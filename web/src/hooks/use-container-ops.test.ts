@@ -22,6 +22,8 @@ const compute = vi.hoisted(() => ({
     }),
   execContainer: () => Promise.resolve({ success: true, data: {} }),
   attestContainer: () => Promise.resolve({ success: true, data: {} }),
+  attestVM: vi.fn(),
+  verifyVMAttestation: vi.fn(),
 }));
 
 vi.mock('trusted-platform-sdk', async (importOriginal) => ({
@@ -29,7 +31,7 @@ vi.mock('trusted-platform-sdk', async (importOriginal) => ({
   useCompute: () => compute,
 }));
 
-import { splitCommand, useContainerOps } from './use-container-ops';
+import { splitCommand, useContainerOps, useVMAttestationVerify } from './use-container-ops';
 
 function settle(list: Deferred[], id: string, value: unknown): void {
   const i = list.findIndex((d) => d.id === id);
@@ -99,6 +101,66 @@ describe('useContainerOps across a container change', () => {
     expect(result.current.container).toEqual({ id: 'b', name: 'b' });
     expect(result.current.metrics).toEqual({ containerId: 'b' });
     expect(result.current.error).toBeNull();
+  });
+});
+
+describe('useVMAttestationVerify', () => {
+  const quote = {
+    quote: 'cXVvdGU=',
+    signature: 'c2ln',
+    signatureAlgorithm: 'ECDSA_P256_SHA256',
+  };
+
+  afterEach(() => {
+    compute.attestVM.mockReset();
+    compute.verifyVMAttestation.mockReset();
+  });
+
+  it('sends a fresh nonce on every call and passes the quote on', async () => {
+    compute.attestVM.mockResolvedValue({ success: true, data: quote });
+    compute.verifyVMAttestation.mockResolvedValue({ success: true, data: { verified: true } });
+    const { result } = renderHook(() => useVMAttestationVerify('vm-1'));
+
+    await expect(result.current()).resolves.toEqual({ verified: true });
+    await expect(result.current()).resolves.toEqual({ verified: true });
+
+    expect(compute.attestVM).toHaveBeenCalledTimes(2);
+    const [first, second] = compute.attestVM.mock.calls.map(([req]) => req);
+    expect(first.vmId).toBe('vm-1');
+    expect(second.vmId).toBe('vm-1');
+    expect(first.nonce).toBeTruthy();
+    expect(second.nonce).not.toBe(first.nonce);
+
+    expect(compute.verifyVMAttestation).toHaveBeenCalledTimes(2);
+    expect(compute.verifyVMAttestation.mock.calls[0][0]).toEqual({
+      vmId: 'vm-1',
+      nonce: first.nonce,
+      ...quote,
+    });
+    expect(compute.verifyVMAttestation.mock.calls[1][0]).toEqual({
+      vmId: 'vm-1',
+      nonce: second.nonce,
+      ...quote,
+    });
+  });
+
+  it('rejects and never verifies when attestation fails', async () => {
+    compute.attestVM.mockResolvedValue({ success: false, error: { message: 'no tpm' } });
+    const { result } = renderHook(() => useVMAttestationVerify('vm-1'));
+
+    await expect(result.current()).rejects.toThrow('no tpm');
+    expect(compute.verifyVMAttestation).not.toHaveBeenCalled();
+  });
+
+  it('rejects when verification fails', async () => {
+    compute.attestVM.mockResolvedValue({ success: true, data: quote });
+    compute.verifyVMAttestation.mockResolvedValue({
+      success: false,
+      error: { message: 'bad quote' },
+    });
+    const { result } = renderHook(() => useVMAttestationVerify('vm-1'));
+
+    await expect(result.current()).rejects.toThrow('bad quote');
   });
 });
 
