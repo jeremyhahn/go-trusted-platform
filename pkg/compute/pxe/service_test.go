@@ -1905,7 +1905,7 @@ func TestService_AuthorizeDevice_FailedStateWriteUndoesFlows(t *testing.T) {
 	assert.Equal(t, before.CurrentVLAN, reloaded.CurrentVLAN)
 }
 
-func TestService_QuarantineDevice_FailedStateWriteUndoesFlows(t *testing.T) {
+func TestService_QuarantineDevice_FailedStateWriteKeepsQuarantineFlows(t *testing.T) {
 	svc, vlan, store, id := newStoreBackedService(t, StateQuarantined)
 	before, err := svc.stateManager.Get(id)
 	require.NoError(t, err)
@@ -1916,7 +1916,7 @@ func TestService_QuarantineDevice_FailedStateWriteUndoesFlows(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StateAuthorizing, got.State)
 	assert.Equal(t, before.CurrentVLAN, got.CurrentVLAN)
-	assert.Equal(t, "provisioning", vlan.flows(), "the quarantine flows must be undone")
+	assert.Equal(t, "quarantine", vlan.flows(), "a failed write must keep the restrictive quarantine flows")
 
 	reloaded, err := reloadFrom(t, store).Get(id)
 	require.NoError(t, err)
@@ -1932,4 +1932,103 @@ func TestService_QuarantineDevice_FailedStateWriteUndoesFlows(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StateQuarantined, reloaded.State)
 	assert.Equal(t, svc.config.QuarantineVLAN, reloaded.CurrentVLAN)
+}
+
+// setStoredDevice stores the device in state with currentVLAN, then makes
+// every later write that matches failPut fail.
+func setStoredDevice(t *testing.T, svc *service, store *failingDeviceStore, id string, state ProvisioningState, currentVLAN uint16, failPut func(*DeviceInfo) bool) {
+	t.Helper()
+	store.mu.Lock()
+	store.failPut = nil
+	store.mu.Unlock()
+	require.NoError(t, svc.stateManager.UpdateDevice(id, func(d *DeviceInfo) error {
+		d.State = state
+		d.CurrentVLAN = currentVLAN
+		return nil
+	}))
+	store.mu.Lock()
+	store.failPut = failPut
+	store.mu.Unlock()
+}
+
+// Quarantining an authorized device whose state write fails must not
+// restore production access (#2081 Codex P1).
+func TestService_QuarantineDevice_FromAuthorizedFailedWriteStaysIsolated(t *testing.T) {
+	const productionVLAN uint16 = 300
+	svc, vlan, store, id := newStoreBackedService(t, StateQuarantined)
+	setStoredDevice(t, svc, store, id, StateAuthorized, productionVLAN,
+		func(d *DeviceInfo) bool { return d.State == StateQuarantined })
+
+	require.Error(t, svc.QuarantineDevice(context.Background(), id, "posture failed"))
+	assert.Equal(t, "quarantine", vlan.flows(), "a datastore outage must not reconnect the device")
+
+	got, err := svc.stateManager.Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateAuthorized, got.State, "state is only changed by a committed write")
+
+	store.mu.Lock()
+	store.failPut = nil
+	store.mu.Unlock()
+	require.NoError(t, svc.QuarantineDevice(context.Background(), id, "posture failed"))
+	reloaded, err := reloadFrom(t, store).Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateQuarantined, reloaded.State)
+	assert.Equal(t, svc.config.QuarantineVLAN, reloaded.CurrentVLAN)
+	assert.Equal(t, "quarantine", vlan.flows())
+}
+
+// A failed transition write must not consume the retry (#2081 Codex P1).
+func TestService_RetryDevice_FailedTransitionWriteKeepsRetry(t *testing.T) {
+	svc, _, store, id := newStoreBackedService(t, StateQuarantined)
+	svc.config.MaxRetries = 1
+	setStoredDevice(t, svc, store, id, StateFailed, svc.config.QuarantineVLAN,
+		func(d *DeviceInfo) bool { return d.State == StateDiscovered })
+
+	require.Error(t, svc.RetryDevice(context.Background(), id))
+
+	got, err := svc.stateManager.Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateFailed, got.State)
+	assert.Equal(t, 0, got.RetryCount, "retry count unchanged in memory")
+	reloaded, err := reloadFrom(t, store).Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateFailed, reloaded.State)
+	assert.Equal(t, 0, reloaded.RetryCount, "retry count unchanged in storage")
+
+	store.mu.Lock()
+	store.failPut = nil
+	store.mu.Unlock()
+	require.NoError(t, svc.RetryDevice(context.Background(), id))
+	reloaded, err = reloadFrom(t, store).Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateDiscovered, reloaded.State)
+	assert.Equal(t, 1, reloaded.RetryCount)
+}
+
+// State and the VLAN it enforces are committed together (#2081 Codex P1).
+func TestService_UpdateDeviceState_FailedVLANWriteKeepsState(t *testing.T) {
+	svc, _, store, id := newStoreBackedService(t, StateQuarantined)
+	provisioningVLAN := svc.config.ProvisioningVLAN
+	setStoredDevice(t, svc, store, id, StateDiscovered, svc.config.QuarantineVLAN,
+		func(d *DeviceInfo) bool { return d.State == StateBooting && d.CurrentVLAN == provisioningVLAN })
+
+	require.Error(t, svc.UpdateDeviceState(context.Background(), id, StateBooting, "pxe boot"))
+
+	got, err := svc.stateManager.Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateDiscovered, got.State)
+	assert.Equal(t, svc.config.QuarantineVLAN, got.CurrentVLAN)
+	reloaded, err := reloadFrom(t, store).Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateDiscovered, reloaded.State)
+	assert.Equal(t, svc.config.QuarantineVLAN, reloaded.CurrentVLAN)
+
+	store.mu.Lock()
+	store.failPut = nil
+	store.mu.Unlock()
+	require.NoError(t, svc.UpdateDeviceState(context.Background(), id, StateBooting, "pxe boot"))
+	reloaded, err = reloadFrom(t, store).Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateBooting, reloaded.State)
+	assert.Equal(t, provisioningVLAN, reloaded.CurrentVLAN)
 }
