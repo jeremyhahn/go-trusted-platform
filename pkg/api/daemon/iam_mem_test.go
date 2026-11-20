@@ -413,6 +413,11 @@ func (p memPEP) Check(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.Chec
 	if !strings.Contains(req.Resource, "://") {
 		return nil, sdkerrors.NewInvalidInput("iam.pep.check", "resource must be a type://path URI")
 	}
+	// The local operator: a Unix peer's uid/gid principal
+	// (unixPeerPrincipal) is admitted, as the fixtures' operator policy.
+	if strings.HasPrefix(req.Subject.ID, "unix:uid:") {
+		return &sdkiam.CheckResponse{Allowed: true, MatchedPolicy: "unix-operator", MatchedRule: req.Action}, nil
+	}
 	p.m.mu.Lock()
 	defer p.m.mu.Unlock()
 	for _, roleID := range req.Subject.Roles {

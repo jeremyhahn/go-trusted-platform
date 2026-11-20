@@ -285,6 +285,7 @@ func newTenantParityHarness(t *testing.T) *tenantParityHarness {
 	h.manager = manager
 
 	h.server = NewTenantGRPCServer(WithTenantLogger(quiet))
+	h.server.SetPEP(allowAllPEP(nil))
 	h.server.SetManager(manager)
 	for label, name := range parityTenantNames {
 		resp, err := h.server.CreateTenant(unixOperatorContext(), &platformv1.CreateTenantRequest{Name: name})

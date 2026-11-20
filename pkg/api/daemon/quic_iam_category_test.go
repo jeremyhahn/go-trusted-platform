@@ -133,7 +133,7 @@ func newIAMCategoryHandler() *QUICServiceHandler {
 	logger := logging.DefaultLogger()
 	handler := newTestQUICServiceHandler(logger)
 	client := iamTenantOnlyClient{tenants: newMockIAMClientForTenant()}
-	handler.SetIAMGRPCService(NewIAMGRPCService(logger.Slog(), client, nil))
+	handler.SetIAMGRPCService(NewIAMGRPCService(logger.Slog(), client, allowAllPEP(nil)))
 	return handler
 }
 

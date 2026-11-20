@@ -140,13 +140,16 @@ func createTestTenantGRPCServer(t *testing.T) *TenantGRPCServer {
 
 	server := NewTenantGRPCServer(WithTenantLogger(logger))
 	server.SetManager(mgr)
+	server.SetPEP(allowAllPEP(nil))
 	return server
 }
 
 // createUninitializedServer creates a server without a manager for testing
 // FailedPrecondition error paths.
 func createUninitializedServer() *TenantGRPCServer {
-	return NewTenantGRPCServer(WithTenantLogger(slog.Default()))
+	server := NewTenantGRPCServer(WithTenantLogger(slog.Default()))
+	server.SetPEP(allowAllPEP(nil))
+	return server
 }
 
 // =============================================================================
@@ -162,6 +165,7 @@ func TestTenantGRPCServer_WithTenantManager_Option(t *testing.T) {
 		WithTenantManager(mgr),
 		WithTenantLogger(logger),
 	)
+	server.SetPEP(allowAllPEP(nil))
 
 	// Verify manager was set by performing an operation
 	ctx := unixOperatorContext()

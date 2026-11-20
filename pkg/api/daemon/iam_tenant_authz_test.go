@@ -383,8 +383,9 @@ func TestIAMGRPCService_CrossTenantRPCsAreSystemOnly(t *testing.T) {
 			}
 
 			// The local caller reads back what was created, through a PEP
-			// that admits it.
+			// that admits it, in the system tenant.
 			svc.pepClient = allowAllPEP(nil)
+			svc.SetSystemTenant("system")
 			listed, err := svc.ListTenants(unixOperatorContext(), &platformv1.ListIAMTenantsRequest{})
 			if err != nil {
 				t.Fatalf("ListTenants as the local caller: %v", err)
