@@ -32,6 +32,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	resttypes "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -241,7 +242,7 @@ func (r *RESTAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) 
 	if err := json.Unmarshal(respBody, &genResp); err != nil {
 		return nil, ErrRESTUnmarshalFailed{Err: err}
 	}
-	result, err := r.convertDaemonGenerateKeyResult(&genResp, opts.Algorithm)
+	result, err := r.convertDaemonGenerateKeyResult(&genResp)
 	if err != nil {
 		return nil, err
 	}
@@ -1465,9 +1466,44 @@ func (r *RESTAdapter) convertToGenerateKeyRequest(req *service.GenerateKeyReques
 // response (nested key handle and metadata) onto KeyGenerateResult. The wire
 // algorithm is an enum, so the result carries the requested algorithm name.
 // A response without a key ID is an error.
-func (r *RESTAdapter) convertDaemonGenerateKeyResult(resp *restapi.KMSGenerateKeyResponse, algorithm string) (*KeyGenerateResult, error) {
-	result := &KeyGenerateResult{Algorithm: algorithm}
+// restKeyAlgorithmNames maps the platform.v1 KMSKeyAlgorithm enum a
+// generate-key response carries to the adapter's algorithm string (the
+// form keyAttributesToAlgorithmString produces for the request side).
+var restKeyAlgorithmNames = map[platformv1.KMSKeyAlgorithm]string{
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048:          "RSA-2048",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_3072:          "RSA-3072",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_4096:          "RSA-4096",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256:        "ECDSA-P256",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P384:        "ECDSA-P384",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P521:        "ECDSA-P521",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ED25519:           "ED25519",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM2:        "DILITHIUM2",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM3:        "DILITHIUM3",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM5:        "DILITHIUM5",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128:           "AES-128-GCM",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_192:           "AES-192-GCM",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256:           "AES-256-GCM",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305: "CHACHA20-POLY1305",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA256:       "HMAC-SHA256",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA384:       "HMAC-SHA384",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA512:       "HMAC-SHA512",
+}
+
+// restKeyAlgorithmName decodes a response's KMSKeyAlgorithm; an unspecified
+// or unknown value is an error, never the requested algorithm.
+func restKeyAlgorithmName(v int32) (string, error) {
+	name, ok := restKeyAlgorithmNames[platformv1.KMSKeyAlgorithm(v)]
+	if !ok {
+		return "", fmt.Errorf("generate-key response: unsupported key algorithm %d (%s)", v, platformv1.KMSKeyAlgorithm(v))
+	}
+	return name, nil
+}
+
+func (r *RESTAdapter) convertDaemonGenerateKeyResult(resp *restapi.KMSGenerateKeyResponse) (*KeyGenerateResult, error) {
+	result := &KeyGenerateResult{}
+	var algorithm int32
 	if resp.Key != nil {
+		algorithm = resp.Key.Algorithm
 		result.KeyID = resp.Key.KeyID
 		result.Version = resp.Key.Version
 		if resp.Key.CreatedAt != 0 {
@@ -1485,10 +1521,18 @@ func (r *RESTAdapter) convertDaemonGenerateKeyResult(resp *restapi.KMSGenerateKe
 		result.Description = md.Description
 		result.Exportable = md.Exportable
 		result.DeletionProtection = md.DeletionProtection
+		if algorithm == 0 {
+			algorithm = md.Algorithm
+		}
 	}
 	if result.KeyID == "" {
 		return nil, ErrRESTMissingParameter{Parameter: "key.key_id in generate-key response"}
 	}
+	name, err := restKeyAlgorithmName(algorithm)
+	if err != nil {
+		return nil, err
+	}
+	result.Algorithm = name
 	return result, nil
 }
 
