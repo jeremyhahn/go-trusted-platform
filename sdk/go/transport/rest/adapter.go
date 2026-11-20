@@ -1006,7 +1006,11 @@ var templatedRouteTable = map[string]templatedRoute{
 	"/platform.v1.CAService/RenewCertificate":  itemRoute("/api/v1/ca/certificates/{serial}/renew", http.MethodPost, "{serial}", "serial"),
 
 	// GET /api/v1/compute/containers/{id}
-	"/platform.v1.ComputeService/GetContainer": itemRoute("/api/v1/compute/containers/{id}", http.MethodGet, "{id}", "id"),
+	"/platform.v1.ComputeService/GetContainer":        itemRoute("/api/v1/compute/containers/{id}", http.MethodGet, "{id}", "id"),
+	"/platform.v1.ComputeService/GetContainerMetrics": itemRoute("/api/v1/compute/containers/{id}/metrics", http.MethodGet, "{id}", "id"),
+	"/platform.v1.ComputeService/ExecContainer":       itemRoute("/api/v1/compute/containers/{id}/exec", http.MethodPost, "{id}", "id"),
+	"/platform.v1.ComputeService/GetVM":               itemRoute("/api/v1/compute/vms/{id}", http.MethodGet, "{id}", "id"),
+	"/platform.v1.ComputeService/GetVMMetrics":        itemRoute("/api/v1/compute/vms/{id}/metrics", http.MethodGet, "{id}", "id"),
 
 	// DELETE /api/v1/compute/containers/{id}?force=true&delete_volumes=true
 	// -- the handler reads force and delete_volumes from the query.
