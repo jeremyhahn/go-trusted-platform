@@ -42,7 +42,7 @@ describe('VTPMService', () => {
   });
 
   describe('createBundle', () => {
-    it('posts the request to /v1/vtpm/bundles', async () => {
+    it('posts the wire body to /v1/vtpm/bundles', async () => {
       vi.mocked(mockClient.post).mockResolvedValue(ok);
       const request: CreateBundleRequest = {
         options: {
@@ -184,7 +184,7 @@ describe('VTPMService', () => {
   });
 
   describe('createTemplate', () => {
-    it('posts the request to /v1/vtpm/templates', async () => {
+    it('posts the wire body to /v1/vtpm/templates', async () => {
       vi.mocked(mockClient.post).mockResolvedValue(ok);
       const request: CreateTemplateRequest = {
         options: { id: 't-1', description: 'base', ekAlgorithm: 'RSA', secureBootEnabled: false },
