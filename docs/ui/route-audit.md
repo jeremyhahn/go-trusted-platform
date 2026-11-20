@@ -2,14 +2,14 @@
 
 Issue #2032, epic #1665 (ruling 972 wave 1). `docs/ui/coverage-matrix.md` maps backend operations to pages; this file goes the other way: every REST path or SDK method that `web/src` calls, and whether the daemon serves it.
 
-**Draft (slice 1).** The `not-configured` pass is not done yet: every area below is registered only when its backend server is non-nil (for example `gatewayRoutes`, `pkg/webservice/v1/router.go:723`), and slice 2 must check each one against `configs/platform/templates/single-node/default.yaml`. Until then, rows whose route exists are marked `implemented`.
+Every area below is registered only when its backend server is non-nil (for example `gatewayRoutes`, `pkg/webservice/v1/router.go:723`). Each such area was checked against `configs/platform/templates/single-node/default.yaml`; rows whose backend is off under that config are marked `not-configured`.
 
 ## How to read this file
 
 - **Caller**: the file under `web/src` and its line. Paths are relative to `web/src`; `(d)` stands for `app/(dashboard)`.
 - **SDK**: the method's line in `sdk/javascript/src/services/<area>-service.ts` (quicBaaS: `services/quicbaas/`). The SDK base URL is `/api` plus the service's base path (for example `/v1/ca`).
 - **Server**: the line in `pkg/webservice/v1/testdata/routes.golden` (`g:N`). The golden file lists every route the v1 router registers when all backends are wired (`TestRegisterRoutes_EveryRouteStillExists`). `router.go:N` is `pkg/webservice/v1/router.go`. `-` means no route matches the method and path, so the call gets a 404 or 405.
-- **Status**: `implemented`, `unimplemented` (no route), `stubbed` (the handler returns fixed or empty data), `not-configured` (see the draft note above).
+- **Status**: `implemented`, `unimplemented` (no route), `stubbed` (the handler returns fixed or empty data), `not-configured` (the backend is off under the default config; see above).
 
 ## Counts (grep)
 
@@ -255,11 +255,12 @@ Counted with Serena `search_for_pattern` over `web/src`, excluding `__tests__/`,
 | utils/auth-factors-api.ts:75 (via :149) | PUT /api/v1/tenants/{t}/security/mfa-policy | - | **unimplemented** |
 | utils/auth-factors-api.ts:201 | HEAD /api/v1/auth/mtls/probe | - | **unimplemented** |
 
-## Counts per status (draft, before the not-configured pass)
+## Counts per status
 
 - Table A (181 rows: 178 SDK methods, 3 NTP paths): implemented 145, unimplemented 17, stubbed 7, not-configured 12 (9 overlay, 3 PXE).
 - Default-config basis: gateway (default.yaml:631), sdn (:571) and ntp (:420) are enabled; VPN registers always and has a store through the embedded quicBaaS (pkg/api/daemon/vpn_grpc_service.go:70); compute and vTPM depend on the host runtime, not a config key (pkg/daemon/commands/serve.go:857-863).
-- Table B (45 rows covering 37 fetch sites): implemented 35, unimplemented 9, stubbed 1, not-configured 0 (pending).
+- Table B (45 rows covering 37 fetch sites): implemented 35, unimplemented 9, stubbed 1, not-configured 0.
+- The stub pass changed no status, so these are the final totals: 181 + 45 = 226 rows, implemented 180, unimplemented 26, stubbed 8, not-configured 12.
 
 ## Stub pass over the `implemented` rows
 
@@ -306,7 +307,10 @@ Each `implemented` row was checked for a handler that answers fixed data, `codes
 33. `auth-factors-api` PUT /tenants/{t}/security/mfa-policy: unimplemented.
 34. `auth-factors-api` HEAD /auth/mtls/probe: unimplemented.
 
-## Remaining for slice 2
+## Remaining
 
-- The not-configured pass: for each area whose `*Routes()` in `router.go` registers only on a non-nil server (gateway, vpn, overlay, sdn, pxe, compute, dns, ntp, vtpm and others), check the backend against `configs/platform/templates/single-node/default.yaml` and re-mark the rows.
-- Look for stubs inside handlers that the golden file lists as registered (Unimplemented, TODO, fixed data).
+The audit is complete. What is left is server or web work, not audit work:
+
+- Fix the 26 `unimplemented` rows: add the missing routes or correct the SDK and web paths (items 1-10, 25-27 and 29-34 above).
+- Replace the 8 `stubbed` handlers (`quicbaasStubRoutes`, router.go:252-332) with real quicBaaS backends, and add the missing quicBaaS backup, object and time-series routes (items 11-24 and 28).
+- The 12 `not-configured` rows (overlay, PXE) need a capability gate in the UI so the pages say the service is off instead of showing an error.
