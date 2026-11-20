@@ -50,7 +50,7 @@ func swapService(t *testing.T, rec *countingInitializer) (*CAGRPCService, string
 	return NewCAGRPCService(nil, nil, nil).WithCAInitializer(rec.init).WithTrustInstallPath(path), path
 }
 
-const initCASwapMessage = "CA initialised; the gRPC CA service serves it now; restart platformd to serve it over REST and QUIC"
+const initCASwapMessage = "CA initialised; the gRPC and REST CA services serve it now; restart platformd to serve it over QUIC"
 
 func TestCAGRPCService_InitCA_SwapsTheServedCA(t *testing.T) {
 	ctx := context.Background()
