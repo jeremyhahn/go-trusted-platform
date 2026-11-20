@@ -1632,6 +1632,65 @@ func TestDaemonRollbackKeepsPXEBackendUsable(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 }
 
+// startingPXEService models a backend whose Start is still binding its
+// listeners: IsRunning is false, and Stop is the call that waits on the
+// lifecycle lock Start holds. It records each Stop and what the daemon's
+// transports looked like at that moment.
+type startingPXEService struct {
+	pxe.Service
+	stops             int
+	grpcListenerAlive bool
+	daemon            *Daemon
+}
+
+func (s *startingPXEService) IsRunning() bool { return false }
+
+func (s *startingPXEService) Stop(context.Context) error {
+	s.stops++
+	if s.daemon != nil {
+		s.grpcListenerAlive = s.daemon.grpcListener != nil
+	}
+	return pxe.ErrServiceNotRunning{}
+}
+
+func TestPXEStopBackendWaitsForAnInFlightStart(t *testing.T) {
+	backend := &startingPXEService{}
+	svc := NewPXEGRPCService(logging.DefaultLogger(), nil)
+	svc.SetPXEService(backend)
+
+	require.NoError(t, svc.StopBackend(context.Background()), "a backend Start left not running is not an error")
+	assert.Equal(t, 1, backend.stops, "StopBackend must call Stop, which serialises with an in-flight Start, even while IsRunning is false")
+}
+
+func TestPXEStopBackendStopsTheRunAConcurrentStartLeft(t *testing.T) {
+	svc, addr := pxeStartedBackend(t)
+
+	require.NoError(t, svc.StopBackend(context.Background()))
+	l, err := net.Listen("tcp", addr)
+	require.NoError(t, err, "the iPXE listener is still bound after StopBackend")
+	_ = l.Close()
+	require.NoError(t, svc.StopBackend(context.Background()), "a second StopBackend on a stopped backend is not an error")
+}
+
+func TestDaemonRollbackStopsPXEAfterTheTransports(t *testing.T) {
+	config := DefaultConfig()
+	config.Logger = logging.DefaultLogger()
+	service, err := NewService(config)
+	require.NoError(t, err)
+	backend := &startingPXEService{}
+	svc := NewPXEGRPCService(logging.DefaultLogger(), nil)
+	svc.SetPXEService(backend)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	d := &Daemon{logger: config.Logger, config: config, service: service, pxeGRPCService: svc, grpcListener: l}
+	backend.daemon = d
+
+	d.rollbackPartialStart(context.Background())
+
+	require.Equal(t, 1, backend.stops, "rollback must stop the PXE backend")
+	assert.False(t, backend.grpcListenerAlive, "rollback stopped the PXE backend while the gRPC transport still accepted StartService")
+}
+
 // TestPXEGRPC_UpdateStateFailsWhenTheVLANMoveFails checks that the
 // UpdateState RPC on the configured backend fails, and the device keeps
 // its state, when the flow manager cannot move the device (#1694).
