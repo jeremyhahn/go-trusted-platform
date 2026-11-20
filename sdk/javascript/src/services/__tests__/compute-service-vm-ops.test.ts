@@ -67,9 +67,9 @@ describe('ComputeService VM operations', () => {
     expect(body).toEqual({ commit: false });
   });
 
-  it('finalizes a migration with client retries disabled', async () => {
+  it('finalizes a migration relying on the api-client retry default', async () => {
     await service.finalizeMigration({ receiverId: 'rx-9', commit: true });
-    expect(vi.mocked(mockClient.post).mock.calls[0]?.[2]).toEqual({ retry: { enabled: false } });
+    expect(vi.mocked(mockClient.post).mock.calls[0]?.[2]).toBeUndefined();
   });
 
   it('surfaces a lost finalize response without resending the commit', async () => {
@@ -79,7 +79,7 @@ describe('ComputeService VM operations', () => {
     vi.mocked(mockClient.post).mockRejectedValueOnce(lost);
     await expect(service.finalizeMigration({ receiverId: 'rx-9', commit: true })).rejects.toBe(lost);
     expect(mockClient.post).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(mockClient.post).mock.calls[0]?.[2]).toEqual({ retry: { enabled: false } });
+    expect(vi.mocked(mockClient.post).mock.calls[0]?.[2]).toBeUndefined();
   });
 
   it('migrateVM forwards a per-request timeout to the client', async () => {

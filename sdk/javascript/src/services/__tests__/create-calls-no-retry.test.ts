@@ -48,23 +48,23 @@ function lossyClient(): { client: ApiClient; fetchImpl: ReturnType<typeof vi.fn>
 
 const spec = { memoryMb: 2048, cpus: 2, diskSize: '20G', bootMode: 'uefi', arch: 'x86_64', tpmEnabled: true };
 
-describe('create calls go out without client retries', () => {
-  it('createLDevID passes retry disabled to the client', async () => {
+describe('create calls go out without client retries: they rely on the api-client default', () => {
+  it('createLDevID passes no per-call options and relies on the api-client default', async () => {
     const mockClient = createMockApiClient();
     await new IDevIDService(mockClient).createLDevID({ overwrite: true });
-    expect(vi.mocked(mockClient.post).mock.calls[0]?.[2]).toEqual({ retry: { enabled: false } });
+    expect(vi.mocked(mockClient.post).mock.calls[0]?.[2]).toBeUndefined();
   });
 
-  it('signCSR passes retry disabled to the client', async () => {
+  it('signCSR passes no per-call options and relies on the api-client default', async () => {
     const mockClient = createMockApiClient();
     await new CAService(mockClient).signCSR({ csrPem: 'CSR' });
-    expect(vi.mocked(mockClient.post).mock.calls[0]?.[2]).toEqual({ retry: { enabled: false } });
+    expect(vi.mocked(mockClient.post).mock.calls[0]?.[2]).toBeUndefined();
   });
 
-  it('prepareMigration passes retry disabled to the client', async () => {
+  it('prepareMigration passes no per-call options and relies on the api-client default', async () => {
     const mockClient = createMockApiClient();
     await new ComputeService(mockClient).prepareMigration({ vmId: 'vm-1', vmName: 'web', mode: 'live', spec });
-    expect(vi.mocked(mockClient.post).mock.calls[0]?.[2]).toEqual({ retry: { enabled: false } });
+    expect(vi.mocked(mockClient.post).mock.calls[0]?.[2]).toBeUndefined();
   });
 
   it('createLDevID surfaces a lost response with exactly one request', async () => {

@@ -57,7 +57,7 @@ describe('BMCService', () => {
       privilege: 'operator',
       enabled: true,
       channel: 1,
-    }, { retry: { enabled: false } });
+    });
   });
 
   it('deleteUser DELETEs /v1/bmc/{profileID}/users/{slot}', async () => {
@@ -173,7 +173,7 @@ describe('BMCService routes (#1736)', () => {
 
   it('provision POSTs to provision', async () => {
     await service.provision('1');
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/1/provision', {}, { retry: { enabled: false } });
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/1/provision', {});
   });
 
   it('encodes the profile ID as one path segment', async () => {

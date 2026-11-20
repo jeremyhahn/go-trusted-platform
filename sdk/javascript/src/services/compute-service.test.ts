@@ -157,7 +157,6 @@ const cases: Case[] = [
     method: 'post',
     path: '/v1/compute/migrations/prepare',
     body: { vmId: 'vm/1', vmName: 'vm-a', mode: 'live', spec: { cpu: 2 } },
-    options: { retry: { enabled: false } },
   },
   {
     name: 'finalizeMigration',
@@ -165,7 +164,6 @@ const cases: Case[] = [
     method: 'post',
     path: '/v1/compute/migrations/r%2F1/finalize',
     body: { commit: true },
-    options: { retry: { enabled: false } },
   },
   {
     name: 'suspendVM',
@@ -173,7 +171,6 @@ const cases: Case[] = [
     method: 'post',
     path: '/v1/compute/vms/vm%2F1/suspend',
     body: {},
-    options: { retry: { enabled: false } },
   },
   {
     name: 'resumeVM',
@@ -181,7 +178,6 @@ const cases: Case[] = [
     method: 'post',
     path: '/v1/compute/vms/vm%2F1/resume',
     body: {},
-    options: { retry: { enabled: false } },
   },
   {
     name: 'getSnapshot',

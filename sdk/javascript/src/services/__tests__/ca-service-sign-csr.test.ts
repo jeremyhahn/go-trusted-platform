@@ -8,7 +8,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CAService } from '../ca-service.js';
 import { ApiClient } from '../../client/api-client.js';
 
-const NO_RETRY = { retry: { enabled: false } };
 const CSR_PEM = '-----BEGIN CERTIFICATE REQUEST-----\nCSR\n-----END CERTIFICATE REQUEST-----';
 
 function createMockApiClient(): ApiClient {
@@ -43,7 +42,7 @@ describe('CAService.signCSR', () => {
 
     expect(result.success).toBe(true);
     expect(mockClient.post).toHaveBeenCalledTimes(1);
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/ca/sign-csr', { csrPem: CSR_PEM, validDays: 30 }, NO_RETRY);
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/ca/sign-csr', { csrPem: CSR_PEM, validDays: 30 });
   });
 
   it('propagates a scope refusal unchanged', async () => {
@@ -51,7 +50,7 @@ describe('CAService.signCSR', () => {
     vi.mocked(mockClient.post).mockRejectedValue(failure);
 
     await expect(service.signCSR({ csrPem: CSR_PEM })).rejects.toBe(failure);
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/ca/sign-csr', { csrPem: CSR_PEM }, NO_RETRY);
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/ca/sign-csr', { csrPem: CSR_PEM });
   });
 });
 
