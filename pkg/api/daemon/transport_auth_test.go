@@ -292,7 +292,7 @@ func TestSelectQUICAuth_NoBackend_ReturnsTypedError(t *testing.T) {
 	}
 	for name, config := range cases {
 		t.Run(name, func(t *testing.T) {
-			mw, validator, err := selectQUICAuth(config, nil, nil, nil, logging.DefaultLogger())
+			mw, validator, err := selectQUICAuth(config, nil, nil, nil, nil, logging.DefaultLogger())
 			require.Error(t, err)
 			var want ErrTransportAuthRequired
 			require.True(t, errors.As(err, &want), "error is %T, want ErrTransportAuthRequired", err)
@@ -309,7 +309,7 @@ func TestSelectQUICAuth_JWTVerifier_BuildsRequiredMiddleware(t *testing.T) {
 	config.App = remoteQuicBaaSApp()
 	config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
 
-	mw, validator, err := selectQUICAuth(config, nil, &mockSDKPEPClient{}, nil, logging.DefaultLogger())
+	mw, validator, err := selectQUICAuth(config, nil, &mockSDKPEPClient{}, nil, nil, logging.DefaultLogger())
 	require.NoError(t, err)
 	require.NotNil(t, mw)
 	require.NotNil(t, validator)
@@ -327,7 +327,7 @@ func TestSelectQUICAuth_LocalValidator_AuthorizesEachOperationThroughIAM(t *test
 	var last *sdkiam.CheckRequest
 	pep := pepAllowing("42", "kms", "read", &last)
 
-	mw, _, err := selectQUICAuth(config, nil, pep, nil, logging.DefaultLogger())
+	mw, _, err := selectQUICAuth(config, nil, pep, nil, nil, logging.DefaultLogger())
 	require.NoError(t, err)
 	require.NotNil(t, mw)
 
@@ -355,7 +355,7 @@ func TestSelectQUICAuth_JWTVerifier_NoPEP_ReturnsTypedError(t *testing.T) {
 	config.App = &app.App{}
 	config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
 
-	mw, validator, err := selectQUICAuth(config, nil, nil, nil, logging.DefaultLogger())
+	mw, validator, err := selectQUICAuth(config, nil, nil, nil, nil, logging.DefaultLogger())
 	require.Error(t, err)
 	var want ErrTransportAuthRequired
 	require.True(t, errors.As(err, &want), "error is %T, want ErrTransportAuthRequired", err)
@@ -408,7 +408,7 @@ func TestSelectQUICAuth_EmbeddedPEP_RefusesLocalTokenListener(t *testing.T) {
 			config.App = application
 			config.PlatformJWTVerifier = alwaysValidJWTVerifier{claims: jwt.TokenClaims{UserIDStr: "42", TenantID: "acme"}}
 
-			mw, validator, err := selectQUICAuth(config, nil, pep, nil, logging.DefaultLogger())
+			mw, validator, err := selectQUICAuth(config, nil, pep, nil, nil, logging.DefaultLogger())
 			var want ErrEmbeddedPEPUnavailable
 			require.True(t, errors.As(err, &want), "error is %T (%v), want ErrEmbeddedPEPUnavailable", err, err)
 			assert.Equal(t, transportQUIC, want.Transport)
@@ -442,7 +442,7 @@ func TestSelectQUICAuth_MTLS_EmbeddedPEP_RefusesListener(t *testing.T) {
 			config.EnableMTLS = true
 			config.App = application
 
-			mw, validator, err := selectQUICAuth(config, nil, pep, testutil.GenerateTestTLSBundle(t).CAPool, logging.DefaultLogger())
+			mw, validator, err := selectQUICAuth(config, nil, pep, nil, testutil.GenerateTestTLSBundle(t).CAPool, logging.DefaultLogger())
 			var want ErrEmbeddedPEPUnavailable
 			require.True(t, errors.As(err, &want), "error is %T (%v), want ErrEmbeddedPEPUnavailable", err, err)
 			assert.Equal(t, transportQUIC, want.Transport)
@@ -461,7 +461,27 @@ func TestSelectQUICAuth_MTLS_NoPEP_RefusesCertificatePrincipal(t *testing.T) {
 	config.EnableMTLS = true
 	bundle := testutil.GenerateTestTLSBundle(t)
 
-	mw, _, err := selectQUICAuth(config, nil, nil, bundle.CAPool, logging.DefaultLogger())
+	mw, _, err := selectQUICAuth(config, nil, nil, nil, bundle.CAPool, logging.DefaultLogger())
+	require.NoError(t, err)
+	verified := quic.WithConnectionTLS(context.Background(), &tls.ConnectionState{
+		VerifiedChains: [][]*x509.Certificate{{leafOf(t, bundle.ClientCert), bundle.CACert}},
+	})
+	_, resp := mw.GuardRequest(verified, &quicwire.Request{Opcode: quicwire.OpKMSListKeys})
+	require.NotNil(t, resp)
+	assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
+}
+
+// Without an IAM client a certificate principal's roles cannot be resolved,
+// so the PEP would decide on none: every classified request is refused, even
+// by a PEP that would allow it.
+func TestSelectQUICAuth_MTLS_NoIAMClient_RefusesCertificatePrincipal(t *testing.T) {
+	t.Parallel()
+	config := failClosedConfig()
+	config.EnableMTLS = true
+	config.App = remoteQuicBaaSApp()
+	bundle := testutil.GenerateTestTLSBundle(t)
+
+	mw, _, err := selectQUICAuth(config, nil, pepAllowingAll(), nil, bundle.CAPool, logging.DefaultLogger())
 	require.NoError(t, err)
 	verified := quic.WithConnectionTLS(context.Background(), &tls.ConnectionState{
 		VerifiedChains: [][]*x509.Certificate{{leafOf(t, bundle.ClientCert), bundle.CACert}},
@@ -473,7 +493,7 @@ func TestSelectQUICAuth_MTLS_NoPEP_RefusesCertificatePrincipal(t *testing.T) {
 
 func TestSelectQUICAuth_SharedValidator_BuildsRequiredMiddleware(t *testing.T) {
 	t.Parallel()
-	mw, validator, err := selectQUICAuth(failClosedConfig(), &platformTokenValidator{}, nil, nil, logging.DefaultLogger())
+	mw, validator, err := selectQUICAuth(failClosedConfig(), &platformTokenValidator{}, nil, nil, nil, logging.DefaultLogger())
 	require.NoError(t, err)
 	require.NotNil(t, mw)
 	assert.Nil(t, validator)
@@ -494,7 +514,7 @@ func TestSelectQUICAuth_MTLS_AuthenticatesByCertificate(t *testing.T) {
 	var last *sdkiam.CheckRequest
 	pep := pepAllowing("test-client", "kms", "delete", &last)
 
-	mw, validator, err := selectQUICAuth(config, nil, pep, bundle.CAPool, logging.DefaultLogger())
+	mw, validator, err := selectQUICAuth(config, nil, pep, iamStoringAnyUser(), bundle.CAPool, logging.DefaultLogger())
 	require.NoError(t, err)
 	require.NotNil(t, mw, "the QUIC dispatcher always authorizes; mTLS supplies the identity")
 	assert.Nil(t, validator)
@@ -532,7 +552,7 @@ func TestSelectQUICAuth_MTLS_WithSharedValidator_ValidatesPresentedTokens(t *tes
 	config := failClosedConfig()
 	config.EnableMTLS = true
 	shared := &platformTokenValidator{}
-	mw, _, err := selectQUICAuth(config, shared, nil, testutil.GenerateTestTLSBundle(t).CAPool, logging.DefaultLogger())
+	mw, _, err := selectQUICAuth(config, shared, nil, nil, testutil.GenerateTestTLSBundle(t).CAPool, logging.DefaultLogger())
 	require.NoError(t, err)
 	require.NotNil(t, mw)
 
@@ -548,7 +568,7 @@ func TestSelectQUICAuth_MTLSWithoutClientCAPool_ReturnsTypedError(t *testing.T) 
 	config := failClosedConfig()
 	config.EnableMTLS = true
 
-	mw, validator, err := selectQUICAuth(config, nil, nil, nil, logging.DefaultLogger())
+	mw, validator, err := selectQUICAuth(config, nil, nil, nil, nil, logging.DefaultLogger())
 	require.Error(t, err)
 	var want ErrTransportAuthRequired
 	require.True(t, errors.As(err, &want), "error is %T, want ErrTransportAuthRequired", err)
@@ -612,7 +632,7 @@ func TestSelectQUICAuth_SkipIAMValidation_IsTheOnlyOptOut(t *testing.T) {
 	t.Parallel()
 	config := DefaultConfig()
 	config.SkipIAMValidation = true
-	mw, validator, err := selectQUICAuth(config, nil, nil, nil, logging.DefaultLogger())
+	mw, validator, err := selectQUICAuth(config, nil, nil, nil, nil, logging.DefaultLogger())
 	require.NoError(t, err)
 	require.NotNil(t, mw)
 	assert.Nil(t, validator)

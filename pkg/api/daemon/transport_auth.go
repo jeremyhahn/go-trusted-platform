@@ -183,7 +183,7 @@ func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicb
 // operations are still refused. A configuration with no backend is refused
 // with ErrTransportAuthRequired instead of yielding an unauthenticated server
 // (#550).
-func selectQUICAuth(config *Config, shared *platformTokenValidator, pep quicbaassdk.IAMPEPClient, clientCAPool *x509.CertPool, logger *logging.Logger) (*quic.AuthMiddleware, *grpcTokenValidator, error) {
+func selectQUICAuth(config *Config, shared *platformTokenValidator, pep quicbaassdk.IAMPEPClient, iam quicbaassdk.IAMClient, clientCAPool *x509.CertPool, logger *logging.Logger) (*quic.AuthMiddleware, *grpcTokenValidator, error) {
 	if config.EnableMTLS {
 		if clientCAPool == nil {
 			return nil, nil, ErrTransportAuthRequired{
@@ -207,11 +207,16 @@ func selectQUICAuth(config *Config, shared *platformTokenValidator, pep quicbaas
 			quic.WithQUICPeerAuthenticator(mtlsPeerAuthenticator{authenticator: mtlsAuth}),
 			quic.WithQUICRequireAuth(true),
 		}
-		if pep != nil {
-			opts = append(opts, quic.WithQUICPeerAuthorizationChecker(&iamTokenAuthorizer{pep: pep}))
-		} else {
+		switch {
+		case pep == nil:
 			// No decision point: every certificate principal is refused.
 			logger.Warn("QUIC server: no IAM policy enforcement point; mTLS callers are refused")
+		case iam == nil:
+			// No store to resolve a certificate principal's roles: the PEP
+			// would decide on none, so every certificate principal is refused.
+			logger.Warn("QUIC server: no IAM client to resolve certificate principals' roles; mTLS callers are refused")
+		default:
+			opts = append(opts, quic.WithQUICPeerAuthorizationChecker(&iamTokenAuthorizer{pep: pep, iam: iam}))
 		}
 		if shared != nil {
 			opts = append(opts, quic.WithQUICTokenValidator(shared))

@@ -167,7 +167,14 @@ type storedUsersIAM struct {
 	quicbaassdk.IAMClient
 	users  map[string]*sdkiam.User // tenantID + "/" + userID
 	getErr error
+	// anyUser, when set, is the stored user for every lookup: tests whose
+	// PEP fake does not look at roles give it to admit a certificate caller.
+	anyUser *sdkiam.User
 }
+
+// iamStoringAnyUser is an IAM client that holds a user, with no roles, for
+// every subject and tenant.
+func iamStoringAnyUser() *storedUsersIAM { return &storedUsersIAM{anyUser: &sdkiam.User{}} }
 
 func (c *storedUsersIAM) User() sdkiam.UserClient { return storedUsers{client: c} }
 
@@ -179,6 +186,9 @@ type storedUsers struct {
 func (u storedUsers) Get(_ context.Context, tenantID, userID string) (*sdkiam.User, error) {
 	if u.client.getErr != nil {
 		return nil, u.client.getErr
+	}
+	if u.client.anyUser != nil {
+		return u.client.anyUser, nil
 	}
 	user, ok := u.client.users[tenantID+"/"+userID]
 	if !ok {
