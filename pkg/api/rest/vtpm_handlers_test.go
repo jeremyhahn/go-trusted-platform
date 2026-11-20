@@ -1050,6 +1050,21 @@ func TestHandleGetBundleState(t *testing.T) {
 		assert.Empty(t, stateResp.SocketPath)
 	})
 
+	t.Run("returns not found for a missing bundle", func(t *testing.T) {
+		svc := newMockVTPMService()
+		_, router := setupVTPMTestHandler(svc)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/bundles/no-such/state", nil)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	})
+
 	t.Run("returns error when service not available", func(t *testing.T) {
 		handlers := NewVTPMHandlers(nil, slog.Default())
 		router := mux.NewRouter()

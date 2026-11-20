@@ -173,6 +173,21 @@ func TestGetVTPMState_Success(t *testing.T) {
 	assert.Equal(t, StateResponse{BundleID: "b1", Running: true, SocketPath: "/bundles/b1/tpm/swtpm.sock"}, payload)
 }
 
+func TestGetVTPMState_MissingBundle(t *testing.T) {
+	service := &mockVTPMService{
+		getBundleFn: func(ctx context.Context, id string) (*vtpm.Bundle, error) {
+			return nil, vtpm.ErrBundleNotFound{ID: id}
+		},
+		isRunningFn: func(id string) bool { return false },
+	}
+	handlers, writer := newTestHandlers(service)
+	req := createRequestWithVars(http.MethodGet, "/api/v1/vtpm/bundles/no-such/state", nil, map[string]string{"id": "no-such"})
+
+	handlers.GetVTPMState(httptest.NewRecorder(), req)
+
+	require.Equal(t, http.StatusNotFound, writer.lastStatus)
+}
+
 func TestQuoteVTPM_Success(t *testing.T) {
 	var gotNonce []byte
 	var gotPCRs []int
