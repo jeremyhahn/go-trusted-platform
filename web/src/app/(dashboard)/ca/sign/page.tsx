@@ -7,8 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { createPlatformClient } from "trusted-platform-sdk";
-import { useMutation, usePlatformClient } from "@/hooks";
+import { useSignCSR } from "@/hooks/use-ca-ops";
 import { base64ToPem } from "@/utils/pem-base64";
 
 /** The issued certificate as the REST layer sends it. */
@@ -27,7 +26,6 @@ interface IssuedCertWire {
  * per-request headers).
  */
 export default function SignCSRPage() {
-  const { baseUrl } = usePlatformClient();
   const [csrPem, setCsrPem] = React.useState("");
   const [token, setToken] = React.useState("");
   const [validDays, setValidDays] = React.useState("");
@@ -37,18 +35,7 @@ export default function SignCSRPage() {
   const [signedFor, setSignedFor] = React.useState<string | null>(null);
   const inputKey = (csr: string, tok: string, days: string) => `${csr}\n${tok}\n${days}`;
 
-  const signMutation = useMutation(
-    (req: { csrPem: string; token: string; validDays?: number; key: string }) =>
-      createPlatformClient({
-        baseUrl,
-        credentials: "include",
-        headers: { Authorization: `Bearer ${req.token}` },
-      }).ca.signCSR({
-        csrPem: req.csrPem,
-        ...(req.validDays !== undefined ? { validDays: req.validDays } : {}),
-      }),
-    { onSuccess: (_data, req) => setSignedFor(req.key) }
-  );
+  const signMutation = useSignCSR<string>({ onSuccess: (_data, req) => setSignedFor(req.key ?? null) });
 
   const clearResult = () => {
     signMutation.reset();
@@ -59,7 +46,7 @@ export default function SignCSRPage() {
     e.preventDefault();
     clearResult();
     const days = Number.parseInt(validDays, 10);
-    signMutation.mutate({
+    signMutation.sign({
       csrPem: csrPem.trim(),
       token: token.trim(),
       ...(Number.isFinite(days) && days > 0 ? { validDays: days } : {}),

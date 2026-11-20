@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, render, screen, fireEvent } from '@testing-library/react';
+
+afterEach(cleanup);
 
 // The overview reads GetCAInfo and shows the three lifecycle controls the
 // daemon serves no REST route for (InitCA, InstallCACertificates,

@@ -6,8 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { useCA, useMutation } from "@/hooks";
-import { pemToBase64 } from "@/utils/pem-base64";
+import { useVerifyCertificate } from "@/hooks/use-ca-ops";
 
 /**
  * Verify Certificate: POST /v1/ca/certificates/verify. The certificate
@@ -15,22 +14,18 @@ import { pemToBase64 } from "@/utils/pem-base64";
  * one this CA issued.
  */
 export default function VerifyCertificatePage() {
-  const ca = useCA();
   const [certificatePem, setCertificatePem] = React.useState("");
 
   // The PEM whose verification succeeded; a verdict is shown only for it.
   const [verifiedPem, setVerifiedPem] = React.useState<string | null>(null);
 
-  const verifyMutation = useMutation(
-    (pem: string) => ca.verifyCertificate({ certificatePem: pemToBase64(pem), verifyRevocation: true }),
-    { onSuccess: (_data, pem) => setVerifiedPem(pem) }
-  );
+  const verifyMutation = useVerifyCertificate({ onSuccess: (_data, pem) => setVerifiedPem(pem) });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     verifyMutation.reset();
     setVerifiedPem(null);
-    verifyMutation.mutate(certificatePem.trim());
+    verifyMutation.verify(certificatePem.trim());
   };
 
   const result =
