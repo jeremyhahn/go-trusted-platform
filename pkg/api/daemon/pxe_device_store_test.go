@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -81,4 +82,32 @@ func TestPXEDeviceStoreFor_NoDatastore(t *testing.T) {
 		require.NoError(t, err)
 		require.Nil(t, store)
 	}
+}
+
+// fakePXEDatastoreClient is a quicbaas.Storage that reports its transport.
+type fakePXEDatastoreClient struct {
+	quicbaas.Storage
+	embedded bool
+}
+
+func (f fakePXEDatastoreClient) IsEmbedded() bool { return f.embedded }
+
+// TestPXEDeviceStoreForClient_RefusesRemoteTransport: the pinned go-quicbaas
+// REST KV handlers neither page List nor carry the system tenant, so an
+// enabled PXE backend over a remote transport is refused instead of
+// persisting records it cannot reload completely or scope (#2028 Codex).
+func TestPXEDeviceStoreForClient_RefusesRemoteTransport(t *testing.T) {
+	remote := fakePXEDatastoreClient{Storage: quicbaas.NewMockStorage(), embedded: false}
+	store, err := pxeDeviceStoreForClient(remote, nil)
+	require.Error(t, err)
+	require.Nil(t, store)
+	var cfgErr pxe.ErrInvalidConfiguration
+	require.True(t, errors.As(err, &cfgErr), "want pxe.ErrInvalidConfiguration, got %T: %v", err, err)
+	require.Equal(t, "quicbaas.transport", cfgErr.Field)
+	require.NotEmpty(t, cfgErr.Reason)
+
+	embedded := fakePXEDatastoreClient{Storage: quicbaas.NewMockStorage(), embedded: true}
+	store, err = pxeDeviceStoreForClient(embedded, nil)
+	require.NoError(t, err)
+	require.NotNil(t, store)
 }
