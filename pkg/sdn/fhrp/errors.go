@@ -109,6 +109,19 @@ type ErrSpeakerAlreadyRunning struct{}
 // Error implements the error interface.
 func (ErrSpeakerAlreadyRunning) Error() string { return "fhrp: speaker is already running" }
 
+// ErrReleasePending is returned by Start while a VIP release from an earlier
+// Stop is still outstanding: starting over a leftover VIP would let an owner
+// group adopt it as a pre-existing address and never delete it.
+type ErrReleasePending struct{ Cause error }
+
+// Error implements the error interface.
+func (e ErrReleasePending) Error() string {
+	return fmt.Sprintf("fhrp: a VIP release from an earlier Stop is still pending: %v", e.Cause)
+}
+
+// Unwrap exposes the failed release.
+func (e ErrReleasePending) Unwrap() error { return e.Cause }
+
 // ErrGroupNotFound is returned when a VRID is not configured.
 type ErrGroupNotFound struct {
 	VRID      uint8

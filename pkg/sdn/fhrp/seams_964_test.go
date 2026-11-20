@@ -24,6 +24,7 @@ package fhrp
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/netip"
@@ -447,6 +448,89 @@ func TestNetlinkProgrammer_DeleteAddressReportsFailures(t *testing.T) {
 	requireSeamErr(t, p.DeleteAddress("missing0", netip.MustParsePrefix("192.0.2.1/24"), nil), "LinkByName")
 }
 
+// stubAddrList routes the handle-less AddrList to a fake that lists addrs
+// (or fails with listErr) and records the family it was asked for.
+func stubAddrList(t *testing.T, listErr error, addrs ...string) *int {
+	t.Helper()
+	stubNetlink(t, nil, nil)
+	orig := netlinkAddrList
+	t.Cleanup(func() { netlinkAddrList = orig })
+	family := new(int)
+	netlinkAddrList = func(_ vnl.Link, fam int) ([]vnl.Addr, error) {
+		*family = fam
+		if listErr != nil {
+			return nil, listErr
+		}
+		var out []vnl.Addr
+		for _, a := range addrs {
+			parsed, err := vnl.ParseAddr(a)
+			require.NoError(t, err)
+			out = append(out, *parsed)
+		}
+		return out, nil
+	}
+	return family
+}
+
+func TestNetlinkProgrammer_HasAddressMatchesAddressAndLength(t *testing.T) {
+	family := stubAddrList(t, nil, "192.0.2.9/24", "192.0.2.1/24")
+	p := NewNetlinkProgrammer().(AddressReader)
+
+	ok, err := p.HasAddress(seamIface.Name, netip.MustParsePrefix("192.0.2.1/24"))
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, vnl.FAMILY_V4, *family)
+
+	ok, err = p.HasAddress(seamIface.Name, netip.MustParsePrefix("192.0.2.1/32"))
+	require.NoError(t, err)
+	assert.False(t, ok, "another prefix length is not the same address")
+
+	ok, err = p.HasAddress(seamIface.Name, netip.MustParsePrefix("192.0.2.2/24"))
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestNetlinkProgrammer_AddressPrefixesMatchesTheAddressAtAnyLength(t *testing.T) {
+	family := stubAddrList(t, nil, "192.0.2.9/24", "192.0.2.1/16")
+	p := NewNetlinkProgrammer().(PrefixReader)
+
+	got, err := p.AddressPrefixes(seamIface.Name, netip.MustParseAddr("192.0.2.1"))
+	require.NoError(t, err)
+	assert.Equal(t, []netip.Prefix{netip.MustParsePrefix("192.0.2.1/16")}, got)
+	assert.Equal(t, vnl.FAMILY_V4, *family)
+
+	got, err = p.AddressPrefixes(seamIface.Name, netip.MustParseAddr("192.0.2.2"))
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestNetlinkProgrammer_AddressPrefixesReportsFailures(t *testing.T) {
+	stubAddrList(t, errors.New("dump interrupted"))
+	p := NewNetlinkProgrammer().(PrefixReader)
+	_, err := p.AddressPrefixes(seamIface.Name, netip.MustParseAddr("192.0.2.1"))
+	require.Error(t, err)
+	_, err = p.AddressPrefixes("missing0", netip.MustParseAddr("192.0.2.1"))
+	require.Error(t, err)
+}
+
+func TestNetlinkProgrammer_HasAddressAsksForTheIPv6Family(t *testing.T) {
+	family := stubAddrList(t, nil, "2001:db8::1/64")
+	ok, err := NewNetlinkProgrammer().(AddressReader).HasAddress(seamIface.Name, netip.MustParsePrefix("2001:db8::1/64"))
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, vnl.FAMILY_V6, *family)
+}
+
+func TestNetlinkProgrammer_HasAddressReportsFailures(t *testing.T) {
+	stubAddrList(t, &errSeam{step: "AddrList"})
+	p := NewNetlinkProgrammer().(AddressReader)
+
+	_, err := p.HasAddress(seamIface.Name, netip.MustParsePrefix("192.0.2.1/24"))
+	requireSeamErr(t, err, "AddrList")
+	_, err = p.HasAddress("missing0", netip.MustParsePrefix("192.0.2.1/24"))
+	requireSeamErr(t, err, "LinkByName")
+}
+
 // fakeFrameWriter records the frame the gratuitous ARP writes.
 type fakeFrameWriter struct {
 	fail   string
@@ -549,7 +633,7 @@ func TestNetlinkProgrammer_AnnounceSendsAnUnsolicitedNA(t *testing.T) {
 	require.Len(t, v6.payload, 4+4+16+8)
 	assert.Equal(t, byte(136), v6.payload[0], "ICMPv6 Neighbor Advertisement")
 	assert.Zero(t, v6.payload[1], "code")
-	assert.Equal(t, []byte{0x20, 0, 0, 0}, v6.payload[4:8], "override flag")
+	assert.Equal(t, []byte{0xa0, 0, 0, 0}, v6.payload[4:8], "Router and Override set, Solicited clear (RFC 4861 7.2.5)")
 	assert.Equal(t, target.AsSlice(), v6.payload[8:24], "target address")
 	assert.Equal(t, []byte{2, 1}, v6.payload[24:26], "target link-layer address option")
 	assert.Equal(t, []byte(seamIface.HardwareAddr), v6.payload[26:32])

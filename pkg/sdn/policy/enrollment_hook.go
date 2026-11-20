@@ -894,10 +894,19 @@ func (h *SDNEnrollmentHook) buildPortPolicy(profile *entities.DeviceProfile, cer
 		return nil, nil
 	}
 
-	// Extract tenant ID from certificate (e.g., from Organization field)
-	tenantID := "default"
-	if len(cert.Subject.Organization) > 0 {
-		tenantID = cert.Subject.Organization[0]
+	// The tenant is the certificate subject OU (SPEC row 122). A certificate
+	// without one has no tenant and gets no port policy: never a "default".
+	tenantExtractor := h.extractor
+	if tenantExtractor == nil {
+		tenantExtractor = &X509PolicyExtractor{}
+	}
+	tenantID, err := tenantExtractor.ExtractTenantID(cert)
+	if err != nil {
+		h.logger.Error("certificate carries no tenant OU; refusing to build a port policy",
+			slog.String("serial", cert.Subject.CommonName),
+			slog.String("profile", profile.Name),
+			complianceAttr(complianceSC7, complianceSC4, complianceAC4))
+		return nil, err
 	}
 
 	// Resolve zone: cert zone is authoritative; fall back to profile zone.

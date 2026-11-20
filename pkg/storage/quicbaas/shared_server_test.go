@@ -39,7 +39,6 @@ const genericTestEntityType = "TestRole"
 // none of them (TestSharedServer_FreshServerHoldsNoTestEntities).
 var sharedServerEntityTypes = []string{
 	genericTestEntityType,
-	entityTypeRole,
 	entityTypeUser,
 	entityTypeRegistration,
 	entityTypeWebAuthn,
