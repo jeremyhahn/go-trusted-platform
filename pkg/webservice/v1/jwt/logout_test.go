@@ -14,6 +14,7 @@
 package jwt
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -220,4 +221,45 @@ func TestRevocationList_ForgetsExpiredEntries(t *testing.T) {
 
 	assert.False(t, list.revoked(token), "an entry outlives its token's expiry")
 	assert.True(t, list.revoked(other))
+}
+
+// TestLogout_RevokesTheWholeSessionAcrossRefreshes pins #1906 Codex
+// round 2: login gives A, refresh gives B, logout with B; then A and B
+// are both refused for authentication and for refresh, while a second,
+// independent login stays valid.
+func TestLogout_RevokesTheWholeSessionAcrossRefreshes(t *testing.T) {
+	t.Parallel()
+	handler := newHandlerForLoginTest(t)
+	handler.SetPrincipalResolver(&fakePrincipals{tenants: map[string]map[string][]string{
+		"tenant-a": {backboneSubject: {"admin"}},
+	}})
+	refresh := func(bearer string) (int, string) {
+		rec := httptest.NewRecorder()
+		handler.RefreshToken(rec, bearerRequest(http.MethodPost, "/login/refresh", bearer))
+		var env struct {
+			Payload string `json:"payload"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &env)
+		return rec.Code, env.Payload
+	}
+
+	a := issueBackboneBearer(t, handler)
+	code, b := refresh(a)
+	require.Equal(t, http.StatusOK, code)
+	require.NotEmpty(t, b)
+	other := issueBackboneBearer(t, handler)
+
+	require.Equal(t, http.StatusOK, logout(handler, b).Code)
+
+	for name, bearer := range map[string]string{"A": a, "B": b} {
+		_, reached := verifyThrough(handler, bearer)
+		assert.False(t, reached, "%s authenticates after its session was signed out", name)
+		code, _ := refresh(bearer)
+		assert.Equal(t, http.StatusUnauthorized, code,
+			"%s refreshes after its session was signed out", name)
+	}
+	_, reached := verifyThrough(handler, other)
+	assert.True(t, reached, "an independent login was signed out")
+	code, _ = refresh(other)
+	assert.Equal(t, http.StatusOK, code, "an independent login cannot refresh")
 }
