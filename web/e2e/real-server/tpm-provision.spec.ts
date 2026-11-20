@@ -10,7 +10,11 @@
  * assertion compares what the page shows with what the server answers.
  */
 import type { Page } from "@playwright/test";
+import type { PlatformClient } from "trusted-platform-sdk";
 import { test, expect } from "./fixtures";
+
+/** The harness fixtures this spec uses (web/e2e/real-server/fixtures). */
+type Fx = { adminPage: Page; sdk: PlatformClient };
 
 const KEYS = "/tpm/keys";
 const QUOTE = "/tpm/quote";
@@ -38,7 +42,7 @@ function derToPEM(derB64: string): string {
 }
 
 test.describe("TPM provisioning (real server)", () => {
-  test("GetCapabilities shows what the server reports", async ({ adminPage, sdk }) => {
+  test("GetCapabilities shows what the server reports", async ({ adminPage, sdk }: Fx) => {
     const want = await sdk.tpm.getCapabilities();
     expect(want.success).toBe(true);
 
@@ -48,7 +52,7 @@ test.describe("TPM provisioning (real server)", () => {
     expect(await shownJSON(adminPage, "capabilities")).toEqual(want.data);
   });
 
-  test("GetPlatformAttributes shows what the server reports", async ({ adminPage, sdk }) => {
+  test("GetPlatformAttributes shows what the server reports", async ({ adminPage, sdk }: Fx) => {
     const want = await sdk.tpm.getPlatformAttributes();
     expect(want.success).toBe(true);
 
@@ -58,7 +62,7 @@ test.describe("TPM provisioning (real server)", () => {
     expect(await shownJSON(adminPage, "platform")).toEqual(want.data);
   });
 
-  test("Provision answers with the server's outcome and leaves an EK and SRK", async ({ adminPage, sdk }) => {
+  test("Provision answers with the server's outcome and leaves an EK and SRK", async ({ adminPage, sdk }: Fx) => {
     await adminPage.goto(KEYS);
     await adminPage.getByTestId("tpm-op-provision").click();
     const outcome = await outcomeOf(adminPage, "provision");
@@ -72,7 +76,7 @@ test.describe("TPM provisioning (real server)", () => {
     expect(srk.success).toBe(true);
   });
 
-  test("Clear asks first; Cancel sends nothing", async ({ adminPage, sdk }) => {
+  test("Clear asks first; Cancel sends nothing", async ({ adminPage, sdk }: Fx) => {
     const before = await sdk.tpm.getEK();
 
     await adminPage.goto(KEYS);
@@ -87,7 +91,7 @@ test.describe("TPM provisioning (real server)", () => {
     expect(after.data).toEqual(before.data);
   });
 
-  test("Clear with a wrong owner password shows the server's refusal", async ({ adminPage, sdk }) => {
+  test("Clear with a wrong owner password shows the server's refusal", async ({ adminPage, sdk }: Fx) => {
     const before = await sdk.tpm.getEK();
 
     await adminPage.goto(KEYS);
@@ -107,7 +111,7 @@ test.describe("TPM provisioning (real server)", () => {
     }
   });
 
-  test("CreateEK and CreateSRK show the keys the server then reports", async ({ adminPage, sdk }) => {
+  test("CreateEK and CreateSRK show the keys the server then reports", async ({ adminPage, sdk }: Fx) => {
     await adminPage.goto(KEYS);
 
     await adminPage.getByTestId("tpm-op-createEK").click();
@@ -123,7 +127,7 @@ test.describe("TPM provisioning (real server)", () => {
     }
   });
 
-  test("DeleteSRK evicts the SRK after the confirm; CreateSRK restores it", async ({ adminPage, sdk }) => {
+  test("DeleteSRK evicts the SRK after the confirm; CreateSRK restores it", async ({ adminPage, sdk }: Fx) => {
     const seeded = await sdk.tpm.createSRK({ persistent: true });
     expect(seeded.success !== false || (await sdk.tpm.getSRK()).success).toBe(true);
 
@@ -139,7 +143,7 @@ test.describe("TPM provisioning (real server)", () => {
     expect((await sdk.tpm.getSRK()).success).toBe(true);
   });
 
-  test("DeleteEK evicts the EK after the confirm; CreateEK restores it", async ({ adminPage, sdk }) => {
+  test("DeleteEK evicts the EK after the confirm; CreateEK restores it", async ({ adminPage, sdk }: Fx) => {
     const seeded = await sdk.tpm.createEK({ persistent: true });
     expect(seeded.success !== false || (await sdk.tpm.getEK()).success).toBe(true);
 
@@ -155,7 +159,7 @@ test.describe("TPM provisioning (real server)", () => {
     expect((await sdk.tpm.getEK()).success).toBe(true);
   });
 
-  test("ImportEKCertificate sends the pasted PEM and shows the server's answer", async ({ adminPage, sdk }) => {
+  test("ImportEKCertificate sends the pasted PEM and shows the server's answer", async ({ adminPage, sdk }: Fx) => {
     const cert = await sdk.tpm.getEKCertificate();
     test.skip(cert.success === false, "the harness TPM carries no EK certificate to re-import");
     const der = (cert.data as { certificate?: string } | undefined)?.certificate ?? "";
@@ -171,7 +175,7 @@ test.describe("TPM provisioning (real server)", () => {
     expect((after.data as { certificate?: string } | undefined)?.certificate).toBe(der);
   });
 
-  test("ImportEKCertificate refuses text that is not a PEM certificate", async ({ adminPage }) => {
+  test("ImportEKCertificate refuses text that is not a PEM certificate", async ({ adminPage }: Fx) => {
     await adminPage.goto(KEYS);
     await adminPage.getByLabel("EK certificate (PEM)").fill("not a certificate");
     await adminPage.getByTestId("tpm-op-importEKCertificate").click();
@@ -179,7 +183,7 @@ test.describe("TPM provisioning (real server)", () => {
     await expect(adminPage.getByTestId("tpm-result-importEKCertificate")).toHaveCount(0);
   });
 
-  test("CreateAK and GetAK show the AK the server reports", async ({ adminPage, sdk }) => {
+  test("CreateAK and GetAK show the AK the server reports", async ({ adminPage, sdk }: Fx) => {
     await adminPage.goto(KEYS);
     await adminPage.getByTestId("tpm-op-createAK").click();
     await outcomeOf(adminPage, "createAK");
@@ -195,7 +199,7 @@ test.describe("TPM provisioning (real server)", () => {
     }
   });
 
-  test("DeleteAK of the platform IAK shows the server's refusal and keeps the key", async ({ adminPage, sdk }) => {
+  test("DeleteAK of the platform IAK shows the server's refusal and keeps the key", async ({ adminPage, sdk }: Fx) => {
     const before = await sdk.tpm.getAK({ handle: PLATFORM_IAK_HANDLE });
 
     await adminPage.goto(KEYS);
@@ -209,7 +213,7 @@ test.describe("TPM provisioning (real server)", () => {
     expect(after.success).toBe(before.success);
   });
 
-  test("Certify of the SRK shows the server's certification", async ({ adminPage, sdk }) => {
+  test("Certify of the SRK shows the server's certification", async ({ adminPage, sdk }: Fx) => {
     const srk = await sdk.tpm.getSRK();
     test.skip(srk.success === false, "no SRK to certify");
 
@@ -220,7 +224,7 @@ test.describe("TPM provisioning (real server)", () => {
     expect(Object.keys(shown).length).toBeGreaterThan(0);
   });
 
-  test("Quote then Verify Quote on the keys page reports VERIFIED", async ({ adminPage }) => {
+  test("Quote then Verify Quote on the keys page reports VERIFIED", async ({ adminPage }: Fx) => {
     await adminPage.goto(KEYS);
     await expect(adminPage.getByTestId("tpm-op-verifyQuote")).toBeDisabled();
     await adminPage.getByTestId("tpm-op-quote").click();
@@ -230,7 +234,7 @@ test.describe("TPM provisioning (real server)", () => {
     await expect(adminPage.getByTestId("tpm-verdict-verifyQuote")).toContainText("VERIFIED");
   });
 
-  test("the quote page generates a quote and verifies it", async ({ adminPage }) => {
+  test("the quote page generates a quote and verifies it", async ({ adminPage }: Fx) => {
     await adminPage.goto(QUOTE);
     await adminPage.getByRole("button", { name: /generate quote/i }).click();
     await expect(adminPage.locator("#vquote")).not.toHaveValue("", { timeout: 30_000 });
@@ -243,7 +247,7 @@ test.describe("TPM provisioning (real server)", () => {
   test("the quote page verifies a quote seeded through the SDK, and refuses a tampered signature", async ({
     adminPage,
     sdk,
-  }) => {
+  }: Fx) => {
     const nonce = toBase64(crypto.getRandomValues(new Uint8Array(32)));
     const quoted = await sdk.tpm.quote({ akHandle: PLATFORM_IAK_HANDLE, pcrIndices: [0, 7], nonce });
     expect(quoted.success).toBe(true);

@@ -52,11 +52,18 @@ export function useTPMKeyOperations() {
   const [pending, setPending] = React.useState<TPMKeyOperation | null>(null);
   const [results, setResults] = React.useState<Partial<Record<TPMKeyOperation, unknown>>>({});
   const [errors, setErrors] = React.useState<Partial<Record<TPMKeyOperation, string>>>({});
+  // Operations in flight, in start order: pending names the latest one still
+  // running, so a fast operation finishing never clears a slow one's spinner.
+  const inFlight = React.useRef<TPMKeyOperation[]>([]);
 
   const run = React.useCallback(
     async (op: TPMKeyOperation, call: (client: TPMClient) => Promise<OperationResponse>) => {
+      inFlight.current = [...inFlight.current, op];
       setPending(op);
       setErrors((prev) => ({ ...prev, [op]: undefined }));
+      // An earlier answer of this operation never stands beside a new one's
+      // failure (a stale "verified" next to a refused verify).
+      setResults((prev) => ({ ...prev, [op]: undefined }));
       try {
         const res = await call(tpm);
         if (res.success === false) {
@@ -69,7 +76,9 @@ export function useTPMKeyOperations() {
         setErrors((prev) => ({ ...prev, [op]: operationError(err, `${op} failed`) }));
         return null;
       } finally {
-        setPending(null);
+        const at = inFlight.current.indexOf(op);
+        if (at >= 0) inFlight.current = [...inFlight.current.slice(0, at), ...inFlight.current.slice(at + 1)];
+        setPending(inFlight.current.length > 0 ? inFlight.current[inFlight.current.length - 1] : null);
       }
     },
     [tpm],

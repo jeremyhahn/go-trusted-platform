@@ -653,26 +653,26 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
 | `TPMService.Info` | `GET /info` | `(dashboard)/tpm/lockout/page.tsx`<br>`(dashboard)/tpm/nvram/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `TPMService.Provision` | `POST /provision` | - | - | - | missing |
-| `TPMService.Clear` | `POST /clear` | - | - | - | missing |
-| `TPMService.GetCapabilities` | `GET /capabilities` | - | - | - | missing |
-| `TPMService.GetPlatformAttributes` | `GET /platform` | - | - | - | missing |
-| `TPMService.CreateEK` | `POST /ek` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | - | partial |
+| `TPMService.Provision` | `POST /provision` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-provision.spec.ts` | covered |
+| `TPMService.Clear` | `POST /clear` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-provision.spec.ts` | covered |
+| `TPMService.GetCapabilities` | `GET /capabilities` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-provision.spec.ts` | covered |
+| `TPMService.GetPlatformAttributes` | `GET /platform` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-provision.spec.ts` | covered |
+| `TPMService.CreateEK` | `POST /ek` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-provision.spec.ts` | covered |
 | `TPMService.GetEK` | `GET /ek` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.GetEKCertificate` | `GET /ek/certificate` | `(dashboard)/tpm/keys/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `TPMService.ImportEKCertificate` | `POST /ek/certificate` | `(dashboard)/tpm/keys/page.tsx` (read-only) | - | - | partial |
-| `TPMService.DeleteEK` | `DELETE /ek` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | - | partial |
-| `TPMService.CreateSRK` | `POST /srk` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | - | partial |
+| `TPMService.ImportEKCertificate` | `POST /ek/certificate` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-provision.spec.ts` | covered |
+| `TPMService.DeleteEK` | `DELETE /ek` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-provision.spec.ts` | covered |
+| `TPMService.CreateSRK` | `POST /srk` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-provision.spec.ts` | covered |
 | `TPMService.GetSRK` | `GET /srk` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `TPMService.DeleteSRK` | `DELETE /srk` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | - | partial |
-| `TPMService.CreateAK` | `POST /ak` | - | - | - | missing |
-| `TPMService.GetAK` | `GET /ak` | - | - | - | missing |
-| `TPMService.DeleteAK` | `DELETE /ak` | - | - | - | missing |
+| `TPMService.DeleteSRK` | `DELETE /srk` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-provision.spec.ts` | covered |
+| `TPMService.CreateAK` | `POST /ak` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-provision.spec.ts` | covered |
+| `TPMService.GetAK` | `GET /ak` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-provision.spec.ts` | covered |
+| `TPMService.DeleteAK` | `DELETE /ak` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-provision.spec.ts` | covered |
 | `TPMService.Seal` | `POST /seal` | `(dashboard)/tpm/seal/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.Unseal` | `POST /unseal` | `(dashboard)/tpm/seal/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `TPMService.Quote` | `POST /quote` | `(dashboard)/tpm/quote/page.tsx` | - | - | partial |
-| `TPMService.VerifyQuote` | `POST /quote/verify` | `(dashboard)/tpm/quote/page.tsx` | - | - | partial |
-| `TPMService.Certify` | `POST /certify` | - | - | - | missing |
+| `TPMService.Quote` | `POST /quote` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/quote/page.tsx` | - | `real-server/tpm-provision.spec.ts` | covered |
+| `TPMService.VerifyQuote` | `POST /quote/verify` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/quote/page.tsx` | - | `real-server/tpm-provision.spec.ts` | covered |
+| `TPMService.Certify` | `POST /certify` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-provision.spec.ts` | covered |
 | `TPMService.GetEventLog` | `GET /eventlog` | `(dashboard)/tpm/eventlog/page.tsx` | - | - | partial |
 | `TPMService.GetPCRs` | `GET /pcrs` | `(dashboard)/tpm/pcrs/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.ExtendPCR` | `POST /pcrs/extend` | - | - | - | missing |
@@ -833,4 +833,4 @@ Eleven rows were checked against the page source. Two disagreed and the join was
 | `KeyManagementService.ExportKey` | covered | `kms` calls `kms.exportKey` | agrees |
 | `PlatformDaemon.GetHealth` | covered | `platform/health` calls `platform.getHealth` | agrees |
 | `PlatformIAMService.CreateRole` | partial | `iam/roles/new` calls `iam.createRole`; no spec visits `/iam/roles/new` | agrees |
-| `TPMService.Quote` | partial | `tpm/quote` calls `tpm.quote`; no spec visits `/tpm/quote` | agrees |
+| `TPMService.Quote` | covered | `tpm/quote` calls `tpm.quote`; `real-server/tpm-provision.spec.ts` visits `/tpm/quote` (#2068) | agrees |
