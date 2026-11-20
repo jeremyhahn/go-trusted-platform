@@ -24,6 +24,7 @@ import (
 	"sync"
 	"testing"
 
+	ipcv1 "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -126,6 +127,115 @@ func TestWireGuardPlane_InstallAndRemove(t *testing.T) {
 	assert.Len(t, hub.removed, 1)
 }
 
+// TestWireGuardPlane_AnInstallAfterItsRemovalIsRefused pins finding 3: the
+// removal of a lease the plane does not hold yet, the cleanup of a cancelled
+// install, fences that install when it arrives late.
+func TestWireGuardPlane_AnInstallAfterItsRemovalIsRefused(t *testing.T) {
+	plane, hub := newWireGuardPlaneForTest(t)
+	ctx := context.Background()
+	require.NoError(t, plane.RemovePeer(ctx, "l1"))
+
+	var notFound *ErrLeaseNotFound
+	require.ErrorAs(t, plane.InstallPeer(ctx, wgLease("l1", "10.9.0.23/32", wgClientKey(1))), &notFound)
+	assert.Equal(t, LeaseID("l1"), notFound.LeaseID)
+
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	assert.Empty(t, hub.peers, "the late install programs no peer")
+	assert.Empty(t, plane.peers, "the plane records no peer")
+}
+
+func TestWireGuardPlane_ACancelledInstallProgramsNothing(t *testing.T) {
+	plane, hub := newWireGuardPlaneForTest(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := plane.InstallPeer(ctx, wgLease("l1", "10.9.0.23/32", wgClientKey(1)))
+	require.ErrorIs(t, err, context.Canceled)
+
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	assert.Empty(t, hub.peers, "a cancelled install programs no peer")
+}
+
+// heldInstallPeers holds each install's server handler until release closes,
+// as a datapath child still working on an RPC its caller gave up on.
+type heldInstallPeers struct {
+	*hostPeers
+	release chan struct{}
+	handled chan struct{}
+}
+
+func (p *heldInstallPeers) InstallVPNPeer(ctx context.Context, req *ipcv1.InstallVPNPeerRequest) (*ipcv1.InstallVPNPeerResponse, error) {
+	go func() {
+		defer close(p.handled)
+		<-p.release
+		p.host.InstallVPNPeer(context.Background(), req)
+	}()
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestDatapathPlane_AnInstallHeldPastItsCleanupProgramsNothing(t *testing.T) {
+	plane, hub := newWireGuardPlaneForTest(t)
+	peers := &heldInstallPeers{
+		hostPeers: &hostPeers{host: hostOf(t, plane)},
+		release:   make(chan struct{}),
+		handled:   make(chan struct{}),
+	}
+	remote, err := NewDatapathPlane(DataPlaneWireGuard, peers)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	lease := wgLease("l1", "10.9.0.23/32", wgClientKey(1))
+	require.Error(t, remote.InstallPeer(ctx, lease), "the cancelled install fails")
+	require.NoError(t, remote.RemovePeer(context.Background(), lease.ID), "the cleanup removal succeeds")
+
+	close(peers.release)
+	<-peers.handled
+
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	assert.Empty(t, hub.peers, "the install held past its cleanup programs no peer")
+}
+
+// TestWireGuardPlane_ReconcileRemovesPeersOutsideKeep covers the hosted
+// plane's half of a vpn child's restart: a peer whose lease the restarted
+// child no longer stores is removed from the hub; a kept one stays.
+func TestWireGuardPlane_ReconcileRemovesPeersOutsideKeep(t *testing.T) {
+	plane, hub := newWireGuardPlaneForTest(t)
+	kept, revoked := wgClientKey(1), wgClientKey(2)
+	require.NoError(t, plane.InstallPeer(context.Background(), wgLease("l1", "10.9.0.23/32", kept)))
+	require.NoError(t, plane.InstallPeer(context.Background(), wgLease("l2", "10.9.0.24/32", revoked)))
+
+	var r PeerReconciler = plane
+	require.NoError(t, r.ReconcilePeers(context.Background(), []LeaseID{"l1"}))
+	_, ok := hub.peers[string(kept)]
+	assert.True(t, ok, "the kept peer was removed")
+	_, ok = hub.peers[string(revoked)]
+	assert.False(t, ok, "the revoked peer is still on the hub")
+}
+
+func TestWireGuardPlane_ACancelledReconcileRemovesNothing(t *testing.T) {
+	// A given-up follower's withdrawal is cancelled by its replacement's
+	// launch: the cancelled reconciliation must not remove a peer the
+	// replacement installs after it.
+	plane, hub := newWireGuardPlaneForTest(t)
+	first, second := wgClientKey(1), wgClientKey(2)
+	require.NoError(t, plane.InstallPeer(context.Background(), wgLease("l1", "10.9.0.23/32", first)))
+	require.NoError(t, plane.InstallPeer(context.Background(), wgLease("l2", "10.9.0.24/32", second)))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var r PeerReconciler = plane
+	require.ErrorIs(t, r.ReconcilePeers(ctx, nil), context.Canceled)
+	_, ok := hub.peers[string(first)]
+	assert.True(t, ok, "a cancelled reconciliation removed a peer")
+	_, ok = hub.peers[string(second)]
+	assert.True(t, ok, "a cancelled reconciliation removed a peer")
+}
+
 func TestWireGuardPlane_RefusesBadLeases(t *testing.T) {
 	plane, hub := newWireGuardPlaneForTest(t)
 	ctx := context.Background()
@@ -152,6 +262,54 @@ func TestWireGuardPlane_KernelRefusalIsReported(t *testing.T) {
 	hub.removeErr = boom
 	require.ErrorIs(t, plane.RemovePeer(context.Background(), "l1"), boom)
 	assert.Contains(t, plane.peers, LeaseID("l1"), "the lease must stay mapped when the kernel refused the removal")
+}
+
+// A public key belongs to one lease at a time. Removal is by key, so a
+// second lease on a key whose removal failed would lose its peer to the
+// retry of the first lease's removal; the plane refuses it instead.
+func TestWireGuardPlane_RefusesAKeyAnotherLeaseHolds(t *testing.T) {
+	plane, hub := newWireGuardPlaneForTest(t)
+	key := wgClientKey(1)
+	require.NoError(t, plane.InstallPeer(context.Background(), wgLease("l1", "10.9.0.23/32", key)))
+	hub.removeErr = errors.New("kernel says no")
+	require.Error(t, plane.RemovePeer(context.Background(), "l1"))
+
+	err := plane.InstallPeer(context.Background(), wgLease("l2", "10.9.0.24/32", key))
+	var conflict *ErrPeerConflict
+	require.True(t, errors.As(err, &conflict), "got %v", err)
+	assert.Equal(t, LeaseID("l2"), conflict.LeaseID)
+	assert.Equal(t, LeaseID("l1"), conflict.Existing)
+	assert.Equal(t, []netip.Prefix{netip.MustParsePrefix("10.9.0.23/32")}, hub.peers[string(key)],
+		"the refused lease does not reprogram l1's peer")
+	assert.NotContains(t, plane.peers, LeaseID("l2"))
+
+	require.NoError(t, plane.InstallPeer(context.Background(), wgLease("l1", "10.9.0.23/32", key)),
+		"re-installing a lease with its own key still succeeds")
+
+	hub.removeErr = nil
+	require.NoError(t, plane.ReconcilePeers(context.Background(), []LeaseID{}))
+	require.NoError(t, plane.InstallPeer(context.Background(), wgLease("l2", "10.9.0.24/32", key)),
+		"the key is free once l1's peer is gone")
+	require.NoError(t, plane.ReconcilePeers(context.Background(), []LeaseID{"l2"}))
+	assert.Contains(t, hub.peers, string(key), "reconciling keeps l2's peer")
+}
+
+// Removal is by key: a lease whose key another mapped lease still holds
+// drops only its own entry, never the other lease's peer.
+func TestWireGuardPlane_RemovalKeepsAKeyAnotherLeaseHolds(t *testing.T) {
+	plane, hub := newWireGuardPlaneForTest(t)
+	key := wgClientKey(1)
+	require.NoError(t, plane.InstallPeer(context.Background(), wgLease("l1", "10.9.0.23/32", key)))
+	plane.peers["l0"] = key
+
+	require.NoError(t, plane.RemovePeer(context.Background(), "l0"))
+	assert.Contains(t, hub.peers, string(key), "l1 still holds the key")
+	assert.NotContains(t, plane.peers, LeaseID("l0"))
+
+	plane.peers["l0"] = key
+	require.NoError(t, plane.ReconcilePeers(context.Background(), []LeaseID{"l1"}))
+	assert.Contains(t, hub.peers, string(key), "reconciling away l0 keeps l1's peer")
+	assert.NotContains(t, plane.peers, LeaseID("l0"))
 }
 
 func TestWireGuardPlane_Lifecycle(t *testing.T) {

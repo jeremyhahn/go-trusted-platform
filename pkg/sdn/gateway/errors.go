@@ -532,6 +532,19 @@ func (e *ErrHostFWConfigInvalid) Unwrap() error {
 	return e.Cause
 }
 
+// ErrFHRPConfigInvalid wraps an fhrp section configuration error.
+type ErrFHRPConfigInvalid struct {
+	Cause error
+}
+
+func (e *ErrFHRPConfigInvalid) Error() string {
+	return fmt.Sprintf("gateway fhrp configuration invalid: %v", e.Cause)
+}
+
+func (e *ErrFHRPConfigInvalid) Unwrap() error {
+	return e.Cause
+}
+
 // ErrOverlayIPsecConfigInvalid wraps an overlay ipsec section error.
 type ErrOverlayIPsecConfigInvalid struct {
 	Cause error

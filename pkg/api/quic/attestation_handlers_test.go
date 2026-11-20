@@ -64,6 +64,24 @@ type mockAttestationService struct {
 	vmAttestation        *manifest.VMAttestation
 	containerAttestation *manifest.ContainerAttestation
 	deviceResult         *AttestationDeviceResult
+	listManifests        []*manifest.HostManifest
+	listManifestsErr     error
+	lastListFilter       *AttestationListManifestsFilter
+	deletedID            string
+	deleteManifestErr    error
+}
+
+func (m *mockAttestationService) ListManifests(_ context.Context, filter *AttestationListManifestsFilter) ([]*manifest.HostManifest, int, error) {
+	m.lastListFilter = filter
+	if m.listManifestsErr != nil {
+		return nil, 0, m.listManifestsErr
+	}
+	return m.listManifests, len(m.listManifests), nil
+}
+
+func (m *mockAttestationService) DeleteManifest(_ context.Context, id string) error {
+	m.deletedID = id
+	return m.deleteManifestErr
 }
 
 func newMockAttestationService() *mockAttestationService {
@@ -529,6 +547,133 @@ func TestHandleGetManifest(t *testing.T) {
 		resp := handler.HandleRequest(ctx, req)
 
 		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
+	})
+}
+
+// TestHandleListManifests: OpAttestListManifests (0x66) reaches the service
+// with the parsed filter (#1686, ruling 931).
+func TestHandleListManifests(t *testing.T) {
+	ctx := context.Background()
+	start := time.Unix(1700000000, 123456789).UTC()
+	end := time.Unix(1700009000, 0).UTC()
+
+	t.Run("lists manifests with the filter", func(t *testing.T) {
+		handler, service := createTestAttestationHandler()
+		service.listManifests = []*manifest.HostManifest{{ID: "m-1", HostID: "host-a"}, {ID: "m-2", HostID: "host-a"}}
+
+		payload, err := quicwire.EncodePayload(&ListManifestsRequest{
+			HostID: "host-a", StartTime: start.Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano),
+			Limit: 5, Offset: 1,
+		})
+		require.NoError(t, err)
+
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpAttestListManifests, Payload: payload})
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+
+		require.NotNil(t, service.lastListFilter)
+		f := service.lastListFilter
+		assert.Equal(t, "host-a", f.HostID)
+		assert.True(t, f.StartTime.Equal(start))
+		assert.True(t, f.EndTime.Equal(end))
+		assert.Equal(t, 5, f.Limit)
+		assert.Equal(t, 1, f.Offset)
+
+		var listResp ListManifestsResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &listResp))
+		require.Len(t, listResp.Manifests, 2)
+		assert.Equal(t, "m-1", listResp.Manifests[0].ID)
+		assert.Equal(t, 2, listResp.Total)
+	})
+
+	t.Run("empty bounds are no bound", func(t *testing.T) {
+		handler, service := createTestAttestationHandler()
+		payload, err := quicwire.EncodePayload(&ListManifestsRequest{})
+		require.NoError(t, err)
+
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpAttestListManifests, Payload: payload})
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		require.NotNil(t, service.lastListFilter)
+		assert.True(t, service.lastListFilter.StartTime.IsZero())
+		assert.True(t, service.lastListFilter.EndTime.IsZero())
+	})
+
+	t.Run("bad start_time is an invalid argument", func(t *testing.T) {
+		handler, service := createTestAttestationHandler()
+		payload, err := quicwire.EncodePayload(&ListManifestsRequest{StartTime: "yesterday"})
+		require.NoError(t, err)
+
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpAttestListManifests, Payload: payload})
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+		assert.Nil(t, service.lastListFilter)
+
+		_, perr := handler.parseListManifestsFilter(&ListManifestsRequest{StartTime: "yesterday"})
+		var bound ErrAttestationInvalidTimeBound
+		require.ErrorAs(t, perr, &bound)
+		assert.Equal(t, "start_time", bound.Field)
+	})
+
+	t.Run("service error maps through the error table", func(t *testing.T) {
+		handler, service := createTestAttestationHandler()
+		service.listManifestsErr = manifest.ErrBuilderNotInitialized{}
+		payload, err := quicwire.EncodePayload(&ListManifestsRequest{})
+		require.NoError(t, err)
+
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpAttestListManifests, Payload: payload})
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
+	})
+
+	t.Run("service unavailable", func(t *testing.T) {
+		handler := NewAttestationHandler(newAttestTestLogger(), nil)
+		payload, err := quicwire.EncodePayload(&ListManifestsRequest{})
+		require.NoError(t, err)
+
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpAttestListManifests, Payload: payload})
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
+	})
+}
+
+// TestHandleDeleteManifest: OpAttestDeleteManifest (0x67) deletes by id.
+func TestHandleDeleteManifest(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("deletes the manifest", func(t *testing.T) {
+		handler, service := createTestAttestationHandler()
+		payload, err := quicwire.EncodePayload(&DeleteManifestRequest{ID: "m-9"})
+		require.NoError(t, err)
+
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpAttestDeleteManifest, Payload: payload})
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		assert.Equal(t, "m-9", service.deletedID)
+
+		var delResp DeleteManifestResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &delResp))
+		assert.True(t, delResp.Success)
+	})
+
+	t.Run("empty id is an invalid argument", func(t *testing.T) {
+		handler, service := createTestAttestationHandler()
+		payload, err := quicwire.EncodePayload(&DeleteManifestRequest{})
+		require.NoError(t, err)
+
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpAttestDeleteManifest, Payload: payload})
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+		assert.Empty(t, service.deletedID)
+	})
+
+	t.Run("service error maps through the error table", func(t *testing.T) {
+		handler, service := createTestAttestationHandler()
+		service.deleteManifestErr = manifest.ErrHostNotAttested{}
+		payload, err := quicwire.EncodePayload(&DeleteManifestRequest{ID: "m-9"})
+		require.NoError(t, err)
+
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpAttestDeleteManifest, Payload: payload})
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
+	})
+
+	t.Run("invalid payload", func(t *testing.T) {
+		handler, _ := createTestAttestationHandler()
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpAttestDeleteManifest, Payload: []byte("invalid")})
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -2406,6 +2551,20 @@ func TestManifestToData(t *testing.T) {
 		assert.Len(t, data.Containers, 1)
 	})
 
+	t.Run("keeps sub-second manifest time", func(t *testing.T) {
+		m := &manifest.HostManifest{
+			ID:        "frac",
+			HostID:    "test-host",
+			Timestamp: time.Unix(1700000000, 123456789).UTC(),
+		}
+		data := handler.manifestToData(m)
+		assert.Equal(t, int64(1700000000), data.Timestamp)
+		assert.Equal(t, int64(123456789), data.TimestampNanos)
+		back, err := handler.dataToManifest(data)
+		assert.NoError(t, err)
+		assert.True(t, back.Timestamp.Equal(m.Timestamp), "round trip %v != %v", back.Timestamp, m.Timestamp)
+	})
+
 	t.Run("handles nil manifest", func(t *testing.T) {
 		data := handler.manifestToData(nil)
 		assert.Nil(t, data)
@@ -2440,11 +2599,54 @@ func TestDataToManifest(t *testing.T) {
 		assert.NotNil(t, m.Host)
 	})
 
+	t.Run("keeps sub-second manifest time", func(t *testing.T) {
+		want := time.Unix(1700000000, 123456789).UTC()
+		m, err := handler.dataToManifest(&ManifestData{
+			ID:             "frac",
+			HostID:         "test-host",
+			Timestamp:      1700000000,
+			TimestampNanos: 123456789,
+		})
+		assert.NoError(t, err)
+		assert.True(t, m.Timestamp.Equal(want), "timestamp %v != %v", m.Timestamp, want)
+	})
+
 	t.Run("handles nil data", func(t *testing.T) {
 		m, err := handler.dataToManifest(nil)
 		assert.Error(t, err)
 		assert.Nil(t, m)
 	})
+}
+
+// A stored manifest whose host, VM and container evidence carry
+// sub-second times crosses the QUIC wire unchanged (#1686, Codex round 5).
+func TestManifestNestedEvidenceKeepsNanoseconds(t *testing.T) {
+	handler, _ := createTestAttestationHandler()
+	hostTS := time.Unix(1700000100, 111111111).UTC()
+	vmTS := time.Unix(1700000200, 222222222).UTC()
+	ctrTS := time.Unix(1700000300, 333333333).UTC()
+	m := &manifest.HostManifest{
+		ID:         "frac-nested",
+		HostID:     "test-host",
+		Timestamp:  time.Unix(1700000000, 123456789).UTC(),
+		Host:       &manifest.HostAttestation{QuoteData: []byte("q"), Timestamp: hostTS, HashAlgorithm: manifest.HashAlgorithmSHA256},
+		VMs:        []manifest.VMAttestation{{VMID: "vm-1", Timestamp: vmTS, HashAlgorithm: manifest.HashAlgorithmSHA256}},
+		Containers: []manifest.ContainerAttestation{{ContainerID: "c-1", Timestamp: ctrTS}},
+	}
+
+	data := handler.manifestToData(m)
+	require.NotNil(t, data.Host)
+	require.Len(t, data.VMs, 1)
+	require.Len(t, data.Containers, 1)
+	assert.Equal(t, int64(111111111), data.Host.TimestampNanos)
+	assert.Equal(t, int64(222222222), data.VMs[0].TimestampNanos)
+	assert.Equal(t, int64(333333333), data.Containers[0].TimestampNanos)
+
+	back, err := handler.dataToManifest(data)
+	require.NoError(t, err)
+	assert.True(t, back.Host.Timestamp.Equal(hostTS), "host %v != %v", back.Host.Timestamp, hostTS)
+	assert.True(t, back.VMs[0].Timestamp.Equal(vmTS), "vm %v != %v", back.VMs[0].Timestamp, vmTS)
+	assert.True(t, back.Containers[0].Timestamp.Equal(ctrTS), "container %v != %v", back.Containers[0].Timestamp, ctrTS)
 }
 
 func TestHostAttestationDataConversion(t *testing.T) {
@@ -2570,6 +2772,12 @@ func TestAttestationOpcodeConstants(t *testing.T) {
 		{"OpAttestGetReportByID", quicwire.OpAttestGetReportByID},
 		{"OpAttestCreatePolicy", quicwire.OpAttestCreatePolicy},
 		{"OpAttestListPolicies", quicwire.OpAttestListPolicies},
+		{"OpAttestListManifests", quicwire.OpAttestListManifests},
+		{"OpAttestDeleteManifest", quicwire.OpAttestDeleteManifest},
+	}
+	if quicwire.OpAttestListManifests != 0x66 || quicwire.OpAttestDeleteManifest != 0x67 {
+		t.Errorf("manifest list/delete opcodes = 0x%02X/0x%02X, want 0x66/0x67",
+			quicwire.OpAttestListManifests, quicwire.OpAttestDeleteManifest)
 	}
 
 	seen := make(map[byte]string)

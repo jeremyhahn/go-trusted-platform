@@ -1,0 +1,2 @@
+ID    HOST     TIMESTAMP              VERSION   SIGNATURE           VMS   CONTAINERS
+m-1   host-a   2026-11-12T10:00:00Z   1         ECDSA-P256-SHA256   2     1

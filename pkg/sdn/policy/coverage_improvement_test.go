@@ -176,10 +176,10 @@ func TestSDNEnrollmentHook_BuildPortPolicy_NoOrganization(t *testing.T) {
 
 	profile := createTestDeviceProfile(1, "Test Profile", "52:54:00", "", 100)
 
-	policy, _ := hook.buildPortPolicy(profile, cert)
-	require.NotNil(t, policy)
-	// Verify default tenant ID is used when Organization is empty
-	assert.Equal(t, "default", policy.TenantID)
+	policy, err := hook.buildPortPolicy(profile, cert)
+	// SPEC row 122: no subject OU means no tenant, never a "default" one.
+	require.ErrorIs(t, err, ErrMissingTenantID)
+	assert.Nil(t, policy)
 }
 
 // TestSDNEnrollmentHook_PrecheckActivation_NilPolicyBuild tests that a

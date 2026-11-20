@@ -20,12 +20,14 @@ import { DeviceService } from '../services/device-service.js';
 import { DNSService } from '../services/dns-service.js';
 import { NTPService } from '../services/ntp-service.js';
 import { BMCService } from '../services/bmc-service.js';
+import { CapabilitiesService } from '../services/capabilities-service.js';
 import { GatewayService } from '../services/gateway-service.js';
 import { IAMService } from '../services/iam-service.js';
 import { IDevIDService } from '../services/idevid-service.js';
 import { KMSService } from '../services/kms-service.js';
 import { OverlayService } from '../services/overlay-service.js';
 import { PlatformService } from '../services/platform-service.js';
+import type { PlatformRouteLayout } from '../services/platform-service.js';
 import { PXEService } from '../services/pxe-service.js';
 import { SDNService } from '../services/sdn-service.js';
 import { SwitchService } from '../services/switch-service.js';
@@ -101,6 +103,13 @@ export interface PlatformClientConfig extends ApiClientConfig {
    * (in-memory transport), and gRPC-Web deployments.
    */
   transport?: Transport;
+
+  /**
+   * Route layout of the platform service's getStatus and service-management
+   * methods: 'webservice' (default, /api/v1/platform/...) or 'daemon' (the
+   * daemon REST listener's /api/v1/status and /api/v1/services).
+   */
+  platformRouteLayout?: PlatformRouteLayout;
 }
 
 /**
@@ -190,6 +199,9 @@ export class PlatformClient {
 
   /** NTP status, sources and clock step */
   public readonly ntp: NTPService;
+
+  /** What the server offers, enabled and dark */
+  public readonly capabilities: CapabilitiesService;
 
   /** Gateway service for BGP and IPAM operations */
   public readonly gateway: GatewayService;
@@ -363,12 +375,13 @@ export class PlatformClient {
     this.dns = new DNSService(t);
     this.ntp = new NTPService(t);
     this.bmc = new BMCService(t);
+    this.capabilities = new CapabilitiesService(t);
     this.gateway = new GatewayService(t);
     this.iam = new IAMService(t);
     this.idevid = new IDevIDService(t);
     this.kms = new KMSService(t);
     this.overlay = new OverlayService(t);
-    this.platform = new PlatformService(t);
+    this.platform = new PlatformService(t, { routeLayout: config?.platformRouteLayout });
     this.pxe = new PXEService(t);
     this.sdn = new SDNService(t);
     this.switches = new SwitchService(t);

@@ -28,6 +28,22 @@ import type {
 } from '../types/platform.js';
 
 /**
+ * Which listener's route layout the platform service speaks for getStatus
+ * and the service-management methods. The webservice listener serves them
+ * under /api/v1/platform; the daemon REST listener registers /api/v1/status
+ * and /api/v1/services (pkg/api/daemon/rest_service.go).
+ */
+export type PlatformRouteLayout = 'webservice' | 'daemon';
+
+/**
+ * Platform service options
+ */
+export interface PlatformServiceOptions {
+  /** Route layout; defaults to 'webservice' */
+  routeLayout?: PlatformRouteLayout | undefined;
+}
+
+/**
  * Platform Service class
  *
  * @example
@@ -57,9 +73,13 @@ export class PlatformService extends BaseService {
    *
    * @param client - The API client to use for requests
    */
-  constructor(client: Transport | ApiClient) {
+  constructor(client: Transport | ApiClient, options?: PlatformServiceOptions) {
     super(client, '/v1/platform');
+    this.lifecycleBasePath = (options?.routeLayout ?? 'webservice') === 'daemon' ? '/v1' : '/v1/platform';
   }
+
+  /** Base path of getStatus and the service-management routes. */
+  private readonly lifecycleBasePath: string;
 
   // =========================================================================
   // Information Operations
@@ -163,7 +183,7 @@ export class PlatformService extends BaseService {
    * @returns Daemon status
    */
   async getStatus(): Promise<ApiResponse<DaemonStatusResponse>> {
-    return this.client.get<DaemonStatusResponse>(this.buildUrl('/status'));
+    return this.client.get<DaemonStatusResponse>(this.buildUrlUnder(this.lifecycleBasePath, '/status'));
   }
 
   /**
@@ -172,7 +192,7 @@ export class PlatformService extends BaseService {
    * @returns Services and their status
    */
   async listServices(): Promise<ApiResponse<ListDaemonServicesResponse>> {
-    return this.client.get<ListDaemonServicesResponse>(this.buildUrl('/services'));
+    return this.client.get<ListDaemonServicesResponse>(this.buildUrlUnder(this.lifecycleBasePath, '/services'));
   }
 
   /**
@@ -183,7 +203,7 @@ export class PlatformService extends BaseService {
    */
   async getServiceStatus(service: string): Promise<ApiResponse<DaemonServiceInfo>> {
     return this.client.get<DaemonServiceInfo>(
-      this.buildUrl(`/services/${encodeURIComponent(service)}`)
+      this.buildUrlUnder(this.lifecycleBasePath, `/services/${encodeURIComponent(service)}`)
     );
   }
 
@@ -225,7 +245,7 @@ export class PlatformService extends BaseService {
     // acted, and the REST handler has no idempotency key, so a resend could
     // stop or restart the service a second time.
     return this.client.post<DaemonServiceActionResponse>(
-      this.buildUrl(`/services/${encodeURIComponent(service)}/${action}`),
+      this.buildUrlUnder(this.lifecycleBasePath, `/services/${encodeURIComponent(service)}/${action}`),
       {},
       { retry: { enabled: false } }
     );

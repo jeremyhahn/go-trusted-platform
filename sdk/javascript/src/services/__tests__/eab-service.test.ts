@@ -121,4 +121,39 @@ describe('EABService', () => {
       expect(mockClient.get).toHaveBeenCalledWith('/v1/eab/credentials/1762905600123456789');
     });
   });
+
+  describe('credential id validation (#2022 Codex r1)', () => {
+    it('rejects an id that would reach another route, without a transport call', async () => {
+      await expect(service.markUsed('cleanup?')).rejects.toThrow(RangeError);
+      expect(mockClient.post).not.toHaveBeenCalled();
+    });
+
+    it('rejects an id with a path separator, without a transport call', async () => {
+      await expect(service.getEnrollmentURL('1/2')).rejects.toThrow(RangeError);
+      expect(mockClient.get).not.toHaveBeenCalled();
+    });
+
+    it('rejects an empty id in every id method, without a transport call', async () => {
+      await expect(service.get('')).rejects.toThrow(RangeError);
+      await expect(service.revoke('')).rejects.toThrow(RangeError);
+      await expect(service.delete('')).rejects.toThrow(RangeError);
+      await expect(service.getQRCode('')).rejects.toThrow(RangeError);
+      await expect(service.getEnrollmentURL('')).rejects.toThrow(RangeError);
+      await expect(service.markUsed('')).rejects.toThrow(RangeError);
+      expect(mockClient.get).not.toHaveBeenCalled();
+      expect(mockClient.post).not.toHaveBeenCalled();
+      expect(mockClient.delete).not.toHaveBeenCalled();
+    });
+
+    it('posts the max uint64 id to its used route', async () => {
+      vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: {} });
+
+      await service.markUsed('18446744073709551615');
+
+      expect(mockClient.post).toHaveBeenCalledWith(
+        '/v1/eab/credentials/18446744073709551615/used',
+        {}
+      );
+    });
+  });
 });

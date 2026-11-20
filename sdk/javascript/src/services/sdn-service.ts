@@ -285,6 +285,26 @@ export class SDNService extends BaseService {
    * @returns Applied policy
    */
   async applyPolicy(request: ApplyPolicyRequest): Promise<ApiResponse<ApplyPolicyResponse>> {
+    // The daemon installs flows on BRIDGE targets only and reports success for
+    // any other target type, so refuse those here rather than send a policy
+    // that silently does nothing on them.
+    for (const target of request.config.targets ?? []) {
+      if (target.type !== 'POLICY_TARGET_TYPE_BRIDGE') {
+        throw new RangeError(
+          `policy target type ${target.type} is not supported: only POLICY_TARGET_TYPE_BRIDGE is applied`
+        );
+      }
+    }
+    // The daemon installs RATE_LIMIT and MIRROR rules as a plain forward, so
+    // such a policy would be reported active while limiting or mirroring
+    // nothing: refuse it before sending.
+    for (const rule of request.config.rules ?? []) {
+      if (rule.action === 'POLICY_RULE_ACTION_RATE_LIMIT' || rule.action === 'POLICY_RULE_ACTION_MIRROR') {
+        throw new RangeError(
+          `policy rule action ${rule.action} is not supported: the daemon does not enforce it`
+        );
+      }
+    }
     // Not idempotent: the daemon installs the policy (generating an ID when
     // none is given) before it answers, so a resend after a lost response
     // fails AlreadyExists although the policy is enforced.

@@ -17,6 +17,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1197,8 +1199,10 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		for i, rule := range config.GetRules() {
 			flowMod := flowMods[i]
 			if err := client.AddFlow(ctx, bridgeName, flowMod); err != nil {
+				removed := make(map[flowEntryKey]bool, len(installed))
 				for _, f := range installed {
 					_ = client.DeleteFlowStrict(ctx, f.bridge, f.flow)
+					removed[newFlowEntryKey(f.bridge, f.flow)] = true
 				}
 				// An update's AddFlow replaced the previous policy's flow with
 				// the same match, and the delete above removed it: put the
@@ -1208,6 +1212,10 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 					old.status = "error"
 					s.mu.Unlock()
 				}
+				// A flow this call installed may also have replaced another
+				// policy's entry with the same table, priority and match: put
+				// those entries back so that policy stays enforced.
+				s.restoreOverwrittenFlows(ctx, client, policyID, removed)
 				return nil, status.Errorf(codes.Internal, "install flow for rule %q on bridge %q: %v", rule.GetRuleId(), bridgeName, err)
 			}
 			installed = append(installed, installedFlow{bridge: bridgeName, flow: flowMod})
@@ -1273,6 +1281,129 @@ func (s *SDNService) restorePolicyFlows(ctx context.Context, client ovs.ClientIn
 		}
 	}
 	return ok
+}
+
+// flowEntryKey identifies a switch entry: OpenFlow keeps one flow per bridge,
+// table, priority and match, so a flow with the same key replaces another.
+type flowEntryKey struct {
+	bridge   string
+	table    int
+	priority int
+	match    string
+}
+
+func newFlowEntryKey(bridge string, f *ovs.FlowMod) flowEntryKey {
+	return flowEntryKey{bridge: bridge, table: f.Table, priority: f.Priority, match: normalizeFlowMatch(f.Match)}
+}
+
+// flowMatchShorthands expands the ovs-ofctl protocol shorthands to the fields
+// the switch parses them into, so "tcp" and "ip,nw_proto=6" compare equal.
+var flowMatchShorthands = map[string][]string{
+	"ip":    {"dl_type=2048"},
+	"ipv6":  {"dl_type=34525"},
+	"arp":   {"dl_type=2054"},
+	"icmp":  {"dl_type=2048", "nw_proto=1"},
+	"tcp":   {"dl_type=2048", "nw_proto=6"},
+	"udp":   {"dl_type=2048", "nw_proto=17"},
+	"sctp":  {"dl_type=2048", "nw_proto=132"},
+	"icmp6": {"dl_type=34525", "nw_proto=58"},
+	"tcp6":  {"dl_type=34525", "nw_proto=6"},
+	"udp6":  {"dl_type=34525", "nw_proto=17"},
+	"sctp6": {"dl_type=34525", "nw_proto=132"},
+}
+
+// normalizeFlowMatch returns a canonical form of an OpenFlow match: protocol
+// shorthands expanded to their fields, numeric values in decimal, fields
+// de-duplicated and sorted, so two spellings of one switch entry are equal.
+func normalizeFlowMatch(match string) string {
+	fields := make(map[string]struct{})
+	for _, part := range strings.Split(match, ",") {
+		part = strings.ToLower(strings.TrimSpace(part))
+		if part == "" {
+			continue
+		}
+		if expanded, ok := flowMatchShorthands[part]; ok {
+			for _, f := range expanded {
+				fields[f] = struct{}{}
+			}
+			continue
+		}
+		if k, v, ok := strings.Cut(part, "="); ok {
+			k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+			if k == "ip_proto" {
+				k = "nw_proto"
+			}
+			if n, err := strconv.ParseUint(v, 0, 64); err == nil {
+				v = strconv.FormatUint(n, 10)
+			} else if _, prefix, err := net.ParseCIDR(v); err == nil {
+				// The OpenFlow encoder writes a prefix's masked network
+				// (10.0.0.1/24 and 10.0.0.0/24 are one switch entry), and
+				// a full-length prefix is the plain address.
+				if ones, bits := prefix.Mask.Size(); ones == bits {
+					v = prefix.IP.String()
+				} else {
+					v = prefix.String()
+				}
+			}
+			part = k + "=" + v
+		}
+		fields[part] = struct{}{}
+	}
+	out := make([]string, 0, len(fields))
+	for f := range fields {
+		out = append(out, f)
+	}
+	sort.Strings(out)
+	return strings.Join(out, ",")
+}
+
+// restoreOverwrittenFlows re-installs the flows of every recorded policy other
+// than skipID whose switch entry is in removed: a failed apply replaced those
+// entries and its rollback deleted them. A policy whose flow cannot be put back
+// is marked "error".
+func (s *SDNService) restoreOverwrittenFlows(ctx context.Context, client ovs.ClientInterface, skipID string, removed map[flowEntryKey]bool) {
+	type restore struct {
+		p      *policyResource
+		bridge string
+		flow   *ovs.FlowMod
+	}
+	var others []*policyResource
+	s.mu.RLock()
+	for id, p := range s.policies {
+		if id != skipID {
+			others = append(others, p)
+		}
+	}
+	s.mu.RUnlock()
+
+	// findBridgeName takes s.mu itself, so resolve outside the lock.
+	var restores []restore
+	for _, p := range others {
+		for _, target := range p.targets {
+			if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
+				continue
+			}
+			bridgeName, found := s.findBridgeName(target.GetId())
+			if !found {
+				continue
+			}
+			for _, rule := range p.rules {
+				flowMod, err := s.policyRuleToFlowMod(rule, p.priority)
+				if err != nil || !removed[newFlowEntryKey(bridgeName, flowMod)] {
+					continue
+				}
+				restores = append(restores, restore{p: p, bridge: bridgeName, flow: flowMod})
+			}
+		}
+	}
+
+	for _, r := range restores {
+		if err := client.AddFlow(ctx, r.bridge, r.flow); err != nil {
+			s.mu.Lock()
+			r.p.status = "error"
+			s.mu.Unlock()
+		}
+	}
 }
 
 // GetPolicy retrieves a policy by ID

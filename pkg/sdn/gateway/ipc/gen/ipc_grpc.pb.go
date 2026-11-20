@@ -10,9 +10,10 @@
 // supervisor; each `gatewayd service run <process>` child serves this
 // contract over a Unix socket the supervisor created. The transport is gRPC
 // over that socket with SO_PEERCRED as the only authentication: the child
-// admits the supervisor (uid 0) on ProcessControlService and the supervisor
-// plus the parser uid on DatapathService, and the supervisor plus the
-// platform uids on GatewayServicesService.
+// admits the supervisor (uid 0) on ProcessControlService and DatapathService,
+// the supervisor plus the parser uid on VPNPlaneService (the `wireguard`
+// process only), and the supervisor plus the platform uids on
+// GatewayServicesService.
 //
 // Structured gateway documents ride as JSON: gwstate.Snapshot and
 // gwstate.DesiredConfig (pkg/sdn/gateway/state) are the one schema the
@@ -187,9 +188,7 @@ var ProcessControlService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	DatapathService_ApplyDesired_FullMethodName   = "/gatewayd.ipc.v1.DatapathService/ApplyDesired"
-	DatapathService_InstallVPNPeer_FullMethodName = "/gatewayd.ipc.v1.DatapathService/InstallVPNPeer"
-	DatapathService_RemoveVPNPeer_FullMethodName  = "/gatewayd.ipc.v1.DatapathService/RemoveVPNPeer"
+	DatapathService_ApplyDesired_FullMethodName = "/gatewayd.ipc.v1.DatapathService/ApplyDesired"
 )
 
 // DatapathServiceClient is the client API for DatapathService service.
@@ -198,19 +197,11 @@ const (
 //
 // DatapathService is the narrow surface the kernel-programming process exposes to
 // the supervisor's reconciler: the control plane's desired configuration in,
-// the reconciliation state out. It also carries the VPN DataPlane seam
-// (pkg/sdn/gateway/services/vpn): the datapath child owns the WireGuard and
-// MASQUE planes, and admission installs and removes peers on them here.
+// the reconciliation state out.
 type DatapathServiceClient interface {
 	// ApplyDesired brings the datapath services to the desired configuration
 	// through the child's Gateway.Apply.
 	ApplyDesired(ctx context.Context, in *ApplyDesiredRequest, opts ...grpc.CallOption) (*ApplyDesiredResponse, error)
-	// InstallVPNPeer installs one admitted lease's peer on the data plane it
-	// names. A plane's refusal travels in the response; an RPC error means
-	// the child never answered.
-	InstallVPNPeer(ctx context.Context, in *InstallVPNPeerRequest, opts ...grpc.CallOption) (*InstallVPNPeerResponse, error)
-	// RemoveVPNPeer removes a lease's peer from the data plane it names.
-	RemoveVPNPeer(ctx context.Context, in *RemoveVPNPeerRequest, opts ...grpc.CallOption) (*RemoveVPNPeerResponse, error)
 }
 
 type datapathServiceClient struct {
@@ -231,45 +222,17 @@ func (c *datapathServiceClient) ApplyDesired(ctx context.Context, in *ApplyDesir
 	return out, nil
 }
 
-func (c *datapathServiceClient) InstallVPNPeer(ctx context.Context, in *InstallVPNPeerRequest, opts ...grpc.CallOption) (*InstallVPNPeerResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(InstallVPNPeerResponse)
-	err := c.cc.Invoke(ctx, DatapathService_InstallVPNPeer_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *datapathServiceClient) RemoveVPNPeer(ctx context.Context, in *RemoveVPNPeerRequest, opts ...grpc.CallOption) (*RemoveVPNPeerResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RemoveVPNPeerResponse)
-	err := c.cc.Invoke(ctx, DatapathService_RemoveVPNPeer_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // DatapathServiceServer is the server API for DatapathService service.
 // All implementations must embed UnimplementedDatapathServiceServer
 // for forward compatibility.
 //
 // DatapathService is the narrow surface the kernel-programming process exposes to
 // the supervisor's reconciler: the control plane's desired configuration in,
-// the reconciliation state out. It also carries the VPN DataPlane seam
-// (pkg/sdn/gateway/services/vpn): the datapath child owns the WireGuard and
-// MASQUE planes, and admission installs and removes peers on them here.
+// the reconciliation state out.
 type DatapathServiceServer interface {
 	// ApplyDesired brings the datapath services to the desired configuration
 	// through the child's Gateway.Apply.
 	ApplyDesired(context.Context, *ApplyDesiredRequest) (*ApplyDesiredResponse, error)
-	// InstallVPNPeer installs one admitted lease's peer on the data plane it
-	// names. A plane's refusal travels in the response; an RPC error means
-	// the child never answered.
-	InstallVPNPeer(context.Context, *InstallVPNPeerRequest) (*InstallVPNPeerResponse, error)
-	// RemoveVPNPeer removes a lease's peer from the data plane it names.
-	RemoveVPNPeer(context.Context, *RemoveVPNPeerRequest) (*RemoveVPNPeerResponse, error)
 	mustEmbedUnimplementedDatapathServiceServer()
 }
 
@@ -282,12 +245,6 @@ type UnimplementedDatapathServiceServer struct{}
 
 func (UnimplementedDatapathServiceServer) ApplyDesired(context.Context, *ApplyDesiredRequest) (*ApplyDesiredResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApplyDesired not implemented")
-}
-func (UnimplementedDatapathServiceServer) InstallVPNPeer(context.Context, *InstallVPNPeerRequest) (*InstallVPNPeerResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method InstallVPNPeer not implemented")
-}
-func (UnimplementedDatapathServiceServer) RemoveVPNPeer(context.Context, *RemoveVPNPeerRequest) (*RemoveVPNPeerResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method RemoveVPNPeer not implemented")
 }
 func (UnimplementedDatapathServiceServer) mustEmbedUnimplementedDatapathServiceServer() {}
 func (UnimplementedDatapathServiceServer) testEmbeddedByValue()                         {}
@@ -328,42 +285,6 @@ func _DatapathService_ApplyDesired_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
-func _DatapathService_InstallVPNPeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(InstallVPNPeerRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(DatapathServiceServer).InstallVPNPeer(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: DatapathService_InstallVPNPeer_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DatapathServiceServer).InstallVPNPeer(ctx, req.(*InstallVPNPeerRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _DatapathService_RemoveVPNPeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RemoveVPNPeerRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(DatapathServiceServer).RemoveVPNPeer(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: DatapathService_RemoveVPNPeer_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DatapathServiceServer).RemoveVPNPeer(ctx, req.(*RemoveVPNPeerRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // DatapathService_ServiceDesc is the grpc.ServiceDesc for DatapathService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -375,13 +296,249 @@ var DatapathService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "ApplyDesired",
 			Handler:    _DatapathService_ApplyDesired_Handler,
 		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "ipc.proto",
+}
+
+const (
+	VPNPlaneService_InstallVPNPeer_FullMethodName    = "/gatewayd.ipc.v1.VPNPlaneService/InstallVPNPeer"
+	VPNPlaneService_RemoveVPNPeer_FullMethodName     = "/gatewayd.ipc.v1.VPNPlaneService/RemoveVPNPeer"
+	VPNPlaneService_ReconcileVPNPeers_FullMethodName = "/gatewayd.ipc.v1.VPNPlaneService/ReconcileVPNPeers"
+	VPNPlaneService_RenewVPNPeer_FullMethodName      = "/gatewayd.ipc.v1.VPNPlaneService/RenewVPNPeer"
+)
+
+// VPNPlaneServiceClient is the client API for VPNPlaneService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// VPNPlaneService is the VPN DataPlane seam (pkg/sdn/gateway/services/vpn),
+// served only by the `wireguard` process (ruling 942): that process owns the
+// WireGuard hub device, and admission installs, renews and removes peers on
+// it here. Every other process refuses these methods.
+type VPNPlaneServiceClient interface {
+	// InstallVPNPeer installs one admitted lease's peer on the data plane it
+	// names. A plane's refusal travels in the response; an RPC error means
+	// the child never answered.
+	InstallVPNPeer(ctx context.Context, in *InstallVPNPeerRequest, opts ...grpc.CallOption) (*InstallVPNPeerResponse, error)
+	// RemoveVPNPeer removes a lease's peer from the data plane it names.
+	RemoveVPNPeer(ctx context.Context, in *RemoveVPNPeerRequest, opts ...grpc.CallOption) (*RemoveVPNPeerResponse, error)
+	// ReconcileVPNPeers removes from the data plane it names every peer whose
+	// lease is not in lease_ids. A restarted vpn child sends its stored leases
+	// so a peer whose record a revoke deleted before the child died is removed.
+	ReconcileVPNPeers(ctx context.Context, in *ReconcileVPNPeersRequest, opts ...grpc.CallOption) (*ReconcileVPNPeersResponse, error)
+	// RenewVPNPeer extends the deadline of a peer the plane already holds. It
+	// never installs one; a refusal leaves the old deadline standing.
+	RenewVPNPeer(ctx context.Context, in *RenewVPNPeerRequest, opts ...grpc.CallOption) (*RenewVPNPeerResponse, error)
+}
+
+type vPNPlaneServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewVPNPlaneServiceClient(cc grpc.ClientConnInterface) VPNPlaneServiceClient {
+	return &vPNPlaneServiceClient{cc}
+}
+
+func (c *vPNPlaneServiceClient) InstallVPNPeer(ctx context.Context, in *InstallVPNPeerRequest, opts ...grpc.CallOption) (*InstallVPNPeerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InstallVPNPeerResponse)
+	err := c.cc.Invoke(ctx, VPNPlaneService_InstallVPNPeer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNPlaneServiceClient) RemoveVPNPeer(ctx context.Context, in *RemoveVPNPeerRequest, opts ...grpc.CallOption) (*RemoveVPNPeerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveVPNPeerResponse)
+	err := c.cc.Invoke(ctx, VPNPlaneService_RemoveVPNPeer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNPlaneServiceClient) ReconcileVPNPeers(ctx context.Context, in *ReconcileVPNPeersRequest, opts ...grpc.CallOption) (*ReconcileVPNPeersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReconcileVPNPeersResponse)
+	err := c.cc.Invoke(ctx, VPNPlaneService_ReconcileVPNPeers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNPlaneServiceClient) RenewVPNPeer(ctx context.Context, in *RenewVPNPeerRequest, opts ...grpc.CallOption) (*RenewVPNPeerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenewVPNPeerResponse)
+	err := c.cc.Invoke(ctx, VPNPlaneService_RenewVPNPeer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// VPNPlaneServiceServer is the server API for VPNPlaneService service.
+// All implementations must embed UnimplementedVPNPlaneServiceServer
+// for forward compatibility.
+//
+// VPNPlaneService is the VPN DataPlane seam (pkg/sdn/gateway/services/vpn),
+// served only by the `wireguard` process (ruling 942): that process owns the
+// WireGuard hub device, and admission installs, renews and removes peers on
+// it here. Every other process refuses these methods.
+type VPNPlaneServiceServer interface {
+	// InstallVPNPeer installs one admitted lease's peer on the data plane it
+	// names. A plane's refusal travels in the response; an RPC error means
+	// the child never answered.
+	InstallVPNPeer(context.Context, *InstallVPNPeerRequest) (*InstallVPNPeerResponse, error)
+	// RemoveVPNPeer removes a lease's peer from the data plane it names.
+	RemoveVPNPeer(context.Context, *RemoveVPNPeerRequest) (*RemoveVPNPeerResponse, error)
+	// ReconcileVPNPeers removes from the data plane it names every peer whose
+	// lease is not in lease_ids. A restarted vpn child sends its stored leases
+	// so a peer whose record a revoke deleted before the child died is removed.
+	ReconcileVPNPeers(context.Context, *ReconcileVPNPeersRequest) (*ReconcileVPNPeersResponse, error)
+	// RenewVPNPeer extends the deadline of a peer the plane already holds. It
+	// never installs one; a refusal leaves the old deadline standing.
+	RenewVPNPeer(context.Context, *RenewVPNPeerRequest) (*RenewVPNPeerResponse, error)
+	mustEmbedUnimplementedVPNPlaneServiceServer()
+}
+
+// UnimplementedVPNPlaneServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedVPNPlaneServiceServer struct{}
+
+func (UnimplementedVPNPlaneServiceServer) InstallVPNPeer(context.Context, *InstallVPNPeerRequest) (*InstallVPNPeerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method InstallVPNPeer not implemented")
+}
+func (UnimplementedVPNPlaneServiceServer) RemoveVPNPeer(context.Context, *RemoveVPNPeerRequest) (*RemoveVPNPeerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveVPNPeer not implemented")
+}
+func (UnimplementedVPNPlaneServiceServer) ReconcileVPNPeers(context.Context, *ReconcileVPNPeersRequest) (*ReconcileVPNPeersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReconcileVPNPeers not implemented")
+}
+func (UnimplementedVPNPlaneServiceServer) RenewVPNPeer(context.Context, *RenewVPNPeerRequest) (*RenewVPNPeerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RenewVPNPeer not implemented")
+}
+func (UnimplementedVPNPlaneServiceServer) mustEmbedUnimplementedVPNPlaneServiceServer() {}
+func (UnimplementedVPNPlaneServiceServer) testEmbeddedByValue()                         {}
+
+// UnsafeVPNPlaneServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to VPNPlaneServiceServer will
+// result in compilation errors.
+type UnsafeVPNPlaneServiceServer interface {
+	mustEmbedUnimplementedVPNPlaneServiceServer()
+}
+
+func RegisterVPNPlaneServiceServer(s grpc.ServiceRegistrar, srv VPNPlaneServiceServer) {
+	// If the following call panics, it indicates UnimplementedVPNPlaneServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&VPNPlaneService_ServiceDesc, srv)
+}
+
+func _VPNPlaneService_InstallVPNPeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InstallVPNPeerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNPlaneServiceServer).InstallVPNPeer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNPlaneService_InstallVPNPeer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNPlaneServiceServer).InstallVPNPeer(ctx, req.(*InstallVPNPeerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNPlaneService_RemoveVPNPeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveVPNPeerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNPlaneServiceServer).RemoveVPNPeer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNPlaneService_RemoveVPNPeer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNPlaneServiceServer).RemoveVPNPeer(ctx, req.(*RemoveVPNPeerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNPlaneService_ReconcileVPNPeers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReconcileVPNPeersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNPlaneServiceServer).ReconcileVPNPeers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNPlaneService_ReconcileVPNPeers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNPlaneServiceServer).ReconcileVPNPeers(ctx, req.(*ReconcileVPNPeersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNPlaneService_RenewVPNPeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenewVPNPeerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNPlaneServiceServer).RenewVPNPeer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNPlaneService_RenewVPNPeer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNPlaneServiceServer).RenewVPNPeer(ctx, req.(*RenewVPNPeerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// VPNPlaneService_ServiceDesc is the grpc.ServiceDesc for VPNPlaneService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var VPNPlaneService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "gatewayd.ipc.v1.VPNPlaneService",
+	HandlerType: (*VPNPlaneServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
 		{
 			MethodName: "InstallVPNPeer",
-			Handler:    _DatapathService_InstallVPNPeer_Handler,
+			Handler:    _VPNPlaneService_InstallVPNPeer_Handler,
 		},
 		{
 			MethodName: "RemoveVPNPeer",
-			Handler:    _DatapathService_RemoveVPNPeer_Handler,
+			Handler:    _VPNPlaneService_RemoveVPNPeer_Handler,
+		},
+		{
+			MethodName: "ReconcileVPNPeers",
+			Handler:    _VPNPlaneService_ReconcileVPNPeers_Handler,
+		},
+		{
+			MethodName: "RenewVPNPeer",
+			Handler:    _VPNPlaneService_RenewVPNPeer_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

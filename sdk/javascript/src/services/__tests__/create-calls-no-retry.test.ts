@@ -9,6 +9,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { ApiClient } from '../../client/api-client.js';
+import { CAService } from '../ca-service.js';
 import { ComputeService } from '../compute-service.js';
 import { IDevIDService } from '../idevid-service.js';
 
@@ -51,6 +52,12 @@ describe('create calls go out without client retries', () => {
   it('createLDevID passes retry disabled to the client', async () => {
     const mockClient = createMockApiClient();
     await new IDevIDService(mockClient).createLDevID({ overwrite: true });
+    expect(vi.mocked(mockClient.post).mock.calls[0]?.[2]).toEqual({ retry: { enabled: false } });
+  });
+
+  it('signCSR passes retry disabled to the client', async () => {
+    const mockClient = createMockApiClient();
+    await new CAService(mockClient).signCSR({ csrPem: 'CSR' });
     expect(vi.mocked(mockClient.post).mock.calls[0]?.[2]).toEqual({ retry: { enabled: false } });
   });
 

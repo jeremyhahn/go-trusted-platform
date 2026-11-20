@@ -155,3 +155,71 @@ describe('PlatformService', () => {
     });
   });
 });
+
+// The daemon REST listener registers /api/v1/status and /api/v1/services
+// (pkg/api/daemon/rest_service.go); the webservice listener serves the same
+// operations under /api/v1/platform. The route layout picks one.
+describe('PlatformService route layout', () => {
+  const ok = { success: true, data: {} };
+
+  function setup(layout?: 'webservice' | 'daemon'): { client: ApiClient; service: PlatformService } {
+    const client = createMockClient();
+    vi.mocked(client.get).mockResolvedValue(ok);
+    vi.mocked(client.post).mockResolvedValue(ok);
+    const service = layout === undefined
+      ? new PlatformService(client)
+      : new PlatformService(client, { routeLayout: layout });
+    return { client, service };
+  }
+
+  const cases = [
+    ['webservice', '/v1/platform'],
+    ['daemon', '/v1'],
+  ] as const;
+
+  it.each(cases)('under %s, getStatus sends GET %s/status', async (layout, base) => {
+    const { client, service } = setup(layout);
+    await service.getStatus();
+    expect(client.get).toHaveBeenCalledWith(`${base}/status`);
+  });
+
+  it.each(cases)('under %s, listServices sends GET %s/services', async (layout, base) => {
+    const { client, service } = setup(layout);
+    await service.listServices();
+    expect(client.get).toHaveBeenCalledWith(`${base}/services`);
+  });
+
+  it.each(cases)('under %s, getServiceStatus sends GET %s/services/{service}', async (layout, base) => {
+    const { client, service } = setup(layout);
+    await service.getServiceStatus('a b');
+    expect(client.get).toHaveBeenCalledWith(`${base}/services/a%20b`);
+  });
+
+  it.each([
+    ['webservice', '/v1/platform', 'startService', 'start'],
+    ['webservice', '/v1/platform', 'stopService', 'stop'],
+    ['webservice', '/v1/platform', 'restartService', 'restart'],
+    ['daemon', '/v1', 'startService', 'start'],
+    ['daemon', '/v1', 'stopService', 'stop'],
+    ['daemon', '/v1', 'restartService', 'restart'],
+  ] as const)('under %s, posts to %s/services/{service}/%s', async (layout, base, method, action) => {
+    const { client, service } = setup(layout);
+    await service[method]('kms');
+    expect(client.post).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(client.post).mock.calls[0]?.[0]).toBe(`${base}/services/kms/${action}`);
+  });
+
+  it('defaults to the webservice layout', async () => {
+    const { client, service } = setup();
+    await service.listServices();
+    await service.getStatus();
+    expect(client.get).toHaveBeenCalledWith('/v1/platform/services');
+    expect(client.get).toHaveBeenCalledWith('/v1/platform/status');
+  });
+
+  it('keeps the other platform routes under /v1/platform with the daemon layout', async () => {
+    const { client, service } = setup('daemon');
+    await service.getVersion();
+    expect(client.get).toHaveBeenCalledWith('/v1/platform/version');
+  });
+});

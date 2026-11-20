@@ -197,6 +197,11 @@ export class BMCService extends BaseService {
       privilege: request.privilege,
       enabled: request.enabled,
       channel: request.channel,
+    }, {
+      // The BMC creates the Redfish account before it answers and the
+      // POST carries no idempotency key: never resend it after a lost
+      // response.
+      retry: { enabled: false },
     });
   }
 
@@ -292,14 +297,30 @@ export class BMCService extends BaseService {
    * host is already being reinstalled.
    */
   async provision(profileID: string): Promise<ApiResponse<BMCProvisionStatus>> {
-    return this.client.post<BMCProvisionStatus>(this.path(profileID, 'provision'), {}, {
+    const response = await this.client.post<BMCProvisionStatus>(this.path(profileID, 'provision'), {}, {
       retry: { enabled: false },
     });
+    return this.withProfileID(response, profileID);
   }
 
   /** ProvisionStatus: GET /bmc/{profileID}/provision */
   async getProvisionStatus(profileID: string): Promise<ApiResponse<BMCProvisionStatus>> {
-    return this.client.get<BMCProvisionStatus>(this.path(profileID, 'provision'));
+    const response = await this.client.get<BMCProvisionStatus>(this.path(profileID, 'provision'));
+    return this.withProfileID(response, profileID);
+  }
+
+  /**
+   * The server sends profile_id as a JSON number, which rounds above 2^53;
+   * the caller's string is the exact ID, so it replaces the parsed value.
+   */
+  private withProfileID(
+    response: ApiResponse<BMCProvisionStatus>,
+    profileID: string
+  ): ApiResponse<BMCProvisionStatus> {
+    if (!response.data) {
+      return response;
+    }
+    return { ...response, data: { ...response.data, profile_id: profileID } };
   }
 
   /** GetWebCertificate: GET /bmc/{profileID}/cert */

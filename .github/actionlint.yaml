@@ -67,6 +67,8 @@ self-hosted-runner:
     - code-review
     - batch
     - bigdisk
+    # ruling 742 (1): scans.yml runs `make vuln` on [self-hosted, linux, x64, bigdisk-docker], where main's vuln job ran (#1425).
+    - bigdisk-docker
     - ci-gate
     - qwen
     - dells

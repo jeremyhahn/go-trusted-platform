@@ -14,8 +14,11 @@ package rest
 
 import (
 	"net/http"
+	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -53,9 +56,45 @@ func init() {
 		},
 	}
 
+	// Host manifests (#1686): the server answers the pb replies as
+	// protojson, which decodes generically.
+	templatedRouteTable[platformv1.AttestationService_ListManifests_FullMethodName] = templatedRoute{
+		path:   "/api/v1/attestation/manifests",
+		method: http.MethodGet,
+		queryParams: []queryParam{
+			{name: "host_id", field: "host_id"},
+			{name: "limit", field: "limit"},
+			{name: "offset", field: "offset"},
+			{name: "start_time", field: "start_time", encode: timestampQueryField},
+			{name: "end_time", field: "end_time", encode: timestampQueryField},
+		},
+	}
+	templatedRouteTable[platformv1.AttestationService_GetManifest_FullMethodName] =
+		itemRoute("/api/v1/attestation/manifests/{id}", http.MethodGet, "{id}", "id")
+	templatedRouteTable[platformv1.AttestationService_DeleteManifest_FullMethodName] =
+		itemRoute("/api/v1/attestation/manifests/{id}", http.MethodDelete, "{id}", "id")
+
 	restResponseDecoders[platformv1.AttestationService_GetDeviceReport_FullMethodName] = decodeDeviceReport
 	restResponseDecoders[platformv1.AttestationService_ListDeviceReports_FullMethodName] = decodeDeviceReports
 	restResponseDecoders[platformv1.AttestationService_DescribeCallerPolicy_FullMethodName] = decodeCallerPolicy
+}
+
+// timestampQueryField renders a google.protobuf.Timestamp query value as
+// RFC 3339 in UTC, the form the webservice parses; an unset value renders
+// "" so the parameter is left out (#1686).
+func timestampQueryField(v protoreflect.Value) string {
+	if !v.IsValid() {
+		return ""
+	}
+	m := v.Message()
+	if m == nil || !m.IsValid() {
+		return ""
+	}
+	ts, ok := m.Interface().(*timestamppb.Timestamp)
+	if !ok || ts == nil {
+		return ""
+	}
+	return ts.AsTime().UTC().Format(time.RFC3339Nano)
 }
 
 // reportJSON decodes the reporting cache's JSON (snake_case names, RFC 3339

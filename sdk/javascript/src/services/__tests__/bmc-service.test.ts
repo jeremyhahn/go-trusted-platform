@@ -57,7 +57,7 @@ describe('BMCService', () => {
       privilege: 'operator',
       enabled: true,
       channel: 1,
-    });
+    }, { retry: { enabled: false } });
   });
 
   it('deleteUser DELETEs /v1/bmc/{profileID}/users/{slot}', async () => {
@@ -214,5 +214,77 @@ describe('BMCService.provision without client retries', () => {
     expect(init?.method).toBe('POST');
     expect(result.success).toBe(false);
     expect(result.error?.message).toMatch(/network error/);
+  });
+});
+
+describe('BMCService.createUser without client retries (#2022 Codex r2)', () => {
+  it('surfaces a lost response with exactly one POST', async () => {
+    // The BMC creates the Redfish account before it answers and the POST
+    // carries no idempotency key: a resend after a lost response would
+    // create the account twice or fail on the slot it already took.
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('network error: response lost after the BMC created the user'))
+      .mockResolvedValue(
+        new Response(JSON.stringify({ success: true, payload: { slot: 3, username: 'ops' } }), {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        })
+      );
+    const client = new ApiClient({
+      baseUrl: 'https://platform.test/api/v1',
+      fetch: fetchImpl as unknown as typeof fetch,
+      retry: { maxRetries: 3, initialDelayMs: 1, maxDelayMs: 1 },
+    });
+
+    const result = await new BMCService(client).createUser('bmc-1', {
+      slot: 3,
+      username: 'ops',
+      password: 'pw',
+      privilege: 'operator',
+      enabled: true,
+      channel: 1,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const init = fetchImpl.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(init?.method).toBe('POST');
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toMatch(/network error/);
+  });
+});
+
+describe('BMCService provision keeps the profile ID string (#2022 Codex r1)', () => {
+  // The server sends profile_id as a JSON number; above 2^53 it rounds
+  // (9007199254740993 parses as 9007199254740992).
+  const rounded = { success: true, data: { provision_id: 'p-1', profile_id: 9007199254740993, state: 'running' } };
+
+  it('provision returns the requested profile ID', async () => {
+    const client = createRouteMockApiClient();
+    vi.mocked(client.post).mockResolvedValue(rounded);
+
+    const res = await new BMCService(client).provision('9007199254740993');
+
+    expect(res.data?.profile_id).toBe('9007199254740993');
+    expect(res.data?.provision_id).toBe('p-1');
+  });
+
+  it('getProvisionStatus returns the requested profile ID', async () => {
+    const client = createRouteMockApiClient();
+    vi.mocked(client.get).mockResolvedValue(rounded);
+
+    const res = await new BMCService(client).getProvisionStatus('9007199254740993');
+
+    expect(res.data?.profile_id).toBe('9007199254740993');
+  });
+
+  it('leaves a response without data alone', async () => {
+    const client = createRouteMockApiClient();
+    vi.mocked(client.get).mockResolvedValue({ success: false, error: { code: 'NOT_FOUND', message: 'no' } });
+
+    const res = await new BMCService(client).getProvisionStatus('9007199254740993');
+
+    expect(res.data).toBeUndefined();
+    expect(res.success).toBe(false);
   });
 });

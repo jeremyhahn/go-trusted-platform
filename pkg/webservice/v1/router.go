@@ -71,6 +71,9 @@ type Router struct {
 	// gatedGroups memoises one protected route group per role set. See
 	// gated() in authz.go.
 	gatedGroups map[string]*mux.Router
+	// stubRoutes are the placeholder routes quicbaasStubRoutes adds; the
+	// capabilities listing reports them blocked on integration.
+	stubRoutes map[*mux.Route]struct{}
 	router.WebServiceRouter
 }
 
@@ -225,7 +228,9 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.tenantRoutes()
 	v1Router.tpmRoutes()
 	v1Router.vtpmRoutes()
-	v1Router.quicbaasStubRoutes()
+	// The quicbaas placeholders are recorded as they register so the
+	// capabilities listing reports them blocked on integration.
+	v1Router.stubRoutes = recordNewRoutes(v1Router.router, v1Router.quicbaasStubRoutes)
 
 	// Always mount /platform/service-registry last so it observes the
 	// full set of *Routes() outcomes recorded above. The endpoint is
@@ -235,6 +240,12 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	if v1Router.serviceRegistry != nil {
 		v1Router.serviceRegistry.RegisterStatusEndpoint(v1Router.router)
 	}
+
+	// GET /capabilities lists what this table offers (#2033); it walks
+	// the table per request, so it sees every route registered above.
+	// Any authenticated caller may read it.
+	registerCapabilitiesEndpoint(v1Router.router, v1Router.serviceRegistry,
+		v1Router.stubRoutes, v1Router.responseWriter, v1Router.authenticatedOnly())
 }
 
 // quicbaasStubRoutes registers placeholder GET handlers for QuicBaaS
