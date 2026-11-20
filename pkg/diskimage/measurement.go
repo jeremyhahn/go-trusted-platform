@@ -1,6 +1,7 @@
 package diskimage
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path"
@@ -32,11 +33,30 @@ func (e *MeasureError) Error() string {
 // Unwrap returns the underlying error.
 func (e *MeasureError) Unwrap() error { return e.Err }
 
+// PreseededKeysMismatchError reports a prebuilt U-Boot (--uboot-dir) whose
+// u-boot.bin does not carry the build's signature list for Variable ("PK",
+// "KEK" or "db"): it seeds other keys, so the PCR 7 it measures is not the
+// one the resolved certificates predict.
+type PreseededKeysMismatchError struct {
+	Variable string
+	UBoot    string
+}
+
+// Error implements error.
+func (e *PreseededKeysMismatchError) Error() string {
+	return "the prebuilt U-Boot at " + e.UBoot + " does not preseed the build's " + e.Variable +
+		" signature list, so its PCR 7 cannot be predicted from the resolved certificates; " +
+		"rebuild U-Boot with these keys (make uboot-build) or pass the matching keys"
+}
+
 // measureImage predicts measure.ManifestPCRs of the finished image for every
 // configured bank. The UKI is the signed one copied out of the image's EFI
 // partition; U-Boot, its owner GUID and the PK/KEK/DB certificates are the
 // build's. A build with Secure Boot off is not measured: it returns no banks
 // and the reason. Any missing input fails the build, so no bank is partial.
+// A prebuilt U-Boot (c.UBootDir) must carry the resolved PK, KEK and db
+// signature lists in its binary, or the build fails with a
+// PreseededKeysMismatchError.
 func (c *BuildConfig) measureImage(ctx context.Context, image string, staged *StagedMedia) ([]measure.Bank, string, error) {
 	if staged.SecureBoot == nil {
 		return nil, UnmeasuredSecureBootOff, nil
@@ -70,6 +90,17 @@ func (c *BuildConfig) measureImage(ctx context.Context, image string, staged *St
 	img, err := measure.ReadImage(measure.ImageFiles{UBoot: staged.UBoot.Binary, UKI: ukiPath, CertDir: staged.SecureBoot.CertDir, OwnerGUID: owner})
 	if err != nil {
 		return nil, "", &MeasureError{Step: "reading the image's inputs", Err: err}
+	}
+	if c.UBootDir != "" {
+		for _, v := range []struct {
+			name string
+			list []byte
+		}{{"PK", img.SecureBoot.PK}, {"KEK", img.SecureBoot.KEK}, {"db", img.SecureBoot.DB}} {
+			if !bytes.Contains(img.UBoot, v.list) {
+				return nil, "", &MeasureError{Step: "matching the prebuilt U-Boot's preseeded Secure Boot keys",
+					Err: &PreseededKeysMismatchError{Variable: v.name, UBoot: staged.UBoot.Binary}}
+			}
+		}
 	}
 	banks, err := measure.Predict(img, c.MeasurementBanks...)
 	if err != nil {
