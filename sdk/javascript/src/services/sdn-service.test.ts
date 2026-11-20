@@ -165,3 +165,43 @@ describe('SDNService.applyPolicy target scope and enabled flag', () => {
     expect(client.post).toHaveBeenCalledTimes(1);
   });
 });
+
+// policyRuleToFlowMod (pkg/api/daemon/sdn_service.go) never reads the rule's
+// log flag, so a rule asking to be logged would be installed and log nothing.
+// The SDK refuses log: true unsent.
+describe('SDNService.applyPolicy rule logging', () => {
+  let client: ApiClient;
+  let service: SDNService;
+
+  function policyWithLog(log?: boolean): ApplyPolicyRequest {
+    const request = policyWithAction('POLICY_RULE_ACTION_ALLOW');
+    if (log !== undefined) {
+      Object.assign(request.config.rules?.[0] ?? {}, { log });
+    }
+    return request;
+  }
+
+  beforeEach(() => {
+    client = createMockClient();
+    vi.mocked(client.post).mockResolvedValue({ success: true, data: {} });
+    service = new SDNService(client);
+  });
+
+  it('refuses a rule with log: true before any request', async () => {
+    const request = policyWithLog(true);
+    await expect(service.applyPolicy(request)).rejects.toThrow(RangeError);
+    await expect(service.applyPolicy(request)).rejects.toThrow('log');
+    expect(client.post).not.toHaveBeenCalled();
+    expect(client.get).not.toHaveBeenCalled();
+  });
+
+  it('still sends a rule with log: false', async () => {
+    await service.applyPolicy(policyWithLog(false));
+    expect(client.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('still sends a rule that leaves log unset', async () => {
+    await service.applyPolicy(policyWithLog());
+    expect(client.post).toHaveBeenCalledTimes(1);
+  });
+});

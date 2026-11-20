@@ -494,6 +494,34 @@ describe('DeviceService assignProfileToDevice and updateTemplate wire bodies', (
     expect(mockClient.post).toHaveBeenCalledWith('/v1/device/profiles/18446744073709551615/unassign', {});
   });
 
+  // #2022 Codex round 3: a number past Number.MAX_SAFE_INTEGER is already
+  // rounded (9007199254740993 is held as ...992), so it would reach another
+  // profile. Large IDs must come as decimal strings.
+  const unsafeNumericProfileIds = [9007199254740993, Number.MAX_SAFE_INTEGER + 1, 1.5e20];
+
+  it.each(unsafeNumericProfileIds)(
+    'unassignProfileFromDevice rejects unsafe numeric profile ID %d without a request',
+    async (profileId) => {
+      await expect(service.unassignProfileFromDevice(profileId)).rejects.toThrow(RangeError);
+      expect(mockClient.post).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(unsafeNumericProfileIds)(
+    'assignProfileToDevice rejects unsafe numeric profile ID %d without a request',
+    async (profileId) => {
+      // The request type takes a string; a JavaScript caller can still pass a number.
+      const request = { profileId, ekSerial: 'EK1' } as unknown as { profileId: string; ekSerial: string };
+      await expect(service.assignProfileToDevice(request)).rejects.toThrow(RangeError);
+      expect(mockClient.post).not.toHaveBeenCalled();
+    }
+  );
+
+  it('accepts the largest safe integer as a number', async () => {
+    await service.unassignProfileFromDevice(Number.MAX_SAFE_INTEGER);
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/device/profiles/9007199254740991/unassign', {});
+  });
+
   it('assign keeps a large profile id exact in the path and posts snake_case identity only', async () => {
     await service.assignProfileToDevice({ profileId: '9007199254740993', ekSerial: 'EK1', macAddress: '' });
 
