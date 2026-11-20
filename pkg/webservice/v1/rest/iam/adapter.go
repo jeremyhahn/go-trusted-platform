@@ -383,40 +383,24 @@ func (a *QuicBaaSIAMAdapter) ListPolicies(ctx context.Context, tenantID string, 
 	if offset < 0 {
 		offset = 0
 	}
-	want := -1
-	sdkReq := &iamsdk.ListPoliciesRequest{}
-	if limit > 0 {
-		want = int(offset) + int(limit)
-		sdkReq.Limit = int(limit)
+	// The pinned upstream transports apply Limit to the head of the
+	// collection and return no cursor and no total, so the whole collection
+	// is listed (no Limit) and the page is cut from it here.
+	resp, err := a.client.Policy().List(ctx, tenantID, &iamsdk.ListPoliciesRequest{})
+	if err != nil {
+		return nil, err
 	}
-	var (
-		collected []iamsdk.Policy
-		total     int64
-	)
-	for first := true; ; first = false {
-		resp, err := a.client.Policy().List(ctx, tenantID, sdkReq)
-		if err != nil {
-			return nil, err
-		}
-		if first {
-			total = resp.TotalCount
-		}
-		collected = append(collected, resp.Policies...)
-		if (want >= 0 && len(collected) >= want) || !resp.HasMore || resp.NextCursor == "" {
-			break
-		}
-		sdkReq = &iamsdk.ListPoliciesRequest{Limit: sdkReq.Limit, Cursor: resp.NextCursor}
-	}
+	collected := resp.Policies
 	start := min(int(offset), len(collected))
 	end := len(collected)
-	if want >= 0 && want < end {
-		end = want
+	if limit > 0 {
+		end = min(start+int(limit), end)
 	}
 	page := collected[start:end]
 	out := &ListPoliciesResponse{
 		Policies: make([]PolicyResponse, 0, len(page)),
+		Total:    int64(len(collected)),
 	}
-	out.Total = total
 	for i := range page {
 		out.Policies = append(out.Policies, *decodePolicy(tenantID, &page[i]))
 	}
