@@ -262,6 +262,18 @@ webservices:
     port: 0
     tls-port: 18443
     index: index.html
+    # ACME server, as in the default config. The http-01/http-80xx and
+    # enroll-80xx challenges need plain-HTTP listeners this TLS-only daemon
+    # does not open, so only the TLS-reachable challenge types are offered.
+    acme:
+      enabled: true
+      directory: https://localhost:18443/api/v1/acme/directory
+      terms-of-service: /tos.html
+      challenges:
+        - enroll-01
+        - device-attest-01
+        - dns-01
+        - endorse-01
     jwt:
       expiration: 60
       issuer: trusted-platform
@@ -302,3 +314,215 @@ webservices:
           - localhost
         email:
           - hostmaster@localhost
+
+  # Internal webservice, as in the default config (local-network facing).
+  # Fixed port: global-setup rewrites only 18443, so two concurrent
+  # `make web-e2e` runs on one host collide here.
+  - name: internal
+    home: trusted-data/www
+    port: 0
+    tls-port: 19443
+    index: index.html
+    jwt:
+      expiration: 60
+      issuer: trusted-platform
+    cors:
+      allowed-origins:
+        - https://localhost:19443
+      allowed-methods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+      allowed-headers:
+        - "*"
+      allow-credentials: true
+    webauthn:
+      display-name: Trusted Platform Internal
+      id: localhost
+      origins:
+        - https://localhost:19443
+    key:
+      algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: software
+      password: "kms://webservices/1/key/password?ensure=true&len=32&enc=raw"
+      platform-policy: true
+      debug: true
+    certificate:
+      subject:
+        cn: localhost
+        organization: Trusted Platform
+        country: US
+      sans:
+        dns:
+          - localhost
+        email:
+          - hostmaster@localhost
+
+# =============================================================================
+# DNS (public + internal zones, DNSSEC, DANE), as in the default config
+# =============================================================================
+# Unprivileged loopback ports; the zone addresses are 127.0.0.1 instead of
+# the ${PUBLIC_IPv4}/${PRIVATE_IPv4} the installer substitutes.
+
+dns:
+  resolver:
+    servers:
+      - address: "127.0.0.1"
+        port: 18053
+    fallback: []
+    local-forwarder:
+      enabled: false
+  allow-registration: true
+  allow-external-registration: true
+  allow-internal-registration: true
+  quicbaas:
+    data-dir: trusted-data/quicbaas
+    storage-backend: memory
+    node-id: 1
+    log-level: warn
+  default-ttl: 3600
+  dnssec:
+    enabled: true
+    default-key:
+      algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: software
+    signature-expiry: 30d
+    nsec-mode: nsec3
+    nsec3-iterations: 1
+    nsec3-salt: ""
+    ksk:
+      lifetime: 365d
+      ttl: 86400
+    zsk:
+      lifetime: 30d
+      ttl: 3600
+  dane:
+    enabled: true
+    auto-generate: true
+    default-port: 18443
+    ttl: 3600
+    default-usage: 2
+    default-selector: 1
+    default-matching-type: 1
+    publish-dane-ee: true
+    key-reuse: true
+    rollover-ttl: 0
+  public:
+    port: 18053
+    forwarders: []
+    zone:
+      description: Public zone for localhost
+      name: localhost.
+      ttl: 3600
+      records:
+        soa:
+          name: localhost.
+          mname: ns1.localhost.
+          rname: hostmaster.localhost.
+          serial: 1
+          refresh: 86400
+          retry: 7200
+          expire: 86400
+          minimum_ttl: 3600
+          ttl: 3600
+        ns:
+          - name: "@"
+            value: ns1.localhost.
+            ttl: 3600
+        a:
+          - name: "@"
+            value: 127.0.0.1
+            ttl: 3600
+          - name: ns1
+            value: 127.0.0.1
+            ttl: 3600
+  internal:
+    port: 19053
+    forwarders:
+      - 127.0.0.1:18053
+    zone:
+      description: Internal zone for example.internal
+      name: example.internal.
+      ttl: 3600
+      internal: true
+      records:
+        soa:
+          name: example.internal.
+          mname: ns1.example.internal.
+          rname: hostmaster.example.internal.
+          serial: 1
+          refresh: 86400
+          retry: 7200
+          expire: 86400
+          minimum_ttl: 3600
+          ttl: 3600
+        ns:
+          - name: example.internal.
+            value: ns1.example.internal.
+            ttl: 3600
+        a:
+          - name: "@"
+            value: 127.0.0.1
+            ttl: 3600
+          - name: ns1
+            value: 127.0.0.1
+            ttl: 3600
+
+# =============================================================================
+# PASSWORD HASHING (Argon2), as in the default config
+# =============================================================================
+
+argon2:
+  memory: 1
+  iterations: 1
+  parallelism: 1
+  saltLen: 16
+  keyLen: 32
+
+# =============================================================================
+# TRUSTED REVERSE PROXY, as in the default config (store seed only)
+# =============================================================================
+
+proxy:
+  defaults:
+    backend-zone: trusted
+  pools:
+    - id: control-plane-console
+      backends:
+        - url: "https://localhost:18443"
+      tls:
+        trust-class: platform
+  routes:
+    - id: console
+      hosts:
+        - localhost
+      path-prefix: /
+      pool: control-plane-console
+      preserve-host: true
+      auth:
+        mode: public
+
+# =============================================================================
+# Default-config sections NOT enabled here (no simulator path)
+# =============================================================================
+# - acme.client: the default daemon enrols its own account against the
+#   internal webservice and renews the public certificate over http-01 on
+#   port 8080; this daemon opens no plain-HTTP port, and the webservice
+#   certificate is issued by the platform CA directly.
+# - disk, os, network, uki, secure-boot, enable-tpm-sealing, seal-pcrs,
+#   fido2: installer/initrd settings for a real host disk and boot chain;
+#   `platformd serve` does not run them.
+# - bootstrap.noise: disabled in the default config too.
+# - tenant seeding: the config has no tenant list; the harness fixtures
+#   (web/e2e/real-server/fixtures) create the admin and the tenant over the
+#   API.
