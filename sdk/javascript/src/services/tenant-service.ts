@@ -296,9 +296,17 @@ export class TenantService extends BaseService {
    * @returns Init result
    */
   async initBarrier(request: InitTenantBarrierRequest): Promise<ApiResponse<InitTenantBarrierResponse>> {
+    // The daemon REST handler (handleInitTenantBarrier) and the gRPC server
+    // discard threshold and shares and run a deterministic, non-Shamir init:
+    // refuse the settings rather than report protection that was not applied.
+    if (request.threshold || request.shares) {
+      throw new RangeError(
+        'initBarrier: threshold and shares are not supported; the server initialises a non-Shamir barrier'
+      );
+    }
     return this.client.post<InitTenantBarrierResponse>(
       this.buildUrl(`/${this.encodePathSegment(request.tenantId)}/barrier/init`),
-      { threshold: request.threshold, shares: request.shares }
+      {}
     );
   }
 
