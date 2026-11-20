@@ -17,7 +17,6 @@ import (
 	"crypto/x509"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -129,25 +128,17 @@ func (e *X509PolicyExtractor) ExtractPolicy(cert *x509.Certificate) (*PortPolicy
 	return policy, nil
 }
 
-// ExtractTenantID extracts the tenant ID from the certificate subject.
-// Falls back to the first Organization field, then to the first component
-// of the CommonName.
+// ExtractTenantID extracts the tenant ID from the certificate subject
+// OrganizationalUnit (SPEC row 122). The first OU is the tenant; O and CN
+// are never used. A certificate without a non-empty OU has no tenant and
+// returns ErrMissingTenantID.
 func (e *X509PolicyExtractor) ExtractTenantID(cert *x509.Certificate) (string, error) {
 	if cert == nil {
 		return "", ErrInvalidCertificate
 	}
-
-	if len(cert.Subject.Organization) > 0 {
-		return cert.Subject.Organization[0], nil
+	if len(cert.Subject.OrganizationalUnit) > 0 && cert.Subject.OrganizationalUnit[0] != "" {
+		return cert.Subject.OrganizationalUnit[0], nil
 	}
-
-	if cert.Subject.CommonName != "" {
-		parts := strings.Split(cert.Subject.CommonName, ".")
-		if len(parts) > 0 {
-			return parts[0], nil
-		}
-	}
-
 	return "", ErrMissingTenantID
 }
 

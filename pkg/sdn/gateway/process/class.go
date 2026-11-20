@@ -20,6 +20,7 @@
 package process
 
 import (
+	"slices"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -107,10 +108,14 @@ type Definition struct {
 // AF_UNIX for the supervisor and datapath IPC, AF_INET and AF_INET6 for its
 // listeners and peers, and AF_NETLINK, over which the datapath programs
 // nftables, routes, XFRM and WireGuard and every process's net package reads
-// interfaces and addresses (NETLINK_ROUTE). No gateway process opens
-// AF_PACKET: none sends raw frames (the ARP prober and the FHRP announcer
-// run in platformd).
+// interfaces and addresses (NETLINK_ROUTE). No parser process opens
+// AF_PACKET; only the datapath does, see datapathFamilies.
 var serviceFamilies = []uint32{unix.AF_UNIX, unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK}
+
+// datapathFamilies are serviceFamilies plus AF_PACKET: the FHRP speaker
+// runs in the datapath and its announcer sends the IPv4 takeover's
+// gratuitous ARP over an AF_PACKET socket (CAP_NET_RAW is already kept).
+var datapathFamilies = append(slices.Clone(serviceFamilies), unix.AF_PACKET)
 
 // definitions is the process table. It is the one place a service's class,
 // capabilities and limits are decided; the supervisor, the child command and
@@ -135,10 +140,11 @@ var definitions = []Definition{
 			gateway.ServiceNAT64,
 			gateway.ServiceHostFW,
 			gateway.ServiceTunnels,
+			gateway.ServiceFHRP,
 			gateway.ServiceOverlay,
 		},
 		Capabilities:    []uintptr{unix.CAP_NET_ADMIN, unix.CAP_NET_RAW},
-		AddressFamilies: serviceFamilies,
+		AddressFamilies: datapathFamilies,
 		MemoryMax:       512 << 20,
 		CPUMax:          "200000 100000",
 		// Last to move: the one supervised process that is not unprivileged.
@@ -148,6 +154,10 @@ var definitions = []Definition{
 		Supervised: true,
 		// The load-balancer and NAT sections.
 		ReconcilesDesired: true,
+		// The FHRP speaker's VIP inventory, fhrp/vips.json: the sweep of
+		// removed groups' VIPs deletes only what it records.
+		StateDir:   gateway.FHRPStateDir,
+		StateFiles: []string{gateway.FHRPInventoryFile},
 	},
 	{
 		Name:     WireGuardProcess,

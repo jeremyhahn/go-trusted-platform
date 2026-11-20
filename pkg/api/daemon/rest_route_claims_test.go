@@ -91,6 +91,7 @@ func daemonRouteTable(t *testing.T, guard *restapi.ScopeGuard) (*RESTServer, []s
 	require.NoError(t, s.SetOverlayHandlers(routeTableOverlay{}, guard))
 	s.SetCAHandlers(routeTableCA{}, guard)
 	s.SetTPMHandlers(platformv1.UnimplementedTPMServiceServer{}, guard)
+	require.NoError(t, s.SetServiceControlHandlers(guard))
 	require.NoError(t, s.SetVTPMService(routeTableVTPM{}, guard))
 	require.NoError(t, s.SetSDNService(nil, guard))
 	require.NoError(t, s.SetGatewayIPAMService(nil, nil, guard))

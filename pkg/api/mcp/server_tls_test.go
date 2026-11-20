@@ -88,7 +88,10 @@ func startTLSTestServer(t *testing.T, authMgr AuthManager) (string, *x509.CertPo
 	cert, pool := newTestServerCertificate(t)
 	config := DefaultConfig()
 	config.HTTPAddr = "127.0.0.1:0"
-	config.AuthManager = authMgr
+	config.AuthManager = pepCaller(authMgr)
+	// An unscoped token is decided by the IAM PEP (SPEC row 116): allow,
+	// so a test sees the transport, not the policy.
+	config.PEPClient = &recordingPEP{allowed: true}
 	config.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
 
 	server := NewServer(newMockServiceProvider(), config, newTestLogger())

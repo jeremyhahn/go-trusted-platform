@@ -419,7 +419,8 @@ func vpnLeaseControl(ctx context.Context, cfg *ServeConfig, gw *gateway.Gateway,
 // servicePolicy admits the supervisor to the control service. Only the
 // datapath process also admits the service account, through which the
 // parser processes reach the kernel state they may not program themselves;
-// a parser process admits no other parser.
+// a parser process admits no other parser. Only the `wireguard` process
+// serves the VPN plane (VPNPlaneService).
 func servicePolicy(def process.Definition, opts serviceOptions, settings *process.Settings) ipc.Policy {
 	// Only the wireguard child's socket admits VPNPlaneService (ruling 942).
 	policy := ipc.Policy{ControlUIDs: []uint32{opts.supervisorUID}, VPNPlane: def.Name == process.WireGuardProcess}
@@ -429,6 +430,10 @@ func servicePolicy(def process.Definition, opts serviceOptions, settings *proces
 			policy.PlatformUIDs = settings.PlatformUIDs
 		}
 	}
+	// Ruling 942: VPNPlaneService is served only on the `wireguard`
+	// process's socket, the process that owns the hub device; the vpn
+	// child reaches it as the service account (DatapathUIDs above).
+	policy.VPNPlane = def.Name == process.WireGuardProcess
 	return policy
 }
 

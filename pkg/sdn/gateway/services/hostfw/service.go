@@ -30,6 +30,13 @@ type Deps struct {
 	Inventory ListenerInventory
 	// Config is the operator-declared part of the ruleset.
 	Config Config
+	// VIPDeny are the accept-mode-off FHRP virtual addresses the caller
+	// derives from its FHRP groups; validated when the ruleset renders.
+	VIPDeny []VIPDeny
+	// VRRP are the enabled FHRP groups' interfaces, on which the caller
+	// admits VRRP advertisements (IP protocol 112); validated when the
+	// ruleset renders. There is no operator setting for them.
+	VRRP []string
 	// Logger receives lifecycle logs. Defaults to slog.Default.
 	Logger *slog.Logger
 	// Now is the clock; defaults to time.Now. Tests substitute it.
@@ -99,8 +106,10 @@ func (s *Service) ruleset() Ruleset {
 		Listeners:  listeners,
 		Peers:      cfg.Peers,
 		Tunnels:    cfg.Tunnels,
+		VRRP:       s.deps.VRRP,
 		Unfiltered: cfg.Unfiltered,
 		ICMP:       cfg.ICMP,
+		VIPDeny:    s.deps.VIPDeny,
 	}
 }
 

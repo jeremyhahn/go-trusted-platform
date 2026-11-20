@@ -12,8 +12,11 @@ The three control-plane templates are under `supermicro/x10/cp1..cp3`
 (`cp1/control-plane.yaml`, `cp2/control-plane.yaml`, `cp3/control-plane.yaml`):
 the x10 dedicated control plane with node-id 1, 2 and 3, one shared
 `deployment-id`, all three members in `join-addresses`, `pebble` storage and
-Raft mutual TLS. The gateway pair (#710) and the compute pair are not provided
-yet.
+Raft mutual TLS. The compute pair is under `supermicro/x10/compute1` and
+`supermicro/x10/compute2` (`compute1/compute.yaml`, `compute2/compute.yaml`):
+the x10 dedicated compute node twice, differing only in node identity
+(hostname, host and BMC addresses, TPM serial).
+The gateway pair (#710) is not provided yet.
 
 ## Intended Use
 
