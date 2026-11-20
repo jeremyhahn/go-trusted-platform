@@ -2,8 +2,10 @@
 
 /**
  * Device lookup (#1743): device and profile counts, lookups by serial, MAC
- * and match criteria, the device's own profile, partial updates, activation
- * and attestation. Every write waits for a confirm dialog.
+ * and match criteria, the device's own profile, partial updates and
+ * activation. Every write waits for a confirm dialog. Pasted-evidence
+ * attestation is not offered: it is replayable until a challenge-based flow
+ * exists (#2024 Codex round 4).
  */
 
 import { useState } from 'react';
@@ -19,7 +21,6 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import { useDeviceLookup } from '@/hooks';
 import type { Device, DeviceProfile } from 'trusted-platform-sdk';
 
@@ -83,7 +84,6 @@ export default function DeviceLookupPage() {
   const [deviceSerial, setDeviceSerial] = useState('');
   const [device, setDevice] = useState<Device | null>(null);
   const [deviceModel, setDeviceModel] = useState('');
-  const [evidence, setEvidence] = useState('');
 
   const [activateSerial, setActivateSerial] = useState('');
   const [activateMAC, setActivateMAC] = useState('');
@@ -121,10 +121,6 @@ export default function DeviceLookupPage() {
   };
 
   const findDevice = async () => {
-    // A new lookup may select another device: drop the previous verdict and
-    // evidence so no device ever shows another device's attestation.
-    lookup.attestDevice.reset();
-    setEvidence('');
     try {
       const result = await lookup.findDeviceBySerial.mutateAsync(deviceSerial.trim());
       showDevice(result);
@@ -142,7 +138,6 @@ export default function DeviceLookupPage() {
   };
 
   const deviceProfile = lookup.getDeviceProfile.data;
-  const attestResult = lookup.attestDevice.data;
   const activateTarget = `${activateSerial.trim()}|${activateMAC.trim()}`;
   const changeActivateTarget = (set: (value: string) => void) => (value: string) => {
     set(value);
@@ -157,7 +152,7 @@ export default function DeviceLookupPage() {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Device Lookup</h1>
         <p className="text-muted-foreground">
-          Find devices and profiles, update them, activate and attest devices
+          Find devices and profiles, update them, and look up device activation
         </p>
       </div>
 
@@ -187,7 +182,11 @@ export default function DeviceLookupPage() {
       <Card>
         <CardHeader>
           <CardTitle>Device by serial</CardTitle>
-          <CardDescription>Find a device, edit it, or attest it with TPM evidence</CardDescription>
+          {/* No paste-and-verify attestation here: the server verifies pasted
+              evidence against the nonce it carries, with no age limit, so an
+              old quote would replay as a fresh verdict. A challenge-based flow
+              is follow-up work (#2024 Codex round 4, P1). */}
+          <CardDescription>Find a device and edit it</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
           <div className="flex items-end gap-2">
@@ -219,31 +218,6 @@ export default function DeviceLookupPage() {
                   Update device
                 </Button>
               </div>
-              <div className="grid gap-1">
-                <Label htmlFor="attest-evidence">Attestation evidence (base64)</Label>
-                <Textarea id="attest-evidence" value={evidence} onChange={(e) => setEvidence(e.target.value)} />
-              </div>
-              <div>
-                <Button
-                  variant="outline"
-                  disabled={!evidence.trim()}
-                  onClick={() =>
-                    setPending({
-                      title: 'Attest device',
-                      description: `Verify the evidence for device ${device.id}? Its attestation status changes with the verdict.`,
-                      run: () => lookup.attestDevice.mutateAsync({ id: device.id, request: { evidence: evidence.trim() } }),
-                    })
-                  }
-                >
-                  Attest device
-                </Button>
-              </div>
-              {lookup.attestDevice.isSuccess && attestResult && String(attestResult.device_id) === String(device.id) && (
-                <p className="text-sm" data-testid="attest-result">
-                  {attestResult.verified ? 'Verified' : 'Not verified'}: {attestResult.attestation_status}
-                  {attestResult.message ? ` (${attestResult.message})` : ''}
-                </p>
-              )}
             </>
           )}
         </CardContent>

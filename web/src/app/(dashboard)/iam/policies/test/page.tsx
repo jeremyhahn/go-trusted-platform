@@ -66,8 +66,38 @@ export default function PolicyTestPage() {
   const [action, setAction] = useState("read");
   const [resource, setResource] = useState("");
 
-  const validation = validate.data as ValidateWire | undefined;
-  const evaluation = test.data as TestWire | undefined;
+  // The SDK useMutation keeps `data` while a new request runs and after it
+  // fails. A verdict shows only after a successful request whose variables
+  // equal the current tenant and inputs (#2024 Codex round 2 P1).
+  const validated = validate.variables as { tenantId?: string; specYaml?: string } | undefined;
+  const validationCurrent =
+    validate.isSuccess &&
+    !validate.isLoading &&
+    validated?.tenantId === tenantId &&
+    validated?.specYaml === specYaml;
+  const tested = test.variables as
+    | {
+        tenantId?: string;
+        subjectId?: string;
+        action?: string;
+        resource?: string;
+        roles?: string[];
+        groups?: string[];
+      }
+    | undefined;
+  const sameList = (a: string[] | undefined, b: string[]) =>
+    (a ?? []).length === b.length && (a ?? []).every((v, i) => v === b[i]);
+  const evaluationCurrent =
+    test.isSuccess &&
+    !test.isLoading &&
+    tested?.tenantId === tenantId &&
+    tested?.subjectId === subjectId &&
+    tested?.action === action &&
+    tested?.resource === resource &&
+    sameList(tested?.roles, splitList(roles)) &&
+    sameList(tested?.groups, splitList(groups));
+  const validation = validationCurrent ? (validate.data as ValidateWire | undefined) : undefined;
+  const evaluation = evaluationCurrent ? (test.data as TestWire | undefined) : undefined;
   const matchedPolicy = evaluation?.matchedPolicy ?? evaluation?.matched_policy;
   const matchedRule = evaluation?.matchedRule ?? evaluation?.matched_rule;
 

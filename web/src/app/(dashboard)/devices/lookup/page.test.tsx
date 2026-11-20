@@ -109,3 +109,51 @@ describe("DeviceLookupPage activation", () => {
     expect(screen.queryByTestId("activate-result")).toBeNull();
   });
 });
+
+// Pasted evidence is verified against the nonce it carries and with no
+// evidence age limit, so an old quote replays as a fresh verdict. The page
+// offers no paste-and-verify control until a challenge-based flow exists
+// (#2024 Codex round 4, P1).
+describe("DeviceLookupPage attestation", () => {
+  const lookupFetch = vi.fn();
+
+  beforeEach(() => {
+    lookupFetch.mockReset();
+    lookupFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? "GET";
+      if (method === "GET" && url.pathname.endsWith("/devices/serial/SN-1")) {
+        return Promise.resolve(ok({ id: "5", serial: "SN-1", model: "Board-A", hash_algo_id: 11 }));
+      }
+      return Promise.resolve(failure(404, `no route ${method} ${url.pathname}`));
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("offers no pasted-evidence verification and sends no attest call", async () => {
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test/api",
+      fetch: lookupFetch,
+      retry: { maxRetries: 0 },
+    });
+    render(
+      <PlatformProvider client={client}>
+        <DeviceLookupPage />
+      </PlatformProvider>
+    );
+
+    fireEvent.change(screen.getByLabelText("Device serial"), { target: { value: "SN-1" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Find device" }));
+    });
+    await screen.findByRole("button", { name: "Update device" });
+
+    expect(screen.queryByLabelText(/attestation evidence/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /attest/i })).toBeNull();
+    const attestCalls = lookupFetch.mock.calls.filter(([input]) => String(input).includes("/attest"));
+    expect(attestCalls).toEqual([]);
+  });
+});

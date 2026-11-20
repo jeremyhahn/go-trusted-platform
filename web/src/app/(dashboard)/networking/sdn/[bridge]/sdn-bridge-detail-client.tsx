@@ -53,12 +53,12 @@ interface PolicyView {
   error?: string;
 }
 
+// RATE_LIMIT and MIRROR are left out: SDNService.policyRuleToFlowMod installs "normal" for both (#2024 Codex P1).
+// REDIRECT is left out too: the form has no output destination, and a REDIRECT rule
+// without actionValue installs no actions, which drops the traffic (#2024 Codex round 2 P1).
 const RULE_ACTIONS: SDNPolicyRuleAction[] = [
   'POLICY_RULE_ACTION_ALLOW',
   'POLICY_RULE_ACTION_DENY',
-  'POLICY_RULE_ACTION_RATE_LIMIT',
-  'POLICY_RULE_ACTION_REDIRECT',
-  'POLICY_RULE_ACTION_MIRROR',
   'POLICY_RULE_ACTION_LOG',
 ];
 
@@ -246,6 +246,27 @@ export default function SDNBridgeDetailClient() {
     });
   };
   const refreshPort = () => setPortReload((n) => n + 1);
+  // OpenFlow matches a destination port only under tcp or udp; the switch
+  // rejects a port match with any or icmp (#2024 Codex round 4, P1).
+  const portNeedsTransport = (protocol: string) => protocol === 'tcp' || protocol === 'udp';
+  // The backend reads destinationPort 0 as "no port match", so an explicit 0
+  // would cover every port: only 1-65535 is accepted (#2024 Codex round 5, P1).
+  const portText = ruleDestinationPort.trim();
+  const portValue = Number(portText);
+  const rulePortError = !portText
+    ? ''
+    : !portNeedsTransport(ruleProtocol)
+      ? 'Rule rule-1: a destination port needs protocol tcp or udp'
+      : !Number.isInteger(portValue) || portValue < 1 || portValue > 65535
+        ? 'Rule rule-1: the destination port must be between 1 and 65535'
+        : '';
+  // A policy is applied only to a bridge this page loaded: an unresolved URL
+  // ID would target nothing (#2024 Codex round 5, P1).
+  const bridgeLoaded = !!bridge && !bridgeError;
+  const changeRuleProtocol = (protocol: string) => {
+    setRuleProtocol(protocol);
+    if (!portNeedsTransport(protocol)) setRuleDestinationPort('');
+  };
 
   return (
     <div className="space-y-6">
@@ -502,7 +523,12 @@ export default function SDNBridgeDetailClient() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>Policies</CardTitle>
-          <Button size="sm" onClick={() => setApplyOpen(true)}>
+          <Button
+            size="sm"
+            disabled={!bridgeLoaded}
+            title={bridgeLoaded ? undefined : 'The bridge must load before a policy can be applied'}
+            onClick={() => setApplyOpen(true)}
+          >
             <Plus className="mr-2 h-4 w-4" />
             Apply Policy
           </Button>
@@ -641,7 +667,7 @@ export default function SDNBridgeDetailClient() {
                   id="rule-protocol"
                   className="h-9 w-full rounded-md border border-input bg-background px-2"
                   value={ruleProtocol}
-                  onChange={(e) => setRuleProtocol(e.target.value)}
+                  onChange={(e) => changeRuleProtocol(e.target.value)}
                 >
                   {RULE_PROTOCOLS.map((p) => (
                     <option key={p} value={p}>{p}</option>
@@ -653,11 +679,18 @@ export default function SDNBridgeDetailClient() {
                 <Input
                   id="rule-destination-port"
                   type="number"
-                  min={0}
+                  min={1}
                   max={65535}
                   value={ruleDestinationPort}
                   onChange={(e) => setRuleDestinationPort(e.target.value)}
+                  aria-invalid={rulePortError ? true : undefined}
+                  aria-describedby={rulePortError ? 'rule-port-error' : undefined}
                 />
+                {rulePortError && (
+                  <p id="rule-port-error" role="alert" data-testid="rule-port-error" className="text-sm text-destructive">
+                    {rulePortError}
+                  </p>
+                )}
               </div>
               <div className="space-y-1">
                 <Label htmlFor="rule-source-ip">Source IP</Label>
@@ -676,8 +709,10 @@ export default function SDNBridgeDetailClient() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setApplyOpen(false)}>Cancel</Button>
             <Button
-              disabled={!policyName || !ruleAction}
+              disabled={!bridgeLoaded || !policyName || !ruleAction || !!rulePortError}
               onClick={() =>
+                bridgeLoaded &&
+                !rulePortError &&
                 run(
                   'Policy applied',
                   applyPolicy,
