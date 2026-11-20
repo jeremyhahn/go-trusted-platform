@@ -223,7 +223,9 @@ func (handler *RestHandler) RefreshToken(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	tokenString, err := handler.jwtService.GenerateToken(user)
+	// The refreshed token stays in the presented token's login session,
+	// so a logout with either one revokes both (#1906).
+	tokenString, err := handler.jwtService.GenerateSessionToken(user, claims.SessionID)
 	if err != nil {
 		handler.responseWriter.Error500(w, r, err)
 		return
@@ -260,11 +262,13 @@ func (handler *RestHandler) refreshBackboneSession(w http.ResponseWriter, r *htt
 		handler.responseWriter.Error401(w, r, ErrInvalidToken)
 		return
 	}
-	tokenString, _, err := handler.jwtService.IssueSession(&quicbaas.Identity{
+	// The refreshed token stays in the presented token's login session,
+	// so a logout with either one revokes both (#1906).
+	tokenString, _, err := handler.jwtService.IssueSessionIn(&quicbaas.Identity{
 		Subject:  claims.Subject,
 		TenantID: claims.TenantID,
 		Roles:    roles,
-	})
+	}, claims.SessionID)
 	if err != nil {
 		handler.responseWriter.Error500(w, r, err)
 		return

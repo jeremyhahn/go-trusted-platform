@@ -90,6 +90,31 @@ func revocationExpiry(token *jwt.Token) time.Time {
 	return time.Time{}
 }
 
+// sessionRevocationKey names the login session a token belongs to, or ""
+// for a token without a session id (issued before the claim existed),
+// which is revoked by revocationKey alone (#1906).
+func sessionRevocationKey(token *jwt.Token) string {
+	if claims, ok := token.Claims.(*TokenClaims); ok && claims.SessionID != "" {
+		return "sid:" + claims.SessionID
+	}
+	return ""
+}
+
+// sessionRevocationExpiry is when a session's revocation may be
+// forgotten: every token of the session was minted at or before now, so
+// none outlives now plus the token lifetime, nor the presented token's
+// own expiry. Zero (never) when neither is known.
+func sessionRevocationExpiry(token *jwt.Token, lifetime time.Duration, now time.Time) time.Time {
+	expiry := revocationExpiry(token)
+	if lifetime <= 0 {
+		return expiry
+	}
+	if bound := now.Add(lifetime); expiry.IsZero() || bound.After(expiry) {
+		return bound
+	}
+	return expiry
+}
+
 // revoke records the token and forgets every entry whose token has
 // expired, so the list cannot grow past one token lifetime of sign-outs.
 func (list *revocationList) revoke(token *jwt.Token, now time.Time) {

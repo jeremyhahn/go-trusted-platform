@@ -66,6 +66,12 @@ type TokenClaims struct {
 	// authorisation; the omitempty keeps tokens compact when no roles
 	// have been assigned yet.
 	Roles []string `json:"roles,omitempty"`
+	// SessionID names the login session the token belongs to: minted at
+	// login and copied unchanged into every refreshed token, so a logout
+	// revokes the whole refresh chain, not just the presented jti
+	// (#1906). Empty in a token issued before the claim existed; such a
+	// token is revoked by its jti alone.
+	SessionID string `json:"sid,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -121,6 +127,17 @@ func NewService(ctx context.Context, params ServiceParams) (*Service, error) {
 }
 
 func (service *Service) GenerateToken(user *entities.User) (string, error) {
+	return service.GenerateSessionToken(user, "")
+}
+
+// GenerateSessionToken mints a platform token in the login session
+// sessionID: a refresh passes the presented token's session id so a
+// logout revokes the whole chain. An empty sessionID starts a new
+// session (a login).
+func (service *Service) GenerateSessionToken(user *entities.User, sessionID string) (string, error) {
+	if sessionID == "" {
+		sessionID = newTokenID()
+	}
 	now := time.Now()
 	// Surface the user's tenant in the standard "tenant_id" claim so the
 	// WebUI's AuthContext can pick up the active tenant and unlock IAM
@@ -150,6 +167,7 @@ func (service *Service) GenerateToken(user *entities.User) (string, error) {
 		TenantID:      tenantID,
 		IsTenantOwner: user.IsTenantOwner,
 		Roles:         roles,
+		SessionID:     sessionID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:       newTokenID(),
 			Subject:  strconv.FormatUint(user.ID, 10),
@@ -261,14 +279,22 @@ func (service *Service) Verify(token *jwt.Token) error {
 	}
 	// A signed-out token is refused everywhere Verify runs: the route
 	// middleware, /login/refresh (so a revoked session cannot be rolled
-	// into a fresh one) and the gRPC/QUIC/MCP transports (#215).
-	revoked, err := service.revocationStore().Revoked(
-		context.Background(), revocationKey(token), time.Now())
-	if err != nil {
-		return err
+	// into a fresh one) and the gRPC/QUIC/MCP transports (#215). A token
+	// whose login session was signed out is refused too, whichever
+	// token of the refresh chain the logout presented (#1906).
+	keys := []string{revocationKey(token)}
+	if key := sessionRevocationKey(token); key != "" {
+		keys = append(keys, key)
 	}
-	if revoked {
-		return ErrTokenRevoked
+	now := time.Now()
+	for _, key := range keys {
+		revoked, err := service.revocationStore().Revoked(context.Background(), key, now)
+		if err != nil {
+			return err
+		}
+		if revoked {
+			return ErrTokenRevoked
+		}
 	}
 	return nil
 }
@@ -289,8 +315,16 @@ func (service *Service) Revoke(token *jwt.Token) error {
 	if err := service.Verify(token); err != nil {
 		return err
 	}
+	now := time.Now()
+	if key := sessionRevocationKey(token); key != "" {
+		lifetime := time.Minute * time.Duration(service.params.Expiration)
+		if err := service.revocationStore().Revoke(context.Background(),
+			key, sessionRevocationExpiry(token, lifetime, now), now); err != nil {
+			return err
+		}
+	}
 	return service.revocationStore().Revoke(context.Background(),
-		revocationKey(token), revocationExpiry(token), time.Now())
+		revocationKey(token), revocationExpiry(token), now)
 }
 
 // VerifyToken parses and validates a token string. Returns true when the
