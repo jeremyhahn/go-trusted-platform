@@ -673,16 +673,16 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `TPMService.Quote` | `POST /quote` | `(dashboard)/tpm/quote/page.tsx` | - | - | partial |
 | `TPMService.VerifyQuote` | `POST /quote/verify` | `(dashboard)/tpm/quote/page.tsx` | - | - | partial |
 | `TPMService.Certify` | `POST /certify` | - | - | - | missing |
-| `TPMService.GetEventLog` | `GET /eventlog` | `(dashboard)/tpm/eventlog/page.tsx` | - | - | partial |
+| `TPMService.GetEventLog` | `GET /eventlog` | `(dashboard)/tpm/eventlog/page.tsx` | - | `real-server/tpm-eventlog.spec.ts` | covered |
 | `TPMService.GetPCRs` | `GET /pcrs` | `(dashboard)/tpm/pcrs/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `TPMService.ExtendPCR` | `POST /pcrs/extend` | - | - | - | missing |
-| `TPMService.MakeCredential` | `POST /make-credential` | - | - | - | missing |
-| `TPMService.ActivateCredential` | `POST /activate-credential` | - | - | - | missing |
+| `TPMService.ExtendPCR` | `POST /pcrs/extend` | `(dashboard)/tpm/pcrs/page.tsx` | - | `real-server/tpm-eventlog.spec.ts` | covered |
+| `TPMService.MakeCredential` | `POST /make-credential` | `(dashboard)/tpm/credential/page.tsx` | - | `real-server/tpm-eventlog.spec.ts` | covered |
+| `TPMService.ActivateCredential` | `POST /activate-credential` | `(dashboard)/tpm/credential/page.tsx` | - | `real-server/tpm-eventlog.spec.ts` | covered |
 | `TPMService.DefineNVRAM` | `POST /nvram` | `(dashboard)/tpm/nvram/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.WriteNVRAM` | `PUT /nvram/{index}` | `(dashboard)/tpm/nvram/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.ReadNVRAM` | `GET /nvram/{index}` | `(dashboard)/tpm/nvram/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.UndefineNVRAM` | `DELETE /nvram/{index}` | `(dashboard)/tpm/nvram/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `TPMService.GetRandom` | `POST /random` | - | - | - | missing |
+| `TPMService.GetRandom` | `POST /random` | `(dashboard)/tpm/credential/page.tsx` | - | `real-server/tpm-eventlog.spec.ts` | covered |
 
 ## VPNService (`vpn.proto`)
 

@@ -5,7 +5,12 @@
  * Every assertion compares the page with what the harness server returns
  * to the SDK for the same call; no route is mocked.
  */
+import type { Page, Response } from '@playwright/test';
+import type { PlatformClient } from 'trusted-platform-sdk';
 import { test, expect } from './fixtures';
+
+/** The harness fixtures this spec uses (typed here so the spec stands alone). */
+type Fx = { adminPage: Page; sdk: PlatformClient };
 
 const toHex = (b64: string): string =>
   Array.from(Buffer.from(b64, 'base64'))
@@ -19,7 +24,7 @@ const SYNTHETIC_AK_NAME = Buffer.concat([
 ]).toString('base64');
 
 test.describe('TPM event log (GetEventLog)', () => {
-  test('shows the event count the server reports', async ({ adminPage, sdk }) => {
+  test('shows the event count the server reports', async ({ adminPage, sdk }: Fx) => {
     const log = await sdk.tpm.getEventLog();
     expect(log.success).toBe(true);
     const count = log.data?.eventCount ?? 0;
@@ -34,10 +39,10 @@ test.describe('TPM event log (GetEventLog)', () => {
     }
   });
 
-  test('refresh refetches the log', async ({ adminPage }) => {
+  test('refresh refetches the log', async ({ adminPage }: Fx) => {
     await adminPage.goto('/tpm/eventlog');
     const refetch = adminPage.waitForResponse(
-      (r) => r.url().includes('/eventlog') && r.request().method() === 'GET'
+      (r: Response) => r.url().includes('/eventlog') && r.request().method() === 'GET'
     );
     await adminPage.getByRole('button', { name: 'Refresh' }).click();
     expect((await refetch).ok()).toBe(true);
@@ -45,7 +50,7 @@ test.describe('TPM event log (GetEventLog)', () => {
 });
 
 test.describe('TPM PCR extend (ExtendPCR)', () => {
-  test('extending PCR 16 changes its value on the server', async ({ adminPage, sdk }) => {
+  test('extending PCR 16 changes its value on the server', async ({ adminPage, sdk }: Fx) => {
     const before = await sdk.tpm.getPCRs({ indices: [16], bank: 'SHA256' });
     expect(before.success).toBe(true);
     const valueBefore = before.data?.pcrValues?.[0]?.value;
@@ -56,7 +61,7 @@ test.describe('TPM PCR extend (ExtendPCR)', () => {
     await adminPage.getByRole('button', { name: 'Extend PCR' }).click();
     await expect(adminPage.getByRole('dialog')).toContainText('Extend PCR 16?');
     const extended = adminPage.waitForResponse(
-      (r) => r.url().includes('/pcrs/extend') && r.request().method() === 'POST'
+      (r: Response) => r.url().includes('/pcrs/extend') && r.request().method() === 'POST'
     );
     await adminPage.getByRole('button', { name: 'Confirm' }).click();
     expect((await extended).ok()).toBe(true);
@@ -68,12 +73,12 @@ test.describe('TPM PCR extend (ExtendPCR)', () => {
 });
 
 test.describe('TPM credentials and random (MakeCredential, ActivateCredential, GetRandom)', () => {
-  test('make credential fills the activate form with the server blob', async ({ adminPage }) => {
+  test('make credential fills the activate form with the server blob', async ({ adminPage }: Fx) => {
     await adminPage.goto('/tpm/credential');
     await adminPage.getByLabel('AK name (base64)').fill(SYNTHETIC_AK_NAME);
     await adminPage.getByLabel('Secret (optional)').fill('e2e secret');
     const made = adminPage.waitForResponse(
-      (r) => r.url().includes('/make-credential') && r.request().method() === 'POST'
+      (r: Response) => r.url().includes('/make-credential') && r.request().method() === 'POST'
     );
     await adminPage.getByRole('button', { name: 'Make Credential' }).click();
     const resp = await made;
@@ -85,7 +90,7 @@ test.describe('TPM credentials and random (MakeCredential, ActivateCredential, G
     await expect(adminPage.getByLabel('Encrypted secret (base64)')).toHaveValue(body.encryptedSecret!);
   });
 
-  test('activate credential shows what the server returns', async ({ adminPage, sdk }) => {
+  test('activate credential shows what the server returns', async ({ adminPage, sdk }: Fx) => {
     const made = await sdk.tpm.makeCredential({ akName: SYNTHETIC_AK_NAME });
     expect(made.success).toBe(true);
     const credentialBlob = made.data!.credentialBlob;
@@ -97,7 +102,7 @@ test.describe('TPM credentials and random (MakeCredential, ActivateCredential, G
     await adminPage.getByRole('button', { name: 'Activate Credential' }).click();
     await expect(adminPage.getByRole('dialog')).toContainText('Activate this credential?');
     const activated = adminPage.waitForResponse(
-      (r) => r.url().includes('/activate-credential') && r.request().method() === 'POST'
+      (r: Response) => r.url().includes('/activate-credential') && r.request().method() === 'POST'
     );
     await adminPage.getByRole('button', { name: 'Confirm' }).click();
     const resp = await activated;
@@ -112,11 +117,11 @@ test.describe('TPM credentials and random (MakeCredential, ActivateCredential, G
     }
   });
 
-  test('get random shows the bytes the server drew', async ({ adminPage }) => {
+  test('get random shows the bytes the server drew', async ({ adminPage }: Fx) => {
     await adminPage.goto('/tpm/credential');
     await adminPage.getByLabel('Number of bytes').fill('16');
     const drawn = adminPage.waitForResponse(
-      (r) => r.url().includes('/random') && r.request().method() === 'POST'
+      (r: Response) => r.url().includes('/random') && r.request().method() === 'POST'
     );
     await adminPage.getByRole('button', { name: 'Get Random' }).click();
     const resp = await drawn;

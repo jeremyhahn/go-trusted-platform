@@ -111,6 +111,13 @@ export type {
 } from './use-bmc-users';
 export { useTPMOps, textToBase64, base64ToHex } from './use-tpm-ops';
 // textToBase64 and base64ToHex come from use-tpm-ops (main) above.
+export {
+  useTPMEventLog,
+  eventLogBytes,
+  eventLogFileName,
+  summarizeEventLog,
+} from './use-tpm-eventlog';
+export type { EventLogSummary } from './use-tpm-eventlog';
 export { useVTPMRuntime, base64ToText, hexToBase64 } from './use-vtpm-runtime';
 export type { VTPMRunState } from './use-vtpm-runtime';
 export {

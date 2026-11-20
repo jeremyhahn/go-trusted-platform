@@ -40,7 +40,7 @@ import {
   AlertCircle,
   Hash,
 } from "lucide-react";
-import { useApi, useTPM, useToast } from "@/hooks";
+import { eventLogBytes, eventLogFileName, useTPM, useTPMEventLog, useToast } from "@/hooks";
 import type { EventLogEntry } from "trusted-platform-sdk";
 
 
@@ -66,26 +66,19 @@ const PCR_LABELS: Record<number, string> = {
 
 export default function TPMEventLogPage() {
   const { toast } = useToast();
-  const tpm = useTPM();
-
   const {
     data: logData,
     isLoading: loading,
     error,
     refetch,
-  } = useApi(
-    () => tpm.getEventLog(),
-    [],
-    {
-      onError: (err) => {
-        toast({
-          title: "Error loading event log",
-          description: err.message,
-          variant: "destructive",
-        });
-      },
-    }
-  );
+    summary,
+  } = useTPMEventLog(useTPM(), (err) => {
+    toast({
+      title: "Error loading event log",
+      description: err.message,
+      variant: "destructive",
+    });
+  });
 
   // The platformd `/api/v1/tpm/eventlog` endpoint returns the
   // raw TCG2 event log as a single base64 blob plus an
@@ -100,30 +93,17 @@ export default function TPMEventLogPage() {
 
   const rawEventLog: string | null = logData?.eventLog ?? null;
   const eventCount: number = logData?.eventCount ?? entries.length;
-  const eventLogFormat: string = logData?.format || "tcg2";
-
-  const stats = React.useMemo(() => {
-    const byPCR = new Map<number, number>();
-    for (const e of entries) {
-      byPCR.set(e.pcrIndex, (byPCR.get(e.pcrIndex) ?? 0) + 1);
-    }
-    return {
-      total: eventCount || entries.length,
-      pcrsTouched: byPCR.size,
-      mostMeasured: [...byPCR.entries()].sort((a, b) => b[1] - a[1])[0],
-    };
-  }, [entries, eventCount]);
+  const eventLogFormat: string = summary.format;
+  const stats = summary;
 
   const downloadRawLog = React.useCallback(() => {
-    if (!rawEventLog) return;
-    const bin = atob(rawEventLog);
-    const buf = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    const buf = eventLogBytes(rawEventLog);
+    if (buf.length === 0) return;
     const blob = new Blob([buf], { type: "application/octet-stream" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `tpm-eventlog-${eventLogFormat}.bin`;
+    a.download = eventLogFileName(eventLogFormat);
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
