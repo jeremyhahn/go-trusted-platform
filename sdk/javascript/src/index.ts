@@ -84,6 +84,7 @@ export {
   DeviceService,
   DNSService,
   NTPService,
+  ProxyService,
   GatewayService,
   IAMService,
   IDevIDService,
@@ -153,6 +154,24 @@ export type {
   ListNTPSourcesResponse,
   StepNTPClockResponse,
 } from './services/ntp-service.js';
+
+// Reverse proxy (#2061)
+export type {
+  ProxyAuthRequirements,
+  ProxyRoute,
+  ProxyBackend,
+  ProxyBackendTLS,
+  ProxyPool,
+  ProxyZonePair,
+  ProxyRouteResponse,
+  ProxyPoolResponse,
+  ProxyVersionResponse,
+  ListProxyRoutesResponse,
+  ListProxyPoolsResponse,
+  GetProxyConfigResponse,
+  GetProxyStatusResponse,
+  GetProxyZoneMatrixResponse,
+} from './services/proxy-service.js';
 
 // BMC users and web certificate (#1720)
 export {

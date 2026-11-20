@@ -14,6 +14,23 @@ export { ComputeService } from './compute-service.js';
 export { DeviceService } from './device-service.js';
 export { DNSService } from './dns-service.js';
 export { NTPService } from './ntp-service.js';
+export { ProxyService } from './proxy-service.js';
+export type {
+  ProxyAuthRequirements,
+  ProxyRoute,
+  ProxyBackend,
+  ProxyBackendTLS,
+  ProxyPool,
+  ProxyZonePair,
+  ProxyRouteResponse,
+  ProxyPoolResponse,
+  ProxyVersionResponse,
+  ListProxyRoutesResponse,
+  ListProxyPoolsResponse,
+  GetProxyConfigResponse,
+  GetProxyStatusResponse,
+  GetProxyZoneMatrixResponse,
+} from './proxy-service.js';
 export type {
   NTPStatus,
   NTPSource,

@@ -19,6 +19,7 @@ import { ComputeService } from '../services/compute-service.js';
 import { DeviceService } from '../services/device-service.js';
 import { DNSService } from '../services/dns-service.js';
 import { NTPService } from '../services/ntp-service.js';
+import { ProxyService } from '../services/proxy-service.js';
 import { BMCService } from '../services/bmc-service.js';
 import { GatewayService } from '../services/gateway-service.js';
 import { IAMService } from '../services/iam-service.js';
@@ -190,6 +191,8 @@ export class PlatformClient {
 
   /** NTP status, sources and clock step */
   public readonly ntp: NTPService;
+  /** Reverse-proxy routes, pools, config, status and zone matrix. */
+  public readonly proxy: ProxyService;
 
   /** Gateway service for BGP and IPAM operations */
   public readonly gateway: GatewayService;
@@ -362,6 +365,7 @@ export class PlatformClient {
     this.device = new DeviceService(t);
     this.dns = new DNSService(t);
     this.ntp = new NTPService(t);
+    this.proxy = new ProxyService(t);
     this.bmc = new BMCService(t);
     this.gateway = new GatewayService(t);
     this.iam = new IAMService(t);
