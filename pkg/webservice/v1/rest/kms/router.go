@@ -79,7 +79,7 @@ func NewKMSRouter(
 //	# Crypto operations
 //	POST   /api/v1/kms/encrypt/{name}           - Encrypt
 //	POST   /api/v1/kms/decrypt/{name}           - Decrypt
-//	POST   /api/v1/kms/rewrap/{name}            - Rewrap
+//	POST   /api/v1/kms/keys/{name}/rewrap       - Rewrap (same key, newest version)
 //	POST   /api/v1/kms/sign/{name}              - Sign
 //	POST   /api/v1/kms/verify/{name}            - Verify
 //	POST   /api/v1/kms/hmac/{name}              - HMAC
@@ -135,7 +135,7 @@ func (r *KMSRouter) RegisterRoutes(parent *mux.Router) {
 	// Crypto
 	sr.HandleFunc("/encrypt/{name}", r.handlers.Encrypt).Methods("POST")
 	sr.HandleFunc("/decrypt/{name}", r.handlers.Decrypt).Methods("POST")
-	sr.HandleFunc("/rewrap/{name}", r.handlers.Rewrap).Methods("POST")
+	sr.HandleFunc("/keys/{name}/rewrap", r.handlers.Rewrap).Methods("POST")
 	sr.HandleFunc("/sign/{name}", r.handlers.Sign).Methods("POST")
 	sr.HandleFunc("/verify/{name}", r.handlers.Verify).Methods("POST")
 	sr.HandleFunc("/hmac/{name}/verify", r.handlers.VerifyHMAC).Methods("POST")

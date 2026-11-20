@@ -486,9 +486,9 @@ POST /api/v1/kms/hmac/{name}/verify
 POST /api/v1/kms/keys
 POST /api/v1/kms/keys/import
 POST /api/v1/kms/keys/{name}/revoke
+POST /api/v1/kms/keys/{name}/rewrap
 POST /api/v1/kms/keys/{name}/rotate
 POST /api/v1/kms/random
-POST /api/v1/kms/rewrap/{name}
 POST /api/v1/kms/secrets
 POST /api/v1/kms/secrets/{name}/rollback
 POST /api/v1/kms/secrets/{name}/rotate

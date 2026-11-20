@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/gorilla/mux"
 	cryptoclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
 )
 
@@ -25,13 +28,23 @@ func (f *fakeRewrapCrypto) Rewrap(_ context.Context, req *cryptoclient.RewrapReq
 	}, nil
 }
 
-// POST /rewrap/{name} re-encrypts a ciphertext under the newest version of
+// serveRewrap posts body to target with the {name} route variable bound,
+// as the router does.
+func serveRewrap(handler http.HandlerFunc, target, name, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
+	req = mux.SetURLVars(req, map[string]string{"name": name})
+	w := httptest.NewRecorder()
+	handler(w, req)
+	return w
+}
+
+// POST /keys/{name}/rewrap re-encrypts a ciphertext under the newest version of
 // the named key and returns both versions and the new ciphertext (#2057).
 func TestRewrap_ForwardsKeyCiphertextAndContext(t *testing.T) {
 	crypto := &fakeRewrapCrypto{}
 	h := newSignTestHandlers(crypto)
 
-	w := serveDataKey(h.Rewrap, "/api/v1/kms/rewrap/old",
+	w := serveRewrap(h.Rewrap, "/api/v1/kms/keys/old/rewrap", "old",
 		`{"ciphertext":"`+b64("sealed")+`","context":"`+b64("aad")+`"}`)
 
 	if w.Code != http.StatusOK {
@@ -66,7 +79,7 @@ func TestRewrap_RequiresCiphertext(t *testing.T) {
 	crypto := &fakeRewrapCrypto{}
 	h := newSignTestHandlers(crypto)
 
-	w := serveDataKey(h.Rewrap, "/api/v1/kms/rewrap/old", `{}`)
+	w := serveRewrap(h.Rewrap, "/api/v1/kms/keys/old/rewrap", "old", `{}`)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body: %s)", w.Code, w.Body.String())
