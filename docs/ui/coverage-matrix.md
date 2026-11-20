@@ -174,9 +174,9 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `ConfigDeliveryService.FetchConfig` | - | - | - | - | not-UI: device-side pre-enrollment protocol |
 | `ConfigDeliveryService.SignDigest` | - | - | - | - | not-UI: device-side pre-enrollment protocol |
 | `ConfigDeliveryService.PollSession` | - | - | - | - | not-UI: device-side pre-enrollment protocol |
-| `ConfigDeliveryService.FulfillSession` | - | `(dashboard)/provisioning/sessions/[sessionId]/page.tsx` | - | - | partial |
+| `ConfigDeliveryService.FulfillSession` | `POST /provisioning/sessions/{id}/fulfill` | `(dashboard)/provisioning/sessions/[sessionId]/page.tsx` | - | `real-server/config-delivery.spec.ts` | covered |
 | `ConfigDeliveryService.ListSessions` | - | `(dashboard)/provisioning/sessions/page.tsx` | - | `provisioning.spec.ts` | covered |
-| `ConfigDeliveryService.GetSession` | - | `(dashboard)/provisioning/sessions/[sessionId]/page.tsx` | - | - | partial |
+| `ConfigDeliveryService.GetSession` | `GET /provisioning/sessions/{id}` | `(dashboard)/provisioning/sessions/[sessionId]/page.tsx` | - | `real-server/config-delivery.spec.ts` | covered |
 
 ## PlatformDaemon (`daemon.proto`)
 
@@ -737,7 +737,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | CeremonyService | 7 | 0 | 0 | 7 | 0 | 0 |
 | ClusterService | 5 | 0 | 0 | 5 | 0 | 0 |
 | ComputeService | 37 | 14 | 2 | 16 | 5 | 0 |
-| ConfigDeliveryService | 7 | 1 | 2 | 0 | 4 | 0 |
+| ConfigDeliveryService | 7 | 3 | 0 | 0 | 4 | 0 |
 | PlatformDaemon | 19 | 1 | 6 | 8 | 4 | 0 |
 | DeviceService | 32 | 10 | 7 | 15 | 0 | 0 |
 | EABService | 11 | 0 | 0 | 11 | 0 | 0 |

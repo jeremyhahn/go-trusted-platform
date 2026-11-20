@@ -9,8 +9,15 @@
  * fulfil flow runs on the first pending session the server lists, and is
  * skipped when it lists none.
  */
-import type { ProvisioningSession } from 'trusted-platform-sdk';
+import type { Page } from '@playwright/test';
+import type { PlatformClient, ProvisioningSession } from 'trusted-platform-sdk';
 import { test, expect } from './fixtures';
+
+/** The harness fixtures this spec uses (web/e2e/real-server/fixtures). */
+interface Fixtures {
+  adminPage: Page;
+  sdk: PlatformClient;
+}
 
 const UNKNOWN_SESSION = 'no-such-session-2046';
 
@@ -22,7 +29,7 @@ test.describe('config delivery: provisioning session detail', () => {
   test('GetSession: an unknown session is refused by the server and the page says so', async ({
     adminPage,
     sdk,
-  }) => {
+  }: Fixtures) => {
     const reply = await sdk.device.getProvisioningSession(UNKNOWN_SESSION);
     expect(reply.data).toBeUndefined();
     expect(reply.error).toBeDefined();
@@ -31,7 +38,7 @@ test.describe('config delivery: provisioning session detail', () => {
     await expect(adminPage.getByText('Session Not Found')).toBeVisible();
   });
 
-  test('FulfillSession: the server refuses an unknown session', async ({ sdk }) => {
+  test('FulfillSession: the server refuses an unknown session', async ({ sdk }: Pick<Fixtures, 'sdk'>) => {
     const reply = await sdk.device.fulfillProvisioningSession({
       session_id: UNKNOWN_SESSION,
       profile_id: '1',
@@ -42,7 +49,7 @@ test.describe('config delivery: provisioning session detail', () => {
   test('GetSession: the page shows what the server returns for a listed session', async ({
     adminPage,
     sdk,
-  }) => {
+  }: Fixtures) => {
     const listed = await sdk.device.listProvisioningSessions();
     const session = listed.data?.[0];
     test.skip(!session, 'the server lists no provisioning session');
@@ -63,7 +70,7 @@ test.describe('config delivery: provisioning session detail', () => {
   test('FulfillSession: a custom profile fulfils a pending session on the server', async ({
     adminPage,
     sdk,
-  }) => {
+  }: Fixtures) => {
     const listed = await sdk.device.listProvisioningSessions();
     const session = listed.data?.find(isPending);
     test.skip(!session, 'the server lists no pending provisioning session');
@@ -83,9 +90,9 @@ test.describe('config delivery: provisioning session detail', () => {
   test('FulfillSession: a fulfilled or expired session offers no fulfil control', async ({
     adminPage,
     sdk,
-  }) => {
+  }: Fixtures) => {
     const listed = await sdk.device.listProvisioningSessions();
-    const session = listed.data?.find((s) => !isPending(s));
+    const session = listed.data?.find((s: ProvisioningSession) => !isPending(s));
     test.skip(!session, 'the server lists no fulfilled or expired session');
     if (!session) return;
 

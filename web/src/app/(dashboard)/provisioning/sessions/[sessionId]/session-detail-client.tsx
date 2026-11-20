@@ -9,7 +9,7 @@
  * create a profile or create a fully custom profile directly.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter, useParams, usePathname } from 'next/navigation';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import {
@@ -39,7 +39,8 @@ import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useToast, useApi, useDevice, useMutation, useDeviceTemplates } from '@/hooks';
+import { useToast, useDevice, useDeviceTemplates } from '@/hooks';
+import { useProvisioningSession } from '@/hooks/use-provisioning-session';
 import type {
   DeviceRole,
   CreateProfileFromTemplateRequest,
@@ -110,7 +111,6 @@ export default function SessionDetailClient() {
 
   const [activeTab, setActiveTab] = useState<'template' | 'custom'>('template');
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
-  const [isFulfilled, setIsFulfilled] = useState(false);
   const [createdProfileId, setCreatedProfileId] = useState<string | null>(null);
 
   // Template form state
@@ -126,103 +126,74 @@ export default function SessionDetailClient() {
 
   const { templates, isLoading: templatesLoading } = useDeviceTemplates();
 
+  // ConfigDeliveryService.GetSession and FulfillSession (#2046).
   const {
-    data: session,
+    session,
     isLoading: sessionLoading,
     error: sessionError,
-    refetch,
-  } = useApi(
-    () => deviceService.getProvisioningSession(sessionId),
-    [sessionId],
-    {
-      onSuccess: (data) => {
-        if (data) {
-          setTemplateEkSerial(data.ek_serial ?? '');
-          setTemplateMacAddress(data.mac_address ?? '');
-          setProfileEkSerial(data.ek_serial ?? '');
-          setProfileMacAddress(data.mac_address ?? '');
-          if (data.fulfilled) {
-            setIsFulfilled(true);
-          }
-        }
-      },
-      onError: (err) => {
-        toast({
-          title: 'Error loading session',
-          description: err.message,
-          variant: 'destructive',
-        });
-      },
-    }
-  );
+    status: sessionStatus,
+    fulfilBlockedReason: fulfilReason,
+    fulfil,
+  } = useProvisioningSession(sessionId);
 
-  // Mutation: create profile from template AND fulfill the session atomically
-  const createFromTemplateMutation = useMutation(
-    async (request: CreateProfileFromTemplateRequest) => {
-      const profileResponse = await deviceService.createProfileFromTemplate(request);
-      const profile = profileResponse.data;
-      if (profile?.id) {
-        await deviceService.fulfillProvisioningSession({
-          session_id: sessionId,
-          profile_id: profile.id,
-        });
-      }
-      return profileResponse;
-    },
-    {
-      onSuccess: (profileResponse) => {
-        const profileId = profileResponse?.id ?? null;
-        setCreatedProfileId(profileId);
-        setIsFulfilled(true);
-        toast({
-          title: 'Device provisioned',
-          description: 'Profile created and session fulfilled. The device will resume installation.',
-          variant: 'success',
-        });
-      },
-      onError: (err) => {
-        toast({
-          title: 'Error provisioning device',
-          description: err.message,
-          variant: 'destructive',
-        });
-      },
-    }
-  );
+  // Prefill the device-reported identifiers once per loaded session.
+  const prefilledFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!session || prefilledFor.current === session.id) return;
+    prefilledFor.current = session.id;
+    setTemplateEkSerial(session.ek_serial ?? '');
+    setTemplateMacAddress(session.mac_address ?? '');
+    setProfileEkSerial(session.ek_serial ?? '');
+    setProfileMacAddress(session.mac_address ?? '');
+  }, [session]);
 
-  // Mutation: create custom profile AND fulfill the session atomically
-  const createCustomProfileMutation = useMutation(
-    async (request: CreateProfileRequest) => {
-      const profileResponse = await deviceService.createProfile(request);
-      const profile = profileResponse.data?.profile;
-      if (profile?.id) {
-        await deviceService.fulfillProvisioningSession({
-          session_id: sessionId,
-          profile_id: profile.id,
-        });
-      }
-      return profileResponse;
-    },
-    {
-      onSuccess: (profileResponse) => {
-        const profileId = profileResponse?.profile?.id ?? null;
-        setCreatedProfileId(profileId);
-        setIsFulfilled(true);
-        toast({
-          title: 'Device provisioned',
-          description: 'Profile created and session fulfilled. The device will resume installation.',
-          variant: 'success',
-        });
-      },
-      onError: (err) => {
-        toast({
-          title: 'Error creating profile',
-          description: err.message,
-          variant: 'destructive',
-        });
-      },
+  useEffect(() => {
+    if (sessionError) {
+      toast({
+        title: 'Error loading session',
+        description: sessionError.message,
+        variant: 'destructive',
+      });
     }
-  );
+  }, [sessionError, toast]);
+
+  const isFulfilled = createdProfileId !== null || sessionStatus === 'fulfilled';
+
+  // Create the profile, then fulfil the session with its id. The hook
+  // refuses a session that is not pending and reports a fulfil refusal
+  // from the server as an error, never as a provisioned device.
+  const provision = async (create: () => Promise<string | null | undefined>, failTitle: string) => {
+    try {
+      const result = await fulfil.mutateAsync(create);
+      setCreatedProfileId(result?.profileId ?? null);
+      toast({
+        title: 'Device provisioned',
+        description: 'Profile created and session fulfilled. The device will resume installation.',
+        variant: 'success',
+      });
+    } catch (err) {
+      toast({
+        title: failTitle,
+        description: err instanceof Error ? err.message : String(err),
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const createFromTemplate = (request: CreateProfileFromTemplateRequest) =>
+    provision(async () => {
+      const reply = await deviceService.createProfileFromTemplate(request);
+      if (reply.error !== undefined) throw new Error(reply.error.message);
+      return reply.data?.id != null ? String(reply.data.id) : undefined;
+    }, 'Error provisioning device');
+
+  const createCustomProfile = (request: CreateProfileRequest) =>
+    provision(async () => {
+      const reply = await deviceService.createProfile(request);
+      if (reply.error !== undefined) throw new Error(reply.error.message);
+      const id = reply.data?.profile?.id;
+      return id != null ? String(id) : undefined;
+    }, 'Error creating profile');
 
   const handleCreateFromTemplate = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -235,7 +206,7 @@ export default function SessionDetailClient() {
       return;
     }
 
-    createFromTemplateMutation.mutate({
+    void createFromTemplate({
       templateId: selectedTemplateId,
       overrides: profileOverrides({
         staticIp: templateStaticIp,
@@ -247,7 +218,7 @@ export default function SessionDetailClient() {
 
   const handleCreateCustomProfile = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    createCustomProfileMutation.mutate({
+    void createCustomProfile({
       profile: {
         name: profileName,
         role: profileRole,
@@ -290,12 +261,7 @@ export default function SessionDetailClient() {
     );
   }
 
-  const status = getSessionStatus(session.fulfilled, session.expires_at);
-
-  // Success state after provisioning
-  if (isFulfilled && !session.fulfilled) {
-    refetch();
-  }
+  const status: SessionStatus = sessionStatus ?? getSessionStatus(session.fulfilled, session.expires_at);
 
   if (isFulfilled) {
     return (
@@ -514,13 +480,15 @@ export default function SessionDetailClient() {
                     <Button
                       type="submit"
                       className="w-full"
+                      title={fulfilReason ?? undefined}
                       disabled={
+                        fulfilReason !== null ||
                         !selectedTemplateId ||
-                        createFromTemplateMutation.isLoading ||
+                        fulfil.isLoading ||
                         templatesLoading
                       }
                     >
-                      {createFromTemplateMutation.isLoading && (
+                      {fulfil.isLoading && (
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       )}
                       Create Profile and Provision Device
@@ -593,9 +561,10 @@ export default function SessionDetailClient() {
                     <Button
                       type="submit"
                       className="w-full"
-                      disabled={!profileName || createCustomProfileMutation.isLoading}
+                      title={fulfilReason ?? undefined}
+                      disabled={fulfilReason !== null || !profileName || fulfil.isLoading}
                     >
-                      {createCustomProfileMutation.isLoading && (
+                      {fulfil.isLoading && (
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       )}
                       Create Profile and Provision Device
