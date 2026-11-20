@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fhrp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/nat64"
 	"log/slog"
@@ -144,6 +145,14 @@ type HostRuntime struct {
 	Listeners hostfw.ListenerInventory
 	// HostFWApplier programs the nftables table; nil opens netlink.
 	HostFWApplier hostfw.Applier
+	// FHRPTransport opens the VRRP group sockets; nil opens raw sockets.
+	FHRPTransport fhrp.Transport
+	// FHRPProgrammer holds the virtual addresses; nil uses netlink.
+	FHRPProgrammer fhrp.Programmer
+	// FHRPInventory is where the speaker records the VIPs it installs
+	// (fhrp.Inventory). Start deletes the recorded VIPs of groups no longer
+	// configured, FHRP disabled included. Empty records and sweeps nothing.
+	FHRPInventory string
 	// TunnelManager drives tunnel interfaces; nil uses the netlink manager.
 	TunnelManager TunnelManager
 	// UplinkManager programs the routing-uplinks: section for an injected
@@ -174,6 +183,13 @@ type HostRuntime struct {
 	// Logger receives service lifecycle logs.
 	Logger *slog.Logger
 }
+
+// FHRPStateDir is the datapath process's state directory under gatewayd's
+// data directory; FHRPInventoryFile, the speaker's VIP inventory in it.
+const (
+	FHRPStateDir      = "fhrp"
+	FHRPInventoryFile = fhrp.VIPInventoryFile
+)
 
 // hostRuntime returns the injected HostRuntime or a zero one whose fields
 // resolve to the real implementations, always with a usable logger.

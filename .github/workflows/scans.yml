@@ -50,7 +50,7 @@ jobs:
     name: Scheduled scans
     # GitHub only, as the template: the issue calls are GitHub's API (gh).
     if: ${{ github.server_url == 'https://github.com' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
-    runs-on: [self-hosted, linux, x64, bigdisk-docker]
+    runs-on: [self-hosted, linux, x64, bigdisk-docker]  # self-hosted: oversize: measured 16.7 GB for govulncheck (#1425), runs at a 20g container limit; a standard hosted runner has 16 GB RAM (ruling 999)
     timeout-minutes: 120
     env:
       GH_TOKEN: ${{ github.token }}

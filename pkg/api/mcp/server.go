@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	stderrors "errors"
 	"fmt"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"io"
 	"net"
 	"net/http"
@@ -66,6 +67,11 @@ type Config struct {
 
 	// AuthManager for validating tokens (optional)
 	AuthManager AuthManager
+
+	// PEPClient is the IAM policy enforcement point that decides a tool
+	// permission when the token carries no scope grant (SPEC row 116).
+	// Without it such a call is denied.
+	PEPClient iam.PEPClient
 
 	// PeerAuthenticator authenticates a tokenless request by the verified
 	// client certificate of its TLS connection (mTLS), as REST, gRPC and
@@ -135,7 +141,7 @@ func NewServer(svc ServiceProvider, config *Config, log *logging.Logger) *Server
 
 	// Initialize authorization checker
 	s.authChecker = NewAuthorizationChecker(config.AuthorizationService, config.AuthManager,
-		WithPeerAuthenticator(config.PeerAuthenticator))
+		WithPeerAuthenticator(config.PeerAuthenticator), WithPEPClient(config.PEPClient))
 
 	// Initialize OAuth 2.1 metadata handler
 	s.oauthMetadata = NewOAuthMetadataHandler(config.OAuthMetadata)
@@ -154,10 +160,12 @@ func NewServer(svc ServiceProvider, config *Config, log *logging.Logger) *Server
 func (s *Server) SetAuthorizationService(authService AuthorizationService, authManager AuthManager) {
 	// Keep the certificate authenticator the server was built with.
 	var peers PeerAuthenticator
+	var pep iam.PEPClient
 	if s.authChecker != nil {
 		peers = s.authChecker.peerAuthenticator
+		pep = s.authChecker.pep
 	}
-	s.authChecker = NewAuthorizationChecker(authService, authManager, WithPeerAuthenticator(peers))
+	s.authChecker = NewAuthorizationChecker(authService, authManager, WithPeerAuthenticator(peers), WithPEPClient(pep))
 	s.tools.SetAuthorizationChecker(s.authChecker)
 }
 
