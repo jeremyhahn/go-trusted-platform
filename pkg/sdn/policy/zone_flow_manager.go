@@ -167,8 +167,15 @@ func (m *ZoneFlowManager) ApplyZoneFlows(ctx context.Context, portID string, z z
 	}
 
 	// Set VLAN tag via OVSDB.
+	// The delete above removed the port's rules: a failed VLAN update
+	// restores the previous placement and rules, or blocks the port, so
+	// unmatched traffic never reaches NORMAL forwarding (#1896 Codex).
 	if err := m.portController.SetPortVLAN(ctx, portID, int64(vlanID)); err != nil {
-		return &WrappedError{Msg: "zone flow manager: set port VLAN", Err: err}
+		setErr := &WrappedError{Msg: "zone flow manager: set port VLAN", Err: err}
+		if rbErr := m.rollbackZoneMove(ctx, portID, ofPort, nil); rbErr != nil {
+			return errors.Join(setErr, rbErr)
+		}
+		return setErr
 	}
 
 	// Install per-zone template flows as a single batch. The port is an
@@ -191,16 +198,14 @@ func (m *ZoneFlowManager) ApplyZoneFlows(ctx context.Context, portID string, z z
 		// already on the new VLAN: roll both back so the port is never on
 		// the new zone's VLAN while the manager records the old zone
 		// (fail closed, #1896 Codex r2).
-		if rbErr := m.rollbackZoneMove(ctx, portID, ofPort, templateFlows); rbErr != nil {
-			return errors.Join(&SentinelCauseError{Sentinel: ErrFlowInstallFailed, Cause: err}, rbErr)
-		}
-		return &SentinelCauseError{Sentinel: ErrFlowInstallFailed, Cause: err}
+		return m.failMove(ctx, portID, ofPort, err, templateFlows)
 	}
 
 	// Install inter-zone matrix rules as a single batch when matrix and
 	// network summaries are available: the shared tagged-ingress rules plus
 	// this port's untagged-ingress rules for its zone.
-	matrixFlows := append(m.compileMatrixFlows(), m.compilePortMatrixFlows(ofPort, z)...)
+	portMatrix := m.compilePortMatrixFlows(ofPort, z)
+	matrixFlows := append(m.compileMatrixFlows(), portMatrix...)
 	for _, f := range matrixFlows {
 		m.logger.Debug("installing matrix flow",
 			slog.String("port_id", portID),
@@ -210,12 +215,14 @@ func (m *ZoneFlowManager) ApplyZoneFlows(ctx context.Context, portID string, z z
 			slog.String("actions", f.Actions))
 	}
 	if err := m.flowController.InstallFlows(m.bridgeName, matrixFlows); err != nil {
-		m.logger.Warn("failed to install matrix flows",
+		m.logger.Error("failed to install matrix flows",
 			slog.String("port_id", portID),
 			slog.String("zone", string(z)),
 			slog.String("error", err.Error()))
-		// Matrix rules are best-effort; do not abort on failure. A batch
-		// partial failure only skips the rejected rules on the switch.
+		// The matrix's inter-zone denies outrank the zone template's
+		// catch-all: without them the port is not isolated. Fail the
+		// apply and roll back (fail closed, #1896 Codex).
+		return m.failMove(ctx, portID, ofPort, err, templateFlows, portMatrix)
 	}
 
 	m.portZoneMap[portID] = z
@@ -255,6 +262,22 @@ func (m *ZoneFlowManager) rollbackZoneMove(ctx context.Context, portID, ofPort s
 		}
 	}
 
+	// A trunk (gateway, hypervisor) gets its class back: allowed VLANs,
+	// native VLAN and every carried zone's rules. Restoring only the
+	// native VLAN would make it an access port and cut its other tagged
+	// networks (#1896 Codex).
+	if c, ok := m.portClassMap[portID]; ok {
+		if len(errs) == 0 {
+			if err := m.restoreTrunk(ctx, portID, ofPort, c); err != nil {
+				errs = append(errs, err)
+			} else {
+				delete(m.portZoneMap, portID)
+				return nil
+			}
+		}
+		return m.blockPort(portID, ofPort, errs)
+	}
+
 	restoreVLAN, ok := m.portVLANMap[portID]
 	if !ok {
 		v, err := m.resolveVLAN(zone.ZoneQuarantine)
@@ -284,10 +307,14 @@ func (m *ZoneFlowManager) rollbackZoneMove(ctx context.Context, portID, ofPort s
 			return nil
 		}
 	}
+	return m.blockPort(portID, ofPort, errs)
+}
 
-	// The port's rules are not known to be in place: block it with a
-	// drop-all that outranks every other rule (fail closed). The next
-	// apply's DeleteFlowsByPort removes it.
+// blockPort is the last step of a failed rollback: the port's rules are
+// not known to be in place, so it gets a drop-all that outranks every
+// other rule (fail closed) and is recorded as quarantined. The next
+// apply's DeleteFlowsByPort removes the drop-all. Callers hold m.mu.
+func (m *ZoneFlowManager) blockPort(portID, ofPort string, errs []error) error {
 	if err := m.flowController.InstallFlows(m.bridgeName, []zoneflows.FlowRule{portBlockRule(ofPort)}); err != nil {
 		errs = append(errs, &WrappedError{Msg: "zone flow manager: block port after failed rollback", Err: err})
 	}
@@ -300,6 +327,65 @@ func (m *ZoneFlowManager) rollbackZoneMove(ctx context.Context, portID, ofPort s
 		slog.String("error", errors.Join(errs...).Error()),
 		complianceAttr(complianceSC7, complianceAC4))
 	return errors.Join(append([]error{ErrPortStateUnknown}, errs...)...)
+}
+
+// failMove answers a move whose flow install failed with cause: it rolls
+// the port back to its previous placement, deleting the given batches'
+// port rules, and returns ErrFlowInstallFailed joined with any rollback
+// error. Callers hold m.mu.
+func (m *ZoneFlowManager) failMove(ctx context.Context, portID, ofPort string, cause error, batches ...[]zoneflows.FlowRule) error {
+	var batch []zoneflows.FlowRule
+	for _, b := range batches {
+		batch = append(batch, b...)
+	}
+	installErr := &SentinelCauseError{Sentinel: ErrFlowInstallFailed, Cause: cause}
+	if rbErr := m.rollbackZoneMove(ctx, portID, ofPort, batch); rbErr != nil {
+		return errors.Join(installErr, rbErr)
+	}
+	return installErr
+}
+
+// restoreTrunk puts trunk port class c back on portID: its allowed and
+// native VLANs, every carried zone's template and the matrix rules.
+// Callers hold m.mu.
+func (m *ZoneFlowManager) restoreTrunk(ctx context.Context, portID, ofPort string, c zone.PortClass) error {
+	pc, err := m.plan.PortClass(c)
+	if err != nil {
+		return ErrPortClassUnresolved{Class: string(c), Cause: err}
+	}
+	if err := m.portController.SetPortTrunk(ctx, portID, pc.Allowed, pc.Native); err != nil {
+		return &WrappedError{Msg: "zone flow manager: restore port trunk", Err: err}
+	}
+	template, nativeZone := m.classTemplateFlows(ofPort, pc)
+	if err := m.flowController.InstallFlows(m.bridgeName, template); err != nil {
+		return &WrappedError{Msg: "zone flow manager: reinstall previous trunk flows", Err: err}
+	}
+	matrix := append(m.compileMatrixFlows(), m.compilePortMatrixFlows(ofPort, nativeZone)...)
+	if err := m.flowController.InstallFlows(m.bridgeName, matrix); err != nil {
+		return &WrappedError{Msg: "zone flow manager: reinstall previous trunk matrix flows", Err: err}
+	}
+	return nil
+}
+
+// classTemplateFlows answers the template flows of every zone trunk class
+// pc carries, and the native zone: the native zone's frames reach the flow
+// tables untagged, every other zone's tagged (see zoneflows.Ingress).
+func (m *ZoneFlowManager) classTemplateFlows(ofPort string, pc netplan.PortClassPlan) ([]zoneflows.FlowRule, zone.Zone) {
+	var templateFlows []zoneflows.FlowRule
+	var nativeZone zone.Zone
+	for _, vid := range pc.Allowed {
+		z, ok := m.plan.ZoneForVLAN(vid)
+		if !ok {
+			continue
+		}
+		in := zoneflows.Tagged(vid)
+		if vid == pc.Native {
+			in = zoneflows.Untagged(vid)
+			nativeZone = z
+		}
+		templateFlows = append(templateFlows, m.generators.Generate(ofPort, z, in)...)
+	}
+	return templateFlows, nativeZone
 }
 
 // rollbackZone answers the zone a rolled-back port returns to: its recorded
@@ -478,36 +564,33 @@ func (m *ZoneFlowManager) ApplyPortClassFlows(ctx context.Context, portID string
 		return &WrappedError{Msg: "zone flow manager: delete existing flows", Err: err}
 	}
 
+	// Every failure after the delete restores the port's previous
+	// placement and rules, or blocks the port (fail closed, #1896 Codex).
 	if err := m.portController.SetPortTrunk(ctx, portID, pc.Allowed, pc.Native); err != nil {
-		return &WrappedError{Msg: "zone flow manager: set port trunk", Err: err}
+		setErr := &WrappedError{Msg: "zone flow manager: set port trunk", Err: err}
+		if rbErr := m.rollbackZoneMove(ctx, portID, ofPort, nil); rbErr != nil {
+			return errors.Join(setErr, rbErr)
+		}
+		return setErr
 	}
 
-	// The native zone's frames reach the flow tables untagged, every other
-	// zone's tagged (see zoneflows.Ingress).
-	var templateFlows []zoneflows.FlowRule
-	var nativeZone zone.Zone
-	for _, vid := range pc.Allowed {
-		z, ok := m.plan.ZoneForVLAN(vid)
-		if !ok {
-			continue
-		}
-		in := zoneflows.Tagged(vid)
-		if vid == pc.Native {
-			in = zoneflows.Untagged(vid)
-			nativeZone = z
-		}
-		templateFlows = append(templateFlows, m.generators.Generate(ofPort, z, in)...)
-	}
+	templateFlows, nativeZone := m.classTemplateFlows(ofPort, pc)
 	if err := m.flowController.InstallFlows(m.bridgeName, templateFlows); err != nil {
-		return &SentinelCauseError{Sentinel: ErrFlowInstallFailed, Cause: err}
-	}
-
-	matrixFlows := append(m.compileMatrixFlows(), m.compilePortMatrixFlows(ofPort, nativeZone)...)
-	if err := m.flowController.InstallFlows(m.bridgeName, matrixFlows); err != nil {
-		m.logger.Warn("failed to install matrix flows",
+		m.logger.Error("failed to install port class template flows",
 			slog.String("port_id", portID),
 			slog.String("port_class", string(c)),
 			slog.String("error", err.Error()))
+		return m.failMove(ctx, portID, ofPort, err, templateFlows)
+	}
+
+	portMatrix := m.compilePortMatrixFlows(ofPort, nativeZone)
+	matrixFlows := append(m.compileMatrixFlows(), portMatrix...)
+	if err := m.flowController.InstallFlows(m.bridgeName, matrixFlows); err != nil {
+		m.logger.Error("failed to install matrix flows",
+			slog.String("port_id", portID),
+			slog.String("port_class", string(c)),
+			slog.String("error", err.Error()))
+		return m.failMove(ctx, portID, ofPort, err, templateFlows, portMatrix)
 	}
 
 	delete(m.portZoneMap, portID)
