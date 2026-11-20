@@ -146,6 +146,15 @@ export default function KmsOperationsPage() {
   const [wdkSize, setWdkSize] = React.useState("256");
   const [wdkResult, setWdkResult] = React.useState<string | null>(null);
 
+  // Batch encrypt/decrypt and rewrap
+  const [batchKey, setBatchKey] = React.useState("");
+  const [batchItems, setBatchItems] = React.useState("");
+  const [batchResult, setBatchResult] = React.useState<string | null>(null);
+  const [rewrapKey, setRewrapKey] = React.useState("");
+  const [rewrapCiphertext, setRewrapCiphertext] = React.useState("");
+  const [rewrapResult, setRewrapResult] = React.useState<string | null>(null);
+  const batchLines = batchItems.split("\n").filter((line) => line !== "");
+
   // Backend
   const [backend, setBackend] = React.useState<KmsBackendStatus | null>(null);
 
@@ -220,6 +229,30 @@ export default function KmsOperationsPage() {
     }
   };
 
+  const onBatchEncrypt = async () => {
+    setBatchResult(null);
+    const res = await ops.batchEncrypt(batchKey, batchLines);
+    if (res) {
+      setBatchResult(res.map((item) => item.ciphertext).join("\n"));
+    }
+  };
+
+  const onBatchDecrypt = async () => {
+    setBatchResult(null);
+    const res = await ops.batchDecrypt(batchKey, batchLines.map((line) => line.trim()));
+    if (res) {
+      setBatchResult(res.join("\n"));
+    }
+  };
+
+  const onRewrap = async () => {
+    setRewrapResult(null);
+    const res = await ops.rewrap(rewrapKey, rewrapCiphertext.trim());
+    if (res) {
+      setRewrapResult(`${res.key_id} v${res.old_version} -> v${res.new_version}: ${res.ciphertext}`);
+    }
+  };
+
   const onBackend = async () => {
     setBackend(await ops.getBackendStatus());
   };
@@ -230,7 +263,8 @@ export default function KmsOperationsPage() {
         <h1 className="text-3xl font-bold tracking-tight">KMS Operations</h1>
         <p className="text-muted-foreground">
           Key import, status and versions, hashing, HMAC,
-          random bytes, data keys and the backend status
+          random bytes, data keys, batch encrypt and decrypt, rewrap and the
+          backend status
         </p>
       </div>
 
@@ -418,6 +452,55 @@ export default function KmsOperationsPage() {
           <Field id="wrapped-data-key-size" label="Key size" value={wdkSize} onChange={setWdkSize} />
           <Button onClick={onWrappedDataKey} disabled={ops.busy || !wdkKey}>
             Generate wrapped data key
+          </Button>
+        </OpCard>
+
+        <OpCard
+          id="batch"
+          title="Batch Encrypt / Decrypt"
+          description="Encrypt texts or decrypt base64 ciphertexts under one key, one item per line"
+          result={batchResult}
+        >
+          <Field id="batch-key" label="Key name" value={batchKey} onChange={setBatchKey} />
+          <div className="flex flex-col gap-1">
+            <Label htmlFor="batch-items">Items, one per line</Label>
+            <textarea
+              id="batch-items"
+              rows={4}
+              className="rounded-md border bg-transparent px-3 py-2 font-mono text-sm"
+              value={batchItems}
+              onChange={(e) => setBatchItems(e.target.value)}
+            />
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={onBatchEncrypt} disabled={ops.busy || !batchKey || batchLines.length === 0}>
+              Batch encrypt
+            </Button>
+            <Button
+              variant="outline"
+              onClick={onBatchDecrypt}
+              disabled={ops.busy || !batchKey || batchLines.length === 0}
+            >
+              Batch decrypt
+            </Button>
+          </div>
+        </OpCard>
+
+        <OpCard
+          id="rewrap"
+          title="Rewrap"
+          description="Re-encrypt a ciphertext (base64) under the key's newest version"
+          result={rewrapResult}
+        >
+          <Field id="rewrap-key" label="Key name" value={rewrapKey} onChange={setRewrapKey} />
+          <Field
+            id="rewrap-ciphertext"
+            label="Ciphertext (base64)"
+            value={rewrapCiphertext}
+            onChange={setRewrapCiphertext}
+          />
+          <Button onClick={onRewrap} disabled={ops.busy || !rewrapKey || !rewrapCiphertext}>
+            Rewrap
           </Button>
         </OpCard>
 

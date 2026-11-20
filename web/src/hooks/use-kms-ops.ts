@@ -137,6 +137,26 @@ export interface UseKmsOpsResult {
   generateDataKey: (keyId: string, algorithm: string, keySize: number) => Promise<KmsDataKeyResult | null>;
   generateWrappedDataKey: (wrappingKeyId: string, keyAlgorithm: string, keySize: number) => Promise<KmsWrappedDataKeyResult | null>;
   getBackendStatus: () => Promise<KmsBackendStatus | null>;
+  /** Encrypts each text under the key, one /encrypt call per item, in order. */
+  batchEncrypt: (name: string, texts: string[]) => Promise<KmsBatchCiphertext[] | null>;
+  /** Decrypts each base64 ciphertext under the key and decodes it as text. */
+  batchDecrypt: (name: string, ciphertexts: string[]) => Promise<string[] | null>;
+  /** Re-encrypts a ciphertext under the key's newest version. */
+  rewrap: (name: string, ciphertext: string) => Promise<KmsRewrapResult | null>;
+}
+
+/** One item of a batch encrypt. */
+export interface KmsBatchCiphertext {
+  ciphertext: string;
+  version: number;
+}
+
+/** POST /keys/{name}/rewrap payload. */
+export interface KmsRewrapResult {
+  key_id: string;
+  old_version: number;
+  new_version: number;
+  ciphertext: string;
 }
 
 /**
@@ -208,6 +228,28 @@ export function useKmsOps(): UseKmsOpsResult {
           })
         ),
       getBackendStatus: () => run(() => call<KmsBackendStatus>('GET', '/backend/status')),
+      batchEncrypt: (name, texts) =>
+        run(async () => {
+          const out: KmsBatchCiphertext[] = [];
+          for (const text of texts) {
+            const res = await call<KmsBatchCiphertext>('POST', `/encrypt/${seg(name)}`, {
+              plaintext: textToBase64(text),
+            });
+            out.push({ ciphertext: res.ciphertext, version: res.version });
+          }
+          return out;
+        }),
+      batchDecrypt: (name, ciphertexts) =>
+        run(async () => {
+          const out: string[] = [];
+          for (const ciphertext of ciphertexts) {
+            const res = await call<{ plaintext: string }>('POST', `/decrypt/${seg(name)}`, { ciphertext });
+            out.push(base64ToText(res.plaintext));
+          }
+          return out;
+        }),
+      rewrap: (name, ciphertext) =>
+        run(() => call<KmsRewrapResult>('POST', `/keys/${seg(name)}/rewrap`, { ciphertext })),
     }),
     [error, busy, run]
   );
