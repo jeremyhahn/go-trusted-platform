@@ -96,7 +96,8 @@ func registerCapabilitiesEndpoint(
 				http.StatusInternalServerError)
 			return
 		}
-		writer.Success200(w, req, buildCapabilities(router, base, services, stubs))
+		writer.Success200(w, req, buildCapabilities(router, base, services, stubs,
+			services.unavailableRoutes()))
 	})
 }
 
@@ -107,6 +108,7 @@ func buildCapabilities(
 	base string,
 	services *ServiceRegistry,
 	stubs map[*mux.Route]struct{},
+	unavailable map[*mux.Route]string,
 ) CapabilitiesResponse {
 	var entries []*ServiceEntry
 	if services != nil {
@@ -132,8 +134,13 @@ func buildCapabilities(
 		if err != nil || len(methods) == 0 {
 			methods = []string{"ANY"}
 		}
+		// The prefix owner only labels the route. Availability follows the
+		// handler that is actually registered: a route is disabled only when
+		// it was mounted through the unavailable-service handler or is a
+		// placeholder stub.
 		owner := owningService(entries, base, template)
 		_, stub := stubs[route]
+		missing, notConfigured := unavailable[route]
 		for _, method := range methods {
 			op := method + " " + template
 			// mux serves the first match, so the first registration wins.
@@ -148,8 +155,9 @@ func buildCapabilities(
 			switch {
 			case stub:
 				c.Enabled, c.Reason = false, CapabilityReasonBlockedIntegration
-			case owner != nil && !owner.Configured:
-				c.Enabled, c.Reason = false, CapabilityReasonNotConfigured+owner.Name
+			case notConfigured:
+				c.Service = missing
+				c.Enabled, c.Reason = false, CapabilityReasonNotConfigured+missing
 			}
 			routes = append(routes, c)
 		}
