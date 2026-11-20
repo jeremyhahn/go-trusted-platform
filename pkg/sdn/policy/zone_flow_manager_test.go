@@ -275,6 +275,7 @@ func TestZoneFlowManager_ApplyZoneFlows_InstallFailureRestoresPort(t *testing.T)
 	ctrl, m := newPartialInstallZFM(t)
 	require.NoError(t, m.ApplyZoneFlows(ctx, "tap0", zone.ZoneQuarantine))
 	prevVLAN := ctrl.vlans["tap0"]
+	prevLive := append([]zoneflows.FlowRule(nil), ctrl.live...)
 
 	ctrl.failInstalls = 1
 	err := m.ApplyZoneFlows(ctx, "tap0", zone.ZoneProvisioning)
@@ -282,8 +283,10 @@ func TestZoneFlowManager_ApplyZoneFlows_InstallFailureRestoresPort(t *testing.T)
 
 	require.Equal(t, prevVLAN, ctrl.vlans["tap0"], "the port is back on its previous VLAN")
 	require.NotNil(t, ctrl.partial)
+	// The rollback reinstalls the previous zone's rules, which may share a
+	// rule with the failed batch: every live rule is a previous-zone rule.
 	for _, r := range ctrl.live {
-		require.NotEqual(t, *ctrl.partial, r, "a flow of the failed batch is still installed")
+		require.Contains(t, prevLive, r, "a flow of the failed batch is still installed")
 	}
 	got, err := m.GetPortZone("tap0")
 	require.NoError(t, err)

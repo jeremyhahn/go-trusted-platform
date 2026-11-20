@@ -191,7 +191,7 @@ func (m *ZoneFlowManager) ApplyZoneFlows(ctx context.Context, portID string, z z
 		// already on the new VLAN: roll both back so the port is never on
 		// the new zone's VLAN while the manager records the old zone
 		// (fail closed, #1896 Codex r2).
-		if rbErr := m.rollbackZoneMove(ctx, portID, templateFlows); rbErr != nil {
+		if rbErr := m.rollbackZoneMove(ctx, portID, ofPort, templateFlows); rbErr != nil {
 			return errors.Join(&SentinelCauseError{Sentinel: ErrFlowInstallFailed, Cause: err}, rbErr)
 		}
 		return &SentinelCauseError{Sentinel: ErrFlowInstallFailed, Cause: err}
@@ -242,10 +242,12 @@ var ErrPortStateUnknown = errors.New("sdn/policy: zone move failed and could not
 // rollbackZoneMove undoes a zone move whose template batch failed after
 // SetPortVLAN: it deletes every flow of the batch (deleting an absent flow
 // is harmless) and puts the port back on its previous VLAN, or on the
-// quarantine VLAN when the manager had none recorded. When either step
-// fails it records the port as quarantined, forgets its VLAN and returns
-// ErrPortStateUnknown. Callers hold m.mu.
-func (m *ZoneFlowManager) rollbackZoneMove(ctx context.Context, portID string, batch []zoneflows.FlowRule) error {
+// quarantine VLAN when the manager had none recorded, then reinstalls that
+// zone's template and per-port matrix rules, which the move had deleted.
+// When any step fails it blocks the port with a drop-all, records the port
+// as quarantined, forgets its VLAN and returns ErrPortStateUnknown. Callers
+// hold m.mu.
+func (m *ZoneFlowManager) rollbackZoneMove(ctx context.Context, portID, ofPort string, batch []zoneflows.FlowRule) error {
 	var errs []error
 	for _, f := range batch {
 		if err := m.flowController.DeleteFlow(m.bridgeName, f.Match); err != nil {
@@ -266,8 +268,28 @@ func (m *ZoneFlowManager) rollbackZoneMove(ctx context.Context, portID string, b
 			errs = append(errs, &WrappedError{Msg: "zone flow manager: restore port VLAN", Err: err})
 		}
 	}
+
+	// The move deleted the port's earlier rules before it installed the
+	// new template: reinstall the restored zone's template and per-port
+	// matrix rules, or the port keeps its restricted VLAN with no drop
+	// rules (#1896 Codex).
 	if len(errs) == 0 {
-		return nil
+		prev := m.rollbackZone(portID, restoreVLAN)
+		if err := m.reinstallZone(ofPort, prev, restoreVLAN); err != nil {
+			errs = append(errs, err)
+		} else {
+			m.portZoneMap[portID] = prev
+			delete(m.portClassMap, portID)
+			m.portVLANMap[portID] = restoreVLAN
+			return nil
+		}
+	}
+
+	// The port's rules are not known to be in place: block it with a
+	// drop-all that outranks every other rule (fail closed). The next
+	// apply's DeleteFlowsByPort removes it.
+	if err := m.flowController.InstallFlows(m.bridgeName, []zoneflows.FlowRule{portBlockRule(ofPort)}); err != nil {
+		errs = append(errs, &WrappedError{Msg: "zone flow manager: block port after failed rollback", Err: err})
 	}
 
 	m.portZoneMap[portID] = zone.ZoneQuarantine
@@ -278,6 +300,48 @@ func (m *ZoneFlowManager) rollbackZoneMove(ctx context.Context, portID string, b
 		slog.String("error", errors.Join(errs...).Error()),
 		complianceAttr(complianceSC7, complianceAC4))
 	return errors.Join(append([]error{ErrPortStateUnknown}, errs...)...)
+}
+
+// rollbackZone answers the zone a rolled-back port returns to: its recorded
+// access zone, else the zone of the VLAN it is restored to, else quarantine.
+func (m *ZoneFlowManager) rollbackZone(portID string, vlan uint16) zone.Zone {
+	if z, ok := m.portZoneMap[portID]; ok && z != "" {
+		return z
+	}
+	if z, ok := m.plan.ZoneForVLAN(vlan); ok {
+		return z
+	}
+	return zone.ZoneQuarantine
+}
+
+// reinstallZone installs zone z's template and per-port matrix rules for an
+// access port on vlan. Unlike a forward apply, a matrix failure fails it:
+// the per-port matrix rules carry the zone's inter-zone drops.
+func (m *ZoneFlowManager) reinstallZone(ofPort string, z zone.Zone, vlan uint16) error {
+	template := m.generators.Generate(ofPort, z, zoneflows.Untagged(vlan))
+	if err := m.flowController.InstallFlows(m.bridgeName, template); err != nil {
+		return &WrappedError{Msg: "zone flow manager: reinstall previous zone flows", Err: err}
+	}
+	matrix := append(m.compileMatrixFlows(), m.compilePortMatrixFlows(ofPort, z)...)
+	if err := m.flowController.InstallFlows(m.bridgeName, matrix); err != nil {
+		return &WrappedError{Msg: "zone flow manager: reinstall previous zone matrix flows", Err: err}
+	}
+	return nil
+}
+
+// portBlockPriority is the highest OpenFlow priority: a blocked port's
+// drop-all outranks every zone and matrix rule.
+const portBlockPriority = 65535
+
+// portBlockRule drops every frame from the OpenFlow port.
+func portBlockRule(ofPort string) zoneflows.FlowRule {
+	return zoneflows.FlowRule{
+		Table:    0,
+		Priority: portBlockPriority,
+		Match:    "in_port=" + ofPort,
+		Actions:  "drop",
+		Cookie:   zoneflows.QuarantineCookie,
+	}
 }
 
 // RemoveFlows removes all OpenFlow rules for portID and clears zone/VLAN tracking.
