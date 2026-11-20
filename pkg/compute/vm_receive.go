@@ -751,7 +751,7 @@ func defaultNewIncomingReceiver(ctx context.Context, p *incomingReceiverParams) 
 	}
 	// The waiter runs from launch, so every exit of the receiver, aborted,
 	// failed or adopted, is reaped.
-	proc := startReceiverProcess(vm.Wait, vm.Stop, vm.ForceStop)
+	proc := startReceiverProcess(vm.Wait, vm.Stop, vm.Kill)
 
 	if err := vm.ConnectMonitor(ctx); err != nil {
 		_ = proc.terminate()
