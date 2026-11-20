@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
@@ -140,6 +141,12 @@ func (m *ZoneFlowManager) ApplyZoneFlows(ctx context.Context, portID string, z z
 	if err != nil {
 		return err
 	}
+	// Flows match and are deleted by the OpenFlow port number; OVSDB and
+	// the manager's maps use the interface name (#1694).
+	ofPort, err := m.openFlowPort(ctx, portID)
+	if err != nil {
+		return err
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -154,7 +161,7 @@ func (m *ZoneFlowManager) ApplyZoneFlows(ctx context.Context, portID string, z z
 	// Remove existing flows for this port before installing new ones.
 	// A failed delete fails the apply: the port's earlier allow rules
 	// could outrank the new zone's default drop (fail closed, #1694).
-	if err := m.flowController.DeleteFlowsByPort(m.bridgeName, portID); err != nil {
+	if err := m.flowController.DeleteFlowsByPort(m.bridgeName, ofPort); err != nil {
 		return &WrappedError{Msg: "zone flow manager: delete existing flows", Err: err}
 	}
 
@@ -165,7 +172,7 @@ func (m *ZoneFlowManager) ApplyZoneFlows(ctx context.Context, portID string, z z
 
 	// Install per-zone template flows as a single batch. The port is an
 	// access port, so its frames reach the flow tables untagged.
-	templateFlows := m.generators.Generate(portID, z, zoneflows.Untagged(vlanID))
+	templateFlows := m.generators.Generate(ofPort, z, zoneflows.Untagged(vlanID))
 	for _, f := range templateFlows {
 		m.logger.Debug("installing template flow",
 			slog.String("port_id", portID),
@@ -185,7 +192,7 @@ func (m *ZoneFlowManager) ApplyZoneFlows(ctx context.Context, portID string, z z
 	// Install inter-zone matrix rules as a single batch when matrix and
 	// network summaries are available: the shared tagged-ingress rules plus
 	// this port's untagged-ingress rules for its zone.
-	matrixFlows := append(m.compileMatrixFlows(), m.compilePortMatrixFlows(portID, z)...)
+	matrixFlows := append(m.compileMatrixFlows(), m.compilePortMatrixFlows(ofPort, z)...)
 	for _, f := range matrixFlows {
 		m.logger.Debug("installing matrix flow",
 			slog.String("port_id", portID),
@@ -245,7 +252,11 @@ func (m *ZoneFlowManager) RemoveFlows(portID string) error {
 
 	m.logger.Info("removing flows", slog.String("port_id", portID))
 
-	if err := m.flowController.DeleteFlowsByPort(m.bridgeName, portID); err != nil {
+	ofPort, err := m.openFlowPort(context.Background(), portID)
+	if err != nil {
+		return err
+	}
+	if err := m.flowController.DeleteFlowsByPort(m.bridgeName, ofPort); err != nil {
 		return &WrappedError{Msg: "zone flow manager: remove flows", Err: err}
 	}
 
@@ -254,6 +265,20 @@ func (m *ZoneFlowManager) RemoveFlows(portID string) error {
 	delete(m.portVLANMap, portID)
 
 	return nil
+}
+
+// openFlowPort resolves a port name to the decimal OpenFlow port number the
+// generated in_port matches and DeleteFlowsByPort need; OVSDB calls and the
+// manager's maps keep the name.
+func (m *ZoneFlowManager) openFlowPort(ctx context.Context, portID string) (string, error) {
+	n, err := m.portController.GetOFPort(ctx, portID)
+	if err != nil {
+		return "", ErrNoOpenFlowPort{Port: portID, Cause: err}
+	}
+	if n < 1 {
+		return "", ErrNoOpenFlowPort{Port: portID, OFPort: n}
+	}
+	return strconv.FormatInt(int64(n), 10), nil
 }
 
 // GetPortZone returns the current zone for portID.
@@ -314,6 +339,10 @@ func (m *ZoneFlowManager) ApplyPortClassFlows(ctx context.Context, portID string
 		z, _ := m.plan.ZoneForVLAN(pc.Native)
 		return m.ApplyZoneFlows(ctx, portID, z)
 	}
+	ofPort, err := m.openFlowPort(ctx, portID)
+	if err != nil {
+		return err
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -327,7 +356,7 @@ func (m *ZoneFlowManager) ApplyPortClassFlows(ctx context.Context, portID string
 
 	// A failed delete fails the apply: the port's earlier allow rules
 	// could outrank the new zone's default drop (fail closed, #1694).
-	if err := m.flowController.DeleteFlowsByPort(m.bridgeName, portID); err != nil {
+	if err := m.flowController.DeleteFlowsByPort(m.bridgeName, ofPort); err != nil {
 		return &WrappedError{Msg: "zone flow manager: delete existing flows", Err: err}
 	}
 
@@ -349,13 +378,13 @@ func (m *ZoneFlowManager) ApplyPortClassFlows(ctx context.Context, portID string
 			in = zoneflows.Untagged(vid)
 			nativeZone = z
 		}
-		templateFlows = append(templateFlows, m.generators.Generate(portID, z, in)...)
+		templateFlows = append(templateFlows, m.generators.Generate(ofPort, z, in)...)
 	}
 	if err := m.flowController.InstallFlows(m.bridgeName, templateFlows); err != nil {
 		return &SentinelCauseError{Sentinel: ErrFlowInstallFailed, Cause: err}
 	}
 
-	matrixFlows := append(m.compileMatrixFlows(), m.compilePortMatrixFlows(portID, nativeZone)...)
+	matrixFlows := append(m.compileMatrixFlows(), m.compilePortMatrixFlows(ofPort, nativeZone)...)
 	if err := m.flowController.InstallFlows(m.bridgeName, matrixFlows); err != nil {
 		m.logger.Warn("failed to install matrix flows",
 			slog.String("port_id", portID),

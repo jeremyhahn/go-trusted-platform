@@ -375,3 +375,26 @@ func (e ErrPortClassUnresolved) Error() string {
 
 // Unwrap returns the underlying cause.
 func (e ErrPortClassUnresolved) Unwrap() error { return e.Cause }
+
+// ErrNoOpenFlowPort reports a port the switch has no OpenFlow port number
+// for: the lookup failed, or the port is not attached (ofport < 1). Flows
+// match and are deleted by the number, so none can be installed (#1694).
+type ErrNoOpenFlowPort struct {
+	// Port is the OVS interface name.
+	Port string
+	// OFPort is the number the switch reported (meaningless with Cause set).
+	OFPort int32
+	// Cause is the lookup error, nil when the number itself is invalid.
+	Cause error
+}
+
+// Error implements error.
+func (e ErrNoOpenFlowPort) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("sdn/policy: OpenFlow port number of %q: %v", e.Port, e.Cause)
+	}
+	return fmt.Sprintf("sdn/policy: port %q has no OpenFlow port number (ofport %d)", e.Port, e.OFPort)
+}
+
+// Unwrap returns the lookup error.
+func (e ErrNoOpenFlowPort) Unwrap() error { return e.Cause }
