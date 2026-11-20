@@ -287,7 +287,7 @@ export interface DaemonStatusResponse {
   go_version?: string;
   /** System information */
   system?: Record<string, unknown>;
-  /** Unix timestamp */
+  /** Unix timestamp in seconds (the daemon layout's RFC 3339 string is converted to Unix seconds) */
   timestamp?: number;
 }
 
@@ -319,7 +319,7 @@ export interface ListDaemonServicesResponse {
   services: DaemonServiceInfo[];
   /** Count */
   count: number;
-  /** Unix timestamp */
+  /** Unix timestamp in seconds (the daemon layout's RFC 3339 string is converted to Unix seconds) */
   timestamp?: number;
 }
 
