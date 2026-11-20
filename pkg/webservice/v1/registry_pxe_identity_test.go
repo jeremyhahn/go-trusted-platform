@@ -72,3 +72,48 @@ func TestPXEIdentityHook_DisabledPXESkipsTheProfileCheck(t *testing.T) {
 		TCGData:     &trustedca.ACMETCGEnrollmentData{EKCertificate: ek},
 	}))
 }
+
+// idleMACPXERecorder is an enabled PXE backend on which no MAC has a PXE
+// install in progress. Recording is a test failure.
+type idleMACPXERecorder struct {
+	t       *testing.T
+	queried []string
+}
+
+func (r *idleMACPXERecorder) Configured() bool { return true }
+
+func (r *idleMACPXERecorder) PXEInstallInProgressForMAC(_ context.Context, mac string) (bool, error) {
+	r.queried = append(r.queried, mac)
+	return false, nil
+}
+
+func (r *idleMACPXERecorder) RecordEnrolledIDevIDFingerprintForMAC(context.Context, string, *x509.Certificate) error {
+	r.t.Error("the PXE identity hook recorded a fingerprint for a device outside the PXE workflow")
+	return nil
+}
+
+// Codex round 5 P1 on #1896: with PXE enabled, a serial-only profile (no EK
+// certificate registered, as AssignToDevice allows) outside the PXE workflow
+// still enrolls and renews. The EK binding applies only to an active PXE
+// install.
+func TestPXEIdentityHook_EnabledPXESerialOnlyProfileOutsidePXEEnrolls(t *testing.T) {
+	cases := map[string]*deviceentities.DeviceProfile{
+		"MAC with no PXE install": {MACAddress: "02:00:00:00:00:02"},
+		"no MAC":                  {},
+	}
+	for name, profile := range cases {
+		t.Run(name, func(t *testing.T) {
+			ek := pxeIdentityTestCert(t, 2004)
+			profiles := serialOnlyProfiles{ek.SerialNumber.String(): profile}
+			rec := &idleMACPXERecorder{t: t}
+			hook := NewPXEIdentityHookWithProfiles(rec, profiles, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			require.NoError(t, hook(&trustedca.ACMEOrderFinalizeHookContext{
+				Context:     context.Background(),
+				IsTCGCSR:    true,
+				ClientIP:    "192.0.2.11",
+				Certificate: pxeIdentityTestCert(t, 2005),
+				TCGData:     &trustedca.ACMETCGEnrollmentData{EKCertificate: ek},
+			}))
+		})
+	}
+}
