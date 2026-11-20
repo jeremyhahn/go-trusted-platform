@@ -242,11 +242,23 @@ func (sm *StateManager) Unregister(deviceID string) error {
 	entry := entryVal.(*deviceEntry)
 	macKey := entry.device.MACAddress.String()
 
+	// Delete the stored record first: if the datastore delete fails the
+	// device stays registered, so a later Unregister retries it instead of
+	// leaving a stale record that would restore the device on restart.
+	if sm.store != nil {
+		sm.storeMu.Lock()
+		err := sm.store.Delete(context.Background(), deviceID)
+		sm.storeMu.Unlock()
+		if err != nil {
+			return fmt.Errorf("pxe: delete stored device %s: %w", deviceID, err)
+		}
+	}
+
 	// Remove from both maps
 	sm.devices.Delete(deviceID)
 	sm.byMAC.Delete(macKey)
 
-	return sm.persist(deviceID)
+	return nil
 }
 
 // Get retrieves a device by its ID.
