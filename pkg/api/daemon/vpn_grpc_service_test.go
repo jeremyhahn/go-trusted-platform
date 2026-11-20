@@ -25,6 +25,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
@@ -150,6 +151,103 @@ func TestVPNGRPCService_PeerLifecycle(t *testing.T) {
 
 	_, err = server.RevokePeer(ctx, &platformv1.RevokeVPNPeerRequest{TenantId: "acme", DeviceId: "laptop-1"})
 	assert.Equal(t, codes.NotFound, status.Code(err))
+}
+
+// TestVPNGRPCService_RefusesCrossTenantCaller proves a tenant-bound caller
+// reaches only its own tenant: a request naming another tenant, or no tenant
+// (which would list every tenant), is PermissionDenied and reaches no store.
+func TestVPNGRPCService_RefusesCrossTenantCaller(t *testing.T) {
+	server, _ := newVPNTestServer(t)
+	_, err := server.EnrolPeer(context.Background(), &platformv1.EnrolVPNPeerRequest{
+		Peer: &platformv1.VPNPeer{TenantId: "globex", DeviceId: "phone-1"},
+	})
+	require.NoError(t, err)
+
+	acme := context.WithValue(context.Background(), ContextKeyIdentity, &auth.Identity{ID: "op", TenantID: "acme"})
+
+	calls := map[string]func(tenant string) error{
+		"EnrolPeer": func(tenant string) error {
+			_, err := server.EnrolPeer(acme, &platformv1.EnrolVPNPeerRequest{
+				Peer: &platformv1.VPNPeer{TenantId: tenant, DeviceId: "laptop-1"},
+			})
+			return err
+		},
+		"ListPeers": func(tenant string) error {
+			_, err := server.ListPeers(acme, &platformv1.ListVPNPeersRequest{TenantId: tenant})
+			return err
+		},
+		"RevokePeer": func(tenant string) error {
+			_, err := server.RevokePeer(acme, &platformv1.RevokeVPNPeerRequest{TenantId: tenant, DeviceId: "phone-1"})
+			return err
+		},
+		"GetPosturePolicy": func(tenant string) error {
+			_, err := server.GetPosturePolicy(acme, &platformv1.GetVPNPosturePolicyRequest{TenantId: tenant, Name: "corp"})
+			return err
+		},
+		"SetPosturePolicy": func(tenant string) error {
+			_, err := server.SetPosturePolicy(acme, &platformv1.SetVPNPosturePolicyRequest{
+				Policy: &platformv1.VPNPosturePolicy{TenantId: tenant, Name: "corp", Module: vpnTestPolicy},
+			})
+			return err
+		},
+		"DeletePosturePolicy": func(tenant string) error {
+			_, err := server.DeletePosturePolicy(acme, &platformv1.DeleteVPNPosturePolicyRequest{TenantId: tenant, Name: "corp"})
+			return err
+		},
+		"ListPosturePolicies": func(tenant string) error {
+			_, err := server.ListPosturePolicies(acme, &platformv1.ListVPNPosturePoliciesRequest{TenantId: tenant})
+			return err
+		},
+	}
+	for name, call := range calls {
+		for _, tenant := range []string{"globex", ""} {
+			t.Run(name+"/tenant="+tenant, func(t *testing.T) {
+				assert.Equal(t, codes.PermissionDenied, status.Code(call(tenant)))
+			})
+		}
+	}
+
+	// The globex peer survived the refused revocation.
+	listed, err := server.ListPeers(context.Background(), &platformv1.ListVPNPeersRequest{TenantId: "globex"})
+	require.NoError(t, err)
+	assert.Len(t, listed.GetPeers(), 1)
+
+	// The caller's own tenant is admitted.
+	_, err = server.ListPeers(acme, &platformv1.ListVPNPeersRequest{TenantId: "acme"})
+	require.NoError(t, err)
+}
+
+// TestVPNGRPC_TenantlessCallerCannotListAllTenants proves an authenticated
+// caller with no tenant cannot list every tenant's peers or posture policies
+// by omitting tenant_id: the empty request tenant reads as "all tenants" in
+// the backend, so the refusal must come before the backend is reached.
+func TestVPNGRPC_TenantlessCallerCannotListAllTenants(t *testing.T) {
+	server, storage := newVPNTestServer(t)
+	_, err := server.EnrolPeer(context.Background(), &platformv1.EnrolVPNPeerRequest{
+		Peer: &platformv1.VPNPeer{TenantId: "globex", DeviceId: "phone-1"},
+	})
+	require.NoError(t, err)
+
+	tenantless := context.WithValue(context.Background(), ContextKeyIdentity, &auth.Identity{ID: "op"})
+
+	// A store failure makes any backend call Unavailable, so PermissionDenied
+	// proves the backend was never called.
+	storage.ListError = errors.New("backend must not be called")
+	peers, err := server.ListPeers(tenantless, &platformv1.ListVPNPeersRequest{TenantId: ""})
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Nil(t, peers)
+	policies, err := server.ListPosturePolicies(tenantless, &platformv1.ListVPNPosturePoliciesRequest{TenantId: ""})
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Nil(t, policies)
+	storage.ListError = nil
+
+	// A tenant-bound caller naming its own tenant still lists.
+	globex := context.WithValue(context.Background(), ContextKeyIdentity, &auth.Identity{ID: "op", TenantID: "globex"})
+	listed, err := server.ListPeers(globex, &platformv1.ListVPNPeersRequest{TenantId: "globex"})
+	require.NoError(t, err)
+	assert.Len(t, listed.GetPeers(), 1)
+	_, err = server.ListPosturePolicies(globex, &platformv1.ListVPNPosturePoliciesRequest{TenantId: "globex"})
+	require.NoError(t, err)
 }
 
 func TestVPNGRPCService_StoreFailureIsUnavailable(t *testing.T) {

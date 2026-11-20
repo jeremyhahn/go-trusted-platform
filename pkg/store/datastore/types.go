@@ -171,13 +171,6 @@ type InvitationDAO interface {
 	GenericDAO[*entities.Invitation]
 }
 
-// RoleDAO provides operations for Role entities.
-type RoleDAO interface {
-	// GetByName retrieves a role by its name.
-	GetByName(ctx context.Context, name string) (*entities.Role, error)
-	GenericDAO[*entities.Role]
-}
-
 // WebAuthnDAO provides operations for WebAuthn credential blobs.
 type WebAuthnDAO interface {
 	GenericDAO[*entities.Blob]
@@ -188,7 +181,6 @@ type Factory interface {
 	UserDAO() (UserDAO, error)
 	RegistrationDAO() (RegistrationDAO, error)
 	InvitationDAO() (InvitationDAO, error)
-	RoleDAO() (RoleDAO, error)
 	SerializerType() serializer.SerializerType
 	WebAuthnDAO() (WebAuthnDAO, error)
 }
