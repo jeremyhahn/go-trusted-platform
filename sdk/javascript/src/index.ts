@@ -164,6 +164,11 @@ export {
   type CreateBMCUserRequest,
   type ReplaceBMCWebCertificateRequest,
   type BMCStatusResponse,
+  type EnrollBMCRequest,
+  type EnrollBMCResponse,
+  type RestoreBMCFactoryCertResponse,
+  type BMCEnrollStep,
+  type BMCCertMeta,
 } from './services/bmc-service.js';
 
 // =============================================================================

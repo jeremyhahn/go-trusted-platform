@@ -103,6 +103,10 @@ test.describe('BMC admin operations against the real server', () => {
     await expect(restore).toBeVisible();
 
     await enroll.click();
+    await adminPage.getByRole('button', { name: 'Confirm' }).click();
+    // The server refuses an unknown profile (404) or runs without an
+    // enroller (503); either way the page shows the server's answer.
     await expect(adminPage.getByTestId('bmc-cert-ops-error')).toBeVisible();
+    await expect(adminPage.getByTestId('bmc-action-error')).toBeVisible();
   });
 });

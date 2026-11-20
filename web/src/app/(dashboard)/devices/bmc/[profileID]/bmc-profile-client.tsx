@@ -27,6 +27,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useBMC, useToast } from "@/hooks";
 import type { BMCPart } from "@/hooks";
+import { useBMCCertOps } from "@/hooks/use-bmc-cert-ops";
 
 // The boot devices the server accepts (pkg/bmc/types.go); any other is a 400.
 const BOOT_DEVICES = ["none", "pxe", "disk", "cdrom", "virtual_media"];
@@ -55,6 +56,7 @@ export default function BMCProfileClient() {
   const { toast } = useToast();
   const profileID = resolveDynamicId(params, pathname, "bmc", "profileID");
   const bmc = useBMC(profileID);
+  const certOps = useBMCCertOps(profileID ?? "");
 
   const [bootDevice, setBootDevice] = useState("pxe");
   const [image, setImage] = useState("");
@@ -317,6 +319,74 @@ export default function BMCProfileClient() {
               </div>
             )}
             <PartError errors={bmc.errors} part="certificate" />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ShieldCheck className="h-5 w-5" />
+              Enrolment
+            </CardTitle>
+            <CardDescription>
+              Enrol the BMC with the platform CA, or put back the factory web certificate captured at enrolment
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex gap-2">
+              <Button
+                data-testid="bmc-enroll-button"
+                disabled={certOps.busy}
+                onClick={() =>
+                  ask({
+                    title: "Enrol BMC",
+                    description:
+                      "Captures the BMC's factory certificate and replaces it with one the platform CA issues, " +
+                      "then applies the profile's password-rotation and DNS/DANE enrolment settings.",
+                    run: async () => {
+                      if (!(await certOps.enroll({}))) throw new Error("The server refused the enrolment");
+                      await bmc.refetch();
+                    },
+                    done: "BMC enrolled",
+                  })
+                }
+              >
+                Enrol
+              </Button>
+              <Button
+                variant="outline"
+                data-testid="bmc-restore-cert-button"
+                disabled={certOps.busy}
+                onClick={() =>
+                  ask({
+                    title: "Restore factory certificate",
+                    description: "Puts the factory web certificate captured at enrolment back on the BMC.",
+                    run: async () => {
+                      if (!(await certOps.restoreFactoryCert())) throw new Error("The server refused the restore");
+                      await bmc.refetch();
+                    },
+                    done: "Factory certificate restored",
+                  })
+                }
+              >
+                Restore factory certificate
+              </Button>
+            </div>
+            {certOps.error && (
+              <p className="text-sm text-destructive" role="alert" data-testid="bmc-cert-ops-error">
+                {certOps.error}
+              </p>
+            )}
+            {certOps.lastResult && (
+              <ul className="space-y-1 text-sm" data-testid="bmc-cert-ops-steps">
+                {(certOps.lastResult.result.steps ?? []).map((step) => (
+                  <li key={step.name}>
+                    {step.ok ? "ok" : "failed"}: {step.name}
+                    {step.detail ? ` (${step.detail})` : ""}
+                  </li>
+                ))}
+              </ul>
+            )}
           </CardContent>
         </Card>
       </div>

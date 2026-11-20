@@ -66,14 +66,14 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `BMCService.Provision` | `POST /bmc/{profileID:[0-9]+}/provision` | - | - | - | missing |
 | `BMCService.ProvisionStatus` | `GET /bmc/{profileID:[0-9]+}/provision` | - | - | - | missing |
 | `BMCService.GetWebCertificate` | `GET /bmc/{profileID:[0-9]+}/cert` | - | - | - | missing |
-| `BMCService.ReplaceWebCertificate` | `PUT /bmc/{profileID:[0-9]+}/cert` | - | - | - | missing |
-| `BMCService.EnrollBMC` | - | - | - | - | missing |
-| `BMCService.RestoreFactoryCert` | - | - | - | - | missing |
-| `BMCService.ListUsers` | `GET /bmc/{profileID:[0-9]+}/users` | - | - | - | missing |
-| `BMCService.CreateUser` | `POST /bmc/{profileID:[0-9]+}/users` | - | - | - | missing |
-| `BMCService.DeleteUser` | `DELETE /bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}` | - | - | - | missing |
-| `BMCService.SetUserPassword` | `PUT /bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/password` | - | - | - | missing |
-| `BMCService.SetUserPrivilege` | `PUT /bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/privilege` | - | - | - | missing |
+| `BMCService.ReplaceWebCertificate` | `PUT /bmc/{profileID:[0-9]+}/cert` | `/devices/bmc/[profileID]/users` | - | `web/e2e/real-server/bmc-admin.spec.ts` | covered |
+| `BMCService.EnrollBMC` | `POST /bmc/{profileID:[0-9]+}/enroll` | `/devices/bmc/[profileID]` | - | `web/e2e/real-server/bmc-admin.spec.ts` | covered |
+| `BMCService.RestoreFactoryCert` | `POST /bmc/{profileID:[0-9]+}/cert/restore` | `/devices/bmc/[profileID]` | - | `web/e2e/real-server/bmc-admin.spec.ts` | covered |
+| `BMCService.ListUsers` | `GET /bmc/{profileID:[0-9]+}/users` | `/devices/bmc/[profileID]/users` | - | `web/e2e/real-server/bmc-admin.spec.ts` | covered |
+| `BMCService.CreateUser` | `POST /bmc/{profileID:[0-9]+}/users` | `/devices/bmc/[profileID]/users` | - | `web/e2e/real-server/bmc-admin.spec.ts` | covered |
+| `BMCService.DeleteUser` | `DELETE /bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}` | `/devices/bmc/[profileID]/users` | - | `web/e2e/real-server/bmc-admin.spec.ts` | covered |
+| `BMCService.SetUserPassword` | `PUT /bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/password` | `/devices/bmc/[profileID]/users` | - | `web/e2e/real-server/bmc-admin.spec.ts` | covered |
+| `BMCService.SetUserPrivilege` | `PUT /bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/privilege` | `/devices/bmc/[profileID]/users` | - | `web/e2e/real-server/bmc-admin.spec.ts` | covered |
 
 ## CAService (`ca.proto`)
 

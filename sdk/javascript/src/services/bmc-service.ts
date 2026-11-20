@@ -150,6 +150,57 @@ export interface BMCOperationResult {
  * await client.bmc.setBootDevice('1', { device: 'pxe' });
  * ```
  */
+/** Overrides of the profile's enrolment flags for POST /bmc/{profileID}/enroll. */
+export interface EnrollBMCRequest {
+  replaceCertificate?: boolean;
+  rotatePassword?: boolean;
+  dnsRegister?: boolean;
+  danePublish?: boolean;
+}
+
+/** One step of an enrolment or restore ceremony. */
+export interface BMCEnrollStep {
+  name: string;
+  ok: boolean;
+  detail?: string;
+}
+
+/** Metadata of a captured or installed BMC web certificate. */
+export interface BMCCertMeta {
+  subject: string;
+  issuer: string;
+  serial_number: string;
+  not_before: string;
+  not_after: string;
+  spki_sha256: string;
+  sha256: string;
+  captured_at: string;
+}
+
+/** The answer of POST /bmc/{profileID}/enroll. */
+export interface EnrollBMCResponse {
+  device_id: string;
+  endpoint: string;
+  hostname: string;
+  dns_name?: string;
+  pin_spki_sha256: string;
+  factory_cert_pem?: string;
+  factory_cert_meta: BMCCertMeta;
+  new_cert_pem?: string;
+  ca_cert_pem?: string;
+  steps: BMCEnrollStep[];
+}
+
+/** The answer of POST /bmc/{profileID}/cert/restore. */
+export interface RestoreBMCFactoryCertResponse {
+  device_id: string;
+  endpoint: string;
+  hostname: string;
+  new_cert_meta: BMCCertMeta;
+  new_cert_pem?: string;
+  steps: BMCEnrollStep[];
+}
+
 export class BMCService extends BaseService {
   constructor(client: Transport | ApiClient) {
     super(client, '/v1/bmc');
@@ -173,6 +224,41 @@ export class BMCService extends BaseService {
     return this.client.put<BMCStatusResponse>(
       this.buildUrl(this.profilePath(profileID, '/cert')),
       { cert_pem: request.certPem, key_pem: request.keyPem }
+    );
+  }
+
+  /**
+   * EnrollBMC: POST /bmc/{profileID}/enroll. Runs the enrolment ceremony:
+   * captures the factory certificate, then replaces it with one the platform
+   * CA issues, and optionally rotates the password and publishes DNS/DANE.
+   */
+  async enrollBMC(
+    profileID: number | string,
+    request: EnrollBMCRequest = {}
+  ): Promise<ApiResponse<EnrollBMCResponse>> {
+    const body: Record<string, boolean> = {};
+    if (request.replaceCertificate !== undefined) body.replace_certificate = request.replaceCertificate;
+    if (request.rotatePassword !== undefined) body.rotate_password = request.rotatePassword;
+    if (request.dnsRegister !== undefined) body.dns_register = request.dnsRegister;
+    if (request.danePublish !== undefined) body.dane_publish = request.danePublish;
+    return this.client.post<EnrollBMCResponse>(
+      this.buildUrl(this.profilePath(profileID, '/enroll')),
+      body,
+      { retry: { enabled: false } }
+    );
+  }
+
+  /**
+   * RestoreFactoryCert: POST /bmc/{profileID}/cert/restore. Puts back the
+   * web certificate captured at enrolment.
+   */
+  async restoreFactoryCert(
+    profileID: number | string
+  ): Promise<ApiResponse<RestoreBMCFactoryCertResponse>> {
+    return this.client.post<RestoreBMCFactoryCertResponse>(
+      this.buildUrl(this.profilePath(profileID, '/cert/restore')),
+      {},
+      { retry: { enabled: false } }
     );
   }
 

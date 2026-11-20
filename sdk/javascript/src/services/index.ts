@@ -29,6 +29,11 @@ export type {
   CreateBMCUserRequest,
   ReplaceBMCWebCertificateRequest,
   BMCStatusResponse,
+  EnrollBMCRequest,
+  EnrollBMCResponse,
+  RestoreBMCFactoryCertResponse,
+  BMCEnrollStep,
+  BMCCertMeta,
 } from './bmc-service.js';
 export { GatewayService } from './gateway-service.js';
 export { IAMService } from './iam-service.js';
