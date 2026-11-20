@@ -135,8 +135,22 @@ func (l *roundTripLUKS) TokenCount(context.Context, string) (int, error) { retur
 // sealer: the backend's EnrollTPM seals and writes the token into a LUKS2
 // image, the token is re-read from the header, and the initrd TPM token
 // strategy unseals it with the SDK sealer and opens the enrolled keyslot.
-func TestLUKSTPMBootRoundTrip_InitrdUnsealsWhatEnrolmentSealed(t *testing.T) {
-	ctx := context.Background()
+// roundTripEnrolment is a volume enrolled on the simulator with PCR 7 and
+// the initrd strategy that unseals its header token.
+type roundTripEnrolment struct {
+	module   simModule
+	device   string
+	slot     int32
+	raw      []byte
+	header   *roundTripLUKS
+	strategy *initrd.TPMTokenStrategy
+	volume   *luks.VolumeConfig
+}
+
+// enrolRoundTrip enrols a fresh image with a PCR 7 TPM keyslot and builds
+// the initrd strategy over its re-read header token.
+func enrolRoundTrip(t *testing.T, ctx context.Context) *roundTripEnrolment {
+	t.Helper()
 	module := simModule{tpm: newRoundTripSimulator(t)}
 
 	sealer, err := NewLUKSTPMHandler(nil, PlatformTPMOpener(func() xkmssdk.TrustedPlatformModule { return module }))
@@ -173,9 +187,22 @@ func TestLUKSTPMBootRoundTrip_InitrdUnsealsWhatEnrolmentSealed(t *testing.T) {
 
 	header := &roundTripLUKS{device: device, tokens: map[int]*luks.Token{tokenID: &token}}
 	// No SetUnsealer: the strategy unseals over the platform's own TPM.
-	strategy := initrd.NewTPMTokenStrategy(&initrd.Platform{LUKS: header, TPM: module}, nil)
+	return &roundTripEnrolment{
+		module:   module,
+		device:   device,
+		slot:     res.Slot,
+		raw:      raw,
+		header:   header,
+		strategy: initrd.NewTPMTokenStrategy(&initrd.Platform{LUKS: header, TPM: module}, nil),
+		volume:   &luks.VolumeConfig{DevicePath: device, MappingName: "cryptroot"},
+	}
+}
 
-	volume := &luks.VolumeConfig{DevicePath: device, MappingName: "cryptroot"}
+func TestLUKSTPMBootRoundTrip_InitrdUnsealsWhatEnrolmentSealed(t *testing.T) {
+	ctx := context.Background()
+	e := enrolRoundTrip(t, ctx)
+	strategy, volume, header, raw := e.strategy, e.volume, e.header, e.raw
+
 	if !strategy.CanUnlock(ctx, volume) {
 		t.Fatalf("CanUnlock is false for the enrolled header token %s", raw)
 	}
@@ -185,10 +212,36 @@ func TestLUKSTPMBootRoundTrip_InitrdUnsealsWhatEnrolmentSealed(t *testing.T) {
 	if !header.opened {
 		t.Fatal("Unlock never opened the volume")
 	}
-	if header.openSlot == nil || *header.openSlot != int(res.Slot) {
-		t.Fatalf("Open used keyslot %v, want %d", header.openSlot, res.Slot)
+	if header.openSlot == nil || *header.openSlot != int(e.slot) {
+		t.Fatalf("Open used keyslot %v, want %d", header.openSlot, e.slot)
 	}
 	if header.openErr != nil {
 		t.Fatalf("the unsealed passphrase does not open the enrolled keyslot: %v", header.openErr)
+	}
+}
+
+// TestLUKSTPMBootRoundTrip_ChangedPCRRefusesTheUnseal: once a sealed PCR
+// moves, the initrd cannot unseal the passphrase enrolment sealed.
+func TestLUKSTPMBootRoundTrip_ChangedPCRRefusesTheUnseal(t *testing.T) {
+	ctx := context.Background()
+	e := enrolRoundTrip(t, ctx)
+
+	if _, err := (tpm2.PCRExtend{
+		PCRHandle: tpm2.AuthHandle{Handle: tpm2.TPMHandle(7), Auth: tpm2.PasswordAuth(nil)},
+		Digests: tpm2.TPMLDigestValues{Digests: []tpm2.TPMTHA{
+			{HashAlg: tpm2.TPMAlgSHA256, Digest: make([]byte, 32)},
+		}},
+	}).Execute(e.module.tpm); err != nil {
+		t.Fatalf("extend PCR 7: %v", err)
+	}
+
+	if !e.strategy.CanUnlock(ctx, e.volume) {
+		t.Fatalf("CanUnlock is false for the enrolled header token %s", e.raw)
+	}
+	if err := e.strategy.Unlock(ctx, e.volume); err == nil {
+		t.Fatal("Unlock succeeded after PCR 7 changed, want the unseal refused")
+	}
+	if e.header.opened {
+		t.Fatal("Unlock opened the volume after PCR 7 changed")
 	}
 }

@@ -317,3 +317,56 @@ func TestPlatformTPMOpener_NoModuleIsNoTransport(t *testing.T) {
 		})
 	}
 }
+
+// TestPlatformTPMOpener_ExclusiveDeviceSharesThePlatformConnection: an
+// exclusive /dev/tpm0 the platform already holds answers a second open with
+// EBUSY, so the opener lends the platform's connection under the sealer lock
+// instead of reopening the device.
+func TestPlatformTPMOpener_ExclusiveDeviceSharesThePlatformConnection(t *testing.T) {
+	rec := &recordingTPM{}
+	fake := fakePlatformModule{tpm: rec, device: "/dev/tpm0"}
+	var opens int
+	stubTPMDevice(t, func(string) bool { return true }, func(string) (transport.TPMCloser, error) {
+		opens++
+		return nil, errors.New("device or resource busy")
+	})
+	opener := PlatformTPMOpener(func() xkmssdk.TrustedPlatformModule { return fake })
+
+	first, err := opener.Open(context.Background())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if opens != 0 {
+		t.Fatalf("opened the exclusive device %d times, want 0", opens)
+	}
+	if _, err := first.Send([]byte{1}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if rec.sends != 1 {
+		t.Fatalf("platform connection saw %d commands, want 1", rec.sends)
+	}
+
+	ctx, stop := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer stop()
+	if _, err := opener.Open(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Open while the exclusive device is lent: err = %v, want context.DeadlineExceeded", err)
+	}
+
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	third, err := opener.Open(context.Background())
+	if err != nil {
+		t.Fatalf("Open after Close: %v", err)
+	}
+	// Close left the platform's connection usable: the platform owns it.
+	if _, err := third.Send([]byte{2}); err != nil {
+		t.Fatalf("Send after Close: %v", err)
+	}
+	if rec.sends != 2 {
+		t.Fatalf("platform connection saw %d commands, want 2", rec.sends)
+	}
+	if err := third.Close(); err != nil {
+		t.Fatalf("third Close: %v", err)
+	}
+}
