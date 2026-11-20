@@ -23,6 +23,7 @@ import (
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -922,6 +923,84 @@ func TestEABGRPCService_MTLSCallerResolvesIAMUser(t *testing.T) {
 				return &sdkiam.CheckResponse{Allowed: allowed && len(req.Subject.Roles) > 0}, nil
 			}})
 			_, err := service.CreateCredential(mtls(tc.identity), &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: "tenant-a"})
+			if code := status.Code(err); code != tc.wantCode {
+				t.Fatalf("code = %v, want %v (err %v)", code, tc.wantCode, err)
+			}
+			if tc.wantCode != codes.OK {
+				if got != nil {
+					t.Fatalf("PEP called for a refused caller: %+v", got)
+				}
+				if svc.lastGenerate.TenantID != "" {
+					t.Fatalf("refused create reached the service: %+v", svc.lastGenerate)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("PEP not called")
+			}
+			if got.Subject.ID != tc.wantID || got.Subject.TenantID != "tenant-a" {
+				t.Fatalf("subject = %+v, want ID %q in tenant-a", got.Subject, tc.wantID)
+			}
+			if len(got.Subject.Roles) != len(tc.wantRoles) || got.Subject.Roles[0] != tc.wantRoles[0] {
+				t.Fatalf("subject roles = %v, want %v", got.Subject.Roles, tc.wantRoles)
+			}
+		})
+	}
+}
+
+// TestEABGRPCService_QUICMTLSCallerResolvesIAMUser pins that a certificate
+// caller on QUIC, which mtlsPeerAuthenticator turns into an AuthorizedContext
+// with the operator scope and no roles, reaches the PEP as its stored IAM user
+// and roles, the same as a certificate caller on gRPC. A QUIC bearer-token
+// caller keeps its token subject and roles with no user lookup.
+func TestEABGRPCService_QUICMTLSCallerResolvesIAMUser(t *testing.T) {
+	users := &eabUserStub{users: []*sdkiam.User{
+		{ID: "1001", TenantID: "tenant-a", Username: "alice", Email: "alice@example.com", Roles: []string{"eab-admin"}},
+		{ID: "1002", TenantID: "tenant-a", Username: "bob-cn", Email: "bob@example.com", Roles: []string{"eab-operator"}},
+	}}
+	cases := []struct {
+		name      string
+		authCtx   *platformtoken.AuthorizedContext
+		users     *eabUserStub
+		wantCode  codes.Code
+		wantID    string
+		wantRoles []string
+	}{
+		{
+			name:      "certificate CN resolves to the stored user",
+			authCtx:   &platformtoken.AuthorizedContext{Subject: "bob-cn", Username: "bob-cn", TenantID: "tenant-a", Scopes: []string{mtlsOperatorScope}},
+			users:     users,
+			wantCode:  codes.OK,
+			wantID:    "1002",
+			wantRoles: []string{"eab-operator"},
+		},
+		{
+			name:     "unknown certificate CN denied without a PEP call",
+			authCtx:  &platformtoken.AuthorizedContext{Subject: "nobody", Username: "nobody", TenantID: "tenant-a", Scopes: []string{mtlsOperatorScope}},
+			users:    users,
+			wantCode: codes.PermissionDenied,
+		},
+		{
+			// An empty directory denies any lookup, so OK proves none was made.
+			name:      "bearer token keeps its subject and roles",
+			authCtx:   &platformtoken.AuthorizedContext{Subject: "tok-1", TenantID: "tenant-a", Scopes: []string{"eab:write"}, Roles: []string{"eab-admin"}},
+			users:     &eabUserStub{},
+			wantCode:  codes.OK,
+			wantID:    "tok-1",
+			wantRoles: []string{"eab-admin"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			service, svc, _ := newEABGRPCFixture()
+			service.SetUserClient(tc.users)
+			var got *sdkiam.CheckRequest
+			service.SetPEPClient(&mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+				got = req
+				return &sdkiam.CheckResponse{Allowed: len(req.Subject.Roles) > 0}, nil
+			}})
+			ctx := quic.ContextWithAuthorizedContext(context.Background(), tc.authCtx)
+			_, err := service.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: "tenant-a"})
 			if code := status.Code(err); code != tc.wantCode {
 				t.Fatalf("code = %v, want %v (err %v)", code, tc.wantCode, err)
 			}
