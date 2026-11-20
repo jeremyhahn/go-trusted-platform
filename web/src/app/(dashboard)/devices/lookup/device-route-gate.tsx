@@ -4,21 +4,16 @@ import type { ReactNode } from 'react';
 import { Button, type ButtonProps } from '@/components/ui/button';
 
 /**
- * DeviceService operations an operator's browser session cannot perform
- * (#2048). A control for one renders disabled through DeviceRouteGate with
+ * DeviceService operations the daemon does not serve to an operator yet
+ * (#2048). A gate is only for a capability the daemon does not serve yet
+ * (ruling 1042): its control renders disabled through DeviceRouteGate with
  * the reason shown, and never calls the SDK.
  */
-export type DeviceGatedOperation = 'AttestDevice' | 'GetProfile' | 'BootCertificate' | 'BootDelivery';
+export type DeviceGatedOperation = 'AttestDevice';
 
 const REASONS: Record<DeviceGatedOperation, string> = {
   AttestDevice:
-    'Not available: the server verifies pasted evidence against the nonce it carries with no age limit, so an old quote would replay as a fresh verdict; a challenge-based flow is follow-up work',
-  GetProfile:
-    "Not available: GET /device/profile resolves the calling device from its mTLS client certificate, which an operator's browser does not hold; find the profile by ID, MAC or serial instead",
-  BootCertificate:
-    "Not available: POST /device/boot/certificate is machine-facing, called by a diskless node over its own connection to prove its key",
-  BootDelivery:
-    "Not available: POST /device/boot is machine-facing, an attested delivery bound to the diskless node's own mTLS connection",
+    'Not available: the server verifies pasted evidence against the nonce it carries with no age limit, so an old quote would replay as a fresh verdict; a server-issued attestation challenge is tracked in #2134',
 };
 
 export function deviceRouteReason(operation: DeviceGatedOperation): string {

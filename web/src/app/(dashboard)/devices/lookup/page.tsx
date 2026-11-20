@@ -2,10 +2,12 @@
 
 /**
  * Device lookup (#1743): device and profile counts, lookups by serial, MAC
- * and match criteria, the device's own profile, partial updates and
- * activation. Every write waits for a confirm dialog. Pasted-evidence
- * attestation is not offered: it is replayable until a challenge-based flow
- * exists (#2024 Codex round 4).
+ * and match criteria, profiles by ID, partial updates and activation. Every
+ * write waits for a confirm dialog. Pasted-evidence attestation is not
+ * offered: it is replayable until a server-issued challenge exists (#2134).
+ * The device-facing routes (/device/profile, /device/boot,
+ * /device/boot/certificate) have no control: they are served only to the
+ * device over its own mTLS connection (ruling 1042).
  */
 
 import { useState } from 'react';
@@ -185,8 +187,8 @@ export default function DeviceLookupPage() {
           <CardTitle>Device by serial</CardTitle>
           {/* Attestation is gated off (DeviceRouteGate): the server verifies
               pasted evidence against the nonce it carries, with no age limit,
-              so an old quote would replay as a fresh verdict. A challenge-based
-              flow is follow-up work (#2024 Codex round 4, P1). */}
+              so an old quote would replay as a fresh verdict. A server-issued
+              challenge is #2134. */}
           <CardDescription>Find a device and edit it</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
@@ -280,26 +282,6 @@ export default function DeviceLookupPage() {
               {activation.status}; switch not changed)
             </p>
           )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Device-facing routes</CardTitle>
-          <CardDescription>
-            Operations a device performs over its own connection. An operator&apos;s session cannot perform them.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          <DeviceRouteGate operation="GetProfile" variant="outline">
-            Load device profile
-          </DeviceRouteGate>
-          <DeviceRouteGate operation="BootCertificate" variant="outline">
-            Fetch boot certificate
-          </DeviceRouteGate>
-          <DeviceRouteGate operation="BootDelivery" variant="outline">
-            Request boot delivery
-          </DeviceRouteGate>
         </CardContent>
       </Card>
 

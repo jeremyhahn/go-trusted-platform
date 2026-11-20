@@ -7,7 +7,6 @@ import type {
   DeviceAttestRequest,
   DeviceAttestResponse,
   DeviceProfile,
-  DeviceSelfServiceProfile,
   FindMatchingProfileRequest,
   UseApiResult,
   UseMutationResult,
@@ -36,7 +35,6 @@ export interface DeviceLookup {
   updateDevice: UseMutationResult<Device, DeviceUpdate>;
   attestDevice: UseMutationResult<DeviceAttestResponse, DeviceAttestVariables>;
   activateDevice: UseMutationResult<ActivateDeviceResponse, ActivateDeviceRequest>;
-  getDeviceProfile: UseMutationResult<DeviceSelfServiceProfile, void>;
   getProfile: UseMutationResult<DeviceProfile, string>;
   findProfileByMAC: UseMutationResult<DeviceProfile, string>;
   findProfileBySerial: UseMutationResult<DeviceProfile, string>;
@@ -86,13 +84,9 @@ export function useDeviceLookup(): DeviceLookup {
     // /device/activate-json resolves the admitted VLAN; it programs no switch.
     { ...failed('Activation failed'), ...done('Admitted VLAN resolved', 'The switch was not changed', deviceCount.refetch) }
   );
-  const getDeviceProfile = useMutation<DeviceSelfServiceProfile, void>(
-    () => deviceService.getDeviceProfile(),
-    failed('Device profile failed')
-  );
   const getProfile = useMutation<DeviceProfile, string>(async (id: string) => {
     // GET /device/profiles/{id} answers the flat ProfileFullResponse, not the
-    // `{ profile }` envelope GetProfileResponse declares: accept either.
+    // `{ profile }` envelope the SDK response type declares: accept either.
     const response = await deviceService.getProfile(id);
     const data = response.data as (DeviceProfile & { profile?: DeviceProfile }) | undefined;
     return { ...response, data: data?.profile ?? data };
@@ -121,7 +115,6 @@ export function useDeviceLookup(): DeviceLookup {
     updateDevice,
     attestDevice,
     activateDevice,
-    getDeviceProfile,
     getProfile,
     findProfileByMAC,
     findProfileBySerial,
