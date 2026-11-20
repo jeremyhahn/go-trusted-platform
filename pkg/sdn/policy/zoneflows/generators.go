@@ -255,6 +255,13 @@ const (
 // the conntrack verdict table-miss continue the pipeline instead of dropping.
 const DefaultPolicyAllow = "allow"
 
+// QuarantineCookie tags the quarantine default-drop rule. The switch takes
+// only a numeric cookie, so it sits in the 0xF1BE owner family next to the
+// gateway pipeline (0x0000), firewall (0x0001), NAT (0x0002), load
+// balancer (0x0003), NAT64 (0x0004), overlay (0x0005, 0x0006), the ovs
+// generation tests (0x0007, 0x0008) and perf (0x00FF) owners.
+const QuarantineCookie = "0xF1BE000900000000"
+
 // CompileStatefulMatrixRules derives the conntrack-based stateful firewall
 // rule set from the compiled zone.Matrix. It emits rules for the ct
 // pipeline installed by the gateway firewall service:
@@ -557,7 +564,7 @@ func (gs *GeneratorSet) quarantine(portID string, in Ingress) []FlowRule {
 		Priority: prioQDropDefault,
 		Match:    matchInVLAN(portID, in, ""),
 		Actions:  "drop",
-		Cookie:   fmt.Sprintf("quarantine:%s", portID),
+		Cookie:   QuarantineCookie,
 	})
 
 	return flows
