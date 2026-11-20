@@ -170,18 +170,19 @@ func TestZoneFlowManager_NoOpenFlowPort_Errors(t *testing.T) {
 // real OpenFlow client allows partial batch success.
 type partialInstallController struct {
 	*ofPortController
-	vlans       map[string]int64
-	live        []zoneflows.FlowRule
-	failInstall bool
-	failVLANAt  int // fail the n-th SetPortVLAN call (1-based); 0 never
-	vlanCalls   int
-	partial     *zoneflows.FlowRule
+	vlans        map[string]int64
+	live         []zoneflows.FlowRule
+	failInstalls int // fail the next n non-empty InstallFlows batches
+	failVLANAt   int // fail the n-th SetPortVLAN call (1-based); 0 never
+	vlanCalls    int
+	partial      *zoneflows.FlowRule
 }
 
 func (c *partialInstallController) InstallFlows(bridge string, rules []zoneflows.FlowRule) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.failInstall && len(rules) > 0 {
+	if c.failInstalls > 0 && len(rules) > 0 {
+		c.failInstalls--
 		r := rules[0]
 		c.partial = &r
 		c.live = append(c.live, r)
@@ -202,6 +203,44 @@ func (c *partialInstallController) DeleteFlow(_ string, match string) error {
 	}
 	c.live = kept
 	return nil
+}
+
+// DeleteFlowsByPort removes every live flow that matches on the port, as
+// ovs-ofctl del-flows in_port=N does: the move really deletes the port's
+// earlier rules, so a rollback that does not reinstall them leaves none.
+func (c *partialInstallController) DeleteFlowsByPort(_ string, ofPort string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	kept := c.live[:0]
+	for _, r := range c.live {
+		if !matchesInPort(r.Match, ofPort) {
+			kept = append(kept, r)
+		}
+	}
+	c.live = kept
+	return nil
+}
+
+func matchesInPort(match, ofPort string) bool {
+	for _, field := range strings.Split(match, ",") {
+		if strings.TrimSpace(field) == "in_port="+ofPort {
+			return true
+		}
+	}
+	return false
+}
+
+// portDropRules answers the live drop rules that match on OpenFlow port 7.
+func portDropRules(c *partialInstallController) []zoneflows.FlowRule {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []zoneflows.FlowRule
+	for _, r := range c.live {
+		if r.Actions == "drop" && matchesInPort(r.Match, "7") {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func (c *partialInstallController) SetPortVLAN(_ context.Context, portName string, vlan int64) error {
@@ -237,7 +276,7 @@ func TestZoneFlowManager_ApplyZoneFlows_InstallFailureRestoresPort(t *testing.T)
 	require.NoError(t, m.ApplyZoneFlows(ctx, "tap0", zone.ZoneQuarantine))
 	prevVLAN := ctrl.vlans["tap0"]
 
-	ctrl.failInstall = true
+	ctrl.failInstalls = 1
 	err := m.ApplyZoneFlows(ctx, "tap0", zone.ZoneProvisioning)
 	require.Error(t, err)
 
@@ -259,7 +298,7 @@ func TestZoneFlowManager_ApplyZoneFlows_RestoreFailureIsUnknownState(t *testing.
 	ctrl, m := newPartialInstallZFM(t)
 	require.NoError(t, m.ApplyZoneFlows(ctx, "tap0", zone.ZoneProvisioning))
 
-	ctrl.failInstall = true
+	ctrl.failInstalls = 1
 	ctrl.failVLANAt = 3 // 1: first apply, 2: the move, 3: the restore
 	err := m.ApplyZoneFlows(ctx, "tap0", zone.ZoneControlPlane)
 	require.ErrorIs(t, err, ErrPortStateUnknown)
@@ -269,4 +308,71 @@ func TestZoneFlowManager_ApplyZoneFlows_RestoreFailureIsUnknownState(t *testing.
 	got, err := m.GetPortZone("tap0")
 	require.NoError(t, err)
 	require.Equal(t, zone.ZoneQuarantine, got, "the manager records the most restrictive zone")
+}
+
+// TestZoneFlowManager_ApplyZoneFlows_RollbackReinstallsPreviousZone pins
+// #1896 Codex P1: the move deletes the port's rules before it installs the
+// new template, so when that install fails part-way the rollback must
+// reinstall the previous zone's rules; a quarantined port must not be left
+// on its restricted VLAN with no drop rules.
+func TestZoneFlowManager_ApplyZoneFlows_RollbackReinstallsPreviousZone(t *testing.T) {
+	for _, prev := range []zone.Zone{zone.ZoneQuarantine, zone.ZoneProvisioning} {
+		t.Run(string(prev), func(t *testing.T) {
+			ctx := context.Background()
+			ctrl, m := newPartialInstallZFM(t)
+			require.NoError(t, m.ApplyZoneFlows(ctx, "tap0", prev))
+			before := portDropRules(ctrl)
+			require.NotEmpty(t, before, "the %s zone installs drop rules for the port", prev)
+
+			ctrl.failInstalls = 1
+			err := m.ApplyZoneFlows(ctx, "tap0", zone.ZoneControlPlane)
+			require.ErrorIs(t, err, ErrFlowInstallFailed)
+			require.NotErrorIs(t, err, ErrPortStateUnknown)
+
+			after := portDropRules(ctrl)
+			for _, r := range before {
+				require.Contains(t, after, r, "the previous zone's drop rule is reinstalled")
+			}
+			got, err := m.GetPortZone("tap0")
+			require.NoError(t, err)
+			require.Equal(t, prev, got)
+		})
+	}
+}
+
+// TestZoneFlowManager_ApplyZoneFlows_FailedRestoreBlocksPort: when the
+// previous zone's rules cannot be reinstalled either, the port is blocked by
+// a drop-all that outranks every other rule, and the error is returned.
+func TestZoneFlowManager_ApplyZoneFlows_FailedRestoreBlocksPort(t *testing.T) {
+	ctx := context.Background()
+	ctrl, m := newPartialInstallZFM(t)
+	require.NoError(t, m.ApplyZoneFlows(ctx, "tap0", zone.ZoneQuarantine))
+
+	ctrl.failInstalls = 2 // the new template, then the restore of the old one
+	err := m.ApplyZoneFlows(ctx, "tap0", zone.ZoneControlPlane)
+	require.ErrorIs(t, err, ErrFlowInstallFailed)
+	require.ErrorIs(t, err, ErrPortStateUnknown)
+
+	var block *zoneflows.FlowRule
+	maxOther := 0
+	for _, r := range portDropRules(ctrl) {
+		if r.Match == "in_port=7" {
+			r := r
+			block = &r
+		}
+	}
+	require.NotNil(t, block, "a drop-all for the port is installed")
+	ctrl.mu.Lock()
+	for _, r := range ctrl.live {
+		if r != *block && r.Priority > maxOther {
+			maxOther = r.Priority
+		}
+	}
+	ctrl.mu.Unlock()
+	require.Greater(t, block.Priority, maxOther, "the drop-all outranks every other rule")
+	require.Equal(t, 0, block.Table)
+
+	got, err := m.GetPortZone("tap0")
+	require.NoError(t, err)
+	require.Equal(t, zone.ZoneQuarantine, got)
 }

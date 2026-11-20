@@ -27,6 +27,8 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -77,6 +79,25 @@ func (s *recordingPXEServer) WebhookComplete(
 	s.calls++
 	s.state = pxeInstalled
 	return &platformv1.PXEWebhookCompleteResponse{}, nil
+}
+
+// WebhookCompleteForIDevID is the path the webhook route takes: like the
+// daemon's PXE service it compares the authenticated fingerprint with the
+// one recorded for the device and only then applies the report; a mismatch
+// is PermissionDenied (#1896 Codex r2).
+func (s *recordingPXEServer) WebhookCompleteForIDevID(
+	ctx context.Context,
+	req *platformv1.PXEWebhookCompleteRequest,
+	fingerprint string,
+) (*platformv1.PXEWebhookCompleteResponse, error) {
+	recorded, err := s.RecordedIDevIDFingerprint(ctx, req.GetMacAddress())
+	if err != nil {
+		return nil, err
+	}
+	if fingerprint == "" || fingerprint != recorded {
+		return nil, status.Error(codes.PermissionDenied, "IDevID fingerprint mismatch")
+	}
+	return s.WebhookComplete(ctx, req)
 }
 
 const pxeTestWebhookSecret = "router-test-webhook-secret"
