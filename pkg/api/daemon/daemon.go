@@ -308,6 +308,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if err := config.validateGRPCAuthorization(); err != nil {
 		return nil, err
 	}
+	if err := config.validateQUICAuthorization(); err != nil {
+		return nil, err
+	}
 
 	// Set up logger
 	logger := config.Logger
