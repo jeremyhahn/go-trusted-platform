@@ -411,7 +411,7 @@ func assertDaemonConfigScope(t *testing.T, tool string) {
 	if want == "" {
 		t.Fatalf("gRPC twin of %s has no scope", tool)
 	}
-	got, ok := toolPermissionCatalog()[tool]
+	got, ok := declaredToolPermissions(PlatformTools{})[tool]
 	if !ok {
 		t.Fatalf("MCP %s is not classified", tool)
 	}
