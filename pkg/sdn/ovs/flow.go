@@ -564,7 +564,11 @@ func parseMatchString(match *openflow.Match, matchStr string) error {
 			// VLAN_VID=OFPVID_NONE. The PCP bits (0xe000) become an exact
 			// VLAN_PCP on a tagged match; OXM has no masked PCP, so a
 			// partial PCP mask, or a PCP on a frame not known to be
-			// tagged, is refused rather than dropped.
+			// tagged, is refused rather than dropped. The one exception
+			// is PCP 0 with the CFI bit masked and clear: the frame is
+			// known untagged and its TCI reads 0. PCP 0 without the CFI
+			// bit in the mask is refused too, since dropping it would
+			// leave a rule that matches every frame (#1896 F49).
 			tci, tciMask, err := parseValueMask(value, 16)
 			if err != nil {
 				return &MessageError{Msg: fmt.Sprintf("invalid vlan_tci: %s", value)}
@@ -576,8 +580,8 @@ func parseMatchString(match *openflow.Match, matchStr string) error {
 			case pcpMask == 0:
 			case pcpMask == 0xe000 && tagged:
 				matchPCP = true
-			case pcpMask == 0xe000 && tci&0xe000 == 0:
-				// An untagged frame's TCI reads 0, PCP included.
+			case pcpMask == 0xe000 && tciMask&0x1000 != 0 && tci&0xf000 == 0:
+				// A known untagged frame's TCI reads 0, PCP included.
 			default:
 				return &MessageError{Msg: fmt.Sprintf("unsupported vlan_tci PCP match: %s", value)}
 			}

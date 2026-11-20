@@ -201,8 +201,9 @@ declare -A TARGET_NO_DAEMON=(
 # diskimage, netboot, nat64 and ipsec need inputs only their make targets
 # build on the host; lb, testenv-enrollment and ipxe-* are slices of
 # packages already listed (sdn, root, ipxe). pxe stays runnable by name but
-# is out of the default set: platformd builds its PXE service with no
-# backend, so every PXE call answers SERVICE_NOT_CONFIGURED.
+# is out of the default set: it needs its own daemon config (the pxe:
+# overlay, see prepare_pxe_config), which the shared platformd does not
+# carry.
 # secureboot stays runnable by name but is out of the default set as well: its
 # FIPS-kernel test needs a prebuilt kernel, modules and signing key that only
 # the caller supplies (FIPS_KERNEL_IMAGE, FIPS_MODULES_TAR,
@@ -937,6 +938,20 @@ COMPUTEEOF
     echo "Compute platformd config: ${COMPUTE_PLATFORMD_CONFIG}"
 }
 
+# prepare_pxe_config writes the pxe target's platformd config: the shared
+# integration config plus the pxe: overlay test/integration/pxe ships, so
+# platformd builds its PXE backend on the integration bridge (#1896).
+prepare_pxe_config() {
+    PXE_PLATFORMD_CONFIG="/tmp/platformd-pxe-config.yaml"
+    mkdir -p /tmp/platformd-pxe/files /tmp/platformd-pxe/installs
+    {
+        cat "${PLATFORM_BUILD_DIR}/test/integration/config.yaml"
+        echo
+        cat "${PLATFORM_BUILD_DIR}/test/integration/pxe/platformd-pxe.yaml"
+    } > "${PXE_PLATFORMD_CONFIG}"
+    echo "PXE platformd config: ${PXE_PLATFORMD_CONFIG}"
+}
+
 # start_vbmc builds and starts the virtual BMC responder, exports the harness
 # environment variables, downloads the vBMC CA cert for daemon trust injection,
 # and generates a modified platformd config that trusts the vBMC HTTPS cert.
@@ -1425,6 +1440,11 @@ elif [ "$RUN_TARGET" = "compute" ]; then
     # tools and RPCs reach a VM orchestrator.
     prepare_compute_config
     start_platformd "${COMPUTE_PLATFORMD_CONFIG}" || abort_no_daemon
+elif [ "$RUN_TARGET" = "pxe" ]; then
+    # PXE target: platformd with the pxe: overlay, so the PXE backend is
+    # built and the PXE RPCs and CLI do not answer SERVICE_NOT_CONFIGURED.
+    prepare_pxe_config
+    start_platformd "${PXE_PLATFORMD_CONFIG}" || abort_no_daemon
 elif [ "$RUN_TARGET" = "proxy" ]; then
     # The proxy suite talks to the shared platformd and also runs gatewayd
     # itself, supervised, to kill its children under load.

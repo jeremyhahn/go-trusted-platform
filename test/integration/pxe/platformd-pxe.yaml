@@ -1,0 +1,11 @@
+# PXE section for the pxe integration target (#1896).
+# build/docker/devcontainer/run-integration-tests.sh (prepare_pxe_config)
+# appends this file to test/integration/config.yaml, so the daemon the PXE
+# suite drives builds its PXE backend on the integration bridge; the shared
+# platformd of the other targets runs without it.
+pxe:
+  enabled: true
+  bridge-name: br-platform-int
+  bind-host: 127.0.0.1
+  local-files-dir: /tmp/platformd-pxe/files
+  installs-dir: /tmp/platformd-pxe/installs

@@ -213,16 +213,19 @@ func testPXECLI(t *testing.T, ctx context.Context, cli *CLIAdapter, prefix strin
 		_, err := seed.SetDeviceEnrolled(testCtx, id, GenerateTestCertSerial())
 		require.NoError(t, err, "Setup: SetDeviceEnrolled")
 
-		got, err := cli.AuthorizeDevice(testCtx, id, 100)
+		// The daemon maps the target VLAN to a zone through its plan, so
+		// it must be a VLAN the integration plan carries (#1896 F47).
+		target := integrationTargetVLAN(t)
+		got, err := cli.AuthorizeDevice(testCtx, id, target)
 		require.NoError(t, err, "platformctl pxe authorize of an enrolled device")
 		assert.Equal(t, StateAuthorized, got.State)
-		assert.Equal(t, uint16(100), got.TargetVLAN)
+		assert.Equal(t, target, got.TargetVLAN)
 		assert.Equal(t, StateAuthorized, seededState(t, id))
 	})
 
 	t.Run("AuthorizeRefusesUnenrolledDevice", func(t *testing.T) {
 		id, _ := register(t, "authorize-early", StateBooting)
-		_, err := cli.AuthorizeDevice(testCtx, id, 100)
+		_, err := cli.AuthorizeDevice(testCtx, id, integrationTargetVLAN(t))
 		var failed ErrCLICommandFailed
 		require.ErrorAs(t, err, &failed, "authorize of a booting device must be refused")
 		assert.Equal(t, StateBooting, seededState(t, id), "a refused authorize leaves the state")
@@ -557,7 +560,7 @@ func testAuthorize(t *testing.T, ctx context.Context, cmd PXECommands, prefix st
 	require.NoError(t, err, "Setup: UpdateDeviceState to authorizing should succeed")
 
 	t.Run("AuthorizeDevice", func(t *testing.T) {
-		targetVLAN := uint16(100)
+		targetVLAN := integrationTargetVLAN(t)
 		result, err := cmd.AuthorizeDevice(testCtx, registered.ID, targetVLAN)
 		require.NoError(t, err, "AuthorizeDevice should succeed")
 		require.NotNil(t, result, "Result should not be nil")

@@ -780,11 +780,12 @@ func (s *service) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial st
 // enrolment. Per ruling 70 and ruling 673, enrolment comes before install
 // completion: the fingerprint is accepted while the device is discovered,
 // booting or installing, and refused once the install is complete. It
-// makes no state transition. The fingerprint is fixed for one provisioning
-// attempt: re-recording the same fingerprint is a no-op and a different one
-// is refused, until RetryDevice starts a new attempt and clears it; the one
-// exception is a re-enrolment while the device is installing (a certificate
-// delivery that failed after the finalize hook), which replaces it.
+// makes no state transition. Re-recording the same fingerprint is a no-op.
+// A different fingerprint is a re-enrolment (for example a certificate
+// delivery that failed after the finalize hook): it replaces the recorded
+// one in every pre-completion state (discovered, booting, installing), and
+// is refused once the install is complete; RetryDevice starts a new
+// attempt and clears it.
 func (s *service) RecordIDevIDFingerprint(ctx context.Context, deviceID, fingerprint string) error {
 	if !s.beginOp() {
 		return ErrServiceNotInitialized{}

@@ -278,7 +278,12 @@ func initSDNPolicy(a *app.App, slogger *slog.Logger) *sdnPolicyComponents {
 
 // newSharedZoneFlowManager builds the zone flow manager initSDNPolicy
 // shares with the policy engine, the quarantine loop and the PXE backend.
+// It compiles the inter-zone matrix of cfg.Zones into cfg.Matrix: the
+// AllowTo paths of the resolved zones are part of enforcement, and a
+// manager with the zero matrix denies every inter-zone pair on every port
+// it moves (#1896 F48).
 func newSharedZoneFlowManager(cfg policy.ZoneFlowManagerConfig) (*policy.ZoneFlowManager, error) {
+	cfg.Matrix = zone.CompileMatrix(cfg.Zones)
 	return policy.NewZoneFlowManager(cfg)
 }
 
