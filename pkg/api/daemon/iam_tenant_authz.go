@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"strconv"
+	"strings"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -73,19 +75,20 @@ func (e errUnixPeerDenied) Error() string {
 	return "tenant-scoped call refused: IAM denied " + e.Subject + " " + e.Action + " on " + e.Resource
 }
 
-// The actions the PEP decides for a Unix peer (authorizeUnboundCaller), on
-// the resource tenantResource names. A cross-tenant method appends its name
-// to unixPeerActionCrossTenant ("tenant:ListTenants").
-const (
-	unixPeerActionIAMTenant    = "iam:tenant"
-	unixPeerActionTenantAccess = "tenant:access"
-	unixPeerActionTenantLookup = "tenant:lookup"
-	unixPeerActionCrossTenant  = "tenant:"
-)
-
-// tenantResource is the PEP resource URI of a tenant.
-func tenantResource(tenantID string) string {
-	return "tenant://" + tenantID
+// unboundCallerPermission is the registered permission pair of the gRPC
+// method in ctx (grpcapi.ScopeForMethod), split into the resource and action
+// the PEP decides. ok is false when ctx carries no method, the method has no
+// catalog entry, or the entry is not a resource:action pair.
+func unboundCallerPermission(ctx context.Context) (resource, action string, ok bool) {
+	method, hasMethod := grpc.Method(ctx)
+	if !hasMethod || method == "" {
+		return "", "", false
+	}
+	resource, action, ok = strings.Cut(grpcapi.ScopeForMethod(method), ":")
+	if !ok || resource == "" || action == "" {
+		return "", "", false
+	}
+	return resource, action, true
 }
 
 // unixPeerPrincipal maps kernel-verified Unix peer credentials (SO_PEERCRED,
@@ -103,11 +106,18 @@ func unixPeerPrincipal(creds peercred.UnixCredentials, tenantID string) *tokenPr
 // authorizeUnboundCaller decides a caller callerTenant reports unbound (SPEC
 // row 109, fail closed). Unix peer credentials are not a grant on their own:
 // the caller's uid/gid principal (unixPeerPrincipal) must be admitted by the
-// IAM decision point, pep.Check, for action on tenantID's resource. A caller
-// with no peer credentials, a daemon with no PEP wired, a failed check and a
-// denial are all refused with codes.PermissionDenied.
-func authorizeUnboundCaller(ctx context.Context, pep quicbaassdk.IAMPEPClient, tenantID, action string) error {
+// IAM decision point, pep.Check, for the registered permission pair of the
+// gRPC method being served (unboundCallerPermission, SPEC row 109), in
+// tenantID: the tenant is the principal's, not part of the resource. A
+// caller with no peer credentials, a method with no registered scope, a
+// daemon with no PEP wired, a failed check and a denial are all refused
+// with codes.PermissionDenied.
+func authorizeUnboundCaller(ctx context.Context, pep quicbaassdk.IAMPEPClient, tenantID string) error {
 	creds, ok := peercred.UnixCredentialsFromContext(ctx)
+	if !ok {
+		return status.Error(codes.PermissionDenied, errUnboundCaller{}.Error())
+	}
+	resource, action, ok := unboundCallerPermission(ctx)
 	if !ok {
 		return status.Error(codes.PermissionDenied, errUnboundCaller{}.Error())
 	}
@@ -115,7 +125,6 @@ func authorizeUnboundCaller(ctx context.Context, pep quicbaassdk.IAMPEPClient, t
 		return status.Error(codes.PermissionDenied, ErrPEPClientNotAvailable{}.Error())
 	}
 	principal := unixPeerPrincipal(creds, tenantID)
-	resource := tenantResource(tenantID)
 	allowed, err := checkPrincipalPermission(ctx, pep, principal, resource, action)
 	if err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
@@ -134,7 +143,7 @@ func authorizeUnboundCaller(ctx context.Context, pep quicbaassdk.IAMPEPClient, t
 func authorizeIAMTenant(ctx context.Context, pep quicbaassdk.IAMPEPClient, requested string) error {
 	caller, bound := callerTenant(ctx)
 	if !bound {
-		return authorizeUnboundCaller(ctx, pep, requested, unixPeerActionIAMTenant)
+		return authorizeUnboundCaller(ctx, pep, requested)
 	}
 	if err := iamTenantDecision(caller, requested); err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
@@ -162,7 +171,7 @@ func iamTenantDecision(caller, requested string) error {
 func authorizeSystemCaller(ctx context.Context, pep quicbaassdk.IAMPEPClient, systemTenantID, method string) error {
 	caller, bound := callerTenant(ctx)
 	if !bound {
-		return authorizeUnboundCaller(ctx, pep, systemTenantID, unixPeerActionCrossTenant+method)
+		return authorizeUnboundCaller(ctx, pep, systemTenantID)
 	}
 	if err := systemCallerDecision(systemTenantID, caller, method); err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())

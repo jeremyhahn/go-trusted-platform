@@ -66,7 +66,7 @@ func (s *TenantGRPCServer) isSystemTenant(tenantID string) bool {
 func (s *TenantGRPCServer) authorizeTenant(ctx context.Context, requested string) error {
 	caller, bound := callerTenant(ctx)
 	if !bound {
-		return authorizeUnboundCaller(ctx, s.pep, requested, unixPeerActionTenantAccess)
+		return authorizeUnboundCaller(ctx, s.pep, requested)
 	}
 	if err := tenant.AuthorizeTenantAccess(caller, s.isSystemTenant(caller), requested); err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
@@ -94,7 +94,7 @@ func (s *TenantGRPCServer) authorizeTenantName(ctx context.Context, resolvedID s
 			// An unresolved name is decided in the system tenant.
 			lookupTenant = s.systemTenantID
 		}
-		return authorizeUnboundCaller(ctx, s.pep, lookupTenant, unixPeerActionTenantLookup)
+		return authorizeUnboundCaller(ctx, s.pep, lookupTenant)
 	}
 	if err := tenant.AuthorizeNameLookup(caller, s.isSystemTenant(caller), resolvedID); err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
