@@ -1,12 +1,18 @@
-import { test, expect, type BrowserContext, type CDPSession, type Page } from '@playwright/test';
+import { test, expect, type BrowserContext, type Page } from '@playwright/test';
+import { runAttestation } from './global-setup';
+import { SoftAuthenticator } from './fixtures/soft-authenticator';
 
 /**
  * web/e2e/auth.spec.ts ported to the real server (#2034, epic #1665).
  *
  * The console and its API are the platformd global-setup.ts started; nothing
- * is mocked. Registration and login are real WebAuthn ceremonies: Chromium's
- * virtual authenticator (CDP) answers navigator.credentials, the server
- * verifies the attestation/assertion and sets the session cookie itself.
+ * is mocked. Registration and login are real WebAuthn ceremonies: the
+ * software authenticator (fixtures/soft-authenticator.ts) answers
+ * navigator.credentials with a `packed` attestation chained to the test root
+ * global-setup gave the server (ruling 1028 Q1 (c)); the server verifies the
+ * attestation/assertion and sets the session cookie itself. Chromium's CDP
+ * virtual authenticator is not used: its self-signed batch certificate is
+ * refused for an administrative enrollment.
  */
 
 let seq = 0;
@@ -17,21 +23,14 @@ function uniqueEmail(tag: string): string {
   return `e2e-${tag}-${Date.now().toString(36)}-${seq}@example.com`;
 }
 
-/** Adds a resident-key, user-verifying platform authenticator to the page. */
-async function addAuthenticator(page: Page): Promise<{ cdp: CDPSession; id: string }> {
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send('WebAuthn.enable');
-  const { authenticatorId } = await cdp.send('WebAuthn.addVirtualAuthenticator', {
-    options: {
-      protocol: 'ctap2',
-      transport: 'internal',
-      hasResidentKey: true,
-      hasUserVerification: true,
-      isUserVerified: true,
-      automaticPresenceSimulation: true,
-    },
-  });
-  return { cdp, id: authenticatorId };
+/**
+ * Adds a fresh resident-key, user-verifying software authenticator (no
+ * credential yet) to the page, from its next navigation on.
+ */
+async function addAuthenticator(page: Page): Promise<SoftAuthenticator> {
+  const authenticator = new SoftAuthenticator(runAttestation());
+  await authenticator.install(page);
+  return authenticator;
 }
 
 async function jwtCookie(context: BrowserContext) {
