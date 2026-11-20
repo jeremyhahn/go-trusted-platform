@@ -993,3 +993,163 @@ test.describe('API Credentials / Tokens', () => {
     await expect(adminPage.getByText(/client credentials flow/i)).toBeVisible();
   });
 });
+
+interface ListedApp {
+  clientId?: string;
+  name?: string;
+  redirectUris?: string[];
+}
+
+/** Registers an app with redirect URIs too; deleted again in afterEach. */
+async function seedAppWithUris(
+  sdk: PlatformClient,
+  tenant: Tenant,
+  label: string,
+  redirectUris: string[],
+  grantTypes: string[] = ['authorization_code'],
+): Promise<SeededApp> {
+  const name = `${label} ${suffix()}`;
+  const res = await sdk.iam.registerApp({ tenantId: tenant.id, name, grantTypes, redirectUris });
+  ok(res);
+  const clientId = res.data?.app.clientId as string;
+  expect(clientId, 'client id').toBeTruthy();
+  made.apps.push(clientId);
+  return { clientId, name };
+}
+
+/** The stat card under title on /iam/apps. */
+function statCard(page: import('@playwright/test').Page, title: string) {
+  return page
+    .locator('[class*="card"]')
+    .filter({ has: page.getByText(title, { exact: true }) })
+    .first();
+}
+
+async function openAppActions(page: import('@playwright/test').Page, name: string): Promise<void> {
+  await expect(appRow(page, name)).toBeVisible();
+  await appRow(page, name).getByRole('button').last().click();
+}
+
+test.describe('Applications', () => {
+  test('should display applications list', async ({ adminPage, sdk, tenant }) => {
+    const apps = [
+      await seedAppWithUris(sdk, tenant, 'Web Application', ['https://example.com/callback'], [
+        'authorization_code',
+        'refresh_token',
+      ]),
+      await seedAppWithUris(sdk, tenant, 'Mobile App', ['https://mobile.example.com/callback']),
+      await seedApp(sdk, tenant, 'Service Account'),
+    ];
+
+    await adminPage.goto('/iam/apps');
+    await expect(adminPage.getByRole('heading', { name: 'Applications', exact: true })).toBeVisible();
+    for (const a of apps) await expect(adminPage.getByText(a.name).first()).toBeVisible();
+  });
+
+  test('should show statistics cards', async ({ adminPage, sdk, tenant }) => {
+    const seeded = [
+      await seedAppWithUris(sdk, tenant, 'App with URIs', [
+        'https://example.com/callback',
+        'https://example.com/callback2',
+      ]),
+      await seedApp(sdk, tenant, 'App without URIs'),
+      await seedAppWithUris(sdk, tenant, 'Another App', ['https://another.com/callback']),
+    ];
+
+    await adminPage.goto('/iam/apps');
+    for (const a of seeded) await expect(adminPage.getByText(a.name).first()).toBeVisible();
+    await expect(adminPage.getByText('Total Applications', { exact: true })).toBeVisible();
+    await expect(adminPage.getByText('With Redirect URIs', { exact: true })).toBeVisible();
+    await expect(adminPage.getByText('Total Redirect URIs', { exact: true })).toBeVisible();
+
+    const listed = (await listedApps(sdk, tenant)) as ListedApp[];
+    const withUris = listed.filter((a) => (a.redirectUris?.length ?? 0) > 0).length;
+    const uriTotal = listed.reduce((sum, a) => sum + (a.redirectUris?.length ?? 0), 0);
+    expect(withUris).toBeGreaterThanOrEqual(2);
+    expect(uriTotal).toBeGreaterThanOrEqual(3);
+    await expect(statCard(adminPage, 'Total Applications').locator('.text-2xl')).toHaveText(String(listed.length));
+    await expect(statCard(adminPage, 'With Redirect URIs').locator('.text-2xl')).toHaveText(String(withUris));
+    await expect(statCard(adminPage, 'Total Redirect URIs').locator('.text-2xl')).toHaveText(String(uriTotal));
+  });
+
+  test('should open register application dialog', async ({ adminPage }) => {
+    await adminPage.goto('/iam/apps');
+    const registerButton = adminPage.getByRole('button', { name: /register application/i });
+    await expect(registerButton).toBeVisible();
+    await registerButton.click();
+    await expect(adminPage).toHaveURL(/\/iam\/apps\/new/);
+  });
+
+  test('should show empty state when no applications match', async ({ adminPage, sdk, tenant }) => {
+    await adminPage.goto('/iam/apps');
+    await expect(adminPage.getByRole('heading', { name: 'Applications', exact: true })).toBeVisible();
+    await adminPage.getByPlaceholder(/search applications/i).fill(`no-such-app-${suffix()}`);
+    await expect(adminPage.getByText(/no results/i)).toBeVisible();
+
+    const total = (await listedApps(sdk, tenant)).length;
+    await expect(statCard(adminPage, 'Total Applications').locator('.text-2xl')).toHaveText(String(total));
+  });
+
+  test('should show application row actions', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'Test Application');
+
+    await adminPage.goto('/iam/apps');
+    await openAppActions(adminPage, app.name);
+    await expect(adminPage.getByRole('menuitem', { name: /view/i })).toBeVisible();
+    await expect(adminPage.getByRole('menuitem', { name: /edit/i })).toBeVisible();
+    await expect(adminPage.getByRole('menuitem', { name: /rotate secret/i })).toBeVisible();
+    await expect(adminPage.getByRole('menuitem', { name: /delete/i })).toBeVisible();
+  });
+
+  test('should navigate to application details on view', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'View Test App');
+
+    await adminPage.goto('/iam/apps');
+    await openAppActions(adminPage, app.name);
+    await adminPage.getByRole('menuitem', { name: /view/i }).click();
+    await expect(adminPage).toHaveURL(new RegExp(`/iam/apps/${app.clientId}`));
+  });
+
+  test('should delete application with confirmation', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'Delete Test App');
+
+    await adminPage.goto('/iam/apps');
+    await openAppActions(adminPage, app.name);
+    adminPage.once('dialog', (dialog) => void dialog.accept());
+    await adminPage.getByRole('menuitem', { name: /delete/i }).click();
+
+    await expect(adminPage.getByText(/application deleted|deleted successfully/i).first()).toBeVisible();
+    await expect(appRow(adminPage, app.name)).toHaveCount(0);
+    const listed = (await listedApps(sdk, tenant)) as ListedApp[];
+    expect(listed.some((a) => a.clientId === app.clientId)).toBe(false);
+  });
+
+  test('should cancel delete when confirmation is declined', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'Keep This App');
+
+    await adminPage.goto('/iam/apps');
+    await openAppActions(adminPage, app.name);
+    adminPage.once('dialog', (dialog) => void dialog.dismiss());
+    await adminPage.getByRole('menuitem', { name: /delete/i }).click();
+
+    await expect(appRow(adminPage, app.name)).toBeVisible();
+    const listed = (await listedApps(sdk, tenant)) as ListedApp[];
+    expect(listed.some((a) => a.clientId === app.clientId)).toBe(true);
+  });
+
+  test('should select multiple applications with checkboxes', async ({ adminPage, sdk, tenant }) => {
+    const apps = [
+      await seedApp(sdk, tenant, 'Bulk Delete App 1'),
+      await seedApp(sdk, tenant, 'Bulk Delete App 2'),
+      await seedApp(sdk, tenant, 'Keep This App'),
+    ];
+
+    await adminPage.goto('/iam/apps');
+    for (const a of apps) {
+      const row = appRow(adminPage, a.name);
+      await expect(row).toBeVisible();
+      await expect(row.locator('input[type="checkbox"], [role="checkbox"]').first()).toBeVisible();
+    }
+    expect(await adminPage.locator('tbody tr').count()).toBeGreaterThanOrEqual(3);
+  });
+});
