@@ -29,27 +29,24 @@ func newUninstallCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "uninstall-ca-certificates",
 		Short: "Uninstall Certificate Authority certificates",
-		Long: `Remove the Root and Intermediate Certificate Authority certificates
-from the operating system trusted certificate store.
+		Long: `Ask the daemon to remove this CA's certificates from its system trust
+path.
 
-This command removes the CA certificates from the system trust store.
-After removal, applications will no longer automatically trust certificates
-issued by this CA.
+The daemon removes the PEM bundle at its trust path, by default
+/usr/local/share/ca-certificates/trusted-platform-ca.crt, only when it is a
+bundle this CA wrote (the root, or the root plus the intermediate). It
+answers "nothing installed" when there is no bundle and refuses any other
+file. The daemon does not run update-ca-certificates: run it afterwards to
+refresh the system trust store.
 
-Platform-specific behavior:
-  - Linux: Removes certificates from /usr/local/share/ca-certificates/ and
-           runs update-ca-certificates
-  - macOS: Removes certificates from the system trust store
-  - Windows: Removes certificates from the Trusted Root Certification Authorities
-
-NOTE: This operation typically requires root/administrator privileges.
+The caller needs the trust:write scope.
 
 Examples:
-  # Uninstall CA certificates from system trust store
-  sudo platformctl ca uninstall-ca-certificates
+  # Remove the CA bundle from the daemon's trust path
+  platformctl ca uninstall-ca-certificates
 
-  # Uninstall root and intermediate certificates
-  sudo platformctl ca uninstall-ca-certificates --include-intermediates`,
+  # Then refresh the system trust store on the daemon's host
+  sudo update-ca-certificates`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
 			return runUninstall(flags, includeIntermediates)
@@ -89,7 +86,11 @@ func runUninstall(flags *cli.CommonFlags, includeIntermediates bool) error {
 		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		printer.PrintInfo("CA certificates uninstalled successfully")
+		if result.Message != "" {
+			printer.PrintInfo(result.Message)
+		} else {
+			printer.PrintInfo("CA certificates uninstalled successfully")
+		}
 		fmt.Println()
 		printer.PrintKeyValue("Certificates Removed", fmt.Sprintf("%d", result.CertificatesRemoved))
 		return nil
