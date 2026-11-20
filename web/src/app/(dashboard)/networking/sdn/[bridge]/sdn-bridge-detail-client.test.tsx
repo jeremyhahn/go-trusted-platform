@@ -251,6 +251,22 @@ describe('SDNBridgeDetailClient policy apply and policy identity', () => {
     expect(body.config.targets[0]).toEqual({ type: 'POLICY_TARGET_TYPE_BRIDGE', id: 'br-1' });
   });
 
+  // #1675 Codex round 10 (F15): the server applies RATE_LIMIT and MIRROR as
+  // normal forwarding and REDIRECT needs an actionValue the form does not
+  // collect, so the form offers only ALLOW, DENY and LOG.
+  it('the rule form offers only the actions the server enforces', async () => {
+    await renderPage({ [`POST ${SDN}/policies`]: ok({ policy: { id: 'pol-9' } }) });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Policy' }));
+    const select = screen.getByLabelText('Action *') as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.value)).toEqual([
+      '',
+      'POLICY_RULE_ACTION_ALLOW',
+      'POLICY_RULE_ACTION_DENY',
+      'POLICY_RULE_ACTION_LOG',
+    ]);
+  });
+
   it('a refused policy read after viewing another policy shows the error, not the old policy', async () => {
     await renderPage({
       [`GET ${SDN}/policies`]: ok({
