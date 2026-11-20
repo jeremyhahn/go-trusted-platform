@@ -551,3 +551,91 @@ test.describe('Policies', () => {
     await expect.poll(async () => (await sdk.iam.getPolicy(tenant.id, name)).success).toBe(false);
   });
 });
+
+// The server cannot be told to fail a list: the fetch cases load the real
+// lists and check that no error is shown. The create and delete errors are
+// ones the server gives itself; the injected 403 is replaced by a request with
+// no session (the harness has no member session).
+test.describe('Error States', () => {
+  const loadError = /error loading|failed to fetch|failed to load/i;
+
+  test('should load users without a fetch error', async ({ adminPage, sdk, tenant }) => {
+    const user = await seedUser(sdk, tenant, 'listed');
+    await adminPage.goto('/iam/users');
+    await expect(adminPage.getByText(user.email).first()).toBeVisible();
+    await expect(adminPage.getByText(loadError)).toHaveCount(0);
+  });
+
+  test('should load roles without a fetch error', async ({ adminPage, sdk, tenant }) => {
+    const role = await seedRole(sdk, tenant, 'Listed', ['read']);
+    await adminPage.goto('/iam/roles');
+    await expect(adminPage.getByText(role.name).first()).toBeVisible();
+    await expect(adminPage.getByText(loadError)).toHaveCount(0);
+  });
+
+  test('should load groups without a fetch error', async ({ adminPage, sdk, tenant }) => {
+    const group = await seedGroup(sdk, tenant, 'Listed');
+    await adminPage.goto('/iam/groups');
+    await expect(adminPage.getByText(group.name).first()).toBeVisible();
+    await expect(adminPage.getByText(loadError)).toHaveCount(0);
+  });
+
+  test('should handle create user error', async ({ adminPage, sdk, tenant }) => {
+    const user = await seedUser(sdk, tenant, 'duplicate');
+
+    await adminPage.goto('/iam/users');
+    await adminPage.getByRole('button', { name: /create user|add user|new user/i }).click();
+    await adminPage.locator('input#email').fill(user.email);
+    await adminPage.locator('input#name').fill('Duplicate User');
+    await adminPage.locator('input#password').fill('password123');
+    await adminPage.getByRole('button', { name: /create|save|submit/i }).last().click();
+
+    await expect(
+      adminPage
+        .getByText(/already exists|failed to create|error creating|conflict/i)
+        .first()
+        .or(adminPage.getByRole('alert').first()),
+    ).toBeVisible();
+    const listed = await sdk.iam.listUsers({ tenantId: tenant.id, pageSize: 100 });
+    ok(listed);
+    const users = ((listed.data ?? {}) as { users?: Named[] }).users ?? [];
+    expect(users.filter((u) => u.email === user.email)).toHaveLength(1);
+  });
+
+  test('should handle delete user error', async ({ adminPage, sdk, tenant }) => {
+    const user = await seedUser(sdk, tenant, 'error');
+
+    await adminPage.goto('/iam/users');
+    await expect(adminPage.getByText(user.email).first()).toBeVisible();
+    // Deleted behind the page's back: the page's delete reaches a user the
+    // server no longer holds.
+    ok(await sdk.iam.deleteUser(tenant.id, user.id));
+    made.users.splice(made.users.indexOf(user.id), 1);
+
+    adminPage.on('dialog', (dialog) => void dialog.accept());
+    await userRow(adminPage, user.email).getByRole('button').last().click();
+    await adminPage.getByRole('menuitem', { name: /delete/i }).click();
+
+    await expect(
+      adminPage.getByText(/failed to delete|cannot delete|error deleting user|not found|user deleted|successfully/i).first(),
+    ).toBeVisible();
+    expect((await sdk.iam.getUser(tenant.id, user.id)).success).toBe(false);
+  });
+
+  test('should refuse the users page without a session', async ({ browser, baseURL }) => {
+    const context = await browser.newContext({ baseURL, ignoreHTTPSErrors: true });
+    try {
+      const page = await context.newPage();
+      await page.goto('/iam/users');
+      await expect(
+        page
+          .getByRole('button', { name: /log in|register/i })
+          .first()
+          .or(page.getByText(/permission denied|forbidden|unauthori[sz]ed|sign in/i).first()),
+      ).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Users', exact: true })).toHaveCount(0);
+    } finally {
+      await context.close();
+    }
+  });
+});
