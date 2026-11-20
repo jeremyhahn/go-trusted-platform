@@ -15,7 +15,11 @@ async function readStatus(
   sdk: { cluster: { getStatus(): Promise<unknown> } },
 ): Promise<{ ok: true; status: any } | { ok: false; error: string }> {
   try {
-    return { ok: true, status: await sdk.cluster.getStatus() };
+    const resp: any = await sdk.cluster.getStatus();
+    if (resp && resp.success === false) {
+      return { ok: false, error: resp.error?.message ?? 'unavailable' };
+    }
+    return { ok: true, status: resp?.data ?? resp };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
@@ -34,11 +38,14 @@ test.describe('cluster: status view (GetStatus)', () => {
       const status = result.status;
       const view = adminPage.getByTestId('cluster-status');
       await expect(view).toBeVisible();
-      if (status.nodeId) {
-        await expect(view).toContainText(status.nodeId);
+      if (status.localNode?.id) {
+        await expect(view).toContainText(status.localNode.id);
       }
-      if (status.leaderId) {
-        await expect(view).toContainText(status.leaderId);
+      if (status.cluster?.leaderId) {
+        await expect(view).toContainText(status.cluster.leaderId);
+      }
+      if (status.cluster?.state) {
+        await expect(view).toContainText(String(status.cluster.state).replace(/^CLUSTER_STATE_/, ''));
       }
     } else {
       // A node with no cluster section answers 503; the page says so and
@@ -53,10 +60,10 @@ test.describe('cluster: status view (GetStatus)', () => {
 
 test.describe('cluster: nodes view (ListNodes)', () => {
   test('lists every node the server returns', async ({ adminPage, sdk }) => {
-    let nodes: Array<{ nodeId?: string; id?: string }> | null = null;
+    let nodes: Array<{ id?: string }> | null = null;
     try {
       const resp: any = await sdk.cluster.listNodes();
-      nodes = resp.nodes ?? [];
+      nodes = resp?.success === false ? null : ((resp?.data ?? resp)?.nodes ?? []);
     } catch {
       nodes = null;
     }
@@ -70,9 +77,8 @@ test.describe('cluster: nodes view (ListNodes)', () => {
     await expect(table).toBeVisible();
     await expect(table.getByRole('row')).toHaveCount(nodes.length + 1);
     for (const node of nodes) {
-      const id = node.nodeId ?? node.id;
-      if (id) {
-        await expect(table).toContainText(id);
+      if (node.id) {
+        await expect(table).toContainText(node.id);
       }
     }
   });
@@ -97,17 +103,27 @@ test.describe('cluster: write flows (Bootstrap, Join, Leave)', () => {
       return;
     }
 
-    // Join with no peer address is refused by the server (InvalidArgument,
-    // HTTP 400); the page shows the server's error text.
-    await adminPage.getByLabel('Peer addresses').fill('');
+    // Join with no seed address is refused before any request; the page
+    // shows the error.
+    await adminPage.getByLabel('Seed addresses').fill('');
     await join.click();
     await expect(adminPage.getByTestId('cluster-error')).toBeVisible();
 
-    // The page and the SDK still agree on the status after the refused write.
-    const after = await readStatus(sdk);
-    expect(after.ok).toBe(true);
-    if (after.ok && after.status.nodeId) {
-      await expect(adminPage.getByTestId('cluster-status')).toContainText(after.status.nodeId);
+    // Bootstrapping a node that is already in a cluster is refused by the
+    // server (409); the page shows the server's error and the status the
+    // SDK reads afterwards is unchanged.
+    if (result.status.cluster?.id) {
+      await adminPage.getByLabel('Cluster name').fill(result.status.cluster.name || 'e2e');
+      await bootstrap.click();
+      await expect(adminPage.getByTestId('cluster-error')).toBeVisible();
+      const after = await readStatus(sdk);
+      expect(after.ok).toBe(true);
+      if (after.ok) {
+        expect(after.status.cluster?.id).toBe(result.status.cluster.id);
+        if (after.status.localNode?.id) {
+          await expect(adminPage.getByTestId('cluster-status')).toContainText(after.status.localNode.id);
+        }
+      }
     }
   });
 });
