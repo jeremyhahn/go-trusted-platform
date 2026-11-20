@@ -173,6 +173,7 @@ const cases: Case[] = [
     method: 'post',
     path: '/v1/compute/vms/vm%2F1/suspend',
     body: {},
+    options: { retry: { enabled: false } },
   },
   {
     name: 'resumeVM',
@@ -180,6 +181,7 @@ const cases: Case[] = [
     method: 'post',
     path: '/v1/compute/vms/vm%2F1/resume',
     body: {},
+    options: { retry: { enabled: false } },
   },
   {
     name: 'getSnapshot',
