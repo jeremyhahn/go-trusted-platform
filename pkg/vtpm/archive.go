@@ -30,6 +30,10 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
+// importStagingPrefix names the private directories (and temp archives) an
+// import stages in BundlesDir before publishing; bundle listings skip them.
+const importStagingPrefix = ".import-"
+
 // Archiver handles bundle export/import operations.
 type Archiver struct {
 	config *Config
@@ -155,7 +159,7 @@ func (a *Archiver) Import(ctx context.Context, r io.Reader) (*Bundle, error) {
 		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: &WrappedError{Msg: "failed to create bundles directory", Err: err}}
 	}
 
-	tmp, err := os.CreateTemp(a.config.BundlesDir(), ".import-*.tar.gz")
+	tmp, err := os.CreateTemp(a.config.BundlesDir(), importStagingPrefix+"*.tar.gz")
 	if err != nil {
 		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: &WrappedError{Msg: "failed to create temp archive", Err: err}}
 	}
@@ -287,7 +291,7 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 	if err := os.MkdirAll(filepath.Dir(bundlePath), 0700); err != nil {
 		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: err}
 	}
-	stagePath, err := os.MkdirTemp(filepath.Dir(bundlePath), ".import-"+id+"-")
+	stagePath, err := os.MkdirTemp(filepath.Dir(bundlePath), importStagingPrefix+""+id+"-")
 	if err != nil {
 		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: err}
 	}

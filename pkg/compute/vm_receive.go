@@ -188,10 +188,24 @@ type incomingReceiver interface {
 	// orchestrator as a normal instance.
 	VM() *qemu.VM
 
-	// Transferring reports whether a migration stream is in progress (or
-	// complete and awaiting finalize), which renews the receiver lifetime.
-	Transferring(ctx context.Context) bool
+	// TransferState reports whether a migration stream is in progress,
+	// complete and awaiting finalize, or neither. An active stream renews
+	// the receiver lifetime; a completed one gets one more lifetime of
+	// grace for the finalize.
+	TransferState(ctx context.Context) receiverTransferState
 }
+
+// receiverTransferState is what a receiver's migration stream is doing.
+type receiverTransferState int
+
+const (
+	// transferIdle: no stream, a failed one, or an unanswered query.
+	transferIdle receiverTransferState = iota
+	// transferActive: a stream is in progress.
+	transferActive
+	// transferCompleted: the guest arrived and awaits finalize.
+	transferCompleted
+)
 
 // incomingReceiverParams carries everything the launcher needs to stand up a
 // receiver.
@@ -248,6 +262,9 @@ const receiverStatusTimeout = 10 * time.Second
 // transfer in progress, renewing it while one is. It stops when ended closes
 // (FinalizeIncoming or Close took the receiver).
 func (o *QEMUOrchestrator) watchReceiverLifetime(ended <-chan struct{}, receiverID string, lifetime time.Duration) {
+	// graced records that a completed transfer already had its one
+	// lifetime of finalization grace.
+	graced := false
 	for {
 		timer := time.NewTimer(lifetime)
 		select {
@@ -261,13 +278,25 @@ func (o *QEMUOrchestrator) watchReceiverLifetime(ended <-chan struct{}, receiver
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), receiverStatusTimeout)
-		transferring := tr.recv.Transferring(ctx)
+		state := tr.recv.TransferState(ctx)
 		cancel()
-		if !transferring {
+		switch state {
+		case transferActive:
+			o.logger.Infof("Migration receiver %s is transferring; renewing its lifetime by %s", receiverID, lifetime)
+		case transferCompleted:
+			// The source may have crashed or lost its link after the
+			// transfer and never finalize: wait one more lifetime, once,
+			// so the detached QEMU and its TLS material are released.
+			if graced {
+				o.reapReceiver(receiverID, "transfer completed but not finalized within the grace period")
+				return
+			}
+			graced = true
+			o.logger.Infof("Migration receiver %s completed its transfer; waiting %s for finalize", receiverID, lifetime)
+		default:
 			o.reapReceiver(receiverID, "lifetime expired before finalize")
 			return
 		}
-		o.logger.Infof("Migration receiver %s is transferring; renewing its lifetime by %s", receiverID, lifetime)
 	}
 }
 
@@ -631,15 +660,15 @@ func (p *receiverProcess) terminate() error {
 // VM returns the receiving QEMU.
 func (r *qemuIncomingReceiver) VM() *qemu.VM { return r.vm }
 
-// Transferring reports whether query-migrate shows a stream in progress or
-// complete and awaiting finalize. An unanswered query counts as idle.
-func (r *qemuIncomingReceiver) Transferring(ctx context.Context) bool {
+// TransferState reports from query-migrate whether a stream is in progress
+// or complete and awaiting finalize. An unanswered query counts as idle.
+func (r *qemuIncomingReceiver) TransferState(ctx context.Context) receiverTransferState {
 	if r.mgr == nil {
-		return false
+		return transferIdle
 	}
 	st, err := r.mgr.Status(ctx)
 	if err != nil || st == nil {
-		return false
+		return transferIdle
 	}
 	switch st.Status {
 	case qemu.MigrationStatusSetup,
@@ -648,11 +677,12 @@ func (r *qemuIncomingReceiver) Transferring(ctx context.Context) bool {
 		qemu.MigrationStatusPostcopyPaused,
 		qemu.MigrationStatusPostcopyRecover,
 		qemu.MigrationStatusPreSwitchover,
-		qemu.MigrationStatusDevice,
-		qemu.MigrationStatusCompleted:
-		return true
+		qemu.MigrationStatusDevice:
+		return transferActive
+	case qemu.MigrationStatusCompleted:
+		return transferCompleted
 	}
-	return false
+	return transferIdle
 }
 
 func (r *qemuIncomingReceiver) Port() int { return r.port }

@@ -25,6 +25,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -678,6 +679,12 @@ func (s *Service) ListBundles(ctx context.Context, opts *ListOptions) ([]*Bundle
 	var bundles []*Bundle
 	for _, entry := range entries {
 		if !entry.IsDir() {
+			continue
+		}
+		// An import extracts into a staging directory here before it is
+		// published; its manifest already names the final ID, so listing it
+		// would expose an unfinished (or duplicate) bundle.
+		if strings.HasPrefix(entry.Name(), importStagingPrefix) {
 			continue
 		}
 

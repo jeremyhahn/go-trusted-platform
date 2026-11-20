@@ -1181,6 +1181,13 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 	// Convert PolicyType enum to string for internal tracking
 	policyType := strings.ToLower(strings.TrimPrefix(config.GetType().String(), "POLICY_TYPE_"))
 
+	// The policy priority is the default for every rule without its own,
+	// and is stored for later rollbacks: refuse one outside 0-65535 even
+	// when every rule carries its own priority.
+	if err := checkFlowPriority(int(config.GetPriority())); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "policy priority: %v", err)
+	}
+
 	// Translate every rule before any flow is installed, so a rule the flow
 	// grammar cannot carry is refused with nothing applied.
 	flowMods := make([]*ovs.FlowMod, len(config.GetRules()))
@@ -1737,12 +1744,30 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 }
 
 // policyRuleToFlowMod converts a policy rule to an OVS FlowMod
+// maxFlowPriority is the largest OpenFlow priority (a 16-bit field).
+const maxFlowPriority = 65535
+
+// checkFlowPriority refuses a priority the switch cannot carry unchanged.
+func checkFlowPriority(priority int) error {
+	if priority < 0 || priority > maxFlowPriority {
+		return fmt.Errorf("priority %d is outside 0-%d", priority, maxFlowPriority)
+	}
+	return nil
+}
+
 func (s *SDNService) policyRuleToFlowMod(rule *platformv1.PolicyRule, policyPriority int32) (*ovs.FlowMod, error) {
 	flowMod := &ovs.FlowMod{
 		Priority: int(rule.GetPriority()),
 	}
 	if flowMod.Priority == 0 {
 		flowMod.Priority = int(policyPriority)
+	}
+	// OpenFlow priorities are 16 bits and the switch client truncates a
+	// wider value, so 65636 would replace the entry at 100 under a
+	// different ownership and rollback key. Refuse it here, before any
+	// switch operation.
+	if err := checkFlowPriority(flowMod.Priority); err != nil {
+		return nil, err
 	}
 
 	match, err := policyRuleMatch(rule)

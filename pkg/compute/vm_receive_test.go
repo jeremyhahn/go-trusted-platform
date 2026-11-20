@@ -45,7 +45,9 @@ type fakeIncomingReceiver struct {
 
 func (f *fakeIncomingReceiver) VM() *qemu.VM { return f.vm }
 
-func (f *fakeIncomingReceiver) Transferring(context.Context) bool { return false }
+func (f *fakeIncomingReceiver) TransferState(context.Context) receiverTransferState {
+	return transferIdle
+}
 
 func (f *fakeIncomingReceiver) Port() int { return f.port }
 
@@ -184,8 +186,14 @@ type signalReceiver struct {
 
 func (s *signalReceiver) VM() *qemu.VM { return s.vm }
 
-func (s *signalReceiver) Transferring(context.Context) bool {
-	return s.transferring.Load() || s.completed.Load()
+func (s *signalReceiver) TransferState(context.Context) receiverTransferState {
+	switch {
+	case s.transferring.Load():
+		return transferActive
+	case s.completed.Load():
+		return transferCompleted
+	}
+	return transferIdle
 }
 
 func newSignalReceiver() *signalReceiver {
