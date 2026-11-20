@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	kmsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/reporting"
@@ -61,8 +62,18 @@ type (
 )
 
 // daemonRouteTable builds a daemon REST server with every route-mounting
-// setter wired, and returns it with its built table.
+// setter wired in the daemon's order (the KMS router with no backend), and
+// returns it with its built table.
 func daemonRouteTable(t *testing.T, guard *restapi.ScopeGuard) (*RESTServer, []string) {
+	t.Helper()
+	return daemonRouteTableWithKMS(t, guard, nil)
+}
+
+// daemonRouteTableWithKMS builds the same route table as daemonRouteTable,
+// with kms behind the webservice KMS router (SetKMSRouter) the daemon mounts
+// before the legacy KMS handlers, so a test can have /api/v1/kms/* requests
+// answered. A nil kms mounts the router with no backend.
+func daemonRouteTableWithKMS(t *testing.T, guard *restapi.ScopeGuard, kms kmsclient.Client) (*RESTServer, []string) {
 	t.Helper()
 
 	cfg := DefaultConfig()
@@ -86,7 +97,7 @@ func daemonRouteTable(t *testing.T, guard *restapi.ScopeGuard) (*RESTServer, []s
 	require.NoError(t, s.SetDNSRouterHandlers(log, platformv1.UnimplementedDNSServiceServer{}, guard, ""))
 	require.NoError(t, s.SetPXERouterHandlers(log, platformv1.UnimplementedPXEServiceServer{}, guard))
 	s.SetTenantHandlers(routeTableTenants{}, guard, "")
-	s.SetKMSRouter(nil, nil, nil, nil)
+	s.SetKMSRouter(kms, nil, nil, nil)
 	s.SetKMSHandlers(routeTableKMS{})
 	s.SetComputeHandlers(platformv1.UnimplementedComputeServiceServer{}, guard)
 	require.NoError(t, s.SetOverlayHandlers(routeTableOverlay{}, guard))
