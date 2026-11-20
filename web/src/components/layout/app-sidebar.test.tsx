@@ -116,6 +116,8 @@ describe("AppSidebar", () => {
   it.each([
     ["/compute/migrations", "Migrations"],
     ["/attestation/collect", "Collect"],
+    ["/attestation/callers", "Callers"],
+    ["/attestation/verdicts", "Verdicts"],
     ["/devices/bmc", "BMC"],
     ["/devices/lookup", "Device Lookup"],
     ["/ca/eab", "EAB Keys"],
