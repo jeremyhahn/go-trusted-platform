@@ -107,3 +107,61 @@ describe('SDNService.applyPolicy match fields', () => {
     expect(client.post).toHaveBeenCalledTimes(1);
   });
 });
+
+// ApplyPolicy (pkg/api/daemon/sdn_service.go) installs flows from the target
+// type and bridge ID only, so a target zone or direction does not narrow the
+// flows; and it installs every rule before merely recording config.enabled,
+// so a disabled policy is active at once. The SDK refuses both unsent.
+describe('SDNService.applyPolicy target scope and enabled flag', () => {
+  let client: ApiClient;
+  let service: SDNService;
+
+  function policy(
+    target: Record<string, unknown>,
+    extra: Record<string, unknown> = {}
+  ): ApplyPolicyRequest {
+    return {
+      config: {
+        name: 'p1',
+        targets: [{ type: 'POLICY_TARGET_TYPE_BRIDGE', id: 'br0', ...target }],
+        rules: [{ ruleId: 'r1', priority: 100, action: 'POLICY_RULE_ACTION_ALLOW' }],
+        ...extra,
+      },
+    } as unknown as ApplyPolicyRequest;
+  }
+
+  beforeEach(() => {
+    client = createMockClient();
+    vi.mocked(client.post).mockResolvedValue({ success: true, data: {} });
+    service = new SDNService(client);
+  });
+
+  it.each([
+    ['zone', 'dmz'],
+    ['direction', 'ingress'],
+  ] as const)('refuses a target %s before any request', async (field, value) => {
+    const request = policy({ [field]: value });
+    await expect(service.applyPolicy(request)).rejects.toThrow(RangeError);
+    await expect(service.applyPolicy(request)).rejects.toThrow(`target ${field}`);
+    expect(client.post).not.toHaveBeenCalled();
+    expect(client.get).not.toHaveBeenCalled();
+  });
+
+  it('refuses a disabled policy before any request', async () => {
+    const request = policy({}, { enabled: false });
+    await expect(service.applyPolicy(request)).rejects.toThrow(RangeError);
+    await expect(service.applyPolicy(request)).rejects.toThrow('enabled');
+    expect(client.post).not.toHaveBeenCalled();
+    expect(client.get).not.toHaveBeenCalled();
+  });
+
+  it('still sends an enabled policy with an unscoped bridge target', async () => {
+    await service.applyPolicy(policy({ zone: '', direction: '' }, { enabled: true }));
+    expect(client.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('still sends a policy that leaves enabled unset', async () => {
+    await service.applyPolicy(policy({}));
+    expect(client.post).toHaveBeenCalledTimes(1);
+  });
+});
