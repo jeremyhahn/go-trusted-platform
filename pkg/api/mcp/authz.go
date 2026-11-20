@@ -175,7 +175,10 @@ func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName strin
 		return ctx, denied
 	}
 	subject := pepSubjectFromClaims(claims)
-	if subject.ID == "" {
+	// The legacy ValidateToken path fills the user and roles but no tenant;
+	// the old QuicBaaSAuthAdapter refused a blank tenant before deciding, so
+	// a tenantless caller never reaches the PEP (#2011 Codex).
+	if subject.ID == "" || strings.TrimSpace(subject.TenantID) == "" {
 		return ctx, denied
 	}
 	resp, err := c.pep.Check(ctx, &iam.CheckRequest{

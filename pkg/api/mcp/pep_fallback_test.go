@@ -50,7 +50,7 @@ func pepCaller(mgr AuthManager) AuthManager {
 func tokenSubject() *mockAuthManager {
 	return &mockAuthManager{
 		getClaimsFunc: func(_ context.Context, token string) (map[string]interface{}, error) {
-			return map[string]interface{}{"sub": token}, nil
+			return map[string]interface{}{"sub": token, "tenant_id": "tenant-1"}, nil
 		},
 	}
 }
