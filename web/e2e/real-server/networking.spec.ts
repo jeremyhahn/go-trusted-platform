@@ -13,7 +13,7 @@ import { test, expect } from './fixtures';
 interface Result<T> {
   success: boolean;
   data?: T;
-  error?: { message?: string; reason?: string; code?: string } & Record<string, unknown>;
+  error?: unknown;
 }
 
 interface Bridge {
