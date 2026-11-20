@@ -1242,14 +1242,15 @@ web-test:
 # web/playwright.real-server.config.ts starts
 # it on the TPM simulator in a temporary directory (global-setup.ts), runs
 # web/e2e/real-server/ in Chromium with real WebAuthn ceremonies and stops it.
-# No mocks. Run `make web-deps` and `cd web && npx playwright install
-# chromium` first on a fresh checkout; the target downloads nothing.
+# No mocks. web-deps runs first (npm ci from the lockfiles, so
+# @playwright/test is installed). Run `cd web && npx playwright install
+# chromium` once on a fresh checkout; the target downloads no browser.
 #   make web-e2e                 # build, then the suite
 #   make web-e2e E2E_PORT=19443  # another TLS port
 #   make web-e2e WEB_E2E_BUILD=0 # reuse bin/platformd
 WEB_E2E_BUILD ?= 1
 .PHONY: web-e2e
-web-e2e:
+web-e2e: web-deps
 ifeq ($(strip $(WEB_E2E_BUILD)),1)
 	$(MAKE) web-e2e-platformd WITH_WEB=1
 endif
