@@ -768,13 +768,52 @@ func pxeIdentityTCGContext(ek *x509.Certificate) *trustedca.ACMEOrderFinalizeHoo
 func TestNewPXEIdentityHook_ResolvesTheDeviceByItsEKBoundProfile(t *testing.T) {
 	const mac = "52:54:00:12:34:56"
 	ek := pxeIdentityEKCert(t, 1001)
-	profiles := ekProfiles{"1001": {MACAddress: mac}}
+	profiles := ekProfiles{"1001": {MACAddress: mac, EKCert: pxeIdentityEKCertPEM(ek)}}
 	rec := &fakePXEIdentityRecorder{}
 
 	hook := NewPXEIdentityHookWithProfiles(rec, profiles, slog.Default())
 	require.NoError(t, hook(pxeIdentityTCGContext(ek)))
 
 	assert.Equal(t, []string{mac}, rec.macs)
+}
+
+// pxeIdentityEKCertPEM is the PEM of cert, as an operator registers it on
+// a device profile's ek-cert.
+func pxeIdentityEKCertPEM(cert *x509.Certificate) string {
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}))
+}
+
+// TestNewPXEIdentityHook_RefusesAnEKWithTheSerialButNotTheKeyOfTheProfile
+// checks that an EK certificate carrying the serial of a profile's EK but
+// another public key is refused with PermissionDenied, and records nothing:
+// the serial alone does not prove the device holds the profile's EK.
+func TestNewPXEIdentityHook_RefusesAnEKWithTheSerialButNotTheKeyOfTheProfile(t *testing.T) {
+	const mac = "52:54:00:12:34:57"
+	victim := pxeIdentityEKCert(t, 1003)
+	impostor := pxeIdentityEKCert(t, 1003)
+	profiles := ekProfiles{"1003": {MACAddress: mac, EKCert: pxeIdentityEKCertPEM(victim)}}
+	rec := &fakePXEIdentityRecorder{}
+
+	hook := NewPXEIdentityHookWithProfiles(rec, profiles, slog.Default())
+	err := hook(pxeIdentityTCGContext(impostor))
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Empty(t, rec.macs)
+}
+
+// TestNewPXEIdentityHook_RefusesAProfileWithoutABoundEK checks that a
+// profile matched by EK serial alone, with no registered EK certificate,
+// is refused with PermissionDenied and records nothing.
+func TestNewPXEIdentityHook_RefusesAProfileWithoutABoundEK(t *testing.T) {
+	ek := pxeIdentityEKCert(t, 1004)
+	profiles := ekProfiles{"1004": {MACAddress: "52:54:00:12:34:58"}}
+	rec := &fakePXEIdentityRecorder{}
+
+	hook := NewPXEIdentityHookWithProfiles(rec, profiles, slog.Default())
+	err := hook(pxeIdentityTCGContext(ek))
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Empty(t, rec.macs)
 }
 
 func TestNewPXEIdentityHook_SkipsWithoutABoundProfile(t *testing.T) {
