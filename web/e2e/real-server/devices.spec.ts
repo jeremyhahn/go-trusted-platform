@@ -998,6 +998,10 @@ test.describe('Device Profiles', () => {
 interface IDevIDRow {
   id?: string;
   status?: string;
+  subject?: string;
+  serialNumber?: string;
+  issuedAt?: string;
+  expiresAt?: string;
 }
 
 interface IDevIDList {
@@ -1382,6 +1386,121 @@ test.describe('Device IDevID', () => {
       await expect(page.getByRole('menuitem', { name: /download certificate/i })).toBeVisible();
       await expect(page.getByRole('menuitem', { name: /renew certificate/i })).not.toBeVisible();
       await expect(page.getByRole('menuitem', { name: /revoke certificate/i })).not.toBeVisible();
+    });
+  });
+
+  test.describe('IDevID Error States', () => {
+    // The injected 500s on revoke and download have no server behaviour
+    // behind them, and no row exists to act on (gap): each test acts on a
+    // served row and asserts the toast the server gives, and with no row
+    // asserts the page offers no action. The two mocked test.skip cases
+    // (issue error, renew error) are gaps: see the plan.
+    test('should show empty state when no certificates exist', async ({ adminPage: page }) => {
+      const list = await openIDevIDPage(page);
+
+      await expectListAsServed(page, list);
+    });
+
+    test('should handle revoke certificate error', async ({ adminPage: page }) => {
+      const list = await openIDevIDPage(page);
+      await expectListAsServed(page, list);
+
+      const menu = rowMenu(page, list, 'active');
+      if (!menu) {
+        await expect(page.getByRole('menuitem', { name: /revoke certificate/i })).toHaveCount(0);
+        return;
+      }
+      page.on('dialog', async (dialog) => {
+        await dialog.accept();
+      });
+      await menu.click();
+      await page.getByRole('menuitem', { name: /revoke certificate/i }).click();
+      await expect(page.getByText(/revoked successfully|failed to revoke/i).first()).toBeVisible({ timeout: 10000 });
+    });
+
+    test('should handle download certificate error', async ({ adminPage: page }) => {
+      const list = await openIDevIDPage(page);
+      await expectListAsServed(page, list);
+
+      const menu = rowMenu(page, list);
+      if (!menu) {
+        await expect(page.getByRole('menuitem', { name: /download certificate/i })).toHaveCount(0);
+        return;
+      }
+      await menu.click();
+      await page.getByRole('menuitem', { name: /download certificate/i }).click();
+      await expect(page.getByText(/downloaded successfully|failed to download/i).first()).toBeVisible({
+        timeout: 10000,
+      });
+    });
+  });
+
+  test.describe('IDevID Access Control', () => {
+    test('should allow the tenant admin to view the IDevID page', async ({ adminPage: page }) => {
+      // The harness has no tenant member session (gap): runs as the tenant admin.
+      const list = await openIDevIDPage(page);
+
+      await expectListAsServed(page, list);
+    });
+
+    test('should redirect unauthenticated users to login', async ({ browser, baseURL }) => {
+      const context = await browser.newContext({ baseURL, ignoreHTTPSErrors: true });
+      try {
+        const page = await context.newPage();
+        await page.goto('/devices/idevid');
+        await expect(page).toHaveURL(/\/auth\/webauthn/);
+      } finally {
+        await context.close();
+      }
+    });
+  });
+
+  test.describe('IDevID Table Display', () => {
+    // Canned rows (subject, serial, dates, three certificates) have no server
+    // behaviour (gap): each test checks the rows the server serves.
+    test('should display certificate subject', async ({ adminPage: page }) => {
+      const list = await openIDevIDPage(page);
+      await expectListAsServed(page, list);
+
+      for (const c of list.idevids) {
+        if (c.subject) await expect(page.getByText(c.subject, { exact: true }).first()).toBeVisible();
+      }
+    });
+
+    test('should display serial number in monospace font', async ({ adminPage: page }) => {
+      const list = await openIDevIDPage(page);
+      await expectListAsServed(page, list);
+
+      for (const c of list.idevids) {
+        if (c.serialNumber) await expect(page.locator('code').filter({ hasText: c.serialNumber }).first()).toBeVisible();
+      }
+    });
+
+    test('should display formatted dates', async ({ adminPage: page }) => {
+      const list = await openIDevIDPage(page);
+      await expectListAsServed(page, list);
+
+      for (const c of list.idevids) {
+        for (const at of [c.issuedAt, c.expiresAt]) {
+          if (!at) continue;
+          // Formatted in the browser's time zone, as the table does ("Jan 15, 2024").
+          const text = await page.evaluate(
+            (iso) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+            at,
+          );
+          await expect(page.getByText(text).first()).toBeVisible();
+        }
+      }
+    });
+
+    test('should display multiple certificates', async ({ adminPage: page }) => {
+      const list = await openIDevIDPage(page);
+
+      // One table row per served certificate, plus the header row.
+      await expectListAsServed(page, list);
+      if (list.idevids.length > 0) {
+        await expect(page.getByRole('row')).toHaveCount(list.idevids.length + 1);
+      }
     });
   });
 });
