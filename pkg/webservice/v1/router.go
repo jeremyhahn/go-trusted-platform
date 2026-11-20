@@ -34,6 +34,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restattestation "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/attestation"
 	restca "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ca"
+	restcluster "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/cluster"
 	restcompute "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/compute"
 	restdevice "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/device"
 	restdns "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/dns"
@@ -201,6 +202,7 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.attestationRoutes()
 	v1Router.bmcRoutes()
 	v1Router.caRoutes()
+	v1Router.clusterRoutes()
 	// computeImagesRoutes MUST register before computeRoutes: mux matches
 	// in registration order, and when compute is unconfigured its
 	// catch-all 503 stub on /compute would otherwise shadow the
@@ -926,6 +928,23 @@ func (v1Router *Router) vpnRoutes() {
 	// management network, and a posture policy decides which of them stay
 	// there: operator work behind the admin gate, then vpn:read, vpn:write
 	// or vpn:admin per route, as on gRPC, QUIC and MCP.
+	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+}
+
+// clusterRoutes mounts the ClusterService routes. Unlike the other service
+// routers it mounts without a server too: every route then answers 503, so
+// the console can say the cluster is not configured instead of meeting a 404.
+func (v1Router *Router) clusterRoutes() {
+	r := restcluster.NewClusterRouter(
+		v1Router.logger,
+		v1Router.restHandlerRegistry.ClusterServiceServer(),
+		v1Router.responseWriter)
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		r.SetScopeAuthorizer(scoped)
+	}
+	// Bootstrapping, joining or leaving changes the node's cluster
+	// membership: operator work behind the admin gate, then cluster:read or
+	// cluster:write per route, as on gRPC.
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 

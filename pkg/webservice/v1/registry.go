@@ -813,6 +813,7 @@ type RestHandlerRegistry interface {
 	PXEWebhookEnabled() bool
 	NTPServiceServer() platformv1.NTPServiceServer
 	VPNServiceServer() platformv1.VPNServiceServer
+	ClusterServiceServer() platformv1.ClusterServiceServer
 	AppServiceServers() restapi.AppServiceServers
 	RegistryService() grpcapi.RegistryService
 	OCIDistBackend() restregistry.OCIDistBackend
@@ -1042,6 +1043,9 @@ type RegistryParams struct {
 	PXEWebhookEnabled bool
 	NTPServiceServer  platformv1.NTPServiceServer
 	VPNServiceServer  platformv1.VPNServiceServer
+	// ClusterServiceServer is the in-process ClusterService gRPC
+	// implementation; nil when the node runs no cluster service.
+	ClusterServiceServer platformv1.ClusterServiceServer
 	// AppServiceServers are the daemon's Cache, Scheduler, Messaging and
 	// ObjectStorage servers, the instances behind every other transport.
 	AppServiceServers restapi.AppServiceServers
@@ -2122,6 +2126,11 @@ func (registry *HandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer 
 // VPNServiceServer returns the in-process VPNService gRPC implementation, or nil.
 func (registry *HandlerRegistry) VPNServiceServer() platformv1.VPNServiceServer {
 	return registry.params.VPNServiceServer
+}
+
+// ClusterServiceServer returns the in-process ClusterService gRPC implementation, or nil.
+func (registry *HandlerRegistry) ClusterServiceServer() platformv1.ClusterServiceServer {
+	return registry.params.ClusterServiceServer
 }
 
 // AppServiceServers returns the daemon's Cache, Scheduler, Messaging and

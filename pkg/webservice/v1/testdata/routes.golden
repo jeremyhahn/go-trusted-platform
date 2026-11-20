@@ -118,6 +118,7 @@ GET /api/v1/ca/root
 GET /api/v1/cache/config
 GET /api/v1/cache/stats
 GET /api/v1/certificate
+GET /api/v1/cluster
 GET /api/v1/cluster/nodes
 GET /api/v1/cluster/status
 GET /api/v1/compute
