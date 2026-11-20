@@ -40,6 +40,9 @@ type Deps struct {
 	// deterministic hook the tests wait on. Calls are made from the group's
 	// run loop and must not block for long.
 	Observer Observer
+	// Inventory, when set, records every VIP a group adds or adopts, so a
+	// restart that drops the group can still delete it (Inventory.Sweep).
+	Inventory *Inventory
 }
 
 // EventKind classifies an Observer notification.
@@ -91,6 +94,10 @@ type Speaker struct {
 	mu      sync.Mutex
 	active  bool
 	runners []*runner
+	// pending holds the stopped runners whose VIP release failed, at Stop
+	// or in the rollback of a failed Start; a later Start or Stop retries
+	// their group's Shutdown until it succeeds.
+	pending []*runner
 	// dropped counts advertisements discarded by the §7.1 receive checks.
 	dropped atomic.Uint64
 }
@@ -125,6 +132,8 @@ type GroupStatus struct {
 	// Initialize).
 	NextDeadline time.Time
 	LastError    error
+	// ClaimError is the unrepaired address-claim failure; LastError can be nil while it is set.
+	ClaimError error
 }
 
 // Health is the speaker's health summary.
@@ -136,21 +145,35 @@ type Health struct {
 
 // Start opens every group's socket, performs the RFC 5798 §6.4.1 startup
 // and runs one loop per group. A group that cannot open its socket fails
-// the start; groups already started are stopped again.
+// the start; groups already started are stopped again, and one whose VIP
+// release fails in that rollback stays pending (see ReleasePending).
 func (s *Speaker) Start(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.active {
 		return ErrSpeakerAlreadyRunning{}
 	}
+	// Drain the releases an earlier Stop left outstanding first: a VIP
+	// still installed would look like a pre-existing owner address.
+	if err := s.retryPending(); err != nil {
+		return ErrReleasePending{Cause: err}
+	}
 	var started []*runner
 	for _, gc := range s.cfg.Groups {
 		r, err := s.startGroup(ctx, gc)
 		if err != nil {
+			if r != nil {
+				// A stale VIP it could not remove: its loops never ran,
+				// and retryPending drives only its group's Shutdown.
+				s.pending = append(s.pending, r)
+			}
 			// Roll back the groups already started; a rollback that itself
 			// fails is reported beside the cause, never dropped.
 			for _, sr := range started {
 				if rbErr := sr.stop(s.clock.Now()); rbErr != nil {
+					// Keep the runner for cleanup: its VIP is still
+					// installed, and the next Start or Stop releases it.
+					s.pending = append(s.pending, sr)
 					err = &ErrRollbackIncomplete{Cause: err, Rollback: rbErr}
 				}
 			}
@@ -163,22 +186,74 @@ func (s *Speaker) Start(ctx context.Context) error {
 	return nil
 }
 
+// ReleasePending reports whether a VIP release is outstanding, from a
+// failed Stop, a failed startup rollback or a stale VIP that Start could
+// not remove. A speaker in that state must be
+// kept, not rebuilt, so its next Start or Stop can delete that VIP.
+func (s *Speaker) ReleasePending() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.pending) > 0
+}
+
 // Stop shuts every group down (§6.4.3: a master sends a priority-0
-// advertisement and releases its addresses) and closes the sockets.
+// advertisement and releases its addresses) and closes the sockets. The
+// speaker is inactive afterwards even when a group fails to release a VIP;
+// such a group stays pending, and a later Stop retries its release (#1716).
+// Stop on an inactive speaker returns ErrSpeakerNotRunning only when no
+// release is pending.
 func (s *Speaker) Stop(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.active {
-		return ErrSpeakerNotRunning{}
+		if len(s.pending) == 0 {
+			return ErrSpeakerNotRunning{}
+		}
+		return s.retryPending()
 	}
 	var first error
+	// Retry the releases still outstanding from an earlier Stop before
+	// queueing this Stop's failures, so each runner is shut down once here.
+	if err := s.retryPending(); err != nil {
+		first = err
+	}
 	for _, r := range s.runners {
-		if err := r.stop(s.clock.Now()); err != nil && first == nil {
-			first = err
+		if err := r.stop(s.clock.Now()); err != nil {
+			s.pending = append(s.pending, r)
+			if first == nil {
+				first = err
+			}
 		}
 	}
 	s.runners = nil
 	s.active = false
+	return first
+}
+
+// retryPending re-runs Shutdown on every runner whose release failed at an
+// earlier Stop. Its loops and socket are already closed, so only the group
+// is driven. Runners that still fail stay pending. s.mu must be held.
+func (s *Speaker) retryPending() error {
+	var first error
+	still := s.pending[:0]
+	for _, r := range s.pending {
+		r.mu.Lock()
+		err := r.group.Shutdown(s.clock.Now())
+		r.mu.Unlock()
+		if err != nil {
+			still = append(still, r)
+			if first == nil {
+				first = err
+			}
+		}
+	}
+	for i := len(still); i < len(s.pending); i++ {
+		s.pending[i] = nil
+	}
+	s.pending = still
+	if len(s.pending) == 0 {
+		s.pending = nil
+	}
 	return first
 }
 
@@ -228,6 +303,15 @@ type runner struct {
 	// timer is armed in startGroup, before the run loop exists, so the
 	// first deadline is computed from the same instant Startup used.
 	timer Timer
+	// owned holds the prefixes this runner added or adopted; Release
+	// deletes only these. A priority-255 owner's preexisting address is
+	// never in it, so it stays, unless the inventory records that this
+	// node installed it (restoreOwned); a non-owner adopts any VIP it finds (one a
+	// crashed master left), so it is released on demotion and Stop (#1716).
+	owned map[netip.Prefix]bool
+	// stale holds prefixes of another length that dropStaleVIPs found and
+	// could not delete; Release deletes them too.
+	stale []netip.Prefix
 }
 
 type event struct {
@@ -242,6 +326,7 @@ func (s *Speaker) startGroup(ctx context.Context, gc GroupConfig) (*runner, erro
 		events:  make(chan event, 16),
 		stopCh:  make(chan struct{}),
 		done:    make(chan struct{}),
+		owned:   make(map[netip.Prefix]bool),
 	}
 	// The group validates the config, so build it before opening a socket
 	// and open on the source address it parsed.
@@ -255,6 +340,26 @@ func (s *Speaker) startGroup(ctx context.Context, gc GroupConfig) (*runner, erro
 		return nil, &ErrTransportFailed{VRID: gc.VRID, Interface: gc.Interface, Operation: "open", Cause: err}
 	}
 	r.conn = conn
+	// The inventory's record comes first: an address this node installed
+	// is never classified as an owner's preexisting one (Claim).
+	if err := r.restoreOwned(g); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if err := r.dropStaleVIPs(g); err != nil {
+		// Nothing is running yet: close the socket and fail the start, so
+		// Start rolls back the groups already started. A stale VIP that
+		// could not be removed stays recorded as a failed release, and the
+		// runner is returned so Start keeps it pending for Stop or the next
+		// Start to retry (Group.Shutdown releases in Initialize only when
+		// releaseErr is set).
+		_ = conn.Close()
+		if len(r.owned) > 0 || len(r.stale) > 0 {
+			g.releaseErr = err
+			return r, err
+		}
+		return nil, err
+	}
 	now := s.clock.Now()
 	r.mu.Lock()
 	err = g.Startup(now)
@@ -272,6 +377,98 @@ func (s *Speaker) startGroup(ctx context.Context, gc GroupConfig) (*runner, erro
 	go r.receive(recvCtx)
 	go r.run()
 	return r, nil
+}
+
+// dropStaleVIPs removes, before Startup, every VIP a non-owner finds on
+// its interface: a fresh runner owns nothing, so such an address is one a
+// crashed master left. A non-owner starts in Backup and, while a peer stays
+// master, never claims, so a stale VIP would keep answering ARP/ND for the
+// peer's address (Codex #1716 round 4). A priority-255 owner's address is
+// its own and stays. Without an AddressReader nothing can be seen, so
+// nothing is removed. A failed check or removal fails the start (ruling
+// 673, Codex #1716 round 5): a backup that cannot prove its interface free
+// of the master's VIP must not run, so the supervisor restarts the speaker
+// instead of a backup answering for the VIP while Health shows no error.
+// A VIP whose removal failed stays pending (see ReleasePending), and Stop
+// or the next Start retries it.
+func (r *runner) dropStaleVIPs(g *Group) error {
+	reader, ok := r.speaker.deps.Programmer.(AddressReader)
+	if !ok || g.Priority() == PriorityOwner {
+		return nil
+	}
+	lister, lists := r.speaker.deps.Programmer.(PrefixReader)
+	hw := VirtualMAC(g.family, g.cfg.VRID)
+	stale := false
+	for _, p := range g.prefixes {
+		if !lists {
+			present, err := reader.HasAddress(g.cfg.Interface, p)
+			if err != nil {
+				return &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "list", Address: p, Cause: err}
+			}
+			if present {
+				// Owned before the fallible record, so a failed write
+				// still leaves the VIP pending for Stop to remove.
+				r.owned[p] = true
+				if err := r.speaker.deps.Inventory.Record(g.cfg.Interface, g.cfg.VRID, p); err != nil {
+					return err
+				}
+				stale = true
+			}
+			continue
+		}
+		// Match by address: a crashed master may have installed the VIP
+		// with the prefix length of an older configuration.
+		installed, err := lister.AddressPrefixes(g.cfg.Interface, p.Addr())
+		if err != nil {
+			return &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "list", Address: p, Cause: err}
+		}
+		for _, q := range installed {
+			if q == p {
+				// Owned before the fallible record, so a failed write
+				// still leaves the VIP pending for Stop to remove.
+				r.owned[p] = true
+				if err := r.speaker.deps.Inventory.Record(g.cfg.Interface, g.cfg.VRID, p); err != nil {
+					return err
+				}
+				stale = true
+				continue
+			}
+			if err := r.speaker.deps.Programmer.DeleteAddress(g.cfg.Interface, q, hw); err != nil {
+				r.stale = append(r.stale, q)
+				if rerr := r.speaker.deps.Inventory.Record(g.cfg.Interface, g.cfg.VRID, q); rerr != nil {
+					r.speaker.logger.Warn("fhrp: VIP inventory record failed", slog.Any("error", rerr))
+				}
+				return &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "delete", Address: q, Cause: err}
+			}
+		}
+	}
+	if stale {
+		return r.Release(g)
+	}
+	return nil
+}
+
+// restoreOwned marks as owned every configured prefix of g the inventory
+// says this node installed, so a runner restarted after a crash releases on
+// demotion or Stop the VIPs its predecessor added, rather than Claim taking
+// one still on the interface for a priority-255 owner's permanent address.
+// Without an inventory nothing is restored.
+func (r *runner) restoreOwned(g *Group) error {
+	entries, err := r.speaker.deps.Inventory.Entries()
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Interface != g.cfg.Interface || e.VRID != g.cfg.VRID {
+			continue
+		}
+		for _, p := range g.prefixes {
+			if p == e.Prefix {
+				r.owned[p] = true
+			}
+		}
+	}
+	return nil
 }
 
 // stop ends the loops, performs the group's Shutdown and closes the socket.
@@ -294,6 +491,7 @@ func (r *runner) status() GroupStatus {
 	return GroupStatus{
 		VRID: g.cfg.VRID, Interface: g.cfg.Interface, Family: g.family, State: g.state,
 		Priority: g.Priority(), Addresses: g.Addresses(), Transitions: g.transitions, LastError: g.lastErr,
+		ClaimError:   g.claimErr,
 		NextDeadline: g.NextDeadline(),
 	}
 }
@@ -458,10 +656,34 @@ func (r *runner) Advertise(g *Group, priority uint8) error {
 // Claim implements Actuator.
 func (r *runner) Claim(g *Group) error {
 	hw := VirtualMAC(g.family, g.cfg.VRID)
+	if r.owned == nil {
+		r.owned = make(map[netip.Prefix]bool)
+	}
+	reader, _ := r.speaker.deps.Programmer.(AddressReader)
 	for _, p := range g.prefixes {
+		// Only a priority-255 address owner holds a VIP as its own
+		// permanent address. For any other group a VIP already on the
+		// interface is one a crashed master left behind: adopt it
+		// (AddAddress replaces idempotently) so it is released later.
+		if !r.owned[p] && reader != nil && g.Priority() == PriorityOwner {
+			present, err := reader.HasAddress(g.cfg.Interface, p)
+			if err != nil {
+				return &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "list", Address: p, Cause: err}
+			}
+			if present {
+				// The owner's preexisting address: leave it in place.
+				continue
+			}
+		}
+		// Recorded before it is added, so a crash between the two leaves
+		// at most an entry for an address that is not there.
+		if err := r.speaker.deps.Inventory.Record(g.cfg.Interface, g.cfg.VRID, p); err != nil {
+			return err
+		}
 		if err := r.speaker.deps.Programmer.AddAddress(g.cfg.Interface, p, hw); err != nil {
 			return &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "add", Address: p, Cause: err}
 		}
+		r.owned[p] = true
 	}
 	for _, p := range g.prefixes {
 		if err := r.speaker.deps.Programmer.Announce(g.cfg.Interface, p.Addr(), hw); err != nil {
@@ -475,10 +697,49 @@ func (r *runner) Claim(g *Group) error {
 func (r *runner) Release(g *Group) error {
 	hw := VirtualMAC(g.family, g.cfg.VRID)
 	var first error
+	_, reads := r.speaker.deps.Programmer.(AddressReader)
 	for _, p := range g.prefixes {
-		if err := r.speaker.deps.Programmer.DeleteAddress(g.cfg.Interface, p, hw); err != nil && first == nil {
-			first = &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "delete", Address: p, Cause: err}
+		// The owner's preexisting prefix is never ours to delete (Claim
+		// adopts a stale VIP for any other group). Without an
+		// AddressReader every prefix counts as owned, as before.
+		if reads && !r.owned[p] {
+			continue
 		}
+		// A missing interface took its addresses with it (as in
+		// Inventory.Sweep): the release is complete.
+		if err := r.speaker.deps.Programmer.DeleteAddress(g.cfg.Interface, p, hw); err != nil && !linkGone(err) {
+			if first == nil {
+				first = &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "delete", Address: p, Cause: err}
+			}
+			continue
+		}
+		delete(r.owned, p)
+		r.forget(g, p)
+	}
+	// Prefixes of another length a failed stale removal left behind.
+	kept := r.stale[:0]
+	for _, q := range r.stale {
+		if err := r.speaker.deps.Programmer.DeleteAddress(g.cfg.Interface, q, hw); err != nil && !linkGone(err) {
+			kept = append(kept, q)
+			if first == nil {
+				first = &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "delete", Address: q, Cause: err}
+			}
+			continue
+		}
+		r.forget(g, q)
+	}
+	r.stale = kept
+	if len(r.stale) == 0 {
+		r.stale = nil
 	}
 	return first
+}
+
+// forget drops a deleted VIP from the inventory. The address is already
+// gone, so a failed rewrite is logged: the stale entry only makes a later
+// sweep delete an absent address, which succeeds.
+func (r *runner) forget(g *Group, p netip.Prefix) {
+	if err := r.speaker.deps.Inventory.Forget(g.cfg.Interface, g.cfg.VRID, p); err != nil {
+		r.speaker.logger.Warn("fhrp: VIP inventory forget failed", slog.Any("error", err))
+	}
 }

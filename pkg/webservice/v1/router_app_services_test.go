@@ -93,7 +93,7 @@ func TestAppServiceRoutes_ReachTheSharedServers(t *testing.T) {
 	messaging := &countingMessagingServer{}
 	objects := &countingObjectStorageServer{}
 	registry := &testHandlerRegistry{
-		tokenHandler: &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"},
+		tokenHandler: &allScopesSessionAuth{sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"}},
 		appServices:  restapi.AppServiceServers{Cache: cache, Scheduler: scheduler, Messaging: messaging, ObjectStorage: objects},
 	}
 
@@ -172,7 +172,37 @@ func TestScopeRouteGuard(t *testing.T) {
 		assert.Equal(t, http.StatusTeapot, serve(guard, "cache:read"))
 		assert.Equal(t, http.StatusForbidden, serve(guard, "cache:write"))
 	})
-	t.Run("without an authorizer the role gate alone decides", func(t *testing.T) {
-		assert.Equal(t, http.StatusTeapot, serve(scopeRouteGuard{}, "cache:write"))
+	t.Run("without an authorizer the route refuses", func(t *testing.T) {
+		assert.Equal(t, http.StatusForbidden, serve(scopeRouteGuard{}, "cache:read"))
+		assert.Equal(t, http.StatusForbidden, serve(scopeRouteGuard{}, "cache:write"))
 	})
+}
+
+// allScopesSessionAuth is an admin session whose token middleware is also a
+// ScopeAuthorizer granting every scope, so the routes reach their servers.
+type allScopesSessionAuth struct {
+	sessionAuth
+}
+
+func (s *allScopesSessionAuth) RequireScope(string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler { return next }
+}
+
+// TestAppServiceRoutes_RefusedWithoutAScopeAuthorizer pins #1990: an admin
+// session under a token handler that checks no scopes is refused on every
+// application service route, and no server is reached.
+func TestAppServiceRoutes_RefusedWithoutAScopeAuthorizer(t *testing.T) {
+	cache := &countingCacheServer{}
+	scheduler := &countingSchedulerServer{}
+	messaging := &countingMessagingServer{}
+	objects := &countingObjectStorageServer{}
+	registry := &testHandlerRegistry{
+		tokenHandler: &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"},
+		appServices:  restapi.AppServiceServers{Cache: cache, Scheduler: scheduler, Messaging: messaging, ObjectStorage: objects},
+	}
+
+	for _, target := range appServiceProbes {
+		assert.Equal(t, http.StatusForbidden, appServiceServing(t, registry, target), target)
+	}
+	assert.Zero(t, cache.calls+scheduler.calls+messaging.calls+objects.calls)
 }

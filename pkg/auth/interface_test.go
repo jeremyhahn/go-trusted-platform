@@ -29,6 +29,7 @@ func TestIdentityField_String(t *testing.T) {
 		{IdentityFieldSerialNumber, "serial_number"},
 		{IdentityFieldSubjectDN, "subject_dn"},
 		{IdentityFieldOrganization, "organization"},
+		{IdentityFieldOrganizationalUnit, "organizational_unit"},
 		{IdentityField(99), "unknown"},
 	}
 
@@ -183,8 +184,8 @@ func TestDefaultMTLSConfig(t *testing.T) {
 	if config.IdentityField != IdentityFieldEmail {
 		t.Errorf("DefaultMTLSConfig IdentityField = %v, want %v", config.IdentityField, IdentityFieldEmail)
 	}
-	if config.TenantField != IdentityFieldOrganization {
-		t.Errorf("DefaultMTLSConfig TenantField = %v, want %v", config.TenantField, IdentityFieldOrganization)
+	if config.TenantField != IdentityFieldOrganizationalUnit {
+		t.Errorf("DefaultMTLSConfig TenantField = %v, want %v", config.TenantField, IdentityFieldOrganizationalUnit)
 	}
 	if !config.RequireClientAuth {
 		t.Error("DefaultMTLSConfig RequireClientAuth should be true")
