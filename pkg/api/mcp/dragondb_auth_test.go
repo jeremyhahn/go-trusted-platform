@@ -71,9 +71,8 @@ func TestNewQuicBaaSAuthAdapter(t *testing.T) {
 		pepClient := &mockPEPClient{}
 
 		adapter := NewQuicBaaSAuthAdapter(&QuicBaaSAuthConfig{
-			TokenValidator:  validator,
-			PEPClient:       pepClient,
-			DefaultTenantID: "default-tenant",
+			TokenValidator: validator,
+			PEPClient:      pepClient,
 		})
 
 		if adapter.tokenValidator != validator {
@@ -81,9 +80,6 @@ func TestNewQuicBaaSAuthAdapter(t *testing.T) {
 		}
 		if adapter.pepClient != pepClient {
 			t.Error("PEP client not set")
-		}
-		if adapter.defaultTenantID != "default-tenant" {
-			t.Errorf("defaultTenantID = %s, want default-tenant", adapter.defaultTenantID)
 		}
 	})
 }
@@ -592,15 +588,6 @@ func TestQuicBaaSAuthAdapter_HelperMethods(t *testing.T) {
 		})
 		if !adapter.HasPEPClient() {
 			t.Error("expected HasPEPClient to return true")
-		}
-	})
-
-	t.Run("SetDefaultTenantID", func(t *testing.T) {
-		adapter := NewQuicBaaSAuthAdapter(nil)
-		adapter.SetDefaultTenantID("new-tenant")
-
-		if adapter.defaultTenantID != "new-tenant" {
-			t.Errorf("defaultTenantID = %s, want new-tenant", adapter.defaultTenantID)
 		}
 	})
 
