@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { usePlatformClient, type ApiResponse } from "trusted-platform-sdk";
 
 // The wire shapes mirror the SDK's BMCService types (sdk/javascript
 // src/services/bmc-service.ts). They are declared here so the console does
@@ -104,42 +105,45 @@ export function bmcUrl(profileID: string, op: string): string {
   return `/api/v1/bmc/${encodeURIComponent(profileID)}/${op}`;
 }
 
-/** Unwraps the platform envelope, or throws its error message */
-async function call<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    credentials: "include",
-    ...init,
-    headers: init?.body ? { "Content-Type": "application/json" } : undefined,
-  });
-  const text = await res.text();
-  let body: unknown = null;
-  try {
-    body = text ? JSON.parse(text) : null;
-  } catch {
-    body = null;
+/** The SDK's BMCService, as the platform client carries it */
+type BMCClient = ReturnType<typeof usePlatformClient>["bmc"];
+
+/** Unwraps an SDK ApiResponse, or throws the server's error message */
+async function unwrap<T>(pending: ApiResponse<T> | Promise<ApiResponse<T>>): Promise<T> {
+  const res = await pending;
+  if (!res.success) {
+    throw new Error(res.error?.message || "BMC request failed");
   }
-  const envelope = (body ?? {}) as { payload?: unknown; error?: string; message?: string };
-  if (!res.ok) {
-    throw new Error(envelope.error || envelope.message || `HTTP ${res.status}`);
-  }
-  return (envelope.payload ?? body) as T;
+  return res.data as T;
 }
 
 /**
- * useBMC reads and drives one BMC profile through the
- * `/api/v1/bmc/{profileID}/...` routes. Only the newest load is applied, and
+ * useBMC reads and drives one BMC profile through the SDK's BMCService
+ * (`usePlatformClient().bmc`, the `/api/v1/bmc/{profileID}/...` routes). Only the newest load is applied, and
  * a mutation drops every read started before it, so an older refresh that
  * finishes last never overwrites the state read after the mutation.
  */
 export function useBMC(profileID: string): UseBMCResult {
   const [loaded, setLoaded] = React.useState<LoadedBMC | null>(null);
   const generation = React.useRef(0);
+  // The client object may differ per render; the callbacks read the
+  // newest one so their identities, and the load effect, stay stable.
+  const client = usePlatformClient().bmc;
+  const service = React.useRef<BMCClient>(client);
+  // The profile the hook shows now: a mutation started for an earlier
+  // profile must not refresh that profile over this one.
+  const currentProfile = React.useRef(profileID);
+  // Synced after each commit, before the load effect below runs.
+  React.useEffect(() => {
+    service.current = client;
+    currentProfile.current = profileID;
+  });
 
   const apply = React.useCallback((next: LoadedBMC) => setLoaded(next), []);
 
   const load = React.useCallback(async () => {
     const g = ++generation.current;
-    const next = await loadBMC(profileID);
+    const next = await loadBMC(service.current, profileID);
     if (g === generation.current) {
       apply(next);
     }
@@ -149,9 +153,10 @@ export function useBMC(profileID: string): UseBMCResult {
     if (!profileID) {
       return;
     }
+    const gen = generation;
     void load();
     return () => {
-      generation.current++;
+      gen.current++;
     };
   }, [profileID, load]);
 
@@ -161,19 +166,12 @@ export function useBMC(profileID: string): UseBMCResult {
     }
   }, [profileID, load]);
 
-  // The profile the hook shows now: a mutation started for an earlier
-  // profile must not refresh that profile over this one.
-  const currentProfile = React.useRef(profileID);
-  currentProfile.current = profileID;
 
   const mutate = React.useCallback(
-    async (op: string, method: "POST" | "DELETE", body?: unknown) => {
+    async (send: (bmc: BMCClient, id: string) => Promise<ApiResponse<unknown>>) => {
       generation.current++;
       try {
-        await call<unknown>(bmcUrl(profileID, op), {
-          method,
-          body: body === undefined ? undefined : JSON.stringify(body),
-        });
+        await unwrap(send(service.current, profileID));
       } finally {
         // The bump above discarded any read in flight, the initial load
         // included: reload even when the mutation failed, or isLoading
@@ -193,11 +191,11 @@ export function useBMC(profileID: string): UseBMCResult {
     isLoading: current === null,
     errors: current?.errors ?? {},
     refetch,
-    setBootDevice: (request) => mutate("boot-device", "POST", request),
-    mountISO: (isoURL) => mutate("virtual-media", "POST", { iso_url: isoURL }),
-    unmountISO: () => mutate("virtual-media", "DELETE"),
-    provision: () => mutate("provision", "POST", {}),
-    powerAction: (action) => mutate("power", "POST", { action }),
+    setBootDevice: (request) => mutate((bmc, id) => bmc.setBootDevice(id, request)),
+    mountISO: (isoURL) => mutate((bmc, id) => bmc.mountISO(id, { iso_url: isoURL })),
+    unmountISO: () => mutate((bmc, id) => bmc.unmountISO(id)),
+    provision: () => mutate((bmc, id) => bmc.provision(id)),
+    powerAction: (action) => mutate((bmc, id) => bmc.powerAction(id, action)),
   };
 }
 
@@ -208,18 +206,20 @@ interface LoadedBMC {
 }
 
 /** loadBMC reads every part of one profile; a failed part is an error, not a throw */
-async function loadBMC(profileID: string): Promise<LoadedBMC> {
-  const parts: Array<[BMCPart, string, (v: unknown) => unknown]> = [
-    ["power", "power", (v) => v],
-    ["bootDevice", "boot-device", (v) => v],
-    ["virtualMedia", "virtual-media", (v) => v],
-    ["sensors", "sensors", (v) => (Array.isArray(v) ? (v as BMCSensor[]) : [])],
-    ["systemInfo", "system-info", (v) => v],
-    ["provisionStatus", "provision", (v) => v],
-    ["certificate", "cert", (v) => v],
+async function loadBMC(bmc: BMCClient, profileID: string): Promise<LoadedBMC> {
+  const parts: Array<[BMCPart, () => Promise<ApiResponse<unknown>>, (v: unknown) => unknown]> = [
+    ["power", () => bmc.getPowerStatus(profileID), (v) => v],
+    ["bootDevice", () => bmc.getBootDevice(profileID), (v) => v],
+    ["virtualMedia", () => bmc.getVirtualMediaStatus(profileID), (v) => v],
+    ["sensors", () => bmc.getSensors(profileID), (v) => (Array.isArray(v) ? (v as BMCSensor[]) : [])],
+    ["systemInfo", () => bmc.getSystemInfo(profileID), (v) => v],
+    ["provisionStatus", () => bmc.getProvisionStatus(profileID), (v) => v],
+    ["certificate", () => bmc.getWebCertificate(profileID), (v) => v],
   ];
+  // Each read starts inside its own promise, so one that throws before it
+  // answers is that part's error, not a failed load.
   const results = await Promise.allSettled(
-    parts.map(([, op, pick]) => call<unknown>(bmcUrl(profileID, op)).then(pick))
+    parts.map(([, read, pick]) => Promise.resolve().then(read).then(unwrap).then(pick))
   );
   const state: BMCState = { ...EMPTY };
   const errors: Partial<Record<BMCPart, string>> = {};

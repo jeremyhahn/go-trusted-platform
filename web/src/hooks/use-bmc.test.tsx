@@ -5,8 +5,8 @@ import { useBMC } from "./use-bmc";
 
 /**
  * useBMC reads the BMC REST routes in the server's JSON shapes
- * (pkg/webservice/v1/bmc/types.go, pkg/bmc/types.go) and mounts an ISO
- * with the iso_url the handler requires (#1736).
+ * (pkg/webservice/v1/bmc/types.go, pkg/bmc/types.go) through the SDK's
+ * BMCService and mounts an ISO with the iso_url the handler requires (#1736).
  */
 
 /** The numeric device-profile ID the server routes take. */
@@ -43,30 +43,56 @@ const PAYLOADS: Record<string, unknown> = {
   },
 };
 
-type FetchCall = { url: string; init?: RequestInit };
+/** One BMC call as the SDK service saw it: the route op, the method and the body */
+interface Call {
+  profile: string;
+  op: string;
+  method: "GET" | "POST" | "DELETE";
+  body?: unknown;
+}
+
+type Envelope = { success: boolean; data?: unknown; error?: { code: string; message: string } };
+type Handler = (call: Call) => Promise<Envelope>;
+
+const sdk = vi.hoisted(() => ({ handler: undefined as unknown as Handler }));
+
+/** Every BMCService method routes to sdk.handler with its route op */
+vi.mock("trusted-platform-sdk", () => {
+  const send = (profile: string, op: string, method: Call["method"], body?: unknown) =>
+    sdk.handler({ profile, op, method, body });
+  const bmc = {
+    getPowerStatus: (id: string) => send(id, "power", "GET"),
+    powerAction: (id: string, action: string) => send(id, "power", "POST", { action }),
+    getBootDevice: (id: string) => send(id, "boot-device", "GET"),
+    setBootDevice: (id: string, request: unknown) => send(id, "boot-device", "POST", request),
+    getVirtualMediaStatus: (id: string) => send(id, "virtual-media", "GET"),
+    mountISO: (id: string, request: unknown) => send(id, "virtual-media", "POST", request),
+    unmountISO: (id: string) => send(id, "virtual-media", "DELETE"),
+    getSensors: (id: string) => send(id, "sensors", "GET"),
+    getSystemInfo: (id: string) => send(id, "system-info", "GET"),
+    provision: (id: string) => send(id, "provision", "POST", {}),
+    getProvisionStatus: (id: string) => send(id, "provision", "GET"),
+    getWebCertificate: (id: string) => send(id, "cert", "GET"),
+  };
+  return { usePlatformClient: () => ({ bmc }) };
+});
+
+const ok = (data: unknown): Envelope => ({ success: true, data });
+const fail = (message: string): Envelope => ({ success: false, error: { code: "BMC_ERROR", message } });
 
 describe("useBMC", () => {
-  let calls: FetchCall[];
+  let calls: Call[];
 
   beforeEach(() => {
     calls = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        calls.push({ url, init });
-        const op = url.split("/").pop() ?? "";
-        const payload = init?.method && init.method !== "GET" ? { success: true } : PAYLOADS[op];
-        return new Response(JSON.stringify({ success: true, payload }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      })
-    );
+    sdk.handler = async (call) => {
+      calls.push(call);
+      return ok(call.method !== "GET" ? { success: true } : PAYLOADS[call.op]);
+    };
   });
 
   afterEach(() => {
     cleanup();
-    vi.unstubAllGlobals();
   });
 
   it("reads every part in the server's shapes", async () => {
@@ -85,9 +111,10 @@ describe("useBMC", () => {
     const { result } = renderHook(() => useBMC(PROFILE_ID));
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     await act(() => result.current.mountISO("installer.iso"));
-    const post = calls.find((c) => c.init?.method === "POST");
-    expect(post?.url).toBe("/api/v1/bmc/1/virtual-media");
-    expect(post?.init?.body).toBe('{"iso_url":"installer.iso"}');
+    const post = calls.find((c) => c.method === "POST");
+    expect(post?.profile).toBe(PROFILE_ID);
+    expect(post?.op).toBe("virtual-media");
+    expect(post?.body).toEqual({ iso_url: "installer.iso" });
   });
 
   it.each(["on", "off", "reset", "cycle"] as const)(
@@ -95,12 +122,12 @@ describe("useBMC", () => {
     async (action) => {
       const { result } = renderHook(() => useBMC(PROFILE_ID));
       await waitFor(() => expect(result.current.isLoading).toBe(false));
-      const readsBefore = calls.filter((c) => c.url.endsWith("/power") && (c.init?.method ?? "GET") === "GET").length;
+      const readsBefore = calls.filter((c) => c.op === "power" && c.method === "GET").length;
       await act(() => result.current.powerAction(action));
-      const post = calls.find((c) => c.init?.method === "POST");
-      expect(post?.url).toBe("/api/v1/bmc/1/power");
-      expect(post?.init?.body).toBe(JSON.stringify({ action }));
-      const readsAfter = calls.filter((c) => c.url.endsWith("/power") && (c.init?.method ?? "GET") === "GET").length;
+      const post = calls.find((c) => c.method === "POST");
+      expect(post?.op).toBe("power");
+      expect(post?.body).toEqual({ action });
+      const readsAfter = calls.filter((c) => c.op === "power" && c.method === "GET").length;
       expect(readsAfter).toBeGreaterThan(readsBefore);
     }
   );
@@ -108,17 +135,10 @@ describe("useBMC", () => {
   it("powerAction surfaces the server's refusal", async () => {
     const { result } = renderHook(() => useBMC(PROFILE_ID));
     await waitFor(() => expect(result.current.isLoading).toBe(false));
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        calls.push({ url, init });
-        if (init?.method === "POST") {
-          return new Response(JSON.stringify({ error: "bmc unreachable" }), { status: 502 });
-        }
-        const op = url.split("/").pop() ?? "";
-        return new Response(JSON.stringify({ success: true, payload: PAYLOADS[op] }), { status: 200 });
-      })
-    );
+    sdk.handler = async (call) => {
+      calls.push(call);
+      return call.method === "POST" ? fail("bmc unreachable") : ok(PAYLOADS[call.op]);
+    };
     await expect(act(() => result.current.powerAction("off"))).rejects.toThrow("bmc unreachable");
   });
 
@@ -127,33 +147,23 @@ describe("useBMC", () => {
     let release!: () => void;
     const held = new Promise<void>((r) => (release = r));
     let holdNext = false;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        const op = url.split("/").pop() ?? "";
-        const method = init?.method ?? "GET";
-        let payload: unknown;
-        if (method !== "GET") {
-          if (op === "virtual-media" && method === "POST") {
-            mounted = true;
-          }
-          payload = { success: true };
-        } else if (op === "virtual-media") {
-          const snapshot = { mounted, image_url: mounted ? "installer.iso" : undefined };
-          if (holdNext) {
-            holdNext = false;
-            await held;
-          }
-          payload = snapshot;
-        } else {
-          payload = PAYLOADS[op];
+    sdk.handler = async ({ op, method }) => {
+      if (method !== "GET") {
+        if (op === "virtual-media" && method === "POST") {
+          mounted = true;
         }
-        return new Response(JSON.stringify({ success: true, payload }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      })
-    );
+        return ok({ success: true });
+      }
+      if (op === "virtual-media") {
+        const snapshot = { mounted, image_url: mounted ? "installer.iso" : undefined };
+        if (holdNext) {
+          holdNext = false;
+          await held;
+        }
+        return ok(snapshot);
+      }
+      return ok(PAYLOADS[op]);
+    };
 
     const { result } = renderHook(() => useBMC(PROFILE_ID));
     await waitFor(() => expect(result.current.isLoading).toBe(false));
@@ -180,27 +190,16 @@ describe("useBMC", () => {
     let release!: () => void;
     const held = new Promise<void>((r) => (release = r));
     let holdFirst = true;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        const op = url.split("/").pop() ?? "";
-        const method = init?.method ?? "GET";
-        if (method !== "GET") {
-          return new Response(JSON.stringify({ success: false, error: "BMC unreachable" }), {
-            status: 502,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-        if (op === "power" && holdFirst) {
-          holdFirst = false;
-          await held;
-        }
-        return new Response(JSON.stringify({ success: true, payload: PAYLOADS[op] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      })
-    );
+    sdk.handler = async ({ op, method }) => {
+      if (method !== "GET") {
+        return fail("BMC unreachable");
+      }
+      if (op === "power" && holdFirst) {
+        holdFirst = false;
+        await held;
+      }
+      return ok(PAYLOADS[op]);
+    };
 
     const { result } = renderHook(() => useBMC(PROFILE_ID));
     expect(result.current.isLoading).toBe(true);
@@ -224,30 +223,16 @@ describe("useBMC", () => {
     let release!: () => void;
     const held = new Promise<void>((r) => (release = r));
     const reads: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        const parts = url.split("/");
-        const op = parts.pop() ?? "";
-        const profile = parts.pop() ?? "";
-        const method = init?.method ?? "GET";
-        let payload: unknown;
-        if (method !== "GET") {
-          await held;
-          payload = { success: true };
-        } else {
-          reads.push(`${profile}/${op}`);
-          payload =
-            op === "system-info"
-              ? { ...(PAYLOADS[op] as object), product: `profile-${profile}` }
-              : PAYLOADS[op];
-        }
-        return new Response(JSON.stringify({ success: true, payload }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      })
-    );
+    sdk.handler = async ({ profile, op, method }) => {
+      if (method !== "GET") {
+        await held;
+        return ok({ success: true });
+      }
+      reads.push(`${profile}/${op}`);
+      return ok(
+        op === "system-info" ? { ...(PAYLOADS[op] as object), product: `profile-${profile}` } : PAYLOADS[op]
+      );
+    };
 
     const { result, rerender } = renderHook(({ id }) => useBMC(id), {
       initialProps: { id: "1" },
