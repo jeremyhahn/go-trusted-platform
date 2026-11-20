@@ -6,7 +6,7 @@ import { DeviceRouteGate, deviceRouteReason, type DeviceGatedOperation } from ".
 // #2048: device operations an operator session cannot perform render as a
 // disabled control with the reason, never as a live call.
 
-const operations: DeviceGatedOperation[] = ["AttestDevice", "GetProfile", "BootCertificate", "BootDelivery"];
+const operations: DeviceGatedOperation[] = ["AttestDevice"];
 
 describe("DeviceRouteGate", () => {
   afterEach(() => {
@@ -26,8 +26,6 @@ describe("DeviceRouteGate", () => {
 
   it("gives every operation a reason that names why", () => {
     expect(deviceRouteReason("AttestDevice")).toMatch(/replay/i);
-    expect(deviceRouteReason("GetProfile")).toMatch(/client certificate/i);
-    expect(deviceRouteReason("BootCertificate")).toMatch(/machine-facing/i);
-    expect(deviceRouteReason("BootDelivery")).toMatch(/machine-facing/i);
+    expect(deviceRouteReason("AttestDevice")).toMatch(/#2134/);
   });
 });

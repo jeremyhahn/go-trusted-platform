@@ -162,8 +162,7 @@ describe("DeviceLookupPage attestation", () => {
   });
 });
 
-// #2048: the row's operations an operator session cannot perform are gated
-// controls with their reason; GetProfile by ID is a live lookup.
+// #2048: AttestDevice is a gated control with its reason (#2134); the device-facing routes have no control (ruling 1042); GetProfile by ID is a live lookup.
 describe("DeviceLookupPage device operations", () => {
   const rowFetch = vi.fn<typeof fetch>();
 
@@ -196,22 +195,32 @@ describe("DeviceLookupPage device operations", () => {
     cleanup();
   });
 
-  it.each([
-    ["Verify attestation", "AttestDevice"],
-    ["Load device profile", "GetProfile"],
-    ["Fetch boot certificate", "BootCertificate"],
-    ["Request boot delivery", "BootDelivery"],
-  ])("gates %s off with its reason and sends nothing", (name, operation) => {
+  it("gates Verify attestation off with its reason (#2134) and sends nothing", () => {
     renderPage();
 
-    const button = screen.getByRole("button", { name });
+    const button = screen.getByRole("button", { name: "Verify attestation" });
     expect(button).toHaveProperty("disabled", true);
-    expect(screen.getByTestId(`device-gate-${operation}`).textContent).toMatch(/\w/);
+    expect(screen.getByTestId("device-gate-AttestDevice").textContent).toMatch(/#2134/);
     fireEvent.click(button);
-    const sent = rowFetch.mock.calls.filter(([input]) => {
-      const path = new URL(String(input)).pathname;
-      return /\/attest$|\/device\/profile$|\/device\/boot/.test(path);
-    });
+    const sent = rowFetch.mock.calls.filter(([input]) => /\/attest$/.test(new URL(String(input)).pathname));
+    expect(sent).toEqual([]);
+  });
+
+  // Ruling 1042: GET /device/profile, POST /device/boot/certificate and
+  // POST /device/boot are served only to the device over its own mTLS
+  // connection. They are not operator actions, so the page offers no control.
+  it("offers no device-facing control and calls no device-facing route", () => {
+    renderPage();
+
+    for (const name of ["Load device profile", "Fetch boot certificate", "Request boot delivery"]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+    for (const operation of ["GetProfile", "BootCertificate", "BootDelivery"]) {
+      expect(screen.queryByTestId(`device-gate-${operation}`)).toBeNull();
+    }
+    const sent = rowFetch.mock.calls.filter(([input]) =>
+      /\/device\/profile$|\/device\/boot/.test(new URL(String(input)).pathname)
+    );
     expect(sent).toEqual([]);
   });
 

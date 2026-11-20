@@ -25,9 +25,9 @@ const test = base.extend<Fx>({
 // (no route mocks) and every assertion reads what the server answered.
 //
 // Gated off, by design (DeviceRouteGate): AttestDevice (pasted evidence
-// replays, #2024 Codex round 4 P1), GetProfile over /device/profile (needs
-// the device's client certificate), BootCertificate and BootDelivery
-// (machine-facing, the diskless node's own connection).
+// replays, #2134). Not-UI, so the page offers no control: GetProfile over
+// /device/profile, BootCertificate and BootDelivery (served only to the
+// device over its own mTLS connection, ruling 1042).
 
 function unique(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -144,17 +144,18 @@ test.describe('device operations (real server)', () => {
     }
   });
 
-  test('machine-facing and replayable operations are gated off with their reason', async ({ adminPage }) => {
+  test('attestation is gated off with its reason; device-facing operations have no control', async ({ adminPage }) => {
     await adminPage.goto('/devices/lookup');
 
-    for (const [name, operation] of [
-      ['Verify attestation', 'AttestDevice'],
-      ['Load device profile', 'GetProfile'],
-      ['Fetch boot certificate', 'BootCertificate'],
-      ['Request boot delivery', 'BootDelivery'],
-    ] as const) {
+    for (const [name, operation] of [['Verify attestation', 'AttestDevice']] as const) {
       await expect(adminPage.getByRole('button', { name })).toBeDisabled();
       await expect(adminPage.getByTestId(`device-gate-${operation}`)).not.toBeEmpty();
+    }
+    for (const name of ['Load device profile', 'Fetch boot certificate', 'Request boot delivery']) {
+      await expect(adminPage.getByRole('button', { name })).toHaveCount(0);
+    }
+    for (const operation of ['GetProfile', 'BootCertificate', 'BootDelivery']) {
+      await expect(adminPage.getByTestId(`device-gate-${operation}`)).toHaveCount(0);
     }
   });
 });
