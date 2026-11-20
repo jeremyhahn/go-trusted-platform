@@ -53,6 +53,19 @@ func TestToQuicBaaSConfig_AdminEnrollmentPassthrough(t *testing.T) {
 	assert.Equal(t, "/dev/hidraw0", cfg.Auth.PasskeyDevice)
 }
 
+// TestToQuicBaaSConfig_WebAuthnAttestationRootsPassthrough: without
+// iam.webauthn.attestation_roots_file no authenticator can prove it is
+// hardware, so the embedded server refuses every administrative WebAuthn
+// enrollment (a self-service registrant becomes its tenant's admin). The
+// platform key must reach the embedded config verbatim; unset stays empty.
+func TestToQuicBaaSConfig_WebAuthnAttestationRootsPassthrough(t *testing.T) {
+	c := adminEnrollmentConfig(t)
+	assert.Empty(t, c.ToQuicBaaSConfig().IAM.WebAuthn.AttestationRootsFile)
+
+	c.WebAuthnAttestationRootsFile = "/etc/platform/fido-roots.pem"
+	assert.Equal(t, "/etc/platform/fido-roots.pem", c.ToQuicBaaSConfig().IAM.WebAuthn.AttestationRootsFile)
+}
+
 // TestToQuicBaaSConfig_AdminEnrollmentDefaultsEmpty is the other half: an
 // operator who configures none of this must get exactly the upstream
 // default (path A), not a platform-invented one. An empty value has to mean

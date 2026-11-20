@@ -23,21 +23,19 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The race job runs on the persistent bigdisk runner only for code from this
-// repository: a push to main or a same-repository pull request. Fork code
-// on that runner could persist across jobs, so everything else gets a
-// hosted runner. These tests evaluate race's runs-on expression, not just
-// look for the label in it.
+// The race job runs on a GitHub-hosted standard runner on every event (owner
+// ruling 999): it exceeds no hosted limit, so neither a push to main nor a
+// same-repository pull request takes the persistent bigdisk runner (the
+// m2403/m2406 route), and fork code never reaches it. These tests evaluate
+// race's runs-on, an expression or a plain label, not just look for the
+// label in it.
 
 const (
 	raceJobID      = "race"
 	raceRepository = "jeremyhahn/go-trusted-platform"
 )
 
-var (
-	bigdiskLabels = []string{"self-hosted", "linux", "x64", "bigdisk"}
-	hostedLabels  = []string{"ubuntu-latest"}
-)
+var hostedLabels = []string{"ubuntu-latest"}
 
 // ghContext is the slice of the GitHub context race's runs-on reads.
 type ghContext map[string]string
@@ -289,9 +287,9 @@ type raceRoutingCase struct {
 }
 
 var raceRoutingCases = []raceRoutingCase{
-	{"push to main", "push", "refs/heads/main", "", bigdiskLabels},
+	{"push to main", "push", "refs/heads/main", "", hostedLabels},
 	{"push to another branch", "push", "refs/heads/feature", "", hostedLabels},
-	{"same-repository pull request", "pull_request", "refs/pull/1/merge", raceRepository, bigdiskLabels},
+	{"same-repository pull request", "pull_request", "refs/pull/1/merge", raceRepository, hostedLabels},
 	{"fork pull request", "pull_request", "refs/pull/1/merge", "someone/go-trusted-platform", hostedLabels},
 	{"workflow_dispatch on main", "workflow_dispatch", "refs/heads/main", "", hostedLabels},
 	{"schedule on main", "schedule", "refs/heads/main", "", hostedLabels},
@@ -333,7 +331,7 @@ func raceJob(t *testing.T, wf ciWorkflow) ciJob {
 	return ciJob{}
 }
 
-func TestRaceRunsOnTheBigdiskRunnerOnlyForThisRepositorysCode(t *testing.T) {
+func TestRaceRunsOnAHostedRunnerOnEveryEvent(t *testing.T) {
 	wf := loadCIWorkflow(t, repoRoot(t), ciWorkflowFile)
 	runsOn := raceJob(t, wf).RunsOn
 	for _, mismatch := range raceRoutingMismatches(runsOn) {
@@ -345,6 +343,12 @@ func TestRaceRoutingRejectsAnUnconditionalBigdiskRunsOn(t *testing.T) {
 	unconditional := `${{ fromJSON('["self-hosted","linux","x64","bigdisk"]') }}`
 	mismatches := raceRoutingMismatches(unconditional)
 	require.Contains(t, mismatches, "fork pull request: runs on [self-hosted linux x64 bigdisk], want [ubuntu-latest]")
+	// The bigdisk route ruling 999 retired sends a push to main and a
+	// same-repository pull request to the pool.
+	routed := raceRoutingMismatches(bigdiskRoute)
+	require.Contains(t, routed, "push to main: runs on [self-hosted linux x64 bigdisk], want [ubuntu-latest]")
+	require.Contains(t, routed, "same-repository pull request: runs on [self-hosted linux x64 bigdisk], want [ubuntu-latest]")
+	require.Empty(t, raceRoutingMismatches("ubuntu-latest"))
 }
 
 func TestResolveRunsOnRejectsUnsupportedExpressions(t *testing.T) {

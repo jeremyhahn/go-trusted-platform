@@ -191,7 +191,7 @@ func TestDNSTools_RequireTheirGRPCScope(t *testing.T) {
 		"dns_zone_dnssec_status": platformv1.DNSService_GetDNSSECStatus_FullMethodName,
 		"dns_register":           platformv1.DNSService_Register_FullMethodName,
 	}
-	permissions := toolPermissionCatalog()
+	permissions := declaredToolPermissions(PlatformTools{})
 
 	for name, method := range want {
 		tool, ok := dnsTools[name]
@@ -218,7 +218,7 @@ func TestDNSTools_AuthorizeByScope(t *testing.T) {
 			authSvc := &mockAuthorizationService{checkFunc: func(_ context.Context, _, r, a string) (bool, error) {
 				return r == resource && a == action, nil
 			}}
-			server := NewServer(newDNSTestProvider(fake), &Config{AuthorizationService: authSvc}, newTestLogger())
+			server := NewServer(newDNSTestProvider(fake), &Config{AuthorizationService: authSvc, AuthManager: legacyCaller(), PEPClient: servicePEP{authSvc}}, newTestLogger())
 
 			resp := callDNSTool(ContextWithToken(context.Background(), "token"), server, name, dnsToolArgs[name])
 
@@ -232,7 +232,7 @@ func TestDNSTools_AuthorizeByScope(t *testing.T) {
 			authSvc := &mockAuthorizationService{checkFunc: func(_ context.Context, _, r, a string) (bool, error) {
 				return r == resource && a != action, nil
 			}}
-			server := NewServer(newDNSTestProvider(fake), &Config{AuthorizationService: authSvc}, newTestLogger())
+			server := NewServer(newDNSTestProvider(fake), &Config{AuthorizationService: authSvc, AuthManager: legacyCaller(), PEPClient: servicePEP{authSvc}}, newTestLogger())
 
 			resp := callDNSTool(ContextWithToken(context.Background(), "token"), server, name, dnsToolArgs[name])
 
@@ -252,7 +252,7 @@ func TestDNSTools_AcceptTheTokenInTheArguments(t *testing.T) {
 			authSvc := &mockAuthorizationService{checkFunc: func(_ context.Context, subject, _, _ string) (bool, error) {
 				return subject == "arg-token", nil
 			}}
-			server := NewServer(newDNSTestProvider(fake), &Config{AuthorizationService: authSvc}, newTestLogger())
+			server := NewServer(newDNSTestProvider(fake), &Config{AuthorizationService: authSvc, AuthManager: tokenSubject(), PEPClient: servicePEP{authSvc}}, newTestLogger())
 
 			resp := callDNSTool(context.Background(), server, "dns_zone_get",
 				map[string]interface{}{"name": "example.internal.", key: "arg-token"})

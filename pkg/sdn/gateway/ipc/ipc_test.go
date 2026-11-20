@@ -20,6 +20,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -105,10 +106,11 @@ func testContext(t *testing.T) context.Context {
 }
 
 // The running process is the caller here, so its own uid is what the
-// kernel reports; a policy admitting it exercises the allow path.
+// kernel reports; a policy admitting it exercises the allow path. It is the
+// `wireguard` process's socket (VPNPlane), so the VPN verbs answer too.
 func selfPolicy() Policy {
 	uid := uint32(os.Getuid())
-	return Policy{ControlUIDs: []uint32{uid}, DatapathUIDs: []uint32{uid}}
+	return Policy{ControlUIDs: []uint32{uid}, DatapathUIDs: []uint32{uid}, VPNPlane: true}
 }
 
 func TestStatus_ReportsStateServicesAndStartError(t *testing.T) {
@@ -201,9 +203,10 @@ func TestApplyDesired_CarriesTheApplyErrorBesideTheState(t *testing.T) {
 // fakeVPNPlanes records the peer RPCs it is handed and answers with a
 // scripted refusal.
 type fakeVPNPlanes struct {
-	refusal   *ipcv1.VPNPeerRefusal
-	installed *ipcv1.VPNPeer
-	removed   *ipcv1.RemoveVPNPeerRequest
+	refusal    *ipcv1.VPNPeerRefusal
+	installed  *ipcv1.VPNPeer
+	removed    *ipcv1.RemoveVPNPeerRequest
+	reconciled *ipcv1.ReconcileVPNPeersRequest
 }
 
 func (f *fakeVPNPlanes) InstallVPNPeer(_ context.Context, req *ipcv1.InstallVPNPeerRequest) *ipcv1.InstallVPNPeerResponse {
@@ -214,6 +217,11 @@ func (f *fakeVPNPlanes) InstallVPNPeer(_ context.Context, req *ipcv1.InstallVPNP
 func (f *fakeVPNPlanes) RemoveVPNPeer(_ context.Context, req *ipcv1.RemoveVPNPeerRequest) *ipcv1.RemoveVPNPeerResponse {
 	f.removed = req
 	return &ipcv1.RemoveVPNPeerResponse{Refusal: f.refusal}
+}
+
+func (f *fakeVPNPlanes) ReconcileVPNPeers(_ context.Context, req *ipcv1.ReconcileVPNPeersRequest) *ipcv1.ReconcileVPNPeersResponse {
+	f.reconciled = req
+	return &ipcv1.ReconcileVPNPeersResponse{Refusal: f.refusal}
 }
 
 func TestVPNPeer_ForwardsToTheHostedPlanes(t *testing.T) {
@@ -240,6 +248,15 @@ func TestVPNPeer_ForwardsToTheHostedPlanes(t *testing.T) {
 	}
 	if removed.GetRefusal() != nil || planes.removed.GetLeaseId() != "l1" || planes.removed.GetDataPlane() != "masque" {
 		t.Fatalf("remove = %v, planes saw %v", removed.GetRefusal(), planes.removed)
+	}
+
+	reconciled, err := client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "masque", LeaseIds: []string{"l2"}})
+	if err != nil {
+		t.Fatalf("ReconcileVPNPeers: %v", err)
+	}
+	if reconciled.GetRefusal() != nil || planes.reconciled.GetDataPlane() != "masque" ||
+		len(planes.reconciled.GetLeaseIds()) != 1 || planes.reconciled.GetLeaseIds()[0] != "l2" {
+		t.Fatalf("reconcile = %v, planes saw %v", reconciled.GetRefusal(), planes.reconciled)
 	}
 }
 
@@ -285,6 +302,45 @@ func TestVPNPeer_RefusedWhenTheProcessHostsNoPlanes(t *testing.T) {
 	}
 }
 
+// TestVPNPeer_WithdrawingEveryPeerWithNoPlanesSucceeds pins finding 2: a
+// datapath that hosts no plane holds no peer, so withdrawing every peer of a
+// plane is confirmed; keeping one is still refused.
+func TestVPNPeer_WithdrawingEveryPeerWithNoPlanesSucceeds(t *testing.T) {
+	_, client := serve(t, &fakeNode{state: gateway.GatewayStateRunning}, selfPolicy())
+
+	withdrawn, err := client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "wireguard"})
+	if err != nil || withdrawn.GetRefusal() != nil {
+		t.Fatalf("withdraw every peer with no planes = %v, %v; want success", withdrawn.GetRefusal(), err)
+	}
+	kept, err := client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "wireguard", LeaseIds: []string{"l1"}})
+	if err != nil || kept.GetRefusal().GetClass() != ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE {
+		t.Fatalf("keep a peer with no planes = %v, %v; want an UNAVAILABLE refusal", kept.GetRefusal(), err)
+	}
+}
+
+// A process whose plane start failed may still carry a predecessor's peers
+// in the kernel: withdrawing every peer is not confirmed until planes are
+// up, so the supervisor keeps retrying.
+func TestVPNPeer_AFailedPlaneStartNeverConfirmsAWithdrawal(t *testing.T) {
+	srv, client := serve(t, &fakeNode{state: gateway.GatewayStateRunning}, selfPolicy())
+	srv.SetVPNPlanesFailed(errors.New("stale hub could not be deleted"))
+
+	withdrawn, err := client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "wireguard"})
+	if err != nil || withdrawn.GetRefusal().GetClass() != ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE {
+		t.Fatalf("withdraw after a failed plane start = %v, %v; want an UNAVAILABLE refusal", withdrawn.GetRefusal(), err)
+	}
+	if !strings.Contains(withdrawn.GetRefusal().GetReason(), "stale hub could not be deleted") {
+		t.Fatalf("refusal reason = %q; want the start failure named", withdrawn.GetRefusal().GetReason())
+	}
+
+	planes := &fakeVPNPlanes{}
+	srv.SetVPNPlanes(planes)
+	served, err := client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "wireguard"})
+	if err != nil || served.GetRefusal() != nil || planes.reconciled.GetDataPlane() != "wireguard" {
+		t.Fatalf("withdraw once planes are set = %v, %v; planes saw %v", served.GetRefusal(), err, planes.reconciled)
+	}
+}
+
 func TestPolicy_DeniesAnUnadmittedUIDOnEveryService(t *testing.T) {
 	// No caller is uid 4294967000, so both services must refuse us.
 	policy := Policy{ControlUIDs: []uint32{4294967000}, DatapathUIDs: []uint32{4294967000}}
@@ -306,6 +362,10 @@ func TestPolicy_DeniesAnUnadmittedUIDOnEveryService(t *testing.T) {
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("RemoveVPNPeer err = %v, want PermissionDenied", err)
 	}
+	_, err = client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "wireguard", LeaseIds: []string{"l1"}})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("ReconcileVPNPeers err = %v, want PermissionDenied", err)
+	}
 }
 
 func TestPolicy_TheParserUIDReachesOnlyTheVPNPeerMethods(t *testing.T) {
@@ -313,7 +373,7 @@ func TestPolicy_TheParserUIDReachesOnlyTheVPNPeerMethods(t *testing.T) {
 	// admits the parser class. The VPN peer methods must answer while
 	// Status and ApplyDesired, the supervisor's alone, are refused: a
 	// compromised parser must not replace the firewall's desired document.
-	policy := Policy{ControlUIDs: []uint32{4294967000}, DatapathUIDs: []uint32{uint32(os.Getuid())}}
+	policy := Policy{ControlUIDs: []uint32{4294967000}, DatapathUIDs: []uint32{uint32(os.Getuid())}, VPNPlane: true}
 	_, client := serve(t, &fakeNode{state: gateway.GatewayStateRunning}, policy)
 
 	if _, err := client.Status(testContext(t)); status.Code(err) != codes.PermissionDenied {
@@ -328,10 +388,13 @@ func TestPolicy_TheParserUIDReachesOnlyTheVPNPeerMethods(t *testing.T) {
 	if _, err := client.RemoveVPNPeer(testContext(t), &ipcv1.RemoveVPNPeerRequest{LeaseId: "l1"}); err != nil {
 		t.Fatalf("RemoveVPNPeer: %v", err)
 	}
+	if _, err := client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "wireguard", LeaseIds: []string{"l1"}}); err != nil {
+		t.Fatalf("ReconcileVPNPeers: %v", err)
+	}
 }
 
 func TestPolicyAdmit_TableAndUnknownMethod(t *testing.T) {
-	p := Policy{DatapathUIDs: []uint32{1001}}
+	p := Policy{DatapathUIDs: []uint32{1001}, VPNPlane: true}
 	cases := []struct {
 		method string
 		parser bool
@@ -339,8 +402,10 @@ func TestPolicyAdmit_TableAndUnknownMethod(t *testing.T) {
 		{ipcv1.ProcessControlService_Status_FullMethodName, false},
 		{ipcv1.ProcessControlService_Snapshot_FullMethodName, false},
 		{ipcv1.DatapathService_ApplyDesired_FullMethodName, false},
-		{ipcv1.DatapathService_InstallVPNPeer_FullMethodName, true},
-		{ipcv1.DatapathService_RemoveVPNPeer_FullMethodName, true},
+		{ipcv1.VPNPlaneService_InstallVPNPeer_FullMethodName, true},
+		{ipcv1.VPNPlaneService_RemoveVPNPeer_FullMethodName, true},
+		{ipcv1.VPNPlaneService_ReconcileVPNPeers_FullMethodName, true},
+		{ipcv1.VPNPlaneService_RenewVPNPeer_FullMethodName, true},
 	}
 	for _, tc := range cases {
 		if err := p.admit(tc.method, creds(0)); err != nil {
@@ -366,10 +431,61 @@ func TestPolicyAdmit_TableAndUnknownMethod(t *testing.T) {
 	}
 }
 
+func TestPolicy_VPNPlaneServiceIsAdmittedOnlyOnTheWireGuardSocket(t *testing.T) {
+	// Ruling 942: the `wireguard` process alone owns the hub device, so
+	// every other socket (VPNPlane unset) refuses VPNPlaneService to every
+	// uid, the supervisor's and the parser's included, while still
+	// admitting the supervisor to its own services.
+	p := Policy{DatapathUIDs: []uint32{1001}}
+	for _, method := range []string{
+		ipcv1.VPNPlaneService_InstallVPNPeer_FullMethodName,
+		ipcv1.VPNPlaneService_RemoveVPNPeer_FullMethodName,
+		ipcv1.VPNPlaneService_ReconcileVPNPeers_FullMethodName,
+		ipcv1.VPNPlaneService_RenewVPNPeer_FullMethodName,
+	} {
+		for _, uid := range []uint32{0, 1001} {
+			var denied *ErrPeerDenied
+			if err := p.admit(method, creds(uid)); !errors.As(err, &denied) || denied.Method != method {
+				t.Fatalf("uid %d on %s off the wireguard socket = %v, want ErrPeerDenied", uid, method, err)
+			}
+		}
+	}
+	if err := p.admit(ipcv1.DatapathService_ApplyDesired_FullMethodName, creds(0)); err != nil {
+		t.Fatalf("root on ApplyDesired: %v", err)
+	}
+
+	// Over the socket: the same refusal reaches the client as
+	// PermissionDenied.
+	uid := uint32(os.Getuid())
+	_, client := serve(t, &fakeNode{state: gateway.GatewayStateRunning}, Policy{ControlUIDs: []uint32{uid}, DatapathUIDs: []uint32{uid}})
+	if _, err := client.InstallVPNPeer(testContext(t), &ipcv1.InstallVPNPeerRequest{Peer: &ipcv1.VPNPeer{LeaseId: "l1"}}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("InstallVPNPeer off the wireguard socket err = %v, want PermissionDenied", err)
+	}
+	if _, err := client.RenewVPNPeer(testContext(t), &ipcv1.RenewVPNPeerRequest{PublicKey: make([]byte, 32)}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("RenewVPNPeer off the wireguard socket err = %v, want PermissionDenied", err)
+	}
+}
+
+func TestVPNPeer_RenewIsRefusedByPlanesThatDoNotRenew(t *testing.T) {
+	// Renewal fails closed: planes with no RenewVPNPeer, or no planes at
+	// all, refuse UNAVAILABLE and the old deadline stands.
+	server, client := serve(t, &fakeNode{state: gateway.GatewayStateRunning}, selfPolicy())
+	req := &ipcv1.RenewVPNPeerRequest{PublicKey: make([]byte, 32), ExpiresAtUnixNano: 1}
+	resp, err := client.RenewVPNPeer(testContext(t), req)
+	if err != nil || resp.GetRefusal().GetClass() != ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE {
+		t.Fatalf("RenewVPNPeer with no planes = %v, %v; want an UNAVAILABLE refusal", resp, err)
+	}
+	server.SetVPNPlanes(&fakeVPNPlanes{})
+	resp, err = client.RenewVPNPeer(testContext(t), req)
+	if err != nil || resp.GetRefusal().GetClass() != ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE {
+		t.Fatalf("RenewVPNPeer on planes that do not renew = %v, %v; want an UNAVAILABLE refusal", resp, err)
+	}
+}
+
 func TestPolicy_EveryContractMethodIsPlaced(t *testing.T) {
 	// A method added to ipc.proto without a policy entry would be refused
 	// to everyone, the supervisor included; this fails before that ships.
-	for _, desc := range []grpc.ServiceDesc{ipcv1.ProcessControlService_ServiceDesc, ipcv1.DatapathService_ServiceDesc, ipcv1.GatewayServicesService_ServiceDesc} {
+	for _, desc := range []grpc.ServiceDesc{ipcv1.ProcessControlService_ServiceDesc, ipcv1.DatapathService_ServiceDesc, ipcv1.VPNPlaneService_ServiceDesc, ipcv1.GatewayServicesService_ServiceDesc} {
 		for _, m := range desc.Methods {
 			method := "/" + desc.ServiceName + "/" + m.MethodName
 			if _, ok := methodAdmissions[method]; !ok {

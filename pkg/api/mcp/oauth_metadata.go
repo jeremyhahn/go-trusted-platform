@@ -115,7 +115,7 @@ func (h *OAuthMetadataHandler) buildMetadata() {
 // derived from the tool permission catalog rather than kept as a second list,
 // because two hand-maintained lists drifted apart in both directions (#315).
 func (h *OAuthMetadataHandler) getSupportedScopes() []string {
-	return advertisedScopes(toolPermissionCatalog())
+	return advertisedScopes(declaredToolPermissions(PlatformTools{}))
 }
 
 // advertisedScopes returns the sorted, deduplicated token scopes the given
@@ -127,7 +127,7 @@ func advertisedScopes(permissions map[string]string) []string {
 	scopes := make([]string, 0, len(permissions))
 	for _, permission := range permissions {
 		scope := scopeForToolPermission(permission)
-		if scope == "" {
+		if scope == "" || scope == PlatformIdentityGated {
 			continue
 		}
 		if _, duplicate := seen[scope]; duplicate {

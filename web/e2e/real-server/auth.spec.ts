@@ -1,17 +1,59 @@
-import { test, expect } from './fixtures';
+import { test, expect, type BrowserContext, type Page } from '@playwright/test';
+import { runAttestation } from './global-setup';
+import { SoftAuthenticator } from './fixtures/soft-authenticator';
 
 /**
- * Authentication flow against the real-server harness (#2035).
+ * web/e2e/auth.spec.ts ported to the real server (#2034, epic #1665).
  *
- * The form cases need no server; the protected-route and session cases run
- * against the harness server, signed out (`page`) or signed in as the seeded
- * admin through the real WebAuthn login (`adminPage`). Registration and
- * login ceremonies that need a second authenticator are listed as gaps in the
- * PR body: the harness seeds one admin credential only.
+ * The console and its API are the platformd global-setup.ts started; nothing
+ * is mocked. Registration and login are real WebAuthn ceremonies: the
+ * software authenticator (fixtures/soft-authenticator.ts) answers
+ * navigator.credentials with a `packed` attestation chained to the test root
+ * global-setup gave the server (ruling 1028 Q1 (c)); the server verifies the
+ * attestation/assertion and sets the session cookie itself. Chromium's CDP
+ * virtual authenticator is not used: its self-signed batch certificate is
+ * refused for an administrative enrollment.
  */
 
-test.describe('Authentication form', () => {
-  test('shows the registration form by default', async ({ page }) => {
+let seq = 0;
+
+/** A username no earlier test (or earlier run on a kept data dir) took. */
+function uniqueEmail(tag: string): string {
+  seq += 1;
+  return `e2e-${tag}-${Date.now().toString(36)}-${seq}@example.com`;
+}
+
+/**
+ * Adds a fresh resident-key, user-verifying software authenticator (no
+ * credential yet) to the page, from its next navigation on.
+ */
+async function addAuthenticator(page: Page): Promise<SoftAuthenticator> {
+  const authenticator = new SoftAuthenticator(runAttestation());
+  await authenticator.install(page);
+  return authenticator;
+}
+
+async function jwtCookie(context: BrowserContext) {
+  return (await context.cookies()).find((c) => c.name === 'jwt');
+}
+
+/** Registers username through the form; resolves on /dashboard. */
+async function register(page: Page, username: string): Promise<void> {
+  await page.goto('/auth/webauthn?status=not_registered');
+  await page.getByPlaceholder('Enter your email').fill(username);
+  await page.getByRole('button', { name: /register/i }).click();
+  await expect(page).toHaveURL(/\/dashboard/, { timeout: 30000 });
+}
+
+/** Logs out through the account menu; resolves on the login page. */
+async function logout(page: Page): Promise<void> {
+  await page.getByTestId('header-account-menu').click();
+  await page.getByRole('menuitem', { name: /log out/i }).click();
+  await expect(page).toHaveURL(/\/auth\/webauthn/, { timeout: 30000 });
+}
+
+test.describe('Authentication forms', () => {
+  test('should display registration form by default', async ({ page }) => {
     await page.goto('/auth/webauthn?status=not_registered');
 
     await expect(page.locator('h2')).toContainText('Create Account');
@@ -19,16 +61,16 @@ test.describe('Authentication form', () => {
     await expect(page.getByRole('button', { name: /register/i })).toBeVisible();
   });
 
-  test('shows the login form, with no username field, when status=registered', async ({ page }) => {
+  test('should display login form, with no username field, when status=registered', async ({ page }) => {
     await page.goto('/auth/webauthn?status=registered');
 
     await expect(page.locator('h2')).toContainText('Login');
     await expect(page.getByRole('button', { name: /log in/i })).toBeVisible();
-    // Login is usernameless: the authenticator picks the credential.
+    // Login is usernameless (discoverable credentials).
     await expect(page.getByPlaceholder('Enter your email')).toHaveCount(0);
   });
 
-  test('toggles between registration and login forms', async ({ page }) => {
+  test('should toggle between registration and login forms', async ({ page }) => {
     await page.goto('/auth/webauthn?status=not_registered');
     await expect(page.locator('h2')).toContainText('Create Account');
 
@@ -39,125 +81,99 @@ test.describe('Authentication form', () => {
     await expect(page.locator('h2')).toContainText('Create Account');
   });
 
-  test('requires an email to register', async ({ page }) => {
-    await page.goto('/auth/webauthn?status=not_registered');
-    await page.click('button:has-text("Register")');
-    await expect(page.getByText(/please enter your email address/i)).toBeVisible();
+  test('should show invitation UI when invitation token is present', async ({ page }) => {
+    await page.goto('/auth/webauthn?invitation=some-token&tenant_name=Test%20Workspace');
+
+    await expect(page.locator('h2')).toContainText('Join Workspace');
+    await expect(page.getByText(/You've been invited to join Test Workspace/i)).toBeVisible();
   });
 
-  test('does not require a username to log in', async ({ page }) => {
-    await page.goto('/auth/webauthn?status=registered');
-    await page.click('button:has-text("Log In")');
-    await expect(page.getByText(/please enter your username/i)).not.toBeVisible();
-  });
-
-  test('keeps the form usable after a validation error', async ({ page }) => {
+  test('should validate username input', async ({ page }) => {
     await page.goto('/auth/webauthn?status=not_registered');
     await page.click('button:has-text("Register")');
-    await expect(page.getByText(/please enter your email address/i)).toBeVisible();
 
-    await page.fill('input[placeholder="Enter your email"]', 't');
-    await expect(page.getByRole('button', { name: /register/i })).toBeEnabled();
+    await expect(page.getByText(/please enter your email address/i)).toBeVisible();
   });
 });
 
-test.describe('Invitation link on the auth page', () => {
-  test('shows the invitation UI with the tenant name', async ({ page }) => {
-    await page.goto('/auth/webauthn?invitation=e2e-token&tenant_name=Acme%20Corp');
-
-    await expect(page.locator('h2')).toContainText('Join Workspace');
-    await expect(page.getByText(/You've been invited to join Acme Corp/i)).toBeVisible();
-    await expect(page.getByPlaceholder('Enter your email')).toBeVisible();
-    await expect(page.getByRole('button', { name: /register/i })).toBeVisible();
-  });
-
-  test('shows a generic invitation message without a tenant name', async ({ page }) => {
-    await page.goto('/auth/webauthn?invitation=e2e-token');
-
-    await expect(page.locator('h2')).toContainText('Join Workspace');
-    await expect(page.getByText(/You've been invited to join a workspace/i)).toBeVisible();
-  });
-
-  test('allows toggling to login with an invitation', async ({ page }) => {
-    await page.goto('/auth/webauthn?invitation=e2e-token&tenant_name=Test%20Team');
-    await expect(page.locator('h2')).toContainText('Join Workspace');
-
-    await page.click('text=Already have an account? Log In');
-    await expect(page.locator('h2')).toContainText('Login');
-  });
-});
-
-test.describe('Protected routes, real server', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.context().clearCookies();
-  });
-
-  for (const path of ['/admin/tenant', '/admin/invitations', '/dashboard']) {
-    test(`redirects ${path} to login when signed out`, async ({ page }) => {
-      await page.goto(path);
+test.describe('Protected routes', () => {
+  for (const route of ['/admin/tenant', '/admin/invitations', '/dashboard']) {
+    test(`should redirect ${route} to login without a session`, async ({ page }) => {
+      await page.goto(route);
       await expect(page).toHaveURL(/\/auth\/webauthn/);
     });
   }
-
-  test('lets the signed-in admin reach a protected route', async ({ adminPage }) => {
-    await adminPage.goto('/admin/tenant');
-    await expect(adminPage).toHaveURL(/\/admin\/tenant/);
-    await expect(adminPage.getByRole('heading', { name: /tenant dashboard/i })).toBeVisible();
-  });
 });
 
-test.describe('Session management, real server', () => {
-  test('the real WebAuthn login leaves a session cookie', async ({ adminPage }) => {
-    const cookies = await adminPage.context().cookies();
-    const jwt = cookies.find((c) => c.name === 'jwt');
-    expect(jwt?.value ?? '').toContain('.');
+test.describe('Registration and login against the server', () => {
+  test('registration creates the account, sets the session and opens the dashboard', async ({ page }) => {
+    await addAuthenticator(page);
+    await register(page, uniqueEmail('reg'));
+
+    const jwt = await jwtCookie(page.context());
+    expect(jwt, 'the server sets the jwt cookie').toBeTruthy();
+    expect(jwt!.value.split('.')).toHaveLength(3);
   });
 
-  test('redirects the signed-in admin from login to the dashboard', async ({ adminPage }) => {
-    await adminPage.goto('/auth/webauthn');
-    await expect(adminPage).toHaveURL(/\/dashboard/);
+  test('an authenticated user is sent from the login page to the dashboard', async ({ page }) => {
+    await addAuthenticator(page);
+    await register(page, uniqueEmail('redir'));
+
+    await page.goto('/auth/webauthn');
+    await expect(page).toHaveURL(/\/dashboard/);
   });
 
-  test('logout clears the session, and a protected page then redirects to login', async ({ adminPage }) => {
-    await adminPage.goto('/admin/tenant');
-    await adminPage.click('button:has-text("Logout")');
-    await expect(adminPage).toHaveURL(/\/auth\/webauthn/);
+  test('log out clears the session; protected routes redirect again', async ({ page }) => {
+    await addAuthenticator(page);
+    await register(page, uniqueEmail('logout'));
 
-    const cookies = await adminPage.context().cookies();
-    expect(cookies.find((c) => c.name === 'jwt')).toBeUndefined();
+    await logout(page);
+    expect(await jwtCookie(page.context())).toBeUndefined();
 
-    await adminPage.goto('/admin/tenant');
-    await expect(adminPage).toHaveURL(/\/auth\/webauthn/);
-  });
-});
-
-test.describe('Accessibility', () => {
-  test('the email input is visible and enabled', async ({ page }) => {
-    await page.goto('/auth/webauthn?status=not_registered');
-    const input = page.getByPlaceholder('Enter your email');
-    await expect(input).toBeVisible();
-    await expect(input).toBeEnabled();
+    await page.goto('/dashboard');
+    await expect(page).toHaveURL(/\/auth\/webauthn/);
   });
 
-  test('supports keyboard navigation', async ({ page }) => {
-    await page.goto('/auth/webauthn?status=not_registered');
-    const input = page.getByPlaceholder('Enter your email');
-    await input.click();
-    expect(await input.evaluate((el) => document.activeElement === el)).toBe(true);
+  test('a registered user logs in again with their passkey', async ({ page }) => {
+    await addAuthenticator(page);
+    await register(page, uniqueEmail('login'));
+    await logout(page);
 
-    await page.keyboard.type('testuser');
-    await expect(input).toHaveValue('testuser');
-    await page.keyboard.press('Tab');
-    const register = page.getByRole('button', { name: /register/i });
-    await expect(register).toBeVisible();
-    await expect(register).toBeEnabled();
+    await page.goto('/auth/webauthn?status=registered');
+    await page.getByRole('button', { name: /log in/i }).click();
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 30000 });
+    expect(await jwtCookie(page.context())).toBeTruthy();
   });
 
-  test('has visible focus indicators', async ({ page }) => {
-    await page.goto('/auth/webauthn?status=not_registered');
-    const input = page.getByPlaceholder('Enter your email');
-    await input.click();
-    await input.focus();
-    await expect(input).toBeFocused();
+  test('registering an existing account is refused with an error', async ({ page, browser }) => {
+    const username = uniqueEmail('dup');
+    await addAuthenticator(page);
+    await register(page, username);
+
+    // A second browser context, so no session: the same username again.
+    const other = await browser.newContext({ ignoreHTTPSErrors: true });
+    try {
+      const second = await other.newPage();
+      await addAuthenticator(second);
+      await second.goto('/auth/webauthn?status=not_registered');
+      await second.getByPlaceholder('Enter your email').fill(username);
+      await second.getByRole('button', { name: /register/i }).click();
+
+      await expect(second.locator('[class*="error"]').first()).toBeVisible({ timeout: 30000 });
+      await expect(second).toHaveURL(/\/auth\/webauthn/);
+      expect(await jwtCookie(other)).toBeUndefined();
+    } finally {
+      await other.close();
+    }
+  });
+
+  test('login with no credential for this site shows an error', async ({ page }) => {
+    // An authenticator holding no credential: the ceremony cannot complete.
+    await addAuthenticator(page);
+    await page.goto('/auth/webauthn?status=registered');
+    await page.getByRole('button', { name: /log in/i }).click();
+
+    await expect(page.locator('[class*="error"]').first()).toBeVisible({ timeout: 30000 });
+    await expect(page).toHaveURL(/\/auth\/webauthn/);
   });
 });

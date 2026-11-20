@@ -20,6 +20,7 @@ import { DeviceService } from '../services/device-service.js';
 import { DNSService } from '../services/dns-service.js';
 import { NTPService } from '../services/ntp-service.js';
 import { BMCService } from '../services/bmc-service.js';
+import { CapabilitiesService } from '../services/capabilities-service.js';
 import { GatewayService } from '../services/gateway-service.js';
 import { IAMService } from '../services/iam-service.js';
 import { IDevIDService } from '../services/idevid-service.js';
@@ -190,6 +191,9 @@ export class PlatformClient {
 
   /** NTP status, sources and clock step */
   public readonly ntp: NTPService;
+
+  /** What the server offers, enabled and dark */
+  public readonly capabilities: CapabilitiesService;
 
   /** Gateway service for BGP and IPAM operations */
   public readonly gateway: GatewayService;
@@ -363,6 +367,7 @@ export class PlatformClient {
     this.dns = new DNSService(t);
     this.ntp = new NTPService(t);
     this.bmc = new BMCService(t);
+    this.capabilities = new CapabilitiesService(t);
     this.gateway = new GatewayService(t);
     this.iam = new IAMService(t);
     this.idevid = new IDevIDService(t);
