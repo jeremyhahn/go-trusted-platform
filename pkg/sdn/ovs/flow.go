@@ -235,20 +235,11 @@ func (c *Client) ListFlows(ctx context.Context, bridgeName string) ([]*Flow, err
 		return nil, &WrappedError{Msg: "failed to get flow stats", Err: err}
 	}
 
-	// Convert to Flow type
+	// Convert to Flow type. Each listed flow carries its match: callers
+	// compare matches to tell their own entries from foreign ones.
 	flows := make([]*Flow, 0, len(stats))
 	for _, stat := range stats {
-		flow := &Flow{
-			Table:       int(stat.TableID),
-			Priority:    int(stat.Priority),
-			Duration:    int(stat.DurationSec),
-			IdleAge:     int(stat.IdleTimeout),
-			HardAge:     int(stat.HardTimeout),
-			Cookie:      fmt.Sprintf("0x%x", stat.Cookie),
-			PacketCount: int64(stat.PacketCount),
-			ByteCount:   int64(stat.ByteCount),
-		}
-		flows = append(flows, flow)
+		flows = append(flows, flowFromStats(stat))
 	}
 
 	return flows, nil
@@ -347,21 +338,26 @@ func (c *Client) GetFlowStats(ctx context.Context, bridgeName string, match stri
 	// Convert to Flow type
 	flows := make([]*Flow, 0, len(stats))
 	for _, stat := range stats {
-		flow := &Flow{
-			Table:       int(stat.TableID),
-			Priority:    int(stat.Priority),
-			Match:       formatMatchString(stat.Match),
-			Duration:    int(stat.DurationSec),
-			IdleAge:     int(stat.IdleTimeout),
-			HardAge:     int(stat.HardTimeout),
-			Cookie:      fmt.Sprintf("0x%x", stat.Cookie),
-			PacketCount: int64(stat.PacketCount),
-			ByteCount:   int64(stat.ByteCount),
-		}
-		flows = append(flows, flow)
+		flows = append(flows, flowFromStats(stat))
 	}
 
 	return flows, nil
+}
+
+// flowFromStats converts one switch flow-stats entry, match included, to a
+// Flow. ListFlows and GetFlowStats share it so both report the match.
+func flowFromStats(stat openflow.FlowStats) *Flow {
+	return &Flow{
+		Table:       int(stat.TableID),
+		Priority:    int(stat.Priority),
+		Match:       formatMatchString(stat.Match),
+		Duration:    int(stat.DurationSec),
+		IdleAge:     int(stat.IdleTimeout),
+		HardAge:     int(stat.HardTimeout),
+		Cookie:      fmt.Sprintf("0x%x", stat.Cookie),
+		PacketCount: int64(stat.PacketCount),
+		ByteCount:   int64(stat.ByteCount),
+	}
 }
 
 // splitStatsFilter separates the keys of an ovs-ofctl dump-flows filter

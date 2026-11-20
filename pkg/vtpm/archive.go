@@ -43,6 +43,8 @@ type Archiver struct {
 	// and write; maxEntries bounds the tar entries it may process.
 	maxExpandedBytes int64
 	maxEntries       int
+	// maxCompressedBytes bounds the archive bytes Import spools to disk.
+	maxCompressedBytes int64
 }
 
 // DefaultMaxImportExpandedBytes and DefaultMaxImportEntries bound a bundle
@@ -52,6 +54,10 @@ type Archiver struct {
 const (
 	DefaultMaxImportExpandedBytes int64 = 256 << 20
 	DefaultMaxImportEntries             = 4096
+	// DefaultMaxImportCompressedBytes bounds the upload Import spools to disk
+	// before it is validated: gzip never compresses a bundle to more than
+	// its expanded size, so the expanded budget bounds the compressed one.
+	DefaultMaxImportCompressedBytes = DefaultMaxImportExpandedBytes
 )
 
 // NewArchiver creates a new bundle archiver.
@@ -64,6 +70,8 @@ func NewArchiver(config *Config, logger *logging.Logger) *Archiver {
 		logger:           logger,
 		maxExpandedBytes: DefaultMaxImportExpandedBytes,
 		maxEntries:       DefaultMaxImportEntries,
+
+		maxCompressedBytes: DefaultMaxImportCompressedBytes,
 	}
 }
 
@@ -165,8 +173,15 @@ func (a *Archiver) Import(ctx context.Context, r io.Reader) (*Bundle, error) {
 	}
 	defer os.Remove(tmp.Name())
 
-	if _, err := io.Copy(tmp, r); err != nil {
+	// The upload is bounded and cancellable while it spools: an oversized
+	// or endless stream must not fill the bundle filesystem.
+	spool := &expansionBudget{ctx: ctx, r: r, remaining: a.maxCompressedBytes, limit: a.maxCompressedBytes}
+	if _, err := io.Copy(tmp, spool); err != nil {
 		tmp.Close()
+		var tooLarge ErrArchiveTooLarge
+		if errors.As(err, &tooLarge) || ctx.Err() != nil {
+			return nil, ErrArchiveOperationFailed{Operation: "import", Cause: err}
+		}
 		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: &WrappedError{Msg: "failed to spool archive", Err: err}}
 	}
 	if err := tmp.Close(); err != nil {

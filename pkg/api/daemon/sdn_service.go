@@ -1812,10 +1812,6 @@ func (s *SDNService) policyRuleToFlowMod(rule *platformv1.PolicyRule, policyPrio
 }
 
 // policyRuleToMatchString converts a policy rule to an OVS match string for deletion
-func (s *SDNService) policyRuleToMatchString(rule *platformv1.PolicyRule) (string, error) {
-	return policyRuleMatch(rule)
-}
-
 // policyProtocolMatch renders a policy protocol as the head of an OVS match the
 // flow grammar parses: tcp, udp, icmp and sctp as their shorthands (which also
 // set the IPv4 eth_type that nw_src, nw_dst and tp_* need), and a decimal

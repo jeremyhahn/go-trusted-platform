@@ -331,7 +331,33 @@ func (o *QEMUOrchestrator) adoptReceived(tr *trackedReceiver) (string, error) {
 		}
 	}
 
+	// A receiver whose QEMU exited after acknowledging the resume has no
+	// guest left to adopt: refuse it before any state is recorded, so
+	// FinalizeIncoming reports the failure and the source keeps its copy.
+	// An exit after this check is recorded by the exit watcher below.
+	waiter, hasWaiter := tr.recv.(interface {
+		Done() <-chan struct{}
+		ExitErr() error
+	})
+	if hasWaiter && waiter.Done() == nil {
+		hasWaiter = false
+	}
+	exited := func() bool {
+		if hasWaiter {
+			select {
+			case <-waiter.Done():
+				return true
+			default:
+			}
+		}
+		return !vm.IsRunning()
+	}
+
 	o.mu.Lock()
+	if exited() {
+		o.mu.Unlock()
+		return "", &MessageError{Msg: "received VM exited before adoption"}
+	}
 	instanceID := tr.spec.InstanceID
 	if _, taken := o.instances[instanceID]; instanceID == "" || taken {
 		instanceID = generateInstanceID()
@@ -366,26 +392,24 @@ func (o *QEMUOrchestrator) adoptReceived(tr *trackedReceiver) (string, error) {
 	// A receiver that already waits on its process hands that waiter over:
 	// a second vm.Wait on the same process would fail at once.
 	waitExit := vm.Wait
-	if w, ok := tr.recv.(interface {
-		Done() <-chan struct{}
-		ExitErr() error
-	}); ok && w.Done() != nil {
+	if hasWaiter {
 		waitExit = func() error {
-			<-w.Done()
-			return w.ExitErr()
+			<-waiter.Done()
+			return waiter.ExitErr()
 		}
 	}
-	if vm.IsRunning() {
-		run := &qemuRun{cancel: func() {}, done: make(chan struct{})}
-		qemuInst.run = run
-		go func() {
-			defer close(run.done)
-			if err := waitExit(); err != nil {
-				o.logger.Errorf("VM %s exited with error: %v", instanceID, err)
-			}
-			o.recordExit(instanceID, qemuInst)
-		}()
-	}
+	// The watcher is always installed: the process was alive at the check
+	// above, so an exit from then on, even one before publication, ends in
+	// recordExit rather than leaving a running instance with no process.
+	run := &qemuRun{cancel: func() {}, done: make(chan struct{})}
+	qemuInst.run = run
+	go func() {
+		defer close(run.done)
+		if err := waitExit(); err != nil {
+			o.logger.Errorf("VM %s exited with error: %v", instanceID, err)
+		}
+		o.recordExit(instanceID, qemuInst)
+	}()
 	o.instances[instanceID] = qemuInst
 	o.mu.Unlock()
 

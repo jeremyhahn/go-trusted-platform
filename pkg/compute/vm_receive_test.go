@@ -368,7 +368,9 @@ func TestFinalizeIncoming_CommitAdoptsTheGuest(t *testing.T) {
 	orch := newOpsOrchestrator(t)
 	orch.config.MigrationTLS = &fakeServerTLS{dir: t.TempDir()}
 
-	recv := &fakeIncomingReceiver{port: 5000, vm: newReceivedVM(t, orch)}
+	// A committed receiver's QEMU is running: adoption refuses one that
+	// already exited.
+	recv := &fakeIncomingReceiver{port: 5000, vm: startReceivedVM(t, orch)}
 	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
 		return recv, nil
 	})
@@ -530,7 +532,7 @@ func TestFinalizeIncoming_EndsTheReceiverLifetime(t *testing.T) {
 	orch.config.MigrationTLS = tlsProv
 
 	recv := newSignalReceiver()
-	recv.vm = newReceivedVM(t, orch)
+	recv.vm = startReceivedVM(t, orch)
 	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
 		return recv, nil
 	})
@@ -836,7 +838,7 @@ func TestFinalizeIncoming_Commit(t *testing.T) {
 	tlsProv := &fakeServerTLS{dir: t.TempDir()}
 	orch.config.MigrationTLS = tlsProv
 
-	recv := &fakeIncomingReceiver{port: 5000, vm: newReceivedVM(t, orch)}
+	recv := &fakeIncomingReceiver{port: 5000, vm: startReceivedVM(t, orch)}
 	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
 		return recv, nil
 	})
