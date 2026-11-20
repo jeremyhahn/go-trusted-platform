@@ -132,6 +132,31 @@ transition (for example `UpdateState`) returns the
 enforcement error. A device is never recorded in a state whose zone it is
 not in.
 
+## Device store
+
+The PXE backend's device records are platform state, so they live in the
+deployment datastore (docs/SPEC.md:23, #2028). The `StateManager` in
+`pkg/compute/pxe` holds devices in memory for lookups and writes every
+change through a `DeviceStore` (`Put`, `Delete`, `List`):
+
+- `Register`, `Unregister`, `Transition` and `UpdateDevice` persist the
+  device's current record after the in-memory change. Writes are ordered
+  under one lock and always send the latest record, so a slower write never
+  overwrites a newer one.
+- When the daemon starts an enabled PXE backend it builds the store over
+  the quicbaas client (`PXEDeviceStore` in `pkg/storage/quicbaas`: one
+  `PXEDevice` entity per device in the system shard, the whole device as
+  JSON) and calls `Load` before `Initialize`. A restarted daemon finds every
+  device in the state it was in, with its retry count, event history and
+  IDevID binding, so a completion report or a quarantine still has its
+  target. A record that does not decode is logged and skipped.
+- A failed store write is returned to the caller **without rollback**: the
+  in-memory change has already happened and any transition event has
+  already been emitted. The caller sees the error; the next successful
+  write of that device stores its full current record again.
+- With no quicbaas DAO factory (tests, a daemon without the datastore) the
+  backend keeps devices in memory only.
+
 ## What this feature deliberately does not do
 
 - **It does not decide whether a machine belongs.** Fulfilment does, and

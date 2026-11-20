@@ -2019,6 +2019,36 @@ const provisioningDeviceScriptPortOffset = 1
 const provisioningNBDPort uint16 = 10809
 
 func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *app.App, section *pxe.DaemonConfig, flows *policy.ZoneFlowManager) (*PXEGRPCService, error) {
+	var store pxe.DeviceStore
+	if section != nil && section.Enabled {
+		store = pxeDeviceStoreFor(a, logger)
+	}
+	return pxeGRPCServiceWithStore(ctx, logger, a, section, flows, store)
+}
+
+// pxeDeviceStoreFor returns the PXE device store over the deployment
+// datastore (docs/SPEC.md:23, #2028), or nil when the app has no quicbaas
+// DAO factory; the backend then keeps its devices in memory only.
+func pxeDeviceStoreFor(a *app.App, logger *logging.Logger) pxe.DeviceStore {
+	if a == nil {
+		return nil
+	}
+	factory, ok := a.DAOFactory().(*quicbaas.Factory)
+	if !ok || factory == nil {
+		return nil
+	}
+	client := factory.Client()
+	if client == nil {
+		return nil
+	}
+	return quicbaas.NewPXEDeviceStore(client, logger)
+}
+
+// pxeGRPCServiceWithStore builds the PXE backend with its StateManager
+// writing through to store (nil: in memory only) and reloads the stored
+// devices before Initialize, so a restart keeps every device, its state
+// and its identity binding (#2028).
+func pxeGRPCServiceWithStore(ctx context.Context, logger *logging.Logger, a *app.App, section *pxe.DaemonConfig, flows *policy.ZoneFlowManager, store pxe.DeviceStore) (*PXEGRPCService, error) {
 	svc := NewPXEGRPCService(logger, nil)
 	if section == nil || !section.Enabled {
 		return svc, nil
@@ -2067,9 +2097,17 @@ func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *ap
 		)
 	}
 	flows.AllowProvisioningBootPorts(provisioningNBDPort)
+	var stateOpts []pxe.StateManagerOption
+	if store != nil {
+		stateOpts = append(stateOpts, pxe.WithDeviceStore(store))
+	}
+	stateManager := pxe.NewStateManager(stateOpts...)
+	if err := stateManager.Load(ctx); err != nil {
+		return nil, err
+	}
 	backend := pxe.NewService(
 		pxe.WithLogger(logger),
-		pxe.WithStateManager(pxe.NewStateManager()),
+		pxe.WithStateManager(stateManager),
 		pxe.WithVLANIntegration(pxe.NewVLANIntegrationWrapper(
 			pxe.WithBridgeName(cfg.BridgeName),
 			pxe.WithFlowManager(flows),
