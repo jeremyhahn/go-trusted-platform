@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -442,7 +443,33 @@ func (o *QEMUOrchestrator) releaseReceiver(receiverID string, tr *trackedReceive
 		o.logger.Errorf("Failed to abort migration receiver %s (%s): %v", receiverID, reason, err)
 		return
 	}
+	o.removeReceiverWorkDir(receiverID, tr.recv)
 	o.logger.Infof("Aborted migration receiver %s: %s", receiverID, reason)
+}
+
+// removeReceiverWorkDir removes an aborted receiver's incoming-<id> work
+// directory and the disk in it. Only a direct incoming-* child of the
+// orchestrator work directory is removed; an adopted receiver's directory
+// belongs to its instance and never reaches here.
+func (o *QEMUOrchestrator) removeReceiverWorkDir(receiverID string, recv incomingReceiver) {
+	if recv == nil {
+		return
+	}
+	vm := recv.VM()
+	if vm == nil {
+		return
+	}
+	cfg := vm.GetConfig()
+	if cfg == nil || cfg.WorkDir == "" || o.config.WorkDir == "" {
+		return
+	}
+	wd := filepath.Clean(cfg.WorkDir)
+	if filepath.Dir(wd) != filepath.Clean(o.config.WorkDir) || !strings.HasPrefix(filepath.Base(wd), "incoming-") {
+		return
+	}
+	if err := os.RemoveAll(wd); err != nil {
+		o.logger.Errorf("Failed to remove migration receiver %s work directory %s: %v", receiverID, wd, err)
+	}
 }
 
 // closeReceivers reaps every receiver still pending on o; Close calls it so
@@ -612,6 +639,7 @@ func (o *QEMUOrchestrator) FinalizeIncoming(ctx context.Context, receiverID stri
 	if err := tr.recv.Abort(ctx); err != nil {
 		return &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "abort received VM", Err: err}}
 	}
+	o.removeReceiverWorkDir(receiverID, tr.recv)
 	o.logger.Infof("Aborted migration receiver %s", receiverID)
 	return nil
 }
@@ -753,6 +781,15 @@ func defaultNewIncomingReceiver(ctx context.Context, p *incomingReceiverParams) 
 	if err := os.MkdirAll(workDir, 0755); err != nil {
 		return nil, &WrappedError{Msg: "create receiver work directory", Err: err}
 	}
+	// A receiver that fails to launch leaves no work directory or disk.
+	launched := false
+	defer func() {
+		if !launched {
+			if err := os.RemoveAll(workDir); err != nil {
+				o.logger.Errorf("Failed to remove receiver work directory %s: %v", workDir, err)
+			}
+		}
+	}()
 
 	diskSize := p.spec.Config.DiskSize
 	if diskSize == "" {
@@ -825,6 +862,7 @@ func defaultNewIncomingReceiver(ctx context.Context, p *incomingReceiverParams) 
 		return nil, &WrappedError{Msg: "arm receiver migrate-incoming", Err: err}
 	}
 
+	launched = true
 	return &qemuIncomingReceiver{vm: vm, monitor: mon, mgr: mgr, port: port, proc: proc}, nil
 }
 

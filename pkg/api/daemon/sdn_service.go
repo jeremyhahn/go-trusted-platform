@@ -1199,6 +1199,21 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		flowMods[i] = flowMod
 	}
 
+	// Resolve every target before any flow is installed: a target the
+	// policy cannot be applied to is refused, not skipped, so a policy is
+	// never recorded as applied on a target it does not cover (#2022 R12-1).
+	bridgeNames := make([]string, 0, len(config.GetTargets()))
+	for _, target := range config.GetTargets() {
+		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
+			return nil, status.Errorf(codes.InvalidArgument, "target %q: only bridge targets are supported", target.GetId())
+		}
+		bridgeName, found := s.findBridgeName(target.GetId())
+		if !found {
+			return nil, status.Errorf(codes.NotFound, "target bridge %q not found", target.GetId())
+		}
+		bridgeNames = append(bridgeNames, bridgeName)
+	}
+
 	client := s.getOVSClient()
 
 	// Entries an earlier rollback could not remove go first.
@@ -1220,16 +1235,7 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 	s.mu.RLock()
 	old := s.policies[policyID]
 	s.mu.RUnlock()
-	for _, target := range config.GetTargets() {
-		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
-			continue
-		}
-
-		bridgeName, found := s.findBridgeName(target.GetId())
-		if !found {
-			continue
-		}
-
+	for _, bridgeName := range bridgeNames {
 		for i, rule := range config.GetRules() {
 			flowMod := flowMods[i]
 			// Record the flow before the call: an AddFlow error does not
