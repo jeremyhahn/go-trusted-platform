@@ -18,11 +18,14 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -277,6 +280,24 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 		return nil, ErrBundleAlreadyExists{ID: manifest.ID}
 	}
 
+	// Extract into a staging directory this import owns exclusively, next
+	// to bundlePath so the publishing rename stays on one filesystem. A
+	// concurrent import of the same ID extracts into its own staging
+	// directory, and a refused import removes only its own.
+	if err := os.MkdirAll(filepath.Dir(bundlePath), 0700); err != nil {
+		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: err}
+	}
+	stagePath, err := os.MkdirTemp(filepath.Dir(bundlePath), ".import-"+id+"-")
+	if err != nil {
+		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: err}
+	}
+	published := false
+	defer func() {
+		if !published {
+			os.RemoveAll(stagePath)
+		}
+	}()
+
 	// Reopen and extract
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: err}
@@ -288,9 +309,9 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 	defer gzr2.Close()
 	tr2 := tar.NewReader(&expansionBudget{ctx: ctx, r: gzr2, remaining: a.maxExpandedBytes, limit: a.maxExpandedBytes})
 
-	// refuse removes the partial bundle and reports why the import stopped.
+	// refuse reports why the import stopped; the deferred clean-up removes
+	// the staging directory, never a published bundle.
 	refuse := func(cause error) (*Bundle, error) {
-		os.RemoveAll(bundlePath)
 		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: cause}
 	}
 	remaining := a.maxExpandedBytes
@@ -305,8 +326,7 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 			break
 		}
 		if err != nil {
-			os.RemoveAll(bundlePath)
-			return nil, ErrArchiveOperationFailed{Operation: "import", Cause: err}
+			return refuse(err)
 		}
 
 		entries++
@@ -320,32 +340,29 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 			continue
 		}
 
-		destPath := filepath.Join(bundlePath, relPath)
+		destPath := filepath.Join(stagePath, relPath)
 
 		// Security check: prevent path traversal
-		if destPath != bundlePath && !strings.HasPrefix(destPath, bundlePath+string(os.PathSeparator)) {
+		if destPath != stagePath && !strings.HasPrefix(destPath, stagePath+string(os.PathSeparator)) {
 			continue
 		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(destPath, 0700); err != nil {
-				os.RemoveAll(bundlePath)
-				return nil, ErrArchiveOperationFailed{Operation: "import", Cause: err}
+				return refuse(err)
 			}
 
 		case tar.TypeReg:
 			// Create parent directory
 			if err := os.MkdirAll(filepath.Dir(destPath), 0700); err != nil {
-				os.RemoveAll(bundlePath)
-				return nil, ErrArchiveOperationFailed{Operation: "import", Cause: err}
+				return refuse(err)
 			}
 
 			// Create file
 			outFile, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 			if err != nil {
-				os.RemoveAll(bundlePath)
-				return nil, ErrArchiveOperationFailed{Operation: "import", Cause: err}
+				return refuse(err)
 			}
 
 			n, err := io.CopyN(outFile, tr2, remaining+1)
@@ -363,6 +380,17 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 			}
 		}
 	}
+
+	if err := ctx.Err(); err != nil {
+		return refuse(err)
+	}
+	if err := publishStagedBundle(stagePath, bundlePath); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return nil, ErrBundleAlreadyExists{ID: manifest.ID}
+		}
+		return refuse(err)
+	}
+	published = true
 
 	a.logger.Info("Bundle imported successfully", "id", manifest.ID)
 
@@ -395,6 +423,24 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 	}
 
 	return bundle, nil
+}
+
+// publishStagedBundle moves the fully extracted stagePath to bundlePath
+// without replacing anything there. os.Mkdir claims bundlePath exclusively
+// (it fails with fs.ErrExist when a bundle, or another import's claim, is
+// already there); the rename then replaces only that empty claim, so the
+// bundle appears complete in one step. A failed rename releases the claim.
+// The rename is syscall.Rename: os.Rename refuses any existing directory,
+// while rename(2) atomically replaces an empty one, which is the claim.
+func publishStagedBundle(stagePath, bundlePath string) error {
+	if err := os.Mkdir(bundlePath, 0700); err != nil {
+		return err
+	}
+	if err := syscall.Rename(stagePath, bundlePath); err != nil {
+		os.Remove(bundlePath)
+		return err
+	}
+	return nil
 }
 
 // ValidateArchive checks archive integrity without extracting.
