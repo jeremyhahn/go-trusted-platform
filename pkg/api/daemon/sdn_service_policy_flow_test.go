@@ -450,6 +450,20 @@ type switchModelClient struct {
 	deletes    []string
 	addHook    func(flow *ovs.FlowMod) error
 	deleteHook func(flow *ovs.FlowMod) error
+	listed     []*ovs.Flow // entries other owners installed, as ListFlows reports them
+}
+
+// ListFlows reports the entries other owners installed (listed); the model
+// keys its own entries by match alone, so it does not list them.
+func (c *switchModelClient) ListFlows(_ context.Context, _ string) ([]*ovs.Flow, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]*ovs.Flow, 0, len(c.listed))
+	for _, f := range c.listed {
+		cp := *f
+		out = append(out, &cp)
+	}
+	return out, nil
 }
 
 func newSwitchModelSDNService(t *testing.T) (*SDNService, *switchModelClient) {
@@ -602,4 +616,91 @@ func TestSDNService_ApplyPolicy_FailedRollbackDeleteIsReportedAndRetried(t *test
 	_, err = svc.ApplyPolicy(context.Background(), z)
 	require.NoError(t, err)
 	assert.Empty(t, sw.deleted())
+}
+
+// A failed update whose rollback delete also fails still puts the old deny
+// back (an OpenFlow ADD replaces the same-match entry), or reports the old
+// policy as erroneous: never a permissive flow under an ACTIVE deny (#2021 Codex).
+func TestSDNService_ApplyPolicy_FailedRollbackDeleteRestoresTheOldDeny(t *testing.T) {
+	svc, client := newSwitchModelSDNService(t)
+	ctx := context.Background()
+
+	web := &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 80}
+	deny := denyRule("r1", web)
+	denyReq := denyPolicy("deny-web", deny)
+	denyReq.PolicyId = "p1"
+	if _, err := svc.ApplyPolicy(ctx, denyReq); err != nil {
+		t.Fatalf("apply deny: %v", err)
+	}
+	denyFlow, err := svc.policyRuleToFlowMod(deny, 100)
+	if err != nil {
+		t.Fatalf("translate deny: %v", err)
+	}
+	denyActions, ok := client.entry(denyFlow.Match)
+	if !ok {
+		t.Fatalf("deny flow %q not installed", denyFlow.Match)
+	}
+
+	allow := allowRule("r1", web)
+	broken := allowRule("r2", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 443})
+	brokenFlow, err := svc.policyRuleToFlowMod(broken, 100)
+	if err != nil {
+		t.Fatalf("translate broken: %v", err)
+	}
+	client.mu.Lock()
+	client.addHook = func(flow *ovs.FlowMod) error {
+		if flow.Match == brokenFlow.Match {
+			return errFlowInstall
+		}
+		return nil
+	}
+	client.deleteHook = func(*ovs.FlowMod) error { return errFlowInstall }
+	client.mu.Unlock()
+
+	update := denyPolicy("deny-web", allow, broken)
+	update.PolicyId = "p1"
+	if _, err := svc.ApplyPolicy(ctx, update); err == nil {
+		t.Fatal("apply with a refused flow succeeded")
+	}
+
+	got, ok := client.entry(denyFlow.Match)
+	restored := ok && got == denyActions
+	svc.mu.RLock()
+	state := svc.policies["p1"].status
+	svc.mu.RUnlock()
+	if !restored && state == "active" {
+		t.Fatalf("entry %q = %q (present %v) with policy p1 still active; want the deny %q back or p1 in error", denyFlow.Match, got, ok, denyActions)
+	}
+	if !restored {
+		t.Fatalf("deny entry %q not restored: %q", denyFlow.Match, got)
+	}
+}
+
+// A policy flow the switch rejected is not deleted by the rollback: a
+// non-policy entry with the same table, priority and match (the gateway's
+// ingress pipeline at table 0, priority 0) survives (#2021 Codex).
+func TestSDNService_ApplyPolicy_RejectedFlowRollbackKeepsAForeignEntry(t *testing.T) {
+	svc, client := newSwitchModelSDNService(t)
+	ctx := context.Background()
+
+	wildcard := allowRule("any", nil)
+	flow, err := svc.policyRuleToFlowMod(wildcard, 0)
+	if err != nil {
+		t.Fatalf("translate wildcard: %v", err)
+	}
+	client.mu.Lock()
+	client.entries[flow.Match] = "foreign:pipeline"
+	// The gateway pipeline's own entry, unknown to the policy service.
+	client.listed = []*ovs.Flow{{Table: flow.Table, Priority: flow.Priority, Match: flow.Match, Actions: "foreign:pipeline"}}
+	client.addHook = func(*ovs.FlowMod) error { return ovs.ErrInvalidFlow }
+	client.mu.Unlock()
+
+	wild := denyPolicy("wild", wildcard)
+	wild.Config.Priority = 0
+	if _, err := svc.ApplyPolicy(ctx, wild); err == nil {
+		t.Fatal("apply with a rejected flow succeeded")
+	}
+	if got, ok := client.entry(flow.Match); !ok || got != "foreign:pipeline" {
+		t.Fatalf("foreign entry %q = %q (present %v), want it kept; deletes %v", flow.Match, got, ok, client.deleted())
+	}
 }
