@@ -1,4 +1,4 @@
-# code-review-template: v5.12.3 -- the code review in Gitea or GitHub CI for a pull request
+# code-review-template: v5.12.6 -- the code review in Gitea or GitHub CI for a pull request
 # that carries `code-review` and `task:ready`, routed by its labels through
 # route-labels (labels.md §2). Codex on the `codex` runner reviews every such
 # PR; `agent:opencode` adds an advisory COMMENT review by the opencode job on
@@ -28,6 +28,40 @@
 #   COORDINATOR_TURNS         the codex rounds the project coordinator has
 #                             on a `needs-coordinator` PR after the two-round
 #                             stop (v5.9.8, Tenant Agent m2185); default 3
+#
+# v5.12.6 (2026-11-20, Tenant Agent ruling 1046; Fleet Ops): THE GATE DOES
+# NOT WAIT FOR A TWIN. The gate's twin wait held a hosted runner while
+# another run's `Codex review` queued for the one codex runner, up to
+# 4500 s: six hosted slots at 22:06Z on 11-20. The gate now reads the twins
+# once; an APPROVED head passes as before, and otherwise, while a twin's
+# review of the head is queued or in progress, it fails at once (exit 3)
+# naming that run, whose own gate (it needs its review) posts the head's
+# newest `Code Review (codex)` check. API errors still fail closed. The
+# gate's timeout is 10 minutes (ruling 580). The twins: on go-qrdb #1645
+# (f4d36189) and go-quicbaas #2636 (d9e472e3) each head had two runs 1-2 s
+# apart, the push's `synchronize` (which starts the review) and a `labeled
+# code-review` from the coordinator's bot removing and re-adding the label
+# about 10 s after the push. No workflow concurrency group (v5.9.4).
+#
+# v5.12.5 (2026-11-20, Tenant Agent ruling 1012): THE REVIEW LOCK WAITS IN
+# THE JOB'S BUDGET. Three Codex reviews failed on 11-20 with "timed out after
+# 600 s waiting for /root/.codex/.review.lock" because five runner pools on
+# the GPU host shared one lock file (Infrastructure gave each pool its own
+# lock at 08:24Z). The review lock and the login-refresh lock no longer wait
+# a fixed 600 s and 300 s: each waits for what is left of the job's 75
+# minutes (JOB_BUDGET, counted from the guard's start in $WORK/job-start),
+# less the time the job still needs after the lock is taken. The review
+# keeps codex's limit, its 30 s kill grace and 440 s for posting and cleanup;
+# the refresh keeps 130 s for the refresh call, 360 s for the module fetch,
+# 2730 s for the largest review and the same 440 s. A wait that has no time
+# left fails at once with that reason. Nothing else changes.
+#
+# v5.12.4 (2026-11-20, Tenant Agent ruling 999): the two self-hosted review
+# jobs name their reason's category for ci.yml v1.46's runner check: the
+# opencode review runs on the GPU host (`hardware:`), and the Codex review
+# on the one runner that holds the reviewer token (`credential:`, pending
+# the Tenant Agent's answer on ruling 999). Every other job already runs on
+# ubuntu-latest on github.com. Nothing else changes.
 #
 # v5.12.3 (2026-11-17, Tenant Agent; Codex's P1 on go-xkms #2251): THE SCOPE
 # JOB IS NOT CANCELLED. v5.12.2 gave it a per-head group with
@@ -1227,14 +1261,15 @@ jobs:
     concurrency:
       group: ${{ format('code-review-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) }}
       cancel-in-progress: false
-    runs-on: codex  # lab-string-ok: the public label of the Codex review runner, read by the review tier only # self-hosted: credential: the reviewer token is mounted on this runner alone
+    runs-on: codex  # lab-string-ok: the public label of the Codex review runner, read by the review tier only # self-hosted: credential: the reviewer token is mounted on this runner alone (ruling 999 question to the Tenant Agent)
     # The route, for the opencode job.
     outputs:
       agent: ${{ steps.guard.outputs.agent }}
       model: ${{ steps.guard.outputs.model }}
       effort: ${{ steps.guard.outputs.effort }}
-    # One budget inside 75 minutes: the refresh lock waits at most 300 s and
-    # the refresh runs at most 130 s, the review lock 600 s, codex runs at most
+    # One budget inside 75 minutes (JOB_BUDGET in lib.sh; v5.12.5: each lock
+    # waits for what that budget has left, not a fixed 300 s and 600 s): the
+    # refresh runs at most 130 s, codex runs at most
     # 2730 s (a large head, v5.6; 1530 s otherwise), the module fetch at most
     # 300 s; the guard, checkout, retried API calls and posting keep the
     # remaining 440 s (less the 20 s twin settle on GitHub, v5.10.9), so the
@@ -1260,6 +1295,8 @@ jobs:
           umask 077
           rm -rf "$WORK"
           mkdir -m 0711 "$WORK"
+          # v5.12.5: the job's clock, for lock_wait (lib.sh). Root-owned.
+          date +%s > "$WORK/job-start"
 
           # Shared by every later step. die() records the reason, which the
           # error-report step posts as the PR comment.
@@ -1458,6 +1495,21 @@ jobs:
             jq -r '.tokens.access_token | split(".") | .[1]
                      | gsub("-"; "+") | gsub("_"; "/") | . + ("=" * ((4 - length % 4) % 4))
                      | @base64d | fromjson | .exp | numbers | floor' "$1" 2>/dev/null
+          }
+          # THE LOCK WAITS IN THE JOB'S BUDGET (v5.12.5, Tenant Agent ruling
+          # 1012). JOB_BUDGET is the review job's timeout-minutes in seconds.
+          # lock_wait NEED prints the seconds a flock on the review lock may
+          # wait: the budget left since $WORK/job-start, less the NEED seconds
+          # the job still uses once it holds the lock. No time left: die.
+          JOB_BUDGET=$(( 75 * 60 ))
+          lock_wait() {
+            local start left
+            start=$(cat "$WORK/job-start") || die "cannot read the job's start time ($WORK/job-start)"
+            [[ $start =~ ^[0-9]+$ ]] || die "the job's start time ($WORK/job-start) is not a number"
+            left=$(( start + JOB_BUDGET - $(date +%s) - $1 ))
+            [ "$left" -ge 1 ] ||
+              die "no time is left in the job's $JOB_BUDGET s to wait for $CODEX_MASTER/.review.lock (it needs $1 s after the lock)"
+            echo "$left"
           }
           LIB
           # shellcheck source=/dev/null
@@ -2086,8 +2138,10 @@ jobs:
             # `codex login status` renews nothing (v5.4); one minimal model
             # call does, run in an empty directory so it reads no checkout.
             refresh_dir=$(mktemp -d) || die "cannot create a directory for the Codex refresh call"
+            # The refresh call, the module fetch, the largest review and posting.
+            wait_s=$(lock_wait $(( 130 + 360 + 2730 + 440 )))
             rc=0
-            flock -w 300 -E 75 "$CODEX_MASTER/.review.lock" \
+            flock -w "$wait_s" -E 75 "$CODEX_MASTER/.review.lock" \
               timeout -k 10 120 \
               env -i PATH="$PATH" HOME=/root LANG=C.UTF-8 NO_COLOR=1 CODEX_HOME="$CODEX_MASTER" ${HTTPS_PROXY:+HTTPS_PROXY=$HTTPS_PROXY} ${HTTP_PROXY:+HTTP_PROXY=$HTTP_PROXY} ${NO_PROXY:+NO_PROXY=$NO_PROXY} ${https_proxy:+https_proxy=$https_proxy} ${http_proxy:+http_proxy=$http_proxy} ${no_proxy:+no_proxy=$no_proxy} \
                 codex exec --skip-git-repo-check -C "$refresh_dir" -s read-only --ephemeral --color never \
@@ -2095,7 +2149,7 @@ jobs:
                   </dev/null >/dev/null 2>&1 || rc=$?
             rm -rf -- "${refresh_dir:?}"
             [ "$rc" != 75 ] ||
-              die "timed out after 300 s waiting for $CODEX_MASTER/.review.lock to refresh the Codex login"
+              die "timed out after $wait_s s waiting for $CODEX_MASTER/.review.lock to refresh the Codex login"
             if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
               die "the Codex refresh call (\`codex exec\`) did not finish within 120 s; the Codex login was not refreshed"
             fi
@@ -2625,10 +2679,13 @@ jobs:
           # would steer later root steps). Its stdout and stderr go to a
           # root-owned file only, and workflow commands stay stopped under a
           # random token until the codex process tree is gone.
+          # The lock's wait (v5.12.5), before workflow commands stop: codex's
+          # limit, its kill grace, and posting and cleanup.
+          wait_s=$(lock_wait $(( limit + 30 + 440 )))
           stop=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
           echo "::stop-commands::$stop"
           rc=0
-          flock -w 600 -E 75 "$CODEX_MASTER/.review.lock" \
+          flock -w "$wait_s" -E 75 "$CODEX_MASTER/.review.lock" \
             timeout -k 30 "$limit" \
             setpriv --reuid=1000 --regid=1000 --clear-groups --no-new-privs \
               env -i PATH="$PATH" HOME=/home/node LANG=C.UTF-8 NO_COLOR=1 ${HTTPS_PROXY:+HTTPS_PROXY=$HTTPS_PROXY} ${HTTP_PROXY:+HTTP_PROXY=$HTTP_PROXY} ${https_proxy:+https_proxy=$https_proxy} ${http_proxy:+http_proxy=$http_proxy} \
@@ -2658,7 +2715,7 @@ jobs:
 
           case "$rc" in
             0)   ;;
-            75)  die "timed out after 600 s waiting for /root/.codex/.review.lock (another review holds it)" ;;
+            75)  die "timed out after $wait_s s waiting for /root/.codex/.review.lock (another review holds it)" ;;
             124) die "codex did not finish within $limit s" ;;
             *)   die "codex exited $rc" ;;
           esac
@@ -3511,9 +3568,10 @@ jobs:
   #   (b) $REVIEWER's latest standing verdict ON THIS HEAD is APPROVED.
   # Anything else fails, the label missing included: no approval, a
   # REQUEST_CHANGES, an approval of another head, a fork head, an unreadable
-  # API, a change list the forge truncates. A run whose review job did not
-  # review waits for the in-flight `Codex review` jobs of the same PR and
-  # head first, so the newest check on the head reads their verdict.
+  # API, a change list the forge truncates. v5.12.6: a run whose head is
+  # not approved while a twin's `Codex review` of it is queued or in flight
+  # fails at once; the twin's gate, the newest check on the head, reads that
+  # review's verdict.
   gate:
     name: Code Review (codex)
     needs: [scope, review]
@@ -3525,7 +3583,8 @@ jobs:
       group: ${{ format('code-review-gate-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) }}
       cancel-in-progress: true
     runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
-    timeout-minutes: 80
+    # v5.12.6 (ruling 580): no twin wait is left, so 10 minutes.
+    timeout-minutes: 10
     permissions:
       contents: read
       actions: read
@@ -3642,34 +3701,32 @@ jobs:
           fi
           echo "$n changed files; at least one is code, so $REVIEWER must approve $EVENT_SHA."
 
-          # Wait for the in-flight review of this PR and head, if any, so this
-          # check, the newest on the head, reads its verdict (GitHub; on Gitea
-          # one concurrency group per PR and head already orders the runs).
+          # v5.12.6 (ruling 1046): NO TWIN WAIT. A twin run (same head, same
+          # run-name) whose `Codex review` job is queued or in progress posts
+          # this head's check itself: its gate needs its review, so that gate's
+          # check is created after the review ends and is the newest on the
+          # head. This gate reads the twins once (GitHub; on Gitea one
+          # concurrency group per PR and head orders the runs), then reads the
+          # standing verdict below: an APPROVED head passes as before; anything
+          # else fails at once, naming the twin, and never holds a hosted
+          # runner for the codex runner's queue. No wait is left.
+          twin=
           if [ "$FORGE" = github ]; then
             title="Code Review: PR #$PR_NUM into $BASE_REF at $EVENT_SHA"
             wf=$(get "/actions/runs/$GITHUB_RUN_ID" | jq -r '.workflow_id // empty')
             [[ $wf =~ ^[0-9]+$ ]] || fail "cannot read this run's workflow"
-            waited=0
-            while :; do
-              busy=0
-              for st in queued in_progress; do
-                ids=$(get "/actions/workflows/$wf/runs?head_sha=$EVENT_SHA&status=$st&per_page=100" |
-                      jq -r --argjson me "$GITHUB_RUN_ID" --arg t "$title" \
-                        '.workflow_runs[] | select(.id != $me and .display_title == $t) | .id') ||
-                  fail "cannot list the $st runs on $EVENT_SHA"
-                for id in $ids; do
-                  rc=0
-                  get "/actions/runs/$id/jobs?per_page=100" |
-                    jq -e 'any(.jobs[]?; .name == "Codex review" and (.status == "queued" or .status == "in_progress"))' >/dev/null || rc=$?
-                  [ "$rc" -le 1 ] || fail "cannot read the jobs of run $id"
-                  [ "$rc" = 1 ] || busy=1
-                done
+            for st in queued in_progress; do
+              ids=$(get "/actions/workflows/$wf/runs?head_sha=$EVENT_SHA&status=$st&per_page=100" |
+                    jq -r --argjson me "$GITHUB_RUN_ID" --arg t "$title" \
+                      '.workflow_runs[] | select(.id != $me and .display_title == $t) | .id') ||
+                fail "cannot list the $st runs on $EVENT_SHA"
+              for id in $ids; do
+                rc=0
+                get "/actions/runs/$id/jobs?per_page=100" |
+                  jq -e 'any(.jobs[]?; .name == "Codex review" and (.status == "queued" or .status == "in_progress"))' >/dev/null || rc=$?
+                [ "$rc" -le 1 ] || fail "cannot read the jobs of run $id"
+                [ "$rc" = 1 ] || twin=${twin:-$id}
               done
-              [ "$busy" = 1 ] || break
-              [ "$waited" -lt 4500 ] || fail "a Codex review of $EVENT_SHA is still running after 4500 s"
-              [ "$waited" -gt 0 ] || echo "A Codex review of $EVENT_SHA is in flight; waiting for its verdict."
-              sleep 30
-              waited=$((waited + 30))
             done
           fi
 
@@ -3695,7 +3752,7 @@ jobs:
           # v5.12.1: NO APPROVAL IS REUSED on a failed review or a hold. This
           # run's review job failed (a requested round that ended red, an
           # owner or round-limit stop): its outcome stands over an earlier
-          # approval. The live PR's labels, read after the twin wait: a hold
+          # approval. The live PR's labels, read after the twin read: a hold
           # keeps even an approval of the head from passing.
           [ "$REVIEW_RESULT" != failure ] ||
             fail "this run's Codex review job failed, so no earlier approval of $EVENT_SHA is reused (v5.12.1)"
@@ -3716,6 +3773,10 @@ jobs:
                              and (.state == "APPROVED" or .state == "REQUEST_CHANGES")) ]
               | sort_by(.submitted_at // "", .id) | last | .state // "NONE"') ||
             fail "cannot read the reviews of PR $PR_NUM"
+          # v5.12.6: not approved while a twin reviews the head: that run's
+          # gate posts the head's check; this one fails closed now.
+          [ "$verdict" = APPROVED ] || [ -z "$twin" ] ||
+            fail "the Codex review of $EVENT_SHA runs in run $twin; that run's gate posts this head's check (verdict here: $verdict; v5.12.6, ruling 1046)"
           case "$verdict" in
             APPROVED) echo "$REVIEWER approved $EVENT_SHA." ;;
             REQUEST_CHANGES) fail "$REVIEWER requested changes on $EVENT_SHA" ;;
