@@ -112,6 +112,29 @@ describe("AppSidebar", () => {
     expect(vms?.getAttribute("href")).toBe("/compute/vms");
   });
 
+  // #2024 Codex round 1: the pages this split adds are reachable from the nav.
+  it.each([
+    ["/compute/migrations", "Migrations"],
+    ["/attestation/collect", "Collect"],
+    ["/devices/bmc", "BMC"],
+    ["/devices/lookup", "Device Lookup"],
+    ["/ca/eab", "EAB Keys"],
+    ["/ca/sign", "Sign"],
+    ["/ca/verify", "Verify"],
+    ["/kms/operations", "Key Operations"],
+    ["/iam/policies/test", "Policy Test"],
+    ["/tenant/lifecycle", "Lifecycle"],
+    ["/networking/switches", "Switches"],
+    ["/networking/gateway/bgp", "BGP"],
+    ["/tpm/idevid", "IDevID"],
+  ])("links %s as %s in its group", (href, label) => {
+    nav.pathname = href;
+    renderSidebar();
+    const link = document.querySelector(`a[href="${href}"]`);
+    expect(link?.textContent).toBe(label);
+    expect(link?.getAttribute("data-active")).toBe("true");
+  });
+
   it("opens no group for an unknown or missing path", () => {
     nav.pathname = "/no/such/page";
     const { unmount } = renderSidebar();
