@@ -412,6 +412,56 @@ func TestSelectQUICAuth_EmbeddedPEP_RefusesLocalTokenListener(t *testing.T) {
 	}
 }
 
+// Under mTLS a certificate principal is decided by the IAM PEP (#2016). The
+// embedded quicbaas SDK PEP cannot decide a Check, so an mTLS QUIC listener
+// on it would refuse every classified request: selectQUICAuth refuses it at
+// startup, as on the local-token path.
+func TestSelectQUICAuth_MTLS_EmbeddedPEP_RefusesListener(t *testing.T) {
+	t.Parallel()
+	tr, err := qbembedded.New(embeddedQuicBaaSService{})
+	require.NoError(t, err)
+	pep := sdkiam.NewPEPClient(tr)
+
+	cases := map[string]*app.App{
+		"explicit embedded transport":                     {QuicBaaSConfig: &quicbaas.Config{Transport: quicbaas.TransportEmbedded}},
+		"absent quicbaas section is the embedded default": {},
+	}
+	for name, application := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			config := failClosedConfig()
+			config.EnableMTLS = true
+			config.App = application
+
+			mw, validator, err := selectQUICAuth(config, nil, pep, testutil.GenerateTestTLSBundle(t).CAPool, logging.DefaultLogger())
+			var want ErrEmbeddedPEPUnavailable
+			require.True(t, errors.As(err, &want), "error is %T (%v), want ErrEmbeddedPEPUnavailable", err, err)
+			assert.Equal(t, transportQUIC, want.Transport)
+			assert.NotContains(t, err.Error(), "--enable-mtls", "mTLS is already on; the remedy must not name it")
+			assert.Nil(t, mw)
+			assert.Nil(t, validator)
+		})
+	}
+}
+
+// Without a PEP an mTLS QUIC listener has no decision point for a
+// certificate principal: every classified request is refused (fail closed).
+func TestSelectQUICAuth_MTLS_NoPEP_RefusesCertificatePrincipal(t *testing.T) {
+	t.Parallel()
+	config := failClosedConfig()
+	config.EnableMTLS = true
+	bundle := testutil.GenerateTestTLSBundle(t)
+
+	mw, _, err := selectQUICAuth(config, nil, nil, bundle.CAPool, logging.DefaultLogger())
+	require.NoError(t, err)
+	verified := quic.WithConnectionTLS(context.Background(), &tls.ConnectionState{
+		VerifiedChains: [][]*x509.Certificate{{leafOf(t, bundle.ClientCert), bundle.CACert}},
+	})
+	_, resp := mw.GuardRequest(verified, &quicwire.Request{Opcode: quicwire.OpKMSListKeys})
+	require.NotNil(t, resp)
+	assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
+}
+
 func TestSelectQUICAuth_SharedValidator_BuildsRequiredMiddleware(t *testing.T) {
 	t.Parallel()
 	mw, validator, err := selectQUICAuth(failClosedConfig(), &platformTokenValidator{}, nil, nil, logging.DefaultLogger())
@@ -423,24 +473,41 @@ func TestSelectQUICAuth_SharedValidator_BuildsRequiredMiddleware(t *testing.T) {
 // Under mTLS the QUIC connection's client certificate is the credential, and
 // the middleware must turn it into a principal: without one every category
 // operation guarded by AuthorizeSubOpcode is refused (#720). The QUIC
-// dispatcher always authorizes, so the middleware is never nil (#767).
+// dispatcher always authorizes, so the middleware is never nil (#767). The
+// certificate principal is decided by the IAM PEP, not by a wildcard scope
+// (#2016): removing the peer checker wiring fails this test.
 func TestSelectQUICAuth_MTLS_AuthenticatesByCertificate(t *testing.T) {
 	t.Parallel()
 	config := failClosedConfig()
 	config.EnableMTLS = true
+	config.App = remoteQuicBaaSApp()
 	bundle := testutil.GenerateTestTLSBundle(t)
+	var last *sdkiam.CheckRequest
+	pep := pepAllowing("test-client", "kms", "delete", &last)
 
-	mw, validator, err := selectQUICAuth(config, nil, nil, bundle.CAPool, logging.DefaultLogger())
+	mw, validator, err := selectQUICAuth(config, nil, pep, bundle.CAPool, logging.DefaultLogger())
 	require.NoError(t, err)
 	require.NotNil(t, mw, "the QUIC dispatcher always authorizes; mTLS supplies the identity")
 	assert.Nil(t, validator)
 
-	// The verified peer certificate authenticates a tokenless request...
+	// The verified peer certificate authenticates a tokenless request, and
+	// the PEP decides it for the certificate's subject and tenant...
 	verified := quic.WithConnectionTLS(context.Background(), &tls.ConnectionState{
 		VerifiedChains: [][]*x509.Certificate{{leafOf(t, bundle.ClientCert), bundle.CACert}},
 	})
 	_, resp := mw.GuardRequest(verified, &quicwire.Request{Opcode: quicwire.OpKMSDeleteKey})
 	assert.Nil(t, resp)
+	require.NotNil(t, last, "the IAM PEP must be asked for a certificate principal")
+	assert.Equal(t, "test-client", last.Subject.ID)
+	assert.Equal(t, "Test Platform Client", last.Subject.TenantID)
+	assert.Equal(t, "kms", last.Resource)
+	assert.Equal(t, "delete", last.Action)
+	// ...which refuses what the principal does not hold, whatever the
+	// certificate's wildcard scope says...
+	_, resp = mw.GuardRequest(verified, &quicwire.Request{Opcode: quicwire.OpKMSListKeys})
+	require.NotNil(t, resp)
+	assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
+	assert.Equal(t, "read", last.Action)
 	// ...but an unclassified operation is still refused...
 	_, resp = mw.GuardRequest(verified, &quicwire.Request{Opcode: quicwire.OpJWTVerify})
 	require.NotNil(t, resp)
