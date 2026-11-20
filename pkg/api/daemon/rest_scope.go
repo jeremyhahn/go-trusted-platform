@@ -74,8 +74,8 @@ func sdnRouteScope(method, route string) (string, error) {
 	return sdnScopeResource + ":" + action, nil
 }
 
-// catalogRouteRPCs maps each ceremony, PIV, LUKS, FIDO2, vTPM, proxy and
-// cluster route on the daemon
+// catalogRouteRPCs maps each ceremony, PIV, LUKS, FIDO2, vTPM, proxy,
+// service-control (/api/v1/services) and cluster route on the daemon
 // REST listener, as "METHOD route-template", to the gRPC method it serves. The
 // route needs the scope the gRPC catalog gives that method: several of these
 // POSTs read, delete or use a key, and every ceremony step has its own
@@ -153,6 +153,12 @@ var catalogRouteRPCs = map[string]string{
 	"GET /api/v1/proxy/status":         "/platform.v1.ProxyService/GetProxyStatus",
 	"POST /api/v1/proxy/reload":        "/platform.v1.ProxyService/ReloadProxyConfig",
 	"GET /api/v1/proxy/zone-matrix":    "/platform.v1.ProxyService/GetZoneMatrix",
+
+	"GET /api/v1/services":                    "/platform.v1.PlatformDaemon/ListServices",
+	"GET /api/v1/services/{service}":          "/platform.v1.PlatformDaemon/GetServiceStatus",
+	"POST /api/v1/services/{service}/start":   "/platform.v1.PlatformDaemon/StartService",
+	"POST /api/v1/services/{service}/stop":    "/platform.v1.PlatformDaemon/StopService",
+	"POST /api/v1/services/{service}/restart": "/platform.v1.PlatformDaemon/RestartService",
 
 	"GET /api/v1/cluster/status":     "/platform.v1.ClusterService/GetStatus",
 	"GET /api/v1/cluster/nodes":      "/platform.v1.ClusterService/ListNodes",

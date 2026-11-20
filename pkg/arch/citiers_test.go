@@ -160,6 +160,9 @@ const (
 	// guard, ci-template v1.34) cannot carry the schedule guard: it cannot
 	// need itself, and it feeds the docs tier. On exactly this expression it
 	// needs none, because a schedule run never reaches the pool (m2475).
+	// Owner ruling 999 retired this route from ci.yml (every job there is on
+	// ubuntu-latest unless a measured reason keeps it self-hosted); the
+	// fixtures keep it so the rule above still holds for a job that takes it.
 	bigdiskRoute = `${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}`
 
 	// ciFullTierEnv is the workflow-level env the steps and the gate read. It
