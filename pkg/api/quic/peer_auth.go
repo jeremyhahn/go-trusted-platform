@@ -80,5 +80,6 @@ func (m *AuthMiddleware) authenticatePeer(ctx context.Context) (context.Context,
 			Payload: []byte(ErrPeerAuthenticationFailed{Cause: err}.Error()),
 		}
 	}
+	ctx = contextWithPeerPrincipal(ctx, m.peerChecker)
 	return ContextWithAuthorizedContext(ctx, authCtx), nil
 }
