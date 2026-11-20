@@ -19,7 +19,7 @@ test.describe('gateway VIPs (real server)', () => {
     const listed = await sdk.gateway.listVIPs();
     expect(listed.success).toBe(true);
     const vips = listed.data?.vips ?? [];
-    expect(vips.some((v) => v.address === VIP_ADDRESS)).toBe(true);
+    expect(vips.some((v) => v.vip?.address === VIP_ADDRESS)).toBe(true);
 
     await adminPage.goto('/networking/gateway/vips');
     await expect(adminPage.getByRole('heading', { name: 'Virtual IPs' })).toBeVisible();
@@ -67,14 +67,14 @@ test.describe('gateway VIPs (real server)', () => {
     await expect(adminPage.getByText(VIP_ADDRESS)).toBeVisible();
 
     const afterAdd = await sdk.gateway.listVIPs();
-    expect((afterAdd.data?.vips ?? []).some((v) => v.address === VIP_ADDRESS)).toBe(true);
+    expect((afterAdd.data?.vips ?? []).some((v) => v.vip?.address === VIP_ADDRESS)).toBe(true);
 
     await adminPage.getByRole('button', { name: `Remove ${VIP_ADDRESS}:${VIP_PORT}` }).click();
     await adminPage.getByRole('button', { name: 'Confirm' }).click();
     await expect(adminPage.getByText(VIP_ADDRESS)).toHaveCount(0);
 
     const afterRemove = await sdk.gateway.listVIPs();
-    expect((afterRemove.data?.vips ?? []).some((v) => v.address === VIP_ADDRESS)).toBe(false);
+    expect((afterRemove.data?.vips ?? []).some((v) => v.vip?.address === VIP_ADDRESS)).toBe(false);
   });
 });
 
