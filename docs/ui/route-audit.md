@@ -17,7 +17,7 @@ Counted with Serena `search_for_pattern` over `web/src`, excluding `__tests__/`,
 
 - `\bfetch\(`: 38 matches. One is a comment (`(d)/tpm/nvram/page.tsx:112`), so there are **37 fetch call sites**, all listed in table B. Two of them are wrappers that send several paths (`app/auth/webauthn/page.tsx:98`, `utils/auth-factors-api.ts:75`). B lists each of those paths on its own row.
 - `apiClient\.`: **0 matches**.
-- SDK service calls: the web code takes a service from `useAttestation/useCA/useCompute/useDevice/useDNS/useGateway/useIAM/useIDevID/useKMS/useOverlay/usePlatform/usePXE/useSDN/useTenant/useTPM/useVPN/useVTPM` (`sdk/javascript/src/react/hooks/use-services.ts`) or from `usePlatformClient()`, and calls `<var>.<method>(`. That gives **139 distinct SDK methods** (table A). Each appears once, and the caller column lists every call site. `hooks/use-ntp.ts` calls the NTP paths through `client.getApiClient()`.
+- SDK service calls: the web code takes a service from `useAttestation/useCA/useCompute/useDevice/useDNS/useGateway/useIAM/useIDevID/useKMS/useOverlay/usePlatform/usePXE/useSDN/useTenant/useTPM/useVPN/useVTPM` (`sdk/javascript/src/react/hooks/use-services.ts`) or from `usePlatformClient()`, and calls `<var>.<method>(`. That gives **178 distinct SDK methods** (table A, plus 3 NTP paths: 181 rows). Each appears once, and the caller column lists every call site. `hooks/use-ntp.ts` calls the NTP paths through `client.getApiClient()`.
 
 ## A. SDK service methods
 
@@ -257,7 +257,7 @@ Counted with Serena `search_for_pattern` over `web/src`, excluding `__tests__/`,
 
 ## Counts per status (draft, before the not-configured pass)
 
-- Table A (162 rows: 159 SDK methods, 3 NTP paths): implemented 140, unimplemented 16, stubbed 6, not-configured 0 (pending).
+- Table A (181 rows: 178 SDK methods, 3 NTP paths): implemented 157, unimplemented 17, stubbed 7, not-configured 0 (pending).
 - Table B (45 rows covering 37 fetch sites): implemented 35, unimplemented 9, stubbed 1, not-configured 0 (pending).
 
 ## Every row that is not `implemented`
@@ -300,6 +300,5 @@ Counted with Serena `search_for_pattern` over `web/src`, excluding `__tests__/`,
 ## Remaining for slice 2
 
 - The not-configured pass: for each area whose `*Routes()` in `router.go` registers only on a non-nil server (gateway, vpn, overlay, sdn, pxe, compute, dns, ntp, vtpm and others), check the backend against `configs/platform/templates/single-node/default.yaml` and re-mark the rows.
-- Recount table A from the rows (the counts above were tallied by hand) and paste the exact grep output.
 - Read the paths not yet verified: `device:607`, `kms:123/152`, `tpm:492`, and the `/v2` handlers.
 - Look for stubs inside handlers that the golden file lists as registered (Unimplemented, TODO, fixed data).
