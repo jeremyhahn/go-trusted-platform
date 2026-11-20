@@ -73,6 +73,14 @@ func (f *fakeGatewayService) SetGatewayMode(_ context.Context, req *platformv1.S
 	return answer[*platformv1.SetGatewayModeResponse](f, req)
 }
 
+func (f *fakeGatewayService) ListGatewayAdmittedVTEPs(_ context.Context, req *platformv1.ListGatewayAdmittedVTEPsRequest) (*platformv1.ListGatewayAdmittedVTEPsResponse, error) {
+	return answer[*platformv1.ListGatewayAdmittedVTEPsResponse](f, req)
+}
+
+func (f *fakeGatewayService) GetGatewayAdmittedVTEP(_ context.Context, req *platformv1.GetGatewayAdmittedVTEPRequest) (*platformv1.GetGatewayAdmittedVTEPResponse, error) {
+	return answer[*platformv1.GetGatewayAdmittedVTEPResponse](f, req)
+}
+
 func (f *fakeGatewayService) GetBGPStatus(_ context.Context, req *platformv1.GetBGPStatusRequest) (*platformv1.GetBGPStatusResponse, error) {
 	return answer[*platformv1.GetBGPStatusResponse](f, req)
 }
@@ -124,6 +132,22 @@ type gatewayRouteCase struct {
 
 func gatewayRouteCases() []gatewayRouteCase {
 	return []gatewayRouteCase{
+		{
+			name: "list admitted vteps", method: http.MethodGet, path: "/api/v1/gateway/vteps?gatewayId=gw-1",
+			wantReq: &platformv1.ListGatewayAdmittedVTEPsRequest{GatewayId: "gw-1"},
+			reply: &platformv1.ListGatewayAdmittedVTEPsResponse{Vteps: []*platformv1.GatewayAdmittedVTEP{
+				{Vtep: "192.0.2.10", Hostname: "host-a", DeviceId: 7},
+			}},
+			wantCode: http.StatusOK,
+		},
+		{
+			name: "get admitted vtep", method: http.MethodGet, path: "/api/v1/gateway/vteps/192.0.2.10?gatewayId=gw-1",
+			wantReq: &platformv1.GetGatewayAdmittedVTEPRequest{GatewayId: "gw-1", Vtep: "192.0.2.10"},
+			reply: &platformv1.GetGatewayAdmittedVTEPResponse{Vtep: &platformv1.GatewayAdmittedVTEP{
+				Vtep: "192.0.2.10", Hostname: "host-a",
+			}},
+			wantCode: http.StatusOK,
+		},
 		{
 			name: "get status", method: http.MethodGet, path: "/api/v1/gateway/status",
 			wantReq: &platformv1.GetGatewayStatusRequest{},
