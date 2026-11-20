@@ -272,13 +272,6 @@ func (s *RESTServer) registerRoutes() {
 	api.HandleFunc("/status", s.handleStatus).Methods(http.MethodGet)
 	api.HandleFunc("/version", s.handleVersion).Methods(http.MethodGet)
 
-	// Service management endpoints
-	api.HandleFunc("/services", s.handleListServices).Methods(http.MethodGet)
-	api.HandleFunc("/services/{service}", s.handleGetService).Methods(http.MethodGet)
-	api.HandleFunc("/services/{service}/start", s.handleStartService).Methods(http.MethodPost)
-	api.HandleFunc("/services/{service}/stop", s.handleStopService).Methods(http.MethodPost)
-	api.HandleFunc("/services/{service}/restart", s.handleRestartService).Methods(http.MethodPost)
-
 	// Protocol status endpoint
 	api.HandleFunc("/protocols", s.handleProtocols).Methods(http.MethodGet)
 
@@ -589,6 +582,23 @@ func (s *RESTServer) SetTPMHandlers(tpm platformv1.TPMServiceServer, guard *rest
 		return
 	}
 	restapi.NewTPMHandlers(s.logger).WithTPMService(tpm).WithScopeGuard(guard).RegisterRoutes(s.router)
+}
+
+// SetServiceControlHandlers mounts the service-control routes
+// (/api/v1/services) behind guard with the scopes the gRPC catalog gives
+// their PlatformDaemon twins: platform:read to list or read a service,
+// platform:write to start, stop or restart one. A nil guard mounts nothing.
+func (s *RESTServer) SetServiceControlHandlers(guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrServiceRESTUnavailable{Reason: "no REST scope guard"}
+	}
+	api := s.catalogGuardedAPI(guard)
+	api.HandleFunc("/services", s.handleListServices).Methods(http.MethodGet)
+	api.HandleFunc("/services/{service}", s.handleGetService).Methods(http.MethodGet)
+	api.HandleFunc("/services/{service}/start", s.handleStartService).Methods(http.MethodPost)
+	api.HandleFunc("/services/{service}/stop", s.handleStopService).Methods(http.MethodPost)
+	api.HandleFunc("/services/{service}/restart", s.handleRestartService).Methods(http.MethodPost)
+	return nil
 }
 
 // applyMiddleware wraps the router with middleware handlers
