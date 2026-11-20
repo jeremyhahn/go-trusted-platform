@@ -422,6 +422,83 @@ describe('SDNBridgeDetailClient policy apply and policy identity', () => {
     });
   }
 
+  // #2024 Codex round 3 P1: an empty policy list while the read is pending or
+  // refused is not "no conflict"; Apply waits for a loaded policy list.
+  function holdPolicyList(): () => void {
+    const real = globalThis.fetch;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        if ((init?.method ?? 'GET').toUpperCase() === 'GET' && url.pathname === `${SDN}/policies`) {
+          await gate;
+        }
+        return real(input, init);
+      })
+    );
+    return release;
+  }
+
+  function fillAllowTelnet() {
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Policy' }));
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: 'allow-telnet' } });
+    fireEvent.change(screen.getByLabelText('Action *'), { target: { value: 'POLICY_RULE_ACTION_ALLOW' } });
+    fireEvent.change(screen.getByLabelText('Protocol'), { target: { value: 'tcp' } });
+    fireEvent.change(screen.getByLabelText('Destination port'), { target: { value: '23' } });
+  }
+
+  it('a pending policy list read blocks Apply until the list loads', async () => {
+    const sent = stubControlPlane({
+      [`GET ${SDN}/bridges/br-1`]: ok({
+        bridge: { id: 'br-1', config: { name: 'br-int' }, status: 'BRIDGE_STATUS_UP' },
+      }),
+      [`GET ${SDN}/bridges/br-1/ports`]: ok({ ports: [] }),
+      [`GET ${SDN}/policies`]: ok({ policies: [] }),
+      [`POST ${SDN}/policies`]: ok({ policy: { id: 'pol-9' } }),
+    });
+    const release = holdPolicyList();
+    render(withControlPlane(<SDNBridgeDetailClient />));
+    await screen.findByRole('heading', { level: 1, name: 'br-int' });
+    fillAllowTelnet();
+
+    const apply = screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement;
+    expect(apply.disabled).toBe(true);
+    expect(screen.getByTestId('policy-list-not-loaded').textContent).toContain('policy list');
+    await act(async () => {
+      fireEvent.click(apply);
+    });
+    expect(sent.some((r) => r.method === 'POST' && r.path === `${SDN}/policies`)).toBe(false);
+
+    await act(async () => {
+      release();
+    });
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(false)
+    );
+    expect(screen.queryByTestId('policy-list-not-loaded')).toBeNull();
+  });
+
+  it('a refused policy list read blocks Apply and nothing is sent', async () => {
+    const sent = await renderPage({
+      [`GET ${SDN}/policies`]: refused(403, 'policy list forbidden'),
+      [`POST ${SDN}/policies`]: ok({ policy: { id: 'pol-9' } }),
+    });
+    await screen.findByTestId('sdn-policies-error');
+    fillAllowTelnet();
+
+    const apply = screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement;
+    expect(apply.disabled).toBe(true);
+    expect(screen.getByTestId('policy-list-not-loaded').textContent).toContain('policy list');
+    await act(async () => {
+      fireEvent.click(apply);
+    });
+    expect(sent.some((r) => r.method === 'POST' && r.path === `${SDN}/policies`)).toBe(false);
+  });
+
   it('switching to icmp clears an entered destination port', async () => {
     await renderPage({});
     fireEvent.click(screen.getByRole('button', { name: 'Apply Policy' }));
