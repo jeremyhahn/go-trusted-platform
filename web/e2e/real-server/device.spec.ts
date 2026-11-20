@@ -1,4 +1,24 @@
-import { test, expect } from './fixtures';
+import type { Page } from '@playwright/test';
+import { test as base, expect } from '@playwright/test';
+import { PlatformClient } from 'trusted-platform-sdk';
+
+type Fx = { adminPage: Page; sdk: PlatformClient };
+
+const apiUrl = process.env.E2E_REAL_SERVER_API_URL ?? '';
+const adminJwt = process.env.E2E_REAL_SERVER_ADMIN_JWT ?? '';
+
+const test = base.extend<Fx>({
+  sdk: async ({}, provide, testInfo) => {
+    testInfo.skip(!apiUrl || !adminJwt, 'real server not configured (E2E_REAL_SERVER_API_URL, E2E_REAL_SERVER_ADMIN_JWT)');
+    await provide(new PlatformClient({ baseUrl: apiUrl, headers: { Authorization: `Bearer ${adminJwt}` } }));
+  },
+  adminPage: async ({ page, context, baseURL }, provide, testInfo) => {
+    testInfo.skip(!apiUrl || !adminJwt, 'real server not configured (E2E_REAL_SERVER_API_URL, E2E_REAL_SERVER_ADMIN_JWT)');
+    const domain = new URL(baseURL ?? 'http://localhost:3000').hostname;
+    await context.addCookies([{ name: 'jwt', value: adminJwt, domain, path: '/', httpOnly: false, secure: false, sameSite: 'Lax' }]);
+    await provide(page);
+  },
+});
 
 // #2048, coverage-matrix slice 11: the device row's operations on
 // /devices/lookup against the real server. State is seeded through the SDK
@@ -46,7 +66,7 @@ test.describe('device operations (real server)', () => {
     await adminPage.goto('/devices/lookup');
     await adminPage.getByLabel('Device serial').fill(serial);
     await adminPage.getByRole('button', { name: 'Find device' }).click();
-    await adminPage.getByLabel('Model').fill('Board-B');
+    await adminPage.getByLabel('Model', { exact: true }).fill('Board-B');
     await adminPage.getByRole('button', { name: 'Update device' }).click();
     await adminPage.getByRole('button', { name: 'Confirm' }).click();
     await expect(adminPage.getByText('Device updated').first()).toBeVisible();
