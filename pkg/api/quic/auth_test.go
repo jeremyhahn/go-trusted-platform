@@ -17,6 +17,8 @@ package quic
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"testing"
@@ -623,5 +625,83 @@ func TestAuthMiddleware_EmptyToken_IsNotSkipped(t *testing.T) {
 
 	if resp.Status != quicwire.StatusUnauthorized {
 		t.Errorf("status = %v, want %v", resp.Status, quicwire.StatusUnauthorized)
+	}
+}
+
+// wildcardPeerAuthenticator admits every certificate as a principal holding
+// the wildcard scope, so a test sees whether the scope or the peer checker
+// decides an mTLS caller (#2016).
+type wildcardPeerAuthenticator struct{}
+
+func (wildcardPeerAuthenticator) AuthenticatePeer(context.Context, []*x509.Certificate) (*platformtoken.AuthorizedContext, error) {
+	return &platformtoken.AuthorizedContext{Subject: "operator-cert", TenantID: "tenant-a", Scopes: []string{"*:*"}}, nil
+}
+
+type stubPeerChecker struct {
+	allowed bool
+	err     error
+	asked   *platformtoken.AuthorizedContext
+}
+
+func (c *stubPeerChecker) CheckPeerPermission(_ context.Context, authCtx *platformtoken.AuthorizedContext, _, _ string) (bool, error) {
+	c.asked = authCtx
+	return c.allowed, c.err
+}
+
+func peerTLSContext() context.Context {
+	leaf := &x509.Certificate{}
+	return WithConnectionTLS(context.Background(), &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{leaf}}})
+}
+
+func authenticatedPeerContext(t *testing.T, m *AuthMiddleware) context.Context {
+	t.Helper()
+	ctx, resp := m.AuthenticateRequest(peerTLSContext(), &quicwire.Request{})
+	if resp != nil {
+		t.Fatalf("peer authentication failed: %v", resp)
+	}
+	return ctx
+}
+
+func TestAuthorizeRequest_PeerPrincipalDecidedByPeerChecker(t *testing.T) {
+	tests := []struct {
+		name    string
+		checker *stubPeerChecker
+		denied  bool
+	}{
+		{name: "no peer checker denies", checker: nil, denied: true},
+		{name: "checker denies", checker: &stubPeerChecker{allowed: false}, denied: true},
+		{name: "checker error denies", checker: &stubPeerChecker{allowed: true, err: errors.New("pep unreachable")}, denied: true},
+		{name: "checker allows", checker: &stubPeerChecker{allowed: true}, denied: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := []AuthMiddlewareOption{WithQUICPeerAuthenticator(wildcardPeerAuthenticator{}), WithQUICRequireAuth(true)}
+			if tt.checker != nil {
+				opts = append(opts, WithQUICPeerAuthorizationChecker(tt.checker))
+			}
+			m := NewAuthMiddleware(opts...)
+			ctx := authenticatedPeerContext(t, m)
+
+			resp := m.AuthorizeRequest(ctx, "device", "read")
+			if tt.denied {
+				if resp == nil || resp.Status != quicwire.StatusPermissionDenied {
+					t.Fatalf("got %v, want PermissionDenied", resp)
+				}
+			} else if resp != nil {
+				t.Fatalf("got %v, want nil", resp)
+			}
+			if tt.checker != nil && (tt.checker.asked == nil || tt.checker.asked.Subject != "operator-cert") {
+				t.Fatalf("peer checker was not asked for the certificate principal")
+			}
+
+			subResp := AuthorizeSubOpcode(ctx, map[byte]OpcodePermission{1: {Resource: "device", Action: "read"}}, 1)
+			if tt.denied {
+				if subResp == nil || subResp.Status != quicwire.StatusPermissionDenied {
+					t.Fatalf("sub-opcode: got %v, want PermissionDenied", subResp)
+				}
+			} else if subResp != nil {
+				t.Fatalf("sub-opcode: got %v, want nil", subResp)
+			}
+		})
 	}
 }
