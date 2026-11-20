@@ -164,7 +164,7 @@ export default function SessionDetailClient() {
   // from the server as an error, never as a provisioned device.
   const provision = async (create: () => Promise<string | null | undefined>, failTitle: string) => {
     try {
-      const result = await fulfil.mutateAsync(create);
+      const result = await fulfil.mutateAsync({ create });
       setCreatedProfileId(result?.profileId ?? null);
       toast({
         title: 'Device provisioned',
@@ -493,6 +493,11 @@ export default function SessionDetailClient() {
                       )}
                       Create Profile and Provision Device
                     </Button>
+                    {fulfilReason !== null && (
+                      <p className="text-sm text-muted-foreground" data-testid="fulfil-blocked-reason">
+                        {fulfilReason}
+                      </p>
+                    )}
                   </form>
                 </CardContent>
               </Card>
@@ -569,6 +574,11 @@ export default function SessionDetailClient() {
                       )}
                       Create Profile and Provision Device
                     </Button>
+                    {fulfilReason !== null && (
+                      <p className="text-sm text-muted-foreground" data-testid="fulfil-blocked-reason">
+                        {fulfilReason}
+                      </p>
+                    )}
                   </form>
                 </CardContent>
               </Card>
