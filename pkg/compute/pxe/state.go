@@ -463,7 +463,14 @@ func (sm *StateManager) UpdateDevice(deviceID string, fn func(*DeviceInfo) error
 
 		// Attempt atomic swap
 		if sm.devices.CompareAndSwap(deviceID, entry, newEntry) {
-			return sm.persist(deviceID)
+			if err := sm.persist(deviceID); err != nil {
+				// The datastore did not take the update: restore the
+				// previous record in memory, unless a later writer has
+				// already replaced it, so the caller can retry (#2081).
+				sm.devices.CompareAndSwap(deviceID, newEntry, entry)
+				return err
+			}
+			return nil
 		}
 		// CAS failed, retry
 	}

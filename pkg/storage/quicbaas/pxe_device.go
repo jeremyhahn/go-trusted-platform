@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"hash/fnv"
 
+	"github.com/jeremyhahn/go-quicbaas/pkg/iam"
 	sdktransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
@@ -60,7 +61,10 @@ func NewPXEDeviceStore(storage Storage, tenantID string, logger *logging.Logger)
 // tenantContext scopes ctx to the store's tenant: PXE device records are
 // system-level and live in the system tenant (docs/SPEC.md:23).
 func (s *PXEDeviceStore) tenantContext(ctx context.Context) context.Context {
-	return sdktransport.ContextWithTenant(ctx, s.tenantID)
+	// The transport carries the tenant to a remote server; the embedded
+	// keyspace (service/keyspace.go BuildKey) reads it from pkg/iam's
+	// context key instead, so set both (#2081).
+	return iam.ContextWithTenant(sdktransport.ContextWithTenant(ctx, s.tenantID), s.tenantID)
 }
 
 // pxeDeviceEntityID maps a PXE device ID to the datastore's numeric ID
