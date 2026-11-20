@@ -79,17 +79,27 @@ export function useTenantLifecycle(): UseTenantLifecycleResult {
     return tenant;
   }, [tenant]);
 
-  const refresh = useCallback(
-    async (id: string) => {
-      setTenant(normalizeTenant(unwrap(await service.getTenant(id)).tenant));
-    },
-    [service]
-  );
-
   // Each lookup takes a generation; a lookup superseded by a later one drops
   // its result, busy, error and notice updates, so an earlier lookup that
   // finishes last never becomes the target of remove, suspend or rotation.
+  // Mutations capture the same generation when they start and drop their
+  // selection, DEK and quota updates when a lookup has moved the selection
+  // meanwhile, so a slow mutation of tenant A never re-selects A.
   const lookupGen = useRef(0);
+
+  /** Captures the selection generation; the returned check is true while it is unchanged. */
+  const selection = useCallback(() => {
+    const gen = lookupGen.current;
+    return () => gen === lookupGen.current;
+  }, []);
+
+  const refresh = useCallback(
+    async (id: string, current: () => boolean) => {
+      const found = normalizeTenant(unwrap(await service.getTenant(id)).tenant);
+      if (current()) setTenant(found);
+    },
+    [service]
+  );
 
   const lookup = useCallback(
     async (name: string) => {
@@ -119,48 +129,54 @@ export function useTenantLifecycle(): UseTenantLifecycleResult {
     (displayName: string) =>
       run(async () => {
         const t = requireTenant();
+        const current = selection();
         // TenantGRPCServer.UpdateTenant applies displayName only when it is
         // nonempty, so an empty one would be reported as saved but ignored.
         if (!displayName.trim()) throw new Error('Display name cannot be empty');
         const updated = unwrap(await service.updateTenant({ tenantId: t.id, displayName })).tenant;
-        setTenant(updated ? normalizeTenant(updated) : { ...t, displayName });
+        if (current()) setTenant(updated ? normalizeTenant(updated) : { ...t, displayName });
         return 'Tenant updated';
       }),
-    [run, service, requireTenant]
+    [run, service, requireTenant, selection]
   );
 
   const remove = useCallback(
     () =>
       run(async () => {
         const t = requireTenant();
+        const current = selection();
         unwrap(await service.deleteTenant(t.id));
-        setTenant(null);
-        setDEKStatus(null);
+        if (current()) {
+          setTenant(null);
+          setDEKStatus(null);
+        }
         return `Tenant ${t.name} deleted`;
       }),
-    [run, service, requireTenant]
+    [run, service, requireTenant, selection]
   );
 
   const suspend = useCallback(
     () =>
       run(async () => {
         const t = requireTenant();
+        const current = selection();
         unwrap(await service.suspendTenant(t.id));
-        await refresh(t.id);
+        await refresh(t.id, current);
         return 'Tenant suspended';
       }),
-    [run, service, requireTenant, refresh]
+    [run, service, requireTenant, refresh, selection]
   );
 
   const resume = useCallback(
     () =>
       run(async () => {
         const t = requireTenant();
+        const current = selection();
         unwrap(await service.resumeTenant(t.id));
-        await refresh(t.id);
+        await refresh(t.id, current);
         return 'Tenant resumed';
       }),
-    [run, service, requireTenant, refresh]
+    [run, service, requireTenant, refresh, selection]
   );
 
   const updateQuotas = useCallback(
@@ -180,14 +196,15 @@ export function useTenantLifecycle(): UseTenantLifecycleResult {
     (resource: string, amount: number) =>
       run(async () => {
         const t = requireTenant();
+        const current = selection();
         // Clear the earlier answer first: a failed check must not leave it
         // beside the new inputs as if it answered them.
         setQuotaCheck(null);
         const res = unwrap(await service.checkQuota({ tenantId: t.id, resource, amount }));
-        setQuotaCheck({ ...res, resource, amount });
+        if (current()) setQuotaCheck({ ...res, resource, amount });
         return null;
       }),
-    [run, service, requireTenant]
+    [run, service, requireTenant, selection]
   );
 
   const sync = useCallback(
@@ -205,21 +222,25 @@ export function useTenantLifecycle(): UseTenantLifecycleResult {
     () =>
       run(async () => {
         const t = requireTenant();
-        setDEKStatus(unwrap(await service.getDEKStatus(t.id)).dekStatus);
+        const current = selection();
+        const status = unwrap(await service.getDEKStatus(t.id)).dekStatus;
+        if (current()) setDEKStatus(status);
         return null;
       }),
-    [run, service, requireTenant]
+    [run, service, requireTenant, selection]
   );
 
   const rotateDEK = useCallback(
     () =>
       run(async () => {
         const t = requireTenant();
+        const current = selection();
         const rotated = unwrap(await service.rotateDEK({ tenantId: t.id }));
-        setDEKStatus(unwrap(await service.getDEKStatus(t.id)).dekStatus);
+        const status = unwrap(await service.getDEKStatus(t.id)).dekStatus;
+        if (current()) setDEKStatus(status);
         return `DEK rotated to version ${rotated.newVersion}`;
       }),
-    [run, service, requireTenant]
+    [run, service, requireTenant, selection]
   );
 
   return {
