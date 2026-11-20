@@ -84,6 +84,7 @@ export {
   DeviceService,
   DNSService,
   NTPService,
+  PlatformClusterService,
   GatewayService,
   IAMService,
   IDevIDService,
@@ -153,6 +154,21 @@ export type {
   ListNTPSourcesResponse,
   StepNTPClockResponse,
 } from './services/ntp-service.js';
+
+// ClusterService over REST (#2043)
+export type {
+  ClusterOperationStatus,
+  ClusterNode,
+  ClusterInfo,
+  GetClusterStatusResponse,
+  ListClusterNodesResponse,
+  BootstrapClusterRequest,
+  BootstrapClusterResponse,
+  JoinClusterRequest,
+  JoinClusterResponse,
+  LeaveClusterRequest,
+  LeaveClusterResponse,
+} from './services/platform-cluster-service.js';
 
 // BMC users and web certificate (#1720)
 export {
@@ -1170,6 +1186,7 @@ export {
   usePXE,
   useSDN,
   useTenant,
+  usePlatformCluster,
   useTPM,
   useVTPM,
   useVPN,

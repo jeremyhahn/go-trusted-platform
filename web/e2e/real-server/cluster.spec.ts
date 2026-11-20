@@ -12,10 +12,10 @@ const CLUSTER_PATH = '/platform/cluster';
 
 /** Reads the cluster status, or the error the server answers with. */
 async function readStatus(
-  sdk: { cluster: { getStatus(): Promise<unknown> } },
+  sdk: { platformCluster: { getStatus(): Promise<unknown> } },
 ): Promise<{ ok: true; status: any } | { ok: false; error: string }> {
   try {
-    const resp: any = await sdk.cluster.getStatus();
+    const resp: any = await sdk.platformCluster.getStatus();
     if (resp && resp.success === false) {
       return { ok: false, error: resp.error?.message ?? 'unavailable' };
     }
@@ -62,7 +62,7 @@ test.describe('cluster: nodes view (ListNodes)', () => {
   test('lists every node the server returns', async ({ adminPage, sdk }) => {
     let nodes: Array<{ id?: string }> | null = null;
     try {
-      const resp: any = await sdk.cluster.listNodes();
+      const resp: any = await sdk.platformCluster.listNodes();
       nodes = resp?.success === false ? null : ((resp?.data ?? resp)?.nodes ?? []);
     } catch {
       nodes = null;

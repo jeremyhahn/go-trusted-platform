@@ -104,6 +104,7 @@ export {
   usePXE,
   useSDN,
   useTenant,
+  usePlatformCluster,
   useTPM,
   useVTPM,
   useVPN,

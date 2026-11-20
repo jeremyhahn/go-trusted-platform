@@ -13,6 +13,20 @@ export { CAService } from './ca-service.js';
 export { ComputeService } from './compute-service.js';
 export { DeviceService } from './device-service.js';
 export { DNSService } from './dns-service.js';
+export { PlatformClusterService } from './platform-cluster-service.js';
+export type {
+  ClusterOperationStatus,
+  ClusterNode,
+  ClusterInfo,
+  GetClusterStatusResponse,
+  ListClusterNodesResponse,
+  BootstrapClusterRequest,
+  BootstrapClusterResponse,
+  JoinClusterRequest,
+  JoinClusterResponse,
+  LeaveClusterRequest,
+  LeaveClusterResponse,
+} from './platform-cluster-service.js';
 export { NTPService } from './ntp-service.js';
 export type {
   NTPStatus,

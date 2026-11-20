@@ -10,7 +10,7 @@ const service = {
 };
 
 vi.mock('trusted-platform-sdk', () => ({
-  useCluster: () => service,
+  usePlatformCluster: () => service,
 }));
 
 import { useClusterOps } from './use-cluster-ops';

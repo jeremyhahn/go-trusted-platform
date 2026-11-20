@@ -11,6 +11,7 @@ import type {
   AttestationService,
   CAService,
   ComputeService,
+  PlatformClusterService,
   DeviceService,
   DNSService,
   GatewayService,
@@ -379,6 +380,16 @@ export function useSDN(): SDNService {
 export function useTenant(): TenantService {
   const client = usePlatformClient();
   return client.tenant;
+}
+
+/**
+ * Hook to get the cluster service (status, nodes, bootstrap, join, leave)
+ *
+ * @returns ClusterService instance
+ */
+export function usePlatformCluster(): PlatformClusterService {
+  const client = usePlatformClient();
+  return client.platformCluster;
 }
 
 /**
