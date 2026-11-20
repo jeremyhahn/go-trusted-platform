@@ -7,12 +7,38 @@
  * server; every assertion compares the page with what the server returns.
  * No route mocks.
  */
-import type { Page } from '@playwright/test';
-import type { PlatformClient } from 'trusted-platform-sdk';
-import { test, expect } from './fixtures';
+import { test as base, expect, type Page } from '@playwright/test';
+import { PlatformClient } from 'trusted-platform-sdk';
 
 type Sdk = PlatformClient;
 type Fx = { adminPage: Page; sdk: Sdk };
+
+// The real-server harness: REAL_SERVER_URL is the server's API base URL,
+// REAL_SERVER_TOKEN an admin bearer token for the SDK, and
+// REAL_SERVER_STORAGE_STATE the admin session for the browser. Without
+// REAL_SERVER_URL (the mocked e2e run) every test here is skipped.
+const serverUrl = process.env.REAL_SERVER_URL;
+const token = process.env.REAL_SERVER_TOKEN;
+const storageState = process.env.REAL_SERVER_STORAGE_STATE;
+
+const test = base.extend<Fx>({
+  adminPage: async ({ browser }, provide) => {
+    const context = await browser.newContext(storageState ? { storageState } : {});
+    const page = await context.newPage();
+    await provide(page);
+    await context.close();
+  },
+  sdk: async ({}, provide) => {
+    await provide(
+      new PlatformClient({
+        baseUrl: serverUrl,
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      })
+    );
+  },
+});
+
+test.skip(!serverUrl, 'REAL_SERVER_URL is not set: no real server to test against');
 
 const IMAGE = 'docker.io/library/busybox:latest';
 
