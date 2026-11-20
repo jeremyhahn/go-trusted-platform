@@ -1219,7 +1219,9 @@ func (o *QEMUOrchestrator) Close() error {
 	// Stop all running instances
 	for instanceID, qemuInst := range o.instances {
 		o.closeConsole(instanceID)
-		if qemuInst.vm.IsRunning() {
+		// An adopted migrated guest may carry no VM handle; it counts as not
+		// running.
+		if qemuInst.vm != nil && qemuInst.vm.IsRunning() {
 			o.logger.Infof("Stopping instance %s during shutdown", instanceID)
 			if err := qemuInst.vm.Stop(); err != nil {
 				o.logger.Errorf("Failed to stop instance %s: %v", instanceID, err)
