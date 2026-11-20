@@ -21,13 +21,15 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { DNSZoneTable } from '@/components/features/networking/dns-zone-table';
-import { useDNS, useApi, useToast } from '@/hooks';
+import { useDNS, useApi, useDnsOps, useToast } from '@/hooks';
+import { DNSRegisterResolve } from './dns-register-resolve';
 import type { DNSZone } from '@/types/infrastructure';
 import { readZone } from '@/lib/dns-wire';
 
 export default function DNSZonesPage() {
   const { toast } = useToast();
   const dns = useDNS();
+  const dnsOps = useDnsOps(dns);
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState('');
   const [createTTL, setCreateTTL] = useState('3600');
@@ -185,6 +187,9 @@ export default function DNSZonesPage() {
       ) : (
         <DNSZoneTable zones={zones} onRefresh={() => fetchZones()} />
       )}
+
+      <DNSRegisterResolve ops={dnsOps} onRegistered={() => fetchZones()} />
+
     </div>
   );
 }

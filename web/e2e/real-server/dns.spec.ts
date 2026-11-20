@@ -6,7 +6,11 @@
  * server through the SDK. No route mocks.
  */
 import type { PlatformClient } from 'trusted-platform-sdk';
+import type { Page } from '@playwright/test';
 import { expect, test } from './fixtures';
+
+/** The harness fixtures these tests use (see ./fixtures). */
+type Fx = { adminPage: Page; sdk: PlatformClient };
 
 function uniqueZone(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1e6)}.e2e.test`;
@@ -32,7 +36,7 @@ function zonePath(zone: string): string {
 }
 
 test.describe('DNS zone detail (real server)', () => {
-  test('GetZone: the detail page shows the zone the server returns', async ({ adminPage, sdk }) => {
+  test('GetZone: the detail page shows the zone the server returns', async ({ adminPage, sdk }: Fx) => {
     const zone = uniqueZone('get');
     await seedZone(sdk, zone, 1800);
     try {
@@ -46,7 +50,7 @@ test.describe('DNS zone detail (real server)', () => {
     }
   });
 
-  test('UpdateZone: saving zone settings changes TTL and description on the server', async ({ adminPage, sdk }) => {
+  test('UpdateZone: saving zone settings changes TTL and description on the server', async ({ adminPage, sdk }: Fx) => {
     const zone = uniqueZone('upd');
     await seedZone(sdk, zone, 3600);
     try {
@@ -64,7 +68,7 @@ test.describe('DNS zone detail (real server)', () => {
     }
   });
 
-  test('AddRecord: an A record added in the page is stored on the server', async ({ adminPage, sdk }) => {
+  test('AddRecord: an A record added in the page is stored on the server', async ({ adminPage, sdk }: Fx) => {
     const zone = uniqueZone('add');
     await seedZone(sdk, zone);
     try {
@@ -83,7 +87,7 @@ test.describe('DNS zone detail (real server)', () => {
     }
   });
 
-  test('ListRecords: the records panel lists server records and filters by type', async ({ adminPage, sdk }) => {
+  test('ListRecords: the records panel lists server records and filters by type', async ({ adminPage, sdk }: Fx) => {
     const zone = uniqueZone('list');
     await seedZone(sdk, zone);
     try {
@@ -106,7 +110,7 @@ test.describe('DNS zone detail (real server)', () => {
     }
   });
 
-  test('UpdateRecord: editing an A record replaces its value on the server', async ({ adminPage, sdk }) => {
+  test('UpdateRecord: editing an A record replaces its value on the server', async ({ adminPage, sdk }: Fx) => {
     const zone = uniqueZone('edit');
     await seedZone(sdk, zone);
     try {
@@ -127,7 +131,7 @@ test.describe('DNS zone detail (real server)', () => {
     }
   });
 
-  test('DeleteRecord: deleting an A record removes it from the server', async ({ adminPage, sdk }) => {
+  test('DeleteRecord: deleting an A record removes it from the server', async ({ adminPage, sdk }: Fx) => {
     const zone = uniqueZone('del');
     await seedZone(sdk, zone);
     try {
@@ -146,7 +150,7 @@ test.describe('DNS zone detail (real server)', () => {
     }
   });
 
-  test('GetDNSSECStatus + SignZone: the DNSSEC card shows the status and signs the zone', async ({ adminPage, sdk }) => {
+  test('GetDNSSECStatus + SignZone: the DNSSEC card shows the status and signs the zone', async ({ adminPage, sdk }: Fx) => {
     const zone = uniqueZone('sec');
     await seedZone(sdk, zone);
     try {
@@ -176,7 +180,7 @@ test.describe('DNS zone detail (real server)', () => {
 });
 
 test.describe('DNS register and resolve (real server)', () => {
-  test('Register then Resolve: a registered name resolves to its IP', async ({ adminPage, sdk }) => {
+  test('Register then Resolve: a registered name resolves to its IP', async ({ adminPage, sdk }: Fx) => {
     const zone = uniqueZone('reg');
     await seedZone(sdk, zone);
     const fqdn = `host1.${zone}`;

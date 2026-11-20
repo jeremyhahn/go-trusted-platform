@@ -146,6 +146,8 @@ export type {
 // textToBase64 and base64ToText are exported above (use-tpm-ops,
 // use-vtpm-runtime); use-kms-ops keeps its own copies module-local.
 export { useKmsOps, KMS_KEY_STATUSES } from './use-kms-ops';
+export { useDnsOps } from './use-dns-ops';
+export type { DnsOpsService, UseDnsOpsResult } from './use-dns-ops';
 export type {
   UseKmsOpsResult,
   KmsKeyStatus,

@@ -1,16 +1,15 @@
 'use client';
 
-import { useState } from 'react';
 import { useParams, usePathname, useRouter } from 'next/navigation';
 import { resolveDynamicId } from '@/utils/dynamic-route';
-import { ArrowLeft, Plus, RefreshCw, Download, Upload } from 'lucide-react';
+import { ArrowLeft, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { DNSRecordTable } from '@/components/features/networking/dns-record-table';
-import { DNSRecordForm } from '@/components/features/networking/dns-record-form';
-import { useDNS, useApi, useToast } from '@/hooks';
-import type { DNSZoneDetail, DNSRecord } from '@/types/infrastructure';
+import { useDNS, useApi, useDnsOps } from '@/hooks';
+import type { DNSZoneDetail } from '@/types/infrastructure';
+import { DNSRecordsPanel } from './dns-records-panel';
+import { DNSSECCard, DNSZoneSettingsCard } from './dns-zone-cards';
 import type { GetZoneResponse } from 'trusted-platform-sdk';
 import { readZoneDetail } from '@/lib/dns-wire';
 
@@ -18,10 +17,9 @@ export default function DNSZoneDetailPage() {
   const params = useParams();
   const pathname = usePathname();
   const router = useRouter();
-  const [formOpen, setFormOpen] = useState(false);
-  const [editingRecord, setEditingRecord] = useState<DNSRecord | undefined>();
-  const { toast } = useToast();
   const dns = useDNS();
+  const ops = useDnsOps(dns);
+  const dnssecOps = useDnsOps(dns);
 
   const zoneName = resolveDynamicId(params, pathname, 'dns', 'zone');
 
@@ -36,18 +34,6 @@ export default function DNSZoneDetailPage() {
   // unwraps the {payload} envelope, so `zoneResponse` is the protojson
   // GetZoneResponse and the zone is its `zone` field (#445).
   const zone: DNSZoneDetail | null = zoneResponse?.zone ? readZoneDetail(zoneResponse.zone) : null;
-
-  const handleEdit = (record: DNSRecord) => {
-    setEditingRecord(record);
-    setFormOpen(true);
-  };
-
-  const handleFormClose = (open: boolean) => {
-    setFormOpen(open);
-    if (!open) {
-      setEditingRecord(undefined);
-    }
-  };
 
   if (isLoading || !zone) {
     return (
@@ -80,18 +66,6 @@ export default function DNSZoneDetailPage() {
         <div className="flex gap-2">
           <Button variant="outline" size="icon" onClick={fetchZone} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
-          </Button>
-          <Button variant="outline">
-            <Download className="mr-2 h-4 w-4" />
-            Export
-          </Button>
-          <Button variant="outline">
-            <Upload className="mr-2 h-4 w-4" />
-            Import
-          </Button>
-          <Button onClick={() => setFormOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            Add Record
           </Button>
         </div>
       </div>
@@ -171,29 +145,20 @@ export default function DNSZoneDetailPage() {
             </div>
           </CardContent>
         </Card>
+
+        <DNSZoneSettingsCard
+          key={`${zoneResponse?.zone?.ttl ?? zone.ttl}|${zoneResponse?.zone?.description ?? ''}`}
+          zoneName={zoneName}
+          ttl={zoneResponse?.zone?.ttl ?? zone.ttl}
+          description={zoneResponse?.zone?.description}
+          ops={ops}
+          onSaved={fetchZone}
+        />
+
+        <DNSSECCard zoneName={zoneName} ops={dnssecOps} />
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>DNS Records</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <DNSRecordTable
-            zoneName={zoneName}
-            records={zone.records}
-            onRefresh={fetchZone}
-            onEdit={handleEdit}
-          />
-        </CardContent>
-      </Card>
-
-      <DNSRecordForm
-        zoneName={zoneName}
-        open={formOpen}
-        onOpenChange={handleFormClose}
-        onSuccess={fetchZone}
-        record={editingRecord}
-      />
+      <DNSRecordsPanel zoneName={zoneName} ops={ops} onChanged={fetchZone} />
     </div>
   );
 }
