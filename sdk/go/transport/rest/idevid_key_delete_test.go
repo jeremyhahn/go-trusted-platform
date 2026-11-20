@@ -105,13 +105,13 @@ func TestTranslateInvokeError_ConflictFollowsTheMethod(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			err := translateInvokeError(tc.method, tc.err)
+			err := translateInvokeError(platformv1.IDevIDService_DeleteIDevID_FullMethodName, tc.method, tc.err)
 			if status.Code(err) != tc.want {
 				t.Fatalf("translateInvokeError(%s) = %v, want %s", tc.method, err, tc.want)
 			}
 		})
 	}
-	if msg := status.Convert(translateInvokeError(http.MethodDelete, conflict)).Message(); msg != "the key is in use" {
+	if msg := status.Convert(translateInvokeError(platformv1.IDevIDService_DeleteIDevID_FullMethodName, http.MethodDelete, conflict)).Message(); msg != "the key is in use" {
 		t.Errorf("message = %q, want the envelope's error", msg)
 	}
 }

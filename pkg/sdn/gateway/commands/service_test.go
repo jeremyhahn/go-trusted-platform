@@ -95,6 +95,36 @@ func TestBuildSupervisor_AttachesTheSupervisorToTheGateway(t *testing.T) {
 	assert.True(t, cfg.Gateway.Supervisor.Supervises(gateway.ServiceProxy))
 }
 
+func TestBuildSupervisor_OnChildExitRemovesHubForWireGuardOnly(t *testing.T) {
+	var removals int
+	removeErr := errors.New("link busy")
+	prevRemove, prevNew := supervisorRemoveVPNHub, newProcessSupervisor
+	t.Cleanup(func() { supervisorRemoveVPNHub, newProcessSupervisor = prevRemove, prevNew })
+	supervisorRemoveVPNHub = func(*slog.Logger) error { removals++; return removeErr }
+	var built process.Config
+	newProcessSupervisor = func(c process.Config) *process.Supervisor {
+		built = c
+		return prevNew(c)
+	}
+
+	cfg := &ServeConfig{Gateway: &gateway.GatewayConfig{Enabled: true}, Process: supervisorSettings(t)}
+	_, err := BuildSupervisor(cfg, process.Inherited{ConfigFile: "/etc/gatewayd/config.yaml"}, testLogger())
+	require.NoError(t, err)
+	require.NotNil(t, built.OnChildExit, "BuildSupervisor must set the exit hook")
+
+	for _, name := range []string{"datapath", "routing"} {
+		def, err := process.DefinitionByName(name)
+		require.NoError(t, err)
+		require.NoError(t, built.OnChildExit(context.Background(), def))
+	}
+	assert.Zero(t, removals, "only the wireguard row owns the hub")
+
+	def, err := process.DefinitionByName(process.WireGuardProcess)
+	require.NoError(t, err)
+	require.ErrorIs(t, built.OnChildExit(context.Background(), def), removeErr)
+	assert.Equal(t, 1, removals, "the wireguard child's exit removes the hub")
+}
+
 func TestBuildSupervisor_NothingToSupervise(t *testing.T) {
 	tests := map[string]*ServeConfig{
 		"no process section": {Gateway: &gateway.GatewayConfig{Enabled: true}},
@@ -176,7 +206,7 @@ func TestChildInheritance_TheProxyChildOpensTheSupervisorsPinStore(t *testing.T)
 	require.NoError(t, err)
 	spec := process.Spec{
 		Definition: def,
-		Socket:     filepath.Join(t.TempDir(), "proxy.sock"),
+		Socket:     filepath.Join(shortSocketDir(t), "proxy.sock"),
 		SocketGID:  -1,
 		Inherited:  childInheritance(&ServeConfig{DataDir: dataDir}, ""),
 	}
@@ -224,6 +254,7 @@ func (f *fakeShutdowner) Shutdown(ctx context.Context) error {
 func TestShutdownSupervisor_StopsTheChildrenWithinTheShutdownTimeout(t *testing.T) {
 	var logged bytes.Buffer
 	supervisor := &fakeShutdowner{}
+	fakeHubRemoval(t, nil, nil)
 
 	shutdownSupervisor(supervisor, slog.New(slog.NewTextHandler(&logged, nil)))
 
@@ -234,11 +265,53 @@ func TestShutdownSupervisor_StopsTheChildrenWithinTheShutdownTimeout(t *testing.
 func TestShutdownSupervisor_LogsAFailure(t *testing.T) {
 	var logged bytes.Buffer
 	supervisor := &fakeShutdowner{err: context.DeadlineExceeded}
+	fakeHubRemoval(t, nil, nil)
 
 	shutdownSupervisor(supervisor, slog.New(slog.NewTextHandler(&logged, nil)))
 
 	assert.Contains(t, logged.String(), "Process supervisor shutdown failed")
 	assert.Contains(t, logged.String(), context.DeadlineExceeded.Error())
+}
+
+// fakeHubRemoval swaps the stale-hub remover for one that counts its calls
+// and records whether the supervisor had shut down when it ran.
+func fakeHubRemoval(t *testing.T, removeErr error, shutdown *fakeShutdowner) *int {
+	t.Helper()
+	removals := 0
+	prev := supervisorRemoveVPNHub
+	t.Cleanup(func() { supervisorRemoveVPNHub = prev })
+	supervisorRemoveVPNHub = func(*slog.Logger) error {
+		if shutdown != nil && !shutdown.hadDeadline {
+			t.Error("the hub was removed before the children were shut down")
+		}
+		removals++
+		return removeErr
+	}
+	return &removals
+}
+
+// TestShutdownSupervisor_RemovesTheHubAfterAKilledChild checks Codex #2029
+// round 1 P1 2: a WireGuard child killed at the shutdown deadline runs no
+// exit hook, so the shutdown removes its hub once the children are gone.
+func TestShutdownSupervisor_RemovesTheHubAfterAKilledChild(t *testing.T) {
+	var logged bytes.Buffer
+	supervisor := &fakeShutdowner{err: context.DeadlineExceeded}
+	removals := fakeHubRemoval(t, nil, supervisor)
+
+	shutdownSupervisor(supervisor, slog.New(slog.NewTextHandler(&logged, nil)))
+
+	assert.Equal(t, 1, *removals, "the killed child's hub is removed")
+}
+
+func TestShutdownSupervisor_LogsAHubRemovalFailure(t *testing.T) {
+	var logged bytes.Buffer
+	supervisor := &fakeShutdowner{}
+	fakeHubRemoval(t, errors.New("netlink refused"), supervisor)
+
+	shutdownSupervisor(supervisor, slog.New(slog.NewTextHandler(&logged, nil)))
+
+	assert.Contains(t, logged.String(), "Stale VPN hub removal at shutdown failed")
+	assert.Contains(t, logged.String(), "netlink refused")
 }
 
 func TestServicePolicy_OnlyTheDatapathProcessAdmitsTheServiceAccount(t *testing.T) {
@@ -269,6 +342,23 @@ func TestServicePolicy_OnlyTheDatapathProcessAdmitsPlatformd(t *testing.T) {
 	assert.Empty(t, servicePolicy(routing, opts, settings).PlatformUIDs,
 		"a parser hosts no live service platformd reads")
 	assert.Equal(t, []uint32{2002}, servicePolicy(datapath, opts, settings).PlatformUIDs)
+}
+
+func TestServicePolicy_OnlyTheWireGuardProcessServesTheVPNPlane(t *testing.T) {
+	// Ruling 942 (#1698 part B1): VPNPlaneService is served by the
+	// `wireguard` process alone, the one that owns the hub device. Its
+	// socket admits the service account the vpn child runs as; every
+	// other process's socket refuses the VPN plane to every uid.
+	opts := serviceOptions{supervisorUID: 0, uid: 1001, gid: 1001}
+	for _, def := range process.Definitions() {
+		policy := servicePolicy(def, opts, nil)
+		if def.Name == process.WireGuardProcess {
+			assert.True(t, policy.VPNPlane, "the wireguard process serves VPNPlaneService")
+			assert.Equal(t, []uint32{1001}, policy.DatapathUIDs, "the vpn child reaches the plane as the service account")
+			continue
+		}
+		assert.False(t, policy.VPNPlane, "%s must not serve VPNPlaneService", def.Name)
+	}
 }
 
 // constructOnlyOVS satisfies the runtime OVS client for a test that only
@@ -362,6 +452,11 @@ func (h *fakeServiceHandler) Health() error { return nil }
 
 // serviceRun records what serveProcess handed its collaborators.
 type serviceRun struct {
+	// keyResolves counts the hub-key resolutions; keyHardened is how many
+	// hardenings had run at the first one.
+	keyResolves int
+	keyHardened int
+	hubKey      *vpnHubKey
 	hardened    []process.Definition
 	built       *ServeConfig
 	handler     *fakeServiceHandler
@@ -442,6 +537,13 @@ func (r *serviceRun) deps() serviceDeps {
 			}
 			return fakeLeaseControl{}, nil, nil
 		},
+		resolveVPNHubKey: func(context.Context, *ServeConfig, *slog.Logger) *vpnHubKey {
+			if r.keyResolves == 0 {
+				r.keyHardened = len(r.hardened)
+			}
+			r.keyResolves++
+			return r.hubKey
+		},
 	}
 }
 
@@ -463,7 +565,7 @@ func newVPNServiceRun() *serviceRun {
 func serviceTestOptions(t *testing.T) serviceOptions {
 	t.Helper()
 	return serviceOptions{
-		socket:        filepath.Join(t.TempDir(), "routing.sock"),
+		socket:        filepath.Join(shortSocketDir(t), "routing.sock"),
 		socketGroup:   -1,
 		supervisorUID: uint32(os.Getuid()),
 		uid:           4242,
@@ -533,7 +635,7 @@ func TestServeProcess_HostsItsOwnServicesAndServesTheSupervisor(t *testing.T) {
 // NOTIFY_SOCKET at it.
 func bindTestNotifySocket(t *testing.T) *process.NotifySocket {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "n.notify")
+	path := filepath.Join(shortSocketDir(t), "n.notify")
 	sock, err := process.ListenNotify(path, os.Getpid(), -1)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sock.Close() })

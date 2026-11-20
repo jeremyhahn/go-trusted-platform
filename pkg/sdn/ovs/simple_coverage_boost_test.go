@@ -72,7 +72,7 @@ func TestAdditionalFlowCoverage(t *testing.T) {
 
 // TestAdditionalDisconnectCoverage tests additional disconnect scenarios
 func TestAdditionalDisconnectCoverage(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -98,7 +98,7 @@ func TestAdditionalDisconnectCoverage(t *testing.T) {
 
 // TestCallErrorHandling tests error paths in call method
 func TestCallErrorHandling(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -124,7 +124,7 @@ func TestCallErrorHandling(t *testing.T) {
 
 // TestSelectNoResults tests Select with no results
 func TestSelectNoResults(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -149,7 +149,7 @@ func TestSelectNoResults(t *testing.T) {
 
 // TestBridgeEdgeCases covers additional bridge scenarios
 func TestBridgeEdgeCases(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -195,7 +195,7 @@ func TestBridgeEdgeCases(t *testing.T) {
 
 // TestGetOpenVSwitchUUIDBranches tests different branches
 func TestGetOpenVSwitchUUIDBranches(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -222,7 +222,7 @@ func TestGetOpenVSwitchUUIDBranches(t *testing.T) {
 
 // TestTransactMultiOps tests Transact with multiple operations
 func TestTransactMultiOps(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)

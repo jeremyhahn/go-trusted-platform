@@ -268,7 +268,7 @@ func callComputeTool(t *testing.T, tc computeToolCase, granted string) (*mcpwire
 			return resource+":"+action == granted, nil
 		},
 	}
-	server := NewServer(provider, &Config{AuthorizationService: authz}, newTestLogger())
+	server := NewServer(provider, &Config{AuthorizationService: authz, AuthManager: legacyCaller(), PEPClient: servicePEP{authz}}, newTestLogger())
 
 	resp := server.handleRequest(context.Background(), &mcpwire.JSONRPCRequest{
 		JSONRPC: "2.0",

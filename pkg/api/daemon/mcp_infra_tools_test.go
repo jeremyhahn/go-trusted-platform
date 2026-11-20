@@ -23,8 +23,10 @@ import (
 	"net/http/httptest"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -47,18 +49,65 @@ import (
 // scopeGrantAuthz grants its caller exactly one scope, so a tool call
 // passes the MCP server's authorization check only when the tool's catalog
 // scope is that scope.
-type scopeGrantAuthz struct{ scope string }
+//
+// tenant is the caller's tenant_id claim, and checks counts the IAM PEP
+// Check calls, so a test can tell a PEP denial from a refusal before it.
+type scopeGrantAuthz struct {
+	scope  string
+	tenant string
+	checks *atomic.Int32
+}
 
 func (a scopeGrantAuthz) CheckPermission(_ context.Context, _, resource, action string) (bool, error) {
 	return resource+":"+action == a.scope, nil
 }
 
+// ValidateToken and GetTokenClaims make scopeGrantAuthz the AuthManager too,
+// so the unscoped tool path reaches the IAM PEP with a caller (#1995).
+func (scopeGrantAuthz) ValidateToken(context.Context, string) (bool, error) { return true, nil }
+
+func (a scopeGrantAuthz) GetTokenClaims(context.Context, string) (map[string]interface{}, error) {
+	claims := map[string]interface{}{"sub": "mcp-test-caller"}
+	if a.tenant != "" {
+		claims["tenant_id"] = a.tenant
+	}
+	return claims, nil
+}
+
+// mcpTestTenant is the tenant the infrastructure-tool caller belongs to: the
+// PEP path refuses a tenantless caller before asking the PEP (#2011 Codex).
+const mcpTestTenant = "mcp-test-tenant"
+
+// pep answers the IAM PEP Check with the same grant: allowed only for scope.
+// Every Check is counted in a.checks.
+func (a scopeGrantAuthz) pep() *mockSDKPEPClient {
+	return &mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		a.checks.Add(1)
+		return &sdkiam.CheckResponse{Allowed: req.Resource+":"+req.Action == a.scope}, nil
+	}}
+}
+
 // callMCPTool sends one tools/call through the MCP server's HTTP handler,
-// in memory, as a caller holding scope, and returns the JSON-RPC answer.
+// in memory, as a caller of mcpTestTenant holding scope, and returns the
+// JSON-RPC answer. Every tool called here is protected, so the IAM PEP must
+// decide the call exactly once, whether it allows or denies it: a call
+// refused before the PEP would hide a fixture fault behind a denial.
 func callMCPTool(t *testing.T, provider mcp.ServiceProvider, scope, tool string, args map[string]interface{}) mcpwire.JSONRPCResponse {
 	t.Helper()
+	resp, checks := callMCPToolAs(t, provider, scope, mcpTestTenant, tool, args)
+	require.EqualValues(t, 1, checks, "the IAM PEP was not asked to decide %s", tool)
+	return resp
+}
+
+// callMCPToolAs is callMCPTool for a caller of tenant ("" for a tenantless
+// caller); it also returns the number of IAM PEP Check calls.
+func callMCPToolAs(t *testing.T, provider mcp.ServiceProvider, scope, tenant, tool string, args map[string]interface{}) (mcpwire.JSONRPCResponse, int32) {
+	t.Helper()
 	config := mcp.DefaultConfig()
-	config.AuthorizationService = scopeGrantAuthz{scope: scope}
+	grant := scopeGrantAuthz{scope: scope, tenant: tenant, checks: new(atomic.Int32)}
+	config.AuthorizationService = grant
+	config.AuthManager = grant
+	config.PEPClient = grant.pep()
 	handler := mcp.NewServer(provider, config, logging.DefaultLogger()).Handler()
 
 	body, err := json.Marshal(mcpwire.JSONRPCRequest{
@@ -76,7 +125,7 @@ func callMCPTool(t *testing.T, provider mcp.ServiceProvider, scope, tool string,
 
 	var resp mcpwire.JSONRPCResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	return resp
+	return resp, grant.checks.Load()
 }
 
 // mcpToolResult returns the output of a successful tool call, read from
@@ -414,6 +463,19 @@ func TestInfraToolsAnswerOnlyUnderTheirScope(t *testing.T) {
 			assert.Zero(t, denied.calls(), "a refused call reached the tool's service")
 		})
 	}
+}
+
+// TestInfraToolsRefuseTenantlessCallerBeforePEP pins the one refusal that
+// comes before the IAM PEP: a caller whose claims carry no tenant_id is
+// denied, even holding the tool's scope, and the PEP is never asked (#2011
+// Codex).
+func TestInfraToolsRefuseTenantlessCallerBeforePEP(t *testing.T) {
+	harness := newSwitchToolHarness(t)
+	resp, checks := callMCPToolAs(t, harness.provider, "switch:read", "", "switch_list_ports",
+		map[string]interface{}{"switch_name": "core-1"})
+	assert.Equal(t, mcpwire.PermissionDenied, mcpToolErrorCode(t, resp))
+	assert.Zero(t, checks, "a tenantless caller reached the IAM PEP")
+	assert.Zero(t, harness.calls(), "a tenantless caller reached the tool's service")
 }
 
 // TestInfraToolsUnwiredAnswerUnavailable pins the class the cluster and
