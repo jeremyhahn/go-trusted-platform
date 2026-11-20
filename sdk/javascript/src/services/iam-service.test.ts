@@ -195,11 +195,11 @@ const cases: WireCase[] = [
   },
   {
     method: 'addGroupMember',
-    name: 'posts only the user id to the group members path',
+    name: 'posts an empty body to the member path, the user id in the path',
     call: (s) => s.addGroupMember({ tenantId: 'acme', groupId: 'g1', userId: 'u1' }),
     verb: 'post',
-    url: '/v1/iam/tenants/acme/groups/g1/members',
-    body: { userId: 'u1' },
+    url: '/v1/iam/tenants/acme/groups/g1/members/u1',
+    body: {},
   },
   {
     method: 'removeGroupMember',
@@ -219,12 +219,12 @@ const cases: WireCase[] = [
   },
   {
     method: 'checkPermission',
-    name: 'posts the request to the auth check path',
+    name: 'posts the wire request to the tenant permission check path, the tenant only in the path',
     call: (s) =>
       s.checkPermission({ tenantId: 'acme', subjectId: 'u1', action: 'read', resource: 'devices/d1' }),
     verb: 'post',
-    url: '/v1/iam/auth/check',
-    body: { tenantId: 'acme', subjectId: 'u1', action: 'read', resource: 'devices/d1' },
+    url: '/v1/iam/tenants/acme/permissions/check',
+    body: { subject_id: 'u1', action: 'read', resource: 'devices/d1' },
   },
   {
     method: 'createToken',
@@ -268,10 +268,10 @@ const cases: WireCase[] = [
   },
   {
     method: 'listTenants',
-    name: 'maps page and pageSize to the query',
+    name: 'maps page and pageSize to limit and offset',
     call: (s) => s.listTenants({ page: 2, pageSize: 50 }),
     verb: 'get',
-    url: '/v1/iam/tenants?page=2&limit=50',
+    url: '/v1/iam/tenants?limit=50&offset=50',
   },
   {
     method: 'listTenants',

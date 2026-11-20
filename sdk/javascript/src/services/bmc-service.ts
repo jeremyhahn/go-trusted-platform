@@ -286,9 +286,15 @@ export class BMCService extends BaseService {
    * provisioning: the host is powered off, booted once from the network
    * (PXE), an operating system is installed, then disk boot is set and the
    * host power-cycled. The host's disks can be overwritten.
+   *
+   * Sent with client retries disabled: the server starts the workflow before
+   * it answers, so a resend after a lost response is rejected (409) while the
+   * host is already being reinstalled.
    */
   async provision(profileID: string): Promise<ApiResponse<BMCProvisionStatus>> {
-    return this.client.post<BMCProvisionStatus>(this.path(profileID, 'provision'), {});
+    return this.client.post<BMCProvisionStatus>(this.path(profileID, 'provision'), {}, {
+      retry: { enabled: false },
+    });
   }
 
   /** ProvisionStatus: GET /bmc/{profileID}/provision */

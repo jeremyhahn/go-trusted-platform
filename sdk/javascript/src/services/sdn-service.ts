@@ -285,7 +285,12 @@ export class SDNService extends BaseService {
    * @returns Applied policy
    */
   async applyPolicy(request: ApplyPolicyRequest): Promise<ApiResponse<ApplyPolicyResponse>> {
-    return this.client.post<ApplyPolicyResponse>(this.buildUrl('/policies'), request);
+    // Not idempotent: the daemon installs the policy (generating an ID when
+    // none is given) before it answers, so a resend after a lost response
+    // fails AlreadyExists although the policy is enforced.
+    return this.client.post<ApplyPolicyResponse>(this.buildUrl('/policies'), request, {
+      retry: { enabled: false },
+    });
   }
 
   /**

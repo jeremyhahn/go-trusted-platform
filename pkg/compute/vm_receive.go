@@ -183,6 +183,14 @@ type incomingReceiver interface {
 
 	// Abort tears the receiver down after a failed or cancelled transfer.
 	Abort(ctx context.Context) error
+
+	// VM returns the receiving QEMU, which a committed receiver hands to the
+	// orchestrator as a normal instance.
+	VM() *qemu.VM
+
+	// Transferring reports whether a migration stream is in progress (or
+	// complete and awaiting finalize), which renews the receiver lifetime.
+	Transferring(ctx context.Context) bool
 }
 
 // incomingReceiverParams carries everything the launcher needs to stand up a
@@ -217,24 +225,108 @@ type receiverRegistry struct {
 type trackedReceiver struct {
 	recv    incomingReceiver
 	cleanup func()
+	// spec is the migration the receiver was prepared for; a committed
+	// receiver is adopted as an instance from it.
+	spec MigrationSpec
 	// endLifetime stops the receiver's lifetime watch once it is finalized
 	// or reaped.
 	endLifetime context.CancelFunc
 }
 
-// receiverLifetime bounds how long a prepared receiver waits for
-// FinalizeIncoming. If the prepare reply is lost or the caller goes away, the
-// orchestrator reaps the receiver (aborts its QEMU and releases its TLS
-// material) at this deadline instead of leaving it running. Tests shorten it.
+// receiverLifetime bounds idle preparation: how long a prepared receiver waits
+// with no migration stream in progress. If the prepare reply is lost or the
+// caller goes away, the orchestrator reaps the receiver (aborts its QEMU and
+// releases its TLS material) at this deadline instead of leaving it running.
+// An active transfer renews it at each deadline, so a long migration is not
+// stopped mid-stream. Tests shorten it.
 var receiverLifetime = 30 * time.Minute
 
-// watchReceiverLifetime reaps receiverID when lifetime ends, unless
-// FinalizeIncoming or Close took it first.
-func (o *QEMUOrchestrator) watchReceiverLifetime(lifetime context.Context, receiverID string) {
-	<-lifetime.Done()
-	if errors.Is(lifetime.Err(), context.DeadlineExceeded) {
-		o.reapReceiver(receiverID, "lifetime expired before finalize")
+// receiverStatusTimeout bounds the query-migrate a lifetime check makes.
+const receiverStatusTimeout = 10 * time.Second
+
+// watchReceiverLifetime reaps receiverID when a lifetime passes with no
+// transfer in progress, renewing it while one is. It stops when ended closes
+// (FinalizeIncoming or Close took the receiver).
+func (o *QEMUOrchestrator) watchReceiverLifetime(ended <-chan struct{}, receiverID string, lifetime time.Duration) {
+	for {
+		timer := time.NewTimer(lifetime)
+		select {
+		case <-ended:
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		tr, ok := receiversFor(o).peek(receiverID)
+		if !ok {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), receiverStatusTimeout)
+		transferring := tr.recv.Transferring(ctx)
+		cancel()
+		if !transferring {
+			o.reapReceiver(receiverID, "lifetime expired before finalize")
+			return
+		}
+		o.logger.Infof("Migration receiver %s is transferring; renewing its lifetime by %s", receiverID, lifetime)
 	}
+}
+
+// adoptReceived hands a committed receiver's QEMU to the orchestrator as a
+// running instance, under the source InstanceID when it is free, so the
+// migrated guest is listed, stoppable and closed like any other. A running
+// QEMU gets the same exit watch Start installs.
+func (o *QEMUOrchestrator) adoptReceived(tr *trackedReceiver) (string, error) {
+	vm := tr.recv.VM()
+	if vm == nil {
+		return "", &MessageError{Msg: "received VM has no QEMU process"}
+	}
+
+	o.mu.Lock()
+	instanceID := tr.spec.InstanceID
+	if _, taken := o.instances[instanceID]; instanceID == "" || taken {
+		instanceID = generateInstanceID()
+	}
+	for _, state := range []InstanceState{StateCreating, StateStopped, StateStarting, StateRunning} {
+		if err := o.lifecycle.SetState(instanceID, state); err != nil {
+			_ = o.lifecycle.DeleteInstance(instanceID)
+			o.mu.Unlock()
+			return "", err
+		}
+	}
+	now := time.Now()
+	qemuInst := &qemuInstance{
+		vm: vm,
+		instance: &Instance{
+			ID:                 instanceID,
+			Name:               tr.spec.VMName,
+			Type:               ComputeTypeVM,
+			State:              StateRunning,
+			Config:             tr.spec.Config,
+			NetworkAttachments: []NetworkAttachment{},
+			CreatedAt:          now,
+			UpdatedAt:          now,
+			StartedAt:          now,
+			Metadata:           map[string]string{"migrated": "true"},
+			PID:                vm.GetPID(),
+		},
+	}
+	o.instances[instanceID] = qemuInst
+	o.mu.Unlock()
+
+	if vm.IsRunning() {
+		qemuInst.mu.Lock()
+		run := &qemuRun{cancel: func() {}, done: make(chan struct{})}
+		qemuInst.run = run
+		qemuInst.mu.Unlock()
+		go func() {
+			defer close(run.done)
+			if err := vm.Wait(); err != nil {
+				o.logger.Errorf("VM %s exited with error: %v", instanceID, err)
+			}
+			o.recordExit(instanceID, qemuInst)
+		}()
+	}
+	return instanceID, nil
 }
 
 // reapReceiver aborts and releases a receiver that was never finalized. It is a
@@ -289,6 +381,14 @@ func (r *receiverRegistry) take(id string) (*trackedReceiver, bool) {
 	if ok {
 		delete(r.receivers, id)
 	}
+	return tr, ok
+}
+
+// peek returns the receiver tracked under id without removing it.
+func (r *receiverRegistry) peek(id string) (*trackedReceiver, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	tr, ok := r.receivers[id]
 	return tr, ok
 }
 
@@ -354,11 +454,12 @@ func (o *QEMUOrchestrator) ReceiveIncoming(ctx context.Context, spec MigrationSp
 	}
 
 	// The orchestrator, not the request, owns the receiver's lifetime: it is
-	// reaped at receiverLifetime unless FinalizeIncoming or Close takes it.
+	// reaped when receiverLifetime passes with no transfer in progress, unless
+	// FinalizeIncoming or Close takes it first.
 	receiverID := generateInstanceID()
-	lifetime, endLifetime := context.WithTimeout(context.Background(), receiverLifetime)
-	receiversFor(o).put(receiverID, &trackedReceiver{recv: recv, cleanup: cleanup, endLifetime: endLifetime})
-	go o.watchReceiverLifetime(lifetime, receiverID)
+	ended, endLifetime := context.WithCancel(context.Background())
+	receiversFor(o).put(receiverID, &trackedReceiver{recv: recv, cleanup: cleanup, spec: spec, endLifetime: endLifetime})
+	go o.watchReceiverLifetime(ended.Done(), receiverID, receiverLifetime)
 
 	// A caller that went away before the reply never gets the receiver token,
 	// so nobody could finalize it: reap it now rather than at the deadline.
@@ -394,7 +495,14 @@ func (o *QEMUOrchestrator) FinalizeIncoming(ctx context.Context, receiverID stri
 		if err := tr.recv.Commit(ctx); err != nil {
 			return &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "commit received VM", Err: err}}
 		}
-		o.logger.Infof("Committed migration receiver %s", receiverID)
+		// The resumed guest becomes a normal instance before success is
+		// acknowledged, so it can be listed, stopped and closed.
+		instanceID, err := o.adoptReceived(tr)
+		if err != nil {
+			o.logger.Errorf("Committed migration receiver %s but could not adopt its VM: %v", receiverID, err)
+			return &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "adopt received VM", Err: err}}
+		}
+		o.logger.Infof("Committed migration receiver %s as instance %s", receiverID, instanceID)
 		return nil
 	}
 
@@ -414,7 +522,35 @@ func (o *QEMUOrchestrator) FinalizeIncoming(ctx context.Context, receiverID stri
 type qemuIncomingReceiver struct {
 	vm      *qemu.VM
 	monitor *qemu.Monitor
+	mgr     *qemu.MigrationManager
 	port    int
+}
+
+// VM returns the receiving QEMU.
+func (r *qemuIncomingReceiver) VM() *qemu.VM { return r.vm }
+
+// Transferring reports whether query-migrate shows a stream in progress or
+// complete and awaiting finalize. An unanswered query counts as idle.
+func (r *qemuIncomingReceiver) Transferring(ctx context.Context) bool {
+	if r.mgr == nil {
+		return false
+	}
+	st, err := r.mgr.Status(ctx)
+	if err != nil || st == nil {
+		return false
+	}
+	switch st.Status {
+	case qemu.MigrationStatusSetup,
+		qemu.MigrationStatusActive,
+		qemu.MigrationStatusPostcopyActive,
+		qemu.MigrationStatusPostcopyPaused,
+		qemu.MigrationStatusPostcopyRecover,
+		qemu.MigrationStatusPreSwitchover,
+		qemu.MigrationStatusDevice,
+		qemu.MigrationStatusCompleted:
+		return true
+	}
+	return false
 }
 
 func (r *qemuIncomingReceiver) Port() int { return r.port }
@@ -511,7 +647,7 @@ func defaultNewIncomingReceiver(ctx context.Context, p *incomingReceiverParams) 
 		return nil, &WrappedError{Msg: "arm receiver migrate-incoming", Err: err}
 	}
 
-	return &qemuIncomingReceiver{vm: vm, monitor: mon, port: port}, nil
+	return &qemuIncomingReceiver{vm: vm, monitor: mon, mgr: mgr, port: port}, nil
 }
 
 // receiverPort is the TCP port the receiver listens on: the configured port,

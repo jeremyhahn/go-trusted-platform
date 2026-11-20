@@ -59,7 +59,14 @@ describe('VTPMService', () => {
 
       expect(result).toBe(ok);
       expect(mockClient.post).toHaveBeenCalledTimes(1);
-      expect(mockClient.post).toHaveBeenCalledWith('/v1/vtpm/bundles', request);
+      // The body is pre-encoded JSON in wire names, with device_profile_id
+      // as a bare uint64 number (vtpm-service-wire-names.test.ts pins each field).
+      const [url, body] = vi.mocked(mockClient.post).mock.calls[0]!;
+      expect(url).toBe('/v1/vtpm/bundles');
+      expect(typeof body).toBe('string');
+      const wire = JSON.parse(body as string) as Record<string, unknown>;
+      expect(wire).toMatchObject({ hostname: 'vm-1', labels: { env: 'prod' }, device_profile_id: 42 });
+      expect(body as string).toMatch(/"device_profile_id":42\}$/);
     });
   });
 
@@ -101,7 +108,7 @@ describe('VTPMService', () => {
       expect(mockClient.get).toHaveBeenCalledWith('/v1/vtpm/bundles');
     });
 
-    it('maps offset and limit to page and limit, and mode, labels and deviceProfileId to filters', async () => {
+    it('sends offset and limit as they are, and mode, labels and deviceProfileId to filters', async () => {
       vi.mocked(mockClient.get).mockResolvedValue(ok);
 
       await service.listBundles({
@@ -115,16 +122,16 @@ describe('VTPMService', () => {
       });
 
       expect(mockClient.get).toHaveBeenCalledWith(
-        '/v1/vtpm/bundles?page=3&limit=10&mode=TEMPLATE&label_env=prod&label_tier=a+b&device_profile_id=42'
+        '/v1/vtpm/bundles?limit=10&mode=TEMPLATE&label_env=prod&label_tier=a+b&device_profile_id=42&offset=20'
       );
     });
 
-    it('pages by a default limit of 10 when only an offset is given', async () => {
+    it('sends only the offset when no limit is given', async () => {
       vi.mocked(mockClient.get).mockResolvedValue(ok);
 
       await service.listBundles({ options: { offset: 25 } });
 
-      expect(mockClient.get).toHaveBeenCalledWith('/v1/vtpm/bundles?page=3');
+      expect(mockClient.get).toHaveBeenCalledWith('/v1/vtpm/bundles?offset=25');
     });
 
     it('sends only the limit when no offset is given', async () => {
@@ -185,7 +192,12 @@ describe('VTPMService', () => {
 
       await service.createTemplate(request);
 
-      expect(mockClient.post).toHaveBeenCalledWith('/v1/vtpm/templates', request);
+      expect(mockClient.post).toHaveBeenCalledWith('/v1/vtpm/templates', {
+        id: 't-1',
+        description: 'base',
+        ek_algorithm: 'RSA',
+        secure_boot_enabled: false,
+      });
     });
   });
 

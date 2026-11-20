@@ -51,6 +51,25 @@ const cases: CallCase[] = [
     url: '/v1/tpm/info',
   },
   {
+    name: 'getCapabilities',
+    invoke: (s) => s.getCapabilities(),
+    verb: 'get',
+    url: '/v1/tpm/capabilities',
+  },
+  {
+    name: 'getPlatformAttributes',
+    invoke: (s) => s.getPlatformAttributes(),
+    verb: 'get',
+    url: '/v1/tpm/platform',
+  },
+  {
+    name: 'certify',
+    invoke: (s) => s.certify({ keyHandle: 0x81010003, keyPassword: 'kp', nonce: 'bm9uY2U=' }),
+    verb: 'post',
+    url: '/v1/tpm/certify',
+    body: { keyHandle: 0x81010003, keyPassword: 'kp', nonce: 'bm9uY2U=' },
+  },
+  {
     name: 'provision',
     invoke: (s) => s.provision({ ownerPassword: 'owner', createEk: true, createSrk: false }),
     verb: 'post',
@@ -94,7 +113,9 @@ const cases: CallCase[] = [
     name: 'deleteEK',
     invoke: (s) => s.deleteEK({ handle: 0x81010001 }),
     verb: 'delete',
-    url: '/v1/tpm/ek/2164326401',
+    // Bare DELETE /ek: the router decodes the handle from the request body.
+    url: '/v1/tpm/ek',
+    options: { handle: 0x81010001, algorithm: undefined, password: undefined },
   },
   {
     name: 'createSRK',
@@ -113,7 +134,8 @@ const cases: CallCase[] = [
     name: 'deleteSRK',
     invoke: (s) => s.deleteSRK({ handle: 0x81000001 }),
     verb: 'delete',
-    url: '/v1/tpm/srk/2164260865',
+    url: '/v1/tpm/srk',
+    options: { handle: 0x81000001, algorithm: undefined, password: undefined },
   },
   {
     name: 'createAK',
@@ -132,14 +154,15 @@ const cases: CallCase[] = [
     name: 'deleteAK',
     invoke: (s) => s.deleteAK({ handle: 0x81010002 }),
     verb: 'delete',
-    url: '/v1/tpm/ak/2164326402',
+    url: '/v1/tpm/ak',
+    options: { handle: 0x81010002, algorithm: undefined, password: undefined },
   },
   {
     name: 'seal',
     invoke: (s) => s.seal({ data: 'c2VjcmV0', cn: 'disk-key', pcrIndices: [0, 7], pcrBank: 'SHA256' }),
     verb: 'post',
     url: '/v1/tpm/seal',
-    body: { data: 'c2VjcmV0', cn: 'disk-key', pcrIndices: [0, 7], pcrBank: 'SHA256' },
+    body: { data: 'c2VjcmV0', cn: 'disk-key', pcrIndices: [0, 7], pcrBank: 'PCR_BANK_SHA256' },
   },
   {
     name: 'unseal',

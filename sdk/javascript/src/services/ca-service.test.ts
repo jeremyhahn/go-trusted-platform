@@ -167,14 +167,23 @@ describe('CAService', () => {
       certificateType: 'CLIENT',
     };
 
-    it('POSTs the request unchanged to /v1/ca/certificates', async () => {
+    it('POSTs the request wrapped in request, with wire enums, to /v1/ca/certificates', async () => {
       const response = { success: true, data: { certificate: { serialNumber: '02' } } };
       vi.mocked(mockClient.post).mockResolvedValue(response);
 
       await expect(service.issueCertificate(request)).resolves.toBe(response);
 
       expectOnlyPost();
-      expect(mockClient.post).toHaveBeenCalledWith('/v1/ca/certificates', request);
+      expect(mockClient.post).toHaveBeenCalledWith('/v1/ca/certificates', {
+        request: {
+          subject: { commonName: 'device-7', organization: 'Org' },
+          sans: { uris: ['urn:device:7'] },
+          validDays: 90,
+          keyAlgorithm: 'KEY_ALGORITHM_ECDSA_P256',
+          isCa: false,
+          certificateType: 'CERTIFICATE_TYPE_CLIENT',
+        },
+      });
     });
 
     it('propagates a transport failure', async () => {
@@ -190,23 +199,26 @@ describe('CAService', () => {
       deleteKeys: true,
     };
 
-    it('POSTs reason and deleteKeys to /v1/ca/certificates/{serial}/revoke, the serial only in the path', async () => {
+    it('DELETEs /v1/ca/certificates/{serial} with reason and deleteKeys in the body, the serial only in the path', async () => {
       const response = { success: true, data: { revoked: true } };
-      vi.mocked(mockClient.post).mockResolvedValue(response);
+      vi.mocked(mockClient.delete).mockResolvedValue(response);
 
       await expect(service.revokeCertificate(request)).resolves.toBe(response);
 
-      expectOnlyPost();
-      expect(mockClient.post).toHaveBeenCalledWith(`/v1/ca/certificates/${ENC_SERIAL}/revoke`, {
-        reason: 'KEY_COMPROMISE',
+      expect(mockClient.delete).toHaveBeenCalledTimes(1);
+      expect(mockClient.get).not.toHaveBeenCalled();
+      expect(mockClient.post).not.toHaveBeenCalled();
+      expect(mockClient.put).not.toHaveBeenCalled();
+      expect(mockClient.delete).toHaveBeenCalledWith(`/v1/ca/certificates/${ENC_SERIAL}`, undefined, {
+        reason: 'REVOCATION_REASON_KEY_COMPROMISE',
         deleteKeys: true,
       });
-      const body = vi.mocked(mockClient.post).mock.calls[0]?.[1] as Record<string, unknown>;
+      const body = vi.mocked(mockClient.delete).mock.calls[0]?.[2] as Record<string, unknown>;
       expect(body).not.toHaveProperty('serial');
     });
 
     it('propagates a transport failure', async () => {
-      vi.mocked(mockClient.post).mockRejectedValue(failure);
+      vi.mocked(mockClient.delete).mockRejectedValue(failure);
       await expect(service.revokeCertificate(request)).rejects.toBe(failure);
     });
   });

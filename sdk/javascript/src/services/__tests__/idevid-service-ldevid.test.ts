@@ -46,7 +46,7 @@ describe('IDevIDService.createLDevID', () => {
     }
     const [url, body] = call;
     expect(url).toMatch(/\/v1\/idevid\/ldevid$/);
-    expect(body).toEqual({ ...request, algorithm: 'DEVICE_KEY_ALGORITHM_ECDSA_P256' });
+    expect(body).toEqual({ ...request, algorithm: 1 });
     expect(result.data?.certificatePem).toBe('PEM');
   });
 
@@ -58,25 +58,55 @@ describe('IDevIDService.createLDevID', () => {
     return call[1];
   }
 
-  it('sends the algorithm as the proto enum name', async () => {
+  // pkg/api/daemon/rest_idevid_ldevid.go decodes with encoding/json into
+  // CreateLDevIDRequest: algorithm is the int32 DeviceKeyAlgorithm and the
+  // field is validity_days. protojson in the webservice accepts both too.
+  it('sends the algorithm as the proto enum number', async () => {
     vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: { status: { success: true } } });
 
     await service.createLDevID({ algorithm: 'RSA_3072' });
 
-    expect(postedBody()).toEqual({ algorithm: 'DEVICE_KEY_ALGORITHM_RSA_3072' });
+    expect(postedBody()).toEqual({ algorithm: 4 });
   });
 
-  it('sends nondefault algorithms as protobuf enum names', async () => {
+  it('sends every algorithm as its proto enum number', async () => {
     vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: { status: { success: true } } });
 
-    await service.createLDevID({ algorithm: 'ECDSA_P384' });
-    await service.createLDevID({ algorithm: 'RSA_3072' });
+    for (const algorithm of ['UNSPECIFIED', 'ECDSA_P256', 'ECDSA_P384', 'RSA_2048', 'RSA_3072'] as const) {
+      await service.createLDevID({ algorithm });
+    }
 
     const bodies = vi.mocked(mockClient.post).mock.calls.map((call) => call[1]);
-    expect(bodies).toEqual([
-      { algorithm: 'DEVICE_KEY_ALGORITHM_ECDSA_P384' },
-      { algorithm: 'DEVICE_KEY_ALGORITHM_RSA_3072' },
-    ]);
+    expect(bodies).toEqual([{ algorithm: 0 }, { algorithm: 1 }, { algorithm: 2 }, { algorithm: 3 }, { algorithm: 4 }]);
+  });
+
+  it('sends validityDays as validity_days', async () => {
+    vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: { status: { success: true } } });
+
+    await service.createLDevID({ algorithm: 'ECDSA_P384', validityDays: 30, overwrite: true });
+
+    expect(postedBody()).toEqual({ algorithm: 2, validity_days: 30, overwrite: true });
+  });
+
+  it('normalises the daemon snake_case response', async () => {
+    // CreateLDevIDResponse as encoding/json writes it in the daemon handler.
+    vi.mocked(mockClient.post).mockResolvedValue({
+      success: true,
+      data: { status: { success: true }, csr_pem: 'Q1NS', certificate_pem: 'Q0VSVA==' },
+    });
+
+    const result = await service.createLDevID({ algorithm: 'ECDSA_P384' });
+
+    expect(result.data).toEqual({ status: { success: true }, csrPem: 'Q1NS', certificatePem: 'Q0VSVA==' });
+  });
+
+  it('keeps the webservice camelCase response', async () => {
+    const data = { status: { success: true }, csrPem: 'Q1NS', certificatePem: 'Q0VSVA==' };
+    vi.mocked(mockClient.post).mockResolvedValue({ success: true, data });
+
+    const result = await service.createLDevID();
+
+    expect(result.data).toEqual(data);
   });
 
   it('posts no algorithm key when none is given', async () => {

@@ -93,6 +93,22 @@ describe('EABService', () => {
       expect(mockClient.get).toHaveBeenCalledWith('/v1/eab/credentials/5/url');
       expect(res.data?.url).toBe('/enroll?kid=kid-5');
     });
+
+    it('passes the wire url and generation timestamp through, with no expiry', async () => {
+      vi.mocked(mockClient.get).mockResolvedValue({
+        success: true,
+        data: { url: '/enroll?kid=kid-7', timestamp: '2026-02-03T04:05:06Z' },
+      });
+
+      const res = await service.getEnrollmentURL('7');
+
+      expect(res.success).toBe(true);
+      expect(res.data).toEqual({ url: '/enroll?kid=kid-7', timestamp: '2026-02-03T04:05:06Z' });
+      expect(Object.keys(res.data ?? {}).sort()).toEqual(['timestamp', 'url']);
+      // The response type carries the generation time, not an expiry.
+      const data: { url: string; timestamp: string } | undefined = res.data;
+      expect(data?.timestamp).toBe('2026-02-03T04:05:06Z');
+    });
   });
 
   describe('uint64 ids', () => {

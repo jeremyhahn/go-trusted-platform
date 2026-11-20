@@ -10,7 +10,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SDNService } from '../sdn-service.js';
-import type { ApiClient } from '../../client/api-client.js';
+import { ApiClient } from '../../client/api-client.js';
 
 function createMockApiClient(): ApiClient {
   return {
@@ -61,7 +61,36 @@ describe('SDNService port state and policies (#1745)', () => {
   it('applyPolicy POSTs to /policies', async () => {
     const request = { config: { name: 'deny-all', type: 'POLICY_TYPE_ACL' as const } };
     await service.applyPolicy(request);
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/sdn/policies', request);
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/sdn/policies', request, { retry: { enabled: false } });
+  });
+
+  it('applyPolicy surfaces a lost response with exactly one POST', async () => {
+    // The daemon installs the policy before it answers; with no policyId a
+    // resend gets a fresh ID and is refused AlreadyExists on the name.
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('network error: response lost after the server acted'))
+      .mockResolvedValue(
+        new Response(JSON.stringify({ success: true, payload: { policyId: 'second' } }), {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        })
+      );
+    const client = new ApiClient({
+      baseUrl: 'https://platform.test/api/v1',
+      fetch: fetchImpl as unknown as typeof fetch,
+      retry: { maxRetries: 3, initialDelayMs: 1, maxDelayMs: 1 },
+    });
+
+    const result = await new SDNService(client).applyPolicy({
+      config: { name: 'deny-all', type: 'POLICY_TYPE_ACL' as const },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const init = fetchImpl.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(init?.method).toBe('POST');
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toMatch(/network error/);
   });
 
   it('getPolicy GETs /policies/{id} with the id encoded', async () => {

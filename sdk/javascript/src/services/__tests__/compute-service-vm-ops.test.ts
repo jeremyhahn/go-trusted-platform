@@ -67,6 +67,21 @@ describe('ComputeService VM operations', () => {
     expect(body).toEqual({ commit: false });
   });
 
+  it('finalizes a migration with client retries disabled', async () => {
+    await service.finalizeMigration({ receiverId: 'rx-9', commit: true });
+    expect(vi.mocked(mockClient.post).mock.calls[0]?.[2]).toEqual({ retry: { enabled: false } });
+  });
+
+  it('surfaces a lost finalize response without resending the commit', async () => {
+    // The daemon removes the receiver token before it commits, so a resent
+    // finalize would answer 404 for a migration that has already resumed.
+    const lost = new TypeError('network error: response lost after commit');
+    vi.mocked(mockClient.post).mockRejectedValueOnce(lost);
+    await expect(service.finalizeMigration({ receiverId: 'rx-9', commit: true })).rejects.toBe(lost);
+    expect(mockClient.post).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(mockClient.post).mock.calls[0]?.[2]).toEqual({ retry: { enabled: false } });
+  });
+
   it('migrateVM forwards a per-request timeout to the client', async () => {
     await service.migrateVM(
       { vmId: 'vm-1', destinationHost: 'dest', liveMigration: true },
