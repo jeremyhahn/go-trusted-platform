@@ -291,9 +291,17 @@ func NewAuthFactorHandlers(ca quicbaasca.CACertificateAuthority, logger *slog.Lo
 
 // RegisterRoutes attaches all auth factor routes to the provided mux router.
 func (h *AuthFactorHandlers) RegisterRoutes(router *mux.Router) {
+	h.RegisterRoutesWithIssuer(router, router)
+}
+
+// RegisterRoutesWithIssuer attaches the auth factor routes to router and
+// the certificate issuance route to issuer, so a caller can mount issuance
+// behind the middleware that authenticates the principal callerAuthorized
+// resolves.
+func (h *AuthFactorHandlers) RegisterRoutesWithIssuer(router, issuer *mux.Router) {
 	router.HandleFunc("/api/v1/auth/factors/aaguid-lookup", h.handleAAGUIDLookup).Methods(http.MethodGet)
 	router.HandleFunc("/api/v1/auth/mtls/probe", h.handleMTLSProbe).Methods(http.MethodHead)
-	router.HandleFunc("/api/v1/users/{id}/factors/mtls/issue-cert", h.handleIssueCert).Methods(http.MethodPost)
+	issuer.HandleFunc("/api/v1/users/{id}/factors/mtls/issue-cert", h.handleIssueCert).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/tenants/{id}/security/mfa-policy", h.handleGetMFAPolicy).Methods(http.MethodGet)
 	router.HandleFunc("/api/v1/tenants/{id}/security/mfa-policy", h.handlePutMFAPolicy).Methods(http.MethodPut)
 

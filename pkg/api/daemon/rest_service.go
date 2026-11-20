@@ -548,7 +548,16 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, guard *
 	authFactorHandlers := restapi.NewAuthFactorHandlers(ca, s.logger)
 	authFactorHandlers.SetAuthorization(nil, authFactorPrincipal)
 	s.authFactorHandlers = authFactorHandlers
-	authFactorHandlers.RegisterRoutes(s.router)
+	// Issuance runs behind the REST scope guard: authorize authenticates the
+	// platform token and puts the caller where authFactorPrincipal reads it,
+	// then the PEP decides authfactor:enroll. Without a guard the route
+	// still refuses every request (no principal).
+	issuer := s.router
+	if guard != nil {
+		issuer = s.router.NewRoute().Subrouter()
+		issuer.Use(s.authFactorAuthorization(guard).authorize)
+	}
+	authFactorHandlers.RegisterRoutesWithIssuer(s.router, issuer)
 	s.logger.Info("Auth factor REST routes registered")
 }
 
@@ -569,6 +578,24 @@ func authFactorPrincipal(r *http.Request) (restapi.AuthFactorPrincipal, bool) {
 		return restapi.AuthFactorPrincipal{}, false
 	}
 	return restapi.AuthFactorPrincipal{Subject: caller.Subject, TenantID: caller.TenantID, Roles: caller.Roles}, true
+}
+
+// authFactorAuthorization authenticates an auth-factor issuance request
+// through guard. Enrolling a user's factor is an IAM write, so the token
+// needs the iam scope for the request's method; the PEP then decides the
+// go-qrdb permission authfactor:enroll for the principal.
+func (s *RESTServer) authFactorAuthorization(guard *restapi.ScopeGuard) restScopeAuthorization {
+	return restScopeAuthorization{
+		guard:      guard,
+		respWriter: response.NewResponseWriter(logging.NewFromSlog(s.logger), nil),
+		routeScope: func(method, route string) (string, error) {
+			action, err := restScopeAction(iamScopeResource, nil, method, route)
+			if err != nil {
+				return "", err
+			}
+			return iamScopeResource + ":" + action, nil
+		},
+	}
 }
 
 // SetTPMHandlers mounts the physical TPM routes (/api/v1/tpm/...). Every
