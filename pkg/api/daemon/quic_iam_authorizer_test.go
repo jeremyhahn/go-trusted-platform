@@ -18,7 +18,9 @@ import (
 	"errors"
 	"testing"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -155,6 +157,122 @@ func TestErrPEPClientNotAvailable_Error(t *testing.T) {
 	if err.Error() != "PEP client is not available" {
 		t.Errorf("unexpected error message: %s", err.Error())
 	}
+}
+
+// storedUsersIAM is an IAM client whose User().Get answers from a map of
+// stored users keyed by tenant and user ID, the way the IAM store holds them.
+// A missing user is an error; every other IAM method is the embedded nil
+// interface and panics if called.
+type storedUsersIAM struct {
+	quicbaassdk.IAMClient
+	users  map[string]*sdkiam.User // tenantID + "/" + userID
+	getErr error
+}
+
+func (c *storedUsersIAM) User() sdkiam.UserClient { return storedUsers{client: c} }
+
+type storedUsers struct {
+	sdkiam.UserClient
+	client *storedUsersIAM
+}
+
+func (u storedUsers) Get(_ context.Context, tenantID, userID string) (*sdkiam.User, error) {
+	if u.client.getErr != nil {
+		return nil, u.client.getErr
+	}
+	user, ok := u.client.users[tenantID+"/"+userID]
+	if !ok {
+		return nil, errors.New("user not found")
+	}
+	return user, nil
+}
+
+// pepGrantingRole is a PEP that allows resource:action only when the Check
+// carries role, the way the RBAC authorizer behind the real PEP resolves
+// permissions from the subject's supplied roles. It records every request.
+func pepGrantingRole(role, resource, action string, asked *[]*sdkiam.CheckRequest) *mockSDKPEPClient {
+	return &mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		*asked = append(*asked, req)
+		if req.Resource != resource || req.Action != action {
+			return &sdkiam.CheckResponse{Allowed: false}, nil
+		}
+		for _, r := range req.Subject.Roles {
+			if r == role {
+				return &sdkiam.CheckResponse{Allowed: true}, nil
+			}
+		}
+		return &sdkiam.CheckResponse{Allowed: false}, nil
+	}}
+}
+
+// A certificate principal carries only subject and tenant. Its role grants
+// are the stored IAM user's, resolved in its tenant before the PEP is asked
+// (#2016, PR #2082 Codex round 1 P1): without them the RBAC chain resolves
+// no permission and denies every certificate caller.
+func TestIAMTokenAuthorizer_CheckPeerPermission_ResolvesStoredRoles(t *testing.T) {
+	t.Parallel()
+	peer := &platformtoken.AuthorizedContext{Subject: "svc-1", TenantID: "acme"}
+
+	t.Run("stored role granting the permission allows", func(t *testing.T) {
+		var asked []*sdkiam.CheckRequest
+		authz := &iamTokenAuthorizer{
+			pep: pepGrantingRole("kms-operator", "kms", "delete", &asked),
+			iam: &storedUsersIAM{users: map[string]*sdkiam.User{
+				"acme/svc-1": {ID: "svc-1", TenantID: "acme", Roles: []string{"kms-operator"}},
+			}},
+		}
+		allowed, err := authz.CheckPeerPermission(context.Background(), peer, "kms", "delete")
+		require.NoError(t, err)
+		assert.True(t, allowed)
+		require.Len(t, asked, 1)
+		assert.Equal(t, "svc-1", asked[0].Subject.ID)
+		assert.Equal(t, "acme", asked[0].Subject.TenantID)
+		assert.Equal(t, []string{"kms-operator"}, asked[0].Subject.Roles)
+	})
+	t.Run("stored user without the role is denied", func(t *testing.T) {
+		var asked []*sdkiam.CheckRequest
+		authz := &iamTokenAuthorizer{
+			pep: pepGrantingRole("kms-operator", "kms", "delete", &asked),
+			iam: &storedUsersIAM{users: map[string]*sdkiam.User{
+				"acme/svc-1": {ID: "svc-1", TenantID: "acme"},
+			}},
+		}
+		allowed, err := authz.CheckPeerPermission(context.Background(), peer, "kms", "delete")
+		require.NoError(t, err)
+		assert.False(t, allowed)
+	})
+	t.Run("user stored in another tenant is denied", func(t *testing.T) {
+		var asked []*sdkiam.CheckRequest
+		authz := &iamTokenAuthorizer{
+			pep: pepGrantingRole("kms-operator", "kms", "delete", &asked),
+			iam: &storedUsersIAM{users: map[string]*sdkiam.User{
+				"other/svc-1": {ID: "svc-1", TenantID: "other", Roles: []string{"kms-operator"}},
+			}},
+		}
+		allowed, err := authz.CheckPeerPermission(context.Background(), peer, "kms", "delete")
+		require.NoError(t, err)
+		assert.False(t, allowed)
+		assert.Empty(t, asked, "a principal with no stored user never reaches the PEP")
+	})
+	t.Run("lookup error is a denial without an error", func(t *testing.T) {
+		var asked []*sdkiam.CheckRequest
+		authz := &iamTokenAuthorizer{
+			pep: pepGrantingRole("kms-operator", "kms", "delete", &asked),
+			iam: &storedUsersIAM{getErr: errors.New("iam store unreachable: secret detail")},
+		}
+		allowed, err := authz.CheckPeerPermission(context.Background(), peer, "kms", "delete")
+		assert.NoError(t, err)
+		assert.False(t, allowed)
+		assert.Empty(t, asked)
+	})
+	t.Run("no IAM client is a denial", func(t *testing.T) {
+		var asked []*sdkiam.CheckRequest
+		authz := &iamTokenAuthorizer{pep: pepGrantingRole("kms-operator", "kms", "delete", &asked)}
+		allowed, err := authz.CheckPeerPermission(context.Background(), peer, "kms", "delete")
+		assert.NoError(t, err)
+		assert.False(t, allowed)
+		assert.Empty(t, asked)
+	})
 }
 
 // mockSDKPEPClient is an sdkiam.PEPClient whose answers the test supplies.
