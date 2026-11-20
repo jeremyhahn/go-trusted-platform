@@ -121,21 +121,21 @@ Counted with Serena `search_for_pattern` over `web/src`, excluding `__tests__/`,
 | kms.decrypt | key-detail-client.tsx:158 | kms:234 | POST /kms/decrypt | - (g:462 needs `{name}`) | **unimplemented** |
 | kms.sign | key-detail-client.tsx:168 | kms:244 | POST /kms/sign | - (g:477 needs `{name}`) | **unimplemented** |
 | kms.verify | key-detail-client.tsx:178 | kms:254 | POST /kms/verify | - (g:478 needs `{name}`) | **unimplemented** |
-| overlay.listVNIs | (d)/networking/overlays/page.tsx:41, hooks/use-overlay-vteps.ts:26 | overlay:118 | GET /overlay/vnis | g:234 | implemented |
-| overlay.createVNI | overlays/page.tsx:129 | overlay:109 | POST /overlay/vnis | g:484 | implemented |
-| overlay.deleteVNI | use-overlay-vteps.ts:55 | overlay:128 | DELETE /overlay/vnis/{vni} | g:45 | implemented |
-| overlay.listVTEPs | use-overlay-vteps.ts:25 | overlay:83 | GET /overlay/vteps | g:235 | implemented |
-| overlay.getVTEP | use-overlay-vteps.ts:32 | overlay:93 | GET /overlay/vteps/{nodeId} | g:236 | implemented |
-| overlay.listTunnels | use-overlay-vteps.ts:27 | overlay:142 | GET /overlay/tunnels | g:232 | implemented |
-| overlay.getTunnelStats | use-overlay-vteps.ts:41 | overlay:154 | GET /overlay/tunnels/stats | g:233 | implemented |
-| overlay.listRemoteMACs | use-overlay-vteps.ts:28 | overlay:172 | GET /overlay/macs | g:230 | implemented |
-| overlay.forgetMAC | use-overlay-vteps.ts:66 | overlay:184 | DELETE /overlay/macs | g:44 | implemented |
+| overlay.listVNIs | (d)/networking/overlays/page.tsx:41, hooks/use-overlay-vteps.ts:26 | overlay:118 | GET /overlay/vnis | g:234 | **not-configured** (default.yaml:625 `sdn.overlay.enabled: false`; overlay_grpc_service.go:100 answers Unavailable) |
+| overlay.createVNI | overlays/page.tsx:129 | overlay:109 | POST /overlay/vnis | g:484 | **not-configured** (default.yaml:625 `sdn.overlay.enabled: false`; overlay_grpc_service.go:100 answers Unavailable) |
+| overlay.deleteVNI | use-overlay-vteps.ts:55 | overlay:128 | DELETE /overlay/vnis/{vni} | g:45 | **not-configured** (default.yaml:625 `sdn.overlay.enabled: false`; overlay_grpc_service.go:100 answers Unavailable) |
+| overlay.listVTEPs | use-overlay-vteps.ts:25 | overlay:83 | GET /overlay/vteps | g:235 | **not-configured** (default.yaml:625 `sdn.overlay.enabled: false`; overlay_grpc_service.go:100 answers Unavailable) |
+| overlay.getVTEP | use-overlay-vteps.ts:32 | overlay:93 | GET /overlay/vteps/{nodeId} | g:236 | **not-configured** (default.yaml:625 `sdn.overlay.enabled: false`; overlay_grpc_service.go:100 answers Unavailable) |
+| overlay.listTunnels | use-overlay-vteps.ts:27 | overlay:142 | GET /overlay/tunnels | g:232 | **not-configured** (default.yaml:625 `sdn.overlay.enabled: false`; overlay_grpc_service.go:100 answers Unavailable) |
+| overlay.getTunnelStats | use-overlay-vteps.ts:41 | overlay:154 | GET /overlay/tunnels/stats | g:233 | **not-configured** (default.yaml:625 `sdn.overlay.enabled: false`; overlay_grpc_service.go:100 answers Unavailable) |
+| overlay.listRemoteMACs | use-overlay-vteps.ts:28 | overlay:172 | GET /overlay/macs | g:230 | **not-configured** (default.yaml:625 `sdn.overlay.enabled: false`; overlay_grpc_service.go:100 answers Unavailable) |
+| overlay.forgetMAC | use-overlay-vteps.ts:66 | overlay:184 | DELETE /overlay/macs | g:44 | **not-configured** (default.yaml:625 `sdn.overlay.enabled: false`; overlay_grpc_service.go:100 answers Unavailable) |
 | platform.getHealth | dashboard:152, (d)/platform/events:182, health:76, metrics:230, services:152 | platform:100 | GET /platform/health | g:241 | implemented |
 | platform.getMetrics | dashboard:163, health:95, metrics:202 | platform:141 | GET /platform/metrics | g:245 | implemented |
 | platform.getSystemInfo | health:99, metrics:222 | platform:77 | GET /platform/system | g:251 | implemented |
-| pxe.listDevices | (d)/networking/pxe/page.tsx:46 | pxe:124 | GET /pxe/devices | g:260 | implemented |
-| pxe.getStatus | pxe/page.tsx:72 | pxe:240 | GET /pxe/status | g:264 | implemented |
-| pxe.registerDevice | pxe/page.tsx:302 | pxe:78 | POST /pxe/devices | g:498 | implemented |
+| pxe.listDevices | (d)/networking/pxe/page.tsx:46 | pxe:124 | GET /pxe/devices | g:260 | **not-configured** (platformd has no `pxe:` section; nil backend at pkg/api/daemon/daemon.go:993 answers SERVICE_NOT_CONFIGURED) |
+| pxe.getStatus | pxe/page.tsx:72 | pxe:240 | GET /pxe/status | g:264 | **not-configured** (platformd has no `pxe:` section; nil backend at pkg/api/daemon/daemon.go:993 answers SERVICE_NOT_CONFIGURED) |
+| pxe.registerDevice | pxe/page.tsx:302 | pxe:78 | POST /pxe/devices | g:498 | **not-configured** (platformd has no `pxe:` section; nil backend at pkg/api/daemon/daemon.go:993 answers SERVICE_NOT_CONFIGURED) |
 | sdn.listBridges | (d)/networking/sdn:66, flows:118, ports:78, vlans:60 | sdn:135 | GET /sdn/bridges | g:278 | implemented |
 | sdn.createBridge | sdn/page.tsx:221 | sdn:113 | POST /sdn/bridges | g:518 | implemented |
 | sdn.listPorts | ports/page.tsx:103 | sdn:192 | GET /sdn/bridges/{name}/ports | g:282 | implemented |
@@ -257,7 +257,8 @@ Counted with Serena `search_for_pattern` over `web/src`, excluding `__tests__/`,
 
 ## Counts per status (draft, before the not-configured pass)
 
-- Table A (181 rows: 178 SDK methods, 3 NTP paths): implemented 157, unimplemented 17, stubbed 7, not-configured 0 (pending).
+- Table A (181 rows: 178 SDK methods, 3 NTP paths): implemented 145, unimplemented 17, stubbed 7, not-configured 12 (9 overlay, 3 PXE).
+- Default-config basis: gateway (default.yaml:631), sdn (:571) and ntp (:420) are enabled; VPN registers always and has a store through the embedded quicBaaS (pkg/api/daemon/vpn_grpc_service.go:70); compute and vTPM depend on the host runtime, not a config key (pkg/daemon/commands/serve.go:857-863).
 - Table B (45 rows covering 37 fetch sites): implemented 35, unimplemented 9, stubbed 1, not-configured 0 (pending).
 
 ## Every row that is not `implemented`
