@@ -1227,7 +1227,7 @@ jobs:
     concurrency:
       group: ${{ format('code-review-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) }}
       cancel-in-progress: false
-    runs-on: codex  # lab-string-ok: the public label of the Codex review runner, read by the review tier only # self-hosted: the reviewer token is mounted on this runner alone
+    runs-on: codex  # lab-string-ok: the public label of the Codex review runner, read by the review tier only # self-hosted: credential: the reviewer token is mounted on this runner alone
     # The route, for the opencode job.
     outputs:
       agent: ${{ steps.guard.outputs.agent }}
@@ -3084,7 +3084,7 @@ jobs:
     needs: review
     # Gitea only (v5.9.0): its token check and permission read are Gitea's.
     if: needs.review.outputs.agent == 'opencode' && github.server_url != 'https://github.com'
-    runs-on: qwen  # CUSTOMIZE: the opencode review host's runner label # self-hosted: the GPU host that serves the model
+    runs-on: qwen  # CUSTOMIZE: the opencode review host's runner label # self-hosted: hardware: the GPU host that serves the model
     # 3300 s >= 1530 + 630 (the two runs, kill grace included) + 2 x 130 (the
     # debug calls) + 880 s for checkout, guard, prepare, post and cleanup.
     timeout-minutes: 55

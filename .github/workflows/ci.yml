@@ -125,13 +125,20 @@
 #     need no toolchain image.
 #   - sdkjs and web run on the runner with setup-node: the toolchain image
 #     has no Node (the Dockerfile installs it in the integration stage only).
-#   - The jobs that need no Docker daemon (race, lint-gates, arch-gates,
-#     sdkjs, web; #1589 and its follow-up) take race's runs-on: a push to main
-#     and a pull_request from this repository run on the bigdisk runner
-#     [self-hosted, linux, x64, bigdisk], everything else on ubuntu-latest.
-#     Each needs preflight and carries the guard in its `if:`, its
-#     checkout persists no token, and any apt step is hosted-only. fips stays
-#     hosted: its main-tier `if:` has no guarded form yet (see there).
+#   - Runners (owner ruling 999, superseding m2475, m2403/m2406 and #1589's
+#     routing): every job runs on GitHub's standard hosted runner,
+#     `runs-on: ubuntu-latest` (4 vCPU, 16 GB RAM, 14 GB SSD, 6-hour job
+#     limit), on every event. A job runs self-hosted only for hardware it
+#     needs or a measured hosted limit it exceeds, recorded on its runs-on
+#     line as `# self-hosted: <category>: <reason>` with the category
+#     `hardware` or `oversize` (ruling 1006), on one label and never an
+#     expression; pkg/arch/ci_runners_test.go holds the rule. Larger hosted
+#     runners are not used. Here that is the image job alone (its unit suite, see there);
+#     scans.yml's job is the other. The bigdisk jobs' `if:` keep the schedule
+#     guard, so the tiers and CI Gate read the same verdicts; the
+#     hosted-only steps (`runner.environment == 'github-hosted'`: the apt
+#     installs, the integration image artifact download) now run on every
+#     event, and each checkout of a no-Docker job persists no token.
 #   - The gate's check lines are `check <tier> <job> "$RESULT"` with a docs
 #     tier (pkg/arch/citiers_test.go holds the format).
 #   - integration needs image (isolation, see there) and applies the
@@ -316,16 +323,14 @@ jobs:
   # xkmsctl and xkey depend only on sdk/go) are further steps in this job.
   # A source check with grep, not a stage: it runs on the runner's shell.
   # v1.23: a lint-class check, so it stays on the PR tier.
-  # Routing (m2475): a push to main and a pull_request from this repository
-  # run on the bigdisk pool; fork PRs, dispatch and the schedule stay on
-  # ubuntu-latest. The job needs git, curl and jq only. It cannot carry the
-  # schedule guard (it is the guard), and on exactly this route a schedule
-  # run never reaches the pool.
+  # Runner (ruling 999): ubuntu-latest on every event. The job needs git,
+  # curl and jq only. It cannot carry the schedule guard (it is the guard),
+  # and it never runs on the self-hosted pool.
   # CUSTOMIZE: this repository has no go-objstore seam and no import, so
   # OBJSTORE_SEAMS is empty and any import fails.
   preflight:
     name: Preflight [changed files, schedule guard, architecture gates]
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     # v1.26: a draft PR runs no CI; every job that needs this one skips with it.
     if: ${{ !github.event.pull_request.draft }}
     timeout-minutes: 10       # v1.34: the three jobs had 5 each
@@ -499,11 +504,12 @@ jobs:
   # builds the toolchain image alone (`make docker-build-toolchain`), so they
   # run beside build and test and not in series before them. It runs on a
   # docs-only PR, as the image job's lint steps did. CUSTOMIZE: the image
-  # job's runs-on (it needs Docker) and its BuildKit builder; make lint is
-  # three targets here (fmt-check, vet, lint) with their memory bounds.
+  # job's BuildKit builder; make lint is three targets here (fmt-check, vet,
+  # lint) with their memory bounds. Runner (ruling 999): ubuntu-latest, which
+  # has Docker; no step here has a measured figure over the hosted limits.
   lint:
     name: Lint [fmt-check, vet, lint, gosec]
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk-docker"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     needs: preflight   # v1.30, v1.34
     if: ${{ !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     # CUSTOMIZE: golangci-lint alone takes up to GOLANGCI_LINT_TIMEOUT (45m,
@@ -643,11 +649,16 @@ jobs:
   # docs tier and skips on a docs-only PR.
   image:
     name: Devcontainer image [build, test]
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk-docker"]') || 'ubuntu-latest' }}
+    # Ruling 1006: one self-hosted label with a categorised waiver, never an
+    # expression (pkg/arch/ci_runners_test.go). A persistent self-hosted
+    # runner never takes untrusted code, so the `if:` below skips a fork PR;
+    # the gate's `check docs image` then fails that PR closed (a skip passes
+    # only on a docs-only PR).
+    runs-on: bigdisk-docker  # self-hosted: oversize: measured 24.2 GB unbounded (#1178), runs at a 16g container limit; a standard hosted runner has 16 GB RAM
     # v1.26: never on a draft. v1.29.3: on a schedule run, only on the
     # schedule guard's `run`; v1.30: only on `run` on every event, and never
     # on a docs-only PR.
-    if: ${{ needs.preflight.outputs.docs_only != 'true' && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
+    if: ${{ needs.preflight.outputs.docs_only != 'true' && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     needs: preflight   # v1.29.3
     # CUSTOMIZE: the build and the unit suite run one after another here;
     # the race suite is the race job and lint the lint job (v1.30).
@@ -881,9 +892,9 @@ jobs:
     # v1.26: never on a draft. v1.29.3: on a schedule run, only on the
     # schedule guard's `run`.
     if: ${{ !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
-    # Race's runs-on (#1589 follow-up): the bigdisk runner for a push to main
-    # and a same-repository PR, ubuntu-latest otherwise.
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
+    # Runner (ruling 999): ubuntu-latest. The 10.6 GB above was a container
+    # layer; the job now runs on the runner with no image.
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
@@ -1040,11 +1051,11 @@ jobs:
   # Job id is `sdkjs`, deliberately without a hyphen: ci-gate dereferences it
   # as `needs.sdkjs.result`. Do not "tidy" this to `sdk-js`.
   #
-  # Race's runs-on (#1589 follow-up): npm needs no Docker. As a bigdisk job it
-  # needs preflight and its if: carries the guard.
+  # Runner (ruling 999): ubuntu-latest. It still needs preflight and its if:
+  # carries the guard, as it did on the bigdisk pool.
   sdkjs:
     name: SDK JavaScript
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     if: ${{ needs.preflight.outputs.docs_only != 'true' && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     needs: preflight
     timeout-minutes: 15
@@ -1091,17 +1102,14 @@ jobs:
   # RACE_EXCLUDE (#37). Race detection is sampling, not proof: a ratchet
   # against reintroduction. Hosted runners (CA m2061): four shards, each a
   # round-robin quarter of test-race's package list (Makefile SHARD/SHARDS),
-  # to fit a hosted job's 4 cores and 6 hours. The one exception to the
-  # hosted runners (m2403 (2), m2406 (1), 2026-11-10): a push to main and a
-  # pull_request from this repository run on the bigdisk runner
-  # [self-hosted, linux, x64, bigdisk]; fork PRs, other branches,
-  # workflow_dispatch and the schedule stay on ubuntu-latest. As on every
-  # bigdisk job, it needs preflight and its if: carries the guard. The
-  # runner image carries cpio and libssl-dev, so the apt step is hosted-only,
-  # and the checkout token is not persisted.
+  # to fit a hosted job's 4 cores and 6 hours. Runner (ruling 999, which
+  # ends m2403 (2) / m2406 (1)'s bigdisk route): ubuntu-latest on every
+  # event. It still needs preflight and its if: carries the guard; the apt
+  # step installs cpio and libssl-dev, and the checkout token is not
+  # persisted.
   race:
     name: Race (shard ${{ matrix.shard }}/4)
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     if: ${{ needs.preflight.outputs.docs_only != 'true' && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     needs: preflight
     timeout-minutes: 60
@@ -1123,8 +1131,9 @@ jobs:
 
       # cpio: pkg/diskimage/netboot repacks an initramfs with it. libssl-dev:
       # pkg/app's IDevID mTLS tests run go-tpm-tools' simulator, which
-      # compiles the reference TPM with cgo against OpenSSL (#149). The
-      # bigdisk runner's image carries both: hosted runners only.
+      # compiles the reference TPM with cgo against OpenSSL (#149). The job is
+      # hosted on every event (ruling 999), so this step always runs; a
+      # self-hosted runner's image carries both.
       - name: Install cpio and the OpenSSL headers
         if: runner.environment == 'github-hosted'
         run: sudo apt-get update && sudo apt-get install -y cpio libssl-dev
@@ -1153,11 +1162,11 @@ jobs:
   #
   # Job id is `web`, one word, for the same reason `sdkjs` is.
   #
-  # Race's runs-on (#1589 follow-up): npm and next build need no Docker. As a
-  # bigdisk job it needs preflight and its if: carries the guard.
+  # Runner (ruling 999): ubuntu-latest. It still needs preflight and its if:
+  # carries the guard, as it did on the bigdisk pool.
   web:
     name: Web Console
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     needs: preflight
     timeout-minutes: 15
@@ -1262,7 +1271,7 @@ jobs:
   # run in it by that id (see the integration job's lease step).
   integration-image:
     name: Integration image
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk-docker"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     # As the legs had: nothing is built for a run whose image job failed, so
     # no image is left for legs that never run. v1.29.3: the guard
@@ -1518,7 +1527,7 @@ jobs:
   # the teardown runs last under if: always().
   integration:
     name: Integration [build tag integration]
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk-docker"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     # v1.26: never on a draft PR, ci:full or not. v1.29.3: on a schedule run,
     # only on the schedule guard's `run`.
     if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
@@ -1864,7 +1873,7 @@ jobs:
     needs: preflight   # v1.34
     # v1.30: a dispatch off main is refused, so soak runs only on `run`.
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && needs.preflight.outputs.verdict == 'run' }}
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk-docker"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 90       # CUSTOMIZE: SOAK_MINUTES plus one iteration
     env:
       GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
@@ -2047,12 +2056,10 @@ jobs:
     # round-robin quarter of the package list (Makefile SHARD/SHARDS), to fit
     # a hosted job's 4 cores and 6 hours. The job carries no module
     # credential and no proxy setting.
-    # Routing (m2475): a push to main runs on the bigdisk pool, which has
-    # cpio and libssl-dev, so the apt step is hosted-only; the schedule and
-    # workflow_dispatch stay on ubuntu-latest. A bigdisk job carries the
-    # schedule guard, so the if: is the guarded main tier
-    # (pkg/arch/citiers_test.go mainOnlyGuardedIf).
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
+    # Runner (ruling 999, which ends m2475's route): ubuntu-latest on every
+    # event, so the apt step installs cpio and libssl-dev. The if: keeps the
+    # guarded main tier (pkg/arch/citiers_test.go mainOnlyGuardedIf).
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -2221,12 +2228,10 @@ jobs:
   ci-gate:
     timeout-minutes: 10
     name: CI Gate
-    # The reserved 1-CPU ci-gate runners (DS-2273), so the gate does not queue
-    # behind ubuntu-latest jobs: never add a checkout or a `uses:` step here.
-    # CA m2475 (2h): the gate runs on the self-hosted bigdisk pool (main pushes
-    # and same-repo PRs), so it never waits in the hosted queue and always
-    # reports; it needs no Docker. Fork PRs stay on ubuntu-latest.
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
+    # Never add a checkout or a `uses:` step here: the gate reads only its
+    # needs' results. Runner (ruling 999, which ends CA m2475 (2h)'s bigdisk
+    # route): ubuntu-latest on every event; it needs no Docker.
+    runs-on: ubuntu-latest
     # v1.29.3: on a schedule run the schedule guard decides. `busy` skips the
     # gate, so `CI / CI Gate (schedule)` posts `skipped` (Gitea 1.27.1 posts a
     # skipped job as `skipped`, not `success`), never a green nightly. Every

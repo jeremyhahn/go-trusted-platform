@@ -50,45 +50,6 @@ type authzCacheEntry struct {
 	expiresAt time.Time
 }
 
-// NewAuthzMiddleware creates a new authorization middleware instance.
-func NewAuthzMiddleware(
-	logger *logging.Logger,
-	responseWriter response.HttpWriter,
-	config AuthzConfig,
-	pepService PEPServiceClient,
-	opts ...AuthzOption,
-) (*AuthzMiddleware, error) {
-
-	if logger == nil {
-		return nil, ErrInvalidConfig{Field: "logger", Reason: "logger is required"}
-	}
-	if responseWriter == nil {
-		return nil, ErrInvalidConfig{Field: "responseWriter", Reason: "response writer is required"}
-	}
-	if pepService == nil {
-		return nil, ErrInvalidConfig{Field: "pepService", Reason: "PEP service client is required"}
-	}
-
-	m := &AuthzMiddleware{
-		logger:         logger,
-		responseWriter: responseWriter,
-		config:         config,
-		pepService:     pepService,
-	}
-
-	// Apply functional options
-	for _, opt := range opts {
-		opt(m)
-	}
-
-	if config.CacheDecisions {
-		m.cache = make(map[string]*authzCacheEntry)
-		go m.cleanupCache()
-	}
-
-	return m, nil
-}
-
 // Handler returns an http.Handler middleware for authorization.
 func (m *AuthzMiddleware) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -289,23 +250,6 @@ func (m *AuthzMiddleware) cacheDecision(session IAMSession, action, resource str
 // buildCacheKey creates a unique cache key for an authorization decision.
 func (m *AuthzMiddleware) buildCacheKey(session IAMSession, action, resource string) string {
 	return session.TenantID() + ":" + session.UserID() + ":" + action + ":" + resource
-}
-
-// cleanupCache periodically removes expired cache entries.
-func (m *AuthzMiddleware) cleanupCache() {
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		m.cacheMutex.Lock()
-		now := time.Now()
-		for key, entry := range m.cache {
-			if now.After(entry.expiresAt) {
-				delete(m.cache, key)
-			}
-		}
-		m.cacheMutex.Unlock()
-	}
 }
 
 // ClearCache clears all cached authorization decisions.
