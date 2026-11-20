@@ -185,32 +185,62 @@ func parseSpecID(raw []byte) (map[uint16]int, int, error) {
 }
 
 // ReplayEventLog extends each PCR of bank h from its records in log order,
-// through Replay, skipping EV_NO_ACTION records (they extend nothing). A
+// as Replay does, skipping EV_NO_ACTION records (they extend nothing). A
+// StartupLocality EV_NO_ACTION record seeds PCR 0 with its locality
+// (0x00..0L) before the first extend, as TCG PC Client 10.4.5.3 specifies. A
 // record without an h digest gives a *MissingBankError.
 func ReplayEventLog(events []Event, h crypto.Hash) (map[int][]byte, error) {
 	if err := checkHash(h); err != nil {
 		return nil, err
 	}
-	digests := make(map[int][][]byte)
+	pcrs := make(map[int][]byte)
+	extends := make(map[int]int) // digests extended per PCR, for DigestSizeError.Index
 	for _, e := range events {
 		if e.Type == EventNoAction {
+			// A StartupLocality record extends nothing, but the locality
+			// the CRTM started at is PCR 0's initial value: 0x00..0L
+			// (TCG PC Client 10.4.5.3). Other EV_NO_ACTION records are
+			// skipped.
+			if loc, ok := startupLocality(e); ok {
+				if _, extended := pcrs[0]; !extended {
+					seed := make([]byte, h.Size())
+					seed[len(seed)-1] = loc
+					pcrs[0] = seed
+				}
+			}
 			continue
 		}
 		d, ok := e.Digests[h]
 		if !ok {
 			return nil, &MissingBankError{Hash: h}
 		}
-		digests[e.PCR] = append(digests[e.PCR], d)
-	}
-	pcrs := make(map[int][]byte, len(digests))
-	for pcr, ds := range digests {
-		v, err := Replay(h, ds...)
-		if err != nil {
-			return nil, err
+		if len(d) != h.Size() {
+			return nil, &DigestSizeError{Hash: h, Index: extends[e.PCR], Got: len(d)}
 		}
-		pcrs[pcr] = v
+		extends[e.PCR]++
+		pcr, ok := pcrs[e.PCR]
+		if !ok {
+			pcr = make([]byte, h.Size())
+		}
+		w := h.New()
+		_, _ = w.Write(pcr) // hash.Hash.Write never returns an error
+		_, _ = w.Write(d)
+		pcrs[e.PCR] = w.Sum(nil)
 	}
 	return pcrs, nil
+}
+
+// startupLocalitySignature opens a TCG_EfiStartupLocalityEvent's data.
+const startupLocalitySignature = "StartupLocality\x00"
+
+// startupLocality is the locality an EV_NO_ACTION StartupLocality record on
+// PCR 0 names, and whether e is such a record.
+func startupLocality(e Event) (byte, bool) {
+	if e.Type != EventNoAction || e.PCR != 0 || len(e.Data) != len(startupLocalitySignature)+1 ||
+		string(e.Data[:len(startupLocalitySignature)]) != startupLocalitySignature {
+		return 0, false
+	}
+	return e.Data[len(startupLocalitySignature)], true
 }
 
 // CheckEventLog parses raw, replays it for every bank and compares each PCR

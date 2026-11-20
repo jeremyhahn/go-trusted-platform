@@ -154,19 +154,21 @@ type ReferenceValueRegistrar interface {
 }
 
 // publishManifest writes the image's signed manifest beside it and registers
-// it through c.ReferenceValues when one is set. It reports whether the
-// manifest was registered; a registration failure is a MeasureError. With no
-// registrar (the pinned go-quicbaas SDK has no reference-values client until
-// the bump held to #1348) the manifest stays beside the image, a warning is
-// logged and it is reported unregistered.
+// it through c.ReferenceValues. It reports whether the manifest was
+// registered; a registration failure is a MeasureError. With no registrar
+// (the pinned go-quicbaas SDK has no reference-values client until the bump
+// held to #1348) the measured build fails with a MeasureError before it signs
+// anything: docs/SPEC.md:57 requires every manifest registered.
 func (c *BuildConfig) publishManifest(ctx context.Context, image, sum string, target Target, banks []measure.Bank) (string, bool, error) {
+	if c.ReferenceValues == nil {
+		// docs/SPEC.md:57: every image's signed manifest is registered in the
+		// reference-values store; a measured build that cannot register it
+		// fails rather than shipping an image no verifier can appraise.
+		return "", false, &MeasureError{Step: "registering the measurement manifest", Err: errNoRegistrar}
+	}
 	out, err := c.writeManifest(ctx, image, sum, target, banks)
 	if err != nil {
 		return "", false, err
-	}
-	if c.ReferenceValues == nil {
-		c.Logger.Warn("[DISKIMAGE] no reference-values registrar: the signed manifest is written beside the image but not registered", "manifest", out)
-		return out, false, nil
 	}
 	signed, err := os.ReadFile(out)
 	if err != nil {
@@ -177,6 +179,10 @@ func (c *BuildConfig) publishManifest(ctx context.Context, image, sum string, ta
 	}
 	return out, true, nil
 }
+
+// errNoRegistrar is why a measured build without a reference-values
+// registrar fails (until the go-quicbaas SDK bump, #1348, supplies one).
+var errNoRegistrar = errors.New("no reference-values registrar: a measured build cannot register its manifest")
 
 // errNoCABundle: the platform CA client cannot return the CA bundle, so the
 // manifest certificate's issuer chain cannot be built.

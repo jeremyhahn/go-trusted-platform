@@ -3,6 +3,7 @@ package diskimage
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -397,13 +398,21 @@ func runCreate(common *cli.CommonFlags, flags *createFlags) (err error) {
 		return ErrBuildFailed{Reason: err.Error()}
 	}
 	fmt.Printf("\nImage: %s\n  SHA256: %s\n  Size: %d MB\n  U-Boot: %s\n  Media: %s\n", result.Image, result.SHA256, result.SizeBytes/(1024*1024), result.UBoot.Binary, result.MediaDir)
-	switch {
-	case result.Manifest != "":
-		fmt.Printf("  Measurement manifest: %s (registered in the reference-values store)\n", result.Manifest)
-	case result.Unmeasured != "":
-		fmt.Printf("  Measurement manifest: none (%s)\n", result.Unmeasured)
-	}
+	printManifestLine(os.Stdout, result)
 	return nil
+}
+
+// printManifestLine reports the build's measurement manifest, claiming
+// registration only when the build registered it (result.Registered).
+func printManifestLine(w io.Writer, result *pkgdiskimage.Result) {
+	switch {
+	case result.Manifest != "" && result.Registered:
+		fmt.Fprintf(w, "  Measurement manifest: %s (registered in the reference-values store)\n", result.Manifest)
+	case result.Manifest != "":
+		fmt.Fprintf(w, "  Measurement manifest: %s (NOT registered in the reference-values store)\n", result.Manifest)
+	case result.Unmeasured != "":
+		fmt.Fprintf(w, "  Measurement manifest: none (%s)\n", result.Unmeasured)
+	}
 }
 
 // kmsClients reaches kms:// Secure Boot references through the operator's
@@ -423,9 +432,9 @@ func kmsClients(client *cli.LazyClient) pkgiso.KMSClientsFunc {
 // store the verifier reads, reached through the platform client. The pinned
 // go-quicbaas SDK (v0.12.0-alpha) carries no reference-values verb
 // (PutReferenceValues ships in v0.14.0-alpha, a bump held to #1348), so it
-// yields no registrar: a measured build then signs and writes its manifest
-// beside the image, warns, and leaves it unregistered (Result.Registered
-// false) until the SDK bump (#1348). A variable so the command's tests can
+// yields no registrar: a measured (Secure Boot) build then fails before it
+// signs its manifest, since docs/SPEC.md:57 requires every manifest
+// registered, until the SDK bump (#1348). A variable so the command's tests can
 // supply a registrar.
 var referenceValues = func(_ *cli.LazyClient) pkgdiskimage.ReferenceValueRegistrar {
 	return nil
