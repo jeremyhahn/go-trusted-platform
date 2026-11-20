@@ -60,6 +60,10 @@ type CAGRPCService struct {
 	objStorage objectstorage.Client
 	// kms holds the keys SignCSR certifies; without it SignCSR fails closed.
 	kms issuance.KMS
+	// initCA brings the CA up for InitCA; nil leaves InitCA refusing.
+	initCA CAInitializer
+	// trustPath is where InstallCACertificates writes the CA bundle.
+	trustPath string
 }
 
 // WithKMS sets the KMS whose keys SignCSR certifies, and returns s.
@@ -84,6 +88,7 @@ func NewCAGRPCService(logger *logging.Logger, ca quicbaasca.CACertificateAuthori
 		logger:     logger,
 		ca:         ca,
 		objStorage: objStorage,
+		trustPath:  defaultCATrustInstallPath,
 	}
 }
 

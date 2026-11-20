@@ -625,9 +625,12 @@ func TestRegisterRoutes_RegistersOnlyTheProtectedHalf(t *testing.T) {
 		"GET /api/v1/ca/certificates/{serial}":        true,
 		"DELETE /api/v1/ca/certificates/{serial}":     true,
 		"POST /api/v1/ca/certificates/{serial}/renew": true,
+		"POST /api/v1/ca/init":                        true,
+		"POST /api/v1/ca/trust/install":               true,
+		"POST /api/v1/ca/trust/uninstall":             true,
 	}
 	assert.Equal(t, want, got,
-		"the protected CA half must be exactly issuance, CSR signing, renewal, revocation, verification and the issued-certificate inventory")
+		"the protected CA half must be exactly issuance, CSR signing, renewal, revocation, verification, the issued-certificate inventory and the CA lifecycle (init, trust install/uninstall)")
 }
 
 // TestRegisterPublicRoutes_RegistersOnlyTheUnauthenticatedHalf pins the
@@ -683,5 +686,5 @@ func TestRegisterRoutes_HalvesAreDisjointAndCoverTheSurface(t *testing.T) {
 		caRouter.RegisterPublicRoutes(r)
 		caRouter.RegisterRoutes(r)
 	}), union, "the two halves must cover the whole CA surface")
-	assert.Len(t, union, 13)
+	assert.Len(t, union, 16)
 }

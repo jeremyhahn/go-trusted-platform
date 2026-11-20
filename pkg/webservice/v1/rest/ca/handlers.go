@@ -67,6 +67,11 @@ const (
 	RenewScope  = "certs:generate"
 	RevokeScope = "certs:revoke"
 	VerifyScope = "certs:read"
+
+	// InitScope and TrustWriteScope are the gRPC catalog scopes for the same
+	// RPCs (InitCA; Install/UninstallCACertificates).
+	InitScope       = "ca:create"
+	TrustWriteScope = "trust:write"
 )
 
 // NewCAHandlers creates a new CAHandlers instance.
@@ -1051,6 +1056,71 @@ func (h *CAHandlers) RenewCertificate(w http.ResponseWriter, r *http.Request) {
 	req.Serial = serial
 
 	resp, err := h.service.RenewCertificate(r.Context(), req)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// InitCA initialises the node CA (POST /ca/init, scope ca:create).
+func (h *CAHandlers) InitCA(w http.ResponseWriter, r *http.Request) {
+	if h.service == nil {
+		protorest.WriteError(w, r, h.respWriter, &protorest.ErrServiceUnavailable{Service: "ca"})
+		return
+	}
+	req := &platformv1.InitCARequest{}
+	if r.Body != nil && r.ContentLength > 0 {
+		if err := protorest.DecodeRequest(r, req); err != nil {
+			protorest.WriteError(w, r, h.respWriter, status.Error(codes.InvalidArgument, err.Error()))
+			return
+		}
+	}
+	resp, err := h.service.InitCA(r.Context(), req)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// InstallCACertificates installs the CA bundle into the system trust store
+// (POST /ca/trust/install, scope trust:write).
+func (h *CAHandlers) InstallCACertificates(w http.ResponseWriter, r *http.Request) {
+	if h.service == nil {
+		protorest.WriteError(w, r, h.respWriter, &protorest.ErrServiceUnavailable{Service: "ca"})
+		return
+	}
+	req := &platformv1.InstallCACertificatesRequest{}
+	if r.Body != nil && r.ContentLength > 0 {
+		if err := protorest.DecodeRequest(r, req); err != nil {
+			protorest.WriteError(w, r, h.respWriter, status.Error(codes.InvalidArgument, err.Error()))
+			return
+		}
+	}
+	resp, err := h.service.InstallCACertificates(r.Context(), req)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// UninstallCACertificates removes the CA bundle from the system trust store
+// (POST /ca/trust/uninstall, scope trust:write).
+func (h *CAHandlers) UninstallCACertificates(w http.ResponseWriter, r *http.Request) {
+	if h.service == nil {
+		protorest.WriteError(w, r, h.respWriter, &protorest.ErrServiceUnavailable{Service: "ca"})
+		return
+	}
+	req := &platformv1.UninstallCACertificatesRequest{}
+	if r.Body != nil && r.ContentLength > 0 {
+		if err := protorest.DecodeRequest(r, req); err != nil {
+			protorest.WriteError(w, r, h.respWriter, status.Error(codes.InvalidArgument, err.Error()))
+			return
+		}
+	}
+	resp, err := h.service.UninstallCACertificates(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return

@@ -611,7 +611,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if config.App != nil {
 			caObjStorage = config.App.Storage
 		}
-		caService = NewCAGRPCService(caLogger, config.CAService, caObjStorage).WithKMS(config.csrKMS())
+		caService = NewCAGRPCService(caLogger, config.CAService, caObjStorage).WithKMS(config.csrKMS()).WithCAInitializer(AppCAInitializer(config.App))
 
 		// Register with TCP gRPC server if available
 		if grpcServer != nil {
