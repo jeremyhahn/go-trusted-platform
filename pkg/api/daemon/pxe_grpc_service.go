@@ -68,10 +68,16 @@ func (s *PXEGRPCService) StopBackend(ctx context.Context) error {
 	if s == nil || s.pxeService == nil {
 		return nil
 	}
-	if s.pxeService.IsRunning() {
-		return s.pxeService.Stop(ctx)
+	// Stop takes the backend's lifecycle lock, which an in-flight Start
+	// holds until its listeners are bound: calling it unconditionally
+	// waits for that Start and stops the run it leaves. An IsRunning
+	// pre-check would read false mid-Start and skip the stop.
+	err := s.pxeService.Stop(ctx)
+	var notRunning pxe.ErrServiceNotRunning
+	if errors.As(err, &notRunning) {
+		return nil
 	}
-	return nil
+	return err
 }
 
 // requireService returns the canonical not-configured error when this

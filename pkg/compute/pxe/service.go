@@ -815,18 +815,13 @@ func (s *service) RecordIDevIDFingerprint(ctx context.Context, deviceID, fingerp
 			}
 		}
 		// The finalize hook records before the CA commits the certificate,
-		// so a storage failure there is followed by a re-enrolment that
-		// issues a different IDevID. While the device is installing it has
-		// reported no certificate in use, so the later fingerprint replaces
-		// the earlier one; the install-complete webhook then accepts only
-		// the IDevID the device actually received.
-		if d.IDevIDFingerprint != "" && d.IDevIDFingerprint != fingerprint && d.State != StateInstalling {
-			return ErrInvalidState{
-				DeviceID: deviceID,
-				State:    string(d.State),
-				Reason:   "a different IDevID fingerprint is already recorded",
-			}
-		}
+		// so a storage or delivery failure there is followed by a
+		// re-enrolment that issues a different IDevID. Before install
+		// completion (discovered, booting or installing) the device has
+		// reported no certificate in use, so the later fingerprint
+		// replaces the earlier one in every one of those states; the
+		// install-complete webhook then accepts only the IDevID the device
+		// actually received, and past it the state check above refuses.
 		d.IDevIDFingerprint = fingerprint
 		return nil
 	})

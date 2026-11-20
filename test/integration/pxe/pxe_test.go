@@ -145,6 +145,9 @@ func testPXECLI(t *testing.T, ctx context.Context, cli *CLIAdapter, prefix strin
 	register := func(t *testing.T, name string, states ...string) (string, RegisterDeviceOptions) {
 		t.Helper()
 		opts := DefaultRegisterOptions(prefix + "-" + name)
+		// A real port on the daemon's bridge: registration applies
+		// quarantine flows, which refuse a port the bridge does not have.
+		opts.PortID = CreateTestOVSPort(t, prefix+"-"+name)
 		dev, err := seed.RegisterDevice(testCtx, opts)
 		require.NoError(t, err, "Setup: RegisterDevice")
 		t.Cleanup(func() { _ = CleanupDevice(testCtx, seed, dev.ID) })

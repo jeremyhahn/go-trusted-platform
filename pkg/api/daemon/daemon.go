@@ -2691,8 +2691,6 @@ func (d *Daemon) tlsPreflight() error {
 // cleanup path, and a retry could meet duplicate workers (#32). Stop
 // errors are logged, never masked over the original startup error.
 func (d *Daemon) rollbackPartialStart(ctx context.Context) {
-	d.stopPXEBackend(ctx, "startup rollback")
-
 	// QUIC first: a QUIC Start that acquired resources (bound its
 	// listener, started workers) before returning an error can leave the
 	// surface reachable; IsRunning gates the stop so an unstarted server
@@ -2736,6 +2734,11 @@ func (d *Daemon) rollbackPartialStart(ctx context.Context) {
 			d.logger.Warn("startup rollback: REST server stop failed", "error", err)
 		}
 	}
+	// PXE last among the surfaces: until every transport is down a
+	// StartService call can still start the backend, and its run context
+	// outlives the RPC. StopBackend takes the backend's lifecycle lock, so
+	// it also waits for a Start already in flight and stops what it left.
+	d.stopPXEBackend(ctx, "startup rollback")
 	if d.tenantService != nil {
 		if err := d.tenantService.Stop(ctx); err != nil {
 			d.logger.Warn("startup rollback: tenant service stop failed", "error", err)

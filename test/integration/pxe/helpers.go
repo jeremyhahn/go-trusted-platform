@@ -22,7 +22,9 @@ package pxe
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"os"
+	"os/exec"
 	"testing"
 	"time"
 )
@@ -205,6 +207,41 @@ func DefaultRegisterOptions(prefix string) RegisterDeviceOptions {
 		MACAddress: GenerateTestMAC(prefix),
 		PortID:     GenerateTestPortID(prefix),
 	}
+}
+
+// EnvPXETestBridge names the OVS bridge the test ports are added to. It must
+// be the bridge the integration platformd's sdn.ovs.bridge names: the PXE
+// backend refuses any other bridge.
+const EnvPXETestBridge = "PXE_TEST_OVS_BRIDGE"
+
+// DefaultPXETestBridge is sdn.ovs.bridge in test/integration/config.yaml,
+// the bridge run-integration-tests.sh creates.
+const DefaultPXETestBridge = "br-platform-int"
+
+// OVSTestPortName derives a port name OVS (IFNAMSIZ: at most 15 characters)
+// accepts from a test prefix: "px" and 8 hex digits of its FNV-1a hash.
+func OVSTestPortName(prefix string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(prefix))
+	return fmt.Sprintf("px%08x", h.Sum32())
+}
+
+// CreateTestOVSPort adds an internal OVS port named after prefix to the
+// integration bridge, removes it when the test ends, and returns its name.
+// Registration applies quarantine flows, whose OpenFlow port lookup refuses
+// an interface the bridge does not have.
+func CreateTestOVSPort(t *testing.T, prefix string) string {
+	t.Helper()
+	bridge := getEnvOrDefault(EnvPXETestBridge, DefaultPXETestBridge)
+	port := OVSTestPortName(prefix)
+	if out, err := exec.Command("ovs-vsctl", "--may-exist", "add-port", bridge, port,
+		"--", "set", "interface", port, "type=internal").CombinedOutput(); err != nil {
+		t.Fatalf("Setup: ovs-vsctl add-port %s %s: %v: %s", bridge, port, err, out)
+	}
+	t.Cleanup(func() {
+		_ = exec.Command("ovs-vsctl", "--if-exists", "del-port", bridge, port).Run()
+	})
+	return port
 }
 
 // =============================================================================
