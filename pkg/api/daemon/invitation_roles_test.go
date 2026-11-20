@@ -16,9 +16,13 @@ package daemon
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"os"
 	"testing"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -107,4 +111,19 @@ func TestInvitationRoleLister_ListError(t *testing.T) {
 
 	require.ErrorIs(t, err, cause)
 	assert.Nil(t, names)
+}
+
+// TestWireInvitationRoleLister_NoIAMClientLeavesCreateRefused verifies the
+// daemon wiring tolerates a disabled IAM service: no lister is set, so the
+// invitation service still refuses Create instead of accepting any role.
+func TestWireInvitationRoleLister_NoIAMClientLeavesCreateRefused(t *testing.T) {
+	svc := platformservice.NewInvitationService(logging.NewLogger(slog.LevelWarn, os.Stderr), nil, nil)
+
+	wireInvitationRoleLister(nil, svc, nil)
+
+	_, err := svc.Create(context.Background(), &platformservice.CreateInvitationRequest{
+		TenantID: "tenant-a", Email: "a@example.com", Role: "member", InvitedByID: 1,
+	})
+	var unavailable platformservice.ErrInvitationRolesUnavailable
+	require.ErrorAs(t, err, &unavailable)
 }
