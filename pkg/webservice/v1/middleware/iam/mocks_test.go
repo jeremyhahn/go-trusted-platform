@@ -84,10 +84,6 @@ type mockPEPServiceClient struct {
 	checkBatchCalls []*sdkiam.CheckBatchRequest
 }
 
-func newMockPEPServiceClient() *mockPEPServiceClient {
-	return &mockPEPServiceClient{}
-}
-
 func (m *mockPEPServiceClient) Check(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
 	m.mu.Lock()
 	m.checkCalls = append(m.checkCalls, req)

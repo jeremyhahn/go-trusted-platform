@@ -45,6 +45,9 @@ type fakeLeaseControl struct {
 	deletes    []string
 }
 
+// GatewayID is the control-plane identity the reporter is bound to.
+func (f *fakeLeaseControl) GatewayID() string { return "vpn-gw" }
+
 func (c *fakeLeaseControl) FetchDesiredConfig(context.Context) (*gwstate.DesiredConfig, error) {
 	return c.desired, c.fetchErr
 }
@@ -168,6 +171,17 @@ func TestVPNService_StartRebuildsTheLeasesTheControlPlaneRecorded(t *testing.T) 
 	assert.Len(t, r.gw.vpn.svc.Enrolments(), 1, "the section of the same pull is applied")
 	assert.Empty(t, control.puts, "rebuilding writes nothing back")
 	assert.Empty(t, control.deletes)
+}
+
+func TestVPNService_TakesTheGatewayIDFromTheControlPlane(t *testing.T) {
+	ctx := context.Background()
+	r, _ := newProjectedRig(t)
+
+	require.NoError(t, r.handler().Start(ctx))
+	t.Cleanup(func() { require.NoError(t, r.handler().Stop(ctx)) })
+
+	assert.Equal(t, "vpn-gw", r.gw.vpn.svc.Config().GatewayID,
+		"the vpn service owner-tags its allocations with the control plane's gateway identity")
 }
 
 func TestVPNService_StartRevokesARecordedLeaseWhosePeerWasWithdrawn(t *testing.T) {

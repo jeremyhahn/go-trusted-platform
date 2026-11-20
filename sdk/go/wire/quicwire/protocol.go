@@ -203,8 +203,9 @@ const (
 
 	// Compute (0x69). The VM verbs travel as OpVMExtendedCategory
 	// sub-opcodes (vm_opcodes.go). 0x60 is OpObjectStorageCategory
-	// (appservice_opcodes.go) and 0x61 is OpDNSCategory; the rest of
-	// 0x62-0x6A is unassigned.
+	// (appservice_opcodes.go) and 0x61 is OpDNSCategory. 0x66/0x67 are
+	// the attestation manifest list/delete opcodes (attestation_opcodes.go);
+	// 0x62-0x65, 0x68 and 0x6A are unassigned.
 	//
 	// OpVMExtendedCategory multiplexes the VM operations (create, delete,
 	// start, stop, get, list, restart, suspend, resume and the operational
@@ -893,14 +894,16 @@ var opcodeNames = map[byte]string{
 	OpVMExtendedCategory: "VMExtendedCategory",
 
 	// Attestation
-	OpAttestQuote:        "AttestQuote",
-	OpAttestVerify:       "AttestVerify",
-	OpAttestCollectHost:  "AttestCollectHost",
-	OpAttestGetAK:        "AttestGetAK",
-	OpAttestChallenge:    "AttestChallenge",
-	OpAttestPollVerdicts: "AttestPollVerdicts",
-	OpAttestGetReport:    "AttestGetReport",
-	OpAttestGetPCRs:      "AttestGetPCRs",
+	OpAttestQuote:          "AttestQuote",
+	OpAttestVerify:         "AttestVerify",
+	OpAttestCollectHost:    "AttestCollectHost",
+	OpAttestGetAK:          "AttestGetAK",
+	OpAttestChallenge:      "AttestChallenge",
+	OpAttestPollVerdicts:   "AttestPollVerdicts",
+	OpAttestGetReport:      "AttestGetReport",
+	OpAttestGetPCRs:        "AttestGetPCRs",
+	OpAttestListManifests:  "AttestListManifests",
+	OpAttestDeleteManifest: "AttestDeleteManifest",
 
 	// Certificate
 	OpCertIssue:    "CertIssue",

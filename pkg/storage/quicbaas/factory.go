@@ -57,7 +57,6 @@ type Factory struct {
 	userDAO          *UserDAO
 	registrationDAO  *RegistrationDAO
 	invitationDAO    *InvitationDAO
-	roleDAO          *RoleDAO
 	webAuthnDAO      *WebAuthnDAO
 	deviceDAO        *DeviceDAO
 	deviceProfileDAO *DeviceProfileDAO
@@ -300,25 +299,6 @@ func (f *Factory) InvitationDAO() (datastore.InvitationDAO, error) {
 		f.invitationDAO = NewInvitationDAO(f.storage, f.logger)
 	}
 	return f.invitationDAO, nil
-}
-
-// RoleDAO returns the role DAO, creating it lazily if needed.
-func (f *Factory) RoleDAO() (datastore.RoleDAO, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if f.closed {
-		return nil, ErrFactoryClosed{}
-	}
-
-	if f.storage == nil {
-		return nil, ErrStorageNotStarted{}
-	}
-
-	if f.roleDAO == nil {
-		f.roleDAO = NewRoleDAO(f.storage, f.logger)
-	}
-	return f.roleDAO, nil
 }
 
 // WebAuthnDAO returns the WebAuthn DAO, creating it lazily if needed.
