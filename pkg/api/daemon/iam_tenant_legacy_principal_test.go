@@ -19,10 +19,10 @@ func TestCallerTenant_QUICLegacyPrincipalBound(t *testing.T) {
 	if !bound || tenant != "tenant-a" {
 		t.Fatalf("callerTenant = %q, %v; want tenant-a, true", tenant, bound)
 	}
-	if err := authorizeIAMTenant(ctx, "tenant-a"); err != nil {
+	if err := authorizeIAMTenant(ctx, nil, "tenant-a"); err != nil {
 		t.Fatalf("own tenant must be allowed: %v", err)
 	}
-	err := authorizeIAMTenant(ctx, "tenant-b")
+	err := authorizeIAMTenant(ctx, nil, "tenant-b")
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("another tenant must be PermissionDenied, got %v", err)
 	}

@@ -19,6 +19,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 )
 
@@ -36,8 +38,9 @@ import (
 //     a tenant acting on itself.
 //
 // A caller with no tenant-bound identity is decided by authorizeUnboundCaller:
-// the Unix-socket operator (peer credentials) is admitted, and a caller with
-// no identity at all is refused with codes.PermissionDenied.
+// a Unix peer is admitted only when the IAM decision point set by SetPEP
+// admits its uid/gid principal, and any other caller (or any caller when no
+// PEP is set) is refused with codes.PermissionDenied.
 // An unset system tenant admits no tenant-bound caller as the system tenant,
 // the same fail-closed reading the REST guards give an empty tenant.
 
@@ -45,6 +48,12 @@ import (
 // tenant allowed to act on every other tenant.
 func (s *TenantGRPCServer) SetSystemTenant(tenantID string) {
 	s.systemTenantID = tenantID
+}
+
+// SetPEP sets the IAM decision point that decides callers with no
+// tenant-bound identity (authorizeUnboundCaller). Unset, they are refused.
+func (s *TenantGRPCServer) SetPEP(pep quicbaassdk.IAMPEPClient) {
+	s.pep = pep
 }
 
 // isSystemTenant reports whether tenantID is the configured system tenant.
@@ -57,7 +66,7 @@ func (s *TenantGRPCServer) isSystemTenant(tenantID string) bool {
 func (s *TenantGRPCServer) authorizeTenant(ctx context.Context, requested string) error {
 	caller, bound := callerTenant(ctx)
 	if !bound {
-		return authorizeUnboundCaller(ctx)
+		return authorizeUnboundCaller(ctx, s.pep, requested, unixPeerActionTenantAccess)
 	}
 	if err := tenant.AuthorizeTenantAccess(caller, s.isSystemTenant(caller), requested); err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
@@ -69,7 +78,7 @@ func (s *TenantGRPCServer) authorizeTenant(ctx context.Context, requested string
 // the system tenant (tenant.AuthorizeCrossTenant), with
 // codes.PermissionDenied.
 func (s *TenantGRPCServer) authorizeSystemTenant(ctx context.Context, method string) error {
-	return authorizeSystemCaller(ctx, s.systemTenantID, method)
+	return authorizeSystemCaller(ctx, s.pep, s.systemTenantID, method)
 }
 
 // authorizeTenantName decides a lookup by name once the name has been
@@ -80,7 +89,12 @@ func (s *TenantGRPCServer) authorizeSystemTenant(ctx context.Context, method str
 func (s *TenantGRPCServer) authorizeTenantName(ctx context.Context, resolvedID string) error {
 	caller, bound := callerTenant(ctx)
 	if !bound {
-		return authorizeUnboundCaller(ctx)
+		lookupTenant := resolvedID
+		if lookupTenant == "" {
+			// An unresolved name is decided in the system tenant.
+			lookupTenant = s.systemTenantID
+		}
+		return authorizeUnboundCaller(ctx, s.pep, lookupTenant, unixPeerActionTenantLookup)
 	}
 	if err := tenant.AuthorizeNameLookup(caller, s.isSystemTenant(caller), resolvedID); err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())

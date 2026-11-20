@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -38,6 +39,11 @@ type TenantGRPCServer struct {
 	// systemTenantID is the platform's operating tenant, the one tenant
 	// that may act on every other (tenant_grpc_authz.go).
 	systemTenantID string
+
+	// pep is the IAM decision point a caller with no tenant-bound identity
+	// (a Unix peer) is decided by; nil refuses such callers
+	// (tenant_grpc_authz.go).
+	pep quicbaassdk.IAMPEPClient
 }
 
 // TenantGRPCServerOption is a functional option for configuring TenantGRPCServer.

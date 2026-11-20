@@ -192,7 +192,7 @@ func (s *IAMGRPCService) CreateUser(ctx context.Context, req *platformv1.CreateI
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetEmail() == "" {
@@ -246,7 +246,7 @@ func (s *IAMGRPCService) GetUser(ctx context.Context, req *platformv1.GetIAMUser
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetUserId() == "" {
@@ -284,7 +284,7 @@ func (s *IAMGRPCService) ListUsers(ctx context.Context, req *platformv1.ListIAMU
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 
@@ -336,7 +336,7 @@ func (s *IAMGRPCService) UpdateUser(ctx context.Context, req *platformv1.UpdateI
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetUserId() == "" {
@@ -385,7 +385,7 @@ func (s *IAMGRPCService) DeleteUser(ctx context.Context, req *platformv1.DeleteI
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetUserId() == "" {
@@ -429,7 +429,7 @@ func (s *IAMGRPCService) CreateRole(ctx context.Context, req *platformv1.CreateI
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetId() == "" && req.GetName() == "" {
@@ -472,7 +472,7 @@ func (s *IAMGRPCService) GetRole(ctx context.Context, req *platformv1.GetIAMRole
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetRoleId() == "" {
@@ -506,7 +506,7 @@ func (s *IAMGRPCService) ListRoles(ctx context.Context, req *platformv1.ListIAMR
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 
@@ -554,7 +554,7 @@ func (s *IAMGRPCService) UpdateRole(ctx context.Context, req *platformv1.UpdateI
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetRoleId() == "" {
@@ -596,7 +596,7 @@ func (s *IAMGRPCService) DeleteRole(ctx context.Context, req *platformv1.DeleteI
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetRoleId() == "" {
@@ -634,7 +634,7 @@ func (s *IAMGRPCService) AssignRole(ctx context.Context, req *platformv1.AssignI
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetUserId() == "" {
@@ -682,7 +682,7 @@ func (s *IAMGRPCService) RevokeRole(ctx context.Context, req *platformv1.RevokeI
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetUserId() == "" {
@@ -736,7 +736,7 @@ func (s *IAMGRPCService) CreateGroup(ctx context.Context, req *platformv1.Create
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetId() == "" && req.GetName() == "" {
@@ -778,7 +778,7 @@ func (s *IAMGRPCService) GetGroup(ctx context.Context, req *platformv1.GetIAMGro
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetGroupId() == "" {
@@ -812,7 +812,7 @@ func (s *IAMGRPCService) ListGroups(ctx context.Context, req *platformv1.ListIAM
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 
@@ -858,7 +858,7 @@ func (s *IAMGRPCService) UpdateGroup(ctx context.Context, req *platformv1.Update
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetGroupId() == "" {
@@ -899,7 +899,7 @@ func (s *IAMGRPCService) DeleteGroup(ctx context.Context, req *platformv1.Delete
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetGroupId() == "" {
@@ -938,7 +938,7 @@ func (s *IAMGRPCService) AddGroupMember(ctx context.Context, req *platformv1.Add
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetGroupId() == "" {
@@ -980,7 +980,7 @@ func (s *IAMGRPCService) RemoveGroupMember(ctx context.Context, req *platformv1.
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetGroupId() == "" {
@@ -1030,7 +1030,7 @@ func (s *IAMGRPCService) CheckPermission(ctx context.Context, req *platformv1.Ch
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetSubjectId() == "" {
@@ -1174,7 +1174,7 @@ func (s *IAMGRPCService) CreateTenant(ctx context.Context, req *platformv1.Creat
 	if req.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "id"}.Error())
 	}
-	if err := authorizeSystemCaller(ctx, s.systemTenantID, "CreateTenant"); err != nil {
+	if err := authorizeSystemCaller(ctx, s.pepClient, s.systemTenantID, "CreateTenant"); err != nil {
 		return nil, err
 	}
 
@@ -1221,7 +1221,7 @@ func (s *IAMGRPCService) GetTenant(ctx context.Context, req *platformv1.GetIAMTe
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 
@@ -1247,7 +1247,7 @@ func (s *IAMGRPCService) ListTenants(ctx context.Context, req *platformv1.ListIA
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
-	if err := authorizeSystemCaller(ctx, s.systemTenantID, "ListTenants"); err != nil {
+	if err := authorizeSystemCaller(ctx, s.pepClient, s.systemTenantID, "ListTenants"); err != nil {
 		return nil, err
 	}
 
@@ -1293,7 +1293,7 @@ func (s *IAMGRPCService) UpdateTenant(ctx context.Context, req *platformv1.Updat
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 
@@ -1339,7 +1339,7 @@ func (s *IAMGRPCService) DeleteTenant(ctx context.Context, req *platformv1.Delet
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 
@@ -1380,7 +1380,7 @@ func (s *IAMGRPCService) CreatePolicy(ctx context.Context, req *platformv1.Creat
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetName() == "" {
@@ -1427,7 +1427,7 @@ func (s *IAMGRPCService) GetPolicy(ctx context.Context, req *platformv1.GetIAMPo
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetPolicyName() == "" {
@@ -1461,7 +1461,7 @@ func (s *IAMGRPCService) ListPolicies(ctx context.Context, req *platformv1.ListI
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 
@@ -1509,7 +1509,7 @@ func (s *IAMGRPCService) UpdatePolicy(ctx context.Context, req *platformv1.Updat
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetPolicyName() == "" {
@@ -1554,7 +1554,7 @@ func (s *IAMGRPCService) DeletePolicy(ctx context.Context, req *platformv1.Delet
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetPolicyName() == "" {
@@ -1593,7 +1593,7 @@ func (s *IAMGRPCService) ValidatePolicy(ctx context.Context, req *platformv1.Val
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if len(req.GetSpecYaml()) == 0 {
@@ -1642,7 +1642,7 @@ func (s *IAMGRPCService) TestPolicy(ctx context.Context, req *platformv1.TestIAM
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetSubjectId() == "" {
@@ -1737,7 +1737,7 @@ func (s *IAMGRPCService) RegisterApp(ctx context.Context, req *platformv1.Regist
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetName() == "" {
@@ -1786,7 +1786,7 @@ func (s *IAMGRPCService) GetApp(ctx context.Context, req *platformv1.GetIAMAppRe
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetClientId() == "" {
@@ -1820,7 +1820,7 @@ func (s *IAMGRPCService) ListApps(ctx context.Context, req *platformv1.ListIAMAp
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 
@@ -1862,7 +1862,7 @@ func (s *IAMGRPCService) UpdateApp(ctx context.Context, req *platformv1.UpdateIA
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetClientId() == "" {
@@ -1911,7 +1911,7 @@ func (s *IAMGRPCService) DeleteApp(ctx context.Context, req *platformv1.DeleteIA
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetClientId() == "" {
@@ -1950,7 +1950,7 @@ func (s *IAMGRPCService) RotateAppSecret(ctx context.Context, req *platformv1.Ro
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetClientId() == "" {

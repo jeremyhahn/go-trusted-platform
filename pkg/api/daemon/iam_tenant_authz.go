@@ -2,6 +2,9 @@ package daemon
 
 import (
 	"context"
+	"strconv"
+
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
@@ -60,26 +63,78 @@ func (errUnboundCaller) Error() string {
 	return "tenant-scoped call refused: the caller carries no authenticated identity"
 }
 
-// authorizeUnboundCaller decides a caller callerTenant reports unbound (SPEC
-// row 109, fail closed). The local operator is admitted: a Unix-socket peer
-// carries kernel-verified SO_PEERCRED credentials, and an in-process embedder
-// carries the process credentials (peercred.ContextWithProcessCredentials).
-// Any other caller is refused with codes.PermissionDenied.
-func authorizeUnboundCaller(ctx context.Context) error {
-	if _, ok := peercred.UnixCredentialsFromContext(ctx); ok {
-		return nil
+// errUnixPeerDenied is the refusal a Unix peer gets when the IAM decision
+// point does not admit its uid/gid principal for the request.
+type errUnixPeerDenied struct {
+	Subject, Resource, Action string
+}
+
+func (e errUnixPeerDenied) Error() string {
+	return "tenant-scoped call refused: IAM denied " + e.Subject + " " + e.Action + " on " + e.Resource
+}
+
+// The actions the PEP decides for a Unix peer (authorizeUnboundCaller), on
+// the resource tenantResource names. A cross-tenant method appends its name
+// to unixPeerActionCrossTenant ("tenant:ListTenants").
+const (
+	unixPeerActionIAMTenant    = "iam:tenant"
+	unixPeerActionTenantAccess = "tenant:access"
+	unixPeerActionTenantLookup = "tenant:lookup"
+	unixPeerActionCrossTenant  = "tenant:"
+)
+
+// tenantResource is the PEP resource URI of a tenant.
+func tenantResource(tenantID string) string {
+	return "tenant://" + tenantID
+}
+
+// unixPeerPrincipal maps kernel-verified Unix peer credentials (SO_PEERCRED,
+// or the process credentials of an in-process embedder) to the principal the
+// PEP decides: subject "unix:uid:<uid>", one role "unix:gid:<gid>", in the
+// tenant the request acts on. The PID is not part of the principal.
+func unixPeerPrincipal(creds peercred.UnixCredentials, tenantID string) *tokenPrincipal {
+	return &tokenPrincipal{
+		Subject:  "unix:uid:" + strconv.FormatUint(uint64(creds.UID), 10),
+		TenantID: tenantID,
+		Roles:    []string{"unix:gid:" + strconv.FormatUint(uint64(creds.GID), 10)},
 	}
-	return status.Error(codes.PermissionDenied, errUnboundCaller{}.Error())
+}
+
+// authorizeUnboundCaller decides a caller callerTenant reports unbound (SPEC
+// row 109, fail closed). Unix peer credentials are not a grant on their own:
+// the caller's uid/gid principal (unixPeerPrincipal) must be admitted by the
+// IAM decision point, pep.Check, for action on tenantID's resource. A caller
+// with no peer credentials, a daemon with no PEP wired, a failed check and a
+// denial are all refused with codes.PermissionDenied.
+func authorizeUnboundCaller(ctx context.Context, pep quicbaassdk.IAMPEPClient, tenantID, action string) error {
+	creds, ok := peercred.UnixCredentialsFromContext(ctx)
+	if !ok {
+		return status.Error(codes.PermissionDenied, errUnboundCaller{}.Error())
+	}
+	if pep == nil {
+		return status.Error(codes.PermissionDenied, ErrPEPClientNotAvailable{}.Error())
+	}
+	principal := unixPeerPrincipal(creds, tenantID)
+	resource := tenantResource(tenantID)
+	allowed, err := checkPrincipalPermission(ctx, pep, principal, resource, action)
+	if err != nil {
+		return status.Error(codes.PermissionDenied, err.Error())
+	}
+	if !allowed {
+		return status.Error(codes.PermissionDenied, errUnixPeerDenied{Subject: principal.Subject, Resource: resource, Action: action}.Error())
+	}
+	return nil
 }
 
 // authorizeIAMTenant refuses an IAM request that names a tenant other than
 // the caller's own, with codes.PermissionDenied — the same refusal the REST
 // IAM tree gives with 403 from RequireOwnTenant, so no transport answers a
-// tenant-bound caller from another tenant.
-func authorizeIAMTenant(ctx context.Context, requested string) error {
+// tenant-bound caller from another tenant. An unbound caller is decided by
+// pep (authorizeUnboundCaller).
+func authorizeIAMTenant(ctx context.Context, pep quicbaassdk.IAMPEPClient, requested string) error {
 	caller, bound := callerTenant(ctx)
 	if !bound {
-		return authorizeUnboundCaller(ctx)
+		return authorizeUnboundCaller(ctx, pep, requested, unixPeerActionIAMTenant)
 	}
 	if err := iamTenantDecision(caller, requested); err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
@@ -102,12 +157,12 @@ func iamTenantDecision(caller, requested string) error {
 // tenants — from any tenant-bound caller but the system tenant
 // (tenant.AuthorizeCrossTenant), with codes.PermissionDenied. It is the rule
 // the REST trees enforce with RequireSystemTenant; a caller with no
-// tenant-bound identity is decided by authorizeUnboundCaller, and an unset
-// systemTenantID admits no tenant-bound caller.
-func authorizeSystemCaller(ctx context.Context, systemTenantID, method string) error {
+// tenant-bound identity is decided by pep in the system tenant
+// (authorizeUnboundCaller), and an unset systemTenantID admits no caller.
+func authorizeSystemCaller(ctx context.Context, pep quicbaassdk.IAMPEPClient, systemTenantID, method string) error {
 	caller, bound := callerTenant(ctx)
 	if !bound {
-		return authorizeUnboundCaller(ctx)
+		return authorizeUnboundCaller(ctx, pep, systemTenantID, unixPeerActionCrossTenant+method)
 	}
 	if err := systemCallerDecision(systemTenantID, caller, method); err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
