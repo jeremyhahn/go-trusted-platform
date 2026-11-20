@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
@@ -114,6 +115,7 @@ type AuthMiddleware struct {
 	tokenValidator    TokenValidator
 	peerAuthenticator PeerAuthenticator
 	authzChecker      AuthorizationChecker
+	peerChecker       PeerAuthorizationChecker
 	requireAuth       bool
 	peerAuthenticated bool
 }
@@ -133,6 +135,61 @@ func WithQUICAuthorizationChecker(c AuthorizationChecker) AuthMiddlewareOption {
 	return func(m *AuthMiddleware) {
 		m.authzChecker = c
 	}
+}
+
+// PeerAuthorizationChecker decides an operation for a principal authenticated
+// by its mTLS client certificate. The certificate's scopes never decide such a
+// caller: the IAM policy enforcement point does (#2016).
+type PeerAuthorizationChecker interface {
+	CheckPeerPermission(ctx context.Context, authCtx *platformtoken.AuthorizedContext, resource, action string) (bool, error)
+}
+
+// WithQUICPeerAuthorizationChecker sets the checker that decides requests
+// authenticated by a client certificate. Without one such requests are denied.
+func WithQUICPeerAuthorizationChecker(c PeerAuthorizationChecker) AuthMiddlewareOption {
+	return func(m *AuthMiddleware) {
+		m.peerChecker = c
+	}
+}
+
+// peerPrincipalContextKey marks a context whose AuthorizedContext came from a
+// verified client certificate; its value is the checker that decides it,
+// which may be nil.
+type peerPrincipalContextKey struct{}
+
+type peerPrincipal struct {
+	checker PeerAuthorizationChecker
+}
+
+// contextWithPeerPrincipal marks ctx as carrying a certificate principal
+// decided by checker.
+func contextWithPeerPrincipal(ctx context.Context, checker PeerAuthorizationChecker) context.Context {
+	return context.WithValue(ctx, peerPrincipalContextKey{}, peerPrincipal{checker: checker})
+}
+
+// peerPrincipalFromContext reports whether ctx carries a certificate
+// principal, and the checker stored with it.
+func peerPrincipalFromContext(ctx context.Context) (PeerAuthorizationChecker, bool) {
+	p, ok := ctx.Value(peerPrincipalContextKey{}).(peerPrincipal)
+	if !ok {
+		return nil, false
+	}
+	return p.checker, true
+}
+
+// checkPeerPrincipal decides a certificate principal's request. A nil checker,
+// a missing principal, an error or a refusal is a denial; an error is never
+// an allow.
+func checkPeerPrincipal(ctx context.Context, checker PeerAuthorizationChecker, resource, action string) bool {
+	if checker == nil {
+		return false
+	}
+	authCtx, ok := AuthorizedContextFromContext(ctx)
+	if !ok || authCtx == nil {
+		return false
+	}
+	allowed, err := checker.CheckPeerPermission(ctx, authCtx, resource, action)
+	return err == nil && allowed
 }
 
 // WithQUICRequireAuth sets whether authentication is required.
@@ -292,6 +349,15 @@ func (m *AuthMiddleware) AuthorizeRequest(ctx context.Context, resource, action 
 	scope := scopeForOperation(resource, action)
 	if scope == "" {
 		return permissionDenied(resource, action)
+	}
+
+	// A caller authenticated by its client certificate is decided by the
+	// IAM PEP for its principal, never by the certificate's scopes (#2016).
+	if checker, ok := peerPrincipalFromContext(ctx); ok {
+		if !checkPeerPrincipal(ctx, checker, resource, action) {
+			return permissionDenied(resource, action)
+		}
+		return nil
 	}
 
 	// When the request was validated via the platform-token (claims) path, an

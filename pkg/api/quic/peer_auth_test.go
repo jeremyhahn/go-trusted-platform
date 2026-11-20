@@ -51,7 +51,10 @@ func TestAuthenticateRequest_PeerAuthenticator_AttachesPrincipal(t *testing.T) {
 	leaf := &x509.Certificate{Raw: []byte("leaf")}
 	want := &platformtoken.AuthorizedContext{Subject: "admin", Scopes: []string{"*:*"}}
 	stub := &peerAuthenticatorStub{authCtx: want}
-	mw := NewAuthMiddleware(WithQUICPeerAuthenticator(stub), WithQUICRequireAuth(true))
+	// The peer checker (the IAM PEP in the daemon) decides the certificate
+	// principal; its wildcard scope does not (#2016).
+	mw := NewAuthMiddleware(WithQUICPeerAuthenticator(stub), WithQUICRequireAuth(true),
+		WithQUICPeerAuthorizationChecker(&stubPeerChecker{allowed: true}))
 
 	ctx, resp := mw.AuthenticateRequest(peerContext(&tls.ConnectionState{
 		VerifiedChains: [][]*x509.Certificate{{leaf}},
