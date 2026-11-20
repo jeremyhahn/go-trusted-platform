@@ -34,6 +34,7 @@ function BundleDetail({ bundleId }: { bundleId: string }) {
   const { getBundle } = vt;
 
   const [validation, setValidation] = useState<VTPMValidationWire | null>(null);
+  const [validating, setValidating] = useState<'idle' | 'pending' | 'failed'>('idle');
   const [bundlePath, setBundlePath] = useState<string | null>(null);
   const [socketPath, setSocketPath] = useState<string | null>(null);
   const [nvramPath, setNvramPath] = useState<string | null>(null);
@@ -60,6 +61,21 @@ function BundleDetail({ bundleId }: { bundleId: string }) {
       if (id === bundleId) set(value);
     } catch {
       // onError already shows a toast
+    }
+  };
+
+  // A recheck never shows the earlier verdict: it is cleared before the
+  // request, and a failed request shows the failure (#2024 Codex round 5, P1).
+  const validate = async () => {
+    setValidation(null);
+    setValidating('pending');
+    try {
+      const value = await vt.validateBundle.mutateAsync(bundleId);
+      setValidation(value);
+      setValidating('idle');
+    } catch {
+      // onError also shows a toast
+      setValidating('failed');
     }
   };
 
@@ -108,8 +124,8 @@ function BundleDetail({ bundleId }: { bundleId: string }) {
           <div className="flex flex-wrap gap-2">
             <Button
               variant="outline"
-              disabled={vt.validateBundle.isLoading}
-              onClick={() => run(bundleId, () => vt.validateBundle.mutateAsync(bundleId), setValidation)}
+              disabled={vt.validateBundle.isLoading || validating === 'pending'}
+              onClick={validate}
             >
               Validate bundle
             </Button>
@@ -139,6 +155,16 @@ function BundleDetail({ bundleId }: { bundleId: string }) {
             </Button>
           </div>
 
+          {validating === 'pending' && (
+            <p data-testid="vtpm-validate-pending" className="text-sm text-muted-foreground">
+              Validating bundle
+            </p>
+          )}
+          {validating === 'failed' && (
+            <p role="alert" data-testid="vtpm-validate-error" className="text-sm text-destructive">
+              Validation could not be completed; no verdict is available.
+            </p>
+          )}
           {validation && (
             <div data-testid="vtpm-validate-result" className="text-sm">
               {validation.valid ? (

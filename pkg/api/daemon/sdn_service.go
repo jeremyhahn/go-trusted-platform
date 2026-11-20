@@ -1169,6 +1169,22 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		flowMods[i] = flowMod
 	}
 
+	// Resolve every bridge target before any flow is installed: a target that
+	// does not resolve (a stale ID, or a bridge deleted meanwhile) fails the
+	// apply closed, never as an active policy that protects nothing (#2024
+	// Codex round 5).
+	var bridgeNames []string
+	for _, target := range config.GetTargets() {
+		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
+			continue
+		}
+		bridgeName, found := s.findBridgeName(target.GetId())
+		if !found {
+			return nil, status.Errorf(codes.NotFound, "target bridge %q not found", target.GetId())
+		}
+		bridgeNames = append(bridgeNames, bridgeName)
+	}
+
 	client := s.getOVSClient()
 
 	// Install OpenFlow rules for each target bridge without holding the lock.
@@ -1180,16 +1196,7 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 	}
 	var installed []installedFlow
 	var flowIDs []string
-	for _, target := range config.GetTargets() {
-		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
-			continue
-		}
-
-		bridgeName, found := s.findBridgeName(target.GetId())
-		if !found {
-			continue
-		}
-
+	for _, bridgeName := range bridgeNames {
 		for i, rule := range config.GetRules() {
 			flowMod := flowMods[i]
 			if err := client.AddFlow(ctx, bridgeName, flowMod); err != nil {

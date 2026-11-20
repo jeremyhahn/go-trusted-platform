@@ -249,10 +249,20 @@ export default function SDNBridgeDetailClient() {
   // OpenFlow matches a destination port only under tcp or udp; the switch
   // rejects a port match with any or icmp (#2024 Codex round 4, P1).
   const portNeedsTransport = (protocol: string) => protocol === 'tcp' || protocol === 'udp';
-  const rulePortError =
-    ruleDestinationPort.trim() && !portNeedsTransport(ruleProtocol)
+  // The backend reads destinationPort 0 as "no port match", so an explicit 0
+  // would cover every port: only 1-65535 is accepted (#2024 Codex round 5, P1).
+  const portText = ruleDestinationPort.trim();
+  const portValue = Number(portText);
+  const rulePortError = !portText
+    ? ''
+    : !portNeedsTransport(ruleProtocol)
       ? 'Rule rule-1: a destination port needs protocol tcp or udp'
-      : '';
+      : !Number.isInteger(portValue) || portValue < 1 || portValue > 65535
+        ? 'Rule rule-1: the destination port must be between 1 and 65535'
+        : '';
+  // A policy is applied only to a bridge this page loaded: an unresolved URL
+  // ID would target nothing (#2024 Codex round 5, P1).
+  const bridgeLoaded = !!bridge && !bridgeError;
   const changeRuleProtocol = (protocol: string) => {
     setRuleProtocol(protocol);
     if (!portNeedsTransport(protocol)) setRuleDestinationPort('');
@@ -513,7 +523,12 @@ export default function SDNBridgeDetailClient() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>Policies</CardTitle>
-          <Button size="sm" onClick={() => setApplyOpen(true)}>
+          <Button
+            size="sm"
+            disabled={!bridgeLoaded}
+            title={bridgeLoaded ? undefined : 'The bridge must load before a policy can be applied'}
+            onClick={() => setApplyOpen(true)}
+          >
             <Plus className="mr-2 h-4 w-4" />
             Apply Policy
           </Button>
@@ -664,7 +679,7 @@ export default function SDNBridgeDetailClient() {
                 <Input
                   id="rule-destination-port"
                   type="number"
-                  min={0}
+                  min={1}
                   max={65535}
                   value={ruleDestinationPort}
                   onChange={(e) => setRuleDestinationPort(e.target.value)}
@@ -694,8 +709,9 @@ export default function SDNBridgeDetailClient() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setApplyOpen(false)}>Cancel</Button>
             <Button
-              disabled={!policyName || !ruleAction || !!rulePortError}
+              disabled={!bridgeLoaded || !policyName || !ruleAction || !!rulePortError}
               onClick={() =>
+                bridgeLoaded &&
                 !rulePortError &&
                 run(
                   'Policy applied',
