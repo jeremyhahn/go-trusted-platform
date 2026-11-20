@@ -152,8 +152,81 @@ describe("DeviceLookupPage attestation", () => {
     await screen.findByRole("button", { name: "Update device" });
 
     expect(screen.queryByLabelText(/attestation evidence/i)).toBeNull();
-    expect(screen.queryByRole("button", { name: /attest/i })).toBeNull();
+    // The only attest control is the gated one (#2048): disabled, no call.
+    for (const button of screen.queryAllByRole("button", { name: /attest/i })) {
+      expect(button).toHaveProperty("disabled", true);
+      fireEvent.click(button);
+    }
     const attestCalls = lookupFetch.mock.calls.filter(([input]) => String(input).includes("/attest"));
     expect(attestCalls).toEqual([]);
+  });
+});
+
+// #2048: the row's operations an operator session cannot perform are gated
+// controls with their reason; GetProfile by ID is a live lookup.
+describe("DeviceLookupPage device operations", () => {
+  const rowFetch = vi.fn<typeof fetch>();
+
+  function renderPage() {
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test/api",
+      fetch: rowFetch,
+      retry: { maxRetries: 0 },
+    });
+    return render(
+      <PlatformProvider client={client}>
+        <DeviceLookupPage />
+      </PlatformProvider>
+    );
+  }
+
+  beforeEach(() => {
+    rowFetch.mockReset();
+    rowFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? "GET";
+      if (method === "GET" && url.pathname.endsWith("/device/profiles/7")) {
+        return Promise.resolve(ok({ id: "7", name: "edge-a", model: "Board-A" }));
+      }
+      return Promise.resolve(failure(404, `no route ${method} ${url.pathname}`));
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it.each([
+    ["Verify attestation", "AttestDevice"],
+    ["Load device profile", "GetProfile"],
+    ["Fetch boot certificate", "BootCertificate"],
+    ["Request boot delivery", "BootDelivery"],
+  ])("gates %s off with its reason and sends nothing", (name, operation) => {
+    renderPage();
+
+    const button = screen.getByRole("button", { name });
+    expect(button).toHaveProperty("disabled", true);
+    expect(screen.getByTestId(`device-gate-${operation}`).textContent).toMatch(/\w/);
+    fireEvent.click(button);
+    const sent = rowFetch.mock.calls.filter(([input]) => {
+      const path = new URL(String(input)).pathname;
+      return /\/attest$|\/device\/profile$|\/device\/boot/.test(path);
+    });
+    expect(sent).toEqual([]);
+  });
+
+  it("finds a profile by ID and shows it for editing", async () => {
+    renderPage();
+
+    fireEvent.change(screen.getByLabelText("Profile ID"), { target: { value: "7" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Find by ID" }));
+    });
+
+    await waitFor(() => expect(screen.getByLabelText("Profile name")).toHaveProperty("value", "edge-a"));
+    const byId = rowFetch.mock.calls.filter(([input]) =>
+      new URL(String(input)).pathname.endsWith("/device/profiles/7")
+    );
+    expect(byId).toHaveLength(1);
   });
 });
