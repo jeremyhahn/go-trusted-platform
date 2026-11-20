@@ -3264,6 +3264,13 @@ func (d *Daemon) VPNGRPCServiceServer() *VPNGRPCService {
 	return d.vpnGRPCService
 }
 
+// ClusterGRPCServiceServer returns the ClusterService registered on gRPC and
+// the Unix socket, backing /api/v1/cluster. Until SetClusterService sets a
+// servicer every RPC answers Unavailable.
+func (d *Daemon) ClusterGRPCServiceServer() platformv1.ClusterServiceServer {
+	return d.clusterGRPCService
+}
+
 // VPNControlPlane returns the control-plane VPN service, or nil when the
 // daemon runs without a platform store.
 func (d *Daemon) VPNControlPlane() *vpn.Service {
