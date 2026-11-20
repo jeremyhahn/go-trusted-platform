@@ -96,6 +96,16 @@ func dataEvent(t *testing.T, banks []crypto.Hash, pcr int, typ uint32, data []by
 	return e
 }
 
+// startupLocalityEvent is the EV_NO_ACTION TCG_EfiStartupLocalityEvent
+// firmware logs when the H-CRTM or S-CRTM started at locality loc.
+func startupLocalityEvent(banks []crypto.Hash, loc byte) logEvent {
+	e := logEvent{pcr: 0, typ: EventNoAction, digest: map[crypto.Hash][]byte{}, data: append([]byte("StartupLocality\x00"), loc)}
+	for _, h := range banks {
+		e.digest[h] = make([]byte, h.Size())
+	}
+	return e
+}
+
 // imageEvents is the boot chain's event sequence for img, written event by
 // event as firmware, shim-less systemd-stub and the kernel log it. It uses
 // the event encodings only, never the PCR predictors.
@@ -122,11 +132,16 @@ func imageEvents(t *testing.T, img Image, banks ...crypto.Hash) []logEvent {
 	}
 	sep := []byte{0, 0, 0, 0}
 	gv, sdb := EFIGlobalVariable, EFIImageSecurityDatabase
-	junk := logEvent{pcr: 0, typ: EventNoAction, digest: map[crypto.Hash][]byte{}, data: []byte("StartupLocality\x00\x03")}
+	// Firmware logs its startup locality first (TCG PC Client 10.4.5.3);
+	// an EV_NO_ACTION record extends nothing, so its digests are zero.
+	locality := startupLocalityEvent(banks, 0)
+	// Any other EV_NO_ACTION record is skipped whatever its digests hold.
+	junk := logEvent{pcr: 0, typ: EventNoAction, digest: map[crypto.Hash][]byte{}, data: []byte("SP800-155 Event\x00")}
 	for _, h := range banks {
 		junk.digest[h] = bytes.Repeat([]byte{0x5a}, h.Size())
 	}
 	return []logEvent{
+		locality,
 		dataEvent(t, banks, 0, EventSCRTMVersion, []byte(testUBootVersion+"\x00")),
 		junk,
 		dataEvent(t, banks, 0, EventSeparator, sep),
@@ -252,6 +267,53 @@ func TestReplayEventLogSkipsNoAction(t *testing.T) {
 	}
 	if mb.Error() == "" {
 		t.Fatal("MissingBankError has an empty message")
+	}
+}
+
+// TestReplayEventLogSeedsPCR0FromTheStartupLocality covers a log whose
+// StartupLocality record names locality 3: PCR 0 starts at 0x00..03, not
+// zero, before the first digest extends it (TCG PC Client 10.4.5.3).
+func TestReplayEventLogSeedsPCR0FromTheStartupLocality(t *testing.T) {
+	img, _ := testImage()
+	hashes := []crypto.Hash{crypto.SHA256, crypto.SHA384}
+	events := imageEvents(t, img, hashes...)
+	events[0] = startupLocalityEvent(hashes, 3)
+	parsed, err := ParseEventLog(encodeEventLog(hashes, events...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range hashes {
+		pcrs, err := ReplayEventLog(parsed, h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		version, _ := Digest(h, []byte(testUBootVersion+"\x00"))
+		separator, _ := SeparatorDigest(h)
+		want := make([]byte, h.Size())
+		want[len(want)-1] = 3
+		for _, d := range [][]byte{version, separator} {
+			w := h.New()
+			w.Write(want)
+			w.Write(d)
+			want = w.Sum(nil)
+		}
+		if !bytes.Equal(pcrs[0], want) {
+			t.Fatalf("%v: PCR 0 replays to %x, want %x from locality 3", h, pcrs[0], want)
+		}
+		zero, _ := Replay(h, version, separator)
+		if bytes.Equal(pcrs[0], zero) {
+			t.Fatalf("%v: PCR 0 replayed from zero despite locality 3", h)
+		}
+	}
+
+	// A locality-3 log no longer matches a prediction made for locality 0.
+	banks, err := Predict(img, hashes...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pm *PCRMismatchError
+	if err := CheckEventLog(encodeEventLog(hashes, events...), banks); !errors.As(err, &pm) || pm.PCR != 0 {
+		t.Fatalf("locality 3 against a locality-0 prediction: err %v, want a PCR 0 mismatch", err)
 	}
 }
 

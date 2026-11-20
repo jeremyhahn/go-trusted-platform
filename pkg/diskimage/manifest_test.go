@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -338,9 +339,10 @@ func TestCreateRefusesASecureBootBuildWithoutAPlatformClient(t *testing.T) {
 
 // TestPublishManifestSkipsRegistrationWithoutARegistrar: the pinned
 // go-quicbaas SDK has no reference-values client, so with no registrar
-// publishManifest still signs and writes the manifest beside the image, warns,
-// and reports it unregistered rather than failing the build (Codex P1, #1907).
-func TestPublishManifestSkipsRegistrationWithoutARegistrar(t *testing.T) {
+// publishManifest refuses a measured build it cannot register: docs/SPEC.md:57
+// requires every image's signed manifest in the reference-values store, so a
+// missing registrar is a MeasureError, never a success (Codex P1, #1907).
+func TestPublishManifestRefusesWithoutARegistrar(t *testing.T) {
 	pki := newManifestPKI(t)
 	target, err := NewTarget("rpi", "")
 	if err != nil {
@@ -350,12 +352,13 @@ func TestPublishManifestSkipsRegistrationWithoutARegistrar(t *testing.T) {
 	sum := hex.EncodeToString(digest[:])
 	image := filepath.Join(t.TempDir(), "trusted-platform-rpi.img")
 	cfg := (&BuildConfig{ManifestKey: "kms://build/manifest", KMSClients: pki.clients()}).withDefaults()
-	out, registered, err := cfg.publishManifest(context.Background(), image, sum, target, manifestBanks())
-	if err != nil || registered || out != ManifestPath(image) {
-		t.Fatalf("no registrar: out %q, registered %v, err %v", out, registered, err)
+	_, registered, err := cfg.publishManifest(context.Background(), image, sum, target, manifestBanks())
+	var me *MeasureError
+	if !errors.As(err, &me) || registered {
+		t.Fatalf("no registrar: registered %v, err %v, want a MeasureError", registered, err)
 	}
-	if _, err := os.Stat(out); err != nil {
-		t.Fatalf("the manifest was not written beside the image: %v", err)
+	if !strings.Contains(me.Error(), "reference-values registrar") {
+		t.Fatalf("error %q does not name the missing registrar", me.Error())
 	}
 }
 
