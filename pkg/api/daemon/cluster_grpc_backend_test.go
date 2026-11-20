@@ -208,6 +208,26 @@ func TestDaemonSetClusterService_ReachesGRPCBackend(t *testing.T) {
 	assert.Equal(t, codes.Unavailable, status.Code(err))
 }
 
+func TestDaemonClusterGRPCServiceServer_ServesTheRegisteredService(t *testing.T) {
+	service, backend := registerClusterGRPCService(logging.DefaultLogger())
+	d := &Daemon{clusterGRPCService: service, clusterBackend: backend}
+	ctx := context.Background()
+
+	got := d.ClusterGRPCServiceServer()
+	require.NotNil(t, got)
+	assert.Same(t, service, got)
+
+	_, err := got.GetStatus(ctx, &platformv1.GetClusterStatusRequest{})
+	assert.Equal(t, codes.Unavailable, status.Code(err))
+
+	d.SetClusterService(&fakeClusterServicer{statusInfo: stockStatus()})
+	resp, err := got.GetStatus(ctx, &platformv1.GetClusterStatusRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, uint32(3), resp.GetCluster().GetTotalNodes())
+
+	assert.Nil(t, (&Daemon{}).ClusterGRPCServiceServer())
+}
+
 // =============================================================================
 // Backend methods
 // =============================================================================
