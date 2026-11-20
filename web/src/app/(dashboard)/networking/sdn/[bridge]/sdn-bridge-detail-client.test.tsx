@@ -307,6 +307,58 @@ describe('SDNBridgeDetailClient policy apply and policy identity', () => {
     });
   }
 
+  // Port 0 is sent as destinationPort 0, which the backend reads as "no port
+  // match": the rule would cover every tcp port. The form takes 1-65535 only
+  // (#2024 Codex round 5, P1).
+  async function fillTcpPort(port: string) {
+    const sent = await renderPage({ [`POST ${SDN}/policies`]: ok({ policy: { id: 'pol-9' } }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Policy' }));
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: 'port-rule' } });
+    fireEvent.change(screen.getByLabelText('Action *'), { target: { value: 'POLICY_RULE_ACTION_ALLOW' } });
+    fireEvent.change(screen.getByLabelText('Protocol'), { target: { value: 'tcp' } });
+    fireEvent.change(screen.getByLabelText('Destination port'), { target: { value: port } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    });
+    return sent;
+  }
+
+  it('destination port 0 is refused and nothing is sent', async () => {
+    const sent = await fillTcpPort('0');
+    expect(screen.getByTestId('rule-port-error').textContent).toMatch(/1.*65535/);
+    expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(sent.some((r) => r.method === 'POST' && r.path === `${SDN}/policies`)).toBe(false);
+  });
+
+  for (const port of [1, 65535]) {
+    it(`destination port ${port} is submitted`, async () => {
+      const sent = await fillTcpPort(String(port));
+      await waitFor(() => expect(sent.some((r) => r.method === 'POST' && r.path === `${SDN}/policies`)).toBe(true));
+      const body = sent.find((r) => r.method === 'POST' && r.path === `${SDN}/policies`)?.body as {
+        config: { rules: { match: Record<string, unknown> }[] };
+      };
+      expect(body.config.rules[0].match).toEqual({ protocol: 'tcp', destinationPort: port });
+    });
+  }
+
+  // A policy applied from a bridge that did not load targets nothing the
+  // server can resolve, so the page offers no apply (#2024 Codex round 5, P1).
+  for (const [what, answer] of [
+    ['a refused bridge read', refused(403, 'forbidden')],
+    ['a missing bridge', refused(404, 'bridge not found')],
+  ] as const) {
+    it(`${what} leaves Apply Policy disabled`, async () => {
+      stubControlPlane({
+        [`GET ${SDN}/bridges/br-1`]: answer,
+        [`GET ${SDN}/bridges/br-1/ports`]: ok({ ports: [] }),
+        [`GET ${SDN}/policies`]: ok({ policies: [] }),
+      });
+      render(withControlPlane(<SDNBridgeDetailClient />));
+      await waitFor(() => expect(screen.queryByText('Loading bridge')).toBeNull());
+      expect((screen.getByRole('button', { name: 'Apply Policy' }) as HTMLButtonElement).disabled).toBe(true);
+    });
+  }
+
   it('switching to icmp clears an entered destination port', async () => {
     await renderPage({});
     fireEvent.click(screen.getByRole('button', { name: 'Apply Policy' }));

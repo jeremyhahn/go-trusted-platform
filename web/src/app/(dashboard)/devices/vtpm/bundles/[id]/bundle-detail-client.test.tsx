@@ -76,6 +76,32 @@ describe('BundleDetailClient keyed to the bundle ID', () => {
     expect(screen.queryByTestId('vtpm-validate-result')).toBeNull();
   });
 
+  // #2024 Codex round 5 P1: a failed recheck must not leave the earlier
+  // verdict on screen as if it were the result of the recheck.
+  it('a failed revalidation clears the earlier Valid verdict and shows the failure', async () => {
+    const routes: Record<string, Answer> = {
+      ...LISTS,
+      [bundlePath('bundle-a')]: storedBundle('bundle-a'),
+      'POST /api/v1/vtpm/bundles/bundle-a/validate': ok({ valid: true }),
+    };
+    stubControlPlane(routes);
+    await renderAndWaitFor('bundle-a');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Validate bundle' }));
+    });
+    expect(await screen.findByText('Valid')).toBeDefined();
+
+    routes['POST /api/v1/vtpm/bundles/bundle-a/validate'] = refused(500, 'validation backend down');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Validate bundle' }));
+    });
+
+    expect(await screen.findByTestId('vtpm-validate-error')).toBeDefined();
+    expect(screen.queryByText('Valid')).toBeNull();
+    expect(screen.queryByTestId('vtpm-validate-result')).toBeNull();
+  });
+
   it('does not carry A validation and paths over to B', async () => {
     stubControlPlane({
       ...LISTS,
