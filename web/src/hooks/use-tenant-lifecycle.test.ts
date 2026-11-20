@@ -114,4 +114,33 @@ describe('useTenantLifecycle lookup', () => {
     await act(() => result.current.suspend());
     expect(service.suspendTenant).toHaveBeenCalledWith('t-b');
   });
+
+  it('a mutation that finishes after a later lookup does not re-select its tenant', async () => {
+    const s = deferred<unknown>();
+    service.getTenantByName.mockImplementation((name: string) =>
+      Promise.resolve(name === 'alpha' ? found('t-a', 'alpha') : found('t-b', 'bravo'))
+    );
+    service.suspendTenant.mockImplementation(() => s.promise);
+    service.getTenant.mockResolvedValue(found('t-a', 'alpha'));
+
+    const { result } = renderHook(() => useTenantLifecycle());
+
+    await act(() => result.current.lookup('alpha'));
+    expect(result.current.tenant?.id).toBe('t-a');
+
+    let suspending!: Promise<void>;
+    act(() => {
+      suspending = result.current.suspend();
+    });
+    expect(service.suspendTenant).toHaveBeenCalledWith('t-a');
+
+    await act(() => result.current.lookup('bravo'));
+    expect(result.current.tenant?.id).toBe('t-b');
+
+    await act(async () => {
+      s.resolve({ success: true, data: {} });
+      await suspending;
+    });
+    expect(result.current.tenant?.id).toBe('t-b');
+  });
 });
