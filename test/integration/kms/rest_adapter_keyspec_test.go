@@ -16,11 +16,72 @@
 package kms
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
+
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 )
+
+// TestRESTAdapterKeyGenerateDaemonResponse checks that KeyGenerate decodes
+// the body the mounted REST handler writes (a bare KMSGenerateKeyResponse
+// with nested key and metadata) instead of reporting an empty key.
+func TestRESTAdapterKeyGenerateDaemonResponse(t *testing.T) {
+	serve := func(t *testing.T, status int, body []byte) *RESTAdapter {
+		t.Helper()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if req.Method != http.MethodPost || req.URL.Path != "/api/v1/kms/keys" {
+				http.NotFound(w, req)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			_, _ = w.Write(body)
+		}))
+		t.Cleanup(srv.Close)
+		return &RESTAdapter{baseURL: srv.URL, httpClient: srv.Client()}
+	}
+	opts := KeyGenerateOptions{KeyID: "gen-key-1", Algorithm: "AES-256-GCM", Purpose: "encrypt"}
+
+	t.Run("nested key and metadata", func(t *testing.T) {
+		body, err := json.Marshal(restapi.KMSGenerateKeyResponse{
+			Key: &restapi.KMSKeyHandleResponse{KeyID: "gen-key-1", Version: 3, Algorithm: 1, Status: 1, CreatedAt: 1700000000},
+			Metadata: &restapi.KMSKeyMetadataResponse{
+				KeyID: "gen-key-1", Name: "gen-key-1", Description: "d", Version: 3,
+				Exportable: true, DeletionProtection: true,
+			},
+			Timestamp: 1700000000,
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		r := serve(t, http.StatusCreated, body)
+		res, err := r.KeyGenerate(context.Background(), opts)
+		if err != nil {
+			t.Fatalf("KeyGenerate: %v", err)
+		}
+		if res.KeyID != "gen-key-1" || res.Version != 3 {
+			t.Fatalf("result key_id=%q version=%d, want gen-key-1/3", res.KeyID, res.Version)
+		}
+		if !res.Exportable || !res.DeletionProtection {
+			t.Fatalf("result exportable=%v deletion_protection=%v, want true/true", res.Exportable, res.DeletionProtection)
+		}
+		if res.Algorithm != "AES-256-GCM" {
+			t.Fatalf("result algorithm=%q, want AES-256-GCM", res.Algorithm)
+		}
+	})
+
+	t.Run("empty body is an error", func(t *testing.T) {
+		r := serve(t, http.StatusOK, []byte(`{}`))
+		if res, err := r.KeyGenerate(context.Background(), opts); err == nil {
+			t.Fatalf("KeyGenerate on {} = %+v, want error", res)
+		}
+	})
+}
 
 // TestRESTAdapterGenerateKeyBodyKeySpec checks that the body the REST
 // adapter sends for key generation carries key_spec.algorithm, the field
