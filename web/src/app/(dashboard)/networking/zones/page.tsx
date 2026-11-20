@@ -29,6 +29,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
+import { useNetworkZones } from '@/hooks/use-network-zones';
 
 // The nine built-in underlay zones of the reference network, at fixed
 // offsets x00-x08 of every environment block. Their policy can be tuned;
@@ -234,9 +235,17 @@ function AllowToRow({
 export default function ZonesPage() {
   const { toast } = useToast();
 
-  const [zones, setZones] = React.useState<ZoneResponse[]>([]);
-  const [loading, setLoading] = React.useState(true);
-  const [loadError, setLoadError] = React.useState<string | null>(null);
+  const {
+    zones: listedZones,
+    isLoading: loading,
+    error: listError,
+    refetch: fetchZones,
+    createZone,
+    updateZone,
+    deleteZone,
+  } = useNetworkZones();
+  const zones = listedZones as ZoneResponse[];
+  const loadError = listError ? listError.message : null;
 
   const [formOpen, setFormOpen] = React.useState(false);
   const [editTarget, setEditTarget] = React.useState<ZoneResponse | null>(null);
@@ -250,42 +259,6 @@ export default function ZonesPage() {
   const [deleteError, setDeleteError] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState(false);
 
-  // settleZones applies one zone read from its promise callbacks, so the
-  // effect starts it without a synchronous setState; fetchZones adds the
-  // loading reset for a re-read.
-  const settleZones = React.useCallback(
-    () =>
-      fetch('/api/v1/sdn/zones', { credentials: 'include' })
-        .then(async (res) => {
-          if (!res.ok) {
-            const body = await res.json().catch(() => ({}));
-            throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
-          }
-          // The webservice wraps payloads in {payload}; the daemon REST
-          // stack returns the body bare — accept both.
-          const body = (await res.json()) as {
-            zones?: ZoneResponse[];
-            payload?: { zones?: ZoneResponse[] };
-          };
-          setZones(body.payload?.zones ?? body.zones ?? []);
-          setLoadError(null);
-        })
-        .catch((err: unknown) => {
-          setLoadError(err instanceof Error ? err.message : String(err));
-        })
-        .finally(() => setLoading(false)),
-    []
-  );
-
-  const fetchZones = React.useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
-    await settleZones();
-  }, [settleZones]);
-
-  React.useEffect(() => {
-    void settleZones();
-  }, [settleZones]);
 
   const zoneNames = React.useMemo(() => zones.map((z) => z.name), [zones]);
 
@@ -331,35 +304,13 @@ export default function ZonesPage() {
     setSubmitting(true);
     try {
       if (editTarget) {
-        const res = await fetch(
-          `/api/v1/sdn/zones/${encodeURIComponent(editTarget.name)}`,
-          {
-            method: 'PUT',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(zoneBody(form, false)),
-          }
-        );
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
-        }
+        await updateZone(editTarget.name, zoneBody(form, false));
         toast({ title: 'Zone updated', variant: 'success' });
       } else {
-        const res = await fetch('/api/v1/sdn/zones', {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(zoneBody(form, true)),
-        });
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
-        }
+        await createZone(zoneBody(form, true));
         toast({ title: 'Zone created', variant: 'success' });
       }
       setFormOpen(false);
-      void fetchZones();
     } catch (err) {
       toast({
         title: editTarget ? 'Failed to update zone' : 'Failed to create zone',
@@ -369,7 +320,7 @@ export default function ZonesPage() {
     } finally {
       setSubmitting(false);
     }
-  }, [form, editTarget, fetchZones, toast]);
+  }, [form, editTarget, createZone, updateZone, toast]);
 
   const openDeleteConfirm = React.useCallback((zone: ZoneResponse) => {
     setDeleteTarget(zone);
@@ -382,27 +333,16 @@ export default function ZonesPage() {
     setDeleting(true);
     setDeleteError(null);
     try {
-      const res = await fetch(
-        `/api/v1/sdn/zones/${encodeURIComponent(deleteTarget.name)}`,
-        {
-          method: 'DELETE',
-          credentials: 'include',
-        }
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
-      }
+      await deleteZone(deleteTarget.name);
       toast({ title: 'Zone deleted', variant: 'success' });
       setDeleteConfirmOpen(false);
       setDeleteTarget(null);
-      void fetchZones();
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setDeleting(false);
     }
-  }, [deleteTarget, fetchZones, toast]);
+  }, [deleteTarget, deleteZone, toast]);
 
   // isolate_from helpers
   const addIsolateFrom = React.useCallback(() => {

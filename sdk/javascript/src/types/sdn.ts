@@ -358,6 +358,69 @@ export interface VLANStats {
   bytes: string;
 }
 
+/** A path a zone may open to another zone (REST NetworkZonePathSpec). */
+export interface NetworkZonePath {
+  zone: string;
+  services?: string[];
+}
+
+/** Who approved a privileged zone, and why (REST NetworkZonePrivilegedAccess). */
+export interface NetworkZonePrivilegedAccess {
+  reason: string;
+  approved_by: string;
+}
+
+/**
+ * A network zone as POST /v1/sdn/zones and PUT /v1/sdn/zones/{name} take it
+ * (REST NetworkZoneRequest, snake_case on the wire).
+ */
+export interface NetworkZoneSpec {
+  name?: string;
+  offset?: number;
+  port_classes?: string[];
+  internet_ingress?: boolean;
+  isolate_from?: string[];
+  allow_to?: NetworkZonePath[];
+  services?: string[];
+  isolate?: boolean;
+  oob?: boolean;
+  lifecycle_role?: string;
+  privileged_access?: NetworkZonePrivilegedAccess;
+}
+
+/** The addressing the server derived for a zone. */
+export interface NetworkZoneNumbering {
+  vlan: number;
+  subnet4: string;
+  subnet6?: string;
+  gateway: string;
+}
+
+/** A network zone as the server returns it (REST NetworkZoneResponse). */
+export interface NetworkZone extends NetworkZoneSpec {
+  name: string;
+  numbering?: NetworkZoneNumbering;
+  restart_required?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ListNetworkZonesRequest {
+  /** Only zones with this lifecycle role. */
+  lifecycleRole?: string;
+}
+
+export interface ListNetworkZonesResponse {
+  zones: NetworkZone[];
+  count: number;
+  timestamp?: string;
+}
+
+export interface DeleteNetworkZoneResponse {
+  deleted: boolean;
+  restart_required: boolean;
+}
+
 /**
  * VLAN information
  */

@@ -9,6 +9,49 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const toast = vi.fn();
 
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast }) }));
+// The page reaches the zones through the SDK (#2065): useSDN gives the real
+// SDNService over a client that sends the request the browser would, through
+// the stubbed fetch below, and answers an ApiResponse.
+vi.mock("trusted-platform-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("trusted-platform-sdk")>();
+  const send = async (method: string, path: string, body?: unknown) => {
+    const init: RequestInit =
+      method === "GET"
+        ? { credentials: "include" }
+        : body === undefined
+          ? { method, credentials: "include" }
+          : {
+              method,
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            };
+    const res = await fetch(`/api${path}`, init);
+    const text = await res.text();
+    let parsed: unknown;
+    try {
+      parsed = text ? JSON.parse(text) : undefined;
+    } catch {
+      parsed = undefined;
+    }
+    if (!res.ok) {
+      return {
+        success: false,
+        error: { message: (parsed as { error?: string } | undefined)?.error || `HTTP ${res.status}` },
+      };
+    }
+    const wrapped = parsed as { payload?: unknown } | undefined;
+    return { success: true, data: wrapped && typeof wrapped === "object" && "payload" in wrapped ? wrapped.payload : wrapped };
+  };
+  const client = {
+    get: (path: string) => send("GET", path),
+    post: (path: string, body: unknown) => send("POST", path, body),
+    put: (path: string, body: unknown) => send("PUT", path, body),
+    delete: (path: string) => send("DELETE", path),
+  };
+  const sdn = new actual.SDNService(client as never);
+  return { ...actual, useSDN: () => sdn };
+});
 vi.mock("@/components/ui/data-table-row-actions", () => ({
   DataTableRowActions: ({
     row,

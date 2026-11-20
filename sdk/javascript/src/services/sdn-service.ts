@@ -33,6 +33,11 @@ import type {
   DeleteVLANResponse,
   ListVLANsRequest,
   ListVLANsResponse,
+  NetworkZone,
+  NetworkZoneSpec,
+  ListNetworkZonesRequest,
+  ListNetworkZonesResponse,
+  DeleteNetworkZoneResponse,
   AuthenticatePortRequest,
   AuthenticatePortResponse,
   RevokePortAuthResponse,
@@ -201,6 +206,49 @@ export class SDNService extends BaseService {
     return this.client.put<SetPortStateResponse>(
       this.buildUrl(`/bridges/${this.encodePathSegment(bridgeId)}/ports/${this.encodePathSegment(portId)}/state`),
       state
+    );
+  }
+
+  // ==========================================================================
+  // Network zones (GET/POST /zones, PUT/DELETE /zones/{name})
+  // ==========================================================================
+
+  /**
+   * List the network zones, optionally only those with a lifecycle role.
+   */
+  async listNetworkZones(request: ListNetworkZonesRequest = {}): Promise<ApiResponse<ListNetworkZonesResponse>> {
+    const url = this.buildUrl('/zones');
+    if (!request.lifecycleRole) {
+      return this.client.get<ListNetworkZonesResponse>(url);
+    }
+    return this.client.get<ListNetworkZonesResponse>(
+      `${url}?lifecycle_role=${encodeURIComponent(request.lifecycleRole)}`
+    );
+  }
+
+  /**
+   * Create a network zone. Not retried: a resend after a lost response
+   * answers AlreadyExists although the zone was created.
+   */
+  async createNetworkZone(zone: NetworkZoneSpec): Promise<ApiResponse<NetworkZone>> {
+    return this.client.post<NetworkZone>(this.buildUrl('/zones'), zone, {
+      retry: { enabled: false },
+    });
+  }
+
+  /**
+   * Replace the spec of the named network zone.
+   */
+  async updateNetworkZone(name: string, zone: NetworkZoneSpec): Promise<ApiResponse<NetworkZone>> {
+    return this.client.put<NetworkZone>(this.buildUrl(`/zones/${this.encodePathSegment(name)}`), zone);
+  }
+
+  /**
+   * Delete the named network zone.
+   */
+  async deleteNetworkZone(name: string): Promise<ApiResponse<DeleteNetworkZoneResponse>> {
+    return this.client.delete<DeleteNetworkZoneResponse>(
+      this.buildUrl(`/zones/${this.encodePathSegment(name)}`)
     );
   }
 
