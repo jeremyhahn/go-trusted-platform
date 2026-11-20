@@ -18,7 +18,48 @@ vi.mock("@/hooks", async (importOriginal) => ({
   usePXE: () => pxe,
   useToast: () => ({ toast }),
   useReportedGateways: (opts: { enabled: boolean }) => reported(opts),
+  usePXEDevice: () => deviceCtl,
+  usePXEServiceControl: () => serviceCtl,
 }));
+
+type DeviceCtl = {
+  device: Record<string, unknown> | null;
+  events: Record<string, unknown>[];
+  busy: boolean;
+  error: string | null;
+  notice: string | null;
+  [fn: string]: unknown;
+};
+
+const deviceFns = [
+  "open",
+  "lookupByMAC",
+  "close",
+  "updateState",
+  "setEnrolled",
+  "authorize",
+  "quarantine",
+  "retry",
+  "remove",
+] as const;
+
+const deviceCtl: DeviceCtl = { device: null, events: [], busy: false, error: null, notice: null };
+const serviceCtl = {
+  busy: false,
+  error: null as string | null,
+  notice: null as string | null,
+  start: vi.fn(),
+  stop: vi.fn(),
+};
+
+function resetCtls() {
+  Object.assign(deviceCtl, { device: null, events: [], busy: false, error: null, notice: null });
+  for (const fn of deviceFns) deviceCtl[fn] = vi.fn().mockResolvedValue(undefined);
+  Object.assign(serviceCtl, { busy: false, error: null, notice: null });
+  serviceCtl.start = vi.fn().mockResolvedValue(undefined);
+  serviceCtl.stop = vi.fn().mockResolvedValue(undefined);
+}
+resetCtls();
 
 import PXEBootPage from "./page";
 
@@ -52,6 +93,7 @@ function stat(title: string) {
 
 describe("PXEBootPage", () => {
   beforeEach(() => {
+    resetCtls();
     toast.mockReset();
     reported.mockReset();
     reported.mockReturnValue({ gateways: [], isLoading: false });
@@ -223,5 +265,96 @@ describe("PXEBootPage", () => {
     );
     expect((screen.getByLabelText("MAC Address *") as HTMLInputElement).value).toBe("zz");
     expect((screen.getByRole("button", { name: "Register" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe("PXEBootPage device operations (#2062)", () => {
+  beforeEach(() => {
+    resetCtls();
+    reported.mockReturnValue({ gateways: [], isLoading: false });
+    pxe.listDevices.mockResolvedValue({ data: { devices: [booting] } });
+    pxe.getStatus.mockResolvedValue({ data: { status: { running: true, deviceCount: 1 } } });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("looks a device up by MAC and opens a listed device by ID", async () => {
+    render(<PXEBootPage />);
+    await screen.findByText("All Devices");
+
+    fireEvent.change(screen.getByLabelText("Device MAC address"), { target: { value: "aa:bb:cc:00:00:02" } });
+    fireEvent.click(screen.getByRole("button", { name: "Look up" }));
+    expect(deviceCtl.lookupByMAC).toHaveBeenCalledWith("aa:bb:cc:00:00:02");
+
+    fireEvent.click(screen.getByRole("button", { name: "Manage aa:bb:cc:00:00:02" }));
+    expect(deviceCtl.open).toHaveBeenCalledWith("d2");
+  });
+
+  it("shows the open device, its events, and drives each operation", async () => {
+    deviceCtl.device = { id: "d3", macAddress: "aa:bb:cc:00:00:03", state: "QUARANTINED" };
+    deviceCtl.events = [
+      { id: "e1", deviceId: "d3", timestamp: minutesAgo(1), eventType: "QUARANTINED", toState: "QUARANTINED" },
+    ];
+    render(<PXEBootPage />);
+    const detail = await screen.findByTestId("pxe-device-detail");
+    expect(screen.getByTestId("pxe-device-state").textContent).toBe("QUARANTINED");
+    expect(screen.getByTestId("pxe-device-events").querySelectorAll("li")).toHaveLength(1);
+    expect(detail.textContent).toContain("d3");
+
+    fireEvent.change(screen.getByLabelText("Quarantine reason"), { target: { value: "bad quote" } });
+    fireEvent.click(screen.getByRole("button", { name: "Quarantine" }));
+    expect(deviceCtl.quarantine).toHaveBeenCalledWith("bad quote");
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(deviceCtl.retry).toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("New state"), { target: { value: "ENROLLED" } });
+    fireEvent.change(screen.getByLabelText("State reason"), { target: { value: "manual" } });
+    fireEvent.click(screen.getByRole("button", { name: "Set state" }));
+    expect(deviceCtl.updateState).toHaveBeenCalledWith("ENROLLED", "manual");
+
+    fireEvent.change(screen.getByLabelText("Certificate serial"), { target: { value: "0a1b" } });
+    fireEvent.click(screen.getByRole("button", { name: "Mark enrolled" }));
+    expect(deviceCtl.setEnrolled).toHaveBeenCalledWith("0a1b");
+
+    fireEvent.change(screen.getByLabelText("Target VLAN"), { target: { value: "200" } });
+    fireEvent.click(screen.getByRole("button", { name: "Authorize" }));
+    expect(deviceCtl.authorize).toHaveBeenCalledWith(200);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove device" }));
+    expect(deviceCtl.remove).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm remove" }));
+    expect(deviceCtl.remove).toHaveBeenCalled();
+    await waitFor(() => expect(pxe.listDevices.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it("shows the operation error", async () => {
+    deviceCtl.error = "device not found";
+    render(<PXEBootPage />);
+    expect((await screen.findByRole("alert")).textContent).toBe("device not found");
+  });
+
+  it("stops a running service and starts a stopped one", async () => {
+    const { unmount } = render(<PXEBootPage />);
+    await screen.findByText("Running");
+    expect(screen.getByRole("button", { name: "Start service" })).toHaveProperty("disabled", true);
+    fireEvent.click(screen.getByRole("button", { name: "Stop service" }));
+    expect(serviceCtl.stop).toHaveBeenCalled();
+    unmount();
+
+    pxe.getStatus.mockResolvedValue({ data: { status: { running: false, deviceCount: 1 } } });
+    render(<PXEBootPage />);
+    await screen.findByText("Stopped");
+    fireEvent.click(screen.getByRole("button", { name: "Start service" }));
+    expect(serviceCtl.start).toHaveBeenCalled();
+  });
+
+  it("gates the install-complete webhook off with its reason", async () => {
+    render(<PXEBootPage />);
+    const control = await screen.findByRole("button", { name: "Send install-complete webhook" });
+    expect(control).toHaveProperty("disabled", true);
+    expect(screen.getByTestId("pxe-webhook-gate-reason").textContent).toContain("machine-facing");
   });
 });

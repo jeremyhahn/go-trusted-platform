@@ -27,7 +27,15 @@ import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { ServiceUnavailableState } from '@/components/features/platform';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
-import { usePXE, useApi, useToast, useReportedGateways } from '@/hooks';
+import {
+  usePXE,
+  usePXEDevice,
+  usePXEServiceControl,
+  useApi,
+  useToast,
+  useReportedGateways,
+} from '@/hooks';
+import { PXEDevicePanel, PXEServiceControls, PXEWebhookGate } from './pxe-device-panel';
 import type { PXEDeviceInfo } from 'trusted-platform-sdk';
 
 export default function PXEBootPage() {
@@ -105,6 +113,11 @@ export default function PXEBootPage() {
     refetchDevices();
     refetchStatus();
   };
+
+  // Device operations (lookup, detail, state changes, events) and the
+  // service start/stop controls (#2062).
+  const deviceCtl = usePXEDevice();
+  const serviceCtl = usePXEServiceControl(refetchStatus);
 
   // Calculate stats from devices
   const stats = useMemo(() => {
@@ -410,6 +423,10 @@ export default function PXEBootPage() {
                 PXE service status not available
               </p>
             )}
+            <PXEServiceControls running={!!status?.running} control={serviceCtl} />
+            <div className="pt-4">
+              <PXEWebhookGate />
+            </div>
           </CardContent>
         </Card>
 
@@ -466,6 +483,8 @@ export default function PXEBootPage() {
         </Card>
       </div>
 
+      <PXEDevicePanel ctl={deviceCtl} onChanged={refetchDevices} />
+
       <Card>
         <CardHeader>
           <CardTitle>All Devices</CardTitle>
@@ -486,13 +505,14 @@ export default function PXEBootPage() {
                   <TableHead>Certificate</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead>Updated</TableHead>
+                  <TableHead />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {devices.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={7}
+                      colSpan={8}
                       className="text-center text-muted-foreground"
                     >
                       No devices found
@@ -538,6 +558,16 @@ export default function PXEBootPage() {
                         {device.updatedAt ? formatDistanceToNow(new Date(device.updatedAt), {
                           addSuffix: true,
                         }) : '-'}
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-label={`Manage ${device.macAddress}`}
+                          onClick={() => void deviceCtl.open(device.id)}
+                        >
+                          Manage
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))

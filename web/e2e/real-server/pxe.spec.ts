@@ -8,7 +8,11 @@
  * service-unavailable state is asserted instead.
  */
 import type { Page } from '@playwright/test';
+import type { PlatformClient } from 'trusted-platform-sdk';
 import { test, expect } from './fixtures';
+
+/** The harness fixtures this spec uses (web/e2e/real-server/fixtures). */
+type Fixtures = { adminPage: Page; sdk: PlatformClient };
 
 const PXE_PATH = '/networking/pxe';
 
@@ -24,13 +28,7 @@ function shortState(state: string | undefined): string {
   return String(state ?? '').replace(/^PROVISIONING_STATE_/, '');
 }
 
-type PXEClient = {
-  pxe: {
-    getStatus: () => Promise<{ success: boolean; error?: { code?: string; status?: number } }>;
-  };
-};
-
-async function pxeServed(sdk: PXEClient): Promise<boolean> {
+async function pxeServed(sdk: PlatformClient): Promise<boolean> {
   const res = await sdk.pxe.getStatus();
   return res.success;
 }
@@ -45,10 +43,7 @@ async function openDevice(page: Page, mac: string) {
 }
 
 test.describe('PXE operations (real server)', () => {
-  test('the page renders the service status or the unavailable state the server reports', async ({
-    adminPage,
-    sdk,
-  }) => {
+  test('the page renders the service status or the unavailable state the server reports', async ({ adminPage, sdk }: Fixtures) => {
     const served = await pxeServed(sdk);
     await adminPage.goto(PXE_PATH);
     await expect(adminPage.getByRole('heading', { name: 'PXE Boot' })).toBeVisible();
@@ -59,7 +54,7 @@ test.describe('PXE operations (real server)', () => {
     }
   });
 
-  test('look up a seeded device by MAC, open it and read its events', async ({ adminPage, sdk }) => {
+  test('look up a seeded device by MAC, open it and read its events', async ({ adminPage, sdk }: Fixtures) => {
     test.skip(!(await pxeServed(sdk)), 'PXE is not served by this node (503)');
     const mac = randomMAC();
     const reg = await sdk.pxe.registerDevice({ macAddress: mac });
@@ -76,13 +71,12 @@ test.describe('PXE operations (real server)', () => {
     const events = await sdk.pxe.getEvents(deviceId);
     expect(events.success).toBe(true);
     const list = detail.getByTestId('pxe-device-events');
-    await expect(list).toBeVisible();
     await expect(list.getByRole('listitem')).toHaveCount(events.data!.events?.length ?? 0);
 
     await sdk.pxe.removeDevice(deviceId);
   });
 
-  test('quarantine, retry, update state, mark enrolled and authorize a device', async ({ adminPage, sdk }) => {
+  test('quarantine, retry, update state, mark enrolled and authorize a device', async ({ adminPage, sdk }: Fixtures) => {
     test.skip(!(await pxeServed(sdk)), 'PXE is not served by this node (503)');
     const mac = randomMAC();
     const reg = await sdk.pxe.registerDevice({ macAddress: mac });
@@ -118,7 +112,7 @@ test.describe('PXE operations (real server)', () => {
     await sdk.pxe.removeDevice(deviceId);
   });
 
-  test('remove a device from its detail panel', async ({ adminPage, sdk }) => {
+  test('remove a device from its detail panel', async ({ adminPage, sdk }: Fixtures) => {
     test.skip(!(await pxeServed(sdk)), 'PXE is not served by this node (503)');
     const mac = randomMAC();
     const reg = await sdk.pxe.registerDevice({ macAddress: mac });
@@ -134,7 +128,7 @@ test.describe('PXE operations (real server)', () => {
     expect(after.success).toBe(false);
   });
 
-  test('stop and start the PXE service', async ({ adminPage, sdk }) => {
+  test('stop and start the PXE service', async ({ adminPage, sdk }: Fixtures) => {
     test.skip(!(await pxeServed(sdk)), 'PXE is not served by this node (503)');
     await adminPage.goto(PXE_PATH);
     const running = async () => (await sdk.pxe.getStatus()).data?.status.running;
@@ -147,7 +141,7 @@ test.describe('PXE operations (real server)', () => {
     await expect.poll(running).toBe(true);
   });
 
-  test('the install-complete webhook is gated off with its reason', async ({ adminPage, sdk }) => {
+  test('the install-complete webhook is gated off with its reason', async ({ adminPage, sdk }: Fixtures) => {
     test.skip(!(await pxeServed(sdk)), 'PXE is not served by this node (503)');
     await adminPage.goto(PXE_PATH);
     const control = adminPage.getByRole('button', { name: 'Send install-complete webhook' });

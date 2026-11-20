@@ -164,6 +164,8 @@ export {
 export type { InvitationView, InvitationWire } from './use-invitation-detail';
 export { useTenantLifecycle } from './use-tenant-lifecycle';
 export type { UseTenantLifecycleResult } from './use-tenant-lifecycle';
+export { usePXEDevice, usePXEServiceControl, SETTABLE_PXE_STATES } from './use-pxe-device';
+export type { UsePXEDeviceResult, UsePXEServiceControlResult } from './use-pxe-device';
 export { useOverlayVteps } from './use-overlay-vteps';
 export { useRegistry, encodeRepository } from './use-registry';
 export type {

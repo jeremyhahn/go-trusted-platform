@@ -538,20 +538,20 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
 | `PXEService.RegisterDevice` | - | `(dashboard)/networking/pxe/page.tsx` | - | `networking.spec.ts` | covered |
-| `PXEService.GetDevice` | - | - | - | - | missing |
-| `PXEService.GetDeviceByMAC` | - | - | - | - | missing |
+| `PXEService.GetDevice` | `GET /pxe/devices/{id}` | `(dashboard)/networking/pxe/pxe-device-panel.tsx` (Manage) | - | `real-server/pxe.spec.ts` | covered |
+| `PXEService.GetDeviceByMAC` | `GET /pxe/devices/mac/{mac}` | `(dashboard)/networking/pxe/pxe-device-panel.tsx` (Look up) | - | `real-server/pxe.spec.ts` | covered |
 | `PXEService.ListDevices` | - | `(dashboard)/networking/pxe/page.tsx` | - | `networking.spec.ts` | covered |
-| `PXEService.RemoveDevice` | - | `(dashboard)/networking/pxe/page.tsx` (read-only) | - | - | partial |
-| `PXEService.UpdateState` | - | - | - | - | missing |
-| `PXEService.SetDeviceEnrolled` | - | - | - | - | missing |
-| `PXEService.Authorize` | - | - | - | - | missing |
-| `PXEService.Quarantine` | - | - | - | - | missing |
-| `PXEService.Retry` | - | - | - | - | missing |
-| `PXEService.GetEvents` | - | - | - | - | missing |
+| `PXEService.RemoveDevice` | `DELETE /pxe/devices/{id}` | `(dashboard)/networking/pxe/pxe-device-panel.tsx` | - | `real-server/pxe.spec.ts` | covered |
+| `PXEService.UpdateState` | `PUT /pxe/devices/{id}/state` | `(dashboard)/networking/pxe/pxe-device-panel.tsx` | - | `real-server/pxe.spec.ts` | covered |
+| `PXEService.SetDeviceEnrolled` | `POST /pxe/devices/{id}/enrolled` | `(dashboard)/networking/pxe/pxe-device-panel.tsx` | - | `real-server/pxe.spec.ts` | covered |
+| `PXEService.Authorize` | `POST /pxe/devices/{id}/authorize` | `(dashboard)/networking/pxe/pxe-device-panel.tsx` | - | `real-server/pxe.spec.ts` | covered |
+| `PXEService.Quarantine` | `POST /pxe/devices/{id}/quarantine` | `(dashboard)/networking/pxe/pxe-device-panel.tsx` | - | `real-server/pxe.spec.ts` | covered |
+| `PXEService.Retry` | `POST /pxe/devices/{id}/retry` | `(dashboard)/networking/pxe/pxe-device-panel.tsx` | - | `real-server/pxe.spec.ts` | covered |
+| `PXEService.GetEvents` | `GET /pxe/devices/{id}/events` | `(dashboard)/networking/pxe/pxe-device-panel.tsx` | - | `real-server/pxe.spec.ts` | covered |
 | `PXEService.GetStatus` | - | `(dashboard)/networking/pxe/page.tsx` | - | `networking.spec.ts` | covered |
-| `PXEService.StartService` | - | - | - | - | missing |
-| `PXEService.StopService` | - | - | - | - | missing |
-| `PXEService.WebhookComplete` | `POST /webhook/complete` | - | - | - | missing |
+| `PXEService.StartService` | `POST /pxe/start` | `(dashboard)/networking/pxe/pxe-device-panel.tsx` (status card) | - | `real-server/pxe.spec.ts` | covered |
+| `PXEService.StopService` | `POST /pxe/stop` | `(dashboard)/networking/pxe/pxe-device-panel.tsx` (status card) | - | `real-server/pxe.spec.ts` | covered |
+| `PXEService.WebhookComplete` | `POST /webhook/complete` | gated off: machine-facing, unauthenticated (#238), mounted only when the webhook is enabled | - | `real-server/pxe.spec.ts` (gate) | covered |
 
 ## RegistryService (`registry.proto`)
 
