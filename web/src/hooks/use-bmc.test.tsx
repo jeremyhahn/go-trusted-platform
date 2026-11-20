@@ -143,4 +143,58 @@ describe("useBMC", () => {
     expect(result.current.virtualMedia?.mounted).toBe(true);
     expect(result.current.virtualMedia?.image_url).toBe("installer.iso");
   });
+
+  it("a mutation for an earlier profile does not refresh it over the current profile", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const reads: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const parts = url.split("/");
+        const op = parts.pop() ?? "";
+        const profile = parts.pop() ?? "";
+        const method = init?.method ?? "GET";
+        let payload: unknown;
+        if (method !== "GET") {
+          await held;
+          payload = { success: true };
+        } else {
+          reads.push(`${profile}/${op}`);
+          payload =
+            op === "system-info"
+              ? { ...(PAYLOADS[op] as object), product: `profile-${profile}` }
+              : PAYLOADS[op];
+        }
+        return new Response(JSON.stringify({ success: true, payload }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      })
+    );
+
+    const { result, rerender } = renderHook(({ id }) => useBMC(id), {
+      initialProps: { id: "1" },
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.mountISO("installer.iso");
+    });
+
+    rerender({ id: "2" });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.systemInfo?.product).toBe("profile-2");
+
+    reads.length = 0;
+    release();
+    await act(async () => {
+      await pending;
+    });
+
+    expect(reads.filter((r) => r.startsWith("1/"))).toEqual([]);
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.systemInfo?.product).toBe("profile-2");
+  });
 });
