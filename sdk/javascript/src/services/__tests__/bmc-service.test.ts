@@ -173,7 +173,7 @@ describe('BMCService routes (#1736)', () => {
 
   it('provision POSTs to provision', async () => {
     await service.provision('1');
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/1/provision', {});
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/1/provision', {}, { retry: { enabled: false } });
   });
 
   it('encodes the profile ID as one path segment', async () => {

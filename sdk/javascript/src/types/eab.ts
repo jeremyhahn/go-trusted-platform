@@ -277,10 +277,10 @@ export interface GetEABQRCodeResponse {
  * Get enrollment URL response
  */
 export interface GetEnrollmentURLResponse {
-  /** Enrollment URL */
+  /** Enrollment URL with the credential embedded as query parameters */
   url: string;
-  /** URL expiration timestamp */
-  expiresAt: string;
+  /** Time the server generated the URL (RFC 3339); not an expiry */
+  timestamp: string;
 }
 
 /**
