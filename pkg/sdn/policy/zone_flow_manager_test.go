@@ -171,16 +171,40 @@ func TestZoneFlowManager_NoOpenFlowPort_Errors(t *testing.T) {
 type partialInstallController struct {
 	*ofPortController
 	vlans        map[string]int64
+	trunks       map[string]trunkState
 	live         []zoneflows.FlowRule
+	passInstalls int // let the next n non-empty batches through before failInstalls applies
 	failInstalls int // fail the next n non-empty InstallFlows batches
 	failVLANAt   int // fail the n-th SetPortVLAN call (1-based); 0 never
+	failVLANFrom int // fail every SetPortVLAN call from the n-th on (1-based); 0 never
 	vlanCalls    int
 	partial      *zoneflows.FlowRule
+}
+
+// trunkState is a port's trunk placement as OVSDB holds it.
+type trunkState struct {
+	allowed []uint16
+	native  uint16
+}
+
+// SetPortTrunk records the port as a trunk; SetPortVLAN makes it an access
+// port again, as the OVSDB controller clears trunks there.
+func (c *partialInstallController) SetPortTrunk(_ context.Context, portName string, allowed []uint16, native uint16) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.trunks[portName] = trunkState{allowed: append([]uint16(nil), allowed...), native: native}
+	delete(c.vlans, portName)
+	return nil
 }
 
 func (c *partialInstallController) InstallFlows(bridge string, rules []zoneflows.FlowRule) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.passInstalls > 0 && len(rules) > 0 {
+		c.passInstalls--
+		c.live = append(c.live, rules...)
+		return nil
+	}
 	if c.failInstalls > 0 && len(rules) > 0 {
 		c.failInstalls--
 		r := rules[0]
@@ -250,22 +274,33 @@ func (c *partialInstallController) SetPortVLAN(_ context.Context, portName strin
 	if c.failVLANAt != 0 && c.vlanCalls == c.failVLANAt {
 		return errors.New("ovsdb unavailable")
 	}
+	if c.failVLANFrom != 0 && c.vlanCalls >= c.failVLANFrom {
+		return errors.New("ovsdb unavailable")
+	}
 	c.vlans[portName] = vlan
+	delete(c.trunks, portName)
 	return nil
 }
 
 func newPartialInstallZFM(t *testing.T) (*partialInstallController, *ZoneFlowManager) {
 	t.Helper()
+	return newPartialInstallZFMWith(t, ZoneFlowManagerConfig{})
+}
+
+// newPartialInstallZFMWith builds the manager over a partial-install
+// controller; cfg supplies the optional fields (Matrix, Zones).
+func newPartialInstallZFMWith(t *testing.T, cfg ZoneFlowManagerConfig) (*partialInstallController, *ZoneFlowManager) {
+	t.Helper()
 	ctrl := &partialInstallController{
 		ofPortController: &ofPortController{ofPorts: map[string]int32{"tap0": 7}},
 		vlans:            map[string]int64{},
+		trunks:           map[string]trunkState{},
 	}
-	m, err := NewZoneFlowManager(ZoneFlowManagerConfig{
-		BridgeName:     "br0",
-		FlowController: ctrl,
-		PortController: ctrl,
-		Plan:           testPlan(t),
-	})
+	cfg.BridgeName = "br0"
+	cfg.FlowController = ctrl
+	cfg.PortController = ctrl
+	cfg.Plan = testPlan(t)
+	m, err := NewZoneFlowManager(cfg)
 	require.NoError(t, err)
 	return ctrl, m
 }
@@ -378,4 +413,152 @@ func TestZoneFlowManager_ApplyZoneFlows_FailedRestoreBlocksPort(t *testing.T) {
 	got, err := m.GetPortZone("tap0")
 	require.NoError(t, err)
 	require.Equal(t, zone.ZoneQuarantine, got)
+}
+
+// portRules answers every live rule that matches on OpenFlow port 7.
+func portRules(c *partialInstallController) []zoneflows.FlowRule {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []zoneflows.FlowRule
+	for _, r := range c.live {
+		if matchesInPort(r.Match, "7") {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// TestZoneFlowManager_ApplyZoneFlows_VLANFailureRestoresRules: the move
+// deletes the port's rules, then SetPortVLAN fails. The previous zone's
+// rules come back, or, when OVSDB stays down, the port is blocked; it is
+// never left with no rules (fail closed, #1896 Codex).
+func TestZoneFlowManager_ApplyZoneFlows_VLANFailureRestoresRules(t *testing.T) {
+	t.Run("restore", func(t *testing.T) {
+		ctx := context.Background()
+		ctrl, m := newPartialInstallZFM(t)
+		require.NoError(t, m.ApplyZoneFlows(ctx, "tap0", zone.ZoneProvisioning))
+		before := portDropRules(ctrl)
+		require.NotEmpty(t, before)
+
+		ctrl.failVLANAt = ctrl.vlanCalls + 1
+		err := m.ApplyZoneFlows(ctx, "tap0", zone.ZoneQuarantine)
+		require.Error(t, err)
+		require.NotErrorIs(t, err, ErrPortStateUnknown)
+
+		after := portDropRules(ctrl)
+		for _, r := range before {
+			require.Contains(t, after, r, "the previous zone's drop rule is reinstalled")
+		}
+		got, err := m.GetPortZone("tap0")
+		require.NoError(t, err)
+		require.Equal(t, zone.ZoneProvisioning, got)
+	})
+	t.Run("block", func(t *testing.T) {
+		ctx := context.Background()
+		ctrl, m := newPartialInstallZFM(t)
+		require.NoError(t, m.ApplyZoneFlows(ctx, "tap0", zone.ZoneProvisioning))
+
+		ctrl.failVLANFrom = ctrl.vlanCalls + 1
+		err := m.ApplyZoneFlows(ctx, "tap0", zone.ZoneQuarantine)
+		require.ErrorIs(t, err, ErrPortStateUnknown)
+
+		var blocked bool
+		for _, r := range portDropRules(ctrl) {
+			if r.Match == "in_port=7" {
+				blocked = true
+			}
+		}
+		require.True(t, blocked, "a drop-all for the port is installed")
+	})
+}
+
+// TestZoneFlowManager_ApplyZoneFlows_MatrixFailureFailsAndRollsBack: the
+// inter-zone matrix is part of enforcement. A failed matrix batch fails
+// the apply and the port returns to its previous zone (#1896 Codex).
+func TestZoneFlowManager_ApplyZoneFlows_MatrixFailureFailsAndRollsBack(t *testing.T) {
+	ctx := context.Background()
+	defaults := zone.Defaults()
+	ctrl, m := newPartialInstallZFMWith(t, ZoneFlowManagerConfig{
+		Matrix: zone.CompileMatrix(defaults),
+		Zones:  defaults,
+	})
+	require.NoError(t, m.ApplyZoneFlows(ctx, "tap0", zone.ZoneQuarantine))
+	before := portRules(ctrl)
+	require.NotEmpty(t, before)
+	prevVLAN, err := m.GetPortVLAN("tap0")
+	require.NoError(t, err)
+
+	ctrl.passInstalls = 1 // the new template
+	ctrl.failInstalls = 1 // the matrix batch
+	err = m.ApplyZoneFlows(ctx, "tap0", zone.ZoneControlPlane)
+	require.ErrorIs(t, err, ErrFlowInstallFailed)
+	require.NotErrorIs(t, err, ErrPortStateUnknown)
+
+	after := portRules(ctrl)
+	for _, r := range before {
+		require.Contains(t, after, r, "the previous zone's rule is reinstalled")
+	}
+	for _, r := range after {
+		require.Contains(t, before, r, "no rule of the failed move stays on the port")
+	}
+	got, err := m.GetPortZone("tap0")
+	require.NoError(t, err)
+	require.Equal(t, zone.ZoneQuarantine, got)
+	require.Equal(t, int64(prevVLAN), ctrl.vlans["tap0"])
+}
+
+// TestZoneFlowManager_RollbackPreservesTrunkPlacement: a failed move
+// restores the port class, allowed VLANs, native VLAN and rules the port
+// had, whether it was a trunk or an access port (#1896 Codex).
+func TestZoneFlowManager_RollbackPreservesTrunkPlacement(t *testing.T) {
+	t.Run("zone move from a trunk", func(t *testing.T) {
+		ctx := context.Background()
+		ctrl, m := newPartialInstallZFM(t)
+		require.NoError(t, m.ApplyPortClassFlows(ctx, "tap0", zone.PortClassHypervisor))
+		trunk, ok := ctrl.trunks["tap0"]
+		require.True(t, ok)
+		before := portRules(ctrl)
+		require.NotEmpty(t, before)
+
+		ctrl.failInstalls = 1
+		err := m.ApplyZoneFlows(ctx, "tap0", zone.ZoneControlPlane)
+		require.ErrorIs(t, err, ErrFlowInstallFailed)
+		require.NotErrorIs(t, err, ErrPortStateUnknown)
+
+		require.Equal(t, trunk, ctrl.trunks["tap0"], "the trunk VLANs and native VLAN are restored")
+		after := portRules(ctrl)
+		for _, r := range before {
+			require.Contains(t, after, r, "the trunk's rule is reinstalled")
+		}
+		c, err := m.GetPortClass("tap0")
+		require.NoError(t, err)
+		require.Equal(t, zone.PortClassHypervisor, c)
+	})
+	t.Run("class move from an access port", func(t *testing.T) {
+		ctx := context.Background()
+		ctrl, m := newPartialInstallZFM(t)
+		require.NoError(t, m.ApplyZoneFlows(ctx, "tap0", zone.ZoneQuarantine))
+		prevVLAN, err := m.GetPortVLAN("tap0")
+		require.NoError(t, err)
+		before := portRules(ctrl)
+		require.NotEmpty(t, before)
+
+		ctrl.failInstalls = 1
+		err = m.ApplyPortClassFlows(ctx, "tap0", zone.PortClassHypervisor)
+		require.ErrorIs(t, err, ErrFlowInstallFailed)
+		require.NotErrorIs(t, err, ErrPortStateUnknown)
+
+		_, trunked := ctrl.trunks["tap0"]
+		require.False(t, trunked, "the port is an access port again")
+		require.Equal(t, int64(prevVLAN), ctrl.vlans["tap0"])
+		after := portRules(ctrl)
+		for _, r := range before {
+			require.Contains(t, after, r, "the access zone's rule is reinstalled")
+		}
+		got, err := m.GetPortZone("tap0")
+		require.NoError(t, err)
+		require.Equal(t, zone.ZoneQuarantine, got)
+		_, err = m.GetPortClass("tap0")
+		require.Error(t, err)
+	})
 }
