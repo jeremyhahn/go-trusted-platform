@@ -42,7 +42,7 @@ describe('VTPMService', () => {
   });
 
   describe('createBundle', () => {
-    it('posts the request to /v1/vtpm/bundles', async () => {
+    it('posts the wire body to /v1/vtpm/bundles', async () => {
       vi.mocked(mockClient.post).mockResolvedValue(ok);
       const request: CreateBundleRequest = {
         options: {
@@ -59,7 +59,11 @@ describe('VTPMService', () => {
 
       expect(result).toBe(ok);
       expect(mockClient.post).toHaveBeenCalledTimes(1);
-      expect(mockClient.post).toHaveBeenCalledWith('/v1/vtpm/bundles', request);
+      expect(mockClient.post).toHaveBeenCalledWith(
+        '/v1/vtpm/bundles',
+        '{"mode":"pre-assigned","hostname":"vm-1","ek_algorithm":"ECC","secure_boot_enabled":true,' +
+          '"labels":{"env":"prod"},"device_profile_id":42}'
+      );
     });
   });
 
@@ -101,7 +105,7 @@ describe('VTPMService', () => {
       expect(mockClient.get).toHaveBeenCalledWith('/v1/vtpm/bundles');
     });
 
-    it('maps offset and limit to page and limit, and mode, labels and deviceProfileId to filters', async () => {
+    it('sends offset and limit as offset and limit, and mode, labels and deviceProfileId as filters', async () => {
       vi.mocked(mockClient.get).mockResolvedValue(ok);
 
       await service.listBundles({
@@ -114,17 +118,26 @@ describe('VTPMService', () => {
         },
       });
 
-      expect(mockClient.get).toHaveBeenCalledWith(
-        '/v1/vtpm/bundles?page=3&limit=10&mode=TEMPLATE&label_env=prod&label_tier=a+b&device_profile_id=42'
-      );
+      const url = new URL(String(vi.mocked(mockClient.get).mock.calls[0]?.[0]), 'http://x');
+      expect(url.pathname).toBe('/v1/vtpm/bundles');
+      expect(url.searchParams.get('offset')).toBe('20');
+      expect(url.searchParams.get('limit')).toBe('10');
+      expect(url.searchParams.get('mode')).toBe('TEMPLATE');
+      expect(url.searchParams.get('label_env')).toBe('prod');
+      expect(url.searchParams.get('label_tier')).toBe('a b');
+      expect(url.searchParams.get('device_profile_id')).toBe('42');
+      expect(url.searchParams.has('page')).toBe(false);
     });
 
-    it('pages by a default limit of 10 when only an offset is given', async () => {
+    it('sends only the offset when no limit is given', async () => {
       vi.mocked(mockClient.get).mockResolvedValue(ok);
 
       await service.listBundles({ options: { offset: 25 } });
 
-      expect(mockClient.get).toHaveBeenCalledWith('/v1/vtpm/bundles?page=3');
+      const url = new URL(String(vi.mocked(mockClient.get).mock.calls[0]?.[0]), 'http://x');
+      expect(url.searchParams.get('offset')).toBe('25');
+      expect(url.searchParams.has('page')).toBe(false);
+      expect(url.searchParams.has('limit')).toBe(false);
     });
 
     it('sends only the limit when no offset is given', async () => {
@@ -177,7 +190,7 @@ describe('VTPMService', () => {
   });
 
   describe('createTemplate', () => {
-    it('posts the request to /v1/vtpm/templates', async () => {
+    it('posts the wire body to /v1/vtpm/templates', async () => {
       vi.mocked(mockClient.post).mockResolvedValue(ok);
       const request: CreateTemplateRequest = {
         options: { id: 't-1', description: 'base', ekAlgorithm: 'RSA', secureBootEnabled: false },
@@ -185,7 +198,12 @@ describe('VTPMService', () => {
 
       await service.createTemplate(request);
 
-      expect(mockClient.post).toHaveBeenCalledWith('/v1/vtpm/templates', request);
+      expect(mockClient.post).toHaveBeenCalledWith('/v1/vtpm/templates', {
+        id: 't-1',
+        description: 'base',
+        ek_algorithm: 'RSA',
+        secure_boot_enabled: false,
+      });
     });
   });
 

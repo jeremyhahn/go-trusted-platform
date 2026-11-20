@@ -223,11 +223,11 @@ describe('EABService', () => {
   });
 
   describe('getEnrollmentURL', () => {
-    it('gets /v1/eab/credentials/{id}/enrollment-url with no query and no body', async () => {
+    it('gets /v1/eab/credentials/{id}/url with no query and no body', async () => {
       await service.getEnrollmentURL(8);
       const call = onlyCall(client);
       expect(call.verb).toBe('get');
-      expect(call.path).toBe('/v1/eab/credentials/8/enrollment-url');
+      expect(call.path).toBe('/v1/eab/credentials/8/url');
       expect([...call.query.keys()]).toEqual([]);
       expect(call.argc).toBe(1);
     });

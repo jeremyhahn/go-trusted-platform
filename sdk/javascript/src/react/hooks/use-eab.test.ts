@@ -32,6 +32,8 @@ const service = {
   getQRCode: vi.fn(),
   getEnrollmentURL: vi.fn(),
   list: vi.fn(),
+  markUsed: vi.fn(),
+  cleanupExpired: vi.fn(),
 };
 
 function mutationFn(result: unknown): Fn {
@@ -60,9 +62,24 @@ describe('useEAB', () => {
     expect(useEAB().service).toBe(service);
   });
 
-  it('builds exactly six mutations', () => {
+  it('builds exactly eight mutations', () => {
     useEAB();
-    expect(useMutation).toHaveBeenCalledTimes(6);
+    expect(useMutation).toHaveBeenCalledTimes(8);
+  });
+
+  it('markUsed forwards the id to service.markUsed', async () => {
+    await mutationFn(useEAB().markUsed)('5');
+    expect(service.markUsed).toHaveBeenCalledWith('5');
+  });
+
+  it('cleanupExpired forwards the request to service.cleanupExpired', async () => {
+    await mutationFn(useEAB().cleanupExpired)({ tenantId: 'tenant-a' });
+    expect(service.cleanupExpired).toHaveBeenCalledWith({ tenantId: 'tenant-a' });
+  });
+
+  it('cleanupExpired passes undefined when no request is given', async () => {
+    await mutationFn(useEAB().cleanupExpired)();
+    expect(service.cleanupExpired).toHaveBeenCalledWith(undefined);
   });
 
   it('create forwards the request to service.create', async () => {
