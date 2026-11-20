@@ -159,10 +159,10 @@ describe('UserForm', () => {
     const onSubmit = vi.fn();
     render(<UserForm open onOpenChange={vi.fn()} onSubmit={onSubmit} roles={roles} user={ada} />);
 
-    fill(/^Password/, 'new-secret-1');
+    fill(/^Password/, 'new-secret-1'); // ggignore: test fixture, not a credential
     await save('Update User');
 
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ password: 'new-secret-1' }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ password: 'new-secret-1' })); // ggignore: test fixture, not a credential
   });
 
   it('refuses a short new password in edit mode as it does on create', async () => {
