@@ -90,6 +90,38 @@ describe("useBMC", () => {
     expect(post?.init?.body).toBe('{"iso_url":"installer.iso"}');
   });
 
+  it.each(["on", "off", "reset", "cycle"] as const)(
+    "powerAction(%s) POSTs the action to /power and refreshes the power state",
+    async (action) => {
+      const { result } = renderHook(() => useBMC(PROFILE_ID));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      const readsBefore = calls.filter((c) => c.url.endsWith("/power") && (c.init?.method ?? "GET") === "GET").length;
+      await act(() => result.current.powerAction(action));
+      const post = calls.find((c) => c.init?.method === "POST");
+      expect(post?.url).toBe("/api/v1/bmc/1/power");
+      expect(post?.init?.body).toBe(JSON.stringify({ action }));
+      const readsAfter = calls.filter((c) => c.url.endsWith("/power") && (c.init?.method ?? "GET") === "GET").length;
+      expect(readsAfter).toBeGreaterThan(readsBefore);
+    }
+  );
+
+  it("powerAction surfaces the server's refusal", async () => {
+    const { result } = renderHook(() => useBMC(PROFILE_ID));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, init });
+        if (init?.method === "POST") {
+          return new Response(JSON.stringify({ error: "bmc unreachable" }), { status: 502 });
+        }
+        const op = url.split("/").pop() ?? "";
+        return new Response(JSON.stringify({ success: true, payload: PAYLOADS[op] }), { status: 200 });
+      })
+    );
+    await expect(act(() => result.current.powerAction("off"))).rejects.toThrow("bmc unreachable");
+  });
+
   it("an older refresh that finishes last does not overwrite the state read after a mount", async () => {
     let mounted = false;
     let release!: () => void;
