@@ -18,6 +18,7 @@ import (
 	"crypto/tls"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -50,8 +51,13 @@ func (tokenGrantAuthz) ValidateToken(_ context.Context, token string) (bool, err
 }
 
 func (tokenGrantAuthz) GetTokenClaims(_ context.Context, token string) (map[string]interface{}, error) {
-	return map[string]interface{}{"sub": token}, nil
+	// The PEP path refuses a caller with no tenant before asking the PEP
+	// (#2011 Codex), so the caller carries one.
+	return map[string]interface{}{"sub": token, "tenant_id": phase35MCPTenant}, nil
 }
+
+// phase35MCPTenant is the tenant of the phase35MCPToken caller.
+const phase35MCPTenant = "phase35-tenant"
 
 // newPhase35MCPClient serves the daemon's MCP provider through the MCP
 // server's HTTP routes and connects the SDK's MCP adapter to it, so a call
@@ -71,9 +77,19 @@ func serveMCPProvider(t *testing.T, provider *MCPServiceProvider) *sdkmcp.Adapte
 	config := mcp.DefaultConfig()
 	config.AuthorizationService = tokenGrantAuthz{}
 	config.AuthManager = tokenGrantAuthz{}
+	// checks counts the PEP's decisions: a test whose tool calls never
+	// reached the PEP was refused before it (no tenant, no caller), and its
+	// denials would pass for the wrong reason.
+	var checks atomic.Int32
 	config.PEPClient = &mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
-		return &sdkiam.CheckResponse{Allowed: req.Subject.ID == phase35MCPToken}, nil
+		checks.Add(1)
+		return &sdkiam.CheckResponse{Allowed: req.Subject.ID == phase35MCPToken && req.Subject.TenantID == phase35MCPTenant}, nil
 	}}
+	t.Cleanup(func() {
+		if checks.Load() == 0 {
+			t.Error("no MCP tool call reached the IAM PEP")
+		}
+	})
 	return serveMCPConfig(t, provider, config)
 }
 
