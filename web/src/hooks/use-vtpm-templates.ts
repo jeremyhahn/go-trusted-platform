@@ -85,7 +85,31 @@ export type VTPMBundle = NonNullable<Awaited<ReturnType<VTPMService['importBundl
  * shape the bundle views read, so an imported bundle keeps its fields.
  */
 export function bundleToWire(b: VTPMBundle): VTPMBundleWire {
-  return b as unknown as VTPMBundleWire;
+  const m = b.manifest;
+  return {
+    id: b.id,
+    mode: String(b.mode),
+    ...(m !== undefined && {
+      manifest: {
+        version: m.version,
+        id: m.id,
+        mode: String(m.mode),
+        hostname: m.hostname,
+        created_at: m.createdAt,
+        ek_algorithm: String(m.ekAlgorithm),
+        ek_handle: m.ekHandle,
+        secure_boot_enabled: m.secureBootEnabled,
+        ...(m.labels !== undefined && { labels: m.labels }),
+        ...(m.clonedFrom !== undefined && { cloned_from: m.clonedFrom }),
+      },
+    }),
+    ...(b.tpmState !== undefined && {
+      tpm_state: { state_dir: b.tpmState.stateDir, permall_file: b.tpmState.permallFile },
+    }),
+    ...(b.ovmfState !== undefined && { ovmf_state: { nvram_file: b.ovmfState.nvramFile } }),
+    created_at: b.createdAt,
+    ...(b.clonedFrom !== undefined && { cloned_from: b.clonedFrom }),
+  };
 }
 
 export function useVTPMTemplates() {
@@ -155,7 +179,12 @@ export function useVTPMTemplates() {
   );
 
   const importBundle = useMutation(
-    async (archive: Blob) => wire<VTPMBundleWire>(await vtpm.importBundle(archive)),
+    async (archive: Blob): Promise<ApiResponse<VTPMBundleWire>> => {
+      // importBundle already resolves with a camelCase VTPMBundle: convert it,
+      // a cast would leave every snake_case field undefined.
+      const response = await vtpm.importBundle(archive);
+      return { ...response, data: response.data ? bundleToWire(response.data) : undefined };
+    },
     { onSuccess: () => void bundles.refetch(), onError }
   );
 

@@ -90,11 +90,11 @@ describe('ComputeService VM operations', () => {
     const call = vi.mocked(mockClient.post).mock.calls[0]!;
     expect(call[0]).toMatch(/\/compute\/vms\/vm-1\/migrate$/);
     expect(call[1]).toEqual({ destinationHost: 'dest', liveMigration: true, bandwidthLimitMbps: undefined });
-    expect(call[2]).toEqual({ timeout: 3600000 });
+    expect(call[2]).toEqual({ retry: { enabled: false }, timeout: 3600000 });
   });
 
-  it('migrateVM without options passes no request options', async () => {
+  it('migrateVM without options passes only retry disabled', async () => {
     await service.migrateVM({ vmId: 'vm-1', destinationHost: 'dest', liveMigration: false });
-    expect(vi.mocked(mockClient.post).mock.calls[0]![2]).toBeUndefined();
+    expect(vi.mocked(mockClient.post).mock.calls[0]![2]).toEqual({ retry: { enabled: false } });
   });
 });

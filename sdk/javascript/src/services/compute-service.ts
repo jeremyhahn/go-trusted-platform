@@ -356,7 +356,13 @@ export class ComputeService extends BaseService {
         liveMigration: request.liveMigration,
         bandwidthLimitMbps: request.bandwidthLimitMbps,
       },
-      options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : undefined
+      // No retries: a migration retires the source instance when it commits,
+      // so a resend after a lost response reaches a source that is gone and
+      // answers not-found for a guest that migrated.
+      {
+        retry: { enabled: false },
+        ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
+      }
     );
   }
 
