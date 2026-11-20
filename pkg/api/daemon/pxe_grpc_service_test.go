@@ -1684,6 +1684,41 @@ func TestPXEGRPC_BootingAllowsTheIPXEHTTPPort(t *testing.T) {
 	assert.True(t, allowed, "no provisioning allow rule for the iPXE HTTP port %d", ipxe.DefaultHTTPPort)
 }
 
+// Codex round 5 P1 on #1896: docs/SPEC.md (ipxe row) requires the
+// provisioning-zone rules to admit TCP 8080 (iPXE HTTP), 8081 (the
+// bootstrap device-script and UKI server) and 10809 (NBD). A provisioning
+// transition replaces the port's flows, so each must be carried into the
+// generator and installed as an allow rule.
+func TestPXEGRPC_BootingAllowsEveryProvisioningBootPort(t *testing.T) {
+	ctx := context.Background()
+	port := &pxeRecordingPort{}
+	svc, err := pxeGRPCServiceFromConfig(ctx, logging.DefaultLogger(), pxeSectionApp(), pxeEnabledSection(t), pxeTestFlowManager(t, port))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	reg, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{MacAddress: "00:11:22:33:44:df", PortId: "port-1"})
+	require.NoError(t, err)
+
+	port.flows = nil
+	_, err = svc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
+		DeviceId: reg.GetDevice().GetId(),
+		State:    platformv1.ProvisioningState_PROVISIONING_STATE_BOOTING,
+		Reason:   "boot",
+	})
+	require.NoError(t, err)
+
+	for _, p := range []int{8080, 8081, 10809} {
+		want := fmt.Sprintf("tp_dst=%d", p)
+		allowed := false
+		for _, f := range port.flows {
+			if strings.Contains(f.Match, "nw_proto=6") && strings.Contains(f.Match, want) && f.Actions != "drop" {
+				allowed = true
+			}
+		}
+		assert.True(t, allowed, "no provisioning allow rule for TCP port %d", p)
+	}
+}
+
 // TestDaemonPXEBackendRefusesABridgeMismatch: the VLAN wrapper only
 // delegates to the shared flow manager, so a pxe.bridge-name other than
 // the manager's sdn.ovs.bridge is refused at startup (#1694).
