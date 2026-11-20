@@ -54,6 +54,16 @@ type SDNService struct {
 	// policySeq numbers policy applies, so a rollback can tell which of
 	// two policies with the same flow entry was applied last.
 	policySeq uint64
+
+	// applyMu serializes the switch writes of policy applies and deletes
+	// from the first flow-mod until the policy is recorded or the rollback
+	// has finished: a concurrent apply's rollback would otherwise remove an
+	// entry another apply installed but has not yet published.
+	applyMu sync.Mutex
+	// strandedFlows holds, under applyMu, the entries a rollback failed to
+	// remove: they are on the switch but no policy owns them, so the next
+	// apply removes them first.
+	strandedFlows map[flowEntryKey]attemptedFlow
 }
 
 type bridgeResource struct {
@@ -1153,6 +1163,11 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		policyID = "policy-" + uuid.NewString()
 	}
 
+	// One apply or delete at a time writes the switch, until its policy is
+	// recorded or rolled back (see applyMu).
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+
 	// Check for duplicate policy name under read lock
 	s.mu.RLock()
 	for id, p := range s.policies {
@@ -1178,6 +1193,9 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 	}
 
 	client := s.getOVSClient()
+
+	// Entries an earlier rollback could not remove go first.
+	s.removeStrandedFlows(ctx, client)
 
 	// Install OpenFlow rules for each target bridge without holding the lock.
 	// A flow the switch refuses fails the apply: the flows this call
@@ -1205,7 +1223,9 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 			// its barrier is awaited), so the rollback removes it too.
 			attempted = append(attempted, attemptedFlow{bridge: bridgeName, flow: flowMod})
 			if err := client.AddFlow(ctx, bridgeName, flowMod); err != nil {
-				s.rollbackPolicyApply(ctx, client, policyID, old, attempted)
+				if rbErr := s.rollbackPolicyApply(ctx, client, policyID, old, attempted); rbErr != nil {
+					return nil, status.Errorf(codes.Internal, "install flow for rule %q on bridge %q: %v; rollback: %v", rule.GetRuleId(), bridgeName, err, rbErr)
+				}
 				return nil, status.Errorf(codes.Internal, "install flow for rule %q on bridge %q: %v", rule.GetRuleId(), bridgeName, err)
 			}
 			flowID := fmt.Sprintf("policy-%s-rule-%s-%s", policyID, rule.GetRuleId(), uuid.NewString())
@@ -1238,6 +1258,12 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 	policy := s.policyResourceToPb(policyID, s.policies[policyID])
 	s.mu.Unlock()
 
+	// An entry this policy now owns is no longer stranded: removing it
+	// later would take this policy's flow off the switch.
+	for _, f := range attempted {
+		delete(s.strandedFlows, newFlowEntryKey(f.bridge, f.flow))
+	}
+
 	return &platformv1.ApplyPolicyResponse{
 		Status: &platformv1.Status{
 			Success: true,
@@ -1265,16 +1291,30 @@ type attemptedFlow struct {
 // re-installs the entries those flows may have replaced, the previous
 // version of the policy (old, nil for a new policy) included.
 
-func (s *SDNService) rollbackPolicyApply(ctx context.Context, client ovs.ClientInterface, policyID string, old *policyResource, attempted []attemptedFlow) {
+func (s *SDNService) rollbackPolicyApply(ctx context.Context, client ovs.ClientInterface, policyID string, old *policyResource, attempted []attemptedFlow) error {
 	// The request may already be cancelled (a barrier timeout often is the
 	// caller going away): clean up on a context of its own, bounded.
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), policyRollbackTimeout)
 	defer cancel()
 
+	// A delete that fails leaves the entry on the switch with no policy
+	// owning it: it is reported, kept in strandedFlows for the next apply,
+	// and nothing is restored over it until that apply removes it.
+	var errs []error
 	removed := make(map[flowEntryKey]bool, len(attempted))
+	stranded := make(map[flowEntryKey]bool)
 	for _, f := range attempted {
-		_ = client.DeleteFlowStrict(cctx, f.bridge, f.flow)
-		removed[newFlowEntryKey(f.bridge, f.flow)] = true
+		key := newFlowEntryKey(f.bridge, f.flow)
+		if err := client.DeleteFlowStrict(cctx, f.bridge, f.flow); err != nil {
+			errs = append(errs, fmt.Errorf("remove flow %q on bridge %q: %w", f.flow.Match, f.bridge, err))
+			if s.strandedFlows == nil {
+				s.strandedFlows = make(map[flowEntryKey]attemptedFlow)
+			}
+			s.strandedFlows[key] = f
+			stranded[key] = true
+			continue
+		}
+		removed[key] = true
 	}
 
 	skipID := policyID
@@ -1299,13 +1339,40 @@ func (s *SDNService) rollbackPolicyApply(ctx context.Context, client ovs.ClientI
 					s.mu.Unlock()
 					continue
 				}
-				removed[newFlowEntryKey(bridgeName, flowMod)] = true
+				if key := newFlowEntryKey(bridgeName, flowMod); !stranded[key] {
+					removed[key] = true
+				}
 			}
 		}
 	}
 	// A flow this call attempted may also have replaced another policy's
 	// entry with the same table, priority and match: put those back.
 	s.restoreOverwrittenFlows(cctx, client, skipID, removed)
+	return errors.Join(errs...)
+}
+
+// removeStrandedFlows removes, with applyMu held, the entries an earlier
+// rollback failed to remove, and puts back the published policies' flows
+// for the entries it removed. An entry whose delete fails again stays
+// tracked.
+func (s *SDNService) removeStrandedFlows(ctx context.Context, client ovs.ClientInterface) {
+	if len(s.strandedFlows) == 0 {
+		return
+	}
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), policyRollbackTimeout)
+	defer cancel()
+
+	removed := make(map[flowEntryKey]bool, len(s.strandedFlows))
+	for key, f := range s.strandedFlows {
+		if err := client.DeleteFlowStrict(cctx, f.bridge, f.flow); err != nil {
+			continue
+		}
+		delete(s.strandedFlows, key)
+		removed[key] = true
+	}
+	if len(removed) > 0 {
+		s.restoreOverwrittenFlows(cctx, client, "", removed)
+	}
 }
 
 // flowEntryKey identifies a switch entry: OpenFlow keeps one flow per bridge,
@@ -1516,6 +1583,10 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 	if req.GetPolicyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "policy_id is required")
 	}
+
+	// Serialized with applies (see applyMu).
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
 
 	// Find policy by ID or name and snapshot its data under read lock
 	s.mu.RLock()

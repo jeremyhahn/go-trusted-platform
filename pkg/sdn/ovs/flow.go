@@ -600,10 +600,14 @@ func parseMatchString(match *openflow.Match, matchStr string) error {
 			if err != nil {
 				return &MessageError{Msg: fmt.Sprintf("invalid tp_src: %s", value)}
 			}
-			// Use correct method based on protocol (17=UDP, 6=TCP)
-			if ipProto == 17 {
+			// The port field follows the protocol (17=UDP, 132=SCTP, else TCP):
+			// a switch rejects a TCP port field on another protocol.
+			switch ipProto {
+			case 17:
 				match.AddUDPSrc(uint16(port))
-			} else {
+			case 132:
+				match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBSCTPSrc, transportPort(port), nil)
+			default:
 				match.AddTCPSrc(uint16(port))
 			}
 
@@ -612,10 +616,12 @@ func parseMatchString(match *openflow.Match, matchStr string) error {
 			if err != nil {
 				return &MessageError{Msg: fmt.Sprintf("invalid tp_dst: %s", value)}
 			}
-			// Use correct method based on protocol (17=UDP, 6=TCP)
-			if ipProto == 17 {
+			switch ipProto {
+			case 17:
 				match.AddUDPDst(uint16(port))
-			} else {
+			case 132:
+				match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBSCTPDst, transportPort(port), nil)
+			default:
 				match.AddTCPDst(uint16(port))
 			}
 
@@ -705,6 +711,13 @@ func icmpField(key string, ipProto uint8) uint8 {
 	default:
 		return openflow.OFPXMTOFBICMPv4Type
 	}
+}
+
+// transportPort encodes a transport port as its 2-byte OXM value.
+func transportPort(port uint64) []byte {
+	raw := make([]byte, 2)
+	openflow.ByteOrder.PutUint16(raw, uint16(port))
+	return raw
 }
 
 // parseIPv6Match parses an IPv6 address or CIDR into an OXM value and,
@@ -953,11 +966,11 @@ func formatBasicMatchField(field openflow.OXMField) string {
 		if len(field.Value) == 1 {
 			return fmt.Sprintf("nw_proto=%d", field.Value[0])
 		}
-	case openflow.OFPXMTOFBTCPSrc, openflow.OFPXMTOFBUDPSrc:
+	case openflow.OFPXMTOFBTCPSrc, openflow.OFPXMTOFBUDPSrc, openflow.OFPXMTOFBSCTPSrc:
 		if len(field.Value) == 2 {
 			return fmt.Sprintf("tp_src=%d", openflow.ByteOrder.Uint16(field.Value))
 		}
-	case openflow.OFPXMTOFBTCPDst, openflow.OFPXMTOFBUDPDst:
+	case openflow.OFPXMTOFBTCPDst, openflow.OFPXMTOFBUDPDst, openflow.OFPXMTOFBSCTPDst:
 		if len(field.Value) == 2 {
 			return fmt.Sprintf("tp_dst=%d", openflow.ByteOrder.Uint16(field.Value))
 		}
