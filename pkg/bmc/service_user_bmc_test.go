@@ -249,3 +249,29 @@ func TestService_CreateUser_SlotOccupied_Simulator(t *testing.T) {
 		}
 	})
 }
+
+// TestService_CreateUser_UnknownProfiles_LocksBounded checks that creates
+// refused for nonexistent profiles do not grow the user-slot lock storage,
+// and that one profile always maps to the same mutex.
+func TestService_CreateUser_UnknownProfiles_LocksBounded(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newSimUserService(t)
+
+	const maxLocks = 64
+	for id := uint64(1000); id < 2000; id++ {
+		err := svc.CreateUser(ctx, id, bmc.User{Slot: 5, Username: "ghost", Enabled: true, Privilege: bmc.PrivilegeUser}, "s3cret-pass")
+		var notFound bmc.ErrProfileNotFound
+		if !errors.As(err, &notFound) {
+			t.Fatalf("CreateUser(profile %d) err = %v, want ErrProfileNotFound", id, err)
+		}
+	}
+	if n := svc.UserLockCount(); n > maxLocks {
+		t.Errorf("user-slot locks after 1000 unknown profiles = %d, want <= %d", n, maxLocks)
+	}
+	for _, id := range []uint64{1, 1000, 1999, 1 << 40} {
+		if svc.UserLockFor(id) != svc.UserLockFor(id) {
+			t.Errorf("profile %d maps to different mutexes", id)
+		}
+	}
+}

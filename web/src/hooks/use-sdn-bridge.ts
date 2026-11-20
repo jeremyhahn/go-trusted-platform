@@ -15,6 +15,11 @@ export interface UseSDNBridgeResult {
   bridgeError: string | null;
   portsError: string | null;
   policiesError: string | null;
+  /**
+   * True only once the policy list read has succeeded. While it is pending or
+   * after it is refused, `policies` is an empty stand-in, not "no policies".
+   */
+  policiesLoaded: boolean;
   refetchBridge: () => void;
   refetchPorts: () => void;
   refetchPolicies: () => void;
@@ -41,6 +46,7 @@ export function useSDNBridge(bridgeId: string): UseSDNBridgeResult {
     bridgeError: bridgeQuery.isError ? bridgeQuery.error?.message || 'Request failed' : null,
     portsError: portsQuery.isError ? portsQuery.error?.message || 'Request failed' : null,
     policiesError: policiesQuery.isError ? policiesQuery.error?.message || 'Request failed' : null,
+    policiesLoaded: !policiesQuery.isLoading && !policiesQuery.isError && !!policiesQuery.data,
     refetchBridge: () => {
       void bridgeQuery.refetch();
     },
