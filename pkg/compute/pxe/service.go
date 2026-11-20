@@ -642,6 +642,12 @@ func (s *service) UpdateDeviceState(ctx context.Context, deviceID string, state 
 			d.CurrentVLAN = vlan
 		}
 	}); err != nil {
+		// The record still says the device is where it was; put the port
+		// back there unless the move only narrowed access (quarantined or
+		// failed), whose restrictive flows stay in place.
+		if state != StateQuarantined && state != StateFailed {
+			s.restoreEnforcedFlows(ctx, device)
+		}
 		return ErrProvisioningFailed{
 			DeviceID: deviceID,
 			Reason:   "failed to transition device state",
@@ -957,6 +963,34 @@ func (s *service) undoFlows(ctx context.Context, before *DeviceInfo) {
 	}
 	if err != nil {
 		s.logger.Warn("Failed to undo flows after a failed state write",
+			"device_id", before.ID,
+			"error", err.Error(),
+		)
+	}
+}
+
+// restoreEnforcedFlows reinstalls the flows of the VLAN before records as
+// enforced, after a state write failed. A device on the quarantine VLAN, in
+// quarantined or failed state, or with no known VLAN goes back to the
+// quarantine flows (fail closed).
+func (s *service) restoreEnforcedFlows(ctx context.Context, before *DeviceInfo) {
+	if s.vlanManager == nil || before == nil {
+		return
+	}
+	var err error
+	switch {
+	case before.State == StateQuarantined || before.State == StateFailed ||
+		before.CurrentVLAN == s.config.QuarantineVLAN:
+		err = s.vlanManager.ApplyQuarantineFlows(ctx, before.PortID, before.MACAddress)
+	case before.State == StateAuthorized && before.CurrentVLAN != 0:
+		err = s.vlanManager.ApplyAuthorizedFlows(ctx, before.PortID, before.MACAddress, before.CurrentVLAN)
+	case before.CurrentVLAN == s.config.ProvisioningVLAN:
+		err = s.vlanManager.ApplyProvisioningFlows(ctx, before.PortID, before.MACAddress)
+	default:
+		err = s.vlanManager.ApplyQuarantineFlows(ctx, before.PortID, before.MACAddress)
+	}
+	if err != nil {
+		s.logger.Warn("Failed to restore flows after a failed state write",
 			"device_id", before.ID,
 			"error", err.Error(),
 		)
