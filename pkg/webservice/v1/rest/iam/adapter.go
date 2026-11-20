@@ -455,9 +455,14 @@ func (a *QuicBaaSIAMAdapter) TestPolicy(ctx context.Context, tenantID string, re
 	if req == nil {
 		return nil, errors.New("test policy request is required")
 	}
-	// The QuicBaaS SDK runs test cases against a named policy. The REST
-	// shape only describes a single inline check; wrap it as a one-element
-	// test case so the underlying engine evaluates the same scenario.
+	// The pinned QuicBaaS SDK runs test cases against one named policy and
+	// refuses a request without PolicyName before any transport is called;
+	// it has no tenant-wide evaluation. Refuse that explicitly.
+	if req.PolicyName == "" {
+		return nil, ErrInvalidRequestBody{Reason: "policy_name is required: tenant-wide policy evaluation is not supported by the IAM backend"}
+	}
+	// The REST shape describes a single inline check; wrap it as a
+	// one-element test case so the engine evaluates the same scenario.
 	contextMap := make(map[string]interface{}, len(req.Context))
 	for k, v := range req.Context {
 		contextMap[k] = v
@@ -469,6 +474,7 @@ func (a *QuicBaaSIAMAdapter) TestPolicy(ctx context.Context, tenantID string, re
 		Groups:   req.Groups,
 	}
 	sdkReq := &iamsdk.TestPolicyRequest{
+		PolicyName: req.PolicyName,
 		TestCases: []iamsdk.TestCase{{
 			Name:     "rest-inline",
 			Subject:  subject,
