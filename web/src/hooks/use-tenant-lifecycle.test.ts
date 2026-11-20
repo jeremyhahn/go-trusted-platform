@@ -144,3 +144,103 @@ describe('useTenantLifecycle lookup', () => {
     expect(result.current.tenant?.id).toBe('t-b');
   });
 });
+
+/**
+ * A mutation that a newer lookup has superseded leaves busy, notice and
+ * error to that lookup (#2023 Codex round R16, finding F28).
+ */
+describe('useTenantLifecycle superseded mutation', () => {
+  beforeEach(() => {
+    for (const fn of Object.values(service)) fn.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('a mutation that settles during a newer lookup does not end its busy state or set a notice', async () => {
+    const b = deferred<unknown>();
+    const s = deferred<unknown>();
+    service.getTenantByName.mockImplementation((name: string) =>
+      name === 'alpha' ? Promise.resolve(found('t-a', 'alpha')) : b.promise
+    );
+    service.suspendTenant.mockImplementation(() => s.promise);
+    service.getTenant.mockResolvedValue(found('t-a', 'alpha'));
+
+    const { result } = renderHook(() => useTenantLifecycle());
+
+    await act(() => result.current.lookup('alpha'));
+    expect(result.current.tenant?.id).toBe('t-a');
+
+    let suspending!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      suspending = result.current.suspend();
+    });
+    act(() => {
+      second = result.current.lookup('bravo');
+    });
+
+    await act(async () => {
+      s.resolve({ success: true, data: {} });
+      await suspending;
+    });
+    expect(result.current.busy).toBe(true);
+    expect(result.current.notice).toBeNull();
+    expect(result.current.error).toBeNull();
+
+    await act(async () => {
+      b.resolve(found('t-b', 'bravo'));
+      await second;
+    });
+    expect(result.current.tenant?.id).toBe('t-b');
+    expect(result.current.busy).toBe(false);
+    expect(result.current.notice).toBeNull();
+    expect(result.current.error).toBeNull();
+  });
+
+  it('a mutation that fails after a newer lookup does not report its error', async () => {
+    const s = deferred<unknown>();
+    service.getTenantByName.mockImplementation((name: string) =>
+      Promise.resolve(name === 'alpha' ? found('t-a', 'alpha') : found('t-b', 'bravo'))
+    );
+    service.suspendTenant.mockImplementation(() => s.promise);
+
+    const { result } = renderHook(() => useTenantLifecycle());
+
+    await act(() => result.current.lookup('alpha'));
+
+    let suspending!: Promise<void>;
+    act(() => {
+      suspending = result.current.suspend();
+    });
+
+    await act(() => result.current.lookup('bravo'));
+    expect(result.current.busy).toBe(false);
+    expect(result.current.tenant?.id).toBe('t-b');
+
+    await act(async () => {
+      s.reject(new Error('alpha suspend refused'));
+      await suspending;
+    });
+    expect(result.current.error).toBeNull();
+    expect(result.current.notice).toBeNull();
+    expect(result.current.busy).toBe(false);
+    expect(result.current.tenant?.id).toBe('t-b');
+  });
+
+  it('a mutation with no newer lookup still reports its notice', async () => {
+    service.getTenantByName.mockResolvedValue(found('t-a', 'alpha'));
+    service.suspendTenant.mockResolvedValue({ success: true, data: {} });
+    service.getTenant.mockResolvedValue(found('t-a', 'alpha'));
+
+    const { result } = renderHook(() => useTenantLifecycle());
+
+    await act(() => result.current.lookup('alpha'));
+    await act(() => result.current.suspend());
+    expect(service.suspendTenant).toHaveBeenCalledWith('t-a');
+    expect(result.current.notice).toBe('Tenant suspended');
+    expect(result.current.busy).toBe(false);
+    expect(result.current.error).toBeNull();
+  });
+});
