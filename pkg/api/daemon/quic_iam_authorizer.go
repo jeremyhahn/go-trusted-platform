@@ -85,31 +85,35 @@ type iamTokenAuthorizer struct {
 
 // CheckPeerPermission implements quic.PeerAuthorizationChecker: a QUIC
 // caller authenticated by its client certificate is decided by the IAM PEP
-// for the certificate's subject in its tenant, never by a wildcard scope
-// (#2016). A certificate carries no roles, so the subject's stored IAM user
-// in that tenant supplies them: the PEP's RBAC chain decides from the roles
-// it is given and resolves no permission from none (PR #2082 review). A
-// missing subject or tenant, a missing IAM client, a missing user or a
-// lookup error is a denial; an error is never allow.
+// for the certificate's stored IAM user in its tenant, never by a wildcard
+// scope (#2016). The mTLS adapter sets the subject to the certificate's
+// email SAN, else its CN, which the store does not take as a user ID, so the
+// subject is first resolved to its stored user (PR #2082 review); that
+// user's canonical ID and roles go to the PEP, whose RBAC chain decides from
+// the roles it is given and resolves no permission from none. A missing
+// subject or tenant, a missing IAM client, an unknown subject, a user of
+// another tenant or a lookup error is a denial; an error is never allow.
 func (a *iamTokenAuthorizer) CheckPeerPermission(ctx context.Context, authCtx *platformtoken.AuthorizedContext, resource, action string) (bool, error) {
 	if authCtx == nil || authCtx.Subject == "" || authCtx.TenantID == "" {
 		return false, nil
 	}
-	roles, ok := a.storedRoles(ctx, authCtx.TenantID, authCtx.Subject)
+	user, ok := a.certificateUser(ctx, authCtx.TenantID, authCtx.Subject)
 	if !ok {
 		return false, nil
 	}
 	return checkPrincipalPermission(ctx, a.pep, &tokenPrincipal{
-		Subject:  authCtx.Subject,
+		Subject:  user.ID,
 		TenantID: authCtx.TenantID,
-		Roles:    roles,
+		Roles:    user.Roles,
 	}, resource, action)
 }
 
-// storedRoles returns the role grants the IAM store holds for userID in
-// tenantID. ok is false when there is no IAM client, the lookup fails or
-// no user is stored: the caller denies, and the cause is not passed on.
-func (a *iamTokenAuthorizer) storedRoles(ctx context.Context, tenantID, userID string) ([]string, bool) {
+// certificateUser resolves a certificate subject to the IAM user stored in
+// tenantID: an email SAN subject by its email, any other subject (the CN) by
+// its username. ok is false when there is no IAM client, the lookup fails,
+// no user is stored, the stored user has no ID or belongs to another tenant:
+// the caller denies, and the cause is not passed on.
+func (a *iamTokenAuthorizer) certificateUser(ctx context.Context, tenantID, subject string) (*sdkiam.User, bool) {
 	if a.iam == nil {
 		return nil, false
 	}
@@ -119,14 +123,22 @@ func (a *iamTokenAuthorizer) storedRoles(ctx context.Context, tenantID, userID s
 	}
 	lookupCtx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
-	user, err := users.Get(lookupCtx, tenantID, userID)
-	if err != nil || user == nil {
+	var (
+		user *sdkiam.User
+		err  error
+	)
+	if strings.Contains(subject, "@") {
+		user, err = users.GetByEmail(lookupCtx, tenantID, subject)
+	} else {
+		user, err = users.FindByUsername(lookupCtx, tenantID, subject)
+	}
+	if err != nil || user == nil || user.ID == "" {
 		return nil, false
 	}
 	if user.TenantID != "" && user.TenantID != tenantID {
 		return nil, false
 	}
-	return user.Roles, true
+	return user, true
 }
 
 // newIAMTokenAuthorizer returns an authorizer backed by pep. Both arguments
