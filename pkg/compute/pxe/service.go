@@ -268,6 +268,11 @@ func (s *service) Start(ctx context.Context) error {
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
 
+	// A Close that ran while this Start waited for lifecycle has cleared
+	// the config: check again under the lock (#1896 Codex).
+	if !s.initialized.Load() {
+		return ErrServiceNotInitialized{}
+	}
 	if s.running.Load() {
 		return ErrServiceAlreadyRunning{}
 	}
@@ -368,7 +373,11 @@ func (s *service) watchIPXERun(run *ipxeRun) {
 func (s *service) Stop(ctx context.Context) error {
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
+	return s.stopLocked(ctx)
+}
 
+// stopLocked stops the running iPXE server. Callers hold s.lifecycle.
+func (s *service) stopLocked(ctx context.Context) error {
 	if !s.running.Load() {
 		return ErrServiceNotRunning{}
 	}
@@ -403,17 +412,22 @@ func (s *service) IsRunning() bool {
 
 // Close releases all resources held by the service.
 func (s *service) Close() error {
+	// Wait for the device operations in flight: they read s.config.
+	s.ops.Lock()
+	defer s.ops.Unlock()
+
+	// The running check, the stop and the teardown are one step under
+	// lifecycle, which Start holds until its server is running: a Start
+	// in flight finishes first and its run is stopped here, never cleared
+	// while it listens on (#1896 Codex).
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
 	if s.running.Load() {
-		if err := s.Stop(context.Background()); err != nil {
+		if err := s.stopLocked(context.Background()); err != nil {
 			return err
 		}
 	}
 
-	// Wait for the device operations in flight: they read s.config.
-	s.ops.Lock()
-	defer s.ops.Unlock()
-	s.lifecycle.Lock()
-	defer s.lifecycle.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
