@@ -37,9 +37,107 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
+import { unwrapPayload } from '@/hooks/use-gateway-bgp';
+import { gatewayNotConfigured } from '@/hooks/use-gateway-ops';
+import { useGateway } from 'trusted-platform-sdk';
+import type { ApiResponse } from 'trusted-platform-sdk';
 
 // uint64 arrives as JSON string — render as-is, never parseInt
 type Uint64String = string;
+
+type Raw = Record<string, unknown>;
+
+/** The SDK error of a failed reply: its message, or the HTTP status. */
+interface SdkError {
+  message?: string;
+  status?: number;
+}
+
+/** IPAMCallError carries an SDK failure and whether it is "not configured". */
+class IPAMCallError extends Error {
+  constructor(message: string, readonly notConfigured: boolean) {
+    super(message);
+  }
+}
+
+/**
+ * sdkCall settles one SDK gateway call: the reply's payload, or an
+ * IPAMCallError with the SDK error message (the HTTP status when the
+ * server sent none) and the not-configured mark.
+ */
+async function sdkCall<T>(call: () => Promise<ApiResponse<T>>): Promise<unknown> {
+  let res: ApiResponse<T>;
+  try {
+    res = await call();
+  } catch (err) {
+    const e = err as SdkError;
+    throw new IPAMCallError(
+      e?.message || (e?.status ? `HTTP ${e.status}` : 'Unknown error'),
+      gatewayNotConfigured(err)
+    );
+  }
+  if (!res.success) {
+    const e = res.error as SdkError | undefined;
+    throw new IPAMCallError(
+      e?.message || (e?.status ? `HTTP ${e.status}` : 'Unknown error'),
+      gatewayNotConfigured(res.error)
+    );
+  }
+  return unwrapPayload(res.data);
+}
+
+function listOf(body: unknown, key: string): Raw[] {
+  if (body && typeof body === 'object') {
+    const v = (body as Raw)[key];
+    if (Array.isArray(v)) return v.filter((x): x is Raw => !!x && typeof x === 'object');
+  }
+  return [];
+}
+
+function text(v: unknown): string {
+  return v === undefined || v === null ? '' : String(v);
+}
+
+/** toPool reads a pool in its proto (snake_case) or lowerCamelCase names. */
+function toPool(r: Raw): IPAMPoolResponse {
+  const pick = (camel: string, snake: string) => r[camel] ?? r[snake];
+  const reserved = r.reserved;
+  return {
+    id: text(r.id),
+    name: text(r.name),
+    cidr: text(r.cidr),
+    gateway: text(r.gateway),
+    zone: text(r.zone),
+    description: text(r.description),
+    total: text(r.total),
+    allocated: text(r.allocated),
+    available: text(r.available),
+    default_lease_duration_nanos: Number(pick('defaultLeaseDurationNanos', 'default_lease_duration_nanos') ?? 0),
+    inactivity_timeout_nanos: Number(pick('inactivityTimeoutNanos', 'inactivity_timeout_nanos') ?? 0),
+    reserved: Array.isArray(reserved) ? reserved.map(text) : undefined,
+    range_start: text(pick('rangeStart', 'range_start')),
+    range_end: text(pick('rangeEnd', 'range_end')),
+    created_at: text(pick('createdAt', 'created_at')),
+    updated_at: text(pick('updatedAt', 'updated_at')),
+  };
+}
+
+/** toAllocationRow reads an allocation in either naming. */
+function toAllocationRow(r: Raw): IPAllocationResponse {
+  const pick = (camel: string, snake: string) => text(r[camel] ?? r[snake]);
+  return {
+    ip: text(r.ip),
+    pool_id: pick('poolId', 'pool_id'),
+    device_id: pick('deviceId', 'device_id'),
+    hostname: text(r.hostname),
+    allocated_at: pick('allocatedAt', 'allocated_at'),
+    expires_at: pick('expiresAt', 'expires_at'),
+  };
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : 'Unknown error';
+}
 
 interface IPAMPoolResponse {
   id: string;
@@ -123,6 +221,11 @@ function utilization(pool: IPAMPoolResponse): number {
 
 export default function IPAMPage() {
   const { toast } = useToast();
+  const gateway = useGateway();
+
+  // Set when the server answers "not configured": create, edit and delete
+  // are disabled with this reason and never reach the SDK.
+  const [gatedReason, setGatedReason] = React.useState<string | null>(null);
 
   const [pools, setPools] = React.useState<IPAMPoolResponse[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -156,35 +259,34 @@ export default function IPAMPage() {
   // the table nor clears loading).
   const settlePools = React.useCallback((zone?: string) => {
     const seq = ++poolSeq.current;
-    const params = zone ? `?zone=${encodeURIComponent(zone)}` : '';
-    return fetch(`/api/v1/sdn/gateway/ipam/pools${params}`, {
-      credentials: 'include',
-    })
-      .then(async (res) => {
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body.error || `HTTP ${res.status}`);
-        }
-        const body = await res.json();
+    // The SDK pool list carries every pool; the zone filter applies here.
+    return sdkCall(() => gateway.listIPAMPools())
+      .then((body) => {
         if (seq !== poolSeq.current) return;
-        // The webservice wraps payloads in {payload}; the daemon REST
-        // stack returns the body bare — accept both.
-        const list: IPAMPoolResponse[] = body.payload?.pools ?? body.pools ?? [];
-        setPools(list);
+        const all = listOf(body, 'pools').map(toPool);
+        setPools(zone ? all.filter((p) => p.zone === zone) : all);
         // Collect unique zone values for the filter dropdown
-        const seenZones = Array.from(new Set(list.map((p) => p.zone).filter(Boolean)));
+        const seenZones = Array.from(new Set(all.map((p) => p.zone).filter(Boolean)));
         setZoneOptions(seenZones);
         setLoadError(null);
       })
       .catch((err: unknown) => {
         if (seq !== poolSeq.current) return;
-        setLoadError(err instanceof Error ? err.message : String(err));
+        if (err instanceof IPAMCallError && err.notConfigured) {
+          // A node without the gateway IPAM: show the page with every
+          // write gated off and the reason, not a load failure.
+          setPools([]);
+          setGatedReason(`IPAM is not available on this node: ${err.message}`);
+          setLoadError(null);
+          return;
+        }
+        setLoadError(errorText(err));
       })
       .finally(() => {
         if (seq !== poolSeq.current) return;
         setLoading(false);
       });
-  }, []);
+  }, [gateway]);
 
   const fetchPools = React.useCallback(
     async (zone?: string) => {
@@ -204,35 +306,29 @@ export default function IPAMPage() {
     setAllocationsLoading(true);
     setAllocationsOpen(true);
     try {
-      const res = await fetch(
-        `/api/v1/sdn/gateway/ipam/allocations?pool_id=${encodeURIComponent(pool.id)}`,
-        { credentials: 'include' }
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `HTTP ${res.status}`);
-      }
-      const body = await res.json();
-      setAllocations(body.payload?.allocations ?? body.allocations ?? []);
+      const body = await sdkCall(() => gateway.listAllocations({ poolId: pool.id }));
+      setAllocations(listOf(body, 'allocations').map(toAllocationRow));
     } catch (err) {
       toast({
         title: 'Failed to load allocations',
-        description: err instanceof Error ? err.message : 'Unknown error',
+        description: errorText(err),
         variant: 'destructive',
       });
       setAllocations([]);
     } finally {
       setAllocationsLoading(false);
     }
-  }, [toast]);
+  }, [gateway, toast]);
 
   const openCreate = React.useCallback(() => {
+    if (gatedReason) return;
     setEditTarget(null);
     setForm(emptyPoolForm());
     setFormOpen(true);
-  }, []);
+  }, [gatedReason]);
 
   const openEdit = React.useCallback((pool: IPAMPoolResponse) => {
+    if (gatedReason) return;
     setEditTarget(pool);
     setForm({
       id: pool.id,
@@ -246,9 +342,10 @@ export default function IPAMPage() {
       rangeEnd: pool.range_end ?? '',
     });
     setFormOpen(true);
-  }, []);
+  }, [gatedReason]);
 
   const handleSubmit = React.useCallback(async () => {
+    if (gatedReason) return;
     if (!editTarget && (!form.name.trim() || !form.cidr.trim())) return;
     setSubmitting(true);
     try {
@@ -265,86 +362,67 @@ export default function IPAMPage() {
           range_start: form.rangeStart.trim(),
           range_end: form.rangeEnd.trim(),
         };
-        const res = await fetch(
-          `/api/v1/sdn/gateway/ipam/pools/${encodeURIComponent(editTarget.id)}`,
-          {
-            method: 'PUT',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-          }
+        // UpdateIPAMPool keeps the CIDR; the SDK request type requires one.
+        await sdkCall(() =>
+          gateway.updateIPAMPool(editTarget.id, body as Parameters<typeof gateway.updateIPAMPool>[1])
         );
-        if (!res.ok) {
-          const b = await res.json().catch(() => ({}));
-          throw new Error(b.error || `HTTP ${res.status}`);
-        }
         toast({ title: 'Pool updated', variant: 'success' });
       } else {
-        const body = {
-          id: form.id || undefined,
+        const body: Parameters<typeof gateway.createIPAMPool>[0] = {
           name: form.name,
           cidr: form.cidr,
-          gateway: form.gateway || undefined,
-          zone: form.zone || undefined,
-          description: form.description || undefined,
-          reserved: form.reserved.trim() ? splitReserved(form.reserved) : undefined,
-          range_start: form.rangeStart.trim() || undefined,
-          range_end: form.rangeEnd.trim() || undefined,
         };
-        const res = await fetch('/api/v1/sdn/gateway/ipam/pools', {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        if (!res.ok) {
-          const b = await res.json().catch(() => ({}));
-          throw new Error(b.error || `HTTP ${res.status}`);
-        }
+        if (form.gateway) body.gateway = form.gateway;
+        if (form.zone) body.zone = form.zone;
+        if (form.description) body.description = form.description;
+        if (form.reserved.trim()) body.reserved = splitReserved(form.reserved);
+        if (form.rangeStart.trim()) body.range_start = form.rangeStart.trim();
+        if (form.rangeEnd.trim()) body.range_end = form.rangeEnd.trim();
+        await sdkCall(() => gateway.createIPAMPool(body));
         toast({ title: 'Pool created', variant: 'success' });
       }
       setFormOpen(false);
       void fetchPools(zoneFilter || undefined);
     } catch (err) {
+      if (err instanceof IPAMCallError && err.notConfigured) {
+        setGatedReason(`IPAM is not available on this node: ${err.message}`);
+      }
       toast({
         title: editTarget ? 'Failed to update pool' : 'Failed to create pool',
-        description: err instanceof Error ? err.message : 'Unknown error',
+        description: errorText(err),
         variant: 'destructive',
       });
     } finally {
       setSubmitting(false);
     }
-  }, [form, editTarget, fetchPools, zoneFilter, toast]);
+  }, [form, editTarget, fetchPools, zoneFilter, toast, gateway, gatedReason]);
 
   const openDeleteConfirm = React.useCallback((pool: IPAMPoolResponse) => {
+    if (gatedReason) return;
     setDeleteTarget(pool);
     setDeleteError(null);
     setDeleteConfirmOpen(true);
-  }, []);
+  }, [gatedReason]);
 
   const handleDelete = React.useCallback(async () => {
-    if (!deleteTarget) return;
+    if (!deleteTarget || gatedReason) return;
     setDeleting(true);
     setDeleteError(null);
     try {
-      const res = await fetch(
-        `/api/v1/sdn/gateway/ipam/pools/${encodeURIComponent(deleteTarget.id)}`,
-        { method: 'DELETE', credentials: 'include' }
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `HTTP ${res.status}`);
-      }
+      await sdkCall(() => gateway.deleteIPAMPool(deleteTarget.id));
       toast({ title: 'Pool deleted', variant: 'success' });
       setDeleteConfirmOpen(false);
       setDeleteTarget(null);
       void fetchPools(zoneFilter || undefined);
     } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : 'Unknown error');
+      if (err instanceof IPAMCallError && err.notConfigured) {
+        setGatedReason(`IPAM is not available on this node: ${err.message}`);
+      }
+      setDeleteError(errorText(err));
     } finally {
       setDeleting(false);
     }
-  }, [deleteTarget, fetchPools, zoneFilter, toast]);
+  }, [deleteTarget, fetchPools, zoneFilter, toast, gateway, gatedReason]);
 
   const columns: ColumnDef<IPAMPoolResponse>[] = React.useMemo(
     () => [
@@ -533,10 +611,15 @@ export default function IPAMPage() {
           >
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button type="button" onClick={openCreate}>
+          <Button type="button" onClick={openCreate} disabled={!!gatedReason}>
             <Plus className="mr-2 h-4 w-4" />
             Create Pool
           </Button>
+          {gatedReason && (
+            <span role="note" className="text-sm text-muted-foreground">
+              {gatedReason}
+            </span>
+          )}
         </div>
       </div>
 
