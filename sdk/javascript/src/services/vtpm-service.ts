@@ -248,6 +248,87 @@ function fromWireBundle(b: WireBundleResponse): VTPMBundle {
   };
 }
 
+/**
+ * Import response of the daemon REST listener (pkg/api/rest/vtpm_handlers.go
+ * ImportBundleResponse): a plain { bundle, timestamp } object whose bundle
+ * carries flattened manifest metadata and no state paths.
+ */
+interface WireDaemonImportResponse {
+  bundle: {
+    id: string;
+    mode: string;
+    hostname?: string;
+    ek_algorithm?: string;
+    secure_boot_enabled?: boolean;
+    created_at: string;
+    cloned_from?: string;
+    labels?: Record<string, string>;
+    ek_certificate?: {
+      subject: string;
+      issuer: string;
+      serial_number: string;
+      not_before?: string;
+      not_after?: string;
+      fingerprint: string;
+    };
+    secure_boot_keys?: { pk_fingerprint: string; kek_fingerprint: string; db_fingerprint: string };
+  };
+  timestamp?: string;
+}
+
+function isDaemonImportResponse(
+  d: WireBundleResponse | WireDaemonImportResponse
+): d is WireDaemonImportResponse {
+  return (
+    typeof (d as WireDaemonImportResponse).bundle === 'object' &&
+    (d as WireDaemonImportResponse).bundle !== null &&
+    (d as WireBundleResponse).manifest === undefined
+  );
+}
+
+function fromDaemonImportResponse(d: WireDaemonImportResponse): VTPMBundle {
+  const b = d.bundle;
+  const mode = decodeWireEnum<BundleMode>(BUNDLE_MODE_WIRE_NAMES, b.mode) as BundleMode;
+  return {
+    id: b.id,
+    mode,
+    manifest: {
+      version: '',
+      id: b.id,
+      mode,
+      hostname: b.hostname ?? '',
+      createdAt: b.created_at ?? '',
+      ...(b.ek_certificate !== undefined && {
+        ekCertificate: {
+          subject: b.ek_certificate.subject,
+          issuer: b.ek_certificate.issuer,
+          serialNumber: b.ek_certificate.serial_number,
+          notBefore: b.ek_certificate.not_before ?? '',
+          notAfter: b.ek_certificate.not_after ?? '',
+          fingerprint: b.ek_certificate.fingerprint,
+        },
+      }),
+      ekAlgorithm: decodeWireEnum<EKAlgorithm>(EK_ALGORITHM_WIRE_NAMES, b.ek_algorithm) as EKAlgorithm,
+      ekHandle: 0,
+      secureBootEnabled: b.secure_boot_enabled ?? false,
+      ...(b.secure_boot_keys !== undefined && {
+        secureBootKeys: {
+          pkFingerprint: b.secure_boot_keys.pk_fingerprint,
+          kekFingerprint: b.secure_boot_keys.kek_fingerprint,
+          dbFingerprint: b.secure_boot_keys.db_fingerprint,
+          ownerGuid: '',
+        },
+      }),
+      ...(b.labels !== undefined && { labels: b.labels }),
+      ...(b.cloned_from !== undefined && { clonedFrom: b.cloned_from }),
+    },
+    tpmState: { stateDir: '', permallFile: '', volatileFile: '' },
+    ovmfState: { nvramFile: '' },
+    createdAt: b.created_at,
+    ...(b.cloned_from !== undefined && { clonedFrom: b.cloned_from }),
+  };
+}
+
 /** A request's outcome: the reply it returned, or the error it threw. */
 type Settled<T> = { reply: ApiResponse<T> } | { thrown: unknown };
 
@@ -679,8 +760,19 @@ export class VTPMService extends BaseService {
    * Blob is sent unchanged.
    */
   async importBundle(archive: Blob): Promise<ApiResponse<VTPMBundle>> {
-    const response = await this.client.post<WireBundleResponse>(this.buildUrl('/bundles/import'), archive);
+    // The server persists the bundle under the archive's ID and refuses a
+    // second import, so a resend after a lost response would report a false
+    // conflict: no client retries.
+    const response = await this.client.post<WireBundleResponse | WireDaemonImportResponse>(
+      this.buildUrl('/bundles/import'),
+      archive,
+      { retry: { enabled: false } }
+    );
     const { data, ...rest } = response;
-    return data === undefined ? rest : { ...rest, data: fromWireBundle(data) };
+    if (data === undefined) return rest;
+    return {
+      ...rest,
+      data: isDaemonImportResponse(data) ? fromDaemonImportResponse(data) : fromWireBundle(data),
+    };
   }
 }
