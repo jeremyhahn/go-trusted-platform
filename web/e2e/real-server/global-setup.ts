@@ -82,7 +82,10 @@ async function globalSetup(): Promise<void> {
 
   const log = path.join(dir, 'platformd.log');
   const out = fs.openSync(log, 'a');
-  const child = spawn(binary, ['--config', 'config.yaml', '--init'], {
+  // `serve` explicitly: --socket-path is a serve flag. The socket lives in
+  // the run directory, never the daemon default under /run (#2034).
+  const socket = path.join(dir, 'platformd.sock');
+  const child = spawn(binary, ['serve', '--config', 'config.yaml', '--init', '--socket-path', socket], {
     cwd: dir,
     detached: true,
     stdio: ['ignore', out, out],
