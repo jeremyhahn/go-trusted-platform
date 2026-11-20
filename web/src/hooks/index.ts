@@ -119,8 +119,10 @@ export {
   randomNonce,
   decodeOutput,
   splitCommand,
+  containerControlGates,
+  vmVerifyGate,
 } from './use-container-ops';
-export type { UseContainerOpsResult } from './use-container-ops';
+export type { UseContainerOpsResult, ControlGate } from './use-container-ops';
 export { useVMOperations, attestationNonce } from './use-vm-operations';
 export type { UseVMOperationsResult } from './use-vm-operations';
 export { useAttestationCollect, newAttestationNonce } from './use-attestation-collect';

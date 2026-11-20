@@ -23,7 +23,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { useVMAttestationVerify } from '@/hooks';
+import { useVMAttestationVerify, vmVerifyGate } from '@/hooks';
 import type { VerifyVMAttestationResponse } from 'trusted-platform-sdk';
 import { formatDistanceToNow } from 'date-fns';
 import { Button } from '@/components/ui/button';
@@ -317,6 +317,8 @@ export default function VMDetailPage() {
   const formatMemory = (mb: number) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
   const formatStorage = (mb: number) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
 
+  const verifyGate = vmVerifyGate(vm.status, actionLoading);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -381,7 +383,8 @@ export default function VMDetailPage() {
           <Button
             variant="outline"
             onClick={() => setVerifyConfirmOpen(true)}
-            disabled={actionLoading}
+            disabled={!verifyGate.enabled}
+            title={verifyGate.reason ?? undefined}
           >
             <ShieldCheck className="mr-2 h-4 w-4" />
             Verify Attestation

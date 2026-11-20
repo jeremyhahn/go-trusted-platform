@@ -7,9 +7,12 @@
  * server; every assertion compares the page with what the server returns.
  * No route mocks.
  */
+import type { Page } from '@playwright/test';
+import type { PlatformClient } from 'trusted-platform-sdk';
 import { test, expect } from './fixtures';
 
-type Sdk = Parameters<Parameters<typeof test>[2]>[0]['sdk'];
+type Sdk = PlatformClient;
+type Fx = { adminPage: Page; sdk: Sdk };
 
 const IMAGE = 'docker.io/library/busybox:latest';
 
@@ -34,7 +37,7 @@ test.describe('compute containers: detail page against the real server', () => {
   test('GetContainer and GetContainerMetrics: the page shows what the server returns', async ({
     adminPage,
     sdk,
-  }) => {
+  }: Fx) => {
     const id = await seedContainer(sdk, `e2e-ctr-get-${Date.now()}`);
     test.skip(id === null, 'harness server has no container runtime');
     try {
@@ -62,7 +65,7 @@ test.describe('compute containers: detail page against the real server', () => {
     }
   });
 
-  test('GetContainer: an unknown ID shows the server error', async ({ adminPage, sdk }) => {
+  test('GetContainer: an unknown ID shows the server error', async ({ adminPage, sdk }: Fx) => {
     const missing = `e2e-missing-${Date.now()}`;
     const got = await sdk.compute.getContainer(missing);
     expect(got.success).toBe(false);
@@ -74,7 +77,7 @@ test.describe('compute containers: detail page against the real server', () => {
   test('ExecContainer: the confirmed command runs and its exit code is shown', async ({
     adminPage,
     sdk,
-  }) => {
+  }: Fx) => {
     const id = await seedContainer(sdk, `e2e-ctr-exec-${Date.now()}`);
     test.skip(id === null, 'harness server has no container runtime');
     try {
@@ -107,7 +110,7 @@ test.describe('compute containers: detail page against the real server', () => {
   test('AttestContainer: the attestation result matches the server digests', async ({
     adminPage,
     sdk,
-  }) => {
+  }: Fx) => {
     const id = await seedContainer(sdk, `e2e-ctr-attest-${Date.now()}`);
     test.skip(id === null, 'harness server has no container runtime');
     try {
@@ -138,7 +141,7 @@ test.describe('compute VMs: attestation verify against the real server', () => {
   test('VerifyVMAttestation: the verify control shows the server verdict or its reason', async ({
     adminPage,
     sdk,
-  }) => {
+  }: Fx) => {
     const listed = await sdk.compute.listVMs();
     expect(listed.success).toBe(true);
     const vm = listed.data?.vms?.[0];
