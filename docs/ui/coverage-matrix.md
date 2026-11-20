@@ -492,18 +492,18 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
 | `DNSService.CreateZone` | `POST /zones` | `(dashboard)/networking/dns/page.tsx` | - | `networking.spec.ts` | covered |
-| `DNSService.GetZone` | `GET /zones/{zone}` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | - | partial |
-| `DNSService.UpdateZone` | `PUT /zones/{zone}` | `(dashboard)/networking/dns/[zone]/page.tsx`<br>`(dashboard)/networking/dns/page.tsx` (read-only) | - | - | partial |
+| `DNSService.GetZone` | `GET /zones/{zone}` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.UpdateZone` | `PUT /zones/{zone}` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
 | `DNSService.DeleteZone` | `DELETE /zones/{zone}` | `(dashboard)/networking/dns/page.tsx` | - | `networking.spec.ts` | covered |
 | `DNSService.ListZones` | `GET /zones` | `(dashboard)/networking/dns/page.tsx` | - | `networking.spec.ts` | covered |
-| `DNSService.AddRecord` | `POST /zones/{zone}/records` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | - | partial |
-| `DNSService.DeleteRecord` | `DELETE /zones/{zone}/records/{type}/{name}` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | - | partial |
-| `DNSService.UpdateRecord` | `PUT /zones/{zone}/records` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | - | partial |
-| `DNSService.ListRecords` | `GET /zones/{zone}/records` | - | - | - | missing |
-| `DNSService.SignZone` | `POST /zones/{zone}/sign` | - | - | - | missing |
-| `DNSService.GetDNSSECStatus` | `GET /zones/{zone}/dnssec` | - | - | - | missing |
-| `DNSService.Resolve` | `GET /resolve` | - | - | - | missing |
-| `DNSService.Register` | `POST /register` | - | - | - | missing |
+| `DNSService.AddRecord` | `POST /zones/{zone}/records` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.DeleteRecord` | `DELETE /zones/{zone}/records/{type}/{name}` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.UpdateRecord` | `PUT /zones/{zone}/records` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.ListRecords` | `GET /zones/{zone}/records` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.SignZone` | `POST /zones/{zone}/sign` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.GetDNSSECStatus` | `GET /zones/{zone}/dnssec` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.Resolve` | `GET /resolve` | `(dashboard)/networking/dns/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.Register` | `POST /register` | `(dashboard)/networking/dns/page.tsx` | - | `real-server/dns.spec.ts` | covered |
 
 ## ProvisioningGateway (`provisioning.proto`)
 
@@ -753,7 +753,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | ObjectStorageService | 8 | 0 | 0 | 0 | 0 | 8 |
 | OverlayService | 10 | 2 | 1 | 7 | 0 | 0 |
 | PIVService | 8 | 0 | 0 | 0 | 8 | 0 |
-| DNSService | 13 | 3 | 5 | 5 | 0 | 0 |
+| DNSService | 13 | 13 | 0 | 0 | 0 | 0 |
 | ProvisioningGateway | 4 | 0 | 0 | 0 | 4 | 0 |
 | ProxyService | 14 | 0 | 0 | 14 | 0 | 0 |
 | PXEService | 15 | 3 | 1 | 11 | 0 | 0 |
@@ -765,7 +765,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **122** | **61** | **265** | **50** | **31** |
+| **Total** | **529** | **132** | **56** | **260** | **50** | **31** |
 
 ## Proposed slices
 
