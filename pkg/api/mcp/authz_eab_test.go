@@ -65,7 +65,7 @@ func eabOtherAction(action string) string {
 }
 
 func TestEABToolsCarryGRPCScope(t *testing.T) {
-	permissions := toolPermissionCatalog()
+	permissions := declaredToolPermissions(PlatformTools{})
 	for _, tc := range eabToolScopes {
 		assert.Equal(t, "eab:"+tc.action, permissions[tc.tool], tc.tool)
 	}

@@ -168,7 +168,7 @@ var classifiedIDevIDTools = []classifiedIDevIDTool{
 // TestIDevIDToolsCarryGRPCScope pins each classified IDevID and IAK tool to the
 // scope of its gRPC twin in method_permissions.go.
 func TestIDevIDToolsCarryGRPCScope(t *testing.T) {
-	catalog := toolPermissionCatalog()
+	catalog := declaredToolPermissions(PlatformTools{})
 	for _, tc := range classifiedIDevIDTools {
 		got, ok := catalog[tc.tool]
 		if !ok {

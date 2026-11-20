@@ -274,7 +274,7 @@ var classifiedTPMTools = []classifiedTPMTool{
 // its gRPC twin in method_permissions.go. A drift here is a tool that answers
 // on MCP to a caller gRPC would refuse, or the reverse.
 func TestTPMToolsCarryGRPCScope(t *testing.T) {
-	catalog := toolPermissionCatalog()
+	catalog := declaredToolPermissions(PlatformTools{})
 	for _, tc := range classifiedTPMTools {
 		got, ok := catalog[tc.tool]
 		if !ok {

@@ -191,7 +191,7 @@ func TestDNSTools_RequireTheirGRPCScope(t *testing.T) {
 		"dns_zone_dnssec_status": platformv1.DNSService_GetDNSSECStatus_FullMethodName,
 		"dns_register":           platformv1.DNSService_Register_FullMethodName,
 	}
-	permissions := toolPermissionCatalog()
+	permissions := declaredToolPermissions(PlatformTools{})
 
 	for name, method := range want {
 		tool, ok := dnsTools[name]
