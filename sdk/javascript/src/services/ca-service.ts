@@ -186,7 +186,11 @@ export class CAService extends BaseService {
    * @returns The issued certificate
    */
   async signCSR(request: SignCSRRequest): Promise<ApiResponse<IssueCertificateResponse>> {
-    return this.client.post<IssueCertificateResponse>(this.buildUrl('/sign-csr'), request);
+    // The server issues a certificate on every call: a resend after a lost
+    // response would issue a second one, so this call never retries.
+    return this.client.post<IssueCertificateResponse>(this.buildUrl('/sign-csr'), request, {
+      retry: { enabled: false },
+    });
   }
 
   /**
