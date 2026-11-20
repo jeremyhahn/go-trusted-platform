@@ -21,7 +21,8 @@ export const CAPABILITY_REASON_BLOCKED_INTEGRATION = 'blocked: integration';
 /** One operation the server knows about. */
 export interface Capability {
   op: string;
-  kind: 'service' | 'route' | string;
+  /** 'service' or 'route' today; a newer server may send other kinds. */
+  kind: string;
   service?: string;
   enabled: boolean;
   reason?: string;
