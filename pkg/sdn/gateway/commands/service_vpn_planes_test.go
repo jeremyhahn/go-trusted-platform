@@ -292,3 +292,19 @@ func TestBuildHostRuntime_OperatorDeclaredHubPortKept(t *testing.T) {
 		}
 	}
 }
+
+// Codex #2029 round 2 P1, Tenant Agent ruling 1028 Q2 (b): B2 is preparatory
+// wiring. With the production default (no withHubZoneEnforced), a fully
+// configured WireGuard hub refuses to start with ErrVPNHubZoneUnenforced and
+// builds no plane until destination-zone enforcement (#2093) lands.
+func TestVPNDataPlanes_ProductionDefaultRefusesTheHubUntilZoneEnforcement(t *testing.T) {
+	require.False(t, vpnHubZoneEnforced, "the production default must keep the hub refused until #2093")
+	cfg, hubKey := wireGuardPlaneRun(t, []vpn.DataPlaneKind{vpn.DataPlaneWireGuard}, "kms://vpn/hub0", hubAddress, &stubSecrets{})
+	require.NotNil(t, hubKey, "a valid key-ref and a secret resolver resolve a hub key")
+
+	planes, err := vpnDataPlanes(cfg, hubKey, testLogger())
+	var unenforced *ErrVPNHubZoneUnenforced
+	require.ErrorAs(t, err, &unenforced, "the production default refuses the configured hub")
+	assert.Equal(t, "kms://vpn/hub0", unenforced.KeyRef)
+	assert.Nil(t, planes, "the production default builds no WireGuard plane")
+}
