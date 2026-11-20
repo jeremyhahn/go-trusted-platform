@@ -297,6 +297,9 @@ func NewDeviceRegistrationHook(deviceService DeviceRegistrar, logger *slog.Logge
 // past Installing.
 type PXEIdentityRecorder interface {
 	RecordEnrolledIDevIDFingerprintForMAC(ctx context.Context, mac string, leaf *x509.Certificate) error
+	// Configured reports whether a PXE backend is present. With none, the
+	// hook imposes no PXE profile requirement on an enrolment.
+	Configured() bool
 }
 
 // NewPXEIdentityHook returns NewPXEIdentityHookWithProfiles with no profile
@@ -325,6 +328,11 @@ func NewPXEIdentityHook(recorder PXEIdentityRecorder, logger *slog.Logger) trust
 func NewPXEIdentityHookWithProfiles(recorder PXEIdentityRecorder, profiles devicepkg.ConfigForDeviceFinder, logger *slog.Logger) trustedca.ACMEOrderFinalizeHook {
 	return func(ctx *trustedca.ACMEOrderFinalizeHookContext) error {
 		if !ctx.IsTCGCSR || ctx.Certificate == nil {
+			return nil
+		}
+		// PXE disabled: no PXE record to bind, so no PXE-specific profile
+		// requirement may abort an ordinary TCG enrolment.
+		if recorder == nil || !recorder.Configured() {
 			return nil
 		}
 		reqCtx := ctx.Context

@@ -646,6 +646,9 @@ func TestNewDeviceRegistrationHook_SkipsNilTCGData(t *testing.T) {
 	assert.Empty(t, reg.saveCalls)
 }
 
+// Configured reports a PXE backend: these tests exercise the enabled path.
+func (r *fakePXEIdentityRecorder) Configured() bool { return true }
+
 type fakePXEIdentityRecorder struct {
 	err  error
 	macs []string

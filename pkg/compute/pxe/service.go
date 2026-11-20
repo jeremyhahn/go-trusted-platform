@@ -723,7 +723,9 @@ func (s *service) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial st
 // booting or installing, and refused once the install is complete. It
 // makes no state transition. The fingerprint is fixed for one provisioning
 // attempt: re-recording the same fingerprint is a no-op and a different one
-// is refused, until RetryDevice starts a new attempt and clears it.
+// is refused, until RetryDevice starts a new attempt and clears it; the one
+// exception is a re-enrolment while the device is installing (a certificate
+// delivery that failed after the finalize hook), which replaces it.
 func (s *service) RecordIDevIDFingerprint(ctx context.Context, deviceID, fingerprint string) error {
 	if !s.beginOp() {
 		return ErrServiceNotInitialized{}
@@ -753,7 +755,13 @@ func (s *service) RecordIDevIDFingerprint(ctx context.Context, deviceID, fingerp
 				Reason:    "the IDevID fingerprint is recorded at enrolment, before install completion",
 			}
 		}
-		if d.IDevIDFingerprint != "" && d.IDevIDFingerprint != fingerprint {
+		// The finalize hook records before the CA commits the certificate,
+		// so a storage failure there is followed by a re-enrolment that
+		// issues a different IDevID. While the device is installing it has
+		// reported no certificate in use, so the later fingerprint replaces
+		// the earlier one; the install-complete webhook then accepts only
+		// the IDevID the device actually received.
+		if d.IDevIDFingerprint != "" && d.IDevIDFingerprint != fingerprint && d.State != StateInstalling {
 			return ErrInvalidState{
 				DeviceID: deviceID,
 				State:    string(d.State),

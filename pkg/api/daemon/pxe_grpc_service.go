@@ -117,6 +117,11 @@ func (s *PXEGRPCService) RecordedIDevIDFingerprint(ctx context.Context, mac stri
 // device enrolling across a router or over IPv6 (#1694). A MAC with no PXE
 // device answers codes.NotFound and records nothing; a device past Installing
 // answers codes.FailedPrecondition. A Go method, not a proto RPC.
+// Configured reports whether this service has a PXE backend.
+func (s *PXEGRPCService) Configured() bool {
+	return s != nil && s.pxeService != nil
+}
+
 func (s *PXEGRPCService) RecordEnrolledIDevIDFingerprintForMAC(ctx context.Context, mac string, leaf *x509.Certificate) error {
 	if err := s.requireService(); err != nil {
 		return err
