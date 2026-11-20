@@ -18,6 +18,7 @@ import (
 	"errors"
 	"testing"
 
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
 
@@ -556,6 +557,74 @@ func TestAuthorizeTool_UnscopedPathDecidedByPEP(t *testing.T) {
 		_, err := newChecker(nil).AuthorizeTool(context.Background(), tool, "tok")
 		if err == nil || err.Type != AuthErrorPermissionDenied {
 			t.Fatalf("nil PEP: want permission denied, got %v", err)
+		}
+	})
+}
+
+// declaredTools is a module declaring its MCP tool permissions through the
+// SDK's ModuleMCPToolPermissions extension.
+type declaredTools map[string]quicbaas.Permission
+
+func (d declaredTools) MCPToolPermissions() map[string]quicbaas.Permission { return d }
+
+var _ quicbaas.ModuleMCPToolPermissions = declaredTools(nil)
+
+// TestAuthorizeTool_ModuleDeclaredPermissions pins SPEC row 116 (#1995): the
+// tool's permission is the one its module declares, and the IAM PEP decides it.
+func TestAuthorizeTool_ModuleDeclaredPermissions(t *testing.T) {
+	module := declaredTools{
+		"module_power_tool": quicbaas.Permission("bmc:power"),
+		"module_gated_tool": quicbaas.PermissionIdentityGated,
+	}
+	newChecker := func(pep iam.PEPClient, manager AuthManager) *AuthorizationChecker {
+		return NewAuthorizationChecker(nil, manager, WithPEPClient(pep), WithToolPermissions(module))
+	}
+
+	t.Run("declared permission goes to the PEP", func(t *testing.T) {
+		pep := &recordingPEP{allowed: true}
+		if _, err := newChecker(pep, legacyCaller()).AuthorizeTool(context.Background(), "module_power_tool", "tok"); err != nil {
+			t.Fatalf("declared tool: want nil error, got %v", err)
+		}
+		if pep.calls != 1 || pep.last == nil {
+			t.Fatalf("PEP calls = %d, want 1", pep.calls)
+		}
+		if pep.last.Resource != "bmc" || pep.last.Action != "power" {
+			t.Errorf("resource/action = %q/%q, want bmc/power", pep.last.Resource, pep.last.Action)
+		}
+	})
+
+	t.Run("undeclared tool is denied", func(t *testing.T) {
+		pep := &recordingPEP{allowed: true}
+		_, err := newChecker(pep, legacyCaller()).AuthorizeTool(context.Background(), "vtpm_list", "tok")
+		if err == nil || err.Type != AuthErrorToolNotClassified {
+			t.Fatalf("undeclared tool: want tool-not-classified, got %v", err)
+		}
+		if pep.calls != 0 {
+			t.Errorf("PEP calls = %d, want 0", pep.calls)
+		}
+	})
+
+	t.Run("identity-gated skips the PEP", func(t *testing.T) {
+		pep := &recordingPEP{allowed: false}
+		if _, err := newChecker(pep, legacyCaller()).AuthorizeTool(context.Background(), "module_gated_tool", "tok"); err != nil {
+			t.Fatalf("identity-gated with a valid token: want nil error, got %v", err)
+		}
+		if pep.calls != 0 {
+			t.Errorf("PEP calls = %d, want 0", pep.calls)
+		}
+	})
+
+	t.Run("identity-gated needs an identity", func(t *testing.T) {
+		_, err := newChecker(&recordingPEP{allowed: true}, legacyCaller()).AuthorizeTool(context.Background(), "module_gated_tool", "")
+		if err == nil || err.Type != AuthErrorMissingToken {
+			t.Fatalf("identity-gated without a token: want missing token, got %v", err)
+		}
+	})
+
+	t.Run("scopes_supported comes from the declaration", func(t *testing.T) {
+		got := advertisedScopes(newChecker(nil, nil).toolPermissions)
+		if len(got) != 1 || got[0] != scopeForToolPermission("bmc:power") {
+			t.Errorf("advertised scopes = %v, want only the scope of bmc:power", got)
 		}
 	})
 }
