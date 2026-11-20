@@ -472,6 +472,11 @@ func TestFinalizeIncoming_FailedCommitAdoptsNothing(t *testing.T) {
 	require.NoError(t, err)
 	require.ErrorIs(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true), ErrMigrationReceiveFailed)
 
+	// The failed finalize reaps the receiver's process: nothing is left
+	// running without an owner, and a retry finds no receiver.
+	assert.True(t, recv.aborted, "a failed commit must abort the receiver so its process is killed and waited")
+	require.ErrorIs(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true), ErrReceiverNotFound)
+
 	_, err = orch.Get(context.Background(), "vm-migrated")
 	require.ErrorIs(t, err, ErrInstanceNotFound)
 	list, err := orch.List(context.Background(), nil)
