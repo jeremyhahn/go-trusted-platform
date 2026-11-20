@@ -252,23 +252,6 @@ func (m *AuthzMiddleware) buildCacheKey(session IAMSession, action, resource str
 	return session.TenantID() + ":" + session.UserID() + ":" + action + ":" + resource
 }
 
-// cleanupCache periodically removes expired cache entries.
-func (m *AuthzMiddleware) cleanupCache() {
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		m.cacheMutex.Lock()
-		now := time.Now()
-		for key, entry := range m.cache {
-			if now.After(entry.expiresAt) {
-				delete(m.cache, key)
-			}
-		}
-		m.cacheMutex.Unlock()
-	}
-}
-
 // ClearCache clears all cached authorization decisions.
 func (m *AuthzMiddleware) ClearCache() {
 	if !m.config.CacheDecisions {
