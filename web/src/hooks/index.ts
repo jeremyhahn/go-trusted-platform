@@ -86,16 +86,10 @@ export type { User, AuthContextType } from '@/contexts/AuthContext';
 export { useToast, toast, dismissToast } from './use-toast';
 export {
   useInvitationLookup,
-  fetchInvitation,
-  fetchInvitationByToken,
-  acceptInvitation,
+  toInvitationDetail,
   isPendingInvitation,
-} from './use-invitation-lookup';
-export type {
-  InvitationDetail,
-  AcceptInvitationResult,
-  InvitationLookupState,
-} from './use-invitation-lookup';
+} from "./use-invitation-lookup";
+export type { InvitationDetail, InvitationLookupState } from "./use-invitation-lookup";
 export { usePlatformDaemon } from './use-platform-daemon';
 export type { DaemonServiceAction } from './use-platform-daemon';
 export type { Toast, UseToastReturn } from './use-toast';

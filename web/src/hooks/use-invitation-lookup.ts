@@ -1,15 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { getBaseUrl } from "@/utils/getBaseUrl";
-import { getCookie } from "@/utils/cookie";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useInvitation } from "trusted-platform-sdk";
 
 /**
- * Invitation detail, lookup by token and accept (#1753).
+ * Invitation detail and lookup by token (#1753, #2056), through the SDK
+ * InvitationService, never a hand-written fetch.
  *
  * - GetInvitation         GET  /api/v1/invitations/{id}            (authenticated)
  * - GetInvitationByToken  GET  /api/v1/invitations/token/{token}   (public)
- * - AcceptInvitation      POST /api/v1/invitations/accept          (public)
+ *
+ * AcceptInvitation (POST /api/v1/invitations/accept) is deliberately not
+ * offered here: the server marks the invitation accepted without adding the
+ * user to the tenant, so joining goes through the passkey sign-up
+ * (RegisterInvitedUser) and the accept control is gated off
+ * (app/(auth)/invite/[token]/accept-invitation-gate.tsx).
  */
 
 export interface InvitationDetail {
@@ -23,26 +28,12 @@ export interface InvitationDetail {
   tenant_name?: string;
 }
 
-export interface AcceptInvitationResult {
-  success: boolean;
-  message?: string;
-  tenantId?: string;
-  userId?: string;
-}
-
-async function readError(response: Response): Promise<string> {
-  try {
-    const body = (await response.json()) as { message?: string; error?: string };
-    return body.message || body.error || `Request failed (${response.status})`;
-  } catch {
-    return `Request failed (${response.status})`;
-  }
-}
-
-function unwrapInvitation(body: unknown): InvitationDetail {
-  // The gateway answers with its REST envelope
-  // {code, success, payload: {invitation, timestamp}}; a bare {invitation}
-  // is accepted too. The envelope itself is never the invitation.
+/**
+ * Reads the invitation out of what the SDK returns ({invitation}) or a raw
+ * REST envelope ({code, success, payload: {invitation, timestamp}}), and
+ * normalizes the protojson camelCase fields to snake_case.
+ */
+export function toInvitationDetail(body: unknown): InvitationDetail {
   const record = (body ?? {}) as {
     invitation?: Record<string, unknown>;
     payload?: { invitation?: Record<string, unknown> };
@@ -51,12 +42,8 @@ function unwrapInvitation(body: unknown): InvitationDetail {
   if (!invitation) {
     throw new Error("The server returned no invitation");
   }
-  // GetInvitation marshals its protobuf with protojson field names
-  // (expiresAt, createdAt, tenantId, tenantName); InvitationDetail and
-  // the pages that read it use snake_case.
   const { expiresAt, createdAt, tenantId, tenantName, ...rest } = invitation;
-  const pick = (snake: unknown, camel: unknown) =>
-    (snake ?? camel) as string | undefined;
+  const pick = (snake: unknown, camel: unknown) => (snake ?? camel) as string | undefined;
   const detail = { ...rest } as unknown as InvitationDetail;
   const fields: Array<[keyof InvitationDetail, string | undefined]> = [
     ["expires_at", pick(rest.expires_at, expiresAt)],
@@ -82,48 +69,6 @@ export function isPendingInvitation(status: string | undefined | null): boolean 
   return s === "pending" || s === "invitation_status_pending";
 }
 
-/** GetInvitation: reads one invitation by its id with the session bearer. */
-export async function fetchInvitation(id: string): Promise<InvitationDetail> {
-  const jwt = getCookie("jwt");
-  const response = await fetch(
-    `${getBaseUrl()}/api/v1/invitations/${encodeURIComponent(id)}`,
-    { headers: jwt ? { Authorization: `Bearer ${jwt}` } : {} }
-  );
-  if (!response.ok) {
-    throw new Error(await readError(response));
-  }
-  return unwrapInvitation(await response.json());
-}
-
-/** GetInvitationByToken: public lookup of the invitation a token names. */
-export async function fetchInvitationByToken(token: string): Promise<InvitationDetail> {
-  const response = await fetch(
-    `${getBaseUrl()}/api/v1/invitations/token/${encodeURIComponent(token)}`
-  );
-  if (!response.ok) {
-    throw new Error(await readError(response));
-  }
-  return unwrapInvitation(await response.json());
-}
-
-/** AcceptInvitation: public accept of the invitation a token names. */
-export async function acceptInvitation(
-  token: string,
-  userId: string
-): Promise<AcceptInvitationResult> {
-  // AcceptInvitationRequest is {token, user_id}.
-  const body = { token, user_id: userId };
-  const response = await fetch(`${getBaseUrl()}/api/v1/invitations/accept`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    throw new Error(await readError(response));
-  }
-  return (await response.json()) as AcceptInvitationResult;
-}
-
 export interface InvitationLookupState {
   invitation: InvitationDetail | null;
   loading: boolean;
@@ -131,12 +76,27 @@ export interface InvitationLookupState {
   reload: () => void;
 }
 
+type LookupResponse = {
+  success: boolean;
+  data?: unknown;
+  error?: { message?: string };
+};
+
 /**
- * Loads an invitation either by id (`{ id }`) or by token (`{ token }`).
- * With neither set it stays idle and reports an error.
+ * Loads an invitation either by id (`{ id }`, GetInvitation) or by token
+ * (`{ token }`, GetInvitationByToken). With neither set it stays idle and
+ * reports an error.
  */
 export function useInvitationLookup(key: { id?: string | null; token?: string | null }): InvitationLookupState {
   const { id, token } = key;
+  const { service } = useInvitation();
+  // The service object may be rebuilt per render; the effect reads the
+  // latest one without re-running on it.
+  const serviceRef = useRef(service);
+  useEffect(() => {
+    serviceRef.current = service;
+  }, [service]);
+
   const [nonce, setNonce] = useState(0);
   // The settled answer, tagged with the request it answers, so loading is
   // derived (no synchronous setState in the effect).
@@ -156,8 +116,15 @@ export function useInvitationLookup(key: { id?: string | null; token?: string | 
       return;
     }
     let cancelled = false;
-    const request = id ? fetchInvitation(id) : fetchInvitationByToken(token as string);
+    const svc = serviceRef.current;
+    const request = (id ? svc.get(id) : svc.getByToken(token as string)) as Promise<LookupResponse>;
     request
+      .then((res) => {
+        if (!res.success) {
+          throw new Error(res.error?.message || "Failed to load invitation");
+        }
+        return toInvitationDetail(res.data);
+      })
       .then((found) => {
         if (!cancelled) setResult({ requestKey, invitation: found, error: null });
       })

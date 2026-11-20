@@ -72,7 +72,7 @@ test.describe('invitation operations (#2056)', () => {
     try {
       const page = await context.newPage();
       await page.goto(`/invite/no-such-token-${Date.now()}`);
-      await expect(page.getByRole('alert')).toBeVisible();
+      await expect(page.getByText(/invalid invitation/i)).toBeVisible();
     } finally {
       await context.close();
     }

@@ -18,6 +18,7 @@ import {
 import { toInvitationView, useInvitationByToken } from "@/hooks";
 import { useSessionToken } from "@/hooks/use-session-token";
 import { decodeJWT } from "@/utils/jwt";
+import { AcceptInvitationGate } from "./accept-invitation-gate";
 
 // signedInUserId returns the numeric user ID of the signed-in session, or
 // null when there is no session or its subject is not a decimal user ID.
@@ -106,6 +107,7 @@ export default function InviteAcceptClient({ params }: { params: Promise<{ token
             an invitation link yet; ask the workspace administrator to add you, or sign out and
             create an account with a passkey for {invitation.email}.
           </p>
+          <AcceptInvitationGate />
         </CardContent>
       ) : canAccept ? (
         <CardFooter>
