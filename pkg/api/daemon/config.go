@@ -530,6 +530,12 @@ func (c *Config) validateGRPCAuthorization() error {
 // refusal leaves nothing running (PR #2000 review); selectQUICAuth keeps its
 // own check as defense in depth.
 func (c *Config) validateQUICAuthorization() error {
+	// A certificate principal is decided by the IAM PEP (#2016), which the
+	// embedded quicbaas SDK cannot do: refuse it as selectQUICAuth does,
+	// whatever the token mode, since the mTLS branch is taken first.
+	if c.EnableQUIC && c.EnableMTLS && c.quicbaasEmbedded() {
+		return ErrEmbeddedPEPUnavailable{Transport: transportQUIC, MTLS: true}
+	}
 	if c.quicAuthorizesThroughPEP() && c.quicbaasEmbedded() {
 		return ErrEmbeddedPEPUnavailable{Transport: transportQUIC}
 	}
