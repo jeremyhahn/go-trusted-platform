@@ -15,10 +15,13 @@ package quicbaas
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/stretchr/testify/require"
@@ -95,4 +98,100 @@ func TestPXEDeviceStore_Errors_Mock(t *testing.T) {
 	mock.ListError = errors.New("storage unavailable")
 	_, err := store.List(ctx)
 	require.Error(t, err)
+}
+
+// pagingStorage wraps MockStorage and serves List from listFn, failing
+// after maxCalls so a List that loops ends the test instead of hanging.
+type pagingStorage struct {
+	*MockStorage
+	listFn   func(pageToken string) ([]*service.Entity, string)
+	calls    int
+	maxCalls int
+}
+
+func (p *pagingStorage) List(_ context.Context, _ string, _ uint64, pageToken string, _ uint64) ([]*service.Entity, string, error) {
+	p.calls++
+	if p.calls > p.maxCalls {
+		return nil, "", fmt.Errorf("pagingStorage: List called more than %d times", p.maxCalls)
+	}
+	page, next := p.listFn(pageToken)
+	return page, next, nil
+}
+
+func pxeDeviceEntities(t *testing.T, from, to int) []*service.Entity {
+	t.Helper()
+	entities := make([]*service.Entity, 0, to-from)
+	for i := from; i < to; i++ {
+		id := fmt.Sprintf("dev-%04d", i)
+		data, err := json.Marshal(&pxe.DeviceInfo{ID: id})
+		require.NoError(t, err)
+		entities = append(entities, &service.Entity{EntityType: entityTypePXEDevice, ID: pxeDeviceEntityID(id), Data: data})
+	}
+	return entities
+}
+
+func requireUniquePXEDevices(t *testing.T, devices []*pxe.DeviceInfo, want int) {
+	t.Helper()
+	require.Len(t, devices, want)
+	seen := make(map[string]struct{}, len(devices))
+	for _, d := range devices {
+		_, dup := seen[d.ID]
+		require.False(t, dup, "duplicate device %s", d.ID)
+		seen[d.ID] = struct{}{}
+	}
+}
+
+func TestPXEDeviceStore_List_Paging(t *testing.T) {
+	mock := NewMockStorage()
+	all := pxeDeviceEntities(t, 0, 1001)
+
+	t.Run("aggregated response keeps the first batch's token", func(t *testing.T) {
+		// The pinned go-quicbaas v0.12.0-alpha embedded transport ignores
+		// the page token: every call returns every record and "1000".
+		fake := &pagingStorage{MockStorage: mock, maxCalls: 5, listFn: func(string) ([]*service.Entity, string) {
+			return all, "1000"
+		}}
+		devices, err := NewPXEDeviceStore(fake, logging.DefaultLogger()).List(context.Background())
+		require.NoError(t, err)
+		requireUniquePXEDevices(t, devices, 1001)
+		require.LessOrEqual(t, fake.calls, 2)
+	})
+
+	t.Run("repeated token stops the walk", func(t *testing.T) {
+		fake := &pagingStorage{MockStorage: mock, maxCalls: 5, listFn: func(token string) ([]*service.Entity, string) {
+			if token == "" {
+				return all[:500], "p1"
+			}
+			return all[400:900], "p1"
+		}}
+		devices, err := NewPXEDeviceStore(fake, logging.DefaultLogger()).List(context.Background())
+		require.NoError(t, err)
+		requireUniquePXEDevices(t, devices, 900)
+		require.Equal(t, 2, fake.calls)
+	})
+
+	t.Run("true paging reads every page", func(t *testing.T) {
+		fake := &pagingStorage{MockStorage: mock, maxCalls: 5, listFn: func(token string) ([]*service.Entity, string) {
+			if token == "" {
+				return all[:1000], "1000"
+			}
+			require.Equal(t, "1000", token)
+			return all[1000:], ""
+		}}
+		devices, err := NewPXEDeviceStore(fake, logging.DefaultLogger()).List(context.Background())
+		require.NoError(t, err)
+		requireUniquePXEDevices(t, devices, 1001)
+		require.Equal(t, 2, fake.calls)
+	})
+
+	t.Run("cancelled context stops the walk", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		fake := &pagingStorage{MockStorage: mock, maxCalls: 5, listFn: func(string) ([]*service.Entity, string) {
+			return all[:1], ""
+		}}
+		_, err := NewPXEDeviceStore(fake, logging.DefaultLogger()).List(ctx)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Zero(t, fake.calls)
+	})
 }
