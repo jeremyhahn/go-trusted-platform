@@ -53,6 +53,11 @@ func withHubZoneInstall(t *testing.T, install func(cfg *ServeConfig, logger *slo
 	t.Cleanup(func() { installVPNHubZoneEnforcement = prev })
 }
 
+// installedHubZones is an install that succeeds with e.
+func installedHubZones(e *vpnHubZoneEnforcement) func(*ServeConfig, *slog.Logger) (*vpnHubZoneEnforcement, error) {
+	return func(*ServeConfig, *slog.Logger) (*vpnHubZoneEnforcement, error) { return e, nil }
+}
+
 func TestVPNHubZone_ClassifiesHubIngressIntoTheManagementVPNZone(t *testing.T) {
 	z, ok := classifyVPNHubIngress(vpnHubInterface)
 	require.True(t, ok)
