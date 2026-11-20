@@ -61,19 +61,6 @@ export function useTenantLifecycle(): UseTenantLifecycleResult {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const run = useCallback(async (action: () => Promise<string | null>) => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      setNotice(await action());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Request failed');
-    } finally {
-      setBusy(false);
-    }
-  }, []);
-
   const requireTenant = useCallback((): Tenant => {
     if (!tenant) throw new Error('Look up a tenant first');
     return tenant;
@@ -84,7 +71,9 @@ export function useTenantLifecycle(): UseTenantLifecycleResult {
   // finishes last never becomes the target of remove, suspend or rotation.
   // Mutations capture the same generation when they start and drop their
   // selection, DEK and quota updates when a lookup has moved the selection
-  // meanwhile, so a slow mutation of tenant A never re-selects A.
+  // meanwhile, so a slow mutation of tenant A never re-selects A. run() drops
+  // the busy, notice and error updates of a mutation once a lookup has moved
+  // the selection, since that lookup owns them (#2023 F28).
   const lookupGen = useRef(0);
 
   /** Captures the selection generation; the returned check is true while it is unchanged. */
@@ -92,6 +81,24 @@ export function useTenantLifecycle(): UseTenantLifecycleResult {
     const gen = lookupGen.current;
     return () => gen === lookupGen.current;
   }, []);
+
+  const run = useCallback(
+    async (action: () => Promise<string | null>) => {
+      const current = selection();
+      setBusy(true);
+      setError(null);
+      setNotice(null);
+      try {
+        const result = await action();
+        if (current()) setNotice(result);
+      } catch (err) {
+        if (current()) setError(err instanceof Error ? err.message : 'Request failed');
+      } finally {
+        if (current()) setBusy(false);
+      }
+    },
+    [selection]
+  );
 
   const refresh = useCallback(
     async (id: string, current: () => boolean) => {
