@@ -439,8 +439,8 @@ func (h *Handlers) UpdateKeyStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ListKeyVersions handles GET /api/v1/kms/keys/{name}/versions.
-func (h *Handlers) ListKeyVersions(w http.ResponseWriter, r *http.Request) {
+// GetKeyVersions handles GET /api/v1/kms/keys/{name}/versions.
+func (h *Handlers) GetKeyVersions(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureKMS(w, r) {
 		return
 	}
