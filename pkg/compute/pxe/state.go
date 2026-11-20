@@ -15,6 +15,7 @@ package pxe
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"net"
 	"sync"
@@ -57,11 +58,84 @@ type StateManager struct {
 	// now is the time source for every timestamp the state machine stamps.
 	// time.Now in production; tests inject a clock they step by hand (#284).
 	now func() time.Time
+
+	// store, when set, receives every device change after the in-memory
+	// update, so devices survive a restart (#2028). storeMu orders the
+	// writes: each one sends the device's current entry, never a stale one.
+	store   DeviceStore
+	storeMu sync.Mutex
+}
+
+// DeviceStore persists PXE devices in the deployment datastore
+// (docs/SPEC.md:23, #2028). Put stores the whole device record (state,
+// retry count, events and identity binding) under its ID; Delete removes
+// it; List returns every stored device for Load.
+type DeviceStore interface {
+	Put(ctx context.Context, device *DeviceInfo) error
+	Delete(ctx context.Context, deviceID string) error
+	List(ctx context.Context) ([]*DeviceInfo, error)
+}
+
+// StateManagerOption configures a StateManager.
+type StateManagerOption func(*StateManager)
+
+// WithDeviceStore writes every device change through to store; call Load
+// to refill the manager from it when the backend starts.
+func WithDeviceStore(store DeviceStore) StateManagerOption {
+	return func(sm *StateManager) {
+		sm.store = store
+	}
+}
+
+// Load refills the manager from its DeviceStore: every stored device is
+// registered by ID and MAC address in the state it was stored in. Without a
+// store Load does nothing.
+func (sm *StateManager) Load(ctx context.Context) error {
+	if sm.store == nil {
+		return nil
+	}
+	devices, err := sm.store.List(ctx)
+	if err != nil {
+		return fmt.Errorf("pxe: load devices from store: %w", err)
+	}
+	for _, device := range devices {
+		if device == nil || device.ID == "" || len(device.MACAddress) == 0 {
+			continue
+		}
+		sm.devices.Store(device.ID, &deviceEntry{device: device, version: 1})
+		sm.byMAC.Store(device.MACAddress.String(), device.ID)
+	}
+	return nil
+}
+
+// persist writes the device's current record to the store, or deletes it
+// when the device is no longer registered. A nil store is a no-op.
+func (sm *StateManager) persist(deviceID string) error {
+	if sm.store == nil {
+		return nil
+	}
+	sm.storeMu.Lock()
+	defer sm.storeMu.Unlock()
+	ctx := context.Background()
+	if entryVal, ok := sm.devices.Load(deviceID); ok {
+		if err := sm.store.Put(ctx, entryVal.(*deviceEntry).device); err != nil {
+			return fmt.Errorf("pxe: store device %s: %w", deviceID, err)
+		}
+		return nil
+	}
+	if err := sm.store.Delete(ctx, deviceID); err != nil {
+		return fmt.Errorf("pxe: delete stored device %s: %w", deviceID, err)
+	}
+	return nil
 }
 
 // NewStateManager creates a new StateManager instance.
-func NewStateManager() *StateManager {
-	return newStateManager(time.Now)
+func NewStateManager(opts ...StateManagerOption) *StateManager {
+	sm := newStateManager(time.Now)
+	for _, opt := range opts {
+		opt(sm)
+	}
+	return sm
 }
 
 // newStateManager creates a state manager that stamps devices and events with
@@ -150,7 +224,7 @@ func (sm *StateManager) Register(device *DeviceInfo) error {
 		}
 	}
 
-	return nil
+	return sm.persist(device.ID)
 }
 
 // Unregister removes a device from the state manager.
@@ -172,7 +246,7 @@ func (sm *StateManager) Unregister(deviceID string) error {
 	sm.devices.Delete(deviceID)
 	sm.byMAC.Delete(macKey)
 
-	return nil
+	return sm.persist(deviceID)
 }
 
 // Get retrieves a device by its ID.
@@ -309,7 +383,7 @@ func (sm *StateManager) Transition(deviceID string, newState ProvisioningState, 
 			emitted := *event
 			emitted.Details = maps.Clone(event.Details)
 			sm.emitEvent(&emitted)
-			return nil
+			return sm.persist(deviceID)
 		}
 
 		// Reload and retry if CAS failed
@@ -376,7 +450,7 @@ func (sm *StateManager) UpdateDevice(deviceID string, fn func(*DeviceInfo) error
 
 		// Attempt atomic swap
 		if sm.devices.CompareAndSwap(deviceID, entry, newEntry) {
-			return nil
+			return sm.persist(deviceID)
 		}
 		// CAS failed, retry
 	}
