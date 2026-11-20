@@ -167,7 +167,8 @@ func TestEngine_AuthenticatePortErrorPaths(t *testing.T) {
 		// Create an expired certificate — validation fails before extraction
 		cert := createTestCertificate(t, x509.Certificate{
 			Subject: pkix.Name{
-				Organization: []string{"tenant-1"},
+				OrganizationalUnit: []string{"tenant-1"},
+				Organization:       []string{"tenant-1"},
 			},
 			NotBefore: time.Now().Add(-48 * time.Hour),
 			NotAfter:  time.Now().Add(-24 * time.Hour),
@@ -220,7 +221,8 @@ func TestEngine_AuthenticatePortErrorPaths(t *testing.T) {
 		// (Zone="" and VLAN=0) → "policy application failed: invalid VLAN ID".
 		cert := createTestCertificate(t, x509.Certificate{
 			Subject: pkix.Name{
-				Organization: []string{"tenant-1"},
+				OrganizationalUnit: []string{"tenant-1"},
+				Organization:       []string{"tenant-1"},
 			},
 		})
 
@@ -346,7 +348,8 @@ func TestEngine_AuthenticatePortStateRecording(t *testing.T) {
 		// Create an expired certificate — validation fails before extraction
 		cert := createTestCertificate(t, x509.Certificate{
 			Subject: pkix.Name{
-				Organization: []string{"tenant-1"},
+				OrganizationalUnit: []string{"tenant-1"},
+				Organization:       []string{"tenant-1"},
 			},
 			NotBefore: time.Now().Add(-48 * time.Hour),
 			NotAfter:  time.Now().Add(-24 * time.Hour),

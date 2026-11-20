@@ -20,6 +20,7 @@ import (
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 )
 
 // tokenPrincipal is the caller a validated token names — the IAM subject a
@@ -52,6 +53,17 @@ func (v *grpcTokenValidator) ResolvePrincipal(ctx context.Context, token string)
 		return nil, ErrTokenValidationFailed{}
 	}
 	return &tokenPrincipal{Subject: resp.UserID, Roles: resp.Roles}, nil
+}
+
+// TokenPrincipal implements grpc.PrincipalTokenValidator: the gRPC
+// interceptor's legacy path binds the principal and tenant a local token names,
+// so tenant-scoped RPCs see the caller (SPEC row 109).
+func (v *grpcTokenValidator) TokenPrincipal(ctx context.Context, token string) (*platformtoken.AuthorizedContext, error) {
+	p, err := v.ResolvePrincipal(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	return &platformtoken.AuthorizedContext{Subject: p.Subject, TenantID: p.TenantID, Roles: p.Roles}, nil
 }
 
 // iamTokenAuthorizer is the QUIC AuthorizationChecker for tokens that carry no

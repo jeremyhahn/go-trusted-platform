@@ -167,11 +167,11 @@ func newTestIssuer(t *testing.T) *testIssuer {
 }
 
 // issueClient issues a TLS client certificate with the given common name for pub.
-func (ca *testIssuer) issueClient(t *testing.T, cn string, pub crypto.PublicKey) *x509.Certificate {
+func (ca *testIssuer) issueClient(t *testing.T, cn string, pub crypto.PublicKey, ou ...string) *x509.Certificate {
 	t.Helper()
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: cn},
+		Subject:      pkix.Name{CommonName: cn, OrganizationalUnit: ou},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
