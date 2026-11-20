@@ -86,3 +86,78 @@ describe('useKmsOps', () => {
     expect(result.current.error).toBe('backend unavailable');
   });
 });
+
+describe('useKmsOps batch and rewrap (#2057)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('batch encrypt sends one /encrypt/{name} call per item, in order', async () => {
+    let n = 0;
+    const seen = stubFetch(() => ({ status: 200, json: { key_id: 'k', version: 1, ciphertext: `c${n++}` } }));
+    const { result } = renderHook(() => useKmsOps());
+    let out: unknown;
+    await act(async () => {
+      out = await result.current.batchEncrypt('k/1', ['one', 'two']);
+    });
+    expect(seen.map((s) => `${s.method} ${s.url}`)).toEqual([
+      'POST /api/v1/kms/encrypt/k%2F1',
+      'POST /api/v1/kms/encrypt/k%2F1',
+    ]);
+    expect(seen.map((s) => s.body)).toEqual([
+      { plaintext: textToBase64('one') },
+      { plaintext: textToBase64('two') },
+    ]);
+    expect(out).toEqual([
+      { ciphertext: 'c0', version: 1 },
+      { ciphertext: 'c1', version: 1 },
+    ]);
+  });
+
+  it('batch decrypt returns the decoded plaintext of every item', async () => {
+    const seen = stubFetch(() => ({ status: 200, json: { plaintext: textToBase64('hi') } }));
+    const { result } = renderHook(() => useKmsOps());
+    let out: unknown;
+    await act(async () => {
+      out = await result.current.batchDecrypt('k', ['AAA=', 'AQE=']);
+    });
+    expect(seen.map((s) => `${s.method} ${s.url}`)).toEqual([
+      'POST /api/v1/kms/decrypt/k',
+      'POST /api/v1/kms/decrypt/k',
+    ]);
+    expect(seen[1].body).toEqual({ ciphertext: 'AQE=' });
+    expect(out).toEqual(['hi', 'hi']);
+  });
+
+  it('a failed batch item fails the batch with the server message', async () => {
+    let n = 0;
+    stubFetch(() =>
+      n++ === 0
+        ? { status: 200, json: { ciphertext: 'c0', version: 1 } }
+        : { status: 403, json: { message: 'key disabled' } }
+    );
+    const { result } = renderHook(() => useKmsOps());
+    let out: unknown = 'unset';
+    await act(async () => {
+      out = await result.current.batchEncrypt('k', ['a', 'b']);
+    });
+    expect(out).toBeNull();
+    expect(result.current.error).toBe('key disabled');
+  });
+
+  it('rewrap posts the ciphertext to /rewrap/{name}', async () => {
+    const seen = stubFetch(() => ({
+      status: 200,
+      json: { key_id: 'k/1', old_version: 1, new_version: 2, ciphertext: 'Zm9v' },
+    }));
+    const { result } = renderHook(() => useKmsOps());
+    let out: unknown;
+    await act(async () => {
+      out = await result.current.rewrap('k/1', 'AAE=');
+    });
+    expect(seen).toEqual([
+      { url: '/api/v1/kms/rewrap/k%2F1', method: 'POST', body: { ciphertext: 'AAE=' } },
+    ]);
+    expect(out).toEqual({ key_id: 'k/1', old_version: 1, new_version: 2, ciphertext: 'Zm9v' });
+  });
+});
