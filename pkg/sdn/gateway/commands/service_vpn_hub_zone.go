@@ -97,18 +97,43 @@ func compileVPNHubZoneEnforcement(zones []zone.ZoneConfig) (*vpnHubZoneEnforceme
 	return newVPNHubZoneEnforcement(zone.CompileMatrix(zones)), nil
 }
 
-// installVPNHubZoneEnforcement installs the hub's destination-zone
-// enforcement from the configuration's SDN zones. vpnDataPlanes builds the
-// hub only when it succeeds. A variable so tests can make it fail.
-var installVPNHubZoneEnforcement = func(cfg *ServeConfig, logger *slog.Logger) (*vpnHubZoneEnforcement, error) {
-	if cfg == nil || cfg.SDN == nil {
-		return nil, errors.New("no SDN configuration")
-	}
-	e, err := compileVPNHubZoneEnforcement(cfg.SDN.ResolvedZones())
+// errVPNHubNoForwardFilter is the production forwarding-path filter
+// install's refusal: no filter in pkg/sdn/gateway can apply Allow to traffic
+// forwarded from vpn-hub0 yet. The host filter renders only an input-hook
+// chain, and the compiled zone flows classify by VLAN and destination subnet,
+// not by an L3 ingress device or a lease's source address (docs/plans/1698.md
+// B3). Until one exists the hub stays refused (Tenant Agent ruling 1028).
+var errVPNHubNoForwardFilter = errors.New("no forwarding-path filter for " + vpnHubInterface + " exists yet")
+
+// installVPNHubForwardFilter installs the filter on the kernel forwarding
+// path of vpn-hub0 that drops whatever e.Allow refuses. A variable so tests
+// can stand one in; the production default fails closed.
+var installVPNHubForwardFilter = func(*vpnHubZoneEnforcement, *slog.Logger) error {
+	return errVPNHubNoForwardFilter
+}
+
+// installVPNHubZones compiles the enforcement from zones and installs it on
+// the forwarding path; it returns the enforcement only when both succeed.
+func installVPNHubZones(zones []zone.ZoneConfig, logger *slog.Logger) (*vpnHubZoneEnforcement, error) {
+	e, err := compileVPNHubZoneEnforcement(zones)
 	if err != nil {
+		return nil, err
+	}
+	if err := installVPNHubForwardFilter(e, logger); err != nil {
 		return nil, err
 	}
 	logger.Info("The WireGuard hub's destination zones are enforced through the compiled zone matrix",
 		slog.String("ingress", vpnHubInterface), slog.String("zone", string(vpnHubZone)))
 	return e, nil
+}
+
+// installVPNHubZoneEnforcement installs the hub's destination-zone
+// enforcement from the configuration's SDN zones: the compiled matrix and the
+// vpn-hub0 forwarding-path filter. vpnDataPlanes builds the hub only when it
+// succeeds. A variable so tests can stand one in.
+var installVPNHubZoneEnforcement = func(cfg *ServeConfig, logger *slog.Logger) (*vpnHubZoneEnforcement, error) {
+	if cfg == nil || cfg.SDN == nil {
+		return nil, errors.New("no SDN configuration")
+	}
+	return installVPNHubZones(cfg.SDN.ResolvedZones(), logger)
 }
