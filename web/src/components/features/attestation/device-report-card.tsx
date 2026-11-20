@@ -38,14 +38,17 @@ export function DeviceReportCard({ deviceId }: DeviceReportCardProps) {
   const [state, setState] = useState<DeviceReportState | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const response = await attestation.getDeviceReport(deviceId);
-      setState(classifyDeviceReport(response));
-    } catch (err) {
-      setState({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
-    }
-  }, [attestation, deviceId]);
+  // load settles the report read into state from its promise callbacks, so
+  // the mount effect starts it without a synchronous setState.
+  const load = useCallback(
+    () =>
+      attestation.getDeviceReport(deviceId).then(
+        (response) => setState(classifyDeviceReport(response)),
+        (err: unknown) =>
+          setState({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
+      ),
+    [attestation, deviceId]
+  );
 
   useEffect(() => {
     void load();
