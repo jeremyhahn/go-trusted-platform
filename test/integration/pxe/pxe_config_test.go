@@ -23,6 +23,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	pxesvc "github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
@@ -92,6 +93,12 @@ func TestPXEIntegrationConfigEnablesPXE(t *testing.T) {
 	svc, err := cfg.PXE.ToServiceConfig(integrationPlan(t))
 	require.NoError(t, err)
 	require.NotNil(t, svc)
+
+	// The pxe leg's iPXE HTTP server must not take the ipxe suite's 8080 on
+	// the shared host network.
+	require.NotZero(t, cfg.PXE.HTTPPort, "the overlay sets http-port")
+	require.NotEqual(t, ipxe.DefaultHTTPPort, cfg.PXE.HTTPPort, "the overlay's http-port is not the ipxe default")
+	require.Equal(t, cfg.PXE.HTTPPort, svc.IPXEConfig.HTTPPort)
 }
 
 // TestPXEIntegrationTargetVLANIsInThePlan requires the authorize cases'
