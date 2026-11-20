@@ -3378,11 +3378,11 @@ func (d *Daemon) MCPServiceProvider() *MCPServiceProvider {
 // MCP cluster tools all call.
 // A nil svc clears it.
 //
-// NOTHING CALLS THIS IN PRODUCTION, in any build. There is no tagged
-// wiring that constructs a *ClusterService and injects it here, so every
-// cluster operation reports the service as not configured — with -tags
-// cluster exactly as without it. Do not read the build tag as the
-// difference. See #334.
+// serve (and every embedded host) sets it through appbackends.WireSDKBackends
+// with a servicer over the embedded go-quicbaas service, which reads the Raft
+// cluster that service already runs (status, nodes, leader). Join and Leave
+// still answer Unavailable until runtime membership is wired. The
+// build-tagged *ClusterService is not what is injected here. See #334.
 func (d *Daemon) SetClusterService(svc ClusterServicer) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

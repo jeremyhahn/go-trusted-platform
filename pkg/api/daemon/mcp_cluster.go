@@ -32,10 +32,10 @@ import (
 // ClusterServicer: an MCP platform_cluster_status runs the exact code path of
 // a gRPC GetStatus.
 //
-// That servicer answers Unavailable today: no ClusterServicer is wired in ANY
-// build. A build-tagged implementation exists (`-tags cluster`) but nothing
-// constructs it or injects it via Daemon.SetClusterService, so the tag does
-// not change what any transport answers. See #334.
+// serve sets the ClusterServicer through appbackends.WireSDKBackends over the
+// embedded go-quicbaas service, so status and node reads answer from the Raft
+// cluster that service runs. Join and Leave still answer Unavailable until
+// runtime membership is wired. See #334.
 
 // ErrClusterNotConfigured indicates that no cluster service is wired into a
 // daemon surface. Callers should treat this the same way the gRPC
