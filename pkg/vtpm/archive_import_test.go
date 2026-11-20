@@ -1,6 +1,7 @@
 package vtpm
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"errors"
@@ -208,4 +209,67 @@ func TestArchiver_ImportFromFile_OverBudgetLeavesExistingBundle(t *testing.T) {
 			assertNoStagingLeft(t, config)
 		}
 	})
+}
+
+// TestService_ImportBundle_RootLevelEntriesPublishTheManifest pins that an
+// archive whose manifest.json sits at the tar root, with or without a "./"
+// prefix, imports every entry (#2021 Codex round 4): the root prefix "."
+// used to skip them all and publish an empty bundle.
+func TestService_ImportBundle_RootLevelEntriesPublishTheManifest(t *testing.T) {
+	for _, tc := range []struct{ name, prefix string }{{"bare", ""}, {"dot-slash", "./"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			archive := buildArchive(t, []tarEntry{
+				{name: tc.prefix + "manifest.json", typeflag: tar.TypeReg, body: `{"id":"rootlvl"}`},
+				{name: tc.prefix + "tpm/", typeflag: tar.TypeDir},
+				{name: tc.prefix + "tpm/tpm2-00.permall", typeflag: tar.TypeReg, body: "state"},
+			}, 0)
+			config := createTestConfig(t)
+			service, err := NewService(config, nil, &mockCA{})
+			if err != nil {
+				t.Fatalf("NewService: %v", err)
+			}
+			ctx := context.Background()
+			if _, err := service.ImportBundle(ctx, bytes.NewReader(archive)); err != nil {
+				t.Fatalf("ImportBundle: %v", err)
+			}
+			bundle, err := service.GetBundle(ctx, "rootlvl")
+			if err != nil {
+				t.Fatalf("GetBundle after import: %v", err)
+			}
+			if bundle.ID != "rootlvl" {
+				t.Fatalf("bundle ID = %q, want rootlvl", bundle.ID)
+			}
+			state, err := os.ReadFile(bundle.TPMState.PermallFile)
+			if err != nil {
+				t.Fatalf("read permall: %v", err)
+			}
+			if string(state) != "state" {
+				t.Fatalf("permall = %q, want state", state)
+			}
+			assertNoStagingLeft(t, config)
+		})
+	}
+}
+
+// TestArchiver_ImportFromFile_RefusesAnArchiveWithoutManifestJSON pins that
+// a file merely ending in manifest.json is not taken for the manifest, and
+// that a stage with no manifest.json is never published.
+func TestArchiver_ImportFromFile_RefusesAnArchiveWithoutManifestJSON(t *testing.T) {
+	archive := buildArchive(t, []tarEntry{
+		{name: "p/old-manifest.json", typeflag: tar.TypeReg, body: `{"id":"nomani"}`},
+		{name: "p/tpm/tpm2-00.permall", typeflag: tar.TypeReg, body: "state"},
+	}, 0)
+	archivePath := filepath.Join(t.TempDir(), "nomani.tar.gz")
+	if err := os.WriteFile(archivePath, archive, 0600); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	config := &Config{BaseDir: t.TempDir()}
+	_, err := NewArchiver(config, nil).ImportFromFile(context.Background(), archivePath)
+	if !errors.As(err, &ErrInvalidManifest{}) {
+		t.Fatalf("ImportFromFile error = %v, want ErrInvalidManifest", err)
+	}
+	if _, statErr := os.Stat(config.BundlePath("nomani")); !os.IsNotExist(statErr) {
+		t.Fatalf("bundle published without manifest.json: stat err %v", statErr)
+	}
+	assertNoStagingLeft(t, config)
 }

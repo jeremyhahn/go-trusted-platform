@@ -15,15 +15,20 @@ package v1
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/gorilla/mux"
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -183,5 +188,133 @@ func TestBMCRoutes_NilHandlerMountsNothing(t *testing.T) {
 	for _, route := range testutil.WalkRoutes(t, r) {
 		assert.False(t, strings.Contains(route, "/bmc"),
 			"a nil BMC handler still built %s", route)
+	}
+}
+
+// bmcScopeProbes pairs every BMC console route except POST power with the
+// gRPC RPC it mirrors (#2021 Codex round 4): the REST route must take the
+// same operation scope as its gRPC twin under platform-token auth.
+var bmcScopeProbes = []struct {
+	method, path, rpc string
+}{
+	{http.MethodGet, "/api/v1/bmc/7/power", "PowerStatus"},
+	{http.MethodPost, "/api/v1/bmc/7/boot-device", "SetBootDevice"},
+	{http.MethodGet, "/api/v1/bmc/7/boot-device", "GetBootDevice"},
+	{http.MethodPost, "/api/v1/bmc/7/virtual-media", "MountISO"},
+	{http.MethodDelete, "/api/v1/bmc/7/virtual-media", "UnmountISO"},
+	{http.MethodGet, "/api/v1/bmc/7/virtual-media", "VirtualMediaStatus"},
+	{http.MethodGet, "/api/v1/bmc/7/sensors", "GetSensors"},
+	{http.MethodGet, "/api/v1/bmc/7/system-info", "GetSystemInfo"},
+	{http.MethodPost, "/api/v1/bmc/7/provision", "Provision"},
+	{http.MethodGet, "/api/v1/bmc/7/provision", "ProvisionStatus"},
+	{http.MethodPost, "/api/v1/bmc/7/enroll", "EnrollBMC"},
+	{http.MethodPost, "/api/v1/bmc/7/cert/restore", "RestoreFactoryCert"},
+	{http.MethodGet, "/api/v1/bmc/7/cert", "GetWebCertificate"},
+	{http.MethodPut, "/api/v1/bmc/7/cert", "ReplaceWebCertificate"},
+	{http.MethodGet, "/api/v1/bmc/7/users", "ListUsers"},
+	{http.MethodPost, "/api/v1/bmc/7/users", "CreateUser"},
+	{http.MethodDelete, "/api/v1/bmc/7/users/3", "DeleteUser"},
+	{http.MethodPut, "/api/v1/bmc/7/users/3/password", "SetUserPassword"},
+	{http.MethodPut, "/api/v1/bmc/7/users/3/privilege", "SetUserPrivilege"},
+}
+
+var allBMCScopes = []string{"bmc:read", "bmc:write", "bmc:power", "bmc:media", "bmc:admin"}
+
+func newBMCScopedRouter(t *testing.T, handler bmc.RestHandler, scopes []string) *mux.Router {
+	t.Helper()
+	return newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &scopedSessionAuth{
+			sessionAuth: sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"},
+			scopes:      scopes,
+		},
+		bmcHandler:           handler,
+		deviceProfileService: &tenantProfiles{owners: map[uint64]string{7: "tenant-b", 9: ""}},
+	})
+}
+
+func bmcRPCScope(t *testing.T, rpc string) string {
+	t.Helper()
+	scope := grpcapi.ScopeForMethod("/platform.v1.BMCService/" + rpc)
+	require.NotEmpty(t, scope, "no gRPC scope for %s", rpc)
+	return scope
+}
+
+// TestBMCRoutes_RefuseAnAdminWithoutTheRPCScope pins that an admin token
+// holding every BMC scope but the one the gRPC twin needs is refused before
+// the handler runs.
+func TestBMCRoutes_RefuseAnAdminWithoutTheRPCScope(t *testing.T) {
+	for _, p := range bmcScopeProbes {
+		t.Run(p.method+" "+p.path, func(t *testing.T) {
+			scope := bmcRPCScope(t, p.rpc)
+			granted := slices.DeleteFunc(slices.Clone(allBMCScopes), func(s string) bool { return s == scope })
+			h := &recordingBMCHandler{}
+			router := newBMCScopedRouter(t, h, granted)
+			code := serve(router, httptest.NewRequest(p.method, p.path, nil))
+			assert.Equal(t, http.StatusForbidden, code)
+			assert.Empty(t, h.reached)
+		})
+	}
+}
+
+// TestBMCRoutes_AdmitAnAdminWithTheRPCScope pins that the gRPC twin's scope
+// alone is enough to reach the handler.
+func TestBMCRoutes_AdmitAnAdminWithTheRPCScope(t *testing.T) {
+	for _, p := range bmcScopeProbes {
+		t.Run(p.method+" "+p.path, func(t *testing.T) {
+			scope := bmcRPCScope(t, p.rpc)
+			router := newBMCScopedRouter(t, &recordingBMCHandler{}, []string{scope})
+			code := serve(router, httptest.NewRequest(p.method, p.path, nil))
+			assert.NotEqual(t, http.StatusForbidden, code)
+		})
+	}
+}
+
+// actionRecordingBMCHandler decodes the power request the way the real
+// handler does and records the action it saw.
+type actionRecordingBMCHandler struct {
+	recordingBMCHandler
+	actions []string
+}
+
+func (h *actionRecordingBMCHandler) PowerAction(w http.ResponseWriter, r *http.Request) {
+	var req bmc.PowerActionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	h.actions = append(h.actions, req.Action)
+	w.WriteHeader(http.StatusOK)
+}
+
+// TestBMCRoutes_PowerActionTakesTheActionScope pins that POST power takes
+// bmc:write for "on" (PowerOn) and bmc:power for off/reset/cycle, and that
+// the body still reaches the handler intact after the scope check read it.
+func TestBMCRoutes_PowerActionTakesTheActionScope(t *testing.T) {
+	cases := []struct {
+		scope, action string
+		want          int
+	}{
+		{"bmc:write", "on", http.StatusOK},
+		{"bmc:write", "off", http.StatusForbidden},
+		{"bmc:write", "reset", http.StatusForbidden},
+		{"bmc:write", "cycle", http.StatusForbidden},
+		{"bmc:power", "off", http.StatusOK},
+		{"bmc:power", "cycle", http.StatusOK},
+		{"bmc:read", "on", http.StatusForbidden},
+		{"bmc:power", "on", http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.scope+" "+tc.action, func(t *testing.T) {
+			h := &actionRecordingBMCHandler{}
+			router := newBMCScopedRouter(t, h, []string{tc.scope})
+			code := serve(router, httptest.NewRequest(http.MethodPost, "/api/v1/bmc/7/power",
+				strings.NewReader(`{"action":"`+tc.action+`"}`)))
+			require.Equal(t, tc.want, code)
+			if tc.want == http.StatusOK {
+				assert.Equal(t, []string{tc.action}, h.actions)
+			} else {
+				assert.Empty(t, h.actions)
+			}
+		})
 	}
 }
