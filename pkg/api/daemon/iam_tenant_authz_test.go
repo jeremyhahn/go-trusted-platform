@@ -15,7 +15,9 @@ import (
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -99,34 +101,43 @@ func TestUnboundTenantCallers(t *testing.T) {
 		return s
 	}
 
+	// Each check runs inside the gRPC method it guards; the PEP must be asked
+	// for that method's registered permission pair (method_permissions.go),
+	// with the tenant carried in the principal, not in the resource.
 	checks := []struct {
-		name   string
-		call   func(ctx context.Context, pep quicbaassdk.IAMPEPClient) error
-		tenant string
-		action string
+		name     string
+		method   string
+		call     func(ctx context.Context, pep quicbaassdk.IAMPEPClient) error
+		tenant   string
+		resource string
+		action   string
 	}{
-		{"authorizeIAMTenant", func(ctx context.Context, pep quicbaassdk.IAMPEPClient) error {
+		{"authorizeIAMTenant", "/platform.v1.PlatformIAMService/CreateUser", func(ctx context.Context, pep quicbaassdk.IAMPEPClient) error {
 			return authorizeIAMTenant(ctx, pep, "tenant-a")
-		}, "tenant-a", unixPeerActionIAMTenant},
-		{"authorizeSystemCaller", func(ctx context.Context, pep quicbaassdk.IAMPEPClient) error {
+		}, "tenant-a", "iam", "write"},
+		{"authorizeSystemCaller", "/platform.v1.PlatformIAMService/ListTenants", func(ctx context.Context, pep quicbaassdk.IAMPEPClient) error {
 			return authorizeSystemCaller(ctx, pep, "system", "ListTenants")
-		}, "system", unixPeerActionCrossTenant + "ListTenants"},
-		{"authorizeTenant", func(ctx context.Context, pep quicbaassdk.IAMPEPClient) error {
+		}, "system", "iam", "read"},
+		{"authorizeTenant", "/platform.v1.TenantService/GetTenant", func(ctx context.Context, pep quicbaassdk.IAMPEPClient) error {
 			return tenantServer(pep).authorizeTenant(ctx, "tenant-a")
-		}, "tenant-a", unixPeerActionTenantAccess},
-		{"authorizeSystemTenant", func(ctx context.Context, pep quicbaassdk.IAMPEPClient) error {
+		}, "tenant-a", "tenant", "read"},
+		{"authorizeSystemTenant", "/platform.v1.TenantService/CreateTenant", func(ctx context.Context, pep quicbaassdk.IAMPEPClient) error {
 			return tenantServer(pep).authorizeSystemTenant(ctx, "CreateTenant")
-		}, "system", unixPeerActionCrossTenant + "CreateTenant"},
-		{"authorizeTenantName", func(ctx context.Context, pep quicbaassdk.IAMPEPClient) error {
+		}, "system", "tenant", "write"},
+		{"authorizeTenantName", "/platform.v1.TenantService/GetTenantByName", func(ctx context.Context, pep quicbaassdk.IAMPEPClient) error {
 			return tenantServer(pep).authorizeTenantName(ctx, "tenant-a")
-		}, "tenant-a", unixPeerActionTenantLookup},
+		}, "tenant-a", "tenant", "read"},
 	}
 
-	peer := peercred.ContextWithUnixCredentials(context.Background(), peercred.UnixCredentials{PID: 7, UID: 1000, GID: 100})
+	creds := peercred.UnixCredentials{PID: 7, UID: 1000, GID: 100}
+	peerIn := func(method string) context.Context {
+		return withGRPCMethod(peercred.ContextWithUnixCredentials(context.Background(), creds), method)
+	}
 
 	for _, c := range checks {
+		peer := peerIn(c.method)
 		t.Run(c.name+" refuses a caller with no identity", func(t *testing.T) {
-			err := c.call(context.Background(), allowAllPEP(nil))
+			err := c.call(withGRPCMethod(context.Background(), c.method), allowAllPEP(nil))
 			if status.Code(err) != codes.PermissionDenied {
 				t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
 			}
@@ -157,7 +168,7 @@ func TestUnboundTenantCallers(t *testing.T) {
 		})
 		t.Run(c.name+" admits the Unix peer the PEP allows, as its uid/gid principal", func(t *testing.T) {
 			var seen []*sdkiam.CheckRequest
-			if err := c.call(peer, allowAllPEP(&seen)); err != nil {
+			if err := c.call(peer, registeredPairPEP(c.resource, c.action, &seen)); err != nil {
 				t.Fatalf("%s() = %v, want nil", c.name, err)
 			}
 			if len(seen) != 1 {
@@ -170,11 +181,56 @@ func TestUnboundTenantCallers(t *testing.T) {
 			if len(req.Subject.Roles) != 1 || req.Subject.Roles[0] != "unix:gid:100" {
 				t.Fatalf("roles = %v, want [unix:gid:100]", req.Subject.Roles)
 			}
-			if req.Resource != "tenant://"+c.tenant || req.Action != c.action {
-				t.Fatalf("resource, action = %q, %q; want %q, %q", req.Resource, req.Action, "tenant://"+c.tenant, c.action)
+			if req.Resource != c.resource || req.Action != c.action {
+				t.Fatalf("resource, action = %q, %q; want %q, %q", req.Resource, req.Action, c.resource, c.action)
+			}
+		})
+		t.Run(c.name+" refuses the Unix peer in a method with no registered scope, without a PEP call", func(t *testing.T) {
+			var seen []*sdkiam.CheckRequest
+			err := c.call(peerIn("/platform.v1.NoSuchService/NoSuchMethod"), allowAllPEP(&seen))
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+			}
+			if len(seen) != 0 {
+				t.Fatalf("PEP checks = %d, want 0", len(seen))
+			}
+		})
+		t.Run(c.name+" refuses the Unix peer with no gRPC method, without a PEP call", func(t *testing.T) {
+			var seen []*sdkiam.CheckRequest
+			err := c.call(peercred.ContextWithUnixCredentials(context.Background(), creds), allowAllPEP(&seen))
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+			}
+			if len(seen) != 0 {
+				t.Fatalf("PEP checks = %d, want 0", len(seen))
 			}
 		})
 	}
+}
+
+// methodTransportStream is the grpc.ServerTransportStream a server handler
+// sees; it carries only the full method name grpc.Method reads.
+type methodTransportStream struct{ method string }
+
+func (m methodTransportStream) Method() string             { return m.method }
+func (methodTransportStream) SetHeader(metadata.MD) error  { return nil }
+func (methodTransportStream) SendHeader(metadata.MD) error { return nil }
+func (methodTransportStream) SetTrailer(metadata.MD) error { return nil }
+
+// withGRPCMethod returns ctx as a gRPC handler for method sees it.
+func withGRPCMethod(ctx context.Context, method string) context.Context {
+	return grpc.NewContextWithServerTransportStream(ctx, methodTransportStream{method: method})
+}
+
+// registeredPairPEP admits only the one resource/action pair, the way an RBAC
+// authorizer admits only declared permission scopes: any other name is denied.
+func registeredPairPEP(resource, action string, seen *[]*sdkiam.CheckRequest) quicbaassdk.IAMPEPClient {
+	return &mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		if seen != nil {
+			*seen = append(*seen, req)
+		}
+		return &sdkiam.CheckResponse{Allowed: req.Resource == resource && req.Action == action}, nil
+	}}
 }
 
 // allowAllPEP is a decision point that admits every request, recording each
