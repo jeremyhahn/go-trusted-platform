@@ -744,17 +744,18 @@ func TestEABGRPCService_CallerTenantBinding(t *testing.T) {
 func TestEABGRPCService_PEPDecision(t *testing.T) {
 	calls := map[string]struct {
 		action string
+		perm   string
 		call   func(*EABGRPCService, context.Context, string) error
 	}{
-		"CreateCredential": {action: "eab:write", call: func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+		"CreateCredential": {action: "write", perm: "eab:write", call: func(s *EABGRPCService, ctx context.Context, tenantID string) error {
 			_, err := s.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: tenantID})
 			return err
 		}},
-		"ListCredentials": {action: "eab:read", call: func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+		"ListCredentials": {action: "read", perm: "eab:read", call: func(s *EABGRPCService, ctx context.Context, tenantID string) error {
 			_, err := s.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{TenantId: tenantID})
 			return err
 		}},
-		"CleanupExpiredCredentials": {action: "eab:write", call: func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+		"CleanupExpiredCredentials": {action: "write", perm: "eab:write", call: func(s *EABGRPCService, ctx context.Context, tenantID string) error {
 			_, err := s.CleanupExpiredCredentials(ctx, &platformv1.CleanupExpiredEABCredentialsRequest{TenantId: tenantID})
 			return err
 		}},
@@ -797,6 +798,11 @@ func TestEABGRPCService_PEPDecision(t *testing.T) {
 				if got != nil {
 					if got.TenantID != tc.tenantID || got.Subject.TenantID != "tenant-a" || got.Subject.ID != "user-a" || got.Action != m.action {
 						t.Fatalf("check request = %+v", got)
+					}
+					// The RBAC authorizer joins resource and action into the
+					// permission it looks up; it must be the granted one.
+					if got.Resource != "eab" || got.Resource+":"+got.Action != m.perm {
+						t.Fatalf("check permission = %q, want %q", got.Resource+":"+got.Action, m.perm)
 					}
 				}
 				if tc.wantCode == codes.PermissionDenied && svc.lastGenerate.TenantID != "" {
