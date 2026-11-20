@@ -351,24 +351,24 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 |---|---|---|---|---|---|
 | `IDevIDService.GenerateIDevID` | `POST /generate` | `(dashboard)/devices/idevid/[id]/page.tsx`<br>`(dashboard)/devices/idevid/page.tsx` | - | `devices.spec.ts` | covered |
 | `IDevIDService.GetIDevIDInfo` | `GET /info` | `(dashboard)/devices/idevid/[id]/page.tsx`<br>`(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `IDevIDService.HasIDevID` | `GET /exists` | - | - | - | missing |
+| `IDevIDService.HasIDevID` | `GET /exists` | `(dashboard)/tpm/idevid/page.tsx` | - | `idevid.spec.ts` | covered |
 | `IDevIDService.DeleteIDevID` | `DELETE /tpm/idevid` | `(dashboard)/devices/idevid/[id]/page.tsx`<br>`(dashboard)/devices/idevid/page.tsx` | - | `devices.spec.ts` | covered |
-| `IDevIDService.GenerateIAK` | `POST /iak/generate` | - | - | - | missing |
+| `IDevIDService.GenerateIAK` | `POST /iak/generate` | `(dashboard)/tpm/idevid/page.tsx` | - | `idevid.spec.ts` | covered |
 | `IDevIDService.GetIAKInfo` | `GET /iak` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `IDevIDService.HasIAK` | `GET /iak/exists` | - | - | - | missing |
-| `IDevIDService.DeleteIAK` | `DELETE /iak` | - | - | - | missing |
+| `IDevIDService.HasIAK` | `GET /iak/exists` | `(dashboard)/tpm/idevid/page.tsx` | - | `idevid.spec.ts` | covered |
+| `IDevIDService.DeleteIAK` | `DELETE /iak` | `(dashboard)/tpm/idevid/page.tsx` | - | `idevid.spec.ts` | covered |
 | `IDevIDService.CreateIDevIDCSR` | `POST /csr` | `(dashboard)/devices/idevid/page.tsx` | - | `devices.spec.ts` | covered |
-| `IDevIDService.CreateIAKCSR` | `POST /iak/csr` | - | - | - | missing |
-| `IDevIDService.CreateLDevID` | `POST /ldevid` | - | - | - | missing |
-| `IDevIDService.InstallIDevIDCertificate` | `POST /certificate` | - | - | - | missing |
-| `IDevIDService.InstallIAKCertificate` | `POST /iak/certificate` | - | - | - | missing |
+| `IDevIDService.CreateIAKCSR` | `POST /iak/csr` | `(dashboard)/tpm/idevid/page.tsx` | - | `idevid.spec.ts` | covered |
+| `IDevIDService.CreateLDevID` | `POST /ldevid` | `(dashboard)/tpm/idevid/page.tsx` | - | `idevid.spec.ts` | covered |
+| `IDevIDService.InstallIDevIDCertificate` | `POST /certificate` | `(dashboard)/tpm/idevid/page.tsx` | - | `idevid.spec.ts` | covered |
+| `IDevIDService.InstallIAKCertificate` | `POST /iak/certificate` | `(dashboard)/tpm/idevid/page.tsx` | - | `idevid.spec.ts` | covered |
 | `IDevIDService.GetIDevIDCertificate` | `GET /certificate` | `(dashboard)/devices/idevid/[id]/page.tsx`<br>`(dashboard)/devices/idevid/page.tsx`<br>`(dashboard)/tpm/keys/page.tsx` | - | `devices.spec.ts`<br>`tpm-attestation.spec.ts` | covered |
 | `IDevIDService.GetIAKCertificate` | `GET /iak/certificate` | `(dashboard)/tpm/keys/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `IDevIDService.DeleteIDevIDCertificate` | `DELETE /certificate` | `(dashboard)/devices/idevid/[id]/page.tsx`<br>`(dashboard)/devices/idevid/page.tsx` | - | `devices.spec.ts` | covered |
-| `IDevIDService.DeleteIAKCertificate` | `DELETE /iak/certificate` | `(dashboard)/tpm/keys/page.tsx` (read-only) | - | - | partial |
-| `IDevIDService.GetDeviceAttributes` | `GET /attributes` | - | - | - | missing |
-| `IDevIDService.FlushTransientContexts` | `POST /flush` | - | - | - | missing |
-| `IDevIDService.ActivateCredential` | `POST /activate-credential` | - | - | - | missing |
+| `IDevIDService.DeleteIAKCertificate` | `DELETE /iak/certificate` | `(dashboard)/tpm/idevid/page.tsx`<br>`(dashboard)/tpm/keys/page.tsx` (read-only) | - | `idevid.spec.ts` | covered |
+| `IDevIDService.GetDeviceAttributes` | `GET /attributes` | `(dashboard)/tpm/idevid/page.tsx` | - | `idevid.spec.ts` | covered |
+| `IDevIDService.FlushTransientContexts` | `POST /flush` | `(dashboard)/tpm/idevid/page.tsx` | - | `idevid.spec.ts` | covered |
+| `IDevIDService.ActivateCredential` | `POST /activate-credential` | `(dashboard)/tpm/idevid/page.tsx` | - | `idevid.spec.ts` | covered |
 
 ## InvitationService (`invitation.proto`)
 

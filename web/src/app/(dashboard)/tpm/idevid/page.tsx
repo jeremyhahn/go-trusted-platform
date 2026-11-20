@@ -150,6 +150,12 @@ export default function TPMIDevIDPage() {
 
   const loading = hasIDevID.isLoading || hasIAK.isLoading || attributes.isLoading;
   const attrs = (attributes.data?.attributes ?? {}) as Record<string, string | undefined>;
+  // A failed status read leaves its badge at "Unknown"; say why on the page.
+  const loadErrors = [
+    { title: "IDevID status", error: hasIDevID.error },
+    { title: "IAK status", error: hasIAK.error },
+    { title: "Device attributes", error: attributes.error },
+  ].flatMap(({ title, error }) => (error ? [{ title, message: error.message }] : []));
 
   return (
     <div className="space-y-6">
@@ -182,6 +188,16 @@ export default function TPMIDevIDPage() {
               <PresenceBadge testId="iak-status" present={hasIAK.data?.exists} />
             </div>
           </div>
+          {loadErrors.length > 0 && (
+            <div className="space-y-1" role="alert" data-testid="idevid-load-errors">
+              {loadErrors.map(({ title, message }) => (
+                <p key={title} className="text-sm text-destructive">
+                  <span className="font-medium">{title}: </span>
+                  <span>{message}</span>
+                </p>
+              ))}
+            </div>
+          )}
           <dl className="grid grid-cols-2 gap-2 text-sm" data-testid="device-attributes">
             {ATTRIBUTE_LABELS.map(([key, label]) => (
               <React.Fragment key={key}>
