@@ -315,22 +315,22 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `PlatformIAMService.DeleteRole` | `DELETE /roles/{id}` | `(dashboard)/iam/roles/page.tsx`<br>`(dashboard)/iam/users/[id]/page.tsx` | - | `iam.spec.ts` | covered |
 | `PlatformIAMService.AssignRole` | - | `(dashboard)/iam/users/[id]/page.tsx`<br>`(dashboard)/tenant/members/page.tsx` | - | `iam.spec.ts`<br>`tenant-management.spec.ts` | covered |
 | `PlatformIAMService.RevokeRole` | - | `(dashboard)/iam/users/[id]/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.CreateGroup` | `POST /groups` | `(dashboard)/iam/groups/new/page.tsx` | - | - | partial |
-| `PlatformIAMService.GetGroup` | `GET /groups/{id}` | `(dashboard)/iam/groups/[id]/page.tsx` | - | - | partial |
+| `PlatformIAMService.CreateGroup` | `POST /groups` | `(dashboard)/iam/groups/new/page.tsx` | - | `real-server/iam-group.spec.ts` | covered |
+| `PlatformIAMService.GetGroup` | `GET /groups/{id}` | `(dashboard)/iam/groups/[id]/page.tsx` | - | `real-server/iam-group.spec.ts` | covered |
 | `PlatformIAMService.ListGroups` | `GET /groups` | `(dashboard)/iam/groups/page.tsx`<br>`(dashboard)/iam/permissions/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.UpdateGroup` | `PUT /groups/{id}` | `(dashboard)/iam/groups/[id]/page.tsx`<br>`(dashboard)/iam/groups/new/page.tsx`<br>`(dashboard)/iam/groups/page.tsx` (+1) (read-only) | - | - | partial |
+| `PlatformIAMService.UpdateGroup` | `PUT /groups/{id}` | `(dashboard)/iam/groups/[id]/page.tsx`<br>`(dashboard)/iam/groups/new/page.tsx`<br>`(dashboard)/iam/groups/page.tsx` (+1) (read-only) | - | `real-server/iam-group.spec.ts` | covered |
 | `PlatformIAMService.DeleteGroup` | `DELETE /groups/{id}` | `(dashboard)/iam/groups/[id]/page.tsx`<br>`(dashboard)/iam/groups/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.AddGroupMember` | `POST /groups/{id}/members/{user}` | - | - | - | missing |
-| `PlatformIAMService.RemoveGroupMember` | `DELETE /groups/{id}/members/{user}` | - | - | - | missing |
-| `PlatformIAMService.CheckPermission` | `POST /permissions/check` | - | - | - | missing |
-| `PlatformIAMService.CreateToken` | - | - | - | - | missing |
-| `PlatformIAMService.RevokeToken` | - | - | - | - | missing |
-| `PlatformIAMService.VerifyToken` | - | - | - | - | missing |
-| `PlatformIAMService.CreateTenant` | `POST /tenants` | - | - | - | missing |
-| `PlatformIAMService.GetTenant` | `GET /tenants/{tenant}` | - | - | - | missing |
-| `PlatformIAMService.ListTenants` | `GET /tenants` | - | - | - | missing |
-| `PlatformIAMService.UpdateTenant` | `PUT /tenants/{tenant}` | - | - | - | missing |
-| `PlatformIAMService.DeleteTenant` | `DELETE /tenants/{tenant}` | - | - | - | missing |
+| `PlatformIAMService.AddGroupMember` | `POST /groups/{id}/members/{user}` | `(dashboard)/iam/groups/[id]/page.tsx` (gated off) | - | `real-server/iam-group.spec.ts` | blocked: the embedded IAM backend has no Group.AddMember handler (#2024) |
+| `PlatformIAMService.RemoveGroupMember` | `DELETE /groups/{id}/members/{user}` | `(dashboard)/iam/groups/[id]/page.tsx` (gated off) | - | `real-server/iam-group.spec.ts` | blocked: the embedded IAM backend has no Group.RemoveMember handler (#2024) |
+| `PlatformIAMService.CheckPermission` | `POST /permissions/check` | `(dashboard)/iam/permissions/page.tsx` | - | `real-server/iam-group.spec.ts` | covered |
+| `PlatformIAMService.CreateToken` | - | `(dashboard)/iam/tokens/page.tsx` (gated off) | - | `real-server/iam-group.spec.ts` | blocked: no REST route; the IAM client the REST handlers use has no token methods (upstream) |
+| `PlatformIAMService.RevokeToken` | - | `(dashboard)/iam/tokens/page.tsx` (gated off) | - | `real-server/iam-group.spec.ts` | blocked: no REST route; the IAM client the REST handlers use has no token methods (upstream) |
+| `PlatformIAMService.VerifyToken` | - | `(dashboard)/iam/tokens/page.tsx` (gated off) | - | `real-server/iam-group.spec.ts` | blocked: no REST route; the IAM client the REST handlers use has no token methods (upstream) |
+| `PlatformIAMService.CreateTenant` | `POST /tenants` | `(dashboard)/iam/tenants/page.tsx` | - | `real-server/iam-group.spec.ts` | covered |
+| `PlatformIAMService.GetTenant` | `GET /tenants/{tenant}` | `(dashboard)/iam/tenants/page.tsx` | - | `real-server/iam-group.spec.ts` | covered |
+| `PlatformIAMService.ListTenants` | `GET /tenants` | `(dashboard)/iam/tenants/page.tsx` | - | `real-server/iam-group.spec.ts` | covered |
+| `PlatformIAMService.UpdateTenant` | `PUT /tenants/{tenant}` | `(dashboard)/iam/tenants/page.tsx` | - | `real-server/iam-group.spec.ts` | covered |
+| `PlatformIAMService.DeleteTenant` | `DELETE /tenants/{tenant}` | `(dashboard)/iam/tenants/page.tsx` | - | `real-server/iam-group.spec.ts` | covered |
 | `PlatformIAMService.CreatePolicy` | `POST /policies` | `(dashboard)/iam/policies/new/page.tsx` | - | - | partial |
 | `PlatformIAMService.GetPolicy` | `GET /policies/{id}` | `(dashboard)/iam/policies/[name]/page.tsx` | - | - | partial |
 | `PlatformIAMService.ListPolicies` | `GET /policies` | `(dashboard)/iam/permissions/page.tsx`<br>`(dashboard)/iam/policies/page.tsx` | - | `iam.spec.ts` | covered |

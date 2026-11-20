@@ -1,5 +1,7 @@
 'use client';
 
+import { TokenOperationsCard } from './token-operations-card';
+
 /**
  * API Tokens Page
  *
@@ -422,6 +424,8 @@ export default function TokensPage() {
           Register Application
         </Button>
       </div>
+
+      <TokenOperationsCard />
 
       {/* Info Alert */}
       <Alert>

@@ -76,15 +76,15 @@ test.describe('IAM permission check', () => {
     await adminPage.getByLabel('Subject ID').fill(request.subjectId);
     await adminPage.getByLabel('Action', { exact: true }).fill(request.action);
     await adminPage.getByLabel('Resource', { exact: true }).fill(request.resource);
-    await adminPage.getByRole('button', { name: 'Check permission' }).click();
+    await adminPage.getByRole('button', { name: 'Check', exact: true }).click();
 
-    const result = adminPage.getByTestId('permission-check-result');
+    const result = adminPage.getByRole('status').filter({ hasText: /Allowed|Denied|Check failed/ });
     if (expected.success) {
       const allowed = Boolean((expected.data as unknown as { allowed?: boolean }).allowed);
-      await expect(result).toHaveText(allowed ? /allowed/i : /denied/i);
+      await expect(result).toContainText(allowed ? 'Allowed' : 'Denied');
     } else {
       // The server refused the check (no PEP configured): the page shows its error.
-      await expect(result).toHaveText(/error/i);
+      await expect(result).toContainText('Check failed');
     }
   });
 });

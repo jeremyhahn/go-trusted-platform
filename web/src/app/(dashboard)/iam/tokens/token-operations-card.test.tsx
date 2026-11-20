@@ -10,8 +10,8 @@ describe('TokenOperationsCard', () => {
       ['Verify token', 'VerifyToken'],
       ['Revoke token', 'RevokeToken'],
     ] as const) {
-      const button = screen.getByRole('button', { name });
-      expect(button).toBeDisabled();
+      const button = screen.getByRole('button', { name }) as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
       expect(button.getAttribute('title')).toBe(tokenRouteReason(op));
     }
   });
