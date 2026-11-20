@@ -134,6 +134,13 @@ func createTestTenantManagerForServer(t *testing.T) *tenant.Manager {
 	return mgr
 }
 
+// fixtureSystemTenantID is the system tenant the tenant test servers carry.
+// A Unix peer's cross-tenant calls (CreateTenant, ListTenants, Sync, and a
+// by-name lookup that resolves to nothing) are decided by the PEP in the
+// system tenant, and with none set they fail closed (docs/SPEC.md); tests
+// about other behaviour set one so their own assertions hold.
+const fixtureSystemTenantID = "fixture-system-tenant"
+
 func createTestTenantGRPCServer(t *testing.T) *TenantGRPCServer {
 	logger := slog.Default()
 	mgr := createTestTenantManagerForServer(t)
@@ -141,6 +148,7 @@ func createTestTenantGRPCServer(t *testing.T) *TenantGRPCServer {
 	server := NewTenantGRPCServer(WithTenantLogger(logger))
 	server.SetManager(mgr)
 	server.SetPEP(allowAllPEP(nil))
+	server.SetSystemTenant(fixtureSystemTenantID)
 	return server
 }
 
@@ -166,6 +174,7 @@ func TestTenantGRPCServer_WithTenantManager_Option(t *testing.T) {
 		WithTenantLogger(logger),
 	)
 	server.SetPEP(allowAllPEP(nil))
+	server.SetSystemTenant(fixtureSystemTenantID)
 
 	// Verify manager was set by performing an operation
 	ctx := unixOperatorContext()

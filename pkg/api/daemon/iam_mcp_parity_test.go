@@ -48,7 +48,7 @@ import (
 // wiredIAMToolRegistry is the MCP tool registry on an in-memory IAM client,
 // built the way createMCPServer builds it.
 func wiredIAMToolRegistry(iam *memIAM) *mcp.ToolRegistry {
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{IAMClient: iam, PEPClient: iam.PEP()})
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{IAMClient: iam, PEPClient: iam.PEP(), PlatformTenantID: fixtureSystemTenantID})
 	return mcp.NewToolRegistry(provider, logging.DefaultLogger())
 }
 

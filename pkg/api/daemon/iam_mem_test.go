@@ -29,7 +29,11 @@ import (
 
 // wiredIAMGRPCService is the gRPC IAM service on an in-memory IAM client.
 func wiredIAMGRPCService(iam *memIAM) *IAMGRPCService {
-	return NewIAMGRPCService(slog.Default(), iam, iam.PEP())
+	svc := NewIAMGRPCService(slog.Default(), iam, iam.PEP())
+	// CreateTenant and ListTenants are decided in the system tenant and
+	// fail closed with none set (fixtureSystemTenantID).
+	svc.SetSystemTenant(fixtureSystemTenantID)
+	return svc
 }
 
 // memIAMCreated is the creation time of every record memIAM stores, so two

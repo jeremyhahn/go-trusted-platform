@@ -133,7 +133,10 @@ func newIAMCategoryHandler() *QUICServiceHandler {
 	logger := logging.DefaultLogger()
 	handler := newTestQUICServiceHandler(logger)
 	client := iamTenantOnlyClient{tenants: newMockIAMClientForTenant()}
-	handler.SetIAMGRPCService(NewIAMGRPCService(logger.Slog(), client, allowAllPEP(nil)))
+	svc := NewIAMGRPCService(logger.Slog(), client, allowAllPEP(nil))
+	// IAM tenant create and list fail closed with no system tenant set.
+	svc.SetSystemTenant(fixtureSystemTenantID)
+	handler.SetIAMGRPCService(svc)
 	return handler
 }
 

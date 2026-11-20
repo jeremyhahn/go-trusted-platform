@@ -287,6 +287,10 @@ func newTenantParityHarness(t *testing.T) *tenantParityHarness {
 	h.server = NewTenantGRPCServer(WithTenantLogger(quiet))
 	h.server.SetPEP(allowAllPEP(nil))
 	h.server.SetManager(manager)
+	// The Unix operator's CreateTenant is a cross-tenant call decided in
+	// the system tenant, which fails closed while none is set: bootstrap
+	// with a placeholder, then make the created system tenant the real one.
+	h.server.SetSystemTenant(fixtureSystemTenantID)
 	for label, name := range parityTenantNames {
 		resp, err := h.server.CreateTenant(unixOperatorContext(), &platformv1.CreateTenantRequest{Name: name})
 		require.NoError(t, err)
