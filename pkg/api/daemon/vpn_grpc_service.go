@@ -18,6 +18,8 @@ import (
 	"errors"
 	"maps"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vpn"
@@ -54,6 +56,15 @@ type VPNGRPCService struct {
 
 	backend VPNBackend
 	logger  *logging.Logger
+	// pep decides callers with no tenant-bound identity (authorizeIAMTenant);
+	// nil refuses them.
+	pep quicbaassdk.IAMPEPClient
+}
+
+// SetPEP wires the IAM decision point the tenant checks use for callers
+// with no tenant-bound identity.
+func (s *VPNGRPCService) SetPEP(pep quicbaassdk.IAMPEPClient) {
+	s.pep = pep
 }
 
 // NewVPNGRPCService creates the VPN gRPC service. A nil backend means the node
@@ -103,7 +114,7 @@ func (s *VPNGRPCService) EnrolPeer(ctx context.Context, req *platformv1.EnrolVPN
 	if req.GetPeer() == nil {
 		return nil, vpnErrToGRPC(&vpn.ErrInvalidArgument{Field: "peer", Reason: "is required"})
 	}
-	if err := authorizeVPNTenant(ctx, req.GetPeer().GetTenantId()); err != nil {
+	if err := s.authorizeVPNTenant(ctx, req.GetPeer().GetTenantId()); err != nil {
 		return nil, err
 	}
 	peer, err := s.backend.EnrolPeer(ctx, vpn.Peer{
@@ -125,7 +136,7 @@ func (s *VPNGRPCService) ListPeers(ctx context.Context, req *platformv1.ListVPNP
 	if err := s.requireBackend(); err != nil {
 		return nil, err
 	}
-	if err := authorizeVPNTenant(ctx, req.GetTenantId()); err != nil {
+	if err := s.authorizeVPNTenant(ctx, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	peers, err := s.backend.ListPeers(ctx, req.GetTenantId())
@@ -147,7 +158,7 @@ func (s *VPNGRPCService) RevokePeer(ctx context.Context, req *platformv1.RevokeV
 	if err := s.requireBackend(); err != nil {
 		return nil, err
 	}
-	if err := authorizeVPNTenant(ctx, req.GetTenantId()); err != nil {
+	if err := s.authorizeVPNTenant(ctx, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if err := s.backend.RevokePeer(ctx, req.GetTenantId(), req.GetDeviceId()); err != nil {
@@ -183,7 +194,7 @@ func (s *VPNGRPCService) GetPosturePolicy(ctx context.Context, req *platformv1.G
 	if err := s.requireBackend(); err != nil {
 		return nil, err
 	}
-	if err := authorizeVPNTenant(ctx, req.GetTenantId()); err != nil {
+	if err := s.authorizeVPNTenant(ctx, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	policy, err := s.backend.GetPosturePolicy(ctx, req.GetTenantId(), req.GetName())
@@ -204,7 +215,7 @@ func (s *VPNGRPCService) SetPosturePolicy(ctx context.Context, req *platformv1.S
 	if req.GetPolicy() == nil {
 		return nil, vpnErrToGRPC(&vpn.ErrInvalidArgument{Field: "policy", Reason: "is required"})
 	}
-	if err := authorizeVPNTenant(ctx, req.GetPolicy().GetTenantId()); err != nil {
+	if err := s.authorizeVPNTenant(ctx, req.GetPolicy().GetTenantId()); err != nil {
 		return nil, err
 	}
 	policy, err := s.backend.SetPosturePolicy(ctx, vpn.PosturePolicy{
@@ -226,7 +237,7 @@ func (s *VPNGRPCService) DeletePosturePolicy(ctx context.Context, req *platformv
 	if err := s.requireBackend(); err != nil {
 		return nil, err
 	}
-	if err := authorizeVPNTenant(ctx, req.GetTenantId()); err != nil {
+	if err := s.authorizeVPNTenant(ctx, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if err := s.backend.DeletePosturePolicy(ctx, req.GetTenantId(), req.GetName()); err != nil {
@@ -243,7 +254,7 @@ func (s *VPNGRPCService) ListPosturePolicies(ctx context.Context, req *platformv
 	if err := s.requireBackend(); err != nil {
 		return nil, err
 	}
-	if err := authorizeVPNTenant(ctx, req.GetTenantId()); err != nil {
+	if err := s.authorizeVPNTenant(ctx, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	policies, err := s.backend.ListPosturePolicies(ctx, req.GetTenantId())
@@ -297,11 +308,11 @@ func vpnErrToGRPC(err error) error {
 // A bound caller with no tenant is refused outright: the VPN backend reads an
 // empty tenant as every tenant, so letting "" match "" would list them all.
 // Every other case defers to authorizeIAMTenant.
-func authorizeVPNTenant(ctx context.Context, requested string) error {
+func (s *VPNGRPCService) authorizeVPNTenant(ctx context.Context, requested string) error {
 	if caller, bound := callerTenant(ctx); bound && caller == "" {
 		return status.Error(codes.PermissionDenied, "vpn: caller is not bound to a tenant")
 	}
-	return authorizeIAMTenant(ctx, requested)
+	return authorizeIAMTenant(ctx, s.pep, requested)
 }
 
 func vpnPeerToPb(peer *vpn.Peer) *platformv1.VPNPeer {

@@ -19,6 +19,8 @@ import (
 	"strings"
 	"time"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
@@ -42,6 +44,15 @@ type InvitationGRPCService struct {
 
 	logger *logging.Logger
 	svc    platformservice.InvitationServicer
+	// pep decides callers with no tenant-bound identity (authorizeIAMTenant);
+	// nil refuses them.
+	pep quicbaassdk.IAMPEPClient
+}
+
+// SetPEP wires the IAM decision point the tenant checks use for callers
+// with no tenant-bound identity.
+func (s *InvitationGRPCService) SetPEP(pep quicbaassdk.IAMPEPClient) {
+	s.pep = pep
 }
 
 // NewInvitationGRPCService creates a new Invitation gRPC service instance.
@@ -171,7 +182,7 @@ func (s *InvitationGRPCService) CreateInvitation(
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "invitation: request is required")
 	}
-	if err := authorizeIAMTenant(ctx, req.TenantId); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pep, req.TenantId); err != nil {
 		return nil, err
 	}
 	createReq := &platformservice.CreateInvitationRequest{
@@ -246,7 +257,7 @@ func (s *InvitationGRPCService) ListInvitations(
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "invitation: request is required")
 	}
-	if err := authorizeIAMTenant(ctx, req.TenantId); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pep, req.TenantId); err != nil {
 		return nil, err
 	}
 	var (

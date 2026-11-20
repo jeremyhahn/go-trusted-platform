@@ -959,6 +959,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// SetService is called the service returns Unimplemented per the
 	// legacy stub.
 	invitationService := NewInvitationGRPCService(logger, nil)
+	invitationService.SetPEP(iamPEP)
 	if grpcServer != nil {
 		platformv1.RegisterInvitationServiceServer(grpcServer, invitationService)
 	}
@@ -1028,6 +1029,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if vpnControlPlane != nil {
 		vpnGRPCService = NewVPNGRPCService(logger, vpnControlPlane)
 	}
+	vpnGRPCService.SetPEP(iamPEP)
 	if grpcServer != nil {
 		platformv1.RegisterVPNServiceServer(grpcServer, vpnGRPCService)
 	}
