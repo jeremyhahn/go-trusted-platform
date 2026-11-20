@@ -170,15 +170,18 @@ type LUKSBackend struct {
 	locksMu sync.Mutex
 	locks   map[string]chan struct{}
 
-	// fido2Mu serializes every call into the shared FIDO2 handler. The
-	// go-xkms handler reads, overwrites and restores its config timeout
-	// without synchronization, and one handler serves every request, so
-	// two enrollments (even on different devices) must not call it at once.
-	// The lock is released when the handler call returns; a call that
-	// returns early on a cancelled context may leave its SDK call running,
-	// so the SDK-backed handler (luksFIDO2Handler) also holds its own lock
-	// from inside the goroutine running that call until the call returns.
-	fido2Mu sync.Mutex
+	// fido2Sem (capacity 1) serializes every call into the shared FIDO2
+	// handler. The go-xkms handler reads, overwrites and restores its
+	// config timeout without synchronization, and one handler serves every
+	// request, so two enrollments (even on different devices) must not call
+	// it at once. A waiter whose context ends gives up with ctx.Err()
+	// (acquireFIDO2) instead of queueing behind a ceremony that may wait on
+	// a user touch. The slot is released when the handler call returns; a
+	// call that returns early on a cancelled context may leave its SDK call
+	// running, so the SDK-backed handler (luksFIDO2Handler) also holds its
+	// own lock from inside the goroutine running that call until the call
+	// returns.
+	fido2Sem chan struct{}
 
 	// fipsActive reports whether the platform FIPS keyslot policy applies.
 	// nil means luksFIPSActive; the package's tests set it as a seam.
@@ -286,6 +289,18 @@ func (b *LUKSBackend) lockDevice(ctx context.Context, device string) (func(), er
 		return nil, err
 	}
 	return unlock, nil
+}
+
+// acquireFIDO2 takes the shared FIDO2 handler's slot (fido2Sem), or returns
+// ctx.Err() when ctx ends first. The returned release frees the slot once.
+func (b *LUKSBackend) acquireFIDO2(ctx context.Context) (func(), error) {
+	select {
+	case b.fido2Sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	var once sync.Once
+	return func() { once.Do(func() { <-b.fido2Sem }) }, nil
 }
 
 // luksFlockRetry is how often a contended volume flock is retried while the
@@ -412,7 +427,7 @@ func NewLUKSBackend(logger *logging.Logger, opts ...LUKSBackendOption) *LUKSBack
 	if logger == nil {
 		logger = logging.DefaultLogger()
 	}
-	b := &LUKSBackend{logger: logger}
+	b := &LUKSBackend{logger: logger, fido2Sem: make(chan struct{}, 1)}
 	for _, opt := range opts {
 		opt(b)
 	}
@@ -614,18 +629,24 @@ func (b *LUKSBackend) EnrollFIDO2(ctx context.Context, req *daemon.LUKSEnrollFID
 		err       error
 	)
 	if rich, ok := b.fido2.(LUKSFIDO2EnrollingHandler); ok {
-		b.fido2Mu.Lock()
+		release, aerr := b.acquireFIDO2(ctx)
+		if aerr != nil {
+			return nil, aerr
+		}
 		res, derr := rich.DeriveEnroll(ctx, req.CredentialID, req.RequirePIN, req.RequireUV)
-		b.fido2Mu.Unlock()
+		release()
 		if derr != nil {
 			return nil, derr
 		}
 		key = res.DerivedKey
 		tokenJSON = res.TokenJSON
 	} else {
-		b.fido2Mu.Lock()
+		release, aerr := b.acquireFIDO2(ctx)
+		if aerr != nil {
+			return nil, aerr
+		}
 		key, err = b.fido2.EnrollCredential(ctx, req.CredentialID, req.RequirePIN, req.RequireUV)
-		b.fido2Mu.Unlock()
+		release()
 		if err != nil {
 			return nil, err
 		}

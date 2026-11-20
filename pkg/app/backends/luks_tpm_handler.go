@@ -17,6 +17,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/google/go-tpm/tpm2/transport"
@@ -86,23 +88,29 @@ var DefaultTPMOpener = luks.DefaultTPMOpener
 // module answers ErrLUKSTPMNoTransport. Which mode applies depends on the
 // module's Device():
 //
-//   - A TPM character device (a kernel resource-manager device such as the
-//     default /dev/tpmrm0): every Open opens a new connection to that same
-//     device and the closer closes it. The resource manager gives each
-//     connection its own context and serializes commands between them, so
-//     the sealer never shares a connection with the platform's own TPM work
-//     (quotes, NV reads and writes, transient-handle flushes), and an
-//     enrolment runs at the same time as that work. An open failure answers
-//     ErrLUKSTPMNoTransport wrapping the cause.
+//   - A kernel resource-manager device (/dev/tpmrm*, such as the default
+//     /dev/tpmrm0, resolved through symlinks): every Open opens a new
+//     connection to that same device and the closer closes it. The resource
+//     manager gives each connection its own context and serializes commands
+//     between them, so the sealer never shares a connection with the
+//     platform's own TPM work (quotes, NV reads and writes, transient-handle
+//     flushes), and an enrolment runs at the same time as that work. An open
+//     failure answers ErrLUKSTPMNoTransport wrapping the cause.
+//   - Any other device path (an exclusive /dev/tpm0 the platform already
+//     holds): a second open would answer EBUSY, so every Open lends the
+//     module's own connection under a lock. The lock orders the sealers
+//     only; the platform's own users of that connection are not covered.
+//     Covering them needs a synchronized transport from go-xkms (upstream
+//     gap). A nil transport answers ErrLUKSTPMNoTransport.
 //   - An in-process TPM (the simulator: no device path): every Open lends the
-//     module's own transport under a lock that orders the sealers only, not
-//     the platform's own users of that transport. This mode is for
+//     module's own transport under the same lock, which orders the sealers
+//     only, not the platform's own users of that transport. This mode is for
 //     single-user test hardware; a nil transport answers
 //     ErrLUKSTPMNoTransport.
 func PlatformTPMOpener(module func() xkmssdk.TrustedPlatformModule) TPMOpener {
 	// lock (capacity 1) is held from Open until the returned closer's
-	// Close, so in the in-process mode one sealer at a time exchanges
-	// commands over the platform's transport.
+	// Close, so in the lent modes (exclusive device, in-process TPM) one
+	// sealer at a time exchanges commands over the platform's transport.
 	lock := make(chan struct{}, 1)
 	return TPMOpenerFunc(func(ctx context.Context) (transport.TPMCloser, error) {
 		if module == nil {
@@ -112,7 +120,7 @@ func PlatformTPMOpener(module func() xkmssdk.TrustedPlatformModule) TPMOpener {
 		if m == nil {
 			return nil, ErrLUKSTPMNoTransport
 		}
-		if device := m.Device(); device != "" && isTPMCharDevice(device) {
+		if device := m.Device(); device != "" && isTPMCharDevice(device) && isTPMResourceManager(device) {
 			conn, err := openTPMDevice(device)
 			if err != nil {
 				return nil, fmt.Errorf("%w: %w", ErrLUKSTPMNoTransport, err)
@@ -141,6 +149,17 @@ var (
 		return err == nil && info.Mode()&os.ModeCharDevice != 0
 	}
 )
+
+// isTPMResourceManager reports whether path (resolved through symlinks;
+// unresolved on error) names a kernel TPM resource-manager device
+// (/dev/tpmrm*), the only kind that takes a second connection while the
+// platform holds one. An exclusive /dev/tpm* answers a second open EBUSY.
+func isTPMResourceManager(path string) bool {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	return strings.HasPrefix(filepath.Base(path), "tpmrm")
+}
 
 // sharedTPM lends the platform's transport to the sealer in the in-process
 // (simulator) mode of PlatformTPMOpener; the device mode hands the sealer
