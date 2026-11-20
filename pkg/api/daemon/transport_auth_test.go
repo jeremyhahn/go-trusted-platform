@@ -39,6 +39,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
@@ -756,4 +757,60 @@ func TestRESTServerStart_MTLSWithPool_Listens(t *testing.T) {
 	require.NoError(t, server.Start())
 	t.Cleanup(func() { _ = server.ForceStop() })
 	assert.True(t, server.IsRunning())
+}
+
+// quicPEPGuardConfig is a QUIC-only daemon whose local tokens would be
+// authorized by the embedded quicbaas SDK PEP, which cannot decide a Check.
+func quicPEPGuardConfig() *Config {
+	config := pepGuardConfig()
+	config.EnableGRPCTCP = false
+	config.EnableQUIC = true
+	return config
+}
+
+// TestValidateQUICAuthorization_RejectsEmbeddedPEPPath: the QUIC local-token
+// path through the embedded PEP is refused at configuration time (PR #2000
+// review round 3).
+func TestValidateQUICAuthorization_RejectsEmbeddedPEPPath(t *testing.T) {
+	err := quicPEPGuardConfig().validateQUICAuthorization()
+	var want ErrEmbeddedPEPUnavailable
+	require.True(t, errors.As(err, &want), "error is %T (%v), want ErrEmbeddedPEPUnavailable", err, err)
+	assert.Equal(t, transportQUIC, want.Transport)
+}
+
+func TestValidateQUICAuthorization_AcceptsWorkingModes(t *testing.T) {
+	cases := map[string]func(*Config){
+		"mTLS enabled":            func(c *Config) { c.EnableMTLS = true },
+		"platform tokens enabled": func(c *Config) { c.PlatformToken.Enabled = true },
+		"remote quicbaas transport": func(c *Config) {
+			c.App.QuicBaaSConfig.Transport = quicbaas.TransportGRPC
+		},
+		"QUIC disabled":                  func(c *Config) { c.EnableQUIC = false },
+		"testing-only IAM opt-out":       func(c *Config) { c.SkipIAMValidation = true },
+		"no App leaves it to IAM wiring": func(c *Config) { c.App = nil },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			config := quicPEPGuardConfig()
+			mutate(config)
+			require.NoError(t, config.validateQUICAuthorization())
+		})
+	}
+}
+
+// TestNew_RefusesEmbeddedQUICPEPPathBeforeSubsystems: New refuses the QUIC
+// embedded-PEP path before it starts any subsystem: a New that reached
+// subsystem setup would fail there with another error (IAM wiring, then the
+// overlay, enabled here with no VTEP settings), and one that got past the
+// overlay would leave its controller running with no daemon handle to stop
+// it (PR #2000 review round 3).
+func TestNew_RefusesEmbeddedQUICPEPPathBeforeSubsystems(t *testing.T) {
+	config := quicPEPGuardConfig()
+	config.App.SDNConfig = &sdn.Config{Overlay: &sdn.OverlayConfig{Enabled: true}}
+
+	d, err := New(config)
+	var want ErrEmbeddedPEPUnavailable
+	require.True(t, errors.As(err, &want), "New() error is %T (%v), want ErrEmbeddedPEPUnavailable", err, err)
+	assert.Equal(t, transportQUIC, want.Transport)
+	assert.Nil(t, d, "New() returned a daemon alongside the refusal")
 }
