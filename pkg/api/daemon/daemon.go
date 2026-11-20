@@ -2009,6 +2009,15 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 // enabled section is built against the SDN network plan, initialized, and
 // set as the backend; an invalid section returns its typed error so the
 // daemon does not start.
+// provisioningDeviceScriptPortOffset is pkg/bootstrap/container's
+// DeviceScriptPortOffset: the bootstrap device-script and UKI server
+// listens on the iPXE HTTP port plus one (8081 by default).
+const provisioningDeviceScriptPortOffset = 1
+
+// provisioningNBDPort is pkg/bootstrap/nbd.DefaultPort, the NBD export a
+// provisioning device mounts its root from.
+const provisioningNBDPort uint16 = 10809
+
 func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *app.App, section *pxe.DaemonConfig, flows *policy.ZoneFlowManager) (*PXEGRPCService, error) {
 	svc := NewPXEGRPCService(logger, nil)
 	if section == nil || !section.Enabled {
@@ -2045,10 +2054,19 @@ func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *ap
 		}
 	}
 	// A device in provisioning fetches its boot script and payloads from
-	// the iPXE HTTP server, so the provisioning flows allow its port.
-	if cfg.IPXEConfig != nil && cfg.IPXEConfig.HTTPPort > 0 && cfg.IPXEConfig.HTTPPort <= 65535 {
-		flows.AllowProvisioningBootPorts(uint16(cfg.IPXEConfig.HTTPPort))
+	// the iPXE HTTP server, its per-device script and installed UKI from
+	// the bootstrap device-script server (the HTTP port plus one), and its
+	// root over NBD. docs/SPEC.md (ipxe) requires the provisioning-zone
+	// rules to admit TCP 8080, 8081 and 10809; a provisioning transition
+	// replaces the port's flows, so all three are carried into the
+	// generator.
+	if cfg.IPXEConfig != nil && cfg.IPXEConfig.HTTPPort > 0 && cfg.IPXEConfig.HTTPPort < 65535 {
+		flows.AllowProvisioningBootPorts(
+			uint16(cfg.IPXEConfig.HTTPPort),
+			uint16(cfg.IPXEConfig.HTTPPort+provisioningDeviceScriptPortOffset),
+		)
 	}
+	flows.AllowProvisioningBootPorts(provisioningNBDPort)
 	backend := pxe.NewService(
 		pxe.WithLogger(logger),
 		pxe.WithStateManager(pxe.NewStateManager()),
