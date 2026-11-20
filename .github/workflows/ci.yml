@@ -129,9 +129,11 @@
 #     routing): every job runs on GitHub's standard hosted runner,
 #     `runs-on: ubuntu-latest` (4 vCPU, 16 GB RAM, 14 GB SSD, 6-hour job
 #     limit), on every event. A job runs self-hosted only for hardware it
-#     needs or a measured hosted limit it exceeds, recorded as a
-#     `# self-hosted:` reason on its runs-on line; larger hosted runners are
-#     not used. Here that is the image job alone (its unit suite, see there);
+#     needs or a measured hosted limit it exceeds, recorded on its runs-on
+#     line as `# self-hosted: <category>: <reason>` with the category
+#     `hardware` or `oversize` (ruling 1006), on one label and never an
+#     expression; pkg/arch/ci_runners_test.go holds the rule. Larger hosted
+#     runners are not used. Here that is the image job alone (its unit suite, see there);
 #     scans.yml's job is the other. The bigdisk jobs' `if:` keep the schedule
 #     guard, so the tiers and CI Gate read the same verdicts; the
 #     hosted-only steps (`runner.environment == 'github-hosted'`: the apt
@@ -647,12 +649,16 @@ jobs:
   # docs tier and skips on a docs-only PR.
   image:
     name: Devcontainer image [build, test]
-    # Fork PRs stay on ubuntu-latest: a persistent self-hosted runner never takes untrusted code.
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk-docker"]') || 'ubuntu-latest' }}  # self-hosted: measured 24.2 GB unbounded (#1178), runs at a 16g container limit; a standard hosted runner has 16 GB RAM
+    # Ruling 1006: one self-hosted label with a categorised waiver, never an
+    # expression (pkg/arch/ci_runners_test.go). A persistent self-hosted
+    # runner never takes untrusted code, so the `if:` below skips a fork PR;
+    # the gate's `check docs image` then fails that PR closed (a skip passes
+    # only on a docs-only PR).
+    runs-on: bigdisk-docker  # self-hosted: oversize: measured 24.2 GB unbounded (#1178), runs at a 16g container limit; a standard hosted runner has 16 GB RAM
     # v1.26: never on a draft. v1.29.3: on a schedule run, only on the
     # schedule guard's `run`; v1.30: only on `run` on every event, and never
     # on a docs-only PR.
-    if: ${{ needs.preflight.outputs.docs_only != 'true' && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
+    if: ${{ needs.preflight.outputs.docs_only != 'true' && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     needs: preflight   # v1.29.3
     # CUSTOMIZE: the build and the unit suite run one after another here;
     # the race suite is the race job and lint the lint job (v1.30).
