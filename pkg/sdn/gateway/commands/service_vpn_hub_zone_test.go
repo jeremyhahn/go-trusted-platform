@@ -149,3 +149,56 @@ func TestVPNDataPlanes_BuildsTheHubOnlyAfterTheEnforcementInstalls(t *testing.T)
 	require.True(t, ok)
 	assert.Same(t, installed, hub.zones, "the plane carries the installed enforcement")
 }
+
+// hubZoneDeclarations declares the management-vpn zone, so the matrix
+// compiles; only the forwarding-path filter is left to install.
+func hubZoneDeclarations() []zone.ZoneConfig {
+	return []zone.ZoneConfig{
+		{Name: vpnHubZone, AllowTo: []zone.ZonePath{{Zone: zone.ZoneManagement}}},
+		{Name: zone.ZoneManagement},
+	}
+}
+
+// withHubForwardFilter replaces the vpn-hub0 forwarding-path filter install
+// for one test.
+func withHubForwardFilter(t *testing.T, install func(e *vpnHubZoneEnforcement, logger *slog.Logger) error) {
+	t.Helper()
+	prev := installVPNHubForwardFilter
+	installVPNHubForwardFilter = install
+	t.Cleanup(func() { installVPNHubForwardFilter = prev })
+}
+
+// A valid management-vpn matrix is not enforcement on its own: with no
+// forwarding-path filter on vpn-hub0 (the production default until one
+// exists), the hub stays refused (Tenant Agent ruling 1028).
+func TestVPNDataPlanes_RefusesTheHubWithAMatrixButNoForwardingFilter(t *testing.T) {
+	withHubZoneInstall(t, func(_ *ServeConfig, logger *slog.Logger) (*vpnHubZoneEnforcement, error) {
+		return installVPNHubZones(hubZoneDeclarations(), logger)
+	})
+	cfg, hubKey := wireGuardPlaneRun(t, []vpn.DataPlaneKind{vpn.DataPlaneWireGuard}, "kms://vpn/hub0", hubAddress, &stubSecrets{})
+	require.NotNil(t, hubKey)
+
+	planes, err := vpnDataPlanes(cfg, hubKey, discardLogger())
+	var unenforced *ErrVPNHubZoneUnenforced
+	require.ErrorAs(t, err, &unenforced, "a matrix without a forwarding-path filter keeps the plane refused")
+	assert.Empty(t, planes)
+}
+
+// The forwarding-path filter receives the compiled enforcement, whose Allow
+// is its decision; only once it installs is the enforcement returned.
+func TestVPNHubZone_InstallNeedsTheForwardingFilter(t *testing.T) {
+	var got *vpnHubZoneEnforcement
+	withHubForwardFilter(t, func(e *vpnHubZoneEnforcement, _ *slog.Logger) error {
+		got = e
+		return nil
+	})
+	e, err := installVPNHubZones(hubZoneDeclarations(), discardLogger())
+	require.NoError(t, err)
+	require.NotNil(t, e)
+	assert.Same(t, e, got, "the filter decides with the compiled enforcement")
+	assert.True(t, got.Allow(vpnHubInterface, &vpn.Lease{Zones: []string{string(zone.ZoneManagement)}}, zone.ZoneManagement, ""))
+
+	withHubForwardFilter(t, func(*vpnHubZoneEnforcement, *slog.Logger) error { return errors.New("filter not installed") })
+	_, err = installVPNHubZones(hubZoneDeclarations(), discardLogger())
+	require.Error(t, err, "a failed filter install fails the enforcement install")
+}
