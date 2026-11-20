@@ -47,6 +47,11 @@ quicbaas:
   # Required for qrdb first-boot to seed IAM (system tenant, roles, admin
   # certificate).
   spiffe-trust-domain: example.internal
+  # The auth specs register uninvited users (each becomes the admin of a
+  # new tenant). The platform default is invite-only, which refuses
+  # registration/begin with 403 "public registration is disabled".
+  self-service-registration:
+    enabled: true
 
 
 # =============================================================================
