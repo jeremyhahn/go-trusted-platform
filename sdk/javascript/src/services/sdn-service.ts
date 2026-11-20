@@ -328,6 +328,11 @@ export class SDNService extends BaseService {
           `policy rule action ${rule.action} is not supported: the daemon does not enforce it`
         );
       }
+      // The daemon never reads the rule's log flag, so a rule asking to be
+      // logged would be installed and log nothing: refuse it before sending.
+      if (rule.log === true) {
+        throw new RangeError('policy rule log is not supported: the daemon does not enforce it');
+      }
       // The daemon builds the flow from protocol, addresses, ports and VLAN
       // only and drops these fields, so a rule scoped by one would apply
       // across the whole bridge: refuse it before sending.

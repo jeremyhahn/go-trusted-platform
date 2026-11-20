@@ -68,6 +68,13 @@ const UINT64_MAX = 18446744073709551615n;
  * route, so '7/unassign?' could reach another action.
  */
 function profileIdSegment(profileId: number | string): string {
+  // A number past Number.MAX_SAFE_INTEGER is already rounded, so it would
+  // name a different profile: large IDs must come as decimal strings.
+  if (typeof profileId === 'number' && !Number.isSafeInteger(profileId)) {
+    throw new RangeError(
+      `device profile id ${profileId} is not a safe integer: pass large IDs as a decimal string`
+    );
+  }
   const id = String(profileId);
   if (!/^[0-9]{1,20}$/.test(id) || BigInt(id) > UINT64_MAX) {
     throw new RangeError(`device profile id must be a decimal uint64, got ${JSON.stringify(id)}`);
