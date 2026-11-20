@@ -164,12 +164,18 @@ export function useBMC(profileID: string): UseBMCResult {
   const mutate = React.useCallback(
     async (op: string, method: "POST" | "DELETE", body?: unknown) => {
       generation.current++;
-      await call<unknown>(bmcUrl(profileID, op), {
-        method,
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
-      if (currentProfile.current === profileID) {
-        await refetch();
+      try {
+        await call<unknown>(bmcUrl(profileID, op), {
+          method,
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+      } finally {
+        // The bump above discarded any read in flight, the initial load
+        // included: reload even when the mutation failed, or isLoading
+        // never clears. The mutation's error still reaches the caller.
+        if (currentProfile.current === profileID) {
+          await refetch();
+        }
       }
     },
     [profileID, refetch]
