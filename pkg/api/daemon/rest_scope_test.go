@@ -107,7 +107,6 @@ var daemonPreAuthRoutes = []string{
 var daemonMTLSOnlyRoutes = []string{
 	"/api/v1/status",                             // daemon status (registerRoutes)
 	"/api/v1/version",                            // daemon version (registerRoutes)
-	"/api/v1/services",                           // service list, get, start, stop, restart (registerRoutes)
 	"/api/v1/protocols",                          // transport status (registerRoutes)
 	"/api/v1/tpm/idevid",                         // IDevID lifecycle (registerIDevIDRoutes)
 	"/api/v1/tpm/iak",                            // IAK lifecycle (registerIDevIDRoutes)

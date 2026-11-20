@@ -18,6 +18,7 @@ package quic
 import (
 	"context"
 	"errors"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
@@ -401,14 +402,53 @@ func TestAuthMiddleware_AuthenticateRequest_ValidToken(t *testing.T) {
 // AuthorizeRequest Tests
 // =============================================================================
 
+// A request with no decision point wired is refused, not allowed (#1988).
 func TestAuthMiddleware_AuthorizeRequest_NoChecker(t *testing.T) {
 	m := NewAuthMiddleware()
 
 	ctx := ContextWithToken(context.Background(), "test-token")
 	resp := m.AuthorizeRequest(ctx, "vtpm", "write")
 
-	if resp != nil {
-		t.Errorf("expected nil response when no checker configured, got %+v", resp)
+	if resp == nil || resp.Status != quicwire.StatusPermissionDenied {
+		t.Fatalf("expected PermissionDenied when no checker is configured, got %+v", resp)
+	}
+}
+
+// The explicit testing opt-out disables authorization with authentication.
+func TestAuthMiddleware_AuthorizeRequest_RequireAuthOff(t *testing.T) {
+	m := NewAuthMiddleware(WithQUICRequireAuth(false))
+
+	if resp := m.AuthorizeRequest(context.Background(), "vtpm", "write"); resp != nil {
+		t.Fatalf("expected the testing opt-out to allow, got %+v", resp)
+	}
+}
+
+// An operation with no permission (empty resource/action) is refused on the
+// checker path, without asking the checker (#1988).
+func TestAuthMiddleware_AuthorizeRequest_NoPermission_CheckerPath(t *testing.T) {
+	checker := &mockQUICAuthorizationChecker{allowed: true}
+	m := NewAuthMiddleware(WithQUICAuthorizationChecker(checker))
+
+	ctx := ContextWithToken(context.Background(), "test-token")
+	resp := m.AuthorizeRequest(ctx, "", "")
+
+	if resp == nil || resp.Status != quicwire.StatusPermissionDenied {
+		t.Fatalf("expected PermissionDenied for an operation with no permission, got %+v", resp)
+	}
+	if checker.lastResource != "" || checker.lastAction != "" {
+		t.Fatal("the checker must not be asked for an operation with no permission")
+	}
+}
+
+// An operation with no permission is refused on the claims path (#1988).
+func TestAuthMiddleware_AuthorizeRequest_NoPermission_ClaimsPath(t *testing.T) {
+	m := NewAuthMiddleware()
+
+	ctx := ContextWithAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{Scopes: []string{"*:*"}})
+	resp := m.AuthorizeRequest(ctx, "", "")
+
+	if resp == nil || resp.Status != quicwire.StatusPermissionDenied {
+		t.Fatalf("expected PermissionDenied for an operation with no permission, got %+v", resp)
 	}
 }
 

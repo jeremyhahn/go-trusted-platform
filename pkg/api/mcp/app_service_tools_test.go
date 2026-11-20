@@ -103,7 +103,7 @@ func TestAppServiceTools_MatchTheGRPCCatalogAndTheSDK(t *testing.T) {
 	for name, tool := range appServiceTools {
 		byMethod[tool.method] = name
 	}
-	permissions := toolPermissionCatalog()
+	permissions := declaredToolPermissions(PlatformTools{})
 	sdkTools := sdkmcp.MethodTools()
 
 	declared := 0
