@@ -397,7 +397,10 @@ export class ComputeService extends BaseService {
   async suspendVM(id: string): Promise<ApiResponse<SuspendVMResponse>> {
     return this.client.post<SuspendVMResponse>(
       this.buildUrl(`/vms/${this.encodePathSegment(id)}/suspend`),
-      {}
+      {},
+      // No retries: a resend after a lost response fails (the run state
+      // already changed) or undoes another caller's transition.
+      { retry: { enabled: false } }
     );
   }
 
@@ -407,7 +410,10 @@ export class ComputeService extends BaseService {
   async resumeVM(id: string): Promise<ApiResponse<ResumeVMResponse>> {
     return this.client.post<ResumeVMResponse>(
       this.buildUrl(`/vms/${this.encodePathSegment(id)}/resume`),
-      {}
+      {},
+      // No retries: a resend after a lost response fails (the run state
+      // already changed) or undoes another caller's transition.
+      { retry: { enabled: false } }
     );
   }
 
