@@ -273,6 +273,49 @@ describe('SDNBridgeDetailClient policy apply and policy identity', () => {
     expect(body.config.targets[0]).toEqual({ type: 'POLICY_TARGET_TYPE_BRIDGE', id: 'br-1' });
   });
 
+  // A destination port matches only under tcp or udp: OpenFlow rejects a port
+  // match with any or icmp, so the form refuses it (#2024 Codex round 4, P1).
+  async function fillPortRule(protocol: string) {
+    const sent = await renderPage({ [`POST ${SDN}/policies`]: ok({ policy: { id: 'pol-9' } }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Policy' }));
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: 'port-rule' } });
+    fireEvent.change(screen.getByLabelText('Action *'), { target: { value: 'POLICY_RULE_ACTION_DENY' } });
+    fireEvent.change(screen.getByLabelText('Protocol'), { target: { value: protocol } });
+    fireEvent.change(screen.getByLabelText('Destination port'), { target: { value: '23' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    });
+    return sent;
+  }
+
+  for (const protocol of ['any', 'icmp']) {
+    it(`a destination port with protocol ${protocol} is refused`, async () => {
+      const sent = await fillPortRule(protocol);
+      expect(screen.getByTestId('rule-port-error').textContent).toMatch(/rule-1.*tcp or udp/i);
+      expect(sent.some((r) => r.method === 'POST' && r.path === `${SDN}/policies`)).toBe(false);
+    });
+  }
+
+  for (const protocol of ['tcp', 'udp']) {
+    it(`a destination port with protocol ${protocol} is submitted`, async () => {
+      const sent = await fillPortRule(protocol);
+      await waitFor(() => expect(sent.some((r) => r.method === 'POST' && r.path === `${SDN}/policies`)).toBe(true));
+      const body = sent.find((r) => r.method === 'POST' && r.path === `${SDN}/policies`)?.body as {
+        config: { rules: { match: Record<string, unknown> }[] };
+      };
+      expect(body.config.rules[0].match).toEqual({ protocol, destinationPort: 23 });
+    });
+  }
+
+  it('switching to icmp clears an entered destination port', async () => {
+    await renderPage({});
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Policy' }));
+    fireEvent.change(screen.getByLabelText('Protocol'), { target: { value: 'tcp' } });
+    fireEvent.change(screen.getByLabelText('Destination port'), { target: { value: '23' } });
+    fireEvent.change(screen.getByLabelText('Protocol'), { target: { value: 'icmp' } });
+    expect((screen.getByLabelText('Destination port') as HTMLInputElement).value).toBe('');
+  });
+
   it('a refused policy read after viewing another policy shows the error, not the old policy', async () => {
     await renderPage({
       [`GET ${SDN}/policies`]: ok({
