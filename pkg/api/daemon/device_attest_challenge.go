@@ -27,6 +27,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
+
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -48,15 +50,39 @@ type attestChallenge struct {
 	expiresAt   time.Time
 }
 
+// attestChallengeKeyPrefix is the object-storage key prefix of issued,
+// not yet used attestation challenges.
+const attestChallengeKeyPrefix = "attest-challenges/"
+
+// attestChallengeKey is the object-storage key of challenge id.
+func attestChallengeKey(id string) string {
+	return attestChallengeKeyPrefix + id + ".json"
+}
+
+// attestChallengeRecord is the JSON form of an attestChallenge in object
+// storage.
+type attestChallengeRecord struct {
+	DeviceID    string    `json:"device_id"`
+	Tenant      string    `json:"tenant"`
+	TenantBound bool      `json:"tenant_bound"`
+	Nonce       []byte    `json:"nonce"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
 // attestChallengeStore holds the server-issued single-use nonces AttestDevice
-// binds a quote to (#2136). It is in-memory and per process: a challenge
-// issued by one daemon is unknown to another, and a restart forgets every
-// outstanding challenge (the device asks for a new one).
+// binds a quote to (#2136). With a backend (the daemon's shared object
+// store) every challenge is an object under attest-challenges/, so it
+// survives a restart and is honoured by any daemon sharing the store;
+// single use across daemons rests on DeleteObject refusing a key that is
+// already gone. Without a backend it is in-memory and per process: a
+// challenge issued by one daemon is unknown to another, and a restart
+// forgets every outstanding challenge (the device asks for a new one).
 type attestChallengeStore struct {
 	mu      sync.Mutex
 	entries map[string]attestChallenge
 	ttl     time.Duration
 	now     func() time.Time
+	backend objectstorage.Client
 }
 
 func newAttestChallengeStore() *attestChallengeStore {
@@ -69,7 +95,7 @@ func newAttestChallengeStore() *attestChallengeStore {
 
 // issue records a fresh challenge for deviceID under the caller's tenant and
 // returns its ID and entry. Expired entries are dropped first.
-func (c *attestChallengeStore) issue(deviceID, tenant string, tenantBound bool) (string, attestChallenge, error) {
+func (c *attestChallengeStore) issue(ctx context.Context, deviceID, tenant string, tenantBound bool) (string, attestChallenge, error) {
 	nonce := make([]byte, attestChallengeNonceBytes)
 	if _, err := rand.Read(nonce); err != nil {
 		return "", attestChallenge{}, fmt.Errorf("draw challenge nonce: %w", err)
@@ -79,6 +105,34 @@ func (c *attestChallengeStore) issue(deviceID, tenant string, tenantBound bool) 
 		return "", attestChallenge{}, fmt.Errorf("draw challenge id: %w", err)
 	}
 	id := hex.EncodeToString(rawID)
+
+	if c.backend != nil {
+		entry := attestChallenge{
+			deviceID:    deviceID,
+			tenant:      tenant,
+			tenantBound: tenantBound,
+			nonce:       nonce,
+			expiresAt:   c.now().Add(c.ttl),
+		}
+		raw, err := json.Marshal(attestChallengeRecord{
+			DeviceID:    entry.deviceID,
+			Tenant:      entry.tenant,
+			TenantBound: entry.tenantBound,
+			Nonce:       entry.nonce,
+			ExpiresAt:   entry.expiresAt,
+		})
+		if err != nil {
+			return "", attestChallenge{}, fmt.Errorf("encode challenge: %w", err)
+		}
+		if _, err := c.backend.PutObject(ctx, &objectstorage.PutObjectRequest{
+			Key:         attestChallengeKey(id),
+			Value:       raw,
+			ContentType: "application/json",
+		}); err != nil {
+			return "", attestChallenge{}, fmt.Errorf("store challenge: %w", err)
+		}
+		return id, entry, nil
+	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -101,7 +155,32 @@ func (c *attestChallengeStore) issue(deviceID, tenant string, tenantBound bool) 
 
 // take removes the challenge and returns it: a challenge is consumed by the
 // first attempt that names it, whatever that attempt's result.
-func (c *attestChallengeStore) take(id string) (attestChallenge, bool) {
+func (c *attestChallengeStore) take(ctx context.Context, id string) (attestChallenge, bool) {
+	if c.backend != nil {
+		key := attestChallengeKey(id)
+		got, err := c.backend.GetObject(ctx, &objectstorage.GetObjectRequest{Key: key})
+		if err != nil || got == nil {
+			return attestChallenge{}, false
+		}
+		// The delete is the claim: a daemon that loses the race finds the
+		// key gone and must not honour the challenge.
+		del, err := c.backend.DeleteObject(ctx, &objectstorage.DeleteObjectRequest{Key: key})
+		if err != nil || del == nil || !del.Success {
+			return attestChallenge{}, false
+		}
+		var rec attestChallengeRecord
+		if err := json.Unmarshal(got.Value, &rec); err != nil {
+			return attestChallenge{}, false
+		}
+		return attestChallenge{
+			deviceID:    rec.DeviceID,
+			tenant:      rec.Tenant,
+			tenantBound: rec.TenantBound,
+			nonce:       rec.Nonce,
+			expiresAt:   rec.ExpiresAt,
+		}, true
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.entries[id]
@@ -118,6 +197,18 @@ func WithDeviceAttestChallengeRequired() DeviceGRPCOption {
 	return func(s *DeviceGRPCService) { s.challengeRequired = true }
 }
 
+// WithDeviceAttestChallengeStorage keeps issued attestation challenges in
+// the shared object store, so they survive a restart and any daemon over
+// the same store honours them once (#2136). A nil client keeps the
+// per-process in-memory store.
+func WithDeviceAttestChallengeStorage(storage objectstorage.Client) DeviceGRPCOption {
+	return func(s *DeviceGRPCService) {
+		if storage != nil {
+			s.challenges.backend = storage
+		}
+	}
+}
+
 // IssueAttestationChallenge issues a single-use nonce for device_id, bound to
 // the caller's tenant, that AttestDevice checks the quote against (#2136).
 func (s *DeviceGRPCService) IssueAttestationChallenge(
@@ -128,7 +219,7 @@ func (s *DeviceGRPCService) IssueAttestationChallenge(
 		return nil, status.Error(codes.InvalidArgument, "device_id is required")
 	}
 	tenant, bound := callerTenant(ctx)
-	id, entry, err := s.challenges.issue(req.GetDeviceId(), tenant, bound)
+	id, entry, err := s.challenges.issue(ctx, req.GetDeviceId(), tenant, bound)
 	if err != nil {
 		s.logger.Error("attestation challenge could not be issued", "device_id", req.GetDeviceId(), "error", err)
 		return nil, status.Error(codes.Internal, "attestation challenge could not be issued")
@@ -157,7 +248,7 @@ func (s *DeviceGRPCService) checkAttestChallenge(ctx context.Context, req *platf
 		}
 		return nil
 	}
-	entry, ok := s.challenges.take(id)
+	entry, ok := s.challenges.take(ctx, id)
 	if !ok {
 		return status.Error(codes.FailedPrecondition, "attestation challenge is unknown or already used")
 	}
