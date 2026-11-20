@@ -1241,7 +1241,8 @@ web-test:
 # with the console embedded, then web/playwright.real-server.config.ts starts
 # it on the TPM simulator in a temporary directory (global-setup.ts), runs
 # web/e2e/real-server/ in Chromium with real WebAuthn ceremonies and stops it.
-# No mocks. Run `make web-deps` first on a fresh checkout.
+# No mocks. Run `make web-deps` and `cd web && npx playwright install
+# chromium` first on a fresh checkout; the target downloads nothing.
 #   make web-e2e                 # build, then the suite
 #   make web-e2e E2E_PORT=19443  # another TLS port
 #   make web-e2e WEB_E2E_BUILD=0 # reuse bin/platformd
@@ -1252,8 +1253,7 @@ ifeq ($(strip $(WEB_E2E_BUILD)),1)
 	$(MAKE) build WITH_WEB=1
 endif
 	@echo "[Web] Running Playwright against a real platformd..."
-	cd $(WEB_SRC) && npx playwright install chromium && \
-		E2E_PORT=$(E2E_PORT) PLATFORMD_BIN=$(abspath $(PLATFORMD)) \
+	cd $(WEB_SRC) && E2E_PORT=$(E2E_PORT) PLATFORMD_BIN=$(abspath $(PLATFORMD)) \
 		npx playwright test --config playwright.real-server.config.ts
 
 # vitest over web/src/**/*.test.ts(x): hooks, stores, contexts in jsdom, no
