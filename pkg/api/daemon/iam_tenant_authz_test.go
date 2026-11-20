@@ -168,7 +168,7 @@ func TestUnboundTenantCallers(t *testing.T) {
 		})
 		t.Run(c.name+" admits the Unix peer the PEP allows, as its uid/gid principal", func(t *testing.T) {
 			var seen []*sdkiam.CheckRequest
-			if err := c.call(peer, registeredPairPEP(c.resource, c.action, &seen)); err != nil {
+			if err := c.call(peer, registeredPairPEP(c.resource+"://"+c.tenant, c.action, &seen)); err != nil {
 				t.Fatalf("%s() = %v, want nil", c.name, err)
 			}
 			if len(seen) != 1 {
@@ -181,8 +181,8 @@ func TestUnboundTenantCallers(t *testing.T) {
 			if len(req.Subject.Roles) != 1 || req.Subject.Roles[0] != "unix:gid:100" {
 				t.Fatalf("roles = %v, want [unix:gid:100]", req.Subject.Roles)
 			}
-			if req.Resource != c.resource || req.Action != c.action {
-				t.Fatalf("resource, action = %q, %q; want %q, %q", req.Resource, req.Action, c.resource, c.action)
+			if req.Resource != c.resource+"://"+c.tenant || req.Action != c.action {
+				t.Fatalf("resource, action = %q, %q; want %q, %q", req.Resource, req.Action, c.resource+"://"+c.tenant, c.action)
 			}
 		})
 		t.Run(c.name+" refuses the Unix peer in a method with no registered scope, without a PEP call", func(t *testing.T) {
@@ -325,7 +325,8 @@ func TestAuthorizeIAMTenant(t *testing.T) {
 	})
 
 	t.Run("Unix peer-credential operator the PEP allows is allowed", func(t *testing.T) {
-		if err := authorizeIAMTenant(unixOperatorContext(), allowAllPEP(nil), "tenant-a"); err != nil {
+		ctx := withOperationMethod(unixOperatorContext(), "/platform.v1.PlatformIAMService/GetUser")
+		if err := authorizeIAMTenant(ctx, allowAllPEP(nil), "tenant-a"); err != nil {
 			t.Fatalf("authorizeIAMTenant() = %v, want nil", err)
 		}
 	})

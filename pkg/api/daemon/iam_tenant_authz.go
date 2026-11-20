@@ -75,12 +75,34 @@ func (e errUnixPeerDenied) Error() string {
 	return "tenant-scoped call refused: IAM denied " + e.Subject + " " + e.Action + " on " + e.Resource
 }
 
-// unboundCallerPermission is the registered permission pair of the gRPC
-// method in ctx (grpcapi.ScopeForMethod), split into the resource and action
-// the PEP decides. ok is false when ctx carries no method, the method has no
-// catalog entry, or the entry is not a resource:action pair.
+// operationMethodKey keys the full gRPC method name of the operation a
+// handler serves (withOperationMethod).
+type operationMethodKey struct{}
+
+// withOperationMethod records fullMethod ("/platform.v1.TenantService/GetTenant")
+// as the operation ctx serves. Each gRPC handler records its own method, so
+// the operation is known whichever transport (gRPC, REST, QUIC, MCP or an
+// in-process caller) reached the handler.
+func withOperationMethod(ctx context.Context, fullMethod string) context.Context {
+	return context.WithValue(ctx, operationMethodKey{}, fullMethod)
+}
+
+// operationMethod is the full method of the operation ctx serves: the one a
+// handler recorded (withOperationMethod), else the gRPC server's (grpc.Method).
+func operationMethod(ctx context.Context) (string, bool) {
+	if method, ok := ctx.Value(operationMethodKey{}).(string); ok && method != "" {
+		return method, true
+	}
+	return grpc.Method(ctx)
+}
+
+// unboundCallerPermission is the registered permission pair of the
+// operation in ctx (operationMethod, grpcapi.ScopeForMethod), split into the
+// resource and action the PEP decides. ok is false when ctx carries no
+// method, the method has no catalog entry, or the entry is not a
+// resource:action pair.
 func unboundCallerPermission(ctx context.Context) (resource, action string, ok bool) {
-	method, hasMethod := grpc.Method(ctx)
+	method, hasMethod := operationMethod(ctx)
 	if !hasMethod || method == "" {
 		return "", "", false
 	}
@@ -125,6 +147,9 @@ func authorizeUnboundCaller(ctx context.Context, pep quicbaassdk.IAMPEPClient, t
 		return status.Error(codes.PermissionDenied, ErrPEPClientNotAvailable{}.Error())
 	}
 	principal := unixPeerPrincipal(creds, tenantID)
+	// The PEP takes a type://path resource URI: the registered resource
+	// type, scoped to the tenant the principal carries.
+	resource = resource + "://" + tenantID
 	allowed, err := checkPrincipalPermission(ctx, pep, principal, resource, action)
 	if err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())

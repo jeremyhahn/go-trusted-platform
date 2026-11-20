@@ -176,6 +176,7 @@ func (s *InvitationGRPCService) CreateInvitation(
 	ctx context.Context,
 	req *platformv1.CreateInvitationRequest,
 ) (*platformv1.CreateInvitationResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.InvitationService/CreateInvitation")
 	if s.svc == nil {
 		return nil, s.invitationNotImplemented("CreateInvitation")
 	}
@@ -209,6 +210,7 @@ func (s *InvitationGRPCService) GetInvitation(
 	ctx context.Context,
 	req *platformv1.GetInvitationRequest,
 ) (*platformv1.GetInvitationResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.InvitationService/GetInvitation")
 	if s.svc == nil {
 		return nil, s.invitationNotImplemented("GetInvitation")
 	}
@@ -230,6 +232,7 @@ func (s *InvitationGRPCService) GetInvitationByToken(
 	ctx context.Context,
 	req *platformv1.GetInvitationByTokenRequest,
 ) (*platformv1.GetInvitationResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.InvitationService/GetInvitationByToken")
 	if s.svc == nil {
 		return nil, s.invitationNotImplemented("GetInvitationByToken")
 	}
@@ -251,6 +254,7 @@ func (s *InvitationGRPCService) ListInvitations(
 	ctx context.Context,
 	req *platformv1.ListInvitationsRequest,
 ) (*platformv1.ListInvitationsResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.InvitationService/ListInvitations")
 	if s.svc == nil {
 		return nil, s.invitationNotImplemented("ListInvitations")
 	}
@@ -298,6 +302,7 @@ func (s *InvitationGRPCService) RevokeInvitation(
 	ctx context.Context,
 	req *platformv1.RevokeInvitationRequest,
 ) (*platformv1.RevokeInvitationResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.InvitationService/RevokeInvitation")
 	if s.svc == nil {
 		return nil, s.invitationNotImplemented("RevokeInvitation")
 	}
@@ -321,6 +326,7 @@ func (s *InvitationGRPCService) AcceptInvitation(
 	ctx context.Context,
 	req *platformv1.AcceptInvitationRequest,
 ) (*platformv1.AcceptInvitationResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.InvitationService/AcceptInvitation")
 	if s.svc == nil {
 		return nil, s.invitationNotImplemented("AcceptInvitation")
 	}
@@ -357,6 +363,7 @@ func (s *InvitationGRPCService) DeleteInvitation(
 	ctx context.Context,
 	req *platformv1.DeleteInvitationRequest,
 ) (*platformv1.DeleteInvitationResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.InvitationService/DeleteInvitation")
 	if s.svc == nil {
 		return nil, s.invitationNotImplemented("DeleteInvitation")
 	}

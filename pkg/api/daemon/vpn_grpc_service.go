@@ -108,6 +108,7 @@ func (s *VPNGRPCService) requireBackend() error {
 //
 // Permission: vpn:write.
 func (s *VPNGRPCService) EnrolPeer(ctx context.Context, req *platformv1.EnrolVPNPeerRequest) (*platformv1.EnrolVPNPeerResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.VPNService/EnrolPeer")
 	if err := s.requireBackend(); err != nil {
 		return nil, err
 	}
@@ -133,6 +134,7 @@ func (s *VPNGRPCService) EnrolPeer(ctx context.Context, req *platformv1.EnrolVPN
 //
 // Permission: vpn:read.
 func (s *VPNGRPCService) ListPeers(ctx context.Context, req *platformv1.ListVPNPeersRequest) (*platformv1.ListVPNPeersResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.VPNService/ListPeers")
 	if err := s.requireBackend(); err != nil {
 		return nil, err
 	}
@@ -155,6 +157,7 @@ func (s *VPNGRPCService) ListPeers(ctx context.Context, req *platformv1.ListVPNP
 //
 // Permission: vpn:write.
 func (s *VPNGRPCService) RevokePeer(ctx context.Context, req *platformv1.RevokeVPNPeerRequest) (*platformv1.RevokeVPNPeerResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.VPNService/RevokePeer")
 	if err := s.requireBackend(); err != nil {
 		return nil, err
 	}
@@ -172,6 +175,7 @@ func (s *VPNGRPCService) RevokePeer(ctx context.Context, req *platformv1.RevokeV
 //
 // Permission: vpn:read.
 func (s *VPNGRPCService) GetStatus(ctx context.Context, req *platformv1.GetVPNStatusRequest) (*platformv1.GetVPNStatusResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.VPNService/GetStatus")
 	if err := s.requireBackend(); err != nil {
 		return nil, err
 	}
@@ -191,6 +195,7 @@ func (s *VPNGRPCService) GetStatus(ctx context.Context, req *platformv1.GetVPNSt
 //
 // Permission: vpn:admin.
 func (s *VPNGRPCService) GetPosturePolicy(ctx context.Context, req *platformv1.GetVPNPosturePolicyRequest) (*platformv1.GetVPNPosturePolicyResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.VPNService/GetPosturePolicy")
 	if err := s.requireBackend(); err != nil {
 		return nil, err
 	}
@@ -209,6 +214,7 @@ func (s *VPNGRPCService) GetPosturePolicy(ctx context.Context, req *platformv1.G
 //
 // Permission: vpn:admin.
 func (s *VPNGRPCService) SetPosturePolicy(ctx context.Context, req *platformv1.SetVPNPosturePolicyRequest) (*platformv1.SetVPNPosturePolicyResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.VPNService/SetPosturePolicy")
 	if err := s.requireBackend(); err != nil {
 		return nil, err
 	}
@@ -234,6 +240,7 @@ func (s *VPNGRPCService) SetPosturePolicy(ctx context.Context, req *platformv1.S
 //
 // Permission: vpn:admin.
 func (s *VPNGRPCService) DeletePosturePolicy(ctx context.Context, req *platformv1.DeleteVPNPosturePolicyRequest) (*platformv1.DeleteVPNPosturePolicyResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.VPNService/DeletePosturePolicy")
 	if err := s.requireBackend(); err != nil {
 		return nil, err
 	}
@@ -251,6 +258,7 @@ func (s *VPNGRPCService) DeletePosturePolicy(ctx context.Context, req *platformv
 //
 // Permission: vpn:admin.
 func (s *VPNGRPCService) ListPosturePolicies(ctx context.Context, req *platformv1.ListVPNPosturePoliciesRequest) (*platformv1.ListVPNPosturePoliciesResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.VPNService/ListPosturePolicies")
 	if err := s.requireBackend(); err != nil {
 		return nil, err
 	}
