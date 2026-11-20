@@ -9,9 +9,29 @@ interface Pending {
   resolve: (payload: unknown) => void;
 }
 
-// Every fetch stays pending until the test answers it, so a test controls
-// the order in which two profiles' listings settle.
+// Every SDK call stays pending until the test answers it, so a test
+// controls the order in which two profiles' listings settle. Each call is
+// recorded with the REST method and path its BMCService method sends.
 let pending: Pending[] = [];
+
+function sdkCall(method: string, path: (id: string, ...rest: never[]) => string) {
+  return vi.fn(
+    (id: string, ...rest: never[]) =>
+      new Promise((resolve) => {
+        pending.push({
+          method,
+          url: `/api/v1/bmc/${encodeURIComponent(id)}${path(id, ...rest)}`,
+          resolve: (payload) => resolve({ success: true, data: payload }),
+        });
+      })
+  );
+}
+
+const bmc = vi.hoisted(() => ({}) as Record<string, unknown>);
+
+vi.mock('trusted-platform-sdk', () => ({
+  usePlatformClient: () => ({ bmc }),
+}));
 
 function answer(url: string, payload: unknown): void {
   const i = pending.findIndex((p) => p.url === url);
@@ -25,24 +45,14 @@ const bob: BMCUserSlot = { slot: 3, username: 'bob', enabled: true, privilege: 2
 
 beforeEach(() => {
   pending = [];
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(
-      (url: string, init?: RequestInit) =>
-        new Promise((resolve) => {
-          pending.push({
-            method: init?.method ?? 'GET',
-            url,
-            resolve: (payload) =>
-              resolve({
-                ok: true,
-                status: 200,
-                text: async () => JSON.stringify({ payload }),
-              }),
-          });
-        })
-    )
-  );
+  Object.assign(bmc, {
+    listUsers: sdkCall('GET', () => '/users'),
+    createUser: sdkCall('POST', () => '/users'),
+    deleteUser: sdkCall('DELETE', (_id, slot: number) => `/users/${slot}`),
+    setUserPassword: sdkCall('PUT', (_id, slot: number) => `/users/${slot}/password`),
+    setUserPrivilege: sdkCall('PUT', (_id, slot: number) => `/users/${slot}/privilege`),
+    replaceWebCertificate: sdkCall('PUT', () => '/cert'),
+  });
 });
 
 afterEach(() => {
@@ -169,23 +179,20 @@ function answerMethod(method: string, url: string, payload: unknown): void {
   p.resolve(payload);
 }
 
-// #2023 Codex round 5: an HTTP 200 whose body is not a user list (invalid
-// JSON, an empty body, an object) never established slot occupancy, so it
-// must not mark the profile listed, and createUser must send no POST.
+// #2023 Codex round 5: a successful answer whose payload is not a user
+// list (no payload, an empty body, an object) never established slot
+// occupancy, so it must not mark the profile listed, and createUser must
+// send nothing.
 describe('useBMCUsers with an unreadable listing', () => {
   const unreadable = [
-    { name: 'invalid JSON', body: '{"payload": [' },
-    { name: 'an empty body', body: '' },
-    { name: 'an object payload', body: '{}' },
-    { name: 'a non-array payload', body: JSON.stringify({ payload: { slot: 3 } }) },
+    { name: 'no payload', res: { success: true } },
+    { name: 'an empty body', res: { success: true, data: '' } },
+    { name: 'an object payload', res: { success: true, data: {} } },
+    { name: 'a non-array payload', res: { success: true, data: { slot: 3 } } },
   ];
 
-  it.each(unreadable)('keeps listed false and refuses createUser after $name', async ({ body }) => {
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-      if ((init?.method ?? 'GET') !== 'GET') throw new Error(`unexpected ${init?.method}`);
-      return { ok: true, status: 200, text: async () => body };
-    });
-    vi.stubGlobal('fetch', fetchMock);
+  it.each(unreadable)('keeps listed false and refuses createUser after $name', async ({ res }) => {
+    bmc.listUsers = vi.fn(async () => res);
     const { result } = renderHook(() => useBMCUsers('7'));
     await flush();
     await waitFor(() => expect(result.current.isLoading).toBe(false));
@@ -195,14 +202,12 @@ describe('useBMCUsers with an unreadable listing', () => {
     await expect(
       result.current.createUser({ slot: 3, username: 'eve', password: 'pw', privilege: 4, channel: 1 } as never)
     ).rejects.toThrow(/still loading|unreadable/);
-    expect(fetchMock.mock.calls.every(([, init]) => (init?.method ?? 'GET') === 'GET')).toBe(true);
+    expect(bmc.createUser).not.toHaveBeenCalled();
+    expect(pending).toEqual([]);
   });
 
   it('lists an empty array as listed with no users', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ payload: [] }) }))
-    );
+    bmc.listUsers = vi.fn(async () => ({ success: true, data: [] }));
     const { result } = renderHook(() => useBMCUsers('7'));
     await flush();
     await waitFor(() => expect(result.current.listed).toBe(true));

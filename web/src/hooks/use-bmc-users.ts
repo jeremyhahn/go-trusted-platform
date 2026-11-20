@@ -1,5 +1,8 @@
 "use client";
 import * as React from 'react';
+import { usePlatformClient } from 'trusted-platform-sdk';
+
+import { payloadOf } from './use-bmc-cert-ops';
 
 /**
  * Privilege names the BMC REST surface accepts.
@@ -62,47 +65,13 @@ export interface UseBMCUsersResult {
   replaceWebCertificate: (certPem: string, keyPem: string) => Promise<void>;
 }
 
-async function call(method: string, path: string, body?: unknown): Promise<unknown> {
-  const res = await fetch(path, {
-    method,
-    credentials: 'include',
-    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await res.text();
-  let parsed: unknown = undefined;
-  if (text) {
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = undefined;
-    }
-  }
-  if (!res.ok) {
-    const env = parsed as { error?: { message?: string } | string; message?: string } | undefined;
-    const msg =
-      (typeof env?.error === 'object' ? env.error?.message : env?.error) ?? env?.message ?? `HTTP ${res.status}`;
-    throw new Error(msg);
-  }
-  return parsed;
-}
-
-function unwrap<T>(body: unknown): T | undefined {
-  if (body && typeof body === 'object') {
-    const env = body as { payload?: T; data?: T };
-    if (env.payload !== undefined) return env.payload;
-    if (env.data !== undefined) return env.data;
-  }
-  return body as T | undefined;
-}
-
 /**
  * useBMCUsers drives the BMC user and web certificate operations of one
- * BMC profile (#1720) over /api/v1/bmc/{profileID}/...
- *
- * The SDK carries the same calls as BMCService; the web consumes the
- * SDK's built bundle, so this hook calls the REST routes directly with
- * the session cookie, as useReportedGateways does.
+ * BMC profile (#1720) over /api/v1/bmc/{profileID}/... through the SDK
+ * client's BMCService (#2040): `make web-deps` builds the SDK before the
+ * web install, so the console uses the same calls as every SDK consumer.
+ * A refused call (a 403 for a missing scope) rejects with the server's
+ * message, which the page shows.
  */
 interface Listing {
   base: string;
@@ -113,6 +82,8 @@ interface Listing {
 const EMPTY_USERS: BMCUserSlot[] = [];
 
 export function useBMCUsers(profileID: string): UseBMCUsersResult {
+  const bmc = usePlatformClient().bmc;
+  // The profile's REST base; it keys the listing and the stale-profile guards.
   const base = `/api/v1/bmc/${encodeURIComponent(profileID)}`;
   // The last settled listing, tagged with the base it was read from. Rows
   // and errors of another profile are never shown for this one.
@@ -136,13 +107,13 @@ export function useBMCUsers(profileID: string): UseBMCUsersResult {
     const mine = ++seq.current;
     let next: Listing;
     try {
-      const list = unwrap<BMCUserSlot[]>(await call('GET', `${base}/users`));
+      const list: unknown = payloadOf<unknown>(await bmc.listUsers(profileID));
       // Only a user array establishes slot occupancy. An unparseable or
       // empty body, or a payload that is not an array, never listed the
       // slots, so it must not mark the profile listed: createUser writes
       // the requested slot without an occupancy check of its own.
       next = Array.isArray(list)
-        ? { base, users: list, error: null }
+        ? { base, users: list as BMCUserSlot[], error: null }
         : { base, users: [], error: 'BMC returned an unreadable user listing' };
     } catch (e: unknown) {
       next = { base, users: [], error: e instanceof Error ? e.message : String(e) };
@@ -150,7 +121,7 @@ export function useBMCUsers(profileID: string): UseBMCUsersResult {
     if (mine !== seq.current || currentBase.current !== base) return;
     setListing(next);
     setRefreshing(false);
-  }, [base]);
+  }, [base, bmc, profileID]);
 
   const refetch = React.useCallback(async () => {
     setRefreshing(true);
@@ -197,43 +168,43 @@ export function useBMCUsers(profileID: string): UseBMCUsersResult {
   const createUser = React.useCallback(
     async (input: CreateBMCUserInput) => {
       requireListed();
-      await call('POST', `${base}/users`, input);
+      payloadOf(await bmc.createUser(profileID, input));
       await refetchIfCurrent();
     },
-    [base, refetchIfCurrent, requireListed]
+    [bmc, profileID, refetchIfCurrent, requireListed]
   );
 
   const deleteUser = React.useCallback(
     async (slot: number) => {
       requireListed();
-      await call('DELETE', `${base}/users/${slot}`);
+      payloadOf(await bmc.deleteUser(profileID, slot));
       await refetchIfCurrent();
     },
-    [base, refetchIfCurrent, requireListed]
+    [bmc, profileID, refetchIfCurrent, requireListed]
   );
 
   const setUserPassword = React.useCallback(
     async (slot: number, password: string) => {
       requireListed();
-      await call('PUT', `${base}/users/${slot}/password`, { password });
+      payloadOf(await bmc.setUserPassword(profileID, slot, password));
     },
-    [base, requireListed]
+    [bmc, profileID, requireListed]
   );
 
   const setUserPrivilege = React.useCallback(
     async (slot: number, privilege: BMCPrivilege, channel: number) => {
       requireListed();
-      await call('PUT', `${base}/users/${slot}/privilege`, { privilege, channel });
+      payloadOf(await bmc.setUserPrivilege(profileID, slot, privilege, channel));
       await refetchIfCurrent();
     },
-    [base, refetchIfCurrent, requireListed]
+    [bmc, profileID, refetchIfCurrent, requireListed]
   );
 
   const replaceWebCertificate = React.useCallback(
     async (certPem: string, keyPem: string) => {
-      await call('PUT', `${base}/cert`, { cert_pem: certPem, key_pem: keyPem });
+      payloadOf(await bmc.replaceWebCertificate(profileID, { certPem, keyPem }));
     },
-    [base]
+    [bmc, profileID]
   );
 
   return {

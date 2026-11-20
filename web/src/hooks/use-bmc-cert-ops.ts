@@ -1,13 +1,12 @@
 'use client';
 import * as React from 'react';
+import { usePlatformClient, type ApiResponse, type EnrollBMCRequest } from 'trusted-platform-sdk';
 
 /**
  * Wire shapes of POST /api/v1/bmc/{profileID}/enroll and
  * POST /api/v1/bmc/{profileID}/cert/restore (pkg/webservice/v1/bmc/enroll.go
- * and cert_restore.go). They mirror the SDK's BMCService.enrollBMC and
- * restoreFactoryCert; the calls go straight to the REST routes, as useBMC and
- * useBMCUsers do, because the web app consumes the built SDK package and the
- * two methods reach it only with the next SDK build.
+ * and cert_restore.go). The hook calls them through the SDK client's
+ * BMCService.enrollBMC and restoreFactoryCert (#2040).
  */
 export interface BMCEnrollOptions {
   /** Overrides the profile's replace_certificate enrolment flag. */
@@ -78,38 +77,25 @@ export interface UseBMCCertOpsResult {
   restoreFactoryCert: () => Promise<BMCRestoreResult | null>;
 }
 
-async function call<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(path, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const text = await res.text();
-  let parsed: unknown = undefined;
-  if (text) {
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = undefined;
-    }
+/**
+ * payloadOf turns an SDK answer into its payload, or an Error carrying the
+ * server's message (a 403 for a missing scope, a 503, ...).
+ */
+export function payloadOf<T>(res: ApiResponse<unknown>): T {
+  if (!res.success) {
+    throw new Error(res.error?.message || 'BMC request failed');
   }
-  if (!res.ok) {
-    const env = parsed as { error?: { message?: string } | string; message?: string } | undefined;
-    const msg =
-      (typeof env?.error === 'object' ? env.error?.message : env?.error) ?? env?.message ?? `HTTP ${res.status}`;
-    throw new Error(msg);
-  }
-  const env = parsed as { payload?: T } | undefined;
-  return (env?.payload ?? parsed ?? {}) as T;
+  return (res.data ?? {}) as T;
 }
 
-function enrollBody(options: BMCEnrollOptions): Record<string, boolean> {
-  const body: Record<string, boolean> = {};
-  if (options.replaceCertificate !== undefined) body.replace_certificate = options.replaceCertificate;
-  if (options.rotatePassword !== undefined) body.rotate_password = options.rotatePassword;
-  if (options.dnsRegister !== undefined) body.dns_register = options.dnsRegister;
-  if (options.danePublish !== undefined) body.dane_publish = options.danePublish;
+function enrollBody(options: BMCEnrollOptions): EnrollBMCRequest {
+  // Only the options the operator set are sent; the SDK maps them to the
+  // replace_certificate, rotate_password, dns_register and dane_publish fields.
+  const body: EnrollBMCRequest = {};
+  if (options.replaceCertificate !== undefined) body.replaceCertificate = options.replaceCertificate;
+  if (options.rotatePassword !== undefined) body.rotatePassword = options.rotatePassword;
+  if (options.dnsRegister !== undefined) body.dnsRegister = options.dnsRegister;
+  if (options.danePublish !== undefined) body.danePublish = options.danePublish;
   return body;
 }
 
@@ -121,7 +107,7 @@ export function useBMCCertOps(profileID: string): UseBMCCertOpsResult {
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [lastResult, setLastResult] = React.useState<BMCCertOpResult | null>(null);
-  const base = `/api/v1/bmc/${encodeURIComponent(profileID)}`;
+  const bmc = usePlatformClient().bmc;
 
   const run = React.useCallback(
     async <T extends BMCEnrollResult | BMCRestoreResult>(
@@ -149,9 +135,11 @@ export function useBMCCertOps(profileID: string): UseBMCCertOpsResult {
       error,
       busy,
       lastResult,
-      enroll: (options) => run('enroll', () => call<BMCEnrollResult>(`${base}/enroll`, enrollBody(options))),
-      restoreFactoryCert: () => run('restore', () => call<BMCRestoreResult>(`${base}/cert/restore`, {})),
+      enroll: (options) =>
+        run('enroll', async () => payloadOf<BMCEnrollResult>(await bmc.enrollBMC(profileID, enrollBody(options)))),
+      restoreFactoryCert: () =>
+        run('restore', async () => payloadOf<BMCRestoreResult>(await bmc.restoreFactoryCert(profileID))),
     }),
-    [error, busy, lastResult, run, base]
+    [error, busy, lastResult, run, bmc, profileID]
   );
 }
