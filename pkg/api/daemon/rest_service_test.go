@@ -272,8 +272,9 @@ func TestRESTHandlerListServices(t *testing.T) {
 
 		server, err := NewRESTServer(config, service, slog.Default())
 		require.NoError(t, err)
+		allowServiceRoutes(t, server)
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/services", nil)
+		req := servicesRequest(http.MethodGet, "/api/v1/services", nil)
 		w := httptest.NewRecorder()
 
 		server.router.ServeHTTP(w, req)
@@ -299,8 +300,9 @@ func TestRESTHandlerGetService(t *testing.T) {
 
 		server, err := NewRESTServer(config, service, slog.Default())
 		require.NoError(t, err)
+		allowServiceRoutes(t, server)
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/services/nonexistent", nil)
+		req := servicesRequest(http.MethodGet, "/api/v1/services/nonexistent", nil)
 		w := httptest.NewRecorder()
 
 		server.router.ServeHTTP(w, req)

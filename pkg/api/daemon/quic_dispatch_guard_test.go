@@ -55,6 +55,7 @@ import (
 //	0x56-0x5F tpm2 (idevid)     0xB0-0xB4 sdn extended
 //	0x60      objectstorage cat 0xB5-0xBF iam roles/groups
 //	0x61      dns category
+//	0x66-0x67 attestation manifest list/delete
 //	0x69      vm (ext cat)
 //	0x6B-0x6E tpm2 (iak ext)    0xC0-0xCB kms keys
 //	0x6F      container         0xCC-0xCF switch/kms-ext/secrets/prov cats
@@ -218,7 +219,9 @@ var quicWireOwners = []struct {
 	{0x56, 0x5F, "tpm2"},
 	{0x60, 0x60, "objectstorage"},
 	{0x61, 0x61, "dnscategory"},
-	{0x62, 0x68, "reserved"}, // retired top-level VM bytes (#704), unclassified
+	{0x62, 0x65, "reserved"},    // retired top-level VM bytes (#704), unclassified
+	{0x66, 0x67, "attestation"}, // manifest list/delete (#1686, ruling 931)
+	{0x68, 0x68, "reserved"},    // retired top-level VM byte (#704), unclassified
 	{0x69, 0x69, "vm"},
 	{0x6A, 0x6A, "reserved"}, // retired VMGetState (#704), unclassified
 	{0x6B, 0x6E, "tpm2"},
@@ -439,6 +442,8 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpAttestVerifyManifest":      {value: quicwire.OpAttestVerifyManifest, mode: wireDirect, family: "attestation"},
 	"OpAttestHost":                {value: quicwire.OpAttestHost, mode: wireDirect, family: "attestation"},
 	"OpAttestVMWorkload":          {value: quicwire.OpAttestVMWorkload, mode: wireDirect, family: "attestation"},
+	"OpAttestListManifests":       {value: quicwire.OpAttestListManifests, mode: wireDirect, family: "attestation"},
+	"OpAttestDeleteManifest":      {value: quicwire.OpAttestDeleteManifest, mode: wireDirect, family: "attestation"},
 	"OpCertIssue":                 {value: quicwire.OpCertIssue, mode: wireDirect, family: "ca"},
 	"OpCertRevoke":                {value: quicwire.OpCertRevoke, mode: wireDirect, family: "ca"},
 	"OpCertRenew":                 {value: quicwire.OpCertRenew, mode: wireDirect, family: "ca"},

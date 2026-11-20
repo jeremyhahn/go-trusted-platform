@@ -299,7 +299,6 @@ type MockFactory struct {
 	userDAO          datastore.UserDAO
 	registrationDAO  datastore.RegistrationDAO
 	invitationDAO    datastore.InvitationDAO
-	roleDAO          datastore.RoleDAO
 	webAuthnDAO      datastore.WebAuthnDAO
 	deviceDAO        devicedao.DeviceDAO
 	deviceProfileDAO devicedao.DeviceProfileDAO
@@ -419,16 +418,6 @@ func (m *MockFactory) InvitationDAO() (datastore.InvitationDAO, error) {
 // SetInvitationDAO sets the mock invitation DAO.
 func (m *MockFactory) SetInvitationDAO(dao datastore.InvitationDAO) {
 	m.invitationDAO = dao
-}
-
-// RoleDAO returns the mock role DAO.
-func (m *MockFactory) RoleDAO() (datastore.RoleDAO, error) {
-	return m.roleDAO, nil
-}
-
-// SetRoleDAO sets the mock role DAO.
-func (m *MockFactory) SetRoleDAO(dao datastore.RoleDAO) {
-	m.roleDAO = dao
 }
 
 // WebAuthnDAO returns the mock WebAuthn DAO.

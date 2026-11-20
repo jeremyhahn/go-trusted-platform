@@ -308,7 +308,11 @@ func OIDCUnaryInterceptor(opts ...OIDCInterceptorOption) grpc.UnaryServerInterce
 			return nil, err
 		}
 
-		// Add validated token to context and continue
+		// Bind the verified principal and tenant, then the token.
+		ctx, err = bindLegacyPrincipal(ctx, config.TokenValidator, token)
+		if err != nil {
+			return nil, err
+		}
 		ctx = ContextWithToken(ctx, token)
 		return handler(ctx, req)
 	}
@@ -402,7 +406,12 @@ func OIDCStreamInterceptor(opts ...OIDCInterceptorOption) grpc.StreamServerInter
 			return err
 		}
 
-		// Wrap stream with token in context
+		// Bind the verified principal and tenant, then wrap the stream with
+		// the token in context.
+		ctx, err = bindLegacyPrincipal(ctx, config.TokenValidator, token)
+		if err != nil {
+			return err
+		}
 		wrapped := &wrappedServerStream{
 			ServerStream: ss,
 			ctx:          ContextWithToken(ctx, token),
@@ -441,6 +450,32 @@ func mapClaimsAuthError(method, scope string, err error) error {
 // without claims. The token names no scopes, so the AuthorizationChecker
 // decides the catalog "resource:action" for it; without a checker, or when
 // the checker cannot decide, the call is refused (#768).
+// PrincipalTokenValidator is an optional TokenValidator extension for the
+// legacy (bool-only) path: it names the principal and tenant a token it has
+// already validated carries, so the interceptor can bind the caller's identity
+// for tenant-scoped handlers.
+type PrincipalTokenValidator interface {
+	TokenPrincipal(ctx context.Context, token string) (*platformtoken.AuthorizedContext, error)
+}
+
+// bindLegacyPrincipal stores the principal a legacy-path token names with
+// ContextWithAuthorizedContext. A validator that cannot name one leaves ctx
+// unchanged, so tenant-scoped handlers still see an unbound caller.
+func bindLegacyPrincipal(ctx context.Context, validator TokenValidator, token string) (context.Context, error) {
+	pv, ok := validator.(PrincipalTokenValidator)
+	if !ok {
+		return ctx, nil
+	}
+	authCtx, err := pv.TokenPrincipal(ctx, token)
+	if err != nil {
+		return ctx, status.Error(codes.Unauthenticated, ErrTokenValidationFailed{Cause: err}.Error())
+	}
+	if authCtx == nil {
+		return ctx, nil
+	}
+	return ContextWithAuthorizedContext(ctx, authCtx), nil
+}
+
 func authorizeLegacyToken(ctx context.Context, checker AuthorizationChecker, method, scope, token string) error {
 	if checker == nil {
 		return status.Error(codes.PermissionDenied, ErrAuthorizationCheckerRequired{Method: method}.Error())

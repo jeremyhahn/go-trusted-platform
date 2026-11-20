@@ -1,0 +1,392 @@
+package arch
+
+import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"testing"
+
+	"gopkg.in/yaml.v3"
+)
+
+// Ruling 862: a pool host's downloads cross the owner's WAN unless they come
+// from the LAN. Every pool sets GOPROXY with the LAN module proxy first, so a
+// workflow step that can run on the pool keeps that proxy and fetches no
+// build artifact or cache from GitHub's storage.
+//
+// Ruling 869 (pending InfoSec's review of M-8): with the LAN-first proxy,
+// integrity rests on the checksum database. A pool job that runs Go natively
+// (a setup-go step that can run on the pool) sets -mod=readonly in its job
+// GOFLAGS, and every later step of it that can run on the pool and runs go or
+// make calls scripts/ci-go-integrity.sh as its first command, so no Go runs
+// unless the gate passed in that same step. No step relaxes either.
+
+const (
+	// poolHostedTerm keeps a step off the pool when it is a top-level
+	// conjunct of the step's if: (and the if: has no ||).
+	poolHostedTerm = "runner.environment == 'github-hosted'"
+	// poolGiteaTerm keeps a step off github.com the same way; its
+	// artifacts are served by Gitea on the LAN.
+	poolGiteaTerm = "github.server_url != 'https://github.com'"
+	// poolIntegrityScript is the gate every pool Go step calls first.
+	poolIntegrityScript = "scripts/ci-go-integrity.sh"
+)
+
+// poolWANActions download from GitHub's artifact and cache storage.
+var poolWANActions = []string{"actions/download-artifact@", "actions/cache@", "actions/cache/restore@"}
+
+// poolSumdbEnv are the variables that exempt modules from the checksum
+// database or the proxy, or replace the database.
+var poolSumdbEnv = []string{"GOSUMDB", "GONOSUMDB", "GONOSUMCHECK", "GONOPROXY", "GOINSECURE", "GOPRIVATE"}
+
+// poolGoRun matches a script that runs go or make as a command.
+var poolGoRun = regexp.MustCompile(`(^|[\s;&|(` + "`" + `])(go|make)\s`)
+
+type poolStep struct {
+	Name string            `yaml:"name"`
+	If   string            `yaml:"if"`
+	Uses string            `yaml:"uses"`
+	Run  string            `yaml:"run"`
+	Env  map[string]string `yaml:"env"`
+}
+
+type poolJob struct {
+	RunsOn yaml.Node         `yaml:"runs-on"`
+	Env    map[string]string `yaml:"env"`
+	Steps  []poolStep        `yaml:"steps"`
+}
+
+type poolWorkflow struct {
+	Env  map[string]string  `yaml:"env"`
+	Jobs map[string]poolJob `yaml:"jobs"`
+}
+
+// poolConjunct reports whether term is a top-level conjunct of the if:
+// expression cond: only then does the term alone decide that the step is
+// skipped when the term is false. The && it splits on are those outside every
+// parenthesis, so a term inside a group (negated or compared) is not a
+// conjunct; an expression with || never qualifies.
+func poolConjunct(cond, term string) bool {
+	c := strings.TrimSpace(cond)
+	c = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(c, "${{"), "}}"))
+	if strings.Contains(c, "||") {
+		return false
+	}
+	for _, part := range poolTopLevelAnd(c) {
+		if poolUnwrap(part) == term {
+			return true
+		}
+	}
+	return false
+}
+
+// poolTopLevelAnd splits an expression at the && outside every parenthesis;
+// unbalanced parentheses yield no parts.
+func poolTopLevelAnd(c string) []string {
+	var parts []string
+	depth, start := 0, 0
+	for i := 0; i < len(c); i++ {
+		switch {
+		case c[i] == '(':
+			depth++
+		case c[i] == ')':
+			depth--
+			if depth < 0 {
+				return nil
+			}
+		case depth == 0 && strings.HasPrefix(c[i:], "&&"):
+			parts = append(parts, c[start:i])
+			start = i + 2
+			i++
+		}
+	}
+	if depth != 0 {
+		return nil
+	}
+	return append(parts, c[start:])
+}
+
+// poolUnwrap trims a part and the parentheses that enclose all of it.
+func poolUnwrap(p string) string {
+	p = strings.TrimSpace(p)
+	for strings.HasPrefix(p, "(") && strings.HasSuffix(p, ")") {
+		inner := p[1 : len(p)-1]
+		if parts := poolTopLevelAnd(inner); parts == nil {
+			break
+		}
+		// "(a) && (b)" is not enclosed by one pair: the inner text must
+		// keep its own parentheses balanced throughout.
+		depth, ok := 0, true
+		for _, r := range inner {
+			if r == '(' {
+				depth++
+			} else if r == ')' {
+				depth--
+				if depth < 0 {
+					ok = false
+					break
+				}
+			}
+		}
+		if !ok {
+			break
+		}
+		p = strings.TrimSpace(inner)
+	}
+	return p
+}
+
+func poolOff(s poolStep) bool {
+	return poolConjunct(s.If, poolHostedTerm) || poolConjunct(s.If, poolGiteaTerm)
+}
+
+// poolHostedLabel matches the GitHub-hosted labels actionlint.yaml lists
+// beside the self-hosted ones.
+var poolHostedLabel = regexp.MustCompile(`^(ubuntu|windows|macos)-`)
+
+// poolWord is a runner label as it appears in a runs-on value or expression.
+var poolWord = regexp.MustCompile(`[A-Za-z0-9_.-]+`)
+
+// poolLabels are the self-hosted labels: self-hosted itself and every label
+// the repository declares in .github/actionlint.yaml that is not
+// GitHub-hosted.
+func poolLabels(t testing.TB) map[string]bool {
+	labels := map[string]bool{"self-hosted": true}
+	data, err := os.ReadFile("../../.github/actionlint.yaml")
+	if err != nil {
+		t.Fatalf("read actionlint.yaml: %v", err)
+	}
+	var cfg struct {
+		Runner struct {
+			Labels []string `yaml:"labels"`
+		} `yaml:"self-hosted-runner"`
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("parse actionlint.yaml: %v", err)
+	}
+	for _, l := range cfg.Runner.Labels {
+		if !poolHostedLabel.MatchString(l) {
+			labels[l] = true
+		}
+	}
+	return labels
+}
+
+// poolServerSplit is the Gitea-era runs-on that names one label on github.com
+// and another on Gitea; on github.com only the first applies.
+var poolServerSplit = regexp.MustCompile(`^\$\{\{\s*github\.server_url == 'https://github\.com' && '([^']+)' \|\| '[^']+'\s*\}\}$`)
+
+// poolMayRun reports whether a runs-on, a scalar, a list or an expression,
+// can name a self-hosted runner on github.com: one of its words is a pool
+// label (a server_url split counts only its github.com label).
+func poolMayRun(n yaml.Node, labels map[string]bool) bool {
+	if m := poolServerSplit.FindStringSubmatch(strings.TrimSpace(n.Value)); m != nil {
+		return labels[m[1]]
+	}
+	found := false
+	var walk func(*yaml.Node)
+	walk = func(x *yaml.Node) {
+		for _, w := range poolWord.FindAllString(x.Value, -1) {
+			if labels[w] {
+				found = true
+			}
+		}
+		for _, c := range x.Content {
+			walk(c)
+		}
+	}
+	walk(&n)
+	return found
+}
+
+// poolReadonly: GOFLAGS sets -mod=readonly and no other -mod or -insecure
+// (--flag counts as -flag), with no quoting, which go parses differently
+// from a split on spaces.
+func poolReadonly(flags string) bool {
+	if strings.ContainsAny(flags, "'\"\\") {
+		return false
+	}
+	ro := false
+	for _, f := range strings.Fields(flags) {
+		if strings.HasPrefix(f, "--") {
+			f = f[1:]
+		}
+		switch {
+		case f == "-mod=readonly":
+			ro = true
+		case f == "-mod" || strings.HasPrefix(f, "-mod=") || f == "-insecure" || strings.HasPrefix(f, "-insecure="):
+			return false
+		}
+	}
+	return ro
+}
+
+// poolFirstCommand is a script's first command: its first line that is not
+// blank, a comment or a `set` of shell options.
+func poolFirstCommand(run string) string {
+	for _, l := range strings.Split(run, "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" || strings.HasPrefix(l, "#") || strings.HasPrefix(l, "set -") {
+			continue
+		}
+		return l
+	}
+	return ""
+}
+
+func poolIntegrityProblems(where string, wf poolWorkflow, job poolJob) []string {
+	setup := -1
+	for i, s := range job.Steps {
+		if strings.HasPrefix(s.Uses, "actions/setup-go@") && !poolOff(s) {
+			setup = i
+			break
+		}
+	}
+	if setup < 0 {
+		return nil
+	}
+	var problems []string
+	flags, ok := job.Env["GOFLAGS"]
+	if !ok {
+		flags = wf.Env["GOFLAGS"]
+	}
+	if !poolReadonly(flags) {
+		problems = append(problems, where+": runs Go on the pool without -mod=readonly (and no other -mod, no -insecure) in its job GOFLAGS (ruling 869)")
+	}
+	for i, s := range job.Steps {
+		for _, v := range poolSumdbEnv {
+			if _, set := s.Env[v]; set {
+				problems = append(problems, where+" step "+s.Name+": sets "+v+", which relaxes the checksum database or the proxy (ruling 869)")
+			}
+		}
+		if f, set := s.Env["GOFLAGS"]; set && !poolReadonly(f) {
+			problems = append(problems, where+" step "+s.Name+": sets GOFLAGS without -mod=readonly, or with another -mod or -insecure (ruling 869)")
+		}
+		if i > setup && !poolOff(s) && poolGoRun.MatchString(s.Run) && poolFirstCommand(s.Run) != poolIntegrityScript {
+			problems = append(problems, where+" step "+s.Name+": runs go or make on the pool without `"+poolIntegrityScript+"` as its first command (ruling 869)")
+		}
+	}
+	return problems
+}
+
+// poolWANProblems lists every step of a self-hosted-capable job that can
+// reach the WAN, or run Go, in a way rulings 862 and 869 forbid.
+func poolWANProblems(file string, data []byte, labels map[string]bool) []string {
+	var wf poolWorkflow
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		return []string{file + ": not parseable YAML: " + err.Error()}
+	}
+	var problems []string
+	names := make([]string, 0, len(wf.Jobs))
+	for n := range wf.Jobs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		job := wf.Jobs[name]
+		if !poolMayRun(job.RunsOn, labels) {
+			continue
+		}
+		where := file + ": job " + name
+		problems = append(problems, poolIntegrityProblems(where, wf, job)...)
+		if _, ok := wf.Env["GOPROXY"]; ok {
+			problems = append(problems, file+": the workflow env sets GOPROXY, replacing the pool's LAN-first module proxy")
+		}
+		if _, ok := job.Env["GOPROXY"]; ok {
+			problems = append(problems, where+": the job env sets GOPROXY, replacing the pool's LAN-first module proxy")
+		}
+		for _, s := range job.Steps {
+			if poolOff(s) {
+				continue
+			}
+			step := where + " step " + s.Name
+			if _, ok := s.Env["GOPROXY"]; ok {
+				problems = append(problems, step+": sets GOPROXY, replacing the pool's LAN-first module proxy with a WAN one")
+			}
+			for _, a := range poolWANActions {
+				if strings.HasPrefix(s.Uses, a) {
+					problems = append(problems, step+": uses "+a+", which downloads from GitHub's storage over the WAN")
+				}
+			}
+		}
+	}
+	return problems
+}
+
+func TestCIPoolStepsKeepTheLANProxy(t *testing.T) {
+	files, err := filepath.Glob("../../.github/workflows/*.yml")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no workflows found: %v", err)
+	}
+	labels := poolLabels(t)
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		for _, p := range poolWANProblems(filepath.Base(f), data, labels) {
+			t.Error(p)
+		}
+	}
+}
+
+func TestPoolWANProblems(t *testing.T) {
+	labels := map[string]bool{"self-hosted": true, "bigdisk": true, "bigdisk-docker": true}
+	const pool = "    runs-on: [self-hosted, linux, x64, bigdisk]\n"
+	const ro = "    env:\n      GOFLAGS: -mod=readonly\n"
+	const setup = "      - uses: actions/setup-go@0\n"
+	gated := func(cmd string) string {
+		return "      - name: t\n        run: |\n          " + poolIntegrityScript + "\n          " + cmd + "\n"
+	}
+	for _, c := range []struct {
+		name, body, want string
+	}{
+		{"a pool step sets GOPROXY", "jobs:\n  a:\n" + pool + "    steps:\n      - name: s\n        env:\n          GOPROXY: https://proxy.golang.org\n", "step s: sets GOPROXY"},
+		{"a pool step downloads an artifact", "jobs:\n  a:\n" + pool + "    steps:\n      - name: d\n        uses: actions/download-artifact@0000\n", "uses actions/download-artifact@"},
+		{"a pool step restores a cache", "jobs:\n  a:\n" + pool + "    steps:\n      - name: c\n        uses: actions/cache/restore@0000\n", "uses actions/cache/restore@"},
+		{"a pool job sets GOPROXY", "jobs:\n  a:\n" + pool + "    env:\n      GOPROXY: https://proxy.golang.org\n    steps: []\n", "the job env sets GOPROXY"},
+		{"an expression that can reach the pool", "jobs:\n  a:\n    runs-on: ${{ cond && fromJSON('[\"self-hosted\",\"bigdisk\"]') || 'ubuntu-latest' }}\n    steps:\n      - name: s\n        env:\n          GOPROXY: x\n", "step s: sets GOPROXY"},
+		{"a hosted term under || is not hosted-only", "jobs:\n  a:\n" + pool + "    steps:\n      - name: d\n        if: runner.environment == 'github-hosted' || true\n        uses: actions/download-artifact@0000\n", "uses actions/download-artifact@"},
+		{"a hosted term inside a negated group is not hosted-only", "jobs:\n  a:\n" + pool + "    steps:\n      - name: d\n        if: ${{ !(failure() && runner.environment == 'github-hosted') }}\n        uses: actions/download-artifact@0000\n", "uses actions/download-artifact@"},
+		{"a hosted term inside a group with another term is not hosted-only", "jobs:\n  a:\n" + pool + "    steps:\n      - name: d\n        if: (x && runner.environment == 'github-hosted') == false\n        uses: actions/download-artifact@0000\n", "uses actions/download-artifact@"},
+		{"a negated hosted term is not hosted-only", "jobs:\n  a:\n" + pool + "    steps:\n      - name: d\n        if: \"!(runner.environment == 'github-hosted')\"\n        uses: actions/download-artifact@0000\n", "uses actions/download-artifact@"},
+		{"unparsable", "jobs: [", "not parseable"},
+		{"a server_url split that is the pool on github.com", "jobs:\n  a:\n    runs-on: ${{ github.server_url == 'https://github.com' && 'bigdisk' || 'ubuntu-latest' }}\n    steps:\n      - name: s\n        env:\n          GOPROXY: x\n", "step s: sets GOPROXY"},
+		{"a pool label alone", "jobs:\n  a:\n    runs-on: bigdisk\n    steps:\n      - name: s\n        env:\n          GOPROXY: x\n", "step s: sets GOPROXY"},
+		{"a pool label in an expression", "jobs:\n  a:\n    runs-on: ${{ cond && 'bigdisk-docker' || 'ubuntu-latest' }}\n    steps:\n      - name: s\n        env:\n          GOPROXY: x\n", "step s: sets GOPROXY"},
+		{"a quoted -mod override in the job GOFLAGS", "jobs:\n  a:\n" + pool + "    env:\n      GOFLAGS: -mod=readonly '-mod=mod'\n    steps:\n" + setup + gated("go test ./..."), "without -mod=readonly"},
+		{"a --mod override in the job GOFLAGS", "jobs:\n  a:\n" + pool + "    env:\n      GOFLAGS: -mod=readonly --mod=mod\n    steps:\n" + setup + gated("go test ./..."), "without -mod=readonly"},
+		{"native Go without read-only modules", "jobs:\n  a:\n" + pool + "    steps:\n" + setup + gated("go test ./..."), "without -mod=readonly"},
+		{"a later -mod in the job GOFLAGS", "jobs:\n  a:\n" + pool + "    env:\n      GOFLAGS: -mod=readonly -mod=mod\n    steps:\n" + setup + gated("go test ./..."), "without -mod=readonly"},
+		{"a Go step without the gate first", "jobs:\n  a:\n" + pool + ro + "    steps:\n" + setup + "      - name: t\n        run: go test ./...\n", "step t: runs go or make on the pool without"},
+		{"a make step with the gate second", "jobs:\n  a:\n" + pool + ro + "    steps:\n" + setup + "      - name: t\n        run: |\n          make test\n          " + poolIntegrityScript + "\n", "step t: runs go or make on the pool without"},
+		{"a step exempts modules", "jobs:\n  a:\n" + pool + ro + "    steps:\n" + setup + "      - name: t\n        env:\n          GONOSUMDB: github.com/x\n", "sets GONOSUMDB"},
+		{"a step exempts a module from the proxy", "jobs:\n  a:\n" + pool + ro + "    steps:\n" + setup + "      - name: t\n        env:\n          GONOPROXY: github.com/x\n", "sets GONOPROXY"},
+		{"a step drops read-only modules", "jobs:\n  a:\n" + pool + ro + "    steps:\n" + setup + "      - name: t\n        env:\n          GOFLAGS: -mod=mod\n", "sets GOFLAGS without -mod=readonly"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := poolWANProblems("f.yml", []byte(c.body), labels)
+			if len(p) == 0 || !strings.Contains(strings.Join(p, "\n"), c.want) {
+				t.Fatalf("want a problem containing %q, got %v", c.want, p)
+			}
+		})
+	}
+	for _, c := range []struct{ name, body string }{
+		{"a server_url split that is hosted on github.com", "jobs:\n  a:\n    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}\n    steps:\n      - name: s\n        env:\n          GOPROXY: x\n"},
+		{"a hosted job may set GOPROXY", "jobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - name: s\n        env:\n          GOPROXY: https://proxy.golang.org\n"},
+		{"native Go with read-only modules and the gate first", "jobs:\n  a:\n" + pool + ro + "    steps:\n" + setup + gated("go test ./...") + "      - name: e\n        run: echo done\n"},
+		{"a Go step before setup-go needs no gate", "jobs:\n  a:\n" + pool + ro + "    steps:\n      - name: pin\n        run: make -s pin\n" + setup + gated("go test ./...")},
+		{"a hosted-only Go step needs no gate", "jobs:\n  a:\n" + pool + ro + "    steps:\n" + setup + "      - name: t\n        if: ${{ !cancelled() && runner.environment == 'github-hosted' }}\n        run: make test\n"},
+		{"a Gitea-only step of a pool job may download", "jobs:\n  a:\n" + pool + "    steps:\n      - name: d\n        if: x && github.server_url != 'https://github.com'\n        uses: actions/download-artifact@0000\n"},
+		{"a parenthesised hosted conjunct is hosted-only", "jobs:\n  a:\n" + pool + "    steps:\n      - name: d\n        if: ${{ x != 'y' && (runner.environment == 'github-hosted') }}\n        uses: actions/download-artifact@0000\n"},
+		{"a hosted-only step of a pool job may download", "jobs:\n  a:\n" + pool + "    steps:\n      - name: d\n        if: runner.environment == 'github-hosted'\n        uses: actions/download-artifact@0000\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if p := poolWANProblems("f.yml", []byte(c.body), labels); len(p) != 0 {
+				t.Fatalf("want no problem, got %v", p)
+			}
+		})
+	}
+}
