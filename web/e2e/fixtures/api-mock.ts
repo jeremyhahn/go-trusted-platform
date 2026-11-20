@@ -3216,8 +3216,15 @@ export interface VTPMRuntimeCall {
 }
 
 export interface VTPMRuntimeApiMockConfig {
-  /** Error to return for every runtime route (e.g. bundle not running) */
+  /**
+   * Error to return for every runtime route (e.g. bundle not running) except
+   * GET /state, whose error is stateError.
+   */
   error?: ApiError;
+  /** The running state GET /state reports before any start or stop (default false) */
+  running?: boolean;
+  /** Error to return for GET /state only */
+  stateError?: ApiError;
   /** Per-operation reply delay in ms, keyed by operation ('start', 'quote', 'pcrs/extend', 'pcrs', ...) */
   delayMs?: Record<string, number>;
   /**
@@ -3236,6 +3243,10 @@ export interface VTPMRuntimeApiMockConfig {
  * - POST /api/v1/vtpm/bundles/{id}/start, /stop, /quote, /seal, /unseal
  * - POST /api/v1/vtpm/bundles/{id}/pcrs/extend
  * - GET  /api/v1/vtpm/bundles/{id}/pcrs?pcr_index=N
+ * - GET  /api/v1/vtpm/bundles/{id}/state: config.running, then the last
+ *   start (true) or stop (false) reply for that bundle. The webservice answers
+ *   { bundle_id, running, socket_path }, the daemon (pkg/api/rest/vtpm_handlers.go
+ *   BundleStateResponse) { id, running, socket_path, timestamp }.
  *
  * Byte fields are base64 on the wire, as Go encodes []byte. Seal returns
  * base64("sealed:" + data) and unseal reverses it, so a round trip through
@@ -3249,11 +3260,14 @@ export async function mockVTPMRuntimeApi(
   const ok = { success: true, message: 'ok' };
   const b64 = (s: string) => Buffer.from(s, 'binary').toString('base64');
   const unb64 = (s: string) => Buffer.from(s, 'base64').toString('binary');
+  // Running state per bundle, as the last start or stop reply left it.
+  const running = new Map<string, boolean>();
+  const isRunning = (id: string) => running.get(id) ?? config.running ?? false;
 
   await page.route('**/api/v1/vtpm/bundles/**', async (route: Route, request: Request) => {
     const url = new URL(request.url());
     const m = url.pathname.match(
-      /\/api\/v1\/vtpm\/bundles\/([^/]+)\/(start|stop|quote|seal|unseal|pcrs\/extend|pcrs|pcr\/\d+\/extend|pcr\/\d+)\/?$/
+      /\/api\/v1\/vtpm\/bundles\/([^/]+)\/(start|stop|state|quote|seal|unseal|pcrs\/extend|pcrs|pcr\/\d+\/extend|pcr\/\d+)\/?$/
     );
     if (!m) {
       await route.continue();
@@ -3272,7 +3286,16 @@ export async function mockVTPMRuntimeApi(
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
 
-    if (config.error) {
+    if (op === 'state' && config.stateError) {
+      await route.fulfill({
+        status: config.stateError.status,
+        contentType: 'application/json',
+        body: errorEnvelope(config.stateError),
+      });
+      return;
+    }
+
+    if (config.error && op !== 'state') {
       await route.fulfill({
         status: config.error.status,
         contentType: 'application/json',
@@ -3292,8 +3315,17 @@ export async function mockVTPMRuntimeApi(
       return;
     }
 
+    if (method === 'POST' && op === 'start') running.set(bundleId, true);
+    if (method === 'POST' && op === 'stop') running.set(bundleId, false);
+
     let reply: unknown;
-    if (method === 'POST' && op === 'start') {
+    if (method === 'GET' && op === 'state') {
+      const up = isRunning(bundleId);
+      const socket_path = up ? `/run/vtpm/${bundleId}.sock` : '';
+      reply = daemon
+        ? { id: bundleId, running: up, socket_path, timestamp: '2026-11-20T00:00:00Z' }
+        : { bundle_id: bundleId, running: up, socket_path };
+    } else if (method === 'POST' && op === 'start') {
       reply = { status: ok, bundle_id: bundleId, running: true, socket_path: `/run/vtpm/${bundleId}.sock` };
     } else if (daemon && method === 'POST' && op === 'stop') {
       reply = { bundle_id: bundleId, action: 'stop', success: true, message: 'ok' };

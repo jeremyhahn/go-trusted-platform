@@ -36,7 +36,8 @@ test.describe('vTPM runtime page', () => {
 
   test('StartVTPM starts a bundle and shows it running', async ({ page }) => {
     const calls = await openRuntimePage(page);
-    await expect(page.getByTestId('vtpm-run-state')).toHaveText('Unknown');
+    // The state comes from GET /state on open; the mock reports stopped by default.
+    await expect(page.getByTestId('vtpm-run-state')).toHaveText('Stopped');
 
     await page.getByRole('button', { name: 'Start vTPM' }).click();
 
@@ -190,7 +191,8 @@ test.describe('vTPM runtime page', () => {
     await page.getByLabel('Bundle ID').fill('vm-2');
     await page.waitForTimeout(2000);
 
-    await expect(page.getByTestId('vtpm-run-state')).toHaveText('Unknown');
+    // vm-2's state comes from its own GET /state (stopped), not A's late start reply.
+    await expect(page.getByTestId('vtpm-run-state')).toHaveText('Stopped');
     await expect(page.getByTestId('vtpm-socket')).toHaveCount(0);
     await expect(page.getByTestId('vtpm-quote-result')).toHaveCount(0);
     await expect(page.getByTestId('vtpm-pcr-value')).toHaveCount(0);
@@ -276,5 +278,37 @@ test.describe('vTPM runtime page', () => {
     });
     // The webservice extend was tried once and answered 404; it is not replayed.
     expect(calls.filter((c) => c.path === 'pcrs/extend')).toHaveLength(1);
+  });
+
+  test('IsVTPMRunning shows the server state when the bundle is opened', async ({ page }) => {
+    const calls = await openRuntimePage(page, { running: true });
+
+    await expect(page.getByTestId('vtpm-run-state')).toHaveText('Running');
+    expect(lastCall(calls, 'state')?.method).toBe('GET');
+  });
+
+  test('Refresh state reads the server state again', async ({ page }) => {
+    const calls = await openRuntimePage(page);
+    await expect(page.getByTestId('vtpm-run-state')).toHaveText('Stopped');
+    const reads = calls.filter((c) => c.path === 'state').length;
+
+    await page.getByRole('button', { name: 'Refresh state' }).click();
+
+    await expect.poll(() => calls.filter((c) => c.path === 'state').length).toBe(reads + 1);
+    await expect(page.getByTestId('vtpm-run-state')).toHaveText('Stopped');
+  });
+
+  test('a failed state read shows its reason', async ({ page }) => {
+    await openRuntimePage(page, { stateError: { error: 'vtpm: bundle not found', status: 404 } });
+
+    await expect(page.getByTestId('vtpm-state-error')).toContainText('Could not read the running state');
+  });
+
+  test('daemon listener: the state read maps id to the bundle', async ({ page }) => {
+    const calls = await openRuntimePage(page, { listener: 'daemon', running: true });
+
+    await expect(page.getByTestId('vtpm-run-state')).toHaveText('Running');
+    await expect(page.getByTestId('vtpm-state-error')).not.toBeVisible();
+    expect(lastCall(calls, 'state')?.method).toBe('GET');
   });
 });

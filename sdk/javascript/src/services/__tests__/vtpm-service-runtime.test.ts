@@ -74,6 +74,34 @@ describe('VTPMService bundle runtime', () => {
     expect(r.data?.stopped).toBe(true);
   });
 
+  it('isBundleRunning GETs /bundles/{id}/state', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({
+      success: true,
+      data: { bundle_id: 'vm-1', running: false, socket_path: '' },
+    });
+    await service.isBundleRunning('vm-1');
+    expect(mockClient.get).toHaveBeenCalledWith('/v1/vtpm/bundles/vm-1/state');
+  });
+
+  it("isBundleRunning maps a daemon state reply's id to bundle_id", async () => {
+    // The daemon listener (pkg/api/rest/vtpm_handlers.go BundleStateResponse)
+    // answers { id, running, socket_path, timestamp }.
+    vi.mocked(mockClient.get).mockResolvedValue({
+      success: true,
+      data: { id: 'vm-1', running: true, socket_path: '/run/vm-1.sock', timestamp: '2026-11-20T00:00:00Z' },
+    });
+    const r = await service.isBundleRunning('vm-1');
+    expect(r.data?.bundle_id).toBe('vm-1');
+    expect(r.data?.running).toBe(true);
+  });
+
+  it('isBundleRunning passes a webservice state reply unchanged', async () => {
+    const reply = { bundle_id: 'vm-1', running: false, socket_path: '' };
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: reply });
+    const r = await service.isBundleRunning('vm-1');
+    expect(r.data).toEqual(reply);
+  });
+
   it('startBundle gives a daemon start reply a status block', async () => {
     vi.mocked(mockClient.post).mockResolvedValue({
       success: true,
