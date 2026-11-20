@@ -90,6 +90,18 @@ func probeTPMSealArtifacts() tpmSealProbe {
 	return tpmSealAbsent
 }
 
+// probeTPMSealArtifactsForTPM is the seal probe for the configured TPM.
+// An in-process TPM simulator cannot hold an ESP seal (its state lives
+// only in this process), so with the simulator selected the probe answers
+// absent without reading the ESP (#2034, option a). Every device TPM keeps
+// the full ESP probe of probeTPMSealArtifacts.
+func probeTPMSealArtifactsForTPM(useSimulator bool) tpmSealProbe {
+	if useSimulator {
+		return tpmSealAbsent
+	}
+	return probeTPMSealArtifacts()
+}
+
 // tpmSealESPMounted reports whether the ESP mount point appears in the
 // mount table. An unreadable mount table also fails safe (true would let
 // the not-exist answer stand, so report "not verified" → indeterminate).
