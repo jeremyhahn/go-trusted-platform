@@ -242,8 +242,16 @@ type supervised struct {
 	missedChild Child
 	// exitHookErr is the last failure of Config.OnChildExit for this
 	// process's last unrequested exit; nil once the hook has succeeded.
-	// restartLoop retries the hook on each backoff tick while it is set.
+	// restartLoop retries the hook on each backoff tick while it is set,
+	// and past an exhausted restart budget until it succeeds.
 	exitHookErr error
+	// exitHook is non-nil while an exit-hook call is outstanding and is
+	// closed when it returns. It is claimed under s.mu only while no child
+	// exists and no launch is claimed (watch claims it in the section that
+	// publishes child=nil), and a launch claimant waits on it before it
+	// execs: the hook removes the process's kernel state (the WireGuard
+	// hub), so it must never run while a replacement child exists.
+	exitHook chan struct{}
 }
 
 // withdrawal is a given-up follower's in-flight peer withdrawal: ctx is
@@ -309,10 +317,14 @@ func (s *Supervisor) StartService(ctx context.Context, service string) error {
 	// second caller.
 	claimed := proc.child == nil && !proc.launching
 	var pending *withdrawal
+	var hook chan struct{}
 	if claimed {
 		// Read with the claim: a give-up either registered its withdrawal
-		// before this point, or sees the claim and registers none.
+		// before this point, or sees the claim and registers none. The
+		// same holds for an outstanding exit hook: one claimed before
+		// this point is waited for, and none starts after it.
 		pending = proc.withdrawal
+		hook = proc.exitHook
 		proc.launching = true
 		proc.followPending = false
 		// A process started again after a stop, or while its restart is
@@ -325,6 +337,9 @@ func (s *Supervisor) StartService(ctx context.Context, service string) error {
 	if claimed {
 		launched := false
 		err := awaitWithdrawal(ctx, pending)
+		if err == nil {
+			err = awaitExitHook(ctx, hook)
+		}
 		if err == nil {
 			err = s.launch(ctx, proc)
 			launched = err == nil
@@ -916,6 +931,9 @@ func (s *Supervisor) watch(ctx context.Context, proc *supervised, child Child, n
 		s.mu.Unlock()
 		return
 	}
+	// The hook is claimed in the section that publishes child=nil, so a
+	// launch claimed after it waits for the hook before it execs.
+	hook := s.claimExitHookLocked(proc)
 	proc.child = nil
 	s.closeClientLocked(proc)
 	// A child its watchdog stopped failed by missing its keep-alive, not
@@ -927,7 +945,7 @@ func (s *Supervisor) watch(ctx context.Context, proc *supervised, child Child, n
 	proc.missed, proc.missedChild = nil, nil
 	s.mu.Unlock()
 
-	s.runExitHook(ctx, proc)
+	s.runExitHook(ctx, proc, hook)
 	s.restartLoop(ctx, proc, failure, cause)
 }
 
@@ -935,8 +953,8 @@ func (s *Supervisor) watch(ctx context.Context, proc *supervised, child Child, n
 // records the outcome: a failure is logged at Error and kept in
 // proc.exitHookErr, which noteRestart folds into the process's health and
 // restartLoop retries on each backoff tick.
-func (s *Supervisor) runExitHook(ctx context.Context, proc *supervised) {
-	if s.cfg.OnChildExit == nil {
+func (s *Supervisor) runExitHook(ctx context.Context, proc *supervised, done chan struct{}) {
+	if done == nil {
 		return
 	}
 	err := s.cfg.OnChildExit(ctx, proc.def)
@@ -947,7 +965,90 @@ func (s *Supervisor) runExitHook(ctx context.Context, proc *supervised) {
 	}
 	s.mu.Lock()
 	proc.exitHookErr = err
+	if proc.exitHook == done {
+		proc.exitHook = nil
+	}
+	close(done)
 	s.mu.Unlock()
+}
+
+// claimExitHookLocked marks an exit-hook call outstanding for proc and
+// returns the channel runExitHook closes when the call returns; nil when
+// no hook is configured. s.mu must be held, with no child and no launch
+// claimed.
+func (s *Supervisor) claimExitHookLocked(proc *supervised) chan struct{} {
+	if s.cfg.OnChildExit == nil {
+		return nil
+	}
+	done := make(chan struct{})
+	proc.exitHook = done
+	return done
+}
+
+// retryExitHook calls a failed exit hook again, only while no replacement
+// child exists or is being launched and no other call is outstanding. It
+// reports whether the hook ran.
+func (s *Supervisor) retryExitHook(ctx context.Context, proc *supervised) bool {
+	s.mu.Lock()
+	if proc.exitHookErr == nil || proc.child != nil || proc.launching || proc.exitHook != nil {
+		s.mu.Unlock()
+		return false
+	}
+	done := s.claimExitHookLocked(proc)
+	s.mu.Unlock()
+	s.runExitHook(ctx, proc, done)
+	return done != nil
+}
+
+// retryExitHookPastBudget keeps retrying a failed exit hook of a given-up
+// process on its own backoff until it succeeds, the supervisor or the
+// process's watch context stops, or a replacement launch takes the process
+// over. A non-follower has no withdrawal, so without this the kernel state
+// the hook removes (the WireGuard hub and its peers) would outlive its
+// process with nothing able to revoke it. The failure stays in the
+// process's health until a retry succeeds.
+func (s *Supervisor) retryExitHookPastBudget(ctx context.Context, proc *supervised) {
+	s.mu.Lock()
+	budget := proc.failure
+	showHookErr := func() {
+		// Only while the give-up is still the process's state: a
+		// replacement launch owns failure from its claim on.
+		if proc.child != nil || proc.launching {
+			return
+		}
+		proc.failure = budget
+		if proc.exitHookErr != nil {
+			proc.failure = errors.Join(budget, proc.exitHookErr)
+		}
+	}
+	showHookErr()
+	s.mu.Unlock()
+
+	backoff := s.cfg.RestartBackoff
+	for {
+		s.mu.Lock()
+		pending := proc.exitHookErr != nil && !s.stopped && proc.child == nil && !proc.launching
+		s.mu.Unlock()
+		if !pending {
+			return
+		}
+		s.cfg.Logger.Warn("gatewayd supervisor: retrying child exit hook past the restart budget",
+			slog.String("process", proc.def.Name), slog.Duration("backoff", backoff))
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.cfg.Clock.After(backoff):
+		}
+		if !s.retryExitHook(ctx, proc) {
+			return
+		}
+		s.mu.Lock()
+		showHookErr()
+		s.mu.Unlock()
+		if backoff < s.cfg.RestartBackoffMax {
+			backoff = min(backoff*2, s.cfg.RestartBackoffMax)
+		}
+	}
 }
 
 // ErrExitHook reports a failed Config.OnChildExit call.
@@ -986,6 +1087,7 @@ func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, failure 
 				}
 				s.mu.Unlock()
 			}
+			s.retryExitHookPastBudget(ctx, proc)
 			return
 		}
 		s.cfg.Logger.Warn("gatewayd supervisor: process down, restarting",
@@ -1000,25 +1102,29 @@ func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, failure 
 		case <-s.cfg.Clock.After(backoff):
 		}
 
-		s.mu.Lock()
-		hookPending := proc.exitHookErr != nil
-		s.mu.Unlock()
-		if hookPending {
-			s.runExitHook(ctx, proc)
-		}
+		// A retry runs only while no replacement exists or is claimed;
+		// a launch claimed during it waits for it.
+		s.retryExitHook(ctx, proc)
 
 		s.mu.Lock()
 		stillWanted := !s.stopped && !proc.stopping && len(proc.wanted) > 0 && proc.child == nil && !proc.launching
+		var hook chan struct{}
 		if stillWanted {
 			proc.launching = true
 			proc.followPending = false
 			proc.restoring = proc.desired != nil
+			// A hook still outstanding from another goroutine's retry
+			// finishes before this launch execs.
+			hook = proc.exitHook
 		}
 		s.mu.Unlock()
 		if !stillWanted {
 			return
 		}
-		err := s.launch(ctx, proc)
+		err := awaitExitHook(ctx, hook)
+		if err == nil {
+			err = s.launch(ctx, proc)
+		}
 		if err == nil {
 			err = s.serveLaunched(ctx, proc)
 		}
@@ -1149,6 +1255,20 @@ func awaitWithdrawal(ctx context.Context, w *withdrawal) error {
 	w.cancel()
 	select {
 	case <-w.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// awaitExitHook waits for an outstanding exit-hook call before a launch
+// claimant execs, so the hook never removes the replacement's state.
+func awaitExitHook(ctx context.Context, done chan struct{}) error {
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
