@@ -18,6 +18,9 @@ function createMockApiClient(): ApiClient {
 
 const oldRecord: DNSRecord = { type: 'A', a: { name: 'svc', value: 'ip-1', ttl: 300 } };
 const newRecord: DNSRecord = { type: 'A', a: { name: 'svc', value: 'ip-2', ttl: 600 } };
+/** The records as the service sends them: protojson needs the full enum name. */
+const oldWire = { ...oldRecord, type: 'RECORD_TYPE_A' };
+const newWire = { ...newRecord, type: 'RECORD_TYPE_A' };
 
 type Verb = 'get' | 'post' | 'put' | 'delete';
 
@@ -96,7 +99,7 @@ describe('DNSService', () => {
     it('addRecord posts the record wrapped in the record field', async () => {
       await service.addRecord({ zoneName: 'zone/a', record: oldRecord });
 
-      expect(onlyCall('post')).toEqual(['/v1/dns/zones/zone%2Fa/records', { record: oldRecord }]);
+      expect(onlyCall('post')).toEqual(['/v1/dns/zones/zone%2Fa/records', { record: oldWire }]);
     });
 
     it('listRecords sends the type filter as a query parameter', async () => {
@@ -114,7 +117,7 @@ describe('DNSService', () => {
     it('updateRecord puts the old and the new record', async () => {
       await service.updateRecord({ zoneName: 'zone-a', oldRecord, newRecord });
 
-      expect(onlyCall('put')).toEqual(['/v1/dns/zones/zone-a/records', { oldRecord, newRecord }]);
+      expect(onlyCall('put')).toEqual(['/v1/dns/zones/zone-a/records', { oldRecord: oldWire, newRecord: newWire }]);
     });
 
     it('deleteRecord deletes by zone, type and encoded record name', async () => {
@@ -139,11 +142,10 @@ describe('DNSService', () => {
   });
 
   describe('resolution', () => {
-    it('resolve posts the query to /v1/dns/resolve', async () => {
-      const request = { fqdn: 'svc.zone-a', type: 'AAAA' as const };
-      await service.resolve(request);
+    it('resolve gets /v1/dns/resolve with fqdn and the wire record type in the query', async () => {
+      await service.resolve({ fqdn: 'svc.zone-a', type: 'AAAA' });
 
-      expect(onlyCall('post')).toEqual(['/v1/dns/resolve', request]);
+      expect(onlyCall('get')).toEqual(['/v1/dns/resolve?fqdn=svc.zone-a&type=RECORD_TYPE_AAAA']);
     });
 
     it('register posts the hostname and address to /v1/dns/register', async () => {
@@ -167,7 +169,7 @@ describe('DNSService', () => {
       ['deleteRecord', 'delete', (s) => s.deleteRecord({ zoneName: 'zone-a', type: 'A', name: 'svc' })],
       ['signZone', 'post', (s) => s.signZone('zone-a')],
       ['getDNSSECStatus', 'get', (s) => s.getDNSSECStatus('zone-a')],
-      ['resolve', 'post', (s) => s.resolve({ fqdn: 'svc.zone-a', type: 'A' })],
+      ['resolve', 'get', (s) => s.resolve({ fqdn: 'svc.zone-a', type: 'A' })],
       ['register', 'post', (s) => s.register({ fqdn: 'svc.zone-a', ip: 'ip-1' })],
     ];
 

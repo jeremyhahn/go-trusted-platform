@@ -122,6 +122,13 @@ export function useBMCUsers(profileID: string): UseBMCUsersResult {
   // Each load takes a number; only the newest load may set state, so a
   // superseded request (an earlier profile, an earlier refetch) is dropped.
   const seq = React.useRef(0);
+  // The base the hook serves now. A mutation captured for an earlier
+  // profile must not start a listing of that profile once the hook moved
+  // on: it would bump seq and replace the newer profile's rows.
+  const currentBase = React.useRef(base);
+  React.useEffect(() => {
+    currentBase.current = base;
+  }, [base]);
 
   // load sets state only once the request settles, so the mount effect
   // below never sets state synchronously (react-hooks/set-state-in-effect).
@@ -130,11 +137,17 @@ export function useBMCUsers(profileID: string): UseBMCUsersResult {
     let next: Listing;
     try {
       const list = unwrap<BMCUserSlot[]>(await call('GET', `${base}/users`));
-      next = { base, users: Array.isArray(list) ? list : [], error: null };
+      // Only a user array establishes slot occupancy. An unparseable or
+      // empty body, or a payload that is not an array, never listed the
+      // slots, so it must not mark the profile listed: createUser writes
+      // the requested slot without an occupancy check of its own.
+      next = Array.isArray(list)
+        ? { base, users: list, error: null }
+        : { base, users: [], error: 'BMC returned an unreadable user listing' };
     } catch (e: unknown) {
       next = { base, users: [], error: e instanceof Error ? e.message : String(e) };
     }
-    if (mine !== seq.current) return;
+    if (mine !== seq.current || currentBase.current !== base) return;
     setListing(next);
     setRefreshing(false);
   }, [base]);
@@ -143,6 +156,13 @@ export function useBMCUsers(profileID: string): UseBMCUsersResult {
     setRefreshing(true);
     await load();
   }, [load]);
+
+  // The follow-up listing of a mutation runs only while its profile is
+  // still the current one (the ref, not the base the callback captured).
+  const refetchIfCurrent = React.useCallback(async () => {
+    if (currentBase.current !== base) return;
+    await refetch();
+  }, [base, refetch]);
 
   React.useEffect(() => {
     // An empty ID is the static-export placeholder before the client has
@@ -178,18 +198,18 @@ export function useBMCUsers(profileID: string): UseBMCUsersResult {
     async (input: CreateBMCUserInput) => {
       requireListed();
       await call('POST', `${base}/users`, input);
-      await refetch();
+      await refetchIfCurrent();
     },
-    [base, refetch, requireListed]
+    [base, refetchIfCurrent, requireListed]
   );
 
   const deleteUser = React.useCallback(
     async (slot: number) => {
       requireListed();
       await call('DELETE', `${base}/users/${slot}`);
-      await refetch();
+      await refetchIfCurrent();
     },
-    [base, refetch, requireListed]
+    [base, refetchIfCurrent, requireListed]
   );
 
   const setUserPassword = React.useCallback(
@@ -204,9 +224,9 @@ export function useBMCUsers(profileID: string): UseBMCUsersResult {
     async (slot: number, privilege: BMCPrivilege, channel: number) => {
       requireListed();
       await call('PUT', `${base}/users/${slot}/privilege`, { privilege, channel });
-      await refetch();
+      await refetchIfCurrent();
     },
-    [base, refetch, requireListed]
+    [base, refetchIfCurrent, requireListed]
   );
 
   const replaceWebCertificate = React.useCallback(

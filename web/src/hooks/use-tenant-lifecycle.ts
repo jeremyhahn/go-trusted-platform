@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useTenant } from 'trusted-platform-sdk';
 import type {
   ApiResponse,
@@ -86,19 +86,33 @@ export function useTenantLifecycle(): UseTenantLifecycleResult {
     [service]
   );
 
+  // Each lookup takes a generation; a lookup superseded by a later one drops
+  // its result, busy, error and notice updates, so an earlier lookup that
+  // finishes last never becomes the target of remove, suspend or rotation.
+  const lookupGen = useRef(0);
+
   const lookup = useCallback(
-    (name: string) =>
-      run(async () => {
-        // Clear the previous selection first: a failed lookup must not leave
-        // the earlier tenant as the target of delete, suspend or rotation.
-        setTenant(null);
-        setDEKStatus(null);
-        setQuotaCheck(null);
+    async (name: string) => {
+      const gen = ++lookupGen.current;
+      const current = () => gen === lookupGen.current;
+      setBusy(true);
+      setError(null);
+      setNotice(null);
+      // Clear the previous selection first: a failed lookup must not leave
+      // the earlier tenant as the target of delete, suspend or rotation.
+      setTenant(null);
+      setDEKStatus(null);
+      setQuotaCheck(null);
+      try {
         const found = unwrap(await service.getTenantByName(name)).tenant;
-        setTenant(normalizeTenant(found));
-        return null;
-      }),
-    [run, service]
+        if (current()) setTenant(normalizeTenant(found));
+      } catch (err) {
+        if (current()) setError(err instanceof Error ? err.message : 'Request failed');
+      } finally {
+        if (current()) setBusy(false);
+      }
+    },
+    [service]
   );
 
   const update = useCallback(

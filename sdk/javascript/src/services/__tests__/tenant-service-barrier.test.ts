@@ -55,14 +55,14 @@ describe('TenantService listTenants paging', () => {
 });
 
 describe('TenantService barrier operations', () => {
-  it('initBarrier posts threshold and shares to barrier/init', async () => {
+  it('initBarrier posts an empty body to barrier/init', async () => {
     const { client, calls } = recordingClient();
-    const res = await new TenantService(client).initBarrier({ tenantId: 't 1', threshold: 2, shares: 3 });
+    const res = await new TenantService(client).initBarrier({ tenantId: 't 1' });
     expect(res.success).toBe(true);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.method).toBe('POST');
     expect(calls[0]?.url).toContain('/v1/tenants/t%201/barrier/init');
-    expect(calls[0]?.body).toEqual({ threshold: 2, shares: 3 });
+    expect(calls[0]?.body).toEqual({});
   });
 
   it('unsealBarrier posts the key to barrier/unseal', async () => {

@@ -32,7 +32,14 @@ describe('VTPMService.importBundle', () => {
   });
 
   it('posts the archive Blob unchanged to /bundles/import', async () => {
-    const payload = { id: 'bundle-1', mode: 'TEMPLATE' };
+    const payload = {
+      id: 'bundle-1',
+      mode: 'template',
+      manifest: { version: '1', id: 'bundle-1', mode: 'template', ek_algorithm: 'RSA', ek_handle: 1, secure_boot_enabled: false },
+      tpm_state: { state_dir: 's', permall_file: 'p', volatile_file: 'v' },
+      ovmf_state: { nvram_file: 'n' },
+      created_at: 't',
+    };
     vi.mocked(mockClient.post).mockResolvedValue({ data: payload } as never);
     const archive = new Blob([new Uint8Array([0x1f, 0x8b, 0x08, 0x00])], {
       type: 'application/gzip',
@@ -44,6 +51,8 @@ describe('VTPMService.importBundle', () => {
     const [path, body] = vi.mocked(mockClient.post).mock.calls[0]!;
     expect(path).toMatch(/\/v1\/vtpm\/bundles\/import$/);
     expect(body).toBe(archive);
-    expect(result.data).toEqual(payload);
+    expect(result.data?.id).toBe('bundle-1');
+    expect(result.data?.mode).toBe('TEMPLATE');
+    expect(result.data?.tpmState.stateDir).toBe('s');
   });
 });

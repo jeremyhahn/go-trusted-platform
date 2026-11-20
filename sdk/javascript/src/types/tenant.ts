@@ -533,9 +533,12 @@ export interface GetTenantDEKStatusResponse {
 export interface InitTenantBarrierRequest {
   /** Tenant ID */
   tenantId: string;
-  /** Number of key shares needed to unseal */
+  /**
+   * Number of key shares needed to unseal. Not supported yet: the server
+   * runs a non-Shamir init, so initBarrier refuses any nonzero value.
+   */
   threshold?: number;
-  /** Number of key shares to split the key into */
+  /** Number of key shares to split the key into. Not supported yet (see threshold). */
   shares?: number;
 }
 

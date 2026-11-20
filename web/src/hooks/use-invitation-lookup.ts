@@ -44,14 +44,32 @@ function unwrapInvitation(body: unknown): InvitationDetail {
   // {code, success, payload: {invitation, timestamp}}; a bare {invitation}
   // is accepted too. The envelope itself is never the invitation.
   const record = (body ?? {}) as {
-    invitation?: InvitationDetail;
-    payload?: { invitation?: InvitationDetail };
+    invitation?: Record<string, unknown>;
+    payload?: { invitation?: Record<string, unknown> };
   };
   const invitation = record.payload?.invitation ?? record.invitation;
   if (!invitation) {
     throw new Error("The server returned no invitation");
   }
-  return invitation;
+  // GetInvitation marshals its protobuf with protojson field names
+  // (expiresAt, createdAt, tenantId, tenantName); InvitationDetail and
+  // the pages that read it use snake_case.
+  const { expiresAt, createdAt, tenantId, tenantName, ...rest } = invitation;
+  const pick = (snake: unknown, camel: unknown) =>
+    (snake ?? camel) as string | undefined;
+  const detail = { ...rest } as unknown as InvitationDetail;
+  const fields: Array<[keyof InvitationDetail, string | undefined]> = [
+    ["expires_at", pick(rest.expires_at, expiresAt)],
+    ["created_at", pick(rest.created_at, createdAt)],
+    ["tenant_id", pick(rest.tenant_id, tenantId)],
+    ["tenant_name", pick(rest.tenant_name, tenantName)],
+  ];
+  for (const [key, value] of fields) {
+    if (value !== undefined) {
+      (detail as unknown as Record<string, unknown>)[key] = value;
+    }
+  }
+  return detail;
 }
 
 /**

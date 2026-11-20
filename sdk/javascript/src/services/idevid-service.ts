@@ -44,6 +44,50 @@ import type {
 } from '../types/idevid.js';
 import { DEVICE_KEY_ALGORITHM_PROTO_NAMES, CERT_STORAGE_TYPE_PROTO_NAMES } from '../types/idevid.js';
 import { encodeEnum } from './wire-enum.js';
+import type { DeviceKeyAlgorithm } from '../types/idevid.js';
+
+/**
+ * DeviceKeyAlgorithm numbers (idevid.proto). The daemon REST handler
+ * (pkg/api/daemon/rest_idevid_ldevid.go) decodes with encoding/json, which
+ * reads the enum only as a number; protojson in the webservice accepts it too.
+ */
+const DEVICE_KEY_ALGORITHM_NUMBERS: Readonly<Record<DeviceKeyAlgorithm, number>> = {
+  UNSPECIFIED: 0,
+  ECDSA_P256: 1,
+  ECDSA_P384: 2,
+  RSA_2048: 3,
+  RSA_3072: 4,
+};
+
+/** CreateLDevIDRequest as both REST handlers decode it. */
+interface CreateLDevIDWireRequest {
+  template?: CreateLDevIDRequest['template'];
+  algorithm?: number;
+  handle?: number;
+  profile?: string;
+  validity_days?: number;
+  overwrite?: boolean;
+}
+
+/**
+ * Maps the daemon's encoding/json field names (certificate_pem, csr_pem) to
+ * the declared camelCase response; a webservice (protojson) body passes through.
+ */
+function normalizeCreateLDevIDResponse(res: ApiResponse<CreateLDevIDResponse>): ApiResponse<CreateLDevIDResponse> {
+  const data: unknown = res.data;
+  if (data === null || typeof data !== 'object' || !('certificate_pem' in data || 'csr_pem' in data)) {
+    return res;
+  }
+  const { certificate_pem: certificatePem, csr_pem: csrPem, ...rest } = data as Record<string, unknown>;
+  const normalized: Record<string, unknown> = { ...rest };
+  if (certificatePem !== undefined) {
+    normalized.certificatePem = certificatePem;
+  }
+  if (csrPem !== undefined) {
+    normalized.csrPem = csrPem;
+  }
+  return { ...res, data: normalized as unknown as CreateLDevIDResponse };
+}
 
 /** A key config as the REST decoder reads it: enums carry their protobuf names. */
 type WireKeyConfig<T extends IDevIDConfig | IAKConfig> = Omit<T, 'algorithm' | 'storage'> & {
@@ -279,17 +323,29 @@ export class IDevIDService extends BaseService {
    * @returns CSR and issued certificate
    */
   async createLDevID(request?: CreateLDevIDRequest): Promise<ApiResponse<CreateLDevIDResponse>> {
-    // The REST handler decodes protobuf JSON: the algorithm must carry the
-    // proto enum name (DeviceKeyAlgorithm in idevid.proto), or the decoder
-    // drops it and the service falls back to its default algorithm.
-    const { algorithm, ...rest } = request ?? {};
-    const body: Omit<CreateLDevIDRequest, 'algorithm'> & { algorithm?: string } = { ...rest };
-    if (algorithm) {
-      body.algorithm = algorithm.startsWith('DEVICE_KEY_ALGORITHM_')
-        ? algorithm
-        : `DEVICE_KEY_ALGORITHM_${algorithm}`;
+    // Both REST handlers accept this shape: the daemon decodes with
+    // encoding/json (int32 algorithm, validity_days), the webservice with
+    // protojson (which also takes enum numbers and the proto field name).
+    const { algorithm, validityDays, ...rest } = request ?? {};
+    const body: CreateLDevIDWireRequest = { ...rest };
+    if (algorithm !== undefined) {
+      const number = DEVICE_KEY_ALGORITHM_NUMBERS[algorithm];
+      if (number === undefined) {
+        throw new RangeError(`createLDevID: unknown algorithm ${String(algorithm)}`);
+      }
+      body.algorithm = number;
     }
-    return this.client.post<CreateLDevIDResponse>(this.buildUrl('/ldevid'), body);
+    if (validityDays !== undefined) {
+      body.validity_days = validityDays;
+    }
+    // No retries: the daemon creates and saves a fresh key on each call, so a
+    // resend after a lost response replaces the just-issued identity
+    // (overwrite=true) or reports a false failure (overwrite=false).
+    return normalizeCreateLDevIDResponse(
+      await this.client.post<CreateLDevIDResponse>(this.buildUrl('/ldevid'), body, {
+        retry: { enabled: false },
+      })
+    );
   }
 
   // =========================================================================

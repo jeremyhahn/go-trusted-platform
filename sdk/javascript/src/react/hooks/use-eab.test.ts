@@ -31,6 +31,8 @@ const service = {
   delete: vi.fn(),
   getQRCode: vi.fn(),
   getEnrollmentURL: vi.fn(),
+  markUsed: vi.fn(),
+  cleanupExpired: vi.fn(),
   list: vi.fn(),
 };
 
@@ -60,20 +62,20 @@ describe('useEAB', () => {
     expect(useEAB().service).toBe(service);
   });
 
-  it('builds exactly six mutations', () => {
+  it('builds exactly eight mutations', () => {
     useEAB();
-    expect(useMutation).toHaveBeenCalledTimes(6);
+    expect(useMutation).toHaveBeenCalledTimes(8);
   });
 
   it('create forwards the request to service.create', async () => {
-    const req = { profileId: 1, tenantId: 'tenant-a', expiresInSeconds: 60 };
+    const req = { profileId: '1', tenantId: 'tenant-a', expiresInSeconds: 60 };
     await expect(mutationFn(useEAB().create)(req)).resolves.toEqual({ success: true, data: 'ok' });
     expect(service.create).toHaveBeenCalledWith(req);
   });
 
   it('revoke forwards the id to service.revoke', async () => {
-    await mutationFn(useEAB().revoke)(7);
-    expect(service.revoke).toHaveBeenCalledWith(7);
+    await mutationFn(useEAB().revoke)('7');
+    expect(service.revoke).toHaveBeenCalledWith('7');
   });
 
   it('validate forwards the request to service.validate', async () => {
@@ -83,29 +85,44 @@ describe('useEAB', () => {
   });
 
   it('deleteCredential forwards the id to service.delete', async () => {
-    await mutationFn(useEAB().deleteCredential)(9);
-    expect(service.delete).toHaveBeenCalledWith(9);
+    await mutationFn(useEAB().deleteCredential)('9');
+    expect(service.delete).toHaveBeenCalledWith('9');
   });
 
   it('getQRCode passes id and size', async () => {
-    await mutationFn(useEAB().getQRCode)({ id: 3, size: 256 });
-    expect(service.getQRCode).toHaveBeenCalledWith(3, 256);
+    await mutationFn(useEAB().getQRCode)({ id: '3', size: 256 });
+    expect(service.getQRCode).toHaveBeenCalledWith('3', 256);
   });
 
   it('getQRCode passes an undefined size when none is given', async () => {
-    await mutationFn(useEAB().getQRCode)({ id: 3 });
-    expect(service.getQRCode).toHaveBeenCalledWith(3, undefined);
+    await mutationFn(useEAB().getQRCode)({ id: '3' });
+    expect(service.getQRCode).toHaveBeenCalledWith('3', undefined);
   });
 
   it('getEnrollmentURL forwards the id', async () => {
-    await mutationFn(useEAB().getEnrollmentURL)(4);
-    expect(service.getEnrollmentURL).toHaveBeenCalledWith(4);
+    await mutationFn(useEAB().getEnrollmentURL)('4');
+    expect(service.getEnrollmentURL).toHaveBeenCalledWith('4');
+  });
+
+  it('markUsed forwards the id to service.markUsed', async () => {
+    await mutationFn(useEAB().markUsed)('5');
+    expect(service.markUsed).toHaveBeenCalledWith('5');
+  });
+
+  it('cleanupExpired forwards the request to service.cleanupExpired', async () => {
+    await mutationFn(useEAB().cleanupExpired)({ tenantId: 'tenant-a' });
+    expect(service.cleanupExpired).toHaveBeenCalledWith({ tenantId: 'tenant-a' });
+  });
+
+  it('cleanupExpired forwards an undefined request for every tenant', async () => {
+    await mutationFn(useEAB().cleanupExpired)(undefined);
+    expect(service.cleanupExpired).toHaveBeenCalledWith(undefined);
   });
 
   it('propagates a service rejection through the mutation function', async () => {
     service.revoke.mockRejectedValueOnce(new Error('revoke failed'));
-    await expect(mutationFn(useEAB().revoke)(-1)).rejects.toThrow('revoke failed');
-    expect(service.revoke).toHaveBeenCalledWith(-1);
+    await expect(mutationFn(useEAB().revoke)('missing')).rejects.toThrow('revoke failed');
+    expect(service.revoke).toHaveBeenCalledWith('missing');
   });
 
   it('throws when the platform client is missing', () => {

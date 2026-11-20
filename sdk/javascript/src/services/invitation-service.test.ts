@@ -171,13 +171,12 @@ describe('InvitationService', () => {
       const data = { user: { id: 'u-1' }, tenant: { id: 't-1' } };
       vi.mocked(mockClient.post).mockResolvedValue({ success: true, data });
 
-      const result = await service.accept({ token: 'tok-1', name: 'Ann', password: 'pw' });
+      const result = await service.accept({ token: 'tok-1', userId: '42' });
 
       expect(result.data).toEqual(data);
       expect(mockClient.post).toHaveBeenCalledWith('/v1/invitations/accept', {
         token: 'tok-1',
-        name: 'Ann',
-        password: 'pw',
+        userId: '42',
       });
     });
 
@@ -185,7 +184,7 @@ describe('InvitationService', () => {
       const failure = new Error('400 Bad Request: invalid token');
       vi.mocked(mockClient.post).mockRejectedValue(failure);
 
-      await expect(service.accept({ token: 'bad' })).rejects.toBe(failure);
+      await expect(service.accept({ token: 'bad', userId: '42' })).rejects.toBe(failure);
     });
   });
 
