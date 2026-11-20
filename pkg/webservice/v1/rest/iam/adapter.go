@@ -461,7 +461,7 @@ func (a *QuicBaaSIAMAdapter) TestPolicy(ctx context.Context, tenantID string, re
 		Context:  contextMap,
 	})
 	if err != nil {
-		return nil, err
+		return nil, simulateError(err)
 	}
 	return testPolicyResponseFromSimulate(resp), nil
 }
