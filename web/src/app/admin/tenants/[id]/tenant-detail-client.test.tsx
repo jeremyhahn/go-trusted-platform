@@ -34,11 +34,19 @@ const apiResult = vi.hoisted(() => ({
   refetch: () => Promise.resolve(),
 }));
 
-vi.mock("@/hooks", () => ({
-  useApi: () => apiResult,
-  useTenant: () => ({ syncTenants, ...tenantSvc }),
-}));
+// The barrier suite below runs the page against the real SDK tenant
+// service (only fetch is stubbed); the other suites use the mocked service.
+const realSdk = vi.hoisted(() => ({ on: false }));
 
+vi.mock("@/hooks", async () => {
+  const sdk = await vi.importActual<typeof import("trusted-platform-sdk")>("trusted-platform-sdk");
+  return {
+    useApi: () => apiResult,
+    useTenant: () => (realSdk.on ? sdk.useTenant() : { syncTenants, ...tenantSvc }),
+  };
+});
+
+import { PlatformClient, PlatformProvider } from "trusted-platform-sdk";
 import TenantDetailClient from "./tenant-detail-client";
 
 async function clickSync() {
@@ -180,5 +188,114 @@ describe("TenantDetailClient actions", () => {
     });
     expect(screen.getByTestId("action-result").textContent).toBe("refused by policy");
     expect((screen.getByLabelText("Max VMs") as HTMLInputElement).value).toBe("2");
+  });
+});
+
+// #2023 Codex round 5: barrier init and unseal change access to the
+// tenant's encrypted data. These cases run the page against the real SDK
+// tenant service with only fetch stubbed: the request names this page's
+// tenant, unseal sends the base64 key, a refusal shows its message and keeps
+// the key, and the key field is cleared only after a success.
+describe("TenantDetailClient barrier through the SDK", () => {
+  interface Sent {
+    method: string;
+    url: string;
+    body: unknown;
+  }
+  const fetchMock = vi.fn<typeof fetch>();
+  let sent: Sent[] = [];
+  let reply: (url: string) => Response;
+
+  function json(status: number, body: unknown): Response {
+    return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  }
+
+  beforeEach(() => {
+    realSdk.on = true;
+    sent = [];
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(async (input, init) => {
+      const req = input instanceof Request ? input : null;
+      const url = req ? req.url : String(input);
+      const method = init?.method ?? req?.method ?? "GET";
+      const raw = init?.body ?? (req ? await req.clone().text() : undefined);
+      sent.push({ method, url, body: typeof raw === "string" && raw ? JSON.parse(raw) : raw });
+      return reply(url);
+    });
+  });
+  afterEach(() => {
+    cleanup();
+    realSdk.on = false;
+  });
+
+  function renderPage() {
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test/api",
+      fetch: fetchMock,
+      retry: { maxRetries: 0 },
+    });
+    render(
+      <PlatformProvider client={client}>
+        <TenantDetailClient />
+      </PlatformProvider>
+    );
+  }
+
+  const barrierCalls = () => sent.filter((s) => s.url.includes("/barrier/"));
+  const keyField = () => screen.getByLabelText("Unseal key (base64)") as HTMLInputElement;
+
+  async function click(name: string) {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name }));
+    });
+  }
+
+  it("initialises the barrier of this page's tenant", async () => {
+    reply = () => json(200, { code: 200, error: "", success: true, payload: {} });
+    renderPage();
+    await click("Initialise barrier");
+    const calls = barrierCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].method).toBe("POST");
+    expect(calls[0].url).toContain("/v1/tenants/t-1/barrier/init");
+    expect(screen.getByTestId("action-result").textContent).toBe("Barrier initialised");
+  });
+
+  it("shows the refusal of a barrier init", async () => {
+    reply = () => json(409, { code: 409, error: "barrier already initialised", success: false });
+    renderPage();
+    await click("Initialise barrier");
+    expect(barrierCalls()).toHaveLength(1);
+    const result = screen.getByTestId("action-result").textContent;
+    expect(result).toContain("barrier already initialised");
+    expect(result).not.toBe("Barrier initialised");
+  });
+
+  it("unseals this page's tenant with the base64 key and clears the key after success", async () => {
+    reply = () => json(200, { code: 200, error: "", success: true, payload: {} });
+    renderPage();
+    fireEvent.change(keyField(), { target: { value: "a2V5LW1hdGVyaWFs" } });
+    await click("Unseal barrier");
+    const calls = barrierCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].method).toBe("POST");
+    expect(calls[0].url).toContain("/v1/tenants/t-1/barrier/unseal");
+    expect(calls[0].body).toEqual({ key: "a2V5LW1hdGVyaWFs" });
+    expect(screen.getByTestId("action-result").textContent).toBe("Barrier unsealed");
+    expect(keyField().value).toBe("");
+  });
+
+  it("shows the refusal of an unseal and keeps the key", async () => {
+    reply = () => json(403, { code: 403, error: "unseal refused by policy", success: false });
+    renderPage();
+    fireEvent.change(keyField(), { target: { value: "a2V5LW1hdGVyaWFs" } });
+    await click("Unseal barrier");
+    const calls = barrierCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].body).toEqual({ key: "a2V5LW1hdGVyaWFs" });
+    const result = screen.getByTestId("action-result").textContent;
+    expect(result).toContain("unseal refused by policy");
+    expect(result).not.toBe("Barrier unsealed");
+    expect(keyField().value).toBe("a2V5LW1hdGVyaWFs");
   });
 });
