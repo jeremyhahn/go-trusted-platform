@@ -92,33 +92,100 @@ func (s tenantOnlySession) TenantID() string { return s.tenant }
 // at all is refused every tenant-scoped IAM and tenant call with
 // PermissionDenied, and the Unix peer-credential operator is still admitted.
 func TestUnboundTenantCallers(t *testing.T) {
-	s := &TenantGRPCServer{}
-	s.SetSystemTenant("system")
+	tenantServer := func(pep quicbaassdk.IAMPEPClient) *TenantGRPCServer {
+		s := &TenantGRPCServer{}
+		s.SetSystemTenant("system")
+		s.SetPEP(pep)
+		return s
+	}
 
 	checks := []struct {
-		name string
-		call func(ctx context.Context) error
+		name   string
+		call   func(ctx context.Context, pep quicbaassdk.IAMPEPClient) error
+		tenant string
+		action string
 	}{
-		{"authorizeIAMTenant", func(ctx context.Context) error { return authorizeIAMTenant(ctx, "tenant-a") }},
-		{"authorizeSystemCaller", func(ctx context.Context) error { return authorizeSystemCaller(ctx, "system", "ListTenants") }},
-		{"authorizeTenant", func(ctx context.Context) error { return s.authorizeTenant(ctx, "tenant-a") }},
-		{"authorizeSystemTenant", func(ctx context.Context) error { return s.authorizeSystemTenant(ctx, "CreateTenant") }},
-		{"authorizeTenantName", func(ctx context.Context) error { return s.authorizeTenantName(ctx, "tenant-a") }},
+		{"authorizeIAMTenant", func(ctx context.Context, pep quicbaassdk.IAMPEPClient) error {
+			return authorizeIAMTenant(ctx, pep, "tenant-a")
+		}, "tenant-a", unixPeerActionIAMTenant},
+		{"authorizeSystemCaller", func(ctx context.Context, pep quicbaassdk.IAMPEPClient) error {
+			return authorizeSystemCaller(ctx, pep, "system", "ListTenants")
+		}, "system", unixPeerActionCrossTenant + "ListTenants"},
+		{"authorizeTenant", func(ctx context.Context, pep quicbaassdk.IAMPEPClient) error {
+			return tenantServer(pep).authorizeTenant(ctx, "tenant-a")
+		}, "tenant-a", unixPeerActionTenantAccess},
+		{"authorizeSystemTenant", func(ctx context.Context, pep quicbaassdk.IAMPEPClient) error {
+			return tenantServer(pep).authorizeSystemTenant(ctx, "CreateTenant")
+		}, "system", unixPeerActionCrossTenant + "CreateTenant"},
+		{"authorizeTenantName", func(ctx context.Context, pep quicbaassdk.IAMPEPClient) error {
+			return tenantServer(pep).authorizeTenantName(ctx, "tenant-a")
+		}, "tenant-a", unixPeerActionTenantLookup},
 	}
+
+	peer := peercred.ContextWithUnixCredentials(context.Background(), peercred.UnixCredentials{PID: 7, UID: 1000, GID: 100})
 
 	for _, c := range checks {
 		t.Run(c.name+" refuses a caller with no identity", func(t *testing.T) {
-			err := c.call(context.Background())
+			err := c.call(context.Background(), allowAllPEP(nil))
 			if status.Code(err) != codes.PermissionDenied {
 				t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
 			}
 		})
-		t.Run(c.name+" admits the Unix peer-credential operator", func(t *testing.T) {
-			if err := c.call(unixOperatorContext()); err != nil {
+		t.Run(c.name+" refuses the Unix peer when no PEP is wired", func(t *testing.T) {
+			err := c.call(peer, nil)
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+			}
+		})
+		t.Run(c.name+" refuses the Unix peer the PEP denies", func(t *testing.T) {
+			deny := &mockSDKPEPClient{checkFunc: func(context.Context, *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+				return &sdkiam.CheckResponse{Allowed: false}, nil
+			}}
+			err := c.call(peer, deny)
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+			}
+		})
+		t.Run(c.name+" refuses the Unix peer when the PEP check fails", func(t *testing.T) {
+			failing := &mockSDKPEPClient{checkFunc: func(context.Context, *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+				return nil, context.DeadlineExceeded
+			}}
+			err := c.call(peer, failing)
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+			}
+		})
+		t.Run(c.name+" admits the Unix peer the PEP allows, as its uid/gid principal", func(t *testing.T) {
+			var seen []*sdkiam.CheckRequest
+			if err := c.call(peer, allowAllPEP(&seen)); err != nil {
 				t.Fatalf("%s() = %v, want nil", c.name, err)
+			}
+			if len(seen) != 1 {
+				t.Fatalf("PEP checks = %d, want 1", len(seen))
+			}
+			req := seen[0]
+			if req.Subject.ID != "unix:uid:1000" || req.Subject.TenantID != c.tenant {
+				t.Fatalf("subject = %+v, want unix:uid:1000 in %q", req.Subject, c.tenant)
+			}
+			if len(req.Subject.Roles) != 1 || req.Subject.Roles[0] != "unix:gid:100" {
+				t.Fatalf("roles = %v, want [unix:gid:100]", req.Subject.Roles)
+			}
+			if req.Resource != "tenant://"+c.tenant || req.Action != c.action {
+				t.Fatalf("resource, action = %q, %q; want %q, %q", req.Resource, req.Action, "tenant://"+c.tenant, c.action)
 			}
 		})
 	}
+}
+
+// allowAllPEP is a decision point that admits every request, recording each
+// one into seen when seen is not nil.
+func allowAllPEP(seen *[]*sdkiam.CheckRequest) quicbaassdk.IAMPEPClient {
+	return &mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		if seen != nil {
+			*seen = append(*seen, req)
+		}
+		return &sdkiam.CheckResponse{Allowed: true}, nil
+	}}
 }
 
 func TestCallerTenant(t *testing.T) {
@@ -182,26 +249,33 @@ func TestCallerTenant(t *testing.T) {
 
 func TestAuthorizeIAMTenant(t *testing.T) {
 	t.Run("own tenant is allowed", func(t *testing.T) {
-		if err := authorizeIAMTenant(tokenCallerContext("tenant-a"), "tenant-a"); err != nil {
+		if err := authorizeIAMTenant(tokenCallerContext("tenant-a"), nil, "tenant-a"); err != nil {
 			t.Fatalf("authorizeIAMTenant() = %v, want nil", err)
 		}
 	})
 
 	t.Run("caller with no identity is refused", func(t *testing.T) {
-		err := authorizeIAMTenant(context.Background(), "tenant-a")
+		err := authorizeIAMTenant(context.Background(), nil, "tenant-a")
 		if status.Code(err) != codes.PermissionDenied {
 			t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
 		}
 	})
 
-	t.Run("Unix peer-credential operator is allowed", func(t *testing.T) {
-		if err := authorizeIAMTenant(unixOperatorContext(), "tenant-a"); err != nil {
+	t.Run("Unix peer-credential operator with no PEP wired is refused", func(t *testing.T) {
+		err := authorizeIAMTenant(unixOperatorContext(), nil, "tenant-a")
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+		}
+	})
+
+	t.Run("Unix peer-credential operator the PEP allows is allowed", func(t *testing.T) {
+		if err := authorizeIAMTenant(unixOperatorContext(), allowAllPEP(nil), "tenant-a"); err != nil {
 			t.Fatalf("authorizeIAMTenant() = %v, want nil", err)
 		}
 	})
 
 	t.Run("another tenant is refused", func(t *testing.T) {
-		err := authorizeIAMTenant(tokenCallerContext("tenant-a"), "tenant-b")
+		err := authorizeIAMTenant(tokenCallerContext("tenant-a"), nil, "tenant-b")
 		if status.Code(err) != codes.PermissionDenied {
 			t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
 		}
@@ -212,7 +286,7 @@ func TestAuthorizeIAMTenant(t *testing.T) {
 	})
 
 	t.Run("tenant-less token does not match a named tenant", func(t *testing.T) {
-		err := authorizeIAMTenant(tokenCallerContext(""), "tenant-b")
+		err := authorizeIAMTenant(tokenCallerContext(""), nil, "tenant-b")
 		if status.Code(err) != codes.PermissionDenied {
 			t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
 		}
@@ -279,10 +353,12 @@ func TestIAMGRPCService_CrossTenantRPCsAreSystemOnly(t *testing.T) {
 		name         string
 		systemTenant string
 		ctx          context.Context
+		noPEP        bool
 		wantCode     codes.Code
 	}{
 		{name: "system tenant", systemTenant: "system", ctx: tokenCallerContext("system"), wantCode: codes.OK},
 		{name: "local operator", systemTenant: "system", ctx: unixOperatorContext(), wantCode: codes.OK},
+		{name: "local operator, no PEP wired", systemTenant: "system", ctx: unixOperatorContext(), noPEP: true, wantCode: codes.PermissionDenied},
 		{name: "anonymous caller", systemTenant: "system", ctx: context.Background(), wantCode: codes.PermissionDenied},
 		{name: "other tenant", systemTenant: "system", ctx: tokenCallerContext("tenant-a"), wantCode: codes.PermissionDenied},
 		{name: "unset system tenant", systemTenant: "", ctx: tokenCallerContext("system"), wantCode: codes.PermissionDenied},
@@ -290,7 +366,11 @@ func TestIAMGRPCService_CrossTenantRPCsAreSystemOnly(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			svc := NewIAMGRPCService(slog.Default(), newMemIAM(), nil)
+			pep := allowAllPEP(nil)
+			if tc.noPEP {
+				pep = nil
+			}
+			svc := NewIAMGRPCService(slog.Default(), newMemIAM(), pep)
 			svc.SetSystemTenant(tc.systemTenant)
 
 			_, err := svc.CreateTenant(tc.ctx, &platformv1.CreateIAMTenantRequest{Id: "acme", Name: "Acme"})
@@ -302,6 +382,9 @@ func TestIAMGRPCService_CrossTenantRPCsAreSystemOnly(t *testing.T) {
 				t.Fatalf("ListTenants code = %v, want %v (err %v)", status.Code(err), tc.wantCode, err)
 			}
 
+			// The local caller reads back what was created, through a PEP
+			// that admits it.
+			svc.pepClient = allowAllPEP(nil)
 			listed, err := svc.ListTenants(unixOperatorContext(), &platformv1.ListIAMTenantsRequest{})
 			if err != nil {
 				t.Fatalf("ListTenants as the local caller: %v", err)
