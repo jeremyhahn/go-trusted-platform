@@ -331,14 +331,13 @@ func TestRunnerSelectionScript(t *testing.T) {
 		overflow = "overflow"
 	)
 	self := selJobs(1, selRunID, "in_progress", selUbuntu, 5*time.Second) // this preflight job
-	cat := func(parts ...[]selJob) []selJob { return slices.Concat(parts...) }
 	gh := selEnv{server: "https://github.com"}
 	sameRepoPR := selEnv{server: "https://github.com", headRepo: selRepo}
 	forkPR := selEnv{server: "https://github.com", headRepo: "someone/repo"}
-	saturated := cat(self, selJobs(30, 7, "in_progress", selUbuntu, time.Minute), selJobs(5, 8, "queued", selUbuntu, 10*time.Minute))
+	saturated := slices.Concat(self, selJobs(30, 7, "in_progress", selUbuntu, time.Minute), selJobs(5, 8, "queued", selUbuntu, 10*time.Minute))
 	// 150 jobs of one run: the first page all done, the 12 in progress on
 	// the second page, so only a complete read overflows.
-	paged := cat(selJobs(100, 9, "completed", selUbuntu, time.Hour), selJobs(38, 9, "completed", selUbuntu, time.Hour), selJobs(12, 9, "in_progress", selUbuntu, time.Minute))
+	paged := slices.Concat(selJobs(100, 9, "completed", selUbuntu, time.Hour), selJobs(38, 9, "completed", selUbuntu, time.Hour), selJobs(12, 9, "in_progress", selUbuntu, time.Minute))
 	jobsURL := func(run, page int) string {
 		return selPage(fmt.Sprintf("%s/runs/%d/jobs?filter=latest", selAPI, run), page)
 	}
@@ -355,30 +354,30 @@ func TestRunnerSelectionScript(t *testing.T) {
 	}{
 		{name: "no other jobs", env: gh, jobs: self, want: hosted},
 		{name: "11 hosted jobs in progress, under the limit", env: gh,
-			jobs: cat(self, selJobs(10, 7, "in_progress", selUbuntu, time.Minute)), want: hosted},
+			jobs: slices.Concat(self, selJobs(10, 7, "in_progress", selUbuntu, time.Minute)), want: hosted},
 		{name: "12 hosted jobs in progress, at the limit", env: gh,
-			jobs: cat(self, selJobs(11, 7, "in_progress", selUbuntu, time.Minute)), want: overflow},
+			jobs: slices.Concat(self, selJobs(11, 7, "in_progress", selUbuntu, time.Minute)), want: overflow},
 		{name: "12 hosted jobs in progress across runs", env: gh,
-			jobs: cat(self, selJobs(4, 7, "in_progress", selUbuntu, time.Minute), selJobs(7, 8, "in_progress", selUbuntu, time.Minute)), want: overflow},
+			jobs: slices.Concat(self, selJobs(4, 7, "in_progress", selUbuntu, time.Minute), selJobs(7, 8, "in_progress", selUbuntu, time.Minute)), want: overflow},
 		{name: "self-hosted jobs in progress do not count", env: gh,
-			jobs: cat(self, selJobs(10, 7, "in_progress", selUbuntu, time.Minute), selJobs(20, 7, "in_progress", selSelfHosted, time.Minute)), want: hosted},
+			jobs: slices.Concat(self, selJobs(10, 7, "in_progress", selUbuntu, time.Minute), selJobs(20, 7, "in_progress", selSelfHosted, time.Minute)), want: hosted},
 		{name: "completed jobs do not count", env: gh,
-			jobs: cat(self, selJobs(10, 7, "in_progress", selUbuntu, time.Minute), selJobs(20, 7, "completed", selUbuntu, time.Minute)), want: hosted},
+			jobs: slices.Concat(self, selJobs(10, 7, "in_progress", selUbuntu, time.Minute), selJobs(20, 7, "completed", selUbuntu, time.Minute)), want: hosted},
 		{name: "12 hosted jobs of another run queued under 60s", env: gh,
-			jobs: cat(self, selJobs(12, 7, "queued", selUbuntu, 45*time.Second)), want: hosted},
+			jobs: slices.Concat(self, selJobs(12, 7, "queued", selUbuntu, 45*time.Second)), want: hosted},
 		{name: "12 hosted jobs of another run queued 60s", env: gh,
-			jobs: cat(self, selJobs(12, 7, "queued", selUbuntu, 60*time.Second)), want: overflow},
+			jobs: slices.Concat(self, selJobs(12, 7, "queued", selUbuntu, 60*time.Second)), want: overflow},
 		{name: "one hosted job of another run queued 90s", env: gh,
-			jobs: cat(self, selJobs(1, 7, "queued", selUbuntu, 90*time.Second)), want: overflow},
+			jobs: slices.Concat(self, selJobs(1, 7, "queued", selUbuntu, 90*time.Second)), want: overflow},
 		{name: "this run's own jobs queued 90s do not count", env: gh,
-			jobs: cat(self, selJobs(12, selRunID, "queued", selUbuntu, 90*time.Second)), want: hosted},
+			jobs: slices.Concat(self, selJobs(12, selRunID, "queued", selUbuntu, 90*time.Second)), want: hosted},
 		{name: "a self-hosted job queued 90s does not count", env: gh,
-			jobs: cat(self, selJobs(3, 7, "queued", selSelfHosted, 90*time.Second)), want: hosted},
+			jobs: slices.Concat(self, selJobs(3, 7, "queued", selSelfHosted, 90*time.Second)), want: hosted},
 		{name: "a same-repository pull request at saturation", env: sameRepoPR, jobs: saturated, want: overflow},
 		{name: "a fork pull request at saturation", env: forkPR, jobs: saturated, want: hosted, noCalls: true},
 		{name: "off github.com at saturation", env: selEnv{server: "https://gitea.example"}, jobs: saturated, want: hosted, noCalls: true},
-		{name: "a second jobs page read in full", env: gh, jobs: cat(self, paged), want: overflow},
-		{name: "a failed second jobs page at saturation", env: gh, jobs: cat(saturated, paged),
+		{name: "a second jobs page read in full", env: gh, jobs: slices.Concat(self, paged), want: overflow},
+		{name: "a failed second jobs page at saturation", env: gh, jobs: slices.Concat(saturated, paged),
 			break_: func(r map[string]selReply) { r[jobsURL(9, 2)] = selReply{code: 502, body: `{"message":"Bad Gateway"}`} },
 			want:   hosted, warning: true},
 		{name: "a jobs list short of its total_count at saturation", env: gh, jobs: saturated,
