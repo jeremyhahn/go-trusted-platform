@@ -116,4 +116,39 @@ describe("PermissionCheckCard", () => {
     });
     expect(screen.getByText("Denied")).toBeDefined();
   });
+
+  it("sends the roles and groups typed for the subject", async () => {
+    checkPermission.mockResolvedValue({ allowed: true });
+    render(<PermissionCheckCard tenantId="t-1" />);
+
+    fill("u-1", "read", "fleet");
+    fireEvent.change(screen.getByLabelText("Roles"), { target: { value: " admin, ops ," } });
+    fireEvent.change(screen.getByLabelText("Groups"), { target: { value: "g-1" } });
+    await submit();
+
+    expect(checkPermission).toHaveBeenCalledWith({
+      tenantId: "t-1",
+      subjectId: "u-1",
+      action: "read",
+      resource: "fleet",
+      roles: ["admin", "ops"],
+      groups: ["g-1"],
+    });
+  });
+
+  it("hides the verdict once the roles change", async () => {
+    checkPermission.mockResolvedValue({ allowed: true });
+    render(<PermissionCheckCard tenantId="t-1" />);
+
+    fill("u-1", "read", "fleet");
+    fireEvent.change(screen.getByLabelText("Roles"), { target: { value: "admin" } });
+    await submit();
+    expect(screen.getByText("Allowed")).toBeDefined();
+
+    fireEvent.change(screen.getByLabelText("Roles"), { target: { value: "viewer" } });
+    expect(screen.queryByText("Allowed")).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Roles"), { target: { value: "admin" } });
+    expect(screen.getByText("Allowed")).toBeDefined();
+  });
 });
