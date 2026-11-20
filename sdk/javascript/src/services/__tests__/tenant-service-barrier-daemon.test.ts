@@ -35,3 +35,37 @@ describe('TenantService.initBarrier Shamir settings', () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+// TenantBarrierActionResponse as handleInitTenantBarrier, handleUnsealTenantBarrier
+// and handleSealTenantBarrier write it.
+const daemonBody = {
+  tenant_id: 't1',
+  success: true,
+  message: 'tenant barrier initialized',
+  timestamp: '2026-11-20T05:00:00Z',
+};
+
+describe('TenantService barrier responses from the daemon', () => {
+  it.each([
+    ['initBarrier', (s: TenantService) => s.initBarrier({ tenantId: 't1' })],
+    ['unsealBarrier', (s: TenantService) => s.unsealBarrier({ tenantId: 't1', key: 'a2V5' })],
+    ['sealBarrier', (s: TenantService) => s.sealBarrier('t1')],
+  ] as const)('%s normalises the flat body into status', async (_name, call) => {
+    const { client } = daemonClient(daemonBody);
+    const res = await call(new TenantService(client));
+    expect(res.success).toBe(true);
+    expect(res.data?.status).toEqual({ success: true, message: 'tenant barrier initialized' });
+  });
+
+  it('reports a daemon failure in status', async () => {
+    const { client } = daemonClient({ ...daemonBody, success: false, message: 'sealed' });
+    const res = await new TenantService(client).sealBarrier('t1');
+    expect(res.data?.status).toEqual({ success: false, message: 'sealed' });
+  });
+
+  it('keeps the webservice status shape', async () => {
+    const { client } = daemonClient({ status: { success: true, message: 'ok' } });
+    const res = await new TenantService(client).sealBarrier('t1');
+    expect(res.data?.status).toEqual({ success: true, message: 'ok' });
+  });
+});
