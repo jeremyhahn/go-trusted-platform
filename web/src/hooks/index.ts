@@ -172,6 +172,7 @@ export type {
   RegistryStatus,
   RegistryTags,
   UseRegistryResult,
+  RegistryArtifactDetail,
 } from './use-registry';
 export { useSwitchPorts } from './use-switch-ports';
 export type { UseSwitchPortsResult } from './use-switch-ports';

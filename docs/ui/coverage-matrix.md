@@ -559,10 +559,10 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 |---|---|---|---|---|---|
 | `RegistryService.Push` | `POST /` | - | - | - | not-UI: streaming plumbing |
 | `RegistryService.Pull` | - | - | - | - | not-UI: streaming plumbing |
-| `RegistryService.List` | `GET /{name:.+}/tags/list` | - | - | - | missing |
-| `RegistryService.Inspect` | - | - | - | - | missing |
-| `RegistryService.Delete` | `DELETE /{name:.+}/manifests/{reference}` | - | - | - | missing |
-| `RegistryService.Status` | `GET /status` | - | - | - | missing |
+| `RegistryService.List` | `GET /{name:.+}/tags/list` | `(dashboard)/compute/registry/page.tsx` | - | `real-server/registry.spec.ts` | covered |
+| `RegistryService.Inspect` | `GET /{repository:.+}` (`{repository}:{tag}`) | `(dashboard)/compute/registry/page.tsx` | - | `real-server/registry.spec.ts` | covered |
+| `RegistryService.Delete` | `DELETE /{name:.+}/manifests/{reference}` | `(dashboard)/compute/registry/page.tsx` | - | `real-server/registry.spec.ts` | covered |
+| `RegistryService.Status` | `GET /status` | `(dashboard)/compute/registry/page.tsx` | - | `real-server/registry.spec.ts` | covered |
 
 ## SchedulerService (`scheduler.proto`)
 
@@ -757,7 +757,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | ProvisioningGateway | 4 | 0 | 0 | 0 | 4 | 0 |
 | ProxyService | 14 | 0 | 0 | 14 | 0 | 0 |
 | PXEService | 15 | 3 | 1 | 11 | 0 | 0 |
-| RegistryService | 6 | 0 | 0 | 4 | 2 | 0 |
+| RegistryService | 6 | 4 | 0 | 0 | 2 | 0 |
 | SchedulerService | 11 | 0 | 0 | 0 | 0 | 11 |
 | SDNService | 29 | 11 | 1 | 16 | 1 | 0 |
 | SwitchService | 5 | 0 | 0 | 5 | 0 | 0 |

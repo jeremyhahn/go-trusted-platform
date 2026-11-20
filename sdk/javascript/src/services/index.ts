@@ -42,6 +42,8 @@ export {
   RegistryHealth,
   type RegistryStatus,
   type RegistryTagList,
+  type RegistryArtifact,
+  type RegistryArtifactDetail,
   type RegistryComponentHealth,
 } from './registry-service.js';
 export { SDNService } from './sdn-service.js';

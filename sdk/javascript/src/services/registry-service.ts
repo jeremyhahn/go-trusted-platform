@@ -40,6 +40,32 @@ export interface RegistryTagList {
   tags: string[];
 }
 
+/** One artifact, as the daemon's RegistryArtifact (Go field names). */
+export interface RegistryArtifact {
+  ID?: string;
+  Repository?: string;
+  Tag?: string;
+  Digest?: string;
+  Type?: number;
+  State?: number;
+  Size?: number;
+  Labels?: Record<string, string> | null;
+  Annotations?: Record<string, string> | null;
+  OS?: string;
+  Architecture?: string;
+  Author?: string;
+  CreatedAt?: string;
+  PushedAt?: string;
+  PullCount?: number;
+}
+
+/** Response of GET /v1/compute/images/{repository}:{tag}. */
+export interface RegistryArtifactDetail {
+  Artifact?: RegistryArtifact | null;
+  Signatures?: unknown[] | null;
+  ScanResult?: Record<string, unknown> | null;
+}
+
 /** OCI distribution base path. */
 const OCI_BASE = '/v2';
 
@@ -84,6 +110,18 @@ export class RegistryService extends BaseService {
     return this.client.delete<undefined>(
       `${OCI_BASE}/${this.encodeRepository(name)}/manifests/${this.encodePathSegment(reference)}`,
       { rootRelative: true }
+    );
+  }
+
+  /**
+   * Inspect an artifact by tag (RegistryService.Inspect).
+   *
+   * @param name - Repository name
+   * @param tag - Tag (the route splits on the last colon, so not a digest)
+   */
+  async inspect(name: string, tag: string): Promise<ApiResponse<RegistryArtifactDetail>> {
+    return this.client.get<RegistryArtifactDetail>(
+      this.buildUrl(`/${this.encodeRepository(name)}:${this.encodePathSegment(tag)}`)
     );
   }
 

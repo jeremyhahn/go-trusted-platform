@@ -95,6 +95,8 @@ export {
   RegistryHealth,
   type RegistryStatus,
   type RegistryTagList,
+  type RegistryArtifact,
+  type RegistryArtifactDetail,
   type RegistryComponentHealth,
   SDNService,
   SwitchService,

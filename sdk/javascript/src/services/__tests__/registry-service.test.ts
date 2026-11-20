@@ -84,6 +84,18 @@ describe('RegistryService', () => {
     expect(mockClient.get).toHaveBeenCalledWith('/v1/compute/images/status');
     expect(res.data?.Health).toBe(RegistryHealth.Healthy);
   });
+
+  it('inspect gets the artifact by repository and tag (#2063)', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({
+      success: true,
+      data: { Artifact: { Repository: 'team/app', Tag: 'v1', Digest: 'sha256:abc' } },
+    });
+
+    const res = await service.inspect('team/app', 'v1');
+
+    expect(mockClient.get).toHaveBeenCalledWith('/v1/compute/images/team/app:v1');
+    expect(res.data?.Artifact?.Digest).toBe('sha256:abc');
+  });
 });
 
 describe('RegistryService with a real ApiClient', () => {
