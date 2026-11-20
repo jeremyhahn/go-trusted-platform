@@ -28,8 +28,8 @@ REST: `pkg/webservice/v1/rest/attestation/` (`server_router.go`,
 — see §3). The daemon REST listener serves the manifest, quote-verify,
 report and callers routes behind its scope guard ([`docs/daemon/api.md`](../daemon/api.md) §1, #997).
 QUIC: `pkg/api/quic/attestation_handlers.go` plus the base range in
-`sdk/go/wire/quicwire/protocol.go`, routed by the daemon for opcodes `0x70`–`0x77`
-and `0x7C`–`0x7F` (`pkg/api/daemon/quic_attestation.go`). The manifest and
+`sdk/go/wire/quicwire/protocol.go`, routed by the daemon for opcodes `0x66`–`0x67`,
+`0x70`–`0x77` and `0x7C`–`0x7F` (`pkg/api/daemon/quic_attestation.go`). The manifest and
 collection opcodes call the same gRPC servicer through
 `pkg/api/daemon/quic_attestation_adapter.go`, so each answers with its gRPC
 twin's result and error class; `0x77` has no report store behind any transport
@@ -46,11 +46,11 @@ refused (§5).
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| List manifests | `GET /api/v1/attestation/manifests` | `ListManifests` | `MISSING — docs/13 G7` | `attestation_list_manifests` | ✅ |
+| List manifests | `GET /api/v1/attestation/manifests` | `ListManifests` | `OpAttestListManifests` (`0x66`) | `attestation_list_manifests` | ✅ |
 | Get manifest | `GET /api/v1/attestation/manifests/{id}` | `GetManifest` | `OpAttestGetManifest` (`0x76`) | `attestation_get_manifest` | ✅ |
 | Build manifest | `POST /api/v1/attestation/manifests/build` | `BuildManifest` | `OpAttestBuildManifest` (`0x7C`) | `attestation_create_manifest` | refused — every transport answers `ErrTPMSessionNotConfigured` ([engineering](engineering.md) §3a) |
 | Verify manifest | `POST /api/v1/attestation/manifests/verify` | `VerifyManifest` | `OpAttestVerifyManifest` (`0x7D`) | `attestation_verify_manifest` | ✅ |
-| Delete manifest | `DELETE /api/v1/attestation/manifests/{id}` | `DeleteManifest` | `MISSING — docs/13 G7` | `attestation_delete_manifest` | ✅ |
+| Delete manifest | `DELETE /api/v1/attestation/manifests/{id}` | `DeleteManifest` | `OpAttestDeleteManifest` (`0x67`) | `attestation_delete_manifest` | ✅ |
 | Get quote (TLS only — §5.1a) | `POST /api/v1/attestation/quote` | `GetAttestationQuote` (refused over Unix) | `OpAttestQuote` (`0x70`) | `attestation_get_quote` (HTTPS only) | refused — no TLS (§5.1a) |
 | Verify quote | `POST /api/v1/attestation/quote/verify` | `VerifyAttestationQuote` | `OpAttestVerify` (`0x71`) | `attestation_verify_quote` | ✅ |
 | Collect host attestation (TLS only — §5.1a) | `POST /api/v1/attestation/host` | `CollectHostAttestation` (refused over Unix) | `OpAttestHost` (`0x7E`), `OpAttestCollectHost` (`0x72`) | `attestation_collect_host` (HTTPS only) | refused — no TLS (§5.1a) |
@@ -111,13 +111,16 @@ Two pairs of constants share a value in the same flat opcode space:
 
 | Value | Names | Which one the dispatcher uses |
 |---|---|---|
-| `0x76` | `OpAttestGetReport` (`protocol.go:226`), `OpAttestGetManifest` (`attestation_handlers.go:29`) | **`OpAttestGetManifest`** — the handler switches on it |
-| `0x77` | `OpAttestGetPCRs` (`protocol.go:227`), `OpAttestGetReportByID` (`attestation_handlers.go:55`) | **`OpAttestGetReportByID`** |
+| `0x76` | `OpAttestGetManifest` (`attestation_opcodes.go:18`); dead alias `OpAttestGetReport` (`protocol.go:231`) | **`OpAttestGetManifest`** — the handler switches on it |
+| `0x77` | `OpAttestGetReportByID` (`attestation_opcodes.go:51`); dead alias `OpAttestGetPCRs` (`protocol.go:232`) | **`OpAttestGetReportByID`** |
 
 `OpAttestGetReport` and `OpAttestGetPCRs` are therefore dead names, but both are
-still in the `OpcodeNames` table (`protocol.go:898-899`), so **logs will label a
+still in the `opcodeNames` table (`protocol.go:902-903`), so **logs will label a
 manifest fetch `AttestGetReport` and a report fetch `AttestGetPCRs`**. When
 debugging a QUIC attestation call, trust the handler, not the log label.
+
+Manifest list and delete have their own opcodes, `OpAttestListManifests`
+(`0x66`) and `OpAttestDeleteManifest` (`0x67`) (#1686); neither shares a value.
 
 `OpAttestCollectHost` (`0x72`) carries a comment saying it was "repurposed from
 the never-implemented OpAttestGetEK" — the EK opcode never shipped and the value
@@ -135,13 +138,15 @@ Platform tokens carry an `scp` claim in the qrdb-canonical
 **QUIC checks a scope on every attestation opcode (#767).** The catalog
 (`pkg/api/quic/opcode_permissions.go`, [`docs/daemon/api.md`](../daemon/api.md)
 §5) asks `attestation:read` for the reads (verify a quote, get the AK, reports,
-manifest verification) and `attestation:write` for every opcode that collects
+manifest get, list and verification) and `attestation:write` for every opcode that collects
 fresh evidence: `OpAttestQuote` (`0x70`) and `OpAttestCollectHost` (`0x72`),
 which make the node's TPM sign the caller's nonce and return the PCR values the
 quote covers, plus challenge/response, manifest build, host attestation and VM
 workload attestation. A quote is the TPM-DoS and measured-state disclosure
 surface §5.1 describes, so an `attestation:read` token is refused it with
-`StatusPermissionDenied`.
+`StatusPermissionDenied`. Manifest delete, `OpAttestDeleteManifest` (`0x67`),
+asks `attestation:delete`, as its gRPC twin does; manifest list,
+`OpAttestListManifests` (`0x66`), asks `attestation:read`.
 
 Both catalogs are **default-deny**
 ([`docs/auth/architecture.md`](../auth/architecture.md)).

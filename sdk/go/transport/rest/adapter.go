@@ -408,7 +408,7 @@ func (c *restClientConn) Invoke(ctx context.Context, method string, args interfa
 		if probeVerdict(method, reqErr, reply) {
 			return nil
 		}
-		return translateInvokeError(httpMethod, reqErr)
+		return translateInvokeError(method, httpMethod, reqErr)
 	}
 	return c.finishInvoke(hasDecoder, decode, raw, reply)
 }
@@ -1824,10 +1824,16 @@ var httpStatusToGRPCMap = map[int]codes.Code{
 // the status it also answers AlreadyExists with. A delete creates nothing, so
 // a 409 on a DELETE is the target's state refusing it: FailedPrecondition.
 // Every other answer takes translateErrorToGRPC.
-func translateInvokeError(httpMethod string, err error) error {
+func translateInvokeError(grpcMethod, httpMethod string, err error) error {
 	var httpErr ErrHTTPStatus
-	if httpMethod == http.MethodDelete && errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusConflict {
-		return status.Error(codes.FailedPrecondition, restErrorMessage(httpErr.Body))
+	if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusConflict {
+		msg := restErrorMessage(httpErr.Body)
+		if conflictCode, ok := restConflictCodes[grpcMethod]; ok {
+			return status.Error(conflictCode(msg), msg)
+		}
+		if httpMethod == http.MethodDelete {
+			return status.Error(codes.FailedPrecondition, msg)
+		}
 	}
 	return translateErrorToGRPC(err)
 }

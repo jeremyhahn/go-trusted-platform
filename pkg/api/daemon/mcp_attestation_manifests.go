@@ -17,9 +17,11 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -52,14 +54,22 @@ func (p *MCPServiceProvider) AttestationGetManifest(ctx context.Context, id stri
 }
 
 // AttestationListManifests serves attestation_list_manifests.
-func (p *MCPServiceProvider) AttestationListManifests(ctx context.Context, limit, offset uint32) (any, error) {
+func (p *MCPServiceProvider) AttestationListManifests(ctx context.Context, hostID string, start, end time.Time, limit, offset uint32) (any, error) {
 	if p.attestationServer == nil {
 		return nil, mcp.ErrAttestationManifestsNotConfigured
 	}
-	return protoResult(p.attestationServer.ListManifests(ctx, &platformv1.ListManifestsRequest{
+	req := &platformv1.ListManifestsRequest{
+		HostId: hostID,
 		Limit:  limit,
 		Offset: offset,
-	}))
+	}
+	if !start.IsZero() {
+		req.StartTime = timestamppb.New(start)
+	}
+	if !end.IsZero() {
+		req.EndTime = timestamppb.New(end)
+	}
+	return protoResult(p.attestationServer.ListManifests(ctx, req))
 }
 
 // AttestationBuildManifest serves attestation_create_manifest.

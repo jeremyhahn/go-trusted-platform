@@ -219,7 +219,7 @@ func TestAuthorizeTool_LegacyFallback(t *testing.T) {
 	svc := &mockAuthorizationService{checkFunc: func(ctx context.Context, subject, resource, action string) (bool, error) {
 		return true, nil
 	}}
-	checker := NewAuthorizationChecker(svc, mgr)
+	checker := pepChecker(svc, mgr)
 
 	ctx, authErr := checker.AuthorizeTool(context.Background(), "dns_add_record", "tok")
 	if authErr != nil {
