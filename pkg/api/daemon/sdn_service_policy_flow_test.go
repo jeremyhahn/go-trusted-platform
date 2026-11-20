@@ -708,3 +708,43 @@ func TestSDNService_ApplyPolicy_RejectedFlowRollbackKeepsAForeignEntry(t *testin
 		t.Fatalf("foreign entry %q = %q (present %v), want it kept; deletes %v", flow.Match, got, ok, client.deleted())
 	}
 }
+
+// A target ApplyPolicy cannot install flows on is refused before any flow is
+// installed, and no policy is recorded: a non-bridge target, or a bridge
+// target that resolves to no bridge (#2022 R12-1).
+func TestSDNService_ApplyPolicy_RefusesTargetsItCannotApply(t *testing.T) {
+	bridge := func(id string) *platformv1.PolicyTarget {
+		return &platformv1.PolicyTarget{Type: platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE, Id: id}
+	}
+	cases := []struct {
+		name    string
+		targets []*platformv1.PolicyTarget
+		want    codes.Code
+	}{
+		{"non-bridge target", []*platformv1.PolicyTarget{{
+			Type: platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE + 1,
+			Id:   "br0",
+		}}, codes.InvalidArgument},
+		{"missing bridge", []*platformv1.PolicyTarget{bridge("br-missing")}, codes.NotFound},
+		{"known and missing bridge", []*platformv1.PolicyTarget{bridge("br0"), bridge("br-missing")}, codes.NotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _, mods := newPolicyFlowFixture(t)
+			req := denyPolicy("p", denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}))
+			req.PolicyId = "policy-refused"
+			req.Config.Targets = tc.targets
+
+			_, err := svc.ApplyPolicy(context.Background(), req)
+			require.Error(t, err)
+			assert.Equal(t, tc.want, status.Code(err), "%v", err)
+			assert.Empty(t, *mods, "no flow may be installed for a refused target")
+
+			_, err = svc.GetPolicy(context.Background(), &platformv1.GetPolicyRequest{PolicyId: req.PolicyId})
+			assert.Error(t, err, "a refused apply records no policy")
+			list, err := svc.ListPolicies(context.Background(), &platformv1.ListPoliciesRequest{})
+			require.NoError(t, err)
+			assert.Empty(t, list.GetPolicies(), "a refused apply records no policy")
+		})
+	}
+}
