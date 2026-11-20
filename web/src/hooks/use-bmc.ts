@@ -1,10 +1,11 @@
 "use client";
 
 import * as React from "react";
+import { usePlatformClient, type ApiResponse } from "trusted-platform-sdk";
 
 // The wire shapes mirror the SDK's BMCService types (sdk/javascript
-// src/services/bmc-service.ts). They are declared here so the console does
-// not need an SDK rebuild to pick them up, as with use-reported-gateways.
+// src/services/bmc-service.ts). Every call goes through PlatformClient.bmc,
+// so the SDK's base URL, auth interceptors and transport apply (#1675 F27).
 export interface BMCPowerStatus {
   state: string;
 }
@@ -94,51 +95,36 @@ const EMPTY: BMCState = {
   certificate: null,
 };
 
-/** bmcUrl is the console path of one BMC operation */
-export function bmcUrl(profileID: string, op: string): string {
-  return `/api/v1/bmc/${encodeURIComponent(profileID)}/${op}`;
-}
+type BMCClient = ReturnType<typeof usePlatformClient>["bmc"];
 
-/** Unwraps the platform envelope, or throws its error message */
-async function call<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    credentials: "include",
-    ...init,
-    headers: init?.body ? { "Content-Type": "application/json" } : undefined,
-  });
-  const text = await res.text();
-  let body: unknown = null;
-  try {
-    body = text ? JSON.parse(text) : null;
-  } catch {
-    body = null;
+/** Returns the data of an SDK response, or throws its error message */
+async function sdkData<T>(p: Promise<ApiResponse<T>>): Promise<T> {
+  const res = await p;
+  if (!res.success) {
+    throw new Error(res.error?.message || "BMC request failed");
   }
-  const envelope = (body ?? {}) as { payload?: unknown; error?: string; message?: string };
-  if (!res.ok) {
-    throw new Error(envelope.error || envelope.message || `HTTP ${res.status}`);
-  }
-  return (envelope.payload ?? body) as T;
+  return res.data as T;
 }
 
 /**
- * useBMC reads and drives one BMC profile through the
- * `/api/v1/bmc/{profileID}/...` routes. Only the newest load is applied, and
+ * useBMC reads and drives one BMC profile through PlatformClient.bmc. Only the newest load is applied, and
  * a mutation drops every read started before it, so an older refresh that
  * finishes last never overwrites the state read after the mutation.
  */
 export function useBMC(profileID: string): UseBMCResult {
   const [loaded, setLoaded] = React.useState<LoadedBMC | null>(null);
   const generation = React.useRef(0);
+  const bmc = usePlatformClient().bmc;
 
   const apply = React.useCallback((next: LoadedBMC) => setLoaded(next), []);
 
   const load = React.useCallback(async () => {
     const g = ++generation.current;
-    const next = await loadBMC(profileID);
+    const next = await loadBMC(bmc, profileID);
     if (g === generation.current) {
       apply(next);
     }
-  }, [profileID, apply]);
+  }, [bmc, profileID, apply]);
 
   React.useEffect(() => {
     if (!profileID) {
@@ -162,13 +148,10 @@ export function useBMC(profileID: string): UseBMCResult {
   currentProfile.current = profileID;
 
   const mutate = React.useCallback(
-    async (op: string, method: "POST" | "DELETE", body?: unknown) => {
+    async (send: () => Promise<ApiResponse<unknown>>) => {
       generation.current++;
       try {
-        await call<unknown>(bmcUrl(profileID, op), {
-          method,
-          body: body === undefined ? undefined : JSON.stringify(body),
-        });
+        await sdkData(send());
       } finally {
         // The bump above discarded any read in flight, the initial load
         // included: reload even when the mutation failed, or isLoading
@@ -188,10 +171,10 @@ export function useBMC(profileID: string): UseBMCResult {
     isLoading: current === null,
     errors: current?.errors ?? {},
     refetch,
-    setBootDevice: (request) => mutate("boot-device", "POST", request),
-    mountISO: (isoURL) => mutate("virtual-media", "POST", { iso_url: isoURL }),
-    unmountISO: () => mutate("virtual-media", "DELETE"),
-    provision: () => mutate("provision", "POST", {}),
+    setBootDevice: (request) => mutate(() => bmc.setBootDevice(profileID, request)),
+    mountISO: (isoURL) => mutate(() => bmc.mountISO(profileID, { iso_url: isoURL })),
+    unmountISO: () => mutate(() => bmc.unmountISO(profileID)),
+    provision: () => mutate(() => bmc.provision(profileID)),
   };
 }
 
@@ -202,18 +185,18 @@ interface LoadedBMC {
 }
 
 /** loadBMC reads every part of one profile; a failed part is an error, not a throw */
-async function loadBMC(profileID: string): Promise<LoadedBMC> {
-  const parts: Array<[BMCPart, string, (v: unknown) => unknown]> = [
-    ["power", "power", (v) => v],
-    ["bootDevice", "boot-device", (v) => v],
-    ["virtualMedia", "virtual-media", (v) => v],
-    ["sensors", "sensors", (v) => (Array.isArray(v) ? (v as BMCSensor[]) : [])],
-    ["systemInfo", "system-info", (v) => v],
-    ["provisionStatus", "provision", (v) => v],
-    ["certificate", "cert", (v) => v],
+async function loadBMC(bmc: BMCClient, profileID: string): Promise<LoadedBMC> {
+  const parts: Array<[BMCPart, () => Promise<ApiResponse<unknown>>, (v: unknown) => unknown]> = [
+    ["power", () => bmc.getPowerStatus(profileID), (v) => v],
+    ["bootDevice", () => bmc.getBootDevice(profileID), (v) => v],
+    ["virtualMedia", () => bmc.getVirtualMediaStatus(profileID), (v) => v],
+    ["sensors", () => bmc.getSensors(profileID), (v) => (Array.isArray(v) ? (v as BMCSensor[]) : [])],
+    ["systemInfo", () => bmc.getSystemInfo(profileID), (v) => v],
+    ["provisionStatus", () => bmc.getProvisionStatus(profileID), (v) => v],
+    ["certificate", () => bmc.getWebCertificate(profileID), (v) => v],
   ];
   const results = await Promise.allSettled(
-    parts.map(([, op, pick]) => call<unknown>(bmcUrl(profileID, op)).then(pick))
+    parts.map(([, read, pick]) => sdkData(read()).then(pick))
   );
   const state: BMCState = { ...EMPTY };
   const errors: Partial<Record<BMCPart, string>> = {};
