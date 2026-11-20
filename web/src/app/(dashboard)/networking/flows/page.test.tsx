@@ -14,7 +14,18 @@ const { sdn, toast } = vi.hoisted(() => ({
 vi.mock("@/hooks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks")>()),
   useSDN: () => sdn,
+  useSDNOps: () => sdnOps,
 }));
+
+// FlushFlows and GetFlowStats run through useSDNOps (#2064); its own
+// behaviour is covered by use-sdn-ops.test.ts.
+const sdnOps = {
+  pending: null,
+  error: null as string | null,
+  flushFlows: vi.fn(),
+  getFlowStats: vi.fn(),
+  deletePolicy: vi.fn(),
+};
 
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast }) }));
 

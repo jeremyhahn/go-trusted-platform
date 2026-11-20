@@ -585,29 +585,29 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
 | `SDNService.CreateBridge` | `POST /bridges` | `(dashboard)/networking/sdn/page.tsx` | - | `networking.spec.ts` | covered |
-| `SDNService.DeleteBridge` | `DELETE /bridges/{name}` | `(dashboard)/networking/flows/page.tsx`<br>`(dashboard)/networking/ports/page.tsx`<br>`(dashboard)/networking/sdn/page.tsx` (+1) (read-only) | - | - | partial |
-| `SDNService.GetBridge` | `GET /bridges/{name}` | - | - | - | missing |
+| `SDNService.DeleteBridge` | `DELETE /bridges/{name}` | `(dashboard)/networking/sdn/[bridge]/page.tsx` | - | `real-server/sdn.spec.ts` | covered |
+| `SDNService.GetBridge` | `GET /bridges/{name}` | `(dashboard)/networking/sdn/[bridge]/page.tsx` | - | `real-server/sdn.spec.ts` | covered |
 | `SDNService.ListBridges` | `GET /bridges` | `(dashboard)/networking/flows/page.tsx`<br>`(dashboard)/networking/ports/page.tsx`<br>`(dashboard)/networking/sdn/page.tsx` (+1) | - | `networking.spec.ts` | covered |
 | `SDNService.AddPort` | `POST /bridges/{name}/ports` | `(dashboard)/networking/ports/page.tsx` | - | `networking.spec.ts` | covered |
 | `SDNService.DeletePort` | `DELETE /bridges/{name}/ports/{port}` | `(dashboard)/networking/ports/page.tsx` | - | `networking.spec.ts` | covered |
-| `SDNService.GetPort` | `GET /bridges/{name}/ports/{port}/state` | - | - | - | missing |
+| `SDNService.GetPort` | `GET /bridges/{name}/ports/{port}/state` | `(dashboard)/networking/sdn/[bridge]/page.tsx` | - | `real-server/sdn.spec.ts` | covered |
 | `SDNService.ListPorts` | `GET /bridges/{name}/ports` | `(dashboard)/networking/ports/page.tsx` | - | `networking.spec.ts` | covered |
-| `SDNService.SetPortState` | `PUT /bridges/{name}/ports/{port}/state` | - | - | - | missing |
+| `SDNService.SetPortState` | `PUT /bridges/{name}/ports/{port}/state` | `(dashboard)/networking/sdn/[bridge]/page.tsx` | - | `real-server/sdn.spec.ts` | covered |
 | `SDNService.AddFlow` | `POST /flows` | `(dashboard)/networking/flows/page.tsx` | - | `networking.spec.ts` | covered |
 | `SDNService.DeleteFlow` | `DELETE /flows` | `(dashboard)/networking/flows/page.tsx` | - | `networking.spec.ts` | covered |
 | `SDNService.ListFlows` | `GET /flows` | `(dashboard)/networking/flows/page.tsx`<br>`(dashboard)/networking/sdn/page.tsx` | - | `networking.spec.ts` | covered |
-| `SDNService.FlushFlows` | - | - | - | - | missing |
+| `SDNService.FlushFlows` | `POST /bridges/{name}/flows/flush` | `(dashboard)/networking/flows/page.tsx` | - | `real-server/sdn.spec.ts` | covered |
 | `SDNService.CreateVLAN` | `POST /vlans` | `(dashboard)/networking/vlans/page.tsx` | - | `networking.spec.ts` | covered |
 | `SDNService.DeleteVLAN` | - | `(dashboard)/networking/vlans/page.tsx` | - | `networking.spec.ts` | covered |
 | `SDNService.ListVLANs` | `GET /vlans` | `(dashboard)/networking/vlans/page.tsx` | - | `networking.spec.ts` | covered |
-| `SDNService.AuthenticatePort` | `POST /bridges/{name}/ports/{port}/auth` | - | - | - | missing |
-| `SDNService.RevokePortAuth` | `DELETE /bridges/{name}/ports/{port}/auth` | - | - | - | missing |
-| `SDNService.GetPortStats` | `GET /bridges/{name}/ports/{port}/stats` | - | - | - | missing |
-| `SDNService.GetFlowStats` | - | - | - | - | missing |
-| `SDNService.ApplyPolicy` | `POST /policies` | - | - | - | missing |
-| `SDNService.GetPolicy` | `GET /policies/{id}` | - | - | - | missing |
-| `SDNService.ListPolicies` | `GET /policies` | - | - | - | missing |
-| `SDNService.DeletePolicy` | - | - | - | - | missing |
+| `SDNService.AuthenticatePort` | `POST /bridges/{name}/ports/{port}/auth` | `(dashboard)/networking/sdn/[bridge]/page.tsx` | - | `real-server/sdn.spec.ts` | covered |
+| `SDNService.RevokePortAuth` | `DELETE /bridges/{name}/ports/{port}/auth` | `(dashboard)/networking/sdn/[bridge]/page.tsx` | - | `real-server/sdn.spec.ts` | covered |
+| `SDNService.GetPortStats` | `GET /bridges/{name}/ports/{port}/stats` | `(dashboard)/networking/sdn/[bridge]/page.tsx` | - | `real-server/sdn.spec.ts` | covered |
+| `SDNService.GetFlowStats` | `GET /bridges/{name}/flows/{flow}/stats` | `(dashboard)/networking/flows/page.tsx` | - | `real-server/sdn.spec.ts` | covered |
+| `SDNService.ApplyPolicy` | `POST /policies` | `(dashboard)/networking/sdn/[bridge]/page.tsx` | - | `real-server/sdn.spec.ts` | covered |
+| `SDNService.GetPolicy` | `GET /policies/{id}` | `(dashboard)/networking/sdn/[bridge]/page.tsx` | - | `real-server/sdn.spec.ts` | covered |
+| `SDNService.ListPolicies` | `GET /policies` | `(dashboard)/networking/sdn/[bridge]/page.tsx` | - | `real-server/sdn.spec.ts` | covered |
+| `SDNService.DeletePolicy` | `DELETE /policies/{id}` | `(dashboard)/networking/sdn/[bridge]/page.tsx` | - | `real-server/sdn.spec.ts` | covered |
 | `SDNService.CreateNetworkZone` | - | - | - | - | missing |
 | `SDNService.UpdateNetworkZone` | - | - | - | - | missing |
 | `SDNService.DeleteNetworkZone` | - | - | - | - | missing |
