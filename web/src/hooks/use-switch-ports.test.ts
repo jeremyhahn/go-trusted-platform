@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { useSwitchPorts } from './use-switch-ports';
 
-type ListReply = { success: boolean; data?: Array<{ name: string }> };
+type ListReply = { success: boolean; data?: Array<{ port: string }> };
 
 interface Pending {
   switchName: string;
@@ -31,7 +31,7 @@ vi.mock('trusted-platform-sdk', async (importOriginal) => ({
 }));
 
 function ports(names: string[]): ListReply {
-  return { success: true, data: names.map((name) => ({ name })) };
+  return { success: true, data: names.map((port) => ({ port })) };
 }
 
 afterEach(() => {
@@ -48,7 +48,7 @@ describe('useSwitchPorts across a switch change', () => {
     await act(async () => {
       pending[0].resolve(ports(['a1']));
     });
-    expect(result.current.ports.map((p) => p.name)).toEqual(['a1']);
+    expect(result.current.ports.map((p) => p.port)).toEqual(['a1']);
     expect(result.current.isLoading).toBe(false);
 
     // A second listing of A is in flight when the switch changes.
@@ -77,7 +77,7 @@ describe('useSwitchPorts across a switch change', () => {
     await act(async () => {
       pending[2].resolve(ports(['b1']));
     });
-    expect(result.current.ports.map((p) => p.name)).toEqual(['b1']);
+    expect(result.current.ports.map((p) => p.port)).toEqual(['b1']);
     expect(result.current.isLoading).toBe(false);
 
     await act(async () => {
@@ -100,7 +100,7 @@ describe('useSwitchPorts across a switch change', () => {
     await act(async () => {
       pending[0].resolve(ports(['a1']));
     });
-    expect(result.current.ports.map((p) => p.name)).toEqual(['b1']);
+    expect(result.current.ports.map((p) => p.port)).toEqual(['b1']);
     expect(result.current.isLoading).toBe(false);
   });
 });
