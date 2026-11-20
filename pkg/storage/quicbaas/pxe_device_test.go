@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
+	sdktransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/stretchr/testify/require"
@@ -32,7 +33,7 @@ func setupMockPXEDeviceStore(t *testing.T) (*PXEDeviceStore, *MockStorage) {
 	mock := NewMockStorage()
 	require.NoError(t, mock.Start(context.Background()))
 	t.Cleanup(func() { _ = mock.Stop(context.Background()) })
-	return NewPXEDeviceStore(mock, logging.DefaultLogger()), mock
+	return mustPXEDeviceStore(t, mock), mock
 }
 
 func testPXEDevice(t *testing.T, id, mac string) *pxe.DeviceInfo {
@@ -68,7 +69,7 @@ func TestPXEDeviceStore_RoundTrip_Mock(t *testing.T) {
 	require.NoError(t, store.Put(ctx, a))
 	require.NoError(t, store.Delete(ctx, "dev-b"))
 
-	restarted := NewPXEDeviceStore(mock, logging.DefaultLogger())
+	restarted := mustPXEDeviceStore(t, mock)
 	devices, err := restarted.List(ctx)
 	require.NoError(t, err)
 	require.Len(t, devices, 1)
@@ -151,7 +152,7 @@ func TestPXEDeviceStore_List_Paging(t *testing.T) {
 		fake := &pagingStorage{MockStorage: mock, maxCalls: 5, listFn: func(string) ([]*service.Entity, string) {
 			return all, "1000"
 		}}
-		devices, err := NewPXEDeviceStore(fake, logging.DefaultLogger()).List(context.Background())
+		devices, err := mustPXEDeviceStore(t, fake).List(context.Background())
 		require.NoError(t, err)
 		requireUniquePXEDevices(t, devices, 1001)
 		require.LessOrEqual(t, fake.calls, 2)
@@ -164,7 +165,7 @@ func TestPXEDeviceStore_List_Paging(t *testing.T) {
 			}
 			return all[400:900], "p1"
 		}}
-		devices, err := NewPXEDeviceStore(fake, logging.DefaultLogger()).List(context.Background())
+		devices, err := mustPXEDeviceStore(t, fake).List(context.Background())
 		require.NoError(t, err)
 		requireUniquePXEDevices(t, devices, 900)
 		require.Equal(t, 2, fake.calls)
@@ -178,7 +179,7 @@ func TestPXEDeviceStore_List_Paging(t *testing.T) {
 			require.Equal(t, "1000", token)
 			return all[1000:], ""
 		}}
-		devices, err := NewPXEDeviceStore(fake, logging.DefaultLogger()).List(context.Background())
+		devices, err := mustPXEDeviceStore(t, fake).List(context.Background())
 		require.NoError(t, err)
 		requireUniquePXEDevices(t, devices, 1001)
 		require.Equal(t, 2, fake.calls)
@@ -190,8 +191,65 @@ func TestPXEDeviceStore_List_Paging(t *testing.T) {
 		fake := &pagingStorage{MockStorage: mock, maxCalls: 5, listFn: func(string) ([]*service.Entity, string) {
 			return all[:1], ""
 		}}
-		_, err := NewPXEDeviceStore(fake, logging.DefaultLogger()).List(ctx)
+		_, err := mustPXEDeviceStore(t, fake).List(ctx)
 		require.ErrorIs(t, err, context.Canceled)
 		require.Zero(t, fake.calls)
 	})
+}
+
+func mustPXEDeviceStore(t *testing.T, storage Storage) *PXEDeviceStore {
+	t.Helper()
+	store, err := NewPXEDeviceStore(storage, "system", logging.DefaultLogger())
+	require.NoError(t, err)
+	return store
+}
+
+// tenantStorage records the tenant each storage call carries in its ctx.
+type tenantStorage struct {
+	*MockStorage
+	tenants map[string][]string
+}
+
+func (s *tenantStorage) record(ctx context.Context, op string) {
+	s.tenants[op] = append(s.tenants[op], sdktransport.TenantFromContext(ctx))
+}
+
+func (s *tenantStorage) Put(ctx context.Context, entityType string, id uint64, data []byte, shardID uint64) error {
+	s.record(ctx, "put")
+	return s.MockStorage.Put(ctx, entityType, id, data, shardID)
+}
+
+func (s *tenantStorage) Delete(ctx context.Context, entityType string, id uint64, shardID uint64) error {
+	s.record(ctx, "delete")
+	return s.MockStorage.Delete(ctx, entityType, id, shardID)
+}
+
+func (s *tenantStorage) List(ctx context.Context, entityType string, pageSize uint64, pageToken string, shardID uint64) ([]*service.Entity, string, error) {
+	s.record(ctx, "list")
+	return s.MockStorage.List(ctx, entityType, pageSize, pageToken, shardID)
+}
+
+func TestPXEDeviceStore_SystemTenant(t *testing.T) {
+	mock := NewMockStorage()
+	require.NoError(t, mock.Start(context.Background()))
+	t.Cleanup(func() { _ = mock.Stop(context.Background()) })
+
+	_, err := NewPXEDeviceStore(mock, "", logging.DefaultLogger())
+	require.Error(t, err, "an empty tenant must be refused")
+
+	fake := &tenantStorage{MockStorage: mock, tenants: map[string][]string{}}
+	store := mustPXEDeviceStore(t, fake)
+	device := testPXEDevice(t, "dev-tenant", "aa:bb:cc:dd:ee:01")
+	ctx := context.Background()
+	require.NoError(t, store.Put(ctx, device))
+	_, err = store.List(ctx)
+	require.NoError(t, err)
+	require.NoError(t, store.Delete(ctx, device.ID))
+
+	for _, op := range []string{"put", "list", "delete"} {
+		require.NotEmpty(t, fake.tenants[op], op)
+		for _, tenant := range fake.tenants[op] {
+			require.Equal(t, "system", tenant, op)
+		}
+	}
 }

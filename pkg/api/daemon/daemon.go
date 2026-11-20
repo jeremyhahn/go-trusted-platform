@@ -2021,7 +2021,10 @@ const provisioningNBDPort uint16 = 10809
 func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *app.App, section *pxe.DaemonConfig, flows *policy.ZoneFlowManager) (*PXEGRPCService, error) {
 	var store pxe.DeviceStore
 	if section != nil && section.Enabled {
-		store = pxeDeviceStoreFor(a, logger)
+		var err error
+		if store, err = pxeDeviceStoreFor(a, logger); err != nil {
+			return nil, err
+		}
 	}
 	return pxeGRPCServiceWithStore(ctx, logger, a, section, flows, store)
 }
@@ -2029,19 +2032,25 @@ func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *ap
 // pxeDeviceStoreFor returns the PXE device store over the deployment
 // datastore (docs/SPEC.md:23, #2028), or nil when the app has no quicbaas
 // DAO factory; the backend then keeps its devices in memory only.
-func pxeDeviceStoreFor(a *app.App, logger *logging.Logger) pxe.DeviceStore {
+func pxeDeviceStoreFor(a *app.App, logger *logging.Logger) (pxe.DeviceStore, error) {
 	if a == nil {
-		return nil
+		return nil, nil
 	}
 	factory, ok := a.DAOFactory().(*quicbaas.Factory)
 	if !ok || factory == nil {
-		return nil
+		return nil, nil
 	}
 	client := factory.Client()
 	if client == nil {
-		return nil
+		return nil, nil
 	}
-	return quicbaas.NewPXEDeviceStore(client, logger)
+	// PXE device records are system-level: they live in the system tenant
+	// (docs/SPEC.md:23).
+	store, err := quicbaas.NewPXEDeviceStore(client, app.SystemTenantID, logger)
+	if err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 // pxeGRPCServiceWithStore builds the PXE backend with its StateManager

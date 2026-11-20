@@ -36,19 +36,20 @@ const pxeDeviceListPageSize = 1000
 // history and IDevID binding. Records live in the system shard (0), like
 // zones: PXE devices are platform state, not tenant data.
 type PXEDeviceStore struct {
-	storage Storage
-	logger  *logging.Logger
-	shardID uint64
+	storage  Storage
+	tenantID string
+	logger   *logging.Logger
+	shardID  uint64
 }
 
 var _ pxe.DeviceStore = (*PXEDeviceStore)(nil)
 
 // NewPXEDeviceStore returns a DeviceStore over storage.
-func NewPXEDeviceStore(storage Storage, logger *logging.Logger) *PXEDeviceStore {
+func NewPXEDeviceStore(storage Storage, tenantID string, logger *logging.Logger) (*PXEDeviceStore, error) {
 	if logger == nil {
 		logger = logging.DefaultLogger()
 	}
-	return &PXEDeviceStore{storage: storage, logger: logger}
+	return &PXEDeviceStore{storage: storage, tenantID: tenantID, logger: logger}, nil
 }
 
 // pxeDeviceEntityID maps a PXE device ID to the datastore's numeric ID

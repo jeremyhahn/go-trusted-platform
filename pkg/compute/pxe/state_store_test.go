@@ -18,6 +18,7 @@ import (
 	"errors"
 	"net"
 	"reflect"
+	"runtime"
 	"sync"
 	"testing"
 )
@@ -29,6 +30,10 @@ type fakeDeviceStore struct {
 	devices map[string]*DeviceInfo
 	// deleteErr, when set, fails every Delete (a datastore outage).
 	deleteErr error
+	// deleteStarted and deleteGate, when set, make Delete signal its start
+	// and wait for the gate before it removes the record.
+	deleteStarted chan struct{}
+	deleteGate    chan struct{}
 }
 
 func newFakeDeviceStore() *fakeDeviceStore {
@@ -43,6 +48,16 @@ func (f *fakeDeviceStore) Put(_ context.Context, device *DeviceInfo) error {
 }
 
 func (f *fakeDeviceStore) Delete(_ context.Context, deviceID string) error {
+	f.mu.Lock()
+	started, gate := f.deleteStarted, f.deleteGate
+	f.deleteStarted, f.deleteGate = nil, nil
+	f.mu.Unlock()
+	if started != nil {
+		close(started)
+	}
+	if gate != nil {
+		<-gate
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.deleteErr != nil {
@@ -162,5 +177,65 @@ func TestStateManager_UnregisterDeleteFailureIsRetryable(t *testing.T) {
 	var notFound ErrDeviceNotFound
 	if _, err := sm.Get("dev-2081"); !errors.As(err, &notFound) {
 		t.Fatalf("Get after Unregister: want ErrDeviceNotFound, got %v", err)
+	}
+}
+
+// TestStateManager_UnregisterRacingPersist: an UpdateDevice that lands while
+// Unregister's datastore delete is in flight must not write the device back
+// once Unregister has removed it (#2081 Codex r1).
+func TestStateManager_UnregisterRacingPersist(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		store := newFakeDeviceStore()
+		sm := NewStateManager(WithDeviceStore(store))
+		mac, _ := net.ParseMAC("02:00:00:00:20:82")
+		if err := sm.Register(&DeviceInfo{ID: "dev-race", MACAddress: mac, State: StateDiscovered}); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
+
+		started, gate := make(chan struct{}), make(chan struct{})
+		store.mu.Lock()
+		store.deleteStarted, store.deleteGate = started, gate
+		store.mu.Unlock()
+
+		unregistered := make(chan error, 1)
+		go func() { unregistered <- sm.Unregister("dev-race") }()
+		<-started
+
+		updated := make(chan error, 1)
+		go func() {
+			updated <- sm.UpdateDevice("dev-race", func(d *DeviceInfo) error {
+				d.StateReason = "racing update"
+				return nil
+			})
+		}()
+		// Let UpdateDevice swap its entry in and block in persist.
+		for {
+			entryVal, ok := sm.devices.Load("dev-race")
+			if ok && entryVal.(*deviceEntry).device.StateReason == "racing update" {
+				break
+			}
+			runtime.Gosched()
+		}
+		close(gate)
+
+		if err := <-unregistered; err != nil {
+			t.Fatalf("Unregister: %v", err)
+		}
+		if err := <-updated; err != nil {
+			var notFound ErrDeviceNotFound
+			if !errors.As(err, &notFound) {
+				t.Fatalf("UpdateDevice: %v", err)
+			}
+		}
+
+		store.mu.Lock()
+		_, stored := store.devices["dev-race"]
+		store.mu.Unlock()
+		if stored {
+			t.Fatalf("iteration %d: datastore holds the device after Unregister", i)
+		}
+		if _, err := sm.Get("dev-race"); err == nil {
+			t.Fatalf("iteration %d: device still registered after Unregister", i)
+		}
 	}
 }

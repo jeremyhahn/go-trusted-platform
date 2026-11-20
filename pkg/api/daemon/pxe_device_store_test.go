@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
@@ -41,8 +42,10 @@ func TestPXEBackend_CompletionReportAfterRestart(t *testing.T) {
 	cert := webhookIdentityCert(t)
 	logger := logging.NewLogger(slog.LevelError, io.Discard)
 
+	pxeStore, err := quicbaas.NewPXEDeviceStore(storage, app.SystemTenantID, logger)
+	require.NoError(t, err)
 	first, err := pxeGRPCServiceWithStore(ctx, logger, pxeSectionApp(), pxeEnabledSection(t),
-		pxeTestFlowManager(t, &pxeRecordingPort{}), quicbaas.NewPXEDeviceStore(storage, logger))
+		pxeTestFlowManager(t, &pxeRecordingPort{}), pxeStore)
 	require.NoError(t, err)
 	device, err := first.pxeService.RegisterDevice(ctx, webhookIdentityMAC, "port-1")
 	require.NoError(t, err)
@@ -51,7 +54,7 @@ func TestPXEBackend_CompletionReportAfterRestart(t *testing.T) {
 	require.NoError(t, first.pxeService.RecordIDevIDFingerprint(ctx, device.ID, webhookIdentityFingerprint(cert)))
 
 	restarted, err := pxeGRPCServiceWithStore(ctx, logger, pxeSectionApp(), pxeEnabledSection(t),
-		pxeTestFlowManager(t, &pxeRecordingPort{}), quicbaas.NewPXEDeviceStore(storage, logger))
+		pxeTestFlowManager(t, &pxeRecordingPort{}), pxeStore)
 	require.NoError(t, err)
 	got, err := restarted.pxeService.GetDevice(ctx, device.ID)
 	require.NoError(t, err)
@@ -73,6 +76,9 @@ func TestPXEBackend_CompletionReportAfterRestart(t *testing.T) {
 // TestPXEDeviceStoreFor_NoDatastore: an app without the quicbaas DAO
 // factory gets no device store, so the backend keeps devices in memory.
 func TestPXEDeviceStoreFor_NoDatastore(t *testing.T) {
-	require.Nil(t, pxeDeviceStoreFor(pxeSectionApp(), nil))
-	require.Nil(t, pxeDeviceStoreFor(nil, nil))
+	for _, a := range []*app.App{pxeSectionApp(), nil} {
+		store, err := pxeDeviceStoreFor(a, nil)
+		require.NoError(t, err)
+		require.Nil(t, store)
+	}
 }
