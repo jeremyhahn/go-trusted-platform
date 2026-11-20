@@ -225,6 +225,17 @@ func (e ErrConnectionAccount) Error() string {
 	return fmt.Sprintf("bmc: user slot %d is the connection account of profile %d; change it in the profile instead", e.Slot, e.ProfileID)
 }
 
+// ErrSlotOccupied indicates a create on a BMC user slot that already holds
+// a user: creating there would overwrite the existing account.
+type ErrSlotOccupied struct {
+	ProfileID uint64
+	Slot      uint8
+}
+
+func (e ErrSlotOccupied) Error() string {
+	return fmt.Sprintf("bmc: user slot %d of profile %d is already in use", e.Slot, e.ProfileID)
+}
+
 // ErrInvalidBootDevice indicates an unrecognized boot device value.
 type ErrInvalidBootDevice struct {
 	Device string

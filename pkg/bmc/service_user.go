@@ -68,12 +68,31 @@ func (s *Service) ListUsers(ctx context.Context, profileID uint64) ([]User, erro
 // The plaintext password is wrapped in a *memguard.MemoryEnclave for the
 // duration of the call; callers should pass an empty string for
 // name-only entries. Most BMCs reject empty-password users.
+//
+// A slot that already holds a user is refused with ErrSlotOccupied: the
+// IPMI create overwrites whatever is in the slot. The occupancy check and
+// the create run under the profile's user lock, so two concurrent creates
+// on one free slot cannot both succeed.
 func (s *Service) CreateUser(ctx context.Context, profileID uint64, user User, password string) error {
+	mu := s.userLock(profileID)
+	mu.Lock()
+	defer mu.Unlock()
+
 	mgr, _, err := s.userManagerFor(ctx, profileID)
 	if err != nil {
 		return err
 	}
 	defer mgr.Close()
+
+	users, err := mgr.ListUsers(ctx)
+	if err != nil {
+		return err
+	}
+	for _, u := range users {
+		if u.Slot == user.Slot && u.Username != "" {
+			return ErrSlotOccupied{ProfileID: profileID, Slot: user.Slot}
+		}
+	}
 
 	pwSecret := memguard.NewMemoryEnclaveFromString(password)
 	defer pwSecret.Destroy()
@@ -114,11 +133,21 @@ func (s *Service) SetUserPassword(ctx context.Context, profileID uint64, slot ui
 // SetUserPrivilege updates the channel privilege for the BMC user at the
 // given slot. The channel argument selects the IPMI logical channel;
 // pass 0 to use the package default LAN channel.
+//
+// On the profile's connection account any privilege other than
+// administrator is refused with ErrConnectionAccount: no-access disables
+// the account's IPMI login, and a lower privilege leaves the profile
+// unable to manage its own BMC.
 func (s *Service) SetUserPrivilege(ctx context.Context, profileID uint64, slot, channel uint8, privilege Privilege) error {
-	mgr, _, err := s.userManagerFor(ctx, profileID)
+	mgr, cfg, err := s.userManagerFor(ctx, profileID)
 	if err != nil {
 		return err
 	}
 	defer mgr.Close()
+	if privilege != PrivilegeAdministrator {
+		if err := refuseConnectionAccount(ctx, mgr, cfg, profileID, slot); err != nil {
+			return err
+		}
+	}
 	return mgr.SetUserPrivilege(ctx, slot, channel, privilege)
 }
