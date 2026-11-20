@@ -93,7 +93,7 @@ func WireSDKBackends(target SDKBackendTarget, src SDKBackendSources, logger *log
 	//
 	// FIDO2 enrollment uses the default handler when an authenticator
 	// library opens: it derives the keyslot key with hmac-secret and writes
-	// a fido2-manual token (credential, salt, RP, UV) naming the slot. The
+	// a gtp-fido2-derived token (credential, salt, RP, UV) naming the slot. The
 	// initrd FIDO2 strategy finds the slot from that token and derives the
 	// same key at boot. Without a handler EnrollFIDO2 answers
 	// ErrLUKSFIDO2NotWired.

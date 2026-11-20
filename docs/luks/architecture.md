@@ -75,7 +75,7 @@ sdk/go/services/luks  (Service)          pkg/api/daemon transport adapters
 the go-luks2 backend (`NewLUKSBackend`) and the effective-UID root checker into
 `LUKSService`, next to the ceremony backend. Its FIDO2 handler is the
 default one; the initrd FIDO2 strategy opens the slots it enrolls from their
-`fido2-manual` tokens. Its TPM handler is the default one behind the
+`gtp-fido2-derived` tokens (the initrd dispatches on that type). Its TPM handler is the default one behind the
 PCR-index check; the initrd `TPMTokenStrategy` opens the slots it enrolls from
 their `systemd-tpm2` tokens (after the firstboot seal is confirmed, and with the
 platform PCR extended first). TPM enrollment answers *not wired* only when no

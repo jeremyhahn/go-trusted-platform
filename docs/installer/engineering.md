@@ -345,7 +345,10 @@ Strategy constructors: `NewKeyfileStrategy`, `NewTPMPCRStrategy`,
 **`FIDO2` keeps its credential and salt in the LUKS2 header.** `Install`
 enrolls a credential for relying party `luks-root`, then derives the keyslot
 key as the authenticator's hmac-secret over a fresh 32-byte salt (a second
-touch). It writes a `fido2-manual` token listing the slot, with the
+touch). The initrd Install writes a `gtp-fido2-derived` token listing the
+slot (the installer's own `fido2-manual` slots hold the raw hmac-secret and
+are refused at boot with `ErrFIDO2RawHMACSecretUnsupported` until the go-xkms
+seam lands), with the
 credential in hex and the salt in base64; this is the token shape the
 platformd backend writes (`docs/luks/engineering.md`). A LUKS handler without
 a token area is refused with `ErrFIDO2TokensUnsupported` before the

@@ -33,9 +33,10 @@ import (
 )
 
 const (
-	// fido2TokenType is the LUKS2 token type the platformd backend writes for
-	// a FIDO2 keyslot; Install writes the same shape.
-	fido2TokenType      = "fido2-manual"
+	// fido2TokenType is the LUKS2 token type the platformd backend and
+	// Install write for a FIDO2 keyslot keyed with UnlockWithKey output; it is
+	// the only FIDO2 token type boot opens.
+	fido2TokenType      = luks.TokenTypeFIDO2Derived
 	fido2RelyingPartyID = "luks-root"
 	fido2SaltSize       = 32
 )
@@ -49,6 +50,10 @@ var (
 	ErrFIDO2TokenMissing = errors.New("initrd: fido2: no token for the keyslot")
 	// ErrFIDO2TokenInvalid: a token's credential or salt does not decode.
 	ErrFIDO2TokenInvalid = errors.New("initrd: fido2: invalid token")
+	// ErrFIDO2RawHMACSecretUnsupported: the slot's token is not the derived
+	// type, so its keyslot holds the raw hmac-secret, which UnlockWithKey
+	// cannot produce.
+	ErrFIDO2RawHMACSecretUnsupported = errors.New("initrd: fido2: raw hmac-secret token (installer fido2-manual / systemd-fido2) not supported until go-xkms has a Handler-level raw hmac-secret call")
 )
 
 // FIDO2Strategy unlocks using FIDO2 hardware security key
@@ -141,6 +146,7 @@ func (s *FIDO2Strategy) fido2Slots(ctx context.Context, volume *luks.VolumeConfi
 func (s *FIDO2Strategy) Unlock(ctx context.Context, volume *luks.VolumeConfig) error {
 	s.logger.Infof("Attempting FIDO2 unlock for %s", volume.DevicePath)
 
+	refusedRaw := false
 	for _, slot := range s.fido2Slots(ctx, volume) {
 		select {
 		case <-ctx.Done():
@@ -149,14 +155,17 @@ func (s *FIDO2Strategy) Unlock(ctx context.Context, volume *luks.VolumeConfig) e
 		}
 
 		s.logger.Debugf("Trying FIDO2 slot %d", slot.Index)
-		s.logger.Info("Please touch your security key...")
 
 		// Load authentication config from slot metadata
 		authConfig, err := s.loadAuthConfig(ctx, volume.DevicePath, slot)
 		if err != nil {
+			if errors.Is(err, ErrFIDO2RawHMACSecretUnsupported) {
+				refusedRaw = true
+			}
 			s.logger.Warnf("Failed to load auth config for slot %d: %v", slot.Index, err)
 			continue
 		}
+		s.logger.Info("Please touch your security key...")
 
 		// Authenticate with FIDO2 device
 		key, err := s.platform.FIDO2.UnlockWithKey(authConfig)
@@ -182,6 +191,9 @@ func (s *FIDO2Strategy) Unlock(ctx context.Context, volume *luks.VolumeConfig) e
 		s.logger.Warnf("LUKS open failed with slot %d: %v", slot.Index, err)
 	}
 
+	if refusedRaw {
+		return &WrappedError{Msg: "all FIDO2 slots failed", Err: ErrFIDO2RawHMACSecretUnsupported}
+	}
 	return &MessageError{Msg: "all FIDO2 slots failed"}
 }
 
@@ -307,6 +319,9 @@ func (s *FIDO2Strategy) loadAuthConfig(ctx context.Context, devicePath string, s
 		if token == nil || token.FIDO2Credential == "" || !slices.Contains(token.Keyslots, want) {
 			continue
 		}
+		if token.Type != fido2TokenType {
+			return nil, &WrappedError{Msg: fmt.Sprintf("token %d type %q", id, token.Type), Err: ErrFIDO2RawHMACSecretUnsupported}
+		}
 		credentialID, err := decodeFIDO2Credential(token.FIDO2Credential)
 		if err != nil {
 			return nil, &WrappedError{Msg: fmt.Sprintf("token %d credential", id), Err: err}
@@ -320,6 +335,8 @@ func (s *FIDO2Strategy) loadAuthConfig(ctx context.Context, devicePath string, s
 		if token.FIDO2RP != "" {
 			config.RelyingPartyID = token.FIDO2RP
 		}
+		// In the derived type fido2-up-required means user verification:
+		// the daemon writes requireUV there.
 		config.RequireUserVerification = token.FIDO2UPRequired
 		config.Timeout = s.unlockTimeout()
 		return config, nil

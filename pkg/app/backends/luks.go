@@ -460,6 +460,7 @@ var luksKeySlotTypeMap = map[string]daemon.LUKSKeyType{
 	"passphrase":             daemon.LUKSKeyTypePassphrase,
 	"fido2":                  daemon.LUKSKeyTypeFIDO2,
 	"fido2-manual":           daemon.LUKSKeyTypeFIDO2,
+	LUKSFIDO2TokenType:       daemon.LUKSKeyTypeFIDO2,
 	"systemd-fido2":          daemon.LUKSKeyTypeFIDO2,
 	"tpm":                    daemon.LUKSKeyTypeTPM,
 	"tpm2":                   daemon.LUKSKeyTypeTPM,
@@ -683,9 +684,10 @@ func (b *LUKSBackend) EnrollFIDO2(ctx context.Context, req *daemon.LUKSEnrollFID
 	}
 
 	// A rich handler's token carries its salt and is written as-is; a minimal
-	// LUKSFIDO2Handler gets a fido2-manual token built here.
+	// LUKSFIDO2Handler gets a gtp-fido2-derived token built here (its key is
+	// derived the same way, so the initrd opens it the same way).
 	fallback := &luks2.Token{
-		Type:            "fido2-manual",
+		Type:            LUKSFIDO2TokenType,
 		FIDO2Credential: req.CredentialID,
 		FIDO2UPRequired: req.RequireUV,
 	}

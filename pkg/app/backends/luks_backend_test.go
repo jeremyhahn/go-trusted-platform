@@ -291,7 +291,7 @@ func TestLUKSBackend_EnrollPassphraseErrors(t *testing.T) {
 }
 
 func TestLUKSBackend_EnrollFIDO2(t *testing.T) {
-	t.Run("minimal handler writes a fido2-manual token", func(t *testing.T) {
+	t.Run("minimal handler writes a gtp-fido2-derived token", func(t *testing.T) {
 		device := newLUKSImage(t)
 		key := []byte("fido2-hmac-secret-derived-key-32")
 		b := newTestLUKSBackend(WithLUKSFIDO2Handler(&stubFIDO2Key{key: append([]byte(nil), key...)}))
@@ -310,8 +310,8 @@ func TestLUKSBackend_EnrollFIDO2(t *testing.T) {
 			t.Fatalf("EnrollFIDO2 slot = %d, want 1", res.Slot)
 		}
 		tok := tokenByID(t, device, res.TokenID)
-		if tok["type"] != "fido2-manual" {
-			t.Fatalf("token type = %v, want fido2-manual", tok["type"])
+		if tok["type"] != "gtp-fido2-derived" {
+			t.Fatalf("token type = %v, want gtp-fido2-derived", tok["type"])
 		}
 		assertKeyslots(t, tok, "1")
 		if !bytes.Equal(handlerKey, make([]byte, len(key))) {

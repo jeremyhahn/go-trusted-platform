@@ -36,6 +36,17 @@ const (
 
 	// TokenTypeKeyring is a kernel keyring token
 	TokenTypeKeyring = "keyring"
+
+	// TokenTypeFIDO2Derived is the FIDO2 token the platformd backend and the
+	// initrd Install write: the keyslot key is go-xkms UnlockWithKey output
+	// (GenerateDerivedKey of the hmac-secret), and fido2-up-required means
+	// user verification.
+	TokenTypeFIDO2Derived = "gtp-fido2-derived"
+
+	// TokenTypeFIDO2Manual is the FIDO2 token the installer writes: the
+	// keyslot key is the raw 32-byte hmac-secret. Boot cannot open it until
+	// go-xkms has a Handler-level raw hmac-secret call.
+	TokenTypeFIDO2Manual = "fido2-manual"
 )
 
 // Token represents LUKS2 token metadata for storing unlock information.

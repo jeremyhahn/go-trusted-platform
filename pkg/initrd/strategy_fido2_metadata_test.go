@@ -50,7 +50,7 @@ func withFIDO2Tokens(p *Platform, m *MockLUKSHandler, slots ...int) *tokenLUKS {
 	tl := newTokenLUKS(m)
 	for i, slot := range slots {
 		tl.tokens[i] = &luks.Token{
-			Type:            "fido2-manual",
+			Type:            "gtp-fido2-derived",
 			Keyslots:        []string{strconv.Itoa(slot)},
 			FIDO2Credential: hex.EncodeToString([]byte{0x11, byte(slot)}),
 			FIDO2Salt:       base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(slot)}, 32)),

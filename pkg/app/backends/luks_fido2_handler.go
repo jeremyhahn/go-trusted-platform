@@ -27,6 +27,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	storageluks "github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 )
 
 // LUKS FIDO2 handler errors.
@@ -54,8 +55,10 @@ var ErrLUKSFIDO2DeriveFailed = errors.New("luks fido2 handler: hmac-secret deriv
 var ErrLUKSFIDO2PINUnsupported = daemon.ErrLUKSFIDO2PINUnsupported
 
 // LUKSFIDO2TokenType is the LUKS2 token type stored for trusted-platform
-// FIDO2 slots. Mirrors the token type already routed by luksKeySlotTypeMap.
-const LUKSFIDO2TokenType = "fido2-manual"
+// FIDO2 slots: the keyslot key is go-xkms UnlockWithKey output, not the raw
+// hmac-secret the installer's fido2-manual tokens hold, so the initrd
+// dispatches on it (ruling 1048).
+const LUKSFIDO2TokenType = storageluks.TokenTypeFIDO2Derived
 
 // fido2LUKSToken is the JSON payload we persist in a LUKS2 token when a slot
 // is enrolled via HMAC-SECRET. The format is intentionally forward-compatible

@@ -85,6 +85,9 @@ func TestFIDO2Unlock_DispatchesByTokenType(t *testing.T) {
 		if !strings.Contains(err.Error(), "raw hmac-secret") {
 			t.Errorf("error %q does not name the raw hmac-secret token", err)
 		}
+		if !errors.Is(err, ErrFIDO2RawHMACSecretUnsupported) {
+			t.Errorf("error %q does not wrap ErrFIDO2RawHMACSecretUnsupported", err)
+		}
 		if len(fido.unlockConfigs) != 0 {
 			t.Errorf("UnlockWithKey calls = %d, want 0: a raw token must not cost a touch", len(fido.unlockConfigs))
 		}

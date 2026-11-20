@@ -147,7 +147,7 @@ func TestFIDO2StrategyLoadAuthConfigFromToken(t *testing.T) {
 	salt := bytes.Repeat([]byte{0x5a}, 32)
 	tl.tokens[0] = &luks.Token{Type: "fido2-manual", Keyslots: []string{"1"}, FIDO2Credential: "ignored-other-slot", FIDO2Salt: "x"}
 	tl.tokens[3] = &luks.Token{
-		Type:            "fido2-manual",
+		Type:            "gtp-fido2-derived",
 		Keyslots:        []string{"5"},
 		FIDO2Credential: base64.StdEncoding.EncodeToString(credentialID),
 		FIDO2Salt:       base64.StdEncoding.EncodeToString(salt),
@@ -169,7 +169,7 @@ func TestFIDO2StrategyLoadAuthConfigFromToken(t *testing.T) {
 	if _, err := strategy.loadAuthConfig(context.Background(), "/dev/sda2", luks.KeySlot{Index: 7, Type: luks.UnlockFIDO2}); !errors.Is(err, ErrFIDO2TokenMissing) {
 		t.Errorf("loadAuthConfig(slot 7) = %v, want ErrFIDO2TokenMissing", err)
 	}
-	tl.tokens[4] = &luks.Token{Type: "fido2-manual", Keyslots: []string{"8"}, FIDO2Credential: "abcd", FIDO2Salt: "!!"}
+	tl.tokens[4] = &luks.Token{Type: "gtp-fido2-derived", Keyslots: []string{"8"}, FIDO2Credential: "abcd", FIDO2Salt: "!!"}
 	if _, err := strategy.loadAuthConfig(context.Background(), "/dev/sda2", luks.KeySlot{Index: 8, Type: luks.UnlockFIDO2}); !errors.Is(err, ErrFIDO2TokenInvalid) {
 		t.Errorf("loadAuthConfig(slot 8) = %v, want ErrFIDO2TokenInvalid", err)
 	}

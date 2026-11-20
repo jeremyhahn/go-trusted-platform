@@ -84,7 +84,7 @@
    | Reported type | Token / keyslot types |
    |---|---|
    | `passphrase` | `luks2`, `passphrase`, `trusted-platform-luks2` |
-   | `fido2` | `fido2`, `fido2-manual`, `systemd-fido2` |
+   | `fido2` | `fido2`, `gtp-fido2-derived`, `fido2-manual`, `systemd-fido2` |
    | `tpm` | `tpm`, `tpm2`, `systemd-tpm2` |
    | `recovery` | `recovery`, `systemd-recovery` |
 
@@ -108,7 +108,7 @@
 | ListSlots | `ListKeyslots` | type per §2.6 |
 | Info | header metadata | `SectorSize` defaults to `luks2.DefaultSectorSize`; `MetadataJSON` is the raw JSON area |
 | EnrollPassphrase | `AddKey` | |
-| EnrollFIDO2 | `AddKey`, `FindFreeTokenSlot`, `ImportTokenJSON` / `ImportToken` | an enrolling handler imports its own token JSON; otherwise a `fido2-manual` token is written; a failed token write removes the keyslot (§2.8) |
+| EnrollFIDO2 | `AddKey`, `FindFreeTokenSlot`, `ImportTokenJSON` / `ImportToken` | an enrolling handler imports its own token JSON; otherwise a `gtp-fido2-derived` token is written (the daemon writes this type, never `fido2-manual`); a failed token write removes the keyslot (§2.8) |
 | EnrollTPM | `AddKey`, `FindFreeTokenSlot`, `ImportTokenJSON` | the handler seals to `--handle` / `--pcrs`; no token JSON is `ErrLUKSTokenMissing` and removes the keyslot (§2.8) |
 | EnrollRecovery | `AddRecoveryKey` | |
 | RemoveKey | `KillKeyslot` | destructive |
@@ -189,7 +189,9 @@ ceremony backend, injects the production LUKS pieces through the
   `pcrCheckedTPMHandler(luks.TPMHandler())` (none when no TPM opened).
   - FIDO2: the default handler stays when a FIDO2 library opens at startup.
     It derives the keyslot key with hmac-secret over a fresh salt and writes
-    a `fido2-manual` token (credential, salt, RP, UV) naming the slot. At
+    a `gtp-fido2-derived` token (credential, salt, RP, UV) naming the slot;
+    the initrd opens only that type and refuses raw hmac-secret tokens
+    (`fido2-manual`, `systemd-fido2`) with `ErrFIDO2RawHMACSecretUnsupported`. At
     boot, `pkg/boot/commands` opens a FIDO2 handler when `fido2` is an
     unlock method (`bootFIDO2Handler`), and the initrd FIDO2 strategy lists
     the slots the header's FIDO2 tokens name besides the configured ones,
