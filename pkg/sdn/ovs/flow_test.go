@@ -1339,3 +1339,31 @@ func TestParseMatchString_AnyTaggedFrame(t *testing.T) {
 	assert.Error(t, parseMatchString(openflow.NewMatch(), "vlan_vid=0x2000"))
 	assert.Error(t, parseMatchString(openflow.NewMatch(), "vlan_vid=0x1000/zz"))
 }
+
+// An SCTP port match carries the OXM SCTP port fields: TCP port fields on
+// ip_proto=132 are a prerequisite error the switch rejects.
+func TestParseMatchString_SCTPPorts(t *testing.T) {
+	for _, matchStr := range []string{"sctp,tp_src=5000,tp_dst=9899", "ip,nw_proto=132,tp_src=5000,tp_dst=9899", "sctp6,tp_src=5000,tp_dst=9899"} {
+		t.Run(matchStr, func(t *testing.T) {
+			m := openflow.NewMatch()
+			require.NoError(t, parseMatchString(m, matchStr))
+			ports := map[uint8][]byte{}
+			for _, f := range m.Fields {
+				if f.Class != openflow.OFPXMCOpenflowBasic {
+					continue
+				}
+				switch f.Field {
+				case openflow.OFPXMTOFBTCPSrc, openflow.OFPXMTOFBTCPDst, openflow.OFPXMTOFBUDPSrc, openflow.OFPXMTOFBUDPDst:
+					t.Fatalf("SCTP match carries a TCP/UDP port field %d: %+v", f.Field, m.Fields)
+				case openflow.OFPXMTOFBSCTPSrc, openflow.OFPXMTOFBSCTPDst:
+					ports[f.Field] = f.Value
+				}
+			}
+			assert.Equal(t, []byte{0x13, 0x88}, ports[openflow.OFPXMTOFBSCTPSrc])
+			assert.Equal(t, []byte{0x26, 0xab}, ports[openflow.OFPXMTOFBSCTPDst])
+			s := formatMatchString(m)
+			assert.Contains(t, s, "tp_src=5000")
+			assert.Contains(t, s, "tp_dst=9899")
+		})
+	}
+}

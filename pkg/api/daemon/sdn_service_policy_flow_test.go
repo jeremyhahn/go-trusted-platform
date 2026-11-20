@@ -3,7 +3,9 @@ package daemon
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -435,4 +437,169 @@ func TestSDNService_DeletePolicy_UsesTheSameMatch(t *testing.T) {
 	deletes := mock.GetCalls("DeleteFlow")
 	require.Len(t, deletes, 1)
 	assert.Equal(t, (*mods)[0].Match, deletes[0].Args[1])
+}
+
+// switchModelClient models the switch's flow table on top of the mock: an
+// AddFlow writes the entry (before its hook runs, as a flow-mod is written
+// before its barrier is awaited) and a DeleteFlowStrict removes it.
+type switchModelClient struct {
+	*ConfigurableMockOVSClient
+
+	mu         sync.Mutex
+	entries    map[string]string // match -> actions
+	deletes    []string
+	addHook    func(flow *ovs.FlowMod) error
+	deleteHook func(flow *ovs.FlowMod) error
+}
+
+func newSwitchModelSDNService(t *testing.T) (*SDNService, *switchModelClient) {
+	t.Helper()
+	sw := &switchModelClient{ConfigurableMockOVSClient: NewConfigurableMockOVSClient(), entries: map[string]string{}}
+	svc, err := NewSDNService("", WithOVSClient(sw))
+	require.NoError(t, err)
+	svc.bridges["br0"] = &bridgeResource{id: "br0-uuid", name: "br0"}
+	return svc, sw
+}
+
+func (c *switchModelClient) AddFlow(_ context.Context, _ string, flow *ovs.FlowMod) error {
+	c.mu.Lock()
+	c.entries[flow.Match] = flow.Actions
+	hook := c.addHook
+	c.mu.Unlock()
+	if hook != nil {
+		return hook(flow)
+	}
+	return nil
+}
+
+func (c *switchModelClient) DeleteFlowStrict(_ context.Context, _ string, flow *ovs.FlowMod) error {
+	c.mu.Lock()
+	hook := c.deleteHook
+	c.deletes = append(c.deletes, flow.Match)
+	c.mu.Unlock()
+	if hook != nil {
+		if err := hook(flow); err != nil {
+			return err
+		}
+	}
+	c.mu.Lock()
+	delete(c.entries, flow.Match)
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *switchModelClient) entry(match string) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	a, ok := c.entries[match]
+	return a, ok
+}
+
+func (c *switchModelClient) deleted() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.deletes...)
+}
+
+// Apply A installs an entry and then fails while apply B installs the same
+// entry and has not yet published its policy: A's rollback must not leave B
+// reporting success without its flow on the switch.
+func TestSDNService_ApplyPolicy_ConcurrentRollbackKeepsTheOtherApplysFlow(t *testing.T) {
+	svc, sw := newSwitchModelSDNService(t)
+
+	aInstalled := make(chan struct{})
+	bInstalled := make(chan struct{})
+	rolledBack := make(chan struct{})
+	var aOnce, bOnce, rbOnce sync.Once
+	sw.addHook = func(flow *ovs.FlowMod) error {
+		if flow.Actions == "drop" { // apply A
+			aOnce.Do(func() { close(aInstalled) })
+			// A's barrier is slow: B gets to install the same entry meanwhile
+			// if nothing serializes the two applies.
+			select {
+			case <-bInstalled:
+			case <-time.After(300 * time.Millisecond):
+			}
+			return errFlowInstall
+		}
+		// Apply B: installed, its barrier returns only after A rolled back.
+		bOnce.Do(func() { close(bInstalled) })
+		select {
+		case <-rolledBack:
+		case <-time.After(2 * time.Second):
+		}
+		return nil
+	}
+	sw.deleteHook = func(*ovs.FlowMod) error {
+		rbOnce.Do(func() { close(rolledBack) })
+		return nil
+	}
+
+	a := denyPolicy("a", denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}))
+	a.PolicyId = "pol-a"
+	b := denyPolicy("b", allowRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}))
+	b.PolicyId = "pol-b"
+
+	aErr := make(chan error, 1)
+	go func() {
+		_, err := svc.ApplyPolicy(context.Background(), a)
+		aErr <- err
+	}()
+	select {
+	case <-aInstalled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("apply A never installed its flow")
+	}
+	bErr := make(chan error, 1)
+	go func() {
+		_, err := svc.ApplyPolicy(context.Background(), b)
+		bErr <- err
+	}()
+
+	require.Error(t, <-aErr)
+	require.NoError(t, <-bErr)
+
+	actions, ok := sw.entry("tcp,tp_dst=22")
+	require.True(t, ok, "B reported success, so its flow must be on the switch")
+	assert.NotEqual(t, "drop", actions)
+}
+
+// A rollback delete that fails is an error of the apply, and the entry it
+// left behind stays tracked: the next apply removes it.
+func TestSDNService_ApplyPolicy_FailedRollbackDeleteIsReportedAndRetried(t *testing.T) {
+	svc, sw := newSwitchModelSDNService(t)
+
+	errDelete := errors.New("test: delete refused")
+	sw.addHook = func(*ovs.FlowMod) error { return errFlowInstall }
+	sw.deleteHook = func(*ovs.FlowMod) error { return errDelete }
+
+	x := denyPolicy("x", allowRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}))
+	_, err := svc.ApplyPolicy(context.Background(), x)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rollback")
+	assert.Contains(t, err.Error(), errDelete.Error())
+	_, ok := sw.entry("tcp,tp_dst=22")
+	require.True(t, ok, "the model keeps the entry the delete failed on")
+
+	// The switch recovers: the next apply removes the stranded entry.
+	sw.mu.Lock()
+	sw.addHook = nil
+	sw.deleteHook = nil
+	sw.deletes = nil
+	sw.mu.Unlock()
+	y := denyPolicy("y", denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 80}))
+	_, err = svc.ApplyPolicy(context.Background(), y)
+	require.NoError(t, err)
+	assert.Contains(t, sw.deleted(), "tcp,tp_dst=22", "the stranded entry must be removed by the next apply")
+	_, ok = sw.entry("tcp,tp_dst=22")
+	assert.False(t, ok)
+
+	// Once removed it is no longer tracked: a third apply deletes nothing.
+	sw.mu.Lock()
+	sw.deletes = nil
+	sw.mu.Unlock()
+	z := denyPolicy("z", denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 443}))
+	_, err = svc.ApplyPolicy(context.Background(), z)
+	require.NoError(t, err)
+	assert.Empty(t, sw.deleted())
 }
