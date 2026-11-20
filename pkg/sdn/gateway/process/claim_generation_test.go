@@ -42,14 +42,24 @@ func TestSupervisor_OnChildExitRunsForACrashDuringReadiness(t *testing.T) {
 
 	started := make(chan error, 1)
 	go func() { started <- supervisor.StartService(ctx, gateway.ServiceVPNWireGuard) }()
-	require.Eventually(t, func() bool { return launcher.launchCount() == 1 },
-		5*time.Second, time.Millisecond, "the wireguard child is launched")
+	// launchCount records the launch before the child exists (#742), so
+	// wait for the child itself: lastChild right after the count can find
+	// none on a loaded runner under -race.
+	var child *fakeChild
+	require.Eventually(t, func() bool {
+		children := launcher.allChildren()
+		if len(children) != 1 {
+			return false
+		}
+		child = children[0]
+		return true
+	}, 5*time.Second, time.Millisecond, "the wireguard child is launched")
 	supervisor.mu.Lock()
 	launching := supervisor.processes[WireGuardProcess].launching
 	supervisor.mu.Unlock()
 	require.True(t, launching, "the child is still waiting for readiness")
 
-	launcher.lastChild().exit(errors.New("signal: killed"))
+	child.exit(errors.New("signal: killed"))
 	require.Eventually(t, func() bool { return rec.callCount() == 1 },
 		5*time.Second, time.Millisecond, "the crash during readiness runs the exit hook")
 	assert.Never(t, func() bool { return rec.callCount() > 1 },
