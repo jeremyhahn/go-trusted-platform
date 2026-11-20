@@ -28,6 +28,8 @@ import (
 type fakeDeviceStore struct {
 	mu      sync.Mutex
 	devices map[string]*DeviceInfo
+	// putErr, when set, fails the next Put once (a transient outage).
+	putErr error
 	// deleteErr, when set, fails every Delete (a datastore outage).
 	deleteErr error
 	// deleteStarted and deleteGate, when set, make Delete signal its start
@@ -43,6 +45,10 @@ func newFakeDeviceStore() *fakeDeviceStore {
 func (f *fakeDeviceStore) Put(_ context.Context, device *DeviceInfo) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.putErr; err != nil {
+		f.putErr = nil
+		return err
+	}
 	f.devices[device.ID] = copyDeviceInfo(device)
 	return nil
 }

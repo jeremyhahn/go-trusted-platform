@@ -921,6 +921,54 @@ func TestService_RetryDevice_MaxRetriesExceeded(t *testing.T) {
 	assert.True(t, errors.As(err, &maxRetriesErr))
 }
 
+// A failed persisting write leaves the device as it was, so the retry at
+// the last allowed attempt can be made again once storage recovers (#2081).
+func TestService_RetryDevice_PutFailureIsRetryable(t *testing.T) {
+	cfg := createTestConfig()
+	cfg.MaxRetries = 2
+	ctx := context.Background()
+
+	store := newFakeDeviceStore()
+	svc := &service{
+		logger:       logging.DefaultLogger(),
+		stateManager: NewStateManager(WithDeviceStore(store)),
+		vlanManager:  NewNoopVLANIntegration(testNetPlan),
+		config:       cfg,
+	}
+	svc.initialized.Store(true)
+
+	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:56", "port-1")
+	require.NoError(t, err)
+
+	// Use up all but the last retry.
+	for i := 0; i < cfg.MaxRetries-1; i++ {
+		require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateFailed, "test failure"))
+		require.NoError(t, svc.RetryDevice(ctx, device.ID))
+	}
+	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateFailed, "test failure"))
+	require.NoError(t, svc.stateManager.UpdateDevice(device.ID, func(d *DeviceInfo) error {
+		d.IDevIDFingerprint = "fp-before"
+		return nil
+	}))
+
+	store.mu.Lock()
+	store.putErr = errors.New("datastore unavailable")
+	store.mu.Unlock()
+	require.Error(t, svc.RetryDevice(ctx, device.ID))
+
+	got, err := svc.stateManager.Get(device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, cfg.MaxRetries-1, got.RetryCount, "retry count restored")
+	assert.Equal(t, "fp-before", got.IDevIDFingerprint, "fingerprint restored")
+	assert.Equal(t, StateFailed, got.State, "state restored")
+
+	require.NoError(t, svc.RetryDevice(ctx, device.ID))
+	got, err = svc.stateManager.Get(device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StateDiscovered, got.State)
+	assert.Equal(t, cfg.MaxRetries, got.RetryCount)
+}
+
 func TestService_RetryDevice_InvalidTransition(t *testing.T) {
 	svc, _ := initializeTestService(t)
 	ctx := context.Background()

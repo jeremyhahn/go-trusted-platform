@@ -21,6 +21,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/jeremyhahn/go-quicbaas/pkg/iam"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	sdktransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
@@ -212,6 +213,9 @@ type tenantStorage struct {
 
 func (s *tenantStorage) record(ctx context.Context, op string) {
 	s.tenants[op] = append(s.tenants[op], sdktransport.TenantFromContext(ctx))
+	// The embedded keyspace (service/keyspace.go BuildKey) reads the
+	// tenant from pkg/iam's context key, not the transport's (#2081).
+	s.tenants[op+"/iam"] = append(s.tenants[op+"/iam"], iam.TenantFromContext(ctx))
 }
 
 func (s *tenantStorage) Put(ctx context.Context, entityType string, id uint64, data []byte, shardID uint64) error {
@@ -246,7 +250,7 @@ func TestPXEDeviceStore_SystemTenant(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.Delete(ctx, device.ID))
 
-	for _, op := range []string{"put", "list", "delete"} {
+	for _, op := range []string{"put", "list", "delete", "put/iam", "list/iam", "delete/iam"} {
 		require.NotEmpty(t, fake.tenants[op], op)
 		for _, tenant := range fake.tenants[op] {
 			require.Equal(t, "system", tenant, op)
