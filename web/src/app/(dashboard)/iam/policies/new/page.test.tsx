@@ -11,13 +11,13 @@ const iam = { createPolicy: vi.fn() };
 
 let authResult: { tenantId?: string; isLoading: boolean };
 let mutationLoading: boolean;
-let mutationCall: { fn: () => Promise<unknown>; opts: any };
+let mutationCall: { fn: (v?: any) => Promise<unknown>; opts: any };
 
 // useMutation runs the page's function and then its onSuccess or onError,
 // the way the real hook does.
-const mutate = vi.fn(async () => {
+const mutate = vi.fn(async (v?: unknown) => {
   try {
-    const r = await mutationCall.fn();
+    const r = await mutationCall.fn(v);
     mutationCall.opts?.onSuccess?.(r);
   } catch (e) {
     mutationCall.opts?.onError?.(e);
@@ -35,6 +35,16 @@ vi.mock("@/hooks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks")>()),
   useIAM: () => iam,
   useToast: () => ({ toast }),
+  useMutation: (fn: () => Promise<unknown>, opts: unknown) => {
+    mutationCall = { fn, opts };
+    return { mutate, isLoading: mutationLoading };
+  },
+}));
+
+// The page's useCreatePolicy hook reads the SDK hooks directly.
+vi.mock("trusted-platform-sdk", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("trusted-platform-sdk")>()),
+  useIAM: () => iam,
   useMutation: (fn: () => Promise<unknown>, opts: unknown) => {
     mutationCall = { fn, opts };
     return { mutate, isLoading: mutationLoading };

@@ -40,6 +40,18 @@ vi.mock("@/hooks", async (importOriginal) => ({
   }),
 }));
 
+// The page's useAppDetail hook reads the SDK hooks directly.
+vi.mock("trusted-platform-sdk", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("trusted-platform-sdk")>()),
+  useIAM: () => iam,
+  useApi: () => ({
+    data: { app: { name: "portal", redirect_uris: ["https://x/cb"], grant_types: ["authorization_code"] } },
+    isLoading: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
+}));
+
 describe("AppDetailClient on the embedded IAM backend", () => {
   beforeEach(() => {
     vi.spyOn(window, "confirm").mockReturnValue(true);

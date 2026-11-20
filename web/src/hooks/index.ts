@@ -134,6 +134,15 @@ export type { BMCState, BMCPart, UseBMCResult } from './use-bmc';
 
 export { useIAMTenants } from './use-iam-tenants';
 export type { UseIAMTenantsResult } from './use-iam-tenants';
+export {
+  buildPolicyYaml,
+  toPolicyDetail,
+  useCreatePolicy,
+  usePolicyDetail,
+} from './use-iam-policy';
+export type { PolicyDetail, PolicyDraft } from './use-iam-policy';
+export { toAppDetail, useAppDetail } from './use-iam-app';
+export type { AppDetail } from './use-iam-app';
 
 export { useGatewayBgp } from './use-gateway-bgp';
 export type {

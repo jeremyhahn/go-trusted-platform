@@ -40,6 +40,18 @@ vi.mock("@/hooks", async (importOriginal) => ({
   }),
 }));
 
+// The page's usePolicyDetail hook reads the SDK hooks directly.
+vi.mock("trusted-platform-sdk", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("trusted-platform-sdk")>()),
+  useIAM: () => iam,
+  useApi: () => ({
+    data: { policy: { name: "allow-read", description: "d", priority: 3, spec_yaml: "kind: Policy" } },
+    isLoading: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
+}));
+
 describe("PolicyDetailClient on the embedded IAM backend", () => {
   beforeEach(() => {
     vi.spyOn(window, "confirm").mockReturnValue(true);

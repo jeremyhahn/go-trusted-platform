@@ -5,7 +5,7 @@ import { useParams, usePathname, useRouter } from 'next/navigation';
 import { ArrowLeft, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import { useAuth } from '@/contexts/AuthContext';
-import { useIAM, useApi, useMutation, useToast } from '@/hooks';
+import { useAppDetail, useIAM, useMutation, useToast } from '@/hooks';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -16,16 +16,6 @@ import {
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { EmbeddedIamGate } from '../../embedded-iam-gate';
-
-// Application record as the REST API sends it: camelCase or snake_case keys (#445).
-interface AppWire {
-  name?: string;
-  redirect_uris?: string[];
-  redirectUris?: string[];
-  grant_types?: string[];
-  grantTypes?: string[];
-  created_at?: string;
-}
 
 export default function AppDetailClient() {
   const params = useParams();
@@ -38,13 +28,7 @@ export default function AppDetailClient() {
   // Apps use `clientId` not `id` as the path param.
   const clientId = resolveDynamicId(params, pathname, 'apps', 'clientId');
 
-  const { data: app, isLoading, error } = useApi(
-    () => {
-      if (!tenantId) return Promise.reject(new Error('No tenant ID'));
-      return iam.getApp(tenantId, clientId);
-    },
-    [tenantId, clientId],
-  );
+  const { app: a, isLoading, error } = useAppDetail(tenantId, clientId);
 
   const deleteMutation = useMutation(
     async () => {
@@ -92,11 +76,8 @@ export default function AppDetailClient() {
     );
   }
 
-  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-  const rawApp = app as unknown as (AppWire & { app?: AppWire }) | null | undefined;
-  const a: AppWire | null = rawApp?.app ?? rawApp ?? null;
-  const redirectUris: string[] = a?.redirect_uris ?? a?.redirectUris ?? [];
-  const grantTypes: string[] = a?.grant_types ?? a?.grantTypes ?? [];
+  const redirectUris: string[] = a?.redirectUris ?? [];
+  const grantTypes: string[] = a?.grantTypes ?? [];
 
   return (
     <div className="container mx-auto py-6 space-y-6">
@@ -157,9 +138,9 @@ export default function AppDetailClient() {
               </ul>
             )}
           </div>
-          {a?.created_at && (
+          {a?.createdAt && (
             <div className="text-xs text-muted-foreground">
-              Created {new Date(a.created_at).toLocaleString()}
+              Created {new Date(a.createdAt).toLocaleString()}
             </div>
           )}
         </CardContent>

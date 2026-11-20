@@ -8,7 +8,7 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useIAM, useToast, useMutation } from '@/hooks';
+import { useToast, useCreatePolicy } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -24,12 +24,9 @@ import {
 } from '@/components/ui/select';
 import { Loader2 } from 'lucide-react';
 
-import type { CreateIAMPolicyRequest } from 'trusted-platform-sdk';
-
 export default function NewPolicyPage() {
   const router = useRouter();
   const { toast } = useToast();
-  const iam = useIAM();
   const { tenantId, isLoading: authLoading } = useAuth();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -37,41 +34,8 @@ export default function NewPolicyPage() {
   const [actions, setActions] = useState('read');
   const [resources, setResources] = useState('*');
 
-  const createMutation = useMutation(
-    async () => {
-      if (!tenantId) throw new Error('No tenant available');
-      const ruleActions = actions
-        .split(',')
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
-      const ruleResources = resources
-        .split(',')
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
-      const yaml = [
-        'apiVersion: v1',
-        'kind: Policy',
-        'metadata:',
-        `  name: ${name}`,
-        `  tenant: ${tenantId}`,
-        `  description: ${description || ''}`,
-        'spec:',
-        '  rules:',
-        '    - name: rule-1',
-        `      effect: ${effect}`,
-        `      actions: [${ruleActions.join(', ')}]`,
-        `      resources: [${ruleResources.map((r) => `"${r}"`).join(', ')}]`,
-      ].join('\n');
-      // The platform IAM REST handler reads the YAML from the
-      // snake_case `spec_yaml` field; send all three known names so
-      // the call works regardless of how the SDK serializes the
-      // request shape.
-      // The SDK request plus the spec keys the REST API also reads.
-      const request: CreateIAMPolicyRequest & { spec: string; spec_yaml: string } = {
-        tenantId, name, description, specYaml: yaml, spec: yaml, spec_yaml: yaml,
-      };
-      return iam.createPolicy(request);
-    },
+  const createMutation = useCreatePolicy(
+    tenantId,
     {
       onSuccess: () => {
         toast({ title: 'Policy created', variant: 'success' });
@@ -160,7 +124,7 @@ export default function NewPolicyPage() {
               Cancel
             </Button>
             <Button
-              onClick={() => createMutation.mutate(undefined)}
+              onClick={() => createMutation.mutate({ name, description, effect, actions, resources })}
               disabled={!name || createMutation.isLoading}
             >
               {createMutation.isLoading && (

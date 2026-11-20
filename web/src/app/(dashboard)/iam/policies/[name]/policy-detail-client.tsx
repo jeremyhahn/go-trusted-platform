@@ -13,7 +13,7 @@ import { useParams, usePathname, useRouter } from 'next/navigation';
 import { ArrowLeft, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import { useAuth } from '@/contexts/AuthContext';
-import { useIAM, useApi, useMutation, useToast } from '@/hooks';
+import { useIAM, useMutation, usePolicyDetail, useToast } from '@/hooks';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -24,15 +24,6 @@ import {
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { EmbeddedIamGate } from '../../embedded-iam-gate';
-
-// Policy record as the REST API sends it: camelCase or snake_case keys (#445).
-interface PolicyWire {
-  description?: string;
-  priority?: number;
-  spec_yaml?: string;
-  specYaml?: string;
-  spec?: string;
-}
 
 export default function PolicyDetailClient() {
   const params = useParams();
@@ -46,13 +37,7 @@ export default function PolicyDetailClient() {
     resolveDynamicId(params, pathname, 'policies', 'name'),
   );
 
-  const { data: policy, isLoading, error } = useApi(
-    () => {
-      if (!tenantId) return Promise.reject(new Error('No tenant ID'));
-      return iam.getPolicy(tenantId, policyName);
-    },
-    [tenantId, policyName],
-  );
+  const { policy: p, isLoading, error } = usePolicyDetail(tenantId, policyName);
 
   const deleteMutation = useMutation(
     async () => {
@@ -100,10 +85,7 @@ export default function PolicyDetailClient() {
     );
   }
 
-  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-  const rawPolicy = policy as unknown as (PolicyWire & { policy?: PolicyWire }) | null | undefined;
-  const p: PolicyWire | null = rawPolicy?.policy ?? rawPolicy ?? null;
-  const yaml: string = p?.spec_yaml ?? p?.specYaml ?? p?.spec ?? '';
+  const yaml: string = p?.yaml ?? '';
 
   return (
     <div className="container mx-auto py-6 space-y-6">
