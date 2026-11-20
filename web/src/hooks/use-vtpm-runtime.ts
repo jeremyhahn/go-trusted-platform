@@ -9,13 +9,29 @@
  */
 
 import * as React from "react";
-import { useVTPM, useMutation } from "trusted-platform-sdk";
+import { useVTPM, useMutation, isServiceNotConfigured } from "trusted-platform-sdk";
 import type {
   QuoteBundleRequest,
   SealBundleRequest,
   UnsealBundleRequest,
   ExtendBundlePCRRequest,
 } from "trusted-platform-sdk";
+
+/**
+ * Reason the vTPM runtime controls are gated off, or null when the error is
+ * an ordinary failure. A 503 carrying SERVICE_NOT_CONFIGURED means the
+ * daemon has no VTPMService on this node; a 501 means the route is not
+ * implemented by this server.
+ */
+export function runtimeGateReason(err: unknown): string | null {
+  if (isServiceNotConfigured(err)) {
+    return "The vTPM service is not configured on this server.";
+  }
+  if (err !== null && typeof err === "object" && (err as { status?: unknown }).status === 501) {
+    return "This server does not implement the vTPM runtime operations.";
+  }
+  return null;
+}
 
 /** Running state as the last start or stop result left it. */
 export type VTPMRunState = "unknown" | "running" | "stopped";
@@ -24,6 +40,7 @@ export function useVTPMRuntime(bundleId: string) {
   const vtpm = useVTPM();
   const [runState, setRunState] = React.useState<VTPMRunState>("unknown");
   const [stateError, setStateError] = React.useState<string | null>(null);
+  const [gatedReason, setGatedReason] = React.useState<string | null>(null);
 
   // Every write of the running state (a state read sent, a start or stop
   // reply) takes the next sequence number; a state read applies only when
@@ -43,7 +60,9 @@ export function useVTPMRuntime(bundleId: string) {
     setRunState(s);
   };
 
-  // IsVTPMRunning (GET /bundles/{id}/state).
+  // IsVTPMRunning (GET /bundles/{id}/state). A not-configured (503
+  // SERVICE_NOT_CONFIGURED) or 501 reply means this server lacks the vTPM
+  // runtime: gatedReason is set and every runtime mutation is refused.
   const refreshState = React.useCallback(async () => {
     if (bundleId.trim() === "") return;
     seq.current += 1;
@@ -52,39 +71,61 @@ export function useVTPMRuntime(bundleId: string) {
       const r = await vtpm.isBundleRunning(bundleId);
       if (!alive.current || seq.current !== sent) return;
       if (!r.success || !r.data) {
-        const message = (r as { error?: { message?: string } }).error?.message;
-        throw new Error(message || "Failed to read the vTPM state");
+        const error = (r as { error?: { message?: string } }).error;
+        const reason = runtimeGateReason(error);
+        if (reason) {
+          setGatedReason(reason);
+          setStateError(null);
+          return;
+        }
+        throw new Error(error?.message || "Failed to read the vTPM state");
       }
       setRunState(r.data.running ? "running" : "stopped");
       setStateError(null);
+      setGatedReason(null);
     } catch (err) {
       if (!alive.current || seq.current !== sent) return;
+      const reason = runtimeGateReason(err);
+      if (reason) {
+        setGatedReason(reason);
+        setStateError(null);
+        return;
+      }
       setStateError(err instanceof Error ? err.message : String(err));
     }
   }, [vtpm, bundleId]);
 
   // Read the server state once per bundle; the panel is keyed on the bundle,
   // so a new bundle remounts the hook.
+  // The read is queued, not called in the effect body, so no state is set
+  // synchronously inside the effect (react-hooks/set-state-in-effect).
   React.useEffect(() => {
-    void refreshState();
+    void Promise.resolve().then(refreshState);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bundleId]);
 
-  const start = useMutation(() => vtpm.startBundle(bundleId), {
+  // Every runtime mutation goes through gated(): while the server lacks the
+  // vTPM runtime, it rejects without calling the SDK.
+  const gated = <T,>(call: () => Promise<T>): Promise<T> => {
+    if (gatedReason) return Promise.reject(new Error(gatedReason));
+    return call();
+  };
+
+  const start = useMutation(() => gated(() => vtpm.startBundle(bundleId)), {
     onSuccess: (r) => writeRunState(r.running ? "running" : "stopped"),
   });
-  const stop = useMutation(() => vtpm.stopBundle(bundleId), {
+  const stop = useMutation(() => gated(() => vtpm.stopBundle(bundleId)), {
     onSuccess: (r) => {
       if (r.stopped) writeRunState("stopped");
     },
   });
-  const quote = useMutation((req: QuoteBundleRequest) => vtpm.quoteBundle(bundleId, req));
-  const seal = useMutation((req: SealBundleRequest) => vtpm.sealBundle(bundleId, req));
-  const unseal = useMutation((req: UnsealBundleRequest) => vtpm.unsealBundle(bundleId, req));
+  const quote = useMutation((req: QuoteBundleRequest) => gated(() => vtpm.quoteBundle(bundleId, req)));
+  const seal = useMutation((req: SealBundleRequest) => gated(() => vtpm.sealBundle(bundleId, req)));
+  const unseal = useMutation((req: UnsealBundleRequest) => gated(() => vtpm.unsealBundle(bundleId, req)));
   const extendPCR = useMutation((req: ExtendBundlePCRRequest) =>
-    vtpm.extendBundlePCR(bundleId, req)
+    gated(() => vtpm.extendBundlePCR(bundleId, req))
   );
-  const readPCR = useMutation((pcrIndex: number) => vtpm.readBundlePCR(bundleId, pcrIndex));
+  const readPCR = useMutation((pcrIndex: number) => gated(() => vtpm.readBundlePCR(bundleId, pcrIndex)));
 
   // Start and stop write the same running state: while either is pending,
   // neither may be sent, so a late reply cannot overwrite a newer one.
@@ -93,6 +134,7 @@ export function useVTPMRuntime(bundleId: string) {
   return {
     runState,
     stateError,
+    gatedReason,
     refreshState,
     lifecycleBusy,
     start,

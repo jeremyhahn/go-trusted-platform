@@ -176,6 +176,7 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
   const confirmPending = () => {
     const action = pending;
     setPending(null);
+    if (rt.gatedReason) return;
     if (action === "stop") {
       if (rt.lifecycleBusy) return;
       void run("Error stopping vTPM", async () => {
@@ -194,6 +195,9 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
   const extendResult = rt.extendPCR.data;
   const readData = rt.readPCR.data;
   const noBundle = bundleId.trim() === "";
+  // Capability gate: the server lacks the vTPM runtime, so every runtime
+  // control is disabled and the reason is shown beside them.
+  const gated = rt.gatedReason !== null;
 
   return (
     <div className="space-y-6">
@@ -214,6 +218,11 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {rt.gatedReason && (
+            <p className="text-sm text-muted-foreground" data-testid="vtpm-runtime-reason" role="status">
+              Runtime operations unavailable: {rt.gatedReason}
+            </p>
+          )}
           {rt.stateError && (
             <p className="text-sm text-destructive" data-testid="vtpm-state-error">
               Could not read the running state: {rt.stateError}
@@ -223,18 +232,18 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
             <Button
               variant="outline"
               onClick={() => void rt.refreshState()}
-              disabled={noBundle || rt.lifecycleBusy}
+              disabled={noBundle || gated || rt.lifecycleBusy}
             >
               Refresh state
             </Button>
-            <Button onClick={handleStart} disabled={noBundle || rt.lifecycleBusy}>
+            <Button onClick={handleStart} disabled={noBundle || gated || rt.lifecycleBusy}>
               {rt.start.isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
               Start vTPM
             </Button>
             <Button
               variant="destructive"
               onClick={() => setPending("stop")}
-              disabled={noBundle || rt.lifecycleBusy}
+              disabled={noBundle || gated || rt.lifecycleBusy}
             >
               <Square className="mr-2 h-4 w-4" />
               Stop vTPM
@@ -264,7 +273,7 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
               <Input id="vtpm-quote-pcrs" value={quotePCRs} onChange={(e) => setQuotePCRs(e.target.value)} />
             </div>
           </div>
-          <Button onClick={handleQuote} disabled={noBundle || rt.quote.isLoading}>Quote</Button>
+          <Button onClick={handleQuote} disabled={noBundle || gated || rt.quote.isLoading}>Quote</Button>
           {quoteData && (
             <div className="space-y-2" data-testid="vtpm-quote-result">
               <p className="text-sm">Hash algorithm: {quoteData.hash_algorithm}</p>
@@ -296,7 +305,7 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
               <Input id="vtpm-seal-pcrs" value={sealPCRs} onChange={(e) => setSealPCRs(e.target.value)} />
             </div>
           </div>
-          <Button onClick={handleSeal} disabled={noBundle || !sealText || rt.seal.isLoading}>Seal</Button>
+          <Button onClick={handleSeal} disabled={noBundle || gated || !sealText || rt.seal.isLoading}>Seal</Button>
           {sealedBlob && (
             <div className="space-y-2">
               <Label>Sealed blob (base64)</Label>
@@ -307,7 +316,7 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
             <Label htmlFor="vtpm-unseal-blob">Sealed blob to unseal</Label>
             <Textarea id="vtpm-unseal-blob" className="font-mono text-xs" value={unsealBlob} onChange={(e) => setUnsealBlob(e.target.value)} />
           </div>
-          <Button onClick={handleUnseal} disabled={noBundle || !unsealBlob || rt.unseal.isLoading}>Unseal</Button>
+          <Button onClick={handleUnseal} disabled={noBundle || gated || !unsealBlob || rt.unseal.isLoading}>Unseal</Button>
           {unsealData && (
             <p className="text-sm" data-testid="vtpm-unsealed-data">
               Unsealed: <code>{base64ToText(unsealData.data)}</code>
@@ -327,7 +336,7 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
               <Label htmlFor="vtpm-read-index">Read PCR index</Label>
               <Input id="vtpm-read-index" value={readIndex} onChange={(e) => setReadIndex(e.target.value)} />
             </div>
-            <Button onClick={handleRead} disabled={noBundle || rt.readPCR.isLoading}>Read PCR</Button>
+            <Button onClick={handleRead} disabled={noBundle || gated || rt.readPCR.isLoading}>Read PCR</Button>
           </div>
           {readData && (
             <p className="font-mono text-xs" data-testid="vtpm-pcr-value">
@@ -355,7 +364,7 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
           <Button
             variant="destructive"
             onClick={requestExtend}
-            disabled={noBundle || !extendData || rt.extendPCR.isLoading}
+            disabled={noBundle || gated || !extendData || rt.extendPCR.isLoading}
           >
             Extend PCR
           </Button>
