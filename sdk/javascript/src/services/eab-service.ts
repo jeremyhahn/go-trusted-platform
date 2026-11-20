@@ -64,6 +64,20 @@ export class EABService extends BaseService {
     super(client, '/v1/eab');
   }
 
+  /**
+   * Builds `/credentials/{id}{suffix}` for a credential ID. IDs are uint64
+   * decimals: anything else (empty, a path separator, a query) would reach
+   * another route, so it is refused before any request is sent.
+   *
+   * @throws RangeError when `id` is not 1-20 decimal digits
+   */
+  private credentialPath(id: string, suffix = ''): string {
+    if (!/^[0-9]{1,20}$/.test(id)) {
+      throw new RangeError(`EAB credential id must be 1-20 decimal digits, got ${JSON.stringify(id)}`);
+    }
+    return `/credentials/${encodeURIComponent(id)}${suffix}`;
+  }
+
   // =========================================================================
   // EAB CRUD Operations
   // =========================================================================
@@ -86,7 +100,7 @@ export class EABService extends BaseService {
    */
   async get(id: string): Promise<ApiResponse<GetEABCredentialResponse>> {
     return this.client.get<GetEABCredentialResponse>(
-      this.buildUrl(`/credentials/${id}`)
+      this.buildUrl(this.credentialPath(id))
     );
   }
 
@@ -134,7 +148,7 @@ export class EABService extends BaseService {
    */
   async revoke(id: string): Promise<ApiResponse<RevokeEABCredentialResponse>> {
     return this.client.post<RevokeEABCredentialResponse>(
-      this.buildUrl(`/credentials/${id}/revoke`),
+      this.buildUrl(this.credentialPath(id, '/revoke')),
       {}
     );
   }
@@ -160,7 +174,7 @@ export class EABService extends BaseService {
    */
   async delete(id: string): Promise<ApiResponse<DeleteEABCredentialResponse>> {
     return this.client.delete<DeleteEABCredentialResponse>(
-      this.buildUrl(`/credentials/${id}`)
+      this.buildUrl(this.credentialPath(id))
     );
   }
 
@@ -181,7 +195,7 @@ export class EABService extends BaseService {
       filters.size = size;
     }
     return this.client.get<GetEABQRCodeResponse>(
-      this.buildUrl(`/credentials/${id}/qrcode`, { filters })
+      this.buildUrl(this.credentialPath(id, '/qrcode'), { filters })
     );
   }
 
@@ -196,7 +210,7 @@ export class EABService extends BaseService {
    */
   async getEnrollmentURL(id: string): Promise<ApiResponse<GetEnrollmentURLResponse>> {
     return this.client.get<GetEnrollmentURLResponse>(
-      this.buildUrl(`/credentials/${id}/url`)
+      this.buildUrl(this.credentialPath(id, '/url'))
     );
   }
 
@@ -208,7 +222,7 @@ export class EABService extends BaseService {
    */
   async markUsed(id: string): Promise<ApiResponse<MarkEABCredentialUsedResponse>> {
     return this.client.post<MarkEABCredentialUsedResponse>(
-      this.buildUrl(`/credentials/${id}/used`),
+      this.buildUrl(this.credentialPath(id, '/used')),
       {}
     );
   }

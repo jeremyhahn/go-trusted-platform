@@ -327,6 +327,7 @@ export type {
   OperationStatus,
   ErrorDetail,
   CAPaginationResponse,
+  SignCSRRequest,
 } from './types/ca.js';
 
 // IDevID / IAK types
@@ -1031,6 +1032,9 @@ export type {
   DeleteEABCredentialResponse,
   GetEABQRCodeResponse,
   GetEnrollmentURLResponse,
+  MarkEABCredentialUsedResponse,
+  CleanupExpiredEABCredentialsRequest,
+  CleanupExpiredEABCredentialsResponse,
 } from './types/eab.js';
 
 // vTPM Instance types
@@ -1127,6 +1131,11 @@ export type {
   UpdateTenantResponse,
   UpdateQuotasRequest,
   SyncTenantsResponse,
+  InitTenantBarrierRequest,
+  InitTenantBarrierResponse,
+  UnsealTenantBarrierRequest,
+  UnsealTenantBarrierResponse,
+  SealTenantBarrierResponse,
 } from './types/tenant.js';
 
 // =============================================================================

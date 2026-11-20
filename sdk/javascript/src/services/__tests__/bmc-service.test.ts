@@ -243,7 +243,7 @@ describe('BMCService provision keeps the profile ID string (#2022 Codex r1)', ()
 
   it('leaves a response without data alone', async () => {
     const client = createRouteMockApiClient();
-    vi.mocked(client.get).mockResolvedValue({ success: false, error: { message: 'no' } });
+    vi.mocked(client.get).mockResolvedValue({ success: false, error: { code: 'NOT_FOUND', message: 'no' } });
 
     const res = await new BMCService(client).getProvisionStatus('9007199254740993');
 
