@@ -51,6 +51,20 @@ import type {
 } from '../types/kms.js';
 
 /**
+ * Builds a REST wire body, leaving out fields that are undefined so the
+ * server's `omitempty` defaults apply.
+ */
+function wireBody(fields: Record<string, unknown>): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined) {
+      body[key] = value;
+    }
+  }
+  return body;
+}
+
+/**
  * Key Management Service class
  *
  * @example
@@ -101,13 +115,22 @@ export class KMSService extends BaseService {
   }
 
   /**
-   * Import an existing key
+   * Import an existing key: `POST /keys/import` with the server's
+   * snake_case ImportKeyRequest body.
    *
    * @param request - Key import request with key material
    * @returns Imported key handle and metadata
    */
   async importKey(request: ImportKeyRequest): Promise<ApiResponse<ImportKeyResponse>> {
-    return this.client.post<ImportKeyResponse>(this.buildUrl('/keys/import'), request);
+    return this.client.post<ImportKeyResponse>(this.buildUrl('/keys/import'), wireBody({
+      name: request.name,
+      algorithm: request.keySpec.algorithm,
+      key_material: request.keyMaterial,
+      wrapping_key_id: request.wrappingKeyId,
+      usage: request.keySpec.usage,
+      description: request.description,
+      tags: request.tags,
+    }));
   }
 
   /**
@@ -167,13 +190,13 @@ export class KMSService extends BaseService {
   }
 
   /**
-   * Update key status (enable/disable)
+   * Update key status (enable/disable): `PUT /keys/{name}/status`.
    *
    * @param request - Status update request
    * @returns Updated key status
    */
   async updateKeyStatus(request: UpdateKeyStatusRequest): Promise<ApiResponse<UpdateKeyStatusResponse>> {
-    return this.client.patch<UpdateKeyStatusResponse>(
+    return this.client.put<UpdateKeyStatusResponse>(
       this.buildUrl(`/keys/${this.encodePathSegment(request.keyId)}/status`),
       { version: request.version, status: request.status }
     );
@@ -256,33 +279,39 @@ export class KMSService extends BaseService {
   }
 
   /**
-   * Compute hash
+   * Compute hash: `POST /hash` with `{ data, hash }`.
    *
    * @param request - Hash request
    * @returns Hash value
    */
   async hash(request: HashRequest): Promise<ApiResponse<HashResponse>> {
-    return this.client.post<HashResponse>(this.buildUrl('/hash'), request);
+    return this.client.post<HashResponse>(this.buildUrl('/hash'), { data: request.data, hash: request.algorithm });
   }
 
   /**
-   * Compute HMAC
+   * Compute HMAC: `POST /hmac/{name}` with `{ data, hash }`.
    *
    * @param request - HMAC request
    * @returns HMAC value
    */
   async hmac(request: HMACRequest): Promise<ApiResponse<HMACResponse>> {
-    return this.client.post<HMACResponse>(this.buildUrl('/hmac'), request);
+    return this.client.post<HMACResponse>(
+      this.buildUrl(`/hmac/${this.encodePathSegment(request.keyId)}`),
+      wireBody({ data: request.message, hash: request.hashAlgorithm })
+    );
   }
 
   /**
-   * Verify HMAC
+   * Verify HMAC: `POST /hmac/{name}/verify` with `{ data, hmac, hash }`.
    *
    * @param request - HMAC verification request
    * @returns Verification result
    */
   async verifyHMAC(request: VerifyHMACRequest): Promise<ApiResponse<VerifyHMACResponse>> {
-    return this.client.post<VerifyHMACResponse>(this.buildUrl('/hmac/verify'), request);
+    return this.client.post<VerifyHMACResponse>(
+      this.buildUrl(`/hmac/${this.encodePathSegment(request.keyId)}/verify`),
+      wireBody({ data: request.message, hmac: request.hmac, hash: request.hashAlgorithm })
+    );
   }
 
   // =========================================================================
@@ -290,33 +319,45 @@ export class KMSService extends BaseService {
   // =========================================================================
 
   /**
-   * Generate random bytes
+   * Generate random bytes: `POST /random` with `{ num_bytes }`.
    *
    * @param request - Random generation request
    * @returns Random bytes
    */
   async generateRandom(request: GenerateRandomRequest): Promise<ApiResponse<GenerateRandomResponse>> {
-    return this.client.post<GenerateRandomResponse>(this.buildUrl('/random'), request);
+    return this.client.post<GenerateRandomResponse>(this.buildUrl('/random'), { num_bytes: request.numBytes });
   }
 
   /**
-   * Generate a data key (plaintext + encrypted)
+   * Generate a data key (plaintext + encrypted): `POST /data-keys` with
+   * `{ key_id, algorithm, key_size, context }`.
    *
    * @param request - Data key generation request
    * @returns Plaintext and encrypted data key
    */
   async generateDataKey(request: GenerateDataKeyRequest): Promise<ApiResponse<GenerateDataKeyResponse>> {
-    return this.client.post<GenerateDataKeyResponse>(this.buildUrl('/datakey'), request);
+    return this.client.post<GenerateDataKeyResponse>(this.buildUrl('/data-keys'), wireBody({
+      key_id: request.keyId,
+      algorithm: request.algorithm,
+      key_size: request.keySize,
+      context: request.context,
+    }));
   }
 
   /**
-   * Generate a wrapped data key (encrypted only)
+   * Generate a wrapped data key (encrypted only): `POST /data-keys/wrapped`
+   * with `{ wrapping_key_id, key_algorithm, key_size, context }`.
    *
    * @param request - Wrapped data key generation request
    * @returns Wrapped data key
    */
   async generateWrappedDataKey(request: GenerateWrappedDataKeyRequest): Promise<ApiResponse<GenerateWrappedDataKeyResponse>> {
-    return this.client.post<GenerateWrappedDataKeyResponse>(this.buildUrl('/datakey/wrapped'), request);
+    return this.client.post<GenerateWrappedDataKeyResponse>(this.buildUrl('/data-keys/wrapped'), wireBody({
+      wrapping_key_id: request.wrappingKeyId,
+      key_algorithm: request.keyAlgorithm,
+      key_size: request.keySize,
+      context: request.context,
+    }));
   }
 
   // =========================================================================
