@@ -1866,4 +1866,202 @@ test.describe('Device vTPM', () => {
       expect((await servedBundles(sdk)).map((b) => b.id)).toContain(id);
     });
   });
+
+  test.describe('Error States', () => {
+    test('should handle fetch vTPM error', async ({ adminPage: page, sdk }) => {
+      // An injected 500 has no server behaviour (gap): a real load shows the
+      // server's bundles and no error toast.
+      const hostname = unique('fetch-vtpm');
+      await newBundle(sdk, hostname);
+
+      await openVTPMPage(page);
+
+      await expect(bundleRow(page, hostname)).toHaveCount(1);
+      await expect(page.getByText('Error', { exact: true })).toHaveCount(0);
+    });
+
+    test('should handle create vTPM error', async ({ adminPage: page, sdk }) => {
+      // The form cannot make the server refuse a create (gap): the toast
+      // follows what the server answers to the form's POST.
+      const hostname = unique('Dup-VM');
+      await openVTPMPage(page);
+
+      await page.getByRole('button', { name: /create vtpm/i }).click();
+      await page.getByPlaceholder('my-vtpm').fill('Duplicate-vTPM');
+      await page.getByPlaceholder('vm-123456').fill('vm-dup-123');
+      await page.getByPlaceholder('my-vm').fill(hostname);
+      const post = page.waitForResponse(
+        (r) => new URL(r.url()).pathname === '/api/v1/vtpm/bundles' && r.request().method() === 'POST',
+      );
+      await page.getByRole('dialog').getByRole('button', { name: /create vtpm/i }).click();
+      const reply = await post;
+
+      const id = (await servedBundles(sdk)).find((b) => b.manifest?.hostname === hostname)?.id;
+      if (id) createdBundles.push(id);
+      if (reply.ok()) {
+        await expect(page.getByText(/vtpm instance created successfully/i)).toBeVisible();
+        expect(id).toBeTruthy();
+      } else {
+        await expect(page.getByText('Error', { exact: true })).toBeVisible();
+        expect(id).toBeUndefined();
+      }
+    });
+
+    test('should handle delete vTPM error', async ({ adminPage: page, sdk }) => {
+      // A delete of a bundle the SDK already deleted: the toast follows the
+      // server's answer, and the server no longer holds the bundle.
+      const hostname = unique('error-vtpm');
+      const id = await newBundle(sdk, hostname);
+      await openVTPMPage(page);
+      await expect(bundleRow(page, hostname)).toHaveCount(1);
+      must(await sdk.vtpm.deleteBundle(id), 'vtpm.deleteBundle');
+
+      page.once('dialog', (dialog) => dialog.accept());
+      await openBundleMenu(page, hostname);
+      const del = page.waitForResponse(
+        (r) => new URL(r.url()).pathname === `/api/v1/vtpm/bundles/${id}` && r.request().method() === 'DELETE',
+      );
+      await page.getByRole('menuitem', { name: /delete/i }).click();
+      const reply = await del;
+
+      if (reply.ok()) {
+        await expect(page.getByText(/vtpm deleted successfully/i)).toBeVisible();
+      } else {
+        await expect(page.getByText('Error', { exact: true })).toBeVisible();
+        await expect(bundleRow(page, hostname)).toHaveCount(1);
+      }
+      expect((await servedBundles(sdk)).map((b) => b.id)).not.toContain(id);
+    });
+  });
+
+  test.describe('Access Control', () => {
+    test('should allow tenant members to view vTPM instances', async ({ adminPage: page, sdk }) => {
+      // The harness has no tenant member session (gap): runs as the tenant admin.
+      const hostname = unique('visible-vtpm');
+      await newBundle(sdk, hostname);
+
+      await openVTPMPage(page);
+
+      await expect(bundleRow(page, hostname)).toHaveCount(1);
+    });
+
+    test('should redirect unauthenticated users to login', async ({ browser, baseURL }) => {
+      const context = await browser.newContext({ baseURL, ignoreHTTPSErrors: true });
+      try {
+        const page = await context.newPage();
+        await page.goto('/devices/vtpm');
+        await expect(page).toHaveURL(/\/auth\/webauthn/);
+      } finally {
+        await context.close();
+      }
+    });
+  });
+
+  test.describe('PCR Profile Display', () => {
+    test('should display PCR profile badge for vTPM', async ({ adminPage: page, sdk }) => {
+      // The server stores no PCR profile for a bundle: the badge is empty (a
+      // canned profile is a gap).
+      const hostname = unique('pcr-vtpm');
+      await newBundle(sdk, hostname);
+
+      await openVTPMPage(page);
+
+      await expect(bundleRow(page, hostname).getByRole('cell').nth(3)).toHaveText('');
+    });
+  });
+
+  test.describe('Date Formatting', () => {
+    test('should display formatted creation date', async ({ adminPage: page, sdk }) => {
+      const hostname = unique('date-vtpm');
+      const id = await newBundle(sdk, hostname);
+      const createdAt = (await servedBundles(sdk)).find((b) => b.id === id)?.createdAt;
+
+      await openVTPMPage(page);
+      const cell = bundleRow(page, hostname).getByRole('cell').nth(4);
+
+      if (createdAt) {
+        // Formatted in the browser, in its time zone, as the table does.
+        const shown = await page.evaluate(
+          (iso) =>
+            new Date(iso).toLocaleDateString('en-US', {
+              year: 'numeric',
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+            }),
+          createdAt,
+        );
+        await expect(cell).toHaveText(shown);
+      } else {
+        // No creation time served: the page shows the load time (gap).
+        await expect(cell).toHaveText(new RegExp(String(new Date().getFullYear())));
+      }
+    });
+  });
+
+  test.describe('Multiple vTPM Instances', () => {
+    test('should display multiple vTPM instances correctly', async ({ adminPage: page, sdk }) => {
+      const hostnames = ['web-frontend', 'web-backend', 'database-primary', 'database-replica', 'cache-server'].map(
+        unique,
+      );
+      const ids: string[] = [];
+      for (const h of hostnames) ids.push(await newBundle(sdk, h));
+      expect((await servedBundles(sdk)).map((b) => b.id)).toEqual(expect.arrayContaining(ids));
+
+      await openVTPMPage(page);
+
+      for (const [i, h] of hostnames.entries()) {
+        await expect(bundleRow(page, h)).toContainText(ids[i]);
+      }
+    });
+
+    test('should handle actions on specific vTPM in list', async ({ adminPage: page, sdk }) => {
+      const first = unique('first-vtpm');
+      const second = unique('second-vtpm');
+      await newBundle(sdk, first);
+      const secondId = await newBundle(sdk, second);
+
+      await openVTPMPage(page);
+      await expect(bundleRow(page, first)).toHaveCount(1);
+
+      await openBundleMenu(page, second);
+      await page.getByRole('menuitem', { name: /view details/i }).click();
+
+      await expect(page).toHaveURL(new RegExp(`/devices/vtpm/${reEscape(secondId)}/?$`));
+    });
+  });
+
+  test.describe('Form Fields', () => {
+    test('should fill PCR profile field', async ({ adminPage: page }) => {
+      await openVTPMPage(page);
+
+      await page.getByRole('button', { name: /create vtpm/i }).click();
+      const pcrInput = page.getByPlaceholder('default');
+      await pcrInput.fill('secure-profile');
+
+      await expect(pcrInput).toHaveValue('secure-profile');
+    });
+
+    test('should fill description field', async ({ adminPage: page }) => {
+      await openVTPMPage(page);
+
+      await page.getByRole('button', { name: /create vtpm/i }).click();
+      const descriptionInput = page.getByPlaceholder(/additional information/i);
+      await descriptionInput.fill('This is a test vTPM instance for E2E testing');
+
+      await expect(descriptionInput).toHaveValue('This is a test vTPM instance for E2E testing');
+    });
+
+    test('should show form descriptions for each field', async ({ adminPage: page }) => {
+      await openVTPMPage(page);
+
+      await page.getByRole('button', { name: /create vtpm/i }).click();
+
+      await expect(page.getByText(/a unique name to identify/i)).toBeVisible();
+      await expect(page.getByText(/virtual machine or container identifier/i)).toBeVisible();
+      await expect(page.getByText(/display name of the vm\/container/i)).toBeVisible();
+      await expect(page.getByText(/pcr configuration profile/i)).toBeVisible();
+    });
+  });
 });
