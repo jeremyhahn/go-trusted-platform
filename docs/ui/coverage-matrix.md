@@ -118,11 +118,11 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `ClusterService.Bootstrap` | - | - | - | - | missing |
-| `ClusterService.Join` | - | - | - | - | missing |
-| `ClusterService.Leave` | - | - | - | - | missing |
-| `ClusterService.GetStatus` | - | - | - | - | missing |
-| `ClusterService.ListNodes` | - | - | - | - | missing |
+| `ClusterService.Bootstrap` | `POST /bootstrap` | - | - | - | missing |
+| `ClusterService.Join` | `POST /join` | - | - | - | missing |
+| `ClusterService.Leave` | `POST /leave` | - | - | - | missing |
+| `ClusterService.GetStatus` | `GET /status` | - | - | - | missing |
+| `ClusterService.ListNodes` | `GET /nodes` | - | - | - | missing |
 
 ## ComputeService (`compute.proto`)
 
