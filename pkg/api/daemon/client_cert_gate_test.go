@@ -71,7 +71,7 @@ func newGatePKI(t *testing.T) gatePKI {
 		}
 		tmpl := &x509.Certificate{
 			SerialNumber: big.NewInt(serial),
-			Subject:      pkix.Name{CommonName: cn},
+			Subject:      pkix.Name{CommonName: cn, OrganizationalUnit: []string{"gate-test"}},
 			NotBefore:    time.Now().Add(-time.Hour),
 			NotAfter:     time.Now().Add(time.Hour),
 			KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -290,7 +290,7 @@ func TestQUICServerMTLS_SharesTheAuthenticatorsPool(t *testing.T) {
 		t.Fatalf("remove CA file: %v", err)
 	}
 
-	mw, _, err := selectQUICAuth(config, nil, pool, logger)
+	mw, _, err := selectQUICAuth(config, nil, nil, pool, logger)
 	if err != nil {
 		t.Fatalf("selectQUICAuth: %v", err)
 	}

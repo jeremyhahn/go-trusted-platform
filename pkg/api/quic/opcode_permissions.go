@@ -234,8 +234,9 @@ var (
 	containerWrite  = OpcodePermission{Resource: "container", Action: actionWrite}
 	containerDelete = OpcodePermission{Resource: "container", Action: actionDelete}
 
-	attestationRead  = OpcodePermission{Resource: "attestation", Action: actionRead}
-	attestationWrite = OpcodePermission{Resource: "attestation", Action: actionWrite}
+	attestationRead   = OpcodePermission{Resource: "attestation", Action: actionRead}
+	attestationWrite  = OpcodePermission{Resource: "attestation", Action: actionWrite}
+	attestationDelete = OpcodePermission{Resource: "attestation", Action: actionDelete}
 
 	caRead = OpcodePermission{Resource: "ca", Action: actionRead}
 
@@ -439,6 +440,8 @@ var opcodePermissions = map[byte]OpcodePermission{
 	quicwire.OpAttestVerifyManifest: attestationRead,
 	quicwire.OpAttestHost:           attestationWrite,
 	quicwire.OpAttestVMWorkload:     attestationWrite,
+	quicwire.OpAttestListManifests:  attestationRead,
+	quicwire.OpAttestDeleteManifest: attestationDelete,
 
 	// Certificates and the CA (gRPC CAService). Certificates are the go-qrdb
 	// certs family; the CA's own metadata, bundle and CRL are ca:read.

@@ -123,7 +123,7 @@ func (a *QuicBaaSAuthAdapter) ValidateToken(ctx context.Context, token string) (
 	// here, at authentication, so the catalogue listings (tools/list,
 	// resources/list) are refused too, not only permission checks (SPEC
 	// row 123).
-	if result.TenantID == "" {
+	if strings.TrimSpace(result.TenantID) == "" {
 		return false, &QuicBaaSAuthError{
 			Code:    QuicBaaSAuthErrorMissingTenant,
 			Message: "token names no tenant",
@@ -241,9 +241,9 @@ func (a *QuicBaaSAuthAdapter) CheckPermission(ctx context.Context, token string,
 		result = a.claimsMapToResult(claims)
 	}
 
-	// The tenant comes only from the token: no configured default stands
-	// in for it (SPEC row 123).
-	tenantID := result.TenantID
+	// The tenant comes only from the authenticated principal: a token that
+	// names no tenant is refused before the PEP is asked.
+	tenantID := strings.TrimSpace(result.TenantID)
 	if tenantID == "" {
 		return false, &QuicBaaSAuthError{
 			Code:    QuicBaaSAuthErrorMissingTenant,
@@ -346,7 +346,7 @@ const (
 	QuicBaaSAuthErrorPermissionCheck
 	// QuicBaaSAuthErrorClaimsExtraction indicates an error extracting claims.
 	QuicBaaSAuthErrorClaimsExtraction
-	// QuicBaaSAuthErrorMissingTenant indicates the token names no tenant.
+	// QuicBaaSAuthErrorMissingTenant indicates a validated token names no tenant.
 	QuicBaaSAuthErrorMissingTenant
 )
 

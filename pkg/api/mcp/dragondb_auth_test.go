@@ -37,13 +37,15 @@ func (m *mockTokenValidator) ValidateToken(ctx context.Context, token string) (*
 
 // mockPEPClient implements iam.PEPClient for testing.
 type mockPEPClient struct {
-	checkResp *iam.CheckResponse
-	checkErr  error
-	lastReq   *iam.CheckRequest
+	checkResp  *iam.CheckResponse
+	checkErr   error
+	lastReq    *iam.CheckRequest
+	checkCalls int
 }
 
 func (m *mockPEPClient) Check(ctx context.Context, req *iam.CheckRequest) (*iam.CheckResponse, error) {
 	m.lastReq = req
+	m.checkCalls++
 	if m.checkErr != nil {
 		return nil, m.checkErr
 	}

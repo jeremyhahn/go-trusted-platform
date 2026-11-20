@@ -19,6 +19,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync/atomic"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/peer"
@@ -78,9 +79,11 @@ type BuildManifestOptions struct {
 
 // ListManifestsFilter contains filters for listing manifests.
 type ListManifestsFilter struct {
-	HostID    string
-	StartTime int64
-	EndTime   int64
+	HostID string
+	// StartTime and EndTime are inclusive bounds; zero means no bound; full
+	// nanosecond precision (#1686, ruling 673).
+	StartTime time.Time
+	EndTime   time.Time
 	Limit     int
 	Offset    int
 }
@@ -272,13 +275,7 @@ func (s *AttestationServiceServer) ListManifests(
 ) (*platformv1.ListManifestsResponse, error) {
 
 	if err := s.requireService(); err != nil {
-		// Treat the unconfigured backend as an empty list rather than an
-		// error so the dashboard renders the empty state instead of an
-		// inline "Loading..." that never resolves.
-		return &platformv1.ListManifestsResponse{
-			Manifests: []*platformv1.HostManifest{},
-			Total:     0,
-		}, nil
+		return nil, err
 	}
 	filter := &ListManifestsFilter{
 		HostID: req.GetHostId(),
@@ -287,10 +284,10 @@ func (s *AttestationServiceServer) ListManifests(
 	}
 
 	if req.GetStartTime() != nil {
-		filter.StartTime = req.GetStartTime().AsTime().Unix()
+		filter.StartTime = req.GetStartTime().AsTime()
 	}
 	if req.GetEndTime() != nil {
-		filter.EndTime = req.GetEndTime().AsTime().Unix()
+		filter.EndTime = req.GetEndTime().AsTime()
 	}
 
 	manifests, total, err := s.service.ListManifests(ctx, filter)
@@ -664,7 +661,7 @@ func (s *AttestationServiceServer) protoToHostAttestation(a *platformv1.HostAtte
 		Nonce:              a.GetNonce(),
 		AKPublicKey:        a.GetAkPublicKey(),
 		IDevIDCertificate:  a.GetIdevidCertificate(),
-		HashAlgorithm:      s.protoToHashAlgorithm(a.GetHashAlgorithm()),
+		HashAlgorithm:      s.protoToManifestHashAlgorithm(a.GetHashAlgorithm()),
 		FirmwareVersion:    a.GetFirmwareVersion(),
 	}
 
@@ -676,7 +673,7 @@ func (s *AttestationServiceServer) protoToHostAttestation(a *platformv1.HostAtte
 		result.PCRs = append(result.PCRs, manifest.PCRValue{
 			Index:     int(pcr.GetIndex()),
 			Value:     pcr.GetValue(),
-			Algorithm: s.protoToHashAlgorithm(pcr.GetAlgorithm()),
+			Algorithm: s.protoToManifestHashAlgorithm(pcr.GetAlgorithm()),
 		})
 	}
 
@@ -699,7 +696,7 @@ func (s *AttestationServiceServer) protoToVMAttestation(a *platformv1.VMAttestat
 		AIKPublicKey:       a.GetAikPublicKey(),
 		EKCertificate:      a.GetEkCertificate(),
 		WorkloadPCR:        a.GetWorkloadPcr(),
-		HashAlgorithm:      s.protoToHashAlgorithm(a.GetHashAlgorithm()),
+		HashAlgorithm:      s.protoToManifestHashAlgorithm(a.GetHashAlgorithm()),
 		Metadata:           a.GetMetadata(),
 	}
 
@@ -711,7 +708,7 @@ func (s *AttestationServiceServer) protoToVMAttestation(a *platformv1.VMAttestat
 		result.PCRs = append(result.PCRs, manifest.PCRValue{
 			Index:     int(pcr.GetIndex()),
 			Value:     pcr.GetValue(),
-			Algorithm: s.protoToHashAlgorithm(pcr.GetAlgorithm()),
+			Algorithm: s.protoToManifestHashAlgorithm(pcr.GetAlgorithm()),
 		})
 	}
 
@@ -778,6 +775,26 @@ func (s *AttestationServiceServer) protoToHashAlgorithm(alg platformv1.Attestati
 		return manifest.HashAlgorithmSHA512
 	default:
 		return manifest.HashAlgorithmSHA256
+	}
+}
+
+// protoToManifestHashAlgorithm converts the hash algorithm of stored manifest
+// evidence. It is the inverse of hashAlgorithmToProto: an unspecified algorithm
+// stays unspecified (""), so a manifest round trip through the servicer reports
+// the algorithm the evidence carries and never invents one (#1686). Request
+// configs keep protoToHashAlgorithm, which defaults an unset algorithm to SHA256.
+func (s *AttestationServiceServer) protoToManifestHashAlgorithm(alg platformv1.AttestationHashAlgorithm) manifest.HashAlgorithm {
+	switch alg {
+	case platformv1.AttestationHashAlgorithm_ATTESTATION_HASH_ALGORITHM_SHA1:
+		return manifest.HashAlgorithmSHA1
+	case platformv1.AttestationHashAlgorithm_ATTESTATION_HASH_ALGORITHM_SHA256:
+		return manifest.HashAlgorithmSHA256
+	case platformv1.AttestationHashAlgorithm_ATTESTATION_HASH_ALGORITHM_SHA384:
+		return manifest.HashAlgorithmSHA384
+	case platformv1.AttestationHashAlgorithm_ATTESTATION_HASH_ALGORITHM_SHA512:
+		return manifest.HashAlgorithmSHA512
+	default:
+		return ""
 	}
 }
 
