@@ -18,6 +18,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -47,9 +48,16 @@ const (
 	ServiceProxy   = "proxy"
 	// ServiceHostFW is the nftables host packet filter (#569).
 	ServiceHostFW = "hostfw"
+	// ServiceFHRP is the VRRPv3 first-hop redundancy speaker (pkg/sdn/fhrp).
+	ServiceFHRP = "fhrp"
 	// ServiceManagementVPN is the attested remote-access VPN (docs/vpn/).
 	// It runs over the assembly's VPNRuntime; without one it is refused.
 	ServiceManagementVPN = "management-vpn"
+	// ServiceVPNWireGuard is the management VPN's WireGuard data plane, run
+	// by its own supervised `wireguard` process (ruling 942): it owns the
+	// hub device and serves VPNPlaneService. EnabledServices enables it with
+	// the management VPN when its data-planes offer wireguard (#1698).
+	ServiceVPNWireGuard = "vpn-wireguard"
 )
 
 // Gateway manages the lifecycle and operations of a gateway node.
@@ -68,6 +76,11 @@ type Gateway struct {
 
 	// Ordered list of active service names for deterministic start/stop
 	activeOrder []string
+
+	// Handlers whose Start failed but left cleanup outstanding (a
+	// retained FHRP speaker still announcing, for one). They are not
+	// active, so the rollback does not see them; Stop finishes them.
+	cleanupPending []string
 
 	// State
 	state     atomic.Uint32
@@ -97,6 +110,44 @@ type Gateway struct {
 }
 
 // NewGateway creates a new gateway with the given configuration.
+// fhrpDatapathServices are the services of the process that holds the
+// datapath and the FHRP speaker: the datapath row of the supervisor's class
+// table (process/class.go), the one supervised process that keeps
+// CAP_NET_ADMIN and owns the fhrp state directory.
+var fhrpDatapathServices = []string{
+	ServiceFirewall,
+	ServiceNAT,
+	ServiceLoadBalancer,
+	ServiceNAT64,
+	ServiceHostFW,
+	ServiceTunnels,
+	ServiceFHRP,
+	ServiceOverlay,
+}
+
+// ownsFHRPAddresses reports whether this process holds the FHRP virtual
+// addresses, and so sweeps the VIP inventory at Start: a single-process
+// gateway does; a supervisor parent does when no datapath child will start
+// (no enabled, hosted service of the datapath's row), and leaves the sweep
+// to that child when one will; a child does only when it hosts the
+// datapath's services. The routing, proxy, VPN and parser children drop
+// their credentials before Start and never touch the inventory.
+func (g *Gateway) ownsFHRPAddresses() bool {
+	if g.supervises(ServiceFHRP) {
+		// Supervises reads the static class table, not the config: what
+		// is enabled decides whether a datapath child will run.
+		return !slices.ContainsFunc(g.config.EnabledServices(), func(s string) bool {
+			return slices.Contains(fhrpDatapathServices, s) && g.config.Hosts(s)
+		})
+	}
+	if len(g.config.HostedServices) == 0 {
+		return true
+	}
+	return slices.ContainsFunc(g.config.HostedServices, func(s string) bool {
+		return slices.Contains(fhrpDatapathServices, s)
+	})
+}
+
 func NewGateway(config *GatewayConfig) (*Gateway, error) {
 	if config == nil {
 		return nil, ErrConfigNil
@@ -156,7 +207,12 @@ func (g *Gateway) RegisterServiceHandler(handler ServiceHandler) error {
 	return nil
 }
 
-// Start starts the gateway and activates all configured services.
+// Start starts the gateway and activates all configured services. When a
+// handler fails to start, the services already started are rolled back; a
+// failed handler that still holds cleanup (CleanupPending), and a started
+// one whose rollback Stop fails, is recorded so that Stop finishes it. While
+// such cleanup is pending, the services started earlier (the host firewall
+// among them) and the pipeline stay up until Stop finishes the cleanup.
 func (g *Gateway) Start(ctx context.Context) error {
 	if !g.state.CompareAndSwap(uint32(GatewayStateStopped), uint32(GatewayStateInitializing)) {
 		currentState := GatewayState(g.state.Load())
@@ -170,6 +226,19 @@ func (g *Gateway) Start(ctx context.Context) error {
 	if err := g.MeetsRequirements(); err != nil {
 		g.state.Store(uint32(GatewayStateStopped))
 		return &ErrStartupFailed{GatewayID: g.config.ID, Phase: "requirements-check", Cause: err}
+	}
+
+	// VIPs a crashed predecessor left for FHRP groups since removed go
+	// before any service starts, so neither ARP/ND nor the host firewall
+	// ever sees an address no runner owns. Only the process that owns the
+	// datapath and FHRP sweeps, or the supervisor parent when no datapath
+	// child runs: the other children have dropped the credentials the
+	// inventory and the addresses need.
+	if g.ownsFHRPAddresses() {
+		if err := sweepRemovedFHRPGroups(g.config); err != nil {
+			g.state.Store(uint32(GatewayStateStopped))
+			return &ErrStartupFailed{GatewayID: g.config.ID, Phase: "fhrp-sweep", Cause: err}
+		}
 	}
 
 	// The base pipeline goes in before any service handler: every datapath
@@ -190,10 +259,18 @@ func (g *Gateway) Start(ctx context.Context) error {
 	for _, name := range order {
 		handler := g.serviceHandlers[name]
 		if err := handler.Start(ctx); err != nil {
+			if cp, ok := handler.(cleanupPendingHandler); ok && cp.CleanupPending() {
+				g.recordCleanupPending(name)
+			}
 			// Rollback: stop already started services
-			g.rollbackStartedServices(ctx)
+			kept := g.rollbackStartedServices(ctx)
 			g.state.Store(uint32(GatewayStateError))
 			startErr := namedStartError(name, err)
+			if kept {
+				// The kept services gate out of the pipeline; Stop removes
+				// it after them.
+				return &ErrStartupFailed{GatewayID: g.config.ID, Phase: "service-start", Cause: startErr}
+			}
 			if rmErr := g.removePipeline(ctx); rmErr != nil {
 				// The service failure is the cause the operator acts on; the
 				// pipeline left behind is reported beside it, not instead.
@@ -228,23 +305,48 @@ func namedStartError(name string, err error) error {
 	return &ErrServiceStartFailed{Service: name, Cause: err}
 }
 
-// rollbackStartedServices stops any services that were already started during a failed Start.
-func (g *Gateway) rollbackStartedServices(ctx context.Context) {
+// rollbackStartedServices stops any services that were already started
+// during a failed Start, in reverse order. When cleanup is pending (the
+// failed handler kept some, or a rollback Stop fails), it stops nothing more:
+// the services started earlier stay up, and kept is true, until Stop
+// finishes the pending cleanup and then stops them.
+func (g *Gateway) rollbackStartedServices(ctx context.Context) (kept bool) {
 	g.mu.Lock()
 	order := make([]string, len(g.activeOrder))
 	copy(order, g.activeOrder)
+	pending := len(g.cleanupPending) > 0
 	g.mu.Unlock()
+
+	// The failed handler still holds cleanup (an FHRP VIP still installed):
+	// the services started before it, the host firewall among them, stay up
+	// until Stop finishes that cleanup.
+	if pending {
+		return true
+	}
 
 	// Stop in reverse order. The start error is what the caller sees; a
 	// backend that will not stop during rollback is logged so the failure is
-	// still visible.
+	// still visible, and the rollback stops there.
 	logger := g.config.hostRuntime().Logger
 	for i := len(order) - 1; i >= 0; i-- {
 		name := order[i]
-		if handler, ok := g.serviceHandlers[name]; ok {
-			if err := handler.Stop(ctx); err != nil {
-				logger.Warn("gateway: rollback stop failed", slog.String("service", name), slog.Any("error", err))
+		handler, ok := g.serviceHandlers[name]
+		if !ok {
+			continue
+		}
+		if err := handler.Stop(ctx); err != nil {
+			logger.Warn("gateway: rollback stop failed", slog.String("service", name), slog.Any("error", err))
+			// The handler keeps what it could not release; Stop retries
+			// it, then stops the services started before it.
+			g.recordCleanupPending(name)
+			g.mu.Lock()
+			g.activeOrder = append([]string(nil), order[:i]...)
+			g.node.ActiveServices = make(map[string]bool, i)
+			for _, earlier := range g.activeOrder {
+				g.node.ActiveServices[earlier] = true
 			}
+			g.mu.Unlock()
+			return true
 		}
 	}
 
@@ -252,9 +354,44 @@ func (g *Gateway) rollbackStartedServices(ctx context.Context) {
 	g.node.ActiveServices = make(map[string]bool)
 	g.activeOrder = nil
 	g.mu.Unlock()
+	return false
 }
 
-// Stop gracefully shuts down the gateway.
+// recordCleanupPending adds a handler whose failed Start, or whose failed
+// rollback Stop, left cleanup outstanding to the list Stop finishes, once.
+func (g *Gateway) recordCleanupPending(name string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !slices.Contains(g.cleanupPending, name) {
+		g.cleanupPending = append(g.cleanupPending, name)
+	}
+}
+
+// finishPendingCleanups stops every handler left holding cleanup by a
+// failed Start. An entry is dropped when its Stop succeeds and kept when it
+// fails, so the next Stop tries it again.
+func (g *Gateway) finishPendingCleanups(ctx context.Context) error {
+	g.mu.Lock()
+	pending := append([]string(nil), g.cleanupPending...)
+	g.mu.Unlock()
+
+	for _, name := range pending {
+		if handler, ok := g.serviceHandlers[name]; ok {
+			if err := handler.Stop(ctx); err != nil {
+				return &ErrShutdownFailed{GatewayID: g.config.ID, Phase: "service-cleanup", Cause: &ErrServiceStopFailed{Service: name, Cause: err}}
+			}
+		}
+		g.mu.Lock()
+		g.cleanupPending = slices.DeleteFunc(g.cleanupPending, func(n string) bool { return n == name })
+		g.mu.Unlock()
+	}
+	return nil
+}
+
+// Stop gracefully shuts down the gateway. It first finishes the cleanup a
+// failed Start left with a handler, then stops the active services in
+// reverse start order, then removes the pipeline. A cleanup that fails to
+// stop is kept for the next Stop and reported as ErrShutdownFailed.
 func (g *Gateway) Stop(ctx context.Context) error {
 	currentState := GatewayState(g.state.Load())
 	if currentState == GatewayStateStopped || currentState == GatewayStateStopping {
@@ -277,6 +414,13 @@ func (g *Gateway) Stop(ctx context.Context) error {
 	copy(order, g.activeOrder)
 	g.mu.Unlock()
 
+	// A handler whose Start failed holds no active service but may still
+	// hold cleanup (an FHRP group still announcing); finish it first.
+	if err := g.finishPendingCleanups(ctx); err != nil {
+		g.state.Store(uint32(GatewayStateError))
+		return err
+	}
+
 	// Stop services in reverse order
 	for i := len(order) - 1; i >= 0; i-- {
 		name := order[i]
@@ -288,6 +432,13 @@ func (g *Gateway) Stop(ctx context.Context) error {
 			g.state.Store(uint32(GatewayStateError))
 			return &ErrShutdownFailed{GatewayID: g.config.ID, Phase: "service-stop", Cause: &ErrServiceStopFailed{Service: name, Cause: err}}
 		}
+		// A stopped service leaves the active set at once, so a Stop that
+		// fails further on is retried from the service that failed (an FHRP
+		// VIP still to release), not from one already down.
+		g.mu.Lock()
+		g.activeOrder = slices.DeleteFunc(g.activeOrder, func(n string) bool { return n == name })
+		delete(g.node.ActiveServices, name)
+		g.mu.Unlock()
 	}
 
 	// The pipeline comes out after the last service gate is gone, so no

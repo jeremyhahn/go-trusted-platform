@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
@@ -29,12 +30,17 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 )
 
+// installCleanupTimeout bounds the removal Admit attempts after a failed
+// peer install, independent of the caller's context.
+const installCleanupTimeout = 5 * time.Second
+
 // Admit runs the five steps for a fresh session and returns the lease. Every
 // step fails closed; the order is fixed: identity, attestation, posture,
 // person factor, address, peer. A device that already holds a lease in the
 // tenant has that lease revoked (RevokeReplaced) before the new one is
 // issued — a lost laptop coming back cannot keep a session open beside its
-// replacement. A failed peer install releases the address.
+// replacement. A failed peer install removes the peer it may have left and
+// releases the address, or owes the removal to the sweep and holds it.
 func (s *Service) Admit(ctx context.Context, req *AdmissionRequest) (*Lease, error) {
 	if !s.Active() {
 		return nil, &ErrNotStarted{}
@@ -125,15 +131,32 @@ func (s *Service) Admit(ctx context.Context, req *AdmissionRequest) (*Lease, err
 	}
 	plane := s.deps.DataPlanes[req.DataPlane]
 	if err := plane.InstallPeer(ctx, lease); err != nil {
-		s.releaseAddress(ctx, addr)
+		// A failed install is ambiguous: a hosted datapath may have set
+		// the peer while the response was lost or the caller gave up.
+		// Remove it on a context the caller cannot cancel; if that fails,
+		// owe the removal to the sweep and hold the address until then.
+		rmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), installCleanupTimeout)
+		rmErr := plane.RemovePeer(rmCtx, lease.ID)
+		cancel()
+		if rmErr != nil {
+			s.logger.Warn("vpn.admit: peer may be left in the datapath after a failed install; owed to the sweep",
+				slog.String("lease", string(lease.ID)), slog.Any("error", rmErr))
+			s.owePeerRetry(lease.DataPlane, lease)
+		} else {
+			s.releaseAddress(ctx, addr)
+		}
 		return nil, s.refuse(ctx, req.DeviceID, &ErrDataPlaneUnavailable{Kind: req.DataPlane, Cause: err})
 	}
 	if err := s.deps.Leases.Put(ctx, lease); err != nil {
 		if rmErr := plane.RemovePeer(ctx, lease.ID); rmErr != nil {
 			// Both the store and the datapath failed: the peer may be live
-			// with no lease behind it, and the operator must be told.
-			s.logger.Warn("vpn.admit: peer left in the datapath after a lease-store failure",
+			// with no lease behind it. Owe its removal to the sweep and
+			// hold the address until then, so no other device gets it
+			// while this peer may still route it.
+			s.logger.Warn("vpn.admit: peer left in the datapath after a lease-store failure; owed to the sweep",
 				slog.String("lease", string(lease.ID)), slog.Any("error", rmErr))
+			s.owePeerRetry(lease.DataPlane, lease)
+			return nil, s.refuse(ctx, req.DeviceID, &ErrLeaseStoreUnavailable{Cause: err})
 		}
 		s.releaseAddress(ctx, addr)
 		return nil, s.refuse(ctx, req.DeviceID, &ErrLeaseStoreUnavailable{Cause: err})
@@ -164,6 +187,10 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 	if err != nil {
 		return nil, err
 	}
+	// Every revoke below needs enrolGate held (see revoke); it is taken
+	// before the device lock, the lock order Admit and enrolment keep.
+	s.enrolGate.RLock()
+	defer s.enrolGate.RUnlock()
 	unlock := s.devices.lock(deviceKey(probe.TenantID, probe.DeviceID))
 	defer unlock()
 	// Re-read under the lock: a concurrent renewal or revoke may have
@@ -234,6 +261,9 @@ func (s *Service) Revoke(ctx context.Context, id LeaseID, reason RevokeReason) e
 	if err != nil {
 		return err
 	}
+	// revoke needs enrolGate held; it is taken before the device lock.
+	s.enrolGate.RLock()
+	defer s.enrolGate.RUnlock()
 	unlock := s.devices.lock(deviceKey(probe.TenantID, probe.DeviceID))
 	defer unlock()
 	lease, err := s.deps.Leases.Get(ctx, id)
@@ -276,17 +306,54 @@ func (s *Service) OwnLease(ctx context.Context, id LeaseID, peer *calleradmissio
 // record the revocation nowhere (ErrRevocationNotRecorded) keeps the lease,
 // and revoke then tears nothing down: a peer removed or an address released
 // under a lease a restart restores would be a session the gateway and its
-// next start disagree on. Any other store error still tears the lease down,
+// next start disagree on. An expired lease (RevokeExpired) is the exception:
+// it is dead whether or not its deletion was recorded, and a restart drops
+// it before anything else, so its peer is removed anyway (a failed removal
+// is owed to Sweep) and only its address waits for a recorded deletion. Any
+// other store error still tears the lease down,
 // because a lease past its authority is dead whether or not its record went;
-// the peer is removed even when that error is returned, and a removal error
-// is returned so the caller retries the peer.
+// the peer is removed even when that error is returned. A peer the plane
+// failed to remove is never forgotten: its removal is owed to the next
+// Sweep, which retries it, and the address stays held until the peer is
+// gone, so it cannot go to another device while the revoked key may still
+// pass traffic. The removal error is returned too. Restore's dropLease
+// keeps the same order: the deletion is recorded before the peer goes, so an
+// unrecorded drop of a lease that is not expired leaves the peer with the
+// lease a restart reinstates.
 func (s *Service) revoke(ctx context.Context, lease *Lease, reason RevokeReason) error {
+	// The caller holds enrolGate (read or write), taken before the device
+	// lock. Orphan reclaim holds it for writing across its snapshot and
+	// its releases, so a revocation can neither release an address and
+	// clear its teardown mark under a reclaim that has already listed the
+	// leases, nor let the freed address be reassigned and then released
+	// by that reclaim. revoke does not take it itself: Admit and the
+	// enrolment sweep already hold it when they call here.
+	// The address stays visible to orphan reclaim from before the lease
+	// deletion until the teardown settles (released, or owed through
+	// peerRetry), on every return path.
+	defer s.markTearingDown(lease.Address)()
 	var storeErr error
 	if err := s.deps.Leases.Delete(ctx, lease.ID); err != nil {
 		var nf *ErrLeaseNotFound
 		var unrecorded *ErrRevocationNotRecorded
 		if errors.As(err, &unrecorded) {
-			return err
+			if reason != RevokeExpired {
+				return err
+			}
+			// An expired lease is dead whether or not its deletion was
+			// recorded: its peer goes now, and the kept record keeps the
+			// address until a later Sweep records the deletion.
+			var planeErr error
+			if plane, ok := s.deps.DataPlanes[lease.DataPlane]; ok {
+				if rmErr := plane.RemovePeer(ctx, lease.ID); rmErr != nil {
+					var nf *ErrLeaseNotFound
+					if !errors.As(rmErr, &nf) {
+						planeErr = &ErrDataPlaneUnavailable{Kind: lease.DataPlane, Cause: rmErr}
+						s.owePeerRetry(lease.DataPlane, lease)
+					}
+				}
+			}
+			return errors.Join(err, planeErr)
 		}
 		if !errors.As(err, &nf) {
 			storeErr = err
@@ -298,7 +365,11 @@ func (s *Service) revoke(ctx context.Context, lease *Lease, reason RevokeReason)
 			planeErr = &ErrDataPlaneUnavailable{Kind: lease.DataPlane, Cause: err}
 		}
 	}
-	s.releaseAddress(ctx, lease.Address)
+	if planeErr != nil {
+		s.owePeerRetry(lease.DataPlane, lease)
+	} else {
+		s.releaseAddress(ctx, lease.Address)
+	}
 	s.revocations.inc(string(reason))
 	s.logger.Info("vpn.revoke", slog.String("lease", string(lease.ID)), slog.String("device", lease.DeviceID), slog.String("reason", string(reason)))
 	return errors.Join(storeErr, planeErr)
@@ -310,6 +381,30 @@ func (s *Service) releaseAddress(ctx context.Context, addr netip.Prefix) {
 	}
 	if err := s.deps.IPAM.Release(ctx, addr.Addr()); err != nil {
 		s.logger.Warn("vpn address release failed", slog.String("address", addr.String()), slog.Any("error", err))
+	}
+}
+
+// markTearingDown records addr as held by a revocation in flight and returns
+// the function that clears the mark. s.mu is held only for the map updates.
+func (s *Service) markTearingDown(addr netip.Prefix) func() {
+	if !addr.IsValid() {
+		return func() {}
+	}
+	a := addr.Addr()
+	s.mu.Lock()
+	if s.tearingDown == nil {
+		s.tearingDown = map[netip.Addr]int{}
+	}
+	s.tearingDown[a]++
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		if s.tearingDown[a] <= 1 {
+			delete(s.tearingDown, a)
+		} else {
+			s.tearingDown[a]--
+		}
+		s.mu.Unlock()
 	}
 }
 
@@ -410,21 +505,23 @@ func (s *Service) posture(ctx context.Context, tenantID string, report *PostureR
 	}
 	input, err := postureInput(report, v)
 	if err != nil {
-		return &ErrPostureUnavailable{Cause: err}
+		return &ErrPostureUnavailable{TenantID: tenantID, Cause: err}
 	}
-	evaluator, policyName, err := s.postureFor(tenantID)
+	evaluator, lookupName, policyName, err := s.postureFor(tenantID)
 	if err != nil {
 		// A tenant policy that failed to compile refuses; it never falls
-		// back to the default.
-		return &ErrPostureUnavailable{Cause: err}
+		// back to the default. SetPosturePolicies keeps only a policy named
+		// s.cfg.PosturePolicy, so that is the policy that failed.
+		return &ErrPostureUnavailable{TenantID: tenantID, Name: s.cfg.PosturePolicy, Cause: err}
 	}
-	result, err := evaluator.Evaluate(ctx, policyName, input)
+	result, err := evaluator.Evaluate(ctx, lookupName, input)
 	if err != nil {
 		// Every engine failure is a refusal: no policy never means allow.
-		return &ErrPostureUnavailable{Cause: err}
+		return &ErrPostureUnavailable{TenantID: tenantID, Name: policyName, Cause: err}
 	}
 	if result == nil {
-		return &ErrPostureUnavailable{Cause: &opa.ErrEvaluationFailed{PolicyName: policyName, Reason: "no result"}}
+		return &ErrPostureUnavailable{TenantID: tenantID, Name: policyName,
+			Cause: &opa.ErrEvaluationFailed{PolicyName: policyName, Reason: "no result"}}
 	}
 	if len(result.Violations) > 0 || !result.Allowed {
 		names := make([]string, 0, len(result.Violations))
@@ -488,13 +585,26 @@ func (s *Service) allocationRequest(ctx context.Context, tenantID, deviceID stri
 	if err != nil {
 		return nil, &ErrPoolExhausted{Pool: s.cfg.Pool, Cause: err}
 	}
+	tags := []string{"vpn", "tenant:" + tenantID}
+	if owner := s.ownerTag(); owner != "" {
+		tags = append(tags, owner)
+	}
 	return &ipam.AllocationRequest{
 		PoolID:        pool.ID,
 		DeviceID:      deviceID,
 		Description:   "vpn lease",
-		Tags:          []string{"vpn", "tenant:" + tenantID},
+		Tags:          tags,
 		LeaseDuration: s.cfg.LeaseTTL,
 	}, nil
+}
+
+// ownerTag is the allocation tag that proves this gateway wrote an
+// allocation, or "" when the gateway has no cert-bound identity.
+func (s *Service) ownerTag() string {
+	if s.cfg.GatewayID == "" {
+		return ""
+	}
+	return "gateway:" + s.cfg.GatewayID
 }
 
 // zonesAllowed is exported for the daemon's authorization layer: the lease's
