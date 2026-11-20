@@ -4,10 +4,34 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useBMC } from "./use-bmc";
 
 /**
- * useBMC reads the BMC REST routes in the server's JSON shapes
- * (pkg/webservice/v1/bmc/types.go, pkg/bmc/types.go) and mounts an ISO
- * with the iso_url the handler requires (#1736).
+ * useBMC reads and drives one BMC profile through the SDK's
+ * PlatformClient.bmc (BMCService), never a direct fetch, so the SDK's base
+ * URL, auth interceptors and transport apply (#1675 F27). It reads each part
+ * in the server's JSON shapes (pkg/webservice/v1/bmc/types.go,
+ * pkg/bmc/types.go) and mounts an ISO with the iso_url the handler requires
+ * (#1736).
  */
+
+const bmc = {
+  getPowerStatus: vi.fn(),
+  getBootDevice: vi.fn(),
+  getVirtualMediaStatus: vi.fn(),
+  getSensors: vi.fn(),
+  getSystemInfo: vi.fn(),
+  getProvisionStatus: vi.fn(),
+  getWebCertificate: vi.fn(),
+  setBootDevice: vi.fn(),
+  mountISO: vi.fn(),
+  unmountISO: vi.fn(),
+  provision: vi.fn(),
+};
+
+// One stable client: a new object per render would re-run the hook's effects.
+const client = { bmc };
+
+vi.mock("trusted-platform-sdk", () => ({
+  usePlatformClient: () => client,
+}));
 
 /** The numeric device-profile ID the server routes take. */
 const PROFILE_ID = "1";
@@ -43,23 +67,24 @@ const PAYLOADS: Record<string, unknown> = {
   },
 };
 
-type FetchCall = { url: string; init?: RequestInit };
+const ok = (data: unknown) => ({ success: true, data });
 
 describe("useBMC", () => {
-  let calls: FetchCall[];
-
   beforeEach(() => {
-    calls = [];
+    bmc.getPowerStatus.mockResolvedValue(ok(PAYLOADS.power));
+    bmc.getBootDevice.mockResolvedValue(ok(PAYLOADS["boot-device"]));
+    bmc.getVirtualMediaStatus.mockResolvedValue(ok(PAYLOADS["virtual-media"]));
+    bmc.getSensors.mockResolvedValue(ok(PAYLOADS.sensors));
+    bmc.getSystemInfo.mockResolvedValue(ok(PAYLOADS["system-info"]));
+    bmc.getProvisionStatus.mockResolvedValue(ok(PAYLOADS.provision));
+    bmc.getWebCertificate.mockResolvedValue(ok(PAYLOADS.cert));
+    for (const write of [bmc.setBootDevice, bmc.mountISO, bmc.unmountISO, bmc.provision]) {
+      write.mockResolvedValue(ok({ success: true }));
+    }
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        calls.push({ url, init });
-        const op = url.split("/").pop() ?? "";
-        const payload = init?.method && init.method !== "GET" ? { success: true } : PAYLOADS[op];
-        return new Response(JSON.stringify({ success: true, payload }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+      vi.fn(() => {
+        throw new Error("the BMC hooks must not call fetch");
       })
     );
   });
@@ -67,9 +92,10 @@ describe("useBMC", () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    vi.clearAllMocks();
   });
 
-  it("reads every part in the server's shapes", async () => {
+  it("reads every part through client.bmc", async () => {
     const { result } = renderHook(() => useBMC(PROFILE_ID));
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.errors).toEqual({});
@@ -79,15 +105,39 @@ describe("useBMC", () => {
     expect(result.current.systemInfo?.product).toBe("PowerEdge R640");
     expect(result.current.provisionStatus?.status).toBe("installing");
     expect(result.current.certificate?.fingerprint).toBe("AA:BB:CC");
+    for (const read of [
+      bmc.getPowerStatus,
+      bmc.getBootDevice,
+      bmc.getVirtualMediaStatus,
+      bmc.getSensors,
+      bmc.getSystemInfo,
+      bmc.getProvisionStatus,
+      bmc.getWebCertificate,
+    ]) {
+      expect(read).toHaveBeenCalledWith("1");
+    }
+    expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("mountISO POSTs the iso_url", async () => {
+  it("mountISO calls client.bmc.mountISO with the iso_url", async () => {
     const { result } = renderHook(() => useBMC(PROFILE_ID));
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     await act(() => result.current.mountISO("installer.iso"));
-    const post = calls.find((c) => c.init?.method === "POST");
-    expect(post?.url).toBe("/api/v1/bmc/1/virtual-media");
-    expect(post?.init?.body).toBe('{"iso_url":"installer.iso"}');
+    expect(bmc.mountISO).toHaveBeenCalledWith("1", { iso_url: "installer.iso" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("a failed part is that part's error", async () => {
+    bmc.getProvisionStatus.mockResolvedValue({
+      success: false,
+      error: { code: "HTTP_503", message: "baremetal provisioning not configured", status: 503 },
+    });
+    const { result } = renderHook(() => useBMC(PROFILE_ID));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.errors.provisionStatus).toBe("baremetal provisioning not configured");
+    expect(result.current.provisionStatus).toBeNull();
+    expect(result.current.power?.state).toBe("On");
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("an older refresh that finishes last does not overwrite the state read after a mount", async () => {
@@ -95,33 +145,18 @@ describe("useBMC", () => {
     let release!: () => void;
     const held = new Promise<void>((r) => (release = r));
     let holdNext = false;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        const op = url.split("/").pop() ?? "";
-        const method = init?.method ?? "GET";
-        let payload: unknown;
-        if (method !== "GET") {
-          if (op === "virtual-media" && method === "POST") {
-            mounted = true;
-          }
-          payload = { success: true };
-        } else if (op === "virtual-media") {
-          const snapshot = { mounted, image_url: mounted ? "installer.iso" : undefined };
-          if (holdNext) {
-            holdNext = false;
-            await held;
-          }
-          payload = snapshot;
-        } else {
-          payload = PAYLOADS[op];
-        }
-        return new Response(JSON.stringify({ success: true, payload }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      })
-    );
+    bmc.mountISO.mockImplementation(async () => {
+      mounted = true;
+      return ok({ success: true });
+    });
+    bmc.getVirtualMediaStatus.mockImplementation(async () => {
+      const snapshot = { mounted, image_url: mounted ? "installer.iso" : undefined };
+      if (holdNext) {
+        holdNext = false;
+        await held;
+      }
+      return ok(snapshot);
+    });
 
     const { result } = renderHook(() => useBMC(PROFILE_ID));
     await waitFor(() => expect(result.current.isLoading).toBe(false));
@@ -142,5 +177,6 @@ describe("useBMC", () => {
     });
     expect(result.current.virtualMedia?.mounted).toBe(true);
     expect(result.current.virtualMedia?.image_url).toBe("installer.iso");
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
