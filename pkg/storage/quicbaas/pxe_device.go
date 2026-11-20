@@ -85,9 +85,19 @@ func (s *PXEDeviceStore) Delete(ctx context.Context, deviceID string) error {
 // List returns every stored device. A record that does not decode is logged
 // and skipped, so one bad record does not keep the backend from starting.
 func (s *PXEDeviceStore) List(ctx context.Context) ([]*pxe.DeviceInfo, error) {
+	// The pinned go-quicbaas v0.12.0-alpha embedded transport ignores the
+	// page token: it returns every record in one response but keeps the
+	// first batch's NextPageToken. So the walk stops on a token already
+	// sent or a page larger than the page size, and dedupes by ID.
 	var devices []*pxe.DeviceInfo
+	seenIDs := make(map[string]struct{})
+	sentTokens := make(map[string]struct{})
 	pageToken := ""
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("pxe device store: list: %w", err)
+		}
+		sentTokens[pageToken] = struct{}{}
 		page, next, err := s.storage.List(ctx, entityTypePXEDevice, pxeDeviceListPageSize, pageToken, s.shardID)
 		if err != nil {
 			return nil, fmt.Errorf("pxe device store: list: %w", err)
@@ -98,9 +108,16 @@ func (s *PXEDeviceStore) List(ctx context.Context) ([]*pxe.DeviceInfo, error) {
 				s.logger.Warn("Failed to decode PXE device", "id", entity.ID, "error", err)
 				continue
 			}
+			if _, dup := seenIDs[device.ID]; dup {
+				continue
+			}
+			seenIDs[device.ID] = struct{}{}
 			devices = append(devices, &device)
 		}
-		if next == "" {
+		if next == "" || uint64(len(page)) > pxeDeviceListPageSize {
+			return devices, nil
+		}
+		if _, sent := sentTokens[next]; sent {
 			return devices, nil
 		}
 		pageToken = next
