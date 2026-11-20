@@ -581,22 +581,22 @@ func authFactorPrincipal(r *http.Request) (restapi.AuthFactorPrincipal, bool) {
 }
 
 // authFactorAuthorization authenticates an auth-factor issuance request
-// through guard. Enrolling a user's factor is an IAM write, so the token
-// needs the iam scope for the request's method; the PEP then decides the
-// go-qrdb permission authfactor:enroll for the principal.
+// through guard. The token needs the authfactor:enroll scope (an iam:write
+// token alone is refused); the PEP then decides the go-qrdb permission
+// authfactor:enroll for the principal.
 func (s *RESTServer) authFactorAuthorization(guard *restapi.ScopeGuard) restScopeAuthorization {
 	return restScopeAuthorization{
 		guard:      guard,
 		respWriter: response.NewResponseWriter(logging.NewFromSlog(s.logger), nil),
-		routeScope: func(method, route string) (string, error) {
-			action, err := restScopeAction(iamScopeResource, nil, method, route)
-			if err != nil {
-				return "", err
-			}
-			return iamScopeResource + ":" + action, nil
+		routeScope: func(_, _ string) (string, error) {
+			return authFactorEnrollScope, nil
 		},
 	}
 }
+
+// authFactorEnrollScope is the token scope auth-factor issuance requires:
+// the same permission the PEP then decides for the principal.
+const authFactorEnrollScope = restapi.AuthFactorResource + ":" + restapi.AuthFactorEnrollAction
 
 // SetTPMHandlers mounts the physical TPM routes (/api/v1/tpm/...). Every
 // route runs on tpm, the daemon's TPM service, with the protobuf JSON request
