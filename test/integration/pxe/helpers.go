@@ -201,7 +201,9 @@ func ShortTestContext() (context.Context, context.CancelFunc) {
 // Default Test Options
 // =============================================================================
 
-// DefaultRegisterOptions returns default device registration options for tests.
+// DefaultRegisterOptions returns device registration options whose port is
+// not on any bridge, so only a call refused before registration may use it;
+// a registration that reaches the daemon uses RegisterOptionsOnBridge.
 func DefaultRegisterOptions(prefix string) RegisterDeviceOptions {
 	return RegisterDeviceOptions{
 		MACAddress: GenerateTestMAC(prefix),
@@ -226,6 +228,12 @@ func OVSTestPortName(prefix string) string {
 	return fmt.Sprintf("px%08x", h.Sum32())
 }
 
+// ovsVsctl runs ovs-vsctl with args and returns its combined output; tests
+// swap it to check the calls without OVS.
+var ovsVsctl = func(args ...string) ([]byte, error) {
+	return exec.Command("ovs-vsctl", args...).CombinedOutput()
+}
+
 // CreateTestOVSPort adds an internal OVS port named after prefix to the
 // integration bridge, removes it when the test ends, and returns its name.
 // Registration applies quarantine flows, whose OpenFlow port lookup refuses
@@ -234,14 +242,26 @@ func CreateTestOVSPort(t *testing.T, prefix string) string {
 	t.Helper()
 	bridge := getEnvOrDefault(EnvPXETestBridge, DefaultPXETestBridge)
 	port := OVSTestPortName(prefix)
-	if out, err := exec.Command("ovs-vsctl", "--may-exist", "add-port", bridge, port,
-		"--", "set", "interface", port, "type=internal").CombinedOutput(); err != nil {
+	if out, err := ovsVsctl("--may-exist", "add-port", bridge, port,
+		"--", "set", "interface", port, "type=internal"); err != nil {
 		t.Fatalf("Setup: ovs-vsctl add-port %s %s: %v: %s", bridge, port, err, out)
 	}
 	t.Cleanup(func() {
-		_ = exec.Command("ovs-vsctl", "--if-exists", "del-port", bridge, port).Run()
+		_, _ = ovsVsctl("--if-exists", "del-port", bridge, port)
 	})
 	return port
+}
+
+// RegisterOptionsOnBridge returns registration options whose port is a real
+// port of the integration bridge (CreateTestOVSPort): registration applies
+// quarantine flows, which refuse a port the bridge does not have. The port
+// is removed when t ends.
+func RegisterOptionsOnBridge(t *testing.T, prefix string) RegisterDeviceOptions {
+	t.Helper()
+	return RegisterDeviceOptions{
+		MACAddress: GenerateTestMAC(prefix),
+		PortID:     CreateTestOVSPort(t, prefix),
+	}
 }
 
 // =============================================================================

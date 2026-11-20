@@ -144,10 +144,9 @@ func testPXECLI(t *testing.T, ctx context.Context, cli *CLIAdapter, prefix strin
 
 	register := func(t *testing.T, name string, states ...string) (string, RegisterDeviceOptions) {
 		t.Helper()
-		opts := DefaultRegisterOptions(prefix + "-" + name)
 		// A real port on the daemon's bridge: registration applies
 		// quarantine flows, which refuse a port the bridge does not have.
-		opts.PortID = CreateTestOVSPort(t, prefix+"-"+name)
+		opts := RegisterOptionsOnBridge(t, prefix+"-"+name)
 		dev, err := seed.RegisterDevice(testCtx, opts)
 		require.NoError(t, err, "Setup: RegisterDevice")
 		t.Cleanup(func() { _ = CleanupDevice(testCtx, seed, dev.ID) })
@@ -297,7 +296,7 @@ func testDeviceRegister(t *testing.T, ctx context.Context, cmd PXECommands, pref
 	t.Run("RegisterDeviceWithDefaults", func(t *testing.T) {
 		opts := RegisterDeviceOptions{
 			MACAddress: GenerateTestMAC(prefix),
-			PortID:     GenerateTestPortID(prefix),
+			PortID:     CreateTestOVSPort(t, prefix),
 		}
 
 		result, err := cmd.RegisterDevice(testCtx, opts)
@@ -316,7 +315,7 @@ func testDeviceRegister(t *testing.T, ctx context.Context, cmd PXECommands, pref
 	t.Run("RegisterDeviceEmptyMACFails", func(t *testing.T) {
 		opts := RegisterDeviceOptions{
 			MACAddress: "",
-			PortID:     GenerateTestPortID(prefix),
+			PortID:     CreateTestOVSPort(t, prefix),
 		}
 
 		_, err := cmd.RegisterDevice(testCtx, opts)
@@ -329,7 +328,7 @@ func testDeviceGet(t *testing.T, ctx context.Context, cmd PXECommands, prefix st
 	defer cancel()
 
 	// Create a device first
-	regOpts := DefaultRegisterOptions(prefix + "-get")
+	regOpts := RegisterOptionsOnBridge(t, prefix+"-get")
 	registered, err := cmd.RegisterDevice(testCtx, regOpts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	defer CleanupDevice(testCtx, cmd, registered.ID)
@@ -355,7 +354,7 @@ func testDeviceGetByMAC(t *testing.T, ctx context.Context, cmd PXECommands, pref
 	defer cancel()
 
 	// Create a device first
-	regOpts := DefaultRegisterOptions(prefix + "-getmac")
+	regOpts := RegisterOptionsOnBridge(t, prefix+"-getmac")
 	registered, err := cmd.RegisterDevice(testCtx, regOpts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	defer CleanupDevice(testCtx, cmd, registered.ID)
@@ -388,7 +387,7 @@ func testDeviceList(t *testing.T, ctx context.Context, cmd PXECommands, prefix s
 	for i := 0; i < 3; i++ {
 		opts := RegisterDeviceOptions{
 			MACAddress: GenerateTestMAC(fmt.Sprintf("%s-list-%d", prefix, i)),
-			PortID:     GenerateTestPortID(fmt.Sprintf("%s-list-%d", prefix, i)),
+			PortID:     CreateTestOVSPort(t, fmt.Sprintf("%s-list-%d", prefix, i)),
 		}
 		result, err := cmd.RegisterDevice(testCtx, opts)
 		require.NoError(t, err, "Setup: RegisterDevice should succeed")
@@ -429,7 +428,7 @@ func testDeviceRemove(t *testing.T, ctx context.Context, cmd PXECommands, prefix
 	defer cancel()
 
 	// Create a device for removal
-	regOpts := DefaultRegisterOptions(prefix + "-remove")
+	regOpts := RegisterOptionsOnBridge(t, prefix+"-remove")
 	registered, err := cmd.RegisterDevice(testCtx, regOpts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 
@@ -461,7 +460,7 @@ func testStateUpdate(t *testing.T, ctx context.Context, cmd PXECommands, prefix 
 	defer cancel()
 
 	// Create a device for state updates
-	regOpts := DefaultRegisterOptions(prefix + "-state")
+	regOpts := RegisterOptionsOnBridge(t, prefix+"-state")
 	registered, err := cmd.RegisterDevice(testCtx, regOpts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	defer CleanupDevice(testCtx, cmd, registered.ID)
@@ -502,7 +501,7 @@ func testSetEnrolled(t *testing.T, ctx context.Context, cmd PXECommands, prefix 
 	defer cancel()
 
 	// Create a device and progress to enrolling state
-	regOpts := DefaultRegisterOptions(prefix + "-enrolled")
+	regOpts := RegisterOptionsOnBridge(t, prefix+"-enrolled")
 	registered, err := cmd.RegisterDevice(testCtx, regOpts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	defer CleanupDevice(testCtx, cmd, registered.ID)
@@ -532,7 +531,7 @@ func testAuthorize(t *testing.T, ctx context.Context, cmd PXECommands, prefix st
 	defer cancel()
 
 	// Create a device and progress to authorizing state
-	regOpts := DefaultRegisterOptions(prefix + "-authorize")
+	regOpts := RegisterOptionsOnBridge(t, prefix+"-authorize")
 	registered, err := cmd.RegisterDevice(testCtx, regOpts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	defer CleanupDevice(testCtx, cmd, registered.ID)
@@ -574,7 +573,7 @@ func testQuarantine(t *testing.T, ctx context.Context, cmd PXECommands, prefix s
 	defer cancel()
 
 	// Create a device for quarantine testing
-	regOpts := DefaultRegisterOptions(prefix + "-quarantine")
+	regOpts := RegisterOptionsOnBridge(t, prefix+"-quarantine")
 	registered, err := cmd.RegisterDevice(testCtx, regOpts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	defer CleanupDevice(testCtx, cmd, registered.ID)
@@ -602,7 +601,7 @@ func testRetry(t *testing.T, ctx context.Context, cmd PXECommands, prefix string
 	defer cancel()
 
 	// Create a device and move to failed state
-	regOpts := DefaultRegisterOptions(prefix + "-retry")
+	regOpts := RegisterOptionsOnBridge(t, prefix+"-retry")
 	registered, err := cmd.RegisterDevice(testCtx, regOpts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	defer CleanupDevice(testCtx, cmd, registered.ID)
@@ -640,7 +639,7 @@ func testGetEvents(t *testing.T, ctx context.Context, cmd PXECommands, prefix st
 	defer cancel()
 
 	// Create a device and perform some state transitions to generate events
-	regOpts := DefaultRegisterOptions(prefix + "-events")
+	regOpts := RegisterOptionsOnBridge(t, prefix+"-events")
 	registered, err := cmd.RegisterDevice(testCtx, regOpts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	defer CleanupDevice(testCtx, cmd, registered.ID)
@@ -696,7 +695,7 @@ func testInvalidMACAddress(t *testing.T, ctx context.Context, cmd PXECommands, p
 	t.Run("RegisterWithInvalidMAC", func(t *testing.T) {
 		opts := RegisterDeviceOptions{
 			MACAddress: "invalid-mac-address",
-			PortID:     GenerateTestPortID(prefix),
+			PortID:     CreateTestOVSPort(t, prefix),
 		}
 
 		_, err := cmd.RegisterDevice(testCtx, opts)
@@ -706,7 +705,7 @@ func testInvalidMACAddress(t *testing.T, ctx context.Context, cmd PXECommands, p
 	t.Run("RegisterWithMalformedMAC", func(t *testing.T) {
 		opts := RegisterDeviceOptions{
 			MACAddress: "12:34:56:78:90", // Missing octet
-			PortID:     GenerateTestPortID(prefix),
+			PortID:     CreateTestOVSPort(t, prefix),
 		}
 
 		_, err := cmd.RegisterDevice(testCtx, opts)
@@ -757,7 +756,7 @@ func testInvalidStateTransition(t *testing.T, ctx context.Context, cmd PXEComman
 	defer cancel()
 
 	// Create a device
-	regOpts := DefaultRegisterOptions(prefix + "-invalid-state")
+	regOpts := RegisterOptionsOnBridge(t, prefix+"-invalid-state")
 	registered, err := cmd.RegisterDevice(testCtx, regOpts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	defer CleanupDevice(testCtx, cmd, registered.ID)
@@ -792,7 +791,7 @@ func testDuplicateRegistration(t *testing.T, ctx context.Context, cmd PXECommand
 	defer cancel()
 
 	// Create a device
-	opts := DefaultRegisterOptions(prefix + "-duplicate")
+	opts := RegisterOptionsOnBridge(t, prefix+"-duplicate")
 	registered, err := cmd.RegisterDevice(testCtx, opts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	defer CleanupDevice(testCtx, cmd, registered.ID)
@@ -801,7 +800,7 @@ func testDuplicateRegistration(t *testing.T, ctx context.Context, cmd PXECommand
 		// Try to register the same MAC address again
 		duplicateOpts := RegisterDeviceOptions{
 			MACAddress: opts.MACAddress,
-			PortID:     GenerateTestPortID(prefix + "-duplicate2"),
+			PortID:     CreateTestOVSPort(t, prefix+"-duplicate2"),
 		}
 
 		_, err := cmd.RegisterDevice(testCtx, duplicateOpts)
