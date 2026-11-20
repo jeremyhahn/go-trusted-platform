@@ -152,10 +152,10 @@ func (m *ZoneFlowManager) ApplyZoneFlows(ctx context.Context, portID string, z z
 		complianceAttr(complianceAC4))
 
 	// Remove existing flows for this port before installing new ones.
+	// A failed delete fails the apply: the port's earlier allow rules
+	// could outrank the new zone's default drop (fail closed, #1694).
 	if err := m.flowController.DeleteFlowsByPort(m.bridgeName, portID); err != nil {
-		m.logger.Warn("failed to delete existing flows",
-			slog.String("port_id", portID),
-			slog.String("error", err.Error()))
+		return &WrappedError{Msg: "zone flow manager: delete existing flows", Err: err}
 	}
 
 	// Set VLAN tag via OVSDB.
@@ -310,10 +310,10 @@ func (m *ZoneFlowManager) ApplyPortClassFlows(ctx context.Context, portID string
 		slog.Uint64("native_vlan", uint64(pc.Native)),
 		complianceAttr(complianceAC4))
 
+	// A failed delete fails the apply: the port's earlier allow rules
+	// could outrank the new zone's default drop (fail closed, #1694).
 	if err := m.flowController.DeleteFlowsByPort(m.bridgeName, portID); err != nil {
-		m.logger.Warn("failed to delete existing flows",
-			slog.String("port_id", portID),
-			slog.String("error", err.Error()))
+		return &WrappedError{Msg: "zone flow manager: delete existing flows", Err: err}
 	}
 
 	if err := m.portController.SetPortTrunk(ctx, portID, pc.Allowed, pc.Native); err != nil {
