@@ -29,7 +29,8 @@ func (p *authFactorRoutePEP) Check(_ context.Context, _ *sdkiam.CheckRequest) (*
 // authFactorRouteCallers are the platform-token callers the auth-factor
 // route tests authenticate as.
 var authFactorRouteCallers = iamRESTTokens{
-	"factor-admin": {Subject: "factor-admin", TenantID: iamRESTTenantA, Scopes: []string{"iam:read", "iam:write", "iam:delete"}},
+	"factor-admin": {Subject: "factor-admin", TenantID: iamRESTTenantA, Scopes: []string{"authfactor:enroll"}},
+	"iam-writer":   {Subject: "iam-writer", TenantID: iamRESTTenantA, Scopes: []string{"iam:read", "iam:write", "iam:delete"}},
 }
 
 // authFactorRouteServer builds a daemon REST server whose auth-factor routes
@@ -79,4 +80,14 @@ func TestAuthFactorRoute_NoCredentialIsUnauthorized(t *testing.T) {
 	s := authFactorRouteServer(t, pep)
 	assert.Equal(t, http.StatusUnauthorized, issueCertThroughRouter(s, ""))
 	assert.False(t, pep.asked)
+}
+
+// TestAuthFactorRoute_IAMWriteScopeWithoutEnrollIsForbidden pins the scope
+// layer: issuance needs the authfactor:enroll scope, and an iam:write token
+// is refused before the PEP is asked (#2079 Codex round 1).
+func TestAuthFactorRoute_IAMWriteScopeWithoutEnrollIsForbidden(t *testing.T) {
+	pep := &authFactorRoutePEP{allow: true}
+	s := authFactorRouteServer(t, pep)
+	assert.Equal(t, http.StatusForbidden, issueCertThroughRouter(s, "iam-writer"))
+	assert.False(t, pep.asked, "a token without authfactor:enroll never reaches the PEP")
 }
