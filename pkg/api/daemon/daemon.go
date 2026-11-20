@@ -308,6 +308,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if err := config.validateGRPCAuthorization(); err != nil {
 		return nil, err
 	}
+	if err := config.validateQUICAuthorization(); err != nil {
+		return nil, err
+	}
 
 	// Set up logger
 	logger := config.Logger
@@ -1141,7 +1144,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if poolErr != nil {
 			return nil, poolErr
 		}
-		quicAuthMiddleware, quicLocalValidator, quicAuthErr := selectQUICAuth(config, platformTokenValidatorShared, quicClientCAPool, logger)
+		quicAuthMiddleware, quicLocalValidator, quicAuthErr := selectQUICAuth(config, platformTokenValidatorShared, iamPEP, quicClientCAPool, logger)
 		if quicAuthErr != nil {
 			return nil, quicAuthErr
 		}
@@ -1498,6 +1501,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 		daemon.concreteRestServer.SetVPNHandlers(vpnGRPCService, restGuard)
 		daemon.concreteRestServer.SetAppServiceHandlers(appServices.restServers(), restGuard)
+		if err := daemon.concreteRestServer.SetServiceControlHandlers(restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
 		if computeService != nil {
 			daemon.concreteRestServer.SetComputeHandlers(computeService, restGuard)
 		}
@@ -2238,6 +2246,7 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 			mcpConfig.AuthorizationService = authAdapter
 			mcpConfig.AuthManager = authAdapter
 			d.logger.Info("MCP server configured with QuicBaaS authorization")
+			d.logger.Warn("MCP uses the legacy QuicBaaS adapter: bearer tokens are refused on this path because the QuicBaaS validator returns no tenant; certificate auth still works")
 		} else {
 			// Fail closed (#440). With no backend AuthorizeTool refuses every
 			// tool that requires a permission, so a server started here would

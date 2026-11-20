@@ -2050,8 +2050,8 @@ func TestTenantUserService_IssueToken_Success(t *testing.T) {
 	mockTokenIssuer.AssertExpectations(t)
 }
 
-// TestTenantUserService_IssueToken_WithTenantOwnerRole verifies tenant_owner role
-// is added for owners
+// TestTenantUserService_IssueToken_WithTenantOwnerRole verifies an owner's token
+// carries only its bound roles: no synthesized tenant_owner role (SPEC row 114)
 func TestTenantUserService_IssueToken_WithTenantOwnerRole(t *testing.T) {
 	logger := newTestLogger()
 	mockUserService := new(MockUserServicer)
@@ -2078,8 +2078,9 @@ func TestTenantUserService_IssueToken_WithTenantOwnerRole(t *testing.T) {
 	}
 
 	expectedToken := "jwt-token-owner"
-	// Should include both admin and tenant_owner
-	mockTokenIssuer.On("IssueToken", ctx, user.ID, user.TenantID, []string{"admin", "tenant_owner"}).Return(expectedToken, nil)
+	// Roles come from IAM bindings only: no synthesized tenant_owner role.
+	// The owner flag the is_tenant_owner claim derives from is kept.
+	mockTokenIssuer.On("IssueToken", ctx, user.ID, user.TenantID, []string{"admin"}).Return(expectedToken, nil)
 
 	// Execute
 	token, err := service.IssueToken(ctx, user)
@@ -2087,6 +2088,11 @@ func TestTenantUserService_IssueToken_WithTenantOwnerRole(t *testing.T) {
 	// Verify
 	require.NoError(t, err)
 	assert.Equal(t, expectedToken, token)
+	assert.True(t, user.IsTenantOwner, "is_tenant_owner source flag must stay set")
+	for _, call := range mockTokenIssuer.Calls {
+		roles, _ := call.Arguments.Get(3).([]string)
+		assert.NotContains(t, roles, "tenant_owner")
+	}
 
 	mockTokenIssuer.AssertExpectations(t)
 }
@@ -2228,8 +2234,8 @@ func TestTenantUserService_IssueToken_MultipleRoles(t *testing.T) {
 	}
 
 	expectedToken := "jwt-token-multi-role"
-	// All roles including tenant_owner for owner
-	expectedRoles := []string{"admin", "developer", "auditor", "tenant_owner"}
+	// Bound roles only; ownership is not a synthesized role
+	expectedRoles := []string{"admin", "developer", "auditor"}
 	mockTokenIssuer.On("IssueToken", ctx, user.ID, user.TenantID, expectedRoles).Return(expectedToken, nil)
 
 	// Execute

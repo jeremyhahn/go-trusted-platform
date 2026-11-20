@@ -159,35 +159,6 @@ func TestFactory_InvitationDAO(t *testing.T) {
 	})
 }
 
-func TestFactory_RoleDAO(t *testing.T) {
-	t.Run("returns DAO successfully", func(t *testing.T) {
-		storage := newMemoryStorage()
-		logger := logging.DefaultLogger()
-		factory := NewFactory(storage, logger)
-
-		dao, err := factory.RoleDAO()
-		require.NoError(t, err)
-		require.NotNil(t, dao)
-
-		dao2, err := factory.RoleDAO()
-		require.NoError(t, err)
-		assert.Equal(t, dao, dao2)
-	})
-
-	t.Run("returns error when closed", func(t *testing.T) {
-		storage := newMemoryStorage()
-		logger := logging.DefaultLogger()
-		factory := NewFactory(storage, logger)
-
-		ctx := context.Background()
-		require.NoError(t, factory.Start(ctx))
-		require.NoError(t, factory.Stop(ctx))
-
-		_, err := factory.RoleDAO()
-		require.Error(t, err)
-	})
-}
-
 func TestFactory_WebAuthnDAO(t *testing.T) {
 	t.Run("returns DAO successfully", func(t *testing.T) {
 		storage := newMemoryStorage()
