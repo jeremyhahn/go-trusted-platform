@@ -114,12 +114,16 @@ export class InvitationService extends BaseService {
   /**
    * Revoke an invitation
    *
+   * Marks the invitation revoked (POST /api/v1/invitations/{id}/revoke).
+   * It does not delete the invitation: the record and its history stay.
+   *
    * @param id - Invitation ID
    * @returns Revocation result
    */
   async revoke(id: string): Promise<ApiResponse<RevokeInvitationResponse>> {
-    return this.client.delete<RevokeInvitationResponse>(
-      this.buildUrl(`/${this.encodePathSegment(id)}`)
+    return this.client.post<RevokeInvitationResponse>(
+      this.buildUrl(`/${this.encodePathSegment(id)}/revoke`),
+      {}
     );
   }
 
