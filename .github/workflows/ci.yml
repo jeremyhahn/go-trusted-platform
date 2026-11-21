@@ -445,7 +445,9 @@ jobs:
           # not 200.
           # v1.50: a list short of its total_count is a lower bound, kept in
           # SHORT (the API's listing lags total_count while runs move); the
-          # counts it gives are never over, so it may still overflow.
+          # counts it gives are never over, so it may still overflow. A
+          # total_count over 1000 is past what the API lists, so no lower bound:
+          # the hosted default, as before.
           SHORT=""
           pages() {
             local p=1 got=0 total n
@@ -453,6 +455,7 @@ jobs:
             while :; do
               get "$1&per_page=100&page=$p" "$RUNNER_TEMP/sel-page.json" || { WHY="$1: $CODE"; return 1; }
               total=$(jq -er '.total_count | numbers' "$RUNNER_TEMP/sel-page.json") || { WHY="$1: 200 with no total_count"; return 1; }
+              [ "$total" -le 1000 ] || { WHY="$1: total_count $total, over the 1000 entries the API lists"; return 1; }
               n=$(jq -er --arg k "$2" '.[$k] | arrays | length' "$RUNNER_TEMP/sel-page.json") || { WHY="$1: 200 with no $2 list"; return 1; }
               jq -c --arg k "$2" '.[$k][]' "$RUNNER_TEMP/sel-page.json" >> "$3"
               got=$((got + n))
