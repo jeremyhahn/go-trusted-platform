@@ -44,6 +44,7 @@ func TestSDNService_ApplyPolicy_GeneratedIDsAreUnique(t *testing.T) {
 		return &platformv1.PolicyConfig{
 			Name:     name,
 			Priority: 100,
+			Enabled:  true,
 			Rules: []*platformv1.PolicyRule{
 				{RuleId: "r1", Priority: 100, Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_ALLOW},
 			},
