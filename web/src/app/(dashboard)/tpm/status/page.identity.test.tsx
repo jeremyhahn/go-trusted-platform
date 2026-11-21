@@ -1,7 +1,7 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ok, refused, stubControlPlane, withControlPlane } from "@/test/control-plane-fetch";
+import { type Answer, ok, refused, stubControlPlane, withControlPlane } from "@/test/control-plane-fetch";
 import TPMStatusPage from "./page";
 
 // #2055: the TPM status page asks the IDevID service directly whether the
@@ -53,6 +53,50 @@ describe("TPMStatusPage identity keys and device attributes", () => {
 
     expect(await screen.findByText("IDevID Unknown")).toBeTruthy();
     expect(screen.queryByText("No IDevID")).toBeNull();
+  });
+
+  // #2170 Codex: useApi keeps the last data when a fetch fails, so a refused
+  // refresh must not leave the earlier answer on screen as if it were current.
+  it("a failed HasIDevID refresh shows IDevID Unknown, not the old Present", async () => {
+    const routes: Record<string, Answer> = {
+      "GET /api/v1/tpm/info": ok(tpmInfo),
+      "GET /api/v1/idevid/exists": ok({ exists: true }),
+      "GET /api/v1/idevid/iak/exists": ok({ exists: true }),
+    };
+    stubControlPlane(routes);
+
+    render(withControlPlane(<TPMStatusPage />));
+
+    expect(await screen.findByText("IDevID Present")).toBeTruthy();
+    expect(await screen.findByText("IAK Present")).toBeTruthy();
+
+    routes["GET /api/v1/idevid/exists"] = refused(403, "permission denied");
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(await screen.findByText("IDevID Unknown")).toBeTruthy();
+    expect(screen.queryByText("IDevID Present")).toBeNull();
+    expect(screen.getByText("IAK Present")).toBeTruthy();
+  });
+
+  it("a failed HasIAK refresh shows IAK Unknown, not the old No IAK", async () => {
+    const routes: Record<string, Answer> = {
+      "GET /api/v1/tpm/info": ok(tpmInfo),
+      "GET /api/v1/idevid/exists": ok({ exists: true }),
+      "GET /api/v1/idevid/iak/exists": ok({ exists: false }),
+    };
+    stubControlPlane(routes);
+
+    render(withControlPlane(<TPMStatusPage />));
+
+    expect(await screen.findByText("No IAK")).toBeTruthy();
+    expect(await screen.findByText("IDevID Present")).toBeTruthy();
+
+    routes["GET /api/v1/idevid/iak/exists"] = refused(403, "permission denied");
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(await screen.findByText("IAK Unknown")).toBeTruthy();
+    expect(screen.queryByText("No IAK")).toBeNull();
+    expect(screen.getByText("IDevID Present")).toBeTruthy();
   });
 
   it("shows the TCG device attributes", async () => {
