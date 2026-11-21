@@ -25,6 +25,12 @@ harness this copies. Nothing reaches the network.
      progress fails the unrelated-label run's gate (exit 3, naming the
      twin); once that re-review approves, the gate passes; once it
      requests changes, the gate fails.
+  C. A CANCELLED REVIEW IS NO REVIEW (Codex's P1 on go-trusted-platform
+     #2227 at c6c70f34): scope success, this run's re-review cancelled, an
+     earlier approval of the head standing, and no twin left (the shape of
+     the handoff's re-run of that run's red gate): the gate fails closed
+     (exit 3). A failed review still fails; a skipped or successful review
+     with the approval still passes.
 
 Run: python3 -I software/templates/github-actions/testdata/code-review-v51212-tests.py [workflow]
 """
@@ -216,7 +222,7 @@ def gate_routes(reviews, twin_status=None, twin_where="in_progress"):
     ]
 
 
-def run_gate(script, rts, no_review, docs):
+def run_gate(script, rts, no_review, docs, review_result="skipped"):
     with tempfile.TemporaryDirectory() as d:
         tmp = pathlib.Path(d)
         bin_dir = tmp / "bin"
@@ -233,7 +239,7 @@ def run_gate(script, rts, no_review, docs):
                "EVENT_SHA": HEAD, "BASE_SHA": BASE, "BASE_REF": "main", "GITHUB_RUN_ID": "77",
                "GH_API_TOKEN": "<REDACTED>",
                "NO_REVIEW_PATHS": no_review, "DOCS_PATHS": docs,
-               "SCOPE_SKIP": "false", "SCOPE_RESULT": "success", "REVIEW_RESULT": "skipped"}
+               "SCOPE_SKIP": "false", "SCOPE_RESULT": "success", "REVIEW_RESULT": review_result}
         out = subprocess.run(["bash", "-c", script], cwd=tmp, env=env,
                              capture_output=True, text=True, check=False, timeout=60)
         return out.returncode, out.stdout + out.stderr
@@ -329,6 +335,20 @@ def main():
     check(rc == 3 and "requested changes" in out, f"W3 after the re-review requests changes: the gate fails (got {rc})")
     rc, out = run_gate(gscript, gate_routes(["APPROVED"]), no_review, docs)
     check(rc == 0, f"W4 no twin, approved head: passes as before (got {rc})")
+
+    # C: a cancelled re-review never reuses an earlier approval.
+    rc, out = run_gate(gscript, gate_routes(["APPROVED"]), no_review, docs, "cancelled")
+    check(rc == 3 and "was cancelled" in out and "v5.12.12" in out,
+          f"C1 scope success, re-review cancelled, approval standing, handoff re-run: fails closed (got {rc})")
+    rc, out = run_gate(gscript, gate_routes(["APPROVED"]), no_review, docs, "failure")
+    check(rc == 3 and "job failed" in out, f"C2 a failed review still fails over an approval (got {rc})")
+    rc, out = run_gate(gscript, gate_routes(["APPROVED"]), no_review, docs, "success")
+    check(rc == 0 and "approved" in out, f"C3 a successful review with the approval passes (got {rc})")
+    rc, out = run_gate(gscript, gate_routes(["APPROVED"]), no_review, docs, "skipped")
+    check(rc == 0, f"C4 no review asked (skipped) with the approval passes as before (got {rc})")
+    hand = step(gate, "Re-run a newer twin's failed gate on this head")
+    check('.conclusion == "failure" or .conclusion == "cancelled"' in hand,
+          "C5 the handoff still re-runs a cancelled run's red gate, which now fails closed (C1)")
 
     # R: ruling 1087 (3), a pushed fix is a new round by right.
     block = round_block(src)

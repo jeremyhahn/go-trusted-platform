@@ -29,6 +29,13 @@
 #                             on a `needs-coordinator` PR after the two-round
 #                             stop (v5.9.8, Tenant Agent m2185); default 3
 #
+# v5.12.12 also (Codex's P1 on go-trusted-platform #2227 at c6c70f34): A
+# CANCELLED REVIEW IS NO REVIEW. The gate rejected an earlier approval only
+# when this run's review job failed; a cancelled re-review kept
+# REVIEW_RESULT=cancelled, the handoff re-ran its red gate, and that gate
+# reused the earlier approval, so auto-merge landed the head without the
+# requested review. The gate now fails closed on a cancelled review job as
+# on a failed one. testdata/code-review-v51212-tests.py part C.
 # v5.12.12 also (Tenant Agent on trusted-firmware #821): the Review scope
 # job, API-only, takes the Dells' bigdisk pool on github.com for a
 # same-repository head (a fork's head keeps ubuntu-latest), so a review no
@@ -4069,8 +4076,18 @@ jobs:
           # owner or round-limit stop): its outcome stands over an earlier
           # approval. The live PR's labels, read after the twin read: a hold
           # keeps even an approval of the head from passing.
-          [ "$REVIEW_RESULT" != failure ] ||
-            fail "this run's Codex review job failed, so no earlier approval of $EVENT_SHA is reused (v5.12.1)"
+          # v5.12.12 (Codex's P1 on go-trusted-platform #2227): a review job
+          # that was CANCELLED is no review either. A requested re-review
+          # cancelled mid-round (a newer run's group, a runner loss) left
+          # REVIEW_RESULT=cancelled, and the handoff (v5.12.7) re-runs a
+          # cancelled run's red gate, which kept its needs: the old check
+          # rejected only failure, so that re-run reused the earlier approval
+          # and unblocked auto-merge without the requested review. skipped
+          # (no review asked by this event) still reads the standing verdict.
+          case "$REVIEW_RESULT" in
+            failure) fail "this run's Codex review job failed, so no earlier approval of $EVENT_SHA is reused (v5.12.1)" ;;
+            cancelled) fail "this run's Codex review job was cancelled, so no earlier approval of $EVENT_SHA is reused (v5.12.12)" ;;
+          esac
           # v5.12.2: a scope job that failed or was cancelled ran no review.
           case "$SCOPE_RESULT" in
             failure|cancelled) fail "this run's scope job ended $SCOPE_RESULT, so no review ran and no earlier approval of $EVENT_SHA is reused (v5.12.2)" ;;
