@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"testing"
@@ -349,9 +350,10 @@ func TestTPMSealNV_SealDomainSendsTheWrapperDefaults(t *testing.T) {
 		"platform_tpm_seal": map[string]interface{}{"sealed_data": base64.StdEncoding.EncodeToString([]byte("blob"))},
 	}, &calls)
 
-	// An empty PCRBank goes out as SHA256 and the CLI sends the SRK handle.
+	// An empty PCRBank goes out as SHA256 and the parent handle stays unset:
+	// the server seals under its configured SSRK.
 	resp, err := client.SealDomain(context.Background(), &tpmsvc.SealRequest{
-		CN: "disk-key", Data: []byte("secret"), Password: "pw", ParentHandle: 0x81000001, PCRIndices: []uint32{0, 7},
+		CN: "disk-key", Data: []byte("secret"), Password: "pw", PCRIndices: []uint32{0, 7},
 	})
 	if err != nil {
 		t.Fatalf("SealDomain: %v", err)
@@ -380,7 +382,7 @@ func TestTPMSealNV_UnsealDomainSendsTheWrapperDefaults(t *testing.T) {
 	}, &calls)
 
 	resp, err := client.UnsealDomain(context.Background(), &tpmsvc.UnsealRequest{
-		CN: "disk-key", Password: "pw", ParentHandle: 0x81000001,
+		CN: "disk-key", Password: "pw",
 	})
 	if err != nil {
 		t.Fatalf("UnsealDomain: %v", err)
@@ -403,9 +405,9 @@ func TestTPMSealNV_SealAndUnsealRefuseOtherParentChoices(t *testing.T) {
 		pw     string
 		bank   platformv1.PCRBank
 	}{
-		"another bank":    {handle: 0x81000001, bank: platformv1.PCRBank_PCR_BANK_SHA384},
+		"another bank":    {handle: 0, bank: platformv1.PCRBank_PCR_BANK_SHA384},
 		"another handle":  {handle: 0x81000002, bank: platformv1.PCRBank_PCR_BANK_SHA256},
-		"parent password": {handle: 0x81000001, pw: "p", bank: platformv1.PCRBank_PCR_BANK_SHA256},
+		"parent password": {handle: 0, pw: "p", bank: platformv1.PCRBank_PCR_BANK_SHA256},
 	}
 	for name, tc := range cases {
 		t.Run("seal "+name, func(t *testing.T) {
@@ -429,6 +431,42 @@ func TestTPMSealNV_SealAndUnsealRefuseOtherParentChoices(t *testing.T) {
 				&platformv1.UnsealResponse{})
 			if status.Code(err) != codes.InvalidArgument {
 				t.Errorf("Invoke code = %v, want InvalidArgument", status.Code(err))
+			}
+			if len(calls) != 0 {
+				t.Errorf("calls = %v, want no tool call", calls)
+			}
+		})
+	}
+}
+
+// TestTPMSealNV_SealAndUnsealRefuseEveryExplicitParentHandle pins that an
+// explicit parent handle is refused even when it names the default SRK
+// handle: the server seals under its configured SSRK, whose handle may be
+// another one, and the transport cannot verify it.
+func TestTPMSealNV_SealAndUnsealRefuseEveryExplicitParentHandle(t *testing.T) {
+	for _, handle := range []uint32{0x81000001, 0x81000002} {
+		name := fmt.Sprintf("0x%08x", handle)
+		t.Run("seal "+name, func(t *testing.T) {
+			var calls []toolCall
+			adapter := provisioningTestServer(t, map[string]interface{}{}, &calls)
+			err := adapter.Connection().Invoke(context.Background(), platformv1.TPMService_Seal_FullMethodName,
+				&platformv1.SealRequest{Data: []byte("secret"), ParentHandle: handle, PcrBank: platformv1.PCRBank_PCR_BANK_SHA256},
+				&platformv1.SealResponse{})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Errorf("Seal parent handle %s: Invoke code = %v, want InvalidArgument", name, status.Code(err))
+			}
+			if len(calls) != 0 {
+				t.Errorf("calls = %v, want no tool call", calls)
+			}
+		})
+		t.Run("unseal "+name, func(t *testing.T) {
+			var calls []toolCall
+			adapter := provisioningTestServer(t, map[string]interface{}{}, &calls)
+			err := adapter.Connection().Invoke(context.Background(), platformv1.TPMService_Unseal_FullMethodName,
+				&platformv1.UnsealRequest{Cn: "k", ParentHandle: handle, PcrBank: platformv1.PCRBank_PCR_BANK_SHA256},
+				&platformv1.UnsealResponse{})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Errorf("Unseal parent handle %s: Invoke code = %v, want InvalidArgument", name, status.Code(err))
 			}
 			if len(calls) != 0 {
 				t.Errorf("calls = %v, want no tool call", calls)
