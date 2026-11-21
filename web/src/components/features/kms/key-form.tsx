@@ -39,10 +39,16 @@ export function KeyForm({ onSubmit, loading = false }: KeyFormProps) {
 
   const [metadataKey, setMetadataKey] = React.useState("");
   const [metadataValue, setMetadataValue] = React.useState("");
+  const [error, setError] = React.useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await onSubmit(formData);
+    setError(null);
+    try {
+      await onSubmit(formData);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to generate key");
+    }
   };
 
   const handleChange = (field: keyof GenerateKeyInput, value: string) => {
@@ -195,6 +201,8 @@ export function KeyForm({ onSubmit, loading = false }: KeyFormProps) {
               </div>
             )}
           </div>
+
+          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
 
           {/* Submit Button */}
           <div className="flex justify-end gap-2">
