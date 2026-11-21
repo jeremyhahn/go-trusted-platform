@@ -239,6 +239,7 @@ export type {
   AttestationQuoteConfig,
   AttestationPCRValue,
   AttestationPCRValueWire,
+  VMAttestationWire,
   HostAttestation,
   VMAttestation,
   ContainerAttestation,
