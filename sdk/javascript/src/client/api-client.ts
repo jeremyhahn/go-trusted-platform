@@ -85,8 +85,13 @@ const IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
  * the caller's statement that the server dedupes the request, so a resend is safe.
  */
 function hasIdempotencyKey(sentHeaders: Headers | undefined): boolean {
+  return idempotencyKeyOf(sentHeaders) !== undefined;
+}
+
+/** The non-blank Idempotency-Key a request sent, if any. */
+function idempotencyKeyOf(sentHeaders: Headers | undefined): string | undefined {
   const key = sentHeaders?.get(IDEMPOTENCY_KEY_HEADER);
-  return typeof key === 'string' && key.trim() !== '';
+  return typeof key === 'string' && key.trim() !== '' ? key : undefined;
 }
 
 /**
@@ -376,6 +381,8 @@ export class ApiClient implements Transport {
     const startTime = Date.now();
 
     let attempt = 0;
+    // The Idempotency-Key the first attempt sent, reused on every resend.
+    let idempotencyKey: string | undefined;
 
     for (;;) {
       const context: RequestContext = {
@@ -388,13 +395,22 @@ export class ApiClient implements Transport {
       };
 
       try {
-        const response = await this.executeRequest<T>(method, url, body, options, context, startTime);
+        const response = await this.executeRequest<T>(
+          method,
+          url,
+          body,
+          options,
+          context,
+          startTime,
+          idempotencyKey
+        );
 
         // If response is an error and retryable, throw to trigger retry logic
         if (!response.success && response.error !== undefined) {
           const apiError = ApiError.fromResponse(response.error,
             (response as ApiResponse<T> & { _status?: number })._status);
 
+          idempotencyKey ??= idempotencyKeyOf(context.sentHeaders);
           if (this.shouldRetry(attempt, apiError, options, method, context)) {
             const delay = this.calculateBackoffDelay(attempt);
             await this.wait(delay);
@@ -416,6 +432,7 @@ export class ApiClient implements Transport {
         const processedError = await this.applyErrorInterceptors(err, context);
 
         // Check if we should retry
+        idempotencyKey ??= idempotencyKeyOf(context.sentHeaders);
         if (this.shouldRetry(attempt, processedError, options, method, context)) {
           const delay = this.calculateBackoffDelay(attempt);
           await this.wait(delay);
@@ -462,7 +479,8 @@ export class ApiClient implements Transport {
     body: RequestBody | undefined,
     options: RequestOptions | undefined,
     context: RequestContext,
-    startTime: number
+    startTime: number,
+    idempotencyKey?: string
   ): Promise<ApiResponse<T>> {
     // Build request config
     const headers: Record<string, string> = mergeHeaders(this.config.headers, options?.headers);
@@ -490,6 +508,13 @@ export class ApiClient implements Transport {
 
     // Apply request interceptors
     requestInit = await this.applyRequestInterceptors(requestInit, context);
+    // A resend carries the key the first attempt sent, so an interceptor that
+    // mints a key per call cannot make the server run the mutation twice.
+    if (idempotencyKey !== undefined) {
+      const h = new Headers(requestInit.headers);
+      h.set(IDEMPOTENCY_KEY_HEADER, idempotencyKey);
+      requestInit.headers = h;
+    }
     // The retry policy decides on the headers actually sent, interceptors included.
     context.sentHeaders = new Headers(requestInit.headers);
 

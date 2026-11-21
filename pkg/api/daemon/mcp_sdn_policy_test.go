@@ -43,7 +43,10 @@ const webPolicyBody = `{"name": "web", "type": "firewall", "priority": 200, "ena
 	"targets": [{"type": "bridge", "id": "br0"}]}`
 
 func newPolicySDNService() *SDNService {
-	return newTestSDNService(NewConfigurableMockOVSClient())
+	svc := newTestSDNService(NewConfigurableMockOVSClient())
+	// webPolicyBody targets br0: ApplyPolicy refuses a bridge it cannot resolve.
+	svc.bridges["br0"] = &bridgeResource{id: "br0-uuid", name: "br0"}
+	return svc
 }
 
 // applyWebPolicy stores webPolicyBody through the shared service and returns

@@ -48,7 +48,21 @@ import type {
   GenerateDataKeyResponse,
   GenerateWrappedDataKeyResponse,
   BackendStatusResponse,
+  HashAlgorithm,
 } from '../types/kms.js';
+
+/**
+ * The REST handlers map only these hash choices and turn every other value
+ * into SHA256 (handlers.go parseHashAlgorithm), so a SHA1 or SHA3 choice
+ * would be silently replaced: refuse it before sending.
+ */
+const HANDLED_HASHES: ReadonlySet<string> = new Set(['', 'UNSPECIFIED', 'SHA256', 'SHA384', 'SHA512']);
+
+function assertHandledHash(op: string, hash: HashAlgorithm | undefined): void {
+  if (hash !== undefined && !HANDLED_HASHES.has(hash)) {
+    throw new RangeError(`${op}: hash ${hash} is not supported by the daemon (SHA256, SHA384 or SHA512)`);
+  }
+}
 
 /**
  * Builds a REST wire body, leaving out fields that are undefined so the
@@ -271,6 +285,7 @@ export class KMSService extends BaseService {
    * @returns Signature
    */
   async sign(request: SignRequest): Promise<ApiResponse<SignResponse>> {
+    assertHandledHash('sign', request.hashAlgorithm);
     // The REST Sign handler never reads a version and always signs with the
     // current key, so a selected older version would be silently ignored:
     // refuse it before sending.
@@ -290,19 +305,28 @@ export class KMSService extends BaseService {
   }
 
   /**
-   * Verify a signature: POST /v1/kms/verify/{name} with { data, signature, hash, version }
+   * Verify a signature: POST /v1/kms/verify/{name} with { data, signature, hash }.
+   * The daemon always verifies with the current key, so a nonzero keyVersion is refused.
    *
    * @param request - Verification request
    * @returns Verification result
    */
   async verify(request: VerifyRequest): Promise<ApiResponse<VerifyResponse>> {
+    assertHandledHash('verify', request.hashAlgorithm);
+    // The REST Verify handler never forwards a version, and the crypto client
+    // it calls has no version field: a selected older version would be
+    // silently checked against the current key, so refuse it before sending.
+    if (request.keyVersion) {
+      throw new RangeError(
+        'verify key version selection is not supported: the daemon always verifies with the current key'
+      );
+    }
     return this.client.post<VerifyResponse>(
       this.buildUrl(`/verify/${this.encodePathSegment(request.keyId)}`),
       wireBody({
         data: request.message,
         signature: request.signature,
         hash: request.hashAlgorithm,
-        version: request.keyVersion,
       })
     );
   }
@@ -314,6 +338,7 @@ export class KMSService extends BaseService {
    * @returns Hash value
    */
   async hash(request: HashRequest): Promise<ApiResponse<HashResponse>> {
+    assertHandledHash('hash', request.algorithm);
     return this.client.post<HashResponse>(this.buildUrl('/hash'), { data: request.data, hash: request.algorithm });
   }
 
@@ -324,6 +349,7 @@ export class KMSService extends BaseService {
    * @returns HMAC value
    */
   async hmac(request: HMACRequest): Promise<ApiResponse<HMACResponse>> {
+    assertHandledHash('hmac', request.hashAlgorithm);
     return this.client.post<HMACResponse>(
       this.buildUrl(`/hmac/${this.encodePathSegment(request.keyId)}`),
       wireBody({ data: request.message, hash: request.hashAlgorithm })
@@ -337,6 +363,7 @@ export class KMSService extends BaseService {
    * @returns Verification result
    */
   async verifyHMAC(request: VerifyHMACRequest): Promise<ApiResponse<VerifyHMACResponse>> {
+    assertHandledHash('verifyHMAC', request.hashAlgorithm);
     return this.client.post<VerifyHMACResponse>(
       this.buildUrl(`/hmac/${this.encodePathSegment(request.keyId)}/verify`),
       wireBody({ data: request.message, hmac: request.hmac, hash: request.hashAlgorithm })
