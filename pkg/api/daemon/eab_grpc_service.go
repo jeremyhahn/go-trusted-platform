@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"encoding/base64"
+	"strings"
 	"time"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
@@ -148,10 +149,16 @@ func eabCallerFromContext(ctx context.Context) (eabCaller, bool) {
 	} {
 		if authCtx, ok := from(ctx); ok && authCtx != nil {
 			if isMTLSPeerAuthorizedContext(authCtx) {
+				identity := &auth.Identity{ID: authCtx.Subject, Name: authCtx.Username, TenantID: authCtx.TenantID}
+				// The mTLS adapter takes the certificate identity from the email
+				// SAN by default; carry it as Email so resolution tries it first.
+				if strings.Contains(authCtx.Subject, "@") {
+					identity.Email = authCtx.Subject
+				}
 				return eabCaller{
 					id:       authCtx.Subject,
 					tenantID: authCtx.TenantID,
-					identity: &auth.Identity{ID: authCtx.Subject, Name: authCtx.Username, TenantID: authCtx.TenantID},
+					identity: identity,
 				}, true
 			}
 			return eabCaller{id: authCtx.Subject, tenantID: authCtx.TenantID, roles: authCtx.Roles}, true
