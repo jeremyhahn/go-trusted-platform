@@ -362,9 +362,11 @@ func TestPublishManifestRefusesWithoutARegistrar(t *testing.T) {
 	}
 }
 
-// TestValidateManifestKeyAllowsASecureBootBuildWithoutARegistrar: a measured
-// build with no reference-values registrar is not refused up front; its
-// manifest is signed and left beside the image, unregistered.
+// TestValidateManifestKeyAllowsASecureBootBuildWithoutARegistrar:
+// validateManifestKey checks only the manifest signing key, so a measured
+// build with no reference-values registrar passes it; Create refuses the
+// missing registrar itself, before it stages anything
+// (TestCreateRefusesAMeasuredBuildWithoutARegistrarBeforeAssembly).
 func TestValidateManifestKeyAllowsASecureBootBuildWithoutARegistrar(t *testing.T) {
 	t.Parallel()
 	rec := &diskimagetest.Runner{}
@@ -396,5 +398,54 @@ func TestCreateReportsAnUnknownTargetBeforeAMissingRegistrar(t *testing.T) {
 	}
 	if len(rec.Calls) != 0 {
 		t.Errorf("the build ran before refusing: %v", rec.Calls)
+	}
+}
+
+// TestCreateRefusesAMeasuredBuildWithoutARegistrarBeforeAssembly: a Secure
+// Boot build is the measured one and docs/SPEC.md:57 needs its manifest
+// registered, so with no reference-values registrar Create refuses it at
+// configuration, before it stages media, removes the earlier manifest or
+// assembles: the earlier image and its manifest are left untouched.
+func TestCreateRefusesAMeasuredBuildWithoutARegistrarBeforeAssembly(t *testing.T) {
+	t.Parallel()
+	rec := &diskimagetest.Runner{}
+	cfg := buildConfigForTest(t, "qemu-virt", rec)
+	cfg.ISO.SecureBoot = true
+	cfg.KMSClients = newManifestPKI(t).clients()
+	cfg.ReferenceValues = nil
+	if err := os.MkdirAll(filepath.Dir(cfg.Output), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	earlierImage := []byte("earlier image")
+	earlierManifest := []byte("earlier manifest")
+	if err := os.WriteFile(cfg.Output, earlierImage, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ManifestPath(cfg.Output), earlierManifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Create(context.Background(), cfg)
+	var se *StageError
+	if !errors.As(err, &se) || se.Step != "configuration" {
+		t.Fatalf("want a configuration StageError, got result %+v, err %v", res, err)
+	}
+	if !errors.Is(err, errNoRegistrar) {
+		t.Errorf("err %v, want errNoRegistrar", err)
+	}
+	if res != nil {
+		t.Errorf("result %+v, want nil", res)
+	}
+	if len(rec.Calls) != 0 {
+		t.Errorf("the build ran before refusing: %v", rec.Calls)
+	}
+	for path, want := range map[string][]byte{cfg.Output: earlierImage, ManifestPath(cfg.Output): earlierManifest} {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("%s: %v", path, err)
+			continue
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("%s = %q, want the earlier %q", path, got, want)
+		}
 	}
 }
