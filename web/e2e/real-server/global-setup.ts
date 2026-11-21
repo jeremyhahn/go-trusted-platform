@@ -3,6 +3,7 @@ import fs from 'fs';
 import https from 'https';
 import os from 'os';
 import path from 'path';
+import { generateAttestationCA, loadAttestation, type AttestationMaterial } from './fixtures/soft-authenticator';
 
 /**
  * Real-server Playwright global setup (#2034, epic #1665).
@@ -41,6 +42,24 @@ export interface ServerState {
   log: string;
 }
 
+/** Where setup generates the WebAuthn attestation CA in a run directory. */
+export function attestationDir(runDir: string): string {
+  return path.join(runDir, 'webauthn-attestation');
+}
+
+/**
+ * The attestation material of the daemon setup started on port, for a
+ * test's SoftAuthenticator.
+ */
+export function runAttestation(port: number = e2ePort()): AttestationMaterial {
+  const file = stateFile(port);
+  if (!fs.existsSync(file)) {
+    throw new Error(`[real-server] ${file} is missing: global-setup did not start platformd`);
+  }
+  const state = JSON.parse(fs.readFileSync(file, 'utf8')) as ServerState;
+  return loadAttestation(attestationDir(state.dir));
+}
+
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 const READY_TIMEOUT_MS = Number(process.env.E2E_READY_TIMEOUT_MS || 240_000);
 
@@ -77,6 +96,9 @@ async function globalSetup(): Promise<void> {
   for (const sub of ['trusted-data/etc', 'trusted-data/log', 'trusted-data/quicbaas/wal', 'trusted-data/www']) {
     fs.mkdirSync(path.join(dir, sub), { recursive: true });
   }
+  // The WebAuthn attestation CA platformd.test.yaml names as
+  // quicbaas.webauthn-attestation-roots-file (relative to dir).
+  generateAttestationCA(attestationDir(dir));
   const template = fs.readFileSync(path.join(__dirname, 'platformd.test.yaml'), 'utf8');
   fs.writeFileSync(path.join(dir, 'config.yaml'), template.replace(/18443/g, String(port)));
 

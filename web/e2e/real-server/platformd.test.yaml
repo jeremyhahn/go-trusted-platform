@@ -52,6 +52,12 @@ quicbaas:
   # registration/begin with 403 "public registration is disabled".
   self-service-registration:
     enabled: true
+  # An administrative WebAuthn enrollment (each self-service registrant)
+  # needs an attestation that chains to a trusted root. global-setup
+  # generates this test root, and the batch leaf the software authenticator
+  # (fixtures/soft-authenticator.ts) attests with, into the run directory at
+  # run time (ruling 1028 Q1 (c)); no key or certificate is committed.
+  webauthn-attestation-roots-file: webauthn-attestation/roots.pem
 
 
 # =============================================================================
