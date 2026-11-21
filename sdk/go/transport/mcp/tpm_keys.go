@@ -24,7 +24,13 @@ package mcp
 // algorithm, an NV index) is refused with ErrTPMKeysFieldUnsupported before
 // any call goes out, so the TPM never acts on a request it only half read.
 // create_ak on Provision and a transient (persistent false) CreateEK or
-// CreateSRK are refused the same way.
+// CreateSRK are refused the same way, and so is a Provision that does not
+// ask for both the EK and the SRK: the tool always creates both.
+//
+// An owner password is never sent over a plaintext http:// connection: a
+// request carrying one is refused with FailedPrecondition
+// (ErrInsecureTransport) before any call goes out
+// (tpmKeysRefusePlaintextSecret).
 //
 // Every tool answers {"success", "message"}, the create tools also "handle".
 // They send no public key, so PublicKey on the create replies and the
@@ -35,6 +41,10 @@ import (
 	"encoding/pem"
 	"strings"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -113,9 +123,27 @@ func tpmKeysOwnerArgs(password string) map[string]interface{} {
 	return args
 }
 
-// buildTPMKeysProvisionArgs sends the owner password only. The tool
-// provisions the EK and the shared SRK only, so create_ek and create_srk are
-// not sent; create_ak is refused because the tool creates no attestation key.
+// tpmKeysRefusePlaintextSecret refuses a call whose arguments carry an owner
+// password when the connection is plaintext http://, so the TPM
+// authorization never travels unencrypted. It returns nil otherwise.
+func tpmKeysRefusePlaintextSecret(address, method string, arguments map[string]interface{}) error {
+	if !strings.HasPrefix(address, "http://") {
+		return nil
+	}
+	if _, ok := arguments["owner_password"]; !ok {
+		return nil
+	}
+	return status.Error(codes.FailedPrecondition, platform.ErrInsecureTransport{
+		Protocol: platform.ProtocolMCP,
+		Target:   address,
+		Reason:   "owner_password requires https://",
+	}.Error()+" ("+method+")")
+}
+
+// buildTPMKeysProvisionArgs sends the owner password only. The tool always
+// provisions the EK and the shared SRK, so a request without both create_ek
+// and create_srk is refused and neither is sent; create_ak is refused because
+// the tool creates no attestation key.
 func buildTPMKeysProvisionArgs(args interface{}) (map[string]interface{}, error) {
 	const method = platformv1.TPMService_Provision_FullMethodName
 	in, ok := args.(*platformv1.TPMProvisionRequest)
@@ -123,6 +151,10 @@ func buildTPMKeysProvisionArgs(args interface{}) (map[string]interface{}, error)
 		return nil, ErrUnexpectedArgsType{Method: method}
 	}
 	switch {
+	case !in.GetCreateEk():
+		return nil, ErrTPMKeysFieldUnsupported{Method: method, Field: "create_ek"}
+	case !in.GetCreateSrk():
+		return nil, ErrTPMKeysFieldUnsupported{Method: method, Field: "create_srk"}
 	case in.GetCreateAk():
 		return nil, ErrTPMKeysFieldUnsupported{Method: method, Field: "create_ak"}
 	case in.GetEndorsementPassword() != "":

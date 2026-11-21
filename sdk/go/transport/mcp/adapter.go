@@ -223,6 +223,10 @@ func (c *mcpClientConn) Invoke(ctx context.Context, method string, args interfac
 	if err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
+	// A TPM owner password never goes out over plaintext http://.
+	if err := tpmKeysRefusePlaintextSecret(c.adapter.address, method, arguments); err != nil {
+		return err
+	}
 
 	// Call MCP tool, waiting as long as the daemon may take to answer it
 	result, err := c.adapter.client.CallToolWithin(ctx, toolName, arguments, replyWindow(method, args))
