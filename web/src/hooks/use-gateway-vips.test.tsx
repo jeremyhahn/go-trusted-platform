@@ -34,6 +34,40 @@ const lbStatus = {
   lastReconcile: null,
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+// Starts the mount read (old) and a refetch (new), each on its own deferreds.
+function overlappingReads() {
+  const oldList = deferred<unknown>();
+  const oldStatus = deferred<unknown>();
+  const newList = deferred<unknown>();
+  const newStatus = deferred<unknown>();
+  gateway.listVIPs.mockReset().mockReturnValueOnce(oldList.promise).mockReturnValueOnce(newList.promise);
+  gateway.getLBStatus
+    .mockReset()
+    .mockReturnValueOnce(oldStatus.promise)
+    .mockReturnValueOnce(newStatus.promise);
+  const hook = renderHook(() => useGatewayVIPs());
+  act(() => {
+    void hook.result.current.refetch();
+  });
+  const resolveOld = () => {
+    oldList.resolve({ success: true, data: { vips: [vip] } });
+    oldStatus.resolve({ success: true, data: { status: lbStatus } });
+  };
+  const resolveNew = () => {
+    newList.resolve({ success: true, data: { vips: [] } });
+    newStatus.resolve({ success: true, data: { status: { ...lbStatus, vipCount: 0 } } });
+  };
+  return { result: hook.result, resolveOld, resolveNew };
+}
+
 describe('useGatewayVIPs', () => {
   beforeEach(() => {
     gateway.listVIPs.mockReset();
@@ -96,5 +130,40 @@ describe('useGatewayVIPs', () => {
     expect(result.current.isLoading).toBe(false);
     expect(gateway.listVIPs).not.toHaveBeenCalled();
     expect(gateway.getLBStatus).not.toHaveBeenCalled();
+  });
+
+  it('a slower older refetch does not overwrite a newer one', async () => {
+    const { result, resolveOld, resolveNew } = overlappingReads();
+
+    await act(async () => {
+      resolveNew();
+    });
+    expect(result.current.vips).toEqual([]);
+    expect(result.current.lbStatus?.vipCount).toBe(0);
+    expect(result.current.isLoading).toBe(false);
+
+    await act(async () => {
+      resolveOld();
+    });
+    expect(result.current.vips).toEqual([]);
+    expect(result.current.lbStatus?.vipCount).toBe(0);
+    expect(result.current.error).toBeNull();
+  });
+
+  it('isLoading stays true until the newest read lands', async () => {
+    const { result, resolveOld, resolveNew } = overlappingReads();
+
+    await act(async () => {
+      resolveOld();
+    });
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.vips).toEqual([]);
+
+    await act(async () => {
+      resolveNew();
+    });
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.vips).toEqual([]);
+    expect(result.current.lbStatus?.vipCount).toBe(0);
   });
 });
