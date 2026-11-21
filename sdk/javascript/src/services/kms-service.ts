@@ -218,21 +218,33 @@ export class KMSService extends BaseService {
   /**
    * Encrypt plaintext
    *
+   * Calls the served route POST /v1/kms/encrypt/{name}; the key name is the
+   * path segment and the request body is sent unchanged.
+   *
    * @param request - Encryption request
    * @returns Ciphertext
    */
   async encrypt(request: EncryptRequest): Promise<ApiResponse<EncryptResponse>> {
-    return this.client.post<EncryptResponse>(this.buildUrl('/encrypt'), request);
+    return this.client.post<EncryptResponse>(
+      this.buildUrl(`/encrypt/${this.encodePathSegment(request.keyId)}`),
+      request
+    );
   }
 
   /**
    * Decrypt ciphertext
    *
+   * Calls the served route POST /v1/kms/decrypt/{name}; the key name is the
+   * path segment and the request body is sent unchanged.
+   *
    * @param request - Decryption request
    * @returns Plaintext
    */
   async decrypt(request: DecryptRequest): Promise<ApiResponse<DecryptResponse>> {
-    return this.client.post<DecryptResponse>(this.buildUrl('/decrypt'), request);
+    return this.client.post<DecryptResponse>(
+      this.buildUrl(`/decrypt/${this.encodePathSegment(request.keyId)}`),
+      request
+    );
   }
 
   /**

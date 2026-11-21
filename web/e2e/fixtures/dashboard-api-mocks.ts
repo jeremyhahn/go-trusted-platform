@@ -1172,8 +1172,8 @@ export async function mockCertificateApi(
  * - GET /api/v1/kms/keys/:id - Get key
  * - POST /api/v1/kms/keys - Create key
  * - DELETE /api/v1/kms/keys/:id - Delete key
- * - POST /api/v1/kms/encrypt - Encrypt data
- * - POST /api/v1/kms/decrypt - Decrypt data
+ * - POST /api/v1/kms/encrypt/{name} - Encrypt data
+ * - POST /api/v1/kms/decrypt/{name} - Decrypt data
  */
 export async function mockKMSApi(
   page: Page,
@@ -1290,7 +1290,7 @@ export async function mockKMSApi(
   });
 
   // Encrypt endpoint
-  await page.route('**/api/v1/kms/encrypt', async (route: Route, request: Request) => {
+  await page.route('**/api/v1/kms/encrypt/*', async (route: Route, request: Request) => {
     if (request.method() !== 'POST') {
       await route.continue();
       return;
@@ -1328,7 +1328,7 @@ export async function mockKMSApi(
   });
 
   // Decrypt endpoint
-  await page.route('**/api/v1/kms/decrypt', async (route: Route, request: Request) => {
+  await page.route('**/api/v1/kms/decrypt/*', async (route: Route, request: Request) => {
     if (request.method() !== 'POST') {
       await route.continue();
       return;
