@@ -105,10 +105,8 @@ export interface RevokeInvitationRequest {
 export interface AcceptInvitationRequest {
   /** Invitation token */
   token: string;
-  /** User's name */
-  name?: string;
-  /** User's password (if creating new account) */
-  password?: string;
+  /** ID of the accepting user, a decimal uint64 (wire field user_id) */
+  userId: string;
 }
 
 // =============================================================================

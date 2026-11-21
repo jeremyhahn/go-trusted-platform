@@ -63,7 +63,7 @@ export default function InvitationsPage() {
   const [processingId, setProcessingId] = React.useState<string | null>(null);
 
   // Use SDK invitation hooks
-  const { create, revoke, resend } = useInvitation();
+  const { create, revoke } = useInvitation();
   const {
     data: invitationsResponse,
     isLoading,
@@ -118,28 +118,6 @@ export default function InvitationsPage() {
         variant: "destructive",
       });
       throw err;
-    }
-  };
-
-  const handleResend = async (invitation: Invitation) => {
-    setProcessingId(invitation.id);
-    try {
-      await resend.mutateAsync(invitation.id);
-      toast({
-        title: "Invitation resent",
-        description: `Invitation resent to ${invitation.email}`,
-        variant: "success",
-      });
-      void refetch();
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Failed to resend invitation";
-      toast({
-        title: "Failed to resend invitation",
-        description: errorMessage,
-        variant: "destructive",
-      });
-    } finally {
-      setProcessingId(null);
     }
   };
 
@@ -252,7 +230,6 @@ export default function InvitationsPage() {
       cell: ({ row }) => {
         const invitation = row.original;
         const isProcessing = processingId === invitation.id;
-        const canResend = invitation.status === "pending" || invitation.status === "expired";
         const canCancel = invitation.status === "pending";
 
         return (
@@ -270,12 +247,6 @@ export default function InvitationsPage() {
             <DropdownMenuContent align="end">
               <DropdownMenuLabel>Actions</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              {canResend && (
-                <DropdownMenuItem onClick={() => handleResend(invitation)}>
-                  <RefreshCw className="h-4 w-4 mr-2" />
-                  Resend Invitation
-                </DropdownMenuItem>
-              )}
               {canCancel && (
                 <DropdownMenuItem
                   onClick={() => handleCancel(invitation.id)}
@@ -285,7 +256,7 @@ export default function InvitationsPage() {
                   Cancel Invitation
                 </DropdownMenuItem>
               )}
-              {!canResend && !canCancel && (
+              {!canCancel && (
                 <DropdownMenuItem disabled>
                   No actions available
                 </DropdownMenuItem>

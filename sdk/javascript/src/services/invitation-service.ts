@@ -114,12 +114,17 @@ export class InvitationService extends BaseService {
   /**
    * Revoke an invitation
    *
+   * Sends POST /v1/invitations/{id}/revoke with an empty body. This is
+   * not DELETE /v1/invitations/{id}, which deletes the invitation record
+   * instead of revoking it.
+   *
    * @param id - Invitation ID
    * @returns Revocation result
    */
   async revoke(id: string): Promise<ApiResponse<RevokeInvitationResponse>> {
-    return this.client.delete<RevokeInvitationResponse>(
-      this.buildUrl(`/${this.encodePathSegment(id)}`)
+    return this.client.post<RevokeInvitationResponse>(
+      this.buildUrl(`/${this.encodePathSegment(id)}/revoke`),
+      {}
     );
   }
 
@@ -139,13 +144,17 @@ export class InvitationService extends BaseService {
   /**
    * Resend an invitation email
    *
-   * @param id - Invitation ID
-   * @returns Updated invitation with new expiration
+   * Refused: the server serves no resend operation (no
+   * /v1/invitations/{id}/resend route and no resend RPC). The SDK does not
+   * emulate it (no create-again, no revoke-and-recreate); the returned
+   * promise rejects without a request until the server serves one.
+   *
+   * @param _id - Invitation ID
+   * @returns Never resolves; always rejects
    */
-  async resend(id: string): Promise<ApiResponse<CreateInvitationResponse>> {
-    return this.client.post<CreateInvitationResponse>(
-      this.buildUrl(`/${this.encodePathSegment(id)}/resend`),
-      {}
+  async resend(_id: string): Promise<ApiResponse<CreateInvitationResponse>> {
+    throw new Error(
+      'Invitation resend is not served: the server has no /v1/invitations/{id}/resend route'
     );
   }
 }

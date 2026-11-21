@@ -106,3 +106,9 @@ export type {
   UseReportedGatewaysOptions,
   UseReportedGatewaysResult,
 } from './use-reported-gateways';
+export {
+  useInvitationById,
+  useInvitationByToken,
+  toInvitationView,
+} from './use-invitation-detail';
+export type { InvitationView, InvitationWire } from './use-invitation-detail';

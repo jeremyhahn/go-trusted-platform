@@ -79,7 +79,6 @@ interface InvitationApiMockConfig {
   fetchError?: ApiError | null;
   createError?: ApiError | null;
   revokeError?: ApiError | null;
-  resendError?: ApiError | null;
 }
 
 interface QuotaApiMockConfig {
@@ -324,7 +323,7 @@ async function mockSDKInvitationApi(
   getInvitations: () => Invitation[];
   addInvitation: (invitation: Invitation) => void;
   removeInvitation: (id: string) => void;
-  setError: (endpoint: 'fetch' | 'create' | 'revoke' | 'resend', error: ApiError | null) => void;
+  setError: (endpoint: 'fetch' | 'create' | 'revoke', error: ApiError | null) => void;
 }> {
   const state: InvitationApiState = {
     invitations: config.initialInvitations || [],
@@ -332,7 +331,6 @@ async function mockSDKInvitationApi(
       fetchError: null,
       createError: null,
       revokeError: null,
-      resendError: null,
       ...config,
     },
   };
@@ -343,7 +341,7 @@ async function mockSDKInvitationApi(
     const method = request.method();
     const url = request.url();
 
-    // Skip if this is a specific invitation URL (e.g., /invitations/inv-123 or /invitations/inv-123/resend)
+    // Skip if this is a specific invitation URL (e.g., /invitations/inv-123 or /invitations/inv-123/revoke)
     const invitationIdMatch = url.match(/\/invitations\/([^/?]+)/);
     if (invitationIdMatch) {
       // This is a specific invitation operation, let it fall through to the next handler
@@ -420,17 +418,11 @@ async function mockSDKInvitationApi(
   });
 
   // Route handler for individual invitation operations (revoke)
-  await page.route('**/api/v1/invitations/*', async (route: Route, request: Request) => {
+  await page.route('**/api/v1/invitations/*/revoke', async (route: Route, request: Request) => {
     const method = request.method();
     const url = request.url();
 
-    // Skip resend route
-    if (url.includes('/resend')) {
-      await route.continue();
-      return;
-    }
-
-    if (method === 'DELETE') {
+    if (method === 'POST') {
       if (state.config.revokeError) {
         await route.fulfill({
           status: state.config.revokeError.status,
@@ -465,34 +457,6 @@ async function mockSDKInvitationApi(
     await route.continue();
   });
 
-  // Route handler for resend invitation
-  await page.route('**/api/v1/invitations/*/resend', async (route: Route, request: Request) => {
-    const method = request.method();
-
-    if (method === 'POST') {
-      if (state.config.resendError) {
-        await route.fulfill({
-          status: state.config.resendError.status,
-          contentType: 'application/json',
-          body: JSON.stringify({
-            message: state.config.resendError.error,
-            code: state.config.resendError.errorCode || 'HTTP_' + state.config.resendError.status,
-          }),
-        });
-        return;
-      }
-
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ success: true, message: 'Invitation resent' }),
-      });
-      return;
-    }
-
-    await route.continue();
-  });
-
   return {
     getInvitations: () => [...state.invitations],
     addInvitation: (invitation: Invitation) => {
@@ -504,15 +468,13 @@ async function mockSDKInvitationApi(
         state.invitations.splice(index, 1);
       }
     },
-    setError: (endpoint: 'fetch' | 'create' | 'revoke' | 'resend', error: ApiError | null) => {
+    setError: (endpoint: 'fetch' | 'create' | 'revoke', error: ApiError | null) => {
       if (endpoint === 'fetch') {
         state.config.fetchError = error;
       } else if (endpoint === 'create') {
         state.config.createError = error;
       } else if (endpoint === 'revoke') {
         state.config.revokeError = error;
-      } else if (endpoint === 'resend') {
-        state.config.resendError = error;
       }
     },
   };
@@ -1013,9 +975,9 @@ test.describe('Tenant Invitations', () => {
       expect(remainingInvitations.some((inv) => inv.id === 'inv-cancel')).toBe(false);
     });
 
-    test('should resend an invitation', async ({ page }) => {
+    test('should offer no resend action', async ({ page }) => {
       const invitations = [
-        createMockSDKInvitation({ id: 'inv-resend', email: 'resend@example.com', status: 'pending' }),
+        createMockSDKInvitation({ id: 'inv-pending', email: 'pending@example.com', status: 'pending' }),
       ];
 
       await mockSDKInvitationApi(page, { initialInvitations: invitations });
@@ -1023,36 +985,12 @@ test.describe('Tenant Invitations', () => {
 
       await page.goto('/tenant/invitations');
 
-      // Find the row and click actions menu
-      const invitationRow = page.getByRole('row').filter({ hasText: 'resend@example.com' });
+      const invitationRow = page.getByRole('row').filter({ hasText: 'pending@example.com' });
       await invitationRow.getByRole('button', { name: /open menu/i }).click();
 
-      // Click resend invitation
-      await page.getByRole('menuitem', { name: /resend invitation/i }).click();
-
-      // Should show success toast (use .first() to match title, not description)
-      await expect(page.getByText(/invitation resent/i).first()).toBeVisible();
-    });
-
-    test('should handle resend error', async ({ page }) => {
-      const invitations = [
-        createMockSDKInvitation({ id: 'inv-error', email: 'error@example.com', status: 'pending' }),
-      ];
-
-      await mockSDKInvitationApi(page, {
-        initialInvitations: invitations,
-        resendError: { error: 'Too many resend attempts', status: 429 },
-      });
-      await mockTenantApi(page);
-
-      await page.goto('/tenant/invitations');
-
-      const invitationRow = page.getByRole('row').filter({ hasText: 'error@example.com' });
-      await invitationRow.getByRole('button', { name: /open menu/i }).click();
-      await page.getByRole('menuitem', { name: /resend invitation/i }).click();
-
-      // Should show error toast (use .first() to match title, not description)
-      await expect(page.getByText(/failed to resend invitation/i).first()).toBeVisible();
+      // The server serves no resend route, so a pending row offers only cancel.
+      await expect(page.getByRole('menuitem', { name: /cancel invitation/i })).toBeVisible();
+      await expect(page.getByRole('menuitem', { name: /resend/i })).toHaveCount(0);
     });
 
     test('should handle fetch error', async ({ page }) => {
