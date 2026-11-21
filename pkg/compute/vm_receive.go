@@ -402,7 +402,10 @@ func (o *QEMUOrchestrator) adoptReceived(tr *trackedReceiver) (string, error) {
 	// The watcher is always installed: the process was alive at the check
 	// above, so an exit from then on, even one before publication, ends in
 	// recordExit rather than leaving a running instance with no process.
-	run := &qemuRun{cancel: func() {}, done: make(chan struct{})}
+	// The receiver's QEMU runs under a context that is never cancelled, so
+	// the run's cancel kills the process: a stop that only signalled a
+	// guest ignoring SIGTERM would otherwise wait on run.done forever.
+	run := &qemuRun{cancel: func() { _ = vm.Kill() }, done: make(chan struct{})}
 	qemuInst.run = run
 	go func() {
 		defer close(run.done)
