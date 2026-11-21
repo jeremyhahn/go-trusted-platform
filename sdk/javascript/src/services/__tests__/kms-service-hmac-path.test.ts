@@ -41,7 +41,7 @@ describe('KMSService HMAC routes (#2057)', () => {
     await service.hmac({ keyId: 'k 1/x', message: 'aGk=', hashAlgorithm: 'SHA384' });
 
     expect(client.post).toHaveBeenCalledTimes(1);
-    const [url, body] = vi.mocked(client.post).mock.calls[0];
+    const [url, body] = vi.mocked(client.post).mock.calls[0]!;
     expect(url).toBe('/v1/kms/hmac/k%201%2Fx');
     expect(body).toEqual({ data: 'aGk=', hash: 'SHA384' });
   });
@@ -52,7 +52,7 @@ describe('KMSService HMAC routes (#2057)', () => {
     await service.hmac({ keyId: 'k1', message: 'aGk=' });
 
     expect(client.post).toHaveBeenCalledTimes(1);
-    const [url, body] = vi.mocked(client.post).mock.calls[0];
+    const [url, body] = vi.mocked(client.post).mock.calls[0]!;
     expect(url).toBe('/v1/kms/hmac/k1');
     expect(Object.keys(body as object)).toEqual(['data']);
     expect(body).toEqual({ data: 'aGk=' });
@@ -70,7 +70,7 @@ describe('KMSService HMAC routes (#2057)', () => {
     });
 
     expect(client.post).toHaveBeenCalledTimes(1);
-    const [url, body] = vi.mocked(client.post).mock.calls[0];
+    const [url, body] = vi.mocked(client.post).mock.calls[0]!;
     expect(url).toBe('/v1/kms/hmac/k1/verify');
     expect(body).toEqual({ data: 'aGk=', hmac: 'dGFn', hash: 'SHA256' });
     expect(Object.keys(body as object).sort()).toEqual(['data', 'hash', 'hmac']);
