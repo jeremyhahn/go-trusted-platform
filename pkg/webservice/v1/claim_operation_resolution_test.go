@@ -172,3 +172,27 @@ func TestUnroutedClaims_EveryEntryIsStillAClaim(t *testing.T) {
 			"only grows stops recording what is owed and starts hiding it.",
 		len(stranded), strings.Join(stranded, "\n  "))
 }
+
+// TestClaimFillsCatchAll pins the one shape the ratchet treats as the same
+// operation although the templates differ: a claim filling a {name:.+} tail
+// with placeholders joined by punctuation, which the handler splits back out.
+func TestClaimFillsCatchAll(t *testing.T) {
+	cases := []struct {
+		name     string
+		claim    string
+		template string
+		want     bool
+	}{
+		{"repository:reference fills the catch-all", "/api/v1/compute/images/{repository}:{reference}", "/api/v1/compute/images/{repository:.+}", true},
+		{"a literal reference is a different resource", "/api/v1/compute/images/{repository}:latest", "/api/v1/compute/images/{repository:.+}", false},
+		{"a further segment is a different resource", "/api/v1/compute/images/{repository}/tags", "/api/v1/compute/images/{repository:.+}", false},
+		{"a literal tail is a different resource", "/api/v1/compute/images/status", "/api/v1/compute/images/{repository:.+}", false},
+		{"a different prefix is a different resource", "/api/v1/compute/{repository}:{reference}", "/api/v1/compute/images/{repository:.+}", false},
+		{"no catch-all, no exception", "/api/v1/groups/{id}/members", "/api/v1/groups/{id}", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, claimFillsCatchAll(tc.claim, tc.template))
+		})
+	}
+}
