@@ -177,7 +177,8 @@ const (
 	selectionRunner      = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}"
 	selectionDocker      = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}"
 	selectionGate        = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner || '\"ubuntu-latest\"') || 'ubuntu-latest' }}"
-	selectionForkGuard   = `if [ -n "$HEAD_REPO" ] && [ "$HEAD_REPO" != "$REPO" ]; then`
+	selectionForkEvents  = "case \"$EVENT\" in\n  pull_request|pull_request_target)\n"
+	selectionForkGuard   = `if [ "$HEAD_REPO" != "$REPO" ]; then`
 	selectionOverflowMsg = "the self-hosted overflow runners (bigdisk, bigdisk-docker)"
 )
 
@@ -289,7 +290,7 @@ func selectionProblems(body []byte) []string {
 	if r := mapValue(first, "run"); r != nil {
 		run = r.Value
 	}
-	for _, want := range []string{selectionForkGuard, selectionOverflowMsg, `emit "$(overflow bigdisk)" "$(overflow bigdisk-docker)"`} {
+	for _, want := range []string{selectionForkEvents + "    " + selectionForkGuard, selectionOverflowMsg, `emit "$(overflow bigdisk)" "$(overflow bigdisk-docker)"`} {
 		if !strings.Contains(run, want) {
 			problems = append(problems, "the selection step's run lacks "+strconv.Quote(want))
 		}

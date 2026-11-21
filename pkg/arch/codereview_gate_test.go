@@ -33,7 +33,6 @@ const (
 	// reviewer's standing verdict on the head.
 	codeReviewVerdictRead = `verdict=$(get_all "/pulls/$PR_NUM/reviews?"`
 	codeReviewVerdictCase = `case "$verdict"`
-	codeReviewTwinWait    = `"$waited" -lt 4500`
 	codeReviewLabelsRead  = `.labels[].name`
 	codeReviewOwnerHold   = `needs-owner`
 )
@@ -68,13 +67,12 @@ func loadCodeReviewGateStep(t *testing.T) ciStep {
 // before it accepts the verdict (Codex P1, #1921).
 func TestCodeReviewGateReadsTheLiveLabelsBeforeTheVerdict(t *testing.T) {
 	run := loadCodeReviewGateStep(t).Run
-	wait := strings.Index(run, codeReviewTwinWait)
+	// v5.12.8 dropped the gate's twin-review wait: the gate reads the twins
+	// without waiting, so only the order labels -> hold -> verdict is pinned.
 	verdict := strings.Index(run, codeReviewVerdictCase)
-	require.GreaterOrEqual(t, wait, 0, "the gate has no twin-review wait")
 	require.GreaterOrEqual(t, verdict, 0, "the gate has no verdict case")
 	labels := strings.Index(run, codeReviewLabelsRead)
 	require.GreaterOrEqual(t, labels, 0, "the gate never reads the PR's live labels")
-	require.Greater(t, labels, wait, "the gate reads the labels before the twin-review wait ends")
 	require.Less(t, labels, verdict, "the gate reads the labels after it accepts the verdict")
 	hold := strings.Index(run[labels:], codeReviewOwnerHold)
 	require.GreaterOrEqual(t, hold, 0, "the gate does not check the labels for %s", codeReviewOwnerHold)
