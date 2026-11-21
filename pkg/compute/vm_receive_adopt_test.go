@@ -43,8 +43,11 @@ func (r *transferReceiver) Abort(context.Context) error {
 	return nil
 }
 
-func (r *transferReceiver) Transferring(context.Context) (bool, error) {
-	return r.transferring.Load(), nil
+func (r *transferReceiver) TransferState(context.Context) receiverTransferState {
+	if r.transferring.Load() {
+		return transferActive
+	}
+	return transferIdle
 }
 
 func (r *transferReceiver) VM() *qemu.VM { return r.vm }
@@ -86,8 +89,9 @@ func TestReceiveIncoming_ActiveTransferOutlivesTheLifetime(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 	assert.Equal(t, int32(0), recv.aborts.Load(), "a receiver whose transfer runs is not reaped")
 
-	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true))
-	assert.Equal(t, int32(1), recv.commits.Load())
+	// The receiver is still owned and finalizable after the lifetimes passed.
+	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, false))
+	assert.Equal(t, int32(1), recv.aborts.Load())
 }
 
 func TestReceiveIncoming_IdleReceiverStillExpires(t *testing.T) {
@@ -115,51 +119,30 @@ func TestReceiveIncoming_IdleReceiverStillExpires(t *testing.T) {
 	assert.ErrorIs(t, err, ErrReceiverNotFound)
 }
 
-func TestFinalizeIncoming_CommitAdoptsTheGuest(t *testing.T) {
+// A committed receiver with no QEMU process cannot be adopted: the finalize
+// fails, the receiver is aborted, and no instance is tracked. Adoption of a
+// running guest is covered by TestFinalizeIncoming_CommitAdoptsTheGuest.
+func TestFinalizeIncoming_CommitWithoutProcessTracksNothing(t *testing.T) {
 	ctx := context.Background()
 	orch := newOpsOrchestrator(t)
 	orch.config.MigrationTLS = newSignalServerTLS(t.TempDir())
 
 	recv := newTransferReceiver()
 	handle := receiveWith(t, orch, recv, adoptSpec(orch))
-	require.NoError(t, orch.FinalizeIncoming(ctx, handle.ReceiverID, true))
+	err := orch.FinalizeIncoming(ctx, handle.ReceiverID, true)
+	assert.ErrorIs(t, err, ErrMigrationReceiveFailed)
+	assert.Equal(t, int32(1), recv.commits.Load())
+	assert.Equal(t, int32(1), recv.aborts.Load(), "a receiver that cannot be adopted is aborted")
 
 	list, err := orch.List(ctx, nil)
 	require.NoError(t, err)
-	require.Len(t, list, 1, "the committed guest is a tracked instance")
-	inst := list[0]
-	assert.Equal(t, "src-vm-1", inst.ID)
-	assert.Equal(t, "guest", inst.Name)
-	assert.Equal(t, ComputeTypeVM, inst.Type)
-	assert.Equal(t, StateRunning, inst.State)
-	assert.Equal(t, handle.ReceiverID, inst.Metadata["migration_receiver"])
+	assert.Empty(t, list)
 
-	got, err := orch.Get(ctx, "src-vm-1")
-	require.NoError(t, err)
-	assert.Equal(t, StateRunning, got.State)
+	_, err = orch.lifecycle.GetState("src-vm-1")
+	assert.Error(t, err, "no lifecycle state is recorded for a refused guest")
 
-	state, err := orch.lifecycle.GetState("src-vm-1")
-	require.NoError(t, err)
-	assert.Equal(t, StateRunning, state)
-
-	// A second guest received under the same source ID does not overwrite it.
-	second := receiveWith(t, orch, newTransferReceiver(), adoptSpec(orch))
-	require.NoError(t, orch.FinalizeIncoming(ctx, second.ReceiverID, true))
-
-	list, err = orch.List(ctx, nil)
-	require.NoError(t, err)
-	require.Len(t, list, 2)
-	ids := map[string]string{}
-	for _, i := range list {
-		ids[i.ID] = i.Metadata["migration_receiver"]
-	}
-	assert.Equal(t, handle.ReceiverID, ids["src-vm-1"], "the first adopted guest is kept")
-	for id, receiver := range ids {
-		if id != "src-vm-1" {
-			assert.NotEmpty(t, id)
-			assert.Equal(t, second.ReceiverID, receiver)
-		}
-	}
+	err = orch.FinalizeIncoming(ctx, handle.ReceiverID, true)
+	assert.ErrorIs(t, err, ErrReceiverNotFound)
 }
 
 func TestFinalizeIncoming_AbortAdoptsNothing(t *testing.T) {
@@ -177,7 +160,10 @@ func TestFinalizeIncoming_AbortAdoptsNothing(t *testing.T) {
 	assert.Empty(t, list)
 }
 
-func TestFinalizeIncoming_AdoptedGuestStopsAndCloses(t *testing.T) {
+// A committed receiver whose QEMU is not running (here a real, never-started
+// VM) is not adopted: the finalize fails, nothing is tracked, and Close
+// succeeds.
+func TestFinalizeIncoming_ExitedGuestIsNotAdopted(t *testing.T) {
 	ctx := context.Background()
 	config := DefaultOrchestratorConfig(ComputeTypeVM)
 	config.WorkDir = t.TempDir()
@@ -185,7 +171,6 @@ func TestFinalizeIncoming_AdoptedGuestStopsAndCloses(t *testing.T) {
 	require.NoError(t, err)
 	orch.config.MigrationTLS = newSignalServerTLS(t.TempDir())
 
-	// A real, never-started VM: no QEMU process runs.
 	workDir := t.TempDir()
 	qcfg := orch.config.qemuBase()
 	qcfg.WorkDir = workDir
@@ -199,17 +184,20 @@ func TestFinalizeIncoming_AdoptedGuestStopsAndCloses(t *testing.T) {
 	recv := newTransferReceiver()
 	recv.vm = vm
 	handle := receiveWith(t, orch, recv, adoptSpec(orch))
-	require.NoError(t, orch.FinalizeIncoming(ctx, handle.ReceiverID, true))
+	err = orch.FinalizeIncoming(ctx, handle.ReceiverID, true)
+	assert.ErrorIs(t, err, ErrMigrationReceiveFailed)
+	assert.Equal(t, int32(1), recv.aborts.Load())
 
-	// The guest's QEMU is not running, so the stop cannot power it off: it
-	// answers with an error and marks the instance in error, after which the
-	// delete removes it.
+	list, err := orch.List(ctx, nil)
+	require.NoError(t, err)
+	assert.Empty(t, list)
 	assert.NotPanics(t, func() { assert.Error(t, orch.Stop(ctx, "src-vm-1")) })
-	assert.NotPanics(t, func() { assert.NoError(t, orch.Delete(ctx, "src-vm-1")) })
 	assert.NotPanics(t, func() { assert.NoError(t, orch.Close()) })
 }
 
-func TestClose_AdoptedGuestWithoutVM(t *testing.T) {
+// After a refused adoption of a receiver without a VM, Stop answers with an
+// error rather than panicking and Close succeeds.
+func TestClose_AfterRefusedAdoptionWithoutVM(t *testing.T) {
 	ctx := context.Background()
 	config := DefaultOrchestratorConfig(ComputeTypeVM)
 	config.WorkDir = t.TempDir()
@@ -218,8 +206,8 @@ func TestClose_AdoptedGuestWithoutVM(t *testing.T) {
 	orch.config.MigrationTLS = newSignalServerTLS(t.TempDir())
 
 	handle := receiveWith(t, orch, newTransferReceiver(), adoptSpec(orch))
-	require.NoError(t, orch.FinalizeIncoming(ctx, handle.ReceiverID, true))
+	assert.Error(t, orch.FinalizeIncoming(ctx, handle.ReceiverID, true))
 
-	assert.NotPanics(t, func() { _ = orch.Stop(ctx, "src-vm-1") })
+	assert.NotPanics(t, func() { assert.Error(t, orch.Stop(ctx, "src-vm-1")) })
 	assert.NotPanics(t, func() { assert.NoError(t, orch.Close()) })
 }
