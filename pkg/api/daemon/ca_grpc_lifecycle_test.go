@@ -25,9 +25,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -88,6 +90,59 @@ func TestCAGRPCService_InitCA_RunsTheAppInitPath(t *testing.T) {
 	require.NotNil(t, resp.CaInfo)
 	assert.True(t, resp.CaInfo.IsInitialized)
 	assert.Equal(t, 1, rec.calls)
+}
+
+// The first InitCA response carries the same CA information GetCAInfo
+// answers afterwards, so an intermediate CA shows its real properties
+// right after creation.
+func TestCAGRPCService_InitCA_FirstResponseIsFullCAInfo(t *testing.T) {
+	rec := &recordingInitializer{ca: lifecycleCA(t)}
+	svc := NewCAGRPCService(nil, nil, nil).WithCAInitializer(rec.init)
+
+	resp, err := svc.InitCA(context.Background(), &platformv1.InitCARequest{})
+	require.NoError(t, err)
+	require.NotNil(t, resp.CaInfo)
+	assert.True(t, resp.CaInfo.IsIntermediate)
+	assert.NotEmpty(t, resp.CaInfo.DefaultAlgorithm)
+	assert.NotNil(t, resp.CaInfo.RootCert)
+	assert.Len(t, resp.CaInfo.Intermediates, 1)
+
+	info, err := svc.GetCAInfo(context.Background(), &platformv1.GetCAInfoRequest{})
+	require.NoError(t, err)
+	assert.True(t, proto.Equal(info.GetCaInfo(), resp.CaInfo),
+		"InitCA CaInfo %v differs from GetCAInfo %v", resp.CaInfo, info.GetCaInfo())
+}
+
+// A health checker on a service built with an empty holder reports the CA
+// InitCA brings up.
+func TestCAServiceHealthChecker_FollowsInitCAOnEmptyHolder(t *testing.T) {
+	ca := lifecycleCA(t)
+	rec := &recordingInitializer{ca: ca}
+	svc := NewCAGRPCService(nil, nil, nil).WithCAHolder(NewCAHolder(nil)).WithCAInitializer(rec.init)
+
+	_, err := svc.InitCA(context.Background(), &platformv1.InitCARequest{})
+	require.NoError(t, err)
+
+	got := NewCAServiceHealthChecker(svc).Check(context.Background())
+	assert.Equal(t, health.StatusHealthy, got.Status, got.Message)
+	assert.Equal(t, ca.Identity(), got.Details["identity"])
+}
+
+// A checker created before InitCA on an empty holder reports unhealthy
+// first and healthy once InitCA swaps the CA in.
+func TestCAServiceHealthChecker_BeforeAndAfterInitCA(t *testing.T) {
+	rec := &recordingInitializer{ca: lifecycleCA(t)}
+	svc := NewCAGRPCService(nil, nil, nil).WithCAHolder(NewCAHolder(nil)).WithCAInitializer(rec.init)
+	checker := NewCAServiceHealthChecker(svc)
+
+	before := checker.Check(context.Background())
+	assert.Equal(t, health.StatusUnhealthy, before.Status)
+
+	_, err := svc.InitCA(context.Background(), &platformv1.InitCARequest{})
+	require.NoError(t, err)
+
+	after := checker.Check(context.Background())
+	assert.Equal(t, health.StatusHealthy, after.Status, after.Message)
 }
 
 func TestCAGRPCService_InitCA_Refusals(t *testing.T) {
