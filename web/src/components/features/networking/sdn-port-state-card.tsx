@@ -13,7 +13,18 @@ import { useCallback, useEffect, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { useSDNPortState } from '@/hooks/use-sdn-port-state';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { useToast } from '@/hooks/use-toast';
+import { useSDNPortState, type PortAdminState, type PortStateInput } from '@/hooks/use-sdn-port-state';
 import type { Port } from 'trusted-platform-sdk';
 
 /** "PORT_STATUS_UP" -> "UP"; "" or undefined -> "UNKNOWN"; any other string is returned without the "PORT_STATUS_" prefix. */
@@ -68,6 +79,68 @@ export function SDNPortStateCard({ bridgeId, portId }: SDNPortStateCardProps) {
     void reload();
   }, [reload]);
 
+  const { toast } = useToast();
+  const [adminState, setAdminState] = useState<PortAdminState>('up');
+  const [ingressRate, setIngressRate] = useState('');
+  const [ingressBurst, setIngressBurst] = useState('');
+  const [egressRate, setEgressRate] = useState('');
+  const [egressBurst, setEgressBurst] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [confirmDown, setConfirmDown] = useState(false);
+
+  const parsedInput = (): PortStateInput | null => {
+    const rates = {
+      ingressRate: parseRate(ingressRate),
+      ingressBurst: parseRate(ingressBurst),
+      egressRate: parseRate(egressRate),
+      egressBurst: parseRate(egressBurst),
+    };
+    if (Object.values(rates).some((v) => v !== undefined && Number.isNaN(v))) return null;
+    return { adminState, ...rates };
+  };
+
+  const send = async () => {
+    const input = parsedInput();
+    if (!input) return;
+    setBusy(true);
+    try {
+      const res = await ops.setPortState(input);
+      if (res.success) {
+        toast({ title: 'Port state set', description: `Port ${portId} is ${input.adminState}`, variant: 'success' });
+        await reload();
+      } else {
+        toast({
+          title: 'Set port state failed',
+          description: res.error?.message ?? 'request failed',
+          variant: 'destructive',
+        });
+      }
+    } catch (err) {
+      toast({ title: 'Set port state failed', description: messageOf(err), variant: 'destructive' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const apply = () => {
+    if (!parsedInput()) {
+      toast({ title: 'Invalid rate', description: 'rates are whole numbers of bits per second', variant: 'destructive' });
+      return;
+    }
+    if (adminState === 'down') {
+      setConfirmDown(true);
+      return;
+    }
+    void send();
+  };
+
+  const rateFields: { label: string; value: string; set: (v: string) => void }[] = [
+    { label: 'Ingress rate (bps)', value: ingressRate, set: setIngressRate },
+    { label: 'Ingress burst (bits)', value: ingressBurst, set: setIngressBurst },
+    { label: 'Egress rate (bps)', value: egressRate, set: setEgressRate },
+    { label: 'Egress burst (bits)', value: egressBurst, set: setEgressBurst },
+  ];
+
   const label = port ? portStatusLabel(String(port.status)) : '';
 
   return (
@@ -99,7 +172,58 @@ export function SDNPortStateCard({ bridgeId, portId }: SDNPortStateCardProps) {
             {loadError}
           </p>
         )}
+        <div className="space-y-2">
+          <Label>Admin state and rate limits (a zero or blank rate leaves the policing as it is)</Label>
+          <select
+            aria-label="Admin state"
+            className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+            value={adminState}
+            onChange={(e) => setAdminState(e.target.value as PortAdminState)}
+          >
+            <option value="up">Up</option>
+            <option value="down">Down</option>
+          </select>
+          <div className="grid grid-cols-2 gap-2">
+            {rateFields.map((f) => (
+              <Input
+                key={f.label}
+                aria-label={f.label}
+                placeholder={f.label}
+                inputMode="numeric"
+                value={f.value}
+                onChange={(e) => f.set(e.target.value)}
+              />
+            ))}
+          </div>
+          <Button onClick={apply} disabled={busy}>
+            Apply
+          </Button>
+        </div>
       </CardContent>
+      <Dialog open={confirmDown} onOpenChange={setConfirmDown}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Set the port down?</DialogTitle>
+            <DialogDescription>
+              Port {portId} on bridge {bridgeId} stops passing traffic until it is set up again.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmDown(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setConfirmDown(false);
+                void send();
+              }}
+            >
+              Set down
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
