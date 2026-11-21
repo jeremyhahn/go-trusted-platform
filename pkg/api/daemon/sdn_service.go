@@ -1720,6 +1720,7 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 	// overlaps, at any priority, including other policies' enforcement
 	// rules: delete each translated flow strictly, at its own priority.
 	removed := make(map[flowEntryKey]bool)
+	var deleteErr error
 	for _, target := range policyTargets {
 		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
 			continue
@@ -1735,17 +1736,23 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 				// can be matched for removal.
 				continue
 			}
-			// Best-effort cleanup of flow rules
-			if err := client.DeleteFlowStrict(ctx, bridgeName, flowMod); err == nil {
-				removed[newFlowEntryKey(bridgeName, flowMod)] = true
+			// The entry is tracked before the call: a delete that fails
+			// after the switch applied it (a barrier timeout) may still
+			// have removed a surviving policy's shared entry.
+			removed[newFlowEntryKey(bridgeName, flowMod)] = true
+			if err := client.DeleteFlowStrict(ctx, bridgeName, flowMod); err != nil && deleteErr == nil {
+				deleteErr = err
 			}
 		}
 	}
 
-	// Remove from tracking under write lock
-	s.mu.Lock()
-	delete(s.policies, foundID)
-	s.mu.Unlock()
+	// A failed delete keeps the policy record: its flows may still be on
+	// the switch, so success is not reported.
+	if deleteErr == nil {
+		s.mu.Lock()
+		delete(s.policies, foundID)
+		s.mu.Unlock()
+	}
 
 	// A surviving policy with the same entry (bridge, table, priority and
 	// match) lost its flow with the strict delete: put it back.
@@ -1753,6 +1760,9 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), policyRollbackTimeout)
 		s.restoreOverwrittenFlows(cctx, client, foundID, removed)
 		cancel()
+	}
+	if deleteErr != nil {
+		return nil, status.Errorf(codes.Internal, "failed to delete policy flows: %v", deleteErr)
 	}
 
 	return &platformv1.DeletePolicyResponse{
