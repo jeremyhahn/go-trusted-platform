@@ -27,7 +27,7 @@ import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { ServiceUnavailableState } from '@/components/features/platform';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
-import { usePXE, useApi, useToast, useReportedGateways } from '@/hooks';
+import { usePXE, useApi, useToast, useReportedGateways, usePXEDeviceActions } from '@/hooks';
 import type { PXEDeviceInfo } from 'trusted-platform-sdk';
 
 export default function PXEBootPage() {
@@ -62,6 +62,38 @@ export default function PXEBootPage() {
       },
     }
   );
+
+  const actions = usePXEDeviceActions(refetchDevices);
+  const [pending, setPending] = useState<{
+    kind: 'authorize' | 'quarantine' | 'remove';
+    device: PXEDeviceInfo;
+  } | null>(null);
+  const [actionValue, setActionValue] = useState('');
+
+  const actionVlan = Number(actionValue);
+  const actionReady =
+    pending?.kind === 'authorize'
+      ? actionValue.trim() !== '' && Number.isInteger(actionVlan) && actionVlan >= 1 && actionVlan <= 4094
+      : pending?.kind === 'quarantine'
+        ? actionValue.trim() !== ''
+        : pending !== null;
+
+  const closeAction = () => {
+    setPending(null);
+    setActionValue('');
+  };
+
+  const confirmAction = async () => {
+    if (!pending) return;
+    const { kind, device } = pending;
+    const ok =
+      kind === 'authorize'
+        ? await actions.authorize(device, actionVlan)
+        : kind === 'quarantine'
+          ? await actions.quarantine(device, actionValue.trim())
+          : await actions.remove(device);
+    if (ok) closeAction();
+  };
 
   // Fetch PXE status
   const {
@@ -323,6 +355,70 @@ export default function PXEBootPage() {
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={pending !== null}
+        onOpenChange={(o) => {
+          if (!o) closeAction();
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {pending?.kind === 'authorize'
+                ? 'Authorize device'
+                : pending?.kind === 'quarantine'
+                  ? 'Quarantine device'
+                  : 'Remove device'}
+            </DialogTitle>
+            <DialogDescription>
+              Device <span className="font-mono">{pending?.device.macAddress}</span>
+            </DialogDescription>
+          </DialogHeader>
+          {pending?.kind === 'authorize' && (
+            <div className="space-y-2">
+              <Label htmlFor="pxe-action-vlan">Target VLAN *</Label>
+              <Input
+                id="pxe-action-vlan"
+                type="number"
+                min={1}
+                max={4094}
+                value={actionValue}
+                onChange={(e) => setActionValue(e.target.value)}
+              />
+            </div>
+          )}
+          {pending?.kind === 'quarantine' && (
+            <div className="space-y-2">
+              <Label htmlFor="pxe-action-reason">Reason *</Label>
+              <Input
+                id="pxe-action-reason"
+                value={actionValue}
+                onChange={(e) => setActionValue(e.target.value)}
+              />
+            </div>
+          )}
+          {pending?.kind === 'remove' && (
+            <p className="text-sm text-muted-foreground">
+              This removes the device from PXE provisioning.
+            </p>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={closeAction}>Cancel</Button>
+            <Button
+              variant={pending?.kind === 'remove' ? 'destructive' : 'default'}
+              disabled={!actionReady || (pending !== null && actions.pendingId === pending.device.id)}
+              onClick={confirmAction}
+            >
+              {pending?.kind === 'authorize'
+                ? 'Authorize'
+                : pending?.kind === 'quarantine'
+                  ? 'Quarantine'
+                  : 'Remove'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <div className="grid gap-4 md:grid-cols-5">
         <div className="rounded-lg border border-border bg-card p-6">
           <div className="text-sm font-medium text-muted-foreground">Total Devices</div>
@@ -486,13 +582,14 @@ export default function PXEBootPage() {
                   <TableHead>Certificate</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead>Updated</TableHead>
+                  <TableHead>Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {devices.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={7}
+                      colSpan={8}
                       className="text-center text-muted-foreground"
                     >
                       No devices found
@@ -538,6 +635,57 @@ export default function PXEBootPage() {
                         {device.updatedAt ? formatDistanceToNow(new Date(device.updatedAt), {
                           addSuffix: true,
                         }) : '-'}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex gap-1">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            aria-label={`Authorize ${device.macAddress}`}
+                            disabled={actions.pendingId === device.id}
+                            onClick={() => {
+                              setActionValue(device.targetVlan ? String(device.targetVlan) : '');
+                              setPending({ kind: 'authorize', device });
+                            }}
+                          >
+                            Authorize
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            aria-label={`Quarantine ${device.macAddress}`}
+                            disabled={actions.pendingId === device.id}
+                            onClick={() => {
+                              setActionValue('');
+                              setPending({ kind: 'quarantine', device });
+                            }}
+                          >
+                            Quarantine
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            aria-label={`Retry ${device.macAddress}`}
+                            disabled={actions.pendingId === device.id}
+                            onClick={() => {
+                              void actions.retry(device);
+                            }}
+                          >
+                            Retry
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            aria-label={`Remove ${device.macAddress}`}
+                            disabled={actions.pendingId === device.id}
+                            onClick={() => {
+                              setActionValue('');
+                              setPending({ kind: 'remove', device });
+                            }}
+                          >
+                            Remove
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))
