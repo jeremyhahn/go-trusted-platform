@@ -219,12 +219,13 @@ export default function DeviceProfilesPage() {
 
   // The registered total, from GET /device/profiles/count (#2048). The list
   // above loads one server page; the count tells the operator when it is cut
-  // off. A refused count hides the line; the list still renders.
-  const { data: countResponse, refetch: refetchCount } = useApi(
+  // off. A refused count hides the line; the list still renders. useApi keeps
+  // the last data on error, so a failed refresh must hide it too (#2185 Codex).
+  const { data: countResponse, error: countError, refetch: refetchCount } = useApi(
     () => deviceService.countProfiles(),
     []
   );
-  const registeredTotal = countResponse?.count;
+  const registeredTotal = countError ? undefined : countResponse?.count;
 
   const profiles: DeviceProfile[] = useMemo(() => {
     if (!profilesData?.profiles) return [];
