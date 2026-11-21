@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	qbiam "github.com/jeremyhahn/go-quicbaas/pkg/iam"
 	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	sdktransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
@@ -46,14 +47,18 @@ func (tenantTokenValidator) AuthorizeToken(ctx context.Context, token, requiredP
 	return &platformtoken.AuthorizedContext{Subject: "u", TenantID: tenant, Scopes: []string{"*:*"}}, nil
 }
 
-// tenantRecordingSecrets records the SDK tenant each List call carries.
+// tenantRecordingSecrets records the SDK tenant each List call carries, and
+// the tenant the embedded go-quicbaas services read (pkg/iam), which is a
+// different context key.
 type tenantRecordingSecrets struct {
 	secretsclient.Client
-	tenants []string
+	tenants    []string
+	iamTenants []string
 }
 
 func (f *tenantRecordingSecrets) List(ctx context.Context, prefix string) (*secretsclient.ListSecretsResponse, error) {
 	f.tenants = append(f.tenants, sdktransport.TenantFromContext(ctx))
+	f.iamTenants = append(f.iamTenants, qbiam.TenantFromContext(ctx))
 	return &secretsclient.ListSecretsResponse{}, nil
 }
 
@@ -86,6 +91,7 @@ func TestKMSRouter_BindsTheCallersTenant(t *testing.T) {
 	w = list("tenant-b")
 	require.Equal(t, http.StatusOK, w.Code, "tenant-b: body %s", w.Body.String())
 	require.Equal(t, []string{"tenant-a", "tenant-b"}, secrets.tenants, "tenant-b's list must reach the SDK bound to tenant-b")
+	require.Equal(t, []string{"tenant-a", "tenant-b"}, secrets.iamTenants, "the embedded services read pkg/iam's tenant: it must be the caller's too")
 
 	w = list("none")
 	require.Equal(t, http.StatusForbidden, w.Code, "no tenant: body %s", w.Body.String())
