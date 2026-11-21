@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useDNSSEC, useToast } from '@/hooks';
+import { describeDnssecKeys } from '@/lib/dnssec-key';
 
 interface DNSSECStatusCardProps {
   zoneName: string;
@@ -47,6 +48,10 @@ export function DNSSECStatusCard({ zoneName, onSigned }: DNSSECStatusCardProps) 
   } else {
     const dsRecords = status?.dsRecords ?? [];
     const notEnabled = status?.enabled === false;
+    // The server sends only the DNSKEY records; derive what it leaves empty (#2165 Codex).
+    const derived = describeDnssecKeys(status?.keys);
+    const algorithm = status?.algorithm || derived.algorithm;
+    const keySize = status?.keySize || derived.keySize;
     body = (
       <>
         <div className="flex items-center justify-between">
@@ -59,11 +64,11 @@ export function DNSSECStatusCard({ zoneName, onSigned }: DNSSECStatusCardProps) 
         </div>
         <div className="flex items-center justify-between">
           <span className="text-muted-foreground">Algorithm</span>
-          <span className="font-mono">{status?.algorithm || '—'}</span>
+          <span className="font-mono">{algorithm || '—'}</span>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-muted-foreground">Key size</span>
-          <span className="font-mono">{status?.keySize || '—'}</span>
+          <span className="font-mono">{keySize || '—'}</span>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-muted-foreground">Keys</span>
