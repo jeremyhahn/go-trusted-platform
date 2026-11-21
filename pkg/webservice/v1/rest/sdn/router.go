@@ -115,10 +115,12 @@ func (r *SDNRouter) registerFlowRoutes(router *mux.Router) {
 // POST   /api/v1/sdn/policies          - Apply policy
 // GET    /api/v1/sdn/policies          - List policies
 // GET    /api/v1/sdn/policies/{id}     - Get policy
+// DELETE /api/v1/sdn/policies/{id}     - Delete policy
 func (r *SDNRouter) registerPolicyRoutes(router *mux.Router) {
 	router.HandleFunc("/policies", r.handlers.ApplyPolicy).Methods("POST")
 	router.HandleFunc("/policies", r.handlers.ListPolicies).Methods("GET")
 	router.HandleFunc("/policies/{id}", r.handlers.GetPolicy).Methods("GET")
+	router.HandleFunc("/policies/{id}", r.handlers.DeletePolicy).Methods("DELETE")
 }
 
 // registerVLANRoutes registers VLAN management endpoints.
@@ -129,12 +131,14 @@ func (r *SDNRouter) registerPolicyRoutes(router *mux.Router) {
 //
 //	POST   /api/v1/sdn/vlans                              - Create VLAN
 //	GET    /api/v1/sdn/vlans?bridge_id=…                  - List VLANs
+//	DELETE /api/v1/sdn/vlans/{vlan_id}?bridge_id=…        - Delete VLAN
 //	POST   /api/v1/sdn/bridges/{bridge_id}/vlans          - Create VLAN
 //	GET    /api/v1/sdn/bridges/{bridge_id}/vlans          - List VLANs
 //	GET    /api/v1/sdn/bridges/{bridge_id}/vlans/{vlan_id} - Get VLAN
 func (r *SDNRouter) registerVLANRoutes(router *mux.Router) {
 	router.HandleFunc("/vlans", r.handlers.CreateVLAN).Methods("POST")
 	router.HandleFunc("/vlans", r.handlers.ListVLANs).Methods("GET")
+	router.HandleFunc("/vlans/{vlan_id}", r.handlers.DeleteVLAN).Methods("DELETE")
 	router.HandleFunc("/bridges/{bridge_id}/vlans", r.handlers.CreateVLAN).Methods("POST")
 	router.HandleFunc("/bridges/{bridge_id}/vlans", r.handlers.ListVLANs).Methods("GET")
 }
