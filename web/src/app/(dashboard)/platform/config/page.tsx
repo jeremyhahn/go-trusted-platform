@@ -123,10 +123,11 @@ export default function ConfigPage() {
   }, [fetchConfig, fetchSnapshots]);
 
   const handleCaptureSnapshot = async () => {
+    // Cancel (null) captures nothing; an empty answer is a deliberate choice.
+    const reason = window.prompt("Snapshot reason (optional)", "manual");
+    if (reason === null) return;
     setIsCapturing(true);
     try {
-      const reason =
-        window.prompt("Snapshot reason (optional)", "manual") ?? "manual";
       const res = await fetch("/api/v1/platform/config/snapshots", {
         ...fetchOpts,
         method: "POST",
