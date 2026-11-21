@@ -38,6 +38,12 @@ interface KeyResponseWire extends KeyWire {
   key?: KeyWire;
   metadata?: KeyWire;
 }
+
+// Key versions as GET /kms/keys/{name}/versions emits them
+// (rest/kms ListKeyVersionsResponse); the SDK's declared type differs (#445).
+interface KeyVersionsWire {
+  versions?: Array<{ version?: number; status?: string; created_at?: string }>;
+}
 import { ArrowLeft, Loader2, AlertCircle, RefreshCw, Ban } from "lucide-react";
 
 /**
@@ -63,6 +69,11 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
     [id]
   );
 
+  const { data: versionsResponse, error: versionsError } = useApi(
+    () => kms.getKeyVersions({ keyId: id }),
+    [id]
+  );
+
   // Transform server response to UI KeyDetail. The platform KMS REST
   // handler returns the key record directly (snake_case) so the older
   // {key, metadata} envelope expected here was always missing. Read
@@ -85,6 +96,22 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
     };
     const createdRaw = metadata.createdAt ?? metadata.created_at ?? key.createdAt ?? key.created_at;
     const status: string = String(key.status ?? metadata.status ?? '').toUpperCase();
+    const served = (versionsResponse as unknown as KeyVersionsWire | null | undefined)?.versions;
+    const versions: KeyDetail["versions"] = Array.isArray(served)
+      ? served
+          .map((v) => ({
+            version: v.version ?? 0,
+            createdAt: toIso(v.created_at),
+            status: String(v.status ?? '').toUpperCase() === 'ENABLED' ? 'active' as const : 'inactive' as const,
+          }))
+          .sort((a, b) => b.version - a.version)
+      : [
+          {
+            version: metadata.version ?? key.version ?? 1,
+            createdAt: toIso(createdRaw),
+            status: status === 'ENABLED' ? 'active' as const : 'inactive' as const,
+          }
+        ];
     return {
       id: keyId,
       name: metadata.name || key.name || keyId,
@@ -92,18 +119,12 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
       type: algorithm.includes('AES') || algorithm.includes('HMAC') ? 'symmetric' as const : 'asymmetric' as const,
       status: (status === 'ENABLED' ? 'active' : status === 'DISABLED' ? 'disabled' : 'active') as 'active' | 'disabled' | 'pending_deletion',
       createdAt: toIso(createdRaw),
-      rotationCount: 0,
-      versions: [
-        {
-          version: metadata.version ?? key.version ?? 1,
-          createdAt: toIso(createdRaw),
-          status: status === 'ENABLED' ? 'active' as const : 'inactive' as const,
-        }
-      ],
+      rotationCount: Array.isArray(served) ? Math.max(versions.length - 1, 0) : 0,
+      versions,
       usageHistory: [],
       metadata: metadata.tags || {},
     };
-  }, [response]);
+  }, [response, versionsResponse]);
 
   const deleteMutation = useMutation(
     (keyId: string) => kms.deleteKey({ keyId }),
@@ -320,13 +341,16 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
       </Card>
 
       {/* Key Versions */}
-      {keyDetail.versions.length > 0 && (
+      {(versionsError || keyDetail.versions.length > 0) && (
         <Card>
           <CardHeader>
             <CardTitle>Key Versions</CardTitle>
             <CardDescription>History of key rotations</CardDescription>
           </CardHeader>
           <CardContent>
+            {versionsError ? (
+              <p className="text-sm text-destructive">Key versions could not be read: {versionsError.message}</p>
+            ) : (
             <div className="rounded-md border">
               <Table>
                 <TableHeader>
@@ -355,6 +379,7 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
                 </TableBody>
               </Table>
             </div>
+            )}
           </CardContent>
         </Card>
       )}
