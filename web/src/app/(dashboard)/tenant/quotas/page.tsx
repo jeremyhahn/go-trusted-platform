@@ -14,6 +14,7 @@ import {
   Container,
   MemoryStick,
   Pencil,
+  KeyRound,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import {
@@ -284,6 +285,33 @@ export default function TenantQuotasPage() {
       onError: (error) => {
         toast({
           title: "Quota update failed",
+          description: error.message,
+          variant: "destructive",
+        });
+      },
+    }
+  );
+
+  const [confirmRotate, setConfirmRotate] = React.useState(false);
+  const [rotatedVersion, setRotatedVersion] = React.useState<number | null>(
+    null
+  );
+
+  const rotateDEK = useMutation(
+    (_: void) =>
+      tenant.rotateDEK({ tenantId: tenantId || "", background: false }),
+    {
+      onSuccess: (result) => {
+        setConfirmRotate(false);
+        setRotatedVersion(result.newVersion);
+        toast({
+          title: "Data key rotated",
+          description: `Version ${result.oldVersion} replaced by version ${result.newVersion}.`,
+        });
+      },
+      onError: (error) => {
+        toast({
+          title: "Data key rotation failed",
           description: error.message,
           variant: "destructive",
         });
@@ -860,6 +888,70 @@ export default function TenantQuotasPage() {
                   <a href="/tenant">Back to Tenant Overview</a>
                 </Button>
               </div>
+            </CardContent>
+          </Card>
+
+          {/* Data Encryption Key */}
+          <Card>
+            <CardHeader className="flex flex-row items-start justify-between space-y-0">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <KeyRound className="h-5 w-5" />
+                  Data Encryption Key
+                </CardTitle>
+                <CardDescription>
+                  Rotate the key that encrypts this tenant&apos;s data
+                </CardDescription>
+              </div>
+              {!confirmRotate && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setConfirmRotate(true)}
+                >
+                  <KeyRound className="h-4 w-4 mr-2" />
+                  Rotate data key
+                </Button>
+              )}
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {rotatedVersion !== null && (
+                <p className="text-sm">{`Current key version: ${rotatedVersion}`}</p>
+              )}
+              {confirmRotate && (
+                <div
+                  role="group"
+                  aria-label="Confirm data key rotation"
+                  className="space-y-3 rounded-md border p-4"
+                >
+                  <p className="text-sm">
+                    Rotating the data key moves this tenant to a new key
+                    version. Data written before stays readable.
+                  </p>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      disabled={rotateDEK.isLoading}
+                      onClick={() => rotateDEK.mutate()}
+                    >
+                      Rotate now
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setConfirmRotate(false)}
+                    >
+                      Keep current key
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {rotatedVersion === null && !confirmRotate && (
+                <p className="text-sm text-muted-foreground">
+                  No rotation in this session.
+                </p>
+              )}
             </CardContent>
           </Card>
         </>

@@ -244,13 +244,18 @@ export class TenantService extends BaseService {
   /**
    * Rotate tenant DEK
    *
+   * The rotation is not idempotent: each success advances the key version.
+   * The client therefore never retries it, and a lost response leaves the
+   * outcome to a DEK status read ({@link getDEKStatus}).
+   *
    * @param request - Rotation request
    * @returns Rotation result
    */
   async rotateDEK(request: RotateTenantDEKRequest): Promise<ApiResponse<RotateTenantDEKResponse>> {
     return this.client.post<RotateTenantDEKResponse>(
       this.buildUrl(`/${this.encodePathSegment(request.tenantId)}/dek/rotate`),
-      { background: request.background }
+      { background: request.background },
+      { retry: { enabled: false } }
     );
   }
 
