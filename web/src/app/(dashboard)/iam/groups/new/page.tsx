@@ -16,6 +16,16 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Loader2 } from 'lucide-react';
 
+// The SDK rejects with an error object carrying the server's message; it is
+// not always an Error instance.
+function failureMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err !== null && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string') {
+    return (err as { message: string }).message;
+  }
+  return String(err);
+}
+
 export default function NewGroupPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -38,7 +48,7 @@ export default function NewGroupPage() {
       onError: (err) => {
         toast({
           title: 'Failed to create group',
-          description: err instanceof Error ? err.message : 'Unknown error',
+          description: failureMessage(err),
           variant: 'destructive',
         });
       },
