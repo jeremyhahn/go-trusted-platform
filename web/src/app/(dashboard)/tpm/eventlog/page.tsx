@@ -26,6 +26,8 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Table,
   TableBody,
@@ -97,6 +99,17 @@ export default function TPMEventLogPage() {
   // the empty-state copy explains the situation; we don't
   // synthesize fake parsed rows.
   const entries: EventLogEntry[] = React.useMemo(() => logData?.entries ?? [], [logData]);
+
+  // PCR filter: an empty field keeps every entry; a whole number keeps
+  // only the entries extended into that PCR.
+  const [pcrFilter, setPcrFilter] = React.useState("");
+  const filtered: EventLogEntry[] = React.useMemo(() => {
+    const wanted = pcrFilter.trim();
+    if (wanted === "") return entries;
+    if (!/^\d+$/.test(wanted)) return entries;
+    const pcr = Number(wanted);
+    return entries.filter((e) => e.pcrIndex === pcr);
+  }, [entries, pcrFilter]);
 
   const rawEventLog: string | null = logData?.eventLog ?? null;
   const eventCount: number = logData?.eventCount ?? entries.length;
@@ -244,6 +257,19 @@ export default function TPMEventLogPage() {
               )}
             </div>
           ) : (
+            <>
+            <div className="mb-4 flex items-center gap-2">
+              <Label htmlFor="eventlog-pcr-filter">Filter by PCR</Label>
+              <Input
+                id="eventlog-pcr-filter"
+                type="number"
+                min={0}
+                max={23}
+                className="w-24"
+                value={pcrFilter}
+                onChange={(e) => setPcrFilter(e.target.value)}
+              />
+            </div>
             <Table>
               <TableHeader>
                 <TableRow>
@@ -254,7 +280,7 @@ export default function TPMEventLogPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {entries.slice(0, 200).map((e, i) => {
+                {filtered.slice(0, 200).map((e, i) => {
                   const display = e.eventString;
                   const label = PCR_LABELS[e.pcrIndex];
                   return (
@@ -274,10 +300,11 @@ export default function TPMEventLogPage() {
                 })}
               </TableBody>
             </Table>
+            </>
           )}
-          {entries.length > 200 && (
+          {filtered.length > 200 && (
             <p className="text-xs text-muted-foreground mt-2">
-              Showing first 200 of {entries.length} events. Filter by PCR to see more.
+              Showing first 200 of {filtered.length} events. Filter by PCR to see more.
             </p>
           )}
         </CardContent>
