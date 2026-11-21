@@ -29,7 +29,7 @@ test.describe('Gateway flow benchmark', () => {
     const dialog = authenticatedPage.getByTestId('perf-flows-dialog');
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText('Install temporary switch flows?');
-    await expect(dialog).toContainText('expire when the run ends');
+    await expect(dialog).toContainText('deletes them when the run ends');
 
     await authenticatedPage.getByTestId('perf-flows-cancel').click();
     await expect(dialog).toBeHidden();
@@ -38,6 +38,11 @@ test.describe('Gateway flow benchmark', () => {
   });
 
   test('confirm runs one benchmark and the page answers', async ({ authenticatedPage }) => {
+    const posts: Request[] = [];
+    authenticatedPage.on('request', (r) => {
+      if (isPerfFlowsPost(r)) posts.push(r);
+    });
+
     await authenticatedPage.goto('/networking/gateway');
     await authenticatedPage.getByTestId('perf-flows-run').click();
     await expect(authenticatedPage.getByTestId('perf-flows-dialog')).toBeVisible();
@@ -53,5 +58,10 @@ test.describe('Gateway flow benchmark', () => {
       authenticatedPage.getByTestId('perf-flows-result').or(authenticatedPage.getByTestId('perf-flows-error'))
     ).toBeVisible();
     await expect(authenticatedPage.getByTestId('perf-flows-run')).toBeEnabled();
+
+    // One confirmation is one run: the SDK never re-sends the POST (#2179
+    // Codex).
+    await authenticatedPage.waitForLoadState('networkidle');
+    expect(posts).toHaveLength(1);
   });
 });

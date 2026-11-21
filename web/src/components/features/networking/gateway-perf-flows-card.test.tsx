@@ -57,9 +57,17 @@ describe("GatewayPerfFlowsCard", () => {
     const dialog = screen.getByTestId("perf-flows-dialog");
     expect(screen.getByText("Install temporary switch flows?")).toBeTruthy();
     const text = dialog.textContent ?? "";
-    for (const want of ["1000 temporary drop flows", "table 250", "expire when the run ends", "within 30 seconds"]) {
+    for (const want of [
+      "1000 temporary drop flows",
+      "table 250",
+      "deletes them when the run ends",
+      "expires any left behind within 60 seconds",
+    ]) {
       expect(text).toContain(want);
     }
+    // The server bounds only its delete attempt; the hard timeout is what
+    // guarantees expiry (#2179 Codex).
+    expect(text).not.toContain("within 30 seconds");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -110,5 +118,26 @@ describe("GatewayPerfFlowsCard", () => {
     const error = await screen.findByTestId("perf-flows-error");
     expect(error.textContent).toContain("perf service not configured");
     expect((screen.getByTestId("perf-flows-run") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("a failed teardown shows the server message and the hard timeout", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(500, {
+        code: 500,
+        error: "perf operation failed: perf: flow teardown on br-int failed: boom",
+        success: false,
+        payload: null,
+      })
+    );
+    render(<GatewayPerfFlowsCard />);
+    await openDialog();
+
+    await act(async () => screen.getByTestId("perf-flows-confirm").click());
+
+    const error = await screen.findByTestId("perf-flows-error");
+    const text = error.textContent ?? "";
+    expect(text).toContain("flow teardown on br-int failed");
+    expect(text).toContain("expires any left behind within 60 seconds");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
