@@ -71,7 +71,7 @@ func TestSDKRouteClaims_ResolveToTheirOwnOperation(t *testing.T) {
 		}
 		resolved++
 
-		if testutil.NormalisePlaceholders(template) == testutil.NormalisePlaceholders(c.Path) {
+		if testutil.NormalisePlaceholders(template) == testutil.NormalisePlaceholders(c.Path) || claimFillsCatchAll(c.Path, template) {
 			continue
 		}
 		if _, known := claimsResolvingToASiblingRoute[c.GRPCMethod]; known {
@@ -95,6 +95,39 @@ func TestSDKRouteClaims_ResolveToTheirOwnOperation(t *testing.T) {
 			"in claimsResolvingToASiblingRoute with the issue that tracks it -- never silently.",
 			len(swallowed), strings.Join(swallowed, "\n\n    "))
 	}
+}
+
+// claimFillsCatchAll reports whether a claim that routed to template is still
+// the operation template serves: template's last segment is a catch-all
+// {name:.+} and the claim fills that tail with placeholders joined only by
+// punctuation, as {repository}:{reference} fills {repository:.+} and the
+// registry handler splits it back out (parseRef). A literal word or another
+// path segment in the tail names a different resource and stays a finding.
+func claimFillsCatchAll(claim, template string) bool {
+	slash := strings.LastIndex(template, "/")
+	if slash < 0 {
+		return false
+	}
+	last := template[slash+1:]
+	if !strings.HasPrefix(last, "{") || !strings.HasSuffix(last, ":.+}") || strings.Count(last, "{") != 1 {
+		return false
+	}
+	prefix := testutil.NormalisePlaceholders(template[:slash+1])
+	normalised := testutil.NormalisePlaceholders(claim)
+	if !strings.HasPrefix(normalised, prefix) {
+		return false
+	}
+	tail := normalised[len(prefix):]
+	if !strings.Contains(tail, "{}") {
+		return false
+	}
+	for _, r := range strings.ReplaceAll(tail, "{}", "") {
+		if r == '/' || r == '{' || r == '}' ||
+			('a' <= r && r <= 'z') || ('A' <= r && r <= 'Z') || ('0' <= r && r <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // TestSDKRouteClaims_SiblingExemptionsAreStillReal keeps the list above a
@@ -128,7 +161,7 @@ func TestSDKRouteClaims_SiblingExemptionsAreStillReal(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		if testutil.NormalisePlaceholders(template) == testutil.NormalisePlaceholders(c.Path) {
+		if testutil.NormalisePlaceholders(template) == testutil.NormalisePlaceholders(c.Path) || claimFillsCatchAll(c.Path, template) {
 			stale = append(stale, method+" (now lands on its own route)")
 		}
 	}
