@@ -2,6 +2,9 @@ package iam
 
 import (
 	"context"
+	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -113,6 +116,38 @@ func TestQuicBaaSIAMAdapter_CreatePolicyRefusesUnknownEffect(t *testing.T) {
 	}
 }
 
+// TestQuicBaaSIAMAdapter_CreatePolicyRefusesSubjects: the pinned backend
+// stores only the flat rules and drops the subject selector, and an empty
+// selector matches every subject, so a subject-scoped policy would grant its
+// rules to everyone. CreatePolicy refuses it before anything is created.
+func TestQuicBaaSIAMAdapter_CreatePolicyRefusesSubjects(t *testing.T) {
+	t.Parallel()
+	const rule = "  rules:\n    - name: r\n      effect: allow\n      actions: [read]\n      resources: [\"*\"]\n"
+	for name, spec := range map[string]string{
+		"spec roles":     "spec:\n  subjects:\n    roles: [reader]\n" + rule,
+		"top-level":      "subjects:\n  users: [u1]\nrules:\n  - name: r\n    effect: allow\n    actions: [read]\n    resources: [\"*\"]\n",
+		"spec any":       "spec:\n  subjects:\n    any: true\n" + rule,
+		"spec attribute": "spec:\n  subjects:\n    match: {dept: eng}\n" + rule,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			adapter, up := newRecordingAdapter()
+			_, err := adapter.CreatePolicy(context.Background(), "tenant-a", &CreatePolicyRequest{Name: "p", SpecYAML: spec})
+			require.Error(t, err)
+			assert.ErrorAs(t, err, new(ErrInvalidRequestBody))
+			assert.Contains(t, err.Error(), "subjects")
+			assert.Zero(t, up.creates, "no create may reach the upstream")
+		})
+	}
+
+	adapter, up := newRecordingAdapter()
+	_, err := adapter.CreatePolicy(context.Background(), "tenant-a", &CreatePolicyRequest{
+		Name: "p", SpecYAML: "spec:\n  subjects: {}\n" + rule,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, up.creates)
+}
+
 // Paging is done over the whole collection: the upstream supplies no cursor
 // and no total, so the adapter asks for everything and slices it.
 func TestQuicBaaSIAMAdapter_ListPoliciesWithoutCursor(t *testing.T) {
@@ -139,21 +174,21 @@ func TestQuicBaaSIAMAdapter_ListPoliciesWithoutCursor(t *testing.T) {
 
 // TestPolicy evaluates against the named policy; the pinned SDK refuses a
 // request without one, so a request naming none is refused explicitly.
-func TestQuicBaaSIAMAdapter_TestPolicyPolicyName(t *testing.T) {
+func TestQuicBaaSIAMAdapter_TestPolicyUnimplemented(t *testing.T) {
 	t.Parallel()
-	adapter, up := newRecordingAdapter()
-	_, err := adapter.TestPolicy(context.Background(), "tenant-a", &TestPolicyRequest{
-		PolicyName: "p1", SubjectID: "u", Action: "read", Resource: "r",
-	})
-	require.NoError(t, err)
-	require.Len(t, up.tested, 1)
-	assert.Equal(t, "p1", up.tested[0].PolicyName)
+	var req TestPolicyRequest
+	require.NoError(t, json.Unmarshal([]byte(`{"policy_name":"p1","subject_id":"u","action":"read","resource":"r"}`), &req))
 
-	_, err = adapter.TestPolicy(context.Background(), "tenant-a", &TestPolicyRequest{
-		SubjectID: "u", Action: "read", Resource: "r",
-	})
+	adapter, up := newRecordingAdapter()
+	_, err := adapter.TestPolicy(context.Background(), "tenant-a", &req)
 	require.Error(t, err)
 	assert.Equal(t, codes.Unimplemented, status.Code(err), "err %v", err)
-	assert.Contains(t, err.Error(), "tenant-wide")
-	assert.Len(t, up.tested, 1, "no test may reach the upstream")
+	assert.Empty(t, up.tested, "no test may reach the upstream")
+
+	typ := reflect.TypeOf(TestPolicyRequest{})
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		assert.False(t, strings.HasPrefix(f.Tag.Get("json"), "policy_name"),
+			"TestPolicyRequest.%s carries a REST-only policy_name the SDK request lacks", f.Name)
+	}
 }

@@ -231,6 +231,13 @@ func TestPolicyMethodsOverSDKREST_ProductionAdapter(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "err %v", err)
+
+	_, err = client.CreatePolicy(ctx, &platformv1.CreateIAMPolicyRequest{
+		TenantId: "tenant-a", Name: "p9",
+		SpecYaml: []byte("spec:\n  subjects:\n    roles: [reader]\n  rules:\n    - name: r\n      effect: allow\n      actions: [read]\n      resources: [\"*\"]\n"),
+	})
+	require.Error(t, err, "a subject-scoped policy must be refused")
+	assert.Equal(t, codes.InvalidArgument, status.Code(err), "err %v", err)
 }
 
 // unimplementedPolicies answers Update, Validate and Test the way the pinned
@@ -269,7 +276,7 @@ func TestPolicyMethodsOverSDKREST_UnimplementedVerbs(t *testing.T) {
 		_, err = adapter.ValidatePolicy(ctx, "tenant-a", "rules: []")
 		assert.Equal(t, codes.Unimplemented, status.Code(err), "validate: %v", err)
 		_, err = adapter.TestPolicy(ctx, "tenant-a", &TestPolicyRequest{
-			PolicyName: "p1", SubjectID: "u", Action: "read", Resource: "r",
+			SubjectID: "u", Action: "read", Resource: "r",
 		})
 		assert.Equal(t, codes.Unimplemented, status.Code(err), "test: %v", err)
 	})

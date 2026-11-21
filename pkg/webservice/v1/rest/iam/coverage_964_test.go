@@ -22,6 +22,8 @@ import (
 	qberrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // cov964NotFound is the typed not-found error the fake SDK clients return
@@ -1000,72 +1002,23 @@ func TestCov964Adapter_ValidatePolicy(t *testing.T) {
 	assert.ErrorIs(t, err, cov964Unavailable{})
 }
 
-func TestCov964Adapter_TestPolicySendsOneInlineCase(t *testing.T) {
+func TestCov964Adapter_TestPolicyIsUnimplemented(t *testing.T) {
 	client := cov964NewClient()
 	client.policies.testRes = &iamsdk.TestPolicyResponse{Passed: 1}
 
 	resp, err := NewQuicBaaSIAMAdapter(client).TestPolicy(context.Background(), "tenant-a", &TestPolicyRequest{
-		PolicyName: "read-only",
-		SubjectID:  "user-1",
-		Roles:      []string{"viewer"},
-		Groups:     []string{"ops"},
-		Action:     "iam:get",
-		Resource:   "tenant/a",
-		Context:    map[string]string{"ip": "10.0.0.1"},
+		SubjectID: "user-1",
+		Roles:     []string{"viewer"},
+		Groups:    []string{"ops"},
+		Action:    "iam:get",
+		Resource:  "tenant/a",
+		Context:   map[string]string{"ip": "10.0.0.1"},
 	})
 
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-
-	require.NotNil(t, client.policies.tested)
-	assert.Equal(t, "read-only", client.policies.tested.PolicyName)
-	require.Len(t, client.policies.tested.TestCases, 1)
-	tc := client.policies.tested.TestCases[0]
-	assert.Equal(t, "rest-inline", tc.Name)
-	assert.Equal(t, iamsdk.Subject{ID: "user-1", TenantID: "tenant-a", Roles: []string{"viewer"}, Groups: []string{"ops"}}, tc.Subject)
-	assert.Equal(t, "iam:get", tc.Action)
-	assert.Equal(t, "tenant/a", tc.Resource)
-	assert.Equal(t, map[string]interface{}{"ip": "10.0.0.1"}, tc.Context)
-}
-
-func TestCov964Adapter_TestPolicyResultDecides(t *testing.T) {
-	tests := []struct {
-		name string
-		res  *iamsdk.TestPolicyResponse
-		want *TestPolicyResponse
-	}{
-		{
-			name: "passing deny case is not allowed",
-			res: &iamsdk.TestPolicyResponse{Passed: 1, Results: []iamsdk.TestCaseResult{{
-				Passed: true, ExpectedResult: iamsdk.EffectDeny, ActualResult: iamsdk.EffectDeny, MatchedRule: "block",
-			}}},
-			want: &TestPolicyResponse{Allowed: false, MatchedRule: "block"},
-		},
-		{
-			name: "failing case whose actual decision is allow is allowed",
-			res: &iamsdk.TestPolicyResponse{Failed: 1, Results: []iamsdk.TestCaseResult{{
-				Passed: false, ExpectedResult: iamsdk.EffectDeny, ActualResult: iamsdk.EffectAllow, MatchedRule: "read",
-			}}},
-			want: &TestPolicyResponse{Allowed: true, MatchedRule: "read"},
-		},
-		{
-			name: "passing allow case is allowed",
-			res: &iamsdk.TestPolicyResponse{Passed: 1, Results: []iamsdk.TestCaseResult{{
-				Passed: true, ExpectedResult: iamsdk.EffectAllow, ActualResult: iamsdk.EffectAllow, MatchedRule: "read",
-			}}},
-			want: &TestPolicyResponse{Allowed: true, MatchedRule: "read"},
-		},
-		{
-			name: "no results is not allowed",
-			res:  &iamsdk.TestPolicyResponse{Passed: 1},
-			want: &TestPolicyResponse{},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, testPolicyResponseFromSDK(tt.res))
-		})
-	}
+	require.Error(t, err)
+	assert.Equal(t, codes.Unimplemented, status.Code(err), "err %v", err)
+	assert.Nil(t, resp)
+	assert.Nil(t, client.policies.tested, "the SDK must not be called")
 }
 
 func TestCov964Adapter_TestPolicyErrors(t *testing.T) {
@@ -1074,9 +1027,9 @@ func TestCov964Adapter_TestPolicyErrors(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, client.policies.tested, "the SDK must not be called")
 
-	_, err = NewQuicBaaSIAMAdapter(client).TestPolicy(context.Background(), "", &TestPolicyRequest{PolicyName: "read-only"})
-	assert.True(t, qberrors.IsInvalidInput(err), "want the SDK's invalid-input error, got %v", err)
-	assert.Equal(t, "tenant ID is required", qberrors.Message(err))
+	_, err = NewQuicBaaSIAMAdapter(client).TestPolicy(context.Background(), "", &TestPolicyRequest{SubjectID: "user-1"})
+	assert.Equal(t, codes.Unimplemented, status.Code(err), "err %v", err)
+	assert.Nil(t, client.policies.tested, "the SDK must not be called")
 }
 
 func TestCov964Adapter_ListApps(t *testing.T) {
