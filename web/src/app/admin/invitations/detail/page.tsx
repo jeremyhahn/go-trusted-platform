@@ -1,9 +1,9 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useMemo } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useInvitationLookup } from "@/hooks";
+import { toInvitationView, useInvitationById } from "@/hooks";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui";
 
 /**
@@ -14,7 +14,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui";
 function InvitationDetailView() {
   const params = useSearchParams();
   const id = params.get("id");
-  const { invitation, loading, error } = useInvitationLookup({ id });
+  // The SDK client loads the invitation (service.get); an SDK error is shown
+  // as it is, never retried with a hand-written fetch.
+  const { data, isLoading: loading, error: apiError } = useInvitationById(id ?? "");
+  const invitation = useMemo(() => toInvitationView(data), [data]);
+  const error = !id ? "No invitation was named" : apiError?.message ?? null;
 
   return (
     <Card data-testid="invitation-detail">
@@ -38,10 +42,10 @@ function InvitationDetailView() {
             <dd data-testid="invitation-detail-role">{invitation.role}</dd>
             <dt>Status</dt>
             <dd data-testid="invitation-detail-status">{invitation.status}</dd>
-            {invitation.expires_at && (
+            {invitation.expiresAt && (
               <>
                 <dt>Expires</dt>
-                <dd>{new Date(invitation.expires_at).toLocaleString()}</dd>
+                <dd>{new Date(invitation.expiresAt).toLocaleString()}</dd>
               </>
             )}
           </dl>

@@ -2,7 +2,7 @@
 
 import { Suspense, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
-import { isPendingInvitation, useInvitationLookup } from "@/hooks";
+import { toInvitationView, useInvitationByToken } from "@/hooks";
 import { useSessionToken } from "@/hooks/use-session-token";
 import { decodeJWT } from "@/utils/jwt";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui";
@@ -35,13 +35,17 @@ function signedInUserId(sessionToken: string | null): string | null {
 function InviteAccept() {
   const params = useSearchParams();
   const token = params.get("token");
-  const { invitation, loading, error } = useInvitationLookup({ token });
+  // The SDK client loads the invitation (service.getByToken); an SDK error is
+  // shown as it is, never retried with a hand-written fetch.
+  const { data, isLoading: loading, error: apiError } = useInvitationByToken(token ?? "");
+  const invitation = useMemo(() => toInvitationView(data), [data]);
+  const error = !token ? "No invitation was named" : apiError?.message ?? null;
   // The passkey sign-up redirects a browser with a session to /dashboard
   // before it processes the invitation, so a signed-in invitee gets a notice.
   const sessionToken = useSessionToken();
   const signedInAs = useMemo(() => signedInUserId(sessionToken), [sessionToken]);
   const joinHref = `/auth/webauthn/?invitation=${encodeURIComponent(token ?? "")}${
-    invitation?.tenant_name ? `&tenant_name=${encodeURIComponent(invitation.tenant_name)}` : ""
+    invitation?.tenantName ? `&tenant_name=${encodeURIComponent(invitation.tenantName)}` : ""
   }`;
 
   return (
@@ -66,15 +70,15 @@ function InviteAccept() {
               <dd data-testid="invite-role">{invitation.role}</dd>
               <dt>Status</dt>
               <dd data-testid="invite-status">{invitation.status}</dd>
-              {invitation.tenant_name && (
+              {invitation.tenantName && (
                 <>
                   <dt>Workspace</dt>
-                  <dd data-testid="invite-tenant">{invitation.tenant_name}</dd>
+                  <dd data-testid="invite-tenant">{invitation.tenantName}</dd>
                 </>
               )}
             </dl>
           )}
-          {!loading && invitation && isPendingInvitation(invitation.status) && (
+          {!loading && invitation && invitation.status === "pending" && (
             signedInAs ? (
               <p role="status" data-testid="invite-signed-in" className="text-sm text-muted-foreground">
                 You are signed in as {signedInAs}. An existing account cannot join this workspace from
