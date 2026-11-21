@@ -15,7 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { MemberTable } from "@/components/features/tenant/member-table";
 import { InvitationForm } from "@/components/features/tenant/invitation-form";
 import { useAuth } from "@/contexts/AuthContext";
-import { useIAM, useApi, useMutation, useToast } from "@/hooks";
+import { useIAM, useApi, useMutation, useToast, useInvitation } from "@/hooks";
 import type { IAMUser } from "trusted-platform-sdk";
 import type { Member, TenantRole, SendInvitationInput } from "@/types/tenant";
 
@@ -23,6 +23,7 @@ export default function MembersPage() {
   const { tenantId, isLoading: authLoading } = useAuth();
   const { toast } = useToast();
   const iam = useIAM();
+  const { create } = useInvitation();
 
   // Fetch members (users) for the current tenant
   const {
@@ -114,14 +115,26 @@ export default function MembersPage() {
   };
 
   const handleSendInvitation = async (data: SendInvitationInput) => {
-    // TODO: SDK does not yet have invitation endpoints
-    console.log("Send invitation not yet implemented in SDK", data);
-    toast({
-      title: "Not available",
-      description: "Invitation functionality is not yet available",
-      variant: "destructive",
-    });
-    throw new Error("Invitation functionality not yet available");
+    try {
+      await create.mutateAsync({
+        email: data.email,
+        role: data.role,
+        expiresIn: 72, // 72 hours expiration
+      });
+      toast({
+        title: "Invitation sent",
+        description: `Invitation sent to ${data.email}`,
+        variant: "success",
+      });
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Failed to send invitation";
+      toast({
+        title: "Failed to send invitation",
+        description: errorMessage,
+        variant: "destructive",
+      });
+      throw err;
+    }
   };
 
   if (error) {
