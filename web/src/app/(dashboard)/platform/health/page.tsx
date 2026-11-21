@@ -12,6 +12,8 @@ import {
   ResourceUsage,
 } from "@/components/features/platform";
 import { usePlatform, useApi } from "@/hooks";
+import { PlatformVersionCard } from "@/components/features/platform/platform-version-card";
+import { PlatformProbesCard } from "@/components/features/platform/platform-probes-card";
 import { useToast } from "@/hooks/use-toast";
 import type { SystemHealth, ServiceHealth } from "@/types/platform";
 
@@ -216,6 +218,8 @@ export default function HealthPage() {
           </Button>
         </div>
       </PageHeader>
+      <PlatformVersionCard />
+      <PlatformProbesCard />
 
       {health && (
         <>
