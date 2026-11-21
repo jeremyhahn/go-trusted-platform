@@ -397,6 +397,15 @@ func TestRunnerSelectionScript(t *testing.T) {
 				r[jobsURL(7, 2)] = selReply{code: 200, body: `{"total_count":11,"jobs":[]}`}
 			},
 			want: hosted, warning: true},
+		// v1.50: the Actions API lists at most 1000 entries, so a total_count
+		// over 1000 is no lower bound the short-list path may trust: it keeps
+		// the hosted default, as before v1.50, even with an early empty page.
+		{name: "a jobs list with a total_count over 1000 and an early empty page at saturation", env: gh, jobs: saturated,
+			break_: func(r map[string]selReply) {
+				r[jobsURL(7, 1)] = selReply{code: 200, body: strings.Replace(r[jobsURL(7, 1)].body, `"total_count":30`, `"total_count":1001`, 1)}
+				r[jobsURL(7, 2)] = selReply{code: 200, body: `{"total_count":1001,"jobs":[]}`}
+			},
+			want: hosted, warning: true},
 		{name: "a run list reply that is not 200 at saturation", env: gh, jobs: saturated,
 			break_: func(r map[string]selReply) {
 				r[runsURL("in_progress", 1)] = selReply{code: 403, body: `{"message":"Forbidden"}`}
