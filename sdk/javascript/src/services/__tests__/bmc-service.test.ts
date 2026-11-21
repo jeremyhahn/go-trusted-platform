@@ -83,6 +83,47 @@ describe('BMCService', () => {
     expect(client.put).toHaveBeenCalledWith('/v1/bmc/7/cert', { cert_pem: 'C', key_pem: 'K' });
   });
 
+  const profileCalls: Array<[string, (id: number | string) => Promise<unknown>]> = [
+    ['replaceWebCertificate', (id) => service.replaceWebCertificate(id, { certPem: 'C', keyPem: 'K' })],
+    ['listUsers', (id) => service.listUsers(id)],
+    [
+      'createUser',
+      (id) =>
+        service.createUser(id, {
+          slot: 3,
+          username: 'ops',
+          password: 'pw',
+          privilege: 'operator',
+          enabled: true,
+          channel: 1,
+        }),
+    ],
+    ['deleteUser', (id) => service.deleteUser(id, 3)],
+    ['setUserPassword', (id) => service.setUserPassword(id, 3, 'new')],
+    ['setUserPrivilege', (id) => service.setUserPrivilege(id, 3, 'operator', 1)],
+  ];
+
+  function requestCount(): number {
+    return [client.get, client.post, client.put, client.delete].reduce(
+      (sum, fn) => sum + vi.mocked(fn).mock.calls.length,
+      0
+    );
+  }
+
+  for (const [name, call] of profileCalls) {
+    it(`${name} refuses an unsafe or non-numeric profile id with no request`, async () => {
+      await expect(call(9007199254740993)).rejects.toThrow(RangeError);
+      await expect(call('12a')).rejects.toThrow(RangeError);
+      await expect(call('18446744073709551616')).rejects.toThrow(RangeError);
+      expect(requestCount()).toBe(0);
+    });
+
+    it(`${name} accepts a uint64 profile id as a decimal string`, async () => {
+      await call('18446744073709551615');
+      expect(requestCount()).toBe(1);
+    });
+  }
+
   it('bmcPrivilegeName maps IPMI codes and names', () => {
     expect(bmcPrivilegeName(0x04)).toBe('administrator');
     expect(bmcPrivilegeName(0x0f)).toBe('no-access');

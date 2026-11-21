@@ -99,6 +99,38 @@ describe('ApiClient mutation retry policy', () => {
     expect(response.success).toBe(true);
   });
 
+  it('does not resend when a blank per-request key replaces a default one', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async () => unavailable());
+    await clientWith(fetchImpl, { 'Idempotency-Key': 'k' }).post(
+      '/vms',
+      {},
+      { headers: { 'Idempotency-Key': '' } }
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not resend when a blank per-request key of another case replaces a default one', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async () => unavailable());
+    await clientWith(fetchImpl, { 'idempotency-key': 'k' }).post(
+      '/vms',
+      {},
+      { headers: { 'Idempotency-Key': '' } }
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('resends a POST whose Idempotency-Key a request interceptor adds', async () => {
+    const fetchImpl = unavailableOnceThenOk();
+    const client = clientWith(fetchImpl);
+    client.addRequestInterceptor((init) => ({
+      ...init,
+      headers: { ...(init.headers as Record<string, string>), 'idempotency-key': 'i' },
+    }));
+    const response = await client.post('/vms', {});
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(response.success).toBe(true);
+  });
+
   it('ignores a blank Idempotency-Key', async () => {
     const fetchImpl = alwaysRejects();
     await clientWith(fetchImpl).post('/vms', {}, { headers: { 'Idempotency-Key': '  ' } });
