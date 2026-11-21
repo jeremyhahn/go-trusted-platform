@@ -104,6 +104,80 @@ describe('useContainerOps across a container change', () => {
   });
 });
 
+function settleAt(list: Deferred[], index: number, value: unknown): void {
+  const [d] = list.splice(index, 1);
+  if (!d) throw new Error(`no pending request at ${index}`);
+  d.resolve(value);
+}
+
+describe('useContainerOps overlapping reads of one container', () => {
+  async function loaded() {
+    const hook = renderHook(({ id }) => useContainerOps(id), { initialProps: { id: 'a' } });
+    await act(async () => {
+      settle(calls.get, 'a', containerOf('a'));
+      settle(calls.metrics, 'a', metricsOf('a'));
+    });
+    return hook;
+  }
+
+  it('an older refresh that settles after a newer one does not restore stale state', async () => {
+    const { result } = await loaded();
+    act(() => {
+      void result.current.refresh();
+      void result.current.refresh();
+    });
+    expect(calls.get).toHaveLength(2);
+
+    await act(async () => {
+      settleAt(calls.get, 1, { success: true, data: { container: { id: 'a', name: 'new' } } });
+    });
+    await act(async () => {
+      settleAt(calls.get, 0, { success: true, data: { container: { id: 'a', name: 'old' } } });
+    });
+
+    expect(result.current.container?.name).toBe('new');
+  });
+
+  it('an older failed refresh after a newer success leaves the error null', async () => {
+    const { result } = await loaded();
+    act(() => {
+      void result.current.refresh();
+      void result.current.refresh();
+    });
+
+    await act(async () => {
+      settleAt(calls.get, 1, { success: true, data: { container: { id: 'a', name: 'new' } } });
+    });
+    await act(async () => {
+      settleAt(calls.get, 0, { success: false, error: { message: 'gone' } });
+    });
+
+    expect(result.current.error).toBeNull();
+    expect(result.current.container).toEqual({ id: 'a', name: 'new' });
+  });
+
+  it('an older failed metrics read does not erase a newer result', async () => {
+    const { result } = await loaded();
+    act(() => {
+      void result.current.refreshMetrics();
+      void result.current.refreshMetrics();
+    });
+    expect(calls.metrics).toHaveLength(2);
+
+    await act(async () => {
+      settleAt(calls.metrics, 1, {
+        success: true,
+        data: { metrics: { containerId: 'a', cpuPercent: 2 } },
+      });
+    });
+    await act(async () => {
+      settleAt(calls.metrics, 0, { success: false });
+    });
+
+    expect(result.current.metrics).toEqual({ containerId: 'a', cpuPercent: 2 });
+  });
+});
+
 describe('useVMAttestationVerify', () => {
   const quote = {
     quote: 'cXVvdGU=',
