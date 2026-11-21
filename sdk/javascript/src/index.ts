@@ -84,6 +84,10 @@ export {
   DeviceService,
   DNSService,
   NTPService,
+  PlatformClusterService,
+  PlatformClusterState,
+  PlatformClusterNodeRole,
+  PlatformClusterNodeState,
   GatewayService,
   IAMService,
   IDevIDService,
@@ -147,6 +151,20 @@ export type {
   ListNTPSourcesResponse,
   StepNTPClockResponse,
 } from './services/ntp-service.js';
+
+export type {
+  PlatformClusterTimestamp,
+  PlatformClusterNode,
+  PlatformClusterInfo,
+  PlatformClusterStatusResponse,
+  PlatformClusterNodesResponse,
+  PlatformClusterBootstrapRequest,
+  PlatformClusterJoinRequest,
+  PlatformClusterOperationStatus,
+  PlatformClusterMembershipResponse,
+  PlatformClusterLeaveRequest,
+  PlatformClusterLeaveResponse,
+} from './services/platform-cluster-service.js';
 
 // =============================================================================
 // Error Exports
