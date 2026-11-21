@@ -2,9 +2,11 @@ package iam
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/transport/embedded"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -258,4 +260,77 @@ func TestAppMethodsOverSDKREST_ProductionAdapterForeignApp(t *testing.T) {
 	assert.Empty(t, apps.deleted)
 	assert.Empty(t, apps.rotated)
 	assert.Zero(t, apps.updates)
+}
+
+// unimplementedApps is the pinned go-quicbaas embedded transport as seen
+// through the SDK: it dispatches App Register/Get/List/Delete but answers
+// an unknown-method error for Update and RotateSecret.
+type unimplementedApps struct {
+	*orderedApps
+}
+
+func (u *unimplementedApps) Register(_ context.Context, tenantID string, req *iamsdk.RegisterAppRequest) (*iamsdk.Application, error) {
+	u.registered = req
+	return &iamsdk.Application{
+		ClientID: "c-new", TenantID: tenantID, Name: req.Name,
+		ClientSecret: "s3cret", ResourcePrefix: "tenant-a/apps/", ResponseTypes: req.ResponseTypes,
+	}, nil
+}
+
+func (u *unimplementedApps) Update(context.Context, string, string, *iamsdk.UpdateAppRequest) (*iamsdk.Application, error) {
+	return nil, embedded.NewUnknownMethodError("quicbaas.IAM.App", "Update")
+}
+
+func (u *unimplementedApps) RotateSecret(context.Context, string, string) (*iamsdk.RotateSecretResponse, error) {
+	return nil, embedded.NewUnknownMethodError("quicbaas.IAM.App", "RotateSecret")
+}
+
+type unimplementedAppsClient struct {
+	*cov964Client
+	apps *unimplementedApps
+}
+
+func (c *unimplementedAppsClient) App() iamsdk.AppClient { return c.apps }
+
+func TestAppMethodsOverSDKREST_UnimplementedVerbs(t *testing.T) {
+	t.Parallel()
+	const tenant = "tenant-a"
+	apps := &unimplementedApps{orderedApps: &orderedApps{apps: []iamsdk.Application{
+		{ClientID: "c1", TenantID: tenant, Name: "one", ResourcePrefix: "one/", ResponseTypes: []string{"code"}},
+	}}}
+	adapter := NewQuicBaaSIAMAdapter(&unimplementedAppsClient{cov964Client: cov964NewClient(), apps: apps})
+	server := adminSessionIAMServer(t, adapter, &mockPEPClient{})
+	client := platformv1.NewPlatformIAMServiceClient(sdkRESTConnection(t, server))
+	ctx := context.Background()
+
+	t.Run("UpdateApp", func(t *testing.T) {
+		_, err := client.UpdateApp(ctx, &platformv1.UpdateIAMAppRequest{TenantId: tenant, ClientId: "c1", Name: "docs"})
+		require.Error(t, err)
+		assert.Equal(t, codes.Unimplemented, status.Code(err), "update: %v", err)
+	})
+
+	t.Run("RotateAppSecret", func(t *testing.T) {
+		_, err := client.RotateAppSecret(ctx, &platformv1.RotateIAMAppSecretRequest{TenantId: tenant, ClientId: "c1"})
+		require.Error(t, err)
+		assert.Equal(t, codes.Unimplemented, status.Code(err), "rotate: %v", err)
+	})
+
+	t.Run("RotateOverHTTPIs501", func(t *testing.T) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+			server.URL+"/api/v1/iam/tenants/"+tenant+"/apps/c1/rotate", nil)
+		require.NoError(t, err)
+		resp, err := server.Client().Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusNotImplemented, resp.StatusCode)
+	})
+
+	t.Run("RegisterKeepsSecretAndPrefix", func(t *testing.T) {
+		registered, err := client.RegisterApp(ctx, &platformv1.RegisterIAMAppRequest{
+			TenantId: tenant, Name: "docs", ResourcePrefix: "tenant-a/apps/", ResponseTypes: []string{"code"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "s3cret", registered.GetApp().GetClientSecret())
+		assert.Equal(t, "tenant-a/apps/", registered.GetApp().GetResourcePrefix())
+	})
 }
