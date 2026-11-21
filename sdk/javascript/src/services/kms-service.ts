@@ -167,15 +167,22 @@ export class KMSService extends BaseService {
   }
 
   /**
-   * Update key status (enable/disable)
+   * Update key status through the served route PUT /v1/kms/keys/{name}/status.
+   *
+   * The body carries `status` and, only when the caller sets one, `version`;
+   * without a version the server changes the current one.
    *
    * @param request - Status update request
    * @returns Updated key status
    */
   async updateKeyStatus(request: UpdateKeyStatusRequest): Promise<ApiResponse<UpdateKeyStatusResponse>> {
-    return this.client.patch<UpdateKeyStatusResponse>(
+    const body: { status: UpdateKeyStatusRequest['status']; version?: number } = { status: request.status };
+    if (request.version !== undefined) {
+      body.version = request.version;
+    }
+    return this.client.put<UpdateKeyStatusResponse>(
       this.buildUrl(`/keys/${this.encodePathSegment(request.keyId)}/status`),
-      { version: request.version, status: request.status }
+      body
     );
   }
 
