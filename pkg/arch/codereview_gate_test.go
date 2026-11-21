@@ -230,6 +230,68 @@ func TestCodeReviewGateRefusesAnApprovalOnOwnerHold(t *testing.T) {
 }
 
 // or returns v, or def when v is empty.
+// codeReviewJob returns the one job of code-review.yml with the given ID.
+func codeReviewJob(t *testing.T, wf ciWorkflow, id string) ciJob {
+	t.Helper()
+	var found []ciJob
+	for _, j := range wf.Jobs {
+		if j.ID == id {
+			found = append(found, j)
+		}
+	}
+	require.Len(t, found, 1, "code-review.yml has no single %s job", id)
+	return found[0]
+}
+
+// An unrelated label must still run the guard: the gate reads the scope
+// job's SCOPE_SKIP, so a label filter on scope's if: would drop a
+// guard-cleared CI-only PR's exemption on, say, a dept:software label event.
+// Only the review job keeps the label filter (Codex P1, #2227).
+func TestCodeReviewScopeJobIfCarriesNoLabelFilter(t *testing.T) {
+	wf := loadCIWorkflow(t, repoRoot(t), codeReviewWorkflowFile)
+	scope := codeReviewJob(t, wf, "scope")
+	review := codeReviewJob(t, wf, "review")
+	require.NotContains(t, scope.If, "github.event.label.name", "the scope job filters on the event's label")
+	require.Contains(t, scope.If, "github.event.pull_request.draft != true")
+	require.Contains(t, scope.If, "github.event.pull_request.state == 'open'")
+	require.Contains(t, review.If, "github.event.label.name == 'code-review'", "the review job lost its label filter")
+}
+
+// The handoff re-runs a newer twin's red gate only once that run has
+// completed, so it polls: the status is read again inside the loop, not only
+// from the initial runs listing, within a bounded wait that fails the step
+// (exit 5) past the bound (Codex P1, #2227).
+func TestCodeReviewHandoffPollsANewerRunUntilItCompletes(t *testing.T) {
+	wf := loadCIWorkflow(t, repoRoot(t), codeReviewWorkflowFile)
+	gate := codeReviewJob(t, wf, "gate")
+	var found []string
+	for _, s := range gate.Steps {
+		if strings.Contains(s.Run, `api POST "/actions/jobs/$gate/rerun"`) {
+			found = append(found, s.Run)
+		}
+	}
+	require.Len(t, found, 1, "the gate job has no single handoff step")
+	run := found[0]
+	require.Contains(t, run, `HANDOFF_POLL_S=${HANDOFF_POLL_S:-15}`)
+	require.Contains(t, run, `HANDOFF_WAIT_S=${HANDOFF_WAIT_S:-300}`)
+	require.Contains(t, run, `deadline=$((SECONDS + HANDOFF_WAIT_S))`)
+	require.Contains(t, run, "exit 5", "the handoff never fails a stuck wait")
+
+	start := strings.Index(run, `while read -r id status; do`)
+	end := strings.Index(run, `done <<<"$newer"`)
+	require.GreaterOrEqual(t, start, 0, "the handoff has no loop over the newer runs")
+	require.GreaterOrEqual(t, end, 0, "the handoff loop does not read the newer runs")
+	require.Less(t, start, end)
+	body := run[start:end]
+	require.Contains(t, body, `[ "$status" != completed ] || break`)
+	require.Contains(t, body, `"$SECONDS" -ge "$deadline"`)
+	sleep := strings.Index(body, `sleep "$HANDOFF_POLL_S"`)
+	reread := strings.Index(body, `status=$(api GET "/actions/runs/$id"`)
+	require.GreaterOrEqual(t, sleep, 0, "the handoff loop never waits between polls")
+	require.GreaterOrEqual(t, reread, 0, "the handoff loop never reads the run's status again")
+	require.Less(t, sleep, reread, "the handoff re-reads the status before it waits")
+}
+
 func or(v, def string) string {
 	if v == "" {
 		return def
