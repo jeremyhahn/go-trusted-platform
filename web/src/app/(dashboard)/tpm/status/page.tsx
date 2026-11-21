@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   RefreshCw,
   Shield,
@@ -36,7 +37,6 @@ import type {
   ApiResponse,
   GetEKResponse,
   GetIAKInfoResponse,
-  GetIDevIDInfoResponse,
   GetSRKResponse,
   TPMCapability,
   TPMVersion,
@@ -136,11 +136,23 @@ export default function TPMStatusPage() {
     [],
     { onError: () => {} }
   );
-  const { data: idevidProbe, refetch: refetchIDevID } = useApi(
-    () => idevid.getIDevIDInfo().catch((): ApiResponse<GetIDevIDInfoResponse> => ({ success: false })),
+  // HasIDevID / HasIAK answer presence directly. A refusal leaves data
+  // undefined, which the badges show as "Unknown", not as "No ...".
+  const { data: idevidExists, refetch: refetchIDevID } = useApi(
+    () => idevid.hasIDevID(),
     [],
     { onError: () => {} }
   );
+  const { data: iakExists, refetch: refetchIAKExists } = useApi(
+    () => idevid.hasIAK(),
+    [],
+    { onError: () => {} }
+  );
+  const {
+    data: deviceAttributes,
+    error: deviceAttributesError,
+    refetch: refetchAttributes,
+  } = useApi(() => idevid.getDeviceAttributes(), [], { onError: () => {} });
 
   const refetchAll = React.useCallback(() => {
     loadStatus();
@@ -148,7 +160,74 @@ export default function TPMStatusPage() {
     refetchSRK();
     refetchIAK();
     refetchIDevID();
-  }, [loadStatus, refetchEK, refetchSRK, refetchIAK, refetchIDevID]);
+    refetchIAKExists();
+    refetchAttributes();
+  }, [loadStatus, refetchEK, refetchSRK, refetchIAK, refetchIDevID, refetchIAKExists, refetchAttributes]);
+
+  // GenerateIAK / DeleteIAK: each call re-reads HasIAK and the IAK info
+  // afterwards, whether it was accepted or refused. The SDK does not throw;
+  // a refusal comes back as res.error.
+  const [iakBusy, setIakBusy] = React.useState(false);
+  const [confirmDeleteIAK, setConfirmDeleteIAK] = React.useState(false);
+
+  const rereadIAK = React.useCallback(() => {
+    refetchIAKExists();
+    refetchIAK();
+  }, [refetchIAKExists, refetchIAK]);
+
+  const generateIAK = React.useCallback(async () => {
+    setIakBusy(true);
+    try {
+      const res = await idevid.generateIAK();
+      if (res.error) {
+        toast({ title: "IAK generation failed", description: res.error.message, variant: "destructive" });
+      } else {
+        toast({ title: "IAK generated", description: res.data?.status?.message || "The IAK was created" });
+      }
+    } finally {
+      setIakBusy(false);
+      rereadIAK();
+    }
+  }, [idevid, toast, rereadIAK]);
+
+  const deleteIAK = React.useCallback(async () => {
+    setConfirmDeleteIAK(false);
+    setIakBusy(true);
+    try {
+      const res = await idevid.deleteIAK();
+      if (res.error) {
+        toast({ title: "IAK delete refused", description: res.error.message, variant: "destructive" });
+      } else {
+        toast({ title: "IAK deleted", description: res.data?.status?.message || "The IAK was deleted" });
+      }
+    } finally {
+      setIakBusy(false);
+      rereadIAK();
+    }
+  }, [idevid, toast, rereadIAK]);
+
+  // FlushTransientContexts: flushes every transient TPM context. The SDK does
+  // not throw; a refusal comes back as res.error.
+  const [flushBusy, setFlushBusy] = React.useState(false);
+  const [confirmFlush, setConfirmFlush] = React.useState(false);
+
+  const flushContexts = React.useCallback(async () => {
+    setConfirmFlush(false);
+    setFlushBusy(true);
+    try {
+      const res = await idevid.flushTransientContexts();
+      if (res.error) {
+        toast({ title: "Flush refused", description: res.error.message, variant: "destructive" });
+      } else {
+        toast({
+          title: "Transient contexts flushed",
+          description: res.data?.status?.message || "The transient contexts were flushed",
+        });
+      }
+    } finally {
+      setFlushBusy(false);
+    }
+  }, [idevid, toast]);
 
   // Helper to find capability by name
   const findCapability = (caps: TPMCapability[] | undefined, name: string) => {
@@ -229,13 +308,32 @@ export default function TPMStatusPage() {
         isEndorsementHierarchyEnabled: findCapability(caps, 'endorsementHierarchy')?.supported ?? true,
       },
     };
-  }, [infoData, ekProbe, srkProbe, iakProbe, idevidProbe]);
+  }, [infoData, ekProbe, srkProbe, iakProbe]);
 
   const getStatusBadge = (enabled: boolean, label: string) => (
     <Badge variant={enabled ? "default" : "secondary"}>
       {enabled ? label : `Not ${label}`}
     </Badge>
   );
+
+  // Presence from HasIDevID / HasIAK: undefined means the check was
+  // refused or failed, which is not the same as "not provisioned".
+  const presenceBadge = (exists: boolean | undefined, label: string) => {
+    if (exists === true) return <Badge variant="default">{label} Present</Badge>;
+    if (exists === false) return <Badge variant="secondary">No {label}</Badge>;
+    return <Badge variant="outline">{label} Unknown</Badge>;
+  };
+
+  const attributes = deviceAttributes?.attributes;
+  const attributeRows: Array<[string, string | undefined]> = [
+    ["TPM Manufacturer", attributes?.tpmManufacturer],
+    ["TPM Model", attributes?.tpmModel],
+    ["TPM Version", attributes?.tpmVersion],
+    ["Platform Manufacturer", attributes?.platformManufacturer],
+    ["Platform Model", attributes?.platformModel],
+    ["Platform Version", attributes?.platformVersion],
+    ["Platform Serial", attributes?.platformSerial],
+  ];
 
   if (loading && !status) {
     return (
@@ -421,15 +519,24 @@ export default function TPMStatusPage() {
                       <Badge variant={status.capabilities.hasSRK ? "default" : "secondary"}>
                         {status.capabilities.hasSRK ? "SRK Present" : "No SRK"}
                       </Badge>
-                      <Badge variant={iakProbe ? "default" : "secondary"}>
-                        {iakProbe ? "IAK Present" : "No IAK"}
-                      </Badge>
-                      <Badge variant={idevidProbe ? "default" : "secondary"}>
-                        {idevidProbe ? "IDevID Present" : "No IDevID"}
-                      </Badge>
+                      {presenceBadge(iakExists?.exists, "IAK")}
+                      {presenceBadge(idevidExists?.exists, "IDevID")}
                       <Badge variant={status.capabilities.hasOwner ? "default" : "secondary"}>
                         {status.capabilities.hasOwner ? "Owner Set" : "No Owner"}
                       </Badge>
+                    </div>
+                    <div className="flex flex-wrap gap-2 mt-2" data-testid="iak-actions">
+                      <Button size="sm" variant="outline" onClick={() => void generateIAK()} disabled={iakBusy}>
+                        Generate IAK
+                      </Button>
+                      <Button size="sm" variant="destructive" onClick={() => setConfirmDeleteIAK(true)} disabled={iakBusy}>
+                        Delete IAK
+                      </Button>
+                    </div>
+                    <div className="flex flex-wrap gap-2 mt-2" data-testid="tpm-maintenance">
+                      <Button size="sm" variant="outline" onClick={() => setConfirmFlush(true)} disabled={flushBusy}>
+                        Flush transient contexts
+                      </Button>
                     </div>
                   </div>
 
@@ -472,7 +579,65 @@ export default function TPMStatusPage() {
                 </div>
               </CardContent>
             </Card>
+
+            <Card data-testid="device-attributes">
+              <CardHeader>
+                <CardTitle>Device Attributes</CardTitle>
+                <CardDescription>
+                  TCG device attributes reported by the IDevID service
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {deviceAttributesError ? (
+                  <p className="text-sm text-destructive">
+                    Device attributes unavailable: {deviceAttributesError.message}
+                  </p>
+                ) : (
+                  <dl className="space-y-3">
+                    {attributeRows.map(([label, value]) => (
+                      <div key={label} className="flex justify-between">
+                        <dt className="text-sm text-muted-foreground">{label}</dt>
+                        <dd className="text-sm font-medium">{value || "—"}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+              </CardContent>
+            </Card>
           </div>
+
+          <Dialog open={confirmDeleteIAK} onOpenChange={setConfirmDeleteIAK}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Delete the IAK?</DialogTitle>
+                <DialogDescription>
+                  The IDevID service is asked to delete the Initial Attestation Key. The service may refuse: a TPM-resident IAK is not evicted by it.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setConfirmDeleteIAK(false)}>Cancel</Button>
+                <Button type="button" variant="destructive" onClick={() => void deleteIAK()}>Delete IAK</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+          <Dialog open={confirmFlush} onOpenChange={setConfirmFlush}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Flush the transient contexts?</DialogTitle>
+                <DialogDescription>
+                  Every transient object and session loaded in the TPM is flushed. Persistent keys are not touched.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setConfirmFlush(false)}>
+                  Cancel
+                </Button>
+                <Button type="button" onClick={() => void flushContexts()}>
+                  Flush
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </>
       )}
     </div>
