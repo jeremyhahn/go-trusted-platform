@@ -2882,9 +2882,9 @@ test.describe('IAM Management', () => {
         },
       };
 
-      // Rotate secret: POST /api/v1/iam/tenants/{tenantId}/apps/{clientId}/rotate-secret
+      // Rotate secret: POST /api/v1/iam/tenants/{tenantId}/apps/{clientId}/rotate
       // This must be registered BEFORE the more general apps/* route
-      await page.route('**/api/v1/iam/tenants/*/apps/*/rotate-secret', async (route: Route, request: Request) => {
+      await page.route('**/api/v1/iam/tenants/*/apps/*/rotate', async (route: Route, request: Request) => {
         const method = request.method();
         const url = request.url();
 
@@ -2894,7 +2894,7 @@ test.describe('IAM Management', () => {
             return;
           }
 
-          const clientId = extractIdFromUrl(url, /\/apps\/([^/?]+)\/rotate-secret/);
+          const clientId = extractIdFromUrl(url, /\/apps\/([^/?]+)\/rotate/);
           const app = state.apps.find((a) => a.clientId === clientId);
 
           if (!app) {
@@ -2921,8 +2921,8 @@ test.describe('IAM Management', () => {
         const method = request.method();
         const url = request.url();
 
-        // Skip rotate-secret endpoint (handled above)
-        if (url.includes('/rotate-secret')) {
+        // Skip rotate endpoint (handled above)
+        if (url.includes('/rotate')) {
           await route.continue();
           return;
         }
@@ -3727,8 +3727,8 @@ test.describe('IAM Management', () => {
         await route.continue();
       });
 
-      // Rotate secret: POST /api/v1/iam/tenants/{tenantId}/apps/{clientId}/rotate-secret
-      await page.route('**/api/v1/iam/tenants/*/apps/*/rotate-secret', async (route: Route, request: Request) => {
+      // Rotate secret: POST /api/v1/iam/tenants/{tenantId}/apps/{clientId}/rotate
+      await page.route('**/api/v1/iam/tenants/*/apps/*/rotate', async (route: Route, request: Request) => {
         const method = request.method();
         const url = request.url();
 
@@ -3738,7 +3738,7 @@ test.describe('IAM Management', () => {
             return;
           }
 
-          const clientId = extractIdFromUrl(url, /\/apps\/([^/?]+)\/rotate-secret$/);
+          const clientId = extractIdFromUrl(url, /\/apps\/([^/?]+)\/rotate$/);
           const app = state.apps.find((a) => a.clientId === clientId);
 
           if (!app) {
@@ -3765,8 +3765,8 @@ test.describe('IAM Management', () => {
         const method = request.method();
         const url = request.url();
 
-        // Skip if this is the rotate-secret endpoint
-        if (url.includes('/rotate-secret')) {
+        // Skip if this is the rotate endpoint
+        if (url.includes('/rotate')) {
           await route.continue();
           return;
         }
