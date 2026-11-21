@@ -23,15 +23,6 @@ import type {
   UpdateProxyPoolResponse,
   UpdateProxyRouteResponse,
 } from '../../index.js';
-import type {
-  GetProxyConfigResponse,
-  GetProxyPoolResponse,
-  GetProxyRouteResponse,
-  GetProxyStatusResponse,
-  GetProxyZoneMatrixResponse,
-  ListProxyPoolsResponse,
-  ListProxyRoutesResponse,
-} from '../../index.js';
 import type { ApiClient } from '../../client/api-client.js';
 
 function createMockApiClient(): ApiClient {
