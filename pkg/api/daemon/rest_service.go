@@ -499,8 +499,24 @@ func (s *RESTServer) SetKMSHandlers(service restapi.KMSService) {
 func (s *RESTServer) SetKMSRouter(kms kmsclient.Client, crypto cryptoclient.Client, dek dekclient.Client, secrets secretsclient.Client, guard *restapi.ScopeGuard) {
 	logger := logging.NewFromSlog(s.logger)
 	restkms.NewKMSRouter(logger, kms, crypto, dek, secrets, response.NewResponseWriter(logger, nil)).
-		RegisterRoutes(s.catalogGuardedAPI(guard))
+		RegisterRoutes(s.catalogGuardedAPIWith(guard, s.kmsPlatformTenantGate))
 	s.logger.Info("KMS REST routes registered (docs/kms/api.md contract)")
+}
+
+// kmsPlatformTenantGate refuses the secrets and DEK routes to every caller
+// but the platform tenant. The secrets and DEK backends read the tenant from
+// the request context, which this listener does not bind yet, and an absent
+// tenant selects the platform namespace: until the tenant is bound, a caller
+// of another tenant must not reach them. Other KMS routes keep their
+// scope-only check.
+func (s *RESTServer) kmsPlatformTenantGate(callerTenantID, route string) error {
+	if !strings.HasPrefix(route, restBasePath+"/kms/secrets") && !strings.HasPrefix(route, restBasePath+"/kms/deks") {
+		return nil
+	}
+	if s.config == nil || callerTenantID != s.config.PlatformTenantID {
+		return restapi.ErrRouteForbidden{Scope: route, Reason: "the secrets and DEK routes serve the platform tenant only"}
+	}
+	return nil
 }
 
 // SetComputeHandlers wires the compute (VM and container) REST handlers onto

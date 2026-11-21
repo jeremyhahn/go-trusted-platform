@@ -271,6 +271,16 @@ func (s *RESTServer) catalogGuardedAPI(guard *restapi.ScopeGuard) *mux.Router {
 	return api
 }
 
+// catalogGuardedAPIWith is catalogGuardedAPI with gate run on every
+// authenticated, scoped caller and the route template it reached.
+func (s *RESTServer) catalogGuardedAPIWith(guard *restapi.ScopeGuard, gate func(callerTenantID, route string) error) *mux.Router {
+	api := s.router.PathPrefix(restBasePath).Subrouter()
+	auth := s.catalogAuthorization(guard)
+	auth.routeGate = gate
+	api.Use(auth.authorize)
+	return api
+}
+
 // catalogGuardedRoot returns a matcher-less subrouter of the root router for
 // registrars that mount absolute /api/v1 paths. Its routes run behind guard
 // like catalogGuardedAPI's; gorilla/mux runs its middleware only when one of
@@ -299,6 +309,9 @@ type restScopeAuthorization struct {
 	// callerGate, when set, refuses an authenticated, scoped caller the
 	// router cannot serve (for example a tenant it cannot bind).
 	callerGate func(callerTenantID string) error
+	// routeGate, when set, refuses an authenticated, scoped caller a route
+	// template it may not reach (for example a platform-only route).
+	routeGate func(callerTenantID, route string) error
 }
 
 // authorize answers 401 for a missing or invalid credential and 403 for a
@@ -316,6 +329,12 @@ func (a restScopeAuthorization) authorize(next http.Handler) http.Handler {
 		}
 		if a.callerGate != nil {
 			if err := a.callerGate(caller.TenantID); err != nil {
+				a.respWriter.Error403(w, r, err, nil)
+				return
+			}
+		}
+		if a.routeGate != nil {
+			if err := a.routeGate(caller.TenantID, restRouteTemplate(r)); err != nil {
 				a.respWriter.Error403(w, r, err, nil)
 				return
 			}

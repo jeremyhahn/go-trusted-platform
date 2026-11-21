@@ -71,6 +71,8 @@ func init() {
 		wireDecoder(platformv1.KeyManagementService_GenerateKey_FullMethodName, decodeKMSGenerateKey)
 	restResponseDecoders[platformv1.KeyManagementService_GetKey_FullMethodName] =
 		wireDecoder(platformv1.KeyManagementService_GetKey_FullMethodName, decodeKMSGetKey)
+	restResponseDecoders[platformv1.KeyManagementService_ListKeys_FullMethodName] =
+		wireDecoder(platformv1.KeyManagementService_ListKeys_FullMethodName, decodeKMSListKeys)
 }
 
 // encodeKMSGenerateKey flattens the key spec onto the route's top-level
@@ -217,6 +219,34 @@ func decodeKMSGetKey(raw []byte) (*platformv1.GetKeyResponse, error) {
 		},
 		Metadata: meta,
 	}, nil
+}
+
+// kmsListKeysReply is the webservice KMS router's ListKeys reply.
+type kmsListKeysReply struct {
+	Keys []kmsKeyInfoReply `json:"keys"`
+}
+
+// decodeKMSListKeys reads the webservice {"keys":[...]} reply, whose
+// created_at is RFC3339 and whose algorithm is a name such as AES-256-GCM,
+// into the platform key handles.
+func decodeKMSListKeys(raw []byte) (*platformv1.ListKeysResponse, error) {
+	var reply kmsListKeysReply
+	if err := json.Unmarshal(raw, &reply); err != nil {
+		return nil, ErrUnmarshalFailed{Err: err}
+	}
+	resp := &platformv1.ListKeysResponse{Keys: make([]*platformv1.KMSKeyHandle, 0, len(reply.Keys))}
+	for _, k := range reply.Keys {
+		handle := &platformv1.KMSKeyHandle{
+			KeyId:     k.KeyID,
+			Version:   k.Version,
+			Algorithm: kmsKeyAlgorithmsByName[k.Algorithm],
+		}
+		if !k.CreatedAt.IsZero() {
+			handle.CreatedAt = k.CreatedAt.Unix()
+		}
+		resp.Keys = append(resp.Keys, handle)
+	}
+	return resp, nil
 }
 
 func invertKMSKeyAlgorithmNames() map[string]platformv1.KMSKeyAlgorithm {
