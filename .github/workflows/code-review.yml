@@ -1009,7 +1009,7 @@ jobs:
                     | .id' <<<"$body") || warn "cannot read this workflow's $st runs (page $page)"
               older+="$got"$'\n'
               n=$(jq -r '.workflow_runs | length' <<<"$body") || warn "cannot count this workflow's $st runs"
-              [[ $n =~ ^[0-9]+$ ]] && [ "$n" -ge 100 ] || break
+              if ! [[ $n =~ ^[0-9]+$ ]] || [ "$n" -lt 100 ]; then break; fi
             done
           done
           older=$(sort -un <<<"$older" | sed '/^$/d')
@@ -1954,7 +1954,7 @@ jobs:
               if [ "$busy" = 0 ]; then
                 # Nothing first: settle once, then read again, unless a wait
                 # already ran (the twin it waited for has ended).
-                [ "$settled" = 0 ] && [ "$twin_waited" = 0 ] || break
+                if [ "$settled" != 0 ] || [ "$twin_waited" != 0 ]; then break; fi
                 settled=1
                 sleep "$TWIN_SETTLE"
                 continue
