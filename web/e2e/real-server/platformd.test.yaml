@@ -9,7 +9,8 @@
 #   - quicbaas is embedded on the in-memory backend,
 #   - the console (embedded by `make build WITH_WEB=1`) and its API are the
 #     public webservice on TLS port 18443, with a WebAuthn relying party for
-#     localhost. global-setup rewrites 18443 when E2E_PORT is set.
+#     localhost. global-setup rewrites 18443 when E2E_PORT is set, and the
+#     internal webservice's __E2E_INTERNAL_PORT__ always (ports.ts).
 #
 # Derived from configs/platform/standalone/web-test.example.yaml. Every secret
 # is a kms:// reference the embedded quicbaas SecretsService generates on
@@ -322,19 +323,20 @@ webservices:
           - hostmaster@localhost
 
   # Internal webservice, as in the default config (local-network facing).
-  # Fixed port: global-setup rewrites only 18443, so two concurrent
-  # `make web-e2e` runs on one host collide here.
+  # Its own port: global-setup replaces __E2E_INTERNAL_PORT__ with the
+  # internal port ports.ts picks from E2E_PORT (19443 for the default 18443),
+  # never the public port, so both listeners bind distinct addresses.
   - name: internal
     home: trusted-data/www
     port: 0
-    tls-port: 19443
+    tls-port: __E2E_INTERNAL_PORT__
     index: index.html
     jwt:
       expiration: 60
       issuer: trusted-platform
     cors:
       allowed-origins:
-        - https://localhost:19443
+        - https://localhost:__E2E_INTERNAL_PORT__
       allowed-methods:
         - GET
         - POST
@@ -348,7 +350,7 @@ webservices:
       display-name: Trusted Platform Internal
       id: localhost
       origins:
-        - https://localhost:19443
+        - https://localhost:__E2E_INTERNAL_PORT__
     key:
       algorithm: ECDSA
       ecc:

@@ -4,6 +4,7 @@ import https from 'https';
 import os from 'os';
 import path from 'path';
 import { generateAttestationCA, loadAttestation, type AttestationMaterial } from './fixtures/soft-authenticator';
+import { pickPorts, renderConfig } from './ports';
 
 /**
  * Real-server Playwright global setup (#2034, epic #1665).
@@ -100,7 +101,9 @@ async function globalSetup(): Promise<void> {
   // quicbaas.webauthn-attestation-roots-file (relative to dir).
   generateAttestationCA(attestationDir(dir));
   const template = fs.readFileSync(path.join(__dirname, 'platformd.test.yaml'), 'utf8');
-  fs.writeFileSync(path.join(dir, 'config.yaml'), template.replace(/18443/g, String(port)));
+  // The public port from E2E_PORT and an internal port of its own, so the
+  // two TLS listeners never bind one address.
+  fs.writeFileSync(path.join(dir, 'config.yaml'), renderConfig(template, pickPorts(port)));
 
   const log = path.join(dir, 'platformd.log');
   const out = fs.openSync(log, 'a');
