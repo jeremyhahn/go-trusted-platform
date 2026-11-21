@@ -206,6 +206,27 @@ func TestKMSGenerateKey_ReplyFillsHandleAndMetadata(t *testing.T) {
 	}
 }
 
+// TestKMSGetKey_FlatReplyFillsKey pins Codex round 2 P1 on #2151:
+// GET /api/v1/kms/keys/{name} answers the flat KeyInfoResponse, so the
+// adapter decodes it into Key and Metadata instead of returning a nil Key.
+func TestKMSGetKey_FlatReplyFillsKey(t *testing.T) {
+	a, _ := kmsAdapter(t, `{"key_id":"k1","name":"k1","algorithm":"AES-256-GCM","version":1}`)
+	resp := &platformv1.GetKeyResponse{}
+	err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_GetKey_FullMethodName,
+		&platformv1.GetKeyRequest{KeyId: "k1"}, resp)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	key := resp.GetKey()
+	if key == nil || key.GetKeyId() != "k1" || key.GetVersion() != 1 {
+		t.Fatalf("key = %v", key)
+	}
+	meta := resp.GetMetadata()
+	if meta.GetKeyId() != "k1" || meta.GetName() != "k1" || meta.GetVersion() != 1 {
+		t.Fatalf("metadata = %v", meta)
+	}
+}
+
 // TestKMSGenerateKey_UnknownAlgorithmNameAndMalformedReply: an algorithm name
 // the SDK does not know decodes as UNSPECIFIED; a reply that is not JSON is an
 // error, not an empty key.

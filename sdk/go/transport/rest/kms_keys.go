@@ -14,6 +14,7 @@ package rest
 
 import (
 	"encoding/json"
+	"time"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -68,6 +69,8 @@ func init() {
 
 	restResponseDecoders[platformv1.KeyManagementService_GenerateKey_FullMethodName] =
 		wireDecoder(platformv1.KeyManagementService_GenerateKey_FullMethodName, decodeKMSGenerateKey)
+	restResponseDecoders[platformv1.KeyManagementService_GetKey_FullMethodName] =
+		wireDecoder(platformv1.KeyManagementService_GetKey_FullMethodName, decodeKMSGetKey)
 }
 
 // encodeKMSGenerateKey flattens the key spec onto the route's top-level
@@ -175,6 +178,44 @@ func decodeKMSGenerateKey(raw []byte) (*platformv1.GenerateKeyResponse, error) {
 			Exportable:         reply.Exportable,
 			DeletionProtection: reply.DeletionProtection,
 		},
+	}, nil
+}
+
+// kmsKeyInfoReply is the flat KeyInfoResponse GET /api/v1/kms/keys/{name}
+// answers (pkg/webservice/v1/rest/kms).
+type kmsKeyInfoReply struct {
+	KeyID     string    `json:"key_id"`
+	Name      string    `json:"name"`
+	Algorithm string    `json:"algorithm"`
+	Version   uint64    `json:"version"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// decodeKMSGetKey reads the route's flat KeyInfoResponse into the key handle
+// and metadata, so a successful lookup never returns a nil Key. An algorithm
+// name the SDK does not know decodes as UNSPECIFIED.
+func decodeKMSGetKey(raw []byte) (*platformv1.GetKeyResponse, error) {
+	var reply kmsKeyInfoReply
+	if err := json.Unmarshal(raw, &reply); err != nil {
+		return nil, ErrUnmarshalFailed{Err: err}
+	}
+	algorithm := kmsKeyAlgorithmsByName[reply.Algorithm]
+	meta := &platformv1.KMSKeyMetadata{
+		KeyId:     reply.KeyID,
+		Name:      reply.Name,
+		Algorithm: algorithm,
+		Version:   reply.Version,
+	}
+	if !reply.CreatedAt.IsZero() {
+		meta.CreatedAt = reply.CreatedAt.Unix()
+	}
+	return &platformv1.GetKeyResponse{
+		Key: &platformv1.KMSKeyHandle{
+			KeyId:     reply.KeyID,
+			Version:   reply.Version,
+			Algorithm: algorithm,
+		},
+		Metadata: meta,
 	}, nil
 }
 

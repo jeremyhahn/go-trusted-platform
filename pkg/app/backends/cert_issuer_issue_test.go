@@ -154,6 +154,48 @@ func TestLocalCACertIssuer_IssueCertificate_BuildsTheCSRAndReturnsAMatchingKey(t
 	}
 }
 
+// mTLS takes the tenant from the subject OU only (#2020), so the local CA's
+// CSR must carry the requested OU, and no empty OU when none is requested.
+func TestLocalCACertIssuer_IssueCertificate_CarriesTheRequestedOU(t *testing.T) {
+	cases := []struct {
+		name string
+		ou   string
+		want []string
+	}{
+		{name: "requested OU", ou: "tenant-a", want: []string{"tenant-a"}},
+		{name: "no OU", ou: "", want: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ca := newSigningCA(t)
+			resp, err := PlatformCertIssuer(ca, nil).IssueCertificate(context.Background(), &certclient.IssueCertificateRequest{
+				CommonName:         "node-1",
+				Organization:       "tenant-a",
+				OrganizationalUnit: tc.ou,
+				Usage:              "client",
+				ValidityDays:       30,
+			})
+			if err != nil {
+				t.Fatalf("IssueCertificate: %v", err)
+			}
+			if got := ca.csr.Subject.OrganizationalUnit; !slices.Equal(got, tc.want) {
+				t.Errorf("CSR OrganizationalUnit = %q, want %q", got, tc.want)
+			}
+			certBlock, _ := pem.Decode([]byte(resp.CertificatePEM))
+			if certBlock == nil {
+				t.Fatal("certificate is not PEM")
+			}
+			cert, err := x509.ParseCertificate(certBlock.Bytes)
+			if err != nil {
+				t.Fatalf("parse certificate: %v", err)
+			}
+			if got := cert.Subject.OrganizationalUnit; !slices.Equal(got, tc.want) {
+				t.Errorf("certificate OrganizationalUnit = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestLocalCACertIssuer_IssueCertificate_UsageSelectsKeyUsage(t *testing.T) {
 	server := x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment
 	serverExt := []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}

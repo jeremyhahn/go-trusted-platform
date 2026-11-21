@@ -86,6 +86,7 @@ func daemonRouteTable(t *testing.T, guard *restapi.ScopeGuard) (*RESTServer, []s
 	require.NoError(t, s.SetDNSRouterHandlers(log, platformv1.UnimplementedDNSServiceServer{}, guard, ""))
 	require.NoError(t, s.SetPXERouterHandlers(log, platformv1.UnimplementedPXEServiceServer{}, guard))
 	s.SetTenantHandlers(routeTableTenants{}, guard, "")
+	s.SetKMSRouter(nil, nil, nil, nil, guard)
 	s.SetKMSHandlers(routeTableKMS{})
 	s.SetComputeHandlers(platformv1.UnimplementedComputeServiceServer{}, guard)
 	require.NoError(t, s.SetOverlayHandlers(routeTableOverlay{}, guard))
@@ -142,15 +143,6 @@ var daemonDivergentClaims = map[string]string{
 	"/platform.v1.IDevIDService/InstallIAKCertificate":    idevidOnTPMPrefix,
 	"/platform.v1.IDevIDService/InstallIDevIDCertificate": idevidOnTPMPrefix,
 
-	"/platform.v1.KeyManagementService/Decrypt":                kmsKeyInBody,
-	"/platform.v1.KeyManagementService/Encrypt":                kmsKeyInBody,
-	"/platform.v1.KeyManagementService/Sign":                   kmsKeyInBody,
-	"/platform.v1.KeyManagementService/Verify":                 kmsKeyInBody,
-	"/platform.v1.KeyManagementService/HMAC":                   "#452: the daemon takes the key in the body at POST /api/v1/kms/hmac; the claim is the webservice's /hmac/{name} path",
-	"/platform.v1.KeyManagementService/VerifyHMAC":             "#452: the daemon has no HMAC verify route; the claim is the webservice's /hmac/{name}/verify",
-	"/platform.v1.KeyManagementService/GenerateDataKey":        "#452: the daemon's KMS routes have no data-keys",
-	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": "#452: the daemon's KMS routes have no data-keys/wrapped",
-
 	"/platform.v1.ProvisioningGateway/GetBootConfig":         "#452: no server serves it; platformd holds no per-MAC boot configuration (route_coverage_test.go unroutedClaims)",
 	"/platform.v1.ProvisioningGateway/NotifyInstallComplete": pxeGatewayOnWebservice,
 	"/platform.v1.ProvisioningGateway/RegisterPXEDevice":     pxeGatewayOnWebservice,
@@ -169,7 +161,6 @@ var daemonDivergentClaims = map[string]string{
 
 const (
 	idevidOnTPMPrefix      = "#452: the daemon serves IDevID and IAK under /api/v1/tpm/idevid and /api/v1/tpm/iak (rest_idevid.go, registerIDevIDRoutes); the claim is the webservice's /api/v1/idevid shape"
-	kmsKeyInBody           = "#452: the daemon takes the key in the body at POST /api/v1/kms/{encrypt,decrypt,sign,verify}; the claim is the webservice's /{name} path"
 	pxeGatewayOnWebservice = "#452: the per-MAC PXE gateway routes are the webservice's (rest/pxe/gateway.go); the daemon mounts none"
 	// attestationQuoteOnWebservice and deviceMachineFacingOnWebservice are the
 	// caller-gated quote routes and the machine-facing device routes, which
