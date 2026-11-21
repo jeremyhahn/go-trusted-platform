@@ -254,6 +254,13 @@ func TestService_AnonymousConnectionAccount_Refused_Simulator(t *testing.T) {
 			t.Fatalf("SetUserPassword slot 3: %v", err)
 		}
 	})
+
+	t.Run("CreateUser_OverAnonymous", func(t *testing.T) {
+		t.Parallel()
+		svc := newSimAnonymousUserService(t)
+		u := bmc.User{Slot: 1, Username: "intruder", Enabled: true, Privilege: bmc.PrivilegeUser}
+		assertRefused(t, svc.CreateUser(ctx, 1, u, "s3cret-pass"))
+	})
 }
 
 // CreateUser must not overwrite a slot that already holds a user: the page
