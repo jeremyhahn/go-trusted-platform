@@ -53,7 +53,7 @@ describe('AttestationService device verdicts', () => {
     const result = await service.pollDeviceVerdicts();
     expect(client.get).toHaveBeenCalledWith('/v1/attestation/verdicts');
     expect(result.data?.cursor).toBe('c2');
-    expect(result.data?.verdicts[0].deviceId).toBe('9007199254740993');
+    expect(result.data?.verdicts[0]?.deviceId).toBe('9007199254740993');
   });
 
   it('encodes the cursor and floors wait_ms', async () => {
