@@ -106,19 +106,23 @@ export class EABService extends BaseService {
    * @returns List of credentials
    */
   async list(request?: ListEABCredentialsRequest): Promise<ApiResponse<ListEABCredentialsResponse>> {
+    // Query names and status values as ListCredentials reads them
+    // (pkg/webservice/v1/rest/eab/handlers.go listCredentialsRequestFromQuery).
     const filters: Record<string, string | number | boolean | undefined> = {};
     if (request?.profileId !== undefined) {
-      filters.profileId = request.profileId;
+      filters.profile_id = request.profileId;
     }
     if (request?.tenantId !== undefined) {
-      filters.tenantId = request.tenantId;
+      filters.tenant_id = request.tenantId;
     }
     if (request?.status !== undefined) {
-      filters.status = request.status;
+      filters.status = `EAB_CREDENTIAL_STATUS_${request.status}`;
+    }
+    if (request?.pageSize !== undefined) {
+      filters.page_size = request.pageSize;
     }
     return this.client.get<ListEABCredentialsResponse>(this.buildUrl('/credentials', {
       page: request?.page,
-      limit: request?.pageSize,
       filters,
     }));
   }

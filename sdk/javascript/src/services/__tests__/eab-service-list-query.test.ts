@@ -35,7 +35,7 @@ describe('EABService.list query names', () => {
   });
 
   function calledUrl(): { path: string; params: URLSearchParams } {
-    const [path, query] = String(vi.mocked(mockClient.get).mock.calls[0][0]).split('?');
+    const [path = '', query = ''] = String(vi.mocked(mockClient.get).mock.calls[0]?.[0]).split('?');
     return { path, params: new URLSearchParams(query) };
   }
 
