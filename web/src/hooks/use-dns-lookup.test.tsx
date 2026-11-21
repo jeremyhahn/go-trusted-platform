@@ -49,7 +49,7 @@ describe("useDNSLookup", () => {
     const { result } = renderHook(() => useDNSLookup());
 
     await act(async () => {
-      await expect(result.current.resolve({ fqdn: "www.example.com.", type: "BOGUS" })).rejects.toMatchObject({
+      await expect(result.current.resolve({ fqdn: "www.example.com.", type: "A" })).rejects.toMatchObject({
         message: "invalid record type",
       });
     });
