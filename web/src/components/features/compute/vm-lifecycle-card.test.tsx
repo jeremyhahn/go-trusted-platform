@@ -44,7 +44,7 @@ describe('VMLifecycleCard', () => {
   });
 
   it('suspends only after the confirm and re-reads the state', async () => {
-    const routes = { ...baseRoutes(), [SUSPEND_PATH]: ok({ status: { success: true, message: 'ok' } }) };
+    const routes: Record<string, Answer> = { ...baseRoutes(), [SUSPEND_PATH]: ok({ status: { success: true, message: 'ok' } }) };
     const sent = stubControlPlane(routes);
     render(withControlPlane(<VMLifecycleCard vmId="vm-1" />));
     const suspend = await screen.findByTestId('vm-suspend');
