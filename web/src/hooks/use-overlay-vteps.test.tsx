@@ -96,6 +96,15 @@ function overlayRoutes(extra: Route = () => undefined) {
   };
 }
 
+/** Answers the status reads in order: the first read gets bodies[0], each later read the next body, the last one repeating. */
+function statusReads(...bodies: Array<typeof status>): Route {
+  let n = 0;
+  return (method, url) =>
+    method === "GET" && url.pathname === `${base}/status`
+      ? ok({ status: bodies[Math.min(n++, bodies.length - 1)] })
+      : undefined;
+}
+
 describe("useOverlayVteps", () => {
   const fetchMock = vi.fn<typeof fetch>();
 
@@ -212,5 +221,50 @@ describe("useOverlayVteps", () => {
 
     await waitFor(() => expect(result.current.tunnelsError).toBeTruthy());
     await waitFor(() => expect(result.current.vteps).toHaveLength(2));
+  });
+
+  it("deleteVNI re-reads the status and shows the updated counts", async () => {
+    const updated = { ...status, vniCount: 0, tunnelCount: 0, remoteMacCount: 0 };
+    fetchMock.mockImplementation(overlayRoutes(statusReads(status, updated)));
+    const { result } = renderOverlay();
+    await waitFor(() => expect(result.current.status?.vniCount).toBe(1));
+
+    await act(() => result.current.deleteVNI(5001));
+
+    await waitFor(() => expect(result.current.status?.vniCount).toBe(0));
+    expect(result.current.status?.remoteMacCount).toBe(0);
+    expect(result.current.status?.tunnelCount).toBe(0);
+    expect(callsTo("GET", `${base}/status`)).toHaveLength(2);
+  });
+
+  it("forgetMAC re-reads the status and shows the updated counts", async () => {
+    const updated = { ...status, remoteMacCount: 0 };
+    fetchMock.mockImplementation(overlayRoutes(statusReads(status, updated)));
+    const { result } = renderOverlay();
+    await waitFor(() => expect(result.current.status?.remoteMacCount).toBe(1));
+
+    await act(() => result.current.forgetMAC("aa:bb:cc:dd:ee:ff", 5001));
+
+    await waitFor(() => expect(result.current.status?.remoteMacCount).toBe(0));
+    expect(result.current.status?.vniCount).toBe(1);
+    expect(callsTo("GET", `${base}/status`)).toHaveLength(2);
+  });
+
+  it("refetchAll re-reads the status with every list", async () => {
+    const updated = { ...status, vtepCount: 3, healthy: false };
+    fetchMock.mockImplementation(overlayRoutes(statusReads(status, updated)));
+    const { result } = renderOverlay();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    await waitFor(() => expect(result.current.status?.vtepCount).toBe(2));
+
+    act(() => {
+      result.current.refetchAll();
+    });
+
+    await waitFor(() => expect(result.current.status?.vtepCount).toBe(3));
+    expect(result.current.status?.healthy).toBe(false);
+    for (const path of ["/status", "/vteps", "/vnis", "/tunnels", "/macs"]) {
+      await waitFor(() => expect(callsTo("GET", `${base}${path}`)).toHaveLength(2));
+    }
   });
 });

@@ -95,6 +95,15 @@ function routes(extra: Route = () => undefined) {
   };
 }
 
+/** Answers the status reads in order: the first read gets bodies[0], each later read the next body, the last one repeating. */
+function statusReads(...bodies: Array<typeof status>): Route {
+  let n = 0;
+  return (method, url) =>
+    method === "GET" && url.pathname === `${base}/status`
+      ? ok({ status: bodies[Math.min(n++, bodies.length - 1)] })
+      : undefined;
+}
+
 describe("OverlayVtepsPage", () => {
   const fetchMock = vi.fn<typeof fetch>();
 
@@ -201,5 +210,34 @@ describe("OverlayVtepsPage", () => {
     const params = new URL(String(call?.[0])).searchParams;
     expect(params.get("mac")).toBe("aa:bb:cc:dd:ee:ff");
     expect(params.get("vni")).toBe("5001");
+  });
+
+  it("Delete VNI shows the re-read status counts", async () => {
+    fetchMock.mockImplementation(routes(statusReads(status, { ...status, vniCount: 0, remoteMacCount: 0 })));
+    renderPage();
+
+    await waitFor(() => expect(screen.getByTestId("overlay-status").textContent).toContain("VNI count1"));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete VNI 5001" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+    await waitFor(() => {
+      const text = screen.getByTestId("overlay-status").textContent;
+      expect(text).toContain("VNI count0");
+      expect(text).toContain("Remote MAC count0");
+    });
+    expect(callsTo("GET", `${base}/status`)).toHaveLength(2);
+  });
+
+  it("Refresh re-reads the status", async () => {
+    fetchMock.mockImplementation(routes(statusReads(status, { ...status, vtepCount: 3 })));
+    renderPage();
+
+    await waitFor(() => expect(screen.getByTestId("overlay-status").textContent).toContain("VTEP count2"));
+    const refresh = screen.getByRole("button", { name: "Refresh" });
+    await waitFor(() => expect((refresh as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(refresh);
+
+    await waitFor(() => expect(screen.getByTestId("overlay-status").textContent).toContain("VTEP count3"));
+    expect(callsTo("GET", `${base}/status`)).toHaveLength(2);
   });
 });
