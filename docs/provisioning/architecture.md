@@ -132,6 +132,59 @@ transition (for example `UpdateState`) returns the
 enforcement error. A device is never recorded in a state whose zone it is
 not in.
 
+## Device store
+
+The PXE backend's device records are platform state, so they live in the
+deployment datastore (docs/SPEC.md:23, #2028). The `StateManager` in
+`pkg/compute/pxe` holds devices in memory for lookups and writes every
+change through a `DeviceStore` (`Put`, `Delete`, `List`):
+
+- `Register`, `Unregister`, `Transition` and `UpdateDevice` write the
+  device's new record to the store **before** changing memory. Writes are
+  ordered under one lock, so a slower write never overwrites a newer one.
+- When the daemon starts an enabled PXE backend it builds the store over
+  the quicbaas client (`PXEDeviceStore` in `pkg/storage/quicbaas`: one
+  `PXEDevice` entity per device in the system shard, the whole device as
+  JSON) and calls `Load` before `Initialize`. A restarted daemon finds every
+  device in the state it was in, with its retry count, event history and
+  IDevID binding, so a completion report or a quarantine still has its
+  target. A record that does not decode is logged and skipped.
+- The store runs only over the embedded datastore. An enabled PXE backend
+  over a remote (REST) quicbaas transport is refused at start with
+  `pxe.ErrInvalidConfiguration` on `quicbaas.transport`
+  (`pxeDeviceStoreForClient` in `pkg/api/daemon/daemon.go`): the pinned
+  go-quicbaas REST KV handlers return only the first `List` batch and carry
+  no tenant, so a restart would reload an incomplete inventory and records
+  would not land in the system tenant. The refusal stands until the SDK
+  pages and tenant-scopes REST KV
+  (`TestPXEDeviceStoreForClient_RefusesRemoteTransport`).
+- A failed store write is returned to the caller and **nothing takes
+  effect**: memory keeps the previous record and no transition event is
+  emitted (events are emitted only after a committed write). The caller may
+  repeat the same request once the store is back.
+- An operation that changes several fields commits them in one write
+  (`TransitionWithUpdate`): `AuthorizeDevice`, `QuarantineDevice` and
+  `UpdateDeviceState` store the state with the VLAN they enforced, and
+  `RetryDevice` stores the retry count, the cleared IDevID fingerprint and
+  `discovered` together, so a failed write never consumes a retry.
+- Network enforcement happens before the write. If the write then fails,
+  `AuthorizeDevice` restores the device's previous flows, and so does
+  `UpdateDeviceState` for a move to any state but quarantined or failed:
+  `restoreEnforcedFlows` reinstalls the flows of the VLAN the stored record
+  still enforces (the quarantine flows for a device that was quarantined,
+  failed or on the quarantine VLAN; the authorized flows of its VLAN for an
+  authorized device; the provisioning flows for a device on the
+  provisioning VLAN; the quarantine flows when the VLAN is unknown).
+  `QuarantineDevice`, and `UpdateDeviceState` to quarantined or failed,
+  keep the restrictive flows: a datastore outage never gives a device being
+  quarantined its earlier access back. Its stored state stays the old one
+  until the quarantine is repeated
+  (`TestService_UpdateDeviceState_FailedWideningWriteRestoresQuarantineFlows`,
+  `TestService_UpdateDeviceState_FailedWriteRestoresProvisioningFlows`,
+  `TestService_UpdateDeviceState_FailedRestrictiveWriteKeepsQuarantineFlows`).
+- With no quicbaas DAO factory (tests, a daemon without the datastore) the
+  backend keeps devices in memory only.
+
 ## What this feature deliberately does not do
 
 - **It does not decide whether a machine belongs.** Fulfilment does, and

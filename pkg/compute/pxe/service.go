@@ -691,27 +691,26 @@ func (s *service) updateDeviceStateLocked(ctx context.Context, deviceID string, 
 		}
 	}
 
-	if err := s.stateManager.Transition(deviceID, state, reason); err != nil {
+	// State and the VLAN the move enforced in one record write, so
+	// GetDevice and a VLAN filter report the device where its port now
+	// is, and a failed write leaves state and VLAN as they were.
+	vlan, recordVLAN := s.vlanForState(state)
+	recordVLAN = recordVLAN && s.vlanManager != nil
+	if err := s.stateManager.TransitionWithUpdate(deviceID, state, reason, func(d *DeviceInfo) {
+		if recordVLAN {
+			d.CurrentVLAN = vlan
+		}
+	}); err != nil {
+		// The record still says the device is where it was; put the port
+		// back there unless the move only narrowed access (quarantined or
+		// failed), whose restrictive flows stay in place.
+		if state != StateQuarantined && state != StateFailed {
+			s.restoreEnforcedFlows(ctx, device)
+		}
 		return ErrProvisioningFailed{
 			DeviceID: deviceID,
 			Reason:   "failed to transition device state",
 			Cause:    err,
-		}
-	}
-
-	// Record the VLAN the move enforced, so GetDevice and a VLAN filter
-	// report the device where its port now is.
-	if vlan, ok := s.vlanForState(state); s.vlanManager != nil && ok {
-		updateErr := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
-			d.CurrentVLAN = vlan
-			return nil
-		})
-		if updateErr != nil {
-			return ErrProvisioningFailed{
-				DeviceID: deviceID,
-				Reason:   "failed to record current VLAN",
-				Cause:    updateErr,
-			}
 		}
 	}
 
@@ -906,19 +905,18 @@ func (s *service) AuthorizeDevice(ctx context.Context, deviceID string, targetVL
 			}
 		}
 
-		updateErr = s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
-			d.CurrentVLAN = targetVLAN
-			return nil
-		})
-		if updateErr != nil {
-			s.logger.Warn("Failed to update current VLAN in state",
-				"device_id", deviceID,
-				"error", updateErr.Error(),
-			)
-		}
 	}
 
-	if err := s.stateManager.Transition(deviceID, StateAuthorized, "device authorized for production"); err != nil {
+	// The lifecycle state and the enforced VLAN go to the store in one
+	// record write; if it fails the flows just applied are undone (#2081
+	// Codex), so no stored record pairs StateAuthorized with a stale VLAN.
+	err = s.stateManager.TransitionWithUpdate(deviceID, StateAuthorized, "device authorized for production", func(d *DeviceInfo) {
+		if s.vlanManager != nil {
+			d.CurrentVLAN = targetVLAN
+		}
+	})
+	if err != nil {
+		s.undoFlows(ctx, device)
 		return ErrProvisioningFailed{
 			DeviceID: deviceID,
 			Reason:   "failed to transition to authorized state",
@@ -969,19 +967,23 @@ func (s *service) QuarantineDevice(ctx context.Context, deviceID string, reason 
 			}
 		}
 
-		updateErr := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
-			d.CurrentVLAN = s.config.QuarantineVLAN
-			return nil
-		})
-		if updateErr != nil {
-			s.logger.Warn("Failed to update current VLAN in state",
-				"device_id", deviceID,
-				"error", updateErr.Error(),
-			)
-		}
 	}
 
-	if err := s.stateManager.Transition(deviceID, StateQuarantined, reason); err != nil {
+	// State and enforced VLAN in one record write. On failure the
+	// quarantine flows stay in place: a datastore outage must never
+	// restore the device's earlier (possibly production) access. The
+	// stored state is unchanged and the caller retries the quarantine
+	// (#2081 Codex).
+	err = s.stateManager.TransitionWithUpdate(deviceID, StateQuarantined, reason, func(d *DeviceInfo) {
+		if s.vlanManager != nil {
+			d.CurrentVLAN = s.config.QuarantineVLAN
+		}
+	})
+	if err != nil {
+		s.logger.Warn("Quarantine state write failed; quarantine flows kept",
+			"device_id", deviceID,
+			"error", err.Error(),
+		)
 		return ErrProvisioningFailed{
 			DeviceID: deviceID,
 			Reason:   "failed to transition to quarantined state",
@@ -995,6 +997,59 @@ func (s *service) QuarantineDevice(ctx context.Context, deviceID string, reason 
 	)
 
 	return nil
+}
+
+// undoFlows puts back the flows that match the device record as it was
+// before a transition whose state write failed (#2081 Codex): authorized
+// devices get their stored VLAN back, quarantined devices stay in
+// quarantine, every other state returns to the provisioning flows.
+func (s *service) undoFlows(ctx context.Context, before *DeviceInfo) {
+	if s.vlanManager == nil || before == nil {
+		return
+	}
+	var err error
+	switch before.State {
+	case StateAuthorized:
+		err = s.vlanManager.ApplyAuthorizedFlows(ctx, before.PortID, before.MACAddress, before.CurrentVLAN)
+	case StateQuarantined:
+		err = s.vlanManager.ApplyQuarantineFlows(ctx, before.PortID, before.MACAddress)
+	default:
+		err = s.vlanManager.ApplyProvisioningFlows(ctx, before.PortID, before.MACAddress)
+	}
+	if err != nil {
+		s.logger.Warn("Failed to undo flows after a failed state write",
+			"device_id", before.ID,
+			"error", err.Error(),
+		)
+	}
+}
+
+// restoreEnforcedFlows reinstalls the flows of the VLAN before records as
+// enforced, after a state write failed. A device on the quarantine VLAN, in
+// quarantined or failed state, or with no known VLAN goes back to the
+// quarantine flows (fail closed).
+func (s *service) restoreEnforcedFlows(ctx context.Context, before *DeviceInfo) {
+	if s.vlanManager == nil || before == nil {
+		return
+	}
+	var err error
+	switch {
+	case before.State == StateQuarantined || before.State == StateFailed ||
+		before.CurrentVLAN == s.config.QuarantineVLAN:
+		err = s.vlanManager.ApplyQuarantineFlows(ctx, before.PortID, before.MACAddress)
+	case before.State == StateAuthorized && before.CurrentVLAN != 0:
+		err = s.vlanManager.ApplyAuthorizedFlows(ctx, before.PortID, before.MACAddress, before.CurrentVLAN)
+	case before.CurrentVLAN == s.config.ProvisioningVLAN:
+		err = s.vlanManager.ApplyProvisioningFlows(ctx, before.PortID, before.MACAddress)
+	default:
+		err = s.vlanManager.ApplyQuarantineFlows(ctx, before.PortID, before.MACAddress)
+	}
+	if err != nil {
+		s.logger.Warn("Failed to restore flows after a failed state write",
+			"device_id", before.ID,
+			"error", err.Error(),
+		)
+	}
 }
 
 // RetryDevice resets a device to discovered state for retry. A retry is a new
@@ -1029,20 +1084,13 @@ func (s *service) RetryDevice(ctx context.Context, deviceID string) error {
 		}
 	}
 
-	updateErr := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
+	// Counter, fingerprint reset and transition in one record write, so
+	// a failed write never consumes a retry that did not start.
+	reason := fmt.Sprintf("retry initiated (attempt %d)", device.RetryCount+1)
+	if err := s.stateManager.TransitionWithUpdate(deviceID, StateDiscovered, reason, func(d *DeviceInfo) {
 		d.RetryCount++
 		d.IDevIDFingerprint = ""
-		return nil
-	})
-	if updateErr != nil {
-		return ErrProvisioningFailed{
-			DeviceID: deviceID,
-			Reason:   "failed to increment retry count",
-			Cause:    updateErr,
-		}
-	}
-
-	if err := s.stateManager.Transition(deviceID, StateDiscovered, fmt.Sprintf("retry initiated (attempt %d)", device.RetryCount+1)); err != nil {
+	}); err != nil {
 		return ErrProvisioningFailed{
 			DeviceID: deviceID,
 			Reason:   "failed to transition to discovered state",

@@ -2019,6 +2019,72 @@ const provisioningDeviceScriptPortOffset = 1
 const provisioningNBDPort uint16 = 10809
 
 func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *app.App, section *pxe.DaemonConfig, flows *policy.ZoneFlowManager) (*PXEGRPCService, error) {
+	var store pxe.DeviceStore
+	if section != nil && section.Enabled {
+		var err error
+		if store, err = pxeDeviceStoreFor(a, logger); err != nil {
+			return nil, err
+		}
+	}
+	return pxeGRPCServiceWithStore(ctx, logger, a, section, flows, store)
+}
+
+// pxeDeviceStoreFor returns the PXE device store over the deployment
+// datastore (docs/SPEC.md:23, #2028), or nil when the app has no quicbaas
+// DAO factory; the backend then keeps its devices in memory only.
+func pxeDeviceStoreFor(a *app.App, logger *logging.Logger) (pxe.DeviceStore, error) {
+	if a == nil {
+		return nil, nil
+	}
+	factory, ok := a.DAOFactory().(*quicbaas.Factory)
+	if !ok || factory == nil {
+		return nil, nil
+	}
+	client := factory.Client()
+	if client == nil {
+		return nil, nil
+	}
+	return pxeDeviceStoreForClient(client, logger)
+}
+
+// pxeDatastoreClient is the quicbaas client surface the PXE device store
+// needs: the KV storage and the transport it runs over. *quicbaas.Client
+// satisfies it.
+type pxeDatastoreClient interface {
+	quicbaas.Storage
+	IsEmbedded() bool
+}
+
+// pxeDeviceStoreForClient builds the PXE device store over client, refusing
+// a remote (non-embedded) transport. The pinned go-quicbaas REST KV handlers
+// return only the first List batch and ignore the page token, so a restart
+// would reload an incomplete inventory; and they transmit neither the tenant
+// nor a tenant-bound identity, so records would not land in the system tenant
+// (docs/SPEC.md:23). Until the SDK pages and scopes REST KV, an enabled PXE
+// backend needs the embedded datastore.
+func pxeDeviceStoreForClient(client pxeDatastoreClient, logger *logging.Logger) (pxe.DeviceStore, error) {
+	if !client.IsEmbedded() {
+		return nil, pxe.ErrInvalidConfiguration{
+			Field: "quicbaas.transport",
+			Reason: "PXE device persistence requires the embedded datastore: the pinned " +
+				"go-quicbaas REST KV transport neither pages List (a reload would miss devices) " +
+				"nor carries the system tenant scope",
+		}
+	}
+	// PXE device records are system-level: they live in the system tenant
+	// (docs/SPEC.md:23).
+	store, err := quicbaas.NewPXEDeviceStore(client, app.SystemTenantID, logger)
+	if err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+// pxeGRPCServiceWithStore builds the PXE backend with its StateManager
+// writing through to store (nil: in memory only) and reloads the stored
+// devices before Initialize, so a restart keeps every device, its state
+// and its identity binding (#2028).
+func pxeGRPCServiceWithStore(ctx context.Context, logger *logging.Logger, a *app.App, section *pxe.DaemonConfig, flows *policy.ZoneFlowManager, store pxe.DeviceStore) (*PXEGRPCService, error) {
 	svc := NewPXEGRPCService(logger, nil)
 	if section == nil || !section.Enabled {
 		return svc, nil
@@ -2067,9 +2133,17 @@ func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *ap
 		)
 	}
 	flows.AllowProvisioningBootPorts(provisioningNBDPort)
+	var stateOpts []pxe.StateManagerOption
+	if store != nil {
+		stateOpts = append(stateOpts, pxe.WithDeviceStore(store))
+	}
+	stateManager := pxe.NewStateManager(stateOpts...)
+	if err := stateManager.Load(ctx); err != nil {
+		return nil, err
+	}
 	backend := pxe.NewService(
 		pxe.WithLogger(logger),
-		pxe.WithStateManager(pxe.NewStateManager()),
+		pxe.WithStateManager(stateManager),
 		pxe.WithVLANIntegration(pxe.NewVLANIntegrationWrapper(
 			pxe.WithBridgeName(cfg.BridgeName),
 			pxe.WithFlowManager(flows),
