@@ -10,6 +10,7 @@
  * - Export keys (if exportable)
  * - Delete keys
  * - Filter by algorithm, type, and status
+ * - Show the KMS backend status
  *
  * Uses the trusted-platform-sdk for API interactions.
  */
@@ -25,6 +26,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { KeyTable } from "@/components/features/kms/key-table";
 import { KeyForm } from "@/components/features/kms/key-form";
 import { useKMS, useApi, useMutation, useToast } from "@/hooks";
@@ -43,6 +45,16 @@ interface KeyWire {
   createdAt?: string | number;
   created_at?: string | number;
   version?: number;
+}
+
+// The KMS backend status as GET /kms/backend/status emits it
+// (rest/kms BackendStatusResponse); the SDK's declared type differs (#445).
+interface BackendStatusWire {
+  backend_type?: string;
+  status?: string;
+  device?: string;
+  region?: string;
+  capabilities?: Record<string, boolean>;
 }
 
 export default function KMSKeysPage() {
@@ -70,6 +82,17 @@ export default function KMSKeysPage() {
       },
     }
   );
+
+  // Read the KMS backend status; the card shows its own refusal (no toast).
+  const { data: backendData, error: backendError } = useApi(
+    () => kms.getBackendStatus(),
+    []
+  );
+  const backend = backendData as unknown as BackendStatusWire | null | undefined;
+  const enabledCapabilities = Object.entries(backend?.capabilities ?? {})
+    .filter(([, on]) => on)
+    .map(([name]) => name)
+    .sort();
 
   // Map SDK algorithm to web app algorithm format
   const mapAlgorithm = (sdkAlgo: string): Key['algorithm'] => {
@@ -319,6 +342,56 @@ export default function KMSKeysPage() {
           </div>
         </div>
       )}
+
+      {/* KMS backend status */}
+      <Card data-testid="kms-backend-status">
+        <CardHeader>
+          <CardTitle>KMS Backend</CardTitle>
+          <CardDescription>The backend that holds this platform&apos;s keys</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {backendError ? (
+            <p className="text-sm text-destructive">
+              Backend status could not be read: {backendError.message}
+            </p>
+          ) : backend ? (
+            <dl className="grid gap-3 text-sm sm:grid-cols-2">
+              <div>
+                <dt className="text-muted-foreground">Backend</dt>
+                <dd data-testid="kms-backend-type" className="font-mono">
+                  {backend.backend_type || "-"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">Status</dt>
+                <dd data-testid="kms-backend-state">{backend.status || "-"}</dd>
+              </div>
+              {backend.device && (
+                <div>
+                  <dt className="text-muted-foreground">Device</dt>
+                  <dd data-testid="kms-backend-device" className="font-mono">
+                    {backend.device}
+                  </dd>
+                </div>
+              )}
+              {backend.region && (
+                <div>
+                  <dt className="text-muted-foreground">Region</dt>
+                  <dd data-testid="kms-backend-region">{backend.region}</dd>
+                </div>
+              )}
+              <div className="sm:col-span-2">
+                <dt className="text-muted-foreground">Capabilities</dt>
+                <dd data-testid="kms-backend-capabilities">
+                  {enabledCapabilities.length ? enabledCapabilities.join(", ") : "none reported"}
+                </dd>
+              </div>
+            </dl>
+          ) : (
+            <p className="text-sm text-muted-foreground">Reading backend status...</p>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Keys Table */}
       <KeyTable
