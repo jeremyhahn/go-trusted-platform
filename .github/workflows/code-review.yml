@@ -1,4 +1,4 @@
-# code-review-template: v5.12.10 -- the code review in Gitea or GitHub CI for a pull request
+# code-review-template: v5.12.11 -- the code review in Gitea or GitHub CI for a pull request
 # that carries `code-review` and `task:ready`, routed by its labels through
 # route-labels (labels.md §2). Codex on the `codex` runner reviews every such
 # PR; `agent:opencode` adds an advisory COMMENT review by the opencode job on
@@ -28,6 +28,57 @@
 #   COORDINATOR_TURNS         the codex rounds the project coordinator has
 #                             on a `needs-coordinator` PR after the two-round
 #                             stop (v5.9.8, Tenant Agent m2185); default 3
+#
+# v5.12.11 (2026-11-21, Tenant Agent ruling 1079; Codex's two P1s on
+# go-trusted-platform #2227): FIVE FIXES.
+# (1) THE GUARD RUNS WHEREVER THE GATE RUNS. v5.12.10 ran the gate on every
+# non-draft event but left scope (InfoSec's guard) under the shared
+# condition, so on an unrelated label (dept:*, ci:full, task:in-progress, a
+# hold) scope was skipped, the gate read an empty SCOPE_SKIP, and a
+# CI-config-only change the guard had cleared lost its exemption: the
+# newest suite went red and no review could repair it, since the review
+# skips on skip=true. scope's `if:` is now the draft clause and the open
+# state: it runs on every non-draft event of an open PR, and the gate reads
+# this event's guard result. review and review-opencode keep the shared
+# condition, and review still skips on skip=true, so an unrelated label
+# still starts no review. A scope job that failed or was cancelled still
+# fails the gate closed (v5.12.2), and a skip other than `true` still
+# exempts no CI config. Cost: one short API-only scope job per unrelated
+# `labeled` event on a non-draft PR.
+# (2) THE HANDOFF WAITS FOR A NEWER RUN TO END. v5.12.7's handoff read each
+# newer run's status once, from the runs list, before reading its jobs: a
+# newer run still in progress (its gate red, or still running) was only a
+# warning and its gate was never re-run, so the newest required check
+# could stay red. The handoff now polls each newer run (GET the run, then
+# its jobs, every HANDOFF_POLL_S seconds) until the run is completed, then
+# re-runs a red gate as before (the gate job only, never a review). A
+# newer run whose own `Codex review` is queued or in progress is left to
+# its own gate, and so is a newer run whose gate has not started (gate
+# queued or waiting, or a queued run with no jobs yet): that gate reads
+# the approval itself, so a full hosted pool never turns this gate red or
+# holds its runner. Only a red gate in a run not yet completed is waited
+# for, and a gate still running is read again until it ends. The poll has
+# one bound for the step, HANDOFF_WAIT_S (300 s inside the gate's 600 s):
+# when it expires on a red gate the step FAILS with an ::error:: naming
+# the run, never a warning; on a gate still running it is a warning. An
+# API error stays a warning.
+# (3) A HOLD READ LIVE FAILS CLOSED. The gate's hold read (v5.12.1, after
+# the twin read) takes the labels from the live PR and now fails when the
+# PR answers no label list, instead of reading a missing list as no hold:
+# `needs-owner` or `needs-coordinator` on the PR refuses even a standing
+# approval of the head. The live hold is also read BEFORE the exemption
+# exit, so a hold refuses an exempt change too: a guard-cleared CI-only
+# PR (or a docs-only one) labelled needs-owner fails, where v5.12.1 to
+# v5.12.10 passed it.
+# (4) get_all FAILS ON A FAILED PAGE. Its callers run it inside `|| fail`,
+# where errexit is off, so a failed page request ended the listing as if
+# it were complete and a partial list (no reviews, say) passed on. A
+# failed page, or a page count that is not a number, now fails the call.
+# (5) A RETARGETED PR NEVER PASSES. The gate reads the live PR's base
+# before the no-review list and again with the hold labels: a base other
+# than this event's $BASE_REF fails, so a PR retargeted while the run
+# waited never passes on the old base's exempt diff or approval.
+# Tests: testdata/code-review-v51211-tests.py. Nothing else changes.
 #
 # v5.12.10 (2026-11-21, Codex's P1 on trusted-firmware #653): EVERY
 # NON-DRAFT SUITE CARRIES THE REQUIRED CONTEXT. v5.12.9 skipped the gate
@@ -260,12 +311,7 @@
 # on a person's removal of `needs-owner` (GitHub), or when `code-review` is
 # added again. A copy takes the version line, the two stop lines (marked
 # v5.11.2), the hand-on step's dropped `needs-owner)` case and the guard's
-# "the count stands" message. The approval gate reads the PR's live labels
-# after the twin-review wait and refuses even a standing approval while
-# `needs-owner` is on the PR (Codex P1, #1921). The gate's get_all fails
-# on a failed page request (and on a page count that is not a number)
-# instead of ending the listing, so a failed labels or reviews read never
-# passes as an empty list (Codex P1, #1921).
+# "the count stands" message.
 #
 # v5.11.1 (2026-11-13, Tenant Agent m2669, ruling 589; go-qrdb #1572 and
 # go-xkms #2183 merged with no review): THE NO-REVIEW LIST IS DOCS AND CI
@@ -954,16 +1000,14 @@ jobs:
     name: Review scope (InfoSec guard)
     # v5.12.9 (header): THE SHARED CONDITION. No job that takes a runner
     # runs on a draft, or on a `labeled` event whose label requests no
-    # review. It is the review job's label list, verbatim, in every job's
-    # `if:` (scope, review, review-opencode, gate) and in the gate's name.
+    # review. It is the review job's label list, verbatim, in the `if:` of
+    # review and review-opencode.
+    # v5.12.11 (header, ruling 1079): not here. The gate runs on every
+    # non-draft event (v5.12.10) and reads this job's skip, so the guard
+    # runs on every non-draft event of an open PR, an unrelated label
+    # included; the review still skips on skip=true.
     if: >-
       github.event.pull_request.draft != true
-      && (github.event.action != 'labeled'
-      || github.event.label.name == 'code-review'
-      || github.event.label.name == 'task:ready'
-      || startsWith(github.event.label.name, 'agent:')
-      || startsWith(github.event.label.name, 'model:')
-      || startsWith(github.event.label.name, 'effort:'))
       && github.event.pull_request.state == 'open'
     # v5.12.3: no concurrency group. Cancelling an older run's scope job
     # skipped that run's requested review (v5.12.2), so each event's guard
@@ -1869,7 +1913,7 @@ jobs:
               if [ "$busy" = 0 ]; then
                 # Nothing first: settle once, then read again, unless a wait
                 # already ran (the twin it waited for has ended).
-                if [ "$settled" != 0 ] || [ "$twin_waited" != 0 ]; then break; fi
+                [ "$settled" = 0 ] && [ "$twin_waited" = 0 ] || break
                 settled=1
                 sleep "$TWIN_SETTLE"
                 continue
@@ -3849,29 +3893,44 @@ jobs:
             local page=1 all='[]' got n size=limit=50
             [ "$FORGE" != github ] || size=per_page=100
             while :; do
-              # The callers run get_all under `|| fail`, where errexit is
-              # off: a failed page returns non-zero here, never ends the
-              # list as if it were complete (Codex P1, #1921).
+              # v5.12.11: the callers run get_all inside `|| fail`, where
+              # errexit is off, so a failed page returns 3 here and never
+              # ends the listing as if it were complete.
               got=$(get "$1&$size&page=$page") || return 3
               n=$(jq 'if type == "array" then length else error("not a list") end' <<<"$got") ||
                 fail "GET $1 did not answer a list"
-              [[ $n =~ ^[0-9]+$ ]] || return 3
+              [[ $n =~ ^[0-9]+$ ]] || fail "GET $1 answered no page count"
               [ "$n" -gt 0 ] || break
               all=$(printf '%s\n%s\n' "$all" "$got" | jq -cs '.[0] + .[1]') || fail "cannot join the pages of $1"
               page=$((page + 1))
             done
             printf '%s\n' "$all"
           }
-
-          # The live PR. Its base must still be $BASE_REF, the base this run's
-          # change and verdict belong to: a PR retargeted while the run waited
-          # never passes on the old base's exempt diff or approval (Codex P1,
-          # #1921). Checked before the exemption and again before the verdict.
-          same_base() { # PR body -> fails unless its base is still $BASE_REF
+          # v5.12.11: the live PR's base must still be $BASE_REF, the base
+          # this run's change and verdict belong to: a PR retargeted while
+          # the run waited never passes on the old base's exempt diff or
+          # approval. Read before the no-review list and again with the
+          # hold labels.
+          same_base() { # live PR body -> fails unless its base is $BASE_REF
             local live_base
             live_base=$(jq -r '.base.ref // empty' <<<"$1") || fail "cannot read the base of PR $PR_NUM"
             [ "$live_base" = "$BASE_REF" ] ||
-              fail "PR $PR_NUM was retargeted from $BASE_REF to ${live_base:-no base}"
+              fail "PR $PR_NUM was retargeted from $BASE_REF to ${live_base:-no base}; this run's change and verdict are not for its base"
+          }
+          # v5.12.11 (the Tenant Agent's review of handbook PR 94): the live
+          # PR's base and holds, read before the exemption exit and again
+          # after the twin read. A hold refuses every pass, an exempt change
+          # too: a guard-cleared CI-only PR labelled needs-owner fails.
+          holds() {
+            local labels hold
+            pr=$(get "/pulls/$PR_NUM")
+            same_base "$pr"
+            labels=$(jq -r '.labels | if type == "array" then .[].name else error("no labels") end' <<<"$pr") ||
+              fail "cannot read the labels of PR $PR_NUM"
+            for hold in needs-owner needs-coordinator; do
+              ! grep -qx "$hold" <<<"$labels" ||
+                fail "PR $PR_NUM is on hold ($hold): neither an exempt change nor an approval of $EVENT_SHA passes the gate until the label comes off (v5.12.1, v5.12.11)"
+            done
           }
           pr=$(get "/pulls/$PR_NUM")
           same_base "$pr"
@@ -3895,6 +3954,8 @@ jobs:
             live=$(jq -r '.head.sha // empty' <<<"$pr")
             [ "$live" = "$EVENT_SHA" ] || files='[]'
           fi
+          # v5.12.11: the live hold before the exemption exit (holds above).
+          holds
           n=$(jq 'length' <<<"$files")
           if [ "$n" -gt 0 ] && [ "$n" -lt 300 ]; then
             names=$(jq -r '.[] | .filename, (.previous_filename // empty)' <<<"$files")
@@ -3946,23 +4007,6 @@ jobs:
             done
           fi
 
-          # The base and the hold, read live from the PR after the wait: a
-          # retargeted PR fails, and a hold label on the PR refuses even an
-          # approval already on the head. The labels come from the PR itself,
-          # never from the issue-labels list, which Gitea does not paginate
-          # (Codex P1, #1921). v5.12.0: the review job swaps `needs-owner`
-          # for `needs-coordinator` (v5.11.3, owner ruling 732), so the hold
-          # is either label; the coordinator takes needs-coordinator off to
-          # release it (Codex P1 round 2, #1986).
-          pr=$(get "/pulls/$PR_NUM")
-          same_base "$pr"
-          labels=$(jq -r '.labels[].name' <<<"$pr") ||
-            fail "cannot read the labels of PR $PR_NUM"
-          ! grep -qx needs-owner <<<"$labels" ||
-            fail "PR $PR_NUM is on owner hold (needs-owner): an existing approval does not pass the gate"
-          ! grep -qx needs-coordinator <<<"$labels" ||
-            fail "PR $PR_NUM is on coordinator hold (needs-coordinator): an existing approval does not pass the gate"
-
           # (b) The reviewer's latest standing verdict on this head. PENDING,
           # COMMENTED and dismissed reviews are no verdict.
           # v5.12.1: NO APPROVAL IS REUSED on a failed review or a hold. This
@@ -3976,12 +4020,10 @@ jobs:
           case "$SCOPE_RESULT" in
             failure|cancelled) fail "this run's scope job ended $SCOPE_RESULT, so no review ran and no earlier approval of $EVENT_SHA is reused (v5.12.2)" ;;
           esac
-          labels=$(get "/pulls/$PR_NUM" | jq -r '.labels[]?.name') ||
-            fail "cannot read the labels of PR $PR_NUM"
-          for hold in needs-owner needs-coordinator; do
-            ! grep -qx "$hold" <<<"$labels" ||
-              fail "PR $PR_NUM is on hold ($hold): an approval of $EVENT_SHA does not pass the gate until the label comes off (v5.12.1)"
-          done
+          # v5.12.11: the base again, and the labels as a list from the
+          # live PR (never the event payload): a PR that answers no label
+          # list fails closed, never reads as no hold.
+          holds
 
           verdict=$(get_all "/pulls/$PR_NUM/reviews?" | jq -r --arg u "$REVIEWER" --arg s "$EVENT_SHA" '
               [ .[] | (if .state == "CHANGES_REQUESTED" then .state = "REQUEST_CHANGES" else . end)
@@ -4015,15 +4057,31 @@ jobs:
       # re-run, never a review. Best effort: an API error is a warning, and
       # the head stays red (fail closed), never green. The re-run joins the
       # gate's group, so it may cancel this job as it ends.
+      # v5.12.11 (header, ruling 1079; Codex's P1 on go-trusted-platform
+      # #2227): a newer run still in progress is polled until it ends, then
+      # its red gate is re-run; past the bound the step fails, never warns.
       - name: Re-run a newer twin's failed gate on this head
         if: success() && env.FORGE == 'github'
         run: |
           set -euo pipefail
           shopt -s inherit_errexit
-          # Best effort: any stop is a warning and exit 0, so this run's pass
-          # stands; the newer gate then stays red (fail closed).
+          # Best effort: an API error is a warning and exit 0, so this run's
+          # pass stands; the newer gate then stays red (fail closed).
+          # v5.12.11: a newer run that never ends inside the bound is no
+          # warning: the step fails (exit 5), so the stuck newest suite is
+          # visible on this run too.
           warn() { echo "::warning::Code Review (codex): $*" >&2; exit 4; }
-          trap 'rc=$?; [ "$rc" = 0 ] || [ "$rc" = 4 ] || echo "::warning::Code Review (codex): the handoff stopped (exit $rc); no newer twin gate was re-run past this point" >&2; exit 0' EXIT
+          stuck() { echo "::error::Code Review (codex): $*" >&2; exit 5; }
+          trap 'rc=$?; [ "$rc" != 5 ] || exit 5; [ "$rc" = 0 ] || [ "$rc" = 4 ] || echo "::warning::Code Review (codex): the handoff stopped (exit $rc); no newer twin gate was re-run past this point" >&2; exit 0' EXIT
+          # v5.12.11 (header, ruling 1079): a newer run still in progress is
+          # read again every HANDOFF_POLL_S seconds, for at most
+          # HANDOFF_WAIT_S seconds over the whole step: 300 s inside the
+          # gate's 600 s (timeout-minutes 10), which leaves the first step
+          # and the retried API calls the rest. Only the tests set them.
+          HANDOFF_POLL_S=${HANDOFF_POLL_S:-15}
+          HANDOFF_WAIT_S=${HANDOFF_WAIT_S:-300}
+          [[ $HANDOFF_POLL_S =~ ^[0-9]+$ && $HANDOFF_WAIT_S =~ ^[0-9]+$ ]] || warn "HANDOFF_POLL_S and HANDOFF_WAIT_S must be whole seconds"
+          deadline=$((SECONDS + HANDOFF_WAIT_S))
           hdr=(-H "Authorization: token $GH_API_TOKEN" -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28')
           api() { # method path -> body; warns and stops unless 2xx
             local code
@@ -4043,14 +4101,53 @@ jobs:
             warn "cannot list the runs on $EVENT_SHA"
           [ -n "$newer" ] || { echo "No newer run of PR $PR_NUM on $EVENT_SHA; this gate's check stands."; exit 0; }
           while read -r id status; do
-            gate=$(api GET "/actions/runs/$id/jobs?per_page=100" |
-                   jq -r '[.jobs[]? | select(.name == "Code Review (codex)" and .status == "completed"
-                                             and (.conclusion == "failure" or .conclusion == "cancelled"))] | first | .id // empty') ||
-              warn "cannot read the jobs of run $id"
-            if [ -z "$gate" ]; then
+            # v5.12.11: the run's status is read BEFORE its jobs, so a run
+            # read as completed has final jobs; one still in progress is read
+            # again (status, then jobs) until it ends or the bound expires.
+            while :; do
+              jobs=$(api GET "/actions/runs/$id/jobs?per_page=100")
+              gate=$(jq -r '[.jobs[]? | select(.name == "Code Review (codex)" and .status == "completed"
+                                             and (.conclusion == "failure" or .conclusion == "cancelled"))] | first | .id // empty' <<<"$jobs") ||
+                warn "cannot read the jobs of run $id"
+              [ "$status" != completed ] || break
+              # A newer run that reviews the head itself: its own gate reads
+              # its own review's verdict, and hands off in turn.
+              rc=0
+              jq -e 'any(.jobs[]?; .name == "Codex review" and (.status == "queued" or .status == "in_progress"
+                                                               or .status == "waiting" or .status == "pending"))' >/dev/null <<<"$jobs" || rc=$?
+              [ "$rc" -le 1 ] || warn "cannot read the jobs of run $id"
+              [ "$rc" = 1 ] || { gate=; status=reviewing; break; }
+              # v5.12.11 (the Tenant Agent's review of handbook PR 94): only a
+              # red gate in a run not yet completed is waited for, and only it
+              # fails the step at the bound. A gate still running is read
+              # again until it ends (past the bound: a warning). A gate not
+              # started yet (queued, waiting, or a run with no jobs) reads
+              # this approval itself when it runs: it is left to its own gate
+              # at once, so a full hosted pool never turns this gate red or
+              # holds its runner for the bound.
+              running=0
+              if [ -z "$gate" ]; then
+                rc=0
+                jq -e 'any(.jobs[]?; .name == "Code Review (codex)" and .status == "in_progress")' >/dev/null <<<"$jobs" || rc=$?
+                [ "$rc" -le 1 ] || warn "cannot read the jobs of run $id"
+                [ "$rc" = 0 ] || { status=own-gate; break; }
+                running=1
+              fi
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                [ "$running" = 0 ] ||
+                  warn "run $id's gate on $EVENT_SHA is still running after the handoff's ${HANDOFF_WAIT_S} s bound; it reads the verdict itself"
+                stuck "run $id on $EVENT_SHA is still $status after the handoff's ${HANDOFF_WAIT_S} s bound, so its gate (job $gate, red) is not re-run; re-run it by hand when the run ends"
+              fi
+              echo "Run $id is $status; reading it again in ${HANDOFF_POLL_S} s."
+              sleep "$HANDOFF_POLL_S"
+              status=$(api GET "/actions/runs/$id" | jq -r '.status // empty') || warn "cannot read run $id"
+            done
+            if [ "$status" = reviewing ]; then
+              echo "Run $id reviews $EVENT_SHA itself; its own gate reads that verdict."
+            elif [ "$status" = own-gate ]; then
+              echo "Run $id has not run its gate yet; that gate reads this approval itself."
+            elif [ -z "$gate" ]; then
               echo "Run $id: its gate did not end red; nothing to re-run."
-            elif [ "$status" != completed ]; then
-              echo "::warning::Code Review (codex): run $id's gate ended red but the run is $status, so it cannot be re-run yet; re-run job $gate when it ends" >&2
             else
               api POST "/actions/jobs/$gate/rerun" >/dev/null
               echo "Run $id is newer on $EVENT_SHA and its gate (job $gate) ended red: re-run, so the newest suite reads this approval."
