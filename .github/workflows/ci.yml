@@ -1,4 +1,4 @@
-# ci-template: v1.35.1 + v1.42 hermetic gate + v1.48 runner selection + v1.50 short-list fix + v1.51 reviewed (customized)
+# ci-template: v1.35.1 + v1.42 hermetic gate + v1.48 runner selection + v1.50 short-list fix + v1.51 reviewed + v1.52 fork check (customized)
 #
 # v1.42 hermetic gate only (owner ruling 742 (1), Tenant Agent rulings 754 and
 # 794): the CI Gate's outcome depends only on the tree under test. `make
@@ -35,6 +35,15 @@
 # under pull_request_target. That step is not adopted here (v1.38 is on the
 # catch-up list above), so v1.51 has nothing to apply to this file; it is
 # adopted with the step. code-review.yml takes v5.12.8 and v5.12.9 in the same change.
+# v1.52 fork check (handbook PR 91, 263544734, DS-9861): a pull request whose
+# head repository is not this repository, a deleted fork included, runs every
+# job on ubuntu-latest. The selection step's fork check (CUSTOMIZE #2128,
+# which skipped an empty head repository) takes the template's form: on a
+# pull_request or pull_request_target event a head repository that is not
+# this one outputs the hosted default with a ::notice and no API call.
+# v1.52's preflight runs-on clause applies to v1.49's bigdisk runs-on, and
+# its Runner labels cases to the v1.38 step; neither is adopted here, since
+# preflight stays on ubuntu-latest, so neither has anything to apply to.
 # v1.35.1 (DS-8433, CA m2557): the Signatures job of handbook cd17d28
 # (ci-template v1.35.1) is adopted as is, in CI Gate's needs, env block and a
 # `pr` check line, with .github/allowed_signers synced from handbook
@@ -403,6 +412,7 @@ jobs:
         id: runner
         env:
           SERVER: ${{ github.server_url }}
+          EVENT: ${{ github.event_name }}
           API: ${{ github.api_url }}/repos/${{ github.repository }}/actions
           RUN_ID: ${{ github.run_id }}
           JOB_TOKEN: ${{ github.token }}
@@ -429,11 +439,16 @@ jobs:
             emit "$HOSTED" "$HOSTED"
             exit 0
           fi
-          if [ -n "$HEAD_REPO" ] && [ "$HEAD_REPO" != "$REPO" ]; then
-            echo "a pull request from a fork: every job takes the GitHub-hosted default, ubuntu-latest; no selection"
-            emit "$HOSTED" "$HOSTED"
-            exit 0
-          fi
+          # v1.52: a fork's pull request (a deleted fork too, whose head
+          # repository reads empty) runs every job on GitHub-hosted runners.
+          case "$EVENT" in
+            pull_request|pull_request_target)
+              if [ "$HEAD_REPO" != "$REPO" ]; then
+                echo "::notice::runner selection: this pull request's head repository is not this repository (a fork); every job of this run takes the GitHub-hosted default, ubuntu-latest, and none reaches a self-hosted runner (ci-template v1.52)"
+                emit "$HOSTED" "$HOSTED"
+                exit 0
+              fi ;;
+          esac
           case "$LIMIT:$GRACE" in
             *[!0-9:]*|:*|*:) hosted "HOSTED_JOBS_PER_REPO='$LIMIT' or HOSTED_QUEUE_GRACE_SECONDS='$GRACE' is not a whole number" ;;
           esac
