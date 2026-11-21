@@ -237,10 +237,6 @@ type ValidatePolicyResponse struct {
 type TestPolicyRequest struct {
 	BodyTenant
 
-	// PolicyName names the policy the check is evaluated against. The pinned
-	// upstream evaluates one named policy only; a request naming none is
-	// refused.
-	PolicyName string            `json:"policy_name,omitempty"`
 	SubjectID  string            `json:"subject_id"`
 	Roles      []string          `json:"roles,omitempty"`
 	Groups     []string          `json:"groups,omitempty"`

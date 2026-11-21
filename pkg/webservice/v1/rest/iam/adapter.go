@@ -109,6 +109,26 @@ func policyRuleCondition(specYAML string) (rule, kind string) {
 	return "", ""
 }
 
+// policySubjects reports whether the policy YAML carries a non-empty subject
+// selector, under spec.subjects or a top-level subjects key. The pinned
+// backend stores only the flat rules and drops the selector, and an empty
+// selector matches every subject.
+func policySubjects(specYAML string) bool {
+	if specYAML == "" {
+		return false
+	}
+	var doc struct {
+		Spec struct {
+			Subjects map[string]interface{} `yaml:"subjects"`
+		} `yaml:"spec"`
+		Subjects map[string]interface{} `yaml:"subjects"`
+	}
+	if err := yaml.Unmarshal([]byte(specYAML), &doc); err != nil {
+		return false
+	}
+	return len(doc.Spec.Subjects) > 0 || len(doc.Subjects) > 0
+}
+
 // policyRuleBadEffect names the first rule of a policy document whose effect
 // is neither "allow" nor "deny", and that effect; bad is false when every
 // rule's effect is one of the two.
@@ -352,6 +372,12 @@ func (a *QuicBaaSIAMAdapter) CreatePolicy(ctx context.Context, tenantID string, 
 		SpecYAML:    []byte(req.SpecYAML),
 		Labels:      req.Labels,
 	}
+	// The pinned upstream persists only the flat Rules and drops the subject
+	// selector; its evaluator treats an empty selector as every subject, so
+	// a subject-scoped policy would apply to everyone. Refuse it first.
+	if policySubjects(req.SpecYAML) {
+		return nil, ErrInvalidRequestBody{Reason: "policy subjects (spec.subjects) are not persisted by the IAM backend, which would apply the rules to every subject; remove them"}
+	}
 	// The flat Rules translation maps every effect but "deny" to allow, and
 	// the pinned upstream never sees the original value: refuse any other
 	// effect before anything is created.
@@ -475,54 +501,15 @@ func (a *QuicBaaSIAMAdapter) TestPolicy(ctx context.Context, tenantID string, re
 	if req == nil {
 		return nil, errors.New("test policy request is required")
 	}
-	// The pinned QuicBaaS SDK runs test cases against one named policy and
-	// refuses a request without PolicyName before any transport is called;
-	// it has no tenant-wide evaluation. Refuse that as Unimplemented (501).
-	if req.PolicyName == "" {
-		return nil, status.Error(codes.Unimplemented, "tenant-wide policy evaluation is not implemented by the pinned IAM service")
-	}
-	// The REST shape describes a single inline check; wrap it as a
-	// one-element test case so the engine evaluates the same scenario.
-	contextMap := make(map[string]interface{}, len(req.Context))
-	for k, v := range req.Context {
-		contextMap[k] = v
-	}
-	subject := iamsdk.Subject{
-		ID:       req.SubjectID,
-		TenantID: tenantID,
-		Roles:    req.Roles,
-		Groups:   req.Groups,
-	}
-	sdkReq := &iamsdk.TestPolicyRequest{
-		PolicyName: req.PolicyName,
-		TestCases: []iamsdk.TestCase{{
-			Name:     "rest-inline",
-			Subject:  subject,
-			Action:   req.Action,
-			Resource: req.Resource,
-			Context:  contextMap,
-		}},
-	}
-	resp, err := a.client.Policy().Test(ctx, tenantID, sdkReq)
-	if err != nil {
-		return nil, upstreamUnimplemented("policy test", err)
-	}
-	return testPolicyResponseFromSDK(resp), nil
+	// The pinned QuicBaaS SDK runs test cases against one named policy only
+	// and has no tenant-wide evaluation; the SDK's TestIAMPolicyRequest names
+	// no policy. Refuse every request as Unimplemented (501).
+	return nil, status.Error(codes.Unimplemented, "policy evaluation is not implemented by the pinned IAM service: it evaluates one named policy and the request names none")
 }
 
 // testPolicyResponseFromSDK maps the inline case's result to the REST shape.
 // Allowed is the actual authorization decision: the SDK's Passed only says
 // whether the case met its expected result, so a passing deny case is denied.
-func testPolicyResponseFromSDK(resp *iamsdk.TestPolicyResponse) *TestPolicyResponse {
-	out := &TestPolicyResponse{}
-	if len(resp.Results) > 0 {
-		first := resp.Results[0]
-		out.MatchedRule = first.MatchedRule
-		out.Allowed = first.ActualResult == iamsdk.EffectAllow
-	}
-	return out
-}
-
 // -----------------------------------------------------------------------------
 // Application operations.
 // -----------------------------------------------------------------------------
