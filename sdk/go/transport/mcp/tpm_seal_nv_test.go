@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"math"
 	"reflect"
 	"testing"
 
@@ -173,6 +174,65 @@ func TestInvoke_TPMReadNVRAM_CarriesTheData(t *testing.T) {
 	}
 	if string(reply.GetData()) != "abcd" {
 		t.Errorf("data = %q, want %q", reply.GetData(), "abcd")
+	}
+}
+
+// TestInvoke_TPMReadNVRAM_CapsTheSize pins the size ReadNVRAM sends to
+// platform_tpm_nv_read: no NV index exceeds 65535 bytes, so a larger size
+// reads the whole index (as TPMGRPCService.ReadNVRAM does) instead of being
+// refused by the tool, 65535 passes unchanged and 0 sends no size.
+func TestInvoke_TPMReadNVRAM_CapsTheSize(t *testing.T) {
+	tests := []struct {
+		name     string
+		size     uint32
+		wantSize interface{}
+	}{
+		{name: "oversized", size: math.MaxUint32, wantSize: float64(math.MaxUint16)},
+		{name: "largest", size: math.MaxUint16, wantSize: float64(math.MaxUint16)},
+		{name: "unset", size: 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls []toolCall
+			adapter := provisioningTestServer(t, map[string]interface{}{
+				"platform_tpm_nv_read": map[string]interface{}{
+					"index": 0x01500000,
+					"data":  base64.StdEncoding.EncodeToString([]byte("abcd")),
+					"size":  4,
+				},
+			}, &calls)
+
+			reply := &platformv1.ReadNVRAMResponse{}
+			if err := adapter.Connection().Invoke(context.Background(), platformv1.TPMService_ReadNVRAM_FullMethodName,
+				&platformv1.ReadNVRAMRequest{Index: 0x01500000, Size: tc.size}, reply); err != nil {
+				t.Fatalf("Invoke: %v", err)
+			}
+
+			if len(calls) != 1 || calls[0].Name != "platform_tpm_nv_read" {
+				t.Fatalf("calls = %v, want one platform_tpm_nv_read call", calls)
+			}
+			args := calls[0].Arguments
+			size, hasSize := args["size"]
+			if tc.wantSize == nil {
+				if hasSize {
+					t.Errorf("size = %v, want no size key for an unset size", size)
+				}
+			} else if size != tc.wantSize {
+				t.Errorf("size = %v, want 65535: no NV index is larger, and the tool refuses more", size)
+			}
+			if args["index"] != float64(0x01500000) {
+				t.Errorf("index = %v, want %v", args["index"], float64(0x01500000))
+			}
+			if _, ok := args["offset"]; ok {
+				t.Errorf("wire args = %v, want no offset", args)
+			}
+			if _, ok := args["password"]; ok {
+				t.Errorf("wire args = %v, want no password", args)
+			}
+			if string(reply.GetData()) != "abcd" {
+				t.Errorf("data = %q, want %q", reply.GetData(), "abcd")
+			}
+		})
 	}
 }
 
