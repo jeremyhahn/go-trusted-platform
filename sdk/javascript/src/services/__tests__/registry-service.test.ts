@@ -137,3 +137,79 @@ describe('RegistryService with a real ApiClient', () => {
     ]);
   });
 });
+
+describe('RegistryService.listImages', () => {
+  let mockClient: ApiClient;
+  let service: RegistryService;
+
+  beforeEach(() => {
+    mockClient = createMockClient();
+    service = new RegistryService(mockClient);
+  });
+
+  it('gets the image list from /v1/compute/images with no query', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({
+      success: true,
+      data: {
+        images: [
+          {
+            repository: 'team/app',
+            tag: 'v1',
+            digest: 'sha256:ab',
+            media_type: 'application/vnd.oci.image.manifest.v1+json',
+            size: 1024,
+            layers: 2,
+          },
+        ],
+        total: 1,
+      },
+    });
+
+    const res = await service.listImages();
+
+    expect(mockClient.get).toHaveBeenCalledWith('/v1/compute/images');
+    expect(res.data?.total).toBe(1);
+    expect(res.data?.images[0]?.media_type).toBe('application/vnd.oci.image.manifest.v1+json');
+  });
+
+  it('sends repository, limit and offset in that order', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true });
+
+    await service.listImages({ repository: 'team/app', limit: 50, offset: 100 });
+
+    expect(mockClient.get).toHaveBeenCalledWith(
+      '/v1/compute/images?repository=team%2Fapp&limit=50&offset=100'
+    );
+  });
+
+  it('leaves out an empty repository and a negative limit, and floors a fraction', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true });
+
+    await service.listImages({ repository: '', limit: -1, offset: 2.9 });
+
+    expect(mockClient.get).toHaveBeenCalledWith('/v1/compute/images?offset=2');
+  });
+
+  it('passes an error response through unchanged', async () => {
+    const failure = {
+      success: false,
+      error: { code: 'INTERNAL', message: 'registry not configured', status: 500 },
+    };
+    vi.mocked(mockClient.get).mockResolvedValue(failure);
+
+    const res = await service.listImages();
+
+    expect(res).toEqual(failure);
+  });
+
+  it('is a method of the exported RegistryService and only reads', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true });
+
+    expect(typeof sdk.RegistryService.prototype.listImages).toBe('function');
+    await service.listImages({ limit: 10 });
+
+    expect(mockClient.post).not.toHaveBeenCalled();
+    expect(mockClient.put).not.toHaveBeenCalled();
+    expect(mockClient.delete).not.toHaveBeenCalled();
+  });
+});
