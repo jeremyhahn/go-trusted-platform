@@ -265,6 +265,17 @@ func catalogRouteScope(method, route string) (string, error) {
 
 // catalogGuardedAPI returns a restBasePath subrouter whose routes each run
 // behind guard and need the scope catalogRouteScope gives them.
+// tenantBoundCatalogAPI is catalogGuardedAPI for routers whose shared SDK
+// clients scope by the context tenant: it binds the verified caller's tenant
+// and refuses a caller without one.
+func (s *RESTServer) tenantBoundCatalogAPI(guard *restapi.ScopeGuard) *mux.Router {
+	api := s.router.PathPrefix(restBasePath).Subrouter()
+	auth := s.catalogAuthorization(guard)
+	auth.bindTenant = true
+	api.Use(auth.authorize)
+	return api
+}
+
 func (s *RESTServer) catalogGuardedAPI(guard *restapi.ScopeGuard) *mux.Router {
 	api := s.router.PathPrefix(restBasePath).Subrouter()
 	api.Use(s.catalogAuthorization(guard).authorize)
@@ -299,6 +310,11 @@ type restScopeAuthorization struct {
 	// callerGate, when set, refuses an authenticated, scoped caller the
 	// router cannot serve (for example a tenant it cannot bind).
 	callerGate func(callerTenantID string) error
+	// bindTenant, when set, refuses a caller with no tenant and binds the
+	// caller's tenant into the SDK context (sdktransport.ContextWithTenant):
+	// the router's shared SDK clients read it, and an empty tenant there is
+	// system-wide.
+	bindTenant bool
 }
 
 // authorize answers 401 for a missing or invalid credential and 403 for a
@@ -320,7 +336,15 @@ func (a restScopeAuthorization) authorize(next http.Handler) http.Handler {
 				return
 			}
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), restCallerKey{}, caller)))
+		ctx := context.WithValue(r.Context(), restCallerKey{}, caller)
+		if a.bindTenant {
+			if caller.TenantID == "" {
+				a.respWriter.Error403(w, r, restapi.ErrRouteForbidden{Scope: scope, Reason: "caller has no tenant to bind"}, nil)
+				return
+			}
+			ctx = sdktransport.ContextWithTenant(ctx, caller.TenantID)
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 

@@ -250,14 +250,6 @@ func (h *Handlers) GenerateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Resolve()
-	if req.Description != "" {
-		h.respWriter.Error400(w, r, &ErrInvalidRequest{Field: "description", Reason: "not supported by the key service"})
-		return
-	}
-	if len(req.Tags) > 0 {
-		h.respWriter.Error400(w, r, &ErrInvalidRequest{Field: "tags", Reason: "not supported by the key service"})
-		return
-	}
 	alg, err := parseKeyAlgorithm(req.Algorithm)
 	if err != nil {
 		h.respWriter.Error400(w, r, err)
@@ -280,6 +272,18 @@ func (h *Handlers) GenerateKey(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.fail(w, r, err)
 		return
+	}
+	// The key service takes no metadata on generate; description and tags
+	// go through its UpdateKeyMetadata, as the legacy daemon handler kept them.
+	if req.Description != "" || len(req.Tags) > 0 {
+		if _, err := h.kms.UpdateKeyMetadata(ctx, &kmsclient.UpdateKeyMetadataRequest{
+			KeyID:       resp.KeyID,
+			Description: req.Description,
+			Tags:        req.Tags,
+		}); err != nil {
+			h.fail(w, r, err)
+			return
+		}
 	}
 	h.success201(w, r, &GenerateKeyResponse{
 		KeyID:              resp.KeyID,

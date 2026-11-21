@@ -17,11 +17,14 @@ package kms
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	kmsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
@@ -34,11 +37,47 @@ type daemonRouteKMS struct {
 	got  *kmsclient.GenerateKeyRequest
 	resp *kmsclient.GenerateKeyResponse
 	err  error
+	meta []*kmsclient.UpdateKeyMetadataRequest
 }
 
 func (f *daemonRouteKMS) GenerateKey(_ context.Context, req *kmsclient.GenerateKeyRequest) (*kmsclient.GenerateKeyResponse, error) {
 	f.got = req
 	return f.resp, f.err
+}
+
+func (f *daemonRouteKMS) UpdateKeyMetadata(_ context.Context, req *kmsclient.UpdateKeyMetadataRequest) (*kmsclient.KeyMetadataResponse, error) {
+	f.meta = append(f.meta, req)
+	return &kmsclient.KeyMetadataResponse{}, nil
+}
+
+// daemonRouteToken is the bearer every daemonRouteAdapter request carries;
+// daemonRouteValidator grants it the KMS scopes in a tenant, the way the
+// daemon's guard verifies a tenant operator.
+const daemonRouteToken = "daemon-route-token"
+
+type daemonRouteValidator struct{}
+
+func (daemonRouteValidator) ValidateToken(_ context.Context, token string) (bool, error) {
+	return token == daemonRouteToken, nil
+}
+
+func (daemonRouteValidator) AuthorizeToken(_ context.Context, token, _, _, _, _ string) (*platformtoken.AuthorizedContext, error) {
+	if token != daemonRouteToken {
+		return nil, errors.New("unknown token")
+	}
+	return &platformtoken.AuthorizedContext{
+		Subject: "kms-it", TenantID: "tenant-kms-it",
+		Scopes: []string{"kms:read", "kms:write", "kms:delete"},
+	}, nil
+}
+
+// bearerTransport adds the daemon route token to every request.
+type bearerTransport struct{ next http.RoundTripper }
+
+func (b bearerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+daemonRouteToken)
+	return b.next.RoundTrip(r)
 }
 
 // daemonRouteAdapter builds the daemon REST server as the daemon wires it
@@ -56,11 +95,13 @@ func daemonRouteAdapter(t *testing.T, fake *daemonRouteKMS) *RESTAdapter {
 	if err != nil {
 		t.Fatalf("NewRESTServer: %v", err)
 	}
-	s.SetKMSRouter(fake, nil, nil, nil)
+	s.SetKMSRouter(fake, nil, nil, nil, restapi.NewScopeGuard(daemonRouteValidator{}, nil, nil))
 	s.SetKMSHandlers(struct{ restapi.KMSService }{})
 	srv := httptest.NewServer(s.Router())
 	t.Cleanup(srv.Close)
-	return &RESTAdapter{baseURL: srv.URL, httpClient: srv.Client()}
+	client := srv.Client()
+	client.Transport = bearerTransport{next: client.Transport}
+	return &RESTAdapter{baseURL: srv.URL, httpClient: client}
 }
 
 // TestRESTAdapterKeyGenerateThroughTheDaemonRoute drives KeyGenerate through
