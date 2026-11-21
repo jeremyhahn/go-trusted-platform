@@ -484,6 +484,10 @@ type fakeLauncher struct {
 	// startErrors, keyed by process name, is the Gateway.Start failure
 	// every child of that process launched from now on reports in Status.
 	startErrors map[string]error
+	// beforeLaunch, when set, runs at the start of every Launch, outside
+	// l.mu, so a test can change what a counted launch sees without racing
+	// the restart loop.
+	beforeLaunch func(spec Spec)
 	// events is an ordered log of what the supervisor did to its children,
 	// so a test can assert the ORDER of a signal and a cancellation rather
 	// than only that both happened.
@@ -534,8 +538,11 @@ func (l *fakeLauncher) node(process string, services []string) *fakeNode {
 
 func (l *fakeLauncher) Launch(ctx context.Context, spec Spec) (Child, error) {
 	l.mu.Lock()
-	gate, launched := l.gate, l.launched
+	gate, launched, beforeLaunch := l.gate, l.launched, l.beforeLaunch
 	l.mu.Unlock()
+	if beforeLaunch != nil {
+		beforeLaunch(spec)
+	}
 	if launched != nil {
 		close(launched)
 	}
@@ -1506,8 +1513,17 @@ func TestRestart_AChildThatNeverServesIsNotAcceptedAsLive(t *testing.T) {
 func TestRestart_ARestartedChildWhoseServiceFailsToStartIsRestartedAgain(t *testing.T) {
 	// The vpn child itself crashes. Its restart answers the socket, but its
 	// start failed and its VPN service is inactive: the restart loop stops
-	// it and restarts it again until the service comes up.
-	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.RestartBackoff = time.Millisecond })
+	// it and restarts it again until the service comes up. The budget is
+	// explicit because the start error is cleared at a counted restart
+	// launch, which must fall inside it.
+	const restartBudget = 3
+	// One restart fails; the second restart launch comes up inside the
+	// budget. Cleared at a counted launch, not after a poll.
+	const clearAt = 2
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = restartBudget
+	})
 	ctx := testContext(t)
 	startDatapath(t, ctx, supervisor, launcher, "v1")
 	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
@@ -1521,6 +1537,24 @@ func TestRestart_ARestartedChildWhoseServiceFailsToStartIsRestartedAgain(t *test
 	launcher.startErrors = map[string]error{"vpn": errors.New("vpn: lease projection: control plane unavailable")}
 	launcher.mu.Unlock()
 	vpn.setHealth(gateway.ServiceManagementVPN, false, nil)
+
+	// The control plane is back at a counted restart launch, not after a
+	// poll the 1 ms restart loop can outrun into a give-up.
+	var vpnRestarts atomic.Int32
+	launcher.mu.Lock()
+	launcher.beforeLaunch = func(spec Spec) {
+		if spec.Definition.Name != "vpn" {
+			return
+		}
+		if vpnRestarts.Add(1) != clearAt {
+			return
+		}
+		launcher.mu.Lock()
+		launcher.startErrors = nil
+		launcher.mu.Unlock()
+		vpn.setHealth(gateway.ServiceManagementVPN, true, nil)
+	}
+	launcher.mu.Unlock()
 
 	vpnChild.exit(errors.New("signal: killed"))
 	require.Eventually(t, func() bool {
@@ -1539,25 +1573,15 @@ func TestRestart_ARestartedChildWhoseServiceFailsToStartIsRestartedAgain(t *test
 		return false
 	}, 5*time.Second, 10*time.Millisecond, "the restarted vpn child whose service failed to start is stopped")
 
-	// The control plane is back.
-	launcher.mu.Lock()
-	launcher.startErrors = nil
-	launcher.mu.Unlock()
-	vpn.setHealth(gateway.ServiceManagementVPN, true, nil)
-
-	// Wait for the second relaunch as well as the healthy service: the
-	// health flips as soon as the fake node reports it, which can be before
-	// the restart loop has launched the vpn child again.
+	// The stopped child shares the fake node, so the child count is part of
+	// the condition, not only the health.
 	require.Eventually(t, func() bool {
 		launcher.mu.Lock()
-		relaunched := len(launcher.children) >= before+2
+		launches := len(launcher.children)
 		launcher.mu.Unlock()
-		return relaunched && supervisor.ServiceHealth(gateway.ServiceManagementVPN) == nil
+		return launches >= before+2 && supervisor.ServiceHealth(gateway.ServiceManagementVPN) == nil
 	}, 5*time.Second, 10*time.Millisecond, "the vpn child is restarted again and comes up")
-	launcher.mu.Lock()
-	launches := len(launcher.children)
-	launcher.mu.Unlock()
-	assert.GreaterOrEqual(t, launches, before+2, "the vpn child is restarted after the failed start")
+	assert.Equal(t, int32(2), vpnRestarts.Load(), "one failed restart, then the one that came up")
 }
 
 func TestCrashedProcess_IsRestartedWithGrowingBackoff(t *testing.T) {
@@ -3262,19 +3286,28 @@ type exitHookRecorder struct {
 	failures int
 	calls    []string
 	launches []int
+	// onCall, when set, runs after a call is recorded, outside r.mu, with
+	// the supervisor's lock not held; call is the 1-based call number.
+	onCall func(call int)
 }
 
 func (r *exitHookRecorder) hook(_ context.Context, def Definition) error {
 	launches := r.launcher.launchCount()
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.calls = append(r.calls, def.Name)
 	r.launches = append(r.launches, launches)
+	call := len(r.calls)
+	onCall := r.onCall
+	var err error
 	if r.failures > 0 {
 		r.failures--
-		return errors.New("wireguard hub: device busy")
+		err = errors.New("wireguard hub: device busy")
 	}
-	return nil
+	r.mu.Unlock()
+	if onCall != nil {
+		onCall(call)
+	}
+	return err
 }
 
 func (r *exitHookRecorder) callCount() int {
@@ -3449,17 +3482,48 @@ func TestSupervisor_OnChildExitRetriedPastTheRestartBudget(t *testing.T) {
 	rec.mu.Lock()
 	rec.failures = 3
 	rec.mu.Unlock()
-	var sawInHealth atomic.Bool
+	// Health is sampled inside the hook calls, while the previous call's
+	// error is still in health, not from a poll that can miss the window.
+	var samplesMu sync.Mutex
+	samples := map[int]error{}
+	rec.mu.Lock()
+	rec.onCall = func(call int) {
+		if call < 3 {
+			return
+		}
+		health := supervisor.ServiceHealth(gateway.ServiceVPNWireGuard)
+		samplesMu.Lock()
+		samples[call] = health
+		samplesMu.Unlock()
+	}
+	rec.mu.Unlock()
 	child.exit(errors.New("signal: killed"))
 	require.Eventually(t, func() bool {
-		var hookErr *ErrExitHook
-		if errors.As(supervisor.ServiceHealth(gateway.ServiceVPNWireGuard), &hookErr) {
-			sawInHealth.Store(true)
-		}
-		return rec.callCount() >= 5
-	}, 5*time.Second, time.Millisecond, "the failed hook is retried after the budget is exhausted")
+		samplesMu.Lock()
+		_, ok := samples[5]
+		samplesMu.Unlock()
+		return ok
+	}, 5*time.Second, 10*time.Millisecond, "the failed hook is retried after the budget is exhausted")
 
-	assert.True(t, sawInHealth.Load(), "the cleanup failure is reported in health while it lasts")
+	// The wait is on the fifth recorded sample, not the call count: the
+	// recorder counts a call before it runs onCall, so callCount can reach 5
+	// before the fifth onCall stored its sample. Each hook call runs while
+	// the previous call's error is in health, so calls 3-5 read it at a
+	// counted call, not from a poll.
+	samplesMu.Lock()
+	sampled := make(map[int]error, len(samples))
+	for call, health := range samples {
+		sampled[call] = health
+	}
+	samplesMu.Unlock()
+	for call := 3; call <= 5; call++ {
+		health, ok := sampled[call]
+		require.True(t, ok, "health is sampled at hook call %d", call)
+		var hookErr *ErrExitHook
+		var budget *ErrRestartBudgetExhausted
+		assert.True(t, errors.As(health, &hookErr), "the cleanup failure is reported in health while it lasts (call %d)", call)
+		assert.True(t, errors.As(health, &budget), "joined to the give-up (call %d)", call)
+	}
 	require.Eventually(t, func() bool {
 		var hookErr *ErrExitHook
 		var budget *ErrRestartBudgetExhausted
