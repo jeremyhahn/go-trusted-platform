@@ -70,9 +70,6 @@ describe('SnapshotsPage Create Snapshot', () => {
     await click('Create Snapshot');
     type('Name', 'pre-upgrade');
     type('Description', 'before kernel 6.12');
-    await act(async () => {
-      fireEvent.click(screen.getByLabelText('Include memory'));
-    });
 
     routes[`GET ${SNAPSHOTS_PATH}`] = ok({ snapshots: [snapshot] });
     await click('Create');
@@ -100,6 +97,26 @@ describe('SnapshotsPage Create Snapshot', () => {
     expect(await screen.findByText('pre-upgrade')).toBeTruthy();
     const toasts = await screen.findAllByTestId('toast');
     expect(toasts.map((t) => t.textContent)).toContain('Snapshot created: Snapshot pre-upgrade was created');
+  });
+
+  it('submits the default dialog as a full memory-and-disk snapshot and offers no memory toggle', async () => {
+    const { sent } = controlPlane(created);
+    await renderPage();
+
+    await click('Create Snapshot');
+    expect(screen.queryByLabelText('Include memory')).toBeNull();
+    expect(screen.getByText(/captures both the VM's memory and its disks/i)).toBeTruthy();
+
+    type('Name', 'nightly');
+    await click('Create');
+
+    await waitFor(() =>
+      expect(sent).toContainEqual({
+        method: 'POST',
+        path: SNAPSHOTS_PATH,
+        body: { config: { name: 'nightly', memorySnapshot: true, diskSnapshot: true } },
+      }),
+    );
   });
 
   it('shows a refused create as a destructive toast and keeps the dialog open', async () => {
