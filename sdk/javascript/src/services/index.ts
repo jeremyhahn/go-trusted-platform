@@ -44,6 +44,14 @@ export {
   type RegistryComponentHealth,
 } from './registry-service.js';
 export { SDNService } from './sdn-service.js';
+export {
+  SwitchService,
+  SWITCH_MAX_VLAN_ID,
+  type SwitchPortMode,
+  type SwitchPortStatus,
+  type SwitchPortActionResponse,
+  type SwitchSetPortVLANResponse,
+} from './switch-service.js';
 export { TenantService } from './tenant-service.js';
 export { TPMService } from './tpm-service.js';
 export { VTPMService, InvalidDeviceProfileIdError } from './vtpm-service.js';
