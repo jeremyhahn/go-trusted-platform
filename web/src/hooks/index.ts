@@ -101,6 +101,26 @@ export type {
   RegistryTags,
   UseRegistryResult,
 } from './use-registry';
+// Bootstrap ceremony (#2042)
+export { useCeremony } from './use-ceremony';
+export type {
+  CeremonyState,
+  CeremonyAuthenticatorType,
+  CeremonyOfficerRole,
+  CeremonyInitRequest,
+  CeremonyInitResponse,
+  CeremonyStatusResponse,
+  CeremonyClaimCertBeginRequest,
+  CeremonyClaimCertBeginResponse,
+  CeremonyClaimCertCompleteRequest,
+  CeremonyClaimCertCompleteResponse,
+  CeremonyClaimShareBeginRequest,
+  CeremonyClaimShareBeginResponse,
+  CeremonyClaimShareCompleteRequest,
+  CeremonyClaimShareCompleteResponse,
+  CeremonySignCSRRequest,
+  CeremonySignCSRResponse,
+} from './use-ceremony';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,
