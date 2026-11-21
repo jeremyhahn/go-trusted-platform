@@ -407,7 +407,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 		// Configure authentication interceptors. Fails closed (#550): with
 		// SkipIAMValidation off, no authentication backend means no server.
-		authSel, authErr := selectGRPCTCPAuth(config, platformTokenValidatorShared, iamPEP, logger, grpcTCPSkipMethods)
+		var mtlsPrincipal func(ctx context.Context, tenantID, subject string) (string, []string, error)
+		if iamService != nil {
+			mtlsPrincipal = iamUserPrincipal(iamService.Client())
+		}
+		authSel, authErr := selectGRPCTCPAuth(config, platformTokenValidatorShared, iamPEP, mtlsPrincipal, logger, grpcTCPSkipMethods)
 		if authErr != nil {
 			return nil, authErr
 		}

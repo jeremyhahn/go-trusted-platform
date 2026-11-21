@@ -106,6 +106,9 @@ func isPreAuthMethod(fullMethod string) bool {
 	return ok
 }
 
+// IsPreAuthMethod reports whether fullMethod is classified as served without a platform token.
+func IsPreAuthMethod(fullMethod string) bool { return isPreAuthMethod(fullMethod) }
+
 // buildGRPCMethodPermissions constructs the FullMethod -> scope catalog. The
 // resource/action pairs mirror the QUIC operation catalog and the MCP
 // toolPermissions for the same capabilities; the daemon's QUIC authorization

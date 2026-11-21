@@ -29,6 +29,8 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -477,7 +479,10 @@ func TestMTLSUnaryInterceptorSuccess(t *testing.T) {
 				return expectedIdentity, nil
 			},
 		},
-		Logger: logging.DefaultLogger(),
+		Logger:     logging.DefaultLogger(),
+		PEP:        &mockSDKPEPClient{checkFunc: grantAllCheck},
+		Permission: func(string) string { return "daemon:test" },
+		Principal:  staticPrincipal("cert-client", []string{"operator"}, nil, nil),
 	}
 
 	interceptor := MTLSUnaryInterceptor(cfg)
@@ -710,7 +715,10 @@ func TestMTLSStreamInterceptorSuccess(t *testing.T) {
 				return expectedIdentity, nil
 			},
 		},
-		Logger: logging.DefaultLogger(),
+		Logger:     logging.DefaultLogger(),
+		PEP:        &mockSDKPEPClient{checkFunc: grantAllCheck},
+		Permission: func(string) string { return "daemon:test" },
+		Principal:  staticPrincipal("cert-client", []string{"operator"}, nil, nil),
 	}
 
 	interceptor := MTLSStreamInterceptor(cfg)
@@ -1120,4 +1128,374 @@ func TestExtractClientCertsMultipleVerifiedChains(t *testing.T) {
 	if certs[0].Subject.CommonName != "chain1-leaf" {
 		t.Errorf("first cert CN = %q, want %q", certs[0].Subject.CommonName, "chain1-leaf")
 	}
+}
+
+// --- per-method PEP check (#1989) ---------------------------------------------
+
+const mtlsPEPTestMethod = "/platform.Daemon/Shutdown"
+
+// mtlsTestPermission maps the test method to daemon:shutdown and leaves every
+// other method unmapped.
+func mtlsTestPermission(fullMethod string) string {
+	if fullMethod == mtlsPEPTestMethod {
+		return "daemon:shutdown"
+	}
+	return ""
+}
+
+// grantAllCheck is a fake PEP decision that allows every request.
+func grantAllCheck(context.Context, *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+	return &sdkiam.CheckResponse{Allowed: true}, nil
+}
+
+// recordingPEP grants only the permissions it lists for the subject it names.
+func recordingPEP(subject string, granted ...string) (*mockSDKPEPClient, *[]*sdkiam.CheckRequest) {
+	var calls []*sdkiam.CheckRequest
+	allow := make(map[string]bool, len(granted))
+	for _, g := range granted {
+		allow[g] = true
+	}
+	pep := &mockSDKPEPClient{
+		checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+			calls = append(calls, req)
+			ok := req.Subject.ID == subject && allow[req.Resource+":"+req.Action]
+			return &sdkiam.CheckResponse{Allowed: ok}, nil
+		},
+	}
+	return pep, &calls
+}
+
+// rolePEP grants a permission only when the CheckRequest's Subject.Roles
+// hold a role that grants it (grants maps role -> "resource:action"
+// permissions); the subject ID never grants anything.
+func rolePEP(grants map[string][]string) (*mockSDKPEPClient, *[]*sdkiam.CheckRequest) {
+	var calls []*sdkiam.CheckRequest
+	pep := &mockSDKPEPClient{
+		checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+			calls = append(calls, req)
+			want := req.Resource + ":" + req.Action
+			for _, role := range req.Subject.Roles {
+				for _, p := range grants[role] {
+					if p == want {
+						return &sdkiam.CheckResponse{Allowed: true}, nil
+					}
+				}
+			}
+			return &sdkiam.CheckResponse{Allowed: false}, nil
+		},
+	}
+	return pep, &calls
+}
+
+// staticPrincipal returns a Principal resolver that answers the stored user
+// ID and roles for the test certificate principal and records the tenant and
+// subject it was asked for.
+func staticPrincipal(userID string, roles []string, err error, asked *[]string) func(context.Context, string, string) (string, []string, error) {
+	return func(_ context.Context, tenantID, subject string) (string, []string, error) {
+		if asked != nil {
+			*asked = append(*asked, tenantID+"/"+subject)
+		}
+		return userID, roles, err
+	}
+}
+
+func mtlsPEPConfig(pep *mockSDKPEPClient) *MTLSInterceptorConfig {
+	cfg := &MTLSInterceptorConfig{
+		Authenticator: &mockAuthenticator{
+			authenticateFunc: func(context.Context, *x509.Certificate) (*auth.Identity, error) {
+				return &auth.Identity{ID: "cert-client", TenantID: "acme-corp", Name: "Cert Client"}, nil
+			},
+		},
+		Logger:     logging.DefaultLogger(),
+		Permission: mtlsTestPermission,
+		Principal:  staticPrincipal("cert-client", []string{"operator"}, nil, nil),
+	}
+	if pep != nil {
+		cfg.PEP = pep
+	}
+	return cfg
+}
+
+func runMTLSUnary(t *testing.T, cfg *MTLSInterceptorConfig, method string) (bool, error) {
+	t.Helper()
+	called := false
+	handler := func(context.Context, interface{}) (interface{}, error) {
+		called = true
+		return "ok", nil
+	}
+	ctx := createTLSPeerContext(generateTestCert("cert-client"))
+	_, err := MTLSUnaryInterceptor(cfg)(ctx, "req", &grpc.UnaryServerInfo{FullMethod: method}, handler)
+	return called, err
+}
+
+func runMTLSStream(t *testing.T, cfg *MTLSInterceptorConfig, method string) (bool, error) {
+	t.Helper()
+	called := false
+	handler := func(interface{}, grpc.ServerStream) error {
+		called = true
+		return nil
+	}
+	ss := &mockServerStream{ctx: createTLSPeerContext(generateTestCert("cert-client"))}
+	err := MTLSStreamInterceptor(cfg)(nil, ss, &grpc.StreamServerInfo{FullMethod: method}, handler)
+	return called, err
+}
+
+func TestMTLSInterceptorsPEPCheck(t *testing.T) {
+	runners := map[string]func(*testing.T, *MTLSInterceptorConfig, string) (bool, error){
+		"unary":  runMTLSUnary,
+		"stream": runMTLSStream,
+	}
+	for name, run := range runners {
+		t.Run(name+"/principal with the permission", func(t *testing.T) {
+			pep, calls := recordingPEP("cert-client", "daemon:shutdown")
+			called, err := run(t, mtlsPEPConfig(pep), mtlsPEPTestMethod)
+			if err != nil {
+				t.Fatalf("err = %v, want nil", err)
+			}
+			if !called {
+				t.Fatal("handler not called for a granted principal")
+			}
+			if len(*calls) != 1 {
+				t.Fatalf("PEP calls = %d, want 1", len(*calls))
+			}
+			req := (*calls)[0]
+			if req.Subject.ID != "cert-client" || req.Subject.TenantID != "acme-corp" ||
+				req.Resource != "daemon" || req.Action != "shutdown" {
+				t.Errorf("PEP request = %+v, want cert-client/acme-corp daemon:shutdown", req)
+			}
+		})
+		t.Run(name+"/principal without the permission", func(t *testing.T) {
+			pep, _ := recordingPEP("cert-client", "daemon:status")
+			called, err := run(t, mtlsPEPConfig(pep), mtlsPEPTestMethod)
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+			}
+			if called {
+				t.Fatal("handler called for a denied principal")
+			}
+		})
+		t.Run(name+"/no PEP wired", func(t *testing.T) {
+			called, err := run(t, mtlsPEPConfig(nil), mtlsPEPTestMethod)
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+			}
+			if called {
+				t.Fatal("handler called with no PEP wired")
+			}
+		})
+		t.Run(name+"/unmapped method", func(t *testing.T) {
+			pep, calls := recordingPEP("cert-client", "daemon:shutdown")
+			called, err := run(t, mtlsPEPConfig(pep), "/platform.Daemon/NotInTheMap")
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+			}
+			if called || len(*calls) != 0 {
+				t.Fatalf("handler called = %v, PEP calls = %d; want neither", called, len(*calls))
+			}
+		})
+		t.Run(name+"/PEP error", func(t *testing.T) {
+			pep := &mockSDKPEPClient{checkFunc: func(context.Context, *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+				return nil, errors.New("pep down")
+			}}
+			called, err := run(t, mtlsPEPConfig(pep), mtlsPEPTestMethod)
+			if status.Code(err) != codes.Unavailable {
+				t.Fatalf("code = %v, want Unavailable (err %v)", status.Code(err), err)
+			}
+			if called {
+				t.Fatal("handler called on a PEP error")
+			}
+		})
+	}
+}
+
+// TestMTLS_PEPSubjectIsTheStoredUserID: the PEP is asked about the stored IAM
+// user ID the certificate identifier resolves to, not the identifier itself,
+// so an ABAC rule naming the user ID matches (#1989, Codex round 4).
+func TestMTLS_PEPSubjectIsTheStoredUserID(t *testing.T) {
+	newCfg := func(pep *mockSDKPEPClient, userID string) *MTLSInterceptorConfig {
+		cfg := mtlsPEPConfig(pep)
+		cfg.Authenticator = &mockAuthenticator{
+			authenticateFunc: func(context.Context, *x509.Certificate) (*auth.Identity, error) {
+				return &auth.Identity{ID: "operator@example.com", TenantID: "acme-corp"}, nil
+			},
+		}
+		cfg.Principal = staticPrincipal(userID, []string{"operator"}, nil, nil)
+		return cfg
+	}
+	runners := map[string]func(*testing.T, *MTLSInterceptorConfig, string) (bool, error){
+		"unary":  runMTLSUnary,
+		"stream": runMTLSStream,
+	}
+	for name, run := range runners {
+		t.Run(name+"/subject is the stored user ID", func(t *testing.T) {
+			pep, calls := rolePEP(map[string][]string{"operator": {"daemon:shutdown"}})
+			called, err := run(t, newCfg(pep, "123"), mtlsPEPTestMethod)
+			if err != nil || !called {
+				t.Fatalf("called = %v, err = %v; want the handler called", called, err)
+			}
+			if len(*calls) != 1 || (*calls)[0].Subject.ID != "123" {
+				t.Fatalf("PEP subjects = %+v, want exactly the stored user ID 123", *calls)
+			}
+		})
+		t.Run(name+"/deny rule on the stored user ID refuses", func(t *testing.T) {
+			pep, _ := rolePEP(map[string][]string{"operator": {"daemon:shutdown"}})
+			grant := pep.checkFunc
+			pep.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+				if req.Subject.ID == "123" {
+					return &sdkiam.CheckResponse{Allowed: false}, nil
+				}
+				return grant(ctx, req)
+			}
+			called, err := run(t, newCfg(pep, "123"), mtlsPEPTestMethod)
+			if status.Code(err) != codes.PermissionDenied || called {
+				t.Fatalf("called = %v, code = %v; want PermissionDenied from the user-ID deny rule", called, status.Code(err))
+			}
+		})
+		t.Run(name+"/empty resolved user ID refuses", func(t *testing.T) {
+			pep, calls := rolePEP(map[string][]string{"operator": {"daemon:shutdown"}})
+			called, err := run(t, newCfg(pep, ""), mtlsPEPTestMethod)
+			if err == nil || called {
+				t.Fatalf("called = %v, err = %v; want a refusal on an empty user ID", called, err)
+			}
+			if len(*calls) != 0 {
+				t.Fatalf("PEP calls = %d, want none on an empty user ID", len(*calls))
+			}
+		})
+	}
+}
+
+func TestMTLSAuthorizeUsesCertificatePrincipalRoles(t *testing.T) {
+	runners := map[string]func(*testing.T, *MTLSInterceptorConfig, string) (bool, error){
+		"unary":  runMTLSUnary,
+		"stream": runMTLSStream,
+	}
+	grants := map[string][]string{"operator": {"daemon:shutdown"}}
+	for name, run := range runners {
+		t.Run(name+"/role grants the permission", func(t *testing.T) {
+			pep, calls := rolePEP(grants)
+			var asked []string
+			cfg := mtlsPEPConfig(pep)
+			cfg.Principal = staticPrincipal("cert-client", []string{"operator"}, nil, &asked)
+			called, err := run(t, cfg, mtlsPEPTestMethod)
+			if err != nil {
+				t.Fatalf("err = %v, want nil", err)
+			}
+			if !called {
+				t.Fatal("handler not called for a principal whose role grants the permission")
+			}
+			if len(asked) != 1 || asked[0] != "acme-corp/cert-client" {
+				t.Errorf("Roles asked for %v, want [acme-corp/cert-client]", asked)
+			}
+			if len(*calls) != 1 {
+				t.Fatalf("PEP calls = %d, want 1", len(*calls))
+			}
+			if got := (*calls)[0].Subject.Roles; len(got) != 1 || got[0] != "operator" {
+				t.Errorf("PEP request roles = %v, want [operator]", got)
+			}
+		})
+		t.Run(name+"/principal with no roles", func(t *testing.T) {
+			pep, _ := rolePEP(grants)
+			cfg := mtlsPEPConfig(pep)
+			cfg.Principal = staticPrincipal("cert-client", nil, nil, nil)
+			called, err := run(t, cfg, mtlsPEPTestMethod)
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+			}
+			if called {
+				t.Fatal("handler called for a principal with no roles")
+			}
+		})
+		t.Run(name+"/no roles resolver", func(t *testing.T) {
+			pep, calls := rolePEP(grants)
+			cfg := mtlsPEPConfig(pep)
+			cfg.Principal = nil
+			called, err := run(t, cfg, mtlsPEPTestMethod)
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+			}
+			if called || len(*calls) != 0 {
+				t.Fatalf("handler called = %v, PEP calls = %d; want neither", called, len(*calls))
+			}
+		})
+		t.Run(name+"/roles resolver error", func(t *testing.T) {
+			pep, calls := rolePEP(grants)
+			cfg := mtlsPEPConfig(pep)
+			cfg.Principal = staticPrincipal("cert-client", nil, errors.New("iam down"), nil)
+			called, err := run(t, cfg, mtlsPEPTestMethod)
+			if status.Code(err) != codes.Unavailable {
+				t.Fatalf("code = %v, want Unavailable (err %v)", status.Code(err), err)
+			}
+			if called || len(*calls) != 0 {
+				t.Fatalf("handler called = %v, PEP calls = %d; want neither", called, len(*calls))
+			}
+		})
+	}
+}
+
+// TestMTLSInterceptorsPreAuthMethods checks, with the production method
+// catalog, that a method classified pre-auth in pkg/api/grpc is served after
+// certificate authentication without a PEP call, while an unclassified method
+// is still denied and a pre-auth call with no certificate is unauthenticated.
+func TestMTLSInterceptorsPreAuthMethods(t *testing.T) {
+	preAuth := []string{
+		"/platform.v1.InvitationService/GetInvitationByToken",
+		"/platform.v1.InvitationService/AcceptInvitation",
+		"/platform.v1.ConfigDeliveryService/GetNonce",
+		"/platform.v1.ConfigDeliveryService/FetchConfig",
+		"/platform.v1.ConfigDeliveryService/SignDigest",
+		"/platform.v1.ConfigDeliveryService/PollSession",
+	}
+	runners := map[string]func(*testing.T, *MTLSInterceptorConfig, string) (bool, error){
+		"unary":  runMTLSUnary,
+		"stream": runMTLSStream,
+	}
+	for name, run := range runners {
+		for _, method := range preAuth {
+			t.Run(name+"/pre-auth "+method, func(t *testing.T) {
+				pep, calls := recordingPEP("cert-client")
+				cfg := mtlsPEPConfig(pep)
+				cfg.Permission = nil
+				called, err := run(t, cfg, method)
+				if err != nil {
+					t.Fatalf("err = %v, want nil", err)
+				}
+				if !called {
+					t.Fatal("handler not called for a pre-auth method")
+				}
+				if len(*calls) != 0 {
+					t.Fatalf("PEP calls = %d, want 0", len(*calls))
+				}
+			})
+		}
+		t.Run(name+"/unclassified method", func(t *testing.T) {
+			pep, calls := recordingPEP("cert-client")
+			cfg := mtlsPEPConfig(pep)
+			cfg.Permission = nil
+			called, err := run(t, cfg, "/platform.v1.PlatformDaemon/NotAClassifiedMethod")
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+			}
+			if called || len(*calls) != 0 {
+				t.Fatalf("handler called = %v, PEP calls = %d; want neither", called, len(*calls))
+			}
+		})
+	}
+	t.Run("unary/pre-auth method without a client certificate", func(t *testing.T) {
+		pep, calls := recordingPEP("cert-client")
+		cfg := mtlsPEPConfig(pep)
+		cfg.Permission = nil
+		called := false
+		handler := func(context.Context, interface{}) (interface{}, error) {
+			called = true
+			return "ok", nil
+		}
+		info := &grpc.UnaryServerInfo{FullMethod: "/platform.v1.InvitationService/AcceptInvitation"}
+		_, err := MTLSUnaryInterceptor(cfg)(createPeerContextNoCerts(), "req", info, handler)
+		if status.Code(err) != codes.Unauthenticated {
+			t.Fatalf("code = %v, want Unauthenticated (err %v)", status.Code(err), err)
+		}
+		if called || len(*calls) != 0 {
+			t.Fatalf("handler called = %v, PEP calls = %d; want neither", called, len(*calls))
+		}
+	})
 }
