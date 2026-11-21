@@ -55,7 +55,7 @@ func TestKMSMAC_RoutesAndBodies(t *testing.T) {
 			resp:     &platformv1.HashResponse{},
 			payload:  `{"hash":"SHA-384","digest":"` + b64("h") + `"}`,
 			wantPath: "/api/v1/kms/hash",
-			wantBody: map[string]interface{}{"data": b64("d"), "hash": "SHA-384"},
+			wantBody: map[string]interface{}{"data": b64("d"), "hash": "SHA-384", "algorithm": float64(3)},
 		},
 		{
 			name:     "HashUnspecifiedLeavesServerDefault",
@@ -174,4 +174,68 @@ func TestKMSMAC_RepliesDecode(t *testing.T) {
 			t.Fatalf("err = %v, want ErrUnmarshalFailed", err)
 		}
 	})
+}
+
+// TestKMSMAC_RepliesCarryTheRequest: the routes do not echo the HMAC hash or
+// the verified key, so the replies take them from the request: HMAC
+// hash_algorithm is the requested one (SHA-256, the server default, when
+// unspecified) and VerifyHMAC key_id is the requested key for either verdict.
+func TestKMSMAC_RepliesCarryTheRequest(t *testing.T) {
+	ctx := context.Background()
+	hmacCases := []struct {
+		name string
+		req  platformv1.HashAlgorithm
+		want platformv1.HashAlgorithm
+	}{
+		{"HMACSHA384", platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384, platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384},
+		{"HMACUnspecified", platformv1.HashAlgorithm_HASH_ALGORITHM_UNSPECIFIED, platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256},
+	}
+	for _, tc := range hmacCases {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _ := kmsAdapter(t, `{"key_id":"mac","hmac":"`+b64("tag")+`"}`)
+			resp := &platformv1.HMACResponse{}
+			if err := a.Connection().Invoke(ctx, platformv1.KeyManagementService_HMAC_FullMethodName,
+				&platformv1.HMACRequest{KeyId: "mac", Message: []byte("m"), HashAlgorithm: tc.req}, resp); err != nil {
+				t.Fatalf("Invoke: %v", err)
+			}
+			if resp.GetHashAlgorithm() != tc.want {
+				t.Fatalf("hash_algorithm = %v, want %v (reply %v)", resp.GetHashAlgorithm(), tc.want, resp)
+			}
+		})
+	}
+	for _, valid := range []bool{true, false} {
+		payload := `{"valid":false}`
+		if valid {
+			payload = `{"valid":true}`
+		}
+		t.Run(payload, func(t *testing.T) {
+			a, _ := kmsAdapter(t, payload)
+			resp := &platformv1.VerifyHMACResponse{}
+			if err := a.Connection().Invoke(ctx, platformv1.KeyManagementService_VerifyHMAC_FullMethodName,
+				&platformv1.VerifyHMACRequest{KeyId: "mac", Message: []byte("m"), Hmac: []byte("t")}, resp); err != nil {
+				t.Fatalf("Invoke: %v", err)
+			}
+			if resp.GetKeyId() != "mac" || resp.GetValid() != valid {
+				t.Fatalf("reply = %v, want key_id mac valid %v", resp, valid)
+			}
+		})
+	}
+}
+
+// TestKMSMAC_HashDaemonShape: the daemon reads a numeric algorithm and
+// replies {algorithm, hash (base64 digest), timestamp}; the SDK sends the
+// number and decodes that reply.
+func TestKMSMAC_HashDaemonShape(t *testing.T) {
+	a, captured := kmsAdapter(t, `{"algorithm":3,"hash":"`+b64("dg")+`","timestamp":1}`)
+	resp := &platformv1.HashResponse{}
+	if err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_Hash_FullMethodName,
+		&platformv1.HashRequest{Data: []byte("d"), Algorithm: platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384}, resp); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if string(resp.GetHash()) != "dg" || resp.GetAlgorithm() != platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384 {
+		t.Fatalf("reply = %v", resp)
+	}
+	if captured.body["algorithm"] != float64(3) {
+		t.Fatalf("body = %v, want algorithm 3", captured.body)
+	}
 }

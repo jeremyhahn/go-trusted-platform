@@ -337,9 +337,8 @@ func TestSDKRoundTrip_HMAC(t *testing.T) {
 	if got == nil || got.KeyID != "mac" || string(got.Message) != "msg" || got.HashAlg != cryptoclient.HashSHA384 {
 		t.Fatalf("service request = %+v", got)
 	}
-	// The webservice reply carries no hash name, and a response decoder
-	// cannot see the request, so hash_algorithm is not asserted here.
-	if resp.GetKeyId() != "mac" || string(resp.GetHmac()) != "tag" || !resp.GetStatus().GetSuccess() {
+	if resp.GetKeyId() != "mac" || string(resp.GetHmac()) != "tag" || !resp.GetStatus().GetSuccess() ||
+		resp.GetHashAlgorithm() != platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384 {
 		t.Fatalf("reply = %v", resp)
 	}
 }
@@ -361,8 +360,8 @@ func TestSDKRoundTrip_VerifyHMAC(t *testing.T) {
 			got.HashAlg != cryptoclient.HashSHA256 {
 			t.Fatalf("service request = %+v", got)
 		}
-		if resp.GetValid() != valid {
-			t.Fatalf("valid = %v, want %v", resp.GetValid(), valid)
+		if resp.GetValid() != valid || resp.GetKeyId() != "mac" {
+			t.Fatalf("reply = %v, want key_id mac valid %v", resp, valid)
 		}
 	}
 }
