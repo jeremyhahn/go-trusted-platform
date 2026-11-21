@@ -70,4 +70,14 @@ describe("links to pages", () => {
       expect(hrefs.filter((href) => !hasPage(href))).toEqual([]);
     },
   );
+
+  // #2145 Codex round 1: the pages later splits add are not linked until they land.
+  it.each([
+    "/iam/policies/test", "/tenant/lifecycle", "/kms/operations", "/ca/eab", "/ca/sign", "/ca/verify",
+    "/attestation/collect", "/tpm/idevid", "/devices/bmc", "/devices/lookup", "/compute/migrations",
+    "/networking/switches", "/networking/gateway/bgp",
+  ])("defers %s until its page is on this branch", (href) => {
+    expect(hasPage(href)).toBe(false);
+    expect(linkedHrefs("components/layout/app-sidebar.tsx")).not.toContain(href);
+  });
 });

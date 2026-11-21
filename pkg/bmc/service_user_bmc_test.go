@@ -184,6 +184,78 @@ func TestService_ConnectionAccount_Refused_Simulator(t *testing.T) {
 	}
 }
 
+// newSimAnonymousUserService is newSimUserService with a profile that logs in
+// through the anonymous (empty-name) account, which the simulator puts in
+// slot 1.
+func newSimAnonymousUserService(t *testing.T) *bmc.Service {
+	t.Helper()
+	sim := startSim(t, "", simPassword)
+	svc, err := bmc.NewService(bmc.ServiceParams{
+		Factory: bmc.NewIPMIClientFactory(slog.Default()),
+		Profiles: simProfiles{1: {
+			Address:  sim.LocalAddr().IP.String(),
+			Port:     sim.LocalAddr().Port,
+			Username: "",
+			Password: simPassword,
+			Protocol: bmc.ProtocolIPMI,
+		}},
+		Logger: slog.Default(),
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	return svc
+}
+
+// TestService_AnonymousConnectionAccount_Refused_Simulator: ListUsers omits
+// empty-name slots, so the guard must still refuse writes to the anonymous
+// account a profile connects with (#2145 Codex round 1).
+func TestService_AnonymousConnectionAccount_Refused_Simulator(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	assertRefused := func(t *testing.T, err error) {
+		t.Helper()
+		var refused bmc.ErrConnectionAccount
+		if !errors.As(err, &refused) {
+			t.Fatalf("err = %v, want ErrConnectionAccount", err)
+		}
+		if refused.ProfileID != 1 || refused.Slot != 1 {
+			t.Errorf("refused = %+v, want profile 1 slot 1", refused)
+		}
+	}
+
+	t.Run("SetUserPassword", func(t *testing.T) {
+		t.Parallel()
+		svc := newSimAnonymousUserService(t)
+		assertRefused(t, svc.SetUserPassword(ctx, 1, 1, "n3w-secret-pass"))
+	})
+
+	t.Run("DeleteUser", func(t *testing.T) {
+		t.Parallel()
+		svc := newSimAnonymousUserService(t)
+		assertRefused(t, svc.DeleteUser(ctx, 1, 1))
+	})
+
+	t.Run("SetUserPrivilege_NoAccess", func(t *testing.T) {
+		t.Parallel()
+		svc := newSimAnonymousUserService(t)
+		assertRefused(t, svc.SetUserPrivilege(ctx, 1, 1, 1, bmc.PrivilegeNoAccess))
+	})
+
+	t.Run("NamedSlotStillWritable", func(t *testing.T) {
+		t.Parallel()
+		svc := newSimAnonymousUserService(t)
+		u := bmc.User{Slot: 3, Username: "operator1", Enabled: true, Privilege: bmc.PrivilegeUser}
+		if err := svc.CreateUser(ctx, 1, u, "s3cret-pass"); err != nil {
+			t.Fatalf("CreateUser slot 3: %v", err)
+		}
+		if err := svc.SetUserPassword(ctx, 1, 3, "n3w-secret-pass"); err != nil {
+			t.Fatalf("SetUserPassword slot 3: %v", err)
+		}
+	})
+}
+
 // CreateUser must not overwrite a slot that already holds a user: the page
 // checks occupancy against a listing that may be stale, so the service
 // checks again under a per-profile lock.

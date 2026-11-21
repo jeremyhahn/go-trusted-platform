@@ -112,21 +112,10 @@ describe("AppSidebar", () => {
     expect(vms?.getAttribute("href")).toBe("/compute/vms");
   });
 
-  // #2024 Codex round 1: the pages this split adds are reachable from the nav.
+  // #2024 Codex round 1 / #2145 Codex round 1: the new links whose pages are on this branch.
   it.each([
-    ["/compute/migrations", "Migrations"],
-    ["/attestation/collect", "Collect"],
-    ["/devices/bmc", "BMC"],
-    ["/devices/lookup", "Device Lookup"],
-    ["/ca/eab", "EAB Keys"],
-    ["/ca/sign", "Sign"],
-    ["/ca/verify", "Verify"],
-    ["/kms/operations", "Key Operations"],
-    ["/iam/policies/test", "Policy Test"],
-    ["/tenant/lifecycle", "Lifecycle"],
-    ["/networking/switches", "Switches"],
-    ["/networking/gateway/bgp", "BGP"],
-    ["/tpm/idevid", "IDevID"],
+    ["/iam/permissions", "Permissions"],
+    ["/admin/tenants", "All Tenants"],
   ])("links %s as %s in its group", (href, label) => {
     nav.pathname = href;
     renderSidebar();
