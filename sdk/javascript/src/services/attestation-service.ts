@@ -31,6 +31,8 @@ import type {
   ListDeviceReportsResponse,
   RefreshDeviceReportResponse,
   CallerPolicyDescription,
+  PollDeviceVerdictsRequest,
+  PollDeviceVerdictsResponse,
   AttestationHashAlgorithm,
   AttestationHashAlgorithmProtoName,
   AttestationPCRValue,
@@ -248,6 +250,32 @@ export class AttestationService extends BaseService {
    */
   async describeCallers(): Promise<ApiResponse<CallerPolicyDescription>> {
     return this.client.get<CallerPolicyDescription>(this.buildUrl('/callers'));
+  }
+
+  /**
+   * Poll the tenant's device verdict feed.
+   *
+   * `GET /api/v1/attestation/verdicts` with the optional `cursor` (the value
+   * the previous page returned) and `wait_ms` (how long the server may hold
+   * the request open for a new verdict; the server caps it at 20000 ms). The
+   * response is protojson: lowerCamelCase field names, and the uint64 device
+   * id is a decimal string. A session that names no tenant is answered 403.
+   * An empty cursor and a negative or non-finite `waitMs` are left out.
+   */
+  async pollDeviceVerdicts(
+    request?: PollDeviceVerdictsRequest
+  ): Promise<ApiResponse<PollDeviceVerdictsResponse>> {
+    const params = new URLSearchParams();
+    if (typeof request?.cursor === 'string' && request.cursor !== '') {
+      params.set('cursor', request.cursor);
+    }
+    const waitMs = request?.waitMs;
+    if (typeof waitMs === 'number' && Number.isFinite(waitMs) && waitMs >= 0) {
+      params.set('wait_ms', String(Math.floor(waitMs)));
+    }
+    const query = params.toString();
+    const url = this.buildUrl('/verdicts');
+    return this.client.get<PollDeviceVerdictsResponse>(query ? `${url}?${query}` : url);
   }
 
   async collectHostAttestation(request: CollectHostAttestationRequest): Promise<ApiResponse<CollectHostAttestationResponse>> {

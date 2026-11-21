@@ -694,6 +694,45 @@ export interface CallerPolicyDescription {
 }
 
 /**
+ * One attestation verdict on the tenant's feed (`platform.v1.DeviceVerdictEvent`).
+ * Field names are protojson lowerCamelCase.
+ */
+export interface DeviceVerdictEvent {
+  eventId: string;
+  /** RFC 3339 timestamp (protojson google.protobuf.Timestamp) */
+  recordedAt?: string;
+  /** uint64 device id, a protojson decimal string */
+  deviceId: string;
+  tenantId: string;
+  hostId: string;
+  serial: string;
+  passed: boolean;
+  cryptographic: boolean;
+  reason: string;
+}
+
+/**
+ * `GET /api/v1/attestation/verdicts` response
+ * (`platform.v1.PollDeviceVerdictsResponse`).
+ */
+export interface PollDeviceVerdictsResponse {
+  /** Pass back as `cursor` to read the next page */
+  cursor: string;
+  verdicts: DeviceVerdictEvent[];
+}
+
+/**
+ * Query of `GET /api/v1/attestation/verdicts`
+ * (`platform.v1.PollDeviceVerdictsRequest`).
+ */
+export interface PollDeviceVerdictsRequest {
+  /** The cursor a previous poll returned; omit to start from the feed head */
+  cursor?: string;
+  /** Long-poll wait in milliseconds (sent as `wait_ms`; the server caps it at 20000) */
+  waitMs?: number;
+}
+
+/**
  * The four states a device report route can leave a console in. They must
  * render distinctly (docs/attestation/user.md): "never collected" is a 404
  * and is not a failed verdict; "not configured" is a 503 from a node without
