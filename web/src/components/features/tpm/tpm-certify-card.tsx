@@ -9,6 +9,14 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
@@ -41,13 +49,14 @@ function errorMessage(err: unknown): string {
 }
 
 export function TPMCertifyCard() {
-  const { certify } = useTPMCertify();
+  const { certify, deleteAK } = useTPMCertify();
   const { toast } = useToast();
   const [handleText, setHandleText] = useState('');
   const [password, setPassword] = useState('');
   const [nonceText, setNonceText] = useState('');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<TPMCertifyResult | null>(null);
+  const [evictHandle, setEvictHandle] = useState<number | null>(null);
 
   const readHandle = (): number | null => {
     const handle = parsePersistentHandle(handleText);
@@ -90,6 +99,38 @@ export function TPMCertifyCard() {
     } catch (err) {
       setResult(null);
       toast({ title: 'Certify failed', description: errorMessage(err), variant: 'destructive' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openEvict = () => {
+    const handle = readHandle();
+    if (handle !== null) setEvictHandle(handle);
+  };
+
+  const handleEvict = async () => {
+    const handle = evictHandle;
+    setEvictHandle(null);
+    if (handle === null) return;
+    setBusy(true);
+    try {
+      const res = await deleteAK({ handle });
+      if (res.success) {
+        toast({
+          title: 'AK evicted',
+          description: res.data?.status?.message ?? 'done',
+          variant: 'success',
+        });
+      } else {
+        toast({
+          title: 'Evict AK refused',
+          description: res.error?.message || 'the TPM did not evict the AK',
+          variant: 'destructive',
+        });
+      }
+    } catch (err) {
+      toast({ title: 'Evict AK refused', description: errorMessage(err), variant: 'destructive' });
     } finally {
       setBusy(false);
     }
@@ -151,7 +192,42 @@ export function TPMCertifyCard() {
             <dd className="font-mono break-all">{shortHex(result.signature) || '-'}</dd>
           </dl>
         )}
+
+        <section className="space-y-2 border-t pt-4" aria-label="Attestation key">
+          <h3 className="text-sm font-medium">Attestation key</h3>
+          <p className="text-sm text-muted-foreground">
+            The IAK is the device identity; the server refuses to evict it.
+          </p>
+          <Button variant="outline" onClick={openEvict} disabled={busy}>
+            Evict AK
+          </Button>
+        </section>
       </CardContent>
+
+      <Dialog
+        open={evictHandle !== null}
+        onOpenChange={(open) => {
+          if (!open) setEvictHandle(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Evict the AK?</DialogTitle>
+            <DialogDescription>
+              The attestation key at {evictHandle !== null ? `0x${evictHandle.toString(16)}` : ''} is
+              removed from the TPM.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEvictHandle(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleEvict}>
+              Evict
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
