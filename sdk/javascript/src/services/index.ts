@@ -63,6 +63,13 @@ export type {
   GetProxyConfigResponse,
   GetProxyStatusResponse,
   GetProxyZoneMatrixResponse,
+  CreateProxyRouteResponse,
+  UpdateProxyRouteResponse,
+  DeleteProxyRouteResponse,
+  CreateProxyPoolResponse,
+  UpdateProxyPoolResponse,
+  DeleteProxyPoolResponse,
+  ReloadProxyConfigResponse,
 } from './proxy-service.js';
 export { InvitationService } from './invitation-service.js';
 export { EABService } from './eab-service.js';

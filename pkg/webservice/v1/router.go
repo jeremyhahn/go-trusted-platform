@@ -879,7 +879,7 @@ func (v1Router *Router) vpnRoutes() {
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
-// proxyRoutes mounts the ProxyService reads on /api/v1/proxy (#2061), the
+// proxyRoutes mounts the ProxyService routes on /api/v1/proxy (#2061), the
 // surface the web SDK's client.proxy calls.
 func (v1Router *Router) proxyRoutes() {
 	server := v1Router.restHandlerRegistry.ProxyServiceServer()
@@ -895,8 +895,8 @@ func (v1Router *Router) proxyRoutes() {
 		r.SetScopeAuthorizer(scoped)
 	}
 	// The reverse-proxy routes, pools and zone matrix decide what reaches
-	// which backend: operator work behind the admin gate, then proxy:read
-	// per route, as on gRPC, QUIC and MCP.
+	// which backend: operator work behind the admin gate, then proxy:read,
+	// proxy:write or proxy:delete per route, as on gRPC, QUIC and MCP.
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 

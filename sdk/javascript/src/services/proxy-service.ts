@@ -3,8 +3,9 @@
  *
  * The reverse-proxy routes, backend pools, merged configuration, status and
  * SDN zone matrix (ProxyService, pkg/api/grpc/proto/proxy.proto), served by
- * the webservice on `/api/v1/proxy` (#2061). This slice carries the reads;
- * the writes follow.
+ * the webservice on `/api/v1/proxy` (#2061): the reads, and the writes
+ * (route and pool create/update/delete, reload) with the daemon REST body
+ * shapes (`{ route }`, `{ pool }`).
  *
  * Types are protojson (lowerCamelCase); 64-bit integer fields are strings.
  */
@@ -122,8 +123,54 @@ export interface GetProxyZoneMatrixResponse {
   pairs?: ProxyZonePair[];
 }
 
+/** POST /api/v1/proxy/routes. */
+export interface CreateProxyRouteResponse {
+  route?: ProxyRoute;
+  /** Config version (uint64). */
+  version?: string;
+}
+
+/** PUT /api/v1/proxy/routes/{id}. */
+export interface UpdateProxyRouteResponse {
+  route?: ProxyRoute;
+  /** Config version (uint64). */
+  version?: string;
+}
+
+/** DELETE /api/v1/proxy/routes/{id}. */
+export interface DeleteProxyRouteResponse {
+  /** Config version (uint64). */
+  version?: string;
+}
+
+/** POST /api/v1/proxy/pools. */
+export interface CreateProxyPoolResponse {
+  pool?: ProxyPool;
+  /** Config version (uint64). */
+  version?: string;
+}
+
+/** PUT /api/v1/proxy/pools/{id}. */
+export interface UpdateProxyPoolResponse {
+  pool?: ProxyPool;
+  /** Config version (uint64). */
+  version?: string;
+}
+
+/** DELETE /api/v1/proxy/pools/{id}. */
+export interface DeleteProxyPoolResponse {
+  /** Config version (uint64). */
+  version?: string;
+}
+
+/** POST /api/v1/proxy/reload. */
+export interface ReloadProxyConfigResponse {
+  /** Config version (uint64). */
+  version?: string;
+}
+
 /**
- * Proxy service client: the ProxyService reads on /api/v1/proxy.
+ * Proxy service client: the ProxyService reads and writes on /api/v1/proxy.
  */
 export class ProxyService extends BaseService {
   /**
@@ -168,5 +215,44 @@ export class ProxyService extends BaseService {
   /** Get the SDN zone names and the allowed (from, to) pairs. */
   async getZoneMatrix(): Promise<ApiResponse<GetProxyZoneMatrixResponse>> {
     return this.client.get<GetProxyZoneMatrixResponse>(this.buildUrl('/zone-matrix'));
+  }
+
+  /** Create a proxy route. */
+  async createRoute(route: ProxyRoute): Promise<ApiResponse<CreateProxyRouteResponse>> {
+    return this.client.post<CreateProxyRouteResponse>(this.buildUrl('/routes'), { route });
+  }
+
+  /** Replace the proxy route with the given id. */
+  async updateRoute(id: string, route: ProxyRoute): Promise<ApiResponse<UpdateProxyRouteResponse>> {
+    return this.client.put<UpdateProxyRouteResponse>(this.buildUrl(`/routes/${encodeURIComponent(id)}`), {
+      route,
+    });
+  }
+
+  /** Delete the proxy route with the given id. */
+  async deleteRoute(id: string): Promise<ApiResponse<DeleteProxyRouteResponse>> {
+    return this.client.delete<DeleteProxyRouteResponse>(this.buildUrl(`/routes/${encodeURIComponent(id)}`));
+  }
+
+  /** Create a backend pool. */
+  async createPool(pool: ProxyPool): Promise<ApiResponse<CreateProxyPoolResponse>> {
+    return this.client.post<CreateProxyPoolResponse>(this.buildUrl('/pools'), { pool });
+  }
+
+  /** Replace the backend pool with the given id. */
+  async updatePool(id: string, pool: ProxyPool): Promise<ApiResponse<UpdateProxyPoolResponse>> {
+    return this.client.put<UpdateProxyPoolResponse>(this.buildUrl(`/pools/${encodeURIComponent(id)}`), {
+      pool,
+    });
+  }
+
+  /** Delete the backend pool with the given id. */
+  async deletePool(id: string): Promise<ApiResponse<DeleteProxyPoolResponse>> {
+    return this.client.delete<DeleteProxyPoolResponse>(this.buildUrl(`/pools/${encodeURIComponent(id)}`));
+  }
+
+  /** Reload the proxy configuration; answers the new config version. */
+  async reloadConfig(): Promise<ApiResponse<ReloadProxyConfigResponse>> {
+    return this.client.post<ReloadProxyConfigResponse>(this.buildUrl('/reload'), {});
   }
 }
