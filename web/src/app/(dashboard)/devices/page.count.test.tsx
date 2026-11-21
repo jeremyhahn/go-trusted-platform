@@ -98,4 +98,42 @@ describe('DevicesPage registered total (#2048)', () => {
     );
     expect(screen.queryByTestId('device-count')).toBeNull();
   });
+
+  it('hides the total when the count refresh after a device change is refused', async () => {
+    const r = routes(3, 3, ok({ count: 3 }));
+    const sent = stubControlPlane(r);
+    render(withControlPlane(<DevicesPage />));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('device-count').textContent).toBe('Showing 3 of 3 registered devices')
+    );
+
+    r['GET /api/v1/devices/count'] = refused(403, 'forbidden');
+    screen.getByText('table-change').click();
+
+    await waitFor(() =>
+      expect(
+        sent.filter((x) => x.method === 'GET' && x.path === '/api/v1/devices/count').length
+      ).toBe(2)
+    );
+    await waitFor(() => expect(screen.queryByTestId('device-count')).toBeNull());
+    expect(screen.getAllByTestId('device-row')).toHaveLength(3);
+  });
+
+  it('updates the total when the count refresh after a device change succeeds', async () => {
+    const r = routes(3, 3, ok({ count: 3 }));
+    stubControlPlane(r);
+    render(withControlPlane(<DevicesPage />));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('device-count').textContent).toBe('Showing 3 of 3 registered devices')
+    );
+
+    r['GET /api/v1/devices/count'] = ok({ count: 2 });
+    screen.getByText('table-change').click();
+
+    await waitFor(() =>
+      expect(screen.getByTestId('device-count').textContent).toBe('Showing 3 of 2 registered devices')
+    );
+  });
 });
