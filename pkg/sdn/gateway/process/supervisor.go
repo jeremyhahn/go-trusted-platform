@@ -164,6 +164,11 @@ type Supervisor struct {
 	// a file's owner on the host.
 	fchown func(fd, uid, gid int) error
 
+	// rootCredentials reports the credentials a child that is not
+	// Unprivileged keeps (ensureStateDir); os.Geteuid and os.Getegid,
+	// replaced in tests so none needs root.
+	rootCredentials func() (uid, gid uint32)
+
 	// desired is the last document Apply was given. A process that
 	// reconciles a section of it and is started after that apply is given
 	// it at launch.
@@ -288,6 +293,9 @@ func New(cfg Config) *Supervisor {
 		processes: make(map[string]*supervised),
 		applying:  make(chan struct{}, 1),
 		fchown:    unix.Fchown,
+		rootCredentials: func() (uint32, uint32) {
+			return uint32(os.Geteuid()), uint32(os.Getegid())
+		},
 	}
 }
 
@@ -572,8 +580,10 @@ const stateDirMode = 0o700
 // ensureStateDir makes the process's state directory under the data directory
 // exist and belong to the credentials the process runs with. The data
 // directory belongs to root, so an unprivileged child could not create it
-// itself. With no data directory the child resolves its own default, and
-// there is nothing to lay out.
+// itself. A privileged child keeps root's uid without the DAC capabilities,
+// so it too is given search on a data directory it does not own (#2150);
+// its state directory stays root's. With no data directory the child
+// resolves its own default, and there is nothing to lay out.
 func (s *Supervisor) ensureStateDir(def Definition) error {
 	if def.StateDir == "" || s.cfg.Inherited.DataDir == "" {
 		return nil
@@ -591,6 +601,11 @@ func (s *Supervisor) ensureStateDir(def Definition) error {
 		}
 		if err := s.handOverStateFiles(def, dir); err != nil {
 			return err
+		}
+	} else {
+		uid, gid := s.rootCredentials()
+		if err := grantTraverse(s.cfg.Inherited.DataDir, uid, gid); err != nil {
+			return &ErrStateDir{Process: def.Name, Path: s.cfg.Inherited.DataDir, Op: "traverse", Cause: err}
 		}
 	}
 	// MkdirAll leaves an existing directory's mode alone.
