@@ -14,8 +14,10 @@
 package invitation
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gorilla/mux"
 
@@ -118,12 +120,52 @@ func resolveUserID(r *http.Request) uint64 {
 // caller-supplied tenant on a tenant-scoped read is the same defect in a
 // different carrier, and since #165 the route requires an authenticated
 // admin, so there is no credential-less caller left for it to serve.
+// invitationStatusFromQuery maps the status query parameter to an
+// InvitationStatus. Empty is UNSPECIFIED (no filter); the short names the
+// JS SDK sends (pending, accepted, expired, revoked) match in any case, as
+// does the full INVITATION_STATUS_* proto name. Anything else is an
+// *ErrInvalidQuery, so an unknown status is a 400 rather than an
+// unfiltered list.
+func invitationStatusFromQuery(raw string) (platformv1.InvitationStatus, error) {
+	if raw == "" {
+		return platformv1.InvitationStatus_INVITATION_STATUS_UNSPECIFIED, nil
+	}
+	name := strings.ToUpper(raw)
+	if !strings.HasPrefix(name, "INVITATION_STATUS_") {
+		name = "INVITATION_STATUS_" + name
+	}
+	if v, ok := platformv1.InvitationStatus_value[name]; ok &&
+		v != int32(platformv1.InvitationStatus_INVITATION_STATUS_UNSPECIFIED) {
+		return platformv1.InvitationStatus(v), nil
+	}
+	return platformv1.InvitationStatus_INVITATION_STATUS_UNSPECIFIED, &protorest.ErrInvalidQuery{
+		Name:  "status",
+		Value: raw,
+		Cause: errors.New("want one of pending, accepted, expired or revoked"),
+	}
+}
+
 func (h *Handlers) ListInvitations(w http.ResponseWriter, r *http.Request) {
 	if !h.ensure(w, r) {
 		return
 	}
+	statusFilter, err := invitationStatusFromQuery(r.URL.Query().Get("status"))
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	pendingOnly, err := protorest.QueryBool(r, "pending_only")
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
 	tenantID := resolveTenantID(r)
-	req := &platformv1.ListInvitationsRequest{TenantId: tenantID}
+	req := &platformv1.ListInvitationsRequest{
+		TenantId:     tenantID,
+		StatusFilter: statusFilter,
+		EmailFilter:  r.URL.Query().Get("email"),
+		PendingOnly:  pendingOnly,
+	}
 	resp, err := h.server.ListInvitations(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
