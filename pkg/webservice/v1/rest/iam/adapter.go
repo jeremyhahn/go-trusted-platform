@@ -21,6 +21,8 @@ import (
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v3"
 )
 
@@ -426,7 +428,7 @@ func (a *QuicBaaSIAMAdapter) UpdatePolicy(ctx context.Context, tenantID, policyN
 	}
 	p, err := a.client.Policy().Update(ctx, tenantID, policyName, sdkReq)
 	if err != nil {
-		return nil, err
+		return nil, upstreamUnimplemented("policy update", err)
 	}
 	return decodePolicy(tenantID, p), nil
 }
@@ -442,7 +444,7 @@ func (a *QuicBaaSIAMAdapter) ValidatePolicy(ctx context.Context, tenantID, specY
 	}
 	resp, err := a.client.Policy().Validate(ctx, tenantID, policy)
 	if err != nil {
-		return nil, err
+		return nil, upstreamUnimplemented("policy validation", err)
 	}
 	out := &ValidatePolicyResponse{Valid: resp.Valid}
 	for _, e := range resp.Errors {
@@ -457,9 +459,9 @@ func (a *QuicBaaSIAMAdapter) TestPolicy(ctx context.Context, tenantID string, re
 	}
 	// The pinned QuicBaaS SDK runs test cases against one named policy and
 	// refuses a request without PolicyName before any transport is called;
-	// it has no tenant-wide evaluation. Refuse that explicitly.
+	// it has no tenant-wide evaluation. Refuse that as Unimplemented (501).
 	if req.PolicyName == "" {
-		return nil, ErrInvalidRequestBody{Reason: "policy_name is required: tenant-wide policy evaluation is not supported by the IAM backend"}
+		return nil, status.Error(codes.Unimplemented, "tenant-wide policy evaluation is not implemented by the pinned IAM service")
 	}
 	// The REST shape describes a single inline check; wrap it as a
 	// one-element test case so the engine evaluates the same scenario.
@@ -485,7 +487,7 @@ func (a *QuicBaaSIAMAdapter) TestPolicy(ctx context.Context, tenantID string, re
 	}
 	resp, err := a.client.Policy().Test(ctx, tenantID, sdkReq)
 	if err != nil {
-		return nil, err
+		return nil, upstreamUnimplemented("policy test", err)
 	}
 	return testPolicyResponseFromSDK(resp), nil
 }
