@@ -92,6 +92,8 @@ export { useVTPMRuntime, base64ToText, hexToBase64 } from './use-vtpm-runtime';
 export type { VTPMRunState } from './use-vtpm-runtime';
 
 export { useReportedGateways } from './use-reported-gateways';
+export { useTenantLifecycle } from './use-tenant-lifecycle';
+export type { UseTenantLifecycleResult } from './use-tenant-lifecycle';
 export { useOverlayVteps } from './use-overlay-vteps';
 export { useRegistry, encodeRepository } from './use-registry';
 export type {
