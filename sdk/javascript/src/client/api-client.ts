@@ -84,15 +84,34 @@ const IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
  * True when any header set carries an `Idempotency-Key` (any case) with a non-blank value:
  * the caller's statement that the server dedupes the request, so a resend is safe.
  */
-function hasIdempotencyKey(...headerSets: Array<Record<string, string> | undefined>): boolean {
-  return headerSets.some(
-    (headers) =>
-      headers !== undefined &&
-      Object.entries(headers).some(
-        ([name, value]) =>
-          name.toLowerCase() === IDEMPOTENCY_KEY_HEADER && typeof value === 'string' && value.trim() !== ''
-      )
-  );
+function hasIdempotencyKey(sentHeaders: Headers | undefined): boolean {
+  const key = sentHeaders?.get(IDEMPOTENCY_KEY_HEADER);
+  return typeof key === 'string' && key.trim() !== '';
+}
+
+/**
+ * Merges header sets case-insensitively: a later set's header replaces an
+ * earlier one of any case, so a per-request header always wins over a default.
+ */
+function mergeHeaders(
+  ...headerSets: Array<Record<string, string> | undefined>
+): Record<string, string> {
+  const merged: Record<string, string> = {};
+  for (const headers of headerSets) {
+    if (headers === undefined) {
+      continue;
+    }
+    for (const [name, value] of Object.entries(headers)) {
+      const lower = name.toLowerCase();
+      for (const existing of Object.keys(merged)) {
+        if (existing.toLowerCase() === lower) {
+          delete merged[existing];
+        }
+      }
+      merged[name] = value;
+    }
+  }
+  return merged;
 }
 
 /**
@@ -294,6 +313,7 @@ export class ApiClient implements Transport {
     error: ApiError | Error,
     options?: RequestOptions,
     method?: HttpMethod,
+    context?: RequestContext,
   ): boolean {
     // Check if retries are explicitly disabled
     if (options?.retry?.enabled === false) {
@@ -309,7 +329,7 @@ export class ApiClient implements Transport {
     if (
       isMutation &&
       options?.retry?.retryOnMutation !== true &&
-      !hasIdempotencyKey(this.config.headers, options?.headers)
+      !hasIdempotencyKey(context?.sentHeaders)
     ) {
       return false;
     }
@@ -361,7 +381,7 @@ export class ApiClient implements Transport {
       const context: RequestContext = {
         url,
         method,
-        headers: { ...this.config.headers, ...options?.headers },
+        headers: mergeHeaders(this.config.headers, options?.headers),
         body,
         attempt,
         metadata: { ...options?.metadata },
@@ -375,7 +395,7 @@ export class ApiClient implements Transport {
           const apiError = ApiError.fromResponse(response.error,
             (response as ApiResponse<T> & { _status?: number })._status);
 
-          if (this.shouldRetry(attempt, apiError, options, method)) {
+          if (this.shouldRetry(attempt, apiError, options, method, context)) {
             const delay = this.calculateBackoffDelay(attempt);
             await this.wait(delay);
             attempt++;
@@ -396,7 +416,7 @@ export class ApiClient implements Transport {
         const processedError = await this.applyErrorInterceptors(err, context);
 
         // Check if we should retry
-        if (this.shouldRetry(attempt, processedError, options, method)) {
+        if (this.shouldRetry(attempt, processedError, options, method, context)) {
           const delay = this.calculateBackoffDelay(attempt);
           await this.wait(delay);
           attempt++;
@@ -445,10 +465,7 @@ export class ApiClient implements Transport {
     startTime: number
   ): Promise<ApiResponse<T>> {
     // Build request config
-    const headers: Record<string, string> = {
-      ...this.config.headers,
-      ...options?.headers,
-    };
+    const headers: Record<string, string> = mergeHeaders(this.config.headers, options?.headers);
 
     let requestInit: RequestInit = {
       method,
@@ -473,6 +490,8 @@ export class ApiClient implements Transport {
 
     // Apply request interceptors
     requestInit = await this.applyRequestInterceptors(requestInit, context);
+    // The retry policy decides on the headers actually sent, interceptors included.
+    context.sentHeaders = new Headers(requestInit.headers);
 
     // Setup timeout
     const timeout = options?.timeout ?? this.config.timeout.requestTimeoutMs;

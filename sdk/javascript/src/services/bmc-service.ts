@@ -150,6 +150,26 @@ export interface BMCOperationResult {
  * await client.bmc.setBootDevice('1', { device: 'pxe' });
  * ```
  */
+const UINT64_MAX = 18446744073709551615n;
+
+/**
+ * Checks a BMC profile ID the way device-service checks a device profile ID.
+ * A number past Number.MAX_SAFE_INTEGER is already rounded, so it would name
+ * a different profile: large IDs must come as decimal strings.
+ */
+function bmcProfileId(profileID: number | string): string {
+  if (typeof profileID === 'number' && !Number.isSafeInteger(profileID)) {
+    throw new RangeError(
+      `BMC profile id ${profileID} is not a safe integer: pass large IDs as a decimal string`
+    );
+  }
+  const id = String(profileID);
+  if (!/^[0-9]{1,20}$/.test(id) || BigInt(id) > UINT64_MAX) {
+    throw new RangeError(`BMC profile id must be a decimal uint64, got ${JSON.stringify(id)}`);
+  }
+  return id;
+}
+
 export class BMCService extends BaseService {
   constructor(client: Transport | ApiClient) {
     super(client, '/v1/bmc');
@@ -160,7 +180,7 @@ export class BMCService extends BaseService {
   }
 
   private profilePath(profileID: number | string, suffix: string): string {
-    return `/${this.encodePathSegment(String(profileID))}${suffix}`;
+    return `/${this.encodePathSegment(bmcProfileId(profileID))}${suffix}`;
   }
 
   /**

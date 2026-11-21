@@ -278,7 +278,7 @@ describe('BMCService.createUser without client retries (#2022 Codex r2)', () => 
       retry: { maxRetries: 3, initialDelayMs: 1, maxDelayMs: 1 },
     });
 
-    const result = await new BMCService(client).createUser('bmc-1', {
+    const result = await new BMCService(client).createUser('1', {
       slot: 3,
       username: 'ops',
       password: 'pw',

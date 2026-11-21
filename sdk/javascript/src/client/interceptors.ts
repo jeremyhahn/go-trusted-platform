@@ -20,6 +20,11 @@ export interface RequestContext {
   attempt: number;
   /** Custom metadata that can be passed between interceptors */
   metadata: Record<string, unknown>;
+  /**
+   * The headers actually sent, recorded after the request interceptors ran.
+   * The retry policy reads the Idempotency-Key from here.
+   */
+  sentHeaders?: Headers;
 }
 
 /**
