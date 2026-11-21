@@ -178,8 +178,9 @@ export function useCluster() {
   return useMemo(() => {
     const api = client.getApiClient();
     return {
-      getStatus: () => api.get<ClusterStatusResponse>(`${CLUSTER_BASE}/status`),
-      listNodes: () => api.get<ClusterNodesResponse>(`${CLUSTER_BASE}/nodes`),
+      // A 503 "cluster service not configured" is not transient: answer at once.
+      getStatus: () => api.get<ClusterStatusResponse>(`${CLUSTER_BASE}/status`, { retry: { enabled: false } }),
+      listNodes: () => api.get<ClusterNodesResponse>(`${CLUSTER_BASE}/nodes`, { retry: { enabled: false } }),
       bootstrap: (req: BootstrapClusterRequest) =>
         api.post<ClusterMembershipResponse>(`${CLUSTER_BASE}/bootstrap`, req as unknown as Body),
       join: (req: JoinClusterRequest) =>
