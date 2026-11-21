@@ -318,3 +318,30 @@ func TestBMCRoutes_PowerActionTakesTheActionScope(t *testing.T) {
 		})
 	}
 }
+
+// The handler decodes only the first JSON object of the body, so a trailing
+// object must not make the scope check read the body differently: an "on"
+// followed by more data is still a power-on and takes bmc:write.
+func TestBMCRoutes_PowerActionTrailingJSONTakesTheWriteScope(t *testing.T) {
+	cases := []struct {
+		scope string
+		want  int
+	}{
+		{"bmc:power", http.StatusForbidden},
+		{"bmc:write", http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.scope, func(t *testing.T) {
+			h := &actionRecordingBMCHandler{}
+			router := newBMCScopedRouter(t, h, []string{tc.scope})
+			code := serve(router, httptest.NewRequest(http.MethodPost, "/api/v1/bmc/7/power",
+				strings.NewReader(`{"action":"on"}{}`)))
+			require.Equal(t, tc.want, code)
+			if tc.want == http.StatusOK {
+				assert.Equal(t, []string{"on"}, h.actions)
+			} else {
+				assert.Empty(t, h.actions)
+			}
+		})
+	}
+}
