@@ -53,13 +53,14 @@ describe('TPMCertifyCard Certify', () => {
   });
 
   it('sends the key password', async () => {
-    const sent = stubControlPlane({ [CERTIFY]: ok({ signatureAlgorithm: 'SHA256-RSAPSS' }) });
+    // Toasts are global and outlive a test: this one names another algorithm.
+    const sent = stubControlPlane({ [CERTIFY]: ok({ signatureAlgorithm: 'SHA256-RSASSA' }) });
     render(withControlPlane(<TPMCertifyCard />));
     type('Key handle', '0x81000002');
     type('Key password', 'pw');
     await click('Certify');
 
-    await screen.findByText('Key certified: signed under SHA256-RSAPSS');
+    await screen.findByText('Key certified: signed under SHA256-RSASSA');
     const posts = sent.filter((r) => r.method === 'POST');
     expect(posts).toHaveLength(1);
     expect(posts[0].body).toEqual({ keyHandle: 2164260866, keyPassword: 'pw' });
