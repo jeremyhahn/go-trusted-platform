@@ -250,7 +250,7 @@ export default function VPNPage() {
 
   if (vpnUnavailable) {
     return (
-      <div className="container mx-auto py-6 space-y-6">
+      <div className="container mx-auto py-6 space-y-6" data-testid="vpn-unavailable">
         {header}
         <ServiceUnavailableState
           service="VPN"
@@ -303,7 +303,7 @@ export default function VPNPage() {
         </Button>
       </div>
 
-      <Card>
+      <Card data-testid="vpn-gateways-card">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Shield className="h-5 w-5" />
@@ -370,7 +370,7 @@ export default function VPNPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card data-testid="vpn-sessions-card">
         <CardHeader>
           <CardTitle>Sessions</CardTitle>
         </CardHeader>
@@ -408,7 +408,7 @@ export default function VPNPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card data-testid="vpn-peers-card">
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2">
@@ -460,7 +460,7 @@ export default function VPNPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card data-testid="vpn-policies-card">
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2">
