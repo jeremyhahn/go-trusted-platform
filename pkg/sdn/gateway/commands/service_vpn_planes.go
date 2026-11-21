@@ -26,14 +26,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/tunnel"
 )
 
-// vpnHubZoneEnforced stays false until the hub's traffic is wired through
-// the compiled zone policy (SPEC.md:80, docs/vpn/architecture.md:160-163;
-// Codex #2029 round 2): until then the kernel hub plane is not built. A
-// configuration that names the hub then fails the wireguard child's start
-// with ErrVPNHubZoneUnenforced, so the supervisor never sees a ready child
-// that refuses every InstallVPNPeer (Codex #2029 round 3).
-var vpnHubZoneEnforced = false
-
 // vpnDataPlanes is gatewayd's plane factory. It builds the WireGuard hub
 // plane when the management VPN offers wireguard and names the hub's key
 // reference (`wireguard.key-ref`) and address (`wireguard.address`), with
@@ -54,10 +46,11 @@ func vpnDataPlanes(cfg *ServeConfig, hubKey *vpnHubKey, logger *slog.Logger) ([]
 			slog.String("key_ref", wg.KeyRef))
 		return nil, nil
 	}
-	if !vpnHubZoneEnforced {
+	zones, err := installVPNHubZoneEnforcement(cfg, logger)
+	if err != nil || zones == nil {
 		hubKey.erase()
-		logger.Error("The datapath hosts no VPN data plane: the WireGuard hub has no destination-zone enforcement yet",
-			slog.String("key_ref", wg.KeyRef))
+		logger.Error("The datapath hosts no VPN data plane: the WireGuard hub's destination-zone enforcement is not installed",
+			slog.String("key_ref", wg.KeyRef), slog.Any("error", err))
 		return nil, &ErrVPNHubZoneUnenforced{KeyRef: wg.KeyRef}
 	}
 	hub, err := tunnel.NewWireGuardHub(logger, tunnel.WireGuardHubConfig{
@@ -73,7 +66,7 @@ func vpnDataPlanes(cfg *ServeConfig, hubKey *vpnHubKey, logger *slog.Logger) ([]
 	if err != nil {
 		return nil, err
 	}
-	return []vpn.ManagedDataPlane{hubNetworkPlane{ManagedDataPlane: plane, network: wg.Address.Masked(), hub: wg.Address.Addr()}}, nil
+	return []vpn.ManagedDataPlane{hubNetworkPlane{ManagedDataPlane: plane, network: wg.Address.Masked(), hub: wg.Address.Addr(), zones: zones}}, nil
 }
 
 // vpnHubKeyRef is the hub key's reference when the configuration builds a
@@ -128,6 +121,8 @@ type hubNetworkPlane struct {
 	vpn.ManagedDataPlane
 	network netip.Prefix
 	hub     netip.Addr
+	// zones is the installed destination-zone enforcement (#2093).
+	zones *vpnHubZoneEnforcement
 }
 
 // InstallPeer refuses a lease address outside the hub's network.
@@ -140,6 +135,9 @@ func (p hubNetworkPlane) InstallPeer(ctx context.Context, lease *vpn.Lease) erro
 		if addr == p.hub {
 			return &vpn.ErrPeerKeyInvalid{Kind: vpn.DataPlaneWireGuard, Reason: "lease address is the hub's own"}
 		}
+	}
+	if err := p.zones.admitLease(lease); err != nil {
+		return err
 	}
 	return p.ManagedDataPlane.InstallPeer(ctx, lease)
 }
