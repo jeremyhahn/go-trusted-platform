@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { useApi, useAttestation, useToast } from "@/hooks";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { QuoteVerifyCard } from "./quote-verify-card";
 
 /**
  * TPM Quote represents a cryptographically signed attestation quote
@@ -312,6 +313,7 @@ export default function QuotesPage() {
         </Button>
       </div>
 
+      <QuoteVerifyCard />
       {/* Statistics Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card>
