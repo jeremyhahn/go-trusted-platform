@@ -890,6 +890,14 @@ func (s *BMCGRPCService) toGRPCError(operation string, err error) error {
 	if errors.As(err, &profileNoBMC) {
 		return status.Error(codes.FailedPrecondition, profileNoBMC.Error())
 	}
+	var slotOccupied bmc.ErrSlotOccupied
+	if errors.As(err, &slotOccupied) {
+		return status.Error(codes.AlreadyExists, slotOccupied.Error())
+	}
+	var connAccount bmc.ErrConnectionAccount
+	if errors.As(err, &connAccount) {
+		return status.Error(codes.FailedPrecondition, connAccount.Error())
+	}
 
 	s.logger.Error("bmc grpc: operation failed",
 		slog.String("operation", operation),
