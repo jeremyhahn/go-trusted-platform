@@ -201,6 +201,16 @@ export interface GetLicenseRequest {}
  */
 export interface ReloadConfigRequest {}
 
+/**
+ * Update config section request (PUT /api/v1/platform/config/sections/{section})
+ */
+export interface UpdateConfigSectionRequest {
+  /** Keys and values to apply to the section */
+  values: Record<string, string>;
+  /** Also write the section to the config file (default false) */
+  persist?: boolean;
+}
+
 // =============================================================================
 // Response Types
 // =============================================================================
@@ -251,6 +261,18 @@ export interface GetHealthResponse {
 export interface GetConfigResponse {
   /** Platform config */
   config: PlatformConfig;
+}
+
+/**
+ * Update config section response. The applied values are never echoed.
+ */
+export interface UpdateConfigSectionResponse {
+  /** Section that was updated */
+  section: string;
+  /** Whether the section was written to the config file */
+  persisted: boolean;
+  /** Daemon status message */
+  message: string;
 }
 
 /**

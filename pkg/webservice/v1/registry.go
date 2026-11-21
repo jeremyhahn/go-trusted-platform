@@ -1073,6 +1073,9 @@ type RegistryParams struct {
 	VersionInfo *platform.VersionInfo
 	// HealthRegistry powers the platform health and metrics endpoints.
 	HealthRegistry health.Registry
+	// ConfigUpdater wires PUT /api/v1/platform/config/sections/{section}.
+	// When nil the endpoint returns 503.
+	ConfigUpdater platform.ConfigUpdater
 	// ConfigReloader wires /api/v1/platform/config/reload. When nil
 	// the endpoint returns 503 with a structured "not configured"
 	// envelope so callers can tell it apart from an actual reload
@@ -1929,6 +1932,9 @@ func (registry *HandlerRegistry) PlatformRestRouter() *platform.PlatformRouter {
 	}
 	if registry.params.HealthRegistry != nil {
 		router.SetHealthRegistry(registry.params.HealthRegistry)
+	}
+	if registry.params.ConfigUpdater != nil {
+		router.SetConfigUpdater(registry.params.ConfigUpdater)
 	}
 	if registry.params.ConfigReloader != nil {
 		router.SetConfigReloader(registry.params.ConfigReloader)

@@ -15,6 +15,8 @@ import type {
   GetSystemInfoResponse,
   GetHealthRequest,
   GetHealthResponse,
+  UpdateConfigSectionRequest,
+  UpdateConfigSectionResponse,
   GetConfigRequest,
   GetConfigResponse,
   GetMetricsRequest,
@@ -126,6 +128,21 @@ export class PlatformService extends BaseService {
    */
   async reloadConfig(): Promise<ApiResponse<ReloadConfigResponse>> {
     return this.client.post<ReloadConfigResponse>(this.buildUrl('/config/reload'), {});
+  }
+
+  /**
+   * Apply (and optionally persist) one config section.
+   * `PUT /api/v1/platform/config/sections/{section}`, served by
+   * PlatformDaemon.UpdateConfig.
+   */
+  async updateConfigSection(
+    section: string,
+    request: UpdateConfigSectionRequest,
+  ): Promise<ApiResponse<UpdateConfigSectionResponse>> {
+    return this.client.put<UpdateConfigSectionResponse>(
+      this.buildUrl(`/config/sections/${this.encodePathSegment(section)}`),
+      { values: request.values, persist: request.persist ?? false },
+    );
   }
 
   // =========================================================================

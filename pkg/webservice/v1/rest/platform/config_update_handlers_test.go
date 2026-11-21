@@ -227,7 +227,8 @@ func TestUpdateConfigSection_RouteIsRegisteredPUTOnly(t *testing.T) {
 	logger := logging.DefaultLogger()
 	respWriter := response.NewResponseWriter(logger, nil)
 	router := NewPlatformRouter(logger, respWriter)
-	router.SetConfigUpdater(okUpdater("configuration section applied"))
+	fake := okUpdater("configuration section applied")
+	router.SetConfigUpdater(fake)
 	root, apiRouter := newTestRouter()
 	router.RegisterRoutes(apiRouter)
 
@@ -242,7 +243,13 @@ func TestUpdateConfigSection_RouteIsRegisteredPUTOnly(t *testing.T) {
 	req = httptest.NewRequest(http.MethodGet, path, nil)
 	rec = httptest.NewRecorder()
 	root.ServeHTTP(rec, req)
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("GET %s = %d, want 405", path, rec.Code)
+	// The route is PUT only. Behind the nested /api/v1 and /platform
+	// subrouters gorilla/mux answers a method mismatch with 404 rather
+	// than 405; either way GET must not reach the handler.
+	if rec.Code != http.StatusMethodNotAllowed && rec.Code != http.StatusNotFound {
+		t.Fatalf("GET %s = %d, want 405 or 404", path, rec.Code)
+	}
+	if fake.called != 1 {
+		t.Fatalf("updater called %d times, want 1 (the PUT only)", fake.called)
 	}
 }

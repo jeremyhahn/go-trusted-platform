@@ -31,6 +31,7 @@ type PlatformHandlers struct {
 	healthRegistry  health.Registry
 	servicesManager ServicesManager
 	protocolConfig  *ProtocolConfig
+	configUpdater   ConfigUpdater
 	versionInfo     *VersionInfo
 	startTime       time.Time
 	restServerRunFn func() bool
