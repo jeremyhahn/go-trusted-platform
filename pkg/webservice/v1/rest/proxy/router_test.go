@@ -145,8 +145,10 @@ func newTestRouter(server platformv1.ProxyServiceServer) *Router {
 
 // mountRouter mounts the proxy routes under /api/v1, as the webservice does.
 func mountRouter(server platformv1.ProxyServiceServer) *mux.Router {
+	proxyRouter := newTestRouter(server)
+	proxyRouter.SetScopeAuthorizer(grantingAuthorizer{granted: "proxy:read"})
 	router := mux.NewRouter()
-	newTestRouter(server).RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
+	proxyRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 	return router
 }
 
@@ -336,6 +338,50 @@ func TestProxyRouterHasNoWriteRoutes(t *testing.T) {
 		}
 		if server.calls != 0 {
 			t.Errorf("%s %s: service saw %d calls, want none", write.verb, write.path, server.calls)
+		}
+	}
+}
+
+// TestProxyRouterRefusesEveryReadWithoutAScopeAuthorizer pins the legacy JWT
+// case: with no ScopeAuthorizer set, a role-only session carries no scopes,
+// so every read answers 403 before the service (#1990, #2157 Codex).
+func TestProxyRouterRefusesEveryReadWithoutAScopeAuthorizer(t *testing.T) {
+	for _, probe := range proxyProbes {
+		server := &recordingServer{}
+		router := mux.NewRouter()
+		newTestRouter(server).RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
+
+		rec := serve(router, http.MethodGet, probe.path)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s: code = %d, want 403", probe.name, rec.Code)
+		}
+		if server.calls != 0 {
+			t.Errorf("%s: service saw %d calls, want none", probe.name, server.calls)
+		}
+	}
+}
+
+// TestProxyRouterPassesEncodedSlashIDs pins that route and pool IDs holding a
+// slash, which the SDK sends as a%2Fb, reach the service decoded (#2157 Codex).
+func TestProxyRouterPassesEncodedSlashIDs(t *testing.T) {
+	cases := []struct {
+		path string
+		want proto.Message
+	}{
+		{"/api/v1/proxy/routes/web", &platformv1.GetProxyRouteRequest{Id: "web"}},
+		{"/api/v1/proxy/routes/a%2Fb", &platformv1.GetProxyRouteRequest{Id: "a/b"}},
+		{"/api/v1/proxy/pools/pool-1", &platformv1.GetProxyPoolRequest{Id: "pool-1"}},
+		{"/api/v1/proxy/pools/a%2Fb", &platformv1.GetProxyPoolRequest{Id: "a/b"}},
+	}
+	for _, tc := range cases {
+		server := &recordingServer{}
+		rec := serve(mountRouter(server), http.MethodGet, tc.path)
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s: code = %d, want 200", tc.path, rec.Code)
+			continue
+		}
+		if !proto.Equal(server.last, tc.want) {
+			t.Errorf("%s: service got %v, want %v", tc.path, server.last, tc.want)
 		}
 	}
 }
