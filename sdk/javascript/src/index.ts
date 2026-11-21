@@ -101,6 +101,7 @@ export {
   TPMService,
   VTPMService,
   VPNService,
+  ProxyService,
   InvitationService,
   EABService,
   // QuicBaaS Services (28 services)
@@ -147,6 +148,22 @@ export type {
   ListNTPSourcesResponse,
   StepNTPClockResponse,
 } from './services/ntp-service.js';
+
+export type {
+  ProxyAuthRequirements,
+  ProxyRoute,
+  ProxyBackend,
+  ProxyBackendTLS,
+  ProxyPool,
+  ProxyZonePair,
+  ListProxyRoutesResponse,
+  GetProxyRouteResponse,
+  ListProxyPoolsResponse,
+  GetProxyPoolResponse,
+  GetProxyConfigResponse,
+  GetProxyStatusResponse,
+  GetProxyZoneMatrixResponse,
+} from './services/proxy-service.js';
 
 // =============================================================================
 // Error Exports

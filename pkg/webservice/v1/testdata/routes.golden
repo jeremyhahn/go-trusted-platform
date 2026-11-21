@@ -256,6 +256,14 @@ GET /api/v1/provisioning/devices
 GET /api/v1/provisioning/sessions
 GET /api/v1/provisioning/sessions/{sessionID}
 GET /api/v1/provisioning/sessions/{sessionID}/poll
+GET /api/v1/proxy
+GET /api/v1/proxy/config
+GET /api/v1/proxy/pools
+GET /api/v1/proxy/pools/{id}
+GET /api/v1/proxy/routes
+GET /api/v1/proxy/routes/{id}
+GET /api/v1/proxy/status
+GET /api/v1/proxy/zone-matrix
 GET /api/v1/pubkey
 GET /api/v1/pxe
 GET /api/v1/pxe/devices

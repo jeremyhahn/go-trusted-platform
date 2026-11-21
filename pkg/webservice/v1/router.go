@@ -43,6 +43,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 	restntp "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ntp"
 	restoverlay "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/overlay"
+	restproxy "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/proxy"
 	restpxe "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/pxe"
 	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/sdn"
@@ -218,6 +219,7 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.overlayRoutes()
 	v1Router.ntpRoutes()
 	v1Router.vpnRoutes()
+	v1Router.proxyRoutes()
 	v1Router.appServiceRoutes()
 	v1Router.pxeRoutes()
 	v1Router.sdnRoutes()
@@ -874,6 +876,27 @@ func (v1Router *Router) vpnRoutes() {
 	// management network, and a posture policy decides which of them stay
 	// there: operator work behind the admin gate, then vpn:read, vpn:write
 	// or vpn:admin per route, as on gRPC, QUIC and MCP.
+	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+}
+
+// proxyRoutes mounts the ProxyService reads on /api/v1/proxy (#2061), the
+// surface the web SDK's client.proxy calls.
+func (v1Router *Router) proxyRoutes() {
+	server := v1Router.restHandlerRegistry.ProxyServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("Proxy service server is nil - proxy routes not registered")
+		return
+	}
+	r := restproxy.NewRouter(
+		v1Router.logger,
+		server,
+		v1Router.responseWriter)
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		r.SetScopeAuthorizer(scoped)
+	}
+	// The reverse-proxy routes, pools and zone matrix decide what reaches
+	// which backend: operator work behind the admin gate, then proxy:read
+	// per route, as on gRPC, QUIC and MCP.
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
