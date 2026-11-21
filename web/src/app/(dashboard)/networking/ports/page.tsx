@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import { Plus, RefreshCw, Cable, Wifi, WifiOff, AlertCircle, Loader2 } from 'lucide-react';
 import { ColumnDef } from '@tanstack/react-table';
 import { Button } from '@/components/ui/button';
@@ -71,6 +71,8 @@ export default function SDNPortsPage() {
   const [statsPort, setStatsPort] = useState<SDNPort | null>(null);
   const [portStats, setPortStats] = useState<PortStats | null>(null);
   const [statsError, setStatsError] = useState<string | null>(null);
+  // statsRequest is the generation of the current stats read.
+  const statsRequest = useRef(0);
 
   // Fetch bridges to get the first bridge ID
   const {
@@ -161,20 +163,24 @@ export default function SDNPortsPage() {
    * handlePortStats reads the port's counters from the switch through
    * GET /sdn/bridges/{name}/ports/{port}/stats. The SDK reports a refusal in
    * the response, not by throwing, so the error is read from it and shown in
-   * the dialog instead of a row of zeros.
+   * the dialog instead of a row of zeros. An answer for a read the operator
+   * closed or replaced is dropped.
    */
   const handlePortStats = async (port: SDNPort) => {
+    const generation = ++statsRequest.current;
     setStatsPort(port);
     setPortStats(null);
     setStatsError(null);
     try {
       const response = await sdn.getPortStats(selectedBridgeId, port.id);
+      if (generation !== statsRequest.current) return;
       if (response.error !== undefined) {
         setStatsError(response.error.message);
         return;
       }
       setPortStats(response.data?.stats ?? null);
     } catch (err) {
+      if (generation !== statsRequest.current) return;
       setStatsError(err instanceof Error ? err.message : String(err));
     }
   };
@@ -497,6 +503,7 @@ export default function SDNPortsPage() {
         open={statsPort !== null}
         onOpenChange={(open) => {
           if (!open) {
+            statsRequest.current += 1;
             setStatsPort(null);
             setPortStats(null);
             setStatsError(null);
