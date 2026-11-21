@@ -107,7 +107,8 @@ type clusterComponentsGetter interface {
 
 It reaches that interface by walking `App.DAOFactory()` → `*quicbaas.Factory` →
 `Client()` → `Service()` and type-asserting. If the assertion fails it returns
-`"QuicBaaS service does not support cluster coordination (build with -tags cluster)"`.
+`"QuicBaaS service does not support cluster coordination"`. Nothing calls the
+constructor in any build yet (#336), so this message is not seen in practice.
 
 **That is the SDK edge this feature consumes**, and it is why
 `cluster.NewCoordinator` and `cluster.NewMembershipManager` — both exported,

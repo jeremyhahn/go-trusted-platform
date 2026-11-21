@@ -97,8 +97,9 @@ type ClusterNodesInfo struct {
 // ClusterServicer defines the cluster service operations the gRPC
 // ClusterService delegates to. The interface is tag-agnostic so the daemon
 // can hold a ClusterServicer without pulling in pkg/cluster when building
-// without -tags cluster. The build-tagged adapter wires
-// *cluster.ClusterService to satisfy this interface.
+// without -tags cluster. A build-tagged adapter (mcp_cluster_adapter.go) can
+// satisfy this interface, but nothing constructs it in any build: every
+// transport answers Unavailable until #336 lands.
 type ClusterServicer interface {
 	// Bootstrap initializes a new cluster with this node as the first
 	// member. Should only be called once on the first node in a new

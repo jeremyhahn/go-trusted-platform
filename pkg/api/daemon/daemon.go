@@ -974,7 +974,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// socket. It is the pkg/api/grpc implementation over the daemon's
 	// ClusterServicer — the same servicer the MCP cluster tools use, set
 	// through Daemon.SetClusterService. Until one is set every RPC returns
-	// Unavailable.
+	// Unavailable. That is true on every build, with or without -tags
+	// cluster, until #336 lands.
 	clusterGRPCService, clusterBackend := registerClusterGRPCService(logger, grpcServer, grpcUDSServer)
 	logger.Info("Cluster gRPC service registered")
 
