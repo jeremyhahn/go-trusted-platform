@@ -126,13 +126,15 @@ export class InvitationService extends BaseService {
   /**
    * Accept an invitation
    *
+   * POST /api/v1/invitations/accept with the body { token, userId } only.
+   *
    * @param request - Accept invitation request with token
    * @returns Acceptance result with user and tenant information
    */
   async accept(request: AcceptInvitationRequest): Promise<ApiResponse<AcceptInvitationResponse>> {
     return this.client.post<AcceptInvitationResponse>(
       this.buildUrl(`/accept`),
-      request
+      { token: request.token, userId: request.userId }
     );
   }
 

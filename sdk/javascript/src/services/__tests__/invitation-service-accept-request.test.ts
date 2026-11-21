@@ -52,7 +52,7 @@ describe('InvitationService accept request', () => {
     } as unknown as AcceptInvitationRequest;
     await service.accept(request);
     expect(client.post).toHaveBeenCalledTimes(1);
-    const [url, body] = vi.mocked(client.post).mock.calls[0];
+    const [url, body] = vi.mocked(client.post).mock.calls[0] as [string, unknown];
     expect(url).toBe('/v1/invitations/accept');
     expect(Object.keys(body as object)).toEqual(['token', 'userId']);
     expect((body as { userId: unknown }).userId).toBe('9007199254740993');
