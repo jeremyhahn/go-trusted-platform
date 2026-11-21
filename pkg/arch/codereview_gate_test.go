@@ -33,7 +33,7 @@ const (
 	// reviewer's standing verdict on the head.
 	codeReviewVerdictRead = `verdict=$(get_all "/pulls/$PR_NUM/reviews?"`
 	codeReviewVerdictCase = `case "$verdict"`
-	codeReviewLabelsRead  = `.labels[].name`
+	codeReviewLabelsRead  = `.labels | if type == "array" then .[].name`
 	codeReviewOwnerHold   = `needs-owner`
 )
 
@@ -63,8 +63,8 @@ func loadCodeReviewGateStep(t *testing.T) ciStep {
 
 // The gate owns the required Code Review (codex) context, so an approval
 // that is already on the head must not pass it while the PR is on owner
-// hold: the gate reads the live labels after the twin-review wait and
-// before it accepts the verdict (Codex P1, #1921).
+// hold: the gate reads the live labels and checks the holds in holds()
+// (v5.12.11), which it calls before it accepts the verdict (Codex P1, #1921).
 func TestCodeReviewGateReadsTheLiveLabelsBeforeTheVerdict(t *testing.T) {
 	run := loadCodeReviewGateStep(t).Run
 	// v5.12.8 dropped the gate's twin-review wait: the gate reads the twins
@@ -155,11 +155,11 @@ func TestCodeReviewGateRefusesAnApprovalOnOwnerHold(t *testing.T) {
 		// The labels come from the live PR, so a forge whose labels
 		// endpoint is not paginated (Gitea) never loops (Codex P1, #1921).
 		{"an approval without the hold", `[{"name":"code-review"},{"name":"task:ready"}]`, "", "", "", jobs{}, "", true, "codex approved"},
-		{"an approval on owner hold", `[{"name":"code-review"},{"name":"needs-owner"}]`, "", "", "", jobs{}, "", false, "owner hold"},
+		{"an approval on owner hold", `[{"name":"code-review"},{"name":"needs-owner"}]`, "", "", "", jobs{}, "", false, "on hold (needs-owner)"},
 		// The review job swaps needs-owner for needs-coordinator (v5.11.3);
 		// the hold carries over, so the swap never releases an approval
 		// (Codex P1 round 2, #1986).
-		{"an approval on coordinator hold", `[{"name":"code-review"},{"name":"needs-coordinator"}]`, "", "", "", jobs{}, "", false, "coordinator hold"},
+		{"an approval on coordinator hold", `[{"name":"code-review"},{"name":"needs-coordinator"}]`, "", "", "", jobs{}, "", false, "on hold (needs-coordinator)"},
 		{"a docs-only change", `[]`, docsOnly, "", "", jobs{}, "", true, "no review is required"},
 		// A PR retargeted while the run waited never passes on the old
 		// base's exempt diff or approval (Codex P1, #1921).
