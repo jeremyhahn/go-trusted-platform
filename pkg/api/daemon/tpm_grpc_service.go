@@ -1726,16 +1726,26 @@ func (s *TPMGRPCService) ActivateCredential(
 // makeCredential is the single TPM2_MakeCredential delegation point shared
 // by every transport in the daemon package. When ekCertDER and iakPub are
 // both present the verifier path (no local EK) is used; otherwise the call
-// uses the local TPM EK with akName.
+// uses the local TPM EK with akName. A request carrying only one of
+// ekCertDER and iakPub, an empty akName on the local path, or an
+// unparsable ekCertDER is refused with ErrMakeCredentialInvalid before
+// the TPM is touched.
 func makeCredential(
 	tpm quicbaassdk.TrustedPlatformModule,
 	akName, secret, ekCertDER, iakPub []byte,
 ) (credentialBlob, encryptedSecret, plaintextSecret []byte, err error) {
 
-	if len(ekCertDER) > 0 && len(iakPub) > 0 {
+	hasEKCert, hasIAKPub := len(ekCertDER) > 0, len(iakPub) > 0
+	if hasEKCert != hasIAKPub {
+		return nil, nil, nil, ErrMakeCredentialInvalid{Reason: "ek_cert and iak_pub must be sent together"}
+	}
+	if !hasEKCert && len(akName) == 0 {
+		return nil, nil, nil, ErrMakeCredentialInvalid{Reason: "ak_name is required"}
+	}
+	if hasEKCert {
 		ekCert, parseErr := x509.ParseCertificate(ekCertDER)
 		if parseErr != nil {
-			return nil, nil, nil, parseErr
+			return nil, nil, nil, ErrMakeCredentialInvalid{Reason: "ek_cert is not a DER certificate: " + parseErr.Error()}
 		}
 		return tpm.MakeCredentialWithExternalEK(ekCert, iakPub, secret)
 	}
