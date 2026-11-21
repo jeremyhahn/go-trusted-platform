@@ -373,13 +373,24 @@ export class TPMService extends BaseService {
   /**
    * Get TPM event log
    *
+   * The server's uint64 event_count arrives as a protojson decimal string
+   * and is returned as a number.
+   *
    * @param request - Optional format specification
    * @returns Event log
    */
   async getEventLog(request?: GetEventLogRequest): Promise<ApiResponse<GetEventLogResponse>> {
-    return this.client.get<GetEventLogResponse>(this.buildUrl('/eventlog', {
+    const res = await this.client.get<GetEventLogResponse>(this.buildUrl('/eventlog', {
       filters: { format: request?.format },
     }));
+    const raw: unknown = res.success ? res.data?.eventCount : undefined;
+    if (res.success && res.data && typeof raw === 'string' && /^\d+$/.test(raw)) {
+      const eventCount = Number(raw);
+      if (Number.isSafeInteger(eventCount)) {
+        return { ...res, data: { ...res.data, eventCount } };
+      }
+    }
+    return res;
   }
 
   /**

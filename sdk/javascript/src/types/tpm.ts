@@ -749,7 +749,7 @@ export interface GetEventLogResponse {
   eventLog: string;
   /** Format */
   format: string;
-  /** Event count */
+  /** Event count; a number after the SDK decodes the server's decimal string (protojson uint64) */
   eventCount: number;
   /** Parsed entries (proto entries; absent until server-side parsing ships) */
   entries?: EventLogEntry[];
