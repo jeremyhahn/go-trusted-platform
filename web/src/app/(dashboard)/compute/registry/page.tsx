@@ -242,7 +242,35 @@ export default function RegistryPage() {
               <dt className="text-muted-foreground">Mode</dt>
               <dd>{status.ReadOnly ? "Read-only" : "Read-write"}</dd>
               <dt className="text-muted-foreground">Components</dt>
-              <dd>{status.Components?.length ?? 0}</dd>
+              <dd data-testid="registry-components">
+                {status.Components && status.Components.length > 0 ? (
+                  <ul className="space-y-1">
+                    {status.Components.map((c, i) => {
+                      const code = c.Status ?? 0;
+                      return (
+                        <li
+                          key={c.Name ?? i}
+                          className="flex flex-wrap items-center gap-2"
+                        >
+                          <span className="font-mono">{dash(c.Name)}</span>
+                          <Badge variant={healthVariant(code)}>
+                            {HEALTH_LABEL[code] ?? HEALTH_LABEL[0]}
+                          </Badge>
+                          <span className="text-muted-foreground">
+                            {dash(c.Message)}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : (
+                  <span className="text-muted-foreground">
+                    No components reported
+                  </span>
+                )}
+              </dd>
+              <dt className="text-muted-foreground">Last updated</dt>
+              <dd className="font-mono">{dash(status.Timestamp)}</dd>
             </dl>
           ) : null}
         </CardContent>
