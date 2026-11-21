@@ -499,7 +499,7 @@ func (s *RESTServer) SetKMSHandlers(service restapi.KMSService) {
 func (s *RESTServer) SetKMSRouter(kms kmsclient.Client, crypto cryptoclient.Client, dek dekclient.Client, secrets secretsclient.Client, guard *restapi.ScopeGuard) {
 	logger := logging.NewFromSlog(s.logger)
 	restkms.NewKMSRouter(logger, kms, crypto, dek, secrets, response.NewResponseWriter(logger, nil)).
-		RegisterRoutes(s.catalogGuardedAPI(guard))
+		RegisterRoutes(s.tenantBoundCatalogAPI(guard))
 	s.logger.Info("KMS REST routes registered (docs/kms/api.md contract)")
 }
 
