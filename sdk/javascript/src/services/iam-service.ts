@@ -464,22 +464,35 @@ export class IAMService extends BaseService {
   }
 
   /**
-   * Validate a policy
+   * Validate a policy: POST /v1/iam/tenants/{tenant}/policies/validate with
+   * the snake_case body the server decodes ({tenant_id, spec_yaml}).
    */
   async validatePolicy(request: ValidateIAMPolicyRequest): Promise<ApiResponse<ValidateIAMPolicyResponse>> {
     return this.client.post<ValidateIAMPolicyResponse>(
       this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/policies/validate`),
-      request
+      { tenant_id: request.tenantId, spec_yaml: request.specYaml }
     );
   }
 
   /**
-   * Test a policy
+   * Test a policy: POST /v1/iam/tenants/{tenant}/policies/test with the
+   * snake_case body the server decodes ({tenant_id, subject_id, roles, groups,
+   * action, resource, context, attributes}). Omitted optional fields stay
+   * undefined and drop out of the JSON.
    */
   async testPolicy(request: TestIAMPolicyRequest): Promise<ApiResponse<TestIAMPolicyResponse>> {
     return this.client.post<TestIAMPolicyResponse>(
       this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/policies/test`),
-      request
+      {
+        tenant_id: request.tenantId,
+        subject_id: request.subjectId,
+        roles: request.roles,
+        groups: request.groups,
+        action: request.action,
+        resource: request.resource,
+        context: request.context,
+        attributes: request.attributes,
+      }
     );
   }
 
