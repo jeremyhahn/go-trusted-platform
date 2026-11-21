@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { ok, refused, stubControlPlane, withControlPlane, type Answer } from '@/test/control-plane-fetch';
@@ -66,12 +67,16 @@ describe('useGatewayIPAM', () => {
 
     let got: GatewayIPAllocation | undefined;
     await act(async () => {
-      got = await result.current.allocate({ poolId: 'pool-a', hostname: 'node-b' });
+      got = await result.current.allocate({ poolId: 'pool-a', hostname: 'node-b', deviceId: 'dev-1' });
     });
 
     expect(got).toEqual(A2);
     const post = sent.findIndex((r) => r.method === 'POST');
-    expect(sent[post]).toEqual({ method: 'POST', path: PATH, body: { poolId: 'pool-a', hostname: 'node-b' } });
+    expect(sent[post]).toEqual({
+      method: 'POST',
+      path: PATH,
+      body: { poolId: 'pool-a', hostname: 'node-b', deviceId: 'dev-1' },
+    });
     expect(sent.slice(post + 1)).toContainEqual({ method: 'GET', path: PATH, body: undefined });
   });
 
@@ -101,11 +106,106 @@ describe('useGatewayIPAM', () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     await act(async () => {
-      await expect(result.current.allocate({ poolId: 'pool-a' })).rejects.toThrow('HTTP 409: pool exhausted');
+      await expect(result.current.allocate({ poolId: 'pool-a', deviceId: 'dev-1' })).rejects.toThrow('HTTP 409: pool exhausted');
     });
 
     const post = sent.findIndex((r) => r.method === 'POST');
     expect(post).toBeGreaterThanOrEqual(0);
+    expect(sent[post].body).toMatchObject({ deviceId: 'dev-1' });
     expect(sent.slice(post + 1).some((r) => r.method === 'GET')).toBe(false);
+  });
+});
+
+describe('useGatewayIPAM stale reads', () => {
+  const B1 = { ip: '198.51.100.10', poolId: 'pool-b', allocatedAt: '2026-11-21T00:00:00Z' };
+
+  interface Pending {
+    poolId: string | null;
+    resolve: (allocations: unknown[]) => void;
+  }
+
+  /** stubDeferred answers each list GET with a promise the test resolves by hand. */
+  function stubDeferred(): Pending[] {
+    const pending: Pending[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+        const respond = (status: number, body: unknown) =>
+          new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+        if (method === 'POST' && url.pathname === PATH) {
+          return Promise.resolve(respond(allocated.status, allocated.body));
+        }
+        if (method === 'GET' && url.pathname === PATH) {
+          return new Promise<Response>((resolve) => {
+            pending.push({
+              poolId: url.searchParams.get('poolId'),
+              resolve: (allocations) =>
+                resolve(respond(200, { code: 200, success: true, payload: { allocations } })),
+            });
+          });
+        }
+        return Promise.resolve(respond(404, { code: 404, success: false, error: 'no route' }));
+      })
+    );
+    return pending;
+  }
+
+  const wrapper = ({ children }: { children: ReactNode }) => withControlPlane(children);
+
+  it('a mutation refetch for the old pool does not overwrite the new pool', async () => {
+    const pending = stubDeferred();
+    const { result, rerender } = renderHook(({ p }: { p: string }) => useGatewayIPAM(p), {
+      initialProps: { p: 'pool-a' },
+      wrapper,
+    });
+    await waitFor(() => expect(pending).toHaveLength(1));
+    await act(async () => pending[0].resolve([A1]));
+    await waitFor(() => expect(result.current.allocations).toEqual([A1]));
+
+    let done!: Promise<unknown>;
+    act(() => {
+      done = result.current.allocate({ poolId: 'pool-a', deviceId: 'dev-1' });
+    });
+    await waitFor(() => expect(pending).toHaveLength(2));
+    expect(pending[1].poolId).toBe('pool-a');
+
+    rerender({ p: 'pool-b' });
+    await waitFor(() => expect(pending).toHaveLength(3));
+    expect(pending[2].poolId).toBe('pool-b');
+    await act(async () => pending[2].resolve([B1]));
+    await waitFor(() => expect(result.current.allocations).toEqual([B1]));
+
+    await act(async () => {
+      pending[1].resolve([A1, A2]);
+      await done;
+    });
+    expect(result.current.allocations).toEqual([B1]);
+  });
+
+  it('an older refetch resolving last does not replace a newer one', async () => {
+    const pending = stubDeferred();
+    const { result } = renderHook(() => useGatewayIPAM('pool-a'), { wrapper });
+    await waitFor(() => expect(pending).toHaveLength(1));
+    await act(async () => pending[0].resolve([]));
+
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = result.current.refetch();
+      second = result.current.refetch();
+    });
+    await waitFor(() => expect(pending).toHaveLength(3));
+
+    await act(async () => {
+      pending[2].resolve([A1, A2]);
+      await second;
+    });
+    await act(async () => {
+      pending[1].resolve([A1]);
+      await first;
+    });
+    expect(result.current.allocations).toEqual([A1, A2]);
   });
 });
