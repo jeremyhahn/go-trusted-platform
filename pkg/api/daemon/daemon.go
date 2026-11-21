@@ -755,7 +755,6 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			WithDeviceLifecycle(config.DeviceLifecycle),
 			WithDeviceTemplateService(config.DeviceTemplateService),
 			WithDeviceBootCA(config.CAService),
-			WithDeviceAttestChallengeStorage(deviceChallengeStorage(config)),
 		)
 
 		// Register with TCP gRPC server if enabled
@@ -3962,14 +3961,4 @@ func deviceVerdictSink(config *Config) verdict.Sink {
 		return nil
 	}
 	return sink
-}
-
-// deviceChallengeStorage returns the shared object store the device service
-// keeps attestation challenges in (#2136), or nil, which keeps the
-// per-process in-memory store.
-func deviceChallengeStorage(config *Config) objectstorage.Client {
-	if config == nil || config.App == nil || config.App.Storage == nil {
-		return nil
-	}
-	return config.App.Storage
 }

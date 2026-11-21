@@ -61,8 +61,9 @@ type attestChallenge struct {
 }
 
 // attestChallengeKeyPrefix is the object-storage key prefix of issued,
-// not yet used attestation challenges.
-const attestChallengeKeyPrefix = "attest-challenges/"
+// not yet used attestation challenges: the namespace-qualified
+// (namespace:path) prefix the object catalog requires.
+const attestChallengeKeyPrefix = "attest-challenges:"
 
 // attestChallengeKey is the object-storage key of challenge id.
 func attestChallengeKey(id string) string {
@@ -80,13 +81,14 @@ type attestChallengeRecord struct {
 }
 
 // attestChallengeStore holds the server-issued single-use nonces AttestDevice
-// binds a quote to (#2136). With a backend (the daemon's shared object
-// store) every challenge is an object under attest-challenges/, so it
-// survives a restart and is honoured by any daemon sharing the store;
-// single use across daemons rests on DeleteObject refusing a key that is
-// already gone. Without a backend it is in-memory and per process: a
-// challenge issued by one daemon is unknown to another, and a restart
-// forgets every outstanding challenge (the device asks for a new one).
+// binds a quote to (#2136). With a backend every challenge is an object
+// under attest-challenges:, so it survives a restart; a backend is honoured
+// once per process. The pinned object store has no atomic take or
+// compare-and-delete, so daemon.New does not share challenges across
+// daemons until upstream offers one (#2136). Without a backend it is
+// in-memory and per process, where take is atomic under mu: a challenge
+// issued by one daemon is unknown to another, and a restart forgets every
+// outstanding challenge (the device asks for a new one).
 // A challenge that is issued and never used is swept once its TTL has
 // passed: sweep removes expired objects (or entries), and the
 // DeviceGRPCService runs it on a ticker (StartChallengeSweeper).
@@ -223,9 +225,11 @@ func WithDeviceAttestChallengeRequired() DeviceGRPCOption {
 }
 
 // WithDeviceAttestChallengeStorage keeps issued attestation challenges in
-// the shared object store, so they survive a restart and any daemon over
-// the same store honours them once (#2136). A nil client keeps the
-// per-process in-memory store.
+// an object store, so they survive a restart (#2136). A backend is honoured
+// once per process: the pinned object store has no atomic take or
+// compare-and-delete, so daemon.New does not share challenge storage across
+// daemons until upstream offers one. A nil client keeps the per-process
+// in-memory store.
 func WithDeviceAttestChallengeStorage(storage objectstorage.Client) DeviceGRPCOption {
 	return func(s *DeviceGRPCService) {
 		if storage != nil {
@@ -306,7 +310,7 @@ func (c *attestChallengeStore) log() *slog.Logger {
 
 // sweep removes every challenge whose TTL has passed and returns how many
 // went. A challenge at exactly its expiry is kept, the rule take applies.
-// With a backend it lists every page of attest-challenges/, then deletes
+// With a backend it lists every page of attest-challenges:, then deletes
 // the expired keys it found: an unreadable or
 // undecodable record is skipped (logged), a delete another daemon won is
 // not counted, and a failed delete is reported after the rest are tried.
