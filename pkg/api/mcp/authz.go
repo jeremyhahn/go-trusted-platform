@@ -183,6 +183,7 @@ func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName strin
 	}
 	resp, err := c.pep.Check(ctx, &iam.CheckRequest{
 		Subject:  subject,
+		TenantID: subject.TenantID,
 		Resource: resource,
 		Action:   action,
 	})

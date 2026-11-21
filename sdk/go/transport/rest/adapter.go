@@ -413,9 +413,16 @@ func (c *restClientConn) Invoke(ctx context.Context, method string, args interfa
 	if err := c.finishInvoke(hasDecoder, decode, raw, reply); err != nil {
 		return err
 	}
-	echoRequestIntoReply(method, args, reply)
+	if complete, ok := restReplyCompleters[method]; ok && reply != nil {
+		complete(args, reply)
+	}
 	return nil
 }
+
+// restReplyCompleters fill reply fields a route does not echo from the
+// request (the HMAC hash, the verified key), keyed by gRPC full method name.
+// A completer runs after the response decoder, which never sees the request.
+var restReplyCompleters = map[string]func(args, reply interface{}){}
 
 // route resolves the HTTP method, path and body of a gRPC method call.
 // Templated routes substitute path params and strip them from the body,
@@ -429,7 +436,11 @@ func route(method string, args interface{}) (httpMethod, path string, body inter
 		if err != nil {
 			return "", "", nil, err
 		}
-		if body, err = encodeInvokeBody(method, body); err != nil {
+		if entry.encodeBody != nil {
+			if body, err = entry.encodeBody(body); err != nil {
+				return "", "", nil, status.Error(codes.InvalidArgument, err.Error())
+			}
+		} else if body, err = encodeInvokeBody(method, body); err != nil {
 			return "", "", nil, err
 		}
 		return entry.method, path, body, nil
@@ -773,6 +784,11 @@ type templatedRoute struct {
 	method      string
 	pathParams  []pathParam
 	queryParams []queryParam
+	// encodeBody, when set, replaces the method's request encoder for
+	// this route: it receives the body with the templated fields cleared
+	// and returns what is sent (a route whose REST document differs
+	// from the proto request, such as the flat SDN zone document).
+	encodeBody restRequestEncoder
 }
 
 // templatedRouteTable maps gRPC methods to REST routes whose URLs
@@ -1010,7 +1026,11 @@ var templatedRouteTable = map[string]templatedRoute{
 	"/platform.v1.CAService/RenewCertificate":  itemRoute("/api/v1/ca/certificates/{serial}/renew", http.MethodPost, "{serial}", "serial"),
 
 	// GET /api/v1/compute/containers/{id}
-	"/platform.v1.ComputeService/GetContainer": itemRoute("/api/v1/compute/containers/{id}", http.MethodGet, "{id}", "id"),
+	"/platform.v1.ComputeService/GetContainer":        itemRoute("/api/v1/compute/containers/{id}", http.MethodGet, "{id}", "id"),
+	"/platform.v1.ComputeService/GetContainerMetrics": itemRoute("/api/v1/compute/containers/{id}/metrics", http.MethodGet, "{id}", "id"),
+	"/platform.v1.ComputeService/ExecContainer":       itemRoute("/api/v1/compute/containers/{id}/exec", http.MethodPost, "{id}", "id"),
+	"/platform.v1.ComputeService/GetVM":               itemRoute("/api/v1/compute/vms/{id}", http.MethodGet, "{id}", "id"),
+	"/platform.v1.ComputeService/GetVMMetrics":        itemRoute("/api/v1/compute/vms/{id}/metrics", http.MethodGet, "{id}", "id"),
 
 	// DELETE /api/v1/compute/containers/{id}?force=true&delete_volumes=true
 	// -- the handler reads force and delete_volumes from the query.

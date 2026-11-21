@@ -51,17 +51,6 @@ var kmsKeyStatusesByName = map[string]platformv1.KeyStatus{
 	"COMPROMISED":      platformv1.KeyStatus_KEY_STATUS_DISABLED,
 }
 
-// restReplyEchoes fills reply fields the server's JSON leaves out but the
-// request carries, after the reply is decoded.
-var restReplyEchoes = map[string]func(args, reply interface{}){}
-
-// echoRequestIntoReply runs the method's reply echo, if it has one.
-func echoRequestIntoReply(method string, args, reply interface{}) {
-	if echo, ok := restReplyEchoes[method]; ok {
-		echo(args, reply)
-	}
-}
-
 func init() {
 	templatedRouteTable[platformv1.KeyManagementService_ImportKey_FullMethodName] = templatedRoute{
 		path:   "/api/v1/kms/keys/import",
@@ -96,7 +85,7 @@ func init() {
 
 	// The versions route answers only the list; the key it lists is the
 	// request's.
-	restReplyEchoes[platformv1.KeyManagementService_GetKeyVersions_FullMethodName] = func(args, reply interface{}) {
+	restReplyCompleters[platformv1.KeyManagementService_GetKeyVersions_FullMethodName] = func(args, reply interface{}) {
 		req, okReq := args.(*platformv1.GetKeyVersionsRequest)
 		resp, okResp := reply.(*platformv1.GetKeyVersionsResponse)
 		if okReq && okResp && req != nil && resp != nil && resp.GetKeyId() == "" {
