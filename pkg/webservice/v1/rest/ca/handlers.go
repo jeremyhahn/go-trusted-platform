@@ -985,7 +985,7 @@ func (h *CAHandlers) RevokeCertificate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req := &platformv1.RevokeCertificateRequest{}
-	if r.Body != nil && r.ContentLength > 0 {
+	if r.Body != nil && r.ContentLength != 0 {
 		if err := protorest.DecodeRequest(r, req); err != nil {
 			h.respWriter.Error400(w, r, err)
 			return
@@ -1047,7 +1047,7 @@ func (h *CAHandlers) RenewCertificate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req := &platformv1.RenewCertificateRequest{}
-	if r.Body != nil && r.ContentLength > 0 {
+	if r.Body != nil && r.ContentLength != 0 {
 		if err := protorest.DecodeRequest(r, req); err != nil {
 			protorest.WriteError(w, r, h.respWriter, status.Error(codes.InvalidArgument, err.Error()))
 			return
@@ -1070,7 +1070,7 @@ func (h *CAHandlers) InitCA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req := &platformv1.InitCARequest{}
-	if r.Body != nil && r.ContentLength > 0 {
+	if r.Body != nil && r.ContentLength != 0 {
 		if err := protorest.DecodeRequest(r, req); err != nil {
 			protorest.WriteError(w, r, h.respWriter, status.Error(codes.InvalidArgument, err.Error()))
 			return
@@ -1092,7 +1092,7 @@ func (h *CAHandlers) InstallCACertificates(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	req := &platformv1.InstallCACertificatesRequest{}
-	if r.Body != nil && r.ContentLength > 0 {
+	if r.Body != nil && r.ContentLength != 0 {
 		if err := protorest.DecodeRequest(r, req); err != nil {
 			protorest.WriteError(w, r, h.respWriter, status.Error(codes.InvalidArgument, err.Error()))
 			return
@@ -1114,7 +1114,7 @@ func (h *CAHandlers) UninstallCACertificates(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	req := &platformv1.UninstallCACertificatesRequest{}
-	if r.Body != nil && r.ContentLength > 0 {
+	if r.Body != nil && r.ContentLength != 0 {
 		if err := protorest.DecodeRequest(r, req); err != nil {
 			protorest.WriteError(w, r, h.respWriter, status.Error(codes.InvalidArgument, err.Error()))
 			return

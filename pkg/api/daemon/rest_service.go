@@ -41,6 +41,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restca "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ca"
 	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -556,9 +557,28 @@ func (s *RESTServer) SetCAHolder(holder *CAHolder, guard *restapi.ScopeGuard) {
 	// Wire auth factor endpoints (AAGUID lookup, mTLS probe, cert issuance,
 	// MFA policy). They still hold the CA the holder held at start-up; they
 	// follow the holder in a later slice.
-	authFactorHandlers := restapi.NewAuthFactorHandlers(holder.Get(), s.logger)
-	authFactorHandlers.RegisterRoutes(s.router)
-	s.logger.Info("Auth factor REST routes registered")
+	// They cannot run on a nil CA.
+	if ca := holder.Get(); ca != nil {
+		authFactorHandlers := restapi.NewAuthFactorHandlers(ca, s.logger)
+		authFactorHandlers.RegisterRoutes(s.router)
+		s.logger.Info("Auth factor REST routes registered")
+	}
+}
+
+// SetCALifecycle mounts POST /api/v1/ca/init, /ca/trust/install and
+// /ca/trust/uninstall on service behind the catalog scope guard (ca:create,
+// trust:write), with or without a loaded CA. A nil service mounts nothing.
+func (s *RESTServer) SetCALifecycle(service platformv1.CAServiceServer, guard *restapi.ScopeGuard) {
+	if service == nil {
+		return
+	}
+	logger := logging.NewFromSlog(s.logger)
+	h := restca.NewCAHandlers(logger, nil, response.NewResponseWriter(logger, nil)).WithService(service)
+	api := s.catalogGuardedAPI(guard)
+	api.HandleFunc("/ca/init", h.InitCA).Methods(http.MethodPost)
+	api.HandleFunc("/ca/trust/install", h.InstallCACertificates).Methods(http.MethodPost)
+	api.HandleFunc("/ca/trust/uninstall", h.UninstallCACertificates).Methods(http.MethodPost)
+	s.logger.Info("CA lifecycle REST routes registered")
 }
 
 // SetTPMHandlers mounts the physical TPM routes (/api/v1/tpm/...). Every

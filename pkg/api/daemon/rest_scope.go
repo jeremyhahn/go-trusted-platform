@@ -75,7 +75,7 @@ func sdnRouteScope(method, route string) (string, error) {
 }
 
 // catalogRouteRPCs maps each ceremony, PIV, LUKS, FIDO2, vTPM, proxy,
-// service-control (/api/v1/services) and cluster route on the daemon
+// service-control (/api/v1/services), cluster and CA lifecycle route on the daemon
 // REST listener, as "METHOD route-template", to the gRPC method it serves. The
 // route needs the scope the gRPC catalog gives that method: several of these
 // POSTs read, delete or use a key, and every ceremony step has its own
@@ -203,6 +203,9 @@ var catalogRouteRPCs = map[string]string{
 	"POST /api/v1/sdn/gateway/perf/flows":                                  "/platform.v1.GatewayService/GetPerfFlows",
 	"GET /api/v1/sdn/gateway/perf/datapath":                                "/platform.v1.GatewayService/GetPerfDatapath",
 	"GET /api/v1/sdn/gateway/perf/conntrack":                               "/platform.v1.GatewayService/GetPerfConntrack",
+	"POST /api/v1/ca/init":                                                 "/platform.v1.CAService/InitCA",
+	"POST /api/v1/ca/trust/install":                                        "/platform.v1.CAService/InstallCACertificates",
+	"POST /api/v1/ca/trust/uninstall":                                      "/platform.v1.CAService/UninstallCACertificates",
 }
 
 // catalogRouteScope returns the scope the gRPC catalog gives the method a

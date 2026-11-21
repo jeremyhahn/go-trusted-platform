@@ -596,40 +596,41 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("Proxy service initialized and registered successfully")
 
-	// Create CA gRPC service if CAService is configured
+	// Create the CA gRPC service on every start. With no loaded CA (CA
+	// bring-up failed or none is configured yet) the service is still
+	// registered, so InitCA can initialise one through its initializer.
 	var caService *CAGRPCService
 	// caHolder is the CA the gRPC CA service and the REST CA handlers
 	// share, so a CA InitCA swaps in is served by both.
-	var caHolder *CAHolder
+	caHolder := NewCAHolder(config.CAService)
+	// Get the logging.Logger from the App if available
+	var caLogger *logging.Logger
+	if config.App != nil && config.App.Logger != nil {
+		caLogger = config.App.Logger
+	} else {
+		caLogger = logging.DefaultLogger()
+	}
+
+	var caObjStorage objectstorage.Client
+	if config.App != nil {
+		caObjStorage = config.App.Storage
+	}
+	caService = NewCAGRPCService(caLogger, config.CAService, caObjStorage).WithKMS(config.csrKMS()).WithCAInitializer(AppCAInitializer(config.App)).WithCAHolder(caHolder)
+
+	// Register with TCP gRPC server if available
+	if grpcServer != nil {
+		platformv1.RegisterCAServiceServer(grpcServer, caService)
+	}
+
+	// Register with UDS gRPC server if available
+	if grpcUDSServer != nil {
+		platformv1.RegisterCAServiceServer(grpcUDSServer, caService)
+	}
+
 	if config.CAService != nil {
-		caHolder = NewCAHolder(config.CAService)
-		// Get the logging.Logger from the App if available
-		var caLogger *logging.Logger
-		if config.App != nil && config.App.Logger != nil {
-			caLogger = config.App.Logger
-		} else {
-			caLogger = logging.DefaultLogger()
-		}
-
-		var caObjStorage objectstorage.Client
-		if config.App != nil {
-			caObjStorage = config.App.Storage
-		}
-		caService = NewCAGRPCService(caLogger, config.CAService, caObjStorage).WithKMS(config.csrKMS()).WithCAInitializer(AppCAInitializer(config.App)).WithCAHolder(caHolder)
-
-		// Register with TCP gRPC server if available
-		if grpcServer != nil {
-			platformv1.RegisterCAServiceServer(grpcServer, caService)
-		}
-
-		// Register with UDS gRPC server if available
-		if grpcUDSServer != nil {
-			platformv1.RegisterCAServiceServer(grpcUDSServer, caService)
-		}
-
 		logger.Info("CA service initialized and registered successfully")
 	} else {
-		logger.Info("CA service not available (CAService not configured)")
+		logger.Info("CA service registered without a loaded CA; InitCA can initialise it")
 	}
 
 	// Create KMS service if QuicBaaS backend is available
@@ -1581,8 +1582,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// `platformctl --protocol rest ca list` would 404. The handlers share
 	// the same CA instance as the gRPC, QUIC, MCP and Unix-socket adapters
 	// so all transports return identical results.
-	if daemon.concreteRestServer != nil && config.CAService != nil {
+	if daemon.concreteRestServer != nil {
 		daemon.concreteRestServer.SetCAHolder(caHolder, restGuard)
+		daemon.concreteRestServer.SetCALifecycle(caService, restGuard)
 	}
 
 	// Wire the physical TPM REST handlers. Quote and verify run on the same
@@ -3719,7 +3721,7 @@ func (d *Daemon) registerHealthCheckers() {
 	}
 
 	// Register CA service health checker if available
-	if d.caService != nil {
+	if d.caService != nil && d.config != nil && d.config.CAService != nil {
 		checker := NewCAServiceHealthChecker(d.caService)
 		if checker != nil {
 			if err := d.healthRegistry.Register(checker); err != nil {
