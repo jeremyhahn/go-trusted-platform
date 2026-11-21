@@ -3162,6 +3162,45 @@ func TestStartService_ADataDirectoryAlreadyTraversableKeepsItsMode(t *testing.T)
 	assert.Equal(t, uint32(0o751), st.Mode&0o7777)
 }
 
+func TestStartService_TheDatapathChildCanTraverseTheDataDirectory(t *testing.T) {
+	// The datapath child keeps root's uid but none of the DAC capabilities,
+	// and reads <data-dir>/fhrp at start (#1716). Under a data directory
+	// another account owns (0750, as the gatewayd supervisor integration
+	// tests lay it out) the kernel checks the "other" class, which has no
+	// search bit, and the open fails with EACCES (#2150). The supervisor
+	// grants that one bit; a data directory the child's uid owns is left
+	// alone. rootCredentials stands in for root so no test needs root.
+	t.Run("another owner", func(t *testing.T) {
+		dataDir := filepath.Join(t.TempDir(), "data")
+		require.NoError(t, os.Mkdir(dataDir, 0o750))
+		require.NoError(t, os.Chmod(dataDir, 0o750))
+		supervisor, _, _ := newSupervisor(t, func(cfg *Config) { cfg.Inherited.DataDir = dataDir })
+		supervisor.rootCredentials = func() (uint32, uint32) {
+			return uint32(os.Getuid()) + 1, uint32(os.Getgid()) + 1
+		}
+
+		require.NoError(t, supervisor.StartService(testContext(t), gateway.ServiceNAT))
+		var st unix.Stat_t
+		require.NoError(t, unix.Stat(dataDir, &st))
+		assert.Equal(t, uint32(0o751), st.Mode&0o7777, "the other class gains search only")
+		require.NoError(t, unix.Stat(filepath.Join(dataDir, "fhrp"), &st))
+		assert.Equal(t, uint32(0o700), st.Mode&0o7777, "the child's own state stays private")
+	})
+	t.Run("own data directory", func(t *testing.T) {
+		dataDir := filepath.Join(t.TempDir(), "data")
+		require.NoError(t, os.Mkdir(dataDir, 0o700))
+		supervisor, _, _ := newSupervisor(t, func(cfg *Config) { cfg.Inherited.DataDir = dataDir })
+		supervisor.rootCredentials = func() (uint32, uint32) {
+			return uint32(os.Getuid()), uint32(os.Getgid())
+		}
+
+		require.NoError(t, supervisor.StartService(testContext(t), gateway.ServiceNAT))
+		var st unix.Stat_t
+		require.NoError(t, unix.Stat(dataDir, &st))
+		assert.Equal(t, uint32(0o700), st.Mode&0o7777, "the owner class already traverses; no class is widened")
+	})
+}
+
 func TestGrantTraverse_AMissingDirectoryIsAnError(t *testing.T) {
 	err := grantTraverse(filepath.Join(t.TempDir(), "absent"), uint32(os.Getuid()), uint32(os.Getgid()))
 	require.ErrorIs(t, err, os.ErrNotExist)
