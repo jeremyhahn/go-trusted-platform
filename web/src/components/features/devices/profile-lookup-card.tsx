@@ -2,7 +2,8 @@
 
 /**
  * ProfileLookupCard finds a device profile by MAC address or by serial number
- * (FindProfileByMACAddress, FindProfileBySerial) and shows what the control
+ * (FindProfileByMACAddress, FindProfileBySerial), or the profile that matches
+ * a MAC, serial and model (FindMatchingProfile), and shows what the control
  * plane answered, or its refusal verbatim. It is read-only and gates nothing.
  */
 
@@ -12,7 +13,11 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
-import { useDeviceProfileLookup, type LookedUpProfile } from '@/hooks/use-device-profile-lookup';
+import {
+  useDeviceProfileLookup,
+  type LookedUpProfile,
+  type ProfileMatchCriteria,
+} from '@/hooks/use-device-profile-lookup';
 
 interface LookupResult {
   success: boolean;
@@ -29,6 +34,7 @@ export function ProfileLookupCard(): JSX.Element {
   const { toast } = useToast();
   const [mac, setMac] = useState('');
   const [serial, setSerial] = useState('');
+  const [model, setModel] = useState('');
   const [busy, setBusy] = useState(false);
   const [profile, setProfile] = useState<LookedUpProfile | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -73,6 +79,21 @@ export function ProfileLookupCard(): JSX.Element {
     void run(() => lookup.bySerial(value));
   };
 
+  const findMatching = () => {
+    const criteria: ProfileMatchCriteria = {};
+    const m = mac.trim();
+    const s = serial.trim();
+    const md = model.trim();
+    if (m) criteria.mac_address = m;
+    if (s) criteria.serial = s;
+    if (md) criteria.model = md;
+    if (!m && !s && !md) {
+      required('Match criteria required', 'enter a MAC address, serial or model');
+      return;
+    }
+    void run(() => lookup.match(criteria));
+  };
+
   return (
     <Card data-testid="profile-lookup-card">
       <CardHeader>
@@ -90,6 +111,12 @@ export function ProfileLookupCard(): JSX.Element {
           <Input aria-label="Serial number" value={serial} onChange={(e) => setSerial(e.target.value)} />
           <Button onClick={findBySerial} disabled={busy}>
             Find by serial
+          </Button>
+        </div>
+        <div className="flex gap-2">
+          <Input aria-label="Model" value={model} onChange={(e) => setModel(e.target.value)} />
+          <Button variant="outline" onClick={findMatching} disabled={busy}>
+            Match
           </Button>
         </div>
 
