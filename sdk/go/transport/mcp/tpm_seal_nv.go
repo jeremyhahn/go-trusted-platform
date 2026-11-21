@@ -16,8 +16,11 @@ package mcp
 // TPM seal and NV data mapping for the MCP transport (#1690).
 //
 // platform_tpm_seal and platform_tpm_unseal seal under the platform SRK
-// only: a request that names another parent key, its password or a PCR
-// bank is refused here rather than silently sealed under the SRK. The seal
+// with SHA-256 PCRs only. A request may leave the parent handle and PCR bank
+// unset or name the defaults the SDK wrappers and CLI send (the SRK handle
+// 0x81000001, PCR bank SHA256); one that names another parent key, its
+// password or another PCR bank is refused here rather than silently sealed
+// under the SRK. The seal
 // tool takes the PCRs as "pcrs" and answers {"sealed_data"}; unseal answers
 // {"data"}. platform_tpm_nv_write takes the pb request's own names, so the
 // generic JSON round-trip carries its arguments. platform_tpm_nv_read gets a
@@ -25,7 +28,8 @@ package mcp
 // caps it), and its reply still decodes through the generic round-trip.
 // The write and delete tools answer with a
 // bare success/message pair. platform_tpm_nv_delete undefines through the
-// owner hierarchy, so an index password is refused. DefineNVRAM has no
+// owner hierarchy: the owner password goes as parent_password and an index
+// password is refused. DefineNVRAM has no
 // server tool and stays unrouted.
 
 import (
@@ -77,15 +81,20 @@ func (e ErrTPMSealNVFieldUnsupported) Error() string {
 	return fmt.Sprintf("%s: %s is not supported over MCP", e.Method, e.Field)
 }
 
+// tpmSealNVSRKHandle is the platform SRK's persistent handle, the parent
+// the CLI names by default.
+const tpmSealNVSRKHandle = 0x81000001
+
 // tpmSealNVParentRefusal refuses a request that names a parent key other
-// than the platform SRK, its password, or a PCR bank.
+// than the platform SRK, a parent password, or a PCR bank other than
+// SHA256 (what PCRBankToProto sends for an unset bank).
 func tpmSealNVParentRefusal(method string, parentHandle uint32, parentPassword string, bank platformv1.PCRBank) error {
 	switch {
-	case parentHandle != 0:
+	case parentHandle != 0 && parentHandle != tpmSealNVSRKHandle:
 		return ErrTPMSealNVFieldUnsupported{Method: method, Field: "parent_handle"}
 	case parentPassword != "":
 		return ErrTPMSealNVFieldUnsupported{Method: method, Field: "parent_password"}
-	case bank != platformv1.PCRBank_PCR_BANK_UNSPECIFIED:
+	case bank != platformv1.PCRBank_PCR_BANK_UNSPECIFIED && bank != platformv1.PCRBank_PCR_BANK_SHA256:
 		return ErrTPMSealNVFieldUnsupported{Method: method, Field: "pcr_bank"}
 	}
 	return nil
