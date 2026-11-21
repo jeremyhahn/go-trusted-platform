@@ -5,13 +5,23 @@
  * CreateLDevID through the useLDevID hook (POST /api/v1/idevid/ldevid) and
  * shows the CSR and certificate PEM the device returns.
  *
- * Refusals (no TPM, no LDevID CA, no proven IDevID, a bad request) are shown
- * verbatim.
+ * Overwrite replaces the key at the handle and cannot be undone, so with the
+ * box checked the card asks first in a dialog. Refusals (no TPM, no LDevID
+ * CA, no proven IDevID, a taken handle, a bad request) are shown verbatim.
  */
 
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
@@ -36,15 +46,20 @@ export function LDevIDCard() {
   const [busy, setBusy] = useState(false);
   const [csr, setCsr] = useState('');
   const [cert, setCert] = useState('');
+  const [overwrite, setOverwrite] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [handleTaken, setHandleTaken] = useState(false);
 
-  const send = async () => {
+  const send = async (replace: boolean) => {
     setBusy(true);
+    setHandleTaken(false);
     try {
       const res = await createLDevID({
         commonName,
         organization: organization.trim() || undefined,
         algorithm,
         validityDays: validity === '' ? undefined : Number(validity),
+        overwrite: replace || undefined,
       });
       if (res.success && res.data) {
         setCsr(decodePem(res.data.csrPem));
@@ -54,11 +69,25 @@ export function LDevIDCard() {
         const message = res.error?.message ?? 'request failed';
         setCsr('');
         setCert('');
+        setHandleTaken(message.includes('already exists'));
         toast({ title: 'Create LDevID failed', description: message, variant: 'destructive' });
       }
     } finally {
       setBusy(false);
     }
+  };
+
+  const onCreate = () => {
+    if (overwrite) {
+      setConfirmOpen(true);
+      return;
+    }
+    void send(false);
+  };
+
+  const onConfirm = () => {
+    setConfirmOpen(false);
+    void send(true);
   };
 
   return (
@@ -118,9 +147,23 @@ export function LDevIDCard() {
           </div>
         </div>
         <p className="text-sm text-muted-foreground">Handle {HANDLE_HEX}</p>
-        <Button onClick={send} disabled={busy || commonName.trim() === ''}>
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id="ldevid-overwrite"
+            aria-label="Overwrite the existing key"
+            checked={overwrite}
+            onCheckedChange={(v) => setOverwrite(v === true)}
+          />
+          <Label htmlFor="ldevid-overwrite">Overwrite the existing key</Label>
+        </div>
+        <Button onClick={onCreate} disabled={busy || commonName.trim() === ''}>
           Create LDevID
         </Button>
+        {handleTaken && (
+          <p data-testid="ldevid-overwrite-hint" className="text-sm text-muted-foreground">
+            A key exists at the handle. Check Overwrite the existing key to replace it.
+          </p>
+        )}
         {csr !== '' && (
           <pre data-testid="ldevid-csr-pem" className="rounded bg-muted p-2 text-xs font-mono whitespace-pre-wrap break-all">
             {csr}
@@ -132,6 +175,25 @@ export function LDevIDCard() {
           </pre>
         )}
       </CardContent>
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Replace the LDevID key?</DialogTitle>
+            <DialogDescription>
+              The key at handle {HANDLE_HEX} is replaced. The old LDevID cannot be recovered.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={onConfirm} disabled={busy}>
+              Confirm
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
