@@ -150,17 +150,18 @@ describe('InvitationService', () => {
   });
 
   describe('revoke', () => {
-    it('DELETEs /v1/invitations/{id} with no body', async () => {
-      vi.mocked(mockClient.delete).mockResolvedValue({ success: true, data: { success: true } });
+    it('POSTs an empty body to /v1/invitations/{id}/revoke', async () => {
+      vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: { success: true } });
 
       await service.revoke('inv-1');
 
-      expect(mockClient.delete).toHaveBeenCalledWith('/v1/invitations/inv-1');
+      expect(mockClient.post).toHaveBeenCalledWith('/v1/invitations/inv-1/revoke', {});
+      expect(mockClient.delete).not.toHaveBeenCalled();
     });
 
     it('propagates a transport error unchanged', async () => {
       const failure = new Error('409 Conflict: already accepted');
-      vi.mocked(mockClient.delete).mockRejectedValue(failure);
+      vi.mocked(mockClient.post).mockRejectedValue(failure);
 
       await expect(service.revoke('inv-1')).rejects.toBe(failure);
     });
@@ -189,19 +190,12 @@ describe('InvitationService', () => {
   });
 
   describe('resend', () => {
-    it('POSTs an empty body to /v1/invitations/{id}/resend', async () => {
-      vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: { invitation: { id: 'inv-1' } } });
+    it('is refused: the server serves no resend route', async () => {
+      await expect(service.resend('inv-1')).rejects.toThrow(/resend/i);
 
-      await service.resend('inv-1');
-
-      expect(mockClient.post).toHaveBeenCalledWith('/v1/invitations/inv-1/resend', {});
-    });
-
-    it('propagates a transport error unchanged', async () => {
-      const failure = new Error('404 Not Found');
-      vi.mocked(mockClient.post).mockRejectedValue(failure);
-
-      await expect(service.resend('missing')).rejects.toBe(failure);
+      expect(mockClient.post).not.toHaveBeenCalled();
+      expect(mockClient.put).not.toHaveBeenCalled();
+      expect(mockClient.delete).not.toHaveBeenCalled();
     });
   });
 });
