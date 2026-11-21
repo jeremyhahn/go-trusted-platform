@@ -2,8 +2,8 @@
 
 /**
  * TPMKeyLifecycleCard — creates and evicts the TPM's endorsement key and
- * imports its certificate (#2068), on the SDK TPMService through
- * useTPMKeyLifecycle.
+ * imports its certificate, and creates and evicts the storage root key
+ * (#2068), on the SDK TPMService through useTPMKeyLifecycle.
  *
  * Evicting a key removes it from the TPM, so the card asks first. The control
  * plane's refusals are shown verbatim: their text names what was refused.
@@ -43,7 +43,7 @@ const CONFIRM_TEXT: Record<'ek' | 'srk', { title: string; description: string }>
 };
 
 export function TPMKeyLifecycleCard(): JSX.Element {
-  const { createEK, deleteEK, importEKCertificate } = useTPMKeyLifecycle();
+  const { createEK, deleteEK, importEKCertificate, createSRK, deleteSRK } = useTPMKeyLifecycle();
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);
   const [handle, setHandle] = useState('');
@@ -101,6 +101,8 @@ export function TPMKeyLifecycleCard(): JSX.Element {
     const req = (parsed === undefined ? {} : { handle: parsed }) as { handle: number };
     if (key === 'ek') {
       void run('EK evicted', () => deleteEK(req));
+    } else if (key === 'srk') {
+      void run('SRK evicted', () => deleteSRK(req));
     }
   };
 
@@ -144,6 +146,12 @@ export function TPMKeyLifecycleCard(): JSX.Element {
           </Button>
           <Button variant="destructive" onClick={() => askEvict('ek')} disabled={busy}>
             Evict EK
+          </Button>
+          <Button onClick={() => void run('SRK created', () => createSRK({ persistent: true }))} disabled={busy}>
+            Create SRK
+          </Button>
+          <Button variant="destructive" onClick={() => askEvict('srk')} disabled={busy}>
+            Evict SRK
           </Button>
         </div>
         <div className="space-y-2">
