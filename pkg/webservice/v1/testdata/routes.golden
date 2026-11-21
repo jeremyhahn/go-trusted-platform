@@ -239,6 +239,7 @@ GET /api/v1/platform
 GET /api/v1/platform/config
 GET /api/v1/platform/config/snapshots
 GET /api/v1/platform/config/snapshots/{id}
+GET /api/v1/platform/entity-types
 GET /api/v1/platform/health
 GET /api/v1/platform/logs
 GET /api/v1/platform/logs/services

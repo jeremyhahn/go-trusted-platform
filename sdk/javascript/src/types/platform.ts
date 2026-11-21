@@ -264,6 +264,24 @@ export interface GetMetricsResponse {
 }
 
 /**
+ * One storage entity type and its entity count (PlatformDaemon.ListEntityTypes)
+ */
+export interface EntityTypeInfo {
+  name: string;
+  entityCount: number;
+  status: 'empty' | 'active' | 'error' | string;
+}
+
+/**
+ * List entity types response (GET /api/v1/platform/entity-types)
+ */
+export interface ListEntityTypesResponse {
+  entityTypes: EntityTypeInfo[];
+  totalEntities: number;
+  activeTypes: number;
+}
+
+/**
  * Reload config response
  */
 export interface ReloadConfigResponse {
