@@ -609,8 +609,10 @@ func ciTierFindings(wf ciWorkflow) []error {
 		c, gated := checked[j.ID]
 		guarded := scheduleGuardedIf[j.If]
 		// preflight (changes and the guard) cannot carry the guard; on bigdiskRoute,
-		// and only on it, a schedule run never reaches the pool.
-		routed := (j.ID == changesJobID || j.ID == scheduleGuardJobID) && j.RunsOn == bigdiskRoute
+		// and only on it, a schedule run never reaches the pool. v1.49: on
+		// preflightRunsOn it is the guard itself (no schedule check on
+		// github.com) and holds a pool slot for about ten seconds.
+		routed := (j.ID == changesJobID || j.ID == scheduleGuardJobID) && (j.RunsOn == bigdiskRoute || j.RunsOn == preflightRunsOn)
 		if strings.Contains(j.RunsOn, bigdiskLabel) && !guarded && !routed {
 			fail(j.Line, "a bigdisk job's if: carries the schedule guard `("+scheduleGuardExpr+")`: without it a schedule run fills the runner while main is busy")
 		}
@@ -1071,6 +1073,7 @@ func TestCITierFindingsAcceptTheBigdiskRoute(t *testing.T) {
 	}{
 		{"a guarded main-tier job", fixtureFipsJob, "  fips:\n    needs: preflight\n    if: " + mainOnlyGuardedIf + "\n    runs-on: " + bigdiskRoute + "\n"},
 		{"the preflight job", fixturePreflightJob, "  preflight:\n    if: " + prTierIf + "\n    runs-on: " + bigdiskRoute + "\n"},
+		{"the preflight job on its v1.49 runs-on", fixturePreflightJob, "  preflight:\n    if: " + prTierIf + "\n    runs-on: " + preflightRunsOn + "\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1151,6 +1154,7 @@ func TestCITierFindingsRejectEachInconsistency(t *testing.T) {
 		{"a preflight job on a literal bigdisk runner", fixturePreflightJob, "  preflight:\n    if: " + prTierIf + "\n    runs-on: bigdisk\n", "preflight: a bigdisk job's if: carries the schedule guard"},
 		{"a preflight job on a bigdisk label list", fixturePreflightJob, "  preflight:\n    if: " + prTierIf + "\n    runs-on: [self-hosted, bigdisk]\n", "preflight: a bigdisk job's if: carries the schedule guard"},
 		{"another unguarded job on the bigdisk route", "  lint:\n    if: " + prTierIf + "\n    runs-on: x\n", "  lint:\n    if: " + prTierIf + "\n    runs-on: " + bigdiskRoute + "\n", "lint: a bigdisk job's if: carries the schedule guard"},
+		{"another unguarded job on the preflight runs-on", "  lint:\n    if: " + prTierIf + "\n    runs-on: x\n", "  lint:\n    if: " + prTierIf + "\n    runs-on: " + preflightRunsOn + "\n", "lint: a bigdisk job's if: carries the schedule guard"},
 		{"a full-tier job needing a nightly-tier job", "    needs: lint\n  fips:", "    needs: [lint, soak]\n  fips:", "a full-tier job needs nightly-tier job soak"},
 	}
 	for _, tc := range cases {

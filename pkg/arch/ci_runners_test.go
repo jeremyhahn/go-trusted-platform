@@ -34,6 +34,22 @@ const (
 	selfHostedWaiver = "# self-hosted: "
 )
 
+// The v1.49 preflight runner (ci-template v1.49, Tenant Agent ruling 1047
+// (3) and (2), #2128): on github.com preflight runs on the self-hosted
+// bigdisk pool, which CI_PREFLIGHT_RUNS_ON (runs-on JSON) overrides, and
+// off github.com on the forge's hosted label; the schedule guard's BOT
+// passes AGENT_TOKEN off github.com only.
+const (
+	preflightRunsOn = `${{ github.server_url == 'https://github.com' && fromJSON(vars.CI_PREFLIGHT_RUNS_ON || '["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}`
+	preflightBOT    = `${{ github.server_url != 'https://github.com' && (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && secrets.AGENT_TOKEN || '' }}`
+)
+
+// isPreflightRunsOn reports whether j is the preflight job on its v1.49
+// runs-on, the one expression only that job may carry.
+func isPreflightRunsOn(j runnerJob) bool {
+	return j.name == "preflight" && j.runsOn != nil && j.runsOn.Kind == yaml.ScalarNode && j.runsOn.Value == preflightRunsOn
+}
+
 // waiverCategories are the categories a ci.yml waiver may name: the job
 // needs specific hardware, or it needs more than a standard hosted runner's
 // 4 vCPU, 16 GB memory, about 14 GB free disk or 6 hours. `credential:` is
@@ -109,6 +125,11 @@ func runnerProblems(body []byte) []string {
 			if p := waiverProblem(j.runsOn.LineComment); p != "" {
 				problems = append(problems, where+" "+p)
 			}
+		case isPreflightRunsOn(j):
+			// v1.49: preflight alone reaches the pool without the fork
+			// guard or a waiver: it sets up no Go, touches no cache,
+			// builds nothing, checks out with persist-credentials false
+			// and reads the tree as text only.
 		case isSelectionRunsOn(j.runsOn.Value):
 			// v1.48: the preflight selection, hosted unless the hosted
 			// pool is full; its step keeps fork pull requests hosted.
@@ -122,7 +143,7 @@ func runnerProblems(body []byte) []string {
 		// A self-hosted runner is persistent: fork pull requests must
 		// never reach it, so the job's if: carries the same-repository guard.
 		if j.runsOn != nil && (j.runsOn.Kind != yaml.ScalarNode || (j.runsOn.Value != hostedRunner && !isSelectionRunsOn(j.runsOn.Value))) &&
-			!strings.Contains(j.cond, sameRepoExpr) {
+			!strings.Contains(j.cond, sameRepoExpr) && !isPreflightRunsOn(j) {
 			problems = append(problems, where+": self-hosted runner without the fork guard")
 		}
 	}
@@ -183,10 +204,11 @@ const (
 
 // selectionRunsOn is the runs-on every job of ci.yml carries under v1.48:
 // a job whose steps run Docker reads runner_docker, CI Gate reads runner with
-// the hosted fallback, the others read runner. preflight decides, so it stays
-// hosted; image keeps its ruling 999 oversize waiver.
+// the hosted fallback, the others read runner. preflight decides, and since
+// v1.49 runs on the bigdisk pool on github.com unless CI_PREFLIGHT_RUNS_ON
+// overrides it; image keeps its ruling 999 oversize waiver.
 var selectionRunsOn = map[string]string{
-	"preflight":         hostedRunner,
+	"preflight":         preflightRunsOn,
 	"lint":              selectionDocker,
 	"image":             "bigdisk-docker",
 	"lint-gates":        selectionRunner,
@@ -303,6 +325,113 @@ func TestCIJobsReadThePreflightRunnerSelection(t *testing.T) {
 	}
 }
 
+// preflightProblems lists every way ci.yml's preflight departs from the
+// v1.49 preflight runner: its runs-on, resolved for each event in three
+// states (github.com with CI_PREFLIGHT_RUNS_ON unset, github.com with it set
+// to the hosted label, and another forge), and its guard step's BOT.
+func preflightProblems(body []byte) []string {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(body, &doc); err != nil || len(doc.Content) == 0 {
+		return []string{"ci.yml does not parse: " + errString(err)}
+	}
+	preflight := mapValue(mapValue(doc.Content[0], "jobs"), "preflight")
+	if preflight == nil {
+		return []string{"ci.yml has no preflight job"}
+	}
+	var problems []string
+	runsOn := ""
+	if r := mapValue(preflight, "runs-on"); r != nil {
+		runsOn = r.Value
+	}
+	states := []struct {
+		name, variable, server string
+		want                   []string
+	}{
+		{"github.com, CI_PREFLIGHT_RUNS_ON unset", "", "", raceOverflowLabels},
+		{`github.com, CI_PREFLIGHT_RUNS_ON "ubuntu-latest"`, `"ubuntu-latest"`, "", hostedLabels},
+		{"off github.com, CI_PREFLIGHT_RUNS_ON unset", "", "https://forge.example", hostedLabels},
+	}
+	for _, c := range raceRoutingCases[:6] {
+		for _, s := range states {
+			ctx := c.context()
+			ctx["vars.CI_PREFLIGHT_RUNS_ON"] = s.variable
+			if s.server != "" {
+				ctx["github.server_url"] = s.server
+			}
+			where := "preflight on " + c.name + " (" + s.name + ")"
+			got, err := resolveRunsOn(runsOn, ctx)
+			switch {
+			case err != nil:
+				problems = append(problems, where+": "+err.Error())
+			case strings.Join(got, ",") != strings.Join(s.want, ","):
+				problems = append(problems, where+" runs on ["+strings.Join(got, " ")+"], want ["+strings.Join(s.want, " ")+"]")
+			}
+		}
+	}
+	guard := false
+	if steps := mapValue(preflight, "steps"); steps != nil {
+		for _, step := range steps.Content {
+			if id := mapValue(step, "id"); id == nil || id.Value != "guard" {
+				continue
+			}
+			guard = true
+			bot := "<none>"
+			if b := mapValue(mapValue(step, "env"), "BOT"); b != nil {
+				bot = b.Value
+			}
+			if bot != preflightBOT {
+				problems = append(problems, "the guard step's BOT is "+strconv.Quote(bot)+", want "+strconv.Quote(preflightBOT)+": AGENT_TOKEN goes off github.com only")
+			}
+		}
+	}
+	if !guard {
+		problems = append(problems, "preflight has no step with id: guard to read its BOT from")
+	}
+	return problems
+}
+
+// TestPreflightRunsOnTheBigdiskPool holds ci.yml's preflight to the v1.49
+// runner: the bigdisk pool on github.com, the hosted label when
+// CI_PREFLIGHT_RUNS_ON says so and off github.com, and AGENT_TOKEN off
+// github.com only.
+func TestPreflightRunsOnTheBigdiskPool(t *testing.T) {
+	for _, p := range preflightProblems(readCI(t)) {
+		t.Error(p)
+	}
+}
+
+// TestPreflightProblems_Mutations shows that preflightProblems reports each
+// regression of the v1.49 preflight runner.
+func TestPreflightProblems_Mutations(t *testing.T) {
+	body := string(readCI(t))
+	if p := preflightProblems([]byte(body)); len(p) != 0 {
+		t.Fatalf("ci.yml itself has problems: %v", p)
+	}
+	v148BOT := strings.Replace(preflightBOT, "github.server_url != 'https://github.com' && ", "", 1)
+	for _, c := range []struct {
+		name   string
+		mutate func(string) string
+		want   string
+	}{
+		{"preflight back on the hosted label", func(b string) string { return replaceJobRunner(t, b, "preflight", hostedRunner) }, "CI_PREFLIGHT_RUNS_ON unset"},
+		{"the fallback ignored", func(b string) string {
+			return replaceJobRunner(t, b, "preflight", strings.Replace(preflightRunsOn, "vars.CI_PREFLIGHT_RUNS_ON || ", "", 1))
+		}, `"ubuntu-latest"`},
+		{"the v1.48 BOT", func(b string) string { return strings.Replace(b, preflightBOT, v148BOT, 1) }, "BOT"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			mutated := c.mutate(body)
+			if mutated == body {
+				t.Fatal("the mutation changed nothing")
+			}
+			p := preflightProblems([]byte(mutated))
+			if !slices.ContainsFunc(p, func(s string) bool { return strings.Contains(s, c.want) }) {
+				t.Fatalf("want a problem containing %q, got %v", c.want, p)
+			}
+		})
+	}
+}
+
 func TestSelectionProblems_Mutations(t *testing.T) {
 	body := string(readCI(t))
 	if p := selectionProblems([]byte(body)); len(p) != 0 {
@@ -324,6 +453,7 @@ func TestSelectionProblems_Mutations(t *testing.T) {
 		}, "env HOSTED_QUEUE_GRACE_SECONDS is not 60"},
 		{"the fork guard dropped", func(b string) string { return strings.Replace(b, selectionForkGuard, "if false; then", 1) }, "lacks"},
 		{"the step renamed", func(b string) string { return strings.Replace(b, "name: "+selectionStep, "name: Runner", 1) }, "first step"},
+		{"preflight back on the hosted label", func(b string) string { return replaceJobRunner(t, b, "preflight", hostedRunner) }, "job preflight runs on"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			mutated := c.mutate(body)
@@ -359,6 +489,8 @@ func TestRunnerProblems_Mutations(t *testing.T) {
 	}{
 		{"a job sent to a self-hosted label", lint("bigdisk"), "job lint runs on \"bigdisk\" and carries no"},
 		{"a job sent to a self-hosted label list", lint("[self-hosted, linux, x64, bigdisk]"), "job lint runs on a label list"},
+		{"another job on the preflight runs-on", lint(preflightRunsOn), "job lint runs on an expression"},
+		{"preflight on a bare bigdisk label", func(b string) string { return replaceJobRunner(t, b, "preflight", "bigdisk") }, "job preflight runs on \"bigdisk\" and carries no"},
 		{"the event expression put back", func(b string) string {
 			return replaceJobRunner(t, b, "race", split+"  "+selfHostedWaiver+"oversize: measured 24.2 GB")
 		}, "job race runs on an expression"},
