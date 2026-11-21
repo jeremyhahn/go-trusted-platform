@@ -166,16 +166,20 @@ export class EABService extends BaseService {
   // =========================================================================
 
   /**
-   * Get QR code for an EAB credential
+   * Get QR code for an EAB credential (GET /credentials/{id}/qrcode)
+   *
+   * The server reads `size` as an unsigned integer and answers 400 to a
+   * fraction, so a fractional size is floored and a negative or non-finite
+   * size is left out (the server then uses its default of 256 pixels).
    *
    * @param id - Credential ID
-   * @param size - QR code size in pixels (optional)
-   * @returns Base64-encoded QR code image
+   * @param size - QR code size in pixels (optional, integer)
+   * @returns The base64-encoded PNG and its content type
    */
   async getQRCode(id: number, size?: number): Promise<ApiResponse<GetEABQRCodeResponse>> {
     const filters: Record<string, string | number | boolean | undefined> = {};
-    if (size !== undefined) {
-      filters.size = size;
+    if (size !== undefined && Number.isFinite(size) && size >= 0) {
+      filters.size = Math.floor(size);
     }
     return this.client.get<GetEABQRCodeResponse>(
       this.buildUrl(`/credentials/${id}/qrcode`, { filters })
