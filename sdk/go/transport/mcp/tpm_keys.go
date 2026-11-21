@@ -23,6 +23,8 @@ package mcp
 // honour (attributes, endorsement or key passwords, parent handles, a key
 // algorithm, an NV index) is refused with ErrTPMKeysFieldUnsupported before
 // any call goes out, so the TPM never acts on a request it only half read.
+// create_ak on Provision and a transient (persistent false) CreateEK or
+// CreateSRK are refused the same way.
 //
 // Every tool answers {"success", "message"}, the create tools also "handle".
 // They send no public key, so PublicKey on the create replies and the
@@ -111,8 +113,9 @@ func tpmKeysOwnerArgs(password string) map[string]interface{} {
 	return args
 }
 
-// buildTPMKeysProvisionArgs sends the owner password only. The create_*
-// flags are not sent: the tool always creates the EK, SRK and IAK.
+// buildTPMKeysProvisionArgs sends the owner password only. The tool
+// provisions the EK and the shared SRK only, so create_ek and create_srk are
+// not sent; create_ak is refused because the tool creates no attestation key.
 func buildTPMKeysProvisionArgs(args interface{}) (map[string]interface{}, error) {
 	const method = platformv1.TPMService_Provision_FullMethodName
 	in, ok := args.(*platformv1.TPMProvisionRequest)
@@ -120,6 +123,8 @@ func buildTPMKeysProvisionArgs(args interface{}) (map[string]interface{}, error)
 		return nil, ErrUnexpectedArgsType{Method: method}
 	}
 	switch {
+	case in.GetCreateAk():
+		return nil, ErrTPMKeysFieldUnsupported{Method: method, Field: "create_ak"}
 	case in.GetEndorsementPassword() != "":
 		return nil, ErrTPMKeysFieldUnsupported{Method: method, Field: "endorsement_password"}
 	case in.GetEkAttributes() != nil:
@@ -146,8 +151,8 @@ func buildTPMKeysClearArgs(args interface{}) (map[string]interface{}, error) {
 	return tpmKeysOwnerArgs(in.GetOwnerPassword()), nil
 }
 
-// buildTPMKeysCreateEKArgs sends no arguments; persistent is not sent (the
-// tool persists the key).
+// buildTPMKeysCreateEKArgs sends no arguments. The tool always persists the
+// key, so a transient request (persistent false) is refused.
 func buildTPMKeysCreateEKArgs(args interface{}) (map[string]interface{}, error) {
 	const method = platformv1.TPMService_CreateEK_FullMethodName
 	in, ok := args.(*platformv1.CreateEKRequest)
@@ -157,11 +162,15 @@ func buildTPMKeysCreateEKArgs(args interface{}) (map[string]interface{}, error) 
 	if in.GetAttributes() != nil {
 		return nil, ErrTPMKeysFieldUnsupported{Method: method, Field: "attributes"}
 	}
+	if !in.GetPersistent() {
+		return nil, ErrTPMKeysFieldUnsupported{Method: method, Field: "persistent"}
+	}
 	return map[string]interface{}{}, nil
 }
 
-// buildTPMKeysCreateSRKArgs sends no arguments; persistent is not sent (the
-// tool persists the key under the platform's EK).
+// buildTPMKeysCreateSRKArgs sends no arguments. The tool always persists the
+// key under the platform's EK, so a transient request (persistent false) is
+// refused.
 func buildTPMKeysCreateSRKArgs(args interface{}) (map[string]interface{}, error) {
 	const method = platformv1.TPMService_CreateSRK_FullMethodName
 	in, ok := args.(*platformv1.CreateSRKRequest)
@@ -175,6 +184,8 @@ func buildTPMKeysCreateSRKArgs(args interface{}) (map[string]interface{}, error)
 		return nil, ErrTPMKeysFieldUnsupported{Method: method, Field: "parent_handle"}
 	case in.GetParentPassword() != "":
 		return nil, ErrTPMKeysFieldUnsupported{Method: method, Field: "parent_password"}
+	case !in.GetPersistent():
+		return nil, ErrTPMKeysFieldUnsupported{Method: method, Field: "persistent"}
 	}
 	return map[string]interface{}{}, nil
 }
