@@ -10,9 +10,16 @@ authorization model are defined once in [`docs/daemon/api.md`](../daemon/api.md)
 this page lists only what is specific to LUKS. **Unix is gRPC over a Unix
 domain socket**, so gRPC and Unix share a column.
 
-Every server transport is registered, but the service behind it has no backend
-or root checker injected, so each capability answers *backend not configured*
-or *root required* today ([engineering.md](engineering.md) §6).
+Every server transport is registered, and platformd startup injects the
+go-luks2 backend and the root checker into the service behind it, so each
+capability runs against the host's volumes. TPM enrollment seals through the
+PCR-checked TPM handler and writes a `systemd-tpm2` token, which the initrd
+`TPMTokenStrategy` unseals at boot; it answers *not wired* only when platformd
+could not open the TPM at startup. FIDO2
+enrollment answers *not wired* only when platformd could not open a FIDO2
+handler at startup. If the startup wiring is refused
+(no SDK client), nothing is injected and each capability answers *backend not
+configured* or *root required* ([engineering.md](engineering.md) §6).
 
 ---
 
@@ -88,7 +95,7 @@ Field names per transport:
 | EnrollTPM | `device`, `existing_passphrase`, `pcrs` (int list), `handle` | first two | `slot`, `token_id` |
 | EnrollRecovery | `device`, `existing_passphrase` | both | `slot`, `recovery_key` |
 | RemoveKey | `device`, `slot` | both | `removed` |
-| TestUnlock | `device`, `slot` | both | `unlocked` |
+| TestUnlock | `device`, `slot` | both | error `ErrLUKSTestUnlockUnverified` (no credential to verify) |
 | ChangePassphrase | `device`, `slot`, `old_passphrase`, `new_passphrase` | all | `changed` |
 
 The server does not range-check `slot`. On REST and QUIC an omitted `slot`
@@ -110,6 +117,7 @@ honoured, and the token's `fido2-up-required` records it.
 | `ErrLUKSRootRequired` | 403 | `PermissionDenied` | `StatusPermissionDenied` |
 | `ErrLUKS{Device,Passphrase,NewPassphrase,CredentialID,Slot}Required` | 400 | `InvalidArgument` | `StatusInvalidArgument` |
 | `ErrLUKSFIDO2PINUnsupported` (EnrollFIDO2 with `require_pin`) | 400 | `InvalidArgument` | `StatusInvalidArgument`, message as payload |
+| `ErrLUKSPCRInvalid` (EnrollTPM with no PCR or an index above 23) | 400 | `InvalidArgument` | `StatusInvalidArgument` |
 | any other error | 500 | `Internal` | `StatusInternalError` |
 | `ErrLUKSMalformedBody` (REST body that is not valid JSON) | 400 | — | — |
 
@@ -146,10 +154,13 @@ message. The SDK REST transport takes that message from the `error` key.
 | EnrollPassphrase, EnrollFIDO2, EnrollTPM, EnrollRecovery, ChangePassphrase | `luks:write` |
 | RemoveKey | `luks:delete` |
 
-Test-unlock proves less than its name says, on every transport: the request
-carries no key, and the backend only checks that the keyslot exists
-(`pkg/app/backends/luks.go`), so `unlocked: true` means the slot is there, not
-that a key opens it.
+Test-unlock is refused on every transport: the request carries no credential,
+so the backend (`pkg/app/backends/luks.go`) cannot prove a key opens the slot
+and returns `ErrLUKSTestUnlockUnverified`, which the transport returns as an
+error (a device that is not a LUKS2 volume returns its read error instead). It
+never answers `unlocked: true`. Before `remove-key`, confirm separately that
+another credential still opens the volume, by unlocking with it, for example
+`cryptsetup open --test-passphrase --key-slot N /dev/<device>`.
 
 LUKS has no tenancy. A request names only a device path, and neither
 `LUKSService` nor its transports read a tenant.

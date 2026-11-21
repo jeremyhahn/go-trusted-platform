@@ -57,6 +57,7 @@ func luksErrorToHTTP(err error) int {
 		errors.Is(err, ErrLUKSCredentialIDRequired),
 		errors.Is(err, ErrLUKSSlotRequired),
 		errors.Is(err, ErrLUKSMalformedBody),
+		errors.Is(err, ErrLUKSPCRInvalid),
 		errors.Is(err, ErrLUKSFIDO2PINUnsupported):
 		return http.StatusBadRequest
 	}

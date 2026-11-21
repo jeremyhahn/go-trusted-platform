@@ -70,7 +70,10 @@
    A recovery keyslot is covered the same way; `RecoveryKeyOptions` has no hash
    or iteration-time field, so its PBKDF2 cost is go-luks2's calibrated default.
    `pkg/arch/luks_keyslot_policy_test.go` fails the build if a keyslot call
-   bypasses it.
+   bypasses it. `ChangePassphrase` keeps the slot's KDF and PRF, so on a FIPS
+   host it refuses, with `ErrLUKSRotationKDFNotApproved`, a slot whose KDF is
+   not PBKDF2 or whose PBKDF2 hash is not approved (SHA-1 included). The slot
+   and its passphrase are left as they were.
 5. **New slot detection.** After `AddKey`, the backend reports the slot that was
    absent from the pre-call snapshot. If none is found it fails with
    `ErrLUKSNewSlotNotFound`; it never guesses the highest slot, which can name
@@ -81,7 +84,7 @@
    | Reported type | Token / keyslot types |
    |---|---|
    | `passphrase` | `luks2`, `passphrase`, `trusted-platform-luks2` |
-   | `fido2` | `fido2`, `fido2-manual`, `systemd-fido2` |
+   | `fido2` | `fido2`, `gtp-fido2-derived`, `fido2-manual`, `systemd-fido2` |
    | `tpm` | `tpm`, `tpm2`, `systemd-tpm2` |
    | `recovery` | `recovery`, `systemd-recovery` |
 
@@ -105,12 +108,21 @@
 | ListSlots | `ListKeyslots` | type per §2.6 |
 | Info | header metadata | `SectorSize` defaults to `luks2.DefaultSectorSize`; `MetadataJSON` is the raw JSON area |
 | EnrollPassphrase | `AddKey` | |
-| EnrollFIDO2 | `AddKey`, `FindFreeTokenSlot`, `ImportTokenJSON` / `ImportToken` | an enrolling handler imports its own token JSON; otherwise a `fido2-manual` token is written; a failed token write removes the keyslot (§2.8) |
+| EnrollFIDO2 | `AddKey`, `FindFreeTokenSlot`, `ImportTokenJSON` / `ImportToken` | an enrolling handler imports its own token JSON; otherwise a `gtp-fido2-derived` token is written (the daemon writes this type, never `fido2-manual`); a failed token write removes the keyslot (§2.8) |
 | EnrollTPM | `AddKey`, `FindFreeTokenSlot`, `ImportTokenJSON` | the handler seals to `--handle` / `--pcrs`; no token JSON is `ErrLUKSTokenMissing` and removes the keyslot (§2.8) |
 | EnrollRecovery | `AddRecoveryKey` | |
 | RemoveKey | `KillKeyslot` | destructive |
-| TestUnlock | `ListKeyslots` | **checks only that the slot exists**; no key material is tried |
+| TestUnlock | `ListKeyslots` | the request carries no credential, so it always returns `ErrLUKSTestUnlockUnverified` (a non-LUKS2 device returns its read error); confirm a credential separately before RemoveKey |
 | ChangePassphrase | `ChangeKey(device, old, new, slot)` | |
+
+Every keyslot mutation (the four Enroll operations, RemoveKey,
+ChangePassphrase) holds the volume's in-process mutex and a blocking
+exclusive `flock` on `/run/platform/luks-locks/<sha256 of the resolved
+device path>.lock` for its whole snapshot, add, token-write and rollback
+sequence, so separate backends and processes (platformd and each embedded
+platformctl host) serialize on one volume; when the lock cannot be taken the
+operation fails and writes nothing. The device node itself is not flocked:
+go-luks2 takes its own `LOCK_NB` flock there for each call.
 
 ---
 
@@ -167,20 +179,62 @@ platform stores nothing about the volume.
 ## 6. Wiring as shipped
 
 `daemon.go` constructs `NewLUKSService(logger, nil, nil)` and registers it on
-REST, gRPC (TCP and Unix), QUIC and MCP. **No production code calls
-`SetLUKSBackend`, `SetLUKSRootChecker`, `NewLUKSBackend` or
-`DefaultRootChecker`.** The consequences on every server transport:
+REST, gRPC (TCP and Unix), QUIC and MCP. The platformd startup path then calls
+`backends.WireSDKBackends` (`pkg/app/backends/sdk_wiring.go`), which, after the
+ceremony backend, injects the production LUKS pieces through the
+`SDKBackendTarget` interface (implemented by `*daemon.Daemon`):
 
-- mutating operations return `ErrLUKSRootRequired` (the nil root checker reports
-  non-root), before the backend is ever consulted;
-- `status`, `list-slots`, `info` and `test-unlock` return `ErrLUKSNotConfigured`.
+- `SetLUKSBackend(NewLUKSBackend(logger, WithDefaultLUKSHandlers()))`: the
+  go-luks2 backend, with its default TPM handler then replaced by
+  `pcrCheckedTPMHandler(luks.TPMHandler())` (none when no TPM opened).
+  - FIDO2: the default handler stays when a FIDO2 library opens at startup.
+    It derives the keyslot key with hmac-secret over a fresh salt and writes
+    a `gtp-fido2-derived` token (credential, salt, RP, UV) naming the slot;
+    the initrd opens only that type and refuses raw hmac-secret tokens
+    (`fido2-manual`, `systemd-fido2`) with `ErrFIDO2RawHMACSecretUnsupported`. At
+    boot, `pkg/boot/commands` opens a FIDO2 handler when `fido2` is an
+    unlock method (`bootFIDO2Handler`), and the initrd FIDO2 strategy lists
+    the slots the header's FIDO2 tokens name besides the configured ones,
+    rebuilds the same derivation from the token and opens that slot
+    (`TestLUKSFIDO2EnrollmentUnlocksAtBoot`). Without a handler
+    `EnrollFIDO2` answers `ErrLUKSFIDO2NotWired`.
+  - TPM (ruling 673): `EnrollTPM` seals a fresh passphrase to the requested
+    PCRs and writes the sealed blob in a `systemd-tpm2` header token naming
+    the slot. At boot the initrd `TPMTokenStrategy` (TPM2-Token, priority
+    0, ahead of the ESP-based TPM-PCR strategy; the `tpm-pcr` unlock method
+    registers it, and there is no `tpm-token` config value) lists the header's
+    `systemd-tpm2` tokens, unseals each blob through its `TokenUnsealer`
+    (the go-xkms sealer by default; `SetUnsealer` swaps it) and opens the
+    slot the token names. A header without such a token leaves `CanUnlock`
+    false and the next strategy runs. Without a TPM handler `EnrollTPM`
+    answers `ErrLUKSTPMNotWired` before touching the device.
+
+  Passphrase, recovery, remove, test-unlock and change-passphrase run
+  against the device. The PCR
+  check (`pcrCheckedTPMHandler`, `ErrLUKSPCRInvalid`, 400 on REST and
+  `InvalidArgument` on gRPC) is in front of the TPM handler when one is wired;
+- `SetLUKSRootChecker(DefaultRootChecker())`: the effective-UID root gate for
+  mutating operations.
+
+The LUKS backend needs no SDK client, but it is wired only when
+`WireSDKBackends` succeeds: if the SDK client is missing it returns
+`ErrCeremonyBackendRequiresSDK` and wires nothing, so every server transport
+keeps answering as before (mutations `ErrLUKSRootRequired`, reads
+`ErrLUKSNotConfigured`).
 
 On the client side, every `platformctl luks` verb reaches the server through
-`platform.Client.LUKS()`, so after its local checks it returns the server's
-refusal above.
+`platform.Client.LUKS()`, so after its local checks it runs against the wired
+backend on whichever transport is active.
 
-The working pieces are the backend (exercised by its loopback tests) and the
-server-side transport adapters (exercised against a stub backend).
+`TestWireSDKBackends_WiresLUKS` (`pkg/app/backends/sdk_wiring_test.go`) checks
+that a fake target receives a non-nil `*LUKSBackend` and a root checker,
+`TestWireSDKBackends_WiresPCRCheckedTPMEnrollment` that the wired TPM handler
+is the PCR-checked one, and `TestWireSDKBackends_NoSDKClientIsFatal` that a
+refused wiring sets neither. `TestLUKSTPMBootRoundTrip_InitrdUnsealsWhatEnrolmentSealed`
+(`pkg/app/backends/luks_tpm_boot_roundtrip_test.go`) seals through the
+PCR-checked handler, writes the token for keyslot 1, and has the initrd
+`TPMTokenStrategy` unseal it and open keyslot 1 with the sealed passphrase,
+with no hardware.
 
 ---
 
@@ -193,6 +247,7 @@ server-side transport adapters (exercised against a stub backend).
 | `pkg/api/daemon/mcp_luks_parity_test.go` | the MCP provider and the gRPC service over one service and an in-memory backend: same answers, and the same code for invalid input, a backend error, non-root and not configured, test-unlock included |
 | `pkg/api/mcp/luks_authz_test.go` | each LUKS tool's scope, `tools/call` running the handler only for a caller holding it, test-unlock included |
 | `pkg/app/backends/luks_test.go`, `luks_fido2_handler_test.go`, `luks_tpm_handler_test.go`, `luks_fips_test.go` | backend, handlers, FIPS policy |
+| `pkg/app/backends/luks_tpm_boot_roundtrip_test.go`, `pkg/initrd/strategy_tpm_token_test.go` | TPM enrolment's `systemd-tpm2` token unsealed and opened by the initrd `TPMTokenStrategy` |
 | `pkg/app/backends/luks_token_test.go` | slot detection, token write and rollback (`ErrMetadataTooLarge`, failed rollback), `AddRecoveryKey` slot; file-backed images, no loop device |
 | `pkg/app/backends/luks_integration_test.go` | enroll and test against a loopback LUKS2 volume |
 | `pkg/installer/mapped_name_test.go`, `pkg/storage/drive/types_test.go` | mapping names `Unlock` would refuse are rejected before the disk is formatted |

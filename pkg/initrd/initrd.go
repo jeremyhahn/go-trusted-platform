@@ -184,6 +184,13 @@ func (m *initrdManager) registerDefaultStrategies() {
 	for _, method := range m.platform.Config.FallbackMethods {
 		switch method {
 		case luks.UnlockTPMPCR:
+			// Ruling 673: the systemd-tpm2 token that SDK TPM enrolment
+			// writes is tried ahead of the ESP-sealed root key. A volume
+			// without the token answers CanUnlock false, so the ESP
+			// strategies still unlock volumes enrolled the old way.
+			// The token strategy is internal to tpm-pcr: there is no
+			// separate tpm-token unlock method.
+			m.RegisterStrategy(NewTPMTokenStrategy(m.platform, m.logger))
 			m.RegisterStrategy(NewTPMPCRStrategy(m.platform, m.logger))
 		case luks.UnlockTPMUpgrade:
 			m.RegisterStrategy(NewTPMUpgradeStrategy(m.platform, m.logger))

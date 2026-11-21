@@ -27,6 +27,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	storageluks "github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 )
 
 // LUKS FIDO2 handler errors.
@@ -54,8 +55,10 @@ var ErrLUKSFIDO2DeriveFailed = errors.New("luks fido2 handler: hmac-secret deriv
 var ErrLUKSFIDO2PINUnsupported = daemon.ErrLUKSFIDO2PINUnsupported
 
 // LUKSFIDO2TokenType is the LUKS2 token type stored for trusted-platform
-// FIDO2 slots. Mirrors the token type already routed by luksKeySlotTypeMap.
-const LUKSFIDO2TokenType = "fido2-manual"
+// FIDO2 slots: the keyslot key is go-xkms UnlockWithKey output, not the raw
+// hmac-secret the installer's fido2-manual tokens hold, so the initrd
+// dispatches on it (ruling 1048).
+const LUKSFIDO2TokenType = storageluks.TokenTypeFIDO2Derived
 
 // fido2LUKSToken is the JSON payload we persist in a LUKS2 token when a slot
 // is enrolled via HMAC-SECRET. The format is intentionally forward-compatible
@@ -88,6 +91,12 @@ type luksFIDO2Handler struct {
 	logger *logging.Logger
 	xkms   fido2.Handler
 	rpID   string
+	// sdkSem (capacity 1) serializes calls into xkms, whose UnlockWithKey
+	// overwrites and restores its config timeout without synchronization.
+	// The goroutine running the SDK call releases it when that call
+	// returns, so a caller whose context is cancelled never lets the next
+	// derivation in while the SDK is still running.
+	sdkSem chan struct{}
 }
 
 // Compile-time assertion against the minimum interface.
@@ -107,7 +116,7 @@ func NewLUKSFIDO2Handler(logger *logging.Logger, h fido2.Handler, rpID string) (
 	if rpID == "" {
 		rpID = fido2.DefaultConfig.RelyingPartyID
 	}
-	return &luksFIDO2Handler{logger: logger, xkms: h, rpID: rpID}, nil
+	return &luksFIDO2Handler{logger: logger, xkms: h, rpID: rpID, sdkSem: make(chan struct{}, 1)}, nil
 }
 
 // EnrollCredential satisfies the minimal LUKSFIDO2Handler interface consumed
@@ -210,8 +219,16 @@ func (h *luksFIDO2Handler) deriveWithContext(ctx context.Context, credentialID, 
 		key []byte
 		err error
 	}
+	// Wait for any earlier SDK call to return, also one whose caller has
+	// already given up, unless this caller gives up first.
+	select {
+	case h.sdkSem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	ch := make(chan derivation, 1)
 	go func() {
+		defer func() { <-h.sdkSem }()
 		key, err := h.xkms.UnlockWithKey(cfg)
 		ch <- derivation{key: key, err: err}
 	}()

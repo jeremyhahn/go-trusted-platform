@@ -25,8 +25,9 @@ keyslots enrolled here are the ones those strategies consume.
 
 ## 2. What it does not do
 
-- It does not unlock, open or mount a volume. `test-unlock` checks a slot; it
-  maps nothing.
+- It does not unlock, open or mount a volume. `test-unlock` carries no
+  credential, so the backend refuses it with `ErrLUKSTestUnlockUnverified`;
+  it maps nothing.
 - It does not format a volume. Formatting happens in the installer
   ([`docs/installer/`](../installer/)).
 - It does not implement LUKS2. All header and keyslot I/O is
@@ -69,12 +70,19 @@ sdk/go/services/luks  (Service)          pkg/api/daemon transport adapters
   and applies the platform FIPS keyslot policy. FIDO2 and TPM enrollment go
   through pluggable handlers built on the go-xkms re-exports.
 
-**As shipped, the chain is not connected at the server end** (see
-[engineering.md](engineering.md) §6): the platformd startup path injects
-neither the go-luks2 backend nor a root checker, so every server transport
-answers *backend not configured* or *root required*. `platformctl luks` builds
-the SDK's `GRPCClient` from `platform.Client.LUKS()` and reaches that refusal
-over whichever transport is active.
+**The chain is connected at the server end by `backends.WireSDKBackends`** (see
+[engineering.md](engineering.md) §6): on the platformd startup path it injects
+the go-luks2 backend (`NewLUKSBackend`) and the effective-UID root checker into
+`LUKSService`, next to the ceremony backend. Its FIDO2 handler is the
+default one; the initrd FIDO2 strategy opens the slots it enrolls from their
+`gtp-fido2-derived` tokens (the initrd dispatches on that type). Its TPM handler is the default one behind the
+PCR-index check; the initrd `TPMTokenStrategy` opens the slots it enrolls from
+their `systemd-tpm2` tokens (after the firstboot seal is confirmed, and with the
+platform PCR extended first). TPM enrollment answers *not wired* only when no
+TPM could be opened. When that wiring is refused (no SDK client), nothing is injected and
+every server transport answers *backend not configured* or *root required*.
+`platformctl luks` builds the SDK's `GRPCClient` from `platform.Client.LUKS()`
+and reaches the service over whichever transport is active.
 
 ---
 

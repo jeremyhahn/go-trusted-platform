@@ -8,13 +8,28 @@
 
 ## 1. Read this before anything else
 
-**Every `platformctl luks` verb fails today.** Each verb runs its local checks
-(root, flags, device detection) and then calls the daemon through
-`platform.Client.LUKS()` on the selected transport. The server side is
-registered on every transport but is not connected to a backend
-([engineering.md](engineering.md) §6), so it refuses each call. This page
-documents the verbs as declared, so the contract is fixed before the backend
-wiring lands.
+Each `platformctl luks` verb runs its local checks (root, flags, device
+detection) and then calls platformd through `platform.Client.LUKS()` on the
+selected transport, where the go-luks2 backend runs it on the host's volume
+([engineering.md](engineering.md) §6). What a verb needs:
+
+- **platformd started with its SDK client.** The LUKS backend and the root
+  checker are wired at startup only when the SDK backends wire; without the
+  SDK client nothing is wired, mutating verbs answer *root required* and
+  reads answer *backend not configured*.
+- **Root, on the host that holds the volume.** The CLI checks root locally,
+  and platformd refuses keyslot mutations unless it runs as root.
+- **A TPM for `enroll-tpm`.** platformd opens `/dev/tpmrm0` at startup; when
+  it could not, `enroll-tpm` is refused (*not wired*) before the device is
+  touched. A TPM slot opens at boot from its `systemd-tpm2` header token.
+- **A FIDO2 library and authenticator for `enroll-fido2`.** When platformd
+  found no FIDO2 library at startup, `enroll-fido2` is refused (*not
+  wired*). A FIDO2 slot opens at boot only when `fido2` is one of the host's
+  unlock methods.
+
+Keyslot mutations on one volume are serialized across requests and
+processes; a request whose deadline passes or whose client goes away while
+it waits for that lock gives up and changes nothing.
 
 ---
 
@@ -222,8 +237,10 @@ platformctl luks remove-key --device /dev/<device> --slot 3
 | `--device` | string | auto-detect | no |
 | `--slot` | int32, `0`–`31` | `-1` (unset) | yes |
 
-Output: `unlocked`. The request carries no credential; the backend reports
-`true` when the slot exists ([engineering.md](engineering.md) §3).
+Output: an error. The request carries no credential, so the backend refuses
+with `ErrLUKSTestUnlockUnverified` ([engineering.md](engineering.md) §3);
+it never reports `unlocked: true`. Confirm a credential before `remove-key`
+by unlocking with it, e.g. `cryptsetup open --test-passphrase --key-slot N`.
 
 ```
 platformctl luks test-unlock --device /dev/<device> --slot 3

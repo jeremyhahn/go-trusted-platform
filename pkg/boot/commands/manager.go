@@ -20,12 +20,14 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	googleLogger "github.com/google/logger"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	platforminitrd "github.com/jeremyhahn/go-trusted-platform/pkg/initrd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -284,11 +286,12 @@ func CreateManager(ctx context.Context, logger *logging.Logger, config *platform
 	backendInstance := xkmssdk.NewFileBackend(xkmsLogger, storageBackend)
 
 	// 4. Create Platform Bundle (minimal dependencies for boot)
-	// No XKMS, no FIDO2 - just TPM + LUKS + backend for unsealing
+	// No XKMS - TPM + LUKS + backend for unsealing, and a FIDO2 handler
+	// when FIDO2 is one of the unlock methods.
 	platformBundle := &platforminitrd.Platform{
 		TPM:     tpmModule,
 		LUKS:    luksHandler,
-		FIDO2:   nil,             // Not needed for boot
+		FIDO2:   bootFIDO2Handler(config, logger),
 		XKMS:    nil,             // Not needed for boot
 		Backend: backendInstance, // Direct backend access for TPM unsealing
 		Config:  config,
@@ -302,6 +305,33 @@ func CreateManager(ctx context.Context, logger *logging.Logger, config *platform
 	}
 
 	return manager, nil
+}
+
+// newBootFIDO2Handler opens the FIDO2 handler boot unlocks with; tests
+// replace it.
+var newBootFIDO2Handler = func() (fido2.Handler, error) {
+	cfg := fido2.DefaultConfig
+	h, err := fido2.NewHandler(&cfg, fido2.NewDefaultEnumerator())
+	if err != nil {
+		return nil, err
+	}
+	return h, nil
+}
+
+// bootFIDO2Handler returns a FIDO2 handler when FIDO2 is one of config's
+// unlock methods, so the initrd FIDO2 strategy can open a FIDO2 slot from
+// its header token. It returns nil when FIDO2 is not configured or no
+// handler opens; boot then goes on with the other methods.
+func bootFIDO2Handler(config *platforminitrd.Config, logger *logging.Logger) fido2.Handler {
+	if config == nil || !slices.Contains(config.FallbackMethods, storageluks.UnlockFIDO2) {
+		return nil
+	}
+	h, err := newBootFIDO2Handler()
+	if err != nil {
+		logger.Warn("FIDO2 unlock configured but no FIDO2 handler opened", "err", err.Error())
+		return nil
+	}
+	return h
 }
 
 // InitializeLogger creates and configures the logger

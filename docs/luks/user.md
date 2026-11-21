@@ -7,11 +7,18 @@
 
 ## Before you start
 
-- **The verbs below do not work yet.** `platformctl luks` validates its input
-  and reaches platformd over the active transport, but platformd has no LUKS
-  backend wired, so every verb ends with a *backend not configured* or *root
-  required* error. The tasks show the intended use. [cli.md](cli.md) §1 has the
-  details.
+- `platformctl luks` validates its input and reaches platformd over the active
+  transport, where the go-luks2 backend runs the verb on the host's volume.
+  TPM enrollment seals the new slot's passphrase to the TPM and the initrd
+  opens that slot at boot from its `systemd-tpm2` token
+  ([engineering.md](engineering.md) §6); it is refused (*not wired*) only when
+  platformd could not open the TPM at startup. FIDO2 enrollment
+  is refused (*not wired*) when platformd found no FIDO2 library at startup.
+  A FIDO2 slot opens at boot only when `fido2` is one of the host's unlock
+  methods.
+  A *backend not configured* error means platformd started without its SDK
+  client, so it wired no LUKS backend ([engineering.md](engineering.md) §6).
+  [cli.md](cli.md) §1 has the details.
 - Run as root, on the host that holds the volume. The CLI checks root and
   auto-detects the device on the host it runs on.
 - Pass `--device /dev/<device>` explicitly unless the volume is on one of the
@@ -102,14 +109,16 @@ platformctl luks change-passphrase --device /dev/<device> --slot 0 \
 ## Retire a slot
 
 ```
-platformctl luks test-unlock --device /dev/<device> --slot 3
-platformctl luks remove-key  --device /dev/<device> --slot 3
+cryptsetup open --test-passphrase --key-slot 0 /dev/<device>
+platformctl luks remove-key --device /dev/<device> --slot 3
 ```
 
-`remove-key` wipes the slot and cannot be undone. Make sure another slot you
-can use still exists first. `test-unlock` confirms only that the slot exists;
-it does not prove a credential opens it. Every transport, MCP included, gives
-that same answer.
+`remove-key` wipes the slot and cannot be undone. First confirm that another
+credential still opens the volume by unlocking with it, as the `cryptsetup
+open --test-passphrase --key-slot N` line above does for the slot you keep.
+`platformctl luks test-unlock` cannot do this: the request carries no
+credential, so the backend refuses it with `ErrLUKSTestUnlockUnverified` and
+every transport, MCP included, returns that error.
 
 ---
 
