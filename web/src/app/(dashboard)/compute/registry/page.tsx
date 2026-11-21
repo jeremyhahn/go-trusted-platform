@@ -309,8 +309,9 @@ export default function RegistryPage() {
                         variant="ghost"
                         size="icon"
                         onClick={() => setPending(tag)}
+                        disabled={status?.ReadOnly === true}
                         aria-label={`Delete ${tag}`}
-                        title="Delete manifest"
+                        title={status?.ReadOnly ? "Registry is read-only" : "Delete manifest"}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
