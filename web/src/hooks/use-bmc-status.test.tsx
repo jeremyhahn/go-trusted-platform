@@ -141,10 +141,14 @@ describe('useBMCStatus', () => {
     expect(res?.data?.status).toBe('installing');
     expect(isProvisionDone('installing')).toBe(false);
 
+    // The SDK client keeps the fetch it was built with, so the re-stubbed
+    // control plane needs a fresh provider (and so a fresh client).
+    cleanup();
     vi.unstubAllGlobals();
     stubControlPlane({ 'GET /api/v1/bmc/42/provision': refused(404, 'baremetal: provision not found: 42') });
+    const missing = renderStatus().result;
     await act(async () => {
-      res = await result.current.getProvisionStatus();
+      res = await missing.current.getProvisionStatus();
     });
     expect(res?.error?.status).toBe(404);
   });
