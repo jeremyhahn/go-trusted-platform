@@ -79,17 +79,17 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `CAService.GetCAInfo` | - | - | - | - | missing |
-| `CAService.InitCA` | - | - | - | - | missing |
-| `CAService.InstallCACertificates` | - | - | - | - | missing |
-| `CAService.UninstallCACertificates` | - | - | - | - | missing |
+| `CAService.GetCAInfo` | `GET /info` | `(dashboard)/ca/page.tsx` | - | - | partial |
+| `CAService.InitCA` | - | `(dashboard)/ca/page.tsx` (gated: run at daemon start, no API route) | - | - | partial |
+| `CAService.InstallCACertificates` | - | `(dashboard)/ca/page.tsx` (gated: run at daemon start, no API route) | - | - | partial |
+| `CAService.UninstallCACertificates` | - | `(dashboard)/ca/page.tsx` (gated: run at daemon start, no API route) | - | - | partial |
 | `CAService.IssueCertificate` | `POST /certificates` | `(dashboard)/ca/certificates/page.tsx` | - | `ca.spec.ts`<br>`dashboard.spec.ts` | covered |
-| `CAService.SignCSR` | `POST /sign-csr` | - | - | - | missing |
+| `CAService.SignCSR` | `POST /sign-csr` | `(dashboard)/ca/sign/page.tsx` | - | - | partial |
 | `CAService.GetCertificate` | `GET /certificates/{serial}` | `(dashboard)/ca/certificates/[id]/page.tsx` | - | `ca.spec.ts` | covered |
 | `CAService.ListCertificates` | `GET /certificates` | `(dashboard)/ca/certificates/page.tsx`<br>`(dashboard)/dashboard/page.tsx` | - | `auth.spec.ts`<br>`ca.spec.ts`<br>`dashboard.spec.ts` (+1) | covered |
 | `CAService.RevokeCertificate` | `DELETE /certificates/{serial}` | `(dashboard)/ca/certificates/[id]/page.tsx`<br>`(dashboard)/ca/certificates/page.tsx` | - | `ca.spec.ts`<br>`dashboard.spec.ts` | covered |
 | `CAService.RenewCertificate` | `POST /certificates/{serial}/renew` | `(dashboard)/ca/certificates/page.tsx` | - | `ca.spec.ts`<br>`dashboard.spec.ts` | covered |
-| `CAService.VerifyCertificate` | `POST /certificates/verify` | - | - | - | missing |
+| `CAService.VerifyCertificate` | `POST /certificates/verify` | `(dashboard)/ca/verify/page.tsx` | - | - | partial |
 | `CAService.GetCRL` | `GET /crl` | `(dashboard)/ca/crl/page.tsx` | - | `ca.spec.ts` | covered |
 | `CAService.GetCABundle` | - | `(dashboard)/ca/bundle/page.tsx` | - | `ca.spec.ts` | covered |
 
@@ -732,7 +732,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | AttestationService | 16 | 6 | 1 | 8 | 1 | 0 |
 | BarrierService | 5 | 0 | 0 | 0 | 5 | 0 |
 | BMCService | 23 | 0 | 0 | 23 | 0 | 0 |
-| CAService | 13 | 7 | 0 | 6 | 0 | 0 |
+| CAService | 13 | 7 | 6 | 0 | 0 | 0 |
 | CacheService | 4 | 0 | 0 | 0 | 0 | 4 |
 | CeremonyService | 7 | 0 | 0 | 7 | 0 | 0 |
 | ClusterService | 5 | 0 | 0 | 5 | 0 | 0 |
@@ -774,7 +774,7 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 1. **AttestationService: Manifest, AttestationQuote, HostAttestation, VMAttestation, ContainerAttestation, CallerPolicy…**: 9 operations (8 missing, 1 partial): VerifyManifest, DeleteManifest, GetAttestationQuote, VerifyAttestationQuote, CollectHostAttestation, CollectVMAttestation, CollectContainerAttestation, DescribeCallerPolicy, PollDeviceVerdicts.
 2. **BMCService (1/2): On, Off, Reset, Cycle, Status, BootDevice…**: 15 operations (15 missing, 0 partial): PowerOn, PowerOff, PowerReset, PowerCycle, PowerStatus, ProvisionStatus, SetBootDevice, GetBootDevice, MountISO, UnmountISO, VirtualMediaStatus, GetSensors, GetSystemInfo, Provision, GetWebCertificate.
 3. **BMCService (2/2): ReplaceWebCertificate, BMC, FactoryCert, User, UserPassword, UserPrivilege**: 8 operations (8 missing, 0 partial): ReplaceWebCertificate, EnrollBMC, RestoreFactoryCert, ListUsers, CreateUser, DeleteUser, SetUserPassword, SetUserPrivilege.
-4. **CAService: CAInfo, CA, CACertificate, CSR, Certificate**: 6 operations (6 missing, 0 partial): GetCAInfo, InitCA, InstallCACertificates, UninstallCACertificates, SignCSR, VerifyCertificate.
+4. **CAService: CAInfo, CA, CACertificate, CSR, Certificate**: 6 operations (0 missing, 6 partial): GetCAInfo, InitCA, InstallCACertificates, UninstallCACertificates, SignCSR, VerifyCertificate.
 5. **CeremonyService: Init, Status, Cert, Share, CSR**: 7 operations (7 missing, 0 partial): Init, Status, ClaimCertBegin, ClaimCertComplete, ClaimShareBegin, ClaimShareComplete, SignCSR.
 6. **ClusterService: Bootstrap, Join, Leave, Status, Node**: 5 operations (5 missing, 0 partial): Bootstrap, Join, Leave, GetStatus, ListNodes.
 7. **ComputeService (1/2): VM, VMMetric, Disk, Snapshot, Migration**: 13 operations (11 missing, 2 partial): SuspendVM, ResumeVM, GetVM, MigrateVM, AttestVM, GetVMMetrics, AttachDisk, DetachDisk, ResizeDisk, CreateSnapshot, GetSnapshot, PrepareMigration, FinalizeMigration.
@@ -826,7 +826,7 @@ Eleven rows were checked against the page source. Two disagreed and the join was
 | `OverlayService.ListVNIs`, `CreateVNI` | covered | `networking/overlays` calls `overlay.listVNIs` and `overlay.createVNI` | agrees |
 | `GatewayService.GetGatewayStatus` | missing | `networking/gateway` calls `gateway.getStatus` | fixed: the area noun is dropped before matching |
 | `CAService.GetCABundle` | covered | `ca/bundle` calls `ca.getBundle` | agrees |
-| `CAService.GetCAInfo` | missing | no page calls `ca.getInfo` | agrees |
+| `CAService.GetCAInfo` | partial | `ca` calls `ca.getInfo` through `useCAInfo` | agrees |
 | `TenantService.ListTenants` | missing | `admin/tenant` is a landing page with a raw fetch and no SDK call | agrees |
 | `PXEService.RegisterDevice` | covered | `networking/pxe` calls `pxe.registerDevice` | agrees |
 | `ConfigDeliveryService.GetSession` | not-UI | `provisioning/sessions/[sessionId]` calls `device.getProvisioningSession` and `fulfillProvisioningSession` | fixed: mapped to `GetSession` and `FulfillSession` |

@@ -79,10 +79,13 @@ const navigation = [
     title: "Security",
     icon: Lock,
     children: [
+      { title: "CA Overview", href: "/ca" },
       { title: "Certificates", href: "/ca/certificates" },
       { title: "Certificate Requests", href: "/ca/requests" },
       { title: "CA Bundle", href: "/ca/bundle" },
       { title: "CRL", href: "/ca/crl" },
+      { title: "Sign CSR", href: "/ca/sign" },
+      { title: "Verify", href: "/ca/verify" },
       { title: "Key Management", href: "/kms" },
       { title: "Key Encryption", href: "/kms/encrypt" },
     ],
