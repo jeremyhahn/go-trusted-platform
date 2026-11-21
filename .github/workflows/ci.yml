@@ -1420,9 +1420,12 @@ jobs:
       # which `docker save` / `docker load` and a registry push / pull keep
       # whatever the image store.
       image_identity: ${{ steps.build.outputs.image_identity }}
-      # Ruling 675: the LAN registry reference a leg on another runner's
-      # daemon pulls the image from; empty when the artifact path ran.
-      image_ref: ${{ steps.push.outputs.image_ref }}
+      # Ruling 675: the tag a leg on another runner's daemon pulls the image
+      # by from the LAN registry; empty when the artifact path ran. Only the
+      # tag: GitHub Actions drops a job output holding a masked value, and
+      # the registry address is masked above, so each leg rebuilds the
+      # reference from vars.CI_IMAGE_REGISTRY after its own mask step.
+      image_tag: ${{ steps.push.outputs.image_tag }}
       # The artifact a leg on another runner's daemon loads the image from
       # when no registry carries it (GitHub-hosted runners, or a self-hosted
       # runner with CI_IMAGE_REGISTRY unset). An output, so a re-run of the
@@ -1620,7 +1623,7 @@ jobs:
           docker tag "$IT_LEASE_ID" "$ref"
           image_unlock
           DOCKER_CONFIG=$registry_config docker push "$ref"
-          echo "image_ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IT_LEASE_ID#sha256:}" >> "$GITHUB_OUTPUT"
 
       # Without a registry (GitHub-hosted runners, or CI_IMAGE_REGISTRY unset)
       # a leg on another runner loads the image from this artifact. Gitea
@@ -1725,6 +1728,21 @@ jobs:
             case $val in *://*:*@*) t=${val#*://}; t=${t%%@*}; echo "::add-mask::${t#*:}" ;; esac
           done
 
+      # v1.53: a registry a later step takes from `vars` is masked first.
+      # CUSTOMIZE: one VARS_<NAME> line per vars.<NAME> ending in _REGISTRY
+      # that this job reads.
+      - name: Mask the LAN registry
+        env:
+          VARS_CI_IMAGE_REGISTRY: ${{ vars.CI_IMAGE_REGISTRY }}
+        run: |
+          for v in "${!VARS_@}"; do
+            case $v in *_REGISTRY) ;; *) continue ;; esac
+            val=${!v:-}
+            [ -n "$val" ] || continue
+            echo "::add-mask::$val"
+            echo "::add-mask::${val%%:*}"
+          done
+
       - name: Reap stale CI stacks
         run: scripts/reap-stale-ci-stacks.sh go-trusted-platform-ci-
 
@@ -1816,12 +1834,14 @@ jobs:
       # the load step's fallback build, with a warning.
       - name: Pull the integration image from the LAN registry
         id: pull
-        if: steps.lease.outputs.leased != 'true' && needs.integration-image.outputs.image_ref != ''
+        if: steps.lease.outputs.leased != 'true' && needs.integration-image.outputs.image_tag != ''
         env:
-          IT_IMAGE_REF: ${{ needs.integration-image.outputs.image_ref }}
+          IT_REGISTRY: ${{ vars.CI_IMAGE_REGISTRY }}
+          IT_IMAGE_TAG: ${{ needs.integration-image.outputs.image_tag }}
           REGISTRY_USER: ${{ secrets.CI_IMAGE_REGISTRY_USER }}
           REGISTRY_PASSWORD: ${{ secrets.CI_IMAGE_REGISTRY_PASSWORD }}
         run: |
+          IT_IMAGE_REF="$IT_REGISTRY/go-trusted-platform/it-image:$IT_IMAGE_TAG"
           source "$RUNNER_TEMP/image-lock.sh"
           registry_config=$(mktemp -d "$RUNNER_TEMP/docker-config.XXXXXX") || exit 1
           trap 'image_unlock; rm -rf "$registry_config"' EXIT
@@ -1872,7 +1892,7 @@ jobs:
       # Without a registry (GitHub-hosted runners, or CI_IMAGE_REGISTRY
       # unset), such a leg loads the image job's `docker save` of the image.
       - name: Download the integration image (Gitea)
-        if: steps.lease.outputs.leased != 'true' && needs.integration-image.outputs.image_ref == '' && github.server_url != 'https://github.com'
+        if: steps.lease.outputs.leased != 'true' && needs.integration-image.outputs.image_tag == '' && github.server_url != 'https://github.com'
         uses: actions/download-artifact@a9bc5e6ef2cb54c177f32aa5726adaa15e7e2d59 # v3.1.0
         with:
           name: ${{ needs.integration-image.outputs.artifact }}
@@ -1882,7 +1902,7 @@ jobs:
         # Ruling 862: hosted runners only. On the pool the image comes from the
         # LAN registry or the lease; a failed pull fails the job rather than
         # fetching the artifact over the owner's WAN.
-        if: steps.lease.outputs.leased != 'true' && needs.integration-image.outputs.image_ref == '' && github.server_url == 'https://github.com' && runner.environment == 'github-hosted'
+        if: steps.lease.outputs.leased != 'true' && needs.integration-image.outputs.image_tag == '' && github.server_url == 'https://github.com' && runner.environment == 'github-hosted'
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: ${{ needs.integration-image.outputs.artifact }}
@@ -1922,14 +1942,14 @@ jobs:
       - name: Load the integration image
         if: steps.lease.outputs.leased != 'true' && steps.pull.outputs.leased != 'true'
         env:
-          IT_IMAGE_REF: ${{ needs.integration-image.outputs.image_ref }}
+          IT_IMAGE_TAG: ${{ needs.integration-image.outputs.image_tag }}
         run: |
           source "$RUNNER_TEMP/image-lock.sh"
           trap image_unlock EXIT
           # shellcheck disable=SC2034 # read by take_lease, sourced above
           lease=$IT_LEASE
           leased=false
-          if [ -z "$IT_IMAGE_REF" ] && docker load -i "$RUNNER_TEMP/it-image/it-image.tar"; then
+          if [ -z "$IT_IMAGE_TAG" ] && docker load -i "$RUNNER_TEMP/it-image/it-image.tar"; then
             image_lock || exit 1
             if loaded_id=$(docker image inspect -f '{{.Id}}' "$IT_IMAGE") &&
               docker create --pull never --name "$IT_LEASE" "$loaded_id" true >/dev/null; then
