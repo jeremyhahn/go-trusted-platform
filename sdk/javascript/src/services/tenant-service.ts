@@ -281,7 +281,9 @@ export class TenantService extends BaseService {
   async rotateDEK(request: RotateTenantDEKRequest): Promise<ApiResponse<RotateTenantDEKResponse>> {
     return this.client.post<RotateTenantDEKResponse>(
       this.buildUrl(`/${this.encodePathSegment(request.tenantId)}/dek/rotate`),
-      { background: request.background }
+      { background: request.background },
+      // No retries: a resend after a lost response rotates the key again.
+      { retry: { enabled: false } }
     );
   }
 

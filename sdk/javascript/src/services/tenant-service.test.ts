@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TenantService } from './tenant-service.js';
-import type { ApiClient } from '../client/api-client.js';
+import { ApiClient } from '../client/api-client.js';
 import type { ComputeQuota, NetworkQuota, StorageQuota } from '../types/tenant.js';
 
 function createMockApiClient(): ApiClient {
@@ -285,9 +285,34 @@ describe('TenantService', () => {
 
       await service.rotateDEK({ tenantId: 't-1', background: true });
 
-      expect(mockClient.post).toHaveBeenCalledWith('/v1/tenants/t-1/dek/rotate', {
-        background: true,
+      expect(mockClient.post).toHaveBeenCalledWith(
+        '/v1/tenants/t-1/dek/rotate',
+        { background: true },
+        { retry: { enabled: false } }
+      );
+    });
+
+    it('never replays a rotation whose response was lost', async () => {
+      // The server rotated the DEK, then the response was lost: a client
+      // resend would rotate the key a second time for one confirmation.
+      const fetchImpl = vi
+        .fn()
+        .mockRejectedValueOnce(new TypeError('network error: response lost after the server acted'))
+        .mockResolvedValue(
+          new Response(JSON.stringify({ success: true, payload: {} }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        );
+      const client = new ApiClient({
+        baseUrl: 'https://platform.test/api',
+        fetch: fetchImpl as unknown as typeof fetch,
+        retry: { maxRetries: 3, initialDelayMs: 1, maxDelayMs: 1 },
       });
+
+      const result = await new TenantService(client).rotateDEK({ tenantId: 't-1' });
+      expect(result.success).toBe(false);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
     });
 
     it('propagates a transport error', async () => {
