@@ -61,24 +61,6 @@ export function useTenantLifecycle(): UseTenantLifecycleResult {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const run = useCallback(async (action: () => Promise<string | null>) => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      setNotice(await action());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Request failed');
-    } finally {
-      setBusy(false);
-    }
-  }, []);
-
-  const requireTenant = useCallback((): Tenant => {
-    if (!tenant) throw new Error('Look up a tenant first');
-    return tenant;
-  }, [tenant]);
-
   // Each lookup takes a generation; a lookup superseded by a later one drops
   // its result, busy, error and notice updates, so an earlier lookup that
   // finishes last never becomes the target of remove, suspend or rotation.
@@ -92,6 +74,31 @@ export function useTenantLifecycle(): UseTenantLifecycleResult {
     const gen = lookupGen.current;
     return () => gen === lookupGen.current;
   }, []);
+
+  // A mutation's notice, error and busy end are dropped once a lookup has
+  // moved the selection: the later lookup owns them.
+  const run = useCallback(
+    async (action: () => Promise<string | null>) => {
+      setBusy(true);
+      setError(null);
+      setNotice(null);
+      const current = selection();
+      try {
+        const message = await action();
+        if (current()) setNotice(message);
+      } catch (err) {
+        if (current()) setError(err instanceof Error ? err.message : 'Request failed');
+      } finally {
+        if (current()) setBusy(false);
+      }
+    },
+    [selection]
+  );
+
+  const requireTenant = useCallback((): Tenant => {
+    if (!tenant) throw new Error('Look up a tenant first');
+    return tenant;
+  }, [tenant]);
 
   const refresh = useCallback(
     async (id: string, current: () => boolean) => {
