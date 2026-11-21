@@ -139,4 +139,26 @@ describe("VPNPage test ids", () => {
     expect(await screen.findByTestId("vpn-unavailable")).toBeTruthy();
     expect(screen.queryByTestId("vpn-peers-card")).toBeNull();
   });
+
+  it("a refused GetStatus marks the status error, not the gateways table", async () => {
+    fetchMock.mockImplementation(
+      routes((method, url) =>
+        method === "GET" && url.pathname === "/api/v1/vpn/status" ? failure(500, "status down") : undefined
+      )
+    );
+
+    renderPage();
+
+    expect((await screen.findByTestId("vpn-status-error")).textContent).toContain("status down");
+    expect(screen.queryByTestId("vpn-gateways-table")).toBeNull();
+  });
+
+  it("a successful GetStatus renders the gateways table", async () => {
+    fetchMock.mockImplementation(routes());
+
+    renderPage();
+
+    expect(within(await screen.findByTestId("vpn-gateways-table")).getByText("gateway-a")).toBeTruthy();
+    expect(screen.queryByTestId("vpn-status-error")).toBeNull();
+  });
 });
