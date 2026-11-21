@@ -1545,8 +1545,14 @@ func TestRestart_ARestartedChildWhoseServiceFailsToStartIsRestartedAgain(t *test
 	launcher.mu.Unlock()
 	vpn.setHealth(gateway.ServiceManagementVPN, true, nil)
 
+	// Wait for the second relaunch as well as the healthy service: the
+	// health flips as soon as the fake node reports it, which can be before
+	// the restart loop has launched the vpn child again.
 	require.Eventually(t, func() bool {
-		return supervisor.ServiceHealth(gateway.ServiceManagementVPN) == nil
+		launcher.mu.Lock()
+		relaunched := len(launcher.children) >= before+2
+		launcher.mu.Unlock()
+		return relaunched && supervisor.ServiceHealth(gateway.ServiceManagementVPN) == nil
 	}, 5*time.Second, 10*time.Millisecond, "the vpn child is restarted again and comes up")
 	launcher.mu.Lock()
 	launches := len(launcher.children)
