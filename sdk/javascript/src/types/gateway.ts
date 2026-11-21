@@ -402,6 +402,23 @@ export interface GetLBStatusResponse {
   status: LBStatus | null;
 }
 
+/** GetPerfFlows run parameters; zero values take the server defaults (1000 flows, unbatched, default bridge). */
+export interface GetPerfFlowsRequest {
+  count?: number;
+  batch?: boolean;
+  bridge?: string;
+}
+
+/** One measured flow-programming run (POST /api/v1/gateway/perf/flows). */
+export interface GetPerfFlowsResponse {
+  installed: number;
+  /** int64 nanoseconds, a string in protojson. */
+  durationNs: string;
+  flowsPerSecond: number;
+  batched: boolean;
+  bridge: string;
+}
+
 // =============================================================================
 // Telemetry snapshots (#594)
 // =============================================================================

@@ -802,6 +802,8 @@ export type {
   GetVIPResponse,
   ListVIPsResponse,
   GetLBStatusResponse,
+  GetPerfFlowsRequest,
+  GetPerfFlowsResponse,
 } from './types/gateway.js';
 
 // SDN types

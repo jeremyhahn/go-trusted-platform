@@ -23,6 +23,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { useGateway, useApi, useToast, useReportedGateways } from '@/hooks';
 import { GatewaySnapshotDetail } from '@/components/features/networking/gateway-snapshot-detail';
+import { GatewayPerfFlowsCard } from '@/components/features/networking/gateway-perf-flows-card';
 
 export default function APIGatewayPage() {
   const { toast } = useToast();
@@ -455,6 +456,8 @@ export default function APIGatewayPage() {
           )}
         </>
       )}
+
+      <GatewayPerfFlowsCard />
     </div>
   );
 }
