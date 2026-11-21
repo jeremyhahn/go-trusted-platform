@@ -410,8 +410,19 @@ func (c *restClientConn) Invoke(ctx context.Context, method string, args interfa
 		}
 		return translateInvokeError(method, httpMethod, reqErr)
 	}
-	return c.finishInvoke(hasDecoder, decode, raw, reply)
+	if err := c.finishInvoke(hasDecoder, decode, raw, reply); err != nil {
+		return err
+	}
+	if complete, ok := restReplyCompleters[method]; ok && reply != nil {
+		complete(args, reply)
+	}
+	return nil
 }
+
+// restReplyCompleters fill reply fields a route does not echo from the
+// request (the HMAC hash, the verified key), keyed by gRPC full method name.
+// A completer runs after the response decoder, which never sees the request.
+var restReplyCompleters = map[string]func(args, reply interface{}){}
 
 // route resolves the HTTP method, path and body of a gRPC method call.
 // Templated routes substitute path params and strip them from the body,
