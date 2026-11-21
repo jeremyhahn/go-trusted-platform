@@ -29,6 +29,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vpn"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
@@ -82,6 +83,11 @@ func (s *vpnTestSnapshots) Delete(id string) error {
 	return nil
 }
 
+// vpnOperatorContext is the local Unix-peer operator, which the server's PEP decides.
+func vpnOperatorContext() context.Context {
+	return peercred.ContextWithProcessCredentials(context.Background())
+}
+
 // newVPNTestServer builds the gRPC service over a real VPN control plane on
 // in-memory storage, with a telemetry store holding one VPN gateway and one
 // gateway that runs no VPN service.
@@ -122,12 +128,14 @@ func newVPNTestServer(t *testing.T) (*VPNGRPCService, *quicbaas.MockStorage) {
 		},
 		"gw-2": {GatewayID: "gw-2", ReportedAt: reported},
 	}})
-	return NewVPNGRPCService(logging.DefaultLogger(), controlPlane), storage
+	server := NewVPNGRPCService(logging.DefaultLogger(), controlPlane)
+	server.SetPEP(allowAllPEP(nil))
+	return server, storage
 }
 
 func TestVPNGRPCService_PeerLifecycle(t *testing.T) {
 	server, _ := newVPNTestServer(t)
-	ctx := context.Background()
+	ctx := vpnOperatorContext()
 
 	enrolled, err := server.EnrolPeer(ctx, &platformv1.EnrolVPNPeerRequest{
 		Peer: &platformv1.VPNPeer{TenantId: "acme", DeviceId: "laptop-1", Zones: []string{"management"}},
@@ -158,7 +166,7 @@ func TestVPNGRPCService_PeerLifecycle(t *testing.T) {
 // (which would list every tenant), is PermissionDenied and reaches no store.
 func TestVPNGRPCService_RefusesCrossTenantCaller(t *testing.T) {
 	server, _ := newVPNTestServer(t)
-	_, err := server.EnrolPeer(context.Background(), &platformv1.EnrolVPNPeerRequest{
+	_, err := server.EnrolPeer(vpnOperatorContext(), &platformv1.EnrolVPNPeerRequest{
 		Peer: &platformv1.VPNPeer{TenantId: "globex", DeviceId: "phone-1"},
 	})
 	require.NoError(t, err)
@@ -208,7 +216,7 @@ func TestVPNGRPCService_RefusesCrossTenantCaller(t *testing.T) {
 	}
 
 	// The globex peer survived the refused revocation.
-	listed, err := server.ListPeers(context.Background(), &platformv1.ListVPNPeersRequest{TenantId: "globex"})
+	listed, err := server.ListPeers(vpnOperatorContext(), &platformv1.ListVPNPeersRequest{TenantId: "globex"})
 	require.NoError(t, err)
 	assert.Len(t, listed.GetPeers(), 1)
 
@@ -223,7 +231,7 @@ func TestVPNGRPCService_RefusesCrossTenantCaller(t *testing.T) {
 // the backend, so the refusal must come before the backend is reached.
 func TestVPNGRPC_TenantlessCallerCannotListAllTenants(t *testing.T) {
 	server, storage := newVPNTestServer(t)
-	_, err := server.EnrolPeer(context.Background(), &platformv1.EnrolVPNPeerRequest{
+	_, err := server.EnrolPeer(vpnOperatorContext(), &platformv1.EnrolVPNPeerRequest{
 		Peer: &platformv1.VPNPeer{TenantId: "globex", DeviceId: "phone-1"},
 	})
 	require.NoError(t, err)
@@ -254,7 +262,7 @@ func TestVPNGRPCService_StoreFailureIsUnavailable(t *testing.T) {
 	server, storage := newVPNTestServer(t)
 	storage.ListError = errors.New("raft leader lost")
 
-	_, err := server.ListPeers(context.Background(), &platformv1.ListVPNPeersRequest{})
+	_, err := server.ListPeers(vpnOperatorContext(), &platformv1.ListVPNPeersRequest{TenantId: "acme"})
 	assert.Equal(t, codes.Unavailable, status.Code(err))
 }
 

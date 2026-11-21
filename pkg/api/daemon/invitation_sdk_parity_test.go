@@ -26,6 +26,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
@@ -77,7 +78,7 @@ func invokeInvitationServer(server platformv1.InvitationServiceServer, method st
 			proto.Merge(in.(proto.Message), req)
 			return nil
 		}
-		resp, err := desc.Handler(server, context.Background(), decode, nil)
+		resp, err := desc.Handler(server, context.WithValue(context.Background(), ContextKeyIdentity, &auth.Identity{ID: "op", TenantID: "tenant-1"}), decode, nil)
 		if err != nil {
 			return nil, err
 		}
