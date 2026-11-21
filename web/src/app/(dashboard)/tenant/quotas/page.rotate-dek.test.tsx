@@ -135,4 +135,45 @@ describe('TenantQuotasPage RotateTenantDEK', () => {
     expect(screen.queryByText('Current key version: 4')).toBeNull();
     expect(posts(sent)).toBe(1);
   });
+
+  it('sends one rotation when the committed POST loses its response', async () => {
+    const sent: Array<{ method: string; path: string }> = [];
+    const routes: Record<string, Answer> = {
+      [QUOTAS_PATH]: storedQuotas(12),
+      [USAGE_PATH]: storedUsage(),
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        const method = (init?.method ?? 'GET').toUpperCase();
+        sent.push({ method, path: url.pathname });
+        const key = `${method} ${url.pathname}`;
+        if (key === ROTATE_PATH) {
+          // The server committed the rotation; only its response is lost.
+          throw new TypeError('Failed to fetch');
+        }
+        const answer = routes[key] ?? refused(404, `no route for ${key}`);
+        return new Response(JSON.stringify(answer.body), {
+          status: answer.status,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      })
+    );
+    render(withControlPlane(<TenantQuotasPage />));
+
+    await screen.findByText('Data Encryption Key');
+    await click('Rotate data key');
+    await click('Rotate now');
+
+    await waitFor(() => expect(posts(sent)).toBe(1));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 1500));
+    });
+    expect(posts(sent)).toBe(1);
+
+    const toast = await screen.findByText(/^Data key rotation failed:/);
+    expect(toast.closest('[data-testid="toast"]')?.getAttribute('data-variant')).toBe('destructive');
+    expect(screen.queryByText('Current key version: 4')).toBeNull();
+  }, 10_000);
 });
