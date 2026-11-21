@@ -62,6 +62,7 @@ func NewGatewayRouter(
 //	GET    /api/v1/gateway/lb/vips                  - ListVIPs
 //	GET    /api/v1/gateway/lb/vips/{protocol}/{address}/{port} - GetVIP
 //	GET    /api/v1/gateway/lb/status                - GetLBStatus
+//	POST   /api/v1/gateway/perf/flows               - GetPerfFlows (installs temporary flows; admin)
 func (r *GatewayRouter) RegisterRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix(basePath).Subrouter()
 	sr.HandleFunc("/status", r.getStatus).Methods("GET")
@@ -80,6 +81,9 @@ func (r *GatewayRouter) RegisterRoutes(parent *mux.Router) {
 	sr.HandleFunc("/lb/vips", r.listVIPs).Methods("GET")
 	sr.HandleFunc("/lb/vips/{protocol}/{address}/{port}", r.getVIP).Methods("GET")
 	sr.HandleFunc("/lb/status", r.getLBStatus).Methods("GET")
+	// GetPerfFlows installs and removes temporary flows in OpenFlow table
+	// 250, so it is a POST (a write), never a GET.
+	sr.HandleFunc("/perf/flows", r.getPerfFlows).Methods("POST")
 }
 
 func (r *GatewayRouter) ensure(w http.ResponseWriter, req *http.Request) bool {
@@ -170,6 +174,25 @@ func (r *GatewayRouter) getLBStatus(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	resp, err := r.server.GetLBStatus(req.Context(), &platformv1.GetLBStatusRequest{})
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+// getPerfFlows runs one flow-programming benchmark. The service validates
+// the count (InvalidArgument maps to 400) and removes the flows it installs.
+func (r *GatewayRouter) getPerfFlows(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	pbReq := &platformv1.GetPerfFlowsRequest{}
+	if err := protorest.DecodeRequest(req, pbReq); err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	resp, err := r.server.GetPerfFlows(req.Context(), pbReq)
 	if err != nil {
 		protorest.WriteError(w, req, r.respWriter, err)
 		return

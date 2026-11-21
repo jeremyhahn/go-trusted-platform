@@ -33,6 +33,8 @@ import type {
   GetVIPResponse,
   ListVIPsResponse,
   GetLBStatusResponse,
+  GetPerfFlowsRequest,
+  GetPerfFlowsResponse,
 } from '../types/gateway.js';
 
 /**
@@ -307,5 +309,14 @@ export class GatewayService extends BaseService {
    */
   async getLBStatus(): Promise<ApiResponse<GetLBStatusResponse>> {
     return this.client.get<GetLBStatusResponse>(this.buildUrl('/lb/status'));
+  }
+
+  /**
+   * Run one flow-programming benchmark: the server installs temporary drop
+   * flows in OpenFlow table 250 and deletes them when the run ends.
+   * Admin only. Route: POST /api/v1/gateway/perf/flows
+   */
+  async getPerfFlows(request: GetPerfFlowsRequest = {}): Promise<ApiResponse<GetPerfFlowsResponse>> {
+    return this.client.post<GetPerfFlowsResponse>(this.buildUrl('/perf/flows'), request);
   }
 }

@@ -425,6 +425,7 @@ POST /api/v1/eab/credentials/{id:[0-9]+}/used
 POST /api/v1/gateway/bgp/prefixes
 POST /api/v1/gateway/ipam/allocations
 POST /api/v1/gateway/mode
+POST /api/v1/gateway/perf/flows
 POST /api/v1/gateway/telemetry
 POST /api/v1/iam/apps
 POST /api/v1/iam/apps/{id}/rotate
