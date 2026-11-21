@@ -223,7 +223,10 @@ func decodeKMSGetKey(raw []byte) (*platformv1.GetKeyResponse, error) {
 
 // kmsListKeysReply is the webservice KMS router's ListKeys reply.
 type kmsListKeysReply struct {
-	Keys []kmsKeyInfoReply `json:"keys"`
+	Keys       []kmsKeyInfoReply `json:"keys"`
+	NextCursor string            `json:"next_cursor"`
+	HasMore    bool              `json:"has_more"`
+	TotalCount int32             `json:"total_count"`
 }
 
 // decodeKMSListKeys reads the webservice {"keys":[...]} reply, whose
@@ -234,7 +237,12 @@ func decodeKMSListKeys(raw []byte) (*platformv1.ListKeysResponse, error) {
 	if err := json.Unmarshal(raw, &reply); err != nil {
 		return nil, ErrUnmarshalFailed{Err: err}
 	}
-	resp := &platformv1.ListKeysResponse{Keys: make([]*platformv1.KMSKeyHandle, 0, len(reply.Keys))}
+	resp := &platformv1.ListKeysResponse{
+		Keys:       make([]*platformv1.KMSKeyHandle, 0, len(reply.Keys)),
+		NextCursor: reply.NextCursor,
+		HasMore:    reply.HasMore,
+		TotalCount: reply.TotalCount,
+	}
 	for _, k := range reply.Keys {
 		handle := &platformv1.KMSKeyHandle{
 			KeyId:     k.KeyID,

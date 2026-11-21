@@ -14,12 +14,14 @@
 package kms
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -239,7 +241,10 @@ func (h *Handlers) ensureKMS(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// GenerateKey handles POST /api/v1/kms/keys.
+// GenerateKey handles POST /api/v1/kms/keys. It keeps the semantics of the
+// facade handler it shadows on the daemon listener: a supplied description
+// or tags are recorded through UpdateKeyMetadata after generation, and a
+// failed update fails the request.
 func (h *Handlers) GenerateKey(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureKMS(w, r) {
 		return
@@ -272,6 +277,16 @@ func (h *Handlers) GenerateKey(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.fail(w, r, err)
 		return
+	}
+	if req.Description != "" || len(req.Tags) > 0 {
+		if _, err := h.kms.UpdateKeyMetadata(ctx, &kmsclient.UpdateKeyMetadataRequest{
+			KeyID:       resp.KeyID,
+			Description: req.Description,
+			Tags:        req.Tags,
+		}); err != nil {
+			h.fail(w, r, err)
+			return
+		}
 	}
 	h.success201(w, r, &GenerateKeyResponse{
 		KeyID:              resp.KeyID,
@@ -324,9 +339,19 @@ func (h *Handlers) ImportKey(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ListKeys handles GET /api/v1/kms/keys.
+// ListKeys handles GET /api/v1/kms/keys. It keeps the semantics of the
+// facade handler it shadows on the daemon listener: the name (exact) and
+// algorithm (case-insensitive) filters, limit and cursor (a decimal offset)
+// select from the keys sorted by key ID then version, and the reply carries
+// next_cursor, has_more and total_count. Any other query key, a bad limit or
+// a bad cursor answers 400.
 func (h *Handlers) ListKeys(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureKMS(w, r) {
+		return
+	}
+	q, err := parseListKeysQuery(r.URL.Query())
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
 		return
 	}
 	ctx, cancel := h.ctx(r)
@@ -336,8 +361,35 @@ func (h *Handlers) ListKeys(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	out := &ListKeysResponse{Keys: make([]KeyInfoResponse, 0, len(resp.Keys))}
+	keys := make([]kmsclient.KeyInfo, 0, len(resp.Keys))
 	for _, k := range resp.Keys {
+		if q.name != "" && k.Name != q.name {
+			continue
+		}
+		if q.algorithm != "" && !strings.EqualFold(k.Algorithm.String(), q.algorithm) {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	slices.SortFunc(keys, func(a, b kmsclient.KeyInfo) int {
+		if c := cmp.Compare(a.KeyID, b.KeyID); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Version, b.Version)
+	})
+	start := q.offset
+	if start > len(keys) {
+		start = len(keys)
+	}
+	end := len(keys)
+	out := &ListKeysResponse{TotalCount: len(keys)}
+	if q.limit > 0 && start+q.limit < len(keys) {
+		end = start + q.limit
+		out.HasMore = true
+		out.NextCursor = strconv.Itoa(end)
+	}
+	out.Keys = make([]KeyInfoResponse, 0, end-start)
+	for _, k := range keys[start:end] {
 		out.Keys = append(out.Keys, KeyInfoResponse{
 			KeyID:     k.KeyID,
 			Name:      k.Name,
@@ -349,6 +401,45 @@ func (h *Handlers) ListKeys(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	h.success200(w, r, out)
+}
+
+// listKeysQuery is the parsed query of GET /api/v1/kms/keys.
+type listKeysQuery struct {
+	name      string
+	algorithm string
+	limit     int
+	offset    int
+}
+
+// parseListKeysQuery reads the name and algorithm filters, limit and cursor
+// of GET /api/v1/kms/keys and refuses any other key, a limit that is not a
+// non-negative integer and a cursor that is not a non-negative offset.
+func parseListKeysQuery(values url.Values) (listKeysQuery, error) {
+	var q listKeysQuery
+	for key := range values {
+		switch key {
+		case "name", "algorithm", "limit", "cursor":
+		default:
+			return q, &ErrInvalidRequest{Field: key, Reason: "unknown query parameter"}
+		}
+	}
+	q.name = values.Get("name")
+	q.algorithm = values.Get("algorithm")
+	if raw := values.Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			return q, &ErrInvalidRequest{Field: "limit", Reason: "must be a non-negative integer"}
+		}
+		q.limit = n
+	}
+	if raw := values.Get("cursor"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			return q, &ErrInvalidRequest{Field: "cursor", Reason: "must be a non-negative offset"}
+		}
+		q.offset = n
+	}
+	return q, nil
 }
 
 // GetKey handles GET /api/v1/kms/keys/{name}.
