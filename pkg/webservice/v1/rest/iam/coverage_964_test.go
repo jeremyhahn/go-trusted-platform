@@ -461,6 +461,7 @@ func cov964NewClient() *cov964Client {
 		apps: &cov964Apps{apps: map[string]*iamsdk.Application{
 			"client-1": {
 				ClientID:     "client-1",
+				TenantID:     "tenant-a",
 				Name:         "portal",
 				RedirectURIs: []string{"https://portal.example.com/cb"},
 				GrantTypes:   []iamsdk.GrantType{iamsdk.ParseGrantType("client_credentials")},
@@ -1083,7 +1084,7 @@ func TestCov964Adapter_RotateAppSecret(t *testing.T) {
 
 	resp, err := adapter.RotateAppSecret(ctx, "tenant-a", "client-1")
 	require.NoError(t, err)
-	assert.Equal(t, &RotateSecretResponse{ClientID: "client-1", ClientSecret: "rotated-secret"}, resp)
+	assert.Equal(t, &RotateSecretResponse{ClientID: "client-1", Name: "portal", ClientSecret: "rotated-secret"}, resp)
 
 	_, err = adapter.RotateAppSecret(ctx, "tenant-a", "missing")
 	cov964RequireNotFound(t, err, "app", "missing")
