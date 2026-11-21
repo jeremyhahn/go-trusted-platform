@@ -206,6 +206,29 @@ export default function TPMStatusPage() {
     }
   }, [idevid, toast, rereadIAK]);
 
+  // FlushTransientContexts: flushes every transient TPM context. The SDK does
+  // not throw; a refusal comes back as res.error.
+  const [flushBusy, setFlushBusy] = React.useState(false);
+  const [confirmFlush, setConfirmFlush] = React.useState(false);
+
+  const flushContexts = React.useCallback(async () => {
+    setConfirmFlush(false);
+    setFlushBusy(true);
+    try {
+      const res = await idevid.flushTransientContexts();
+      if (res.error) {
+        toast({ title: "Flush refused", description: res.error.message, variant: "destructive" });
+      } else {
+        toast({
+          title: "Transient contexts flushed",
+          description: res.data?.status?.message || "The transient contexts were flushed",
+        });
+      }
+    } finally {
+      setFlushBusy(false);
+    }
+  }, [idevid, toast]);
+
   // Helper to find capability by name
   const findCapability = (caps: TPMCapability[] | undefined, name: string) => {
     return caps?.find(c => c.name === name);
@@ -510,6 +533,11 @@ export default function TPMStatusPage() {
                         Delete IAK
                       </Button>
                     </div>
+                    <div className="flex flex-wrap gap-2 mt-2" data-testid="tpm-maintenance">
+                      <Button size="sm" variant="outline" onClick={() => setConfirmFlush(true)} disabled={flushBusy}>
+                        Flush transient contexts
+                      </Button>
+                    </div>
                   </div>
 
                   <div>
@@ -589,6 +617,24 @@ export default function TPMStatusPage() {
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setConfirmDeleteIAK(false)}>Cancel</Button>
                 <Button type="button" variant="destructive" onClick={() => void deleteIAK()}>Delete IAK</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+          <Dialog open={confirmFlush} onOpenChange={setConfirmFlush}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Flush the transient contexts?</DialogTitle>
+                <DialogDescription>
+                  Every transient object and session loaded in the TPM is flushed. Persistent keys are not touched.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setConfirmFlush(false)}>
+                  Cancel
+                </Button>
+                <Button type="button" onClick={() => void flushContexts()}>
+                  Flush
+                </Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
