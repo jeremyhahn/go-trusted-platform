@@ -44,32 +44,42 @@ export function useGatewayIPAM(poolId?: string): UseGatewayIPAMResult {
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
 
-  const read = React.useCallback(
-    async (live: () => boolean) => {
-      try {
-        const res = await gateway.listAllocations(poolId ? { poolId } : undefined);
-        if (!live()) return;
-        if (res.error) {
-          setError(apiFailure(res.error).message);
-          setAllocations([]);
-        } else {
-          setError(null);
-          setAllocations(res.data?.allocations ?? []);
-        }
-      } finally {
-        if (live()) setIsLoading(false);
-      }
-    },
-    [gateway, poolId]
-  );
+  // #2184 Codex: every read (effect, refetch, mutation refetch) takes a
+  // sequence number and publishes only while it is still the newest one. A
+  // pool or client change bumps the sequence in the effect cleanup, so reads
+  // started for the old pool are dropped, and an older read resolving after a
+  // newer one never replaces it.
+  const seq = React.useRef(0);
 
-  const refetch = React.useCallback(() => read(() => true), [read]);
+  const read = React.useCallback(async () => {
+    const id = ++seq.current;
+    try {
+      const res = await gateway.listAllocations(poolId ? { poolId } : undefined);
+      if (id !== seq.current) return;
+      if (res.error) {
+        setError(apiFailure(res.error).message);
+        setAllocations([]);
+      } else {
+        setError(null);
+        setAllocations(res.data?.allocations ?? []);
+      }
+    } finally {
+      if (id === seq.current) setIsLoading(false);
+    }
+  }, [gateway, poolId]);
+
+  // A mutation awaits refetch after its request; latestRead makes that
+  // refetch list the pool current when it runs, not the one it captured.
+  const latestRead = React.useRef(read);
+  React.useLayoutEffect(() => {
+    latestRead.current = read;
+  }, [read]);
+  const refetch = React.useCallback(() => latestRead.current(), []);
 
   React.useEffect(() => {
-    let live = true;
-    void read(() => live);
+    void read();
     return () => {
-      live = false;
+      seq.current++;
     };
   }, [read]);
 
