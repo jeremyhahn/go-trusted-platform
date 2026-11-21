@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 
@@ -121,5 +121,107 @@ describe('SDNPortsPage port statistics', () => {
       await within(dialog).findByText('The switch returned no statistics for eth0: port not found')
     ).toBeDefined();
     expect(within(dialog).queryByText('Packets received')).toBeNull();
+  });
+
+  // stubDeferredStats answers the bridge and port lists at once and holds
+  // every stats read until the test releases it, so reads resolve in the
+  // order the test chooses.
+  function stubDeferredStats(): (path: string, answer: Answer) => Promise<void> {
+    const pending = new Map<string, (a: Answer) => void>();
+    const respond = (answer: Answer) =>
+      new Response(JSON.stringify(answer.body), {
+        status: answer.status,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        const method = (init?.method ?? 'GET').toUpperCase();
+        if (method === 'GET' && url.pathname === '/api/v1/sdn/bridges') {
+          return respond(ok({ bridges: [{ id: 'br-int' }] }));
+        }
+        if (method === 'GET' && url.pathname === '/api/v1/sdn/bridges/br-int/ports') {
+          return respond(
+            ok({
+              ports: [
+                { id: 'p1', config: { name: 'eth0' }, status: 'PORT_STATUS_UP' },
+                { id: 'p2', config: { name: 'eth1' }, status: 'PORT_STATUS_UP' },
+              ],
+            })
+          );
+        }
+        if (url.pathname.endsWith('/stats')) {
+          return new Promise<Response>((resolve) => {
+            pending.set(url.pathname, (a) => resolve(respond(a)));
+          });
+        }
+        return respond(refused(404, `no route for ${method} ${url.pathname}`));
+      })
+    );
+    return async (path, answer) => {
+      await act(async () => {
+        pending.get(path)!(answer);
+      });
+    };
+  }
+
+  async function clickStats(id: string): Promise<void> {
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId(`row-${id}`)).getByText('Port Statistics'));
+    });
+  }
+
+  function statsOf(n: number): Answer {
+    return ok({
+      stats: {
+        packetsReceived: String(n),
+        packetsSent: '0',
+        bytesReceived: '0',
+        bytesSent: '0',
+        errors: '0',
+        dropped: '0',
+      },
+    });
+  }
+
+  it("a closed dialog's late counters do not replace the next port's", async () => {
+    const release = stubDeferredStats();
+    render(withControlPlane(<PortsPage />));
+    await screen.findByText('eth1');
+
+    await clickStats('p1');
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }));
+    });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    await clickStats('p2');
+    await release('/api/v1/sdn/bridges/br-int/ports/p2/stats', statsOf(2));
+    const dialog = screen.getByRole('dialog');
+    await within(dialog).findByText('Packets received');
+    expect(statValue(dialog, 'Packets received')).toBe('2');
+
+    await release('/api/v1/sdn/bridges/br-int/ports/p1/stats', statsOf(1200));
+    const after = screen.getByRole('dialog');
+    expect(within(after).getByRole('heading', { name: 'Port statistics: eth1' })).toBeDefined();
+    expect(statValue(after, 'Packets received')).toBe('2');
+  });
+
+  it("a superseded read's late refusal does not replace the current counters", async () => {
+    const release = stubDeferredStats();
+    render(withControlPlane(<PortsPage />));
+    await screen.findByText('eth1');
+
+    await clickStats('p1');
+    await clickStats('p2');
+    await release('/api/v1/sdn/bridges/br-int/ports/p2/stats', statsOf(2));
+    await within(screen.getByRole('dialog')).findByText('Packets received');
+
+    await release('/api/v1/sdn/bridges/br-int/ports/p1/stats', refused(404, 'port not found'));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).queryByText(/The switch returned no statistics/)).toBeNull();
+    expect(within(dialog).getByRole('heading', { name: 'Port statistics: eth1' })).toBeDefined();
+    expect(statValue(dialog, 'Packets received')).toBe('2');
   });
 });
