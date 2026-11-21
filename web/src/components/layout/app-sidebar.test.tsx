@@ -112,6 +112,18 @@ describe("AppSidebar", () => {
     expect(vms?.getAttribute("href")).toBe("/compute/vms");
   });
 
+  // #2024 Codex round 1 / #2145 Codex round 1: the new links whose pages are on this branch.
+  it.each([
+    ["/iam/permissions", "Permissions"],
+    ["/admin/tenants", "All Tenants"],
+  ])("links %s as %s in its group", (href, label) => {
+    nav.pathname = href;
+    renderSidebar();
+    const link = document.querySelector(`a[href="${href}"]`);
+    expect(link?.textContent).toBe(label);
+    expect(link?.getAttribute("data-active")).toBe("true");
+  });
+
   it("opens no group for an unknown or missing path", () => {
     nav.pathname = "/no/such/page";
     const { unmount } = renderSidebar();
