@@ -27,7 +27,10 @@ describe("AttestationCollectPage", () => {
   });
 
   it("collects the host attestation with the typed PCR indices and nonce", async () => {
-    collect.collectHost.mockResolvedValue({ success: true, data: { status: "collected" } });
+    collect.collectHost.mockResolvedValue({
+      success: true,
+      data: { status: { success: true, message: "collected" } },
+    });
     render(<AttestationCollectPage />);
 
     type("collect-host-pcrs", "7, 11");
