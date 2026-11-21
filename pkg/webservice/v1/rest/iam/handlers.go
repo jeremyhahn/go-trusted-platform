@@ -303,6 +303,12 @@ func (h *IAMHandlers) consistentTenant(next http.HandlerFunc) http.HandlerFunc {
 
 func (h *IAMHandlers) handleError(w http.ResponseWriter, r *http.Request, err error) {
 	errStr := err.Error()
+	if st, ok := status.FromError(err); ok && st.Code() == codes.Unimplemented {
+		// An operation the IAM service does not implement (e.g. policy
+		// simulation over the embedded transport) is 501, never 500.
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
 	switch {
 	case strings.Contains(errStr, "not found"):
 		h.respWriter.Error404(w, r, err)
