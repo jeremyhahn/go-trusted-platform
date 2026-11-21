@@ -417,9 +417,18 @@ export class IAMService extends BaseService {
    * Create a policy
    */
   async createPolicy(request: CreateIAMPolicyRequest): Promise<ApiResponse<IAMPolicyResponse>> {
+    // POST /v1/iam/tenants/{tenantId}/policies: the body is the snake_case
+    // CreatePolicyRequest the server decodes (spec_yaml is required).
     return this.client.post<IAMPolicyResponse>(
       this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/policies`),
-      request
+      {
+        tenant_id: request.tenantId,
+        name: request.name,
+        description: request.description,
+        priority: request.priority,
+        spec_yaml: request.specYaml,
+        labels: request.labels,
+      }
     );
   }
 
@@ -448,9 +457,18 @@ export class IAMService extends BaseService {
    * Update a policy
    */
   async updatePolicy(request: UpdateIAMPolicyRequest): Promise<ApiResponse<IAMPolicyResponse>> {
+    // PUT /v1/iam/tenants/{tenantId}/policies/{policyName}: the body is the
+    // snake_case UpdatePolicyRequest the server decodes; the policy name
+    // travels in the path only.
     return this.client.put<IAMPolicyResponse>(
       this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/policies/${this.encodePathSegment(request.policyName)}`),
-      request
+      {
+        tenant_id: request.tenantId,
+        description: request.description,
+        priority: request.priority,
+        spec_yaml: request.specYaml,
+        labels: request.labels,
+      }
     );
   }
 
