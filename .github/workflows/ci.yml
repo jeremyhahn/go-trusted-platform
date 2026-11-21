@@ -1,4 +1,4 @@
-# ci-template: v1.35.1 + v1.42 hermetic gate (customized)
+# ci-template: v1.35.1 + v1.42 hermetic gate + v1.48 runner selection (customized)
 #
 # v1.42 hermetic gate only (owner ruling 742 (1), Tenant Agent rulings 754 and
 # 794): the CI Gate's outcome depends only on the tree under test. `make
@@ -15,6 +15,13 @@
 # PR/main parity and v1.35.2/v1.35.3's signatures.yml move are the full
 # catch-up, still to come. The history below describes the jobs before v1.42.
 #
+# v1.48 runner selection only (Tenant Agent rulings 1024 and 1031, #2128):
+# hosted first. The preflight step `Hosted or overflow runner (ruling 1024)`
+# sends a run's jobs to the self-hosted overflow runners (bigdisk,
+# bigdisk-docker) only when HOSTED_JOBS_PER_REPO hosted jobs are in progress
+# or a hosted job of another run has queued HOSTED_QUEUE_GRACE_SECONDS; a
+# fork pull request always stays hosted. Nothing else of v1.43 to v1.48 is
+# taken.
 # v1.35.1 (DS-8433, CA m2557): the Signatures job of handbook cd17d28
 # (ci-template v1.35.1) is adopted as is, in CI Gate's needs, env block and a
 # `pr` check line, with .github/allowed_signers synced from handbook
@@ -275,6 +282,16 @@ env:
   # builds, run alone on a docs-only PR. CUSTOMIZE: empty, this repo has no
   # releasability test yet, so the step skips.
   RELEASABILITY_TEST: ""
+  # v1.48 (Tenant Agent ruling 1024 item 1, queue 250 (a); ruling 1031,
+  # #2128): the most jobs of this repository that run on GitHub-hosted
+  # runners at once. The preflight step `Hosted or overflow runner (ruling
+  # 1024)` sends the run's jobs to the self-hosted overflow runners (bigdisk,
+  # bigdisk-docker) when this many hosted jobs of the repository are already
+  # in progress, or when one of its hosted jobs has waited in the queue for
+  # HOSTED_QUEUE_GRACE_SECONDS (the hosted pool is full). The owner's number,
+  # not a CUSTOMIZE value.
+  HOSTED_JOBS_PER_REPO: 12
+  HOSTED_QUEUE_GRACE_SECONDS: 60
 
 jobs:
   # v1.34 (Company Agent m2211 item 2(b)): one preflight job instead of three.
@@ -330,7 +347,7 @@ jobs:
   # OBJSTORE_SEAMS is empty and any import fails.
   preflight:
     name: Preflight [changed files, schedule guard, architecture gates]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest   # v1.48: it decides the runner, so it stays hosted
     # v1.26: a draft PR runs no CI; every job that needs this one skips with it.
     if: ${{ !github.event.pull_request.draft }}
     timeout-minutes: 10       # v1.34: the three jobs had 5 each
@@ -343,7 +360,126 @@ jobs:
       docs_only: ${{ steps.diff.outputs.docs_only }}
       verdict: ${{ steps.guard.outputs.verdict }}
       proof: ${{ steps.guard.outputs.proof }}   # v1.30
+      # v1.48 (ruling 1024): runs-on JSON for the two hosted-capable classes,
+      # read as fromJSON(needs.preflight.outputs.runner_docker) by every job
+      # that builds or runs images and fromJSON(needs.preflight.outputs.runner)
+      # by the others and CI Gate. `"ubuntu-latest"`, or the self-hosted
+      # overflow label list.
+      runner: ${{ steps.runner.outputs.runner }}
+      runner_docker: ${{ steps.runner.outputs.runner_docker }}
     steps:
+      # v1.48 (ruling 1024): hosted stays the default. On github.com this step
+      # counts this repository's jobs on GitHub-hosted runners (a job whose
+      # labels name an ubuntu-* image and not self-hosted) in every queued and
+      # in-progress run of every workflow, through the Actions API with the
+      # job token (actions: read). It outputs `runner` and `runner_docker` as
+      # runs-on JSON: `"ubuntu-latest"`, or, when HOSTED_JOBS_PER_REPO hosted
+      # jobs or more are in progress, or a hosted job of another run has been
+      # queued HOSTED_QUEUE_GRACE_SECONDS or more (the hosted pool is full),
+      # the self-hosted overflow runners (bigdisk, bigdisk-docker) as label
+      # lists. A count it cannot read (a reply that is not 200, a list short
+      # of its total_count, a field missing) picks nothing silently: it prints
+      # a ::warning naming why and outputs the hosted default. One decision
+      # per run: every job of the run takes it. Off github.com it makes no
+      # call, and each job's runs-on keeps its forge label as before v1.48.
+      # It runs before the checkout, beside no repository code.
+      # CUSTOMIZE (#2128, not in the template): a pull request from a fork
+      # always takes the hosted default. The self-hosted runners are
+      # persistent, and ruling 999 keeps fork code off them.
+      - name: Hosted or overflow runner (ruling 1024)
+        id: runner
+        env:
+          SERVER: ${{ github.server_url }}
+          API: ${{ github.api_url }}/repos/${{ github.repository }}/actions
+          RUN_ID: ${{ github.run_id }}
+          JOB_TOKEN: ${{ github.token }}
+          LIMIT: ${{ env.HOSTED_JOBS_PER_REPO }}
+          GRACE: ${{ env.HOSTED_QUEUE_GRACE_SECONDS }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          set -uo pipefail
+          HOSTED='"ubuntu-latest"'
+          overflow() { printf '["self-hosted","linux","x64","%s"]' "$1"; }
+          emit() {
+            echo "runner: $1; runner_docker: $2"
+            { echo "runner=$1"; echo "runner_docker=$2"; } >> "$GITHUB_OUTPUT"
+          }
+          # hosted <why>: no count, so the default, with the reason shown.
+          hosted() {
+            echo "::warning::runner selection: $1; every job of this run takes the GitHub-hosted default, ubuntu-latest, and none overflows to the self-hosted overflow runners (bigdisk, bigdisk-docker) (ci-template v1.48, ruling 1024)"
+            emit "$HOSTED" "$HOSTED"
+            exit 0
+          }
+          if [ "$SERVER" != https://github.com ]; then
+            echo "not github.com: each job keeps its forge label; no selection"
+            emit "$HOSTED" "$HOSTED"
+            exit 0
+          fi
+          if [ -n "$HEAD_REPO" ] && [ "$HEAD_REPO" != "$REPO" ]; then
+            echo "a pull request from a fork: every job takes the GitHub-hosted default, ubuntu-latest; no selection"
+            emit "$HOSTED" "$HOSTED"
+            exit 0
+          fi
+          case "$LIMIT:$GRACE" in
+            *[!0-9:]*|:*|*:) hosted "HOSTED_JOBS_PER_REPO='$LIMIT' or HOSTED_QUEUE_GRACE_SECONDS='$GRACE' is not a whole number" ;;
+          esac
+          # get <url> <file>: 0 on a 200 reply, saved in <file>; the answer in
+          # CODE. The token reaches curl as a header from a file descriptor.
+          get() {
+            CODE=$(curl -sS --max-time 30 -o "$2" -w '%{http_code}' \
+              -H @<(printf 'Authorization: Bearer %s\n' "$JOB_TOKEN") \
+              -H 'Accept: application/vnd.github+json' "$1") || CODE="curl exit $?"
+            [ "$CODE" = 200 ]
+          }
+          # pages <url> <key> <out>: every page of a listing, its <key> items
+          # one JSON object per line in <out>. 1, with WHY set, when a reply is
+          # not 200 or the items fall short of total_count.
+          pages() {
+            local p=1 got=0 total n
+            : > "$3"
+            while :; do
+              get "$1&per_page=100&page=$p" "$RUNNER_TEMP/sel-page.json" || { WHY="$1: $CODE"; return 1; }
+              total=$(jq -er '.total_count | numbers' "$RUNNER_TEMP/sel-page.json") || { WHY="$1: 200 with no total_count"; return 1; }
+              n=$(jq -er --arg k "$2" '.[$k] | arrays | length' "$RUNNER_TEMP/sel-page.json") || { WHY="$1: 200 with no $2 list"; return 1; }
+              jq -c --arg k "$2" '.[$k][]' "$RUNNER_TEMP/sel-page.json" >> "$3"
+              got=$((got + n))
+              { [ "$got" -lt "$total" ] && [ "$n" -gt 0 ]; } || break
+              [ "$p" -lt 10 ] || { WHY="$1: more than 1000 entries"; return 1; }
+              p=$((p + 1))
+            done
+            [ "$got" -ge "$total" ] || { WHY="$1: $got of $total entries"; return 1; }
+          }
+          : > "$RUNNER_TEMP/sel-runs.jsonl"
+          for st in queued in_progress; do
+            pages "$API/runs?status=$st" workflow_runs "$RUNNER_TEMP/sel-r.jsonl" || hosted "the Actions API gave no complete run list ($WHY)"
+            cat "$RUNNER_TEMP/sel-r.jsonl" >> "$RUNNER_TEMP/sel-runs.jsonl"
+          done
+          : > "$RUNNER_TEMP/sel-jobs.jsonl"
+          for id in $(jq -r '.id' "$RUNNER_TEMP/sel-runs.jsonl" | sort -u); do
+            pages "$API/runs/$id/jobs?filter=latest" jobs "$RUNNER_TEMP/sel-j.jsonl" || hosted "the Actions API gave no complete job list ($WHY)"
+            cat "$RUNNER_TEMP/sel-j.jsonl" >> "$RUNNER_TEMP/sel-jobs.jsonl"
+          done
+          # In progress: every hosted job, this one included. Queued: a hosted
+          # job of another run (this run's jobs wait on this one) queued for
+          # GRACE seconds or more, so a runner did not take it at once.
+          read -r running queued < <(jq -rs --argjson run "$RUN_ID" --argjson grace "$GRACE" '
+              [.[] | select((.labels // []) | any(startswith("ubuntu-")) and all(. != "self-hosted"))] as $h
+              | ($h | map(select(.status == "in_progress")) | length) as $r
+              | ($h | map(select(.status == "queued" and .run_id != $run
+                    and now - ((.created_at // .started_at) | fromdateiso8601) >= $grace)) | length) as $q
+              | "\($r) \($q)"' "$RUNNER_TEMP/sel-jobs.jsonl") || hosted "the job list could not be counted"
+          echo "this repository: $running hosted job(s) in progress (HOSTED_JOBS_PER_REPO=$LIMIT); $queued hosted job(s) of other runs queued ${GRACE}s or more"
+          if [ "$running" -ge "$LIMIT" ]; then
+            why="$running hosted jobs in progress, HOSTED_JOBS_PER_REPO=$LIMIT"
+          elif [ "$queued" -gt 0 ]; then
+            why="$queued hosted job(s) queued ${GRACE}s or more: the hosted pool is full"
+          else
+            emit "$HOSTED" "$HOSTED"
+            exit 0
+          fi
+          echo "::notice::runner selection: $why; this run's jobs overflow to the self-hosted overflow runners (bigdisk, bigdisk-docker) (ci-template v1.48, ruling 1024)"
+          emit "$(overflow bigdisk)" "$(overflow bigdisk-docker)"
       - name: Is a main push run of this workflow in flight?
         id: guard
         env:
@@ -509,7 +645,7 @@ jobs:
   # has Docker; no step here has a measured figure over the hosted limits.
   lint:
     name: Lint [fmt-check, vet, lint, gosec]
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}   # v1.48
     needs: preflight   # v1.30, v1.34
     if: ${{ !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     # CUSTOMIZE: golangci-lint alone takes up to GOLANGCI_LINT_TIMEOUT (45m,
@@ -894,7 +1030,7 @@ jobs:
     if: ${{ !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     # Runner (ruling 999): ubuntu-latest. The 10.6 GB above was a container
     # layer; the job now runs on the runner with no image.
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}   # v1.48
     timeout-minutes: 15
     env:
       GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
@@ -1055,7 +1191,7 @@ jobs:
   # carries the guard, as it did on the bigdisk pool.
   sdkjs:
     name: SDK JavaScript
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}   # v1.48
     if: ${{ needs.preflight.outputs.docs_only != 'true' && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     needs: preflight
     timeout-minutes: 15
@@ -1109,7 +1245,7 @@ jobs:
   # persisted.
   race:
     name: Race (shard ${{ matrix.shard }}/4)
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}   # v1.48
     if: ${{ needs.preflight.outputs.docs_only != 'true' && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     needs: preflight
     timeout-minutes: 60
@@ -1166,7 +1302,7 @@ jobs:
   # carries the guard, as it did on the bigdisk pool.
   web:
     name: Web Console
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}   # v1.48
     if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     needs: preflight
     timeout-minutes: 15
@@ -1271,7 +1407,7 @@ jobs:
   # run in it by that id (see the integration job's lease step).
   integration-image:
     name: Integration image
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}   # v1.48
     if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     # As the legs had: nothing is built for a run whose image job failed, so
     # no image is left for legs that never run. v1.29.3: the guard
@@ -1527,7 +1663,7 @@ jobs:
   # the teardown runs last under if: always().
   integration:
     name: Integration [build tag integration]
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}   # v1.48
     # v1.26: never on a draft PR, ci:full or not. v1.29.3: on a schedule run,
     # only on the schedule guard's `run`.
     if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
@@ -1873,7 +2009,7 @@ jobs:
     needs: preflight   # v1.34
     # v1.30: a dispatch off main is refused, so soak runs only on `run`.
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && needs.preflight.outputs.verdict == 'run' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}   # v1.48
     timeout-minutes: 90       # CUSTOMIZE: SOAK_MINUTES plus one iteration
     env:
       GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
@@ -2059,7 +2195,7 @@ jobs:
     # Runner (ruling 999, which ends m2475's route): ubuntu-latest on every
     # event, so the apt step installs cpio and libssl-dev. The if: keeps the
     # guarded main tier (pkg/arch/citiers_test.go mainOnlyGuardedIf).
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}   # v1.48
     strategy:
       fail-fast: false
       matrix:
@@ -2125,7 +2261,8 @@ jobs:
   # runs: no repository code, no token beyond github.token (contents: read).
   signatures:
     name: Signatures
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}   # v1.48
+    needs: preflight   # v1.48: its runs-on reads the runner selection
     if: ${{ !github.event.pull_request.draft }}
     timeout-minutes: 5
     permissions:
@@ -2231,7 +2368,7 @@ jobs:
     # Never add a checkout or a `uses:` step here: the gate reads only its
     # needs' results. Runner (ruling 999, which ends CA m2475 (2h)'s bigdisk
     # route): ubuntu-latest on every event; it needs no Docker.
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner || '"ubuntu-latest"') || 'ubuntu-latest' }}   # v1.48
     # v1.29.3: on a schedule run the schedule guard decides. `busy` skips the
     # gate, so `CI / CI Gate (schedule)` posts `skipped` (Gitea 1.27.1 posts a
     # skipped job as `skipped`, not `success`), never a green nightly. Every

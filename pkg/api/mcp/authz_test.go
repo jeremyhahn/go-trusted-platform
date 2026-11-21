@@ -535,6 +535,9 @@ func TestAuthorizeTool_UnscopedPathDecidedByPEP(t *testing.T) {
 		if pep.last.Subject.ID != "user-1" || pep.last.Subject.TenantID != "tenant-1" {
 			t.Errorf("subject = %+v, want user-1 in tenant-1", pep.last.Subject)
 		}
+		if pep.last.TenantID != "tenant-1" {
+			t.Errorf("CheckRequest.TenantID = %q, want tenant-1 (docs/SPEC.md:123)", pep.last.TenantID)
+		}
 		if len(pep.last.Subject.Roles) != 1 || pep.last.Subject.Roles[0] != "operator" {
 			t.Errorf("roles = %v, want [operator]", pep.last.Subject.Roles)
 		}

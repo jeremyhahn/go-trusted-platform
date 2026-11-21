@@ -62,9 +62,12 @@ type ValidateTokenRequest struct {
 
 // ValidateTokenResponse contains the validation result from QuicBaaS.
 type ValidateTokenResponse struct {
-	Valid     bool
-	UserID    string
-	Username  string
+	Valid    bool
+	UserID   string
+	Username string
+	// TenantID is the tenant the verified token names; empty when it
+	// names none. It never comes from a request header.
+	TenantID  string
 	Roles     []string
 	ExpiresAt int64
 }
