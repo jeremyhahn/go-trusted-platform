@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"reflect"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -224,6 +225,57 @@ func TestKMSGetKey_FlatReplyFillsKey(t *testing.T) {
 	meta := resp.GetMetadata()
 	if meta.GetKeyId() != "k1" || meta.GetName() != "k1" || meta.GetVersion() != 1 {
 		t.Fatalf("metadata = %v", meta)
+	}
+}
+
+// TestKMSListKeys_NonEmptyReplyDecodes pins Codex round 1 P1 on #2151: the
+// webservice KMS router answers ListKeys with {"keys":[...]}, RFC3339
+// created_at and algorithm names such as AES-256-GCM, which protojson cannot
+// decode into KMSKeyHandle.
+func TestKMSListKeys_NonEmptyReplyDecodes(t *testing.T) {
+	a, _ := kmsAdapter(t, `{"keys":[{"key_id":"k1","name":"k1","algorithm":"AES-256-GCM","version":1,"created_at":"2026-01-02T03:04:05Z"},{"key_id":"k2","name":"k2","algorithm":"ECDSA-P256","version":2,"created_at":"2026-01-03T03:04:05Z"}]}`)
+	resp := &platformv1.ListKeysResponse{}
+	err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_ListKeys_FullMethodName,
+		&platformv1.ListKeysRequest{}, resp)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	want := []struct {
+		id        string
+		version   uint64
+		algorithm string
+		created   string
+	}{
+		{"k1", 1, "AES-256-GCM", "2026-01-02T03:04:05Z"},
+		{"k2", 2, "ECDSA-P256", "2026-01-03T03:04:05Z"},
+	}
+	keys := resp.GetKeys()
+	if len(keys) != len(want) {
+		t.Fatalf("keys = %v, want %d", keys, len(want))
+	}
+	for i, w := range want {
+		created, _ := time.Parse(time.RFC3339, w.created)
+		k := keys[i]
+		if k.GetKeyId() != w.id || k.GetVersion() != w.version || k.GetAlgorithm() != kmsKeyAlgorithmsByName[w.algorithm] || k.GetCreatedAt() != created.Unix() {
+			t.Fatalf("keys[%d] = %v, want %s v%d %s %d", i, k, w.id, w.version, w.algorithm, created.Unix())
+		}
+		if k.GetAlgorithm() == 0 {
+			t.Fatalf("keys[%d] algorithm %q has no platform value", i, w.algorithm)
+		}
+	}
+}
+
+// TestKMSListKeys_EmptyReplyDecodes checks an empty key list.
+func TestKMSListKeys_EmptyReplyDecodes(t *testing.T) {
+	a, _ := kmsAdapter(t, `{"keys":[]}`)
+	resp := &platformv1.ListKeysResponse{}
+	err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_ListKeys_FullMethodName,
+		&platformv1.ListKeysRequest{}, resp)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if len(resp.GetKeys()) != 0 {
+		t.Fatalf("keys = %v, want none", resp.GetKeys())
 	}
 }
 

@@ -62,11 +62,14 @@ type (
 
 // daemonRouteTable builds a daemon REST server with every route-mounting
 // setter wired, and returns it with its built table.
-func daemonRouteTable(t *testing.T, guard *restapi.ScopeGuard) (*RESTServer, []string) {
+func daemonRouteTable(t *testing.T, guard *restapi.ScopeGuard, opts ...func(*Config)) (*RESTServer, []string) {
 	t.Helper()
 
 	cfg := DefaultConfig()
 	cfg.RESTListenAddr = "127.0.0.1:0"
+	for _, opt := range opts {
+		opt(cfg)
+	}
 	svc, err := NewService(cfg)
 	require.NoError(t, err)
 	s, err := NewRESTServer(cfg, svc, slog.Default())
