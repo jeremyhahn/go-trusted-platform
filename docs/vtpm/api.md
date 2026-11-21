@@ -32,6 +32,7 @@ QUIC: **two top-level ranges** — `0x03`–`0x0F` for templates and bundles,
 | Clone template → bundle | `POST /api/v1/vtpm/templates/{id}/clone` | `CloneTemplate` | `OpVTPMCloneTemplate` (`0x07`) | `vtpm_template_clone` | ✅ |
 
 Complete on all five reachable transports.
+The SDK REST transport claims all five template routes and translates the domain JSON (`sdk/go/transport/rest/vtpm_templates.go`).
 
 ---
 
@@ -67,6 +68,14 @@ The REST create bodies are flat and snake_case (`mode`, `hostname`,
 `device_profile_id`; a template takes `id`, `description`, `ek_algorithm`,
 `secure_boot_enabled`), and an unknown field is 400. The JavaScript SDK maps
 its `options` object onto that body, sending `UNSPECIFIED` as an omitted field.
+
+The web service's template reply carries the template's on-disk paths:
+`tpm_state_dir`, `nvram_path` and `secure_boot_keys_dir`. The daemon's
+(`pkg/api/rest`) template reply does not, and the Go SDK decodes it with empty
+paths. The daemon's clone reply is a flat bundle (`hostname`,
+`labels`, `ek_algorithm`, `secure_boot_enabled` and `ek_certificate` at the top
+level, Secure Boot key fingerprints under `secure_boot_keys`); the Go SDK
+decodes it into the bundle's `Manifest`.
 
 ---
 

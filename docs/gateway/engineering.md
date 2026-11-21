@@ -1899,6 +1899,47 @@ does; a section that does not assemble stops the child before its VPN starts
 after it drops to the service account, so the account must be able to read
 them.
 
+#### The wireguard process (#1698)
+
+The management VPN's WireGuard data plane runs in its own supervised
+`wireguard` process (ruling 942), a kernel-class row whose one service is
+`vpn-wireguard`. `GatewayConfig.EnabledServices` enables it with the
+management VPN when the VPN's `data-planes` offer `wireguard`; the default
+plane is MASQUE alone, and a FIPS build refuses the kind at validation, so
+neither starts the process (`TestGatewayConfig_EnabledServicesVPNWireGuard`).
+
+Part B2 (#2029) is preparatory wiring: the supervised `wireguard` process,
+the plane factory and the socket restriction are in place, but the hub plane
+refuses to start with `ErrVPNHubZoneUnenforced` until #2093 wires the hub
+through the compiled zone matrix. A configured hub therefore fails the
+process's start (no READY=1) and no WireGuard peer is admitted
+(`TestVPNDataPlanes_ProductionDefaultRefusesTheHubUntilZoneEnforcement`,
+`TestServeProcess_AnUnenforcedHubFailsTheStart`). The paragraphs below
+describe the wiring the plane runs on once #2093 lands.
+
+The process owns the hub device and is the only one that serves
+`VPNPlaneService`: its socket alone sets `ipc.Policy.VPNPlane`, admitting the
+supervisor and the parser uid (the `vpn` child) to `InstallVPNPeer`,
+`RemoveVPNPeer`, `ReconcileVPNPeers` and `RenewVPNPeer`; every other socket
+refuses them. `serveProcess` builds the planes and starts them before it
+binds the socket, so the first peer RPC finds them up. A plane that fails to
+start is reported to the supervisor as the start error, every peer RPC is
+refused as unavailable, and the gateway's services are not started
+(`TestServeProcess_PlaneFailureKeepsServicesInactive`). The `vpn-wireguard`
+service handler itself owns nothing: it is active and healthy from Start to
+Stop, since the gateway starts only once the planes are up.
+
+A hub device of the process's name at start is a killed predecessor's, and
+its peers would pass traffic past their leases, so the process removes it,
+with its peers, before it reads its configuration or assembles the gateway
+(`TestServeProcess_WireGuardChildRemovesStaleHubFirst`). The supervisor's
+`OnChildExit` hook removes it again whenever the `wireguard` child exits, and
+only for that row (`TestBuildSupervisor_OnChildExitRemovesHubForWireGuardOnly`).
+
+*(planned)* Operator `stop`, `start` and `restart` verbs for the process,
+lease `expires_at` enforcement and `RenewVPNPeer` (#1698 part B3), and an
+init-script stop hook that removes the hub when gatewayd itself is stopped.
+
 ### Supervisor IPC — `pkg/sdn/gateway/ipc` (#557)
 
 The contract is `ipc/proto/ipc.proto`, generated into `ipc/gen` with

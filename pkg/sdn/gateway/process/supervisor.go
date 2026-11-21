@@ -1106,6 +1106,7 @@ func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, gen uint
 				}
 				s.mu.Unlock()
 			}
+			s.retryExitHookPastBudget(ctx, proc, gen)
 			return
 		}
 		s.cfg.Logger.Warn("gatewayd supervisor: process down, restarting",
@@ -1171,6 +1172,60 @@ func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, gen uint
 		s.cfg.Logger.Error("gatewayd supervisor: restart failed",
 			slog.String("process", proc.def.Name), slog.Any("error", err))
 		failure, cause = err, err
+	}
+}
+
+// retryExitHookPastBudget keeps retrying a failed exit hook of a given-up
+// process on its own doubling backoff until it succeeds, the supervisor or
+// the watch context stops, or a replacement of another generation takes the
+// process over (#2029 Codex r1). A non-follower has no withdrawal, so
+// without this the kernel state the hook removes (the WireGuard hub and its
+// peers) would outlive its process with nothing able to revoke it. gen is
+// the generation that gave up: runExitHook fences every retry to it. The
+// failure stays in the process's health, joined to the give-up, until a
+// retry succeeds.
+func (s *Supervisor) retryExitHookPastBudget(ctx context.Context, proc *supervised, gen uint64) {
+	// givenUp reports, with s.mu held, whether gen's give-up is still the
+	// process's state: a replacement owns failure from its claim on.
+	givenUp := func() bool {
+		return !s.stopped && proc.child == nil && !proc.launching && proc.launchGen == gen
+	}
+	s.mu.Lock()
+	budget := proc.failure
+	showHookErr := func() {
+		if !givenUp() {
+			return
+		}
+		proc.failure = budget
+		if proc.exitHookErr != nil {
+			proc.failure = errors.Join(budget, proc.exitHookErr)
+		}
+	}
+	showHookErr()
+	s.mu.Unlock()
+
+	backoff := s.cfg.RestartBackoff
+	for {
+		s.mu.Lock()
+		pending := proc.exitHookErr != nil && givenUp()
+		s.mu.Unlock()
+		if !pending {
+			return
+		}
+		s.cfg.Logger.Warn("gatewayd supervisor: retrying child exit hook past the restart budget",
+			slog.String("process", proc.def.Name), slog.Duration("backoff", backoff))
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.cfg.Clock.After(backoff):
+		}
+		s.runExitHook(ctx, proc, gen)
+		s.mu.Lock()
+		showHookErr()
+		s.mu.Unlock()
+		if backoff < s.cfg.RestartBackoffMax {
+			backoff = min(backoff*2, s.cfg.RestartBackoffMax)
+		}
 	}
 }
 

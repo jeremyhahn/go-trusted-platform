@@ -3474,6 +3474,96 @@ func TestSupervisor_OnChildExitNotCalledOnOperatorStop(t *testing.T) {
 		200*time.Millisecond, 10*time.Millisecond, "an operator stop is not an unrequested exit")
 }
 
+func TestSupervisor_OnChildExitRetriedPastTheRestartBudget(t *testing.T) {
+	// WireGuard has no Follows value, so no withdrawal covers a given-up
+	// child: a failed hub cleanup on the crash that exhausts the budget
+	// must still be retried until it succeeds, and stay in health until it
+	// does (#2029 Codex r1).
+	supervisor, launcher, rec := newHookedSupervisor(t, 0, func(c *Config) { c.RestartBudget = 1 })
+	ctx := testContext(t)
+	child := startWireGuard(t, ctx, supervisor, launcher)
+
+	child.exit(errors.New("signal: killed"))
+	child = awaitRelaunch(t, supervisor, launcher, WireGuardProcess, 2)
+	require.Equal(t, 1, rec.callCount(), "the first crash's hook succeeded")
+
+	rec.mu.Lock()
+	rec.failures = 3
+	rec.mu.Unlock()
+	var sawInHealth atomic.Bool
+	child.exit(errors.New("signal: killed"))
+	require.Eventually(t, func() bool {
+		var hookErr *ErrExitHook
+		if errors.As(supervisor.ServiceHealth(gateway.ServiceVPNWireGuard), &hookErr) {
+			sawInHealth.Store(true)
+		}
+		return rec.callCount() >= 5
+	}, 5*time.Second, time.Millisecond, "the failed hook is retried after the budget is exhausted")
+
+	assert.True(t, sawInHealth.Load(), "the cleanup failure is reported in health while it lasts")
+	require.Eventually(t, func() bool {
+		var hookErr *ErrExitHook
+		var budget *ErrRestartBudgetExhausted
+		health := supervisor.ServiceHealth(gateway.ServiceVPNWireGuard)
+		return errors.As(health, &budget) && !errors.As(health, &hookErr)
+	}, 5*time.Second, 10*time.Millisecond, "a successful retry clears the cleanup failure, the give-up stays")
+	assert.Never(t, func() bool { return rec.callCount() > 5 },
+		100*time.Millisecond, 10*time.Millisecond, "a succeeded cleanup is not retried")
+	assert.Equal(t, 2, launcher.launchCount(), "a given-up process is not relaunched")
+}
+
+func TestSupervisor_OnChildExitFencesReplacementLaunch(t *testing.T) {
+	// A replacement started while the exit hook runs must not exec until
+	// the hook returns: the hook removes vpn-hub0, and the replacement's
+	// hub would be the one removed (#2029 Codex r1).
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var seen []int
+	var launcher *fakeLauncher
+	supervisor, l, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.OnChildExit = func(context.Context, Definition) error {
+			n := launcher.launchCount()
+			mu.Lock()
+			first := len(seen) == 0
+			seen = append(seen, n)
+			mu.Unlock()
+			if first {
+				<-release
+			}
+			return nil
+		}
+	})
+	launcher = l
+	ctx := testContext(t)
+	child := startWireGuard(t, ctx, supervisor, launcher)
+
+	child.exit(errors.New("signal: killed"))
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(seen) == 1
+	}, 5*time.Second, time.Millisecond, "the hook runs for the crash")
+
+	started := make(chan error, 1)
+	go func() { started <- supervisor.StartService(ctx, gateway.ServiceVPNWireGuard) }()
+	assert.Never(t, func() bool { return launcher.launchCount() > 1 },
+		200*time.Millisecond, 10*time.Millisecond, "no replacement execs while the hook runs")
+
+	close(release)
+	select {
+	case err := <-started:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("StartService did not return after the hook")
+	}
+	awaitRelaunch(t, supervisor, launcher, WireGuardProcess, 2)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []int{1}, seen, "the hook never sees the replacement's child")
+}
+
 func TestSupervisor_DatapathCrashDoesNotRelaunchVPN(t *testing.T) {
 	// The vpn child's peers live in the wireguard process's plane (ruling
 	// 942), so a datapath crash leaves it running.

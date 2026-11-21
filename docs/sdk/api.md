@@ -46,7 +46,7 @@ folder's own `api.md`. Streaming RPCs are ✅ only on gRPC / Unix.
 | `PXEService` | `PXE()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `DNSService` | `DNS()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `NTPService` | `NTP()` | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `VPNService` | `VPN()` | ✅ | ✅ | ✅ | ✅ | `MISSING — docs/13 G7` |
+| `VPNService` | `VPN()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `GatewayService` | `Gateway()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `ProxyService` | `Proxy()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `OverlayService` | `Overlay()` | ✅ | ✅ | ✅ | ✅ | ✅ |

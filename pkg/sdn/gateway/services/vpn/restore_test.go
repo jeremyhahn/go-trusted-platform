@@ -820,6 +820,64 @@ func TestRetry_ReclaimDuringAWaitingRetryKeepsTheOwedAddress(t *testing.T) {
 	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "the retry failed again, so the obligation is kept")
 }
 
+func TestSweep_AnOverlappingSweepNeverReclaimsAnAddressWhosePeerRemovalIsPending(t *testing.T) {
+	// After a restart whose reconciliation failed, the reclaim is owed and
+	// a reconciliation pending. Sweep A is parked just before it takes the
+	// enrolment gate; an overlapping Sweep B (Sweep is exported and can
+	// overlap sweepLoop) runs to the end meanwhile. No address may be
+	// reclaimed while the orphan peer that holds it is still installed: A
+	// must not have detached the pending reconciliation where B cannot see
+	// it (#2029 Codex).
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	h.allocateVPN(t, "mini-1", lease.Address)
+	h.start(t)
+	require.NoError(t, h.svc.Restore(ctx))
+	h.forgetAFailedRemoval(t, lease)
+
+	h.restart(t)
+	var unavailable *ErrDataPlaneUnavailable
+	require.ErrorAs(t, h.svc.Restore(ctx), &unavailable)
+	h.plane.failRemovals(nil)
+
+	parked := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	h.svc.sweepGateHook = func() {
+		first := false
+		once.Do(func() { first = true })
+		if first {
+			close(parked)
+			<-release
+		}
+	}
+	sweepA := make(chan struct{})
+	go func() {
+		h.svc.Sweep(ctx)
+		close(sweepA)
+	}()
+	select {
+	case <-parked:
+	case <-time.After(10 * time.Second):
+		t.Fatal("sweep A never reached the enrolment gate")
+	}
+
+	h.svc.Sweep(ctx)
+	if h.holder(t, lease.Address) == "" {
+		assert.False(t, h.plane.hosts(lease.ID), "an address was reclaimed while its orphan peer is still installed")
+	}
+
+	close(release)
+	select {
+	case <-sweepA:
+	case <-time.After(10 * time.Second):
+		t.Fatal("sweep A never finished")
+	}
+	assert.False(t, h.plane.hosts(lease.ID), "the orphan peer is removed")
+	assert.Equal(t, "", h.holder(t, lease.Address), "and its address reclaimed")
+}
+
 // reclaimAfterRevoke starts orphan reclaim while the revocation paused at
 // p is in flight, checks that reclaim waits behind it (the two are
 // serialized by enrolGate), lets the revocation finish and waits for

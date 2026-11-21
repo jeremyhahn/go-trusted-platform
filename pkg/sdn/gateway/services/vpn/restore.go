@@ -237,6 +237,9 @@ func (s *Service) retryPeerReconcile(ctx context.Context) {
 	if !pending {
 		return
 	}
+	if s.sweepGateHook != nil {
+		s.sweepGateHook()
+	}
 	s.enrolGate.Lock()
 	defer s.enrolGate.Unlock()
 	s.mu.Lock()

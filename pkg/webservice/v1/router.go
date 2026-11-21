@@ -897,16 +897,18 @@ func (v1Router *Router) appServiceRoutes() {
 }
 
 // scopeRouteGuard checks an application service route's scope with the
-// platform token middleware. Without one the routes stay on the role gate
-// alone, as the VPN routes do under the legacy JWT handler: its sessions
-// carry roles, not scopes.
+// platform token middleware. Without one the guard fails closed: every
+// guarded route answers 403, since a role-only session (the legacy JWT
+// handler) carries no scopes to check (#1990).
 type scopeRouteGuard struct {
 	authorizer middleware.ScopeAuthorizer
 }
 
 func (g scopeRouteGuard) Require(scope string, next http.HandlerFunc) http.HandlerFunc {
 	if g.authorizer == nil {
-		return next
+		return func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		}
 	}
 	return g.authorizer.RequireScope(scope)(next).ServeHTTP
 }
