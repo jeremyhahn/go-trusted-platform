@@ -4,9 +4,14 @@ package diskimage
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu/harness"
 )
 
 // TestDecodeEventLogCapture checks the helper that pulls a guest's TCG event
@@ -96,4 +101,106 @@ func wrapLines(s string, n int) string {
 	}
 	b.WriteString(s)
 	return b.String()
+}
+
+func TestConsoleCredentialsFromEnv(t *testing.T) {
+	got := consoleCredentialsFromEnv(lookup(nil))
+	if want := (consoleCredentials{login: "root", password: "password"}); got != want {
+		t.Fatalf("empty env: got %+v, want %+v", got, want)
+	}
+	got = consoleCredentialsFromEnv(lookup(map[string]string{
+		"DISKIMAGE_CONSOLE_LOGIN":    "ops",
+		"DISKIMAGE_CONSOLE_PASSWORD": "s3cret",
+	}))
+	if want := (consoleCredentials{login: "ops", password: "s3cret"}); got != want {
+		t.Fatalf("set env: got %+v, want %+v", got, want)
+	}
+}
+
+func TestManifestRootsFromEnv(t *testing.T) {
+	path, err := manifestRootsFromEnv(lookup(map[string]string{"DISKIMAGE_MANIFEST_ROOTS": "/workspace/roots.pem"}))
+	if err != nil || path != "/workspace/roots.pem" {
+		t.Fatalf("set: got %q, %v", path, err)
+	}
+	_, err = manifestRootsFromEnv(lookup(nil))
+	var missing *MissingInputError
+	if !errors.As(err, &missing) {
+		t.Fatalf("unset: got %v, want a *MissingInputError", err)
+	}
+	if missing.Variable != "DISKIMAGE_MANIFEST_ROOTS" {
+		t.Fatalf("unset: Variable = %q", missing.Variable)
+	}
+}
+
+// fakeConsole shows a Password: prompt after the first line when prompt is
+// set; otherwise Expect waits for its context to end.
+type fakeConsole struct {
+	prompt  bool
+	sent    []string
+	sendErr error
+}
+
+func (f *fakeConsole) SendLine(text string) error {
+	if f.sendErr != nil {
+		return f.sendErr
+	}
+	f.sent = append(f.sent, text)
+	return nil
+}
+
+func (f *fakeConsole) Expect(ctx context.Context, needle string) (string, error) {
+	if f.prompt && len(f.sent) == 1 {
+		return "login: root\r\nPassword:", nil
+	}
+	<-ctx.Done()
+	return "", &harness.ConsoleTimeoutError{Needle: needle}
+}
+
+func TestLoginAtConsole(t *testing.T) {
+	cred := consoleCredentials{login: "root", password: "password"}
+
+	t.Run("prompt", func(t *testing.T) {
+		c := &fakeConsole{prompt: true}
+		if err := loginAtConsole(context.Background(), c, cred, time.Second); err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{"root", "password"}; !slicesEqual(c.sent, want) {
+			t.Fatalf("sent %q, want %q", c.sent, want)
+		}
+	})
+	t.Run("no prompt", func(t *testing.T) {
+		c := &fakeConsole{}
+		if err := loginAtConsole(context.Background(), c, cred, 20*time.Millisecond); err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{"root"}; !slicesEqual(c.sent, want) {
+			t.Fatalf("sent %q, want %q", c.sent, want)
+		}
+	})
+	t.Run("cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := loginAtConsole(ctx, &fakeConsole{}, cred, time.Second); err == nil {
+			t.Fatal("a cancelled context logged in")
+		}
+	})
+	t.Run("send fails", func(t *testing.T) {
+		sendErr := errors.New("console closed")
+		err := loginAtConsole(context.Background(), &fakeConsole{sendErr: sendErr}, cred, time.Second)
+		if !errors.Is(err, sendErr) {
+			t.Fatalf("got %v, want %v", err, sendErr)
+		}
+	})
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
