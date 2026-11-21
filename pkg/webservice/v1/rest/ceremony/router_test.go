@@ -14,6 +14,7 @@
 package ceremony
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -96,9 +97,12 @@ func mount(ceremonyRouter *Router) *mux.Router {
 	return router
 }
 
-// mountRouter mounts the ceremony routes on server without a scope check.
+// mountRouter mounts the ceremony routes on server behind a scope check that
+// grants every scope, as production mounts them behind its authorizer.
 func mountRouter(server platformv1.CeremonyServiceServer) *mux.Router {
-	return mount(newTestRouter(server))
+	ceremonyRouter := newTestRouter(server)
+	ceremonyRouter.SetScopeAuthorizer(everyScope{})
+	return mount(ceremonyRouter)
 }
 
 // envelope is the standard webservice response wrapper.
@@ -299,6 +303,13 @@ func (a grantingAuthorizer) RequireScope(scope string) func(http.Handler) http.H
 	}
 }
 
+// everyScope is a scope authorizer that grants every scope.
+type everyScope struct{}
+
+func (everyScope) RequireScope(string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler { return next }
+}
+
 func scopedRouter(server platformv1.CeremonyServiceServer, granted string) *mux.Router {
 	ceremonyRouter := newTestRouter(server)
 	ceremonyRouter.SetScopeAuthorizer(grantingAuthorizer{granted: granted})
@@ -340,6 +351,62 @@ func TestCeremonyRouterRequiresEachRouteScope(t *testing.T) {
 				t.Errorf("%s with %s: code = %d, service called = %v; want 403 and no call",
 					probe.name, granted, rec.Code, server.last != nil)
 			}
+		}
+	}
+}
+
+// TestCeremonyRouterRefusesEveryRouteWithoutAScopeAuthorizer checks that the
+// routes fail closed when no scope authorizer is set (the legacy JWT handler,
+// whose role-only sessions carry no ceremony scope): every route answers 403
+// before the service is called, as scopeRouteGuard does (#1990, #2158 Codex).
+func TestCeremonyRouterRefusesEveryRouteWithoutAScopeAuthorizer(t *testing.T) {
+	for _, probe := range ceremonyProbes {
+		server := &recordingServer{}
+		rec := serve(mount(newTestRouter(server)), probe.verb, probe.path, probe.body)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s: code = %d, want %d", probe.name, rec.Code, http.StatusForbidden)
+		}
+		if server.last != nil {
+			t.Errorf("%s: the service was called without a scope authorizer", probe.name)
+		}
+		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("%s: Cache-Control = %q, want no-store", probe.name, got)
+		}
+	}
+}
+
+// TestCeremonyRouterKeepsSecretsOutOfTheLog checks that the admin private key
+// Init returns and the Shamir share ClaimShareComplete returns never reach a
+// debug-level log, whatever the Accept header asks for (#2158 Codex).
+func TestCeremonyRouterKeepsSecretsOutOfTheLog(t *testing.T) {
+	var buf bytes.Buffer
+	logger := logging.NewLogger(slog.LevelDebug, &buf)
+	r := NewRouter(logger, &recordingServer{}, response.NewResponseWriter(logger, nil))
+	r.SetScopeAuthorizer(everyScope{})
+	router := mount(r)
+	for _, probe := range ceremonyProbes {
+		if probe.name != "init" && probe.name != "claim share complete" {
+			continue
+		}
+		for _, accept := range []string{"", "application/yaml"} {
+			req := httptest.NewRequest(probe.verb, probe.path, strings.NewReader(probe.body))
+			if accept != "" {
+				req.Header.Set("Accept", accept)
+			}
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Errorf("%s (Accept %q): code = %d, want 200", probe.name, accept, rec.Code)
+			}
+			if !strings.Contains(rec.Body.String(), probe.wantKey) {
+				t.Errorf("%s (Accept %q): body %q lacks %q", probe.name, accept, rec.Body.String(), probe.wantKey)
+			}
+		}
+	}
+	logged := buf.String()
+	for _, secret := range []string{"adminKeyPem", `"KEY"`, "SHARE"} {
+		if strings.Contains(logged, secret) {
+			t.Errorf("the log carries %s:\n%s", secret, logged)
 		}
 	}
 }
