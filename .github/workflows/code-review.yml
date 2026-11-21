@@ -1,4 +1,4 @@
-# code-review-template: v5.12.3 -- the code review in Gitea or GitHub CI for a pull request
+# code-review-template: v5.12.8 -- the code review in Gitea or GitHub CI for a pull request
 # that carries `code-review` and `task:ready`, routed by its labels through
 # route-labels (labels.md §2). Codex on the `codex` runner reviews every such
 # PR; `agent:opencode` adds an advisory COMMENT review by the opencode job on
@@ -28,6 +28,77 @@
 #   COORDINATOR_TURNS         the codex rounds the project coordinator has
 #                             on a `needs-coordinator` PR after the two-round
 #                             stop (v5.9.8, Tenant Agent m2185); default 3
+#
+# v5.12.8 (2026-11-21, hosted load; Tenant Agent review of handbook #86):
+# A NEW HEAD CANCELS THE OLDER HEADS' RUNS. Every push left the older
+# heads' runs queued for hosted runners (scope and gate) though no check on
+# a superseded head gates the merge: go-trusted-platform had 24 Code Review
+# jobs queued on the full hosted pool. A new job, `supersede`, on GitHub
+# for a `synchronize` or `reopened` event only, reads the PR's live head
+# and, only when it is this event's head, cancels every queued or running
+# run of this workflow for the same PR whose head is another commit: both
+# the run's head_sha and the head its display_title names (the run-name)
+# must differ. A run on this head, a twin from a `labeled` event included,
+# is never touched, so v5.12.7's handoff and the APPROVED-at-head gate stand;
+# a run whose review job is in progress is left to the review's own stale
+# check. Only a run with a lower id than this one is cancelled: a head
+# pushed after the live-head read starts a newer run, and an older head's
+# job must never cancel it (review of #86). Not a concurrency group:
+# one per PR would cancel same-head twins (v5.9.4, v5.12.3), and one per
+# PR and head cannot reach another head.
+# Its token is `actions: write` and `pull-requests: read`, apart from the
+# guard's; no checkout. API errors are warnings, exit 0. Gitea already
+# cancels an older head's runs on a push. Nothing else changes.
+#
+# v5.12.7 (2026-11-21, Codex's P1 on go-xkms #2327): THE TWIN HANDOFF
+# REACHES THE NEWEST SUITE. v5.12.6's gate fails at once when a twin
+# reviews the head and says the twin's gate, created after its review,
+# posts the newest check. But GitHub reads a required context from the
+# newest check suite of the workflow on the head, not the newest
+# check-run (go-quicraft #683, v5.9.7: a newer cancelled run with no gate
+# check left the context "expected" over older green ones). A newer run
+# whose review is skipped (a label that requests none, added while the
+# older run reviews) failed at once, and the older twin's later pass could
+# not clear it. The gate now has a second step, on GitHub after a pass:
+# every newer run of the PR on the head (higher check_suite_id) whose gate
+# ended failure or cancelled has that gate job re-run, in its own (newest)
+# suite, where it reads the verdict again. The gate's `actions:` is write,
+# for that re-run only. API errors there are warnings and leave the head
+# red. Nothing else changes; still no wait.
+#
+# v5.12.6 (2026-11-20, Tenant Agent ruling 1046; Fleet Ops): THE GATE DOES
+# NOT WAIT FOR A TWIN. The gate's twin wait held a hosted runner while
+# another run's `Codex review` queued for the one codex runner, up to
+# 4500 s: six hosted slots at 22:06Z on 11-20. The gate now reads the twins
+# once; an APPROVED head passes as before, and otherwise, while a twin's
+# review of the head is queued or in progress, it fails at once (exit 3)
+# naming that run, whose own gate (it needs its review) posts the head's
+# newest `Code Review (codex)` check. API errors still fail closed. The
+# gate's timeout is 10 minutes (ruling 580). The twins: on go-qrdb #1645
+# (f4d36189) and go-quicbaas #2636 (d9e472e3) each head had two runs 1-2 s
+# apart, the push's `synchronize` (which starts the review) and a `labeled
+# code-review` from the coordinator's bot removing and re-adding the label
+# about 10 s after the push. No workflow concurrency group (v5.9.4).
+#
+# v5.12.5 (2026-11-20, Tenant Agent ruling 1012): THE REVIEW LOCK WAITS IN
+# THE JOB'S BUDGET. Three Codex reviews failed on 11-20 with "timed out after
+# 600 s waiting for /root/.codex/.review.lock" because five runner pools on
+# the GPU host shared one lock file (Infrastructure gave each pool its own
+# lock at 08:24Z). The review lock and the login-refresh lock no longer wait
+# a fixed 600 s and 300 s: each waits for what is left of the job's 75
+# minutes (JOB_BUDGET, counted from the guard's start in $WORK/job-start),
+# less the time the job still needs after the lock is taken. The review
+# keeps codex's limit, its 30 s kill grace and 440 s for posting and cleanup;
+# the refresh keeps 130 s for the refresh call, 360 s for the module fetch,
+# 2730 s for the largest review and the same 440 s. A wait that has no time
+# left fails at once with that reason. Nothing else changes.
+#
+# v5.12.4 (2026-11-20, Tenant Agent ruling 999): the two self-hosted review
+# jobs name their reason's category for ci.yml v1.46's runner check: the
+# opencode review runs on the GPU host (`hardware:`), and the Codex review
+# on the one runner that holds the reviewer token (`credential:`, pending
+# the Tenant Agent's answer on ruling 999). Every other job already runs on
+# ubuntu-latest on github.com. Nothing else changes.
 #
 # v5.12.3 (2026-11-17, Tenant Agent; Codex's P1 on go-xkms #2251): THE SCOPE
 # JOB IS NOT CANCELLED. v5.12.2 gave it a per-head group with
@@ -743,6 +814,79 @@ env:
   COORDINATOR_TURNS: 3
 
 jobs:
+  # v5.12.8: a new head cancels the runs of this PR's older heads, never a
+  # run on this head (header). It gates nothing and nothing needs it.
+  supersede:
+    name: Cancel superseded runs
+    if: >-
+      github.server_url == 'https://github.com' &&
+      github.event.pull_request.state == 'open' &&
+      (github.event.action == 'synchronize' || github.event.action == 'reopened')
+    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
+    timeout-minutes: 5
+    permissions:
+      # The cancel only. No contents: nothing is checked out.
+      actions: write
+      pull-requests: read
+    env:
+      GH_API_TOKEN: ${{ github.token }}
+      REPO_API: ${{ format('https://api.github.com/repos/{0}', github.repository) }}
+      PR_NUM: ${{ github.event.pull_request.number }}
+      EVENT_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Cancel this PR's runs on an older head
+        run: |
+          set -euo pipefail
+          shopt -s inherit_errexit
+          # Best effort: any stop is a warning and exit 0; an older run left
+          # queued only costs a hosted runner, and its own guard ends it stale.
+          warn() { echo "::warning::Cancel superseded runs: $*" >&2; exit 4; }
+          trap 'rc=$?; [ "$rc" = 0 ] || [ "$rc" = 4 ] || echo "::warning::Cancel superseded runs: stopped (exit $rc); no run was cancelled past this point" >&2; exit 0' EXIT
+          [[ $EVENT_SHA =~ ^[0-9a-f]{40}$ ]] || warn "the event names no head commit"
+          [[ $PR_NUM =~ ^[0-9]+$ ]] || warn "the event names no pull request"
+          hdr=(-H "Authorization: token $GH_API_TOKEN" -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28')
+          api() { # method path -> body; warns and stops unless 2xx
+            local code
+            code=$(curl -sS --proto '=http,https' --max-time 60 --retry 3 --retry-all-errors \
+                     -X "$1" -o supersede-api.json -w '%{http_code}' "${hdr[@]}" "$REPO_API$2") ||
+              warn "cannot reach $REPO_API$2"
+            case "$code" in 2??) cat supersede-api.json ;; *) warn "$1 $2 answered HTTP $code" ;; esac
+          }
+          # Only the live head may supersede: a run for a head already
+          # replaced cancels nothing, the newest head's run does.
+          live=$(api GET "/pulls/$PR_NUM" | jq -r 'select(.state == "open") | .head.sha // empty') ||
+            warn "cannot read PR $PR_NUM"
+          [ "$live" = "$EVENT_SHA" ] ||
+            { echo "PR $PR_NUM's live head is ${live:-not open}, not $EVENT_SHA; nothing to cancel."; exit 0; }
+          wf=$(api GET "/actions/runs/$GITHUB_RUN_ID" | jq -r '.workflow_id // empty') || warn "cannot read this run"
+          [[ $wf =~ ^[0-9]+$ ]] || warn "cannot read this run's workflow"
+          # Both the run's head_sha and the head its display_title (the
+          # run-name) names must be another commit: a run on this head is
+          # never a candidate.
+          older=''
+          for st in queued in_progress waiting pending requested; do
+            got=$(api GET "/actions/workflows/$wf/runs?event=pull_request_target&status=$st&per_page=100" |
+                  jq -r --arg pr "$PR_NUM" --arg sha "$EVENT_SHA" --argjson me "$GITHUB_RUN_ID" '
+                    .workflow_runs[]
+                    | ((.display_title // "") | capture("^Code Review: PR #(?<n>[0-9]+) into .+ at (?<h>[0-9a-f]{40})$")) as $t
+                    | select($t.n == $pr and $t.h != $sha and .head_sha != $sha and .id < $me)
+                    | .id') || warn "cannot list this workflow's $st runs"
+            older+="$got"$'\n'
+          done
+          older=$(sort -un <<<"$older" | sed '/^$/d')
+          [ -n "$older" ] || { echo "No run of PR $PR_NUM on an older head is queued or running."; exit 0; }
+          while read -r id; do
+            busy=$(api GET "/actions/runs/$id/jobs?per_page=100" |
+                   jq -r '[.jobs[]? | select((.name == "Codex review" or .name == "Code Review (opencode)") and .status == "in_progress")] | length') ||
+              warn "cannot read the jobs of run $id"
+            if [ "$busy" != 0 ]; then
+              echo "Run $id: its review is in progress; left to the review's own stale check."
+              continue
+            fi
+            api POST "/actions/runs/$id/cancel" >/dev/null
+            echo "Run $id is on an older head of PR $PR_NUM than $EVENT_SHA: cancelled."
+          done <<<"$older"
+
   # v5.12.1 (rulings 443, 804, 805): InfoSec's guard as its own job, once
   # per event, ahead of the review and the gate. Its step is the step every
   # repository carried in its review jobs, byte-for-byte; the job around it
@@ -1227,14 +1371,15 @@ jobs:
     concurrency:
       group: ${{ format('code-review-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) }}
       cancel-in-progress: false
-    runs-on: codex  # lab-string-ok: the public label of the Codex review runner, read by the review tier only # self-hosted: credential: the reviewer token is mounted on this runner alone
+    runs-on: codex  # lab-string-ok: the public label of the Codex review runner, read by the review tier only # self-hosted: credential: the reviewer token is mounted on this runner alone (ruling 999 question to the Tenant Agent)
     # The route, for the opencode job.
     outputs:
       agent: ${{ steps.guard.outputs.agent }}
       model: ${{ steps.guard.outputs.model }}
       effort: ${{ steps.guard.outputs.effort }}
-    # One budget inside 75 minutes: the refresh lock waits at most 300 s and
-    # the refresh runs at most 130 s, the review lock 600 s, codex runs at most
+    # One budget inside 75 minutes (JOB_BUDGET in lib.sh; v5.12.5: each lock
+    # waits for what that budget has left, not a fixed 300 s and 600 s): the
+    # refresh runs at most 130 s, codex runs at most
     # 2730 s (a large head, v5.6; 1530 s otherwise), the module fetch at most
     # 300 s; the guard, checkout, retried API calls and posting keep the
     # remaining 440 s (less the 20 s twin settle on GitHub, v5.10.9), so the
@@ -1260,6 +1405,8 @@ jobs:
           umask 077
           rm -rf "$WORK"
           mkdir -m 0711 "$WORK"
+          # v5.12.5: the job's clock, for lock_wait (lib.sh). Root-owned.
+          date +%s > "$WORK/job-start"
 
           # Shared by every later step. die() records the reason, which the
           # error-report step posts as the PR comment.
@@ -1458,6 +1605,21 @@ jobs:
             jq -r '.tokens.access_token | split(".") | .[1]
                      | gsub("-"; "+") | gsub("_"; "/") | . + ("=" * ((4 - length % 4) % 4))
                      | @base64d | fromjson | .exp | numbers | floor' "$1" 2>/dev/null
+          }
+          # THE LOCK WAITS IN THE JOB'S BUDGET (v5.12.5, Tenant Agent ruling
+          # 1012). JOB_BUDGET is the review job's timeout-minutes in seconds.
+          # lock_wait NEED prints the seconds a flock on the review lock may
+          # wait: the budget left since $WORK/job-start, less the NEED seconds
+          # the job still uses once it holds the lock. No time left: die.
+          JOB_BUDGET=$(( 75 * 60 ))
+          lock_wait() {
+            local start left
+            start=$(cat "$WORK/job-start") || die "cannot read the job's start time ($WORK/job-start)"
+            [[ $start =~ ^[0-9]+$ ]] || die "the job's start time ($WORK/job-start) is not a number"
+            left=$(( start + JOB_BUDGET - $(date +%s) - $1 ))
+            [ "$left" -ge 1 ] ||
+              die "no time is left in the job's $JOB_BUDGET s to wait for $CODEX_MASTER/.review.lock (it needs $1 s after the lock)"
+            echo "$left"
           }
           LIB
           # shellcheck source=/dev/null
@@ -2086,8 +2248,10 @@ jobs:
             # `codex login status` renews nothing (v5.4); one minimal model
             # call does, run in an empty directory so it reads no checkout.
             refresh_dir=$(mktemp -d) || die "cannot create a directory for the Codex refresh call"
+            # The refresh call, the module fetch, the largest review and posting.
+            wait_s=$(lock_wait $(( 130 + 360 + 2730 + 440 )))
             rc=0
-            flock -w 300 -E 75 "$CODEX_MASTER/.review.lock" \
+            flock -w "$wait_s" -E 75 "$CODEX_MASTER/.review.lock" \
               timeout -k 10 120 \
               env -i PATH="$PATH" HOME=/root LANG=C.UTF-8 NO_COLOR=1 CODEX_HOME="$CODEX_MASTER" ${HTTPS_PROXY:+HTTPS_PROXY=$HTTPS_PROXY} ${HTTP_PROXY:+HTTP_PROXY=$HTTP_PROXY} ${NO_PROXY:+NO_PROXY=$NO_PROXY} ${https_proxy:+https_proxy=$https_proxy} ${http_proxy:+http_proxy=$http_proxy} ${no_proxy:+no_proxy=$no_proxy} \
                 codex exec --skip-git-repo-check -C "$refresh_dir" -s read-only --ephemeral --color never \
@@ -2095,7 +2259,7 @@ jobs:
                   </dev/null >/dev/null 2>&1 || rc=$?
             rm -rf -- "${refresh_dir:?}"
             [ "$rc" != 75 ] ||
-              die "timed out after 300 s waiting for $CODEX_MASTER/.review.lock to refresh the Codex login"
+              die "timed out after $wait_s s waiting for $CODEX_MASTER/.review.lock to refresh the Codex login"
             if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
               die "the Codex refresh call (\`codex exec\`) did not finish within 120 s; the Codex login was not refreshed"
             fi
@@ -2625,10 +2789,13 @@ jobs:
           # would steer later root steps). Its stdout and stderr go to a
           # root-owned file only, and workflow commands stay stopped under a
           # random token until the codex process tree is gone.
+          # The lock's wait (v5.12.5), before workflow commands stop: codex's
+          # limit, its kill grace, and posting and cleanup.
+          wait_s=$(lock_wait $(( limit + 30 + 440 )))
           stop=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
           echo "::stop-commands::$stop"
           rc=0
-          flock -w 600 -E 75 "$CODEX_MASTER/.review.lock" \
+          flock -w "$wait_s" -E 75 "$CODEX_MASTER/.review.lock" \
             timeout -k 30 "$limit" \
             setpriv --reuid=1000 --regid=1000 --clear-groups --no-new-privs \
               env -i PATH="$PATH" HOME=/home/node LANG=C.UTF-8 NO_COLOR=1 ${HTTPS_PROXY:+HTTPS_PROXY=$HTTPS_PROXY} ${HTTP_PROXY:+HTTP_PROXY=$HTTP_PROXY} ${https_proxy:+https_proxy=$https_proxy} ${http_proxy:+http_proxy=$http_proxy} \
@@ -2658,7 +2825,7 @@ jobs:
 
           case "$rc" in
             0)   ;;
-            75)  die "timed out after 600 s waiting for /root/.codex/.review.lock (another review holds it)" ;;
+            75)  die "timed out after $wait_s s waiting for /root/.codex/.review.lock (another review holds it)" ;;
             124) die "codex did not finish within $limit s" ;;
             *)   die "codex exited $rc" ;;
           esac
@@ -3511,9 +3678,11 @@ jobs:
   #   (b) $REVIEWER's latest standing verdict ON THIS HEAD is APPROVED.
   # Anything else fails, the label missing included: no approval, a
   # REQUEST_CHANGES, an approval of another head, a fork head, an unreadable
-  # API, a change list the forge truncates. A run whose review job did not
-  # review waits for the in-flight `Codex review` jobs of the same PR and
-  # head first, so the newest check on the head reads their verdict.
+  # API, a change list the forge truncates. v5.12.6: a run whose head is
+  # not approved while a twin's `Codex review` of it is queued or in flight
+  # fails at once; the twin's gate reads that review's verdict, and on a
+  # pass re-runs the gate of every newer run on the head that ended red
+  # (v5.12.7: GitHub reads the context from the newest suite).
   gate:
     name: Code Review (codex)
     needs: [scope, review]
@@ -3525,10 +3694,12 @@ jobs:
       group: ${{ format('code-review-gate-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) }}
       cancel-in-progress: true
     runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
-    timeout-minutes: 80
+    # v5.12.6 (ruling 580): no twin wait is left, so 10 minutes.
+    timeout-minutes: 10
     permissions:
       contents: read
-      actions: read
+      # v5.12.7: write, for the re-run of a newer twin's gate only.
+      actions: write
       pull-requests: read
     env:
       GH_API_TOKEN: ${{ github.token }}
@@ -3642,34 +3813,33 @@ jobs:
           fi
           echo "$n changed files; at least one is code, so $REVIEWER must approve $EVENT_SHA."
 
-          # Wait for the in-flight review of this PR and head, if any, so this
-          # check, the newest on the head, reads its verdict (GitHub; on Gitea
-          # one concurrency group per PR and head already orders the runs).
+          # v5.12.6 (ruling 1046): NO TWIN WAIT. A twin run (same head, same
+          # run-name) whose `Codex review` job is queued or in progress posts
+          # this head's check itself: its gate needs its review, so it reads
+          # the verdict after the review ends, and on a pass re-runs this gate
+          # when this run is the newer suite (v5.12.7, the next step). This
+          # gate reads the twins once (GitHub; on Gitea one concurrency group
+          # per PR and head orders the runs), then reads the
+          # standing verdict below: an APPROVED head passes as before; anything
+          # else fails at once, naming the twin, and never holds a hosted
+          # runner for the codex runner's queue. No wait is left.
+          twin=
           if [ "$FORGE" = github ]; then
             title="Code Review: PR #$PR_NUM into $BASE_REF at $EVENT_SHA"
             wf=$(get "/actions/runs/$GITHUB_RUN_ID" | jq -r '.workflow_id // empty')
             [[ $wf =~ ^[0-9]+$ ]] || fail "cannot read this run's workflow"
-            waited=0
-            while :; do
-              busy=0
-              for st in queued in_progress; do
-                ids=$(get "/actions/workflows/$wf/runs?head_sha=$EVENT_SHA&status=$st&per_page=100" |
-                      jq -r --argjson me "$GITHUB_RUN_ID" --arg t "$title" \
-                        '.workflow_runs[] | select(.id != $me and .display_title == $t) | .id') ||
-                  fail "cannot list the $st runs on $EVENT_SHA"
-                for id in $ids; do
-                  rc=0
-                  get "/actions/runs/$id/jobs?per_page=100" |
-                    jq -e 'any(.jobs[]?; .name == "Codex review" and (.status == "queued" or .status == "in_progress"))' >/dev/null || rc=$?
-                  [ "$rc" -le 1 ] || fail "cannot read the jobs of run $id"
-                  [ "$rc" = 1 ] || busy=1
-                done
+            for st in queued in_progress; do
+              ids=$(get "/actions/workflows/$wf/runs?head_sha=$EVENT_SHA&status=$st&per_page=100" |
+                    jq -r --argjson me "$GITHUB_RUN_ID" --arg t "$title" \
+                      '.workflow_runs[] | select(.id != $me and .display_title == $t) | .id') ||
+                fail "cannot list the $st runs on $EVENT_SHA"
+              for id in $ids; do
+                rc=0
+                get "/actions/runs/$id/jobs?per_page=100" |
+                  jq -e 'any(.jobs[]?; .name == "Codex review" and (.status == "queued" or .status == "in_progress"))' >/dev/null || rc=$?
+                [ "$rc" -le 1 ] || fail "cannot read the jobs of run $id"
+                [ "$rc" = 1 ] || twin=${twin:-$id}
               done
-              [ "$busy" = 1 ] || break
-              [ "$waited" -lt 4500 ] || fail "a Codex review of $EVENT_SHA is still running after 4500 s"
-              [ "$waited" -gt 0 ] || echo "A Codex review of $EVENT_SHA is in flight; waiting for its verdict."
-              sleep 30
-              waited=$((waited + 30))
             done
           fi
 
@@ -3695,7 +3865,7 @@ jobs:
           # v5.12.1: NO APPROVAL IS REUSED on a failed review or a hold. This
           # run's review job failed (a requested round that ended red, an
           # owner or round-limit stop): its outcome stands over an earlier
-          # approval. The live PR's labels, read after the twin wait: a hold
+          # approval. The live PR's labels, read after the twin read: a hold
           # keeps even an approval of the head from passing.
           [ "$REVIEW_RESULT" != failure ] ||
             fail "this run's Codex review job failed, so no earlier approval of $EVENT_SHA is reused (v5.12.1)"
@@ -3716,8 +3886,70 @@ jobs:
                              and (.state == "APPROVED" or .state == "REQUEST_CHANGES")) ]
               | sort_by(.submitted_at // "", .id) | last | .state // "NONE"') ||
             fail "cannot read the reviews of PR $PR_NUM"
+          # v5.12.6: not approved while a twin reviews the head: that run's
+          # gate posts the head's check (and re-runs this one when this run
+          # is newer, v5.12.7); this one fails closed now.
+          [ "$verdict" = APPROVED ] || [ -z "$twin" ] ||
+            fail "the Codex review of $EVENT_SHA runs in run $twin; that run's gate posts this head's check (verdict here: $verdict; v5.12.6, ruling 1046)"
           case "$verdict" in
             APPROVED) echo "$REVIEWER approved $EVENT_SHA." ;;
             REQUEST_CHANGES) fail "$REVIEWER requested changes on $EVENT_SHA" ;;
             *) fail "no $REVIEWER approval of $EVENT_SHA. A code change needs a Codex review: label the PR code-review and task:ready (ruling 589)" ;;
           esac
+
+      # v5.12.7 (Codex's P1 on go-xkms #2327): THE TWIN HANDOFF REACHES THE
+      # NEWEST SUITE. GitHub reads a required context from the newest check
+      # suite of the workflow on the head, not from the newest check-run: a
+      # newer run cancelled with no `Code Review (codex)` check left the
+      # context "expected" over older green ones (go-quicraft #683, v5.9.7).
+      # So when a newer run's gate failed at once on this run's review in
+      # flight (an unrelated label's run, its own review skipped), this
+      # gate's pass is in the older suite and the head stays red. After a
+      # pass here, every newer run of this PR on the head whose gate ended
+      # failure or cancelled has that gate re-run: the re-run is in the
+      # newest suite and reads the verdict again (it keeps its run's needs,
+      # so a failed review or a hold still fails it). Only the gate job is
+      # re-run, never a review. Best effort: an API error is a warning, and
+      # the head stays red (fail closed), never green. The re-run joins the
+      # gate's group, so it may cancel this job as it ends.
+      - name: Re-run a newer twin's failed gate on this head
+        if: success() && env.FORGE == 'github'
+        run: |
+          set -euo pipefail
+          shopt -s inherit_errexit
+          # Best effort: any stop is a warning and exit 0, so this run's pass
+          # stands; the newer gate then stays red (fail closed).
+          warn() { echo "::warning::Code Review (codex): $*" >&2; exit 4; }
+          trap 'rc=$?; [ "$rc" = 0 ] || [ "$rc" = 4 ] || echo "::warning::Code Review (codex): the handoff stopped (exit $rc); no newer twin gate was re-run past this point" >&2; exit 0' EXIT
+          hdr=(-H "Authorization: token $GH_API_TOKEN" -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28')
+          api() { # method path -> body; warns and stops unless 2xx
+            local code
+            code=$(curl -sS --proto '=http,https' --max-time 60 --retry 3 --retry-all-errors \
+                     -X "$1" -o handoff-api.json -w '%{http_code}' "${hdr[@]}" "$REPO_API$2") ||
+              warn "cannot reach $REPO_API$2; a newer twin's gate is not re-run"
+            case "$code" in 2??) cat handoff-api.json ;; *) warn "$1 $2 answered HTTP $code; a newer twin's gate is not re-run" ;; esac
+          }
+          title="Code Review: PR #$PR_NUM into $BASE_REF at $EVENT_SHA"
+          me=$(api GET "/actions/runs/$GITHUB_RUN_ID")
+          wf=$(jq -r '.workflow_id // empty' <<<"$me")
+          suite=$(jq -r '.check_suite_id // empty' <<<"$me")
+          [[ $wf =~ ^[0-9]+$ && $suite =~ ^[0-9]+$ ]] || warn "cannot read this run's workflow and check suite"
+          newer=$(api GET "/actions/workflows/$wf/runs?head_sha=$EVENT_SHA&per_page=100" |
+                  jq -r --argjson s "$suite" --arg t "$title" \
+                    '.workflow_runs[] | select(.display_title == $t and .check_suite_id > $s) | "\(.id) \(.status)"') ||
+            warn "cannot list the runs on $EVENT_SHA"
+          [ -n "$newer" ] || { echo "No newer run of PR $PR_NUM on $EVENT_SHA; this gate's check stands."; exit 0; }
+          while read -r id status; do
+            gate=$(api GET "/actions/runs/$id/jobs?per_page=100" |
+                   jq -r '[.jobs[]? | select(.name == "Code Review (codex)" and .status == "completed"
+                                             and (.conclusion == "failure" or .conclusion == "cancelled"))] | first | .id // empty') ||
+              warn "cannot read the jobs of run $id"
+            if [ -z "$gate" ]; then
+              echo "Run $id: its gate did not end red; nothing to re-run."
+            elif [ "$status" != completed ]; then
+              echo "::warning::Code Review (codex): run $id's gate ended red but the run is $status, so it cannot be re-run yet; re-run job $gate when it ends" >&2
+            else
+              api POST "/actions/jobs/$gate/rerun" >/dev/null
+              echo "Run $id is newer on $EVENT_SHA and its gate (job $gate) ended red: re-run, so the newest suite reads this approval."
+            fi
+          done <<<"$newer"

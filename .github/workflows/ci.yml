@@ -1,4 +1,4 @@
-# ci-template: v1.35.1 + v1.42 hermetic gate + v1.48 runner selection + v1.50 short-list fix (customized)
+# ci-template: v1.35.1 + v1.42 hermetic gate + v1.48 runner selection + v1.50 short-list fix + v1.51 reviewed (customized)
 #
 # v1.42 hermetic gate only (owner ruling 742 (1), Tenant Agent rulings 754 and
 # 794): the CI Gate's outcome depends only on the tree under test. `make
@@ -30,6 +30,11 @@
 # short list is now a lower bound: at or past HOSTED_JOBS_PER_REPO, or with
 # a hosted job of another run queued past the grace in it, it overflows; a
 # short list that reaches neither trigger picks hosted with a ::warning.
+# v1.51 reviewed (handbook PR 86, c4de1f7d, DS-9791): v1.51 changes only
+# the v1.38 step `Runner labels (ruling 633)`, which also reads every runs-on
+# under pull_request_target. That step is not adopted here (v1.38 is on the
+# catch-up list above), so v1.51 has nothing to apply to this file; it is
+# adopted with the step. code-review.yml takes v5.12.8 in the same change.
 # v1.35.1 (DS-8433, CA m2557): the Signatures job of handbook cd17d28
 # (ci-template v1.35.1) is adopted as is, in CI Gate's needs, env block and a
 # `pr` check line, with .github/allowed_signers synced from handbook
