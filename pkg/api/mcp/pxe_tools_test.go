@@ -60,7 +60,7 @@ func newPXETestRegistry(server platformv1.PXEServiceServer) *ToolRegistry {
 // Every PXEService method has one tool, and the tool requires the scope its
 // gRPC method requires.
 func TestPXETools_CoverEveryMethodWithItsGRPCScope(t *testing.T) {
-	permissions := toolPermissionCatalog()
+	permissions := declaredToolPermissions(PlatformTools{})
 	byMethod := make(map[string]string, len(pxeTools))
 	for name, tool := range pxeTools {
 		byMethod[tool.method] = name

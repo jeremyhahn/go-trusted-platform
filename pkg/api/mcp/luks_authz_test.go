@@ -97,7 +97,7 @@ func TestLUKSAuthorizeToolEnforcesScope(t *testing.T) {
 	scopes := []string{"luks:read", "luks:write", "luks:delete"}
 	for tool, want := range luksToolScopes {
 		for _, held := range scopes {
-			checker := NewAuthorizationChecker(scopeChecker(held), &mockAuthManager{})
+			checker := pepChecker(scopeChecker(held), &mockAuthManager{})
 			_, authErr := checker.AuthorizeTool(ctx, tool, "tok")
 			if held == want {
 				if authErr != nil {
@@ -135,7 +135,7 @@ func luksServer(scope string) (*Server, *phase35StubProvider) {
 	stub := &phase35StubProvider{}
 	svc := &phase35CombinedProvider{mockServiceProvider: newMockServiceProvider(), phase35StubProvider: stub}
 	server := NewServer(svc, nil, newTestLogger())
-	server.SetAuthorizationService(scopeChecker(scope), &mockAuthManager{})
+	usePEP(server, scopeChecker(scope), &mockAuthManager{})
 	return server, stub
 }
 

@@ -95,6 +95,36 @@ func TestBuildSupervisor_AttachesTheSupervisorToTheGateway(t *testing.T) {
 	assert.True(t, cfg.Gateway.Supervisor.Supervises(gateway.ServiceProxy))
 }
 
+func TestBuildSupervisor_OnChildExitRemovesHubForWireGuardOnly(t *testing.T) {
+	var removals int
+	removeErr := errors.New("link busy")
+	prevRemove, prevNew := supervisorRemoveVPNHub, newProcessSupervisor
+	t.Cleanup(func() { supervisorRemoveVPNHub, newProcessSupervisor = prevRemove, prevNew })
+	supervisorRemoveVPNHub = func(*slog.Logger) error { removals++; return removeErr }
+	var built process.Config
+	newProcessSupervisor = func(c process.Config) *process.Supervisor {
+		built = c
+		return prevNew(c)
+	}
+
+	cfg := &ServeConfig{Gateway: &gateway.GatewayConfig{Enabled: true}, Process: supervisorSettings(t)}
+	_, err := BuildSupervisor(cfg, process.Inherited{ConfigFile: "/etc/gatewayd/config.yaml"}, testLogger())
+	require.NoError(t, err)
+	require.NotNil(t, built.OnChildExit, "BuildSupervisor must set the exit hook")
+
+	for _, name := range []string{"datapath", "routing"} {
+		def, err := process.DefinitionByName(name)
+		require.NoError(t, err)
+		require.NoError(t, built.OnChildExit(context.Background(), def))
+	}
+	assert.Zero(t, removals, "only the wireguard row owns the hub")
+
+	def, err := process.DefinitionByName(process.WireGuardProcess)
+	require.NoError(t, err)
+	require.ErrorIs(t, built.OnChildExit(context.Background(), def), removeErr)
+	assert.Equal(t, 1, removals, "the wireguard child's exit removes the hub")
+}
+
 func TestBuildSupervisor_NothingToSupervise(t *testing.T) {
 	tests := map[string]*ServeConfig{
 		"no process section": {Gateway: &gateway.GatewayConfig{Enabled: true}},
@@ -224,6 +254,7 @@ func (f *fakeShutdowner) Shutdown(ctx context.Context) error {
 func TestShutdownSupervisor_StopsTheChildrenWithinTheShutdownTimeout(t *testing.T) {
 	var logged bytes.Buffer
 	supervisor := &fakeShutdowner{}
+	fakeHubRemoval(t, nil, nil)
 
 	shutdownSupervisor(supervisor, slog.New(slog.NewTextHandler(&logged, nil)))
 
@@ -234,11 +265,53 @@ func TestShutdownSupervisor_StopsTheChildrenWithinTheShutdownTimeout(t *testing.
 func TestShutdownSupervisor_LogsAFailure(t *testing.T) {
 	var logged bytes.Buffer
 	supervisor := &fakeShutdowner{err: context.DeadlineExceeded}
+	fakeHubRemoval(t, nil, nil)
 
 	shutdownSupervisor(supervisor, slog.New(slog.NewTextHandler(&logged, nil)))
 
 	assert.Contains(t, logged.String(), "Process supervisor shutdown failed")
 	assert.Contains(t, logged.String(), context.DeadlineExceeded.Error())
+}
+
+// fakeHubRemoval swaps the stale-hub remover for one that counts its calls
+// and records whether the supervisor had shut down when it ran.
+func fakeHubRemoval(t *testing.T, removeErr error, shutdown *fakeShutdowner) *int {
+	t.Helper()
+	removals := 0
+	prev := supervisorRemoveVPNHub
+	t.Cleanup(func() { supervisorRemoveVPNHub = prev })
+	supervisorRemoveVPNHub = func(*slog.Logger) error {
+		if shutdown != nil && !shutdown.hadDeadline {
+			t.Error("the hub was removed before the children were shut down")
+		}
+		removals++
+		return removeErr
+	}
+	return &removals
+}
+
+// TestShutdownSupervisor_RemovesTheHubAfterAKilledChild checks Codex #2029
+// round 1 P1 2: a WireGuard child killed at the shutdown deadline runs no
+// exit hook, so the shutdown removes its hub once the children are gone.
+func TestShutdownSupervisor_RemovesTheHubAfterAKilledChild(t *testing.T) {
+	var logged bytes.Buffer
+	supervisor := &fakeShutdowner{err: context.DeadlineExceeded}
+	removals := fakeHubRemoval(t, nil, supervisor)
+
+	shutdownSupervisor(supervisor, slog.New(slog.NewTextHandler(&logged, nil)))
+
+	assert.Equal(t, 1, *removals, "the killed child's hub is removed")
+}
+
+func TestShutdownSupervisor_LogsAHubRemovalFailure(t *testing.T) {
+	var logged bytes.Buffer
+	supervisor := &fakeShutdowner{}
+	fakeHubRemoval(t, errors.New("netlink refused"), supervisor)
+
+	shutdownSupervisor(supervisor, slog.New(slog.NewTextHandler(&logged, nil)))
+
+	assert.Contains(t, logged.String(), "Stale VPN hub removal at shutdown failed")
+	assert.Contains(t, logged.String(), "netlink refused")
 }
 
 func TestServicePolicy_OnlyTheDatapathProcessAdmitsTheServiceAccount(t *testing.T) {
@@ -379,6 +452,11 @@ func (h *fakeServiceHandler) Health() error { return nil }
 
 // serviceRun records what serveProcess handed its collaborators.
 type serviceRun struct {
+	// keyResolves counts the hub-key resolutions; keyHardened is how many
+	// hardenings had run at the first one.
+	keyResolves int
+	keyHardened int
+	hubKey      *vpnHubKey
 	hardened    []process.Definition
 	built       *ServeConfig
 	handler     *fakeServiceHandler
@@ -458,6 +536,13 @@ func (r *serviceRun) deps() serviceDeps {
 				return r.leaseControl, r.journal, nil
 			}
 			return fakeLeaseControl{}, nil, nil
+		},
+		resolveVPNHubKey: func(context.Context, *ServeConfig, *slog.Logger) *vpnHubKey {
+			if r.keyResolves == 0 {
+				r.keyHardened = len(r.hardened)
+			}
+			r.keyResolves++
+			return r.hubKey
 		},
 	}
 }

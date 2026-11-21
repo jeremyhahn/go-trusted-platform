@@ -55,8 +55,8 @@ it cannot.
 1. **A build with the `cluster` tag.** It is in the default `BUILD_TAGS`, so a
    standard build has it. Run `make -s print-build-tags` for the derived set
    rather than copying a list — the tags are assembled in two stages.
-   Without it, the cluster service is a stub that reports
-   `"cluster service not enabled (build with -tags cluster)"`.
+   The tag alone does not enable clustering: the cluster service is a stub on
+   every build until #336 lands.
 2. **A `quicbaas:` section configured for a multi-node deployment** — see below.
 3. **An odd number of nodes.** Three or five. Quorum is
    `(total / 2) + 1`, so three nodes tolerate one failure and five tolerate two.
@@ -269,14 +269,6 @@ Expected. No coordinator is wired into the daemon.
 not configured".**
 Expected, same cause: the registered service has no cluster servicer behind it,
 and QUIC and MCP call that same service.
-
-**Startup fails with "cluster service not enabled (build with -tags cluster)".**
-The binary was built without the `cluster` tag. It is in the default tag set, so
-this means a custom build.
-
-**Startup fails with "QuicBaaS service does not support cluster coordination".**
-The tag is present but the database layer does not expose a coordinator. That is
-a lower-layer capability question, not a platform configuration one.
 
 **Startup fails with "invalid storage backend".**
 You set `storage-backend: raft`. Use `pebble` — see the configuration section.
