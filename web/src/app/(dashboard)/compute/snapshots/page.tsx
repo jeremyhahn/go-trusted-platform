@@ -192,7 +192,6 @@ export default function SnapshotsPage() {
   const [createVmId, setCreateVmId] = useState('');
   const [createName, setCreateName] = useState('');
   const [createDescription, setCreateDescription] = useState('');
-  const [createMemory, setCreateMemory] = useState(false);
 
   // Create snapshot mutation (#2044): POST /vms/{id}/snapshots through the SDK.
   const createSnapshotMutation = useMutation(
@@ -208,7 +207,6 @@ export default function SnapshotsPage() {
         setCreateOpen(false);
         setCreateName('');
         setCreateDescription('');
-        setCreateMemory(false);
         refetchSnapshots();
       },
       onError: (error) => {
@@ -234,7 +232,9 @@ export default function SnapshotsPage() {
       config: {
         name,
         ...(description ? { description } : {}),
-        memorySnapshot: createMemory,
+        // The compute service takes internal QEMU snapshots, which always capture
+        // memory and disk; it rejects disk-only and memory-only requests (#2181 Codex).
+        memorySnapshot: true,
         diskSnapshot: true,
       },
     });
@@ -480,7 +480,8 @@ export default function SnapshotsPage() {
           <DialogHeader>
             <DialogTitle>Create snapshot</DialogTitle>
             <DialogDescription>
-              Take a snapshot of a VM&apos;s disks, and optionally its memory.
+              Takes a full snapshot that captures both the VM&apos;s memory and its disks. Disk-only and
+              memory-only snapshots are not supported.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -514,15 +515,6 @@ export default function SnapshotsPage() {
                 value={createDescription}
                 onChange={(e) => setCreateDescription(e.target.value)}
               />
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="snapshot-memory"
-                checked={createMemory}
-                onChange={(e) => setCreateMemory(e.target.checked)}
-              />
-              <Label htmlFor="snapshot-memory">Include memory</Label>
             </div>
           </div>
           <DialogFooter>
