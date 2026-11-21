@@ -2063,6 +2063,7 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		DeviceTemplateService: d.config.DeviceTemplateService,
 		VerdictSink:           deviceVerdictSink(d.config),
 		AttestCertRecorder:    newDeviceAttestCertRecorder(d.config, d.logger.Slog()),
+		AttestChallengeIssuer: attestChallengeIssuerOf(d.deviceService),
 		DeviceLifecycle:       d.config.DeviceLifecycle,
 		AttestationReporting:  d.config.AttestationReporting,
 		AttestationServer:     d.attestationService,
