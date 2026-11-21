@@ -948,6 +948,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		})
 	}
 	eabGRPCService := NewEABGRPCService(logger, eabServicer, eabDeliveryServicer)
+	eabGRPCService.SetSystemTenant(config.PlatformTenantID)
 	if grpcServer != nil {
 		platformv1.RegisterEABServiceServer(grpcServer, eabGRPCService)
 	}
