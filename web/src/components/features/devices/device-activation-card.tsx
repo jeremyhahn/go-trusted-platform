@@ -11,9 +11,17 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
-import { useDeviceActivation, type FoundDevice } from '@/hooks/use-device-activation';
+import { useDeviceActivation, type ActivationResult, type FoundDevice } from '@/hooks/use-device-activation';
 
 function show(value: string | number | undefined): string {
   return value === undefined || value === '' ? '-' : String(value);
@@ -26,6 +34,36 @@ export function DeviceActivationCard(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [device, setDevice] = useState<FoundDevice | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
+  const [mac, setMac] = useState('');
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [activation, setActivation] = useState<ActivationResult | null>(null);
+
+  const handleActivate = async () => {
+    if (!device?.serial) return;
+    setConfirmOpen(false);
+    setBusy(true);
+    try {
+      const res = await api.activate(device.serial, mac.trim() || undefined);
+      if (res.success && res.data) {
+        setActivation(res.data);
+        toast({ title: 'Device activated', description: `VLAN ${res.data.vlan}`, variant: 'success' });
+      } else {
+        toast({
+          title: 'Activation failed',
+          description: res.error?.message || 'The control plane did not activate the device',
+          variant: 'destructive',
+        });
+      }
+    } catch (err) {
+      toast({
+        title: 'Activation failed',
+        description: err instanceof Error ? err.message : String(err),
+        variant: 'destructive',
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const handleFind = async () => {
     const wanted = serial.trim();
@@ -35,6 +73,7 @@ export function DeviceActivationCard(): JSX.Element {
     }
     setBusy(true);
     setRefusal(null);
+    setActivation(null);
     try {
       const res = await api.findBySerial(wanted);
       if (res.success && res.data) {
@@ -92,7 +131,38 @@ export function DeviceActivationCard(): JSX.Element {
             <dd>{show(device.last_heartbeat_at)}</dd>
           </dl>
         )}
+
+        {device && (
+          <div className="flex gap-2">
+            <Input aria-label="MAC address (optional)" value={mac} onChange={(e) => setMac(e.target.value)} />
+            <Button onClick={() => setConfirmOpen(true)} disabled={busy}>
+              Activate
+            </Button>
+          </div>
+        )}
+
+        {activation && (
+          <div data-testid="device-activation-result" className="text-sm">
+            <p>{`${activation.status} on VLAN ${activation.vlan}`}</p>
+            <p className="text-muted-foreground">{show(activation.transitioned_at)}</p>
+          </div>
+        )}
       </CardContent>
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{`Activate ${device?.serial ?? ''}?`}</DialogTitle>
+            <DialogDescription>The device is moved onto the admitted VLAN of the profile that matches it.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleActivate}>Activate</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
