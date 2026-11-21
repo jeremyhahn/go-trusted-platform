@@ -1,7 +1,8 @@
 'use client';
 
+import React from 'react';
 import { useParams, usePathname, useRouter } from 'next/navigation';
-import { ArrowLeft, Loader2, Trash2 } from 'lucide-react';
+import { ArrowLeft, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
@@ -14,6 +15,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { EmbeddedIamGate } from '../../embedded-iam-gate';
 
 // Application record as the REST API sends it: camelCase or snake_case keys (#445).
 interface AppWire {
@@ -102,17 +104,23 @@ export default function AppDetailClient() {
         <Button variant="ghost" size="sm" onClick={() => router.push('/iam/apps')}>
           <ArrowLeft className="h-4 w-4 mr-2" /> Back to Applications
         </Button>
-        <Button
-          variant="destructive"
-          disabled={deleteMutation.isLoading}
-          onClick={() => {
-            if (window.confirm(`Delete application "${a?.name || clientId}"?`)) {
-              deleteMutation.mutate(undefined);
-            }
-          }}
-        >
-          <Trash2 className="h-4 w-4 mr-2" /> Delete
-        </Button>
+        <div className="flex gap-2">
+          {/* The embedded IAM backend has no App.Update handler (#2024 Codex). */}
+          <EmbeddedIamGate method="App.Update" variant="outline">
+            <Pencil className="h-4 w-4 mr-2" /> Edit
+          </EmbeddedIamGate>
+          <Button
+            variant="destructive"
+            disabled={deleteMutation.isLoading}
+            onClick={() => {
+              if (window.confirm(`Delete application "${a?.name || clientId}"?`)) {
+                deleteMutation.mutate(undefined);
+              }
+            }}
+          >
+            <Trash2 className="h-4 w-4 mr-2" /> Delete
+          </Button>
+        </div>
       </div>
 
       <Card>

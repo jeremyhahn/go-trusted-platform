@@ -8,6 +8,7 @@
  * URL pathname instead of `useParams()`.
  */
 
+import React from 'react';
 import { useParams, usePathname, useRouter } from 'next/navigation';
 import { ArrowLeft, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { resolveDynamicId } from '@/utils/dynamic-route';
@@ -22,6 +23,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { EmbeddedIamGate } from '../../embedded-iam-gate';
 
 // Policy record as the REST API sends it: camelCase or snake_case keys (#445).
 interface PolicyWire {
@@ -110,9 +112,10 @@ export default function PolicyDetailClient() {
           <ArrowLeft className="h-4 w-4 mr-2" /> Back to Policies
         </Button>
         <div className="flex gap-2">
-          <Button variant="outline" disabled>
+          {/* The embedded IAM backend has no Policy.Update handler (#2024 Codex). */}
+          <EmbeddedIamGate method="Policy.Update" variant="outline">
             <Pencil className="h-4 w-4 mr-2" /> Edit
-          </Button>
+          </EmbeddedIamGate>
           <Button
             variant="destructive"
             disabled={deleteMutation.isLoading}
@@ -139,6 +142,9 @@ export default function PolicyDetailClient() {
         <CardContent className="space-y-4">
           <div>
             <h3 className="text-sm font-medium mb-2">Spec (YAML)</h3>
+            <p className="text-xs text-muted-foreground mb-2">
+              The spec cannot be changed in place: delete and re-create the policy to change it.
+            </p>
             <pre className="rounded-md border bg-muted p-4 text-xs overflow-auto max-h-[500px]">
               {yaml || '(no spec returned)'}
             </pre>

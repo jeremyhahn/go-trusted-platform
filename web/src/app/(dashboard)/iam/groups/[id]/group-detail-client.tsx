@@ -1,7 +1,10 @@
 'use client';
 
 import { useParams, usePathname, useRouter } from 'next/navigation';
-import { ArrowLeft, Loader2, Trash2 } from 'lucide-react';
+import { useState } from 'react';
+import { ArrowLeft, Loader2, Trash2, UserMinus, UserPlus } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
@@ -14,6 +17,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { EmbeddedIamGate } from '../../embedded-iam-gate';
 
 // Group record as the REST API sends it: camelCase or snake_case keys (#445).
 interface GroupWire {
@@ -37,7 +41,7 @@ export default function GroupDetailClient() {
 
   const groupId = resolveDynamicId(params, pathname, 'groups');
 
-  const { data: group, isLoading, error } = useApi(
+  const { data: group, isLoading, error, refetch } = useApi(
     () => {
       if (!tenantId) return Promise.reject(new Error('No tenant ID'));
       return iam.getGroup(tenantId, groupId);
@@ -62,6 +66,33 @@ export default function GroupDetailClient() {
           variant: 'destructive',
         });
       },
+    },
+  );
+
+  const [editName, setEditName] = useState<string | null>(null);
+  const [editDescription, setEditDescription] = useState<string | null>(null);
+  const [newMember, setNewMember] = useState('');
+  const [removeMember, setRemoveMember] = useState('');
+
+  const failToast = (title: string) => (err: unknown) => {
+    toast({
+      title,
+      description: err instanceof Error ? err.message : 'Unknown error',
+      variant: 'destructive',
+    });
+  };
+
+  const updateMutation = useMutation(
+    async (vars: { name: string; description: string }) => {
+      if (!tenantId) throw new Error('No tenant ID');
+      return iam.updateGroup({ tenantId, groupId, ...vars });
+    },
+    {
+      onSuccess: () => {
+        toast({ title: 'Group updated', variant: 'success' });
+        refetch();
+      },
+      onError: failToast('Failed to update group'),
     },
   );
 
@@ -123,7 +154,7 @@ export default function GroupDetailClient() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center gap-4">
-            <Badge variant="outline">{members.length} members</Badge>
+            {members.length > 0 && <Badge variant="outline">{members.length} members</Badge>}
             <Badge variant="outline">{roles.length} roles</Badge>
           </div>
           {members.length > 0 && (
@@ -131,13 +162,57 @@ export default function GroupDetailClient() {
               <h3 className="text-sm font-medium mb-2">Members</h3>
               <ul className="text-sm space-y-1">
                 {members.map((m) => (
-                  <li key={m} className="font-mono text-xs">
-                    {m}
+                  <li key={m} className="font-mono text-xs flex items-center gap-2">
+                    <span>{m}</span>
+                    <EmbeddedIamGate
+                      method="Group.RemoveMember"
+                      showReason={false}
+                      size="sm"
+                      variant="ghost"
+                      aria-label={`Remove member ${m}`}
+                    >
+                      <UserMinus className="h-4 w-4" />
+                    </EmbeddedIamGate>
                   </li>
                 ))}
               </ul>
             </div>
           )}
+          <form
+            className="flex items-end gap-2"
+            // The embedded IAM backend has no Group.AddMember handler (#2024 Codex).
+            onSubmit={(e) => e.preventDefault()}
+          >
+            <div className="space-y-2 flex-1">
+              <Label htmlFor="group-new-member">User ID</Label>
+              <Input
+                id="group-new-member"
+                value={newMember}
+                onChange={(e) => setNewMember(e.target.value)}
+              />
+            </div>
+            <EmbeddedIamGate method="Group.AddMember">
+              <UserPlus className="h-4 w-4 mr-2" /> Add member
+            </EmbeddedIamGate>
+          </form>
+          {/* GET /groups/{id} carries no members list (groupToResponse), so removal goes by user ID. */}
+          <form
+            className="flex items-end gap-2"
+            // The embedded IAM backend has no Group.RemoveMember handler (#2024 Codex).
+            onSubmit={(e) => e.preventDefault()}
+          >
+            <div className="space-y-2 flex-1">
+              <Label htmlFor="group-remove-member">User ID to remove</Label>
+              <Input
+                id="group-remove-member"
+                value={removeMember}
+                onChange={(e) => setRemoveMember(e.target.value)}
+              />
+            </div>
+            <EmbeddedIamGate method="Group.RemoveMember" variant="outline">
+              <UserMinus className="h-4 w-4 mr-2" /> Remove by user ID
+            </EmbeddedIamGate>
+          </form>
           {roles.length > 0 && (
             <div>
               <h3 className="text-sm font-medium mb-2">Roles</h3>
@@ -152,6 +227,45 @@ export default function GroupDetailClient() {
           )}
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Edit group</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              updateMutation.mutate({
+                name: editName ?? g?.name ?? '',
+                description: editDescription ?? g?.description ?? '',
+              });
+            }}
+          >
+            <div className="space-y-2">
+              <Label htmlFor="group-edit-name">Name</Label>
+              <Input
+                id="group-edit-name"
+                value={editName ?? g?.name ?? ''}
+                onChange={(e) => setEditName(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="group-edit-description">Description</Label>
+              <Input
+                id="group-edit-description"
+                value={editDescription ?? g?.description ?? ''}
+                onChange={(e) => setEditDescription(e.target.value)}
+              />
+            </div>
+            <Button type="submit" disabled={updateMutation.isLoading}>
+              Save group
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
     </div>
   );
 }

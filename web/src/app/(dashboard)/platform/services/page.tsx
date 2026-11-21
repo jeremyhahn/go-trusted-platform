@@ -3,11 +3,14 @@
 import * as React from "react";
 import {
   RefreshCw,
+  Play,
+  Square,
+  RotateCcw,
   Server,
-  CheckCircle,
-  XCircle,
+  Info,
   AlertCircle,
   Loader2,
+  FileCog,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -19,321 +22,366 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { DataTable } from "@/components/ui/data-table";
-import { DataTableColumnHeader } from "@/components/ui/data-table-column-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { useApi, usePlatform, useToast } from "@/hooks";
-import type { ColumnDef } from "@tanstack/react-table";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { usePlatformDaemon, useToast } from "@/hooks";
+import type { DaemonServiceAction } from "@/hooks";
+import type { DaemonServiceInfo } from "trusted-platform-sdk";
 
-/**
- * Service status type
- */
-type ServiceState = "running" | "stopped" | "starting" | "stopping" | "error";
-
-/**
- * Platform service interface
- */
-interface PlatformService {
-  id: string;
-  name: string;
-  displayName: string;
-  state: ServiceState;
-  latencyMs: number;
-  lastCheck: string | null;
-  message: string;
-  healthy: boolean;
+/** Badge variant for a daemon or service status string. */
+function statusVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
+  switch (status.toLowerCase()) {
+    case "running":
+    case "healthy":
+    case "ok":
+      return "default";
+    case "stopped":
+      return "secondary";
+    case "error":
+    case "failed":
+      return "destructive";
+    default:
+      return "outline";
+  }
 }
 
 /**
- * Get state badge variant based on service state
+ * The version string from a `GET /version` reply. The daemon sends the
+ * version flat or wrapped in `version`; accept both.
  */
-function getStateBadge(state: ServiceState) {
-  const variants: Record<ServiceState, { variant: "default" | "secondary" | "destructive" | "outline"; icon: React.ReactNode }> = {
-    running: { variant: "default", icon: <CheckCircle className="h-3 w-3 mr-1" /> },
-    stopped: { variant: "secondary", icon: <XCircle className="h-3 w-3 mr-1" /> },
-    starting: { variant: "outline", icon: <RefreshCw className="h-3 w-3 mr-1 animate-spin" /> },
-    stopping: { variant: "outline", icon: <RefreshCw className="h-3 w-3 mr-1 animate-spin" /> },
-    error: { variant: "destructive", icon: <AlertCircle className="h-3 w-3 mr-1" /> },
-  };
-
-  const { variant, icon } = variants[state];
-  return (
-    <Badge variant={variant} className="capitalize">
-      {icon}
-      {state}
-    </Badge>
-  );
+function versionString(data: unknown): string {
+  if (!data || typeof data !== "object") return "-";
+  const v = (data as Record<string, unknown>).version;
+  if (typeof v === "string") return v;
+  if (v && typeof v === "object") {
+    const inner = (v as Record<string, unknown>).version;
+    if (typeof inner === "string") return inner;
+  }
+  return "-";
 }
 
-/**
- * Table columns for services
- */
-const columns: ColumnDef<PlatformService>[] = [
-  {
-    accessorKey: "displayName",
-    header: ({ column }) => (
-      <DataTableColumnHeader column={column} title="Service" />
-    ),
-    cell: ({ row }) => (
-      <div className="flex flex-col">
-        <span className="font-medium">{row.original.displayName}</span>
-        <span className="text-xs text-muted-foreground">{row.original.name}</span>
-      </div>
-    ),
-  },
-  {
-    accessorKey: "state",
-    header: ({ column }) => (
-      <DataTableColumnHeader column={column} title="Status" />
-    ),
-    cell: ({ row }) => getStateBadge(row.original.state),
-    filterFn: (row, id, value) => {
-      return value.includes(row.getValue(id));
-    },
-  },
-  {
-    accessorKey: "latencyMs",
-    header: ({ column }) => (
-      <DataTableColumnHeader column={column} title="Latency" />
-    ),
-    cell: ({ row }) => (
-      <span className="font-mono text-sm">
-        {row.original.latencyMs.toFixed(2)} ms
-      </span>
-    ),
-  },
-  {
-    accessorKey: "lastCheck",
-    header: ({ column }) => (
-      <DataTableColumnHeader column={column} title="Last Check" />
-    ),
-    cell: ({ row }) => {
-      if (!row.original.lastCheck) return "-";
-      const date = new Date(row.original.lastCheck);
-      return (
-        <span className="text-sm">
-          {date.toLocaleTimeString()}
-        </span>
-      );
-    },
-  },
-  {
-    accessorKey: "message",
-    header: ({ column }) => (
-      <DataTableColumnHeader column={column} title="Message" />
-    ),
-    cell: ({ row }) => (
-      <span className="text-sm text-muted-foreground truncate max-w-md">
-        {row.original.message || "No message"}
-      </span>
-    ),
-  },
-];
+const ACTION_LABEL: Record<DaemonServiceAction, string> = {
+  start: "Start",
+  stop: "Stop",
+  restart: "Restart",
+};
 
 /**
  * Platform Services Page
  *
- * Features:
- * - List all platform services
- * - Service health status indicators
- * - Service latency metrics
- * - Service statistics overview
+ * Daemon status, version and configuration (with reload), and the daemon's
+ * services with status details and start, stop and restart. Stop and
+ * restart ask for confirmation first.
  */
 export default function ServicesPage() {
   const { toast } = useToast();
-  const platform = usePlatform();
+  const daemon = usePlatformDaemon();
+  const [confirm, setConfirm] = React.useState<{ name: string; action: DaemonServiceAction } | null>(null);
+  const [detail, setDetail] = React.useState<DaemonServiceInfo | null>(null);
+  // The service whose details the operator asked for, set before any await,
+  // and the generation of detail reads: a read applies its answer only while
+  // it is still the latest read for the still-selected service. A lifecycle
+  // action bumps the generation, so a read begun before it never lands.
+  const selectedRef = React.useRef<string | null>(null);
+  const detailSeq = React.useRef(0);
 
-  // Fetch platform health with service details
-  const {
-    data: healthData,
-    isLoading,
-    error,
-    refetch,
-  } = useApi(
-    () => platform.getHealth({ includeServices: true }),
-    [],
-    {
-      onError: (err) => {
-        toast({
-          title: "Error loading services",
-          description: err.message,
-          variant: "destructive",
-        });
-      },
+  const services = daemon.services.data?.services ?? [];
+
+  const fail = (title: string, err: unknown) =>
+    toast({
+      title,
+      description: err instanceof Error ? err.message : String(err),
+      variant: "destructive",
+    });
+
+  const readDetail = async (name: string, onError: (err: unknown) => void) => {
+    const seq = ++detailSeq.current;
+    const current = () => seq === detailSeq.current && selectedRef.current === name;
+    try {
+      const info = await daemon.getServiceStatus(name);
+      if (current()) setDetail(info ?? null);
+    } catch (err) {
+      if (current()) onError(err);
     }
-  );
-
-  // Transform health data into services
-  const services: PlatformService[] = React.useMemo(() => {
-    if (!healthData?.health?.services) return [];
-
-    return healthData.health.services.map((service) => ({
-      id: service.name,
-      name: service.name,
-      displayName: service.name.replace(/-/g, " ").replace(/\b\w/g, (l) => l.toUpperCase()),
-      state: service.healthy ? "running" : "error",
-      latencyMs: service.latencyMs || 0,
-      lastCheck: service.lastCheck || null,
-      message: service.message || "",
-      healthy: service.healthy,
-    }));
-  }, [healthData]);
-
-  // Calculate statistics
-  const stats = React.useMemo(() => {
-    const running = services.filter((s) => s.state === "running").length;
-    const stopped = services.filter((s) => s.state === "stopped").length;
-    const error = services.filter((s) => s.state === "error").length;
-
-    return { running, stopped, error, total: services.length };
-  }, [services]);
-
-  const handleRefresh = () => {
-    refetch();
   };
 
-  // Show error state
-  if (error) {
-    return (
-      <div className="space-y-6">
-        <PageHeader
-          title="Platform Services"
-          description="Manage and monitor platform services"
-        />
-        <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
-          <AlertTitle>Error Loading Services</AlertTitle>
-          <AlertDescription>
-            {error.message}
-            <Button
-              variant="outline"
-              size="sm"
-              className="ml-4"
-              onClick={handleRefresh}
-            >
-              Retry
-            </Button>
-          </AlertDescription>
-        </Alert>
-      </div>
-    );
-  }
+  const showDetail = async (name: string) => {
+    selectedRef.current = name;
+    await readDetail(name, (err) => fail(`Status of ${name} failed`, err));
+  };
+
+  // Re-read the open details; a failed re-read clears the panel so stale
+  // status never stays on screen.
+  const refreshDetail = (name: string) =>
+    readDetail(name, () => {
+      setDetail(null);
+      selectedRef.current = null;
+    });
+
+  const refreshAll = () => {
+    daemon.status.refetch();
+    daemon.version.refetch();
+    daemon.config.refetch();
+    daemon.services.refetch();
+    if (selectedRef.current) void refreshDetail(selectedRef.current);
+  };
+
+  const handleReload = async () => {
+    try {
+      await daemon.reloadConfig();
+      toast({ title: "Configuration reloaded" });
+    } catch (err) {
+      fail("Configuration reload failed", err);
+    }
+  };
+
+  const runAction = async (name: string, action: DaemonServiceAction) => {
+    // Drop every detail read in flight for this service: it may hold the
+    // pre-action status. The finally below re-reads it.
+    if (selectedRef.current === name) detailSeq.current++;
+    try {
+      const res = await daemon.serviceAction(name, action);
+      toast({
+        title: `${ACTION_LABEL[action]} ${name}`,
+        description: res?.message || "Done",
+      });
+    } catch (err) {
+      fail(`${ACTION_LABEL[action]} ${name} failed`, err);
+    } finally {
+      if (selectedRef.current === name) void refreshDetail(name);
+    }
+  };
+
+  const status = daemon.status.data;
+  const anyLoading =
+    daemon.status.isLoading || daemon.services.isLoading || daemon.config.isLoading;
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Platform Services"
-        description="Manage and monitor platform services"
+        description="Daemon status, configuration and service control"
       >
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleRefresh}
-          disabled={isLoading}
-        >
-          <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
+        <Button variant="outline" size="sm" onClick={refreshAll} disabled={anyLoading}>
+          <RefreshCw className={`h-4 w-4 mr-2 ${anyLoading ? "animate-spin" : ""}`} />
           Refresh
         </Button>
       </PageHeader>
 
-      {/* Statistics Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card>
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card data-testid="daemon-status">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Services</CardTitle>
+            <CardTitle className="text-sm font-medium">Daemon Status</CardTitle>
             <Server className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.total}</div>
-            <p className="text-xs text-muted-foreground">
-              Platform services configured
-            </p>
+          <CardContent className="space-y-1 text-sm">
+            {daemon.status.error ? (
+              <span className="text-destructive">{daemon.status.error.message}</span>
+            ) : status ? (
+              <>
+                <Badge variant={statusVariant(status.status)} className="capitalize">
+                  {status.status}
+                </Badge>
+                {status.git_commit && <p>Commit: {status.git_commit}</p>}
+                {status.go_version && <p>Go: {status.go_version}</p>}
+              </>
+            ) : (
+              <span className="text-muted-foreground">Loading...</span>
+            )}
           </CardContent>
         </Card>
-        <Card>
+        <Card data-testid="daemon-version">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Running</CardTitle>
-            <CheckCircle className="h-4 w-4 text-green-500" />
+            <CardTitle className="text-sm font-medium">Version</CardTitle>
+            <Info className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-600">{stats.running}</div>
-            <p className="text-xs text-muted-foreground">
-              Services currently active
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Stopped</CardTitle>
-            <XCircle className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.stopped}</div>
-            <p className="text-xs text-muted-foreground">
-              Services currently stopped
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Errors</CardTitle>
-            <AlertCircle className="h-4 w-4 text-destructive" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-destructive">{stats.error}</div>
-            <p className="text-xs text-muted-foreground">
-              Services with errors
-            </p>
+            <div className="text-2xl font-bold font-mono">
+              {daemon.version.error ? "-" : versionString(daemon.version.data)}
+            </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Services Table */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <div>
+            <CardTitle>Configuration</CardTitle>
+            <CardDescription>The daemon&apos;s running configuration</CardDescription>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleReload}
+            disabled={daemon.isPending("reload")}
+          >
+            <FileCog className="h-4 w-4 mr-2" />
+            Reload Config
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {daemon.config.error ? (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Error Loading Configuration</AlertTitle>
+              <AlertDescription>{daemon.config.error.message}</AlertDescription>
+            </Alert>
+          ) : (
+            <pre
+              data-testid="daemon-config"
+              className="max-h-80 overflow-auto rounded bg-muted p-3 text-xs"
+            >
+              {daemon.config.data ? JSON.stringify(daemon.config.data, null, 2) : "Loading..."}
+            </pre>
+          )}
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle>Services</CardTitle>
           <CardDescription>
-            View and manage all platform services. Use the controls to start, stop, or restart services.
+            View and manage the daemon&apos;s services. Stop and restart ask for confirmation.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {isLoading ? (
-            <div className="flex items-center justify-center h-64">
+          {daemon.services.error ? (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Error Loading Services</AlertTitle>
+              <AlertDescription>{daemon.services.error.message}</AlertDescription>
+            </Alert>
+          ) : daemon.services.isLoading ? (
+            <div className="flex items-center justify-center h-32">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
               <span className="ml-2">Loading services...</span>
             </div>
           ) : services.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
-              <Server className="h-12 w-12 mb-4" />
-              <p>No services found</p>
-              <p className="text-sm">No service health data available</p>
-            </div>
+            <p className="text-muted-foreground">No services found</p>
           ) : (
-            <DataTable
-              columns={columns}
-              data={services}
-              searchKey="displayName"
-              searchPlaceholder="Search services..."
-              filterableColumns={[
-                {
-                  id: "state",
-                  title: "Status",
-                  options: [
-                    { label: "Running", value: "running" },
-                    { label: "Stopped", value: "stopped" },
-                    { label: "Starting", value: "starting" },
-                    { label: "Stopping", value: "stopping" },
-                    { label: "Error", value: "error" },
-                  ],
-                },
-              ]}
-              loading={false}
-              pagination
-              pageSize={10}
-            />
+            <table className="w-full text-sm" data-testid="services-table">
+              <thead>
+                <tr className="border-b text-left">
+                  <th className="py-2">Service</th>
+                  <th className="py-2">Status</th>
+                  <th className="py-2">Uptime</th>
+                  <th className="py-2 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {services.map((svc) => (
+                  <tr key={svc.name} className="border-b" data-testid={`service-row-${svc.name}`}>
+                    <td className="py-2 font-medium">{svc.name}</td>
+                    <td className="py-2">
+                      <Badge variant={statusVariant(svc.status)} className="capitalize">
+                        {svc.status}
+                      </Badge>
+                    </td>
+                    <td className="py-2">{svc.uptime || "-"}</td>
+                    <td className="py-2">
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={`Details ${svc.name}`}
+                          onClick={() => showDetail(svc.name)}
+                        >
+                          <Info className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={`Start ${svc.name}`}
+                          disabled={daemon.lifecyclePending}
+                          onClick={() => runAction(svc.name, "start")}
+                        >
+                          <Play className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={`Stop ${svc.name}`}
+                          disabled={daemon.lifecyclePending}
+                          onClick={() => setConfirm({ name: svc.name, action: "stop" })}
+                        >
+                          <Square className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={`Restart ${svc.name}`}
+                          disabled={daemon.lifecyclePending}
+                          onClick={() => setConfirm({ name: svc.name, action: "restart" })}
+                        >
+                          <RotateCcw className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </CardContent>
       </Card>
+
+      {detail && (
+        <Card data-testid="service-detail">
+          <CardHeader>
+            <CardTitle>Service {detail.name}</CardTitle>
+            <CardDescription>Status reported by the daemon</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-1 text-sm">
+            <p>
+              Status:{" "}
+              <Badge variant={statusVariant(detail.status)} className="capitalize">
+                {detail.status}
+              </Badge>
+            </p>
+            {detail.started_at && <p>Started: {detail.started_at}</p>}
+            {detail.uptime && <p>Uptime: {detail.uptime}</p>}
+            <p>Starts: {detail.start_count ?? 0}</p>
+            <p>Stops: {detail.stop_count ?? 0}</p>
+            {detail.last_error && <p className="text-destructive">Last error: {detail.last_error}</p>}
+          </CardContent>
+        </Card>
+      )}
+
+      <Dialog open={confirm !== null} onOpenChange={(open) => !open && setConfirm(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {confirm ? `${ACTION_LABEL[confirm.action]} ${confirm.name}?` : ""}
+            </DialogTitle>
+            <DialogDescription>
+              {confirm?.action === "stop"
+                ? "The service stops serving until it is started again."
+                : "The service stops and starts again; requests in flight may fail."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirm(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (confirm) void runAction(confirm.name, confirm.action);
+                setConfirm(null);
+              }}
+            >
+              Confirm
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
