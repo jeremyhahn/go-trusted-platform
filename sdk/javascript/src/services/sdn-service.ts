@@ -401,7 +401,8 @@ export class SDNService extends BaseService {
   }
 
   /**
-   * Update the zone `name`; the URL name wins over a name in the spec.
+   * Update the zone `name`. The spec is sent unchanged: its `name` must be
+   * omitted or equal `name`, and the server answers HTTP 400 when they differ.
    */
   async updateNetworkZone(name: string, spec: NetworkZoneSpec): Promise<ApiResponse<NetworkZone>> {
     return this.client.put<NetworkZone>(
