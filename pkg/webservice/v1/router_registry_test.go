@@ -104,6 +104,7 @@ type testHandlerRegistry struct {
 	// that a nil service is skipped.
 	platformRouter        *platform.PlatformRouter
 	computeService        platformv1.ComputeServiceServer
+	ceremonyService       platformv1.CeremonyServiceServer
 	dnsService            dns.DNSService
 	dnsServer             platformv1.DNSServiceServer
 	eabService            platformv1.EABServiceServer
@@ -251,6 +252,10 @@ func (r *testHandlerRegistry) AttestationServiceServer() platformv1.AttestationS
 
 func (r *testHandlerRegistry) ComputeServiceServer() platformv1.ComputeServiceServer {
 	return r.computeService
+}
+
+func (r *testHandlerRegistry) CeremonyServiceServer() platformv1.CeremonyServiceServer {
+	return r.ceremonyService
 }
 
 func (r *testHandlerRegistry) DeviceServiceServer() platformv1.DeviceServiceServer {

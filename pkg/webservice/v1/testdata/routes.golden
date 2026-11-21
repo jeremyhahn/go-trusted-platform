@@ -108,6 +108,8 @@ GET /api/v1/ca/root
 GET /api/v1/cache/config
 GET /api/v1/cache/stats
 GET /api/v1/capabilities
+GET /api/v1/ceremony
+GET /api/v1/ceremony/status
 GET /api/v1/certificate
 GET /api/v1/compute
 GET /api/v1/compute/containers
@@ -371,6 +373,12 @@ POST /api/v1/ca/certificates
 POST /api/v1/ca/certificates/verify
 POST /api/v1/ca/certificates/{serial}/renew
 POST /api/v1/ca/sign-csr
+POST /api/v1/ceremony/claim-cert/begin
+POST /api/v1/ceremony/claim-cert/complete
+POST /api/v1/ceremony/claim-share/begin
+POST /api/v1/ceremony/claim-share/complete
+POST /api/v1/ceremony/init
+POST /api/v1/ceremony/sign-csr
 POST /api/v1/compute/containers
 POST /api/v1/compute/containers/{id}/attest
 POST /api/v1/compute/containers/{id}/exec

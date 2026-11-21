@@ -106,13 +106,13 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `CeremonyService.Init` | - | - | - | - | missing |
-| `CeremonyService.Status` | - | - | - | - | missing |
-| `CeremonyService.ClaimCertBegin` | - | - | - | - | missing |
-| `CeremonyService.ClaimCertComplete` | - | - | - | - | missing |
-| `CeremonyService.ClaimShareBegin` | - | - | - | - | missing |
-| `CeremonyService.ClaimShareComplete` | - | - | - | - | missing |
-| `CeremonyService.SignCSR` | - | - | - | - | missing |
+| `CeremonyService.Init` | `POST /init` | - | - | - | missing |
+| `CeremonyService.Status` | `GET /status` | - | - | - | missing |
+| `CeremonyService.ClaimCertBegin` | `POST /claim-cert/begin` | - | - | - | missing |
+| `CeremonyService.ClaimCertComplete` | `POST /claim-cert/complete` | - | - | - | missing |
+| `CeremonyService.ClaimShareBegin` | `POST /claim-share/begin` | - | - | - | missing |
+| `CeremonyService.ClaimShareComplete` | `POST /claim-share/complete` | - | - | - | missing |
+| `CeremonyService.SignCSR` | `POST /sign-csr` | - | - | - | missing |
 
 ## ClusterService (`cluster.proto`)
 
