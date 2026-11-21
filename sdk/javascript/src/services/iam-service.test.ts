@@ -459,4 +459,59 @@ describe('IAMService', () => {
       });
     });
   }
+
+  // The REST handler sends CheckPermissionResponse in snake_case
+  // (pkg/webservice/v1/rest/iam/types.go, #2127 Codex round 2).
+  describe('checkPermission REST envelope', () => {
+    const request = { tenantId: 't-1', subjectId: 'u-1', action: 'read', resource: 'fleet' };
+
+    it('maps matched_policy, matched_rule and evaluation_time_ns to the camelCase fields', async () => {
+      vi.mocked(client.post).mockResolvedValue({
+        success: true,
+        data: { allowed: true, matched_policy: 'p-1', matched_rule: 'r-1', evaluation_time_ns: 42 },
+      });
+
+      const result = await service.checkPermission(request);
+
+      expect(result.data).toMatchObject({
+        allowed: true,
+        matchedPolicy: 'p-1',
+        matchedRule: 'r-1',
+        evaluationTimeNs: 42,
+      });
+    });
+
+    it('keeps the identity of the resolved response', async () => {
+      const response = { success: true, data: { allowed: false, matched_policy: 'p-2' } };
+      vi.mocked(client.post).mockResolvedValue(response);
+
+      const result = await service.checkPermission(request);
+
+      expect(result).toBe(response);
+      expect(result.data?.matchedPolicy).toBe('p-2');
+    });
+
+    it('does not overwrite camelCase fields already present', async () => {
+      vi.mocked(client.post).mockResolvedValue({
+        success: true,
+        data: {
+          allowed: true,
+          matchedPolicy: 'camel-p',
+          matched_policy: 'snake-p',
+          matchedRule: 'camel-r',
+          matched_rule: 'snake-r',
+          evaluationTimeNs: 7,
+          evaluation_time_ns: 42,
+        },
+      });
+
+      const result = await service.checkPermission(request);
+
+      expect(result.data).toMatchObject({
+        matchedPolicy: 'camel-p',
+        matchedRule: 'camel-r',
+        evaluationTimeNs: 7,
+      });
+    });
+  });
 });
