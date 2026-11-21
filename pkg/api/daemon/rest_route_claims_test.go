@@ -150,6 +150,8 @@ var daemonDivergentClaims = map[string]string{
 	"/platform.v1.KeyManagementService/VerifyHMAC":             "#452: the daemon has no HMAC verify route; the claim is the webservice's /hmac/{name}/verify",
 	"/platform.v1.KeyManagementService/GenerateDataKey":        "#452: the daemon's KMS routes have no data-keys",
 	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": "#452: the daemon's KMS routes have no data-keys/wrapped",
+	"/platform.v1.KeyManagementService/UpdateKeyStatus":        "#452: the daemon's KMS routes have no /keys/{id}/status; the claim is the webservice's PUT /api/v1/kms/keys/{name}/status",
+	"/platform.v1.KeyManagementService/BackendStatus":          "#452: the daemon serves KMS backend status at /api/v1/kms/status; the claim is the webservice's /api/v1/kms/backend/status",
 
 	"/platform.v1.ProvisioningGateway/GetBootConfig":         "#452: no server serves it; platformd holds no per-MAC boot configuration (route_coverage_test.go unroutedClaims)",
 	"/platform.v1.ProvisioningGateway/NotifyInstallComplete": pxeGatewayOnWebservice,
