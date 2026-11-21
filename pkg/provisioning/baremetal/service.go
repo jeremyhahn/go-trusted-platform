@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -38,6 +39,7 @@ type Service struct {
 	config     *Config
 	provisions sync.Map // map[string]*provisionState
 	inFlight   sync.Map // map[uint64]string (profileID -> provisionID)
+	latest     sync.Map // map[uint64]string (profileID -> newest provisionID)
 	logger     *slog.Logger
 }
 
@@ -119,6 +121,7 @@ func (s *Service) Provision(ctx context.Context, req *ProvisionRequest) (*Provis
 	}
 
 	s.provisions.Store(provisionID, state)
+	s.latest.Store(req.ProfileID, provisionID)
 
 	go s.runProvision(provisionID, req)
 
@@ -132,6 +135,21 @@ func (s *Service) Status(provisionID string) (*ProvisionResult, error) {
 		return nil, err
 	}
 	return state.result.Load(), nil
+}
+
+// StatusForProfile returns the result of the newest provisioning workflow
+// started for profileID. It returns ErrProvisionNotFound when no workflow
+// has been started for that profile.
+func (s *Service) StatusForProfile(_ context.Context, profileID uint64) (*ProvisionResult, error) {
+	v, ok := s.latest.Load(profileID)
+	if !ok {
+		return nil, ErrProvisionNotFound{ProvisionID: fmt.Sprintf("profile %d", profileID)}
+	}
+	id, ok := v.(string)
+	if !ok {
+		return nil, ErrProvisionNotFound{ProvisionID: fmt.Sprintf("profile %d", profileID)}
+	}
+	return s.Status(id)
 }
 
 // List returns all tracked provisions.
