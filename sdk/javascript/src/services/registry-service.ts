@@ -1,6 +1,7 @@
 /**
  * Container registry service: tag listing and manifest deletion over the
- * OCI distribution surface (/v2), and the registry status endpoint.
+ * OCI distribution surface (/v2), image inspection by tag and the registry
+ * status endpoint.
  */
 
 import type { ApiClient } from '../client/api-client.js';
@@ -38,6 +39,73 @@ export interface RegistryStatus {
 export interface RegistryTagList {
   name: string;
   tags: string[];
+}
+
+/*
+ * Image detail types of GET /v1/compute/images/{repository}:{tag}. They are
+ * the daemon's Go structs, which carry no json tags, so the keys are
+ * capitalized; int64 values arrive as numbers and times as RFC 3339 strings.
+ */
+
+/** One layer of an image manifest. */
+export interface RegistryImageLayer {
+  Digest?: string;
+  Size?: number;
+  MediaType?: string;
+  Annotations?: Record<string, string>;
+}
+
+/** The manifest of an image. */
+export interface RegistryImageManifest {
+  Digest?: string;
+  MediaType?: string;
+  Size?: number;
+  ConfigDigest?: string;
+  Layers?: RegistryImageLayer[] | null;
+  Annotations?: Record<string, string>;
+}
+
+/** The artifact a tag points at. */
+export interface RegistryImageArtifact {
+  ID?: string;
+  Repository?: string;
+  Tag?: string;
+  Digest?: string;
+  Size?: number;
+  Manifest?: RegistryImageManifest | null;
+  Labels?: Record<string, string>;
+  OS?: string;
+  Architecture?: string;
+  Author?: string;
+  CreatedAt?: string;
+  PushedAt?: string;
+  PullCount?: number;
+}
+
+/** A signature over an image. */
+export interface RegistryImageSignature {
+  KeyID?: string;
+  Algorithm?: string;
+  Signer?: string;
+  SignedAt?: string;
+}
+
+/** The vulnerability scan result of an image. */
+export interface RegistryImageScan {
+  Scanner?: string;
+  ScannedAt?: string;
+  LowCount?: number;
+  MediumCount?: number;
+  HighCount?: number;
+  CriticalCount?: number;
+}
+
+/** Response of GET /v1/compute/images/{repository}:{tag}. */
+export interface RegistryImageDetail {
+  Artifact?: RegistryImageArtifact | null;
+  Signatures?: RegistryImageSignature[] | null;
+  ScanResult?: RegistryImageScan | null;
+  Tags?: string[] | null;
 }
 
 /** OCI distribution base path. */
@@ -84,6 +152,20 @@ export class RegistryService extends BaseService {
     return this.client.delete<undefined>(
       `${OCI_BASE}/${this.encodeRepository(name)}/manifests/${this.encodePathSegment(reference)}`,
       { rootRelative: true }
+    );
+  }
+
+  /**
+   * Inspect an image by tag: its manifest, signatures, scan result and tags.
+   * Route: GET /api/v1/compute/images/{repository}:{tag} (the server takes the
+   * last colon as the tag separator). Digest references are not supported here.
+   *
+   * @param name - Repository name
+   * @param tag - Tag
+   */
+  async inspect(name: string, tag: string): Promise<ApiResponse<RegistryImageDetail>> {
+    return this.client.get<RegistryImageDetail>(
+      this.buildUrl(`/${this.encodeRepository(name)}:${this.encodePathSegment(tag)}`)
     );
   }
 
