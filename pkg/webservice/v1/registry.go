@@ -1081,6 +1081,9 @@ type RegistryParams struct {
 	// LogQuerier wires /api/v1/platform/logs. When nil the endpoint
 	// returns 503 with the same structured-honesty pattern.
 	LogQuerier platform.LogQuerier
+	// EntityTypeLister wires GET /api/v1/platform/entity-types. When
+	// nil the endpoint answers 503.
+	EntityTypeLister platform.EntityTypeLister
 	// RegistryService wires /api/v1/compute/images. When nil the
 	// /compute/images surface returns 503 via the service registry.
 	RegistryService grpcapi.RegistryService
@@ -1935,6 +1938,9 @@ func (registry *HandlerRegistry) PlatformRestRouter() *platform.PlatformRouter {
 	}
 	if registry.params.LogQuerier != nil {
 		router.SetLogQuerier(registry.params.LogQuerier)
+	}
+	if registry.params.EntityTypeLister != nil {
+		router.SetEntityTypeLister(registry.params.EntityTypeLister)
 	}
 	return router
 }

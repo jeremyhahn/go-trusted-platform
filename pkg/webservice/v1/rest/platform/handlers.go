@@ -26,17 +26,18 @@ import (
 
 // PlatformHandlers provides REST handlers for platform daemon operations
 type PlatformHandlers struct {
-	logger          *logging.Logger
-	respWriter      response.HttpWriter
-	healthRegistry  health.Registry
-	servicesManager ServicesManager
-	protocolConfig  *ProtocolConfig
-	versionInfo     *VersionInfo
-	startTime       time.Time
-	restServerRunFn func() bool
-	sysSampler      *sysstats.Sampler
-	configReloader  ConfigReloader
-	logQuerier      LogQuerier
+	logger           *logging.Logger
+	respWriter       response.HttpWriter
+	healthRegistry   health.Registry
+	servicesManager  ServicesManager
+	protocolConfig   *ProtocolConfig
+	versionInfo      *VersionInfo
+	startTime        time.Time
+	restServerRunFn  func() bool
+	sysSampler       *sysstats.Sampler
+	configReloader   ConfigReloader
+	logQuerier       LogQuerier
+	entityTypeLister EntityTypeLister
 }
 
 // NewPlatformHandlers creates a new PlatformHandlers instance

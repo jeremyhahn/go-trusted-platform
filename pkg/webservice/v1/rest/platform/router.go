@@ -81,6 +81,11 @@ func (r *PlatformRouter) SetLogQuerier(q LogQuerier) {
 	r.handlers.SetLogQuerier(q)
 }
 
+// SetEntityTypeLister wires the lister behind GET /platform/entity-types.
+func (r *PlatformRouter) SetEntityTypeLister(l EntityTypeLister) {
+	r.handlers.SetEntityTypeLister(l)
+}
+
 // Handlers returns the underlying handlers for direct access if needed
 func (r *PlatformRouter) Handlers() *PlatformHandlers {
 	return r.handlers
@@ -101,6 +106,7 @@ func (r *PlatformRouter) RegisterRoutes(router *mux.Router) {
 	r.registerMetricsRoutes(platformRouter)
 	r.registerConfigRoutes(platformRouter)
 	r.registerLogRoutes(platformRouter)
+	r.registerEntityTypeRoutes(platformRouter)
 }
 
 // registerConfigRoutes registers platform configuration endpoints.
@@ -181,4 +187,10 @@ func (r *PlatformRouter) registerProtocolRoutes(router *mux.Router) {
 // GET    /api/v1/platform/metrics              - Get platform metrics
 func (r *PlatformRouter) registerMetricsRoutes(router *mux.Router) {
 	router.HandleFunc("/metrics", r.handlers.GetMetrics).Methods("GET")
+}
+
+// registerEntityTypeRoutes registers the storage entity type listing.
+func (r *PlatformRouter) registerEntityTypeRoutes(router *mux.Router) {
+	// GET    /api/v1/platform/entity-types         - List storage entity types and counts
+	router.HandleFunc("/entity-types", r.handlers.ListEntityTypes).Methods("GET")
 }

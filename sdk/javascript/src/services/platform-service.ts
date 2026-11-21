@@ -17,6 +17,7 @@ import type {
   GetHealthResponse,
   GetConfigRequest,
   GetConfigResponse,
+  ListEntityTypesResponse,
   GetMetricsRequest,
   GetMetricsResponse,
   ReloadConfigResponse,
@@ -142,6 +143,16 @@ export class PlatformService extends BaseService {
     return this.client.get<GetMetricsResponse>(this.buildUrl('/metrics', {
       filters: { includeHistory: request?.includeHistory?.toString() },
     }));
+  }
+
+  /**
+   * List storage entity types and their entity counts
+   * (GET /api/v1/platform/entity-types, PlatformDaemon.ListEntityTypes)
+   *
+   * @returns Entity types, total entities and active type count
+   */
+  async listEntityTypes(): Promise<ApiResponse<ListEntityTypesResponse>> {
+    return this.client.get<ListEntityTypesResponse>(this.buildUrl('/entity-types'));
   }
 
   // =========================================================================
