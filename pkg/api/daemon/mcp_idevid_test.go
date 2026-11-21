@@ -185,6 +185,10 @@ func (m *mockTPM2MCPService) CreateTCG_CSR_IDEVID(ekCert *x509.Certificate, iakA
 	return xkmssdk.TCG_CSR_IDEVID{}, nil
 }
 
+func (m *mockTPM2MCPService) EKCertificate() (*x509.Certificate, error) {
+	return &x509.Certificate{}, nil
+}
+
 func (m *mockTPM2MCPService) ActivateCredential(credentialBlob, secret []byte) ([]byte, error) {
 	if m.activateCredentialErr != nil {
 		return nil, m.activateCredentialErr

@@ -35,6 +35,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/adminclaim"
+	bmcweb "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
@@ -147,7 +148,14 @@ type testHandlerRegistry struct {
 	// the skip; the route-table fixture builds one so the five claim routes
 	// are walked (#420).
 	adminClaim *adminclaim.RestHandler
+	// The BMC REST handler. Nil in the older tests; the route-table
+	// fixture sets a stub so the admin-gated /bmc routes are walked.
+	bmcHandler bmcweb.RestHandler
 }
+
+// stubBMCHandler satisfies bmcweb.RestHandler for the route-table walk. Its
+// methods are never reached: the admin gate refuses every probe first.
+type stubBMCHandler struct{ bmcweb.RestHandler }
 
 func (r *testHandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
 	return r.acmeService
@@ -191,6 +199,10 @@ func (r *testHandlerRegistry) ResponseWriter() response.HttpWriter {
 
 func (r *testHandlerRegistry) SDNService() platformv1.SDNServiceServer {
 	return r.sdnService
+}
+
+func (r *testHandlerRegistry) BMCRestHandler() bmcweb.RestHandler {
+	return r.bmcHandler
 }
 
 func (r *testHandlerRegistry) TPM() xkmssdk.TrustedPlatformModule {

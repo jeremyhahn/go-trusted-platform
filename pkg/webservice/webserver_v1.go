@@ -658,20 +658,40 @@ func (server *WebServerV1) serveEmbeddedFiles(index string, rewriteRules []*v1.R
 // next segment with `__placeholder__` and checks whether that sibling
 // directory contains the static `index` file.
 func findPlaceholderFallback(requestPath, index string) string {
+	return findPlaceholderFallbackIn(embed.WebFS, requestPath, index)
+}
+
+// findPlaceholderFallbackIn resolves requestPath against fsys. For each
+// segment, deepest first, it tries the segment replaced by
+// __placeholder__ with the trailing segments kept (so
+// devices/bmc/7/users finds devices/bmc/__placeholder__/users/index.html),
+// then the truncated form (devices/bmc/__placeholder__/index.html).
+func findPlaceholderFallbackIn(fsys fs.FS, requestPath, index string) string {
 	if requestPath == "" {
 		return ""
 	}
 	parts := strings.Split(strings.Trim(requestPath, "/"), "/")
 	for i := len(parts) - 1; i >= 0; i-- {
-		candidateParts := append([]string{}, parts[:i]...)
-		candidateParts = append(candidateParts, "__placeholder__")
-		candidate := strings.Join(candidateParts, "/") + "/" + index
-		if f, err := embed.WebFS.Open(candidate); err == nil {
-			f.Close()
-			return candidate
+		for _, candidateParts := range placeholderCandidates(parts, i) {
+			candidate := strings.Join(append(candidateParts, index), "/")
+			if info, err := fs.Stat(fsys, candidate); err == nil && !info.IsDir() {
+				return candidate
+			}
 		}
 	}
 	return ""
+}
+
+// placeholderCandidates returns, for segment i of parts, the path with
+// that segment replaced by __placeholder__ and the trailing segments
+// kept, followed by the truncated form when the two differ.
+func placeholderCandidates(parts []string, i int) [][]string {
+	kept := append(append(append([]string{}, parts[:i]...), "__placeholder__"), parts[i+1:]...)
+	if i == len(parts)-1 {
+		return [][]string{kept}
+	}
+	truncated := append(append([]string{}, parts[:i]...), "__placeholder__")
+	return [][]string{kept, truncated}
 }
 
 // findPlaceholderFallbackFS is the on-disk counterpart to
@@ -693,11 +713,11 @@ func findPlaceholderFallbackFS(rootDir, requestPath, index string) string {
 	}
 	parts := strings.Split(strings.Trim(requestPath, "/"), "/")
 	for i := len(parts) - 1; i >= 0; i-- {
-		candidateParts := append([]string{}, parts[:i]...)
-		candidateParts = append(candidateParts, "__placeholder__", index)
-		candidate := filepath.Join(append([]string{rootDir}, candidateParts...)...)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate
+		for _, candidateParts := range placeholderCandidates(parts, i) {
+			candidate := filepath.Join(append(append([]string{rootDir}, candidateParts...), index)...)
+			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+				return candidate
+			}
 		}
 	}
 	return ""
