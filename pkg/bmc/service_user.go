@@ -84,16 +84,26 @@ func (s *Service) ListUsers(ctx context.Context, profileID uint64) ([]User, erro
 // IPMI create overwrites whatever is in the slot. The occupancy check and
 // the create run under the profile's user lock, so two concurrent creates
 // on one free slot cannot both succeed.
+//
+// A profile with an empty Username connects through the IPMI null-name
+// (anonymous) user, which is always user ID 1 and which ListUsers omits, so
+// the occupancy check cannot see it: CreateUser refuses slot 1 on such a
+// profile with ErrConnectionAccount, since overwriting it would lock the
+// profile out (#2145).
 func (s *Service) CreateUser(ctx context.Context, profileID uint64, user User, password string) error {
 	mu := s.userLock(profileID)
 	mu.Lock()
 	defer mu.Unlock()
 
-	mgr, _, err := s.userManagerFor(ctx, profileID)
+	mgr, cfg, err := s.userManagerFor(ctx, profileID)
 	if err != nil {
 		return err
 	}
 	defer mgr.Close()
+
+	if cfg.Username == "" && user.Slot == 1 {
+		return ErrConnectionAccount{ProfileID: profileID, Slot: user.Slot}
+	}
 
 	users, err := mgr.ListUsers(ctx)
 	if err != nil {
