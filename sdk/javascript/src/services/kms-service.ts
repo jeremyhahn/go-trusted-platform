@@ -302,21 +302,25 @@ export class KMSService extends BaseService {
   /**
    * Generate a data key (plaintext + encrypted)
    *
+   * Calls the served route POST /v1/kms/data-keys.
+   *
    * @param request - Data key generation request
    * @returns Plaintext and encrypted data key
    */
   async generateDataKey(request: GenerateDataKeyRequest): Promise<ApiResponse<GenerateDataKeyResponse>> {
-    return this.client.post<GenerateDataKeyResponse>(this.buildUrl('/datakey'), request);
+    return this.client.post<GenerateDataKeyResponse>(this.buildUrl('/data-keys'), request);
   }
 
   /**
    * Generate a wrapped data key (encrypted only)
    *
+   * Calls the served route POST /v1/kms/data-keys/wrapped.
+   *
    * @param request - Wrapped data key generation request
    * @returns Wrapped data key
    */
   async generateWrappedDataKey(request: GenerateWrappedDataKeyRequest): Promise<ApiResponse<GenerateWrappedDataKeyResponse>> {
-    return this.client.post<GenerateWrappedDataKeyResponse>(this.buildUrl('/datakey/wrapped'), request);
+    return this.client.post<GenerateWrappedDataKeyResponse>(this.buildUrl('/data-keys/wrapped'), request);
   }
 
   // =========================================================================
