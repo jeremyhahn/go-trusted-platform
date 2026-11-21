@@ -255,6 +255,26 @@ func (e ErrArchiveOperationFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrArchiveTooLarge indicates an archive import would expand beyond its
+// decompressed-byte budget.
+type ErrArchiveTooLarge struct {
+	Limit int64
+}
+
+func (e ErrArchiveTooLarge) Error() string {
+	return fmt.Sprintf("vtpm: archive import expands beyond %d bytes", e.Limit)
+}
+
+// ErrArchiveTooManyEntries indicates an archive import holds more entries
+// than its budget allows.
+type ErrArchiveTooManyEntries struct {
+	Limit int
+}
+
+func (e ErrArchiveTooManyEntries) Error() string {
+	return fmt.Sprintf("vtpm: archive import has more than %d entries", e.Limit)
+}
+
 // =============================================================================
 // Configuration Errors
 // =============================================================================

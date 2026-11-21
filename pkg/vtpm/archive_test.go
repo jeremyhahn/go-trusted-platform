@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -775,6 +776,439 @@ func TestArchiver_ImportFromFile_WithOVMFAndSecureBootFiles(t *testing.T) {
 	}
 }
 
+// TestArchiver_ExportImport_RoundTripRestoresState exports a full bundle and
+// imports it from a plain io.Reader (as the REST handler does): every state
+// file comes back with the same bytes and no temporary file is left behind.
+func TestArchiver_ExportImport_RoundTripRestoresState(t *testing.T) {
+	bundleID := "round-trip"
+	srcDir := t.TempDir()
+	srcBundle := filepath.Join(srcDir, "bundles", bundleID)
+	for _, d := range []string{"tpm", "ovmf", "secure-boot-keys"} {
+		if err := os.MkdirAll(filepath.Join(srcBundle, d), 0700); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	manifest := &Manifest{
+		Version:           ManifestVersion,
+		ID:                bundleID,
+		Mode:              BundleModePreAssigned,
+		CreatedAt:         time.Now(),
+		SecureBootEnabled: true,
+	}
+	manifestData, _ := json.Marshal(manifest)
+	contents := map[string][]byte{
+		"manifest.json":           manifestData,
+		"tpm/tpm2-00.permall":     []byte("round-trip-tpm-state"),
+		"ovmf/OVMF_VARS.fd":       []byte("round-trip-ovmf-nvram"),
+		"secure-boot-keys/PK.key": []byte("round-trip-pk-key"),
+	}
+	for rel, data := range contents {
+		if err := os.WriteFile(filepath.Join(srcBundle, rel), data, 0600); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+
+	ctx := context.Background()
+	var buf bytes.Buffer
+	if err := NewArchiver(&Config{BaseDir: srcDir}, nil).Export(ctx, bundleID, &buf); err != nil {
+		t.Fatalf("Export failed: %v", err)
+	}
+
+	dstConfig := &Config{BaseDir: t.TempDir()}
+	bundle, err := NewArchiver(dstConfig, nil).Import(ctx, io.Reader(&buf))
+	if err != nil {
+		t.Fatalf("Import failed: %v", err)
+	}
+	if bundle.SecureBootKeys == nil {
+		t.Fatal("SecureBootKeys should be set for a secure boot bundle")
+	}
+
+	checks := map[string]string{
+		bundle.TPMState.PermallFile: "tpm/tpm2-00.permall",
+		bundle.OVMFState.NVRAMFile:  "ovmf/OVMF_VARS.fd",
+		bundle.SecureBootKeys.PKKey: "secure-boot-keys/PK.key",
+	}
+	for path, rel := range checks {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("%s not restored: %v", rel, err)
+			continue
+		}
+		if !bytes.Equal(got, contents[rel]) {
+			t.Errorf("%s = %q, want %q", rel, got, contents[rel])
+		}
+	}
+
+	entries, err := os.ReadDir(dstConfig.BundlesDir())
+	if err != nil {
+		t.Fatalf("read bundles dir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".import-") {
+			t.Errorf("temporary import file left behind: %s", e.Name())
+		}
+	}
+}
+
+// TestArchiver_ImportFromFile_RejectsSiblingPrefix checks that an entry
+// escaping into a sibling directory whose name starts with the bundle ID is
+// not written.
+func TestArchiver_ImportFromFile_RejectsSiblingPrefix(t *testing.T) {
+	bundleID := "x"
+	archivePath := filepath.Join(t.TempDir(), "evil.tar.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	gzw := gzip.NewWriter(f)
+	tw := tar.NewWriter(gzw)
+
+	manifestData, _ := json.Marshal(&Manifest{
+		Version:   ManifestVersion,
+		ID:        bundleID,
+		Mode:      BundleModePreAssigned,
+		CreatedAt: time.Now(),
+	})
+	for _, file := range []struct {
+		name    string
+		content []byte
+	}{
+		{"vtpm-bundle-x/manifest.json", manifestData},
+		{"vtpm-bundle-x/../x-evil/f", []byte("evil")},
+	} {
+		tw.WriteHeader(&tar.Header{Name: file.name, Mode: 0600, Size: int64(len(file.content)), Typeflag: tar.TypeReg})
+		tw.Write(file.content)
+	}
+	tw.Close()
+	gzw.Close()
+	f.Close()
+
+	config := &Config{BaseDir: t.TempDir()}
+	if _, err := NewArchiver(config, nil).ImportFromFile(context.Background(), archivePath); err != nil {
+		t.Fatalf("ImportFromFile failed: %v", err)
+	}
+	evil := filepath.Join(config.BundlesDir(), "x-evil")
+	if _, err := os.Stat(evil); !os.IsNotExist(err) {
+		t.Errorf("entry outside the bundle was written to %s (stat err %v)", evil, err)
+	}
+}
+
+// writeBudgetTestArchive writes a bundle archive for id holding manifest.json
+// and the given extra entries, built as the sibling-prefix test does.
+func writeBudgetTestArchive(t *testing.T, id string, entries map[string][]byte) string {
+	t.Helper()
+	archivePath := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	gzw := gzip.NewWriter(f)
+	tw := tar.NewWriter(gzw)
+
+	manifestData, _ := json.Marshal(&Manifest{
+		Version:   ManifestVersion,
+		ID:        id,
+		Mode:      BundleModePreAssigned,
+		CreatedAt: time.Now(),
+	})
+	prefix := "vtpm-bundle-" + id + "/"
+	write := func(name string, content []byte) {
+		if err := tw.WriteHeader(&tar.Header{Name: prefix + name, Mode: 0600, Size: int64(len(content)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatalf("write header: %v", err)
+		}
+		if _, err := tw.Write(content); err != nil {
+			t.Fatalf("write entry: %v", err)
+		}
+	}
+	write("manifest.json", manifestData)
+	names := make([]string, 0, len(entries))
+	for name := range entries {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		write(name, entries[name])
+	}
+	tw.Close()
+	gzw.Close()
+	f.Close()
+	return archivePath
+}
+
+func TestArchiver_ImportFromFile_RefusesExpansionBeyondBudget(t *testing.T) {
+	id := "big"
+	archivePath := writeBudgetTestArchive(t, id, map[string][]byte{
+		"tpm/tpm2-00.permall": bytes.Repeat([]byte{0xA5}, 4096),
+	})
+
+	config := &Config{BaseDir: t.TempDir()}
+	a := NewArchiver(config, nil)
+	a.maxExpandedBytes = 1024
+
+	_, err := a.ImportFromFile(context.Background(), archivePath)
+	var tooLarge ErrArchiveTooLarge
+	if !errors.As(err, &tooLarge) {
+		t.Fatalf("ImportFromFile error = %v, want ErrArchiveTooLarge", err)
+	}
+	if tooLarge.Limit != 1024 {
+		t.Errorf("ErrArchiveTooLarge.Limit = %d, want 1024", tooLarge.Limit)
+	}
+	if _, err := os.Stat(config.BundlePath(id)); !os.IsNotExist(err) {
+		t.Errorf("partial bundle left at %s (stat err %v)", config.BundlePath(id), err)
+	}
+}
+
+// writeForeignEntryArchive writes a valid manifest under the bundle prefix,
+// then one regular entry with the raw tar name name and size zero bytes.
+func writeForeignEntryArchive(t *testing.T, id, name string, size int) string {
+	t.Helper()
+	archivePath := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	gzw := gzip.NewWriter(f)
+	tw := tar.NewWriter(gzw)
+
+	manifestData, _ := json.Marshal(&Manifest{
+		Version:   ManifestVersion,
+		ID:        id,
+		Mode:      BundleModePreAssigned,
+		CreatedAt: time.Now(),
+	})
+	write := func(name string, content []byte) {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0600, Size: int64(len(content)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatalf("write header: %v", err)
+		}
+		if _, err := tw.Write(content); err != nil {
+			t.Fatalf("write entry: %v", err)
+		}
+	}
+	write("vtpm-bundle-"+id+"/manifest.json", manifestData)
+	write(name, make([]byte, size))
+	tw.Close()
+	gzw.Close()
+	f.Close()
+	return archivePath
+}
+
+func TestArchiver_ImportFromFile_BudgetsSkippedEntries(t *testing.T) {
+	id := "skipped"
+	tests := []struct {
+		name  string
+		entry string
+	}{
+		{name: "a foreign prefix", entry: "other/blob.bin"},
+		{name: "a traversal entry", entry: "vtpm-bundle-" + id + "/../../escape.bin"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			archivePath := writeForeignEntryArchive(t, id, tt.entry, 64*1024)
+
+			config := &Config{BaseDir: t.TempDir()}
+			a := NewArchiver(config, nil)
+			a.maxExpandedBytes = 1024
+
+			_, err := a.ImportFromFile(context.Background(), archivePath)
+			var tooLarge ErrArchiveTooLarge
+			if !errors.As(err, &tooLarge) {
+				t.Fatalf("ImportFromFile error = %v, want ErrArchiveTooLarge", err)
+			}
+			if tooLarge.Limit != 1024 {
+				t.Errorf("ErrArchiveTooLarge.Limit = %d, want 1024", tooLarge.Limit)
+			}
+			if _, err := os.Stat(config.BundlePath(id)); !os.IsNotExist(err) {
+				t.Errorf("partial bundle left at %s (stat err %v)", config.BundlePath(id), err)
+			}
+		})
+	}
+}
+
+func TestArchiver_ImportFromFile_CancelledDuringASkippedEntry(t *testing.T) {
+	t.Run("cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		b := &expansionBudget{ctx: ctx, r: bytes.NewReader(make([]byte, 64)), remaining: 1024, limit: 1024}
+		buf := make([]byte, 16)
+		if _, err := b.Read(buf); err != nil {
+			t.Fatalf("Read before cancel: %v", err)
+		}
+		cancel()
+		if _, err := b.Read(buf); !errors.Is(err, context.Canceled) {
+			t.Fatalf("Read after cancel error = %v, want context.Canceled", err)
+		}
+	})
+	t.Run("first byte past the limit", func(t *testing.T) {
+		b := &expansionBudget{ctx: context.Background(), r: bytes.NewReader(make([]byte, 17)), remaining: 16, limit: 16}
+		n, err := io.ReadAll(b)
+		var tooLarge ErrArchiveTooLarge
+		if !errors.As(err, &tooLarge) || tooLarge.Limit != 16 {
+			t.Fatalf("ReadAll error = %v, want ErrArchiveTooLarge{Limit: 16}", err)
+		}
+		if len(n) != 16 {
+			t.Errorf("read %d bytes before refusal, want 16", len(n))
+		}
+	})
+	t.Run("exactly the limit", func(t *testing.T) {
+		b := &expansionBudget{ctx: context.Background(), r: bytes.NewReader(make([]byte, 16)), remaining: 16, limit: 16}
+		n, err := io.ReadAll(b)
+		if err != nil || len(n) != 16 {
+			t.Fatalf("ReadAll = %d bytes, %v; want 16 bytes, nil", len(n), err)
+		}
+	})
+}
+
+func TestArchiver_ImportFromFile_RefusesTooManyEntries(t *testing.T) {
+	id := "many"
+	archivePath := writeBudgetTestArchive(t, id, map[string][]byte{
+		"a": []byte("a"),
+		"b": []byte("b"),
+		"c": []byte("c"),
+		"d": []byte("d"),
+	})
+
+	config := &Config{BaseDir: t.TempDir()}
+	a := NewArchiver(config, nil)
+	a.maxEntries = 2
+
+	_, err := a.ImportFromFile(context.Background(), archivePath)
+	var tooMany ErrArchiveTooManyEntries
+	if !errors.As(err, &tooMany) {
+		t.Fatalf("ImportFromFile error = %v, want ErrArchiveTooManyEntries", err)
+	}
+	if tooMany.Limit != 2 {
+		t.Errorf("ErrArchiveTooManyEntries.Limit = %d, want 2", tooMany.Limit)
+	}
+	if _, err := os.Stat(config.BundlePath(id)); !os.IsNotExist(err) {
+		t.Errorf("partial bundle left at %s (stat err %v)", config.BundlePath(id), err)
+	}
+}
+
+func TestArchiver_ImportFromFile_CancelledRemovesPartialOutput(t *testing.T) {
+	id := "cancelled"
+	archivePath := writeBudgetTestArchive(t, id, map[string][]byte{
+		"tpm/tpm2-00.permall": []byte("state"),
+	})
+
+	config := &Config{BaseDir: t.TempDir()}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := NewArchiver(config, nil).ImportFromFile(ctx, archivePath)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ImportFromFile error = %v, want context.Canceled", err)
+	}
+	if _, err := os.Stat(config.BundlePath(id)); !os.IsNotExist(err) {
+		t.Errorf("partial bundle left at %s (stat err %v)", config.BundlePath(id), err)
+	}
+}
+
+// writeHostileIDArchive writes a bundle archive whose manifest carries id and
+// whose one regular file entry sits under the archive prefix.
+func writeHostileIDArchive(t *testing.T, id string) string {
+	t.Helper()
+	archivePath := filepath.Join(t.TempDir(), "hostile.tar.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	gzw := gzip.NewWriter(f)
+	tw := tar.NewWriter(gzw)
+	manifestData, err := json.Marshal(&Manifest{
+		Version:   ManifestVersion,
+		ID:        id,
+		Mode:      BundleModePreAssigned,
+		CreatedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	for _, file := range []struct {
+		name    string
+		content []byte
+	}{
+		{"vtpm-bundle-hostile/manifest.json", manifestData},
+		{"vtpm-bundle-hostile/f", []byte("evil")},
+	} {
+		if err := tw.WriteHeader(&tar.Header{Name: file.name, Mode: 0600, Size: int64(len(file.content)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatalf("write header: %v", err)
+		}
+		if _, err := tw.Write(file.content); err != nil {
+			t.Fatalf("write entry: %v", err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close archive: %v", err)
+	}
+	return archivePath
+}
+
+func TestArchiver_Import_HostileManifestID(t *testing.T) {
+	absTarget := filepath.Join(t.TempDir(), "abs-bundle")
+	tests := []struct {
+		name string
+		id   string
+		// outside is a path that must not exist after the import.
+		outside func(baseDir string) string
+	}{
+		{"parent", "../x", func(baseDir string) string { return filepath.Join(baseDir, "x") }},
+		{"nested", "a/b", func(baseDir string) string { return filepath.Join(baseDir, "bundles", "a") }},
+		{"absolute", absTarget, func(string) string { return absTarget }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := &Config{BaseDir: t.TempDir()}
+			archivePath := writeHostileIDArchive(t, tt.id)
+
+			for _, importer := range []struct {
+				name string
+				run  func() error
+			}{
+				{"ImportFromFile", func() error {
+					_, err := NewArchiver(config, nil).ImportFromFile(context.Background(), archivePath)
+					return err
+				}},
+				{"Import", func() error {
+					f, err := os.Open(archivePath)
+					if err != nil {
+						t.Fatalf("open archive: %v", err)
+					}
+					defer f.Close()
+					_, err = NewArchiver(config, nil).Import(context.Background(), f)
+					return err
+				}},
+			} {
+				err := importer.run()
+				var invalid ErrInvalidManifest
+				if !errors.As(err, &invalid) {
+					t.Fatalf("%s(id %q): want ErrInvalidManifest, got %v", importer.name, tt.id, err)
+				}
+			}
+
+			if _, err := os.Stat(tt.outside(config.BaseDir)); !os.IsNotExist(err) {
+				t.Errorf("hostile id %q created %s (stat err %v)", tt.id, tt.outside(config.BaseDir), err)
+			}
+			entries, err := os.ReadDir(config.BaseDir)
+			if err != nil {
+				t.Fatalf("read base dir: %v", err)
+			}
+			for _, e := range entries {
+				if filepath.Join(config.BaseDir, e.Name()) != filepath.Clean(config.BundlesDir()) {
+					t.Errorf("hostile id %q created %s outside the bundle store", tt.id, e.Name())
+				}
+			}
+			if bundles, err := os.ReadDir(config.BundlesDir()); err == nil && len(bundles) != 0 {
+				t.Errorf("hostile id %q left %d entries in the bundle store", tt.id, len(bundles))
+			}
+		})
+	}
+}
+
 func TestArchiver_Export_EmptyBundle(t *testing.T) {
 	tmpDir := t.TempDir()
 	bundleID := "empty-bundle"
@@ -1061,6 +1495,90 @@ func TestArchiver_ValidateArchive_ManifestInDirectory(t *testing.T) {
 	if validatedManifest.ID != "nested-manifest" {
 		t.Errorf("Manifest ID = %v, want nested-manifest", validatedManifest.ID)
 	}
+}
+
+// writeValidateArchive writes a gzip tar of the given entries, in order, to a
+// buffer for ValidateArchive.
+func writeValidateArchive(t *testing.T, entries []struct {
+	name    string
+	content []byte
+}) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+	for _, e := range entries {
+		if err := tw.WriteHeader(&tar.Header{Name: e.name, Mode: 0600, Size: int64(len(e.content)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatalf("write header: %v", err)
+		}
+		if _, err := tw.Write(e.content); err != nil {
+			t.Fatalf("write entry: %v", err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	return &buf
+}
+
+// TestArchiver_ValidateArchive_BudgetsTheManifestRead checks that validation
+// reads the decompressed stream within the expansion budget: an oversized
+// manifest and an oversized entry before the manifest are both refused with
+// ErrArchiveTooLarge, and a cancelled context stops the read.
+func TestArchiver_ValidateArchive_BudgetsTheManifestRead(t *testing.T) {
+	manifestData, err := json.Marshal(&Manifest{
+		Version:   ManifestVersion,
+		ID:        "x",
+		Mode:      BundleModePreAssigned,
+		CreatedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	padded := append(append([]byte{}, manifestData...), bytes.Repeat([]byte(" "), 64*1024)...)
+
+	type entry = struct {
+		name    string
+		content []byte
+	}
+	tests := []struct {
+		name    string
+		entries []entry
+	}{
+		{"oversized manifest", []entry{{"vtpm-bundle-x/manifest.json", padded}}},
+		{"oversized entry before the manifest", []entry{
+			{"other/blob.bin", make([]byte, 64*1024)},
+			{"vtpm-bundle-x/manifest.json", manifestData},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := NewArchiver(&Config{BaseDir: t.TempDir()}, nil)
+			a.maxExpandedBytes = 1024
+
+			_, err := a.ValidateArchive(context.Background(), writeValidateArchive(t, tt.entries))
+			var tooLarge ErrArchiveTooLarge
+			if !errors.As(err, &tooLarge) {
+				t.Fatalf("ValidateArchive error = %v, want ErrArchiveTooLarge", err)
+			}
+			if tooLarge.Limit != 1024 {
+				t.Errorf("ErrArchiveTooLarge.Limit = %d, want 1024", tooLarge.Limit)
+			}
+		})
+	}
+
+	t.Run("cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		a := NewArchiver(&Config{BaseDir: t.TempDir()}, nil)
+		_, err := a.ValidateArchive(ctx, writeValidateArchive(t, []entry{{"vtpm-bundle-x/manifest.json", manifestData}}))
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("ValidateArchive error = %v, want context.Canceled", err)
+		}
+	})
 }
 
 func TestArchiver_Import_WithSecureBootEnabled(t *testing.T) {
