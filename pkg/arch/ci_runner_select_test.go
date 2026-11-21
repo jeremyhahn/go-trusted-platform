@@ -380,10 +380,21 @@ func TestRunnerSelectionScript(t *testing.T) {
 		{name: "a failed second jobs page at saturation", env: gh, jobs: slices.Concat(saturated, paged),
 			break_: func(r map[string]selReply) { r[jobsURL(9, 2)] = selReply{code: 502, body: `{"message":"Bad Gateway"}`} },
 			want:   hosted, warning: true},
+		// v1.50: a list short of its total_count is a lower bound, so it
+		// still overflows at saturation.
 		{name: "a jobs list short of its total_count at saturation", env: gh, jobs: saturated,
 			break_: func(r map[string]selReply) {
 				r[jobsURL(7, 1)] = selReply{code: 200, body: strings.Replace(r[jobsURL(7, 1)].body, `"total_count":30`, `"total_count":31`, 1)}
 				r[jobsURL(7, 2)] = selReply{code: 200, body: `{"total_count":31,"jobs":[]}`}
+			},
+			want: overflow},
+		// v1.50: a short list that reaches no trigger stays hosted with a
+		// ::warning naming the shortfall.
+		{name: "a jobs list short of its total_count under the limit", env: gh,
+			jobs: slices.Concat(self, selJobs(10, 7, "in_progress", selUbuntu, time.Minute)),
+			break_: func(r map[string]selReply) {
+				r[jobsURL(7, 1)] = selReply{code: 200, body: strings.Replace(r[jobsURL(7, 1)].body, `"total_count":10`, `"total_count":11`, 1)}
+				r[jobsURL(7, 2)] = selReply{code: 200, body: `{"total_count":11,"jobs":[]}`}
 			},
 			want: hosted, warning: true},
 		{name: "a run list reply that is not 200 at saturation", env: gh, jobs: saturated,
