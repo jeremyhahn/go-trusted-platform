@@ -267,7 +267,13 @@ describe('KMSService', () => {
 
   const encryptReq: EncryptRequest = { keyId: 'key-1', plaintext: 'cGxhaW4=', context: 'YWFk' };
   const decryptReq: DecryptRequest = { keyId: 'key-1', ciphertext: 'Y2lwaGVy', keyVersion: 2 };
-  const signReq: SignRequest = { keyId: 'key-1', message: 'bXNn', hashAlgorithm: 'SHA256' };
+  const signReq: SignRequest = {
+    keyId: 'key-1',
+    message: 'bXNn',
+    hashAlgorithm: 'SHA256',
+    keyVersion: 3,
+    preHashed: true,
+  };
   const verifyReq: VerifyRequest = {
     keyId: 'key-1',
     message: 'bXNn',
@@ -371,15 +377,41 @@ describe('KMSService', () => {
   });
 
   const postCases: Array<{ method: string; path: string; body: unknown; call: () => Promise<unknown> }> = [
-    { method: 'encrypt', path: '/v1/kms/encrypt', body: encryptReq, call: () => service.encrypt(encryptReq) },
-    { method: 'decrypt', path: '/v1/kms/decrypt', body: decryptReq, call: () => service.decrypt(decryptReq) },
-    { method: 'sign', path: '/v1/kms/sign', body: signReq, call: () => service.sign(signReq) },
-    { method: 'verify', path: '/v1/kms/verify', body: verifyReq, call: () => service.verify(verifyReq) },
+    {
+      method: 'encrypt',
+      path: '/v1/kms/encrypt/key-1',
+      body: { plaintext: 'cGxhaW4=', context: 'YWFk' },
+      call: () => service.encrypt(encryptReq),
+    },
+    {
+      method: 'decrypt',
+      path: '/v1/kms/decrypt/key-1',
+      body: { ciphertext: 'Y2lwaGVy', version: 2 },
+      call: () => service.decrypt(decryptReq),
+    },
+    {
+      method: 'sign',
+      path: '/v1/kms/sign/key-1',
+      body: { data: 'bXNn', hash: 'SHA256', version: 3, pre_hashed: true },
+      call: () => service.sign(signReq),
+    },
+    {
+      method: 'verify',
+      path: '/v1/kms/verify/key-1',
+      body: { data: 'bXNn', signature: 'c2ln', hash: 'SHA384', version: 1 },
+      call: () => service.verify(verifyReq),
+    },
+    {
+      method: 'encrypt',
+      path: '/v1/kms/encrypt/a%2Fb',
+      body: { plaintext: 'cGxhaW4=' },
+      call: () => service.encrypt({ keyId: 'a/b', plaintext: 'cGxhaW4=' }),
+    },
   ];
 
   for (const c of postCases) {
     describe(c.method, () => {
-      it(`POSTs the request unchanged to ${c.path} with no query`, async () => {
+      it(`POSTs the server's wire body to ${c.path}, as the REST router serves`, async () => {
         await expect(c.call()).resolves.toBe(ok);
         expectOnlyCall('post', c.path, c.body);
       });
