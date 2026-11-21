@@ -16,9 +16,11 @@ package daemon
 import (
 	"context"
 	"crypto"
+	"crypto/fips140"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -42,13 +44,34 @@ const simulatedPCR = 16
 // simulator, so the TPM service methods run against real TPM commands.
 func newSimulatedTPM(t *testing.T) xkmssdk.TrustedPlatformModule {
 	t.Helper()
+	tpm, _ := newSimulatedTPMWithSim(t)
+	return tpm
+}
+
+// newSimulatedTPMWithSim is newSimulatedTPM that also returns the simulator,
+// so a test can open a second TPM over the same state with openSimulatedTPM.
+func newSimulatedTPMWithSim(t *testing.T) (xkmssdk.TrustedPlatformModule, io.ReadWriter) {
+	t.Helper()
 
 	sim, err := simulator.GetWithFixedSeedInsecure(1234567890)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sim.Close()) })
 
+	tpm, err := openSimulatedTPM(sim)
+	if err == xkmssdk.ErrTPMNotInitialized {
+		require.NoError(t, tpm.Provision(nil))
+	} else {
+		require.NoError(t, err)
+	}
+	t.Cleanup(func() { require.NoError(t, tpm.Close()) })
+	return tpm, sim
+}
+
+// openSimulatedTPM opens an xkms TPM over rw with the simulator's
+// configuration. It does not provision.
+func openSimulatedTPM(rw io.ReadWriter) (xkmssdk.TrustedPlatformModule, error) {
 	rsa2048 := func() *xkmssdk.RSAConfig { return &xkmssdk.RSAConfig{KeySize: 2048} }
-	tpm, err := xkmssdk.NewTPM2(&xkmssdk.TPMParams{
+	return xkmssdk.NewTPM2(&xkmssdk.TPMParams{
 		Config: &xkmssdk.TPMConfig{
 			Hash: "SHA-256",
 			EK: &xkmssdk.EKConfig{
@@ -75,15 +98,8 @@ func newSimulatedTPM(t *testing.T) xkmssdk.TrustedPlatformModule {
 			},
 		},
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Transport: transport.FromReadWriter(sim),
+		Transport: transport.FromReadWriter(rw),
 	})
-	if err == xkmssdk.ErrTPMNotInitialized {
-		require.NoError(t, tpm.Provision(nil))
-	} else {
-		require.NoError(t, err)
-	}
-	t.Cleanup(func() { require.NoError(t, tpm.Close()) })
-	return tpm
 }
 
 // simulatedPCRValue reads the SHA-256 bank of simulatedPCR through GetPCRs.
@@ -224,12 +240,25 @@ func TestTPMSimulator_Attrs(t *testing.T) {
 	})
 }
 
+// skipIfFIPSOnlyXKMSSession skips a simulator test under GODEBUG=fips140=only.
+// go-xkms opens an unsalted, unbound policy session in ActivateCredential, so
+// the session HMAC key is zero bytes and crypto/hmac panics in FIPS-only mode
+// (#1979). The upstream go-xkms fix (plan slice 2) drops this skip.
+func skipIfFIPSOnlyXKMSSession(t *testing.T) {
+	t.Helper()
+	if fips140.Enforced() {
+		t.Skip("#1979: go-xkms ActivateCredential uses an unsalted policy session (zero-length HMAC key), which panics under fips140=only")
+	}
+}
+
 // TestTPMSimulator_ActivateCredentialRefusesAForeignCredential is a
 // top-level test, not a TestTPMSimulator_Attrs subtest: a well-formed pair
 // reaches go-tpm, whose policy session HMAC panics under
 // GODEBUG=fips140=only (go-quicbaas#1389), and the FIPS foreign-failure
 // baseline can only list, and rerun around, a top-level test.
+
 func TestTPMSimulator_ActivateCredentialRefusesAForeignCredential(t *testing.T) {
+	skipIfFIPSOnlyXKMSSession(t)
 	tpm := newSimulatedTPM(t)
 	svc := newTPMGRPCServiceWith(tpm)
 	mcp := newMCPProviderWithTPM(tpm)
@@ -273,4 +302,68 @@ func TestTPMSimulator_ActivateCredentialRefusesAForeignCredential(t *testing.T) 
 		"the guard must pass a well-formed pair through to the TPM")
 	assert.ErrorIs(t, helperErr, xkmssdk.ErrTPMInvalidActivationCredential,
 		"the TPM refuses a credential made for another key's name")
+}
+
+// TestTPMSimulator_GetAKWithoutIAK drives the real missing-handle path
+// (#2188 Codex): with the IAK evicted from the simulated TPM, IAKAttributes
+// returns the ReadPublic TPM_RC_HANDLE error, and GetAK on gRPC (REST 404)
+// and TPMGetIAK on MCP must answer NotFound, so the quote page offers
+// Create AK instead of an error.
+func TestTPMSimulator_GetAKWithoutIAK(t *testing.T) {
+	provisioned, sim := newSimulatedTPMWithSim(t)
+	ctx := context.Background()
+
+	attrs, err := provisioned.IAKAttributes()
+	require.NoError(t, err)
+	require.NoError(t, provisioned.DeleteKey(attrs, nil))
+
+	// The provisioning instance keeps the IAK attributes it created in
+	// memory; a daemon that starts on a TPM with no IAK has no such cache.
+	// Open a fresh instance over the same simulator, as the daemon would.
+	// The wrapper hides the simulator's Close from this instance, which
+	// newSimulatedTPMWithSim already closes.
+	tpm, err := openSimulatedTPM(struct{ io.ReadWriter }{sim})
+	if err != nil {
+		require.ErrorIs(t, err, xkmssdk.ErrTPMNotInitialized)
+	}
+	require.NotNil(t, tpm)
+	_, _, err = tpm.ReadHandle(xkmssdk.TPMHandle(attrs.TPMAttributes.Handle))
+	require.Error(t, err, "the IAK handle is evicted")
+
+	_, grpcErr := newTPMGRPCServiceWith(tpm).GetAK(ctx, &platformv1.GetAKRequest{})
+	_, mcpErr := newMCPProviderWithTPM(tpm).TPMGetIAK(ctx)
+	assert.Equal(t, codes.NotFound, status.Code(grpcErr), "gRPC GetAK: %v", grpcErr)
+	assert.Equal(t, codes.NotFound, status.Code(mcpErr), "MCP TPMGetIAK: %v", mcpErr)
+}
+
+// TestTPMSimulator_ActivateCredentialZeroKeySessionPanicsUnderFIPSOnly pins
+// the cause of the #1979 skips: under GODEBUG=fips140=only a well-formed
+// MakeCredential/ActivateCredential pair panics in crypto/hmac, because
+// go-xkms opens an unsalted, unbound policy session whose HMAC key is zero
+// bytes. It runs only in FIPS-only mode. When go-xkms ships a salted session
+// the pair stops panicking and this test fails, telling the reader to drop
+// both #1979 skips (here and in pkg/vpn/agent) and this test.
+func TestTPMSimulator_ActivateCredentialZeroKeySessionPanicsUnderFIPSOnly(t *testing.T) {
+	if !fips140.Enforced() {
+		t.Skip("#1979: the zero-length session HMAC key panics only under GODEBUG=fips140=only")
+	}
+	tpm := newSimulatedTPM(t)
+	svc := newTPMGRPCServiceWith(tpm)
+	ctx := context.Background()
+
+	recovered := func() (r any) {
+		defer func() { r = recover() }()
+		secret := sha256.Sum256([]byte("zero-key-secret"))
+		challenge, err := svc.MakeCredential(ctx, &platformv1.MakeCredentialRequest{AkName: simulatedAKName("foreign"), Secret: secret[:]})
+		require.NoError(t, err)
+		_, _ = activateCredential(tpm, challenge.GetCredentialBlob(), challenge.GetEncryptedSecret())
+		return nil
+	}()
+
+	if recovered == nil {
+		t.Fatal("#1979: ActivateCredential no longer panics under fips140=only; go-xkms now salts its policy session, " +
+			"so drop skipIfFIPSOnlyXKMSSession here, the #1979 skip in pkg/vpn/agent, and this test")
+	}
+	assert.Contains(t, fmt.Sprint(recovered), "shorter than 112 bits",
+		"the panic is crypto/hmac refusing the zero-length session key")
 }
