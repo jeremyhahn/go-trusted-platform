@@ -3344,6 +3344,47 @@ func TestEnsureStateDir_TheRootDatapathChildCanTraverseTheDataDirectory(t *testi
 		"the state directory is owned by the uid and gid the datapath child runs with")
 }
 
+// A Supervisor not built by New (as main's tests build one) has no
+// rootCredentials or rootGroups; ensureStateDir keeps the process's own
+// credentials for the root child instead of calling a nil func (#646).
+func TestEnsureStateDir_ABareSupervisorFallsBackToTheProcessCredentials(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("as root the temp data directory is already owned by the child's uid")
+	}
+	var def Definition
+	for _, d := range Definitions() {
+		if d.Name == "datapath" {
+			def = d
+		}
+	}
+	require.NotEmpty(t, def.StateDir, "the datapath class keeps a state directory")
+	require.False(t, def.Unprivileged, "the datapath class stays uid 0")
+
+	dataDir := t.TempDir()
+	require.NoError(t, os.Chmod(dataDir, 0o700))
+
+	childUID, childGID := uint32(os.Getuid())+1, uint32(os.Getgid())+1
+	var chowned []string
+	prevCreds, prevChown := childCredentials, chownStateDir
+	t.Cleanup(func() { childCredentials, chownStateDir = prevCreds, prevChown })
+	childCredentials = func() (uint32, uint32) { return childUID, childGID }
+	chownStateDir = func(path string, uid, gid int) error {
+		chowned = append(chowned, path)
+		return nil
+	}
+
+	s := &Supervisor{cfg: Config{Inherited: Inherited{DataDir: dataDir}, UID: 990, GID: 990}}
+	require.NotPanics(t, func() {
+		require.NoError(t, s.ensureStateDir(def))
+	})
+
+	var st syscall.Stat_t
+	require.NoError(t, syscall.Stat(dataDir, &st))
+	assert.NotZero(t, st.Mode&traverseBit(st.Uid, st.Gid, childUID, childGID),
+		"the data directory is searchable with the child credentials (mode %o)", st.Mode&0o7777)
+	assert.Equal(t, []string{filepath.Join(dataDir, def.StateDir)}, chowned)
+}
+
 func TestStartService_AStateDirectoryThatCannotBeMadeRefusesTheLaunch(t *testing.T) {
 	// A data directory that is a file: the child would run without its
 	// journal, so it is not launched.

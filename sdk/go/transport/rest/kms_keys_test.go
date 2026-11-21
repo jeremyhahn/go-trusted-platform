@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"reflect"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -203,6 +204,40 @@ func TestKMSGenerateKey_ReplyFillsHandleAndMetadata(t *testing.T) {
 	meta := resp.GetMetadata()
 	if !meta.GetExportable() || !meta.GetDeletionProtection() || meta.GetKeyId() != "k1" {
 		t.Fatalf("metadata = %v", meta)
+	}
+}
+
+func TestKMSGetKey_FlatReplyFillsHandleAndMetadata(t *testing.T) {
+	a, _ := kmsAdapter(t, `{"key_id":"k1","name":"one","algorithm":"ECDSA-P256","version":3,"usage":["SIGN"],"created_at":"2026-11-01T00:00:00Z","rotated_at":"2026-11-02T00:00:00Z"}`)
+	resp := &platformv1.GetKeyResponse{}
+	err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_GetKey_FullMethodName,
+		&platformv1.GetKeyRequest{KeyId: "k1"}, resp)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	created := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC).Unix()
+	rotated := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC).Unix()
+	key := resp.GetKey()
+	if key.GetKeyId() != "k1" || key.GetVersion() != 3 ||
+		key.GetAlgorithm() != platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256 ||
+		key.GetCreatedAt() != created {
+		t.Fatalf("key = %v", key)
+	}
+	meta := resp.GetMetadata()
+	if meta.GetKeyId() != "k1" || meta.GetName() != "one" || meta.GetVersion() != 3 ||
+		meta.GetAlgorithm() != platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256 ||
+		len(meta.GetUsage()) != 1 || meta.GetUsage()[0] != platformv1.KeyUsage_KEY_USAGE_SIGN ||
+		meta.GetCreatedAt() != created || meta.GetUpdatedAt() != rotated {
+		t.Fatalf("metadata = %v", meta)
+	}
+}
+
+func TestKMSGetKey_BadReplyIsAnUnmarshalError(t *testing.T) {
+	a, _ := kmsAdapter(t, `"not json"`)
+	err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_GetKey_FullMethodName,
+		&platformv1.GetKeyRequest{KeyId: "k1"}, &platformv1.GetKeyResponse{})
+	if !errors.As(err, new(ErrUnmarshalFailed)) {
+		t.Fatalf("err = %v, want ErrUnmarshalFailed", err)
 	}
 }
 
