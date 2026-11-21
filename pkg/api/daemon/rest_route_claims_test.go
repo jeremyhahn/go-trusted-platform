@@ -146,6 +146,8 @@ var daemonDivergentClaims = map[string]string{
 	"/platform.v1.KeyManagementService/Encrypt":                kmsKeyInBody,
 	"/platform.v1.KeyManagementService/Sign":                   kmsKeyInBody,
 	"/platform.v1.KeyManagementService/Verify":                 kmsKeyInBody,
+	"/platform.v1.KeyManagementService/HMAC":                   "#452: the daemon takes the key in the body at POST /api/v1/kms/hmac; the claim is the webservice's /hmac/{name} path",
+	"/platform.v1.KeyManagementService/VerifyHMAC":             "#452: the daemon has no HMAC verify route; the claim is the webservice's /hmac/{name}/verify",
 	"/platform.v1.KeyManagementService/GenerateDataKey":        "#452: the daemon's KMS routes have no data-keys",
 	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": "#452: the daemon's KMS routes have no data-keys/wrapped",
 
