@@ -1081,6 +1081,9 @@ type RegistryParams struct {
 	// LogQuerier wires /api/v1/platform/logs. When nil the endpoint
 	// returns 503 with the same structured-honesty pattern.
 	LogQuerier platform.LogQuerier
+	// Shutdowner wires POST /api/v1/platform/shutdown. When nil the
+	// endpoint returns 503.
+	Shutdowner platform.Shutdowner
 	// RegistryService wires /api/v1/compute/images. When nil the
 	// /compute/images surface returns 503 via the service registry.
 	RegistryService grpcapi.RegistryService
@@ -1935,6 +1938,9 @@ func (registry *HandlerRegistry) PlatformRestRouter() *platform.PlatformRouter {
 	}
 	if registry.params.LogQuerier != nil {
 		router.SetLogQuerier(registry.params.LogQuerier)
+	}
+	if registry.params.Shutdowner != nil {
+		router.SetShutdowner(registry.params.Shutdowner)
 	}
 	return router
 }

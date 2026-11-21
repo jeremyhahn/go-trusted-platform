@@ -490,6 +490,7 @@ POST /api/v1/platform/config/validate
 POST /api/v1/platform/services/{service}/restart
 POST /api/v1/platform/services/{service}/start
 POST /api/v1/platform/services/{service}/stop
+POST /api/v1/platform/shutdown
 POST /api/v1/provisioning/config
 POST /api/v1/provisioning/devices/{mac}/install-complete
 POST /api/v1/provisioning/devices/{mac}/register
