@@ -84,6 +84,7 @@ export {
   DeviceService,
   DNSService,
   NTPService,
+  CeremonyService,
   GatewayService,
   IAMService,
   IDevIDService,
@@ -147,6 +148,24 @@ export type {
   ListNTPSourcesResponse,
   StepNTPClockResponse,
 } from './services/ntp-service.js';
+export type {
+  CeremonyState,
+  CeremonyAuthenticatorType,
+  CeremonyOfficerRole,
+  CeremonyInitRequest,
+  CeremonyInitResponse,
+  CeremonyStatusResponse,
+  CeremonyClaimCertBeginRequest,
+  CeremonyClaimCertBeginResponse,
+  CeremonyClaimCertCompleteRequest,
+  CeremonyClaimCertCompleteResponse,
+  CeremonyClaimShareBeginRequest,
+  CeremonyClaimShareBeginResponse,
+  CeremonyClaimShareCompleteRequest,
+  CeremonyClaimShareCompleteResponse,
+  CeremonySignCSRRequest,
+  CeremonySignCSRResponse,
+} from './services/ceremony-service.js';
 
 // =============================================================================
 // Error Exports

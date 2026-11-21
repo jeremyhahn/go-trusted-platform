@@ -1,0 +1,226 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+// Package ceremony implements REST endpoints under /api/v1/ceremony. The
+// routes are a thin binding over the same in-process CeremonyServiceServer
+// that backs gRPC and the daemon REST, so the web UI sees the one ceremony.
+package ceremony
+
+import (
+	"net/http"
+
+	"github.com/gorilla/mux"
+	"google.golang.org/protobuf/proto"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/router"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+)
+
+// basePath is the REST prefix for the ceremony routes.
+const basePath = "/ceremony"
+
+// The scopes the routes require, the same ones the gRPC transport enforces
+// (pkg/api/iam/method_permissions.go).
+const (
+	scopeInitialize         = "ceremony:initialize"
+	scopeStatus             = "ceremony:status"
+	scopeClaimCert          = "ceremony:claim_cert"
+	scopeClaimShareBegin    = "ceremony:claim_share_begin"
+	scopeClaimShareComplete = "ceremony:claim_share_complete"
+	scopeSignCSR            = "ceremony:sign_csr"
+)
+
+// Router wires REST endpoints onto a CeremonyServiceServer.
+type Router struct {
+	logger          *logging.Logger
+	server          platformv1.CeremonyServiceServer
+	respWriter      response.HttpWriter
+	scopeAuthorizer middleware.ScopeAuthorizer
+	router.WebServiceRouter
+}
+
+// NewRouter creates a new ceremony REST router.
+func NewRouter(
+	logger *logging.Logger,
+	server platformv1.CeremonyServiceServer,
+	respWriter response.HttpWriter,
+) *Router {
+	return &Router{logger: logger, server: server, respWriter: respWriter}
+}
+
+// SetScopeAuthorizer supplies the scope check every route takes on top of the
+// admin gate. Nil leaves the routes on the role gate alone, which is the case
+// under the legacy JWT handler: its sessions carry roles, not scopes.
+func (r *Router) SetScopeAuthorizer(authorizer middleware.ScopeAuthorizer) {
+	r.scopeAuthorizer = authorizer
+}
+
+// RegisterRoutes mounts the ceremony routes, the same paths the daemon REST
+// serves. Every answer, error or success, carries Cache-Control: no-store:
+// Init returns the admin private key and ClaimShareComplete a Shamir share.
+//
+//	POST /api/v1/ceremony/init                 - Init (ceremony:initialize)
+//	GET  /api/v1/ceremony/status               - Status (ceremony:status)
+//	POST /api/v1/ceremony/claim-cert/begin     - ClaimCertBegin (ceremony:claim_cert)
+//	POST /api/v1/ceremony/claim-cert/complete  - ClaimCertComplete (ceremony:claim_cert)
+//	POST /api/v1/ceremony/claim-share/begin    - ClaimShareBegin (ceremony:claim_share_begin)
+//	POST /api/v1/ceremony/claim-share/complete - ClaimShareComplete (ceremony:claim_share_complete)
+//	POST /api/v1/ceremony/sign-csr             - SignCSR (ceremony:sign_csr)
+func (r *Router) RegisterRoutes(parent *mux.Router) {
+	sr := parent.PathPrefix(basePath).Subrouter()
+	sr.Handle("/init", r.route(scopeInitialize, r.initCeremony)).Methods(http.MethodPost)
+	sr.Handle("/status", r.route(scopeStatus, r.status)).Methods(http.MethodGet)
+	sr.Handle("/claim-cert/begin", r.route(scopeClaimCert, r.claimCertBegin)).Methods(http.MethodPost)
+	sr.Handle("/claim-cert/complete", r.route(scopeClaimCert, r.claimCertComplete)).Methods(http.MethodPost)
+	sr.Handle("/claim-share/begin", r.route(scopeClaimShareBegin, r.claimShareBegin)).Methods(http.MethodPost)
+	sr.Handle("/claim-share/complete", r.route(scopeClaimShareComplete, r.claimShareComplete)).Methods(http.MethodPost)
+	sr.Handle("/sign-csr", r.route(scopeSignCSR, r.signCSR)).Methods(http.MethodPost)
+}
+
+// route sets Cache-Control: no-store before anything answers, the scope
+// check included, then runs handler behind the scope check.
+func (r *Router) route(scope string, handler http.HandlerFunc) http.Handler {
+	scoped := r.requireScope(scope, handler)
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		scoped.ServeHTTP(w, req)
+	})
+}
+
+// requireScope wraps handler in the scope check when one is configured.
+func (r *Router) requireScope(scope string, handler http.HandlerFunc) http.Handler {
+	if r.scopeAuthorizer == nil {
+		return handler
+	}
+	return r.scopeAuthorizer.RequireScope(scope)(handler)
+}
+
+// ensure reports whether the backing service is configured, writing a 503
+// when it is not.
+func (r *Router) ensure(w http.ResponseWriter, req *http.Request) bool {
+	if r.server == nil {
+		protorest.WriteError(w, req, r.respWriter, &protorest.ErrServiceUnavailable{Service: "ceremony"})
+		return false
+	}
+	return true
+}
+
+// decode reads the request body into msg, writing a 400 when it is not
+// valid JSON for msg.
+func (r *Router) decode(w http.ResponseWriter, req *http.Request, msg proto.Message) bool {
+	if err := protorest.DecodeRequest(req, msg); err != nil {
+		r.respWriter.Error400(w, req, err)
+		return false
+	}
+	return true
+}
+
+// write answers 200 with resp, or the HTTP status matching err.
+func (r *Router) write(w http.ResponseWriter, req *http.Request, resp proto.Message, err error) {
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+// initCeremony handles POST /api/v1/ceremony/init.
+func (r *Router) initCeremony(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	in := &platformv1.CeremonyInitRequest{}
+	if !r.decode(w, req, in) {
+		return
+	}
+	resp, err := r.server.Init(req.Context(), in)
+	r.write(w, req, resp, err)
+}
+
+// status handles GET /api/v1/ceremony/status.
+func (r *Router) status(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	resp, err := r.server.Status(req.Context(), &platformv1.CeremonyStatusRequest{})
+	r.write(w, req, resp, err)
+}
+
+// claimCertBegin handles POST /api/v1/ceremony/claim-cert/begin.
+func (r *Router) claimCertBegin(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	in := &platformv1.CeremonyClaimCertBeginRequest{}
+	if !r.decode(w, req, in) {
+		return
+	}
+	resp, err := r.server.ClaimCertBegin(req.Context(), in)
+	r.write(w, req, resp, err)
+}
+
+// claimCertComplete handles POST /api/v1/ceremony/claim-cert/complete.
+func (r *Router) claimCertComplete(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	in := &platformv1.CeremonyClaimCertCompleteRequest{}
+	if !r.decode(w, req, in) {
+		return
+	}
+	resp, err := r.server.ClaimCertComplete(req.Context(), in)
+	r.write(w, req, resp, err)
+}
+
+// claimShareBegin handles POST /api/v1/ceremony/claim-share/begin.
+func (r *Router) claimShareBegin(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	in := &platformv1.CeremonyClaimShareBeginRequest{}
+	if !r.decode(w, req, in) {
+		return
+	}
+	resp, err := r.server.ClaimShareBegin(req.Context(), in)
+	r.write(w, req, resp, err)
+}
+
+// claimShareComplete handles POST /api/v1/ceremony/claim-share/complete.
+func (r *Router) claimShareComplete(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	in := &platformv1.CeremonyClaimShareCompleteRequest{}
+	if !r.decode(w, req, in) {
+		return
+	}
+	resp, err := r.server.ClaimShareComplete(req.Context(), in)
+	r.write(w, req, resp, err)
+}
+
+// signCSR handles POST /api/v1/ceremony/sign-csr.
+func (r *Router) signCSR(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	in := &platformv1.CeremonySignCSRRequest{}
+	if !r.decode(w, req, in) {
+		return
+	}
+	resp, err := r.server.SignCSR(req.Context(), in)
+	r.write(w, req, resp, err)
+}
