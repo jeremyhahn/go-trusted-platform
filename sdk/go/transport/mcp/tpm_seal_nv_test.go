@@ -25,6 +25,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	tpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tpm"
 )
 
 func TestTPMSealNVMethodsAreRouted(t *testing.T) {
@@ -328,5 +329,148 @@ func TestTPMSealNVFieldUnsupported_Message(t *testing.T) {
 	err := ErrTPMSealNVFieldUnsupported{Method: "Seal", Field: "parent_handle"}
 	if got, want := err.Error(), "Seal: parent_handle is not supported over MCP"; got != want {
 		t.Errorf("Error() = %q, want %q", got, want)
+	}
+}
+
+// tpmSealNVWrapperClient builds a services/tpm Client on the test MCP
+// server, so the domain wrappers send their own defaults (#2156 Codex).
+func tpmSealNVWrapperClient(t *testing.T, results map[string]interface{}, calls *[]toolCall) *tpmsvc.Client {
+	t.Helper()
+	client, err := tpmsvc.NewClient(provisioningTestServer(t, results, calls))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	return client
+}
+
+func TestTPMSealNV_SealDomainSendsTheWrapperDefaults(t *testing.T) {
+	var calls []toolCall
+	client := tpmSealNVWrapperClient(t, map[string]interface{}{
+		"platform_tpm_seal": map[string]interface{}{"sealed_data": base64.StdEncoding.EncodeToString([]byte("blob"))},
+	}, &calls)
+
+	// An empty PCRBank goes out as SHA256 and the CLI sends the SRK handle.
+	resp, err := client.SealDomain(context.Background(), &tpmsvc.SealRequest{
+		CN: "disk-key", Data: []byte("secret"), Password: "pw", ParentHandle: 0x81000001, PCRIndices: []uint32{0, 7},
+	})
+	if err != nil {
+		t.Fatalf("SealDomain: %v", err)
+	}
+	if len(calls) != 1 || calls[0].Name != "platform_tpm_seal" {
+		t.Fatalf("calls = %v, want one platform_tpm_seal call", calls)
+	}
+	want := map[string]interface{}{
+		"data":     base64.StdEncoding.EncodeToString([]byte("secret")),
+		"cn":       "disk-key",
+		"password": "pw",
+		"pcrs":     []interface{}{float64(0), float64(7)},
+	}
+	if !reflect.DeepEqual(calls[0].Arguments, want) {
+		t.Errorf("wire args = %v, want %v", calls[0].Arguments, want)
+	}
+	if resp.Status == nil || !resp.Status.Success {
+		t.Errorf("status = %v, want success", resp.Status)
+	}
+}
+
+func TestTPMSealNV_UnsealDomainSendsTheWrapperDefaults(t *testing.T) {
+	var calls []toolCall
+	client := tpmSealNVWrapperClient(t, map[string]interface{}{
+		"platform_tpm_unseal": map[string]interface{}{"data": base64.StdEncoding.EncodeToString([]byte("secret"))},
+	}, &calls)
+
+	resp, err := client.UnsealDomain(context.Background(), &tpmsvc.UnsealRequest{
+		CN: "disk-key", Password: "pw", ParentHandle: 0x81000001,
+	})
+	if err != nil {
+		t.Fatalf("UnsealDomain: %v", err)
+	}
+	if len(calls) != 1 || calls[0].Name != "platform_tpm_unseal" {
+		t.Fatalf("calls = %v, want one platform_tpm_unseal call", calls)
+	}
+	want := map[string]interface{}{"cn": "disk-key", "password": "pw"}
+	if !reflect.DeepEqual(calls[0].Arguments, want) {
+		t.Errorf("wire args = %v, want %v", calls[0].Arguments, want)
+	}
+	if string(resp.Data) != "secret" {
+		t.Errorf("data = %q, want %q", resp.Data, "secret")
+	}
+}
+
+func TestTPMSealNV_SealAndUnsealRefuseOtherParentChoices(t *testing.T) {
+	cases := map[string]struct {
+		handle uint32
+		pw     string
+		bank   platformv1.PCRBank
+	}{
+		"another bank":    {handle: 0x81000001, bank: platformv1.PCRBank_PCR_BANK_SHA384},
+		"another handle":  {handle: 0x81000002, bank: platformv1.PCRBank_PCR_BANK_SHA256},
+		"parent password": {handle: 0x81000001, pw: "p", bank: platformv1.PCRBank_PCR_BANK_SHA256},
+	}
+	for name, tc := range cases {
+		t.Run("seal "+name, func(t *testing.T) {
+			var calls []toolCall
+			adapter := provisioningTestServer(t, map[string]interface{}{}, &calls)
+			err := adapter.Connection().Invoke(context.Background(), platformv1.TPMService_Seal_FullMethodName,
+				&platformv1.SealRequest{Data: []byte("secret"), ParentHandle: tc.handle, ParentPassword: tc.pw, PcrBank: tc.bank},
+				&platformv1.SealResponse{})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Errorf("Invoke code = %v, want InvalidArgument", status.Code(err))
+			}
+			if len(calls) != 0 {
+				t.Errorf("calls = %v, want no tool call", calls)
+			}
+		})
+		t.Run("unseal "+name, func(t *testing.T) {
+			var calls []toolCall
+			adapter := provisioningTestServer(t, map[string]interface{}{}, &calls)
+			err := adapter.Connection().Invoke(context.Background(), platformv1.TPMService_Unseal_FullMethodName,
+				&platformv1.UnsealRequest{Cn: "k", ParentHandle: tc.handle, ParentPassword: tc.pw, PcrBank: tc.bank},
+				&platformv1.UnsealResponse{})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Errorf("Invoke code = %v, want InvalidArgument", status.Code(err))
+			}
+			if len(calls) != 0 {
+				t.Errorf("calls = %v, want no tool call", calls)
+			}
+		})
+	}
+}
+
+func TestTPMSealNV_UndefineNVRAMDomainSendsTheOwnerAuth(t *testing.T) {
+	var calls []toolCall
+	client := tpmSealNVWrapperClient(t, map[string]interface{}{
+		"platform_tpm_nv_delete": map[string]interface{}{"success": true, "message": "undefined"},
+	}, &calls)
+
+	if _, err := client.UndefineNVRAMDomain(context.Background(), 0x01500000, "owner"); err != nil {
+		t.Fatalf("UndefineNVRAMDomain: %v", err)
+	}
+	if len(calls) != 1 || calls[0].Name != "platform_tpm_nv_delete" {
+		t.Fatalf("calls = %v, want one platform_tpm_nv_delete call", calls)
+	}
+	want := map[string]interface{}{"index": float64(0x01500000), "parent_password": "owner"}
+	if !reflect.DeepEqual(calls[0].Arguments, want) {
+		t.Errorf("wire args = %v, want %v", calls[0].Arguments, want)
+	}
+
+	calls = nil
+	if _, err := client.UndefineNVRAMDomain(context.Background(), 0x01500000, ""); err != nil {
+		t.Fatalf("UndefineNVRAMDomain without owner auth: %v", err)
+	}
+	if len(calls) != 1 || !reflect.DeepEqual(calls[0].Arguments, map[string]interface{}{"index": float64(0x01500000)}) {
+		t.Errorf("calls = %v, want one call with the index only", calls)
+	}
+
+	// A request that sets the index password itself is still refused.
+	calls = nil
+	err := provisioningTestServer(t, map[string]interface{}{}, &calls).Connection().Invoke(context.Background(),
+		platformv1.TPMService_UndefineNVRAM_FullMethodName,
+		&platformv1.UndefineNVRAMRequest{Index: 0x01500000, Password: "idx"}, &platformv1.UndefineNVRAMResponse{})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("Invoke code = %v, want InvalidArgument for an index password", status.Code(err))
+	}
+	if len(calls) != 0 {
+		t.Errorf("calls = %v, want no tool call", calls)
 	}
 }
