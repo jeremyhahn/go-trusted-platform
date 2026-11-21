@@ -131,6 +131,36 @@ describe('ApiClient mutation retry policy', () => {
     expect(response.success).toBe(true);
   });
 
+  function sentKeys(fetchImpl: FetchMock): Array<string | null> {
+    return fetchImpl.mock.calls.map((c) => new Headers((c[1] as RequestInit).headers).get('idempotency-key'));
+  }
+
+  function clientMintingAKeyPerCall(fetchImpl: FetchMock): ApiClient {
+    const client = clientWith(fetchImpl);
+    let n = 0;
+    client.addRequestInterceptor((init) => ({
+      ...init,
+      headers: { ...(init.headers as Record<string, string>), 'Idempotency-Key': `k-${++n}` },
+    }));
+    return client;
+  }
+
+  it('resends the first Idempotency-Key when an interceptor generates a fresh key per attempt (503)', async () => {
+    const fetchImpl = unavailableOnceThenOk();
+    const response = await clientMintingAKeyPerCall(fetchImpl).post('/vms', {});
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(response.success).toBe(true);
+    expect(sentKeys(fetchImpl)).toEqual(['k-1', 'k-1']);
+  });
+
+  it('resends the first Idempotency-Key when an interceptor generates a fresh key per attempt (network error)', async () => {
+    const fetchImpl = rejectsOnceThenOk();
+    const response = await clientMintingAKeyPerCall(fetchImpl).post('/vms', {});
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(response.success).toBe(true);
+    expect(sentKeys(fetchImpl)).toEqual(['k-1', 'k-1']);
+  });
+
   it('ignores a blank Idempotency-Key', async () => {
     const fetchImpl = alwaysRejects();
     await clientWith(fetchImpl).post('/vms', {}, { headers: { 'Idempotency-Key': '  ' } });

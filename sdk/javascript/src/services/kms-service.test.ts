@@ -17,6 +17,7 @@ import type {
   GenerateRandomRequest,
   GenerateWrappedDataKeyRequest,
   GetKeyVersionsRequest,
+  HashAlgorithm,
   HashRequest,
   HMACRequest,
   ImportKeyRequest,
@@ -280,7 +281,6 @@ describe('KMSService', () => {
     message: 'bXNn',
     signature: 'c2ln',
     hashAlgorithm: 'SHA384',
-    keyVersion: 1,
   };
 
   describe('hmac', () => {
@@ -315,11 +315,11 @@ describe('KMSService', () => {
   });
 
   describe('hash', () => {
-    const req: HashRequest = { data: 'ZGF0YQ==', algorithm: 'SHA3_256' };
+    const req: HashRequest = { data: 'ZGF0YQ==', algorithm: 'SHA512' };
 
     it('POSTs { data, hash } to /v1/kms/hash', async () => {
       await expect(service.hash(req)).resolves.toBe(ok);
-      expectOnlyCall('post', '/v1/kms/hash', { data: 'ZGF0YQ==', hash: 'SHA3_256' });
+      expectOnlyCall('post', '/v1/kms/hash', { data: 'ZGF0YQ==', hash: 'SHA512' });
     });
 
     it('propagates a client error', async () => {
@@ -401,7 +401,7 @@ describe('KMSService', () => {
     {
       method: 'verify',
       path: '/v1/kms/verify/key-1',
-      body: { data: 'bXNn', signature: 'c2ln', hash: 'SHA384', version: 1 },
+      body: { data: 'bXNn', signature: 'c2ln', hash: 'SHA384' },
       call: () => service.verify(verifyReq),
     },
     {
@@ -435,6 +435,53 @@ describe('KMSService', () => {
       await service.sign({ ...signReq, keyVersion: 0 });
       expectOnlyCall('post', '/v1/kms/sign/key-1', { data: 'bXNn', hash: 'SHA256', pre_hashed: true });
     });
+  });
+
+  describe('verify key version', () => {
+    it('refuses a nonzero keyVersion before any request: the daemon verifies with the current key', async () => {
+      await expect(service.verify({ ...verifyReq, keyVersion: 1 })).rejects.toBeInstanceOf(RangeError);
+      expect(mock.post).not.toHaveBeenCalled();
+    });
+
+    it('posts without version when keyVersion is 0', async () => {
+      await service.verify({ ...verifyReq, keyVersion: 0 });
+      expectOnlyCall('post', '/v1/kms/verify/key-1', { data: 'bXNn', signature: 'c2ln', hash: 'SHA384' });
+    });
+  });
+
+  describe('hash algorithms the REST handlers honor', () => {
+    const withHash = (hash: HashAlgorithm | undefined): { hashAlgorithm?: HashAlgorithm } =>
+      hash !== undefined ? { hashAlgorithm: hash } : {};
+    const ops: Array<{ op: string; call: (hash: HashAlgorithm | undefined) => Promise<unknown> }> = [
+      { op: 'sign', call: (hash) => service.sign({ keyId: 'key-1', message: 'bXNn', ...withHash(hash) }) },
+      {
+        op: 'verify',
+        call: (hash) => service.verify({ keyId: 'key-1', message: 'bXNn', signature: 'c2ln', ...withHash(hash) }),
+      },
+      { op: 'hmac', call: (hash) => service.hmac({ keyId: 'hmac-1', message: 'bXNn', ...withHash(hash) }) },
+      {
+        op: 'verifyHMAC',
+        call: (hash) => service.verifyHMAC({ keyId: 'hmac-1', message: 'bXNn', hmac: 'bWFj', ...withHash(hash) }),
+      },
+      // An unset algorithm is what a caller outside TypeScript can send.
+      { op: 'hash', call: (hash) => service.hash({ data: 'ZGF0YQ==', algorithm: hash } as HashRequest) },
+    ];
+
+    for (const { op, call } of ops) {
+      for (const hash of ['SHA1', 'SHA3_256', 'SHA3_384', 'SHA3_512'] as HashAlgorithm[]) {
+        it(`${op} refuses ${hash} before any request: the handlers would use SHA256`, async () => {
+          await expect(call(hash)).rejects.toBeInstanceOf(RangeError);
+          expect(mock.post).not.toHaveBeenCalled();
+        });
+      }
+
+      for (const hash of ['SHA256', 'SHA384', 'SHA512', undefined] as Array<HashAlgorithm | undefined>) {
+        it(`${op} posts ${hash ?? 'an unset hash'}`, async () => {
+          await call(hash);
+          expect(mock.post).toHaveBeenCalledTimes(1);
+        });
+      }
+    }
   });
 
   describe('crypto responses carry the REST handlers\' wire shape', () => {
