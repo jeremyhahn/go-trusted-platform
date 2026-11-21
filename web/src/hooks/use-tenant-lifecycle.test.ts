@@ -143,4 +143,44 @@ describe('useTenantLifecycle lookup', () => {
     });
     expect(result.current.tenant?.id).toBe('t-b');
   });
+
+  it('a mutation that settles while a later lookup is in flight does not end its busy state or report its notice', async () => {
+    const b = deferred<unknown>();
+    const s = deferred<unknown>();
+    service.getTenantByName.mockImplementation((name: string) =>
+      name === 'alpha' ? Promise.resolve(found('t-a', 'alpha')) : b.promise
+    );
+    service.suspendTenant.mockImplementation(() => s.promise);
+    service.getTenant.mockResolvedValue(found('t-a', 'alpha'));
+
+    const { result } = renderHook(() => useTenantLifecycle());
+
+    await act(() => result.current.lookup('alpha'));
+    expect(result.current.tenant?.id).toBe('t-a');
+
+    let suspending!: Promise<void>;
+    act(() => {
+      suspending = result.current.suspend();
+    });
+    let looking!: Promise<void>;
+    act(() => {
+      looking = result.current.lookup('bravo');
+    });
+
+    await act(async () => {
+      s.resolve({ success: true, data: {} });
+      await suspending;
+    });
+    expect(result.current.busy).toBe(true);
+    expect(result.current.notice).toBeNull();
+    expect(result.current.error).toBeNull();
+
+    await act(async () => {
+      b.resolve(found('t-b', 'bravo'));
+      await looking;
+    });
+    expect(result.current.busy).toBe(false);
+    expect(result.current.tenant?.id).toBe('t-b');
+    expect(result.current.notice).toBeNull();
+  });
 });
