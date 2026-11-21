@@ -13,8 +13,32 @@ import { useCallback, useEffect, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
-import { usePlatformServices, type PlatformServiceInfo } from '@/hooks/use-platform-services';
+import {
+  usePlatformServices,
+  type PlatformServiceInfo,
+  type ServiceAction,
+} from '@/hooks/use-platform-services';
+
+const DONE: Record<ServiceAction, string> = {
+  start: 'Service started',
+  stop: 'Service stopped',
+  restart: 'Service restarted',
+};
+
+const VERB: Record<ServiceAction, string> = {
+  start: 'Start',
+  stop: 'Stop',
+  restart: 'Restart',
+};
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -32,6 +56,8 @@ export function PlatformServiceControlCard(): JSX.Element {
   const [list, setList] = useState<PlatformServiceInfo[] | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [detail, setDetail] = useState<PlatformServiceInfo | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState<{ name: string; action: 'stop' | 'restart' } | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -68,6 +94,34 @@ export function PlatformServiceControlCard(): JSX.Element {
     } catch (err) {
       toast({ title: 'Service status failed', description: errorMessage(err), variant: 'destructive' });
     }
+  };
+
+  const run = async (name: string, action: ServiceAction) => {
+    setBusy(true);
+    try {
+      const res = await services.act(name, action);
+      if (res.success && res.data?.success !== false) {
+        toast({ title: DONE[action], description: res.data?.message, variant: 'success' });
+        await reload();
+      } else {
+        toast({
+          title: `${VERB[action]} failed`,
+          description: res.error?.message ?? res.data?.message,
+          variant: 'destructive',
+        });
+      }
+    } catch (err) {
+      toast({ title: `${VERB[action]} failed`, description: errorMessage(err), variant: 'destructive' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmAction = () => {
+    if (confirm === null) return;
+    const { name, action } = confirm;
+    setConfirm(null);
+    void run(name, action);
   };
 
   return (
@@ -112,7 +166,34 @@ export function PlatformServiceControlCard(): JSX.Element {
                   </td>
                   <td>{svc.uptime ?? '-'}</td>
                   <td className="text-destructive">{svc.last_error ? svc.last_error : null}</td>
-                  <td className="text-right">
+                  <td className="space-x-1 text-right">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Start ${svc.name}`}
+                      disabled={busy}
+                      onClick={() => void run(svc.name, 'start')}
+                    >
+                      Start
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Stop ${svc.name}`}
+                      disabled={busy}
+                      onClick={() => setConfirm({ name: svc.name, action: 'stop' })}
+                    >
+                      Stop
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Restart ${svc.name}`}
+                      disabled={busy}
+                      onClick={() => setConfirm({ name: svc.name, action: 'restart' })}
+                    >
+                      Restart
+                    </Button>
                     <Button variant="ghost" size="sm" onClick={() => void showDetail(svc.name)}>
                       Details
                     </Button>
@@ -137,6 +218,29 @@ export function PlatformServiceControlCard(): JSX.Element {
           </dl>
         )}
       </CardContent>
+
+      <Dialog open={confirm !== null} onOpenChange={(open) => !open && setConfirm(null)}>
+        <DialogContent>
+          {confirm !== null && (
+            <>
+              <DialogHeader>
+                <DialogTitle>{`${VERB[confirm.action]} ${confirm.name}?`}</DialogTitle>
+                <DialogDescription>
+                  {`Requests to the ${confirm.name} service fail until it is running again.`}
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setConfirm(null)}>
+                  Cancel
+                </Button>
+                <Button variant="destructive" onClick={confirmAction}>
+                  {VERB[confirm.action]}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
