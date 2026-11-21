@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
+	qbiam "github.com/jeremyhahn/go-quicbaas/pkg/iam"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 
 	sdktransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
@@ -312,8 +313,11 @@ type restScopeAuthorization struct {
 	// router cannot serve (for example a tenant it cannot bind).
 	callerGate func(callerTenantID string) error
 	// bindTenant, when set, refuses a caller with no tenant and binds the
-	// caller's tenant into the SDK context (sdktransport.ContextWithTenant):
-	// the router's shared SDK clients read it, and an empty tenant there is
+	// caller's tenant into both tenant context keys: the SDK transport's
+	// (sdktransport.ContextWithTenant), which the router's shared SDK clients
+	// read, and go-quicbaas pkg/iam's (iam.ContextWithTenant), which the
+	// embedded services read in prepareTenantContext after the embedded
+	// transport forwards the context unchanged. An empty tenant in either is
 	// system-wide.
 	bindTenant bool
 }
@@ -344,6 +348,7 @@ func (a restScopeAuthorization) authorize(next http.Handler) http.Handler {
 				return
 			}
 			ctx = sdktransport.ContextWithTenant(ctx, caller.TenantID)
+			ctx = qbiam.ContextWithTenant(ctx, caller.TenantID)
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
