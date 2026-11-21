@@ -33,9 +33,11 @@ const (
 	// reviewer's standing verdict on the head.
 	codeReviewVerdictRead = `verdict=$(get_all "/pulls/$PR_NUM/reviews?"`
 	codeReviewVerdictCase = `case "$verdict"`
-	codeReviewTwinWait    = `"$waited" -lt 4500`
-	codeReviewLabelsRead  = `.labels[].name`
-	codeReviewOwnerHold   = `needs-owner`
+	// codeReviewTwinRead marks the gate's one read of the twin runs on the
+	// head (v5.12.6, ruling 1046: no twin wait is left).
+	codeReviewTwinRead   = `twin=${twin:-$id}`
+	codeReviewLabelsRead = `.labels[].name`
+	codeReviewOwnerHold  = `needs-owner`
 )
 
 // loadCodeReviewGateStep returns the approval gate's step of code-review.yml,
@@ -64,17 +66,17 @@ func loadCodeReviewGateStep(t *testing.T) ciStep {
 
 // The gate owns the required Code Review (codex) context, so an approval
 // that is already on the head must not pass it while the PR is on owner
-// hold: the gate reads the live labels after the twin-review wait and
+// hold: the gate reads the live labels after the twin read and
 // before it accepts the verdict (Codex P1, #1921).
 func TestCodeReviewGateReadsTheLiveLabelsBeforeTheVerdict(t *testing.T) {
 	run := loadCodeReviewGateStep(t).Run
-	wait := strings.Index(run, codeReviewTwinWait)
+	wait := strings.Index(run, codeReviewTwinRead)
 	verdict := strings.Index(run, codeReviewVerdictCase)
-	require.GreaterOrEqual(t, wait, 0, "the gate has no twin-review wait")
+	require.GreaterOrEqual(t, wait, 0, "the gate never reads the twin runs on the head")
 	require.GreaterOrEqual(t, verdict, 0, "the gate has no verdict case")
 	labels := strings.Index(run, codeReviewLabelsRead)
 	require.GreaterOrEqual(t, labels, 0, "the gate never reads the PR's live labels")
-	require.Greater(t, labels, wait, "the gate reads the labels before the twin-review wait ends")
+	require.Greater(t, labels, wait, "the gate reads the labels before it reads the twin runs")
 	require.Less(t, labels, verdict, "the gate reads the labels after it accepts the verdict")
 	hold := strings.Index(run[labels:], codeReviewOwnerHold)
 	require.GreaterOrEqual(t, hold, 0, "the gate does not check the labels for %s", codeReviewOwnerHold)
