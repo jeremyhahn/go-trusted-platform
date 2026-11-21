@@ -106,7 +106,8 @@ describe("useOverlayVteps", () => {
       retry: { maxRetries: 0 },
     });
     const wrapper = ({ children }: { children: React.ReactNode }) => (
-      <PlatformProvider client={client}>{children}</PlatformProvider>
+      // The SDK builds against its own @types/react, whose ReactNode has no bigint.
+      <PlatformProvider client={client}>{children as React.ComponentProps<typeof PlatformProvider>["children"]}</PlatformProvider>
     );
     return renderHook(() => useOverlayVteps(), { wrapper });
   }
