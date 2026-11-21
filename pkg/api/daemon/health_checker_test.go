@@ -441,7 +441,7 @@ func TestSDNServiceHealthChecker(t *testing.T) {
 		}
 	})
 
-	t.Run("Check returns unhealthy when OVS client is nil", func(t *testing.T) {
+	t.Run("Check returns degraded when OVS client is nil", func(t *testing.T) {
 		service := &SDNService{
 			ovsClient: nil,
 		}
@@ -449,8 +449,8 @@ func TestSDNServiceHealthChecker(t *testing.T) {
 
 		result := checker.Check(context.Background())
 
-		if result.Status != health.StatusUnhealthy {
-			t.Errorf("Status = %v, want StatusUnhealthy", result.Status)
+		if result.Status != health.StatusDegraded {
+			t.Errorf("Status = %v, want StatusDegraded", result.Status)
 		}
 		if result.Message != "OVS client not initialized" {
 			t.Errorf("Message = %v, want 'OVS client not initialized'", result.Message)

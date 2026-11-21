@@ -1,0 +1,536 @@
+# Real-server Playwright platformd (#2034, epic #1665)
+#
+# web/e2e/real-server/global-setup.ts copies this file into a fresh temporary
+# directory, starts `platformd --config config.yaml --init` there and waits on
+# /health/ready; global-teardown.ts stops it and removes the directory. So
+# every `make web-e2e` run is a fresh platform:
+#   - the TPM is the in-process software simulator (tpm.simulator: true), so
+#     no swtpm and no device are needed,
+#   - quicbaas is embedded on the in-memory backend,
+#   - the console (embedded by `make build WITH_WEB=1`) and its API are the
+#     public webservice on TLS port 18443, with a WebAuthn relying party for
+#     localhost. global-setup rewrites 18443 when E2E_PORT is set, and the
+#     internal webservice's __E2E_INTERNAL_PORT__ always (ports.ts).
+#
+# Derived from configs/platform/standalone/web-test.example.yaml. Every secret
+# is a kms:// reference the embedded quicbaas SecretsService generates on
+# first resolve (ensure=true). Paths are relative to the directory platformd
+# runs in.
+# =============================================================================
+
+debug: true
+debug-secrets: false
+platform-dir: trusted-data
+config-dir: trusted-data/etc
+log-dir: trusted-data/log
+domain: localhost
+hostmaster: hostmaster@localhost
+
+secrets:
+  enabled: true
+  auto-generate: true
+  local-kms: true
+
+platform:
+  so-pin:   "kms://platform/so-pin?ensure=true&len=8&enc=numeric"
+  user-pin: "kms://platform/user-pin?ensure=true&len=6&enc=numeric"
+
+
+# =============================================================================
+# QUICBAAS (embedded, in memory)
+# =============================================================================
+
+quicbaas:
+  transport: embedded
+  storage-backend: memory
+  data-dir: trusted-data/quicbaas
+  log-level: warn
+  # Required for qrdb first-boot to seed IAM (system tenant, roles, admin
+  # certificate).
+  spiffe-trust-domain: example.internal
+  # The auth specs register uninvited users (each becomes the admin of a
+  # new tenant). The platform default is invite-only, which refuses
+  # registration/begin with 403 "public registration is disabled".
+  self-service-registration:
+    enabled: true
+  # An administrative WebAuthn enrollment (each self-service registrant)
+  # needs an attestation that chains to a trusted root. global-setup
+  # generates this test root, and the batch leaf the software authenticator
+  # (fixtures/soft-authenticator.ts) attests with, into the run directory at
+  # run time (ruling 1028 Q1 (c)); no key or certificate is committed.
+  webauthn-attestation-roots-file: webauthn-attestation/roots.pem
+
+
+# =============================================================================
+# TPM CONFIGURATION (swtpm)
+# =============================================================================
+
+tpm:
+  simulator: true
+  encrypt-sessions: false
+  entropy: false
+  hash: SHA-256
+  ek:
+    debug: true
+    handle: 0x81010001
+    hash: SHA-256
+    rsa:
+      size: 2048
+  ssrk:
+    debug: true
+    handle: 0x81000001
+    platform-policy: false
+    rsa:
+      size: 2048
+  iak:
+    debug: true
+    hash: SHA-256
+    handle: 0x81010002
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSA
+  idevid:
+    model: web-test
+    serial: web-test-01
+    cert-handle: 0x01C90000
+    debug: true
+    handle: 0x81020000
+    hash: SHA-256
+    pad: true
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSA
+  platform-pcr: 23
+  platform-pcr-bank: sha256
+  platform-srk:
+    srk-handle: 0x81000002
+    srk-auth: "kms://tpm/platform-srk/srk-auth?ensure=true&len=32&enc=raw"
+    platform-policy: true
+
+
+# =============================================================================
+# CERTIFICATE AUTHORITY CONFIGURATION
+# =============================================================================
+
+certificate-authority:
+  platform-ca: 1
+  auto-import-issuing-ca: true
+  system-cert-pool: false
+  default-validity: 365
+  default-idevid-cn: default-device-id
+  sans-include-localhost: true
+  require-password: true
+  identity:
+    - # Root Certificate Authority
+      is-root: true
+      key-algorithm: RSA
+      key-size: 2048
+      keystore-type: software
+      keystores:
+        software:
+          password: "kms://ca/root/software/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000001
+          srk-auth: "kms://ca/root/tpm2/srk-auth?ensure=true&len=32&enc=raw"
+          platform-policy: true
+      keys:
+        # PKCS #8 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: software
+          password: "kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: tpm2
+          password: "kms://ca/root/keys/1/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: software
+          password: "kms://ca/root/keys/2/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: tpm2
+          password: "kms://ca/root/keys/3/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+      valid: 50
+      subject:
+        cn: root-ca.localhost
+        organization: Trusted Platform
+        country: US
+      sans:
+        dns:
+          - root-ca.localhost
+        email:
+          - hostmaster@localhost
+
+    - # Intermediate Certificate Authority
+      key-algorithm: RSA
+      key-size: 2048
+      keystore-type: software
+      keystores:
+        software:
+          password: "kms://ca/issuing/software/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000001
+          srk-auth: "kms://ca/issuing/tpm2/srk-auth?ensure=true&len=32&enc=raw"
+          platform-policy: true
+      keys:
+        # PKCS #8 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: software
+          password: "kms://ca/issuing/keys/0/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: tpm2
+          password: "kms://ca/issuing/keys/1/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: software
+          password: "kms://ca/issuing/keys/2/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: tpm2
+          password: "kms://ca/issuing/keys/3/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+      valid: 10
+      subject:
+        cn: ca.localhost
+        organization: Trusted Platform
+        country: US
+      sans:
+        dns:
+          - ca.localhost
+        email:
+          - hostmaster@localhost
+
+
+# =============================================================================
+# WEBSERVICES CONFIGURATION
+# =============================================================================
+
+webservices:
+  - name: public
+    home: trusted-data/www
+    # TLS only: the console and its API, same origin.
+    port: 0
+    tls-port: 18443
+    index: index.html
+    # ACME server, as in the default config. The http-01/http-80xx and
+    # enroll-80xx challenges need plain-HTTP listeners this TLS-only daemon
+    # does not open, so only the TLS-reachable challenge types are offered.
+    acme:
+      enabled: true
+      directory: https://localhost:18443/api/v1/acme/directory
+      terms-of-service: /tos.html
+      challenges:
+        - enroll-01
+        - device-attest-01
+        - dns-01
+        - endorse-01
+    jwt:
+      expiration: 60
+      issuer: trusted-platform
+    webauthn:
+      display-name: Trusted Platform
+      id: localhost
+      origins:
+        - https://localhost:18443
+    cors:
+      allowed-origins:
+        - https://localhost:18443
+      allowed-methods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+      allowed-headers:
+        - "*"
+      allow-credentials: true
+    key:
+      algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: software
+      password: "kms://webservices/0/key/password?ensure=true&len=32&enc=raw"
+      platform-policy: true
+      debug: true
+    certificate:
+      subject:
+        cn: localhost
+        organization: Trusted Platform
+        country: US
+      sans:
+        dns:
+          - localhost
+        email:
+          - hostmaster@localhost
+
+  # Internal webservice, as in the default config (local-network facing).
+  # Its own port: global-setup replaces __E2E_INTERNAL_PORT__ with the
+  # internal port ports.ts picks from E2E_PORT (19443 for the default 18443),
+  # never the public port, so both listeners bind distinct addresses.
+  - name: internal
+    home: trusted-data/www
+    port: 0
+    tls-port: __E2E_INTERNAL_PORT__
+    index: index.html
+    jwt:
+      expiration: 60
+      issuer: trusted-platform
+    cors:
+      allowed-origins:
+        - https://localhost:__E2E_INTERNAL_PORT__
+      allowed-methods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+      allowed-headers:
+        - "*"
+      allow-credentials: true
+    webauthn:
+      display-name: Trusted Platform Internal
+      id: localhost
+      origins:
+        - https://localhost:__E2E_INTERNAL_PORT__
+    key:
+      algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: software
+      password: "kms://webservices/1/key/password?ensure=true&len=32&enc=raw"
+      platform-policy: true
+      debug: true
+    certificate:
+      subject:
+        cn: localhost
+        organization: Trusted Platform
+        country: US
+      sans:
+        dns:
+          - localhost
+        email:
+          - hostmaster@localhost
+
+# =============================================================================
+# DNS (public + internal zones, DNSSEC, DANE), as in the default config
+# =============================================================================
+# Unprivileged loopback ports; the zone addresses are 127.0.0.1 instead of
+# the ${PUBLIC_IPv4}/${PRIVATE_IPv4} the installer substitutes.
+
+dns:
+  resolver:
+    servers:
+      - address: "127.0.0.1"
+        port: 18053
+    fallback: []
+    local-forwarder:
+      enabled: false
+  allow-registration: true
+  allow-external-registration: true
+  allow-internal-registration: true
+  quicbaas:
+    data-dir: trusted-data/quicbaas
+    storage-backend: memory
+    node-id: 1
+    log-level: warn
+  default-ttl: 3600
+  dnssec:
+    enabled: true
+    default-key:
+      algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: software
+    signature-expiry: 30d
+    nsec-mode: nsec3
+    nsec3-iterations: 1
+    nsec3-salt: ""
+    ksk:
+      lifetime: 365d
+      ttl: 86400
+    zsk:
+      lifetime: 30d
+      ttl: 3600
+  dane:
+    enabled: true
+    auto-generate: true
+    default-port: 18443
+    ttl: 3600
+    default-usage: 2
+    default-selector: 1
+    default-matching-type: 1
+    publish-dane-ee: true
+    key-reuse: true
+    rollover-ttl: 0
+  public:
+    port: 18053
+    forwarders: []
+    zone:
+      description: Public zone for localhost
+      name: localhost.
+      ttl: 3600
+      records:
+        soa:
+          name: localhost.
+          mname: ns1.localhost.
+          rname: hostmaster.localhost.
+          serial: 1
+          refresh: 86400
+          retry: 7200
+          expire: 86400
+          minimum_ttl: 3600
+          ttl: 3600
+        ns:
+          - name: "@"
+            value: ns1.localhost.
+            ttl: 3600
+        a:
+          - name: "@"
+            value: 127.0.0.1
+            ttl: 3600
+          - name: ns1
+            value: 127.0.0.1
+            ttl: 3600
+  internal:
+    port: 19053
+    forwarders:
+      - 127.0.0.1:18053
+    zone:
+      description: Internal zone for example.internal
+      name: example.internal.
+      ttl: 3600
+      internal: true
+      records:
+        soa:
+          name: example.internal.
+          mname: ns1.example.internal.
+          rname: hostmaster.example.internal.
+          serial: 1
+          refresh: 86400
+          retry: 7200
+          expire: 86400
+          minimum_ttl: 3600
+          ttl: 3600
+        ns:
+          - name: example.internal.
+            value: ns1.example.internal.
+            ttl: 3600
+        a:
+          - name: "@"
+            value: 127.0.0.1
+            ttl: 3600
+          - name: ns1
+            value: 127.0.0.1
+            ttl: 3600
+
+# =============================================================================
+# PASSWORD HASHING (Argon2), as in the default config
+# =============================================================================
+
+argon2:
+  memory: 1
+  iterations: 1
+  parallelism: 1
+  saltLen: 16
+  keyLen: 32
+
+# =============================================================================
+# TRUSTED REVERSE PROXY, as in the default config (store seed only)
+# =============================================================================
+
+proxy:
+  defaults:
+    backend-zone: trusted
+  pools:
+    - id: control-plane-console
+      backends:
+        - url: "https://localhost:18443"
+      tls:
+        trust-class: platform
+  routes:
+    - id: console
+      hosts:
+        - localhost
+      path-prefix: /
+      pool: control-plane-console
+      preserve-host: true
+      auth:
+        mode: public
+
+# =============================================================================
+# Default-config sections NOT enabled here (no simulator path)
+# =============================================================================
+# - acme.client: the default daemon enrols its own account against the
+#   internal webservice and renews the public certificate over http-01 on
+#   port 8080; this daemon opens no plain-HTTP port, and the webservice
+#   certificate is issued by the platform CA directly.
+# - disk, os, network, uki, secure-boot, enable-tpm-sealing, seal-pcrs,
+#   fido2: installer/initrd settings for a real host disk and boot chain;
+#   `platformd serve` does not run them.
+# - bootstrap.noise: disabled in the default config too.
+# - tenant seeding: the config has no tenant list; the harness fixtures
+#   (web/e2e/real-server/fixtures) create the admin and the tenant over the
+#   API.

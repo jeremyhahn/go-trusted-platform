@@ -186,13 +186,15 @@ const (
 // the hosted fallback, the others read runner. preflight decides, so it stays
 // hosted; image keeps its ruling 999 oversize waiver.
 var selectionRunsOn = map[string]string{
-	"preflight":         hostedRunner,
-	"lint":              selectionDocker,
-	"image":             "bigdisk-docker",
-	"lint-gates":        selectionRunner,
-	"sdkjs":             selectionRunner,
-	"race":              selectionRunner,
-	"web":               selectionRunner,
+	"preflight":  hostedRunner,
+	"lint":       selectionDocker,
+	"image":      "bigdisk-docker",
+	"lint-gates": selectionRunner,
+	"sdkjs":      selectionRunner,
+	"race":       selectionRunner,
+	"web":        selectionRunner,
+	// Hosted only: `playwright install --with-deps` installs system packages.
+	"web-e2e":           hostedRunner,
 	"integration-image": selectionDocker,
 	"integration":       selectionDocker,
 	"soak":              selectionDocker,
