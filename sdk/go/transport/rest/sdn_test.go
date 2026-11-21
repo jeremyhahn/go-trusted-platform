@@ -369,6 +369,14 @@ func TestSDN_SDKOverREST_RefusesARequestTheRouteCannotCarry(t *testing.T) {
 			_, err := c.RevokePortAuth(ctx, &platformv1.RevokePortAuthRequest{BridgeId: "br-int"})
 			return err
 		}},
+		{"DeleteVLAN without vlan id", func(c platformv1.SDNServiceClient) error {
+			_, err := c.DeleteVLAN(ctx, &platformv1.DeleteVLANRequest{BridgeId: "br-int"})
+			return err
+		}},
+		{"DeletePolicy without id", func(c platformv1.SDNServiceClient) error {
+			_, err := c.DeletePolicy(ctx, &platformv1.DeletePolicyRequest{})
+			return err
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
