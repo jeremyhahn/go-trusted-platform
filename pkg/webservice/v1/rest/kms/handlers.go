@@ -14,12 +14,14 @@
 package kms
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -341,6 +343,27 @@ func (h *Handlers) ListKeys(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureKMS(w, r) {
 		return
 	}
+	query := r.URL.Query()
+	var limit int
+	if raw := query.Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			h.respWriter.Error400(w, r, &ErrInvalidRequest{Field: "limit", Reason: "must be a non-negative integer"})
+			return
+		}
+		limit = n
+	}
+	filter := map[string]string{}
+	for key := range query {
+		switch key {
+		case "limit", "cursor":
+		case "name", "algorithm":
+			filter[key] = query.Get(key)
+		default:
+			h.respWriter.Error400(w, r, &ErrInvalidRequest{Field: key, Reason: "unsupported filter (name, algorithm)"})
+			return
+		}
+	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
 	resp, err := h.kms.ListKeys(ctx)
@@ -348,8 +371,19 @@ func (h *Handlers) ListKeys(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	out := &ListKeysResponse{Keys: make([]KeyInfoResponse, 0, len(resp.Keys))}
-	for _, k := range resp.Keys {
+	keys := listKeysFilterSort(resp.Keys, filter)
+	start, end, next, more, ok := listKeysPage(len(keys), limit, query.Get("cursor"))
+	if !ok {
+		h.respWriter.Error400(w, r, &ErrInvalidRequest{Field: "cursor", Reason: "must be a non-negative offset"})
+		return
+	}
+	out := &ListKeysResponse{
+		Keys:       make([]KeyInfoResponse, 0, end-start),
+		NextCursor: next,
+		HasMore:    more,
+		TotalCount: len(keys),
+	}
+	for _, k := range keys[start:end] {
 		out.Keys = append(out.Keys, KeyInfoResponse{
 			KeyID:     k.KeyID,
 			Name:      k.Name,
@@ -361,6 +395,51 @@ func (h *Handlers) ListKeys(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	h.success200(w, r, out)
+}
+
+// listKeysFilterSort keeps the keys matching filter ("name" exact,
+// "algorithm" case-insensitive) sorted by key ID then version, as the
+// legacy daemon route did.
+func listKeysFilterSort(keys []kmsclient.KeyInfo, filter map[string]string) []kmsclient.KeyInfo {
+	out := make([]kmsclient.KeyInfo, 0, len(keys))
+	for _, k := range keys {
+		if name, ok := filter["name"]; ok && k.Name != name {
+			continue
+		}
+		if alg, ok := filter["algorithm"]; ok && !strings.EqualFold(k.Algorithm.String(), alg) {
+			continue
+		}
+		out = append(out, k)
+	}
+	slices.SortFunc(out, func(a, b kmsclient.KeyInfo) int {
+		if c := cmp.Compare(a.KeyID, b.KeyID); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Version, b.Version)
+	})
+	return out
+}
+
+// listKeysPage applies the legacy offset cursor (a decimal string) and
+// limit (0 = all) to a collection of total entries.
+func listKeysPage(total, limit int, cursor string) (start, end int, next string, more, ok bool) {
+	if cursor != "" {
+		offset, err := strconv.Atoi(cursor)
+		if err != nil || offset < 0 {
+			return 0, 0, "", false, false
+		}
+		start = offset
+	}
+	if start > total {
+		start = total
+	}
+	end = total
+	if limit > 0 && start+limit < total {
+		end = start + limit
+		more = true
+		next = strconv.Itoa(end)
+	}
+	return start, end, next, more, true
 }
 
 // GetKey handles GET /api/v1/kms/keys/{name}.
