@@ -18,6 +18,16 @@ export const SIDEBAR_WIDTH = "16rem";
 export const SIDEBAR_WIDTH_MOBILE = "18rem";
 export const SIDEBAR_WIDTH_ICON = "3rem";
 export const SIDEBAR_COOKIE_NAME = "sidebar:state";
+
+const subscribeNever = () => () => {};
+
+/** readSidebarCookie returns the saved open state, or null when unset. */
+function readSidebarCookie(): boolean | null {
+  const sidebarCookie = document.cookie
+    .split("; ")
+    .find((c) => c.startsWith(`${SIDEBAR_COOKIE_NAME}=`));
+  return sidebarCookie ? sidebarCookie.split("=")[1] === "true" : null;
+}
 export const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7; // 7 days
 
 // Types
@@ -117,17 +127,22 @@ export const SidebarProvider = React.forwardRef<
       return () => window.removeEventListener("resize", checkMobile);
     }, []);
 
-    // Initialize from cookie
-    React.useEffect(() => {
-      const cookies = document.cookie.split("; ");
-      const sidebarCookie = cookies.find((c) =>
-        c.startsWith(`${SIDEBAR_COOKIE_NAME}=`)
-      );
-      if (sidebarCookie) {
-        const value = sidebarCookie.split("=")[1];
-        _setOpen(value === "true");
+    // Initialize from cookie once hydrated: the server render and hydration
+    // use defaultOpen, then the first client render adopts the cookie value
+    // (state adjusted during render, not in an effect).
+    const hydrated = React.useSyncExternalStore(
+      subscribeNever,
+      () => true,
+      () => false
+    );
+    const [cookieRead, setCookieRead] = React.useState(false);
+    if (hydrated && !cookieRead) {
+      setCookieRead(true);
+      const fromCookie = readSidebarCookie();
+      if (fromCookie !== null) {
+        _setOpen(fromCookie);
       }
-    }, []);
+    }
 
     const toggleSidebar = React.useCallback(() => {
       if (isMobile) {
@@ -527,6 +542,7 @@ export const SidebarMenuButton = React.forwardRef<
     const button = (
       <Comp
         ref={ref}
+        data-active={isActive}
         className={cn(
           sidebarMenuButtonVariants({ variant, size, isActive }),
           state === "collapsed" &&
@@ -595,12 +611,13 @@ export const SidebarMenuSubButton = React.forwardRef<
     size?: "sm" | "md";
     isActive?: boolean;
   }
->(({ asChild = false, size = "md", isActive, className, ...props }, ref) => {
+>(({ asChild = false, size = "md", isActive = false, className, ...props }, ref) => {
   const Comp = asChild ? Slot : "a";
 
   return (
     <Comp
       ref={ref}
+      data-active={isActive}
       className={cn(
         "flex h-7 min-w-0 items-center gap-2 overflow-hidden rounded-md px-2 text-xs outline-none transition-colors hover:bg-neutral-200 hover:text-neutral-900 focus-visible:ring-2 focus-visible:ring-neutral-950 active:bg-neutral-200 disabled:pointer-events-none disabled:opacity-50 dark:hover:bg-neutral-800 dark:hover:text-neutral-50 dark:focus-visible:ring-neutral-300 dark:active:bg-neutral-800 aria-disabled:pointer-events-none aria-disabled:opacity-50 [&>svg]:size-4 [&>svg]:shrink-0",
         size === "sm" && "h-6 text-xs",

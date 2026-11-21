@@ -16,7 +16,6 @@ import {
   Settings,
   ChevronRight,
   LogOut,
-  User,
   Database,
   FileCheck,
   Fingerprint,
@@ -60,6 +59,7 @@ const navigation = [
       { title: "Users", href: "/iam/users" },
       { title: "Roles", href: "/iam/roles" },
       { title: "Groups", href: "/iam/groups" },
+      { title: "Permissions", href: "/iam/permissions" },
       { title: "Policies", href: "/iam/policies" },
       { title: "Applications", href: "/iam/apps" },
       { title: "API Tokens", href: "/iam/tokens" },
@@ -73,6 +73,7 @@ const navigation = [
       { title: "Members", href: "/tenant/members" },
       { title: "Invitations", href: "/tenant/invitations" },
       { title: "Quotas", href: "/tenant/quotas" },
+      { title: "All Tenants", href: "/admin/tenants" },
     ],
   },
   {
@@ -316,19 +317,6 @@ export function AppSidebar(props: AppSidebarProps) {
               </DropdownMenuTrigger>
               <DropdownMenuContent side="top" className="w-56">
                 <DropdownMenuLabel>My Account</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem asChild>
-                  <Link href="/profile" className="cursor-pointer">
-                    <User className="mr-2 h-4 w-4" />
-                    <span>Profile</span>
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="/settings" className="cursor-pointer">
-                    <Settings className="mr-2 h-4 w-4" />
-                    <span>Settings</span>
-                  </Link>
-                </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={handleLogout}
