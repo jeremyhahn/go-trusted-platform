@@ -84,12 +84,12 @@ describe('CeremonyStatusCard', () => {
     expect(alert.textContent).toBe('Ceremony status unavailable: ceremony: scope ceremony:status required');
   });
 
-  it('the page has its header and no control', async () => {
+  it('the page has its header and the Initialize control', async () => {
     stubControlPlane({ [STATUS_PATH]: inProgress() });
     render(withControlPlane(<CeremonyPage />));
 
     expect(await screen.findByRole('heading', { name: 'Bootstrap ceremony' })).toBeDefined();
     expect(await screen.findByText('In progress')).toBeDefined();
-    expect(screen.queryAllByRole('button')).toHaveLength(0);
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Initialize']);
   });
 });
