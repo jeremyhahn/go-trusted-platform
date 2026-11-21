@@ -119,7 +119,12 @@ export function useContainerOps(containerId: string): UseContainerOpsResult {
   // The container the hook is showing now. A response is kept only while
   // the ID it was requested for is still this one, so a delayed read of a
   // previous container (an effect, refresh() or refreshMetrics()) is dropped.
+  // Container and metrics reads also carry their own generation: only the
+  // newest read of each applies, so a superseded read of the same container
+  // (an older refresh that settles last, or fails last) is dropped too.
   const currentId = useRef(containerId);
+  const containerSeq = useRef(0);
+  const metricsSeq = useRef(0);
   useEffect(() => {
     currentId.current = containerId;
   }, [containerId]);
@@ -134,36 +139,42 @@ export function useContainerOps(containerId: string): UseContainerOpsResult {
   // The fetches set state only in promise callbacks, never synchronously
   // in the effect body (react-hooks/set-state-in-effect).
   const fetchContainer = useCallback(
-    (id: string): Promise<void> =>
-      compute
+    (id: string): Promise<void> => {
+      const seq = ++containerSeq.current;
+      const newest = () => currentId.current === id && seq === containerSeq.current;
+      return compute
         .getContainer(id)
         .then((response) => {
           const value = unwrap(response, 'GetContainer').container;
-          if (currentId.current !== id) return;
+          if (!newest()) return;
           setContainerState({ id, value });
           setErrorState({ id, value: null });
         })
         .catch((err: unknown) => {
-          if (currentId.current !== id) return;
+          if (!newest()) return;
           setErrorState({ id, value: err instanceof Error ? err.message : String(err) });
         })
         .finally(() => {
-          if (currentId.current === id) setLoadedId(id);
-        }),
+          if (newest()) setLoadedId(id);
+        });
+    },
     [compute]
   );
 
   const fetchMetrics = useCallback(
-    (id: string): Promise<void> =>
-      compute
+    (id: string): Promise<void> => {
+      const seq = ++metricsSeq.current;
+      const newest = () => currentId.current === id && seq === metricsSeq.current;
+      return compute
         .getContainerMetrics(id)
         .then((response) => {
           const value = unwrap(response, 'GetContainerMetrics').metrics;
-          if (currentId.current === id) setMetricsState({ id, value });
+          if (newest()) setMetricsState({ id, value });
         })
         .catch(() => {
-          if (currentId.current === id) setMetricsState({ id, value: null });
-        }),
+          if (newest()) setMetricsState({ id, value: null });
+        });
+    },
     [compute]
   );
 

@@ -135,7 +135,7 @@ describe('useContainerOps overlapping reads of one container', () => {
       settleAt(calls.get, 0, { success: true, data: { container: { id: 'a', name: 'old' } } });
     });
 
-    expect(result.current.container?.name).toBe('new');
+    expect(result.current.container).toEqual({ id: 'a', name: 'new' });
   });
 
   it('an older failed refresh after a newer success leaves the error null', async () => {
