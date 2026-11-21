@@ -230,6 +230,28 @@ func TestSDKRouteClaims_NoGetResolvesToList(t *testing.T) {
 	}
 }
 
+// TestGetAsksForCollection pins the guard's exemption: a Get rpc whose noun
+// is the List handler's noun asks for the collection by name, while a
+// singular Get on a plural List handler is still a defect.
+func TestGetAsksForCollection(t *testing.T) {
+	cases := []struct {
+		method, handler string
+		want            bool
+	}{
+		{"GetKeyVersions", "ListKeyVersions", true},
+		{"GetDevice", "ListDevices", false},
+		{"GetKey", "ListKeys", false},
+		{"GetRecord", "ListRecords", false},
+		{"GetStatus", "ListStatus", true},
+		{"Get", "List", false},
+	}
+	for _, c := range cases {
+		if got := getAsksForCollection(c.method, c.handler); got != c.want {
+			t.Errorf("getAsksForCollection(%q, %q) = %v, want %v", c.method, c.handler, got, c.want)
+		}
+	}
+}
+
 // deviceServiceHandlers names the handler each DeviceService SDK claim must
 // dispatch to on the built router (#321). The SDK test
 // TestDeviceServiceRoutes_MatchTheServerRouter requires a claim for every
