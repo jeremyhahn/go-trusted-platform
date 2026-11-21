@@ -2056,6 +2056,10 @@ test.describe('IAM Management', () => {
 
       await mockExtendedIAMApi(page, { initialUsers: users, initialGroups: groups });
       await mockTenantApi(page);
+      const memberWrites: string[] = [];
+      page.on('request', (req) => {
+        if (req.method() !== 'GET' && /\/members/.test(req.url())) memberWrites.push(`${req.method()} ${req.url()}`);
+      });
 
       await page.goto('/iam/groups');
       await page.waitForLoadState('domcontentloaded');
@@ -2124,42 +2128,10 @@ test.describe('IAM Management', () => {
       if (currentUrl.includes('/iam/groups/group-1') || currentUrl.includes('/iam/groups/')) {
         // On group detail page - look for add member functionality
         const addMemberButton = page.getByRole('button', { name: /add member/i });
-        const addMemberVisible = await addMemberButton.isVisible({ timeout: 3000 }).catch(() => false);
-
-        if (addMemberVisible) {
-          await addMemberButton.click();
-
-          // Try to select user
-          const userSelect = page.locator('select, [role="combobox"]').first();
-          if (await userSelect.isVisible({ timeout: 2000 }).catch(() => false)) {
-            await userSelect.click();
-            const userOption = page.getByRole('option', { name: /member@example.com/i });
-            if (await userOption.isVisible({ timeout: 2000 }).catch(() => false)) {
-              await userOption.click();
-
-              // Submit
-              const submitButton = page.getByRole('button', { name: /add|save|submit/i }).last();
-              if (await submitButton.isVisible({ timeout: 2000 }).catch(() => false)) {
-                await submitButton.click();
-
-                // Check for success message
-                const successVisible = await page.getByText(/member added|successfully/i)
-                  .first().isVisible({ timeout: 3000 }).catch(() => false);
-                expect(successVisible || true).toBe(true);
-              } else {
-                expect(true).toBe(true); // Selection worked
-              }
-            } else {
-              expect(true).toBe(true); // Combobox opened
-            }
-          } else {
-            expect(true).toBe(true); // Add member button was visible
-          }
-        } else {
-          // No add member button - page may show error or limited UI
-          const bodyVisible = await page.locator('body').first().isVisible().catch(() => false);
-          expect(bodyVisible).toBe(true);
-        }
+        // #2146 Codex round 2 P1: the embedded IAM backend has no membership
+        // handler, so EmbeddedIamGate keeps Add member disabled and sends nothing.
+        await expect(addMemberButton).toBeDisabled();
+        expect(memberWrites).toEqual([]);
       } else {
         // Didn't navigate to group detail, but groups page worked
         expect(true).toBe(true);
@@ -2180,6 +2152,10 @@ test.describe('IAM Management', () => {
 
       await mockExtendedIAMApi(page, { initialUsers: users, initialGroups: groups });
       await mockTenantApi(page);
+      const memberWrites: string[] = [];
+      page.on('request', (req) => {
+        if (req.method() !== 'GET' && /\/members/.test(req.url())) memberWrites.push(`${req.method()} ${req.url()}`);
+      });
 
       // Set up dialog handler for confirmation early
       page.on('dialog', async (dialog) => {
@@ -2250,26 +2226,11 @@ test.describe('IAM Management', () => {
       if (currentUrl.includes('/iam/groups/group-1') || currentUrl.includes('/iam/groups/')) {
         // On group detail page - look for member list and remove functionality
         // Find remove member button if members are shown
-        const removeMemberButton = page.getByRole('button', { name: /remove|delete/i }).first();
-        const removeVisible = await removeMemberButton.isVisible({ timeout: 3000 }).catch(() => false);
-
-        if (removeVisible) {
-          await removeMemberButton.click();
-
-          // Check for success message
-          const successVisible = await page.getByText(/member removed|removed|successfully/i)
-            .first().waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
-          expect(successVisible || true).toBe(true);
-        } else {
-          // No remove button - page may not show members or limited UI
-          // Check for member display
-          const memberEmail = await page.getByText('member@example.com').isVisible({ timeout: 2000 }).catch(() => false);
-          const memberName = await page.getByText('Member').first().isVisible({ timeout: 1000 }).catch(() => false);
-
-          // Either members are shown (even without remove), or page loaded
-          const bodyVisible = await page.locator('body').first().isVisible().catch(() => false);
-          expect(memberEmail || memberName || bodyVisible).toBe(true);
-        }
+        // #2146 Codex round 2 P1: EmbeddedIamGate keeps Remove by user ID
+        // disabled on the embedded backend and sends nothing.
+        const removeMemberButton = page.getByRole('button', { name: /remove by user id/i });
+        await expect(removeMemberButton).toBeDisabled();
+        expect(memberWrites).toEqual([]);
       } else {
         // Didn't navigate to group detail, but groups page worked
         expect(true).toBe(true);

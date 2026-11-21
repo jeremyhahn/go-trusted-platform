@@ -7,7 +7,8 @@ import KmsOperationsPage from './page';
 // #2024 Codex P1: a verify-HMAC verdict belongs to the exact inputs it was
 // computed for. Editing an input or a failed request must clear it.
 
-const { verifyHmac, generateDataKey, generateWrappedDataKey } = vi.hoisted(() => ({
+const { verifyHmac, generateDataKey, generateWrappedDataKey, updateKeyStatus } = vi.hoisted(() => ({
+  updateKeyStatus: vi.fn(),
   verifyHmac: vi.fn(),
   generateDataKey: vi.fn(),
   generateWrappedDataKey: vi.fn(),
@@ -19,7 +20,7 @@ vi.mock('@/hooks', () => ({
     busy: false,
     error: null,
     importKey: vi.fn(),
-    updateKeyStatus: vi.fn(),
+    updateKeyStatus,
     getKeyVersions: vi.fn(),
     hash: vi.fn(),
     hmac: vi.fn(),
@@ -134,5 +135,56 @@ describe('KmsOperationsPage data-key defaults', () => {
       fireEvent.click(card.getByRole('button', { name: 'Generate wrapped data key' }));
     });
     expect(generateWrappedDataKey).toHaveBeenCalledWith('kek', 'AES_256', 256);
+  });
+});
+
+// #2146 Codex round 2 P1: the pinned go-quicbaas UpdateKeyStatus treats
+// version 0 as the whole key and a positive version as that version only, so
+// the form must send 0 as given and refuse empty or invalid input.
+describe('KmsOperationsPage key status version', () => {
+  afterEach(() => {
+    cleanup();
+    updateKeyStatus.mockReset();
+  });
+
+  function fillStatus(version: string) {
+    const card = within(screen.getByTestId('op-status'));
+    fireEvent.change(card.getByLabelText('Key name'), { target: { value: 'k1' } });
+    fireEvent.change(card.getByLabelText('Version'), { target: { value: version } });
+    return card;
+  }
+
+  async function updateAndConfirm(card: ReturnType<typeof within>) {
+    await act(async () => {
+      fireEvent.click(card.getByRole('button', { name: 'Update status' }));
+    });
+    const dialog = within(screen.getByRole('dialog'));
+    await act(async () => {
+      fireEvent.click(dialog.getByRole('button', { name: 'Confirm' }));
+    });
+  }
+
+  it('sends version 0 for a whole-key status change', async () => {
+    updateKeyStatus.mockResolvedValue(null);
+    render(<KmsOperationsPage />);
+    await updateAndConfirm(fillStatus('0'));
+    expect(updateKeyStatus).toHaveBeenCalledWith('k1', 'DISABLED', 0);
+  });
+
+  it('sends a positive version as given', async () => {
+    updateKeyStatus.mockResolvedValue(null);
+    render(<KmsOperationsPage />);
+    await updateAndConfirm(fillStatus('3'));
+    expect(updateKeyStatus).toHaveBeenCalledWith('k1', 'DISABLED', 3);
+  });
+
+  it.each(['', 'abc', '-1', '1.5'])('refuses the invalid version %j', (version) => {
+    render(<KmsOperationsPage />);
+    const card = fillStatus(version);
+    const button = card.getByRole('button', { name: 'Update status' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(screen.getByTestId('status-version-error')).toBeTruthy();
+    fireEvent.click(button);
+    expect(updateKeyStatus).not.toHaveBeenCalled();
   });
 });
