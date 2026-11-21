@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -16,9 +17,36 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), back: vi.fn() }),
 }));
 
+// Radix Select does not open in jsdom, so the test picks a template through a
+// native select carrying the same value and onValueChange.
+vi.mock('@/components/ui/select', () => ({
+  Select: ({
+    value,
+    onValueChange,
+    children,
+  }: {
+    value?: string;
+    onValueChange?: (value: string) => void;
+    children?: ReactNode;
+  }) => (
+    <select value={value} onChange={(e) => onValueChange?.(e.target.value)}>
+      <option value="" />
+      {children}
+    </select>
+  ),
+  SelectTrigger: () => null,
+  SelectValue: () => null,
+  SelectContent: ({ children }: { children?: ReactNode }) => <>{children}</>,
+  SelectItem: ({ value, children }: { value: string; children?: ReactNode }) => (
+    <option value={value}>{children}</option>
+  ),
+}));
+
 const SESSION_PATH = 'GET /api/v1/provisioning/sessions/sess-1';
 const PROFILES_PATH = 'POST /api/v1/device/profiles';
 const FULFIL_PATH = 'POST /api/v1/provisioning/sessions/sess-1/fulfill';
+const TEMPLATES_PATH = 'GET /api/v1/device/templates';
+const FROM_TEMPLATE_PATH = 'POST /api/v1/device/templates/7/create-profile';
 const SUBMIT = 'Create Profile and Provision Device';
 
 function storedSession(fulfilled: boolean): Answer {
@@ -35,8 +63,20 @@ function storedSession(fulfilled: boolean): Answer {
 function baseRoutes(): Record<string, Answer> {
   return {
     [SESSION_PATH]: storedSession(false),
-    'GET /api/v1/device/templates': ok([]),
+    [TEMPLATES_PATH]: ok([]),
   };
+}
+
+function templateRoutes(): Record<string, Answer> {
+  return {
+    ...baseRoutes(),
+    [TEMPLATES_PATH]: ok({ templates: [{ id: '7', name: 'edge-gw', role: 'gateway' }] }),
+  };
+}
+
+/** The control plane's Success201 envelope around payload. */
+function created(payload: unknown): Answer {
+  return { status: 201, body: { code: 201, success: true, payload } };
 }
 
 async function renderPage() {
@@ -47,6 +87,15 @@ async function renderPage() {
 async function submitCustomProfile() {
   fireEvent.mouseDown(screen.getByRole('tab', { name: 'Custom Profile' }), { button: 0 });
   fireEvent.change(await screen.findByLabelText('Profile Name'), { target: { value: 'rack-07' } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: SUBMIT }));
+  });
+}
+
+// The template tab is the default one.
+async function submitTemplate() {
+  await screen.findByRole('option', { name: 'edge-gw — gateway' });
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: '7' } });
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: SUBMIT }));
   });
@@ -137,6 +186,81 @@ describe('SessionDetailClient', () => {
 
     const toast = await screen.findByText(
       'Error creating profile: The server returned no profile id, so the session was not fulfilled.'
+    );
+    expect(toast.getAttribute('data-variant')).toBe('destructive');
+    expect(sent.some((r) => r.path.endsWith('/fulfill'))).toBe(false);
+    expect(screen.queryByRole('heading', { name: 'Device Provisioned' })).toBeNull();
+    expect(provisionedToasts()).toBe(provisionedBefore);
+  });
+
+  it('creates the profile from the selected template, then fulfils the session with its id', async () => {
+    const routes: Record<string, Answer> = {
+      ...templateRoutes(),
+      [FROM_TEMPLATE_PATH]: created({ id: '43', name: 'edge-gw-1' }),
+      [FULFIL_PATH]: ok({ status: 'fulfilled' }),
+    };
+    const sent = stubControlPlane(routes);
+    await renderPage();
+
+    // The control plane records the fulfilment; the re-read returns it.
+    routes[SESSION_PATH] = storedSession(true);
+    await submitTemplate();
+
+    await waitFor(() =>
+      expect(sent).toContainEqual({
+        method: 'POST',
+        path: '/api/v1/device/templates/7/create-profile',
+        body: { templateId: '7', overrides: { ek_serial: 'EK-0007', mac_address: 'aa:bb:cc:dd:ee:07' } },
+      })
+    );
+    await waitFor(() =>
+      expect(sent).toContainEqual({
+        method: 'POST',
+        path: '/api/v1/provisioning/sessions/sess-1/fulfill',
+        body: { session_id: 'sess-1', profile_id: '43' },
+      })
+    );
+    expect(await screen.findByRole('heading', { name: 'Device Provisioned' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'View Profile' })).toBeDefined();
+  });
+
+  it('shows a refused fulfilment of a template profile as a destructive toast, not as a provisioned device', async () => {
+    const sent = stubControlPlane({
+      ...templateRoutes(),
+      [FROM_TEMPLATE_PATH]: created({ id: '43', name: 'edge-gw-1' }),
+      [FULFIL_PATH]: refused(400, 'configdelivery: session already fulfilled: sess-1'),
+    });
+    await renderPage();
+    const provisionedBefore = provisionedToasts();
+
+    await submitTemplate();
+
+    const toast = await screen.findByText(
+      'Error provisioning device: Profile 43 was created, but the session was not fulfilled: configdelivery: session already fulfilled: sess-1'
+    );
+    expect(toast.getAttribute('data-variant')).toBe('destructive');
+    expect(sent).toContainEqual({
+      method: 'POST',
+      path: '/api/v1/provisioning/sessions/sess-1/fulfill',
+      body: { session_id: 'sess-1', profile_id: '43' },
+    });
+    expect(screen.queryByRole('heading', { name: 'Device Provisioned' })).toBeNull();
+    expect(provisionedToasts()).toBe(provisionedBefore);
+    expect(screen.getByRole('button', { name: SUBMIT })).toBeDefined();
+  });
+
+  it('fulfils nothing and says so when the profile created from a template has no id', async () => {
+    const sent = stubControlPlane({
+      ...templateRoutes(),
+      [FROM_TEMPLATE_PATH]: created({ name: 'edge-gw-1' }),
+    });
+    await renderPage();
+    const provisionedBefore = provisionedToasts();
+
+    await submitTemplate();
+
+    const toast = await screen.findByText(
+      'Error provisioning device: The server returned no profile id, so the session was not fulfilled.'
     );
     expect(toast.getAttribute('data-variant')).toBe('destructive');
     expect(sent.some((r) => r.path.endsWith('/fulfill'))).toBe(false);
