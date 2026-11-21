@@ -178,18 +178,36 @@ func TestProbeTPMSealArtifactsForTPM(t *testing.T) {
 	tpmSealMountsFile = filepath.Join(dir, "does-not-exist")
 
 	t.Run("simulator TPM is absent without an ESP", func(t *testing.T) {
-		if got := probeTPMSealArtifactsForTPM(true); got != tpmSealAbsent {
+		if got := probeTPMSealArtifactsForTPM(true, ""); got != tpmSealAbsent {
 			t.Fatalf("probe = %v, want absent for the simulator TPM", got)
 		}
-		action, err := resolveTPMRecovery(probeTPMSealArtifactsForTPM(true), tpmCauseUnprovisioned)
+		action, err := resolveTPMRecovery(probeTPMSealArtifactsForTPM(true, ""), tpmCauseUnprovisioned)
 		if err != nil || action != tpmRecoverFullProvision {
 			t.Fatalf("recovery = %v, %v; want full provision for the simulator TPM", action, err)
 		}
 	})
 
 	t.Run("device TPM with no verified ESP is indeterminate", func(t *testing.T) {
-		if got := probeTPMSealArtifactsForTPM(false); got != tpmSealIndeterminate {
+		if got := probeTPMSealArtifactsForTPM(false, ""); got != tpmSealIndeterminate {
 			t.Fatalf("probe = %v, want indeterminate for a device TPM without a verified ESP", got)
+		}
+	})
+
+	// The TPM library dials CommandAddress before it looks at UseSimulator,
+	// so simulator plus a command address is a TCP TPM that can hold a
+	// seal: it must run the full ESP probe, never short-circuit to absent.
+	t.Run("simulator with a command address runs the ESP probe", func(t *testing.T) {
+		if got := probeTPMSealArtifactsForTPM(true, "127.0.0.1:2321"); got != tpmSealIndeterminate {
+			t.Fatalf("probe = %v, want indeterminate for a TCP TPM without a verified ESP", got)
+		}
+		if _, err := resolveTPMRecovery(probeTPMSealArtifactsForTPM(true, "127.0.0.1:2321"), tpmCauseUnprovisioned); err == nil {
+			t.Fatal("recovery succeeded for a TCP TPM without a verified ESP; want a typed startup error")
+		}
+	})
+
+	t.Run("device TPM with a command address runs the ESP probe", func(t *testing.T) {
+		if got := probeTPMSealArtifactsForTPM(false, "127.0.0.1:2321"); got != tpmSealIndeterminate {
+			t.Fatalf("probe = %v, want indeterminate for a TCP TPM without a verified ESP", got)
 		}
 	})
 }

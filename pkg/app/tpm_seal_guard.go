@@ -95,7 +95,7 @@ func probeTPMSealArtifacts() tpmSealProbe {
 // only in this process), so with the simulator selected the probe answers
 // absent without reading the ESP (#2034, option a). Every device TPM keeps
 // the full ESP probe of probeTPMSealArtifacts.
-func probeTPMSealArtifactsForTPM(useSimulator bool) tpmSealProbe {
+func probeTPMSealArtifactsForTPM(useSimulator bool, commandAddress string) tpmSealProbe {
 	if useSimulator {
 		return tpmSealAbsent
 	}
