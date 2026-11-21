@@ -126,7 +126,7 @@ Verified by grep on 2026-08-18:
 | `cluster.NewMembershipManager` | **none** |
 | `cluster.RaftOperator` implementations | **none in this repo** |
 | `daemon.NewClusterService` | **none** |
-| `daemon.Daemon.SetClusterService` | **none** |
+| `daemon.Daemon.SetClusterService` | `appbackends.WireSDKBackends` (serve and embedded hosts, over the embedded go-quicbaas service; #2140) |
 
 The gRPC service the daemon registers, on the TCP listener and the Unix
 socket, is the full `ClusterGRPCService` in `pkg/api/grpc/cluster_service.go`.
@@ -134,8 +134,10 @@ Its `grpc.ClusterService` dependency is the daemon adapter
 `clusterGRPCBackend` (`pkg/api/daemon/cluster_grpc_backend.go`), which
 answers from the daemon's `ClusterServicer`. The REST handlers, the QUIC `0x90`
 sub-opcodes and the MCP `platform_cluster_*` tools all call that registered
-service. `Daemon.SetClusterService` sets the servicer for all of them — and
-nothing calls it.
+service. `Daemon.SetClusterService` sets the servicer for all of them; since
+#2140 serve calls it through `appbackends.WireSDKBackends` with a servicer that
+reads the embedded go-quicbaas cluster (status, nodes, leader), while Join and
+Leave still answer Unavailable.
 
 **So today: the interfaces, the coordinator implementation, the state machine,
 the node registry, the transports and the CLI package all exist, and no shipped
