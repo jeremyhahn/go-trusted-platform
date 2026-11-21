@@ -72,6 +72,20 @@ describe('OverlayService', () => {
     );
   });
 
+  it('getStatus GETs /status', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: { status: {} } });
+    await service.getStatus();
+    expect(mockClient.get).toHaveBeenCalledWith('/v1/overlay/status');
+  });
+
+  it('listRemoteMACs GETs /macs, filtered by VNI when given', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: { macs: [] } });
+    await service.listRemoteMACs();
+    expect(mockClient.get).toHaveBeenCalledWith('/v1/overlay/macs');
+    await service.listRemoteMACs({ vni: 7 });
+    expect(mockClient.get).toHaveBeenCalledWith('/v1/overlay/macs?vni=7');
+  });
+
   it('propagates a transport error unchanged', async () => {
     const failure = new Error('404 Not Found: overlay: vni not found');
     vi.mocked(mockClient.delete).mockRejectedValue(failure);

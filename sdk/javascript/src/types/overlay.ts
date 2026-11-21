@@ -101,6 +101,10 @@ export interface OverlayStatus {
   remoteMacCount: number;
   /** Whether healthy */
   healthy: boolean;
+  /** VXLAN UDP port */
+  vxlanPort?: number;
+  /** Underlay MTU */
+  underlayMtu?: number;
 }
 
 // =============================================================================

@@ -38,11 +38,13 @@ function errorText(err: unknown): string {
 }
 
 /**
- * Overlay VTEPs, VNIs, tunnels and remote MACs (#1722).
+ * Overlay status, VTEPs, VNIs, tunnels and remote MACs (#1722, #2059).
  */
 export default function OverlayVtepsPage() {
   const { toast } = useToast();
   const {
+    status,
+    statusError,
     vteps,
     vnis,
     tunnels,
@@ -155,6 +157,38 @@ export default function OverlayVtepsPage() {
           <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
         </Button>
       </div>
+
+      <section className="space-y-2" data-testid="overlay-status">
+        <h2 className="text-xl font-semibold">Status</h2>
+        {statusError ? (
+          <p className="text-destructive" data-testid="overlay-status-error">
+            {statusError.message || 'Failed to load overlay status'}
+          </p>
+        ) : status ? (
+          <dl className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
+            <dt className="text-muted-foreground">Node</dt>
+            <dd>{status.nodeId || '-'}</dd>
+            <dt className="text-muted-foreground">VTEP IP</dt>
+            <dd className="font-mono">{status.vtepIp || '-'}</dd>
+            <dt className="text-muted-foreground">Health</dt>
+            <dd>
+              <Badge variant="outline">{status.healthy ? 'healthy' : 'unhealthy'}</Badge>
+            </dd>
+            <dt className="text-muted-foreground">VTEP count</dt>
+            <dd>{status.vtepCount ?? 0}</dd>
+            <dt className="text-muted-foreground">VNI count</dt>
+            <dd>{status.vniCount ?? 0}</dd>
+            <dt className="text-muted-foreground">Tunnel count</dt>
+            <dd>{status.tunnelCount ?? 0}</dd>
+            <dt className="text-muted-foreground">Remote MAC count</dt>
+            <dd>{status.remoteMacCount ?? 0}</dd>
+            <dt className="text-muted-foreground">VXLAN port</dt>
+            <dd>{status.vxlanPort ?? '-'}</dd>
+            <dt className="text-muted-foreground">Underlay MTU</dt>
+            <dd>{status.underlayMtu ?? '-'}</dd>
+          </dl>
+        ) : null}
+      </section>
 
       <section className="space-y-2">
         <h2 className="text-xl font-semibold">VTEPs</h2>
