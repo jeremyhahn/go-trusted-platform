@@ -66,6 +66,14 @@ func TestToQuicBaaSConfig_WebAuthnAttestationRootsPassthrough(t *testing.T) {
 	assert.Equal(t, "/etc/platform/fido-roots.pem", c.ToQuicBaaSConfig().IAM.WebAuthn.AttestationRootsFile)
 }
 
+func TestToQuicBaaSConfig_WebAuthnAAGUIDAllowlistPassthrough(t *testing.T) {
+	c := adminEnrollmentConfig(t)
+	assert.Empty(t, c.ToQuicBaaSConfig().IAM.AAGUID.AllowlistFile)
+
+	c.WebAuthnAAGUIDAllowlistFile = "/etc/platform/fido-aaguids.json"
+	assert.Equal(t, "/etc/platform/fido-aaguids.json", c.ToQuicBaaSConfig().IAM.AAGUID.AllowlistFile)
+}
+
 // TestToQuicBaaSConfig_AdminEnrollmentDefaultsEmpty is the other half: an
 // operator who configures none of this must get exactly the upstream
 // default (path A), not a platform-invented one. An empty value has to mean

@@ -87,7 +87,7 @@ try {
   assert.equal(sa.cborEncode(Buffer.alloc(300)).subarray(0, 3).toString('hex'), '59012c');
 
   const att = sa.generateAttestationCA(dir);
-  assert.deepEqual(fs.readdirSync(dir).sort(), Object.values(sa.ATTESTATION_FILES).sort(), 'only the four run files remain');
+  assert.deepEqual(fs.readdirSync(dir).sort(), Object.values(sa.ATTESTATION_FILES).sort(), 'only the run files remain');
 
   // The chain the server verifies.
   const root = new crypto.X509Certificate(fs.readFileSync(path.join(dir, sa.ATTESTATION_FILES.roots)));
@@ -102,6 +102,13 @@ try {
   // extnValue OCTET STRING wrapping OCTET STRING(16) = the AAGUID.
   const ext = Buffer.concat([Buffer.from('060b2b0601040182e51c0101040412' + '0410', 'hex'), att.aaguid]);
   assert.ok(att.leafDer.includes(ext), 'leaf carries the AAGUID extension');
+  // The allowlist the server's strict AAGUID gate reads holds the run's AAGUID.
+  const allowlist = JSON.parse(fs.readFileSync(path.join(dir, sa.ATTESTATION_FILES.aaguidAllowlist), 'utf8'));
+  assert.deepEqual(
+    allowlist,
+    [{ aaguid: att.aaguid.toString('hex'), name: 'E2E Soft Authenticator' }],
+    'AAGUID allowlist holds the run AAGUID',
+  );
 
   // Registration: packed attestation.
   const auth = new sa.SoftAuthenticator(att);
