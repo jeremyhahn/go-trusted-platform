@@ -135,14 +135,15 @@ export default function TPMStatusPage() {
     [],
     { onError: () => {} }
   );
-  // HasIDevID / HasIAK answer presence directly. A refusal leaves data
-  // undefined, which the badges show as "Unknown", not as "No ...".
-  const { data: idevidExists, refetch: refetchIDevID } = useApi(
+  // HasIDevID / HasIAK answer presence directly. useApi keeps the last data
+  // when a fetch fails, so a set error means the current answer is unknown,
+  // whatever an earlier check said (#2170 Codex).
+  const { data: idevidExists, error: idevidExistsError, refetch: refetchIDevID } = useApi(
     () => idevid.hasIDevID(),
     [],
     { onError: () => {} }
   );
-  const { data: iakExists, refetch: refetchIAKExists } = useApi(
+  const { data: iakExists, error: iakExistsError, refetch: refetchIAKExists } = useApi(
     () => idevid.hasIAK(),
     [],
     { onError: () => {} }
@@ -251,7 +252,8 @@ export default function TPMStatusPage() {
   );
 
   // Presence from HasIDevID / HasIAK: undefined means the check was
-  // refused or failed, which is not the same as "not provisioned".
+  // refused or failed, now or on the latest refresh, which is not the
+  // same as "not provisioned".
   const presenceBadge = (exists: boolean | undefined, label: string) => {
     if (exists === true) return <Badge variant="default">{label} Present</Badge>;
     if (exists === false) return <Badge variant="secondary">No {label}</Badge>;
@@ -453,8 +455,8 @@ export default function TPMStatusPage() {
                       <Badge variant={status.capabilities.hasSRK ? "default" : "secondary"}>
                         {status.capabilities.hasSRK ? "SRK Present" : "No SRK"}
                       </Badge>
-                      {presenceBadge(iakExists?.exists, "IAK")}
-                      {presenceBadge(idevidExists?.exists, "IDevID")}
+                      {presenceBadge(iakExistsError ? undefined : iakExists?.exists, "IAK")}
+                      {presenceBadge(idevidExistsError ? undefined : idevidExists?.exists, "IDevID")}
                       <Badge variant={status.capabilities.hasOwner ? "default" : "secondary"}>
                         {status.capabilities.hasOwner ? "Owner Set" : "No Owner"}
                       </Badge>
