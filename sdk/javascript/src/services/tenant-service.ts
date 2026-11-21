@@ -9,6 +9,11 @@ import type { Transport } from '../transport/transport.js';
 import type { ApiResponse } from '../types/api.js';
 import { BaseService } from './base-service.js';
 import type {
+  InitTenantBarrierRequest,
+  InitTenantBarrierResponse,
+  UnsealTenantBarrierRequest,
+  UnsealTenantBarrierResponse,
+  SealTenantBarrierResponse,
   ListTenantsRequest,
   ListTenantsResponse,
   GetTenantResponse,
@@ -30,7 +35,32 @@ import type {
   RotateTenantDEKRequest,
   RotateTenantDEKResponse,
   GetTenantDEKStatusResponse,
+  TenantStatus,
 } from '../types/tenant.js';
+
+/**
+ * Normalises a barrier action response into the declared `{ status }` shape.
+ * The daemon REST handlers (pkg/api/rest/tenant_handlers.go) write a flat
+ * TenantBarrierActionResponse `{ tenant_id, success, message, timestamp }`;
+ * the webservice writes `{ status }`, which is returned unchanged.
+ */
+function normalizeBarrierResponse<T extends { status: TenantStatus }>(res: ApiResponse<T>): ApiResponse<T> {
+  const data: unknown = res.data;
+  if (
+    data === null ||
+    typeof data !== 'object' ||
+    'status' in data ||
+    typeof (data as { success?: unknown }).success !== 'boolean'
+  ) {
+    return res;
+  }
+  const flat = data as { success: boolean; message?: unknown };
+  const status: TenantStatus = {
+    success: flat.success,
+    message: typeof flat.message === 'string' ? flat.message : '',
+  };
+  return { ...res, data: { status } as T };
+}
 
 /**
  * Tenant Service class
@@ -115,10 +145,11 @@ export class TenantService extends BaseService {
         filters[`label_${k}`] = v;
       });
     }
+    // The REST handler reads limit and offset; it has no page parameter.
+    if (request?.offset !== undefined) {
+      filters.offset = String(request.offset);
+    }
     return this.client.get<ListTenantsResponse>(this.buildUrl('', {
-      page: request?.offset !== undefined && request?.limit !== undefined
-        ? Math.floor(request.offset / request.limit) + 1
-        : undefined,
       limit: request?.limit,
       filters,
     }));
@@ -232,7 +263,7 @@ export class TenantService extends BaseService {
    */
   async checkQuota(request: CheckQuotaRequest): Promise<ApiResponse<CheckQuotaResponse>> {
     return this.client.post<CheckQuotaResponse>(
-      this.buildUrl(`/${this.encodePathSegment(request.tenantId)}/quotas/check`),
+      this.buildUrl(`/${this.encodePathSegment(request.tenantId)}/quota-check`),
       { resource: request.resource, amount: request.amount }
     );
   }
@@ -250,7 +281,9 @@ export class TenantService extends BaseService {
   async rotateDEK(request: RotateTenantDEKRequest): Promise<ApiResponse<RotateTenantDEKResponse>> {
     return this.client.post<RotateTenantDEKResponse>(
       this.buildUrl(`/${this.encodePathSegment(request.tenantId)}/dek/rotate`),
-      { background: request.background }
+      { background: request.background },
+      // No retries: a resend after a lost response rotates the key again.
+      { retry: { enabled: false } }
     );
   }
 
@@ -262,7 +295,7 @@ export class TenantService extends BaseService {
    */
   async getDEKStatus(tenantId: string): Promise<ApiResponse<GetTenantDEKStatusResponse>> {
     return this.client.get<GetTenantDEKStatusResponse>(
-      this.buildUrl(`/${this.encodePathSegment(tenantId)}/dek/status`)
+      this.buildUrl(`/${this.encodePathSegment(tenantId)}/dek`)
     );
   }
 
@@ -277,5 +310,62 @@ export class TenantService extends BaseService {
    */
   async syncTenants(): Promise<ApiResponse<SyncTenantsResponse>> {
     return this.client.post<SyncTenantsResponse>(this.buildUrl('/sync'), {});
+  }
+
+  // =========================================================================
+  // Barrier Operations
+  // =========================================================================
+
+  /**
+   * Initialise a tenant's barrier
+   *
+   * @param request - Init request (threshold and shares)
+   * @returns Init result
+   */
+  async initBarrier(request: InitTenantBarrierRequest): Promise<ApiResponse<InitTenantBarrierResponse>> {
+    // The daemon REST handler (handleInitTenantBarrier) and the gRPC server
+    // discard threshold and shares and run a deterministic, non-Shamir init:
+    // refuse the settings rather than report protection that was not applied.
+    if (request.threshold || request.shares) {
+      throw new RangeError(
+        'initBarrier: threshold and shares are not supported; the server initialises a non-Shamir barrier'
+      );
+    }
+    return normalizeBarrierResponse(
+      await this.client.post<InitTenantBarrierResponse>(
+        this.buildUrl(`/${this.encodePathSegment(request.tenantId)}/barrier/init`),
+        {}
+      )
+    );
+  }
+
+  /**
+   * Unseal a tenant's barrier
+   *
+   * @param request - Unseal request (base64 key)
+   * @returns Unseal result
+   */
+  async unsealBarrier(request: UnsealTenantBarrierRequest): Promise<ApiResponse<UnsealTenantBarrierResponse>> {
+    return normalizeBarrierResponse(
+      await this.client.post<UnsealTenantBarrierResponse>(
+        this.buildUrl(`/${this.encodePathSegment(request.tenantId)}/barrier/unseal`),
+        { key: request.key }
+      )
+    );
+  }
+
+  /**
+   * Seal a tenant's barrier
+   *
+   * @param tenantId - Tenant ID
+   * @returns Seal result
+   */
+  async sealBarrier(tenantId: string): Promise<ApiResponse<SealTenantBarrierResponse>> {
+    return normalizeBarrierResponse(
+      await this.client.post<SealTenantBarrierResponse>(
+        this.buildUrl(`/${this.encodePathSegment(tenantId)}/barrier/seal`),
+        {}
+      )
+    );
   }
 }

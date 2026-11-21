@@ -80,6 +80,64 @@ export interface TPMCapability {
 }
 
 /**
+ * TPM capabilities: TPM2_GetCapability's algorithm, command and ECC-curve names
+ */
+export interface TPMCapabilitiesResponse {
+  algorithms?: string[];
+  commands?: string[];
+  eccCurves?: string[];
+}
+
+/**
+ * A provisioned key named by its persistent handle and algorithm
+ */
+export interface TPMKeyRef {
+  handle?: number;
+  algorithm?: string;
+}
+
+/**
+ * TPM device and provisioned identity keys. A key that is not provisioned is absent.
+ */
+export interface TPMPlatformAttributesResponse {
+  device?: string;
+  isFips?: boolean;
+  pcrExtended?: boolean;
+  canSeal?: boolean;
+  isSimulator?: boolean;
+  manufacturer?: string;
+  ek?: TPMKeyRef;
+  srk?: TPMKeyRef;
+  iak?: TPMKeyRef;
+}
+
+/**
+ * Certify request: the IAK certifies the key at a persistent handle (TPM2_Certify)
+ */
+export interface CertifyRequest {
+  keyHandle: number;
+  /** The certified key's authValue; empty when it has none */
+  keyPassword?: string;
+  /** Qualifying data (base64), at most 64 bytes */
+  nonce?: string;
+}
+
+/**
+ * Certify response (byte fields are base64)
+ */
+export interface CertifyResponse {
+  certifyInfo?: string;
+  signature?: string;
+  signatureAlgorithm?: string;
+  certifyInfoSignature?: string;
+  attestingKeyPublic?: string;
+  attestedKeyPublic?: string;
+  attestingKeyPublicArea?: string;
+  attestedKeyPublicArea?: string;
+  nonce?: string;
+}
+
+/**
  * A defined NV index as reported by TPM info (proto NVIndex).
  */
 export interface NVIndex {

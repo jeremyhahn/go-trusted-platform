@@ -35,16 +35,12 @@ describe('VTPMService bundle runtime', () => {
 
   it('startBundle POSTs /bundles/{id}/start', async () => {
     await service.startBundle('vm 1');
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/vtpm/bundles/vm%201/start', {}, {
-      retry: { enabled: false },
-    });
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/vtpm/bundles/vm%201/start', {});
   });
 
   it('stopBundle POSTs /bundles/{id}/stop', async () => {
     await service.stopBundle('vm-1');
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/vtpm/bundles/vm-1/stop', {}, {
-      retry: { enabled: false },
-    });
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/vtpm/bundles/vm-1/stop', {});
   });
 
   it('stopBundle marks a daemon stop reply stopped', async () => {
@@ -200,7 +196,6 @@ describe('VTPMService bundle runtime', () => {
     expect(vi.mocked(mockClient.post).mock.calls[1]).toEqual([
       '/v1/vtpm/bundles/vm-1/pcr/16/extend',
       { data: 'AAAA' },
-      { retry: { enabled: false } },
     ]);
     expect(r.success).toBe(true);
     expect(r.data).toEqual({
@@ -266,8 +261,7 @@ describe('VTPMService bundle runtime', () => {
     await service.extendBundlePCR('vm-1', { pcr_index: 16, data: 'AAAA' });
     expect(mockClient.post).toHaveBeenCalledWith(
       '/v1/vtpm/bundles/vm-1/pcrs/extend',
-      { pcr_index: 16, data: 'AAAA' },
-      { retry: { enabled: false } }
+      { pcr_index: 16, data: 'AAAA' }
     );
   });
 

@@ -147,7 +147,13 @@ const routes: RouteCase[] = [
     method: 'assignProfileToDevice',
     verb: 'post',
     path: '/v1/device/profiles/7/assign',
-    call: (s) => s.assignProfileToDevice({ profileId: 7 } as never),
+    call: (s) => s.assignProfileToDevice({ profileId: '7' } as never),
+  },
+  {
+    method: 'unassignProfileFromDevice',
+    verb: 'post',
+    path: '/v1/device/profiles/7/unassign',
+    call: (s) => s.unassignProfileFromDevice(7),
   },
   // Templates: singular.
   { method: 'createTemplate', verb: 'post', path: '/v1/device/templates', call: (s) => s.createTemplate({} as never) },
@@ -451,5 +457,140 @@ describe('DeviceService fulfillProvisioningSession', () => {
     const [path] = vi.mocked(mockClient.post).mock.calls[0] as [string, unknown];
     expect(path).toBe('/v1/provisioning/sessions/a%2Fb%20c/fulfill');
     expect(path).not.toContain('/v1/devices/');
+  });
+});
+
+describe('DeviceService assignProfileToDevice and updateTemplate wire bodies', () => {
+  let service: DeviceService;
+  let mockClient: ApiClient;
+
+  beforeEach(() => {
+    mockClient = createMockApiClient();
+    service = new DeviceService(mockClient);
+    vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: undefined });
+    vi.mocked(mockClient.put).mockResolvedValue({ success: true, data: undefined });
+  });
+
+  // #2022 Codex: a string profile ID is interpolated into the path, so
+  // '7/unassign?' would reach the unassign action. Only a decimal uint64 passes.
+  const badProfileIds = ['7/unassign?', '-1', '1.5', '', '18446744073709551616'];
+
+  it.each(badProfileIds)('assignProfileToDevice rejects profile ID %j without a request', async (profileId) => {
+    await expect(service.assignProfileToDevice({ profileId, ekSerial: 'EK1' })).rejects.toThrow(RangeError);
+    expect(mockClient.post).not.toHaveBeenCalled();
+  });
+
+  it.each(badProfileIds)('unassignProfileFromDevice rejects profile ID %j without a request', async (profileId) => {
+    await expect(service.unassignProfileFromDevice(profileId)).rejects.toThrow(RangeError);
+    expect(mockClient.post).not.toHaveBeenCalled();
+  });
+
+  it('assignProfileToDevice and unassignProfileFromDevice accept 42 and the uint64 maximum', async () => {
+    await service.assignProfileToDevice({ profileId: '42', ekSerial: 'EK1' });
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/device/profiles/42/assign', { ek_serial: 'EK1' });
+    await service.unassignProfileFromDevice(42);
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/device/profiles/42/unassign', {});
+    await service.unassignProfileFromDevice('18446744073709551615');
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/device/profiles/18446744073709551615/unassign', {});
+  });
+
+  // #2022 Codex round 3: a number past Number.MAX_SAFE_INTEGER is already
+  // rounded (9007199254740993 is held as ...992), so it would reach another
+  // profile. Large IDs must come as decimal strings.
+  const unsafeNumericProfileIds = [9007199254740993, Number.MAX_SAFE_INTEGER + 1, 1.5e20];
+
+  it.each(unsafeNumericProfileIds)(
+    'unassignProfileFromDevice rejects unsafe numeric profile ID %d without a request',
+    async (profileId) => {
+      await expect(service.unassignProfileFromDevice(profileId)).rejects.toThrow(RangeError);
+      expect(mockClient.post).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(unsafeNumericProfileIds)(
+    'assignProfileToDevice rejects unsafe numeric profile ID %d without a request',
+    async (profileId) => {
+      // The request type takes a string; a JavaScript caller can still pass a number.
+      const request = { profileId, ekSerial: 'EK1' } as unknown as { profileId: string; ekSerial: string };
+      await expect(service.assignProfileToDevice(request)).rejects.toThrow(RangeError);
+      expect(mockClient.post).not.toHaveBeenCalled();
+    }
+  );
+
+  it('accepts the largest safe integer as a number', async () => {
+    await service.unassignProfileFromDevice(Number.MAX_SAFE_INTEGER);
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/device/profiles/9007199254740991/unassign', {});
+  });
+
+  it('assign keeps a large profile id exact in the path and posts snake_case identity only', async () => {
+    await service.assignProfileToDevice({ profileId: '9007199254740993', ekSerial: 'EK1', macAddress: '' });
+
+    expect(mockClient.post).toHaveBeenCalledTimes(1);
+    const [path, body] = vi.mocked(mockClient.post).mock.calls[0] as [string, Record<string, unknown>];
+    expect(path).toMatch(/\/profiles\/9007199254740993\/assign$/);
+    expect(body).toEqual({ ek_serial: 'EK1' });
+    expect(body).not.toHaveProperty('profile_id');
+    expect(body).not.toHaveProperty('profileId');
+    expect(body).not.toHaveProperty('ekSerial');
+    expect(body).not.toHaveProperty('mac_address');
+  });
+
+  it('assign posts mac_address when a MAC is given', async () => {
+    await service.assignProfileToDevice({ profileId: '7', macAddress: 'aa:bb:cc:dd:ee:ff' });
+
+    const [, body] = vi.mocked(mockClient.post).mock.calls[0] as [string, Record<string, unknown>];
+    expect(body).toEqual({ mac_address: 'aa:bb:cc:dd:ee:ff' });
+  });
+
+  it('updateTemplate carries tenant_id, config and match_rules in the flat PUT body', async () => {
+    const config = 'Y2Zn' as unknown as Record<string, unknown>;
+    await service.updateTemplate({
+      id: '1',
+      name: 'n',
+      tenant_id: 't',
+      config,
+      match_rules: { mac_prefix: 'aa:bb' },
+    });
+
+    expect(mockClient.put).toHaveBeenCalledTimes(1);
+    const [, body] = vi.mocked(mockClient.put).mock.calls[0] as [string, Record<string, unknown>];
+    expect(body).toMatchObject({ tenant_id: 't', config: 'Y2Zn', match_rules: { mac_prefix: 'aa:bb' } });
+    expect(body).not.toHaveProperty('matchRules');
+  });
+});
+
+describe('DeviceService wire bodies for the lookup page (#1756)', () => {
+  let service: DeviceService;
+  let mockClient: ApiClient;
+
+  beforeEach(() => {
+    mockClient = createMockApiClient();
+    service = new DeviceService(mockClient);
+    vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: undefined });
+    vi.mocked(mockClient.put).mockResolvedValue({ success: true, data: undefined });
+  });
+
+  it('updateProfile PUTs the flat profile, not the request envelope', async () => {
+    await service.updateProfile({ profile: { id: '9007199254740993', name: 'n', zone: 'z' } as never });
+
+    const [path, body] = vi.mocked(mockClient.put).mock.calls[0] as [string, Record<string, unknown>];
+    expect(path.endsWith('/profiles/9007199254740993')).toBe(true);
+    expect(body).toHaveProperty('name', 'n');
+    expect(body).toHaveProperty('zone', 'z');
+    expect(body).not.toHaveProperty('profile');
+  });
+
+  it('findMatchingProfile sends mac_address and omits empty criteria', async () => {
+    await service.findMatchingProfile({ macAddress: 'aa:bb', model: '' });
+
+    const [, body] = vi.mocked(mockClient.post).mock.calls[0] as [string, Record<string, unknown>];
+    expect(body).toEqual({ mac_address: 'aa:bb' });
+  });
+
+  it('activateDevice sends serial and mac_address', async () => {
+    await service.activateDevice({ serial: 'S1', macAddress: 'aa:bb' });
+
+    const [, body] = vi.mocked(mockClient.post).mock.calls[0] as [string, Record<string, unknown>];
+    expect(body).toEqual({ serial: 'S1', mac_address: 'aa:bb' });
   });
 });
