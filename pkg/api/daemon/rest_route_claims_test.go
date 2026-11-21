@@ -117,6 +117,74 @@ func daemonRouteTableWithKMS(t *testing.T, guard *restapi.ScopeGuard, kms kmscli
 	return s, testutil.WalkRoutes(t, s.Router())
 }
 
+// kmsRESTRouteCalls is one request per route the KMS REST router mounts
+// (pkg/webservice/v1/rest/kms/router.go RegisterRoutes).
+var kmsRESTRouteCalls = []struct{ method, path string }{
+	{http.MethodPost, "/api/v1/kms/keys/import"},
+	{http.MethodPost, "/api/v1/kms/keys"},
+	{http.MethodGet, "/api/v1/kms/keys"},
+	{http.MethodGet, "/api/v1/kms/keys/k1"},
+	{http.MethodDelete, "/api/v1/kms/keys/k1"},
+	{http.MethodPost, "/api/v1/kms/keys/k1/rotate"},
+	{http.MethodPost, "/api/v1/kms/keys/k1/revoke"},
+	{http.MethodPut, "/api/v1/kms/keys/k1/status"},
+	{http.MethodGet, "/api/v1/kms/keys/k1/versions"},
+	{http.MethodGet, "/api/v1/kms/keys/k1/metadata"},
+	{http.MethodPut, "/api/v1/kms/keys/k1/metadata"},
+	{http.MethodGet, "/api/v1/kms/keys/k1/policy"},
+	{http.MethodPut, "/api/v1/kms/keys/k1/policy"},
+	{http.MethodGet, "/api/v1/kms/algorithms"},
+	{http.MethodGet, "/api/v1/kms/backend/status"},
+	{http.MethodPost, "/api/v1/kms/encrypt/k1"},
+	{http.MethodPost, "/api/v1/kms/decrypt/k1"},
+	{http.MethodPost, "/api/v1/kms/sign/k1"},
+	{http.MethodPost, "/api/v1/kms/verify/k1"},
+	{http.MethodPost, "/api/v1/kms/hmac/k1/verify"},
+	{http.MethodPost, "/api/v1/kms/hmac/k1"},
+	{http.MethodPost, "/api/v1/kms/hash"},
+	{http.MethodPost, "/api/v1/kms/random"},
+	{http.MethodPost, "/api/v1/kms/data-keys"},
+	{http.MethodPost, "/api/v1/kms/data-keys/wrapped"},
+	{http.MethodPost, "/api/v1/kms/deks"},
+	{http.MethodGet, "/api/v1/kms/deks"},
+	{http.MethodGet, "/api/v1/kms/deks/d1/status"},
+	{http.MethodPost, "/api/v1/kms/deks/d1/rotate"},
+	{http.MethodGet, "/api/v1/kms/deks/d1"},
+	{http.MethodDelete, "/api/v1/kms/deks/d1"},
+	{http.MethodPost, "/api/v1/kms/secrets"},
+	{http.MethodGet, "/api/v1/kms/secrets"},
+	{http.MethodGet, "/api/v1/kms/secrets/s1/versions/1"},
+	{http.MethodGet, "/api/v1/kms/secrets/s1/versions"},
+	{http.MethodPost, "/api/v1/kms/secrets/s1/rotate"},
+	{http.MethodPost, "/api/v1/kms/secrets/s1/rollback"},
+	{http.MethodPut, "/api/v1/kms/secrets/s1/status"},
+	{http.MethodPut, "/api/v1/kms/secrets/s1/policy"},
+	{http.MethodGet, "/api/v1/kms/secrets/s1/policy"},
+	{http.MethodGet, "/api/v1/kms/secrets/s1"},
+	{http.MethodDelete, "/api/v1/kms/secrets/s1"},
+}
+
+// TestRESTRouteClaims_KMSRoutesNeedTheirCatalogScope pins that every KMS
+// REST route runs behind the catalog scope guard: no credential answers
+// 401, a credential without the route's scope answers 403.
+func TestRESTRouteClaims_KMSRoutesNeedTheirCatalogScope(t *testing.T) {
+	guard := restapi.NewScopeGuard(scopedTokenValidator{scopes: []string{"ca:read"}}, nil, nil)
+	s, _ := daemonRouteTableWithKMS(t, guard, nil)
+	for _, c := range kmsRESTRouteCalls {
+		t.Run(c.method+" "+c.path, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			s.Router().ServeHTTP(w, httptest.NewRequest(c.method, c.path, strings.NewReader("{}")))
+			require.Equal(t, http.StatusUnauthorized, w.Code, "no credential: body %s", w.Body.String())
+
+			w = httptest.NewRecorder()
+			r := httptest.NewRequest(c.method, c.path, strings.NewReader("{}"))
+			r.Header.Set("Authorization", "Bearer t")
+			s.Router().ServeHTTP(w, r)
+			require.Equal(t, http.StatusForbidden, w.Code, "credential without the scope: body %s", w.Body.String())
+		})
+	}
+}
+
 // daemonDivergentClaims are SDK claims under a prefix both REST servers serve
 // that reach no daemon route of their own shape. All but GetBootConfig
 // resolve on the webservice router, where route_coverage_test.go checks them. One SDK route table addresses both
