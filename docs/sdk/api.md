@@ -33,7 +33,7 @@ folder's own `api.md`. Streaming RPCs are ✅ only on gRPC / Unix.
 | Service (`platform.v1`) | `Client` accessor | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|---|
 | `PlatformDaemon` | `Daemon()` | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `TPMService` | `TPM()` | ✅ | ✅ | `Quote`, `VerifyQuote` only ([tpm/api.md §5](../tpm/api.md#5-sealing-pcrs-attestation-entropy)); the rest `MISSING — docs/13 G7` | `Quote` (refused: no TLS to bind), `VerifyQuote` only; the rest `MISSING — docs/13 G7` | ✅ |
+| `TPMService` | `TPM()` | ✅ | ✅ | `Quote`, `VerifyQuote` only ([tpm/api.md §5](../tpm/api.md#5-sealing-pcrs-attestation-entropy)); the rest `MISSING — docs/13 G7` | `Quote` (refused: no TLS to bind), `VerifyQuote`, `Certify`, `GetCapabilities`, `GetPlatformAttributes`, `ExtendPCR`, `GetEK`, `GetEKCertificate`, `GetSRK`, `GetPCRs`, `GetEventLog` (no parsed entries), `GetRandom`; the rest `MISSING — docs/13 G7` | ✅ |
 | `CAService` | `CA()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `DeviceService` | `Device()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `VTPMService` | `VTPM()` | ✅ | ✅ | ✅ | ✅ | ✅ |
