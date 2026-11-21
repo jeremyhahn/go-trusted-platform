@@ -113,6 +113,8 @@ func TestInvoke_TPMProvision_SendsTheOwnerAuth(t *testing.T) {
 		&platformv1.TPMProvisionRequest{EndorsementPassword: "e"}, &platformv1.TPMProvisionResponse{})
 	tpmKeysExpectRefused(t, "ek attributes", tool, method,
 		&platformv1.TPMProvisionRequest{EkAttributes: &platformv1.KeyAttributes{}}, &platformv1.TPMProvisionResponse{})
+	tpmKeysExpectRefused(t, "create ak", tool, method,
+		&platformv1.TPMProvisionRequest{CreateAk: true}, &platformv1.TPMProvisionResponse{})
 }
 
 func TestInvoke_TPMClear_NeedsConfirm(t *testing.T) {
@@ -142,6 +144,8 @@ func TestInvoke_TPMCreateEK_CarriesTheHandle(t *testing.T) {
 
 	tpmKeysExpectRefused(t, "attributes", tool, method,
 		&platformv1.CreateEKRequest{Attributes: &platformv1.KeyAttributes{}}, &platformv1.CreateEKResponse{})
+	tpmKeysExpectRefused(t, "transient", tool, method,
+		&platformv1.CreateEKRequest{}, &platformv1.CreateEKResponse{})
 }
 
 func TestInvoke_TPMCreateSRK_CarriesTheHandle(t *testing.T) {
@@ -149,7 +153,7 @@ func TestInvoke_TPMCreateSRK_CarriesTheHandle(t *testing.T) {
 	reply := &platformv1.CreateSRKResponse{}
 	calls, err := tpmKeysInvoke(t, tool,
 		map[string]interface{}{"success": true, "message": "SRK created", "handle": 0x81000001},
-		method, &platformv1.CreateSRKRequest{}, reply)
+		method, &platformv1.CreateSRKRequest{Persistent: true}, reply)
 	tpmKeysExpectOneCall(t, calls, err, tool, map[string]interface{}{})
 	tpmKeysCheckStatus(t, reply.GetStatus(), "SRK created")
 	if reply.GetHandle() != 0x81000001 {
@@ -162,6 +166,8 @@ func TestInvoke_TPMCreateSRK_CarriesTheHandle(t *testing.T) {
 		&platformv1.CreateSRKRequest{ParentHandle: 1}, &platformv1.CreateSRKResponse{})
 	tpmKeysExpectRefused(t, "parent password", tool, method,
 		&platformv1.CreateSRKRequest{ParentPassword: "p"}, &platformv1.CreateSRKResponse{})
+	tpmKeysExpectRefused(t, "transient", tool, method,
+		&platformv1.CreateSRKRequest{}, &platformv1.CreateSRKResponse{})
 }
 
 func TestInvoke_TPMDeleteEK_SendsTheHandle(t *testing.T) {
