@@ -100,7 +100,7 @@ describe("usePXEDeviceActions", () => {
     });
   });
 
-  it("sets pendingId while a call is in flight and clears it after", async () => {
+  it("marks the device pending while a call is in flight and clears it after", async () => {
     let resolve: (v: unknown) => void = () => {};
     pxe.retryDevice.mockReturnValue(new Promise((r) => (resolve = r)));
     const { result } = renderHook(() => usePXEDeviceActions());
@@ -108,11 +108,71 @@ describe("usePXEDeviceActions", () => {
     act(() => {
       call = result.current.retry(device);
     });
-    await waitFor(() => expect(result.current.pendingId).toBe("dev-1"));
+    await waitFor(() => expect(result.current.isPending("dev-1")).toBe(true));
     await act(async () => {
       resolve({ data: {} });
       await call;
     });
-    await waitFor(() => expect(result.current.pendingId).toBeNull());
+    await waitFor(() => expect(result.current.isPending("dev-1")).toBe(false));
+  });
+
+  // #2166 Codex: a completion on one device must not re-enable another
+  // device's controls while its own request is still running.
+  it("keeps each device pending until its own request finishes", async () => {
+    const deviceB = { id: "dev-2", macAddress: "00:11:22:33:44:66", state: "FAILED" } as PXEDeviceInfo;
+    const a = deferred();
+    const b = deferred();
+    pxe.retryDevice.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
+    const { result } = renderHook(() => usePXEDeviceActions());
+    let callA: Promise<boolean> = Promise.resolve(false);
+    let callB: Promise<boolean> = Promise.resolve(false);
+    act(() => {
+      callA = result.current.retry(device);
+      callB = result.current.retry(deviceB);
+    });
+    expect(result.current.isPending("dev-1")).toBe(true);
+    expect(result.current.isPending("dev-2")).toBe(true);
+    await act(async () => {
+      b.resolve({ data: {} });
+      await callB;
+    });
+    expect(result.current.isPending("dev-2")).toBe(false);
+    expect(result.current.isPending("dev-1")).toBe(true);
+    await act(async () => {
+      a.resolve({ data: {} });
+      await callA;
+    });
+    expect(result.current.isPending("dev-1")).toBe(false);
+  });
+
+  it("the same device stays pending while a second action on it is outstanding", async () => {
+    const first = deferred();
+    const second = deferred();
+    pxe.retryDevice.mockReturnValueOnce(first.promise);
+    pxe.removeDevice.mockReturnValueOnce(second.promise);
+    const { result } = renderHook(() => usePXEDeviceActions());
+    let callRetry: Promise<boolean> = Promise.resolve(false);
+    let callRemove: Promise<boolean> = Promise.resolve(false);
+    act(() => {
+      callRetry = result.current.retry(device);
+      callRemove = result.current.remove(device);
+    });
+    expect(result.current.isPending("dev-1")).toBe(true);
+    await act(async () => {
+      first.resolve({ data: {} });
+      await callRetry;
+    });
+    expect(result.current.isPending("dev-1")).toBe(true);
+    await act(async () => {
+      second.resolve({ data: {} });
+      await callRemove;
+    });
+    expect(result.current.isPending("dev-1")).toBe(false);
   });
 });
+
+function deferred(): { promise: Promise<unknown>; resolve: (v: unknown) => void } {
+  let resolve: (v: unknown) => void = () => {};
+  const promise = new Promise((r) => (resolve = r));
+  return { promise, resolve };
+}
