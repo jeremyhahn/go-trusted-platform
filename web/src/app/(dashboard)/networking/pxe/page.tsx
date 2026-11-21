@@ -406,7 +406,7 @@ export default function PXEBootPage() {
             <Button variant="outline" onClick={closeAction}>Cancel</Button>
             <Button
               variant={pending?.kind === 'remove' ? 'destructive' : 'default'}
-              disabled={!actionReady || (pending !== null && actions.pendingId === pending.device.id)}
+              disabled={!actionReady || (pending !== null && actions.isPending(pending.device.id))}
               onClick={confirmAction}
             >
               {pending?.kind === 'authorize'
@@ -642,7 +642,7 @@ export default function PXEBootPage() {
                             size="sm"
                             variant="outline"
                             aria-label={`Authorize ${device.macAddress}`}
-                            disabled={actions.pendingId === device.id}
+                            disabled={actions.isPending(device.id)}
                             onClick={() => {
                               setActionValue(device.targetVlan ? String(device.targetVlan) : '');
                               setPending({ kind: 'authorize', device });
@@ -654,7 +654,7 @@ export default function PXEBootPage() {
                             size="sm"
                             variant="outline"
                             aria-label={`Quarantine ${device.macAddress}`}
-                            disabled={actions.pendingId === device.id}
+                            disabled={actions.isPending(device.id)}
                             onClick={() => {
                               setActionValue('');
                               setPending({ kind: 'quarantine', device });
@@ -666,7 +666,7 @@ export default function PXEBootPage() {
                             size="sm"
                             variant="outline"
                             aria-label={`Retry ${device.macAddress}`}
-                            disabled={actions.pendingId === device.id}
+                            disabled={actions.isPending(device.id)}
                             onClick={() => {
                               void actions.retry(device);
                             }}
@@ -677,7 +677,7 @@ export default function PXEBootPage() {
                             size="sm"
                             variant="destructive"
                             aria-label={`Remove ${device.macAddress}`}
-                            disabled={actions.pendingId === device.id}
+                            disabled={actions.isPending(device.id)}
                             onClick={() => {
                               setActionValue('');
                               setPending({ kind: 'remove', device });

@@ -15,14 +15,18 @@ export interface UsePXEDeviceActionsResult {
   quarantine(device: PXEDeviceInfo, reason: string): Promise<boolean>;
   retry(device: PXEDeviceInfo): Promise<boolean>;
   remove(device: PXEDeviceInfo): Promise<boolean>;
-  /** The id of the device whose action is in flight, or null. */
-  pendingId: string | null;
+  /** Whether the device with this id has an action in flight. */
+  isPending(id: string): boolean;
 }
 
 export function usePXEDeviceActions(onChanged?: () => void): UsePXEDeviceActionsResult {
   const pxe = usePXE();
   const { toast } = useToast();
-  const [pendingId, setPendingId] = React.useState<string | null>(null);
+  // Pending is tracked per device, as a count of in-flight requests, so one
+  // completion never re-enables another device's controls (#2166 Codex).
+  const [pending, setPending] = React.useState<ReadonlyMap<string, number>>(new Map());
+
+  const isPending = React.useCallback((id: string) => (pending.get(id) ?? 0) > 0, [pending]);
 
   const run = React.useCallback(
     async (
@@ -31,7 +35,11 @@ export function usePXEDeviceActions(onChanged?: () => void): UsePXEDeviceActions
       ok: string,
       fail: string,
     ): Promise<boolean> => {
-      setPendingId(device.id);
+      setPending((prev) => {
+        const next = new Map(prev);
+        next.set(device.id, (prev.get(device.id) ?? 0) + 1);
+        return next;
+      });
       try {
         const res = await call();
         if (res && res.error) {
@@ -48,7 +56,16 @@ export function usePXEDeviceActions(onChanged?: () => void): UsePXEDeviceActions
         });
         return false;
       } finally {
-        setPendingId(null);
+        setPending((prev) => {
+          const next = new Map(prev);
+          const count = (prev.get(device.id) ?? 0) - 1;
+          if (count > 0) {
+            next.set(device.id, count);
+          } else {
+            next.delete(device.id);
+          }
+          return next;
+        });
       }
     },
     [toast, onChanged],
@@ -88,5 +105,5 @@ export function usePXEDeviceActions(onChanged?: () => void): UsePXEDeviceActions
     [pxe, run],
   );
 
-  return { authorize, quarantine, retry, remove, pendingId };
+  return { authorize, quarantine, retry, remove, isPending };
 }
