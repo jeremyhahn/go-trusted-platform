@@ -159,6 +159,16 @@ func (s *CAGRPCService) GetCAInfo(ctx context.Context, req *platformv1.GetCAInfo
 
 	now := timestamppb.Now()
 
+	return &platformv1.GetCAInfoResponse{
+		CaInfo:    s.caInfoOf(ca),
+		Timestamp: now,
+	}, nil
+}
+
+// caInfoOf converts a CA into the CAInfo message GetCAInfo and InitCA
+// answer: identity, default algorithm and validity, root and intermediate
+// summaries.
+func (s *CAGRPCService) caInfoOf(ca quicbaasca.CACertificateAuthority) *platformv1.CAInfo {
 	caInfo := &platformv1.CAInfo{
 		IsInitialized: ca.IsInitialized(),
 	}
@@ -182,10 +192,7 @@ func (s *CAGRPCService) GetCAInfo(ctx context.Context, req *platformv1.GetCAInfo
 		}
 	}
 
-	return &platformv1.GetCAInfoResponse{
-		CaInfo:    caInfo,
-		Timestamp: now,
-	}, nil
+	return caInfo
 }
 
 // IssueCertificate issues a new certificate.

@@ -109,10 +109,7 @@ func (s *CAGRPCService) InitCA(ctx context.Context, req *platformv1.InitCAReques
 			Success: true,
 			Message: "CA initialised; the gRPC and REST CA services serve it now; restart platformd to serve it over QUIC",
 		},
-		CaInfo: &platformv1.CAInfo{
-			IsInitialized: true,
-			CommonName:    ca.Identity(),
-		},
+		CaInfo:    s.caInfoOf(ca),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }

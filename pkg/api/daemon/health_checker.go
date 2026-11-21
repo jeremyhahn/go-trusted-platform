@@ -148,8 +148,12 @@ func (c *CAServiceHealthChecker) Check(ctx context.Context) health.ComponentHeal
 		return componentHealth
 	}
 
+	// Read the shared CA holder once, so a runtime InitCA is monitored and
+	// the whole check sees one CA.
+	ca := c.service.authority()
+
 	// Check if CA is configured
-	if c.service.ca == nil {
+	if ca == nil {
 		componentHealth.Status = health.StatusUnhealthy
 		componentHealth.Message = "Certificate Authority not initialized"
 		componentHealth.Details["ca_initialized"] = false
@@ -160,7 +164,7 @@ func (c *CAServiceHealthChecker) Check(ctx context.Context) health.ComponentHeal
 	componentHealth.Details["ca_initialized"] = true
 
 	// Check if CA is initialized (has root cert, etc.)
-	isInitialized := c.service.ca.IsInitialized()
+	isInitialized := ca.IsInitialized()
 	componentHealth.Details["is_initialized"] = isInitialized
 
 	if !isInitialized {
@@ -171,10 +175,10 @@ func (c *CAServiceHealthChecker) Check(ctx context.Context) health.ComponentHeal
 	}
 
 	// Get CA identity
-	componentHealth.Details["identity"] = c.service.ca.Identity()
+	componentHealth.Details["identity"] = ca.Identity()
 
 	// Check root certificate validity
-	rootCert, err := c.service.ca.TrustedRoot()
+	rootCert, err := ca.TrustedRoot()
 	if err != nil {
 		componentHealth.Status = health.StatusDegraded
 		componentHealth.Message = "Failed to get trusted root certificate"
@@ -215,7 +219,7 @@ func (c *CAServiceHealthChecker) Check(ctx context.Context) health.ComponentHeal
 	}
 
 	// Check intermediate certificate if available
-	intermediateCert, err := c.service.ca.TrustedIntermediate()
+	intermediateCert, err := ca.TrustedIntermediate()
 	if err == nil && intermediateCert != nil {
 		now := time.Now()
 		componentHealth.Details["intermediate_cn"] = intermediateCert.Subject.CommonName
