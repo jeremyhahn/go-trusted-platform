@@ -27,8 +27,10 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -266,4 +268,37 @@ func TestCALifecycle_RequiresTheAdminScope(t *testing.T) {
 	assert.Equal(t, "ca:create", grpcapi.ScopeForMethod("/platform.v1.CAService/InitCA"))
 	assert.Equal(t, "trust:write", grpcapi.ScopeForMethod("/platform.v1.CAService/InstallCACertificates"))
 	assert.Equal(t, "trust:write", grpcapi.ScopeForMethod("/platform.v1.CAService/UninstallCACertificates"))
+}
+
+// A daemon with no CA loaded and no CA configuration has nothing InitCA can
+// bring up, so it must not report CA readiness: an empty-holder checker would
+// keep /health/ready at 503 for good.
+func TestRegisterHealthCheckers_NoCAConfiguredOmitsCAChecker(t *testing.T) {
+	d, err := New(testConfig("/tmp/test-reg-health-no-ca.sock"))
+	require.NoError(t, err)
+
+	d.healthRegistry = health.NewRegistry()
+	d.caService = NewCAGRPCService(nil, nil, nil).
+		WithCAHolder(NewCAHolder(nil)).
+		WithCAInitializer(AppCAInitializer(&app.App{}))
+
+	d.registerHealthCheckers()
+
+	assert.NotContains(t, d.healthRegistry.List(), "ca")
+}
+
+// A daemon with a CA configuration can bring its CA up through InitCA, so the
+// CA readiness check stays registered and follows the holder.
+func TestRegisterHealthCheckers_ConfiguredCAKeepsCAChecker(t *testing.T) {
+	d, err := New(testConfig("/tmp/test-reg-health-cfg-ca.sock"))
+	require.NoError(t, err)
+
+	d.healthRegistry = health.NewRegistry()
+	d.caService = NewCAGRPCService(nil, nil, nil).
+		WithCAHolder(NewCAHolder(nil)).
+		WithCAInitializer(AppCAInitializer(&app.App{CAConfig: &trustedca.CAConfig{}}))
+
+	d.registerHealthCheckers()
+
+	assert.Contains(t, d.healthRegistry.List(), "ca")
 }

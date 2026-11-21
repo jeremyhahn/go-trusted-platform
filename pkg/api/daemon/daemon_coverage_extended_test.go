@@ -22,6 +22,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -385,9 +387,7 @@ func TestRegisterHealthCheckersExtended_WithCAService(t *testing.T) {
 	require.NoError(t, err)
 
 	d.healthRegistry = health.NewRegistry()
-	d.caService = &CAGRPCService{
-		logger: logging.DefaultLogger(),
-	}
+	d.caService = &CAGRPCService{logger: logging.DefaultLogger(), initCA: func(context.Context) (quicbaasca.CACertificateAuthority, error) { return nil, nil }}
 
 	d.registerHealthCheckers()
 
@@ -448,7 +448,7 @@ func TestRegisterHealthCheckersExtended_WithAllServers(t *testing.T) {
 	d, err := New(config)
 	require.NoError(t, err)
 
-	d.caService = &CAGRPCService{logger: logging.DefaultLogger()}
+	d.caService = &CAGRPCService{logger: logging.DefaultLogger(), initCA: func(context.Context) (quicbaasca.CACertificateAuthority, error) { return nil, nil }}
 	d.healthRegistry = health.NewRegistry()
 
 	d.registerHealthCheckers()

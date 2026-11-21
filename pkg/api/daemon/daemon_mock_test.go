@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
@@ -541,7 +542,7 @@ func TestRegisterHealthCheckersMock_WithCAService(t *testing.T) {
 	}
 
 	// Set a mock CA service
-	d.caService = &CAGRPCService{}
+	d.caService = &CAGRPCService{logger: logging.DefaultLogger(), initCA: func(context.Context) (quicbaasca.CACertificateAuthority, error) { return nil, nil }}
 
 	// Re-register health checkers
 	d.registerHealthCheckers()
@@ -565,7 +566,7 @@ func TestRegisterHealthCheckersMock_WithAllServices(t *testing.T) {
 	}
 
 	// Manually set some services for testing
-	d.caService = &CAGRPCService{}
+	d.caService = &CAGRPCService{logger: logging.DefaultLogger(), initCA: func(context.Context) (quicbaasca.CACertificateAuthority, error) { return nil, nil }}
 	d.sdnService = &SDNService{}
 	d.kmsService = &KMSService{}
 	d.iamService = &IAMService{}
@@ -596,7 +597,7 @@ func TestRegisterHealthCheckersMock_VerifyLogOnFailure(t *testing.T) {
 	}
 
 	// Set services
-	d.caService = &CAGRPCService{}
+	d.caService = &CAGRPCService{logger: logging.DefaultLogger(), initCA: func(context.Context) (quicbaasca.CACertificateAuthority, error) { return nil, nil }}
 
 	// Re-register should log warnings but not panic
 	d.registerHealthCheckers()
