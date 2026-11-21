@@ -2,8 +2,9 @@
 
 /**
  * SDNPortAuthCard authenticates a switch port with a certificate
- * (AuthenticatePort) on `POST /api/v1/sdn/bridges/{name}/ports/{port}/auth`
- * through useSDNPortAuth, which calls the SDK SDNService.
+ * (AuthenticatePort) and revokes it (RevokePortAuth) on
+ * `POST|DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth` through
+ * useSDNPortAuth, which calls the SDK SDNService. Revoking asks first.
  *
  * The switch may refuse with 409 while port authentication is not enforced;
  * the card shows that refusal verbatim and never claims the port is
@@ -14,6 +15,14 @@ import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
@@ -38,7 +47,8 @@ function errorMessage(err: unknown): string {
 
 export function SDNPortAuthCard({ bridgeId, portId }: SDNPortAuthCardProps) {
   const { toast } = useToast();
-  const { authenticatePEM, authenticateDER } = useSDNPortAuth(bridgeId, portId);
+  const { authenticatePEM, authenticateDER, revoke } = useSDNPortAuth(bridgeId, portId);
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
   const [format, setFormat] = useState<CertificateInputFormat>('PEM');
   const [certificate, setCertificate] = useState('');
   const [auth, setAuth] = useState<PortAuth | null>(null);
@@ -85,6 +95,25 @@ export function SDNPortAuthCard({ bridgeId, portId }: SDNPortAuthCardProps) {
       }
     } catch (err) {
       refuse('Authenticate failed', errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onRevoke = async () => {
+    setConfirmRevoke(false);
+    setBusy(true);
+    try {
+      const response = await revoke();
+      if (!response.success) {
+        refuse('Revoke failed', response.error?.message || 'the switch did not answer');
+        return;
+      }
+      setAuth({ authenticated: false });
+      setRefusal(null);
+      toast({ title: 'Port authentication revoked', description: `Port ${portId}`, variant: 'success' });
+    } catch (err) {
+      refuse('Revoke failed', errorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -142,7 +171,28 @@ export function SDNPortAuthCard({ bridgeId, portId }: SDNPortAuthCardProps) {
           <Button onClick={onAuthenticate} disabled={busy || certificate.trim() === ''}>
             Authenticate
           </Button>
+          <Button variant="destructive" onClick={() => setConfirmRevoke(true)} disabled={busy}>
+            Revoke
+          </Button>
         </div>
+        <Dialog open={confirmRevoke} onOpenChange={setConfirmRevoke}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Revoke port authentication?</DialogTitle>
+              <DialogDescription>
+                Port {portId} on bridge {bridgeId} loses its authentication and the VLANs it authorized.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setConfirmRevoke(false)}>
+                Cancel
+              </Button>
+              <Button variant="destructive" onClick={onRevoke}>
+                Revoke
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </CardContent>
     </Card>
   );
