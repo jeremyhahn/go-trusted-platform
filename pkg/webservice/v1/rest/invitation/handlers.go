@@ -184,6 +184,9 @@ func (h *Handlers) DeleteInvitation(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !h.invitationInCallerTenant(w, r, id) {
+		return
+	}
 	resp, err := h.server.DeleteInvitation(r.Context(), &platformv1.DeleteInvitationRequest{InvitationId: id})
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
@@ -199,6 +202,9 @@ func (h *Handlers) RevokeInvitation(w http.ResponseWriter, r *http.Request) {
 	}
 	id, ok := h.parseID(w, r)
 	if !ok {
+		return
+	}
+	if !h.invitationInCallerTenant(w, r, id) {
 		return
 	}
 	req := &platformv1.RevokeInvitationRequest{}
@@ -244,4 +250,34 @@ func (h *Handlers) AcceptInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// errInvitationOutsideTenant is the 403 cause when a session tenant names
+// another tenant's invitation.
+type errInvitationOutsideTenant struct{}
+
+func (errInvitationOutsideTenant) Error() string {
+	return "invitation: not in the caller's tenant"
+}
+
+// invitationInCallerTenant reports whether the caller may act on invitation
+// id. A session tenant acts only on its own tenant's invitations, as
+// GetInvitation's rule does (#2056): the invitation is loaded and a tenant
+// mismatch answers 403 before any revoke or delete. With no session tenant
+// the check is skipped. On false the response has been written.
+func (h *Handlers) invitationInCallerTenant(w http.ResponseWriter, r *http.Request, id uint64) bool {
+	tenantID := resolveTenantID(r)
+	if tenantID == "" {
+		return true
+	}
+	resp, err := h.server.GetInvitation(r.Context(), &platformv1.GetInvitationRequest{InvitationId: id})
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return false
+	}
+	if resp.GetInvitation().GetTenantId() != tenantID {
+		h.respWriter.Error403(w, r, errInvitationOutsideTenant{}, nil)
+		return false
+	}
+	return true
 }
