@@ -39,6 +39,10 @@ export function useGatewayVIPs(options: UseGatewayVIPsOptions = {}): UseGatewayV
   const isLoading = enabled && (inFlight || !loaded);
 
   const mounted = React.useRef(true);
+  // A newer refetch supersedes an older one; a stale completion writes
+  // nothing, so an older slower read cannot restore removed VIPs, stale
+  // health or clear loading while the newest read is pending (#2163 Codex).
+  const generation = React.useRef(0);
   React.useEffect(() => {
     mounted.current = true;
     return () => {
@@ -50,11 +54,13 @@ export function useGatewayVIPs(options: UseGatewayVIPsOptions = {}): UseGatewayV
     if (!enabled) {
       return;
     }
+    const gen = ++generation.current;
+    const isCurrent = () => mounted.current && gen === generation.current;
     setInFlight(true);
     setError(null);
     try {
       const [list, status] = await Promise.all([gateway.listVIPs(), gateway.getLBStatus()]);
-      if (!mounted.current) {
+      if (!isCurrent()) {
         return;
       }
       let firstError: string | null = null;
@@ -72,11 +78,11 @@ export function useGatewayVIPs(options: UseGatewayVIPsOptions = {}): UseGatewayV
       }
       setError(firstError);
     } catch (e: unknown) {
-      if (mounted.current) {
+      if (isCurrent()) {
         setError(e instanceof Error ? e.message : String(e));
       }
     } finally {
-      if (mounted.current) {
+      if (isCurrent()) {
         setInFlight(false);
         setLoaded(true);
       }
