@@ -133,6 +133,15 @@ func handlerName(h any) (string, bool) {
 	return strings.TrimSuffix(short, "-fm"), true
 }
 
+// getAsksForCollection reports whether a Get rpc names the collection its
+// List handler serves: GetKeyVersions on ListKeyVersions asks for the
+// collection by name, so the List handler is its route. A singular Get
+// (GetDevice on ListDevices) does not share the noun and still fails.
+func getAsksForCollection(method, handler string) bool {
+	noun := strings.TrimPrefix(method, "Get")
+	return noun != "" && noun == strings.TrimPrefix(handler, "List")
+}
+
 // builtHandlers maps "METHOD /normalised/path" to the handler's short name for
 // every route whose handler identity survived registration.
 func builtHandlers(t *testing.T) (resolved map[string]string, wrapped []string) {
@@ -197,6 +206,9 @@ func TestSDKRouteClaims_NoGetResolvesToList(t *testing.T) {
 		}
 		method := claim.GRPCMethod[strings.LastIndex(claim.GRPCMethod, "/")+1:]
 		if !strings.HasPrefix(method, "Get") || !strings.HasPrefix(handler, "List") {
+			continue
+		}
+		if getAsksForCollection(method, handler) {
 			continue
 		}
 		if _, known := getListDefects[claim.GRPCMethod]; known {
