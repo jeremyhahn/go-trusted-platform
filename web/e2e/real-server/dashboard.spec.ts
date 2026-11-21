@@ -33,6 +33,22 @@ async function json<T>(r: Response): Promise<T> {
   return unwrapPayload<T>(await r.json());
 }
 
+/** A protojson double: a JSON number, or a string for NaN and the infinities. */
+type WirePercent = number | string;
+
+/**
+ * The percentage the dashboard shows for a protojson double: an omitted
+ * field is 0 (the page's `?? 0`), and a non-finite value fails the test.
+ */
+function wirePercent(v: WirePercent | undefined): number {
+  if (v === undefined) return 0;
+  const n = typeof v === 'number' ? v : Number(v);
+  if (!Number.isFinite(n)) {
+    throw new Error(`percentage ${JSON.stringify(v)} is not a finite number`);
+  }
+  return n;
+}
+
 const headerAvatar = (page: Page) =>
   page.locator('header button').filter({ has: page.locator('[class*="rounded-full"]') });
 
@@ -195,11 +211,26 @@ test.describe('Dashboard Overview', () => {
   test('system health shows the metrics the server returns', async ({ adminPage }) => {
     const metricsRes = apiResponse(adminPage, /\/api\/v1\/platform\/metrics$/);
     await adminPage.goto('/dashboard');
-    await json<{ metrics: unknown }>(await metricsRes);
+    const { metrics } = await json<{
+      metrics?: { cpuUsagePercent?: WirePercent; memoryUsagePercent?: WirePercent; diskUsagePercent?: WirePercent };
+    }>(await metricsRes);
     await expect(adminPage.getByText('System Health')).toBeVisible();
-    await expect(adminPage.getByText('CPU Usage')).toBeVisible();
-    await expect(adminPage.getByText('Memory', { exact: true })).toBeVisible();
-    await expect(adminPage.getByText('Storage', { exact: true })).toBeVisible();
+    // The page reads each percentage with `?? 0` (protojson omits a zero
+    // double), shows it as toFixed(1) followed by %, and draws its bar at
+    // min(value, 100)% wide.
+    const gauges: Array<[string, WirePercent | undefined]> = [
+      ['CPU Usage', metrics?.cpuUsagePercent],
+      ['Memory', metrics?.memoryUsagePercent],
+      ['Storage', metrics?.diskUsagePercent],
+    ];
+    for (const [label, wire] of gauges) {
+      const value = wirePercent(wire);
+      const gauge = adminPage.getByText(label, { exact: true }).locator('xpath=../..');
+      await expect(gauge.locator('span.text-xs')).toHaveText(`${value.toFixed(1)}%`);
+      const width = await gauge.locator('div.h-2 > div').evaluate((el) => (el as HTMLElement).style.width);
+      expect(width.endsWith('%'), `${label} bar width ${width}`).toBeTruthy();
+      expect(parseFloat(width), `${label} bar width`).toBeCloseTo(Math.min(value, 100), 3);
+    }
   });
 
   test('refresh asks the server again', async ({ adminPage }) => {
