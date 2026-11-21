@@ -217,10 +217,20 @@ export default function DeviceProfilesPage() {
     }
   );
 
+  // The registered total, from GET /device/profiles/count (#2048). The list
+  // above loads one server page; the count tells the operator when it is cut
+  // off. A refused count hides the line; the list still renders.
+  const { data: countResponse, refetch: refetchCount } = useApi(
+    () => deviceService.countProfiles(),
+    []
+  );
+  const registeredTotal = countResponse?.count;
+
   const profiles: DeviceProfile[] = useMemo(() => {
     if (!profilesData?.profiles) return [];
     return profilesData.profiles;
   }, [profilesData]);
+  const loadedCount = profiles.length;
 
   // Filtered profiles
   const filteredProfiles = useMemo(() => {
@@ -262,6 +272,7 @@ export default function DeviceProfilesPage() {
           variant: 'success',
         });
         refetchProfiles();
+        refetchCount();
       },
       onError: (error) => {
         toast({
@@ -292,6 +303,7 @@ export default function DeviceProfilesPage() {
           variant: 'success',
         });
         refetchProfiles();
+        refetchCount();
         setIsCreateDialogOpen(false);
       },
       onError: (error) => {
@@ -393,7 +405,7 @@ export default function DeviceProfilesPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => refetchProfiles()} disabled={isLoading}>
+          <Button variant="outline" onClick={() => { refetchProfiles(); refetchCount(); }} disabled={isLoading}>
             <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
@@ -467,6 +479,15 @@ export default function DeviceProfilesPage() {
         </div>
       </div>
 
+      {registeredTotal !== undefined && (
+        <p data-testid="profile-count" className="text-sm text-muted-foreground">
+          Showing {filteredProfiles.length} of {registeredTotal} registered profiles
+          {registeredTotal > loadedCount && (
+            <> (only the first {loadedCount} are loaded)</>
+          )}
+        </p>
+      )}
+
       {/* Statistics Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card>
@@ -475,7 +496,7 @@ export default function DeviceProfilesPage() {
             <Layers className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{stats.total}</div>
+            <div className="text-2xl font-bold">{registeredTotal ?? stats.total}</div>
             <p className="text-xs text-muted-foreground">All device profiles</p>
           </CardContent>
         </Card>
