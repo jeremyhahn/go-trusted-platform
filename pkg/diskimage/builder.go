@@ -152,6 +152,14 @@ func Create(ctx context.Context, cfg *BuildConfig) (*Result, error) {
 	if err := resolved.validateManifestKey(); err != nil {
 		return nil, &StageError{Step: "configuration", Err: err}
 	}
+	// A Secure Boot build is the measured one, and docs/SPEC.md:57 needs its
+	// manifest registered: with no reference-values registrar it is refused
+	// here, before preflight, staging, removeManifest or assembly touch the
+	// output, so the earlier image and its manifest are left as they were.
+	// publishManifest's nil check stays as the backstop.
+	if resolved.ISO.SecureBoot && resolved.ReferenceValues == nil {
+		return nil, &StageError{Step: "configuration", Err: errNoRegistrar}
+	}
 	if !resolved.SkipPreflight {
 		if err := Preflight(ctx, resolved.Runner, resolved.ContainerRuntime, string(target.Architecture())); err != nil {
 			return nil, err

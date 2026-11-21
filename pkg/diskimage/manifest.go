@@ -155,10 +155,11 @@ type ReferenceValueRegistrar interface {
 
 // publishManifest writes the image's signed manifest beside it and registers
 // it through c.ReferenceValues. It reports whether the manifest was
-// registered; a registration failure is a MeasureError. With no registrar
-// (the pinned go-quicbaas SDK has no reference-values client until the bump
-// held to #1348) the measured build fails with a MeasureError before it signs
-// anything: docs/SPEC.md:57 requires every manifest registered.
+// registered; a registration failure is a MeasureError. docs/SPEC.md:57
+// requires every manifest registered, so Create refuses a measured build
+// with no registrar (the pinned go-quicbaas SDK has no reference-values
+// client until the bump held to #1348) at configuration, before assembly;
+// the nil check here is the backstop and fails before it signs anything.
 func (c *BuildConfig) publishManifest(ctx context.Context, image, sum string, target Target, banks []measure.Bank) (string, bool, error) {
 	if c.ReferenceValues == nil {
 		// docs/SPEC.md:57: every image's signed manifest is registered in the
@@ -181,7 +182,8 @@ func (c *BuildConfig) publishManifest(ctx context.Context, image, sum string, ta
 }
 
 // errNoRegistrar is why a measured build without a reference-values
-// registrar fails (until the go-quicbaas SDK bump, #1348, supplies one).
+// registrar is refused, by Create before assembly (until the go-quicbaas SDK
+// bump, #1348, supplies one).
 var errNoRegistrar = errors.New("no reference-values registrar: a measured build cannot register its manifest")
 
 // errNoCABundle: the platform CA client cannot return the CA bundle, so the

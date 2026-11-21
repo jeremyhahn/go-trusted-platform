@@ -432,10 +432,10 @@ func kmsClients(client *cli.LazyClient) pkgiso.KMSClientsFunc {
 // store the verifier reads, reached through the platform client. The pinned
 // go-quicbaas SDK (v0.12.0-alpha) carries no reference-values verb
 // (PutReferenceValues ships in v0.14.0-alpha, a bump held to #1348), so it
-// yields no registrar: a measured (Secure Boot) build then fails before it
-// signs its manifest, since docs/SPEC.md:57 requires every manifest
-// registered, until the SDK bump (#1348). A variable so the command's tests can
-// supply a registrar.
+// yields no registrar: since docs/SPEC.md:57 requires every manifest
+// registered, a measured (Secure Boot) build is refused before assembly,
+// the output left untouched, until the SDK bump (#1348). A variable so the
+// command's tests can supply a registrar.
 var referenceValues = func(_ *cli.LazyClient) pkgdiskimage.ReferenceValueRegistrar {
 	return nil
 }
