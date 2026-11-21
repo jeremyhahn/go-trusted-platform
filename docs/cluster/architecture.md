@@ -139,12 +139,17 @@ service. `Daemon.SetClusterService` sets the servicer for all of them; since
 reads the embedded go-quicbaas cluster (status, nodes, leader), while Join and
 Leave still answer Unavailable.
 
-**So today: the interfaces, the coordinator implementation, the state machine,
-the node registry, the transports and the CLI package all exist, and no shipped
-code path connects them to a consensus engine.** Every cluster call on every
-transport returns "unavailable" or "not configured". That is the honest state
-of this feature, it is recorded here rather than in a footnote, and
-[api.md](api.md) shows it per capability.
+**So today: serve and every embedded host set the servicer through
+`appbackends.WireSDKBackends`, over the Raft cluster the embedded go-quicbaas
+service runs.** Status, nodes and leader answer on every transport; Join and
+Leave answer Unavailable. Node health reads unknown: the pinned go-quicbaas
+`ClusterStatus` reports Raft membership and marks every member healthy, a
+stopped follower included, so every node State is "unknown", the healthy count
+is 0 and the cluster State is "unknown" with a leader ("degraded" without one,
+"uninitialized" with no members) until the SDK exposes liveness. The
+coordinator, state machine and node registry in this repo are still not
+connected to a consensus engine. [api.md](api.md) shows the state per
+capability.
 
 The daemon once registered a second, stubbed `ClusterGRPCService` of its own
 whose every RPC returned `Unimplemented`, while the complete one went

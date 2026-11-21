@@ -40,7 +40,9 @@ type ClusterSurface interface {
 var _ ClusterSurface = (quicbaasservice.QuicBaaS)(nil)
 
 // clusterBackend is the daemon.ClusterServicer over the Raft cluster the
-// embedded go-quicbaas server already runs in-process.
+// embedded go-quicbaas server already runs in-process. That server's
+// ClusterStatus reports Raft membership, not liveness, so node health is
+// reported as unknown until the SDK exposes liveness.
 type clusterBackend struct {
 	svc         ClusterSurface
 	nodeID      uint64
@@ -110,7 +112,12 @@ func clusterLeaderID(resp *quicbaasservice.ClusterStatusResponse) uint64 {
 	return 0
 }
 
-// Status reports the cluster state the embedded server sees.
+// Status reports the cluster state the embedded server sees. The embedded
+// go-quicbaas ClusterStatus reports Raft membership, not liveness: it marks
+// every configured member Healthy, a stopped follower included. So no member
+// is counted healthy (HealthyCount stays 0) and a cluster with a known leader
+// reads "unknown" until the SDK exposes liveness; "degraded" means no leader,
+// "uninitialized" no members.
 func (b *clusterBackend) Status(ctx context.Context) (*daemon.ClusterStatusInfo, error) {
 	resp, err := b.clusterStatus(ctx, "status")
 	if err != nil {
@@ -123,26 +130,25 @@ func (b *clusterBackend) Status(ctx context.Context) (*daemon.ClusterStatusInfo,
 		LastUpdated: time.Unix(0, resp.Timestamp),
 	}
 	for _, n := range resp.Nodes {
-		if n == nil {
-			continue
-		}
-		info.NodeCount++
-		if n.HealthStatus == quicbaasservice.HealthStatusHealthy {
-			info.HealthyCount++
+		if n != nil {
+			info.NodeCount++
 		}
 	}
 	switch {
 	case info.NodeCount == 0:
 		info.State = "uninitialized"
-	case leaderID != 0 && info.HealthyCount == info.NodeCount:
-		info.State = "running"
-	default:
+	case leaderID == 0:
 		info.State = "degraded"
+	default:
+		info.State = "unknown"
 	}
 	return info, nil
 }
 
 // Nodes lists the cluster members sorted by ID, with the leader marked.
+// Every node State is "unknown": the embedded go-quicbaas ClusterStatus
+// reports Raft membership, not liveness, so its HealthStatus is not a
+// measured verdict until the SDK exposes liveness.
 func (b *clusterBackend) Nodes(ctx context.Context) (*daemon.ClusterNodesInfo, error) {
 	resp, err := b.clusterStatus(ctx, "nodes")
 	if err != nil {
@@ -154,16 +160,12 @@ func (b *clusterBackend) Nodes(ctx context.Context) (*daemon.ClusterNodesInfo, e
 		if n == nil {
 			continue
 		}
-		state := "unhealthy"
-		if n.HealthStatus == quicbaasservice.HealthStatusHealthy {
-			state = "healthy"
-		}
 		nodes = append(nodes, daemon.ClusterNodeInfo{
 			ID:          n.NodeID,
 			Address:     n.Address,
 			RaftAddress: n.Address,
 			IsLeader:    leaderID != 0 && n.NodeID == leaderID,
-			State:       state,
+			State:       "unknown",
 		})
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })

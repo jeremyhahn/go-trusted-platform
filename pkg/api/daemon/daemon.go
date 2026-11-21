@@ -973,9 +973,12 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Register the Cluster gRPC service on the TCP listener and the Unix
 	// socket. It is the pkg/api/grpc implementation over the daemon's
 	// ClusterServicer — the same servicer the MCP cluster tools use, set
-	// through Daemon.SetClusterService. Until one is set every RPC returns
-	// Unavailable. That is true on every build, with or without -tags
-	// cluster, until #336 lands.
+	// through Daemon.SetClusterService. serve and every embedded host set
+	// that servicer through appbackends.WireSDKBackends, over the Raft
+	// cluster the embedded go-quicbaas service runs: status, nodes and
+	// leader answer, Join and Leave answer Unavailable, and node health
+	// reads unknown (the SDK reports membership, not liveness). Until a
+	// servicer is set every RPC returns Unavailable.
 	clusterGRPCService, clusterBackend := registerClusterGRPCService(logger, grpcServer, grpcUDSServer)
 	logger.Info("Cluster gRPC service registered")
 
