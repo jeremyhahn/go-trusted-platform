@@ -312,13 +312,13 @@ export default function VPNPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           {statusError ? (
-            <p className="text-sm text-muted-foreground">
+            <p className="text-sm text-muted-foreground" data-testid="vpn-status-error">
               Session status is unavailable: {statusError.message}
             </p>
           ) : gateways.length === 0 ? (
             <p className="text-sm text-muted-foreground">No gateway has reported yet.</p>
           ) : (
-            <Table>
+            <Table data-testid="vpn-gateways-table">
               <TableHeader>
                 <TableRow>
                   <TableHead>Gateway</TableHead>
