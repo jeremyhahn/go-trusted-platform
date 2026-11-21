@@ -16,6 +16,7 @@ package pxe
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -46,7 +47,15 @@ type Service interface {
 
 	// State Transitions
 	UpdateDeviceState(ctx context.Context, deviceID string, state ProvisioningState, reason string) error
+
+	// UpdateDeviceStateForIDevID is UpdateDeviceState for a change the
+	// device reported: it compares fingerprint with the recorded IDevID
+	// fingerprint under the same device lock as the transition.
+	UpdateDeviceStateForIDevID(ctx context.Context, deviceID, fingerprint string, state ProvisioningState, reason string) error
 	SetDeviceEnrolled(ctx context.Context, deviceID, certSerial string) error
+	// RecordIDevIDFingerprint stores the device's IDevID fingerprint at
+	// enrolment, before install completion (ruling 673).
+	RecordIDevIDFingerprint(ctx context.Context, deviceID, fingerprint string) error
 	AuthorizeDevice(ctx context.Context, deviceID string, targetVLAN uint16) error
 	QuarantineDevice(ctx context.Context, deviceID string, reason string) error
 	RetryDevice(ctx context.Context, deviceID string) error
@@ -82,6 +91,64 @@ type service struct {
 	// calls cannot both run a server.
 	lifecycle sync.Mutex
 	mu        sync.RWMutex
+
+	// ops is held for reading by every device operation for its whole
+	// call, and for writing by Close, so Close waits for the calls in
+	// flight before it clears config.
+	ops sync.RWMutex
+
+	// devLocks holds one lock per device (keyed by the device ID, which
+	// is derived from the MAC address), guarded by mu. Every lifecycle
+	// method holds its device's lock for the whole state check, flow
+	// change and state/VLAN commit, so two transitions of one device
+	// cannot interleave and leave its port flows and recorded state
+	// disagreeing.
+	devLocks map[string]*deviceLock
+}
+
+// deviceLock is a device's lifecycle lock; refs counts the holders and
+// waiters, so the entry is dropped when the last one releases it.
+type deviceLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lockDevice takes deviceID's lifecycle lock and returns its release.
+func (s *service) lockDevice(deviceID string) func() {
+	s.mu.Lock()
+	if s.devLocks == nil {
+		s.devLocks = make(map[string]*deviceLock)
+	}
+	l := s.devLocks[deviceID]
+	if l == nil {
+		l = &deviceLock{}
+		s.devLocks[deviceID] = l
+	}
+	l.refs++
+	s.mu.Unlock()
+
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		s.mu.Lock()
+		l.refs--
+		if l.refs == 0 {
+			delete(s.devLocks, deviceID)
+		}
+		s.mu.Unlock()
+	}
+}
+
+// beginOp enters a device operation. It reports false when the service
+// is not initialized; otherwise the caller must call s.ops.RUnlock when
+// the operation returns.
+func (s *service) beginOp() bool {
+	s.ops.RLock()
+	if !s.initialized.Load() {
+		s.ops.RUnlock()
+		return false
+	}
+	return true
 }
 
 // ipxeRun is one run of an iPXE server, from Start until it exits.
@@ -201,6 +268,11 @@ func (s *service) Start(ctx context.Context) error {
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
 
+	// A Close that ran while this Start waited for lifecycle has cleared
+	// the config: check again under the lock (#1896 Codex).
+	if !s.initialized.Load() {
+		return ErrServiceNotInitialized{}
+	}
 	if s.running.Load() {
 		return ErrServiceAlreadyRunning{}
 	}
@@ -301,7 +373,11 @@ func (s *service) watchIPXERun(run *ipxeRun) {
 func (s *service) Stop(ctx context.Context) error {
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
+	return s.stopLocked(ctx)
+}
 
+// stopLocked stops the running iPXE server. Callers hold s.lifecycle.
+func (s *service) stopLocked(ctx context.Context) error {
 	if !s.running.Load() {
 		return ErrServiceNotRunning{}
 	}
@@ -336,14 +412,22 @@ func (s *service) IsRunning() bool {
 
 // Close releases all resources held by the service.
 func (s *service) Close() error {
+	// Wait for the device operations in flight: they read s.config.
+	s.ops.Lock()
+	defer s.ops.Unlock()
+
+	// The running check, the stop and the teardown are one step under
+	// lifecycle, which Start holds until its server is running: a Start
+	// in flight finishes first and its run is stopped here, never cleared
+	// while it listens on (#1896 Codex).
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
 	if s.running.Load() {
-		if err := s.Stop(context.Background()); err != nil {
+		if err := s.stopLocked(context.Background()); err != nil {
 			return err
 		}
 	}
 
-	s.lifecycle.Lock()
-	defer s.lifecycle.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -359,9 +443,10 @@ func (s *service) Close() error {
 
 // RegisterDevice registers a new device for provisioning.
 func (s *service) RegisterDevice(ctx context.Context, macAddress, portID string) (*DeviceInfo, error) {
-	if !s.initialized.Load() {
+	if !s.beginOp() {
 		return nil, ErrServiceNotInitialized{}
 	}
+	defer s.ops.RUnlock()
 
 	mac, err := net.ParseMAC(macAddress)
 	if err != nil {
@@ -370,6 +455,9 @@ func (s *service) RegisterDevice(ctx context.Context, macAddress, portID string)
 			Reason:     err.Error(),
 		}
 	}
+
+	unlock := s.lockDevice(generateDeviceID(mac))
+	defer unlock()
 
 	existing, err := s.stateManager.GetByMAC(mac)
 	if err == nil && existing != nil {
@@ -410,21 +498,24 @@ func (s *service) RegisterDevice(ctx context.Context, macAddress, portID string)
 	}
 	device.Events = append(device.Events, event)
 
+	// Fail closed: the device is registered, and advertised on the
+	// quarantine VLAN, only once its port has been moved there.
+	if s.vlanManager != nil {
+		if vlanErr := s.vlanManager.ApplyQuarantineFlows(ctx, portID, mac); vlanErr != nil {
+			return nil, ErrVLANTransitionFailed{
+				DeviceID: deviceID,
+				ToVLAN:   s.config.QuarantineVLAN,
+				Reason:   "failed to apply quarantine VLAN; device not registered",
+				Cause:    vlanErr,
+			}
+		}
+	}
+
 	if err := s.stateManager.Register(device); err != nil {
 		return nil, ErrProvisioningFailed{
 			DeviceID: deviceID,
 			Reason:   "failed to register device",
 			Cause:    err,
-		}
-	}
-
-	if s.vlanManager != nil {
-		if vlanErr := s.vlanManager.ApplyQuarantineFlows(ctx, portID, mac); vlanErr != nil {
-			s.logger.Warn("Failed to apply quarantine VLAN",
-				"device_id", deviceID,
-				"port_id", portID,
-				"error", vlanErr.Error(),
-			)
 		}
 	}
 
@@ -440,9 +531,10 @@ func (s *service) RegisterDevice(ctx context.Context, macAddress, portID string)
 
 // GetDevice retrieves a device by its ID.
 func (s *service) GetDevice(ctx context.Context, deviceID string) (*DeviceInfo, error) {
-	if !s.initialized.Load() {
+	if !s.beginOp() {
 		return nil, ErrServiceNotInitialized{}
 	}
+	defer s.ops.RUnlock()
 
 	device, err := s.stateManager.Get(deviceID)
 	if err != nil {
@@ -454,9 +546,10 @@ func (s *service) GetDevice(ctx context.Context, deviceID string) (*DeviceInfo, 
 
 // GetDeviceByMAC retrieves a device by its MAC address.
 func (s *service) GetDeviceByMAC(ctx context.Context, mac string) (*DeviceInfo, error) {
-	if !s.initialized.Load() {
+	if !s.beginOp() {
 		return nil, ErrServiceNotInitialized{}
 	}
+	defer s.ops.RUnlock()
 
 	parsedMAC, err := net.ParseMAC(mac)
 	if err != nil {
@@ -476,18 +569,21 @@ func (s *service) GetDeviceByMAC(ctx context.Context, mac string) (*DeviceInfo, 
 
 // ListDevices returns all devices matching the provided filter.
 func (s *service) ListDevices(ctx context.Context, filter *DeviceFilter) ([]*DeviceInfo, error) {
-	if !s.initialized.Load() {
+	if !s.beginOp() {
 		return nil, ErrServiceNotInitialized{}
 	}
+	defer s.ops.RUnlock()
 
 	return s.stateManager.List(filter), nil
 }
 
 // RemoveDevice removes a device from the service.
 func (s *service) RemoveDevice(ctx context.Context, deviceID string) error {
-	if !s.initialized.Load() {
+	if !s.beginOp() {
 		return ErrServiceNotInitialized{}
 	}
+	defer s.ops.RUnlock()
+	defer s.lockDevice(deviceID)()
 
 	device, err := s.stateManager.Get(deviceID)
 	if err != nil {
@@ -512,10 +608,51 @@ func (s *service) RemoveDevice(ctx context.Context, deviceID string) error {
 
 // UpdateDeviceState transitions a device to a new state.
 func (s *service) UpdateDeviceState(ctx context.Context, deviceID string, state ProvisioningState, reason string) error {
-	if !s.initialized.Load() {
+	if !s.beginOp() {
 		return ErrServiceNotInitialized{}
 	}
+	defer s.ops.RUnlock()
+	defer s.lockDevice(deviceID)()
+	return s.updateDeviceStateLocked(ctx, deviceID, state, reason)
+}
 
+// UpdateDeviceStateForIDevID applies a device-reported state change only
+// when fingerprint is the IDevID fingerprint recorded for the device. The
+// comparison and the transition run under one device lock, so an
+// enrolment recording a new IDevID cannot land between them (#1896 Codex
+// r2). A missing or different fingerprint is ErrIDevIDMismatch.
+func (s *service) UpdateDeviceStateForIDevID(ctx context.Context, deviceID, fingerprint string, state ProvisioningState, reason string) error {
+	if !s.beginOp() {
+		return ErrServiceNotInitialized{}
+	}
+	defer s.ops.RUnlock()
+	defer s.lockDevice(deviceID)()
+
+	device, err := s.stateManager.Get(deviceID)
+	if err != nil {
+		return ErrDeviceNotFound{DeviceID: deviceID}
+	}
+	if device.IDevIDFingerprint == "" || fingerprint == "" ||
+		subtle.ConstantTimeCompare([]byte(device.IDevIDFingerprint), []byte(fingerprint)) != 1 {
+		return ErrIDevIDMismatch{DeviceID: deviceID}
+	}
+	return s.updateDeviceStateLocked(ctx, deviceID, state, reason)
+}
+
+// ErrIDevIDMismatch is returned when a device-reported change is
+// authenticated with an IDevID other than the one recorded for the device.
+type ErrIDevIDMismatch struct {
+	DeviceID string
+}
+
+// Error implements error.
+func (e ErrIDevIDMismatch) Error() string {
+	return "pxe: the authenticated IDevID is not the one recorded for device " + e.DeviceID
+}
+
+// updateDeviceStateLocked is UpdateDeviceState's body; the caller holds
+// the operation read lock and the device lock.
+func (s *service) updateDeviceStateLocked(ctx context.Context, deviceID string, state ProvisioningState, reason string) error {
 	if !state.IsValid() {
 		return ErrInvalidState{
 			DeviceID: deviceID,
@@ -538,12 +675,20 @@ func (s *service) UpdateDeviceState(ctx context.Context, deviceID string, state 
 		}
 	}
 
+	// Fail closed: a device whose VLAN move failed keeps its old state,
+	// so a device sent to failed or quarantined is never reported moved
+	// while it keeps its old network access.
 	if err := s.applyVLANForState(ctx, device, state); err != nil {
-		s.logger.Warn("Failed to apply VLAN for state transition",
+		s.logger.Warn("VLAN enforcement failed; state transition not committed",
 			"device_id", deviceID,
 			"state", state,
 			"error", err.Error(),
 		)
+		return ErrProvisioningFailed{
+			DeviceID: deviceID,
+			Reason:   "VLAN enforcement failed; transition not committed",
+			Cause:    err,
+		}
 	}
 
 	if err := s.stateManager.Transition(deviceID, state, reason); err != nil {
@@ -551,6 +696,22 @@ func (s *service) UpdateDeviceState(ctx context.Context, deviceID string, state 
 			DeviceID: deviceID,
 			Reason:   "failed to transition device state",
 			Cause:    err,
+		}
+	}
+
+	// Record the VLAN the move enforced, so GetDevice and a VLAN filter
+	// report the device where its port now is.
+	if vlan, ok := s.vlanForState(state); s.vlanManager != nil && ok {
+		updateErr := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
+			d.CurrentVLAN = vlan
+			return nil
+		})
+		if updateErr != nil {
+			return ErrProvisioningFailed{
+				DeviceID: deviceID,
+				Reason:   "failed to record current VLAN",
+				Cause:    updateErr,
+			}
 		}
 	}
 
@@ -566,9 +727,11 @@ func (s *service) UpdateDeviceState(ctx context.Context, deviceID string, state 
 
 // SetDeviceEnrolled marks a device as enrolled with the provided certificate serial.
 func (s *service) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial string) error {
-	if !s.initialized.Load() {
+	if !s.beginOp() {
 		return ErrServiceNotInitialized{}
 	}
+	defer s.ops.RUnlock()
+	defer s.lockDevice(deviceID)()
 
 	device, err := s.stateManager.Get(deviceID)
 	if err != nil {
@@ -612,11 +775,89 @@ func (s *service) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial st
 	return nil
 }
 
-// AuthorizeDevice authorizes a device for production network access.
-func (s *service) AuthorizeDevice(ctx context.Context, deviceID string, targetVLAN uint16) error {
-	if !s.initialized.Load() {
+// RecordIDevIDFingerprint stores the IDevID fingerprint (lower-case hex
+// SHA-256 of the IDevID certificate's DER) the device presented at
+// enrolment. Per ruling 70 and ruling 673, enrolment comes before install
+// completion: the fingerprint is accepted while the device is discovered,
+// booting or installing, and refused once the install is complete. It
+// makes no state transition. Re-recording the same fingerprint is a no-op.
+// A different fingerprint is a re-enrolment (for example a certificate
+// delivery that failed after the finalize hook): it replaces the recorded
+// one in every pre-completion state (discovered, booting, installing), and
+// is refused once the install is complete; RetryDevice starts a new
+// attempt and clears it.
+func (s *service) RecordIDevIDFingerprint(ctx context.Context, deviceID, fingerprint string) error {
+	if !s.beginOp() {
 		return ErrServiceNotInitialized{}
 	}
+	defer s.ops.RUnlock()
+	defer s.lockDevice(deviceID)()
+	if !isIDevIDFingerprint(fingerprint) {
+		return ErrInvalidConfiguration{
+			Field:  "idevid_fingerprint",
+			Reason: "must be 64 lower-case hex characters (SHA-256)",
+		}
+	}
+
+	device, err := s.stateManager.Get(deviceID)
+	if err != nil {
+		return ErrDeviceNotFound{DeviceID: deviceID}
+	}
+
+	updateErr := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
+		switch d.State {
+		case StateDiscovered, StateBooting, StateInstalling:
+		default:
+			return ErrInvalidStateTransition{
+				DeviceID:  deviceID,
+				FromState: string(d.State),
+				ToState:   string(d.State),
+				Reason:    "the IDevID fingerprint is recorded at enrolment, before install completion",
+			}
+		}
+		// The finalize hook records before the CA commits the certificate,
+		// so a storage or delivery failure there is followed by a
+		// re-enrolment that issues a different IDevID. Before install
+		// completion (discovered, booting or installing) the device has
+		// reported no certificate in use, so the later fingerprint
+		// replaces the earlier one in every one of those states; the
+		// install-complete webhook then accepts only the IDevID the device
+		// actually received, and past it the state check above refuses.
+		d.IDevIDFingerprint = fingerprint
+		return nil
+	})
+	if updateErr != nil {
+		return updateErr
+	}
+
+	s.logger.Info("Device IDevID fingerprint recorded",
+		"device_id", deviceID,
+		"mac_address", device.MACAddress.String(),
+		"idevid_fingerprint", fingerprint,
+	)
+	return nil
+}
+
+// isIDevIDFingerprint reports whether fp is a lower-case hex SHA-256 digest.
+func isIDevIDFingerprint(fp string) bool {
+	if len(fp) != 64 {
+		return false
+	}
+	for _, c := range fp {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// AuthorizeDevice authorizes a device for production network access.
+func (s *service) AuthorizeDevice(ctx context.Context, deviceID string, targetVLAN uint16) error {
+	if !s.beginOp() {
+		return ErrServiceNotInitialized{}
+	}
+	defer s.ops.RUnlock()
+	defer s.lockDevice(deviceID)()
 
 	if targetVLAN < MinVLANID || targetVLAN > MaxVLANID {
 		return ErrVLANTransitionFailed{
@@ -695,9 +936,11 @@ func (s *service) AuthorizeDevice(ctx context.Context, deviceID string, targetVL
 
 // QuarantineDevice moves a device to quarantine state.
 func (s *service) QuarantineDevice(ctx context.Context, deviceID string, reason string) error {
-	if !s.initialized.Load() {
+	if !s.beginOp() {
 		return ErrServiceNotInitialized{}
 	}
+	defer s.ops.RUnlock()
+	defer s.lockDevice(deviceID)()
 
 	device, err := s.stateManager.Get(deviceID)
 	if err != nil {
@@ -754,11 +997,15 @@ func (s *service) QuarantineDevice(ctx context.Context, deviceID string, reason 
 	return nil
 }
 
-// RetryDevice resets a device to discovered state for retry.
+// RetryDevice resets a device to discovered state for retry. A retry is a new
+// provisioning attempt, so it clears the IDevID fingerprint the previous
+// attempt recorded: the retried install enrols a new IDevID.
 func (s *service) RetryDevice(ctx context.Context, deviceID string) error {
-	if !s.initialized.Load() {
+	if !s.beginOp() {
 		return ErrServiceNotInitialized{}
 	}
+	defer s.ops.RUnlock()
+	defer s.lockDevice(deviceID)()
 
 	device, err := s.stateManager.Get(deviceID)
 	if err != nil {
@@ -784,6 +1031,7 @@ func (s *service) RetryDevice(ctx context.Context, deviceID string) error {
 
 	updateErr := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
 		d.RetryCount++
+		d.IDevIDFingerprint = ""
 		return nil
 	})
 	if updateErr != nil {
@@ -812,9 +1060,10 @@ func (s *service) RetryDevice(ctx context.Context, deviceID string) error {
 
 // GetEvents retrieves all events for a device.
 func (s *service) GetEvents(ctx context.Context, deviceID string) ([]*ProvisioningEvent, error) {
-	if !s.initialized.Load() {
+	if !s.beginOp() {
 		return nil, ErrServiceNotInitialized{}
 	}
+	defer s.ops.RUnlock()
 
 	device, err := s.stateManager.Get(deviceID)
 	if err != nil {
@@ -881,5 +1130,20 @@ func (s *service) applyVLANForState(ctx context.Context, device *DeviceInfo, sta
 
 	default:
 		return nil
+	}
+}
+
+// vlanForState returns the VLAN applyVLANForState moves a device's port to
+// for state, and false when the state moves no flows.
+func (s *service) vlanForState(state ProvisioningState) (uint16, bool) {
+	switch state {
+	case StateBooting, StateInstalling, StateInstallComplete, StateEnrolling, StateEnrolled, StateAuthorizing:
+		return s.config.ProvisioningVLAN, true
+
+	case StateQuarantined, StateFailed:
+		return s.config.QuarantineVLAN, true
+
+	default:
+		return 0, false
 	}
 }

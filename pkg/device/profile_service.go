@@ -407,7 +407,9 @@ func isNotFoundByIndex(err error) bool {
 }
 
 // FindConfigForDevice finds a profile for a device using resolution priority:
-// EK serial -> exact MAC -> prefix match rules.
+// EK serial -> exact MAC -> prefix match rules. ErrNoMatchingConfig means
+// no profile matched; a storage failure is never reported as one, it is
+// returned wrapped in a WrappedError.
 func (s *ProfileService) FindConfigForDevice(ctx context.Context, ekSerial, mac string) (*entities.DeviceProfile, error) {
 	if ekSerial == "" && mac == "" {
 		return nil, ErrDeviceIdentityRequired{}
@@ -415,7 +417,10 @@ func (s *ProfileService) FindConfigForDevice(ctx context.Context, ekSerial, mac 
 
 	profile, err := s.profileDAO.FindConfigForDevice(ctx, ekSerial, mac)
 	if err != nil {
-		return nil, ErrNoMatchingConfig{EKSerial: ekSerial, MAC: mac}
+		if isNotFoundByIndex(err) {
+			return nil, ErrNoMatchingConfig{EKSerial: ekSerial, MAC: mac}
+		}
+		return nil, &WrappedError{Msg: "failed to find a profile for the device", Err: err}
 	}
 
 	return profile, nil

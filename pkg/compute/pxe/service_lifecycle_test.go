@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -128,6 +129,54 @@ func TestService_StartOutlivesRequestContext(t *testing.T) {
 
 	require.NoError(t, svc.Stop(context.Background()))
 	<-run.exited
+}
+
+// TestService_Close_StopsStartInFlight: a Close that begins while a Start
+// is still to finish (here gated behind a device operation in flight)
+// must stop the run that Start leaves, not clear it while it listens on.
+// Daemon shutdown calls Close while StartService may be running (#1896
+// Codex).
+func TestService_Close_StopsStartInFlight(t *testing.T) {
+	port := lifecyclePort(t)
+	svc := lifecycleService(t, port)
+	s := svc.(*service)
+
+	// A device operation in flight holds ops: Close queues behind it.
+	require.True(t, s.beginOp())
+	closed := make(chan error, 1)
+	go func() { closed <- svc.Close() }()
+	require.Eventually(t, func() bool {
+		if s.ops.TryRLock() {
+			s.ops.RUnlock()
+			return false
+		}
+		return true // Close is waiting for ops
+	}, 5*time.Second, time.Millisecond)
+
+	// Start completes while Close waits.
+	require.NoError(t, svc.Start(context.Background()))
+	s.lifecycle.Lock()
+	run := s.ipxeRun
+	s.lifecycle.Unlock()
+	require.NotNil(t, run)
+
+	s.ops.RUnlock()
+	select {
+	case err := <-closed:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close did not return")
+	}
+
+	select {
+	case <-run.exited:
+	case <-time.After(5 * time.Second):
+		run.cancel()
+		t.Fatal("the iPXE server Start left running outlived Close")
+	}
+	require.False(t, svc.IsRunning())
+	var notInit ErrServiceNotInitialized
+	require.ErrorAs(t, svc.Start(context.Background()), &notInit)
 }
 
 // TestService_Start_ListenerBindFails requires Start to report a listener

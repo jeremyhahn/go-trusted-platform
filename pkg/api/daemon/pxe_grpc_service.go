@@ -15,6 +15,10 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
+	"errors"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -48,6 +52,34 @@ func (s *PXEGRPCService) SetPXEService(svc pxe.Service) {
 	s.pxeService = svc
 }
 
+// Close stops the PXE backend, when one is set, releasing its iPXE listener
+// and VLAN integration. The daemon calls it on Stop and ForceStop (#1694).
+func (s *PXEGRPCService) Close() error {
+	if s == nil || s.pxeService == nil {
+		return nil
+	}
+	return s.pxeService.Close()
+}
+
+// StopBackend stops the PXE backend's iPXE server, when it is running. It
+// frees the iPXE listener and keeps the backend initialized, so a Start
+// retry after a startup rollback serves PXE (#1694).
+func (s *PXEGRPCService) StopBackend(ctx context.Context) error {
+	if s == nil || s.pxeService == nil {
+		return nil
+	}
+	// Stop takes the backend's lifecycle lock, which an in-flight Start
+	// holds until its listeners are bound: calling it unconditionally
+	// waits for that Start and stops the run it leaves. An IsRunning
+	// pre-check would read false mid-Start and skip the stop.
+	err := s.pxeService.Stop(ctx)
+	var notRunning pxe.ErrServiceNotRunning
+	if errors.As(err, &notRunning) {
+		return nil
+	}
+	return err
+}
+
 // requireService returns the canonical not-configured error when this
 // node has no PXE backend. PXE is served by the GATEWAY role, so on a
 // control plane an absent backend is the expected topology, not an
@@ -63,6 +95,86 @@ func (s *PXEGRPCService) requireService() error {
 		return serviceNotConfigured("pxe", "PXE service is not configured on this node")
 	}
 	return nil
+}
+
+// RecordedIDevIDFingerprint answers the IDevID fingerprint recorded at
+// enrolment for the device with the given MAC: the binding the REST
+// install-completion webhook verifies its mTLS caller against (ruling 673).
+// It is a Go method for the REST router, not a proto RPC. A MAC with no
+// device answers codes.NotFound; a device with none recorded answers "".
+func (s *PXEGRPCService) RecordedIDevIDFingerprint(ctx context.Context, mac string) (string, error) {
+	if err := s.requireService(); err != nil {
+		return "", err
+	}
+	device, err := s.pxeService.GetDeviceByMAC(ctx, mac)
+	if err != nil {
+		var notFound pxe.ErrDeviceNotFound
+		if errors.As(err, &notFound) {
+			return "", status.Error(codes.NotFound, "device not found")
+		}
+		return "", s.mapPXEError(err, "get device for webhook identity")
+	}
+	return device.IDevIDFingerprint, nil
+}
+
+// RecordEnrolledIDevIDFingerprintForMAC records the SHA-256 of the issued
+// IDevID leaf on the PXE record of the device with the given MAC: the MAC the
+// operator bound to the device's verified EK in its profile, which resolves a
+// device enrolling across a router or over IPv6 (#1694). A MAC with no PXE
+// device answers codes.NotFound and records nothing; a device past Installing
+// answers codes.FailedPrecondition. A Go method, not a proto RPC.
+// Configured reports whether this service has a PXE backend.
+func (s *PXEGRPCService) Configured() bool {
+	return s != nil && s.pxeService != nil
+}
+
+func (s *PXEGRPCService) RecordEnrolledIDevIDFingerprintForMAC(ctx context.Context, mac string, leaf *x509.Certificate) error {
+	if err := s.requireService(); err != nil {
+		return err
+	}
+	if leaf == nil || len(leaf.Raw) == 0 {
+		return status.Error(codes.InvalidArgument, "no issued certificate")
+	}
+	device, err := s.pxeService.GetDeviceByMAC(ctx, mac)
+	if err != nil {
+		var notFound pxe.ErrDeviceNotFound
+		if errors.As(err, &notFound) {
+			return status.Errorf(codes.NotFound, "no PXE device for MAC %s", mac)
+		}
+		return s.mapPXEError(err, "get device for enrolled IDevID")
+	}
+	sum := sha256.Sum256(leaf.Raw)
+	if err := s.pxeService.RecordIDevIDFingerprint(ctx, device.ID, hex.EncodeToString(sum[:])); err != nil {
+		return s.mapPXEError(err, "record enrolled IDevID fingerprint")
+	}
+	return nil
+}
+
+// PXEInstallInProgressForMAC reports whether mac names a PXE device whose
+// install is still in progress: Discovered, Booting or Installing, the
+// states in which an enrolment records its IDevID. An unknown MAC is no
+// install. With no backend it answers SERVICE_NOT_CONFIGURED (#1694).
+func (s *PXEGRPCService) PXEInstallInProgressForMAC(ctx context.Context, mac string) (bool, error) {
+	if err := s.requireService(); err != nil {
+		return false, err
+	}
+	if mac == "" {
+		return false, nil
+	}
+	device, err := s.pxeService.GetDeviceByMAC(ctx, mac)
+	if err != nil {
+		var notFound pxe.ErrDeviceNotFound
+		if errors.As(err, &notFound) {
+			return false, nil
+		}
+		return false, s.mapPXEError(err, "get device for PXE install check")
+	}
+	switch device.State {
+	case pxe.StateDiscovered, pxe.StateBooting, pxe.StateInstalling:
+		return true, nil
+	default:
+		return false, nil
+	}
 }
 
 // =============================================================================
@@ -285,10 +397,16 @@ func (s *PXEGRPCService) Authorize(ctx context.Context, req *platformv1.Authoriz
 		return nil, status.Error(codes.InvalidArgument, "device ID is required")
 	}
 
-	targetVLAN := uint16(req.GetTargetVlan())
-	if targetVLAN == 0 {
+	// Validate the wire uint32 before narrowing: uint16(65556) would
+	// silently become VLAN 20.
+	rawVLAN := req.GetTargetVlan()
+	if rawVLAN == 0 {
 		return nil, status.Error(codes.InvalidArgument, "target VLAN is required")
 	}
+	if rawVLAN > 4094 {
+		return nil, status.Errorf(codes.InvalidArgument, "target VLAN %d out of range (1-4094)", rawVLAN)
+	}
+	targetVLAN := uint16(rawVLAN)
 
 	if err := s.pxeService.AuthorizeDevice(ctx, deviceID, targetVLAN); err != nil {
 		s.logger.Error(err, "Failed to authorize device", "device_id", deviceID, "target_vlan", targetVLAN)
@@ -478,6 +596,23 @@ func (s *PXEGRPCService) StopService(ctx context.Context, req *platformv1.StopPX
 
 // WebhookComplete handles the callback when OS installation completes.
 func (s *PXEGRPCService) WebhookComplete(ctx context.Context, req *platformv1.PXEWebhookCompleteRequest) (*platformv1.PXEWebhookCompleteResponse, error) {
+	return s.webhookComplete(ctx, req, "")
+}
+
+// WebhookCompleteForIDevID is WebhookComplete for a report authenticated
+// with an IDevID: the service compares fingerprint with the recorded one
+// under the device lock it transitions under (#1896 Codex r2). A mismatch
+// is PermissionDenied.
+func (s *PXEGRPCService) WebhookCompleteForIDevID(ctx context.Context, req *platformv1.PXEWebhookCompleteRequest, fingerprint string) (*platformv1.PXEWebhookCompleteResponse, error) {
+	if fingerprint == "" {
+		return nil, status.Error(codes.PermissionDenied, "no authenticated IDevID fingerprint")
+	}
+	return s.webhookComplete(ctx, req, fingerprint)
+}
+
+// webhookComplete applies an install report; a non-empty fingerprint is
+// compared with the recorded IDevID with the transition.
+func (s *PXEGRPCService) webhookComplete(ctx context.Context, req *platformv1.PXEWebhookCompleteRequest, fingerprint string) (*platformv1.PXEWebhookCompleteResponse, error) {
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
@@ -511,7 +646,17 @@ func (s *PXEGRPCService) WebhookComplete(ctx context.Context, req *platformv1.PX
 		}
 	}
 
-	if err := s.pxeService.UpdateDeviceState(ctx, device.ID, newState, reason); err != nil {
+	var updateErr error
+	if fingerprint != "" {
+		updateErr = s.pxeService.UpdateDeviceStateForIDevID(ctx, device.ID, fingerprint, newState, reason)
+	} else {
+		updateErr = s.pxeService.UpdateDeviceState(ctx, device.ID, newState, reason)
+	}
+	if err := updateErr; err != nil {
+		var mismatch pxe.ErrIDevIDMismatch
+		if errors.As(err, &mismatch) {
+			return nil, status.Error(codes.PermissionDenied, "the authenticated IDevID is not the reported device's")
+		}
 		s.logger.Error(err, "Failed to update device state from webhook", "device_id", device.ID)
 		return nil, s.mapPXEError(err, "update state from webhook")
 	}

@@ -182,15 +182,13 @@ reachable by unidentified machines and is rate-limited for that reason.
 - `test/integration/authenticode/multiprotocol_test.go:67-71` has **all five
   protocol adapters commented out**: a multi-protocol conformance test that
   exercises the CLI alone.
-- The PXE suite's CLI leg asserts a declared gap, never a skip: there is no
-  `platformctl pxe` group, PXE device lifecycle is API-only
-  (`docs/daemon/cli.md:224`). `testPXEProtocol` routes the `*CLIAdapter` into
-  `assertPXECLIGap`, which runs the real binary once and requires the
-  unknown-command non-zero exit, and checks the CLI adapter methods return
-  the typed `ErrCLIPXENotImplemented` refusal. When a `platformctl pxe`
-  group is added (the department question on #975 question 2), the leg flips:
-  `assertPXECLIGap` is deleted, the CLI branch in `testPXEProtocol` drops, and
-  the adapter drives the group.
+- The PXE suite's CLI leg (`testPXECLI` in `test/integration/pxe/pxe_test.go`)
+  drives the six `platformctl pxe` verbs through the real binary — get, list,
+  authorize (from enrolled), quarantine, retry and events — on devices it
+  seeds through the gRPC adapter, because registration and state writes have
+  no CLI verb. Those API-only verbs (register, remove, get-by-MAC,
+  update-state, set-enrolled, status) assert the typed
+  `ErrCLIPXENotImplemented` refusal, never a skip.
 
 All three are recorded here rather than left to be rediscovered.
 

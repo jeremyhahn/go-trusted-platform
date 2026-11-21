@@ -16,6 +16,7 @@ package zoneflows
 import (
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
@@ -100,6 +101,19 @@ var eastWestZones = []zone.Zone{
 // rules are returned; user-defined zones without a built-in template return
 // an empty slice (only matrix rules apply at that point, emitted separately by
 // CompileMatrixRules).
+// AddProvisioningBootHTTPPorts adds TCP ports to the provisioning
+// template's boot-server allowances; zero and already-listed ports are
+// skipped. It is not safe for concurrent use with Generate: the caller
+// serialises the two (ZoneFlowManager holds its lock across both).
+func (gs *GeneratorSet) AddProvisioningBootHTTPPorts(ports ...uint16) {
+	for _, p := range ports {
+		if p == 0 || slices.Contains(gs.cfg.Provisioning.BootHTTPPorts, p) {
+			continue
+		}
+		gs.cfg.Provisioning.BootHTTPPorts = append(gs.cfg.Provisioning.BootHTTPPorts, p)
+	}
+}
+
 func (gs *GeneratorSet) Generate(portID string, z zone.Zone, in Ingress) []FlowRule {
 	gen, ok := gs.generators[z]
 	if !ok || gen == nil {
@@ -240,6 +254,13 @@ const (
 // DefaultPolicyAllow is the MatrixRuleConfig.DefaultPolicy value that makes
 // the conntrack verdict table-miss continue the pipeline instead of dropping.
 const DefaultPolicyAllow = "allow"
+
+// QuarantineCookie tags the quarantine default-drop rule. The switch takes
+// only a numeric cookie, so it sits in the 0xF1BE owner family next to the
+// gateway pipeline (0x0000), firewall (0x0001), NAT (0x0002), load
+// balancer (0x0003), NAT64 (0x0004), overlay (0x0005, 0x0006), the ovs
+// generation tests (0x0007, 0x0008) and perf (0x00FF) owners.
+const QuarantineCookie = "0xF1BE000900000000"
 
 // CompileStatefulMatrixRules derives the conntrack-based stateful firewall
 // rule set from the compiled zone.Matrix. It emits rules for the ct
@@ -543,7 +564,7 @@ func (gs *GeneratorSet) quarantine(portID string, in Ingress) []FlowRule {
 		Priority: prioQDropDefault,
 		Match:    matchInVLAN(portID, in, ""),
 		Actions:  "drop",
-		Cookie:   fmt.Sprintf("quarantine:%s", portID),
+		Cookie:   QuarantineCookie,
 	})
 
 	return flows
@@ -596,6 +617,18 @@ func (gs *GeneratorSet) provisioning(portID string, in Ingress) []FlowRule {
 			Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=17", fmt.Sprintf("tp_dst=%d", portTFTP))),
 			Actions:  "normal",
 		})
+	}
+
+	// PXE boot server HTTP (iPXE boot script and payloads), both families.
+	for _, p := range cfg.BootHTTPPorts {
+		for _, f := range families {
+			flows = append(flows, FlowRule{
+				Table:    0,
+				Priority: prioTFTP,
+				Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=6", fmt.Sprintf("tp_dst=%d", p))),
+				Actions:  "normal",
+			})
+		}
 	}
 
 	// ACME / HTTPS

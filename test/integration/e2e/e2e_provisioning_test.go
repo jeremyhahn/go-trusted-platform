@@ -23,9 +23,11 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -65,12 +67,12 @@ import (
 // nobody mistakes them for tuned figures -- with no marker to poll for, any
 // shorter value would be an equally arbitrary guess (#372).
 const (
-	// serverBootBudget is how long Phase 2 allows the server VM to boot and
-	// start its platform services. NOT verified: see #372.
+	// serverBootBudget is how long Phase 2 waits for the server boot marker
+	// (INTEGRATION_TEST_SERVER_BOOT_MARKER) in the server's serial log.
 	serverBootBudget = 2 * time.Minute
 
-	// clientEnrollBudget is how long Phase 3 allows the client VM to boot and
-	// complete ACME enrollment. NOT verified: see #372.
+	// clientEnrollBudget is how long Phase 3 waits for the client enrollment
+	// marker (INTEGRATION_TEST_CLIENT_ENROLL_MARKER) in the client's serial log.
 	clientEnrollBudget = 3 * time.Minute
 )
 
@@ -97,6 +99,16 @@ func TestE2EDeviceProvisioning(t *testing.T) {
 	config := DefaultTestConfig()
 	config.ServerISO = serverISO
 	config.ClientISO = clientISO
+	if fullIntegrationMode {
+		// Phases 2 and 3 assert on these markers; without them the run
+		// would verify nothing it reports (#374), so refuse it up front.
+		serverMarker, clientMarker, err := provisioningMarkersFromEnv()
+		if err != nil {
+			t.Fatalf("full provisioning run needs both serial-log markers: %v", err)
+		}
+		config.ServerBootMarker = serverMarker
+		config.ClientEnrollMarker = clientMarker
+	}
 
 	// Setup infrastructure
 	infra, err := SetupTestInfrastructure(ctx, t, config)
@@ -259,25 +271,17 @@ func testServerProvisioning(ctx context.Context, t *testing.T, infra *TestInfras
 	// Wait for server to boot and initialize services
 	infra.Logger.Info("Waiting for server to boot and initialize services")
 
-	// In a real test, we would:
-	// 1. Monitor serial console for boot completion
-	// 2. Check that platform services are running (CA, ACME, DNS)
-	// 3. Verify server is accessible on provisioning network
+	// The phase passes only on evidence (#374): the server ISO's boot marker
+	// in the server's serial log within the budget. A budget that merely
+	// elapses verifies nothing, so a missing marker fails the phase.
+	serverLog := filepath.Join(infra.Config.ServerWorkDir, "serial.log")
+	err = waitForSerialMarker(ctx, serverLog, infra.Config.ServerBootMarker,
+		serverBootBudget, serialMarkerPollInterval)
+	require.NoError(t, err, "server boot not verified")
 
-	// NOTHING BELOW VERIFIES ANY OF THE ABOVE (#372). This is an unconditional
-	// budget, not a wait for a condition: the helper that would poll for one,
-	// searchSerialLog, already exists in this file, but the boot-completion
-	// marker is a property of the server ISO and is not known here. Inventing a
-	// pattern would be worse than waiting -- a poll that never matches burns the
-	// whole budget and then claims a verification it did not perform.
-	require.NoError(t, testenv.Elapse(ctx, serverBootBudget))
-
-	// Deliberately NOT "Phase 2 complete: Server provisioned". Nothing here
-	// establishes that the server was provisioned, and a log line that says so
-	// makes a failed run indistinguishable from a successful one.
-	infra.Logger.Info("Phase 2 budget elapsed: server boot NOT verified",
-		"budget", serverBootBudget,
-		"tracking", "#372")
+	infra.Logger.Info("Phase 2 complete: server boot marker seen in serial log",
+		"marker", infra.Config.ServerBootMarker,
+		"serial_log", serverLog)
 }
 
 // testClientProvisioning boots the client and performs ACME enrollment
@@ -344,27 +348,20 @@ func testClientProvisioning(ctx context.Context, t *testing.T, infra *TestInfras
 	// Wait for client to boot and complete enrollment
 	infra.Logger.Info("Waiting for client to boot and complete ACME enrollment")
 
-	// In a real test, we would:
-	// 1. Monitor serial console for enrollment progress
-	// 2. Verify TPM attestation was performed
-	// 3. Verify certificate was requested and received
-	// 4. Check certificate contains correct attributes
+	// The phase passes only on evidence (#374): the client ISO's enrollment
+	// marker in the client's serial log within the budget. The port moves to
+	// enrolled only after the marker is seen, never on an elapsed budget.
+	clientLog := filepath.Join(infra.Config.ClientWorkDir, "serial.log")
+	err = waitForSerialMarker(ctx, clientLog, infra.Config.ClientEnrollMarker,
+		clientEnrollBudget, serialMarkerPollInterval)
+	require.NoError(t, err, "client enrollment not verified")
 
-	// NOTHING BELOW VERIFIES ANY OF THE ABOVE (#372) -- same shape as Phase 2:
-	// an unconditional budget, because the enrollment-completion marker is a
-	// property of the client ISO and is not known here.
-	require.NoError(t, testenv.Elapse(ctx, clientEnrollBudget))
-
-	// Transition to enrolled state
 	err = infra.PolicyEngine.SetPortState(infra.ClientTapName, policy.PortStateEnrolled)
 	require.NoError(t, err, "Failed to transition to enrolled state")
 
-	// Deliberately NOT "Phase 3 complete: Client provisioned and enrolled": the
-	// port-state transition above is real, but no TPM attestation, certificate
-	// issuance or certificate attribute was checked (#372).
-	infra.Logger.Info("Phase 3 budget elapsed: port moved to enrolled; enrollment itself NOT verified",
-		"budget", clientEnrollBudget,
-		"tracking", "#372")
+	infra.Logger.Info("Phase 3 complete: client enrollment marker seen; port moved to enrolled",
+		"marker", infra.Config.ClientEnrollMarker,
+		"serial_log", clientLog)
 }
 
 // testNetworkTransition transitions the client from provisioning to production network
@@ -555,6 +552,65 @@ func searchSerialLog(logPath, pattern string) (bool, error) {
 		return false, err
 	}
 	return strings.Contains(content, pattern), nil
+}
+
+const (
+	// envServerBootMarker names the text the server ISO prints on its serial
+	// console once its platform services are up; Phase 2 waits for it.
+	envServerBootMarker = "INTEGRATION_TEST_SERVER_BOOT_MARKER"
+	// envClientEnrollMarker names the text the client ISO prints on its
+	// serial console once ACME enrollment has completed; Phase 3 waits for it.
+	envClientEnrollMarker = "INTEGRATION_TEST_CLIENT_ENROLL_MARKER"
+
+	serialMarkerPollInterval = 5 * time.Second
+)
+
+var (
+	// errSerialMarkerUnset is a phase asked to verify against no marker.
+	errSerialMarkerUnset = errors.New("serial-log marker not set")
+	// errSerialMarkerNotSeen is a marker absent from the serial log when the
+	// budget ran out.
+	errSerialMarkerNotSeen = errors.New("serial-log marker not seen")
+)
+
+// provisioningMarkersFromEnv reads the server boot and client enrollment
+// markers. Both are required: a full run without them would assert nothing.
+func provisioningMarkersFromEnv() (server, client string, err error) {
+	server = os.Getenv(envServerBootMarker)
+	client = os.Getenv(envClientEnrollMarker)
+	var missing []string
+	if server == "" {
+		missing = append(missing, envServerBootMarker)
+	}
+	if client == "" {
+		missing = append(missing, envClientEnrollMarker)
+	}
+	if len(missing) > 0 {
+		return "", "", fmt.Errorf("%w: set %s", errSerialMarkerUnset, strings.Join(missing, ", "))
+	}
+	return server, client, nil
+}
+
+// waitForSerialMarker polls logPath until it contains marker, and fails with
+// errSerialMarkerNotSeen when budget runs out first. A log not yet written
+// counts as not seen.
+func waitForSerialMarker(ctx context.Context, logPath, marker string, budget, interval time.Duration) error {
+	if marker == "" {
+		return errSerialMarkerUnset
+	}
+	var lastErr error
+	err := testenv.WaitUntilEvery(ctx, budget, interval, "serial log shows "+marker, func() bool {
+		found, err := searchSerialLog(logPath, marker)
+		lastErr = err
+		return found
+	})
+	if err == nil {
+		return nil
+	}
+	if lastErr != nil && !errors.Is(lastErr, os.ErrNotExist) {
+		return fmt.Errorf("%w: %q in %s after %s: %v", errSerialMarkerNotSeen, marker, logPath, budget, lastErr)
+	}
+	return fmt.Errorf("%w: %q in %s after %s", errSerialMarkerNotSeen, marker, logPath, budget)
 }
 
 // Helper function to verify network connectivity (for use with real VMs)

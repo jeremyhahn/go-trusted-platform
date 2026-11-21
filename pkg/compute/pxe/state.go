@@ -15,6 +15,7 @@ package pxe
 
 import (
 	"context"
+	"maps"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -290,6 +291,11 @@ func (sm *StateManager) Transition(deviceID string, newState ProvisioningState, 
 		updatedDevice.UpdatedAt = now
 		updatedDevice.StateChangedAt = now
 
+		// The transition event is stored on the device with the swap, so
+		// GetEvents lists it (#1694); it is emitted only once the swap wins.
+		event := sm.createTransitionEvent(deviceID, currentState, newState, reason)
+		updatedDevice.Events = append(updatedDevice.Events, event)
+
 		// Create new entry with incremented version
 		newEntry := &deviceEntry{
 			device:  updatedDevice,
@@ -298,9 +304,11 @@ func (sm *StateManager) Transition(deviceID string, newState ProvisioningState, 
 
 		// Attempt atomic swap
 		if sm.devices.CompareAndSwap(deviceID, currentEntry, newEntry) {
-			// Generate and emit event
-			event := sm.createTransitionEvent(deviceID, currentState, newState, reason)
-			sm.emitEvent(event)
+			// Handlers get their own copy: they run concurrently with
+			// readers of the stored event.
+			emitted := *event
+			emitted.Details = maps.Clone(event.Details)
+			sm.emitEvent(&emitted)
 			return nil
 		}
 
@@ -499,6 +507,7 @@ func copyDeviceInfo(src *DeviceInfo) *DeviceInfo {
 		StateReason:       src.StateReason,
 		Profile:           src.Profile, // Shallow copy - profiles should be immutable
 		CertificateSerial: src.CertificateSerial,
+		IDevIDFingerprint: src.IDevIDFingerprint,
 		CurrentVLAN:       src.CurrentVLAN,
 		TargetVLAN:        src.TargetVLAN,
 		CreatedAt:         src.CreatedAt,

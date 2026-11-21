@@ -43,10 +43,16 @@ Runs complete provisioning workflow with actual platform ISOs:
 ```bash
 export INTEGRATION_TEST_SERVER_ISO=build/iso/server.iso
 export INTEGRATION_TEST_CLIENT_ISO=build/iso/client.iso
+export INTEGRATION_TEST_SERVER_BOOT_MARKER='<line the server ISO prints when its services are up>'
+export INTEGRATION_TEST_CLIENT_ENROLL_MARKER='<line the client ISO prints when enrollment completes>'
 make integration-test-e2e
 ```
 
-The target passes both variables into the devcontainer when they are set.
+The two markers are required with the ISOs: Phases 2 and 3 pass only when
+the marker appears in the VM's serial log (`serial.log` in its work
+directory) within the phase budget, and the test refuses a full run without
+them (#374). The target passes all four variables into the devcontainer when
+they are set.
 Give paths under the repository, which the container mounts at `/workspace`;
 a host path outside it does not exist in the container.
 
@@ -139,30 +145,31 @@ Verifies test infrastructure is properly configured:
 
 ### Phase 2: Server Provisioning
 
-Boots and provisions the platform server:
+Boots the platform server and asserts on its serial log:
 
 ```go
 ✓ Server VM boots from ISO (install mode)
-✓ Server completes firstboot provisioning
-✓ CA initialized and root/intermediate certs created
-✓ ACME server listening on port 8443
-✓ DNS server listening on port 9053
+✓ INTEGRATION_TEST_SERVER_BOOT_MARKER appears in the server serial log
+  within the boot budget (2 min); otherwise the phase fails
 ```
+
+CA, ACME and DNS readiness are whatever the server ISO's marker attests;
+the phase checks nothing beyond the marker.
 
 ### Phase 3: Client Provisioning
 
-Client boots and performs ACME enrollment:
+Client boots on the provisioning network and the test waits for enrollment:
 
 ```go
-✓ Client VM boots from ISO (install mode)
 ✓ Client on provisioning network (VLAN 100)
 ✓ Provisioning ACLs applied (HTTPS, DNS only)
-✓ Client performs TPM attestation
-✓ Client requests certificate via ACME enroll-01
-✓ Server validates attestation
-✓ Certificate issued with network policy metadata
-✓ Client transitions to enrolled state
+✓ Client VM boots from ISO (install mode)
+✓ INTEGRATION_TEST_CLIENT_ENROLL_MARKER appears in the client serial log
+  within the enrollment budget (3 min); otherwise the phase fails
+✓ Client port transitions to enrolled state (only after the marker)
 ```
+
+TPM attestation and certificate attributes are not checked in this phase.
 
 ### Phase 4: Network Transition
 

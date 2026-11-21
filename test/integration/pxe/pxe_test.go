@@ -28,11 +28,8 @@
 package pxe
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
 	"testing"
 	"time"
 
@@ -85,11 +82,11 @@ func testPXEProtocol(t *testing.T, ctx context.Context, cmd PXECommands) {
 	// Generate unique test prefix for this protocol run
 	prefix := fmt.Sprintf("%s-%d", cmd.Name(), time.Now().Unix())
 
-	// The PXE device lifecycle is API-only (docs/daemon/cli.md:223), so the
-	// CLI leg asserts the documented refusal instead of the device flow. On
+	// platformctl pxe covers six verbs; registration and state writes stay
+	// API-only, so the CLI leg seeds through gRPC and drives those six. On
 	// every other transport the assertions below are unchanged.
 	if cliAdapter, ok := cmd.(*CLIAdapter); ok {
-		assertPXECLIGap(t, cliAdapter)
+		testPXECLI(t, ctx, cliAdapter, prefix)
 		return
 	}
 
@@ -129,71 +126,162 @@ func testPXEProtocol(t *testing.T, ctx context.Context, cmd PXECommands) {
 // CLI Declared Gap: the PXE device lifecycle is API-only
 // =============================================================================
 
-// runPXECLIBinaryOnce executes one real `platformctl pxe ...` command. The
-// subcommand tree past `pxe` is irrelevant: the refusal happens at the
-// group level, because there is no `pxe` group (docs/daemon/cli.md:223).
-// It returns the process error and stderr so the caller can assert either
-// the documented refusal or its flip.
-func runPXECLIBinaryOnce(t *testing.T, ctx context.Context) (error, string) {
+// testPXECLI is the CLI leg of TestPXEMultiProtocol. platformctl pxe has six
+// verbs (docs/provisioning/cli.md §5): get, list, authorize, quarantine,
+// retry and events, and every assertion on them goes through the real
+// binary. Registration and raw state writes stay API-only, so devices are
+// seeded through the gRPC adapter. The verbs with no CLI counterpart assert
+// their typed refusal (CA m588 (1)): green on declared behaviour, red when
+// the gap closes, never skipped.
+func testPXECLI(t *testing.T, ctx context.Context, cli *CLIAdapter, prefix string) {
 	t.Helper()
-
-	path := os.Getenv(EnvPlatformctlBinary)
-	if path == "" {
-		path = DefaultPlatformctlBinary
-	}
-	if _, err := exec.LookPath(path); err != nil {
-		t.Fatalf("platformctl binary %q not found: %v", path, err)
-	}
-
-	cmd := exec.CommandContext(ctx, path,
-		"--output", "json", "pxe", "device", "list")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	return err, stderr.String()
-}
-
-// assertPXECLIGap is the CLI leg of TestPXEMultiProtocol. Per CA m588 (1),
-// a capability that is documented but missing asserts its typed refusal:
-// green on declared behavior, red when the gap closes, never skipped.
-//
-// docs/daemon/cli.md:223: "There is no `dns`, no `pxe`, no `gateway` and no
-// `cluster` top-level group ... PXE device lifecycle is API-only".
-// Option (b) of the #975 ruling kept that architecture and sent option (a),
-// building a `platformctl pxe` group, to the department as a question.
-//
-// The leg performs two assertions: it runs the real binary once and requires
-// the unknown-command refusal, and it checks that the CLI adapter's methods
-// carry the same typed refusal so a future implementation cannot fake a
-// success. When a `platformctl pxe` group is added, delete this function,
-// drop the CLIAdapter branch in testPXEProtocol, and have the adapter drive
-// the group.
-func assertPXECLIGap(t *testing.T, cli *CLIAdapter) {
-	t.Helper()
-
-	testCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	testCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 
-	t.Run("BinaryRefusesThePXEGroup", func(t *testing.T) {
-		err, stderr := runPXECLIBinaryOnce(t, testCtx)
-		var exitErr *exec.ExitError
-		require.Error(t, err,
-			"platformctl pxe exited 0, so the documented API-only refusal "+
-				"(docs/daemon/cli.md:223) is no longer the behaviour: the "+
-				"platformctl pxe group exists, so delete this gap check and "+
-				"have the CLI adapter drive it")
-		require.ErrorAs(t, err, &exitErr, "platformctl pxe did not exit non-zero: %v", err)
-		assert.Contains(t, stderr, "unknown command",
-			"want the unknown-command refusal of the absent pxe group, got: %s", stderr)
+	seed := NewGRPCAdapter()
+	require.NoError(t, seed.Setup(testCtx), "Setup: gRPC seed adapter")
+	defer func() { _ = seed.Teardown() }()
+
+	register := func(t *testing.T, name string, states ...string) (string, RegisterDeviceOptions) {
+		t.Helper()
+		// A real port on the daemon's bridge: registration applies
+		// quarantine flows, which refuse a port the bridge does not have.
+		opts := RegisterOptionsOnBridge(t, prefix+"-"+name)
+		dev, err := seed.RegisterDevice(testCtx, opts)
+		require.NoError(t, err, "Setup: RegisterDevice")
+		t.Cleanup(func() { _ = CleanupDevice(testCtx, seed, dev.ID) })
+		for _, s := range states {
+			_, err := seed.UpdateDeviceState(testCtx, UpdateStateOptions{
+				DeviceID: dev.ID, State: s, Reason: "Setup progression",
+			})
+			require.NoError(t, err, "Setup: UpdateDeviceState to %s", s)
+		}
+		return dev.ID, opts
+	}
+	seededState := func(t *testing.T, id string) string {
+		t.Helper()
+		dev, err := seed.GetDevice(testCtx, id)
+		require.NoError(t, err, "GetDevice through gRPC")
+		return dev.State
+	}
+
+	t.Run("Get", func(t *testing.T) {
+		id, opts := register(t, "get")
+		got, err := cli.GetDevice(testCtx, id)
+		require.NoError(t, err, "platformctl pxe get")
+		assert.Equal(t, id, got.ID)
+		assert.Equal(t, opts.MACAddress, got.MACAddress)
+		assert.Equal(t, opts.PortID, got.PortID)
+		assert.Equal(t, StateDiscovered, got.State)
 	})
 
-	t.Run("AdapterCarriesTheTypedRefusal", func(t *testing.T) {
-		_, err := cli.ListDevices(testCtx, ListDevicesOptions{Limit: 10})
-		var notImpl ErrCLIPXENotImplemented
-		require.ErrorAs(t, err, &notImpl,
-			"want the declared API-only refusal, got: %v", err)
-		assert.Equal(t, "ListDevices", notImpl.Method, "declared method")
+	t.Run("GetNonexistentFails", func(t *testing.T) {
+		_, err := cli.GetDevice(testCtx, "nonexistent-device-id")
+		var failed ErrCLICommandFailed
+		require.ErrorAs(t, err, &failed, "platformctl pxe get of an unknown device must exit non-zero")
+	})
+
+	t.Run("List", func(t *testing.T) {
+		id, opts := register(t, "list", StateBooting)
+		byMAC, err := cli.ListDevices(testCtx, ListDevicesOptions{MACAddress: opts.MACAddress})
+		require.NoError(t, err, "platformctl pxe list --mac")
+		require.Len(t, byMAC.Devices, 1, "--mac selects the one device")
+		assert.Equal(t, id, byMAC.Devices[0].ID)
+		assert.Equal(t, StateBooting, byMAC.Devices[0].State)
+
+		byState, err := cli.ListDevices(testCtx, ListDevicesOptions{State: StateBooting, Limit: 1000})
+		require.NoError(t, err, "platformctl pxe list --state")
+		var ids []string
+		for _, d := range byState.Devices {
+			assert.Equal(t, StateBooting, d.State, "--state returns only booting devices")
+			ids = append(ids, d.ID)
+		}
+		assert.Contains(t, ids, id)
+	})
+
+	t.Run("ListRejectsOutOfRangeVLAN", func(t *testing.T) {
+		_, err := cli.ListDevices(testCtx, ListDevicesOptions{VLAN: 4095})
+		var failed ErrCLICommandFailed
+		require.ErrorAs(t, err, &failed, "--vlan 4095 must be refused")
+		assert.Contains(t, failed.Output, "out of range")
+	})
+
+	t.Run("AuthorizeEnrolledDevice", func(t *testing.T) {
+		id, _ := register(t, "authorize",
+			StateBooting, StateInstalling, StateInstallComplete, StateEnrolling)
+		_, err := seed.SetDeviceEnrolled(testCtx, id, GenerateTestCertSerial())
+		require.NoError(t, err, "Setup: SetDeviceEnrolled")
+
+		// The daemon maps the target VLAN to a zone through its plan, so
+		// it must be a VLAN the integration plan carries (#1896 F47).
+		target := integrationTargetVLAN(t)
+		got, err := cli.AuthorizeDevice(testCtx, id, target)
+		require.NoError(t, err, "platformctl pxe authorize of an enrolled device")
+		assert.Equal(t, StateAuthorized, got.State)
+		assert.Equal(t, target, got.TargetVLAN)
+		assert.Equal(t, StateAuthorized, seededState(t, id))
+	})
+
+	t.Run("AuthorizeRefusesUnenrolledDevice", func(t *testing.T) {
+		id, _ := register(t, "authorize-early", StateBooting)
+		_, err := cli.AuthorizeDevice(testCtx, id, integrationTargetVLAN(t))
+		var failed ErrCLICommandFailed
+		require.ErrorAs(t, err, &failed, "authorize of a booting device must be refused")
+		assert.Equal(t, StateBooting, seededState(t, id), "a refused authorize leaves the state")
+	})
+
+	t.Run("Quarantine", func(t *testing.T) {
+		id, _ := register(t, "quarantine", StateBooting)
+		reason := "Security policy violation"
+		got, err := cli.QuarantineDevice(testCtx, id, reason)
+		require.NoError(t, err, "platformctl pxe quarantine")
+		assert.Equal(t, StateQuarantined, got.State)
+		assert.Equal(t, reason, got.Reason)
+		assert.Equal(t, StateQuarantined, seededState(t, id))
+	})
+
+	t.Run("Retry", func(t *testing.T) {
+		id, _ := register(t, "retry", StateBooting, StateFailed)
+		got, err := cli.RetryDevice(testCtx, id)
+		require.NoError(t, err, "platformctl pxe retry")
+		assert.Equal(t, StateDiscovered, got.State)
+		assert.Greater(t, got.RetryCount, 0)
+	})
+
+	t.Run("Events", func(t *testing.T) {
+		id, _ := register(t, "events", StateBooting)
+		got, err := cli.GetEvents(testCtx, id)
+		require.NoError(t, err, "platformctl pxe events")
+		assert.Equal(t, id, got.DeviceID)
+		require.GreaterOrEqual(t, len(got.Events), 2, "register and the state change")
+		var toBooting bool
+		for _, e := range got.Events {
+			assert.Equal(t, id, e.DeviceID)
+			toBooting = toBooting || e.ToState == StateBooting
+		}
+		assert.True(t, toBooting, "an event records the move to booting")
+	})
+
+	t.Run("APIOnlyVerbsRefuse", func(t *testing.T) {
+		calls := map[string]func() error{
+			"RegisterDevice": func() error {
+				_, err := cli.RegisterDevice(testCtx, DefaultRegisterOptions(prefix+"-refused"))
+				return err
+			},
+			"GetDeviceByMAC": func() error { _, err := cli.GetDeviceByMAC(testCtx, "00:00:00:00:00:01"); return err },
+			"RemoveDevice":   func() error { _, err := cli.RemoveDevice(testCtx, "any"); return err },
+			"UpdateDeviceState": func() error {
+				_, err := cli.UpdateDeviceState(testCtx, UpdateStateOptions{DeviceID: "any", State: StateBooting})
+				return err
+			},
+			"SetDeviceEnrolled": func() error { _, err := cli.SetDeviceEnrolled(testCtx, "any", "serial"); return err },
+			"GetStatus":         func() error { _, err := cli.GetStatus(testCtx); return err },
+		}
+		for method, call := range calls {
+			var notImpl ErrCLIPXENotImplemented
+			require.ErrorAs(t, call(), &notImpl, "%s: want the declared API-only refusal", method)
+			assert.Equal(t, method, notImpl.Method)
+		}
 	})
 }
 
@@ -208,7 +296,7 @@ func testDeviceRegister(t *testing.T, ctx context.Context, cmd PXECommands, pref
 	t.Run("RegisterDeviceWithDefaults", func(t *testing.T) {
 		opts := RegisterDeviceOptions{
 			MACAddress: GenerateTestMAC(prefix),
-			PortID:     GenerateTestPortID(prefix),
+			PortID:     CreateTestOVSPort(t, prefix),
 		}
 
 		result, err := cmd.RegisterDevice(testCtx, opts)
@@ -227,7 +315,7 @@ func testDeviceRegister(t *testing.T, ctx context.Context, cmd PXECommands, pref
 	t.Run("RegisterDeviceEmptyMACFails", func(t *testing.T) {
 		opts := RegisterDeviceOptions{
 			MACAddress: "",
-			PortID:     GenerateTestPortID(prefix),
+			PortID:     CreateTestOVSPort(t, prefix),
 		}
 
 		_, err := cmd.RegisterDevice(testCtx, opts)
@@ -240,7 +328,7 @@ func testDeviceGet(t *testing.T, ctx context.Context, cmd PXECommands, prefix st
 	defer cancel()
 
 	// Create a device first
-	regOpts := DefaultRegisterOptions(prefix + "-get")
+	regOpts := RegisterOptionsOnBridge(t, prefix+"-get")
 	registered, err := cmd.RegisterDevice(testCtx, regOpts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	defer CleanupDevice(testCtx, cmd, registered.ID)
@@ -266,7 +354,7 @@ func testDeviceGetByMAC(t *testing.T, ctx context.Context, cmd PXECommands, pref
 	defer cancel()
 
 	// Create a device first
-	regOpts := DefaultRegisterOptions(prefix + "-getmac")
+	regOpts := RegisterOptionsOnBridge(t, prefix+"-getmac")
 	registered, err := cmd.RegisterDevice(testCtx, regOpts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	defer CleanupDevice(testCtx, cmd, registered.ID)
@@ -299,7 +387,7 @@ func testDeviceList(t *testing.T, ctx context.Context, cmd PXECommands, prefix s
 	for i := 0; i < 3; i++ {
 		opts := RegisterDeviceOptions{
 			MACAddress: GenerateTestMAC(fmt.Sprintf("%s-list-%d", prefix, i)),
-			PortID:     GenerateTestPortID(fmt.Sprintf("%s-list-%d", prefix, i)),
+			PortID:     CreateTestOVSPort(t, fmt.Sprintf("%s-list-%d", prefix, i)),
 		}
 		result, err := cmd.RegisterDevice(testCtx, opts)
 		require.NoError(t, err, "Setup: RegisterDevice should succeed")
@@ -340,7 +428,7 @@ func testDeviceRemove(t *testing.T, ctx context.Context, cmd PXECommands, prefix
 	defer cancel()
 
 	// Create a device for removal
-	regOpts := DefaultRegisterOptions(prefix + "-remove")
+	regOpts := RegisterOptionsOnBridge(t, prefix+"-remove")
 	registered, err := cmd.RegisterDevice(testCtx, regOpts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 
@@ -372,7 +460,7 @@ func testStateUpdate(t *testing.T, ctx context.Context, cmd PXECommands, prefix 
 	defer cancel()
 
 	// Create a device for state updates
-	regOpts := DefaultRegisterOptions(prefix + "-state")
+	regOpts := RegisterOptionsOnBridge(t, prefix+"-state")
 	registered, err := cmd.RegisterDevice(testCtx, regOpts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	defer CleanupDevice(testCtx, cmd, registered.ID)
@@ -413,7 +501,7 @@ func testSetEnrolled(t *testing.T, ctx context.Context, cmd PXECommands, prefix 
 	defer cancel()
 
 	// Create a device and progress to enrolling state
-	regOpts := DefaultRegisterOptions(prefix + "-enrolled")
+	regOpts := RegisterOptionsOnBridge(t, prefix+"-enrolled")
 	registered, err := cmd.RegisterDevice(testCtx, regOpts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	defer CleanupDevice(testCtx, cmd, registered.ID)
@@ -443,7 +531,7 @@ func testAuthorize(t *testing.T, ctx context.Context, cmd PXECommands, prefix st
 	defer cancel()
 
 	// Create a device and progress to authorizing state
-	regOpts := DefaultRegisterOptions(prefix + "-authorize")
+	regOpts := RegisterOptionsOnBridge(t, prefix+"-authorize")
 	registered, err := cmd.RegisterDevice(testCtx, regOpts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	defer CleanupDevice(testCtx, cmd, registered.ID)
@@ -471,7 +559,7 @@ func testAuthorize(t *testing.T, ctx context.Context, cmd PXECommands, prefix st
 	require.NoError(t, err, "Setup: UpdateDeviceState to authorizing should succeed")
 
 	t.Run("AuthorizeDevice", func(t *testing.T) {
-		targetVLAN := uint16(100)
+		targetVLAN := integrationTargetVLAN(t)
 		result, err := cmd.AuthorizeDevice(testCtx, registered.ID, targetVLAN)
 		require.NoError(t, err, "AuthorizeDevice should succeed")
 		require.NotNil(t, result, "Result should not be nil")
@@ -485,7 +573,7 @@ func testQuarantine(t *testing.T, ctx context.Context, cmd PXECommands, prefix s
 	defer cancel()
 
 	// Create a device for quarantine testing
-	regOpts := DefaultRegisterOptions(prefix + "-quarantine")
+	regOpts := RegisterOptionsOnBridge(t, prefix+"-quarantine")
 	registered, err := cmd.RegisterDevice(testCtx, regOpts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	defer CleanupDevice(testCtx, cmd, registered.ID)
@@ -513,7 +601,7 @@ func testRetry(t *testing.T, ctx context.Context, cmd PXECommands, prefix string
 	defer cancel()
 
 	// Create a device and move to failed state
-	regOpts := DefaultRegisterOptions(prefix + "-retry")
+	regOpts := RegisterOptionsOnBridge(t, prefix+"-retry")
 	registered, err := cmd.RegisterDevice(testCtx, regOpts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	defer CleanupDevice(testCtx, cmd, registered.ID)
@@ -551,7 +639,7 @@ func testGetEvents(t *testing.T, ctx context.Context, cmd PXECommands, prefix st
 	defer cancel()
 
 	// Create a device and perform some state transitions to generate events
-	regOpts := DefaultRegisterOptions(prefix + "-events")
+	regOpts := RegisterOptionsOnBridge(t, prefix+"-events")
 	registered, err := cmd.RegisterDevice(testCtx, regOpts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	defer CleanupDevice(testCtx, cmd, registered.ID)
@@ -607,7 +695,7 @@ func testInvalidMACAddress(t *testing.T, ctx context.Context, cmd PXECommands, p
 	t.Run("RegisterWithInvalidMAC", func(t *testing.T) {
 		opts := RegisterDeviceOptions{
 			MACAddress: "invalid-mac-address",
-			PortID:     GenerateTestPortID(prefix),
+			PortID:     CreateTestOVSPort(t, prefix),
 		}
 
 		_, err := cmd.RegisterDevice(testCtx, opts)
@@ -617,7 +705,7 @@ func testInvalidMACAddress(t *testing.T, ctx context.Context, cmd PXECommands, p
 	t.Run("RegisterWithMalformedMAC", func(t *testing.T) {
 		opts := RegisterDeviceOptions{
 			MACAddress: "12:34:56:78:90", // Missing octet
-			PortID:     GenerateTestPortID(prefix),
+			PortID:     CreateTestOVSPort(t, prefix),
 		}
 
 		_, err := cmd.RegisterDevice(testCtx, opts)
@@ -668,7 +756,7 @@ func testInvalidStateTransition(t *testing.T, ctx context.Context, cmd PXEComman
 	defer cancel()
 
 	// Create a device
-	regOpts := DefaultRegisterOptions(prefix + "-invalid-state")
+	regOpts := RegisterOptionsOnBridge(t, prefix+"-invalid-state")
 	registered, err := cmd.RegisterDevice(testCtx, regOpts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	defer CleanupDevice(testCtx, cmd, registered.ID)
@@ -703,7 +791,7 @@ func testDuplicateRegistration(t *testing.T, ctx context.Context, cmd PXECommand
 	defer cancel()
 
 	// Create a device
-	opts := DefaultRegisterOptions(prefix + "-duplicate")
+	opts := RegisterOptionsOnBridge(t, prefix+"-duplicate")
 	registered, err := cmd.RegisterDevice(testCtx, opts)
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	defer CleanupDevice(testCtx, cmd, registered.ID)
@@ -712,7 +800,7 @@ func testDuplicateRegistration(t *testing.T, ctx context.Context, cmd PXECommand
 		// Try to register the same MAC address again
 		duplicateOpts := RegisterDeviceOptions{
 			MACAddress: opts.MACAddress,
-			PortID:     GenerateTestPortID(prefix + "-duplicate2"),
+			PortID:     CreateTestOVSPort(t, prefix+"-duplicate2"),
 		}
 
 		_, err := cmd.RegisterDevice(testCtx, duplicateOpts)

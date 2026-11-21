@@ -18,10 +18,12 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -540,6 +542,154 @@ func TestService_SetDeviceEnrolled_InvalidTransition(t *testing.T) {
 	assert.True(t, errors.As(err, &transitionErr))
 }
 
+// TestService_RecordIDevIDFingerprint pins ruling 673 (per ruling 70): the
+// IDevID fingerprint is stored at enrolment, before install completion, so
+// it is accepted while the device boots and installs, leaves the state
+// alone, and is refused once the install is complete.
+func TestService_RecordIDevIDFingerprint(t *testing.T) {
+	const fp = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	const otherFP = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	ctx := context.Background()
+
+	// advance moves a fresh device through the given states in order.
+	advance := func(t *testing.T, svc Service, id string, states ...ProvisioningState) {
+		t.Helper()
+		for _, st := range states {
+			require.NoError(t, svc.UpdateDeviceState(ctx, id, st, string(st)))
+		}
+	}
+
+	for name, path := range map[string][]ProvisioningState{
+		"discovered": nil,
+		"booting":    {StateBooting},
+		"installing": {StateBooting, StateInstalling},
+	} {
+		t.Run("accepted while "+name, func(t *testing.T) {
+			svc, _ := initializeTestService(t)
+			device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+			require.NoError(t, err)
+			advance(t, svc, device.ID, path...)
+			before, err := svc.GetDevice(ctx, device.ID)
+			require.NoError(t, err)
+
+			require.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fp))
+
+			got, err := svc.GetDeviceByMAC(ctx, "00:11:22:33:44:55")
+			require.NoError(t, err)
+			assert.Equal(t, fp, got.IDevIDFingerprint)
+			assert.Equal(t, before.State, got.State, "recording the fingerprint changed the state")
+		})
+	}
+
+	for name, path := range map[string][]ProvisioningState{
+		"install_complete": {StateBooting, StateInstalling, StateInstallComplete},
+		"enrolling":        {StateBooting, StateInstalling, StateInstallComplete, StateEnrolling},
+	} {
+		t.Run("refused once "+name, func(t *testing.T) {
+			svc, _ := initializeTestService(t)
+			device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+			require.NoError(t, err)
+			advance(t, svc, device.ID, path...)
+
+			err = svc.RecordIDevIDFingerprint(ctx, device.ID, fp)
+			var transitionErr ErrInvalidStateTransition
+			assert.True(t, errors.As(err, &transitionErr), "got %v", err)
+
+			got, err := svc.GetDevice(ctx, device.ID)
+			require.NoError(t, err)
+			assert.Empty(t, got.IDevIDFingerprint)
+		})
+	}
+
+	t.Run("refuses a value that is not a SHA-256 hex digest", func(t *testing.T) {
+		svc, _ := initializeTestService(t)
+		device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+		require.NoError(t, err)
+		for _, bad := range []string{"", "abc", fp[:63], fp + "0", "0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef", "g123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"} {
+			assert.Error(t, svc.RecordIDevIDFingerprint(ctx, device.ID, bad), "accepted %q", bad)
+		}
+		got, err := svc.GetDevice(ctx, device.ID)
+		require.NoError(t, err)
+		assert.Empty(t, got.IDevIDFingerprint)
+	})
+
+	t.Run("a re-enrolment before install completion replaces the fingerprint", func(t *testing.T) {
+		svc, _ := initializeTestService(t)
+		device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+		require.NoError(t, err)
+		require.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fp))
+
+		assert.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fp), "re-recording the same fingerprint is a no-op")
+		assert.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, otherFP), "a re-enrolment in discovered is refused")
+
+		got, err := svc.GetDevice(ctx, device.ID)
+		require.NoError(t, err)
+		assert.Equal(t, otherFP, got.IDevIDFingerprint)
+	})
+
+	t.Run("needs an initialized service", func(t *testing.T) {
+		err := NewService().RecordIDevIDFingerprint(ctx, "device-123", fp)
+		var notInitErr ErrServiceNotInitialized
+		assert.True(t, errors.As(err, &notInitErr))
+	})
+
+	t.Run("unknown device", func(t *testing.T) {
+		svc, _ := initializeTestService(t)
+		err := svc.RecordIDevIDFingerprint(ctx, "nonexistent", fp)
+		var notFoundErr ErrDeviceNotFound
+		assert.True(t, errors.As(err, &notFoundErr))
+	})
+}
+
+// TestService_RecordIDevIDFingerprint_ReEnrolmentWhileInstallingReplaces:
+// the finalize hook records the fingerprint before the CA commits the
+// certificate, so a delivery failure is followed by a re-enrolment that
+// issues a different IDevID. While the device is still installing (it has
+// not reported any certificate in use) the later fingerprint replaces the
+// earlier one; once the device is past installing it is fixed.
+func TestService_RecordIDevIDFingerprint_ReEnrolmentWhileInstallingReplaces(t *testing.T) {
+	const fpA = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	const fpB = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	paths := map[ProvisioningState][]ProvisioningState{
+		StateDiscovered: nil,
+		StateBooting:    {StateBooting},
+		StateInstalling: {StateBooting, StateInstalling},
+	}
+	for _, want := range []ProvisioningState{StateDiscovered, StateBooting, StateInstalling} {
+		t.Run(string(want), func(t *testing.T) {
+			svc, _ := initializeTestService(t)
+			ctx := context.Background()
+
+			device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+			require.NoError(t, err)
+			for _, st := range paths[want] {
+				require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, st, string(st)))
+			}
+
+			require.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fpA))
+			require.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fpB), "a re-enrolment in %s is refused", want)
+			got, err := svc.GetDevice(ctx, device.ID)
+			require.NoError(t, err)
+			assert.Equal(t, fpB, got.IDevIDFingerprint)
+			assert.Equal(t, want, got.State)
+
+			if want != StateInstalling {
+				for _, st := range []ProvisioningState{StateBooting, StateInstalling} {
+					if st == want {
+						continue
+					}
+					require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, st, string(st)))
+				}
+			}
+			require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateInstallComplete, "complete"))
+			assert.Error(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fpA), "a re-enrolment past install completion is accepted")
+			got, err = svc.GetDevice(ctx, device.ID)
+			require.NoError(t, err)
+			assert.Equal(t, fpB, got.IDevIDFingerprint)
+		})
+	}
+}
+
 func TestService_AuthorizeDevice_NotInitialized(t *testing.T) {
 	svc := NewService()
 	ctx := context.Background()
@@ -649,6 +799,23 @@ func TestService_QuarantineDevice_Valid(t *testing.T) {
 	assert.Equal(t, StateQuarantined, retrieved.State)
 }
 
+func TestService_GetEvents_ListsAQuarantine(t *testing.T) {
+	svc, _ := initializeTestService(t)
+	ctx := context.Background()
+
+	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+	require.NoError(t, err)
+	require.NoError(t, svc.QuarantineDevice(ctx, device.ID, "security violation"))
+
+	events, err := svc.GetEvents(ctx, device.ID)
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	assert.Equal(t, EventDeviceDiscovered, events[0].EventType)
+	assert.Equal(t, EventQuarantined, events[1].EventType)
+	assert.Equal(t, StateQuarantined, events[1].ToState)
+	assert.Equal(t, "security violation", events[1].Details["reason"])
+}
+
 func TestService_QuarantineDevice_NotFound(t *testing.T) {
 	svc, _ := initializeTestService(t)
 	ctx := context.Background()
@@ -692,6 +859,45 @@ func TestService_RetryDevice_Valid(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, StateDiscovered, retrieved.State)
 	assert.Equal(t, 1, retrieved.RetryCount)
+}
+
+// TestService_RetryDevice_ReEnrolmentRecordsTheNewIDevID: a retry is a new
+// provisioning attempt, so the IDevID the retried install enrols is recorded
+// even though the failed attempt recorded a different one.
+func TestService_RetryDevice_ReEnrolmentRecordsTheNewIDevID(t *testing.T) {
+	const fp = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	const otherFP = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	svc, cfg := initializeTestService(t)
+	ctx := context.Background()
+	cfg.MaxRetries = DefaultMaxRetries
+
+	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+	require.NoError(t, err)
+	for _, st := range []ProvisioningState{StateBooting, StateInstalling} {
+		require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, st, string(st)))
+	}
+	require.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fp))
+	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateFailed, "install failed"))
+
+	require.NoError(t, svc.RetryDevice(ctx, device.ID))
+	retried, err := svc.GetDevice(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StateDiscovered, retried.State)
+	assert.Empty(t, retried.IDevIDFingerprint, "a retry keeps the previous attempt's fingerprint")
+
+	for _, st := range []ProvisioningState{StateBooting, StateInstalling} {
+		require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, st, string(st)))
+	}
+	require.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, otherFP))
+	got, err := svc.GetDevice(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, otherFP, got.IDevIDFingerprint)
+
+	// Within the same attempt a different fingerprint is refused once the
+	// install is complete (a re-enrolment while installing replaces it, see
+	// TestService_RecordIDevIDFingerprint_ReEnrolmentWhileInstallingReplaces).
+	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateInstallComplete, "complete"))
+	assert.Error(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fp))
 }
 
 func TestService_RetryDevice_MaxRetriesExceeded(t *testing.T) {
@@ -1253,4 +1459,339 @@ func TestService_Status_NilStateManager(t *testing.T) {
 	status := svc.Status()
 	assert.NotNil(t, status)
 	assert.Equal(t, 0, status.DeviceCount)
+}
+
+// failingFlowVLAN is a flow manager whose flow moves fail on demand.
+type failingFlowVLAN struct {
+	VLANIntegration
+	fail atomic.Bool
+}
+
+var errFlowMove = errors.New("flow manager unavailable")
+
+func (f *failingFlowVLAN) ApplyQuarantineFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
+	if f.fail.Load() {
+		return errFlowMove
+	}
+	return f.VLANIntegration.ApplyQuarantineFlows(ctx, portID, mac)
+}
+
+func (f *failingFlowVLAN) ApplyProvisioningFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
+	if f.fail.Load() {
+		return errFlowMove
+	}
+	return f.VLANIntegration.ApplyProvisioningFlows(ctx, portID, mac)
+}
+
+// TestService_UpdateDeviceState_VLANFailureFailsClosed checks that a
+// failed VLAN move fails the transition: the device keeps its old state
+// and the caller sees the error.
+func TestService_UpdateDeviceState_VLANFailureFailsClosed(t *testing.T) {
+	for _, target := range []ProvisioningState{StateQuarantined, StateFailed, StateBooting} {
+		t.Run(string(target), func(t *testing.T) {
+			vlan := &failingFlowVLAN{VLANIntegration: NewNoopVLANIntegration(testNetPlan)}
+			svc := &service{
+				logger:       logging.DefaultLogger(),
+				stateManager: NewStateManager(),
+				vlanManager:  vlan,
+				config:       createTestConfig(),
+			}
+			svc.initialized.Store(true)
+			ctx := context.Background()
+
+			device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+			require.NoError(t, err)
+
+			vlan.fail.Store(true)
+			err = svc.UpdateDeviceState(ctx, device.ID, target, "test")
+			require.Error(t, err)
+			var provErr ErrProvisioningFailed
+			require.ErrorAs(t, err, &provErr)
+			assert.ErrorIs(t, err, errFlowMove)
+
+			got, err := svc.GetDevice(ctx, device.ID)
+			require.NoError(t, err)
+			assert.Equal(t, StateDiscovered, got.State)
+		})
+	}
+}
+
+// TestService_RegisterDevice_QuarantineFailureFailsClosed: a registration
+// whose quarantine move fails registers nothing, so a retry once the flow
+// manager recovers succeeds (#1896 P1).
+func TestService_RegisterDevice_QuarantineFailureFailsClosed(t *testing.T) {
+	vlan := &failingFlowVLAN{VLANIntegration: NewNoopVLANIntegration(testNetPlan)}
+	svc := &service{
+		logger:       logging.DefaultLogger(),
+		stateManager: NewStateManager(),
+		vlanManager:  vlan,
+		config:       createTestConfig(),
+	}
+	svc.initialized.Store(true)
+	ctx := context.Background()
+
+	vlan.fail.Store(true)
+	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+	require.Error(t, err)
+	assert.Nil(t, device)
+	assert.ErrorIs(t, err, errFlowMove)
+
+	_, err = svc.GetDeviceByMAC(ctx, "00:11:22:33:44:55")
+	require.Error(t, err, "a device whose quarantine move failed is registered")
+
+	vlan.fail.Store(false)
+	device, err = svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+	require.NoError(t, err)
+	require.NotNil(t, device)
+}
+
+// TestService_UpdateDeviceState_CommitsCurrentVLAN: a state move records the
+// VLAN it enforced, so GetDevice and a VLAN filter see the device where its
+// port is (#1896 P1).
+func TestService_UpdateDeviceState_CommitsCurrentVLAN(t *testing.T) {
+	cfg := createTestConfig()
+	require.NotEqual(t, cfg.QuarantineVLAN, cfg.ProvisioningVLAN)
+	vlan := &failingFlowVLAN{VLANIntegration: NewNoopVLANIntegration(testNetPlan)}
+	svc := &service{
+		logger:       logging.DefaultLogger(),
+		stateManager: NewStateManager(),
+		vlanManager:  vlan,
+		config:       cfg,
+	}
+	svc.initialized.Store(true)
+	ctx := context.Background()
+
+	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+	require.NoError(t, err)
+	assert.Equal(t, cfg.QuarantineVLAN, device.CurrentVLAN)
+
+	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateBooting, "test"))
+	got, err := svc.GetDevice(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, cfg.ProvisioningVLAN, got.CurrentVLAN)
+
+	inProvisioning, err := svc.ListDevices(ctx, &DeviceFilter{VLAN: cfg.ProvisioningVLAN})
+	require.NoError(t, err)
+	require.Len(t, inProvisioning, 1)
+	assert.Equal(t, device.ID, inProvisioning[0].ID)
+	inQuarantine, err := svc.ListDevices(ctx, &DeviceFilter{VLAN: cfg.QuarantineVLAN})
+	require.NoError(t, err)
+	assert.Empty(t, inQuarantine)
+
+	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateFailed, "test"))
+	got, err = svc.GetDevice(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, cfg.QuarantineVLAN, got.CurrentVLAN)
+}
+
+// deleteFailingPort is a recordingPort whose DeleteFlowsByPort fails on
+// demand while flow installation keeps succeeding.
+type deleteFailingPort struct {
+	recordingPort
+	failDelete bool
+}
+
+var errFlowDelete = errors.New("flow deletion failed")
+
+func (d *deleteFailingPort) DeleteFlowsByPort(string, string) error {
+	if d.failDelete {
+		return errFlowDelete
+	}
+	return nil
+}
+
+// TestService_UpdateDeviceState_FlowDeletionFailureFailsClosed: through the
+// real VLAN wrapper and zone flow manager, a failure to delete the port's
+// provisioning flows leaves the device in its old state, because the
+// provisioning allow rules would outrank quarantine's default drop.
+func TestService_UpdateDeviceState_FlowDeletionFailureFailsClosed(t *testing.T) {
+	port := &deleteFailingPort{}
+	zfm, err := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
+		BridgeName: "br-fabric", FlowController: port, PortController: port, Plan: testNetPlan,
+	})
+	require.NoError(t, err)
+	svc := &service{
+		logger:       logging.DefaultLogger(),
+		stateManager: NewStateManager(),
+		vlanManager:  NewVLANIntegrationWrapper(WithFlowManager(zfm)),
+		config:       createTestConfig(),
+	}
+	svc.initialized.Store(true)
+	ctx := context.Background()
+
+	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+	require.NoError(t, err)
+	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateBooting, "test"))
+	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateInstalling, "test"))
+
+	port.failDelete = true
+	err = svc.UpdateDeviceState(ctx, device.ID, StateQuarantined, "test")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errFlowDelete)
+
+	got, err := svc.GetDevice(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StateInstalling, got.State)
+}
+
+// blockingFlowVLAN blocks ApplyQuarantineFlows until release is closed.
+type blockingFlowVLAN struct {
+	VLANIntegration
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingFlowVLAN) ApplyQuarantineFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
+	close(b.entered)
+	<-b.release
+	return nil
+}
+
+// TestService_Close_WaitsForInFlightOperations checks that Close waits
+// for a RegisterDevice in flight before it clears the config, so the
+// call returns cleanly, and later calls see ErrServiceNotInitialized.
+func TestService_Close_WaitsForInFlightOperations(t *testing.T) {
+	vlan := &blockingFlowVLAN{
+		VLANIntegration: NewNoopVLANIntegration(testNetPlan),
+		entered:         make(chan struct{}),
+		release:         make(chan struct{}),
+	}
+	svc := &service{
+		logger:       logging.DefaultLogger(),
+		stateManager: NewStateManager(),
+		vlanManager:  vlan,
+		config:       createTestConfig(),
+	}
+	svc.initialized.Store(true)
+	ctx := context.Background()
+
+	type result struct {
+		device *DeviceInfo
+		err    error
+	}
+	registered := make(chan result, 1)
+	go func() {
+		d, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+		registered <- result{d, err}
+	}()
+	<-vlan.entered
+
+	closed := make(chan error, 1)
+	go func() { closed <- svc.Close() }()
+
+	select {
+	case <-closed:
+		t.Fatal("Close returned while RegisterDevice was in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(vlan.release)
+	r := <-registered
+	require.NoError(t, r.err)
+	require.NotNil(t, r.device)
+	require.NoError(t, <-closed)
+
+	_, err := svc.RegisterDevice(ctx, "00:11:22:33:44:66", "port-2")
+	var notInit ErrServiceNotInitialized
+	assert.ErrorAs(t, err, &notInit)
+}
+
+// gatedQuarantineVLAN blocks ApplyQuarantineFlows while armed, and
+// records the last flow set it installed, so a test can see which
+// flows a device's port is left with.
+type gatedQuarantineVLAN struct {
+	VLANIntegration
+	armed   atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+
+	mu        sync.Mutex
+	lastFlows string
+}
+
+func (g *gatedQuarantineVLAN) ApplyQuarantineFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
+	// The flows are installed first; the block stands for the time the
+	// call takes to return to the service.
+	g.mu.Lock()
+	g.lastFlows = "quarantine"
+	g.mu.Unlock()
+	if g.armed.CompareAndSwap(true, false) {
+		close(g.entered)
+		<-g.release
+	}
+	return nil
+}
+
+func (g *gatedQuarantineVLAN) ApplyAuthorizedFlows(ctx context.Context, portID string, mac net.HardwareAddr, vlanID uint16) error {
+	g.mu.Lock()
+	g.lastFlows = "authorized"
+	g.mu.Unlock()
+	return nil
+}
+
+func (g *gatedQuarantineVLAN) flows() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.lastFlows
+}
+
+// TestService_QuarantineAuthorize_Serialized checks that an
+// AuthorizeDevice started while a QuarantineDevice of the same device is
+// inside its flow change waits for it, so the device never ends
+// quarantined with production flows on its port.
+func TestService_QuarantineAuthorize_Serialized(t *testing.T) {
+	vlan := &gatedQuarantineVLAN{
+		VLANIntegration: NewNoopVLANIntegration(testNetPlan),
+		entered:         make(chan struct{}),
+		release:         make(chan struct{}),
+	}
+	svc := &service{
+		logger:       logging.DefaultLogger(),
+		stateManager: NewStateManager(),
+		vlanManager:  vlan,
+		config:       createTestConfig(),
+	}
+	svc.initialized.Store(true)
+	ctx := context.Background()
+
+	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:77", "port-7")
+	require.NoError(t, err)
+	require.NoError(t, svc.stateManager.UpdateDevice(device.ID, func(d *DeviceInfo) error {
+		d.State = StateAuthorizing
+		return nil
+	}))
+
+	vlan.armed.Store(true)
+	quarantined := make(chan error, 1)
+	go func() { quarantined <- svc.QuarantineDevice(ctx, device.ID, "test") }()
+	<-vlan.entered
+
+	authorized := make(chan error, 1)
+	go func() { authorized <- svc.AuthorizeDevice(ctx, device.ID, 200) }()
+
+	authReturned := false
+	select {
+	case <-authorized:
+		// The old code lets authorize run to the end here; the
+		// release below still lets the quarantine commit.
+		authReturned = true
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(vlan.release)
+	require.NoError(t, <-quarantined)
+
+	if !authReturned {
+		select {
+		case <-authorized:
+		case <-time.After(5 * time.Second):
+			t.Fatal("AuthorizeDevice did not return after the quarantine finished")
+		}
+	}
+
+	got, err := svc.GetDevice(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StateQuarantined, got.State)
+	assert.Equal(t, svc.config.QuarantineVLAN, got.CurrentVLAN)
+	assert.Equal(t, "quarantine", vlan.flows(),
+		"a quarantined device must not be left with production flows")
 }

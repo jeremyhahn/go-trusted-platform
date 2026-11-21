@@ -963,6 +963,9 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	defer attestation.Stop()
 	attestationSvcs := attestation.Services
 	sdnPolicy := attestation.SDNPolicy
+	// The PXE backend moves devices between zones on the SDN policy's flow
+	// manager; an enabled pxe: section without one fails daemon start.
+	wirePXEOnConfig(App, daemonConfig, sdnPolicy)
 	reportingRest := attestation.ReportingRest
 
 	// Construct the SDN enrollment hook on the same engine. The webservice
@@ -1322,6 +1325,9 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			if svc := platformDaemon.PXEGRPCServiceServer(); svc != nil {
 				params.PXEServiceServer = svc
 			}
+			// The install-completion webhook follows the pxe: section's
+			// webhook-enabled and webhook-secret (#1694).
+			params.SetPXEWebhook(App.PXEConfig)
 			if svc := platformDaemon.NTPGRPCServiceServer(); svc != nil {
 				params.NTPServiceServer = svc
 			}
@@ -1544,6 +1550,20 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 
 // runDaemonOnly starts the platform daemon without webservices.
 // This mode can run with limited functionality even if the CA is not available.
+// wirePXEOnConfig carries the pxe: section and the SDN zone flow manager
+// onto cfg. Both run paths call it (#1694), so daemon start validates an
+// enabled section, and refuses one with no flow manager, whether or not
+// webservices run.
+func wirePXEOnConfig(a *app.App, cfg *daemon.Config, sdnPolicy *sdnPolicyComponents) {
+	if a == nil || cfg == nil {
+		return
+	}
+	cfg.PXE = a.PXEConfig
+	if sdnPolicy != nil {
+		cfg.PXEFlowManager = sdnPolicy.ZoneFlowManager
+	}
+}
+
 func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Signal, logger *logging.Logger, appErr error) error {
 	config := daemon.DefaultConfig()
 	if App != nil {
@@ -1692,6 +1712,11 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	initRegistryServiceOnConfig(logger, App, config)
 	attestation := wireAttestationOnConfig(ctx, logger, App, config)
 	defer attestation.Stop()
+	// The pxe: section and its SDN flow manager, as runWithWebservices
+	// wires them: without them every PXE RPC on a daemon-only node answers
+	// SERVICE_NOT_CONFIGURED and an invalid enabled section is never
+	// validated (#1694).
+	wirePXEOnConfig(App, config, attestation.SDNPolicy)
 
 	// M6 barrier-unseal gate: bind only the Unix socket + a loopback
 	// /healthz + /init + /unseal HTTP listener and block until the

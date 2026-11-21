@@ -88,8 +88,11 @@ comes back.
 **`WebhookComplete` is an input, not a truth.** It is the machine reporting that
 installation finished; the state machine decides what that means. Its REST route
 is registered only when `pxe.ServiceConfig.WebhookEnabled` is true (default
-false), and is then unauthenticated — see [`docs/ipxe/api.md`](../ipxe/api.md)
-§4 and #238.
+false), and then admits only a report HMAC-signed with
+`pxe.ServiceConfig.WebhookSecret` (#240) and sent over a verified mTLS device
+client certificate whose SHA-256 is the IDevID fingerprint recorded for the
+reported MAC's device (ruling 673) — see [`docs/ipxe/api.md`](../ipxe/api.md)
+§4 for both checks and their refusals.
 
 ---
 
@@ -189,8 +192,10 @@ PXE service refuses (`FailedPrecondition`) `409` (#665), and a token without
 alone applies.
 
 `NotifyInstallComplete` is the same operation as the booting node's
-`POST /api/v1/pxe/webhook/complete`. That webhook presents no credential
-(#238). The gateway route is not a second open path: it takes the admin gate
+`POST /api/v1/pxe/webhook/complete`. That webhook presents an HMAC of the body
+under the shared `WebhookSecret` (#240) and a verified mTLS device client
+certificate matching the IDevID fingerprint recorded for the device
+([`docs/ipxe/api.md`](../ipxe/api.md) §4). The gateway route takes the admin gate
 and the scope. The EAB check was not used, because it authenticates a device
 on its own first contact, not a gateway reporting on a device.
 

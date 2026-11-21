@@ -15,15 +15,31 @@ package daemon
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -161,6 +177,13 @@ func (m *mockPXEService) RemoveDevice(ctx context.Context, deviceID string) erro
 	return nil
 }
 
+func (m *mockPXEService) UpdateDeviceStateForIDevID(ctx context.Context, deviceID, fingerprint string, state pxe.ProvisioningState, reason string) error {
+	if d, ok := m.devices[deviceID]; ok && d.IDevIDFingerprint != fingerprint {
+		return pxe.ErrIDevIDMismatch{DeviceID: deviceID}
+	}
+	return m.UpdateDeviceState(ctx, deviceID, state, reason)
+}
+
 func (m *mockPXEService) UpdateDeviceState(ctx context.Context, deviceID string, state pxe.ProvisioningState, reason string) error {
 	if m.updateStateErr != nil {
 		return m.updateStateErr
@@ -173,6 +196,15 @@ func (m *mockPXEService) UpdateDeviceState(ctx context.Context, deviceID string,
 	device.StateReason = reason
 	device.StateChangedAt = time.Now()
 	device.UpdatedAt = time.Now()
+	return nil
+}
+
+func (m *mockPXEService) RecordIDevIDFingerprint(ctx context.Context, deviceID, fingerprint string) error {
+	device, ok := m.devices[deviceID]
+	if !ok {
+		return pxe.ErrDeviceNotFound{DeviceID: deviceID}
+	}
+	device.IDevIDFingerprint = fingerprint
 	return nil
 }
 
@@ -750,6 +782,39 @@ func TestPXEGRPCService_Authorize(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
 	})
+
+	// Out-of-range VLANs are refused before the service is called: a
+	// uint16 conversion would otherwise turn 65556 into VLAN 20.
+	for _, vlan := range []uint32{4095, 65556} {
+		t.Run(fmt.Sprintf("target VLAN %d out of range", vlan), func(t *testing.T) {
+			before := mockService.devices[deviceID].TargetVLAN
+			resp, err := svc.Authorize(ctx, &platformv1.AuthorizePXEDeviceRequest{
+				DeviceId:   deviceID,
+				TargetVlan: vlan,
+			})
+
+			require.Error(t, err)
+			assert.Nil(t, resp)
+			st, ok := status.FromError(err)
+			require.True(t, ok)
+			assert.Equal(t, codes.InvalidArgument, st.Code())
+			assert.Contains(t, st.Message(), "1-4094")
+			assert.Equal(t, before, mockService.devices[deviceID].TargetVLAN, "AuthorizeDevice must not be called")
+		})
+	}
+
+	for _, vlan := range []uint32{1, 4094} {
+		t.Run(fmt.Sprintf("target VLAN %d accepted", vlan), func(t *testing.T) {
+			resp, err := svc.Authorize(ctx, &platformv1.AuthorizePXEDeviceRequest{
+				DeviceId:   deviceID,
+				TargetVlan: vlan,
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+			assert.Equal(t, vlan, resp.GetDevice().GetTargetVlan())
+		})
+	}
 }
 
 // TestPXEGRPCService_Quarantine tests quarantining a device.
@@ -1275,6 +1340,549 @@ func TestPXEGRPCService_SetPXEService(t *testing.T) {
 	svc.SetPXEService(mockService)
 
 	assert.NotNil(t, svc.pxeService)
+}
+
+// pxeSectionApp is an app whose sdn: section numbers the zones the PXE
+// backend's VLANs come from.
+func pxeSectionApp() *app.App {
+	return &app.App{SDNConfig: &sdn.Config{
+		Enabled:     true,
+		Environment: &netplan.Environment{ID: 4},
+		Zones:       zone.Defaults(),
+	}}
+}
+
+// isPXEServiceNotConfigured reports whether err carries the typed
+// SERVICE_NOT_CONFIGURED ErrorInfo detail.
+func isPXEServiceNotConfigured(err error) bool {
+	st, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	for _, d := range st.Details() {
+		if info, ok := d.(*errdetails.ErrorInfo); ok && info.GetReason() == response.ReasonServiceNotConfigured {
+			return true
+		}
+	}
+	return false
+}
+
+// TestPXEGRPCServiceFromConfig_DaemonPXESection pins the daemon side of the
+// pxe: section (#1694): no section or enabled: false leaves the service with
+// no backend (every verb answers SERVICE_NOT_CONFIGURED, as before), a valid
+// enabled section reaches a real backend, and an invalid enabled section
+// fails daemon start with a typed error.
+func TestPXEGRPCServiceFromConfig_DaemonPXESection(t *testing.T) {
+	ctx := context.Background()
+	logger := logging.DefaultLogger()
+
+	notConfigured := func(t *testing.T, svc *PXEGRPCService) {
+		t.Helper()
+		_, err := svc.ListDevices(ctx, &platformv1.ListPXEDevicesRequest{})
+		require.Error(t, err)
+		assert.Equal(t, codes.Unavailable, status.Code(err))
+		assert.True(t, isPXEServiceNotConfigured(err), "want SERVICE_NOT_CONFIGURED, got %v", err)
+	}
+
+	t.Run("no section", func(t *testing.T) {
+		svc, err := pxeGRPCServiceFromConfig(ctx, logger, pxeSectionApp(), nil, nil)
+		require.NoError(t, err)
+		notConfigured(t, svc)
+	})
+
+	t.Run("enabled false", func(t *testing.T) {
+		svc, err := pxeGRPCServiceFromConfig(ctx, logger, pxeSectionApp(), &pxe.DaemonConfig{BridgeName: "br-pxe"}, nil)
+		require.NoError(t, err)
+		notConfigured(t, svc)
+	})
+
+	t.Run("enabled reaches the backend", func(t *testing.T) {
+		section := &pxe.DaemonConfig{
+			Enabled:         true,
+			BridgeName:      "br-pxe",
+			BindHost:        "127.0.0.1",
+			LocalFilesDir:   t.TempDir(),
+			InstallsDir:     t.TempDir(),
+			FirmwareDir:     t.TempDir(),
+			FirmwareOffline: true,
+			BootEntries:     []ipxe.BootEntry{{Name: "test", Description: "Test Entry", Kernel: "http://example.com/kernel"}},
+		}
+		svc, err := pxeGRPCServiceFromConfig(ctx, logger, pxeSectionApp(), section, pxeTestFlowManager(t, &pxeRecordingPort{}))
+		require.NoError(t, err)
+		resp, err := svc.ListDevices(ctx, &platformv1.ListPXEDevicesRequest{})
+		require.NoError(t, err)
+		assert.Empty(t, resp.GetDevices())
+	})
+
+	t.Run("invalid enabled section fails start", func(t *testing.T) {
+		svc, err := pxeGRPCServiceFromConfig(ctx, logger, pxeSectionApp(), &pxe.DaemonConfig{Enabled: true}, nil)
+		require.Error(t, err)
+		assert.Nil(t, svc)
+		assert.True(t, errors.Is(err, pxe.ErrInvalidConfig), "got %v", err)
+	})
+
+	t.Run("enabled without a network plan fails start", func(t *testing.T) {
+		svc, err := pxeGRPCServiceFromConfig(ctx, logger, &app.App{}, &pxe.DaemonConfig{Enabled: true, BridgeName: "br-pxe"}, nil)
+		require.Error(t, err)
+		assert.Nil(t, svc)
+		var want pxe.ErrNetworkPlanRequired
+		assert.True(t, errors.As(err, &want), "got %v", err)
+	})
+}
+
+// pxeRecordingPort is an OVS port controller that records the access VLANs
+// the zone flow manager sets.
+type pxeRecordingPort struct {
+	vlans []int64
+	// flows records every rule installed, in order.
+	flows []zoneflows.FlowRule
+	// fail makes every flow and VLAN move fail, as an unreachable switch.
+	fail bool
+}
+
+var errPXEPortDown = errors.New("switch unreachable")
+
+func (p *pxeRecordingPort) InstallFlow(string, int, string, string) error { return nil }
+func (p *pxeRecordingPort) InstallFlows(_ string, rules []zoneflows.FlowRule) error {
+	if p.fail {
+		return errPXEPortDown
+	}
+	p.flows = append(p.flows, rules...)
+	return nil
+}
+func (p *pxeRecordingPort) DeleteFlow(string, string) error                              { return nil }
+func (p *pxeRecordingPort) DeleteFlowsByPort(string, string) error                       { return nil }
+func (p *pxeRecordingPort) ListFlows(string) ([]string, error)                           { return nil, nil }
+func (p *pxeRecordingPort) SetPortTrunk(context.Context, string, []uint16, uint16) error { return nil }
+func (p *pxeRecordingPort) SetPortState(context.Context, string, ovs.PortState) error    { return nil }
+func (p *pxeRecordingPort) GetOFPort(context.Context, string) (int32, error)             { return 1, nil }
+func (p *pxeRecordingPort) SetPortVLAN(_ context.Context, _ string, v int64) error {
+	if p.fail {
+		return errPXEPortDown
+	}
+	p.vlans = append(p.vlans, v)
+	return nil
+}
+
+// pxeTestFlowManager builds a zone flow manager on the network plan of
+// pxeSectionApp, driving port.
+func pxeTestFlowManager(t *testing.T, port *pxeRecordingPort) *policy.ZoneFlowManager {
+	t.Helper()
+	zones, env := zoneServiceSeed(pxeSectionApp())
+	require.NotNil(t, env)
+	if len(zones) == 0 {
+		zones = zone.Defaults()
+	}
+	plan, err := netplan.New(*env, zones)
+	require.NoError(t, err)
+	zfm, err := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
+		BridgeName: "br-pxe", FlowController: port, PortController: port, Plan: plan,
+	})
+	require.NoError(t, err)
+	return zfm
+}
+
+// pxeEnabledSection is a valid, enabled pxe: section on temporary dirs.
+func pxeEnabledSection(t *testing.T) *pxe.DaemonConfig {
+	t.Helper()
+	return &pxe.DaemonConfig{
+		Enabled:         true,
+		BridgeName:      "br-pxe",
+		BindHost:        "127.0.0.1",
+		LocalFilesDir:   t.TempDir(),
+		InstallsDir:     t.TempDir(),
+		FirmwareDir:     t.TempDir(),
+		FirmwareOffline: true,
+		BootEntries:     []ipxe.BootEntry{{Name: "test", Description: "Test Entry", Kernel: "http://example.com/kernel"}},
+	}
+}
+
+// TestDaemonPXEBackendRequiresFlowManager: an enabled pxe: section with no
+// zone flow manager is refused at start rather than running with no-op
+// quarantine, provisioning and authorization flows; with one, a quarantine
+// reaches the flow manager (Codex P1 on #1896).
+func TestDaemonPXEBackendRequiresFlowManager(t *testing.T) {
+	ctx := context.Background()
+	logger := logging.DefaultLogger()
+
+	t.Run("no flow manager fails start", func(t *testing.T) {
+		svc, err := pxeGRPCServiceFromConfig(ctx, logger, pxeSectionApp(), pxeEnabledSection(t), nil)
+		require.Error(t, err)
+		assert.Nil(t, svc)
+		var want pxe.ErrInvalidConfiguration
+		assert.True(t, errors.As(err, &want), "got %v", err)
+	})
+
+	t.Run("quarantine reaches the flow manager", func(t *testing.T) {
+		port := &pxeRecordingPort{}
+		svc, err := pxeGRPCServiceFromConfig(ctx, logger, pxeSectionApp(), pxeEnabledSection(t), pxeTestFlowManager(t, port))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = svc.Close() })
+
+		reg, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{MacAddress: "52:54:00:12:34:56", PortId: "port-1"})
+		require.NoError(t, err)
+		before := len(port.vlans)
+		_, err = svc.Quarantine(ctx, &platformv1.QuarantinePXEDeviceRequest{DeviceId: reg.GetDevice().GetId(), Reason: "test"})
+		require.NoError(t, err)
+		assert.Greater(t, len(port.vlans), before, "the quarantine set no VLAN through the flow manager")
+	})
+}
+
+// pxeFreePort asks the OS for a loopback port nothing listens on.
+func pxeFreePort(t *testing.T, network string) int {
+	t.Helper()
+	if network == "udp" {
+		c, err := net.ListenPacket("udp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer c.Close()
+		return c.LocalAddr().(*net.UDPAddr).Port
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+// pxeStartedBackend builds the PXEGRPCService a daemon holds around a
+// started backend whose iPXE HTTP listener is on the returned port.
+func pxeStartedBackend(t *testing.T) (*PXEGRPCService, string) {
+	t.Helper()
+	section := pxeEnabledSection(t)
+	require.NoError(t, os.WriteFile(filepath.Join(section.FirmwareDir, "ipxe.efi"), []byte("test firmware"), 0o600))
+	zones, env := zoneServiceSeed(pxeSectionApp())
+	require.NotNil(t, env)
+	if len(zones) == 0 {
+		zones = zone.Defaults()
+	}
+	plan, err := netplan.New(*env, zones)
+	require.NoError(t, err)
+	cfg, err := section.ToServiceConfig(plan)
+	require.NoError(t, err)
+	httpPort := pxeFreePort(t, "tcp")
+	cfg.IPXEConfig.HTTPPort = httpPort
+	cfg.IPXEConfig.TFTPPort = pxeFreePort(t, "udp")
+
+	backend := pxe.NewService(pxe.WithVLANIntegration(pxe.NewNoopVLANIntegration(plan)))
+	require.NoError(t, backend.Initialize(context.Background(), cfg))
+	require.NoError(t, backend.Start(context.Background()))
+	t.Cleanup(func() { _ = backend.Close() })
+
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(httpPort))
+	conn, err := net.Dial("tcp", addr)
+	require.NoError(t, err, "the started backend is not listening")
+	_ = conn.Close()
+
+	svc := NewPXEGRPCService(logging.DefaultLogger(), nil)
+	svc.SetPXEService(backend)
+	return svc, addr
+}
+
+// TestDaemonStopStopsPXEBackend: Stop, ForceStop and startup rollback stop
+// the PXE backend, so its iPXE listener port is free afterwards (#1694).
+func TestDaemonStopStopsPXEBackend(t *testing.T) {
+	cases := map[string]func(d *Daemon){
+		"Stop":      func(d *Daemon) { _ = d.Stop(context.Background()) },
+		"ForceStop": func(d *Daemon) { _ = d.ForceStop() },
+		"rollback":  func(d *Daemon) { d.rollbackPartialStart(context.Background()) },
+	}
+	for name, stop := range cases {
+		t.Run(name, func(t *testing.T) {
+			svc, addr := pxeStartedBackend(t)
+			config := DefaultConfig()
+			config.Logger = logging.DefaultLogger()
+			service, err := NewService(config)
+			require.NoError(t, err)
+			d := &Daemon{logger: config.Logger, config: config, service: service, pxeGRPCService: svc}
+			d.running.Store(true)
+
+			stop(d)
+
+			l, err := net.Listen("tcp", addr)
+			require.NoError(t, err, "the PXE listener is still bound after %s", name)
+			_ = l.Close()
+		})
+	}
+}
+
+// TestDaemonRollbackKeepsPXEBackendUsable: startup rollback frees the iPXE
+// listener but keeps the backend initialized, so a Start retry serves PXE
+// device operations and StartService (#1896 P1).
+func TestDaemonRollbackKeepsPXEBackendUsable(t *testing.T) {
+	svc, addr := pxeStartedBackend(t)
+	config := DefaultConfig()
+	config.Logger = logging.DefaultLogger()
+	service, err := NewService(config)
+	require.NoError(t, err)
+	d := &Daemon{logger: config.Logger, config: config, service: service, pxeGRPCService: svc}
+	d.running.Store(true)
+
+	d.rollbackPartialStart(context.Background())
+
+	l, err := net.Listen("tcp", addr)
+	require.NoError(t, err, "the PXE listener is still bound after rollback")
+	_ = l.Close()
+
+	ctx := context.Background()
+	_, err = svc.ListDevices(ctx, &platformv1.ListPXEDevicesRequest{})
+	require.NoError(t, err)
+	_, err = svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{MacAddress: "00:11:22:33:44:ee", PortId: "port-1"})
+	require.NoError(t, err)
+	_, err = svc.StartService(ctx, &platformv1.StartPXEServiceRequest{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+}
+
+// startingPXEService models a backend whose Start is still binding its
+// listeners: IsRunning is false, and Stop is the call that waits on the
+// lifecycle lock Start holds. It records each Stop and what the daemon's
+// transports looked like at that moment.
+type startingPXEService struct {
+	pxe.Service
+	stops             int
+	grpcListenerAlive bool
+	daemon            *Daemon
+}
+
+func (s *startingPXEService) IsRunning() bool { return false }
+
+func (s *startingPXEService) Stop(context.Context) error {
+	s.stops++
+	if s.daemon != nil {
+		s.grpcListenerAlive = s.daemon.grpcListener != nil
+	}
+	return pxe.ErrServiceNotRunning{}
+}
+
+func TestPXEStopBackendWaitsForAnInFlightStart(t *testing.T) {
+	backend := &startingPXEService{}
+	svc := NewPXEGRPCService(logging.DefaultLogger(), nil)
+	svc.SetPXEService(backend)
+
+	require.NoError(t, svc.StopBackend(context.Background()), "a backend Start left not running is not an error")
+	assert.Equal(t, 1, backend.stops, "StopBackend must call Stop, which serialises with an in-flight Start, even while IsRunning is false")
+}
+
+func TestPXEStopBackendStopsTheRunAConcurrentStartLeft(t *testing.T) {
+	svc, addr := pxeStartedBackend(t)
+
+	require.NoError(t, svc.StopBackend(context.Background()))
+	l, err := net.Listen("tcp", addr)
+	require.NoError(t, err, "the iPXE listener is still bound after StopBackend")
+	_ = l.Close()
+	require.NoError(t, svc.StopBackend(context.Background()), "a second StopBackend on a stopped backend is not an error")
+}
+
+func TestDaemonRollbackStopsPXEAfterTheTransports(t *testing.T) {
+	config := DefaultConfig()
+	config.Logger = logging.DefaultLogger()
+	service, err := NewService(config)
+	require.NoError(t, err)
+	backend := &startingPXEService{}
+	svc := NewPXEGRPCService(logging.DefaultLogger(), nil)
+	svc.SetPXEService(backend)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	d := &Daemon{logger: config.Logger, config: config, service: service, pxeGRPCService: svc, grpcListener: l}
+	backend.daemon = d
+
+	d.rollbackPartialStart(context.Background())
+
+	require.Equal(t, 1, backend.stops, "rollback must stop the PXE backend")
+	assert.False(t, backend.grpcListenerAlive, "rollback stopped the PXE backend while the gRPC transport still accepted StartService")
+}
+
+// TestPXEGRPC_UpdateStateFailsWhenTheVLANMoveFails checks that the
+// UpdateState RPC on the configured backend fails, and the device keeps
+// its state, when the flow manager cannot move the device (#1694).
+func TestPXEGRPC_UpdateStateFailsWhenTheVLANMoveFails(t *testing.T) {
+	ctx := context.Background()
+	port := &pxeRecordingPort{}
+	svc, err := pxeGRPCServiceFromConfig(ctx, logging.DefaultLogger(), pxeSectionApp(), pxeEnabledSection(t), pxeTestFlowManager(t, port))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	reg, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{MacAddress: "00:11:22:33:44:dd", PortId: "port-1"})
+	require.NoError(t, err)
+	deviceID := reg.GetDevice().GetId()
+
+	port.fail = true
+	resp, err := svc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
+		DeviceId: deviceID,
+		State:    platformv1.ProvisioningState_PROVISIONING_STATE_QUARANTINED,
+		Reason:   "quarantine",
+	})
+	require.Error(t, err, "UpdateState succeeded although the VLAN move failed: %v", resp)
+
+	got, err := svc.GetDevice(ctx, &platformv1.GetPXEDeviceRequest{DeviceId: deviceID})
+	require.NoError(t, err)
+	assert.Equal(t, platformv1.ProvisioningState_PROVISIONING_STATE_DISCOVERED, got.GetDevice().GetState())
+}
+
+// TestPXEGRPC_BootingAllowsTheIPXEHTTPPort checks that moving a device to
+// booting on the configured backend installs an allow rule for the iPXE
+// server's HTTP port, from which the device fetches its boot script and
+// payloads (docs/SPEC.md provisioning ports, #1694).
+func TestPXEGRPC_BootingAllowsTheIPXEHTTPPort(t *testing.T) {
+	ctx := context.Background()
+	port := &pxeRecordingPort{}
+	svc, err := pxeGRPCServiceFromConfig(ctx, logging.DefaultLogger(), pxeSectionApp(), pxeEnabledSection(t), pxeTestFlowManager(t, port))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	reg, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{MacAddress: "00:11:22:33:44:de", PortId: "port-1"})
+	require.NoError(t, err)
+
+	port.flows = nil
+	_, err = svc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
+		DeviceId: reg.GetDevice().GetId(),
+		State:    platformv1.ProvisioningState_PROVISIONING_STATE_BOOTING,
+		Reason:   "boot",
+	})
+	require.NoError(t, err)
+
+	want := fmt.Sprintf("tp_dst=%d", ipxe.DefaultHTTPPort)
+	allowed := false
+	for _, f := range port.flows {
+		if strings.Contains(f.Match, "nw_proto=6") && strings.Contains(f.Match, want) && f.Actions != "drop" {
+			allowed = true
+		}
+	}
+	assert.True(t, allowed, "no provisioning allow rule for the iPXE HTTP port %d", ipxe.DefaultHTTPPort)
+}
+
+// Codex round 5 P1 on #1896: docs/SPEC.md (ipxe row) requires the
+// provisioning-zone rules to admit TCP 8080 (iPXE HTTP), 8081 (the
+// bootstrap device-script and UKI server) and 10809 (NBD). A provisioning
+// transition replaces the port's flows, so each must be carried into the
+// generator and installed as an allow rule.
+func TestPXEGRPC_BootingAllowsEveryProvisioningBootPort(t *testing.T) {
+	ctx := context.Background()
+	port := &pxeRecordingPort{}
+	svc, err := pxeGRPCServiceFromConfig(ctx, logging.DefaultLogger(), pxeSectionApp(), pxeEnabledSection(t), pxeTestFlowManager(t, port))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	reg, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{MacAddress: "00:11:22:33:44:df", PortId: "port-1"})
+	require.NoError(t, err)
+
+	port.flows = nil
+	_, err = svc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
+		DeviceId: reg.GetDevice().GetId(),
+		State:    platformv1.ProvisioningState_PROVISIONING_STATE_BOOTING,
+		Reason:   "boot",
+	})
+	require.NoError(t, err)
+
+	for _, p := range []int{8080, 8081, 10809} {
+		want := fmt.Sprintf("tp_dst=%d", p)
+		allowed := false
+		for _, f := range port.flows {
+			if strings.Contains(f.Match, "nw_proto=6") && strings.Contains(f.Match, want) && f.Actions != "drop" {
+				allowed = true
+			}
+		}
+		assert.True(t, allowed, "no provisioning allow rule for TCP port %d", p)
+	}
+}
+
+// TestDaemonPXEBackendRefusesABridgeMismatch: the VLAN wrapper only
+// delegates to the shared flow manager, so a pxe.bridge-name other than
+// the manager's sdn.ovs.bridge is refused at startup (#1694).
+func TestDaemonPXEBackendRefusesABridgeMismatch(t *testing.T) {
+	ctx := context.Background()
+	zones, env := zoneServiceSeed(pxeSectionApp())
+	require.NotNil(t, env)
+	if len(zones) == 0 {
+		zones = zone.Defaults()
+	}
+	plan, err := netplan.New(*env, zones)
+	require.NoError(t, err)
+	port := &pxeRecordingPort{}
+	flows, err := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
+		BridgeName: "br-int", FlowController: port, PortController: port, Plan: plan,
+	})
+	require.NoError(t, err)
+
+	section := pxeEnabledSection(t)
+	require.Equal(t, "br-pxe", section.BridgeName)
+	svc, err := pxeGRPCServiceFromConfig(ctx, logging.DefaultLogger(), pxeSectionApp(), section, flows)
+	require.Error(t, err)
+	assert.Nil(t, svc)
+	var cfgErr pxe.ErrInvalidConfiguration
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "pxe.bridge-name", cfgErr.Field)
+}
+
+// pxeBlockingVLAN blocks ApplyQuarantineFlows until release is closed.
+type pxeBlockingVLAN struct {
+	pxe.VLANIntegration
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *pxeBlockingVLAN) ApplyQuarantineFlows(context.Context, string, net.HardwareAddr) error {
+	close(b.entered)
+	<-b.release
+	return nil
+}
+
+// TestDaemonStopWaitsForAPXECallInFlight checks, under -race, that a
+// RegisterDevice blocked mid-call while Stop or ForceStop closes the PXE
+// backend returns cleanly, and that the stop waits for it (#1694).
+func TestDaemonStopWaitsForAPXECallInFlight(t *testing.T) {
+	cases := map[string]func(d *Daemon){
+		"Stop":      func(d *Daemon) { _ = d.Stop(context.Background()) },
+		"ForceStop": func(d *Daemon) { _ = d.ForceStop() },
+	}
+	for name, stop := range cases {
+		t.Run(name, func(t *testing.T) {
+			zones, env := zoneServiceSeed(pxeSectionApp())
+			require.NotNil(t, env)
+			if len(zones) == 0 {
+				zones = zone.Defaults()
+			}
+			plan, err := netplan.New(*env, zones)
+			require.NoError(t, err)
+			cfg, err := pxeEnabledSection(t).ToServiceConfig(plan)
+			require.NoError(t, err)
+
+			vlan := &pxeBlockingVLAN{
+				VLANIntegration: pxe.NewNoopVLANIntegration(plan),
+				entered:         make(chan struct{}),
+				release:         make(chan struct{}),
+			}
+			backend := pxe.NewService(pxe.WithVLANIntegration(vlan))
+			require.NoError(t, backend.Initialize(context.Background(), cfg))
+			svc := NewPXEGRPCService(logging.DefaultLogger(), nil)
+			svc.SetPXEService(backend)
+
+			config := DefaultConfig()
+			config.Logger = logging.DefaultLogger()
+			service, err := NewService(config)
+			require.NoError(t, err)
+			d := &Daemon{logger: config.Logger, config: config, service: service, pxeGRPCService: svc}
+			d.running.Store(true)
+
+			registered := make(chan error, 1)
+			go func() {
+				_, err := svc.RegisterDevice(context.Background(), &platformv1.RegisterPXEDeviceRequest{MacAddress: "00:11:22:33:44:ee", PortId: "port-1"})
+				registered <- err
+			}()
+			<-vlan.entered
+
+			stopped := make(chan struct{})
+			go func() { stop(d); close(stopped) }()
+			select {
+			case <-stopped:
+				t.Fatalf("%s returned while a PXE call was in flight", name)
+			case <-time.After(100 * time.Millisecond):
+			}
+
+			close(vlan.release)
+			require.NoError(t, <-registered)
+			<-stopped
+		})
+	}
 }
 
 // TestPXEGRPCService_FilterFromProto tests filter conversion from proto.
