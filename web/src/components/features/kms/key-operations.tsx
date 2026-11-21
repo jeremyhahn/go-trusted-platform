@@ -38,6 +38,7 @@ export function KeyOperations({
   const [activeTab, setActiveTab] = React.useState("encrypt");
   const [loading, setLoading] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
 
   // Encrypt/Decrypt state
   const [plaintext, setPlaintext] = React.useState("");
@@ -57,11 +58,13 @@ export function KeyOperations({
   const handleEncrypt = async () => {
     if (!onEncrypt || !plaintext) return;
     setLoading(true);
+    setError(null);
     try {
       const result = await onEncrypt(plaintext);
       setCiphertext(result);
     } catch (error) {
       console.error("Encryption failed:", error);
+      setError(error instanceof Error ? error.message : String(error));
     } finally {
       setLoading(false);
     }
@@ -70,11 +73,13 @@ export function KeyOperations({
   const handleDecrypt = async () => {
     if (!onDecrypt || !ciphertext) return;
     setLoading(true);
+    setError(null);
     try {
       const result = await onDecrypt(ciphertext);
       setDecryptResult(result);
     } catch (error) {
       console.error("Decryption failed:", error);
+      setError(error instanceof Error ? error.message : String(error));
     } finally {
       setLoading(false);
     }
@@ -83,11 +88,13 @@ export function KeyOperations({
   const handleSign = async () => {
     if (!onSign || !signData) return;
     setLoading(true);
+    setError(null);
     try {
       const result = await onSign(signData);
       setSignature(result);
     } catch (error) {
       console.error("Signing failed:", error);
+      setError(error instanceof Error ? error.message : String(error));
     } finally {
       setLoading(false);
     }
@@ -96,11 +103,13 @@ export function KeyOperations({
   const handleVerify = async () => {
     if (!onVerify || !verifyData || !verifySignature) return;
     setLoading(true);
+    setError(null);
     try {
       const result = await onVerify(verifyData, verifySignature);
       setVerifyResult(result);
     } catch (error) {
       console.error("Verification failed:", error);
+      setError(error instanceof Error ? error.message : String(error));
     } finally {
       setLoading(false);
     }
@@ -147,6 +156,12 @@ export function KeyOperations({
               Sign/Verify {!isAsymmetric && "(Asymmetric only)"}
             </TabsTrigger>
           </TabsList>
+
+          {error && (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
 
           {/* Encrypt/Decrypt Tab */}
           <TabsContent value="encrypt" className="space-y-4">
