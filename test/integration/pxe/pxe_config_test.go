@@ -16,6 +16,7 @@
 package pxe
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -93,6 +94,12 @@ func TestPXEIntegrationConfigEnablesPXE(t *testing.T) {
 	svc, err := cfg.PXE.ToServiceConfig(integrationPlan(t))
 	require.NoError(t, err)
 	require.NotNil(t, svc)
+	require.NotEmpty(t, svc.IPXEConfig.BootEntries, "the overlay carries a boot entry; the iPXE server refuses to initialize without one")
+
+	// The fixture must survive backend initialization, not only conversion.
+	b := pxesvc.NewService()
+	require.NoError(t, b.Initialize(context.Background(), svc))
+	t.Cleanup(func() { _ = b.Close() })
 
 	// The pxe leg's iPXE HTTP server must not take the ipxe suite's 8080 on
 	// the shared host network.

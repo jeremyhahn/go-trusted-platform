@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1783,6 +1784,91 @@ func TestPXEGRPC_BootingAllowsEveryProvisioningBootPort(t *testing.T) {
 		}
 		assert.True(t, allowed, "no provisioning allow rule for TCP port %d", p)
 	}
+}
+
+// TestPXEGRPC_BootPortsReachOnlyTheBootServer pins that a booting device's
+// boot-port allowances name only the boot server: the bind host when it is a
+// usable address, otherwise the provisioning zone's own addresses, never a
+// destination in another zone.
+func TestPXEGRPC_BootPortsReachOnlyTheBootServer(t *testing.T) {
+	zones, env := zoneServiceSeed(pxeSectionApp())
+	require.NotNil(t, env)
+	if len(zones) == 0 {
+		zones = zone.Defaults()
+	}
+	plan, err := netplan.New(*env, zones)
+	require.NoError(t, err)
+	prov, err := plan.MustZone(zone.ZoneProvisioning)
+	require.NoError(t, err)
+	cp, err := plan.MustZone(zone.ZoneControlPlane)
+	require.NoError(t, err)
+
+	bootRules := func(t *testing.T, bindHost string) map[int][]string {
+		t.Helper()
+		ctx := context.Background()
+		section := pxeEnabledSection(t)
+		section.BindHost = bindHost
+		port := &pxeRecordingPort{}
+		svc, err := pxeGRPCServiceFromConfig(ctx, logging.DefaultLogger(), pxeSectionApp(), section, pxeTestFlowManager(t, port))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = svc.Close() })
+		reg, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{MacAddress: "00:11:22:33:44:e0", PortId: "port-1"})
+		require.NoError(t, err)
+		port.flows = nil
+		_, err = svc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
+			DeviceId: reg.GetDevice().GetId(),
+			State:    platformv1.ProvisioningState_PROVISIONING_STATE_BOOTING,
+			Reason:   "boot",
+		})
+		require.NoError(t, err)
+
+		out := map[int][]string{}
+		for _, p := range []int{8080, 8081, 10809} {
+			want := fmt.Sprintf("tp_dst=%d", p)
+			for _, f := range port.flows {
+				if f.Actions == "drop" || !strings.Contains(f.Match, "nw_proto=6") {
+					continue
+				}
+				hasPort, dst := false, ""
+				for _, field := range strings.Split(f.Match, ",") {
+					if field == want {
+						hasPort = true
+					}
+					if k, v, ok := strings.Cut(field, "="); ok && (k == "nw_dst" || k == "ipv6_dst") {
+						dst = v
+					}
+				}
+				if hasPort {
+					out[p] = append(out[p], dst)
+				}
+			}
+		}
+		return out
+	}
+
+	t.Run("loopback bind host scopes to the provisioning zone", func(t *testing.T) {
+		rules := bootRules(t, "127.0.0.1")
+		for _, p := range []int{8080, 8081, 10809} {
+			require.NotEmpty(t, rules[p], "no allow rule for TCP port %d", p)
+			for _, dst := range rules[p] {
+				a, err := netip.ParseAddr(dst)
+				require.NoError(t, err, "port %d allow rule has destination %q, want a boot server address", p, dst)
+				assert.True(t, prov.Subnet4.Contains(a) || (prov.Subnet6.IsValid() && prov.Subnet6.Contains(a)),
+					"port %d allows %s, outside the provisioning zone", p, dst)
+				assert.NotEqual(t, cp.Gateway, a, "port %d allows the control-plane gateway", p)
+			}
+		}
+	})
+
+	t.Run("routable bind host is the only destination", func(t *testing.T) {
+		rules := bootRules(t, "192.0.2.10")
+		for _, p := range []int{8080, 8081, 10809} {
+			require.NotEmpty(t, rules[p], "no allow rule for TCP port %d", p)
+			for _, dst := range rules[p] {
+				assert.Equal(t, "192.0.2.10", dst, "port %d allow rule destination", p)
+			}
+		}
+	})
 }
 
 // TestDaemonPXEBackendRefusesABridgeMismatch: the VLAN wrapper only
