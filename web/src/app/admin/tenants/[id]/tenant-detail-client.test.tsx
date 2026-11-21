@@ -18,6 +18,9 @@ const tenantSvc = vi.hoisted(() => ({
   rotateDEK: vi.fn(),
   sealBarrier: vi.fn(),
   updateQuotas: vi.fn(),
+  updateTenant: vi.fn(),
+  resumeTenant: vi.fn(),
+  checkQuota: vi.fn(),
 }));
 
 const apiResult = vi.hoisted(() => ({
@@ -31,7 +34,7 @@ const apiResult = vi.hoisted(() => ({
   },
   isLoading: false,
   error: null,
-  refetch: () => Promise.resolve(),
+  refetch: vi.fn(() => Promise.resolve()),
 }));
 
 // The barrier suite below runs the page against the real SDK tenant
@@ -87,6 +90,7 @@ describe("TenantDetailClient sync", () => {
 describe("TenantDetailClient actions", () => {
   beforeEach(() => {
     for (const fn of Object.values(tenantSvc)) fn.mockReset();
+    apiResult.refetch.mockClear();
   });
   afterEach(() => cleanup());
 
@@ -216,6 +220,102 @@ describe("TenantDetailClient actions", () => {
     });
     expect(screen.queryByText(/must be a whole number/)).toBeNull();
     expect(screen.getByTestId("action-result").textContent).toBe("Quotas updated");
+  });
+});
+
+// #2023 Codex round 2 (review at 9dac950a4): the display-name update, Resume
+// and Check quota flows send one request for this page's tenant, report the
+// verdict or the refusal, and refetch the tenant only after a success.
+describe("TenantDetailClient update, resume and quota check", () => {
+  const refusal = { success: false, error: { message: "refused by policy" } };
+  const result = () => screen.getByTestId("action-result").textContent;
+
+  beforeEach(() => {
+    for (const fn of Object.values(tenantSvc)) fn.mockReset();
+    apiResult.refetch.mockClear();
+  });
+  afterEach(() => {
+    cleanup();
+    apiResult.data.tenant.state = "ACTIVE";
+  });
+
+  async function saveName(value: string) {
+    render(<TenantDetailClient />);
+    fireEvent.change(screen.getByLabelText("Display name"), { target: { value } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
+  }
+
+  it("sends the trimmed display name once and refetches", async () => {
+    tenantSvc.updateTenant.mockResolvedValue({ success: true, data: {} });
+    await saveName("  New Name ");
+    expect(tenantSvc.updateTenant).toHaveBeenCalledTimes(1);
+    expect(tenantSvc.updateTenant).toHaveBeenCalledWith({ tenantId: "t-1", displayName: "New Name" });
+    expect(result()).toBe("Tenant updated");
+    expect(apiResult.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a blank display name before any request", async () => {
+    await saveName("   ");
+    expect(tenantSvc.updateTenant).not.toHaveBeenCalled();
+    expect(result()).toBe("Display name cannot be empty");
+  });
+
+  it("shows the refusal of a display-name update and does not refetch", async () => {
+    tenantSvc.updateTenant.mockResolvedValue(refusal);
+    await saveName("New Name");
+    expect(result()).toBe("refused by policy");
+    expect(apiResult.refetch).not.toHaveBeenCalled();
+  });
+
+  async function clickResume() {
+    apiResult.data.tenant.state = "TENANT_STATE_SUSPENDED";
+    render(<TenantDetailClient />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    });
+  }
+
+  it("resumes this page's suspended tenant once and refetches", async () => {
+    tenantSvc.resumeTenant.mockResolvedValue({ success: true, data: {} });
+    await clickResume();
+    expect(tenantSvc.resumeTenant).toHaveBeenCalledTimes(1);
+    expect(tenantSvc.resumeTenant).toHaveBeenCalledWith("t-1");
+    expect(result()).toBe("Tenant resumed");
+    expect(apiResult.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the refusal of a resume and does not refetch", async () => {
+    tenantSvc.resumeTenant.mockResolvedValue(refusal);
+    await clickResume();
+    expect(result()).toBe("refused by policy");
+    expect(apiResult.refetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "available",
+      { success: true, data: { available: true, amount: 3, resource: "vcpus" } },
+      "Quota available for 3 vcpus",
+    ],
+    [
+      "exceeded",
+      { success: true, data: { available: false, amount: 3, resource: "vcpus", message: "limit is 2" } },
+      "Quota exceeded for 3 vcpus: limit is 2",
+    ],
+    ["refused", refusal, "refused by policy"],
+  ])("checks the quota of this tenant and shows the %s verdict", async (_name, answer, shown) => {
+    tenantSvc.checkQuota.mockResolvedValue(answer);
+    render(<TenantDetailClient />);
+    fireEvent.change(screen.getByLabelText("Resource"), { target: { value: "vcpus" } });
+    fireEvent.change(screen.getByLabelText("Amount"), { target: { value: "3" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Check quota" }));
+    });
+    expect(tenantSvc.checkQuota).toHaveBeenCalledTimes(1);
+    expect(tenantSvc.checkQuota).toHaveBeenCalledWith({ tenantId: "t-1", resource: "vcpus", amount: 3 });
+    expect(result()).toBe(shown);
   });
 });
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 
 import InvitationsPage from './page';
 
@@ -45,5 +45,85 @@ describe('InvitationsPage owner gate', () => {
     await Promise.resolve();
     expect(screen.queryByText('Create New Invitation')).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// #2023 Codex round 2: the REST handlers answer through protorest.WriteSuccess
+// with the {code, success, payload} envelope and protojson camelCase names, so
+// the page must unwrap payload for the list and the create answer.
+describe('InvitationsPage list envelope', () => {
+  function json(status: number, body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  it('lists the invitations of the server envelope and links each to its detail page', async () => {
+    const fetchMock = vi.fn(async () =>
+      json(200, {
+        code: 200,
+        error: '',
+        success: true,
+        payload: {
+          invitations: [
+            {
+              id: '7',
+              token: 'tok-7',
+              tenantId: 't-1',
+              email: 'a@example.com',
+              role: 'member',
+              status: 'INVITATION_STATUS_PENDING',
+              expiresAt: '2026-12-01T00:00:00Z',
+              createdAt: '2026-11-01T00:00:00Z',
+            },
+          ],
+        },
+      })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<InvitationsPage />);
+
+    expect(await screen.findByText('a@example.com')).toBeTruthy();
+    expect(screen.getByTestId('view-invitation-7').getAttribute('href')).toBe(
+      '/admin/invitations/detail/?id=7'
+    );
+    expect(screen.queryByText('No pending invitations')).toBeNull();
+    expect(screen.queryByText(/Invalid Date/)).toBeNull();
+  });
+
+  it('adds the created invitation of the server envelope to the list', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === 'POST'
+        ? json(201, {
+            code: 201,
+            success: true,
+            payload: {
+              invitation: {
+                id: '8',
+                token: 'tok-8',
+                email: 'b@example.com',
+                role: 'member',
+                expiresAt: '2026-12-01T00:00:00Z',
+              },
+            },
+          })
+        : json(200, { code: 200, success: true, payload: { invitations: [] } })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<InvitationsPage />);
+    expect(await screen.findByText('No pending invitations')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Email Address'), {
+      target: { value: 'b@example.com' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create Invitation' }));
+    });
+
+    expect(await screen.findByText('b@example.com')).toBeTruthy();
+    expect(screen.getByTestId('view-invitation-8')).toBeTruthy();
   });
 });
