@@ -1076,6 +1076,62 @@ func TestProfileService_Update_CallerTLSServerNameStillWins(t *testing.T) {
 	assert.Equal(t, "gw.example.internal", stored.TLSServerName)
 }
 
+// TestProfileService_Update_PreservesTenantBMCAndWorkloadPCR pins the #1743
+// rename path: the REST ProfileRequest cannot carry TenantID, BMC or
+// WorkloadPCR, so a console rename rebuilt from it omits them. Omission keeps
+// the stored values (the tenant binding verifyEABBinding compares, the BMC
+// settings enrollment needs); dropping any restore line in Update fails this.
+func TestProfileService_Update_PreservesTenantBMCAndWorkloadPCR(t *testing.T) {
+	ds := testServiceDatastore(t)
+	service, err := NewProfileService(ds)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	bmc := &entities.BMCConfig{Address: "10.0.0.5", Port: 443, Username: "admin", Password: "secret", Protocol: "redfish"}
+	require.NoError(t, service.Save(ctx, &entities.DeviceProfile{
+		ID: 17431, Name: "rack-a", Role: entities.DeviceRoleWorker,
+		TenantID: "tenant-001", BMC: bmc, WorkloadPCR: 16,
+	}))
+
+	require.NoError(t, service.Update(ctx, &entities.DeviceProfile{
+		ID: 17431, Name: "rack-a-renamed", Role: entities.DeviceRoleWorker,
+	}))
+
+	stored, err := service.Get(ctx, 17431)
+	require.NoError(t, err)
+	assert.Equal(t, "rack-a-renamed", stored.Name, "the edit the caller asked for")
+	assert.Equal(t, "tenant-001", stored.TenantID, "TenantID erased by update")
+	require.NotNil(t, stored.BMC, "BMC erased by update")
+	assert.Equal(t, "10.0.0.5", stored.BMC.Address)
+	assert.Equal(t, 16, stored.WorkloadPCR, "WorkloadPCR erased by update")
+}
+
+// TestProfileService_Update_CallerTenantBMCAndWorkloadPCRStillWin pins the
+// boundary of that restore: it fills an omission only, so a caller that
+// supplies the fields (CLI, gRPC, MCP merge paths) stores them as sent.
+func TestProfileService_Update_CallerTenantBMCAndWorkloadPCRStillWin(t *testing.T) {
+	ds := testServiceDatastore(t)
+	service, err := NewProfileService(ds)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, service.Save(ctx, &entities.DeviceProfile{
+		ID: 17432, Name: "rack-b", Role: entities.DeviceRoleWorker,
+		TenantID: "tenant-001", BMC: &entities.BMCConfig{Address: "10.0.0.5"}, WorkloadPCR: 16,
+	}))
+	require.NoError(t, service.Update(ctx, &entities.DeviceProfile{
+		ID: 17432, Name: "rack-b", Role: entities.DeviceRoleWorker,
+		TenantID: "tenant-002", BMC: &entities.BMCConfig{Address: "10.0.0.6"}, WorkloadPCR: 15,
+	}))
+
+	stored, err := service.Get(ctx, 17432)
+	require.NoError(t, err)
+	assert.Equal(t, "tenant-002", stored.TenantID)
+	require.NotNil(t, stored.BMC)
+	assert.Equal(t, "10.0.0.6", stored.BMC.Address)
+	assert.Equal(t, 15, stored.WorkloadPCR)
+}
+
 // TestProfileService_Update_ClearTLSServerName pins the #462 clear path: the
 // explicit option blanks the stored name, the very next update that omits it
 // keeps it blank, and an update without the option still preserves a name

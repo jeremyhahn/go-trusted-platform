@@ -1339,6 +1339,9 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			// registry — surface their daemon-side server impls so REST
 			// /api/v1/{sdn,vtpm,switches} stop returning the
 			// "endpoint does not exist" envelope.
+			if h := platformDaemon.BMCRestHandler(); h != nil {
+				params.BMCRestHandler = h
+			}
 			if svc := platformDaemon.SDNService(); svc != nil {
 				params.SDNService = svc
 				// Reconcile configured VLANs into the in-memory SDN
