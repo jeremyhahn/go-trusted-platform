@@ -32,14 +32,16 @@ import type { GetPerfFlowsResponse } from 'trusted-platform-sdk';
 export const PERF_FLOW_COUNT = 1000;
 /** The OpenFlow table the benchmark writes; no pipeline table resubmits to it. */
 export const PERF_FLOW_TABLE = 250;
-/** Upper bound on the server's deferred delete of the benchmark flows. */
-export const PERF_TEARDOWN_SECONDS = 30;
+/** OVS removes each benchmark flow this long after install (the server's FlowHardTimeout). */
+export const PERF_FLOW_HARD_TIMEOUT_SECONDS = 60;
+
+const EXPIRY_TEXT = `The switch expires any left behind within ${PERF_FLOW_HARD_TIMEOUT_SECONDS} seconds.`;
 
 const CONFIRM_TEXT =
   `This installs ${PERF_FLOW_COUNT} temporary drop flows in OpenFlow table ${PERF_FLOW_TABLE} ` +
-  `on the gateway's default bridge and times the install. They expire when the run ends: ` +
-  `the server deletes them as soon as the measurement finishes, also when it fails, within ` +
-  `${PERF_TEARDOWN_SECONDS} seconds. Table ${PERF_FLOW_TABLE} carries no production traffic.`;
+  `on the gateway's default bridge and times the install. The server deletes them when the run ends, ` +
+  `also when it fails, and the switch expires any left behind within ${PERF_FLOW_HARD_TIMEOUT_SECONDS} ` +
+  `seconds. Table ${PERF_FLOW_TABLE} carries no production traffic.`;
 
 export function GatewayPerfFlowsCard() {
   const gateway = useGateway();
@@ -102,6 +104,8 @@ export function GatewayPerfFlowsCard() {
             <AlertTitle>Benchmark not run</AlertTitle>
             <AlertDescription data-testid="perf-flows-error" className="whitespace-pre-wrap break-words">
               {error}
+              {"\n"}
+              {EXPIRY_TEXT}
             </AlertDescription>
           </Alert>
         )}

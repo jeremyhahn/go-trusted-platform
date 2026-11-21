@@ -315,8 +315,13 @@ export class GatewayService extends BaseService {
    * Run one flow-programming benchmark: the server installs temporary drop
    * flows in OpenFlow table 250 and deletes them when the run ends.
    * Admin only. Route: POST /api/v1/gateway/perf/flows
+   *
+   * The run is never retried: a lost response would install and time the
+   * flows twice for one confirmation (#2179 Codex).
    */
   async getPerfFlows(request: GetPerfFlowsRequest = {}): Promise<ApiResponse<GetPerfFlowsResponse>> {
-    return this.client.post<GetPerfFlowsResponse>(this.buildUrl('/perf/flows'), request);
+    return this.client.post<GetPerfFlowsResponse>(this.buildUrl('/perf/flows'), request, {
+      retry: { enabled: false },
+    });
   }
 }
