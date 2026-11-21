@@ -1,4 +1,4 @@
-# ci-template: v1.35.1 + v1.42 hermetic gate + v1.48 runner selection (customized)
+# ci-template: v1.35.1 + v1.42 hermetic gate + v1.48 runner selection + v1.49 preflight runner (customized)
 #
 # v1.42 hermetic gate only (owner ruling 742 (1), Tenant Agent rulings 754 and
 # 794): the CI Gate's outcome depends only on the tree under test. `make
@@ -22,6 +22,15 @@
 # or a hosted job of another run has queued HOSTED_QUEUE_GRACE_SECONDS; a
 # fork pull request always stays hosted. Nothing else of v1.43 to v1.48 is
 # taken.
+#
+# v1.49 preflight runner only (Tenant Agent ruling 1047 (3) and (2), DS-9721,
+# #2128): preflight's ten seconds waited in the hosted queue. On github.com
+# its runs-on is now the bigdisk pool; the repository variable
+# CI_PREFLIGHT_RUNS_ON (runs-on JSON) overrides it ("ubuntu-latest", quotes
+# included, while the pool is down; a value that is not JSON fails the run).
+# Off github.com it keeps the forge label. The schedule guard's AGENT_TOKEN
+# is passed off github.com only. The template's Runner labels lint is not in
+# this file; pkg/arch/ci_runners_test.go holds the two preflight states.
 # v1.35.1 (DS-8433, CA m2557): the Signatures job of handbook cd17d28
 # (ci-template v1.35.1) is adopted as is, in CI Gate's needs, env block and a
 # `pr` check line, with .github/allowed_signers synced from handbook
@@ -340,14 +349,21 @@ jobs:
   # xkmsctl and xkey depend only on sdk/go) are further steps in this job.
   # A source check with grep, not a stage: it runs on the runner's shell.
   # v1.23: a lint-class check, so it stays on the PR tier.
-  # Runner (ruling 999): ubuntu-latest on every event. The job needs git,
-  # curl and jq only. It cannot carry the schedule guard (it is the guard),
-  # and it never runs on the self-hosted pool.
+  # Runner (ruling 999, v1.49): since v1.49 the bigdisk pool on github.com
+  # (CI_PREFLIGHT_RUNS_ON overrides it) and ubuntu-latest off github.com.
+  # The job needs git, curl and jq only: it sets up no Go, touches no cache,
+  # checks out with persist-credentials false and runs none of the tree,
+  # which is why it alone runs there without the fork guard. It cannot
+  # carry the schedule guard (it is the guard).
   # CUSTOMIZE: this repository has no go-objstore seam and no import, so
   # OBJSTORE_SEAMS is empty and any import fails.
   preflight:
     name: Preflight [changed files, schedule guard, architecture gates]
-    runs-on: ubuntu-latest   # v1.48: it decides the runner, so it stays hosted
+    # v1.49 (ruling 1047 (3)): on github.com the bigdisk pool, so the ten
+    # seconds that decide the runner no longer wait in the hosted queue.
+    # vars.CI_PREFLIGHT_RUNS_ON (runs-on JSON) overrides it, e.g.
+    # "ubuntu-latest" while the pool is down; off github.com, ubuntu-latest.
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(vars.CI_PREFLIGHT_RUNS_ON || '["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}   # v1.49
     # v1.26: a draft PR runs no CI; every job that needs this one skips with it.
     if: ${{ !github.event.pull_request.draft }}
     timeout-minutes: 10       # v1.34: the three jobs had 5 each
@@ -460,7 +476,7 @@ jobs:
             pages "$API/runs/$id/jobs?filter=latest" jobs "$RUNNER_TEMP/sel-j.jsonl" || hosted "the Actions API gave no complete job list ($WHY)"
             cat "$RUNNER_TEMP/sel-j.jsonl" >> "$RUNNER_TEMP/sel-jobs.jsonl"
           done
-          # In progress: every hosted job, this one included. Queued: a hosted
+          # In progress: every hosted job (this one too, when CI_PREFLIGHT_RUNS_ON puts it on a hosted runner; v1.49). Queued: a hosted
           # job of another run (this run's jobs wait on this one) queued for
           # GRACE seconds or more, so a runner did not take it at once.
           read -r running queued < <(jq -rs --argjson run "$RUN_ID" --argjson grace "$GRACE" '
@@ -493,7 +509,8 @@ jobs:
           REPO_API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
           JOB_TOKEN: ${{ github.token }}
           # v1.30: a push to main reads the tree proof with it as well.
-          BOT: ${{ (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && secrets.AGENT_TOKEN || '' }}
+          # v1.49: off github.com only. On github.com the guard never reads it (no schedule check, no tree proof there), so the secret no longer reaches the step on the pool runner.
+          BOT: ${{ github.server_url != 'https://github.com' && (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && secrets.AGENT_TOKEN || '' }}
         run: |
           set -uo pipefail
           # runs <token>: sets N to the number of this workflow's push runs
