@@ -39,6 +39,8 @@ async function createLab(restartRequired: boolean) {
   });
   render(withControlPlane(<ZonesPage />));
   await waitFor(() => expect(sent.some((r) => r.method === 'GET')).toBe(true));
+  // The toast store is module-wide, so an earlier test's toasts can still be listed.
+  const noticesBefore = noticeToasts().length;
 
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create Zone' }));
@@ -58,7 +60,11 @@ async function createLab(restartRequired: boolean) {
       )
     ).toBe(true)
   );
-  return sent;
+  return { sent, noticesBefore };
+}
+
+function noticeToasts() {
+  return screen.queryAllByTestId('toast').filter((t) => t.textContent?.includes(ZONE_RESTART_NOTICE));
 }
 
 describe('zoneChangeToast', () => {
@@ -95,15 +101,16 @@ describe('ZonesPage create dialog', () => {
   });
 
   it('a created zone with no restart pending shows the plain toast', async () => {
-    await createLab(false);
+    const { noticesBefore } = await createLab(false);
 
-    await waitFor(async () => {
-      const toasts = await screen.findAllByTestId('toast');
-      expect(toasts.some((t) => t.textContent?.trim() === 'Zone created:')).toBe(true);
-    });
-    const toasts = screen.getAllByTestId('toast');
-    const created = toasts.find((t) => t.textContent?.trim() === 'Zone created:');
+    const toasts = await screen.findAllByTestId('toast');
+    await waitFor(() =>
+      expect(screen.getAllByTestId('toast').some((t) => t.textContent?.trim() === 'Zone created:')).toBe(true)
+    );
+    const created = screen.getAllByTestId('toast').find((t) => t.textContent?.trim() === 'Zone created:');
     expect(created?.getAttribute('data-variant')).toBe('success');
-    expect(toasts.some((t) => t.textContent?.includes(ZONE_RESTART_NOTICE))).toBe(false);
+    expect(toasts.length).toBeGreaterThan(0);
+    // No new toast carries the restart notice.
+    expect(noticeToasts().length).toBeLessThanOrEqual(noticesBefore);
   });
 });
