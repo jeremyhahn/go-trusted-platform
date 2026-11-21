@@ -522,9 +522,19 @@ export class IAMService extends BaseService {
    * Update an application
    */
   async updateApp(request: UpdateIAMAppRequest): Promise<ApiResponse<IAMAppResponse>> {
+    // PUT /v1/iam/tenants/{tenantId}/apps/{clientId} decodes the server's
+    // snake_case UpdateAppRequest (tenant_id, name, redirect_uris, grant_types,
+    // response_types, resource_prefix); the client ID travels in the path only.
     return this.client.put<IAMAppResponse>(
       this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/apps/${this.encodePathSegment(request.clientId)}`),
-      request
+      {
+        tenant_id: request.tenantId,
+        name: request.name,
+        redirect_uris: request.redirectUris,
+        grant_types: request.grantTypes,
+        response_types: request.responseTypes,
+        resource_prefix: request.resourcePrefix,
+      }
     );
   }
 
