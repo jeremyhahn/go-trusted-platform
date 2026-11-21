@@ -42,6 +42,7 @@ const (
 // CAHandler handles Certificate Authority operations over QUIC
 type CAHandler struct {
 	ca         quicbaasca.CACertificateAuthority
+	source     func() quicbaasca.CACertificateAuthority
 	logger     *logging.Logger
 	objStorage objectstorage.Client
 	kms        issuance.KMS
@@ -69,8 +70,40 @@ func (h *CAHandler) WithKMS(kms issuance.KMS) *CAHandler {
 	return h
 }
 
+// WithCASource makes the handler read its CA from src on every request
+// instead of the CA it was built with, so a CA swapped in after start-up
+// (InitCA through the daemon's shared CA holder) is served without a new
+// handler. src may return nil while no CA is held. A nil src keeps the
+// constructor CA.
+func (h *CAHandler) WithCASource(src func() quicbaasca.CACertificateAuthority) *CAHandler {
+	h.source = src
+	return h
+}
+
+// currentCA returns the CA to serve now: the source's when one is set,
+// otherwise the constructor CA.
+func (h *CAHandler) currentCA() quicbaasca.CACertificateAuthority {
+	if h.source != nil {
+		return h.source()
+	}
+	return h.ca
+}
+
+// forRequest returns a copy of the handler bound to the CA served now, so
+// one request reads the CA once and sees the same CA throughout.
+func (h *CAHandler) forRequest() *CAHandler {
+	if h.source == nil {
+		return h
+	}
+	bound := *h
+	bound.ca = h.currentCA()
+	bound.source = nil
+	return &bound
+}
+
 // HandleRequest processes a CA request and returns a response
 func (h *CAHandler) HandleRequest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	h = h.forRequest()
 	if req == nil {
 		return &quicwire.Response{
 			Status:  quicwire.StatusInvalidRequest,
@@ -425,6 +458,7 @@ func (h *CAHandler) handleIssue(ctx context.Context, req *quicwire.Request) *qui
 // certificate presented with no token: its grant is the peer's, not a
 // token's (docs/ca/api.md §4).
 func (h *CAHandler) SignCSR(ctx context.Context, payload []byte) *quicwire.Response {
+	h = h.forRequest()
 	if err := issuance.AuthorizeSignCSR(tokenAuthorizedContext(ctx)); err != nil {
 		return h.errorResponse(quicwire.StatusPermissionDenied, err)
 	}

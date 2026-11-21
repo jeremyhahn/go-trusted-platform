@@ -166,6 +166,9 @@ func (r *CARouter) requireScope(scope string, handler http.HandlerFunc) http.Han
 // GET    /api/v1/ca/certificates/{serial}      - Get certificate by serial
 // DELETE /api/v1/ca/certificates/{serial}      - Revoke certificate (certs:revoke)
 // POST   /api/v1/ca/certificates/{serial}/renew - Renew certificate (certs:generate)
+// POST   /api/v1/ca/init                       - Initialise the CA (ca:create)
+// POST   /api/v1/ca/trust/install              - Install the CA bundle into system trust (trust:write)
+// POST   /api/v1/ca/trust/uninstall            - Remove the CA bundle from system trust (trust:write)
 func (r *CARouter) registerCertificateRoutes(router *mux.Router) {
 	// Certificate collection routes
 	router.HandleFunc("/certificates", r.handlers.IssueCertificate).Methods("POST")
@@ -177,6 +180,11 @@ func (r *CARouter) registerCertificateRoutes(router *mux.Router) {
 	router.HandleFunc("/certificates/{serial}", r.handlers.GetCertificate).Methods("GET")
 	router.Handle("/certificates/{serial}", r.requireScope(RevokeScope, r.handlers.RevokeCertificate)).Methods("DELETE")
 	router.Handle("/certificates/{serial}/renew", r.requireScope(RenewScope, r.handlers.RenewCertificate)).Methods("POST")
+
+	// CA lifecycle routes (admin scopes, protected router only)
+	router.Handle("/init", r.requireScope(InitScope, r.handlers.InitCA)).Methods("POST")
+	router.Handle("/trust/install", r.requireScope(TrustWriteScope, r.handlers.InstallCACertificates)).Methods("POST")
+	router.Handle("/trust/uninstall", r.requireScope(TrustWriteScope, r.handlers.UninstallCACertificates)).Methods("POST")
 }
 
 // registerBundleRoutes registers CA bundle endpoints

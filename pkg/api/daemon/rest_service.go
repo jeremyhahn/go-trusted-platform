@@ -41,6 +41,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restca "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ca"
 	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -522,8 +523,14 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, guard *
 	if ca == nil {
 		return
 	}
-	adapter := restapi.NewCAAuthorityAdapter(ca)
-	if adapter == nil {
+	s.SetCAHolder(NewCAHolder(ca), guard)
+}
+
+// SetCAHolder mounts the CA REST routes on the CA held by holder, read on
+// every request, so a CA InitCA swaps into the holder is served without a
+// restart. A nil holder mounts nothing.
+func (s *RESTServer) SetCAHolder(holder *CAHolder, guard *restapi.ScopeGuard) {
+	if holder == nil {
 		return
 	}
 	var caObjStorage objectstorage.Client
@@ -534,16 +541,44 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, guard *
 			caObjStorage = s.config.App.Storage
 		}
 	}
-	handlers := restapi.NewCAHandlers(adapter, s.logger, caObjStorage).WithKMS(caKMS).WithScopeGuard(guard)
+	source := func() restapi.CAServiceInterface {
+		ca := holder.Get()
+		if ca == nil {
+			// Untyped nil: a typed nil *CAAuthorityAdapter in the
+			// interface would pass the handlers' nil check.
+			return nil
+		}
+		return restapi.NewCAAuthorityAdapter(ca)
+	}
+	handlers := restapi.NewCAHandlers(nil, s.logger, caObjStorage).WithCASource(source).WithKMS(caKMS).WithScopeGuard(guard)
 	handlers.RegisterRoutes(s.router)
 	s.logger.Info("CA REST routes registered")
 
 	// Wire auth factor endpoints (AAGUID lookup, mTLS probe, cert issuance,
-	// MFA policy). These share the same CA instance as the CA handlers so
-	// certificate issuance goes through the live platform CA.
-	authFactorHandlers := restapi.NewAuthFactorHandlers(ca, s.logger)
-	authFactorHandlers.RegisterRoutes(s.router)
-	s.logger.Info("Auth factor REST routes registered")
+	// MFA policy). They still hold the CA the holder held at start-up; they
+	// follow the holder in a later slice.
+	// They cannot run on a nil CA.
+	if ca := holder.Get(); ca != nil {
+		authFactorHandlers := restapi.NewAuthFactorHandlers(ca, s.logger)
+		authFactorHandlers.RegisterRoutes(s.router)
+		s.logger.Info("Auth factor REST routes registered")
+	}
+}
+
+// SetCALifecycle mounts POST /api/v1/ca/init, /ca/trust/install and
+// /ca/trust/uninstall on service behind the catalog scope guard (ca:create,
+// trust:write), with or without a loaded CA. A nil service mounts nothing.
+func (s *RESTServer) SetCALifecycle(service platformv1.CAServiceServer, guard *restapi.ScopeGuard) {
+	if service == nil {
+		return
+	}
+	logger := logging.NewFromSlog(s.logger)
+	h := restca.NewCAHandlers(logger, nil, response.NewResponseWriter(logger, nil)).WithService(service)
+	api := s.catalogGuardedAPI(guard)
+	api.HandleFunc("/ca/init", h.InitCA).Methods(http.MethodPost)
+	api.HandleFunc("/ca/trust/install", h.InstallCACertificates).Methods(http.MethodPost)
+	api.HandleFunc("/ca/trust/uninstall", h.UninstallCACertificates).Methods(http.MethodPost)
+	s.logger.Info("CA lifecycle REST routes registered")
 }
 
 // SetTPMHandlers mounts the physical TPM routes (/api/v1/tpm/...). Every

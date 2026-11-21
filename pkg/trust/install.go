@@ -14,6 +14,11 @@
 package trust
 
 import (
+	"bytes"
+	"errors"
+	"io/fs"
+	"os"
+
 	xkmsresolver "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/trust/resolver"
 )
 
@@ -26,4 +31,30 @@ import (
 // QuicBaaS SDK re-export.
 func InstallToSystemTrust(bundlePEM []byte, certPath string) error {
 	return xkmsresolver.InstallToSystemTrust(bundlePEM, certPath)
+}
+
+// UninstallFromSystemTrust is the inverse of InstallToSystemTrust: it removes
+// the CA bundle at certPath when the file holds exactly one of the bundles
+// this CA writes (written). A missing file is not an error and reports
+// (false, nil). A file holding anything else is left in place and reported as
+// ErrSystemTrustBundleMismatch. Like InstallToSystemTrust, it leaves running
+// OS-specific trust store update commands (e.g., update-ca-certificates) to
+// the caller.
+func UninstallFromSystemTrust(certPath string, written ...[]byte) (bool, error) {
+	current, err := os.ReadFile(certPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, bundle := range written {
+		if len(bundle) > 0 && bytes.Equal(current, bundle) {
+			if err := os.Remove(certPath); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+	}
+	return false, ErrSystemTrustBundleMismatch{Path: certPath}
 }

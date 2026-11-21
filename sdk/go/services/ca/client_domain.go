@@ -181,6 +181,7 @@ func (c *Client) InstallCACertificatesDomain(ctx context.Context, includeInterme
 	return &InstallResult{
 		CertificatesInstalled: resp.CertificatesInstalled,
 		InstallPath:           resp.InstallPath,
+		Message:               resp.GetStatus().GetMessage(),
 	}, nil
 }
 
@@ -194,5 +195,6 @@ func (c *Client) UninstallCACertificatesDomain(ctx context.Context, includeInter
 	}
 	return &UninstallResult{
 		CertificatesRemoved: resp.CertificatesRemoved,
+		Message:             resp.GetStatus().GetMessage(),
 	}, nil
 }
