@@ -39,8 +39,17 @@ export {
 } from './use-services.js';
 
 // Invitation hooks
-export { useInvitation, useInvitationList } from './use-invitation.js';
-export type { UseInvitationResult, UseInvitationListOptions } from './use-invitation.js';
+export {
+  useInvitation,
+  useInvitationList,
+  useInvitationGet,
+  useInvitationGetByToken,
+} from './use-invitation.js';
+export type {
+  UseInvitationResult,
+  UseInvitationListOptions,
+  UseInvitationGetOptions,
+} from './use-invitation.js';
 
 // EAB hooks
 export { useEAB, useEABList } from './use-eab.js';
