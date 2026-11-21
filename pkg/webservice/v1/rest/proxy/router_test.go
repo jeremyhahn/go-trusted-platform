@@ -161,10 +161,14 @@ func newTestRouter(server platformv1.ProxyServiceServer) *Router {
 	return NewRouter(newTestLogger(), server, response.NewResponseWriter(newTestLogger(), nil))
 }
 
-// mountRouter mounts the proxy routes under /api/v1, as the webservice does.
+// mountRouter mounts the proxy routes under /api/v1, as the webservice does,
+// behind an authorizer that grants every scope; the scope checks are covered
+// by the grantingAuthorizer tests and the no-authorizer test.
 func mountRouter(server platformv1.ProxyServiceServer) *mux.Router {
 	router := mux.NewRouter()
-	newTestRouter(server).RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
+	proxyRouter := newTestRouter(server)
+	proxyRouter.SetScopeAuthorizer(allowAllAuthorizer{})
+	proxyRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 	return router
 }
 
@@ -350,6 +354,15 @@ func TestProxyRouterRequiresProxyRead(t *testing.T) {
 
 // proxyWriteProbe is one write route: the body it sends, the scope it needs,
 // the request it must hand the service and the status it answers.
+// allowAllAuthorizer grants every scope, so the tests that drive the
+// handlers through mountRouter pass the scope gate; the scope checks
+// themselves are covered by the grantingAuthorizer tests.
+type allowAllAuthorizer struct{}
+
+func (allowAllAuthorizer) RequireScope(string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler { return next }
+}
+
 type proxyWriteProbe struct {
 	name  string
 	verb  string
@@ -505,5 +518,81 @@ func TestProxyRouterRequiresEachWriteScope(t *testing.T) {
 					probe.name, granted, rec.Code, server.calls)
 			}
 		}
+	}
+}
+
+// TestProxyRouterRefusesWritesWithoutAScopeAuthorizer pins the fail-closed
+// branch: with no ScopeAuthorizer (the legacy JWT handler) every write answers
+// 403 before the service is called, while the reads stay on the role gate
+// (#2160 Codex).
+func TestProxyRouterRefusesWritesWithoutAScopeAuthorizer(t *testing.T) {
+	unscoped := func(server *recordingServer) *mux.Router {
+		router := mux.NewRouter()
+		newTestRouter(server).RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
+		return router
+	}
+	for _, probe := range proxyWriteProbes {
+		server := &recordingServer{}
+		rec := serveBody(unscoped(server), probe.verb, probe.path, probe.body)
+		if rec.Code != http.StatusForbidden || server.calls != 0 {
+			t.Errorf("%s without an authorizer: code = %d, calls = %d; want 403 and no call",
+				probe.name, rec.Code, server.calls)
+		}
+	}
+	for _, probe := range proxyProbes {
+		server := &recordingServer{}
+		rec := serve(unscoped(server), http.MethodGet, probe.path)
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s without an authorizer: code = %d, want 200", probe.name, rec.Code)
+		}
+	}
+}
+
+// TestProxyRouterAddressesSlashIDs round-trips a route and a pool whose ids
+// contain a slash: the URL carries it percent-encoded and the service sees the
+// decoded id (#2160 Codex).
+func TestProxyRouterAddressesSlashIDs(t *testing.T) {
+	route := &platformv1.ProxyRoute{Id: "a/b", PathPrefix: "/app", PoolId: "pool-1"}
+	routeBody := `{"route":{"id":"a/b","pathPrefix":"/app","poolId":"pool-1"}}`
+	pool := &platformv1.ProxyPool{Id: "p/1", Balancer: "round-robin"}
+	poolBody := `{"pool":{"id":"p/1","balancer":"round-robin"}}`
+	cases := []struct {
+		name string
+		verb string
+		path string
+		body string
+		code int
+		want proto.Message
+	}{
+		{"create route", http.MethodPost, "/api/v1/proxy/routes", routeBody, http.StatusCreated,
+			&platformv1.CreateProxyRouteRequest{Route: route}},
+		{"get route", http.MethodGet, "/api/v1/proxy/routes/a%2Fb", "", http.StatusOK,
+			&platformv1.GetProxyRouteRequest{Id: "a/b"}},
+		{"update route", http.MethodPut, "/api/v1/proxy/routes/a%2Fb", routeBody, http.StatusOK,
+			&platformv1.UpdateProxyRouteRequest{Id: "a/b", Route: route}},
+		{"delete route", http.MethodDelete, "/api/v1/proxy/routes/a%2Fb", "", http.StatusOK,
+			&platformv1.DeleteProxyRouteRequest{Id: "a/b"}},
+		{"create pool", http.MethodPost, "/api/v1/proxy/pools", poolBody, http.StatusCreated,
+			&platformv1.CreateProxyPoolRequest{Pool: pool}},
+		{"get pool", http.MethodGet, "/api/v1/proxy/pools/p%2F1", "", http.StatusOK,
+			&platformv1.GetProxyPoolRequest{Id: "p/1"}},
+		{"update pool", http.MethodPut, "/api/v1/proxy/pools/p%2F1", poolBody, http.StatusOK,
+			&platformv1.UpdateProxyPoolRequest{Id: "p/1", Pool: pool}},
+		{"delete pool", http.MethodDelete, "/api/v1/proxy/pools/p%2F1", "", http.StatusOK,
+			&platformv1.DeleteProxyPoolRequest{Id: "p/1"}},
+		{"get plain route", http.MethodGet, "/api/v1/proxy/routes/web", "", http.StatusOK,
+			&platformv1.GetProxyRouteRequest{Id: "web"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := &recordingServer{}
+			rec := serveBody(mountRouter(server), tc.verb, tc.path, tc.body)
+			if rec.Code != tc.code {
+				t.Fatalf("code = %d, want %d (body %s)", rec.Code, tc.code, rec.Body.String())
+			}
+			if !proto.Equal(server.last, tc.want) {
+				t.Errorf("service saw %v, want %v", server.last, tc.want)
+			}
+		})
 	}
 }
