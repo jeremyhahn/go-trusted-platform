@@ -22,19 +22,29 @@ function errorMessage(err: unknown): string {
   return 'Unknown error';
 }
 
-/** One resolved record as "<TYPE> <name> <value>" (the type without its RECORD_TYPE_ prefix). */
+/**
+ * One resolved record as its zone-file presentation: "<TYPE> <name> <rdata>"
+ * from the type's own wire fields (#2177 Codex). Zero numbers render as 0.
+ */
 function describeRecord(record: DNSRecord): string {
   const type = String(record.type).replace(/^RECORD_TYPE_/, '');
-  const body = (record.a ??
-    record.aaaa ??
-    record.cname ??
-    record.mx ??
-    record.ns ??
-    record.txt ??
-    record.srv ??
-    record.caa ??
-    record.tlsa) as { name?: string; value?: string } | undefined;
-  return [type, body?.name ?? '', body?.value ?? ''].filter(Boolean).join(' ');
+  let fields: Array<string | number | undefined>;
+  if (record.mx) {
+    fields = [record.mx.name, record.mx.priority, record.mx.value];
+  } else if (record.srv) {
+    fields = [record.srv.name, record.srv.priority, record.srv.weight, record.srv.port, record.srv.target];
+  } else if (record.caa) {
+    fields = [record.caa.name, record.caa.flags, record.caa.tag, `"${record.caa.value}"`];
+  } else if (record.tlsa) {
+    fields = [record.tlsa.name, record.tlsa.usage, record.tlsa.selector, record.tlsa.matchingType, record.tlsa.data];
+  } else {
+    const body = record.a ?? record.aaaa ?? record.cname ?? record.ns ?? record.txt;
+    fields = [body?.name, body?.value];
+  }
+  return [type, ...fields]
+    .filter((f) => f !== undefined && f !== '')
+    .map(String)
+    .join(' ');
 }
 
 /**
