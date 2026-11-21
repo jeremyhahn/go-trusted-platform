@@ -507,7 +507,11 @@ func (a *QuicBaaSIAMAdapter) UpdateApp(ctx context.Context, tenantID, clientID s
 	if _, err := a.GetApp(ctx, tenantID, clientID); err != nil {
 		return nil, err
 	}
-	return a.client.App().Update(ctx, tenantID, clientID, req)
+	app, err := a.client.App().Update(ctx, tenantID, clientID, req)
+	if err != nil {
+		return nil, upstreamUnimplemented("app update", err)
+	}
+	return app, nil
 }
 
 func (a *QuicBaaSIAMAdapter) DeleteApp(ctx context.Context, tenantID, clientID string) error {
@@ -526,7 +530,7 @@ func (a *QuicBaaSIAMAdapter) RotateAppSecret(ctx context.Context, tenantID, clie
 	}
 	resp, err := a.client.App().RotateSecret(ctx, tenantID, clientID)
 	if err != nil {
-		return nil, err
+		return nil, upstreamUnimplemented("app secret rotation", err)
 	}
 	return &RotateSecretResponse{
 		ClientID:     resp.ClientID,
