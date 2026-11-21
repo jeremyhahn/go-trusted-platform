@@ -108,16 +108,20 @@ describe('useBMCAccounts', () => {
     const sent = stubControlPlane({
       'PUT /api/v1/bmc/42/users/5/privilege': ok({ status: 'ok' }),
     });
-    const { result } = renderAccounts();
+    const first = renderAccounts();
     await act(async () => {
-      await result.current.setPrivilege(5, 'operator');
+      await first.result.current.setPrivilege(5, 'operator');
     });
     expect(sent[0].body).toEqual({ privilege: 'operator', channel: 1 });
+    first.unmount();
 
+    // The SDK client keeps the fetch it was built with, so the refusal is
+    // served to a client mounted on the new stub.
     vi.unstubAllGlobals();
     stubControlPlane({
       'PUT /api/v1/bmc/42/users/5/privilege': refused(400, 'bmc: invalid privilege: root'),
     });
+    const { result } = renderAccounts();
     let res: ApiResponse<BMCStatusOK> | undefined;
     await act(async () => {
       res = await result.current.setPrivilege(5, 'root' as BMCPrivilegeName);
