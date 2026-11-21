@@ -75,14 +75,56 @@ function ruleMatch(protocol: string, sourceIp: string, destinationIp: string, de
   return match;
 }
 
+// The protocol as the daemon maps it to nw_proto: names are case-blind and a
+// protocol number is the same match as its name (#2148 Codex).
+const PROTOCOL_NUMBERS: Record<string, string> = { '6': 'tcp', '17': 'udp', '1': 'icmp', '132': 'sctp' };
+function canonicalProtocol(v: string) {
+  const p = v.trim().toLowerCase();
+  if (PROTOCOL_NUMBERS[p]) return PROTOCOL_NUMBERS[p];
+  if (/^\d+$/.test(p) && Number(p) <= 255) {
+    const n = String(Number(p));
+    return PROTOCOL_NUMBERS[n] ?? n;
+  }
+  return p;
+}
+
+// An IPv4 match as pkg/sdn/ovs/flow.go installs it: a bare address is an
+// exact /32 match and a CIDR is masked to its network, as net.ParseCIDR does.
+// Anything else is returned trimmed.
+function canonicalIPv4(v: string) {
+  const t = v.trim();
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?$/.exec(t);
+  if (!m) return t;
+  const octets = m.slice(1, 5).map(Number);
+  if (octets.some((o) => o > 255)) return t;
+  const bits = m[5] === undefined ? 32 : Number(m[5]);
+  if (bits > 32) return t;
+  const addr = ((octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3]) >>> 0;
+  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+  const net = (addr & mask) >>> 0;
+  return `${[net >>> 24, (net >>> 16) & 255, (net >>> 8) & 255, net & 255].join('.')}/${bits}`;
+}
+
 // A match in a form two equal matches share: unset and empty fields dropped,
 // keys sorted, so key order or a blank field never hides an equal match.
+// Protocol aliases and IPv4 addresses compare as OpenFlow installs them: the
+// switch masks a CIDR to its network and a bare address is /32 (#2148 Codex).
 function matchKey(match: SDNPolicyRuleMatch | undefined) {
   const entries = Object.entries(match ?? {})
+    .map(([k, v]) => {
+      if (typeof v !== 'string') return [k, v] as const;
+      if (k === 'protocol') return [k, canonicalProtocol(v)] as const;
+      if (k === 'sourceIp' || k === 'destinationIp') return [k, canonicalIPv4(v)] as const;
+      return [k, v.trim()] as const;
+    })
     .filter(([, v]) => v !== undefined && v !== null && v !== '' && v !== 0)
-    .map(([k, v]) => [k, typeof v === 'string' ? v.trim() : v] as const)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return JSON.stringify(entries);
+}
+
+// The priority the switch holds: flow.go installs uint16(flow.Priority).
+function installedPriority(p: number) {
+  return ((p % 65536) + 65536) % 65536;
 }
 
 // The priority the daemon installs a recorded rule at. Mirrors the daemon's
@@ -116,7 +158,9 @@ function conflictingPolicy(
       targets.length === 0 || targets.some((t) => t.type === 'POLICY_TARGET_TYPE_BRIDGE' && bridgeIds.includes(t.id ?? ''));
     if (!onBridge) return false;
     return (config.rules ?? []).some(
-      (r) => effectiveRulePriority(r, config) === priority && matchKey(r.match) === key
+      (r) =>
+        installedPriority(effectiveRulePriority(r, config)) === installedPriority(priority) &&
+        matchKey(r.match) === key
     );
   });
 }
@@ -273,7 +317,7 @@ export default function SDNBridgeDetailClient() {
     setRuleDestinationPort('');
   };
   const applyPolicy = () => {
-    const priority = Number(rulePriority) || 100;
+    const priority = rulePriorityValue;
     return sdn.applyPolicy({
       config: {
         name: policyName,
@@ -298,6 +342,14 @@ export default function SDNBridgeDetailClient() {
   const portNeedsTransport = (protocol: string) => protocol === 'tcp' || protocol === 'udp';
   // The backend reads destinationPort 0 as "no port match", so an explicit 0
   // would cover every port: only 1-65535 is accepted (#2024 Codex round 5, P1).
+  // flow.go installs uint16(flow.Priority), so a priority outside 1-65535
+  // would install at another value than the guard compares (#2148 Codex).
+  const priorityText = rulePriority.trim();
+  const rulePriorityValue = Number(priorityText);
+  const rulePriorityError =
+    /^\d+$/.test(priorityText) && rulePriorityValue >= 1 && rulePriorityValue <= 65535
+      ? ''
+      : 'Rule rule-1: the priority must be a whole number between 1 and 65535';
   const portText = ruleDestinationPort.trim();
   const portValue = Number(portText);
   const rulePortError = !portText
@@ -315,14 +367,12 @@ export default function SDNBridgeDetailClient() {
         policies,
         [bridgeId, bridge?.id, bridge?.config?.name].filter((v): v is string => !!v),
         policyName,
-        Number(rulePriority) || 100,
+        rulePriorityValue,
         ruleMatch(ruleProtocol, ruleSourceIp, ruleDestinationIp, ruleDestinationPort)
       )
     : undefined;
   const policyConflictError = conflict
-    ? `Policy ${conflict.config?.name || conflict.id} already matches this traffic at priority ${
-        Number(rulePriority) || 100
-      } on this bridge: a second policy would replace its flow. Change the match or the priority, or edit that policy.`
+    ? `Policy ${conflict.config?.name || conflict.id} already matches this traffic at priority ${rulePriorityValue} on this bridge: a second policy would replace its flow. Change the match or the priority, or edit that policy.`
     : '';
   const changeRuleProtocol = (protocol: string) => {
     setRuleProtocol(protocol);
@@ -717,10 +767,24 @@ export default function SDNBridgeDetailClient() {
                 <Input
                   id="rule-priority"
                   type="number"
-                  min={0}
+                  min={1}
+                  max={65535}
+                  step={1}
                   value={rulePriority}
                   onChange={(e) => setRulePriority(e.target.value)}
+                  aria-invalid={rulePriorityError ? true : undefined}
+                  aria-describedby={rulePriorityError ? 'rule-priority-error' : undefined}
                 />
+                {rulePriorityError && (
+                  <p
+                    id="rule-priority-error"
+                    role="alert"
+                    data-testid="rule-priority-error"
+                    className="text-sm text-destructive"
+                  >
+                    {rulePriorityError}
+                  </p>
+                )}
               </div>
               <div className="space-y-1">
                 <Label htmlFor="rule-protocol">Protocol</Label>
@@ -790,12 +854,14 @@ export default function SDNBridgeDetailClient() {
                 !policyName ||
                 !ruleAction ||
                 !!rulePortError ||
+                !!rulePriorityError ||
                 !!policyConflictError
               }
               onClick={() =>
                 bridgeLoaded &&
                 policiesLoaded &&
                 !rulePortError &&
+                !rulePriorityError &&
                 !policyConflictError &&
                 run(
                   'Policy applied',

@@ -89,7 +89,8 @@ describe('ContainerTable', () => {
     mount([container({ id: 'ctr/1', name: 'web' })]);
 
     const link = screen.getByRole('link', { name: 'web' });
-    expect(link.getAttribute('href')).toBe('/compute/containers/ctr%2F1/');
+    // next/link drops the trailing slash outside a trailingSlash Next config.
+    expect(link.getAttribute('href')).toMatch(/^\/compute\/containers\/ctr%2F1\/?$/);
   });
 
   it('gives each status its colour', () => {
