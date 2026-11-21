@@ -136,12 +136,16 @@ describe('TenantQuotasPage UpdateQuotas', () => {
 
     await openEditor();
     const readsBefore = quotaReads(sent);
+    // The toast store outlives a test; count the success toasts already there.
+    const successToasts = () =>
+      screen.queryAllByTestId('toast').filter((t) => t.textContent?.startsWith('Quotas updated')).length;
+    const successBefore = successToasts();
     setLimit('Max VMs', '37');
     await click('Save limits');
 
     const toast = await screen.findByText('Quota update failed: quota update denied for tenant t-1');
     expect(toast.closest('[data-testid="toast"]')?.getAttribute('data-variant')).toBe('destructive');
-    expect(screen.queryAllByTestId('toast').some((t) => t.textContent?.startsWith('Quotas updated'))).toBe(false);
+    expect(successToasts()).toBe(successBefore);
     expect(screen.getByRole('button', { name: 'Save limits' })).toBeTruthy();
     expect(readsBefore).toBe(1);
     expect(quotaReads(sent)).toBe(1);
