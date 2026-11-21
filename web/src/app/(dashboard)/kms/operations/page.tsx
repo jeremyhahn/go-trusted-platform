@@ -37,6 +37,14 @@ function toInt(text: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+// A key status version: 0 targets the whole key, a positive version only that
+// version (pinned go-quicbaas UpdateKeyStatus). Anything else is refused, not
+// defaulted (#2146).
+function parseVersion(text: string): number | null {
+  const t = text.trim();
+  return /^\d+$/.test(t) ? Number(t) : null;
+}
+
 function Field(props: {
   id: string;
   label: string;
@@ -105,6 +113,7 @@ export default function KmsOperationsPage() {
   const [statusKey, setStatusKey] = React.useState("");
   const [statusValue, setStatusValue] = React.useState<KmsKeyStatus>("DISABLED");
   const [statusVersion, setStatusVersion] = React.useState("1");
+  const statusVersionValue = parseVersion(statusVersion);
   const [statusConfirm, setStatusConfirm] = React.useState(false);
   const [statusResult, setStatusResult] = React.useState<string | null>(null);
 
@@ -164,7 +173,10 @@ export default function KmsOperationsPage() {
 
   const onStatusConfirmed = async () => {
     setStatusConfirm(false);
-    const res = await ops.updateKeyStatus(statusKey, statusValue, toInt(statusVersion, 1));
+    if (statusVersionValue === null) {
+      return;
+    }
+    const res = await ops.updateKeyStatus(statusKey, statusValue, statusVersionValue);
     if (res) {
       setStatusResult(`${res.key_id} v${res.version} is ${res.status}`);
     }
@@ -290,10 +302,15 @@ export default function KmsOperationsPage() {
             </select>
           </div>
           <Field id="status-version" label="Version" value={statusVersion} onChange={setStatusVersion} />
+          {statusVersionValue === null && (
+            <p data-testid="status-version-error" className="text-sm text-destructive">
+              Version must be 0 (whole key) or a key version number
+            </p>
+          )}
           <Button
             variant="destructive"
             onClick={() => setStatusConfirm(true)}
-            disabled={ops.busy || !statusKey}
+            disabled={ops.busy || !statusKey || statusVersionValue === null}
           >
             Update status
           </Button>
