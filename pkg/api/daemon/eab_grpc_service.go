@@ -16,8 +16,17 @@ package daemon
 import (
 	"context"
 	"encoding/base64"
+	"strings"
 	"time"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -43,6 +52,182 @@ type EABGRPCService struct {
 	service  EABServicer
 	delivery EABDeliveryServicer
 	logger   *logging.Logger
+
+	// pepClient, when set, makes the IAM authorisation decision for the
+	// tenant-scoped EAB operations (docs/SPEC.md line 125). Without it the
+	// service falls back to the caller-tenant equality check.
+	pepClient quicbaassdk.IAMPEPClient
+
+	// users resolves an mTLS certificate identity to its stored IAM user
+	// and roles before the PEP check: the PEP projects the supplied subject
+	// into RBAC as is and does not hydrate roles from the subject ID.
+	users eabUserDirectory
+}
+
+// eabUserDirectory is the part of the SDK IAM UserClient the EAB service
+// uses to resolve an mTLS caller to its stored IAM user.
+type eabUserDirectory interface {
+	Get(ctx context.Context, tenantID, userID string) (*sdkiam.User, error)
+	GetByEmail(ctx context.Context, tenantID, email string) (*sdkiam.User, error)
+	FindByUsername(ctx context.Context, tenantID, username string) (*sdkiam.User, error)
+}
+
+// SetPEPClient wires the IAM PEP client that authorises tenant-scoped EAB
+// operations. A nil client keeps the caller-tenant equality check.
+func (s *EABGRPCService) SetPEPClient(c quicbaassdk.IAMPEPClient) {
+	s.pepClient = c
+}
+
+// SetUserClient wires the IAM user directory that resolves mTLS callers to
+// their stored user and roles. With a PEP configured and no directory, an
+// mTLS caller is refused rather than checked without its roles.
+func (s *EABGRPCService) SetUserClient(c eabUserDirectory) {
+	s.users = c
+}
+
+// eabCaller is the authenticated caller of a tenant-scoped EAB operation.
+// identity is set for an mTLS certificate caller, on gRPC or on QUIC, whose
+// IAM user and roles are not yet resolved.
+type eabCaller struct {
+	id       string
+	tenantID string
+	roles    []string
+	identity *auth.Identity
+}
+
+// resolveEABMTLSCaller resolves an mTLS certificate identity to its stored
+// IAM user in the identity's tenant: by the resolved user ID when the
+// interceptor set one, else by the email SAN, else by the CN as username.
+// A missing user, or one stored in another tenant, is refused.
+func (s *EABGRPCService) resolveEABMTLSCaller(ctx context.Context, caller eabCaller) (eabCaller, error) {
+	identity := caller.identity
+	denied := status.Error(codes.PermissionDenied, ErrIAMTenantForbidden{Requested: caller.tenantID}.Error())
+	if s.users == nil {
+		return eabCaller{}, status.Error(codes.Unavailable, "caller identity resolution unavailable")
+	}
+	var (
+		user *sdkiam.User
+		err  error
+	)
+	switch {
+	case identity.UserID != "":
+		user, err = s.users.Get(ctx, identity.TenantID, identity.UserID)
+	case identity.Email != "":
+		user, err = s.users.GetByEmail(ctx, identity.TenantID, identity.Email)
+	case identity.Name != "":
+		user, err = s.users.FindByUsername(ctx, identity.TenantID, identity.Name)
+	case identity.ID != "":
+		user, err = s.users.FindByUsername(ctx, identity.TenantID, identity.ID)
+	default:
+		return eabCaller{}, denied
+	}
+	if err != nil {
+		if sdkerrors.IsNotFound(err) {
+			return eabCaller{}, denied
+		}
+		if s.logger != nil {
+			s.logger.Error(err, "eab grpc: caller identity lookup failed", "tenant_id", identity.TenantID)
+		}
+		return eabCaller{}, status.Error(codes.Unavailable, "caller identity resolution unavailable")
+	}
+	if user == nil || user.ID == "" || user.TenantID != identity.TenantID {
+		return eabCaller{}, denied
+	}
+	return eabCaller{id: user.ID, tenantID: user.TenantID, roles: user.Roles}, nil
+}
+
+// eabCallerFromContext returns the authenticated caller, or false for an
+// unbound local caller. A certificate caller on QUIC, which
+// mtlsPeerAuthenticator turns into an operator-scoped AuthorizedContext with
+// no roles, carries its identity so it is resolved through IAM the same way
+// as a certificate caller on gRPC.
+func eabCallerFromContext(ctx context.Context) (eabCaller, bool) {
+	for _, from := range []func(context.Context) (*platformtoken.AuthorizedContext, bool){
+		grpcapi.AuthorizedContextFromContext,
+		quic.AuthorizedContextFromContext,
+		mcp.AuthorizedContextFromContext,
+	} {
+		if authCtx, ok := from(ctx); ok && authCtx != nil {
+			if isMTLSPeerAuthorizedContext(authCtx) {
+				identity := &auth.Identity{ID: authCtx.Subject, Name: authCtx.Username, TenantID: authCtx.TenantID}
+				// The mTLS adapter takes the certificate identity from the email
+				// SAN by default; carry it as Email so resolution tries it first.
+				if strings.Contains(authCtx.Subject, "@") {
+					identity.Email = authCtx.Subject
+				}
+				return eabCaller{
+					id:       authCtx.Subject,
+					tenantID: authCtx.TenantID,
+					identity: identity,
+				}, true
+			}
+			return eabCaller{id: authCtx.Subject, tenantID: authCtx.TenantID, roles: authCtx.Roles}, true
+		}
+	}
+	if identity := IdentityFromContext(ctx); identity != nil {
+		id := identity.UserID
+		if id == "" {
+			id = identity.ID
+		}
+		return eabCaller{id: id, tenantID: identity.TenantID, identity: identity}, true
+	}
+	return eabCaller{}, false
+}
+
+// isMTLSPeerAuthorizedContext reports whether authCtx has the shape
+// mtlsPeerAuthenticator builds for a client certificate: exactly the operator
+// scope and no roles.
+func isMTLSPeerAuthorizedContext(authCtx *platformtoken.AuthorizedContext) bool {
+	return len(authCtx.Roles) == 0 && len(authCtx.Scopes) == 1 && authCtx.Scopes[0] == mtlsOperatorScope
+}
+
+// authorizeEABTenant authorises a tenant-scoped EAB operation. A bound caller
+// must carry a tenant and must name one tenant (the empty tenant spans every
+// tenant's store). With a PEP configured the IAM decision is final, with the
+// request tenant in CheckRequest.TenantID and the caller's OU tenant in the
+// subject, so policy can grant cross-tenant access (docs/SPEC.md line 125).
+// action is "read" or "write": the authorizer joins it with the "eab"
+// resource into the granted eab:read / eab:write permission.
+// Without a PEP the caller may only name its own tenant. An unbound local
+// caller is not checked.
+func (s *EABGRPCService) authorizeEABTenant(ctx context.Context, requestTenant, action string) error {
+	caller, bound := eabCallerFromContext(ctx)
+	if !bound {
+		return nil
+	}
+	if caller.tenantID == "" || requestTenant == "" {
+		return status.Error(codes.PermissionDenied, ErrIAMTenantForbidden{Requested: requestTenant}.Error())
+	}
+	if s.pepClient == nil {
+		return authorizeIAMTenant(ctx, requestTenant)
+	}
+	if caller.identity != nil {
+		resolved, err := s.resolveEABMTLSCaller(ctx, caller)
+		if err != nil {
+			return err
+		}
+		caller = resolved
+	}
+	resp, err := s.pepClient.Check(ctx, &sdkiam.CheckRequest{
+		Subject: sdkiam.CheckSubject{
+			ID:       caller.id,
+			TenantID: caller.tenantID,
+			Roles:    caller.roles,
+		},
+		Action:   action,
+		Resource: "eab",
+		TenantID: requestTenant,
+	})
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Error(err, "eab grpc: permission check failed", "tenant_id", requestTenant, "action", action)
+		}
+		return status.Error(codes.Unavailable, "authorization decision unavailable")
+	}
+	if resp == nil || !resp.Allowed {
+		return status.Error(codes.PermissionDenied, ErrIAMTenantForbidden{Requested: requestTenant}.Error())
+	}
+	return nil
 }
 
 // NewEABGRPCService creates a new EAB gRPC service instance. The backing
@@ -175,6 +360,9 @@ func (s *EABGRPCService) CreateCredential(
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
+	if err := s.authorizeEABTenant(ctx, req.GetTenantId(), "write"); err != nil {
+		return nil, err
+	}
 
 	params := eab.GenerateParams{
 		ProfileID:  req.GetProfileId(),
@@ -251,6 +439,9 @@ func (s *EABGRPCService) ListCredentials(
 	req *platformv1.ListEABCredentialsRequest,
 ) (*platformv1.ListEABCredentialsResponse, error) {
 	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+	if err := s.authorizeEABTenant(ctx, req.GetTenantId(), "read"); err != nil {
 		return nil, err
 	}
 
@@ -553,6 +744,12 @@ func (s *EABGRPCService) CleanupExpiredCredentials(
 	req *platformv1.CleanupExpiredEABCredentialsRequest,
 ) (*platformv1.CleanupExpiredEABCredentialsResponse, error) {
 	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+	// A tenant-bound caller must name a tenant the IAM decision allows; the
+	// empty tenant (every tenant's expired credentials) is left to an
+	// unbound local caller.
+	if err := s.authorizeEABTenant(ctx, req.GetTenantId(), "write"); err != nil {
 		return nil, err
 	}
 
