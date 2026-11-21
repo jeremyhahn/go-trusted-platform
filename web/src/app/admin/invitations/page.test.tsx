@@ -86,8 +86,11 @@ describe('InvitationsPage list envelope', () => {
     render(<InvitationsPage />);
 
     expect(await screen.findByText('a@example.com')).toBeTruthy();
-    expect(screen.getByTestId('view-invitation-7').getAttribute('href')).toBe(
-      '/admin/invitations/detail/?id=7'
+    // The page links to /admin/invitations/detail/?id=7; the app builds with
+    // trailingSlash: true, but vitest does not load next.config, so next/link
+    // drops the slash here. Either form reaches the detail page.
+    expect(screen.getByTestId('view-invitation-7').getAttribute('href')).toMatch(
+      /^\/admin\/invitations\/detail\/?\?id=7$/
     );
     expect(screen.queryByText('No pending invitations')).toBeNull();
     expect(screen.queryByText(/Invalid Date/)).toBeNull();

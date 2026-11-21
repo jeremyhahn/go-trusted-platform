@@ -24,6 +24,39 @@ interface Notification {
   type: NotificationType;
 }
 
+// The REST handlers answer through protorest.WriteSuccess with the
+// {code, success, payload} envelope, and payload carries protojson camelCase
+// names (expiresAt, createdAt). unwrapPayload and toInvitation read that
+// shape; a bare body and snake_case names are accepted too.
+
+/** unwrapPayload returns body.payload when it is an object, else the body. */
+function unwrapPayload(body: unknown): Record<string, unknown> {
+  if (body === null || typeof body !== "object") {
+    return {};
+  }
+  const payload = (body as Record<string, unknown>).payload;
+  if (payload !== null && typeof payload === "object") {
+    return payload as Record<string, unknown>;
+  }
+  return body as Record<string, unknown>;
+}
+
+function text(value: unknown): string {
+  return value === undefined || value === null ? "" : String(value);
+}
+
+/** toInvitation maps a protojson invitation to the page's Invitation. */
+function toInvitation(raw: Record<string, unknown>): Invitation {
+  return {
+    id: text(raw.id),
+    token: text(raw.token),
+    email: text(raw.email),
+    role: text(raw.role),
+    expires_at: text(raw.expires_at ?? raw.expiresAt),
+    created_at: text(raw.created_at ?? raw.createdAt),
+  };
+}
+
 /** loadInvitations reads the tenant's invitations; it throws on failure. */
 async function loadInvitations(): Promise<Invitation[]> {
   const baseUrl = getBaseUrl();
@@ -40,7 +73,8 @@ async function loadInvitations(): Promise<Invitation[]> {
   }
 
   const data = await response.json();
-  return data.invitations || [];
+  const list = (unwrapPayload(data).invitations as unknown[] | undefined) ?? [];
+  return list.map((raw) => toInvitation((raw ?? {}) as Record<string, unknown>));
 }
 
 export default function InvitationsPage() {
@@ -140,7 +174,14 @@ export default function InvitationsPage() {
       }
 
       const data = await response.json();
-      setInvitations([data.invitation, ...invitations]);
+      const created = unwrapPayload(data).invitation;
+      if (created === null || typeof created !== "object") {
+        throw new Error("The server returned no invitation");
+      }
+      setInvitations([
+        toInvitation(created as Record<string, unknown>),
+        ...invitations,
+      ]);
       setEmail("");
       setRole("member");
       showNotification("Invitation created successfully!", "success");
@@ -192,6 +233,9 @@ export default function InvitationsPage() {
   };
 
   const formatDate = (dateString: string) => {
+    if (!dateString) {
+      return "-";
+    }
     const date = new Date(dateString);
     return date.toLocaleDateString() + " " + date.toLocaleTimeString();
   };
