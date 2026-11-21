@@ -30,7 +30,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useRegistry, useToast } from "@/hooks";
-import type { RegistryHealthCode } from "@/hooks";
+import type { RegistryHealthCode, UseRegistryResult } from "@/hooks";
+
+type InspectDetail = Awaited<ReturnType<UseRegistryResult["inspect"]>>;
+
+/** dash shows "-" for a missing field. */
+function dash(v: string | number | undefined | null): string {
+  return v === undefined || v === null || v === "" ? "-" : String(v);
+}
 
 const HEALTH_LABEL: Record<RegistryHealthCode, string> = {
   0: "Unknown",
@@ -47,9 +54,81 @@ function healthVariant(
   return "secondary";
 }
 
+/** InspectPanel shows one tag's image detail; missing fields show "-". */
+function InspectPanel({
+  name,
+  tag,
+  detail,
+  onClose,
+}: {
+  name: string;
+  tag: string;
+  detail: InspectDetail;
+  onClose: () => void;
+}) {
+  const artifact = detail.Artifact ?? null;
+  const manifest = artifact?.Manifest ?? null;
+  const scan = detail.ScanResult ?? null;
+  const signatures = detail.Signatures ?? [];
+  const platform =
+    artifact?.OS || artifact?.Architecture
+      ? `${artifact?.OS ?? "-"}/${artifact?.Architecture ?? "-"}`
+      : "-";
+  const size = artifact?.Size;
+  return (
+    <section
+      data-testid="registry-inspect-panel"
+      className="mt-4 rounded-md border p-4 space-y-2"
+    >
+      <div className="flex items-center justify-between">
+        <h3 className="font-mono text-sm font-medium">
+          {name}:{tag}
+        </h3>
+        <Button variant="outline" size="sm" onClick={onClose}>
+          Close
+        </Button>
+      </div>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+        <dt className="text-muted-foreground">Digest</dt>
+        <dd data-testid="registry-inspect-digest" className="font-mono break-all">
+          {dash(artifact?.Digest)}
+        </dd>
+        <dt className="text-muted-foreground">Media type</dt>
+        <dd>{dash(manifest?.MediaType)}</dd>
+        <dt className="text-muted-foreground">Size</dt>
+        <dd>{size === undefined || size === null ? "-" : `${size} bytes`}</dd>
+        <dt className="text-muted-foreground">Layers</dt>
+        <dd data-testid="registry-inspect-layers">
+          {manifest?.Layers?.length ?? 0}
+        </dd>
+        <dt className="text-muted-foreground">Platform</dt>
+        <dd>{platform}</dd>
+        <dt className="text-muted-foreground">Pushed</dt>
+        <dd>{dash(artifact?.PushedAt)}</dd>
+        <dt className="text-muted-foreground">Tags</dt>
+        <dd>{detail.Tags?.length ? detail.Tags.join(", ") : "-"}</dd>
+        <dt className="text-muted-foreground">Signatures</dt>
+        <dd>
+          {signatures.length}
+          {signatures.length > 0
+            ? ` (${signatures.map((s) => dash(s.Signer)).join(", ")})`
+            : null}
+        </dd>
+        <dt className="text-muted-foreground">Vulnerabilities</dt>
+        <dd>
+          {scan
+            ? `Critical ${scan.CriticalCount ?? 0}, High ${scan.HighCount ?? 0}, Medium ${scan.MediumCount ?? 0}, Low ${scan.LowCount ?? 0}`
+            : "Not scanned"}
+        </dd>
+      </dl>
+    </section>
+  );
+}
+
 /**
  * Container registry page: registry status, the tags of a repository
- * (OCI tags/list) and manifest deletion behind a confirm dialog.
+ * (OCI tags/list), image inspection per tag (RegistryService.inspect) and
+ * manifest deletion behind a confirm dialog.
  */
 export default function RegistryPage() {
   const { toast } = useToast();
@@ -63,15 +142,44 @@ export default function RegistryPage() {
     isTagsLoading,
     listTags,
     deleteManifest,
+    inspect,
   } = useRegistry();
   const [repository, setRepository] = React.useState("");
   const [pending, setPending] = React.useState<string | null>(null);
   const [isDeleting, setDeleting] = React.useState(false);
+  const [inspected, setInspected] = React.useState<{
+    tag: string;
+    detail: InspectDetail;
+  } | null>(null);
+  const [inspectError, setInspectError] = React.useState<{
+    tag: string;
+    message: string;
+  } | null>(null);
+  const [inspecting, setInspecting] = React.useState<string | null>(null);
 
   const onList = (e: React.FormEvent) => {
     e.preventDefault();
     const name = repository.trim();
+    setInspected(null);
+    setInspectError(null);
     if (name) void listTags(name);
+  };
+
+  const onInspect = async (name: string, tag: string) => {
+    setInspecting(tag);
+    try {
+      const detail = await inspect(name, tag);
+      setInspected({ tag, detail });
+      setInspectError(null);
+    } catch (e: unknown) {
+      setInspected(null);
+      setInspectError({
+        tag,
+        message: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setInspecting(null);
+    }
   };
 
   const onConfirmDelete = async () => {
@@ -176,7 +284,7 @@ export default function RegistryPage() {
                 <TableRow>
                   <TableHead>Repository</TableHead>
                   <TableHead>Tag</TableHead>
-                  <TableHead className="w-12" />
+                  <TableHead className="w-24" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -187,6 +295,16 @@ export default function RegistryPage() {
                       <Badge variant="secondary">{tag}</Badge>
                     </TableCell>
                     <TableCell>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => void onInspect(tags.name, tag)}
+                        disabled={inspecting !== null}
+                        aria-label={`Inspect ${tag}`}
+                        title="Inspect image"
+                      >
+                        <Search className="h-4 w-4" />
+                      </Button>
                       <Button
                         variant="ghost"
                         size="icon"
@@ -202,6 +320,23 @@ export default function RegistryPage() {
               </TableBody>
             </Table>
           )}
+          {tags && inspectError ? (
+            <p
+              data-testid="registry-inspect-error"
+              className="text-sm text-destructive mt-4"
+            >
+              Failed to inspect {tags.name}:{inspectError.tag}:{" "}
+              {inspectError.message}
+            </p>
+          ) : null}
+          {tags && inspected ? (
+            <InspectPanel
+              name={tags.name}
+              tag={inspected.tag}
+              detail={inspected.detail}
+              onClose={() => setInspected(null)}
+            />
+          ) : null}
         </CardContent>
       </Card>
 
