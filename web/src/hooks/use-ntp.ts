@@ -3,63 +3,37 @@
 /**
  * NTP hook: GetStatus, ListSources and Step (docs/ntp/api.md).
  *
- * Calls the platform's API client directly on the three NTP routes, so the
- * page works against an SDK build that predates `PlatformClient.ntp`.
+ * Calls the SDK's NTPService on `client.ntp` (#2058); the types are the
+ * SDK's, under the names this hook has always exported.
  */
 
 import { useMemo } from "react";
-import { usePlatformClient } from "trusted-platform-sdk";
+import {
+  usePlatformClient,
+  type GetNTPStatusResponse,
+  type ListNTPSourcesResponse,
+  type NTPSource as SDKNTPSource,
+  type NTPStatus as SDKNTPStatus,
+} from "trusted-platform-sdk";
 
 /** Node clock synchronisation status (protojson, lowerCamelCase). */
-export interface NTPStatus {
-  synced: boolean;
-  stratum: number;
-  leapStatus: string;
-  offsetSeconds: number;
-  rootDispersion: number;
-  rootDelay: number;
-  /** Seconds since the epoch; 0 means never synced. */
-  lastSyncUnix: number | string;
-  mode: string;
-  referenceId: string;
-  referenceName: string;
-  sourcesReachable: number;
-  sourcesTotal: number;
-  anomaly: boolean;
-  anomalyReason: string;
-}
+export type NTPStatus = SDKNTPStatus;
 
 /** One configured time source. */
-export interface NTPSource {
-  address: string;
-  mode: string;
-  state: string;
-  stratum: number;
-  pollSeconds: number;
-  reach: number;
-  lastRxSeconds: number | string;
-  offsetSeconds: number;
-  reachable: boolean;
-}
+export type NTPSource = SDKNTPSource;
 
-export interface NTPStatusResponse {
-  status: NTPStatus;
-}
+export type NTPStatusResponse = GetNTPStatusResponse;
 
-export interface NTPSourcesResponse {
-  sources: NTPSource[];
-}
-
-const NTP_BASE = "/v1/ntp";
+export type NTPSourcesResponse = ListNTPSourcesResponse;
 
 export function useNTP() {
   const client = usePlatformClient();
-  return useMemo(() => {
-    const api = client.getApiClient();
-    return {
-      getStatus: () => api.get<NTPStatusResponse>(`${NTP_BASE}/status`),
-      listSources: () => api.get<NTPSourcesResponse>(`${NTP_BASE}/sources`),
-      step: () => api.post<NTPStatusResponse>(`${NTP_BASE}/step`),
-    };
-  }, [client]);
+  return useMemo(
+    () => ({
+      getStatus: () => client.ntp.getStatus(),
+      listSources: () => client.ntp.listSources(),
+      step: () => client.ntp.step(),
+    }),
+    [client]
+  );
 }

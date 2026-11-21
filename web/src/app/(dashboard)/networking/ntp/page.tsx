@@ -29,7 +29,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { useApi, useNTP, useToast } from '@/hooks';
+import { Gated } from '@/components/features/capabilities';
+import { useApi, useCapabilities, useNTP, useToast } from '@/hooks';
 
 /** `lastSyncUnix` is seconds since the epoch; 0 means never. */
 function formatLastSync(value: number | string | undefined): string {
@@ -52,6 +53,11 @@ export default function NTPPage() {
   // The last status read failure, kept until a status read or a Step succeeds.
   // useApi clears its own error as each request starts, so it cannot carry this.
   const [staleError, setStaleError] = useState<{ message: string } | null>(null);
+  // The reads wait for the server's capabilities, and stay off when the
+  // server does not offer GET /api/v1/ntp/status.
+  const { loading: capsLoading, capability } = useCapabilities();
+  const statusCapability = capability('GET /api/v1/ntp/status');
+  const ntpEnabled = !capsLoading && statusCapability.enabled;
 
   const {
     data: statusData,
@@ -60,6 +66,7 @@ export default function NTPPage() {
     refetch: fetchStatus,
     mutate: setStatusData,
   } = useApi(() => ntp.getStatus(), [], {
+    enabled: ntpEnabled,
     onSuccess: () => {
       setStaleError(null);
     },
@@ -80,6 +87,7 @@ export default function NTPPage() {
     isFetching: sourcesFetching,
     refetch: fetchSources,
   } = useApi(() => ntp.listSources(), [], {
+    enabled: ntpEnabled,
     onError: (err) => {
       toast({
         title: 'Error',
@@ -151,10 +159,12 @@ export default function NTPPage() {
           >
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button onClick={() => setStepOpen(true)}>
-            <Clock className="mr-2 h-4 w-4" />
-            Step Clock
-          </Button>
+          <Gated op="POST /api/v1/ntp/step">
+            <Button onClick={() => setStepOpen(true)}>
+              <Clock className="mr-2 h-4 w-4" />
+              Step Clock
+            </Button>
+          </Gated>
         </div>
       </div>
 
@@ -178,6 +188,15 @@ export default function NTPPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {!capsLoading && !statusCapability.enabled && (
+        <Card data-testid="ntp-not-enabled">
+          <CardHeader>
+            <CardTitle>NTP is not enabled on this server</CardTitle>
+            <CardDescription>{statusCapability.reason}</CardDescription>
+          </CardHeader>
+        </Card>
+      )}
 
       <Card data-testid="ntp-status-card">
         <CardHeader>

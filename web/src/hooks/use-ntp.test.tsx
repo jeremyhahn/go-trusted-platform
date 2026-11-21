@@ -8,6 +8,9 @@ import { useNTP } from "./use-ntp";
 // #2058: the NTP hook calls the SDK's NTPService on `client.ntp`, not a
 // hand-written fetch around it.
 
+// The SDK's PlatformProvider types its children with the SDK's own React types.
+type ProviderChildren = Parameters<typeof PlatformProvider>[0]["children"];
+
 const status = {
   synced: true,
   stratum: 2,
@@ -43,7 +46,7 @@ describe("useNTP", () => {
 
   function render() {
     const wrapper = ({ children }: { children: ReactNode }) => (
-      <PlatformProvider client={client}>{children}</PlatformProvider>
+      <PlatformProvider client={client}>{children as ProviderChildren}</PlatformProvider>
     );
     return renderHook(() => useNTP(), { wrapper }).result.current;
   }

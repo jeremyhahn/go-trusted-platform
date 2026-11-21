@@ -8,6 +8,9 @@ import { useCapabilities } from "./use-capabilities";
 // #2058 / #2033 item 4: the capability gate reads GET /api/v1/capabilities
 // once per client and fails closed.
 
+// The SDK's PlatformProvider types its children with the SDK's own React types.
+type ProviderChildren = Parameters<typeof PlatformProvider>[0]["children"];
+
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -37,7 +40,7 @@ describe("useCapabilities", () => {
   let client: PlatformClient;
 
   function wrapper({ children }: { children: ReactNode }) {
-    return <PlatformProvider client={client}>{children}</PlatformProvider>;
+    return <PlatformProvider client={client}>{children as ProviderChildren}</PlatformProvider>;
   }
 
   function capabilityCalls() {
