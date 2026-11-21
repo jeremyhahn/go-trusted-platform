@@ -3,6 +3,7 @@ package firstboot
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -370,6 +371,61 @@ func TestFirstbootSealStrategy_SealKeyToTPM_Success(t *testing.T) {
 	if attrs.Parent.PlatformPolicy {
 		t.Error("parent policy should follow the configured platform-srk policy (false)")
 	}
+}
+
+// sealedPCRs returns the PCR indices of the single SHA-256 bank in the seal
+// policy the fake TPM received, failing the test when the policy is missing
+// or names any other bank.
+func sealedPCRs(t *testing.T, opts *xkmssdk.SealOptions) []uint {
+	t.Helper()
+	if opts == nil || opts.TPMPolicy == nil {
+		t.Fatal("the root-key seal carries no TPMPolicy: the seal-pcrs selection is not bound")
+	}
+	if uint16(opts.TPMPolicy.HashAlg) != 0x000B {
+		t.Errorf("TPMPolicy.HashAlg = %#x, want SHA-256 (0x000b)", uint16(opts.TPMPolicy.HashAlg))
+	}
+	sels := opts.TPMPolicy.PCRSelection.PCRSelections
+	if len(sels) != 1 || uint16(sels[0].Hash) != 0x000B {
+		t.Fatalf("PCR selection = %+v, want one SHA-256 bank", sels)
+	}
+	var pcrs []uint
+	for i, b := range sels[0].PCRSelect {
+		for bit := 0; bit < 8; bit++ {
+			if b&(1<<bit) != 0 {
+				pcrs = append(pcrs, uint(i*8+bit))
+			}
+		}
+	}
+	return pcrs
+}
+
+// The root-key seal binds the resolved seal-pcrs selection (Codex P1, #1897):
+// the installer's seal-pcrs first, else the firstboot Config.PCRSelection.
+func TestFirstbootSealStrategy_SealKeyToTPM_BindsSealPCRs(t *testing.T) {
+	t.Run("installer seal-pcrs", func(t *testing.T) {
+		useHostRoot(t)
+		writeHostFile(t, strategyInstallerMountPoint+"/etc/trusted-platform/config.yaml",
+			[]byte("disk:\n  encryption:\n    tpm:\n      seal-pcrs: [7, 11]\n"))
+		tpm := &fakeTPM{cfg: fullTPMConfig()}
+		s := NewFirstbootSealStrategy(newFakeExecutor(tpm, &Config{PCRSelection: []uint{0, 7}}), nil, testLogger())
+		if err := s.sealKeyToTPM(context.Background(), []byte("key"), newSealEFIDir(t)); err != nil {
+			t.Fatalf("sealKeyToTPM: %v", err)
+		}
+		if got := fmt.Sprint(sealedPCRs(t, tpm.sealOpts)); got != "[7 11]" {
+			t.Errorf("sealed to PCRs %s, want [7 11]", got)
+		}
+	})
+	t.Run("firstboot config fallback", func(t *testing.T) {
+		useHostRoot(t)
+		tpm := &fakeTPM{cfg: fullTPMConfig()}
+		s := NewFirstbootSealStrategy(newFakeExecutor(tpm, &Config{PCRSelection: []uint{0, 7}}), nil, testLogger())
+		if err := s.sealKeyToTPM(context.Background(), []byte("key"), newSealEFIDir(t)); err != nil {
+			t.Fatalf("sealKeyToTPM: %v", err)
+		}
+		if got := fmt.Sprint(sealedPCRs(t, tpm.sealOpts)); got != "[0 7]" {
+			t.Errorf("sealed to PCRs %s, want [0 7]", got)
+		}
+	})
 }
 
 func TestFirstbootSealStrategy_SealKeyToTPM_Errors(t *testing.T) {

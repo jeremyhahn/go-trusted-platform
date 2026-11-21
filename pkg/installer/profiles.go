@@ -194,7 +194,7 @@ func GetProfile(name string) (*Config, error) {
 
 	// Set default PCRs if TPM enabled but no PCRs specified
 	if config.EnableTPMSealing && len(config.PCRs) == 0 {
-		config.PCRs = []uint{0, 7, 9}
+		config.PCRs = SealPCRsDefault()
 	}
 
 	// Set SecureBoot if enabled, carrying the full parsed shape (URIs + key

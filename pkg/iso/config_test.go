@@ -111,8 +111,8 @@ func TestDefaultISOBuildConfig(t *testing.T) {
 		t.Error("expected TPMAutoUpgradeSeal to be true")
 	}
 
-	if len(config.TPMSealPCR) != 3 {
-		t.Errorf("expected 3 TPMSealPCR values, got %d", len(config.TPMSealPCR))
+	if len(config.TPMSealPCR) != 2 || config.TPMSealPCR[0] != 7 || config.TPMSealPCR[1] != 11 {
+		t.Errorf("expected TPMSealPCR [7 11], got %v", config.TPMSealPCR)
 	}
 }
 

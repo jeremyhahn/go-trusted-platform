@@ -203,7 +203,7 @@ func DefaultISOBuildConfig() *ISOBuildConfig {
 		LockdownMode:       "confidentiality",
 		AfterInstall:       "poweroff",
 		TPMAutoUpgradeSeal: true,
-		TPMSealPCR:         []uint{0, 7, 9},
+		TPMSealPCR:         installer.SealPCRsDefault(),
 		GenerateKeys:       true,
 	}
 }

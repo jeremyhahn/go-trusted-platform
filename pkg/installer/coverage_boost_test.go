@@ -1206,7 +1206,7 @@ security:
 	assert.True(t, cfg.OS.EnableFIDO2)
 	assert.True(t, cfg.EnableTPMSealing)
 	// TPM enabled with no PCRs should get default PCRs
-	assert.Equal(t, []uint{0, 7, 9}, cfg.PCRs)
+	assert.Equal(t, []uint{7, 11}, cfg.PCRs)
 }
 
 // =============================================================================

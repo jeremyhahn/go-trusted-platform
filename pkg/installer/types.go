@@ -51,6 +51,16 @@ const (
 // not persisted inside the TPM itself.
 const DefaultLUKSTPMHandle = uint32(0x81000001)
 
+// DefaultSealPCRs is the PCR selection a TPM seal uses when the config sets
+// none (docs/SPEC.md installer row: the board config's seal-pcrs, default 7
+// and 11). Callers take a copy with SealPCRsDefault so nobody can change it.
+var DefaultSealPCRs = []uint{7, 11}
+
+// SealPCRsDefault returns a fresh copy of DefaultSealPCRs.
+func SealPCRsDefault() []uint {
+	return append([]uint(nil), DefaultSealPCRs...)
+}
+
 // DiskConfig defines disk partitioning and filesystem configuration
 type DiskConfig struct {
 	// Target disk device (e.g., /dev/sda, /dev/vda)
