@@ -507,6 +507,10 @@ func (h *Handlers) GetPCRs(w http.ResponseWriter, r *http.Request) {
 			h.respWriter.Error400(w, r, err)
 			return
 		}
+		if err := validatePCRsRequest(req); err != nil {
+			h.respWriter.Error400(w, r, err)
+			return
+		}
 	}
 	resp, err := h.server.GetPCRs(r.Context(), req)
 	if err != nil {
