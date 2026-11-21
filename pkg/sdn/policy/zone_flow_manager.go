@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"strconv"
 	"sync"
 
@@ -437,13 +438,34 @@ func (m *ZoneFlowManager) BridgeName() string {
 	return m.bridgeName
 }
 
-// AllowProvisioningBootPorts adds TCP ports (the PXE server's iPXE HTTP
-// port) to the provisioning zone's allow rules; it applies to every
-// provisioning flow set installed afterwards.
-func (m *ZoneFlowManager) AllowProvisioningBootPorts(ports ...uint16) {
+// AllowProvisioningBootPorts adds TCP ports (the PXE server's iPXE HTTP,
+// device-script HTTP and NBD ports) to the provisioning zone's allow rules,
+// open only to the boot server; it applies to every provisioning flow set
+// installed afterwards. The boot server is bindHost when it parses as an
+// address that is neither unspecified nor loopback; otherwise the boot
+// servers answer on the provisioning zone's own addresses (its gateway and,
+// when the zone has an IPv6 subnet, that subnet's address), which no
+// inter-zone deny covers. With no usable bind host and no provisioning zone
+// in the plan the boot ports stay closed.
+func (m *ZoneFlowManager) AllowProvisioningBootPorts(bindHost string, ports ...uint16) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.generators.AddProvisioningBootHTTPPorts(ports...)
+
+	var servers []net.IP
+	if ip := net.ParseIP(bindHost); ip != nil && !ip.IsUnspecified() && !ip.IsLoopback() {
+		servers = append(servers, ip)
+	} else if m.plan != nil {
+		if z, ok := m.plan.Zone(zone.ZoneProvisioning); ok {
+			if z.Gateway.IsValid() {
+				servers = append(servers, net.IP(z.Gateway.AsSlice()))
+			}
+			if z.Subnet6.IsValid() {
+				servers = append(servers, net.IP(z.Subnet6.Addr().AsSlice()))
+			}
+		}
+	}
+	m.generators.SetProvisioningBootServers(servers...)
 }
 
 func (m *ZoneFlowManager) RemoveFlows(portID string) error {

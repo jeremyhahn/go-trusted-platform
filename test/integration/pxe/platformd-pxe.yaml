@@ -13,3 +13,9 @@ pxe:
   http-port: 18089
   local-files-dir: /tmp/platformd-pxe/files
   installs-dir: /tmp/platformd-pxe/installs
+  # The iPXE server refuses to initialize with no boot entry, and the base
+  # integration configuration supplies none.
+  boot-entries:
+    - name: integration
+      description: PXE integration boot entry
+      kernel: http://127.0.0.1:18089/files/vmlinuz

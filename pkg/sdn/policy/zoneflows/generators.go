@@ -114,6 +114,22 @@ func (gs *GeneratorSet) AddProvisioningBootHTTPPorts(ports ...uint16) {
 	}
 }
 
+// SetProvisioningBootServers replaces the addresses the provisioning
+// template's boot ports are open to; nil addresses are skipped, and an empty
+// list leaves the boot ports closed. It is not safe for concurrent use with
+// Generate: the caller serialises the two (ZoneFlowManager holds its lock
+// across both).
+func (gs *GeneratorSet) SetProvisioningBootServers(ips ...net.IP) {
+	servers := make([]net.IP, 0, len(ips))
+	for _, ip := range ips {
+		if ip == nil {
+			continue
+		}
+		servers = append(servers, ip)
+	}
+	gs.cfg.Provisioning.BootServerIPs = servers
+}
+
 func (gs *GeneratorSet) Generate(portID string, z zone.Zone, in Ingress) []FlowRule {
 	gen, ok := gs.generators[z]
 	if !ok || gen == nil {
@@ -619,13 +635,18 @@ func (gs *GeneratorSet) provisioning(portID string, in Ingress) []FlowRule {
 		})
 	}
 
-	// PXE boot server HTTP (iPXE boot script and payloads), both families.
+	// PXE boot server ports (iPXE boot script and payloads, NBD), each only
+	// to a boot server in its own family. A destination-unrestricted allow
+	// at this priority would outrank the matrix deny at prioMatrixDeny, so
+	// the ports are open only to the boot server, and with no boot server
+	// they stay closed.
 	for _, p := range cfg.BootHTTPPorts {
-		for _, f := range families {
+		for _, ip := range cfg.BootServerIPs {
+			f := familyOf(ip)
 			flows = append(flows, FlowRule{
 				Table:    0,
 				Priority: prioTFTP,
-				Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=6", fmt.Sprintf("tp_dst=%d", p))),
+				Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=6", f.toDst(ip.String()), fmt.Sprintf("tp_dst=%d", p))),
 				Actions:  "normal",
 			})
 		}

@@ -90,8 +90,10 @@ func TestProvisioning_BootPortsReachOnlyBootServers(t *testing.T) {
 		if !ok {
 			t.Fatalf("port %d: no rule matches the denied packet", p)
 		}
-		if w.Actions != "drop" || w.Match != deny.Match {
-			t.Errorf("port %d: denied destination won by %q (%s, priority %d), want the inter-zone deny",
+		// The deny, or the zone's own default drop above it, must win: no
+		// normal rule may forward the denied destination.
+		if w.Actions != "drop" {
+			t.Errorf("port %d: denied destination forwarded by %q (%s, priority %d), want a drop",
 				p, w.Match, w.Actions, w.Priority)
 		}
 	}

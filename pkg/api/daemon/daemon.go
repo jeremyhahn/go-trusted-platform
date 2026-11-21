@@ -2059,14 +2059,20 @@ func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *ap
 	// root over NBD. docs/SPEC.md (ipxe) requires the provisioning-zone
 	// rules to admit TCP 8080, 8081 and 10809; a provisioning transition
 	// replaces the port's flows, so all three are carried into the
-	// generator.
+	// generator. They are open only to the boot server (the bind host, or
+	// the provisioning zone's own addresses when the bind host is a
+	// wildcard or loopback), so an inter-zone deny still wins on them.
+	bindHost := ""
+	if cfg.IPXEConfig != nil {
+		bindHost = cfg.IPXEConfig.BindHost
+	}
 	if cfg.IPXEConfig != nil && cfg.IPXEConfig.HTTPPort > 0 && cfg.IPXEConfig.HTTPPort < 65535 {
-		flows.AllowProvisioningBootPorts(
+		flows.AllowProvisioningBootPorts(bindHost,
 			uint16(cfg.IPXEConfig.HTTPPort),
 			uint16(cfg.IPXEConfig.HTTPPort+provisioningDeviceScriptPortOffset),
 		)
 	}
-	flows.AllowProvisioningBootPorts(provisioningNBDPort)
+	flows.AllowProvisioningBootPorts(bindHost, provisioningNBDPort)
 	backend := pxe.NewService(
 		pxe.WithLogger(logger),
 		pxe.WithStateManager(pxe.NewStateManager()),

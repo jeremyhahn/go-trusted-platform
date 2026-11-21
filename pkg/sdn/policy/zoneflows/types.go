@@ -100,6 +100,10 @@ type ProvisioningConfig struct {
 	// scripts and payloads on (the iPXE HTTP port); each is allowed at
 	// TFTP priority, both families, like the TFTP rule.
 	BootHTTPPorts []uint16
+
+	// BootServerIPs are the only destinations the boot ports
+	// (BootHTTPPorts) are open to; empty means the boot ports stay closed.
+	BootServerIPs []net.IP
 }
 
 // QuarantineConfig configures the quarantine zone flow generator.

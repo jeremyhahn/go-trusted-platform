@@ -52,6 +52,12 @@ func TestPXERESTGRPCParity(t *testing.T) {
 		})
 	}
 
+	// The daemon only initializes the PXE backend; it never starts it.
+	// The suite starts it and checks readiness before the running-service
+	// and stop/restart cases.
+	restartPXEService(t, grpc)
+	requireServiceRunning(t, ctx, grpc, true)
+
 	t.Run("StartServiceRefusedWhileRunning", func(t *testing.T) {
 		testStartServiceParity(t, ctx, rest, grpc)
 	})
@@ -127,8 +133,8 @@ func restartPXEService(t *testing.T, adapter *SDKAdapter) {
 }
 
 // testStartServiceParity starts the already-running PXE service over both
-// transports. StopService is not driven: the shared platformd's iPXE server
-// is single-use, so a stopped service cannot be started again.
+// transports and expects both to refuse it. StopService is not driven here;
+// the stop and restart round trip is StopThenStartOverREST's.
 func testStartServiceParity(t *testing.T, ctx context.Context, rest, grpc *SDKAdapter) {
 	statusResult, err := grpc.GetStatus(ctx)
 	require.NoError(t, err, "GetStatus should succeed")
