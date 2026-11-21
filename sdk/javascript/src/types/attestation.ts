@@ -538,57 +538,40 @@ export interface AttestationPCRValueWire {
   algorithm: string;
 }
 
-export interface CollectVMAttestationResponse {
-  /** VM identifier */
-  vm_id: string;
-  /** Host identifier */
-  host_id: string;
-  /** Whether the quote verified */
-  verified: boolean;
-  /** Raw TPM quote (base64) */
-  quote_data: string;
-  /** AIK/AK signature (base64) */
-  signature: string;
-  /** Signature algorithm */
-  signature_algorithm: string;
-  /** PCR values */
+/**
+ * VMAttestation as protojson writes it on the wire: enum fields arrive by
+ * their proto names, such as ATTESTATION_HASH_ALGORITHM_SHA256, not the
+ * short AttestationHashAlgorithm union, so `hashAlgorithm` and each PCR's
+ * `algorithm` are plain strings.
+ */
+export type VMAttestationWire = Omit<VMAttestation, 'hashAlgorithm' | 'pcrs'> & {
+  hashAlgorithm: string;
   pcrs: AttestationPCRValueWire[];
-  /** PCR digest (base64) */
-  pcr_digest: string;
-  /** Anti-replay nonce (base64) */
-  nonce: string;
-  /** RFC 3339 timestamp */
-  timestamp: string;
-  /** AIK public key, PEM encoded */
-  aik_public_key_pem?: string;
-  /** Hash algorithm the quote used */
-  hash_algorithm: string;
-  /** Workload PCR, when the VM measured one */
-  workload_pcr?: string;
-  /** Free-form metadata */
-  metadata?: Record<string, string>;
+};
+
+/**
+ * Collect VM attestation response: the platform.v1
+ * CollectVMAttestationResponse message that POST /api/v1/attestation/vm/{id}
+ * (AttestationServerRouter) writes as protojson.
+ */
+export interface CollectVMAttestationResponse {
+  /** Operation status */
+  status: AttestationStatus;
+  /** The collected VM attestation */
+  attestation?: VMAttestationWire;
 }
 
 /**
- * Collect container attestation response
+ * Collect container attestation response: the platform.v1
+ * CollectContainerAttestationResponse message that
+ * POST /api/v1/attestation/container/{id} (AttestationServerRouter) writes
+ * as protojson.
  */
 export interface CollectContainerAttestationResponse {
-  /** Container identifier */
-  container_id: string;
-  /** Image identifier */
-  image_id?: string;
-  /** Image digest */
-  image_digest?: string;
-  /** Whether the measurement verified */
-  verified: boolean;
-  /** Measured digest */
-  digest: string;
-  /** PCR the container measurement extended */
-  pcr_value: string;
-  /** RFC 3339 timestamp */
-  timestamp: string;
-  /** Free-form metadata */
-  metadata?: Record<string, string>;
+  /** Operation status */
+  status: AttestationStatus;
+  /** The collected container attestation */
+  attestation?: ContainerAttestation;
 }
 
 // =============================================================================
