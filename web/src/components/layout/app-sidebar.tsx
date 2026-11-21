@@ -63,7 +63,6 @@ const navigation = [
       { title: "Policies", href: "/iam/policies" },
       { title: "Applications", href: "/iam/apps" },
       { title: "API Tokens", href: "/iam/tokens" },
-      { title: "Policy Test", href: "/iam/policies/test" },
     ],
   },
   {
@@ -75,7 +74,6 @@ const navigation = [
       { title: "Invitations", href: "/tenant/invitations" },
       { title: "Quotas", href: "/tenant/quotas" },
       { title: "All Tenants", href: "/admin/tenants" },
-      { title: "Lifecycle", href: "/tenant/lifecycle" },
     ],
   },
   {
@@ -88,10 +86,6 @@ const navigation = [
       { title: "CRL", href: "/ca/crl" },
       { title: "Key Management", href: "/kms" },
       { title: "Key Encryption", href: "/kms/encrypt" },
-      { title: "Key Operations", href: "/kms/operations" },
-      { title: "EAB Keys", href: "/ca/eab" },
-      { title: "Sign", href: "/ca/sign" },
-      { title: "Verify", href: "/ca/verify" },
     ],
   },
   {
@@ -102,7 +96,6 @@ const navigation = [
       { title: "Quotes", href: "/attestation/quotes" },
       { title: "Verification", href: "/attestation/verify" },
       { title: "Event Logs", href: "/attestation/eventlogs" },
-      { title: "Collect", href: "/attestation/collect" },
     ],
   },
   {
@@ -119,7 +112,6 @@ const navigation = [
       { title: "Seal/Unseal", href: "/tpm/seal" },
       { title: "Credential / Random", href: "/tpm/credential" },
       { title: "vTPM Runtime", href: "/tpm/vtpm/__placeholder__" },
-      { title: "IDevID", href: "/tpm/idevid" },
     ],
   },
   {
@@ -131,8 +123,6 @@ const navigation = [
       { title: "Device Templates", href: "/devices/templates" },
       { title: "vTPM Bundles", href: "/devices/vtpm" },
       { title: "IDevID/IAK", href: "/devices/idevid" },
-      { title: "BMC", href: "/devices/bmc" },
-      { title: "Device Lookup", href: "/devices/lookup" },
     ],
   },
   {
@@ -151,7 +141,6 @@ const navigation = [
       { title: "Snapshots", href: "/compute/snapshots" },
       { title: "Images", href: "/compute/images" },
       { title: "Registry", href: "/compute/registry" },
-      { title: "Migrations", href: "/compute/migrations" },
     ],
   },
   {
@@ -171,8 +160,6 @@ const navigation = [
       { title: "Gateway", href: "/networking/gateway" },
       { title: "VPN", href: "/networking/vpn" },
       { title: "PXE Boot", href: "/networking/pxe" },
-      { title: "Switches", href: "/networking/switches" },
-      { title: "BGP", href: "/networking/gateway/bgp" },
     ],
   },
   {

@@ -40,11 +40,22 @@ func (s *Service) userManagerFor(ctx context.Context, profileID uint64) (Managed
 // refuseConnectionAccount returns ErrConnectionAccount when the user in slot
 // is the account the profile itself connects with: changing its password or
 // deleting it would leave the stored profile credential unable to
-// authenticate, so every later request on the profile would fail.
+// authenticate, so every later request on the profile would fail. A
+// profile with an empty Username connects through the anonymous account,
+// which ListUsers omits, so for such a profile every slot ListUsers does not
+// list as a named user is refused as possibly being that account.
 func refuseConnectionAccount(ctx context.Context, mgr ManagedUserManager, cfg *Config, profileID uint64, slot uint8) error {
 	users, err := mgr.ListUsers(ctx)
 	if err != nil {
 		return err
+	}
+	if cfg.Username == "" {
+		for _, u := range users {
+			if u.Slot == slot {
+				return nil
+			}
+		}
+		return ErrConnectionAccount{ProfileID: profileID, Slot: slot}
 	}
 	for _, u := range users {
 		if u.Slot == slot && u.Username == cfg.Username {
