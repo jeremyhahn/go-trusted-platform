@@ -23,8 +23,23 @@ import (
 
 // DaemonRouteTableWithKMS exists for the daemon_test package: it returns the
 // router of the daemon's full REST route table (daemonRouteTableWithKMS) with
-// kms behind the webservice KMS router.
+// kms behind the webservice KMS router. The KMS routes run behind the catalog
+// scope guard, so the route-table tests carry a token with every KMS scope:
+// the integration adapter test (rest_kms_adapter_route_test.go) keeps
+// reaching the handler.
 func DaemonRouteTableWithKMS(t *testing.T, kms kmsclient.Client) http.Handler {
-	s, _ := daemonRouteTableWithKMS(t, restapi.NewScopeGuard(nil, nil, nil), kms)
-	return s.Router()
+	s, _ := daemonRouteTableWithKMS(t, kmsScopedGuard(), kms)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Set("Authorization", "Bearer t")
+		s.Router().ServeHTTP(w, r)
+	})
+}
+
+// kmsScopedGuard returns a scope guard whose token carries every KMS and
+// secrets scope the gRPC catalog names.
+func kmsScopedGuard() *restapi.ScopeGuard {
+	return restapi.NewScopeGuard(scopedTokenValidator{scopes: []string{
+		"kms:read", "kms:write", "kms:delete",
+		"secrets:read", "secrets:write", "secrets:list", "secrets:delete",
+	}}, nil, nil)
 }

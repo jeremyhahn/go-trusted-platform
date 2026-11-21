@@ -1605,7 +1605,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 				}
 			}
 		}
-		daemon.concreteRestServer.SetKMSRouter(kmsPlatformBackend.kmsClient, kmsPlatformBackend.cryptoClient, dekSDK, secretsSDK)
+		daemon.concreteRestServer.SetKMSRouter(kmsPlatformBackend.kmsClient, kmsPlatformBackend.cryptoClient, dekSDK, secretsSDK, restGuard)
 		daemon.concreteRestServer.SetKMSHandlers(NewPlatformKMSRESTFacade(kmsPlatformBackend))
 	}
 

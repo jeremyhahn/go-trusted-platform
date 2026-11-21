@@ -250,6 +250,14 @@ func (h *Handlers) GenerateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Resolve()
+	if req.Description != "" {
+		h.respWriter.Error400(w, r, &ErrInvalidRequest{Field: "description", Reason: "not supported by the key service"})
+		return
+	}
+	if len(req.Tags) > 0 {
+		h.respWriter.Error400(w, r, &ErrInvalidRequest{Field: "tags", Reason: "not supported by the key service"})
+		return
+	}
 	alg, err := parseKeyAlgorithm(req.Algorithm)
 	if err != nil {
 		h.respWriter.Error400(w, r, err)

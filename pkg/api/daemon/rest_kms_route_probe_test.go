@@ -5,8 +5,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 )
 
 // TestDaemonREST_KMSRoutesReachTheirHandlers sends the KMS calls the
@@ -15,7 +13,7 @@ import (
 // daemon wires them. None may answer the router's plain "404 page not
 // found": that body means no route matched, not that a key was missing.
 func TestDaemonREST_KMSRoutesReachTheirHandlers(t *testing.T) {
-	s, _ := daemonRouteTable(t, restapi.NewScopeGuard(nil, nil, nil))
+	s, _ := daemonRouteTable(t, kmsScopedGuard())
 	calls := []struct{ method, path string }{
 		{http.MethodGet, "/api/v1/kms/keys"},
 		{http.MethodPost, "/api/v1/kms/keys"},
@@ -40,7 +38,9 @@ func TestDaemonREST_KMSRoutesReachTheirHandlers(t *testing.T) {
 						ok = true
 					}
 				}()
-				s.Router().ServeHTTP(w, httptest.NewRequest(c.method, c.path, strings.NewReader("{}")))
+				req := httptest.NewRequest(c.method, c.path, strings.NewReader("{}"))
+				req.Header.Set("Authorization", "Bearer t")
+				s.Router().ServeHTTP(w, req)
 				return false
 			}()
 			if !reached && strings.Contains(w.Body.String(), "404 page not found") {
