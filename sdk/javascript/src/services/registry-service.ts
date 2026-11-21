@@ -1,6 +1,7 @@
 /**
  * Container registry service: tag listing and manifest deletion over the
- * OCI distribution surface (/v2), and the registry status endpoint.
+ * OCI distribution surface (/v2), the image list and the registry status
+ * endpoint.
  */
 
 import type { ApiClient } from '../client/api-client.js';
@@ -32,6 +33,45 @@ export interface RegistryStatus {
   Components?: RegistryComponentHealth[] | null;
   StartedAt?: string;
   Timestamp?: string;
+}
+
+/**
+ * One image in the image list. The keys are the snake_case json tags of the
+ * Go ImageSummary.
+ */
+export interface RegistryImageSummary {
+  repository: string;
+  tag: string;
+  digest?: string;
+  media_type?: string;
+  size: number;
+  layers: number;
+  annotations?: Record<string, string>;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/**
+ * Response of GET /v1/compute/images. The keys are the snake_case json tags
+ * of the Go ListImagesResponse.
+ */
+export interface RegistryImageList {
+  images: RegistryImageSummary[];
+  total: number;
+}
+
+/**
+ * Query of GET /v1/compute/images. The keys are the snake_case query
+ * parameters the Go handler reads before it answers with ImageSummary
+ * entries in a ListImagesResponse.
+ */
+export interface ListImagesRequest {
+  /** Only images of this repository. */
+  repository?: string;
+  /** Page size; the server defaults to 200. */
+  limit?: number;
+  /** Number of images to skip. */
+  offset?: number;
 }
 
 /** Response of GET /v2/{name}/tags/list. */
@@ -92,5 +132,30 @@ export class RegistryService extends BaseService {
    */
   async getStatus(): Promise<ApiResponse<RegistryStatus>> {
     return this.client.get<RegistryStatus>(this.buildUrl('/status'));
+  }
+
+  /**
+   * List the images in the registry (RegistryService.List), through
+   * `GET /api/v1/compute/images`. The server's default limit is 200.
+   *
+   * An empty repository and a negative or non-finite limit or offset are
+   * left out of the query; a fractional limit or offset is floored.
+   *
+   * @param request - Optional repository filter and paging
+   */
+  async listImages(request?: ListImagesRequest): Promise<ApiResponse<RegistryImageList>> {
+    const params = new URLSearchParams();
+    if (typeof request?.repository === 'string' && request.repository !== '') {
+      params.set('repository', request.repository);
+    }
+    for (const key of ['limit', 'offset'] as const) {
+      const n = request?.[key];
+      if (typeof n === 'number' && Number.isFinite(n) && n >= 0) {
+        params.set(key, String(Math.floor(n)));
+      }
+    }
+    const query = params.toString();
+    const url = this.buildUrl();
+    return this.client.get<RegistryImageList>(query ? `${url}?${query}` : url);
   }
 }

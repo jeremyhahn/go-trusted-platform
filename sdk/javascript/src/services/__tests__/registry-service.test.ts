@@ -169,7 +169,7 @@ describe('RegistryService.listImages', () => {
 
     expect(mockClient.get).toHaveBeenCalledWith('/v1/compute/images');
     expect(res.data?.total).toBe(1);
-    expect(res.data?.images[0].media_type).toBe('application/vnd.oci.image.manifest.v1+json');
+    expect(res.data?.images[0]?.media_type).toBe('application/vnd.oci.image.manifest.v1+json');
   });
 
   it('sends repository, limit and offset in that order', async () => {
