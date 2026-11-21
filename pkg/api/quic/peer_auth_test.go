@@ -26,6 +26,20 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
+// stubPeerChecker records the certificate principal it is asked about and
+// answers a fixed verdict. It lives in this untagged file so every tag set
+// that builds the package tests has it (auth_test.go is codec_msgpack only).
+type stubPeerChecker struct {
+	allowed bool
+	err     error
+	asked   *platformtoken.AuthorizedContext
+}
+
+func (c *stubPeerChecker) CheckPeerPermission(_ context.Context, authCtx *platformtoken.AuthorizedContext, _, _ string) (bool, error) {
+	c.asked = authCtx
+	return c.allowed, c.err
+}
+
 // peerAuthenticatorStub is a PeerAuthenticator test double.
 type peerAuthenticatorStub struct {
 	authCtx  *platformtoken.AuthorizedContext
@@ -51,7 +65,10 @@ func TestAuthenticateRequest_PeerAuthenticator_AttachesPrincipal(t *testing.T) {
 	leaf := &x509.Certificate{Raw: []byte("leaf")}
 	want := &platformtoken.AuthorizedContext{Subject: "admin", Scopes: []string{"*:*"}}
 	stub := &peerAuthenticatorStub{authCtx: want}
-	mw := NewAuthMiddleware(WithQUICPeerAuthenticator(stub), WithQUICRequireAuth(true))
+	// The peer checker (the IAM PEP in the daemon) decides the certificate
+	// principal; its wildcard scope does not (#2016).
+	mw := NewAuthMiddleware(WithQUICPeerAuthenticator(stub), WithQUICRequireAuth(true),
+		WithQUICPeerAuthorizationChecker(&stubPeerChecker{allowed: true}))
 
 	ctx, resp := mw.AuthenticateRequest(peerContext(&tls.ConnectionState{
 		VerifiedChains: [][]*x509.Certificate{{leaf}},

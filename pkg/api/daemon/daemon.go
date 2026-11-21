@@ -32,6 +32,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/jeremyhahn/go-codec"
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
@@ -344,8 +345,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Info("IAM service initialized (using QuicBaaS SDK clients)")
 	}
 	var iamPEP iamsdk.PEPClient
+	// iamClient resolves a QUIC certificate principal's stored roles (#2016).
+	var iamClient quicbaassdk.IAMClient
 	if iamService != nil {
 		iamPEP = iamService.PEP()
+		iamClient = iamService.Client()
 	}
 
 	// Build the shared broker platform-token validator once when configured. It
@@ -1148,7 +1152,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if poolErr != nil {
 			return nil, poolErr
 		}
-		quicAuthMiddleware, quicLocalValidator, quicAuthErr := selectQUICAuth(config, platformTokenValidatorShared, iamPEP, quicClientCAPool, logger)
+		quicAuthMiddleware, quicLocalValidator, quicAuthErr := selectQUICAuth(config, platformTokenValidatorShared, iamPEP, iamClient, quicClientCAPool, logger)
 		if quicAuthErr != nil {
 			return nil, quicAuthErr
 		}

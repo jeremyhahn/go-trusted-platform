@@ -183,7 +183,7 @@ func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicb
 // operations are still refused. A configuration with no backend is refused
 // with ErrTransportAuthRequired instead of yielding an unauthenticated server
 // (#550).
-func selectQUICAuth(config *Config, shared *platformTokenValidator, pep quicbaassdk.IAMPEPClient, clientCAPool *x509.CertPool, logger *logging.Logger) (*quic.AuthMiddleware, *grpcTokenValidator, error) {
+func selectQUICAuth(config *Config, shared *platformTokenValidator, pep quicbaassdk.IAMPEPClient, iam quicbaassdk.IAMClient, clientCAPool *x509.CertPool, logger *logging.Logger) (*quic.AuthMiddleware, *grpcTokenValidator, error) {
 	if config.EnableMTLS {
 		if clientCAPool == nil {
 			return nil, nil, ErrTransportAuthRequired{
@@ -195,10 +195,28 @@ func selectQUICAuth(config *Config, shared *platformTokenValidator, pep quicbaas
 		if err != nil {
 			return nil, nil, ErrTLSConfigFailed{Reason: "QUIC mTLS auth: " + err.Error()}
 		}
+		// A certificate principal is decided by the IAM PEP (#2016). The
+		// embedded quicbaas SDK PEP cannot decide a Check, so every
+		// classified request would be refused: refuse the listener at
+		// startup, as on the local-token path.
+		if config.quicbaasEmbedded() {
+			return nil, nil, ErrEmbeddedPEPUnavailable{Transport: transportQUIC, MTLS: true}
+		}
 		logger.Info("QUIC server: mTLS authentication enabled")
 		opts := []quic.AuthMiddlewareOption{
 			quic.WithQUICPeerAuthenticator(mtlsPeerAuthenticator{authenticator: mtlsAuth}),
 			quic.WithQUICRequireAuth(true),
+		}
+		switch {
+		case pep == nil:
+			// No decision point: every certificate principal is refused.
+			logger.Warn("QUIC server: no IAM policy enforcement point; mTLS callers are refused")
+		case iam == nil:
+			// No store to resolve a certificate principal's roles: the PEP
+			// would decide on none, so every certificate principal is refused.
+			logger.Warn("QUIC server: no IAM client to resolve certificate principals' roles; mTLS callers are refused")
+		default:
+			opts = append(opts, quic.WithQUICPeerAuthorizationChecker(&iamTokenAuthorizer{pep: pep, iam: iam}))
 		}
 		if shared != nil {
 			opts = append(opts, quic.WithQUICTokenValidator(shared))
