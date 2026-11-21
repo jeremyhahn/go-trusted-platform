@@ -28,6 +28,7 @@ import type {
   ListContainersRequest,
   ExecContainerRequest,
   AttestVMRequest,
+  AttestContainerRequest,
   VerifyVMAttestationRequest,
   CreateVMResponse,
   StartVMResponse,
@@ -54,6 +55,7 @@ import type {
   ContainerMetricsResponse,
   ExecContainerResponse,
   AttestVMResponse,
+  AttestContainerResponse,
   VerifyVMAttestationResponse,
 } from '../types/compute.js';
 
@@ -484,6 +486,22 @@ export class ComputeService extends BaseService {
     return this.client.post<ExecContainerResponse>(
       this.buildUrl(`/containers/${this.encodePathSegment(request.id)}/exec`),
       request
+    );
+  }
+
+
+  /**
+   * Attest a container: the daemon quotes the host TPM and returns the
+   * evidence with the container's image and config digests.
+   *
+   * The daemon's AttestContainer (pkg/api/daemon/compute_grpc_service.go:1414)
+   * ignores the request nonce, PCR selection and bank, so the SDK sends none:
+   * the quote is not bound to a caller challenge.
+   */
+  async attestContainer(request: AttestContainerRequest): Promise<ApiResponse<AttestContainerResponse>> {
+    return this.client.post<AttestContainerResponse>(
+      this.buildUrl(`/containers/${this.encodePathSegment(request.id)}/attest`),
+      {}
     );
   }
 }

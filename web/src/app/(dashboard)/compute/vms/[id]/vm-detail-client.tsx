@@ -13,6 +13,7 @@ import {
   Camera,
   RefreshCw,
   Pause,
+  ShieldCheck,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Button } from '@/components/ui/button';
@@ -27,7 +28,23 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { VMMetricsCard } from '@/components/features/compute/vm-metrics';
-import { useCompute, useMutation, useToast, type MutationError } from '@/hooks';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  useCompute,
+  useMutation,
+  useToast,
+  useVMAttestationVerify,
+  vmVerifyGate,
+  type MutationError,
+} from '@/hooks';
+import type { VerifyVMAttestationResponse } from 'trusted-platform-sdk';
 import type { VMDetail } from '@/types/infrastructure';
 import { vmStatus } from '@/lib/compute-state';
 
@@ -48,6 +65,31 @@ export default function VMDetailPage() {
   const [actionLoading, setActionLoading] = useState(false);
   const compute = useCompute();
   const { toast } = useToast();
+  const verifyAttestation = useVMAttestationVerify(vmId);
+  const [verifyConfirmOpen, setVerifyConfirmOpen] = useState(false);
+  const [verifyResult, setVerifyResult] = useState<VerifyVMAttestationResponse | null>(null);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+
+  // Attest with a fresh nonce, then verify the quote (#2045).
+  const handleVerifyAttestation = async () => {
+    setVerifyConfirmOpen(false);
+    setActionLoading(true);
+    setVerifyResult(null);
+    setVerifyError(null);
+    try {
+      setVerifyResult(await verifyAttestation());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      setVerifyError(message);
+      toast({
+        title: 'Error',
+        description: `Failed to verify VM attestation: ${message}`,
+        variant: 'destructive',
+      });
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   const fetchVM = async () => {
     if (!vmId) {
@@ -271,6 +313,7 @@ export default function VMDetailPage() {
 
   const formatMemory = (mb: number) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
   const formatStorage = (mb: number) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
+  const verifyGate = vmVerifyGate(vm.status, actionLoading);
 
   return (
     <div className="space-y-6">
@@ -333,6 +376,15 @@ export default function VMDetailPage() {
               Resume
             </Button>
           )}
+          <Button
+            variant="outline"
+            onClick={() => setVerifyConfirmOpen(true)}
+            disabled={!verifyGate.enabled}
+            title={verifyGate.reason ?? undefined}
+          >
+            <ShieldCheck className="mr-2 h-4 w-4" />
+            Verify Attestation
+          </Button>
           <Button variant="outline" onClick={handleClone} disabled={actionLoading}>
             <Copy className="mr-2 h-4 w-4" />
             Clone
@@ -391,6 +443,50 @@ export default function VMDetailPage() {
 
         <VMMetricsCard metrics={vm.metrics} />
       </div>
+
+      {(verifyResult || verifyError) && (
+        <Card data-testid="vm-verify-result">
+          <CardHeader>
+            <CardTitle>Attestation Verification</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {verifyError ? (
+              <p className="text-destructive">Verification failed: {verifyError}</p>
+            ) : (
+              <>
+                <p className="font-medium">
+                  {verifyResult?.verified
+                    ? 'Quote signature and nonce verified'
+                    : 'Attestation not verified'}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Boot measurements (PCRs) were not appraised: no reference values were supplied.
+                </p>
+                {verifyResult?.message && (
+                  <p className="text-sm text-muted-foreground">{verifyResult.message}</p>
+                )}
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      <Dialog open={verifyConfirmOpen} onOpenChange={setVerifyConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Verify VM attestation?</DialogTitle>
+            <DialogDescription>
+              The VM is quoted with a fresh nonce and the quote is verified against it.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setVerifyConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleVerifyAttestation}>Confirm</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Card>
         <CardHeader>

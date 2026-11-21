@@ -736,6 +736,12 @@ export interface AttestVMRequest {
   pcrBank?: PCRBank;
 }
 
+/** Container attestation request */
+export interface AttestContainerRequest {
+  /** Container ID */
+  id: string;
+}
+
 /**
  * Verify VM attestation request
  */
@@ -1018,6 +1024,37 @@ export interface AttestVMResponse {
    * as VerifyVMAttestationRequest.signatureAlgorithm.
    */
   signatureAlgorithm?: string;
+}
+
+/**
+ * Container attestation response. The daemon quotes the host TPM and binds
+ * the container's image and config digests into the evidence.
+ */
+export interface AttestContainerResponse {
+  /** Operation status */
+  status: ComputeStatus;
+  /** Quote (base64) */
+  quote?: string;
+  /** Signature (base64) */
+  signature?: string;
+  /** PCR values */
+  pcrValues?: PCRValue[];
+  /** Event log (base64) */
+  eventLog?: string;
+  /** AK public key (base64) */
+  akPublic?: string;
+  /** Container ID */
+  containerId?: string;
+  /** Container name */
+  containerName?: string;
+  /** Image digest */
+  imageDigest?: string;
+  /** Config digest */
+  configDigest?: string;
+  /** Whether the daemon verified the evidence */
+  verified?: boolean;
+  /** Timestamp */
+  timestamp?: string;
 }
 
 /**

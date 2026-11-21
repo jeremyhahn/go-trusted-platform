@@ -624,6 +624,7 @@ export type {
   ListContainersRequest,
   ExecContainerRequest,
   AttestVMRequest,
+  AttestContainerRequest,
   VerifyVMAttestationRequest,
   ComputeStatus,
   CreateVMResponse,
@@ -651,6 +652,7 @@ export type {
   ContainerMetricsResponse,
   ExecContainerResponse,
   AttestVMResponse,
+  AttestContainerResponse,
   VerifyVMAttestationResponse,
 } from './types/compute.js';
 
