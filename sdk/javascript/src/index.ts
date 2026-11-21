@@ -84,6 +84,10 @@ export {
   DeviceService,
   DNSService,
   NTPService,
+  CapabilitiesService,
+  CAPABILITY_REASON_NOT_CONFIGURED,
+  CAPABILITY_REASON_UNIMPLEMENTED,
+  CAPABILITY_REASON_BLOCKED_INTEGRATION,
   GatewayService,
   IAMService,
   IDevIDService,
@@ -147,6 +151,8 @@ export type {
   ListNTPSourcesResponse,
   StepNTPClockResponse,
 } from './services/ntp-service.js';
+
+export type { Capability, CapabilitiesResponse } from './services/capabilities-service.js';
 
 // =============================================================================
 // Error Exports
