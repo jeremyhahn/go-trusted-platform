@@ -1092,7 +1092,6 @@ test.describe('TPM Management', () => {
           await copyButton.click();
           // Toast may or may not show - just verify no errors occurred
           // The copy action should work even without visible feedback in tests
-          await page.waitForTimeout(500);
         }
       }
 
@@ -1154,7 +1153,6 @@ test.describe('TPM Management', () => {
 
       // Wait for page to load
       await page.waitForLoadState('networkidle');
-      await page.waitForTimeout(1000);
 
       // Check for various error indicators
       const errorIndicators = [
@@ -1162,6 +1160,7 @@ test.describe('TPM Management', () => {
         page.getByText(/failed to load|error/i).first(),
         page.locator('[data-testid="error"]').first(),
       ];
+      await errorIndicators[0].or(errorIndicators[1]).or(errorIndicators[2]).first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
 
       let foundError = false;
       for (const indicator of errorIndicators) {
@@ -1359,7 +1358,7 @@ test.describe('Attestation Management', () => {
       }
 
       // Wait for page to stabilize
-      await page.waitForTimeout(500);
+      await page.getByRole('heading', { name: 'Attestation', exact: true }).waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
 
       // Verify page header (use exact match to avoid matching stat cards)
       // Try multiple selectors for resilience
@@ -1497,7 +1496,7 @@ test.describe('Attestation Management', () => {
       }
 
       // Wait for page to stabilize
-      await page.waitForTimeout(500);
+      await page.getByText('detail-host').first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
 
       // Verify details page loads - try multiple approaches
       const hostTextVisible = await page.getByText('detail-host').first().isVisible().catch(() => false);
@@ -1537,7 +1536,7 @@ test.describe('Attestation Management', () => {
       }
 
       // Wait for page to stabilize
-      await page.waitForTimeout(500);
+      await page.getByText('Verification Result').first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
 
       // Verify verification result section - try multiple selectors
       const verificationResultVisible = await page.getByText('Verification Result').first().isVisible().catch(() => false);
@@ -1566,7 +1565,7 @@ test.describe('Attestation Management', () => {
       }
 
       // Wait for page to stabilize
-      await page.waitForTimeout(500);
+      await page.getByText('Device Information').first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
 
       // Verify device information section - try multiple selectors
       const deviceInfoVisible = await page.getByText('Device Information').first().isVisible().catch(() => false);
@@ -1594,7 +1593,7 @@ test.describe('Attestation Management', () => {
       }
 
       // Wait for page to stabilize
-      await page.waitForTimeout(500);
+      await page.getByText(/not found/i).first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
 
       // Check for various not found indicators
       const notFoundVisible = await page.getByText(/not found/i).first().isVisible().catch(() => false);
@@ -1624,7 +1623,7 @@ test.describe('Attestation Management', () => {
       }
 
       // Wait for page to stabilize
-      await page.waitForTimeout(500);
+      await page.getByText('back-host').first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
 
       // Wait for page to load - check multiple conditions
       const hostTextVisible = await page.getByText('back-host').first().isVisible().catch(() => false);
@@ -1709,13 +1708,8 @@ test.describe('Attestation Management', () => {
         }
       }
 
-      // Wait for URL to stabilize
-      await page.waitForTimeout(500);
-
-      // Should be at attestation list (may have trailing slash) - use flexible check
-      const currentUrl = page.url();
-      const isAtAttestationList = /\/attestation\/?$/.test(currentUrl) || currentUrl.endsWith('/attestation');
-      expect(isAtAttestationList).toBe(true);
+      // Should be at attestation list (may have trailing slash)
+      await expect(page).toHaveURL(/\/attestation\/?$/);
     });
   });
 
@@ -2147,9 +2141,8 @@ test.describe('Navigation', () => {
     const tryNavigate = async (url: string, headingPattern: RegExp) => {
       try {
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 });
-        await page.waitForTimeout(200);
         const heading = page.locator('h1').first();
-        if (await heading.isVisible({ timeout: 3000 })) {
+        if (await heading.waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false)) {
           successfulNavigations++;
         }
       } catch {
@@ -2172,7 +2165,6 @@ test.describe('Navigation', () => {
     const navigateAndVerify = async (url: string) => {
       try {
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 });
-        await page.waitForTimeout(200);
         // Verify body is visible
         const bodyVisible = await page.locator('body').first().isVisible({ timeout: 3000 });
         if (bodyVisible) {

@@ -65,26 +65,31 @@ export default function DeviceDetailPage() {
   const [device, setDevice] = useState<DeviceDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  // settleDevice applies one device read from its promise callbacks, so the
+  // mount effect starts it without a synchronous setState; fetchDevice adds
+  // the loading flag for a re-read.
+  const settleDevice = () =>
+    // Wire field names differ from the SDK Device type — #329 follow-ups.
+    deviceService
+      .getDevice(deviceId)
+      .then((response) => {
+        if (!response.data) {
+          throw new Error('Failed to fetch device');
+        }
+        setDevice(normalizeDevice(response.data as unknown as DeviceWire));
+      })
+      .catch((error: unknown) => {
+        toast({
+          title: 'Error',
+          description: error instanceof Error ? error.message : 'Failed to fetch device',
+          variant: 'destructive',
+        });
+      })
+      .finally(() => setIsLoading(false));
+
   const fetchDevice = async () => {
     setIsLoading(true);
-    try {
-      // Wire field names differ from the SDK Device type — #329 follow-ups.
-      const response = await deviceService.getDevice(deviceId);
-
-      if (response.data) {
-        setDevice(normalizeDevice(response.data as unknown as DeviceWire));
-      } else {
-        throw new Error('Failed to fetch device');
-      }
-    } catch (error) {
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to fetch device',
-        variant: 'destructive',
-      });
-    } finally {
-      setIsLoading(false);
-    }
+    await settleDevice();
   };
 
   // normalizeDevice reshapes the raw SDK/REST device payload into the
@@ -163,7 +168,7 @@ export default function DeviceDetailPage() {
 
   useEffect(() => {
     if (deviceId) {
-      fetchDevice();
+      void settleDevice();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceId]);
