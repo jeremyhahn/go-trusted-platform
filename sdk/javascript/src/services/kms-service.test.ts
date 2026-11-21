@@ -274,6 +274,7 @@ describe('KMSService', () => {
     keyVersion: 3,
     preHashed: true,
   };
+  const { keyVersion: _signKeyVersion, ...signReqNoVersion } = signReq;
   const verifyReq: VerifyRequest = {
     keyId: 'key-1',
     message: 'bXNn',
@@ -392,8 +393,10 @@ describe('KMSService', () => {
     {
       method: 'sign',
       path: '/v1/kms/sign/key-1',
-      body: { data: 'bXNn', hash: 'SHA256', version: 3, pre_hashed: true },
-      call: () => service.sign(signReq),
+      // The daemon always signs with the current key version, so the SDK
+      // refuses a version selection and never sends `version`.
+      body: { data: 'bXNn', hash: 'SHA256', pre_hashed: true },
+      call: () => service.sign(signReqNoVersion),
     },
     {
       method: 'verify',
@@ -421,6 +424,53 @@ describe('KMSService', () => {
       });
     });
   }
+
+  describe('sign key version', () => {
+    it('refuses a nonzero keyVersion before any request: the daemon signs with the current key', async () => {
+      await expect(service.sign({ ...signReq, keyVersion: 3 })).rejects.toBeInstanceOf(RangeError);
+      expect(mock.post).not.toHaveBeenCalled();
+    });
+
+    it('posts without version when keyVersion is 0', async () => {
+      await service.sign({ ...signReq, keyVersion: 0 });
+      expectOnlyCall('post', '/v1/kms/sign/key-1', { data: 'bXNn', hash: 'SHA256', pre_hashed: true });
+    });
+  });
+
+  describe('crypto responses carry the REST handlers\' wire shape', () => {
+    it('encrypt resolves {key_id, version, ciphertext}', async () => {
+      const wire = { success: true, data: { key_id: 'key-1', version: 2, ciphertext: 'Y2lwaGVy' } };
+      mock.post.mockResolvedValue(wire);
+      const res = await service.encrypt(encryptReq);
+      const keyId: string | undefined = res.data?.key_id;
+      const version: number | undefined = res.data?.version;
+      const ciphertext: string | undefined = res.data?.ciphertext;
+      expect({ keyId, version, ciphertext }).toEqual({ keyId: 'key-1', version: 2, ciphertext: 'Y2lwaGVy' });
+    });
+
+    it('decrypt resolves {plaintext}', async () => {
+      mock.post.mockResolvedValue({ success: true, data: { plaintext: 'cGxhaW4=' } });
+      const res = await service.decrypt(decryptReq);
+      const plaintext: string | undefined = res.data?.plaintext;
+      expect(plaintext).toBe('cGxhaW4=');
+    });
+
+    it('sign resolves {key_id, version, signature}', async () => {
+      mock.post.mockResolvedValue({ success: true, data: { key_id: 'key-1', version: 4, signature: 'c2ln' } });
+      const res = await service.sign(signReqNoVersion);
+      const keyId: string | undefined = res.data?.key_id;
+      const version: number | undefined = res.data?.version;
+      const signature: string | undefined = res.data?.signature;
+      expect({ keyId, version, signature }).toEqual({ keyId: 'key-1', version: 4, signature: 'c2ln' });
+    });
+
+    it('verify resolves {valid}', async () => {
+      mock.post.mockResolvedValue({ success: true, data: { valid: true } });
+      const res = await service.verify(verifyReq);
+      const valid: boolean | undefined = res.data?.valid;
+      expect(valid).toBe(true);
+    });
+  });
 
   // ===========================================================================
   // Backend operations

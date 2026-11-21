@@ -160,9 +160,12 @@ describe('SDNService.applyPolicy target scope and enabled flag', () => {
     expect(client.post).toHaveBeenCalledTimes(1);
   });
 
-  it('still sends a policy that leaves enabled unset', async () => {
+  it('sends a policy that leaves enabled unset as enabled, since the daemon installs it', async () => {
     await service.applyPolicy(policy({}));
     expect(client.post).toHaveBeenCalledTimes(1);
+    const body = vi.mocked(client.post).mock.calls[0]?.[1] as ApplyPolicyRequest;
+    expect(body.config.enabled).toBe(true);
+    expect(body.config.name).toBe('p1');
   });
 });
 
