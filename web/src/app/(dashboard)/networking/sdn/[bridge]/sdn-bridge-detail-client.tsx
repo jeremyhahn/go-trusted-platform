@@ -56,10 +56,10 @@ interface PolicyView {
 // RATE_LIMIT and MIRROR are left out: SDNService.policyRuleToFlowMod installs "normal" for both (#2024 Codex P1).
 // REDIRECT is left out too: the form has no output destination, and a REDIRECT rule
 // without actionValue installs no actions, which drops the traffic (#2024 Codex round 2 P1).
+// LOG is left out: policyRuleToFlowMod installs "controller" only, with no normal forwarding, so a LOG rule drops the traffic (#2148 Codex round 2 P1).
 const RULE_ACTIONS: SDNPolicyRuleAction[] = [
   'POLICY_RULE_ACTION_ALLOW',
   'POLICY_RULE_ACTION_DENY',
-  'POLICY_RULE_ACTION_LOG',
 ];
 
 const RULE_PROTOCOLS = ['any', 'tcp', 'udp', 'icmp'];
@@ -105,12 +105,27 @@ function canonicalIPv4(v: string) {
   return `${[net >>> 24, (net >>> 16) & 255, (net >>> 8) & 255, net & 255].join('.')}/${bits}`;
 }
 
+// The match fields SDNService.policyRuleMatch (pkg/api/daemon/sdn_service.go)
+// installs in the flow; it ignores every other field of the rule match.
+const INSTALLED_MATCH_FIELDS: ReadonlySet<string> = new Set([
+  'protocol',
+  'sourceIp',
+  'destinationIp',
+  'sourcePort',
+  'destinationPort',
+  'vlanId',
+]);
+
 // A match in a form two equal matches share: unset and empty fields dropped,
 // keys sorted, so key order or a blank field never hides an equal match.
 // Protocol aliases and IPv4 addresses compare as OpenFlow installs them: the
 // switch masks a CIDR to its network and a bare address is /32 (#2148 Codex).
+// Fields the switch never installs (direction, interface, dscp, application)
+// are dropped, since two matches that differ only there install the same flow
+// (#2148 Codex round 2).
 function matchKey(match: SDNPolicyRuleMatch | undefined) {
   const entries = Object.entries(match ?? {})
+    .filter(([k]) => INSTALLED_MATCH_FIELDS.has(k))
     .map(([k, v]) => {
       if (typeof v !== 'string') return [k, v] as const;
       if (k === 'protocol') return [k, canonicalProtocol(v)] as const;
