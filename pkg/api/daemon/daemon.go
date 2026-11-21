@@ -1183,7 +1183,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			if config.App != nil {
 				quicObjStorage = config.App.Storage
 			}
-			quicHandler.SetCAHandler(quic.NewCAHandler(quicLogger, config.CAService, quicObjStorage).WithKMS(config.csrKMS()))
+			// The QUIC CA handler reads the shared CA holder per request,
+			// so a CA InitCA swaps in is served over QUIC with no restart.
+			quicHandler.SetCAHandler(quic.NewCAHandler(quicLogger, config.CAService, quicObjStorage).WithKMS(config.csrKMS()).WithCASource(caHolder.Get))
 			quicHandler.SetDeviceAKTrust(config.CAService)
 		}
 
