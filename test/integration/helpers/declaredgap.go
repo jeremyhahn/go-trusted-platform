@@ -57,6 +57,13 @@ var (
 	// GapEmbeddedParameterStore: quicbaas.ParameterStore has no embedded
 	// handler in the pinned SDK (v0.12.0-alpha) nor in v0.14.0-alpha.
 	GapEmbeddedParameterStore = DeclaredGap{Issue: "go-quicbaas embedded ParameterStore (issue not yet filed)", Service: "quicbaas.ParameterStore"}
+	// GapEmbeddedIAMUserAssignRole: quicbaas.IAM.User/AssignRole has no
+	// embedded handler in the pinned SDK (v0.12.0-alpha); go-quicbaas main
+	// routes it since #1556, untagged.
+	GapEmbeddedIAMUserAssignRole = DeclaredGap{Issue: "go-quicbaas #1556", Service: "quicbaas.IAM.User"}
+	// GapEmbeddedIAMPEPCheck: the pinned SDK's embedded IAM.PEP/Check is a
+	// stub that answers service not configured.
+	GapEmbeddedIAMPEPCheck = DeclaredGap{Issue: "go-quicbaas #2615", Service: "quicbaas.IAM.PEP"}
 	// GapEmbeddedKVCancelledContext: the embedded transport dispatches a
 	// request without checking its context, so a KV Put on a context already
 	// cancelled still writes.

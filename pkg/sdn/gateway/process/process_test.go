@@ -3205,6 +3205,53 @@ func TestTraverseBit_OwnerThenGroupThenOther(t *testing.T) {
 	assert.Equal(t, uint32(0o001), traverseBit(0, 0, 990, 990), "root:root: the other class")
 }
 
+// TestEnsureStateDir_TheRootDatapathChildCanTraverseTheDataDirectory pins
+// #646: the datapath child keeps uid 0 but only CAP_NET_ADMIN and
+// CAP_NET_RAW, so without CAP_DAC_* it cannot traverse a 0700 data
+// directory another user owns. The supervisor must grant the search bit and
+// own the state directory for the credentials that child runs with, as it
+// does for the unprivileged classes, or the FHRP inventory read fails with
+// EACCES and the load-balancer is never reported active.
+func TestEnsureStateDir_TheRootDatapathChildCanTraverseTheDataDirectory(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("as root the temp data directory is already owned by the child's uid")
+	}
+	var def Definition
+	for _, d := range Definitions() {
+		if d.Name == "datapath" {
+			def = d
+		}
+	}
+	require.NotEmpty(t, def.StateDir, "the datapath class keeps a state directory")
+	require.False(t, def.Unprivileged, "the datapath class stays uid 0")
+
+	dataDir := t.TempDir()
+	require.NoError(t, os.Chmod(dataDir, 0o700))
+
+	type chown struct {
+		path     string
+		uid, gid int
+	}
+	var chowned []chown
+	prevCreds, prevChown := childCredentials, chownStateDir
+	t.Cleanup(func() { childCredentials, chownStateDir = prevCreds, prevChown })
+	childCredentials = func() (uint32, uint32) { return 0, 0 }
+	chownStateDir = func(path string, uid, gid int) error {
+		chowned = append(chowned, chown{path: path, uid: uid, gid: gid})
+		return nil
+	}
+
+	s := &Supervisor{cfg: Config{Inherited: Inherited{DataDir: dataDir}, UID: 990, GID: 990}}
+	require.NoError(t, s.ensureStateDir(def))
+
+	var st syscall.Stat_t
+	require.NoError(t, syscall.Stat(dataDir, &st))
+	assert.NotZero(t, st.Mode&traverseBit(st.Uid, st.Gid, 0, 0),
+		"the data directory is searchable by the root datapath child (mode %o)", st.Mode&0o7777)
+	assert.Equal(t, []chown{{path: filepath.Join(dataDir, def.StateDir), uid: 0, gid: 0}}, chowned,
+		"the state directory is owned by the uid and gid the datapath child runs with")
+}
+
 func TestStartService_AStateDirectoryThatCannotBeMadeRefusesTheLaunch(t *testing.T) {
 	// A data directory that is a file: the child would run without its
 	// journal, so it is not launched.

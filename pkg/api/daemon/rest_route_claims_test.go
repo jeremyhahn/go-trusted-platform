@@ -15,12 +15,15 @@ package daemon
 
 import (
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	kmsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/reporting"
@@ -61,8 +64,18 @@ type (
 )
 
 // daemonRouteTable builds a daemon REST server with every route-mounting
-// setter wired, and returns it with its built table.
+// setter wired in the daemon's order (the KMS router with no backend), and
+// returns it with its built table.
 func daemonRouteTable(t *testing.T, guard *restapi.ScopeGuard) (*RESTServer, []string) {
+	t.Helper()
+	return daemonRouteTableWithKMS(t, guard, nil)
+}
+
+// daemonRouteTableWithKMS builds the same route table as daemonRouteTable,
+// with kms behind the webservice KMS router (SetKMSRouter) the daemon mounts
+// before the legacy KMS handlers, so a test can have /api/v1/kms/* requests
+// answered. A nil kms mounts the router with no backend.
+func daemonRouteTableWithKMS(t *testing.T, guard *restapi.ScopeGuard, kms kmsclient.Client) (*RESTServer, []string) {
 	t.Helper()
 
 	cfg := DefaultConfig()
@@ -86,6 +99,7 @@ func daemonRouteTable(t *testing.T, guard *restapi.ScopeGuard) (*RESTServer, []s
 	require.NoError(t, s.SetDNSRouterHandlers(log, platformv1.UnimplementedDNSServiceServer{}, guard, ""))
 	require.NoError(t, s.SetPXERouterHandlers(log, platformv1.UnimplementedPXEServiceServer{}, guard))
 	s.SetTenantHandlers(routeTableTenants{}, guard, "")
+	s.SetKMSRouter(kms, nil, nil, nil, guard)
 	s.SetKMSHandlers(routeTableKMS{})
 	s.SetComputeHandlers(platformv1.UnimplementedComputeServiceServer{}, guard)
 	require.NoError(t, s.SetOverlayHandlers(routeTableOverlay{}, guard))
@@ -103,6 +117,74 @@ func daemonRouteTable(t *testing.T, guard *restapi.ScopeGuard) (*RESTServer, []s
 	require.NoError(t, s.SetFIDO2Service(NewFIDO2Service(log, nil), guard))
 
 	return s, testutil.WalkRoutes(t, s.Router())
+}
+
+// kmsRESTRouteCalls is one request per route the KMS REST router mounts
+// (pkg/webservice/v1/rest/kms/router.go RegisterRoutes).
+var kmsRESTRouteCalls = []struct{ method, path string }{
+	{http.MethodPost, "/api/v1/kms/keys/import"},
+	{http.MethodPost, "/api/v1/kms/keys"},
+	{http.MethodGet, "/api/v1/kms/keys"},
+	{http.MethodGet, "/api/v1/kms/keys/k1"},
+	{http.MethodDelete, "/api/v1/kms/keys/k1"},
+	{http.MethodPost, "/api/v1/kms/keys/k1/rotate"},
+	{http.MethodPost, "/api/v1/kms/keys/k1/revoke"},
+	{http.MethodPut, "/api/v1/kms/keys/k1/status"},
+	{http.MethodGet, "/api/v1/kms/keys/k1/versions"},
+	{http.MethodGet, "/api/v1/kms/keys/k1/metadata"},
+	{http.MethodPut, "/api/v1/kms/keys/k1/metadata"},
+	{http.MethodGet, "/api/v1/kms/keys/k1/policy"},
+	{http.MethodPut, "/api/v1/kms/keys/k1/policy"},
+	{http.MethodGet, "/api/v1/kms/algorithms"},
+	{http.MethodGet, "/api/v1/kms/backend/status"},
+	{http.MethodPost, "/api/v1/kms/encrypt/k1"},
+	{http.MethodPost, "/api/v1/kms/decrypt/k1"},
+	{http.MethodPost, "/api/v1/kms/sign/k1"},
+	{http.MethodPost, "/api/v1/kms/verify/k1"},
+	{http.MethodPost, "/api/v1/kms/hmac/k1/verify"},
+	{http.MethodPost, "/api/v1/kms/hmac/k1"},
+	{http.MethodPost, "/api/v1/kms/hash"},
+	{http.MethodPost, "/api/v1/kms/random"},
+	{http.MethodPost, "/api/v1/kms/data-keys"},
+	{http.MethodPost, "/api/v1/kms/data-keys/wrapped"},
+	{http.MethodPost, "/api/v1/kms/deks"},
+	{http.MethodGet, "/api/v1/kms/deks"},
+	{http.MethodGet, "/api/v1/kms/deks/d1/status"},
+	{http.MethodPost, "/api/v1/kms/deks/d1/rotate"},
+	{http.MethodGet, "/api/v1/kms/deks/d1"},
+	{http.MethodDelete, "/api/v1/kms/deks/d1"},
+	{http.MethodPost, "/api/v1/kms/secrets"},
+	{http.MethodGet, "/api/v1/kms/secrets"},
+	{http.MethodGet, "/api/v1/kms/secrets/s1/versions/1"},
+	{http.MethodGet, "/api/v1/kms/secrets/s1/versions"},
+	{http.MethodPost, "/api/v1/kms/secrets/s1/rotate"},
+	{http.MethodPost, "/api/v1/kms/secrets/s1/rollback"},
+	{http.MethodPut, "/api/v1/kms/secrets/s1/status"},
+	{http.MethodPut, "/api/v1/kms/secrets/s1/policy"},
+	{http.MethodGet, "/api/v1/kms/secrets/s1/policy"},
+	{http.MethodGet, "/api/v1/kms/secrets/s1"},
+	{http.MethodDelete, "/api/v1/kms/secrets/s1"},
+}
+
+// TestRESTRouteClaims_KMSRoutesNeedTheirCatalogScope pins that every KMS
+// REST route runs behind the catalog scope guard: no credential answers
+// 401, a credential without the route's scope answers 403.
+func TestRESTRouteClaims_KMSRoutesNeedTheirCatalogScope(t *testing.T) {
+	guard := restapi.NewScopeGuard(scopedTokenValidator{scopes: []string{"ca:read"}}, nil, nil)
+	s, _ := daemonRouteTableWithKMS(t, guard, nil)
+	for _, c := range kmsRESTRouteCalls {
+		t.Run(c.method+" "+c.path, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			s.Router().ServeHTTP(w, httptest.NewRequest(c.method, c.path, strings.NewReader("{}")))
+			require.Equal(t, http.StatusUnauthorized, w.Code, "no credential: body %s", w.Body.String())
+
+			w = httptest.NewRecorder()
+			r := httptest.NewRequest(c.method, c.path, strings.NewReader("{}"))
+			r.Header.Set("Authorization", "Bearer t")
+			s.Router().ServeHTTP(w, r)
+			require.Equal(t, http.StatusForbidden, w.Code, "credential without the scope: body %s", w.Body.String())
+		})
+	}
 }
 
 // daemonDivergentClaims are SDK claims under a prefix both REST servers serve
@@ -142,15 +224,6 @@ var daemonDivergentClaims = map[string]string{
 	"/platform.v1.IDevIDService/InstallIAKCertificate":    idevidOnTPMPrefix,
 	"/platform.v1.IDevIDService/InstallIDevIDCertificate": idevidOnTPMPrefix,
 
-	"/platform.v1.KeyManagementService/Decrypt":                kmsKeyInBody,
-	"/platform.v1.KeyManagementService/Encrypt":                kmsKeyInBody,
-	"/platform.v1.KeyManagementService/Sign":                   kmsKeyInBody,
-	"/platform.v1.KeyManagementService/Verify":                 kmsKeyInBody,
-	"/platform.v1.KeyManagementService/HMAC":                   "#452: the daemon takes the key in the body at POST /api/v1/kms/hmac; the claim is the webservice's /hmac/{name} path",
-	"/platform.v1.KeyManagementService/VerifyHMAC":             "#452: the daemon has no HMAC verify route; the claim is the webservice's /hmac/{name}/verify",
-	"/platform.v1.KeyManagementService/GenerateDataKey":        "#452: the daemon's KMS routes have no data-keys",
-	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": "#452: the daemon's KMS routes have no data-keys/wrapped",
-
 	"/platform.v1.ProvisioningGateway/GetBootConfig":         "#452: no server serves it; platformd holds no per-MAC boot configuration (route_coverage_test.go unroutedClaims)",
 	"/platform.v1.ProvisioningGateway/NotifyInstallComplete": pxeGatewayOnWebservice,
 	"/platform.v1.ProvisioningGateway/RegisterPXEDevice":     pxeGatewayOnWebservice,
@@ -169,7 +242,6 @@ var daemonDivergentClaims = map[string]string{
 
 const (
 	idevidOnTPMPrefix      = "#452: the daemon serves IDevID and IAK under /api/v1/tpm/idevid and /api/v1/tpm/iak (rest_idevid.go, registerIDevIDRoutes); the claim is the webservice's /api/v1/idevid shape"
-	kmsKeyInBody           = "#452: the daemon takes the key in the body at POST /api/v1/kms/{encrypt,decrypt,sign,verify}; the claim is the webservice's /{name} path"
 	pxeGatewayOnWebservice = "#452: the per-MAC PXE gateway routes are the webservice's (rest/pxe/gateway.go); the daemon mounts none"
 	// attestationQuoteOnWebservice and deviceMachineFacingOnWebservice are the
 	// caller-gated quote routes and the machine-facing device routes, which

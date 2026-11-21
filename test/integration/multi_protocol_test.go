@@ -1400,7 +1400,7 @@ func testIAMCreateRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	roleID := fmt.Sprintf("matrix-role-%d", time.Now().UnixNano())
 	// The CA's certificate scopes (pkg/webservice/v1/rest/ca/handlers.go).
 	result, err := cmd.CreateRole(ctx, iam.CreateRoleOptions{
-		TenantID: helpers.HarnessTenantID, ID: roleID, Name: "Matrix Test Role",
+		TenantID: helpers.HarnessTenantID, ID: roleID, Name: "Matrix Test Role " + roleID,
 		Description: "Role created by matrix integration test", Permissions: []string{"certs:read", "certs:generate"},
 	})
 	if missing := surfaceMissing(adapter, "IAM", "CreateRole", err); missing != nil {
@@ -1430,7 +1430,7 @@ func testIAMAssignRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 
 	roleID := fmt.Sprintf("matrix-assign-role-%d", time.Now().UnixNano())
 	roleResult, err := cmd.CreateRole(ctx, iam.CreateRoleOptions{
-		TenantID: helpers.HarnessTenantID, ID: roleID, Name: "Matrix Assign Role", Permissions: []string{"certs:read"},
+		TenantID: helpers.HarnessTenantID, ID: roleID, Name: "Matrix Assign Role " + roleID, Permissions: []string{"certs:read"},
 	})
 	if missing := surfaceMissing(adapter, "IAM", "CreateRole", err); missing != nil {
 		t.Fatal(missing)
@@ -1445,6 +1445,14 @@ func testIAMAssignRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	result, err := cmd.AssignRole(ctx, iam.AssignRoleOptions{
 		TenantID: helpers.HarnessTenantID, UserID: userResult.User.ID, RoleID: roleResult.Role.ID,
 	})
+	// Checked before surfaceMissing: over gRPC the gap is status
+	// Unimplemented, which surfaceMissing would report as a missing surface.
+	if err != nil && strings.Contains(err.Error(), "unknown method: quicbaas.IAM.User/AssignRole") {
+		if gerr := helpers.GapEmbeddedIAMUserAssignRole.CheckDefect("AssignRole", true, "unknown method", err.Error()); gerr != nil {
+			t.Fatal(gerr)
+		}
+		return
+	}
 	if missing := surfaceMissing(adapter, "IAM", "AssignRole", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -1458,6 +1466,14 @@ func testIAMCheckPermission(t *testing.T, ctx context.Context, adapter ProtocolA
 	result, err := cmd.CheckPermission(ctx, iam.CheckPermissionOptions{
 		TenantID: helpers.HarnessTenantID, SubjectID: "test-user", Action: "read", Resource: "certificates",
 	})
+	// Checked before surfaceMissing, which may see the stub's status code
+	// as a missing surface.
+	if err != nil && strings.Contains(err.Error(), "service not configured: IAM.PEP") {
+		if gerr := helpers.GapEmbeddedIAMPEPCheck.CheckDefect("Check", true, "service not configured", err.Error()); gerr != nil {
+			t.Fatal(gerr)
+		}
+		return
+	}
 	if missing := surfaceMissing(adapter, "IAM", "CheckPermission", err); missing != nil {
 		t.Fatal(missing)
 	}

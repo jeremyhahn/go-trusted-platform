@@ -582,13 +582,22 @@ func (s *Supervisor) ensureStateDir(def Definition) error {
 	if err := os.MkdirAll(dir, stateDirMode); err != nil {
 		return &ErrStateDir{Process: def.Name, Path: dir, Op: "create", Cause: err}
 	}
+	// Every child that keeps a state directory needs to reach it with the
+	// credentials it runs with: an Unprivileged one as the service account,
+	// any other as the supervisor's own uid and gid. A root child keeps no
+	// CAP_DAC_* (harden), so it cannot search a 0700 data directory another
+	// user owns either (#646).
+	uid, gid := s.cfg.UID, s.cfg.GID
+	if !def.Unprivileged {
+		uid, gid = childCredentials()
+	}
+	if err := chownStateDir(dir, int(uid), int(gid)); err != nil {
+		return &ErrStateDir{Process: def.Name, Path: dir, Op: "chown", Cause: err}
+	}
+	if err := grantTraverse(s.cfg.Inherited.DataDir, uid, gid); err != nil {
+		return &ErrStateDir{Process: def.Name, Path: s.cfg.Inherited.DataDir, Op: "traverse", Cause: err}
+	}
 	if def.Unprivileged {
-		if err := os.Chown(dir, int(s.cfg.UID), int(s.cfg.GID)); err != nil {
-			return &ErrStateDir{Process: def.Name, Path: dir, Op: "chown", Cause: err}
-		}
-		if err := grantTraverse(s.cfg.Inherited.DataDir, s.cfg.UID, s.cfg.GID); err != nil {
-			return &ErrStateDir{Process: def.Name, Path: s.cfg.Inherited.DataDir, Op: "traverse", Cause: err}
-		}
 		if err := s.handOverStateFiles(def, dir); err != nil {
 			return err
 		}
@@ -599,6 +608,17 @@ func (s *Supervisor) ensureStateDir(def Definition) error {
 	}
 	return nil
 }
+
+// childCredentials is the uid and gid a child that is not Unprivileged runs
+// with: the supervisor's own, which the launcher does not change. Tests
+// replace it to stand in for a root supervisor.
+var childCredentials = func() (uint32, uint32) {
+	return uint32(os.Geteuid()), uint32(os.Getegid())
+}
+
+// chownStateDir sets a child's state directory owner. Tests replace it,
+// since only root may give a directory away.
+var chownStateDir = os.Chown
 
 // grantTraverse adds search permission to a directory for a child running as
 // uid and gid, so an unprivileged child can reach its own state directory
