@@ -19,6 +19,7 @@ package proxy
 
 import (
 	"net/http"
+	"net/url"
 
 	"github.com/gorilla/mux"
 	"google.golang.org/protobuf/proto"
@@ -58,6 +59,7 @@ func NewRouter(
 }
 
 // SetScopeAuthorizer sets the authorizer that enforces each route's scope.
+// Without one every route answers 403.
 func (r *Router) SetScopeAuthorizer(authorizer middleware.ScopeAuthorizer) {
 	r.scopeAuthorizer = authorizer
 }
@@ -65,6 +67,9 @@ func (r *Router) SetScopeAuthorizer(authorizer middleware.ScopeAuthorizer) {
 // RegisterRoutes mounts the proxy read routes on parent.
 func (r *Router) RegisterRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix(basePath).Subrouter()
+	// Route and pool IDs may contain slashes (the SDK sends a%2Fb): match on
+	// the encoded path and decode {id} in the handler, as the switch router does.
+	sr.UseEncodedPath()
 	sr.Handle("/routes", r.requireScope(scopeRead, r.listRoutes)).Methods(http.MethodGet)
 	sr.Handle("/routes/{id}", r.requireScope(scopeRead, r.getRoute)).Methods(http.MethodGet)
 	sr.Handle("/pools", r.requireScope(scopeRead, r.listPools)).Methods(http.MethodGet)
@@ -76,10 +81,14 @@ func (r *Router) RegisterRoutes(parent *mux.Router) {
 	// next slice of #2061, behind proxy:write and proxy:delete.
 }
 
-// requireScope wraps handler in the scope check when an authorizer is set.
+// requireScope wraps handler in the scope check. Without an authorizer (the
+// legacy JWT handler) the route fails closed with 403, since a role-only
+// session carries no scopes (#1990, #2157 Codex), as scopeRouteGuard does.
 func (r *Router) requireScope(scope string, handler http.HandlerFunc) http.Handler {
 	if r.scopeAuthorizer == nil {
-		return handler
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		})
 	}
 	return r.scopeAuthorizer.RequireScope(scope)(handler)
 }
@@ -91,6 +100,12 @@ func (r *Router) ensure(w http.ResponseWriter, req *http.Request) bool {
 		return false
 	}
 	return true
+}
+
+// pathID returns the URL-decoded {id} of an encoded-path route, so a%2Fb
+// reaches the service as a/b.
+func pathID(req *http.Request) (string, error) {
+	return url.PathUnescape(mux.Vars(req)["id"])
 }
 
 func (r *Router) listRoutes(w http.ResponseWriter, req *http.Request) {
@@ -105,7 +120,12 @@ func (r *Router) getRoute(w http.ResponseWriter, req *http.Request) {
 	if !r.ensure(w, req) {
 		return
 	}
-	resp, err := r.server.GetRoute(req.Context(), &platformv1.GetProxyRouteRequest{Id: mux.Vars(req)["id"]})
+	id, err := pathID(req)
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	resp, err := r.server.GetRoute(req.Context(), &platformv1.GetProxyRouteRequest{Id: id})
 	r.write(w, req, resp, err)
 }
 
@@ -121,7 +141,12 @@ func (r *Router) getPool(w http.ResponseWriter, req *http.Request) {
 	if !r.ensure(w, req) {
 		return
 	}
-	resp, err := r.server.GetPool(req.Context(), &platformv1.GetProxyPoolRequest{Id: mux.Vars(req)["id"]})
+	id, err := pathID(req)
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	resp, err := r.server.GetPool(req.Context(), &platformv1.GetProxyPoolRequest{Id: id})
 	r.write(w, req, resp, err)
 }
 
