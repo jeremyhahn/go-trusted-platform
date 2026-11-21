@@ -4450,6 +4450,20 @@ integration-test-diskimage: build-devcontainer image-rpi image-rpi-qemu
 integration-test-diskimage-only: build-devcontainer
 	$(call run-integration-suite,diskimage,$(DISKIMAGE_SUITE_ENV))
 
+# The live event log checks' inputs: each -e passes the caller's variable
+# through to the devcontainer; paths are as the devcontainer sees them
+# (under /workspace).
+DISKIMAGE_EVENTLOG_ENV := $(DISKIMAGE_SUITE_ENV) -e DISKIMAGE_MANIFEST_ROOTS \
+	-e DISKIMAGE_CONSOLE_LOGIN -e DISKIMAGE_CONSOLE_PASSWORD \
+	-e DISKIMAGE_X86_ISO -e DISKIMAGE_X86_MANIFEST -e DISKIMAGE_X86_OVMF_CODE \
+	-e DISKIMAGE_X86_OVMF_VARS -e DISKIMAGE_X86_READY
+
+.PHONY: integration-test-diskimage-eventlog
+## integration-test-diskimage-eventlog: The diskimage suite plus the eventlog_live checks of both architectures (aarch64 image, x86 ISO); missing inputs fail
+integration-test-diskimage-eventlog: TEST_BUILD_TAGS += eventlog_live
+integration-test-diskimage-eventlog: build-devcontainer image-rpi image-rpi-qemu
+	$(call run-integration-suite,diskimage,$(DISKIMAGE_EVENTLOG_ENV))
+
 # The aarch64 network-boot suite: QEMU virt booted from the qemu_arm64
 # U-Boot on the PXE test bridge — the Raspberry Pi stand-in from U-Boot
 # onward. Boots Alpine's own aarch64 netboot kernel and initramfs, pinned
