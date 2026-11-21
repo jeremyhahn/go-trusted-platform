@@ -235,10 +235,11 @@ describe('SDNBridgeDetailClient policy apply and policy identity', () => {
     // #2024 Codex round 2 P1: the form has no redirect destination, and a
     // REDIRECT rule without one installs no actions (a drop).
     expect(values).not.toContain('POLICY_RULE_ACTION_REDIRECT');
+    // #2148 Codex round 2 P1: LOG installs controller only, which stops forwarding.
+    expect(values).not.toContain('POLICY_RULE_ACTION_LOG');
     for (const v of [
       'POLICY_RULE_ACTION_ALLOW',
       'POLICY_RULE_ACTION_DENY',
-      'POLICY_RULE_ACTION_LOG',
     ]) {
       expect(values).toContain(v);
     }
@@ -526,6 +527,26 @@ describe('SDNBridgeDetailClient policy apply and policy identity', () => {
     const existing = {
       ...denyTelnet,
       config: { ...denyTelnet.config, priority: 65636, rules: [{ ...denyTelnet.config.rules[0], priority: 65636 }] },
+    };
+    const sent = await fillSecondPolicy({ priority: '100', port: '23' }, [existing]);
+    expectConflict(sent);
+  });
+
+  // #2148 Codex round 2 P1: policyRuleMatch installs only protocol, source and
+  // destination IP and port, and VLAN, so a field it drops cannot keep two
+  // policies apart.
+  it.each([
+    ['direction', 'ingress'],
+    ['interface', 'eth0'],
+    ['dscp', 46],
+    ['application', 'telnet'],
+  ] as const)('a recorded %s the switch never installs still conflicts', async (field, value) => {
+    const existing = {
+      ...denyTelnet,
+      config: {
+        ...denyTelnet.config,
+        rules: [{ ...denyTelnet.config.rules[0], match: { protocol: 'tcp', destinationPort: 23, [field]: value } }],
+      },
     };
     const sent = await fillSecondPolicy({ priority: '100', port: '23' }, [existing]);
     expectConflict(sent);
