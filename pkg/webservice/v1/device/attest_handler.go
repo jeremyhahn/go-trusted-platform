@@ -14,6 +14,7 @@
 package device
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -23,7 +24,11 @@ import (
 
 	"github.com/gorilla/mux"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
+
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	mwiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -64,6 +69,24 @@ type AttestChallengeResponse struct {
 	ExpiresAt   time.Time `json:"expires_at"`
 }
 
+// callerContext carries the webservice caller into the gRPC service's
+// caller context. The webservice authenticators store the caller under
+// middleware/iam's own keys (a platform token's AuthorizedContext or an IAM
+// session), which the service's callerTenant does not read; without this
+// bridge a challenge is bound to and checked against tenant "" (#2142).
+func callerContext(r *http.Request) context.Context {
+	if authCtx, ok := mwiam.AuthorizedContextFromRequest(r); ok && authCtx != nil {
+		return grpcapi.ContextWithAuthorizedContext(r.Context(), authCtx)
+	}
+	if session, ok := mwiam.GetSessionFromContext(r.Context()); ok && session != nil {
+		return grpcapi.ContextWithAuthorizedContext(r.Context(), &platformtoken.AuthorizedContext{
+			Subject:  session.UserID(),
+			TenantID: session.TenantID(),
+		})
+	}
+	return r.Context()
+}
+
 // HandleIssueAttestationChallenge delegates to the in-process
 // DeviceService.IssueAttestationChallenge for the path's device.
 func (h *attestHandler) HandleIssueAttestationChallenge(w http.ResponseWriter, r *http.Request) {
@@ -72,12 +95,12 @@ func (h *attestHandler) HandleIssueAttestationChallenge(w http.ResponseWriter, r
 		h.responseWriter.Error400(w, r, ErrDeviceIDRequired{})
 		return
 	}
-	resp, err := h.deviceService.IssueAttestationChallenge(r.Context(), &platformv1.IssueAttestationChallengeRequest{
+	resp, err := h.deviceService.IssueAttestationChallenge(callerContext(r), &platformv1.IssueAttestationChallengeRequest{
 		DeviceId: deviceID,
 	})
 	if err != nil {
 		h.logger.Errorf("device: attestation challenge could not be issued: device_id=%s error=%v", deviceID, err)
-		handleServiceErr(h.responseWriter, w, r, err)
+		writeGRPCStatusError(h.responseWriter, w, r, err)
 		return
 	}
 	h.responseWriter.Success200(w, r, &AttestChallengeResponse{
@@ -157,7 +180,10 @@ func NewAttestHandler(
 // status: the caller asked whether the device attests, and "no" is a
 // successful answer to that question. Error statuses are reserved for
 // requests that could not be evaluated — unparseable evidence, an unknown
-// device, or a device with no trustworthy attestation key.
+// device, or a device with no trustworthy attestation key. A challenge
+// refusal is a 4xx: 400 for a missing or malformed challenge, 403 for
+// another tenant's challenge, and 409 for an unknown, used or expired
+// challenge, one issued for another device, or a nonce mismatch (#2136).
 func (h *attestHandler) HandleAttestDevice(w http.ResponseWriter, r *http.Request) {
 	deviceID := mux.Vars(r)["id"]
 	if deviceID == "" {
@@ -181,14 +207,14 @@ func (h *attestHandler) HandleAttestDevice(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	resp, err := h.deviceService.AttestDevice(r.Context(), &platformv1.AttestDeviceRequest{
+	resp, err := h.deviceService.AttestDevice(callerContext(r), &platformv1.AttestDeviceRequest{
 		DeviceId:    deviceID,
 		Evidence:    req.Evidence,
 		ChallengeId: req.ChallengeID,
 	})
 	if err != nil {
 		h.logger.Errorf("device: attestation could not be evaluated: device_id=%s error=%v", deviceID, err)
-		handleServiceErr(h.responseWriter, w, r, err)
+		writeGRPCStatusError(h.responseWriter, w, r, err)
 		return
 	}
 
