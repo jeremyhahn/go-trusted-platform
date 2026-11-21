@@ -28,6 +28,21 @@ Three things to know before you start:
 3. **Hardware validation is your step.** The pipeline is exercised under
    emulation; booting a real Pi with a real TPM is the verification below.
 
+> **Partly built: the measurement manifest.** The SPEC row's
+> [acceptance](../SPEC.md#features) says every image carries a signed CoRIM of
+> the PCR values it determines, registered in the go-quicbaas
+> reference-values store. A Secure Boot image always gets `<image>.corim`
+> beside it (`bin/rpi.img.corim`), signed in the KMS: by default with the
+> tenant release key (`kms://release-signer`, ruling 134), or with the key
+> `--manifest-key kms://<key>` names (`--manifest-cert` names the key's
+> certificate on the platform CA when it is not the key's ID). A build with
+> no platform client is refused before it starts. An image with Secure Boot
+> off is unmeasured and gets none. Nothing is registered yet, so a node's
+> quote is still checked against its device profile's `PCRBaseline` table. The registration verbs ship in
+> go-quicbaas v0.14.0-alpha; the platform pins v0.12.0-alpha (#720). The
+> design is [architecture.md §8](architecture.md#8-measurement-manifest), and
+> the plan is [docs/plans/669.md](../plans/669.md).
+
 ## Prerequisites
 
 On the build host:

@@ -44,7 +44,7 @@ func TestCommandTree(t *testing.T) {
 		t.Errorf("--uboot default = %s", got)
 	}
 	create, _, _ := cmd.Find([]string{"create"})
-	for _, flag := range []string{"target", "model", "size", "output", "binaries-dir", "uboot-dir", "virt-kernel-dir", "virt-kernel-builder-dir", "virt-kernel-output-dir", "virt-kernel-cache-volume", "platform-config", "overrides", "keys-dir", "pre-fetch", "skip-preflight"} {
+	for _, flag := range []string{"target", "model", "size", "output", "binaries-dir", "uboot-dir", "virt-kernel-dir", "virt-kernel-builder-dir", "virt-kernel-output-dir", "virt-kernel-cache-volume", "platform-config", "overrides", "keys-dir", "pre-fetch", "skip-preflight", "manifest-key", "manifest-cert"} {
 		if create.Flags().Lookup(flag) == nil {
 			t.Errorf("create lacks --%s", flag)
 		}
