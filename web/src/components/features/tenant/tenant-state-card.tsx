@@ -2,19 +2,34 @@
 
 /**
  * TenantStateCard — find a tenant by name (GetTenantByName on the SDK
- * TenantService, #2067) and show its recorded state. Refusals are shown
- * verbatim, because the control plane's text says why it refused.
+ * TenantService, #2067) and show its recorded state, then suspend
+ * (SuspendTenant) or resume (ResumeTenant) it, re-reading its state after
+ * each. Suspending a tenant stops its workloads from being served, so the
+ * card asks first. Refusals are shown verbatim, because the control plane's
+ * text says why it refused.
  */
 
 import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { useTenantState, tenantStateLabel } from '@/hooks/use-tenant-state';
-import type { Tenant } from 'trusted-platform-sdk';
+// The SDK package root exports neither Tenant nor GetTenantByNameResponse,
+// so the tenant type is read off the hook's GetTenantByName answer.
+type Tenant = NonNullable<
+  Awaited<ReturnType<ReturnType<typeof useTenantState>['getByName']>>['data']
+>['tenant'];
 
 function badgeVariant(label: string): 'default' | 'destructive' | 'secondary' {
   if (label === 'ACTIVE') return 'default';
@@ -29,6 +44,7 @@ export function TenantStateCard(): JSX.Element {
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [lookupError, setLookupError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const handleFind = async () => {
     const wanted = name.trim();
@@ -54,7 +70,43 @@ export function TenantStateCard(): JSX.Element {
     }
   };
 
+  const reread = async (tenantName: string) => {
+    try {
+      const res = await tenants.getByName(tenantName);
+      if (res.success && res.data) {
+        setTenant(res.data.tenant);
+        setLookupError(null);
+      }
+    } catch {
+      // Keep the tenant shown; the action's own toast already reported the outcome.
+    }
+  };
+
+  const runAction = async (action: 'suspend' | 'resume') => {
+    if (!tenant) return;
+    const done = action === 'suspend' ? 'Tenant suspended' : 'Tenant resumed';
+    const failed = action === 'suspend' ? 'Suspend failed' : 'Resume failed';
+    setBusy(true);
+    try {
+      const res = action === 'suspend' ? await tenants.suspend(tenant.id) : await tenants.resume(tenant.id);
+      if (res.success) {
+        setConfirmOpen(false);
+        toast({ title: done, description: res.data?.status?.message ?? 'done', variant: 'success' });
+        await reread(tenant.name);
+      } else {
+        setConfirmOpen(false);
+        toast({ title: failed, description: res.error?.message || 'the control plane refused', variant: 'destructive' });
+      }
+    } catch (err) {
+      setConfirmOpen(false);
+      toast({ title: failed, description: err instanceof Error ? err.message : String(err), variant: 'destructive' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const label = tenant ? tenantStateLabel(String(tenant.state)) : '';
+  const shownName = tenant ? tenant.displayName || tenant.name : '';
 
   return (
     <Card data-testid="tenant-state-card">
@@ -101,9 +153,37 @@ export function TenantStateCard(): JSX.Element {
                 {label}
               </Badge>
             </div>
+            <div className="pt-2">
+              {label === 'SUSPENDED' ? (
+                <Button onClick={() => runAction('resume')} disabled={busy}>
+                  Resume
+                </Button>
+              ) : (
+                <Button variant="destructive" onClick={() => setConfirmOpen(true)} disabled={busy}>
+                  Suspend
+                </Button>
+              )}
+            </div>
           </div>
         )}
       </CardContent>
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Suspend {shownName}?</DialogTitle>
+            <DialogDescription>The tenant&apos;s workloads stop being served until it is resumed.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={() => runAction('suspend')} disabled={busy}>
+              Suspend
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
