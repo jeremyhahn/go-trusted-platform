@@ -63,11 +63,9 @@ describe('EABService enrolment operations', () => {
 
     const result = await service.markUsed(7);
 
-    expect(vi.mocked(mockClient.post).mock.calls[0][0]).toBe('/v1/eab/credentials/7/used');
+    expect(vi.mocked(mockClient.post).mock.calls[0]?.[0]).toBe('/v1/eab/credentials/7/used');
     expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.status.success).toBe(true);
-    }
+    expect(result.data?.status.success).toBe(true);
   });
 
   it('cleanupExpired posts an empty body to /credentials/cleanup', async () => {
@@ -80,9 +78,7 @@ describe('EABService enrolment operations', () => {
 
     expect(mockClient.post).toHaveBeenCalledWith('/v1/eab/credentials/cleanup', {});
     expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.deletedCount).toBe(3);
-    }
+    expect(result.data?.deletedCount).toBe(3);
   });
 
   it('cleanupExpired sends the tenant when given', async () => {
