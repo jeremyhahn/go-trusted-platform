@@ -1,5 +1,6 @@
 import type { Page, Response } from '@playwright/test';
 import { expect, test } from './fixtures';
+import { unwrapPayload, wireCount } from './fixtures/wire';
 
 /**
  * Dashboard against the real platformd (#2034, epic #1665).
@@ -29,7 +30,7 @@ function apiResponse(page: Page, path: RegExp): Promise<Response> {
 
 async function json<T>(r: Response): Promise<T> {
   expect(r.ok(), `${r.url()} answered ${r.status()}`).toBeTruthy();
-  return (await r.json()) as T;
+  return unwrapPayload<T>(await r.json());
 }
 
 const headerAvatar = (page: Page) =>
@@ -135,12 +136,14 @@ test.describe('Dashboard Overview', () => {
     const certsRes = apiResponse(adminPage, /\/api\/v1\/ca\/certificates$/);
     await adminPage.goto('/dashboard');
 
-    const users = await json<{ total?: number; pagination?: { totalItems?: number } }>(
+    // protojson: int64/uint64 counts arrive as decimal strings.
+    type WireCount = number | string;
+    const users = await json<{ total?: WireCount; pagination?: { totalItems?: WireCount } }>(
       await usersRes,
     );
-    const certs = await json<{ pagination?: { totalItems?: number } }>(await certsRes);
-    const userTotal = users.pagination?.totalItems ?? users.total ?? 0;
-    const certTotal = certs.pagination?.totalItems ?? 0;
+    const certs = await json<{ pagination?: { totalItems?: WireCount } }>(await certsRes);
+    const userTotal = wireCount(users.pagination?.totalItems ?? users.total);
+    const certTotal = wireCount(certs.pagination?.totalItems);
     // The seeded admin and the certificate issued above.
     expect(userTotal).toBeGreaterThanOrEqual(1);
     expect(certTotal).toBeGreaterThanOrEqual(1);
