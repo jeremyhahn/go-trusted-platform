@@ -254,6 +254,14 @@ type Config struct {
 	// names the file.
 	WebAuthnAttestationRootsFile string `yaml:"webauthn-attestation-roots-file,omitempty" json:"webauthn_attestation_roots_file,omitempty" mapstructure:"webauthn-attestation-roots-file"`
 
+	// WebAuthnAAGUIDAllowlistFile is a JSON allowlist of authenticator
+	// models (AAGUIDs) passed through to the embedded server's
+	// iam.aaguid.allowlist_file. The server's WebAuthn attestation gate
+	// checks the authenticator's AAGUID as well as its chain; unset, the
+	// gate is strict with an empty allowlist, so every attested enrollment
+	// is refused with aaguid_not_allowed.
+	WebAuthnAAGUIDAllowlistFile string `yaml:"webauthn-aaguid-allowlist-file,omitempty" json:"webauthn_aaguid_allowlist_file,omitempty" mapstructure:"webauthn-aaguid-allowlist-file"`
+
 	// StartupTimeout bounds how long Start waits for the embedded server to
 	// report itself started. It is deliberately its OWN budget and not
 	// derived from RequestTimeout.
@@ -555,6 +563,7 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 	cfg.IAM.WebAuthn.RPDisplayName = c.WebAuthnRPDisplayName
 	cfg.IAM.WebAuthn.RPOrigins = c.WebAuthnRPOrigins
 	cfg.IAM.WebAuthn.AttestationRootsFile = c.WebAuthnAttestationRootsFile
+	cfg.IAM.AAGUID.AllowlistFile = c.WebAuthnAAGUIDAllowlistFile
 
 	// Browser login is usernameless: the authenticator must find the
 	// credential on its own, so a credential registered without a resident

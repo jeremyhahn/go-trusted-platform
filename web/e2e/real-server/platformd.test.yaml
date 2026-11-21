@@ -59,6 +59,10 @@ quicbaas:
   # (fixtures/soft-authenticator.ts) attests with, into the run directory at
   # run time (ruling 1028 Q1 (c)); no key or certificate is committed.
   webauthn-attestation-roots-file: webauthn-attestation/roots.pem
+  # The embedded server's AAGUID gate is strict by default: an authenticator
+  # model not on the allowlist is refused even with a trusted chain.
+  # global-setup writes the run's random soft-authenticator AAGUID here.
+  webauthn-aaguid-allowlist-file: webauthn-attestation/aaguid-allowlist.json
 
 
 # =============================================================================

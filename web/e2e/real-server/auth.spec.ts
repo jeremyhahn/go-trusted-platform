@@ -145,13 +145,13 @@ test.describe('Registration and login against the server', () => {
     expect(await jwtCookie(page.context())).toBeTruthy();
   });
 
-  test('registering an existing account is refused with an error', async ({ page, browser }) => {
+  test('registering an existing account is refused with an error', async ({ page, browser, baseURL }) => {
     const username = uniqueEmail('dup');
     await addAuthenticator(page);
     await register(page, username);
 
     // A second browser context, so no session: the same username again.
-    const other = await browser.newContext({ ignoreHTTPSErrors: true });
+    const other = await browser.newContext({ baseURL, ignoreHTTPSErrors: true });
     try {
       const second = await other.newPage();
       await addAuthenticator(second);

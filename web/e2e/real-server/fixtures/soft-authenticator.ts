@@ -16,7 +16,8 @@ import type { BrowserContext, Page } from '@playwright/test';
  *  - generateAttestationCA (global-setup) makes, at run time and into the
  *    run's temp dir, a test root CA and a FIDO batch attestation leaf it
  *    signs. The root's file is the server's
- *    quicbaas.webauthn-attestation-roots-file.
+ *    quicbaas.webauthn-attestation-roots-file; an allowlist holding the
+ *    run's random AAGUID is its quicbaas.webauthn-aaguid-allowlist-file.
  *  - SoftAuthenticator answers navigator.credentials.create/get on a page
  *    (exposeBinding + addInitScript): a P-256 credential, a `packed`
  *    attestation with x5c = [leaf] signed by the leaf key, and ES256
@@ -35,6 +36,7 @@ export const ATTESTATION_FILES = {
   leafCert: 'leaf.pem',
   leafKey: 'leaf.key',
   aaguid: 'aaguid.hex',
+  aaguidAllowlist: 'aaguid-allowlist.json',
 } as const;
 
 /** id-fido-gen-ce-aaguid: the batch certificate names the authenticator model. */
@@ -73,6 +75,11 @@ export function generateAttestationCA(dir: string): AttestationMaterial {
   fs.writeFileSync(p('root.key'), pemKey(root.privateKey), { mode: 0o600 });
   fs.writeFileSync(p(ATTESTATION_FILES.leafKey), pemKey(leaf.privateKey), { mode: 0o600 });
   fs.writeFileSync(p(ATTESTATION_FILES.aaguid), `${aaguidHex}\n`);
+  // The server's AAGUID gate is strict by default: only listed models enroll.
+  fs.writeFileSync(
+    p(ATTESTATION_FILES.aaguidAllowlist),
+    JSON.stringify([{ aaguid: aaguidHex, name: 'E2E Soft Authenticator' }]),
+  );
   fs.writeFileSync(
     p('openssl.cnf'),
     [
