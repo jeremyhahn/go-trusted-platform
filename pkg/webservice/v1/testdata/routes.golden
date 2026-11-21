@@ -158,6 +158,9 @@ GET /api/v1/gateway/bgp/status
 GET /api/v1/gateway/desired-config/{id}
 GET /api/v1/gateway/ipam/allocations
 GET /api/v1/gateway/ipam/pools
+GET /api/v1/gateway/lb/status
+GET /api/v1/gateway/lb/vips
+GET /api/v1/gateway/lb/vips/{protocol}/{address}/{port}
 GET /api/v1/gateway/state
 GET /api/v1/gateway/state/{id}
 GET /api/v1/gateway/status

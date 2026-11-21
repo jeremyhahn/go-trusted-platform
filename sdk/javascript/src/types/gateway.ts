@@ -332,6 +332,77 @@ export interface ListAllocationsResponse {
 }
 
 // =============================================================================
+// Load balancer (#2052)
+//
+// protojson camelCase from gateway.proto (VIPBackend .. GetLBStatusResponse).
+// The webservice marshals with EmitUnpopulated, so every field is present and
+// an unset message is null.
+// =============================================================================
+
+/** One load-balanced endpoint of a VIP. */
+export interface VIPBackend {
+  /** Backend IPv4 address */
+  address: string;
+  /** Backend L4 port (1-65535) */
+  port: number;
+  /** Relative selection weight; zero means 1 */
+  weight: number;
+}
+
+/** A virtual IP and its backends. */
+export interface VIPConfig {
+  /** Virtual IPv4 address */
+  address: string;
+  /** Virtual L4 port (1-65535) */
+  port: number;
+  /** "tcp" or "udp" */
+  protocol: string;
+  /** "hash" or "round-robin"; empty inherits the service default */
+  algorithm: string;
+  /** Load-balanced endpoints */
+  backends: VIPBackend[];
+}
+
+/** One backend's health. */
+export interface VIPBackendStatus {
+  backend: VIPBackend | null;
+  healthy: boolean;
+}
+
+/** A VIP as the datapath programs it. */
+export interface VIPStatus {
+  vip: VIPConfig | null;
+  /** Conntrack zone carrying the VIP's connection state */
+  ctZone: number;
+  /** OpenFlow select group distributing the VIP */
+  groupId: number;
+  /** Per-backend health */
+  backends: VIPBackendStatus[];
+}
+
+/** Load balancer summary. */
+export interface LBStatus {
+  active: boolean;
+  vipCount: number;
+  healthyBackends: number;
+  totalBackends: number;
+  /** RFC 3339 timestamp of the last reconcile, null when never */
+  lastReconcile: string | null;
+}
+
+export interface GetVIPResponse {
+  vip: VIPStatus | null;
+}
+
+export interface ListVIPsResponse {
+  vips: VIPStatus[];
+}
+
+export interface GetLBStatusResponse {
+  status: LBStatus | null;
+}
+
+// =============================================================================
 // Telemetry snapshots (#594)
 // =============================================================================
 

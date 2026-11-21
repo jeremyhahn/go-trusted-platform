@@ -794,6 +794,14 @@ export type {
   GatewaySnapshotNATUplink,
   GatewaySnapshotPipeline,
   ListGatewayStateResponse,
+  VIPBackend,
+  VIPConfig,
+  VIPBackendStatus,
+  VIPStatus,
+  LBStatus,
+  GetVIPResponse,
+  ListVIPsResponse,
+  GetLBStatusResponse,
 } from './types/gateway.js';
 
 // SDN types

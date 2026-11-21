@@ -16,6 +16,7 @@ package gateway
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gorilla/mux"
 
@@ -58,6 +59,9 @@ func NewGatewayRouter(
 //	GET    /api/v1/gateway/ipam/allocations         - ListAllocations (?poolId=)
 //	POST   /api/v1/gateway/ipam/allocations         - AllocateIP
 //	DELETE /api/v1/gateway/ipam/allocations         - ReleaseIP (?ip=)
+//	GET    /api/v1/gateway/lb/vips                  - ListVIPs
+//	GET    /api/v1/gateway/lb/vips/{protocol}/{address}/{port} - GetVIP
+//	GET    /api/v1/gateway/lb/status                - GetLBStatus
 func (r *GatewayRouter) RegisterRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix(basePath).Subrouter()
 	sr.HandleFunc("/status", r.getStatus).Methods("GET")
@@ -71,6 +75,11 @@ func (r *GatewayRouter) RegisterRoutes(parent *mux.Router) {
 	sr.HandleFunc("/ipam/allocations", r.listAllocations).Methods("GET")
 	sr.HandleFunc("/ipam/allocations", r.allocateIP).Methods("POST")
 	sr.HandleFunc("/ipam/allocations", r.releaseIP).Methods("DELETE")
+	// Load-balancer reads. AddVIP, RemoveVIP and SetVIPBackends come in the
+	// next slice (#2052).
+	sr.HandleFunc("/lb/vips", r.listVIPs).Methods("GET")
+	sr.HandleFunc("/lb/vips/{protocol}/{address}/{port}", r.getVIP).Methods("GET")
+	sr.HandleFunc("/lb/status", r.getLBStatus).Methods("GET")
 }
 
 func (r *GatewayRouter) ensure(w http.ResponseWriter, req *http.Request) bool {
@@ -115,6 +124,52 @@ func (r *GatewayRouter) getBGPStatus(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	resp, err := r.server.GetBGPStatus(req.Context(), &platformv1.GetBGPStatusRequest{})
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+func (r *GatewayRouter) listVIPs(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	resp, err := r.server.ListVIPs(req.Context(), &platformv1.ListVIPsRequest{})
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+func (r *GatewayRouter) getVIP(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	vars := mux.Vars(req)
+	port, err := strconv.ParseUint(vars["port"], 10, 16)
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	resp, err := r.server.GetVIP(req.Context(), &platformv1.GetVIPRequest{
+		Protocol: vars["protocol"],
+		Address:  vars["address"],
+		Port:     uint32(port),
+	})
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+func (r *GatewayRouter) getLBStatus(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	resp, err := r.server.GetLBStatus(req.Context(), &platformv1.GetLBStatusRequest{})
 	if err != nil {
 		protorest.WriteError(w, req, r.respWriter, err)
 		return
