@@ -43,7 +43,13 @@
 # status's runs with one request (per_page=100). The list is the workflow's,
 # every PR's runs, so under hosted load an older-head run of this PR past the
 # first 100 was never cancelled. It now reads page after page until a page
-# holds fewer than 100 runs, at most 10 pages. Nothing else changes.
+# holds fewer than 100 runs, at most 10 pages. (3) A PUSHED FIX IS A NEW
+# ROUND BY RIGHT (ruling 1087 (3), owner order): the round limit stops only
+# a PR whose head has not moved since codex's latest verdict. A head that
+# differs from it is reviewed as the next round, past the limit, with no
+# owner-resume; needs-coordinator still goes on at the limit. 79 PRs sat at
+# the limit waiting on owner-resume. testdata/code-review-v51212-tests.py
+# part R holds the cases. Nothing else changes.
 #
 # v5.12.11 (2026-11-21, Tenant Agent ruling 1079; Codex's two P1s on
 # go-trusted-platform #2227): FIVE FIXES.
@@ -2230,6 +2236,18 @@ jobs:
           fi
           [[ $done_rounds =~ ^[0-9]+$ ]] || die "could not count the $REVIEWER rounds on PR $PR_NUM"
           latest=$(jq -r 'if length == 0 then "" elif (last | .stands) then last | .state else "DISMISSED" end' <<<"$hist")
+          # v5.12.12 (Tenant Agent ruling 1087 (3)): A PUSHED FIX IS A NEW
+          # ROUND BY RIGHT. The round limit stops only a PR whose head has not
+          # moved since codex's latest verdict (a re-run, a label event on the
+          # same head). A head that differs from the latest verdict's head is
+          # reviewed as the next round, past the limit, with no owner-resume:
+          # 79 PRs sat at the limit with fixes pushed. A same-patch head never
+          # reaches here (the SAME PATCH carry above), so a rebase is not a
+          # new round. needs-coordinator still goes on at the limit, so the
+          # coordinator sees the PR. The check is below the owner resume.
+          last_head=$(jq -r 'if length == 0 then "" else (last | .head // "") end' <<<"$hist")
+          head_moved=0
+          if [ -n "$last_head" ] && [ "$last_head" != "$EVENT_SHA" ]; then head_moved=1; fi
           # v5.10.10 (Tenant Agent m2369, ruling 422; Codex's P1 at go-qrdb
           # #1436): A LEFTOVER OWNER-RESUME IS NOT EVIDENCE. A restarted
           # round whose verdict was filed but whose label did not come off
@@ -2353,7 +2371,9 @@ jobs:
               echo "needs-coordinator and needs-owner are off PR $PR_NUM, but nothing records the owner resuming it (no fresh owner-resume label, no removal of needs-owner by a person after the latest verdict); the count stands."
             fi
           fi
-          if [ "$done_rounds" -ge "$limit" ] && [ "$latest" != APPROVED ]; then
+          if [ "$done_rounds" -ge "$limit" ] && [ "$latest" != APPROVED ] && [ "$head_moved" = 1 ]; then
+            echo "The head moved from $last_head to $EVENT_SHA since $REVIEWER's latest verdict: a pushed fix is a new round by right (v5.12.12, ruling 1087), past the round limit $limit."
+          elif [ "$done_rounds" -ge "$limit" ] && [ "$latest" != APPROVED ]; then
             # v5.11.2 (ruling 673): every stop goes to the coordinator.
             stop=needs-coordinator
             { echo "skip=round-limit"; echo "stop=$stop"; } >> "$GITHUB_OUTPUT"

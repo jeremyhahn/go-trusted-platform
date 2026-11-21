@@ -29,6 +29,7 @@ harness this copies. Nothing reaches the network.
 Run: python3 -I software/templates/github-actions/testdata/code-review-v51212-tests.py [workflow]
 """
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -230,11 +231,41 @@ def run_gate(script, rts, no_review, docs):
                "FAKE_ROUTES": json.dumps(rts), "FAKE_BASE": API,
                "FORGE": "github", "REVIEWER": REVIEWER, "REPO_API": API, "PR_NUM": "7",
                "EVENT_SHA": HEAD, "BASE_SHA": BASE, "BASE_REF": "main", "GITHUB_RUN_ID": "77",
-               "GH_API_TOKEN": "<REDACTED>", "NO_REVIEW_PATHS": no_review, "DOCS_PATHS": docs,
+               "GH_API_TOKEN": "<REDACTED>",
+               "NO_REVIEW_PATHS": no_review, "DOCS_PATHS": docs,
                "SCOPE_SKIP": "false", "SCOPE_RESULT": "success", "REVIEW_RESULT": "skipped"}
         out = subprocess.run(["bash", "-c", script], cwd=tmp, env=env,
                              capture_output=True, text=True, check=False, timeout=60)
         return out.returncode, out.stdout + out.stderr
+
+
+def round_block(src):
+    """The guard's round count and round limit, from THE TWO-ROUND STOP to the round line."""
+    a = src.index("          [[ $COORDINATOR_TURNS =~ ^[0-9]+$ ]] ||")
+    b = src.index('echo "Codex round $round of $limit on PR $PR_NUM."', a)
+    b = src.index("\n", b)
+    return "\n".join(l[10:] if l.startswith("          ") else l for l in src[a:b].split("\n"))
+
+
+def run_rounds(block, hist, labels, sha, turns=3):
+    with tempfile.TemporaryDirectory() as tmp:
+        out_file = os.path.join(tmp, "out")
+        open(out_file, "w").close()
+        script = ("set -euo pipefail\n"
+                  "die() { echo \"die: $*\"; exit 9; }\n"
+                  "api_all() { echo \"api_all called\"; exit 8; }\n"
+                  "api() { echo \"api called\"; exit 8; }\n" + block + "\n")
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GITHUB_OUTPUT": out_file, "WORK": tmp,
+               "COORDINATOR_TURNS": str(turns), "labels": json.dumps(labels), "hist": json.dumps(hist),
+               "EVENT_ACTION": "synchronize", "EVENT_LABEL": "", "REVIEWER": "codex", "PR_NUM": "5",
+               "EVENT_SHA": sha, "FORGE": "gitea"}
+        r = subprocess.run(["bash", "-c", script], cwd=tmp, env=env, capture_output=True, text=True, timeout=60)
+        return r.returncode, r.stdout + r.stderr, open(out_file).read()
+
+
+def verdict(rid, head, rnd, state="REQUEST_CHANGES"):
+    return {"id": rid, "commit_id": head, "body": "", "head": head, "at": f"2026-11-21T16:0{rid % 10}:00Z",
+            "stands": True, "state": state, "patch": "", "ctx": "", "round": rnd, "resume": ""}
 
 
 def main():
@@ -298,6 +329,25 @@ def main():
     check(rc == 3 and "requested changes" in out, f"W3 after the re-review requests changes: the gate fails (got {rc})")
     rc, out = run_gate(gscript, gate_routes(["APPROVED"]), no_review, docs)
     check(rc == 0, f"W4 no twin, approved head: passes as before (got {rc})")
+
+    # R: ruling 1087 (3), a pushed fix is a new round by right.
+    block = round_block(src)
+    A, B = "a" * 40, "b" * 40
+    at_limit = [verdict(i, "%040x" % i, i) for i in range(1, 5)] + [verdict(5, A, 5)]
+    rc, out, o = run_rounds(block, at_limit, ["code-review", "needs-coordinator"], B)
+    check(rc == 0 and "round=6" in o and "new round by right" in out,
+          f"R1 at the last coordinator round, the head moved: reviewed as round 6 (got {rc}: {o.split()})")
+    rc, out, o = run_rounds(block, at_limit, ["code-review", "needs-coordinator"], A)
+    check(rc == 1 and "skip=round-limit" in o, f"R2 at the limit, the same head: the round limit stops it (got {rc})")
+    two = [verdict(1, "%040x" % 1, 1), verdict(2, A, 2)]
+    rc, out, o = run_rounds(block, two, ["code-review"], B)
+    check(rc == 0 and "round=3" in o, f"R3 round 2 rejected, no needs-coordinator, the head moved: round 3 (got {rc})")
+    rc, out, o = run_rounds(block, two, ["code-review"], A)
+    check(rc == 1 and "skip=round-limit" in o, f"R4 round 2 rejected, the same head: stopped (got {rc})")
+    rc, out, o = run_rounds(block, [verdict(1, A, 1)], ["code-review"], B)
+    check(rc == 0 and "round=2" in o and "new round by right" not in out, f"R5 under the limit: round 2 as before (got {rc})")
+    rc, out, o = run_rounds(block, two[:1] + [verdict(2, A, 2, "APPROVED")], ["code-review"], B)
+    check(rc == 0 and "round=3" in o, f"R6 an approval at the limit, the head moved: reviewed (got {rc})")
 
     print(f"{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED'}")
     sys.exit(1 if FAILS else 0)
