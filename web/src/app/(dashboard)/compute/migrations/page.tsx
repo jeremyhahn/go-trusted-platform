@@ -90,9 +90,13 @@ export default function MigrationsPage() {
     // The guest the receiver holds: the one prepared here, else the name typed.
     const guest = (id === receiver?.receiverId ? preparedName : vmName).trim();
     const result = await ops.finalizeMigration(id, commit);
-    if (!result) return;
-    // Finalize removes the receiver whatever it answers.
+    // Finalize removes the receiver whatever it answers, even when its commit
+    // or abort then fails as a non-2xx answer (#2148 Codex, P1).
     if (id === receiver?.receiverId) setReceiver(null);
+    if (!result) {
+      setFinalizeResult(`Receiver ${id} ${commit ? "commit" : "abort"} failed; prepare a new receiver`);
+      return;
+    }
     if (result.status && result.status.success === false) {
       setFinalizeResult(
         `Receiver ${id} ${commit ? "commit" : "abort"} failed: ${result.status.message || "unknown error"}`,

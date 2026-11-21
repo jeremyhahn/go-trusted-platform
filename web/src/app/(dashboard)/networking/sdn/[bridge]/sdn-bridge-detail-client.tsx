@@ -331,9 +331,24 @@ export default function SDNBridgeDetailClient() {
     setRuleDestinationIp('');
     setRuleDestinationPort('');
   };
+  // The daemon compares policy names exactly (SDNService.ApplyPolicy).
+  const existingPolicy: SDNPolicy | undefined = policyName
+    ? policies.find((p) => p.config?.name === policyName)
+    : undefined;
   const applyPolicy = () => {
     const priority = rulePriorityValue;
+    // SDNService.ApplyPolicy refuses an existing name without its ID
+    // (AlreadyExists), so a replacement carries the policy's ID and keeps
+    // the bridges it already targets (#2148 Codex, P1).
+    const ownTarget = { type: 'POLICY_TARGET_TYPE_BRIDGE' as const, id: bridgeId };
+    let targets: NonNullable<NonNullable<SDNPolicy['config']>['targets']> = [ownTarget];
+    if (existingPolicy) {
+      const names = [bridgeId, bridge?.id, bridge?.config?.name].filter((v): v is string => !!v);
+      const kept = (existingPolicy.config?.targets ?? []).filter((t) => t.type === 'POLICY_TARGET_TYPE_BRIDGE');
+      targets = kept.some((t) => !!t.id && names.includes(t.id)) ? kept : [...kept, ownTarget];
+    }
     return sdn.applyPolicy({
+      ...(existingPolicy?.id ? { policyId: existingPolicy.id } : {}),
       config: {
         name: policyName,
         type: policyType,
@@ -347,7 +362,7 @@ export default function SDNBridgeDetailClient() {
             match: ruleMatch(ruleProtocol, ruleSourceIp, ruleDestinationIp, ruleDestinationPort),
           },
         ],
-        targets: [{ type: 'POLICY_TARGET_TYPE_BRIDGE', id: bridgeId }],
+        targets,
       },
     });
   };
@@ -745,6 +760,11 @@ export default function SDNBridgeDetailClient() {
             <div className="space-y-1">
               <Label htmlFor="policy-name">Name *</Label>
               <Input id="policy-name" value={policyName} onChange={(e) => setPolicyName(e.target.value)} />
+              {existingPolicy && (
+                <p data-testid="policy-replace-note" className="text-sm text-muted-foreground">
+                  Replaces policy {existingPolicy.config?.name}
+                </p>
+              )}
             </div>
             <div className="space-y-1">
               <Label htmlFor="policy-type">Type</Label>
