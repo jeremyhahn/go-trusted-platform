@@ -17,6 +17,7 @@
 package ceremony
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/gorilla/mux"
@@ -28,6 +29,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/router"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 // basePath is the REST prefix for the ceremony routes.
@@ -63,8 +65,8 @@ func NewRouter(
 }
 
 // SetScopeAuthorizer supplies the scope check every route takes on top of the
-// admin gate. Nil leaves the routes on the role gate alone, which is the case
-// under the legacy JWT handler: its sessions carry roles, not scopes.
+// admin gate. Without one (the legacy JWT handler, whose sessions carry roles,
+// not scopes) every route fails closed with 403 (#1990, #2158 Codex).
 func (r *Router) SetScopeAuthorizer(authorizer middleware.ScopeAuthorizer) {
 	r.scopeAuthorizer = authorizer
 }
@@ -92,7 +94,8 @@ func (r *Router) RegisterRoutes(parent *mux.Router) {
 }
 
 // route sets Cache-Control: no-store before anything answers, the scope
-// check included, then runs handler behind the scope check.
+// check included, then runs handler behind the scope check, which refuses
+// every request when no scope authorizer is set.
 func (r *Router) route(scope string, handler http.HandlerFunc) http.Handler {
 	scoped := r.requireScope(scope, handler)
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -101,10 +104,14 @@ func (r *Router) route(scope string, handler http.HandlerFunc) http.Handler {
 	})
 }
 
-// requireScope wraps handler in the scope check when one is configured.
+// requireScope wraps handler in the scope check. With no authorizer
+// configured the route fails closed: it answers 403 and never calls handler,
+// as scopeRouteGuard.Require does (#1990, #2158 Codex).
 func (r *Router) requireScope(scope string, handler http.HandlerFunc) http.Handler {
 	if r.scopeAuthorizer == nil {
-		return handler
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		})
 	}
 	return r.scopeAuthorizer.RequireScope(scope)(handler)
 }
@@ -135,7 +142,26 @@ func (r *Router) write(w http.ResponseWriter, req *http.Request, resp proto.Mess
 		protorest.WriteError(w, req, r.respWriter, err)
 		return
 	}
-	protorest.WriteSuccess(w, req, r.respWriter, resp)
+	// The body carries the admin private key or a Shamir share, so it is
+	// never handed to the logging response writer, which logs every body it
+	// writes at debug level (#2158 Codex).
+	payload, err := protorest.MarshalOptions.Marshal(resp)
+	if err != nil {
+		r.respWriter.Error500(w, req, err)
+		return
+	}
+	body, err := json.Marshal(restwire.WebServiceResponse{
+		Code:    http.StatusOK,
+		Success: true,
+		Payload: json.RawMessage(payload),
+	})
+	if err != nil {
+		r.respWriter.Error500(w, req, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 }
 
 // initCeremony handles POST /api/v1/ceremony/init.
