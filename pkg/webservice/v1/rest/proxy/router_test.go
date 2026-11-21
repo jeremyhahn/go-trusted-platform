@@ -13,11 +13,14 @@
 
 package proxy
 
-// Tests for the ProxyService read routes on the webservice (#2061 slice 1):
-// each read reaches its ProxyServiceServer method with the request the route
-// builds, answers protojson (camelCase, 64-bit fields as strings), maps the
-// service refusals to their HTTP status, needs proxy:read, and no write
-// route is served yet.
+// Tests for the ProxyService routes on the webservice (#2061 slices 1 and
+// 2): each of the fourteen operations reaches its ProxyServiceServer method
+// with the request the route builds (the write bodies decoded as the daemon
+// REST decodes them, the URL id winning on updates), answers protojson
+// (camelCase, 64-bit fields as strings), maps the service refusals to their
+// HTTP status, refuses a body that does not decode, and needs its own scope:
+// proxy:read for the reads, proxy:write for the creates, updates and reload,
+// proxy:delete for the deletes.
 
 import (
 	"context"
@@ -113,26 +116,41 @@ func (s *recordingServer) GetZoneMatrix(_ context.Context, req *platformv1.GetPr
 	}, s.err
 }
 
-// Every write method records too, so a write route served by mistake shows
-// up as a call.
+// The write methods record the request and answer a canned response at
+// config version 8.
 func (s *recordingServer) CreateRoute(_ context.Context, req *platformv1.CreateProxyRouteRequest) (*platformv1.CreateProxyRouteResponse, error) {
 	s.record(req)
-	return &platformv1.CreateProxyRouteResponse{}, s.err
+	return &platformv1.CreateProxyRouteResponse{Route: cannedRoute(), Version: 8}, s.err
 }
 
 func (s *recordingServer) UpdateRoute(_ context.Context, req *platformv1.UpdateProxyRouteRequest) (*platformv1.UpdateProxyRouteResponse, error) {
 	s.record(req)
-	return &platformv1.UpdateProxyRouteResponse{}, s.err
+	return &platformv1.UpdateProxyRouteResponse{Route: cannedRoute(), Version: 8}, s.err
+}
+
+func (s *recordingServer) DeleteRoute(_ context.Context, req *platformv1.DeleteProxyRouteRequest) (*platformv1.DeleteProxyRouteResponse, error) {
+	s.record(req)
+	return &platformv1.DeleteProxyRouteResponse{Version: 8}, s.err
+}
+
+func (s *recordingServer) CreatePool(_ context.Context, req *platformv1.CreateProxyPoolRequest) (*platformv1.CreateProxyPoolResponse, error) {
+	s.record(req)
+	return &platformv1.CreateProxyPoolResponse{Pool: cannedPool(), Version: 8}, s.err
+}
+
+func (s *recordingServer) UpdatePool(_ context.Context, req *platformv1.UpdateProxyPoolRequest) (*platformv1.UpdateProxyPoolResponse, error) {
+	s.record(req)
+	return &platformv1.UpdateProxyPoolResponse{Pool: cannedPool(), Version: 8}, s.err
 }
 
 func (s *recordingServer) DeletePool(_ context.Context, req *platformv1.DeleteProxyPoolRequest) (*platformv1.DeleteProxyPoolResponse, error) {
 	s.record(req)
-	return &platformv1.DeleteProxyPoolResponse{}, s.err
+	return &platformv1.DeleteProxyPoolResponse{Version: 8}, s.err
 }
 
 func (s *recordingServer) ReloadProxyConfig(_ context.Context, req *platformv1.ReloadProxyConfigRequest) (*platformv1.ReloadProxyConfigResponse, error) {
 	s.record(req)
-	return &platformv1.ReloadProxyConfigResponse{}, s.err
+	return &platformv1.ReloadProxyConfigResponse{Version: 8}, s.err
 }
 
 func newTestLogger() *logging.Logger {
@@ -161,6 +179,14 @@ type envelope struct {
 func serve(router *mux.Router, verb, path string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(verb, path, strings.NewReader("")))
+	return rec
+}
+
+func serveBody(router *mux.Router, verb, path, body string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(verb, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
 	return rec
 }
 
@@ -271,6 +297,12 @@ func TestProxyRouterWithoutAServiceIsUnavailable(t *testing.T) {
 			t.Errorf("%s: code = %d, want 503", probe.name, rec.Code)
 		}
 	}
+	for _, probe := range proxyWriteProbes {
+		rec := serveBody(mountRouter(nil), probe.verb, probe.path, probe.body)
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s: code = %d, want 503", probe.name, rec.Code)
+		}
+	}
 }
 
 // grantingAuthorizer grants one scope and refuses every other with 403.
@@ -316,26 +348,162 @@ func TestProxyRouterRequiresProxyRead(t *testing.T) {
 	}
 }
 
-// TestProxyRouterHasNoWriteRoutes: the writes come in the next slice; none
-// is served now and the service sees no call.
-func TestProxyRouterHasNoWriteRoutes(t *testing.T) {
+// proxyWriteProbe is one write route: the body it sends, the scope it needs,
+// the request it must hand the service and the status it answers.
+type proxyWriteProbe struct {
+	name  string
+	verb  string
+	path  string
+	body  string
+	scope string
+	want  proto.Message
+	code  int
+}
+
+var proxyWriteProbes = []proxyWriteProbe{
+	{
+		name: "create route", verb: http.MethodPost, path: "/api/v1/proxy/routes",
+		body:  `{"route":{"id":"web","pathPrefix":"/app","poolId":"pool-1"}}`,
+		scope: "proxy:write",
+		want:  &platformv1.CreateProxyRouteRequest{Route: &platformv1.ProxyRoute{Id: "web", PathPrefix: "/app", PoolId: "pool-1"}},
+		code:  http.StatusCreated,
+	},
+	{
+		name: "update route", verb: http.MethodPut, path: "/api/v1/proxy/routes/web",
+		body:  `{"id":"ignored","route":{"id":"other","pathPrefix":"/app","poolId":"pool-1"}}`,
+		scope: "proxy:write",
+		want:  &platformv1.UpdateProxyRouteRequest{Id: "web", Route: &platformv1.ProxyRoute{Id: "other", PathPrefix: "/app", PoolId: "pool-1"}},
+		code:  http.StatusOK,
+	},
+	{
+		name: "delete route", verb: http.MethodDelete, path: "/api/v1/proxy/routes/web",
+		scope: "proxy:delete",
+		want:  &platformv1.DeleteProxyRouteRequest{Id: "web"},
+		code:  http.StatusOK,
+	},
+	{
+		name: "create pool", verb: http.MethodPost, path: "/api/v1/proxy/pools",
+		body:  `{"pool":{"id":"pool-1","balancer":"round-robin"}}`,
+		scope: "proxy:write",
+		want:  &platformv1.CreateProxyPoolRequest{Pool: &platformv1.ProxyPool{Id: "pool-1", Balancer: "round-robin"}},
+		code:  http.StatusCreated,
+	},
+	{
+		name: "update pool", verb: http.MethodPut, path: "/api/v1/proxy/pools/pool-1",
+		body:  `{"pool":{"id":"pool-1","balancer":"least-conn"}}`,
+		scope: "proxy:write",
+		want:  &platformv1.UpdateProxyPoolRequest{Id: "pool-1", Pool: &platformv1.ProxyPool{Id: "pool-1", Balancer: "least-conn"}},
+		code:  http.StatusOK,
+	},
+	{
+		name: "delete pool", verb: http.MethodDelete, path: "/api/v1/proxy/pools/pool-1",
+		scope: "proxy:delete",
+		want:  &platformv1.DeleteProxyPoolRequest{Id: "pool-1"},
+		code:  http.StatusOK,
+	},
+	{
+		name: "reload", verb: http.MethodPost, path: "/api/v1/proxy/reload",
+		scope: "proxy:write",
+		want:  &platformv1.ReloadProxyConfigRequest{},
+		code:  http.StatusOK,
+	},
+}
+
+// TestProxyRouterServesEveryWriteOperation: each of the seven ProxyService
+// writes reaches its method with the decoded body and the URL id, and
+// answers its status with the protojson payload.
+func TestProxyRouterServesEveryWriteOperation(t *testing.T) {
+	for _, probe := range proxyWriteProbes {
+		t.Run(probe.name, func(t *testing.T) {
+			server := &recordingServer{}
+			rec := serveBody(mountRouter(server), probe.verb, probe.path, probe.body)
+			if rec.Code != probe.code {
+				t.Fatalf("code = %d, want %d, body %s", rec.Code, probe.code, rec.Body)
+			}
+			var body envelope
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode %s: %v", rec.Body, err)
+			}
+			if !body.Success {
+				t.Fatalf("envelope = %+v", body)
+			}
+			if server.calls != 1 || !proto.Equal(server.last, probe.want) {
+				t.Fatalf("service got %v (%d calls), want %v", server.last, server.calls, probe.want)
+			}
+			payload := strings.ReplaceAll(string(body.Payload), " ", "")
+			if !strings.Contains(payload, `"version":"8"`) {
+				t.Errorf("payload %s does not carry the version", payload)
+			}
+		})
+	}
+}
+
+// TestProxyRouterMapsWriteRefusals: a gRPC refusal from a write becomes its
+// HTTP status.
+func TestProxyRouterMapsWriteRefusals(t *testing.T) {
+	refusals := map[codes.Code]int{
+		codes.NotFound:           http.StatusNotFound,
+		codes.InvalidArgument:    http.StatusBadRequest,
+		codes.AlreadyExists:      http.StatusConflict,
+		codes.FailedPrecondition: http.StatusConflict,
+		codes.Unavailable:        http.StatusServiceUnavailable,
+	}
+	for code, want := range refusals {
+		for _, probe := range proxyWriteProbes {
+			server := &recordingServer{err: status.Error(code, "refused")}
+			rec := serveBody(mountRouter(server), probe.verb, probe.path, probe.body)
+			if rec.Code != want {
+				t.Errorf("%s refused with %s: code = %d, want %d", probe.name, code, rec.Code, want)
+			}
+		}
+	}
+}
+
+// TestProxyRouterRefusesBadWriteBodies: a create or update body that does
+// not decode answers 400 before the service is called.
+func TestProxyRouterRefusesBadWriteBodies(t *testing.T) {
 	writes := []struct{ verb, path string }{
 		{http.MethodPost, "/api/v1/proxy/routes"},
-		{http.MethodPut, "/api/v1/proxy/routes/x"},
-		{http.MethodDelete, "/api/v1/proxy/routes/x"},
+		{http.MethodPut, "/api/v1/proxy/routes/web"},
 		{http.MethodPost, "/api/v1/proxy/pools"},
-		{http.MethodPut, "/api/v1/proxy/pools/x"},
-		{http.MethodDelete, "/api/v1/proxy/pools/x"},
-		{http.MethodPost, "/api/v1/proxy/reload"},
+		{http.MethodPut, "/api/v1/proxy/pools/pool-1"},
 	}
 	for _, write := range writes {
 		server := &recordingServer{}
-		rec := serve(mountRouter(server), write.verb, write.path)
-		if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
-			t.Errorf("%s %s: code = %d, want 404 or 405", write.verb, write.path, rec.Code)
+		rec := serveBody(mountRouter(server), write.verb, write.path, `{not json`)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s %s: code = %d, want 400", write.verb, write.path, rec.Code)
 		}
 		if server.calls != 0 {
 			t.Errorf("%s %s: service saw %d calls, want none", write.verb, write.path, server.calls)
+		}
+	}
+}
+
+// TestProxyRouterRequiresEachWriteScope: each write passes with its own
+// scope (proxy:write, or proxy:delete for the deletes) and is refused 403
+// before the service is called under either other proxy scope.
+func TestProxyRouterRequiresEachWriteScope(t *testing.T) {
+	for _, probe := range proxyWriteProbes {
+		for _, granted := range []string{"proxy:read", "proxy:write", "proxy:delete"} {
+			server := &recordingServer{}
+			proxyRouter := newTestRouter(server)
+			proxyRouter.SetScopeAuthorizer(grantingAuthorizer{granted: granted})
+			router := mux.NewRouter()
+			proxyRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
+
+			rec := serveBody(router, probe.verb, probe.path, probe.body)
+			if granted == probe.scope {
+				if rec.Code != probe.code || server.calls != 1 {
+					t.Errorf("%s with %s: code = %d, calls = %d; want %d and one call",
+						probe.name, granted, rec.Code, server.calls, probe.code)
+				}
+				continue
+			}
+			if rec.Code != http.StatusForbidden || server.calls != 0 {
+				t.Errorf("%s with %s: code = %d, calls = %d; want 403 and no call",
+					probe.name, granted, rec.Code, server.calls)
+			}
 		}
 	}
 }
