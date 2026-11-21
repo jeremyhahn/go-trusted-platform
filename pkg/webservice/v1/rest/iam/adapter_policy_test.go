@@ -81,6 +81,38 @@ func TestQuicBaaSIAMAdapter_CreatePolicyRefusesConditions(t *testing.T) {
 	assert.Equal(t, 1, up.creates)
 }
 
+// TestQuicBaaSIAMAdapter_CreatePolicyRefusesUnknownEffect pins that a rule
+// effect other than allow or deny is refused before anything is created: the
+// pinned upstream persists the translated Rules only, so a `DENY` rule would
+// otherwise be stored as an allow rule.
+func TestQuicBaaSIAMAdapter_CreatePolicyRefusesUnknownEffect(t *testing.T) {
+	t.Parallel()
+	spec := func(effect string) string {
+		return "rules:\n  - name: r1\n    effect: \"" + effect + "\"\n    actions: [\"read\"]\n    resources: [\"*\"]\n"
+	}
+	for _, effect := range []string{"DENY", "Deny", "block", ""} {
+		t.Run("bad/"+effect, func(t *testing.T) {
+			t.Parallel()
+			adapter, up := newRecordingAdapter()
+			_, err := adapter.CreatePolicy(context.Background(), "tenant-a", &CreatePolicyRequest{Name: "p", SpecYAML: spec(effect)})
+			require.Error(t, err)
+			assert.ErrorAs(t, err, new(ErrInvalidRequestBody))
+			assert.Contains(t, err.Error(), `"r1"`)
+			assert.Contains(t, err.Error(), `"`+effect+`"`)
+			assert.Zero(t, up.creates, "no create may reach the upstream")
+		})
+	}
+	for _, effect := range []string{"deny", "allow"} {
+		t.Run("ok/"+effect, func(t *testing.T) {
+			t.Parallel()
+			adapter, up := newRecordingAdapter()
+			_, err := adapter.CreatePolicy(context.Background(), "tenant-a", &CreatePolicyRequest{Name: "p", SpecYAML: spec(effect)})
+			require.NoError(t, err)
+			assert.Equal(t, 1, up.creates)
+		})
+	}
+}
+
 // Paging is done over the whole collection: the upstream supplies no cursor
 // and no total, so the adapter asks for everything and slices it.
 func TestQuicBaaSIAMAdapter_ListPoliciesWithoutCursor(t *testing.T) {
