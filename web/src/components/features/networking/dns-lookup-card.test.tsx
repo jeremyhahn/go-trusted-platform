@@ -66,7 +66,7 @@ describe("DNSLookupCard", () => {
     lookup.resolve.mockResolvedValue({
       records: [
         { type: "RECORD_TYPE_A", a: { name: "www.example.com.", value: "10.0.0.5" } },
-        { type: "RECORD_TYPE_MX", mx: { name: "example.com.", value: "mail.example.com." } },
+        { type: "RECORD_TYPE_MX", mx: { name: "example.com.", value: "mail.example.com.", priority: 10 } },
       ],
       authoritative: true,
     });
@@ -80,9 +80,47 @@ describe("DNSLookupCard", () => {
     expect(lookup.resolve).toHaveBeenCalledWith({ fqdn: "www.example.com.", type: "MX" });
     expect(rows.map((r) => r.textContent)).toEqual([
       "A www.example.com. 10.0.0.5",
-      "MX example.com. mail.example.com.",
+      "MX example.com. 10 mail.example.com.",
     ]);
     expect(screen.getByTestId("dns-resolve-authoritative").textContent).toBe("Authoritative");
+  });
+
+  it("formats SRV, TLSA, MX and CAA answers from their own fields", async () => {
+    lookup.resolve.mockResolvedValue({
+      authoritative: true,
+      records: [
+        {
+          type: "RECORD_TYPE_SRV",
+          srv: { name: "_sip._tcp.example.com.", target: "sip.example.com.", port: 5060, priority: 10, weight: 0, ttl: 300 },
+        },
+        {
+          type: "RECORD_TYPE_TLSA",
+          tlsa: {
+            name: "_443._tcp.www.example.com.",
+            usage: 3,
+            selector: 1,
+            matchingType: 1,
+            data: "8d02536c887482bc",
+            ttl: 300,
+          },
+        },
+        { type: "RECORD_TYPE_MX", mx: { name: "example.com.", value: "mail.example.com.", priority: 0, ttl: 300 } },
+        { type: "RECORD_TYPE_CAA", caa: { name: "example.com.", flags: 0, tag: "issue", value: "ca.example.net", ttl: 300 } },
+      ],
+    });
+    render(<DNSLookupCard />);
+
+    fireEvent.change(input("Name"), { target: { value: "example.com." } });
+    fireEvent.change(input("Type"), { target: { value: "SRV" } });
+    fireEvent.click(button("Resolve"));
+
+    const rows = await screen.findAllByTestId("dns-resolve-record");
+    expect(rows.map((r) => r.textContent)).toEqual([
+      "SRV _sip._tcp.example.com. 10 0 5060 sip.example.com.",
+      "TLSA _443._tcp.www.example.com. 3 1 1 8d02536c887482bc",
+      "MX example.com. 0 mail.example.com.",
+      'CAA example.com. 0 issue "ca.example.net"',
+    ]);
   });
 
   it("shows No records for a non-authoritative empty answer", async () => {
