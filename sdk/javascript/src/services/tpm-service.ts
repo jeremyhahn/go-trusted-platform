@@ -471,10 +471,17 @@ export class TPMService extends BaseService {
   /**
    * Get random bytes from TPM
    *
-   * @param request - Number of bytes
+   * The server caps a draw at 1024 bytes and reads 0 as 32, so the SDK
+   * refuses a count outside 1-1024 and sends nothing.
+   *
+   * @param request - Number of bytes, an integer from 1 to 1024
    * @returns Random bytes
+   * @throws RangeError when numBytes is not an integer from 1 to 1024
    */
   async getRandom(request: GetRandomRequest): Promise<ApiResponse<GetRandomResponse>> {
+    if (!Number.isInteger(request.numBytes) || request.numBytes < 1 || request.numBytes > 1024) {
+      throw new RangeError(`numBytes must be an integer from 1 to 1024, got ${request.numBytes}`);
+    }
     return this.client.post<GetRandomResponse>(this.buildUrl('/random'), request);
   }
 
