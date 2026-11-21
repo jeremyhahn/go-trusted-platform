@@ -86,6 +86,7 @@ function stat(title: string): string {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('DeviceProfilesPage registered total (#2048)', () => {
@@ -111,17 +112,80 @@ describe('DeviceProfilesPage registered total (#2048)', () => {
     expect(stat('Total Profiles')).toBe('40');
   });
 
-  it('Refresh re-reads the count', async () => {
-    const sent = stubControlPlane(routes(1, 1, ok({ count: 1 })));
+  const countPath = '/api/v1/device/profiles/count';
+  const countGets = (sent: { method: string; path: string }[]) =>
+    sent.filter((s) => s.method === 'GET' && s.path === countPath);
+  const lineText = () => screen.getByTestId('profile-count').textContent ?? '';
+
+  it('Refresh shows the new count on the line and the card', async () => {
+    const r: Record<string, ReturnType<typeof ok>> = routes(1, 1, ok({ count: 1 }));
+    stubControlPlane(r);
     render(withControlPlane(<DeviceProfilesPage />));
 
-    await screen.findByTestId('profile-count');
+    await waitFor(() => expect(lineText()).toBe('Showing 1 of 1 registered profiles'));
+    r['GET /api/v1/device/profiles/count'] = ok({ count: 5 });
     fireEvent.click(screen.getByText('Refresh').closest('button')!);
     await waitFor(() =>
-      expect(
-        sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/device/profiles/count')
-      ).toHaveLength(2)
+      expect(lineText()).toBe('Showing 1 of 5 registered profiles (only the first 1 are loaded)')
     );
+    expect(stat('Total Profiles')).toBe('5');
+  });
+
+  it('Duplicate (create) re-reads the count', async () => {
+    const r: Record<string, ReturnType<typeof ok>> = routes(1, 1, ok({ count: 1 }));
+    const sent = stubControlPlane(r);
+    render(withControlPlane(<DeviceProfilesPage />));
+
+    await waitFor(() => expect(lineText()).toContain('of 1 registered'));
+    r['POST /api/v1/device/profiles'] = ok({ profile: { id: '2', name: 'profile-1 (Copy)', role: 'server' } });
+    r['GET /api/v1/device/profiles/count'] = ok({ count: 2 });
+    fireEvent.click(screen.getByText('Duplicate'));
+    await waitFor(() => expect(sent.some((s) => s.method === 'POST' && s.path === '/api/v1/device/profiles')).toBe(true));
+    await waitFor(() => expect(stat('Total Profiles')).toBe('2'));
+    expect(lineText()).toContain('of 2 registered');
+  });
+
+  it('Delete re-reads the count', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const r: Record<string, ReturnType<typeof ok>> = routes(1, 1, ok({ count: 1 }));
+    stubControlPlane(r);
+    render(withControlPlane(<DeviceProfilesPage />));
+
+    await waitFor(() => expect(lineText()).toContain('of 1 registered'));
+    r['DELETE /api/v1/device/profiles/1'] = ok({});
+    r['GET /api/v1/device/profiles/count'] = ok({ count: 0 });
+    fireEvent.click(screen.getByText('Delete'));
+    await waitFor(() => expect(lineText()).toContain('of 0 registered'));
+    expect(stat('Total Profiles')).toBe('0');
+  });
+
+  it('a refused create leaves the count unchanged', async () => {
+    const r: Record<string, ReturnType<typeof ok>> = routes(1, 1, ok({ count: 1 }));
+    const sent = stubControlPlane(r);
+    render(withControlPlane(<DeviceProfilesPage />));
+
+    await waitFor(() => expect(lineText()).toContain('of 1 registered'));
+    r['POST /api/v1/device/profiles'] = refused(500, 'boom');
+    r['GET /api/v1/device/profiles/count'] = ok({ count: 9 });
+    fireEvent.click(screen.getByText('Duplicate'));
+    await waitFor(() => expect(sent.some((s) => s.method === 'POST' && s.path === '/api/v1/device/profiles')).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(countGets(sent)).toHaveLength(1);
+    expect(lineText()).toContain('of 1 registered');
+    expect(stat('Total Profiles')).toBe('1');
+  });
+
+  it('a refused refresh after a good count hides the line', async () => {
+    const r: Record<string, ReturnType<typeof ok>> = routes(1, 1, ok({ count: 1 }));
+    const sent = stubControlPlane(r);
+    render(withControlPlane(<DeviceProfilesPage />));
+
+    await waitFor(() => expect(lineText()).toContain('of 1 registered'));
+    r['GET /api/v1/device/profiles/count'] = refused(403, 'forbidden');
+    fireEvent.click(screen.getByText('Refresh').closest('button')!);
+    await waitFor(() => expect(countGets(sent)).toHaveLength(2));
+    await waitFor(() => expect(screen.queryByTestId('profile-count')).toBeNull());
+    expect(stat('Total Profiles')).toBe('1');
   });
 
   it('hides the total and keeps the list when the count is refused', async () => {
