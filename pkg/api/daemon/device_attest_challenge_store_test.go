@@ -16,6 +16,8 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -30,6 +32,10 @@ import (
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
+
+// challengeObjectKey mirrors the pinned object catalog's key rule
+// (namespace:path): the mocks refuse every key the real backend refuses.
+var challengeObjectKey = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9_-]*:[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$")
 
 // challengeObjectStore is an in-memory object store shared by several
 // DeviceGRPCService instances, standing in for config.App.Storage.
@@ -50,6 +56,9 @@ func (s *challengeObjectStore) PutObject(_ context.Context, req *objectstorage.P
 	defer s.mu.Unlock()
 	if s.putErr != nil {
 		return nil, s.putErr
+	}
+	if !challengeObjectKey.MatchString(req.Key) {
+		return nil, fmt.Errorf("invalid key %q: missing separator ':'", req.Key)
 	}
 	s.objects[req.Key] = append([]byte(nil), req.Value...)
 	return &objectstorage.PutObjectResponse{}, nil
@@ -111,7 +120,7 @@ func TestDeviceAttestChallengeStore_SharedObjectStorage(t *testing.T) {
 		ch := issueChallenge(t, ctx, a, itoa(f.device.ID))
 		keys := store.keys()
 		require.Len(t, keys, 1)
-		assert.True(t, strings.HasPrefix(keys[0], "attest-challenges/"), keys[0])
+		assert.True(t, strings.HasPrefix(keys[0], "attest-challenges:"), keys[0])
 		assert.True(t, strings.HasSuffix(keys[0], ".json"), keys[0])
 
 		resp, err := attest(ctx, f, b, ch)

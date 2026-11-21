@@ -49,6 +49,9 @@ type memChallengeObjects struct {
 func (m *memChallengeObjects) PutObject(_ context.Context, req *objectstorage.PutObjectRequest) (*objectstorage.PutObjectResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if !challengeObjectKey.MatchString(req.Key) {
+		return nil, fmt.Errorf("invalid key %q: missing separator ':'", req.Key)
+	}
 	m.objs[req.Key] = append([]byte(nil), req.Value...)
 	return &objectstorage.PutObjectResponse{Key: req.Key}, nil
 }
@@ -139,6 +142,7 @@ func (m *memChallengeObjects) has(key string) bool {
 
 func (m *memChallengeObjects) putRecord(t *testing.T, key string, expiresAt time.Time) {
 	t.Helper()
+	require.Regexp(t, challengeObjectKey, key)
 	raw, err := json.Marshal(attestChallengeRecord{DeviceID: "d", ExpiresAt: expiresAt})
 	require.NoError(t, err)
 	m.mu.Lock()
@@ -223,14 +227,14 @@ func TestAttestChallengeStore_Sweep(t *testing.T) {
 
 	t.Run("other keys are left alone", func(t *testing.T) {
 		svc, store, clock, _ := sweepFixture(t)
-		store.putRecord(t, "other/x.json", clock.Add(-time.Hour))
-		store.putRecord(t, "attest-challenges-extra/x.json", clock.Add(-time.Hour))
+		store.putRecord(t, "other:x.json", clock.Add(-time.Hour))
+		store.putRecord(t, "attest-challenges-extra:x.json", clock.Add(-time.Hour))
 		store.putRecord(t, attestChallengeKey("gone"), clock.Add(-time.Hour))
 		removed, err := svc.challenges.sweep(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, 1, removed)
-		assert.True(t, store.has("other/x.json"))
-		assert.True(t, store.has("attest-challenges-extra/x.json"))
+		assert.True(t, store.has("other:x.json"))
+		assert.True(t, store.has("attest-challenges-extra:x.json"))
 	})
 
 	t.Run("an undecodable record is kept", func(t *testing.T) {
