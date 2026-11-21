@@ -84,6 +84,7 @@ export {
   DeviceService,
   DNSService,
   NTPService,
+  BMCService,
   GatewayService,
   IAMService,
   IDevIDService,
@@ -147,6 +148,13 @@ export type {
   ListNTPSourcesResponse,
   StepNTPClockResponse,
 } from './services/ntp-service.js';
+
+export type {
+  BMCPrivilegeName,
+  BMCUser,
+  CreateBMCUserRequest,
+  BMCStatusOK,
+} from './services/bmc-service.js';
 
 // =============================================================================
 // Error Exports
