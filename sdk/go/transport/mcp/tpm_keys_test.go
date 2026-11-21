@@ -102,19 +102,35 @@ func tpmKeysCheckStatus(t *testing.T, st *platformv1.Status, message string) {
 
 func TestInvoke_TPMProvision_SendsTheOwnerAuth(t *testing.T) {
 	const tool, method = "platform_tpm_provision", platformv1.TPMService_Provision_FullMethodName
+	// The test server is plaintext http://, so the call goes without a
+	// password; the owner_password wire argument is checked on the builder.
 	reply := &platformv1.TPMProvisionResponse{}
 	calls, err := tpmKeysInvoke(t, tool,
 		map[string]interface{}{"success": true, "message": "TPM provisioned successfully"},
-		method, &platformv1.TPMProvisionRequest{OwnerPassword: "owner", CreateEk: true}, reply)
-	tpmKeysExpectOneCall(t, calls, err, tool, map[string]interface{}{"owner_password": "owner"})
+		method, &platformv1.TPMProvisionRequest{CreateEk: true, CreateSrk: true}, reply)
+	tpmKeysExpectOneCall(t, calls, err, tool, map[string]interface{}{})
 	tpmKeysCheckStatus(t, reply.GetStatus(), "TPM provisioned successfully")
 
+	got, err := buildTPMKeysProvisionArgs(&platformv1.TPMProvisionRequest{OwnerPassword: "owner", CreateEk: true, CreateSrk: true})
+	if err != nil {
+		t.Fatalf("buildTPMKeysProvisionArgs: %v", err)
+	}
+	if want := map[string]interface{}{"owner_password": "owner"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("provision args = %v, want %v", got, want)
+	}
+
 	tpmKeysExpectRefused(t, "endorsement password", tool, method,
-		&platformv1.TPMProvisionRequest{EndorsementPassword: "e"}, &platformv1.TPMProvisionResponse{})
+		&platformv1.TPMProvisionRequest{CreateEk: true, CreateSrk: true, EndorsementPassword: "e"}, &platformv1.TPMProvisionResponse{})
 	tpmKeysExpectRefused(t, "ek attributes", tool, method,
-		&platformv1.TPMProvisionRequest{EkAttributes: &platformv1.KeyAttributes{}}, &platformv1.TPMProvisionResponse{})
+		&platformv1.TPMProvisionRequest{CreateEk: true, CreateSrk: true, EkAttributes: &platformv1.KeyAttributes{}}, &platformv1.TPMProvisionResponse{})
 	tpmKeysExpectRefused(t, "create ak", tool, method,
-		&platformv1.TPMProvisionRequest{CreateAk: true}, &platformv1.TPMProvisionResponse{})
+		&platformv1.TPMProvisionRequest{CreateEk: true, CreateSrk: true, CreateAk: true}, &platformv1.TPMProvisionResponse{})
+	tpmKeysExpectRefused(t, "no srk", tool, method,
+		&platformv1.TPMProvisionRequest{CreateEk: true}, &platformv1.TPMProvisionResponse{})
+	tpmKeysExpectRefused(t, "no ek", tool, method,
+		&platformv1.TPMProvisionRequest{CreateSrk: true}, &platformv1.TPMProvisionResponse{})
+	tpmKeysExpectRefused(t, "neither key", tool, method,
+		&platformv1.TPMProvisionRequest{}, &platformv1.TPMProvisionResponse{})
 }
 
 func TestInvoke_TPMClear_NeedsConfirm(t *testing.T) {
@@ -125,9 +141,17 @@ func TestInvoke_TPMClear_NeedsConfirm(t *testing.T) {
 	reply := &platformv1.TPMClearResponse{}
 	calls, err := tpmKeysInvoke(t, tool,
 		map[string]interface{}{"success": true, "message": "TPM cleared"},
-		method, &platformv1.TPMClearRequest{Confirm: true, OwnerPassword: "owner"}, reply)
-	tpmKeysExpectOneCall(t, calls, err, tool, map[string]interface{}{"owner_password": "owner"})
+		method, &platformv1.TPMClearRequest{Confirm: true}, reply)
+	tpmKeysExpectOneCall(t, calls, err, tool, map[string]interface{}{})
 	tpmKeysCheckStatus(t, reply.GetStatus(), "TPM cleared")
+
+	got, err := buildTPMKeysClearArgs(&platformv1.TPMClearRequest{Confirm: true, OwnerPassword: "owner"})
+	if err != nil {
+		t.Fatalf("buildTPMKeysClearArgs: %v", err)
+	}
+	if want := map[string]interface{}{"owner_password": "owner"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("clear args = %v, want %v", got, want)
+	}
 }
 
 func TestInvoke_TPMCreateEK_CarriesTheHandle(t *testing.T) {
@@ -286,4 +310,42 @@ func TestTPMKeysDecoders_RejectWrongTypes(t *testing.T) {
 			t.Errorf("%s reply: got %v, want ErrUnexpectedReplyType", name, err)
 		}
 	}
+}
+
+// TestInvoke_TPMKeys_RefuseAPasswordOverPlaintext: the test server is
+// plaintext http://, so a request carrying an owner password is refused
+// with FailedPrecondition and no call goes out.
+func TestInvoke_TPMKeys_RefuseAPasswordOverPlaintext(t *testing.T) {
+	cases := []struct {
+		name, tool, method string
+		in, reply          proto.Message
+	}{
+		{"provision", "platform_tpm_provision", platformv1.TPMService_Provision_FullMethodName,
+			&platformv1.TPMProvisionRequest{OwnerPassword: "owner", CreateEk: true, CreateSrk: true}, &platformv1.TPMProvisionResponse{}},
+		{"clear", "platform_tpm_clear", platformv1.TPMService_Clear_FullMethodName,
+			&platformv1.TPMClearRequest{OwnerPassword: "owner", Confirm: true}, &platformv1.TPMClearResponse{}},
+	}
+	for _, tc := range cases {
+		calls, err := tpmKeysInvoke(t, tc.tool, map[string]interface{}{"success": true}, tc.method, tc.in, tc.reply)
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Errorf("%s: Invoke code = %v (%v), want FailedPrecondition", tc.name, status.Code(err), err)
+		}
+		if len(calls) != 0 {
+			t.Errorf("%s: calls = %v, want none", tc.name, calls)
+		}
+	}
+}
+
+// TestInvoke_TPMKeys_NoPasswordGoesOverPlaintext: the same requests without
+// a password still reach the plaintext test server.
+func TestInvoke_TPMKeys_NoPasswordGoesOverPlaintext(t *testing.T) {
+	calls, err := tpmKeysInvoke(t, "platform_tpm_provision", map[string]interface{}{"success": true},
+		platformv1.TPMService_Provision_FullMethodName,
+		&platformv1.TPMProvisionRequest{CreateEk: true, CreateSrk: true}, &platformv1.TPMProvisionResponse{})
+	tpmKeysExpectOneCall(t, calls, err, "platform_tpm_provision", map[string]interface{}{})
+
+	calls, err = tpmKeysInvoke(t, "platform_tpm_clear", map[string]interface{}{"success": true},
+		platformv1.TPMService_Clear_FullMethodName,
+		&platformv1.TPMClearRequest{Confirm: true}, &platformv1.TPMClearResponse{})
+	tpmKeysExpectOneCall(t, calls, err, "platform_tpm_clear", map[string]interface{}{})
 }
