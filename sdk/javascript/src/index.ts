@@ -163,6 +163,13 @@ export type {
   GetProxyConfigResponse,
   GetProxyStatusResponse,
   GetProxyZoneMatrixResponse,
+  CreateProxyRouteResponse,
+  UpdateProxyRouteResponse,
+  DeleteProxyRouteResponse,
+  CreateProxyPoolResponse,
+  UpdateProxyPoolResponse,
+  DeleteProxyPoolResponse,
+  ReloadProxyConfigResponse,
 } from './services/proxy-service.js';
 
 // =============================================================================

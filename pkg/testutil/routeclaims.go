@@ -45,7 +45,6 @@ var DaemonOnlyPrefixes = map[string]string{
 	"fido2":    "RESTServer.SetFIDO2Service (pkg/api/daemon/fido2_rest.go)",
 	"luks":     "RESTServer.SetLUKSService (pkg/api/daemon/luks_rest.go)",
 	"piv":      "RESTServer.SetPIVService (pkg/api/daemon/piv_rest.go)",
-	"proxy":    "RESTServer.SetProxyService (pkg/api/daemon/proxy_rest.go)",
 	"services": "RESTServer.registerRoutes (pkg/api/daemon/rest_service.go)",
 	"version":  "RESTServer.registerRoutes, handleVersion (pkg/api/daemon/rest_service.go)",
 

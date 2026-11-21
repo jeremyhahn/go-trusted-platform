@@ -12,9 +12,10 @@
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
 // Package proxy serves the ProxyService on the webservice (/api/v1/proxy),
-// the REST surface the web SDK calls (#2061). It answers from the same
-// in-process ProxyServiceServer the gRPC, daemon REST, QUIC and MCP
-// transports use, on the paths the daemon REST serves.
+// the REST surface the web SDK calls (#2061): all fourteen operations, the
+// seven reads and the seven writes. It answers from the same in-process
+// ProxyServiceServer the gRPC, daemon REST, QUIC and MCP transports use, on
+// the paths and with the body shapes the daemon REST serves.
 package proxy
 
 import (
@@ -35,11 +36,16 @@ import (
 // basePath is where the proxy routes are mounted under /api/v1.
 const basePath = "/proxy"
 
-// scopeRead is the IAM scope every proxy read needs, as on gRPC
-// (pkg/api/iam/method_permissions.go).
-const scopeRead = "proxy:read"
+// The IAM scopes the proxy routes need, as on gRPC
+// (pkg/api/grpc/method_permissions.go): reads need proxy:read; creates,
+// updates and reload need proxy:write; deletes need proxy:delete.
+const (
+	scopeRead   = "proxy:read"
+	scopeWrite  = "proxy:write"
+	scopeDelete = "proxy:delete"
+)
 
-// Router serves the ProxyService reads over REST.
+// Router serves every ProxyService operation over REST.
 type Router struct {
 	logger          *logging.Logger
 	server          platformv1.ProxyServiceServer
@@ -64,26 +70,34 @@ func (r *Router) SetScopeAuthorizer(authorizer middleware.ScopeAuthorizer) {
 	r.scopeAuthorizer = authorizer
 }
 
-// RegisterRoutes mounts the proxy read routes on parent.
+// RegisterRoutes mounts the proxy routes on parent. Route and pool ids may
+// contain slashes: clients send them percent-encoded (a%2Fb), the subrouter
+// matches the encoded path and the handlers decode the id with pathID.
 func (r *Router) RegisterRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix(basePath).Subrouter()
 	// Route and pool IDs may contain slashes (the SDK sends a%2Fb): match on
 	// the encoded path and decode {id} in the handler, as the switch router does.
 	sr.UseEncodedPath()
 	sr.Handle("/routes", r.requireScope(scopeRead, r.listRoutes)).Methods(http.MethodGet)
+	sr.Handle("/routes", r.requireScope(scopeWrite, r.createRoute)).Methods(http.MethodPost)
 	sr.Handle("/routes/{id}", r.requireScope(scopeRead, r.getRoute)).Methods(http.MethodGet)
+	sr.Handle("/routes/{id}", r.requireScope(scopeWrite, r.updateRoute)).Methods(http.MethodPut)
+	sr.Handle("/routes/{id}", r.requireScope(scopeDelete, r.deleteRoute)).Methods(http.MethodDelete)
 	sr.Handle("/pools", r.requireScope(scopeRead, r.listPools)).Methods(http.MethodGet)
+	sr.Handle("/pools", r.requireScope(scopeWrite, r.createPool)).Methods(http.MethodPost)
 	sr.Handle("/pools/{id}", r.requireScope(scopeRead, r.getPool)).Methods(http.MethodGet)
+	sr.Handle("/pools/{id}", r.requireScope(scopeWrite, r.updatePool)).Methods(http.MethodPut)
+	sr.Handle("/pools/{id}", r.requireScope(scopeDelete, r.deletePool)).Methods(http.MethodDelete)
 	sr.Handle("/config", r.requireScope(scopeRead, r.getConfig)).Methods(http.MethodGet)
 	sr.Handle("/status", r.requireScope(scopeRead, r.getStatus)).Methods(http.MethodGet)
+	sr.Handle("/reload", r.requireScope(scopeWrite, r.reloadConfig)).Methods(http.MethodPost)
 	sr.Handle("/zone-matrix", r.requireScope(scopeRead, r.getZoneMatrix)).Methods(http.MethodGet)
-	// The writes (route and pool create/update/delete, reload) come in the
-	// next slice of #2061, behind proxy:write and proxy:delete.
 }
 
 // requireScope wraps handler in the scope check. Without an authorizer (the
 // legacy JWT handler) the route fails closed with 403, since a role-only
 // session carries no scopes (#1990, #2157 Codex), as scopeRouteGuard does.
+// Each write route names its own scope.
 func (r *Router) requireScope(scope string, handler http.HandlerFunc) http.Handler {
 	if r.scopeAuthorizer == nil {
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -171,6 +185,125 @@ func (r *Router) getZoneMatrix(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	resp, err := r.server.GetZoneMatrix(req.Context(), &platformv1.GetProxyZoneMatrixRequest{})
+	r.write(w, req, resp, err)
+}
+
+// decode reads the request body into msg; a body that does not decode is
+// answered 400 and decode reports false.
+func (r *Router) decode(w http.ResponseWriter, req *http.Request, msg proto.Message) bool {
+	if err := protorest.DecodeRequest(req, msg); err != nil {
+		r.respWriter.Error400(w, req, err)
+		return false
+	}
+	return true
+}
+
+// writeCreated answers resp with 201, or the HTTP status of the service
+// refusal.
+func (r *Router) writeCreated(w http.ResponseWriter, req *http.Request, resp proto.Message, err error) {
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccessStatus(w, req, r.respWriter, http.StatusCreated, resp)
+}
+
+// createRoute decodes {"route":{...}}, as the daemon REST does.
+func (r *Router) createRoute(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	in := &platformv1.CreateProxyRouteRequest{}
+	if !r.decode(w, req, in) {
+		return
+	}
+	resp, err := r.server.CreateRoute(req.Context(), in)
+	r.writeCreated(w, req, resp, err)
+}
+
+// updateRoute decodes {"route":{...}}; the URL id is the request id.
+func (r *Router) updateRoute(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	in := &platformv1.UpdateProxyRouteRequest{}
+	if !r.decode(w, req, in) {
+		return
+	}
+	id, err := pathID(req)
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	in.Id = id
+	resp, err := r.server.UpdateRoute(req.Context(), in)
+	r.write(w, req, resp, err)
+}
+
+func (r *Router) deleteRoute(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	id, err := pathID(req)
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	resp, err := r.server.DeleteRoute(req.Context(), &platformv1.DeleteProxyRouteRequest{Id: id})
+	r.write(w, req, resp, err)
+}
+
+// createPool decodes {"pool":{...}}, as the daemon REST does.
+func (r *Router) createPool(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	in := &platformv1.CreateProxyPoolRequest{}
+	if !r.decode(w, req, in) {
+		return
+	}
+	resp, err := r.server.CreatePool(req.Context(), in)
+	r.writeCreated(w, req, resp, err)
+}
+
+// updatePool decodes {"pool":{...}}; the URL id is the request id.
+func (r *Router) updatePool(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	in := &platformv1.UpdateProxyPoolRequest{}
+	if !r.decode(w, req, in) {
+		return
+	}
+	id, err := pathID(req)
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	in.Id = id
+	resp, err := r.server.UpdatePool(req.Context(), in)
+	r.write(w, req, resp, err)
+}
+
+func (r *Router) deletePool(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	id, err := pathID(req)
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	resp, err := r.server.DeletePool(req.Context(), &platformv1.DeleteProxyPoolRequest{Id: id})
+	r.write(w, req, resp, err)
+}
+
+// reloadConfig ignores the request body.
+func (r *Router) reloadConfig(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	resp, err := r.server.ReloadProxyConfig(req.Context(), &platformv1.ReloadProxyConfigRequest{})
 	r.write(w, req, resp, err)
 }
 
