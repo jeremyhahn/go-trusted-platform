@@ -108,21 +108,32 @@ export class PlatformService extends BaseService {
   // =========================================================================
 
   /**
-   * Get platform configuration
+   * Get the effective platform configuration (`GET /api/v1/platform/config`)
+   *
+   * Sends `redact=false` when `includeSensitive` is true and
+   * `section=<name>` when a section is named; neither is sent otherwise.
    *
    * @param request - Config request options
-   * @returns Platform configuration
+   * @returns The config tree, its sources and the redaction state
    */
   async getConfig(request?: GetConfigRequest): Promise<ApiResponse<GetConfigResponse>> {
-    return this.client.get<GetConfigResponse>(this.buildUrl('/config', {
-      filters: { includeSensitive: request?.includeSensitive?.toString() },
-    }));
+    const params = new URLSearchParams();
+    if (request?.includeSensitive === true) {
+      params.set('redact', 'false');
+    }
+    if (typeof request?.section === 'string' && request.section !== '') {
+      params.set('section', request.section);
+    }
+    const query = params.toString();
+    const url = this.buildUrl('/config');
+    return this.client.get<GetConfigResponse>(query ? `${url}?${query}` : url);
   }
 
   /**
    * Reload platform configuration from disk
    *
-   * @returns Reload result
+   * @returns `reloaded`, the `sections` the reload applied and the
+   *   `pre_reload_snapshot` id taken before it
    */
   async reloadConfig(): Promise<ApiResponse<ReloadConfigResponse>> {
     return this.client.post<ReloadConfigResponse>(this.buildUrl('/config/reload'), {});
