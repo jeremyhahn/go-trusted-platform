@@ -541,12 +541,12 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `PXEService.GetDevice` | - | - | - | - | missing |
 | `PXEService.GetDeviceByMAC` | - | - | - | - | missing |
 | `PXEService.ListDevices` | - | `(dashboard)/networking/pxe/page.tsx` | - | `networking.spec.ts` | covered |
-| `PXEService.RemoveDevice` | - | `(dashboard)/networking/pxe/page.tsx` (read-only) | - | - | partial |
+| `PXEService.RemoveDevice` | `DELETE /devices/{id}` | `(dashboard)/networking/pxe/page.tsx` | - | - | partial |
 | `PXEService.UpdateState` | - | - | - | - | missing |
 | `PXEService.SetDeviceEnrolled` | - | - | - | - | missing |
-| `PXEService.Authorize` | - | - | - | - | missing |
-| `PXEService.Quarantine` | - | - | - | - | missing |
-| `PXEService.Retry` | - | - | - | - | missing |
+| `PXEService.Authorize` | `POST /devices/{id}/authorize` | `(dashboard)/networking/pxe/page.tsx` | - | - | partial |
+| `PXEService.Quarantine` | `POST /devices/{id}/quarantine` | `(dashboard)/networking/pxe/page.tsx` | - | - | partial |
+| `PXEService.Retry` | `POST /devices/{id}/retry` | `(dashboard)/networking/pxe/page.tsx` | - | - | partial |
 | `PXEService.GetEvents` | - | - | - | - | missing |
 | `PXEService.GetStatus` | - | `(dashboard)/networking/pxe/page.tsx` | - | `networking.spec.ts` | covered |
 | `PXEService.StartService` | - | - | - | - | missing |
