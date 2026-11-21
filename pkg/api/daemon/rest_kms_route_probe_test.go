@@ -48,3 +48,46 @@ func TestDaemonREST_KMSRoutesReachTheirHandlers(t *testing.T) {
 		})
 	}
 }
+
+// TestDaemonREST_KMSRoutesNeedTheirCatalogScope pins Codex round 2 P0 on
+// #2151: the webservice KMS router serves system secrets and DEKs, so it runs
+// behind the catalog scope guard. Without a credential the routes answer
+// 401, with a token that lacks the route's scope 403, never the handler.
+func TestDaemonREST_KMSRoutesNeedTheirCatalogScope(t *testing.T) {
+	calls := []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/kms/secrets"},
+		{http.MethodPost, "/api/v1/kms/deks"},
+	}
+	cases := []struct {
+		name   string
+		guard  *restapi.ScopeGuard
+		bearer bool
+		want   int
+	}{
+		{"no credential", restapi.NewScopeGuard(nil, nil, nil), false, http.StatusUnauthorized},
+		{"token without the scope", restapi.NewScopeGuard(scopedTokenValidator{scopes: []string{"ca:read"}}, nil, nil), true, http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		s, _ := daemonRouteTable(t, tc.guard)
+		for _, c := range calls {
+			t.Run(tc.name+" "+c.method+" "+c.path, func(t *testing.T) {
+				req := httptest.NewRequest(c.method, c.path, strings.NewReader("{}"))
+				if tc.bearer {
+					req.Header.Set("Authorization", "Bearer t")
+				}
+				w := httptest.NewRecorder()
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							t.Fatalf("%s %s reached a handler: %v", c.method, c.path, r)
+						}
+					}()
+					s.Router().ServeHTTP(w, req)
+				}()
+				if w.Code != tc.want {
+					t.Fatalf("%s %s = %d %q, want %d", c.method, c.path, w.Code, w.Body.String(), tc.want)
+				}
+			})
+		}
+	}
+}
