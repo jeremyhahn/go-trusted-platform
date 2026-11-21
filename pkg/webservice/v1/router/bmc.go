@@ -110,8 +110,13 @@ func (r *BMCRouter) powerActionScope(handler http.HandlerFunc) http.Handler {
 			buf = read
 			req.Body = io.NopCloser(bytes.NewReader(buf))
 		}
+		// Read the action exactly as the handler does: one Decode of the
+		// first JSON object, trailing data ignored. json.Unmarshal would
+		// reject `{"action":"on"}{}` and send a power-on to the power gate.
+		// A body the handler cannot decode fails closed to the write gate.
 		var action bmc.PowerActionRequest
-		if json.Unmarshal(buf, &action) == nil && action.Action == "on" {
+		err := json.NewDecoder(bytes.NewReader(buf)).Decode(&action)
+		if err != nil || action.Action == "on" {
 			writeGate.ServeHTTP(w, req)
 			return
 		}
