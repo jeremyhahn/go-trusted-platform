@@ -823,3 +823,74 @@ export interface GetFlowStatsResponse {
   /** Statistics */
   stats: FlowStats;
 }
+
+// =============================================================================
+// Network Zone Types
+// =============================================================================
+//
+// The webservice serves network zones on the REST zone shape under
+// /api/v1/sdn/zones (pkg/webservice/v1/rest/sdn/zones.go): snake_case JSON
+// named by the Go json tags, not protojson. Optional fields are the tags
+// marked `omitempty`.
+
+/** One egress path of a zone: traffic may flow to `zone`, limited to `services` (empty: all). */
+export interface NetworkZonePath {
+  zone: string;
+  services?: string[];
+}
+
+/** The audited justification a privileged zone carries. */
+export interface NetworkZonePrivilegedAccess {
+  reason: string;
+  approved_by: string;
+}
+
+/** The create and update body of a zone; on update the URL name wins. */
+export interface NetworkZoneSpec {
+  name?: string;
+  offset?: number;
+  port_classes?: string[];
+  internet_ingress?: boolean;
+  isolate_from?: string[];
+  allow_to?: NetworkZonePath[];
+  services?: string[];
+  isolate?: boolean;
+  oob?: boolean;
+  lifecycle_role?: string;
+  privileged_access?: NetworkZonePrivilegedAccess;
+}
+
+/** The numbering the gateway derived for a zone. */
+export interface NetworkZoneNumbering {
+  vlan: number;
+  subnet4: string;
+  subnet6?: string;
+  gateway: string;
+}
+
+/** A stored zone. */
+export interface NetworkZone extends NetworkZoneSpec {
+  numbering?: NetworkZoneNumbering;
+  restart_required?: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Filters of the zone list. */
+export interface ListNetworkZonesRequest {
+  /** Only the zones of this lifecycle role (`lifecycle_role` query). */
+  lifecycleRole?: string;
+}
+
+/** The zone list. */
+export interface ListNetworkZonesResponse {
+  zones: NetworkZone[];
+  count: number;
+  timestamp: string;
+}
+
+/** The result of a zone delete. */
+export interface DeleteNetworkZoneResponse {
+  deleted: boolean;
+  restart_required: boolean;
+}

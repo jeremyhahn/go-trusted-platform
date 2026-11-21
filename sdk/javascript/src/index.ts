@@ -863,6 +863,14 @@ export type {
   RevokePortAuthResponse,
   GetPortStatsResponse,
   GetFlowStatsResponse,
+  NetworkZonePath,
+  NetworkZonePrivilegedAccess,
+  NetworkZoneSpec,
+  NetworkZoneNumbering,
+  NetworkZone,
+  ListNetworkZonesRequest,
+  ListNetworkZonesResponse,
+  DeleteNetworkZoneResponse,
 } from './types/sdn.js';
 
 // PXE types

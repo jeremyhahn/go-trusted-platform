@@ -29,6 +29,15 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
+import { useSDN } from '@/hooks';
+import type { ApiResponse, NetworkZoneSpec } from 'trusted-platform-sdk';
+
+/** The SDK reports a failed call in the response; the handlers need it thrown. */
+function throwOnError<T>(response: ApiResponse<T>): void {
+  if (response.error !== undefined) {
+    throw new Error(response.error.message);
+  }
+}
 
 // The nine built-in underlay zones of the reference network, at fixed
 // offsets x00-x08 of every environment block. Their policy can be tuned;
@@ -233,6 +242,7 @@ function AllowToRow({
 
 export default function ZonesPage() {
   const { toast } = useToast();
+  const sdn = useSDN();
 
   const [zones, setZones] = React.useState<ZoneResponse[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -254,24 +264,15 @@ export default function ZonesPage() {
     setLoading(true);
     setLoadError(null);
     try {
-      const res = await fetch('/api/v1/sdn/zones', { credentials: 'include' });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
-      }
-      // The webservice wraps payloads in {payload}; the daemon REST
-      // stack returns the body bare — accept both.
-      const body = (await res.json()) as {
-        zones?: ZoneResponse[];
-        payload?: { zones?: ZoneResponse[] };
-      };
-      setZones(body.payload?.zones ?? body.zones ?? []);
+      const response = await sdn.listNetworkZones();
+      throwOnError(response);
+      setZones((response.data?.zones ?? []) as ZoneResponse[]);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [sdn]);
 
   React.useEffect(() => {
     void fetchZones();
@@ -321,31 +322,12 @@ export default function ZonesPage() {
     setSubmitting(true);
     try {
       if (editTarget) {
-        const res = await fetch(
-          `/api/v1/sdn/zones/${encodeURIComponent(editTarget.name)}`,
-          {
-            method: 'PUT',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(zoneBody(form, false)),
-          }
+        throwOnError(
+          await sdn.updateNetworkZone(editTarget.name, zoneBody(form, false) as NetworkZoneSpec)
         );
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
-        }
         toast({ title: 'Zone updated', variant: 'success' });
       } else {
-        const res = await fetch('/api/v1/sdn/zones', {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(zoneBody(form, true)),
-        });
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
-        }
+        throwOnError(await sdn.createNetworkZone(zoneBody(form, true) as NetworkZoneSpec));
         toast({ title: 'Zone created', variant: 'success' });
       }
       setFormOpen(false);
@@ -359,7 +341,7 @@ export default function ZonesPage() {
     } finally {
       setSubmitting(false);
     }
-  }, [form, editTarget, fetchZones, toast]);
+  }, [form, editTarget, fetchZones, sdn, toast]);
 
   const openDeleteConfirm = React.useCallback((zone: ZoneResponse) => {
     setDeleteTarget(zone);
@@ -372,17 +354,7 @@ export default function ZonesPage() {
     setDeleting(true);
     setDeleteError(null);
     try {
-      const res = await fetch(
-        `/api/v1/sdn/zones/${encodeURIComponent(deleteTarget.name)}`,
-        {
-          method: 'DELETE',
-          credentials: 'include',
-        }
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
-      }
+      throwOnError(await sdn.deleteNetworkZone(deleteTarget.name));
       toast({ title: 'Zone deleted', variant: 'success' });
       setDeleteConfirmOpen(false);
       setDeleteTarget(null);
@@ -392,7 +364,7 @@ export default function ZonesPage() {
     } finally {
       setDeleting(false);
     }
-  }, [deleteTarget, fetchZones, toast]);
+  }, [deleteTarget, fetchZones, sdn, toast]);
 
   // isolate_from helpers
   const addIsolateFrom = React.useCallback(() => {
