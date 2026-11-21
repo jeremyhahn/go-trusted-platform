@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { MoreHorizontal, Edit, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -19,6 +20,14 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { useDNS, useMutation, useToast } from '@/hooks';
 import { toRecordType } from "@/utils/dns-record-type";
 import type { DNSRecord } from '@/types/infrastructure';
@@ -28,6 +37,8 @@ interface DNSRecordTableProps {
   records: DNSRecord[];
   onRefresh: () => void;
   onEdit?: (record: DNSRecord) => void;
+  /** When set, Delete asks first; off by default. */
+  confirmDelete?: boolean;
 }
 
 const recordTypeColors: Record<DNSRecord['type'], string> = {
@@ -47,8 +58,10 @@ export function DNSRecordTable({
   records,
   onRefresh,
   onEdit,
+  confirmDelete = false,
 }: DNSRecordTableProps) {
   const { toast } = useToast();
+  const [pendingDelete, setPendingDelete] = useState<DNSRecord | null>(null);
   const dns = useDNS();
 
   const deleteMutation = useMutation(
@@ -78,7 +91,18 @@ export function DNSRecordTable({
   );
 
   const handleDelete = (record: DNSRecord) => {
+    if (confirmDelete) {
+      setPendingDelete(record);
+      return;
+    }
     deleteMutation.mutate({ type: record.type, name: record.name });
+  };
+
+  const confirmPendingDelete = () => {
+    if (pendingDelete) {
+      deleteMutation.mutate({ type: pendingDelete.type, name: pendingDelete.name });
+    }
+    setPendingDelete(null);
   };
 
   return (
@@ -150,6 +174,31 @@ export function DNSRecordTable({
           )}
         </TableBody>
       </Table>
+      <Dialog
+        open={pendingDelete !== null}
+        onOpenChange={(o) => {
+          if (!o) setPendingDelete(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete this record?</DialogTitle>
+            <DialogDescription>
+              {pendingDelete
+                ? `${pendingDelete.type} ${pendingDelete.name} is removed from ${zoneName}.`
+                : ''}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingDelete(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmPendingDelete}>
+              Delete record
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

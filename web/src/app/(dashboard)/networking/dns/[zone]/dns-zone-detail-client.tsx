@@ -3,13 +3,14 @@
 import { useState } from 'react';
 import { useParams, usePathname, useRouter } from 'next/navigation';
 import { resolveDynamicId } from '@/utils/dynamic-route';
-import { ArrowLeft, Plus, RefreshCw, Download, Upload } from 'lucide-react';
+import { ArrowLeft, Plus, RefreshCw, Download, Upload, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { DNSRecordTable } from '@/components/features/networking/dns-record-table';
 import { DNSRecordForm } from '@/components/features/networking/dns-record-form';
 import { DNSSECStatusCard } from '@/components/features/networking/dnssec-status-card';
+import { DNSZoneEditDialog } from '@/components/features/networking/dns-zone-edit-dialog';
 import { useDNS, useApi, useToast } from '@/hooks';
 import type { DNSZoneDetail, DNSRecord } from '@/types/infrastructure';
 import type { GetZoneResponse } from 'trusted-platform-sdk';
@@ -21,6 +22,7 @@ export default function DNSZoneDetailPage() {
   const router = useRouter();
   const [formOpen, setFormOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState<DNSRecord | undefined>();
+  const [zoneEditOpen, setZoneEditOpen] = useState(false);
   const { toast } = useToast();
   const dns = useDNS();
 
@@ -90,6 +92,10 @@ export default function DNSZoneDetailPage() {
             <Upload className="mr-2 h-4 w-4" />
             Import
           </Button>
+          <Button variant="outline" onClick={() => setZoneEditOpen(true)}>
+            <Pencil className="mr-2 h-4 w-4" />
+            Edit Zone
+          </Button>
           <Button onClick={() => setFormOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
             Add Record
@@ -140,6 +146,10 @@ export default function DNSZoneDetailPage() {
               <span className="text-muted-foreground">Admin Email</span>
               <span className="font-mono text-sm">{zone.adminEmail}</span>
             </div>
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Description</span>
+              <span className="text-sm">{zoneResponse?.zone?.description || '—'}</span>
+            </div>
           </CardContent>
         </Card>
 
@@ -186,6 +196,7 @@ export default function DNSZoneDetailPage() {
             records={zone.records}
             onRefresh={fetchZone}
             onEdit={handleEdit}
+            confirmDelete
           />
         </CardContent>
       </Card>
@@ -196,6 +207,15 @@ export default function DNSZoneDetailPage() {
         onOpenChange={handleFormClose}
         onSuccess={fetchZone}
         record={editingRecord}
+      />
+
+      <DNSZoneEditDialog
+        zoneName={zoneName}
+        ttl={zone.ttl}
+        description={zoneResponse?.zone?.description ?? ''}
+        open={zoneEditOpen}
+        onOpenChange={setZoneEditOpen}
+        onSaved={fetchZone}
       />
     </div>
   );
