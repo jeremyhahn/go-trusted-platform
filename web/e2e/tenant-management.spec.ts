@@ -420,17 +420,11 @@ async function mockSDKInvitationApi(
   });
 
   // Route handler for individual invitation operations (revoke)
-  await page.route('**/api/v1/invitations/*', async (route: Route, request: Request) => {
+  await page.route('**/api/v1/invitations/*/revoke', async (route: Route, request: Request) => {
     const method = request.method();
     const url = request.url();
 
-    // Skip resend route
-    if (url.includes('/resend')) {
-      await route.continue();
-      return;
-    }
-
-    if (method === 'DELETE') {
+    if (method === 'POST') {
       if (state.config.revokeError) {
         await route.fulfill({
           status: state.config.revokeError.status,
@@ -1013,7 +1007,7 @@ test.describe('Tenant Invitations', () => {
       expect(remainingInvitations.some((inv) => inv.id === 'inv-cancel')).toBe(false);
     });
 
-    test('should resend an invitation', async ({ page }) => {
+    test('should report that resend is not served', async ({ page }) => {
       const invitations = [
         createMockSDKInvitation({ id: 'inv-resend', email: 'resend@example.com', status: 'pending' }),
       ];
@@ -1023,35 +1017,12 @@ test.describe('Tenant Invitations', () => {
 
       await page.goto('/tenant/invitations');
 
-      // Find the row and click actions menu
       const invitationRow = page.getByRole('row').filter({ hasText: 'resend@example.com' });
       await invitationRow.getByRole('button', { name: /open menu/i }).click();
-
-      // Click resend invitation
       await page.getByRole('menuitem', { name: /resend invitation/i }).click();
 
-      // Should show success toast (use .first() to match title, not description)
-      await expect(page.getByText(/invitation resent/i).first()).toBeVisible();
-    });
-
-    test('should handle resend error', async ({ page }) => {
-      const invitations = [
-        createMockSDKInvitation({ id: 'inv-error', email: 'error@example.com', status: 'pending' }),
-      ];
-
-      await mockSDKInvitationApi(page, {
-        initialInvitations: invitations,
-        resendError: { error: 'Too many resend attempts', status: 429 },
-      });
-      await mockTenantApi(page);
-
-      await page.goto('/tenant/invitations');
-
-      const invitationRow = page.getByRole('row').filter({ hasText: 'error@example.com' });
-      await invitationRow.getByRole('button', { name: /open menu/i }).click();
-      await page.getByRole('menuitem', { name: /resend invitation/i }).click();
-
-      // Should show error toast (use .first() to match title, not description)
+      // The SDK refuses resend (the server serves no resend route), so the
+      // page shows its error toast (use .first() to match title, not description)
       await expect(page.getByText(/failed to resend invitation/i).first()).toBeVisible();
     });
 
