@@ -56,6 +56,7 @@ export default function TPMCredentialPage() {
   const [wrappedSecret, setWrappedSecret] = React.useState("");
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [numBytes, setNumBytes] = React.useState("32");
+  const numBytesValid = /^\d+$/.test(numBytes) && Number(numBytes) >= 1 && Number(numBytes) <= 1024;
 
   const fail = (title: string) => (err: unknown) => {
     toast({
@@ -91,8 +92,9 @@ export default function TPMCredentialPage() {
   };
 
   const onRandom = async () => {
+    if (!numBytesValid) return;
     try {
-      await getRandom.mutateAsync({ numBytes: Number(numBytes) || 0 });
+      await getRandom.mutateAsync({ numBytes: Number(numBytes) });
     } catch (err) {
       fail("GetRandom failed")(err);
     }
@@ -199,8 +201,11 @@ export default function TPMCredentialPage() {
               value={numBytes}
               onChange={(e) => setNumBytes(e.target.value)}
             />
+            {numBytes !== "" && !numBytesValid && (
+              <p className="text-xs text-destructive">Number of bytes is a whole number from 1 to 1024</p>
+            )}
           </div>
-          <Button onClick={onRandom} disabled={getRandom.isLoading}>
+          <Button onClick={onRandom} disabled={!numBytesValid || getRandom.isLoading}>
             {getRandom.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Get Random
           </Button>
