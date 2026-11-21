@@ -14,6 +14,7 @@
 package invitation
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -144,8 +145,13 @@ func (h *Handlers) CreateInvitation(w http.ResponseWriter, r *http.Request) {
 	}
 	// Default tenant_id and inviter ID from the authenticated session
 	// so the WebUI doesn't have to thread JWT claims into its form.
+	tenantID := resolveTenantID(r)
 	if req.TenantId == "" {
-		req.TenantId = resolveTenantID(r)
+		req.TenantId = tenantID
+	} else if tenantID != "" && req.TenantId != tenantID {
+		// An explicit tenant_id must match the verified session's tenant.
+		h.respWriter.Error403(w, r, errors.New("invitation: tenant_id is not the caller's tenant"), nil)
+		return
 	}
 	if req.InvitedById == 0 {
 		req.InvitedById = resolveUserID(r)
