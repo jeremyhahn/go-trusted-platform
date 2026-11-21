@@ -61,6 +61,9 @@ func NewGatewayRouter(
 //	DELETE /api/v1/gateway/ipam/allocations         - ReleaseIP (?ip=)
 //	GET    /api/v1/gateway/lb/vips                  - ListVIPs
 //	GET    /api/v1/gateway/lb/vips/{protocol}/{address}/{port} - GetVIP
+//	POST   /api/v1/gateway/lb/vips                  - AddVIP (201)
+//	DELETE /api/v1/gateway/lb/vips/{protocol}/{address}/{port} - RemoveVIP
+//	PUT    /api/v1/gateway/lb/vips/{protocol}/{address}/{port}/backends - SetVIPBackends
 //	GET    /api/v1/gateway/lb/status                - GetLBStatus
 //	POST   /api/v1/gateway/perf/flows               - GetPerfFlows (installs temporary flows; admin)
 func (r *GatewayRouter) RegisterRoutes(parent *mux.Router) {
@@ -76,10 +79,12 @@ func (r *GatewayRouter) RegisterRoutes(parent *mux.Router) {
 	sr.HandleFunc("/ipam/allocations", r.listAllocations).Methods("GET")
 	sr.HandleFunc("/ipam/allocations", r.allocateIP).Methods("POST")
 	sr.HandleFunc("/ipam/allocations", r.releaseIP).Methods("DELETE")
-	// Load-balancer reads. AddVIP, RemoveVIP and SetVIPBackends come in the
-	// next slice (#2052).
+	// Load balancer (#2052).
 	sr.HandleFunc("/lb/vips", r.listVIPs).Methods("GET")
 	sr.HandleFunc("/lb/vips/{protocol}/{address}/{port}", r.getVIP).Methods("GET")
+	sr.HandleFunc("/lb/vips", r.addVIP).Methods("POST")
+	sr.HandleFunc("/lb/vips/{protocol}/{address}/{port}", r.removeVIP).Methods("DELETE")
+	sr.HandleFunc("/lb/vips/{protocol}/{address}/{port}/backends", r.setVIPBackends).Methods("PUT")
 	sr.HandleFunc("/lb/status", r.getLBStatus).Methods("GET")
 	// GetPerfFlows installs and removes temporary flows in OpenFlow table
 	// 250, so it is a POST (a write), never a GET.
@@ -151,17 +156,91 @@ func (r *GatewayRouter) getVIP(w http.ResponseWriter, req *http.Request) {
 	if !r.ensure(w, req) {
 		return
 	}
-	vars := mux.Vars(req)
-	port, err := strconv.ParseUint(vars["port"], 10, 16)
+	protocol, address, port, err := vipKey(req)
 	if err != nil {
 		r.respWriter.Error400(w, req, err)
 		return
 	}
 	resp, err := r.server.GetVIP(req.Context(), &platformv1.GetVIPRequest{
-		Protocol: vars["protocol"],
-		Address:  vars["address"],
-		Port:     uint32(port),
+		Protocol: protocol,
+		Address:  address,
+		Port:     port,
 	})
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+// vipKey reads a VIP's protocol, address and port from the route variables.
+func vipKey(req *http.Request) (protocol, address string, port uint32, err error) {
+	vars := mux.Vars(req)
+	p, err := strconv.ParseUint(vars["port"], 10, 16)
+	if err != nil {
+		return "", "", 0, err
+	}
+	return vars["protocol"], vars["address"], uint32(p), nil
+}
+
+func (r *GatewayRouter) addVIP(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	pbReq := &platformv1.AddVIPRequest{}
+	if err := protorest.DecodeRequest(req, pbReq); err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	resp, err := r.server.AddVIP(req.Context(), pbReq)
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccessStatus(w, req, r.respWriter, http.StatusCreated, resp)
+}
+
+func (r *GatewayRouter) removeVIP(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	protocol, address, port, err := vipKey(req)
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	resp, err := r.server.RemoveVIP(req.Context(), &platformv1.RemoveVIPRequest{
+		Protocol: protocol,
+		Address:  address,
+		Port:     port,
+	})
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+// setVIPBackends replaces a VIP's backend set; the URL keys win over any
+// protocol, address or port in the body.
+func (r *GatewayRouter) setVIPBackends(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	protocol, address, port, err := vipKey(req)
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	pbReq := &platformv1.SetVIPBackendsRequest{}
+	if err := protorest.DecodeRequest(req, pbReq); err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	pbReq.Protocol = protocol
+	pbReq.Address = address
+	pbReq.Port = port
+	resp, err := r.server.SetVIPBackends(req.Context(), pbReq)
 	if err != nil {
 		protorest.WriteError(w, req, r.respWriter, err)
 		return
