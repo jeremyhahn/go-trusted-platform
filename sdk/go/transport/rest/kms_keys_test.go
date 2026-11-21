@@ -279,6 +279,23 @@ func TestKMSListKeys_EmptyReplyDecodes(t *testing.T) {
 	}
 }
 
+func TestKMSListKeys_ReplyCarriesPagination(t *testing.T) {
+	a, _ := kmsAdapter(t, `{"keys":[{"key_id":"k1","algorithm":"AES-256-GCM","version":1}],"next_cursor":"1","has_more":true,"total_count":3}`)
+	resp := &platformv1.ListKeysResponse{}
+	err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_ListKeys_FullMethodName,
+		&platformv1.ListKeysRequest{}, resp)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if len(resp.GetKeys()) != 1 {
+		t.Fatalf("keys = %v, want one", resp.GetKeys())
+	}
+	if resp.GetNextCursor() != "1" || !resp.GetHasMore() || resp.GetTotalCount() != 3 {
+		t.Fatalf("next_cursor %q has_more %v total_count %d, want \"1\" true 3",
+			resp.GetNextCursor(), resp.GetHasMore(), resp.GetTotalCount())
+	}
+}
+
 // TestKMSGenerateKey_UnknownAlgorithmNameAndMalformedReply: an algorithm name
 // the SDK does not know decodes as UNSPECIFIED; a reply that is not JSON is an
 // error, not an empty key.
