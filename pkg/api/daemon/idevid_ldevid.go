@@ -67,6 +67,22 @@ func (s *IDevIDGRPCService) SetCAService(ca quicbaasca.CACertificateAuthority) {
 	s.ca = ca
 }
 
+// SetCASource wires a function that names the CA at each LDevID issuance
+// (the daemon's CAHolder.Get), so a CA InitCA swaps in is used without a
+// restart. A nil source keeps the CA SetCAService wired.
+func (s *IDevIDGRPCService) SetCASource(source func() quicbaasca.CACertificateAuthority) {
+	s.caSource = source
+}
+
+// currentCA returns the CA LDevID issuance uses now: the source's CA when a
+// source is set, else the SetCAService CA.
+func (s *IDevIDGRPCService) currentCA() quicbaasca.CACertificateAuthority {
+	if s.caSource != nil {
+		return s.caSource()
+	}
+	return s.ca
+}
+
 // ldevidSigner adapts a TPM-resident LDevID key to the crypto.Signer interface
 // so the standard library can build a PKCS#10 CSR from it. It mirrors the
 // platform.TPMSigner reuse pattern but carries the public key returned by the
@@ -104,7 +120,8 @@ func (s *IDevIDGRPCService) CreateLDevID(ctx context.Context, req *platformv1.Cr
 	if s.tpm2Service == nil {
 		return nil, status.Error(codes.FailedPrecondition, "TPM2 service not initialized")
 	}
-	if s.ca == nil {
+	ca := s.currentCA()
+	if ca == nil {
 		return nil, status.Error(codes.FailedPrecondition, ErrLDevIDCANotConfigured{}.Error())
 	}
 
@@ -200,7 +217,7 @@ func (s *IDevIDGRPCService) CreateLDevID(ctx context.Context, req *platformv1.Cr
 	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
 
 	// ---- Issue the LDevID certificate from the platform CA. ----
-	cert, err := s.ca.SignCSR(ctx, csrPEM, &quicbaasca.SignOptions{
+	cert, err := ca.SignCSR(ctx, csrPEM, &quicbaasca.SignOptions{
 		Profile:      req.GetProfile(),
 		ValidityDays: int(req.GetValidityDays()),
 	})

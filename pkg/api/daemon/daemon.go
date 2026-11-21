@@ -753,12 +753,12 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			config.DeviceService,
 			config.DeviceProfileService,
 			logger.Slog(),
-			WithDeviceAKTrust(deviceAKTrust(config)),
+			WithDeviceAKTrust(caHolder.AKTrust()),
 			WithDeviceVerdictSink(deviceVerdictSink(config)),
 			WithDeviceAttestCertRecorder(newDeviceAttestCertRecorder(config, logger.Slog())),
 			WithDeviceLifecycle(config.DeviceLifecycle),
 			WithDeviceTemplateService(config.DeviceTemplateService),
-			WithDeviceBootCA(config.CAService),
+			WithDeviceBootCA(caHolder.BootCA()),
 		)
 
 		// Register with TCP gRPC server if enabled
@@ -863,6 +863,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	if config.CAService != nil {
 		idevidService.SetCAService(config.CAService)
+		idevidService.SetCASource(caHolder.Get)
 		logger.Info("IDevID gRPC service wired to CA for LDevID issuance")
 	} else {
 		logger.Warn("IDevID gRPC service created without CA; CreateLDevID will return FailedPrecondition")
@@ -1183,10 +1184,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			if config.App != nil {
 				quicObjStorage = config.App.Storage
 			}
-			// The QUIC CA handler reads the shared CA holder per request,
-			// so a CA InitCA swaps in is served over QUIC with no restart.
+			// The QUIC CA handler and device attestation read the shared CA
+			// holder per request, so a CA InitCA swaps in is served over
+			// QUIC with no restart.
 			quicHandler.SetCAHandler(quic.NewCAHandler(quicLogger, config.CAService, quicObjStorage).WithKMS(config.csrKMS()).WithCASource(caHolder.Get))
-			quicHandler.SetDeviceAKTrust(config.CAService)
+			quicHandler.SetDeviceAKTrust(caHolder.AKTrust())
 		}
 
 		// Set vTPM service if available
@@ -1213,7 +1215,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			quicHandler.SetDeviceAttestCertRecorder(newDeviceAttestCertRecorder(config, quicLogger.Slog()))
 			quicHandler.SetDeviceLifecycle(config.DeviceLifecycle)
 			if config.CAService != nil {
-				quicHandler.SetDeviceBootCA(config.CAService)
+				quicHandler.SetDeviceBootCA(caHolder.BootCA())
 			}
 		}
 
@@ -3934,16 +3936,6 @@ func (d *Daemon) SetFIDO2Backend(b FIDO2Backend) {
 	}
 	svc.service.SetBackend(b)
 	d.logger.Info("FIDO2 backend wired")
-}
-
-// deviceAKTrust returns the platform CA as the trust anchor for device
-// attestation certificates, or nil when no CA is configured so that device
-// quotes fail closed rather than chain against nothing.
-func deviceAKTrust(config *Config) AKTrustAnchor {
-	if config == nil || config.CAService == nil {
-		return nil
-	}
-	return config.CAService
 }
 
 // deviceVerdictSink returns the attestation service as the sink for device

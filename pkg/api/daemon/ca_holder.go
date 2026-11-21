@@ -14,6 +14,7 @@
 package daemon
 
 import (
+	"crypto/x509"
 	"sync"
 
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
@@ -53,4 +54,58 @@ func (h *CAHolder) Set(ca quicbaasca.CACertificateAuthority) {
 func (h *CAHolder) Initialized() bool {
 	ca := h.Get()
 	return ca != nil && ca.IsInitialized()
+}
+
+// AKTrust returns the device attestation trust anchor backed by the holder:
+// each TrustedRoot and TrustedIntermediate call reads the CA the holder holds
+// at that moment, so a CA InitCA swaps in chains device quotes at once. A nil
+// holder returns an untyped nil, which the verifier reads as "no CA".
+func (h *CAHolder) AKTrust() AKTrustAnchor {
+	if h == nil {
+		return nil
+	}
+	return holderTrust{h: h}
+}
+
+// BootCA returns the diskless boot CA bundle source backed by the holder:
+// each CABundle call reads the CA the holder holds at that moment. A nil
+// holder returns an untyped nil, which the boot provider reads as "no CA".
+func (h *CAHolder) BootCA() BootCABundle {
+	if h == nil {
+		return nil
+	}
+	return holderTrust{h: h}
+}
+
+// holderTrust forwards trust-anchor and CA-bundle reads to the CA a CAHolder
+// holds at each call. An empty holder answers ErrCANotInitialized.
+type holderTrust struct {
+	h *CAHolder
+}
+
+// TrustedRoot returns the held CA's root certificate.
+func (t holderTrust) TrustedRoot() (*x509.Certificate, error) {
+	ca := t.h.Get()
+	if ca == nil {
+		return nil, ErrCANotInitialized{}
+	}
+	return ca.TrustedRoot()
+}
+
+// TrustedIntermediate returns the held CA's intermediate certificate.
+func (t holderTrust) TrustedIntermediate() (*x509.Certificate, error) {
+	ca := t.h.Get()
+	if ca == nil {
+		return nil, ErrCANotInitialized{}
+	}
+	return ca.TrustedIntermediate()
+}
+
+// CABundle returns the held CA's certificate bundle.
+func (t holderTrust) CABundle() ([]byte, error) {
+	ca := t.h.Get()
+	if ca == nil {
+		return nil, ErrCANotInitialized{}
+	}
+	return ca.CABundle()
 }
