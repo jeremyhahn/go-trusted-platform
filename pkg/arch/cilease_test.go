@@ -474,8 +474,8 @@ const (
 	ciRegistryValue   = "${{ runner.environment != 'github-hosted' && vars.CI_IMAGE_REGISTRY || '' }}"
 	ciImageNoRegistry = "env.IT_REGISTRY == ''"
 	ciImageRegistry   = "env.IT_REGISTRY != ''"
-	ciLegNoRegistry   = "needs.integration-image.outputs.image_ref == ''"
-	ciLegRegistry     = "needs.integration-image.outputs.image_ref != ''"
+	ciLegNoRegistry   = "needs.integration-image.outputs.image_tag == ''"
+	ciLegRegistry     = "needs.integration-image.outputs.image_tag != ''"
 	ciLegNotLeased    = "steps.lease.outputs.leased != 'true'"
 	ciUploadArtifact  = "actions/upload-artifact"
 	ciDownloadArtfct  = "actions/download-artifact"
@@ -483,10 +483,10 @@ const (
 	reasonRegistryUnguarded  = "sets IT_REGISTRY to something other than CI_IMAGE_REGISTRY on a self-hosted runner only"
 	reasonUploadWithRegistry = "uploads the image artifact even when the LAN registry carries the image"
 	reasonDownloadWithRef    = "downloads the image artifact even when the image job pushed it to the LAN registry"
-	reasonNoRegistryPush     = "has no push step to the LAN registry guarded by IT_REGISTRY, or no image_ref output from it"
-	reasonPullNotGuarded     = "pulls from the LAN registry without the lease step first and an image_ref to pull"
+	reasonNoRegistryPush     = "has no push step to the LAN registry guarded by IT_REGISTRY, or no image_tag output from it"
+	reasonPullNotGuarded     = "pulls from the LAN registry without the lease step first and an image_tag to pull"
 	reasonPullNoLayerCompare = "does not compare the pulled image's layer identity with IT_IMAGE_IDENTITY"
-	reasonNoRegistryPull     = "has no step that pulls the image job's image_ref from the LAN registry"
+	reasonNoRegistryPull     = "has no step that pulls the image job's image_tag from the LAN registry"
 	reasonPullRemovesRef     = "removes the registry reference another leg on the same daemon may still re-tag from"
 	reasonPullRetagExits     = "re-tags the registry reference without a fallback, so a failed tag fails the leg"
 	reasonPullExitHoldsLock  = "exits after image_lock without image_unlock, so the other legs on the daemon wait on a held lock"
@@ -537,6 +537,57 @@ func ciScalar(node *yaml.Node, keys ...string) string {
 	return node.Value
 }
 
+// TestCIImageJobOutputsHoldNoRegistry holds Codex P1 on #2311: GitHub Actions
+// drops a job output that holds a masked value, and the LAN registry address
+// is masked, so the image job exports only the image tag and each leg
+// rebuilds the registry reference from vars.CI_IMAGE_REGISTRY after its own
+// mask step.
+func TestCIImageJobOutputsHoldNoRegistry(t *testing.T) {
+	wf := loadCIWorkflow(t, repoRoot(t), ciWorkflowFile)
+
+	imageJob, imageSteps := ciRawJob(t, wf, ciImageJob)
+	require.Nil(t, mappingValue(mappingValue(imageJob, "outputs"), "image_ref"),
+		"job %s exports image_ref, a value holding the masked registry that GitHub Actions drops", ciImageJob)
+	pushed := false
+	for _, step := range imageSteps {
+		if step.ID != "push" {
+			continue
+		}
+		pushed = true
+		for _, line := range strings.Split(step.Run, "\n") {
+			if !strings.Contains(line, "GITHUB_OUTPUT") {
+				continue
+			}
+			require.NotContains(t, line, "image_ref=", "the push step writes image_ref to GITHUB_OUTPUT")
+			require.NotContains(t, line, "$IT_REGISTRY", "the push step writes the registry to GITHUB_OUTPUT")
+			require.NotContains(t, line, "${IT_REGISTRY", "the push step writes the registry to GITHUB_OUTPUT")
+			require.NotContains(t, line, "$ref", "the push step writes the registry reference to GITHUB_OUTPUT")
+			require.NotContains(t, line, "${ref", "the push step writes the registry reference to GITHUB_OUTPUT")
+		}
+	}
+	require.True(t, pushed, "job %s has no step with id push", ciImageJob)
+
+	_, legSteps := ciRawJob(t, wf, ciLegJob)
+	mask, pull := -1, -1
+	for i, step := range legSteps {
+		switch step.Name {
+		case "Mask the LAN registry":
+			mask = i
+			require.Equal(t, "${{ vars.CI_IMAGE_REGISTRY }}", step.Env["VARS_CI_IMAGE_REGISTRY"],
+				"the mask step of job %s does not mask vars.CI_IMAGE_REGISTRY", ciLegJob)
+		case "Pull the integration image from the LAN registry":
+			pull = i
+			require.Equal(t, "${{ vars.CI_IMAGE_REGISTRY }}", step.Env["IT_REGISTRY"],
+				"the pull step does not take IT_REGISTRY from vars.CI_IMAGE_REGISTRY")
+			require.Equal(t, "${{ needs.integration-image.outputs.image_tag }}", step.Env["IT_IMAGE_TAG"],
+				"the pull step does not take IT_IMAGE_TAG from the image job's image_tag")
+		}
+	}
+	require.NotEqual(t, -1, mask, "job %s has no step \"Mask the LAN registry\"", ciLegJob)
+	require.NotEqual(t, -1, pull, "job %s has no step \"Pull the integration image from the LAN registry\"", ciLegJob)
+	require.Less(t, mask, pull, "job %s masks the LAN registry after its pull step", ciLegJob)
+}
+
 func registryPathFindings(t *testing.T, wf ciWorkflow) []error {
 	var findings []error
 	finding := func(job string, line int, reason string) {
@@ -561,7 +612,7 @@ func registryPathFindings(t *testing.T, wf ciWorkflow) []error {
 			finding(ciImageJob, step.Line, reasonUploadWithRegistry)
 		}
 		if strings.Contains(step.Run, "docker push") && strings.Contains(step.If, ciImageRegistry) && step.ID != "" &&
-			ciScalar(imageJob, "outputs", "image_ref") == "${{ steps."+step.ID+".outputs.image_ref }}" {
+			ciScalar(imageJob, "outputs", "image_tag") == "${{ steps."+step.ID+".outputs.image_tag }}" {
 			pushed = true
 		}
 	}
