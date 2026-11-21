@@ -1480,6 +1480,11 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.CAService/VerifyCertificate": {"/api/v1/ca/certificates/verify", http.MethodPost},
 	"/platform.v1.CAService/GetCRL":            {"/api/v1/ca/crl", http.MethodGet},
 	"/platform.v1.CAService/GetCABundle":       {"/api/v1/ca/bundle", http.MethodGet},
+	// CA lifecycle: the daemon serves these on fixed routes (SetCALifecycle),
+	// not on the lower-cased method names the generic fallback would build.
+	"/platform.v1.CAService/InitCA":                  {"/api/v1/ca/init", http.MethodPost},
+	"/platform.v1.CAService/InstallCACertificates":   {"/api/v1/ca/trust/install", http.MethodPost},
+	"/platform.v1.CAService/UninstallCACertificates": {"/api/v1/ca/trust/uninstall", http.MethodPost},
 
 	// IAM Service. The tenant-scoped collections (users, roles, groups)
 	// and CheckPermission are templated routes above: the daemon's tenant

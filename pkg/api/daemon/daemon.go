@@ -3720,10 +3720,11 @@ func (d *Daemon) registerHealthCheckers() {
 		return
 	}
 
-	// Register the CA service health checker whenever the CA service exists:
-	// the checker reads the shared CA holder, so a CA InitCA brings up at
-	// runtime is monitored too.
-	if d.caService != nil {
+	// Register the CA service health checker when a CA is expected: one is
+	// loaded, or a CA configuration lets InitCA bring one up. The checker reads
+	// the shared CA holder, so a CA InitCA brings up at runtime is monitored
+	// too. A daemon with no CA and no CA configuration has no CA readiness.
+	if d.caService != nil && (d.caService.authority() != nil || d.caService.initCA != nil) {
 		checker := NewCAServiceHealthChecker(d.caService)
 		if checker != nil {
 			if err := d.healthRegistry.Register(checker); err != nil {

@@ -51,9 +51,11 @@ func (s *CAGRPCService) WithTrustInstallPath(path string) *CAGRPCService {
 }
 
 // AppCAInitializer runs the app's CA bring-up path, (*app.App).LoadOrInitCA,
-// the same path AttachNodeCA takes at start-up. It returns nil for a nil app.
+// the same path AttachNodeCA takes at start-up. It returns nil for a nil app
+// and for an app with no CA configuration: there is nothing InitCA can bring
+// up, so the daemon expects no CA.
 func AppCAInitializer(a *app.App) CAInitializer {
-	if a == nil {
+	if a == nil || a.CAConfig == nil {
 		return nil
 	}
 	return func(ctx context.Context) (quicbaasca.CACertificateAuthority, error) {
