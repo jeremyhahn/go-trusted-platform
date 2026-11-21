@@ -236,7 +236,7 @@ func TestInvoke_TPMUndefineNVRAM_SendsTheOwnerAuth(t *testing.T) {
 
 func TestTPMSealNVDecoders_RejectWrongTypes(t *testing.T) {
 	wrongReq := &platformv1.QuoteRequest{}
-	builders := map[string]func(interface{}) (map[string]interface{}, error){
+	builders := map[string]mcpArgBuilder{
 		"seal":     buildTPMSealNVSealArgs,
 		"unseal":   buildTPMSealNVUnsealArgs,
 		"undefine": buildTPMSealNVUndefineArgs,
@@ -249,7 +249,7 @@ func TestTPMSealNVDecoders_RejectWrongTypes(t *testing.T) {
 	}
 
 	wrongReply := &platformv1.QuoteResponse{}
-	decoders := map[string]func(map[string]interface{}, interface{}) error{
+	decoders := map[string]mcpReplyDecoder{
 		"seal":     decodeTPMSealNVSealResult,
 		"unseal":   decodeTPMSealNVUnsealResult,
 		"write":    decodeTPMSealNVWriteResult,
