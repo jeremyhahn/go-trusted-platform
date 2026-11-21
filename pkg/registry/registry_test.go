@@ -16,6 +16,7 @@ package registry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -369,6 +370,54 @@ func TestRegistryList(t *testing.T) {
 
 	if len(manifests) != 0 {
 		t.Errorf("expected empty list, got %d items", len(manifests))
+	}
+}
+
+// TestRegistryListHonoursOffsetAndWalksEveryPage proves List skips Offset
+// entries and follows the storage cursor past the first page (#2063).
+func TestRegistryListHonoursOffsetAndWalksEveryPage(t *testing.T) {
+	reg := newTestRegistry(t)
+	ctx := context.Background()
+
+	// Each PutManifest stores the tag and its digest-keyed copy; a distinct
+	// annotation per manifest gives each its own digest: 120 entries.
+	for i := 0; i < 60; i++ {
+		tag := fmt.Sprintf("t%03d", i)
+		body := strings.Replace(string(ociTestManifest()), `"layers": []`,
+			`"layers": [], "annotations": {"n": "`+tag+`"}`, 1)
+		if _, err := reg.PutManifest(ctx, "alpine", tag,
+			"application/vnd.oci.image.manifest.v1+json", []byte(body)); err != nil {
+			t.Fatalf("PutManifest %d: %v", i, err)
+		}
+	}
+
+	full, err := reg.List(ctx, RegistryListOptions{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(full) != 120 {
+		t.Fatalf("List with no limit returned %d manifests, want 120", len(full))
+	}
+
+	page, err := reg.List(ctx, RegistryListOptions{Offset: 2, Limit: 2})
+	if err != nil {
+		t.Fatalf("List offset 2 limit 2: %v", err)
+	}
+	if len(page) != 2 {
+		t.Fatalf("List offset 2 limit 2 returned %d manifests, want 2", len(page))
+	}
+	for i := range page {
+		if page[i].Reference != full[2+i].Reference {
+			t.Errorf("page[%d].Reference = %q, want %q (full[%d])", i, page[i].Reference, full[2+i].Reference, 2+i)
+		}
+	}
+
+	past, err := reg.List(ctx, RegistryListOptions{Offset: 200})
+	if err != nil {
+		t.Fatalf("List offset 200: %v", err)
+	}
+	if len(past) != 0 {
+		t.Errorf("List offset 200 returned %d manifests, want 0", len(past))
 	}
 }
 
