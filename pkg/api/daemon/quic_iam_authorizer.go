@@ -88,11 +88,16 @@ type iamTokenAuthorizer struct {
 // for the certificate's stored IAM user in its tenant, never by a wildcard
 // scope (#2016). The mTLS adapter sets the subject to the certificate's
 // email SAN, else its CN, which the store does not take as a user ID, so the
-// subject is first resolved to its stored user (PR #2082 review); that
-// user's canonical ID and roles go to the PEP, whose RBAC chain decides from
-// the roles it is given and resolves no permission from none. A missing
-// subject or tenant, a missing IAM client, an unknown subject, a user of
-// another tenant or a lookup error is a denial; an error is never allow.
+// subject is first resolved to its stored user (PR #2082 review) with the
+// IAM List lookup: the pinned SDK serves neither GetByEmail nor
+// FindByUsername on its gRPC or REST/HTTP3 transports, and List is the user
+// lookup it carries end to end. That user's canonical ID and roles go to the
+// PEP, whose RBAC chain decides from the roles it is given and resolves no
+// permission from none. A missing subject or tenant, a missing IAM client,
+// an unknown or ambiguous subject, a user of another tenant or a lookup
+// error is a denial; an error is never allow. A tenant whose users exceed
+// one List page denies callers beyond it (fail closed) until the SDK
+// lookups are fixed upstream.
 func (a *iamTokenAuthorizer) CheckPeerPermission(ctx context.Context, authCtx *platformtoken.AuthorizedContext, resource, action string) (bool, error) {
 	if authCtx == nil || authCtx.Subject == "" || authCtx.TenantID == "" {
 		return false, nil
@@ -108,11 +113,22 @@ func (a *iamTokenAuthorizer) CheckPeerPermission(ctx context.Context, authCtx *p
 	}, resource, action)
 }
 
+// certificateUserListPageSize is the page size certificateUser asks List
+// for: the pinned server's limit cap.
+const certificateUserListPageSize = 1000
+
 // certificateUser resolves a certificate subject to the IAM user stored in
 // tenantID: an email SAN subject by its email, any other subject (the CN) by
-// its username. ok is false when there is no IAM client, the lookup fails,
-// no user is stored, the stored user has no ID or belongs to another tenant:
-// the caller denies, and the cause is not passed on.
+// its username. The pinned go-quicbaas SDK serves neither GetByEmail nor
+// FindByUsername on its gRPC or REST/HTTP3 transports (gRPC answers
+// Unimplemented; REST maps both to the users list and leaves the user
+// empty), so the subject is matched in the tenant's List page, the one user
+// lookup the SDK carries end to end. The SDK sends no offset, so only the
+// first page is seen: a caller beyond it is denied (fail closed) until the
+// SDK lookups are fixed upstream. ok is false when there is no IAM client,
+// the lookup fails, no user or more than one user matches, the matched user
+// has no ID or belongs to another tenant: the caller denies, and the cause
+// is not passed on.
 func (a *iamTokenAuthorizer) certificateUser(ctx context.Context, tenantID, subject string) (*sdkiam.User, bool) {
 	if a.iam == nil {
 		return nil, false
@@ -123,22 +139,30 @@ func (a *iamTokenAuthorizer) certificateUser(ctx context.Context, tenantID, subj
 	}
 	lookupCtx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
-	var (
-		user *sdkiam.User
-		err  error
-	)
-	if strings.Contains(subject, "@") {
-		user, err = users.GetByEmail(lookupCtx, tenantID, subject)
-	} else {
-		user, err = users.FindByUsername(lookupCtx, tenantID, subject)
-	}
-	if err != nil || user == nil || user.ID == "" {
+	resp, err := users.List(lookupCtx, tenantID, &sdkiam.ListUsersRequest{PageSize: certificateUserListPageSize})
+	if err != nil || resp == nil {
 		return nil, false
 	}
-	if user.TenantID != "" && user.TenantID != tenantID {
+	byEmail := strings.Contains(subject, "@")
+	var match *sdkiam.User
+	for i := range resp.Users {
+		candidate := &resp.Users[i]
+		if byEmail {
+			if candidate.Email != subject {
+				continue
+			}
+		} else if candidate.Username != subject {
+			continue
+		}
+		if match != nil {
+			return nil, false
+		}
+		match = candidate
+	}
+	if match == nil || match.ID == "" || match.TenantID != tenantID {
 		return nil, false
 	}
-	return user, true
+	return match, true
 }
 
 // newIAMTokenAuthorizer returns an authorizer backed by pep. Both arguments
