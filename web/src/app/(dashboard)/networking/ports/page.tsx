@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import { Plus, RefreshCw, Cable, Wifi, WifiOff, AlertCircle, Loader2 } from 'lucide-react';
 import { ColumnDef } from '@tanstack/react-table';
 import { Button } from '@/components/ui/button';
@@ -29,7 +29,7 @@ import {
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { useSDN, useApi } from '@/hooks';
-import type { Port, PortType } from 'trusted-platform-sdk';
+import type { Port, PortStats, PortType } from 'trusted-platform-sdk';
 import { portState, readUint64, type SDNPortState } from '@/lib/sdn-wire';
 
 // Types for SDN Port management
@@ -68,6 +68,11 @@ export default function SDNPortsPage() {
   const [createName, setCreateName] = useState('');
   const [createType, setCreateType] = useState<PortType>('PORT_TYPE_INTERNAL');
   const [createSubmitting, setCreateSubmitting] = useState(false);
+  const [statsPort, setStatsPort] = useState<SDNPort | null>(null);
+  const [portStats, setPortStats] = useState<PortStats | null>(null);
+  const [statsError, setStatsError] = useState<string | null>(null);
+  // statsRequest is the generation of the current stats read.
+  const statsRequest = useRef(0);
 
   // Fetch bridges to get the first bridge ID
   const {
@@ -152,6 +157,32 @@ export default function SDNPortsPage() {
       title: 'View Port',
       description: `Viewing details for port ${port.name}`,
     });
+  };
+
+  /**
+   * handlePortStats reads the port's counters from the switch through
+   * GET /sdn/bridges/{name}/ports/{port}/stats. The SDK reports a refusal in
+   * the response, not by throwing, so the error is read from it and shown in
+   * the dialog instead of a row of zeros. An answer for a read the operator
+   * closed or replaced is dropped.
+   */
+  const handlePortStats = async (port: SDNPort) => {
+    const generation = ++statsRequest.current;
+    setStatsPort(port);
+    setPortStats(null);
+    setStatsError(null);
+    try {
+      const response = await sdn.getPortStats(selectedBridgeId, port.id);
+      if (generation !== statsRequest.current) return;
+      if (response.error !== undefined) {
+        setStatsError(response.error.message);
+        return;
+      }
+      setPortStats(response.data?.stats ?? null);
+    } catch (err) {
+      if (generation !== statsRequest.current) return;
+      setStatsError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const handleEditPort = (port: SDNPort) => {
@@ -300,6 +331,7 @@ export default function SDNPortsPage() {
           row={row.original}
           actions={[
             { label: 'View Details', onClick: handleViewPort },
+            { label: 'Port Statistics', onClick: handlePortStats },
             { label: 'Edit', onClick: handleEditPort },
             {
               label: row.original.status === 'up' ? 'Disable' : 'Enable',
@@ -464,6 +496,56 @@ export default function SDNPortsPage() {
               Add
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={statsPort !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            statsRequest.current += 1;
+            setStatsPort(null);
+            setPortStats(null);
+            setStatsError(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Port statistics: {statsPort?.name}</DialogTitle>
+            <DialogDescription>
+              Counters the switch reports for this port on bridge {selectedBridgeId || 'unknown'}.
+            </DialogDescription>
+          </DialogHeader>
+          {statsError !== null ? (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                The switch returned no statistics for {statsPort?.name}: {statsError}
+              </AlertDescription>
+            </Alert>
+          ) : portStats !== null ? (
+            <dl className="grid grid-cols-2 gap-2 text-sm">
+              {[
+                ['Packets received', readUint64(portStats.packetsReceived).toLocaleString('en-US')],
+                ['Packets sent', readUint64(portStats.packetsSent).toLocaleString('en-US')],
+                ['Bytes received', formatBytes(readUint64(portStats.bytesReceived))],
+                ['Bytes sent', formatBytes(readUint64(portStats.bytesSent))],
+                ['Errors', readUint64(portStats.errors).toLocaleString('en-US')],
+                ['Dropped', readUint64(portStats.dropped).toLocaleString('en-US')],
+              ].map(([label, value]) => (
+                <div key={label} className="contents">
+                  <dt className="text-muted-foreground">{label}</dt>
+                  <dd className="font-mono text-right">{value}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading statistics...
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 
