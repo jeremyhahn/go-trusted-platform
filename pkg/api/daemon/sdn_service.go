@@ -64,6 +64,10 @@ type SDNService struct {
 	// remove: they are on the switch but no policy owns them, so the next
 	// apply removes them first.
 	strandedFlows map[flowEntryKey]attemptedFlow
+	// unrestoredFlows holds, under applyMu, the entries a restore failed to
+	// put back: a recorded policy's flow is missing from the switch, so the
+	// next apply retries them.
+	unrestoredFlows map[flowEntryKey]bool
 }
 
 type bridgeResource struct {
@@ -1280,9 +1284,12 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 	s.mu.Unlock()
 
 	// An entry this policy now owns is no longer stranded: removing it
-	// later would take this policy's flow off the switch.
+	// later would take this policy's flow off the switch, and a restore
+	// still pending for it is superseded by this policy's flow.
 	for _, f := range attempted {
-		delete(s.strandedFlows, newFlowEntryKey(f.bridge, f.flow))
+		key := newFlowEntryKey(f.bridge, f.flow)
+		delete(s.strandedFlows, key)
+		delete(s.unrestoredFlows, key)
 	}
 
 	return &platformv1.ApplyPolicyResponse{
@@ -1373,9 +1380,14 @@ func (s *SDNService) rollbackPolicyApply(ctx context.Context, client ovs.ClientI
 	}
 	// A flow this call attempted may also have replaced another policy's
 	// entry with the same table, priority and match: put those back. A
-	// policy whose entry cannot be put back is marked "error".
-	for key := range s.restoreOverwrittenFlows(cctx, client, skipID, removed) {
+	// policy whose entry cannot be put back is marked "error", reported and
+	// retried by the next apply.
+	restored, restoreErr := s.restoreOverwrittenFlows(cctx, client, skipID, removed)
+	for key := range restored {
 		delete(s.strandedFlows, key)
+	}
+	if restoreErr != nil {
+		errs = append(errs, restoreErr)
 	}
 	return errors.Join(errs...)
 }
@@ -1453,13 +1465,23 @@ func (s *SDNService) policyOwnedFlowKeys() map[flowEntryKey]bool {
 // removeStrandedFlows removes, with applyMu held, the entries an earlier
 // rollback failed to remove, and puts back the published policies' flows
 // for the entries it removed. An entry whose delete fails again stays
-// tracked.
+// tracked. It also retries the entries an earlier restore failed to put
+// back (unrestoredFlows); one that fails again is recorded again.
 func (s *SDNService) removeStrandedFlows(ctx context.Context, client ovs.ClientInterface) {
-	if len(s.strandedFlows) == 0 {
+	if len(s.strandedFlows) == 0 && len(s.unrestoredFlows) == 0 {
 		return
 	}
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), policyRollbackTimeout)
 	defer cancel()
+
+	if len(s.unrestoredFlows) > 0 {
+		retry := make(map[flowEntryKey]bool, len(s.unrestoredFlows))
+		for key := range s.unrestoredFlows {
+			retry[key] = true
+		}
+		s.unrestoredFlows = nil
+		_, _ = s.restoreOverwrittenFlows(cctx, client, "", retry)
+	}
 
 	removed := make(map[flowEntryKey]bool, len(s.strandedFlows))
 	for key, f := range s.strandedFlows {
@@ -1470,7 +1492,7 @@ func (s *SDNService) removeStrandedFlows(ctx context.Context, client ovs.ClientI
 		removed[key] = true
 	}
 	if len(removed) > 0 {
-		s.restoreOverwrittenFlows(cctx, client, "", removed)
+		_, _ = s.restoreOverwrittenFlows(cctx, client, "", removed)
 	}
 }
 
@@ -1551,8 +1573,9 @@ func normalizeFlowMatch(match string) string {
 // restoreOverwrittenFlows re-installs the flows of every recorded policy other
 // than skipID whose switch entry is in removed: a failed apply replaced those
 // entries and its rollback deleted them. A policy whose flow cannot be put back
-// is marked "error".
-func (s *SDNService) restoreOverwrittenFlows(ctx context.Context, client ovs.ClientInterface, skipID string, removed map[flowEntryKey]bool) map[flowEntryKey]bool {
+// is marked "error", its entry is recorded in unrestoredFlows for the next
+// apply to retry, and the failure is returned. Called with applyMu held.
+func (s *SDNService) restoreOverwrittenFlows(ctx context.Context, client ovs.ClientInterface, skipID string, removed map[flowEntryKey]bool) (map[flowEntryKey]bool, error) {
 	type restore struct {
 		p      *policyResource
 		bridge string
@@ -1603,6 +1626,7 @@ func (s *SDNService) restoreOverwrittenFlows(ctx context.Context, client ovs.Cli
 		latest[newFlowEntryKey(r.bridge, r.flow)] = i
 	}
 	restored := make(map[flowEntryKey]bool, len(latest))
+	var errs []error
 	for i, r := range restores {
 		key := newFlowEntryKey(r.bridge, r.flow)
 		if latest[key] != i {
@@ -1612,11 +1636,17 @@ func (s *SDNService) restoreOverwrittenFlows(ctx context.Context, client ovs.Cli
 			s.mu.Lock()
 			r.p.status = "error"
 			s.mu.Unlock()
+			if s.unrestoredFlows == nil {
+				s.unrestoredFlows = make(map[flowEntryKey]bool)
+			}
+			s.unrestoredFlows[key] = true
+			errs = append(errs, fmt.Errorf("restore flow %q of policy %q on bridge %q: %w", r.flow.Match, r.p.id, r.bridge, err))
 			continue
 		}
+		delete(s.unrestoredFlows, key)
 		restored[key] = true
 	}
-	return restored
+	return restored, errors.Join(errs...)
 }
 
 // GetPolicy retrieves a policy by ID
@@ -1755,14 +1785,27 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 	}
 
 	// A surviving policy with the same entry (bridge, table, priority and
-	// match) lost its flow with the strict delete: put it back.
+	// match) lost its flow with the strict delete: put it back. When the
+	// delete failed the policy stays recorded and its own entries are
+	// restored too, in apply order: a later deny that shares an entry with
+	// an older allow stays in force, and a partly deleted policy gets its
+	// removed rules back. A policy whose entry cannot be put back is marked
+	// "error" by the restore, and the next apply retries it.
+	var restoreErr error
 	if len(removed) > 0 {
+		skipID := foundID
+		if deleteErr != nil {
+			skipID = ""
+		}
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), policyRollbackTimeout)
-		s.restoreOverwrittenFlows(cctx, client, foundID, removed)
+		_, restoreErr = s.restoreOverwrittenFlows(cctx, client, skipID, removed)
 		cancel()
 	}
 	if deleteErr != nil {
-		return nil, status.Errorf(codes.Internal, "failed to delete policy flows: %v", deleteErr)
+		return nil, status.Errorf(codes.Internal, "failed to delete policy flows: %v", errors.Join(deleteErr, restoreErr))
+	}
+	if restoreErr != nil {
+		return nil, status.Errorf(codes.Internal, "policy deleted; restore surviving policy flows: %v", restoreErr)
 	}
 
 	return &platformv1.DeletePolicyResponse{
