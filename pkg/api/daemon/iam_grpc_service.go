@@ -1127,7 +1127,6 @@ func (s *IAMGRPCService) SetSystemTenant(tenantID string) {
 // CreateToken refuses token issuance with codes.Unimplemented: the SDK IAM
 // client cannot issue tokens; platform tokens come from the broker's OIDC flows.
 func (s *IAMGRPCService) CreateToken(ctx context.Context, req *platformv1.CreateIAMTokenRequest) (*platformv1.CreateIAMTokenResponse, error) {
-	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/CreateToken")
 	return nil, status.Error(codes.Unimplemented, s.tokens.Create().Error())
 }
 
@@ -1135,7 +1134,6 @@ func (s *IAMGRPCService) CreateToken(ctx context.Context, req *platformv1.Create
 // client cannot revoke tokens; platform tokens are revoked by the broker's
 // OIDC flows.
 func (s *IAMGRPCService) RevokeToken(ctx context.Context, req *platformv1.RevokeIAMTokenRequest) (*platformv1.RevokeIAMTokenResponse, error) {
-	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/RevokeToken")
 	return nil, status.Error(codes.Unimplemented, s.tokens.Revoke().Error())
 }
 
