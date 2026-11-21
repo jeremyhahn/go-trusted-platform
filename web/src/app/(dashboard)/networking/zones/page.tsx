@@ -250,32 +250,42 @@ export default function ZonesPage() {
   const [deleteError, setDeleteError] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState(false);
 
+  // settleZones applies one zone read from its promise callbacks, so the
+  // effect starts it without a synchronous setState; fetchZones adds the
+  // loading reset for a re-read.
+  const settleZones = React.useCallback(
+    () =>
+      fetch('/api/v1/sdn/zones', { credentials: 'include' })
+        .then(async (res) => {
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
+          }
+          // The webservice wraps payloads in {payload}; the daemon REST
+          // stack returns the body bare — accept both.
+          const body = (await res.json()) as {
+            zones?: ZoneResponse[];
+            payload?: { zones?: ZoneResponse[] };
+          };
+          setZones(body.payload?.zones ?? body.zones ?? []);
+          setLoadError(null);
+        })
+        .catch((err: unknown) => {
+          setLoadError(err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => setLoading(false)),
+    []
+  );
+
   const fetchZones = React.useCallback(async () => {
     setLoading(true);
     setLoadError(null);
-    try {
-      const res = await fetch('/api/v1/sdn/zones', { credentials: 'include' });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
-      }
-      // The webservice wraps payloads in {payload}; the daemon REST
-      // stack returns the body bare — accept both.
-      const body = (await res.json()) as {
-        zones?: ZoneResponse[];
-        payload?: { zones?: ZoneResponse[] };
-      };
-      setZones(body.payload?.zones ?? body.zones ?? []);
-    } catch (err) {
-      setLoadError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    await settleZones();
+  }, [settleZones]);
 
   React.useEffect(() => {
-    void fetchZones();
-  }, [fetchZones]);
+    void settleZones();
+  }, [settleZones]);
 
   const zoneNames = React.useMemo(() => zones.map((z) => z.name), [zones]);
 

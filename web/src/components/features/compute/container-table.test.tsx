@@ -84,6 +84,15 @@ describe('ContainerTable', () => {
     expect(db.getByText('-')).toBeDefined();
   });
 
+  it('links each container name to its detail page', () => {
+    stubControlPlane({});
+    mount([container({ id: 'ctr/1', name: 'web' })]);
+
+    const link = screen.getByRole('link', { name: 'web' });
+    // next/link drops the trailing slash outside a trailingSlash Next config.
+    expect(link.getAttribute('href')).toMatch(/^\/compute\/containers\/ctr%2F1\/?$/);
+  });
+
   it('gives each status its colour', () => {
     stubControlPlane({});
     mount([

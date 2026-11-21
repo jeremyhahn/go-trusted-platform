@@ -261,8 +261,7 @@ test.describe('TPM Status Page', () => {
     test('should display TPM status information', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/tpm/status');
 
-      // Wait for page to load
-      await authenticatedPage.waitForTimeout(1000);
+      await expect(authenticatedPage.locator('h1, h2, h3').first()).toBeVisible();
 
       // Should show TPM availability status, or error/loading state
       const statusCard = authenticatedPage.locator('text=/available|unavailable|manufacturer|version|tpm/i').first();
@@ -282,14 +281,11 @@ test.describe('TPM Status Page', () => {
     test('should display TPM capabilities', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/tpm/status');
 
-      // Wait for internal mock data to load
-      await authenticatedPage.waitForTimeout(1000);
+      await expect(authenticatedPage.locator('h1, h2, h3').first()).toBeVisible();
 
       // Should show capability section or EK/SRK indicators
       const capabilitiesSection = authenticatedPage.locator('text=/capabilities|ek|endorsement|srk|storage/i').first();
-      const hasCapabilities = (await capabilitiesSection.count()) > 0;
-
-      expect(hasCapabilities).toBe(true);
+      await expect(capabilitiesSection).toBeVisible({ timeout: 10000 });
     });
 
     test('should have refresh button', async ({ authenticatedPage }) => {
@@ -603,7 +599,7 @@ test.describe('Attestation Manifests Page', () => {
 
         // Type in search
         await searchInput.first().fill('Server');
-        await authenticatedPage.waitForTimeout(500);
+        await expect(searchInput.first()).toHaveValue('Server');
       }
     });
   });
@@ -703,7 +699,7 @@ test.describe('Attestation Quotes Page', () => {
 
         // Type in search
         await searchInput.first().fill('Production');
-        await authenticatedPage.waitForTimeout(500);
+        await expect(searchInput.first()).toHaveValue('Production');
       }
     });
   });
