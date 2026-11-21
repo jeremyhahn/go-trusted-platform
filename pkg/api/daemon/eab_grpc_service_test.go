@@ -975,6 +975,14 @@ func TestEABGRPCService_QUICMTLSCallerResolvesIAMUser(t *testing.T) {
 			wantRoles: []string{"eab-operator"},
 		},
 		{
+			name:      "certificate email identity resolves by email when the CN differs",
+			authCtx:   &platformtoken.AuthorizedContext{Subject: "alice@example.com", Username: "alice-cn", TenantID: "tenant-a", Scopes: []string{mtlsOperatorScope}},
+			users:     users,
+			wantCode:  codes.OK,
+			wantID:    "1001",
+			wantRoles: []string{"eab-admin"},
+		},
+		{
 			name:     "unknown certificate CN denied without a PEP call",
 			authCtx:  &platformtoken.AuthorizedContext{Subject: "nobody", Username: "nobody", TenantID: "tenant-a", Scopes: []string{mtlsOperatorScope}},
 			users:    users,
