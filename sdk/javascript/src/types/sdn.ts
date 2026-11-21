@@ -845,7 +845,10 @@ export interface NetworkZonePrivilegedAccess {
   approved_by: string;
 }
 
-/** The create and update body of a zone; on update the URL name wins. */
+/**
+ * The create and update body of a zone. `name` is required on create; on
+ * update it must be omitted or match the URL name (HTTP 400 otherwise).
+ */
 export interface NetworkZoneSpec {
   name?: string;
   offset?: number;
