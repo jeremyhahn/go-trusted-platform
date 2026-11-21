@@ -683,8 +683,9 @@ func (c *Client) AddFlow(ctx context.Context, flow *FlowMod) error {
 		return err
 	}
 
-	// No response is expected: the barrier confirms the switch processed it
-	return c.writeConfirmed(ctx, data, "failed to send flow mod")
+	// No response is expected: the barrier confirms the switch processed it,
+	// and an OFPT_ERROR the switch sent for this xid before it is returned.
+	return c.sendConfirmed(ctx, xid, data)
 }
 
 // DeleteFlow deletes flows matching the criteria
@@ -702,7 +703,7 @@ func (c *Client) DeleteFlow(ctx context.Context, flow *FlowMod) error {
 		return err
 	}
 
-	return c.writeConfirmed(ctx, data, "failed to send flow mod")
+	return c.sendConfirmed(ctx, xid, data)
 }
 
 // DeleteFlowStrict deletes the single flow whose match, priority, and table
@@ -723,7 +724,7 @@ func (c *Client) DeleteFlowStrict(ctx context.Context, flow *FlowMod) error {
 		return err
 	}
 
-	return c.writeConfirmed(ctx, data, "failed to send flow mod")
+	return c.sendConfirmed(ctx, xid, data)
 }
 
 // DeleteAllFlows deletes all flows from the bridge
@@ -750,7 +751,7 @@ func (c *Client) ModifyFlow(ctx context.Context, flow *FlowMod) error {
 		return err
 	}
 
-	return c.writeConfirmed(ctx, data, "failed to send flow mod")
+	return c.sendConfirmed(ctx, xid, data)
 }
 
 // GetFlowStats retrieves flow statistics from every table.
