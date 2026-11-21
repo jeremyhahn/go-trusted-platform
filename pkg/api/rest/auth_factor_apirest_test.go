@@ -104,18 +104,18 @@ func TestAuthFactorAPIRest_EmptyID(t *testing.T) {
 }
 
 func TestAuthFactorAPIRest_CallerAuthorized(t *testing.T) {
+	// Without a PEP and a principal, no certificate name admits a caller.
 	h := NewAuthFactorHandlers(nil, nil)
 	cases := []struct {
 		name    string
 		subject *pkix.Name
-		want    bool
 	}{
-		{"no client certificate", nil, true},
-		{"the user themselves", &pkix.Name{CommonName: "alice"}, true},
-		{"admin common name", &pkix.Name{CommonName: "admin"}, true},
-		{"admin-prefixed common name", &pkix.Name{CommonName: "admin-ops"}, true},
-		{"admin organizational unit", &pkix.Name{CommonName: "carol", OrganizationalUnit: []string{"eng", "ADMIN"}}, true},
-		{"another user", &pkix.Name{CommonName: "bob", OrganizationalUnit: []string{"eng"}}, false},
+		{"no client certificate", nil},
+		{"the user themselves", &pkix.Name{CommonName: "alice"}},
+		{"admin common name", &pkix.Name{CommonName: "admin"}},
+		{"admin-prefixed common name", &pkix.Name{CommonName: "admin-ops"}},
+		{"admin organizational unit", &pkix.Name{CommonName: "carol", OrganizationalUnit: []string{"eng", "ADMIN"}}},
+		{"another user", &pkix.Name{CommonName: "bob", OrganizationalUnit: []string{"eng"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -123,7 +123,7 @@ func TestAuthFactorAPIRest_CallerAuthorized(t *testing.T) {
 			if tc.subject != nil {
 				req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{Subject: *tc.subject}}}
 			}
-			assert.Equal(t, tc.want, h.callerAuthorized(req, "alice"))
+			assert.False(t, h.callerAuthorized(req, "alice"))
 		})
 	}
 }

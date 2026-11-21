@@ -93,6 +93,7 @@ type RESTServer struct {
 	gatewayHandlers       *restapi.GatewayHandlers
 	gatewayService        *gatewayRESTService
 	idevidService         *IDevIDGRPCService
+	authFactorHandlers    *restapi.AuthFactorHandlers
 }
 
 // NewRESTServer creates a new REST server for the daemon
@@ -541,10 +542,61 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, guard *
 	// Wire auth factor endpoints (AAGUID lookup, mTLS probe, cert issuance,
 	// MFA policy). These share the same CA instance as the CA handlers so
 	// certificate issuance goes through the live platform CA.
+	// Cert issuance is decided by the IAM PEP for the request's platform-token
+	// principal; until SetAuthFactorPEP runs (the PEP is built after the CA
+	// handlers), issuance is refused.
 	authFactorHandlers := restapi.NewAuthFactorHandlers(ca, s.logger)
-	authFactorHandlers.RegisterRoutes(s.router)
+	authFactorHandlers.SetAuthorization(nil, authFactorPrincipal)
+	s.authFactorHandlers = authFactorHandlers
+	// Issuance runs behind the REST scope guard: authorize authenticates the
+	// platform token and puts the caller where authFactorPrincipal reads it,
+	// then the PEP decides authfactor:enroll. Without a guard the route
+	// still refuses every request (no principal).
+	issuer := s.router
+	if guard != nil {
+		issuer = s.router.NewRoute().Subrouter()
+		issuer.Use(s.authFactorAuthorization(guard).authorize)
+	}
+	authFactorHandlers.RegisterRoutesWithIssuer(s.router, issuer)
 	s.logger.Info("Auth factor REST routes registered")
 }
+
+// SetAuthFactorPEP hands the daemon's IAM PEP to the auth-factor handlers, so
+// mTLS cert issuance is decided by the PEP. A nil pep keeps issuance refused.
+func (s *RESTServer) SetAuthFactorPEP(pep restapi.AuthFactorPEP) {
+	if s.authFactorHandlers == nil {
+		return
+	}
+	s.authFactorHandlers.SetAuthorization(pep, authFactorPrincipal)
+}
+
+// authFactorPrincipal resolves the platform-token principal the catalog
+// guard put on the request.
+func authFactorPrincipal(r *http.Request) (restapi.AuthFactorPrincipal, bool) {
+	caller, ok := restCaller(r)
+	if !ok {
+		return restapi.AuthFactorPrincipal{}, false
+	}
+	return restapi.AuthFactorPrincipal{Subject: caller.Subject, TenantID: caller.TenantID, Roles: caller.Roles}, true
+}
+
+// authFactorAuthorization authenticates an auth-factor issuance request
+// through guard. The token needs the authfactor:enroll scope (an iam:write
+// token alone is refused); the PEP then decides the go-qrdb permission
+// authfactor:enroll for the principal.
+func (s *RESTServer) authFactorAuthorization(guard *restapi.ScopeGuard) restScopeAuthorization {
+	return restScopeAuthorization{
+		guard:      guard,
+		respWriter: response.NewResponseWriter(logging.NewFromSlog(s.logger), nil),
+		routeScope: func(_, _ string) (string, error) {
+			return authFactorEnrollScope, nil
+		},
+	}
+}
+
+// authFactorEnrollScope is the token scope auth-factor issuance requires:
+// the same permission the PEP then decides for the principal.
+const authFactorEnrollScope = restapi.AuthFactorResource + ":" + restapi.AuthFactorEnrollAction
 
 // SetTPMHandlers mounts the physical TPM routes (/api/v1/tpm/...). Every
 // route runs on tpm, the daemon's TPM service, with the protobuf JSON request
