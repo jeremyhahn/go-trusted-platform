@@ -51,7 +51,7 @@ describe('PlatformService daemon services', () => {
     const res = await service.listServices();
 
     expect(mockClient.get).toHaveBeenCalledWith('/v1/platform/services');
-    expect(res.data?.services[0].start_count).toBe(2);
+    expect(res.data?.services[0]?.start_count).toBe(2);
     expect(res.data?.count).toBe(1);
   });
 
