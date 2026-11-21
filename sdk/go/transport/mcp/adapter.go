@@ -400,6 +400,7 @@ var grpcMethodToMCPToolMap = map[string]string{
 	// the result carries proto field names, so the generic round-trip
 	// decodes straight into RecordAttestationCertificateResponse.
 	"/platform.v1.DeviceService/RecordAttestationCertificate": "device_record_attest_cert",
+	"/platform.v1.DeviceService/IssueAttestationChallenge":    "device_attest_challenge",
 	// A diskless node's per-boot requests. Server tools: pkg/api/mcp/tools.go
 	// device_boot_certificate / device_boot_delivery. MCP carries no TLS
 	// connection, so the server refuses both; the mapping exists for parity.

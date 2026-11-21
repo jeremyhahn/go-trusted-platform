@@ -342,6 +342,7 @@ func (a restScopeAuthorization) authorize(next http.Handler) http.Handler {
 			}
 		}
 		ctx := context.WithValue(r.Context(), restCallerKey{}, caller)
+		ctx = grpcapi.ContextWithAuthorizedContext(ctx, caller)
 		if a.bindTenant {
 			if caller.TenantID == "" {
 				a.respWriter.Error403(w, r, restapi.ErrRouteForbidden{Scope: scope, Reason: "caller has no tenant to bind"}, nil)
@@ -357,7 +358,8 @@ func (a restScopeAuthorization) authorize(next http.Handler) http.Handler {
 // restCallerKey is the request context key of the caller authorize verified.
 // A route's own scope check reads it instead of authenticating again: a
 // sender-constrained (DPoP) proof is single-use, so a second validation would
-// reject the request as a replay.
+// reject the request as a replay. The caller is also the services' gRPC
+// authorized context, so callerTenant binds REST calls to the bearer's tenant (#2142).
 type restCallerKey struct{}
 
 // restCaller returns the caller authorize verified for r, if any.

@@ -333,7 +333,10 @@ func buildGRPCMethodPermissions() map[string]string {
 		"/platform.v1.DeviceService/FindDeviceBySerial":        scope(device, read),
 		// Attestation persists: the first verified quote seeds the profile's
 		// PCR baseline and a failed one quarantines the device.
-		"/platform.v1.DeviceService/AttestDevice":                 scope(device, write),
+		"/platform.v1.DeviceService/AttestDevice": scope(device, write),
+		// Issuing a challenge creates server state: the single-use nonce
+		// AttestDevice consumes (#2136).
+		"/platform.v1.DeviceService/IssueAttestationChallenge":    scope(device, write),
 		"/platform.v1.DeviceService/RecordAttestationCertificate": scope(device, write),
 		"/platform.v1.DeviceService/CreateProfile":                scope(device, write),
 		"/platform.v1.DeviceService/CreateTemplate":               scope(device, write),
