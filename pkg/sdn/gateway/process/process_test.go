@@ -3192,6 +3192,66 @@ func TestStartService_ADataDirectoryAlreadyTraversableKeepsItsMode(t *testing.T)
 	assert.Equal(t, uint32(0o751), st.Mode&0o7777)
 }
 
+func TestStartService_TheDatapathChildCanTraverseTheDataDirectory(t *testing.T) {
+	// The datapath child keeps root's uid but none of the DAC capabilities,
+	// and reads <data-dir>/fhrp at start (#1716). Under a data directory
+	// another account owns (0750, as the gatewayd supervisor integration
+	// tests lay it out) the kernel checks the "other" class, which has no
+	// search bit, and the open fails with EACCES (#2150). The supervisor
+	// grants that one bit; a data directory the child's uid owns is left
+	// alone. rootCredentials stands in for root so no test needs root.
+	// harden skips dropCredentials for the datapath, so the child also keeps
+	// the supervisor's supplementary groups; rootGroups stands in for them.
+	t.Run("another owner", func(t *testing.T) {
+		dataDir := filepath.Join(t.TempDir(), "data")
+		require.NoError(t, os.Mkdir(dataDir, 0o750))
+		require.NoError(t, os.Chmod(dataDir, 0o750))
+		supervisor, _, _ := newSupervisor(t, func(cfg *Config) { cfg.Inherited.DataDir = dataDir })
+		supervisor.rootCredentials = func() (uint32, uint32) {
+			return uint32(os.Getuid()) + 1, uint32(os.Getgid()) + 1
+		}
+		// The test process's own groups include the directory's group.
+		supervisor.rootGroups = func() ([]int, error) { return nil, nil }
+
+		require.NoError(t, supervisor.StartService(testContext(t), gateway.ServiceNAT))
+		var st unix.Stat_t
+		require.NoError(t, unix.Stat(dataDir, &st))
+		assert.Equal(t, uint32(0o751), st.Mode&0o7777, "the other class gains search only")
+		require.NoError(t, unix.Stat(filepath.Join(dataDir, "fhrp"), &st))
+		assert.Equal(t, uint32(0o700), st.Mode&0o7777, "the child's own state stays private")
+	})
+	t.Run("own data directory", func(t *testing.T) {
+		dataDir := filepath.Join(t.TempDir(), "data")
+		require.NoError(t, os.Mkdir(dataDir, 0o700))
+		supervisor, _, _ := newSupervisor(t, func(cfg *Config) { cfg.Inherited.DataDir = dataDir })
+		supervisor.rootCredentials = func() (uint32, uint32) {
+			return uint32(os.Getuid()), uint32(os.Getgid())
+		}
+
+		require.NoError(t, supervisor.StartService(testContext(t), gateway.ServiceNAT))
+		var st unix.Stat_t
+		require.NoError(t, unix.Stat(dataDir, &st))
+		assert.Equal(t, uint32(0o700), st.Mode&0o7777, "the owner class already traverses; no class is widened")
+	})
+	t.Run("a supplementary group owns it", func(t *testing.T) {
+		dataDir := filepath.Join(t.TempDir(), "data")
+		require.NoError(t, os.Mkdir(dataDir, 0o700))
+		require.NoError(t, os.Chmod(dataDir, 0o700))
+		var st unix.Stat_t
+		require.NoError(t, unix.Stat(dataDir, &st))
+		dirGID := st.Gid
+		supervisor, _, _ := newSupervisor(t, func(cfg *Config) { cfg.Inherited.DataDir = dataDir })
+		supervisor.rootCredentials = func() (uint32, uint32) {
+			return uint32(os.Getuid()) + 1, dirGID + 1
+		}
+		supervisor.rootGroups = func() ([]int, error) { return []int{int(dirGID)}, nil }
+
+		require.NoError(t, supervisor.StartService(testContext(t), gateway.ServiceNAT))
+		require.NoError(t, unix.Stat(dataDir, &st))
+		assert.Equal(t, uint32(0o710), st.Mode&0o7777, "the group class the inherited supplementary group selects gains search, not other")
+	})
+}
+
 func TestGrantTraverse_AMissingDirectoryIsAnError(t *testing.T) {
 	err := grantTraverse(filepath.Join(t.TempDir(), "absent"), uint32(os.Getuid()), uint32(os.Getgid()))
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -3233,6 +3293,8 @@ func TestTraverseBit_OwnerThenGroupThenOther(t *testing.T) {
 	assert.Equal(t, uint32(0o100), traverseBit(0, 0, 0, 0), "owner wins even when the group also matches")
 	assert.Equal(t, uint32(0o010), traverseBit(0, 990, 990, 990), "root:<group>: the child's group class")
 	assert.Equal(t, uint32(0o001), traverseBit(0, 0, 990, 990), "root:root: the other class")
+	assert.Equal(t, uint32(0o010), traverseBit(0, 991, 990, 990, 991), "a supplementary group selects the group class")
+	assert.Equal(t, uint32(0o001), traverseBit(0, 0, 990, 990, 991), "no group matches: other")
 }
 
 func TestStartService_AStateDirectoryThatCannotBeMadeRefusesTheLaunch(t *testing.T) {
