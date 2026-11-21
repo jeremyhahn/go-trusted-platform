@@ -450,6 +450,53 @@ describe('SDNBridgeDetailClient policy apply and policy identity', () => {
     });
   }
 
+  // SDNService.ApplyPolicy refuses an existing name without its ID
+  // (AlreadyExists), so a replacement carries the policy's ID and keeps its
+  // other bridge targets (#2148 Codex, P1).
+  it('applying an existing policy name replaces that policy by its ID', async () => {
+    const sent = await renderPage({
+      [`GET ${SDN}/policies`]: ok({ policies: [denyTelnet] }),
+      [`POST ${SDN}/policies`]: ok({ policy: { id: 'pol-deny' } }),
+    });
+    await screen.findByRole('button', { name: 'View policy deny-telnet' });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Policy' }));
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: 'deny-telnet' } });
+    expect(screen.getByTestId('policy-replace-note').textContent).toContain('Replaces policy deny-telnet');
+    fireEvent.change(screen.getByLabelText('Action *'), { target: { value: 'POLICY_RULE_ACTION_ALLOW' } });
+    fireEvent.change(screen.getByLabelText('Protocol'), { target: { value: 'tcp' } });
+    fireEvent.change(screen.getByLabelText('Destination port'), { target: { value: '22' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    });
+
+    await waitFor(() => expect(sent.some((r) => r.method === 'POST' && r.path === `${SDN}/policies`)).toBe(true));
+    const body = sent.find((r) => r.method === 'POST' && r.path === `${SDN}/policies`)?.body as {
+      policyId?: string;
+      config: { name: string; targets: { type: string; id: string }[] };
+    };
+    expect(body.policyId).toBe('pol-deny');
+    expect(body.config.name).toBe('deny-telnet');
+    const own = body.config.targets.filter((t) => t.type === 'POLICY_TARGET_TYPE_BRIDGE' && t.id === 'br-1');
+    expect(own.length).toBe(1);
+  });
+
+  it('a new policy name is sent without a policy ID', async () => {
+    const sent = await renderPage({ [`POST ${SDN}/policies`]: ok({ policy: { id: 'pol-9' } }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Policy' }));
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: 'deny-telnet' } });
+    expect(screen.queryByTestId('policy-replace-note')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Action *'), { target: { value: 'POLICY_RULE_ACTION_DENY' } });
+    fireEvent.change(screen.getByLabelText('Protocol'), { target: { value: 'tcp' } });
+    fireEvent.change(screen.getByLabelText('Destination port'), { target: { value: '23' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    });
+
+    await waitFor(() => expect(sent.some((r) => r.method === 'POST' && r.path === `${SDN}/policies`)).toBe(true));
+    const body = sent.find((r) => r.method === 'POST' && r.path === `${SDN}/policies`)?.body as Record<string, unknown>;
+    expect('policyId' in body).toBe(false);
+  });
+
   it('a recorded rule priority 0 under another policy priority is not a conflict', async () => {
     const existing = {
       ...denyTelnet,

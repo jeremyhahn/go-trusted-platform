@@ -127,6 +127,29 @@ describe("MigrationsPage receivers", () => {
     fireEvent.click(prepare);
     await waitFor(() => expect(ops.prepareMigration).toHaveBeenCalledTimes(2));
   });
+
+  // FinalizeIncoming removes the receiver before it commits or aborts, so a
+  // non-2xx answer (useVMOperations returns undefined) still frees the slot
+  // (#2148 Codex, P1).
+  it("enables Prepare Migration again when finalize fails over HTTP", async () => {
+    ops.finalizeMigration.mockResolvedValue(undefined);
+    render(<MigrationsPage />);
+    fillSpec();
+    const prepare = screen.getByRole("button", { name: "Prepare Migration" }) as HTMLButtonElement;
+    fireEvent.click(prepare);
+    await waitFor(() => expect(prepare.disabled).toBe(true));
+
+    fireEvent.click(screen.getByRole("button", { name: "Commit Migration" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+
+    await waitFor(() => expect(ops.finalizeMigration).toHaveBeenCalledWith("rx-1", true));
+    await waitFor(() => expect(prepare.disabled).toBe(false));
+    expect(screen.getByTestId("migration-finalize-result").textContent).toContain(
+      "Receiver rx-1 commit failed; prepare a new receiver",
+    );
+    fireEvent.click(prepare);
+    await waitFor(() => expect(ops.prepareMigration).toHaveBeenCalledTimes(2));
+  });
 });
 
 // #1742: finalize can answer success while the received guest is missing
