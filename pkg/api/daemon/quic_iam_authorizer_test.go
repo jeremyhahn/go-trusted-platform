@@ -16,12 +16,18 @@ package daemon
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
+	sdktransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
+	sdkrest "github.com/jeremyhahn/go-quicbaas/sdk/go/transport/rest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -160,26 +166,27 @@ func TestErrPEPClientNotAvailable_Error(t *testing.T) {
 	}
 }
 
-// storedUsersIAM is an IAM client whose user lookups follow the IAM store's
-// contract: users are tenant-scoped, Get answers only numeric Snowflake IDs
-// (the store's ParseUserID refuses anything else as not found), GetByEmail
-// matches the email and FindByUsername the username. A missing user is an
-// error; every other IAM method is the embedded nil interface and panics if
-// called.
+// storedUsersIAM is an IAM client whose user lookups follow the pinned
+// go-quicbaas SDK v0.12.0-alpha: users are tenant-scoped, Get answers only
+// numeric Snowflake IDs (the store's ParseUserID refuses anything else as
+// not found), List returns the tenant's stored users, and GetByEmail and
+// FindByUsername fail whatever is stored, as the SDK's gRPC and REST/HTTP3
+// transports do. Every other IAM method is the embedded nil interface and
+// panics if called.
 type storedUsersIAM struct {
 	quicbaassdk.IAMClient
 	users  []*sdkiam.User
 	getErr error
-	// anyUser, when set, is the one stored user, found by any email or
-	// username in any tenant: tests whose PEP fake does not look at roles
-	// give it to admit a certificate caller.
-	anyUser *sdkiam.User
+	// listIgnoresTenant, when set, makes List return every stored user, of
+	// any tenant: a server that does not scope its answer to the tenant.
+	listIgnoresTenant bool
 }
 
-// iamStoringAnyUser is an IAM client that holds a user, with no roles, for
-// every certificate subject and tenant.
+// iamStoringAnyUser is an IAM client that holds the testutil client
+// certificate's user (CN test-client in tenant O "Test Platform Client",
+// pkg/testutil/tls.go), with no roles, as stored user 1001.
 func iamStoringAnyUser() *storedUsersIAM {
-	return &storedUsersIAM{anyUser: &sdkiam.User{ID: "1001"}}
+	return &storedUsersIAM{users: []*sdkiam.User{{ID: "1001", TenantID: "Test Platform Client", Username: "test-client"}}}
 }
 
 func (c *storedUsersIAM) User() sdkiam.UserClient { return storedUsers{client: c} }
@@ -189,14 +196,14 @@ type storedUsers struct {
 	client *storedUsersIAM
 }
 
-var errStoredUserNotFound = errors.New("user not found")
+var (
+	errStoredUserNotFound     = errors.New("user not found")
+	errPinnedSDKUnimplemented = errors.New("unimplemented: the pinned SDK transports do not serve this lookup")
+)
 
 func (u storedUsers) find(tenantID string, match func(*sdkiam.User) bool) (*sdkiam.User, error) {
 	if u.client.getErr != nil {
 		return nil, u.client.getErr
-	}
-	if u.client.anyUser != nil {
-		return u.client.anyUser, nil
 	}
 	for _, user := range u.client.users {
 		if user.TenantID == tenantID && match(user) {
@@ -213,12 +220,25 @@ func (u storedUsers) Get(_ context.Context, tenantID, userID string) (*sdkiam.Us
 	return u.find(tenantID, func(user *sdkiam.User) bool { return user.ID == userID })
 }
 
-func (u storedUsers) GetByEmail(_ context.Context, tenantID, email string) (*sdkiam.User, error) {
-	return u.find(tenantID, func(user *sdkiam.User) bool { return email != "" && user.Email == email })
+func (u storedUsers) GetByEmail(context.Context, string, string) (*sdkiam.User, error) {
+	return nil, errPinnedSDKUnimplemented
 }
 
-func (u storedUsers) FindByUsername(_ context.Context, tenantID, username string) (*sdkiam.User, error) {
-	return u.find(tenantID, func(user *sdkiam.User) bool { return username != "" && user.Username == username })
+func (u storedUsers) FindByUsername(context.Context, string, string) (*sdkiam.User, error) {
+	return nil, errPinnedSDKUnimplemented
+}
+
+func (u storedUsers) List(_ context.Context, tenantID string, _ *sdkiam.ListUsersRequest) (*sdkiam.ListUsersResponse, error) {
+	if u.client.getErr != nil {
+		return nil, u.client.getErr
+	}
+	resp := &sdkiam.ListUsersResponse{}
+	for _, user := range u.client.users {
+		if u.client.listIgnoresTenant || user.TenantID == tenantID {
+			resp.Users = append(resp.Users, *user)
+		}
+	}
+	return resp, nil
 }
 
 // pepGrantingRole is a PEP that allows resource:action only when the Check
@@ -323,12 +343,28 @@ func TestIAMTokenAuthorizer_CheckPeerPermission_ResolvesStoredRoles(t *testing.T
 		var asked []*sdkiam.CheckRequest
 		authz := &iamTokenAuthorizer{
 			pep: pepGrantingRole("kms-operator", "kms", "delete", &asked),
-			iam: &storedUsersIAM{anyUser: &sdkiam.User{ID: "7301", TenantID: "other", Roles: []string{"kms-operator"}}},
+			iam: &storedUsersIAM{listIgnoresTenant: true, users: []*sdkiam.User{
+				{ID: "7301", TenantID: "other", Email: "ops@acme.example", Roles: []string{"kms-operator"}},
+			}},
 		}
 		allowed, err := authz.CheckPeerPermission(context.Background(), emailPeer, "kms", "delete")
 		require.NoError(t, err)
 		assert.False(t, allowed)
 		assert.Empty(t, asked)
+	})
+	t.Run("two stored users with the same username are denied", func(t *testing.T) {
+		var asked []*sdkiam.CheckRequest
+		authz := &iamTokenAuthorizer{
+			pep: pepGrantingRole("kms-operator", "kms", "delete", &asked),
+			iam: &storedUsersIAM{users: []*sdkiam.User{
+				{ID: "7302", TenantID: "acme", Username: "admin", Roles: []string{"kms-operator"}},
+				{ID: "7303", TenantID: "acme", Username: "admin", Roles: []string{"kms-operator"}},
+			}},
+		}
+		allowed, err := authz.CheckPeerPermission(context.Background(), cnPeer, "kms", "delete")
+		require.NoError(t, err)
+		assert.False(t, allowed)
+		assert.Empty(t, asked, "an ambiguous certificate subject never reaches the PEP")
 	})
 	t.Run("lookup error is a denial without an error", func(t *testing.T) {
 		var asked []*sdkiam.CheckRequest
@@ -349,6 +385,60 @@ func TestIAMTokenAuthorizer_CheckPeerPermission_ResolvesStoredRoles(t *testing.T
 		assert.False(t, allowed)
 		assert.Empty(t, asked)
 	})
+}
+
+// TestIAMTokenAuthorizer_CheckPeerPermission_ResolvesThroughPinnedRESTTransport
+// drives certificate-user resolution through the pinned SDK's real REST
+// transport adapter against a server answering the pinned server's
+// ListUsers shape, so a lookup the SDK does not carry end to end fails here.
+func TestIAMTokenAuthorizer_CheckPeerPermission_ResolvesThroughPinnedRESTTransport(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/tenants/acme/users" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"users":[`+
+			`{"id":"7301","tenant_id":"acme","email":"ops@acme.example","username":"ops","roles":["kms-operator"]},`+
+			`{"id":"7302","tenant_id":"acme","email":"admin@acme.example","username":"admin","roles":["kms-operator"]}`+
+			`],"limit":100,"offset":0}`)
+	}))
+	t.Cleanup(srv.Close)
+	tr, err := sdkrest.New(&sdktransport.Config{Address: srv.URL, Timeout: 5 * time.Second})
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		subject string
+		wantID  string
+	}{
+		{subject: "ops@acme.example", wantID: "7301"},
+		{subject: "admin", wantID: "7302"},
+	} {
+		var asked []*sdkiam.CheckRequest
+		authz := &iamTokenAuthorizer{
+			pep: pepGrantingRole("kms-operator", "kms", "delete", &asked),
+			iam: sdkiam.NewClient(tr),
+		}
+		peer := &platformtoken.AuthorizedContext{Subject: tc.subject, TenantID: "acme"}
+		allowed, err := authz.CheckPeerPermission(context.Background(), peer, "kms", "delete")
+		require.NoError(t, err, tc.subject)
+		assert.True(t, allowed, "%s resolves through the pinned REST transport", tc.subject)
+		require.Len(t, asked, 1, tc.subject)
+		assert.Equal(t, tc.wantID, asked[0].Subject.ID, tc.subject)
+		assert.Equal(t, []string{"kms-operator"}, asked[0].Subject.Roles, tc.subject)
+	}
+
+	var asked []*sdkiam.CheckRequest
+	authz := &iamTokenAuthorizer{
+		pep: pepGrantingRole("kms-operator", "kms", "delete", &asked),
+		iam: sdkiam.NewClient(tr),
+	}
+	stranger := &platformtoken.AuthorizedContext{Subject: "stranger@acme.example", TenantID: "acme"}
+	allowed, err := authz.CheckPeerPermission(context.Background(), stranger, "kms", "delete")
+	require.NoError(t, err)
+	assert.False(t, allowed)
+	assert.Empty(t, asked, "an absent certificate subject never reaches the PEP")
 }
 
 // mockSDKPEPClient is an sdkiam.PEPClient whose answers the test supplies.
