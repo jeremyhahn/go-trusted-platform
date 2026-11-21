@@ -92,11 +92,14 @@ func probeTPMSealArtifacts() tpmSealProbe {
 
 // probeTPMSealArtifactsForTPM is the seal probe for the configured TPM.
 // An in-process TPM simulator cannot hold an ESP seal (its state lives
-// only in this process), so with the simulator selected the probe answers
-// absent without reading the ESP (#2034, option a). Every device TPM keeps
-// the full ESP probe of probeTPMSealArtifacts.
+// only in this process), so with the in-process simulator selected the
+// probe answers absent without reading the ESP (#2034, option a). A
+// configured command address means a TCP TPM, which the TPM library dials
+// before it looks at UseSimulator, and a TCP TPM can hold a seal across
+// restarts: with a command address set, as on every device TPM, the probe
+// is the full ESP probe of probeTPMSealArtifacts.
 func probeTPMSealArtifactsForTPM(useSimulator bool, commandAddress string) tpmSealProbe {
-	if useSimulator {
+	if useSimulator && commandAddress == "" {
 		return tpmSealAbsent
 	}
 	return probeTPMSealArtifacts()
