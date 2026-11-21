@@ -3180,6 +3180,8 @@ func TestStartService_TheDatapathChildCanTraverseTheDataDirectory(t *testing.T) 
 		supervisor.rootCredentials = func() (uint32, uint32) {
 			return uint32(os.Getuid()) + 1, uint32(os.Getgid()) + 1
 		}
+		// The test process's own groups include the directory's group.
+		supervisor.rootGroups = func() ([]int, error) { return nil, nil }
 
 		require.NoError(t, supervisor.StartService(testContext(t), gateway.ServiceNAT))
 		var st unix.Stat_t

@@ -169,6 +169,12 @@ type Supervisor struct {
 	// replaced in tests so none needs root.
 	rootCredentials func() (uid, gid uint32)
 
+	// rootGroups reports the supplementary groups a child that is not
+	// Unprivileged inherits: harden skips dropCredentials for it, so it
+	// keeps the supervisor's (ensureStateDir); os.Getgroups, replaced in
+	// tests.
+	rootGroups func() ([]int, error)
+
 	// desired is the last document Apply was given. A process that
 	// reconciles a section of it and is started after that apply is given
 	// it at launch.
@@ -296,6 +302,7 @@ func New(cfg Config) *Supervisor {
 		rootCredentials: func() (uint32, uint32) {
 			return uint32(os.Geteuid()), uint32(os.Getegid())
 		},
+		rootGroups: os.Getgroups,
 	}
 }
 
@@ -581,8 +588,9 @@ const stateDirMode = 0o700
 // exist and belong to the credentials the process runs with. The data
 // directory belongs to root, so an unprivileged child could not create it
 // itself. A privileged child keeps root's uid without the DAC capabilities,
-// so it too is given search on a data directory it does not own (#2150);
-// its state directory stays root's. With no data directory the child
+// so it too is given search on a data directory it does not own (#2150),
+// in the class its uid, gid or the supervisor's supplementary groups it
+// inherits select; its state directory stays root's. With no data directory the child
 // resolves its own default, and there is nothing to lay out.
 func (s *Supervisor) ensureStateDir(def Definition) error {
 	if def.StateDir == "" || s.cfg.Inherited.DataDir == "" {
@@ -604,7 +612,15 @@ func (s *Supervisor) ensureStateDir(def Definition) error {
 		}
 	} else {
 		uid, gid := s.rootCredentials()
-		if err := grantTraverse(s.cfg.Inherited.DataDir, uid, gid); err != nil {
+		inherited, err := s.rootGroups()
+		if err != nil {
+			return &ErrStateDir{Process: def.Name, Path: s.cfg.Inherited.DataDir, Op: "traverse", Cause: err}
+		}
+		groups := make([]uint32, 0, len(inherited))
+		for _, g := range inherited {
+			groups = append(groups, uint32(g))
+		}
+		if err := grantTraverse(s.cfg.Inherited.DataDir, uid, gid, groups...); err != nil {
 			return &ErrStateDir{Process: def.Name, Path: s.cfg.Inherited.DataDir, Op: "traverse", Cause: err}
 		}
 	}
@@ -624,33 +640,39 @@ func (s *Supervisor) ensureStateDir(def Definition) error {
 // already traverse is left alone. The data directory may already exist at
 // 0700 — gatewayd's tunnels record and the ESP inventory both create it that
 // way — so the bit is added to whatever mode it has.
-func grantTraverse(path string, uid, gid uint32) error {
+func grantTraverse(path string, uid, gid uint32, groups ...uint32) error {
 	var st syscall.Stat_t
 	if err := syscall.Stat(path, &st); err != nil {
 		return err
 	}
 	mode := st.Mode & 0o7777
-	search := traverseBit(st.Uid, st.Gid, uid, gid)
+	search := traverseBit(st.Uid, st.Gid, uid, gid, groups...)
 	if mode&search != 0 {
 		return nil
 	}
 	return syscall.Chmod(path, mode|search)
 }
 
-// traverseBit is the one execute bit the kernel checks for a process with uid
-// and gid on a directory owned by ownerUID:ownerGID. Exactly one permission
-// class applies: owner if the uid matches, else group if the gid matches, else
-// other; a class that does not apply is never consulted. The child holds no
-// supplementary group but its own (dropCredentials), so gid is its only group.
-func traverseBit(ownerUID, ownerGID, uid, gid uint32) uint32 {
-	switch {
-	case ownerUID == uid:
+// traverseBit is the one execute bit the kernel checks for a process with uid,
+// gid and supplementary groups on a directory owned by ownerUID:ownerGID.
+// Exactly one permission class applies: owner if the uid matches, else group
+// if the gid or any supplementary group matches, else other; a class that does
+// not apply is never consulted. The Unprivileged child holds only its gid
+// (dropCredentials); a privileged child also holds the supervisor's
+// supplementary groups (harden skips dropCredentials), passed as groups.
+func traverseBit(ownerUID, ownerGID, uid, gid uint32, groups ...uint32) uint32 {
+	if ownerUID == uid {
 		return 0o100
-	case ownerGID == gid:
-		return 0o010
-	default:
-		return 0o001
 	}
+	if ownerGID == gid {
+		return 0o010
+	}
+	for _, g := range groups {
+		if g == ownerGID {
+			return 0o010
+		}
+	}
+	return 0o001
 }
 
 // launch starts the child and its watch goroutine.
