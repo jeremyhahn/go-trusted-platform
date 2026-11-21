@@ -6,7 +6,7 @@
  */
 import * as React from "react";
 import Link from "next/link";
-import { useApi, useTenant } from "@/hooks";
+import { useTenant } from "@/hooks";
 import {
   Badge,
   Button,
@@ -52,14 +52,43 @@ const PAGE_SIZE = 100;
 export default function AdminTenantsPage() {
   const tenants = useTenant();
   const [offset, setOffset] = React.useState(0);
-  const { data, isLoading, error, refetch } = useApi(
-    () => tenants.listTenants({ limit: PAGE_SIZE, offset }),
-    [offset],
+  // Previous and Next stay enabled while a page is loading: each response is
+  // bound to the offset it was requested for, and only the newest request's
+  // completion may replace the list (the same idiom as searchSeq below).
+  const [list, setList] = React.useState<{ offset: number; tenants: Tenant[]; total: number } | null>(null);
+  const [error, setError] = React.useState<Error | null>(null);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const loadSeq = React.useRef<number>(0);
+  const load = React.useCallback(
+    async (at: number) => {
+      const seq = ++loadSeq.current;
+      setIsLoading(true);
+      try {
+        const res = await tenants.listTenants({ limit: PAGE_SIZE, offset: at });
+        if (seq !== loadSeq.current) return;
+        if (res.success) {
+          setList({ offset: at, tenants: res.data?.tenants ?? [], total: Number(res.data?.total ?? 0) });
+          setError(null);
+        } else {
+          setError(new Error(errorText(res, "Failed to load tenants")));
+        }
+      } catch (err) {
+        if (seq !== loadSeq.current) return;
+        setError(err instanceof Error ? err : new Error(String(err)));
+      } finally {
+        if (seq === loadSeq.current) setIsLoading(false);
+      }
+    },
+    [tenants],
   );
-  const total = Number(data?.total ?? 0);
-  const shown = data?.tenants?.length ?? 0;
-  const first = shown > 0 ? offset + 1 : 0;
-  const last = offset + shown;
+  React.useEffect(() => {
+    void load(offset);
+  }, [offset, load]);
+  const refetch = () => load(offset);
+  const total = list?.total ?? 0;
+  const shown = list?.tenants.length ?? 0;
+  const first = list && shown > 0 ? list.offset + 1 : 0;
+  const last = list ? list.offset + shown : 0;
   const [name, setName] = React.useState("");
   const [displayName, setDisplayName] = React.useState("");
   const [search, setSearch] = React.useState("");
@@ -185,7 +214,7 @@ export default function AdminTenantsPage() {
                 </tr>
               </thead>
               <tbody>
-                {(data?.tenants ?? []).map((t) => (
+                {(list?.tenants ?? []).map((t) => (
                   <TenantRow key={t.id} tenant={t} onDelete={askDelete} />
                 ))}
               </tbody>

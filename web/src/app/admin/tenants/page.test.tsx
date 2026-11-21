@@ -24,20 +24,23 @@ const initialTenants = [
   { id: "t-2", name: "beta", displayName: "Beta", state: 1 },
 ];
 
-const apiResult = vi.hoisted(() => ({
-  data: { tenants: [] as Array<Record<string, unknown>>, total: 0 },
-  isLoading: false,
-  error: null as Error | null,
-  refetch: vi.fn(),
-}));
+function listOf(tenants: Array<Record<string, unknown>>) {
+  return { success: true, data: { tenants, total: tenants.length } };
+}
 
 vi.mock("@/hooks", () => ({
-  useApi: () => apiResult,
   useTenant: () => tenantSvc,
 }));
 
+// The page loads its list on mount; render inside act so that load settles.
+async function renderPage() {
+  await act(async () => {
+    render(<AdminTenantsPage />);
+  });
+}
+
 async function askDelete(id: string) {
-  render(<AdminTenantsPage />);
+  await renderPage();
   const row = screen.getByTestId(`tenant-row-${id}`);
   await act(async () => {
     fireEvent.click(within(row).getByRole("button", { name: "Delete" }));
@@ -54,9 +57,7 @@ async function confirm() {
 describe("AdminTenantsPage delete", () => {
   beforeEach(() => {
     for (const fn of Object.values(tenantSvc)) fn.mockReset();
-    apiResult.data = { tenants: [...initialTenants], total: initialTenants.length };
-    apiResult.refetch.mockReset();
-    apiResult.refetch.mockResolvedValue(undefined);
+    tenantSvc.listTenants.mockResolvedValue(listOf([...initialTenants]));
   });
   afterEach(() => cleanup());
 
@@ -67,7 +68,8 @@ describe("AdminTenantsPage delete", () => {
     });
     expect(screen.queryByTestId("confirm-dialog")).toBeNull();
     expect(tenantSvc.deleteTenant).not.toHaveBeenCalled();
-    expect(apiResult.refetch).not.toHaveBeenCalled();
+    // Only the mount load: no refresh.
+    expect(tenantSvc.listTenants).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("tenant-row-t-2")).toBeTruthy();
   });
 
@@ -85,19 +87,21 @@ describe("AdminTenantsPage delete", () => {
     await confirm();
     expect(tenantSvc.deleteTenant).toHaveBeenCalledWith("t-1");
     expect(screen.getByTestId("action-result").textContent).toBe("tenant has live VMs");
-    expect(apiResult.refetch).not.toHaveBeenCalled();
+    // Only the mount load: no refresh.
+    expect(tenantSvc.listTenants).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("tenant-row-t-1")).toBeTruthy();
     expect(screen.getByTestId("tenant-row-t-2")).toBeTruthy();
   });
 
   it("refreshes the list after a successful delete", async () => {
     tenantSvc.deleteTenant.mockResolvedValue({ success: true, data: {} });
-    apiResult.refetch.mockImplementation(async () => {
-      apiResult.data = { tenants: initialTenants.filter((t) => t.id !== "t-1"), total: 1 };
-    });
+    tenantSvc.listTenants
+      .mockResolvedValueOnce(listOf([...initialTenants]))
+      .mockResolvedValueOnce(listOf(initialTenants.filter((t) => t.id !== "t-1")));
     await askDelete("t-1");
     await confirm();
-    expect(apiResult.refetch).toHaveBeenCalledTimes(1);
+    // The mount load, then one refresh.
+    expect(tenantSvc.listTenants).toHaveBeenCalledTimes(2);
     expect(screen.getByTestId("action-result").textContent).toBe("Deleted tenant alpha");
     expect(screen.queryByTestId("tenant-row-t-1")).toBeNull();
     expect(screen.getByTestId("tenant-row-t-2")).toBeTruthy();
@@ -135,16 +139,14 @@ describe("AdminTenantsPage find by name", () => {
 
   beforeEach(() => {
     for (const fn of Object.values(tenantSvc)) fn.mockReset();
-    apiResult.data = { tenants: [], total: 0 };
-    apiResult.refetch.mockReset();
-    apiResult.refetch.mockResolvedValue(undefined);
+    tenantSvc.listTenants.mockResolvedValue(listOf([]));
   });
   afterEach(() => cleanup());
 
   it("keeps the latest result when an earlier lookup succeeds last", async () => {
     const resolvers = deferredLookups();
     tenantSvc.deleteTenant.mockResolvedValue({ success: true, data: {} });
-    render(<AdminTenantsPage />);
+    await renderPage();
     await search("alpha");
     await search("beta");
     await settle(resolvers.get("beta"), { success: true, data: { tenant: initialTenants[1] } });
@@ -162,7 +164,7 @@ describe("AdminTenantsPage find by name", () => {
 
   it("keeps the latest result when an earlier lookup fails last", async () => {
     const resolvers = deferredLookups();
-    render(<AdminTenantsPage />);
+    await renderPage();
     await search("alpha");
     await search("beta");
     await settle(resolvers.get("beta"), { success: true, data: { tenant: initialTenants[1] } });
@@ -190,15 +192,13 @@ describe("AdminTenantsPage create", () => {
 
   beforeEach(() => {
     for (const fn of Object.values(tenantSvc)) fn.mockReset();
-    apiResult.data = { tenants: [...initialTenants], total: initialTenants.length };
-    apiResult.refetch.mockReset();
-    apiResult.refetch.mockResolvedValue(undefined);
+    tenantSvc.listTenants.mockResolvedValue(listOf([...initialTenants]));
   });
   afterEach(() => cleanup());
 
   it("sends exactly the typed name and display name", async () => {
     tenantSvc.createTenant.mockResolvedValue({ success: true, data: {} });
-    render(<AdminTenantsPage />);
+    await renderPage();
     await fillAndCreate("gamma", "Gamma Corp");
     expect(tenantSvc.createTenant).toHaveBeenCalledTimes(1);
     expect(tenantSvc.createTenant).toHaveBeenCalledWith({ name: "gamma", displayName: "Gamma Corp" });
@@ -207,12 +207,13 @@ describe("AdminTenantsPage create", () => {
   it("refreshes the list and clears the form after a successful create", async () => {
     tenantSvc.createTenant.mockResolvedValue({ success: true, data: {} });
     const created = { id: "t-3", name: "gamma", displayName: "Gamma Corp", state: 1 };
-    apiResult.refetch.mockImplementation(async () => {
-      apiResult.data = { tenants: [...initialTenants, created], total: 3 };
-    });
-    render(<AdminTenantsPage />);
+    tenantSvc.listTenants
+      .mockResolvedValueOnce(listOf([...initialTenants]))
+      .mockResolvedValueOnce(listOf([...initialTenants, created]));
+    await renderPage();
     await fillAndCreate("gamma", "Gamma Corp");
-    expect(apiResult.refetch).toHaveBeenCalledTimes(1);
+    // The mount load, then one refresh.
+    expect(tenantSvc.listTenants).toHaveBeenCalledTimes(2);
     expect(screen.getByTestId("action-result").textContent).toBe("Created tenant gamma");
     expect(screen.getByTestId("tenant-row-t-3")).toBeTruthy();
     expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("");
@@ -221,11 +222,12 @@ describe("AdminTenantsPage create", () => {
 
   it("shows the error and keeps the inputs when the create is refused", async () => {
     tenantSvc.createTenant.mockResolvedValue({ success: false, error: { message: "tenant name taken" } });
-    render(<AdminTenantsPage />);
+    await renderPage();
     await fillAndCreate("alpha", "Alpha Again");
     expect(tenantSvc.createTenant).toHaveBeenCalledWith({ name: "alpha", displayName: "Alpha Again" });
     expect(screen.getByTestId("action-result").textContent).toBe("tenant name taken");
-    expect(apiResult.refetch).not.toHaveBeenCalled();
+    // Only the mount load: no refresh.
+    expect(tenantSvc.listTenants).toHaveBeenCalledTimes(1);
     expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("alpha");
     expect((screen.getByLabelText("Display name") as HTMLInputElement).value).toBe("Alpha Again");
   });
