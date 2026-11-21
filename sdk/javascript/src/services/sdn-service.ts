@@ -348,7 +348,12 @@ export class SDNService extends BaseService {
         }
       }
     }
-    return this.client.post<ApplyPolicyResponse>(this.buildUrl('/policies'), request);
+    // An omitted enabled reaches the daemon as false, which then installs the
+    // rules yet records the policy as disabled: send it as enabled.
+    return this.client.post<ApplyPolicyResponse>(this.buildUrl('/policies'), {
+      ...request,
+      config: { ...request.config, enabled: true },
+    });
   }
 
   /**

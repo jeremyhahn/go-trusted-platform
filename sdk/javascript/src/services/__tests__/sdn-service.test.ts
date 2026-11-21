@@ -61,7 +61,10 @@ describe('SDNService port state and policies (#1745)', () => {
   it('applyPolicy POSTs to /policies', async () => {
     const request = { config: { name: 'deny-all', type: 'POLICY_TYPE_ACL' as const } };
     await service.applyPolicy(request);
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/sdn/policies', request);
+    // An omitted enabled is sent as enabled: the daemon installs the rules.
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/sdn/policies', {
+      config: { ...request.config, enabled: true },
+    });
   });
 
   // #2022 Codex: the server installs flows on BRIDGE targets only and reports
@@ -94,7 +97,10 @@ describe('SDNService port state and policies (#1745)', () => {
       },
     };
     await service.applyPolicy(request);
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/sdn/policies', request);
+    // An omitted enabled is sent as enabled: the daemon installs the rules.
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/sdn/policies', {
+      config: { ...request.config, enabled: true },
+    });
   });
 
   it('applyPolicy surfaces a lost response with exactly one POST', async () => {

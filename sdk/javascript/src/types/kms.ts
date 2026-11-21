@@ -343,7 +343,11 @@ export interface SignRequest {
   message: string;
   /** Hash algorithm */
   hashAlgorithm?: HashAlgorithm;
-  /** Key version to sign with (sent as `version`) */
+  /**
+   * Key version to sign with. The daemon always signs with the current key
+   * version, so KMSService.sign refuses a nonzero value with a RangeError and
+   * never sends it.
+   */
   keyVersion?: number;
   /** The message is already a digest (sent as `pre_hashed`) */
   preHashed?: boolean;
@@ -604,68 +608,40 @@ export interface KMSKeyVersionWire {
  * Encrypt response
  */
 export interface EncryptResponse {
-  /** Operation status */
-  status: KMSStatus;
   /** Key ID */
-  keyId: string;
+  key_id: string;
   /** Key version used */
-  keyVersion: number;
+  version: number;
   /** Ciphertext (base64) */
   ciphertext: string;
-  /** Nonce (base64) */
-  nonce?: string;
-  /** Timestamp (unix epoch) */
-  timestamp: number;
 }
 
 /**
  * Decrypt response
  */
 export interface DecryptResponse {
-  /** Operation status */
-  status: KMSStatus;
-  /** Key ID */
-  keyId: string;
-  /** Key version used */
-  keyVersion: number;
   /** Plaintext (base64) */
   plaintext: string;
-  /** Timestamp (unix epoch) */
-  timestamp: number;
 }
 
 /**
  * Sign response
  */
 export interface SignResponse {
-  /** Operation status */
-  status: KMSStatus;
   /** Key ID */
-  keyId: string;
+  key_id: string;
   /** Key version used */
-  keyVersion: number;
+  version: number;
   /** Signature (base64) */
   signature: string;
-  /** Hash algorithm used */
-  hashAlgorithm: HashAlgorithm;
-  /** Timestamp (unix epoch) */
-  timestamp: number;
 }
 
 /**
  * Verify response
  */
 export interface VerifyResponse {
-  /** Operation status */
-  status: KMSStatus;
-  /** Key ID */
-  keyId: string;
-  /** Key version used */
-  keyVersion: number;
   /** Whether the signature is valid */
   valid: boolean;
-  /** Timestamp (unix epoch) */
-  timestamp: number;
 }
 
 /**

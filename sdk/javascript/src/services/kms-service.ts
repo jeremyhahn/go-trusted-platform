@@ -271,12 +271,19 @@ export class KMSService extends BaseService {
    * @returns Signature
    */
   async sign(request: SignRequest): Promise<ApiResponse<SignResponse>> {
+    // The REST Sign handler never reads a version and always signs with the
+    // current key, so a selected older version would be silently ignored:
+    // refuse it before sending.
+    if (request.keyVersion) {
+      throw new RangeError(
+        'sign key version selection is not supported: the daemon always signs with the current key'
+      );
+    }
     return this.client.post<SignResponse>(
       this.buildUrl(`/sign/${this.encodePathSegment(request.keyId)}`),
       wireBody({
         data: request.message,
         hash: request.hashAlgorithm,
-        version: request.keyVersion,
         pre_hashed: request.preHashed,
       })
     );
