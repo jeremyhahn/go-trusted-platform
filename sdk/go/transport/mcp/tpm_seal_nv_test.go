@@ -299,6 +299,7 @@ func TestTPMSealNVDecoders_RejectWrongTypes(t *testing.T) {
 	builders := map[string]mcpArgBuilder{
 		"seal":     buildTPMSealNVSealArgs,
 		"unseal":   buildTPMSealNVUnsealArgs,
+		"read":     buildTPMSealNVReadArgs,
 		"undefine": buildTPMSealNVUndefineArgs,
 	}
 	for name, build := range builders {

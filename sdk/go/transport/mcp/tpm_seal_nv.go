@@ -19,9 +19,11 @@ package mcp
 // only: a request that names another parent key, its password or a PCR
 // bank is refused here rather than silently sealed under the SRK. The seal
 // tool takes the PCRs as "pcrs" and answers {"sealed_data"}; unseal answers
-// {"data"}. platform_tpm_nv_read and platform_tpm_nv_write take the pb
-// request's own names, so the generic JSON round-trip carries their
-// arguments (and the read reply); the write and delete tools answer with a
+// {"data"}. platform_tpm_nv_write takes the pb request's own names, so the
+// generic JSON round-trip carries its arguments. platform_tpm_nv_read gets a
+// builder that caps size at 65535 (the tool refuses more, the gRPC service
+// caps it), and its reply still decodes through the generic round-trip.
+// The write and delete tools answer with a
 // bare success/message pair. platform_tpm_nv_delete undefines through the
 // owner hierarchy, so an index password is refused. DefineNVRAM has no
 // server tool and stays unrouted.
@@ -29,6 +31,7 @@ package mcp
 import (
 	"encoding/base64"
 	"fmt"
+	"math"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -47,6 +50,7 @@ func init() {
 	for method, build := range map[string]mcpArgBuilder{
 		platformv1.TPMService_Seal_FullMethodName:          buildTPMSealNVSealArgs,
 		platformv1.TPMService_Unseal_FullMethodName:        buildTPMSealNVUnsealArgs,
+		platformv1.TPMService_ReadNVRAM_FullMethodName:     buildTPMSealNVReadArgs,
 		platformv1.TPMService_UndefineNVRAM_FullMethodName: buildTPMSealNVUndefineArgs,
 	} {
 		mcpArgBuilders[method] = build
@@ -147,6 +151,27 @@ func buildTPMSealNVUndefineArgs(args interface{}) (map[string]interface{}, error
 	out := map[string]interface{}{"index": in.GetIndex()}
 	if pw := in.GetParentPassword(); pw != "" {
 		out["parent_password"] = pw
+	}
+	return out, nil
+}
+
+func buildTPMSealNVReadArgs(args interface{}) (map[string]interface{}, error) {
+	in, ok := args.(*platformv1.ReadNVRAMRequest)
+	if !ok {
+		return nil, ErrUnexpectedArgsType{Method: platformv1.TPMService_ReadNVRAM_FullMethodName}
+	}
+	out := map[string]interface{}{"index": in.GetIndex()}
+	// No NV index exceeds 65535 bytes, so a larger size reads the whole index,
+	// as TPMGRPCService.ReadNVRAM does (the MCP tool refuses a size above 65535).
+	if size := in.GetSize(); size != 0 {
+		out["size"] = min(size, math.MaxUint16)
+	}
+	// The server refuses an offset past 65535 on every transport.
+	if off := in.GetOffset(); off != 0 {
+		out["offset"] = off
+	}
+	if pw := in.GetPassword(); pw != "" {
+		out["password"] = pw
 	}
 	return out, nil
 }
