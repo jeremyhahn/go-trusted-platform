@@ -3499,11 +3499,17 @@ func TestSupervisor_OnChildExitRetriedPastTheRestartBudget(t *testing.T) {
 	rec.mu.Unlock()
 	child.exit(errors.New("signal: killed"))
 	require.Eventually(t, func() bool {
-		return rec.callCount() >= 5
+		samplesMu.Lock()
+		_, ok := samples[5]
+		samplesMu.Unlock()
+		return ok
 	}, 5*time.Second, 10*time.Millisecond, "the failed hook is retried after the budget is exhausted")
 
-	// Each hook call runs while the previous call's error is in health, so
-	// calls 3-5 read it at a counted call, not from a poll.
+	// The wait is on the fifth recorded sample, not the call count: the
+	// recorder counts a call before it runs onCall, so callCount can reach 5
+	// before the fifth onCall stored its sample. Each hook call runs while
+	// the previous call's error is in health, so calls 3-5 read it at a
+	// counted call, not from a poll.
 	samplesMu.Lock()
 	sampled := make(map[int]error, len(samples))
 	for call, health := range samples {
