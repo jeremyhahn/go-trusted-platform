@@ -492,10 +492,14 @@ func (s *RESTServer) SetKMSHandlers(service restapi.KMSService) {
 // SetKMSHandlers: a path this router does not serve (the bare-path crypto
 // routes, export, batch, rewrap, status) falls through to those handlers. A
 // nil client answers its routes 503, never 404.
-func (s *RESTServer) SetKMSRouter(kms kmsclient.Client, crypto cryptoclient.Client, dek dekclient.Client, secrets secretsclient.Client) {
+//
+// Every route runs behind guard and needs the scope the gRPC catalog gives
+// the method it serves (catalogRouteRPCs): with no credential it answers 401,
+// without the scope 403, and a route with no mapping fails closed.
+func (s *RESTServer) SetKMSRouter(kms kmsclient.Client, crypto cryptoclient.Client, dek dekclient.Client, secrets secretsclient.Client, guard *restapi.ScopeGuard) {
 	logger := logging.NewFromSlog(s.logger)
 	restkms.NewKMSRouter(logger, kms, crypto, dek, secrets, response.NewResponseWriter(logger, nil)).
-		RegisterRoutes(s.router.PathPrefix(restBasePath).Subrouter())
+		RegisterRoutes(s.catalogGuardedAPI(guard))
 	s.logger.Info("KMS REST routes registered (docs/kms/api.md contract)")
 }
 

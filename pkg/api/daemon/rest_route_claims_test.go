@@ -86,7 +86,7 @@ func daemonRouteTable(t *testing.T, guard *restapi.ScopeGuard) (*RESTServer, []s
 	require.NoError(t, s.SetDNSRouterHandlers(log, platformv1.UnimplementedDNSServiceServer{}, guard, ""))
 	require.NoError(t, s.SetPXERouterHandlers(log, platformv1.UnimplementedPXEServiceServer{}, guard))
 	s.SetTenantHandlers(routeTableTenants{}, guard, "")
-	s.SetKMSRouter(nil, nil, nil, nil)
+	s.SetKMSRouter(nil, nil, nil, nil, guard)
 	s.SetKMSHandlers(routeTableKMS{})
 	s.SetComputeHandlers(platformv1.UnimplementedComputeServiceServer{}, guard)
 	require.NoError(t, s.SetOverlayHandlers(routeTableOverlay{}, guard))
