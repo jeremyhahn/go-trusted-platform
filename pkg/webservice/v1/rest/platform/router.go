@@ -68,6 +68,13 @@ func (r *PlatformRouter) SetVersionInfo(info *VersionInfo) {
 	r.handlers.SetVersionInfo(info)
 }
 
+// SetConfigUpdater wires the daemon's UpdateConfig surface into the
+// /platform/config/sections/{section} handler. Routes are always
+// registered; if the updater is unset, the handler returns 503.
+func (r *PlatformRouter) SetConfigUpdater(u ConfigUpdater) {
+	r.handlers.SetConfigUpdater(u)
+}
+
 // SetConfigReloader wires the daemon's config-reload surface into the
 // /platform/config/reload handler. Routes are always registered; if
 // the reloader is unset, the handler returns 503 with a structured
@@ -112,6 +119,7 @@ func (r *PlatformRouter) RegisterRoutes(router *mux.Router) {
 // GET    /api/v1/platform/config/snapshots/{id}               - Get a snapshot (full tree)
 // DELETE /api/v1/platform/config/snapshots/{id}               - Delete a snapshot
 // POST   /api/v1/platform/config/snapshots/{id}/rollback      - Roll back to a snapshot
+// PUT    /api/v1/platform/config/sections/{section}           - Apply (and optionally persist) one config section
 func (r *PlatformRouter) registerConfigRoutes(router *mux.Router) {
 	router.HandleFunc("/config", r.handlers.GetConfig).Methods("GET")
 	router.HandleFunc("/config/reload", r.handlers.ReloadConfig).Methods("POST")
@@ -121,6 +129,7 @@ func (r *PlatformRouter) registerConfigRoutes(router *mux.Router) {
 	router.HandleFunc("/config/snapshots/{id}", r.handlers.GetSnapshot).Methods("GET")
 	router.HandleFunc("/config/snapshots/{id}", r.handlers.DeleteSnapshot).Methods("DELETE")
 	router.HandleFunc("/config/snapshots/{id}/rollback", r.handlers.Rollback).Methods("POST")
+	router.HandleFunc("/config/sections/{section}", r.handlers.UpdateConfigSection).Methods("PUT")
 }
 
 // registerLogRoutes registers structured log query / stream endpoints.

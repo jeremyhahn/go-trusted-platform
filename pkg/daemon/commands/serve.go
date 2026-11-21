@@ -1393,6 +1393,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		// installed earlier.
 		if platformDaemon != nil {
 			if svc := platformDaemon.Service(); svc != nil {
+				params.ConfigUpdater = svc
 				params.ConfigReloader = svc
 			}
 		}
