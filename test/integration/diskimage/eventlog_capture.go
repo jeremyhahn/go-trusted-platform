@@ -3,10 +3,14 @@
 package diskimage
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu/harness"
 )
 
 // The guest prints its event log base64 encoded between these two lines,
@@ -16,6 +20,86 @@ const (
 	eventLogBeginMarker = "EVENTLOG-BEGIN"
 	eventLogEndMarker   = "EVENTLOG-END"
 )
+
+const (
+	// envManifestRoots names a PEM file of the CA roots the image's signed
+	// manifest verifies to.
+	envManifestRoots = "DISKIMAGE_MANIFEST_ROOTS"
+	// envConsoleLogin names the account to log in as at the guest's
+	// "login:" prompt; it must be able to read securityfs.
+	envConsoleLogin = "DISKIMAGE_CONSOLE_LOGIN"
+	// envConsolePassword is that account's password, sent when the guest
+	// asks for one.
+	envConsolePassword = "DISKIMAGE_CONSOLE_PASSWORD"
+
+	defaultConsoleLogin = "root"
+	// defaultConsolePassword is the root password pkg/installer/installer.go
+	// sets when the build config names none.
+	defaultConsolePassword = "password"
+
+	// passwordPrompt is what the guest prints after the login name when the
+	// account has a password.
+	passwordPrompt = "Password:"
+	// passwordPromptWait is how long the login waits for passwordPrompt
+	// before it takes the account to have opened a shell without one.
+	passwordPromptWait = 15 * time.Second
+)
+
+// consoleCredentials are the account the live checks log in with.
+type consoleCredentials struct {
+	login, password string
+}
+
+// consoleCredentialsFromEnv reads envConsoleLogin and envConsolePassword,
+// each defaulting to the account the factory image always has.
+func consoleCredentialsFromEnv(getenv func(string) string) consoleCredentials {
+	cred := consoleCredentials{login: getenv(envConsoleLogin), password: getenv(envConsolePassword)}
+	if cred.login == "" {
+		cred.login = defaultConsoleLogin
+	}
+	if cred.password == "" {
+		cred.password = defaultConsolePassword
+	}
+	return cred
+}
+
+// manifestRootsFromEnv returns the path envManifestRoots names, or a
+// *MissingInputError when it is unset.
+func manifestRootsFromEnv(getenv func(string) string) (string, error) {
+	path := getenv(envManifestRoots)
+	if path == "" {
+		return "", &MissingInputError{Variable: envManifestRoots}
+	}
+	return path, nil
+}
+
+// consoleLine is the part of *harness.Console the login uses.
+type consoleLine interface {
+	SendLine(string) error
+	Expect(context.Context, string) (string, error)
+}
+
+var _ consoleLine = (*harness.Console)(nil)
+
+// loginAtConsole sends the login name and, when the guest asks for a
+// password within promptWait, the password. A guest that asks for none in
+// that time is taken to have opened a shell.
+func loginAtConsole(ctx context.Context, c consoleLine, cred consoleCredentials, promptWait time.Duration) error {
+	if err := c.SendLine(cred.login); err != nil {
+		return err
+	}
+	wait, cancel := context.WithTimeout(ctx, promptWait)
+	_, err := c.Expect(wait, passwordPrompt)
+	cancel()
+	if err == nil {
+		return c.SendLine(cred.password)
+	}
+	var timeout *harness.ConsoleTimeoutError
+	if errors.As(err, &timeout) && ctx.Err() == nil {
+		return nil
+	}
+	return err
+}
 
 // ErrEventLogCaptureEmpty is returned when the markers enclose no bytes.
 var ErrEventLogCaptureEmpty = errors.New("diskimage: the captured event log is empty")

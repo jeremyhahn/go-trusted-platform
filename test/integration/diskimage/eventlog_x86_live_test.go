@@ -28,26 +28,22 @@ const x86BootTimeout = 45 * time.Minute
 // swtpm, copies the guest's binary_bios_measurements out over the serial
 // console and checks it against the ISO's signed measurement manifest
 // (docs/SPEC.md: every signed image's manifest reproduces the live event
-// log). Its inputs are opt-in: the DISKIMAGE_X86_* variables,
-// DISKIMAGE_MANIFEST_ROOTS and DISKIMAGE_CONSOLE_LOGIN; it skips when any is
-// unset.
+// log). It needs the DISKIMAGE_X86_* variables and DISKIMAGE_MANIFEST_ROOTS,
+// and fails when one is unset; it logs in as DISKIMAGE_CONSOLE_LOGIN with
+// DISKIMAGE_CONSOLE_PASSWORD (default root and the installer's default root
+// password).
 func TestX86ISOEventLogMatchesTheSignedManifest(t *testing.T) {
 	in, err := x86InputsFromEnv(os.Getenv)
 	var missing *MissingInputError
 	if errors.As(err, &missing) {
-		// The suite's message points at the make target, which builds no
-		// x86 input, so say the check is opt-in instead.
-		t.Skip(missing.Variable + " is not set; the x86 ISO event log check is opt-in")
+		t.Fatalf("%v; the eventlog_live build runs the x86 ISO check, which needs every DISKIMAGE_X86_* input", missing)
 	}
 	require.NoError(t, err)
-	rootsPath := os.Getenv(envManifestRoots)
-	if rootsPath == "" {
-		t.Skip(envManifestRoots + " is not set")
+	rootsPath, err := manifestRootsFromEnv(os.Getenv)
+	if err != nil {
+		t.Fatal(err)
 	}
-	login := os.Getenv(envConsoleLogin)
-	if login == "" {
-		t.Skip(envConsoleLogin + " is not set")
-	}
+	cred := consoleCredentialsFromEnv(os.Getenv)
 
 	isoSHA256 := hashFile(t, in.iso)
 	signed, err := os.ReadFile(in.manifest)
@@ -85,12 +81,12 @@ func TestX86ISOEventLogMatchesTheSignedManifest(t *testing.T) {
 		t.Fatalf("waiting for %q: %v\n%s", in.ready, err, harness.MissingMilestone(cfg.SerialLogFile, []string{in.ready}))
 	}
 	console.Discard()
-	require.NoError(t, console.SendLine(login))
+	require.NoError(t, loginAtConsole(ctx, console, cred, passwordPromptWait))
 
 	captured, err := captureEventLog(ctx, console)
 	if err != nil {
-		if strings.Contains(console.Transcript(), "Password:") {
-			t.Fatalf("%s=%s asks for a password; the test needs a passwordless console account: %v", envConsoleLogin, login, err)
+		if strings.Contains(console.Transcript(), "Login incorrect") {
+			t.Fatalf("%s=%s was refused; set %s to the account's password: %v", envConsoleLogin, cred.login, envConsolePassword, err)
 		}
 		t.Fatalf("capturing the event log: %v", err)
 	}

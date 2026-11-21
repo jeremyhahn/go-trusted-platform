@@ -23,14 +23,6 @@ import (
 )
 
 const (
-	// envManifestRoots names a PEM file of the CA roots the image's signed
-	// manifest verifies to.
-	envManifestRoots = "DISKIMAGE_MANIFEST_ROOTS"
-	// envConsoleLogin names the account to log in as at the guest's
-	// "login:" prompt. The account must open a shell without a password
-	// and be able to read securityfs; the test invents no credentials.
-	envConsoleLogin = "DISKIMAGE_CONSOLE_LOGIN"
-
 	// eventLogCommand prints the guest's TCG event log between the markers
 	// decodeEventLogCapture looks for.
 	eventLogCommand = "echo " + eventLogBeginMarker +
@@ -44,19 +36,18 @@ const (
 // under swtpm, copies the guest's binary_bios_measurements out over the
 // serial console and checks it against the image's signed measurement
 // manifest (docs/SPEC.md: every signed image's manifest reproduces the live
-// event log). It needs the suite's inputs, DISKIMAGE_MANIFEST_ROOTS and
-// DISKIMAGE_CONSOLE_LOGIN; the eventlog_live build tag keeps it out of the
-// default integration run.
+// event log). It needs the suite's inputs and DISKIMAGE_MANIFEST_ROOTS, and
+// fails when one is unset; it logs in as DISKIMAGE_CONSOLE_LOGIN with
+// DISKIMAGE_CONSOLE_PASSWORD (default root and the installer's default root
+// password). The eventlog_live build tag keeps it out of the default
+// integration run (make integration-test-diskimage-eventlog sets it).
 func TestBootEventLogMatchesTheSignedManifest(t *testing.T) {
 	in := requireInputs(t)
-	rootsPath := os.Getenv(envManifestRoots)
-	if rootsPath == "" {
-		t.Skip(envManifestRoots + " is not set")
+	rootsPath, err := manifestRootsFromEnv(os.Getenv)
+	if err != nil {
+		t.Fatal(err)
 	}
-	login := os.Getenv(envConsoleLogin)
-	if login == "" {
-		t.Skip(envConsoleLogin + " is not set")
-	}
+	cred := consoleCredentialsFromEnv(os.Getenv)
 
 	// The boot works on a copy, so hash the image itself first.
 	imageSHA256 := hashFile(t, in.image)
@@ -106,12 +97,12 @@ func TestBootEventLogMatchesTheSignedManifest(t *testing.T) {
 		t.Fatalf("waiting for %q: %v\n%s", last, err, harness.MissingMilestone(serialLog, firstBootMilestones))
 	}
 	console.Discard()
-	require.NoError(t, console.SendLine(login))
+	require.NoError(t, loginAtConsole(ctx, console, cred, passwordPromptWait))
 
 	captured, err := captureEventLog(ctx, console)
 	if err != nil {
-		if strings.Contains(console.Transcript(), "Password:") {
-			t.Fatalf("%s=%s asks for a password; the test needs a passwordless console account: %v", envConsoleLogin, login, err)
+		if strings.Contains(console.Transcript(), "Login incorrect") {
+			t.Fatalf("%s=%s was refused; set %s to the account's password: %v", envConsoleLogin, cred.login, envConsolePassword, err)
 		}
 		t.Fatalf("capturing the event log: %v", err)
 	}
