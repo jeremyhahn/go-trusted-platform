@@ -1,4 +1,4 @@
-# code-review-template: v5.12.11 -- the code review in Gitea or GitHub CI for a pull request
+# code-review-template: v5.12.12 -- the code review in Gitea or GitHub CI for a pull request
 # that carries `code-review` and `task:ready`, routed by its labels through
 # route-labels (labels.md §2). Codex on the `codex` runner reviews every such
 # PR; `agent:opencode` adds an advisory COMMENT review by the opencode job on
@@ -28,6 +28,22 @@
 #   COORDINATOR_TURNS         the codex rounds the project coordinator has
 #                             on a `needs-coordinator` PR after the two-round
 #                             stop (v5.9.8, Tenant Agent m2185); default 3
+#
+# v5.12.12 (2026-11-21, Tenant Agent rulings 1083 (5) and 1084 (1); Codex on
+# go-trusted-platform #2227, go-quicbaas #2662 and go-xkms #2323): TWO FIXES.
+# (1) THE GATE FAILS CLOSED WHILE A TWIN REVIEWS, APPROVAL OR NOT. The gate
+# line `[ "$verdict" = APPROVED ] || [ -z "$twin" ] || fail` let an approved
+# head pass while a requested re-review (an effort:, model: or agent: label)
+# was queued or in progress, so auto-merge could land the head before that
+# review reported. Now a twin's `Codex review` queued or in progress fails
+# the gate whatever the verdict; the twin's gate posts the head's check, and
+# its handoff (v5.12.7) re-runs this gate after a pass. After a requested
+# change the re-run reads REQUEST_CHANGES and fails.
+# (2) THE CANCEL READS EVERY PAGE. Cancel superseded runs listed each
+# status's runs with one request (per_page=100). The list is the workflow's,
+# every PR's runs, so under hosted load an older-head run of this PR past the
+# first 100 was never cancelled. It now reads page after page until a page
+# holds fewer than 100 runs, at most 10 pages. Nothing else changes.
 #
 # v5.12.11 (2026-11-21, Tenant Agent ruling 1079; Codex's two P1s on
 # go-trusted-platform #2227): FIVE FIXES.
@@ -94,7 +110,7 @@
 # review and review-opencode keep v5.12.9's shared condition, so an
 # unrelated label still starts no review. With scope and review skipped
 # the gate reads the standing verdict, as before v5.12.9: an APPROVED head
-# passes; a twin's review in flight fails it at once, and that twin's
+# passes (v5.12.12: unless a twin reviews it); a twin's review in flight fails it at once, and that twin's
 # handoff re-runs it after its pass (it is a red `Code Review (codex)`);
 # a hold fails it. The guard's CI-config exemption needs this event's
 # scope job (ruling 443), so a docs-and-CI-config change needs an
@@ -175,7 +191,8 @@
 # NOT WAIT FOR A TWIN. The gate's twin wait held a hosted runner while
 # another run's `Codex review` queued for the one codex runner, up to
 # 4500 s: six hosted slots at 22:06Z on 11-20. The gate now reads the twins
-# once; an APPROVED head passes as before, and otherwise, while a twin's
+# once; an APPROVED head passes as before (v5.12.12: not while a twin
+# reviews it), and otherwise, while a twin's
 # review of the head is queued or in progress, it fails at once (exit 3)
 # naming that run, whose own gate (it needs its review) posts the head's
 # newest `Code Review (codex)` check. API errors still fail closed. The
@@ -967,14 +984,22 @@ jobs:
           # run-name) names must be another commit: a run on this head is
           # never a candidate.
           older=''
+          # v5.12.12: every page of each list, at most 10 (1000 runs). The
+          # list is the workflow's, every PR's runs, so under load this PR's
+          # older runs sit past the first 100 (Codex on go-quicbaas #2662).
           for st in queued in_progress waiting pending requested; do
-            got=$(api GET "/actions/workflows/$wf/runs?event=pull_request_target&status=$st&per_page=100" |
-                  jq -r --arg pr "$PR_NUM" --arg sha "$EVENT_SHA" --argjson me "$GITHUB_RUN_ID" '
+            for page in 1 2 3 4 5 6 7 8 9 10; do
+              body=$(api GET "/actions/workflows/$wf/runs?event=pull_request_target&status=$st&per_page=100&page=$page") ||
+                warn "cannot list this workflow's $st runs (page $page)"
+              got=$(jq -r --arg pr "$PR_NUM" --arg sha "$EVENT_SHA" --argjson me "$GITHUB_RUN_ID" '
                     .workflow_runs[]
                     | ((.display_title // "") | capture("^Code Review: PR #(?<n>[0-9]+) into .+ at (?<h>[0-9a-f]{40})$")) as $t
                     | select($t.n == $pr and $t.h != $sha and .head_sha != $sha and .id < $me)
-                    | .id') || warn "cannot list this workflow's $st runs"
-            older+="$got"$'\n'
+                    | .id' <<<"$body") || warn "cannot read this workflow's $st runs (page $page)"
+              older+="$got"$'\n'
+              n=$(jq -r '.workflow_runs | length' <<<"$body") || warn "cannot count this workflow's $st runs"
+              [[ $n =~ ^[0-9]+$ ]] && [ "$n" -ge 100 ] || break
+            done
           done
           older=$(sort -un <<<"$older" | sed '/^$/d')
           [ -n "$older" ] || { echo "No run of PR $PR_NUM on an older head is queued or running."; exit 0; }
@@ -4034,8 +4059,14 @@ jobs:
           # v5.12.6: not approved while a twin reviews the head: that run's
           # gate posts the head's check (and re-runs this one when this run
           # is newer, v5.12.7); this one fails closed now.
-          [ "$verdict" = APPROVED ] || [ -z "$twin" ] ||
-            fail "the Codex review of $EVENT_SHA runs in run $twin; that run's gate posts this head's check (verdict here: $verdict; v5.12.6, ruling 1046)"
+          # v5.12.12 (ruling 1084; Codex's P1 on go-trusted-platform #2227):
+          # APPROVAL OR NOT. A twin reviewing the head is a requested
+          # re-review (an effort:, model: or agent: label); an earlier
+          # approval passing here let auto-merge land the head before that
+          # review reported. The twin's gate posts the check, and its handoff
+          # re-runs this one after a pass.
+          [ -z "$twin" ] ||
+            fail "the Codex review of $EVENT_SHA runs in run $twin; that run's gate posts this head's check (verdict here: $verdict; v5.12.12, ruling 1084; v5.12.6, ruling 1046)"
           case "$verdict" in
             APPROVED) echo "$REVIEWER approved $EVENT_SHA." ;;
             REQUEST_CHANGES) fail "$REVIEWER requested changes on $EVENT_SHA" ;;
