@@ -165,9 +165,9 @@ func newTestRouter(server platformv1.ProxyServiceServer) *Router {
 // behind an authorizer that grants every scope; the scope checks are covered
 // by the grantingAuthorizer tests and the no-authorizer test.
 func mountRouter(server platformv1.ProxyServiceServer) *mux.Router {
-	router := mux.NewRouter()
 	proxyRouter := newTestRouter(server)
 	proxyRouter.SetScopeAuthorizer(allowAllAuthorizer{})
+	router := mux.NewRouter()
 	proxyRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 	return router
 }
@@ -523,8 +523,8 @@ func TestProxyRouterRequiresEachWriteScope(t *testing.T) {
 
 // TestProxyRouterRefusesWritesWithoutAScopeAuthorizer pins the fail-closed
 // branch: with no ScopeAuthorizer (the legacy JWT handler) every write answers
-// 403 before the service is called, while the reads stay on the role gate
-// (#2160 Codex).
+// 403 before the service is called; the reads are covered by
+// TestProxyRouterRefusesEveryReadWithoutAScopeAuthorizer (#2160 Codex).
 func TestProxyRouterRefusesWritesWithoutAScopeAuthorizer(t *testing.T) {
 	unscoped := func(server *recordingServer) *mux.Router {
 		router := mux.NewRouter()
@@ -539,11 +539,23 @@ func TestProxyRouterRefusesWritesWithoutAScopeAuthorizer(t *testing.T) {
 				probe.name, rec.Code, server.calls)
 		}
 	}
+}
+
+// TestProxyRouterRefusesEveryReadWithoutAScopeAuthorizer pins the legacy JWT
+// case: with no ScopeAuthorizer set, a role-only session carries no scopes,
+// so every read answers 403 before the service (#1990, #2157 Codex).
+func TestProxyRouterRefusesEveryReadWithoutAScopeAuthorizer(t *testing.T) {
 	for _, probe := range proxyProbes {
 		server := &recordingServer{}
-		rec := serve(unscoped(server), http.MethodGet, probe.path)
-		if rec.Code != http.StatusOK {
-			t.Errorf("%s without an authorizer: code = %d, want 200", probe.name, rec.Code)
+		router := mux.NewRouter()
+		newTestRouter(server).RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
+
+		rec := serve(router, http.MethodGet, probe.path)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s: code = %d, want 403", probe.name, rec.Code)
+		}
+		if server.calls != 0 {
+			t.Errorf("%s: service saw %d calls, want none", probe.name, server.calls)
 		}
 	}
 }
@@ -594,5 +606,30 @@ func TestProxyRouterAddressesSlashIDs(t *testing.T) {
 				t.Errorf("service saw %v, want %v", server.last, tc.want)
 			}
 		})
+	}
+}
+
+// TestProxyRouterPassesEncodedSlashIDs pins that route and pool IDs holding a
+// slash, which the SDK sends as a%2Fb, reach the service decoded (#2157 Codex).
+func TestProxyRouterPassesEncodedSlashIDs(t *testing.T) {
+	cases := []struct {
+		path string
+		want proto.Message
+	}{
+		{"/api/v1/proxy/routes/web", &platformv1.GetProxyRouteRequest{Id: "web"}},
+		{"/api/v1/proxy/routes/a%2Fb", &platformv1.GetProxyRouteRequest{Id: "a/b"}},
+		{"/api/v1/proxy/pools/pool-1", &platformv1.GetProxyPoolRequest{Id: "pool-1"}},
+		{"/api/v1/proxy/pools/a%2Fb", &platformv1.GetProxyPoolRequest{Id: "a/b"}},
+	}
+	for _, tc := range cases {
+		server := &recordingServer{}
+		rec := serve(mountRouter(server), http.MethodGet, tc.path)
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s: code = %d, want 200", tc.path, rec.Code)
+			continue
+		}
+		if !proto.Equal(server.last, tc.want) {
+			t.Errorf("%s: service got %v, want %v", tc.path, server.last, tc.want)
+		}
 	}
 }

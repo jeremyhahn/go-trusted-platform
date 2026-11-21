@@ -65,6 +65,7 @@ func NewRouter(
 }
 
 // SetScopeAuthorizer sets the authorizer that enforces each route's scope.
+// Without one every route answers 403.
 func (r *Router) SetScopeAuthorizer(authorizer middleware.ScopeAuthorizer) {
 	r.scopeAuthorizer = authorizer
 }
@@ -74,6 +75,8 @@ func (r *Router) SetScopeAuthorizer(authorizer middleware.ScopeAuthorizer) {
 // matches the encoded path and the handlers decode the id with pathID.
 func (r *Router) RegisterRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix(basePath).Subrouter()
+	// Route and pool IDs may contain slashes (the SDK sends a%2Fb): match on
+	// the encoded path and decode {id} in the handler, as the switch router does.
 	sr.UseEncodedPath()
 	sr.Handle("/routes", r.requireScope(scopeRead, r.listRoutes)).Methods(http.MethodGet)
 	sr.Handle("/routes", r.requireScope(scopeWrite, r.createRoute)).Methods(http.MethodPost)
@@ -91,33 +94,17 @@ func (r *Router) RegisterRoutes(parent *mux.Router) {
 	sr.Handle("/zone-matrix", r.requireScope(scopeRead, r.getZoneMatrix)).Methods(http.MethodGet)
 }
 
-// requireScope wraps handler in the scope check when an authorizer is set.
-// Without one (the legacy JWT handler is no ScopeAuthorizer) the reads stay
-// on the admin role gate alone, but every write and delete fails closed with
-// 403, as scopeRouteGuard does for the app service routes (#1990, #2160
-// Codex).
+// requireScope wraps handler in the scope check. Without an authorizer (the
+// legacy JWT handler) the route fails closed with 403, since a role-only
+// session carries no scopes (#1990, #2157 Codex), as scopeRouteGuard does.
+// Each write route names its own scope.
 func (r *Router) requireScope(scope string, handler http.HandlerFunc) http.Handler {
 	if r.scopeAuthorizer == nil {
-		if scope == scopeRead {
-			return handler
-		}
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 		})
 	}
 	return r.scopeAuthorizer.RequireScope(scope)(handler)
-}
-
-// pathID returns the {id} route variable decoded: the subrouter matches the
-// encoded path, so an id containing a slash arrives as a%2Fb. A value that
-// does not decode is returned raw, as the switch router's decodeVar does.
-func pathID(req *http.Request) string {
-	raw := mux.Vars(req)["id"]
-	id, err := url.PathUnescape(raw)
-	if err != nil {
-		return raw
-	}
-	return id
 }
 
 // ensure answers 503 when no ProxyServiceServer is wired.
@@ -127,6 +114,12 @@ func (r *Router) ensure(w http.ResponseWriter, req *http.Request) bool {
 		return false
 	}
 	return true
+}
+
+// pathID returns the URL-decoded {id} of an encoded-path route, so a%2Fb
+// reaches the service as a/b.
+func pathID(req *http.Request) (string, error) {
+	return url.PathUnescape(mux.Vars(req)["id"])
 }
 
 func (r *Router) listRoutes(w http.ResponseWriter, req *http.Request) {
@@ -141,7 +134,12 @@ func (r *Router) getRoute(w http.ResponseWriter, req *http.Request) {
 	if !r.ensure(w, req) {
 		return
 	}
-	resp, err := r.server.GetRoute(req.Context(), &platformv1.GetProxyRouteRequest{Id: pathID(req)})
+	id, err := pathID(req)
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	resp, err := r.server.GetRoute(req.Context(), &platformv1.GetProxyRouteRequest{Id: id})
 	r.write(w, req, resp, err)
 }
 
@@ -157,7 +155,12 @@ func (r *Router) getPool(w http.ResponseWriter, req *http.Request) {
 	if !r.ensure(w, req) {
 		return
 	}
-	resp, err := r.server.GetPool(req.Context(), &platformv1.GetProxyPoolRequest{Id: pathID(req)})
+	id, err := pathID(req)
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	resp, err := r.server.GetPool(req.Context(), &platformv1.GetProxyPoolRequest{Id: id})
 	r.write(w, req, resp, err)
 }
 
@@ -227,7 +230,12 @@ func (r *Router) updateRoute(w http.ResponseWriter, req *http.Request) {
 	if !r.decode(w, req, in) {
 		return
 	}
-	in.Id = pathID(req)
+	id, err := pathID(req)
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	in.Id = id
 	resp, err := r.server.UpdateRoute(req.Context(), in)
 	r.write(w, req, resp, err)
 }
@@ -236,7 +244,12 @@ func (r *Router) deleteRoute(w http.ResponseWriter, req *http.Request) {
 	if !r.ensure(w, req) {
 		return
 	}
-	resp, err := r.server.DeleteRoute(req.Context(), &platformv1.DeleteProxyRouteRequest{Id: pathID(req)})
+	id, err := pathID(req)
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	resp, err := r.server.DeleteRoute(req.Context(), &platformv1.DeleteProxyRouteRequest{Id: id})
 	r.write(w, req, resp, err)
 }
 
@@ -262,7 +275,12 @@ func (r *Router) updatePool(w http.ResponseWriter, req *http.Request) {
 	if !r.decode(w, req, in) {
 		return
 	}
-	in.Id = pathID(req)
+	id, err := pathID(req)
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	in.Id = id
 	resp, err := r.server.UpdatePool(req.Context(), in)
 	r.write(w, req, resp, err)
 }
@@ -271,7 +289,12 @@ func (r *Router) deletePool(w http.ResponseWriter, req *http.Request) {
 	if !r.ensure(w, req) {
 		return
 	}
-	resp, err := r.server.DeletePool(req.Context(), &platformv1.DeleteProxyPoolRequest{Id: pathID(req)})
+	id, err := pathID(req)
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	resp, err := r.server.DeletePool(req.Context(), &platformv1.DeleteProxyPoolRequest{Id: id})
 	r.write(w, req, resp, err)
 }
 
