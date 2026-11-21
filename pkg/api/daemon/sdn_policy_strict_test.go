@@ -162,6 +162,117 @@ func TestSDNService_DeletePolicy_RestoresSurvivorWhenTheDeleteConfirmationFails(
 	require.NotEmpty(t, policyStatus(svc, "pol-b"), "a policy whose delete failed stays recorded")
 }
 
+// A delete the switch rejects leaves the policy's entry in force: the
+// restore must not replace the retained deny with an older allow.
+func TestSDNService_DeletePolicy_RejectedDeleteKeepsTheActiveDeny(t *testing.T) {
+	svc, sw := newLooseDeleteSDNService(t)
+	ctx := context.Background()
+	ssh := &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}
+
+	a := denyPolicy("a", allowRule("r1", ssh))
+	a.PolicyId = "pol-a"
+	_, err := svc.ApplyPolicy(ctx, a)
+	require.NoError(t, err)
+	b := denyPolicy("b", denyRule("r1", ssh))
+	b.PolicyId = "pol-b"
+	_, err = svc.ApplyPolicy(ctx, b)
+	require.NoError(t, err)
+
+	sw.mu.Lock()
+	sw.deleteHook = func(*ovs.FlowMod) error { return errFlowInstall }
+	sw.mu.Unlock()
+
+	_, err = svc.DeletePolicy(ctx, &platformv1.DeletePolicyRequest{PolicyId: "pol-b"})
+	require.Error(t, err)
+
+	actions, ok := sw.entry("tcp,tp_dst=22")
+	require.True(t, ok)
+	require.Equal(t, "drop", actions, "the retained deny must stay in force")
+	require.Equal(t, "active", policyStatus(svc, "pol-b"))
+}
+
+// A delete that removes some of a policy's entries before failing puts the
+// removed ones back: the retained policy keeps all its rules.
+func TestSDNService_DeletePolicy_PartialDeleteRestoresTheRetainedPolicysRules(t *testing.T) {
+	svc, sw := newLooseDeleteSDNService(t)
+	ctx := context.Background()
+	r1 := denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22})
+	r2 := denyRule("r2", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 443})
+
+	b := denyPolicy("b", r1, r2)
+	b.PolicyId = "pol-b"
+	_, err := svc.ApplyPolicy(ctx, b)
+	require.NoError(t, err)
+
+	r2Flow, err := svc.policyRuleToFlowMod(r2, 100)
+	require.NoError(t, err)
+	sw.mu.Lock()
+	sw.deleteHook = func(flow *ovs.FlowMod) error {
+		if flow.Match == r2Flow.Match {
+			return errFlowInstall
+		}
+		return nil
+	}
+	sw.mu.Unlock()
+
+	_, err = svc.DeletePolicy(ctx, &platformv1.DeletePolicyRequest{PolicyId: "pol-b"})
+	require.Error(t, err)
+
+	actions, ok := sw.entry("tcp,tp_dst=22")
+	require.True(t, ok, "the deleted rule of the retained policy must be put back")
+	require.Equal(t, "drop", actions)
+	actions, ok = sw.entry(r2Flow.Match)
+	require.True(t, ok)
+	require.Equal(t, "drop", actions)
+	require.NotEmpty(t, policyStatus(svc, "pol-b"), "a policy whose delete failed stays recorded")
+}
+
+// A strict delete that succeeds but cannot put the surviving policy's entry
+// back fails the delete, marks the survivor "error", and the next apply
+// retries the restore.
+func TestSDNService_DeletePolicy_FailedSurvivorRestoreIsReportedAndRetried(t *testing.T) {
+	svc, sw := newLooseDeleteSDNService(t)
+	ctx := context.Background()
+	ssh := &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}
+
+	a := denyPolicy("a", denyRule("r1", ssh))
+	a.PolicyId = "pol-a"
+	_, err := svc.ApplyPolicy(ctx, a)
+	require.NoError(t, err)
+	b := denyPolicy("b", allowRule("r1", ssh))
+	b.PolicyId = "pol-b"
+	_, err = svc.ApplyPolicy(ctx, b)
+	require.NoError(t, err)
+
+	sw.mu.Lock()
+	sw.addHook = func(flow *ovs.FlowMod) error {
+		sw.mu.Lock()
+		delete(sw.entries, flow.Match)
+		sw.mu.Unlock()
+		return errFlowInstall
+	}
+	sw.mu.Unlock()
+
+	_, err = svc.DeletePolicy(ctx, &platformv1.DeletePolicyRequest{PolicyId: "pol-b"})
+	require.Error(t, err, "a delete that leaves the survivor unenforced must not report success")
+	require.Equal(t, codes.Internal, status.Code(err))
+	require.Empty(t, policyStatus(svc, "pol-b"), "the strict delete succeeded: the policy is gone")
+	require.Equal(t, "error", policyStatus(svc, "pol-a"))
+	_, ok := sw.entry("tcp,tp_dst=22")
+	require.False(t, ok)
+
+	sw.mu.Lock()
+	sw.addHook = nil
+	sw.mu.Unlock()
+	c := denyPolicy("c", denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 443}))
+	c.PolicyId = "pol-c"
+	_, err = svc.ApplyPolicy(ctx, c)
+	require.NoError(t, err)
+	actions, ok := sw.entry("tcp,tp_dst=22")
+	require.True(t, ok, "the next apply must retry the failed restore")
+	require.Equal(t, "drop", actions)
+}
+
 // VLAN 4097 encodes as VLAN 1 on the wire: it is refused before any switch
 // write (#2021 Codex).
 func TestSDNService_ApplyPolicy_RefusesAnOutOfRangeVLAN(t *testing.T) {
