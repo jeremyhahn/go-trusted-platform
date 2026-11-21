@@ -7,7 +7,11 @@ import KmsOperationsPage from './page';
 // #2024 Codex P1: a verify-HMAC verdict belongs to the exact inputs it was
 // computed for. Editing an input or a failed request must clear it.
 
-const { verifyHmac } = vi.hoisted(() => ({ verifyHmac: vi.fn() }));
+const { verifyHmac, generateDataKey, generateWrappedDataKey } = vi.hoisted(() => ({
+  verifyHmac: vi.fn(),
+  generateDataKey: vi.fn(),
+  generateWrappedDataKey: vi.fn(),
+}));
 
 vi.mock('@/hooks', () => ({
   KMS_KEY_STATUSES: ['ENABLED', 'DISABLED'],
@@ -21,8 +25,8 @@ vi.mock('@/hooks', () => ({
     hmac: vi.fn(),
     verifyHmac,
     generateRandom: vi.fn(),
-    generateDataKey: vi.fn(),
-    generateWrappedDataKey: vi.fn(),
+    generateDataKey,
+    generateWrappedDataKey,
     getBackendStatus: vi.fn(),
   }),
 }));
@@ -99,5 +103,36 @@ describe('KmsOperationsPage verify HMAC verdict', () => {
       resolve(true);
     });
     expect(screen.queryByTestId('verify-hmac-result')).toBeNull();
+  });
+});
+
+// #2146 Codex P1: the REST handlers' parseDataKeyAlgorithm accepts KMS enum
+// names such as AES_256 and validateDataKeyRequest only 256 bits, so both
+// data-key forms must default to that pair.
+describe('KmsOperationsPage data-key defaults', () => {
+  afterEach(() => {
+    cleanup();
+    generateDataKey.mockReset();
+    generateWrappedDataKey.mockReset();
+  });
+
+  it('sends AES_256 and 256 bits from the data-key form by default', async () => {
+    render(<KmsOperationsPage />);
+    const card = within(screen.getByTestId('op-data-key'));
+    fireEvent.change(card.getByLabelText('Key name'), { target: { value: 'kek' } });
+    await act(async () => {
+      fireEvent.click(card.getByRole('button', { name: 'Generate data key' }));
+    });
+    expect(generateDataKey).toHaveBeenCalledWith('kek', 'AES_256', 256);
+  });
+
+  it('sends AES_256 and 256 bits from the wrapped data-key form by default', async () => {
+    render(<KmsOperationsPage />);
+    const card = within(screen.getByTestId('op-wrapped-data-key'));
+    fireEvent.change(card.getByLabelText('Wrapping key name'), { target: { value: 'kek' } });
+    await act(async () => {
+      fireEvent.click(card.getByRole('button', { name: 'Generate wrapped data key' }));
+    });
+    expect(generateWrappedDataKey).toHaveBeenCalledWith('kek', 'AES_256', 256);
   });
 });

@@ -121,12 +121,11 @@ test.describe("KMS operations", () => {
     const mock = await openPage(page);
     const card = page.getByTestId("op-data-key");
     await card.getByLabel("Key name").fill("kek");
-    await card.getByLabel("Key size").fill("128");
     await card.getByRole("button", { name: "Generate data key" }).click();
     await expect(page.getByTestId("data-key-result")).toHaveText(
       `plaintext: ${b64("plain-dek")}\nencrypted: ${b64("enc-dek")}`
     );
-    expect(mock.calls.find((c) => c.path === "/data-keys")?.body).toEqual({ key_id: "kek", algorithm: "AES", key_size: 128 });
+    expect(mock.calls.find((c) => c.path === "/data-keys")?.body).toEqual({ key_id: "kek", algorithm: "AES_256", key_size: 256 });
   });
 
   test("generates a wrapped data key", async ({ page }) => {
@@ -137,7 +136,7 @@ test.describe("KMS operations", () => {
     await expect(page.getByTestId("wrapped-data-key-result")).toHaveText(`wrapped by kek: ${b64("wrapped-dek")}`);
     expect(mock.calls.find((c) => c.path === "/data-keys/wrapped")?.body).toEqual({
       wrapping_key_id: "kek",
-      key_algorithm: "AES",
+      key_algorithm: "AES_256",
       key_size: 256,
     });
   });

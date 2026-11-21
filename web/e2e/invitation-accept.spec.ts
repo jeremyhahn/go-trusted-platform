@@ -47,28 +47,30 @@ test.describe('Invitation lookup and accept', () => {
     await expect(page.getByText('Error loading invitation')).toBeVisible();
   });
 
+  // #2146 Codex P1: the public invite page is app/invite/page.tsx, which reads
+  // the token from /invite/?token=... (a static export serves no unlisted
+  // dynamic segment), as invitation-accept-flow.spec.ts drives it.
   test('GetInvitationByToken: invite page shows the invitation for a token', async ({ page }) => {
-    await mockInvitationLookupApi(page, { invitation });
+    const mock = await mockInvitationLookupApi(page, { invitation });
 
     const lookup = page.waitForRequest((req) =>
       /\/api\/v1\/invitations\/token\/tok-accept-1\/?(\?|$)/.test(req.url())
     );
-    await page.goto('/invite/tok-accept-1');
+    await page.goto('/invite/?token=tok-accept-1');
     await lookup;
 
-    await expect(page.getByText('You have been invited')).toBeVisible();
-    await expect(page.getByText(/invitee@example\.com is invited/)).toBeVisible();
-    const signUp = page.getByRole('link', { name: 'Create account with passkey' });
-    await expect(signUp).toBeVisible();
-    await expect(signUp).toHaveAttribute('href', /\/auth\/webauthn\?invitation=tok-accept-1/);
-    await expect(page.getByRole('button', { name: 'Accept Invitation' })).toHaveCount(0);
+    await expect(page.getByTestId('invite-email')).toHaveText('invitee@example.com');
+    await expect(page.getByTestId('invite-role')).toBeVisible();
+    await expect(page.getByTestId('invite-status')).toBeVisible();
+    expect(mock.acceptRequests()).toEqual([]);
   });
 
-  test('GetInvitationByToken: unknown token shows an invalid invitation', async ({ page }) => {
-    await mockInvitationLookupApi(page, { invitation });
+  test('GetInvitationByToken: unknown token shows an error', async ({ page }) => {
+    const mock = await mockInvitationLookupApi(page, { invitation });
 
-    await page.goto('/invite/tok-unknown');
-    await expect(page.getByText('Invalid invitation')).toBeVisible();
+    await page.goto('/invite/?token=tok-unknown');
+    await expect(page.getByTestId('invite-error')).toBeVisible();
+    expect(mock.acceptRequests()).toEqual([]);
   });
 
   // Codex round 2 (#1681): AcceptInvitation only marks the invitation accepted
@@ -77,15 +79,15 @@ test.describe('Invitation lookup and accept', () => {
     await createCustomSession(page.context(), signedIn);
     const mock = await mockInvitationLookupApi(page, { invitation });
 
-    await page.goto('/invite/tok-accept-1');
-    await expect(page.getByRole('status')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Accept Invitation' })).toHaveCount(0);
+    await page.goto('/invite/?token=tok-accept-1');
+    await expect(page.getByTestId('invite-signed-in')).toBeVisible();
+    await expect(page.getByTestId('invite-join')).toHaveCount(0);
     expect(mock.acceptRequests()).toEqual([]);
   });
 
   // A login-issued session carries the login name in user_id and sub; the
   // passkey sign-up would redirect it to the dashboard, so it is not offered.
-  test('AcceptInvitation: a login-issued session gets no passkey dead end and sends no accept', async ({ page }) => {
+  test('AcceptInvitation: a login-issued session gets no join link and sends no accept', async ({ page }) => {
     await createCustomSession(page.context(), {
       sub: 'operator@platform',
       user_id: 'operator@platform',
@@ -94,17 +96,19 @@ test.describe('Invitation lookup and accept', () => {
     });
     const mock = await mockInvitationLookupApi(page, { invitation });
 
-    await page.goto('/invite/tok-accept-1');
-    await expect(page.getByRole('status').filter({ hasText: 'operator@platform' })).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Create account with passkey' })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Accept Invitation' })).toHaveCount(0);
+    await page.goto('/invite/?token=tok-accept-1');
+    await expect(page.getByTestId('invite-signed-in')).toContainText('operator@platform');
+    await expect(page.getByTestId('invite-join')).toHaveCount(0);
     expect(mock.acceptRequests()).toEqual([]);
   });
 
-  test('AcceptInvitation: a signed-out visitor gets the passkey sign-up link', async ({ page }) => {
-    await mockInvitationLookupApi(page, { invitation });
+  test('AcceptInvitation: a signed-out visitor gets the join link', async ({ page }) => {
+    const mock = await mockInvitationLookupApi(page, { invitation });
 
-    await page.goto('/invite/tok-accept-1');
-    await expect(page.getByRole('link', { name: 'Create account with passkey' })).toBeVisible();
+    await page.goto('/invite/?token=tok-accept-1');
+    const join = page.getByTestId('invite-join');
+    await expect(join).toBeVisible();
+    await expect(join).toHaveAttribute('href', '/auth/webauthn/?invitation=tok-accept-1');
+    expect(mock.acceptRequests()).toEqual([]);
   });
 });

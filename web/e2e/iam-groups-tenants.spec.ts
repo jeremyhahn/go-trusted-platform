@@ -59,37 +59,26 @@ test.describe('IAM groups, members, permission check and tenants', () => {
     await expect(page.getByText('Platform Engineering').first()).toBeVisible();
   });
 
-  test('AddGroupMember: POST /groups/{id}/members/{user}', async ({ page }) => {
+  // #2146 Codex P1: the embedded IAM backend has no membership handlers, so
+  // EmbeddedIamGate renders both controls disabled with a reason.
+  test('AddGroupMember: Add member is disabled on the embedded backend and sends nothing', async ({ page }) => {
     const api = await mockIAMGroupsTenantsApi(page, { groups: [engineering()] });
     await page.goto('/iam/groups/group-1');
-    await page.getByLabel('User ID', { exact: true }).fill('user-bob');
-    await page.getByRole('button', { name: 'Add member' }).click();
-    await expect
-      .poll(() =>
-        api.calls.find((c) => c.method === 'POST' && /\/groups\/group-1\/members\/user-bob$/.test(c.path))
-      )
-      .toBeTruthy();
-    await expect(page.getByText('Member added').first()).toBeVisible();
-    expect(api.groups()[0]?.members).toContain('user-bob');
+    await expect(page.getByRole('button', { name: 'Add member' })).toBeDisabled();
+    await expect(
+      page.getByText('Not available: the embedded IAM backend does not implement Group.AddMember yet').first()
+    ).toBeVisible();
+    expect(api.calls.some((c) => c.method === 'POST')).toBe(false);
   });
 
-  test('RemoveGroupMember: DELETE /groups/{id}/members/{user} by user ID behind a confirm', async ({ page }) => {
-    // The real GET /groups/{id} carries no members list, so removal goes by user ID.
+  test('RemoveGroupMember: Remove by user ID is disabled on the embedded backend and sends nothing', async ({ page }) => {
     const api = await mockIAMGroupsTenantsApi(page, { groups: [engineering()] });
     await page.goto('/iam/groups/group-1');
-    await page.getByLabel('User ID to remove').fill('user-alice');
-    await page.getByRole('button', { name: 'Remove by user ID' }).click();
-    const dialog = page.getByRole('dialog');
-    await expect(dialog.getByText('Remove member?')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Remove by user ID' })).toBeDisabled();
+    await expect(
+      page.getByText('Not available: the embedded IAM backend does not implement Group.RemoveMember yet').first()
+    ).toBeVisible();
     expect(api.calls.some((c) => c.method === 'DELETE')).toBe(false);
-    await dialog.getByRole('button', { name: 'Remove member' }).click();
-    await expect
-      .poll(() =>
-        api.calls.find((c) => c.method === 'DELETE' && /\/groups\/group-1\/members\/user-alice$/.test(c.path))
-      )
-      .toBeTruthy();
-    await expect(page.getByText('Member removed').first()).toBeVisible();
-    expect(api.groups()[0]?.members).not.toContain('user-alice');
   });
 
   test('CheckPermission: POST /permissions/check', async ({ page }) => {

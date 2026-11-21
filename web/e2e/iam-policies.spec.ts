@@ -32,56 +32,30 @@ test.describe('IAM policies and apps (#1728)', () => {
     await createTenantOwnerSession(page.context());
   });
 
-  test('ValidatePolicy: POST /policies/validate from the policy test page', async ({ page }) => {
-    const api = await setup(page, {
-      validateResponse: { valid: false, errors: ['rule-1: unknown effect "maybe"'] },
-    });
+  // #2146 Codex P1: the embedded IAM backend has no Validate or Simulate
+  // handler, so EmbeddedIamGate renders both controls disabled with a reason.
+  test('ValidatePolicy: Validate is disabled on the embedded backend and sends nothing', async ({ page }) => {
+    const api = await setup(page);
     await page.goto('/iam/policies/test');
     await expect(page.getByRole('heading', { name: 'Policy Test' })).toBeVisible();
 
-    await page.getByRole('button', { name: 'Validate', exact: true }).click();
-
-    await expect(page.getByText('Policy is invalid')).toBeVisible();
-    await expect(page.getByText('rule-1: unknown effect "maybe"')).toBeVisible();
-    const calls = api.find('POST', '/policies/validate');
-    expect(calls).toHaveLength(1);
-    expect(String(calls[0].body?.spec_yaml)).toContain('kind: Policy');
+    await expect(page.getByRole('button', { name: 'Validate', exact: true })).toBeDisabled();
+    await expect(
+      page.getByText('Not available: the embedded IAM backend does not implement Policy.Validate yet').first()
+    ).toBeVisible();
+    expect(api.find('POST', '/policies/validate')).toHaveLength(0);
   });
 
-  test('ValidatePolicy: a valid document is reported valid', async ({ page }) => {
-    await setup(page, { validateResponse: { valid: true } });
+  test('TestPolicy: Run Test is disabled on the embedded backend and sends nothing', async ({ page }) => {
+    const api = await setup(page);
     await page.goto('/iam/policies/test');
-    await page.getByRole('button', { name: 'Validate', exact: true }).click();
-    await expect(page.getByText('Policy is valid')).toBeVisible();
-  });
+    await expect(page.getByRole('heading', { name: 'Policy Test' })).toBeVisible();
 
-  test('TestPolicy: POST /policies/test from the policy test page', async ({ page }) => {
-    const api = await setup(page, {
-      testResponse: { allowed: true, matchedPolicy: 'allow-read', matchedRule: 'rule-1' },
-    });
-    await page.goto('/iam/policies/test');
-
-    const run = page.getByRole('button', { name: 'Run Test' });
-    await expect(run).toBeDisabled();
-    await page.locator('#subject-id').fill('user-1');
-    await page.locator('#resource').fill('kv://config/a');
-    await page.locator('#roles').fill('admin, ops');
-    await run.click();
-
-    const result = page.getByTestId('test-result');
-    await expect(result.getByText('Allowed')).toBeVisible();
-    await expect(result.getByText('Matched policy: allow-read')).toBeVisible();
-    await expect(result.getByText('Matched rule: rule-1')).toBeVisible();
-    const calls = api.find('POST', '/policies/test');
-    expect(calls).toHaveLength(1);
-    expect(calls[0].body).toMatchObject({
-      subject_id: 'user-1',
-      action: 'read',
-      resource: 'kv://config/a',
-      roles: ['admin', 'ops'],
-      groups: [],
-    });
-    expect(calls[0].body).not.toHaveProperty('subjectId');
+    await expect(page.getByRole('button', { name: 'Run Test' })).toBeDisabled();
+    await expect(
+      page.getByText('Not available: the embedded IAM backend does not implement Policy.Simulate yet').first()
+    ).toBeVisible();
+    expect(api.find('POST', '/policies/test')).toHaveLength(0);
   });
 
   test('CreatePolicy: POST /policies from the new policy page', async ({ page }) => {
@@ -109,44 +83,15 @@ test.describe('IAM policies and apps (#1728)', () => {
     expect(api.find('GET', '/policies/allow-read').length).toBeGreaterThan(0);
   });
 
-  test('UpdatePolicy: PUT /policies/{id} from the policy page, behind a confirm', async ({ page }) => {
+  test('UpdatePolicy: Edit is disabled on the embedded backend and sends nothing', async ({ page }) => {
     const api = await setup(page);
-    const dialogs: string[] = [];
-    page.on('dialog', (dialog) => {
-      dialogs.push(dialog.message());
-      void dialog.accept();
-    });
     await page.goto('/iam/policies/allow-read');
     await expect(page.getByText('Read access')).toBeVisible();
 
-    await page.getByRole('button', { name: 'Edit', exact: true }).click();
-    await expect(page.locator('#policy-description')).toBeVisible();
-    await expect(page.locator('#policy-yaml')).toHaveCount(0);
-    await page.locator('#policy-description').fill('Read access for operators');
-    await page.locator('#policy-priority').fill('20');
-    await page.getByRole('button', { name: 'Save', exact: true }).click();
-
-    await expect(page.getByText('Read access for operators')).toBeVisible();
-    await expect(page.getByText('priority 20')).toBeVisible();
-    expect(dialogs).toEqual(['Save changes to policy "allow-read"?']);
-    const calls = api.find('PUT', '/policies/allow-read');
-    expect(calls).toHaveLength(1);
-    expect(calls[0].body).toMatchObject({
-      policyName: 'allow-read',
-      description: 'Read access for operators',
-      priority: 20,
-    });
-    expect(calls[0].body).not.toHaveProperty('spec_yaml');
-    expect(calls[0].body).not.toHaveProperty('specYaml');
-  });
-
-  test('UpdatePolicy: dismissing the confirm sends nothing', async ({ page }) => {
-    const api = await setup(page);
-    page.on('dialog', (dialog) => void dialog.dismiss());
-    await page.goto('/iam/policies/allow-read');
-    await page.getByRole('button', { name: 'Edit', exact: true }).click();
-    await page.getByRole('button', { name: 'Save', exact: true }).click();
-    await expect(page.locator('#policy-description')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Edit', exact: true })).toBeDisabled();
+    await expect(
+      page.getByText('Not available: the embedded IAM backend does not implement Policy.Update yet').first()
+    ).toBeVisible();
     expect(api.find('PUT', '/policies/allow-read')).toHaveLength(0);
   });
 
@@ -160,30 +105,15 @@ test.describe('IAM policies and apps (#1728)', () => {
     expect(api.find('GET', '/apps/client-1').length).toBeGreaterThan(0);
   });
 
-  test('UpdateApp: PUT /apps/{id} from the app page, behind a confirm', async ({ page }) => {
+  test('UpdateApp: Edit is disabled on the embedded backend and sends nothing', async ({ page }) => {
     const api = await setup(page);
-    const dialogs: string[] = [];
-    page.on('dialog', (dialog) => {
-      dialogs.push(dialog.message());
-      void dialog.accept();
-    });
     await page.goto('/iam/apps/client-1');
     await expect(page.getByText('Billing Portal')).toBeVisible();
 
-    await page.getByRole('button', { name: 'Edit', exact: true }).click();
-    await page.locator('#app-name').fill('Billing Console');
-    await page.locator('#app-grant-types').fill('authorization_code, refresh_token');
-    await page.getByRole('button', { name: 'Save', exact: true }).click();
-
-    await expect(page.getByText('refresh_token')).toBeVisible();
-    expect(dialogs).toEqual(['Save changes to application "Billing Portal"?']);
-    const calls = api.find('PUT', '/apps/client-1');
-    expect(calls).toHaveLength(1);
-    expect(calls[0].body).toMatchObject({
-      clientId: 'client-1',
-      name: 'Billing Console',
-      grant_types: ['authorization_code', 'refresh_token'],
-      redirect_uris: ['app://billing/callback'],
-    });
+    await expect(page.getByRole('button', { name: 'Edit', exact: true })).toBeDisabled();
+    await expect(
+      page.getByText('Not available: the embedded IAM backend does not implement App.Update yet').first()
+    ).toBeVisible();
+    expect(api.find('PUT', '/apps/client-1')).toHaveLength(0);
   });
 });
