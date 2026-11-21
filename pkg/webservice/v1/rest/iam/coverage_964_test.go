@@ -824,7 +824,7 @@ func TestCov964Adapter_CreatePolicy(t *testing.T) {
 	}{
 		{
 			name: "rules come from the spec",
-			spec: "spec:\n  rules:\n    - name: read\n      actions: [\"iam:get\"]\n",
+			spec: "spec:\n  rules:\n    - name: read\n      effect: allow\n      actions: [\"iam:get\"]\n",
 			wantRules: []iamsdk.Rule{{
 				Name:      "read",
 				Effect:    iamsdk.EffectAllow,

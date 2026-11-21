@@ -109,6 +109,18 @@ func policyRuleCondition(specYAML string) (rule, kind string) {
 	return "", ""
 }
 
+// policyRuleBadEffect names the first rule of a policy document whose effect
+// is neither "allow" nor "deny", and that effect; bad is false when every
+// rule's effect is one of the two.
+func policyRuleBadEffect(specYAML string) (rule, effect string, bad bool) {
+	for _, r := range policyYAMLRules(specYAML) {
+		if r.Effect != "allow" && r.Effect != "deny" {
+			return r.Name, r.Effect, true
+		}
+	}
+	return "", "", false
+}
+
 // QuicBaaSIAMAdapter wraps a quicbaassdk.IAMClient to satisfy the
 // IAMClient interface consumed by the REST handlers. The QuicBaaS SDK
 // exposes IAM operations through nested per-resource clients
@@ -339,6 +351,12 @@ func (a *QuicBaaSIAMAdapter) CreatePolicy(ctx context.Context, tenantID string, 
 		Priority:    int(req.Priority),
 		SpecYAML:    []byte(req.SpecYAML),
 		Labels:      req.Labels,
+	}
+	// The flat Rules translation maps every effect but "deny" to allow, and
+	// the pinned upstream never sees the original value: refuse any other
+	// effect before anything is created.
+	if rule, effect, bad := policyRuleBadEffect(req.SpecYAML); bad {
+		return nil, ErrInvalidRequestBody{Reason: fmt.Sprintf("policy rule %q has effect %q; it must be allow or deny", rule, effect)}
 	}
 	// The pinned upstream persists only the flat Rules, which carry no
 	// conditions, and ignores SpecYAML: a conditional rule would be stored
