@@ -208,6 +208,12 @@ func (s *InvitationGRPCService) GetInvitation(
 	if err != nil {
 		return nil, s.toGRPCError("GetInvitation", err)
 	}
+	// Own-tenant rule, as CreateInvitation and ListInvitations apply it.
+	if inv != nil {
+		if err := authorizeIAMTenant(ctx, inv.TenantID); err != nil {
+			return nil, err
+		}
+	}
 	return &platformv1.GetInvitationResponse{
 		Invitation: invitationToProto(inv),
 		Timestamp:  timestamppb.Now(),
