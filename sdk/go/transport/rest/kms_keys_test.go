@@ -236,8 +236,11 @@ func TestKMSGetKey_BadReplyIsAnUnmarshalError(t *testing.T) {
 	a, _ := kmsAdapter(t, `"not json"`)
 	err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_GetKey_FullMethodName,
 		&platformv1.GetKeyRequest{KeyId: "k1"}, &platformv1.GetKeyResponse{})
-	if !errors.As(err, new(ErrUnmarshalFailed)) {
-		t.Fatalf("err = %v, want ErrUnmarshalFailed", err)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("Invoke err = %v, want Internal", err)
+	}
+	if _, err := decodeKMSGetKey([]byte(`not json`)); !errors.As(err, new(ErrUnmarshalFailed)) {
+		t.Fatalf("decode err = %v, want ErrUnmarshalFailed", err)
 	}
 }
 

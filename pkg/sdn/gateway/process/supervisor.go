@@ -620,8 +620,17 @@ func (s *Supervisor) ensureStateDir(def Definition) error {
 			return err
 		}
 	} else {
-		uid, gid := s.rootCredentials()
-		inherited, err := s.rootGroups()
+		// A Supervisor not built by New (as main's #2150 test builds one)
+		// keeps the process's own credentials and groups.
+		rootCredentials, rootGroups := s.rootCredentials, s.rootGroups
+		if rootCredentials == nil {
+			rootCredentials = childCredentials
+		}
+		if rootGroups == nil {
+			rootGroups = os.Getgroups
+		}
+		uid, gid := rootCredentials()
+		inherited, err := rootGroups()
 		if err != nil {
 			return &ErrStateDir{Process: def.Name, Path: s.cfg.Inherited.DataDir, Op: "traverse", Cause: err}
 		}
