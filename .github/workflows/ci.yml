@@ -34,7 +34,7 @@
 # the v1.38 step `Runner labels (ruling 633)`, which also reads every runs-on
 # under pull_request_target. That step is not adopted here (v1.38 is on the
 # catch-up list above), so v1.51 has nothing to apply to this file; it is
-# adopted with the step. code-review.yml takes v5.12.8 in the same change.
+# adopted with the step. code-review.yml takes v5.12.8 and v5.12.9 in the same change.
 # v1.35.1 (DS-8433, CA m2557): the Signatures job of handbook cd17d28
 # (ci-template v1.35.1) is adopted as is, in CI Gate's needs, env block and a
 # `pr` check line, with .github/allowed_signers synced from handbook

@@ -1,4 +1,4 @@
-# code-review-template: v5.12.8 -- the code review in Gitea or GitHub CI for a pull request
+# code-review-template: v5.12.9 -- the code review in Gitea or GitHub CI for a pull request
 # that carries `code-review` and `task:ready`, routed by its labels through
 # route-labels (labels.md §2). Codex on the `codex` runner reviews every such
 # PR; `agent:opencode` adds an advisory COMMENT review by the opencode job on
@@ -28,6 +28,36 @@
 #   COORDINATOR_TURNS         the codex rounds the project coordinator has
 #                             on a `needs-coordinator` PR after the two-round
 #                             stop (v5.9.8, Tenant Agent m2185); default 3
+#
+# v5.12.9 (2026-11-21, Tenant Agent CI-queue order, 07:2xZ): A RUN THAT
+# REQUESTS NO REVIEW TAKES NO RUNNER. go-trusted-platform had 148 runs
+# queued, 144 of them Code Review, for 54 PR heads: each new PR started
+# seven runs at one head within a second, one per pull_request_target
+# event (opened, then six `labeled`: code-review, dept:software and
+# task:ready, each twice), and every run took two hosted runners, the
+# scope job and the always() gate, even when its label requested nothing.
+# 64 of its 94 open PRs were drafts. GitHub cannot filter label names at
+# the trigger, so every job that takes a runner (scope, review,
+# review-opencode, gate) has one shared condition in its `if:`: not a
+# draft, and not a `labeled` event unless the label is code-review,
+# task:ready, agent:*, model:* or effort:* (the review job's own list,
+# verbatim; the review keeps its other conditions). `supersede` keeps
+# synchronize and reopened, and skips a draft too. A draft loses nothing:
+# `ready_for_review` (v5.10.12) starts its run at promotion.
+# The gate alone also runs on a `labeled` needs-owner or needs-coordinator
+# event on a non-draft head, so a hold added to an approved head re-runs
+# the gate, which fails on the hold: a held PR never auto-merges.
+# THE SKIPPED GATE IS NOT THE REQUIRED CHECK. A job its `if:` skips
+# reports success, and `Code Review (codex)` is the required context
+# (v5.11.0), so the gate's name is an expression: `Code Review (codex)`
+# exactly when the gate runs (the same condition), and `Code Review (not
+# requested)` when it is skipped. A skipped run never posts the required
+# name. The by-name lookups still hold: the twin read and the review's
+# twin wait look for `Codex review` queued or in progress, which a skipped
+# run never has; the handoff re-runs only a newer gate named `Code Review
+# (codex)` that ended failure or cancelled, which a skipped gate never is;
+# `supersede` reads `Codex review` and `Code Review (opencode)` by name,
+# unchanged. Nothing else changes.
 #
 # v5.12.8 (2026-11-21, hosted load; Tenant Agent review of handbook #86):
 # A NEW HEAD CANCELS THE OLDER HEADS' RUNS. Every push left the older
@@ -818,10 +848,13 @@ jobs:
   # run on this head (header). It gates nothing and nothing needs it.
   supersede:
     name: Cancel superseded runs
+    # v5.12.9: never on a draft (the shared condition's draft clause; its
+    # label clause is moot here, as this job never runs on `labeled`).
     if: >-
       github.server_url == 'https://github.com' &&
       github.event.pull_request.state == 'open' &&
       (github.event.action == 'synchronize' || github.event.action == 'reopened')
+      && github.event.pull_request.draft != true
     runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
     timeout-minutes: 5
     permissions:
@@ -895,7 +928,19 @@ jobs:
   # CI_FILE and GATE_JOB inside the step, per repository.
   scope:
     name: Review scope (InfoSec guard)
-    if: github.event.pull_request.state == 'open'
+    # v5.12.9 (header): THE SHARED CONDITION. No job that takes a runner
+    # runs on a draft, or on a `labeled` event whose label requests no
+    # review. It is the review job's label list, verbatim, in every job's
+    # `if:` (scope, review, review-opencode, gate) and in the gate's name.
+    if: >-
+      github.event.pull_request.draft != true
+      && (github.event.action != 'labeled'
+      || github.event.label.name == 'code-review'
+      || github.event.label.name == 'task:ready'
+      || startsWith(github.event.label.name, 'agent:')
+      || startsWith(github.event.label.name, 'model:')
+      || startsWith(github.event.label.name, 'effort:'))
+      && github.event.pull_request.state == 'open'
     # v5.12.3: no concurrency group. Cancelling an older run's scope job
     # skipped that run's requested review (v5.12.2), so each event's guard
     # runs to the end; it is a short API-only job.
@@ -1339,8 +1384,16 @@ jobs:
     # re-run replays this payload, as it did before.
     # v5.10.6 (Tenant Agent m2331 (2)): a head in this repository only; a
     # fork's head never takes a codex runner.
+    # v5.12.9: the shared condition first, then v5.9.4's conditions unchanged.
     if: >-
-      github.event.pull_request.state == 'open'
+      github.event.pull_request.draft != true
+      && (github.event.action != 'labeled'
+      || github.event.label.name == 'code-review'
+      || github.event.label.name == 'task:ready'
+      || startsWith(github.event.label.name, 'agent:')
+      || startsWith(github.event.label.name, 'model:')
+      || startsWith(github.event.label.name, 'effort:'))
+      && github.event.pull_request.state == 'open'
       && contains(github.event.pull_request.labels.*.name, 'code-review')
       && contains(github.event.pull_request.labels.*.name, 'task:ready')
       && !contains(github.event.pull_request.labels.*.name, 'task:in-progress')
@@ -3250,7 +3303,16 @@ jobs:
     name: Code Review (opencode)
     needs: review
     # Gitea only (v5.9.0): its token check and permission read are Gitea's.
-    if: needs.review.outputs.agent == 'opencode' && github.server_url != 'https://github.com'
+    # v5.12.9: the shared condition too.
+    if: >-
+      github.event.pull_request.draft != true
+      && (github.event.action != 'labeled'
+      || github.event.label.name == 'code-review'
+      || github.event.label.name == 'task:ready'
+      || startsWith(github.event.label.name, 'agent:')
+      || startsWith(github.event.label.name, 'model:')
+      || startsWith(github.event.label.name, 'effort:'))
+      && needs.review.outputs.agent == 'opencode' && github.server_url != 'https://github.com'
     runs-on: qwen  # CUSTOMIZE: the opencode review host's runner label # self-hosted: hardware: the GPU host that serves the model
     # 3300 s >= 1530 + 630 (the two runs, kill grace included) + 2 x 130 (the
     # debug calls) + 880 s for checkout, guard, prepare, post and cleanup.
@@ -3672,7 +3734,8 @@ jobs:
   # `Code Review (codex)`, and a job its `if:` skips reports success, so a PR
   # without `code-review` and `task:ready` passed it unreviewed. The review
   # job is now `Codex review`; this job carries the required name, always
-  # runs (no `if:` can skip it), and passes only when
+  # runs (no `if:` can skip it; v5.12.9: but the shared condition, and then
+  # it carries another name), and passes only when
   #   (a) every file the PR changes, base commit to head, is on the owner's
   #       no-review list (NO_REVIEW_PATHS: docs and CI config), or
   #   (b) $REVIEWER's latest standing verdict ON THIS HEAD is APPROVED.
@@ -3684,9 +3747,42 @@ jobs:
   # pass re-runs the gate of every newer run on the head that ended red
   # (v5.12.7: GitHub reads the context from the newest suite).
   gate:
-    name: Code Review (codex)
+    # v5.12.9 (header): the required name only when this job runs. A job
+    # its `if:` skips reports success, and a skipped `Code Review (codex)`
+    # would pass the required check unreviewed (v5.11.0). The name is the
+    # shared condition, the gate's `if:` without always(), so a skipped gate
+    # posts `Code Review (not requested)`, never the required context.
+    # jobs.<id>.name reads github, needs, strategy, matrix, vars and inputs
+    # only: the condition reads github alone.
+    # The gate alone also runs on a hold label (needs-owner,
+    # needs-coordinator) on a non-draft head: a hold added to an approved
+    # head re-runs the gate, which fails on the hold, so a held PR never
+    # auto-merges on the earlier green check (Tenant Agent 08:1xZ).
+    name: >-
+      ${{ (
+      github.event.pull_request.draft != true
+      && (github.event.action != 'labeled'
+      || github.event.label.name == 'code-review'
+      || github.event.label.name == 'task:ready'
+      || startsWith(github.event.label.name, 'agent:')
+      || startsWith(github.event.label.name, 'model:')
+      || startsWith(github.event.label.name, 'effort:')
+      || github.event.label.name == 'needs-owner'
+      || github.event.label.name == 'needs-coordinator')
+      ) && 'Code Review (codex)' || 'Code Review (not requested)' }}
     needs: [scope, review]
-    if: always()
+    if: >-
+      always() && (
+      github.event.pull_request.draft != true
+      && (github.event.action != 'labeled'
+      || github.event.label.name == 'code-review'
+      || github.event.label.name == 'task:ready'
+      || startsWith(github.event.label.name, 'agent:')
+      || startsWith(github.event.label.name, 'model:')
+      || startsWith(github.event.label.name, 'effort:')
+      || github.event.label.name == 'needs-owner'
+      || github.event.label.name == 'needs-coordinator')
+      )
     # v5.12.2: one gate per head. A newer event's gate cancels an older one,
     # which no longer holds a hosted runner in the twin wait; the newest
     # gate's check is the head's `Code Review (codex)`.
