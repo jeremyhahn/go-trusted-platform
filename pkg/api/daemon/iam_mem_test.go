@@ -29,7 +29,11 @@ import (
 
 // wiredIAMGRPCService is the gRPC IAM service on an in-memory IAM client.
 func wiredIAMGRPCService(iam *memIAM) *IAMGRPCService {
-	return NewIAMGRPCService(slog.Default(), iam, iam.PEP())
+	svc := NewIAMGRPCService(slog.Default(), iam, iam.PEP())
+	// CreateTenant and ListTenants are decided in the system tenant and
+	// fail closed with none set (fixtureSystemTenantID).
+	svc.SetSystemTenant(fixtureSystemTenantID)
+	return svc
 }
 
 // memIAMCreated is the creation time of every record memIAM stores, so two
@@ -412,6 +416,11 @@ type memPEP struct {
 func (p memPEP) Check(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
 	if !strings.Contains(req.Resource, "://") {
 		return nil, sdkerrors.NewInvalidInput("iam.pep.check", "resource must be a type://path URI")
+	}
+	// The local operator: a Unix peer's uid/gid principal
+	// (unixPeerPrincipal) is admitted, as the fixtures' operator policy.
+	if strings.HasPrefix(req.Subject.ID, "unix:uid:") {
+		return &sdkiam.CheckResponse{Allowed: true, MatchedPolicy: "unix-operator", MatchedRule: req.Action}, nil
 	}
 	p.m.mu.Lock()
 	defer p.m.mu.Unlock()
