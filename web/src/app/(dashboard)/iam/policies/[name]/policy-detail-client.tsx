@@ -22,6 +22,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { PolicyValidateCard } from '@/components/features/iam';
 
 // Policy record as the REST API sends it: camelCase or snake_case keys (#445).
 interface PolicyWire {
@@ -145,6 +146,16 @@ export default function PolicyDetailClient() {
           </div>
         </CardContent>
       </Card>
+
+      <PolicyValidateCard
+        specYaml={yaml}
+        validate={async (y) => {
+          if (!tenantId) throw new Error('No tenant ID');
+          const r = await iam.validatePolicy({ tenantId, specYaml: y });
+          if (!r.data) throw new Error('Empty validation response');
+          return r.data;
+        }}
+      />
     </div>
   );
 }
