@@ -138,11 +138,13 @@ export default function KmsOperationsPage() {
   const [randomBytes, setRandomBytes] = React.useState("32");
   const [randomResult, setRandomResult] = React.useState<string | null>(null);
   const [dkKey, setDkKey] = React.useState("");
-  const [dkAlg, setDkAlg] = React.useState("AES");
+  // The REST handler accepts KMS key-algorithm enum names and 256-bit data
+  // keys only (parseDataKeyAlgorithm, validateDataKeyRequest; #2146 Codex).
+  const [dkAlg, setDkAlg] = React.useState("AES_256");
   const [dkSize, setDkSize] = React.useState("256");
   const [dkResult, setDkResult] = React.useState<string | null>(null);
   const [wdkKey, setWdkKey] = React.useState("");
-  const [wdkAlg, setWdkAlg] = React.useState("AES");
+  const [wdkAlg, setWdkAlg] = React.useState("AES_256");
   const [wdkSize, setWdkSize] = React.useState("256");
   const [wdkResult, setWdkResult] = React.useState<string | null>(null);
 
