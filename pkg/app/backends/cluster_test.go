@@ -81,29 +81,38 @@ func threeNodeStatus() *quicbaasservice.ClusterStatusResponse {
 func TestClusterBackend_Status(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("degraded", func(t *testing.T) {
-		b := NewClusterBackend(&fakeClusterSurface{status: threeNodeStatus()}, 1, "")
-		st, err := b.Status(ctx)
+	// allHealthy is what the pinned go-quicbaas ClusterStatus always
+	// returns: every Raft member marked Healthy, whether it is up or not.
+	allHealthy := func() *quicbaasservice.ClusterStatusResponse {
+		resp := threeNodeStatus()
+		for _, n := range resp.Nodes {
+			n.HealthStatus = quicbaasservice.HealthStatusHealthy
+		}
+		return resp
+	}
+
+	t.Run("membership is not health", func(t *testing.T) {
+		st, err := NewClusterBackend(&fakeClusterSurface{status: allHealthy()}, 1, "").Status(ctx)
 		if err != nil {
 			t.Fatalf("Status: %v", err)
 		}
-		if st.State != "degraded" || st.NodeCount != 3 || st.HealthyCount != 2 || st.LeaderID != 1 || !st.HasQuorum {
-			t.Errorf("status = %+v, want degraded, 3 nodes, 2 healthy, leader 1, quorum", st)
+		if st.State != "unknown" || st.NodeCount != 3 || st.HealthyCount != 0 || st.LeaderID != 1 || !st.HasQuorum {
+			t.Errorf("status = %+v, want unknown, 3 nodes, 0 healthy, leader 1, quorum", st)
 		}
 		if want := time.Unix(0, clusterTestTimestamp); !st.LastUpdated.Equal(want) {
 			t.Errorf("LastUpdated = %v, want %v", st.LastUpdated, want)
 		}
 	})
 
-	t.Run("running", func(t *testing.T) {
-		resp := threeNodeStatus()
-		resp.Nodes[2].HealthStatus = quicbaasservice.HealthStatusHealthy
+	t.Run("no leader", func(t *testing.T) {
+		resp := allHealthy()
+		resp.Shards[0].LeaderID = 0
 		st, err := NewClusterBackend(&fakeClusterSurface{status: resp}, 1, "").Status(ctx)
 		if err != nil {
 			t.Fatalf("Status: %v", err)
 		}
-		if st.State != "running" || st.HealthyCount != 3 {
-			t.Errorf("status = %+v, want running with 3 healthy", st)
+		if st.State != "degraded" || st.HealthyCount != 0 || st.HasQuorum {
+			t.Errorf("status = %+v, want degraded, 0 healthy, no quorum", st)
 		}
 	})
 
@@ -127,7 +136,9 @@ func TestClusterBackend_Nodes(t *testing.T) {
 	if len(nodes.Nodes) != 3 {
 		t.Fatalf("got %d nodes, want 3", len(nodes.Nodes))
 	}
-	wantStates := map[uint64]string{1: "healthy", 2: "unhealthy", 3: "healthy"}
+	// Node 2 is Unhealthy in the fixture: a reported HealthStatus is Raft
+	// membership, not a measured verdict, so every node reads unknown.
+	wantStates := map[uint64]string{1: "unknown", 2: "unknown", 3: "unknown"}
 	for i, n := range nodes.Nodes {
 		if n.ID != uint64(i+1) {
 			t.Errorf("node[%d].ID = %d, want %d (sorted by ID)", i, n.ID, i+1)
@@ -144,6 +155,35 @@ func TestClusterBackend_Nodes(t *testing.T) {
 	}
 	if nodes.Leader == nil || nodes.Leader.ID != 1 {
 		t.Errorf("Leader = %+v, want node 1", nodes.Leader)
+	}
+}
+
+// TestClusterBackend_TopologyIsNotHealth pins that a ClusterStatus marking
+// every member Healthy (as the pinned go-quicbaas one always does, even for a
+// stopped follower) never reaches the daemon as a healthy node or a running
+// cluster.
+func TestClusterBackend_TopologyIsNotHealth(t *testing.T) {
+	ctx := context.Background()
+	resp := threeNodeStatus()
+	for _, n := range resp.Nodes {
+		n.HealthStatus = quicbaasservice.HealthStatusHealthy
+	}
+	b := NewClusterBackend(&fakeClusterSurface{status: resp}, 1, "")
+	st, err := b.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.State == "running" {
+		t.Errorf("Status State = %q from topology alone, want not running", st.State)
+	}
+	nodes, err := b.Nodes(ctx)
+	if err != nil {
+		t.Fatalf("Nodes: %v", err)
+	}
+	for _, n := range nodes.Nodes {
+		if n.State == "healthy" {
+			t.Errorf("node %d State = %q from topology alone, want not healthy", n.ID, n.State)
+		}
 	}
 }
 
