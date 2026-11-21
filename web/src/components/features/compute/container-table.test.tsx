@@ -84,6 +84,14 @@ describe('ContainerTable', () => {
     expect(db.getByText('-')).toBeDefined();
   });
 
+  it('links each container name to its detail page', () => {
+    stubControlPlane({});
+    mount([container({ id: 'ctr/1', name: 'web' })]);
+
+    const link = screen.getByRole('link', { name: 'web' });
+    expect(link.getAttribute('href')).toBe('/compute/containers/ctr%2F1/');
+  });
+
   it('gives each status its colour', () => {
     stubControlPlane({});
     mount([

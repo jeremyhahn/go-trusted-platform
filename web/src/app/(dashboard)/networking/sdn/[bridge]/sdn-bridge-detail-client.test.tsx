@@ -381,7 +381,10 @@ describe('SDNBridgeDetailClient policy apply and policy identity', () => {
     status: 'POLICY_STATUS_ACTIVE',
   };
 
-  async function fillSecondPolicy(rule: { priority: string; port: string }, existing: unknown[] = [denyTelnet]) {
+  async function fillSecondPolicy(
+    rule: { priority: string; port: string; sourceIp?: string },
+    existing: unknown[] = [denyTelnet],
+  ) {
     const sent = await renderPage({
       [`GET ${SDN}/policies`]: ok({ policies: existing }),
       [`POST ${SDN}/policies`]: ok({ policy: { id: 'pol-9' } }),
@@ -393,6 +396,9 @@ describe('SDNBridgeDetailClient policy apply and policy identity', () => {
     fireEvent.change(screen.getByLabelText('Priority'), { target: { value: rule.priority } });
     fireEvent.change(screen.getByLabelText('Protocol'), { target: { value: 'tcp' } });
     fireEvent.change(screen.getByLabelText('Destination port'), { target: { value: rule.port } });
+    if (rule.sourceIp) {
+      fireEvent.change(screen.getByLabelText('Source IP'), { target: { value: rule.sourceIp } });
+    }
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
     });
@@ -451,6 +457,78 @@ describe('SDNBridgeDetailClient policy apply and policy identity', () => {
     const sent = await fillSecondPolicy({ priority: '100', port: '23' }, [existing]);
     await waitFor(() => expect(sent.some((r) => r.method === 'POST' && r.path === `${SDN}/policies`)).toBe(true));
     expect(screen.queryByTestId('policy-conflict-error')).toBeNull();
+  });
+
+  // #2148 Codex round 1: matches and priorities compare as the switch installs them.
+  function withSourceIp(sourceIp: string) {
+    return {
+      ...denyTelnet,
+      config: {
+        ...denyTelnet.config,
+        rules: [{ ...denyTelnet.config.rules[0], match: { protocol: 'tcp', destinationPort: 23, sourceIp } }],
+      },
+    };
+  }
+
+  function expectConflict(sent: { method: string; path: string }[]) {
+    expect(screen.getByTestId('policy-conflict-error').textContent).toContain('deny-telnet');
+    expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(sent.some((r) => r.method === 'POST' && r.path === `${SDN}/policies`)).toBe(false);
+  }
+
+  it('a CIDR with host bits set conflicts with its network', async () => {
+    const sent = await fillSecondPolicy({ priority: '100', port: '23', sourceIp: '10.0.0.1/24' }, [
+      withSourceIp('10.0.0.0/24'),
+    ]);
+    expectConflict(sent);
+  });
+
+  it('a bare address conflicts with its /32', async () => {
+    const sent = await fillSecondPolicy({ priority: '100', port: '23', sourceIp: '10.0.0.5' }, [
+      withSourceIp('10.0.0.5/32'),
+    ]);
+    expectConflict(sent);
+  });
+
+  it.each(['6', 'TCP'])('a recorded protocol number or upper-case name conflicts with tcp (%s)', async (protocol) => {
+    const existing = {
+      ...denyTelnet,
+      config: {
+        ...denyTelnet.config,
+        rules: [{ ...denyTelnet.config.rules[0], match: { protocol, destinationPort: 23 } }],
+      },
+    };
+    const sent = await fillSecondPolicy({ priority: '100', port: '23' }, [existing]);
+    expectConflict(sent);
+  });
+
+  it('another network is not a conflict and is sent', async () => {
+    const sent = await fillSecondPolicy({ priority: '100', port: '23', sourceIp: '10.0.1.0/24' }, [
+      withSourceIp('10.0.0.0/24'),
+    ]);
+    await waitFor(() => expect(sent.some((r) => r.method === 'POST' && r.path === `${SDN}/policies`)).toBe(true));
+    expect(screen.queryByTestId('policy-conflict-error')).toBeNull();
+  });
+
+  it.each(['65536', '65636', '0', '1.5', '-1'])(
+    'a priority outside 1-65535 or not whole is refused and nothing is sent (%s)',
+    async (priority) => {
+      // fillSecondPolicy waits for the deny-telnet row; port 22 keeps it from
+      // matching, so only the priority range can refuse the rule.
+      const sent = await fillSecondPolicy({ priority, port: '22' });
+      expect(screen.getByTestId('rule-priority-error')).toBeDefined();
+      expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(true);
+      expect(sent.some((r) => r.method === 'POST' && r.path === `${SDN}/policies`)).toBe(false);
+    },
+  );
+
+  it('a recorded priority above 65535 conflicts where the switch installs it', async () => {
+    const existing = {
+      ...denyTelnet,
+      config: { ...denyTelnet.config, priority: 65636, rules: [{ ...denyTelnet.config.rules[0], priority: 65636 }] },
+    };
+    const sent = await fillSecondPolicy({ priority: '100', port: '23' }, [existing]);
+    expectConflict(sent);
   });
 
   // #2024 Codex round 3 P1: an empty policy list while the read is pending or
