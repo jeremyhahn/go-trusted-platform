@@ -3307,6 +3307,11 @@ func (d *Daemon) VPNGRPCServiceServer() *VPNGRPCService {
 	return d.vpnGRPCService
 }
 
+// ProxyGRPCServiceServer returns the proxy gRPC service backing /api/v1/proxy.
+func (d *Daemon) ProxyGRPCServiceServer() *grpccreds.ProxyGRPCService {
+	return d.proxyGRPCService
+}
+
 // VPNControlPlane returns the control-plane VPN service, or nil when the
 // daemon runs without a platform store.
 func (d *Daemon) VPNControlPlane() *vpn.Service {

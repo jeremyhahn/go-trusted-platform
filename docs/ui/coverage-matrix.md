@@ -519,19 +519,19 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
 | `ProxyService.CreateRoute` | - | - | - | - | missing |
-| `ProxyService.GetRoute` | - | - | - | - | missing |
+| `ProxyService.GetRoute` | `GET /routes/{id}` | - | - | - | missing |
 | `ProxyService.UpdateRoute` | - | - | - | - | missing |
 | `ProxyService.DeleteRoute` | - | - | - | - | missing |
-| `ProxyService.ListRoutes` | - | - | - | - | missing |
+| `ProxyService.ListRoutes` | `GET /routes` | - | - | - | missing |
 | `ProxyService.CreatePool` | - | - | - | - | missing |
-| `ProxyService.GetPool` | - | - | - | - | missing |
+| `ProxyService.GetPool` | `GET /pools/{id}` | - | - | - | missing |
 | `ProxyService.UpdatePool` | - | - | - | - | missing |
 | `ProxyService.DeletePool` | - | - | - | - | missing |
-| `ProxyService.ListPools` | - | - | - | - | missing |
-| `ProxyService.GetProxyConfig` | - | - | - | - | missing |
-| `ProxyService.GetProxyStatus` | - | - | - | - | missing |
+| `ProxyService.ListPools` | `GET /pools` | - | - | - | missing |
+| `ProxyService.GetProxyConfig` | `GET /config` | - | - | - | missing |
+| `ProxyService.GetProxyStatus` | `GET /status` | - | - | - | missing |
 | `ProxyService.ReloadProxyConfig` | - | - | - | - | missing |
-| `ProxyService.GetZoneMatrix` | - | - | - | - | missing |
+| `ProxyService.GetZoneMatrix` | `GET /zone-matrix` | - | - | - | missing |
 
 ## PXEService (`pxe.proto`)
 
