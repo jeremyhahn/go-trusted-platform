@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Plus, RefreshCw, MoreHorizontal, RotateCcw, Trash2, Copy, Download, AlertCircle, Loader2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Button } from '@/components/ui/button';
@@ -22,10 +22,20 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { ServiceUnavailableState } from '@/components/features/platform';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { useApi, useCompute, useMutation, useToast } from '@/hooks';
-import type { Snapshot, VM } from 'trusted-platform-sdk';
+import type { Snapshot, SnapshotConfig, VM } from 'trusted-platform-sdk';
 import { vmStateName } from '@/lib/compute-state';
 
 // Extended snapshot type with source name
@@ -177,6 +187,59 @@ export default function SnapshotsPage() {
     }
   );
 
+  // Create snapshot dialog state (#2044).
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createVmId, setCreateVmId] = useState('');
+  const [createName, setCreateName] = useState('');
+  const [createDescription, setCreateDescription] = useState('');
+  const [createMemory, setCreateMemory] = useState(false);
+
+  // Create snapshot mutation (#2044): POST /vms/{id}/snapshots through the SDK.
+  const createSnapshotMutation = useMutation(
+    async ({ vmId, config }: { vmId: string; config: SnapshotConfig }) =>
+      compute.createSnapshot({ vmId, config }),
+    {
+      onSuccess: (_data, { config }) => {
+        toast({
+          title: 'Snapshot created',
+          description: `Snapshot ${config.name} was created`,
+          variant: 'success',
+        });
+        setCreateOpen(false);
+        setCreateName('');
+        setCreateDescription('');
+        setCreateMemory(false);
+        refetchSnapshots();
+      },
+      onError: (error) => {
+        toast({
+          title: 'Error creating snapshot',
+          description: error.message,
+          variant: 'destructive',
+        });
+      },
+    }
+  );
+
+  const openCreate = () => {
+    setCreateVmId(vms[0]?.id ?? '');
+    setCreateOpen(true);
+  };
+
+  const submitCreate = () => {
+    const name = createName.trim();
+    const description = createDescription.trim();
+    createSnapshotMutation.mutate({
+      vmId: createVmId,
+      config: {
+        name,
+        ...(description ? { description } : {}),
+        memorySnapshot: createMemory,
+        diskSnapshot: true,
+      },
+    });
+  };
+
   const handleRestore = (snapshot: SnapshotWithSource) => {
     if (window.confirm(`Are you sure you want to restore from snapshot ${snapshot.config?.name || snapshot.id}?`)) {
       restoreSnapshotMutation.mutate({ vmId: snapshot.vmId, snapshotId: snapshot.id });
@@ -283,15 +346,7 @@ export default function SnapshotsPage() {
           <Button variant="outline" size="icon" onClick={handleRefresh} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button
-            onClick={() =>
-              toast({
-                title: 'Feature Not Available',
-                description: 'Create snapshot from this page coming soon. Use VM details page to create snapshots.',
-                variant: 'default',
-              })
-            }
-          >
+          <Button onClick={openCreate} disabled={vms.length === 0}>
             <Plus className="mr-2 h-4 w-4" />
             Create Snapshot
           </Button>
@@ -324,7 +379,7 @@ export default function SnapshotsPage() {
           <AlertDescription>
             {vms.length === 0
               ? 'No VMs are currently running. Create a VM first to take snapshots.'
-              : 'No snapshots have been created yet. Navigate to a VM details page to create a snapshot.'}
+              : 'No snapshots have been created yet. Use Create Snapshot to take one.'}
           </AlertDescription>
         </Alert>
       ) : (
@@ -414,6 +469,80 @@ export default function SnapshotsPage() {
           </Table>
         </div>
       )}
+
+      <Dialog
+        open={createOpen}
+        onOpenChange={(open) => {
+          if (!open && !createSnapshotMutation.isLoading) setCreateOpen(false);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create snapshot</DialogTitle>
+            <DialogDescription>
+              Take a snapshot of a VM&apos;s disks, and optionally its memory.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="snapshot-vm">VM</Label>
+              <select
+                id="snapshot-vm"
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                value={createVmId}
+                onChange={(e) => setCreateVmId(e.target.value)}
+              >
+                {vms.map((vm: VM) => (
+                  <option key={vm.id} value={vm.id}>
+                    {vm.config?.name || vm.id}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="snapshot-name">Name</Label>
+              <Input
+                id="snapshot-name"
+                value={createName}
+                onChange={(e) => setCreateName(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="snapshot-description">Description</Label>
+              <Input
+                id="snapshot-description"
+                value={createDescription}
+                onChange={(e) => setCreateDescription(e.target.value)}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="snapshot-memory"
+                checked={createMemory}
+                onChange={(e) => setCreateMemory(e.target.checked)}
+              />
+              <Label htmlFor="snapshot-memory">Include memory</Label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setCreateOpen(false)}
+              disabled={createSnapshotMutation.isLoading}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={submitCreate}
+              disabled={!createVmId || createName.trim() === '' || createSnapshotMutation.isLoading}
+            >
+              {createSnapshotMutation.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
