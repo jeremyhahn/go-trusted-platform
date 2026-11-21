@@ -239,43 +239,65 @@ export class KMSService extends BaseService {
   // =========================================================================
 
   /**
-   * Encrypt plaintext
+   * Encrypt plaintext: POST /v1/kms/encrypt/{name} with { plaintext, context }
    *
    * @param request - Encryption request
    * @returns Ciphertext
    */
   async encrypt(request: EncryptRequest): Promise<ApiResponse<EncryptResponse>> {
-    return this.client.post<EncryptResponse>(this.buildUrl('/encrypt'), request);
+    return this.client.post<EncryptResponse>(
+      this.buildUrl(`/encrypt/${this.encodePathSegment(request.keyId)}`),
+      wireBody({ plaintext: request.plaintext, context: request.context })
+    );
   }
 
   /**
-   * Decrypt ciphertext
+   * Decrypt ciphertext: POST /v1/kms/decrypt/{name} with { ciphertext, context, version }
    *
    * @param request - Decryption request
    * @returns Plaintext
    */
   async decrypt(request: DecryptRequest): Promise<ApiResponse<DecryptResponse>> {
-    return this.client.post<DecryptResponse>(this.buildUrl('/decrypt'), request);
+    return this.client.post<DecryptResponse>(
+      this.buildUrl(`/decrypt/${this.encodePathSegment(request.keyId)}`),
+      wireBody({ ciphertext: request.ciphertext, context: request.context, version: request.keyVersion })
+    );
   }
 
   /**
-   * Sign a message
+   * Sign a message: POST /v1/kms/sign/{name} with { data, hash, version, pre_hashed }
    *
    * @param request - Signing request
    * @returns Signature
    */
   async sign(request: SignRequest): Promise<ApiResponse<SignResponse>> {
-    return this.client.post<SignResponse>(this.buildUrl('/sign'), request);
+    return this.client.post<SignResponse>(
+      this.buildUrl(`/sign/${this.encodePathSegment(request.keyId)}`),
+      wireBody({
+        data: request.message,
+        hash: request.hashAlgorithm,
+        version: request.keyVersion,
+        pre_hashed: request.preHashed,
+      })
+    );
   }
 
   /**
-   * Verify a signature
+   * Verify a signature: POST /v1/kms/verify/{name} with { data, signature, hash, version }
    *
    * @param request - Verification request
    * @returns Verification result
    */
   async verify(request: VerifyRequest): Promise<ApiResponse<VerifyResponse>> {
-    return this.client.post<VerifyResponse>(this.buildUrl('/verify'), request);
+    return this.client.post<VerifyResponse>(
+      this.buildUrl(`/verify/${this.encodePathSegment(request.keyId)}`),
+      wireBody({
+        data: request.message,
+        signature: request.signature,
+        hash: request.hashAlgorithm,
+        version: request.keyVersion,
+      })
+    );
   }
 
   /**

@@ -343,6 +343,10 @@ export interface SignRequest {
   message: string;
   /** Hash algorithm */
   hashAlgorithm?: HashAlgorithm;
+  /** Key version to sign with (sent as `version`) */
+  keyVersion?: number;
+  /** The message is already a digest (sent as `pre_hashed`) */
+  preHashed?: boolean;
 }
 
 /**
