@@ -20,10 +20,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -182,4 +184,20 @@ func TestLifecycleRoutes_IdempotentAnswers(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Contains(t, rec.Body.String(), "nothing installed")
 	})
+}
+
+// TestLifecycleRoutes_ChunkedBodyIsDecoded: a chunked request carries no
+// Content-Length (ContentLength -1); its body is still decoded.
+func TestLifecycleRoutes_ChunkedBodyIsDecoded(t *testing.T) {
+	service := &fakeLifecycleService{}
+	router := lifecycleRouter(fakeScopes{InitScope: true}, service)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/init", strings.NewReader(`{"force":true}`))
+	req.ContentLength = -1
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, service.initReq)
+	assert.True(t, service.initReq.GetForce())
 }
