@@ -216,7 +216,9 @@ export default function InvitationsPage() {
       cell: ({ row }) => {
         const date = new Date(row.original.expiresAt);
         const now = new Date();
-        const isExpired = date < now;
+        const isExpired =
+          date < now &&
+          (row.original.status === "pending" || row.original.status === "expired");
 
         return (
           <span
