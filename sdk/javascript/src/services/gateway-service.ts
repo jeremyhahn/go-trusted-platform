@@ -1,7 +1,8 @@
 /**
  * Gateway Service
  *
- * Provides operations for multi-mode gateway management including BGP and IPAM.
+ * Provides operations for multi-mode gateway management including BGP, IPAM
+ * and load balancing.
  */
 
 import type { ApiClient } from '../client/api-client.js';
@@ -29,6 +30,9 @@ import type {
   GatewaySnapshot,
   ListGatewayStateResponse,
   GetNAT64StatusResponse,
+  GetVIPResponse,
+  ListVIPsResponse,
+  GetLBStatusResponse,
 } from '../types/gateway.js';
 
 /**
@@ -273,5 +277,35 @@ export class GatewayService extends BaseService {
       );
     }
     return this.client.get<ListAllocationsResponse>(this.buildUrl('/ipam/allocations'));
+  }
+
+  // ===========================================================================
+  // Load balancer operations
+  // ===========================================================================
+
+  /**
+   * List every VIP with its backends and health.
+   * Route: GET /api/v1/gateway/lb/vips
+   */
+  async listVIPs(): Promise<ApiResponse<ListVIPsResponse>> {
+    return this.client.get<ListVIPsResponse>(this.buildUrl('/lb/vips'));
+  }
+
+  /**
+   * Get one VIP by its protocol, address and port.
+   * Route: GET /api/v1/gateway/lb/vips/{protocol}/{address}/{port}
+   */
+  async getVIP(protocol: string, address: string, port: number): Promise<ApiResponse<GetVIPResponse>> {
+    return this.client.get<GetVIPResponse>(
+      this.buildUrl(`/lb/vips/${encodeURIComponent(protocol)}/${encodeURIComponent(address)}/${port}`)
+    );
+  }
+
+  /**
+   * Get the load balancer summary.
+   * Route: GET /api/v1/gateway/lb/status
+   */
+  async getLBStatus(): Promise<ApiResponse<GetLBStatusResponse>> {
+    return this.client.get<GetLBStatusResponse>(this.buildUrl('/lb/status'));
   }
 }
