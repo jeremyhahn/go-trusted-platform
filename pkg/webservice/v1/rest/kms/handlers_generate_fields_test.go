@@ -15,6 +15,7 @@ package kms
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -30,7 +31,9 @@ import (
 // service.
 type generateRecordingKMS struct {
 	kmsclient.Client
-	calls int
+	calls   int
+	meta    *kmsclient.UpdateKeyMetadataRequest
+	metaErr error
 }
 
 func (k *generateRecordingKMS) GenerateKey(ctx context.Context, req *kmsclient.GenerateKeyRequest) (*kmsclient.GenerateKeyResponse, error) {
@@ -38,32 +41,61 @@ func (k *generateRecordingKMS) GenerateKey(ctx context.Context, req *kmsclient.G
 	return &kmsclient.GenerateKeyResponse{KeyID: req.Name}, nil
 }
 
+func (k *generateRecordingKMS) UpdateKeyMetadata(ctx context.Context, req *kmsclient.UpdateKeyMetadataRequest) (*kmsclient.KeyMetadataResponse, error) {
+	k.meta = req
+	if k.metaErr != nil {
+		return nil, k.metaErr
+	}
+	return &kmsclient.KeyMetadataResponse{}, nil
+}
+
 // TestGenerateKey_RejectsDescriptionAndTags pins that GenerateKey refuses
 // the fields the pinned key service cannot carry, instead of answering
 // success with data it dropped.
-func TestGenerateKey_RejectsDescriptionAndTags(t *testing.T) {
-	cases := map[string]string{
-		"description": `{"name":"k1","algorithm":"AES_256","description":"x"}`,
-		"tags":        `{"name":"k1","algorithm":"AES_256","tags":{"a":"b"}}`,
+func TestGenerateKey_PersistsDescriptionAndTags(t *testing.T) {
+	post := func(kms *generateRecordingKMS, body string) *httptest.ResponseRecorder {
+		logger := logging.DefaultLogger()
+		h := NewHandlers(logger, kms, nil, nil, nil, response.NewResponseWriter(logger, nil))
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/kms/keys", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		h.GenerateKey(w, r)
+		return w
 	}
-	for field, body := range cases {
-		t.Run(field, func(t *testing.T) {
-			kms := &generateRecordingKMS{}
-			logger := logging.DefaultLogger()
-			h := NewHandlers(logger, kms, nil, nil, nil, response.NewResponseWriter(logger, nil))
-			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodPost, "/api/v1/kms/keys", strings.NewReader(body))
-			r.Header.Set("Content-Type", "application/json")
-			h.GenerateKey(w, r)
-			if w.Code != http.StatusBadRequest {
-				t.Fatalf("status = %d, want 400 (body: %s)", w.Code, w.Body.String())
-			}
-			if !strings.Contains(w.Body.String(), field) {
-				t.Fatalf("400 body does not name %q: %s", field, w.Body.String())
-			}
-			if kms.calls != 0 {
-				t.Fatalf("a request carrying %s reached the key service", field)
-			}
-		})
-	}
+
+	t.Run("description and tags reach UpdateKeyMetadata", func(t *testing.T) {
+		kms := &generateRecordingKMS{}
+		w := post(kms, `{"name":"k1","algorithm":"AES_256","description":"x","tags":{"a":"b"}}`)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201 (body: %s)", w.Code, w.Body.String())
+		}
+		if kms.calls != 1 {
+			t.Fatalf("GenerateKey calls = %d, want 1", kms.calls)
+		}
+		if kms.meta == nil {
+			t.Fatal("description and tags never reached UpdateKeyMetadata")
+		}
+		if kms.meta.KeyID != "k1" || kms.meta.Description != "x" || kms.meta.Tags["a"] != "b" {
+			t.Fatalf("UpdateKeyMetadata = %+v, want key k1, description x, tag a=b", kms.meta)
+		}
+	})
+
+	t.Run("no metadata means no update", func(t *testing.T) {
+		kms := &generateRecordingKMS{}
+		w := post(kms, `{"name":"k1","algorithm":"AES_256"}`)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201 (body: %s)", w.Code, w.Body.String())
+		}
+		if kms.meta != nil {
+			t.Fatalf("UpdateKeyMetadata called without metadata: %+v", kms.meta)
+		}
+	})
+
+	t.Run("a failed metadata update fails the request", func(t *testing.T) {
+		kms := &generateRecordingKMS{metaErr: errors.New("metadata store down")}
+		w := post(kms, `{"name":"k1","algorithm":"AES_256","description":"x"}`)
+		if w.Code < 400 {
+			t.Fatalf("status = %d, want an error (body: %s)", w.Code, w.Body.String())
+		}
+	})
 }
