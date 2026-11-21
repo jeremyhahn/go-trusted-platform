@@ -419,6 +419,23 @@ export interface GetPerfFlowsResponse {
   bridge: string;
 }
 
+/** Live datapath counters (GET /api/v1/gateway/perf/datapath). uint64 counters are strings in protojson; protojson leaves out zero values. */
+export interface GetPerfDatapathResponse {
+  hits?: string;
+  misses?: string;
+  lost?: string;
+  offloadedFlowCount?: string;
+  hwOffloadEnabled?: boolean;
+  datapathType?: string;
+  bridge?: string;
+}
+
+/** Conntrack table summary (GET /api/v1/gateway/perf/conntrack). Keys of perZone are zone numbers as strings. */
+export interface GetPerfConntrackResponse {
+  totalEntries?: string;
+  perZone?: Record<string, string>;
+}
+
 // =============================================================================
 // Telemetry snapshots (#594)
 // =============================================================================

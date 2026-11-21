@@ -35,6 +35,8 @@ import type {
   GetLBStatusResponse,
   GetPerfFlowsRequest,
   GetPerfFlowsResponse,
+  GetPerfDatapathResponse,
+  GetPerfConntrackResponse,
 } from '../types/gateway.js';
 
 /**
@@ -318,5 +320,18 @@ export class GatewayService extends BaseService {
    */
   async getPerfFlows(request: GetPerfFlowsRequest = {}): Promise<ApiResponse<GetPerfFlowsResponse>> {
     return this.client.post<GetPerfFlowsResponse>(this.buildUrl('/perf/flows'), request);
+  }
+
+
+  /** Read the datapath counters; an empty bridge selects the default bridge. Admin only. Route: GET /api/v1/gateway/perf/datapath */
+  async getPerfDatapath(bridge?: string): Promise<ApiResponse<GetPerfDatapathResponse>> {
+    const q = bridge ? `?bridge=${encodeURIComponent(bridge)}` : '';
+    return this.client.get<GetPerfDatapathResponse>(this.buildUrl(`/perf/datapath${q}`));
+  }
+
+  /** Summarize the conntrack table; no zone summarizes every zone. Admin only. Route: GET /api/v1/gateway/perf/conntrack */
+  async getPerfConntrack(zone?: number): Promise<ApiResponse<GetPerfConntrackResponse>> {
+    const q = zone !== undefined ? `?zone=${zone}` : '';
+    return this.client.get<GetPerfConntrackResponse>(this.buildUrl(`/perf/conntrack${q}`));
   }
 }

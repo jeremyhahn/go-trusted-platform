@@ -804,6 +804,8 @@ export type {
   GetLBStatusResponse,
   GetPerfFlowsRequest,
   GetPerfFlowsResponse,
+  GetPerfDatapathResponse,
+  GetPerfConntrackResponse,
 } from './types/gateway.js';
 
 // SDN types
