@@ -7,6 +7,8 @@ import (
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // recordingPolicies is an upstream policy client with the pinned embedded
@@ -119,7 +121,7 @@ func TestQuicBaaSIAMAdapter_TestPolicyPolicyName(t *testing.T) {
 		SubjectID: "u", Action: "read", Resource: "r",
 	})
 	require.Error(t, err)
-	assert.ErrorAs(t, err, new(ErrInvalidRequestBody))
+	assert.Equal(t, codes.Unimplemented, status.Code(err), "err %v", err)
 	assert.Contains(t, err.Error(), "tenant-wide")
 	assert.Len(t, up.tested, 1, "no test may reach the upstream")
 }

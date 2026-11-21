@@ -2,10 +2,12 @@ package iam
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/transport/embedded"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -182,7 +184,7 @@ func (p *pagedPolicies) Update(context.Context, string, string, *iamsdk.UpdatePo
 // pagedPolicyClient is the cov964 SDK client with the cursor-paged policies.
 type pagedPolicyClient struct {
 	*cov964Client
-	policies *pagedPolicies
+	policies iamsdk.PolicyClient
 }
 
 func (c *pagedPolicyClient) Policy() iamsdk.PolicyClient { return c.policies }
@@ -229,4 +231,73 @@ func TestPolicyMethodsOverSDKREST_ProductionAdapter(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "err %v", err)
+}
+
+// unimplementedPolicies answers Update, Validate and Test the way the pinned
+// go-quicbaas embedded transport does: it dispatches only Policy
+// Create/Get/List/Delete and refuses every other method as unknown.
+type unimplementedPolicies struct {
+	*pagedPolicies
+}
+
+func (unimplementedPolicies) Update(context.Context, string, string, *iamsdk.UpdatePolicyRequest) (*iamsdk.Policy, error) {
+	return nil, embedded.NewUnknownMethodError("quicbaas.IAM.Policy", "Update")
+}
+
+func (unimplementedPolicies) Validate(context.Context, string, *iamsdk.Policy) (*iamsdk.ValidationResult, error) {
+	return nil, embedded.NewUnknownMethodError("quicbaas.IAM.Policy", "Validate")
+}
+
+func (unimplementedPolicies) Test(context.Context, string, *iamsdk.TestPolicyRequest) (*iamsdk.TestPolicyResponse, error) {
+	return nil, embedded.NewUnknownMethodError("quicbaas.IAM.Policy", "Test")
+}
+
+// TestPolicyMethodsOverSDKREST_UnimplementedVerbs: the policy verbs the
+// pinned SDK does not serve answer Unimplemented (HTTP 501), never 500, and a
+// tenant-wide test (no policy name) is Unimplemented rather than a bad request.
+func TestPolicyMethodsOverSDKREST_UnimplementedVerbs(t *testing.T) {
+	t.Parallel()
+	upstream := unimplementedPolicies{pagedPolicies: &pagedPolicies{t: t}}
+	adapter := NewQuicBaaSIAMAdapter(&pagedPolicyClient{cov964Client: cov964NewClient(), policies: upstream})
+	server := adminSessionIAMServer(t, adapter, &mockPEPClient{})
+	client := platformv1.NewPlatformIAMServiceClient(sdkRESTConnection(t, server))
+	ctx := context.Background()
+
+	t.Run("adapter", func(t *testing.T) {
+		_, err := adapter.UpdatePolicy(ctx, "tenant-a", "p1", &UpdatePolicyRequest{Description: "d"})
+		assert.Equal(t, codes.Unimplemented, status.Code(err), "update: %v", err)
+		_, err = adapter.ValidatePolicy(ctx, "tenant-a", "rules: []")
+		assert.Equal(t, codes.Unimplemented, status.Code(err), "validate: %v", err)
+		_, err = adapter.TestPolicy(ctx, "tenant-a", &TestPolicyRequest{
+			PolicyName: "p1", SubjectID: "u", Action: "read", Resource: "r",
+		})
+		assert.Equal(t, codes.Unimplemented, status.Code(err), "test: %v", err)
+	})
+
+	t.Run("UpdatePolicy", func(t *testing.T) {
+		_, err := client.UpdatePolicy(ctx, &platformv1.UpdateIAMPolicyRequest{
+			TenantId: "tenant-a", PolicyName: "p1", Description: "d",
+		})
+		assert.Equal(t, codes.Unimplemented, status.Code(err), "err %v", err)
+	})
+
+	t.Run("ValidatePolicy", func(t *testing.T) {
+		_, err := client.ValidatePolicy(ctx, &platformv1.ValidateIAMPolicyRequest{
+			TenantId: "tenant-a", SpecYaml: []byte("rules: []"),
+		})
+		assert.Equal(t, codes.Unimplemented, status.Code(err), "err %v", err)
+	})
+
+	t.Run("TestPolicy tenant-wide", func(t *testing.T) {
+		_, err := client.TestPolicy(ctx, &platformv1.TestIAMPolicyRequest{
+			TenantId: "tenant-a", SubjectId: "u", Action: "read", Resource: "r",
+		})
+		assert.Equal(t, codes.Unimplemented, status.Code(err), "err %v", err)
+	})
+
+	t.Run("HTTP update answers 501", func(t *testing.T) {
+		got := sendIAMJSON(t, server, http.MethodPut, "/api/v1/iam/tenants/tenant-a/policies/p1",
+			map[string]any{"description": "d"})
+		assert.Equal(t, http.StatusNotImplemented, got)
+	})
 }
