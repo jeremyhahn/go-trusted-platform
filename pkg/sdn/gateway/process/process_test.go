@@ -1517,7 +1517,9 @@ func TestRestart_ARestartedChildWhoseServiceFailsToStartIsRestartedAgain(t *test
 	// explicit because the start error is cleared at a counted restart
 	// launch, which must fall inside it.
 	const restartBudget = 3
-	const clearAt = restartBudget + 1
+	// One restart fails; the second restart launch comes up inside the
+	// budget. Cleared at a counted launch, not after a poll.
+	const clearAt = 2
 	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
 		c.RestartBackoff = time.Millisecond
 		c.RestartBudget = restartBudget
@@ -3500,15 +3502,22 @@ func TestSupervisor_OnChildExitRetriedPastTheRestartBudget(t *testing.T) {
 		return rec.callCount() >= 5
 	}, 5*time.Second, 10*time.Millisecond, "the failed hook is retried after the budget is exhausted")
 
+	// Each hook call runs while the previous call's error is in health, so
+	// calls 3-5 read it at a counted call, not from a poll.
 	samplesMu.Lock()
-	var late []error
+	sampled := make(map[int]error, len(samples))
 	for call, health := range samples {
-		if call >= 6 {
-			late = append(late, health)
-		}
+		sampled[call] = health
 	}
 	samplesMu.Unlock()
-	require.NotEmpty(t, late, "the cleanup failure is reported in health while it lasts")
+	for call := 3; call <= 5; call++ {
+		health, ok := sampled[call]
+		require.True(t, ok, "health is sampled at hook call %d", call)
+		var hookErr *ErrExitHook
+		var budget *ErrRestartBudgetExhausted
+		assert.True(t, errors.As(health, &hookErr), "the cleanup failure is reported in health while it lasts (call %d)", call)
+		assert.True(t, errors.As(health, &budget), "joined to the give-up (call %d)", call)
+	}
 	require.Eventually(t, func() bool {
 		var hookErr *ErrExitHook
 		var budget *ErrRestartBudgetExhausted
