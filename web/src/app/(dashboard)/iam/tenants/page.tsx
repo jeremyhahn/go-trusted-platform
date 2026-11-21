@@ -5,7 +5,7 @@
  * Routes: GET/POST /tenants, GET/PUT/DELETE /tenants/{tenant}.
  */
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { AlertCircle, Building2, Loader2, Plus, Trash2 } from "lucide-react";
 import type { IAMTenant } from "trusted-platform-sdk";
 import { useIAMTenants, useToast } from "@/hooks";
@@ -64,6 +64,7 @@ export default function TenantsPage() {
   const [selected, setSelected] = useState<IAMTenant | null>(null);
   const [editName, setEditName] = useState("");
   const [pendingDelete, setPendingDelete] = useState<IAMTenant | null>(null);
+  const selection = useRef(0);
 
   const run = async (label: string, fn: () => Promise<void>) => {
     setBusy(true);
@@ -89,9 +90,14 @@ export default function TenantsPage() {
     });
   };
 
+  // Selection generation: a View, Save or Delete answer applies to the
+  // selection only while no later selection change has happened, so the
+  // selected tenant and its New name field always describe the same tenant.
   const onView = (tenantId: string) => {
+    const generation = ++selection.current;
     void run("load tenant", async () => {
       const res = await getTenant(tenantId);
+      if (generation !== selection.current) return;
       const t = unwrapTenant(res.data);
       setSelected(t);
       setEditName(t?.name ?? "");
@@ -101,11 +107,17 @@ export default function TenantsPage() {
   const onUpdate = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selected) return;
+    const generation = selection.current;
+    const target = selected;
+    const name = editName.trim();
     void run("update tenant", async () => {
-      const res = await updateTenant({ tenantId: selected.id, name: editName.trim() });
-      setSelected(unwrapTenant(res.data) ?? { ...selected, name: editName.trim() });
+      const res = await updateTenant({ tenantId: target.id, name });
       toast({ title: "Tenant updated", variant: "success" });
       refetch();
+      if (generation !== selection.current) return;
+      const saved = unwrapTenant(res.data) ?? { ...target, name };
+      setSelected(saved);
+      setEditName(saved.name ?? name);
     });
   };
 
@@ -116,7 +128,10 @@ export default function TenantsPage() {
       await deleteTenant(target.id);
       toast({ title: "Tenant deleted", variant: "success" });
       setPendingDelete(null);
-      if (selected?.id === target.id) setSelected(null);
+      if (selected?.id === target.id) {
+        selection.current += 1;
+        setSelected(null);
+      }
       refetch();
     });
   };
@@ -194,6 +209,7 @@ export default function TenantsPage() {
                           size="sm"
                           variant="outline"
                           aria-label={`View tenant ${t.id}`}
+                          disabled={busy}
                           onClick={() => onView(t.id)}
                         >
                           View
@@ -202,6 +218,7 @@ export default function TenantsPage() {
                           size="sm"
                           variant="destructive"
                           aria-label={`Delete tenant ${t.id}`}
+                          disabled={busy}
                           onClick={() => setPendingDelete(t)}
                         >
                           <Trash2 className="h-4 w-4" />
