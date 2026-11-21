@@ -183,28 +183,14 @@ describe("useBMC", () => {
   it("a failed mutation that invalidates the initial read still settles loading", async () => {
     let release!: () => void;
     const held = new Promise<void>((r) => (release = r));
-    let holdFirst = true;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        const op = url.split("/").pop() ?? "";
-        const method = init?.method ?? "GET";
-        if (method !== "GET") {
-          return new Response(JSON.stringify({ success: false, error: "BMC unreachable" }), {
-            status: 502,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-        if (op === "power" && holdFirst) {
-          holdFirst = false;
-          await held;
-        }
-        return new Response(JSON.stringify({ success: true, payload: PAYLOADS[op] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      })
-    );
+    bmc.mountISO.mockResolvedValue({
+      success: false,
+      error: { code: "HTTP_502", message: "BMC unreachable", status: 502 },
+    });
+    bmc.getPowerStatus.mockImplementationOnce(async () => {
+      await held;
+      return ok(PAYLOADS.power);
+    });
 
     const { result } = renderHook(() => useBMC(PROFILE_ID));
     expect(result.current.isLoading).toBe(true);
@@ -228,30 +214,29 @@ describe("useBMC", () => {
     let release!: () => void;
     const held = new Promise<void>((r) => (release = r));
     const reads: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        const parts = url.split("/");
-        const op = parts.pop() ?? "";
-        const profile = parts.pop() ?? "";
-        const method = init?.method ?? "GET";
-        let payload: unknown;
-        if (method !== "GET") {
-          await held;
-          payload = { success: true };
-        } else {
-          reads.push(`${profile}/${op}`);
-          payload =
-            op === "system-info"
-              ? { ...(PAYLOADS[op] as object), product: `profile-${profile}` }
-              : PAYLOADS[op];
-        }
-        return new Response(JSON.stringify({ success: true, payload }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      })
-    );
+    const readers: Array<[keyof typeof bmc, string]> = [
+      ["getPowerStatus", "power"],
+      ["getBootDevice", "boot-device"],
+      ["getVirtualMediaStatus", "virtual-media"],
+      ["getSensors", "sensors"],
+      ["getSystemInfo", "system-info"],
+      ["getProvisionStatus", "provision"],
+      ["getWebCertificate", "cert"],
+    ];
+    for (const [method, op] of readers) {
+      bmc[method].mockImplementation(async (profile: string) => {
+        reads.push(`${profile}/${op}`);
+        return ok(
+          op === "system-info"
+            ? { ...(PAYLOADS[op] as object), product: `profile-${profile}` }
+            : PAYLOADS[op]
+        );
+      });
+    }
+    bmc.mountISO.mockImplementation(async () => {
+      await held;
+      return ok({ success: true });
+    });
 
     const { result, rerender } = renderHook(({ id }) => useBMC(id), {
       initialProps: { id: "1" },
