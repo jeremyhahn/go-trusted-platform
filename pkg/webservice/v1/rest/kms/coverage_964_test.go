@@ -330,7 +330,7 @@ func covRoutes() []covRoute {
 		{"GetKey", func(h *Handlers) http.HandlerFunc { return h.GetKey }, http.MethodGet, "/keys/key-1", "", nameVars},
 		{"DeleteKey", func(h *Handlers) http.HandlerFunc { return h.DeleteKey }, http.MethodDelete, "/keys/key-1", "", nameVars},
 		{"UpdateKeyStatus", func(h *Handlers) http.HandlerFunc { return h.UpdateKeyStatus }, http.MethodPut, "/keys/key-1/status", `{"status":"disabled"}`, nameVars},
-		{"GetKeyVersions", func(h *Handlers) http.HandlerFunc { return h.GetKeyVersions }, http.MethodGet, "/keys/key-1/versions", "", nameVars},
+		{"ListKeyVersions", func(h *Handlers) http.HandlerFunc { return h.ListKeyVersions }, http.MethodGet, "/keys/key-1/versions", "", nameVars},
 		{"Verify", func(h *Handlers) http.HandlerFunc { return h.Verify }, http.MethodPost, "/keys/key-1/verify", `{}`, nameVars},
 		{"HMAC", func(h *Handlers) http.HandlerFunc { return h.HMAC }, http.MethodPost, "/keys/key-1/hmac", `{}`, nameVars},
 		{"VerifyHMAC", func(h *Handlers) http.HandlerFunc { return h.VerifyHMAC }, http.MethodPost, "/keys/key-1/hmac/verify", `{}`, nameVars},
@@ -493,7 +493,7 @@ func TestCoverage964_KeyReadHandlersEncodeSDKValues(t *testing.T) {
 		t.Fatalf("key = %+v", key)
 	}
 
-	w = covServe(h.GetKeyVersions, covRequest(http.MethodGet, "/keys/key-1/versions", "", nameVars))
+	w = covServe(h.ListKeyVersions, covRequest(http.MethodGet, "/keys/key-1/versions", "", nameVars))
 	covStatus(t, w, http.StatusOK)
 	var versions ListKeyVersionsResponse
 	decodeEnvelope(t, w, &versions)
@@ -503,6 +503,16 @@ func TestCoverage964_KeyReadHandlersEncodeSDKValues(t *testing.T) {
 	}
 	if !reflect.DeepEqual(versions.Versions, wantVersions) {
 		t.Fatalf("versions = %+v", versions.Versions)
+	}
+}
+
+// TestCoverage964_ListKeyVersionsHandlerIsExported pins the exported
+// handler name: callers register Handlers.ListKeyVersions themselves,
+// so the SDK's GetKeyVersions RPC must not rename it (#1954 Codex round 4).
+func TestCoverage964_ListKeyVersionsHandlerIsExported(t *testing.T) {
+	var h http.HandlerFunc = (&Handlers{}).ListKeyVersions
+	if h == nil {
+		t.Fatal("Handlers.ListKeyVersions is nil")
 	}
 }
 
