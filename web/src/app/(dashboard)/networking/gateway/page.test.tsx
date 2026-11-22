@@ -37,6 +37,10 @@ vi.mock("@/components/features/networking/gateway-snapshot-detail", () => ({
   ),
 }));
 
+vi.mock("@/components/features/networking/gateway-vips-card", () => ({
+  GatewayVIPsCard: () => <div data-testid="vips-card" />,
+}));
+
 import APIGatewayPage from "./page";
 
 const notConfigured = { error: { status: 503, message: "gateway not configured", details: { reason: SERVICE_NOT_CONFIGURED } } };

@@ -33,6 +33,12 @@ import type {
   GetVIPResponse,
   ListVIPsResponse,
   GetLBStatusResponse,
+  AddVIPRequest,
+  AddVIPResponse,
+  RemoveVIPResponse,
+  SetVIPBackendsResponse,
+  VIPBackend,
+  VIPConfig,
   GetGatewayNAT64StatusResponse,
   GetPerfFlowsRequest,
   GetPerfFlowsResponse,
@@ -301,6 +307,51 @@ export class GatewayService extends BaseService {
   async getVIP(protocol: string, address: string, port: number): Promise<ApiResponse<GetVIPResponse>> {
     return this.client.get<GetVIPResponse>(
       this.buildUrl(`/lb/vips/${encodeURIComponent(protocol)}/${encodeURIComponent(address)}/${port}`)
+    );
+  }
+
+  /**
+   * Add a VIP with its backends. Admin only.
+   * Route: POST /api/v1/gateway/lb/vips
+   *
+   * Never retried: a lost response would replay a switch reprogram (#2179 Codex).
+   */
+  async addVIP(vip: VIPConfig): Promise<ApiResponse<AddVIPResponse>> {
+    const request: AddVIPRequest = { vip };
+    return this.client.post<AddVIPResponse>(this.buildUrl('/lb/vips'), request, {
+      retry: { enabled: false },
+    });
+  }
+
+  /**
+   * Remove a VIP by its protocol, address and port. Admin only.
+   * Route: DELETE /api/v1/gateway/lb/vips/{protocol}/{address}/{port}
+   *
+   * Never retried: a lost response would replay a switch reprogram.
+   */
+  async removeVIP(protocol: string, address: string, port: number): Promise<ApiResponse<RemoveVIPResponse>> {
+    return this.client.delete<RemoveVIPResponse>(
+      this.buildUrl(`/lb/vips/${encodeURIComponent(protocol)}/${encodeURIComponent(address)}/${port}`),
+      { retry: { enabled: false } }
+    );
+  }
+
+  /**
+   * Replace a VIP's backend set. Admin only.
+   * Route: PUT /api/v1/gateway/lb/vips/{protocol}/{address}/{port}/backends
+   *
+   * Never retried: a lost response would replay a switch reprogram.
+   */
+  async setVIPBackends(
+    protocol: string,
+    address: string,
+    port: number,
+    backends: VIPBackend[]
+  ): Promise<ApiResponse<SetVIPBackendsResponse>> {
+    return this.client.put<SetVIPBackendsResponse>(
+      this.buildUrl(`/lb/vips/${encodeURIComponent(protocol)}/${encodeURIComponent(address)}/${port}/backends`),
+      { backends },
+      { retry: { enabled: false } }
     );
   }
 

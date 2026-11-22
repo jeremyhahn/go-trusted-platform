@@ -402,6 +402,28 @@ export interface GetLBStatusResponse {
   status: LBStatus | null;
 }
 
+/** AddVIP request (POST /api/v1/gateway/lb/vips) */
+export interface AddVIPRequest {
+  vip: VIPConfig;
+}
+
+/** AddVIP response: the operation status and the VIP as programmed */
+export interface AddVIPResponse {
+  status: GatewayOperationStatus | null;
+  vip: VIPStatus | null;
+}
+
+/** RemoveVIP response (DELETE /api/v1/gateway/lb/vips/{protocol}/{address}/{port}) */
+export interface RemoveVIPResponse {
+  status: GatewayOperationStatus | null;
+}
+
+/** SetVIPBackends response (PUT .../backends): the VIP with its new backend set */
+export interface SetVIPBackendsResponse {
+  status: GatewayOperationStatus | null;
+  vip: VIPStatus | null;
+}
+
 /**
  * NAT64 translator status as the webservice returns it at
  * GET /api/v1/gateway/nat64/status (protojson camelCase of gateway.proto
