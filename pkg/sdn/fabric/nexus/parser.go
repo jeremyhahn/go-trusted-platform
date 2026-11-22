@@ -90,7 +90,7 @@ type interfaceConfig struct {
 const modeRouted = "routed"
 
 // parseInterfaceConfig reads "show running-config interface <port>" output.
-// Ranges in the allowed VLAN list ("400-402") are expanded; "add" lines
+// Ranges in the allowed VLAN list ("1800-1802") are expanded; "add" lines
 // extend the list. Unparseable values are ignored, which only makes the
 // driver reconfigure the port.
 func parseInterfaceConfig(output string) interfaceConfig {
@@ -136,7 +136,7 @@ func parseInterfaceConfig(output string) interfaceConfig {
 	return cfg
 }
 
-// parseVLANList expands an NX-OS VLAN list such as "400-402,405".
+// parseVLANList expands an NX-OS VLAN list such as "1800-1802,1805".
 func parseVLANList(list string) []uint16 {
 	var out []uint16
 	for _, part := range strings.Split(list, ",") {

@@ -626,7 +626,7 @@ export default function IPAMPage() {
                 id="pool-gateway"
                 value={form.gateway}
                 onChange={(e) => setForm((f) => ({ ...f, gateway: e.target.value }))}
-                placeholder="10.4.6.1"
+                placeholder="198.18.6.1"
               />
             </div>
 
@@ -646,7 +646,7 @@ export default function IPAMPage() {
                 id="pool-reserved"
                 value={form.reserved}
                 onChange={(e) => setForm((f) => ({ ...f, reserved: e.target.value }))}
-                placeholder="10.4.6.1/32, 10.4.6.8/30"
+                placeholder="198.18.6.1/32, 198.18.6.8/30"
               />
             </div>
 
@@ -657,7 +657,7 @@ export default function IPAMPage() {
                   id="pool-range-start"
                   value={form.rangeStart}
                   onChange={(e) => setForm((f) => ({ ...f, rangeStart: e.target.value }))}
-                  placeholder="10.4.6.50"
+                  placeholder="198.18.6.50"
                 />
               </div>
               <div className="space-y-2">
@@ -666,7 +666,7 @@ export default function IPAMPage() {
                   id="pool-range-end"
                   value={form.rangeEnd}
                   onChange={(e) => setForm((f) => ({ ...f, rangeEnd: e.target.value }))}
-                  placeholder="10.4.6.254"
+                  placeholder="198.18.6.254"
                 />
               </div>
             </div>

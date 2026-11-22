@@ -20,7 +20,7 @@
 // The rules, for environment E on the base 10.0.0.0/8:
 //
 //   - zone at offset n: VLAN E·100+n, IPv4 10.E.n.0/24, IPv6 <ULA /48>:<VLAN
-//     digits>::/64 (VLAN 406 → fd12:3456:789a:406::/64);
+//     digits>::/64 (VLAN 1806 → fd12:3456:789a:1806::/64);
 //   - the lower /17 of 10.E.0.0/16 is VLAN-mapped; the upper /17
 //     (10.E.128.0/17) is the IPAM pool, split into tunnel point-to-point
 //     links, loopbacks, platform service VIPs, platform-VRF hosts and the

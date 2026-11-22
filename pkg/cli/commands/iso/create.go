@@ -139,7 +139,7 @@ Examples:
 	cmd.Flags().StringVar(&flags.platformAPKDir, "platform-apk-dir", "", "strongSwan builder output (make strongswan-build) whose apks the ISO carries and installs for the overlay's IPsec transport")
 	cmd.Flags().StringVar(&flags.platformctlPath, "platformctl-binary", "", "platformctl binary the media installs with (default: this platformctl)")
 	cmd.Flags().StringVar(&flags.platformctlStaticPath, "platformctl-static-binary", "", "Static platformctl for Alpine/musl (default: not installed; --platformctl-binary must then be static)")
-	cmd.Flags().StringVar(&flags.apkMirror, "apk-mirror", "", "Install-time APK mirror base URL (e.g. http://10.4.6.11:8080); empty falls back to the public Alpine mirror")
+	cmd.Flags().StringVar(&flags.apkMirror, "apk-mirror", "", "Install-time APK mirror base URL (e.g. http://198.18.6.11:8080); empty falls back to the public Alpine mirror")
 	cmd.Flags().StringVar(&flags.arch, "arch", "x86_64", "Architecture (x86_64 or aarch64)")
 
 	// Platform flags
@@ -405,8 +405,16 @@ func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	// Precedence:
 	//   1. --platform-config flag (explicit operator choice)
 	//   2. single-node default template (reference architecture baseline)
+	//      under the PLATFORM_CONFIG_DIR root: $PLATFORM_CONFIG_DIR/templates/
+	//      single-node/default.yaml, or the in-tree public templates under
+	//      configs/platform when the variable is unset
 	//   3. legacy standalone qemu templates (tests / pre-template-system
-	//      deployments that still live under configs/platform/standalone/)
+	//      deployments that still live under configs/platform/standalone/),
+	//      only when PLATFORM_CONFIG_DIR is unset
+	//
+	// When PLATFORM_CONFIG_DIR is set and its template is missing the build
+	// fails closed (ErrPlatformTemplateMissing) instead of baking the public
+	// example values.
 	//
 	// The single-node default deploys CP + GW on one box per
 	// configs/platform/templates/single-node/README.md. It is the
@@ -418,17 +426,19 @@ func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	if flags.platformConfig != "" {
 		config.PlatformConfigFile = flags.platformConfig
 	} else {
-		var defaultConfigPaths []string
-		if flags.platformType == "server" {
-			defaultConfigPaths = []string{
-				"configs/platform/templates/single-node/default.yaml",
-				"configs/platform/standalone/qemu.server.example.com.yaml",
-			}
-		} else {
-			defaultConfigPaths = []string{
-				"configs/platform/templates/single-node/default.yaml",
-				"configs/platform/standalone/qemu.node0.example.com.yaml",
-				"configs/platform/standalone/qemu.client.example.com.yaml",
+		defaultTemplate := cli.PlatformTemplatePath("single-node", "default.yaml")
+		defaultConfigPaths := []string{defaultTemplate}
+		_, dirSet := cli.PlatformConfigDir()
+		if !dirSet {
+			if flags.platformType == "server" {
+				defaultConfigPaths = append(defaultConfigPaths,
+					"configs/platform/standalone/qemu.server.example.com.yaml",
+				)
+			} else {
+				defaultConfigPaths = append(defaultConfigPaths,
+					"configs/platform/standalone/qemu.node0.example.com.yaml",
+					"configs/platform/standalone/qemu.client.example.com.yaml",
+				)
 			}
 		}
 		for _, p := range defaultConfigPaths {
@@ -436,6 +446,9 @@ func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 				config.PlatformConfigFile = p
 				break
 			}
+		}
+		if dirSet && config.PlatformConfigFile == "" {
+			return nil, &cli.ErrPlatformTemplateMissing{Path: defaultTemplate}
 		}
 	}
 
@@ -677,6 +690,12 @@ func mergeConfigs(base, override *pkgiso.ISOBuildConfig) *pkgiso.ISOBuildConfig 
 	}
 	if override.WorkDir != "" && override.WorkDir != "work" {
 		result.WorkDir = override.WorkDir
+	}
+	// PlatformConfigFile keeps the config file's value; when the file names
+	// none, the template resolved from --platform-config or the
+	// PLATFORM_CONFIG_DIR default applies.
+	if result.PlatformConfigFile == "" {
+		result.PlatformConfigFile = override.PlatformConfigFile
 	}
 	// PlatformdBinary keeps the config file's value; mergeConfigFile falls
 	// back to the platformd beside platformctl when the file names none.

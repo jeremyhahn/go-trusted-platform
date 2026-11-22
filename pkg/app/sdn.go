@@ -950,7 +950,7 @@ func (e ErrSDNIPAMPoolDrift) Error() string {
 }
 
 // zonePortName returns the OVS internal port that carries a host address
-// on VLAN vlan: "zone<VLAN>" (zone406), at most 8 characters, well inside
+// on VLAN vlan: "zone<VLAN>" (zone1806), at most 8 characters, well inside
 // IFNAMSIZ.
 func zonePortName(vlan uint16) string {
 	return fmt.Sprintf("zone%d", vlan)

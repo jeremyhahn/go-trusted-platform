@@ -266,7 +266,7 @@ var operModeRegexp = regexp.MustCompile(`(?i)operational\s+mode:\s*(.+)`)
 // trunkAllowedVLANRegexp matches "Trunking VLANs Allowed: 10,20,30" or similar.
 var trunkAllowedVLANRegexp = regexp.MustCompile(`(?i)trunking\s+vlans?\s+(?:allowed|enabled):\s*(.+)`)
 
-// trunkNativeVLANRegexp matches "Trunking Native Mode VLAN: 405 (provisioning)".
+// trunkNativeVLANRegexp matches "Trunking Native Mode VLAN: 1805 (provisioning)".
 var trunkNativeVLANRegexp = regexp.MustCompile(`(?i)trunking\s+native\s+mode\s+vlan:\s*(\d+)`)
 
 // parseAccessVLANFromSwitchport extracts the access VLAN ID from

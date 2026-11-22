@@ -41,7 +41,7 @@ Examples:
   platformctl sdn ipam pool list
 
   # Create a pool
-  platformctl sdn ipam pool create --name lab-net --cidr 10.4.9.0/24
+  platformctl sdn ipam pool create --name lab-net --cidr 198.18.9.0/24
 
   # Allocate an IP
   platformctl sdn ipam allocate --pool-id pool1 --device-id vm-123
@@ -144,9 +144,9 @@ func newIPAMPoolCreateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 The CIDR is immutable after creation. All other fields can be updated later.
 
 Examples:
-  platformctl sdn ipam pool create --name lab-net --cidr 10.4.9.0/24
-  platformctl sdn ipam pool create --name lab-net --cidr 10.4.9.0/24 --gateway 10.4.9.1 \
-      --reserved 10.4.9.1/32 --range-start 10.4.9.50 --range-end 10.4.9.254
+  platformctl sdn ipam pool create --name lab-net --cidr 198.18.9.0/24
+  platformctl sdn ipam pool create --name lab-net --cidr 198.18.9.0/24 --gateway 198.18.9.1 \
+      --reserved 198.18.9.1/32 --range-start 198.18.9.50 --range-end 198.18.9.254
   platformctl sdn ipam pool create --name public --cidr 203.0.113.0/24 --lease-seconds 86400`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req := &platformv1.CreateIPAMPoolRequest{
@@ -192,9 +192,9 @@ passed keep their current values.
 
 Examples:
   platformctl sdn ipam pool update --id pool-1 --name new-name
-  platformctl sdn ipam pool update --id pool-1 --zone control-plane --gateway 10.4.6.1
+  platformctl sdn ipam pool update --id pool-1 --zone control-plane --gateway 198.18.6.1
   platformctl sdn ipam pool update --id pool-1 --lease-seconds 3600
-  platformctl sdn ipam pool update --id pool-1 --reserved 10.4.6.1/32 --range-start 10.4.6.50 --range-end 10.4.6.254
+  platformctl sdn ipam pool update --id pool-1 --reserved 198.18.6.1/32 --range-start 198.18.6.50 --range-end 198.18.6.254
 
 Passing any of --reserved, --range-start or --range-end replaces the pool's
 allocation window with exactly the values given (omitted ones are cleared).`,
