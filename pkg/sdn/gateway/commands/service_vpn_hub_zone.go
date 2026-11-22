@@ -14,11 +14,14 @@
 package commands
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/vpn"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
@@ -42,6 +45,11 @@ func classifyVPNHubIngress(ingress string) (zone.Zone, bool) {
 // trusted proxy. A nil enforcement admits nothing.
 type vpnHubZoneEnforcement struct {
 	matrix zone.Matrix
+	// nets are the zones' networks, from the same zoneProviders that feed
+	// the OVS zone flows; the forward chain's accepts name their subnets.
+	nets map[zone.Zone]zoneflows.NetworkSummary
+	// forward is the programmed vpn-hub0 forward chain.
+	forward *vpnHubForwardFilter
 }
 
 func newVPNHubZoneEnforcement(m zone.Matrix) *vpnHubZoneEnforcement {
@@ -97,43 +105,57 @@ func compileVPNHubZoneEnforcement(zones []zone.ZoneConfig) (*vpnHubZoneEnforceme
 	return newVPNHubZoneEnforcement(zone.CompileMatrix(zones)), nil
 }
 
-// errVPNHubNoForwardFilter is the production forwarding-path filter
-// install's refusal: no filter in pkg/sdn/gateway can apply Allow to traffic
-// forwarded from vpn-hub0 yet. The host filter renders only an input-hook
-// chain, and the compiled zone flows classify by VLAN and destination subnet,
-// not by an L3 ingress device or a lease's source address (docs/plans/1698.md
-// B3). Until one exists the hub stays refused (Tenant Agent ruling 1028).
-var errVPNHubNoForwardFilter = errors.New("no forwarding-path filter for " + vpnHubInterface + " exists yet")
-
 // installVPNHubForwardFilter installs the filter on the kernel forwarding
-// path of vpn-hub0 that drops whatever e.Allow refuses. A variable so tests
-// can stand one in; the production default fails closed.
-var installVPNHubForwardFilter = func(*vpnHubZoneEnforcement, *slog.Logger) error {
-	return errVPNHubNoForwardFilter
+// path of vpn-hub0: it opens netlink, programs the inet tp_vpn_hub forward
+// chain for the empty lease set (the reply accept and the closing drop) and
+// sets e.forward, so each peer's accepts follow its install. It fails closed
+// on either error. A variable so tests can stand one in.
+var installVPNHubForwardFilter = func(e *vpnHubZoneEnforcement, _ *slog.Logger) error {
+	if e == nil {
+		return errors.New("no destination-zone enforcement for the " + vpnHubInterface + " forward chain")
+	}
+	conn, err := newVPNHubNFTConn()
+	if err != nil {
+		return fmt.Errorf("open netlink for the %s forward chain: %w", vpnHubInterface, err)
+	}
+	f := newVPNHubForwardFilter(e, conn)
+	if err := f.keep(context.Background(), nil); err != nil {
+		return err
+	}
+	e.forward = f
+	return nil
 }
 
-// installVPNHubZones compiles the enforcement from zones and installs it on
-// the forwarding path; it returns the enforcement only when both succeed.
-func installVPNHubZones(zones []zone.ZoneConfig, logger *slog.Logger) (*vpnHubZoneEnforcement, error) {
+// installVPNHubZones compiles the enforcement from zones, keeps the zones'
+// networks nets, and installs it on the forwarding path; it returns the
+// enforcement only when both succeed.
+func installVPNHubZones(zones []zone.ZoneConfig, nets map[zone.Zone]zoneflows.NetworkSummary, logger *slog.Logger) (*vpnHubZoneEnforcement, error) {
 	e, err := compileVPNHubZoneEnforcement(zones)
 	if err != nil {
 		return nil, err
 	}
+	e.nets = nets
 	if err := installVPNHubForwardFilter(e, logger); err != nil {
 		return nil, err
 	}
 	logger.Info("The WireGuard hub's destination zones are enforced through the compiled zone matrix",
-		slog.String("ingress", vpnHubInterface), slog.String("zone", string(vpnHubZone)))
+		slog.String("ingress", vpnHubInterface), slog.String("zone", string(vpnHubZone)),
+		slog.String("table", vpnHubTableName))
 	return e, nil
 }
 
 // installVPNHubZoneEnforcement installs the hub's destination-zone
-// enforcement from the configuration's SDN zones: the compiled matrix and the
+// enforcement from the configuration's SDN zones and networks (the
+// zoneProviders the OVS zone flows use): the compiled matrix and the
 // vpn-hub0 forwarding-path filter. vpnDataPlanes builds the hub only when it
 // succeeds. A variable so tests can stand one in.
 var installVPNHubZoneEnforcement = func(cfg *ServeConfig, logger *slog.Logger) (*vpnHubZoneEnforcement, error) {
 	if cfg == nil || cfg.SDN == nil {
 		return nil, errors.New("no SDN configuration")
 	}
-	return installVPNHubZones(cfg.SDN.ResolvedZones(), logger)
+	zonesFn, netsFn, err := zoneProviders(cfg.SDN)
+	if err != nil {
+		return nil, err
+	}
+	return installVPNHubZones(zonesFn(), netsFn(), logger)
 }

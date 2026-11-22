@@ -17,6 +17,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/netip"
 
@@ -139,15 +140,46 @@ func (p hubNetworkPlane) InstallPeer(ctx context.Context, lease *vpn.Lease) erro
 	if err := p.zones.admitLease(lease); err != nil {
 		return err
 	}
-	return p.ManagedDataPlane.InstallPeer(ctx, lease)
-}
-
-// ReconcilePeers forwards to the plane, which is a vpn.PeerReconciler.
-func (p hubNetworkPlane) ReconcilePeers(ctx context.Context, keep []vpn.LeaseID) error {
-	if r, ok := p.ManagedDataPlane.(vpn.PeerReconciler); ok {
-		return r.ReconcilePeers(ctx, keep)
+	// The lease's accepts are programmed before the peer exists; a failed
+	// program refuses the peer (#2093).
+	if err := p.forward().admit(ctx, lease); err != nil {
+		return err
+	}
+	if err := p.ManagedDataPlane.InstallPeer(ctx, lease); err != nil {
+		if lease != nil {
+			return errors.Join(err, p.forward().forget(ctx, lease.ID))
+		}
+		return err
 	}
 	return nil
+}
+
+// forward is the hub's programmed forward chain, nil when none is installed.
+func (p hubNetworkPlane) forward() *vpnHubForwardFilter {
+	if p.zones == nil {
+		return nil
+	}
+	return p.zones.forward
+}
+
+// RemovePeer withdraws the lease's accepts, then removes the peer.
+func (p hubNetworkPlane) RemovePeer(ctx context.Context, id vpn.LeaseID) error {
+	return errors.Join(p.forward().forget(ctx, id), p.ManagedDataPlane.RemovePeer(ctx, id))
+}
+
+// ReconcilePeers forwards to the plane, which is a vpn.PeerReconciler, and
+// withdraws the accepts of every lease not kept.
+func (p hubNetworkPlane) ReconcilePeers(ctx context.Context, keep []vpn.LeaseID) error {
+	var err error
+	if r, ok := p.ManagedDataPlane.(vpn.PeerReconciler); ok {
+		err = r.ReconcilePeers(ctx, keep)
+	}
+	return errors.Join(err, p.forward().keep(ctx, keep))
+}
+
+// Stop stops the plane, then deletes the hub's forward chain table.
+func (p hubNetworkPlane) Stop(ctx context.Context) error {
+	return errors.Join(p.ManagedDataPlane.Stop(ctx), p.forward().remove(ctx))
 }
 
 // vpnHubListeners is the WireGuard hub's UDP listener for the host
