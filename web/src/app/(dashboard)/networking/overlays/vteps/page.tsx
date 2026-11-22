@@ -22,7 +22,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { useOverlayVteps, useToast } from '@/hooks';
+import { useOptionalAuth, useOverlayVteps, useToast } from '@/hooks';
 import type { TunnelInfo, VTEPInfo } from 'trusted-platform-sdk';
 
 interface PendingAction {
@@ -60,6 +60,9 @@ export default function OverlayVtepsPage() {
     deleteVNI,
     forgetMAC,
   } = useOverlayVteps();
+  // Every overlay route is mounted behind the admin role on the server.
+  const auth = useOptionalAuth();
+  const isAdmin = auth?.user?.roles.includes('admin') ?? false;
 
   const [vtepDetail, setVtepDetail] = useState<VTEPInfo | null>(null);
   const [tunnelStats, setTunnelStats] = useState<TunnelInfo | null>(null);
@@ -105,6 +108,7 @@ export default function OverlayVtepsPage() {
   };
 
   const askForgetMac = () => {
+    if (!isAdmin) return;
     const raw = macVni.trim();
     const vni = Number(raw);
     if (!macAddress || raw === '' || !Number.isInteger(vni) || vni < 1 || vni > 16777215) {
@@ -125,7 +129,7 @@ export default function OverlayVtepsPage() {
   };
 
   const confirmPending = async () => {
-    if (!pending) return;
+    if (!pending || !isAdmin) return;
     setSubmitting(true);
     try {
       await pending.run();
@@ -157,6 +161,12 @@ export default function OverlayVtepsPage() {
           <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
         </Button>
       </div>
+
+      {!isAdmin && (
+        <p data-testid="overlay-admin-note" className="text-sm text-muted-foreground">
+          Requires the admin role: deleting a VNI or forgetting a MAC changes the overlay for every tenant on it.
+        </p>
+      )}
 
       <section className="space-y-2" data-testid="overlay-status">
         <h2 className="text-xl font-semibold">Status</h2>
@@ -269,6 +279,7 @@ export default function OverlayVtepsPage() {
                         variant="ghost"
                         size="sm"
                         aria-label={`Delete VNI ${v.config.vni}`}
+                        disabled={!isAdmin}
                         onClick={() =>
                           setPending({
                             title: 'Delete VNI',
@@ -373,6 +384,7 @@ export default function OverlayVtepsPage() {
                         variant="destructive"
                         size="sm"
                         aria-label={`Forget ${m.mac} on VNI ${m.vni}`}
+                        disabled={!isAdmin}
                         onClick={() =>
                           setPending({
                             title: 'Forget MAC',
@@ -419,7 +431,7 @@ export default function OverlayVtepsPage() {
               placeholder="10000"
             />
           </div>
-          <Button variant="destructive" onClick={askForgetMac}>
+          <Button variant="destructive" disabled={!isAdmin} onClick={askForgetMac}>
             Forget MAC
           </Button>
         </div>
