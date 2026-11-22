@@ -76,6 +76,11 @@ function shared(): Record<string, Answer> {
 async function renderPage() {
   render(withControlPlane(<ProxyPoolsPage />));
   await within(await screen.findByTestId('proxy-pools')).findByText('p1');
+  // The list can load before the capabilities read: the controls stay
+  // disabled until it settles, and a click before then opens nothing.
+  await waitFor(() => expect(screen.queryAllByTitle('checking server capabilities')).toHaveLength(0), {
+    timeout: 5000,
+  });
 }
 
 async function click(name: string) {
@@ -152,7 +157,8 @@ describe('ProxyPoolsPage', () => {
 
     await click('Edit p1');
     await waitFor(() =>
-      expect((screen.getByLabelText('Backends') as HTMLTextAreaElement).value).toBe('https://192.0.2.10:8443 2')
+      expect((screen.getByLabelText('Backends') as HTMLTextAreaElement).value).toBe('https://192.0.2.10:8443 2'),
+      { timeout: 5000 }
     );
     type('Balancer', 'round-robin');
     await click('Save');
@@ -177,13 +183,13 @@ describe('ProxyPoolsPage', () => {
     await renderPage();
 
     await click('Delete p1');
-    await screen.findByText('Delete pool');
+    await screen.findByText('Delete pool', {}, { timeout: 5000 });
     await click('Cancel');
-    await waitFor(() => expect(screen.queryByText('Delete pool')).toBeNull());
+    await waitFor(() => expect(screen.queryByText('Delete pool')).toBeNull(), { timeout: 5000 });
     expect(count(sent, 'DELETE', '/api/v1/proxy/pools/p1')).toBe(0);
 
     await click('Delete p1');
-    const dialog = await screen.findByRole('dialog');
+    const dialog = await screen.findByRole('dialog', {}, { timeout: 5000 });
     await act(async () => {
       fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
     });
