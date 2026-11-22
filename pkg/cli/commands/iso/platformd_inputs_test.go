@@ -20,6 +20,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
 // placeSiblingPlatformd writes a platformd beside the running test binary,
@@ -76,5 +78,29 @@ func TestBuildISOBuildConfig_NoPlatformdAnywhere(t *testing.T) {
 
 	_, err := buildISOBuildConfig(flags)
 	var missing *MessageError
+	require.ErrorAs(t, err, &missing)
+}
+
+func TestBuildISOBuildConfig_DefaultTemplateFromPlatformConfigDir(t *testing.T) {
+	placeSiblingPlatformd(t)
+	dir := t.TempDir()
+	tmpl := filepath.Join(dir, "templates", "single-node", "default.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(tmpl), 0o750))
+	require.NoError(t, os.WriteFile(tmpl, []byte("{}\n"), 0o600))
+	t.Setenv("PLATFORM_CONFIG_DIR", dir)
+	flags := &createFlags{configFile: writeConfigFile(t, "{}\n"), platformType: "server"}
+
+	config, err := buildISOBuildConfig(flags)
+	require.NoError(t, err)
+	assert.Equal(t, tmpl, config.PlatformConfigFile)
+}
+
+func TestBuildISOBuildConfig_PlatformConfigDirWithoutTemplateFails(t *testing.T) {
+	placeSiblingPlatformd(t)
+	t.Setenv("PLATFORM_CONFIG_DIR", t.TempDir())
+	flags := &createFlags{configFile: writeConfigFile(t, "{}\n"), platformType: "server"}
+
+	_, err := buildISOBuildConfig(flags)
+	var missing *cli.ErrPlatformTemplateMissing
 	require.ErrorAs(t, err, &missing)
 }

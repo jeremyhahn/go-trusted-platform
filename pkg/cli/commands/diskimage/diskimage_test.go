@@ -67,6 +67,17 @@ func TestDefaultPlatformConfigPaths(t *testing.T) {
 	}
 }
 
+func TestDefaultPlatformConfigPaths_UnderPlatformConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PLATFORM_CONFIG_DIR", dir)
+	root := filepath.Join(dir, "templates")
+	for _, p := range defaultPlatformConfigPaths("rpi", "") {
+		if !strings.HasPrefix(p, root) {
+			t.Errorf("path %q is not under %q", p, root)
+		}
+	}
+}
+
 func TestLoadInstallerConfig(t *testing.T) {
 	dir := t.TempDir()
 	plain := filepath.Join(dir, "install.yaml")
