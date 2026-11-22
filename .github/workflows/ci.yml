@@ -50,8 +50,9 @@
 # `schedule-{repository}`. CI Gate runs on !cancelled() off pull_request, so
 # a main run cancelled by a newer push posts a skipped gate, not a red one; a
 # pull request keeps always(), since a skipped required check counts as
-# passed. Every job that reads vars.CI_IMAGE_REGISTRY masks it first
-# (VARS_CI_IMAGE_REGISTRY). v1.53's Runner labels case for code-review.yml's
+# passed. The LAN registry is the Actions secret CI_IMAGE_REGISTRY, read
+# guarded so a GitHub-hosted run receives none, never a repository variable:
+# Actions prints a step's env in its log header before the run body. v1.53's Runner labels case for code-review.yml's
 # guard jobs applies to the v1.38 step, which is not adopted here; its
 # preflight bigdisk clause applies to v1.49's runs-on, also not adopted.
 # v1.35.1 (DS-8433, CA m2557): the Signatures job of handbook cd17d28
@@ -1424,7 +1425,8 @@ jobs:
       # by from the LAN registry; empty when the artifact path ran. Only the
       # tag: GitHub Actions drops a job output holding a masked value, and
       # the registry address is masked above, so each leg rebuilds the
-      # reference from vars.CI_IMAGE_REGISTRY after its own mask step.
+      # reference from the guarded Actions secret CI_IMAGE_REGISTRY after its
+      # own mask step.
       image_tag: ${{ steps.push.outputs.image_tag }}
       # The artifact a leg on another runner's daemon loads the image from
       # when no registry carries it (GitHub-hosted runners, or a self-hosted
@@ -1443,20 +1445,15 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      # v1.53: a registry a later step takes from `vars` is masked first.
-      # CUSTOMIZE: one VARS_<NAME> line per vars.<NAME> ending in _REGISTRY
-      # that this job reads.
       - name: Mask the LAN registry
         env:
-          VARS_CI_IMAGE_REGISTRY: ${{ vars.CI_IMAGE_REGISTRY }}
-        run: |
-          for v in "${!VARS_@}"; do
-            case $v in *_REGISTRY) ;; *) continue ;; esac
-            val=${!v:-}
-            [ -n "$val" ] || continue
-            echo "::add-mask::$val"
-            echo "::add-mask::${val%%:*}"
-          done
+          # v1.53: the internal registry is the Actions secret CI_IMAGE_REGISTRY,
+          # never a `vars` value. Actions prints a step's env in its log header
+          # before the run body, so an add-mask comes too late for a variable;
+          # the runner masks a secret from its first byte. A GitHub-hosted run
+          # receives none. This step also masks the bare host name.
+          CI_IMAGE_REGISTRY: ${{ runner.environment != 'github-hosted' && secrets.CI_IMAGE_REGISTRY || '' }}
+        run: '[ -z "$CI_IMAGE_REGISTRY" ] || echo "::add-mask::${CI_IMAGE_REGISTRY%%:*}"'
 
       # Ruling 675: IT_REGISTRY is the LAN registry (host:port) the legs pull
       # the image from, on self-hosted runners only; empty selects the
@@ -1464,7 +1461,7 @@ jobs:
       # in the repo. A step sets it, as a job's env has no runner context.
       - name: Select the integration image transport
         env:
-          IT_REGISTRY: ${{ runner.environment != 'github-hosted' && vars.CI_IMAGE_REGISTRY || '' }}
+          IT_REGISTRY: ${{ runner.environment != 'github-hosted' && secrets.CI_IMAGE_REGISTRY || '' }}
         run: echo "IT_REGISTRY=$IT_REGISTRY" >> "$GITHUB_ENV"
 
       - name: Reap stale CI stacks
@@ -1728,20 +1725,15 @@ jobs:
             case $val in *://*:*@*) t=${val#*://}; t=${t%%@*}; echo "::add-mask::${t#*:}" ;; esac
           done
 
-      # v1.53: a registry a later step takes from `vars` is masked first.
-      # CUSTOMIZE: one VARS_<NAME> line per vars.<NAME> ending in _REGISTRY
-      # that this job reads.
       - name: Mask the LAN registry
         env:
-          VARS_CI_IMAGE_REGISTRY: ${{ vars.CI_IMAGE_REGISTRY }}
-        run: |
-          for v in "${!VARS_@}"; do
-            case $v in *_REGISTRY) ;; *) continue ;; esac
-            val=${!v:-}
-            [ -n "$val" ] || continue
-            echo "::add-mask::$val"
-            echo "::add-mask::${val%%:*}"
-          done
+          # v1.53: the internal registry is the Actions secret CI_IMAGE_REGISTRY,
+          # never a `vars` value. Actions prints a step's env in its log header
+          # before the run body, so an add-mask comes too late for a variable;
+          # the runner masks a secret from its first byte. A GitHub-hosted run
+          # receives none. This step also masks the bare host name.
+          CI_IMAGE_REGISTRY: ${{ runner.environment != 'github-hosted' && secrets.CI_IMAGE_REGISTRY || '' }}
+        run: '[ -z "$CI_IMAGE_REGISTRY" ] || echo "::add-mask::${CI_IMAGE_REGISTRY%%:*}"'
 
       - name: Reap stale CI stacks
         run: scripts/reap-stale-ci-stacks.sh go-trusted-platform-ci-
@@ -1836,11 +1828,12 @@ jobs:
         id: pull
         if: steps.lease.outputs.leased != 'true' && needs.integration-image.outputs.image_tag != ''
         env:
-          IT_REGISTRY: ${{ vars.CI_IMAGE_REGISTRY }}
+          IT_REGISTRY: ${{ runner.environment != 'github-hosted' && secrets.CI_IMAGE_REGISTRY || '' }}
           IT_IMAGE_TAG: ${{ needs.integration-image.outputs.image_tag }}
           REGISTRY_USER: ${{ secrets.CI_IMAGE_REGISTRY_USER }}
           REGISTRY_PASSWORD: ${{ secrets.CI_IMAGE_REGISTRY_PASSWORD }}
         run: |
+          [ -n "$IT_REGISTRY" ] || { echo "::warning::this runner receives no LAN registry; building this leg's image"; exit 0; }
           IT_IMAGE_REF="$IT_REGISTRY/go-trusted-platform/it-image:$IT_IMAGE_TAG"
           source "$RUNNER_TEMP/image-lock.sh"
           registry_config=$(mktemp -d "$RUNNER_TEMP/docker-config.XXXXXX") || exit 1

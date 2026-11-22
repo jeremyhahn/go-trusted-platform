@@ -715,9 +715,11 @@ func TestRegistryPathFindingsRejectArtifactsBesideTheRegistry(t *testing.T) {
 			reason: reasonUploadWithRegistry,
 		},
 		{
-			name:   "registry on GitHub-hosted runners too",
-			old:    ciRegistryEnv + ": " + ciRegistryValue,
-			new:    ciRegistryEnv + ": ${{ secrets.CI_IMAGE_REGISTRY }}",
+			name: "registry on GitHub-hosted runners too",
+			// The image job's select step; the pull step reads the same
+			// guarded value and is not this mutation's target.
+			old:    ciRegistryEnv + ": " + ciRegistryValue + "\n        run: echo \"" + ciRegistryEnv + "=$" + ciRegistryEnv,
+			new:    ciRegistryEnv + ": ${{ secrets.CI_IMAGE_REGISTRY }}\n        run: echo \"" + ciRegistryEnv + "=$" + ciRegistryEnv,
 			reason: reasonRegistryUnguarded,
 		},
 		{
