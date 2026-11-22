@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ok, refused, stubControlPlane, withControlPlane, type Answer } from '@/test/control-plane-fetch';
@@ -16,9 +16,9 @@ vi.mock('next/navigation', () => ({
 const KEYS_PATH = 'GET /api/v1/kms/keys';
 const BACKEND_PATH = 'GET /api/v1/kms/backend/status';
 
-function routes(backend: Answer): Record<string, Answer> {
+function routes(backend: Answer, keys: unknown[] = []): Record<string, Answer> {
   return {
-    [KEYS_PATH]: ok({ keys: [] }),
+    [KEYS_PATH]: ok({ keys }),
     [BACKEND_PATH]: backend,
   };
 }
@@ -29,6 +29,17 @@ const servedBackend = ok({
   device: '/dev/tpmrm0',
   capabilities: { sign: true, encrypt: true, export: false },
 });
+
+// One key in the snake_case wire shape the REST handler emits (page.tsx
+// RestKeyResponse); the page maps ECDSA_P256 to ECDSA-P256.
+const servedKey = {
+  key_id: 'key-0001',
+  name: 'release-signing',
+  algorithm: 'ECDSA_P256',
+  status: 'ENABLED',
+  created_at: '2026-11-01T00:00:00Z',
+  version: 1,
+};
 
 async function renderPage() {
   await act(async () => {
@@ -64,11 +75,16 @@ describe('KMSKeysPage backend status', () => {
   });
 
   it('says so when the backend read is refused, and still lists the keys', async () => {
-    stubControlPlane(routes(refused(403, 'kms: permission denied')));
+    stubControlPlane(routes(refused(403, 'kms: permission denied'), [servedKey]));
     await renderPage();
 
     expect(await screen.findByText('Backend status could not be read: kms: permission denied')).toBeTruthy();
-    expect(screen.getByRole('heading', { level: 1, name: 'Cryptographic Keys' })).toBeTruthy();
+    const row = (await screen.findByText('release-signing')).closest('tr');
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).getByText('ECDSA-P256')).toBeTruthy();
+    // The refusal and the key row are on the page in the same render.
+    expect(screen.getByText('Backend status could not be read: kms: permission denied')).toBeTruthy();
+    expect(screen.queryByText('No results.')).toBeNull();
     expect(screen.queryByText('Error')).toBeNull();
   });
 });
