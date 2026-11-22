@@ -31,6 +31,7 @@ func TestWorkspaceRoleResolverReadsTheRolesOfTheWorkspaceUser(t *testing.T) {
 			gotTenant, gotEmail = tenantID, email
 			return &iamsdk.User{Email: email, Roles: []string{"member"}}, nil
 		},
+		listRolesFn: pagedRoles(nil, nil, nil),
 	}
 	resolver, err := NewWorkspaceRoleResolver(client)
 	if err != nil {
@@ -100,5 +101,98 @@ func TestNewWorkspaceRoleResolverRefusesANilClient(t *testing.T) {
 	}
 	if resolver != nil {
 		t.Fatalf("expected no resolver, got %+v", resolver)
+	}
+}
+
+// pagedRoles serves first on the first ListRoles page and second on the page
+// the first one's "p2" token names, the way IAM pages a tenant's roles; a
+// non-nil err fails every call.
+func pagedRoles(first, second []iamsdk.Role, err error) func(context.Context, string, *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+	return func(_ context.Context, _ string, req *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+		if err != nil {
+			return nil, err
+		}
+		if req.PageToken == "p2" {
+			return &iamsdk.ListRolesResponse{Roles: second}, nil
+		}
+		return &iamsdk.ListRolesResponse{
+			Roles:      first,
+			Pagination: iamsdk.PaginationInfo{HasMore: true, NextPageToken: "p2"},
+		}, nil
+	}
+}
+
+func TestWorkspaceRoleResolverNamesTheRolesIAMStoresByID(t *testing.T) {
+	t.Parallel()
+	client := &mockIAMClient{
+		getByEmailFn: func(_ context.Context, _, email string) (*iamsdk.User, error) {
+			return &iamsdk.User{Email: email, Roles: []string{"rid-admin"}}, nil
+		},
+		listRolesFn: pagedRoles(
+			[]iamsdk.Role{{ID: "rid-member", Name: "member"}},
+			[]iamsdk.Role{{ID: "rid-admin", Name: "admin"}},
+			nil,
+		),
+	}
+	resolver, err := NewWorkspaceRoleResolver(client)
+	if err != nil {
+		t.Fatalf("NewWorkspaceRoleResolver: %v", err)
+	}
+
+	roles, err := resolver.Roles(context.Background(), "workspace-a", "operator@platform")
+	if err != nil {
+		t.Fatalf("Roles: %v", err)
+	}
+	if !slices.Equal(roles, []string{"admin"}) {
+		t.Fatalf("expected the stored role ID to be named admin, got %v", roles)
+	}
+}
+
+func TestWorkspaceRoleResolverKeepsAReferenceNoRoleIDMatches(t *testing.T) {
+	t.Parallel()
+	client := &mockIAMClient{
+		getByEmailFn: func(_ context.Context, _, email string) (*iamsdk.User, error) {
+			return &iamsdk.User{Email: email, Roles: []string{"admin"}}, nil
+		},
+		listRolesFn: pagedRoles(
+			[]iamsdk.Role{{ID: "rid-member", Name: "member"}},
+			[]iamsdk.Role{{ID: "rid-admin", Name: "admin"}},
+			nil,
+		),
+	}
+	resolver, err := NewWorkspaceRoleResolver(client)
+	if err != nil {
+		t.Fatalf("NewWorkspaceRoleResolver: %v", err)
+	}
+
+	roles, err := resolver.Roles(context.Background(), "workspace-a", "operator@platform")
+	if err != nil {
+		t.Fatalf("Roles: %v", err)
+	}
+	if !slices.Equal(roles, []string{"admin"}) {
+		t.Fatalf("expected a reference no role ID matches to be kept, got %v", roles)
+	}
+}
+
+func TestWorkspaceRoleResolverReturnsARoleListFailure(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("roles unavailable")
+	client := &mockIAMClient{
+		getByEmailFn: func(_ context.Context, _, email string) (*iamsdk.User, error) {
+			return &iamsdk.User{Email: email, Roles: []string{"rid-admin"}}, nil
+		},
+		listRolesFn: pagedRoles(nil, nil, cause),
+	}
+	resolver, err := NewWorkspaceRoleResolver(client)
+	if err != nil {
+		t.Fatalf("NewWorkspaceRoleResolver: %v", err)
+	}
+
+	roles, err := resolver.Roles(context.Background(), "workspace-a", "operator@platform")
+	if err == nil {
+		t.Fatalf("expected the role list failure to be returned, got roles %v", roles)
+	}
+	if len(roles) != 0 {
+		t.Fatalf("a failed role list must grant no roles, got %v", roles)
 	}
 }
