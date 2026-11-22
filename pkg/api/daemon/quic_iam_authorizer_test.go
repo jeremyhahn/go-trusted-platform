@@ -299,6 +299,22 @@ func TestIAMTokenAuthorizer_CheckPeerPermission_ResolvesStoredRoles(t *testing.T
 		assert.Equal(t, "7302", asked[0].Subject.ID)
 		assert.Equal(t, []string{"kms-operator"}, asked[0].Subject.Roles)
 	})
+	t.Run("mixed-case email SAN resolves to the normalized stored email", func(t *testing.T) {
+		// The IAM store keeps every email lowercased and trimmed; the
+		// certificate's SAN keeps the case it was issued with.
+		var asked []*sdkiam.CheckRequest
+		authz := &iamTokenAuthorizer{
+			pep: pepGrantingRole("kms-operator", "kms", "delete", &asked),
+			iam: &storedUsersIAM{users: []*sdkiam.User{operator, admin}},
+		}
+		peer := &platformtoken.AuthorizedContext{Subject: "Ops@ACME.Example", TenantID: "acme"}
+		allowed, err := authz.CheckPeerPermission(context.Background(), peer, "kms", "delete")
+		require.NoError(t, err)
+		assert.True(t, allowed, "a mixed-case email SAN resolves its stored user")
+		require.Len(t, asked, 1)
+		assert.Equal(t, "7301", asked[0].Subject.ID)
+		assert.Equal(t, []string{"kms-operator"}, asked[0].Subject.Roles)
+	})
 	t.Run("stored user without the role is denied", func(t *testing.T) {
 		var asked []*sdkiam.CheckRequest
 		authz := &iamTokenAuthorizer{
