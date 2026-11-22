@@ -537,6 +537,53 @@ export interface TPMInfoResponse {
 }
 
 /**
+ * A TPM key reference (TPMKeyRef): its persistent handle and key algorithm.
+ * protojson omits empty fields, so both are optional.
+ */
+export interface TPMKeyRef {
+  /** Persistent handle */
+  handle?: number;
+  /** Key algorithm */
+  algorithm?: string;
+}
+
+/**
+ * TPM capabilities response (GET /v1/tpm/capabilities)
+ */
+export interface TPMCapabilitiesResponse {
+  /** Supported algorithms */
+  algorithms?: string[];
+  /** Supported commands */
+  commands?: string[];
+  /** Supported ECC curves */
+  eccCurves?: string[];
+}
+
+/**
+ * TPM platform attributes response (GET /v1/tpm/platform)
+ */
+export interface TPMPlatformAttributesResponse {
+  /** TPM device path */
+  device?: string;
+  /** FIPS mode enabled */
+  isFips?: boolean;
+  /** PCRs have been extended */
+  pcrExtended?: boolean;
+  /** TPM can seal data */
+  canSeal?: boolean;
+  /** Is simulator */
+  isSimulator?: boolean;
+  /** Manufacturer */
+  manufacturer?: string;
+  /** Endorsement key */
+  ek?: TPMKeyRef;
+  /** Storage root key */
+  srk?: TPMKeyRef;
+  /** Initial attestation key */
+  iak?: TPMKeyRef;
+}
+
+/**
  * TPM provision response
  */
 export interface TPMProvisionResponse {

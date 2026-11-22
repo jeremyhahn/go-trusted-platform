@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -591,7 +592,8 @@ func (s *TPMGRPCService) CreateAK(
 			Success: true,
 			Message: "AK created successfully",
 		},
-		Handle: uint32(iakAttrs.TPMAttributes.Handle),
+		Handle:    uint32(iakAttrs.TPMAttributes.Handle),
+		PublicKey: iakAttrs.TPMAttributes.PublicKeyBytes,
 	}, nil
 }
 
@@ -627,13 +629,23 @@ func (s *TPMGRPCService) GetAK(
 
 // tpmIAKAttributes returns the IAK's attributes only when the IAK exists:
 // attributes alone describe where an IAK would live, so a TPM without one
-// answers NotFound on every transport.
+// answers NotFound on every transport. A missing persistent handle (the
+// ReadPublic TPM_RC_HANDLE error IAKAttributes and IAK return on a TPM with
+// no IAK) is NotFound, not mapTPMError's FailedPrecondition, so REST answers
+// 404 and the quote page offers Create AK; other TPM errors keep their class
+// (#2188 Codex).
 func tpmIAKAttributes(tpm quicbaassdk.TrustedPlatformModule) (*quicbaassdk.KeyAttributes, error) {
 	iakAttrs, err := tpm.IAKAttributes()
+	if errors.Is(err, tpmgo.TPMRCHandle) {
+		return nil, status.Error(codes.NotFound, "IAK not found")
+	}
 	if err != nil {
 		return nil, mapTPMError(err)
 	}
 	pubKey, err := tpm.IAK()
+	if errors.Is(err, tpmgo.TPMRCHandle) {
+		return nil, status.Error(codes.NotFound, "IAK not found")
+	}
 	if err != nil {
 		return nil, mapTPMError(err)
 	}

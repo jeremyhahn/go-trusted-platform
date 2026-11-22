@@ -34,6 +34,8 @@ import type {
   UndefineNVRAMRequest,
   GetRandomRequest,
   TPMInfoResponse,
+  TPMCapabilitiesResponse,
+  TPMPlatformAttributesResponse,
   TPMProvisionResponse,
   TPMClearResponse,
   CreateEKResponse,
@@ -160,6 +162,22 @@ export class TPMService extends BaseService {
    */
   async getInfo(): Promise<ApiResponse<TPMInfoResponse>> {
     return this.client.get<TPMInfoResponse>(this.buildUrl('/info'));
+  }
+
+  /**
+   * Get the TPM capabilities (GET /v1/tpm/capabilities)
+   * @returns Supported algorithms, commands and ECC curves
+   */
+  async getCapabilities(): Promise<ApiResponse<TPMCapabilitiesResponse>> {
+    return this.client.get<TPMCapabilitiesResponse>(this.buildUrl('/capabilities'));
+  }
+
+  /**
+   * Get the TPM platform attributes (GET /v1/tpm/platform)
+   * @returns Device, FIPS and seal state and the EK, SRK and IAK references
+   */
+  async getPlatformAttributes(): Promise<ApiResponse<TPMPlatformAttributesResponse>> {
+    return this.client.get<TPMPlatformAttributesResponse>(this.buildUrl('/platform'));
   }
 
   /**
