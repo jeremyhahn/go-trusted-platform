@@ -346,10 +346,27 @@ export class IAMService extends BaseService {
       context: request.context,
       attributes: request.attributes,
     };
-    return this.client.post<CheckIAMPermissionResponse>(
+    const res = await this.client.post<CheckIAMPermissionResponse>(
       this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/permissions/check`),
       body
     );
+    // The REST handler sends snake_case (pkg/webservice/v1/rest/iam/types.go
+    // CheckPermissionResponse, #2127 Codex): set the camelCase fields on the
+    // same response object, never over a camelCase value already present.
+    if (res.success && res.data) {
+      const data = res.data as unknown as Record<string, unknown>;
+      const fields: Array<[string, string]> = [
+        ['matchedPolicy', 'matched_policy'],
+        ['matchedRule', 'matched_rule'],
+        ['evaluationTimeNs', 'evaluation_time_ns'],
+      ];
+      for (const [camel, wire] of fields) {
+        if (data[camel] === undefined && data[wire] !== undefined) {
+          data[camel] = data[wire];
+        }
+      }
+    }
+    return res;
   }
 
   /**
