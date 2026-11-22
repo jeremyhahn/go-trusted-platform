@@ -813,6 +813,7 @@ type RestHandlerRegistry interface {
 	NTPServiceServer() platformv1.NTPServiceServer
 	VPNServiceServer() platformv1.VPNServiceServer
 	AppServiceServers() restapi.AppServiceServers
+	ClusterServiceServer() platformv1.ClusterServiceServer
 	RegistryService() grpcapi.RegistryService
 	OCIDistBackend() restregistry.OCIDistBackend
 	HealthRegistry() health.Registry
@@ -1041,7 +1042,10 @@ type RegistryParams struct {
 	// AppServiceServers are the daemon's Cache, Scheduler, Messaging and
 	// ObjectStorage servers, the instances behind every other transport.
 	AppServiceServers restapi.AppServiceServers
-	SDNEnrollmentHook *policy.SDNEnrollmentHook
+	// ClusterServiceServer is the daemon's Cluster gRPC server, the one the
+	// daemon REST listener serves; nil leaves the console's cluster routes off.
+	ClusterServiceServer platformv1.ClusterServiceServer
+	SDNEnrollmentHook    *policy.SDNEnrollmentHook
 	// SDNIdentityConfig is sourced from app.SDNConfig.Identity. When present and
 	// encode_zone_in_cert is true, the ACME pre-sign hook embeds the device's
 	// network zone into every issued DEVICE certificate via OIDTPNetworkZone.
@@ -2118,6 +2122,11 @@ func (registry *HandlerRegistry) VPNServiceServer() platformv1.VPNServiceServer 
 // ObjectStorage servers; a service the daemon does not wire is a nil interface.
 func (registry *HandlerRegistry) AppServiceServers() restapi.AppServiceServers {
 	return registry.params.AppServiceServers
+}
+
+// ClusterServiceServer returns the daemon's Cluster gRPC server, or nil.
+func (registry *HandlerRegistry) ClusterServiceServer() platformv1.ClusterServiceServer {
+	return registry.params.ClusterServiceServer
 }
 
 // TenantServiceServer returns the in-process TenantService gRPC implementation, or nil.

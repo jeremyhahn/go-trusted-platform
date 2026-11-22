@@ -2,7 +2,8 @@
 
 /**
  * The cluster hook: GetStatus, ListNodes, Bootstrap, Join and Leave on
- * `/api/v1/cluster/*` (pkg/api/daemon/cluster_rest.go).
+ * `/api/v1/cluster/*`, served on the console listener by
+ * pkg/api/rest/cluster_handlers.go and on the daemon by cluster_rest.go.
  *
  * It calls the SDK API client directly, as use-ntp.ts does, because the SDK
  * has no platform cluster service. The server answers the proto structs

@@ -41,7 +41,6 @@ import (
 var DaemonOnlyPrefixes = map[string]string{
 	"bmc":      "RESTServer.SetBMCHandler (pkg/api/daemon/rest_service.go)",
 	"ceremony": "RESTServer.SetCeremonyService (pkg/api/daemon/ceremony_rest.go)",
-	"cluster":  "RESTServer.SetClusterService (pkg/api/daemon/cluster_rest.go)",
 	"fido2":    "RESTServer.SetFIDO2Service (pkg/api/daemon/fido2_rest.go)",
 	"luks":     "RESTServer.SetLUKSService (pkg/api/daemon/luks_rest.go)",
 	"piv":      "RESTServer.SetPIVService (pkg/api/daemon/piv_rest.go)",

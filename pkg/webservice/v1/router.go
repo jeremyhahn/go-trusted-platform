@@ -219,6 +219,7 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.ntpRoutes()
 	v1Router.vpnRoutes()
 	v1Router.appServiceRoutes()
+	v1Router.clusterRoutes()
 	v1Router.pxeRoutes()
 	v1Router.sdnRoutes()
 	v1Router.switchRoutes()
@@ -894,6 +895,25 @@ func (v1Router *Router) appServiceRoutes() {
 	}
 	restapi.NewAppServiceHandlers(servers, guard, v1Router.logger.Slog()).
 		RegisterVersionedRoutes(v1Router.gated(common.ROLE_ADMIN))
+}
+
+// clusterRoutes mounts /cluster/{status,nodes,bootstrap,join,leave} on the
+// console listener, served by the Cluster gRPC server the daemon REST
+// listener serves, so the web app's cluster hook reaches them here. They are
+// operator work behind the admin gate, then cluster:read or cluster:write as
+// on gRPC, QUIC and MCP.
+func (v1Router *Router) clusterRoutes() {
+	server := v1Router.restHandlerRegistry.ClusterServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("Cluster service server is nil - cluster routes not registered")
+		return
+	}
+	guard := scopeRouteGuard{}
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		guard.authorizer = scoped
+	}
+	restapi.NewClusterHandlers(server, guard).
+		RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
 // scopeRouteGuard checks an application service route's scope with the

@@ -1329,6 +1329,9 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 				params.VPNServiceServer = svc
 			}
 			params.AppServiceServers = platformDaemon.AppServiceRESTServers()
+			if svc := platformDaemon.ClusterGRPCService(); svc != nil {
+				params.ClusterServiceServer = svc
+			}
 			if svc := platformDaemon.TenantGRPCServer(); svc != nil {
 				params.TenantServiceServer = svc
 			}

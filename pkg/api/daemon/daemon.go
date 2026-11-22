@@ -3308,6 +3308,13 @@ func (d *Daemon) VPNGRPCServiceServer() *VPNGRPCService {
 	return d.vpnGRPCService
 }
 
+// ClusterGRPCService returns the Cluster gRPC server the daemon REST
+// listener serves under /cluster, so the console listener can serve the
+// same routes. Returns nil if not configured.
+func (d *Daemon) ClusterGRPCService() platformv1.ClusterServiceServer {
+	return d.clusterGRPCService
+}
+
 // VPNControlPlane returns the control-plane VPN service, or nil when the
 // daemon runs without a platform store.
 func (d *Daemon) VPNControlPlane() *vpn.Service {

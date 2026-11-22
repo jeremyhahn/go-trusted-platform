@@ -110,6 +110,7 @@ type testHandlerRegistry struct {
 	ntpService            platformv1.NTPServiceServer
 	vpnService            platformv1.VPNServiceServer
 	appServices           restapi.AppServiceServers
+	clusterService        platformv1.ClusterServiceServer
 	overlayService        platformv1.OverlayServiceServer
 	switchService         device.SwitchServiceProvider
 	gatewayService        platformv1.GatewayServiceServer
@@ -299,6 +300,10 @@ func (r *testHandlerRegistry) VPNServiceServer() platformv1.VPNServiceServer {
 
 func (r *testHandlerRegistry) AppServiceServers() restapi.AppServiceServers {
 	return r.appServices
+}
+
+func (r *testHandlerRegistry) ClusterServiceServer() platformv1.ClusterServiceServer {
+	return r.clusterService
 }
 
 func (r *testHandlerRegistry) TenantServiceServer() platformv1.TenantServiceServer {
