@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -331,7 +332,7 @@ func (s *RegistryGRPCService) Status(
 		Storage:    registryStorageStatsToProto(resp.Storage),
 		ReadOnly:   resp.ReadOnly,
 		Components: components,
-		StartedAt:  timestamppb.New(resp.StartedAt),
+		StartedAt:  registryTimestamp(resp.StartedAt),
 		Timestamp:  timestamppb.New(resp.Timestamp),
 	}, nil
 }
@@ -393,12 +394,21 @@ func registryArtifactToProto(artifact *RegistryArtifact) *platformv1.Artifact {
 		Os:           artifact.OS,
 		Architecture: artifact.Architecture,
 		Author:       artifact.Author,
-		CreatedAt:    timestamppb.New(artifact.CreatedAt),
-		UpdatedAt:    timestamppb.New(artifact.UpdatedAt),
-		PushedAt:     timestamppb.New(artifact.PushedAt),
-		LastPulledAt: timestamppb.New(artifact.LastPulledAt),
+		CreatedAt:    registryTimestamp(artifact.CreatedAt),
+		UpdatedAt:    registryTimestamp(artifact.UpdatedAt),
+		PushedAt:     registryTimestamp(artifact.PushedAt),
+		LastPulledAt: registryTimestamp(artifact.LastPulledAt),
 		PullCount:    artifact.PullCount,
 	}
+}
+
+// registryTimestamp converts a registry time to its proto timestamp, leaving
+// a zero time unset rather than sending 0001-01-01, as the MCP path does.
+func registryTimestamp(t time.Time) *timestamppb.Timestamp {
+	if t.IsZero() {
+		return nil
+	}
+	return timestamppb.New(t)
 }
 
 func registryManifestToProto(manifest *RegistryArtifactManifest) *platformv1.ArtifactManifest {
