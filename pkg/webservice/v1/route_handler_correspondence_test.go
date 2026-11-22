@@ -255,6 +255,7 @@ var deviceServiceHandlers = map[string]string{
 	"ActivateDevice":               "ActivateDevice",
 	"AttestDevice":                 "HandleAttestDevice",
 	"RecordAttestationCertificate": "HandleRecordAttestCert",
+	"IssueAttestationChallenge":    "HandleIssueAttestationChallenge",
 	"CreateTemplate":               "CreateTemplate",
 	"GetTemplate":                  "GetTemplate",
 	"ListTemplates":                "ListTemplates",
