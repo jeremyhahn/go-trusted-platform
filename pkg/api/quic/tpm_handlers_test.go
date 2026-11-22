@@ -106,6 +106,11 @@ type mockTPM struct {
 	isPCRExtResult     bool
 	isPCRExtErr        error
 	canSealResult      bool
+	// The options and sealed data the handler passed, so a test can see
+	// the key name, password and backend reach the TPM (#1690).
+	sealOpts     *xkmssdk.SealOptions
+	unsealSealed *xkmssdk.SealedData
+	unsealOpts   *xkmssdk.UnsealOptions
 }
 
 func newMockTPM() *mockTPM {
@@ -297,6 +302,7 @@ func (m *mockTPM) RandomBytes(n int) ([]byte, error) {
 	return b, nil
 }
 func (m *mockTPM) Seal(ctx context.Context, data []byte, opts *xkmssdk.SealOptions) (*xkmssdk.SealedData, error) {
+	m.sealOpts = opts
 	if m.sealErr != nil {
 		return nil, m.sealErr
 	}
@@ -306,6 +312,8 @@ func (m *mockTPM) Seal(ctx context.Context, data []byte, opts *xkmssdk.SealOptio
 	return &xkmssdk.SealedData{Ciphertext: data}, nil
 }
 func (m *mockTPM) Unseal(ctx context.Context, sealed *xkmssdk.SealedData, opts *xkmssdk.UnsealOptions) ([]byte, error) {
+	m.unsealSealed = sealed
+	m.unsealOpts = opts
 	if m.unsealErr != nil {
 		return nil, m.unsealErr
 	}
@@ -1015,6 +1023,50 @@ func TestTPM2Handler_HandleUnseal_Success(t *testing.T) {
 	payload, _ := quicwire.EncodePayload(req)
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Unseal}, payload...)})
 	assert.Equal(t, quicwire.StatusOK, resp.Status)
+}
+
+// The seal request's key name and password reach Seal as the gRPC path
+// passes them: the CN under the SSRK, the password held (#1690).
+func TestTPM2Handler_HandleSeal_PassesCNAndPassword(t *testing.T) {
+	h := NewTPM2Handler(logging.DefaultLogger())
+	mock := newMockTPM()
+	h.SetTPM2Service(mock)
+	payload, err := quicwire.EncodePayload(map[string]any{
+		"data":     []byte("secret"),
+		"cn":       "k1",
+		"password": "pw",
+	})
+	require.NoError(t, err)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Seal}, payload...)})
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	require.NotNil(t, mock.sealOpts, "Seal got nil options")
+	require.NotNil(t, mock.sealOpts.KeyAttributes)
+	assert.Equal(t, "k1", mock.sealOpts.KeyAttributes.CN)
+	assert.NotNil(t, mock.sealOpts.KeyAttributes.Password, "the password was dropped")
+	assert.Equal(t, mock.ssrkAttrs, mock.sealOpts.KeyAttributes.Parent)
+}
+
+// The unseal request names the TPM backend and the key, as the gRPC
+// path does (#1690).
+func TestTPM2Handler_HandleUnseal_NamesTheTPMBackend(t *testing.T) {
+	h := NewTPM2Handler(logging.DefaultLogger())
+	mock := newMockTPM()
+	mock.unsealResult = []byte("plaintext")
+	h.SetTPM2Service(mock)
+	payload, err := quicwire.EncodePayload(map[string]any{
+		"cn":       "k1",
+		"password": "pw",
+	})
+	require.NoError(t, err)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Unseal}, payload...)})
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	require.NotNil(t, mock.unsealSealed)
+	assert.Equal(t, xkmssdk.BackendTypeTPM2, mock.unsealSealed.Backend)
+	assert.Equal(t, "k1", mock.unsealSealed.KeyID)
+	require.NotNil(t, mock.unsealOpts, "Unseal got nil options")
+	require.NotNil(t, mock.unsealOpts.KeyAttributes)
+	assert.Equal(t, "k1", mock.unsealOpts.KeyAttributes.CN)
+	assert.NotNil(t, mock.unsealOpts.KeyAttributes.Password, "the password was dropped")
 }
 
 func TestTPM2Handler_HandleUnseal_MissingCN(t *testing.T) {
