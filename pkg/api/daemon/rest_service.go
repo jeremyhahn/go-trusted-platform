@@ -499,8 +499,21 @@ func (s *RESTServer) SetKMSHandlers(service restapi.KMSService) {
 func (s *RESTServer) SetKMSRouter(kms kmsclient.Client, crypto cryptoclient.Client, dek dekclient.Client, secrets secretsclient.Client, guard *restapi.ScopeGuard) {
 	logger := logging.NewFromSlog(s.logger)
 	restkms.NewKMSRouter(logger, kms, crypto, dek, secrets, response.NewResponseWriter(logger, nil)).
-		RegisterRoutes(s.tenantBoundCatalogAPI(guard))
+		RegisterRoutes(s.tenantBoundCatalogAPI(guard, s.kmsDEKPlatformTenantGate))
 	s.logger.Info("KMS REST routes registered (docs/kms/api.md contract)")
+}
+
+// kmsDEKPlatformTenantGate refuses the DEK routes to every tenant but the
+// platform's. The embedded go-quicbaas DEK store is keyed by path alone and
+// ignores the tenant, so binding the caller's tenant does not isolate DEKs.
+func (s *RESTServer) kmsDEKPlatformTenantGate(callerTenantID, route string) error {
+	if !strings.HasPrefix(route, restBasePath+"/kms/deks") {
+		return nil
+	}
+	if s.config != nil && callerTenantID == s.config.PlatformTenantID {
+		return nil
+	}
+	return restapi.ErrRouteForbidden{Scope: route, Reason: "the DEK routes serve the platform tenant only until the DEK store enforces tenant ownership"}
 }
 
 // SetComputeHandlers wires the compute (VM and container) REST handlers onto

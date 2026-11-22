@@ -268,10 +268,11 @@ func catalogRouteScope(method, route string) (string, error) {
 // tenantBoundCatalogAPI is catalogGuardedAPI for routers whose shared SDK
 // clients scope by the context tenant: it binds the verified caller's tenant
 // and refuses a caller without one.
-func (s *RESTServer) tenantBoundCatalogAPI(guard *restapi.ScopeGuard) *mux.Router {
+func (s *RESTServer) tenantBoundCatalogAPI(guard *restapi.ScopeGuard, routeGate func(callerTenantID, route string) error) *mux.Router {
 	api := s.router.PathPrefix(restBasePath).Subrouter()
 	auth := s.catalogAuthorization(guard)
 	auth.bindTenant = true
+	auth.routeGate = routeGate
 	api.Use(auth.authorize)
 	return api
 }
@@ -312,6 +313,9 @@ type restScopeAuthorization struct {
 	// callerGate, when set, refuses an authenticated, scoped caller the
 	// router cannot serve (for example a tenant it cannot bind).
 	callerGate func(callerTenantID string) error
+	// routeGate, when set, refuses a caller's tenant a route it may not use
+	// (for example a route whose backing store ignores the tenant).
+	routeGate func(callerTenantID, route string) error
 	// bindTenant, when set, refuses a caller with no tenant and binds the
 	// caller's tenant into both tenant context keys: the SDK transport's
 	// (sdktransport.ContextWithTenant), which the router's shared SDK clients
@@ -337,6 +341,12 @@ func (a restScopeAuthorization) authorize(next http.Handler) http.Handler {
 		}
 		if a.callerGate != nil {
 			if err := a.callerGate(caller.TenantID); err != nil {
+				a.respWriter.Error403(w, r, err, nil)
+				return
+			}
+		}
+		if a.routeGate != nil {
+			if err := a.routeGate(caller.TenantID, restRouteTemplate(r)); err != nil {
 				a.respWriter.Error403(w, r, err, nil)
 				return
 			}
