@@ -413,7 +413,8 @@ type GenerateRandomRequest struct {
 
 // GenerateRandomResponse contains random bytes.
 type GenerateRandomResponse struct {
-	Bytes []byte `json:"bytes"`
+	Bytes       []byte `json:"bytes"`
+	RandomBytes []byte `json:"random_bytes"`
 }
 
 // GenerateDataKeyRequest asks for a fresh data key wrapped by the key-encryption

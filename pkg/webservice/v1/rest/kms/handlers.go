@@ -1032,7 +1032,7 @@ func (h *Handlers) GenerateRandom(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	h.success200(w, r, &GenerateRandomResponse{Bytes: resp.RandomBytes})
+	h.success200(w, r, &GenerateRandomResponse{Bytes: resp.RandomBytes, RandomBytes: resp.RandomBytes})
 }
 
 // GenerateDataKey handles POST /api/v1/kms/data-keys. It mints a data key
