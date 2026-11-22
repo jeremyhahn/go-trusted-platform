@@ -1,5 +1,49 @@
-# ci-template: v1.35.1 (customized)
+# ci-template: v1.35.1 + v1.42 hermetic gate + v1.48 runner selection + v1.50 short-list fix + v1.51 reviewed + v1.52 fork check (customized)
 #
+# v1.42 hermetic gate only (owner ruling 742 (1), Tenant Agent rulings 754 and
+# 794): the CI Gate's outcome depends only on the tree under test. `make
+# deps-check` (lint job), `make security-novuln` (gosec, go mod verify,
+# trivy fs) and `trivy image` (image job), and the `vuln` job's `make vuln`
+# (govulncheck) read the module proxy and advisory databases, so they could
+# fail a PR or turn main red with no change to the tree. They leave this
+# workflow on every event and run in .github/workflows/scans.yml, on a
+# schedule and on workflow_dispatch on main; the vuln job and its CI Gate
+# line go. `make gosec` reads only the tree and now runs in the lint job on
+# every event but a docs-only PR. Nothing else of v1.36 to v1.42 is taken
+# yet: v1.36 host-local caches and in-toolchain-image.sh v6, v1.37 timeouts,
+# v1.38 release label, v1.39/v1.40 scoped deps-check and deps-bump, v1.41
+# PR/main parity and v1.35.2/v1.35.3's signatures.yml move are the full
+# catch-up, still to come. The history below describes the jobs before v1.42.
+#
+# v1.48 runner selection only (Tenant Agent rulings 1024 and 1031, #2128):
+# hosted first. The preflight step `Hosted or overflow runner (ruling 1024)`
+# sends a run's jobs to the self-hosted overflow runners (bigdisk,
+# bigdisk-docker) only when HOSTED_JOBS_PER_REPO hosted jobs are in progress
+# or a hosted job of another run has queued HOSTED_QUEUE_GRACE_SECONDS; a
+# fork pull request always stays hosted. Nothing else of v1.43 to v1.48 is
+# taken.
+#
+# v1.50 short-list fix only (handbook PR 84, rulings 999/1024, DS-9751,
+# #2128): the overflow never fired under load. The Actions API's listing
+# returns fewer items than its total_count while runs change state, and the
+# selection step treated every short list as unread and picked hosted. A
+# short list is now a lower bound: at or past HOSTED_JOBS_PER_REPO, or with
+# a hosted job of another run queued past the grace in it, it overflows; a
+# short list that reaches neither trigger picks hosted with a ::warning.
+# v1.51 reviewed (handbook PR 86, c4de1f7d, DS-9791): v1.51 changes only
+# the v1.38 step `Runner labels (ruling 633)`, which also reads every runs-on
+# under pull_request_target. That step is not adopted here (v1.38 is on the
+# catch-up list above), so v1.51 has nothing to apply to this file; it is
+# adopted with the step. code-review.yml takes v5.12.8 and v5.12.9 in the same change.
+# v1.52 fork check (handbook PR 91, 263544734, DS-9861): a pull request whose
+# head repository is not this repository, a deleted fork included, runs every
+# job on ubuntu-latest. The selection step's fork check (CUSTOMIZE #2128,
+# which skipped an empty head repository) takes the template's form: on a
+# pull_request or pull_request_target event a head repository that is not
+# this one outputs the hosted default with a ::notice and no API call.
+# v1.52's preflight runs-on clause applies to v1.49's bigdisk runs-on, and
+# its Runner labels cases to the v1.38 step; neither is adopted here, since
+# preflight stays on ubuntu-latest, so neither has anything to apply to.
 # v1.35.1 (DS-8433, CA m2557): the Signatures job of handbook cd17d28
 # (ci-template v1.35.1) is adopted as is, in CI Gate's needs, env block and a
 # `pr` check line, with .github/allowed_signers synced from handbook
@@ -110,13 +154,20 @@
 #     need no toolchain image.
 #   - sdkjs and web run on the runner with setup-node: the toolchain image
 #     has no Node (the Dockerfile installs it in the integration stage only).
-#   - The jobs that need no Docker daemon (race, lint-gates, arch-gates,
-#     sdkjs, web; #1589 and its follow-up) take race's runs-on: a push to main
-#     and a pull_request from this repository run on the bigdisk runner
-#     [self-hosted, linux, x64, bigdisk], everything else on ubuntu-latest.
-#     Each needs preflight and carries the guard in its `if:`, its
-#     checkout persists no token, and any apt step is hosted-only. fips stays
-#     hosted: its main-tier `if:` has no guarded form yet (see there).
+#   - Runners (owner ruling 999, superseding m2475, m2403/m2406 and #1589's
+#     routing): every job runs on GitHub's standard hosted runner,
+#     `runs-on: ubuntu-latest` (4 vCPU, 16 GB RAM, 14 GB SSD, 6-hour job
+#     limit), on every event. A job runs self-hosted only for hardware it
+#     needs or a measured hosted limit it exceeds, recorded on its runs-on
+#     line as `# self-hosted: <category>: <reason>` with the category
+#     `hardware` or `oversize` (ruling 1006), on one label and never an
+#     expression; pkg/arch/ci_runners_test.go holds the rule. Larger hosted
+#     runners are not used. Here that is the image job alone (its unit suite, see there);
+#     scans.yml's job is the other. The bigdisk jobs' `if:` keep the schedule
+#     guard, so the tiers and CI Gate read the same verdicts; the
+#     hosted-only steps (`runner.environment == 'github-hosted'`: the apt
+#     installs, the integration image artifact download) now run on every
+#     event, and each checkout of a no-Docker job persists no token.
 #   - The gate's check lines are `check <tier> <job> "$RESULT"` with a docs
 #     tier (pkg/arch/citiers_test.go holds the format).
 #   - integration needs image (isolation, see there) and applies the
@@ -253,6 +304,16 @@ env:
   # builds, run alone on a docs-only PR. CUSTOMIZE: empty, this repo has no
   # releasability test yet, so the step skips.
   RELEASABILITY_TEST: ""
+  # v1.48 (Tenant Agent ruling 1024 item 1, queue 250 (a); ruling 1031,
+  # #2128): the most jobs of this repository that run on GitHub-hosted
+  # runners at once. The preflight step `Hosted or overflow runner (ruling
+  # 1024)` sends the run's jobs to the self-hosted overflow runners (bigdisk,
+  # bigdisk-docker) when this many hosted jobs of the repository are already
+  # in progress, or when one of its hosted jobs has waited in the queue for
+  # HOSTED_QUEUE_GRACE_SECONDS (the hosted pool is full). The owner's number,
+  # not a CUSTOMIZE value.
+  HOSTED_JOBS_PER_REPO: 12
+  HOSTED_QUEUE_GRACE_SECONDS: 60
 
 jobs:
   # v1.34 (Company Agent m2211 item 2(b)): one preflight job instead of three.
@@ -301,16 +362,14 @@ jobs:
   # xkmsctl and xkey depend only on sdk/go) are further steps in this job.
   # A source check with grep, not a stage: it runs on the runner's shell.
   # v1.23: a lint-class check, so it stays on the PR tier.
-  # Routing (m2475): a push to main and a pull_request from this repository
-  # run on the bigdisk pool; fork PRs, dispatch and the schedule stay on
-  # ubuntu-latest. The job needs git, curl and jq only. It cannot carry the
-  # schedule guard (it is the guard), and on exactly this route a schedule
-  # run never reaches the pool.
+  # Runner (ruling 999): ubuntu-latest on every event. The job needs git,
+  # curl and jq only. It cannot carry the schedule guard (it is the guard),
+  # and it never runs on the self-hosted pool.
   # CUSTOMIZE: this repository has no go-objstore seam and no import, so
   # OBJSTORE_SEAMS is empty and any import fails.
   preflight:
     name: Preflight [changed files, schedule guard, architecture gates]
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest   # v1.48: it decides the runner, so it stays hosted
     # v1.26: a draft PR runs no CI; every job that needs this one skips with it.
     if: ${{ !github.event.pull_request.draft }}
     timeout-minutes: 10       # v1.34: the three jobs had 5 each
@@ -323,7 +382,142 @@ jobs:
       docs_only: ${{ steps.diff.outputs.docs_only }}
       verdict: ${{ steps.guard.outputs.verdict }}
       proof: ${{ steps.guard.outputs.proof }}   # v1.30
+      # v1.48 (ruling 1024): runs-on JSON for the two hosted-capable classes,
+      # read as fromJSON(needs.preflight.outputs.runner_docker) by every job
+      # that builds or runs images and fromJSON(needs.preflight.outputs.runner)
+      # by the others and CI Gate. `"ubuntu-latest"`, or the self-hosted
+      # overflow label list.
+      runner: ${{ steps.runner.outputs.runner }}
+      runner_docker: ${{ steps.runner.outputs.runner_docker }}
     steps:
+      # v1.48 (ruling 1024): hosted stays the default. On github.com this step
+      # counts this repository's jobs on GitHub-hosted runners (a job whose
+      # labels name an ubuntu-* image and not self-hosted) in every queued and
+      # in-progress run of every workflow, through the Actions API with the
+      # job token (actions: read). It outputs `runner` and `runner_docker` as
+      # runs-on JSON: `"ubuntu-latest"`, or, when HOSTED_JOBS_PER_REPO hosted
+      # jobs or more are in progress, or a hosted job of another run has been
+      # queued HOSTED_QUEUE_GRACE_SECONDS or more (the hosted pool is full),
+      # the self-hosted overflow runners (bigdisk, bigdisk-docker) as label
+      # lists. A count it cannot read (a reply that is not 200, a list short
+      # of its total_count, a field missing) picks nothing silently: it prints
+      # a ::warning naming why and outputs the hosted default. One decision
+      # per run: every job of the run takes it. Off github.com it makes no
+      # call, and each job's runs-on keeps its forge label as before v1.48.
+      # It runs before the checkout, beside no repository code.
+      # CUSTOMIZE (#2128, not in the template): a pull request from a fork
+      # always takes the hosted default. The self-hosted runners are
+      # persistent, and ruling 999 keeps fork code off them.
+      - name: Hosted or overflow runner (ruling 1024)
+        id: runner
+        env:
+          SERVER: ${{ github.server_url }}
+          EVENT: ${{ github.event_name }}
+          API: ${{ github.api_url }}/repos/${{ github.repository }}/actions
+          RUN_ID: ${{ github.run_id }}
+          JOB_TOKEN: ${{ github.token }}
+          LIMIT: ${{ env.HOSTED_JOBS_PER_REPO }}
+          GRACE: ${{ env.HOSTED_QUEUE_GRACE_SECONDS }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          set -uo pipefail
+          HOSTED='"ubuntu-latest"'
+          overflow() { printf '["self-hosted","linux","x64","%s"]' "$1"; }
+          emit() {
+            echo "runner: $1; runner_docker: $2"
+            { echo "runner=$1"; echo "runner_docker=$2"; } >> "$GITHUB_OUTPUT"
+          }
+          # hosted <why>: no count, so the default, with the reason shown.
+          hosted() {
+            echo "::warning::runner selection: $1; every job of this run takes the GitHub-hosted default, ubuntu-latest, and none overflows to the self-hosted overflow runners (bigdisk, bigdisk-docker) (ci-template v1.48, ruling 1024)"
+            emit "$HOSTED" "$HOSTED"
+            exit 0
+          }
+          if [ "$SERVER" != https://github.com ]; then
+            echo "not github.com: each job keeps its forge label; no selection"
+            emit "$HOSTED" "$HOSTED"
+            exit 0
+          fi
+          # v1.52: a fork's pull request (a deleted fork too, whose head
+          # repository reads empty) runs every job on GitHub-hosted runners.
+          case "$EVENT" in
+            pull_request|pull_request_target)
+              if [ "$HEAD_REPO" != "$REPO" ]; then
+                echo "::notice::runner selection: this pull request's head repository is not this repository (a fork); every job of this run takes the GitHub-hosted default, ubuntu-latest, and none reaches a self-hosted runner (ci-template v1.52)"
+                emit "$HOSTED" "$HOSTED"
+                exit 0
+              fi ;;
+          esac
+          case "$LIMIT:$GRACE" in
+            *[!0-9:]*|:*|*:) hosted "HOSTED_JOBS_PER_REPO='$LIMIT' or HOSTED_QUEUE_GRACE_SECONDS='$GRACE' is not a whole number" ;;
+          esac
+          # get <url> <file>: 0 on a 200 reply, saved in <file>; the answer in
+          # CODE. The token reaches curl as a header from a file descriptor.
+          get() {
+            CODE=$(curl -sS --max-time 30 -o "$2" -w '%{http_code}' \
+              -H @<(printf 'Authorization: Bearer %s\n' "$JOB_TOKEN") \
+              -H 'Accept: application/vnd.github+json' "$1") || CODE="curl exit $?"
+            [ "$CODE" = 200 ]
+          }
+          # pages <url> <key> <out>: every page of a listing, its <key> items
+          # one JSON object per line in <out>. 1, with WHY set, when a reply is
+          # not 200.
+          # v1.50: a list short of its total_count is a lower bound, kept in
+          # SHORT (the API's listing lags total_count while runs move); the
+          # counts it gives are never over, so it may still overflow. A
+          # total_count over 1000 is past what the API lists, so no lower bound:
+          # the hosted default, as before.
+          SHORT=""
+          pages() {
+            local p=1 got=0 total n
+            : > "$3"
+            while :; do
+              get "$1&per_page=100&page=$p" "$RUNNER_TEMP/sel-page.json" || { WHY="$1: $CODE"; return 1; }
+              total=$(jq -er '.total_count | numbers' "$RUNNER_TEMP/sel-page.json") || { WHY="$1: 200 with no total_count"; return 1; }
+              [ "$total" -le 1000 ] || { WHY="$1: total_count $total, over the 1000 entries the API lists"; return 1; }
+              n=$(jq -er --arg k "$2" '.[$k] | arrays | length' "$RUNNER_TEMP/sel-page.json") || { WHY="$1: 200 with no $2 list"; return 1; }
+              jq -c --arg k "$2" '.[$k][]' "$RUNNER_TEMP/sel-page.json" >> "$3"
+              got=$((got + n))
+              { [ "$got" -lt "$total" ] && [ "$n" -gt 0 ]; } || break
+              [ "$p" -lt 10 ] || { WHY="$1: more than 1000 entries"; return 1; }
+              p=$((p + 1))
+            done
+            [ "$got" -ge "$total" ] || SHORT="${SHORT:+$SHORT; }$1: $got of $total entries"
+          }
+          : > "$RUNNER_TEMP/sel-runs.jsonl"
+          for st in queued in_progress; do
+            pages "$API/runs?status=$st" workflow_runs "$RUNNER_TEMP/sel-r.jsonl" || hosted "the Actions API gave no complete run list ($WHY)"
+            cat "$RUNNER_TEMP/sel-r.jsonl" >> "$RUNNER_TEMP/sel-runs.jsonl"
+          done
+          : > "$RUNNER_TEMP/sel-jobs.jsonl"
+          for id in $(jq -r '.id' "$RUNNER_TEMP/sel-runs.jsonl" | sort -u); do
+            pages "$API/runs/$id/jobs?filter=latest" jobs "$RUNNER_TEMP/sel-j.jsonl" || hosted "the Actions API gave no complete job list ($WHY)"
+            cat "$RUNNER_TEMP/sel-j.jsonl" >> "$RUNNER_TEMP/sel-jobs.jsonl"
+          done
+          # In progress: every hosted job, this one included. Queued: a hosted
+          # job of another run (this run's jobs wait on this one) queued for
+          # GRACE seconds or more, so a runner did not take it at once.
+          read -r running queued < <(jq -rs --argjson run "$RUN_ID" --argjson grace "$GRACE" '
+              [.[] | select((.labels // []) | any(startswith("ubuntu-")) and all(. != "self-hosted"))] as $h
+              | ($h | map(select(.status == "in_progress")) | length) as $r
+              | ($h | map(select(.status == "queued" and .run_id != $run
+                    and now - ((.created_at // .started_at) | fromdateiso8601) >= $grace)) | length) as $q
+              | "\($r) \($q)"' "$RUNNER_TEMP/sel-jobs.jsonl") || hosted "the job list could not be counted"
+          echo "this repository: $running hosted job(s) in progress (HOSTED_JOBS_PER_REPO=$LIMIT); $queued hosted job(s) of other runs queued ${GRACE}s or more"
+          if [ "$running" -ge "$LIMIT" ]; then
+            why="$running hosted jobs in progress, HOSTED_JOBS_PER_REPO=$LIMIT"
+          elif [ "$queued" -gt 0 ]; then
+            why="$queued hosted job(s) queued ${GRACE}s or more: the hosted pool is full"
+          elif [ -n "$SHORT" ]; then
+            hosted "the Actions API listed fewer entries than its total ($SHORT), and the counts read reach no trigger"
+          else
+            emit "$HOSTED" "$HOSTED"
+            exit 0
+          fi
+          [ -z "$SHORT" ] || why="$why (a lower bound: $SHORT)"
+          echo "::notice::runner selection: $why; this run's jobs overflow to the self-hosted overflow runners (bigdisk, bigdisk-docker) (ci-template v1.48, ruling 1024)"
+          emit "$(overflow bigdisk)" "$(overflow bigdisk-docker)"
       - name: Is a main push run of this workflow in flight?
         id: guard
         env:
@@ -478,17 +672,23 @@ jobs:
             echo "$hits"; exit 1
           fi
           echo "OK: no go-objstore import outside the storage seam"
+      - name: The code-review template's v5.12.10, v5.12.11 and v5.12.12 tests
+        run: |
+          python3 -I testdata/code-review-v51210-tests.py .github/workflows/code-review.yml
+          python3 -I testdata/code-review-v51211-tests.py .github/workflows/code-review.yml
+          python3 -I testdata/code-review-v51212-tests.py .github/workflows/code-review.yml
 
   # v1.30 (fix 1, parallel jobs; fix 5, gosec on the PR tier): the
   # lint-class stages, moved from the image job, in a job of their own that
   # builds the toolchain image alone (`make docker-build-toolchain`), so they
   # run beside build and test and not in series before them. It runs on a
   # docs-only PR, as the image job's lint steps did. CUSTOMIZE: the image
-  # job's runs-on (it needs Docker) and its BuildKit builder; make lint is
-  # three targets here (fmt-check, vet, lint) with their memory bounds.
+  # job's BuildKit builder; make lint is three targets here (fmt-check, vet,
+  # lint) with their memory bounds. Runner (ruling 999): ubuntu-latest, which
+  # has Docker; no step here has a measured figure over the hosted limits.
   lint:
-    name: Lint [fmt-check, vet, lint, gosec, deps-check]
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk-docker"]') || 'ubuntu-latest' }}
+    name: Lint [fmt-check, vet, lint, gosec]
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}   # v1.48
     needs: preflight   # v1.30, v1.34
     if: ${{ !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     # CUSTOMIZE: golangci-lint alone takes up to GOLANGCI_LINT_TIMEOUT (45m,
@@ -597,26 +797,20 @@ jobs:
         run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" "go test -count=1 -tags \"\$(make -s print-build-tags)\" $RELEASABILITY_TEST"
 
       # v1.30 (fix 5): gosec on the PR tier, through the developers' target,
-      # with no network. On the full tier the image job's make security-novuln
-      # runs it, so it runs once per event. The limits are that step's (#1178).
-      - name: make gosec (PR tier)
-        if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' && env.CI_FULL_TIER != 'true' && needs.preflight.outputs.docs_only != 'true' }}
+      # with no network. v1.42 (ruling 742 (1)): make security-novuln left the
+      # image job, so gosec runs here on every event but a docs-only PR. It
+      # reads only the tree, so the gate stays hermetic. The limits are that
+      # step's (#1178).
+      - name: make gosec
+        if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' && needs.preflight.outputs.docs_only != 'true' }}
         env:
           IN_IMAGE_MEMORY: 16g
           IN_IMAGE_GOMAXPROCS: 8
         run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make gosec GOSEC_CONCURRENCY=2
 
-      # Fails when a library, first-party or third-party, is behind its latest
-      # release without devops.md §9's documented reason (ci-standard.md §1).
-      # v1.28: a lint-class gate of seconds on the PR tier, every event, a
-      # docs-only PR included (ruling 219(3)); it was full tier only from v1.23.
-      # It keeps a network for the module proxy.
-      - name: make deps-check
-        if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' }}
-        env:
-          IN_IMAGE_NETWORK: bridge
-          IN_IMAGE_MEMORY: 4g
-        run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make deps-check
+      # v1.42 (ruling 742 (1)): `make deps-check` left this job. It reads the
+      # module proxy, so its answer changes with no change to the tree;
+      # scans.yml runs it on main. The Makefile keeps the target.
 
       - name: Tear down
         if: always()
@@ -633,12 +827,17 @@ jobs:
   # v1.30: the lint stages and deps-check are the lint job's; this job is
   # docs tier and skips on a docs-only PR.
   image:
-    name: Devcontainer image [build, test, security, trivy image]
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk-docker"]') || 'ubuntu-latest' }}
+    name: Devcontainer image [build, test]
+    # Ruling 1006: one self-hosted label with a categorised waiver, never an
+    # expression (pkg/arch/ci_runners_test.go). A persistent self-hosted
+    # runner never takes untrusted code, so the `if:` below skips a fork PR;
+    # the gate's `check docs image` then fails that PR closed (a skip passes
+    # only on a docs-only PR).
+    runs-on: bigdisk-docker  # self-hosted: oversize: measured 24.2 GB unbounded (#1178), runs at a 16g container limit; a standard hosted runner has 16 GB RAM
     # v1.26: never on a draft. v1.29.3: on a schedule run, only on the
     # schedule guard's `run`; v1.30: only on `run` on every event, and never
     # on a docs-only PR.
-    if: ${{ needs.preflight.outputs.docs_only != 'true' && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
+    if: ${{ needs.preflight.outputs.docs_only != 'true' && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     needs: preflight   # v1.29.3
     # CUSTOMIZE: the build and the unit suite run one after another here;
     # the race suite is the race job and lint the lint job (v1.30).
@@ -776,18 +975,6 @@ jobs:
           echo "IT_LEASE=$lease" >> "$GITHUB_ENV"
           echo "IT_LEASE_ID=$id" >> "$GITHUB_ENV"
 
-      # Full tier: saved under the lease, scanned by the trivy step after
-      # the suites. The tag is pointed at the leased id under the image lock first.
-      - name: Save the integration image for trivy
-        if: ${{ env.CI_FULL_TIER == 'true' }}
-        run: |
-          source "$RUNNER_TEMP/image-lock.sh"
-          trap image_unlock EXIT
-          image_lock || exit 1
-          docker tag "$IT_LEASE_ID" "$IT_IMAGE"
-          image_unlock
-          docker save -o "$RUNNER_TEMP/it-image.tar" "$IT_IMAGE"
-
       - name: Release the integration image lease
         if: always()
         run: |
@@ -849,41 +1036,12 @@ jobs:
           IN_IMAGE_GOMAXPROCS: 16
         run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make test test-sdk-go
 
-      # make security-novuln: make security (devops.md §8) without
-      # govulncheck, i.e. gosec, go mod verify and `trivy fs`, with
-      # GOSEC_EXCLUDE single-sourced in the Makefile. govulncheck runs in the
-      # vuln job at 20g: its symbol scan reached 16.7 GB under this step's 16g
-      # (#1425). security and trivy are full-tier steps (v1.23,
-      # ci-standard.md §8), with a network for the vulnerability databases.
-      # Unbounded it reached 17.0 GB; GOMAXPROCS 8 (the go list compiles gosec
-      # loads through) and GOSEC_CONCURRENCY 2 keep it under 16g (#1178).
-      - name: make security-novuln
-        if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' && env.CI_FULL_TIER == 'true' }}
-        env:
-          IN_IMAGE_NETWORK: bridge
-          IN_IMAGE_MEMORY: 16g
-          IN_IMAGE_GOMAXPROCS: 8
-        run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make security-novuln GOSEC_CONCURRENCY=2
-
-      # Blocks on CRITICAL/HIGH findings that have a fix (#933). CUSTOMIZE:
-      # --ignore-unfixed is the handbook's rule for image scans (devops.md §8);
-      # Debian's unfixed advisories have no package to move to.
-      # --skip-dirs /gomodcache: the baked module cache is third-party source,
-      # and its test fixtures are not credentials; module vulnerabilities stay
-      # gated by govulncheck and `trivy fs` in make security. --ignorefile:
-      # dated, path-scoped suppressions for advisories in the dependencies npm
-      # bundles, with the reason per entry in the file.
-      - name: trivy image (integration image)
-        if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' && env.CI_FULL_TIER == 'true' }}
-        env:
-          IN_IMAGE_NETWORK: bridge
-          IN_IMAGE_MEMORY: 8g
-        run: |
-          IN_IMAGE_COPY="$RUNNER_TEMP/it-image.tar:/src/integration-image.tar" \
-          scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" \
-            trivy image --input /src/integration-image.tar --severity CRITICAL,HIGH --exit-code 1 \
-              --ignore-unfixed --skip-dirs /gomodcache \
-              --ignorefile build/docker/devcontainer/trivyignore-image.yaml
+      # v1.42 (ruling 742 (1)): `make security-novuln` (gosec, go mod verify,
+      # trivy fs) and `trivy image (integration image)` left this job. Both
+      # read an advisory database that changes with no change to the tree.
+      # scans.yml runs them on main, with this job's limits and flags, and
+      # opens or updates ONE issue on a finding; gosec runs in the lint job
+      # on every event.
 
       - name: Tear down
         if: always()
@@ -892,94 +1050,10 @@ jobs:
           [ -z "${IT_LEASE:-}" ] || docker rm "$IT_LEASE" >/dev/null 2>&1 || true
           docker buildx prune --builder "$BUILDX_BUILDER" --force --keep-storage "$BUILDKIT_KEEP_STORAGE" || true
 
-  # CUSTOMIZE (#1425): govulncheck, the `vuln` part of make security, as its
-  # own full-tier job. Its symbol scan of the root module reached 16.7 GB and
-  # was OOM-killed under the image job's 16g security step (run 370010), and
-  # GOVULN_MODULES cannot split the root module. Here it runs alone at 20g
-  # with GOMEMLIMIT 18GiB below the cap, so the GC works before the cgroup
-  # kills it. The job builds the toolchain image as the image job does: a
-  # TOOLCHAIN_IMAGE lives only on its builder's daemon, and the project's
-  # BuildKit cache keeps a second build warm. It runs beside the image job,
-  # not after it, so the scan never waits on the suites.
-  vuln:
-    name: Vulnerability scan (govulncheck)
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk-docker"]') || 'ubuntu-latest' }}
-    # Full tier only, as the security step was (v1.23); a job-level `if:`
-    # cannot read CI_FULL_TIER, so it repeats the selection. v1.29.3: on a
-    # schedule run, only on the schedule guard's `run`.
-    if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
-    needs: preflight     # v1.29.3
-    timeout-minutes: 60
-    env:
-      # The image job's builder (see there).
-      BUILDX_BUILDER: go-trusted-platform-ci
-      BUILDKIT_KEEP_STORAGE: 40gb
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-
-      - name: Mask the module credentials
-        run: |
-          for v in GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
-            val=${!v:-}
-            [ -n "$val" ] || continue
-            echo "::add-mask::$val"
-            case $val in *://*:*@*) t=${val#*://}; t=${t%%@*}; echo "::add-mask::${t#*:}" ;; esac
-          done
-
-      - name: Reap stale CI stacks
-        run: scripts/reap-stale-ci-stacks.sh go-trusted-platform-ci-
-
-      # The package keys the toolchain build hashes, as in the image job.
-      - name: Read the package indexes
-        run: |
-          base=$(sed -n 's/^GO_IMAGE=//p' scripts/tool-pins.sh)
-          echo "APK_INDEX_SUM=$(APK_BASE_IMAGES="$base" scripts/apk-index-sum.sh)" >> "$GITHUB_ENV"
-          echo "APT_REFRESH=$(scripts/apt-refresh-key.sh)" >> "$GITHUB_ENV"
-
-      - name: Prepare the project's BuildKit builder
-        run: |
-          docker buildx inspect "$BUILDX_BUILDER" >/dev/null 2>&1 ||
-            docker buildx create --name "$BUILDX_BUILDER" --driver docker-container >/dev/null ||
-            docker buildx inspect "$BUILDX_BUILDER" >/dev/null
-          docker buildx inspect --bootstrap "$BUILDX_BUILDER" >/dev/null ||
-            docker buildx inspect --bootstrap "$BUILDX_BUILDER" >/dev/null
-          docker buildx prune --builder "$BUILDX_BUILDER" --force --keep-storage "$BUILDKIT_KEEP_STORAGE"
-
-      - name: Write the module credential file
-        run: |
-          umask 077
-          : > "$RUNNER_TEMP/gomodauth.env"
-          for v in GOPRIVATE GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
-            if [ -n "${!v:-}" ]; then printf '%s=%s\n' "$v" "${!v}" >> "$RUNNER_TEMP/gomodauth.env"; fi
-          done
-
-      - name: Build the toolchain image
-        run: |
-          # v1.29.4 and v1.29.5: Athens first when the runner sets DEVCACHE_GOPROXY
-          # and the cache answers, `|` so any error falls through to the public
-          # proxy; "$bp" is one quoted make argument and the Makefile quotes it.
-          bp=
-          if [ -n "${DEVCACHE_GOPROXY:-}" ] && curl -s -o /dev/null --max-time 5 "$DEVCACHE_GOPROXY/"; then
-            bp="GO_BUILD_PROXY=$DEVCACHE_GOPROXY|https://proxy.golang.org"
-          fi
-          make docker-build-toolchain ${bp:+"$bp"} MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env"
-          echo "TOOLCHAIN_IMAGE=$(make -s toolchain-image)" >> "$GITHUB_ENV"
-
-      # make vuln: govulncheck over GOVULN_MODULES with GOVULN_ALLOW, both
-      # single-sourced in the Makefile, with a network for the database.
-      - name: make vuln
-        env:
-          IN_IMAGE_NETWORK: bridge
-          IN_IMAGE_MEMORY: 20g
-          IN_IMAGE_GOMEMLIMIT: 18GiB
-          IN_IMAGE_GOMAXPROCS: 8
-        run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make vuln
-
-      - name: Tear down
-        if: always()
-        run: |
-          rm -f "$RUNNER_TEMP/gomodauth.env"
-          docker buildx prune --builder "$BUILDX_BUILDER" --force --keep-storage "$BUILDKIT_KEEP_STORAGE" || true
+  # v1.42 (ruling 742 (1)): the `vuln` job (CUSTOMIZE #1425, `make vuln`,
+  # govulncheck at 20g) is gone from this workflow: govulncheck reads the
+  # vulnerability database, so its answer changes with no change to the
+  # tree. scans.yml runs `make vuln` on main with the same limits.
 
   # v1.27 (lint-gates): the repo's grep gates (`make lint-gates`; today the
   # InsecureSkipVerify allowlist) run beside lint, not after it, so a gate's
@@ -997,10 +1071,12 @@ jobs:
     # v1.26: never on a draft. v1.29.3: on a schedule run, only on the
     # schedule guard's `run`.
     if: ${{ !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
-    # Race's runs-on (#1589 follow-up): the bigdisk runner for a push to main
-    # and a same-repository PR, ubuntu-latest otherwise.
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
+    # Runner (ruling 999): ubuntu-latest. The 10.6 GB above was a container
+    # layer; the job now runs on the runner with no image.
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}   # v1.48
     timeout-minutes: 15
+    env:
+      GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -1025,13 +1101,15 @@ jobs:
       # v1.29.1: no -k; the first failing gate ends the step (ruling 226(15)).
       - name: make lint-gates
         if: ${{ steps.probe.outputs.has_target == 'true' }}
-        # InfoSec O-2: the public proxy alone, no direct fallback, and
-        # read-only module mode, as go-quicbaas's pool test jobs set them.
-        # -buildvcs=false is kept from the workflow env this GOFLAGS replaces.
+        # Ruling 869 (provisional, pending InfoSec's review of M-8 and O-2):
+        # the pool's LAN-first GOPROXY, never direct, with the checksum
+        # database on and read-only module mode, which the job's integrity
+        # step checks. -buildvcs=false is kept from the workflow env.
         env:
           GOFLAGS: -mod=readonly -buildvcs=false
-          GOPROXY: https://proxy.golang.org
-        run: make lint-gates
+        run: |
+          scripts/ci-go-integrity.sh
+          make lint-gates
 
       # v1.32 (2026-11-08, Company Agent m2098 item 2, InfoSec finding): the
       # internal-name gate. Its patterns are internal values, so they never
@@ -1152,14 +1230,16 @@ jobs:
   # Job id is `sdkjs`, deliberately without a hyphen: ci-gate dereferences it
   # as `needs.sdkjs.result`. Do not "tidy" this to `sdk-js`.
   #
-  # Race's runs-on (#1589 follow-up): npm needs no Docker. As a bigdisk job it
-  # needs preflight and its if: carries the guard.
+  # Runner (ruling 999): ubuntu-latest. It still needs preflight and its if:
+  # carries the guard, as it did on the bigdisk pool.
   sdkjs:
     name: SDK JavaScript
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}   # v1.48
     if: ${{ needs.preflight.outputs.docs_only != 'true' && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     needs: preflight
     timeout-minutes: 15
+    env:
+      GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -1185,29 +1265,30 @@ jobs:
         # setting). npm test and npm run still run the script they name.
         env:
           npm_config_ignore_scripts: ${{ runner.environment == 'self-hosted' }}
-        run: make test-sdk-js
+        run: |
+          scripts/ci-go-integrity.sh
+          make test-sdk-js
 
       - name: JavaScript SDK lint
         # InfoSec O-3: as in the sdkjs job.
         env:
           npm_config_ignore_scripts: ${{ runner.environment == 'self-hosted' }}
-        run: make lint-sdk-js
+        run: |
+          scripts/ci-go-integrity.sh
+          make lint-sdk-js
 
   # CUSTOMIZE (race): the unit suite under the race detector, minus
   # RACE_EXCLUDE (#37). Race detection is sampling, not proof: a ratchet
   # against reintroduction. Hosted runners (CA m2061): four shards, each a
   # round-robin quarter of test-race's package list (Makefile SHARD/SHARDS),
-  # to fit a hosted job's 4 cores and 6 hours. The one exception to the
-  # hosted runners (m2403 (2), m2406 (1), 2026-11-10): a push to main and a
-  # pull_request from this repository run on the bigdisk runner
-  # [self-hosted, linux, x64, bigdisk]; fork PRs, other branches,
-  # workflow_dispatch and the schedule stay on ubuntu-latest. As on every
-  # bigdisk job, it needs preflight and its if: carries the guard. The
-  # runner image carries cpio and libssl-dev, so the apt step is hosted-only,
-  # and the checkout token is not persisted.
+  # to fit a hosted job's 4 cores and 6 hours. Runner (ruling 999, which
+  # ends m2403 (2) / m2406 (1)'s bigdisk route): ubuntu-latest on every
+  # event. It still needs preflight and its if: carries the guard; the apt
+  # step installs cpio and libssl-dev, and the checkout token is not
+  # persisted.
   race:
     name: Race (shard ${{ matrix.shard }}/4)
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}   # v1.48
     if: ${{ needs.preflight.outputs.docs_only != 'true' && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     needs: preflight
     timeout-minutes: 60
@@ -1215,6 +1296,8 @@ jobs:
       fail-fast: false
       matrix:
         shard: [0, 1, 2, 3]
+    env:
+      GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -1227,20 +1310,23 @@ jobs:
 
       # cpio: pkg/diskimage/netboot repacks an initramfs with it. libssl-dev:
       # pkg/app's IDevID mTLS tests run go-tpm-tools' simulator, which
-      # compiles the reference TPM with cgo against OpenSSL (#149). The
-      # bigdisk runner's image carries both: hosted runners only.
+      # compiles the reference TPM with cgo against OpenSSL (#149). The job is
+      # hosted on every event (ruling 999), so this step always runs; a
+      # self-hosted runner's image carries both.
       - name: Install cpio and the OpenSSL headers
         if: runner.environment == 'github-hosted'
         run: sudo apt-get update && sudo apt-get install -y cpio libssl-dev
 
       - name: make test-race
-        # InfoSec O-2: the public proxy alone, no direct fallback, and
-        # read-only module mode, as go-quicbaas's pool test jobs set them.
-        # -buildvcs=false is kept from the workflow env this GOFLAGS replaces.
+        # Ruling 869 (provisional, pending InfoSec's review of M-8 and O-2):
+        # the pool's LAN-first GOPROXY, never direct, with the checksum
+        # database on and read-only module mode, which the job's integrity
+        # step checks. -buildvcs=false is kept from the workflow env.
         env:
           GOFLAGS: -mod=readonly -buildvcs=false
-          GOPROXY: https://proxy.golang.org
-        run: make test-race SHARD=${{ matrix.shard }} SHARDS=4
+        run: |
+          scripts/ci-go-integrity.sh
+          make test-race SHARD=${{ matrix.shard }} SHARDS=4
 
   # ==========================================================================
   # The full tier. These gate every push to main, the schedule, and a PR
@@ -1255,14 +1341,16 @@ jobs:
   #
   # Job id is `web`, one word, for the same reason `sdkjs` is.
   #
-  # Race's runs-on (#1589 follow-up): npm and next build need no Docker. As a
-  # bigdisk job it needs preflight and its if: carries the guard.
+  # Runner (ruling 999): ubuntu-latest. It still needs preflight and its if:
+  # carries the guard, as it did on the bigdisk pool.
   web:
     name: Web Console
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}   # v1.48
     if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     needs: preflight
     timeout-minutes: 15
+    env:
+      GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -1281,16 +1369,79 @@ jobs:
         # InfoSec O-3: as in the sdkjs job.
         env:
           npm_config_ignore_scripts: ${{ runner.environment == 'self-hosted' }}
-        run: make web-deps
+        run: |
+          scripts/ci-go-integrity.sh
+          make web-deps
 
       - name: Web console unit tests
-        run: make web-test-unit
+        run: |
+          scripts/ci-go-integrity.sh
+          make web-test-unit
 
       - name: Web console typecheck
-        run: make web-typecheck
+        run: |
+          scripts/ci-go-integrity.sh
+          make web-typecheck
 
       - name: Web console build
-        run: make web-build-check
+        run: |
+          scripts/ci-go-integrity.sh
+          make web-build-check
+
+  # Real-server Playwright specs (#2034, epic #1665, ruling 1031): builds the
+  # tpm_simulator platformd with the console embedded and runs
+  # web/playwright.real-server.config.ts against it. Hosted (ruling 999): the
+  # job installs chromium itself, which the pool image does not carry.
+  web-e2e:
+    name: Web Console E2E
+    runs-on: ubuntu-latest
+    if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
+    needs: preflight
+    timeout-minutes: 30
+    env:
+      GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          cache: ${{ runner.environment != 'self-hosted' }}
+          go-version: ${{ env.GO_VERSION }}
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
+      # The tpm_simulator build compiles the reference TPM with cgo against
+      # OpenSSL (#149), as in the race job.
+      - name: Install cpio and the OpenSSL headers
+        if: runner.environment == 'github-hosted'
+        run: sudo apt-get update && sudo apt-get install -y cpio libssl-dev
+
+      - name: Install from lockfiles and build the SDK the console consumes
+        run: |
+          scripts/ci-go-integrity.sh
+          make web-deps
+
+      - name: Install the Playwright chromium
+        run: cd web && npx playwright install --with-deps chromium
+
+      - name: Real-server Playwright specs
+        run: |
+          scripts/ci-go-integrity.sh
+          make web-e2e WEB_E2E_BUILD=1
+
+      - name: Upload the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: web-e2e-playwright
+          path: |
+            web/playwright-report
+            web/test-results
+          if-no-files-found: ignore
 
   # One integration image per run for every leg (#1119). Each leg used to build
   # it itself: five `docker buildx build --load` runs of 6.5 to 7.3 minutes on
@@ -1299,7 +1450,7 @@ jobs:
   # run in it by that id (see the integration job's lease step).
   integration-image:
     name: Integration image
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk-docker"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}   # v1.48
     if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     # As the legs had: nothing is built for a run whose image job failed, so
     # no image is left for legs that never run. v1.29.3: the guard
@@ -1555,7 +1706,7 @@ jobs:
   # the teardown runs last under if: always().
   integration:
     name: Integration [build tag integration]
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk-docker"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}   # v1.48
     # v1.26: never on a draft PR, ci:full or not. v1.29.3: on a schedule run,
     # only on the schedule guard's `run`.
     if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
@@ -1583,6 +1734,7 @@ jobs:
     # load, about 13 min, rounded up to 15 above the old 60.
     timeout-minutes: 75
     env:
+      GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
       IT_PROJECT: go-trusted-platform-ci-${{ github.run_id }}-${{ github.run_attempt }}-leg${{ matrix.leg }}
       IT_IMAGE_ID: ${{ needs.integration-image.outputs.image_id }}
       IT_IMAGE_IDENTITY: ${{ needs.integration-image.outputs.image_identity }}
@@ -1762,11 +1914,28 @@ jobs:
           path: ${{ runner.temp }}/it-image
 
       - name: Download the integration image (GitHub)
-        if: steps.lease.outputs.leased != 'true' && needs.integration-image.outputs.image_ref == '' && github.server_url == 'https://github.com'
+        # Ruling 862: hosted runners only. On the pool the image comes from the
+        # LAN registry or the lease; a failed pull fails the job rather than
+        # fetching the artifact over the owner's WAN.
+        if: steps.lease.outputs.leased != 'true' && needs.integration-image.outputs.image_ref == '' && github.server_url == 'https://github.com' && runner.environment == 'github-hosted'
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: ${{ needs.integration-image.outputs.artifact }}
           path: ${{ runner.temp }}/it-image
+
+      # Rulings 862 and 876 (876 supersedes 675 for pool legs): on a pool
+      # runner the image job's image reaches this daemon only by the lease or
+      # the LAN registry pull, which sets leased=true only once the pulled
+      # layers match IT_IMAGE_IDENTITY. With neither (a failed pull, a failed
+      # re-tag, an identity mismatch, or no registry reference), fail here:
+      # the artifact would cross the owner's WAN, and the fallback below
+      # would build an image the image job never verified. Hosted runners and
+      # Gitea keep their paths.
+      - name: No verified integration image on this pool runner
+        if: steps.lease.outputs.leased != 'true' && steps.pull.outputs.leased != 'true' && runner.environment != 'github-hosted' && github.server_url == 'https://github.com'
+        run: |
+          echo "::error::neither the lease nor the LAN registry pull gave this pool runner the image job's integration image ($IT_IMAGE_IDENTITY): it is never fetched over the WAN nor rebuilt unverified (rulings 862, 876)"
+          exit 1
 
       # The load keeps the image, not its id (run 70938): the id is the
       # config digest on the classic store and the manifest digest on the
@@ -1852,7 +2021,9 @@ jobs:
       # to a listed test (a build failure, a panic or timeout, an unreadable
       # log) fails the step. ci-gate reads this job's result unchanged.
       - name: Run integration suite leg ${{ matrix.leg }} in the integration image
-        run: make integration-test-leg LEG="${{ matrix.leg }}" IT_PREBUILT=1 IT_PROJECT="$IT_PROJECT" IT_IMAGE="$IT_IMAGE" IT_FOREIGN_BASELINE=1 IT_LOG="$RUNNER_TEMP/integration-leg${{ matrix.leg }}.log"
+        run: |
+          scripts/ci-go-integrity.sh
+          make integration-test-leg LEG="${{ matrix.leg }}" IT_PREBUILT=1 IT_PROJECT="$IT_PROJECT" IT_IMAGE="$IT_IMAGE" IT_FOREIGN_BASELINE=1 IT_LOG="$RUNNER_TEMP/integration-leg${{ matrix.leg }}.log"
 
       - name: Tear down
         if: always()
@@ -1881,9 +2052,10 @@ jobs:
     needs: preflight   # v1.34
     # v1.30: a dispatch off main is refused, so soak runs only on `run`.
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && needs.preflight.outputs.verdict == 'run' }}
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk-docker"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}   # v1.48
     timeout-minutes: 90       # CUSTOMIZE: SOAK_MINUTES plus one iteration
     env:
+      GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
       SOAK_MINUTES: 30        # CUSTOMIZE
       SOAK_TARGET: integration-test   # CUSTOMIZE: a make target of the integration image
       IT_PROJECT: go-trusted-platform-ci-${{ github.run_id }}-${{ github.run_attempt }}-soak
@@ -2015,6 +2187,7 @@ jobs:
       # iteration runs in the leased image (IT_PREBUILT=1).
       - name: Soak (integration suite, looped)
         run: |
+          scripts/ci-go-integrity.sh
           deadline=$(( $(date +%s) + SOAK_MINUTES * 60 ))
           i=0
           while [ "$(date +%s)" -lt "$deadline" ]; do
@@ -2062,12 +2235,10 @@ jobs:
     # round-robin quarter of the package list (Makefile SHARD/SHARDS), to fit
     # a hosted job's 4 cores and 6 hours. The job carries no module
     # credential and no proxy setting.
-    # Routing (m2475): a push to main runs on the bigdisk pool, which has
-    # cpio and libssl-dev, so the apt step is hosted-only; the schedule and
-    # workflow_dispatch stay on ubuntu-latest. A bigdisk job carries the
-    # schedule guard, so the if: is the guarded main tier
-    # (pkg/arch/citiers_test.go mainOnlyGuardedIf).
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
+    # Runner (ruling 999, which ends m2475's route): ubuntu-latest on every
+    # event, so the apt step installs cpio and libssl-dev. The if: keeps the
+    # guarded main tier (pkg/arch/citiers_test.go mainOnlyGuardedIf).
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}   # v1.48
     strategy:
       fail-fast: false
       matrix:
@@ -2075,6 +2246,8 @@ jobs:
     needs: preflight
     if: ${{ github.event_name != 'pull_request' && (needs.preflight.outputs.verdict == 'run') }}
     timeout-minutes: 60
+    env:
+      GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -2090,7 +2263,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cpio libssl-dev
 
       - name: FIPS build and unit tests
-        run: make test-fips SHARD=${{ matrix.shard }} SHARDS=4
+        run: |
+          scripts/ci-go-integrity.sh
+          make test-fips SHARD=${{ matrix.shard }} SHARDS=4
 
   # ==========================================================================
   # The gate
@@ -2129,7 +2304,8 @@ jobs:
   # runs: no repository code, no token beyond github.token (contents: read).
   signatures:
     name: Signatures
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}   # v1.48
+    needs: preflight   # v1.48: its runs-on reads the runner selection
     if: ${{ !github.event.pull_request.draft }}
     timeout-minutes: 5
     permissions:
@@ -2232,18 +2408,16 @@ jobs:
   ci-gate:
     timeout-minutes: 10
     name: CI Gate
-    # The reserved 1-CPU ci-gate runners (DS-2273), so the gate does not queue
-    # behind ubuntu-latest jobs: never add a checkout or a `uses:` step here.
-    # CA m2475 (2h): the gate runs on the self-hosted bigdisk pool (main pushes
-    # and same-repo PRs), so it never waits in the hosted queue and always
-    # reports; it needs no Docker. Fork PRs stay on ubuntu-latest.
-    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
+    # Never add a checkout or a `uses:` step here: the gate reads only its
+    # needs' results. Runner (ruling 999, which ends CA m2475 (2h)'s bigdisk
+    # route): ubuntu-latest on every event; it needs no Docker.
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner || '"ubuntu-latest"') || 'ubuntu-latest' }}   # v1.48
     # v1.29.3: on a schedule run the schedule guard decides. `busy` skips the
     # gate, so `CI / CI Gate (schedule)` posts `skipped` (Gitea 1.27.1 posts a
     # skipped job as `skipped`, not `success`), never a green nightly. Every
     # other verdict, an empty one included, runs it.
     if: ${{ always() && (github.event_name != 'schedule' || needs.preflight.outputs.verdict != 'busy') }}
-    needs: [preflight, lint, image, lint-gates, sdkjs, race, web, integration-image, integration, soak, vuln, fips, signatures]   # v1.34, v1.30 lint, v1.35 signatures
+    needs: [preflight, lint, image, lint-gates, sdkjs, race, web, web-e2e, integration-image, integration, soak, fips, signatures]   # v1.34, v1.30 lint, v1.35 signatures, v1.42 no vuln
     steps:
       - name: Verify every job succeeded
         env:
@@ -2267,10 +2441,10 @@ jobs:
           RESULT_SDK_JS: ${{ needs.sdkjs.result }}
           RESULT_RACE: ${{ needs.race.result }}
           RESULT_WEB: ${{ needs.web.result }}
+          RESULT_WEB_E2E: ${{ needs.web-e2e.result }}
           RESULT_INTEGRATION_IMAGE: ${{ needs.integration-image.result }}
           RESULT_INTEGRATION: ${{ needs.integration.result }}
           RESULT_SOAK: ${{ needs.soak.result }}
-          RESULT_VULN: ${{ needs.vuln.result }}
           RESULT_FIPS: ${{ needs.fips.result }}
           RESULT_SIGNATURES: ${{ needs.signatures.result }}
         run: |
@@ -2337,9 +2511,9 @@ jobs:
           check docs sdkjs "$RESULT_SDK_JS"
           check docs race "$RESULT_RACE"
           check full web "$RESULT_WEB"
+          check full web-e2e "$RESULT_WEB_E2E"
           check full integration-image "$RESULT_INTEGRATION_IMAGE"
           check full integration "$RESULT_INTEGRATION"
-          check full vuln "$RESULT_VULN"
           check nightly soak "$RESULT_SOAK"
           check main fips "$RESULT_FIPS"
           check pr signatures "$RESULT_SIGNATURES"

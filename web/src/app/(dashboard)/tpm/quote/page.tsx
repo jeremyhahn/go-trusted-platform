@@ -158,6 +158,9 @@ export default function TPMQuotePage() {
         pcrIndices: selectedPCRs,
         nonce: nonceB64,
       });
+      // The SDK reports a refusal in the response, not by throwing; without
+      // this the binding check below reports a missing binding instead.
+      if (resp.error !== undefined) throw new Error(resp.error.message);
       const payload = resp.data ?? null;
       // Refuse a quote not bound to SHA-256(nonce || channelBinding).
       await checkQuoteBinding(payload?.quote ?? "", nonceB64, payload?.channelBinding);
@@ -211,6 +214,9 @@ export default function TPMQuotePage() {
         // The signature is checked under the scheme the quote declared.
         signatureAlgorithm: verifyScheme,
       });
+      // The SDK reports a refusal in the response, not by throwing: a
+      // refused verify is an error, not an INVALID quote.
+      if (resp.error !== undefined) throw new Error(resp.error.message);
       const payload = resp.data ?? null;
       setVerifyResult(payload);
       toast({

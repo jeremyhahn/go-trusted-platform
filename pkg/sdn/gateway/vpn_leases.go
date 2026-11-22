@@ -30,6 +30,11 @@ import (
 // it: the desired-config pull the gateway rebuilds its leases from on start,
 // and the write-through of every admission, renewal and revocation.
 // controlplane.Reporter implements it.
+// gatewayIdentity is a lease control plane bound to this gateway's
+// certificate identity (the reporter): its ID owner-tags the VPN lease
+// allocations so a restart reclaims only addresses this gateway wrote.
+type gatewayIdentity interface{ GatewayID() string }
+
 type VPNLeaseControl interface {
 	FetchDesiredConfig(ctx context.Context) (*gwstate.DesiredConfig, error)
 	PutVPNLease(ctx context.Context, lease *gwstate.DesiredVPNLease) error

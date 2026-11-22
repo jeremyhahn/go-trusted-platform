@@ -76,12 +76,6 @@ func (s stubInvitationDAO) GetPendingByTenant(ctx context.Context, tenantID stri
 	return nil, nil
 }
 
-type stubRoleDAO struct{ stubDAO[*entities.Role] }
-
-func (s stubRoleDAO) GetByName(ctx context.Context, name string) (*entities.Role, error) {
-	return nil, datastore.ErrRecordNotFound
-}
-
 type stubDAOFactory struct{}
 
 func (f stubDAOFactory) UserDAO() (datastore.UserDAO, error) {
@@ -92,9 +86,6 @@ func (f stubDAOFactory) RegistrationDAO() (datastore.RegistrationDAO, error) {
 }
 func (f stubDAOFactory) InvitationDAO() (datastore.InvitationDAO, error) {
 	return stubInvitationDAO{}, nil
-}
-func (f stubDAOFactory) RoleDAO() (datastore.RoleDAO, error) {
-	return stubRoleDAO{}, nil
 }
 func (f stubDAOFactory) WebAuthnDAO() (datastore.WebAuthnDAO, error) {
 	return stubDAO[*entities.Blob]{}, nil

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/vpn"
 	ipsecconfig "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/vxlan"
 )
@@ -990,6 +991,47 @@ func TestGatewayConfig_HasEnabledServices(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.config.HasEnabledServices(); got != tt.expected {
 				t.Errorf("HasEnabledServices() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGatewayConfig_EnabledServicesVPNWireGuard(t *testing.T) {
+	// vpn-wireguard is the `wireguard` process's service (ruling 942): it is
+	// enabled with the management VPN only when the VPN offers the
+	// WireGuard plane; the default data plane is MASQUE alone (#1698).
+	vpnConfig := func(enabled bool, planes ...string) *GatewayConfig {
+		cfg := &GatewayConfig{ManagementVPN: &ManagementVPNServiceConfig{Enabled: enabled}}
+		for _, p := range planes {
+			cfg.ManagementVPN.DataPlanes = append(cfg.ManagementVPN.DataPlanes, vpn.DataPlaneKind(p))
+		}
+		return cfg
+	}
+	tests := []struct {
+		name      string
+		config    *GatewayConfig
+		wireguard bool
+	}{
+		{"wireguard plane", vpnConfig(true, "wireguard"), true},
+		{"wireguard and masque", vpnConfig(true, "masque", "wireguard"), true},
+		{"masque only", vpnConfig(true, "masque"), false},
+		{"default planes", vpnConfig(true), false},
+		{"vpn disabled", vpnConfig(false, "wireguard"), false},
+		{"no vpn section", &GatewayConfig{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.config.EnabledServices()
+			idx := map[string]int{}
+			for i, name := range got {
+				idx[name] = i
+			}
+			wg, hasWG := idx[ServiceVPNWireGuard]
+			if hasWG != tt.wireguard {
+				t.Fatalf("EnabledServices() = %v, vpn-wireguard enabled %v, want %v", got, hasWG, tt.wireguard)
+			}
+			if hasWG && wg != idx[ServiceManagementVPN]+1 {
+				t.Errorf("EnabledServices() = %v: vpn-wireguard must follow management-vpn", got)
 			}
 		})
 	}

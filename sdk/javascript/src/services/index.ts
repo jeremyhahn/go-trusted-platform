@@ -14,6 +14,13 @@ export { ComputeService } from './compute-service.js';
 export { DeviceService } from './device-service.js';
 export { DNSService } from './dns-service.js';
 export { NTPService } from './ntp-service.js';
+export {
+  CapabilitiesService,
+  CAPABILITY_REASON_NOT_CONFIGURED,
+  CAPABILITY_REASON_UNIMPLEMENTED,
+  CAPABILITY_REASON_BLOCKED_INTEGRATION,
+} from './capabilities-service.js';
+export type { Capability, CapabilitiesResponse } from './capabilities-service.js';
 export type {
   NTPStatus,
   NTPSource,
@@ -41,6 +48,29 @@ export { TenantService } from './tenant-service.js';
 export { TPMService } from './tpm-service.js';
 export { VTPMService, InvalidDeviceProfileIdError } from './vtpm-service.js';
 export { VPNService } from './vpn-service.js';
+export { ProxyService } from './proxy-service.js';
+export type {
+  ProxyAuthRequirements,
+  ProxyRoute,
+  ProxyBackend,
+  ProxyBackendTLS,
+  ProxyPool,
+  ProxyZonePair,
+  ListProxyRoutesResponse,
+  GetProxyRouteResponse,
+  ListProxyPoolsResponse,
+  GetProxyPoolResponse,
+  GetProxyConfigResponse,
+  GetProxyStatusResponse,
+  GetProxyZoneMatrixResponse,
+  CreateProxyRouteResponse,
+  UpdateProxyRouteResponse,
+  DeleteProxyRouteResponse,
+  CreateProxyPoolResponse,
+  UpdateProxyPoolResponse,
+  DeleteProxyPoolResponse,
+  ReloadProxyConfigResponse,
+} from './proxy-service.js';
 export { InvitationService } from './invitation-service.js';
 export { EABService } from './eab-service.js';
 

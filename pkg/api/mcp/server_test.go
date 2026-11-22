@@ -561,7 +561,8 @@ func TestServer_handleToolsCall(t *testing.T) {
 			},
 		}
 		config := &Config{
-			AuthManager: authMgr,
+			AuthManager: pepCaller(authMgr),
+			PEPClient:   &recordingPEP{allowed: true},
 		}
 		server := NewServer(svc, config, log)
 
@@ -594,7 +595,8 @@ func TestServer_handleToolsCall(t *testing.T) {
 			},
 		}
 		config := &Config{
-			AuthManager: authMgr,
+			AuthManager: pepCaller(authMgr),
+			PEPClient:   &recordingPEP{allowed: true},
 		}
 		server := NewServer(svc, config, log)
 
@@ -626,7 +628,8 @@ func TestServer_handleToolsCall(t *testing.T) {
 			},
 		}
 		config := &Config{
-			AuthManager: authMgr,
+			AuthManager: pepCaller(authMgr),
+			PEPClient:   &recordingPEP{allowed: true},
 		}
 		server := NewServer(svc, config, log)
 

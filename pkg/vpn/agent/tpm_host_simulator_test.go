@@ -17,6 +17,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/fips140"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -36,8 +37,20 @@ import (
 
 // newSimulatedHostTPM opens go-tpm-tools' simulator the way openXKMSTPM opens
 // the host TPM, with no key backend, and mints an IDevID on it.
+// skipIfFIPSOnlyXKMSSession skips a simulator test under GODEBUG=fips140=only.
+// go-xkms opens an unsalted, unbound policy session in CreateIDevID, so the
+// session HMAC key is zero bytes and crypto/hmac panics in FIPS-only mode
+// (#1979). The upstream go-xkms fix (plan slice 2) drops this skip.
+func skipIfFIPSOnlyXKMSSession(t *testing.T) {
+	t.Helper()
+	if fips140.Enforced() {
+		t.Skip("#1979: go-xkms CreateIDevID uses an unsalted policy session (zero-length HMAC key), which panics under fips140=only")
+	}
+}
+
 func newSimulatedHostTPM(t *testing.T) *xkmsTPM {
 	t.Helper()
+	skipIfFIPSOnlyXKMSSession(t)
 
 	sim, err := simulator.GetWithFixedSeedInsecure(1234567890)
 	require.NoError(t, err)

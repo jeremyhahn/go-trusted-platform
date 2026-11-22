@@ -461,7 +461,8 @@ func TestEngine_AuthenticatePort(t *testing.T) {
 
 		cert := createTestCertificate(t, x509.Certificate{
 			Subject: pkix.Name{
-				Organization: []string{"tenant-1"},
+				OrganizationalUnit: []string{"tenant-1"},
+				Organization:       []string{"tenant-1"},
 			},
 		})
 
@@ -708,7 +709,8 @@ func createZoneCert(t *testing.T, tenantID, zoneName string) *x509.Certificate {
 	require.NoError(t, err)
 	return createTestCertificate(t, x509.Certificate{
 		Subject: pkix.Name{
-			Organization: []string{tenantID},
+			OrganizationalUnit: []string{tenantID},
+			Organization:       []string{tenantID},
 		},
 		ExtraExtensions: []pkix.Extension{ext},
 	})
