@@ -371,10 +371,11 @@ test.describe('Registration Flow', () => {
     await page.goto('/auth/webauthn?status=not_registered');
 
     await page.fill('input[placeholder="Enter your email"]', 'failuser');
+    const registrationResponse = page.waitForResponse((r) => r.url().includes('/api/v1/webauthn/registration/'));
     await page.click('button:has-text("Register")');
 
-    // Wait for form to process
-    await page.waitForTimeout(1000);
+    // Wait for the mocked registration response
+    await registrationResponse;
 
     // Should stay on registration page (WebAuthn requires browser interaction)
     await expect(page).toHaveURL(/\/auth\/webauthn/);
@@ -397,26 +398,22 @@ test.describe('Registration Flow', () => {
     await page.goto('/auth/webauthn?status=not_registered');
 
     await page.fill('input[placeholder="Enter your email"]', 'existinguser');
+    const registrationResponse = page.waitForResponse((r) => r.url().includes('/api/v1/webauthn/registration/'));
     await page.click('button:has-text("Register")');
 
-    // Wait for the form to process
-    await page.waitForTimeout(1000);
+    // Wait for the mocked registration response
+    await registrationResponse;
 
     // The frontend should show the error message about user already existing
-    // Use more specific selector to avoid strict mode violation
+    // (either the error box or the specific text), polled until it renders
     const errorMessage = page.locator('[class*="errorMessage"]');
-    const hasErrorMessage = await errorMessage.isVisible();
-
-    // Also check for the specific text pattern
-    const hasExistsError = await page.getByText('An account with this email already exists').isVisible();
+    const existsError = page.getByText('An account with this email already exists');
+    await expect(errorMessage.or(existsError).first()).toBeVisible();
 
     // At minimum, the form should still be visible and username filled
     const usernameInput = page.getByPlaceholder('Enter your email');
     await expect(usernameInput).toBeVisible();
     await expect(usernameInput).toHaveValue('existinguser');
-
-    // The test passes if the error message is shown
-    expect(hasErrorMessage || hasExistsError).toBe(true);
   });
 });
 
@@ -783,13 +780,6 @@ test.describe('Accessibility', () => {
     await usernameInput.click();
     await usernameInput.focus();
 
-    // Wait a moment for focus to settle
-    await page.waitForTimeout(100);
-
-    // Use evaluate-based focus check for more reliable cross-browser/device behavior
-    const isFocused = await usernameInput.evaluate((el) => {
-      return document.activeElement === el;
-    });
-    expect(isFocused).toBe(true);
+    await expect(usernameInput).toBeFocused();
   });
 });

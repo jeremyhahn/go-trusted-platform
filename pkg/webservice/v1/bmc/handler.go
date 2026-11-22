@@ -752,6 +752,16 @@ func (h *handler) writeBMCError(w http.ResponseWriter, r *http.Request, profileI
 		h.responseWriter.Error404(w, r, profileNotFound)
 		return
 	}
+	var slotOccupied bmcpkg.ErrSlotOccupied
+	if errors.As(err, &slotOccupied) {
+		h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{Code: http.StatusConflict, Error: slotOccupied.Error(), Success: false})
+		return
+	}
+	var connAccount bmcpkg.ErrConnectionAccount
+	if errors.As(err, &connAccount) {
+		h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{Code: http.StatusConflict, Error: connAccount.Error(), Success: false})
+		return
+	}
 
 	h.logger.Errorf("bmc: %s failed for profile_id=%d: %v", operation, profileID, err)
 	h.responseWriter.Error500(w, r, ErrServiceError{Operation: operation, Cause: err})
