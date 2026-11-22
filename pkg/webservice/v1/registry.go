@@ -813,6 +813,7 @@ type RestHandlerRegistry interface {
 	PXEWebhookEnabled() bool
 	NTPServiceServer() platformv1.NTPServiceServer
 	VPNServiceServer() platformv1.VPNServiceServer
+	ProxyServiceServer() platformv1.ProxyServiceServer
 	AppServiceServers() restapi.AppServiceServers
 	RegistryService() grpcapi.RegistryService
 	OCIDistBackend() restregistry.OCIDistBackend
@@ -1036,6 +1037,9 @@ type RegistryParams struct {
 	InvitationServiceServer  platformv1.InvitationServiceServer
 	OverlayServiceServer     platformv1.OverlayServiceServer
 	PXEServiceServer         platformv1.PXEServiceServer
+	// ProxyServiceServer is the in-process ProxyService behind
+	// /api/v1/proxy (#2061); nil leaves the proxy routes unmounted.
+	ProxyServiceServer platformv1.ProxyServiceServer
 	// PXEWebhookEnabled is pxe.ServiceConfig.WebhookEnabled: it mounts the
 	// unauthenticated POST /pxe/webhook/complete (#238). Nothing in the
 	// daemon sets it today, so the route is not served.
@@ -2122,6 +2126,11 @@ func (registry *HandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer 
 // VPNServiceServer returns the in-process VPNService gRPC implementation, or nil.
 func (registry *HandlerRegistry) VPNServiceServer() platformv1.VPNServiceServer {
 	return registry.params.VPNServiceServer
+}
+
+// ProxyServiceServer returns the in-process ProxyService gRPC implementation, or nil.
+func (registry *HandlerRegistry) ProxyServiceServer() platformv1.ProxyServiceServer {
+	return registry.params.ProxyServiceServer
 }
 
 // AppServiceServers returns the daemon's Cache, Scheduler, Messaging and

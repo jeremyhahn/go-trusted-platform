@@ -45,6 +45,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 	restntp "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ntp"
 	restoverlay "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/overlay"
+	restproxy "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/proxy"
 	restpxe "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/pxe"
 	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/sdn"
@@ -221,6 +222,7 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.overlayRoutes()
 	v1Router.ntpRoutes()
 	v1Router.vpnRoutes()
+	v1Router.proxyRoutes()
 	v1Router.appServiceRoutes()
 	v1Router.pxeRoutes()
 	v1Router.sdnRoutes()
@@ -943,6 +945,36 @@ func (v1Router *Router) vpnRoutes() {
 	// management network, and a posture policy decides which of them stay
 	// there: operator work behind the admin gate, then vpn:read, vpn:write
 	// or vpn:admin per route, as on gRPC, QUIC and MCP.
+	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+}
+
+// proxyRoutes mounts the ProxyService routes on /api/v1/proxy (#2061), the
+// surface the web SDK's client.proxy calls.
+func (v1Router *Router) proxyRoutes() {
+	server := v1Router.restHandlerRegistry.ProxyServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("Proxy service server is nil - proxy routes not registered")
+		return
+	}
+	_, guard, err := v1Router.authorization()
+	if err != nil {
+		v1Router.logger.Error(err,
+			"Proxy routes not registered: the RBAC guard could not be built")
+		return
+	}
+	r := restproxy.NewRouter(
+		v1Router.logger,
+		server,
+		v1Router.responseWriter)
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		r.SetScopeAuthorizer(scoped)
+	}
+	// The reverse-proxy routes, pools and zone matrix decide what reaches
+	// which backend and are one platform-wide store with no tenant filter:
+	// operator work behind the admin gate, then the system tenant, then
+	// proxy:read, proxy:write or proxy:delete per route, as on gRPC, QUIC
+	// and MCP.
+	r.SetSystemTenantGuard(guard.RequireTenant(v1Router.restHandlerRegistry.TenantID()))
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
