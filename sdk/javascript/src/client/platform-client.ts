@@ -19,7 +19,6 @@ import { ComputeService } from '../services/compute-service.js';
 import { DeviceService } from '../services/device-service.js';
 import { DNSService } from '../services/dns-service.js';
 import { NTPService } from '../services/ntp-service.js';
-import { PlatformClusterService } from '../services/platform-cluster-service.js';
 import { CapabilitiesService } from '../services/capabilities-service.js';
 import { GatewayService } from '../services/gateway-service.js';
 import { IAMService } from '../services/iam-service.js';
@@ -188,9 +187,6 @@ export class PlatformClient {
 
   /** NTP status, sources and clock step */
   public readonly ntp: NTPService;
-
-  /** Platform cluster status, nodes, bootstrap, join and leave (/v1/cluster) */
-  public readonly platformCluster: PlatformClusterService;
 
   /** What the server offers, enabled and dark */
   public readonly capabilities: CapabilitiesService;
@@ -361,7 +357,6 @@ export class PlatformClient {
     this.device = new DeviceService(t);
     this.dns = new DNSService(t);
     this.ntp = new NTPService(t);
-    this.platformCluster = new PlatformClusterService(t);
     this.capabilities = new CapabilitiesService(t);
     this.gateway = new GatewayService(t);
     this.iam = new IAMService(t);

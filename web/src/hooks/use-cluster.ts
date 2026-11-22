@@ -95,26 +95,16 @@ export interface ClusterNodesResponse {
   total?: number;
 }
 
+/** The daemon ignores the proto's other fields (pkg/api/daemon/cluster_grpc_backend.go:95-170). */
 export interface BootstrapClusterRequest {
   cluster_name?: string;
   node_name?: string;
-  bind_address?: string;
-  bind_port?: number;
-  advertise_address?: string;
-  advertise_port?: number;
-  labels?: Record<string, string>;
-  metadata?: Record<string, string>;
 }
 
+/** The daemon ignores the proto's other fields (pkg/api/daemon/cluster_grpc_backend.go:95-170). */
 export interface JoinClusterRequest {
   node_name?: string;
-  bind_address?: string;
-  bind_port?: number;
-  advertise_address?: string;
-  advertise_port?: number;
   seed_addresses?: string[];
-  labels?: Record<string, string>;
-  metadata?: Record<string, string>;
 }
 
 export interface ClusterMembershipResponse {
@@ -123,9 +113,9 @@ export interface ClusterMembershipResponse {
   node?: ClusterNode;
 }
 
+/** The daemon ignores the proto's other fields (pkg/api/daemon/cluster_grpc_backend.go:95-170). */
 export interface LeaveClusterRequest {
   node_id?: string;
-  force?: boolean;
   timeout_seconds?: number;
 }
 

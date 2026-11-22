@@ -4,6 +4,9 @@
  * Membership card on the cluster page: bootstrap a cluster, join one through
  * its seeds, or leave it (behind a confirm). Every write goes through the
  * useCluster hook (SDK ApiClient, POST /v1/cluster/{bootstrap,join,leave}).
+ * The daemon takes the node's bind and announced network addresses from its
+ * cluster configuration (pkg/api/daemon/cluster_grpc_backend.go Bootstrap and
+ * Join), and its Leave has no Force option, so the card offers no such fields.
  */
 
 import * as React from "react";
@@ -30,15 +33,6 @@ export function parseSeedAddresses(s: string): string[] {
     .filter((p) => p !== "");
 }
 
-/** "" -> undefined; an integer 1-65535 -> that number; anything else -> NaN. */
-export function parsePort(s: string): number | undefined {
-  const t = s.trim();
-  if (t === "") return undefined;
-  if (!/^\d+$/.test(t)) return NaN;
-  const n = Number(t);
-  return n >= 1 && n <= 65535 ? n : NaN;
-}
-
 interface WriteResult {
   success: boolean;
   data?: { status?: { success?: boolean; message?: string } } | null;
@@ -52,17 +46,12 @@ export function ClusterMembershipCard(props: { localNodeId?: string; onChanged: 
 
   const [clusterName, setClusterName] = React.useState("");
   const [nodeName, setNodeName] = React.useState("");
-  const [bindAddress, setBindAddress] = React.useState("");
-  const [bindPort, setBindPort] = React.useState("");
 
   const [joinName, setJoinName] = React.useState("");
-  const [joinAddress, setJoinAddress] = React.useState("");
-  const [joinPort, setJoinPort] = React.useState("");
   const [seeds, setSeeds] = React.useState("");
 
   const [nodeId, setNodeId] = React.useState(localNodeId ?? "");
   const [nodeIdTouched, setNodeIdTouched] = React.useState(false);
-  const [force, setForce] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
 
   const [pending, setPending] = React.useState<"bootstrap" | "join" | "leave" | null>(null);
@@ -71,14 +60,7 @@ export function ClusterMembershipCard(props: { localNodeId?: string; onChanged: 
     if (!nodeIdTouched) setNodeId(localNodeId ?? "");
   }, [localNodeId, nodeIdTouched]);
 
-  const bootPort = parsePort(bindPort);
-  const joinBindPort = parsePort(joinPort);
   const seedList = parseSeedAddresses(seeds);
-
-  const bindFields = (address: string, port: number | undefined) => {
-    const a = address.trim();
-    return { ...(a ? { bind_address: a } : {}), ...(port ? { bind_port: port } : {}) };
-  };
 
   const settle = (res: WriteResult, title: string, fallback: string) => {
     if (res.success && res.data?.status?.success !== false) {
@@ -108,7 +90,7 @@ export function ClusterMembershipCard(props: { localNodeId?: string; onChanged: 
     const node = nodeName.trim();
     void run(
       "bootstrap",
-      () => cluster.bootstrap({ cluster_name: name, node_name: node, ...bindFields(bindAddress, bootPort) } as Parameters<typeof cluster.bootstrap>[0]),
+      () => cluster.bootstrap({ cluster_name: name, node_name: node }),
       "Cluster bootstrapped",
       name,
     );
@@ -118,7 +100,7 @@ export function ClusterMembershipCard(props: { localNodeId?: string; onChanged: 
     const node = joinName.trim();
     void run(
       "join",
-      () => cluster.join({ node_name: node, seed_addresses: seedList, ...bindFields(joinAddress, joinBindPort) }),
+      () => cluster.join({ node_name: node, seed_addresses: seedList }),
       "Node joined",
       node,
     );
@@ -126,12 +108,11 @@ export function ClusterMembershipCard(props: { localNodeId?: string; onChanged: 
 
   const onLeave = () => {
     const id = nodeId.trim();
-    void run("leave", () => cluster.leave({ node_id: id, ...(force ? { force: true } : {}) }), "Node left", id);
+    void run("leave", () => cluster.leave({ node_id: id }), "Node left", id);
   };
 
-  const bootstrapDisabled =
-    pending === "bootstrap" || clusterName.trim() === "" || nodeName.trim() === "" || Number.isNaN(bootPort);
-  const joinDisabled = pending === "join" || joinName.trim() === "" || seedList.length === 0 || Number.isNaN(joinBindPort);
+  const bootstrapDisabled = pending === "bootstrap" || clusterName.trim() === "" || nodeName.trim() === "";
+  const joinDisabled = pending === "join" || joinName.trim() === "" || seedList.length === 0;
   const leaveDisabled = pending === "leave" || nodeId.trim() === "";
 
   return (
@@ -142,11 +123,9 @@ export function ClusterMembershipCard(props: { localNodeId?: string; onChanged: 
       <CardContent className="space-y-6">
         <section data-testid="cluster-bootstrap" className="space-y-2">
           <h3 className="text-sm font-medium">Bootstrap</h3>
-          <div className="grid gap-2 sm:grid-cols-4">
+          <div className="grid gap-2 sm:grid-cols-2">
             <Input aria-label="Cluster name" value={clusterName} onChange={(e) => setClusterName(e.target.value)} />
             <Input aria-label="Node name" value={nodeName} onChange={(e) => setNodeName(e.target.value)} />
-            <Input aria-label="Bind address" value={bindAddress} onChange={(e) => setBindAddress(e.target.value)} />
-            <Input aria-label="Bind port" value={bindPort} onChange={(e) => setBindPort(e.target.value)} />
           </div>
           <Button size="sm" disabled={bootstrapDisabled} onClick={onBootstrap}>
             Bootstrap
@@ -155,11 +134,7 @@ export function ClusterMembershipCard(props: { localNodeId?: string; onChanged: 
 
         <section data-testid="cluster-join" className="space-y-2">
           <h3 className="text-sm font-medium">Join</h3>
-          <div className="grid gap-2 sm:grid-cols-3">
-            <Input aria-label="Join node name" value={joinName} onChange={(e) => setJoinName(e.target.value)} />
-            <Input aria-label="Join bind address" value={joinAddress} onChange={(e) => setJoinAddress(e.target.value)} />
-            <Input aria-label="Join bind port" value={joinPort} onChange={(e) => setJoinPort(e.target.value)} />
-          </div>
+          <Input aria-label="Join node name" value={joinName} onChange={(e) => setJoinName(e.target.value)} />
           <Textarea
             aria-label="Seed addresses"
             placeholder="192.0.2.11:7946"
@@ -183,10 +158,6 @@ export function ClusterMembershipCard(props: { localNodeId?: string; onChanged: 
                 setNodeId(e.target.value);
               }}
             />
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" aria-label="Force" checked={force} onChange={(e) => setForce(e.target.checked)} />
-              Force
-            </label>
           </div>
           <Button size="sm" variant="destructive" disabled={leaveDisabled} onClick={() => setConfirmOpen(true)}>
             Leave

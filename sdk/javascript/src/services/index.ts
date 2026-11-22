@@ -15,25 +15,6 @@ export { DeviceService } from './device-service.js';
 export { DNSService } from './dns-service.js';
 export { NTPService } from './ntp-service.js';
 export {
-  PlatformClusterService,
-  PlatformClusterState,
-  PlatformClusterNodeRole,
-  PlatformClusterNodeState,
-} from './platform-cluster-service.js';
-export type {
-  PlatformClusterTimestamp,
-  PlatformClusterNode,
-  PlatformClusterInfo,
-  PlatformClusterStatusResponse,
-  PlatformClusterNodesResponse,
-  PlatformClusterBootstrapRequest,
-  PlatformClusterJoinRequest,
-  PlatformClusterOperationStatus,
-  PlatformClusterMembershipResponse,
-  PlatformClusterLeaveRequest,
-  PlatformClusterLeaveResponse,
-} from './platform-cluster-service.js';
-export {
   CapabilitiesService,
   CAPABILITY_REASON_NOT_CONFIGURED,
   CAPABILITY_REASON_UNIMPLEMENTED,
