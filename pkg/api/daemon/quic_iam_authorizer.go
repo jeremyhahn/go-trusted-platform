@@ -119,7 +119,9 @@ const certificateUserListPageSize = 1000
 
 // certificateUser resolves a certificate subject to the IAM user stored in
 // tenantID: an email SAN subject by its email, any other subject (the CN) by
-// its username. The pinned go-quicbaas SDK serves neither GetByEmail nor
+// its username. An email subject is matched after normalizeCertificateEmail,
+// the IAM store's own email normalization; the username is matched as is.
+// The pinned go-quicbaas SDK serves neither GetByEmail nor
 // FindByUsername on its gRPC or REST/HTTP3 transports (gRPC answers
 // Unimplemented; REST maps both to the users list and leaves the user
 // empty), so the subject is matched in the tenant's List page, the one user
@@ -144,11 +146,15 @@ func (a *iamTokenAuthorizer) certificateUser(ctx context.Context, tenantID, subj
 		return nil, false
 	}
 	byEmail := strings.Contains(subject, "@")
+	var normalized string
+	if byEmail {
+		normalized = normalizeCertificateEmail(subject)
+	}
 	var match *sdkiam.User
 	for i := range resp.Users {
 		candidate := &resp.Users[i]
 		if byEmail {
-			if candidate.Email != subject {
+			if normalizeCertificateEmail(candidate.Email) != normalized {
 				continue
 			}
 		} else if candidate.Username != subject {
@@ -163,6 +169,13 @@ func (a *iamTokenAuthorizer) certificateUser(ctx context.Context, tenantID, subj
 		return nil, false
 	}
 	return match, true
+}
+
+// normalizeCertificateEmail mirrors the IAM store's NormalizeEmail
+// (lowercase and trim), which canonicalizes every stored email key, so a
+// certificate's email SAN is compared with stored emails in the same form.
+func normalizeCertificateEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
 }
 
 // newIAMTokenAuthorizer returns an authorizer backed by pep. Both arguments
