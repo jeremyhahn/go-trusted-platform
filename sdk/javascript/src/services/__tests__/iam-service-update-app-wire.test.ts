@@ -44,7 +44,8 @@ describe('IAMService.updateApp wire', () => {
       resourcePrefix: 'console/',
     });
     expect(client.put).toHaveBeenCalledTimes(1);
-    const [url, body] = vi.mocked(client.put).mock.calls[0]!;
+    const url = vi.mocked(client.put).mock.calls[0]?.[0];
+    const body = vi.mocked(client.put).mock.calls[0]?.[1];
     expect(url).toBe('/v1/iam/tenants/t1/apps/app-1');
     expect(body).toEqual({
       tenant_id: 't1',
@@ -59,7 +60,7 @@ describe('IAMService.updateApp wire', () => {
   it('a rename sends only tenant_id and name', async () => {
     vi.mocked(client.put).mockResolvedValue({ success: true, data: {} });
     await service.updateApp({ tenantId: 't1', clientId: 'app-1', name: 'Renamed' });
-    const body = vi.mocked(client.put).mock.calls[0]![1] as Record<string, unknown>;
+    const body = vi.mocked(client.put).mock.calls[0]?.[1] as Record<string, unknown>;
     const defined = Object.entries(body)
       .filter(([, v]) => v !== undefined)
       .map(([k]) => k)
