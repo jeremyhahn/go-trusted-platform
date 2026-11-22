@@ -24,6 +24,7 @@ import { Separator } from "@/components/ui/separator";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTenant, useIAM, useApi, useToast } from "@/hooks";
 import type { Tenant, TenantSettings } from "@/types/tenant";
+import { TenantDirectoryCard } from "@/components/features/tenant/tenant-directory-card";
 
 // Extended tenant type for UI with computed settings
 interface UITenant extends Tenant {
@@ -403,6 +404,8 @@ export default function TenantPage() {
               </div>
             </CardContent>
           </Card>
+
+          <TenantDirectoryCard />
         </>
       )}
     </div>
