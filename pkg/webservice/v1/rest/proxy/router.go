@@ -51,6 +51,7 @@ type Router struct {
 	server          platformv1.ProxyServiceServer
 	respWriter      response.HttpWriter
 	scopeAuthorizer middleware.ScopeAuthorizer
+	systemTenant    func(http.Handler) http.Handler
 	router.WebServiceRouter
 }
 
@@ -68,6 +69,12 @@ func NewRouter(
 // Without one every route answers 403.
 func (r *Router) SetScopeAuthorizer(authorizer middleware.ScopeAuthorizer) {
 	r.scopeAuthorizer = authorizer
+}
+
+// SetSystemTenantGuard sets the guard that admits only callers in the
+// system tenant. Without one every route answers 403.
+func (r *Router) SetSystemTenantGuard(guard func(http.Handler) http.Handler) {
+	r.systemTenant = guard
 }
 
 // RegisterRoutes mounts the proxy routes on parent. Route and pool ids may
@@ -99,12 +106,14 @@ func (r *Router) RegisterRoutes(parent *mux.Router) {
 // session carries no scopes (#1990, #2157 Codex), as scopeRouteGuard does.
 // Each write route names its own scope.
 func (r *Router) requireScope(scope string, handler http.HandlerFunc) http.Handler {
-	if r.scopeAuthorizer == nil {
+	if r.scopeAuthorizer == nil || r.systemTenant == nil {
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 		})
 	}
-	return r.scopeAuthorizer.RequireScope(scope)(handler)
+	// The proxy configuration is one shared platform-wide store with no
+	// tenant filter, so only the system tenant may reach it (#2157 Codex).
+	return r.systemTenant(r.scopeAuthorizer.RequireScope(scope)(handler))
 }
 
 // ensure answers 503 when no ProxyServiceServer is wired.

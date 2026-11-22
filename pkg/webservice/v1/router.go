@@ -887,6 +887,12 @@ func (v1Router *Router) proxyRoutes() {
 		v1Router.logger.Debug("Proxy service server is nil - proxy routes not registered")
 		return
 	}
+	_, guard, err := v1Router.authorization()
+	if err != nil {
+		v1Router.logger.Error(err,
+			"Proxy routes not registered: the RBAC guard could not be built")
+		return
+	}
 	r := restproxy.NewRouter(
 		v1Router.logger,
 		server,
@@ -895,8 +901,11 @@ func (v1Router *Router) proxyRoutes() {
 		r.SetScopeAuthorizer(scoped)
 	}
 	// The reverse-proxy routes, pools and zone matrix decide what reaches
-	// which backend: operator work behind the admin gate, then proxy:read,
-	// proxy:write or proxy:delete per route, as on gRPC, QUIC and MCP.
+	// which backend and are one platform-wide store with no tenant filter:
+	// operator work behind the admin gate, then the system tenant, then
+	// proxy:read, proxy:write or proxy:delete per route, as on gRPC, QUIC
+	// and MCP.
+	r.SetSystemTenantGuard(guard.RequireTenant(v1Router.restHandlerRegistry.TenantID()))
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
