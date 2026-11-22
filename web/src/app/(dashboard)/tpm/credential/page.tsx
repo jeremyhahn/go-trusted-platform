@@ -7,6 +7,9 @@
  * - ActivateCredential: recover the secret (behind a confirm dialog, it
  *   uses the TPM's EK and AK)
  * - GetRandom: draw random bytes from the TPM
+ *
+ * #2069: a refusal shows the server's message, and MakeCredential shows the
+ * wrapped secret, so an operator can compare it with the recovered one.
  */
 import * as React from "react";
 import {
@@ -30,6 +33,18 @@ import {
 import { Loader2 } from "lucide-react";
 import { base64ToHex, textToBase64, useTPMOps, useToast } from "@/hooks";
 
+/**
+ * failureMessage reads the server's reason from a refused mutation:
+ * useMutation rejects with a MutationError object, not an Error (#2069).
+ */
+function failureMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err !== null && typeof err === "object" && typeof (err as { message?: unknown }).message === "string") {
+    return (err as { message: string }).message;
+  }
+  return String(err);
+}
+
 export default function TPMCredentialPage() {
   const { toast } = useToast();
   const { makeCredential, activateCredential, getRandom } = useTPMOps();
@@ -38,13 +53,15 @@ export default function TPMCredentialPage() {
   const [secret, setSecret] = React.useState("");
   const [credentialBlob, setCredentialBlob] = React.useState("");
   const [encryptedSecret, setEncryptedSecret] = React.useState("");
+  const [wrappedSecret, setWrappedSecret] = React.useState("");
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [numBytes, setNumBytes] = React.useState("32");
+  const numBytesValid = /^\d+$/.test(numBytes) && Number(numBytes) >= 1 && Number(numBytes) <= 1024;
 
   const fail = (title: string) => (err: unknown) => {
     toast({
       title,
-      description: err instanceof Error ? err.message : String(err),
+      description: failureMessage(err),
       variant: "destructive",
     });
   };
@@ -57,6 +74,7 @@ export default function TPMCredentialPage() {
       });
       setCredentialBlob(resp.credentialBlob ?? "");
       setEncryptedSecret(resp.encryptedSecret ?? "");
+      setWrappedSecret(resp.secret ?? "");
       toast({ title: "Credential made", variant: "success" });
     } catch (err) {
       fail("MakeCredential failed")(err);
@@ -74,8 +92,9 @@ export default function TPMCredentialPage() {
   };
 
   const onRandom = async () => {
+    if (!numBytesValid) return;
     try {
-      await getRandom.mutateAsync({ numBytes: Number(numBytes) || 0 });
+      await getRandom.mutateAsync({ numBytes: Number(numBytes) });
     } catch (err) {
       fail("GetRandom failed")(err);
     }
@@ -113,6 +132,14 @@ export default function TPMCredentialPage() {
             {makeCredential.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Make Credential
           </Button>
+          {wrappedSecret && (
+            <div className="space-y-1">
+              <p className="text-sm font-medium">Wrapped secret</p>
+              <code data-testid="wrapped-secret" className="text-xs break-all">
+                {base64ToHex(wrappedSecret)}
+              </code>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -174,8 +201,11 @@ export default function TPMCredentialPage() {
               value={numBytes}
               onChange={(e) => setNumBytes(e.target.value)}
             />
+            {numBytes !== "" && !numBytesValid && (
+              <p className="text-xs text-destructive">Number of bytes is a whole number from 1 to 1024</p>
+            )}
           </div>
-          <Button onClick={onRandom} disabled={getRandom.isLoading}>
+          <Button onClick={onRandom} disabled={!numBytesValid || getRandom.isLoading}>
             {getRandom.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Get Random
           </Button>
