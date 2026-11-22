@@ -93,3 +93,35 @@ func TestExtendedMessage_NamesThePCR(t *testing.T) {
 	assert.Equal(t, "PCR 16 extended", ExtendedMessage(16))
 	assert.Equal(t, "PCR 0 extended", ExtendedMessage(0))
 }
+
+func TestExtend_NormalisesTheBankName(t *testing.T) {
+	tests := []struct {
+		hashAlg string
+		want    string
+	}{
+		{"SHA256", "sha256"},
+		{"SHA-256", "sha256"},
+		{"sha-256", "sha256"},
+		{" Sha384 ", "sha384"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.hashAlg, func(t *testing.T) {
+			tpm := &recordingTPM{}
+			assert.NoError(t, Extend(tpm, 16, tt.hashAlg, []byte("x")))
+			assert.Equal(t, 1, tpm.calls)
+			assert.Equal(t, tt.want, tpm.hashAlg)
+		})
+	}
+}
+
+func TestExtend_RejectsAnUnsupportedBank(t *testing.T) {
+	for _, hashAlg := range []string{"md5", "sm3", "sha3-256"} {
+		t.Run(hashAlg, func(t *testing.T) {
+			tpm := &recordingTPM{}
+			err := Extend(tpm, 16, hashAlg, []byte("x"))
+			assert.ErrorIs(t, err, ErrUnsupportedHashAlg{HashAlg: hashAlg})
+			assert.Equal(t, codes.InvalidArgument, status.Code(err))
+			assert.Zero(t, tpm.calls, "an unsupported bank never reaches the TPM")
+		})
+	}
+}

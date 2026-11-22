@@ -64,6 +64,12 @@ var (
 
 	// ErrTPM2InvalidNumBytes is returned when the requested random byte count is invalid.
 	ErrTPM2InvalidNumBytes = errors.New("invalid number of bytes (maximum 1024)")
+
+	// ErrTPM2MakeCredentialUnpaired is returned when MakeCredential has only one of ek_cert and iak_pub.
+	ErrTPM2MakeCredentialUnpaired = errors.New("ek_cert and iak_pub must be sent together")
+
+	// ErrTPM2MissingAKName is returned when a local-EK MakeCredential has no AK name.
+	ErrTPM2MissingAKName = errors.New("ak_name is required")
 )
 
 // TPM2HandlerFunc is the function signature for TPM2 sub-opcode handlers.
@@ -514,7 +520,9 @@ func (h *TPM2Handler) handleGetEK(ctx context.Context, payload []byte) *quicwire
 
 // handleMakeCredential wraps TPM2_MakeCredential. With both EKCert and
 // IAKPub present the verifier path (MakeCredentialWithExternalEK) is used;
-// otherwise the local TPM EK is used with the supplied AKName.
+// otherwise the local TPM EK is used with the supplied AKName. Only one of
+// EKCert and IAKPub, or a local-EK request without AKName, is refused with
+// StatusInvalidArgument before the TPM is called.
 func (h *TPM2Handler) handleMakeCredential(ctx context.Context, payload []byte) *quicwire.Response {
 	var req TPM2MakeCredentialRequest
 	if len(payload) > 0 {
@@ -523,11 +531,19 @@ func (h *TPM2Handler) handleMakeCredential(ctx context.Context, payload []byte) 
 		}
 	}
 
+	hasEKCert, hasIAKPub := len(req.EKCert) > 0, len(req.IAKPub) > 0
+	if hasEKCert != hasIAKPub {
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrTPM2MakeCredentialUnpaired)
+	}
+	if !hasEKCert && len(req.AKName) == 0 {
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrTPM2MissingAKName)
+	}
+
 	var (
 		credentialBlob, encryptedSecret, secret []byte
 		err                                     error
 	)
-	if len(req.EKCert) > 0 && len(req.IAKPub) > 0 {
+	if hasEKCert {
 		ekCert, parseErr := x509.ParseCertificate(req.EKCert)
 		if parseErr != nil {
 			return h.errorResponse(quicwire.StatusInvalidArgument, ErrTPM2DecodingFailed{Cause: parseErr})

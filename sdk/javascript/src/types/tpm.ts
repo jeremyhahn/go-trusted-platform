@@ -484,7 +484,7 @@ export interface UndefineNVRAMRequest {
  * Get random request
  */
 export interface GetRandomRequest {
-  /** Number of bytes */
+  /** Number of bytes, an integer from 1 to 1024 */
   numBytes: number;
 }
 
@@ -749,7 +749,7 @@ export interface GetEventLogResponse {
   eventLog: string;
   /** Format */
   format: string;
-  /** Event count */
+  /** Event count; a number after the SDK decodes the server's decimal string (protojson uint64) */
   eventCount: number;
   /** Parsed entries (proto entries; absent until server-side parsing ships) */
   entries?: EventLogEntry[];

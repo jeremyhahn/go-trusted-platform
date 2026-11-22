@@ -14,10 +14,16 @@ const MAKE_PATH = 'POST /api/v1/tpm/make-credential';
 const ACTIVATE_PATH = 'POST /api/v1/tpm/activate-credential';
 const RANDOM_PATH = 'POST /api/v1/tpm/random';
 
+const CAPS_ON = ok({ capabilities: ['POST /api/v1/tpm/pcrs/extend', 'POST /api/v1/tpm/make-credential', 'POST /api/v1/tpm/activate-credential', 'POST /api/v1/tpm/random'].map((op) => ({ op, kind: 'route', enabled: true })) });
+
 const made = ok({ credentialBlob: 'Y2I=', encryptedSecret: 'ZXM=', secret: 'czNjcmV0' });
 
-function renderPage() {
+/** Renders the page and waits for the capability gate to read the server's capabilities. */
+async function renderPage() {
   render(withControlPlane(<TPMCredentialPage />));
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Get Random' }).getAttribute('data-capability-enabled')).toBe('true')
+  );
 }
 
 function inputOf(label: string): HTMLInputElement {
@@ -45,8 +51,8 @@ describe('TPMCredentialPage', () => {
   });
 
   it('makes a credential through POST /tpm/make-credential and shows the wrapped secret', async () => {
-    const sent = stubControlPlane({ [MAKE_PATH]: made });
-    renderPage();
+    const sent = stubControlPlane({ [MAKE_PATH]: made, 'GET /api/v1/capabilities': CAPS_ON });
+    await renderPage();
 
     await makeCredential('s3cret');
 
@@ -64,9 +70,10 @@ describe('TPMCredentialPage', () => {
     const routes: Record<string, Answer> = {
       [MAKE_PATH]: made,
       [ACTIVATE_PATH]: ok({ secret: 'czNjcmV0' }),
+    'GET /api/v1/capabilities': CAPS_ON,
     };
     const sent = stubControlPlane(routes);
-    renderPage();
+    await renderPage();
 
     await makeCredential('s3cret');
     await waitFor(() => expect(inputOf('Credential blob (base64)').value).toBe('Y2I='));
@@ -88,8 +95,9 @@ describe('TPMCredentialPage', () => {
     const sent = stubControlPlane({
       [MAKE_PATH]: made,
       [ACTIVATE_PATH]: ok({ secret: 'czNjcmV0' }),
+    'GET /api/v1/capabilities': CAPS_ON,
     });
-    renderPage();
+    await renderPage();
 
     await makeCredential('s3cret');
     await waitFor(() => expect(inputOf('Credential blob (base64)').value).toBe('Y2I='));
@@ -103,8 +111,8 @@ describe('TPMCredentialPage', () => {
   });
 
   it('draws random bytes through POST /tpm/random', async () => {
-    const sent = stubControlPlane({ [RANDOM_PATH]: ok({ randomBytes: 'AAEC' }) });
-    renderPage();
+    const sent = stubControlPlane({ [RANDOM_PATH]: ok({ randomBytes: 'AAEC' }), 'GET /api/v1/capabilities': CAPS_ON });
+    await renderPage();
 
     fireEvent.change(inputOf('Number of bytes'), { target: { value: '16' } });
     await click('Get Random');
@@ -114,8 +122,8 @@ describe('TPMCredentialPage', () => {
   });
 
   it("shows the server's reason when MakeCredential is refused", async () => {
-    stubControlPlane({ [MAKE_PATH]: refused(403, 'forbidden') });
-    renderPage();
+    stubControlPlane({ [MAKE_PATH]: refused(403, 'forbidden'), 'GET /api/v1/capabilities': CAPS_ON });
+    await renderPage();
 
     await makeCredential();
 

@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Gated } from "@/components/features/capabilities/gated";
 import {
   Table,
   TableBody,
@@ -121,9 +122,11 @@ export default function TPMPCRsPage() {
   const [extendIndex, setExtendIndex] = React.useState("16");
   const [extendData, setExtendData] = React.useState("");
   const [extendConfirmOpen, setExtendConfirmOpen] = React.useState(false);
+  const extendIndexValid = /^\d+$/.test(extendIndex) && Number(extendIndex) <= 23;
 
   const onExtend = async () => {
     setExtendConfirmOpen(false);
+    if (!extendIndexValid) return;
     try {
       await extendPCR.mutateAsync({
         index: Number(extendIndex),
@@ -139,7 +142,11 @@ export default function TPMPCRsPage() {
     } catch (err) {
       toast({
         title: "Extend PCR failed",
-        description: err instanceof Error ? err.message : String(err),
+        // The SDK rejects with a plain {code, message} object, not an Error.
+        description:
+          typeof (err as { message?: unknown })?.message === "string"
+            ? (err as { message: string }).message
+            : String(err),
         variant: "destructive",
       });
     }
@@ -397,6 +404,9 @@ export default function TPMPCRsPage() {
               value={extendIndex}
               onChange={(e) => setExtendIndex(e.target.value)}
             />
+            {extendIndex !== "" && !extendIndexValid && (
+              <p className="text-xs text-destructive">PCR index is a whole number from 0 to 23</p>
+            )}
           </div>
           <div className="space-y-2 flex-1 min-w-[200px]">
             <Label htmlFor="extend-data">Data</Label>
@@ -406,14 +416,16 @@ export default function TPMPCRsPage() {
               onChange={(e) => setExtendData(e.target.value)}
             />
           </div>
-          <Button
-            variant="destructive"
-            onClick={() => setExtendConfirmOpen(true)}
-            disabled={!extendData || extendIndex === "" || extendPCR.isLoading}
-          >
-            {extendPCR.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Extend PCR
-          </Button>
+          <Gated op="POST /api/v1/tpm/pcrs/extend">
+            <Button
+              variant="destructive"
+              onClick={() => setExtendConfirmOpen(true)}
+              disabled={!extendData || !extendIndexValid || extendPCR.isLoading}
+            >
+              {extendPCR.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Extend PCR
+            </Button>
+          </Gated>
         </CardContent>
       </Card>
 

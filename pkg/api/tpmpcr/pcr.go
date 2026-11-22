@@ -18,6 +18,7 @@ package tpmpcr
 
 import (
 	"fmt"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -62,6 +63,22 @@ func (e ErrDataRequired) GRPCStatus() *status.Status {
 	return status.New(codes.InvalidArgument, e.Error())
 }
 
+// ErrUnsupportedHashAlg is returned for a PCR bank the TPM cannot extend.
+// It is InvalidArgument on every transport.
+type ErrUnsupportedHashAlg struct {
+	HashAlg string
+}
+
+// Error returns the message.
+func (e ErrUnsupportedHashAlg) Error() string {
+	return fmt.Sprintf("unsupported PCR bank %q (must be sha1, sha256, sha384 or sha512)", e.HashAlg)
+}
+
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrUnsupportedHashAlg) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // Extend validates the request and extends the PCR at index in the
 // hashAlg bank (DefaultHashAlg when empty) with data.
 func Extend(tpm Extender, index int, hashAlg string, data []byte) error {
@@ -74,7 +91,13 @@ func Extend(tpm Extender, index int, hashAlg string, data []byte) error {
 	if hashAlg == "" {
 		hashAlg = DefaultHashAlg
 	}
-	return tpm.ExtendPCR(index, hashAlg, data)
+	bank := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(hashAlg)), "-", "")
+	switch bank {
+	case "sha1", "sha256", "sha384", "sha512":
+	default:
+		return ErrUnsupportedHashAlg{HashAlg: hashAlg}
+	}
+	return tpm.ExtendPCR(index, bank, data)
 }
 
 // ExtendedMessage is the status message every transport returns for a
