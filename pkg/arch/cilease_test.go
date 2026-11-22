@@ -464,14 +464,17 @@ func TestLegLoadFindingsRejectStoreDependentLoads(t *testing.T) {
 }
 
 // Ruling 675: on a self-hosted runner the integration image goes through the
-// LAN registry the repository variable CI_IMAGE_REGISTRY names, not a 3.4 GB
+// LAN registry the repository secret CI_IMAGE_REGISTRY names, not a 3.4 GB
 // GitHub artifact each leg downloads over the uplink. The artifact path stays
-// for GitHub-hosted runners and for a runner with the variable unset.
+// for GitHub-hosted runners and for a runner with the secret unset. The value
+// is a secret, never a variable (public hygiene: a variable is printed in the
+// run log), so the selection masks it, and the image_ref job output carries
+// only the repository path and tag: the runner drops a secret-derived output.
 const (
 	ciImageJob        = "integration-image"
 	ciLegJob          = "integration"
 	ciRegistryEnv     = "IT_REGISTRY"
-	ciRegistryValue   = "${{ runner.environment != 'github-hosted' && vars.CI_IMAGE_REGISTRY || '' }}"
+	ciRegistryValue   = "${{ runner.environment != 'github-hosted' && secrets.CI_IMAGE_REGISTRY || '' }}"
 	ciImageNoRegistry = "env.IT_REGISTRY == ''"
 	ciImageRegistry   = "env.IT_REGISTRY != ''"
 	ciLegNoRegistry   = "needs.integration-image.outputs.image_ref == ''"
@@ -480,7 +483,7 @@ const (
 	ciUploadArtifact  = "actions/upload-artifact"
 	ciDownloadArtfct  = "actions/download-artifact"
 
-	reasonRegistryUnguarded  = "sets IT_REGISTRY to something other than CI_IMAGE_REGISTRY on a self-hosted runner only"
+	reasonRegistryUnguarded  = "sets IT_REGISTRY to something other than the CI_IMAGE_REGISTRY secret on a self-hosted runner only"
 	reasonUploadWithRegistry = "uploads the image artifact even when the LAN registry carries the image"
 	reasonDownloadWithRef    = "downloads the image artifact even when the image job pushed it to the LAN registry"
 	reasonNoRegistryPush     = "has no push step to the LAN registry guarded by IT_REGISTRY, or no image_ref output from it"
@@ -490,6 +493,17 @@ const (
 	reasonPullRemovesRef     = "removes the registry reference another leg on the same daemon may still re-tag from"
 	reasonPullRetagExits     = "re-tags the registry reference without a fallback, so a failed tag fails the leg"
 	reasonPullExitHoldsLock  = "exits after image_lock without image_unlock, so the other legs on the daemon wait on a held lock"
+	reasonRegistryUnmasked   = "writes IT_REGISTRY to GITHUB_ENV without masking a non-empty value first"
+	reasonRefCarriesRegistry = "puts the registry host in the image_ref job output, which the runner drops as secret-derived"
+	reasonLegNoRegistry      = "pulls without prefixing the image path with the CI_IMAGE_REGISTRY secret"
+
+	// The selection masks a non-empty registry before GITHUB_ENV carries it,
+	// the push outputs the host-free path, and the leg prefixes the secret.
+	ciRegistryMaskGuard = "if [ -n \"$IT_REGISTRY\" ]; then"
+	ciRegistryMask      = "echo \"::add-mask::$IT_REGISTRY\""
+	ciImageRefOutput    = "echo \"image_ref=$path\""
+	ciLegRegistryRef    = "IT_IMAGE_REF=\"$IT_REGISTRY/$IT_IMAGE_PATH\""
+	ciLegRegistryValue  = "${{ secrets.CI_IMAGE_REGISTRY }}"
 
 	// ciPullRemoveRef is the removal of the shared registry reference; a
 	// leg that already pulled it and waits on the image lock re-tags from it.
@@ -556,13 +570,30 @@ func registryPathFindings(t *testing.T, wf ciWorkflow) []error {
 	if !selected {
 		finding(ciImageJob, imageJob.Line, reasonRegistryUnguarded)
 	}
+	// The selection masks a non-empty value before GITHUB_ENV carries it to
+	// the later steps.
+	for _, step := range imageSteps {
+		envAt := strings.Index(step.Run, "$GITHUB_ENV")
+		if envAt < 0 || !strings.Contains(step.Run, ciRegistryEnv+"=$"+ciRegistryEnv) {
+			continue
+		}
+		maskAt := strings.Index(step.Run, ciRegistryMask)
+		if !strings.Contains(step.Run, ciRegistryMaskGuard) || maskAt < 0 || maskAt > envAt {
+			finding(ciImageJob, step.Line, reasonRegistryUnmasked)
+		}
+	}
 	for _, step := range imageSteps {
 		if strings.Contains(step.Uses, ciUploadArtifact) && !strings.Contains(step.If, ciImageNoRegistry) {
 			finding(ciImageJob, step.Line, reasonUploadWithRegistry)
 		}
-		if strings.Contains(step.Run, "docker push") && strings.Contains(step.If, ciImageRegistry) && step.ID != "" &&
-			ciScalar(imageJob, "outputs", "image_ref") == "${{ steps."+step.ID+".outputs.image_ref }}" {
+		if !strings.Contains(step.Run, "docker push") || !strings.Contains(step.If, ciImageRegistry) {
+			continue
+		}
+		if step.ID != "" && ciScalar(imageJob, "outputs", "image_ref") == "${{ steps."+step.ID+".outputs.image_ref }}" {
 			pushed = true
+		}
+		if !strings.Contains(step.Run, ciImageRefOutput) {
+			finding(ciImageJob, step.Line, reasonRefCarriesRegistry)
 		}
 	}
 	if !pushed {
@@ -587,6 +618,9 @@ func registryPathFindings(t *testing.T, wf ciWorkflow) []error {
 		}
 		if !strings.Contains(step.Run, ciLayerIdentity) || !strings.Contains(step.Run, ciIdentityCompare) {
 			finding(ciLegJob, step.Line, reasonPullNoLayerCompare)
+		}
+		if step.Env[ciRegistryEnv] != ciLegRegistryValue || !strings.Contains(step.Run, ciLegRegistryRef) {
+			finding(ciLegJob, step.Line, reasonLegNoRegistry)
 		}
 		if strings.Contains(step.Run, ciPullRemoveRef) {
 			finding(ciLegJob, step.Line, reasonPullRemovesRef)
@@ -638,8 +672,26 @@ func TestRegistryPathFindingsRejectArtifactsBesideTheRegistry(t *testing.T) {
 		{
 			name:   "registry on GitHub-hosted runners too",
 			old:    ciRegistryEnv + ": " + ciRegistryValue,
-			new:    ciRegistryEnv + ": ${{ vars.CI_IMAGE_REGISTRY }}",
+			new:    ciRegistryEnv + ": ${{ secrets.CI_IMAGE_REGISTRY }}",
 			reason: reasonRegistryUnguarded,
+		},
+		{
+			name:   "selection without the mask",
+			old:    ciRegistryMask + "\n",
+			new:    "",
+			reason: reasonRegistryUnmasked,
+		},
+		{
+			name:   "image_ref carries the registry",
+			old:    ciImageRefOutput,
+			new:    `echo "image_ref=$ref"`,
+			reason: reasonRefCarriesRegistry,
+		},
+		{
+			name:   "leg pulls the bare path",
+			old:    ciLegRegistryRef,
+			new:    `IT_IMAGE_REF="$IT_IMAGE_PATH"`,
+			reason: reasonLegNoRegistry,
 		},
 		{
 			name:   "GitHub download beside the registry",
