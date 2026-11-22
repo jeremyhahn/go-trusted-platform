@@ -1074,6 +1074,12 @@ var templatedRouteTable = map[string]templatedRoute{
 	"/platform.v1.ComputeService/ListSnapshots":  itemRoute("/api/v1/compute/vms/{id}/snapshots", http.MethodGet, "{id}", "vm_id"),
 	"/platform.v1.ComputeService/GetSnapshot":    vmSnapshotRoute("/api/v1/compute/vms/{id}/snapshots/{snapshotId}", http.MethodGet),
 	"/platform.v1.ComputeService/DeleteSnapshot": vmSnapshotRoute("/api/v1/compute/vms/{id}/snapshots/{snapshotId}", http.MethodDelete),
+	// Disks and migration: the VM id and disk id ride the path; the disk
+	// config, new size and migration options stay in the body.
+	"/platform.v1.ComputeService/AttachDisk": itemRoute("/api/v1/compute/vms/{id}/disks", http.MethodPost, "{id}", "vm_id"),
+	"/platform.v1.ComputeService/DetachDisk": vmDiskRoute("/api/v1/compute/vms/{id}/disks/{diskId}", http.MethodDelete),
+	"/platform.v1.ComputeService/ResizeDisk": vmDiskRoute("/api/v1/compute/vms/{id}/disks/{diskId}", http.MethodPatch),
+	"/platform.v1.ComputeService/MigrateVM":  itemRoute("/api/v1/compute/vms/{id}/migrate", http.MethodPost, "{id}", "vm_id"),
 	"/platform.v1.ComputeService/RestoreSnapshot": vmSnapshotRoute(
 		"/api/v1/compute/vms/{id}/snapshots/{snapshotId}/restore", http.MethodPost),
 
@@ -1137,6 +1143,8 @@ var templatedRouteTable = map[string]templatedRoute{
 	// POST /api/v1/devices/{id}/attest (admin gate). The server leaves this
 	// id unconstrained; evidence travels in the body.
 	"/platform.v1.DeviceService/AttestDevice": itemRoute("/api/v1/devices/{id}/attest", http.MethodPost, "{id}", "device_id"),
+	// POST /api/v1/devices/{id}/attest/challenge issues the single-use nonce AttestDevice checks (#2136).
+	"/platform.v1.DeviceService/IssueAttestationChallenge": itemRoute("/api/v1/devices/{id}/attest/challenge", http.MethodPost, "{id}", "device_id"),
 
 	// GET, PUT and DELETE /api/v1/device/templates/{id:[0-9]+}.
 	"/platform.v1.DeviceService/GetTemplate":    itemRoute("/api/v1/device/templates/{id:[0-9]+}", http.MethodGet, "{id:[0-9]+}", "id"),
@@ -1394,6 +1402,19 @@ func vmSnapshotRoute(path, method string) templatedRoute {
 		pathParams: []pathParam{
 			{placeholder: "{id}", field: "vm_id"},
 			{placeholder: "{snapshotId}", field: "snapshot_id"},
+		},
+	}
+}
+
+// vmDiskRoute maps a route naming a VM by {id} and one of its disks by
+// {diskId}, filled from the request's vm_id and disk_id.
+func vmDiskRoute(path, method string) templatedRoute {
+	return templatedRoute{
+		path:   path,
+		method: method,
+		pathParams: []pathParam{
+			{placeholder: "{id}", field: "vm_id"},
+			{placeholder: "{diskId}", field: "disk_id"},
 		},
 	}
 }

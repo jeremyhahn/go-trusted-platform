@@ -277,7 +277,12 @@ the body of `POST /api/v1/compute/vms`. It also maps `GetVM`
 (`GET /api/v1/compute/containers/{id}/metrics`) and `ExecContainer`
 (`POST /api/v1/compute/containers/{id}/exec`, with `command`, `env`,
 `working_dir` and `tty` in the body), the id in the path; an empty id is
-refused with InvalidArgument before any request is sent. Its MCP adapter maps all six, plus
+refused with InvalidArgument before any request is sent. It maps `AttachDisk`,
+`DetachDisk`, `ResizeDisk` and `MigrateVM` to
+`POST /api/v1/compute/vms/{id}/disks`, `DELETE` and
+`PATCH /api/v1/compute/vms/{id}/disks/{diskId}` and
+`POST /api/v1/compute/vms/{id}/migrate`, with `vm_id` and `disk_id` in the
+path and the rest of the request in the body. Its MCP adapter maps all six, plus
 create, get and list, to the `vm_*` tools and sends each RPC's full request,
 `force`, `timeout_seconds` and `delete_disks` included
 (`sdk/go/transport/mcp/compute_vm.go`). Its QUIC adapter maps all six, and
