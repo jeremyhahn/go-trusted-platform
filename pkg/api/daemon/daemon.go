@@ -1512,6 +1512,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 		if computeService != nil {
 			daemon.concreteRestServer.SetComputeHandlers(computeService, restGuard)
+			daemon.concreteRestServer.SetRegistryHandlers(config.RegistryService, restGuard)
 		}
 	}
 

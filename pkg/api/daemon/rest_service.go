@@ -32,6 +32,7 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
@@ -42,6 +43,7 @@ import (
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
+	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -488,6 +490,27 @@ func (s *RESTServer) SetComputeHandlers(compute platformv1.ComputeServiceServer,
 		return
 	}
 	restapi.NewComputeHandlers(compute, guard, s.logger).RegisterRoutes(s.router)
+}
+
+// SetRegistryHandlers mounts the image registry REST routes
+// (/api/v1/compute/images) on the daemon listener, each behind the
+// scope its gRPC RegistryService method needs: the reads need
+// registry:read, a push registry:write and a delete registry:delete.
+// A nil service mounts nothing.
+func (s *RESTServer) SetRegistryHandlers(svc grpcapi.RegistryService, guard *restapi.ScopeGuard) {
+	if svc == nil {
+		return
+	}
+	logger := logging.NewFromSlog(s.logger)
+	h := restregistry.NewHandlers(logger, svc, response.NewResponseWriter(logger, nil))
+	sr := s.router.PathPrefix("/api/v1/compute/images").Subrouter()
+	sr.HandleFunc("", guard.Require("registry:read", h.ListImages)).Methods(http.MethodGet)
+	sr.HandleFunc("/", guard.Require("registry:read", h.ListImages)).Methods(http.MethodGet)
+	sr.HandleFunc("", guard.Require("registry:write", h.PushImage)).Methods(http.MethodPost)
+	sr.HandleFunc("/", guard.Require("registry:write", h.PushImage)).Methods(http.MethodPost)
+	sr.HandleFunc("/status", guard.Require("registry:read", h.Status)).Methods(http.MethodGet)
+	sr.HandleFunc("/{repository:.+}", guard.Require("registry:read", h.GetImage)).Methods(http.MethodGet)
+	sr.HandleFunc("/{repository:.+}", guard.Require("registry:delete", h.DeleteImage)).Methods(http.MethodDelete)
 }
 
 // SetOverlayHandlers wires the overlay REST handlers onto the daemon's REST
