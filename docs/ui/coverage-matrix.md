@@ -51,21 +51,21 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `BMCService.PowerOn` | - | - | - | - | missing |
-| `BMCService.PowerOff` | - | - | - | - | missing |
-| `BMCService.PowerReset` | - | - | - | - | missing |
-| `BMCService.PowerCycle` | - | - | - | - | missing |
-| `BMCService.PowerStatus` | `GET /bmc/{profileID:[0-9]+}/power` | - | - | - | missing |
-| `BMCService.SetBootDevice` | `POST /bmc/{profileID:[0-9]+}/boot-device` | - | - | - | missing |
-| `BMCService.GetBootDevice` | `GET /bmc/{profileID:[0-9]+}/boot-device` | - | - | - | missing |
-| `BMCService.MountISO` | `POST /bmc/{profileID:[0-9]+}/virtual-media` | - | - | - | missing |
-| `BMCService.UnmountISO` | `DELETE /bmc/{profileID:[0-9]+}/virtual-media` | - | - | - | missing |
-| `BMCService.VirtualMediaStatus` | `GET /bmc/{profileID:[0-9]+}/virtual-media` | - | - | - | missing |
-| `BMCService.GetSensors` | `GET /bmc/{profileID:[0-9]+}/sensors` | - | - | - | missing |
-| `BMCService.GetSystemInfo` | `GET /bmc/{profileID:[0-9]+}/system-info` | - | - | - | missing |
-| `BMCService.Provision` | `POST /bmc/{profileID:[0-9]+}/provision` | - | - | - | missing |
-| `BMCService.ProvisionStatus` | `GET /bmc/{profileID:[0-9]+}/provision` | - | - | - | missing |
-| `BMCService.GetWebCertificate` | `GET /bmc/{profileID:[0-9]+}/cert` | - | - | - | missing |
+| `BMCService.PowerOn` | `POST /bmc/{profileID:[0-9]+}/power` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.PowerOff` | `POST /bmc/{profileID:[0-9]+}/power` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.PowerReset` | `POST /bmc/{profileID:[0-9]+}/power` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.PowerCycle` | `POST /bmc/{profileID:[0-9]+}/power` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.PowerStatus` | `GET /bmc/{profileID:[0-9]+}/power` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.SetBootDevice` | `POST /bmc/{profileID:[0-9]+}/boot-device` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.GetBootDevice` | `GET /bmc/{profileID:[0-9]+}/boot-device` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.MountISO` | `POST /bmc/{profileID:[0-9]+}/virtual-media` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.UnmountISO` | `DELETE /bmc/{profileID:[0-9]+}/virtual-media` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.VirtualMediaStatus` | `GET /bmc/{profileID:[0-9]+}/virtual-media` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.GetSensors` | `GET /bmc/{profileID:[0-9]+}/sensors` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.GetSystemInfo` | `GET /bmc/{profileID:[0-9]+}/system-info` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.Provision` | `POST /bmc/{profileID:[0-9]+}/provision` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.ProvisionStatus` | `GET /bmc/{profileID:[0-9]+}/provision` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.GetWebCertificate` | `GET /bmc/{profileID:[0-9]+}/cert` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
 | `BMCService.ReplaceWebCertificate` | `PUT /bmc/{profileID:[0-9]+}/cert` | - | - | - | missing |
 | `BMCService.EnrollBMC` | - | - | - | - | missing |
 | `BMCService.RestoreFactoryCert` | - | - | - | - | missing |
