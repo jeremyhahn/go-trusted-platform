@@ -16,6 +16,7 @@ package iam
 import (
 	"context"
 
+	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 )
 
@@ -25,9 +26,10 @@ import (
 // roles, never the operating tenant's (#662).
 //
 // The principal is named by email, as the backbone names it and as the
-// user mirror writes it. The roles are the names the mirror and the IAM
-// role assignments store on the user ("admin" for a workspace owner), which
-// are the names the session guards check.
+// user mirror writes it. IAM stores a user's roles as role IDs (the SDK's
+// CreateUserRequest.Roles carries IDs, see role_ids.go), while the session
+// guards check role names such as "admin", so the resolver names them from
+// the tenant's roles.
 type WorkspaceRoleResolver struct {
 	client IAMClient
 }
@@ -55,8 +57,43 @@ func (r *WorkspaceRoleResolver) Roles(ctx context.Context, tenantID, subject str
 	if err != nil {
 		return nil, err
 	}
-	if user == nil {
+	if user == nil || len(user.Roles) == 0 {
 		return nil, nil
 	}
-	return append([]string(nil), user.Roles...), nil
+	namesByID, err := r.roleNamesByID(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	roles := make([]string, 0, len(user.Roles))
+	for _, ref := range user.Roles {
+		if name, ok := namesByID[ref]; ok {
+			ref = name
+		}
+		roles = append(roles, ref)
+	}
+	return roles, nil
+}
+
+// roleNamesByID reads every role tenantID holds, system roles included, and
+// maps each role's ID to its name. It pages the way tenantRoleIDs does.
+func (r *WorkspaceRoleResolver) roleNamesByID(ctx context.Context, tenantID string) (map[string]string, error) {
+	namesByID := make(map[string]string)
+	req := &iamsdk.ListRolesRequest{PageSize: rolesPageSize, IncludeSystem: true}
+	for {
+		resp, err := r.client.ListRoles(ctx, tenantID, req)
+		if err != nil {
+			return nil, err
+		}
+		if resp == nil {
+			return namesByID, nil
+		}
+		for _, role := range resp.Roles {
+			namesByID[role.ID] = role.Name
+		}
+		next := resp.Pagination.NextPageToken
+		if !resp.Pagination.HasMore || next == "" || next == req.PageToken {
+			return namesByID, nil
+		}
+		req.PageToken = next
+	}
 }
