@@ -11,6 +11,11 @@ import { BaseService } from './base-service.js';
 import { TPM_BASE_PATH } from './tpm-service.js';
 import type { TPMInfoResponse } from '../types/tpm.js';
 import type {
+  PlatformServicesListResponse,
+  PlatformServiceInfo,
+  PlatformServiceActionResponse,
+} from '../types/platform-services.js';
+import type {
   GetVersionResponse,
   GetSystemInfoResponse,
   GetHealthRequest,
@@ -174,4 +179,54 @@ export class PlatformService extends BaseService {
   // Lifecycle Operations
   // =========================================================================
 
+  /**
+   * List the daemon services and their state.
+   * REST: GET /v1/platform/services (PlatformDaemon.ListServices).
+   */
+  async listServices(): Promise<ApiResponse<PlatformServicesListResponse>> {
+    return this.client.get<PlatformServicesListResponse>(this.buildUrl('/services'));
+  }
+
+  /**
+   * Get one daemon service's state; an unknown name answers 404.
+   * REST: GET /v1/platform/services/{service} (PlatformDaemon.GetServiceStatus).
+   */
+  async getServiceStatus(name: string): Promise<ApiResponse<PlatformServiceInfo>> {
+    return this.client.get<PlatformServiceInfo>(
+      this.buildUrl(`/services/${this.encodePathSegment(name)}`)
+    );
+  }
+
+  /**
+   * Start a daemon service.
+   * REST: POST /v1/platform/services/{service}/start (PlatformDaemon.StartService).
+   */
+  async startService(name: string): Promise<ApiResponse<PlatformServiceActionResponse>> {
+    return this.client.post<PlatformServiceActionResponse>(
+      this.buildUrl(`/services/${this.encodePathSegment(name)}/start`),
+      {}
+    );
+  }
+
+  /**
+   * Stop a daemon service.
+   * REST: POST /v1/platform/services/{service}/stop (PlatformDaemon.StopService).
+   */
+  async stopService(name: string): Promise<ApiResponse<PlatformServiceActionResponse>> {
+    return this.client.post<PlatformServiceActionResponse>(
+      this.buildUrl(`/services/${this.encodePathSegment(name)}/stop`),
+      {}
+    );
+  }
+
+  /**
+   * Restart a daemon service.
+   * REST: POST /v1/platform/services/{service}/restart (PlatformDaemon.RestartService).
+   */
+  async restartService(name: string): Promise<ApiResponse<PlatformServiceActionResponse>> {
+    return this.client.post<PlatformServiceActionResponse>(
+      this.buildUrl(`/services/${this.encodePathSegment(name)}/restart`),
+      {}
+    );
+  }
 }
