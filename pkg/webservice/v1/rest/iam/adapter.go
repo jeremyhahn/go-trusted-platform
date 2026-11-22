@@ -113,20 +113,37 @@ func policyRuleCondition(specYAML string) (rule, kind string) {
 // selector, under spec.subjects or a top-level subjects key. The pinned
 // backend stores only the flat rules and drops the selector, and an empty
 // selector matches every subject.
-func policySubjects(specYAML string) bool {
+func policySubjects(specYAML string) (bool, error) {
 	if specYAML == "" {
-		return false
+		return false, nil
 	}
 	var doc struct {
 		Spec struct {
-			Subjects map[string]interface{} `yaml:"subjects"`
+			Subjects interface{} `yaml:"subjects"`
 		} `yaml:"spec"`
-		Subjects map[string]interface{} `yaml:"subjects"`
+		Subjects interface{} `yaml:"subjects"`
 	}
+	// A document that does not unmarshal yields no rules either, so only
+	// the placeholder rule is sent: no selector to lose.
 	if err := yaml.Unmarshal([]byte(specYAML), &doc); err != nil {
-		return false
+		return false, nil
 	}
-	return len(doc.Spec.Subjects) > 0 || len(doc.Subjects) > 0
+	found := false
+	for _, v := range []interface{}{doc.Spec.Subjects, doc.Subjects} {
+		switch s := v.(type) {
+		case nil:
+		case map[string]interface{}:
+			if len(s) > 0 {
+				found = true
+			}
+		default:
+			// A list or scalar is a malformed selector, not an absent one:
+			// the rules would still reach the upstream and apply to every
+			// subject.
+			return false, fmt.Errorf("policy subjects must be a mapping, got %T", v)
+		}
+	}
+	return found, nil
 }
 
 // policyRuleBadEffect names the first rule of a policy document whose effect
@@ -375,7 +392,11 @@ func (a *QuicBaaSIAMAdapter) CreatePolicy(ctx context.Context, tenantID string, 
 	// The pinned upstream persists only the flat Rules and drops the subject
 	// selector; its evaluator treats an empty selector as every subject, so
 	// a subject-scoped policy would apply to everyone. Refuse it first.
-	if policySubjects(req.SpecYAML) {
+	hasSubjects, err := policySubjects(req.SpecYAML)
+	if err != nil {
+		return nil, ErrInvalidRequestBody{Reason: err.Error()}
+	}
+	if hasSubjects {
 		return nil, ErrInvalidRequestBody{Reason: "policy subjects (spec.subjects) are not persisted by the IAM backend, which would apply the rules to every subject; remove them"}
 	}
 	// The flat Rules translation maps every effect but "deny" to allow, and
