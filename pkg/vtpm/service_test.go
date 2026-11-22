@@ -336,6 +336,63 @@ func TestService_CreateTemplate_InvalidID(t *testing.T) {
 	}
 }
 
+// TestService_CreateTemplate_RefusesAPathTraversingID checks that a template
+// ID that is not a single path element is refused before anything is written,
+// so CreateTemplate cannot place a bundle outside the templates directory
+// (#2021 Codex round 2).
+func TestService_CreateTemplate_RefusesAPathTraversingID(t *testing.T) {
+	for _, id := range []string{"../outside", "a/b", "..", "/abs"} {
+		t.Run(id, func(t *testing.T) {
+			config := createTestConfig(t)
+			service, err := NewService(config, nil, &mockCA{})
+			if err != nil {
+				t.Fatalf("NewService failed: %v", err)
+			}
+
+			_, err = service.CreateTemplate(context.Background(), &CreateTemplateOptions{ID: id})
+			if err == nil {
+				t.Fatalf("CreateTemplate(%q) succeeded, want an invalid template ID error", id)
+			}
+			if !strings.Contains(err.Error(), "invalid template ID") {
+				t.Fatalf("CreateTemplate(%q) error = %v, want it to contain %q", id, err, "invalid template ID")
+			}
+			if _, statErr := os.Stat(filepath.Join(config.BaseDir, "outside")); !os.IsNotExist(statErr) {
+				t.Fatalf("CreateTemplate(%q) wrote outside the templates directory (stat err %v)", id, statErr)
+			}
+		})
+	}
+}
+
+// TestService_DeleteTemplate_RefusesAPathTraversingID checks that
+// DeleteTemplate refuses an ID that leaves the templates directory and does
+// not remove the directory it names (#2021 Codex round 2).
+func TestService_DeleteTemplate_RefusesAPathTraversingID(t *testing.T) {
+	config := createTestConfig(t)
+	service, err := NewService(config, nil, &mockCA{})
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+
+	keep := filepath.Join(config.BaseDir, "keep")
+	if err := os.MkdirAll(keep, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(keep, "manifest.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	err = service.DeleteTemplate(context.Background(), "../keep")
+	if err == nil {
+		t.Fatal(`DeleteTemplate("../keep") succeeded, want an invalid template ID error`)
+	}
+	if !strings.Contains(err.Error(), "invalid template ID") {
+		t.Fatalf(`DeleteTemplate("../keep") error = %v, want it to contain "invalid template ID"`, err)
+	}
+	if _, statErr := os.Stat(keep); statErr != nil {
+		t.Fatalf("DeleteTemplate removed a directory outside the templates directory: %v", statErr)
+	}
+}
+
 func TestService_GetTemplate_NotFound(t *testing.T) {
 	config := createTestConfig(t)
 	service, err := NewService(config, nil, &mockCA{})
