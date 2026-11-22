@@ -29,6 +29,15 @@ export type {
   ListNTPSourcesResponse,
   StepNTPClockResponse,
 } from './ntp-service.js';
+export { BMCService } from './bmc-service.js';
+export type {
+  BMCPowerAction,
+  BMCPowerActionResponse,
+  BMCPowerStatusResponse,
+  BMCSetBootDeviceRequest,
+  BMCSetBootDeviceResponse,
+  BMCBootDeviceResponse,
+} from './bmc-service.js';
 export { GatewayService } from './gateway-service.js';
 export { IAMService } from './iam-service.js';
 export { IDevIDService } from './idevid-service.js';
