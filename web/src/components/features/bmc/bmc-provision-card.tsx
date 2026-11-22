@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Gated } from '@/components/features/capabilities/gated';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Dialog,
@@ -26,6 +27,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks';
 import { isProvisionDone, useBMCStatus, type BMCProvisionResult } from '@/hooks/use-bmc-status';
+
+// The server's op for Provision (pkg/webservice/v1/bmc/routes.go).
+const BMC_PROVISION_OP = 'POST /api/v1/bmc/{profileID:[0-9]+}/provision';
 
 export interface BMCProvisionCardProps {
   profileID: string;
@@ -107,9 +111,11 @@ export function BMCProvisionCard({ profileID }: BMCProvisionCardProps) {
           />
         </div>
         <div className="flex gap-2">
-          <Button variant="destructive" disabled={busy || running} onClick={() => setConfirmOpen(true)}>
-            Provision
-          </Button>
+          <Gated op={BMC_PROVISION_OP}>
+            <Button variant="destructive" disabled={busy || running} onClick={() => setConfirmOpen(true)}>
+              Provision
+            </Button>
+          </Gated>
           <Button variant="outline" size="sm" onClick={() => void reload()}>
             Refresh
           </Button>

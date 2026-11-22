@@ -11,6 +11,7 @@
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
+import { Gated } from '@/components/features/capabilities/gated';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Dialog,
@@ -28,6 +29,9 @@ import {
   useBMCPower,
   type BMCPowerAction,
 } from '@/hooks/use-bmc-power';
+
+// The server's op for the power actions (pkg/webservice/v1/bmc/routes.go).
+const BMC_POWER_OP = 'POST /api/v1/bmc/{profileID:[0-9]+}/power';
 
 export interface BMCPowerCardProps {
   profileID: string;
@@ -81,14 +85,15 @@ export function BMCPowerCard({ profileID, onChanged }: BMCPowerCardProps) {
       </CardHeader>
       <CardContent className="flex flex-wrap gap-2">
         {BMC_POWER_ACTIONS.map((a) => (
-          <Button
-            key={a}
-            variant={bmcPowerActionStopsHost(a) ? 'destructive' : 'default'}
-            disabled={busy}
-            onClick={() => choose(a)}
-          >
-            {bmcPowerActionLabel(a)}
-          </Button>
+          <Gated key={a} op={BMC_POWER_OP}>
+            <Button
+              variant={bmcPowerActionStopsHost(a) ? 'destructive' : 'default'}
+              disabled={busy}
+              onClick={() => choose(a)}
+            >
+              {bmcPowerActionLabel(a)}
+            </Button>
+          </Gated>
         ))}
       </CardContent>
 

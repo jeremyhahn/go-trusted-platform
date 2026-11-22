@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
+import { Gated } from '@/components/features/capabilities/gated';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
@@ -33,6 +34,11 @@ import {
   type BMCBootDevice,
   type BMCVirtualMediaStatus,
 } from '@/hooks/use-bmc-boot-media';
+
+// The server's ops for these controls (pkg/webservice/v1/bmc/routes.go).
+const BMC_BOOT_DEVICE_OP = 'POST /api/v1/bmc/{profileID:[0-9]+}/boot-device';
+const BMC_MOUNT_OP = 'POST /api/v1/bmc/{profileID:[0-9]+}/virtual-media';
+const BMC_UNMOUNT_OP = 'DELETE /api/v1/bmc/{profileID:[0-9]+}/virtual-media';
 
 export interface BMCBootMediaCardProps {
   profileID: string;
@@ -189,9 +195,11 @@ export function BMCBootMediaCard({ profileID }: BMCBootMediaCardProps) {
               />
               <Label htmlFor="bmc-boot-persistent">Persistent</Label>
             </div>
-            <Button onClick={() => void setBootDevice()} disabled={busy}>
-              Set boot device
-            </Button>
+            <Gated op={BMC_BOOT_DEVICE_OP}>
+              <Button onClick={() => void setBootDevice()} disabled={busy}>
+                Set boot device
+              </Button>
+            </Gated>
           </div>
         </section>
 
@@ -200,9 +208,11 @@ export function BMCBootMediaCard({ profileID }: BMCBootMediaCardProps) {
             {media?.mounted ? `Mounted: ${media.image_url ?? 'an image'}` : 'No image mounted'}
           </p>
           {media?.mounted ? (
-            <Button variant="destructive" onClick={() => setConfirmUnmount(true)} disabled={busy}>
-              Unmount
-            </Button>
+            <Gated op={BMC_UNMOUNT_OP}>
+              <Button variant="destructive" onClick={() => setConfirmUnmount(true)} disabled={busy}>
+                Unmount
+              </Button>
+            </Gated>
           ) : (
             <div className="flex flex-wrap items-center gap-3">
               <Input
@@ -212,9 +222,11 @@ export function BMCBootMediaCard({ profileID }: BMCBootMediaCardProps) {
                 value={isoURL}
                 onChange={(e) => setIsoURL(e.target.value)}
               />
-              <Button onClick={() => void mountISO()} disabled={busy || isoURL.trim() === ''}>
-                Mount ISO
-              </Button>
+              <Gated op={BMC_MOUNT_OP}>
+                <Button onClick={() => void mountISO()} disabled={busy || isoURL.trim() === ''}>
+                  Mount ISO
+                </Button>
+              </Gated>
             </div>
           )}
         </section>
