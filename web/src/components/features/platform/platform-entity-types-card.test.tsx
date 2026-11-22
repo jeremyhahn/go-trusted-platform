@@ -37,11 +37,11 @@ describe('PlatformEntityTypesCard', () => {
 
   it('shows the refusal', async () => {
     stubControlPlane({
-      'GET /api/v1/platform/entity-types': refused(503, 'registry offline'),
+      'GET /api/v1/platform/entity-types': refused(403, 'not permitted'),
     });
     render(withControlPlane(<PlatformEntityTypesCard />));
 
     const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toContain('HTTP 503: registry offline');
+    expect(alert.textContent).toContain('HTTP 403: not permitted');
   });
 });
