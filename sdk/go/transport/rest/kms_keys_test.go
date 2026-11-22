@@ -342,3 +342,18 @@ func TestKMSGenerateKey_UnknownAlgorithmNameAndMalformedReply(t *testing.T) {
 		t.Fatalf("err = %v, want ErrUnmarshalFailed", err)
 	}
 }
+
+// TestKMSGenerateRandom_RouterReplyDecodes pins the SDK side of the random
+// reply: the router's random_bytes field fills RandomBytes.
+func TestKMSGenerateRandom_RouterReplyDecodes(t *testing.T) {
+	a, _ := kmsAdapter(t, `{"bytes":"AQIDBA==","random_bytes":"AQIDBA=="}`)
+	resp := &platformv1.GenerateRandomResponse{}
+	err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_GenerateRandom_FullMethodName,
+		&platformv1.GenerateRandomRequest{NumBytes: 4}, resp)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if !reflect.DeepEqual(resp.GetRandomBytes(), []byte{1, 2, 3, 4}) {
+		t.Fatalf("random bytes = %v, want [1 2 3 4]", resp.GetRandomBytes())
+	}
+}

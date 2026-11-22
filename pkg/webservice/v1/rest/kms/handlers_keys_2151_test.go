@@ -263,3 +263,20 @@ func TestGetKey2151_CarriesTheRecordedMetadata(t *testing.T) {
 		}
 	})
 }
+
+// TestGenerateRandom2151_RepliesRandomBytes pins the facade's reply field: the
+// SDK decodes random_bytes, so the router must answer it.
+func TestGenerateRandom2151_RepliesRandomBytes(t *testing.T) {
+	h := NewHandlers(logging.DefaultLogger(), nil, &covCrypto{}, nil, nil, response.NewResponseWriter(logging.DefaultLogger(), nil))
+	w := covServe(h.GenerateRandom, covRequest(http.MethodPost, "/api/v1/kms/random", `{"num_bytes":8}`, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+	var got struct {
+		RandomBytes []byte `json:"random_bytes"`
+	}
+	decodeEnvelope(t, w, &got)
+	if len(got.RandomBytes) != 8 {
+		t.Fatalf("random_bytes = %d bytes (body %s), want 8", len(got.RandomBytes), w.Body.String())
+	}
+}
