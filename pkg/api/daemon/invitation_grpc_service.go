@@ -299,6 +299,16 @@ func (s *InvitationGRPCService) RevokeInvitation(
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "invitation: request is required")
 	}
+	// Own-tenant rule, as CreateInvitation and ListInvitations apply it.
+	inv, err := s.svc.GetByID(ctx, req.InvitationId)
+	if err != nil {
+		return nil, s.toGRPCError("RevokeInvitation", err)
+	}
+	if inv != nil {
+		if err := authorizeIAMTenant(ctx, inv.TenantID); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.svc.Revoke(ctx, req.InvitationId, req.RevokerId); err != nil {
 		return nil, s.toGRPCError("RevokeInvitation", err)
 	}
@@ -357,6 +367,16 @@ func (s *InvitationGRPCService) DeleteInvitation(
 	}
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "invitation: request is required")
+	}
+	// Own-tenant rule, as CreateInvitation and ListInvitations apply it.
+	inv, err := s.svc.GetByID(ctx, req.InvitationId)
+	if err != nil {
+		return nil, s.toGRPCError("DeleteInvitation", err)
+	}
+	if inv != nil {
+		if err := authorizeIAMTenant(ctx, inv.TenantID); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.svc.Delete(ctx, req.InvitationId); err != nil {
 		return nil, s.toGRPCError("DeleteInvitation", err)
