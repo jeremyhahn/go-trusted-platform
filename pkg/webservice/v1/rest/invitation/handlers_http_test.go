@@ -159,21 +159,36 @@ func TestCreateInvitation_DefaultsTenantAndInviterFromTheSession(t *testing.T) {
 	assert.True(t, proto.Equal(want, srv.last), "service received %v, want %v", srv.last, want)
 }
 
-// TestCreateInvitation_KeepsExplicitTenantAndInviter: values the caller
-// set are not overwritten by the session defaults.
+// TestCreateInvitation_KeepsExplicitTenantAndInviter: an explicit tenant_id
+// must be the verified session's tenant (another tenant answers 403 before
+// the service is called); the explicit inviter is still kept.
 func TestCreateInvitation_KeepsExplicitTenantAndInviter(t *testing.T) {
-	srv := &fakeInvitationServer{}
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/invitations",
-		strings.NewReader(`{"tenant_id":"other","email":"new@example.com","invited_by_id":5}`))
-	req = withSession(req, "caller-tenant", "42")
+	t.Run("another tenant", func(t *testing.T) {
+		srv := &fakeInvitationServer{}
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/invitations",
+			strings.NewReader(`{"tenant_id":"other","email":"new@example.com","invited_by_id":5}`))
+		req = withSession(req, "caller-tenant", "42")
 
-	rec := serve(srv, req)
+		rec := serve(srv, req)
 
-	assert.Equal(t, http.StatusCreated, rec.Code)
-	got, ok := srv.last.(*platformv1.CreateInvitationRequest)
-	require.True(t, ok, "service received %T", srv.last)
-	assert.Equal(t, "other", got.GetTenantId())
-	assert.Equal(t, uint64(5), got.GetInvitedById())
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+		assert.Nil(t, srv.last, "the service must not be called")
+	})
+
+	t.Run("own tenant", func(t *testing.T) {
+		srv := &fakeInvitationServer{}
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/invitations",
+			strings.NewReader(`{"tenant_id":"caller-tenant","email":"new@example.com","invited_by_id":5}`))
+		req = withSession(req, "caller-tenant", "42")
+
+		rec := serve(srv, req)
+
+		assert.Equal(t, http.StatusCreated, rec.Code)
+		got, ok := srv.last.(*platformv1.CreateInvitationRequest)
+		require.True(t, ok, "service received %T", srv.last)
+		assert.Equal(t, "caller-tenant", got.GetTenantId())
+		assert.Equal(t, uint64(5), got.GetInvitedById())
+	})
 }
 
 // TestListInvitations_ScopesToTheSessionTenant: the list is scoped by the
