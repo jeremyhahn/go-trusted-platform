@@ -280,21 +280,47 @@ export class KMSService extends BaseService {
   /**
    * Compute HMAC
    *
+   * Reaches the served route POST /api/v1/kms/hmac/{name}: the key name is
+   * the path segment, and the REST body is `{ data, hash }` (data is the
+   * base64 message; hash is sent only when hashAlgorithm is given).
+   *
    * @param request - HMAC request
    * @returns HMAC value
    */
   async hmac(request: HMACRequest): Promise<ApiResponse<HMACResponse>> {
-    return this.client.post<HMACResponse>(this.buildUrl('/hmac'), request);
+    const body: { data: string; hash?: string } = { data: request.message };
+    if (request.hashAlgorithm !== undefined) {
+      body.hash = request.hashAlgorithm;
+    }
+    return this.client.post<HMACResponse>(
+      this.buildUrl(`/hmac/${this.encodePathSegment(request.keyId)}`),
+      body
+    );
   }
 
   /**
    * Verify HMAC
    *
+   * Reaches the served route POST /api/v1/kms/hmac/{name}/verify: the key
+   * name is the path segment, and the REST body is `{ data, hmac, hash }`
+   * (data and hmac base64; hash only when hashAlgorithm is given).
+   * keyVersion is not sent: the served request has no version field.
+   *
    * @param request - HMAC verification request
    * @returns Verification result
    */
   async verifyHMAC(request: VerifyHMACRequest): Promise<ApiResponse<VerifyHMACResponse>> {
-    return this.client.post<VerifyHMACResponse>(this.buildUrl('/hmac/verify'), request);
+    const body: { data: string; hmac: string; hash?: string } = {
+      data: request.message,
+      hmac: request.hmac,
+    };
+    if (request.hashAlgorithm !== undefined) {
+      body.hash = request.hashAlgorithm;
+    }
+    return this.client.post<VerifyHMACResponse>(
+      this.buildUrl(`/hmac/${this.encodePathSegment(request.keyId)}/verify`),
+      body
+    );
   }
 
   // =========================================================================
