@@ -618,11 +618,11 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `SwitchService.ListPorts` | `GET /{switch}/ports` | - | - | - | missing |
-| `SwitchService.GetPortStatus` | `GET /{switch}/ports/{port}` | - | - | - | missing |
-| `SwitchService.SetPortVLAN` | `POST /{switch}/ports/{port}/vlan` | - | - | - | missing |
-| `SwitchService.EnablePort` | `POST /{switch}/ports/{port}/enable` | - | - | - | missing |
-| `SwitchService.DisablePort` | `POST /{switch}/ports/{port}/disable` | - | - | - | missing |
+| `SwitchService.ListPorts` | `GET /{switch}/ports` | `/networking/switches/[switch]` | - | - | partial |
+| `SwitchService.GetPortStatus` | `GET /{switch}/ports/{port}` | `/networking/switches/[switch]` | - | - | partial |
+| `SwitchService.SetPortVLAN` | `POST /{switch}/ports/{port}/vlan` | `/networking/switches/[switch]` | - | - | partial |
+| `SwitchService.EnablePort` | `POST /{switch}/ports/{port}/enable` | `/networking/switches/[switch]` | - | - | partial |
+| `SwitchService.DisablePort` | `POST /{switch}/ports/{port}/disable` | `/networking/switches/[switch]` | - | - | partial |
 
 ## TenantService (`tenant.proto`)
 
@@ -760,12 +760,12 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | RegistryService | 6 | 0 | 0 | 4 | 2 | 0 |
 | SchedulerService | 11 | 0 | 0 | 0 | 0 | 11 |
 | SDNService | 29 | 11 | 1 | 16 | 1 | 0 |
-| SwitchService | 5 | 0 | 0 | 5 | 0 | 0 |
+| SwitchService | 5 | 0 | 5 | 0 | 0 | 0 |
 | TenantService | 19 | 4 | 4 | 11 | 0 | 0 |
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **122** | **61** | **265** | **50** | **31** |
+| **Total** | **529** | **122** | **66** | **260** | **50** | **31** |
 
 ## Proposed slices
 

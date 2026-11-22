@@ -28,6 +28,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useSwitchPorts, useToast } from '@/hooks';
+import { ServiceUnavailableState } from '@/components/features/platform';
 
 type PendingAction = { port: string; action: 'enable' | 'disable' } | null;
 
@@ -40,8 +41,18 @@ export default function SwitchPortsClient() {
   const pathname = usePathname();
   const switchName = resolveDynamicId(params, pathname, 'switches', 'switch');
   const { toast } = useToast();
-  const { ports, isLoading, error, refetch, getPortStatus, enablePort, disablePort, setPortVLAN } =
-    useSwitchPorts(switchName);
+  const {
+    ports,
+    isLoading,
+    error,
+    unavailable,
+    unavailableReason,
+    refetch,
+    getPortStatus,
+    enablePort,
+    disablePort,
+    setPortVLAN,
+  } = useSwitchPorts(switchName);
 
   const [status, setStatus] = useState<SwitchPortStatus | null>(null);
   const [pending, setPending] = useState<PendingAction>(null);
@@ -103,6 +114,23 @@ export default function SwitchPortsClient() {
       setBusy(false);
     }
   };
+
+  // Capability gate: with no switch service wired on this node the server
+  // answers the structured 503, and no port control is offered.
+  if (unavailable) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold">Switch {switchName}</h1>
+          <p className="text-muted-foreground mt-1">Port status, enable and disable, and VLAN</p>
+        </div>
+        <ServiceUnavailableState
+          service="Switch"
+          description={`Port control is off on this node: ${unavailableReason ?? 'the switch service is not configured'}.`}
+        />
+      </div>
+    );
+  }
 
   if (error) {
     return (
