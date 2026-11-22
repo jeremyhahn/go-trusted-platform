@@ -167,7 +167,7 @@ func TestInvoke_TPMCreateEK_CarriesTheHandle(t *testing.T) {
 	}
 
 	tpmKeysExpectRefused(t, "attributes", tool, method,
-		&platformv1.CreateEKRequest{Attributes: &platformv1.KeyAttributes{}}, &platformv1.CreateEKResponse{})
+		&platformv1.CreateEKRequest{Persistent: true, Attributes: &platformv1.KeyAttributes{}}, &platformv1.CreateEKResponse{})
 	tpmKeysExpectRefused(t, "transient", tool, method,
 		&platformv1.CreateEKRequest{}, &platformv1.CreateEKResponse{})
 }
@@ -185,11 +185,11 @@ func TestInvoke_TPMCreateSRK_CarriesTheHandle(t *testing.T) {
 	}
 
 	tpmKeysExpectRefused(t, "attributes", tool, method,
-		&platformv1.CreateSRKRequest{Attributes: &platformv1.KeyAttributes{}}, &platformv1.CreateSRKResponse{})
+		&platformv1.CreateSRKRequest{Persistent: true, Attributes: &platformv1.KeyAttributes{}}, &platformv1.CreateSRKResponse{})
 	tpmKeysExpectRefused(t, "parent handle", tool, method,
-		&platformv1.CreateSRKRequest{ParentHandle: 1}, &platformv1.CreateSRKResponse{})
+		&platformv1.CreateSRKRequest{Persistent: true, ParentHandle: 1}, &platformv1.CreateSRKResponse{})
 	tpmKeysExpectRefused(t, "parent password", tool, method,
-		&platformv1.CreateSRKRequest{ParentPassword: "p"}, &platformv1.CreateSRKResponse{})
+		&platformv1.CreateSRKRequest{Persistent: true, ParentPassword: "p"}, &platformv1.CreateSRKResponse{})
 	tpmKeysExpectRefused(t, "transient", tool, method,
 		&platformv1.CreateSRKRequest{}, &platformv1.CreateSRKResponse{})
 }
@@ -276,6 +276,15 @@ func TestInvoke_TPMImportEKCertificate_PEMAndDER(t *testing.T) {
 		&platformv1.ImportEKCertificateResponse{})
 	tpmKeysExpectRefused(t, "PEM without a block", tool, method,
 		&platformv1.ImportEKCertificateRequest{Certificate: []byte("not pem"), Format: "PEM"},
+		&platformv1.ImportEKCertificateResponse{})
+	tpmKeysExpectRefused(t, "malformed DER", tool, method,
+		&platformv1.ImportEKCertificateRequest{Certificate: []byte("not a certificate"), Format: "DER"},
+		&platformv1.ImportEKCertificateResponse{})
+	tpmKeysExpectRefused(t, "malformed PEM", tool, method,
+		&platformv1.ImportEKCertificateRequest{
+			Certificate: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("junk")}),
+			Format:      "PEM",
+		},
 		&platformv1.ImportEKCertificateResponse{})
 }
 
