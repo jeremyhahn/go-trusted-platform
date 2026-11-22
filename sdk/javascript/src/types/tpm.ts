@@ -484,7 +484,7 @@ export interface UndefineNVRAMRequest {
  * Get random request
  */
 export interface GetRandomRequest {
-  /** Number of bytes */
+  /** Number of bytes, an integer from 1 to 1024 */
   numBytes: number;
 }
 
