@@ -3378,8 +3378,9 @@ func (d *Daemon) MCPServiceProvider() *MCPServiceProvider {
 
 // SetClusterService injects the platform cluster servicer behind every
 // cluster transport: the registered gRPC ClusterService (TCP and Unix
-// socket), which the REST /cluster routes, the QUIC cluster category and the
-// MCP cluster tools all call.
+// socket), which the REST /cluster routes, the QUIC cluster category, the
+// MCP cluster tools and an embedded host's ServiceRegistry (the embedded
+// SDK transport) all call.
 // A nil svc clears it.
 //
 // serve (and every embedded host) sets it through appbackends.WireSDKBackends
