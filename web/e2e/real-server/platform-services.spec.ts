@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures';
 import type { Page } from '@playwright/test';
-import type { PlatformClient } from 'trusted-platform-sdk';
+import { daemonApi, type DaemonApi } from './fixtures/daemon-api';
 
 /**
  * Platform daemon services (#1752) against the real server.
@@ -14,8 +14,6 @@ import type { PlatformClient } from 'trusted-platform-sdk';
  * Gaps (docs/plans/1665-port-3.md): the injected 500 on ListServices.
  */
 
-type SDK = PlatformClient;
-
 /** Services safe to stop in the harness, in order of preference. */
 const PREFERRED = ['ntp', 'dns', 'pxe', 'vpn'];
 
@@ -24,23 +22,23 @@ async function openServicesPage(page: Page): Promise<void> {
   await expect(page.getByRole('heading', { name: /platform services/i })).toBeVisible();
 }
 
-async function listedServices(sdk: SDK): Promise<{ name: string; status: string }[]> {
-  const res = await sdk.platform.listServices();
+async function listedServices(api: DaemonApi): Promise<{ name: string; status: string }[]> {
+  const res = await api.listServices();
   if (!res.success || !res.data) {
     throw new Error(`platform.listServices failed: ${JSON.stringify(res.error)}`);
   }
   return (res.data.services ?? []).map((s) => ({ name: s.name, status: String(s.status ?? '') }));
 }
 
-async function pickService(sdk: SDK): Promise<string> {
-  const services = await listedServices(sdk);
+async function pickService(api: DaemonApi): Promise<string> {
+  const services = await listedServices(api);
   expect(services.length).toBeGreaterThan(0);
   const preferred = PREFERRED.find((n) => services.some((s) => s.name === n));
   return preferred ?? services[0].name;
 }
 
-async function serviceStatus(sdk: SDK, name: string): Promise<string> {
-  const res = await sdk.platform.getServiceStatus(name);
+async function serviceStatus(api: DaemonApi, name: string): Promise<string> {
+  const res = await api.getServiceStatus(name);
   if (!res.success || !res.data) {
     throw new Error(`platform.getServiceStatus(${name}) failed: ${JSON.stringify(res.error)}`);
   }
@@ -61,8 +59,8 @@ function versionString(data: unknown): string {
 }
 
 test.describe('Platform daemon services (real server)', () => {
-  test('GetStatus: shows the daemon status', async ({ adminPage, sdk }) => {
-    const res = await sdk.platform.getStatus();
+  test('GetStatus: shows the daemon status', async ({ adminPage }) => {
+    const res = await daemonApi(adminPage).getStatus();
     expect(res.success).toBe(true);
     const status = (res.data ?? {}) as Record<string, unknown>;
 
@@ -107,8 +105,9 @@ test.describe('Platform daemon services (real server)', () => {
     await expect(adminPage.getByText(/configuration reloaded/i).first()).toBeVisible();
   });
 
-  test('ListServices: lists the services the daemon reports', async ({ adminPage, sdk }) => {
-    const services = await listedServices(sdk);
+  test('ListServices: lists the services the daemon reports', async ({ adminPage }) => {
+    const api = daemonApi(adminPage);
+    const services = await listedServices(api);
     expect(services.length).toBeGreaterThan(0);
 
     await openServicesPage(adminPage);
@@ -119,9 +118,10 @@ test.describe('Platform daemon services (real server)', () => {
     }
   });
 
-  test("GetServiceStatus: shows one service's status", async ({ adminPage, sdk }) => {
-    const name = await pickService(sdk);
-    const res = await sdk.platform.getServiceStatus(name);
+  test("GetServiceStatus: shows one service's status", async ({ adminPage }) => {
+    const api = daemonApi(adminPage);
+    const name = await pickService(api);
+    const res = await api.getServiceStatus(name);
     expect(res.success).toBe(true);
 
     await openServicesPage(adminPage);
@@ -134,58 +134,62 @@ test.describe('Platform daemon services (real server)', () => {
   test.describe('service actions', () => {
     test.describe.configure({ mode: 'serial' });
 
-    test('StartService: starts a stopped service', async ({ adminPage, sdk }) => {
-      const name = await pickService(sdk);
+    test('StartService: starts a stopped service', async ({ adminPage }) => {
+      const api = daemonApi(adminPage);
+      const name = await pickService(api);
       try {
-        const stopped = await sdk.platform.stopService(name);
+        const stopped = await api.stopService(name);
         expect(stopped.success).toBe(true);
-        await expect.poll(() => serviceStatus(sdk, name)).not.toBe('running');
+        await expect.poll(() => serviceStatus(api, name)).not.toBe('running');
 
         await openServicesPage(adminPage);
         await adminPage.getByRole('button', { name: `Start ${name}` }).click();
         await expect(adminPage.getByTestId(`service-row-${name}`)).toContainText('running');
-        await expect.poll(() => serviceStatus(sdk, name)).toBe('running');
+        await expect.poll(() => serviceStatus(api, name)).toBe('running');
       } finally {
-        await sdk.platform.startService(name);
+        await api.startService(name);
       }
     });
 
-    test('StopService: stops a service after confirming', async ({ adminPage, sdk }) => {
-      const name = await pickService(sdk);
+    test('StopService: stops a service after confirming', async ({ adminPage }) => {
+      const api = daemonApi(adminPage);
+      const name = await pickService(api);
       try {
-        await sdk.platform.startService(name);
-        await expect.poll(() => serviceStatus(sdk, name)).toBe('running');
+        await api.startService(name);
+        await expect.poll(() => serviceStatus(api, name)).toBe('running');
 
         await openServicesPage(adminPage);
         await adminPage.getByRole('button', { name: `Stop ${name}` }).click();
         const dialog = adminPage.getByRole('dialog');
         await expect(dialog).toContainText(`Stop ${name}?`);
-        expect(await serviceStatus(sdk, name)).toBe('running');
+        expect(await serviceStatus(api, name)).toBe('running');
         await dialog.getByRole('button', { name: 'Confirm' }).click();
         await expect(adminPage.getByTestId(`service-row-${name}`)).toContainText('stopped');
-        await expect.poll(() => serviceStatus(sdk, name)).not.toBe('running');
+        await expect.poll(() => serviceStatus(api, name)).not.toBe('running');
       } finally {
-        await sdk.platform.startService(name);
+        await api.startService(name);
       }
     });
 
-    test('StopService: cancelling the dialog stops nothing', async ({ adminPage, sdk }) => {
-      const name = await pickService(sdk);
-      await sdk.platform.startService(name);
-      await expect.poll(() => serviceStatus(sdk, name)).toBe('running');
+    test('StopService: cancelling the dialog stops nothing', async ({ adminPage }) => {
+      const api = daemonApi(adminPage);
+      const name = await pickService(api);
+      await api.startService(name);
+      await expect.poll(() => serviceStatus(api, name)).toBe('running');
 
       await openServicesPage(adminPage);
       await adminPage.getByRole('button', { name: `Stop ${name}` }).click();
       await adminPage.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
       await expect(adminPage.getByRole('dialog')).toBeHidden();
       await expect(adminPage.getByTestId(`service-row-${name}`)).toContainText('running');
-      expect(await serviceStatus(sdk, name)).toBe('running');
+      expect(await serviceStatus(api, name)).toBe('running');
     });
 
-    test('RestartService: restarts a service after confirming', async ({ adminPage, sdk }) => {
-      const name = await pickService(sdk);
+    test('RestartService: restarts a service after confirming', async ({ adminPage }) => {
+      const api = daemonApi(adminPage);
+      const name = await pickService(api);
       try {
-        await sdk.platform.startService(name);
+        await api.startService(name);
 
         await openServicesPage(adminPage);
         await adminPage.getByRole('button', { name: `Restart ${name}` }).click();
@@ -197,9 +201,9 @@ test.describe('Platform daemon services (real server)', () => {
         await dialog.getByRole('button', { name: 'Confirm' }).click();
         expect((await restart).ok()).toBe(true);
         await expect(adminPage.getByText(new RegExp(`${name} restarted`, 'i')).first()).toBeVisible();
-        await expect.poll(() => serviceStatus(sdk, name)).toBe('running');
+        await expect.poll(() => serviceStatus(api, name)).toBe('running');
       } finally {
-        await sdk.platform.startService(name);
+        await api.startService(name);
       }
     });
   });

@@ -1,6 +1,7 @@
 import { test, expect } from './fixtures';
 import type { Page } from '@playwright/test';
 import type { PlatformClient } from 'trusted-platform-sdk';
+import { daemonApi, type ApplyPolicyRequest } from './fixtures/daemon-api';
 
 /**
  * SDN bridge detail, port state, port auth, port stats and policies (#1745)
@@ -177,16 +178,18 @@ test.describe('SDN bridge detail and ports (real server)', () => {
   test.describe('policies', () => {
     const created: string[] = [];
 
-    test.afterEach(async ({ sdk }) => {
-      const res = await sdk.sdn.listPolicies();
+    test.afterEach(async ({ adminPage }) => {
+      const api = daemonApi(adminPage);
+      const res = await api.listPolicies();
       for (const p of res.data?.policies ?? []) {
         if (created.includes(p.config?.name ?? '')) {
-          await sdk.sdn.applyPolicy({ policyId: p.id, config: { ...p.config!, enabled: false } });
+          await api.applyPolicy({ policyId: p.id, config: { ...p.config!, enabled: false } });
         }
       }
     });
 
-    test('ApplyPolicy applies a policy', async ({ adminPage, sdk }) => {
+    test('ApplyPolicy applies a policy', async ({ adminPage }) => {
+      const api = daemonApi(adminPage);
       const s = seeded!;
       const name = `allow-ssh-${Date.now().toString(36).slice(-6)}`;
       created.push(name);
@@ -203,7 +206,7 @@ test.describe('SDN bridge detail and ports (real server)', () => {
 
       await expect
         .poll(async () => {
-          const res = await sdk.sdn.listPolicies();
+          const res = await api.listPolicies();
           const p = (res.data?.policies ?? []).find((x) => x.config?.name === name);
           return p ? { type: p.config?.type, targets: p.config?.targets } : undefined;
         })
@@ -213,11 +216,12 @@ test.describe('SDN bridge detail and ports (real server)', () => {
         });
     });
 
-    test('GetPolicy and ListPolicies show a seeded policy', async ({ adminPage, sdk }) => {
+    test('GetPolicy and ListPolicies show a seeded policy', async ({ adminPage }) => {
+      const api = daemonApi(adminPage);
       const s = seeded!;
       const name = `deny-telnet-${Date.now().toString(36).slice(-6)}`;
       created.push(name);
-      const applied = await sdk.sdn.applyPolicy({
+      const applied = await api.applyPolicy({
         config: {
           name,
           type: 'POLICY_TYPE_FIREWALL',
@@ -233,7 +237,7 @@ test.describe('SDN bridge detail and ports (real server)', () => {
           ],
           targets: [{ type: 'POLICY_TARGET_TYPE_BRIDGE', id: s.bridgeId }],
         },
-      } as Parameters<PlatformClient['sdn']['applyPolicy']>[0]);
+      } as ApplyPolicyRequest);
       if (!applied.success || !applied.data?.policy) {
         throw new Error(`sdn.applyPolicy failed: ${JSON.stringify(applied.error)}`);
       }
