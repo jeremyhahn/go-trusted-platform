@@ -78,6 +78,10 @@ func (h *Handlers) ListImages(w http.ResponseWriter, r *http.Request) {
 		Limit:      parseInt32(q.Get("limit"), 200),
 		Offset:     parseInt32(q.Get("offset"), 0),
 	}
+	if req.Limit < 0 || req.Offset < 0 {
+		h.respWriter.Error400(w, r, ErrInvalidListPaging{})
+		return
+	}
 	resp, err := h.service.List(r.Context(), req)
 	if err != nil {
 		h.respWriter.Error500(w, r, err)
@@ -390,4 +394,12 @@ type ErrMissingImageTag struct{}
 
 func (ErrMissingImageTag) Error() string {
 	return "registry: delete needs an explicit tag (repository:tag)"
+}
+
+// ErrInvalidListPaging is returned when an image list asks for a
+// negative limit or offset.
+type ErrInvalidListPaging struct{}
+
+func (ErrInvalidListPaging) Error() string {
+	return "registry: limit and offset must not be negative"
 }
