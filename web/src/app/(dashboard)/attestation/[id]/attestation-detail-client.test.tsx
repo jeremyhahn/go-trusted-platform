@@ -26,6 +26,18 @@ vi.mock("@/hooks", async (importOriginal) => ({
   useToast: () => ({ toast: vi.fn() }),
 }));
 
+// The server's capability answers: every op enabled except those in off.
+const off = new Set<string>();
+
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: (op: string) =>
+      off.has(op) ? { enabled: false, reason: "not-configured: attestation" } : { enabled: true },
+  }),
+}));
+
 const manifest = {
   success: true,
   data: {
@@ -53,6 +65,7 @@ describe("AttestationDetailPage delete", () => {
     cleanup();
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    off.clear();
   });
 
   it("shows a Delete manifest button", async () => {
@@ -82,5 +95,15 @@ describe("AttestationDetailPage delete", () => {
     });
 
     expect(service.deleteManifest).not.toHaveBeenCalled();
+  });
+
+  it("withholds Delete manifest when the server does not offer it", async () => {
+    off.add("DELETE /api/v1/attestation/manifests/{id}");
+    const button = (await renderPage()) as HTMLButtonElement;
+
+    expect(button.getAttribute("data-capability-op")).toBe("DELETE /api/v1/attestation/manifests/{id}");
+    expect(button.getAttribute("data-capability-enabled")).toBe("false");
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("title")).toBe("not-configured: attestation");
   });
 });

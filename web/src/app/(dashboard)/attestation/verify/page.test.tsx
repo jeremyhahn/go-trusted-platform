@@ -23,6 +23,18 @@ vi.mock("@/hooks", async (importOriginal) => ({
   useToast: () => ({ toast: vi.fn() }),
 }));
 
+// The server's capability answers: every op enabled except those in off.
+const off = new Set<string>();
+
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: (op: string) =>
+      off.has(op) ? { enabled: false, reason: "not-configured: attestation" } : { enabled: true },
+  }),
+}));
+
 const manifestA = {
   id: "m-1",
   hostId: "node-a",
@@ -57,6 +69,7 @@ describe("VerifyPage verifier verdicts", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    off.clear();
   });
 
   it("shows a signed manifest as not verified before any run", async () => {
@@ -115,5 +128,17 @@ describe("VerifyPage verifier verdicts", () => {
       expect(within(row(host)).getByText("Not verified")).toBeTruthy();
       expect(within(row(host)).queryByText("Passed")).toBeNull();
     }
+  });
+
+  it("withholds Run Verification when the server does not offer it", async () => {
+    off.add("POST /api/v1/attestation/manifests/verify");
+    render(<VerifyPage />);
+    await screen.findAllByText("node-a");
+
+    const button = screen.getByRole("button", { name: /Run Verification/ }) as HTMLButtonElement;
+    expect(button.getAttribute("data-capability-op")).toBe("POST /api/v1/attestation/manifests/verify");
+    expect(button.getAttribute("data-capability-enabled")).toBe("false");
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("title")).toBe("not-configured: attestation");
   });
 });
