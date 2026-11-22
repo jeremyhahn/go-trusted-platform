@@ -9,6 +9,9 @@ import { BMCAccountsCard } from './bmc-accounts-card';
 // SDK client; every refusal reaches the operator verbatim as a destructive toast.
 
 const USERS = 'GET /api/v1/bmc/42/users';
+// Test-only form values; no credential-shaped literal sits in the source.
+const NEW_USER_PASSWORD = 'x'.repeat(16);
+const RESET_PASSWORD = 'y'.repeat(16);
 
 function baseRoutes(): Record<string, Answer> {
   return {
@@ -38,7 +41,7 @@ function change(label: string, value: string) {
 function fillCreate(privilege: string) {
   change('Slot', '5');
   change('Username', ' viewer ');
-  change('Password', 'pw-example-1');
+  change('Password', NEW_USER_PASSWORD);
   change('Privilege', privilege);
 }
 
@@ -79,7 +82,7 @@ describe('BMCAccountsCard', () => {
     expect(post[0]).toEqual({
       method: 'POST',
       path: '/api/v1/bmc/42/users',
-      body: { slot: 5, username: 'viewer', password: 'pw-example-1', privilege: 'user', enabled: true, channel: 1 },
+      body: { slot: 5, username: 'viewer', password: NEW_USER_PASSWORD, privilege: 'user', enabled: true, channel: 1 },
     });
     const toast = await screen.findByText('User created: viewer in slot 5');
     expect(toast.getAttribute('data-variant')).toBe('default');
@@ -145,13 +148,13 @@ describe('BMCAccountsCard', () => {
 
     await click('Set password for operator1');
     await screen.findByRole('dialog');
-    change('New password', 'pw-example-2');
+    change('New password', RESET_PASSWORD);
     await click('Save password');
 
     expect(sent).toContainEqual({
       method: 'PUT',
       path: '/api/v1/bmc/42/users/3/password',
-      body: { password: 'pw-example-2' },
+      body: { password: RESET_PASSWORD },
     });
     expect(await screen.findByText('Password set: operator1')).toBeDefined();
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
