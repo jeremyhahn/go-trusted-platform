@@ -681,6 +681,88 @@ func TestSDNService_ApplyPolicy_ReplacementKeepingEveryEntrySucceeds(t *testing.
 	assert.Equal(t, "drop", actions)
 }
 
+// A raw AddFlow issued while a policy apply is failing must not land between
+// the apply's installs and its rollback: policy flows carry no cookie, so the
+// rollback would remove or overwrite the raw flow on the same match.
+func TestSDNService_AddFlow_WaitsForAFailingPolicyApplysRollback(t *testing.T) {
+	svc, sw := newSwitchModelSDNService(t)
+
+	var evMu sync.Mutex
+	var events []string
+	logEvent := func(e string) {
+		evMu.Lock()
+		events = append(events, e)
+		evMu.Unlock()
+	}
+
+	policyMid := make(chan struct{})
+	rawAdded := make(chan struct{})
+	var midOnce, rawOnce sync.Once
+	sw.addHook = func(flow *ovs.FlowMod) error {
+		if flow.Cookie != "" {
+			logEvent("raw")
+			rawOnce.Do(func() { close(rawAdded) })
+			return nil
+		}
+		if flow.Match == "tcp,tp_dst=443" { // r2: the apply fails here
+			midOnce.Do(func() { close(policyMid) })
+			select {
+			case <-rawAdded:
+			case <-time.After(300 * time.Millisecond):
+			}
+			return errFlowInstall
+		}
+		return nil
+	}
+	sw.deleteHook = func(*ovs.FlowMod) error {
+		logEvent("delete")
+		return nil
+	}
+
+	pol := denyPolicy("p",
+		denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}),
+		denyRule("r2", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 443}),
+	)
+	applyErr := make(chan error, 1)
+	go func() {
+		_, err := svc.ApplyPolicy(context.Background(), pol)
+		applyErr <- err
+	}()
+	select {
+	case <-policyMid:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the apply never reached its second rule")
+	}
+
+	addErr := make(chan error, 1)
+	go func() {
+		_, err := svc.AddFlow(context.Background(), &platformv1.AddFlowRequest{Config: &platformv1.FlowConfig{
+			BridgeId: "br0",
+			Priority: 100,
+			Match:    &platformv1.FlowMatch{TcpDst: 22},
+		}})
+		addErr <- err
+	}()
+
+	require.Error(t, <-applyErr)
+	require.NoError(t, <-addErr)
+
+	evMu.Lock()
+	defer evMu.Unlock()
+	rawAt, lastDelete := -1, -1
+	for i, e := range events {
+		switch e {
+		case "raw":
+			rawAt = i
+		case "delete":
+			lastDelete = i
+		}
+	}
+	require.NotEqual(t, -1, rawAt, "the raw flow was never added: %v", events)
+	require.NotEqual(t, -1, lastDelete, "the failed apply never rolled back: %v", events)
+	assert.Greater(t, rawAt, lastDelete, "the raw add must come after the rollback: %v", events)
+}
+
 // A rollback delete that fails is an error of the apply, and the entry it
 // left behind stays tracked: the next apply removes it.
 func TestSDNService_ApplyPolicy_FailedRollbackDeleteIsReportedAndRetried(t *testing.T) {
