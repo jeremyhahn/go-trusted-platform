@@ -625,6 +625,62 @@ func TestSDNService_ApplyPolicy_ConcurrentRollbackKeepsTheOtherApplysFlow(t *tes
 	assert.NotEqual(t, "drop", actions)
 }
 
+// A replacement whose rules no longer cover an entry the old policy installed
+// would leave that flow on the switch with no owner: it is refused before any
+// switch write, and the recorded policy is unchanged.
+func TestSDNService_ApplyPolicy_RefusesAReplacementThatDropsAnEntry(t *testing.T) {
+	svc, sw := newSwitchModelSDNService(t)
+
+	first := denyPolicy("p", allowRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp"}))
+	first.PolicyId = "pol-1"
+	_, err := svc.ApplyPolicy(context.Background(), first)
+	require.NoError(t, err)
+
+	adds, deletes := countSwitchCalls(sw)
+
+	second := denyPolicy("p", allowRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", SourceIp: "10.0.0.0/8"}))
+	second.PolicyId = "pol-1"
+	_, err = svc.ApplyPolicy(context.Background(), second)
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err), "err: %v", err)
+
+	assert.Zero(t, *adds, "no flow may be installed by a refused replacement")
+	assert.Zero(t, *deletes, "no flow may be removed by a refused replacement")
+
+	svc.mu.RLock()
+	recorded := svc.policies["pol-1"]
+	svc.mu.RUnlock()
+	require.NotNil(t, recorded)
+	require.Len(t, recorded.rules, 1)
+	assert.Empty(t, recorded.rules[0].GetMatch().GetSourceIp(), "the recorded policy must still hold the first rule")
+}
+
+// A replacement that keeps every entry the old policy installed (here the
+// action changes on the same match and a rule is added) still applies.
+func TestSDNService_ApplyPolicy_ReplacementKeepingEveryEntrySucceeds(t *testing.T) {
+	svc, sw := newSwitchModelSDNService(t)
+
+	first := denyPolicy("p", denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}))
+	first.PolicyId = "pol-1"
+	_, err := svc.ApplyPolicy(context.Background(), first)
+	require.NoError(t, err)
+
+	second := denyPolicy("p",
+		allowRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}),
+		denyRule("r2", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 443}),
+	)
+	second.PolicyId = "pol-1"
+	_, err = svc.ApplyPolicy(context.Background(), second)
+	require.NoError(t, err)
+
+	actions, ok := sw.entry("tcp,tp_dst=22")
+	require.True(t, ok)
+	assert.NotEqual(t, "drop", actions)
+	actions, ok = sw.entry("tcp,tp_dst=443")
+	require.True(t, ok)
+	assert.Equal(t, "drop", actions)
+}
+
 // A rollback delete that fails is an error of the apply, and the entry it
 // left behind stays tracked: the next apply removes it.
 func TestSDNService_ApplyPolicy_FailedRollbackDeleteIsReportedAndRetried(t *testing.T) {
