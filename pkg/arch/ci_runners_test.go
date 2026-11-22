@@ -180,7 +180,7 @@ const (
 	selectionGate          = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner || '\"ubuntu-latest\"') || 'ubuntu-latest' }}"
 	selectionForkEvents    = "case \"$EVENT\" in\n  pull_request|pull_request_target)\n"
 	selectionForkGuard     = `if [ "$HEAD_REPO" != "$REPO" ]; then`
-	selectionSelfHostedMsg = "the self-hosted runners (bigdisk, bigdisk-docker)"
+	selectionSelfHostedMsg = "the Dells (bigdisk, bigdisk-docker)"
 )
 
 // selectionRunsOn is the runs-on every job of ci.yml carries under v1.48:

@@ -426,14 +426,22 @@ func TestRunnerSelectionScript(t *testing.T) {
 		{name: "a failed second jobs page", env: gh, jobs: slices.Concat(thirty, paged),
 			break_: func(r map[string]selReply) { r[jobsURL(9, 2)] = selReply{code: 502, body: `{"message":"Bad Gateway"}`} },
 			want:   hosted, warning: true},
-		// v1.54: a list short of its total_count is no lower bound (v1.50 is
-		// replaced): the run stays hosted.
+		// v1.59: a list short of its total_count is a lower bound, named in a
+		// ::notice, and the choice still uses it: 30 hosted jobs fill the
+		// hosted pool, so the run goes self-hosted with no ::warning.
 		{name: "a jobs list short of its total_count", env: gh, jobs: thirty,
 			break_: func(r map[string]selReply) {
 				r[jobsURL(7, 1)] = selReply{code: 200, body: strings.Replace(r[jobsURL(7, 1)].body, `"total_count":30`, `"total_count":31`, 1)}
 				r[jobsURL(7, 2)] = selReply{code: 200, body: `{"total_count":31,"jobs":[]}`}
 			},
-			want: hosted, warning: true, out: []string{"30 of 31 entries"}},
+			want: selfHosted, out: []string{"::notice::runner selection: the listing returned fewer entries than its total (runs/7/jobs?filter=latest: 30 of 31 entries); the counts are a lower bound", "the hosted pool is full (30 of 10)"}},
+		// A short list below every limit: still chosen, here self-hosted.
+		{name: "a short jobs list below every limit", env: gh, jobs: in(1, 0, 0, 0, 0, 0),
+			break_: func(r map[string]selReply) {
+				r[jobsURL(7, 1)] = selReply{code: 200, body: strings.Replace(r[jobsURL(7, 1)].body, `"total_count":1`, `"total_count":2`, 1)}
+				r[jobsURL(7, 2)] = selReply{code: 200, body: `{"total_count":2,"jobs":[]}`}
+			},
+			want: selfHosted, out: []string{"1 of 2 entries", "use hosted 1/10, bigdisk 0/10, bigdisk-docker 0/10"}},
 		{name: "a jobs page that cannot be counted", env: gh, jobs: thirty,
 			break_: func(r map[string]selReply) {
 				r[jobsURL(7, 1)] = selReply{code: 200, body: `{"total_count":1,"jobs":[7]}`}
@@ -467,7 +475,7 @@ func TestRunnerSelectionScript(t *testing.T) {
 	cases = append(cases, selCase{name: "CI_HOSTED_SHARE unset, the hosted pool full", env: bal("", "10", "10"), jobs: in(12, 9, 0, 0, 0, 0),
 		want: selfHosted, warning: true, out: []string{"the hosted pool is full (12 of 12)"}})
 
-	const selfNotice = "this run's jobs run on the self-hosted runners (bigdisk, bigdisk-docker)"
+	const selfNotice = "this run's jobs run on the Dells (bigdisk, bigdisk-docker)"
 	ownJobs := fmt.Sprintf("/runs/%d/jobs", selRunID)
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
