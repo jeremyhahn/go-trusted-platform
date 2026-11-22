@@ -592,6 +592,7 @@ PUT /api/v1/kms/keys/{name}/policy
 PUT /api/v1/kms/keys/{name}/status
 PUT /api/v1/kms/secrets/{name}/policy
 PUT /api/v1/kms/secrets/{name}/status
+PUT /api/v1/platform/config/sections/{section}
 PUT /api/v1/pxe/devices/{id}/state
 PUT /api/v1/sdn/bridges/{name}/ports/{port}/state
 PUT /api/v1/sdn/gateway/ipam/pools/{id}
