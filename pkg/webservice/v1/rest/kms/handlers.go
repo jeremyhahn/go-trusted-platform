@@ -383,7 +383,7 @@ func (h *Handlers) ListKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	end := len(keys)
 	out := &ListKeysResponse{TotalCount: len(keys)}
-	if q.limit > 0 && start+q.limit < len(keys) {
+	if q.limit > 0 && q.limit < len(keys)-start {
 		end = start + q.limit
 		out.HasMore = true
 		out.NextCursor = strconv.Itoa(end)
