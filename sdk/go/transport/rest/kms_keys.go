@@ -71,6 +71,8 @@ func init() {
 		wireDecoder(platformv1.KeyManagementService_GenerateKey_FullMethodName, decodeKMSGenerateKey)
 	restResponseDecoders[platformv1.KeyManagementService_GetKey_FullMethodName] =
 		wireDecoder(platformv1.KeyManagementService_GetKey_FullMethodName, decodeKMSGetKey)
+	restResponseDecoders[platformv1.KeyManagementService_ListKeys_FullMethodName] =
+		wireDecoder(platformv1.KeyManagementService_ListKeys_FullMethodName, decodeKMSListKeys)
 }
 
 // encodeKMSGenerateKey flattens the key spec onto the route's top-level
@@ -242,6 +244,39 @@ func decodeKMSGetKey(raw []byte) (*platformv1.GetKeyResponse, error) {
 			CreatedAt: created,
 			UpdatedAt: kmsUnixSeconds(reply.RotatedAt),
 		},
+	}, nil
+}
+
+// kmsListKeysReply is the KMS router's ListKeys reply: each key as the flat
+// key-info object GetKey answers, plus the pagination fields.
+type kmsListKeysReply struct {
+	Keys       []kmsKeyInfoReply `json:"keys"`
+	NextCursor string            `json:"next_cursor"`
+	HasMore    bool              `json:"has_more"`
+	TotalCount int32             `json:"total_count"`
+}
+
+// decodeKMSListKeys maps the router's ListKeys reply, whose algorithm is a
+// name and created_at an RFC 3339 time, onto ListKeysResponse.
+func decodeKMSListKeys(raw []byte) (*platformv1.ListKeysResponse, error) {
+	var reply kmsListKeysReply
+	if err := json.Unmarshal(raw, &reply); err != nil {
+		return nil, ErrUnmarshalFailed{Err: err}
+	}
+	keys := make([]*platformv1.KMSKeyHandle, 0, len(reply.Keys))
+	for _, k := range reply.Keys {
+		keys = append(keys, &platformv1.KMSKeyHandle{
+			KeyId:     k.KeyID,
+			Version:   k.Version,
+			Algorithm: kmsKeyAlgorithmsByName[k.Algorithm],
+			CreatedAt: kmsUnixSeconds(k.CreatedAt),
+		})
+	}
+	return &platformv1.ListKeysResponse{
+		Keys:       keys,
+		NextCursor: reply.NextCursor,
+		HasMore:    reply.HasMore,
+		TotalCount: reply.TotalCount,
 	}, nil
 }
 
