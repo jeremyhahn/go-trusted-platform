@@ -378,7 +378,7 @@ func callKMSSecretTool(t *testing.T, tc kmsSecretToolCase, grant func(permission
 			return grant(resource + ":" + action), nil
 		},
 	}
-	server := NewServer(svc, &Config{AuthorizationService: authz}, newTestLogger())
+	server := NewServer(svc, &Config{AuthorizationService: authz, AuthManager: legacyCaller(), PEPClient: servicePEP{authz}}, newTestLogger())
 
 	args := make(map[string]interface{}, len(tc.args))
 	for k, v := range tc.args {

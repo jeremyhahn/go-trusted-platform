@@ -89,6 +89,7 @@ type mockServiceProvider struct {
 	deviceUpdateFunc           func(ctx context.Context, deviceID string, updates map[string]interface{}) error
 	deviceAttestFunc           func(ctx context.Context, deviceID string, evidence []byte) (interface{}, error)
 	deviceRecordAttestCertFunc func(ctx context.Context, deviceID string, reissue, clearOnRefusal bool) (interface{}, error)
+	deviceAttestChallengeFunc  func(ctx context.Context, deviceID string) (interface{}, error)
 	deviceBootCertificateFunc  func(ctx context.Context, identity string, signature []byte) (interface{}, error)
 	deviceBootDeliveryFunc     func(ctx context.Context, evidence []byte) (interface{}, error)
 	deviceProvisionFunc        func(ctx context.Context, deviceID, profile string) error
@@ -1143,6 +1144,13 @@ func (m *mockServiceProvider) DeviceAttest(ctx context.Context, deviceID string,
 func (m *mockServiceProvider) DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue, clearOnRefusal bool) (interface{}, error) {
 	if m.deviceRecordAttestCertFunc != nil {
 		return m.deviceRecordAttestCertFunc(ctx, deviceID, reissue, clearOnRefusal)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) DeviceAttestChallenge(ctx context.Context, deviceID string) (interface{}, error) {
+	if m.deviceAttestChallengeFunc != nil {
+		return m.deviceAttestChallengeFunc(ctx, deviceID)
 	}
 	return nil, nil
 }

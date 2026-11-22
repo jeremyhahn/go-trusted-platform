@@ -93,7 +93,7 @@ func TestAppServiceRoutes_ReachTheSharedServers(t *testing.T) {
 	messaging := &countingMessagingServer{}
 	objects := &countingObjectStorageServer{}
 	registry := &testHandlerRegistry{
-		tokenHandler: &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"},
+		tokenHandler: &allScopesSessionAuth{sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"}},
 		appServices:  restapi.AppServiceServers{Cache: cache, Scheduler: scheduler, Messaging: messaging, ObjectStorage: objects},
 	}
 
@@ -172,7 +172,59 @@ func TestScopeRouteGuard(t *testing.T) {
 		assert.Equal(t, http.StatusTeapot, serve(guard, "cache:read"))
 		assert.Equal(t, http.StatusForbidden, serve(guard, "cache:write"))
 	})
-	t.Run("without an authorizer the role gate alone decides", func(t *testing.T) {
-		assert.Equal(t, http.StatusTeapot, serve(scopeRouteGuard{}, "cache:write"))
+	t.Run("without an authorizer the route refuses", func(t *testing.T) {
+		assert.Equal(t, http.StatusForbidden, serve(scopeRouteGuard{}, "cache:read"))
+		assert.Equal(t, http.StatusForbidden, serve(scopeRouteGuard{}, "cache:write"))
 	})
+}
+
+// allScopesSessionAuth is an admin session whose token middleware is also a
+// ScopeAuthorizer granting every scope, so the routes reach their servers.
+type allScopesSessionAuth struct {
+	sessionAuth
+}
+
+func (s *allScopesSessionAuth) RequireScope(string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler { return next }
+}
+
+// TestAppServiceRoutes_RefusedWithoutAScopeAuthorizer pins #1990: an admin
+// session under a token handler that checks no scopes is refused on every
+// application service route, and no server is reached.
+func TestAppServiceRoutes_RefusedWithoutAScopeAuthorizer(t *testing.T) {
+	cache := &countingCacheServer{}
+	scheduler := &countingSchedulerServer{}
+	messaging := &countingMessagingServer{}
+	objects := &countingObjectStorageServer{}
+	registry := &testHandlerRegistry{
+		tokenHandler: &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"},
+		appServices:  restapi.AppServiceServers{Cache: cache, Scheduler: scheduler, Messaging: messaging, ObjectStorage: objects},
+	}
+
+	for _, target := range appServiceProbes {
+		assert.Equal(t, http.StatusForbidden, appServiceServing(t, registry, target), target)
+	}
+	assert.Zero(t, cache.calls+scheduler.calls+messaging.calls+objects.calls)
+}
+
+// TestProxyRoutes_RefusedWithoutAScopeAuthorizer pins that the proxy reads,
+// like the other scoped routes, fail closed under the legacy JWT handler: an
+// admin session without scopes is refused, one with every scope gets through
+// to the (stub) service (#2157 Codex).
+func TestProxyRoutes_RefusedWithoutAScopeAuthorizer(t *testing.T) {
+	targets := []string{"/api/v1/proxy/routes", "/api/v1/proxy/zone-matrix"}
+
+	roleOnly := &testHandlerRegistry{
+		tokenHandler: &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"},
+	}
+	for _, target := range targets {
+		assert.Equal(t, http.StatusForbidden, appServiceServing(t, roleOnly, target), target)
+	}
+
+	scoped := &testHandlerRegistry{
+		tokenHandler: &allScopesSessionAuth{sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"}},
+	}
+	for _, target := range targets {
+		assert.NotEqual(t, http.StatusForbidden, appServiceServing(t, scoped, target), target)
+	}
 }
