@@ -909,7 +909,7 @@ func (s *SDNService) GetPortStats(ctx context.Context, req *platformv1.GetPortSt
 		return nil, status.Error(codes.InvalidArgument, "port_id is required")
 	}
 
-	portName, _, found := s.findPortName(req.GetPortId())
+	portName, found := s.resolvePortName(ctx, req.GetBridgeId(), req.GetPortId())
 	if !found {
 		return nil, status.Error(codes.NotFound, "port not found")
 	}
@@ -1058,7 +1058,7 @@ func (s *SDNService) SetPortState(ctx context.Context, req *platformv1.SetPortSt
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	portName, _, found := s.findPortName(req.GetPortId())
+	portName, found := s.resolvePortName(ctx, req.GetBridgeId(), req.GetPortId())
 	if !found {
 		return nil, status.Error(codes.NotFound, "port not found")
 	}
@@ -1505,6 +1505,34 @@ func (s *SDNService) findPortName(id string) (string, platformv1.PortType, bool)
 		}
 	}
 	return "", platformv1.PortType_PORT_TYPE_UNSPECIFIED, false
+}
+
+// resolvePortName finds a port on the given bridge by UUID or name. Ports
+// this process added are found in memory; ports created before this process
+// started, or outside it, are known only to OVS, so on a miss the bridge's
+// ports are listed from OVS.
+func (s *SDNService) resolvePortName(ctx context.Context, bridgeID, portID string) (string, bool) {
+	if name, _, found := s.findPortName(portID); found {
+		return name, true
+	}
+	bridgeName, found := s.findBridgeName(bridgeID)
+	if !found {
+		return "", false
+	}
+	client := s.getOVSClient()
+	if client == nil {
+		return "", false
+	}
+	ovsPorts, err := client.ListPorts(ctx, bridgeName)
+	if err != nil {
+		return "", false
+	}
+	for _, p := range ovsPorts {
+		if p.UUID == portID || p.Name == portID {
+			return p.Name, true
+		}
+	}
+	return "", false
 }
 
 // FindPortBridge looks up the bridge ID associated with a port by port ID or name.
