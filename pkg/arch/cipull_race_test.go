@@ -263,12 +263,14 @@ func TestCIRegistryPushSurvivesTwoProducersOnOneDaemon(t *testing.T) {
 	}
 	require.Equal(t, "0", read("a.rc"), "producer A:\n%s", read("a.log"))
 	require.NoError(t, err, "producer B, which pushes after producer A exits:\n%s", out)
-	ref := "image_ref=registry.invalid:5000/go-trusted-platform/it-image:1111"
+	// The image_ref output carries no registry host (the runner drops a
+	// secret-derived output); the push itself goes to the registry.
+	ref := "image_ref=go-trusted-platform/it-image:1111"
 	require.Equal(t, ref, read("a.out"))
 	require.Equal(t, ref, read("b.out"))
 	pushed, err := os.ReadFile(filepath.Join(state, "pushed"))
 	require.NoError(t, err)
-	pushedRef := strings.TrimPrefix(ref, "image_ref=")
+	pushedRef := "registry.invalid:5000/" + strings.TrimPrefix(ref, "image_ref=")
 	require.Equal(t, []string{pushedRef, pushedRef}, strings.Fields(string(pushed)), "both producers push")
 	// The per-job Docker configs are gone with their jobs.
 	left, err := filepath.Glob(filepath.Join(tmp, "docker-config.*"))

@@ -1470,8 +1470,11 @@ jobs:
       # which `docker save` / `docker load` and a registry push / pull keep
       # whatever the image store.
       image_identity: ${{ steps.build.outputs.image_identity }}
-      # Ruling 675: the LAN registry reference a leg on another runner's
-      # daemon pulls the image from; empty when the artifact path ran.
+      # Ruling 675: the image's repository path and tag in the LAN registry
+      # a leg on another runner's daemon pulls it from, with no registry
+      # host: the runner drops a job output that contains a secret, so each
+      # leg prefixes the CI_IMAGE_REGISTRY secret. Empty when the artifact
+      # path ran.
       image_ref: ${{ steps.push.outputs.image_ref }}
       # The artifact a leg on another runner's daemon loads the image from
       # when no registry carries it (GitHub-hosted runners, or a self-hosted
@@ -1492,12 +1495,21 @@ jobs:
 
       # Ruling 675: IT_REGISTRY is the LAN registry (host:port) the legs pull
       # the image from, on self-hosted runners only; empty selects the
-      # artifact path. The endpoint lives in the repository variable, never
-      # in the repo. A step sets it, as a job's env has no runner context.
+      # artifact path. The endpoint lives in the repository secret
+      # CI_IMAGE_REGISTRY, never in the repo or a variable (public hygiene,
+      # "Internal values are configuration inputs": a variable is printed in
+      # the run log, a secret is masked), and the step masks it before
+      # GITHUB_ENV hands it on. A fork or Dependabot run gets no secrets, so
+      # the empty value selects the artifact path. A step sets it, as a job's
+      # env has no runner context.
       - name: Select the integration image transport
         env:
-          IT_REGISTRY: ${{ runner.environment != 'github-hosted' && vars.CI_IMAGE_REGISTRY || '' }}
-        run: echo "IT_REGISTRY=$IT_REGISTRY" >> "$GITHUB_ENV"
+          IT_REGISTRY: ${{ runner.environment != 'github-hosted' && secrets.CI_IMAGE_REGISTRY || '' }}
+        run: |
+          if [ -n "$IT_REGISTRY" ]; then
+            echo "::add-mask::$IT_REGISTRY"
+          fi
+          echo "IT_REGISTRY=$IT_REGISTRY" >> "$GITHUB_ENV"
 
       - name: Reap stale CI stacks
         run: scripts/reap-stale-ci-stacks.sh go-trusted-platform-ci-
@@ -1631,7 +1643,8 @@ jobs:
           REGISTRY_USER: ${{ secrets.CI_IMAGE_REGISTRY_USER }}
           REGISTRY_PASSWORD: ${{ secrets.CI_IMAGE_REGISTRY_PASSWORD }}
         run: |
-          ref="$IT_REGISTRY/go-trusted-platform/it-image:${IT_LEASE_ID#sha256:}"
+          path="go-trusted-platform/it-image:${IT_LEASE_ID#sha256:}"
+          ref="$IT_REGISTRY/$path"
           source "$RUNNER_TEMP/image-lock.sh"
           registry_config=$(mktemp -d "$RUNNER_TEMP/docker-config.XXXXXX") || exit 1
           trap 'image_unlock; rm -rf "$registry_config"' EXIT
@@ -1655,7 +1668,7 @@ jobs:
           docker tag "$IT_LEASE_ID" "$ref"
           image_unlock
           DOCKER_CONFIG=$registry_config docker push "$ref"
-          echo "image_ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "image_ref=$path" >> "$GITHUB_OUTPUT"
 
       # Without a registry (GitHub-hosted runners, or CI_IMAGE_REGISTRY unset)
       # a leg on another runner loads the image from this artifact. Gitea
@@ -1853,10 +1866,12 @@ jobs:
         id: pull
         if: steps.lease.outputs.leased != 'true' && needs.integration-image.outputs.image_ref != ''
         env:
-          IT_IMAGE_REF: ${{ needs.integration-image.outputs.image_ref }}
+          IT_IMAGE_PATH: ${{ needs.integration-image.outputs.image_ref }}
+          IT_REGISTRY: ${{ secrets.CI_IMAGE_REGISTRY }}
           REGISTRY_USER: ${{ secrets.CI_IMAGE_REGISTRY_USER }}
           REGISTRY_PASSWORD: ${{ secrets.CI_IMAGE_REGISTRY_PASSWORD }}
         run: |
+          IT_IMAGE_REF="$IT_REGISTRY/$IT_IMAGE_PATH"
           source "$RUNNER_TEMP/image-lock.sh"
           registry_config=$(mktemp -d "$RUNNER_TEMP/docker-config.XXXXXX") || exit 1
           trap 'image_unlock; rm -rf "$registry_config"' EXIT
