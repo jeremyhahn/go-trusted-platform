@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { useApi, useAttestation, useToast } from "@/hooks";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { ManifestActionsCard } from "./manifest-actions-card";
 
 /**
  * Attestation Manifest represents a reference measurement manifest
@@ -276,6 +277,7 @@ export default function ManifestsPage() {
         </div>
       </div>
 
+      <ManifestActionsCard manifests={manifestsData?.manifests ?? []} onDeleted={() => refetch()} />
       {/* Statistics Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card>
