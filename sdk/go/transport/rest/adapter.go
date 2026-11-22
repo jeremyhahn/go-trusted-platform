@@ -1143,6 +1143,8 @@ var templatedRouteTable = map[string]templatedRoute{
 	// POST /api/v1/devices/{id}/attest (admin gate). The server leaves this
 	// id unconstrained; evidence travels in the body.
 	"/platform.v1.DeviceService/AttestDevice": itemRoute("/api/v1/devices/{id}/attest", http.MethodPost, "{id}", "device_id"),
+	// POST /api/v1/devices/{id}/attest/challenge issues the single-use nonce AttestDevice checks (#2136).
+	"/platform.v1.DeviceService/IssueAttestationChallenge": itemRoute("/api/v1/devices/{id}/attest/challenge", http.MethodPost, "{id}", "device_id"),
 
 	// GET, PUT and DELETE /api/v1/device/templates/{id:[0-9]+}.
 	"/platform.v1.DeviceService/GetTemplate":    itemRoute("/api/v1/device/templates/{id:[0-9]+}", http.MethodGet, "{id:[0-9]+}", "id"),

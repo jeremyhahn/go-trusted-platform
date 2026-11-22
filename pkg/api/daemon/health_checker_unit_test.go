@@ -287,14 +287,14 @@ func TestSDNServiceHealthChecker_CheckAllPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("OVS client nil returns unhealthy", func(t *testing.T) {
+	t.Run("OVS client nil returns degraded", func(t *testing.T) {
 		service := &SDNService{ovsClient: nil}
 		checker := &SDNServiceHealthChecker{service: service}
 
 		result := checker.Check(context.Background())
 
-		if result.Status != health.StatusUnhealthy {
-			t.Errorf("Status = %v, want StatusUnhealthy", result.Status)
+		if result.Status != health.StatusDegraded {
+			t.Errorf("Status = %v, want StatusDegraded", result.Status)
 		}
 		if result.Message != "OVS client not initialized" {
 			t.Errorf("Message = %v, want 'OVS client not initialized'", result.Message)

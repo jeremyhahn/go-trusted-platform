@@ -333,20 +333,23 @@ func (a restScopeAuthorization) authorize(next http.Handler) http.Handler {
 				return
 			}
 		}
+		ctx := context.WithValue(r.Context(), restCallerKey{}, caller)
+		ctx = grpcapi.ContextWithAuthorizedContext(ctx, caller)
 		if a.routeGate != nil {
 			if err := a.routeGate(caller.TenantID, restRouteTemplate(r)); err != nil {
 				a.respWriter.Error403(w, r, err, nil)
 				return
 			}
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), restCallerKey{}, caller)))
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
 // restCallerKey is the request context key of the caller authorize verified.
 // A route's own scope check reads it instead of authenticating again: a
 // sender-constrained (DPoP) proof is single-use, so a second validation would
-// reject the request as a replay.
+// reject the request as a replay. The caller is also the services' gRPC
+// authorized context, so callerTenant binds REST calls to the bearer's tenant (#2142).
 type restCallerKey struct{}
 
 // restCaller returns the caller authorize verified for r, if any.

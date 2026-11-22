@@ -275,9 +275,11 @@ func (c *SDNServiceHealthChecker) Check(ctx context.Context) health.ComponentHea
 		return componentHealth
 	}
 
-	// SDN service doesn't have IsRunning, check if OVS client is connected
+	// SDN service doesn't have IsRunning, check if OVS client is connected.
+	// A host without Open vSwitch can still serve every other API, so a
+	// missing OVS client degrades the platform rather than making it unready.
 	if c.service.ovsClient == nil {
-		componentHealth.Status = health.StatusUnhealthy
+		componentHealth.Status = health.StatusDegraded
 		componentHealth.Message = "OVS client not initialized"
 		componentHealth.Duration = time.Since(start)
 		return componentHealth

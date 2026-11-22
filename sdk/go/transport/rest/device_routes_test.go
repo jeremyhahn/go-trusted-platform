@@ -140,6 +140,11 @@ var deviceServerRoutes = map[protoreflect.Name]deviceServerRoute{
 		req:      &platformv1.AttestDeviceRequest{DeviceId: "dev-1"},
 		wire:     "POST /api/v1/devices/dev-1/attest",
 	},
+	"IssueAttestationChallenge": {
+		template: "POST /api/v1/devices/{id}/attest/challenge",
+		req:      &platformv1.IssueAttestationChallengeRequest{DeviceId: "dev-1"},
+		wire:     "POST /api/v1/devices/dev-1/attest/challenge",
+	},
 	"RecordAttestationCertificate": {
 		template: "POST /api/v1/devices/{id:[0-9]+}/attest-cert/record",
 		req:      &platformv1.RecordAttestationCertificateRequest{DeviceId: "9"},

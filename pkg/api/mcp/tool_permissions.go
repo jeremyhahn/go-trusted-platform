@@ -164,6 +164,7 @@ func platformToolTable() map[string]string {
 	permissions["device_update"] = "device:write"
 	permissions["device_attest"] = "device:write"
 	permissions["device_record_attest_cert"] = "device:write"
+	permissions["device_attest_challenge"] = "device:write"
 	permissions["device_disable"] = "device:write"
 	permissions["device_enable"] = "device:write"
 	// Diskless boot: a node holds no token. These tools are explicitly open
