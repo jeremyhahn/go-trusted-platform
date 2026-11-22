@@ -18,8 +18,14 @@ type keys2151KMS struct {
 	kmsclient.Client
 	keys      []kmsclient.KeyInfo
 	genReq    *kmsclient.GenerateKeyRequest
+	importReq *kmsclient.ImportKeyRequest
 	updateReq *kmsclient.UpdateKeyMetadataRequest
 	updateErr error
+}
+
+func (f *keys2151KMS) ImportKey(_ context.Context, req *kmsclient.ImportKeyRequest) (*kmsclient.ImportKeyResponse, error) {
+	f.importReq = req
+	return &kmsclient.ImportKeyResponse{KeyID: "imp-1", Version: 1, Algorithm: req.Algorithm}, nil
 }
 
 func (f *keys2151KMS) GenerateKey(_ context.Context, req *kmsclient.GenerateKeyRequest) (*kmsclient.GenerateKeyResponse, error) {
@@ -166,5 +172,36 @@ func TestListKeys2151_HugeLimitDoesNotOverflow(t *testing.T) {
 	if got.NextCursor != "" || got.HasMore || got.TotalCount != 3 {
 		t.Fatalf("next_cursor %q has_more %v total_count %d, want \"\" false 3",
 			got.NextCursor, got.HasMore, got.TotalCount)
+	}
+}
+
+// TestGenerateKey2151_AcceptsTheFacadeKeySpec pins the facade's snake_case
+// key_spec envelope on the mounted router (#2151 Codex round 2).
+func TestGenerateKey2151_AcceptsTheFacadeKeySpec(t *testing.T) {
+	f := &keys2151KMS{}
+	w := covServe(keys2151Handlers(f).GenerateKey, covRequest(http.MethodPost, "/api/v1/kms/keys",
+		`{"name":"k","key_spec":{"algorithm":"AES-256-GCM","usage":["ENCRYPT","DECRYPT"],"exportable":true,"deletion_protection":true}}`, nil))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body %s)", w.Code, w.Body.String())
+	}
+	if f.genReq == nil {
+		t.Fatal("GenerateKey was not called")
+	}
+	if f.genReq.Algorithm != kmsclient.AlgorithmAES256GCM || len(f.genReq.Usage) != 2 ||
+		!f.genReq.Exportable || !f.genReq.DeletionProtection {
+		t.Fatalf("GenerateKey request = %+v, want AES-256-GCM, two usages, exportable, deletion protection", f.genReq)
+	}
+}
+
+// TestImportKey2151_AcceptsTheFacadeKeySpec pins the same envelope on import.
+func TestImportKey2151_AcceptsTheFacadeKeySpec(t *testing.T) {
+	f := &keys2151KMS{}
+	w := covServe(keys2151Handlers(f).ImportKey, covRequest(http.MethodPost, "/api/v1/kms/keys/import",
+		`{"name":"k","key_material":"AQID","key_spec":{"algorithm":"AES-256-GCM","usage":["ENCRYPT"]}}`, nil))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body %s)", w.Code, w.Body.String())
+	}
+	if f.importReq == nil || f.importReq.Algorithm != kmsclient.AlgorithmAES256GCM || len(f.importReq.Usage) != 1 {
+		t.Fatalf("ImportKey request = %+v, want AES-256-GCM with one usage", f.importReq)
 	}
 }

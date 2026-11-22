@@ -20,10 +20,12 @@ import (
 // TestDaemonREST_KMSKeysKeepMetadataAndListSemantics.
 type daemonKeys2151KMS struct {
 	kmsclient.Client
+	genReq    *kmsclient.GenerateKeyRequest
 	updateReq *kmsclient.UpdateKeyMetadataRequest
 }
 
 func (f *daemonKeys2151KMS) GenerateKey(_ context.Context, req *kmsclient.GenerateKeyRequest) (*kmsclient.GenerateKeyResponse, error) {
+	f.genReq = req
 	return &kmsclient.GenerateKeyResponse{KeyID: "gen-1", Version: 1, Algorithm: req.Algorithm}, nil
 }
 
@@ -94,4 +96,35 @@ func TestDaemonREST_KMSKeysKeepMetadataAndListSemantics(t *testing.T) {
 	require.Equal(t, "1", reply.Payload.NextCursor)
 	require.True(t, reply.Payload.HasMore)
 	require.Equal(t, 3, reply.Payload.TotalCount)
+}
+
+// TestDaemonREST_KMSGenerateKeyAcceptsTheFacadeKeySpec drives the facade's
+// snake_case key_spec request through the mounted KMS router (#2151 Codex
+// round 2).
+func TestDaemonREST_KMSGenerateKeyAcceptsTheFacadeKeySpec(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RESTListenAddr = "127.0.0.1:0"
+	cfg.PlatformTenantID = probePlatformTenant
+	svc, err := NewService(cfg)
+	require.NoError(t, err)
+	s, err := NewRESTServer(cfg, svc, slog.Default())
+	require.NoError(t, err)
+
+	guard := restapi.NewScopeGuard(tenantScopedTokenValidator{tenant: probePlatformTenant, scopes: kmsCatalogScopes(t)}, nil, nil)
+	fake := &daemonKeys2151KMS{}
+	s.SetKMSRouter(fake, nil, nil, nil, guard)
+	s.SetKMSHandlers(routeTableKMS{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/kms/keys", strings.NewReader(
+		`{"name":"k","key_spec":{"algorithm":"AES-256-GCM","usage":["ENCRYPT","DECRYPT"],"exportable":true,"deletion_protection":true}}`))
+	req.Header.Set("Authorization", "Bearer t")
+	w := httptest.NewRecorder()
+	if serveProbe(s, w, req) {
+		t.Fatal("POST /api/v1/kms/keys reached a legacy handler")
+	}
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	require.NotNil(t, fake.genReq)
+	require.Equal(t, kmsclient.AlgorithmAES256GCM, fake.genReq.Algorithm)
+	require.True(t, fake.genReq.Exportable)
+	require.True(t, fake.genReq.DeletionProtection)
 }
