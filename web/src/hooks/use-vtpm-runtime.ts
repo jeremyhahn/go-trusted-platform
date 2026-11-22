@@ -4,8 +4,9 @@
  * vTPM bundle runtime hook (#1726).
  *
  * Wraps the SDK's bundle runtime routes (start, stop, quote, seal, unseal,
- * PCR extend and PCR read) for one bundle. IsVTPMRunning has no REST route,
- * so the running state is tracked from the start and stop results.
+ * PCR extend and PCR read) for one bundle, and IsVTPMRunning through
+ * GET /bundles/{id}/state (#2072). The running state is whatever the last
+ * state read, start or stop answered.
  */
 
 import * as React from "react";
@@ -17,7 +18,7 @@ import type {
   ExtendBundlePCRRequest,
 } from "trusted-platform-sdk";
 
-/** Running state as the last start or stop result left it. */
+/** Running state as the last state read, start or stop result left it. */
 export type VTPMRunState = "unknown" | "running" | "stopped";
 
 export function useVTPMRuntime(bundleId: string) {
@@ -32,6 +33,9 @@ export function useVTPMRuntime(bundleId: string) {
       if (r.stopped) setRunState("stopped");
     },
   });
+  const checkState = useMutation(() => vtpm.getBundleState(bundleId), {
+    onSuccess: (r) => setRunState(r.running ? "running" : "stopped"),
+  });
   const quote = useMutation((req: QuoteBundleRequest) => vtpm.quoteBundle(bundleId, req));
   const seal = useMutation((req: SealBundleRequest) => vtpm.sealBundle(bundleId, req));
   const unseal = useMutation((req: UnsealBundleRequest) => vtpm.unsealBundle(bundleId, req));
@@ -40,11 +44,11 @@ export function useVTPMRuntime(bundleId: string) {
   );
   const readPCR = useMutation((pcrIndex: number) => vtpm.readBundlePCR(bundleId, pcrIndex));
 
-  // Start and stop write the same running state: while either is pending,
-  // neither may be sent, so a late reply cannot overwrite a newer one.
-  const lifecycleBusy = start.isLoading || stop.isLoading;
+  // Start, stop and the state read write the same running state: while any
+  // is pending, none may be sent, so a late reply cannot overwrite a newer one.
+  const lifecycleBusy = start.isLoading || stop.isLoading || checkState.isLoading;
 
-  return { runState, lifecycleBusy, start, stop, quote, seal, unseal, extendPCR, readPCR };
+  return { runState, lifecycleBusy, start, stop, checkState, quote, seal, unseal, extendPCR, readPCR };
 }
 
 /** Text to base64 (UTF-8). */

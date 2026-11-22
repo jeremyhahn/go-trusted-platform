@@ -42,6 +42,7 @@ import type {
   ExtendBundlePCRRequest,
   ExtendBundlePCRResponse,
   ReadBundlePCRResponse,
+  GetBundleStateResponse,
   VTPMRuntimeStatus,
   CreateBundleOptions,
   CreateTemplateOptions,
@@ -309,8 +310,8 @@ export class VTPMService extends BaseService {
   // =========================================================================
   // Bundle Runtime Operations
   //
-  // IsVTPMRunning has no REST route: callers track the running state from
-  // the start and stop results.
+  // IsVTPMRunning is GET /bundles/{id}/state (getBundleState); start and
+  // stop results also carry the running state.
   // =========================================================================
 
   /**
@@ -370,6 +371,17 @@ export class VTPMService extends BaseService {
       return this.withStatus({ ...r, data: { ...data, stopped: data.success === true } as StopBundleResponse });
     }
     return this.withStatus(r);
+  }
+
+  /**
+   * Reads whether a bundle's vTPM is running (IsVTPMRunning), GET
+   * /bundles/{id}/state. A plain read: retry is allowed, and there is no
+   * daemon-listener fallback, so a 404 is a refusal the caller shows.
+   */
+  async getBundleState(id: string): Promise<ApiResponse<GetBundleStateResponse>> {
+    return this.client.get<GetBundleStateResponse>(
+      this.buildUrl(`/bundles/${this.encodePathSegment(id)}/state`)
+    );
   }
 
   /** Quote PCRs of a running bundle (POST /bundles/{id}/quote) */

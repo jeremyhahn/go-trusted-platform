@@ -139,6 +139,13 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
     });
   };
 
+  const handleCheckState = () => {
+    if (rt.lifecycleBusy) return;
+    void run("Error reading vTPM state", async () => {
+      await rt.checkState.mutateAsync(undefined);
+    });
+  };
+
   const handleQuote = () =>
     run("Error quoting vTPM", async () => {
       const nonce = quoteNonce || crypto.randomUUID();
@@ -194,6 +201,11 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
   const extendResult = rt.extendPCR.data;
   const readData = rt.readPCR.data;
   const noBundle = bundleId.trim() === "";
+  // The socket of a running bundle, from the state check or the start reply.
+  const socketPath =
+    rt.runState === "running"
+      ? (rt.checkState.data?.running ? rt.checkState.data.socket_path : undefined) ?? rt.start.data?.socket_path
+      : rt.start.data?.socket_path;
 
   return (
     <div className="space-y-6">
@@ -209,11 +221,15 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
             </Badge>
           </div>
           <CardDescription>
-            The running state comes from the last start or stop result for this bundle.
+            The running state comes from the last state check, start or stop for this bundle.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex gap-2">
+            <Button variant="outline" onClick={handleCheckState} disabled={noBundle || rt.lifecycleBusy}>
+              {rt.checkState.isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Check state
+            </Button>
             <Button onClick={handleStart} disabled={noBundle || rt.lifecycleBusy}>
               {rt.start.isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
               Start vTPM
@@ -227,9 +243,9 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
               Stop vTPM
             </Button>
           </div>
-          {rt.start.data?.socket_path && (
+          {socketPath && (
             <p className="text-sm text-muted-foreground">
-              Socket: <code data-testid="vtpm-socket">{rt.start.data.socket_path}</code>
+              Socket: <code data-testid="vtpm-socket">{socketPath}</code>
             </p>
           )}
         </CardContent>

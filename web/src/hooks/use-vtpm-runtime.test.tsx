@@ -62,7 +62,8 @@ describe('useVTPMRuntime checkState', () => {
       }
     });
 
-    expect(thrown).toBeInstanceOf(Error);
+    // The SDK rejects with its error object carrying the server's message.
+    expect((thrown as { message?: string } | undefined)?.message).toContain('bundle not found');
     expect(sent).toContainEqual({ method: 'GET', path: '/api/v1/vtpm/bundles/vm-1/state', body: undefined });
     expect(result.current.runState).toBe('unknown');
   });

@@ -1022,6 +1022,7 @@ export type {
   ExtendBundlePCRRequest,
   ExtendBundlePCRResponse,
   ReadBundlePCRResponse,
+  GetBundleStateResponse,
 } from './types/vtpm.js';
 
 // VPN types
