@@ -443,6 +443,21 @@ func parseListKeysQuery(values url.Values) (listKeysQuery, error) {
 	return q, nil
 }
 
+// parseListLimit reads the optional limit query parameter with the rule
+// parseListKeysQuery applies: a non-negative integer, where 0 (or no
+// limit) means no limit.
+func parseListLimit(values url.Values) (int, error) {
+	raw := values.Get("limit")
+	if raw == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0, &ErrInvalidRequest{Field: "limit", Reason: "must be a non-negative integer"}
+	}
+	return n, nil
+}
+
 // GetKey handles GET /api/v1/kms/keys/{name}.
 func (h *Handlers) GetKey(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureKMS(w, r) {
@@ -1227,6 +1242,11 @@ func (h *Handlers) ListDEKs(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureDEK(w, r) {
 		return
 	}
+	limit, err := parseListLimit(r.URL.Query())
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
 	resp, err := h.dek.ListDEKs(ctx, &dekclient.ListDEKsRequest{})
@@ -1234,9 +1254,13 @@ func (h *Handlers) ListDEKs(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	out := &ListDEKsResponse{DEKs: make([]DEKInfoResponse, 0, len(resp.DEKs))}
-	for i := range resp.DEKs {
-		out.DEKs = append(out.DEKs, encodeDEK(&resp.DEKs[i]))
+	deks := resp.DEKs
+	if limit > 0 && len(deks) > limit {
+		deks = deks[:limit]
+	}
+	out := &ListDEKsResponse{DEKs: make([]DEKInfoResponse, 0, len(deks))}
+	for i := range deks {
+		out.DEKs = append(out.DEKs, encodeDEK(&deks[i]))
 	}
 	h.success200(w, r, out)
 }
@@ -1376,6 +1400,11 @@ func (h *Handlers) ListSecrets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	prefix := r.URL.Query().Get("prefix")
+	limit, err := parseListLimit(r.URL.Query())
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
 	resp, err := h.secrets.List(ctx, prefix)
@@ -1383,8 +1412,12 @@ func (h *Handlers) ListSecrets(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	out := &ListSecretsResponse{Secrets: make([]SecretSummary, 0, len(resp.Paths))}
-	for _, path := range resp.Paths {
+	paths := resp.Paths
+	if limit > 0 && len(paths) > limit {
+		paths = paths[:limit]
+	}
+	out := &ListSecretsResponse{Secrets: make([]SecretSummary, 0, len(paths))}
+	for _, path := range paths {
 		out.Secrets = append(out.Secrets, SecretSummary{Path: path})
 	}
 	h.success200(w, r, out)
