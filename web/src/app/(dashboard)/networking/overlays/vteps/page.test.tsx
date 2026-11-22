@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PlatformClient, PlatformProvider } from "trusted-platform-sdk";
 
 import OverlayVtepsPage from "./page";
+const auth: { current: { user: { roles: string[] } } | null } = { current: { user: { roles: ["admin"] } } };
+vi.mock("@/contexts/AuthContext", async (importOriginal) => ({ ...(await importOriginal<typeof import("@/contexts/AuthContext")>()), useOptionalAuth: () => auth.current }));
 
 // #2059: the VTEPs page drives the overlay through client.overlay (the SDK's
 // REST routes under /api/v1/overlay). These tests stub fetch, the boundary
@@ -129,6 +131,7 @@ describe("OverlayVtepsPage", () => {
 
   beforeEach(() => {
     fetchMock.mockReset();
+    auth.current = { user: { roles: ["admin"] } };
   });
 
   afterEach(() => {
