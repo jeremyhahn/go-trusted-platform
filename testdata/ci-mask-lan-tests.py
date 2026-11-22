@@ -19,8 +19,15 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES = os.path.dirname(HERE)
-SCRIPT = os.path.join(TEMPLATES, "ci-mask-lan.sh")
-CI = os.path.join(TEMPLATES, "ci.yml")
+# v1.53 (Codex P2 on go-trusted-platform #2311): the same file runs in the
+# handbook (testdata/ beside the template) and in a carrier (testdata/ at the
+# repository root), so each path is the template's, else the carrier's.
+def first(*paths):
+    return next((p for p in paths if os.path.exists(p)), paths[0])
+
+
+SCRIPT = first(os.path.join(TEMPLATES, "ci-mask-lan.sh"), os.path.join(TEMPLATES, "scripts", "ci-mask-lan.sh"))
+CI = first(os.path.join(TEMPLATES, "ci.yml"), os.path.join(TEMPLATES, ".github", "workflows", "ci.yml"))
 STEP_RUN = "scripts/ci-mask-lan.sh"
 BUILD = re.compile(r"(^|[\s;&|(`])(make|docker|go|scripts/in-toolchain-image\.sh|scripts/ci-image\.sh|scripts/ci-image-cache\.sh)(\s|$)")
 
@@ -34,13 +41,13 @@ def check(cond, msg):
 
 def script_cases():
     if not os.path.exists(SCRIPT):
-        failures.append("no ci-mask-lan.sh beside the template")
+        failures.append("no ci-mask-lan.sh beside the template or at scripts/ci-mask-lan.sh: carry it from the handbook template")
         return
     env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "DEVCACHE_APT_PROXY": "http://192.168.77.7:3142",
         "DEVCACHE_APK_MIRROR": "http://192.168.77.7:3143/alpine",
-        "GOPROXY": "http://10.0.2.15:8081|https://proxy.golang.org,direct",
+        "GOPROXY": "http://10.1.2.3:3300|https://proxy.golang.org,direct",
         "CI_REGISTRY": "172.20.0.5:5005",
         # the forge's release registry and its own host, which image
         # publishing and resolving name (Codex P1 on go-xkms #2273)
@@ -53,7 +60,7 @@ def script_cases():
     lines = out.stdout.split()
     for want in ["::add-mask::http://192.168.77.7:3142", "::add-mask::192.168.77.7:3142", "::add-mask::192.168.77.7",
                  "::add-mask::http://192.168.77.7:3143/alpine", "::add-mask::192.168.77.7:3143",
-                 "::add-mask::http://10.0.2.15:8081", "::add-mask::10.0.2.15",
+                 "::add-mask::http://10.1.2.3:3300", "::add-mask::10.1.2.3",
                  "::add-mask::172.20.0.5:5005", "::add-mask::172.20.0.5",
                  "::add-mask::172.21.0.9:5443", "::add-mask::172.21.0.9",
                  "::add-mask::http://10.9.8.7:8443", "::add-mask::10.9.8.7:8443", "::add-mask::10.9.8.7"]:
@@ -77,7 +84,7 @@ def script_cases():
               f"the script masks {l}: a public host or a keyword")
     # v1.53 (Tenant Agent on go-quicbaas #2667): every *_REGISTRY variable,
     # a secret's copy in the mask step's env included.
-    regs = dict(PATH=env["PATH"], SECRET_REGISTRY="registry.lan:5005", IT_REGISTRY="10.4.4.4:5000",
+    regs = dict(PATH=env["PATH"], LAN_REGISTRY="registry.lan:5005", IT_REGISTRY="10.4.4.4:5000",
                 CI_IMAGE_REGISTRY="build-node-3:5000", CI_REGISTRY_OWNER="someowner", CI_IMAGE_NAMESPACE="ghcr.io/someowner")
     got = subprocess.run(["bash", SCRIPT], env=regs, capture_output=True, text=True).stdout.split()
     for want in ["::add-mask::registry.lan:5005", "::add-mask::registry.lan", "::add-mask::10.4.4.4:5000",
@@ -335,6 +342,9 @@ def mutation_cases(text):
 
 
 script_cases()
+if not os.path.exists(CI):
+    print(f"FAIL no {os.path.relpath(CI, TEMPLATES)}: carry it from the handbook template")
+    sys.exit(1)
 ci = open(CI).read()
 template_cases(ci)
 registry_cases(ci)
