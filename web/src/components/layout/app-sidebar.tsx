@@ -178,6 +178,7 @@ const navigation = [
     children: [
       { title: "Health", href: "/platform/health" },
       { title: "Services", href: "/platform/services" },
+      { title: "Cluster", href: "/platform/cluster" },
       { title: "Configuration", href: "/platform/config" },
       { title: "Events", href: "/platform/events" },
       { title: "Metrics", href: "/platform/metrics" },
