@@ -1,8 +1,7 @@
 'use client';
 
 /**
- * vTPM templates and bundle detail hook (#2071, UI epic #1665 slice 34).
- * The bundle list and the archive import come in part 2.
+ * vTPM templates and bundles hook (#2071, UI epic #1665 slice 34).
  *
  * The SDK's declared vTPM response types (types/vtpm.ts) differ from the
  * flat snake_case payloads the REST handlers emit (gap #445). Until the SDK
@@ -13,6 +12,10 @@
 import type { ApiResponse } from 'trusted-platform-sdk';
 import { useVTPM, useApi, useMutation } from '@/hooks';
 import { useToast } from '@/hooks/use-toast';
+import { useState } from 'react';
+
+/** Bundles fetched per page of the bundle list (the REST handler pages by limit and offset). */
+export const VTPM_BUNDLE_PAGE_SIZE = 100;
 
 export interface VTPMTemplateWire {
   id: string;
@@ -92,6 +95,18 @@ export function useVTPMTemplates() {
     { onError }
   );
 
+  const [bundleOffset, setBundleOffset] = useState(0);
+  const bundles = useApi(
+    async () =>
+      wire<{ bundles?: VTPMBundleWire[]; total?: number }>(
+        await vtpm.listBundles({
+          options: { limit: VTPM_BUNDLE_PAGE_SIZE, offset: bundleOffset },
+        })
+      ),
+    [bundleOffset],
+    { onError }
+  );
+
   const createTemplate = useMutation(
     async (input: CreateTemplateInput) =>
       wire<VTPMTemplateWire>(
@@ -119,13 +134,18 @@ export function useVTPMTemplates() {
           options: { templateId: input.templateId, hostname: input.hostname },
         })
       ),
-    { onError }
+    { onSuccess: () => void bundles.refetch(), onError }
   );
 
   const deleteTemplate = useMutation(
     async (id: string) =>
       wire<{ success: boolean; message?: string }>(await vtpm.deleteTemplate(id)),
     { onSuccess: () => void templates.refetch(), onError }
+  );
+
+  const importBundle = useMutation(
+    async (archive: Blob) => wire<VTPMBundleWire>(await vtpm.importBundle(archive)),
+    { onSuccess: () => void bundles.refetch(), onError }
   );
 
   const getBundle = useMutation(
@@ -157,10 +177,18 @@ export function useVTPMTemplates() {
     templates: templates.data?.templates ?? [],
     templatesLoading: templates.isLoading,
     refetchTemplates: templates.refetch,
+    bundles: bundles.data?.bundles ?? [],
+    bundlesLoading: bundles.isLoading,
+    refetchBundles: bundles.refetch,
+    bundleOffset,
+    hasNextBundlePage: (bundles.data?.bundles?.length ?? 0) === VTPM_BUNDLE_PAGE_SIZE,
+    nextBundlePage: () => setBundleOffset((o) => o + VTPM_BUNDLE_PAGE_SIZE),
+    prevBundlePage: () => setBundleOffset((o) => Math.max(0, o - VTPM_BUNDLE_PAGE_SIZE)),
     createTemplate,
     getTemplate,
     cloneTemplate,
     deleteTemplate,
+    importBundle,
     getBundle,
     validateBundle,
     getBundlePath,
