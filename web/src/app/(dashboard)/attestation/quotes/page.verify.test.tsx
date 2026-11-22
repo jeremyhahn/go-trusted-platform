@@ -31,8 +31,24 @@ const M1: HostManifest = {
 } as HostManifest;
 const M2: HostManifest = { ...M1, id: 'm2', hostId: 'host-b' } as HostManifest;
 
+const ATTESTATION_OPS = [MANIFESTS, QUOTE, QUOTE_VERIFY];
+
+// The server's capabilities listing: every attestation op enabled except those in off.
+function caps(off: string[] = []): Answer {
+  const capabilities = ATTESTATION_OPS.map((op) =>
+    off.includes(op)
+      ? { op, kind: 'route', enabled: false, reason: 'not-configured: attestation' }
+      : { op, kind: 'route', enabled: true },
+  );
+  return ok({ capabilities, total: capabilities.length, enabled: capabilities.filter((c) => c.enabled).length });
+}
+
 function routes(extra: Record<string, Answer>): Record<string, Answer> {
-  return { [MANIFESTS]: ok({ manifests: [M1, M2], total: 2 }), ...extra };
+  return {
+    'GET /api/v1/capabilities': caps(),
+    [MANIFESTS]: ok({ manifests: [M1, M2], total: 2 }),
+    ...extra,
+  };
 }
 
 async function askForQuote() {
@@ -109,6 +125,23 @@ describe('QuotesPage quote verify', () => {
       expect(toasts.some((t) => t.dataset.variant === 'destructive' && t.textContent?.includes('caller not admitted'))).toBe(true);
     });
     expect(screen.queryByTestId('quote-result')).toBeNull();
+  });
+
+  it('withholds get and verify quote the server does not offer', async () => {
+    stubControlPlane(routes({ 'GET /api/v1/capabilities': caps([QUOTE, QUOTE_VERIFY]) }));
+    render(withControlPlane(<QuotesPage />));
+    const card = await screen.findByTestId('quote-verify');
+
+    for (const [name, op] of [
+      ['Get quote', QUOTE],
+      ['Verify quote', QUOTE_VERIFY],
+    ]) {
+      const button = (await within(card).findByRole('button', { name })) as HTMLButtonElement;
+      expect(button.getAttribute('data-capability-op')).toBe(op);
+      await waitFor(() => expect(button.getAttribute('data-capability-enabled')).toBe('false'));
+      expect(button.disabled).toBe(true);
+      expect(button.getAttribute('title')).toBe('not-configured: attestation');
+    }
   });
 
   it('parses the AK handle and PCR list', () => {

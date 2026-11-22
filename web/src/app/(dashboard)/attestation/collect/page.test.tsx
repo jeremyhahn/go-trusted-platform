@@ -16,6 +16,18 @@ vi.mock("@/hooks/use-attestation-collect", () => ({
   useAttestationCollect: () => collect,
 }));
 
+// The server's capability answers: every op enabled except those in off.
+const off = new Set<string>();
+
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: (op: string) =>
+      off.has(op) ? { enabled: false, reason: "not-configured: attestation" } : { enabled: true },
+  }),
+}));
+
 function type(testId: string, value: string) {
   fireEvent.change(screen.getByTestId(testId), { target: { value } });
 }
@@ -24,6 +36,7 @@ describe("AttestationCollectPage", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    off.clear();
   });
 
   it("collects the host attestation with the typed PCR indices and nonce", async () => {
@@ -108,5 +121,23 @@ describe("AttestationCollectPage", () => {
     const error = await screen.findByTestId("collect-host-pcrs-error");
     expect(error.textContent).toContain("x");
     expect(collect.collectHost).not.toHaveBeenCalled();
+  });
+
+  it("withholds the collect controls the server does not offer", () => {
+    const controls: Record<string, string> = {
+      "collect-host-submit": "POST /api/v1/attestation/host",
+      "collect-vm-submit": "POST /api/v1/attestation/vm/{id}",
+      "collect-container-submit": "POST /api/v1/attestation/container/{id}",
+    };
+    for (const op of Object.values(controls)) off.add(op);
+    render(<AttestationCollectPage />);
+
+    for (const [testId, op] of Object.entries(controls)) {
+      const button = screen.getByTestId(testId) as HTMLButtonElement;
+      expect(button.getAttribute("data-capability-op")).toBe(op);
+      expect(button.getAttribute("data-capability-enabled")).toBe("false");
+      expect(button.disabled).toBe(true);
+      expect(button.getAttribute("title")).toBe("not-configured: attestation");
+    }
   });
 });

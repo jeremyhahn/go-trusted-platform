@@ -42,8 +42,26 @@ const VERIFIED = {
   errors: [] as string[],
 };
 
+const VERIFY_OP = 'POST /api/v1/attestation/manifests/verify';
+const DELETE_OP = 'DELETE /api/v1/attestation/manifests/{id}';
+const ATTESTATION_OPS = ['GET /api/v1/attestation/manifests', VERIFY_OP, DELETE_OP];
+
+// The server's capabilities listing: every attestation op enabled except those in off.
+function caps(off: string[] = []): Answer {
+  const capabilities = ATTESTATION_OPS.map((op) =>
+    off.includes(op)
+      ? { op, kind: 'route', enabled: false, reason: 'not-configured: attestation' }
+      : { op, kind: 'route', enabled: true },
+  );
+  return ok({ capabilities, total: capabilities.length, enabled: capabilities.filter((c) => c.enabled).length });
+}
+
 function routes(extra: Record<string, Answer>): Record<string, Answer> {
-  return { [MANIFESTS]: ok({ manifests: [M1, M2], total: 2 }), ...extra };
+  return {
+    'GET /api/v1/capabilities': caps(),
+    [MANIFESTS]: ok({ manifests: [M1, M2], total: 2 }),
+    ...extra,
+  };
 }
 
 function hasToast(text: string, variant?: string): boolean {
@@ -131,5 +149,22 @@ describe('ManifestsPage verify and delete', () => {
 
     await waitFor(() => expect(hasToast('manifest m1 not found', 'destructive')).toBe(true));
     expect(within(screen.getByRole('dialog')).getByText('Delete manifest')).toBeTruthy();
+  });
+
+  it('withholds verify and delete the server does not offer', async () => {
+    stubControlPlane(routes({ 'GET /api/v1/capabilities': caps([VERIFY_OP, DELETE_OP]) }));
+    render(withControlPlane(<ManifestsPage />));
+    const card = await screen.findByTestId('manifest-actions');
+
+    for (const [name, op] of [
+      ['Verify manifest', VERIFY_OP],
+      ['Delete manifest', DELETE_OP],
+    ]) {
+      const button = (await within(card).findByRole('button', { name })) as HTMLButtonElement;
+      expect(button.getAttribute('data-capability-op')).toBe(op);
+      await waitFor(() => expect(button.getAttribute('data-capability-enabled')).toBe('false'));
+      expect(button.disabled).toBe(true);
+      expect(button.getAttribute('title')).toBe('not-configured: attestation');
+    }
   });
 });
