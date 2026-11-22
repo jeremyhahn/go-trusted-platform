@@ -503,15 +503,31 @@ func (s *RESTServer) SetKMSRouter(kms kmsclient.Client, crypto cryptoclient.Clie
 	s.logger.Info("KMS REST routes registered (docs/kms/api.md contract)")
 }
 
-// kmsDEKPlatformTenantGate refuses the DEK routes to every tenant but the
-// platform's. The embedded go-quicbaas DEK store is keyed by path alone and
-// ignores the tenant, so binding the caller's tenant does not isolate DEKs.
+// kmsPlatformTenantOnlyRoutes are the KMS key routes the tenant-bound router
+// serves to the platform tenant only: the pinned upstream GetKeyMetadata,
+// UpdateKeyMetadata and SetKeyPolicy look the key up by ID without tenant
+// scoping, so binding the caller's tenant does not stop a tenant from reading
+// or changing another tenant's key policy and metadata.
+var kmsPlatformTenantOnlyRoutes = map[string]bool{
+	restBasePath + "/kms/keys/{name}/policy":   true,
+	restBasePath + "/kms/keys/{name}/metadata": true,
+}
+
+// kmsDEKPlatformTenantGate refuses the DEK routes and the key policy and
+// metadata routes to every tenant but the platform's. The embedded go-quicbaas
+// DEK store is keyed by path alone and ignores the tenant, so binding the
+// caller's tenant does not isolate DEKs; the key policy and metadata routes
+// are refused for the reason kmsPlatformTenantOnlyRoutes gives.
 func (s *RESTServer) kmsDEKPlatformTenantGate(callerTenantID, route string) error {
-	if !strings.HasPrefix(route, restBasePath+"/kms/deks") {
+	dek := strings.HasPrefix(route, restBasePath+"/kms/deks")
+	if !dek && !kmsPlatformTenantOnlyRoutes[route] {
 		return nil
 	}
 	if s.config != nil && callerTenantID == s.config.PlatformTenantID {
 		return nil
+	}
+	if !dek {
+		return restapi.ErrRouteForbidden{Scope: route, Reason: "the key policy and metadata routes serve the platform tenant only until the KMS service scopes them by tenant"}
 	}
 	return restapi.ErrRouteForbidden{Scope: route, Reason: "the DEK routes serve the platform tenant only until the DEK store enforces tenant ownership"}
 }
