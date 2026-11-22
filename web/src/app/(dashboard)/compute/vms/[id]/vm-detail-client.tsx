@@ -15,16 +15,6 @@ import {
   Pause,
   ShieldCheck,
 } from 'lucide-react';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { useVMAttestationVerify } from '@/hooks';
-import type { VerifyVMAttestationResponse } from 'trusted-platform-sdk';
 import { formatDistanceToNow } from 'date-fns';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -38,7 +28,23 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { VMMetricsCard } from '@/components/features/compute/vm-metrics';
-import { useCompute, useMutation, useToast, type MutationError } from '@/hooks';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  useCompute,
+  useMutation,
+  useToast,
+  useVMAttestationVerify,
+  vmVerifyGate,
+  type MutationError,
+} from '@/hooks';
+import type { VerifyVMAttestationResponse } from 'trusted-platform-sdk';
 import type { VMDetail } from '@/types/infrastructure';
 import { toVMDetail, VM_PCRS_NOT_APPRAISED, vmVerifyHeadline } from '@/lib/vm-detail';
 import { VMOperations } from './vm-operations';
@@ -65,6 +71,7 @@ export default function VMDetailPage() {
   const [verifyResult, setVerifyResult] = useState<VerifyVMAttestationResponse | null>(null);
   const [verifyError, setVerifyError] = useState<string | null>(null);
 
+  // Attest with a fresh nonce, then verify the quote (#2045).
   const handleVerifyAttestation = async () => {
     setVerifyConfirmOpen(false);
     setActionLoading(true);
@@ -316,6 +323,7 @@ export default function VMDetailPage() {
 
   const formatMemory = (mb: number) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
   const formatStorage = (mb: number) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
+  const verifyGate = vmVerifyGate(vm.status, actionLoading);
 
   return (
     <div className="space-y-6">
@@ -381,7 +389,8 @@ export default function VMDetailPage() {
           <Button
             variant="outline"
             onClick={() => setVerifyConfirmOpen(true)}
-            disabled={actionLoading}
+            disabled={!verifyGate.enabled}
+            title={verifyGate.reason ?? undefined}
           >
             <ShieldCheck className="mr-2 h-4 w-4" />
             Verify Attestation

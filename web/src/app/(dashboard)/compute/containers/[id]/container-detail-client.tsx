@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/dialog';
 import {
   useContainerOps,
+  containerControlGates,
   useToast,
   decodeOutput,
   splitCommand,
@@ -118,6 +119,7 @@ export default function ContainerDetailPage() {
   }
 
   const name = container.config?.name || container.id;
+  const gates = containerControlGates(container, busy);
 
   return (
     <div className="space-y-6">
@@ -147,7 +149,12 @@ export default function ContainerDetailPage() {
             <RefreshCw className="mr-2 h-4 w-4" />
             Refresh
           </Button>
-          <Button variant="outline" disabled={busy} onClick={() => setPending('attest')}>
+          <Button
+            variant="outline"
+            disabled={!gates.attest.enabled}
+            title={gates.attest.reason ?? undefined}
+            onClick={() => setPending('attest')}
+          >
             <ShieldCheck className="mr-2 h-4 w-4" />
             Attest
           </Button>
@@ -215,7 +222,11 @@ export default function ContainerDetailPage() {
                 onChange={(e) => setCommand(e.target.value)}
               />
             </div>
-            <Button type="submit" disabled={busy || command.trim().length === 0}>
+            <Button
+              type="submit"
+              disabled={!gates.exec.enabled || command.trim().length === 0}
+              title={gates.exec.reason ?? undefined}
+            >
               <Terminal className="mr-2 h-4 w-4" />
               Run
             </Button>

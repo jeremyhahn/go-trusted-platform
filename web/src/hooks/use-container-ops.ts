@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useCompute } from 'trusted-platform-sdk';
+import { containerStatus } from '@/lib/compute-state';
 import type {
   ApiResponse,
   AttestContainerResponse,
@@ -238,4 +239,46 @@ export function useVMAttestationVerify(vmId: string) {
       'VerifyVMAttestation'
     );
   }, [compute, vmId]);
+}
+
+/** Whether a control may be used, and why not when it may not. */
+export interface ControlGate {
+  enabled: boolean;
+  reason: string | null;
+}
+
+const open: ControlGate = { enabled: true, reason: null };
+const closed = (reason: string): ControlGate => ({ enabled: false, reason });
+
+/**
+ * Capability gates for the container detail controls (#2045): exec runs
+ * only in a loaded, running container; attest needs a loaded container;
+ * neither while another action is in flight.
+ */
+export function containerControlGates(
+  container: Container | null,
+  busy: boolean
+): { exec: ControlGate; attest: ControlGate } {
+  if (!container) {
+    const gate = closed('Container not loaded');
+    return { exec: gate, attest: gate };
+  }
+  if (busy) {
+    const gate = closed('Another action is in progress');
+    return { exec: gate, attest: gate };
+  }
+  const status = containerStatus(container.state);
+  return {
+    exec: status === 'running' ? open : closed(`Exec needs a running container (state: ${status})`),
+    attest: open,
+  };
+}
+
+/** Capability gate for the VM attest-then-verify control (#2045). */
+export function vmVerifyGate(status: string | undefined, busy: boolean): ControlGate {
+  if (busy) return closed('A verification is in progress');
+  const state = (status || 'unknown').toLowerCase();
+  return state === 'running'
+    ? open
+    : closed(`Attestation needs a running VM (state: ${state})`);
 }

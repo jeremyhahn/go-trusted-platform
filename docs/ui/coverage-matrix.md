@@ -156,15 +156,15 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `ComputeService.StartContainer` | `POST /containers/{id}/start` | `(dashboard)/compute/containers/page.tsx` | - | `compute.spec.ts` | covered |
 | `ComputeService.StopContainer` | `POST /containers/{id}/stop` | `(dashboard)/compute/containers/page.tsx` | - | `compute.spec.ts` | covered |
 | `ComputeService.DeleteContainer` | `DELETE /containers/{id}` | `(dashboard)/compute/containers/page.tsx` | - | `compute.spec.ts` | covered |
-| `ComputeService.GetContainer` | `GET /containers/{id}` | - | - | - | missing |
+| `ComputeService.GetContainer` | `GET /containers/{id}` | `(dashboard)/compute/containers/[id]/page.tsx` | - | - | partial |
 | `ComputeService.ListContainers` | `GET /containers` | `(dashboard)/compute/containers/page.tsx` | - | `compute.spec.ts` | covered |
 | `ComputeService.AttachContainer` | - | - | - | - | not-UI: streaming plumbing |
-| `ComputeService.ExecContainer` | `POST /containers/{id}/exec` | - | - | - | missing |
+| `ComputeService.ExecContainer` | `POST /containers/{id}/exec` | `(dashboard)/compute/containers/[id]/page.tsx` | - | - | partial |
 | `ComputeService.GetContainerLogs` | `GET /containers/{id}` | - | - | - | not-UI: streaming plumbing |
-| `ComputeService.GetContainerMetrics` | `GET /containers/{id}/metrics` | - | - | - | missing |
+| `ComputeService.GetContainerMetrics` | `GET /containers/{id}/metrics` | `(dashboard)/compute/containers/[id]/page.tsx` | - | - | partial |
 | `ComputeService.AttestVM` | `POST /vms/{id}/attest` | - | - | - | missing |
-| `ComputeService.VerifyVMAttestation` | `POST /vms/{id}/attest/verify` | - | - | - | missing |
-| `ComputeService.AttestContainer` | `POST /containers/{id}/attest` | - | - | - | missing |
+| `ComputeService.VerifyVMAttestation` | `POST /vms/{id}/attest/verify` | `(dashboard)/compute/vms/[id]/page.tsx` | - | - | partial |
+| `ComputeService.AttestContainer` | `POST /containers/{id}/attest` | `(dashboard)/compute/containers/[id]/page.tsx` | - | - | partial |
 
 ## ConfigDeliveryService (`configdelivery.proto`)
 

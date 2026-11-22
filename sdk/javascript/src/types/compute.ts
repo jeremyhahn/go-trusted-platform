@@ -736,6 +736,12 @@ export interface AttestVMRequest {
   pcrBank?: PCRBank;
 }
 
+/** Container attestation request */
+export interface AttestContainerRequest {
+  /** Container ID */
+  id: string;
+}
+
 /**
  * Request to attest a container
  */
