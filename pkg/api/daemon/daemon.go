@@ -1178,15 +1178,15 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		quicHandler.SetAppServices(appServices)
 		quicHandler.SetIDevIDService(idevidService)
 
-		// Set CA handler if available
+		// The QUIC CA handler reads the shared CA holder per request, so a
+		// daemon that starts with no CA serves the CA InitCA brings up over
+		// QUIC. Device attestation still uses the start-up CA.
+		var quicObjStorage objectstorage.Client
+		if config.App != nil {
+			quicObjStorage = config.App.Storage
+		}
+		quicHandler.SetCAHandler(quic.NewCAHandler(quicLogger, config.CAService, quicObjStorage).WithKMS(config.csrKMS()).WithCASource(caHolder.Get))
 		if config.CAService != nil {
-			var quicObjStorage objectstorage.Client
-			if config.App != nil {
-				quicObjStorage = config.App.Storage
-			}
-			// The QUIC CA handler reads the shared CA holder per request,
-			// so a CA InitCA swaps in is served over QUIC with no restart.
-			quicHandler.SetCAHandler(quic.NewCAHandler(quicLogger, config.CAService, quicObjStorage).WithKMS(config.csrKMS()).WithCASource(caHolder.Get))
 			quicHandler.SetDeviceAKTrust(config.CAService)
 		}
 

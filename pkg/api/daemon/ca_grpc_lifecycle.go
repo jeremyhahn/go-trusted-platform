@@ -50,10 +50,32 @@ func (s *CAGRPCService) WithTrustInstallPath(path string) *CAGRPCService {
 	return s
 }
 
+// injectQuicBaaSCA hands the CA InitCA brings up to the embedded QuicBaaS
+// CertificateService and its ceremony CA, as platformd serve does at
+// start-up (pkg/daemon/commands/serve.go:1598-1605). Tests replace it.
+var injectQuicBaaSCA = func(a *app.App, ca quicbaasca.CACertificateAuthority) error {
+	return a.SetQuicBaaSCA(ca)
+}
+
+// ErrQuicBaaSCAInject is returned when the embedded QuicBaaS refuses the CA
+// InitCA brought up.
+type ErrQuicBaaSCAInject struct {
+	Cause error
+}
+
+func (e ErrQuicBaaSCAInject) Error() string {
+	return "embedded QuicBaaS refused the CA: " + e.Cause.Error()
+}
+
+func (e ErrQuicBaaSCAInject) Unwrap() error { return e.Cause }
+
 // AppCAInitializer runs the app's CA bring-up path, (*app.App).LoadOrInitCA,
-// the same path AttachNodeCA takes at start-up. It returns nil for a nil app
-// and for an app with no CA configuration: there is nothing InitCA can bring
-// up, so the daemon expects no CA.
+// the same path AttachNodeCA takes at start-up, then hands the CA to the
+// embedded QuicBaaS CertificateService and ceremony CA as start-up does, so
+// SDK certificate issuance and ceremonies use it. A refusal fails InitCA
+// with ErrQuicBaaSCAInject. It returns nil for a nil app and for an app with
+// no CA configuration: there is nothing InitCA can bring up, so the daemon
+// expects no CA.
 func AppCAInitializer(a *app.App) CAInitializer {
 	if a == nil || a.CAConfig == nil {
 		return nil
@@ -61,6 +83,9 @@ func AppCAInitializer(a *app.App) CAInitializer {
 	return func(ctx context.Context) (quicbaasca.CACertificateAuthority, error) {
 		if err := a.LoadOrInitCA(ctx, nil); err != nil {
 			return nil, err
+		}
+		if err := injectQuicBaaSCA(a, a.CA); err != nil {
+			return nil, ErrQuicBaaSCAInject{Cause: err}
 		}
 		return a.CA, nil
 	}
@@ -101,15 +126,15 @@ func (s *CAGRPCService) InitCA(ctx context.Context, req *platformv1.InitCAReques
 	if ca == nil || !ca.IsInitialized() {
 		return nil, status.Error(codes.Internal, "CA bring-up returned no initialised CA")
 	}
-	// The gRPC/UDS CA service and the REST CA handlers read one CAHolder,
-	// so both serve the new CA now. The QUIC CA handler, the device
-	// verifier and IDevID still hold the start-up CA; they follow the swap
-	// in the next slice.
+	// The gRPC/UDS CA service, the REST CA handlers and the QUIC CA
+	// handler read one CAHolder, so all three serve the new CA now. QUIC
+	// device attestation (the device AK trust and boot CA) keeps the
+	// start-up CA until platformd restarts.
 	s.setAuthority(ca)
 	return &platformv1.InitCAResponse{
 		Status: &platformv1.Status{
 			Success: true,
-			Message: "CA initialised; the gRPC and REST CA services serve it now; restart platformd to serve it over QUIC",
+			Message: "CA initialised; the gRPC, REST and QUIC CA services serve it now; restart platformd for QUIC device attestation to use it",
 		},
 		CaInfo:    s.caInfoOf(ca),
 		Timestamp: timestamppb.Now(),
