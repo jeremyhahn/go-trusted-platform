@@ -258,6 +258,10 @@ func (h *Handlers) DeleteImage(w http.ResponseWriter, r *http.Request) {
 		h.respWriter.Error400(w, r, ErrInvalidImageReference{})
 		return
 	}
+	if tag == "" {
+		h.respWriter.Error400(w, r, ErrMissingImageTag{})
+		return
+	}
 	resp, err := h.service.Delete(r.Context(), &grpcapi.RegistryDeleteRequest{
 		Repository: repo,
 		Reference:  tag,
@@ -377,4 +381,13 @@ type ErrInvalidImageReference struct{}
 
 func (ErrInvalidImageReference) Error() string {
 	return "registry: invalid image reference (expected repository[:tag])"
+}
+
+// ErrMissingImageTag is returned when a delete names a repository
+// without a tag: the delete route needs an explicit reference and never
+// removes the bare repository.
+type ErrMissingImageTag struct{}
+
+func (ErrMissingImageTag) Error() string {
+	return "registry: delete needs an explicit tag (repository:tag)"
 }
