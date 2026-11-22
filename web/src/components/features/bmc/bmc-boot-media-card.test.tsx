@@ -1,7 +1,14 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ok, refused, stubControlPlane, withControlPlane, type Answer } from '@/test/control-plane-fetch';
+import {
+  ok,
+  refused,
+  stubControlPlane,
+  withControlPlane,
+  type Answer,
+  type SentRequest,
+} from '@/test/control-plane-fetch';
 import { BMCBootMediaCard } from './bmc-boot-media-card';
 
 // #2039: the BMC boot-media card reads and sets the boot device and reads,
@@ -22,13 +29,38 @@ function baseRoutes(): Record<string, Answer> {
   };
 }
 
+// The server's op strings for the three write controls (pkg/webservice/v1/bmc/routes.go).
+const BOOT_OP = 'POST /api/v1/bmc/{profileID:[0-9]+}/boot-device';
+const MOUNT_OP = 'POST /api/v1/bmc/{profileID:[0-9]+}/virtual-media';
+const UNMOUNT_OP = 'DELETE /api/v1/bmc/{profileID:[0-9]+}/virtual-media';
+const OPS = [BOOT_OP, MOUNT_OP, UNMOUNT_OP];
+
+// The server's capabilities listing: every write op enabled except those in off.
+function caps(off: string[] = []): Answer {
+  const capabilities = OPS.map((op) =>
+    off.includes(op)
+      ? { op, kind: 'route', enabled: false, reason: 'scope bmc:media required' }
+      : { op, kind: 'route', enabled: true }
+  );
+  return ok({ capabilities, total: OPS.length, enabled: OPS.length - off.length });
+}
+
+// stub answers the capabilities read; the cases count only the BMC paths they send.
+function stub(routes: Record<string, Answer>, off: string[] = []): SentRequest[] {
+  return stubControlPlane({ 'GET /api/v1/capabilities': caps(off), ...routes });
+}
+
+function button(name: string): HTMLButtonElement {
+  return screen.getByRole('button', { name }) as HTMLButtonElement;
+}
+
 function renderCard() {
   render(withControlPlane(<BMCBootMediaCard profileID="42" />));
 }
 
 async function click(name: string) {
   await act(async () => {
-    fireEvent.click(screen.getByRole('button', { name }));
+    fireEvent.click(button(name));
   });
 }
 
@@ -36,10 +68,15 @@ function count(sent: { method: string; path: string }[], method: string, path: s
   return sent.filter((r) => r.method === method && r.path === path).length;
 }
 
+async function waitEnabled(name: string) {
+  await waitFor(() => expect(button(name).disabled).toBe(false));
+}
+
 async function waitForFirstRead() {
   await waitFor(() => {
     expect(screen.getByTestId('bmc-boot-current').textContent).toContain('Disk');
   });
+  await waitEnabled('Set boot device');
 }
 
 describe('BMCBootMediaCard', () => {
@@ -48,8 +85,50 @@ describe('BMCBootMediaCard', () => {
     vi.unstubAllGlobals();
   });
 
+  it('gates Set boot device and Mount ISO on the server ops', async () => {
+    stub(baseRoutes());
+    renderCard();
+    await waitForFirstRead();
+    expect(button('Set boot device').getAttribute('data-capability-op')).toBe(BOOT_OP);
+    expect(button('Set boot device').getAttribute('data-capability-enabled')).toBe('true');
+    expect(button('Mount ISO').getAttribute('data-capability-op')).toBe(MOUNT_OP);
+    expect(button('Mount ISO').getAttribute('data-capability-enabled')).toBe('true');
+  });
+
+  it('disables Set boot device and Mount ISO when the server leaves the ops out', async () => {
+    const sent = stub(
+      {
+        ...baseRoutes(),
+        [BOOT_POST]: ok({ status: 'ok', device: 'disk' }),
+        [MEDIA_POST]: ok({ status: 'ok', iso_url: 'https://images.example/os.iso' }),
+      },
+      [BOOT_OP, MOUNT_OP]
+    );
+    renderCard();
+    await waitFor(() => expect(button('Set boot device').title).toBe('scope bmc:media required'));
+    fireEvent.change(screen.getByLabelText('ISO URL'), { target: { value: 'https://images.example/os.iso' } });
+    for (const name of ['Set boot device', 'Mount ISO']) {
+      expect(button(name).disabled).toBe(true);
+      expect(button(name).getAttribute('data-capability-enabled')).toBe('false');
+      await click(name);
+    }
+    expect(sent.filter((r) => r.method === 'POST')).toEqual([]);
+  });
+
+  it('gates Unmount on the server op and disables it when left out', async () => {
+    const sent = stub({ ...baseRoutes(), [MEDIA_GET]: MOUNTED, [MEDIA_DELETE]: ok({ status: 'ok' }) }, [UNMOUNT_OP]);
+    renderCard();
+    await waitFor(() => expect(button('Unmount').title).toBe('scope bmc:media required'));
+    expect(button('Unmount').getAttribute('data-capability-op')).toBe(UNMOUNT_OP);
+    expect(button('Unmount').getAttribute('data-capability-enabled')).toBe('false');
+    expect(button('Unmount').disabled).toBe(true);
+    await click('Unmount');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(count(sent, 'DELETE', '/api/v1/bmc/42/virtual-media')).toBe(0);
+  });
+
   it('reads the boot device and the virtual media on mount', async () => {
-    stubControlPlane(baseRoutes());
+    stub(baseRoutes());
     renderCard();
 
     await waitForFirstRead();
@@ -68,7 +147,7 @@ describe('BMCBootMediaCard', () => {
   });
 
   it('sets a persistent boot device and re-reads it', async () => {
-    const sent = stubControlPlane({
+    const sent = stub({
       ...baseRoutes(),
       [BOOT_POST]: ok({ status: 'ok', device: 'cdrom' }),
     });
@@ -89,7 +168,7 @@ describe('BMCBootMediaCard', () => {
   });
 
   it('shows the invalid boot device refusal', async () => {
-    stubControlPlane({
+    stub({
       ...baseRoutes(),
       [BOOT_POST]: refused(400, 'bmc: invalid boot device: none'),
     });
@@ -104,7 +183,7 @@ describe('BMCBootMediaCard', () => {
   });
 
   it('mounts a trimmed ISO URL', async () => {
-    const sent = stubControlPlane({
+    const sent = stub({
       ...baseRoutes(),
       [MEDIA_POST]: ok({ status: 'ok', iso_url: 'https://images.example/os.iso' }),
     });
@@ -128,7 +207,7 @@ describe('BMCBootMediaCard', () => {
   });
 
   it('asks before unmounting and sends nothing on Cancel', async () => {
-    const sent = stubControlPlane({ ...baseRoutes(), [MEDIA_GET]: MOUNTED });
+    const sent = stub({ ...baseRoutes(), [MEDIA_GET]: MOUNTED });
     renderCard();
 
     await waitFor(() => {
@@ -136,6 +215,7 @@ describe('BMCBootMediaCard', () => {
         'Mounted: https://images.example/os.iso'
       );
     });
+    await waitEnabled('Unmount');
     await click('Unmount');
     const dialog = await screen.findByRole('dialog');
     expect(dialog.textContent).toContain('Unmount the virtual media?');
@@ -145,7 +225,7 @@ describe('BMCBootMediaCard', () => {
   });
 
   it('unmounts after the confirm', async () => {
-    const sent = stubControlPlane({
+    const sent = stub({
       ...baseRoutes(),
       [MEDIA_GET]: MOUNTED,
       [MEDIA_DELETE]: ok({ status: 'ok' }),
@@ -157,6 +237,7 @@ describe('BMCBootMediaCard', () => {
         'Mounted: https://images.example/os.iso'
       );
     });
+    await waitEnabled('Unmount');
     await click('Unmount');
     await screen.findByRole('dialog');
     await click('Confirm');
@@ -167,7 +248,7 @@ describe('BMCBootMediaCard', () => {
   });
 
   it('shows an unknown profile on the first read', async () => {
-    stubControlPlane({
+    stub({
       [BOOT_GET]: refused(404, 'bmc: profile 42 not found'),
       [MEDIA_GET]: refused(404, 'bmc: profile 42 not found'),
     });

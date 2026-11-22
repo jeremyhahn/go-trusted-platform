@@ -12,6 +12,19 @@ import { BMCProvisionCard } from './bmc-provision-card';
 const STATUS_PATH = 'GET /api/v1/bmc/42/provision';
 const PROVISION_PATH = 'POST /api/v1/bmc/42/provision';
 
+// The server's op for Provision (pkg/webservice/v1/bmc/routes.go).
+const PROVISION_OP = 'POST /api/v1/bmc/{profileID:[0-9]+}/provision';
+
+// The server's capabilities listing: the provision op enabled unless off.
+function caps(off: boolean): Answer {
+  const capabilities = [
+    off
+      ? { op: PROVISION_OP, kind: 'route', enabled: false, reason: 'scope bmc:admin required' }
+      : { op: PROVISION_OP, kind: 'route', enabled: true },
+  ];
+  return ok({ capabilities, total: 1, enabled: off ? 0 : 1 });
+}
+
 const fixture = {
   provision_id: 'prov-1',
   profile_id: 42,
@@ -20,8 +33,9 @@ const fixture = {
   updated_at: '2026-01-01T00:05:00Z',
 };
 
-function renderCard(routes: Record<string, Answer>) {
+function renderCard(routes: Record<string, Answer>, off = false) {
   const sent = stubControlPlane({
+    'GET /api/v1/capabilities': caps(off),
     [STATUS_PATH]: refused(404, 'baremetal: provision not found: 42'),
     ...routes,
   });
@@ -32,6 +46,7 @@ function renderCard(routes: Record<string, Answer>) {
 async function statusText(text: string): Promise<HTMLElement> {
   const status = screen.getByTestId('bmc-provision-status');
   await waitFor(() => expect(status.textContent).toContain(text));
+  await waitFor(() => expect(provisionButton().getAttribute('data-capability-enabled')).toBe('true'));
   return status;
 }
 
@@ -61,6 +76,23 @@ describe('BMCProvisionCard', () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+  });
+
+  it('gates Provision on the server provision op', async () => {
+    renderCard({});
+    await statusText('No provision');
+    expect(provisionButton().getAttribute('data-capability-op')).toBe(PROVISION_OP);
+    expect(provisionButton().disabled).toBe(false);
+  });
+
+  it('disables Provision when the server leaves the op out', async () => {
+    const sent = renderCard({ [PROVISION_PATH]: ok({ ...fixture, status: 'pending' }) }, true);
+    await waitFor(() => expect(provisionButton().title).toBe('scope bmc:admin required'));
+    expect(provisionButton().disabled).toBe(true);
+    expect(provisionButton().getAttribute('data-capability-enabled')).toBe('false');
+    await click('Provision');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(posts(sent)).toHaveLength(0);
   });
 
   it('shows no provision verbatim', async () => {
