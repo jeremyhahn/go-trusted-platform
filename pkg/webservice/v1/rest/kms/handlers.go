@@ -866,12 +866,27 @@ func (h *Handlers) Decrypt(w http.ResponseWriter, r *http.Request) {
 		h.respWriter.Error400(w, r, err)
 		return
 	}
-	if req.Version != 0 {
-		h.respWriter.Error400(w, r, &ErrKeyVersionUnsupported{Version: req.Version})
-		return
-	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
+	// The SDK decrypt call carries no version: the service decrypts under
+	// the key's current version. A request naming that version (the one
+	// Encrypt answered) is honoured; any other version is refused rather
+	// than silently dropped.
+	if req.Version != 0 {
+		if req.Version < 0 || h.kms == nil {
+			h.respWriter.Error400(w, r, &ErrKeyVersionUnsupported{Version: req.Version})
+			return
+		}
+		k, err := h.kms.GetKey(ctx, h.name(r))
+		if err != nil {
+			h.fail(w, r, err)
+			return
+		}
+		if k == nil || k.Version != req.Version {
+			h.respWriter.Error400(w, r, &ErrKeyVersionUnsupported{Version: req.Version})
+			return
+		}
+	}
 	resp, err := h.crypto.Decrypt(ctx, &cryptoclient.DecryptRequest{
 		KeyID:      h.name(r),
 		Ciphertext: req.Ciphertext,
