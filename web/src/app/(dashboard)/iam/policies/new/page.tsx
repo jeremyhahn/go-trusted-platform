@@ -48,19 +48,23 @@ export default function NewPolicyPage() {
         .split(',')
         .map((s) => s.trim())
         .filter((s) => s.length > 0);
+      // A JSON string is a valid YAML double-quoted scalar, so every
+      // user-supplied value is written with JSON.stringify: a colon, a
+      // `#` or a quote in it cannot break the YAML.
+      const q = (s: string) => JSON.stringify(s);
       const yaml = [
         'apiVersion: v1',
         'kind: Policy',
         'metadata:',
-        `  name: ${name}`,
-        `  tenant: ${tenantId}`,
-        `  description: ${description || ''}`,
+        `  name: ${q(name)}`,
+        `  tenant: ${q(tenantId)}`,
+        `  description: ${q(description || '')}`,
         'spec:',
         '  rules:',
         '    - name: rule-1',
         `      effect: ${effect}`,
-        `      actions: [${ruleActions.join(', ')}]`,
-        `      resources: [${ruleResources.map((r) => `"${r}"`).join(', ')}]`,
+        `      actions: [${ruleActions.map(q).join(', ')}]`,
+        `      resources: [${ruleResources.map(q).join(', ')}]`,
       ].join('\n');
       // The platform IAM REST handler reads the YAML from the
       // snake_case `spec_yaml` field; send all three known names so
