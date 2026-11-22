@@ -53,9 +53,6 @@ type QuicBaaSAuthAdapter struct {
 	// for authorization checks
 	pepClient iam.PEPClient
 
-	// defaultTenantID is used when no tenant is specified in the token
-	defaultTenantID string
-
 	// cachedClaims stores validated token claims (simple cache)
 	cachedClaims map[string]*TokenValidationResult
 }
@@ -67,9 +64,6 @@ type QuicBaaSAuthConfig struct {
 
 	// PEPClient is the QuicBaaS PEP service SDK client
 	PEPClient iam.PEPClient
-
-	// DefaultTenantID is the default tenant for operations without explicit tenant
-	DefaultTenantID string
 }
 
 // NewQuicBaaSAuthAdapter creates a new QuicBaaS authentication adapter.
@@ -85,10 +79,9 @@ func NewQuicBaaSAuthAdapter(config *QuicBaaSAuthConfig) *QuicBaaSAuthAdapter {
 		config = &QuicBaaSAuthConfig{}
 	}
 	return &QuicBaaSAuthAdapter{
-		tokenValidator:  config.TokenValidator,
-		pepClient:       config.PEPClient,
-		defaultTenantID: config.DefaultTenantID,
-		cachedClaims:    make(map[string]*TokenValidationResult),
+		tokenValidator: config.TokenValidator,
+		pepClient:      config.PEPClient,
+		cachedClaims:   make(map[string]*TokenValidationResult),
 	}
 }
 
@@ -122,12 +115,24 @@ func (a *QuicBaaSAuthAdapter) ValidateToken(ctx context.Context, token string) (
 		}
 	}
 
-	// Cache the result for use in permission checking
-	if result.Valid {
-		a.cachedClaims[token] = result
+	if !result.Valid {
+		return false, nil
 	}
 
-	return result.Valid, nil
+	// A verified token naming no tenant is not a principal: refuse it
+	// here, at authentication, so the catalogue listings (tools/list,
+	// resources/list) are refused too, not only permission checks (SPEC
+	// row 123).
+	if strings.TrimSpace(result.TenantID) == "" {
+		return false, &QuicBaaSAuthError{
+			Code:    QuicBaaSAuthErrorMissingTenant,
+			Message: "token names no tenant",
+		}
+	}
+
+	// Cache the result for use in permission checking
+	a.cachedClaims[token] = result
+	return true, nil
 }
 
 // GetTokenClaims extracts claims from a validated access token.
@@ -236,10 +241,14 @@ func (a *QuicBaaSAuthAdapter) CheckPermission(ctx context.Context, token string,
 		result = a.claimsMapToResult(claims)
 	}
 
-	// Build the subject from token claims
-	tenantID := result.TenantID
+	// The tenant comes only from the authenticated principal: a token that
+	// names no tenant is refused before the PEP is asked.
+	tenantID := strings.TrimSpace(result.TenantID)
 	if tenantID == "" {
-		tenantID = a.defaultTenantID
+		return false, &QuicBaaSAuthError{
+			Code:    QuicBaaSAuthErrorMissingTenant,
+			Message: "token names no tenant",
+		}
 	}
 
 	// Build the PEP check request using SDK types
@@ -252,6 +261,7 @@ func (a *QuicBaaSAuthAdapter) CheckPermission(ctx context.Context, token string,
 		},
 		Action:   action,
 		Resource: resource,
+		TenantID: tenantID,
 	}
 
 	// Execute the policy check
@@ -316,11 +326,6 @@ func (a *QuicBaaSAuthAdapter) ClearCache() {
 	a.cachedClaims = make(map[string]*TokenValidationResult)
 }
 
-// SetDefaultTenantID sets the default tenant ID for operations.
-func (a *QuicBaaSAuthAdapter) SetDefaultTenantID(tenantID string) {
-	a.defaultTenantID = tenantID
-}
-
 // =============================================================================
 // Error types
 // =============================================================================
@@ -341,6 +346,8 @@ const (
 	QuicBaaSAuthErrorPermissionCheck
 	// QuicBaaSAuthErrorClaimsExtraction indicates an error extracting claims.
 	QuicBaaSAuthErrorClaimsExtraction
+	// QuicBaaSAuthErrorMissingTenant indicates a validated token names no tenant.
+	QuicBaaSAuthErrorMissingTenant
 )
 
 // QuicBaaSAuthError represents an error from QuicBaaS auth operations.

@@ -63,7 +63,8 @@ func NewUserTokenIssuer(users UserGetter, service *Service) (*UserTokenIssuer, e
 // non-empty tenantID overrides the stored assignment, and a non-empty
 // roles list overrides the stored roles — the tenant orchestration path
 // issues the first token in the same request that created the tenant
-// and resolved its roles (including the synthesized "tenant_owner"),
+// and resolved its roles (bound roles only; ownership is the
+// is_tenant_owner claim, never a role),
 // before any re-read would observe them. Empty arguments fall back to
 // the stored record, so a bare issuance still carries every claim
 // GenerateToken derives.

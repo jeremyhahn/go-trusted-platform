@@ -211,6 +211,40 @@ func TestAdmit_FailedPeerInstallReleasesTheAddress(t *testing.T) {
 	assert.Equal(t, 0, h.ipam.allocatedCount())
 }
 
+// An install whose call fails may still have taken effect in the datapath
+// (a lost response or a cancelled caller). Admit removes the peer before
+// it releases the address; when removal fails, the peer is owed to the
+// sweep and the address is held until the sweep removes it.
+func TestAdmit_AmbiguousPeerInstallIsCleanedUp(t *testing.T) {
+	t.Run("removal succeeds", func(t *testing.T) {
+		h := newHarness(t, testConfig())
+		h.plane.installThenErr = errors.New("response lost")
+		_, err := h.svc.Admit(context.Background(), h.request(t))
+		var unavailable *ErrDataPlaneUnavailable
+		require.True(t, errors.As(err, &unavailable), "got %v", err)
+		assert.Zero(t, h.plane.installedCount(), "the peer the install left is removed")
+		assert.Equal(t, 0, h.ipam.allocatedCount(), "the address is released")
+	})
+	t.Run("removal fails", func(t *testing.T) {
+		h := newHarness(t, testConfig())
+		h.plane.installThenErr = errors.New("response lost")
+		h.plane.failRemovals(errors.New("datapath unreachable"))
+		_, err := h.svc.Admit(context.Background(), h.request(t))
+		var unavailable *ErrDataPlaneUnavailable
+		require.True(t, errors.As(err, &unavailable), "got %v", err)
+		require.Equal(t, 1, h.plane.installedCount(), "the peer is still installed")
+		assert.Equal(t, 1, h.ipam.allocatedCount(), "its address is held while the peer may route it")
+
+		h.svc.Sweep(context.Background())
+		assert.Equal(t, 1, h.ipam.allocatedCount(), "held while removal still fails")
+
+		h.plane.failRemovals(nil)
+		h.svc.Sweep(context.Background())
+		assert.Zero(t, h.plane.installedCount(), "the sweep removes the owed peer")
+		assert.Equal(t, 0, h.ipam.allocatedCount(), "and releases the address")
+	})
+}
+
 func TestAdmit_SecondAdmissionReplacesTheFirst(t *testing.T) {
 	h := newHarness(t, testConfig())
 	first, err := h.svc.Admit(context.Background(), h.request(t))
@@ -426,13 +460,113 @@ func TestRevoke_DataPlaneFailureStillKillsTheLease(t *testing.T) {
 	h := newHarness(t, testConfig())
 	lease, err := h.svc.Admit(context.Background(), h.request(t))
 	require.NoError(t, err)
-	h.plane.removeErr = errors.New("datapath unreachable")
+	h.plane.failRemovals(errors.New("datapath unreachable"))
 	err = h.svc.Revoke(context.Background(), lease.ID, RevokeOperator)
 	var unavailable *ErrDataPlaneUnavailable
 	require.True(t, errors.As(err, &unavailable), "the caller is told to retry the peer")
 	leases, _ := h.svc.Leases(context.Background())
 	assert.Empty(t, leases, "the lease is dead regardless")
-	assert.Equal(t, 0, h.ipam.allocatedCount())
+	assert.True(t, h.plane.hosts(lease.ID), "the peer the plane kept is still there")
+	assert.Equal(t, 1, h.ipam.allocatedCount(), "its address is held while the peer may route it")
+
+	h.svc.Sweep(context.Background())
+	assert.True(t, h.plane.hosts(lease.ID), "a sweep that fails again keeps the peer owed")
+	assert.Equal(t, 1, h.ipam.allocatedCount())
+
+	h.plane.failRemovals(nil)
+	h.svc.Sweep(context.Background())
+	assert.False(t, h.plane.hosts(lease.ID), "the next sweep removes the owed peer")
+	assert.Equal(t, 0, h.ipam.allocatedCount(), "and only then releases the address")
+}
+
+func TestRevoke_InProcessPlaneFailureIsRetriedBySweep(t *testing.T) {
+	plane := newFakePlane(DataPlaneMASQUE)
+	h := newHarnessWith(t, testConfig(), func(d *Deps) {
+		d.DataPlanes = map[DataPlaneKind]DataPlane{DataPlaneMASQUE: inProcessPlane{p: plane}}
+	})
+	lease, err := h.svc.Admit(context.Background(), h.request(t))
+	require.NoError(t, err)
+	plane.failRemovals(errors.New("datapath unreachable"))
+	err = h.svc.Revoke(context.Background(), lease.ID, RevokeOperator)
+	var unavailable *ErrDataPlaneUnavailable
+	require.True(t, errors.As(err, &unavailable), "got %v", err)
+	assert.True(t, plane.hosts(lease.ID))
+	assert.Equal(t, 1, h.ipam.allocatedCount(), "the address is held while the peer is owed")
+
+	plane.failRemovals(nil)
+	h.svc.Sweep(context.Background())
+	assert.False(t, plane.hosts(lease.ID), "the sweep removes the owed peer")
+	assert.Equal(t, 0, h.ipam.allocatedCount(), "and releases the address")
+}
+
+func TestAdmit_FailedRollbackRemovalIsOwedAndHoldsTheAddress(t *testing.T) {
+	var store *putFailStore
+	h := newHarnessWith(t, testConfig(), func(d *Deps) {
+		store = &putFailStore{LeaseStore: d.Leases}
+		d.Leases = store
+	})
+	store.failPuts(errors.New("disk full"))
+	h.plane.failRemovals(errors.New("datapath unreachable"))
+	_, err := h.svc.Admit(context.Background(), h.request(t))
+	var unavailable *ErrLeaseStoreUnavailable
+	require.True(t, errors.As(err, &unavailable), "got %v", err)
+	require.Equal(t, 1, h.plane.installedCount(), "the rolled-back peer is still installed")
+	assert.Equal(t, 1, h.ipam.allocatedCount(), "its address is held while the peer may route it")
+
+	h.plane.failRemovals(nil)
+	store.failPuts(nil)
+	h.svc.Sweep(context.Background())
+	assert.Zero(t, h.plane.installedCount(), "the sweep removes the owed peer")
+	assert.Equal(t, 0, h.ipam.allocatedCount(), "and releases the address")
+}
+
+func (f *fakeIPAM) failLookups(err error) {
+	f.mu.Lock()
+	f.getErr = err
+	f.mu.Unlock()
+}
+
+func (f *fakeIPAM) failReleases(err error) {
+	f.mu.Lock()
+	f.releaseErr = err
+	f.mu.Unlock()
+}
+
+// An owed peer whose removal succeeds but whose address lookup or release
+// fails stays owed: its lease record is gone, so only the retry set can
+// still find the allocation.
+func TestAdmit_AnOwedRemovalWhoseAddressCleanupFailsIsRetried(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fail func(h *harness, err error)
+	}{
+		{"lookup", func(h *harness, err error) { h.ipam.failLookups(err) }},
+		{"release", func(h *harness, err error) { h.ipam.failReleases(err) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var store *putFailStore
+			h := newHarnessWith(t, testConfig(), func(d *Deps) {
+				store = &putFailStore{LeaseStore: d.Leases}
+				d.Leases = store
+			})
+			store.failPuts(errors.New("disk full"))
+			h.plane.failRemovals(errors.New("datapath unreachable"))
+			_, err := h.svc.Admit(context.Background(), h.request(t))
+			var unavailable *ErrLeaseStoreUnavailable
+			require.True(t, errors.As(err, &unavailable), "got %v", err)
+			h.plane.failRemovals(nil)
+			store.failPuts(nil)
+
+			tc.fail(h, errors.New("ipam unreachable"))
+			h.svc.Sweep(context.Background())
+			require.Zero(t, h.plane.installedCount(), "the sweep removes the owed peer")
+			require.Equal(t, 1, h.ipam.allocatedCount(), "the address could not be released yet")
+
+			tc.fail(h, nil)
+			h.svc.Sweep(context.Background())
+			assert.Equal(t, 0, h.ipam.allocatedCount(), "a later sweep releases the address")
+		})
+	}
 }
 
 func TestSweep_ExpiredLeasesAreRevoked(t *testing.T) {

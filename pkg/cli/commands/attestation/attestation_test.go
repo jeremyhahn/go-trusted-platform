@@ -174,7 +174,7 @@ func TestNewCommand_Surface(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		names[sub.Name()] = true
 	}
-	assert.Equal(t, map[string]bool{"reports": true, "callers": true, "verdicts": true}, names)
+	assert.Equal(t, map[string]bool{"reports": true, "callers": true, "verdicts": true, "manifests": true}, names)
 
 	reports, _, err := cmd.Find([]string{"reports"})
 	require.NoError(t, err)

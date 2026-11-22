@@ -15,6 +15,8 @@ package store
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -127,5 +129,29 @@ func TestFileStore_Delete(t *testing.T) {
 	}
 	if _, err := s.GetManifest("d"); err == nil {
 		t.Error("expected ErrManifestNotFound after Delete")
+	}
+}
+
+func TestFileStore_RejectsManifestIDTraversal(t *testing.T) {
+	s := newTestStore(t)
+	sibling := filepath.Join(s.root, "events", "x.json")
+	if err := os.WriteFile(sibling, []byte(`{"id":"x"}`), 0o600); err != nil {
+		t.Fatalf("write sibling: %v", err)
+	}
+	for _, id := range []string{"../events/x", "a/b", "..", ".", `a\b`, "a\x00b"} {
+		t.Run(id, func(t *testing.T) {
+			if err := s.DeleteManifest(id); err == nil {
+				t.Errorf("DeleteManifest(%q) = nil, want an error", id)
+			}
+			if _, err := s.GetManifest(id); err == nil {
+				t.Errorf("GetManifest(%q) = nil error, want an error", id)
+			}
+			if err := s.PutManifest(testManifest(id, "h", time.Now())); err == nil {
+				t.Errorf("PutManifest(%q) = nil, want an error", id)
+			}
+			if _, err := os.Stat(sibling); err != nil {
+				t.Fatalf("sibling file after %q: %v", id, err)
+			}
+		})
 	}
 }
