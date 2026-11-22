@@ -16,6 +16,16 @@ function renderCluster() {
   });
 }
 
+// The connection drops before any response arrives: the server may already
+// have applied the write.
+function stubLostResponse() {
+  const fetchMock = vi.fn(async () => {
+    throw new TypeError('fetch failed');
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
 describe('useCluster', () => {
   afterEach(() => {
     cleanup();
@@ -134,6 +144,39 @@ describe('useCluster', () => {
     expect(res?.error?.status).toBe(409);
     expect(res?.error?.message).toBe('node n2 is the leader');
   });
+
+  it('bootstrap does not replay the POST after a lost response', async () => {
+    const fetchMock = stubLostResponse();
+    const { result } = renderCluster();
+    let res: Awaited<ReturnType<typeof result.current.bootstrap>> | undefined;
+    await act(async () => {
+      res = await result.current.bootstrap({ cluster_name: 'lab', node_name: 'n1' });
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(res?.success).toBe(false);
+  }, 15000);
+
+  it('join does not replay the POST after a lost response', async () => {
+    const fetchMock = stubLostResponse();
+    const { result } = renderCluster();
+    let res: Awaited<ReturnType<typeof result.current.join>> | undefined;
+    await act(async () => {
+      res = await result.current.join({ node_name: 'n2', seed_addresses: ['seed-a:7946'] });
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(res?.success).toBe(false);
+  }, 15000);
+
+  it('leave does not replay the POST after a lost response', async () => {
+    const fetchMock = stubLostResponse();
+    const { result } = renderCluster();
+    let res: Awaited<ReturnType<typeof result.current.leave>> | undefined;
+    await act(async () => {
+      res = await result.current.leave({ node_id: 'n2' });
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(res?.success).toBe(false);
+  }, 15000);
 
   it('labels unknown enum values as Unknown', () => {
     expect(clusterStateLabel(undefined)).toBe('Unknown');
