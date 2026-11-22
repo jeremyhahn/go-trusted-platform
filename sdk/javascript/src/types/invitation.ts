@@ -105,10 +105,12 @@ export interface RevokeInvitationRequest {
 export interface AcceptInvitationRequest {
   /** Invitation token */
   token: string;
-  /** User's name */
-  name?: string;
-  /** User's password (if creating new account) */
-  password?: string;
+  /**
+   * The accepting user's ID: the proto AcceptInvitationRequest.user_id
+   * (uint64, sent as a protojson decimal string). The server refuses an
+   * empty one.
+   */
+  userId: string;
 }
 
 // =============================================================================
@@ -192,15 +194,15 @@ export interface RevokeInvitationResponse {
 }
 
 /**
- * Accept invitation response
+ * Accept invitation response, the proto AcceptInvitationResponse
+ * (invitation.proto): the operation status, the accepted invitation and the
+ * response timestamp.
  */
 export interface AcceptInvitationResponse {
-  /** Operation status */
-  success: boolean;
-  /** User ID (if user was created or associated) */
-  userId?: string;
-  /** Tenant ID */
-  tenantId?: string;
-  /** Status message */
-  message?: string;
+  /** Operation status (common.proto Status) */
+  status: InvitationStatus2;
+  /** The accepted invitation */
+  invitation: Invitation;
+  /** Response timestamp */
+  timestamp?: string;
 }

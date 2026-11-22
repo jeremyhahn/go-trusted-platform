@@ -375,8 +375,8 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
 | `InvitationService.CreateInvitation` | - | `(dashboard)/tenant/invitations/page.tsx` | - | `tenant-management.spec.ts` | covered |
-| `InvitationService.GetInvitation` | `GET /{id:[0-9]+}` | - | - | - | missing |
-| `InvitationService.GetInvitationByToken` | `GET /token/{token}` | - | - | - | missing |
+| `InvitationService.GetInvitation` | `GET /{id:[0-9]+}` | `(dashboard)/tenant/invitations/page.tsx` | - | `real-server/invitations.spec.ts` | covered |
+| `InvitationService.GetInvitationByToken` | `GET /token/{token}` | `auth/webauthn/page.tsx` | - | `real-server/invitations.spec.ts` | covered |
 | `InvitationService.ListInvitations` | - | `(dashboard)/tenant/invitations/page.tsx` | - | `tenant-management.spec.ts` | covered |
 | `InvitationService.RevokeInvitation` | `POST /{id:[0-9]+}/revoke` | `(dashboard)/tenant/invitations/page.tsx` | - | `tenant-management.spec.ts` | covered |
 | `InvitationService.AcceptInvitation` | `POST /accept` | - | - | - | missing |
@@ -518,20 +518,20 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `ProxyService.CreateRoute` | - | - | - | - | missing |
-| `ProxyService.GetRoute` | - | - | - | - | missing |
-| `ProxyService.UpdateRoute` | - | - | - | - | missing |
-| `ProxyService.DeleteRoute` | - | - | - | - | missing |
-| `ProxyService.ListRoutes` | - | - | - | - | missing |
-| `ProxyService.CreatePool` | - | - | - | - | missing |
-| `ProxyService.GetPool` | - | - | - | - | missing |
-| `ProxyService.UpdatePool` | - | - | - | - | missing |
-| `ProxyService.DeletePool` | - | - | - | - | missing |
-| `ProxyService.ListPools` | - | - | - | - | missing |
-| `ProxyService.GetProxyConfig` | - | - | - | - | missing |
-| `ProxyService.GetProxyStatus` | - | - | - | - | missing |
-| `ProxyService.ReloadProxyConfig` | - | - | - | - | missing |
-| `ProxyService.GetZoneMatrix` | - | - | - | - | missing |
+| `ProxyService.CreateRoute` | `POST /routes` | - | - | - | missing |
+| `ProxyService.GetRoute` | `GET /routes/{id}` | - | - | - | missing |
+| `ProxyService.UpdateRoute` | `PUT /routes/{id}` | - | - | - | missing |
+| `ProxyService.DeleteRoute` | `DELETE /routes/{id}` | - | - | - | missing |
+| `ProxyService.ListRoutes` | `GET /routes` | - | - | - | missing |
+| `ProxyService.CreatePool` | `POST /pools` | - | - | - | missing |
+| `ProxyService.GetPool` | `GET /pools/{id}` | - | - | - | missing |
+| `ProxyService.UpdatePool` | `PUT /pools/{id}` | - | - | - | missing |
+| `ProxyService.DeletePool` | `DELETE /pools/{id}` | - | - | - | missing |
+| `ProxyService.ListPools` | `GET /pools` | - | - | - | missing |
+| `ProxyService.GetProxyConfig` | `GET /config` | - | - | - | missing |
+| `ProxyService.GetProxyStatus` | `GET /status` | - | - | - | missing |
+| `ProxyService.ReloadProxyConfig` | `POST /reload` | - | - | - | missing |
+| `ProxyService.GetZoneMatrix` | `GET /zone-matrix` | - | - | - | missing |
 
 ## PXEService (`pxe.proto`)
 

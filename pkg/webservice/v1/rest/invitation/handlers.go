@@ -14,10 +14,14 @@
 package invitation
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gorilla/mux"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
@@ -118,12 +122,52 @@ func resolveUserID(r *http.Request) uint64 {
 // caller-supplied tenant on a tenant-scoped read is the same defect in a
 // different carrier, and since #165 the route requires an authenticated
 // admin, so there is no credential-less caller left for it to serve.
+// invitationStatusFromQuery maps the status query parameter to an
+// InvitationStatus. Empty is UNSPECIFIED (no filter); the short names the
+// JS SDK sends (pending, accepted, expired, revoked) match in any case, as
+// does the full INVITATION_STATUS_* proto name. Anything else is an
+// *ErrInvalidQuery, so an unknown status is a 400 rather than an
+// unfiltered list.
+func invitationStatusFromQuery(raw string) (platformv1.InvitationStatus, error) {
+	if raw == "" {
+		return platformv1.InvitationStatus_INVITATION_STATUS_UNSPECIFIED, nil
+	}
+	name := strings.ToUpper(raw)
+	if !strings.HasPrefix(name, "INVITATION_STATUS_") {
+		name = "INVITATION_STATUS_" + name
+	}
+	if v, ok := platformv1.InvitationStatus_value[name]; ok &&
+		v != int32(platformv1.InvitationStatus_INVITATION_STATUS_UNSPECIFIED) {
+		return platformv1.InvitationStatus(v), nil
+	}
+	return platformv1.InvitationStatus_INVITATION_STATUS_UNSPECIFIED, &protorest.ErrInvalidQuery{
+		Name:  "status",
+		Value: raw,
+		Cause: errors.New("want one of pending, accepted, expired or revoked"),
+	}
+}
+
 func (h *Handlers) ListInvitations(w http.ResponseWriter, r *http.Request) {
 	if !h.ensure(w, r) {
 		return
 	}
+	statusFilter, err := invitationStatusFromQuery(r.URL.Query().Get("status"))
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	pendingOnly, err := protorest.QueryBool(r, "pending_only")
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
 	tenantID := resolveTenantID(r)
-	req := &platformv1.ListInvitationsRequest{TenantId: tenantID}
+	req := &platformv1.ListInvitationsRequest{
+		TenantId:     tenantID,
+		StatusFilter: statusFilter,
+		EmailFilter:  r.URL.Query().Get("email"),
+		PendingOnly:  pendingOnly,
+	}
 	resp, err := h.server.ListInvitations(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
@@ -144,8 +188,13 @@ func (h *Handlers) CreateInvitation(w http.ResponseWriter, r *http.Request) {
 	}
 	// Default tenant_id and inviter ID from the authenticated session
 	// so the WebUI doesn't have to thread JWT claims into its form.
+	tenantID := resolveTenantID(r)
 	if req.TenantId == "" {
-		req.TenantId = resolveTenantID(r)
+		req.TenantId = tenantID
+	} else if tenantID != "" && req.TenantId != tenantID {
+		// An explicit tenant_id must match the verified session's tenant.
+		h.respWriter.Error403(w, r, errors.New("invitation: tenant_id is not the caller's tenant"), nil)
+		return
 	}
 	if req.InvitedById == 0 {
 		req.InvitedById = resolveUserID(r)
@@ -172,6 +221,11 @@ func (h *Handlers) GetInvitation(w http.ResponseWriter, r *http.Request) {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return
 	}
+	// A session tenant reads only its own tenant's invitations.
+	if tenantID := resolveTenantID(r); tenantID != "" && resp.GetInvitation().GetTenantId() != tenantID {
+		protorest.WriteError(w, r, h.respWriter, status.Error(codes.PermissionDenied, "invitation: not in the caller's tenant"))
+		return
+	}
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
 }
 
@@ -182,6 +236,9 @@ func (h *Handlers) DeleteInvitation(w http.ResponseWriter, r *http.Request) {
 	}
 	id, ok := h.parseID(w, r)
 	if !ok {
+		return
+	}
+	if !h.invitationInCallerTenant(w, r, id) {
 		return
 	}
 	resp, err := h.server.DeleteInvitation(r.Context(), &platformv1.DeleteInvitationRequest{InvitationId: id})
@@ -199,6 +256,9 @@ func (h *Handlers) RevokeInvitation(w http.ResponseWriter, r *http.Request) {
 	}
 	id, ok := h.parseID(w, r)
 	if !ok {
+		return
+	}
+	if !h.invitationInCallerTenant(w, r, id) {
 		return
 	}
 	req := &platformv1.RevokeInvitationRequest{}
@@ -244,4 +304,34 @@ func (h *Handlers) AcceptInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// errInvitationOutsideTenant is the 403 cause when a session tenant names
+// another tenant's invitation.
+type errInvitationOutsideTenant struct{}
+
+func (errInvitationOutsideTenant) Error() string {
+	return "invitation: not in the caller's tenant"
+}
+
+// invitationInCallerTenant reports whether the caller may act on invitation
+// id. A session tenant acts only on its own tenant's invitations, as
+// GetInvitation's rule does (#2056): the invitation is loaded and a tenant
+// mismatch answers 403 before any revoke or delete. With no session tenant
+// the check is skipped. On false the response has been written.
+func (h *Handlers) invitationInCallerTenant(w http.ResponseWriter, r *http.Request, id uint64) bool {
+	tenantID := resolveTenantID(r)
+	if tenantID == "" {
+		return true
+	}
+	resp, err := h.server.GetInvitation(r.Context(), &platformv1.GetInvitationRequest{InvitationId: id})
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return false
+	}
+	if resp.GetInvitation().GetTenantId() != tenantID {
+		h.respWriter.Error403(w, r, errInvitationOutsideTenant{}, nil)
+		return false
+	}
+	return true
 }
