@@ -296,3 +296,118 @@ func TestSDKRoundTrip_GenerateKeyAlgorithmTheRouteDoesNotMint(t *testing.T) {
 		t.Fatal("refused request reached the KMS service")
 	}
 }
+
+// macCrypto records the HMAC, VerifyHMAC and Hash requests the router hands
+// the crypto service, and answers with fixed replies.
+type macCrypto struct {
+	fakeCryptoClient
+	hmacReq   *cryptoclient.GenerateHMACRequest
+	verifyReq *cryptoclient.VerifyHMACRequest
+	hashReq   *cryptoclient.HashRequest
+	valid     bool
+}
+
+func (m *macCrypto) GenerateHMAC(_ context.Context, req *cryptoclient.GenerateHMACRequest) (*cryptoclient.GenerateHMACResponse, error) {
+	m.hmacReq = req
+	return &cryptoclient.GenerateHMACResponse{KeyID: req.KeyID, HMAC: []byte("tag"), HashAlg: req.HashAlg}, nil
+}
+
+func (m *macCrypto) VerifyHMAC(_ context.Context, req *cryptoclient.VerifyHMACRequest) (*cryptoclient.VerifyHMACResponse, error) {
+	m.verifyReq = req
+	return &cryptoclient.VerifyHMACResponse{Valid: m.valid}, nil
+}
+
+func (m *macCrypto) Hash(_ context.Context, req *cryptoclient.HashRequest) (*cryptoclient.HashResponse, error) {
+	m.hashReq = req
+	return &cryptoclient.HashResponse{HashAlg: req.HashAlg, Hash: []byte("digest")}, nil
+}
+
+// TestSDKRoundTrip_HMAC: the SDK HMAC reaches the router's HMAC handler with
+// the key from the path and the hash by name, and the tag comes back.
+func TestSDKRoundTrip_HMAC(t *testing.T) {
+	crypto := &macCrypto{}
+	client := kmsOverSDK(t, nil, crypto)
+
+	resp, err := client.HMAC(context.Background(), &platformv1.HMACRequest{KeyId: "mac", Message: []byte("msg"),
+		HashAlgorithm: platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384})
+	if err != nil {
+		t.Fatalf("HMAC: %v", err)
+	}
+	got := crypto.hmacReq
+	if got == nil || got.KeyID != "mac" || string(got.Message) != "msg" || got.HashAlg != cryptoclient.HashSHA384 {
+		t.Fatalf("service request = %+v", got)
+	}
+	if resp.GetKeyId() != "mac" || string(resp.GetHmac()) != "tag" || !resp.GetStatus().GetSuccess() ||
+		resp.GetHashAlgorithm() != platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384 {
+		t.Fatalf("reply = %v", resp)
+	}
+}
+
+// TestSDKRoundTrip_VerifyHMAC: the SDK VerifyHMAC reaches the verify route
+// with the tag, and a false verdict passes through as false.
+func TestSDKRoundTrip_VerifyHMAC(t *testing.T) {
+	for _, valid := range []bool{true, false} {
+		crypto := &macCrypto{valid: valid}
+		client := kmsOverSDK(t, nil, crypto)
+
+		resp, err := client.VerifyHMAC(context.Background(), &platformv1.VerifyHMACRequest{KeyId: "mac",
+			Message: []byte("msg"), Hmac: []byte("tag"), HashAlgorithm: platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256})
+		if err != nil {
+			t.Fatalf("VerifyHMAC: %v", err)
+		}
+		got := crypto.verifyReq
+		if got == nil || got.KeyID != "mac" || string(got.Message) != "msg" || string(got.HMAC) != "tag" ||
+			got.HashAlg != cryptoclient.HashSHA256 {
+			t.Fatalf("service request = %+v", got)
+		}
+		if resp.GetValid() != valid || resp.GetKeyId() != "mac" {
+			t.Fatalf("reply = %v, want key_id mac valid %v", resp, valid)
+		}
+	}
+}
+
+// TestSDKRoundTrip_Hash: the SDK Hash reaches the hash route, and the reply's
+// hash name, spelled by the go-quicbaas HashAlgorithm String(), decodes back
+// to the proto algorithm.
+func TestSDKRoundTrip_Hash(t *testing.T) {
+	for _, tc := range []struct {
+		proto platformv1.HashAlgorithm
+		alg   cryptoclient.HashAlgorithm
+	}{
+		{platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256, cryptoclient.HashSHA256},
+		{platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384, cryptoclient.HashSHA384},
+		{platformv1.HashAlgorithm_HASH_ALGORITHM_SHA512, cryptoclient.HashSHA512},
+	} {
+		crypto := &macCrypto{}
+		client := kmsOverSDK(t, nil, crypto)
+
+		resp, err := client.Hash(context.Background(), &platformv1.HashRequest{Data: []byte("data"), Algorithm: tc.proto})
+		if err != nil {
+			t.Fatalf("Hash %v (server spells it %q): %v", tc.proto, tc.alg.String(), err)
+		}
+		if crypto.hashReq == nil || string(crypto.hashReq.Data) != "data" || crypto.hashReq.HashAlg != tc.alg {
+			t.Fatalf("service request = %+v", crypto.hashReq)
+		}
+		if string(resp.GetHash()) != "digest" || resp.GetAlgorithm() != tc.proto {
+			t.Fatalf("reply = %v", resp)
+		}
+	}
+}
+
+// TestSDKRoundTrip_HashUnspecifiedTakesTheServerDefault: an UNSPECIFIED hash
+// goes out as nothing, the server applies SHA-256, and the reply says so.
+func TestSDKRoundTrip_HashUnspecifiedTakesTheServerDefault(t *testing.T) {
+	crypto := &macCrypto{}
+	client := kmsOverSDK(t, nil, crypto)
+
+	resp, err := client.Hash(context.Background(), &platformv1.HashRequest{Data: []byte("data")})
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+	if crypto.hashReq == nil || crypto.hashReq.HashAlg != cryptoclient.HashSHA256 {
+		t.Fatalf("service request = %+v", crypto.hashReq)
+	}
+	if resp.GetAlgorithm() != platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256 {
+		t.Fatalf("algorithm = %v", resp.GetAlgorithm())
+	}
+}

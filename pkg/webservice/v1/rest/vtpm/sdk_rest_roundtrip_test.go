@@ -175,3 +175,67 @@ func TestSDKREST_CreateBundle(t *testing.T) {
 	assert.Equal(t, platformv1.EKAlgorithm_EK_ALGORITHM_RSA, resp.GetBundle().GetManifest().GetEkAlgorithm())
 	assert.Equal(t, "/bundles/b1/secure-boot-keys/PK.crt", resp.GetBundle().GetSecureBootKeys().GetPkCrt())
 }
+
+func TestSDKREST_GetBundle(t *testing.T) {
+	var asked string
+	client := connectVTPMSDK(t, &mockVTPMService{
+		getBundleFn: func(_ context.Context, id string) (*vtpm.Bundle, error) {
+			asked = id
+			return createTestBundle(id), nil
+		},
+	})
+
+	resp, err := client.GetBundle(context.Background(), &platformv1.GetBundleRequest{Id: "b1"})
+
+	require.NoError(t, err)
+	assert.Equal(t, "b1", asked)
+	assert.Equal(t, "b1", resp.GetBundle().GetId())
+	assert.Equal(t, platformv1.BundleMode_BUNDLE_MODE_PRE_ASSIGNED, resp.GetBundle().GetMode())
+	assert.Equal(t, "test-host", resp.GetBundle().GetManifest().GetHostname())
+}
+
+func TestSDKREST_ValidateBundle(t *testing.T) {
+	t.Run("valid", func(t *testing.T) {
+		client := connectVTPMSDK(t, &mockVTPMService{
+			validateBundleFn: func(context.Context, string) error { return nil },
+		})
+
+		resp, err := client.ValidateBundle(context.Background(), &platformv1.ValidateBundleRequest{Id: "b1"})
+
+		require.NoError(t, err)
+		assert.True(t, resp.GetValid())
+		assert.Empty(t, resp.GetErrors())
+	})
+	t.Run("invalid keeps the errors", func(t *testing.T) {
+		client := connectVTPMSDK(t, &mockVTPMService{
+			validateBundleFn: func(_ context.Context, id string) error { return vtpm.ErrBundleNotFound{ID: id} },
+		})
+
+		resp, err := client.ValidateBundle(context.Background(), &platformv1.ValidateBundleRequest{Id: "b1"})
+
+		require.NoError(t, err)
+		assert.False(t, resp.GetValid())
+		assert.Equal(t, []string{vtpm.ErrBundleNotFound{ID: "b1"}.Error()}, resp.GetErrors())
+	})
+}
+
+func TestSDKREST_BundlePaths(t *testing.T) {
+	client := connectVTPMSDK(t, &mockVTPMService{
+		getBundlePathFn: func(id string) string { return "/var/vtpm/" + id },
+		getTPMSocketFn:  func(id string) string { return "/run/vtpm/" + id + ".sock" },
+		getNVRAMPathFn:  func(id string) string { return "/var/vtpm/" + id + "/nvram" },
+	})
+	ctx := context.Background()
+
+	bundlePath, err := client.GetBundlePath(ctx, &platformv1.GetBundlePathRequest{Id: "b1"})
+	require.NoError(t, err)
+	assert.Equal(t, "/var/vtpm/b1", bundlePath.GetPath())
+
+	socket, err := client.GetTPMSocketPath(ctx, &platformv1.GetTPMSocketPathRequest{Id: "b1"})
+	require.NoError(t, err)
+	assert.Equal(t, "/run/vtpm/b1.sock", socket.GetPath())
+
+	nvram, err := client.GetNVRAMPath(ctx, &platformv1.GetNVRAMPathRequest{Id: "b1"})
+	require.NoError(t, err)
+	assert.Equal(t, "/var/vtpm/b1/nvram", nvram.GetPath())
+}
