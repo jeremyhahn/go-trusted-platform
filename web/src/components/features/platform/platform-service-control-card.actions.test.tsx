@@ -9,6 +9,23 @@ import { PlatformServiceControlCard } from './platform-service-control-card';
 // a daemon refusal reaches the operator verbatim.
 
 const LIST = 'GET /api/v1/platform/services';
+const CAPS = 'GET /api/v1/capabilities';
+
+const SERVICE_OPS = [
+  'POST /api/v1/platform/services/{service}/start',
+  'POST /api/v1/platform/services/{service}/stop',
+  'POST /api/v1/platform/services/{service}/restart',
+] as const;
+
+// The server's capabilities listing: every service op enabled except those in off.
+function caps(off: string[] = []): Answer {
+  const capabilities = SERVICE_OPS.map((op) =>
+    off.includes(op)
+      ? { op, kind: 'route', enabled: false, reason: 'not-configured: services' }
+      : { op, kind: 'route', enabled: true },
+  );
+  return ok({ capabilities, total: capabilities.length, enabled: capabilities.filter((c) => c.enabled).length });
+}
 const START = 'POST /api/v1/platform/services/tpm/start';
 const STOP = 'POST /api/v1/platform/services/tpm/stop';
 const RESTART = 'POST /api/v1/platform/services/tpm/restart';
@@ -35,7 +52,7 @@ function posts(sent: Sent) {
 }
 
 async function renderCard(routes: Record<string, Answer>) {
-  const sent = stubControlPlane({ [LIST]: baseList(), ...routes });
+  const sent = stubControlPlane({ [CAPS]: caps(), [LIST]: baseList(), ...routes });
   render(withControlPlane(<PlatformServiceControlCard />));
   await screen.findByTestId('service-row-tpm');
   return sent;

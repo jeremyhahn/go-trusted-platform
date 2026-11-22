@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ok, refused, stubControlPlane, withControlPlane, type Answer } from '@/test/control-plane-fetch';
@@ -9,6 +9,23 @@ import { PlatformServiceControlCard } from './platform-service-control-card';
 // and a refusal reaches the operator verbatim.
 
 const LIST = 'GET /api/v1/platform/services';
+const CAPS = 'GET /api/v1/capabilities';
+
+const SERVICE_OPS = [
+  'POST /api/v1/platform/services/{service}/start',
+  'POST /api/v1/platform/services/{service}/stop',
+  'POST /api/v1/platform/services/{service}/restart',
+] as const;
+
+// The server's capabilities listing: every service op enabled except those in off.
+function caps(off: string[] = []): Answer {
+  const capabilities = SERVICE_OPS.map((op) =>
+    off.includes(op)
+      ? { op, kind: 'route', enabled: false, reason: 'not-configured: services' }
+      : { op, kind: 'route', enabled: true },
+  );
+  return ok({ capabilities, total: capabilities.length, enabled: capabilities.filter((c) => c.enabled).length });
+}
 const TPM = 'GET /api/v1/platform/services/tpm';
 
 function baseList(): Answer {
@@ -26,6 +43,25 @@ function listGets(sent: { method: string; path: string }[]) {
   return sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/platform/services').length;
 }
 
+describe('PlatformServiceControlCard capability gates', () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('start, stop and restart are disabled when the server does not enable them', async () => {
+    stubControlPlane({ [CAPS]: caps([...SERVICE_OPS]), [LIST]: baseList() });
+    render(withControlPlane(<PlatformServiceControlCard />));
+    const row = await screen.findByTestId('service-row-tpm');
+
+    for (const name of ['Start tpm', 'Stop tpm', 'Restart tpm']) {
+      const button = within(row).getByRole('button', { name });
+      await waitFor(() => expect(button.getAttribute('data-capability-enabled')).toBe('false'));
+      expect((button as HTMLButtonElement).disabled).toBe(true);
+    }
+  });
+});
+
 describe('PlatformServiceControlCard list and detail', () => {
   afterEach(() => {
     cleanup();
@@ -33,7 +69,7 @@ describe('PlatformServiceControlCard list and detail', () => {
   });
 
   it('lists the services with their status', async () => {
-    const sent = stubControlPlane({ [LIST]: baseList() });
+    const sent = stubControlPlane({ [CAPS]: caps(), [LIST]: baseList() });
     render(withControlPlane(<PlatformServiceControlCard />));
 
     expect((await screen.findByTestId('service-status-tpm')).textContent).toBe('running');
@@ -44,14 +80,14 @@ describe('PlatformServiceControlCard list and detail', () => {
   });
 
   it('says when no service is registered', async () => {
-    stubControlPlane({ [LIST]: ok({ services: [], count: 0 }) });
+    stubControlPlane({ [CAPS]: caps(), [LIST]: ok({ services: [], count: 0 }) });
     render(withControlPlane(<PlatformServiceControlCard />));
 
     expect(await screen.findByText('No services registered.')).toBeDefined();
   });
 
   it('shows a list refusal verbatim', async () => {
-    stubControlPlane({ [LIST]: refused(404, 'service registry not configured') });
+    stubControlPlane({ [CAPS]: caps(), [LIST]: refused(404, 'service registry not configured') });
     render(withControlPlane(<PlatformServiceControlCard />));
 
     const alert = await screen.findByRole('alert');
@@ -60,7 +96,7 @@ describe('PlatformServiceControlCard list and detail', () => {
   });
 
   it('re-reads on Refresh', async () => {
-    const sent = stubControlPlane({ [LIST]: baseList() });
+    const sent = stubControlPlane({ [CAPS]: caps(), [LIST]: baseList() });
     render(withControlPlane(<PlatformServiceControlCard />));
     await screen.findByTestId('service-row-tpm');
 
@@ -73,6 +109,7 @@ describe('PlatformServiceControlCard list and detail', () => {
 
   it("shows one service's detail", async () => {
     stubControlPlane({
+      [CAPS]: caps(),
       [LIST]: baseList(),
       [TPM]: ok({
         name: 'tpm',
