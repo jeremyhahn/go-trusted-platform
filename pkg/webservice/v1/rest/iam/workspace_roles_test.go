@@ -16,9 +16,11 @@ package iam
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
+	quicbaasiam "github.com/jeremyhahn/go-quicbaas/pkg/iam"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 )
@@ -264,6 +266,43 @@ func TestWorkspaceRoleResolverKeepsAReferenceGetRoleDoesNotFind(t *testing.T) {
 	}
 	if !slices.Equal(roles, []string{"admin"}) {
 		t.Fatalf("expected a reference GetRole does not find to be kept, got %v", roles)
+	}
+}
+
+func TestWorkspaceRoleResolverKeepsAReferenceTheEmbeddedStoreDoesNotFind(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{name: "store error", err: quicbaasiam.ErrRoleNotFound},
+		{name: "wrapped store error", err: fmt.Errorf("embedded: %w", quicbaasiam.ErrRoleNotFound)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			client := &mockIAMClient{
+				getByEmailFn: func(_ context.Context, _, email string) (*iamsdk.User, error) {
+					return &iamsdk.User{Email: email, Roles: []string{"admin"}}, nil
+				},
+				getRoleFn: func(context.Context, string, string) (*iamsdk.Role, error) {
+					return nil, tc.err
+				},
+				listRolesFn: failListRoles(t),
+			}
+			resolver, err := NewWorkspaceRoleResolver(client)
+			if err != nil {
+				t.Fatalf("NewWorkspaceRoleResolver: %v", err)
+			}
+
+			roles, err := resolver.Roles(context.Background(), "workspace-a", "operator@platform")
+			if err != nil {
+				t.Fatalf("Roles: %v", err)
+			}
+			if !slices.Equal(roles, []string{"admin"}) {
+				t.Fatalf("expected a reference the embedded store does not find to be kept, got %v", roles)
+			}
+		})
 	}
 }
 
