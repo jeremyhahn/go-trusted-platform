@@ -1,4 +1,4 @@
-# ci-template: v1.35.1 + v1.42 hermetic gate + v1.48 runner selection (customized)
+# ci-template: v1.35.1 + v1.42 hermetic gate + v1.48 runner selection + v1.50 short-list fix (customized)
 #
 # v1.42 hermetic gate only (owner ruling 742 (1), Tenant Agent rulings 754 and
 # 794): the CI Gate's outcome depends only on the tree under test. `make
@@ -22,6 +22,14 @@
 # or a hosted job of another run has queued HOSTED_QUEUE_GRACE_SECONDS; a
 # fork pull request always stays hosted. Nothing else of v1.43 to v1.48 is
 # taken.
+#
+# v1.50 short-list fix only (handbook PR 84, rulings 999/1024, DS-9751,
+# #2128): the overflow never fired under load. The Actions API's listing
+# returns fewer items than its total_count while runs change state, and the
+# selection step treated every short list as unread and picked hosted. A
+# short list is now a lower bound: at or past HOSTED_JOBS_PER_REPO, or with
+# a hosted job of another run queued past the grace in it, it overflows; a
+# short list that reaches neither trigger picks hosted with a ::warning.
 # v1.35.1 (DS-8433, CA m2557): the Signatures job of handbook cd17d28
 # (ci-template v1.35.1) is adopted as is, in CI Gate's needs, env block and a
 # `pr` check line, with .github/allowed_signers synced from handbook
@@ -434,13 +442,20 @@ jobs:
           }
           # pages <url> <key> <out>: every page of a listing, its <key> items
           # one JSON object per line in <out>. 1, with WHY set, when a reply is
-          # not 200 or the items fall short of total_count.
+          # not 200.
+          # v1.50: a list short of its total_count is a lower bound, kept in
+          # SHORT (the API's listing lags total_count while runs move); the
+          # counts it gives are never over, so it may still overflow. A
+          # total_count over 1000 is past what the API lists, so no lower bound:
+          # the hosted default, as before.
+          SHORT=""
           pages() {
             local p=1 got=0 total n
             : > "$3"
             while :; do
               get "$1&per_page=100&page=$p" "$RUNNER_TEMP/sel-page.json" || { WHY="$1: $CODE"; return 1; }
               total=$(jq -er '.total_count | numbers' "$RUNNER_TEMP/sel-page.json") || { WHY="$1: 200 with no total_count"; return 1; }
+              [ "$total" -le 1000 ] || { WHY="$1: total_count $total, over the 1000 entries the API lists"; return 1; }
               n=$(jq -er --arg k "$2" '.[$k] | arrays | length' "$RUNNER_TEMP/sel-page.json") || { WHY="$1: 200 with no $2 list"; return 1; }
               jq -c --arg k "$2" '.[$k][]' "$RUNNER_TEMP/sel-page.json" >> "$3"
               got=$((got + n))
@@ -448,7 +463,7 @@ jobs:
               [ "$p" -lt 10 ] || { WHY="$1: more than 1000 entries"; return 1; }
               p=$((p + 1))
             done
-            [ "$got" -ge "$total" ] || { WHY="$1: $got of $total entries"; return 1; }
+            [ "$got" -ge "$total" ] || SHORT="${SHORT:+$SHORT; }$1: $got of $total entries"
           }
           : > "$RUNNER_TEMP/sel-runs.jsonl"
           for st in queued in_progress; do
@@ -474,10 +489,13 @@ jobs:
             why="$running hosted jobs in progress, HOSTED_JOBS_PER_REPO=$LIMIT"
           elif [ "$queued" -gt 0 ]; then
             why="$queued hosted job(s) queued ${GRACE}s or more: the hosted pool is full"
+          elif [ -n "$SHORT" ]; then
+            hosted "the Actions API listed fewer entries than its total ($SHORT), and the counts read reach no trigger"
           else
             emit "$HOSTED" "$HOSTED"
             exit 0
           fi
+          [ -z "$SHORT" ] || why="$why (a lower bound: $SHORT)"
           echo "::notice::runner selection: $why; this run's jobs overflow to the self-hosted overflow runners (bigdisk, bigdisk-docker) (ci-template v1.48, ruling 1024)"
           emit "$(overflow bigdisk)" "$(overflow bigdisk-docker)"
       - name: Is a main push run of this workflow in flight?
@@ -1344,6 +1362,61 @@ jobs:
         run: |
           scripts/ci-go-integrity.sh
           make web-build-check
+
+  # Real-server Playwright specs (#2034, epic #1665, ruling 1031): builds the
+  # tpm_simulator platformd with the console embedded and runs
+  # web/playwright.real-server.config.ts against it. Hosted (ruling 999): the
+  # job installs chromium itself, which the pool image does not carry.
+  web-e2e:
+    name: Web Console E2E
+    runs-on: ubuntu-latest
+    if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
+    needs: preflight
+    timeout-minutes: 30
+    env:
+      GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          cache: ${{ runner.environment != 'self-hosted' }}
+          go-version: ${{ env.GO_VERSION }}
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
+      # The tpm_simulator build compiles the reference TPM with cgo against
+      # OpenSSL (#149), as in the race job.
+      - name: Install cpio and the OpenSSL headers
+        if: runner.environment == 'github-hosted'
+        run: sudo apt-get update && sudo apt-get install -y cpio libssl-dev
+
+      - name: Install from lockfiles and build the SDK the console consumes
+        run: |
+          scripts/ci-go-integrity.sh
+          make web-deps
+
+      - name: Install the Playwright chromium
+        run: cd web && npx playwright install --with-deps chromium
+
+      - name: Real-server Playwright specs
+        run: |
+          scripts/ci-go-integrity.sh
+          make web-e2e WEB_E2E_BUILD=1
+
+      - name: Upload the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: web-e2e-playwright
+          path: |
+            web/playwright-report
+            web/test-results
+          if-no-files-found: ignore
 
   # One integration image per run for every leg (#1119). Each leg used to build
   # it itself: five `docker buildx build --load` runs of 6.5 to 7.3 minutes on
@@ -2319,7 +2392,7 @@ jobs:
     # skipped job as `skipped`, not `success`), never a green nightly. Every
     # other verdict, an empty one included, runs it.
     if: ${{ always() && (github.event_name != 'schedule' || needs.preflight.outputs.verdict != 'busy') }}
-    needs: [preflight, lint, image, lint-gates, sdkjs, race, web, integration-image, integration, soak, fips, signatures]   # v1.34, v1.30 lint, v1.35 signatures, v1.42 no vuln
+    needs: [preflight, lint, image, lint-gates, sdkjs, race, web, web-e2e, integration-image, integration, soak, fips, signatures]   # v1.34, v1.30 lint, v1.35 signatures, v1.42 no vuln
     steps:
       - name: Verify every job succeeded
         env:
@@ -2343,6 +2416,7 @@ jobs:
           RESULT_SDK_JS: ${{ needs.sdkjs.result }}
           RESULT_RACE: ${{ needs.race.result }}
           RESULT_WEB: ${{ needs.web.result }}
+          RESULT_WEB_E2E: ${{ needs.web-e2e.result }}
           RESULT_INTEGRATION_IMAGE: ${{ needs.integration-image.result }}
           RESULT_INTEGRATION: ${{ needs.integration.result }}
           RESULT_SOAK: ${{ needs.soak.result }}
@@ -2412,6 +2486,7 @@ jobs:
           check docs sdkjs "$RESULT_SDK_JS"
           check docs race "$RESULT_RACE"
           check full web "$RESULT_WEB"
+          check full web-e2e "$RESULT_WEB_E2E"
           check full integration-image "$RESULT_INTEGRATION_IMAGE"
           check full integration "$RESULT_INTEGRATION"
           check nightly soak "$RESULT_SOAK"
