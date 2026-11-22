@@ -2,8 +2,7 @@
 
 /**
  * useIDevIDCerts wraps the IDevID certificate operations of the control
- * plane: CreateIAKCSR (`POST /api/v1/idevid/iak/csr`),
- * InstallIDevIDCertificate (`POST /api/v1/idevid/certificate`),
+ * plane: InstallIDevIDCertificate (`POST /api/v1/idevid/certificate`),
  * InstallIAKCertificate (`POST /api/v1/idevid/iak/certificate`),
  * DeleteIAKCertificate (`DELETE /api/v1/idevid/iak/certificate`) and
  * ActivateCredential (`POST /api/v1/idevid/activate-credential`), served by
@@ -11,7 +10,9 @@
  *
  * It calls the SDK IDevIDService from `useIDevID()`. PEM fields are proto
  * bytes, so they travel as base64 on the wire: the hook takes PEM text and
- * encodes it, and `base64ToPem` decodes the CSR it gets back.
+ * encodes it; `base64ToPem` decodes base64 PEM bytes back to text. The hook
+ * offers no IAK CSR call until the daemon's CreateIAKCSR returns a usable PEM
+ * CSR.
  *
  * Deleting the IAK certificate cannot be undone, so a control that calls
  * `deleteIAKCertificate` must ask the operator to confirm first.
@@ -55,8 +56,6 @@ export function useIDevIDCerts() {
   const idevid = useIDevID();
   return useMemo(
     () => ({
-      createIAKCSR: (commonName?: string) =>
-        idevid.createIAKCSR(commonName?.trim() ? { template: { commonName: commonName.trim() } } : undefined),
       installIDevIDCertificate: (pem: string) =>
         idevid.installIDevIDCertificate({ certificatePem: pemToBase64(pem.trim()) }),
       installIAKCertificate: (pem: string) =>

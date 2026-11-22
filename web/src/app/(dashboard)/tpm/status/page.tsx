@@ -32,11 +32,10 @@ import {
   Key,
   AlertCircle,
 } from "lucide-react";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useTPM, useIDevID, useApi, useToast } from "@/hooks";
-import { useIDevIDCerts, base64ToPem, looksLikePem } from "@/hooks/use-idevid-certs";
+import { useIDevIDCerts, looksLikePem } from "@/hooks/use-idevid-certs";
 import type {
   ApiResponse,
   GetEKResponse,
@@ -236,31 +235,16 @@ export default function TPMStatusPage() {
     }
   }, [idevid, toast]);
 
-  // CreateIAKCSR / InstallIDevIDCertificate / InstallIAKCertificate /
-  // DeleteIAKCertificate through useIDevIDCerts (#2055). The SDK does not
-  // throw; a refusal comes back as res.error and shows the server's message.
+  // InstallIDevIDCertificate / InstallIAKCertificate / DeleteIAKCertificate
+  // through useIDevIDCerts (#2055). The SDK does not throw; a refusal comes
+  // back as res.error and shows the server's message. The IAK CSR control is
+  // deferred: the daemon's CreateIAKCSR (pkg/api/daemon/idevid_grpc_service.go)
+  // cannot yet return a usable PEM CSR.
   const certs = useIDevIDCerts();
-  const [csrCommonName, setCsrCommonName] = React.useState("");
-  const [csrPem, setCsrPem] = React.useState("");
   const [idevidCertText, setIdevidCertText] = React.useState("");
   const [iakCertText, setIakCertText] = React.useState("");
   const [certBusy, setCertBusy] = React.useState(false);
   const [confirmDeleteIAKCert, setConfirmDeleteIAKCert] = React.useState(false);
-
-  const createCSR = React.useCallback(async () => {
-    setCertBusy(true);
-    try {
-      const res = await certs.createIAKCSR(csrCommonName);
-      if (res.error) {
-        toast({ title: "IAK CSR refused", description: res.error.message, variant: "destructive" });
-      } else {
-        setCsrPem(base64ToPem(res.data?.csrPem));
-        toast({ title: "IAK CSR created", description: res.data?.status?.message || "The IAK CSR was created" });
-      }
-    } finally {
-      setCertBusy(false);
-    }
-  }, [certs, csrCommonName, toast]);
 
   const installIDevIDCert = React.useCallback(async () => {
     setCertBusy(true);
@@ -695,28 +679,11 @@ export default function TPMStatusPage() {
               <CardHeader>
                 <CardTitle>Identity Certificates</CardTitle>
                 <CardDescription>
-                  IAK CSR and IDevID / IAK certificate install through the IDevID service
+                  IDevID / IAK certificate install through the IDevID service
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="iak-csr-common-name">IAK CSR common name</Label>
-                    <Input
-                      id="iak-csr-common-name"
-                      value={csrCommonName}
-                      onChange={(e) => setCsrCommonName(e.target.value)}
-                      placeholder="optional"
-                    />
-                    <Button size="sm" variant="outline" onClick={() => void createCSR()} disabled={certBusy}>
-                      Create IAK CSR
-                    </Button>
-                    {csrPem && (
-                      <pre data-testid="iak-csr-pem" className="text-xs whitespace-pre-wrap break-all rounded bg-muted p-2">
-                        {csrPem}
-                      </pre>
-                    )}
-                  </div>
                   <div className="space-y-2">
                     <Label htmlFor="idevid-cert-pem">IDevID certificate PEM</Label>
                     <Textarea
