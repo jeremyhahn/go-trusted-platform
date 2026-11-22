@@ -31,7 +31,7 @@ func parseFeatureTable(script string) map[string][]string {
 	body, _, _ = strings.Cut(body, "\n)")
 	for _, line := range strings.Split(body, "\n") {
 		m := featureTableRow.FindStringSubmatch(strings.TrimSpace(line))
-		if m == nil || m[1] == "all" {
+		if len(m) < 3 || m[1] == "all" {
 			continue
 		}
 		table[m[1]] = strings.Fields(m[2])
