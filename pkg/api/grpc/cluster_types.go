@@ -13,7 +13,10 @@
 
 package grpc
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // ClusterService defines the interface for cluster management operations.
 // This interface is implemented by cluster service providers and used by the gRPC service.
@@ -318,6 +321,27 @@ type ErrMissingNodeID struct{}
 
 func (e ErrMissingNodeID) Error() string {
 	return "node ID is required"
+}
+
+// ErrInvalidClusterPort is returned when a bind or advertise port is outside
+// 1-65535. Zero means unset and is not an error.
+type ErrInvalidClusterPort struct {
+	Field string
+	Port  uint32
+}
+
+func (e ErrInvalidClusterPort) Error() string {
+	return fmt.Sprintf("%s %d is not a valid port (1-65535)", e.Field, e.Port)
+}
+
+// ErrBlankSeedAddress is returned when a seed address entry is empty or
+// whitespace only.
+type ErrBlankSeedAddress struct {
+	Index int
+}
+
+func (e ErrBlankSeedAddress) Error() string {
+	return fmt.Sprintf("seed address %d is blank", e.Index)
 }
 
 // ErrClusterOperationFailed is returned when a cluster operation fails.

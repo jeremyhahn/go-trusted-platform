@@ -272,6 +272,48 @@ func TestClusterGRPCService_Bootstrap(t *testing.T) {
 			wantCode: codes.AlreadyExists,
 			wantErr:  true,
 		},
+		{
+			name:    "whitespace-only cluster name returns InvalidArgument",
+			service: &mockClusterService{},
+			req: &platformv1.BootstrapClusterRequest{
+				ClusterName: "   ",
+				NodeName:    "node-1",
+			},
+			wantCode: codes.InvalidArgument,
+			wantErr:  true,
+		},
+		{
+			name:    "whitespace-only node name returns InvalidArgument",
+			service: &mockClusterService{},
+			req: &platformv1.BootstrapClusterRequest{
+				ClusterName: "test-cluster",
+				NodeName:    " \t",
+			},
+			wantCode: codes.InvalidArgument,
+			wantErr:  true,
+		},
+		{
+			name:    "bind port above 65535 returns InvalidArgument",
+			service: &mockClusterService{},
+			req: &platformv1.BootstrapClusterRequest{
+				ClusterName: "test-cluster",
+				NodeName:    "node-1",
+				BindPort:    65536,
+			},
+			wantCode: codes.InvalidArgument,
+			wantErr:  true,
+		},
+		{
+			name:    "advertise port above 65535 returns InvalidArgument",
+			service: &mockClusterService{},
+			req: &platformv1.BootstrapClusterRequest{
+				ClusterName:   "test-cluster",
+				NodeName:      "node-1",
+				AdvertisePort: 70000,
+			},
+			wantCode: codes.InvalidArgument,
+			wantErr:  true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -399,6 +441,47 @@ func TestClusterGRPCService_Join(t *testing.T) {
 				SeedAddresses: []string{"192.168.1.1:7946"},
 			},
 			wantCode: codes.DeadlineExceeded,
+			wantErr:  true,
+		},
+		{
+			name:    "whitespace-only node name returns InvalidArgument",
+			service: &mockClusterService{},
+			req: &platformv1.JoinClusterRequest{
+				NodeName:      "  ",
+				SeedAddresses: []string{"192.168.1.1:7946"},
+			},
+			wantCode: codes.InvalidArgument,
+			wantErr:  true,
+		},
+		{
+			name:    "whitespace-only seed address returns InvalidArgument",
+			service: &mockClusterService{},
+			req: &platformv1.JoinClusterRequest{
+				NodeName:      "node-2",
+				SeedAddresses: []string{"192.168.1.1:7946", "  "},
+			},
+			wantCode: codes.InvalidArgument,
+			wantErr:  true,
+		},
+		{
+			name:    "empty seed address returns InvalidArgument",
+			service: &mockClusterService{},
+			req: &platformv1.JoinClusterRequest{
+				NodeName:      "node-2",
+				SeedAddresses: []string{""},
+			},
+			wantCode: codes.InvalidArgument,
+			wantErr:  true,
+		},
+		{
+			name:    "bind port above 65535 returns InvalidArgument",
+			service: &mockClusterService{},
+			req: &platformv1.JoinClusterRequest{
+				NodeName:      "node-2",
+				SeedAddresses: []string{"192.168.1.1:7946"},
+				BindPort:      65536,
+			},
+			wantCode: codes.InvalidArgument,
 			wantErr:  true,
 		},
 	}

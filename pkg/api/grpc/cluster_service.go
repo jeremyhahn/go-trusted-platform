@@ -15,6 +15,7 @@ package grpc
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -54,12 +55,20 @@ func (s *ClusterGRPCService) Bootstrap(
 		return nil, status.Error(codes.FailedPrecondition, ErrNilClusterService{}.Error())
 	}
 
-	if req.GetClusterName() == "" {
+	if strings.TrimSpace(req.GetClusterName()) == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrMissingClusterName{}.Error())
 	}
 
-	if req.GetNodeName() == "" {
+	if strings.TrimSpace(req.GetNodeName()) == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrMissingNodeName{}.Error())
+	}
+
+	if err := validateClusterPort("bind port", req.GetBindPort()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	if err := validateClusterPort("advertise port", req.GetAdvertisePort()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	clusterReq := &ClusterBootstrapRequest{
@@ -95,12 +104,26 @@ func (s *ClusterGRPCService) Join(
 		return nil, status.Error(codes.FailedPrecondition, ErrNilClusterService{}.Error())
 	}
 
-	if req.GetNodeName() == "" {
+	if strings.TrimSpace(req.GetNodeName()) == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrMissingNodeName{}.Error())
 	}
 
 	if len(req.GetSeedAddresses()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrMissingSeedAddresses{}.Error())
+	}
+
+	for i, seed := range req.GetSeedAddresses() {
+		if strings.TrimSpace(seed) == "" {
+			return nil, status.Error(codes.InvalidArgument, ErrBlankSeedAddress{Index: i}.Error())
+		}
+	}
+
+	if err := validateClusterPort("bind port", req.GetBindPort()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	if err := validateClusterPort("advertise port", req.GetAdvertisePort()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	clusterReq := &ClusterJoinRequest{
@@ -264,6 +287,15 @@ func clusterSuccessStatus(message string) *platformv1.Status {
 		Success: true,
 		Message: message,
 	}
+}
+
+// validateClusterPort rejects a port above 65535. Zero means unset and is
+// accepted; the cluster coordinator then picks its default.
+func validateClusterPort(field string, port uint32) error {
+	if port > 65535 {
+		return ErrInvalidClusterPort{Field: field, Port: port}
+	}
+	return nil
 }
 
 func clusterInfoToProto(info *ClusterInfoData) *platformv1.ClusterInfo {
