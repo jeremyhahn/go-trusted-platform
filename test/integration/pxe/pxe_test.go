@@ -61,6 +61,20 @@ func TestPXEMultiProtocol(t *testing.T) {
 	}
 
 	gate := helpers.NewAdapterGate(t, "pxe", helpers.AdapterNames(adapters)...)
+
+	// The daemon only initializes the PXE backend and never starts it, and
+	// testGetStatus requires it running, so this suite starts it itself
+	// whichever test runs first.
+	starter := NewGRPCAdapter()
+	helpers.RequireAdapterSetup(t, "pxe", starter.Name(), starter.Setup(ctx))
+	defer func() {
+		if err := starter.Teardown(); err != nil {
+			t.Logf("Warning: teardown error for %s: %v", starter.Name(), err)
+		}
+	}()
+	restartPXEService(t, starter)
+	requireServiceRunning(t, ctx, starter, true)
+
 	for _, adapter := range adapters {
 		adapter := adapter // Capture for closure
 		t.Run(adapter.Name(), func(t *testing.T) {
