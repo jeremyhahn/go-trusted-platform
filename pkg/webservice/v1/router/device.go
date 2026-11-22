@@ -174,6 +174,11 @@ func (r *DeviceRouter) RegisterRoutes(router *mux.Router) {
 	if r.attestHandler != nil {
 		router.Handle("/devices/{id}/attest",
 			r.requireScope(deviceWriteScope, r.attestHandler.HandleAttestDevice)).Methods("POST")
+		// The single-use attestation challenge (#2136) creates server state.
+		if ch, ok := r.attestHandler.(device.AttestChallengeHandler); ok {
+			router.Handle("/devices/{id}/attest/challenge",
+				r.requireScope(deviceWriteScope, ch.HandleIssueAttestationChallenge)).Methods("POST")
+		}
 	}
 
 	// Recording a device's attestation certificate without re-enrolling it
