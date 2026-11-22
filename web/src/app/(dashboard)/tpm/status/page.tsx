@@ -32,7 +32,11 @@ import {
   Key,
   AlertCircle,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { useTPM, useIDevID, useApi, useToast } from "@/hooks";
+import { useIDevIDCerts, base64ToPem, looksLikePem } from "@/hooks/use-idevid-certs";
 import type {
   ApiResponse,
   GetEKResponse,
@@ -231,6 +235,84 @@ export default function TPMStatusPage() {
       setFlushBusy(false);
     }
   }, [idevid, toast]);
+
+  // CreateIAKCSR / InstallIDevIDCertificate / InstallIAKCertificate /
+  // DeleteIAKCertificate through useIDevIDCerts (#2055). The SDK does not
+  // throw; a refusal comes back as res.error and shows the server's message.
+  const certs = useIDevIDCerts();
+  const [csrCommonName, setCsrCommonName] = React.useState("");
+  const [csrPem, setCsrPem] = React.useState("");
+  const [idevidCertText, setIdevidCertText] = React.useState("");
+  const [iakCertText, setIakCertText] = React.useState("");
+  const [certBusy, setCertBusy] = React.useState(false);
+  const [confirmDeleteIAKCert, setConfirmDeleteIAKCert] = React.useState(false);
+
+  const createCSR = React.useCallback(async () => {
+    setCertBusy(true);
+    try {
+      const res = await certs.createIAKCSR(csrCommonName);
+      if (res.error) {
+        toast({ title: "IAK CSR refused", description: res.error.message, variant: "destructive" });
+      } else {
+        setCsrPem(base64ToPem(res.data?.csrPem));
+        toast({ title: "IAK CSR created", description: res.data?.status?.message || "The IAK CSR was created" });
+      }
+    } finally {
+      setCertBusy(false);
+    }
+  }, [certs, csrCommonName, toast]);
+
+  const installIDevIDCert = React.useCallback(async () => {
+    setCertBusy(true);
+    try {
+      const res = await certs.installIDevIDCertificate(idevidCertText);
+      if (res.error) {
+        toast({ title: "IDevID certificate install refused", description: res.error.message, variant: "destructive" });
+      } else {
+        toast({
+          title: "IDevID certificate installed",
+          description: res.data?.status?.message || "The IDevID certificate was installed",
+        });
+      }
+    } finally {
+      setCertBusy(false);
+    }
+  }, [certs, idevidCertText, toast]);
+
+  const installIAKCert = React.useCallback(async () => {
+    setCertBusy(true);
+    try {
+      const res = await certs.installIAKCertificate(iakCertText);
+      if (res.error) {
+        toast({ title: "IAK certificate install refused", description: res.error.message, variant: "destructive" });
+      } else {
+        toast({
+          title: "IAK certificate installed",
+          description: res.data?.status?.message || "The IAK certificate was installed",
+        });
+      }
+    } finally {
+      setCertBusy(false);
+    }
+  }, [certs, iakCertText, toast]);
+
+  const deleteIAKCert = React.useCallback(async () => {
+    setConfirmDeleteIAKCert(false);
+    setCertBusy(true);
+    try {
+      const res = await certs.deleteIAKCertificate();
+      if (res.error) {
+        toast({ title: "IAK certificate delete refused", description: res.error.message, variant: "destructive" });
+      } else {
+        toast({
+          title: "IAK certificate deleted",
+          description: res.data?.status?.message || "The IAK certificate was deleted",
+        });
+      }
+    } finally {
+      setCertBusy(false);
+    }
+  }, [certs, toast]);
 
   // Helper to find capability by name
   const findCapability = (caps: TPMCapability[] | undefined, name: string) => {
@@ -608,6 +690,76 @@ export default function TPMStatusPage() {
                 )}
               </CardContent>
             </Card>
+
+            <Card data-testid="identity-certificates">
+              <CardHeader>
+                <CardTitle>Identity Certificates</CardTitle>
+                <CardDescription>
+                  IAK CSR and IDevID / IAK certificate install through the IDevID service
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="iak-csr-common-name">IAK CSR common name</Label>
+                    <Input
+                      id="iak-csr-common-name"
+                      value={csrCommonName}
+                      onChange={(e) => setCsrCommonName(e.target.value)}
+                      placeholder="optional"
+                    />
+                    <Button size="sm" variant="outline" onClick={() => void createCSR()} disabled={certBusy}>
+                      Create IAK CSR
+                    </Button>
+                    {csrPem && (
+                      <pre data-testid="iak-csr-pem" className="text-xs whitespace-pre-wrap break-all rounded bg-muted p-2">
+                        {csrPem}
+                      </pre>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="idevid-cert-pem">IDevID certificate PEM</Label>
+                    <Textarea
+                      id="idevid-cert-pem"
+                      value={idevidCertText}
+                      onChange={(e) => setIdevidCertText(e.target.value)}
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void installIDevIDCert()}
+                      disabled={certBusy || !looksLikePem(idevidCertText, "CERTIFICATE")}
+                    >
+                      Install IDevID certificate
+                    </Button>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="iak-cert-pem">IAK certificate PEM</Label>
+                    <Textarea
+                      id="iak-cert-pem"
+                      value={iakCertText}
+                      onChange={(e) => setIakCertText(e.target.value)}
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void installIAKCert()}
+                      disabled={certBusy || !looksLikePem(iakCertText, "CERTIFICATE")}
+                    >
+                      Install IAK certificate
+                    </Button>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => setConfirmDeleteIAKCert(true)}
+                    disabled={certBusy}
+                  >
+                    Delete IAK certificate
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
           </div>
 
           <Dialog open={confirmDeleteIAK} onOpenChange={setConfirmDeleteIAK}>
@@ -638,6 +790,24 @@ export default function TPMStatusPage() {
                 </Button>
                 <Button type="button" onClick={() => void flushContexts()}>
                   Flush
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+          <Dialog open={confirmDeleteIAKCert} onOpenChange={setConfirmDeleteIAKCert}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Delete the IAK certificate?</DialogTitle>
+                <DialogDescription>
+                  The IDevID service removes the installed IAK certificate. This cannot be undone.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setConfirmDeleteIAKCert(false)}>
+                  Cancel
+                </Button>
+                <Button type="button" variant="destructive" onClick={() => void deleteIAKCert()}>
+                  Delete certificate
                 </Button>
               </DialogFooter>
             </DialogContent>
