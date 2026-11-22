@@ -49,7 +49,7 @@ describe("AttestationCollectPage", () => {
   it("collects a VM attestation and shows a Verified badge", async () => {
     collect.collectVM.mockResolvedValue({
       success: true,
-      data: { vm_id: "vm-1", host_id: "h-1", verified: true, quote_data: "cXVvdGU=" },
+      data: { status: { success: true, message: "" }, attestation: { vmId: "vm-1", hostId: "h-1", quoteData: "cXVvdGU=" } },
     });
     render(<AttestationCollectPage />);
 
@@ -71,7 +71,7 @@ describe("AttestationCollectPage", () => {
   it("collects a container attestation and shows its digest", async () => {
     collect.collectContainer.mockResolvedValue({
       success: true,
-      data: { container_id: "c-1", verified: true, digest: "sha256:abc123", pcr_value: "00" },
+      data: { status: { success: true, message: "" }, attestation: { containerId: "c-1", digest: "sha256:abc123", pcrValue: "00" } },
     });
     render(<AttestationCollectPage />);
 
