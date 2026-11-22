@@ -121,14 +121,26 @@ describe("NewGroupPage", () => {
     expect(push).not.toHaveBeenCalled();
   });
 
-  it("toasts 'Unknown error' for a non-Error rejection", async () => {
+  it("toasts the server's message from a non-Error rejection", async () => {
+    createGroup.mockRejectedValue({ message: "group eng already exists" });
+    render(<NewGroupPage />);
+    setField(/^Name/, "eng");
+    fireEvent.click(submit());
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.objectContaining({ description: "group eng already exists" }),
+      ),
+    );
+  });
+
+  it("toasts the rejected value itself when it carries no message", async () => {
     createGroup.mockRejectedValue(42);
     render(<NewGroupPage />);
     setField(/^Name/, "eng");
     fireEvent.click(submit());
     await waitFor(() =>
       expect(toast).toHaveBeenCalledWith(
-        expect.objectContaining({ description: "Unknown error" }),
+        expect.objectContaining({ description: "42" }),
       ),
     );
   });

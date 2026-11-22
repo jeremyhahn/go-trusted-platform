@@ -320,17 +320,17 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `PlatformIAMService.ListGroups` | `GET /groups` | `(dashboard)/iam/groups/page.tsx`<br>`(dashboard)/iam/permissions/page.tsx` | - | `iam.spec.ts` | covered |
 | `PlatformIAMService.UpdateGroup` | `PUT /groups/{id}` | `(dashboard)/iam/groups/[id]/page.tsx`<br>`(dashboard)/iam/groups/new/page.tsx`<br>`(dashboard)/iam/groups/page.tsx` (+1) (read-only) | - | - | partial |
 | `PlatformIAMService.DeleteGroup` | `DELETE /groups/{id}` | `(dashboard)/iam/groups/[id]/page.tsx`<br>`(dashboard)/iam/groups/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.AddGroupMember` | `POST /groups/{id}/members/{user}` | - | - | - | missing |
-| `PlatformIAMService.RemoveGroupMember` | `DELETE /groups/{id}/members/{user}` | - | - | - | missing |
+| `PlatformIAMService.AddGroupMember` | `POST /groups/{id}/members/{user}` | `(dashboard)/iam/groups/[id]/page.tsx` | - | - | partial |
+| `PlatformIAMService.RemoveGroupMember` | `DELETE /groups/{id}/members/{user}` | `(dashboard)/iam/groups/[id]/page.tsx` | - | - | partial |
 | `PlatformIAMService.CheckPermission` | `POST /permissions/check` | - | - | - | missing |
 | `PlatformIAMService.CreateToken` | - | - | - | - | missing |
 | `PlatformIAMService.RevokeToken` | - | - | - | - | missing |
 | `PlatformIAMService.VerifyToken` | - | - | - | - | missing |
-| `PlatformIAMService.CreateTenant` | `POST /tenants` | - | - | - | missing |
-| `PlatformIAMService.GetTenant` | `GET /tenants/{tenant}` | - | - | - | missing |
-| `PlatformIAMService.ListTenants` | `GET /tenants` | - | - | - | missing |
-| `PlatformIAMService.UpdateTenant` | `PUT /tenants/{tenant}` | - | - | - | missing |
-| `PlatformIAMService.DeleteTenant` | `DELETE /tenants/{tenant}` | - | - | - | missing |
+| `PlatformIAMService.CreateTenant` | `POST /tenants` | `(dashboard)/iam/tenants/page.tsx` | - | - | partial |
+| `PlatformIAMService.GetTenant` | `GET /tenants/{tenant}` | `(dashboard)/iam/tenants/page.tsx` | - | - | partial |
+| `PlatformIAMService.ListTenants` | `GET /tenants` | `(dashboard)/iam/tenants/page.tsx` | - | - | partial |
+| `PlatformIAMService.UpdateTenant` | `PUT /tenants/{tenant}` | `(dashboard)/iam/tenants/page.tsx` | - | - | partial |
+| `PlatformIAMService.DeleteTenant` | `DELETE /tenants/{tenant}` | `(dashboard)/iam/tenants/page.tsx` | - | - | partial |
 | `PlatformIAMService.CreatePolicy` | `POST /policies` | `(dashboard)/iam/policies/new/page.tsx` | - | - | partial |
 | `PlatformIAMService.GetPolicy` | `GET /policies/{id}` | `(dashboard)/iam/policies/[name]/page.tsx` | - | - | partial |
 | `PlatformIAMService.ListPolicies` | `GET /policies` | `(dashboard)/iam/permissions/page.tsx`<br>`(dashboard)/iam/policies/page.tsx` | - | `iam.spec.ts` | covered |

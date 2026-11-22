@@ -19,6 +19,16 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { EmbeddedIamGate } from '../../embedded-iam-gate';
 
+// The SDK rejects with an error object carrying the server's message; it is
+// not always an Error instance.
+function failureMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err !== null && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string') {
+    return (err as { message: string }).message;
+  }
+  return String(err);
+}
+
 // Group record as the REST API sends it: camelCase or snake_case keys (#445).
 interface GroupWire {
   name?: string;
@@ -49,6 +59,12 @@ export default function GroupDetailClient() {
     [tenantId, groupId],
   );
 
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
+  const rawGroup = group as unknown as (GroupWire & { group?: GroupWire }) | null | undefined;
+  const g: GroupWire | null = rawGroup?.group ?? rawGroup ?? null;
+  const members: string[] = g?.member_ids ?? g?.members ?? g?.memberIds ?? [];
+  const roles: string[] = g?.role_ids ?? g?.roles ?? g?.roleIds ?? [];
+
   const deleteMutation = useMutation(
     async () => {
       if (!tenantId) throw new Error('No tenant ID');
@@ -62,7 +78,7 @@ export default function GroupDetailClient() {
       onError: (err) => {
         toast({
           title: 'Failed to delete group',
-          description: err instanceof Error ? err.message : 'Unknown error',
+          description: failureMessage(err),
           variant: 'destructive',
         });
       },
@@ -77,7 +93,7 @@ export default function GroupDetailClient() {
   const failToast = (title: string) => (err: unknown) => {
     toast({
       title,
-      description: err instanceof Error ? err.message : 'Unknown error',
+      description: failureMessage(err),
       variant: 'destructive',
     });
   };
@@ -121,12 +137,6 @@ export default function GroupDetailClient() {
       </div>
     );
   }
-
-  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-  const rawGroup = group as unknown as (GroupWire & { group?: GroupWire }) | null | undefined;
-  const g: GroupWire | null = rawGroup?.group ?? rawGroup ?? null;
-  const members: string[] = g?.member_ids ?? g?.members ?? g?.memberIds ?? [];
-  const roles: string[] = g?.role_ids ?? g?.roles ?? g?.roleIds ?? [];
 
   return (
     <div className="container mx-auto py-6 space-y-6">
@@ -265,7 +275,6 @@ export default function GroupDetailClient() {
           </form>
         </CardContent>
       </Card>
-
     </div>
   );
 }
