@@ -55,12 +55,12 @@ describe('InvitationService.accept wire shape', () => {
     };
     vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: served });
 
-    const result = await service.accept({ token: 'tok-1', name: 'n' });
+    const result = await service.accept({ token: 'tok-1', userId: 'u-1' });
 
     expect(mockClient.post).toHaveBeenCalledTimes(1);
     expect(mockClient.post).toHaveBeenCalledWith('/v1/invitations/accept', {
       token: 'tok-1',
-      name: 'n',
+      userId: 'u-1',
     });
     expect(result.data).toEqual(served);
     expect(result.data?.status.success).toBe(true);
