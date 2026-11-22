@@ -6,7 +6,7 @@ import { readZoneDetail } from "./dns-wire";
 describe("readZoneDetail SRV records (#2060)", () => {
   it("reads srvRecords as SRV rows with priority, weight and port", () => {
     const zone: Zone = {
-      id: "9",
+      id: 9,
       name: "example.com.",
       ttl: 300,
       description: "",
