@@ -586,7 +586,7 @@ func closeInstaller(loopDev string, ops installerCloser) error {
 
 // loadSealPCRsFromFile loads the seal-pcrs from the pcr-banks file
 // The pcr-banks file is written during firstboot with values from the installer config
-// Format: seal-pcrs=0,7,9 (comma-separated PCR indices)
+// Format: seal-pcrs=7,11 (comma-separated PCR indices)
 func loadSealPCRsFromFile(path string) ([]uint, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -675,5 +675,5 @@ func loadSealPCRsFromConfig(logger interface {
 			"file_size", len(data))
 	}
 
-	return nil, &MessageError{Msg: fmt.Sprintf("seal-pcrs not found in config.yaml. Add 'seal-pcrs: [7, 9]' to your config. Searched: %v", configPaths)}
+	return nil, &MessageError{Msg: fmt.Sprintf("seal-pcrs not found in config.yaml. Add 'seal-pcrs: [7, 11]' to your config. Searched: %v", configPaths)}
 }

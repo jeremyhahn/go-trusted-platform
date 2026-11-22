@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -596,7 +597,7 @@ func (ai *alpineInstaller) ConfigureSystem(ctx context.Context, rootPath string,
 TPM_AUTOUNSEAL=1
 
 # PCRs to seal/unseal against
-TPM_SEAL_PCR=0,7,9
+TPM_SEAL_PCR=%s
 
 # Automatically reseal TPM when kernel is upgraded
 TPM_AUTO_UPGRADE_SEAL=%d
@@ -607,6 +608,7 @@ LOCKDOWN=%d
 # Enable FIPS mode
 FIPS=%d
 `,
+		sealPCRList(SealPCRsDefault()),
 		boolToInt(ai.config.TPMAutoUpgradeSeal),
 		boolToInt(ai.config.Lockdown),
 		boolToInt(ai.config.FIPS))
@@ -755,6 +757,17 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// sealPCRList joins PCR indices with "," for alpine-tpm.conf. alpine-tpm.conf
+// carries the installer default seal PCRs (types.go DefaultSealPCRs, 7 and
+// 11) so the boot unseal agrees with the seal.
+func sealPCRList(pcrs []uint) string {
+	parts := make([]string, len(pcrs))
+	for i, pcr := range pcrs {
+		parts[i] = strconv.FormatUint(uint64(pcr), 10)
+	}
+	return strings.Join(parts, ",")
 }
 
 // InstallKernel installs kernel and generates initramfs using dracut
