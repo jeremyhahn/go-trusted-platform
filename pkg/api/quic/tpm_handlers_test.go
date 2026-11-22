@@ -1025,17 +1025,26 @@ func TestTPM2Handler_HandleUnseal_Success(t *testing.T) {
 	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
+// sealWireRequest and unsealWireRequest are the wire shapes a client
+// sends for TPM seal and unseal: the key name and password with the data.
+type sealWireRequest struct {
+	Data     []byte `codec:"data"`
+	CN       string `codec:"cn"`
+	Password string `codec:"password"`
+}
+
+type unsealWireRequest struct {
+	CN       string `codec:"cn"`
+	Password string `codec:"password"`
+}
+
 // The seal request's key name and password reach Seal as the gRPC path
 // passes them: the CN under the SSRK, the password held (#1690).
 func TestTPM2Handler_HandleSeal_PassesCNAndPassword(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	mock := newMockTPM()
 	h.SetTPM2Service(mock)
-	payload, err := quicwire.EncodePayload(map[string]any{
-		"data":     []byte("secret"),
-		"cn":       "k1",
-		"password": "pw",
-	})
+	payload, err := quicwire.EncodePayload(&sealWireRequest{Data: []byte("secret"), CN: "k1", Password: "pw"})
 	require.NoError(t, err)
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Seal}, payload...)})
 	require.Equal(t, quicwire.StatusOK, resp.Status)
@@ -1053,10 +1062,7 @@ func TestTPM2Handler_HandleUnseal_NamesTheTPMBackend(t *testing.T) {
 	mock := newMockTPM()
 	mock.unsealResult = []byte("plaintext")
 	h.SetTPM2Service(mock)
-	payload, err := quicwire.EncodePayload(map[string]any{
-		"cn":       "k1",
-		"password": "pw",
-	})
+	payload, err := quicwire.EncodePayload(&unsealWireRequest{CN: "k1", Password: "pw"})
 	require.NoError(t, err)
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Unseal}, payload...)})
 	require.Equal(t, quicwire.StatusOK, resp.Status)
