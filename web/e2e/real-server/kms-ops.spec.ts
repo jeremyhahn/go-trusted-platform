@@ -266,7 +266,7 @@ test.describe('KMS operations', () => {
     await openPage(adminPage);
     await adminPage.getByTestId('op-backend').getByRole('button', { name: 'Check backend' }).click();
     if (status.success && status.data) {
-      await expect(adminPage.getByTestId('backend-result')).toContainText(status.data.backendType);
+      await expect(adminPage.getByTestId('backend-result')).toContainText(status.data.backend_type);
     } else {
       await expect(adminPage.getByTestId('kms-ops-error')).toBeVisible();
     }
