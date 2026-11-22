@@ -37,7 +37,7 @@ function InvitationDetailView() {
             <dt>Role</dt>
             <dd data-testid="invitation-detail-role">{invitation.role}</dd>
             <dt>Status</dt>
-            <dd data-testid="invitation-detail-status">{invitation.status}</dd>
+            <dd data-testid="invitation-detail-status">{invitation.status.replace(/^INVITATION_STATUS_/, "").toLowerCase()}</dd>
             {invitation.expires_at && (
               <>
                 <dt>Expires</dt>
