@@ -375,8 +375,8 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
 | `InvitationService.CreateInvitation` | - | `(dashboard)/tenant/invitations/page.tsx` | - | `tenant-management.spec.ts` | covered |
-| `InvitationService.GetInvitation` | `GET /{id:[0-9]+}` | - | - | - | missing |
-| `InvitationService.GetInvitationByToken` | `GET /token/{token}` | - | - | - | missing |
+| `InvitationService.GetInvitation` | `GET /{id:[0-9]+}` | `(dashboard)/tenant/invitations/page.tsx` | - | `real-server/invitations.spec.ts` | covered |
+| `InvitationService.GetInvitationByToken` | `GET /token/{token}` | `auth/webauthn/page.tsx` | - | `real-server/invitations.spec.ts` | covered |
 | `InvitationService.ListInvitations` | - | `(dashboard)/tenant/invitations/page.tsx` | - | `tenant-management.spec.ts` | covered |
 | `InvitationService.RevokeInvitation` | `POST /{id:[0-9]+}/revoke` | `(dashboard)/tenant/invitations/page.tsx` | - | `tenant-management.spec.ts` | covered |
 | `InvitationService.AcceptInvitation` | `POST /accept` | - | - | - | missing |
