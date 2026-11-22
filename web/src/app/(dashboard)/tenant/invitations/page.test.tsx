@@ -55,13 +55,35 @@ vi.mock("@/hooks", async (importOriginal) => ({
   useInvitationList: () => listResult,
 }));
 
+// The capability answer each test sets: the gated "View details" item reads it.
+const capabilityState = { enabled: true };
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: null,
+    capability: () => ({ enabled: capabilityState.enabled, reason: "not offered by this server" }),
+  }),
+}));
+
+const GET_INVITATION_OP = "GET /api/v1/invitations/{id:[0-9]+}";
+
 // The Radix menu's portal and popper do not settle in jsdom once opened, so
 // the row menu renders its items inline: which items the page puts in it is
 // still decided by the page's own canResend/canCancel logic.
 vi.mock("@/components/ui/dropdown-menu", async (importOriginal) => {
   const Pass = ({ children }: { children?: React.ReactNode }) => <>{children}</>;
-  const Item = ({ children }: { children?: React.ReactNode }) => (
-    <div role="menuitem">{children}</div>
+  const Item = ({
+    children,
+    disabled,
+    "data-capability-op": op,
+  }: {
+    children?: React.ReactNode;
+    disabled?: boolean;
+    "data-capability-op"?: string;
+  }) => (
+    <div role="menuitem" aria-disabled={disabled ? "true" : undefined} data-capability-op={op}>
+      {children}
+    </div>
   );
   return {
     ...(await importOriginal<typeof import("@/components/ui/dropdown-menu")>()),
@@ -97,7 +119,7 @@ describe("InvitationsPage status mapping", () => {
       render(<InvitationsPage />);
       const row = rowFor(email);
       expect(within(row).getByText("Revoked")).toBeTruthy();
-      expect(menuItems(row)).toEqual(["No actions available"]);
+      expect(menuItems(row)).toEqual(["View details"]);
     },
   );
 
@@ -105,8 +127,25 @@ describe("InvitationsPage status mapping", () => {
     render(<InvitationsPage />);
     const row = rowFor("pending-invitee");
     expect(within(row).getByText("Pending")).toBeTruthy();
-    expect(menuItems(row)).toEqual(["Resend Invitation", "Cancel Invitation"]);
+    expect(menuItems(row)).toEqual(["View details", "Resend Invitation", "Cancel Invitation"]);
   });
+
+  it.each([true, false])(
+    "gates each row's View details on GetInvitation's route (enabled=%s)",
+    (enabled) => {
+      capabilityState.enabled = enabled;
+      try {
+        render(<InvitationsPage />);
+        for (const email of ["pending-invitee", "revoked-invitee", "cancelled-invitee"]) {
+          const item = within(rowFor(email)).getByText("View details").closest('[role="menuitem"]');
+          expect(item?.getAttribute("data-capability-op")).toBe(GET_INVITATION_OP);
+          expect(item?.getAttribute("aria-disabled")).toBe(enabled ? null : "true");
+        }
+      } finally {
+        capabilityState.enabled = true;
+      }
+    },
+  );
 });
 
 // Settled rows: an expired invitation can be resent, an accepted one has no
@@ -161,7 +200,7 @@ describe("InvitationsPage states", () => {
     render(<InvitationsPage />);
     const row = rowFor("expired-invitee");
     expect(within(row).getByText("Expired")).toBeTruthy();
-    expect(menuItems(row)).toEqual(["Resend Invitation"]);
+    expect(menuItems(row)).toEqual(["View details", "Resend Invitation"]);
   });
 
   it("shows an accepted invitation as Accepted with no action", () => {
@@ -169,7 +208,7 @@ describe("InvitationsPage states", () => {
     render(<InvitationsPage />);
     const row = rowFor("accepted-invitee");
     expect(within(row).getByText("Accepted")).toBeTruthy();
-    expect(menuItems(row)).toEqual(["No actions available"]);
+    expect(menuItems(row)).toEqual(["View details"]);
   });
 
   it("colours a past expiry date only on an expired invitation", () => {
