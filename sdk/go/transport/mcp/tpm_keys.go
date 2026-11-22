@@ -37,6 +37,7 @@ package mcp
 // *_public fields on the Provision reply stay unset.
 
 import (
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
 	"strings"
@@ -253,7 +254,8 @@ func buildTPMKeysDeleteSRKArgs(args interface{}) (map[string]interface{}, error)
 
 // buildTPMKeysImportEKCertificateArgs sends the certificate as base64 DER.
 // format is read case-insensitively: "DER" or "" takes the bytes as they are,
-// "PEM" takes the first CERTIFICATE block.
+// "PEM" takes the first CERTIFICATE block. The decoded bytes must parse as an
+// X.509 certificate; anything else is refused before any call goes out.
 func buildTPMKeysImportEKCertificateArgs(args interface{}) (map[string]interface{}, error) {
 	const method = platformv1.TPMService_ImportEKCertificate_FullMethodName
 	in, ok := args.(*platformv1.ImportEKCertificateRequest)
@@ -282,6 +284,11 @@ func buildTPMKeysImportEKCertificateArgs(args interface{}) (map[string]interface
 		}
 	default:
 		return nil, ErrTPMKeysFieldUnsupported{Method: method, Field: "format"}
+	}
+	// The daemon stores these bytes in NV without parsing them, so an
+	// unparseable certificate would be reported as imported; refuse it here.
+	if _, err := x509.ParseCertificate(der); err != nil {
+		return nil, ErrTPMKeysFieldUnsupported{Method: method, Field: "certificate"}
 	}
 	return map[string]interface{}{"certificate": base64.StdEncoding.EncodeToString(der)}, nil
 }
