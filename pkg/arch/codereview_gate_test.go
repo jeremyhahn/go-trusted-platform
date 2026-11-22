@@ -181,6 +181,11 @@ func TestCodeReviewGateRefusesAnApprovalOnOwnerHold(t *testing.T) {
 		{"a CI-only change the guard cleared", `[]`, ciOnly, "", "", jobs{scopeSkip: "true"}, `[]`, true, "no review is required"},
 		{"a CI-only change the guard refused", `[]`, ciOnly, "", "", jobs{scopeSkip: "false"}, `[]`, false, "did not clear it"},
 		{"a CI-only change the guard never judged", `[]`, ciOnly, "", "", jobs{}, `[]`, false, "did not clear it"},
+		// v5.12.11: a hold refuses an exempt change too (DS-10102).
+		{"a docs-only change on owner hold", `[{"name":"needs-owner"}]`, docsOnly, "", "", jobs{}, "", false, "on hold (needs-owner)"},
+		{"a docs-only change on coordinator hold", `[{"name":"needs-coordinator"}]`, docsOnly, "", "", jobs{}, "", false, "on hold (needs-coordinator)"},
+		{"a guard-cleared CI-only change on owner hold", `[{"name":"needs-owner"}]`, ciOnly, "", "", jobs{scopeSkip: "true"}, `[]`, false, "on hold (needs-owner)"},
+		{"a guard-cleared CI-only change on coordinator hold", `[{"name":"needs-coordinator"}]`, ciOnly, "", "", jobs{scopeSkip: "true"}, `[]`, false, "on hold (needs-coordinator)"},
 		{"a code change with no approval", `[{"name":"code-review"}]`, "", "", "", jobs{}, `[]`, false, "codex must approve"},
 	}
 	for _, tc := range cases {
