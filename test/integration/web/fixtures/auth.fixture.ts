@@ -1,4 +1,4 @@
-import { test as base, expect, Page, BrowserContext, CDPSession } from '@playwright/test';
+import { test as base, Page, BrowserContext, CDPSession } from '@playwright/test';
 
 /**
  * Test fixtures for authentication
@@ -9,11 +9,6 @@ import { test as base, expect, Page, BrowserContext, CDPSession } from '@playwri
 export interface AuthFixtures {
   /** Page with authentication cookie set */
   authenticatedPage: Page;
-  /**
-   * Page signed in through the server: a fresh user registered with the
-   * WebAuthn virtual authenticator, carrying the server-issued jwt cookie.
-   */
-  serverSessionPage: Page;
   /** Set up virtual authenticator for WebAuthn testing */
   setupVirtualAuthenticator: (page: Page) => Promise<{ cdpSession: CDPSession; authenticatorId: string }>;
   /** Clean up virtual authenticator */
@@ -67,44 +62,6 @@ export const test = base.extend<AuthFixtures>({
     ]);
 
     await use(page);
-  },
-
-  /**
-   * Provides a page signed in through the server. It registers a unique user
-   * with the WebAuthn virtual authenticator through the console's registration
-   * form (the steps of webauthn-e2e.spec.ts) and waits for the jwt cookie the
-   * server issues. Only Chromium has the virtual authenticator.
-   */
-  serverSessionPage: async ({ page, setupVirtualAuthenticator, cleanupVirtualAuthenticator }, use) => {
-    const username = `e2e-vpn-${Date.now()}`;
-
-    await page.goto('/auth/webauthn', { waitUntil: 'networkidle' });
-    const registerLink = page.getByText(/don.*have an account.*register/i);
-    if (await registerLink.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await registerLink.click();
-      await expect(page.getByRole('button', { name: /register|create account/i })).toBeVisible();
-    }
-
-    const { cdpSession, authenticatorId } = await setupVirtualAuthenticator(page);
-    try {
-      await page.getByPlaceholder(/enter your username/i).fill(username);
-      const registrationFinish = page.waitForResponse(
-        (resp) => resp.url().includes('/api/v1/webauthn/registration/finish') && resp.status() === 200
-      );
-      await page.getByRole('button', { name: /register|create account/i }).click();
-      await registrationFinish;
-
-      await expect
-        .poll(async () => {
-          const jwt = (await page.context().cookies()).find((c) => c.name === 'jwt');
-          return jwt?.value.length ?? 0;
-        }, { timeout: 15_000 })
-        .toBeGreaterThan(0);
-
-      await use(page);
-    } finally {
-      await cleanupVirtualAuthenticator(cdpSession, authenticatorId);
-    }
   },
 
   /**

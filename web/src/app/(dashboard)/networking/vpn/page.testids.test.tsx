@@ -4,7 +4,7 @@ import { PlatformClient, PlatformProvider } from "trusted-platform-sdk";
 
 import VPNPage from "./page";
 
-// #2070: the real-server Playwright spec (test/integration/web/vpn.spec.ts)
+// #2070: the real-server Playwright spec (web/e2e/real-server/vpn.spec.ts)
 // finds the VPN page's cards by data-testid. These tests pin those handles
 // against the same fetch stub page.test.tsx uses.
 

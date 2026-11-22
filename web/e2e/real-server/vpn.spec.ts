@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import { test, expect } from './fixtures/auth.fixture';
+import { expect, test } from './fixtures';
 
 /**
  * VPN page against the real-server harness (#2070, epic #1665, ruling 972).
@@ -7,13 +7,12 @@ import { test, expect } from './fixtures/auth.fixture';
  * Covers the 8 VPNService operations the page drives through the SDK:
  * GetStatus, ListPeers, ListPosturePolicies (the page load), EnrolPeer and
  * RevokePeer, SetPosturePolicy, GetPosturePolicy and DeletePosturePolicy.
- * No route is mocked and the session is the server's own: serverSessionPage
- * registers a fresh user with the WebAuthn virtual authenticator and carries
- * the jwt the server issued. A server without a VPN control plane skips the
+ * It runs on the real-server harness (`make web-e2e`): no route is mocked,
+ * the page is adminPage, signed in as the harness admin through the real
+ * WebAuthn ceremony, and peers and policies go into the admin's own tenant
+ * (the tenant fixture). A server without a VPN control plane skips the
  * spec; a refused status read (401, 403 or any other error) fails it.
  */
-
-const TENANT = 'test-tenant-id';
 
 async function openVPNPage(page: Page) {
   const status = page.waitForResponse(
@@ -31,7 +30,7 @@ async function openVPNPage(page: Page) {
 }
 
 test.describe('VPN', () => {
-  test('the page lists gateways, sessions, peers and policies', async ({ serverSessionPage: page }) => {
+  test('the page lists gateways, sessions, peers and policies', async ({ adminPage: page, tenant }) => {
     const status = await openVPNPage(page);
 
     expect((await status).status()).toBe(200);
@@ -45,13 +44,13 @@ test.describe('VPN', () => {
     await expect(page.getByTestId('vpn-policies-card')).toBeVisible();
   });
 
-  test('enrol a peer, then revoke it', async ({ serverSessionPage: page }) => {
+  test('enrol a peer, then revoke it', async ({ adminPage: page, tenant }) => {
     const device = `e2e-vpn-${Date.now()}`;
     await openVPNPage(page);
     const peers = page.getByTestId('vpn-peers-card');
 
     await page.getByRole('button', { name: 'Enrol Peer' }).click();
-    await page.getByLabel('Tenant *').fill(TENANT);
+    await page.getByLabel('Tenant *').fill(tenant.id);
     await page.getByLabel('Device ID *').fill(device);
     await page.getByLabel('Zones').fill('management');
     await page.getByRole('button', { name: 'Enrol', exact: true }).click();
@@ -62,13 +61,13 @@ test.describe('VPN', () => {
     await expect(peers.getByText(device)).toHaveCount(0);
   });
 
-  test('create a posture policy, open it, save it, delete it', async ({ serverSessionPage: page }) => {
+  test('create a posture policy, open it, save it, delete it', async ({ adminPage: page, tenant }) => {
     const name = `e2e-vpn-${Date.now()}`;
     await openVPNPage(page);
     const policies = page.getByTestId('vpn-policies-card');
 
     await page.getByRole('button', { name: 'New Policy' }).click();
-    await page.getByLabel('Tenant *').fill(TENANT);
+    await page.getByLabel('Tenant *').fill(tenant.id);
     await page.getByLabel('Name *').fill(name);
     await page.getByLabel('Module *').fill('package vpn.posture\n');
     await page.getByRole('button', { name: 'Save', exact: true }).click();
