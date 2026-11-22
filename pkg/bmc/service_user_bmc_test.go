@@ -349,7 +349,8 @@ func TestService_CreateUser_UnknownProfiles_LocksBounded(t *testing.T) {
 		t.Errorf("user-slot locks after 1000 unknown profiles = %d, want <= %d", n, maxLocks)
 	}
 	for _, id := range []uint64{1, 1000, 1999, 1 << 40} {
-		if svc.UserLockFor(id) != svc.UserLockFor(id) {
+		first, second := svc.UserLockFor(id), svc.UserLockFor(id)
+		if first != second {
 			t.Errorf("profile %d maps to different mutexes", id)
 		}
 	}
