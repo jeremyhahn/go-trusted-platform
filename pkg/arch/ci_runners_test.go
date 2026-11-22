@@ -167,6 +167,28 @@ func TestCIRunsHostedFirst(t *testing.T) {
 	}
 }
 
+// TestWebE2EPlaywrightHostOverride pins the web-e2e job's Playwright host
+// override (DS-10151): ubuntu-latest is the 26.04 image, for which the pinned
+// Playwright has no chromium build, so the job installs and runs the 24.04 one.
+func TestWebE2EPlaywrightHostOverride(t *testing.T) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(readCI(t), &doc); err != nil || len(doc.Content) == 0 {
+		t.Fatalf("ci.yml does not parse: %s", errString(err))
+	}
+	job := mapValue(mapValue(doc.Content[0], "jobs"), "web-e2e")
+	if job == nil {
+		t.Fatal("ci.yml has no web-e2e job")
+	}
+	const key, want = "PLAYWRIGHT_HOST_PLATFORM_OVERRIDE", "ubuntu24.04-x64"
+	v := mapValue(mapValue(job, "env"), key)
+	if v == nil {
+		t.Fatalf("web-e2e env has no %s; want %q", key, want)
+	}
+	if v.Value != want {
+		t.Fatalf("web-e2e env %s = %q, want %q", key, v.Value, want)
+	}
+}
+
 // The v1.48 runner selection (ci-template v1.48, Tenant Agent rulings 1024
 // and 1031, #2128): the preflight step `Hosted or overflow runner (ruling
 // 1024)` decides once per run whether its jobs run on the GitHub-hosted
