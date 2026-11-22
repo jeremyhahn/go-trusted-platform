@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"slices"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
@@ -73,6 +74,20 @@ func (e *SignatureError) Error() string {
 
 // Unwrap returns the underlying error.
 func (e *SignatureError) Unwrap() error { return e.Err }
+
+// requireCodeSigning refuses a signing certificate that is not a
+// code-signing certificate. A manifest states PCR reference values, so only a
+// certificate the platform CA issued for code signing (pkg/ca/issuance
+// SignCSR) may sign one: it must carry the code-signing extended key usage and
+// the digital-signature key usage. A TLS client or server identity under the
+// same root must not sign one, and a leaf with no extended key usage, which
+// x509.Verify treats as any usage, is refused too.
+func requireCodeSigning(leaf *x509.Certificate) error {
+	if !slices.Contains(leaf.ExtKeyUsage, x509.ExtKeyUsageCodeSigning) || leaf.KeyUsage&x509.KeyUsageDigitalSignature == 0 {
+		return &SignatureError{Reason: "the signing certificate is not a code-signing certificate"}
+	}
+	return nil
+}
 
 type (
 	// protectedHeader's keys are the COSE header labels a signed manifest
@@ -153,7 +168,9 @@ func toBeSigned(protected, payload []byte) ([]byte, error) {
 // leaf's SHA-256 as kid, corim-meta from signer, and chain as x5chain, leaf
 // first. key is the private half of chain[0]: a KMS key behind a
 // crypto.Signer, so the build host never holds it. The algorithm follows the
-// key (see AlgES256). A manifest EncodeManifest refuses, a key that is not
+// key (see AlgES256). The leaf must be a code-signing certificate (code-signing
+// extended key usage and digital-signature key usage). A manifest
+// EncodeManifest refuses, a leaf that is not code-signing, a key that is not
 // the leaf's, a signer without a name or a NotAfter, or a validity that ends
 // before it starts is refused.
 func SignManifest(m Manifest, key crypto.Signer, chain []*x509.Certificate, signer Signer) ([]byte, error) {
@@ -165,6 +182,9 @@ func SignManifest(m Manifest, key crypto.Signer, chain []*x509.Certificate, sign
 		return nil, &SignatureError{Reason: "no signing certificate"}
 	}
 	leaf := chain[0]
+	if err := requireCodeSigning(leaf); err != nil {
+		return nil, err
+	}
 	if pk, ok := key.Public().(interface{ Equal(crypto.PublicKey) bool }); !ok || !pk.Equal(leaf.PublicKey) {
 		return nil, &SignatureError{Reason: "the key is not the signing certificate's"}
 	}
@@ -254,7 +274,8 @@ type SignedManifest struct {
 }
 
 // VerifyManifest checks a signed-corim SignManifest writes and decodes its
-// manifest: the x5chain verifies to roots, the signature verifies with the
+// manifest: the leaf is a code-signing certificate, the x5chain verifies to
+// roots for code signing, the signature verifies with the
 // leaf's key in the algorithm that key signs, at is inside both the leaf's
 // validity and corim-meta's signature-validity, and the payload is a
 // manifest DecodeManifest takes. Anything else is refused.
@@ -295,11 +316,14 @@ func VerifyManifest(data []byte, roots *x509.CertPool, at time.Time) (SignedMani
 	if kid := sha256.Sum256(leaf.Raw); !bytes.Equal(hdr.KID, kid[:]) {
 		return SignedManifest{}, &SignatureError{Reason: "the kid is not the signing certificate's"}
 	}
+	if err := requireCodeSigning(leaf); err != nil {
+		return SignedManifest{}, err
+	}
 	inter := x509.NewCertPool()
 	for _, c := range chain[1:] {
 		inter.AddCert(c)
 	}
-	if _, err := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: inter, CurrentTime: at, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}}); err != nil {
+	if _, err := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: inter, CurrentTime: at, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning}}); err != nil {
 		return SignedManifest{}, &SignatureError{Reason: "the signing certificate does not verify", Err: err}
 	}
 	alg, err := algFor(leaf.PublicKey)

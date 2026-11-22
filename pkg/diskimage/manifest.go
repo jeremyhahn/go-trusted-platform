@@ -225,7 +225,8 @@ func manifestChain(ctx context.Context, ca secureboot.CertificateGetter, leaf *x
 		}
 	}
 	chains, err := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: inters, CurrentTime: now,
-		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}})
+		// Publication applies the verifier's signer policy: code signing only.
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning}})
 	if err != nil {
 		return nil, nil, fmt.Errorf("diskimage: the manifest certificate does not chain to a platform root in the CA bundle: %w", err)
 	}
