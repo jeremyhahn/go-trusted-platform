@@ -63,7 +63,7 @@ func newInvitationTestRegistry(server platformv1.InvitationServiceServer) *ToolR
 // gRPC InvitationService method, classified with the scope gRPC requires:
 // none for the two invitee methods, whose token is the credential.
 func TestInvitationTools_CoverEveryMethodWithItsGRPCScope(t *testing.T) {
-	permissions := toolPermissionCatalog()
+	permissions := declaredToolPermissions(PlatformTools{})
 	byMethod := make(map[string]string, len(invitationTools))
 	for name, tool := range invitationTools {
 		byMethod[tool.method] = name

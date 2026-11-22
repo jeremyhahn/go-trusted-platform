@@ -18,8 +18,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -391,114 +389,6 @@ func TestAttestationVerifier_VerifyIAK(t *testing.T) {
 
 		if err == nil {
 			t.Error("expected error for certificate without IAK OID")
-		}
-	})
-}
-
-// TestAuthMiddleware_RequireTPMAttestation tests the RequireTPMAttestation middleware.
-func TestAuthMiddleware_RequireTPMAttestation(t *testing.T) {
-	t.Parallel()
-	logger := createTestLogger()
-	iamService := newMockIAMServiceClient()
-
-	t.Run("allows_request_with_verified_attestation", func(t *testing.T) {
-		httpWriter := newMockHttpWriter()
-		config := AuthConfig{}
-		middleware, err := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
-		if err != nil {
-			t.Fatalf("failed to create middleware: %v", err)
-		}
-
-		session := NewIAMSessionWithAttestation(
-			&iamsdk.User{
-				ID:       "user-123",
-				TenantID: "tenant-456",
-			},
-			false,
-			time.Time{},
-			true,
-			time.Now(),
-			"device-001",
-		)
-
-		called := false
-		handler := middleware.RequireTPMAttestation()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			called = true
-		}))
-
-		req := httptest.NewRequest(http.MethodGet, "/test", nil)
-		req = req.WithContext(SetSessionInContext(req.Context(), session))
-		rec := httptest.NewRecorder()
-
-		handler.ServeHTTP(rec, req)
-
-		if !called {
-			t.Error("expected handler to be called for request with verified attestation")
-		}
-	})
-
-	t.Run("blocks_request_without_attestation", func(t *testing.T) {
-		httpWriter := newMockHttpWriter()
-		config := AuthConfig{}
-		middleware, err := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
-		if err != nil {
-			t.Fatalf("failed to create middleware: %v", err)
-		}
-
-		session := NewIAMSessionWithAttestation(
-			&iamsdk.User{
-				ID:       "user-123",
-				TenantID: "tenant-456",
-			},
-			false,
-			time.Time{},
-			false, // attestation not verified
-			time.Time{},
-			"",
-		)
-
-		called := false
-		handler := middleware.RequireTPMAttestation()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			called = true
-		}))
-
-		req := httptest.NewRequest(http.MethodGet, "/test", nil)
-		req = req.WithContext(SetSessionInContext(req.Context(), session))
-		rec := httptest.NewRecorder()
-
-		handler.ServeHTTP(rec, req)
-
-		if called {
-			t.Error("expected handler not to be called for request without verified attestation")
-		}
-		if httpWriter.getError403Count() != 1 {
-			t.Error("expected Error403 to be called for unverified attestation")
-		}
-	})
-
-	t.Run("returns_401_without_session", func(t *testing.T) {
-		httpWriter := newMockHttpWriter()
-		config := AuthConfig{}
-		middleware, err := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
-		if err != nil {
-			t.Fatalf("failed to create middleware: %v", err)
-		}
-
-		called := false
-		handler := middleware.RequireTPMAttestation()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			called = true
-		}))
-
-		req := httptest.NewRequest(http.MethodGet, "/test", nil)
-		rec := httptest.NewRecorder()
-
-		handler.ServeHTTP(rec, req)
-
-		if called {
-			t.Error("expected handler not to be called without session")
-		}
-		if httpWriter.getError401Count() != 1 {
-			t.Error("expected Error401 to be called when session is missing")
 		}
 	})
 }

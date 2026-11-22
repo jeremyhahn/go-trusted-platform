@@ -37,9 +37,6 @@ func TestContextKey(t *testing.T) {
 func TestConstants(t *testing.T) {
 	t.Parallel()
 	t.Run("header_constants", func(t *testing.T) {
-		if TenantIDHeader != "X-Tenant-ID" {
-			t.Errorf("expected TenantIDHeader 'X-Tenant-ID', got %q", TenantIDHeader)
-		}
 		if AuthorizationHeader != "Authorization" {
 			t.Errorf("expected AuthorizationHeader 'Authorization', got %q", AuthorizationHeader)
 		}

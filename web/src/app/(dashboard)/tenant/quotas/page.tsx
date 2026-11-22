@@ -13,6 +13,7 @@ import {
   Server,
   Container,
   MemoryStick,
+  Pencil,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import {
@@ -27,8 +28,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useAuth } from "@/contexts/AuthContext";
-import { useTenant, useApi } from "@/hooks";
+import { useTenant, useApi, useMutation, useToast } from "@/hooks";
 import type {
   TenantQuotasResponse,
   TenantUsageResponse,
@@ -70,6 +73,101 @@ function getStatusBadge(
   if (percentage >= 90) return "destructive";
   if (percentage >= 75) return "secondary";
   return "default";
+}
+
+/** The nine limits the UpdateQuotas wire carries (MaxDiskGB is not on it). */
+type QuotaLimitField =
+  | "maxVms"
+  | "maxContainers"
+  | "maxVcpus"
+  | "maxMemoryMb"
+  | "maxBridges"
+  | "maxPorts"
+  | "maxBandwidthMbps"
+  | "maxVolumesGb"
+  | "maxSnapshots";
+
+const QUOTA_LIMIT_FIELDS: Array<{ key: QuotaLimitField; label: string }> = [
+  { key: "maxVms", label: "Max VMs" },
+  { key: "maxContainers", label: "Max containers" },
+  { key: "maxVcpus", label: "Max vCPUs" },
+  { key: "maxMemoryMb", label: "Max memory (MB)" },
+  { key: "maxBridges", label: "Max bridges" },
+  { key: "maxPorts", label: "Max ports" },
+  { key: "maxBandwidthMbps", label: "Max bandwidth (Mbps)" },
+  { key: "maxVolumesGb", label: "Max volumes (GB)" },
+  { key: "maxSnapshots", label: "Max snapshots" },
+];
+
+function QuotaLimitsForm({
+  initial,
+  isSaving,
+  onSave,
+  onCancel,
+}: {
+  initial: Record<QuotaLimitField, number>;
+  isSaving: boolean;
+  onSave: (limits: Record<QuotaLimitField, number>) => void;
+  onCancel: () => void;
+}) {
+  const [values, setValues] = React.useState<Record<QuotaLimitField, string>>(
+    () =>
+      Object.fromEntries(
+        QUOTA_LIMIT_FIELDS.map(({ key }) => [key, String(initial[key])])
+      ) as Record<QuotaLimitField, string>
+  );
+  const [invalid, setInvalid] = React.useState(false);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const limits = {} as Record<QuotaLimitField, number>;
+    for (const { key } of QUOTA_LIMIT_FIELDS) {
+      const raw = values[key].trim();
+      const n = Number(raw);
+      if (raw === "" || !Number.isInteger(n) || n < 0) {
+        setInvalid(true);
+        return;
+      }
+      limits[key] = n;
+    }
+    setInvalid(false);
+    onSave(limits);
+  };
+
+  return (
+    <form onSubmit={handleSubmit} noValidate className="space-y-4">
+      <div className="grid gap-4 md:grid-cols-3">
+        {QUOTA_LIMIT_FIELDS.map(({ key, label }) => (
+          <div key={key} className="space-y-2">
+            <Label htmlFor={`quota-${key}`}>{label}</Label>
+            <Input
+              id={`quota-${key}`}
+              type="number"
+              min={0}
+              step={1}
+              value={values[key]}
+              onChange={(e) =>
+                setValues((prev) => ({ ...prev, [key]: e.target.value }))
+              }
+            />
+          </div>
+        ))}
+      </div>
+      {invalid && (
+        <p role="alert" className="text-sm text-destructive">
+          Limits must be whole numbers, 0 or more.
+        </p>
+      )}
+      <div className="flex gap-2">
+        <Button type="submit" disabled={isSaving}>
+          Save limits
+        </Button>
+        <Button type="button" variant="outline" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </form>
+  );
 }
 
 export default function TenantQuotasPage() {
@@ -150,6 +248,48 @@ export default function TenantQuotasPage() {
   const fetchData = React.useCallback(async () => {
     await Promise.all([refetchQuotas(), refetchUsage()]);
   }, [refetchQuotas, refetchUsage]);
+
+  const { toast } = useToast();
+  const [editing, setEditing] = React.useState(false);
+
+  const updateQuotas = useMutation(
+    (limits: Record<QuotaLimitField, number>) =>
+      tenant.updateQuotas({
+        tenantId: tenantId || "",
+        compute: {
+          maxVms: limits.maxVms,
+          maxContainers: limits.maxContainers,
+          maxVcpus: limits.maxVcpus,
+          maxMemoryMb: limits.maxMemoryMb,
+        },
+        network: {
+          maxBridges: limits.maxBridges,
+          maxPorts: limits.maxPorts,
+          maxBandwidthMbps: limits.maxBandwidthMbps,
+        },
+        storage: {
+          maxVolumesGb: limits.maxVolumesGb,
+          maxSnapshots: limits.maxSnapshots,
+        },
+      }),
+    {
+      onSuccess: () => {
+        setEditing(false);
+        toast({
+          title: "Quotas updated",
+          description: "The new limits apply to this tenant.",
+        });
+        void fetchData();
+      },
+      onError: (error) => {
+        toast({
+          title: "Quota update failed",
+          description: error.message,
+          variant: "destructive",
+        });
+      },
+    }
+  );
 
   // Build compute resources list
   const computeResources: ResourceUsageItem[] = React.useMemo(() => {
@@ -319,7 +459,7 @@ export default function TenantQuotasPage() {
     <div className="space-y-6">
       <PageHeader
         title="Resource Quotas"
-        description="View resource limits and current usage for your tenant"
+        description="View and set resource limits and current usage for your tenant"
         actions={
           <Button onClick={fetchData} variant="outline" disabled={isLoading}>
             <RefreshCw
@@ -574,16 +714,49 @@ export default function TenantQuotasPage() {
 
           {/* Quota Limits Reference */}
           <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Gauge className="h-5 w-5" />
-                Quota Limits Reference
-              </CardTitle>
-              <CardDescription>
-                Current quota allocations for your tenant
-              </CardDescription>
+            <CardHeader className="flex flex-row items-start justify-between space-y-0">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Gauge className="h-5 w-5" />
+                  Quota Limits Reference
+                </CardTitle>
+                <CardDescription>
+                  Current quota allocations for your tenant
+                </CardDescription>
+              </div>
+              {!editing && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditing(true)}
+                >
+                  <Pencil className="h-4 w-4 mr-2" />
+                  Edit limits
+                </Button>
+              )}
             </CardHeader>
             <CardContent>
+              {editing && (
+                <>
+                  <QuotaLimitsForm
+                    initial={{
+                      maxVms: quotas.compute.max_vms,
+                      maxContainers: quotas.compute.max_containers,
+                      maxVcpus: quotas.compute.max_vcpus,
+                      maxMemoryMb: quotas.compute.max_memory_mb,
+                      maxBridges: quotas.network.max_bridges,
+                      maxPorts: quotas.network.max_ports,
+                      maxBandwidthMbps: quotas.network.max_bandwidth_mbps,
+                      maxVolumesGb: quotas.storage.max_volumes_gb,
+                      maxSnapshots: quotas.storage.max_snapshots,
+                    }}
+                    isSaving={updateQuotas.isLoading}
+                    onSave={(l) => updateQuotas.mutate(l)}
+                    onCancel={() => setEditing(false)}
+                  />
+                  <Separator className="my-6" />
+                </>
+              )}
               <div className="grid gap-6 md:grid-cols-3">
                 <div className="space-y-3">
                   <h4 className="font-medium text-sm">Compute Limits</h4>

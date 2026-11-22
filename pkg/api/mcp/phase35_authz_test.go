@@ -85,7 +85,7 @@ func TestPhase35AuthorizeToolEnforcesScope(t *testing.T) {
 			return action == "read", nil
 		},
 	}
-	checker := NewAuthorizationChecker(readOnly, &mockAuthManager{})
+	checker := pepChecker(readOnly, &mockAuthManager{})
 
 	if _, authErr := checker.AuthorizeTool(context.Background(), "platform_piv_list_devices", "tok"); authErr != nil {
 		t.Errorf("read tool refused for a read-only caller: %v", authErr.Message)

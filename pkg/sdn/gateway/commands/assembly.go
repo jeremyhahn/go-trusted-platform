@@ -40,6 +40,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/secrets"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec"
 	ipsecconfig "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
@@ -220,9 +221,31 @@ func BuildSupervisor(cfg *ServeConfig, inherited process.Inherited, logger *slog
 	if err != nil {
 		return nil, &ErrConfigSection{Section: "process", Cause: err}
 	}
-	supervisor := process.New(processCfg)
+	processCfg.OnChildExit = childExitHook(logger)
+	supervisor := newProcessSupervisor(processCfg)
 	cfg.Gateway.Supervisor = supervisor
 	return supervisor, nil
+}
+
+// supervisorRemoveVPNHub is the hub remover the supervisor's exit hook
+// calls; a package var so the tests swap in a fake.
+var supervisorRemoveVPNHub = removeStaleVPNHub
+
+// newProcessSupervisor builds the supervisor from its configuration; a
+// package var so the tests read the configuration BuildSupervisor passes.
+var newProcessSupervisor = process.New
+
+// childExitHook is the supervisor's OnChildExit: when the wireguard child
+// exits, however it exits, the hub device it owned is removed with its
+// peers, so no peer passes traffic past its lease while no process enforces
+// it (#1698). Every other row has nothing to clean up.
+func childExitHook(logger *slog.Logger) func(context.Context, process.Definition) error {
+	return func(_ context.Context, def process.Definition) error {
+		if def.Name != process.WireGuardProcess {
+			return nil
+		}
+		return supervisorRemoveVPNHub(logger)
+	}
 }
 
 // enabledServices are the services this gatewayd configuration runs: the
@@ -893,6 +916,11 @@ func buildHostRuntime(cfg *ServeConfig, anchor *trust.Anchor, logger *slog.Logge
 		return nil, err
 	}
 	host.SecretResolver = resolver
+	// The datapath's WireGuard hub is a daemon-owned listener too.
+	if hub := vpnHubListeners(cfg, resolver != nil); len(hub) > 0 {
+		inventory, _ := host.Listeners.(hostfw.StaticInventory)
+		host.Listeners = append(inventory, hub...)
+	}
 	return host, nil
 }
 
