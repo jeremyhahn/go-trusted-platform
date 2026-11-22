@@ -22,6 +22,8 @@ export interface UseCapabilitiesResult {
   loading: boolean;
   error: unknown;
   capability(op: string): CapabilityAnswer;
+  /** Reads the capabilities again for every hook on this client. */
+  reload(): void;
 }
 
 export const CAPABILITIES_LOADING_REASON = "checking server capabilities";
@@ -59,12 +61,31 @@ interface Loaded {
   caps: CapabilityMap | undefined;
 }
 
+/** The version-bump callbacks of every mounted hook, per client, for reload(). */
+const subscribers = new WeakMap<PlatformClient, Set<() => void>>();
+
 export function useCapabilities(): UseCapabilitiesResult {
   const client = usePlatformClient();
   const [loaded, setLoaded] = useState<Loaded | undefined>(undefined);
+  // Bumped by reload() to read the capabilities again.
+  const [version, setVersion] = useState(0);
+
+  useEffect(() => {
+    const bump = () => setVersion((v) => v + 1);
+    let set = subscribers.get(client);
+    if (!set) {
+      set = new Set();
+      subscribers.set(client, set);
+    }
+    set.add(bump);
+    return () => {
+      set.delete(bump);
+    };
+  }, [client]);
 
   useEffect(() => {
     let live = true;
+    // A failed read is not cached, so this asks the server again after one.
     loadCapabilities(client).then(
       (caps) => {
         if (live) setLoaded({ client, error: undefined, caps });
@@ -78,6 +99,11 @@ export function useCapabilities(): UseCapabilitiesResult {
     return () => {
       live = false;
     };
+  }, [client, version]);
+
+  // Every hook on the client reads again, so Gated controls recover too.
+  const reload = useCallback(() => {
+    subscribers.get(client)?.forEach((bump) => bump());
   }, [client]);
 
   const current = loaded?.client === client ? loaded : undefined;
@@ -99,5 +125,5 @@ export function useCapabilities(): UseCapabilitiesResult {
     [current]
   );
 
-  return { loading: !current, error: current?.error, capability };
+  return { loading: !current, error: current?.error, capability, reload };
 }

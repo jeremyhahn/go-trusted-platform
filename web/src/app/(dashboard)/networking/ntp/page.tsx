@@ -55,7 +55,14 @@ export default function NTPPage() {
   const [staleError, setStaleError] = useState<{ message: string } | null>(null);
   // The reads wait for the server's capabilities, and stay off when the
   // server does not offer GET /api/v1/ntp/status.
-  const { loading: capsLoading, capability } = useCapabilities();
+  // A failed capabilities read is not "NTP disabled": the page offers a
+  // retry that reads the capabilities again before the NTP reads run.
+  const {
+    loading: capsLoading,
+    error: capsError,
+    capability,
+    reload: reloadCapabilities,
+  } = useCapabilities();
   const statusCapability = capability('GET /api/v1/ntp/status');
   const ntpEnabled = !capsLoading && statusCapability.enabled;
 
@@ -110,6 +117,10 @@ export default function NTPPage() {
 
   const refresh = () => {
     if (loading) return;
+    if (capsError) {
+      reloadCapabilities();
+      return;
+    }
     void fetchStatus();
     void fetchSources();
   };
@@ -189,7 +200,23 @@ export default function NTPPage() {
         </DialogContent>
       </Dialog>
 
-      {!capsLoading && !statusCapability.enabled && (
+      {!capsLoading && Boolean(capsError) && (
+        <Card data-testid="ntp-capabilities-error">
+          <CardHeader>
+            <CardTitle>Server capabilities could not be read</CardTitle>
+            <CardDescription>
+              {capsError instanceof Error ? capsError.message : statusCapability.reason}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button variant="outline" onClick={() => reloadCapabilities()}>
+              Retry
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {!capsLoading && !capsError && !statusCapability.enabled && (
         <Card data-testid="ntp-not-enabled">
           <CardHeader>
             <CardTitle>NTP is not enabled on this server</CardTitle>
