@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useParams, usePathname } from 'next/navigation';
 
+import { Gated } from '@/components/features/capabilities/gated';
 import { PageHeader } from '@/components/layout';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -94,19 +95,23 @@ export default function PXEDeviceClient() {
             <Button variant="outline" onClick={refresh}>
               Refresh
             </Button>
-            <Button
-              disabled={pending === 'start'}
-              onClick={() => write('start', () => detail.startService(), 'PXE service started', false)}
-            >
-              Start PXE service
-            </Button>
-            <Button
-              variant="outline"
-              disabled={pending === 'stop'}
-              onClick={() => write('stop', () => detail.stopService(), 'PXE service stopped', false)}
-            >
-              Stop PXE service
-            </Button>
+            <Gated op="POST /api/v1/pxe/start">
+              <Button
+                disabled={pending === 'start'}
+                onClick={() => write('start', () => detail.startService(), 'PXE service started', false)}
+              >
+                Start PXE service
+              </Button>
+            </Gated>
+            <Gated op="POST /api/v1/pxe/stop">
+              <Button
+                variant="outline"
+                disabled={pending === 'stop'}
+                onClick={() => write('stop', () => detail.stopService(), 'PXE service stopped', false)}
+              >
+                Stop PXE service
+              </Button>
+            </Gated>
           </>
         }
       />
@@ -167,19 +172,21 @@ export default function PXEDeviceClient() {
                 onChange={(e) => setReason(e.target.value)}
                 className="max-w-xs"
               />
-              <Button
-                disabled={pending === 'state'}
-                onClick={() =>
-                  write(
-                    'state',
-                    () => detail.updateState(id, selected, reason.trim() || undefined),
-                    'State updated',
-                    true
-                  )
-                }
-              >
-                Set state
-              </Button>
+              <Gated op="PUT /api/v1/pxe/devices/{id}/state">
+                <Button
+                  disabled={pending === 'state'}
+                  onClick={() =>
+                    write(
+                      'state',
+                      () => detail.updateState(id, selected, reason.trim() || undefined),
+                      'State updated',
+                      true
+                    )
+                  }
+                >
+                  Set state
+                </Button>
+              </Gated>
             </CardContent>
           </Card>
 
@@ -196,14 +203,16 @@ export default function PXEDeviceClient() {
                 onChange={(e) => setSerial(e.target.value)}
                 className="max-w-xs"
               />
-              <Button
-                disabled={serial.trim() === '' || pending === 'enrolled'}
-                onClick={() =>
-                  write('enrolled', () => detail.setEnrolled(id, serial.trim()), 'Device enrolled', true)
-                }
-              >
-                Mark enrolled
-              </Button>
+              <Gated op="POST /api/v1/pxe/devices/{id}/enrolled">
+                <Button
+                  disabled={serial.trim() === '' || pending === 'enrolled'}
+                  onClick={() =>
+                    write('enrolled', () => detail.setEnrolled(id, serial.trim()), 'Device enrolled', true)
+                  }
+                >
+                  Mark enrolled
+                </Button>
+              </Gated>
             </CardContent>
           </Card>
 

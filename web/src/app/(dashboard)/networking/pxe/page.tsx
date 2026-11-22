@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Gated } from '@/components/features/capabilities/gated';
 import { ServiceUnavailableState } from '@/components/features/platform';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { usePXE, useApi, useToast, useReportedGateways, usePXEDeviceActions } from '@/hooks';
@@ -299,10 +300,12 @@ export default function PXEBootPage() {
           <Button variant="outline" size="icon" onClick={fetchData} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            Register Device
-          </Button>
+          <Gated op="POST /api/v1/pxe/devices">
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Register Device
+            </Button>
+          </Gated>
         </div>
       </div>
 
@@ -638,53 +641,61 @@ export default function PXEBootPage() {
                       </TableCell>
                       <TableCell>
                         <div className="flex gap-1">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            aria-label={`Authorize ${device.macAddress}`}
-                            disabled={actions.isPending(device.id)}
-                            onClick={() => {
-                              setActionValue(device.targetVlan ? String(device.targetVlan) : '');
-                              setPending({ kind: 'authorize', device });
-                            }}
-                          >
-                            Authorize
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            aria-label={`Quarantine ${device.macAddress}`}
-                            disabled={actions.isPending(device.id)}
-                            onClick={() => {
-                              setActionValue('');
-                              setPending({ kind: 'quarantine', device });
-                            }}
-                          >
-                            Quarantine
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            aria-label={`Retry ${device.macAddress}`}
-                            disabled={actions.isPending(device.id)}
-                            onClick={() => {
-                              void actions.retry(device);
-                            }}
-                          >
-                            Retry
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            aria-label={`Remove ${device.macAddress}`}
-                            disabled={actions.isPending(device.id)}
-                            onClick={() => {
-                              setActionValue('');
-                              setPending({ kind: 'remove', device });
-                            }}
-                          >
-                            Remove
-                          </Button>
+                          <Gated op="POST /api/v1/pxe/devices/{id}/authorize">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              aria-label={`Authorize ${device.macAddress}`}
+                              disabled={actions.isPending(device.id)}
+                              onClick={() => {
+                                setActionValue(device.targetVlan ? String(device.targetVlan) : '');
+                                setPending({ kind: 'authorize', device });
+                              }}
+                            >
+                              Authorize
+                            </Button>
+                          </Gated>
+                          <Gated op="POST /api/v1/pxe/devices/{id}/quarantine">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              aria-label={`Quarantine ${device.macAddress}`}
+                              disabled={actions.isPending(device.id)}
+                              onClick={() => {
+                                setActionValue('');
+                                setPending({ kind: 'quarantine', device });
+                              }}
+                            >
+                              Quarantine
+                            </Button>
+                          </Gated>
+                          <Gated op="POST /api/v1/pxe/devices/{id}/retry">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              aria-label={`Retry ${device.macAddress}`}
+                              disabled={actions.isPending(device.id)}
+                              onClick={() => {
+                                void actions.retry(device);
+                              }}
+                            >
+                              Retry
+                            </Button>
+                          </Gated>
+                          <Gated op="DELETE /api/v1/pxe/devices/{id}">
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              aria-label={`Remove ${device.macAddress}`}
+                              disabled={actions.isPending(device.id)}
+                              onClick={() => {
+                                setActionValue('');
+                                setPending({ kind: 'remove', device });
+                              }}
+                            >
+                              Remove
+                            </Button>
+                          </Gated>
                         </div>
                       </TableCell>
                     </TableRow>
