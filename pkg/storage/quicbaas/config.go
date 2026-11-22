@@ -244,6 +244,24 @@ type Config struct {
 	AdminFactors              []string `yaml:"admin-factors,omitempty" json:"admin_factors,omitempty" mapstructure:"admin-factors"`
 	PasskeyDevice             string   `yaml:"passkey-device,omitempty" json:"passkey_device,omitempty" mapstructure:"passkey-device"`
 
+	// WebAuthnAttestationRootsFile is a PEM bundle of FIDO attestation
+	// ROOT certificates (the manufacturer roots that sign authenticator
+	// batch attestation certificates), passed through to the embedded
+	// server's iam.webauthn.attestation_roots_file. Unset, no authenticator
+	// can prove it is hardware and every administrative WebAuthn enrollment
+	// is refused, including a self-service registrant who becomes its new
+	// tenant's admin. The trust decision is go-qrdb's; the platform only
+	// names the file.
+	WebAuthnAttestationRootsFile string `yaml:"webauthn-attestation-roots-file,omitempty" json:"webauthn_attestation_roots_file,omitempty" mapstructure:"webauthn-attestation-roots-file"`
+
+	// WebAuthnAAGUIDAllowlistFile is a JSON allowlist of authenticator
+	// models (AAGUIDs) passed through to the embedded server's
+	// iam.aaguid.allowlist_file. The server's WebAuthn attestation gate
+	// checks the authenticator's AAGUID as well as its chain; unset, the
+	// gate is strict with an empty allowlist, so every attested enrollment
+	// is refused with aaguid_not_allowed.
+	WebAuthnAAGUIDAllowlistFile string `yaml:"webauthn-aaguid-allowlist-file,omitempty" json:"webauthn_aaguid_allowlist_file,omitempty" mapstructure:"webauthn-aaguid-allowlist-file"`
+
 	// StartupTimeout bounds how long Start waits for the embedded server to
 	// report itself started. It is deliberately its OWN budget and not
 	// derived from RequestTimeout.
@@ -544,6 +562,8 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 	cfg.IAM.WebAuthn.RPID = c.WebAuthnRPID
 	cfg.IAM.WebAuthn.RPDisplayName = c.WebAuthnRPDisplayName
 	cfg.IAM.WebAuthn.RPOrigins = c.WebAuthnRPOrigins
+	cfg.IAM.WebAuthn.AttestationRootsFile = c.WebAuthnAttestationRootsFile
+	cfg.IAM.AAGUID.AllowlistFile = c.WebAuthnAAGUIDAllowlistFile
 
 	// Browser login is usernameless: the authenticator must find the
 	// credential on its own, so a credential registered without a resident
