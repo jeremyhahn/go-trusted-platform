@@ -35,6 +35,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/adminclaim"
+	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
@@ -109,6 +110,7 @@ type testHandlerRegistry struct {
 	eabService            platformv1.EABServiceServer
 	ntpService            platformv1.NTPServiceServer
 	vpnService            platformv1.VPNServiceServer
+	bmcHandler            bmcwebsvc.RestHandler
 	proxyService          platformv1.ProxyServiceServer
 	appServices           restapi.AppServiceServers
 	overlayService        platformv1.OverlayServiceServer
@@ -296,6 +298,10 @@ func (r *testHandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer {
 
 func (r *testHandlerRegistry) VPNServiceServer() platformv1.VPNServiceServer {
 	return r.vpnService
+}
+
+func (r *testHandlerRegistry) BMCRestHandler() bmcwebsvc.RestHandler {
+	return r.bmcHandler
 }
 
 func (r *testHandlerRegistry) ProxyServiceServer() platformv1.ProxyServiceServer {

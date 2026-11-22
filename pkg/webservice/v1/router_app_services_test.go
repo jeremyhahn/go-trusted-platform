@@ -25,6 +25,7 @@ import (
 
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
+	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -227,4 +228,48 @@ func TestProxyRoutes_RefusedWithoutAScopeAuthorizer(t *testing.T) {
 	for _, target := range targets {
 		assert.NotEqual(t, http.StatusForbidden, appServiceServing(t, scoped, target), target)
 	}
+}
+
+// countingBMCHandler answers the power reads and writes and counts them;
+// every other BMC handler method panics through the nil embedded interface.
+type countingBMCHandler struct {
+	bmcwebsvc.RestHandler
+	statusCalls int
+	actionCalls int
+}
+
+func (h *countingBMCHandler) PowerStatus(w http.ResponseWriter, _ *http.Request) {
+	h.statusCalls++
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *countingBMCHandler) PowerAction(w http.ResponseWriter, _ *http.Request) {
+	h.actionCalls++
+	w.WriteHeader(http.StatusOK)
+}
+
+// TestBMCRoutes_ServedOnTheConsole pins that the console serves
+// /api/v1/bmc through the daemon's BMC handler behind the admin gate and the
+// bmc scopes, and mounts nothing when the daemon has no BMC handler.
+func TestBMCRoutes_ServedOnTheConsole(t *testing.T) {
+	const target = "/api/v1/bmc/7/power"
+
+	handler := &countingBMCHandler{}
+	scoped := &testHandlerRegistry{
+		tokenHandler: &allScopesSessionAuth{sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"}},
+		bmcHandler:   handler,
+	}
+	assert.Equal(t, http.StatusOK, appServiceServing(t, scoped, target))
+	assert.Equal(t, 1, handler.statusCalls)
+
+	roleOnly := &testHandlerRegistry{
+		tokenHandler: &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"},
+		bmcHandler:   &countingBMCHandler{},
+	}
+	assert.Equal(t, http.StatusForbidden, appServiceServing(t, roleOnly, target))
+
+	none := &testHandlerRegistry{
+		tokenHandler: &allScopesSessionAuth{sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"}},
+	}
+	assert.Equal(t, http.StatusNotFound, appServiceServing(t, none, target))
 }
