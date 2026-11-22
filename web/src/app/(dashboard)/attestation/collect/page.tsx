@@ -3,6 +3,7 @@
 import * as React from "react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Gated } from "@/components/features/capabilities/gated";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -180,9 +181,11 @@ export default function AttestationCollectPage() {
             error={hostPcrError}
           />
           <Field id="collect-host-nonce" label="Nonce (base64)" value={hostNonce} onChange={setHostNonce} />
-          <Button data-testid="collect-host-submit" onClick={onHost} disabled={hostBusy}>
-            Collect
-          </Button>
+          <Gated op="POST /api/v1/attestation/host">
+            <Button data-testid="collect-host-submit" onClick={onHost} disabled={hostBusy}>
+              Collect
+            </Button>
+          </Gated>
           {hostOutcome && "error" in hostOutcome && <RefusalAlert message={hostOutcome.error} />}
           {hostOutcome && "data" in hostOutcome && (
             <div data-testid="collect-host-result" className="text-sm">
@@ -211,9 +214,11 @@ export default function AttestationCollectPage() {
             error={vmPcrError}
           />
           <Field id="collect-vm-nonce" label="Nonce (base64)" value={vmNonce} onChange={setVmNonce} />
-          <Button data-testid="collect-vm-submit" onClick={onVM} disabled={vmBusy}>
-            Collect
-          </Button>
+          <Gated op="POST /api/v1/attestation/vm/{id}">
+            <Button data-testid="collect-vm-submit" onClick={onVM} disabled={vmBusy}>
+              Collect
+            </Button>
+          </Gated>
           {vmOutcome && "error" in vmOutcome && <RefusalAlert message={vmOutcome.error} />}
           {vmOutcome && "data" in vmOutcome && (
             <div data-testid="collect-vm-result" className="space-y-1 text-sm">
@@ -231,9 +236,11 @@ export default function AttestationCollectPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <Field id="collect-container-id" label="Container ID" value={containerId} onChange={setContainerId} />
-          <Button data-testid="collect-container-submit" onClick={onContainer} disabled={containerBusy}>
-            Collect
-          </Button>
+          <Gated op="POST /api/v1/attestation/container/{id}">
+            <Button data-testid="collect-container-submit" onClick={onContainer} disabled={containerBusy}>
+              Collect
+            </Button>
+          </Gated>
           {containerOutcome && "error" in containerOutcome && <RefusalAlert message={containerOutcome.error} />}
           {containerOutcome && "data" in containerOutcome && (
             <div data-testid="collect-container-result" className="space-y-1 text-sm">

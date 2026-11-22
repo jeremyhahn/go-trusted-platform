@@ -20,6 +20,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Gated } from "@/components/features/capabilities/gated";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -170,12 +171,16 @@ export function QuoteVerifyCard(): React.JSX.Element {
           onChange={(e) => setPem(e.target.value)}
         />
         <div className="flex gap-2">
-          <Button onClick={onGetQuote} disabled={!canQuote}>
-            Get quote
-          </Button>
-          <Button variant="outline" onClick={onVerifyQuote} disabled={!canVerify}>
-            Verify quote
-          </Button>
+          <Gated op="POST /api/v1/attestation/quote">
+            <Button onClick={onGetQuote} disabled={!canQuote}>
+              Get quote
+            </Button>
+          </Gated>
+          <Gated op="POST /api/v1/attestation/quote/verify">
+            <Button variant="outline" onClick={onVerifyQuote} disabled={!canVerify}>
+              Verify quote
+            </Button>
+          </Gated>
         </div>
         {quote && (
           <dl data-testid="quote-result" className="grid grid-cols-2 gap-1 text-sm">

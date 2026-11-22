@@ -15,6 +15,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Gated } from "@/components/features/capabilities/gated";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -148,12 +149,16 @@ export function ManifestActionsCard({
           disabled={empty}
         />
         <div className="flex gap-2">
-          <Button onClick={onVerify} disabled={empty || busy}>
-            Verify manifest
-          </Button>
-          <Button variant="destructive" onClick={() => setConfirmOpen(true)} disabled={empty || busy}>
-            Delete manifest
-          </Button>
+          <Gated op="POST /api/v1/attestation/manifests/verify">
+            <Button onClick={onVerify} disabled={empty || busy}>
+              Verify manifest
+            </Button>
+          </Gated>
+          <Gated op="DELETE /api/v1/attestation/manifests/{id}">
+            <Button variant="destructive" onClick={() => setConfirmOpen(true)} disabled={empty || busy}>
+              Delete manifest
+            </Button>
+          </Gated>
         </div>
         {verdict && (
           <div data-testid="manifest-verdict" className="flex flex-col gap-1 text-sm">
