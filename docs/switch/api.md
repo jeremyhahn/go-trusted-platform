@@ -321,6 +321,13 @@ anything else.** A node with a configured switch reports `Configured: true`.
 
 The bootstrap `Configurator` path is separate and runs either way.
 
+Vendor `memory` keeps port state in memory, seeded from the config's
+`ports` (ranges expanded, each port enabled with its link up), for
+development and the web harness; it touches no hardware. It answers list,
+status, VLAN move, enable and disable with the same error types as the SSH
+vendor (`ErrPortNotFound`, `ErrInvalidConfig`), and its bootstrap
+`Configurator` is the noop one.
+
 ---
 
 ## 10. Versioning

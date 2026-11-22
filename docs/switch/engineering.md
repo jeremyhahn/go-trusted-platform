@@ -123,8 +123,9 @@ field 8, REST and the Go SDK through the JSON struct, MCP `switch_port_status`).
 `Warnings`) is declared and **never constructed or returned** by any method —
 it is vocabulary for a future batching API.
 
-Vendors: `VendorCiscoNexus = "cisco-nexus"`, `VendorNoop = "noop"`. That is the
-complete set.
+Vendors: `VendorCiscoNexus = "cisco-nexus"`, `VendorNoop = "noop"`,
+`VendorMemory = "memory"` (port state in memory, seeded from the config's
+ports; its configurator is the noop one). That is the complete set.
 
 ## 3. SSH: what `NewSSHExecutor` actually requires
 

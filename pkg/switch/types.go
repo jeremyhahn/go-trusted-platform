@@ -32,6 +32,10 @@ const (
 
 	// VendorNoop represents a no-op configurator for testing.
 	VendorNoop SwitchVendor = "noop"
+
+	// VendorMemory represents a simulated switch that keeps port state in
+	// memory, seeded from the config's ports. It touches no hardware.
+	VendorMemory SwitchVendor = "memory"
 )
 
 // VLANConfig defines a VLAN to be configured on the switch.
