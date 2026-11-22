@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -21,6 +22,19 @@ type keys2151KMS struct {
 	importReq *kmsclient.ImportKeyRequest
 	updateReq *kmsclient.UpdateKeyMetadataRequest
 	updateErr error
+	meta      *kmsclient.KeyMetadataResponse
+	metaErr   error
+}
+
+func (f *keys2151KMS) GetKey(_ context.Context, keyID string) (*kmsclient.KeyInfo, error) {
+	return &kmsclient.KeyInfo{KeyID: keyID, Name: keyID, Algorithm: kmsclient.AlgorithmAES256GCM, Version: 1}, nil
+}
+
+func (f *keys2151KMS) GetKeyMetadata(_ context.Context, keyID string) (*kmsclient.KeyMetadataResponse, error) {
+	if f.metaErr != nil {
+		return nil, f.metaErr
+	}
+	return f.meta, nil
 }
 
 func (f *keys2151KMS) ImportKey(_ context.Context, req *kmsclient.ImportKeyRequest) (*kmsclient.ImportKeyResponse, error) {
@@ -204,4 +218,48 @@ func TestImportKey2151_AcceptsTheFacadeKeySpec(t *testing.T) {
 	if f.importReq == nil || f.importReq.Algorithm != kmsclient.AlgorithmAES256GCM || len(f.importReq.Usage) != 1 {
 		t.Fatalf("ImportKey request = %+v, want AES-256-GCM with one usage", f.importReq)
 	}
+}
+
+// TestGetKey2151_CarriesTheRecordedMetadata pins GetKey's reply to the key's
+// stored metadata, as the facade answered (#2151 Codex round 2).
+func TestGetKey2151_CarriesTheRecordedMetadata(t *testing.T) {
+	updated := time.Unix(1700000100, 0).UTC()
+	lastUsed := time.Unix(1700000200, 0).UTC()
+	t.Run("the reply carries the metadata", func(t *testing.T) {
+		f := &keys2151KMS{meta: &kmsclient.KeyMetadataResponse{
+			KeyID: "k1", Name: "k1", Algorithm: kmsclient.AlgorithmAES256GCM, Version: 1,
+			Status: kmsclient.KeyStatusDisabled, Exportable: true, DeletionProtection: true,
+			Description: "payroll", Tags: map[string]string{"team": "ops"}, Owner: "ops",
+			UpdatedAt: updated, LastUsedAt: lastUsed,
+		}}
+		w := covServe(keys2151Handlers(f).GetKey, covRequest(http.MethodGet, "/api/v1/kms/keys/k1", "",
+			map[string]string{"name": "k1"}))
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+		}
+		var got struct {
+			Status             string            `json:"status"`
+			Exportable         bool              `json:"exportable"`
+			DeletionProtection bool              `json:"deletion_protection"`
+			Description        string            `json:"description"`
+			Tags               map[string]string `json:"tags"`
+			Owner              string            `json:"owner"`
+			UpdatedAt          time.Time         `json:"updated_at"`
+			LastUsedAt         time.Time         `json:"last_used_at"`
+		}
+		decodeEnvelope(t, w, &got)
+		if got.Status != "DISABLED" || !got.Exportable || !got.DeletionProtection ||
+			got.Description != "payroll" || got.Tags["team"] != "ops" || got.Owner != "ops" ||
+			!got.UpdatedAt.Equal(updated) || !got.LastUsedAt.Equal(lastUsed) {
+			t.Fatalf("payload = %+v (body %s), want the recorded metadata", got, w.Body.String())
+		}
+	})
+	t.Run("a metadata failure fails the request", func(t *testing.T) {
+		f := &keys2151KMS{metaErr: errors.New("metadata store down")}
+		w := covServe(keys2151Handlers(f).GetKey, covRequest(http.MethodGet, "/api/v1/kms/keys/k1", "",
+			map[string]string{"name": "k1"}))
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d, want 500 (body %s)", w.Code, w.Body.String())
+		}
+	})
 }

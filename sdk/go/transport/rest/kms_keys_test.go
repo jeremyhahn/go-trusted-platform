@@ -228,6 +228,34 @@ func TestKMSGetKey_FlatReplyFillsKey(t *testing.T) {
 	}
 }
 
+// TestKMSGetKey_ReplyCarriesTheRecordedMetadata pins the decode of the key's
+// stored metadata from the GetKey reply (#2151 Codex round 2).
+func TestKMSGetKey_ReplyCarriesTheRecordedMetadata(t *testing.T) {
+	a, _ := kmsAdapter(t, `{"key_id":"k1","name":"k1","algorithm":"AES-256-GCM","version":1,`+
+		`"usage":["ENCRYPT"],"status":"DISABLED","exportable":true,"deletion_protection":true,`+
+		`"description":"payroll","tags":{"team":"ops"},"owner":"ops",`+
+		`"created_at":"2023-11-14T22:13:20Z","updated_at":"2023-11-14T22:15:00Z","last_used_at":"2023-11-14T22:16:40Z"}`)
+	resp := &platformv1.GetKeyResponse{}
+	err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_GetKey_FullMethodName,
+		&platformv1.GetKeyRequest{KeyId: "k1"}, resp)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	meta := resp.GetMetadata()
+	if meta.GetStatus() != platformv1.KeyStatus_KEY_STATUS_DISABLED || !meta.GetExportable() ||
+		!meta.GetDeletionProtection() || meta.GetDescription() != "payroll" ||
+		meta.GetTags()["team"] != "ops" || meta.GetOwner() != "ops" {
+		t.Fatalf("metadata = %v, want the recorded metadata", meta)
+	}
+	if len(meta.GetUsage()) != 1 || meta.GetUsage()[0] != platformv1.KeyUsage_KEY_USAGE_ENCRYPT {
+		t.Fatalf("usage = %v, want [ENCRYPT]", meta.GetUsage())
+	}
+	if meta.GetCreatedAt() != 1700000000 || meta.GetUpdatedAt() != 1700000100 || meta.GetLastUsedAt() != 1700000200 {
+		t.Fatalf("times = %d %d %d, want 1700000000 1700000100 1700000200",
+			meta.GetCreatedAt(), meta.GetUpdatedAt(), meta.GetLastUsedAt())
+	}
+}
+
 // TestKMSListKeys_NonEmptyReplyDecodes pins Codex round 1 P1 on #2151: the
 // webservice KMS router answers ListKeys with {"keys":[...]}, RFC3339
 // created_at and algorithm names such as AES-256-GCM, which protojson cannot
