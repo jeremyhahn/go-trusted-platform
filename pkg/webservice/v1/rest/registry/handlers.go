@@ -25,6 +25,7 @@ import (
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/registry"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
@@ -146,6 +147,9 @@ func (h *Handlers) GetImage(w http.ResponseWriter, r *http.Request) {
 //	X-Trusted-Platform-Repository: repo name
 //	X-Trusted-Platform-Tag:        tag (optional; default "latest")
 //	X-Trusted-Platform-Encrypt:    "true" to encrypt-on-push
+//	X-Trusted-Platform-Encrypt-Key-ID: encryption key (optional; default key)
+//	X-Trusted-Platform-Sign:       "true" to sign the manifest
+//	X-Trusted-Platform-Signing-Key-ID: signing key (optional; default key)
 //	X-Trusted-Platform-Overwrite:  "true" to allow overwrite
 //
 // The body is application/x-trusted-platform-image (JSON envelope).
@@ -179,7 +183,16 @@ func (h *Handlers) PushImage(w http.ResponseWriter, r *http.Request) {
 	}
 	annotations := map[string]string{}
 	if r.Header.Get("X-Trusted-Platform-Encrypt") == "true" {
-		annotations["encrypt"] = "true"
+		annotations[registry.PushAnnotationEncrypt] = "true"
+	}
+	if keyID := r.Header.Get("X-Trusted-Platform-Encrypt-Key-ID"); keyID != "" {
+		annotations[registry.PushAnnotationKeyID] = keyID
+	}
+	if r.Header.Get("X-Trusted-Platform-Sign") == "true" {
+		annotations[registry.PushAnnotationSign] = "true"
+	}
+	if signingKeyID := r.Header.Get("X-Trusted-Platform-Signing-Key-ID"); signingKeyID != "" {
+		annotations[registry.PushAnnotationSigningKeyID] = signingKeyID
 	}
 	if r.Header.Get("X-Trusted-Platform-Overwrite") == "true" {
 		annotations[regsvc.AnnotationOverwrite] = "true"

@@ -47,6 +47,10 @@ const (
 	headerTag        = "X-Trusted-Platform-Tag"
 	headerEncrypt    = "X-Trusted-Platform-Encrypt"
 	headerOverwrite  = "X-Trusted-Platform-Overwrite"
+
+	headerEncryptKeyID = "X-Trusted-Platform-Encrypt-Key-ID"
+	headerSign         = "X-Trusted-Platform-Sign"
+	headerSigningKeyID = "X-Trusted-Platform-Signing-Key-ID"
 )
 
 // ErrRESTStatus is returned when platformd answers a REST call with an
@@ -184,6 +188,15 @@ func (r *RESTAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*
 	req.Header.Set(headerTag, tag)
 	if opts.Encrypt {
 		req.Header.Set(headerEncrypt, "true")
+		if opts.KeyID != "" {
+			req.Header.Set(headerEncryptKeyID, opts.KeyID)
+		}
+	}
+	if opts.SignImage {
+		req.Header.Set(headerSign, "true")
+		if opts.SigningKeyID != "" {
+			req.Header.Set(headerSigningKeyID, opts.SigningKeyID)
+		}
 	}
 	if opts.AllowOverwrite {
 		req.Header.Set(headerOverwrite, "true")
@@ -200,6 +213,8 @@ func (r *RESTAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*
 	result := &PushResult{Reference: ref, Size: resp.BytesReceived, PushedAt: resp.Timestamp}
 	if resp.Artifact != nil {
 		result.Digest = resp.Artifact.Digest
+		result.Encrypted = resp.Artifact.Annotations[registry.ManifestAnnotationEncrypted] == "true"
+		result.Signed = resp.Artifact.Annotations[registry.ManifestAnnotationSigned] == "true"
 	}
 	return result, nil
 }
@@ -330,7 +345,23 @@ func (r *RESTAdapter) Inspect(ctx context.Context, ref string) (*InspectResult, 
 		CreatedAt:   a.CreatedAt,
 		UpdatedAt:   a.UpdatedAt,
 	}
-	return &InspectResult{Reference: ref, Manifest: &manifest, TotalSize: a.Size}, nil
+	layerCount := 0
+	if a.Manifest != nil {
+		layerCount = len(a.Manifest.Layers)
+	}
+	return &InspectResult{
+		Reference: ref,
+		Manifest:  &manifest,
+		Config: &ImageConfig{
+			Architecture: a.Architecture,
+			OS:           a.OS,
+			Author:       a.Author,
+		},
+		TotalSize:       a.Size,
+		LayerCount:      layerCount,
+		Encrypted:       a.Annotations[registry.ManifestAnnotationEncrypted] == "true",
+		EncryptionKeyID: a.Annotations[registry.ManifestAnnotationKeyID],
+	}, nil
 }
 
 // Status calls the registry status route.
@@ -354,6 +385,11 @@ func (r *RESTAdapter) Status(ctx context.Context) (*StatusResult, error) {
 	}
 	if !resp.StartedAt.IsZero() && !resp.Timestamp.IsZero() {
 		result.Uptime = resp.Timestamp.Sub(resp.StartedAt)
+	}
+	for _, c := range resp.Components {
+		if c != nil && c.Name == storageComponentName {
+			result.StorageBackend = c.Details[storageBackendDetail]
+		}
 	}
 	return result, nil
 }
