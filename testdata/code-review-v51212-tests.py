@@ -31,6 +31,15 @@ harness this copies. Nothing reaches the network.
      the handoff's re-run of that run's red gate): the gate fails closed
      (exit 3). A failed review still fails; a skipped or successful review
      with the approval still passes.
+  H. THE HANDOFF, EXECUTED (Codex's P1 on go-trusted-platform #2227 at
+     923d0d81: the handoff had only a text check): the gate's second step
+     runs against a fake forge whose answers come in order. A newer run's
+     red or cancelled gate is re-run exactly once; a run in progress is
+     polled through to completed and re-run after the last read; a gate
+     that ends green is left; past the bound the step fails (exit 5); a run
+     reviewing the head itself, or whose gate is still queued, is left to
+     its own gate; an older suite's run and another PR's run are never
+     touched; an API error is a warning, exit 0.
 
 Run: python3 -I software/templates/github-actions/testdata/code-review-v51212-tests.py [workflow]
 """
@@ -117,10 +126,18 @@ req = method + " " + path
 with open(os.environ["FAKE_LOG"], "a") as log:
     log.write(req + "\n")
 code, body = 404, '{"message":"no route"}'
-for glob, c, b in json.loads(os.environ["FAKE_ROUTES"]):
-    if fnmatch.fnmatchcase(req, glob):
-        code, body = c, b
-        break
+for n, route in enumerate(json.loads(os.environ["FAKE_ROUTES"])):
+    glob, answers = route[0], route[1:]
+    if not fnmatch.fnmatchcase(req, glob):
+        continue
+    if isinstance(answers[0], list):  # a sequence: one answer per request, the last repeats
+        state = os.path.join(os.environ["FAKE_STATE"], str(n))
+        hits = int(open(state).read()) if os.path.exists(state) else 0
+        open(state, "w").write(str(hits + 1))
+        code, body = answers[0][min(hits, len(answers[0]) - 1)]
+    else:
+        code, body = answers
+    break
 if out:
     open(out, "w").write(body)
 else:
@@ -245,6 +262,65 @@ def run_gate(script, rts, no_review, docs, review_result="skipped"):
         return out.returncode, out.stdout + out.stderr
 
 
+GATE = "Code Review (codex)"
+HANDOFF = "Re-run a newer twin's failed gate on this head"
+
+
+def handoff_jobs(gate_status, gate_conclusion, review="completed"):
+    """A newer run's jobs: scope, its `Codex review` (REVIEW's status) and
+    its gate (job 9000)."""
+    return json.dumps({"jobs": [
+        {"id": 1, "name": "Review scope (InfoSec guard)", "status": "completed", "conclusion": "success"},
+        {"id": 2, "name": "Codex review", "status": review, "conclusion": "skipped" if review == "completed" else None},
+        {"id": 9000, "name": GATE, "status": gate_status, "conclusion": gate_conclusion}]})
+
+
+def handoff_routes(listed_status, run_states, jobs, others=()):
+    """This run is 77 (suite 500); run 92 (suite 502) is the newer twin on
+    the head. listed_status: 92's status in the runs list; run_states:
+    GET /actions/runs/92's answers in order (code, status); jobs: GET
+    /actions/runs/92/jobs's bodies in order (the last repeats). OTHERS:
+    extra listed runs (id, suite, display_title) whose jobs answer a red
+    gate (job 8000), so a re-run of one is visible as POST .../8000/rerun."""
+    listed = [{"id": 92, "check_suite_id": 502, "status": listed_status, "display_title": title(7, HEAD)}]
+    listed += [{"id": i, "check_suite_id": s, "status": "completed", "display_title": t} for i, s, t in others]
+    other_red = json.dumps({"jobs": [{"id": 8000, "name": GATE, "status": "completed", "conclusion": "failure"}]})
+    return [
+        ["GET /actions/runs/77", 200, json.dumps({"workflow_id": 5, "check_suite_id": 500})],
+        [f"GET /actions/workflows/5/runs?head_sha={HEAD}&*", 200, json.dumps({"workflow_runs": listed})],
+        ["GET /actions/runs/92/jobs?*", [[200, b] for b in jobs]],
+        ["GET /actions/runs/92", [[c, json.dumps({"id": 92, "status": s})] for c, s in run_states]],
+        ["GET /actions/runs/*/jobs?*", 200, other_red],
+        ["POST /actions/jobs/*/rerun", 201, ""],
+    ]
+
+
+def run_handoff(script, rts, poll="0", wait="30"):
+    """Runs the handoff step (this run is 77). Returns (exit code, output,
+    requests in order)."""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = pathlib.Path(d)
+        bin_dir = tmp / "bin"
+        bin_dir.mkdir()
+        (tmp / "state").mkdir()
+        (bin_dir / "curl").write_text(FAKE_CURL)
+        (bin_dir / "curl").chmod(0o755)
+        log = tmp / "requests.log"
+        log.write_text("")
+        env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp), "FAKE_LOG": str(log),
+               "FAKE_STATE": str(tmp / "state"), "FAKE_ROUTES": json.dumps(rts), "FAKE_BASE": API,
+               "FORGE": "github", "REPO_API": API, "PR_NUM": "7", "EVENT_SHA": HEAD, "BASE_REF": "main",
+               "GITHUB_RUN_ID": "77", "GH_API_TOKEN": "<REDACTED>",
+               "HANDOFF_POLL_S": poll, "HANDOFF_WAIT_S": wait}
+        out = subprocess.run(["bash", "-c", script], cwd=tmp, env=env,
+                             capture_output=True, text=True, check=False, timeout=120)
+        return out.returncode, out.stdout + out.stderr, log.read_text().splitlines()
+
+
+def posts(reqs):
+    return [r for r in reqs if r.startswith("POST ")]
+
+
 def round_block(src):
     """The guard's round count and round limit, from THE TWO-ROUND STOP to the round line."""
     a = src.index("          [[ $COORDINATOR_TURNS =~ ^[0-9]+$ ]] ||")
@@ -349,6 +425,52 @@ def main():
     hand = step(gate, "Re-run a newer twin's failed gate on this head")
     check('.conclusion == "failure" or .conclusion == "cancelled"' in hand,
           "C5 the handoff still re-runs a cancelled run's red gate, which now fails closed (C1)")
+
+    # H: the handoff step itself, executed against the fake forge (Codex's
+    # P1 on go-trusted-platform #2227 at 923d0d81: C5 only read its text).
+    hscript = run_script(hand)
+    red = handoff_jobs("completed", "failure")
+    cancelled = handoff_jobs("completed", "cancelled")
+    rc, out, reqs = run_handoff(hscript, handoff_routes("completed", [(200, "completed")], [red]))
+    check(rc == 0 and posts(reqs) == ["POST /actions/jobs/9000/rerun"],
+          f"H1 a newer run completed with its gate red: that gate is re-run, once (rc {rc}, {posts(reqs)})")
+    rc, out, reqs = run_handoff(hscript, handoff_routes("completed", [(200, "completed")], [cancelled]))
+    check(rc == 0 and posts(reqs) == ["POST /actions/jobs/9000/rerun"],
+          f"H2 a newer run whose gate was cancelled (C1's shape): that gate is re-run, once (rc {rc}, {posts(reqs)})")
+    rc, out, reqs = run_handoff(hscript, handoff_routes(
+        "in_progress", [(200, "in_progress"), (200, "in_progress"), (200, "completed")], [red]))
+    runs92 = [i for i, r in enumerate(reqs) if r == "GET /actions/runs/92"]
+    post_at = [i for i, r in enumerate(reqs) if r.startswith("POST ")]
+    check(rc == 0 and posts(reqs) == ["POST /actions/jobs/9000/rerun"] and len(runs92) == 3
+          and post_at and post_at[0] > runs92[-1],
+          f"H3 a newer run in progress with a red gate: polled through to completed, then re-run once after the last read (rc {rc}, {len(runs92)} run reads, {posts(reqs)})")
+    running = handoff_jobs("in_progress", None)
+    rc, out, reqs = run_handoff(hscript, handoff_routes(
+        "in_progress", [(200, "in_progress"), (200, "completed")], [running, red]))
+    check(rc == 0 and posts(reqs) == ["POST /actions/jobs/9000/rerun"],
+          f"H4 a newer gate still running that ends red while polled: re-run once (rc {rc}, {posts(reqs)})")
+    rc, out, reqs = run_handoff(hscript, handoff_routes(
+        "in_progress", [(200, "in_progress"), (200, "completed")], [running, handoff_jobs("completed", "success")]))
+    check(rc == 0 and not posts(reqs), f"H5 a newer gate that ends green while polled: nothing re-run (rc {rc}, {posts(reqs)})")
+    rc, out, reqs = run_handoff(hscript, handoff_routes("in_progress", [(200, "in_progress")], [red]), poll="1", wait="2")
+    check(rc == 5 and "::error::" in out and "run 92" in out and "bound" in out and not posts(reqs),
+          f"H6 the run never completes inside the bound: the step fails (exit 5, ::error::), nothing re-run (rc {rc})")
+    rc, out, reqs = run_handoff(hscript, handoff_routes(
+        "in_progress", [(200, "in_progress")], [handoff_jobs("queued", None, review="in_progress")]), poll="1", wait="2")
+    check(rc == 0 and not posts(reqs) and "reviews" in out and "GET /actions/runs/92" not in reqs,
+          f"H7 a newer run reviewing the head itself is left to its own review's gate at once (rc {rc}, {posts(reqs)})")
+    rc, out, reqs = run_handoff(hscript, handoff_routes(
+        "in_progress", [(200, "in_progress")], [handoff_jobs("queued", None)]), poll="1", wait="2")
+    check(rc == 0 and not posts(reqs) and "::error::" not in out and "GET /actions/runs/92" not in reqs
+          and "reads this approval itself" in out,
+          f"H8 a newer run whose gate is queued is left to that gate at once, no poll, no red (rc {rc}, {posts(reqs)})")
+    rc, out, reqs = run_handoff(hscript, handoff_routes("completed", [(200, "completed")], [red], others=[
+        (60, 400, title(7, HEAD)), (93, 503, title(70, HEAD))]))
+    check(rc == 0 and posts(reqs) == ["POST /actions/jobs/9000/rerun"],
+          f"H9 an older suite's run and another PR's run, both red, are never re-run (rc {rc}, {posts(reqs)})")
+    rc, out, reqs = run_handoff(hscript, handoff_routes("in_progress", [(500, "in_progress")], [red]))
+    check(rc == 0 and "::warning::" in out and "HTTP 500" in out and not posts(reqs),
+          f"H10 an API error while polling: a warning, exit 0, nothing re-run (rc {rc})")
 
     # R: ruling 1087 (3), a pushed fix is a new round by right.
     block = round_block(src)
