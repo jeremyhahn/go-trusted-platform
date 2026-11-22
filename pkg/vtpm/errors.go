@@ -110,6 +110,17 @@ func (e ErrTemplateNotFound) Error() string {
 	return fmt.Sprintf("vtpm: template not found: %s", e.ID)
 }
 
+// ErrInvalidTemplateID indicates a template ID that is not a single path
+// element, so it would resolve outside the templates directory.
+type ErrInvalidTemplateID struct {
+	ID     string
+	Reason string
+}
+
+func (e ErrInvalidTemplateID) Error() string {
+	return fmt.Sprintf("invalid template ID %q: %s", e.ID, e.Reason)
+}
+
 // ErrTemplateAlreadyExists indicates a template with the ID already exists.
 type ErrTemplateAlreadyExists struct {
 	ID string

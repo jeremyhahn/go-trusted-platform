@@ -734,8 +734,30 @@ func (s *Service) ListBundles(ctx context.Context, opts *ListOptions) ([]*Bundle
 	return bundles, nil
 }
 
+// validateTemplateID refuses a template ID that is not a single path
+// element. Config.TemplatePath joins the ID onto the templates directory,
+// and create, read and delete all act on that path, so an ID such as "../x"
+// would write, read or remove outside it (#2021 Codex round 2).
+func validateTemplateID(id string) error {
+	switch {
+	case id == "":
+		return ErrInvalidTemplateID{ID: id, Reason: "must not be empty"}
+	case id == "." || id == "..":
+		return ErrInvalidTemplateID{ID: id, Reason: "must not be a relative directory reference"}
+	case strings.ContainsAny(id, "/\\\x00"):
+		return ErrInvalidTemplateID{ID: id, Reason: "must not contain a path separator or NUL byte"}
+	case filepath.Base(id) != id:
+		return ErrInvalidTemplateID{ID: id, Reason: "must be a single path element"}
+	}
+	return nil
+}
+
 // CreateTemplate creates a new vTPM template.
 func (s *Service) CreateTemplate(ctx context.Context, opts *CreateTemplateOptions) (*Template, error) {
+	if err := validateTemplateID(opts.ID); err != nil {
+		return nil, err
+	}
+
 	// Templates are bundles without EK certificate
 	bundleOpts := &CreateBundleOptions{
 		Mode:              BundleModeTemplate,
@@ -903,6 +925,9 @@ func (s *Service) GetTemplate(ctx context.Context, id string) (*Template, error)
 // getTemplateLocked retrieves a template by ID without acquiring a lock.
 // Caller must hold at least a read lock.
 func (s *Service) getTemplateLocked(id string) (*Template, error) {
+	if err := validateTemplateID(id); err != nil {
+		return nil, err
+	}
 	templatePath := s.config.TemplatePath(id)
 	manifestPath := filepath.Join(templatePath, "manifest.json")
 
@@ -939,6 +964,9 @@ func (s *Service) DeleteTemplate(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := validateTemplateID(id); err != nil {
+		return err
+	}
 	templatePath := s.config.TemplatePath(id)
 
 	if _, err := os.Stat(templatePath); err != nil {
