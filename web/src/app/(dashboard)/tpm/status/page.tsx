@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   RefreshCw,
   Shield,
@@ -163,6 +164,71 @@ export default function TPMStatusPage() {
     refetchIAKExists();
     refetchAttributes();
   }, [loadStatus, refetchEK, refetchSRK, refetchIAK, refetchIDevID, refetchIAKExists, refetchAttributes]);
+
+  // GenerateIAK / DeleteIAK: each call re-reads HasIAK and the IAK info
+  // afterwards, whether it was accepted or refused. The SDK does not throw;
+  // a refusal comes back as res.error.
+  const [iakBusy, setIakBusy] = React.useState(false);
+  const [confirmDeleteIAK, setConfirmDeleteIAK] = React.useState(false);
+
+  const rereadIAK = React.useCallback(() => {
+    refetchIAKExists();
+    refetchIAK();
+  }, [refetchIAKExists, refetchIAK]);
+
+  const generateIAK = React.useCallback(async () => {
+    setIakBusy(true);
+    try {
+      const res = await idevid.generateIAK();
+      if (res.error) {
+        toast({ title: "IAK generation failed", description: res.error.message, variant: "destructive" });
+      } else {
+        toast({ title: "IAK generated", description: res.data?.status?.message || "The IAK was created" });
+      }
+    } finally {
+      setIakBusy(false);
+      rereadIAK();
+    }
+  }, [idevid, toast, rereadIAK]);
+
+  const deleteIAK = React.useCallback(async () => {
+    setConfirmDeleteIAK(false);
+    setIakBusy(true);
+    try {
+      const res = await idevid.deleteIAK();
+      if (res.error) {
+        toast({ title: "IAK delete refused", description: res.error.message, variant: "destructive" });
+      } else {
+        toast({ title: "IAK deleted", description: res.data?.status?.message || "The IAK was deleted" });
+      }
+    } finally {
+      setIakBusy(false);
+      rereadIAK();
+    }
+  }, [idevid, toast, rereadIAK]);
+
+  // FlushTransientContexts: flushes every transient TPM context. The SDK does
+  // not throw; a refusal comes back as res.error.
+  const [flushBusy, setFlushBusy] = React.useState(false);
+  const [confirmFlush, setConfirmFlush] = React.useState(false);
+
+  const flushContexts = React.useCallback(async () => {
+    setConfirmFlush(false);
+    setFlushBusy(true);
+    try {
+      const res = await idevid.flushTransientContexts();
+      if (res.error) {
+        toast({ title: "Flush refused", description: res.error.message, variant: "destructive" });
+      } else {
+        toast({
+          title: "Transient contexts flushed",
+          description: res.data?.status?.message || "The transient contexts were flushed",
+        });
+      }
+    } finally {
+      setFlushBusy(false);
+    }
+  }, [idevid, toast]);
 
   // Helper to find capability by name
   const findCapability = (caps: TPMCapability[] | undefined, name: string) => {
@@ -461,6 +527,19 @@ export default function TPMStatusPage() {
                         {status.capabilities.hasOwner ? "Owner Set" : "No Owner"}
                       </Badge>
                     </div>
+                    <div className="flex flex-wrap gap-2 mt-2" data-testid="iak-actions">
+                      <Button size="sm" variant="outline" onClick={() => void generateIAK()} disabled={iakBusy}>
+                        Generate IAK
+                      </Button>
+                      <Button size="sm" variant="destructive" onClick={() => setConfirmDeleteIAK(true)} disabled={iakBusy}>
+                        Delete IAK
+                      </Button>
+                    </div>
+                    <div className="flex flex-wrap gap-2 mt-2" data-testid="tpm-maintenance">
+                      <Button size="sm" variant="outline" onClick={() => setConfirmFlush(true)} disabled={flushBusy}>
+                        Flush transient contexts
+                      </Button>
+                    </div>
                   </div>
 
                   <div>
@@ -528,6 +607,39 @@ export default function TPMStatusPage() {
               </CardContent>
             </Card>
           </div>
+
+          <Dialog open={confirmDeleteIAK} onOpenChange={setConfirmDeleteIAK}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Delete the IAK?</DialogTitle>
+                <DialogDescription>
+                  The IDevID service is asked to delete the Initial Attestation Key. The service may refuse: a TPM-resident IAK is not evicted by it.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setConfirmDeleteIAK(false)}>Cancel</Button>
+                <Button type="button" variant="destructive" onClick={() => void deleteIAK()}>Delete IAK</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+          <Dialog open={confirmFlush} onOpenChange={setConfirmFlush}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Flush the transient contexts?</DialogTitle>
+                <DialogDescription>
+                  Every transient object and session loaded in the TPM is flushed. Persistent keys are not touched.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setConfirmFlush(false)}>
+                  Cancel
+                </Button>
+                <Button type="button" onClick={() => void flushContexts()}>
+                  Flush
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </>
       )}
     </div>
