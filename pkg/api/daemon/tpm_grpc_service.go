@@ -592,7 +592,8 @@ func (s *TPMGRPCService) CreateAK(
 			Success: true,
 			Message: "AK created successfully",
 		},
-		Handle: uint32(iakAttrs.TPMAttributes.Handle),
+		Handle:    uint32(iakAttrs.TPMAttributes.Handle),
+		PublicKey: iakAttrs.TPMAttributes.PublicKeyBytes,
 	}, nil
 }
 
