@@ -58,7 +58,11 @@ type SDNService struct {
 	// applyMu serializes the switch writes of policy applies and deletes
 	// from the first flow-mod until the policy is recorded or the rollback
 	// has finished: a concurrent apply's rollback would otherwise remove an
-	// entry another apply installed but has not yet published.
+	// entry another apply installed but has not yet published. The raw
+	// flow writes (AddFlow, DeleteFlow, FlushFlows) take it too, so they
+	// never interleave with a policy apply or its rollback: policy flows
+	// carry no cookie, and a rollback would remove or overwrite a raw flow
+	// on the same match.
 	applyMu sync.Mutex
 	// strandedFlows holds, under applyMu, the entries a rollback failed to
 	// remove: they are on the switch but no policy owns them, so the next
@@ -576,6 +580,10 @@ func (s *SDNService) AddFlow(ctx context.Context, req *platformv1.AddFlowRequest
 	}
 	flowMod.Cookie = fmt.Sprintf("0x%x", cookie)
 
+	// Never between a policy apply's installs and its rollback (see applyMu).
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+
 	// Add flow via OVS without holding the lock
 	if err := client.AddFlow(ctx, bridgeName, flowMod); err != nil {
 		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to add flow: %v", err))
@@ -620,6 +628,10 @@ func (s *SDNService) DeleteFlow(ctx context.Context, req *platformv1.DeleteFlowR
 	}
 
 	client := s.getOVSClient()
+
+	// Never between a policy apply's installs and its rollback (see applyMu).
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
 
 	// Delete flow via OVS without holding the lock
 	if err := client.DeleteFlowsByCookie(ctx, bridgeName, cookie, ^uint64(0)); err != nil {
@@ -675,6 +687,10 @@ func (s *SDNService) FlushFlows(ctx context.Context, req *platformv1.FlushFlowsR
 	}
 
 	client := s.getOVSClient()
+
+	// Never between a policy apply's installs and its rollback (see applyMu).
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
 
 	// Get current flow count before deletion (without holding the lock)
 	flows, err := client.ListFlows(ctx, bridgeName)
