@@ -270,6 +270,7 @@ func TestBMCRoutes_ServedOnTheConsole(t *testing.T) {
 
 	none := &testHandlerRegistry{
 		tokenHandler: &allScopesSessionAuth{sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"}},
+		withoutBMC:   true,
 	}
 	assert.Equal(t, http.StatusNotFound, appServiceServing(t, none, target))
 }

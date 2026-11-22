@@ -103,14 +103,17 @@ type testHandlerRegistry struct {
 	// Services the route-authorization audit wires so their routers
 	// actually register. Left nil by the older tests, which only assert
 	// that a nil service is skipped.
-	platformRouter        *platform.PlatformRouter
-	computeService        platformv1.ComputeServiceServer
-	dnsService            dns.DNSService
-	dnsServer             platformv1.DNSServiceServer
-	eabService            platformv1.EABServiceServer
-	ntpService            platformv1.NTPServiceServer
-	vpnService            platformv1.VPNServiceServer
-	bmcHandler            bmcwebsvc.RestHandler
+	platformRouter *platform.PlatformRouter
+	computeService platformv1.ComputeServiceServer
+	dnsService     dns.DNSService
+	dnsServer      platformv1.DNSServiceServer
+	eabService     platformv1.EABServiceServer
+	ntpService     platformv1.NTPServiceServer
+	vpnService     platformv1.VPNServiceServer
+	bmcHandler     bmcwebsvc.RestHandler
+	// withoutBMC keeps bmcHandler nil in newGatedTestRouter, which
+	// otherwise stubs it so the route audits cover the BMC routes.
+	withoutBMC            bool
 	proxyService          platformv1.ProxyServiceServer
 	appServices           restapi.AppServiceServers
 	overlayService        platformv1.OverlayServiceServer

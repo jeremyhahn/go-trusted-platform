@@ -214,6 +214,7 @@ type Daemon struct {
 	mcpServer                    MCPServerInterface
 	mcpProvider                  *MCPServiceProvider
 	bmcGRPCService               *BMCGRPCService
+	bmcRestHandler               bmcwebsvc.RestHandler
 	switchGRPCService            *SwitchGRPCService
 	eabService                   EABServicer
 	eabGRPCService               *EABGRPCService
@@ -1894,8 +1895,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 		logger.Info("BMC gRPC service initialized and registered successfully")
 
-		// Wire BMC handler into REST server for bare metal management.
-		if daemon.concreteRestServer != nil {
+		// Build the BMC REST handler whenever the BMC service exists: the
+		// web console serves /api/v1/bmc through it (BMCRestHandler) even
+		// when the daemon REST listener is off, and the listener, when on,
+		// mounts the same handler.
+		{
 			respWriter := response.NewResponseWriter(logger, nil)
 			bmcParams := bmcwebsvc.HandlerParams{
 				BMCService:     bmcSvc,
@@ -1924,8 +1928,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 					)
 					logger.Info("BMC REST restorer wired")
 				}
-				daemon.concreteRestServer.SetBMCHandler(bmcHandler)
-				logger.Info("BMC management handler wired into REST server")
+				daemon.bmcRestHandler = bmcHandler
+				if daemon.concreteRestServer != nil {
+					daemon.concreteRestServer.SetBMCHandler(bmcHandler)
+					logger.Info("BMC management handler wired into REST server")
+				}
 			} else {
 				logger.Warn("BMC handler creation failed", "error", bmcHandlerErr)
 			}
@@ -3338,6 +3345,12 @@ func (d *Daemon) NTPGRPCServiceServer() *NTPGRPCService {
 // VPNGRPCServiceServer returns the VPN gRPC service backing /api/v1/vpn.
 func (d *Daemon) VPNGRPCServiceServer() *VPNGRPCService {
 	return d.vpnGRPCService
+}
+
+// BMCRestHandler returns the BMC REST handler backing /api/v1/bmc, or nil
+// when the daemon has no BMC service.
+func (d *Daemon) BMCRestHandler() bmcwebsvc.RestHandler {
+	return d.bmcRestHandler
 }
 
 // ProxyGRPCServiceServer returns the proxy gRPC service backing /api/v1/proxy.

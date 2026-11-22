@@ -46,6 +46,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/adminclaim"
+	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login"
@@ -812,6 +813,9 @@ type RestHandlerRegistry interface {
 	PXEWebhookEnabled() bool
 	NTPServiceServer() platformv1.NTPServiceServer
 	VPNServiceServer() platformv1.VPNServiceServer
+	// BMCRestHandler is the daemon's BMC REST handler behind /api/v1/bmc,
+	// or nil when the daemon has no BMC service.
+	BMCRestHandler() bmcwebsvc.RestHandler
 	ProxyServiceServer() platformv1.ProxyServiceServer
 	AppServiceServers() restapi.AppServiceServers
 	RegistryService() grpcapi.RegistryService
@@ -1042,6 +1046,9 @@ type RegistryParams struct {
 	PXEWebhookEnabled bool
 	NTPServiceServer  platformv1.NTPServiceServer
 	VPNServiceServer  platformv1.VPNServiceServer
+	// BMCRestHandler is the daemon's BMC REST handler, the one the daemon
+	// REST listener mounts; the console serves /api/v1/bmc through it.
+	BMCRestHandler bmcwebsvc.RestHandler
 	// AppServiceServers are the daemon's Cache, Scheduler, Messaging and
 	// ObjectStorage servers, the instances behind every other transport.
 	AppServiceServers restapi.AppServiceServers
@@ -2116,6 +2123,11 @@ func (registry *HandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer 
 // VPNServiceServer returns the in-process VPNService gRPC implementation, or nil.
 func (registry *HandlerRegistry) VPNServiceServer() platformv1.VPNServiceServer {
 	return registry.params.VPNServiceServer
+}
+
+// BMCRestHandler returns the daemon's BMC REST handler, or nil.
+func (registry *HandlerRegistry) BMCRestHandler() bmcwebsvc.RestHandler {
+	return registry.params.BMCRestHandler
 }
 
 // ProxyServiceServer returns the in-process ProxyService gRPC implementation, or nil.

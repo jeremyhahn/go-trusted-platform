@@ -27,6 +27,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -219,6 +220,7 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.overlayRoutes()
 	v1Router.ntpRoutes()
 	v1Router.vpnRoutes()
+	v1Router.bmcRoutes()
 	v1Router.proxyRoutes()
 	v1Router.appServiceRoutes()
 	v1Router.pxeRoutes()
@@ -877,6 +879,24 @@ func (v1Router *Router) vpnRoutes() {
 	// there: operator work behind the admin gate, then vpn:read, vpn:write
 	// or vpn:admin per route, as on gRPC, QUIC and MCP.
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+}
+
+// bmcRoutes mounts /api/v1/bmc over the daemon's BMC REST handler (#2039),
+// with the route table the daemon REST listener serves. Power, boot, media,
+// provisioning, certificate and user control of bare metal is operator work
+// behind the admin gate, then each route's bmc: scope, as on gRPC, QUIC and
+// MCP; without a scope authorizer every route answers 403.
+func (v1Router *Router) bmcRoutes() {
+	handler := v1Router.restHandlerRegistry.BMCRestHandler()
+	if handler == nil {
+		v1Router.logger.Debug("BMC REST handler is nil - BMC routes not registered")
+		return
+	}
+	guard := scopeRouteGuard{}
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		guard.authorizer = scoped
+	}
+	bmcwebsvc.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN), handler, guard)
 }
 
 // proxyRoutes mounts the ProxyService routes on /api/v1/proxy (#2061), the
