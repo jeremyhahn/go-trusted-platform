@@ -81,14 +81,14 @@ func TestTenantServiceHealthChecker_WithStub(t *testing.T) {
 }
 
 func TestSDNServiceHealthChecker_WithNilOVS(t *testing.T) {
-	t.Run("Check returns unhealthy when OVS client is nil", func(t *testing.T) {
+	t.Run("Check returns degraded when OVS client is nil", func(t *testing.T) {
 		svc := &SDNService{}
 		checker := NewSDNServiceHealthChecker(svc)
 
 		result := checker.Check(context.Background())
 
-		if result.Status != health.StatusUnhealthy {
-			t.Errorf("Status = %v, want StatusUnhealthy", result.Status)
+		if result.Status != health.StatusDegraded {
+			t.Errorf("Status = %v, want StatusDegraded", result.Status)
 		}
 
 		if result.Message != "OVS client not initialized" {

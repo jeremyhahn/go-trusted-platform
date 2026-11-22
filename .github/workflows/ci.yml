@@ -1,4 +1,4 @@
-# ci-template: v1.35.1 + v1.42 hermetic gate + v1.48 runner selection + v1.50 short-list fix (customized)
+# ci-template: v1.35.1 + v1.42 hermetic gate + v1.48 runner selection + v1.50 short-list fix + v1.51 reviewed + v1.52 fork check (customized)
 #
 # v1.42 hermetic gate only (owner ruling 742 (1), Tenant Agent rulings 754 and
 # 794): the CI Gate's outcome depends only on the tree under test. `make
@@ -30,6 +30,20 @@
 # short list is now a lower bound: at or past HOSTED_JOBS_PER_REPO, or with
 # a hosted job of another run queued past the grace in it, it overflows; a
 # short list that reaches neither trigger picks hosted with a ::warning.
+# v1.51 reviewed (handbook PR 86, c4de1f7d, DS-9791): v1.51 changes only
+# the v1.38 step `Runner labels (ruling 633)`, which also reads every runs-on
+# under pull_request_target. That step is not adopted here (v1.38 is on the
+# catch-up list above), so v1.51 has nothing to apply to this file; it is
+# adopted with the step. code-review.yml takes v5.12.8 and v5.12.9 in the same change.
+# v1.52 fork check (handbook PR 91, 263544734, DS-9861): a pull request whose
+# head repository is not this repository, a deleted fork included, runs every
+# job on ubuntu-latest. The selection step's fork check (CUSTOMIZE #2128,
+# which skipped an empty head repository) takes the template's form: on a
+# pull_request or pull_request_target event a head repository that is not
+# this one outputs the hosted default with a ::notice and no API call.
+# v1.52's preflight runs-on clause applies to v1.49's bigdisk runs-on, and
+# its Runner labels cases to the v1.38 step; neither is adopted here, since
+# preflight stays on ubuntu-latest, so neither has anything to apply to.
 # v1.35.1 (DS-8433, CA m2557): the Signatures job of handbook cd17d28
 # (ci-template v1.35.1) is adopted as is, in CI Gate's needs, env block and a
 # `pr` check line, with .github/allowed_signers synced from handbook
@@ -398,6 +412,7 @@ jobs:
         id: runner
         env:
           SERVER: ${{ github.server_url }}
+          EVENT: ${{ github.event_name }}
           API: ${{ github.api_url }}/repos/${{ github.repository }}/actions
           RUN_ID: ${{ github.run_id }}
           JOB_TOKEN: ${{ github.token }}
@@ -424,11 +439,16 @@ jobs:
             emit "$HOSTED" "$HOSTED"
             exit 0
           fi
-          if [ -n "$HEAD_REPO" ] && [ "$HEAD_REPO" != "$REPO" ]; then
-            echo "a pull request from a fork: every job takes the GitHub-hosted default, ubuntu-latest; no selection"
-            emit "$HOSTED" "$HOSTED"
-            exit 0
-          fi
+          # v1.52: a fork's pull request (a deleted fork too, whose head
+          # repository reads empty) runs every job on GitHub-hosted runners.
+          case "$EVENT" in
+            pull_request|pull_request_target)
+              if [ "$HEAD_REPO" != "$REPO" ]; then
+                echo "::notice::runner selection: this pull request's head repository is not this repository (a fork); every job of this run takes the GitHub-hosted default, ubuntu-latest, and none reaches a self-hosted runner (ci-template v1.52)"
+                emit "$HOSTED" "$HOSTED"
+                exit 0
+              fi ;;
+          esac
           case "$LIMIT:$GRACE" in
             *[!0-9:]*|:*|*:) hosted "HOSTED_JOBS_PER_REPO='$LIMIT' or HOSTED_QUEUE_GRACE_SECONDS='$GRACE' is not a whole number" ;;
           esac
@@ -652,6 +672,11 @@ jobs:
             echo "$hits"; exit 1
           fi
           echo "OK: no go-objstore import outside the storage seam"
+      - name: The code-review template's v5.12.10, v5.12.11 and v5.12.12 tests
+        run: |
+          python3 -I testdata/code-review-v51210-tests.py .github/workflows/code-review.yml
+          python3 -I testdata/code-review-v51211-tests.py .github/workflows/code-review.yml
+          python3 -I testdata/code-review-v51212-tests.py .github/workflows/code-review.yml
 
   # v1.30 (fix 1, parallel jobs; fix 5, gosec on the PR tier): the
   # lint-class stages, moved from the image job, in a job of their own that
@@ -1362,6 +1387,61 @@ jobs:
         run: |
           scripts/ci-go-integrity.sh
           make web-build-check
+
+  # Real-server Playwright specs (#2034, epic #1665, ruling 1031): builds the
+  # tpm_simulator platformd with the console embedded and runs
+  # web/playwright.real-server.config.ts against it. Hosted (ruling 999): the
+  # job installs chromium itself, which the pool image does not carry.
+  web-e2e:
+    name: Web Console E2E
+    runs-on: ubuntu-latest
+    if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
+    needs: preflight
+    timeout-minutes: 30
+    env:
+      GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          cache: ${{ runner.environment != 'self-hosted' }}
+          go-version: ${{ env.GO_VERSION }}
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
+      # The tpm_simulator build compiles the reference TPM with cgo against
+      # OpenSSL (#149), as in the race job.
+      - name: Install cpio and the OpenSSL headers
+        if: runner.environment == 'github-hosted'
+        run: sudo apt-get update && sudo apt-get install -y cpio libssl-dev
+
+      - name: Install from lockfiles and build the SDK the console consumes
+        run: |
+          scripts/ci-go-integrity.sh
+          make web-deps
+
+      - name: Install the Playwright chromium
+        run: cd web && npx playwright install --with-deps chromium
+
+      - name: Real-server Playwright specs
+        run: |
+          scripts/ci-go-integrity.sh
+          make web-e2e WEB_E2E_BUILD=1
+
+      - name: Upload the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: web-e2e-playwright
+          path: |
+            web/playwright-report
+            web/test-results
+          if-no-files-found: ignore
 
   # One integration image per run for every leg (#1119). Each leg used to build
   # it itself: five `docker buildx build --load` runs of 6.5 to 7.3 minutes on
@@ -2337,7 +2417,7 @@ jobs:
     # skipped job as `skipped`, not `success`), never a green nightly. Every
     # other verdict, an empty one included, runs it.
     if: ${{ always() && (github.event_name != 'schedule' || needs.preflight.outputs.verdict != 'busy') }}
-    needs: [preflight, lint, image, lint-gates, sdkjs, race, web, integration-image, integration, soak, fips, signatures]   # v1.34, v1.30 lint, v1.35 signatures, v1.42 no vuln
+    needs: [preflight, lint, image, lint-gates, sdkjs, race, web, web-e2e, integration-image, integration, soak, fips, signatures]   # v1.34, v1.30 lint, v1.35 signatures, v1.42 no vuln
     steps:
       - name: Verify every job succeeded
         env:
@@ -2361,6 +2441,7 @@ jobs:
           RESULT_SDK_JS: ${{ needs.sdkjs.result }}
           RESULT_RACE: ${{ needs.race.result }}
           RESULT_WEB: ${{ needs.web.result }}
+          RESULT_WEB_E2E: ${{ needs.web-e2e.result }}
           RESULT_INTEGRATION_IMAGE: ${{ needs.integration-image.result }}
           RESULT_INTEGRATION: ${{ needs.integration.result }}
           RESULT_SOAK: ${{ needs.soak.result }}
@@ -2430,6 +2511,7 @@ jobs:
           check docs sdkjs "$RESULT_SDK_JS"
           check docs race "$RESULT_RACE"
           check full web "$RESULT_WEB"
+          check full web-e2e "$RESULT_WEB_E2E"
           check full integration-image "$RESULT_INTEGRATION_IMAGE"
           check full integration "$RESULT_INTEGRATION"
           check nightly soak "$RESULT_SOAK"
