@@ -24,23 +24,10 @@ describe('useIDevIDCerts', () => {
     vi.unstubAllGlobals();
   });
 
-  it('creates an IAK CSR with and without a common name', async () => {
-    const sent = stubControlPlane({
-      'POST /api/v1/idevid/iak/csr': ok({
-        status: { success: true, message: 'ok' },
-        csrPem: pemToBase64('-----BEGIN CERTIFICATE REQUEST-----\nMIIC\n-----END CERTIFICATE REQUEST-----'),
-      }),
-    });
+  it('exposes no IAK CSR call while the server cannot produce one', () => {
+    stubControlPlane({});
     const { result } = renderCerts();
-    let res: Awaited<ReturnType<typeof result.current.createIAKCSR>> | undefined;
-    await act(async () => {
-      res = await result.current.createIAKCSR(' dev-1 ');
-    });
-    await act(async () => {
-      res = await result.current.createIAKCSR();
-    });
-    expect(sent.map((s) => s.body)).toEqual([{ template: { commonName: 'dev-1' } }, {}]);
-    expect(looksLikePem(base64ToPem(res?.data?.csrPem), 'CERTIFICATE REQUEST')).toBe(true);
+    expect('createIAKCSR' in result.current).toBe(false);
   });
 
   it('installs the IDevID certificate as base64', async () => {

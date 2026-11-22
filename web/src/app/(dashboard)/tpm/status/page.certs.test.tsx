@@ -4,10 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ok, refused, stubControlPlane, withControlPlane, type Answer } from "@/test/control-plane-fetch";
 import TPMStatusPage from "./page";
 
-// #2055: the TPM status page creates the IAK CSR, installs the IDevID and IAK
-// certificates and, after a confirm, deletes the IAK certificate through the
-// IDevID service (useIDevIDCerts), over a stubbed fetch, and shows the answer
-// or the refusal.
+// #2055: the TPM status page installs the IDevID and IAK certificates and,
+// after a confirm, deletes the IAK certificate through the IDevID service
+// (useIDevIDCerts), over a stubbed fetch, and shows the answer or the refusal.
+// It offers no IAK CSR control until the server returns a usable CSR.
 
 const tpmInfo = {
   version: "TPM_VERSION_2_0",
@@ -21,7 +21,6 @@ const tpmInfo = {
   nvIndexes: [],
 };
 
-const CSR_PEM = "-----BEGIN CERTIFICATE REQUEST-----\nMIIB\n-----END CERTIFICATE REQUEST-----";
 const CERT_PEM = "-----BEGIN CERTIFICATE-----\nMIIC\n-----END CERTIFICATE-----";
 
 const toasts = () => screen.queryAllByTestId("toast").map((t) => t.textContent);
@@ -32,29 +31,18 @@ describe("TPMStatusPage identity certificates (#2055)", () => {
     vi.unstubAllGlobals();
   });
 
-  it("creates an IAK CSR and shows the PEM", async () => {
+  it("offers no IAK CSR control while the server cannot produce a CSR", async () => {
     const routes: Record<string, Answer> = {
       "GET /api/v1/tpm/info": ok(tpmInfo),
-      "POST /api/v1/idevid/iak/csr": ok({
-        status: { success: true, message: "csr created" },
-        csrPem: btoa(CSR_PEM),
-      }),
     };
     const sent = stubControlPlane(routes);
 
     render(withControlPlane(<TPMStatusPage />));
 
-    fireEvent.change(await screen.findByLabelText("IAK CSR common name"), { target: { value: "dev-1" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create IAK CSR" }));
-
-    await waitFor(() =>
-      expect(sent).toContainEqual({
-        method: "POST",
-        path: "/api/v1/idevid/iak/csr",
-        body: { template: { commonName: "dev-1" } },
-      })
-    );
-    expect((await screen.findByTestId("iak-csr-pem")).textContent).toBe(CSR_PEM);
+    await screen.findByTestId("identity-certificates");
+    expect(screen.queryByRole("button", { name: "Create IAK CSR" })).toBeNull();
+    expect(screen.queryByLabelText("IAK CSR common name")).toBeNull();
+    expect(sent.some((s) => s.path === "/api/v1/idevid/iak/csr")).toBe(false);
   });
 
   it("installs the IDevID certificate from the pasted PEM", async () => {
