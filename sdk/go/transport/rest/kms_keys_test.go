@@ -262,3 +262,30 @@ func TestKMSGenerateKey_UnknownAlgorithmNameAndMalformedReply(t *testing.T) {
 		t.Fatalf("err = %v, want ErrUnmarshalFailed", err)
 	}
 }
+
+// TestKMSListKeys_PopulatedRouterReplyDecodes pins that the KMS router's
+// ListKeys reply, with a string algorithm and an RFC 3339 created_at, decodes
+// into ListKeysResponse with its pagination fields.
+func TestKMSListKeys_PopulatedRouterReplyDecodes(t *testing.T) {
+	a, _ := kmsAdapter(t, `{"keys":[{"key_id":"k1","version":2,"algorithm":"ECDSA-P256","created_at":"2026-01-02T03:04:05Z"}],"next_cursor":"c2","has_more":true,"total_count":3}`)
+	resp := &platformv1.ListKeysResponse{}
+	err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_ListKeys_FullMethodName,
+		&platformv1.ListKeysRequest{}, resp)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	keys := resp.GetKeys()
+	if len(keys) != 1 {
+		t.Fatalf("keys = %v", keys)
+	}
+	created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC).Unix()
+	key := keys[0]
+	if key.GetKeyId() != "k1" || key.GetVersion() != 2 ||
+		key.GetAlgorithm() != platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256 ||
+		key.GetCreatedAt() != created {
+		t.Fatalf("key = %v", key)
+	}
+	if resp.GetNextCursor() != "c2" || !resp.GetHasMore() || resp.GetTotalCount() != 3 {
+		t.Fatalf("pagination = %q %v %d", resp.GetNextCursor(), resp.GetHasMore(), resp.GetTotalCount())
+	}
+}
