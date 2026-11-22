@@ -1,6 +1,6 @@
 # Go SDK — Architecture
 
-> **Status: NORMATIVE** · Scope: the `sdk/go` module · Last verified: 2026-10-13
+> **Status: NORMATIVE** · Scope: the `sdk/go` module · Last verified: 2026-11-22
 > Conflicts with this document are defects. Fix them here first.
 
 ---
@@ -22,7 +22,7 @@ The SDK owns three things:
 | Service clients and domain wrappers | `sdk/go/gen` (package `platformv1`), `sdk/go/services/*` |
 
 It also carries connection credentials (`sdk/go/auth`) and a typed frontage
-over the go-quicbaas SDK (`sdk/go/services/quicbaas`, `sdk/go/services/auth`,
+over the go-quicbaas SDK, bounded by the re-export manifest (§5.1) (`sdk/go/services/quicbaas`, `sdk/go/services/auth`,
 `sdk/go/services/orchestration`, `sdk/go/services/{orchestrator,project,account,sdlc}`
 and `sdk/go/services/{cache,vector,timeseries,objectstorage,scheduler,messaging}`).
 
@@ -160,6 +160,31 @@ on REST, gRPC, QUIC, MCP and the Unix socket ([api.md §3.5](api.md#35-applicati
 `ObjectStorage()`, and platformctl has a group for each ([cli.md](cli.md)).
 Vector and time-series stay side-client routes.
 
+### 5.1 The re-export manifest (ruling 1158)
+
+The platform does not re-export the whole go-quicbaas SDK. A re-export
+manifest places every go-quicbaas service in one of three tiers, and an
+architecture test enforces it:
+
+| Tier | go-quicbaas services | In `sdk/go` |
+|---|---|---|
+| Re-exported | The database services (KV, batch, transactions, query, time series, cache, backup, cluster, vectors, RAG), object storage, identity, KMS and crypto, secrets, CA and trust, attestation, barrier, audit, messaging, scheduler, service registry, and projects with provider accounts | Re-exported under their own names |
+| Internal only | Orchestrator, agent catalog, fleet runtime, prompts | Never re-exported; used only to build the platform's own agents |
+| Excluded | The SDLC module and the software factory | Never re-exported and never used |
+
+The placement of the embedding and model-serving services is open with the
+owner; the manifest places them in no tier.
+
+The platform's own agentic features (trusted computing, provisioning, and
+infrastructure: fleet monitoring, upgrades) are an infrastructure operations
+profile in this repository (SPEC row `platform-agents`), on the go-quicbaas
+engine's profile seam. The layers below go-quicbaas keep re-exporting
+everything ([00 L5](../../../handbook/software/docs/00-ownership-and-sdk-boundary.md#l5-every-layer-re-exports-every-lower-service)).
+
+The manifest and its architecture test are not in code yet (SPEC row `sdk`).
+Until they land, `sdk/go/services/orchestrator` re-exports an internal-only
+service and `sdk/go/services/sdlc` an excluded one.
+
 ## 6. Invariants
 
 1. One API on every transport. A capability reachable on one transport is
@@ -180,6 +205,8 @@ Vector and time-series stay side-client routes.
 5. The SDK imports go-quicbaas only through `go-quicbaas/sdk/go`. It never
    imports go-xkms, go-qrdb, go-quicraft or go-truststrap
    (`pkg/arch/layerguard_test.go`).
+6. `sdk/go` re-exports only the re-exported tier of the manifest (§5.1);
+   the architecture test fails on any other go-quicbaas re-export.
 
 ## 7. Related
 
