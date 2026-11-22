@@ -36,7 +36,10 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -165,9 +168,52 @@ func newTestRouter(server platformv1.ProxyServiceServer) *Router {
 // behind an authorizer that grants every scope; the scope checks are covered
 // by the grantingAuthorizer tests and the no-authorizer test.
 func mountRouter(server platformv1.ProxyServiceServer) *mux.Router {
+	return mountGuardedRouter(server, systemAdminSession())
+}
+
+// testSystemTenant is the system tenant the guarded test routers require.
+const testSystemTenant = "system"
+
+// systemAdminSession is an admin of the system tenant: it passes the tenant
+// guard, so a test built on it measures the proxy scopes only.
+func systemAdminSession() iammw.IAMSession {
+	return iammw.NewIAMSession(&iamsdk.User{
+		ID: "u1", TenantID: testSystemTenant, Roles: []string{"admin"}})
+}
+
+// tenantAdminSession is an admin of the "acme" tenant, not the system one.
+func tenantAdminSession() iammw.IAMSession {
+	return iammw.NewIAMSession(&iamsdk.User{
+		ID: "u2", TenantID: "acme", Roles: []string{"admin"}})
+}
+
+// systemTenantGuard is the real session guard's RequireTenant(system).
+func systemTenantGuard() func(http.Handler) http.Handler {
+	guard, err := iammw.NewSessionGuard(newTestLogger(), response.NewResponseWriter(newTestLogger(), nil))
+	if err != nil {
+		panic(err)
+	}
+	return guard.RequireTenant(testSystemTenant)
+}
+
+// injectSession publishes session on every request, standing in for the
+// authentication middleware that verifies a token.
+func injectSession(session iammw.IAMSession) mux.MiddlewareFunc {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(iammw.SetSessionInContext(r.Context(), session)))
+		})
+	}
+}
+
+// mountGuardedRouter mounts the proxy routes behind a scope authorizer that
+// grants every scope and the system-tenant guard, with session on every request.
+func mountGuardedRouter(server platformv1.ProxyServiceServer, session iammw.IAMSession) *mux.Router {
 	proxyRouter := newTestRouter(server)
 	proxyRouter.SetScopeAuthorizer(allowAllAuthorizer{})
+	proxyRouter.SetSystemTenantGuard(systemTenantGuard())
 	router := mux.NewRouter()
+	router.Use(injectSession(session))
 	proxyRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 	return router
 }
@@ -334,7 +380,9 @@ func TestProxyRouterRequiresProxyRead(t *testing.T) {
 			server := &recordingServer{}
 			proxyRouter := newTestRouter(server)
 			proxyRouter.SetScopeAuthorizer(grantingAuthorizer{granted: granted})
+			proxyRouter.SetSystemTenantGuard(systemTenantGuard())
 			router := mux.NewRouter()
+			router.Use(injectSession(systemAdminSession()))
 			proxyRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 			rec := serve(router, http.MethodGet, probe.path)
@@ -502,7 +550,9 @@ func TestProxyRouterRequiresEachWriteScope(t *testing.T) {
 			server := &recordingServer{}
 			proxyRouter := newTestRouter(server)
 			proxyRouter.SetScopeAuthorizer(grantingAuthorizer{granted: granted})
+			proxyRouter.SetSystemTenantGuard(systemTenantGuard())
 			router := mux.NewRouter()
+			router.Use(injectSession(systemAdminSession()))
 			proxyRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
 			rec := serveBody(router, probe.verb, probe.path, probe.body)
@@ -630,6 +680,72 @@ func TestProxyRouterPassesEncodedSlashIDs(t *testing.T) {
 		}
 		if !proto.Equal(server.last, tc.want) {
 			t.Errorf("%s: service got %v, want %v", tc.path, server.last, tc.want)
+		}
+	}
+}
+
+// proxyRouteCase is one verb and path RegisterRoutes mounts, with the code
+// a caller that may reach the handler gets from the recording server.
+type proxyRouteCase struct {
+	name, verb, path, body string
+	code                   int
+}
+
+func everyProxyRoute() []proxyRouteCase {
+	routes := make([]proxyRouteCase, 0, len(proxyProbes)+len(proxyWriteProbes))
+	for _, probe := range proxyProbes {
+		routes = append(routes, proxyRouteCase{
+			name: probe.name, verb: http.MethodGet, path: probe.path, code: http.StatusOK})
+	}
+	for _, probe := range proxyWriteProbes {
+		routes = append(routes, proxyRouteCase{
+			name: probe.name, verb: probe.verb, path: probe.path, body: probe.body, code: probe.code})
+	}
+	return routes
+}
+
+// TestProxyRouterRefusesANonSystemTenantAdmin is the #2157 Codex finding:
+// the proxy configuration is one platform-wide store, so a tenant admin
+// holding every proxy scope must still be refused unless it is in the
+// system tenant.
+func TestProxyRouterRefusesANonSystemTenantAdmin(t *testing.T) {
+	routes := everyProxyRoute()
+	if len(routes) != 14 {
+		t.Fatalf("proxy routes = %d, want 14", len(routes))
+	}
+	for _, route := range routes {
+		server := &recordingServer{}
+		rec := serveBody(mountGuardedRouter(server, tenantAdminSession()), route.verb, route.path, route.body)
+		if rec.Code != http.StatusForbidden || server.calls != 0 {
+			t.Errorf("%s as an acme admin: code = %d, calls = %d; want 403 and no call",
+				route.name, rec.Code, server.calls)
+		}
+
+		server = &recordingServer{}
+		rec = serveBody(mountGuardedRouter(server, systemAdminSession()), route.verb, route.path, route.body)
+		if rec.Code != route.code || server.calls != 1 {
+			t.Errorf("%s as a system admin: code = %d, calls = %d; want %d and one call",
+				route.name, rec.Code, server.calls, route.code)
+		}
+	}
+}
+
+// TestProxyRouterRefusesEveryRouteWithoutASystemTenantGuard proves the
+// router fails closed when it is mounted without the tenant guard, as it
+// does without a scope authorizer.
+func TestProxyRouterRefusesEveryRouteWithoutASystemTenantGuard(t *testing.T) {
+	for _, route := range everyProxyRoute() {
+		server := &recordingServer{}
+		proxyRouter := newTestRouter(server)
+		proxyRouter.SetScopeAuthorizer(allowAllAuthorizer{})
+		router := mux.NewRouter()
+		router.Use(injectSession(systemAdminSession()))
+		proxyRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
+
+		rec := serveBody(router, route.verb, route.path, route.body)
+		if rec.Code != http.StatusForbidden || server.calls != 0 {
+			t.Errorf("%s without a tenant guard: code = %d, calls = %d; want 403 and no call",
+				route.name, rec.Code, server.calls)
 		}
 	}
 }
