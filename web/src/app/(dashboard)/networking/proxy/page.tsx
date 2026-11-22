@@ -24,6 +24,8 @@ import {
 } from "@/components/ui/dialog";
 import { useApi, useToast } from "@/hooks";
 import { proxyRouteMatch, useProxy } from "@/hooks/use-proxy";
+import { useCapabilities } from "@/hooks/use-capabilities";
+import { Gated } from "@/components/features/capabilities/gated";
 import {
   ProxyRouteDialog,
   proxyRouteFromForm,
@@ -31,7 +33,7 @@ import {
   type ProxyRouteFormValues,
 } from "./proxy-route-dialog";
 
-const EMPTY_FORM: ProxyRouteFormValues = { id: "", hosts: "", pathPrefix: "", poolId: "" };
+const EMPTY_FORM: ProxyRouteFormValues = { id: "", hosts: "", pathPrefix: "", poolId: "", authMode: "" };
 
 type Editor =
   | { mode: "create"; initial: ProxyRouteFormValues }
@@ -51,8 +53,14 @@ function formatUpdated(updatedAt: string | undefined): string {
 export default function ProxyRoutesPage() {
   const proxy = useProxy();
   const { toast } = useToast();
-  const status = useApi(() => proxy.getStatus(), [proxy]);
-  const routes = useApi(() => proxy.listRoutes(), [proxy]);
+  const { loading: capsLoading, capability } = useCapabilities();
+  const status = useApi(() => proxy.getStatus(), [proxy], {
+    enabled: !capsLoading && capability("GET /api/v1/proxy/status").enabled,
+  });
+  const routesCap = capability("GET /api/v1/proxy/routes");
+  const routes = useApi(() => proxy.listRoutes(), [proxy], {
+    enabled: !capsLoading && routesCap.enabled,
+  });
 
   const [editor, setEditor] = React.useState<Editor | null>(null);
   const [pendingDelete, setPendingDelete] = React.useState<string | null>(null);
@@ -120,24 +128,41 @@ export default function ProxyRoutesPage() {
         title="Proxy routes"
         description="Reverse-proxy routes and configuration status"
       >
-        <Button variant="outline" size="sm" onClick={refresh} disabled={routes.isFetching}>
-          <RefreshCw className="h-4 w-4 mr-2" />
-          Refresh
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void write("Config reloaded", () => proxy.reloadConfig())}
-          disabled={busy}
-        >
-          <RotateCw className="h-4 w-4 mr-2" />
-          Reload config
-        </Button>
-        <Button size="sm" onClick={() => setEditor({ mode: "create", initial: EMPTY_FORM })}>
-          <Plus className="h-4 w-4 mr-2" />
-          New route
-        </Button>
+        <Gated op="GET /api/v1/proxy/routes">
+          <Button variant="outline" size="sm" onClick={refresh} disabled={routes.isFetching}>
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Refresh
+          </Button>
+        </Gated>
+        <Gated op="POST /api/v1/proxy/reload">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void write("Config reloaded", () => proxy.reloadConfig())}
+            disabled={busy}
+          >
+            <RotateCw className="h-4 w-4 mr-2" />
+            Reload config
+          </Button>
+        </Gated>
+        <Gated op="POST /api/v1/proxy/routes">
+          <Button size="sm" onClick={() => setEditor({ mode: "create", initial: EMPTY_FORM })}>
+            <Plus className="h-4 w-4 mr-2" />
+            New route
+          </Button>
+        </Gated>
       </PageHeader>
+
+      {!capsLoading && !routesCap.enabled ? (
+        <Card data-testid="proxy-not-enabled">
+          <CardHeader>
+            <CardTitle>The proxy is not enabled on this server</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">{routesCap.reason}</p>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card data-testid="proxy-status">
         <CardHeader>
@@ -197,22 +222,26 @@ export default function ProxyRoutesPage() {
                       <TableCell className="font-mono">{r.poolId}</TableCell>
                       <TableCell>{r.auth?.mode || "-"}</TableCell>
                       <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label={`Edit ${id}`}
-                          onClick={() => void onEdit(id)}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label={`Delete ${id}`}
-                          onClick={() => setPendingDelete(id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                        <Gated op="PUT /api/v1/proxy/routes/{id}">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label={`Edit ${id}`}
+                            onClick={() => void onEdit(id)}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                        </Gated>
+                        <Gated op="DELETE /api/v1/proxy/routes/{id}">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label={`Delete ${id}`}
+                            onClick={() => setPendingDelete(id)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </Gated>
                       </TableCell>
                     </TableRow>
                   );

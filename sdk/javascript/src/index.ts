@@ -149,6 +149,8 @@ export type {
   StepNTPClockResponse,
 } from './services/ntp-service.js';
 
+export type { Capability, CapabilitiesResponse } from './services/capabilities-service.js';
+
 export type {
   ProxyAuthRequirements,
   ProxyRoute,

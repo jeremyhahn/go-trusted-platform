@@ -18,7 +18,11 @@ export interface ProxyRouteFormValues {
   hosts: string;
   pathPrefix: string;
   poolId: string;
+  authMode: string;
 }
+
+/** The route auth modes the proxy config accepts (pkg/proxy/config.go). */
+export const PROXY_AUTH_MODES = ["public", "mtls", "token", "mtls-or-token"] as const;
 
 /** "a.example, b.example" -> ["a.example", "b.example"]; trims, drops empty entries. */
 export function parseProxyHosts(s: string): string[] {
@@ -35,13 +39,15 @@ export function proxyRouteToForm(route: ProxyRoute): ProxyRouteFormValues {
     hosts: (route.hosts ?? []).join(", "),
     pathPrefix: route.pathPrefix ?? "",
     poolId: route.poolId ?? "",
+    authMode: route.auth?.mode ?? "",
   };
 }
 
 /**
  * The route to send: base (the fetched route on edit, {} on create) with id,
- * hosts, pathPrefix and poolId from the form; id, pathPrefix and poolId
- * trimmed. Other fields of base (auth, stripPrefix, ...) are kept.
+ * hosts, pathPrefix, poolId and auth.mode from the form; id, pathPrefix,
+ * poolId and the mode trimmed. Other fields of base (the rest of auth,
+ * stripPrefix, ...) are kept.
  */
 export function proxyRouteFromForm(
   values: ProxyRouteFormValues,
@@ -53,6 +59,7 @@ export function proxyRouteFromForm(
     hosts: parseProxyHosts(values.hosts),
     pathPrefix: values.pathPrefix.trim(),
     poolId: values.poolId.trim(),
+    auth: { ...base.auth, mode: values.authMode.trim() },
   };
 }
 
@@ -74,10 +81,16 @@ export function ProxyRouteDialog(props: {
 
   const set =
     (field: keyof ProxyRouteFormValues) =>
-    (e: React.ChangeEvent<HTMLInputElement>) =>
+    (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
       setValues((v) => ({ ...v, [field]: e.target.value }));
 
-  const blank = values.id.trim() === "" || values.poolId.trim() === "";
+  // The store's Config.Validate refuses a route without an auth mode or with
+  // a path prefix that does not start with "/" (pkg/proxy/config.go).
+  const blank =
+    values.id.trim() === "" ||
+    values.poolId.trim() === "" ||
+    values.authMode === "" ||
+    !values.pathPrefix.trim().startsWith("/");
 
   return (
     <Dialog
@@ -116,6 +129,19 @@ export function ProxyRouteDialog(props: {
             value={values.poolId}
             onChange={set("poolId")}
           />
+          <select
+            aria-label="Auth mode"
+            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+            value={values.authMode}
+            onChange={set("authMode")}
+          >
+            <option value="">Auth mode</option>
+            {PROXY_AUTH_MODES.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onCancel} disabled={saving}>
