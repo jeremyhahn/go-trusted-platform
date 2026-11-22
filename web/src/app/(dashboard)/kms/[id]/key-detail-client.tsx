@@ -73,7 +73,7 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
     [id]
   );
 
-  const { data: versionsResponse, error: versionsError } = useApi(
+  const { data: versionsResponse, error: versionsError, refetch: refetchVersions } = useApi(
     () => kms.getKeyVersions({ keyId: id }),
     [id]
   );
@@ -133,19 +133,28 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
     };
   }, [response, versionsResponse]);
 
-  const deleteMutation = useMutation(
-    (keyId: string) => kms.deleteKey({ keyId }),
+  // Enable or disable the key, or one of its versions, through UpdateKeyStatus
+  // (PUT /kms/keys/{name}/status, #2057).
+  const statusMutation = useMutation(
+    (req: { status: 'ENABLED' | 'DISABLED'; version?: number }) =>
+      kms.updateKeyStatus({ keyId: id, ...req }),
     {
-      onSuccess: () => {
+      onSuccess: (_data, req) => {
+        const word = req.status === 'DISABLED' ? "disabled" : "enabled";
+        const name = keyDetail?.name ?? id;
         toast({
-          title: "Success",
-          description: "Key disabled successfully",
+          title: "Key status updated",
+          description:
+            req.version !== undefined
+              ? `Version ${req.version} of key "${name}" is now ${word}`
+              : `Key "${name}" is now ${word}`,
         });
         refetch();
+        refetchVersions();
       },
       onError: (error) => {
         toast({
-          title: "Error",
+          title: "Key status change refused",
           description: error.message,
           variant: "destructive",
         });
@@ -169,7 +178,26 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
       return;
     }
 
-    deleteMutation.mutate(id);
+    statusMutation.mutate({ status: 'DISABLED' });
+  };
+
+  const handleEnable = async () => {
+    if (!keyDetail || !confirm(`Enable key "${keyDetail.name}"?`)) {
+      return;
+    }
+
+    statusMutation.mutate({ status: 'ENABLED' });
+  };
+
+  const handleVersionStatus = async (version: number, status: 'ENABLED' | 'DISABLED') => {
+    if (
+      !keyDetail ||
+      !confirm(`${status === 'DISABLED' ? 'Disable' : 'Enable'} version ${version} of key "${keyDetail.name}"?`)
+    ) {
+      return;
+    }
+
+    statusMutation.mutate({ status, version });
   };
 
   const handleEncrypt = async (plaintext: string): Promise<string> => {
@@ -274,6 +302,11 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
               </Button>
             </>
           )}
+          {keyDetail.status === "disabled" && (
+            <Button variant="outline" size="sm" onClick={handleEnable} disabled={statusMutation.isLoading}>
+              Enable
+            </Button>
+          )}
         </div>
       </div>
 
@@ -366,6 +399,7 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
                     <TableHead>Version</TableHead>
                     <TableHead>Created At</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -381,6 +415,19 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
                         >
                           {version.status}
                         </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          aria-label={`${version.status === "active" ? "Disable" : "Enable"} version ${version.version}`}
+                          disabled={statusMutation.isLoading}
+                          onClick={() =>
+                            handleVersionStatus(version.version, version.status === "active" ? 'DISABLED' : 'ENABLED')
+                          }
+                        >
+                          {version.status === "active" ? "Disable" : "Enable"}
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))}
