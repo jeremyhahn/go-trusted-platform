@@ -57,6 +57,17 @@ func pemOf(certs ...[]byte) []byte {
 	return out
 }
 
+// onePEMCert requires b to hold exactly one PEM CERTIFICATE block and nothing
+// else, the only shape openssl rehash trusts, and returns its DER.
+func onePEMCert(t *testing.T, b []byte) []byte {
+	t.Helper()
+	block, rest := pem.Decode(b)
+	require.NotNil(t, block, "no PEM block")
+	require.Equal(t, "CERTIFICATE", block.Type)
+	require.Empty(t, rest, "more than one PEM block")
+	return block.Bytes
+}
+
 // recordingInitializer counts its calls and returns ca, err.
 type recordingInitializer struct {
 	calls int
@@ -193,16 +204,24 @@ func TestCAGRPCService_InstallCACertificates(t *testing.T) {
 	})
 
 	t.Run("with intermediates", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "ca.crt")
+		dir := t.TempDir()
+		path := filepath.Join(dir, "ca.crt")
+		interPath := filepath.Join(dir, "ca-intermediate-1.crt")
 		svc := NewCAGRPCService(nil, ca, nil).WithTrustInstallPath(path)
 
 		resp, err := svc.InstallCACertificates(context.Background(),
 			&platformv1.InstallCACertificatesRequest{IncludeIntermediates: true})
 		require.NoError(t, err)
 		assert.Equal(t, int32(2), resp.CertificatesInstalled)
+		assert.Equal(t, path, resp.InstallPath)
 		written, err := os.ReadFile(path)
 		require.NoError(t, err)
-		assert.Equal(t, pemOf(ca.trustedRoot.Raw, ca.trustedInter.Raw), written)
+		assert.Equal(t, pemOf(ca.trustedRoot.Raw), written)
+		assert.Equal(t, ca.trustedRoot.Raw, onePEMCert(t, written))
+		writtenInter, err := os.ReadFile(interPath)
+		require.NoError(t, err)
+		assert.Equal(t, pemOf(ca.trustedInter.Raw), writtenInter)
+		assert.Equal(t, ca.trustedInter.Raw, onePEMCert(t, writtenInter))
 
 		resp, err = svc.InstallCACertificates(context.Background(),
 			&platformv1.InstallCACertificatesRequest{IncludeIntermediates: true})
@@ -235,7 +254,10 @@ func TestCAGRPCService_UninstallCACertificates(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, resp.Status.Success)
 		assert.Equal(t, inst.CertificatesInstalled, resp.CertificatesRemoved)
+		assert.Equal(t, int32(2), resp.CertificatesRemoved)
 		_, statErr := os.Stat(path)
+		assert.True(t, os.IsNotExist(statErr))
+		_, statErr = os.Stat(filepath.Join(filepath.Dir(path), "ca-intermediate-1.crt"))
 		assert.True(t, os.IsNotExist(statErr))
 
 		resp, err = svc.UninstallCACertificates(context.Background(), &platformv1.UninstallCACertificatesRequest{})
@@ -256,6 +278,39 @@ func TestCAGRPCService_UninstallCACertificates(t *testing.T) {
 		kept, readErr := os.ReadFile(path)
 		require.NoError(t, readErr)
 		assert.Equal(t, other, kept)
+	})
+
+	t.Run("refuses a foreign intermediate file and removes nothing", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "ca.crt")
+		interPath := filepath.Join(filepath.Dir(path), "ca-intermediate-1.crt")
+		other := []byte("-----BEGIN CERTIFICATE-----\nother\n-----END CERTIFICATE-----\n")
+		svc := NewCAGRPCService(nil, ca, nil).WithTrustInstallPath(path)
+		_, err := svc.InstallCACertificates(context.Background(),
+			&platformv1.InstallCACertificatesRequest{IncludeIntermediates: true})
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(interPath, other, 0o644))
+
+		_, err = svc.UninstallCACertificates(context.Background(), &platformv1.UninstallCACertificatesRequest{})
+		assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+		keptRoot, readErr := os.ReadFile(path)
+		require.NoError(t, readErr)
+		assert.Equal(t, pemOf(ca.trustedRoot.Raw), keptRoot)
+		keptInter, readErr := os.ReadFile(interPath)
+		require.NoError(t, readErr)
+		assert.Equal(t, other, keptInter)
+	})
+
+	t.Run("removes a two-certificate bundle an earlier install wrote", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "ca.crt")
+		require.NoError(t, os.WriteFile(path, pemOf(ca.trustedRoot.Raw, ca.trustedInter.Raw), 0o644))
+		svc := NewCAGRPCService(nil, ca, nil).WithTrustInstallPath(path)
+
+		resp, err := svc.UninstallCACertificates(context.Background(), &platformv1.UninstallCACertificatesRequest{})
+		require.NoError(t, err)
+		assert.True(t, resp.Status.Success)
+		assert.Equal(t, int32(2), resp.CertificatesRemoved)
+		_, statErr := os.Stat(path)
+		assert.True(t, os.IsNotExist(statErr))
 	})
 
 	t.Run("no CA", func(t *testing.T) {
@@ -294,6 +349,31 @@ func TestCAGRPCService_TrustLifecycle_Concurrent(t *testing.T) {
 	require.NoError(t, err)
 	_, statErr := os.Stat(path)
 	assert.True(t, os.IsNotExist(statErr))
+	_, statErr = os.Stat(filepath.Join(filepath.Dir(path), "ca-intermediate-1.crt"))
+	assert.True(t, os.IsNotExist(statErr))
+}
+
+func TestCAGRPCService_InstallCACertificates_OneCertificatePerTrustFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ca.crt")
+	svc := NewCAGRPCService(nil, lifecycleCA(t), nil).WithTrustInstallPath(path)
+
+	_, err := svc.InstallCACertificates(context.Background(),
+		&platformv1.InstallCACertificatesRequest{IncludeIntermediates: true})
+	require.NoError(t, err)
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	assert.ElementsMatch(t, []string{"ca.crt", "ca-intermediate-1.crt"}, names)
+	for _, name := range names {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		require.NoError(t, err)
+		onePEMCert(t, b)
+	}
 }
 
 func TestCALifecycle_RequiresTheAdminScope(t *testing.T) {
