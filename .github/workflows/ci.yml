@@ -1375,6 +1375,9 @@ jobs:
     timeout-minutes: 30
     env:
       GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
+      # ubuntu-latest is the 26.04 image, which the pinned Playwright cannot install chromium for;
+      # its builds and apt dependency list for 24.04 run there (DS-10151).
+      PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: ubuntu24.04-x64
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
