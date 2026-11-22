@@ -178,8 +178,8 @@ owner; the manifest places them in no tier.
 The platform's own agentic features (trusted computing, provisioning, and
 infrastructure: fleet monitoring, upgrades) are an infrastructure operations
 profile in this repository (SPEC row `platform-agents`), on the go-quicbaas
-engine's profile seam. The layers below go-quicbaas keep re-exporting
-everything ([00 L5](../../../handbook/software/docs/00-ownership-and-sdk-boundary.md#l5-every-layer-re-exports-every-lower-service)).
+engine's profile seam. The layers below go-trusted-platform keep
+re-exporting everything ([00 L5](../../../handbook/software/docs/00-ownership-and-sdk-boundary.md#l5-every-layer-re-exports-every-lower-service)).
 
 The manifest and its architecture test are not in code yet (SPEC row `sdk`).
 Until they land, `sdk/go/services/orchestrator` re-exports an internal-only
