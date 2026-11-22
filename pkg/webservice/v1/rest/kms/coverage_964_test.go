@@ -856,13 +856,19 @@ func TestCoverage964_ParseHashAlgorithm(t *testing.T) {
 		"sha-512": cryptoclient.HashSHA512,
 		"SHA512":  cryptoclient.HashSHA512,
 		"sha-256": cryptoclient.HashSHA256,
+		"SHA256":  cryptoclient.HashSHA256,
 		"":        cryptoclient.HashSHA256,
-		"md5":     cryptoclient.HashSHA256,
 	}
 	for in, want := range cases {
-		if got := parseHashAlgorithm(in); got != want {
-			t.Errorf("parseHashAlgorithm(%q) = %v, want %v", in, got, want)
+		if got, err := parseHashAlgorithm(in); err != nil || got != want {
+			t.Errorf("parseHashAlgorithm(%q) = %v, %v; want %v", in, got, err, want)
 		}
+	}
+
+	_, err := parseHashAlgorithm("md5")
+	var invalid *ErrInvalidRequest
+	if !errors.As(err, &invalid) || invalid.Field != "hash" {
+		t.Fatalf("parseHashAlgorithm(md5) error = %v, want *ErrInvalidRequest on hash", err)
 	}
 }
 
