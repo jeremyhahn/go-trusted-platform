@@ -80,6 +80,7 @@ func daemonRouteTableWithKMS(t *testing.T, guard *restapi.ScopeGuard, kms kmscli
 
 	cfg := DefaultConfig()
 	cfg.RESTListenAddr = "127.0.0.1:0"
+	cfg.PlatformTenantID = testPlatformTenantID
 	svc, err := NewService(cfg)
 	require.NoError(t, err)
 	s, err := NewRESTServer(cfg, svc, slog.Default())

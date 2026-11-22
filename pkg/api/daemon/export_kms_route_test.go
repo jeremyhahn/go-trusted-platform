@@ -41,5 +41,9 @@ func kmsScopedGuard() *restapi.ScopeGuard {
 	return restapi.NewScopeGuard(scopedTokenValidator{scopes: []string{
 		"kms:read", "kms:write", "kms:delete",
 		"secrets:read", "secrets:write", "secrets:list", "secrets:delete",
-	}}, nil, nil)
+	}, tenant: testPlatformTenantID}, nil, nil)
 }
+
+// testPlatformTenantID is the platform tenant the KMS route fixtures
+// authorize as, so the tenant-bound KMS routes reach their handlers.
+const testPlatformTenantID = "platform"

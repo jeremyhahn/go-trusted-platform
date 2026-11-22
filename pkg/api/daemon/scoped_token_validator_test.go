@@ -22,6 +22,8 @@ import (
 // scopedTokenValidator accepts every token and grants it scopes.
 type scopedTokenValidator struct {
 	scopes []string
+	// tenant is the TenantID AuthorizeToken returns; empty by default.
+	tenant string
 }
 
 func (v scopedTokenValidator) ValidateToken(ctx context.Context, token string) (bool, error) {
@@ -29,5 +31,5 @@ func (v scopedTokenValidator) ValidateToken(ctx context.Context, token string) (
 }
 
 func (v scopedTokenValidator) AuthorizeToken(ctx context.Context, token, requiredPerm, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error) {
-	return &platformtoken.AuthorizedContext{Subject: "u", Scopes: v.scopes}, nil
+	return &platformtoken.AuthorizedContext{Subject: "u", Scopes: v.scopes, TenantID: v.tenant}, nil
 }
