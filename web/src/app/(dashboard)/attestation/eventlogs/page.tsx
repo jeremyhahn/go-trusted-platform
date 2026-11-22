@@ -56,6 +56,13 @@ const pcrColors: Record<number, string> = {
   7: "bg-cyan-500/10 text-cyan-600 border-cyan-500/20",
 };
 
+// The server writes the PCR algorithm enum by its proto name
+// ("ATTESTATION_HASH_ALGORITHM_SHA256"); the table and its filter use the
+// short name ("SHA256") (#2038).
+function shortAlgorithm(alg: string): string {
+  return String(alg).replace(/^ATTESTATION_HASH_ALGORITHM_/, "");
+}
+
 const columns: ColumnDef<EventLog>[] = [
   {
     accessorKey: "deviceName",
@@ -212,7 +219,7 @@ export default function EventLogsPage() {
             eventType: 'PCR_VALUE',
             eventTypeCode: 0,
             digest: pcr.value,
-            digestAlgorithm: pcr.algorithm,
+            digestAlgorithm: shortAlgorithm(pcr.algorithm),
             dataSize: Buffer.from(pcr.value, 'base64').length,
             timestamp: manifest.timestamp,
             description: `Host PCR ${pcr.index} value`,
@@ -231,7 +238,7 @@ export default function EventLogsPage() {
             eventType: 'VM_PCR_VALUE',
             eventTypeCode: 0,
             digest: pcr.value,
-            digestAlgorithm: pcr.algorithm,
+            digestAlgorithm: shortAlgorithm(pcr.algorithm),
             dataSize: Buffer.from(pcr.value, 'base64').length,
             timestamp: vm.timestamp,
             description: `VM ${vm.vmId} PCR ${pcr.index} value`,
