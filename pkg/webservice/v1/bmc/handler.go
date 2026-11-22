@@ -434,6 +434,17 @@ func (h *handler) Provision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The workflow mounts the ISO asynchronously, after this handler has
+	// answered 201, so a URL the BMC cannot fetch must be refused here.
+	// An omitted iso_url stays optional (the workflow skips the mount).
+	if req.ISOURL != "" {
+		spec := bmcpkg.MediaSpec{URL: req.ISOURL}
+		if err := spec.Validate(); err != nil {
+			h.responseWriter.Error400(w, r, ErrInvalidRequestBody{Reason: "iso_url: " + err.Error()})
+			return
+		}
+	}
+
 	provReq := baremetal.ProvisionRequest{
 		ProfileID: profileID,
 		ISOURL:    req.ISOURL,
