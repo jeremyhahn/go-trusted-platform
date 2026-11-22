@@ -9,6 +9,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Gated } from "@/components/features/capabilities/gated";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
@@ -324,13 +325,15 @@ export default function VerifyPage() {
             />
             Refresh
           </Button>
-          <Button
-            onClick={runVerification}
-            disabled={running || !manifestsData?.manifests?.length}
-          >
-            <Play className="mr-2 h-4 w-4" />
-            Run Verification
-          </Button>
+          <Gated op="POST /api/v1/attestation/manifests/verify">
+            <Button
+              onClick={runVerification}
+              disabled={running || !manifestsData?.manifests?.length}
+            >
+              <Play className="mr-2 h-4 w-4" />
+              Run Verification
+            </Button>
+          </Gated>
         </div>
       </div>
 

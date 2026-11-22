@@ -4,6 +4,7 @@ import * as React from "react";
 import { use } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { resolveDynamicId } from "@/utils/dynamic-route";
+import { Gated } from "@/components/features/capabilities/gated";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -154,10 +155,12 @@ export default function AttestationDetailPage({ params }: { params: Promise<{ id
           >
             {attestationDetail.status === "signed" ? "Signed" : "Unsigned"}
           </Badge>
-          <Button variant="destructive" size="sm" onClick={handleDelete} disabled={deleting}>
-            <Trash2 className="mr-2 h-4 w-4" />
-            Delete manifest
-          </Button>
+          <Gated op="DELETE /api/v1/attestation/manifests/{id}">
+            <Button variant="destructive" size="sm" onClick={handleDelete} disabled={deleting}>
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete manifest
+            </Button>
+          </Gated>
         </div>
       </div>
 
