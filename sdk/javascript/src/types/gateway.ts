@@ -405,24 +405,26 @@ export interface GetLBStatusResponse {
 /**
  * NAT64 translator status as the webservice returns it at
  * GET /api/v1/gateway/nat64/status (protojson camelCase of gateway.proto
- * NAT64Status). Every field is optional because protojson omits zero
- * values; 64-bit counters arrive as strings.
+ * NAT64Status). The webservice marshals with EmitUnpopulated, so every field
+ * is present and an unset scalar carries its zero value; 64-bit counters
+ * arrive as strings. lastReconcile is null while the translator has never
+ * reconciled.
  */
 export interface GatewayNAT64Status {
-  active?: boolean;
-  instancePresent?: boolean;
-  prefix?: string;
-  instance?: string;
-  sessions?: string;
-  pool4Used?: string;
-  moduleVersion?: string;
-  flowCount?: number;
-  lastReconcile?: string;
-  lastError?: string;
+  active: boolean;
+  instancePresent: boolean;
+  prefix: string;
+  instance: string;
+  sessions: string;
+  pool4Used: string;
+  moduleVersion: string;
+  flowCount: number;
+  lastReconcile: string | null;
+  lastError: string;
 }
 
 export interface GetGatewayNAT64StatusResponse {
-  status?: GatewayNAT64Status;
+  status: GatewayNAT64Status | null;
 }
 
 /** GetPerfFlows run parameters; zero values take the server defaults (1000 flows, unbatched, default bridge). */
