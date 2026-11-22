@@ -23,14 +23,14 @@ import (
 	"google.golang.org/grpc"
 )
 
-// ClusterService is a stub when cluster support is not enabled.
-// Build with -tags cluster to enable cluster functionality.
+// ClusterService is the !cluster build's placeholder. The cluster surface is a
+// stub on every build, with or without -tags cluster, until #336 lands.
 type ClusterService struct{}
 
 // NewClusterService returns an error when cluster support is not enabled.
 // Kept with no caller: the build-tag twin of the cluster_service.go constructor.
 func NewClusterService(application *app.App, logger *slog.Logger) (*ClusterService, error) {
-	return nil, ErrInvalidConfig{Reason: "cluster service not enabled (build with -tags cluster)"}
+	return nil, ErrInvalidConfig{Reason: "cluster service is not wired in any build (#336)"}
 }
 
 // RegisterGRPCServices is a no-op when cluster support is not enabled.

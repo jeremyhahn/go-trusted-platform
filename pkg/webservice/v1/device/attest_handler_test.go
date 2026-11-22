@@ -43,6 +43,23 @@ type stubAttestDeviceService struct {
 	gotEvidence []byte
 	resp        *platformv1.AttestDeviceResponse
 	err         error
+
+	// gotChallengeID is the challenge_id AttestDevice saw; gotIssueFor the
+	// device_id IssueAttestationChallenge saw (#2136).
+	gotChallengeID string
+	gotIssueFor    string
+	challenge      *platformv1.IssueAttestationChallengeResponse
+}
+
+func (s *stubAttestDeviceService) IssueAttestationChallenge(
+	_ context.Context,
+	req *platformv1.IssueAttestationChallengeRequest,
+) (*platformv1.IssueAttestationChallengeResponse, error) {
+	s.gotIssueFor = req.GetDeviceId()
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.challenge, nil
 }
 
 func (s *stubAttestDeviceService) AttestDevice(
@@ -51,6 +68,7 @@ func (s *stubAttestDeviceService) AttestDevice(
 ) (*platformv1.AttestDeviceResponse, error) {
 	s.gotDeviceID = req.GetDeviceId()
 	s.gotEvidence = req.GetEvidence()
+	s.gotChallengeID = req.GetChallengeId()
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -103,6 +121,53 @@ func TestAttestHandler_PassesEvidenceThroughUnchanged(t *testing.T) {
 	assert.Equal(t, "verified", got.AttestationStatus)
 	assert.Equal(t, uint64(42), got.DeviceID)
 	assert.Equal(t, attestedAt, got.AttestedAt.UTC())
+}
+
+// TestAttestHandler_IssuesAChallenge pins the REST challenge route: it
+// delegates to IssueAttestationChallenge for the path's device and returns
+// the challenge ID, nonce and expiry (#2136).
+func TestAttestHandler_IssuesAChallenge(t *testing.T) {
+	expiresAt := time.Date(2026, 9, 4, 12, 5, 0, 0, time.UTC)
+	nonce := bytes.Repeat([]byte{0xA5}, 32)
+	svc := &stubAttestDeviceService{challenge: &platformv1.IssueAttestationChallengeResponse{
+		Status:      &platformv1.Status{Success: true},
+		ChallengeId: "c1",
+		Nonce:       nonce,
+		ExpiresAt:   timestamppb.New(expiresAt),
+	}}
+	h := NewAttestHandler(logging.DefaultLogger(), &mockResponseWriter{}, svc)
+	require.NotNil(t, h)
+	ch, ok := h.(AttestChallengeHandler)
+	require.True(t, ok, "the attest handler must serve the challenge route")
+
+	req := httptest.NewRequest(http.MethodPost, "/devices/42/attest/challenge", nil)
+	req = mux.SetURLVars(req, map[string]string{"id": "42"})
+	rr := httptest.NewRecorder()
+	ch.HandleIssueAttestationChallenge(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "42", svc.gotIssueFor)
+
+	var got struct {
+		ChallengeID string    `json:"challenge_id"`
+		Nonce       []byte    `json:"nonce"`
+		ExpiresAt   time.Time `json:"expires_at"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+	assert.Equal(t, "c1", got.ChallengeID)
+	assert.Equal(t, nonce, got.Nonce)
+	assert.Equal(t, expiresAt, got.ExpiresAt.UTC())
+}
+
+// TestAttestHandler_PassesTheChallengeIDThrough pins that the attest body's
+// challenge_id reaches AttestDevice (#2136).
+func TestAttestHandler_PassesTheChallengeIDThrough(t *testing.T) {
+	svc := &stubAttestDeviceService{resp: &platformv1.AttestDeviceResponse{DeviceId: 42}}
+	h := NewAttestHandler(logging.DefaultLogger(), &mockResponseWriter{}, svc)
+	require.NotNil(t, h)
+
+	rr := attestPost(t, h, "42", `{"evidence":"AAEC","challenge_id":"c1"}`)
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "c1", svc.gotChallengeID)
 }
 
 // TestAttestHandler_FailedVerdictIs200 mirrors the gRPC contract: a device
