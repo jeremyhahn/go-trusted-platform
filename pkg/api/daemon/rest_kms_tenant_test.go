@@ -97,3 +97,39 @@ func TestKMSRouter_BindsTheCallersTenant(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, w.Code, "no tenant: body %s", w.Body.String())
 	require.Len(t, secrets.tenants, 2, "a caller with no tenant must never reach the secrets client")
 }
+
+// TestKMSRouter_DEKRoutesServeThePlatformTenantOnly: the embedded go-quicbaas
+// DEK store is keyed by path alone and ignores the tenant, so binding the
+// caller's tenant does not isolate DEKs; the daemon refuses the DEK routes to
+// every tenant but the platform's (#2030 Codex P0).
+func TestKMSRouter_DEKRoutesServeThePlatformTenantOnly(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RESTListenAddr = "127.0.0.1:0"
+	cfg.PlatformTenantID = "platform"
+	svc, err := NewService(cfg)
+	require.NoError(t, err)
+	s, err := NewRESTServer(cfg, svc, slog.Default())
+	require.NoError(t, err)
+	s.SetKMSRouter(nil, nil, nil, nil, restapi.NewScopeGuard(tenantTokenValidator{}, nil, nil))
+
+	do := func(method, path, token string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(method, path, strings.NewReader("{}"))
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Content-Type", "application/json")
+		s.Router().ServeHTTP(w, r)
+		return w
+	}
+
+	for _, c := range []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/kms/deks"},
+		{http.MethodPost, "/api/v1/kms/deks"},
+		{http.MethodPost, "/api/v1/kms/deks/a/rotate"},
+	} {
+		w := do(c.method, c.path, "tenant-a")
+		require.Equal(t, http.StatusForbidden, w.Code, "tenant-a %s %s: body %s", c.method, c.path, w.Body.String())
+	}
+
+	w := do(http.MethodGet, "/api/v1/kms/deks", "platform")
+	require.NotEqual(t, http.StatusForbidden, w.Code, "platform tenant: body %s", w.Body.String())
+}
