@@ -14,9 +14,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useEAB, useEABList, useToast } from "@/hooks";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useEAB, useEABList, usePlatformClient, useToast } from "@/hooks";
 import { Gated } from "@/components/features/capabilities/gated";
-import { EABCredentialDetail } from "@/components/features/ca/eab-credential-detail";
+import {
+  EABCredentialDetail,
+  unwrapEAB,
+} from "@/components/features/ca/eab-credential-detail";
 
 // The server's op strings (METHOD + the mux path template, router.go).
 export const EAB_OPS = {
@@ -59,6 +64,101 @@ function formatDate(value?: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+// The tools card: GetCredentialByKeyID, ValidateCredential and
+// CleanupExpiredCredentials through the SDK client (#2050).
+function EABTools({ onChanged }: { onChanged: () => void }) {
+  const client = usePlatformClient();
+  const { toast } = useToast();
+  const [keyId, setKeyId] = React.useState("");
+  const [hmacKey, setHmacKey] = React.useState("");
+  const [result, setResult] = React.useState<{ text: string; failed?: boolean } | null>(null);
+  const [busy, setBusy] = React.useState(false);
+
+  const run = async (action: () => Promise<void>) => {
+    setBusy(true);
+    setResult(null);
+    try {
+      await action();
+    } catch (err) {
+      setResult({ text: err instanceof Error ? err.message : String(err), failed: true });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const findByKey = () =>
+    run(async () => {
+      const res = unwrapEAB(await client.eab.getByKeyId(keyId.trim()), "find the credential");
+      const c = res.credential as unknown as EABCredentialWire;
+      setResult({ text: `Found ${c.keyId} (id ${c.id}): ${statusLabel(c.status)}` });
+    });
+
+  const validate = () =>
+    run(async () => {
+      const res = unwrapEAB(
+        await client.eab.validate({ keyId: keyId.trim(), hmacKey: hmacKey.trim() }),
+        "validate the credential",
+      );
+      setResult(res.valid ? { text: "Valid" } : { text: `Invalid: ${res.errorMessage || "not valid"}`, failed: true });
+    });
+
+  const cleanupExpired = () =>
+    run(async () => {
+      const res = unwrapEAB(await client.eab.cleanupExpired(), "clean up expired credentials");
+      const n = Number(res.deletedCount ?? 0);
+      toast({ title: `Deleted ${n} expired credentials`, variant: "success" });
+      onChanged();
+    });
+
+  const hasKey = keyId.trim() !== "";
+  return (
+    <Card>
+      <CardContent className="space-y-4 pt-6">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="eab-tool-key-id">Key ID</Label>
+            <Input id="eab-tool-key-id" value={keyId} onChange={(e) => setKeyId(e.target.value)} />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="eab-tool-hmac">HMAC key</Label>
+            <Input id="eab-tool-hmac" value={hmacKey} onChange={(e) => setHmacKey(e.target.value)} />
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Gated op={EAB_OPS.byKey}>
+            <Button size="sm" variant="outline" disabled={busy || !hasKey} onClick={() => void findByKey()}>
+              Find by key ID
+            </Button>
+          </Gated>
+          <Gated op={EAB_OPS.validate}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy || !hasKey || hmacKey.trim() === ""}
+              onClick={() => void validate()}
+            >
+              Validate
+            </Button>
+          </Gated>
+          <Gated op={EAB_OPS.cleanup}>
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => void cleanupExpired()}>
+              Clean up expired
+            </Button>
+          </Gated>
+        </div>
+        {result && (
+          <p
+            data-testid="eab-tool-result"
+            className={result.failed ? "text-sm text-destructive" : "text-sm"}
+          >
+            {result.text}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 export default function EABCredentialsPage() {
@@ -121,6 +221,7 @@ export default function EABCredentialsPage() {
         title="EAB Credentials"
         description="ACME External Account Binding credentials"
       />
+      <EABTools onChanged={() => void refetch()} />
       <Card>
         <CardContent className="pt-6">
           {isLoading ? (

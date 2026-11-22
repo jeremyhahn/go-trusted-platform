@@ -44,6 +44,7 @@ vi.mock("@/hooks", async (importOriginal) => ({
   useToast: () => toastResult,
   useEAB: () => eabHooks,
   useEABList: () => listResult,
+  usePlatformClient: () => ({ eab: {} }),
 }));
 
 vi.mock("@/hooks/use-capabilities", () => ({
