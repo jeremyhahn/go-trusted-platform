@@ -139,6 +139,9 @@ func prepareMigrationErrToStatus(err error) error {
 	case errors.Is(err, compute.ErrMigrationSpecRequired):
 		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.Is(err, compute.ErrMigrationServerTLSNotConfigured),
+		// A receive this host cannot complete (#2021 Codex round 2).
+		errors.Is(err, compute.ErrLiveMigrationReceiveUnsupported),
+		errors.Is(err, compute.ErrTPMMigrationReceiveUnsupported),
 		errors.As(err, &listenErr),
 		errors.As(err, &archErr):
 		return status.Error(codes.FailedPrecondition, err.Error())

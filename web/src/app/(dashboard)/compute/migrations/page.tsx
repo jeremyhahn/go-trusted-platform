@@ -41,7 +41,6 @@ export default function MigrationsPage() {
   const [bootMode, setBootMode] = useState("");
   const [arch, setArch] = useState<"x86_64" | "aarch64">("x86_64");
   const [secureBoot, setSecureBoot] = useState(false);
-  const [tpmEnabled, setTpmEnabled] = useState(false);
   const [enableKvm, setEnableKvm] = useState(true);
   // The receiver's NIC must match the source guest's or its migration state
   // does not load; the daemon defaults an empty mode to bridge.
@@ -65,7 +64,9 @@ export default function MigrationsPage() {
     if (bootMode.trim()) spec.bootMode = bootMode.trim();
     spec.arch = arch;
     spec.secureBoot = secureBoot;
-    spec.tpmEnabled = tpmEnabled;
+    // The receiver provisions no vTPM and carries no TPM state, so it
+    // refuses a vTPM guest (#2021 Codex round 2): never ask for one.
+    spec.tpmEnabled = false;
     spec.enableKvm = enableKvm;
     spec.networkMode = networkMode;
     if (macAddress.trim()) spec.macAddress = macAddress.trim();
@@ -223,8 +224,10 @@ export default function MigrationsPage() {
                   <input
                     id="migration-tpm"
                     type="checkbox"
-                    checked={tpmEnabled}
-                    onChange={(e) => setTpmEnabled(e.target.checked)}
+                    checked={false}
+                    disabled
+                    readOnly
+                    title="vTPM migration receive is not supported: the receiver provisions no vTPM"
                   />
                   TPM
                 </label>

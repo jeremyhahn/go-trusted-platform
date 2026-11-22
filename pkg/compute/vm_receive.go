@@ -121,6 +121,17 @@ var (
 	// ErrMigrationReceiveFailed is returned when the destination cannot stand up
 	// or drive the receiving QEMU.
 	ErrMigrationReceiveFailed = errors.New("VM migration receive failed")
+
+	// ErrLiveMigrationReceiveUnsupported refuses a live (shared-storage)
+	// receive: the receiver creates a fresh disk and never opens the source's
+	// shared disk, so the guest would run on a blank disk.
+	ErrLiveMigrationReceiveUnsupported = errors.New("live migration receive is not supported: the receiver creates a fresh disk and does not open the source's shared disk")
+
+	// ErrTPMMigrationReceiveUnsupported refuses a guest with a vTPM: the
+	// receiver provisions no swtpm and carries no TPM state, so the guest
+	// would arrive without its vTPM. VMs default to TPM on, so this refuses
+	// most receives until vTPM state migration exists.
+	ErrTPMMigrationReceiveUnsupported = errors.New("vTPM migration receive is not supported: the receiver provisions no vTPM and does not carry the source's TPM state")
 )
 
 // MigrationListenAddressError refuses a receiver whose bind address cannot be
@@ -533,6 +544,16 @@ func (r *receiverRegistry) takeAll() map[string]*trackedReceiver {
 func (o *QEMUOrchestrator) ReceiveIncoming(ctx context.Context, spec MigrationSpec) (*ReceiverHandle, error) {
 	if spec.Config == nil {
 		return nil, ErrMigrationSpecRequired
+	}
+
+	// Refuse what the receiver cannot complete before any credential is
+	// issued or QEMU started (#2021 Codex round 2): it creates a fresh disk
+	// (no shared-storage live receive) and provisions no vTPM.
+	if spec.Mode == MigrateModeLive {
+		return nil, ErrLiveMigrationReceiveUnsupported
+	}
+	if spec.Config.TPMEnabled {
+		return nil, ErrTPMMigrationReceiveUnsupported
 	}
 
 	// The receiver is built from this host's arch profile; refuse a guest it
