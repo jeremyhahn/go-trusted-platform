@@ -1891,6 +1891,70 @@ func TestPXEGRPC_BootPortsReachOnlyTheBootServer(t *testing.T) {
 	})
 }
 
+// TestPXEGRPC_BootingDeviceReachesNoStorageAddressOverHTTP pins, through the
+// daemon's own PXE wiring, that a Booting device's HTTP(S) allowances do not
+// reach the storage zone, which the default matrix denies to provisioning
+// (#1896 Codex round 1).
+func TestPXEGRPC_BootingDeviceReachesNoStorageAddressOverHTTP(t *testing.T) {
+	zones, env := zoneServiceSeed(pxeSectionApp())
+	require.NotNil(t, env)
+	if len(zones) == 0 {
+		zones = zone.Defaults()
+	}
+	plan, err := netplan.New(*env, zones)
+	require.NoError(t, err)
+	storage, err := plan.MustZone(zone.ZoneStorage)
+	require.NoError(t, err)
+	target := storage.Gateway
+	require.True(t, target.IsValid(), "storage zone has no gateway address")
+
+	ctx := context.Background()
+	port := &pxeRecordingPort{}
+	svc, err := pxeGRPCServiceFromConfig(ctx, logging.DefaultLogger(), pxeSectionApp(), pxeEnabledSection(t), pxeTestFlowManager(t, port))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	reg, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{MacAddress: "00:11:22:33:44:e1", PortId: "port-1"})
+	require.NoError(t, err)
+	port.flows = nil
+	_, err = svc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
+		DeviceId: reg.GetDevice().GetId(),
+		State:    platformv1.ProvisioningState_PROVISIONING_STATE_BOOTING,
+		Reason:   "boot",
+	})
+	require.NoError(t, err)
+
+	covers := func(dst string) bool {
+		if pfx, err := netip.ParsePrefix(dst); err == nil {
+			return pfx.Contains(target)
+		}
+		a, err := netip.ParseAddr(dst)
+		return err == nil && a == target
+	}
+	for _, p := range []int{80, 443, 8443, 9443} {
+		want := fmt.Sprintf("tp_dst=%d", p)
+		for _, f := range port.flows {
+			if f.Actions == "drop" || !strings.Contains(f.Match, "nw_proto=6") {
+				continue
+			}
+			hasPort, dst := false, ""
+			for _, field := range strings.Split(f.Match, ",") {
+				if field == want {
+					hasPort = true
+				}
+				if k, v, ok := strings.Cut(field, "="); ok && (k == "nw_dst" || k == "ipv6_dst") {
+					dst = v
+				}
+			}
+			if !hasPort {
+				continue
+			}
+			assert.False(t, dst == "" || covers(dst),
+				"TCP %d: Booting device reaches the storage gateway %s through %q", p, target, f.Match)
+		}
+	}
+}
+
 // TestDaemonPXEBackendRefusesABridgeMismatch: the VLAN wrapper only
 // delegates to the shared flow manager, so a pxe.bridge-name other than
 // the manager's sdn.ovs.bridge is refused at startup (#1694).

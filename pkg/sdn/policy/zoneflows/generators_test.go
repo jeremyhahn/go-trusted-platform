@@ -99,6 +99,68 @@ func TestProvisioning_BootPortsReachOnlyBootServers(t *testing.T) {
 	}
 }
 
+// TestProvisioning_ServerPortsFailClosedWithoutServers pins that the
+// provisioning template's DNS, ACME and package-repository allowances name a
+// destination: with no server addresses configured they open nothing, so the
+// inter-zone denies below them still drop traffic to a denied zone (#1896
+// Codex round 1).
+func TestProvisioning_ServerPortsFailClosedWithoutServers(t *testing.T) {
+	type svcPort struct {
+		proto string
+		port  uint16
+	}
+	ports := []svcPort{
+		{"6", 80}, {"6", 443}, {"6", 8443}, {"6", 9443},
+		{"17", 53}, {"17", 8053}, {"17", 9053},
+	}
+	deny := zoneflows.FlowRule{Table: 0, Priority: 200,
+		Match: "in_port=7,dl_vlan=100,dl_type=0x0800,nw_dst=198.51.100.0/24", Actions: "drop"}
+	denied := func(p svcPort, dst string) map[string]string {
+		return map[string]string{"dl_type": "0x0800", "nw_proto": p.proto,
+			"nw_dst": dst, "tp_dst": strconv.Itoa(int(p.port))}
+	}
+
+	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{})
+	rules := append(gs.Generate("7", zone.ZoneProvisioning, zoneflows.Untagged(100)), deny)
+	for _, p := range ports {
+		for _, r := range rules {
+			if r.Actions == "drop" {
+				continue
+			}
+			f := matchFields(r.Match)
+			if f["tp_dst"] != strconv.Itoa(int(p.port)) {
+				continue
+			}
+			if _, v4 := f["nw_dst"]; !v4 {
+				if _, v6 := f["ipv6_dst"]; !v6 {
+					t.Errorf("no server configured, yet port %d is open to any destination by %q (priority %d)",
+						p.port, r.Match, r.Priority)
+				}
+			}
+		}
+		w, ok := winner(rules, denied(p, "198.51.100.7"))
+		if !ok {
+			t.Fatalf("port %d: no rule matches the denied packet", p.port)
+		}
+		if w.Actions != "drop" {
+			t.Errorf("port %d: denied destination forwarded by %q (%s, priority %d), want a drop",
+				p.port, w.Match, w.Actions, w.Priority)
+		}
+	}
+
+	gs = zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{
+		Provisioning: zoneflows.ProvisioningConfig{ACMEServerIPs: []net.IP{net.ParseIP("192.0.2.20")}},
+	})
+	rules = append(gs.Generate("7", zone.ZoneProvisioning, zoneflows.Untagged(100)), deny)
+	https := svcPort{"6", 443}
+	if w, ok := winner(rules, denied(https, "192.0.2.20")); !ok || w.Actions != "normal" {
+		t.Errorf("TCP 443 to the configured ACME server: winner %q (%s), want a normal rule", w.Match, w.Actions)
+	}
+	if w, ok := winner(rules, denied(https, "198.51.100.7")); !ok || w.Actions != "drop" {
+		t.Errorf("TCP 443 to a denied destination with an ACME server set: winner %q (%s), want a drop", w.Match, w.Actions)
+	}
+}
+
 // matchFields splits an OVS match string into its key=value fields.
 func matchFields(match string) map[string]string {
 	out := map[string]string{}
