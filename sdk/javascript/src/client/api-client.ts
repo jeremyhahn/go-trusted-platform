@@ -101,22 +101,20 @@ function idempotencyKeyOf(sentHeaders: Headers | undefined): string | undefined 
 function mergeHeaders(
   ...headerSets: Array<Record<string, string> | undefined>
 ): Record<string, string> {
-  const merged: Record<string, string> = {};
+  // Keyed by lower-cased name: a later header replaces any earlier one that
+  // differs only in case, and keeps its own spelling.
+  const byLower = new Map<string, [string, string]>();
   for (const headers of headerSets) {
     if (headers === undefined) {
       continue;
     }
     for (const [name, value] of Object.entries(headers)) {
       const lower = name.toLowerCase();
-      for (const existing of Object.keys(merged)) {
-        if (existing.toLowerCase() === lower) {
-          delete merged[existing];
-        }
-      }
-      merged[name] = value;
+      byLower.delete(lower);
+      byLower.set(lower, [name, value]);
     }
   }
-  return merged;
+  return Object.fromEntries(byLower.values());
 }
 
 /**

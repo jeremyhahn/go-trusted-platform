@@ -152,9 +152,9 @@ export class InvitationService extends BaseService {
    * @param _id - Invitation ID
    * @returns Never resolves; always rejects
    */
-  async resend(_id: string): Promise<ApiResponse<CreateInvitationResponse>> {
-    throw new Error(
-      'Invitation resend is not served: the server has no /v1/invitations/{id}/resend route'
+  resend(_id: string): Promise<ApiResponse<CreateInvitationResponse>> {
+    return Promise.reject(
+      new Error('Invitation resend is not served: the server has no /v1/invitations/{id}/resend route')
     );
   }
 }

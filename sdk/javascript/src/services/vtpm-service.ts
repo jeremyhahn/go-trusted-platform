@@ -190,7 +190,7 @@ function fromWireManifest(m: WireManifest): VTPMManifest {
   return {
     version: m.version,
     id: m.id,
-    mode: decodeWireEnum<BundleMode>(BUNDLE_MODE_WIRE_NAMES, m.mode) as BundleMode,
+    mode: decodeWireEnum<BundleMode>(BUNDLE_MODE_WIRE_NAMES, m.mode),
     hostname: m.hostname ?? '',
     createdAt: m.created_at ?? '',
     ...(m.ek_certificate !== undefined && {
@@ -203,7 +203,7 @@ function fromWireManifest(m: WireManifest): VTPMManifest {
         fingerprint: m.ek_certificate.fingerprint,
       },
     }),
-    ekAlgorithm: decodeWireEnum<EKAlgorithm>(EK_ALGORITHM_WIRE_NAMES, m.ek_algorithm) as EKAlgorithm,
+    ekAlgorithm: decodeWireEnum<EKAlgorithm>(EK_ALGORITHM_WIRE_NAMES, m.ek_algorithm),
     ekHandle: m.ek_handle,
     secureBootEnabled: m.secure_boot_enabled,
     ...(m.secure_boot_keys !== undefined && {
@@ -224,7 +224,7 @@ function fromWireManifest(m: WireManifest): VTPMManifest {
 function fromWireBundle(b: WireBundleResponse): VTPMBundle {
   return {
     id: b.id,
-    mode: decodeWireEnum<BundleMode>(BUNDLE_MODE_WIRE_NAMES, b.mode) as BundleMode,
+    mode: decodeWireEnum<BundleMode>(BUNDLE_MODE_WIRE_NAMES, b.mode),
     manifest: fromWireManifest(b.manifest),
     tpmState: {
       stateDir: b.tpm_state.state_dir,
@@ -288,7 +288,7 @@ function isDaemonImportResponse(
 
 function fromDaemonImportResponse(d: WireDaemonImportResponse): VTPMBundle {
   const b = d.bundle;
-  const mode = decodeWireEnum<BundleMode>(BUNDLE_MODE_WIRE_NAMES, b.mode) as BundleMode;
+  const mode = decodeWireEnum<BundleMode>(BUNDLE_MODE_WIRE_NAMES, b.mode);
   return {
     id: b.id,
     mode,
@@ -308,7 +308,7 @@ function fromDaemonImportResponse(d: WireDaemonImportResponse): VTPMBundle {
           fingerprint: b.ek_certificate.fingerprint,
         },
       }),
-      ekAlgorithm: decodeWireEnum<EKAlgorithm>(EK_ALGORITHM_WIRE_NAMES, b.ek_algorithm) as EKAlgorithm,
+      ekAlgorithm: decodeWireEnum<EKAlgorithm>(EK_ALGORITHM_WIRE_NAMES, b.ek_algorithm),
       ekHandle: 0,
       secureBootEnabled: b.secure_boot_enabled ?? false,
       ...(b.secure_boot_keys !== undefined && {
@@ -764,7 +764,9 @@ export class VTPMService extends BaseService {
       archive
     );
     const { data, ...rest } = response;
-    if (data === undefined) return rest;
+    if (data === undefined) {
+      return rest;
+    }
     return {
       ...rest,
       data: isDaemonImportResponse(data) ? fromDaemonImportResponse(data) : fromWireBundle(data),

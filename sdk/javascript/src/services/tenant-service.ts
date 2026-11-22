@@ -326,7 +326,7 @@ export class TenantService extends BaseService {
     // The daemon REST handler (handleInitTenantBarrier) and the gRPC server
     // discard threshold and shares and run a deterministic, non-Shamir init:
     // refuse the settings rather than report protection that was not applied.
-    if (request.threshold || request.shares) {
+    if (Boolean(request.threshold) || Boolean(request.shares)) {
       throw new RangeError(
         'initBarrier: threshold and shares are not supported; the server initialises a non-Shamir barrier'
       );
