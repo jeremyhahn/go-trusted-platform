@@ -27,6 +27,55 @@ export interface RegistryTags {
   tags: string[];
 }
 
+/**
+ * GET /api/v1/compute/images/{repository}:{tag}: the Go struct
+ * RegistryArtifactDetail, which has no json tags (capitalized keys).
+ */
+export interface RegistryImageDetail {
+  Artifact?: {
+    ID?: string;
+    Repository?: string;
+    Tag?: string;
+    Digest?: string;
+    Size?: number;
+    Manifest?: {
+      Digest?: string;
+      MediaType?: string;
+      Size?: number;
+      ConfigDigest?: string;
+      Layers?: Array<{
+        Digest?: string;
+        Size?: number;
+        MediaType?: string;
+        Annotations?: Record<string, string>;
+      }> | null;
+      Annotations?: Record<string, string>;
+    } | null;
+    Labels?: Record<string, string>;
+    OS?: string;
+    Architecture?: string;
+    Author?: string;
+    CreatedAt?: string;
+    PushedAt?: string;
+    PullCount?: number;
+  } | null;
+  Signatures?: Array<{
+    KeyID?: string;
+    Algorithm?: string;
+    Signer?: string;
+    SignedAt?: string;
+  }> | null;
+  ScanResult?: {
+    Scanner?: string;
+    ScannedAt?: string;
+    LowCount?: number;
+    MediumCount?: number;
+    HighCount?: number;
+    CriticalCount?: number;
+  } | null;
+  Tags?: string[] | null;
+}
+
 export interface UseRegistryResult {
   status: RegistryStatus | null;
   statusError: string | null;
@@ -39,6 +88,8 @@ export interface UseRegistryResult {
   listTags: (name: string) => Promise<void>;
   /** Delete a manifest by tag or digest; resolves once the tag list is reloaded. */
   deleteManifest: (name: string, reference: string) => Promise<void>;
+  /** Inspect a tag; rejects with the server's refusal. Holds no state. */
+  inspect: (name: string, tag: string) => Promise<RegistryImageDetail>;
 }
 
 /** Encode a repository name segment by segment, keeping its slashes. */
@@ -53,7 +104,7 @@ function apiFailure(error: { status?: number; message: string }): Error {
 
 /**
  * useRegistry reads the container registry through the SDK RegistryService:
- * its status from the daemon's REST surface, and tags and manifest deletes
+ * its status and image inspection from the daemon's REST surface, and tags and manifest deletes
  * from the OCI distribution surface (/v2) at the host root (rootRelative).
  */
 export function useRegistry(): UseRegistryResult {
@@ -131,6 +182,20 @@ export function useRegistry(): UseRegistryResult {
     [registry, listTags]
   );
 
+  const inspect = React.useCallback(
+    async (name: string, tag: string): Promise<RegistryImageDetail> => {
+      const res = await registry.inspect(name, tag);
+      if (res.error) {
+        throw apiFailure(res.error);
+      }
+      if (!res.data) {
+        throw new Error('registry inspect: empty response');
+      }
+      return res.data as RegistryImageDetail;
+    },
+    [registry]
+  );
+
   React.useEffect(() => {
     let live = true;
     readStatus()
@@ -160,5 +225,6 @@ export function useRegistry(): UseRegistryResult {
     isTagsLoading,
     listTags,
     deleteManifest,
+    inspect,
   };
 }

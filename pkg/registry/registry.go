@@ -684,20 +684,40 @@ func (r *Registry) List(ctx context.Context, opts RegistryListOptions) ([]*Image
 		"limit", opts.Limit,
 	)
 
-	sopts := ListOptions{
-		Repository:  opts.Repository,
-		Prefix:      opts.TagPrefix,
-		Limit:       opts.Limit,
-		IncludeTags: true,
+	// Walk every storage page: skip the first Offset entries, then collect
+	// until Limit (when set) is reached or the cursor runs out.
+	skip := opts.Offset
+	if skip < 0 {
+		skip = 0
 	}
-	res, err := r.storage.ListManifests(ctx, sopts)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*ImageManifest, len(res.Manifests))
-	for i := range res.Manifests {
-		m := res.Manifests[i]
-		out[i] = &m
+	out := make([]*ImageManifest, 0)
+	cursor := ""
+	for {
+		res, err := r.storage.ListManifests(ctx, ListOptions{
+			Repository:  opts.Repository,
+			Prefix:      opts.TagPrefix,
+			Limit:       500,
+			Cursor:      cursor,
+			IncludeTags: true,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for i := range res.Manifests {
+			if skip > 0 {
+				skip--
+				continue
+			}
+			m := res.Manifests[i]
+			out = append(out, &m)
+			if opts.Limit > 0 && len(out) == opts.Limit {
+				return out, nil
+			}
+		}
+		if !res.HasMore || res.NextCursor == "" || res.NextCursor == cursor {
+			break
+		}
+		cursor = res.NextCursor
 	}
 	return out, nil
 }

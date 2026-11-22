@@ -559,10 +559,10 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 |---|---|---|---|---|---|
 | `RegistryService.Push` | `POST /` | - | - | - | not-UI: streaming plumbing |
 | `RegistryService.Pull` | - | - | - | - | not-UI: streaming plumbing |
-| `RegistryService.List` | `GET /{name:.+}/tags/list` | - | - | - | missing |
-| `RegistryService.Inspect` | - | - | - | - | missing |
-| `RegistryService.Delete` | `DELETE /{name:.+}/manifests/{reference}` | - | - | - | missing |
-| `RegistryService.Status` | `GET /status` | - | - | - | missing |
+| `RegistryService.List` | `GET /{name:.+}/tags/list` | `(dashboard)/compute/registry/page.tsx` | - | `registry.spec.ts` | covered |
+| `RegistryService.Inspect` | `GET /compute/images/{repository:.+}` | `(dashboard)/compute/registry/page.tsx` | - | `registry.spec.ts` | partial: the harness seeds no image and the SDK has no push, so the spec inspects no real tag |
+| `RegistryService.Delete` | `DELETE /{name:.+}/manifests/{reference}` | `(dashboard)/compute/registry/page.tsx` | - | `registry.spec.ts` | partial: no real tag to delete (no seeded image, no SDK push); the OCI route is not in GET /api/v1/capabilities, so it is gated on read-only status only |
+| `RegistryService.Status` | `GET /status` | `(dashboard)/compute/registry/page.tsx` | - | `registry.spec.ts` | covered |
 
 ## SchedulerService (`scheduler.proto`)
 
