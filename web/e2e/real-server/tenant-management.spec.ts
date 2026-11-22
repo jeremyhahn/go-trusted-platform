@@ -176,16 +176,15 @@ test.describe('Tenant Invitations (real server)', () => {
       .not.toBe('pending');
   });
 
-  test('resending an invitation succeeds on the server', async ({ adminPage, sdk }) => {
+  test('a pending invitation offers no resend action', async ({ adminPage, sdk }) => {
     const email = `${unique('resend')}@tenant-mgmt.test`;
     must(await sdk.invitation.create({ email, role: 'member' }), 'invitation.create');
 
     await adminPage.goto('/tenant/invitations');
     const row = adminPage.getByRole('row').filter({ hasText: email });
     await row.getByRole('button', { name: /open menu/i }).click();
-    await adminPage.getByRole('menuitem', { name: /resend invitation/i }).click();
-
-    await expect(adminPage.getByText(/invitation resent/i).first()).toBeVisible();
+    await expect(adminPage.getByRole('menuitem', { name: /cancel invitation/i })).toBeVisible();
+    await expect(adminPage.getByRole('menuitem', { name: /resend invitation/i })).toHaveCount(0);
   });
 
   test('shows the send invitation button', async ({ adminPage }) => {

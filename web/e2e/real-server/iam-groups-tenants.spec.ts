@@ -4,7 +4,24 @@
  * of #1665). State is seeded through the SDK and every assertion reads what
  * the server holds afterwards, not a recorded request.
  */
+import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
+
+/** The reason line EmbeddedIamGate renders (web/src/app/(dashboard)/iam/embedded-iam-gate.tsx). */
+function gateReason(method: string): string {
+  return `Not available: the embedded IAM backend does not implement ${method} yet`;
+}
+
+/** Records every non-GET request whose path the predicate accepts. */
+function nonGetRequests(page: Page, matches: (pathname: string) => boolean): string[] {
+  const sent: string[] = [];
+  page.on('request', (r) => {
+    if (r.method() !== 'GET' && matches(new URL(r.url()).pathname)) {
+      sent.push(`${r.method()} ${r.url()}`);
+    }
+  });
+  return sent;
+}
 
 interface Result<T> {
   success: boolean;
@@ -80,23 +97,22 @@ test.describe('IAM groups, members, permission check and tenants', () => {
       .toMatchObject({ name: renamed, description: 'Runs the platform' });
   });
 
-  test('AddGroupMember and RemoveGroupMember from the detail page', async ({ adminPage, sdk, tenant }) => {
+  test('AddGroupMember and RemoveGroupMember are gated on the detail page', async ({ adminPage, sdk, tenant }) => {
     const created = await sdk.iam.createGroup({ tenantId: tenant.id, name: `Members-${suffix()}` });
     ok(created);
     const id = (record(created).id ?? record(created).groupId) as string;
     const user = `user-${suffix()}`;
 
+    const sent = nonGetRequests(adminPage, (p) => p.includes(`/groups/${id}/members`));
     await adminPage.goto(`/iam/groups/${id}`);
     await adminPage.getByLabel('User ID', { exact: true }).fill(user);
-    await adminPage.getByRole('button', { name: 'Add member' }).click();
-    await expect(adminPage.getByText('Member added').first()).toBeVisible();
+    await expect(adminPage.getByRole('button', { name: 'Add member' })).toBeDisabled();
+    await expect(adminPage.getByText(gateReason('Group.AddMember'))).toBeVisible();
 
     await adminPage.getByLabel('User ID to remove').fill(user);
-    await adminPage.getByRole('button', { name: 'Remove by user ID' }).click();
-    const dialog = adminPage.getByRole('dialog');
-    await expect(dialog.getByText('Remove member?')).toBeVisible();
-    await dialog.getByRole('button', { name: 'Remove member' }).click();
-    await expect(adminPage.getByText('Member removed').first()).toBeVisible();
+    await expect(adminPage.getByRole('button', { name: 'Remove by user ID' })).toBeDisabled();
+    await expect(adminPage.getByText(gateReason('Group.RemoveMember')).first()).toBeVisible();
+    expect(sent).toEqual([]);
   });
 
   test('CheckPermission shows the decision the server makes', async ({ adminPage, sdk, tenant }) => {
