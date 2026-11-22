@@ -512,7 +512,8 @@ func TestRunNVRAMDeleteWithClient_WithPassword(t *testing.T) {
 
 	mockClient := &mockTPMServiceClient{
 		undefineNVRAMFunc: func(ctx context.Context, req *platformv1.UndefineNVRAMRequest, opts ...grpc.CallOption) (*platformv1.UndefineNVRAMResponse, error) {
-			assert.Equal(t, "my-password", req.Password)
+			assert.Equal(t, "my-password", req.ParentPassword)
+			assert.Empty(t, req.Password)
 			return &platformv1.UndefineNVRAMResponse{
 				Status: &platformv1.Status{Success: true},
 			}, nil
@@ -522,6 +523,13 @@ func TestRunNVRAMDeleteWithClient_WithPassword(t *testing.T) {
 	base := newMockTPMBaseCommand(flags, mockClient)
 	err := runNVRAMDeleteWithClient(base, 0x01000001, "my-password")
 	require.NoError(t, err)
+}
+
+func TestNewNVRAMDeleteCommand_PasswordIsOwnerAuthorization(t *testing.T) {
+	cmd := newNVRAMDeleteCommand(func() *cli.CommonFlags { return &cli.CommonFlags{} })
+	f := cmd.Flags().Lookup("password")
+	require.NotNil(t, f)
+	assert.Contains(t, f.Usage, "owner hierarchy")
 }
 
 func TestRunNVRAMDeleteWithClient_Error(t *testing.T) {
