@@ -85,6 +85,29 @@ func TestSDNService_PortStateReadFailureIsInternal(t *testing.T) {
 	assert.Equal(t, codes.Internal, status.Code(err))
 }
 
+// TestSDNService_PortActionsReachPortsOnlyOVSKnows covers a port the page
+// lists from OVS that this process never added (created before a restart or
+// outside the service): port stats and port state reach it by UUID and by
+// name, and a port the bridge does not have is still NotFound.
+func TestSDNService_PortActionsReachPortsOnlyOVSKnows(t *testing.T) {
+	svc := newPortStatusTestService(map[string]string{"p-up": "up", "p-down": "down"})
+	ctx := context.Background()
+
+	for _, portID := range []string{"uuid-p-up", "p-up"} {
+		_, err := svc.GetPortStats(ctx, &platformv1.GetPortStatsRequest{BridgeId: "br0-uuid", PortId: portID})
+		require.NoError(t, err, "GetPortStats %s", portID)
+
+		_, err = svc.SetPortState(ctx, &platformv1.SetPortStateRequest{BridgeId: "br0-uuid", PortId: portID, AdminState: "down"})
+		require.NoError(t, err, "SetPortState %s", portID)
+	}
+
+	_, err := svc.GetPortStats(ctx, &platformv1.GetPortStatsRequest{BridgeId: "br0-uuid", PortId: "uuid-missing"})
+	assert.Equal(t, codes.NotFound, status.Code(err))
+
+	_, err = svc.SetPortState(ctx, &platformv1.SetPortStateRequest{BridgeId: "br0-uuid", PortId: "uuid-missing", AdminState: "down"})
+	assert.Equal(t, codes.NotFound, status.Code(err))
+}
+
 func TestPortAdminStatus(t *testing.T) {
 	assert.Equal(t, platformv1.PortStatus_PORT_STATUS_UP, portAdminStatus["up"])
 	assert.Equal(t, platformv1.PortStatus_PORT_STATUS_DOWN, portAdminStatus["down"])
