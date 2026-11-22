@@ -2,7 +2,8 @@
 
 /**
  * Register OAuth Application page — minimal form that calls
- * iam.registerApp, then routes back to /iam/apps.
+ * iam.registerApp, then shows the one-time client secret until Done
+ * routes back to /iam/apps.
  */
 
 import React, { useState } from 'react';
@@ -13,7 +14,35 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Loader2 } from 'lucide-react';
+
+// The server answers RegisterApp with a snake_case body; the SDK type wraps
+// a camelCase app. Either may carry the one-time client secret.
+interface RegisteredAppFields {
+  clientId?: string;
+  client_id?: string;
+  clientSecret?: string;
+  client_secret?: string;
+}
+
+interface RegisterAppAnswer extends RegisteredAppFields {
+  app?: RegisteredAppFields;
+}
+
+interface RegisteredCredentials {
+  clientId: string;
+  clientSecret: string;
+}
+
+function credentialsFrom(data: unknown): RegisteredCredentials {
+  const answer = (data ?? {}) as RegisterAppAnswer;
+  return {
+    clientId: answer.app?.clientId ?? answer.app?.client_id ?? answer.clientId ?? answer.client_id ?? '',
+    clientSecret:
+      answer.app?.clientSecret ?? answer.app?.client_secret ?? answer.clientSecret ?? answer.client_secret ?? '',
+  };
+}
 
 export default function NewAppPage() {
   const router = useRouter();
@@ -23,6 +52,7 @@ export default function NewAppPage() {
   const [name, setName] = useState('');
   const [redirectUris, setRedirectUris] = useState('');
   const [grantTypes, setGrantTypes] = useState('client_credentials');
+  const [registered, setRegistered] = useState<RegisteredCredentials | null>(null);
 
   const createMutation = useMutation(
     async () => {
@@ -43,9 +73,9 @@ export default function NewAppPage() {
       });
     },
     {
-      onSuccess: () => {
+      onSuccess: (data) => {
         toast({ title: 'Application registered', variant: 'success' });
-        router.push('/iam/apps');
+        setRegistered(credentialsFrom(data));
       },
       onError: (err) => {
         toast({
@@ -74,6 +104,32 @@ export default function NewAppPage() {
             Register a new OAuth 2.0 client application.
           </CardDescription>
         </CardHeader>
+        {registered ? (
+        <CardContent className="space-y-4">
+          <Alert variant="warning">
+            <AlertTitle>Save the client secret now</AlertTitle>
+            <AlertDescription>
+              The client secret is shown only once. Copy it before you leave this page; it cannot be
+              shown again.
+            </AlertDescription>
+          </Alert>
+          <div className="space-y-2">
+            <Label>Client ID</Label>
+            <code className="block rounded bg-muted px-2 py-1 font-mono text-sm break-all">
+              {registered.clientId}
+            </code>
+          </div>
+          <div className="space-y-2">
+            <Label>Client Secret</Label>
+            <code className="block rounded bg-muted px-2 py-1 font-mono text-sm break-all">
+              {registered.clientSecret}
+            </code>
+          </div>
+          <div className="flex gap-2 justify-end">
+            <Button onClick={() => router.push('/iam/apps')}>Done</Button>
+          </div>
+        </CardContent>
+        ) : (
         <CardContent className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="name">Application Name *</Label>
@@ -117,6 +173,7 @@ export default function NewAppPage() {
             </Button>
           </div>
         </CardContent>
+        )}
       </Card>
     </div>
   );
