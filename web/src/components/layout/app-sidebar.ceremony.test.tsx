@@ -31,14 +31,14 @@ describe("AppSidebar ceremony entry (#2042)", () => {
   it("lists the bootstrap ceremony page under Platform", () => {
     renderSidebar();
     const link = screen.getByRole("link", { name: "Bootstrap Ceremony" });
-    expect(link).toHaveAttribute("href", "/platform/ceremony");
+    expect(link.getAttribute("href")).toBe("/platform/ceremony");
   });
 
   it("marks the entry active on the ceremony page", () => {
     renderSidebar();
     const link = screen.getByRole("link", { name: "Bootstrap Ceremony" });
-    expect(link).toHaveClass("bg-neutral-200");
+    expect(link.classList.contains("bg-neutral-200")).toBe(true);
     const health = screen.getByRole("link", { name: "Health" });
-    expect(health).not.toHaveClass("bg-neutral-200");
+    expect(health.classList.contains("bg-neutral-200")).toBe(false);
   });
 });
