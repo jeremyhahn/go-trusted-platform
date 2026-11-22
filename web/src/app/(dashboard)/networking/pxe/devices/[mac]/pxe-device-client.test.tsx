@@ -55,8 +55,34 @@ const EVENTS = ok({
   ],
 });
 
+const PXE_OPS = [
+  'GET /api/v1/pxe/devices/{id}',
+  'GET /api/v1/pxe/devices/mac/{mac}',
+  'GET /api/v1/pxe/devices/{id}/events',
+  'PUT /api/v1/pxe/devices/{id}/state',
+  'POST /api/v1/pxe/devices/{id}/enrolled',
+  'POST /api/v1/pxe/start',
+  'POST /api/v1/pxe/stop',
+] as const;
+
+// The capabilities listing as the server answers it: every PXE op enabled
+// but those in `off`, which carry the server's reason.
+function caps(off: string[] = []): Answer {
+  const capabilities = PXE_OPS.map((op) =>
+    off.includes(op)
+      ? { op, kind: 'route', enabled: false, reason: 'not-configured: pxe' }
+      : { op, kind: 'route', enabled: true },
+  );
+  return ok({ capabilities, total: capabilities.length, enabled: capabilities.filter((c) => c.enabled).length });
+}
+
 function stub(extra: Record<string, Answer> = {}) {
-  return stubControlPlane({ [MAC_PATH]: DEVICE, [EVENTS_PATH]: EVENTS, ...extra });
+  return stubControlPlane({
+    'GET /api/v1/capabilities': caps(),
+    [MAC_PATH]: DEVICE,
+    [EVENTS_PATH]: EVENTS,
+    ...extra,
+  });
 }
 
 async function renderPage() {
@@ -167,5 +193,24 @@ describe('PXEDeviceClient', () => {
     expect(screen.getByTestId('pxe-device')).toBeDefined();
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('pxe: read scope required');
+  });
+
+  it('withholds the device controls the server does not offer', async () => {
+    stub({
+      'GET /api/v1/capabilities': caps([
+        'PUT /api/v1/pxe/devices/{id}/state',
+        'POST /api/v1/pxe/devices/{id}/enrolled',
+        'POST /api/v1/pxe/start',
+        'POST /api/v1/pxe/stop',
+      ]),
+    });
+    await renderPage();
+
+    for (const name of ['Set state', 'Mark enrolled', 'Start PXE service', 'Stop PXE service']) {
+      const button = (await screen.findByRole('button', { name })) as HTMLButtonElement;
+      await waitFor(() => expect(button.getAttribute('title')).toBe('not-configured: pxe'));
+      expect(button.getAttribute('data-capability-enabled')).toBe('false');
+      expect(button.disabled).toBe(true);
+    }
   });
 });

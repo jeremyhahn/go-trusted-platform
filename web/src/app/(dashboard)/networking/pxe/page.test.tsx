@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // (reason), retries and removes the device through client.pxe (network
 // boundary, mocked here).
 
-const { pxe, toast } = vi.hoisted(() => ({
+const { pxe, toast, off } = vi.hoisted(() => ({
   pxe: {
     listDevices: vi.fn(),
     getStatus: vi.fn(),
@@ -16,6 +16,16 @@ const { pxe, toast } = vi.hoisted(() => ({
     removeDevice: vi.fn(),
   },
   toast: vi.fn(),
+  off: new Set<string>(),
+}));
+
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: (op: string) =>
+      off.has(op) ? { enabled: false, reason: "not-configured: pxe" } : { enabled: true },
+  }),
 }));
 
 vi.mock("@/hooks", async (importOriginal) => ({
@@ -37,6 +47,7 @@ const MAC = "00:11:22:33:44:55";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  off.clear();
   pxe.listDevices.mockResolvedValue({
     data: { devices: [{ id: "dev-1", macAddress: MAC, state: "FAILED", targetVlan: 100 }] },
   });
@@ -90,5 +101,31 @@ describe("PXE page device actions", () => {
     const dialog = within(await screen.findByRole("dialog"));
     fireEvent.click(dialog.getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(pxe.removeDevice).toHaveBeenCalledWith("dev-1"));
+  });
+
+  it("withholds the device actions the server does not offer", async () => {
+    for (const op of [
+      "POST /api/v1/pxe/devices/{id}/authorize",
+      "POST /api/v1/pxe/devices/{id}/quarantine",
+      "POST /api/v1/pxe/devices/{id}/retry",
+      "DELETE /api/v1/pxe/devices/{id}",
+      "POST /api/v1/pxe/devices",
+    ]) {
+      off.add(op);
+    }
+    render(<PXEBootPage />);
+    await screen.findByRole("button", { name: `Authorize ${MAC}` });
+    for (const name of [
+      `Authorize ${MAC}`,
+      `Quarantine ${MAC}`,
+      `Retry ${MAC}`,
+      `Remove ${MAC}`,
+      "Register Device",
+    ]) {
+      const button = screen.getByRole("button", { name }) as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
+      expect(button.getAttribute("data-capability-enabled")).toBe("false");
+      expect(button.getAttribute("title")).toBe("not-configured: pxe");
+    }
   });
 });
