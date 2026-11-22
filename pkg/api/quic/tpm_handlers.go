@@ -305,7 +305,9 @@ type TPM2RandomResponse struct {
 
 // TPM2SealRequest represents a TPM seal request.
 type TPM2SealRequest struct {
-	Data []byte `codec:"data"`
+	Data     []byte `codec:"data"`
+	CN       string `codec:"cn"`
+	Password string `codec:"password"`
 }
 
 // TPM2SealResponse represents a TPM seal response.
@@ -316,7 +318,8 @@ type TPM2SealResponse struct {
 
 // TPM2UnsealRequest represents a TPM unseal request.
 type TPM2UnsealRequest struct {
-	CN string `codec:"cn"`
+	CN       string `codec:"cn"`
+	Password string `codec:"password"`
 }
 
 // TPM2UnsealResponse represents a TPM unseal response.
@@ -1036,7 +1039,12 @@ func (h *TPM2Handler) handleSeal(ctx context.Context, payload []byte) *quicwire.
 		return h.errorResponse(quicwire.StatusInvalidArgument, ErrTPM2MissingData)
 	}
 
-	sealed, err := h.tpm.Seal(ctx, req.Data, nil)
+	opts, err := tpmSealOptions(h.tpm, req.CN, req.Password)
+	if err != nil {
+		return h.tpmErrorResponse(err)
+	}
+
+	sealed, err := h.tpm.Seal(ctx, req.Data, opts)
 	if err != nil {
 		return h.tpmErrorResponse(err)
 	}
@@ -1059,10 +1067,16 @@ func (h *TPM2Handler) handleUnseal(ctx context.Context, payload []byte) *quicwir
 	}
 
 	sealed := &xkmssdk.SealedData{
-		KeyID: req.CN,
+		Backend: xkmssdk.BackendTypeTPM2,
+		KeyID:   req.CN,
 	}
 
-	data, err := h.tpm.Unseal(ctx, sealed, nil)
+	opts, err := tpmUnsealOptions(h.tpm, req.CN, req.Password)
+	if err != nil {
+		return h.tpmErrorResponse(err)
+	}
+
+	data, err := h.tpm.Unseal(ctx, sealed, opts)
 	if err != nil {
 		return h.tpmErrorResponse(err)
 	}
@@ -1071,6 +1085,60 @@ func (h *TPM2Handler) handleUnseal(ctx context.Context, payload []byte) *quicwir
 		Data:      data,
 		Timestamp: time.Now().Unix(),
 	})
+}
+
+// tpmSealOptions builds the seal options as the gRPC path's
+// buildSealOptions does: the key named cn (default
+// "platform-sealing-key") under the SSRK, the password held when given.
+// No PCR policy: the QUIC seal request carries none.
+func tpmSealOptions(tpm xkmssdk.TrustedPlatformModule, cn, password string) (*xkmssdk.SealOptions, error) {
+	if cn == "" {
+		cn = "platform-sealing-key"
+	}
+	keyAttrs, err := tpmSealingKeyAttributes(tpm, cn, password)
+	if err != nil {
+		return nil, err
+	}
+	return &xkmssdk.SealOptions{KeyAttributes: keyAttrs}, nil
+}
+
+// tpmUnsealOptions builds the unseal options as the gRPC path's
+// buildUnsealOptions does.
+func tpmUnsealOptions(tpm xkmssdk.TrustedPlatformModule, cn, password string) (*xkmssdk.UnsealOptions, error) {
+	keyAttrs, err := tpmSealingKeyAttributes(tpm, cn, password)
+	if err != nil {
+		return nil, err
+	}
+	opts := &xkmssdk.UnsealOptions{KeyAttributes: keyAttrs}
+	if password != "" {
+		held, err := xkmssdk.NewPassword([]byte(password))
+		if err != nil {
+			return nil, fmt.Errorf("hold the unsealing password: %w", err)
+		}
+		opts.Password = held
+	}
+	return opts, nil
+}
+
+// tpmSealingKeyAttributes names the sealing key cn under the SSRK and
+// holds its password when one is given.
+func tpmSealingKeyAttributes(tpm xkmssdk.TrustedPlatformModule, cn, password string) (*xkmssdk.KeyAttributes, error) {
+	ssrkAttrs, err := tpm.SSRKAttributes()
+	if err != nil {
+		return nil, fmt.Errorf("read SSRK attributes: %w", err)
+	}
+	keyAttrs := &xkmssdk.KeyAttributes{
+		CN:     cn,
+		Parent: ssrkAttrs,
+	}
+	if password != "" {
+		held, err := xkmssdk.NewPassword([]byte(password))
+		if err != nil {
+			return nil, fmt.Errorf("hold the sealing password: %w", err)
+		}
+		keyAttrs.Password = held
+	}
+	return keyAttrs, nil
 }
 
 // handleCapabilities returns TPM supported algorithms, commands, and ECC curves.
