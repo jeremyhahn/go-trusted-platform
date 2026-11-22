@@ -33,6 +33,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // lifecycleCA is an initialised CA with a real root and intermediate.
@@ -301,4 +302,72 @@ func TestRegisterHealthCheckers_ConfiguredCAKeepsCAChecker(t *testing.T) {
 	d.registerHealthCheckers()
 
 	assert.Contains(t, d.healthRegistry.List(), "ca")
+}
+
+// quicBaaSCARecorder stands in for injectQuicBaaSCA: it records the app
+// and CA InitCA hands to the embedded QuicBaaS and returns err.
+type quicBaaSCARecorder struct {
+	calls int
+	app   *app.App
+	ca    quicbaasca.CACertificateAuthority
+	err   error
+}
+
+func (r *quicBaaSCARecorder) install(t *testing.T) {
+	t.Helper()
+	saved := injectQuicBaaSCA
+	t.Cleanup(func() { injectQuicBaaSCA = saved })
+	injectQuicBaaSCA = func(a *app.App, ca quicbaasca.CACertificateAuthority) error {
+		r.calls++
+		r.app = a
+		r.ca = ca
+		return r.err
+	}
+}
+
+func TestAppCAInitializer_HandsTheCAToTheEmbeddedQuicBaaS(t *testing.T) {
+	rec := &quicBaaSCARecorder{}
+	rec.install(t)
+	ca := lifecycleCA(t)
+	// A loaded CA: LoadOrInitCA keeps it, so the initializer returns it.
+	a := &app.App{CAConfig: &trustedca.CAConfig{}, CA: ca}
+	svc := NewCAGRPCService(nil, nil, nil).WithCAInitializer(AppCAInitializer(a))
+
+	resp, err := svc.InitCA(context.Background(), &platformv1.InitCARequest{})
+	require.NoError(t, err)
+	assert.True(t, resp.Status.Success)
+	assert.Equal(t, 1, rec.calls, "InitCA did not hand the CA to the embedded QuicBaaS")
+	assert.Same(t, a, rec.app)
+	assert.Same(t, ca, rec.ca)
+}
+
+func TestAppCAInitializer_QuicBaaSRefusalFailsInitCA(t *testing.T) {
+	rec := &quicBaaSCARecorder{err: errors.New("embedded CA adapter not ready")}
+	rec.install(t)
+	a := &app.App{CAConfig: &trustedca.CAConfig{}, CA: lifecycleCA(t)}
+	svc := NewCAGRPCService(nil, nil, nil).WithCAInitializer(AppCAInitializer(a))
+
+	_, err := svc.InitCA(context.Background(), &platformv1.InitCARequest{})
+	require.Error(t, err)
+	assert.Equal(t, codes.Internal, status.Code(err))
+	assert.Contains(t, status.Convert(err).Message(), "embedded CA adapter not ready")
+	assert.Nil(t, svc.authority(), "a CA the embedded QuicBaaS refused was swapped in")
+}
+
+func TestNew_NoStartupCAMountsTheQUICCAHandler(t *testing.T) {
+	config := testConfig("/tmp/test-quic-ca-holder.sock")
+	config.EnableQUIC = true
+	config.CAService = nil
+	d, err := New(config)
+	require.NoError(t, err)
+	require.NotNil(t, d.quicHandler)
+	require.NotNil(t, d.quicHandler.caHandler, "no QUIC CA handler with no start-up CA")
+
+	ctx := context.Background()
+	resp := d.quicHandler.handleCA(ctx, &quicwire.Request{Opcode: quicwire.OpCAInfo})
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
+
+	d.caService.setAuthority(lifecycleCA(t))
+	resp = d.quicHandler.handleCA(ctx, &quicwire.Request{Opcode: quicwire.OpCAInfo})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
