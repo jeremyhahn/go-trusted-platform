@@ -26,9 +26,23 @@ vi.mock("@/hooks", async (importOriginal) => ({
   useToast: () => toastResult,
 }));
 
+const { off } = vi.hoisted(() => ({ off: new Set<string>() }));
+
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: (op: string) =>
+      off.has(op) ? { enabled: false, reason: "not-configured: iam" } : { enabled: true },
+  }),
+}));
+
+const CREATE_POLICY_OP = "POST /api/v1/iam/tenants/{tenant}/policies";
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  off.clear();
 });
 
 describe("NewPolicyPage", () => {
@@ -60,5 +74,18 @@ describe("NewPolicyPage", () => {
 
     const button = screen.getByRole("button", { name: "Create Policy" }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
+  });
+
+  it("disables Create Policy with the reason when the create op is off (#2054)", () => {
+    off.add(CREATE_POLICY_OP);
+    render(<NewPolicyPage />);
+
+    fireEvent.change(screen.getByLabelText("Name *"), { target: { value: "allow-read" } });
+    const button = screen.getByRole("button", { name: "Create Policy" }) as HTMLButtonElement;
+    expect(button.getAttribute("data-capability-op")).toBe(CREATE_POLICY_OP);
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("title")).toBe("not-configured: iam");
+    fireEvent.click(button);
+    expect(iam.createPolicy).not.toHaveBeenCalled();
   });
 });

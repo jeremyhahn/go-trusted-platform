@@ -66,16 +66,35 @@ vi.mock("@/components/ui/data-table", () => ({
 }));
 
 vi.mock("@/components/ui/data-table-row-actions", () => ({
-  DataTableRowActions: ({ row, actions }: { row: Row; actions: { label: string; onClick: (r: Row) => void }[] }) => (
+  DataTableRowActions: ({
+    row,
+    actions,
+  }: {
+    row: Row;
+    actions: { label: string; onClick: (r: Row) => void; disabled?: boolean; title?: string }[];
+  }) => (
     <div>
       {actions.map((a) => (
-        <button key={a.label} onClick={() => a.onClick(row)}>
+        <button key={a.label} onClick={() => a.onClick(row)} disabled={a.disabled} title={a.title}>
           {a.label}
         </button>
       ))}
     </div>
   ),
 }));
+
+const { off } = vi.hoisted(() => ({ off: new Set<string>() }));
+
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: (op: string) =>
+      off.has(op) ? { enabled: false, reason: "not-configured: iam" } : { enabled: true },
+  }),
+}));
+
+const ROTATE_OP = "POST /api/v1/iam/tenants/{tenant}/apps/{id}/rotate";
 
 import AppsPage from "./page";
 
@@ -91,6 +110,32 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  off.clear();
+});
+
+describe("AppsPage Rotate Secret capability gate (#2054)", () => {
+  it("disables Rotate Secret with the reason when the rotate op is off", async () => {
+    off.add(ROTATE_OP);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<AppsPage />);
+    const button = within(screen.getByTestId("row-app-1")).getByRole("button", {
+      name: "Rotate Secret",
+    }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("title")).toBe("not-configured: iam");
+    fireEvent.click(button);
+    await Promise.resolve();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(iam.rotateAppSecret).not.toHaveBeenCalled();
+  });
+
+  it("leaves Rotate Secret enabled when the rotate op is offered", () => {
+    render(<AppsPage />);
+    const button = within(screen.getByTestId("row-app-1")).getByRole("button", {
+      name: "Rotate Secret",
+    }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+  });
 });
 
 describe("AppsPage Rotate Secret", () => {
