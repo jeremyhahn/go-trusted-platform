@@ -133,3 +133,42 @@ func TestKMSRouter_DEKRoutesServeThePlatformTenantOnly(t *testing.T) {
 	w := do(http.MethodGet, "/api/v1/kms/deks", "platform")
 	require.NotEqual(t, http.StatusForbidden, w.Code, "platform tenant: body %s", w.Body.String())
 }
+
+// TestKMSRouter_KeyPolicyAndMetadataRoutesServeThePlatformTenantOnly pins
+// that the key policy and metadata routes serve the platform tenant only: the
+// pinned upstream SetKeyPolicy, UpdateKeyMetadata and GetKeyMetadata look the
+// key up by ID without tenant scoping.
+func TestKMSRouter_KeyPolicyAndMetadataRoutesServeThePlatformTenantOnly(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RESTListenAddr = "127.0.0.1:0"
+	cfg.PlatformTenantID = "platform"
+	svc, err := NewService(cfg)
+	require.NoError(t, err)
+	s, err := NewRESTServer(cfg, svc, slog.Default())
+	require.NoError(t, err)
+	s.SetKMSRouter(nil, nil, nil, nil, restapi.NewScopeGuard(tenantTokenValidator{}, nil, nil))
+
+	do := func(method, path, token string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(method, path, strings.NewReader("{}"))
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Content-Type", "application/json")
+		s.Router().ServeHTTP(w, r)
+		return w
+	}
+
+	cases := []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/kms/keys/k1/policy"},
+		{http.MethodPut, "/api/v1/kms/keys/k1/policy"},
+		{http.MethodGet, "/api/v1/kms/keys/k1/metadata"},
+		{http.MethodPut, "/api/v1/kms/keys/k1/metadata"},
+	}
+	for _, c := range cases {
+		w := do(c.method, c.path, "tenant-a")
+		require.Equal(t, http.StatusForbidden, w.Code, "tenant-a %s %s: body %s", c.method, c.path, w.Body.String())
+	}
+	for _, c := range cases {
+		w := do(c.method, c.path, "platform")
+		require.NotEqual(t, http.StatusForbidden, w.Code, "platform tenant %s %s: body %s", c.method, c.path, w.Body.String())
+	}
+}
