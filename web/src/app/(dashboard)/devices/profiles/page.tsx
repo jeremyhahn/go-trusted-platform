@@ -227,6 +227,54 @@ export default function DeviceProfilesPage() {
   );
   const registeredTotal = countError ? undefined : countResponse?.count;
 
+  // Find one profile by serial or MAC address (FindProfileBySerial and
+  // FindProfileByMACAddress, #2048). A 404 means no profile matches; any
+  // other refusal shows the server's message. Editing the query clears the
+  // old answer.
+  const [lookupQuery, setLookupQuery] = useState('');
+  const [lookupBusy, setLookupBusy] = useState(false);
+  const [lookup, setLookup] = useState<
+    | { kind: 'found'; profile: DeviceProfile }
+    | { kind: 'none'; query: string }
+    | { kind: 'error'; message: string }
+    | null
+  >(null);
+  const lookupDisabled = lookupBusy || lookupQuery.trim() === '';
+
+  const findProfile = async (by: 'serial' | 'mac') => {
+    const q = lookupQuery.trim();
+    if (q === '') return;
+    setLookupBusy(true);
+    try {
+      const res =
+        by === 'serial'
+          ? await deviceService.findProfileBySerial(q)
+          : await deviceService.findProfileByMACAddress(q);
+      if (res.error?.status === 404) {
+        setLookup({ kind: 'none', query: q });
+      } else if (res.error) {
+        setLookup({ kind: 'error', message: res.error.message });
+      } else {
+        // The server's FindProfileBySerial and FindProfileByMAC handlers
+        // answer the profile itself, while the SDK types the response as
+        // { profile?: DeviceProfile }; accept both shapes.
+        const payload = res.data as unknown as
+          | { profile?: DeviceProfile }
+          | (DeviceProfile & { profile?: undefined })
+          | undefined;
+        let profile: DeviceProfile | undefined;
+        if (payload && 'profile' in payload && payload.profile) {
+          profile = payload.profile;
+        } else if (payload && 'id' in payload && payload.id) {
+          profile = payload as DeviceProfile;
+        }
+        setLookup(profile ? { kind: 'found', profile } : { kind: 'none', query: q });
+      }
+    } finally {
+      setLookupBusy(false);
+    }
+  };
+
   const profiles: DeviceProfile[] = useMemo(() => {
     if (!profilesData?.profiles) return [];
     return profilesData.profiles;
@@ -488,6 +536,49 @@ export default function DeviceProfilesPage() {
           )}
         </p>
       )}
+
+      <Card data-testid="profile-lookup">
+        <CardHeader>
+          <CardTitle>Find a profile</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="space-y-2">
+            <Label htmlFor="profile-lookup-query">Serial or MAC address</Label>
+            <Input
+              id="profile-lookup-query"
+              value={lookupQuery}
+              onChange={(e) => {
+                setLookupQuery(e.target.value);
+                setLookup(null);
+              }}
+            />
+          </div>
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" disabled={lookupDisabled} onClick={() => findProfile('serial')}>
+              Find by serial
+            </Button>
+            <Button type="button" variant="outline" disabled={lookupDisabled} onClick={() => findProfile('mac')}>
+              Find by MAC
+            </Button>
+          </div>
+          {lookup?.kind === 'found' && (
+            <p data-testid="profile-lookup-result" className="text-sm">
+              <Link href={`/devices/profiles/${lookup.profile.id}`}>{lookup.profile.name}</Link>{' '}
+              ({deviceRoleLabel(lookup.profile.role)})
+            </p>
+          )}
+          {lookup?.kind === 'none' && (
+            <p data-testid="profile-lookup-result" className="text-sm text-muted-foreground">
+              {`No profile matches ${lookup.query}`}
+            </p>
+          )}
+          {lookup?.kind === 'error' && (
+            <p data-testid="profile-lookup-error" className="text-sm text-destructive">
+              Lookup refused: {lookup.message}
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Statistics Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
