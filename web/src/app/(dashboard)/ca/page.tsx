@@ -4,7 +4,8 @@ import Link from "next/link";
 import { AlertCircle, FileSignature, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { useCA, useApi } from "@/hooks";
+import { CA_GATED_CONTROLS, useCAInfo } from "@/hooks/use-ca-ops";
+import { CAOperationGate } from "./ca-operation-gate";
 
 /** A chain entry as the REST layer sends it (camelCase or snake_case). */
 interface CertSummaryWire {
@@ -36,14 +37,16 @@ const nameOf = (c: CertSummaryWire): string => c.commonName ?? c.common_name ?? 
  * chain summaries), with links to the sign-CSR and verify pages.
  */
 export default function CAOverviewPage() {
-  const ca = useCA();
-  const { data, isLoading, error } = useApi(() => ca.getInfo(), []);
+  const { info: view, isLoading, error } = useCAInfo();
 
-  const wire = (data as unknown as { caInfo?: CAInfoWire; ca_info?: CAInfoWire } | undefined) ?? {};
-  const info: CAInfoWire = wire.caInfo ?? wire.ca_info ?? {};
-  const root = info.rootCert ?? info.root_cert;
-  const intermediates = info.intermediates ?? [];
-  const validity = info.defaultValidityDays ?? info.default_validity_days;
+  const info: CAInfoWire = {
+    commonName: view.commonName,
+    isIntermediate: view.isIntermediate,
+    defaultAlgorithm: view.defaultAlgorithm,
+  };
+  const root = view.root as Parameters<typeof nameOf>[0] | undefined;
+  const intermediates = view.intermediates as Parameters<typeof nameOf>[0][];
+  const validity = view.defaultValidityDays;
 
   return (
     <div className="flex flex-col gap-6">
@@ -91,6 +94,18 @@ export default function CAOverviewPage() {
             <dt className="text-muted-foreground">Default validity</dt>
             <dd data-testid="ca-default-validity">{validity !== undefined ? `${validity} days` : ""}</dd>
           </dl>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Lifecycle</CardTitle>
+          <CardDescription>Initialization and trust-store installation of the CA certificates</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-4">
+          {CA_GATED_CONTROLS.map((control) => (
+            <CAOperationGate key={control.operation} control={control} />
+          ))}
         </CardContent>
       </Card>
 

@@ -82,6 +82,7 @@ const navigation = [
     title: "Security",
     icon: Lock,
     children: [
+      { title: "CA Overview", href: "/ca" },
       { title: "Certificates", href: "/ca/certificates" },
       { title: "Certificate Requests", href: "/ca/requests" },
       { title: "CA Bundle", href: "/ca/bundle" },
