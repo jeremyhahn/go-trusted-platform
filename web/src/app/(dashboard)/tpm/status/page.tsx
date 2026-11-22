@@ -166,15 +166,17 @@ export default function TPMStatusPage() {
   }, [loadStatus, refetchEK, refetchSRK, refetchIAK, refetchIDevID, refetchIAKExists, refetchAttributes]);
 
   // GenerateIAK / DeleteIAK: each call re-reads HasIAK and the IAK info
-  // afterwards, whether it was accepted or refused. The SDK does not throw;
-  // a refusal comes back as res.error.
+  // afterwards, whether it was accepted or refused (a refused GenerateIAK can
+  // still leave an IAK). The buttons stay disabled until both reads answer, so
+  // nobody acts on a stale badge (#2186 Codex). The SDK does not throw; a
+  // refusal comes back as res.error, and useApi's refetch never rejects.
   const [iakBusy, setIakBusy] = React.useState(false);
   const [confirmDeleteIAK, setConfirmDeleteIAK] = React.useState(false);
 
-  const rereadIAK = React.useCallback(() => {
-    refetchIAKExists();
-    refetchIAK();
-  }, [refetchIAKExists, refetchIAK]);
+  const rereadIAK = React.useCallback(
+    () => Promise.all([refetchIAKExists(), refetchIAK()]),
+    [refetchIAKExists, refetchIAK]
+  );
 
   const generateIAK = React.useCallback(async () => {
     setIakBusy(true);
@@ -186,8 +188,8 @@ export default function TPMStatusPage() {
         toast({ title: "IAK generated", description: res.data?.status?.message || "The IAK was created" });
       }
     } finally {
+      await rereadIAK();
       setIakBusy(false);
-      rereadIAK();
     }
   }, [idevid, toast, rereadIAK]);
 
@@ -202,8 +204,8 @@ export default function TPMStatusPage() {
         toast({ title: "IAK deleted", description: res.data?.status?.message || "The IAK was deleted" });
       }
     } finally {
+      await rereadIAK();
       setIakBusy(false);
-      rereadIAK();
     }
   }, [idevid, toast, rereadIAK]);
 
