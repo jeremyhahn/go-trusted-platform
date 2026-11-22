@@ -56,6 +56,16 @@ interface DNSRecordFormProps {
   record?: DNSRecord;
 }
 
+const EMPTY_VALUES: FormValues = {
+  name: '',
+  type: 'A',
+  value: '',
+  ttl: 3600,
+  priority: undefined,
+  weight: undefined,
+  port: undefined,
+};
+
 export function DNSRecordForm({
   zoneName,
   open,
@@ -69,15 +79,7 @@ export function DNSRecordForm({
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: {
-      name: '',
-      type: 'A',
-      value: '',
-      ttl: 3600,
-      priority: undefined,
-      weight: undefined,
-      port: undefined,
-    },
+    defaultValues: EMPTY_VALUES,
   });
 
   const createMutation = useMutation(
@@ -197,8 +199,11 @@ export function DNSRecordForm({
         weight: record.weight,
         port: record.port,
       });
+    } else if (open && !record) {
+      // The dialog stays mounted: an Add opened after a closed edit must not carry that record's fields.
+      form.reset(EMPTY_VALUES);
     }
-  }, [record, form]);
+  }, [record, open, form]);
 
   const onSubmit = (values: FormValues) => {
     if (isEdit && record) {

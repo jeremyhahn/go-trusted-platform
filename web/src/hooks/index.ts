@@ -12,6 +12,9 @@ export { useSessionToken, useHydrated, notifySessionChanged } from "./use-sessio
 export { useNTP } from "./use-ntp";
 export type { NTPStatus, NTPSource, NTPStatusResponse, NTPSourcesResponse } from "./use-ntp";
 
+// DNSSEC status and zone signing (#2060)
+export { useDNSSEC } from "./use-dnssec";
+
 // SDK hooks (exported from main entry point for bundler compatibility)
 export {
   // Generic hooks

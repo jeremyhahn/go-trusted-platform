@@ -74,6 +74,9 @@ export function readZoneDetail(zone: Zone): DNSZoneDetail {
     ),
     ...(recordSet.txtRecords ?? []).map((r) => record(r.name, 'TXT', r.value, r.ttl)),
     ...nsRecords.map((r) => record(r.name, 'NS', r.value, r.ttl)),
+    ...(recordSet.srvRecords ?? []).map((r) =>
+      record(r.name, 'SRV', r.target, r.ttl, { priority: r.priority, weight: r.weight, port: r.port }),
+    ),
   ];
   if (soa) {
     records.push(record(soa.name, 'SOA', `${soa.mname} ${soa.rname} ${soa.serial}`, soa.ttl));
