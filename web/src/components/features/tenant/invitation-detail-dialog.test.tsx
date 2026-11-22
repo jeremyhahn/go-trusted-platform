@@ -30,10 +30,10 @@ describe('InvitationDetailDialog', () => {
 
     render(withControlPlane(<InvitationDetailDialog id="42" open onOpenChange={() => {}} />));
 
-    expect(await screen.findByText('invitee@example.com')).toBeInTheDocument();
-    expect(screen.getByText('member')).toBeInTheDocument();
-    expect(screen.getByText('pending')).toBeInTheDocument();
-    expect(screen.getByText(invitation.inviteUrl)).toBeInTheDocument();
+    expect(await screen.findByText('invitee@example.com')).toBeTruthy();
+    expect(screen.getByText('member')).toBeTruthy();
+    expect(screen.getByText('pending')).toBeTruthy();
+    expect(screen.getByText(invitation.inviteUrl)).toBeTruthy();
     expect(sent.some((r) => r.method === 'GET' && r.path === '/api/v1/invitations/42')).toBe(true);
   });
 
@@ -44,6 +44,6 @@ describe('InvitationDetailDialog', () => {
 
     render(withControlPlane(<InvitationDetailDialog id="42" open onOpenChange={() => {}} />));
 
-    expect(await screen.findByText(/not allowed to read this invitation/)).toBeInTheDocument();
+    expect(await screen.findByText(/not allowed to read this invitation/)).toBeTruthy();
   });
 });
