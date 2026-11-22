@@ -417,6 +417,41 @@ func TestCAGRPCService_InstallCACertificates_OneCertificatePerTrustFile(t *testi
 	}
 }
 
+func TestCAGRPCService_InstallCACertificates_CountsOnlyFilesWritten(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ca.crt")
+	svc := NewCAGRPCService(nil, lifecycleCA(t), nil).WithTrustInstallPath(path)
+	ctx := context.Background()
+
+	resp, err := svc.InstallCACertificates(ctx,
+		&platformv1.InstallCACertificatesRequest{IncludeIntermediates: false})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), resp.GetCertificatesInstalled(), "root-only install writes one file")
+
+	resp, err = svc.InstallCACertificates(ctx,
+		&platformv1.InstallCACertificatesRequest{IncludeIntermediates: true})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), resp.GetCertificatesInstalled(), "root already installed: only the intermediate is written")
+
+	resp, err = svc.InstallCACertificates(ctx,
+		&platformv1.InstallCACertificatesRequest{IncludeIntermediates: true})
+	require.NoError(t, err)
+	assert.Equal(t, int32(0), resp.GetCertificatesInstalled())
+	assert.Contains(t, resp.GetStatus().GetMessage(), "already installed")
+
+	require.NoError(t, os.Remove(filepath.Join(dir, "ca-intermediate-1.crt")))
+	resp, err = svc.InstallCACertificates(ctx,
+		&platformv1.InstallCACertificatesRequest{IncludeIntermediates: true})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), resp.GetCertificatesInstalled(), "repairing the intermediate writes one file")
+
+	require.NoError(t, os.Remove(path))
+	resp, err = svc.InstallCACertificates(ctx,
+		&platformv1.InstallCACertificatesRequest{IncludeIntermediates: true})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), resp.GetCertificatesInstalled(), "repairing the root writes one file")
+}
+
 func TestCALifecycle_RequiresTheAdminScope(t *testing.T) {
 	assert.Equal(t, "ca:create", grpcapi.ScopeForMethod("/platform.v1.CAService/InitCA"))
 	assert.Equal(t, "trust:write", grpcapi.ScopeForMethod("/platform.v1.CAService/InstallCACertificates"))
