@@ -133,7 +133,10 @@ func newIAMCategoryHandler() *QUICServiceHandler {
 	logger := logging.DefaultLogger()
 	handler := newTestQUICServiceHandler(logger)
 	client := iamTenantOnlyClient{tenants: newMockIAMClientForTenant()}
-	handler.SetIAMGRPCService(NewIAMGRPCService(logger.Slog(), client, nil))
+	svc := NewIAMGRPCService(logger.Slog(), client, allowAllPEP(nil))
+	// IAM tenant create and list fail closed with no system tenant set.
+	svc.SetSystemTenant(fixtureSystemTenantID)
+	handler.SetIAMGRPCService(svc)
 	return handler
 }
 
@@ -150,7 +153,7 @@ func iamCategoryRequest(t *testing.T, sub byte, msg any) *quicwire.Request {
 
 func TestQUICIAMCategoryManagesIAMTenantRecords(t *testing.T) {
 	handler := newIAMCategoryHandler()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	resp := handler.HandleRequest(ctx, iamCategoryRequest(t, quicwire.IAMSubTenantCreate,
 		&platformv1.CreateIAMTenantRequest{Id: "acme", Name: "Acme"}))
@@ -204,7 +207,7 @@ func TestQUICIAMCategoryManagesIAMTenantRecords(t *testing.T) {
 }
 
 func TestQUICIAMCategoryRejectsBadRequests(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	cases := []struct {
 		name    string
@@ -232,7 +235,7 @@ func TestQUICIAMCategoryRejectsBadRequests(t *testing.T) {
 
 func TestQUICIAMCategoryHandlerRejectsUnknownSub(t *testing.T) {
 	handler := newIAMCategoryHandler()
-	resp := handler.handleIAMCategory(context.Background(), &quicwire.Request{Opcode: quicwire.OpIAMCategory, Payload: []byte{0x7F}})
+	resp := handler.handleIAMCategory(unixOperatorContext(), &quicwire.Request{Opcode: quicwire.OpIAMCategory, Payload: []byte{0x7F}})
 	if resp.Status != quicwire.StatusNotImplemented {
 		t.Fatalf("status = 0x%02x, want StatusNotImplemented", resp.Status)
 	}
@@ -242,7 +245,7 @@ func TestQUICIAMCategoryHandlerRejectsUnknownSub(t *testing.T) {
 // the QUIC caller: the IAM service, not the platform TenantService, judged it.
 func TestQUICIAMCategoryCreateRequiresID(t *testing.T) {
 	handler := newIAMCategoryHandler()
-	resp := handler.HandleRequest(context.Background(), iamCategoryRequest(t, quicwire.IAMSubTenantCreate,
+	resp := handler.HandleRequest(unixOperatorContext(), iamCategoryRequest(t, quicwire.IAMSubTenantCreate,
 		&platformv1.CreateIAMTenantRequest{Name: "Acme"}))
 	if resp.Status != quicwire.StatusInvalidArgument {
 		t.Fatalf("status = 0x%02x, want InvalidArgument (payload %q)", resp.Status, resp.Payload)
@@ -252,12 +255,24 @@ func TestQUICIAMCategoryCreateRequiresID(t *testing.T) {
 	}
 }
 
+// TestQUICIAMCategoryRefusesAnUnboundCaller pins SPEC row 109: a caller
+// with no identity (no platform token, no mTLS identity, no peer
+// credentials) is refused a tenant-scoped IAM call, fail closed.
+func TestQUICIAMCategoryRefusesAnUnboundCaller(t *testing.T) {
+	handler := newIAMCategoryHandler()
+	resp := handler.HandleRequest(context.Background(), iamCategoryRequest(t, quicwire.IAMSubTenantCreate,
+		&platformv1.CreateIAMTenantRequest{Id: "acme", Name: "Acme"}))
+	if resp.Status != quicwire.StatusPermissionDenied {
+		t.Fatalf("status = 0x%02x, want PermissionDenied (payload %q)", resp.Status, resp.Payload)
+	}
+}
+
 // newIAMGroupCategoryHandler is a QUIC handler on an in-memory IAM client
 // holding group "ops" in tenant "acme".
 func newIAMGroupCategoryHandler(t *testing.T) *QUICServiceHandler {
 	t.Helper()
 	iam := newMemIAM()
-	if _, err := iam.Group().Create(context.Background(), "acme",
+	if _, err := iam.Group().Create(unixOperatorContext(), "acme",
 		&sdkiam.CreateGroupRequest{ID: "ops", Name: "Ops", Description: "on call"}); err != nil {
 		t.Fatalf("seed group: %v", err)
 	}
@@ -268,7 +283,7 @@ func newIAMGroupCategoryHandler(t *testing.T) *QUICServiceHandler {
 
 func TestQUICIAMCategoryUpdatesGroup(t *testing.T) {
 	handler := newIAMGroupCategoryHandler(t)
-	resp := handler.HandleRequest(context.Background(), iamCategoryRequest(t, quicwire.IAMSubGroupUpdate,
+	resp := handler.HandleRequest(unixOperatorContext(), iamCategoryRequest(t, quicwire.IAMSubGroupUpdate,
 		&platformv1.UpdateIAMGroupRequest{TenantId: "acme", GroupId: "ops", Description: "on call, nights"}))
 	if resp.Status != quicwire.StatusOK {
 		t.Fatalf("status = 0x%02x, want OK (payload %q)", resp.Status, resp.Payload)
@@ -293,7 +308,7 @@ func TestQUICIAMCategoryGroupUpdateRejectsBadRequests(t *testing.T) {
 	handler := newIAMGroupCategoryHandler(t)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			resp := handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpIAMCategory, Payload: tc.payload})
+			resp := handler.HandleRequest(unixOperatorContext(), &quicwire.Request{Opcode: quicwire.OpIAMCategory, Payload: tc.payload})
 			if resp.Status != tc.want {
 				t.Fatalf("status = 0x%02x, want 0x%02x (payload %q)", resp.Status, tc.want, resp.Payload)
 			}
@@ -301,7 +316,7 @@ func TestQUICIAMCategoryGroupUpdateRejectsBadRequests(t *testing.T) {
 	}
 
 	t.Run("unknown group", func(t *testing.T) {
-		resp := handler.HandleRequest(context.Background(), iamCategoryRequest(t, quicwire.IAMSubGroupUpdate,
+		resp := handler.HandleRequest(unixOperatorContext(), iamCategoryRequest(t, quicwire.IAMSubGroupUpdate,
 			&platformv1.UpdateIAMGroupRequest{TenantId: "acme", GroupId: "nobody", Name: "x"}))
 		if resp.Status != quicwire.StatusNotFound {
 			t.Fatalf("status = 0x%02x, want NotFound (payload %q)", resp.Status, resp.Payload)
@@ -317,7 +332,7 @@ func TestQUICIAMCategoryGroupUpdateRejectsBadRequests(t *testing.T) {
 func newIAMRoleCategoryHandler(t *testing.T) *QUICServiceHandler {
 	t.Helper()
 	iam := newMemIAM()
-	if _, err := iam.Role().Create(context.Background(), "acme", &sdkiam.CreateRoleRequest{
+	if _, err := iam.Role().Create(unixOperatorContext(), "acme", &sdkiam.CreateRoleRequest{
 		ID: "reader", Name: "Reader", Description: "reads", Permissions: []string{"device:read"},
 	}); err != nil {
 		t.Fatalf("seed role: %v", err)
@@ -329,7 +344,7 @@ func newIAMRoleCategoryHandler(t *testing.T) *QUICServiceHandler {
 
 func TestQUICIAMCategoryUpdatesRole(t *testing.T) {
 	handler := newIAMRoleCategoryHandler(t)
-	resp := handler.HandleRequest(context.Background(), iamCategoryRequest(t, quicwire.IAMSubRoleUpdate,
+	resp := handler.HandleRequest(unixOperatorContext(), iamCategoryRequest(t, quicwire.IAMSubRoleUpdate,
 		&platformv1.UpdateIAMRoleRequest{TenantId: "acme", RoleId: "reader", Description: "reads, audited"}))
 	if resp.Status != quicwire.StatusOK {
 		t.Fatalf("status = 0x%02x, want OK (payload %q)", resp.Status, resp.Payload)
@@ -347,7 +362,7 @@ func TestQUICIAMCategoryRoleUpdateRejectsBadRequests(t *testing.T) {
 	handler := newIAMRoleCategoryHandler(t)
 
 	t.Run("undecodable body", func(t *testing.T) {
-		resp := handler.HandleRequest(context.Background(), &quicwire.Request{
+		resp := handler.HandleRequest(unixOperatorContext(), &quicwire.Request{
 			Opcode: quicwire.OpIAMCategory, Payload: []byte{quicwire.IAMSubRoleUpdate, 0xC1},
 		})
 		if resp.Status != quicwire.StatusInvalidRequest {
@@ -356,7 +371,7 @@ func TestQUICIAMCategoryRoleUpdateRejectsBadRequests(t *testing.T) {
 	})
 
 	t.Run("unknown role", func(t *testing.T) {
-		resp := handler.HandleRequest(context.Background(), iamCategoryRequest(t, quicwire.IAMSubRoleUpdate,
+		resp := handler.HandleRequest(unixOperatorContext(), iamCategoryRequest(t, quicwire.IAMSubRoleUpdate,
 			&platformv1.UpdateIAMRoleRequest{TenantId: "acme", RoleId: "nobody", Name: "x"}))
 		if resp.Status != quicwire.StatusNotFound {
 			t.Fatalf("status = 0x%02x, want NotFound (payload %q)", resp.Status, resp.Payload)
@@ -401,7 +416,7 @@ func TestQUICIAMListsCarryPaginationAndTimestamp(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			resp := handler.HandleRequest(context.Background(), iamDirectRequest(t, tc.opcode, tc.req))
+			resp := handler.HandleRequest(unixOperatorContext(), iamDirectRequest(t, tc.opcode, tc.req))
 			if resp.Status != quicwire.StatusOK {
 				t.Fatalf("status = 0x%02x, want OK (payload %q)", resp.Status, resp.Payload)
 			}
@@ -432,7 +447,7 @@ func TestQUICIAMRejectsMissingIdentifiers(t *testing.T) {
 	}
 	for name, req := range cases {
 		t.Run(name, func(t *testing.T) {
-			resp := handler.HandleRequest(context.Background(), req)
+			resp := handler.HandleRequest(unixOperatorContext(), req)
 			if resp.Status != quicwire.StatusInvalidArgument {
 				t.Fatalf("status = 0x%02x, want InvalidArgument (payload %q)", resp.Status, resp.Payload)
 			}
@@ -446,7 +461,7 @@ func TestQUICIAMCheckPermissionAnswersVerdict(t *testing.T) {
 	handler := newTestQUICServiceHandler(logging.DefaultLogger())
 	handler.SetIAMGRPCService(wiredIAMGRPCService(newMemIAM()))
 
-	resp := handler.HandleRequest(context.Background(), iamDirectRequest(t, quicwire.OpIAMCheckPermission,
+	resp := handler.HandleRequest(unixOperatorContext(), iamDirectRequest(t, quicwire.OpIAMCheckPermission,
 		&platformv1.CheckIAMPermissionRequest{TenantId: "acme", SubjectId: "test-subject", Resource: "document://123", Action: "read"}))
 	if resp.Status != quicwire.StatusOK {
 		t.Fatalf("status = 0x%02x, want OK (payload %q)", resp.Status, resp.Payload)

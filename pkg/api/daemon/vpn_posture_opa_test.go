@@ -20,7 +20,6 @@
 package daemon
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,7 +33,7 @@ import (
 
 func TestVPNGRPCService_PosturePolicyLifecycle(t *testing.T) {
 	server, _ := newVPNTestServer(t)
-	ctx := context.Background()
+	ctx := vpnOperatorContext()
 
 	set, err := server.SetPosturePolicy(ctx, &platformv1.SetVPNPosturePolicyRequest{
 		Policy: &platformv1.VPNPosturePolicy{TenantId: "acme", Name: "corp", Module: vpnTestPolicy},
@@ -46,7 +45,7 @@ func TestVPNGRPCService_PosturePolicyLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, vpnTestPolicy, got.GetPolicy().GetModule())
 
-	listed, err := server.ListPosturePolicies(ctx, &platformv1.ListVPNPosturePoliciesRequest{})
+	listed, err := server.ListPosturePolicies(ctx, &platformv1.ListVPNPosturePoliciesRequest{TenantId: "acme"})
 	require.NoError(t, err)
 	assert.Len(t, listed.GetPolicies(), 1)
 
@@ -59,7 +58,7 @@ func TestVPNGRPCService_PosturePolicyLifecycle(t *testing.T) {
 
 func TestVPNGRPCService_RefusesInvalidRequests(t *testing.T) {
 	server, _ := newVPNTestServer(t)
-	ctx := context.Background()
+	ctx := vpnOperatorContext()
 
 	_, err := server.EnrolPeer(ctx, &platformv1.EnrolVPNPeerRequest{})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "a missing peer")
@@ -75,7 +74,7 @@ func TestVPNGRPCService_RefusesInvalidRequests(t *testing.T) {
 	})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "a module outside package vpn.posture")
 
-	listed, err := server.ListPosturePolicies(ctx, &platformv1.ListVPNPosturePoliciesRequest{})
+	listed, err := server.ListPosturePolicies(ctx, &platformv1.ListVPNPosturePoliciesRequest{TenantId: "acme"})
 	require.NoError(t, err)
 	assert.Empty(t, listed.GetPolicies(), "a refused policy must not be stored")
 }
@@ -85,7 +84,7 @@ func TestMCPProvidersRunTheVPNOperationsOnTheSharedServer(t *testing.T) {
 
 	for name, provider := range vpnProviders(server) {
 		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := vpnOperatorContext()
 
 			enrolled, err := provider.VPNEnrolPeer(ctx, "acme", "laptop-1", []string{"management"})
 			require.NoError(t, err)
@@ -111,7 +110,7 @@ func TestMCPProvidersRunTheVPNOperationsOnTheSharedServer(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, "corp", got.(*platformv1.GetVPNPosturePolicyResponse).GetPolicy().GetName())
 
-			policies, err := provider.VPNPosturePolicyList(ctx, "")
+			policies, err := provider.VPNPosturePolicyList(ctx, "acme")
 			require.NoError(t, err)
 			assert.Len(t, policies.(*platformv1.ListVPNPosturePoliciesResponse).GetPolicies(), 1)
 
@@ -126,10 +125,10 @@ func TestMCPProvidersReturnTheServiceRefusals(t *testing.T) {
 
 	for name, provider := range vpnProviders(server) {
 		t.Run(name, func(t *testing.T) {
-			_, err := provider.VPNRevokePeer(context.Background(), "acme", "never-enrolled")
+			_, err := provider.VPNRevokePeer(vpnOperatorContext(), "acme", "never-enrolled")
 			assert.Equal(t, codes.NotFound, status.Code(err))
 
-			_, err = provider.VPNPosturePolicySet(context.Background(), "acme", "corp", "package other\n")
+			_, err = provider.VPNPosturePolicySet(vpnOperatorContext(), "acme", "corp", "package other\n")
 			assert.Equal(t, codes.InvalidArgument, status.Code(err))
 		})
 	}
@@ -137,7 +136,7 @@ func TestMCPProvidersReturnTheServiceRefusals(t *testing.T) {
 
 func TestQUICVPNCategoryServesEverySubOperation(t *testing.T) {
 	handler, _ := newVPNQUICHandler(t)
-	ctx := context.Background()
+	ctx := vpnOperatorContext()
 
 	var enrolled platformv1.EnrolVPNPeerResponse
 	requireVPNQUICOK(t, handler.HandleRequest(ctx, vpnCategoryRequest(t, quicwire.VPNSubEnrolPeer,

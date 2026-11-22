@@ -185,6 +185,7 @@ func NewIAMGRPCService(
 //
 // Returns ErrIAMMissingParameter if required fields are missing.
 func (s *IAMGRPCService) CreateUser(ctx context.Context, req *platformv1.CreateIAMUserRequest) (*platformv1.IAMUserResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/CreateUser")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -192,7 +193,7 @@ func (s *IAMGRPCService) CreateUser(ctx context.Context, req *platformv1.CreateI
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetEmail() == "" {
@@ -239,6 +240,7 @@ func (s *IAMGRPCService) CreateUser(ctx context.Context, req *platformv1.CreateI
 //
 // Required fields: tenant_id, user_id
 func (s *IAMGRPCService) GetUser(ctx context.Context, req *platformv1.GetIAMUserRequest) (*platformv1.IAMUserResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/GetUser")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -246,7 +248,7 @@ func (s *IAMGRPCService) GetUser(ctx context.Context, req *platformv1.GetIAMUser
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetUserId() == "" {
@@ -277,6 +279,7 @@ func (s *IAMGRPCService) GetUser(ctx context.Context, req *platformv1.GetIAMUser
 // Required fields: tenant_id
 // Optional fields: pagination, email_filter, role_filter, group_filter
 func (s *IAMGRPCService) ListUsers(ctx context.Context, req *platformv1.ListIAMUsersRequest) (*platformv1.ListIAMUsersResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/ListUsers")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -284,7 +287,7 @@ func (s *IAMGRPCService) ListUsers(ctx context.Context, req *platformv1.ListIAMU
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 
@@ -329,6 +332,7 @@ func (s *IAMGRPCService) ListUsers(ctx context.Context, req *platformv1.ListIAMU
 // Required fields: tenant_id, user_id
 // Optional fields: email, name, roles, groups, attributes
 func (s *IAMGRPCService) UpdateUser(ctx context.Context, req *platformv1.UpdateIAMUserRequest) (*platformv1.IAMUserResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/UpdateUser")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -336,7 +340,7 @@ func (s *IAMGRPCService) UpdateUser(ctx context.Context, req *platformv1.UpdateI
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetUserId() == "" {
@@ -378,6 +382,7 @@ func (s *IAMGRPCService) UpdateUser(ctx context.Context, req *platformv1.UpdateI
 //
 // Required fields: tenant_id, user_id
 func (s *IAMGRPCService) DeleteUser(ctx context.Context, req *platformv1.DeleteIAMUserRequest) (*platformv1.DeleteIAMUserResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/DeleteUser")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -385,7 +390,7 @@ func (s *IAMGRPCService) DeleteUser(ctx context.Context, req *platformv1.DeleteI
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetUserId() == "" {
@@ -422,6 +427,7 @@ func (s *IAMGRPCService) DeleteUser(ctx context.Context, req *platformv1.DeleteI
 // Required fields: tenant_id, id or name
 // Optional fields: description, permissions
 func (s *IAMGRPCService) CreateRole(ctx context.Context, req *platformv1.CreateIAMRoleRequest) (*platformv1.IAMRoleResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/CreateRole")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -429,7 +435,7 @@ func (s *IAMGRPCService) CreateRole(ctx context.Context, req *platformv1.CreateI
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetId() == "" && req.GetName() == "" {
@@ -465,6 +471,7 @@ func (s *IAMGRPCService) CreateRole(ctx context.Context, req *platformv1.CreateI
 //
 // Required fields: tenant_id, role_id
 func (s *IAMGRPCService) GetRole(ctx context.Context, req *platformv1.GetIAMRoleRequest) (*platformv1.IAMRoleResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/GetRole")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -472,7 +479,7 @@ func (s *IAMGRPCService) GetRole(ctx context.Context, req *platformv1.GetIAMRole
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetRoleId() == "" {
@@ -499,6 +506,7 @@ func (s *IAMGRPCService) GetRole(ctx context.Context, req *platformv1.GetIAMRole
 // Required fields: tenant_id
 // Optional fields: pagination
 func (s *IAMGRPCService) ListRoles(ctx context.Context, req *platformv1.ListIAMRolesRequest) (*platformv1.ListIAMRolesResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/ListRoles")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -506,7 +514,7 @@ func (s *IAMGRPCService) ListRoles(ctx context.Context, req *platformv1.ListIAMR
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 
@@ -547,6 +555,7 @@ func (s *IAMGRPCService) ListRoles(ctx context.Context, req *platformv1.ListIAMR
 // Required fields: tenant_id, role_id
 // Optional fields: name, description, permissions
 func (s *IAMGRPCService) UpdateRole(ctx context.Context, req *platformv1.UpdateIAMRoleRequest) (*platformv1.IAMRoleResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/UpdateRole")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -554,7 +563,7 @@ func (s *IAMGRPCService) UpdateRole(ctx context.Context, req *platformv1.UpdateI
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetRoleId() == "" {
@@ -589,6 +598,7 @@ func (s *IAMGRPCService) UpdateRole(ctx context.Context, req *platformv1.UpdateI
 //
 // Required fields: tenant_id, role_id
 func (s *IAMGRPCService) DeleteRole(ctx context.Context, req *platformv1.DeleteIAMRoleRequest) (*platformv1.DeleteIAMRoleResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/DeleteRole")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -596,7 +606,7 @@ func (s *IAMGRPCService) DeleteRole(ctx context.Context, req *platformv1.DeleteI
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetRoleId() == "" {
@@ -627,6 +637,7 @@ func (s *IAMGRPCService) DeleteRole(ctx context.Context, req *platformv1.DeleteI
 //
 // Required fields: tenant_id, user_id, role_id
 func (s *IAMGRPCService) AssignRole(ctx context.Context, req *platformv1.AssignIAMRoleRequest) (*platformv1.AssignIAMRoleResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/AssignRole")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -634,7 +645,7 @@ func (s *IAMGRPCService) AssignRole(ctx context.Context, req *platformv1.AssignI
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetUserId() == "" {
@@ -675,6 +686,7 @@ func (s *IAMGRPCService) AssignRole(ctx context.Context, req *platformv1.AssignI
 //
 // Required fields: tenant_id, user_id, role_id
 func (s *IAMGRPCService) RevokeRole(ctx context.Context, req *platformv1.RevokeIAMRoleRequest) (*platformv1.RevokeIAMRoleResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/RevokeRole")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -682,7 +694,7 @@ func (s *IAMGRPCService) RevokeRole(ctx context.Context, req *platformv1.RevokeI
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetUserId() == "" {
@@ -729,6 +741,7 @@ func (s *IAMGRPCService) RevokeRole(ctx context.Context, req *platformv1.RevokeI
 // Required fields: tenant_id, id or name
 // Optional fields: description
 func (s *IAMGRPCService) CreateGroup(ctx context.Context, req *platformv1.CreateIAMGroupRequest) (*platformv1.IAMGroupResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/CreateGroup")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -736,7 +749,7 @@ func (s *IAMGRPCService) CreateGroup(ctx context.Context, req *platformv1.Create
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetId() == "" && req.GetName() == "" {
@@ -771,6 +784,7 @@ func (s *IAMGRPCService) CreateGroup(ctx context.Context, req *platformv1.Create
 //
 // Required fields: tenant_id, group_id
 func (s *IAMGRPCService) GetGroup(ctx context.Context, req *platformv1.GetIAMGroupRequest) (*platformv1.IAMGroupResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/GetGroup")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -778,7 +792,7 @@ func (s *IAMGRPCService) GetGroup(ctx context.Context, req *platformv1.GetIAMGro
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetGroupId() == "" {
@@ -805,6 +819,7 @@ func (s *IAMGRPCService) GetGroup(ctx context.Context, req *platformv1.GetIAMGro
 // Required fields: tenant_id
 // Optional fields: pagination
 func (s *IAMGRPCService) ListGroups(ctx context.Context, req *platformv1.ListIAMGroupsRequest) (*platformv1.ListIAMGroupsResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/ListGroups")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -812,7 +827,7 @@ func (s *IAMGRPCService) ListGroups(ctx context.Context, req *platformv1.ListIAM
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 
@@ -851,6 +866,7 @@ func (s *IAMGRPCService) ListGroups(ctx context.Context, req *platformv1.ListIAM
 // Required fields: tenant_id, group_id
 // Optional fields: name, description
 func (s *IAMGRPCService) UpdateGroup(ctx context.Context, req *platformv1.UpdateIAMGroupRequest) (*platformv1.IAMGroupResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/UpdateGroup")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -858,7 +874,7 @@ func (s *IAMGRPCService) UpdateGroup(ctx context.Context, req *platformv1.Update
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetGroupId() == "" {
@@ -892,6 +908,7 @@ func (s *IAMGRPCService) UpdateGroup(ctx context.Context, req *platformv1.Update
 //
 // Required fields: tenant_id, group_id
 func (s *IAMGRPCService) DeleteGroup(ctx context.Context, req *platformv1.DeleteIAMGroupRequest) (*platformv1.DeleteIAMGroupResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/DeleteGroup")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -899,7 +916,7 @@ func (s *IAMGRPCService) DeleteGroup(ctx context.Context, req *platformv1.Delete
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetGroupId() == "" {
@@ -931,6 +948,7 @@ func (s *IAMGRPCService) DeleteGroup(ctx context.Context, req *platformv1.Delete
 //
 // Required fields: tenant_id, group_id, user_id
 func (s *IAMGRPCService) AddGroupMember(ctx context.Context, req *platformv1.AddGroupMemberRequest) (*platformv1.AddGroupMemberResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/AddGroupMember")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -938,7 +956,7 @@ func (s *IAMGRPCService) AddGroupMember(ctx context.Context, req *platformv1.Add
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetGroupId() == "" {
@@ -973,6 +991,7 @@ func (s *IAMGRPCService) AddGroupMember(ctx context.Context, req *platformv1.Add
 //
 // Required fields: tenant_id, group_id, user_id
 func (s *IAMGRPCService) RemoveGroupMember(ctx context.Context, req *platformv1.RemoveGroupMemberRequest) (*platformv1.RemoveGroupMemberResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/RemoveGroupMember")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -980,7 +999,7 @@ func (s *IAMGRPCService) RemoveGroupMember(ctx context.Context, req *platformv1.
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetGroupId() == "" {
@@ -1023,6 +1042,7 @@ func (s *IAMGRPCService) RemoveGroupMember(ctx context.Context, req *platformv1.
 //
 // Returns the authorization decision with details about the matched policy and rule.
 func (s *IAMGRPCService) CheckPermission(ctx context.Context, req *platformv1.CheckIAMPermissionRequest) (*platformv1.CheckIAMPermissionResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/CheckPermission")
 	if s.pepClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -1030,7 +1050,7 @@ func (s *IAMGRPCService) CheckPermission(ctx context.Context, req *platformv1.Ch
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetSubjectId() == "" {
@@ -1123,6 +1143,7 @@ func (s *IAMGRPCService) RevokeToken(ctx context.Context, req *platformv1.Revoke
 // InvalidArgument; no wired validator, or a validator that cannot be reached,
 // is Unavailable.
 func (s *IAMGRPCService) VerifyToken(ctx context.Context, req *platformv1.VerifyIAMTokenRequest) (*platformv1.VerifyIAMTokenResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/VerifyToken")
 	verification, err := s.tokens.Verify(ctx, req.GetToken())
 	if err != nil {
 		return nil, status.Error(iamTokenErrorCode(err), err.Error())
@@ -1167,6 +1188,7 @@ func iamTokenErrorCode(err error) codes.Code {
 // Required fields: id
 // Optional fields: name, settings
 func (s *IAMGRPCService) CreateTenant(ctx context.Context, req *platformv1.CreateIAMTenantRequest) (*platformv1.IAMTenantResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/CreateTenant")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -1174,7 +1196,7 @@ func (s *IAMGRPCService) CreateTenant(ctx context.Context, req *platformv1.Creat
 	if req.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "id"}.Error())
 	}
-	if err := authorizeSystemCaller(ctx, s.systemTenantID, "CreateTenant"); err != nil {
+	if err := authorizeSystemCaller(ctx, s.pepClient, s.systemTenantID, "CreateTenant"); err != nil {
 		return nil, err
 	}
 
@@ -1214,6 +1236,7 @@ func (s *IAMGRPCService) CreateTenant(ctx context.Context, req *platformv1.Creat
 //
 // Required fields: tenant_id
 func (s *IAMGRPCService) GetTenant(ctx context.Context, req *platformv1.GetIAMTenantRequest) (*platformv1.IAMTenantResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/GetTenant")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -1221,7 +1244,7 @@ func (s *IAMGRPCService) GetTenant(ctx context.Context, req *platformv1.GetIAMTe
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 
@@ -1244,10 +1267,11 @@ func (s *IAMGRPCService) GetTenant(ctx context.Context, req *platformv1.GetIAMTe
 //
 // Optional fields: pagination
 func (s *IAMGRPCService) ListTenants(ctx context.Context, req *platformv1.ListIAMTenantsRequest) (*platformv1.ListIAMTenantsResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/ListTenants")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
-	if err := authorizeSystemCaller(ctx, s.systemTenantID, "ListTenants"); err != nil {
+	if err := authorizeSystemCaller(ctx, s.pepClient, s.systemTenantID, "ListTenants"); err != nil {
 		return nil, err
 	}
 
@@ -1286,6 +1310,7 @@ func (s *IAMGRPCService) ListTenants(ctx context.Context, req *platformv1.ListIA
 // Required fields: tenant_id
 // Optional fields: name, settings
 func (s *IAMGRPCService) UpdateTenant(ctx context.Context, req *platformv1.UpdateIAMTenantRequest) (*platformv1.IAMTenantResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/UpdateTenant")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -1293,7 +1318,7 @@ func (s *IAMGRPCService) UpdateTenant(ctx context.Context, req *platformv1.Updat
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 
@@ -1332,6 +1357,7 @@ func (s *IAMGRPCService) UpdateTenant(ctx context.Context, req *platformv1.Updat
 //
 // Required fields: tenant_id
 func (s *IAMGRPCService) DeleteTenant(ctx context.Context, req *platformv1.DeleteIAMTenantRequest) (*platformv1.DeleteIAMTenantResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/DeleteTenant")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -1339,7 +1365,7 @@ func (s *IAMGRPCService) DeleteTenant(ctx context.Context, req *platformv1.Delet
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 
@@ -1373,6 +1399,7 @@ func (s *IAMGRPCService) DeleteTenant(ctx context.Context, req *platformv1.Delet
 // Required fields: tenant_id, name, spec_yaml
 // Optional fields: description, priority, labels
 func (s *IAMGRPCService) CreatePolicy(ctx context.Context, req *platformv1.CreateIAMPolicyRequest) (*platformv1.IAMPolicyResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/CreatePolicy")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -1380,7 +1407,7 @@ func (s *IAMGRPCService) CreatePolicy(ctx context.Context, req *platformv1.Creat
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetName() == "" {
@@ -1420,6 +1447,7 @@ func (s *IAMGRPCService) CreatePolicy(ctx context.Context, req *platformv1.Creat
 //
 // Required fields: tenant_id, policy_name
 func (s *IAMGRPCService) GetPolicy(ctx context.Context, req *platformv1.GetIAMPolicyRequest) (*platformv1.IAMPolicyResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/GetPolicy")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -1427,7 +1455,7 @@ func (s *IAMGRPCService) GetPolicy(ctx context.Context, req *platformv1.GetIAMPo
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetPolicyName() == "" {
@@ -1454,6 +1482,7 @@ func (s *IAMGRPCService) GetPolicy(ctx context.Context, req *platformv1.GetIAMPo
 // Required fields: tenant_id
 // Optional fields: pagination
 func (s *IAMGRPCService) ListPolicies(ctx context.Context, req *platformv1.ListIAMPoliciesRequest) (*platformv1.ListIAMPoliciesResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/ListPolicies")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -1461,7 +1490,7 @@ func (s *IAMGRPCService) ListPolicies(ctx context.Context, req *platformv1.ListI
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 
@@ -1502,6 +1531,7 @@ func (s *IAMGRPCService) ListPolicies(ctx context.Context, req *platformv1.ListI
 // Required fields: tenant_id, policy_name
 // Optional fields: description, priority, spec_yaml, labels
 func (s *IAMGRPCService) UpdatePolicy(ctx context.Context, req *platformv1.UpdateIAMPolicyRequest) (*platformv1.IAMPolicyResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/UpdatePolicy")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -1509,7 +1539,7 @@ func (s *IAMGRPCService) UpdatePolicy(ctx context.Context, req *platformv1.Updat
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetPolicyName() == "" {
@@ -1547,6 +1577,7 @@ func (s *IAMGRPCService) UpdatePolicy(ctx context.Context, req *platformv1.Updat
 //
 // Required fields: tenant_id, policy_name
 func (s *IAMGRPCService) DeletePolicy(ctx context.Context, req *platformv1.DeleteIAMPolicyRequest) (*platformv1.DeleteIAMPolicyResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/DeletePolicy")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -1554,7 +1585,7 @@ func (s *IAMGRPCService) DeletePolicy(ctx context.Context, req *platformv1.Delet
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetPolicyName() == "" {
@@ -1586,6 +1617,7 @@ func (s *IAMGRPCService) DeletePolicy(ctx context.Context, req *platformv1.Delet
 //
 // Required fields: tenant_id, spec_yaml
 func (s *IAMGRPCService) ValidatePolicy(ctx context.Context, req *platformv1.ValidateIAMPolicyRequest) (*platformv1.ValidateIAMPolicyResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/ValidatePolicy")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -1593,7 +1625,7 @@ func (s *IAMGRPCService) ValidatePolicy(ctx context.Context, req *platformv1.Val
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if len(req.GetSpecYaml()) == 0 {
@@ -1635,6 +1667,7 @@ func (s *IAMGRPCService) ValidatePolicy(ctx context.Context, req *platformv1.Val
 // Required fields: tenant_id, subject_id, action, resource
 // Optional fields: roles, groups, attributes, context
 func (s *IAMGRPCService) TestPolicy(ctx context.Context, req *platformv1.TestIAMPolicyRequest) (*platformv1.TestIAMPolicyResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/TestPolicy")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -1642,7 +1675,7 @@ func (s *IAMGRPCService) TestPolicy(ctx context.Context, req *platformv1.TestIAM
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetSubjectId() == "" {
@@ -1730,6 +1763,7 @@ func (s *IAMGRPCService) TestPolicy(ctx context.Context, req *platformv1.TestIAM
 // Required fields: tenant_id, name
 // Optional fields: redirect_uris, grant_types, response_types, resource_prefix
 func (s *IAMGRPCService) RegisterApp(ctx context.Context, req *platformv1.RegisterIAMAppRequest) (*platformv1.IAMAppResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/RegisterApp")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -1737,7 +1771,7 @@ func (s *IAMGRPCService) RegisterApp(ctx context.Context, req *platformv1.Regist
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetName() == "" {
@@ -1779,6 +1813,7 @@ func (s *IAMGRPCService) RegisterApp(ctx context.Context, req *platformv1.Regist
 //
 // Required fields: tenant_id, client_id
 func (s *IAMGRPCService) GetApp(ctx context.Context, req *platformv1.GetIAMAppRequest) (*platformv1.IAMAppResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/GetApp")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -1786,7 +1821,7 @@ func (s *IAMGRPCService) GetApp(ctx context.Context, req *platformv1.GetIAMAppRe
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetClientId() == "" {
@@ -1813,6 +1848,7 @@ func (s *IAMGRPCService) GetApp(ctx context.Context, req *platformv1.GetIAMAppRe
 // Required fields: tenant_id
 // Optional fields: pagination
 func (s *IAMGRPCService) ListApps(ctx context.Context, req *platformv1.ListIAMAppsRequest) (*platformv1.ListIAMAppsResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/ListApps")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -1820,7 +1856,7 @@ func (s *IAMGRPCService) ListApps(ctx context.Context, req *platformv1.ListIAMAp
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 
@@ -1855,6 +1891,7 @@ func (s *IAMGRPCService) ListApps(ctx context.Context, req *platformv1.ListIAMAp
 // Required fields: tenant_id, client_id
 // Optional fields: name, redirect_uris, grant_types, response_types, resource_prefix
 func (s *IAMGRPCService) UpdateApp(ctx context.Context, req *platformv1.UpdateIAMAppRequest) (*platformv1.IAMAppResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/UpdateApp")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -1862,7 +1899,7 @@ func (s *IAMGRPCService) UpdateApp(ctx context.Context, req *platformv1.UpdateIA
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetClientId() == "" {
@@ -1904,6 +1941,7 @@ func (s *IAMGRPCService) UpdateApp(ctx context.Context, req *platformv1.UpdateIA
 //
 // Required fields: tenant_id, client_id
 func (s *IAMGRPCService) DeleteApp(ctx context.Context, req *platformv1.DeleteIAMAppRequest) (*platformv1.DeleteIAMAppResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/DeleteApp")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -1911,7 +1949,7 @@ func (s *IAMGRPCService) DeleteApp(ctx context.Context, req *platformv1.DeleteIA
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetClientId() == "" {
@@ -1943,6 +1981,7 @@ func (s *IAMGRPCService) DeleteApp(ctx context.Context, req *platformv1.DeleteIA
 //
 // Required fields: tenant_id, client_id
 func (s *IAMGRPCService) RotateAppSecret(ctx context.Context, req *platformv1.RotateIAMAppSecretRequest) (*platformv1.RotateIAMAppSecretResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.PlatformIAMService/RotateAppSecret")
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
 	}
@@ -1950,7 +1989,7 @@ func (s *IAMGRPCService) RotateAppSecret(ctx context.Context, req *platformv1.Ro
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := authorizeIAMTenant(ctx, s.pepClient, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 	if req.GetClientId() == "" {

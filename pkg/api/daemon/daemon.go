@@ -970,6 +970,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// SetService is called the service returns Unimplemented per the
 	// legacy stub.
 	invitationService := NewInvitationGRPCService(logger, nil)
+	invitationService.SetPEP(iamPEP)
 	if grpcServer != nil {
 		platformv1.RegisterInvitationServiceServer(grpcServer, invitationService)
 	}
@@ -1039,6 +1040,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if vpnControlPlane != nil {
 		vpnGRPCService = NewVPNGRPCService(logger, vpnControlPlane)
 	}
+	vpnGRPCService.SetPEP(iamPEP)
 	if grpcServer != nil {
 		platformv1.RegisterVPNServiceServer(grpcServer, vpnGRPCService)
 	}
@@ -1637,6 +1639,10 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if daemon.tenantService != nil && daemon.tenantService.grpcServer != nil {
 			daemon.tenantService.grpcServer.SetManager(config.PlatformTenantManager)
 			daemon.tenantService.grpcServer.SetSystemTenant(config.PlatformTenantID)
+			if iamService != nil {
+				// Unix peers are decided by the IAM PEP (SPEC row 109).
+				daemon.tenantService.grpcServer.SetPEP(iamService.PEP())
+			}
 			logger.Info("Platform tenant manager wired into gRPC TenantService")
 
 			// Share the same *TenantGRPCServer delegate with the QUIC handler so

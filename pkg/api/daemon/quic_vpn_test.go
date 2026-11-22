@@ -71,7 +71,7 @@ func TestQUICVPNErrorResponse_KeyCollisionIsAConflict(t *testing.T) {
 // requireVPNQUICOK asserts a successful reply and decodes its payload.
 func TestQUICVPNCategoryMapsServiceRefusals(t *testing.T) {
 	handler, _ := newVPNQUICHandler(t)
-	ctx := context.Background()
+	ctx := vpnOperatorContext()
 
 	cases := []struct {
 		name string
@@ -84,8 +84,8 @@ func TestQUICVPNCategoryMapsServiceRefusals(t *testing.T) {
 			want: quicwire.StatusNotFound,
 		},
 		{
-			name: "enrol without a tenant",
-			req:  vpnCategoryRequest(t, quicwire.VPNSubEnrolPeer, &platformv1.EnrolVPNPeerRequest{Peer: &platformv1.VPNPeer{DeviceId: "laptop-1"}}),
+			name: "enrol without a device id",
+			req:  vpnCategoryRequest(t, quicwire.VPNSubEnrolPeer, &platformv1.EnrolVPNPeerRequest{Peer: &platformv1.VPNPeer{TenantId: "acme"}}),
 			want: quicwire.StatusInvalidArgument,
 		},
 		{
@@ -118,7 +118,7 @@ func TestQUICVPNCategoryStoreFailureIsUnavailable(t *testing.T) {
 	handler := newTestQUICServiceHandler(logging.DefaultLogger())
 	handler.SetVPNService(server)
 
-	resp := handler.HandleRequest(context.Background(), vpnCategoryRequest(t, quicwire.VPNSubListPeers, &platformv1.ListVPNPeersRequest{}))
+	resp := handler.HandleRequest(vpnOperatorContext(), vpnCategoryRequest(t, quicwire.VPNSubListPeers, &platformv1.ListVPNPeersRequest{TenantId: "acme"}))
 	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 
