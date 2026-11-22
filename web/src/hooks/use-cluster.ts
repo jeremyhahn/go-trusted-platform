@@ -167,16 +167,19 @@ export function useCluster() {
   const client = usePlatformClient();
   return useMemo(() => {
     const api = client.getApiClient();
+    // No cluster call retries. A 503 "cluster service not configured" is not
+    // transient, and a membership write whose response was lost may already
+    // have been applied: replaying it would answer "already joined" for a
+    // write that succeeded.
     return {
-      // A 503 "cluster service not configured" is not transient: answer at once.
       getStatus: () => api.get<ClusterStatusResponse>(`${CLUSTER_BASE}/status`, { retry: { enabled: false } }),
       listNodes: () => api.get<ClusterNodesResponse>(`${CLUSTER_BASE}/nodes`, { retry: { enabled: false } }),
       bootstrap: (req: BootstrapClusterRequest) =>
-        api.post<ClusterMembershipResponse>(`${CLUSTER_BASE}/bootstrap`, req as unknown as Body),
+        api.post<ClusterMembershipResponse>(`${CLUSTER_BASE}/bootstrap`, req as unknown as Body, { retry: { enabled: false } }),
       join: (req: JoinClusterRequest) =>
-        api.post<ClusterMembershipResponse>(`${CLUSTER_BASE}/join`, req as unknown as Body),
+        api.post<ClusterMembershipResponse>(`${CLUSTER_BASE}/join`, req as unknown as Body, { retry: { enabled: false } }),
       leave: (req: LeaveClusterRequest) =>
-        api.post<LeaveClusterResponse>(`${CLUSTER_BASE}/leave`, req as unknown as Body),
+        api.post<LeaveClusterResponse>(`${CLUSTER_BASE}/leave`, req as unknown as Body, { retry: { enabled: false } }),
     };
   }, [client]);
 }
