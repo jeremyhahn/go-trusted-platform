@@ -18,6 +18,8 @@ import (
 	"strconv"
 
 	"github.com/gorilla/mux"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
@@ -170,6 +172,11 @@ func (h *Handlers) GetInvitation(w http.ResponseWriter, r *http.Request) {
 	resp, err := h.server.GetInvitation(r.Context(), &platformv1.GetInvitationRequest{InvitationId: id})
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	// A session tenant reads only its own tenant's invitations.
+	if tenantID := resolveTenantID(r); tenantID != "" && resp.GetInvitation().GetTenantId() != tenantID {
+		protorest.WriteError(w, r, h.respWriter, status.Error(codes.PermissionDenied, "invitation: not in the caller's tenant"))
 		return
 	}
 	protorest.WriteSuccess(w, r, h.respWriter, resp)

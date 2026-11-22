@@ -190,6 +190,42 @@ func TestListInvitations_ScopesToTheSessionTenant(t *testing.T) {
 		"service received %v", srv.last)
 }
 
+// otherTenantGetServer answers GetInvitation with an invitation of tenant-b.
+type otherTenantGetServer struct{ fakeInvitationServer }
+
+func (f *otherTenantGetServer) GetInvitation(_ context.Context, r *platformv1.GetInvitationRequest) (*platformv1.GetInvitationResponse, error) {
+	f.last = r
+	return &platformv1.GetInvitationResponse{
+		Invitation: &platformv1.Invitation{Id: r.GetInvitationId(), TenantId: "tenant-b", Email: "victim@example.com"},
+	}, nil
+}
+
+// TestGetInvitation_RefusesAnotherTenantsInvitation: GET invitations/{id}
+// answers 403 when the invitation belongs to a tenant other than the
+// verified session's, and 200 for the session's own tenant (#2056).
+func TestGetInvitation_RefusesAnotherTenantsInvitation(t *testing.T) {
+	t.Run("another tenant", func(t *testing.T) {
+		srv := &otherTenantGetServer{}
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/invitations/42", nil)
+		req = withSession(req, "tenant-a", "42")
+
+		rec := serve(srv, req)
+
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+		assert.False(t, strings.Contains(rec.Body.String(), "victim@example.com"),
+			"the body leaks the other tenant's invitation: %s", rec.Body.String())
+	})
+	t.Run("own tenant", func(t *testing.T) {
+		srv := &otherTenantGetServer{}
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/invitations/42", nil)
+		req = withSession(req, "tenant-b", "42")
+
+		rec := serve(srv, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+	})
+}
+
 // TestInvitationHandlers_MalformedBodyIs400: a body that is not the
 // request message is refused before the service is called.
 func TestInvitationHandlers_MalformedBodyIs400(t *testing.T) {
