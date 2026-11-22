@@ -226,11 +226,15 @@ func (s *CAGRPCService) InstallCACertificates(ctx context.Context, req *platform
 
 // UninstallCACertificates removes the trust files InstallCACertificates wrote,
 // one certificate per file: the root at the trust path and the intermediate at
-// the sibling <name>-intermediate-1.crt (see intermediateTrustPath). It also
-// removes the two-certificate bundle an earlier install or start-up wrote at
-// the trust path. It is a no-op ("nothing installed") when neither file is
-// present, and refuses, before removing anything, when either file holds
-// anything this CA did not write. Admin capability: catalog scope trust:write.
+// the sibling <name>-intermediate-1.crt (see intermediateTrustPath). The
+// intermediate file, and the two-certificate bundle an earlier install or
+// start-up wrote at the trust path, are removed only when IncludeIntermediates
+// is set; without it the root file alone is removed, the intermediate file is
+// left untouched, and a two-certificate bundle is refused (it also holds the
+// intermediate). It is a no-op ("nothing installed") when no file it would
+// remove is present, and refuses, before removing anything, when a file it
+// would remove holds anything this CA did not write. Admin capability: catalog
+// scope trust:write.
 func (s *CAGRPCService) UninstallCACertificates(ctx context.Context, req *platformv1.UninstallCACertificatesRequest) (*platformv1.UninstallCACertificatesResponse, error) {
 	ca := s.authority()
 	if ca == nil || !ca.IsInitialized() {
@@ -243,16 +247,23 @@ func (s *CAGRPCService) UninstallCACertificates(ctx context.Context, req *platfo
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	interPath := intermediateTrustPath(s.trustPath)
+	// The intermediate file and the legacy two-certificate bundle are in scope
+	// only when the caller asks for intermediates.
+	inter := req.GetIncludeIntermediates() && interPEM != nil
 
 	// Check both files before removing either, so a refusal removes nothing.
 	currentRoot, rootErr := os.ReadFile(s.trustPath)
 	if rootErr != nil && !errors.Is(rootErr, fs.ErrNotExist) {
 		return nil, status.Error(codes.Internal, rootErr.Error())
 	}
-	if rootErr == nil && !bytes.Equal(currentRoot, rootPEM) && !bytes.Equal(currentRoot, fullPEM) {
+	if rootErr == nil && !inter && interPEM != nil && bytes.Equal(currentRoot, fullPEM) {
+		return nil, status.Error(codes.FailedPrecondition, s.trustPath+
+			" also holds the intermediate certificate; uninstall with include_intermediates to remove it")
+	}
+	if rootErr == nil && !bytes.Equal(currentRoot, rootPEM) && !(inter && bytes.Equal(currentRoot, fullPEM)) {
 		return nil, status.Error(codes.FailedPrecondition, trust.ErrSystemTrustBundleMismatch{Path: s.trustPath}.Error())
 	}
-	if interPEM != nil {
+	if inter {
 		currentInter, interErr := os.ReadFile(interPath)
 		if interErr != nil && !errors.Is(interErr, fs.ErrNotExist) {
 			return nil, status.Error(codes.Internal, interErr.Error())
@@ -262,18 +273,22 @@ func (s *CAGRPCService) UninstallCACertificates(ctx context.Context, req *platfo
 		}
 	}
 
+	accepted := [][]byte{rootPEM}
+	if inter {
+		accepted = append(accepted, fullPEM)
+	}
 	var count int32
-	removed, err := trust.UninstallFromSystemTrust(s.trustPath, rootPEM, fullPEM)
+	removed, err := trust.UninstallFromSystemTrust(s.trustPath, accepted...)
 	if err != nil {
 		return nil, uninstallStatusError(err)
 	}
 	if removed {
 		count = 1
-		if interPEM != nil && bytes.Equal(currentRoot, fullPEM) {
+		if inter && bytes.Equal(currentRoot, fullPEM) {
 			count = 2
 		}
 	}
-	if interPEM != nil {
+	if inter {
 		removedInter, err := trust.UninstallFromSystemTrust(interPath, interPEM)
 		if err != nil {
 			return nil, uninstallStatusError(err)
