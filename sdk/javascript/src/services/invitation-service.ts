@@ -127,7 +127,7 @@ export class InvitationService extends BaseService {
    * Accept an invitation
    *
    * @param request - Accept invitation request with token
-   * @returns Acceptance result with user and tenant information
+   * @returns The operation status and the accepted invitation
    */
   async accept(request: AcceptInvitationRequest): Promise<ApiResponse<AcceptInvitationResponse>> {
     return this.client.post<AcceptInvitationResponse>(
