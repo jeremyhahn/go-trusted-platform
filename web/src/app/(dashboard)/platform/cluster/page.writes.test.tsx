@@ -155,6 +155,31 @@ describe('ClusterPage writes', () => {
     expect(await findToast('bind address in use', 'destructive')).toBeTruthy();
   });
 
+  it('toasts a status whose success field the server omitted', async () => {
+    // encoding/json omits Status.Success (json:"success,omitempty") when it is false.
+    stubControlPlane({
+      [`GET ${STATUS}`]: statusOK,
+      [`GET ${NODES}`]: noNodes,
+      [`POST ${BOOTSTRAP}`]: { status: 200, body: { status: { message: 'refused' } } },
+      [`POST ${LEAVE}`]: { status: 200, body: { status: { message: 'leave refused' } } },
+    });
+    render(withControlPlane(<ClusterPage />));
+
+    const button = await screen.findByRole('button', { name: 'Bootstrap' });
+    type('Cluster name', 'lab');
+    type('Node name', 'alpha');
+    fireEvent.click(button);
+    expect(await findToast('refused', 'destructive')).toBeTruthy();
+    expect(screen.queryAllByTestId('toast').some((t) => t.textContent?.includes('Cluster bootstrapped'))).toBe(false);
+
+    await waitFor(() => expect((screen.getByLabelText('Node ID') as HTMLInputElement).value).toBe('n1'));
+    fireEvent.click(screen.getByRole('button', { name: 'Leave' }));
+    fireEvent.click(await within(await screen.findByRole('dialog')).findByRole('button', { name: 'Leave cluster' }));
+    expect(await findToast('leave refused', 'destructive')).toBeTruthy();
+    expect(screen.queryAllByTestId('toast').some((t) => t.textContent?.includes('Node left'))).toBe(false);
+    expect(within(screen.getByRole('dialog')).getByRole('heading', { name: 'Leave cluster' })).toBeTruthy();
+  });
+
   it('parses seeds', async () => {
     // Loaded here, not at the top, so the page tests above run (and fail) before the card exists.
     const card = './cluster-membership-card';
