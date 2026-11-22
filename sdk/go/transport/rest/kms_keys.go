@@ -14,6 +14,7 @@ package rest
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -186,11 +187,37 @@ func decodeKMSGenerateKey(raw []byte) (*platformv1.GenerateKeyResponse, error) {
 // kmsKeyInfoReply is the flat KeyInfoResponse GET /api/v1/kms/keys/{name}
 // answers (pkg/webservice/v1/rest/kms).
 type kmsKeyInfoReply struct {
-	KeyID     string    `json:"key_id"`
-	Name      string    `json:"name"`
-	Algorithm string    `json:"algorithm"`
-	Version   uint64    `json:"version"`
-	CreatedAt time.Time `json:"created_at"`
+	KeyID              string            `json:"key_id"`
+	Name               string            `json:"name"`
+	Algorithm          string            `json:"algorithm"`
+	Version            uint64            `json:"version"`
+	Usage              []string          `json:"usage,omitempty"`
+	CreatedAt          time.Time         `json:"created_at"`
+	Status             string            `json:"status,omitempty"`
+	Description        string            `json:"description,omitempty"`
+	Tags               map[string]string `json:"tags,omitempty"`
+	Owner              string            `json:"owner,omitempty"`
+	Exportable         bool              `json:"exportable,omitempty"`
+	DeletionProtection bool              `json:"deletion_protection,omitempty"`
+	UpdatedAt          time.Time         `json:"updated_at,omitempty"`
+	LastUsedAt         time.Time         `json:"last_used_at,omitempty"`
+}
+
+// kmsKeyStatusesByName maps the KMS key status names the REST server
+// answers onto the proto key status; any other name is UNSPECIFIED.
+var kmsKeyStatusesByName = map[string]platformv1.KeyStatus{
+	"ENABLED":          platformv1.KeyStatus_KEY_STATUS_ENABLED,
+	"DISABLED":         platformv1.KeyStatus_KEY_STATUS_DISABLED,
+	"PENDING_DELETION": platformv1.KeyStatus_KEY_STATUS_PENDING_DELETION,
+	"DELETED":          platformv1.KeyStatus_KEY_STATUS_DESTROYED,
+}
+
+// kmsUnixOrZero answers t in unix seconds, 0 for the zero time.
+func kmsUnixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
 }
 
 // decodeKMSGetKey reads the route's flat KeyInfoResponse into the key handle
@@ -203,13 +230,27 @@ func decodeKMSGetKey(raw []byte) (*platformv1.GetKeyResponse, error) {
 	}
 	algorithm := kmsKeyAlgorithmsByName[reply.Algorithm]
 	meta := &platformv1.KMSKeyMetadata{
-		KeyId:     reply.KeyID,
-		Name:      reply.Name,
-		Algorithm: algorithm,
-		Version:   reply.Version,
+		KeyId:              reply.KeyID,
+		Name:               reply.Name,
+		Algorithm:          algorithm,
+		Version:            reply.Version,
+		Status:             kmsKeyStatusesByName[strings.ToUpper(reply.Status)],
+		Description:        reply.Description,
+		Tags:               reply.Tags,
+		Owner:              reply.Owner,
+		Exportable:         reply.Exportable,
+		DeletionProtection: reply.DeletionProtection,
+		CreatedAt:          kmsUnixOrZero(reply.CreatedAt),
+		UpdatedAt:          kmsUnixOrZero(reply.UpdatedAt),
+		LastUsedAt:         kmsUnixOrZero(reply.LastUsedAt),
 	}
-	if !reply.CreatedAt.IsZero() {
-		meta.CreatedAt = reply.CreatedAt.Unix()
+	for _, name := range reply.Usage {
+		for usage, usageName := range kmsKeyUsageNames {
+			if strings.EqualFold(usageName, name) {
+				meta.Usage = append(meta.Usage, usage)
+				break
+			}
+		}
 	}
 	return &platformv1.GetKeyResponse{
 		Key: &platformv1.KMSKeyHandle{

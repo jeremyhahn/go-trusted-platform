@@ -450,19 +450,38 @@ func (h *Handlers) GetKey(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
-	k, err := h.kms.GetKey(ctx, h.name(r))
+	name := h.name(r)
+	k, err := h.kms.GetKey(ctx, name)
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
+	// The facade's GetKey answered the stored metadata too; a failed
+	// metadata read fails the request rather than answering a partial key.
+	meta, err := h.kms.GetKeyMetadata(ctx, name)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	if meta == nil {
+		meta = &kmsclient.KeyMetadataResponse{}
+	}
 	h.success200(w, r, &KeyInfoResponse{
-		KeyID:     k.KeyID,
-		Name:      k.Name,
-		Algorithm: k.Algorithm.String(),
-		Version:   k.Version,
-		Usage:     keyUsageToStrings(k.Usage),
-		CreatedAt: k.CreatedAt,
-		RotatedAt: k.RotatedAt,
+		KeyID:              k.KeyID,
+		Name:               k.Name,
+		Algorithm:          k.Algorithm.String(),
+		Version:            k.Version,
+		Usage:              keyUsageToStrings(k.Usage),
+		CreatedAt:          k.CreatedAt,
+		RotatedAt:          k.RotatedAt,
+		Status:             meta.Status.String(),
+		Description:        meta.Description,
+		Tags:               meta.Tags,
+		Owner:              meta.Owner,
+		Exportable:         meta.Exportable,
+		DeletionProtection: meta.DeletionProtection,
+		UpdatedAt:          meta.UpdatedAt,
+		LastUsedAt:         meta.LastUsedAt,
 	})
 }
 

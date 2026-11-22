@@ -154,6 +154,16 @@ type KeyInfoResponse struct {
 	Usage     []string  `json:"usage,omitempty"`
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	RotatedAt time.Time `json:"rotated_at,omitempty"`
+
+	// The key's stored metadata, as the facade's GetKey answered it.
+	Status             string            `json:"status,omitempty"`
+	Description        string            `json:"description,omitempty"`
+	Tags               map[string]string `json:"tags,omitempty"`
+	Owner              string            `json:"owner,omitempty"`
+	Exportable         bool              `json:"exportable,omitempty"`
+	DeletionProtection bool              `json:"deletion_protection,omitempty"`
+	UpdatedAt          time.Time         `json:"updated_at,omitempty"`
+	LastUsedAt         time.Time         `json:"last_used_at,omitempty"`
 }
 
 // ListKeysResponse is the response from listing keys.
