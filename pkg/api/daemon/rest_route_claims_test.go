@@ -148,6 +148,8 @@ var daemonDivergentClaims = map[string]string{
 	"/platform.v1.KeyManagementService/Encrypt":                kmsKeyInBody,
 	"/platform.v1.KeyManagementService/Sign":                   kmsKeyInBody,
 	"/platform.v1.KeyManagementService/Verify":                 kmsKeyInBody,
+	"/platform.v1.KeyManagementService/HMAC":                   "#452: the daemon takes the key in the body at POST /api/v1/kms/hmac; the claim is the webservice's /hmac/{name} path",
+	"/platform.v1.KeyManagementService/VerifyHMAC":             "#452: the daemon has no HMAC verify route; the claim is the webservice's /hmac/{name}/verify",
 	"/platform.v1.KeyManagementService/GenerateDataKey":        "#452: the daemon's KMS routes have no data-keys",
 	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": "#452: the daemon's KMS routes have no data-keys/wrapped",
 
@@ -160,6 +162,8 @@ var daemonDivergentClaims = map[string]string{
 	"/platform.v1.TenantService/GetTenantBarrierStatus": "#452: the daemon serves GET /api/v1/tenants/{id}/barrier/status (docs/tenant/api.md); the claim is the webservice's /barrier",
 	"/platform.v1.TenantService/GetTenantByName":        "#452 (claim from #304): the daemon looks up at GET /api/v1/tenants/name/{name}; the claim is the webservice's system-only /by-name/{name} (sdk_rest_roundtrip_test.go)",
 	"/platform.v1.TenantService/GetTenantDEKStatus":     "#452 (claim from #304): the daemon serves GET /api/v1/tenants/{id}/dek/status with its own JSON; the claim is the webservice's /dek (sdk_rest_roundtrip_test.go)",
+
+	"/platform.v1.RegistryService/Delete": "#452: DELETE /api/v1/compute/images/{repository} is the webservice's (rest/registry/router.go); the daemon mounts none",
 
 	"/platform.v1.VTPMService/ReadVTPMPCR":   "#452: the daemon reads one PCR at GET /api/v1/vtpm/bundles/{id}/pcr/{index}; the claim is the webservice's /pcrs",
 	"/platform.v1.VTPMService/ExtendVTPMPCR": "#452: the daemon's vTPM routes have no PCR extend",

@@ -32,6 +32,7 @@ import { TenantService } from '../services/tenant-service.js';
 import { TPMService } from '../services/tpm-service.js';
 import { VTPMService } from '../services/vtpm-service.js';
 import { VPNService } from '../services/vpn-service.js';
+import { ProxyService } from '../services/proxy-service.js';
 import { InvitationService } from '../services/invitation-service.js';
 import { EABService } from '../services/eab-service.js';
 
@@ -227,6 +228,9 @@ export class PlatformClient {
   /** VPN service for the remote-access VPN control plane */
   public readonly vpn: VPNService;
 
+  /** Proxy service for the reverse-proxy routes, pools and zone matrix */
+  public readonly proxy: ProxyService;
+
   /** Invitation service for tenant invitation management */
   public readonly invitation: InvitationService;
 
@@ -370,6 +374,7 @@ export class PlatformClient {
     this.tpm = new TPMService(t);
     this.vtpm = new VTPMService(t);
     this.vpn = new VPNService(t);
+    this.proxy = new ProxyService(t);
     this.invitation = new InvitationService(t);
     this.eab = new EABService(t);
 

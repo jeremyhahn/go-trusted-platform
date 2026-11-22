@@ -38,7 +38,7 @@ func TestNewClusterService_Stub(t *testing.T) {
 			t.Errorf("expected ErrInvalidConfig, got %T", err)
 		}
 
-		if errInvalid.Reason != "cluster service not enabled (build with -tags cluster)" {
+		if errInvalid.Reason != "cluster service is not wired in any build (#336)" {
 			t.Errorf("unexpected error reason: %s", errInvalid.Reason)
 		}
 	})

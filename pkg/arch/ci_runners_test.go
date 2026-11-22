@@ -109,6 +109,9 @@ func runnerProblems(body []byte) []string {
 			if p := waiverProblem(j.runsOn.LineComment); p != "" {
 				problems = append(problems, where+" "+p)
 			}
+		case isSelectionRunsOn(j.runsOn.Value):
+			// v1.48: the preflight selection, hosted unless the hosted
+			// pool is full; its step keeps fork pull requests hosted.
 		case strings.Contains(j.runsOn.Value, "${{"):
 			problems = append(problems, where+" runs on an expression, which can pick a self-hosted label: "+strconv.Quote(j.runsOn.Value))
 		case j.runsOn.Value != hostedRunner:
@@ -118,7 +121,7 @@ func runnerProblems(body []byte) []string {
 		}
 		// A self-hosted runner is persistent: fork pull requests must
 		// never reach it, so the job's if: carries the same-repository guard.
-		if j.runsOn != nil && (j.runsOn.Kind != yaml.ScalarNode || j.runsOn.Value != hostedRunner) &&
+		if j.runsOn != nil && (j.runsOn.Kind != yaml.ScalarNode || (j.runsOn.Value != hostedRunner && !isSelectionRunsOn(j.runsOn.Value))) &&
 			!strings.Contains(j.cond, sameRepoExpr) {
 			problems = append(problems, where+": self-hosted runner without the fork guard")
 		}
@@ -161,6 +164,180 @@ func readCI(t *testing.T) []byte {
 func TestCIRunsHostedFirst(t *testing.T) {
 	for _, p := range runnerProblems(readCI(t)) {
 		t.Error(p)
+	}
+}
+
+// The v1.48 runner selection (ci-template v1.48, Tenant Agent rulings 1024
+// and 1031, #2128): the preflight step `Hosted or overflow runner (ruling
+// 1024)` decides once per run whether its jobs run on the GitHub-hosted
+// default or overflow to the self-hosted overflow runners, and every hosted
+// job reads that decision. Off github.com each job keeps its label.
+const (
+	selectionStep        = "Hosted or overflow runner (ruling 1024)"
+	selectionRunner      = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}"
+	selectionDocker      = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}"
+	selectionGate        = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner || '\"ubuntu-latest\"') || 'ubuntu-latest' }}"
+	selectionForkEvents  = "case \"$EVENT\" in\n  pull_request|pull_request_target)\n"
+	selectionForkGuard   = `if [ "$HEAD_REPO" != "$REPO" ]; then`
+	selectionOverflowMsg = "the self-hosted overflow runners (bigdisk, bigdisk-docker)"
+)
+
+// selectionRunsOn is the runs-on every job of ci.yml carries under v1.48:
+// a job whose steps run Docker reads runner_docker, CI Gate reads runner with
+// the hosted fallback, the others read runner. preflight decides, so it stays
+// hosted; image keeps its ruling 999 oversize waiver.
+var selectionRunsOn = map[string]string{
+	"preflight":  hostedRunner,
+	"lint":       selectionDocker,
+	"image":      "bigdisk-docker",
+	"lint-gates": selectionRunner,
+	"sdkjs":      selectionRunner,
+	"race":       selectionRunner,
+	"web":        selectionRunner,
+	// Hosted only: `playwright install --with-deps` installs system packages.
+	"web-e2e":           hostedRunner,
+	"integration-image": selectionDocker,
+	"integration":       selectionDocker,
+	"soak":              selectionDocker,
+	"fips":              selectionRunner,
+	"signatures":        selectionRunner,
+	"ci-gate":           selectionGate,
+}
+
+// isSelectionRunsOn reports whether runsOn is one of the v1.48 forms.
+func isSelectionRunsOn(runsOn string) bool {
+	return runsOn == selectionRunner || runsOn == selectionDocker || runsOn == selectionGate
+}
+
+// selectionProblems lists every way ci.yml departs from the v1.48 runner
+// selection.
+func selectionProblems(body []byte) []string {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(body, &doc); err != nil || len(doc.Content) == 0 {
+		return []string{"ci.yml does not parse: " + errString(err)}
+	}
+	root := doc.Content[0]
+	var problems []string
+	env := mapValue(root, "env")
+	for key, want := range map[string]string{"HOSTED_JOBS_PER_REPO": "12", "HOSTED_QUEUE_GRACE_SECONDS": "60"} {
+		if v := mapValue(env, key); v == nil || v.Value != want {
+			problems = append(problems, "env "+key+" is not "+want)
+		}
+	}
+	jobs := mapValue(root, "jobs")
+	if jobs == nil {
+		return append(problems, "ci.yml has no jobs")
+	}
+	seen := map[string]bool{}
+	for i := 0; i+1 < len(jobs.Content); i += 2 {
+		name, job := jobs.Content[i].Value, jobs.Content[i+1]
+		seen[name] = true
+		want, known := selectionRunsOn[name]
+		if !known {
+			problems = append(problems, "job "+name+" has no v1.48 runner in this test")
+			continue
+		}
+		runsOn := mapValue(job, "runs-on")
+		if runsOn == nil || runsOn.Kind != yaml.ScalarNode || runsOn.Value != want {
+			got := "<none>"
+			if runsOn != nil {
+				got = runsOn.Value
+			}
+			problems = append(problems, "job "+name+" runs on "+strconv.Quote(got)+", want "+strconv.Quote(want))
+		}
+		if !isSelectionRunsOn(want) {
+			continue
+		}
+		needsPreflight := false
+		if needs := mapValue(job, "needs"); needs != nil {
+			needsPreflight = needs.Value == "preflight"
+			for _, n := range needs.Content {
+				needsPreflight = needsPreflight || n.Value == "preflight"
+			}
+		}
+		if !needsPreflight {
+			problems = append(problems, "job "+name+" reads needs.preflight.outputs but does not need preflight")
+		}
+	}
+	for name := range selectionRunsOn {
+		if !seen[name] {
+			problems = append(problems, "job "+name+" is missing")
+		}
+	}
+	preflight := mapValue(jobs, "preflight")
+	outputs := mapValue(preflight, "outputs")
+	for key, want := range map[string]string{
+		"runner":        "${{ steps.runner.outputs.runner }}",
+		"runner_docker": "${{ steps.runner.outputs.runner_docker }}",
+	} {
+		if v := mapValue(outputs, key); v == nil || v.Value != want {
+			problems = append(problems, "preflight output "+key+" is not "+want)
+		}
+	}
+	if p := mapValue(mapValue(preflight, "permissions"), "actions"); p == nil || p.Value != "read" {
+		problems = append(problems, "preflight lacks actions: read")
+	}
+	steps := mapValue(preflight, "steps")
+	if steps == nil || len(steps.Content) == 0 {
+		return append(problems, "preflight has no steps")
+	}
+	first := steps.Content[0]
+	if n := mapValue(first, "name"); n == nil || n.Value != selectionStep {
+		problems = append(problems, "preflight's first step, before any checkout, is not "+strconv.Quote(selectionStep))
+	}
+	if id := mapValue(first, "id"); id == nil || id.Value != "runner" {
+		problems = append(problems, "the selection step's id is not runner")
+	}
+	run := ""
+	if r := mapValue(first, "run"); r != nil {
+		run = r.Value
+	}
+	for _, want := range []string{selectionForkEvents + "    " + selectionForkGuard, selectionOverflowMsg, `emit "$(overflow bigdisk)" "$(overflow bigdisk-docker)"`} {
+		if !strings.Contains(run, want) {
+			problems = append(problems, "the selection step's run lacks "+strconv.Quote(want))
+		}
+	}
+	return problems
+}
+
+func TestCIJobsReadThePreflightRunnerSelection(t *testing.T) {
+	for _, p := range selectionProblems(readCI(t)) {
+		t.Error(p)
+	}
+}
+
+func TestSelectionProblems_Mutations(t *testing.T) {
+	body := string(readCI(t))
+	if p := selectionProblems([]byte(body)); len(p) != 0 {
+		t.Fatalf("ci.yml itself has problems: %v", p)
+	}
+	for _, c := range []struct {
+		name   string
+		mutate func(string) string
+		want   string
+	}{
+		{"a hosted job back on a plain label", func(b string) string { return replaceJobRunner(t, b, "race", hostedRunner) }, "job race runs on"},
+		{"a Docker job reading runner", func(b string) string { return replaceJobRunner(t, b, "integration", selectionRunner) }, "job integration runs on"},
+		{"the gate without its fallback", func(b string) string { return replaceJobRunner(t, b, "ci-gate", selectionRunner) }, "job ci-gate runs on"},
+		{"another limit", func(b string) string {
+			return strings.Replace(b, "HOSTED_JOBS_PER_REPO: 12", "HOSTED_JOBS_PER_REPO: 20", 1)
+		}, "env HOSTED_JOBS_PER_REPO is not 12"},
+		{"another grace", func(b string) string {
+			return strings.Replace(b, "HOSTED_QUEUE_GRACE_SECONDS: 60", "HOSTED_QUEUE_GRACE_SECONDS: 5", 1)
+		}, "env HOSTED_QUEUE_GRACE_SECONDS is not 60"},
+		{"the fork guard dropped", func(b string) string { return strings.Replace(b, selectionForkGuard, "if false; then", 1) }, "lacks"},
+		{"the step renamed", func(b string) string { return strings.Replace(b, "name: "+selectionStep, "name: Runner", 1) }, "first step"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			mutated := c.mutate(body)
+			if mutated == body {
+				t.Fatal("the mutation changed nothing")
+			}
+			p := selectionProblems([]byte(mutated))
+			if !slices.ContainsFunc(p, func(s string) bool { return strings.Contains(s, c.want) }) {
+				t.Fatalf("want a problem containing %q, got %v", c.want, p)
+			}
+		})
 	}
 }
 

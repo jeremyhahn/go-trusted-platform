@@ -45,12 +45,12 @@ var DaemonOnlyPrefixes = map[string]string{
 	"fido2":    "RESTServer.SetFIDO2Service (pkg/api/daemon/fido2_rest.go)",
 	"luks":     "RESTServer.SetLUKSService (pkg/api/daemon/luks_rest.go)",
 	"piv":      "RESTServer.SetPIVService (pkg/api/daemon/piv_rest.go)",
-	"proxy":    "RESTServer.SetProxyService (pkg/api/daemon/proxy_rest.go)",
 	"services": "RESTServer.registerRoutes (pkg/api/daemon/rest_service.go)",
 	"version":  "RESTServer.registerRoutes, handleVersion (pkg/api/daemon/rest_service.go)",
 
 	// The webservice router serves /sdn/gateway/ipam, so the gateway surface
 	// is listed by the sub-prefixes only the daemon serves.
+	"sdn/gateway/lb":      "RESTServer.SetGatewayIPAMService (pkg/api/daemon/rest_sdn.go)",
 	"sdn/gateway/nat64":   "RESTServer.SetGatewayIPAMService (pkg/api/daemon/rest_sdn.go)",
 	"sdn/gateway/overlay": "RESTServer.SetGatewayIPAMService (pkg/api/daemon/rest_sdn.go)",
 	"sdn/gateway/perf":    "RESTServer.SetGatewayIPAMService (pkg/api/daemon/rest_sdn.go)",

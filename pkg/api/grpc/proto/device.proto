@@ -42,6 +42,12 @@ service DeviceService {
   // not ask a device for a fresh quote (see #226).
   rpc AttestDevice(AttestDeviceRequest) returns (AttestDeviceResponse);
 
+  // IssueAttestationChallenge issues the server-chosen, single-use nonce
+  // AttestDevice binds a quote to (#2136). The challenge is bound to the
+  // device and the caller's tenant, expires after a short time and is
+  // consumed by the first AttestDevice that presents it.
+  rpc IssueAttestationChallenge(IssueAttestationChallengeRequest) returns (IssueAttestationChallengeResponse);
+
   // RecordAttestationCertificate records (or re-records) the device's
   // attestation (IAK/AK) certificate on its platform record without
   // re-enrolling the device. The certificate is the trust anchor
@@ -511,6 +517,10 @@ message ActivateDeviceResponse {
 message AttestDeviceRequest {
   string device_id = 1;
   bytes evidence = 2;
+  // challenge_id names a challenge from IssueAttestationChallenge. When set,
+  // the evidence nonce must equal the challenge's nonce, and the challenge
+  // is consumed whatever the verdict (#2136).
+  string challenge_id = 3;
 }
 
 // AttestDeviceResponse reports what was verified, not merely whether the
@@ -543,6 +553,21 @@ message AttestDeviceResponse {
   // pcr_baseline_captured is true when this verification recorded the
   // profile's trust-on-first-use baseline from the device's reported values.
   bool pcr_baseline_captured = 15;
+}
+
+// IssueAttestationChallengeRequest names the device the challenge is for.
+message IssueAttestationChallengeRequest {
+  string device_id = 1;
+}
+
+// IssueAttestationChallengeResponse carries the single-use challenge: the
+// device quotes over nonce and presents challenge_id to AttestDevice before
+// expires_at.
+message IssueAttestationChallengeResponse {
+  Status status = 1;
+  string challenge_id = 2;
+  bytes nonce = 3;
+  google.protobuf.Timestamp expires_at = 4;
 }
 
 // RecordAttestationCertificateRequest names the device and whether the

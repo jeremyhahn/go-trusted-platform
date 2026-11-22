@@ -979,7 +979,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// socket. It is the pkg/api/grpc implementation over the daemon's
 	// ClusterServicer — the same servicer the MCP cluster tools use, set
 	// through Daemon.SetClusterService. Until one is set every RPC returns
-	// Unavailable.
+	// Unavailable. That is true on every build, with or without -tags
+	// cluster, until #336 lands.
 	clusterGRPCService, clusterBackend := registerClusterGRPCService(logger, grpcServer, grpcUDSServer)
 	logger.Info("Cluster gRPC service registered")
 
@@ -1121,7 +1122,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	logger.Info("Creating health registry...")
 	// Create health registry
-	healthRegistry := health.NewRegistry()
+	healthRegistry := health.NewRegistry(health.WithLogger(logger.Slog()))
 
 	// Create QUIC service handler and server if enabled
 	var quicServerIntf QUICServerInterface // Use interface type to avoid typed nil issue
@@ -2070,6 +2071,7 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		DeviceTemplateService: d.config.DeviceTemplateService,
 		VerdictSink:           deviceVerdictSink(d.config),
 		AttestCertRecorder:    newDeviceAttestCertRecorder(d.config, d.logger.Slog()),
+		AttestChallengeIssuer: attestChallengeIssuerOf(d.deviceService),
 		DeviceLifecycle:       d.config.DeviceLifecycle,
 		AttestationReporting:  d.config.AttestationReporting,
 		AttestationServer:     d.attestationService,
@@ -2880,6 +2882,9 @@ func (d *Daemon) Start(ctx context.Context) error {
 		d.logger.Info("QUIC server started successfully", "addr", d.quicServer.ListenAddr())
 	}
 
+	if d.deviceService != nil {
+		d.deviceService.StartChallengeSweeper(attestChallengeSweepInterval)
+	}
 	d.running.Store(true)
 
 	// Attach overlay IPsec to charon behind the floor New installed.
@@ -2911,6 +2916,9 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	}
 	if d.verdictFeed != nil {
 		d.verdictFeed.Close()
+	}
+	if d.deviceService != nil {
+		d.deviceService.StopChallengeSweeper()
 	}
 
 	d.mu.Lock()
@@ -3028,6 +3036,9 @@ const forceStopTimeoutSeconds = 5
 func (d *Daemon) ForceStop() error {
 	if !d.running.Load() {
 		return ErrDaemonNotRunning{}
+	}
+	if d.deviceService != nil {
+		d.deviceService.StopChallengeSweeper()
 	}
 
 	d.mu.Lock()
@@ -3315,6 +3326,11 @@ func (d *Daemon) VPNGRPCServiceServer() *VPNGRPCService {
 	return d.vpnGRPCService
 }
 
+// ProxyGRPCServiceServer returns the proxy gRPC service backing /api/v1/proxy.
+func (d *Daemon) ProxyGRPCServiceServer() *grpccreds.ProxyGRPCService {
+	return d.proxyGRPCService
+}
+
 // VPNControlPlane returns the control-plane VPN service, or nil when the
 // daemon runs without a platform store.
 func (d *Daemon) VPNControlPlane() *vpn.Service {
@@ -3390,7 +3406,7 @@ func (d *Daemon) MCPServiceProvider() *MCPServiceProvider {
 // wiring that constructs a *ClusterService and injects it here, so every
 // cluster operation reports the service as not configured — with -tags
 // cluster exactly as without it. Do not read the build tag as the
-// difference. See #334.
+// difference. See #334; wiring is #336.
 func (d *Daemon) SetClusterService(svc ClusterServicer) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

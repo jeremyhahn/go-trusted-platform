@@ -128,6 +128,29 @@ func TestNewEmbeddedHost_ServesTheBarrierService(t *testing.T) {
 	}
 }
 
+func TestNewEmbeddedHost_ServesTheVPNService(t *testing.T) {
+	host, err := NewEmbeddedHost(testConfig(filepath.Join(t.TempDir(), "platformd.sock")))
+	if err != nil {
+		t.Fatalf("NewEmbeddedHost: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := host.Stop(context.Background()); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	})
+
+	if host.daemon.VPNGRPCServiceServer() == nil {
+		t.Fatal("the daemon keeps no VPN service")
+	}
+	services := host.daemon.embeddedServices()
+	if services.VPN == nil {
+		t.Fatal("embeddedServices().VPN is nil")
+	}
+	if services.VPN != platformv1.VPNServiceServer(host.daemon.VPNGRPCServiceServer()) {
+		t.Errorf("VPN = %v, want the daemon's service", services.VPN)
+	}
+}
+
 // The embedder's wiring is handed the hosted daemon; without a hook there is
 // nothing to wire.
 func TestEmbeddedHost_WireBackendsReceivesTheDaemon(t *testing.T) {
