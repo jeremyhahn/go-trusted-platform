@@ -19,6 +19,8 @@ import (
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/transport/embedded"
 	"gopkg.in/yaml.v3"
 )
 
@@ -132,9 +134,51 @@ func (a *QuicBaaSIAMAdapter) GetUser(ctx context.Context, tenantID, userID strin
 	return a.client.User().Get(ctx, tenantID, userID)
 }
 
-// GetUserByEmail delegates to iamsdk.UserClient.GetByEmail.
+// emailLookupPageSize is the page size GetUserByEmail lists users with when
+// it falls back to reading the tenant's users.
+const emailLookupPageSize = 100
+
+// GetUserByEmail delegates to iamsdk.UserClient.GetByEmail. The embedded
+// transport of go-quicbaas v0.12.0-alpha routes no IAM.User/GetByEmail, so
+// login's workspace-role lookup (WorkspaceRoleResolver) would fail there;
+// only on that unknown-method error does GetUserByEmail read the tenant's
+// users instead, page by page, and return the first user whose email equals
+// email exactly, or an SDK not-found error when none does. Every other
+// GetByEmail error, and any List error, is returned.
 func (a *QuicBaaSIAMAdapter) GetUserByEmail(ctx context.Context, tenantID, email string) (*iamsdk.User, error) {
-	return a.client.User().GetByEmail(ctx, tenantID, email)
+	users := a.client.User()
+	user, err := users.GetByEmail(ctx, tenantID, email)
+	if err == nil || !isUnknownMethod(err) {
+		return user, err
+	}
+	tok := ""
+	for {
+		resp, err := users.List(ctx, tenantID, &iamsdk.ListUsersRequest{PageSize: emailLookupPageSize, PageToken: tok})
+		if err != nil {
+			return nil, err
+		}
+		if resp == nil {
+			break
+		}
+		for i := range resp.Users {
+			if resp.Users[i].Email == email {
+				found := resp.Users[i]
+				return &found, nil
+			}
+		}
+		tok = resp.Pagination.NextPageToken
+		if tok == "" {
+			break
+		}
+	}
+	return nil, sdkerrors.NewNotFound("iam.GetUserByEmail", "no user in tenant "+tenantID+" has the email "+email)
+}
+
+// isUnknownMethod reports whether err says the transport does not route the
+// method called.
+func isUnknownMethod(err error) bool {
+	var unknown *embedded.UnknownMethodError
+	return errors.As(err, &unknown) || sdkerrors.IsUnimplemented(err)
 }
 
 // ListUsers delegates to iamsdk.UserClient.List.
