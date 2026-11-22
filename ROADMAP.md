@@ -23,7 +23,6 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **ima** — Linux IMA provisioned on installed nodes — [v0.1.0-alpha](../../releases/tag/v0.1.0-alpha) — done
 - **kms** — keys on TPM, PKCS#11, cloud KMS or software through the stack's key management — [v0.1.0-alpha](../../releases/tag/v0.1.0-alpha) — done
 - **ntp** — trustworthy node time — [v0.1.0-alpha](../../releases/tag/v0.1.0-alpha) — done
-- **provisioning** — a bare machine becomes a trusted node with no login — [v0.1.0-alpha](../../releases/tag/v0.1.0-alpha) — done
 - **proxy** — an attestation-aware reverse proxy — [v0.1.0-alpha](../../releases/tag/v0.1.0-alpha) — done
 - **registry** — an OCI registry authenticated by TPM attestation — [v0.1.0-alpha](../../releases/tag/v0.1.0-alpha) — done
 - **sdn** — the switch port enforces the zone the device's IDevID decides — [v0.1.0-alpha](../../releases/tag/v0.1.0-alpha) — done
@@ -46,6 +45,8 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **sdk** — the full composed go-quicbaas surface re-exported — [#704](../../issues/704) — open
 - **vpn** — the attested remote-access VPN: multi-protocol surface, CLI and client agent — [#584](../../issues/584) — open
 - **installer** — a booting node authenticates to the control-plane API with its IDevID over mTLS, the install-completion webhook included — [#238](../../issues/238) — open
+- **provisioning** — a bare machine becomes a trusted node with no login, E2E provisioning asserting what it reports — [#1694](../../issues/1694) — open
+- **release-readiness** — the Dev complete release criteria held: every test package in a CI stage, one path per behaviour — [#705](../../issues/705) — open
 
 ## Next
 - **bootstrap** — every NBD package behind one build tag, omitted from a client binary that does not use NBD — [#883](../../issues/883) — open
