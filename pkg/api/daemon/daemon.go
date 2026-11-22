@@ -1117,7 +1117,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	logger.Info("Creating health registry...")
 	// Create health registry
-	healthRegistry := health.NewRegistry()
+	healthRegistry := health.NewRegistry(health.WithLogger(logger.Slog()))
 
 	// Create QUIC service handler and server if enabled
 	var quicServerIntf QUICServerInterface // Use interface type to avoid typed nil issue
@@ -3316,6 +3316,11 @@ func (d *Daemon) NTPGRPCServiceServer() *NTPGRPCService {
 // VPNGRPCServiceServer returns the VPN gRPC service backing /api/v1/vpn.
 func (d *Daemon) VPNGRPCServiceServer() *VPNGRPCService {
 	return d.vpnGRPCService
+}
+
+// ProxyGRPCServiceServer returns the proxy gRPC service backing /api/v1/proxy.
+func (d *Daemon) ProxyGRPCServiceServer() *grpccreds.ProxyGRPCService {
+	return d.proxyGRPCService
 }
 
 // VPNControlPlane returns the control-plane VPN service, or nil when the

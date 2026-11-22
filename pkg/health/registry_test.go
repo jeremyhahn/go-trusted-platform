@@ -14,8 +14,11 @@
 package health
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -323,6 +326,54 @@ func TestRegistry_Check(t *testing.T) {
 		assert.Equal(t, StatusHealthy, health.Components[0].Status)
 		assert.Equal(t, "mock check", health.Components[0].Message)
 	})
+}
+
+// messageChecker reports a fixed status and message.
+type messageChecker struct {
+	name    string
+	status  HealthStatus
+	message string
+}
+
+func (m *messageChecker) Name() string { return m.name }
+
+func (m *messageChecker) Check(ctx context.Context) ComponentHealth {
+	return ComponentHealth{Name: m.name, Status: m.status, Message: m.message, LastChecked: time.Now()}
+}
+
+// TestRegistry_Check_LogsUnhealthyComponent proves an unhealthy aggregate
+// names the failing component in the result and logs one WARN line for it,
+// so a 503 from /health/ready can be traced to a checker (#2034).
+func TestRegistry_Check_LogsUnhealthyComponent(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	registry := NewRegistry(WithLogger(logger))
+	require.NoError(t, registry.Register(&messageChecker{name: "ok", status: StatusHealthy}))
+	require.NoError(t, registry.Register(&messageChecker{name: "sdn", status: StatusUnhealthy, message: "OVS client not available"}))
+
+	result := registry.Check(context.Background())
+
+	assert.Equal(t, StatusUnhealthy, result.Status)
+	var unhealthy []string
+	for _, c := range result.Components {
+		if c.Status == StatusUnhealthy {
+			unhealthy = append(unhealthy, c.Name)
+		}
+	}
+	assert.Equal(t, []string{"sdn"}, unhealthy)
+
+	out := buf.String()
+	assert.Equal(t, 1, strings.Count(out, "level=WARN"), out)
+	assert.Contains(t, out, "component=sdn")
+	assert.Contains(t, out, "OVS client not available")
+	assert.NotContains(t, out, "component=ok")
+
+	// A healthy aggregate logs nothing.
+	buf.Reset()
+	require.NoError(t, registry.Unregister("sdn"))
+	result = registry.Check(context.Background())
+	assert.Equal(t, StatusHealthy, result.Status)
+	assert.Empty(t, buf.String())
 }
 
 // TestCheckOutcome pins the rule that decides between a checker's answer and an
