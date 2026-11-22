@@ -31,6 +31,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useSDN } from '@/hooks';
 import type { ApiResponse, NetworkZoneSpec } from 'trusted-platform-sdk';
+import { zoneChangeToast } from './zone-change';
 
 /** The SDK reports a failed call in the response; the handlers need it thrown. */
 function throwOnError<T>(response: ApiResponse<T>): void {
@@ -322,13 +323,13 @@ export default function ZonesPage() {
     setSubmitting(true);
     try {
       if (editTarget) {
-        throwOnError(
-          await sdn.updateNetworkZone(editTarget.name, zoneBody(form, false) as NetworkZoneSpec)
-        );
-        toast({ title: 'Zone updated', variant: 'success' });
+        const res = await sdn.updateNetworkZone(editTarget.name, zoneBody(form, false) as NetworkZoneSpec);
+        throwOnError(res);
+        toast(zoneChangeToast('updated', res.data?.restart_required));
       } else {
-        throwOnError(await sdn.createNetworkZone(zoneBody(form, true) as NetworkZoneSpec));
-        toast({ title: 'Zone created', variant: 'success' });
+        const res = await sdn.createNetworkZone(zoneBody(form, true) as NetworkZoneSpec);
+        throwOnError(res);
+        toast(zoneChangeToast('created', res.data?.restart_required));
       }
       setFormOpen(false);
       void fetchZones();
@@ -354,8 +355,9 @@ export default function ZonesPage() {
     setDeleting(true);
     setDeleteError(null);
     try {
-      throwOnError(await sdn.deleteNetworkZone(deleteTarget.name));
-      toast({ title: 'Zone deleted', variant: 'success' });
+      const res = await sdn.deleteNetworkZone(deleteTarget.name);
+      throwOnError(res);
+      toast(zoneChangeToast('deleted', res.data?.restart_required));
       setDeleteConfirmOpen(false);
       setDeleteTarget(null);
       void fetchZones();
