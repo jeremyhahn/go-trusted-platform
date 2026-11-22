@@ -1,13 +1,16 @@
 import type { Request } from '@playwright/test';
-import { test, expect } from './fixtures/admin-session.fixture';
+import { expect, test } from './fixtures';
 
 /**
  * Gateway flow-programming benchmark (#2052, ruling 972).
  *
  * GetPerfFlows installs temporary switch flows, so the gateway page offers it
- * as one admin-only action behind a confirm dialog. Against the real server
- * (no api-mock): cancel sends nothing; confirm sends exactly one POST and the
- * page answers with the result or the server's refusal, and can run again.
+ * as one admin-only action behind a confirm dialog. These specs run on the
+ * real-server harness against its own platformd (no api-mock), with an admin
+ * session the server issues through its WebAuthn flow; without that session
+ * they fail, never skip. Cancel sends nothing; confirm sends exactly one POST
+ * and the page answers with the result or the server's refusal, and can run
+ * again.
  */
 
 const PERF_FLOWS_PATH = '/api/v1/gateway/perf/flows';
