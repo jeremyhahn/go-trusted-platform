@@ -73,6 +73,18 @@ export default function DevicesPage() {
     }
   );
 
+  // The registered total, from GET /devices/count (#2048). The list above
+  // loads one page of 100; the count tells the operator when it is cut off.
+  // A refused count hides the line; the list still renders. useApi keeps the
+  // last data on error, so a failed refresh hides the line too (#2169 Codex).
+  const {
+    data: countResponse,
+    error: countError,
+    refetch: refetchCount,
+  } = useApi(() => deviceService.countDevices(), []);
+  const registeredTotal = countError ? undefined : countResponse?.count;
+  const loadedCount = devicesResponse?.devices?.length ?? 0;
+
   // Transform SDK Device to local Device type and apply client-side filters
   const devices: Device[] = useMemo(() => {
     const rawDevices: SDKDevice[] = devicesResponse?.devices ?? [];
@@ -168,6 +180,7 @@ export default function DevicesPage() {
   const handleSuccess = () => {
     setIsDialogOpen(false);
     refetch();
+    refetchCount();
   };
 
   const handleFilterChange = (key: keyof DeviceFilters, value: string) => {
@@ -207,6 +220,15 @@ export default function DevicesPage() {
           </DialogContent>
         </Dialog>
       </div>
+
+      {registeredTotal !== undefined && (
+        <p data-testid="device-count" className="text-sm text-muted-foreground">
+          Showing {devices.length} of {registeredTotal} registered devices
+          {registeredTotal > loadedCount && (
+            <> (only the first {loadedCount} are loaded)</>
+          )}
+        </p>
+      )}
 
       <div className="flex items-center gap-4 rounded-lg border border-border bg-card p-4">
         <Filter className="h-5 w-5 text-muted-foreground" />
@@ -268,6 +290,7 @@ export default function DevicesPage() {
           devices={devices}
           onDeviceChange={() => {
             refetch();
+            refetchCount();
             refetchReports();
           }}
           reports={reports}
