@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useAttestationCollect } from "@/hooks/use-attestation-collect";
+import type { CollectContainerAttestationResponse, CollectVMAttestationResponse } from "trusted-platform-sdk";
 
 // #2038: the host, VM and container attestation collect operations, driven
 // through useAttestationCollect. The operator types the nonce (base64) and
@@ -102,12 +103,12 @@ export default function AttestationCollectPage() {
   const [vmNonce, setVmNonce] = React.useState("");
   const [vmPcrError, setVmPcrError] = React.useState<string>();
   const [vmBusy, setVmBusy] = React.useState(false);
-  const [vmOutcome, setVmOutcome] = React.useState<Outcome<{ verified: boolean; host_id?: string }>>();
+  const [vmOutcome, setVmOutcome] = React.useState<Outcome<CollectVMAttestationResponse>>();
 
   const [containerId, setContainerId] = React.useState("");
   const [containerBusy, setContainerBusy] = React.useState(false);
   const [containerOutcome, setContainerOutcome] =
-    React.useState<Outcome<{ verified: boolean; digest: string }>>();
+    React.useState<Outcome<CollectContainerAttestationResponse>>();
 
   const onHost = async () => {
     const pcrs = parsePcrIndices(hostPcrs);
@@ -216,8 +217,8 @@ export default function AttestationCollectPage() {
           {vmOutcome && "error" in vmOutcome && <RefusalAlert message={vmOutcome.error} />}
           {vmOutcome && "data" in vmOutcome && (
             <div data-testid="collect-vm-result" className="space-y-1 text-sm">
-              <VerifiedBadge verified={vmOutcome.data.verified} />
-              {vmOutcome.data.host_id && <p>Host: {vmOutcome.data.host_id}</p>}
+              <VerifiedBadge verified={vmOutcome.data.status.success} />
+              {vmOutcome.data.attestation?.hostId && <p>Host: {vmOutcome.data.attestation?.hostId}</p>}
             </div>
           )}
         </CardContent>
@@ -236,8 +237,8 @@ export default function AttestationCollectPage() {
           {containerOutcome && "error" in containerOutcome && <RefusalAlert message={containerOutcome.error} />}
           {containerOutcome && "data" in containerOutcome && (
             <div data-testid="collect-container-result" className="space-y-1 text-sm">
-              <VerifiedBadge verified={containerOutcome.data.verified} />
-              <p className="font-mono break-all">Digest: {containerOutcome.data.digest}</p>
+              <VerifiedBadge verified={containerOutcome.data.status.success} />
+              <p className="font-mono break-all">Digest: {containerOutcome.data.attestation?.digest}</p>
             </div>
           )}
         </CardContent>
