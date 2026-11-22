@@ -27,12 +27,10 @@ import (
 // closed with 401 when no session is present, so mounting a guard without
 // an authenticator ahead of it denies the route rather than opening it.
 //
-// The guard is deliberately separate from AuthMiddleware. Authentication
+// The guard is deliberately separate from authentication. Authentication
 // has several implementations (the platform JWT handler, the QuicBaaS
 // broker platform token, mTLS), but the authorization decision they all
-// feed is one piece of code — AuthMiddleware embeds this type so its
-// RequireRoles/RequireAllRoles surface and a directly mounted guard are
-// literally the same implementation.
+// feed is this one piece of code.
 type SessionGuard struct {
 	logger         *logging.Logger
 	responseWriter response.HttpWriter

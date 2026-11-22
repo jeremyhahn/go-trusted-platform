@@ -58,7 +58,7 @@ func newSwitchTestRegistry(server platformv1.SwitchServiceServer) *ToolRegistry 
 // its gRPC method requires: read-only for port reads, switch:write for VLAN
 // and admin-state changes.
 func TestSwitchTools_CoverEveryMethodWithItsGRPCScope(t *testing.T) {
-	permissions := toolPermissionCatalog()
+	permissions := declaredToolPermissions(PlatformTools{})
 	byMethod := make(map[string]string, len(switchTools))
 	for name, tool := range switchTools {
 		byMethod[tool.method] = name

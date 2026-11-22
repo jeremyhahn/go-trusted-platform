@@ -202,6 +202,75 @@ func TestGroup_MasterYieldsAndReleases(t *testing.T) {
 	})
 }
 
+// demotedWithFailedRelease takes a group to Master, then demotes it with a
+// failing Release, the case #1716's review names.
+func demotedWithFailedRelease(t *testing.T) (*Group, *recordingActuator, time.Time) {
+	t.Helper()
+	cfg := backupConfig()
+	cfg.Priority = 150
+	g, act := newGroupT(t, cfg)
+	require.NoError(t, g.Startup(t0))
+	require.NoError(t, g.Tick(g.NextDeadline()))
+	require.Equal(t, StateMaster, g.State())
+	act.failRel = errors.New("netlink: device busy")
+	now := t0.Add(10 * time.Second)
+	adv := &Advertisement{VRID: 20, Priority: 200, MaxAdvertInterval: 100, Addresses: g.Addresses()}
+	require.Error(t, g.HandleAdvertisement(adv, netip.MustParseAddr("10.4.200.3"), now))
+	require.Equal(t, StateBackup, g.State())
+	require.Equal(t, 1, act.releases)
+	return g, act, now
+}
+
+func TestGroup_BackupRetriesAFailedRelease(t *testing.T) {
+	g, act, now := demotedWithFailedRelease(t)
+	masterDown := now.Add(g.MasterDownInterval())
+	retryAt := now.Add(g.AdvertInterval())
+	require.True(t, retryAt.Before(masterDown))
+	assert.Equal(t, retryAt, g.NextDeadline(), "an outstanding release wakes the group before Master_Down")
+
+	require.Error(t, g.Tick(retryAt), "the retry still fails")
+	assert.Equal(t, 2, act.releases)
+	assert.Equal(t, StateBackup, g.State())
+	assert.Error(t, g.LastError())
+	assert.Equal(t, retryAt.Add(g.AdvertInterval()), g.NextDeadline())
+
+	act.failRel = nil
+	require.NoError(t, g.Tick(g.NextDeadline()), "the deletion recovers")
+	assert.Equal(t, 3, act.releases)
+	assert.Equal(t, StateBackup, g.State())
+	assert.NoError(t, g.LastError(), "a repaired release clears the health error")
+	assert.Equal(t, masterDown, g.NextDeadline(), "nothing left to retry")
+
+	require.NoError(t, g.Shutdown(masterDown.Add(-time.Millisecond)))
+	assert.Equal(t, 3, act.releases, "nothing outstanding at shutdown")
+}
+
+func TestGroup_BackupShutdownRetriesAFailedRelease(t *testing.T) {
+	t.Run("recovered", func(t *testing.T) {
+		g, act, now := demotedWithFailedRelease(t)
+		act.failRel = nil
+		require.NoError(t, g.Shutdown(now))
+		assert.Equal(t, 2, act.releases, "shutdown in Backup releases what demotion left")
+		assert.Equal(t, StateInitialize, g.State())
+		assert.NoError(t, g.LastError())
+	})
+	t.Run("still failing", func(t *testing.T) {
+		g, act, now := demotedWithFailedRelease(t)
+		require.Error(t, g.Shutdown(now))
+		assert.Equal(t, 2, act.releases)
+		assert.Equal(t, StateInitialize, g.State())
+		assert.Error(t, g.LastError())
+
+		// The failed release stays outstanding: a later shutdown retries it.
+		act.failRel = nil
+		require.NoError(t, g.Shutdown(now))
+		assert.Equal(t, 3, act.releases, "a second shutdown retries the release")
+		assert.NoError(t, g.LastError())
+		require.NoError(t, g.Shutdown(now))
+		assert.Equal(t, 3, act.releases, "nothing outstanding: shutdown is a no-op")
+	})
+}
+
 func TestGroup_Shutdown(t *testing.T) {
 	g, act := newGroupT(t, backupConfig())
 	require.NoError(t, g.Shutdown(t0), "shutdown in Initialize is a no-op")
@@ -240,6 +309,50 @@ func TestGroup_ActuatorFailuresAreReported(t *testing.T) {
 	err = g.Shutdown(t0.Add(time.Hour))
 	assert.ErrorIs(t, err, act.failRel)
 	assert.Equal(t, StateInitialize, g.State())
+
+	// The release a master could not finish stays outstanding.
+	releases := act.releases
+	require.Error(t, g.Shutdown(t0.Add(time.Hour)), "a retry that still fails reports it")
+	assert.Equal(t, releases+1, act.releases)
+	act.failRel = nil
+	require.NoError(t, g.Shutdown(t0.Add(time.Hour)))
+	assert.Equal(t, releases+2, act.releases)
+	assert.NoError(t, g.LastError())
+	require.NoError(t, g.Shutdown(t0.Add(time.Hour)))
+	assert.Equal(t, releases+2, act.releases, "nothing outstanding: shutdown is a no-op")
+}
+
+// A claim that fails at takeover stays reported, and is retried, until a
+// claim succeeds: a later successful advertisement must not hide it.
+func TestGroup_ClaimFailureSurvivesAdvertisement(t *testing.T) {
+	g, act := newGroupT(t, backupConfig())
+	act.failClm = errors.New("netlink EPERM")
+	require.NoError(t, g.Startup(t0))
+	require.Error(t, g.Tick(g.NextDeadline()))
+	require.Equal(t, StateMaster, g.State())
+	assert.ErrorIs(t, g.ClaimError(), act.failClm)
+
+	// The claim still fails: the next advertisement retries it and reports it.
+	require.Error(t, g.Tick(g.NextDeadline()))
+	assert.Equal(t, 2, act.claims)
+	assert.ErrorIs(t, g.ClaimError(), act.failClm)
+	assert.ErrorIs(t, g.LastError(), act.failClm)
+
+	// The claim is repaired: both errors clear.
+	act.failClm = nil
+	require.NoError(t, g.Tick(g.NextDeadline()))
+	assert.Equal(t, 3, act.claims)
+	assert.NoError(t, g.ClaimError())
+	assert.NoError(t, g.LastError())
+
+	// Leaving Master drops an unrepaired claim failure.
+	g2, act2 := newGroupT(t, backupConfig())
+	act2.failClm = errors.New("netlink EPERM")
+	require.NoError(t, g2.Startup(t0))
+	require.Error(t, g2.Tick(g2.NextDeadline()))
+	require.Error(t, g2.ClaimError())
+	_ = g2.Shutdown(t0.Add(time.Hour))
+	assert.NoError(t, g2.ClaimError())
 }
 
 func TestGroup_Accessors(t *testing.T) {

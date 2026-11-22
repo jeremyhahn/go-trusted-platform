@@ -66,6 +66,8 @@ const (
 	// guard's `run` on every event (ci-template v1.30), so a schedule run
 	// skips while main is busy and a refused run skips everywhere.
 	scheduleGuardExpr = "needs.preflight.outputs.verdict == 'run'"
+	// sameRepoExpr holds a job to pushes and same-repository pull requests.
+	sameRepoExpr = "github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository"
 
 	// prTierGuardedIf, docsOnlyGuardedIf, fullTierGuardedIf and
 	// nightlyGuardedIf are the tier `if:`s of a bigdisk job, character for
@@ -73,8 +75,12 @@ const (
 	// docsOnlyGuardedIf (2026-11-10, m2406): race on the bigdisk runner.
 	prTierGuardedIf   = "${{ " + draftGuard + " && (" + scheduleGuardExpr + ") }}"
 	docsOnlyGuardedIf = "${{ needs.preflight.outputs.docs_only != 'true' && " + draftGuard + " && (" + scheduleGuardExpr + ") }}"
-	fullTierGuardedIf = "${{ (" + fullTierExpr + ") && " + draftGuard + " && (" + scheduleGuardExpr + ") }}"
-	nightlyGuardedIf  = "${{ (" + nightlyExpr + ") && " + scheduleGuardExpr + " }}"
+	// docsOnlyGuardedSameRepoIf is docsOnlyGuardedIf plus the fork guard
+	// the image job carries (#2076): its waived self-hosted runner only
+	// serves pushes and same-repository pull requests.
+	docsOnlyGuardedSameRepoIf = "${{ needs.preflight.outputs.docs_only != 'true' && " + draftGuard + " && (" + scheduleGuardExpr + ") && (" + sameRepoExpr + ") }}"
+	fullTierGuardedIf         = "${{ (" + fullTierExpr + ") && " + draftGuard + " && (" + scheduleGuardExpr + ") }}"
+	nightlyGuardedIf          = "${{ (" + nightlyExpr + ") && " + scheduleGuardExpr + " }}"
 
 	// scheduleEnv and scheduleGuardEnv are the gate's schedule flag and the
 	// guard's verdict: on a schedule run the gate fails on any verdict but
@@ -216,20 +222,22 @@ var tierByIf = map[string]string{
 	nightlyIf:  tierNightly,
 	mainOnlyIf: tierMain,
 
-	prTierGuardedIf:   tierPR,
-	docsOnlyGuardedIf: tierDocs,
-	fullTierGuardedIf: tierFull,
-	mainOnlyGuardedIf: tierMain,
-	nightlyGuardedIf:  tierNightly,
+	prTierGuardedIf:           tierPR,
+	docsOnlyGuardedIf:         tierDocs,
+	docsOnlyGuardedSameRepoIf: tierDocs,
+	fullTierGuardedIf:         tierFull,
+	mainOnlyGuardedIf:         tierMain,
+	nightlyGuardedIf:          tierNightly,
 }
 
 // scheduleGuardedIf holds the `if:`s that read the schedule guard's verdict.
 var scheduleGuardedIf = map[string]bool{
-	prTierGuardedIf:   true,
-	docsOnlyGuardedIf: true,
-	fullTierGuardedIf: true,
-	mainOnlyGuardedIf: true,
-	nightlyGuardedIf:  true,
+	prTierGuardedIf:           true,
+	docsOnlyGuardedIf:         true,
+	docsOnlyGuardedSameRepoIf: true,
+	fullTierGuardedIf:         true,
+	mainOnlyGuardedIf:         true,
+	nightlyGuardedIf:          true,
 }
 
 // gatedTiers are the tiers a gate `check` line may carry.
@@ -697,6 +705,45 @@ func TestCIGateTiersMatchTheJobs(t *testing.T) {
 	wf := loadCIWorkflow(t, repoRoot(t), ciWorkflowFile)
 	for _, finding := range ciTierFindings(wf) {
 		t.Error(finding)
+	}
+}
+
+// TestCIGateRequiresTheHostedJobs pins the jobs the gate must require on a
+// named tier and runner: web-e2e runs the real-server Playwright specs on a
+// GitHub-hosted runner, which installs chromium in the job (ruling 1031).
+func TestCIGateRequiresTheHostedJobs(t *testing.T) {
+	wf := loadCIWorkflow(t, repoRoot(t), ciWorkflowFile)
+	jobs := make(map[string]ciJob, len(wf.Jobs))
+	for _, j := range wf.Jobs {
+		jobs[j.ID] = j
+	}
+	gate, ok := jobs[ciGateJobID]
+	if !ok {
+		t.Fatal("the workflow has no ci-gate job")
+	}
+	checked, _ := gateFindings(wf, gate, jobs)
+	for _, tc := range []struct {
+		job, tier, runsOn string
+	}{
+		{job: "web-e2e", tier: tierFull, runsOn: "ubuntu-latest"},
+	} {
+		j, ok := jobs[tc.job]
+		if !ok {
+			t.Errorf("%s: the workflow has no such job", tc.job)
+			continue
+		}
+		if got := tierByIf[j.If]; got != tc.tier {
+			t.Errorf("%s: its if: puts it in tier %q, want %q", tc.job, got, tc.tier)
+		}
+		if j.RunsOn != tc.runsOn {
+			t.Errorf("%s: runs-on is %q, want %q", tc.job, j.RunsOn, tc.runsOn)
+		}
+		if !slices.Contains(gate.Needs, tc.job) {
+			t.Errorf("%s: not in ci-gate's needs", tc.job)
+		}
+		if c, ok := checked[tc.job]; !ok || c.Tier != tc.tier {
+			t.Errorf("%s: ci-gate has no %s check line for it", tc.job, tc.tier)
+		}
 	}
 }
 
