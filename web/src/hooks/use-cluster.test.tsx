@@ -80,14 +80,12 @@ describe('useCluster', () => {
       res = await result.current.bootstrap({
         cluster_name: 'lab',
         node_name: 'n1',
-        bind_address: '0.0.0.0',
-        bind_port: 7946,
       });
     });
     expect(sent[0]).toEqual({
       method: 'POST',
       path: '/api/v1/cluster/bootstrap',
-      body: { cluster_name: 'lab', node_name: 'n1', bind_address: '0.0.0.0', bind_port: 7946 },
+      body: { cluster_name: 'lab', node_name: 'n1' },
     });
     expect(res?.data?.status?.success).toBe(true);
   });
@@ -115,11 +113,11 @@ describe('useCluster', () => {
     const { result } = renderCluster();
     let res: Awaited<ReturnType<typeof result.current.leave>> | undefined;
     await act(async () => {
-      res = await result.current.leave({ node_id: 'n2', force: true });
+      res = await result.current.leave({ node_id: 'n2' });
     });
     expect(sent[0].method).toBe('POST');
     expect(sent[0].path).toBe('/api/v1/cluster/leave');
-    expect(sent[0].body).toEqual({ node_id: 'n2', force: true });
+    expect(sent[0].body).toEqual({ node_id: 'n2' });
     expect(res?.data?.status?.success).toBe(true);
   });
 

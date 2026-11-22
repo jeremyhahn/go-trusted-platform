@@ -64,13 +64,13 @@ describe('ClusterPage writes', () => {
     const button = await screen.findByRole('button', { name: 'Bootstrap' });
     type('Cluster name', 'lab');
     type('Node name', 'alpha');
-    type('Bind address', '192.0.2.10');
-    type('Bind port', '7946');
+    expect(screen.queryByLabelText('Bind address')).toBeNull();
+    expect(screen.queryByLabelText('Bind port')).toBeNull();
     fireEvent.click(button);
 
     expect(await findToast('Cluster bootstrapped: bootstrapped lab')).toBeTruthy();
     const post = sent.find((r) => r.method === 'POST' && r.path === BOOTSTRAP);
-    expect(post?.body).toEqual({ cluster_name: 'lab', node_name: 'alpha', bind_address: '192.0.2.10', bind_port: 7946 });
+    expect(post?.body).toEqual({ cluster_name: 'lab', node_name: 'alpha' });
     await waitFor(() => expect(reads(sent, 'GET', STATUS)).toBe(2));
   });
 
@@ -85,6 +85,8 @@ describe('ClusterPage writes', () => {
     const button = await screen.findByRole('button', { name: 'Join' });
     type('Join node name', 'beta');
     type('Seed addresses', '192.0.2.11:7946,\n192.0.2.12:7946');
+    expect(screen.queryByLabelText('Join bind address')).toBeNull();
+    expect(screen.queryByLabelText('Join bind port')).toBeNull();
     fireEvent.click(button);
 
     expect(await findToast('Node joined: beta')).toBeTruthy();
@@ -92,7 +94,7 @@ describe('ClusterPage writes', () => {
     expect(post?.body).toEqual({ node_name: 'beta', seed_addresses: ['192.0.2.11:7946', '192.0.2.12:7946'] });
   });
 
-  it('leaves only after the confirm, with force', async () => {
+  it('leaves only after the confirm', async () => {
     const sent = stubControlPlane({
       [`GET ${STATUS}`]: statusOK,
       [`GET ${NODES}`]: noNodes,
@@ -101,7 +103,7 @@ describe('ClusterPage writes', () => {
     render(withControlPlane(<ClusterPage />));
 
     await waitFor(() => expect((screen.getByLabelText('Node ID') as HTMLInputElement).value).toBe('n1'));
-    fireEvent.click(screen.getByLabelText('Force'));
+    expect(screen.queryByLabelText('Force')).toBeNull();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Leave' }));
     fireEvent.click(await within(await screen.findByRole('dialog')).findByRole('button', { name: 'Cancel' }));
@@ -113,7 +115,7 @@ describe('ClusterPage writes', () => {
 
     expect(await findToast('Node left: n1')).toBeTruthy();
     expect(reads(sent, 'POST', LEAVE)).toBe(1);
-    expect(sent.find((r) => r.method === 'POST' && r.path === LEAVE)?.body).toEqual({ node_id: 'n1', force: true });
+    expect(sent.find((r) => r.method === 'POST' && r.path === LEAVE)?.body).toEqual({ node_id: 'n1' });
   });
 
   it('keeps the leave dialog open on a refusal', async () => {
@@ -153,16 +155,12 @@ describe('ClusterPage writes', () => {
     expect(await findToast('bind address in use', 'destructive')).toBeTruthy();
   });
 
-  it('parses seeds and ports', async () => {
+  it('parses seeds', async () => {
     // Loaded here, not at the top, so the page tests above run (and fail) before the card exists.
     const card = './cluster-membership-card';
-    const { parsePort, parseSeedAddresses }: typeof import('./cluster-membership-card') = await import(
+    const { parseSeedAddresses }: typeof import('./cluster-membership-card') = await import(
       /* @vite-ignore */ card
     );
     expect(parseSeedAddresses(' 192.0.2.11:7946, \n\n192.0.2.12:7946 ')).toEqual(['192.0.2.11:7946', '192.0.2.12:7946']);
-    expect(parsePort('')).toBeUndefined();
-    expect(parsePort('7946')).toBe(7946);
-    expect(parsePort('70000')).toBeNaN();
-    expect(parsePort('x')).toBeNaN();
   });
 });
