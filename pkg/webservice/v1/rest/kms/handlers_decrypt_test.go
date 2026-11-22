@@ -19,6 +19,9 @@ import (
 	"testing"
 
 	cryptoclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
+	kmsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
 // fakeDecryptCrypto records the decrypt request that reaches the crypto
@@ -44,6 +47,49 @@ func TestDecrypt_WithoutVersionReachesTheService(t *testing.T) {
 	}
 	if crypto.decryptReq == nil || string(crypto.decryptReq.Ciphertext) != "sealed" {
 		t.Fatalf("decrypt request = %+v, want the ciphertext forwarded", crypto.decryptReq)
+	}
+}
+
+// fakeVersionKMS answers GetKey with a fixed current key version.
+type fakeVersionKMS struct {
+	kmsclient.Client
+	version int
+}
+
+func (f *fakeVersionKMS) GetKey(_ context.Context, keyID string) (*kmsclient.KeyInfo, error) {
+	return &kmsclient.KeyInfo{KeyID: keyID, Name: keyID, Version: f.version}, nil
+}
+
+// TestDecrypt_CurrentVersionReachesTheService pins the round trip: the
+// version Encrypt answered is the key's current version, which the service
+// decrypts under, so Decrypt accepts it; any other version is refused.
+func TestDecrypt_CurrentVersionReachesTheService(t *testing.T) {
+	newHandlers := func(crypto cryptoclient.Client) *Handlers {
+		logger := logging.DefaultLogger()
+		return NewHandlers(logger, &fakeVersionKMS{version: 1}, crypto, nil, nil, response.NewResponseWriter(logger, nil))
+	}
+
+	crypto := &fakeDecryptCrypto{}
+	h := newHandlers(crypto)
+	w := serveDataKey(h.Decrypt, "/api/v1/kms/decrypt/kek", `{"ciphertext":"`+b64("sealed")+`","version":1}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("current version: status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	if crypto.decryptReq == nil || string(crypto.decryptReq.Ciphertext) != "sealed" {
+		t.Fatalf("current version: decrypt request = %+v, want the ciphertext forwarded", crypto.decryptReq)
+	}
+
+	crypto = &fakeDecryptCrypto{}
+	h = newHandlers(crypto)
+	w = serveDataKey(h.Decrypt, "/api/v1/kms/decrypt/kek", `{"ciphertext":"`+b64("sealed")+`","version":3}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("other version: status = %d, want 400 (body: %s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "version") {
+		t.Errorf("other version: body %s does not name the version field", w.Body.String())
+	}
+	if crypto.decryptReq != nil {
+		t.Fatal("a decrypt under another version reached the crypto service")
 	}
 }
 
