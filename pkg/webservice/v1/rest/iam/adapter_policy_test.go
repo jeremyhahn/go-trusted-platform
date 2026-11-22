@@ -148,6 +148,42 @@ func TestQuicBaaSIAMAdapter_CreatePolicyRefusesSubjects(t *testing.T) {
 	assert.Equal(t, 1, up.creates)
 }
 
+// A subject selector that is not a mapping must be refused, not read as no
+// selector: the rules parser ignores subjects, so the allow rule would reach
+// the upstream and apply to every subject.
+func TestQuicBaaSIAMAdapter_CreatePolicyRefusesMalformedSubjects(t *testing.T) {
+	t.Parallel()
+	const rule = "  rules:\n    - name: r\n      effect: allow\n      actions: [read]\n      resources: [\"*\"]\n"
+	for name, spec := range map[string]string{
+		"spec list":      "spec:\n  subjects: [reader]\n" + rule,
+		"spec scalar":    "spec:\n  subjects: reader\n" + rule,
+		"top-level list": "subjects: [u1]\nrules:\n  - name: r\n    effect: allow\n    actions: [read]\n    resources: [\"*\"]\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			adapter, up := newRecordingAdapter()
+			_, err := adapter.CreatePolicy(context.Background(), "tenant-a", &CreatePolicyRequest{Name: "p", SpecYAML: spec})
+			require.Error(t, err)
+			assert.ErrorAs(t, err, new(ErrInvalidRequestBody))
+			assert.Contains(t, err.Error(), "subjects")
+			assert.Zero(t, up.creates, "no create may reach the upstream")
+		})
+	}
+
+	for name, spec := range map[string]string{
+		"absent":    "spec:\n" + rule,
+		"empty map": "spec:\n  subjects: {}\n" + rule,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			adapter, up := newRecordingAdapter()
+			_, err := adapter.CreatePolicy(context.Background(), "tenant-a", &CreatePolicyRequest{Name: "p", SpecYAML: spec})
+			require.NoError(t, err)
+			assert.Equal(t, 1, up.creates)
+		})
+	}
+}
+
 // Paging is done over the whole collection: the upstream supplies no cursor
 // and no total, so the adapter asks for everything and slices it.
 func TestQuicBaaSIAMAdapter_ListPoliciesWithoutCursor(t *testing.T) {
