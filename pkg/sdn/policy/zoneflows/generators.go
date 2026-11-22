@@ -621,7 +621,7 @@ func (gs *GeneratorSet) provisioning(portID string, in Ingress) []FlowRule {
 
 	cfg := gs.cfg.Provisioning
 
-	// DNS
+	// DNS, only to the configured DNS servers; none configured opens nothing.
 	flows = append(flows, gs.serverRules(portID, in, prioDNS, "nw_proto=17",
 		cfg.DNSServerIPs, []uint16{portDNS, portDNSAlt1, portDNSAlt2})...)
 
@@ -652,11 +652,13 @@ func (gs *GeneratorSet) provisioning(portID string, in Ingress) []FlowRule {
 		}
 	}
 
-	// ACME / HTTPS
+	// ACME / HTTPS, only to the configured ACME servers; none configured
+	// opens nothing.
 	flows = append(flows, gs.serverRules(portID, in, prioACME, "nw_proto=6",
 		cfg.ACMEServerIPs, []uint16{portHTTPS, portHTTPSAlt1, portHTTPSAlt2})...)
 
-	// Package repos (HTTP + HTTPS)
+	// Package repos (HTTP + HTTPS), only to the configured repositories;
+	// none configured opens nothing.
 	flows = append(flows, gs.serverRules(portID, in, prioPackageRepo, "nw_proto=6",
 		cfg.PackageRepoIPs, []uint16{portHTTP, portHTTPS})...)
 
@@ -684,24 +686,16 @@ func (gs *GeneratorSet) provisioning(portID string, in Ingress) []FlowRule {
 }
 
 // serverRules emits the "reach these servers on these ports" allowances a
-// provisioning-style template uses. With no server addresses configured the
-// ports are open to any destination in both families; with addresses, each
-// address gets rules in its own family only.
+// provisioning-style template uses. Each address gets rules in its own family
+// only. With no server addresses configured it emits nothing: the ports stay
+// closed (fail closed, like the boot ports), because a destination-unrestricted
+// allow at these priorities would outrank the inter-zone denies at
+// prioMatrixDeny and forward traffic to a zone the matrix denies.
 func (gs *GeneratorSet) serverRules(portID string, in Ingress, priority int, proto string, servers []net.IP, ports []uint16) []FlowRule {
-	var flows []FlowRule
 	if len(servers) == 0 {
-		for _, f := range families {
-			for _, p := range ports {
-				flows = append(flows, FlowRule{
-					Table:    0,
-					Priority: priority,
-					Match:    matchInVLAN(portID, in, f.ipMatch(proto, fmt.Sprintf("tp_dst=%d", p))),
-					Actions:  "normal",
-				})
-			}
-		}
-		return flows
+		return nil
 	}
+	var flows []FlowRule
 	for _, ip := range servers {
 		f := familyOf(ip)
 		for _, p := range ports {

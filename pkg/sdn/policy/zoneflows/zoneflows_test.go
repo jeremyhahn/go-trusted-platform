@@ -134,7 +134,16 @@ func TestGenerate_Quarantine_ContainsDropDefault(t *testing.T) {
 }
 
 func TestGenerate_Quarantine_FewerFlowsThanProvisioning(t *testing.T) {
-	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{BridgeName: "br0"})
+	// The provisioning server allowlists fail closed when empty, so name a
+	// server for each: quarantine has none of those service paths.
+	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{
+		BridgeName: "br0",
+		Provisioning: zoneflows.ProvisioningConfig{
+			ACMEServerIPs:  []net.IP{net.ParseIP("192.0.2.20")},
+			DNSServerIPs:   []net.IP{net.ParseIP("192.0.2.53")},
+			PackageRepoIPs: []net.IP{net.ParseIP("192.0.2.80")},
+		},
+	})
 	provFlows := gs.Generate("eth0", zone.ZoneProvisioning, zoneflows.Tagged(201))
 	quarFlows := gs.Generate("eth0", zone.ZoneQuarantine, zoneflows.Tagged(202))
 	// Quarantine is more restrictive — provisioning grants more service paths.
