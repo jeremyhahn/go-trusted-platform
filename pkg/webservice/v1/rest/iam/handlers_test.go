@@ -657,6 +657,35 @@ func TestListUsers_Success(t *testing.T) {
 	assert.NotNil(t, reply.GetTimestamp())
 }
 
+func TestListUsers_CountsThePageWhenIAMSendsNoTotal(t *testing.T) {
+	t.Parallel()
+	iamClient := &mockIAMClient{
+		listUsersFn: func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
+			return &iamsdk.ListUsersResponse{
+				Users: []iamsdk.User{
+					{ID: "user-1", TenantID: tenantID, Email: "user1@example.com"},
+					{ID: "user-2", TenantID: tenantID, Email: "user2@example.com"},
+				},
+				Pagination: iamsdk.PaginationInfo{},
+			}, nil
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants/tenant-1/users", nil, map[string]string{"tenant": "tenant-1"})
+	rec := httptest.NewRecorder()
+
+	handlers.ListUsers(rec, req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+	reply := &platformv1.ListIAMUsersResponse{}
+	decodeProtoReply(t, writer, reply)
+	assert.Len(t, reply.GetUsers(), 2)
+	assert.Equal(t, int64(2), reply.GetTotal())
+	assert.Equal(t, uint64(2), reply.GetPagination().GetTotalItems())
+}
+
 func TestListUsers_WithPagination(t *testing.T) {
 	t.Parallel()
 	iamClient := &mockIAMClient{
