@@ -179,8 +179,17 @@ export interface GetHealthRequest {
  * Get config request
  */
 export interface GetConfigRequest {
-  /** Include sensitive values */
+  /**
+   * Ask for secret values unredacted: sends `redact=false`. The server
+   * still redacts them unless the caller holds the platform-secrets
+   * capability.
+   */
   includeSensitive?: boolean;
+  /**
+   * Return one top-level config section only (sends `section=<name>`).
+   * A section the config does not have is a 404.
+   */
+  section?: string;
 }
 
 /**
@@ -246,11 +255,29 @@ export interface GetHealthResponse {
 }
 
 /**
- * Get config response
+ * A file the effective config was loaded from
+ */
+export interface ConfigSource {
+  /** Path of the config file */
+  path: string;
+  /** File format, e.g. yaml */
+  format: string;
+}
+
+/**
+ * Get config response: the effective config tree the server answers
  */
 export interface GetConfigResponse {
-  /** Platform config */
-  config: PlatformConfig;
+  /** Files the config was loaded from */
+  sources: ConfigSource[];
+  /** The effective config tree (one section when `section` was sent) */
+  tree: Record<string, unknown>;
+  /** When the tree was generated (RFC 3339) */
+  generated_at: string;
+  /** Dotted keys whose values were redacted */
+  redacted_keys?: string[];
+  /** True when secret values are hidden in the tree */
+  secrets_hidden: boolean;
 }
 
 /**
@@ -285,6 +312,10 @@ export interface ListEntityTypesResponse {
  * Reload config response
  */
 export interface ReloadConfigResponse {
-  /** Operation status */
-  status: PlatformStatus;
+  /** True when the config was reloaded */
+  reloaded: boolean;
+  /** Top-level sections the reload applied */
+  sections: string[];
+  /** Snapshot id taken before the reload */
+  pre_reload_snapshot: string;
 }
