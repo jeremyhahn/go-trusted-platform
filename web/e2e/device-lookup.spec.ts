@@ -1,0 +1,204 @@
+import { test, expect, Page } from '@playwright/test';
+import { createTenantOwnerSession } from './fixtures/auth-setup';
+import { mockTenantApi, mockDeviceLookupApi } from './fixtures/api-mock';
+import type { DeviceLookupCall, DeviceLookupMockConfig } from './fixtures/api-mock';
+
+// Flat server payloads: the REST handlers return the DeviceResponse and the
+// ProfileFullResponse directly, with no `device` or `profile` envelope.
+const DEVICE = { id: '5', serial: 'SN-1', model: 'Board-A', hash_algo_id: 11 };
+const PROFILE = {
+  id: '3',
+  name: 'Edge nodes',
+  model: 'Board-A',
+  role: 'server',
+  zone: 'edge.example',
+  config: 'Y29uZmln',
+  match_rules: [{ field: 'model', operator: 'eq', value: 'Board-A' }],
+  ek_serial: 'EK-77',
+  mac_address: 'aa:bb:cc:dd:ee:ff',
+};
+
+const COUNTS: DeviceLookupMockConfig = {
+  'GET /devices/count': { count: 42 },
+  'GET /device/profiles/count': { count: 7 },
+};
+
+async function openLookup(page: Page, config: DeviceLookupMockConfig = {}): Promise<DeviceLookupCall[]> {
+  await mockTenantApi(page);
+  const calls = await mockDeviceLookupApi(page, { ...COUNTS, ...config });
+  await page.goto('/devices/lookup/');
+  await expect(page.getByRole('heading', { name: 'Device Lookup' })).toBeVisible();
+  return calls;
+}
+
+function call(calls: DeviceLookupCall[], method: string, path: string) {
+  return () => calls.find((c) => c.method === method && c.path === path)?.body ?? null;
+}
+
+async function confirm(page: Page) {
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Confirm' }).click();
+}
+
+async function cancel(page: Page) {
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(dialog).toBeHidden();
+}
+
+async function findDevice(page: Page) {
+  await page.getByLabel('Device serial').fill('SN-1');
+  await page.getByRole('button', { name: 'Find device' }).click();
+  await expect(page.getByTestId('device-result')).toContainText('SN-1');
+}
+
+const FIND_DEVICE: DeviceLookupMockConfig = { 'GET /devices/serial/SN-1': DEVICE };
+
+test.describe('Device lookup, counts, profiles, activation and attestation (#1743)', () => {
+  test.beforeEach(async ({ page }) => {
+    await createTenantOwnerSession(page.context());
+  });
+
+  test('CountDevices shows the device count', async ({ page }) => {
+    await openLookup(page);
+    await expect(page.getByTestId('device-count')).toHaveText('42');
+  });
+
+  test('CountProfiles shows the profile count', async ({ page }) => {
+    await openLookup(page);
+    await expect(page.getByTestId('profile-count')).toHaveText('7');
+  });
+
+  test('FindDeviceBySerial finds a device by serial', async ({ page }) => {
+    await openLookup(page, FIND_DEVICE);
+    await findDevice(page);
+    await expect(page.getByTestId('device-result')).toContainText('Board-A');
+  });
+
+  test('FindDeviceBySerial reports a device that is not found', async ({ page }) => {
+    await openLookup(page, {
+      ...FIND_DEVICE,
+      'GET /devices/serial/SN-9': { status: 404, error: 'device not found' },
+    });
+    await findDevice(page);
+    await page.getByLabel('Device serial').fill('SN-9');
+    await page.getByRole('button', { name: 'Find device' }).click();
+    await expect(page.getByText('No device found')).toBeVisible();
+    await expect(page.getByTestId('device-result')).toHaveCount(0);
+  });
+
+  test('UpdateDevice saves a partial update after confirm', async ({ page }) => {
+    const calls = await openLookup(page, {
+      ...FIND_DEVICE,
+      'PUT /devices/5': { ...DEVICE, model: 'Board-B' },
+    });
+    await findDevice(page);
+    await page.getByLabel('Model', { exact: true }).fill('Board-B');
+
+    await page.getByRole('button', { name: 'Update device' }).click();
+    await cancel(page);
+    expect(call(calls, 'PUT', '/devices/5')()).toBeNull();
+
+    await page.getByRole('button', { name: 'Update device' }).click();
+    await confirm(page);
+    await expect.poll(call(calls, 'PUT', '/devices/5')).toEqual({ device: { id: '5', model: 'Board-B' } });
+    await expect(page.getByTestId('device-result')).toContainText('Board-B');
+  });
+
+  // Pasted evidence is verified against the nonce it carries, with no age
+  // limit, so it would replay as a fresh verdict: the page offers no
+  // paste-and-verify control until a challenge-based flow exists
+  // (#2024 Codex round 4, P1).
+  test('AttestDevice is not offered for pasted evidence', async ({ page }) => {
+    const calls = await openLookup(page, FIND_DEVICE);
+    await findDevice(page);
+    await expect(page.getByLabel('Attestation evidence (base64)')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Attest device' })).toHaveCount(0);
+    expect(calls.some((c) => c.path.endsWith('/attest'))).toBe(false);
+  });
+
+  test('ActivateDevice activates a device after confirm', async ({ page }) => {
+    const calls = await openLookup(page, {
+      'POST /device/activate-json': { status: 'activated', vlan: 20, transitioned_at: '2026-11-12T00:00:00Z' },
+    });
+    await page.getByLabel('Serial', { exact: true }).fill('SN-1');
+    await page.getByLabel('MAC address', { exact: true }).fill('aa:bb:cc:dd:ee:ff');
+
+    await page.getByRole('button', { name: 'Activate device' }).click();
+    await cancel(page);
+    expect(call(calls, 'POST', '/device/activate-json')()).toBeNull();
+
+    await page.getByRole('button', { name: 'Activate device' }).click();
+    await confirm(page);
+    await expect
+      .poll(call(calls, 'POST', '/device/activate-json'))
+      .toEqual({ serial: 'SN-1', mac_address: 'aa:bb:cc:dd:ee:ff' });
+    await expect(page.getByTestId('activate-result')).toHaveText('Admitted VLAN 20 (status activated; switch not changed)');
+  });
+
+  test('GetProfile shows the device profile', async ({ page }) => {
+    await openLookup(page, {
+      'GET /device/profile': { serialNumber: 'SN-1', admittedNetwork: { name: 'trusted', vlan: 20 } },
+    });
+    await page.getByRole('button', { name: 'Load device profile' }).click();
+    await expect(page.getByTestId('device-profile-result')).toContainText('SN-1');
+    await expect(page.getByTestId('device-profile-result')).toContainText('trusted');
+  });
+
+  test('FindProfileByMACAddress finds a profile by MAC', async ({ page }) => {
+    await openLookup(page, { 'GET /device/profiles/mac/aa:bb:cc:dd:ee:ff': PROFILE });
+    await page.getByLabel('Profile MAC address').fill('aa:bb:cc:dd:ee:ff');
+    await page.getByRole('button', { name: 'Find by MAC' }).click();
+    await expect(page.getByTestId('profile-result')).toContainText('Edge nodes');
+  });
+
+  test('FindProfileBySerial finds a profile by serial', async ({ page }) => {
+    await openLookup(page, { 'GET /device/profiles/serial/SN-1': PROFILE });
+    await page.getByLabel('Profile serial').fill('SN-1');
+    await page.getByRole('button', { name: 'Find by serial' }).click();
+    await expect(page.getByTestId('profile-result')).toContainText('Edge nodes');
+  });
+
+  test('FindMatchingProfile matches a profile', async ({ page }) => {
+    const calls = await openLookup(page, { 'POST /device/profiles/match': PROFILE });
+    await page.getByLabel('Profile MAC address').fill('aa:bb:cc:dd:ee:ff');
+    await page.getByLabel('Match model').fill('Board-A');
+    await page.getByRole('button', { name: 'Match profile' }).click();
+    await expect(page.getByTestId('profile-result')).toContainText('Edge nodes');
+    const body = call(calls, 'POST', '/device/profiles/match')() as Record<string, unknown>;
+    expect(body).toEqual({ mac_address: 'aa:bb:cc:dd:ee:ff', model: 'Board-A' });
+    expect(body).not.toHaveProperty('macAddress');
+  });
+
+  test('UpdateProfile saves a partial update after confirm', async ({ page }) => {
+    const calls = await openLookup(page, {
+      'GET /device/profiles/serial/SN-1': PROFILE,
+      'PUT /device/profiles/3': { ...PROFILE, name: 'Edge nodes v2' },
+    });
+    await page.getByLabel('Profile serial').fill('SN-1');
+    await page.getByRole('button', { name: 'Find by serial' }).click();
+    await expect(page.getByTestId('profile-result')).toContainText('Edge nodes');
+    await page.getByLabel('Profile name').fill('Edge nodes v2');
+
+    await page.getByRole('button', { name: 'Update profile' }).click();
+    await cancel(page);
+    expect(call(calls, 'PUT', '/device/profiles/3')()).toBeNull();
+
+    await page.getByRole('button', { name: 'Update profile' }).click();
+    await confirm(page);
+    await expect.poll(call(calls, 'PUT', '/device/profiles/3')).not.toBeNull();
+    const body = call(calls, 'PUT', '/device/profiles/3')() as Record<string, unknown>;
+    expect(body).not.toHaveProperty('profile');
+    expect(body).toMatchObject({
+      name: 'Edge nodes v2',
+      zone: PROFILE.zone,
+      config: PROFILE.config,
+      match_rules: PROFILE.match_rules,
+      ek_serial: PROFILE.ek_serial,
+      mac_address: PROFILE.mac_address,
+    });
+    await expect(page.getByTestId('profile-result')).toContainText('Edge nodes v2');
+  });
+});

@@ -40,43 +40,49 @@ export default function IDevIDPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [filters, setFilters] = useState<IDevIDFilters>({});
 
+  // The settle functions apply one read from their promise callbacks, so the
+  // effect starts them without a synchronous setState; fetchIDevIDs adds the
+  // loading flag for a re-read.
+  const settleIDevIDs = () =>
+    fetch('/api/v1/idevid')
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error('Failed to fetch IDevID certificates');
+        }
+        const data = await response.json();
+        setIDevIDs(data.idevids || []);
+      })
+      .catch((error: unknown) => {
+        toast({
+          title: 'Error',
+          description: error instanceof Error ? error.message : 'Failed to fetch IDevID certificates',
+          variant: 'destructive',
+        });
+        setIDevIDs([]);
+      })
+      .finally(() => setIsLoading(false));
+
   const fetchIDevIDs = async () => {
     setIsLoading(true);
-    try {
-      const response = await fetch('/api/v1/idevid');
-      if (!response.ok) {
-        throw new Error('Failed to fetch IDevID certificates');
-      }
-      const data = await response.json();
-      setIDevIDs(data.idevids || []);
-    } catch (error) {
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to fetch IDevID certificates',
-        variant: 'destructive',
-      });
-      setIDevIDs([]);
-    } finally {
-      setIsLoading(false);
-    }
+    await settleIDevIDs();
   };
 
-  const fetchExpiringCertificates = async () => {
-    try {
-      const response = await fetch('/api/v1/idevid/expiring');
-      if (response.ok) {
-        const data = await response.json();
-        setExpiringCount(data.count || 0);
-      }
-    } catch (error) {
-      // Silent fail - this is just a warning
-      console.error('Failed to fetch expiring certificates:', error);
-    }
-  };
+  const settleExpiringCertificates = () =>
+    fetch('/api/v1/idevid/expiring')
+      .then(async (response) => {
+        if (response.ok) {
+          const data = await response.json();
+          setExpiringCount(data.count || 0);
+        }
+      })
+      .catch((error: unknown) => {
+        // Silent fail - this is just a warning
+        console.error('Failed to fetch expiring certificates:', error);
+      });
 
   useEffect(() => {
-    fetchIDevIDs();
-    fetchExpiringCertificates();
+    void settleIDevIDs();
+    void settleExpiringCertificates();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters]);
 
