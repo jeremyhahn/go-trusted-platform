@@ -190,7 +190,7 @@ export default function OverlayVtepsPage() {
         ) : null}
       </section>
 
-      <section className="space-y-2">
+      <section className="space-y-2" data-testid="overlay-vteps">
         <h2 className="text-xl font-semibold">VTEPs</h2>
         <div className="rounded-md border border-border">
           <Table data-testid="vteps-table">
@@ -237,10 +237,10 @@ export default function OverlayVtepsPage() {
         </div>
       </section>
 
-      <section className="space-y-2">
+      <section className="space-y-2" data-testid="overlay-vnis">
         <h2 className="text-xl font-semibold">VNIs</h2>
         <div className="rounded-md border border-border">
-          <Table>
+          <Table data-testid="vnis-table">
             <TableHeader>
               <TableRow>
                 <TableHead>VNI</TableHead>
@@ -290,10 +290,10 @@ export default function OverlayVtepsPage() {
         </div>
       </section>
 
-      <section className="space-y-2">
+      <section className="space-y-2" data-testid="overlay-tunnels">
         <h2 className="text-xl font-semibold">Tunnels</h2>
         <div className="rounded-md border border-border">
-          <Table>
+          <Table data-testid="tunnels-table">
             <TableHeader>
               <TableRow>
                 <TableHead>Local VTEP</TableHead>
@@ -339,10 +339,10 @@ export default function OverlayVtepsPage() {
         </div>
       </section>
 
-      <section className="space-y-2">
+      <section className="space-y-2" data-testid="overlay-macs">
         <h2 className="text-xl font-semibold">Remote MACs</h2>
         <div className="rounded-md border border-border">
-          <Table>
+          <Table data-testid="macs-table">
             <TableHeader>
               <TableRow>
                 <TableHead>MAC</TableHead>
@@ -394,7 +394,7 @@ export default function OverlayVtepsPage() {
         </div>
       </section>
 
-      <section className="space-y-2">
+      <section className="space-y-2" data-testid="overlay-forget-mac">
         <h2 className="text-xl font-semibold">Forget a remote MAC</h2>
         <div className="flex items-end gap-2">
           <div className="space-y-2">
