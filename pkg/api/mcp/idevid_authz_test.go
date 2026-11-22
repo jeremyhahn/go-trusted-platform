@@ -168,7 +168,7 @@ var classifiedIDevIDTools = []classifiedIDevIDTool{
 // TestIDevIDToolsCarryGRPCScope pins each classified IDevID and IAK tool to the
 // scope of its gRPC twin in method_permissions.go.
 func TestIDevIDToolsCarryGRPCScope(t *testing.T) {
-	catalog := toolPermissionCatalog()
+	catalog := declaredToolPermissions(PlatformTools{})
 	for _, tc := range classifiedIDevIDTools {
 		got, ok := catalog[tc.tool]
 		if !ok {
@@ -187,7 +187,7 @@ func callIDevIDTool(t *testing.T, tc classifiedIDevIDTool, granted func(scope st
 	t.Helper()
 	provider := &idevidCallRecorder{mockServiceProvider: newMockServiceProvider()}
 	server := NewServer(provider, nil, newTestLogger())
-	server.SetAuthorizationService(&mockAuthorizationService{
+	usePEP(server, &mockAuthorizationService{
 		checkFunc: func(_ context.Context, _, resource, action string) (bool, error) {
 			return granted(resource + ":" + action), nil
 		},

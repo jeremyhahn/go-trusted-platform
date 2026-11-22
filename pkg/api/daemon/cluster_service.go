@@ -80,9 +80,9 @@ func NewClusterService(application *app.App, logger *slog.Logger) (*ClusterServi
 		return nil, ErrInvalidConfig{Reason: "QuicBaaS service not available"}
 	}
 
-	// Check if the service supports cluster coordination (built with cluster tag)
+	// Check if the service supports cluster coordination (the database layer must expose a coordinator)
 	if _, ok := dbSvc.(clusterComponentsGetter); !ok {
-		return nil, ErrInvalidConfig{Reason: "QuicBaaS service does not support cluster coordination (build with -tags cluster)"}
+		return nil, ErrInvalidConfig{Reason: "QuicBaaS service does not support cluster coordination"}
 	}
 
 	return &ClusterService{

@@ -33,6 +33,7 @@ type Client struct {
 	conn     *grpc.ClientConn
 	control  ipcv1.ProcessControlServiceClient
 	datapath ipcv1.DatapathServiceClient
+	vpnPlane ipcv1.VPNPlaneServiceClient
 	services ipcv1.GatewayServicesServiceClient
 }
 
@@ -79,6 +80,7 @@ func Dial(path string) (*Client, error) {
 		conn:     conn,
 		control:  ipcv1.NewProcessControlServiceClient(conn),
 		datapath: ipcv1.NewDatapathServiceClient(conn),
+		vpnPlane: ipcv1.NewVPNPlaneServiceClient(conn),
 		services: ipcv1.NewGatewayServicesServiceClient(conn),
 	}, nil
 }
@@ -123,17 +125,29 @@ func (c *Client) ApplyDesired(ctx context.Context, desired *gwstate.DesiredConfi
 	return state, nil
 }
 
-// InstallVPNPeer asks the datapath child to install a VPN peer. A plane's
-// refusal is in the response; the error is the RPC's own. *Client is the
-// transport vpn.DatapathPlane forwards over.
+// InstallVPNPeer asks the `wireguard` process (VPNPlaneService) to install
+// a VPN peer. A plane's refusal is in the response; the error is the RPC's
+// own. *Client is the transport vpn.DatapathPlane forwards over.
 func (c *Client) InstallVPNPeer(ctx context.Context, req *ipcv1.InstallVPNPeerRequest) (*ipcv1.InstallVPNPeerResponse, error) {
-	return c.datapath.InstallVPNPeer(ctx, req)
+	return c.vpnPlane.InstallVPNPeer(ctx, req)
 }
 
-// RemoveVPNPeer asks the datapath child to remove a VPN peer, the same way
-// as InstallVPNPeer.
+// RemoveVPNPeer asks the `wireguard` process to remove a VPN peer, the same
+// way as InstallVPNPeer.
 func (c *Client) RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerRequest) (*ipcv1.RemoveVPNPeerResponse, error) {
-	return c.datapath.RemoveVPNPeer(ctx, req)
+	return c.vpnPlane.RemoveVPNPeer(ctx, req)
+}
+
+// ReconcileVPNPeers asks the `wireguard` process to remove every VPN peer of
+// a plane whose lease is not in the request.
+func (c *Client) ReconcileVPNPeers(ctx context.Context, req *ipcv1.ReconcileVPNPeersRequest) (*ipcv1.ReconcileVPNPeersResponse, error) {
+	return c.vpnPlane.ReconcileVPNPeers(ctx, req)
+}
+
+// RenewVPNPeer asks the `wireguard` process to extend the deadline of a peer
+// it already holds.
+func (c *Client) RenewVPNPeer(ctx context.Context, req *ipcv1.RenewVPNPeerRequest) (*ipcv1.RenewVPNPeerResponse, error) {
+	return c.vpnPlane.RenewVPNPeer(ctx, req)
 }
 
 // Close releases the connection.

@@ -273,6 +273,11 @@ func (r *Reporter) vpnLeasesPath() string {
 	return "/api/v1/gateway/vpn-leases/" + url.PathEscape(r.cfg.GatewayID)
 }
 
+// GatewayID is the gateway identity the reporter is bound to: the
+// certificate CN BuildReporter checks, so it proves which gateway wrote a
+// record.
+func (r *Reporter) GatewayID() string { return r.cfg.GatewayID }
+
 // send makes one request to the control plane and returns the status. A
 // status of 400 or above is a MessageError carrying the CP's answer.
 func (r *Reporter) send(ctx context.Context, method, path string, body []byte) (int, error) {

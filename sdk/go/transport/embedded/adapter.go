@@ -76,6 +76,9 @@ type ServiceRegistry struct {
 	// unseal, seal, rekey).
 	Barrier platformv1.BarrierServiceServer
 
+	// VPN backs the tenant VPN verbs (peer enrolment, status, posture policies).
+	VPN platformv1.VPNServiceServer
+
 	// Switch backs the managed-switch port verbs (list, status, VLAN,
 	// enable, disable).
 	Switch platformv1.SwitchServiceServer

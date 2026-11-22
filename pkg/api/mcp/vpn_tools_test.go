@@ -148,7 +148,7 @@ func TestVPNToolPermissionsFollowTheScopeTable(t *testing.T) {
 		"vpn_posture_policy_delete": "vpn:admin",
 		"vpn_posture_policy_list":   "vpn:admin",
 	}
-	permissions := toolPermissionCatalog()
+	permissions := declaredToolPermissions(PlatformTools{})
 	for tool, scope := range want {
 		if permissions[tool] != scope {
 			t.Fatalf("permission for %s = %q, want %q", tool, permissions[tool], scope)
