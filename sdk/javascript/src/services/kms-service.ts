@@ -167,15 +167,22 @@ export class KMSService extends BaseService {
   }
 
   /**
-   * Update key status (enable/disable)
+   * Update key status through the served route PUT /v1/kms/keys/{name}/status.
+   *
+   * The body carries `status` and, only when the caller sets one, `version`;
+   * without a version the server changes the current one.
    *
    * @param request - Status update request
    * @returns Updated key status
    */
   async updateKeyStatus(request: UpdateKeyStatusRequest): Promise<ApiResponse<UpdateKeyStatusResponse>> {
-    return this.client.patch<UpdateKeyStatusResponse>(
+    const body: { status: UpdateKeyStatusRequest['status']; version?: number } = { status: request.status };
+    if (request.version !== undefined) {
+      body.version = request.version;
+    }
+    return this.client.put<UpdateKeyStatusResponse>(
       this.buildUrl(`/keys/${this.encodePathSegment(request.keyId)}/status`),
-      { version: request.version, status: request.status }
+      body
     );
   }
 
@@ -218,21 +225,33 @@ export class KMSService extends BaseService {
   /**
    * Encrypt plaintext
    *
+   * Calls the served route POST /v1/kms/encrypt/{name}; the key name is the
+   * path segment and the request body is sent unchanged.
+   *
    * @param request - Encryption request
    * @returns Ciphertext
    */
   async encrypt(request: EncryptRequest): Promise<ApiResponse<EncryptResponse>> {
-    return this.client.post<EncryptResponse>(this.buildUrl('/encrypt'), request);
+    return this.client.post<EncryptResponse>(
+      this.buildUrl(`/encrypt/${this.encodePathSegment(request.keyId)}`),
+      request
+    );
   }
 
   /**
    * Decrypt ciphertext
    *
+   * Calls the served route POST /v1/kms/decrypt/{name}; the key name is the
+   * path segment and the request body is sent unchanged.
+   *
    * @param request - Decryption request
    * @returns Plaintext
    */
   async decrypt(request: DecryptRequest): Promise<ApiResponse<DecryptResponse>> {
-    return this.client.post<DecryptResponse>(this.buildUrl('/decrypt'), request);
+    return this.client.post<DecryptResponse>(
+      this.buildUrl(`/decrypt/${this.encodePathSegment(request.keyId)}`),
+      request
+    );
   }
 
   /**
@@ -268,21 +287,47 @@ export class KMSService extends BaseService {
   /**
    * Compute HMAC
    *
+   * Reaches the served route POST /api/v1/kms/hmac/{name}: the key name is
+   * the path segment, and the REST body is `{ data, hash }` (data is the
+   * base64 message; hash is sent only when hashAlgorithm is given).
+   *
    * @param request - HMAC request
    * @returns HMAC value
    */
   async hmac(request: HMACRequest): Promise<ApiResponse<HMACResponse>> {
-    return this.client.post<HMACResponse>(this.buildUrl('/hmac'), request);
+    const body: { data: string; hash?: string } = { data: request.message };
+    if (request.hashAlgorithm !== undefined) {
+      body.hash = request.hashAlgorithm;
+    }
+    return this.client.post<HMACResponse>(
+      this.buildUrl(`/hmac/${this.encodePathSegment(request.keyId)}`),
+      body
+    );
   }
 
   /**
    * Verify HMAC
    *
+   * Reaches the served route POST /api/v1/kms/hmac/{name}/verify: the key
+   * name is the path segment, and the REST body is `{ data, hmac, hash }`
+   * (data and hmac base64; hash only when hashAlgorithm is given).
+   * keyVersion is not sent: the served request has no version field.
+   *
    * @param request - HMAC verification request
    * @returns Verification result
    */
   async verifyHMAC(request: VerifyHMACRequest): Promise<ApiResponse<VerifyHMACResponse>> {
-    return this.client.post<VerifyHMACResponse>(this.buildUrl('/hmac/verify'), request);
+    const body: { data: string; hmac: string; hash?: string } = {
+      data: request.message,
+      hmac: request.hmac,
+    };
+    if (request.hashAlgorithm !== undefined) {
+      body.hash = request.hashAlgorithm;
+    }
+    return this.client.post<VerifyHMACResponse>(
+      this.buildUrl(`/hmac/${this.encodePathSegment(request.keyId)}/verify`),
+      body
+    );
   }
 
   // =========================================================================
@@ -302,21 +347,25 @@ export class KMSService extends BaseService {
   /**
    * Generate a data key (plaintext + encrypted)
    *
+   * Calls the served route POST /v1/kms/data-keys.
+   *
    * @param request - Data key generation request
    * @returns Plaintext and encrypted data key
    */
   async generateDataKey(request: GenerateDataKeyRequest): Promise<ApiResponse<GenerateDataKeyResponse>> {
-    return this.client.post<GenerateDataKeyResponse>(this.buildUrl('/datakey'), request);
+    return this.client.post<GenerateDataKeyResponse>(this.buildUrl('/data-keys'), request);
   }
 
   /**
    * Generate a wrapped data key (encrypted only)
    *
+   * Calls the served route POST /v1/kms/data-keys/wrapped.
+   *
    * @param request - Wrapped data key generation request
    * @returns Wrapped data key
    */
   async generateWrappedDataKey(request: GenerateWrappedDataKeyRequest): Promise<ApiResponse<GenerateWrappedDataKeyResponse>> {
-    return this.client.post<GenerateWrappedDataKeyResponse>(this.buildUrl('/datakey/wrapped'), request);
+    return this.client.post<GenerateWrappedDataKeyResponse>(this.buildUrl('/data-keys/wrapped'), request);
   }
 
   // =========================================================================

@@ -10,6 +10,7 @@
  * - Export keys (if exportable)
  * - Delete keys
  * - Filter by algorithm, type, and status
+ * - Show the KMS backend status
  *
  * Uses the trusted-platform-sdk for API interactions.
  */
@@ -25,11 +26,15 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { KeyTable } from "@/components/features/kms/key-table";
 import { KeyForm } from "@/components/features/kms/key-form";
 import { useKMS, useApi, useMutation, useToast } from "@/hooks";
 import type { Key, GenerateKeyInput } from "@/types/security";
 import { Plus, AlertCircle, RefreshCw } from "lucide-react";
+import { usePlatformClient } from "trusted-platform-sdk";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 // A key as the platform KMS REST handler emits it: snake_case or camelCase
 // names and ISO-string or epoch-second timestamps, which differs from the
@@ -43,6 +48,16 @@ interface KeyWire {
   createdAt?: string | number;
   created_at?: string | number;
   version?: number;
+}
+
+// The KMS backend status as GET /kms/backend/status emits it
+// (rest/kms BackendStatusResponse); the SDK's declared type differs (#445).
+interface BackendStatusWire {
+  backend_type?: string;
+  status?: string;
+  device?: string;
+  region?: string;
+  capabilities?: Record<string, boolean>;
 }
 
 export default function KMSKeysPage() {
@@ -70,6 +85,43 @@ export default function KMSKeysPage() {
       },
     }
   );
+
+  // Read the KMS backend status; the card shows its own refusal (no toast).
+  const { data: backendData, error: backendError } = useApi(
+    () => kms.getBackendStatus(),
+    []
+  );
+  const backend = backendData as unknown as BackendStatusWire | null | undefined;
+  const enabledCapabilities = Object.entries(backend?.capabilities ?? {})
+    .filter(([, on]) => on)
+    .map(([name]) => name)
+    .sort();
+
+  // GenerateRandom as POST /kms/random takes and answers it (rest/kms
+  // GenerateRandomRequest/Response: num_bytes in, base64 bytes out). The SDK's
+  // generateRandom sends numBytes and reads randomBytes (#1675 fixes it), so
+  // this goes through the SDK ApiClient with the wire shape.
+  const apiClient = usePlatformClient().getApiClient();
+  const [randomCount, setRandomCount] = React.useState("32");
+  const [randomHex, setRandomHex] = React.useState<string | null>(null);
+  const [randomBusy, setRandomBusy] = React.useState(false);
+
+  const generateRandom = async () => {
+    const n = Number.parseInt(randomCount, 10);
+    setRandomBusy(true);
+    try {
+      const res = await apiClient.post<{ bytes?: string }>("/v1/kms/random", { num_bytes: n });
+      if (res.error) {
+        setRandomHex(null);
+        toast({ title: "Random bytes refused", description: res.error.message, variant: "destructive" });
+        return;
+      }
+      const raw = atob(res.data?.bytes ?? "");
+      setRandomHex(Array.from(raw, (c) => c.charCodeAt(0).toString(16).padStart(2, "0")).join(""));
+    } finally {
+      setRandomBusy(false);
+    }
+  };
 
   // Map SDK algorithm to web app algorithm format
   const mapAlgorithm = (sdkAlgo: string): Key['algorithm'] => {
@@ -319,6 +371,87 @@ export default function KMSKeysPage() {
           </div>
         </div>
       )}
+
+      {/* KMS backend status */}
+      <Card data-testid="kms-backend-status">
+        <CardHeader>
+          <CardTitle>KMS Backend</CardTitle>
+          <CardDescription>The backend that holds this platform&apos;s keys</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {backendError ? (
+            <p className="text-sm text-destructive">
+              Backend status could not be read: {backendError.message}
+            </p>
+          ) : backend ? (
+            <dl className="grid gap-3 text-sm sm:grid-cols-2">
+              <div>
+                <dt className="text-muted-foreground">Backend</dt>
+                <dd data-testid="kms-backend-type" className="font-mono">
+                  {backend.backend_type || "-"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">Status</dt>
+                <dd data-testid="kms-backend-state">{backend.status || "-"}</dd>
+              </div>
+              {backend.device && (
+                <div>
+                  <dt className="text-muted-foreground">Device</dt>
+                  <dd data-testid="kms-backend-device" className="font-mono">
+                    {backend.device}
+                  </dd>
+                </div>
+              )}
+              {backend.region && (
+                <div>
+                  <dt className="text-muted-foreground">Region</dt>
+                  <dd data-testid="kms-backend-region">{backend.region}</dd>
+                </div>
+              )}
+              <div className="sm:col-span-2">
+                <dt className="text-muted-foreground">Capabilities</dt>
+                <dd data-testid="kms-backend-capabilities">
+                  {enabledCapabilities.length ? enabledCapabilities.join(", ") : "none reported"}
+                </dd>
+              </div>
+            </dl>
+          ) : (
+            <p className="text-sm text-muted-foreground">Reading backend status...</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* GenerateRandom */}
+      <Card data-testid="kms-random">
+        <CardHeader>
+          <CardTitle>Random bytes</CardTitle>
+          <CardDescription>Draw random bytes from the KMS backend</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <div className="flex items-end gap-2">
+            <div className="grid gap-1">
+              <Label htmlFor="kms-random-count">Bytes</Label>
+              <Input
+                id="kms-random-count"
+                type="number"
+                min={1}
+                value={randomCount}
+                onChange={(e) => setRandomCount(e.target.value)}
+                className="w-32"
+              />
+            </div>
+            <Button variant="outline" onClick={() => void generateRandom()} disabled={randomBusy}>
+              Generate random bytes
+            </Button>
+          </div>
+          {randomHex !== null && (
+            <code data-testid="kms-random-hex" className="break-all font-mono text-sm">
+              {randomHex}
+            </code>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Keys Table */}
       <KeyTable

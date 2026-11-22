@@ -217,14 +217,16 @@ func parseKeyStatus(s string) (kmsclient.KeyStatus, error) {
 	return kmsclient.KeyStatusEnabled, &ErrInvalidRequest{Field: "status", Reason: "unknown status " + s}
 }
 
-func parseHashAlgorithm(s string) cryptoclient.HashAlgorithm {
+func parseHashAlgorithm(s string) (cryptoclient.HashAlgorithm, error) {
 	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case "", "SHA-256", "SHA256":
+		return cryptoclient.HashSHA256, nil
 	case "SHA-384", "SHA384":
-		return cryptoclient.HashSHA384
+		return cryptoclient.HashSHA384, nil
 	case "SHA-512", "SHA512":
-		return cryptoclient.HashSHA512
+		return cryptoclient.HashSHA512, nil
 	}
-	return cryptoclient.HashSHA256
+	return cryptoclient.HashSHA256, &ErrInvalidRequest{Field: "hash", Reason: "unknown hash " + s}
 }
 
 // =============================================================================
@@ -783,12 +785,17 @@ func (h *Handlers) Sign(w http.ResponseWriter, r *http.Request) {
 		h.respWriter.Error400(w, r, err)
 		return
 	}
+	alg, err := parseHashAlgorithm(req.Hash)
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
 	resp, err := h.crypto.Sign(ctx, &cryptoclient.SignRequest{
 		KeyID:     h.name(r),
 		Data:      req.Data,
-		HashAlg:   parseHashAlgorithm(req.Hash),
+		HashAlg:   alg,
 		PreHashed: req.PreHashed,
 	})
 	if err != nil {
@@ -812,13 +819,18 @@ func (h *Handlers) Verify(w http.ResponseWriter, r *http.Request) {
 		h.respWriter.Error400(w, r, err)
 		return
 	}
+	alg, err := parseHashAlgorithm(req.Hash)
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
 	resp, err := h.crypto.Verify(ctx, &cryptoclient.VerifyRequest{
 		KeyID:     h.name(r),
 		Data:      req.Data,
 		Signature: req.Signature,
-		HashAlg:   parseHashAlgorithm(req.Hash),
+		HashAlg:   alg,
 	})
 	if err != nil {
 		h.fail(w, r, err)
@@ -837,12 +849,17 @@ func (h *Handlers) HMAC(w http.ResponseWriter, r *http.Request) {
 		h.respWriter.Error400(w, r, err)
 		return
 	}
+	alg, err := parseHashAlgorithm(req.Hash)
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
 	resp, err := h.crypto.GenerateHMAC(ctx, &cryptoclient.GenerateHMACRequest{
 		KeyID:   h.name(r),
 		Message: req.Data,
-		HashAlg: parseHashAlgorithm(req.Hash),
+		HashAlg: alg,
 	})
 	if err != nil {
 		h.fail(w, r, err)
@@ -861,13 +878,18 @@ func (h *Handlers) VerifyHMAC(w http.ResponseWriter, r *http.Request) {
 		h.respWriter.Error400(w, r, err)
 		return
 	}
+	alg, err := parseHashAlgorithm(req.Hash)
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
 	resp, err := h.crypto.VerifyHMAC(ctx, &cryptoclient.VerifyHMACRequest{
 		KeyID:   h.name(r),
 		Message: req.Data,
 		HMAC:    req.HMAC,
-		HashAlg: parseHashAlgorithm(req.Hash),
+		HashAlg: alg,
 	})
 	if err != nil {
 		h.fail(w, r, err)
@@ -886,9 +908,13 @@ func (h *Handlers) Hash(w http.ResponseWriter, r *http.Request) {
 		h.respWriter.Error400(w, r, err)
 		return
 	}
+	alg, err := parseHashAlgorithm(req.Hash)
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
-	alg := parseHashAlgorithm(req.Hash)
 	resp, err := h.crypto.Hash(ctx, &cryptoclient.HashRequest{
 		Data:    req.Data,
 		HashAlg: alg,

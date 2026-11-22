@@ -38,6 +38,16 @@ interface KeyResponseWire extends KeyWire {
   key?: KeyWire;
   metadata?: KeyWire;
 }
+
+// Key versions as GET /kms/keys/{name}/versions emits them
+// (rest/kms ListKeyVersionsResponse); the SDK's declared type differs (#445).
+interface KeyVersionsWire {
+  versions?: Array<{ version?: number; status?: string; created_at?: string }>;
+}
+// The key GET's version is the KMS's current version (versions start at 1,
+// each rotation adds one). GET /versions stops at the KMS page size (100 on
+// the pinned KMS) and carries no cursor, so it never decides the count (#2171 Codex).
+type KeyDetailView = KeyDetail & { currentVersion: number; versionsListed: number | null };
 import { ArrowLeft, Loader2, AlertCircle, RefreshCw, Ban } from "lucide-react";
 
 /**
@@ -63,11 +73,16 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
     [id]
   );
 
+  const { data: versionsResponse, error: versionsError, refetch: refetchVersions } = useApi(
+    () => kms.getKeyVersions({ keyId: id }),
+    [id]
+  );
+
   // Transform server response to UI KeyDetail. The platform KMS REST
   // handler returns the key record directly (snake_case) so the older
   // {key, metadata} envelope expected here was always missing. Read
   // both shapes and tolerate ISO-string timestamps.
-  const keyDetail = React.useMemo<KeyDetail | null>(() => {
+  const keyDetail = React.useMemo<KeyDetailView | null>(() => {
     if (!response) return null;
 
     // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
@@ -85,6 +100,23 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
     };
     const createdRaw = metadata.createdAt ?? metadata.created_at ?? key.createdAt ?? key.created_at;
     const status: string = String(key.status ?? metadata.status ?? '').toUpperCase();
+    const served = (versionsResponse as unknown as KeyVersionsWire | null | undefined)?.versions;
+    const currentVersion = Number(metadata.version ?? key.version ?? 0);
+    const versions: KeyDetail["versions"] = Array.isArray(served)
+      ? served
+          .map((v) => ({
+            version: v.version ?? 0,
+            createdAt: toIso(v.created_at),
+            status: String(v.status ?? '').toUpperCase() === 'ENABLED' ? 'active' as const : 'inactive' as const,
+          }))
+          .sort((a, b) => b.version - a.version)
+      : [
+          {
+            version: currentVersion || 1,
+            createdAt: toIso(createdRaw),
+            status: status === 'ENABLED' ? 'active' as const : 'inactive' as const,
+          }
+        ];
     return {
       id: keyId,
       name: metadata.name || key.name || keyId,
@@ -92,32 +124,37 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
       type: algorithm.includes('AES') || algorithm.includes('HMAC') ? 'symmetric' as const : 'asymmetric' as const,
       status: (status === 'ENABLED' ? 'active' : status === 'DISABLED' ? 'disabled' : 'active') as 'active' | 'disabled' | 'pending_deletion',
       createdAt: toIso(createdRaw),
-      rotationCount: 0,
-      versions: [
-        {
-          version: metadata.version ?? key.version ?? 1,
-          createdAt: toIso(createdRaw),
-          status: status === 'ENABLED' ? 'active' as const : 'inactive' as const,
-        }
-      ],
+      rotationCount: currentVersion > 0 ? currentVersion - 1 : Array.isArray(served) ? Math.max(versions.length - 1, 0) : 0,
+      versions,
+      currentVersion,
+      versionsListed: Array.isArray(served) ? served.length : null,
       usageHistory: [],
       metadata: metadata.tags || {},
     };
-  }, [response]);
+  }, [response, versionsResponse]);
 
-  const deleteMutation = useMutation(
-    (keyId: string) => kms.deleteKey({ keyId }),
+  // Enable or disable the key, or one of its versions, through UpdateKeyStatus
+  // (PUT /kms/keys/{name}/status, #2057).
+  const statusMutation = useMutation(
+    (req: { status: 'ENABLED' | 'DISABLED'; version?: number }) =>
+      kms.updateKeyStatus({ keyId: id, ...req }),
     {
-      onSuccess: () => {
+      onSuccess: (_data, req) => {
+        const word = req.status === 'DISABLED' ? "disabled" : "enabled";
+        const name = keyDetail?.name ?? id;
         toast({
-          title: "Success",
-          description: "Key disabled successfully",
+          title: "Key status updated",
+          description:
+            req.version !== undefined
+              ? `Version ${req.version} of key "${name}" is now ${word}`
+              : `Key "${name}" is now ${word}`,
         });
         refetch();
+        refetchVersions();
       },
       onError: (error) => {
         toast({
-          title: "Error",
+          title: "Key status change refused",
           description: error.message,
           variant: "destructive",
         });
@@ -141,7 +178,26 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
       return;
     }
 
-    deleteMutation.mutate(id);
+    statusMutation.mutate({ status: 'DISABLED' });
+  };
+
+  const handleEnable = async () => {
+    if (!keyDetail || !confirm(`Enable key "${keyDetail.name}"?`)) {
+      return;
+    }
+
+    statusMutation.mutate({ status: 'ENABLED' });
+  };
+
+  const handleVersionStatus = async (version: number, status: 'ENABLED' | 'DISABLED') => {
+    if (
+      !keyDetail ||
+      !confirm(`${status === 'DISABLED' ? 'Disable' : 'Enable'} version ${version} of key "${keyDetail.name}"?`)
+    ) {
+      return;
+    }
+
+    statusMutation.mutate({ status, version });
   };
 
   const handleEncrypt = async (plaintext: string): Promise<string> => {
@@ -246,6 +302,11 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
               </Button>
             </>
           )}
+          {keyDetail.status === "disabled" && (
+            <Button variant="outline" size="sm" onClick={handleEnable} disabled={statusMutation.isLoading}>
+              Enable
+            </Button>
+          )}
         </div>
       </div>
 
@@ -320,13 +381,17 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
       </Card>
 
       {/* Key Versions */}
-      {keyDetail.versions.length > 0 && (
+      {(versionsError || keyDetail.versions.length > 0) && (
         <Card>
           <CardHeader>
             <CardTitle>Key Versions</CardTitle>
             <CardDescription>History of key rotations</CardDescription>
           </CardHeader>
           <CardContent>
+            {versionsError ? (
+              <p className="text-sm text-destructive">Key versions could not be read: {versionsError.message}</p>
+            ) : (
+            <>
             <div className="rounded-md border">
               <Table>
                 <TableHeader>
@@ -334,6 +399,7 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
                     <TableHead>Version</TableHead>
                     <TableHead>Created At</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -350,11 +416,31 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
                           {version.status}
                         </Badge>
                       </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          aria-label={`${version.status === "active" ? "Disable" : "Enable"} version ${version.version}`}
+                          disabled={statusMutation.isLoading}
+                          onClick={() =>
+                            handleVersionStatus(version.version, version.status === "active" ? 'DISABLED' : 'ENABLED')
+                          }
+                        >
+                          {version.status === "active" ? "Disable" : "Enable"}
+                        </Button>
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             </div>
+            {keyDetail.versionsListed !== null && keyDetail.currentVersion > keyDetail.versionsListed && (
+              <p className="mt-2 text-sm text-muted-foreground" data-testid="key-versions-partial">
+                {`The KMS listed ${keyDetail.versionsListed} of ${keyDetail.currentVersion} versions.`}
+              </p>
+            )}
+            </>
+            )}
           </CardContent>
         </Card>
       )}
