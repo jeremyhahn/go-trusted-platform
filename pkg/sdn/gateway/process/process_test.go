@@ -718,11 +718,17 @@ type testClock struct {
 	// sets it to stand for the real time a slow runner spends between two
 	// reads of Now.
 	wallSkew time.Duration
+	// virtualFrom, when set, makes Now virtualFrom plus elapsed; see
+	// pollTimeOnly.
+	virtualFrom time.Time
 }
 
 func (c *testClock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if !c.virtualFrom.IsZero() {
+		return c.virtualFrom.Add(c.elapsed)
+	}
 	return time.Now().Add(c.wallSkew + c.elapsed)
 }
 
@@ -778,6 +784,16 @@ func (c *testClock) holdDelay(delay time.Duration) *heldCall {
 	defer c.mu.Unlock()
 	c.heldDelay, c.held = delay, newHeldCall()
 	return c.held
+}
+
+// pollTimeOnly makes the clock move, from now on, only by the readiness
+// polls, never by wall time or wallSkew, so a test that counts polls
+// against ReadyTimeout sees exactly ReadyTimeout/readyPollInterval of them
+// whatever the runner's load (#2337).
+func (c *testClock) pollTimeOnly() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.virtualFrom = time.Now()
 }
 
 // waitingContext closes waiting the first time its Done channel is asked
@@ -1322,6 +1338,7 @@ func TestSupervisor_ReadyButInactiveTimesOut(t *testing.T) {
 	// stopped when it runs out.
 	const readyTimeout = 200 * time.Millisecond
 	supervisor, launcher, clock := newSupervisor(t, func(c *Config) { c.ReadyTimeout = readyTimeout })
+	clock.pollTimeOnly()
 	launcher.pid = os.Getpid()
 	node := launcher.node("datapath", nil)
 	node.services = []gateway.ServiceReport{{Name: gateway.ServiceLoadBalancer, Active: true}}
@@ -1360,9 +1377,9 @@ func TestSupervisor_ReadyButInactiveTimesOut(t *testing.T) {
 	clock.mu.Lock()
 	pollsAfter := countDelays(clock.delays, readyPollInterval) - pollsBefore
 	clock.mu.Unlock()
-	// Every collapsed poll moves the clock one interval on, so reaching the
-	// deadline after READY=1 took polls; half the timeout's worth leaves
-	// room for the real time the status questions took.
+	// The clock moves only by polls, each one interval, so the deadline
+	// after READY=1 is reached after the polls left in the timeout; a
+	// supervisor that stopped polling after READY=1 falls short of them.
 	assert.GreaterOrEqual(t, pollsAfter, int(readyTimeout/readyPollInterval)/2,
 		"polling goes on after the readiness channel is closed")
 	assert.Contains(t, launcher.lastChild().signalled(), os.Signal(syscall.SIGTERM))
