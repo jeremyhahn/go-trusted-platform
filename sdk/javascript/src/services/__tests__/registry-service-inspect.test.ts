@@ -4,7 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { RegistryService } from '../registry-service.js';
-import { ApiClient } from '../../client/api-client.js';
+import type { ApiClient } from '../../client/api-client.js';
 
 function createMockClient(): ApiClient {
   return {
