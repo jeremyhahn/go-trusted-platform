@@ -56,6 +56,22 @@ const BUILTIN_ZONES = new Set([
   'backup',
 ]);
 
+// The built-ins the server never omits: pkg/sdn/zone/defaults.go
+// requiredBuiltins. They may be tuned, never deleted (ErrOmitRequired).
+const REQUIRED_BUILTIN_ZONES = new Set(['fabric', 'quarantine', 'provisioning', 'control-plane']);
+
+// An owner-defined zone's identity as the server checks it
+// (pkg/sdn/zone/validate.go validateIdentity): an integer offset 9-99
+// (ErrOwnerZoneOffset) and at least one port class (ErrOwnerZonePortClass).
+function ownerIdentityValid(form: ZoneFormState): boolean {
+  return (
+    Number.isInteger(form.offset) &&
+    form.offset >= 9 &&
+    form.offset <= 99 &&
+    form.port_classes.length > 0
+  );
+}
+
 // Port classes an owner-defined zone may join.
 const OWNER_PORT_CLASSES = ['gateway', 'hypervisor'];
 
@@ -318,8 +334,13 @@ export default function ZonesPage() {
     setFormOpen(true);
   }, []);
 
+  // Built-in overrides keep their fixed identity; only owner zones are checked.
+  const ownerChecks = !(editTarget && BUILTIN_ZONES.has(editTarget.name));
+  const identityOk = !ownerChecks || ownerIdentityValid(form);
+
   const handleSubmit = React.useCallback(async () => {
     if (!editTarget && !form.name.trim()) return;
+    if (!identityOk) return;
     setSubmitting(true);
     try {
       if (editTarget) {
@@ -342,7 +363,7 @@ export default function ZonesPage() {
     } finally {
       setSubmitting(false);
     }
-  }, [form, editTarget, fetchZones, sdn, toast]);
+  }, [form, editTarget, identityOk, fetchZones, sdn, toast]);
 
   const openDeleteConfirm = React.useCallback((zone: ZoneResponse) => {
     setDeleteTarget(zone);
@@ -542,12 +563,17 @@ export default function ZonesPage() {
                   label: isBuiltin ? 'Override (Edit)' : 'Edit',
                   onClick: openEdit,
                 },
-                {
-                  label: 'Delete',
-                  onClick: openDeleteConfirm,
-                  variant: 'destructive',
-                  separator: true,
-                },
+                // The server never omits a required built-in (ErrOmitRequired).
+                ...(REQUIRED_BUILTIN_ZONES.has(zone.name)
+                  ? []
+                  : [
+                      {
+                        label: 'Delete',
+                        onClick: openDeleteConfirm,
+                        variant: 'destructive' as const,
+                        separator: true,
+                      },
+                    ]),
               ]}
             />
           );
@@ -746,6 +772,11 @@ export default function ZonesPage() {
                     </Label>
                   </div>
                 ))}
+                {!identityOk && (
+                  <p className="text-xs text-destructive">
+                    An owner-defined zone needs an offset 9-99 and at least one port class.
+                  </p>
+                )}
               </div>
             )}
 
@@ -933,7 +964,7 @@ export default function ZonesPage() {
             </Button>
             <Button
               type="button"
-              disabled={(!editTarget && !form.name.trim()) || submitting}
+              disabled={(!editTarget && !form.name.trim()) || submitting || !identityOk}
               onClick={handleSubmit}
             >
               {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
