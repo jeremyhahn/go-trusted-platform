@@ -16,6 +16,7 @@ package iam
 import (
 	"context"
 
+	qberrors "github.com/jeremyhahn/go-quicbaas/pkg/errors"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 )
@@ -52,10 +53,12 @@ func NewWorkspaceRoleResolver(client IAMClient) (*WorkspaceRoleResolver, error) 
 //
 // Each of the user's role references is named, in order, with GetRole:
 // a role GetRole finds gives its name, and a reference it does not find is
-// kept unchanged (a role stored by name, or one since deleted). A transport
-// that does not route GetRole (the embedded one) answers the first call with
-// an unknown-method error; the references are then named from the tenant's
-// role list instead. Any other GetRole failure is returned.
+// kept unchanged (a role stored by name, or one since deleted). The embedded
+// transport routes GetRole and answers a missing role with the server's own
+// not-found error, which is kept like any other not-found. A transport that
+// does not route GetRole answers the first call with an unknown-method error;
+// the references are then named from the tenant's role list instead. Any
+// other GetRole failure is returned.
 func (r *WorkspaceRoleResolver) Roles(ctx context.Context, tenantID, subject string) ([]string, error) {
 	user, err := r.client.GetUserByEmail(ctx, tenantID, subject)
 	if sdkerrors.IsNotFound(err) {
@@ -75,7 +78,7 @@ func (r *WorkspaceRoleResolver) Roles(ctx context.Context, tenantID, subject str
 			if role != nil && role.Name != "" {
 				ref = role.Name
 			}
-		case sdkerrors.IsNotFound(err):
+		case isRoleNotFound(err):
 		case i == 0 && isUnknownMethod(err):
 			return r.namesFromRoleList(ctx, tenantID, user.Roles)
 		default:
@@ -84,6 +87,14 @@ func (r *WorkspaceRoleResolver) Roles(ctx context.Context, tenantID, subject str
 		roles = append(roles, ref)
 	}
 	return roles, nil
+}
+
+// isRoleNotFound reports whether a GetRole error means the role does not
+// exist. The SDK transports answer a missing role with the SDK not-found
+// error; the embedded transport passes the server's iam.ErrRoleNotFound (a
+// go-quicbaas pkg/errors QBError with code ErrNotFound) through unchanged.
+func isRoleNotFound(err error) bool {
+	return sdkerrors.IsNotFound(err) || qberrors.IsNotFound(err)
 }
 
 // namesFromRoleList names refs from the tenant's role list, keeping a
