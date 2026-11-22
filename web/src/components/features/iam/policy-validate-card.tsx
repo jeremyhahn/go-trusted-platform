@@ -8,6 +8,7 @@
 
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { Gated } from '@/components/features/capabilities/gated';
 import {
   Card,
   CardContent,
@@ -25,6 +26,9 @@ export interface PolicyValidateCardProps {
   specYaml: string;
   validate: (specYaml: string) => Promise<PolicyValidateResult>;
 }
+
+/** The server's op the Validate button performs (#2054). */
+export const VALIDATE_POLICY_OP = 'POST /api/v1/iam/tenants/{tenant}/policies/validate';
 
 export function PolicyValidateCard({ specYaml, validate }: PolicyValidateCardProps) {
   const [pending, setPending] = useState(false);
@@ -53,9 +57,11 @@ export function PolicyValidateCard({ specYaml, validate }: PolicyValidateCardPro
         <CardDescription>Check the policy spec against the server&apos;s policy rules.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <Button onClick={onValidate} disabled={!specYaml || pending}>
-          {pending ? 'Validating' : 'Validate'}
-        </Button>
+        <Gated op={VALIDATE_POLICY_OP}>
+          <Button onClick={onValidate} disabled={!specYaml || pending}>
+            {pending ? 'Validating' : 'Validate'}
+          </Button>
+        </Gated>
         {result && (
           <div className="space-y-2">
             <p role="status" className={result.valid ? 'text-sm' : 'text-sm text-destructive'}>

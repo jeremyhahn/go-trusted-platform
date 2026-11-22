@@ -1,6 +1,16 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+// The write controls are capability-gated (#2054); these cases run with
+// every op offered.
+vi.mock('@/hooks/use-capabilities', () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: () => ({ enabled: true }),
+  }),
+}));
+
 import { AppRenameForm } from './app-rename-form';
 
 describe('AppRenameForm', () => {

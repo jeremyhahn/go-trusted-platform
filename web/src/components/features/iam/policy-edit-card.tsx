@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { Gated } from '@/components/features/capabilities/gated';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -23,6 +24,9 @@ export interface PolicyEditCardProps {
 }
 
 /** Edits a policy's description, priority and spec; the caller's save reaches the SDK updatePolicy. */
+/** The server's op the Save button performs (#2054). */
+export const UPDATE_POLICY_OP = 'PUT /api/v1/iam/tenants/{tenant}/policies/{id}';
+
 export function PolicyEditCard({
   initialDescription,
   initialPriority,
@@ -99,9 +103,11 @@ export function PolicyEditCard({
         <Button variant="outline" onClick={onCancel} disabled={pending}>
           Cancel
         </Button>
-        <Button onClick={() => void handleSave()} disabled={!canSave}>
-          {pending ? 'Saving' : 'Save'}
-        </Button>
+        <Gated op={UPDATE_POLICY_OP}>
+          <Button onClick={() => void handleSave()} disabled={!canSave}>
+            {pending ? 'Saving' : 'Save'}
+          </Button>
+        </Gated>
       </CardFooter>
     </Card>
   );

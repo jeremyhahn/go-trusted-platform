@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 
 import { Button, Input, Label } from '@/components/ui';
+import { Gated } from '@/components/features/capabilities/gated';
 
 export interface AppRenameFormProps {
   /** The application's current name. */
@@ -17,6 +18,9 @@ export interface AppRenameFormProps {
  * AppRenameForm edits an IAM application's name. Save stays disabled
  * until the trimmed draft is non-empty and differs from the current name.
  */
+/** The server's op the rename Save button performs (#2054). */
+export const UPDATE_APP_OP = 'PUT /api/v1/iam/tenants/{tenant}/apps/{id}';
+
 export function AppRenameForm({ name, saving, onSave }: AppRenameFormProps) {
   const [draft, setDraft] = useState(name);
 
@@ -42,9 +46,11 @@ export function AppRenameForm({ name, saving, onSave }: AppRenameFormProps) {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
         />
-        <Button type="submit" disabled={unchanged || saving}>
-          {saving ? 'Saving…' : 'Save'}
-        </Button>
+        <Gated op={UPDATE_APP_OP}>
+          <Button type="submit" disabled={unchanged || saving}>
+            {saving ? 'Saving…' : 'Save'}
+          </Button>
+        </Gated>
       </div>
     </form>
   );

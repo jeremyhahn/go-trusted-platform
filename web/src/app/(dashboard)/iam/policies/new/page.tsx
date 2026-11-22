@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
+import { Gated } from '@/components/features/capabilities/gated';
 import {
   Select,
   SelectContent,
@@ -25,6 +26,9 @@ import {
 import { Loader2 } from 'lucide-react';
 
 import type { CreateIAMPolicyRequest } from 'trusted-platform-sdk';
+
+/** The server's op the Create Policy button performs (#2054). */
+const CREATE_POLICY_OP = 'POST /api/v1/iam/tenants/{tenant}/policies';
 
 export default function NewPolicyPage() {
   const router = useRouter();
@@ -163,15 +167,17 @@ export default function NewPolicyPage() {
             <Button variant="outline" onClick={() => router.push('/iam/policies')}>
               Cancel
             </Button>
-            <Button
-              onClick={() => createMutation.mutate(undefined)}
-              disabled={!name || createMutation.isLoading}
-            >
-              {createMutation.isLoading && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
-              Create Policy
-            </Button>
+            <Gated op={CREATE_POLICY_OP}>
+              <Button
+                onClick={() => createMutation.mutate(undefined)}
+                disabled={!name || createMutation.isLoading}
+              >
+                {createMutation.isLoading && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                Create Policy
+              </Button>
+            </Gated>
           </div>
         </CardContent>
       </Card>

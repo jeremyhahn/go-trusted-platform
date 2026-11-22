@@ -1,6 +1,16 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+// The write controls are capability-gated (#2054); these cases run with
+// every op offered.
+vi.mock('@/hooks/use-capabilities', () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: () => ({ enabled: true }),
+  }),
+}));
+
 import { PolicyTestCard } from './policy-test-card';
 
 // The policies page tests an access decision through

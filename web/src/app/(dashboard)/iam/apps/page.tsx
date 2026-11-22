@@ -12,6 +12,7 @@ import { useRouter } from 'next/navigation';
 import { ColumnDef } from '@tanstack/react-table';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCapabilities } from '@/hooks/use-capabilities';
 import { DataTable, createSelectColumn } from '@/components/ui/data-table';
 import { DataTableColumnHeader } from '@/components/ui/data-table-column-header';
 import { DataTableRowActions } from '@/components/ui/data-table-row-actions';
@@ -37,11 +38,15 @@ interface DisplayApplication {
 /**
  * Applications list page component
  */
+/** The server's op the Rotate Secret action performs (#2054). */
+const ROTATE_OP = 'POST /api/v1/iam/tenants/{tenant}/apps/{id}/rotate';
+
 export default function AppsPage() {
   const router = useRouter();
   const { toast } = useToast();
   const { tenantId, isLoading: authLoading } = useAuth();
   const iam = useIAM();
+  const rotate = useCapabilities().capability(ROTATE_OP);
 
   // Fetch applications using SDK
   const {
@@ -281,6 +286,8 @@ export default function AppsPage() {
                 label: 'Rotate Secret',
                 onClick: () => handleRotateSecret(app),
                 separator: true,
+                disabled: !rotate.enabled,
+                title: rotate.enabled ? undefined : rotate.reason,
               },
               {
                 label: 'Delete',
@@ -292,7 +299,7 @@ export default function AppsPage() {
         );
       },
     },
-  ], [handleView, handleEdit, handleDelete, handleRotateSecret]);
+  ], [handleView, handleEdit, handleDelete, handleRotateSecret, rotate.enabled, rotate.reason]);
 
   // Show auth loading state
   if (authLoading) {

@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { Gated } from '@/components/features/capabilities/gated';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -29,6 +30,9 @@ export interface PolicyTestCardProps {
  * a resource under the tenant's policies, and shows the decision with the
  * policy and rule that made it (#2054).
  */
+/** The server's op the Run test button performs (#2054). */
+export const TEST_POLICY_OP = 'POST /api/v1/iam/tenants/{tenant}/policies/test';
+
 export function PolicyTestCard({ test }: PolicyTestCardProps) {
   const [subjectId, setSubjectId] = useState('');
   const [action, setAction] = useState('');
@@ -112,9 +116,11 @@ export function PolicyTestCard({ test }: PolicyTestCardProps) {
               />
             </div>
           </div>
-          <Button type="submit" disabled={!ready || pending}>
-            {pending ? 'Testing' : 'Run test'}
-          </Button>
+          <Gated op={TEST_POLICY_OP}>
+            <Button type="submit" disabled={!ready || pending}>
+              {pending ? 'Testing' : 'Run test'}
+            </Button>
+          </Gated>
           {error && <p className="text-sm text-destructive">{error}</p>}
           {result && (
             <div role="status" className="space-y-1 text-sm">
