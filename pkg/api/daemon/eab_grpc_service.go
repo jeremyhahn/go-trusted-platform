@@ -199,7 +199,7 @@ func (s *EABGRPCService) authorizeEABTenant(ctx context.Context, requestTenant, 
 		return status.Error(codes.PermissionDenied, ErrIAMTenantForbidden{Requested: requestTenant}.Error())
 	}
 	if s.pepClient == nil {
-		return authorizeIAMTenant(ctx, requestTenant)
+		return authorizeIAMTenant(ctx, s.pepClient, requestTenant)
 	}
 	if caller.identity != nil {
 		resolved, err := s.resolveEABMTLSCaller(ctx, caller)
