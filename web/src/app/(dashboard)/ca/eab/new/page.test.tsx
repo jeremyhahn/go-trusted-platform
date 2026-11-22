@@ -17,6 +17,10 @@ vi.mock("@/hooks", async (importOriginal) => ({
   useEAB: () => eabHooks,
 }));
 
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({ loading: false, error: null, capability: () => ({ enabled: true }) }),
+}));
+
 vi.mock("next/navigation", () => ({
   useRouter: () => routerResult,
   usePathname: () => "/ca/eab/new",

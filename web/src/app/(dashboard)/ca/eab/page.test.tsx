@@ -46,6 +46,10 @@ vi.mock("@/hooks", async (importOriginal) => ({
   useEABList: () => listResult,
 }));
 
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({ loading: false, error: null, capability: () => ({ enabled: true }) }),
+}));
+
 beforeEach(() => {
   vi.spyOn(window, "confirm").mockReturnValue(true);
 });

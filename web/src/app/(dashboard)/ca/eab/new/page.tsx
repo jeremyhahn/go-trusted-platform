@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useEAB, useToast } from "@/hooks";
+import { Gated } from "@/components/features/capabilities/gated";
 
 // The server answers with protojson: uint64 fields (id, profileId) arrive as
 // JSON strings and status as the enum name, so the created credential is
@@ -110,9 +111,11 @@ export default function NewEABCredentialPage() {
                 onChange={(e) => setExpiry(e.target.value)}
               />
             </div>
-            <Button type="submit" disabled={create.isLoading}>
-              Create credential
-            </Button>
+            <Gated op="POST /api/v1/eab/credentials">
+              <Button type="submit" disabled={create.isLoading}>
+                Create credential
+              </Button>
+            </Gated>
           </form>
         </CardContent>
       </Card>

@@ -15,6 +15,18 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useEAB, useEABList, useToast } from "@/hooks";
+import { Gated } from "@/components/features/capabilities/gated";
+import { EABCredentialDetail } from "@/components/features/ca/eab-credential-detail";
+
+// The server's op strings (METHOD + the mux path template, router.go).
+export const EAB_OPS = {
+  get: "GET /api/v1/eab/credentials/{id:[0-9]+}",
+  revoke: "POST /api/v1/eab/credentials/{id:[0-9]+}/revoke",
+  delete: "DELETE /api/v1/eab/credentials/{id:[0-9]+}",
+  byKey: "GET /api/v1/eab/credentials/key/{key}",
+  validate: "POST /api/v1/eab/credentials/validate",
+  cleanup: "POST /api/v1/eab/credentials/cleanup",
+} as const;
 
 // The REST wire shape: protojson sends the uint64 id and profile id as strings
 // and the status as the enum name, unlike the SDK's EABCredential type.
@@ -54,6 +66,7 @@ export default function EABCredentialsPage() {
   const { revoke, deleteCredential } = useEAB();
   const { data, isLoading, error, refetch } = useEABList();
   const [processingId, setProcessingId] = React.useState<string | null>(null);
+  const [detailId, setDetailId] = React.useState<string | null>(null);
 
   const credentials = React.useMemo(
     () => (data?.credentials || []) as unknown as EABCredentialWire[],
@@ -151,24 +164,38 @@ export default function EABCredentialsPage() {
                       <TableCell>{formatDate(row.expiresAt)}</TableCell>
                       <TableCell>
                         <div className="flex gap-2">
-                          {active && (
+                          <Gated op={EAB_OPS.get}>
                             <Button
                               size="sm"
                               variant="outline"
-                              disabled={busy}
-                              onClick={() => void handleRevoke(row)}
+                              aria-label={`Details ${row.keyId}`}
+                              onClick={() => setDetailId(detailId === row.id ? null : row.id)}
                             >
-                              Revoke
+                              Details
                             </Button>
+                          </Gated>
+                          {active && (
+                            <Gated op={EAB_OPS.revoke}>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={busy}
+                                onClick={() => void handleRevoke(row)}
+                              >
+                                Revoke
+                              </Button>
+                            </Gated>
                           )}
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            disabled={busy}
-                            onClick={() => void handleDelete(row)}
-                          >
-                            Delete
-                          </Button>
+                          <Gated op={EAB_OPS.delete}>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              disabled={busy}
+                              onClick={() => void handleDelete(row)}
+                            >
+                              Delete
+                            </Button>
+                          </Gated>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -179,6 +206,13 @@ export default function EABCredentialsPage() {
           )}
         </CardContent>
       </Card>
+      {detailId && (
+        <Card>
+          <CardContent className="pt-6">
+            <EABCredentialDetail id={Number(detailId)} />
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
