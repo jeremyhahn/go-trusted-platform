@@ -116,6 +116,19 @@ describe("AppSidebar", () => {
   it.each([
     ["/iam/permissions", "Permissions"],
     ["/admin/tenants", "All Tenants"],
+    ["/compute/migrations", "Migrations"],
+    ["/attestation/collect", "Collect"],
+    ["/devices/bmc", "BMC"],
+    ["/devices/lookup", "Device Lookup"],
+    ["/ca/eab", "EAB Keys"],
+    ["/ca/sign", "Sign"],
+    ["/ca/verify", "Verify"],
+    ["/kms/operations", "Key Operations"],
+    ["/iam/policies/test", "Policy Test"],
+    ["/tenant/lifecycle", "Lifecycle"],
+    ["/networking/switches", "Switches"],
+    ["/networking/gateway/bgp", "BGP"],
+    ["/tpm/idevid", "IDevID"],
   ])("links %s as %s in its group", (href, label) => {
     nav.pathname = href;
     renderSidebar();
