@@ -1011,11 +1011,14 @@ export async function mockVTPMRuntimeApi(
   const ok = { success: true, message: 'ok' };
   const b64 = (s: string) => Buffer.from(s, 'binary').toString('base64');
   const unb64 = (s: string) => Buffer.from(s, 'base64').toString('binary');
+  // The bundle's running state as IsVTPMRunning (GET state) reports it: a
+  // start sets it, a stop clears it.
+  let running = false;
 
   await page.route('**/api/v1/vtpm/bundles/**', async (route: Route, request: Request) => {
     const url = new URL(request.url());
     const m = url.pathname.match(
-      /\/api\/v1\/vtpm\/bundles\/([^/]+)\/(start|stop|quote|seal|unseal|pcrs\/extend|pcrs|pcr\/\d+\/extend|pcr\/\d+)\/?$/
+      /\/api\/v1\/vtpm\/bundles\/([^/]+)\/(start|stop|state|quote|seal|unseal|pcrs\/extend|pcrs|pcr\/\d+\/extend|pcr\/\d+)\/?$/
     );
     if (!m) {
       await route.continue();
@@ -1056,8 +1059,10 @@ export async function mockVTPMRuntimeApi(
 
     let reply: unknown;
     if (method === 'POST' && op === 'start') {
+      running = true;
       reply = { status: ok, bundle_id: bundleId, running: true, socket_path: `/run/vtpm/${bundleId}.sock` };
     } else if (daemon && method === 'POST' && op === 'stop') {
+      running = false;
       reply = { bundle_id: bundleId, action: 'stop', success: true, message: 'ok' };
     } else if (daemonPCR && daemonPCR[2] && method === 'POST') {
       reply = { bundle_id: bundleId, action: 'extend_pcr', success: true, message: 'ok' };
@@ -1069,7 +1074,10 @@ export async function mockVTPMRuntimeApi(
         timestamp: '2026-11-12T00:00:00Z',
       };
     } else if (method === 'POST' && op === 'stop') {
+      running = false;
       reply = { status: ok, bundle_id: bundleId, stopped: true };
+    } else if (method === 'GET' && op === 'state') {
+      reply = { bundle_id: bundleId, running, socket_path: `/run/vtpm/${bundleId}.sock` };
     } else if (method === 'POST' && op === 'quote') {
       reply = {
         status: ok,

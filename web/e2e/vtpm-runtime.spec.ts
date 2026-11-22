@@ -45,6 +45,22 @@ test.describe('vTPM runtime page', () => {
     expect(lastCall(calls, 'start')?.method).toBe('POST');
   });
 
+  test('IsVTPMRunning reads the bundle state', async ({ page }) => {
+    const calls = await openRuntimePage(page);
+    const checkState = page.getByRole('button', { name: 'Check state' });
+
+    await checkState.click();
+    await expect(page.getByTestId('vtpm-run-state')).toHaveText('Stopped');
+
+    await page.getByRole('button', { name: 'Start vTPM' }).click();
+    await expect(page.getByTestId('vtpm-run-state')).toHaveText('Running');
+
+    await checkState.click();
+    await expect(page.getByTestId('vtpm-run-state')).toHaveText('Running');
+    await expect(page.getByTestId('vtpm-socket')).toHaveText(`/run/vtpm/${BUNDLE}.sock`);
+    expect(lastCall(calls, 'state')?.method).toBe('GET');
+  });
+
   test('StopVTPM stops a bundle after the confirm dialog', async ({ page }) => {
     const calls = await openRuntimePage(page);
     await page.getByRole('button', { name: 'Start vTPM' }).click();

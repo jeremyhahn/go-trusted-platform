@@ -277,6 +277,20 @@ describe('VTPMService bundle runtime', () => {
     expect(mockClient.post).not.toHaveBeenCalled();
   });
 
+  it('getBundleState GETs /bundles/{id}/state', async () => {
+    await service.getBundleState('vm 1');
+    expect(mockClient.get).toHaveBeenCalledWith('/v1/vtpm/bundles/vm%201/state');
+    expect(mockClient.post).not.toHaveBeenCalled();
+  });
+
+  it('getBundleState returns the running flag and socket path', async () => {
+    const state = { bundle_id: 'vm-1', running: true, socket_path: '/run/vtpm/vm-1.sock' };
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: state });
+    const r = await service.getBundleState('vm-1');
+    expect(r.success).toBe(true);
+    expect(r.data).toEqual(state);
+  });
+
   it('propagates a transport error unchanged', async () => {
     const failure = new Error('409 Conflict: vtpm: bundle not running');
     vi.mocked(mockClient.post).mockRejectedValue(failure);
