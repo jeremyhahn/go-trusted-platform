@@ -331,17 +331,17 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `PlatformIAMService.ListTenants` | `GET /tenants` | - | - | - | missing |
 | `PlatformIAMService.UpdateTenant` | `PUT /tenants/{tenant}` | - | - | - | missing |
 | `PlatformIAMService.DeleteTenant` | `DELETE /tenants/{tenant}` | - | - | - | missing |
-| `PlatformIAMService.CreatePolicy` | `POST /policies` | `(dashboard)/iam/policies/new/page.tsx` | - | - | partial |
-| `PlatformIAMService.GetPolicy` | `GET /policies/{id}` | `(dashboard)/iam/policies/[name]/page.tsx` | - | - | partial |
+| `PlatformIAMService.CreatePolicy` | `POST /policies` | `(dashboard)/iam/policies/new/page.tsx` | - | `iam-policies-apps.spec.ts` | covered |
+| `PlatformIAMService.GetPolicy` | `GET /policies/{id}` | `(dashboard)/iam/policies/[name]/page.tsx` | - | `iam-policies-apps.spec.ts` | covered |
 | `PlatformIAMService.ListPolicies` | `GET /policies` | `(dashboard)/iam/permissions/page.tsx`<br>`(dashboard)/iam/policies/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.UpdatePolicy` | `PUT /policies/{id}` | `(dashboard)/iam/permissions/page.tsx`<br>`(dashboard)/iam/policies/[name]/page.tsx`<br>`(dashboard)/iam/policies/new/page.tsx` (+1) (read-only) | - | - | partial |
+| `PlatformIAMService.UpdatePolicy` | `PUT /policies/{id}` | `(dashboard)/iam/policies/[name]/page.tsx` | - | `iam-policies-apps.spec.ts` | covered |
 | `PlatformIAMService.DeletePolicy` | `DELETE /policies/{id}` | `(dashboard)/iam/policies/[name]/page.tsx`<br>`(dashboard)/iam/policies/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.ValidatePolicy` | `POST /policies/validate` | - | - | - | missing |
-| `PlatformIAMService.TestPolicy` | `POST /policies/test` | - | - | - | missing |
+| `PlatformIAMService.ValidatePolicy` | `POST /policies/validate` | `(dashboard)/iam/policies/[name]/page.tsx` | - | `iam-policies-apps.spec.ts` | covered |
+| `PlatformIAMService.TestPolicy` | `POST /policies/test` | `(dashboard)/iam/policies/page.tsx` | - | `iam-policies-apps.spec.ts` | covered |
 | `PlatformIAMService.RegisterApp` | `POST /apps` | `(dashboard)/iam/apps/new/page.tsx`<br>`(dashboard)/iam/tokens/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.GetApp` | `GET /apps/{id}` | `(dashboard)/iam/apps/[clientId]/page.tsx` | - | - | partial |
+| `PlatformIAMService.GetApp` | `GET /apps/{id}` | `(dashboard)/iam/apps/[clientId]/page.tsx` | - | `iam-policies-apps.spec.ts` | covered |
 | `PlatformIAMService.ListApps` | `GET /apps` | `(dashboard)/iam/apps/page.tsx`<br>`(dashboard)/iam/tokens/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.UpdateApp` | `PUT /apps/{id}` | `(dashboard)/iam/apps/[clientId]/page.tsx`<br>`(dashboard)/iam/apps/page.tsx`<br>`(dashboard)/iam/tokens/page.tsx` (read-only) | - | - | partial |
+| `PlatformIAMService.UpdateApp` | `PUT /apps/{id}` | `(dashboard)/iam/apps/[clientId]/page.tsx` | - | `iam-policies-apps.spec.ts` | covered |
 | `PlatformIAMService.DeleteApp` | `DELETE /apps/{id}` | `(dashboard)/iam/apps/[clientId]/page.tsx`<br>`(dashboard)/iam/apps/page.tsx`<br>`(dashboard)/iam/tokens/page.tsx` | - | `iam.spec.ts` | covered |
 | `PlatformIAMService.RotateAppSecret` | `POST /apps/{id}/rotate` | `(dashboard)/iam/tokens/page.tsx` | - | `iam.spec.ts` | covered |
 

@@ -13,6 +13,8 @@ import { ArrowLeft, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
+import { useState } from 'react';
+import { PolicyEditCard } from '@/components/features/iam/policy-edit-card';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -22,6 +24,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { PolicyValidateCard } from '@/components/features/iam';
 
 // Policy record as the REST API sends it: camelCase or snake_case keys (#445).
 interface PolicyWire {
@@ -44,7 +47,9 @@ export default function PolicyDetailClient() {
     resolveDynamicId(params, pathname, 'policies', 'name'),
   );
 
-  const { data: policy, isLoading, error } = useApi(
+  const [editing, setEditing] = useState(false);
+
+  const { data: policy, isLoading, error, refetch } = useApi(
     () => {
       if (!tenantId) return Promise.reject(new Error('No tenant ID'));
       return iam.getPolicy(tenantId, policyName);
@@ -110,7 +115,7 @@ export default function PolicyDetailClient() {
           <ArrowLeft className="h-4 w-4 mr-2" /> Back to Policies
         </Button>
         <div className="flex gap-2">
-          <Button variant="outline" disabled>
+          <Button variant="outline" disabled={editing} onClick={() => setEditing(true)}>
             <Pencil className="h-4 w-4 mr-2" /> Edit
           </Button>
           <Button
@@ -127,6 +132,25 @@ export default function PolicyDetailClient() {
           </Button>
         </div>
       </div>
+
+      {editing && (
+        <PolicyEditCard
+          initialDescription={p?.description ?? ''}
+          initialPriority={p?.priority ?? 0}
+          initialSpecYaml={yaml}
+          save={async ({ description, priority, specYaml }) => {
+            if (!tenantId) throw new Error('No tenant ID');
+            const r = await iam.updatePolicy({ tenantId, policyName, description, priority, specYaml });
+            if (!r.success) throw new Error(r.error?.message ?? 'Failed to update policy');
+          }}
+          onSaved={() => {
+            toast({ title: 'Policy updated', variant: 'success' });
+            setEditing(false);
+            refetch();
+          }}
+          onCancel={() => setEditing(false)}
+        />
+      )}
 
       <Card>
         <CardHeader>
@@ -145,6 +169,16 @@ export default function PolicyDetailClient() {
           </div>
         </CardContent>
       </Card>
+
+      <PolicyValidateCard
+        specYaml={yaml}
+        validate={async (y) => {
+          if (!tenantId) throw new Error('No tenant ID');
+          const r = await iam.validatePolicy({ tenantId, specYaml: y });
+          if (!r.data) throw new Error('Empty validation response');
+          return r.data;
+        }}
+      />
     </div>
   );
 }
