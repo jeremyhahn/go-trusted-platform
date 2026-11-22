@@ -13,6 +13,10 @@ import { GatewayService } from '../gateway-service.js';
 import type { ApiClient } from '../../client/api-client.js';
 import type { VIPBackend, VIPConfig } from '../../types/gateway.js';
 
+// A write is sent once: a lost response must not replay a switch reprogram
+// (the rule getPerfFlows follows, #2179 Codex).
+const NO_RETRY = { retry: { enabled: false } };
+
 function createMockApiClient(): ApiClient {
   return {
     get: vi.fn(),
@@ -58,7 +62,7 @@ describe('GatewayService load balancer writes', () => {
 
     expect(result).toBe(response);
     expect(mockClient.post).toHaveBeenCalledTimes(1);
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/gateway/lb/vips', { vip: cfg });
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/gateway/lb/vips', { vip: cfg }, NO_RETRY);
     expect(mockClient.put).not.toHaveBeenCalled();
     expect(mockClient.delete).not.toHaveBeenCalled();
     expectNoReads();
@@ -72,7 +76,7 @@ describe('GatewayService load balancer writes', () => {
 
     expect(result).toBe(response);
     expect(mockClient.delete).toHaveBeenCalledTimes(1);
-    expect(mockClient.delete).toHaveBeenCalledWith('/v1/gateway/lb/vips/tcp/192.0.2.10/443');
+    expect(mockClient.delete).toHaveBeenCalledWith('/v1/gateway/lb/vips/tcp/192.0.2.10/443', NO_RETRY);
     expect(mockClient.post).not.toHaveBeenCalled();
     expect(mockClient.put).not.toHaveBeenCalled();
     expectNoReads();
@@ -88,7 +92,7 @@ describe('GatewayService load balancer writes', () => {
     expect(mockClient.put).toHaveBeenCalledTimes(1);
     expect(mockClient.put).toHaveBeenCalledWith('/v1/gateway/lb/vips/tcp/192.0.2.10/443/backends', {
       backends: [backend],
-    });
+    }, NO_RETRY);
     expect(mockClient.post).not.toHaveBeenCalled();
     expect(mockClient.delete).not.toHaveBeenCalled();
     expectNoReads();
