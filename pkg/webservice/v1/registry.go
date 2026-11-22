@@ -1087,6 +1087,9 @@ type RegistryParams struct {
 	// EntityTypeLister wires GET /api/v1/platform/entity-types. When
 	// nil the endpoint answers 503.
 	EntityTypeLister platform.EntityTypeLister
+	// Shutdowner wires POST /api/v1/platform/shutdown. When nil the
+	// endpoint returns 503.
+	Shutdowner platform.Shutdowner
 	// RegistryService wires /api/v1/compute/images. When nil the
 	// /compute/images surface returns 503 via the service registry.
 	RegistryService grpcapi.RegistryService
@@ -1947,6 +1950,9 @@ func (registry *HandlerRegistry) PlatformRestRouter() *platform.PlatformRouter {
 	}
 	if registry.params.EntityTypeLister != nil {
 		router.SetEntityTypeLister(registry.params.EntityTypeLister)
+	}
+	if registry.params.Shutdowner != nil {
+		router.SetShutdowner(registry.params.Shutdowner)
 	}
 	return router
 }

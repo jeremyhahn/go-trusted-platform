@@ -39,6 +39,7 @@ type PlatformHandlers struct {
 	configReloader   ConfigReloader
 	logQuerier       LogQuerier
 	entityTypeLister EntityTypeLister
+	shutdowner       Shutdowner
 }
 
 // NewPlatformHandlers creates a new PlatformHandlers instance

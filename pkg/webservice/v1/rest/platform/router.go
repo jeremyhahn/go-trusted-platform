@@ -93,6 +93,11 @@ func (r *PlatformRouter) SetEntityTypeLister(l EntityTypeLister) {
 	r.handlers.SetEntityTypeLister(l)
 }
 
+// SetShutdowner wires the daemon that POST /platform/shutdown stops.
+func (r *PlatformRouter) SetShutdowner(s Shutdowner) {
+	r.handlers.SetShutdowner(s)
+}
+
 // Handlers returns the underlying handlers for direct access if needed
 func (r *PlatformRouter) Handlers() *PlatformHandlers {
 	return r.handlers
@@ -186,6 +191,9 @@ func (r *PlatformRouter) registerServiceRoutes(router *mux.Router) {
 	router.HandleFunc("/services/{service}/start", r.handlers.StartService).Methods("POST")
 	router.HandleFunc("/services/{service}/stop", r.handlers.StopService).Methods("POST")
 	router.HandleFunc("/services/{service}/restart", r.handlers.RestartService).Methods("POST")
+
+	// POST /api/v1/platform/shutdown - Shut the daemon down (202, runs after the reply)
+	router.HandleFunc("/shutdown", r.handlers.Shutdown).Methods("POST")
 }
 
 // registerProtocolRoutes registers protocol status endpoints

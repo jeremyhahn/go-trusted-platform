@@ -1396,6 +1396,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 				params.ConfigUpdater = svc
 				params.ConfigReloader = svc
 				params.EntityTypeLister = svc
+				params.Shutdowner = svc
 			}
 		}
 		if jsonlQuerier != nil {
