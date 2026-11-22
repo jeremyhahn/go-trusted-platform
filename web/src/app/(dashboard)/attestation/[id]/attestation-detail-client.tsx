@@ -4,15 +4,16 @@ import * as React from "react";
 import { use } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { resolveDynamicId } from "@/utils/dynamic-route";
+import { Gated } from "@/components/features/capabilities/gated";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { PCRValues } from "@/components/features/attestation/pcr-values";
 import { EventLogViewer } from "@/components/features/attestation/event-log-viewer";
-import { useAttestation, useApi } from "@/hooks";
+import { useAttestation, useApi, useToast } from "@/hooks";
 import type { AttestationDetail } from "@/types/security";
-import { ArrowLeft, Loader2, AlertCircle, ShieldQuestion } from "lucide-react";
+import { ArrowLeft, Loader2, AlertCircle, ShieldQuestion, Trash2 } from "lucide-react";
 
 /**
  * Attestation Detail Page
@@ -31,6 +32,29 @@ export default function AttestationDetailPage({ params }: { params: Promise<{ id
   const id = resolveDynamicId(resolved, pathname, "attestation");
   const router = useRouter();
   const attestation = useAttestation();
+  const { toast } = useToast();
+  const [deleting, setDeleting] = React.useState(false);
+
+  // #2038: DeleteManifest reaches DELETE /manifests/{id} through the SDK.
+  const handleDelete = async () => {
+    if (!window.confirm(`Delete manifest ${id}?`)) return;
+    setDeleting(true);
+    try {
+      const res = await attestation.deleteManifest(id);
+      if (res.success) {
+        toast({ title: "Manifest deleted" });
+        router.push("/attestation");
+      } else {
+        toast({
+          title: "Delete failed",
+          description: res.error?.message,
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   // TODO: The SDK getManifest method returns a full manifest. For now, we're using it
   // to fetch attestation details. A dedicated getAttestationStatus method should be added
@@ -124,12 +148,20 @@ export default function AttestationDetailPage({ params }: { params: Promise<{ id
             <p className="text-muted-foreground">Attestation report details</p>
           </div>
         </div>
-        <Badge
-          variant={attestationDetail.status === "signed" ? "outline" : "secondary"}
-          className="text-base px-4 py-2"
-        >
-          {attestationDetail.status === "signed" ? "Signed" : "Unsigned"}
-        </Badge>
+        <div className="flex items-center gap-2">
+          <Badge
+            variant={attestationDetail.status === "signed" ? "outline" : "secondary"}
+            className="text-base px-4 py-2"
+          >
+            {attestationDetail.status === "signed" ? "Signed" : "Unsigned"}
+          </Badge>
+          <Gated op="DELETE /api/v1/attestation/manifests/{id}">
+            <Button variant="destructive" size="sm" onClick={handleDelete} disabled={deleting}>
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete manifest
+            </Button>
+          </Gated>
+        </div>
       </div>
 
       {/* Verification Result: a manifest is evidence; the verifier's verdict is the device report (#643) */}
