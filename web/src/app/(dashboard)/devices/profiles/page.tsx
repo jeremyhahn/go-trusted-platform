@@ -5,7 +5,7 @@
  * Display and manage device profiles with network phase configurations
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -230,8 +230,10 @@ export default function DeviceProfilesPage() {
   // Find one profile by serial or MAC address (FindProfileBySerial and
   // FindProfileByMACAddress, #2048). A 404 means no profile matches; any
   // other refusal shows the server's message. Editing the query clears the
-  // old answer.
+  // old answer and drops a pending one: each lookup takes a generation, and
+  // an answer for an earlier generation is never shown.
   const [lookupQuery, setLookupQuery] = useState('');
+  const lookupGen = useRef(0);
   const [lookupBusy, setLookupBusy] = useState(false);
   const [lookup, setLookup] = useState<
     | { kind: 'found'; profile: DeviceProfile }
@@ -244,12 +246,14 @@ export default function DeviceProfilesPage() {
   const findProfile = async (by: 'serial' | 'mac') => {
     const q = lookupQuery.trim();
     if (q === '') return;
+    const gen = ++lookupGen.current;
     setLookupBusy(true);
     try {
       const res =
         by === 'serial'
           ? await deviceService.findProfileBySerial(q)
           : await deviceService.findProfileByMACAddress(q);
+      if (gen !== lookupGen.current) return;
       if (res.error?.status === 404) {
         setLookup({ kind: 'none', query: q });
       } else if (res.error) {
@@ -271,7 +275,7 @@ export default function DeviceProfilesPage() {
         setLookup(profile ? { kind: 'found', profile } : { kind: 'none', query: q });
       }
     } finally {
-      setLookupBusy(false);
+      if (gen === lookupGen.current) setLookupBusy(false);
     }
   };
 
@@ -549,7 +553,9 @@ export default function DeviceProfilesPage() {
               value={lookupQuery}
               onChange={(e) => {
                 setLookupQuery(e.target.value);
+                lookupGen.current++;
                 setLookup(null);
+                setLookupBusy(false);
               }}
             />
           </div>
@@ -563,7 +569,7 @@ export default function DeviceProfilesPage() {
           </div>
           {lookup?.kind === 'found' && (
             <p data-testid="profile-lookup-result" className="text-sm">
-              <Link href={`/devices/profiles/${lookup.profile.id}`}>{lookup.profile.name}</Link>{' '}
+              <span>{lookup.profile.name}</span>{' '}
               ({deviceRoleLabel(lookup.profile.role)})
             </p>
           )}
