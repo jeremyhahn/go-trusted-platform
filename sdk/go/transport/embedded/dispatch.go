@@ -54,6 +54,7 @@ func buildHandlerMap(reg *ServiceRegistry) map[string]handlerFunc {
 	registerNTPHandlers(m, reg)
 	registerLUKSHandlers(m, reg)
 	registerBarrierHandlers(m, reg)
+	registerVPNHandlers(m, reg)
 	registerSwitchHandlers(m, reg)
 	registerCacheHandlers(m, reg)
 	registerSchedulerHandlers(m, reg)
@@ -1580,6 +1581,38 @@ func registerBarrierHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	}
 	m[platformv1.BarrierService_Rekey_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.Rekey(ctx, req.(*platformv1.BarrierRekeyRequest))
+	}
+}
+
+func registerVPNHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.VPN == nil {
+		return
+	}
+	svc := reg.VPN
+
+	m[platformv1.VPNService_EnrolPeer_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.EnrolPeer(ctx, req.(*platformv1.EnrolVPNPeerRequest))
+	}
+	m[platformv1.VPNService_ListPeers_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListPeers(ctx, req.(*platformv1.ListVPNPeersRequest))
+	}
+	m[platformv1.VPNService_RevokePeer_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.RevokePeer(ctx, req.(*platformv1.RevokeVPNPeerRequest))
+	}
+	m[platformv1.VPNService_GetStatus_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetStatus(ctx, req.(*platformv1.GetVPNStatusRequest))
+	}
+	m[platformv1.VPNService_GetPosturePolicy_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetPosturePolicy(ctx, req.(*platformv1.GetVPNPosturePolicyRequest))
+	}
+	m[platformv1.VPNService_SetPosturePolicy_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.SetPosturePolicy(ctx, req.(*platformv1.SetVPNPosturePolicyRequest))
+	}
+	m[platformv1.VPNService_DeletePosturePolicy_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DeletePosturePolicy(ctx, req.(*platformv1.DeleteVPNPosturePolicyRequest))
+	}
+	m[platformv1.VPNService_ListPosturePolicies_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListPosturePolicies(ctx, req.(*platformv1.ListVPNPosturePoliciesRequest))
 	}
 }
 

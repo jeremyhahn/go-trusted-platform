@@ -607,6 +607,18 @@ func (r *ToolRegistry) registerDeviceTools() {
 	})
 
 	r.addTool(mcpwire.ToolDefinition{
+		Name:        "device_attest_challenge",
+		Description: "Issue an attestation challenge for a device: the server-chosen, single-use nonce (with its challenge_id and expires_at) that a later attest call binds its TPM quote to.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"device_id": map[string]interface{}{"type": "string", "description": "Device ID"},
+			},
+			"required": []string{"device_id"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_record_attest_cert",
 		Description: "Record (or re-record) a device's attestation certificate on its platform record without re-enrolling it. Fails closed: the certificate must parse, chain to the platform CA, carry tcg-cap-verifiedTPMRestricted (2.23.133.11.1.3) and certify the device's enrolled attestation key, or nothing is written. Set reissue to let the CA issue a fresh certificate over the enrolled key. Set clear_on_refusal to clear a stored certificate that every candidate failed, so the device reads as absent instead of quarantined; it never clears when a candidate passes.",
 		InputSchema: map[string]interface{}{
@@ -1430,6 +1442,8 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeDeviceUpdate(ctx, args)
 	case "device_attest":
 		return r.executeDeviceAttest(ctx, args)
+	case "device_attest_challenge":
+		return r.executeDeviceAttestChallenge(ctx, args)
 	case "device_record_attest_cert":
 		return r.executeDeviceRecordAttestCert(ctx, args)
 	case "device_disable":
