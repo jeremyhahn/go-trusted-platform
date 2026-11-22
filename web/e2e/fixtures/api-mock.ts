@@ -272,11 +272,11 @@ export async function mockInvitationApi(
   });
 
   // Route handler for individual invitation (revoke)
-  await page.route('**/api/v1/invitations/*', async (route: Route, request: Request) => {
+  await page.route('**/api/v1/invitations/*/revoke', async (route: Route, request: Request) => {
     const method = request.method();
     const url = request.url();
 
-    if (method === 'DELETE') {
+    if (method === 'POST') {
       // Revoke invitation
       if (state.config.revokeError) {
         await route.fulfill({
