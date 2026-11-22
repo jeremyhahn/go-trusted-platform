@@ -714,12 +714,16 @@ type testClock struct {
 	// ReadyTimeout runs out after its polls rather than its real duration
 	// (#284).
 	elapsed time.Duration
+	// wallSkew is how far the wall clock has moved past time.Now; a test
+	// sets it to stand for the real time a slow runner spends between two
+	// reads of Now.
+	wallSkew time.Duration
 }
 
 func (c *testClock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return time.Now().Add(c.elapsed)
+	return time.Now().Add(c.wallSkew + c.elapsed)
 }
 
 func (c *testClock) After(d time.Duration) <-chan time.Time {
@@ -1331,6 +1335,12 @@ func TestSupervisor_ReadyButInactiveTimesOut(t *testing.T) {
 	result := make(chan error, 1)
 	go func() { result <- supervisor.StartService(ctx, gateway.ServiceLoadBalancer) }()
 	held.awaitEntered(t, ctx)
+	// Three quarters of the timeout passes in real time around READY=1, as
+	// it did on a loaded -race runner (#2337: the test took 0.17s and saw 2
+	// polls, not 4); the deadline must still stand for polls.
+	clock.mu.Lock()
+	clock.wallSkew = readyTimeout * 3 / 4
+	clock.mu.Unlock()
 	clock.mu.Lock()
 	pollsBefore := countDelays(clock.delays, readyPollInterval)
 	clock.mu.Unlock()
