@@ -31,6 +31,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useSDN, useApi } from '@/hooks';
 import type { Port, PortStats, PortType } from 'trusted-platform-sdk';
 import { portState, readUint64, type SDNPortState } from '@/lib/sdn-wire';
+import { useSDNPortState } from '@/hooks/use-sdn-port-state';
 
 // Types for SDN Port management
 interface SDNPort {
@@ -73,6 +74,9 @@ export default function SDNPortsPage() {
   const [statsError, setStatsError] = useState<string | null>(null);
   // statsRequest is the generation of the current stats read.
   const statsRequest = useRef(0);
+  const [togglePort, setTogglePort] = useState<SDNPort | null>(null);
+  const [toggleBusy, setToggleBusy] = useState(false);
+  const portStateApi = useSDNPortState(selectedBridgeId, togglePort?.id ?? '');
 
   // Fetch bridges to get the first bridge ID
   const {
@@ -192,11 +196,45 @@ export default function SDNPortsPage() {
     });
   };
 
+  /** handleTogglePort asks the operator to confirm before the port's admin state changes. */
   const handleTogglePort = (port: SDNPort) => {
-    toast({
-      title: 'Toggle Port',
-      description: `Toggling port ${port.name} is not yet implemented`,
-    });
+    setTogglePort(port);
+  };
+
+  /**
+   * confirmToggle sets the confirmed port's admin state through SetPortState
+   * (PUT /sdn/bridges/{name}/ports/{port}/state): an up port goes down, any
+   * other goes up. The server's message is shown on success or refusal.
+   */
+  const confirmToggle = async () => {
+    if (!togglePort) return;
+    const disabling = togglePort.status === 'up';
+    setToggleBusy(true);
+    try {
+      const res = await portStateApi.setPortState({ adminState: disabling ? 'down' : 'up' });
+      if (res.error) {
+        toast({
+          title: 'Port state change refused',
+          description: res.error.message,
+          variant: 'destructive',
+        });
+        return;
+      }
+      toast({
+        title: disabling ? 'Port disabled' : 'Port enabled',
+        description: res.data?.status?.message,
+      });
+      setTogglePort(null);
+      refetchPorts();
+    } catch (err) {
+      toast({
+        title: 'Port state change refused',
+        description: err instanceof Error ? err.message : String(err),
+        variant: 'destructive',
+      });
+    } finally {
+      setToggleBusy(false);
+    }
   };
 
   const handleDeletePort = async (port: SDNPort) => {
@@ -546,6 +584,39 @@ export default function SDNPortsPage() {
               Loading statistics...
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={togglePort !== null}
+        onOpenChange={(open) => {
+          if (!open) setTogglePort(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {togglePort?.status === 'up' ? 'Disable' : 'Enable'} port {togglePort?.name}?
+            </DialogTitle>
+            <DialogDescription>
+              {togglePort?.status === 'up'
+                ? `Disabling cuts the port's traffic on bridge ${selectedBridgeId || 'unknown'}.`
+                : `Enabling lets the port's traffic pass on bridge ${selectedBridgeId || 'unknown'} again.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTogglePort(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant={togglePort?.status === 'up' ? 'destructive' : 'default'}
+              disabled={toggleBusy}
+              onClick={confirmToggle}
+            >
+              {toggleBusy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {togglePort?.status === 'up' ? 'Disable port' : 'Enable port'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
