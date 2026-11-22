@@ -23,6 +23,7 @@ import {
 } from "@/components/ui";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2, Play, Square } from "lucide-react";
+import { Gated } from "@/components/features/capabilities/gated";
 import {
   useVTPMRuntime,
   useToast,
@@ -226,22 +227,28 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex gap-2">
-            <Button variant="outline" onClick={handleCheckState} disabled={noBundle || rt.lifecycleBusy}>
-              {rt.checkState.isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Check state
-            </Button>
-            <Button onClick={handleStart} disabled={noBundle || rt.lifecycleBusy}>
-              {rt.start.isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
-              Start vTPM
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => setPending("stop")}
-              disabled={noBundle || rt.lifecycleBusy}
-            >
-              <Square className="mr-2 h-4 w-4" />
-              Stop vTPM
-            </Button>
+            <Gated op="GET /api/v1/vtpm/bundles/{id}/state">
+              <Button variant="outline" onClick={handleCheckState} disabled={noBundle || rt.lifecycleBusy}>
+                {rt.checkState.isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Check state
+              </Button>
+            </Gated>
+            <Gated op="POST /api/v1/vtpm/bundles/{id}/start">
+              <Button onClick={handleStart} disabled={noBundle || rt.lifecycleBusy}>
+                {rt.start.isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
+                Start vTPM
+              </Button>
+            </Gated>
+            <Gated op="POST /api/v1/vtpm/bundles/{id}/stop">
+              <Button
+                variant="destructive"
+                onClick={() => setPending("stop")}
+                disabled={noBundle || rt.lifecycleBusy}
+              >
+                <Square className="mr-2 h-4 w-4" />
+                Stop vTPM
+              </Button>
+            </Gated>
           </div>
           {socketPath && (
             <p className="text-sm text-muted-foreground">
@@ -267,7 +274,9 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
               <Input id="vtpm-quote-pcrs" value={quotePCRs} onChange={(e) => setQuotePCRs(e.target.value)} />
             </div>
           </div>
-          <Button onClick={handleQuote} disabled={noBundle || rt.quote.isLoading}>Quote</Button>
+          <Gated op="POST /api/v1/vtpm/bundles/{id}/quote">
+            <Button onClick={handleQuote} disabled={noBundle || rt.quote.isLoading}>Quote</Button>
+          </Gated>
           {quoteData && (
             <div className="space-y-2" data-testid="vtpm-quote-result">
               <p className="text-sm">Hash algorithm: {quoteData.hash_algorithm}</p>
@@ -299,7 +308,9 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
               <Input id="vtpm-seal-pcrs" value={sealPCRs} onChange={(e) => setSealPCRs(e.target.value)} />
             </div>
           </div>
-          <Button onClick={handleSeal} disabled={noBundle || !sealText || rt.seal.isLoading}>Seal</Button>
+          <Gated op="POST /api/v1/vtpm/bundles/{id}/seal">
+            <Button onClick={handleSeal} disabled={noBundle || !sealText || rt.seal.isLoading}>Seal</Button>
+          </Gated>
           {sealedBlob && (
             <div className="space-y-2">
               <Label>Sealed blob (base64)</Label>
@@ -310,7 +321,9 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
             <Label htmlFor="vtpm-unseal-blob">Sealed blob to unseal</Label>
             <Textarea id="vtpm-unseal-blob" className="font-mono text-xs" value={unsealBlob} onChange={(e) => setUnsealBlob(e.target.value)} />
           </div>
-          <Button onClick={handleUnseal} disabled={noBundle || !unsealBlob || rt.unseal.isLoading}>Unseal</Button>
+          <Gated op="POST /api/v1/vtpm/bundles/{id}/unseal">
+            <Button onClick={handleUnseal} disabled={noBundle || !unsealBlob || rt.unseal.isLoading}>Unseal</Button>
+          </Gated>
           {unsealData && (
             <p className="text-sm" data-testid="vtpm-unsealed-data">
               Unsealed: <code>{base64ToText(unsealData.data)}</code>
@@ -330,7 +343,9 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
               <Label htmlFor="vtpm-read-index">Read PCR index</Label>
               <Input id="vtpm-read-index" value={readIndex} onChange={(e) => setReadIndex(e.target.value)} />
             </div>
-            <Button onClick={handleRead} disabled={noBundle || rt.readPCR.isLoading}>Read PCR</Button>
+            <Gated op="GET /api/v1/vtpm/bundles/{id}/pcrs">
+              <Button onClick={handleRead} disabled={noBundle || rt.readPCR.isLoading}>Read PCR</Button>
+            </Gated>
           </div>
           {readData && (
             <p className="font-mono text-xs" data-testid="vtpm-pcr-value">
@@ -355,13 +370,15 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
               </p>
             </div>
           </div>
-          <Button
-            variant="destructive"
-            onClick={requestExtend}
-            disabled={noBundle || !extendData || rt.extendPCR.isLoading}
-          >
-            Extend PCR
-          </Button>
+          <Gated op="POST /api/v1/vtpm/bundles/{id}/pcrs/extend">
+            <Button
+              variant="destructive"
+              onClick={requestExtend}
+              disabled={noBundle || !extendData || rt.extendPCR.isLoading}
+            >
+              Extend PCR
+            </Button>
+          </Gated>
           {extendResult?.extended && (
             <p className="text-sm" data-testid="vtpm-extend-result">
               PCR {extendResult.pcr_index} extended
