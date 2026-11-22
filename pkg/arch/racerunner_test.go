@@ -23,21 +23,19 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The race job runs on the persistent bigdisk runner only for code from this
-// repository: a push to main or a same-repository pull request. Fork code
-// on that runner could persist across jobs, so everything else gets a
-// hosted runner. These tests evaluate race's runs-on expression, not just
-// look for the label in it.
+// The race job runs on a GitHub-hosted standard runner on every event (owner
+// ruling 999): it exceeds no hosted limit, so neither a push to main nor a
+// same-repository pull request takes the persistent bigdisk runner (the
+// m2403/m2406 route), and fork code never reaches it. These tests evaluate
+// race's runs-on, an expression or a plain label, not just look for the
+// label in it.
 
 const (
 	raceJobID      = "race"
 	raceRepository = "jeremyhahn/go-trusted-platform"
 )
 
-var (
-	bigdiskLabels = []string{"self-hosted", "linux", "x64", "bigdisk"}
-	hostedLabels  = []string{"ubuntu-latest"}
-)
+var hostedLabels = []string{"ubuntu-latest"}
 
 // ghContext is the slice of the GitHub context race's runs-on reads.
 type ghContext map[string]string
@@ -232,14 +230,22 @@ func (p *ghParser) primary() (ghValue, error) {
 			if err := p.expect("("); err != nil {
 				return ghValue{}, err
 			}
-			arg, ok := p.peek()
-			if !ok || arg.kind != "str" {
-				return ghValue{}, fmt.Errorf("fromJSON takes a string literal")
+			// v1.48: the argument is an expression (a literal or the
+			// preflight's runner output), and the JSON a string or an array.
+			arg, err := p.or()
+			if err != nil {
+				return ghValue{}, err
 			}
-			p.pos++
+			if arg.kind != "string" {
+				return ghValue{}, fmt.Errorf("fromJSON takes a string")
+			}
+			var label string
+			if json.Unmarshal([]byte(arg.str), &label) == nil {
+				return ghValue{kind: "string", str: label}, p.expect(")")
+			}
 			var arr []string
-			if err := json.Unmarshal([]byte(arg.text), &arr); err != nil {
-				return ghValue{}, fmt.Errorf("fromJSON(%q) is not a JSON string array: %w", arg.text, err)
+			if err := json.Unmarshal([]byte(arg.str), &arr); err != nil {
+				return ghValue{}, fmt.Errorf("fromJSON(%q) is not a JSON string or string array: %w", arg.str, err)
 			}
 			return ghValue{kind: "array", array: arr}, p.expect(")")
 		}
@@ -286,23 +292,48 @@ type raceRoutingCase struct {
 	ref       string
 	headRepo  string
 	wantLabel []string
+	// runner is the preflight's v1.48 selection (runs-on JSON); empty
+	// means the hosted default. server is github.server_url; empty means
+	// github.com.
+	runner string
+	server string
 }
 
+// raceOverflowLabels is the self-hosted overflow runner the v1.48
+// selection names when the hosted pool is full.
+var raceOverflowLabels = []string{"self-hosted", "linux", "x64", "bigdisk"}
+
+const raceOverflowJSON = `["self-hosted","linux","x64","bigdisk"]`
+
 var raceRoutingCases = []raceRoutingCase{
-	{"push to main", "push", "refs/heads/main", "", bigdiskLabels},
-	{"push to another branch", "push", "refs/heads/feature", "", hostedLabels},
-	{"same-repository pull request", "pull_request", "refs/pull/1/merge", raceRepository, bigdiskLabels},
-	{"fork pull request", "pull_request", "refs/pull/1/merge", "someone/go-trusted-platform", hostedLabels},
-	{"workflow_dispatch on main", "workflow_dispatch", "refs/heads/main", "", hostedLabels},
-	{"schedule on main", "schedule", "refs/heads/main", "", hostedLabels},
+	{"push to main", "push", "refs/heads/main", "", hostedLabels, "", ""},
+	{"push to another branch", "push", "refs/heads/feature", "", hostedLabels, "", ""},
+	{"same-repository pull request", "pull_request", "refs/pull/1/merge", raceRepository, hostedLabels, "", ""},
+	{"fork pull request", "pull_request", "refs/pull/1/merge", "someone/go-trusted-platform", hostedLabels, "", ""},
+	{"workflow_dispatch on main", "workflow_dispatch", "refs/heads/main", "", hostedLabels, "", ""},
+	{"schedule on main", "schedule", "refs/heads/main", "", hostedLabels, "", ""},
+	// v1.48: the preflight's overflow decision is the run's runner.
+	{"push to main, hosted pool full", "push", "refs/heads/main", "", raceOverflowLabels, raceOverflowJSON, ""},
+	{"same-repository pull request, hosted pool full", "pull_request", "refs/pull/1/merge", raceRepository, raceOverflowLabels, raceOverflowJSON, ""},
+	// Off github.com the job keeps its label whatever the output says.
+	{"another forge", "push", "refs/heads/main", "", hostedLabels, raceOverflowJSON, "https://forge.example"},
 }
 
 func (c raceRoutingCase) context() ghContext {
+	runner, server := c.runner, c.server
+	if runner == "" {
+		runner = `"ubuntu-latest"`
+	}
+	if server == "" {
+		server = "https://github.com"
+	}
 	return ghContext{
 		"github.event_name": c.event,
 		"github.ref":        c.ref,
 		"github.repository": raceRepository,
+		"github.server_url": server,
 		"github.event.pull_request.head.repo.full_name": c.headRepo,
+		"needs.preflight.outputs.runner":                runner,
 	}
 }
 
@@ -333,7 +364,7 @@ func raceJob(t *testing.T, wf ciWorkflow) ciJob {
 	return ciJob{}
 }
 
-func TestRaceRunsOnTheBigdiskRunnerOnlyForThisRepositorysCode(t *testing.T) {
+func TestRaceRunsOnAHostedRunnerOnEveryEvent(t *testing.T) {
 	wf := loadCIWorkflow(t, repoRoot(t), ciWorkflowFile)
 	runsOn := raceJob(t, wf).RunsOn
 	for _, mismatch := range raceRoutingMismatches(runsOn) {
@@ -345,6 +376,14 @@ func TestRaceRoutingRejectsAnUnconditionalBigdiskRunsOn(t *testing.T) {
 	unconditional := `${{ fromJSON('["self-hosted","linux","x64","bigdisk"]') }}`
 	mismatches := raceRoutingMismatches(unconditional)
 	require.Contains(t, mismatches, "fork pull request: runs on [self-hosted linux x64 bigdisk], want [ubuntu-latest]")
+	// The bigdisk route ruling 999 retired sends a push to main and a
+	// same-repository pull request to the pool.
+	routed := raceRoutingMismatches(bigdiskRoute)
+	require.Contains(t, routed, "push to main: runs on [self-hosted linux x64 bigdisk], want [ubuntu-latest]")
+	require.Contains(t, routed, "same-repository pull request: runs on [self-hosted linux x64 bigdisk], want [ubuntu-latest]")
+	// v1.48: a plain hosted label ignores the preflight's overflow decision.
+	require.Contains(t, raceRoutingMismatches("ubuntu-latest"), "push to main, hosted pool full: runs on [ubuntu-latest], want [self-hosted linux x64 bigdisk]")
+	require.Empty(t, raceRoutingMismatches(selectionRunner))
 }
 
 func TestResolveRunsOnRejectsUnsupportedExpressions(t *testing.T) {

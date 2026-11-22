@@ -25,7 +25,9 @@ import (
 	"strings"
 	"testing"
 
+	qbservice "github.com/jeremyhahn/go-quicbaas/pkg/service"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	qbembedded "github.com/jeremyhahn/go-quicbaas/sdk/go/transport/embedded"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -37,6 +39,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -279,7 +283,7 @@ func TestSelectQUICAuth_NoBackend_ReturnsTypedError(t *testing.T) {
 	}
 	for name, config := range cases {
 		t.Run(name, func(t *testing.T) {
-			mw, validator, err := selectQUICAuth(config, nil, nil, logging.DefaultLogger())
+			mw, validator, err := selectQUICAuth(config, nil, nil, nil, logging.DefaultLogger())
 			require.Error(t, err)
 			var want ErrTransportAuthRequired
 			require.True(t, errors.As(err, &want), "error is %T, want ErrTransportAuthRequired", err)
@@ -293,18 +297,124 @@ func TestSelectQUICAuth_NoBackend_ReturnsTypedError(t *testing.T) {
 func TestSelectQUICAuth_JWTVerifier_BuildsRequiredMiddleware(t *testing.T) {
 	t.Parallel()
 	config := failClosedConfig()
-	config.App = &app.App{}
+	config.App = remoteQuicBaaSApp()
 	config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
 
-	mw, validator, err := selectQUICAuth(config, nil, nil, logging.DefaultLogger())
+	mw, validator, err := selectQUICAuth(config, nil, &mockSDKPEPClient{}, nil, logging.DefaultLogger())
 	require.NoError(t, err)
 	require.NotNil(t, mw)
 	require.NotNil(t, validator)
 }
 
+// #1988: a local-token QUIC request is decided by the IAM PEP for the token's
+// principal; removing the authorization checker wiring fails this test.
+func TestSelectQUICAuth_LocalValidator_AuthorizesEachOperationThroughIAM(t *testing.T) {
+	t.Parallel()
+	config := failClosedConfig()
+	config.App = remoteQuicBaaSApp()
+	config.PlatformJWTVerifier = alwaysValidJWTVerifier{claims: jwt.TokenClaims{
+		UserIDStr: "42", TenantID: "acme", Roles: []string{"operator"},
+	}}
+	var last *sdkiam.CheckRequest
+	pep := pepAllowing("42", "kms", "read", &last)
+
+	mw, _, err := selectQUICAuth(config, nil, pep, nil, logging.DefaultLogger())
+	require.NoError(t, err)
+	require.NotNil(t, mw)
+
+	// The principal holds kms:read: ListKeys is allowed...
+	_, resp := mw.GuardRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpKMSListKeys, Token: "jwt"})
+	assert.Nil(t, resp)
+	require.NotNil(t, last)
+	assert.Equal(t, sdkiam.CheckSubject{ID: "42", TenantID: "acme", Roles: []string{"operator"}}, last.Subject)
+	assert.Equal(t, "kms", last.Resource)
+	assert.Equal(t, "read", last.Action)
+
+	// ...but the same valid token cannot delete a key: the PEP is asked and refuses.
+	_, resp = mw.GuardRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpKMSDeleteKey, Token: "jwt"})
+	require.NotNil(t, resp)
+	assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
+	assert.Equal(t, "kms", last.Resource)
+	assert.Equal(t, "delete", last.Action)
+}
+
+// Local tokens carry no scope claims: without the IAM policy enforcement
+// point the QUIC transport has no decision point and is refused (#1988).
+func TestSelectQUICAuth_JWTVerifier_NoPEP_ReturnsTypedError(t *testing.T) {
+	t.Parallel()
+	config := failClosedConfig()
+	config.App = &app.App{}
+	config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
+
+	mw, validator, err := selectQUICAuth(config, nil, nil, nil, logging.DefaultLogger())
+	require.Error(t, err)
+	var want ErrTransportAuthRequired
+	require.True(t, errors.As(err, &want), "error is %T, want ErrTransportAuthRequired", err)
+	assert.Equal(t, transportQUIC, want.Transport)
+	assert.Nil(t, mw)
+	assert.Nil(t, validator)
+}
+
+// remoteQuicBaaSApp is an App whose IAM service, and so its policy
+// enforcement point, is a remote quicbaas server: the deployment in which
+// the PEP answers Check.
+func remoteQuicBaaSApp() *app.App {
+	return &app.App{QuicBaaSConfig: &quicbaas.Config{Transport: quicbaas.TransportGRPC}}
+}
+
+// embeddedQuicBaaSService stands in for the in-process quicbaas service. The
+// embedded transport's IAM.PEP/Check handler never reaches the service, so
+// no method of it is called.
+type embeddedQuicBaaSService struct{ qbservice.QuicBaaS }
+
+// TestSelectQUICAuth_EmbeddedPEP_RefusesLocalTokenListener drives the real
+// quicbaas SDK embedded transport, the PEP an embedded deployment (the
+// default) gets from Factory.SDK(): its Check cannot decide, so a QUIC
+// listener that authorizes local tokens through it would answer every
+// classified request with an internal error. selectQUICAuth refuses it at
+// startup with ErrEmbeddedPEPUnavailable naming the working alternatives
+// (#1988, PR #2000 review).
+func TestSelectQUICAuth_EmbeddedPEP_RefusesLocalTokenListener(t *testing.T) {
+	t.Parallel()
+	tr, err := qbembedded.New(embeddedQuicBaaSService{})
+	require.NoError(t, err)
+	pep := sdkiam.NewPEPClient(tr)
+
+	// The embedded SDK PEP cannot authorize even a well-formed request.
+	_, checkErr := pep.Check(context.Background(), &sdkiam.CheckRequest{
+		Subject:  sdkiam.CheckSubject{ID: "42", TenantID: "acme"},
+		Action:   "read",
+		Resource: "kms",
+	})
+	require.Error(t, checkErr, "the embedded SDK PEP answered Check; this refusal can be lifted")
+
+	cases := map[string]*app.App{
+		"explicit embedded transport":                     {QuicBaaSConfig: &quicbaas.Config{Transport: quicbaas.TransportEmbedded}},
+		"absent quicbaas section is the embedded default": {},
+	}
+	for name, application := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			config := failClosedConfig()
+			config.App = application
+			config.PlatformJWTVerifier = alwaysValidJWTVerifier{claims: jwt.TokenClaims{UserIDStr: "42", TenantID: "acme"}}
+
+			mw, validator, err := selectQUICAuth(config, nil, pep, nil, logging.DefaultLogger())
+			var want ErrEmbeddedPEPUnavailable
+			require.True(t, errors.As(err, &want), "error is %T (%v), want ErrEmbeddedPEPUnavailable", err, err)
+			assert.Equal(t, transportQUIC, want.Transport)
+			for _, remedy := range []string{"platform-token", "--enable-mtls"} {
+				assert.Contains(t, err.Error(), remedy)
+			}
+			assert.Nil(t, mw)
+			assert.Nil(t, validator)
+		})
+	}
+}
+
 func TestSelectQUICAuth_SharedValidator_BuildsRequiredMiddleware(t *testing.T) {
 	t.Parallel()
-	mw, validator, err := selectQUICAuth(failClosedConfig(), &platformTokenValidator{}, nil, logging.DefaultLogger())
+	mw, validator, err := selectQUICAuth(failClosedConfig(), &platformTokenValidator{}, nil, nil, logging.DefaultLogger())
 	require.NoError(t, err)
 	require.NotNil(t, mw)
 	assert.Nil(t, validator)
@@ -321,7 +431,7 @@ func TestSelectQUICAuth_MTLS_AuthenticatesByCertificate(t *testing.T) {
 	config.MTLSPrincipals = operatorPrincipals()
 	bundle := testutil.GenerateTestTLSBundle(t)
 
-	mw, validator, err := selectQUICAuth(config, nil, bundle.CAPool, logging.DefaultLogger())
+	mw, validator, err := selectQUICAuth(config, nil, nil, bundle.CAPool, logging.DefaultLogger())
 	require.NoError(t, err)
 	require.NotNil(t, mw, "the QUIC dispatcher always authorizes; mTLS supplies the identity")
 	assert.Nil(t, validator)
@@ -347,7 +457,7 @@ func TestSelectQUICAuth_MTLS_WithSharedValidator_ValidatesPresentedTokens(t *tes
 	config := failClosedConfig()
 	config.EnableMTLS = true
 	shared := &platformTokenValidator{}
-	mw, _, err := selectQUICAuth(config, shared, testutil.GenerateTestTLSBundle(t).CAPool, logging.DefaultLogger())
+	mw, _, err := selectQUICAuth(config, shared, nil, testutil.GenerateTestTLSBundle(t).CAPool, logging.DefaultLogger())
 	require.NoError(t, err)
 	require.NotNil(t, mw)
 
@@ -363,7 +473,7 @@ func TestSelectQUICAuth_MTLSWithoutClientCAPool_ReturnsTypedError(t *testing.T) 
 	config := failClosedConfig()
 	config.EnableMTLS = true
 
-	mw, validator, err := selectQUICAuth(config, nil, nil, logging.DefaultLogger())
+	mw, validator, err := selectQUICAuth(config, nil, nil, nil, logging.DefaultLogger())
 	require.Error(t, err)
 	var want ErrTransportAuthRequired
 	require.True(t, errors.As(err, &want), "error is %T, want ErrTransportAuthRequired", err)
@@ -484,7 +594,7 @@ func TestSelectQUICAuth_SkipIAMValidation_IsTheOnlyOptOut(t *testing.T) {
 	t.Parallel()
 	config := DefaultConfig()
 	config.SkipIAMValidation = true
-	mw, validator, err := selectQUICAuth(config, nil, nil, logging.DefaultLogger())
+	mw, validator, err := selectQUICAuth(config, nil, nil, nil, logging.DefaultLogger())
 	require.NoError(t, err)
 	require.NotNil(t, mw)
 	assert.Nil(t, validator)
@@ -705,4 +815,60 @@ func TestRESTServerStart_MTLSWithPool_Listens(t *testing.T) {
 	require.NoError(t, server.Start())
 	t.Cleanup(func() { _ = server.ForceStop() })
 	assert.True(t, server.IsRunning())
+}
+
+// quicPEPGuardConfig is a QUIC-only daemon whose local tokens would be
+// authorized by the embedded quicbaas SDK PEP, which cannot decide a Check.
+func quicPEPGuardConfig() *Config {
+	config := pepGuardConfig()
+	config.EnableGRPCTCP = false
+	config.EnableQUIC = true
+	return config
+}
+
+// TestValidateQUICAuthorization_RejectsEmbeddedPEPPath: the QUIC local-token
+// path through the embedded PEP is refused at configuration time (PR #2000
+// review round 3).
+func TestValidateQUICAuthorization_RejectsEmbeddedPEPPath(t *testing.T) {
+	err := quicPEPGuardConfig().validateQUICAuthorization()
+	var want ErrEmbeddedPEPUnavailable
+	require.True(t, errors.As(err, &want), "error is %T (%v), want ErrEmbeddedPEPUnavailable", err, err)
+	assert.Equal(t, transportQUIC, want.Transport)
+}
+
+func TestValidateQUICAuthorization_AcceptsWorkingModes(t *testing.T) {
+	cases := map[string]func(*Config){
+		"mTLS enabled":            func(c *Config) { c.EnableMTLS = true },
+		"platform tokens enabled": func(c *Config) { c.PlatformToken.Enabled = true },
+		"remote quicbaas transport": func(c *Config) {
+			c.App.QuicBaaSConfig.Transport = quicbaas.TransportGRPC
+		},
+		"QUIC disabled":                  func(c *Config) { c.EnableQUIC = false },
+		"testing-only IAM opt-out":       func(c *Config) { c.SkipIAMValidation = true },
+		"no App leaves it to IAM wiring": func(c *Config) { c.App = nil },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			config := quicPEPGuardConfig()
+			mutate(config)
+			require.NoError(t, config.validateQUICAuthorization())
+		})
+	}
+}
+
+// TestNew_RefusesEmbeddedQUICPEPPathBeforeSubsystems: New refuses the QUIC
+// embedded-PEP path before it starts any subsystem: a New that reached
+// subsystem setup would fail there with another error (IAM wiring, then the
+// overlay, enabled here with no VTEP settings), and one that got past the
+// overlay would leave its controller running with no daemon handle to stop
+// it (PR #2000 review round 3).
+func TestNew_RefusesEmbeddedQUICPEPPathBeforeSubsystems(t *testing.T) {
+	config := quicPEPGuardConfig()
+	config.App.SDNConfig = &sdn.Config{Overlay: &sdn.OverlayConfig{Enabled: true}}
+
+	d, err := New(config)
+	var want ErrEmbeddedPEPUnavailable
+	require.True(t, errors.As(err, &want), "New() error is %T (%v), want ErrEmbeddedPEPUnavailable", err, err)
+	assert.Equal(t, transportQUIC, want.Transport)
+	assert.Nil(t, d, "New() returned a daemon alongside the refusal")
 }

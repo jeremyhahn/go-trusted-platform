@@ -183,7 +183,7 @@ func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicb
 // operations are still refused. A configuration with no backend is refused
 // with ErrTransportAuthRequired instead of yielding an unauthenticated server
 // (#550).
-func selectQUICAuth(config *Config, shared *platformTokenValidator, clientCAPool *x509.CertPool, logger *logging.Logger) (*quic.AuthMiddleware, *grpcTokenValidator, error) {
+func selectQUICAuth(config *Config, shared *platformTokenValidator, pep quicbaassdk.IAMPEPClient, clientCAPool *x509.CertPool, logger *logging.Logger) (*quic.AuthMiddleware, *grpcTokenValidator, error) {
 	if config.EnableMTLS {
 		if clientCAPool == nil {
 			return nil, nil, ErrTransportAuthRequired{
@@ -223,8 +223,24 @@ func selectQUICAuth(config *Config, shared *platformTokenValidator, clientCAPool
 			Reason:    "neither the platform-token validator, the QuicBaaS service nor a platform JWT verifier is available",
 		}
 	}
+	// Local tokens carry no scope claims: the IAM policy enforcement point
+	// decides each operation, as on gRPC (#1988).
+	authorizer, err := newIAMTokenAuthorizer(local, pep)
+	if err != nil {
+		return nil, nil, ErrTransportAuthRequired{
+			Transport: transportQUIC,
+			Reason:    "tokens without scope claims need the IAM policy enforcement point to be authorized: " + err.Error(),
+		}
+	}
+	// The embedded quicbaas SDK PEP (the default deployment) cannot decide a
+	// Check, so every classified request would fail with an internal error:
+	// refuse the listener at startup, as gRPC does (PR #2000 review).
+	if config.quicbaasEmbedded() {
+		return nil, nil, ErrEmbeddedPEPUnavailable{Transport: transportQUIC}
+	}
 	return quic.NewAuthMiddleware(
 		quic.WithQUICTokenValidator(local),
+		quic.WithQUICAuthorizationChecker(authorizer),
 		quic.WithQUICRequireAuth(true),
 	), local, nil
 }

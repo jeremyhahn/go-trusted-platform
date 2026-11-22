@@ -43,6 +43,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 	restntp "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ntp"
 	restoverlay "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/overlay"
+	restproxy "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/proxy"
 	restpxe "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/pxe"
 	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/sdn"
@@ -69,6 +70,9 @@ type Router struct {
 	// gatedGroups memoises one protected route group per role set. See
 	// gated() in authz.go.
 	gatedGroups map[string]*mux.Router
+	// stubRoutes are the placeholder routes quicbaasStubRoutes adds; the
+	// capabilities listing reports them blocked on integration.
+	stubRoutes map[*mux.Route]struct{}
 	router.WebServiceRouter
 }
 
@@ -215,6 +219,7 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.overlayRoutes()
 	v1Router.ntpRoutes()
 	v1Router.vpnRoutes()
+	v1Router.proxyRoutes()
 	v1Router.appServiceRoutes()
 	v1Router.pxeRoutes()
 	v1Router.sdnRoutes()
@@ -222,7 +227,9 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.tenantRoutes()
 	v1Router.tpmRoutes()
 	v1Router.vtpmRoutes()
-	v1Router.quicbaasStubRoutes()
+	// The quicbaas placeholders are recorded as they register so the
+	// capabilities listing reports them blocked on integration.
+	v1Router.stubRoutes = recordNewRoutes(v1Router.router, v1Router.quicbaasStubRoutes)
 
 	// Always mount /platform/service-registry last so it observes the
 	// full set of *Routes() outcomes recorded above. The endpoint is
@@ -232,6 +239,12 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	if v1Router.serviceRegistry != nil {
 		v1Router.serviceRegistry.RegisterStatusEndpoint(v1Router.router)
 	}
+
+	// GET /capabilities lists what this table offers (#2033); it walks
+	// the table per request, so it sees every route registered above.
+	// Any authenticated caller may read it.
+	registerCapabilitiesEndpoint(v1Router.router, v1Router.serviceRegistry,
+		v1Router.stubRoutes, v1Router.responseWriter, v1Router.authenticatedOnly())
 }
 
 // quicbaasStubRoutes registers placeholder GET handlers for QuicBaaS
@@ -866,6 +879,36 @@ func (v1Router *Router) vpnRoutes() {
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
+// proxyRoutes mounts the ProxyService routes on /api/v1/proxy (#2061), the
+// surface the web SDK's client.proxy calls.
+func (v1Router *Router) proxyRoutes() {
+	server := v1Router.restHandlerRegistry.ProxyServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("Proxy service server is nil - proxy routes not registered")
+		return
+	}
+	_, guard, err := v1Router.authorization()
+	if err != nil {
+		v1Router.logger.Error(err,
+			"Proxy routes not registered: the RBAC guard could not be built")
+		return
+	}
+	r := restproxy.NewRouter(
+		v1Router.logger,
+		server,
+		v1Router.responseWriter)
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		r.SetScopeAuthorizer(scoped)
+	}
+	// The reverse-proxy routes, pools and zone matrix decide what reaches
+	// which backend and are one platform-wide store with no tenant filter:
+	// operator work behind the admin gate, then the system tenant, then
+	// proxy:read, proxy:write or proxy:delete per route, as on gRPC, QUIC
+	// and MCP.
+	r.SetSystemTenantGuard(guard.RequireTenant(v1Router.restHandlerRegistry.TenantID()))
+	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+}
+
 // appServiceRoutes mounts /cache, /scheduler, /messaging and /object-storage
 // over the daemon's Cache, Scheduler, Messaging and ObjectStorage servers,
 // with the route table the daemon REST listener serves. Like the VPN routes
@@ -886,16 +929,18 @@ func (v1Router *Router) appServiceRoutes() {
 }
 
 // scopeRouteGuard checks an application service route's scope with the
-// platform token middleware. Without one the routes stay on the role gate
-// alone, as the VPN routes do under the legacy JWT handler: its sessions
-// carry roles, not scopes.
+// platform token middleware. Without one the guard fails closed: every
+// guarded route answers 403, since a role-only session (the legacy JWT
+// handler) carries no scopes to check (#1990).
 type scopeRouteGuard struct {
 	authorizer middleware.ScopeAuthorizer
 }
 
 func (g scopeRouteGuard) Require(scope string, next http.HandlerFunc) http.HandlerFunc {
 	if g.authorizer == nil {
-		return next
+		return func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		}
 	}
 	return g.authorizer.RequireScope(scope)(next).ServeHTTP
 }

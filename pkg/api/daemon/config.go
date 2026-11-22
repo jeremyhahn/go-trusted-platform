@@ -527,6 +527,26 @@ func (c *Config) validateGRPCAuthorization() error {
 	return nil
 }
 
+// validateQUICAuthorization refuses a QUIC listener whose local tokens would
+// be authorized by the IAM policy enforcement point while that point is the
+// embedded quicbaas SDK, which answers every Check ServiceNotConfigured: the
+// selectQUICAuth path with mTLS, the testing-only IAM opt-out and platform
+// tokens all off. daemon.New runs it before any subsystem starts, so the
+// refusal leaves nothing running (PR #2000 review); selectQUICAuth keeps its
+// own check as defense in depth.
+func (c *Config) validateQUICAuthorization() error {
+	if c.quicAuthorizesThroughPEP() && c.quicbaasEmbedded() {
+		return ErrEmbeddedPEPUnavailable{Transport: transportQUIC}
+	}
+	return nil
+}
+
+// quicAuthorizesThroughPEP reports whether selectQUICAuth would authorize
+// QUIC requests with local tokens through the IAM policy enforcement point.
+func (c *Config) quicAuthorizesThroughPEP() bool {
+	return c.EnableQUIC && !c.EnableMTLS && !c.SkipIAMValidation && !c.PlatformToken.Enabled
+}
+
 // grpcAuthorizesThroughPEP reports whether the gRPC TCP listener will hand
 // every scoped call to the IAM policy enforcement point. That is the
 // selectGRPCTCPAuth path left when neither mTLS, platform tokens nor the

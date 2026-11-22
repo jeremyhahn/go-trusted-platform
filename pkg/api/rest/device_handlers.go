@@ -236,6 +236,20 @@ type DeviceActivateResponse struct {
 // handler-local stub that returned true unconditionally; it is gone.
 type DeviceAttestRequest struct {
 	Evidence []byte `json:"evidence"`
+	// ChallengeID names a challenge from POST
+	// /api/v1/devices/{id}/attest/challenge (IssueAttestationChallenge);
+	// the evidence must quote that challenge's nonce. It is single use.
+	ChallengeID string `json:"challenge_id,omitempty"`
+}
+
+// DeviceAttestChallengeResponse is the body of POST
+// /api/v1/devices/{id}/attest/challenge: a server-issued, single-use nonce
+// the device quotes and sends back with ChallengeID on the attest route.
+// The field names match the pkg/webservice device surface.
+type DeviceAttestChallengeResponse struct {
+	ChallengeID string    `json:"challenge_id"`
+	Nonce       []byte    `json:"nonce"`
+	ExpiresAt   time.Time `json:"expires_at"`
 }
 
 // DeviceAttestResponse reports what was verified, not merely that the call
@@ -574,6 +588,10 @@ func (h *DeviceHandlers) RegisterRoutes(router *mux.Router) {
 	// the endpoint existed and reported success without verifying anything.
 	if h.attestService != nil {
 		router.HandleFunc("/api/v1/devices/{id}/attest", h.handleAttestDevice).Methods(http.MethodPost)
+		// The challenge route creates single-use server state (a nonce the
+		// next attest call consumes), so it is a POST and needs device:write
+		// like the attest route.
+		router.HandleFunc("/api/v1/devices/{id}/attest/challenge", h.handleIssueAttestationChallenge).Methods(http.MethodPost)
 	}
 
 	h.logger.Info("Device REST routes registered")
@@ -921,8 +939,9 @@ func (h *DeviceHandlers) handleAttestDevice(w http.ResponseWriter, r *http.Reque
 	}
 
 	resp, err := h.attestService.AttestDevice(ctx, &platformv1.AttestDeviceRequest{
-		DeviceId: idStr,
-		Evidence: req.Evidence,
+		DeviceId:    idStr,
+		Evidence:    req.Evidence,
+		ChallengeId: req.ChallengeID,
 	})
 	if err != nil {
 		h.logger.Error("Device attestation could not be evaluated", "id", idStr, "error", err)
@@ -937,6 +956,40 @@ func (h *DeviceHandlers) handleAttestDevice(w http.ResponseWriter, r *http.Reque
 	)
 
 	h.writeJSON(w, http.StatusOK, attestResponseFromProto(resp))
+}
+
+// handleIssueAttestationChallenge handles POST
+// /api/v1/devices/{id}/attest/challenge. It reads no body: the server picks
+// the nonce, binds it to the device and the caller's tenant, and the next
+// attest call that names the challenge consumes it.
+func (h *DeviceHandlers) handleIssueAttestationChallenge(w http.ResponseWriter, r *http.Request) {
+	if h.attestService == nil {
+		h.writeError(w, http.StatusServiceUnavailable, ErrDeviceAttestationUnavailable{})
+		return
+	}
+
+	idStr := mux.Vars(r)["id"]
+	if idStr == "" {
+		h.writeError(w, http.StatusBadRequest, ErrDeviceInvalidID{})
+		return
+	}
+
+	resp, err := h.attestService.IssueAttestationChallenge(r.Context(),
+		&platformv1.IssueAttestationChallengeRequest{DeviceId: idStr})
+	if err != nil {
+		h.logger.Error("Device attestation challenge could not be issued", "id", idStr, "error", err)
+		h.writeAttestationError(w, err)
+		return
+	}
+
+	out := DeviceAttestChallengeResponse{
+		ChallengeID: resp.GetChallengeId(),
+		Nonce:       resp.GetNonce(),
+	}
+	if resp.GetExpiresAt() != nil {
+		out.ExpiresAt = resp.GetExpiresAt().AsTime()
+	}
+	h.writeJSON(w, http.StatusOK, out)
 }
 
 // attestResponseFromProto maps the gRPC attestation reply onto the REST
@@ -970,6 +1023,8 @@ func attestResponseFromProto(resp *platformv1.AttestDeviceResponse) DeviceAttest
 // writeAttestationError maps a verifier error onto an HTTP status. The
 // verifier returns an error only when the request could not be evaluated, so
 // these are all client-correctable except an unconfigured dependency.
+// PermissionDenied (a challenge issued to another tenant) is 403 and
+// Unimplemented (a service without challenge support) is 501.
 func (h *DeviceHandlers) writeAttestationError(w http.ResponseWriter, err error) {
 	switch status.Code(err) {
 	case codes.NotFound:
@@ -978,6 +1033,10 @@ func (h *DeviceHandlers) writeAttestationError(w http.ResponseWriter, err error)
 		h.writeError(w, http.StatusBadRequest, ErrDeviceAttestationRejected{Reason: statusMessage(err)})
 	case codes.FailedPrecondition:
 		h.writeError(w, http.StatusConflict, ErrDeviceAttestationRejected{Reason: statusMessage(err)})
+	case codes.PermissionDenied:
+		h.writeError(w, http.StatusForbidden, ErrDeviceAttestationRejected{Reason: statusMessage(err)})
+	case codes.Unimplemented:
+		h.writeError(w, http.StatusNotImplemented, ErrDeviceAttestationRejected{Reason: statusMessage(err)})
 	case codes.Unavailable:
 		h.writeError(w, http.StatusServiceUnavailable, ErrDeviceAttestationRejected{Reason: statusMessage(err)})
 	default:

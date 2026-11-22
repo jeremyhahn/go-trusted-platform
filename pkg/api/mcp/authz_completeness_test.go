@@ -92,7 +92,7 @@ func (allowAllAuthService) CheckPermission(context.Context, string, string, stri
 // is still complete, it is simply no longer consulted for unknown tools. Only
 // calling AuthorizeTool catches that.
 func TestUnclassifiedToolIsDenied(t *testing.T) {
-	checker := NewAuthorizationChecker(allowAllAuthService{}, nil)
+	checker := pepChecker(allowAllAuthService{}, nil)
 
 	// A name that is deliberately not registered and not in the map.
 	_, err := checker.AuthorizeTool(context.Background(), "platform_not_a_real_tool", "any-token")
@@ -108,7 +108,7 @@ func TestUnclassifiedToolIsDenied(t *testing.T) {
 // an explicit "" means "no permission required" and must still be served, or
 // the two invitee invitation tools break.
 func TestClassifiedToolWithEmptyPermissionIsAllowed(t *testing.T) {
-	checker := NewAuthorizationChecker(allowAllAuthService{}, nil)
+	checker := pepChecker(allowAllAuthService{}, nil)
 
 	_, err := checker.AuthorizeTool(context.Background(), "platform_invitation_accept", "any-token")
 
@@ -278,7 +278,7 @@ func TestIAMToolsAuthorizeByScope(t *testing.T) {
 			return resource == "iam" && action == "read", nil
 		},
 	}
-	checker := NewAuthorizationChecker(readOnly, nil)
+	checker := pepChecker(readOnly, nil)
 
 	assert.Nil(t, checker.CheckToolAuthorization(context.Background(), "iam_list_users", "token"))
 
@@ -322,7 +322,7 @@ func TestLastClassifiedToolsAuthorizeByScope(t *testing.T) {
 					return resource == tc.resource && action == tc.action, nil
 				},
 			}
-			checker := NewAuthorizationChecker(exact, nil)
+			checker := pepChecker(exact, nil)
 
 			assert.Nil(t, checker.CheckToolAuthorization(context.Background(), tc.tool, "token"))
 		})
@@ -333,7 +333,7 @@ func TestLastClassifiedToolsAuthorizeByScope(t *testing.T) {
 					return resource == tc.resource && action != tc.action, nil
 				},
 			}
-			checker := NewAuthorizationChecker(otherActions, nil)
+			checker := pepChecker(otherActions, nil)
 
 			err := checker.CheckToolAuthorization(context.Background(), tc.tool, "token")
 			require.NotNil(t, err, "%s needs %s:%s", tc.tool, tc.resource, tc.action)
@@ -352,7 +352,7 @@ func TestIAMAuthenticateIsOpen(t *testing.T) {
 			return false, nil
 		},
 	}
-	checker := NewAuthorizationChecker(denyAll, nil)
+	checker := pepChecker(denyAll, nil)
 
 	_, err := checker.AuthorizeTool(context.Background(), "iam_authenticate", "")
 
@@ -423,7 +423,7 @@ func TestOverlayToolsAuthorizeByScope(t *testing.T) {
 			return resource == "sdn" && action == "read", nil
 		},
 	}
-	checker := NewAuthorizationChecker(readOnly, nil)
+	checker := pepChecker(readOnly, nil)
 
 	assert.Nil(t, checker.CheckToolAuthorization(context.Background(), "overlay_tunnel_stats", "token"))
 
