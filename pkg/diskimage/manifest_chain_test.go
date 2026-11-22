@@ -34,6 +34,7 @@ func newIntermediatePKI(t *testing.T, withChain bool) manifestPKI {
 			tmpl.IsCA, tmpl.BasicConstraintsValid, tmpl.KeyUsage = true, true, x509.KeyUsageCertSign
 		} else {
 			tmpl.KeyUsage = x509.KeyUsageDigitalSignature
+			tmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning}
 		}
 		if parent == nil {
 			parent = tmpl

@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
@@ -30,6 +31,12 @@ type testPKI struct {
 
 func newPKI(t *testing.T, newKey func() (crypto.Signer, error)) testPKI {
 	t.Helper()
+	return newPKIWithUsage(t, newKey, []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning})
+}
+
+// newPKIWithUsage is newPKI with a leaf whose extended key usage is usage.
+func newPKIWithUsage(t *testing.T, newKey func() (crypto.Signer, error), usage []x509.ExtKeyUsage) testPKI {
+	t.Helper()
 	rootKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +58,7 @@ func newPKI(t *testing.T, newKey func() (crypto.Signer, error)) testPKI {
 	leafTmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "manifest signer"},
 		NotBefore: signedAt.Add(-time.Hour), NotAfter: signedAt.Add(24 * time.Hour),
-		KeyUsage: x509.KeyUsageDigitalSignature,
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: usage,
 	}
 	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, root, key.Public(), rootKey)
 	if err != nil {
@@ -260,6 +267,72 @@ func TestVerifyManifestRefuses(t *testing.T) {
 			var se *SignatureError
 			if !errors.As(err, &se) || !strings.Contains(err.Error(), tc.want) || got.Manifest.Banks != nil {
 				t.Fatalf("err %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// signAs re-signs good, a signed manifest, with p's key and p's chain as
+// x5chain, so only the signing certificate differs.
+func signAs(t *testing.T, good []byte, p testPKI) []byte {
+	t.Helper()
+	msg, hdr := decodeSign1(t, good)
+	hdr.X5Chain = nil
+	for _, c := range p.chain {
+		hdr.X5Chain = append(hdr.X5Chain, c.Raw)
+	}
+	kid := sha256.Sum256(p.chain[0].Raw)
+	hdr.KID = kid[:]
+	protected, err := encMode.Marshal(hdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tbs, err := toBeSigned(protected, msg.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg.Protected = protected
+	if msg.Signature, err = sign(rand.Reader, p.key, AlgES384, tbs); err != nil {
+		t.Fatal(err)
+	}
+	return encodeSign1(t, msg)
+}
+
+// notCodeSigning are leaf extended key usages a manifest signer must not have.
+var notCodeSigning = []struct {
+	name  string
+	usage []x509.ExtKeyUsage
+}{
+	{"TLS only", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}},
+	{"no extended key usage", nil},
+}
+
+func TestSignManifestRefusesASignerThatIsNotCodeSigning(t *testing.T) {
+	for _, tc := range notCodeSigning {
+		t.Run(tc.name, func(t *testing.T) {
+			pki := newPKIWithUsage(t, p384, tc.usage)
+			data, err := SignManifest(testManifest(t), pki.key, pki.chain, testSigner)
+			var se *SignatureError
+			if !errors.As(err, &se) || !strings.Contains(err.Error(), "not a code-signing certificate") || data != nil {
+				t.Fatalf("data %d bytes, err %v, want a code-signing refusal", len(data), err)
+			}
+		})
+	}
+}
+
+func TestVerifyManifestRefusesASignerThatIsNotCodeSigning(t *testing.T) {
+	pki := newPKI(t, p384)
+	good, err := SignManifest(testManifest(t), pki.key, pki.chain, testSigner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range notCodeSigning {
+		t.Run(tc.name, func(t *testing.T) {
+			other := newPKIWithUsage(t, p384, tc.usage)
+			got, err := VerifyManifest(signAs(t, good, other), other.roots, signedAt)
+			var se *SignatureError
+			if !errors.As(err, &se) || !strings.Contains(err.Error(), "not a code-signing certificate") || got.Manifest.Banks != nil || got.Chain != nil {
+				t.Fatalf("err %v, want a code-signing refusal", err)
 			}
 		})
 	}

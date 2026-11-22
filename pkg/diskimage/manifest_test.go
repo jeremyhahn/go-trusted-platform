@@ -54,6 +54,13 @@ type manifestPKI struct {
 
 func newManifestPKI(t *testing.T) manifestPKI {
 	t.Helper()
+	return newManifestPKIWithUsage(t, []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning})
+}
+
+// newManifestPKIWithUsage is newManifestPKI with a leaf whose extended key
+// usage is usage.
+func newManifestPKIWithUsage(t *testing.T, usage []x509.ExtKeyUsage) manifestPKI {
+	t.Helper()
 	rootKey, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	now := time.Now()
 	rootTmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "platform CA"},
@@ -65,7 +72,7 @@ func newManifestPKI(t *testing.T) manifestPKI {
 	root, _ := x509.ParseCertificate(rootDER)
 	key, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	leafTmpl := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "image builds"},
-		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour).Truncate(time.Second), KeyUsage: x509.KeyUsageDigitalSignature}
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour).Truncate(time.Second), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: usage}
 	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, root, key.Public(), rootKey)
 	if err != nil {
 		t.Fatal(err)
@@ -300,6 +307,21 @@ func TestWriteManifestRefuses(t *testing.T) {
 				t.Errorf("a refused manifest was written: %v", err)
 			}
 		})
+	}
+}
+
+func TestWriteManifestRefusesATLSOnlyManifestCertificate(t *testing.T) {
+	pki := newManifestPKIWithUsage(t, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
+	cfg := &BuildConfig{ManifestKey: "kms://build/manifest", KMSClients: pki.clients()}
+	target, _ := NewTarget("qemu-virt", "")
+	image := filepath.Join(t.TempDir(), "img.img")
+	path, err := cfg.writeManifest(context.Background(), image, hex.EncodeToString(make([]byte, 32)), target, manifestBanks())
+	var me *MeasureError
+	if want := "building the manifest certificate's chain"; !errors.As(err, &me) || me.Step != want || path != "" {
+		t.Fatalf("path %q, err %v, want step %q", path, err, want)
+	}
+	if _, err := os.Stat(ManifestPath(image)); !os.IsNotExist(err) {
+		t.Errorf("a refused manifest was written: %v", err)
 	}
 }
 
