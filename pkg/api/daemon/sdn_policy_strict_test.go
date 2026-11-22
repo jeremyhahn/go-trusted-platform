@@ -131,9 +131,9 @@ func (c *unconfirmedDeleteSwitch) DeleteFlowStrict(ctx context.Context, bridge s
 	return errors.New("barrier: confirmation timed out")
 }
 
-// A strict delete that removed the shared entry but failed to confirm must
-// still restore the surviving policy's flow, and the deleted policy stays
-// recorded with an error returned (#2021 Codex).
+// A strict delete that removed the shared entry but failed to confirm puts
+// back the effective entries, including the retained policy's own, returns
+// an error and keeps the policy recorded (#2021 Codex round 2).
 func TestSDNService_DeletePolicy_RestoresSurvivorWhenTheDeleteConfirmationFails(t *testing.T) {
 	_, loose := newLooseDeleteSDNService(t)
 	sw := &unconfirmedDeleteSwitch{looseDeleteSwitch: loose}
@@ -156,8 +156,8 @@ func TestSDNService_DeletePolicy_RestoresSurvivorWhenTheDeleteConfirmationFails(
 	require.Error(t, err, "an unconfirmed delete must not report success")
 
 	actions, ok := sw.entry("tcp,tp_dst=22")
-	require.True(t, ok, "the surviving policy's entry must be back on the switch")
-	require.Equal(t, "drop", actions)
+	require.True(t, ok, "the retained policy's entry must be back on the switch")
+	require.Equal(t, "normal", actions, "the retained pol-b's own allow is back, so the switch matches the record")
 	require.Equal(t, "active", policyStatus(svc, "pol-a"))
 	require.NotEmpty(t, policyStatus(svc, "pol-b"), "a policy whose delete failed stays recorded")
 }
