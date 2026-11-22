@@ -686,6 +686,57 @@ func TestListUsers_CountsThePageWhenIAMSendsNoTotal(t *testing.T) {
 	assert.Equal(t, uint64(2), reply.GetPagination().GetTotalItems())
 }
 
+func TestListUsers_KeepsTheTotalIAMReports(t *testing.T) {
+	t.Parallel()
+	iamClient := &mockIAMClient{
+		listUsersFn: func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
+			return &iamsdk.ListUsersResponse{
+				Users: []iamsdk.User{
+					{ID: "user-1", TenantID: tenantID, Email: "user1@example.com"},
+					{ID: "user-2", TenantID: tenantID, Email: "user2@example.com"},
+				},
+				Pagination: iamsdk.PaginationInfo{TotalCount: 2},
+			}, nil
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/iam/tenants/tenant-1/users?offset=50", nil)
+	req = mux.SetURLVars(req, map[string]string{"tenant": "tenant-1"})
+	rec := httptest.NewRecorder()
+
+	handlers.ListUsers(rec, req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+	reply := &platformv1.ListIAMUsersResponse{}
+	decodeProtoReply(t, writer, reply)
+	// IAM is not sent the offset, so its count is the total as reported.
+	assert.Equal(t, int64(2), reply.GetTotal())
+}
+
+func TestListUsers_ReportsZeroForAnEmptyPage(t *testing.T) {
+	t.Parallel()
+	iamClient := &mockIAMClient{
+		listUsersFn: func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
+			return &iamsdk.ListUsersResponse{}, nil
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/iam/tenants/tenant-1/users?offset=50", nil)
+	req = mux.SetURLVars(req, map[string]string{"tenant": "tenant-1"})
+	rec := httptest.NewRecorder()
+
+	handlers.ListUsers(rec, req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+	reply := &platformv1.ListIAMUsersResponse{}
+	decodeProtoReply(t, writer, reply)
+	assert.Equal(t, int64(0), reply.GetTotal())
+}
+
 func TestListUsers_WithPagination(t *testing.T) {
 	t.Parallel()
 	iamClient := &mockIAMClient{
