@@ -21,8 +21,36 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+const PROXY_OPS = [
+  'GET /api/v1/proxy/routes',
+  'POST /api/v1/proxy/routes',
+  'GET /api/v1/proxy/routes/{id}',
+  'PUT /api/v1/proxy/routes/{id}',
+  'DELETE /api/v1/proxy/routes/{id}',
+  'GET /api/v1/proxy/pools',
+  'POST /api/v1/proxy/pools',
+  'GET /api/v1/proxy/pools/{id}',
+  'PUT /api/v1/proxy/pools/{id}',
+  'DELETE /api/v1/proxy/pools/{id}',
+  'GET /api/v1/proxy/config',
+  'GET /api/v1/proxy/status',
+  'POST /api/v1/proxy/reload',
+  'GET /api/v1/proxy/zone-matrix',
+] as const;
+
+// The server's capabilities listing: every proxy op enabled except those in off.
+function caps(off: string[] = []): Answer {
+  const capabilities = PROXY_OPS.map((op) =>
+    off.includes(op)
+      ? { op, kind: 'route', enabled: false, reason: 'not-configured: proxy' }
+      : { op, kind: 'route', enabled: true },
+  );
+  return ok({ capabilities, total: capabilities.length, enabled: capabilities.filter((c) => c.enabled).length });
+}
+
 function shared(): Record<string, Answer> {
   return {
+    'GET /api/v1/capabilities': caps(),
     'GET /api/v1/proxy/pools': ok({
       pools: [
         {
@@ -193,6 +221,38 @@ describe('ProxyPoolsPage', () => {
     const alert = await within(await screen.findByTestId('proxy-pools')).findByRole('alert');
     expect(alert.textContent).toContain('proxy: read scope required');
     await within(screen.getByTestId('proxy-config')).findByText('4');
+  });
+
+  it('withholds the controls the server does not offer', async () => {
+    stubControlPlane({
+      ...shared(),
+      'GET /api/v1/capabilities': caps([
+        'POST /api/v1/proxy/pools',
+        'PUT /api/v1/proxy/pools/{id}',
+        'DELETE /api/v1/proxy/pools/{id}',
+      ]),
+    });
+    await renderPage();
+
+    for (const name of ['New pool', 'Edit p1', 'Delete p1']) {
+      const button = screen.getByRole('button', { name }) as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
+      expect(button.getAttribute('data-capability-enabled')).toBe('false');
+      expect(button.getAttribute('title')).toBe('not-configured: proxy');
+    }
+  });
+
+  it('makes no proxy read when the server does not offer them', async () => {
+    const sent = stubControlPlane({
+      ...shared(),
+      'GET /api/v1/capabilities': caps(['GET /api/v1/proxy/pools', 'GET /api/v1/proxy/config', 'GET /api/v1/proxy/zone-matrix']),
+    });
+    render(withControlPlane(<ProxyPoolsPage />));
+
+    expect((await screen.findByTestId('proxy-not-enabled')).textContent).toContain('not-configured: proxy');
+    expect(count(sent, 'GET', '/api/v1/proxy/pools')).toBe(0);
+    expect(count(sent, 'GET', '/api/v1/proxy/config')).toBe(0);
+    expect(count(sent, 'GET', '/api/v1/proxy/zone-matrix')).toBe(0);
   });
 
   it('parses the backend lines', () => {

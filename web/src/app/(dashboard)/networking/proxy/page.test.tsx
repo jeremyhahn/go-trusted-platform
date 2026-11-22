@@ -11,8 +11,36 @@ import { parseProxyHosts, proxyRouteFromForm } from './proxy-route-dialog';
 
 const UPDATED_AT = '1795233143';
 
+const PROXY_OPS = [
+  'GET /api/v1/proxy/routes',
+  'POST /api/v1/proxy/routes',
+  'GET /api/v1/proxy/routes/{id}',
+  'PUT /api/v1/proxy/routes/{id}',
+  'DELETE /api/v1/proxy/routes/{id}',
+  'GET /api/v1/proxy/pools',
+  'POST /api/v1/proxy/pools',
+  'GET /api/v1/proxy/pools/{id}',
+  'PUT /api/v1/proxy/pools/{id}',
+  'DELETE /api/v1/proxy/pools/{id}',
+  'GET /api/v1/proxy/config',
+  'GET /api/v1/proxy/status',
+  'POST /api/v1/proxy/reload',
+  'GET /api/v1/proxy/zone-matrix',
+] as const;
+
+// The server's capabilities listing: every proxy op enabled except those in off.
+function caps(off: string[] = []): Answer {
+  const capabilities = PROXY_OPS.map((op) =>
+    off.includes(op)
+      ? { op, kind: 'route', enabled: false, reason: 'not-configured: proxy' }
+      : { op, kind: 'route', enabled: true },
+  );
+  return ok({ capabilities, total: capabilities.length, enabled: capabilities.filter((c) => c.enabled).length });
+}
+
 function shared(): Record<string, Answer> {
   return {
+    'GET /api/v1/capabilities': caps(),
     'GET /api/v1/proxy/status': ok({ version: '7', routeCount: 1, poolCount: 1, updatedAt: UPDATED_AT }),
     'GET /api/v1/proxy/routes': ok({
       routes: [{ id: 'r1', hosts: ['a.example', 'b.example'], pathPrefix: '/api', poolId: 'p1', auth: { mode: 'mtls' } }],
@@ -83,11 +111,14 @@ describe('ProxyRoutesPage', () => {
     type('Hosts', ' a.example , b.example ');
     type('Path prefix', '/v2');
     type('Pool ID', 'p1');
+    fireEvent.change(screen.getByLabelText('Auth mode'), { target: { value: 'token' } });
     await click('Save');
 
     await toastText('Route created: version 8');
     const post = sent.find((r) => r.method === 'POST' && r.path === '/api/v1/proxy/routes');
-    expect(post?.body).toEqual({ route: { id: 'r2', hosts: ['a.example', 'b.example'], pathPrefix: '/v2', poolId: 'p1' } });
+    expect(post?.body).toEqual({
+      route: { id: 'r2', hosts: ['a.example', 'b.example'], pathPrefix: '/v2', poolId: 'p1', auth: { mode: 'token' } },
+    });
     await waitFor(() => expect(count(sent, 'GET', '/api/v1/proxy/routes')).toBe(2));
   });
 
@@ -161,7 +192,9 @@ describe('ProxyRoutesPage', () => {
 
     await click('New route');
     type('Route ID', 'r1');
+    type('Path prefix', '/api');
     type('Pool ID', 'p1');
+    fireEvent.change(screen.getByLabelText('Auth mode'), { target: { value: 'mtls' } });
     await click('Save');
 
     await waitFor(() => {
@@ -182,16 +215,70 @@ describe('ProxyRoutesPage', () => {
 
     expect((await screen.findByRole('alert')).textContent).toContain('proxy: read scope required');
   });
+
+  it('keeps Save off until the route has an ID, a path prefix starting with /, a pool and an auth mode', async () => {
+    stubControlPlane(shared());
+    await renderLoaded();
+
+    await click('New route');
+    type('Route ID', 'r2');
+    type('Path prefix', '/v2');
+    type('Pool ID', 'p1');
+    const save = () => screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement;
+    expect(save().disabled).toBe(true);
+
+    fireEvent.change(screen.getByLabelText('Auth mode'), { target: { value: 'public' } });
+    expect(save().disabled).toBe(false);
+
+    type('Path prefix', 'v2');
+    expect(save().disabled).toBe(true);
+  });
+
+  it('withholds the controls the server does not offer', async () => {
+    stubControlPlane({
+      ...shared(),
+      'GET /api/v1/capabilities': caps([
+        'POST /api/v1/proxy/routes',
+        'PUT /api/v1/proxy/routes/{id}',
+        'DELETE /api/v1/proxy/routes/{id}',
+        'POST /api/v1/proxy/reload',
+      ]),
+    });
+    await renderLoaded();
+
+    for (const name of ['New route', 'Reload config', 'Edit r1', 'Delete r1']) {
+      const button = screen.getByRole('button', { name }) as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
+      expect(button.getAttribute('data-capability-enabled')).toBe('false');
+      expect(button.getAttribute('title')).toBe('not-configured: proxy');
+    }
+
+    await click('New route');
+    expect(screen.queryByRole('heading', { name: 'New route' })).toBeNull();
+  });
+
+  it('makes no proxy read when the server does not offer them', async () => {
+    const sent = stubControlPlane({
+      ...shared(),
+      'GET /api/v1/capabilities': caps(['GET /api/v1/proxy/routes', 'GET /api/v1/proxy/status']),
+    });
+    await renderPage();
+
+    expect((await screen.findByTestId('proxy-not-enabled')).textContent).toContain('not-configured: proxy');
+    expect(count(sent, 'GET', '/api/v1/proxy/routes')).toBe(0);
+    expect(count(sent, 'GET', '/api/v1/proxy/status')).toBe(0);
+  });
 });
 
 describe('proxy route form helpers', () => {
   it('parses hosts and builds the route to send', () => {
     expect(parseProxyHosts(' a.example , ,b.example ')).toEqual(['a.example', 'b.example']);
-    expect(proxyRouteFromForm({ id: ' r3 ', hosts: '', pathPrefix: '', poolId: ' p2 ' })).toEqual({
+    expect(proxyRouteFromForm({ id: ' r3 ', hosts: '', pathPrefix: '/x', poolId: ' p2 ', authMode: 'public' })).toEqual({
       id: 'r3',
       hosts: [],
-      pathPrefix: '',
+      pathPrefix: '/x',
       poolId: 'p2',
+      auth: { mode: 'public' },
     });
   });
 });
