@@ -38,6 +38,7 @@ const bundlePath = (id: string) => `GET /api/v1/vtpm/bundles/${id}`;
 // The hook also reads the template and bundle lists.
 const LISTS: Record<string, Answer> = {
   'GET /api/v1/vtpm/templates': ok({ templates: [] }),
+  'GET /api/v1/vtpm/bundles': ok({ bundles: [], total: 0 }),
 };
 
 async function renderAndWaitFor(id: string) {
