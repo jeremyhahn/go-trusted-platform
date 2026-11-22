@@ -60,6 +60,7 @@ async function renderPage() {
 async function renderLoaded() {
   await renderPage();
   await within(await screen.findByTestId('proxy-routes')).findByText('r1');
+  await waitFor(() => expect(document.querySelector('[title="checking server capabilities"]')).toBeNull());
 }
 
 async function click(name: string) {
