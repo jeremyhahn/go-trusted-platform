@@ -77,7 +77,20 @@ export function DNSRecordTable({
     }
   );
 
+  // Delete and update identify an SRV record by type and name only, so the
+  // server would remove the first SRV record with that owner name.
+  const sharedSrvOwners = new Set<string>();
+  const seenSrvOwners = new Set<string>();
+  for (const r of records) {
+    if (r.type !== 'SRV') continue;
+    if (seenSrvOwners.has(r.name)) sharedSrvOwners.add(r.name);
+    seenSrvOwners.add(r.name);
+  }
+  const isAmbiguous = (record: DNSRecord) =>
+    record.type === 'SRV' && sharedSrvOwners.has(record.name);
+
   const handleDelete = (record: DNSRecord) => {
+    if (isAmbiguous(record)) return;
     deleteMutation.mutate({ type: record.type, name: record.name });
   };
 
@@ -102,7 +115,9 @@ export function DNSRecordTable({
               </TableCell>
             </TableRow>
           ) : (
-            records.map((record) => (
+            records.map((record) => {
+              const ambiguous = isAmbiguous(record);
+              return (
               <TableRow key={record.id}>
                 <TableCell className="font-medium font-mono">{record.name}</TableCell>
                 <TableCell>
@@ -121,7 +136,17 @@ export function DNSRecordTable({
                       <Button
                         variant="ghost"
                         size="icon"
-                        disabled={deleteMutation.isLoading}
+                        disabled={deleteMutation.isLoading || ambiguous}
+                        title={
+                          ambiguous
+                            ? 'These SRV records share an owner name; edit or delete them from the CLI until the API can tell them apart'
+                            : undefined
+                        }
+                        aria-label={
+                          ambiguous
+                            ? `No actions for SRV record ${record.name} ${record.value}`
+                            : undefined
+                        }
                       >
                         <MoreHorizontal className="h-4 w-4" />
                       </Button>
@@ -146,7 +171,8 @@ export function DNSRecordTable({
                   </DropdownMenu>
                 </TableCell>
               </TableRow>
-            ))
+              );
+            })
           )}
         </TableBody>
       </Table>
