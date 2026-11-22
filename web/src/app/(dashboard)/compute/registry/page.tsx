@@ -4,6 +4,7 @@ import * as React from "react";
 import { RefreshCw, Trash2, Loader2, Search } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
+import { Gated } from "@/components/features/capabilities/gated";
 import {
   Card,
   CardContent,
@@ -323,16 +324,18 @@ export default function RegistryPage() {
                       <Badge variant="secondary">{tag}</Badge>
                     </TableCell>
                     <TableCell>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => void onInspect(tags.name, tag)}
-                        disabled={inspecting !== null}
-                        aria-label={`Inspect ${tag}`}
-                        title="Inspect image"
-                      >
-                        <Search className="h-4 w-4" />
-                      </Button>
+                      <Gated op="GET /api/v1/compute/images/{repository:.+}">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => void onInspect(tags.name, tag)}
+                          disabled={inspecting !== null}
+                          aria-label={`Inspect ${tag}`}
+                          title="Inspect image"
+                        >
+                          <Search className="h-4 w-4" />
+                        </Button>
+                      </Gated>
                       <Button
                         variant="ghost"
                         size="icon"

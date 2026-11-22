@@ -14,6 +14,16 @@ vi.mock("@/hooks", async (importOriginal) => ({
   useToast: () => ({ toast: vi.fn() }),
 }));
 
+// #2063: every op enabled; page-capability.test.tsx covers the gate.
+vi.mock("@/hooks/use-capabilities", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/use-capabilities")>()),
+  useCapabilities: () => ({
+    loading: false,
+    error: null,
+    capability: () => ({ enabled: true }),
+  }),
+}));
+
 import RegistryPage from "./page";
 
 beforeEach(() => {
