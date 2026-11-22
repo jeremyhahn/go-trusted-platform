@@ -683,6 +683,10 @@ type ServiceProvider interface {
 	// the stored certificate when every candidate is refused, so the
 	// device reads as absent instead of quarantined.
 	DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue, clearOnRefusal bool) (interface{}, error)
+	// DeviceAttestChallenge issues the server-chosen, single-use nonce
+	// (challenge_id, nonce, expires_at) a later attest call for deviceID
+	// binds its quote to.
+	DeviceAttestChallenge(ctx context.Context, deviceID string) (interface{}, error)
 	// DeviceDisable blocks the device's switch port and records it
 	// suspended (see device.LifecycleService).
 	DeviceDisable(ctx context.Context, deviceID, reason string) (interface{}, error)
