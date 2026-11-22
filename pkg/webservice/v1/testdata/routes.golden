@@ -165,6 +165,8 @@ GET /api/v1/gateway/lb/status
 GET /api/v1/gateway/lb/vips
 GET /api/v1/gateway/lb/vips/{protocol}/{address}/{port}
 GET /api/v1/gateway/nat64/status
+GET /api/v1/gateway/perf/conntrack
+GET /api/v1/gateway/perf/datapath
 GET /api/v1/gateway/state
 GET /api/v1/gateway/state/{id}
 GET /api/v1/gateway/status

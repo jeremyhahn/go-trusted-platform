@@ -836,6 +836,8 @@ export type {
   GetGatewayNAT64StatusResponse,
   GetPerfFlowsRequest,
   GetPerfFlowsResponse,
+  GetPerfDatapathResponse,
+  GetPerfConntrackResponse,
 } from './types/gateway.js';
 
 // SDN types

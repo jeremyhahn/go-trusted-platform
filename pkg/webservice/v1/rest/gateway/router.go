@@ -67,6 +67,8 @@ func NewGatewayRouter(
 //	GET    /api/v1/gateway/lb/status                - GetLBStatus
 //	POST   /api/v1/gateway/perf/flows               - GetPerfFlows (installs temporary flows; admin)
 //	GET    /api/v1/gateway/nat64/status             - GetNAT64Status
+//	GET    /api/v1/gateway/perf/datapath            - GetPerfDatapath (?bridge=)
+//	GET    /api/v1/gateway/perf/conntrack           - GetPerfConntrack (?zone=)
 func (r *GatewayRouter) RegisterRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix(basePath).Subrouter()
 	sr.HandleFunc("/status", r.getStatus).Methods("GET")
@@ -93,6 +95,9 @@ func (r *GatewayRouter) RegisterRoutes(parent *mux.Router) {
 	// GetPerfFlows installs and removes temporary flows in OpenFlow table
 	// 250, so it is a POST (a write), never a GET.
 	sr.HandleFunc("/perf/flows", r.getPerfFlows).Methods("POST")
+	// The datapath and conntrack counters are only read, so both are GETs.
+	sr.HandleFunc("/perf/datapath", r.getPerfDatapath).Methods("GET")
+	sr.HandleFunc("/perf/conntrack", r.getPerfConntrack).Methods("GET")
 }
 
 func (r *GatewayRouter) ensure(w http.ResponseWriter, req *http.Request) bool {
@@ -291,6 +296,46 @@ func (r *GatewayRouter) getPerfFlows(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	resp, err := r.server.GetPerfFlows(req.Context(), pbReq)
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+// getPerfDatapath reads the datapath counters of ?bridge= (empty: the
+// default bridge).
+func (r *GatewayRouter) getPerfDatapath(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	resp, err := r.server.GetPerfDatapath(req.Context(), &platformv1.GetPerfDatapathRequest{
+		Bridge: req.URL.Query().Get("bridge"),
+	})
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+// getPerfConntrack summarizes the conntrack table for ?zone= (absent:
+// every zone). A zone that is not a uint32 answers 400.
+func (r *GatewayRouter) getPerfConntrack(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	pbReq := &platformv1.GetPerfConntrackRequest{}
+	if z := req.URL.Query().Get("zone"); z != "" {
+		v, err := strconv.ParseUint(z, 10, 32)
+		if err != nil {
+			r.respWriter.Error400(w, req, err)
+			return
+		}
+		zone := uint32(v)
+		pbReq.Zone = &zone
+	}
+	resp, err := r.server.GetPerfConntrack(req.Context(), pbReq)
 	if err != nil {
 		protorest.WriteError(w, req, r.respWriter, err)
 		return
