@@ -1054,9 +1054,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("Cache, Scheduler, Messaging and ObjectStorage gRPC services registered")
 
-	// Create the Switch gRPC service. It has no switch backend yet, so every
-	// method answers Unavailable (not configured); the QUIC opcodes, the MCP
-	// tools and the embedded transport call this same servicer.
+	// Create the Switch gRPC service. It starts with no backend; serve builds
+	// the switch service from the switches config block and wires it in
+	// through SetSwitchService. When no switch is configured every method
+	// answers Unavailable (not configured). The QUIC opcodes, the MCP tools
+	// and the embedded transport call this same servicer.
 	switchGRPCService := NewSwitchGRPCService(logger, nil)
 	if grpcServer != nil {
 		platformv1.RegisterSwitchServiceServer(grpcServer, switchGRPCService)

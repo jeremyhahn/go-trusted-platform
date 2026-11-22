@@ -286,26 +286,26 @@ error carries the raw switch output, which is the first thing to look at.
 
 ---
 
-## 9. The whole surface is dark by default
+## 9. The surface is dark only when no switch is configured
 
-Three separate wiring seams exist and **none of them is used**, anywhere in the
-repository:
+The `switches:` config block is parsed into `app.App.SwitchConfigs`
+(`pkg/app/app.go`). At startup, on both the webservice path and the
+daemon-only path, `serve` builds a `switchmgmt.Service` from that block with
+`switchmgmt.NewService(configs, logger)`, one manager per configured switch,
+and wires it into:
 
-| Seam | Callers |
+| Seam | What uses it |
 |---|---|
-| `switchmgmt.NewService(configs, logger)` | none outside tests |
-| `HandlerRegistryParams.SwitchService` (REST) | never populated |
-| `(*SwitchGRPCService).SetSwitchService` | **none at all** |
+| `(*SwitchGRPCService).SetSwitchService` | gRPC (TCP and UDS), and through the same servicer the QUIC opcodes, the MCP tools and the embedded transport |
+| `HandlerRegistryParams.SwitchService` (REST) | the `/api/v1/switches/...` routes and the `switch` entry of the service registry |
 
-The gRPC service is registered on both the TCP and UDS servers with an
-**explicit nil** backend, and the source says why:
+An unsupported `vendor` or an invalid connection config (for example an SSH
+block `NewService` refuses) stops startup with the `switch service` phase;
+the node does not start with a half-built switch surface. The service is
+closed at shutdown, after the daemon stops.
 
-> *"Create the Switch gRPC service. It has no switch backend yet, so every
-> method answers Unavailable (not configured); the QUIC opcodes, the MCP
-> tools and the embedded transport call this same servicer."*
-> — `pkg/api/daemon/daemon.go:1049`
-
-Until that is wired:
+A node with **no `switches:` block** builds no service, and every transport
+stays dark:
 
 | Transport | What a caller gets |
 |---|---|
@@ -317,11 +317,9 @@ Until that is wired:
 
 `GET /api/v1/platform/service-registry` reports the `switch` entry with
 `Configured: false` and the reason string. **Check that before debugging
-anything else.**
+anything else.** A node with a configured switch reports `Configured: true`.
 
-The `switches:` config block is parsed into `app.App.SwitchConfigs`
-(`pkg/app/app.go:371`) and nothing constructs a `Service` from it. The
-bootstrap `Configurator` path is separate and does run.
+The bootstrap `Configurator` path is separate and runs either way.
 
 ---
 
