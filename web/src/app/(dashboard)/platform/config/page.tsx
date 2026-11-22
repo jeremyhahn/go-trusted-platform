@@ -23,6 +23,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
+import { Gated } from "@/components/features/capabilities/gated";
+import { ConfigSectionEditor } from "@/components/features/platform/config-section-editor";
 
 interface ConfigSource {
   path: string;
@@ -288,19 +290,21 @@ export default function ConfigPage() {
             )}
             Snapshot
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleReload}
-            disabled={isReloading}
-          >
-            {isReloading ? (
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-            ) : (
-              <RefreshCw className="h-4 w-4 mr-2" />
-            )}
-            Reload
-          </Button>
+          <Gated op="POST /api/v1/platform/config/reload">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleReload}
+              disabled={isReloading}
+            >
+              {isReloading ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4 mr-2" />
+              )}
+              Reload
+            </Button>
+          </Gated>
           <Button
             variant="outline"
             size="sm"
@@ -459,6 +463,8 @@ export default function ConfigPage() {
               </ScrollArea>
             </CardContent>
           </Card>
+
+          <ConfigSectionEditor onApplied={() => void fetchConfig()} />
         </>
       )}
     </div>

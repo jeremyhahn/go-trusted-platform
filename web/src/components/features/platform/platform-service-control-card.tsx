@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Gated } from '@/components/features/capabilities/gated';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Dialog,
@@ -167,6 +168,7 @@ export function PlatformServiceControlCard(): JSX.Element {
                   <td>{svc.uptime ?? '-'}</td>
                   <td className="text-destructive">{svc.last_error ? svc.last_error : null}</td>
                   <td className="space-x-1 text-right">
+                    <Gated op="POST /api/v1/platform/services/{service}/start">
                     <Button
                       variant="outline"
                       size="sm"
@@ -176,6 +178,8 @@ export function PlatformServiceControlCard(): JSX.Element {
                     >
                       Start
                     </Button>
+                    </Gated>
+                    <Gated op="POST /api/v1/platform/services/{service}/stop">
                     <Button
                       variant="outline"
                       size="sm"
@@ -185,6 +189,8 @@ export function PlatformServiceControlCard(): JSX.Element {
                     >
                       Stop
                     </Button>
+                    </Gated>
+                    <Gated op="POST /api/v1/platform/services/{service}/restart">
                     <Button
                       variant="outline"
                       size="sm"
@@ -194,6 +200,7 @@ export function PlatformServiceControlCard(): JSX.Element {
                     >
                       Restart
                     </Button>
+                    </Gated>
                     <Button variant="ghost" size="sm" onClick={() => void showDetail(svc.name)}>
                       Details
                     </Button>

@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ok, refused, stubControlPlane, withControlPlane, type Answer } from '@/test/control-plane-fetch';
@@ -55,6 +55,10 @@ async function renderCard(routes: Record<string, Answer>) {
   const sent = stubControlPlane({ [CAPS]: caps(), [LIST]: baseList(), ...routes });
   render(withControlPlane(<PlatformServiceControlCard />));
   await screen.findByTestId('service-row-tpm');
+  // The gated buttons are disabled until the capabilities answer lands.
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Restart tpm' }).getAttribute('data-capability-enabled')).toBe('true'),
+  );
   return sent;
 }
 

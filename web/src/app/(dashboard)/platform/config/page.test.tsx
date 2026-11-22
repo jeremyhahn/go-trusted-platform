@@ -5,7 +5,24 @@ const { toast } = vi.hoisted(() => ({ toast: vi.fn() }));
 
 vi.mock('@/hooks/use-toast', () => ({ useToast: () => ({ toast }) }));
 
+import type { ReactNode } from 'react';
+import { PlatformProvider } from 'trusted-platform-sdk';
 import ConfigPage from './page';
+
+// The page's write controls are capability-gated (#2047), so it renders
+// inside the PlatformProvider and the stub answers GET /api/v1/capabilities.
+function withPlatform(children: ReactNode) {
+  return <PlatformProvider config={{ baseUrl: '/api' }}><>{children}</></PlatformProvider>;
+}
+
+const capabilitiesBody = {
+  capabilities: [
+    { op: 'POST /api/v1/platform/config/reload', kind: 'route', enabled: true },
+    { op: 'PUT /api/v1/platform/config/sections/{section}', kind: 'route', enabled: true },
+  ],
+  total: 2,
+  enabled: 2,
+};
 
 const configBody = {
   payload: {
@@ -28,7 +45,13 @@ function postCalls() {
 
 beforeEach(() => {
   toast.mockReset();
-  fetchMock = vi.fn((url: string, opts?: RequestInit) => {
+  fetchMock = vi.fn((input: RequestInfo | URL, opts?: RequestInit) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url.endsWith('/api/v1/capabilities')) {
+      return Promise.resolve(
+        new Response(JSON.stringify(capabilitiesBody), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      );
+    }
     if (url === '/api/v1/platform/config/snapshots' && opts?.method === 'POST') {
       return reply({ payload: { id: 'snap-1' } });
     }
@@ -49,7 +72,7 @@ afterEach(() => {
 describe('ConfigPage', () => {
   it('captures no snapshot when the reason prompt is cancelled', async () => {
     vi.spyOn(window, 'prompt').mockReturnValue(null);
-    render(<ConfigPage />);
+    render(withPlatform(<ConfigPage />));
     const button = await screen.findByRole('button', { name: /snapshot/i });
     fireEvent.click(button);
     await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
@@ -60,7 +83,7 @@ describe('ConfigPage', () => {
 
   it('captures a snapshot with the reason the operator gives', async () => {
     vi.spyOn(window, 'prompt').mockReturnValue('pre-upgrade');
-    render(<ConfigPage />);
+    render(withPlatform(<ConfigPage />));
     const button = await screen.findByRole('button', { name: /snapshot/i });
     fireEvent.click(button);
     await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Snapshot captured' })));
@@ -71,7 +94,7 @@ describe('ConfigPage', () => {
   });
 
   it('renders the configuration tree once loaded', async () => {
-    render(<ConfigPage />);
+    render(withPlatform(<ConfigPage />));
     expect(await screen.findByText('Configuration Tree')).toBeTruthy();
     expect(screen.getByText(/\/dev\/tpmrm0/)).toBeTruthy();
   });
