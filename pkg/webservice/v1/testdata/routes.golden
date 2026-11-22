@@ -474,6 +474,8 @@ POST /api/v1/idevid/ldevid
 POST /api/v1/invitations
 POST /api/v1/invitations/accept
 POST /api/v1/invitations/{id:[0-9]+}/revoke
+POST /api/v1/kms/batch-decrypt
+POST /api/v1/kms/batch-encrypt
 POST /api/v1/kms/data-keys
 POST /api/v1/kms/data-keys/wrapped
 POST /api/v1/kms/decrypt/{name}
@@ -488,6 +490,7 @@ POST /api/v1/kms/keys/import
 POST /api/v1/kms/keys/{name}/revoke
 POST /api/v1/kms/keys/{name}/rotate
 POST /api/v1/kms/random
+POST /api/v1/kms/rewrap
 POST /api/v1/kms/secrets
 POST /api/v1/kms/secrets/{name}/rollback
 POST /api/v1/kms/secrets/{name}/rotate
