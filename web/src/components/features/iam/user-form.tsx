@@ -53,7 +53,11 @@ export function UserForm({
 
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  React.useEffect(() => {
+  // Reset the form whenever the user or the open state changes: state
+  // adjusted during render against the previous values, not in an effect.
+  const [shown, setShown] = useState<{ user: typeof user; open: boolean } | null>(null);
+  if (shown === null || shown.user !== user || shown.open !== open) {
+    setShown({ user, open });
     if (user) {
       setFormData({
         name: user.name,
@@ -72,7 +76,7 @@ export function UserForm({
       });
     }
     setErrors({});
-  }, [user, open]);
+  }
 
   const validate = (): boolean => {
     const newErrors: Record<string, string> = {};
@@ -91,7 +95,7 @@ export function UserForm({
       newErrors.password = 'Password is required';
     }
 
-    if (!isEdit && formData.password && formData.password.length < 8) {
+    if (formData.password && formData.password.length < 8) {
       newErrors.password = 'Password must be at least 8 characters';
     }
 

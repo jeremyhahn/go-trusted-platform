@@ -157,7 +157,9 @@ export function ContainerTable({
           ) : (
             containers.map((container) => (
               <TableRow key={container.id}>
-                <TableCell className="font-medium">{container.name}</TableCell>
+                <TableCell className="font-medium">
+                  {container.name}
+                </TableCell>
                 <TableCell className="font-mono text-sm">{container.image}</TableCell>
                 <TableCell>
                   <Badge variant="outline" className={statusColors[container.status]}>
