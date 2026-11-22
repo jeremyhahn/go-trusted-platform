@@ -307,6 +307,7 @@ func (h *Handlers) ImportKey(w http.ResponseWriter, r *http.Request) {
 		h.respWriter.Error400(w, r, err)
 		return
 	}
+	req.Resolve()
 	alg, err := parseKeyAlgorithm(req.Algorithm)
 	if err != nil {
 		h.respWriter.Error400(w, r, err)

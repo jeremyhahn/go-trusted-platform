@@ -43,6 +43,9 @@ type GenerateKeyRequest struct {
 	Owner       string            `json:"owner,omitempty"`
 	KeySpec     *KMSKeySpec       `json:"keySpec,omitempty"`
 
+	// FacadeKeySpec is the facade's snake_case key_spec envelope.
+	FacadeKeySpec *FacadeKeySpec `json:"key_spec,omitempty"`
+
 	// Exportable marks the key material as exportable from the KMS.
 	Exportable bool `json:"exportable,omitempty"`
 
@@ -60,17 +63,36 @@ type KMSKeySpec struct {
 	Curve     string   `json:"curve,omitempty"`
 }
 
+// FacadeKeySpec is the snake_case key_spec envelope the facade REST handlers
+// accepted on key generation and import (#2151 Codex round 2).
+type FacadeKeySpec struct {
+	Algorithm          string   `json:"algorithm,omitempty"`
+	KeySize            int32    `json:"key_size,omitempty"`
+	Usage              []string `json:"usage,omitempty"`
+	Exportable         bool     `json:"exportable,omitempty"`
+	DeletionProtection bool     `json:"deletion_protection,omitempty"`
+}
+
 // Resolve flattens the optional KeySpec nested envelope into top-level
 // Algorithm/Usage so handlers can stay agnostic of the wire shape.
 func (r *GenerateKeyRequest) Resolve() {
-	if r.KeySpec == nil {
-		return
+	if r.KeySpec != nil {
+		if r.Algorithm == "" {
+			r.Algorithm = r.KeySpec.Algorithm
+		}
+		if len(r.Usage) == 0 {
+			r.Usage = r.KeySpec.Usage
+		}
 	}
-	if r.Algorithm == "" {
-		r.Algorithm = r.KeySpec.Algorithm
-	}
-	if len(r.Usage) == 0 {
-		r.Usage = r.KeySpec.Usage
+	if fs := r.FacadeKeySpec; fs != nil {
+		if r.Algorithm == "" {
+			r.Algorithm = fs.Algorithm
+		}
+		if len(r.Usage) == 0 {
+			r.Usage = fs.Usage
+		}
+		r.Exportable = r.Exportable || fs.Exportable
+		r.DeletionProtection = r.DeletionProtection || fs.DeletionProtection
 	}
 }
 
@@ -96,6 +118,24 @@ type ImportKeyRequest struct {
 	Algorithm     string            `json:"algorithm"`
 	Usage         []string          `json:"usage,omitempty"`
 	Tags          map[string]string `json:"tags,omitempty"`
+
+	// FacadeKeySpec is the facade's snake_case key_spec envelope.
+	FacadeKeySpec *FacadeKeySpec `json:"key_spec,omitempty"`
+}
+
+// Resolve fills Algorithm and Usage from the facade's key_spec envelope
+// when the top-level fields are empty.
+func (r *ImportKeyRequest) Resolve() {
+	fs := r.FacadeKeySpec
+	if fs == nil {
+		return
+	}
+	if r.Algorithm == "" {
+		r.Algorithm = fs.Algorithm
+	}
+	if len(r.Usage) == 0 {
+		r.Usage = fs.Usage
+	}
 }
 
 // ImportKeyResponse is the response from importing a key.
