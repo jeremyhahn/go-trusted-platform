@@ -49,6 +49,13 @@ func NewWorkspaceRoleResolver(client IAMClient) (*WorkspaceRoleResolver, error) 
 // empty answer, not an error, because an invited member is mirrored only by
 // the startup reconcile and must still be able to sign in as a member. Any
 // other failure is returned, so the caller refuses rather than guesses.
+//
+// Each of the user's role references is named, in order, with GetRole:
+// a role GetRole finds gives its name, and a reference it does not find is
+// kept unchanged (a role stored by name, or one since deleted). A transport
+// that does not route GetRole (the embedded one) answers the first call with
+// an unknown-method error; the references are then named from the tenant's
+// role list instead. Any other GetRole failure is returned.
 func (r *WorkspaceRoleResolver) Roles(ctx context.Context, tenantID, subject string) ([]string, error) {
 	user, err := r.client.GetUserByEmail(ctx, tenantID, subject)
 	if sdkerrors.IsNotFound(err) {
@@ -60,12 +67,34 @@ func (r *WorkspaceRoleResolver) Roles(ctx context.Context, tenantID, subject str
 	if user == nil || len(user.Roles) == 0 {
 		return nil, nil
 	}
+	roles := make([]string, 0, len(user.Roles))
+	for i, ref := range user.Roles {
+		role, err := r.client.GetRole(ctx, tenantID, ref)
+		switch {
+		case err == nil:
+			if role != nil && role.Name != "" {
+				ref = role.Name
+			}
+		case sdkerrors.IsNotFound(err):
+		case i == 0 && isUnknownMethod(err):
+			return r.namesFromRoleList(ctx, tenantID, user.Roles)
+		default:
+			return nil, err
+		}
+		roles = append(roles, ref)
+	}
+	return roles, nil
+}
+
+// namesFromRoleList names refs from the tenant's role list, keeping a
+// reference no role ID matches; it serves a transport without GetRole.
+func (r *WorkspaceRoleResolver) namesFromRoleList(ctx context.Context, tenantID string, refs []string) ([]string, error) {
 	namesByID, err := r.roleNamesByID(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
-	roles := make([]string, 0, len(user.Roles))
-	for _, ref := range user.Roles {
+	roles := make([]string, 0, len(refs))
+	for _, ref := range refs {
 		if name, ok := namesByID[ref]; ok {
 			ref = name
 		}
