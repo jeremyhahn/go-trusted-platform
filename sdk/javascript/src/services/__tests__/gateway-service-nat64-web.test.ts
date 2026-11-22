@@ -10,6 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { GatewayService } from '../gateway-service.js';
 import type { ApiClient } from '../../client/api-client.js';
+import type { GatewayNAT64Status } from '../../types/gateway.js';
 
 function createMockApiClient(): ApiClient {
   return {
@@ -63,6 +64,29 @@ describe('GatewayService NAT64 status on the webservice', () => {
     const result = await service.getGatewayNAT64Status();
 
     expect(result).toBe(response);
+    expectOnlyGet('/v1/gateway/nat64/status');
+  });
+
+  it('getGatewayNAT64Status types a never-reconciled status with lastReconcile null', async () => {
+    // The webservice emits unpopulated fields: before the first reconcile the
+    // timestamp arrives as null, and every scalar carries its zero value.
+    const status: GatewayNAT64Status = {
+      active: false,
+      instancePresent: false,
+      prefix: '',
+      instance: '',
+      sessions: '0',
+      pool4Used: '0',
+      moduleVersion: '',
+      flowCount: 0,
+      lastReconcile: null,
+      lastError: '',
+    };
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: { status } });
+
+    const result = await service.getGatewayNAT64Status();
+
+    expect(result.data?.status?.lastReconcile).toBeNull();
     expectOnlyGet('/v1/gateway/nat64/status');
   });
 
