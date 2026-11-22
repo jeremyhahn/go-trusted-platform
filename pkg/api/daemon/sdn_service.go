@@ -1218,6 +1218,26 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		bridgeNames = append(bridgeNames, bridgeName)
 	}
 
+	// A replacement must keep every entry the old policy installed: an
+	// entry it drops would stay on the switch with no owner, since the
+	// apply only installs the new flows. Refuse before any switch write.
+	s.mu.RLock()
+	previous := s.policies[policyID]
+	s.mu.RUnlock()
+	if previous != nil {
+		newKeys := make(map[flowEntryKey]bool, len(bridgeNames)*len(flowMods))
+		for _, bridgeName := range bridgeNames {
+			for _, flowMod := range flowMods {
+				newKeys[newFlowEntryKey(bridgeName, flowMod)] = true
+			}
+		}
+		for key := range s.policyEntryKeys(previous) {
+			if !newKeys[key] {
+				return nil, status.Errorf(codes.FailedPrecondition, "policy %q: the replacement would leave the flow %s installed on %s; delete the policy and apply the new one", policyID, key.match, key.bridge)
+			}
+		}
+	}
+
 	client := s.getOVSClient()
 
 	// Entries an earlier rollback could not remove go first.
@@ -1444,22 +1464,32 @@ func (s *SDNService) policyOwnedFlowKeys() map[flowEntryKey]bool {
 	// findBridgeName takes s.mu itself, so resolve outside the lock.
 	owned := make(map[flowEntryKey]bool)
 	for _, p := range policies {
-		for _, target := range p.targets {
-			if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
-				continue
-			}
-			bridgeName, found := s.findBridgeName(target.GetId())
-			if !found {
-				continue
-			}
-			for _, rule := range p.rules {
-				if flowMod, err := s.policyRuleToFlowMod(rule, p.priority); err == nil {
-					owned[newFlowEntryKey(bridgeName, flowMod)] = true
-				}
-			}
+		for key := range s.policyEntryKeys(p) {
+			owned[key] = true
 		}
 	}
 	return owned
+}
+
+// policyEntryKeys returns the switch entries policy p installs: one per rule
+// on each bridge target. Call without s.mu held (findBridgeName takes it).
+func (s *SDNService) policyEntryKeys(p *policyResource) map[flowEntryKey]bool {
+	keys := make(map[flowEntryKey]bool)
+	for _, target := range p.targets {
+		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
+			continue
+		}
+		bridgeName, found := s.findBridgeName(target.GetId())
+		if !found {
+			continue
+		}
+		for _, rule := range p.rules {
+			if flowMod, err := s.policyRuleToFlowMod(rule, p.priority); err == nil {
+				keys[newFlowEntryKey(bridgeName, flowMod)] = true
+			}
+		}
+	}
+	return keys
 }
 
 // removeStrandedFlows removes, with applyMu held, the entries an earlier
