@@ -3,7 +3,9 @@ package arch
 // Behavioural tests of ci.yml's runner selection (ci-template v1.48, Tenant
 // Agent rulings 1024 and 1031, #2128; Codex P1 on #2129; v1.54, the balanced
 // runner pool of ruling 1137, whose cases port the template's
-// testdata/runner-select-tests.py, absent here). The run: script of
+// testdata/runner-select-tests.py; v1.59, a short listing is a lower bound,
+// and the handbook's copy of that file runs in preflight from
+// .github/workflows/testdata). The run: script of
 // the preflight step `id: runner` is taken from ci.yml as is and run with
 // bash against fixture Actions API replies. A stub curl first on PATH serves
 // the replies from files and logs every URL it is asked for, so the test
