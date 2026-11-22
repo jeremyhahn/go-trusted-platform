@@ -25,6 +25,8 @@ import {
 } from "@/components/ui/table";
 import { useApi, useToast } from "@/hooks";
 import { proxyPoolSummary, useProxy } from "@/hooks/use-proxy";
+import { useCapabilities } from "@/hooks/use-capabilities";
+import { Gated } from "@/components/features/capabilities/gated";
 import {
   ProxyPoolDialog,
   proxyPoolFromForm,
@@ -49,9 +51,17 @@ interface Editing {
 export default function ProxyPoolsPage() {
   const proxy = useProxy();
   const { toast } = useToast();
-  const pools = useApi(() => proxy.listPools(), [proxy]);
-  const config = useApi(() => proxy.getConfig(), [proxy]);
-  const matrix = useApi(() => proxy.getZoneMatrix(), [proxy]);
+  const { loading: capsLoading, capability } = useCapabilities();
+  const poolsCap = capability("GET /api/v1/proxy/pools");
+  const pools = useApi(() => proxy.listPools(), [proxy], {
+    enabled: !capsLoading && poolsCap.enabled,
+  });
+  const config = useApi(() => proxy.getConfig(), [proxy], {
+    enabled: !capsLoading && capability("GET /api/v1/proxy/config").enabled,
+  });
+  const matrix = useApi(() => proxy.getZoneMatrix(), [proxy], {
+    enabled: !capsLoading && capability("GET /api/v1/proxy/zone-matrix").enabled,
+  });
 
   const [editing, setEditing] = React.useState<Editing | null>(null);
   const [deleting, setDeleting] = React.useState<string | null>(null);
@@ -118,23 +128,38 @@ export default function ProxyPoolsPage() {
   return (
     <div className="container mx-auto py-6 space-y-6">
       <PageHeader title="Proxy pools" description="Backend pools, merged configuration and the zone matrix">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            void pools.refetch();
-            void config.refetch();
-            void matrix.refetch();
-          }}
-        >
-          <RefreshCw className="h-4 w-4 mr-2" />
-          Refresh
-        </Button>
-        <Button size="sm" onClick={() => setEditing({ mode: "create", initial: EMPTY_FORM })}>
-          <Plus className="h-4 w-4 mr-2" />
-          New pool
-        </Button>
+        <Gated op="GET /api/v1/proxy/pools">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              void pools.refetch();
+              void config.refetch();
+              void matrix.refetch();
+            }}
+          >
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Refresh
+          </Button>
+        </Gated>
+        <Gated op="POST /api/v1/proxy/pools">
+          <Button size="sm" onClick={() => setEditing({ mode: "create", initial: EMPTY_FORM })}>
+            <Plus className="h-4 w-4 mr-2" />
+            New pool
+          </Button>
+        </Gated>
       </PageHeader>
+
+      {!capsLoading && !poolsCap.enabled ? (
+        <Card data-testid="proxy-not-enabled">
+          <CardHeader>
+            <CardTitle>The proxy is not enabled on this server</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">{poolsCap.reason}</p>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card data-testid="proxy-pools">
         <CardHeader>
@@ -164,22 +189,26 @@ export default function ProxyPoolsPage() {
                     <TableCell>{proxyPoolSummary(p)}</TableCell>
                     <TableCell>{p.tls?.trustClass || "-"}</TableCell>
                     <TableCell>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        aria-label={`Edit ${p.id}`}
-                        onClick={() => void onEdit(p.id ?? "")}
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        aria-label={`Delete ${p.id}`}
-                        onClick={() => setDeleting(p.id ?? "")}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      <Gated op="PUT /api/v1/proxy/pools/{id}">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Edit ${p.id}`}
+                          onClick={() => void onEdit(p.id ?? "")}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                      </Gated>
+                      <Gated op="DELETE /api/v1/proxy/pools/{id}">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Delete ${p.id}`}
+                          onClick={() => setDeleting(p.id ?? "")}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </Gated>
                     </TableCell>
                   </TableRow>
                 ))}
