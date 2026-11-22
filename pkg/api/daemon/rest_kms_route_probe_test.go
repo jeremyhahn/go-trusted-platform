@@ -46,6 +46,11 @@ func TestDaemonREST_KMSRoutesReachTheirHandlers(t *testing.T) {
 			if !reached && strings.Contains(w.Body.String(), "404 page not found") {
 				t.Fatalf("%s %s matched no route: status %d body %q", c.method, c.path, w.Code, w.Body.String())
 			}
+			// A 401 or 403 means the guard refused the call before the
+			// handler ran, so the probe proved nothing about the route.
+			if !reached && (w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden) {
+				t.Fatalf("%s %s was refused before its handler: status %d body %q", c.method, c.path, w.Code, w.Body.String())
+			}
 		})
 	}
 }
