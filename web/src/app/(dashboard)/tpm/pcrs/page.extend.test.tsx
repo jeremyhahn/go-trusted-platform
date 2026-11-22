@@ -6,13 +6,17 @@ import TPMPCRsPage from './page';
 
 const PCRS = 'POST /api/v1/tpm/pcrs';
 const EXTEND = 'POST /api/v1/tpm/pcrs/extend';
+const CAPS_ON = ok({ capabilities: ['POST /api/v1/tpm/pcrs/extend', 'POST /api/v1/tpm/make-credential', 'POST /api/v1/tpm/activate-credential', 'POST /api/v1/tpm/random'].map((op) => ({ op, kind: 'route', enabled: true })) });
 
-function mount(extendAnswer: Answer = ok({ status: { success: true } })): SentRequest[] {
+/** Renders the page and waits for the capability gate to read the server's capabilities. */
+async function mount(extendAnswer: Answer = ok({ status: { success: true } })): Promise<SentRequest[]> {
   const sent = stubControlPlane({
     [PCRS]: ok({ pcrValues: [] }),
     [EXTEND]: extendAnswer,
+    'GET /api/v1/capabilities': CAPS_ON,
   });
   render(withControlPlane(<TPMPCRsPage />));
+  await waitFor(() => expect(extendButton().getAttribute('data-capability-enabled')).toBe('true'));
   return sent;
 }
 
@@ -55,7 +59,7 @@ describe('TPMPCRsPage Extend PCR', () => {
   });
 
   it('posts {index, hashAlg, data} to /v1/tpm/pcrs/extend, toasts and reloads the PCRs', async () => {
-    const sent = mount();
+    const sent = await mount();
     await waitFor(() => expect(sentTo(sent, PCRS)).toHaveLength(1));
 
     fill('16', 'boot-ok');
@@ -70,7 +74,7 @@ describe('TPMPCRsPage Extend PCR', () => {
   });
 
   it('sends nothing when the operator cancels the confirm dialog', async () => {
-    const sent = mount();
+    const sent = await mount();
     await waitFor(() => expect(sentTo(sent, PCRS)).toHaveLength(1));
 
     fill('16', 'boot-ok');
@@ -82,7 +86,7 @@ describe('TPMPCRsPage Extend PCR', () => {
   });
 
   it('shows the server refusal in the Extend PCR failed toast', async () => {
-    mount(refused(400, 'pcr index out of range'));
+    await mount(refused(400, 'pcr index out of range'));
 
     fill('16', 'boot-ok');
     await clickButton('Extend PCR');
@@ -94,7 +98,7 @@ describe('TPMPCRsPage Extend PCR', () => {
   });
 
   it('refuses index 24: the button is disabled and no extend is sent', async () => {
-    const sent = mount();
+    const sent = await mount();
     await waitFor(() => expect(sentTo(sent, PCRS)).toHaveLength(1));
 
     fill('24', 'boot-ok');
@@ -106,7 +110,7 @@ describe('TPMPCRsPage Extend PCR', () => {
   });
 
   it('refuses index 1.5: the button is disabled', async () => {
-    const sent = mount();
+    const sent = await mount();
     await waitFor(() => expect(sentTo(sent, PCRS)).toHaveLength(1));
 
     fill('1.5', 'boot-ok');

@@ -20,6 +20,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Gated } from "@/components/features/capabilities/gated";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -128,10 +129,12 @@ export default function TPMCredentialPage() {
             <Label htmlFor="secret">Secret (optional)</Label>
             <Input id="secret" value={secret} onChange={(e) => setSecret(e.target.value)} />
           </div>
-          <Button onClick={onMake} disabled={!akName.trim() || makeCredential.isLoading}>
-            {makeCredential.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Make Credential
-          </Button>
+          <Gated op="POST /api/v1/tpm/make-credential">
+            <Button onClick={onMake} disabled={!akName.trim() || makeCredential.isLoading}>
+              {makeCredential.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Make Credential
+            </Button>
+          </Gated>
           {wrappedSecret && (
             <div className="space-y-1">
               <p className="text-sm font-medium">Wrapped secret</p>
@@ -167,13 +170,15 @@ export default function TPMCredentialPage() {
               onChange={(e) => setEncryptedSecret(e.target.value)}
             />
           </div>
-          <Button
-            variant="destructive"
-            onClick={() => setConfirmOpen(true)}
-            disabled={!credentialBlob || !encryptedSecret || activateCredential.isLoading}
-          >
-            Activate Credential
-          </Button>
+          <Gated op="POST /api/v1/tpm/activate-credential">
+            <Button
+              variant="destructive"
+              onClick={() => setConfirmOpen(true)}
+              disabled={!credentialBlob || !encryptedSecret || activateCredential.isLoading}
+            >
+              Activate Credential
+            </Button>
+          </Gated>
           {activatedSecret !== undefined && (
             <div className="space-y-1">
               <p className="text-sm font-medium">Recovered secret</p>
@@ -205,10 +210,12 @@ export default function TPMCredentialPage() {
               <p className="text-xs text-destructive">Number of bytes is a whole number from 1 to 1024</p>
             )}
           </div>
-          <Button onClick={onRandom} disabled={!numBytesValid || getRandom.isLoading}>
-            {getRandom.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Get Random
-          </Button>
+          <Gated op="POST /api/v1/tpm/random">
+            <Button onClick={onRandom} disabled={!numBytesValid || getRandom.isLoading}>
+              {getRandom.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Get Random
+            </Button>
+          </Gated>
           {randomBytes !== undefined && (
             <code data-testid="random-bytes" className="block text-xs break-all">
               {base64ToHex(randomBytes)}

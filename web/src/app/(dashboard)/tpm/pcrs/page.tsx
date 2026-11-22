@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Gated } from "@/components/features/capabilities/gated";
 import {
   Table,
   TableBody,
@@ -415,14 +416,16 @@ export default function TPMPCRsPage() {
               onChange={(e) => setExtendData(e.target.value)}
             />
           </div>
-          <Button
-            variant="destructive"
-            onClick={() => setExtendConfirmOpen(true)}
-            disabled={!extendData || !extendIndexValid || extendPCR.isLoading}
-          >
-            {extendPCR.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Extend PCR
-          </Button>
+          <Gated op="POST /api/v1/tpm/pcrs/extend">
+            <Button
+              variant="destructive"
+              onClick={() => setExtendConfirmOpen(true)}
+              disabled={!extendData || !extendIndexValid || extendPCR.isLoading}
+            >
+              {extendPCR.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Extend PCR
+            </Button>
+          </Gated>
         </CardContent>
       </Card>
 
