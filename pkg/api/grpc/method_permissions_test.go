@@ -147,6 +147,7 @@ func TestIsPreAuthMethod(t *testing.T) {
 func TestScopeForMethod_EveryDeviceServiceMethodIsScoped(t *testing.T) {
 	want := map[string]string{
 		"AttestDevice":                 "device:write",
+		"IssueAttestationChallenge":    "device:write",
 		"RecordAttestationCertificate": "device:write",
 		"DisableDevice":                "device:write",
 		"EnableDevice":                 "device:write",
@@ -370,11 +371,13 @@ func TestGRPCMethodCatalog_PreAuthIsNotScoped(t *testing.T) {
 	}
 }
 
-// TestGRPCMethodPermissions_AttestationIsAWrite pins that the two
-// attestation RPCs persist state and so are not grantable by device:read.
+// TestGRPCMethodPermissions_AttestationIsAWrite pins that the attestation
+// RPCs persist state and so are not grantable by device:read. Issuing a
+// challenge creates server state too (#2136).
 func TestGRPCMethodPermissions_AttestationIsAWrite(t *testing.T) {
 	for _, method := range []string{
 		"/platform.v1.DeviceService/AttestDevice",
+		"/platform.v1.DeviceService/IssueAttestationChallenge",
 		"/platform.v1.DeviceService/RecordAttestationCertificate",
 	} {
 		if got := ScopeForMethod(method); got != "device:write" {
