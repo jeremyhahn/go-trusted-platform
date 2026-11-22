@@ -295,6 +295,12 @@ func (h *handler) MountISO(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	spec := bmcpkg.MediaSpec{URL: req.ISOURL}
+	if err := spec.Validate(); err != nil {
+		h.responseWriter.Error400(w, r, ErrInvalidISOURL{URL: req.ISOURL, Reason: err.Error()})
+		return
+	}
+
 	if err := h.bmcService.MountISO(r.Context(), profileID, req.ISOURL); err != nil {
 		h.writeBMCError(w, r, profileID, "mount ISO", err)
 		return
