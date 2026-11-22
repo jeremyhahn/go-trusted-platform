@@ -236,9 +236,12 @@ pebble for storage."*
 
 Clustering additionally requires the **`cluster` build tag**, which is in the
 default `BUILD_TAGS` (`make -s print-build-tags` prints the derived set — the
-tags are assembled in two stages, so any hand-copied list is wrong). Without it,
-`daemon.NewClusterService` is the stub in `cluster_service_stub.go` and returns
-`"cluster service not enabled (build with -tags cluster)"`.
+tags are assembled in two stages, so any hand-copied list is wrong). The tag
+does not change what the daemon serves: nothing constructs a ClusterService in
+any build, so every cluster transport answers Unavailable until #336 lands.
+Without the tag, `daemon.NewClusterService` is the stub in
+`cluster_service_stub.go` and returns
+`"cluster service is not wired in any build (#336)"`.
 
 ## 4. State machines
 

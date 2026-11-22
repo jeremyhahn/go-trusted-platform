@@ -2001,7 +2001,7 @@ func (app *App) InitTPM(ctx context.Context, soPIN, userPIN xkmssdk.Password, in
 		// (the repair cannot recreate the seal parent, so the drifted
 		// SRK would be adopted with every policy-authorized operation
 		// failing — round 7).
-		recovery, recoveryErr := resolveTPMRecovery(probeTPMSealArtifacts(), provisionCause)
+		recovery, recoveryErr := resolveTPMRecovery(probeTPMSealArtifactsForTPM(app.TPMConfig.UseSimulator, app.TPMConfig.CommandAddress), provisionCause)
 		if recoveryErr != nil {
 			return recoveryErr
 		}

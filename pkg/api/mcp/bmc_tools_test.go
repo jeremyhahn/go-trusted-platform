@@ -56,7 +56,7 @@ func newBMCTestRegistry(server platformv1.BMCServiceServer) *ToolRegistry {
 // Every BMCService method has one tool, and the tool requires the scope its
 // gRPC method requires.
 func TestBMCTools_CoverEveryMethodWithItsGRPCScope(t *testing.T) {
-	permissions := toolPermissionCatalog()
+	permissions := declaredToolPermissions(PlatformTools{})
 	byMethod := make(map[string]string, len(bmcTools))
 	for name, tool := range bmcTools {
 		byMethod[tool.method] = name

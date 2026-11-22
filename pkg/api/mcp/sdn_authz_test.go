@@ -125,8 +125,9 @@ func callSDNTool(t *testing.T, tool string, granted ...string) (*mcpwire.JSONRPC
 		},
 	}
 	server := NewServer(sdnServiceRecordingCalls(ran), &Config{
-		AuthManager:          authMgr,
+		AuthManager:          pepCaller(authMgr),
 		AuthorizationService: authSvc,
+		PEPClient:            servicePEP{authSvc},
 	}, newTestLogger())
 
 	req := &mcpwire.JSONRPCRequest{
