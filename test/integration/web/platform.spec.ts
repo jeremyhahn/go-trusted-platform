@@ -328,7 +328,7 @@ test.describe('Platform Services Page', () => {
 
       if ((await searchInput.count()) > 0) {
         await searchInput.first().fill('api');
-        await authenticatedPage.waitForTimeout(300);
+        await expect(searchInput.first()).toHaveValue('api');
         await expect(authenticatedPage.locator('main')).toBeVisible();
       }
     });
@@ -580,8 +580,8 @@ test.describe('Platform Metrics Page', () => {
     test('should display system overview cards', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/platform/metrics');
 
-      // Wait for internal mock data to load
-      await authenticatedPage.waitForTimeout(1000);
+      // The Uptime card renders only after the metrics response arrives (the page shows its loading state until then).
+      await expect(authenticatedPage.locator('text=Uptime')).toBeVisible({ timeout: 10000 });
 
       // Look for system metric cards or any card-like containers
       const cards = authenticatedPage.locator('[class*="card"], [class*="rounded-lg border"]');
@@ -592,8 +592,8 @@ test.describe('Platform Metrics Page', () => {
     test('should show uptime information', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/platform/metrics');
 
-      // Wait for internal mock data to load
-      await authenticatedPage.waitForTimeout(1000);
+      // The Uptime card renders only after the metrics response arrives (the page shows its loading state until then).
+      await expect(authenticatedPage.locator('text=Uptime')).toBeVisible({ timeout: 10000 });
 
       // Look for uptime text - the page shows uptime in cards
       const uptimeText = authenticatedPage.locator('text=/uptime/i');
@@ -632,8 +632,8 @@ test.describe('Platform Metrics Page', () => {
     test('should show progress bars for resource usage', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/platform/metrics');
 
-      // Wait for internal mock data to load
-      await authenticatedPage.waitForTimeout(1000);
+      // The Uptime card renders only after the metrics response arrives (the page shows its loading state until then).
+      await expect(authenticatedPage.locator('text=Uptime')).toBeVisible({ timeout: 10000 });
 
       // Look for progress bars or resource usage indicators
       const progressBars = authenticatedPage.locator('[role="progressbar"], [class*="progress"], [class*="bg-primary"]');
@@ -646,8 +646,8 @@ test.describe('Platform Metrics Page', () => {
     test('should display service metrics section', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/platform/metrics');
 
-      // Wait for internal mock data to load
-      await authenticatedPage.waitForTimeout(1000);
+      // The service cards render under the "Service Health" heading, only after the health response arrives (web/src/app/(dashboard)/platform/metrics/page.tsx renders it when serviceMetrics is not empty).
+      await expect(authenticatedPage.locator('h2:has-text("Service Health")')).toBeVisible({ timeout: 10000 });
 
       // Look for service metrics section or service names
       const serviceMetricsSection = authenticatedPage.locator('text=/service metrics|api server|tpm service/i');
@@ -658,8 +658,8 @@ test.describe('Platform Metrics Page', () => {
     test('should show service performance data', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/platform/metrics');
 
-      // Wait for internal mock data to load
-      await authenticatedPage.waitForTimeout(1000);
+      // The service cards render under the "Service Health" heading, only after the health response arrives (web/src/app/(dashboard)/platform/metrics/page.tsx renders it when serviceMetrics is not empty).
+      await expect(authenticatedPage.locator('h2:has-text("Service Health")')).toBeVisible({ timeout: 10000 });
 
       // Look for performance metrics - the page shows latency, requests/sec, error rate
       const perfText = authenticatedPage.locator('text=/latency|requests|error/i');

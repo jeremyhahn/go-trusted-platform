@@ -385,8 +385,7 @@ test.describe('CRUD Operations', () => {
       const submitButton = dialog.locator('button[type="submit"]');
       await submitButton.click();
 
-      // Wait for response
-      await authenticatedPage.waitForTimeout(1000);
+      await expect(dialog).toBeHidden();
     });
   });
 
@@ -477,9 +476,6 @@ test.describe('Real-time Updates', () => {
     await authenticatedPage.goto('/iam/users');
 
     await authenticatedPage.waitForLoadState('networkidle');
-
-    // Wait for potential API call
-    await authenticatedPage.waitForTimeout(1000);
 
     // The page should have made at least one API call to load users
     // or shown an error/loading state (which is also valid)
