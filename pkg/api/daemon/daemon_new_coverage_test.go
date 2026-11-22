@@ -863,7 +863,7 @@ func TestRegisterHealthCheckers_NoOptionalServices(t *testing.T) {
 	assert.Nil(t, d.restServer)
 	assert.Nil(t, d.mcpServer)
 	assert.Nil(t, d.quicServer)
-	assert.Nil(t, d.caService)
+	assert.NotNil(t, d.caService)
 	// sdnService is always a non-nil zone-capable stub; OVSClient is nil when OVSSocketPath is empty.
 	assert.NotNil(t, d.sdnService)
 	assert.Nil(t, d.sdnService.OVSClient())
@@ -904,7 +904,7 @@ func TestDaemon_Accessors(t *testing.T) {
 	assert.NotNil(t, d.MCPServer())
 	assert.NotNil(t, d.MCPServiceProvider())
 
-	assert.Nil(t, d.CAGRPCService())
+	assert.NotNil(t, d.CAGRPCService())
 	// SDNService always returns a non-nil zone-capable stub; OVSClient is nil when no socket is configured.
 	assert.NotNil(t, d.SDNService())
 	assert.Nil(t, d.SDNService().OVSClient())

@@ -90,6 +90,21 @@ func TestUninstallFromSystemTrust_NothingInstalled(t *testing.T) {
 	}
 }
 
+// TestUninstallFromSystemTrust_MissingFileIsNotInstalled: a bundle path that
+// does not exist (never written, or removed by another caller) is not
+// installed, not an error.
+func TestUninstallFromSystemTrust_MissingFileIsNotInstalled(t *testing.T) {
+	certPath := filepath.Join(t.TempDir(), "gone", "ca.crt")
+
+	removed, err := UninstallFromSystemTrust(certPath)
+	if err != nil {
+		t.Fatalf("missing file: expected nil error, got %v", err)
+	}
+	if removed {
+		t.Error("missing file reported as removed")
+	}
+}
+
 func TestUninstallFromSystemTrust_RefusesAnotherBundle(t *testing.T) {
 	certPath := filepath.Join(t.TempDir(), "ca.crt")
 	other := []byte("-----BEGIN CERTIFICATE-----\nother\n-----END CERTIFICATE-----\n")

@@ -370,7 +370,10 @@ POST /api/v1/attestation/vm/{id}
 POST /api/v1/ca/certificates
 POST /api/v1/ca/certificates/verify
 POST /api/v1/ca/certificates/{serial}/renew
+POST /api/v1/ca/init
 POST /api/v1/ca/sign-csr
+POST /api/v1/ca/trust/install
+POST /api/v1/ca/trust/uninstall
 POST /api/v1/compute/containers
 POST /api/v1/compute/containers/{id}/attest
 POST /api/v1/compute/containers/{id}/exec

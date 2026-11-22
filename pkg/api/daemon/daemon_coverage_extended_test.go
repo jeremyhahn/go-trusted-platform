@@ -225,7 +225,7 @@ func TestNewExtended_WithNilCAService(t *testing.T) {
 	d, err := New(config)
 	require.NoError(t, err)
 
-	assert.Nil(t, d.caService)
+	assert.NotNil(t, d.caService)
 }
 
 func TestNewExtended_WithNilVTPMService(t *testing.T) {

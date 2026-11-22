@@ -265,6 +265,37 @@ func TestCAGRPCService_UninstallCACertificates(t *testing.T) {
 	})
 }
 
+// TestCAGRPCService_TrustLifecycle_Concurrent runs an uninstall and an
+// install at once: neither may fail because the other replaced or removed
+// the bundle between its read and its write or remove.
+func TestCAGRPCService_TrustLifecycle_Concurrent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ca.crt")
+	svc := NewCAGRPCService(nil, lifecycleCA(t), nil).WithTrustInstallPath(path)
+	install := &platformv1.InstallCACertificatesRequest{IncludeIntermediates: true}
+
+	for round := 0; round < 20; round++ {
+		_, err := svc.InstallCACertificates(context.Background(), install)
+		require.NoError(t, err)
+
+		errs := make(chan error, 2)
+		go func() {
+			_, err := svc.UninstallCACertificates(context.Background(), &platformv1.UninstallCACertificatesRequest{})
+			errs <- err
+		}()
+		go func() {
+			_, err := svc.InstallCACertificates(context.Background(), install)
+			errs <- err
+		}()
+		require.NoError(t, <-errs, "round %d", round)
+		require.NoError(t, <-errs, "round %d", round)
+	}
+
+	_, err := svc.UninstallCACertificates(context.Background(), &platformv1.UninstallCACertificatesRequest{})
+	require.NoError(t, err)
+	_, statErr := os.Stat(path)
+	assert.True(t, os.IsNotExist(statErr))
+}
+
 func TestCALifecycle_RequiresTheAdminScope(t *testing.T) {
 	assert.Equal(t, "ca:create", grpcapi.ScopeForMethod("/platform.v1.CAService/InitCA"))
 	assert.Equal(t, "trust:write", grpcapi.ScopeForMethod("/platform.v1.CAService/InstallCACertificates"))

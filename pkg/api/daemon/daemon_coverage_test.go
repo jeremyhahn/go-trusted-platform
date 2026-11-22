@@ -43,7 +43,7 @@ func init() {
 // Tests for uncovered daemon methods
 
 func TestDaemon_CAGRPCService(t *testing.T) {
-	t.Run("returns nil when not configured", func(t *testing.T) {
+	t.Run("is registered with no CA configured", func(t *testing.T) {
 		config := DefaultConfig()
 		config.SocketPath = "/tmp/test-ca-grpc-nil.sock"
 		config.SocketGroup = ""
@@ -55,7 +55,7 @@ func TestDaemon_CAGRPCService(t *testing.T) {
 		defer func() { _ = d.ForceStop() }()
 
 		svc := d.CAGRPCService()
-		assert.Nil(t, svc)
+		assert.NotNil(t, svc)
 	})
 
 	t.Run("SetCAGRPCService updates service", func(t *testing.T) {
@@ -69,8 +69,8 @@ func TestDaemon_CAGRPCService(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _ = d.ForceStop() }()
 
-		// Initially nil
-		assert.Nil(t, d.CAGRPCService())
+		// Initially registered with no CA
+		assert.NotNil(t, d.CAGRPCService())
 
 		// Set a CA service
 		caSvc := &CAGRPCService{}
