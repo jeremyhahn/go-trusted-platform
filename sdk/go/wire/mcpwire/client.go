@@ -113,7 +113,7 @@ func NewClient(config *ClientConfig, opts ...ClientOption) (*Client, error) {
 		options.logger = slog.Default()
 	}
 
-	httpClient := &http.Client{Timeout: config.Timeout}
+	httpClient := &http.Client{Timeout: config.Timeout, CheckRedirect: refuseDowngradeRedirect}
 	if config.TLSConfig != nil {
 		httpClient.Transport = &http.Transport{TLSClientConfig: config.TLSConfig}
 	}
@@ -126,6 +126,24 @@ func NewClient(config *ClientConfig, opts ...ClientOption) (*Client, error) {
 	}
 
 	return c, nil
+}
+
+// maxRedirects matches net/http's default redirect limit.
+const maxRedirects = 10
+
+// refuseDowngradeRedirect is the client's CheckRedirect. A 307 or 308
+// replays the POST body, so following a redirect from https to a
+// non-https URL would resend the request, secrets such as owner_password
+// included, in plaintext: such a redirect is refused before it is sent.
+// Other redirects keep Go's default limit of 10.
+func refuseDowngradeRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) > 0 && via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
+		return &MessageError{Msg: "refusing redirect from https to " + req.URL.Scheme}
+	}
+	if len(via) >= maxRedirects {
+		return &MessageError{Msg: "stopped after 10 redirects"}
+	}
+	return nil
 }
 
 // Close closes the MCP client.

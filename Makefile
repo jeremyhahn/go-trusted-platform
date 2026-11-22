@@ -1237,6 +1237,36 @@ web-test:
 	@echo "[Web] Running Playwright E2E tests..."
 	cd $(WEB_SRC) && npm run test:e2e
 
+# Playwright against a real platformd (#2034, epic #1665): builds platformd
+# with the console embedded (web-e2e-platformd: cgo, tpm_simulator), then
+# web/playwright.real-server.config.ts starts
+# it on the TPM simulator in a temporary directory (global-setup.ts), runs
+# web/e2e/real-server/ in Chromium with real WebAuthn ceremonies and stops it.
+# No mocks. web-deps runs first (npm ci from the lockfiles, so
+# @playwright/test is installed). Run `cd web && npx playwright install
+# chromium` once on a fresh checkout; the target downloads no browser.
+#   make web-e2e                 # build, then the suite
+#   make web-e2e E2E_PORT=19443  # another TLS port
+#   make web-e2e WEB_E2E_BUILD=0 # reuse bin/platformd
+WEB_E2E_BUILD ?= 1
+.PHONY: web-e2e
+web-e2e: web-deps
+ifeq ($(strip $(WEB_E2E_BUILD)),1)
+	$(MAKE) web-e2e-platformd WITH_WEB=1
+endif
+	@echo "[Web] Running Playwright against a real platformd..."
+	cd $(WEB_SRC) && E2E_PORT=$(E2E_PORT) PLATFORMD_BIN=$(abspath $(PLATFORMD)) \
+		npx playwright test --config playwright.real-server.config.ts
+
+# The web-e2e daemon: bin/platformd with the console embedded (run with
+# WITH_WEB=1), linked with cgo and the tpm_simulator tag so tpm.simulator: true
+# in platformd.test.yaml has an in-process simulator. The default `make build`
+# stays CGO_ENABLED=0 without the simulator; this binary is for the e2e suite.
+.PHONY: web-e2e-platformd
+web-e2e-platformd: _web-embed-prepare
+	@mkdir -p bin
+	CGO_ENABLED=1 $(GOBIN)/go build -tags "tpm_simulator $(BUILD_TAGS)" -o $(PLATFORMD) --ldflags '-w -s ${LDFLAGS}' ./cmd/platformd
+
 # vitest over web/src/**/*.test.ts(x): hooks, stores, contexts in jsdom, no
 # server. Playwright (web-test) owns the browser flows.
 .PHONY: web-test-unit
