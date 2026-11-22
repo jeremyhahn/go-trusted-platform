@@ -1869,6 +1869,26 @@ func TestPXEGRPC_BootPortsReachOnlyTheBootServer(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("wildcard bind host allows the address iPXE advertises", func(t *testing.T) {
+		for _, bindHost := range []string{"", "0.0.0.0"} {
+			// ipxe.NewServer advertises this address in its boot URL.
+			want, err := (&ipxe.ServerConfig{BindHost: bindHost}).GetServerIP()
+			if err != nil {
+				t.Skipf("no host address to advertise for bind host %q: %v", bindHost, err)
+			}
+			if want == prov.Gateway.String() {
+				t.Skipf("the detected host address is the provisioning gateway %s, so it cannot tell the two apart", want)
+			}
+			rules := bootRules(t, bindHost)
+			for _, p := range []int{8080, 8081, 10809} {
+				require.NotEmpty(t, rules[p], "bind host %q: no allow rule for TCP port %d", bindHost, p)
+				for _, dst := range rules[p] {
+					assert.Equal(t, want, dst, "bind host %q: port %d allow rule destination", bindHost, p)
+				}
+			}
+		}
+	})
 }
 
 // TestDaemonPXEBackendRefusesABridgeMismatch: the VLAN wrapper only
