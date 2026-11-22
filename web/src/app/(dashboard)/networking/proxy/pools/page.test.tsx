@@ -76,6 +76,7 @@ function shared(): Record<string, Answer> {
 async function renderPage() {
   render(withControlPlane(<ProxyPoolsPage />));
   await within(await screen.findByTestId('proxy-pools')).findByText('p1');
+  await waitFor(() => expect(document.querySelector('[title="checking server capabilities"]')).toBeNull());
 }
 
 async function click(name: string) {
@@ -234,12 +235,14 @@ describe('ProxyPoolsPage', () => {
     });
     await renderPage();
 
-    for (const name of ['New pool', 'Edit p1', 'Delete p1']) {
-      const button = screen.getByRole('button', { name }) as HTMLButtonElement;
-      expect(button.disabled).toBe(true);
-      expect(button.getAttribute('data-capability-enabled')).toBe('false');
-      expect(button.getAttribute('title')).toBe('not-configured: proxy');
-    }
+    await waitFor(() => {
+      for (const name of ['New pool', 'Edit p1', 'Delete p1']) {
+        const button = screen.getByRole('button', { name }) as HTMLButtonElement;
+        expect(button.disabled).toBe(true);
+        expect(button.getAttribute('data-capability-enabled')).toBe('false');
+        expect(button.getAttribute('title')).toBe('not-configured: proxy');
+      }
+    });
   });
 
   it('makes no proxy read when the server does not offer them', async () => {
