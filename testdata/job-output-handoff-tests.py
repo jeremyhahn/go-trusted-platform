@@ -44,8 +44,15 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES = os.path.dirname(HERE)
-CI = os.path.join(TEMPLATES, "ci.yml")
-MASK = os.path.join(TEMPLATES, "ci-mask-lan.sh")
+# v1.53 (Codex P2 on go-trusted-platform #2311): the same file runs in the
+# handbook (testdata/ beside the template) and in a carrier (testdata/ at the
+# repository root), so each path is the template's, else the carrier's.
+def first(*paths):
+    return next((p for p in paths if os.path.exists(p)), paths[0])
+
+
+CI = first(os.path.join(TEMPLATES, "ci.yml"), os.path.join(TEMPLATES, ".github", "workflows", "ci.yml"))
+MASK = first(os.path.join(TEMPLATES, "ci-mask-lan.sh"), os.path.join(TEMPLATES, "scripts", "ci-mask-lan.sh"))
 STEP_RUN = "scripts/ci-mask-lan.sh"
 
 failures = []
@@ -261,6 +268,10 @@ def consumer_cases(text):
 
 
 def main():
+    for need in (CI, MASK):
+        if not os.path.exists(need):
+            print(f"FAIL: no {os.path.relpath(need, TEMPLATES)}: carry it from the handbook template")
+            sys.exit(1)
     with open(CI) as f:
         tmpl = f.read()
     f1 = findings(tmpl)
