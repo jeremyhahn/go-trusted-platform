@@ -51,6 +51,9 @@ func UninstallFromSystemTrust(certPath string, written ...[]byte) (bool, error) 
 	for _, bundle := range written {
 		if len(bundle) > 0 && bytes.Equal(current, bundle) {
 			if err := os.Remove(certPath); err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					return false, nil
+				}
 				return false, err
 			}
 			return true, nil

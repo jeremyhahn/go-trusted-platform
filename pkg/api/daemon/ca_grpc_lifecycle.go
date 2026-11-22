@@ -172,6 +172,8 @@ func (s *CAGRPCService) InstallCACertificates(ctx context.Context, req *platform
 	if ca == nil || !ca.IsInitialized() {
 		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
+	s.trustMu.Lock()
+	defer s.trustMu.Unlock()
 	rootPEM, rootCount, fullPEM, fullCount, err := s.caTrustBundles(ca)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
@@ -207,6 +209,8 @@ func (s *CAGRPCService) UninstallCACertificates(ctx context.Context, req *platfo
 	if ca == nil || !ca.IsInitialized() {
 		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
+	s.trustMu.Lock()
+	defer s.trustMu.Unlock()
 	rootPEM, rootCount, fullPEM, fullCount, err := s.caTrustBundles(ca)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())

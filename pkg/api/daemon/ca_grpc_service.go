@@ -71,6 +71,9 @@ type CAGRPCService struct {
 	initMu sync.Mutex
 	// trustPath is where InstallCACertificates writes the CA bundle.
 	trustPath string
+	// trustMu serializes trust install and uninstall, so neither replaces or
+	// removes the bundle between the other's read and its write or remove.
+	trustMu sync.Mutex
 	// holder, when set, is the CA shared with the REST CA handlers; it
 	// replaces ca for every read and write.
 	holder *CAHolder
