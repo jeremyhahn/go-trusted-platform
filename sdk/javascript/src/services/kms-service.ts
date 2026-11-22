@@ -48,7 +48,35 @@ import type {
   GenerateDataKeyResponse,
   GenerateWrappedDataKeyResponse,
   BackendStatusResponse,
+  HashAlgorithm,
 } from '../types/kms.js';
+
+/**
+ * The REST handlers map only these hash choices and turn every other value
+ * into SHA256 (handlers.go parseHashAlgorithm), so a SHA1 or SHA3 choice
+ * would be silently replaced: refuse it before sending.
+ */
+const HANDLED_HASHES: ReadonlySet<string> = new Set(['', 'UNSPECIFIED', 'SHA256', 'SHA384', 'SHA512']);
+
+function assertHandledHash(op: string, hash: HashAlgorithm | undefined): void {
+  if (hash !== undefined && !HANDLED_HASHES.has(hash)) {
+    throw new RangeError(`${op}: hash ${hash} is not supported by the daemon (SHA256, SHA384 or SHA512)`);
+  }
+}
+
+/**
+ * Builds a REST wire body, leaving out fields that are undefined so the
+ * server's `omitempty` defaults apply.
+ */
+function wireBody(fields: Record<string, unknown>): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined) {
+      body[key] = value;
+    }
+  }
+  return body;
+}
 
 /**
  * Key Management Service class
@@ -101,13 +129,22 @@ export class KMSService extends BaseService {
   }
 
   /**
-   * Import an existing key
+   * Import an existing key: `POST /keys/import` with the server's
+   * snake_case ImportKeyRequest body.
    *
    * @param request - Key import request with key material
    * @returns Imported key handle and metadata
    */
   async importKey(request: ImportKeyRequest): Promise<ApiResponse<ImportKeyResponse>> {
-    return this.client.post<ImportKeyResponse>(this.buildUrl('/keys/import'), request);
+    return this.client.post<ImportKeyResponse>(this.buildUrl('/keys/import'), wireBody({
+      name: request.name,
+      algorithm: request.keySpec.algorithm,
+      key_material: request.keyMaterial,
+      wrapping_key_id: request.wrappingKeyId,
+      usage: request.keySpec.usage,
+      description: request.description,
+      tags: request.tags,
+    }));
   }
 
   /**
@@ -167,13 +204,13 @@ export class KMSService extends BaseService {
   }
 
   /**
-   * Update key status (enable/disable)
+   * Update key status (enable/disable): `PUT /keys/{name}/status`.
    *
    * @param request - Status update request
    * @returns Updated key status
    */
   async updateKeyStatus(request: UpdateKeyStatusRequest): Promise<ApiResponse<UpdateKeyStatusResponse>> {
-    return this.client.patch<UpdateKeyStatusResponse>(
+    return this.client.put<UpdateKeyStatusResponse>(
       this.buildUrl(`/keys/${this.encodePathSegment(request.keyId)}/status`),
       { version: request.version, status: request.status }
     );
@@ -216,73 +253,121 @@ export class KMSService extends BaseService {
   // =========================================================================
 
   /**
-   * Encrypt plaintext
+   * Encrypt plaintext: POST /v1/kms/encrypt/{name} with { plaintext, context }
    *
    * @param request - Encryption request
    * @returns Ciphertext
    */
   async encrypt(request: EncryptRequest): Promise<ApiResponse<EncryptResponse>> {
-    return this.client.post<EncryptResponse>(this.buildUrl('/encrypt'), request);
+    return this.client.post<EncryptResponse>(
+      this.buildUrl(`/encrypt/${this.encodePathSegment(request.keyId)}`),
+      wireBody({ plaintext: request.plaintext, context: request.context })
+    );
   }
 
   /**
-   * Decrypt ciphertext
+   * Decrypt ciphertext: POST /v1/kms/decrypt/{name} with { ciphertext, context, version }
    *
    * @param request - Decryption request
    * @returns Plaintext
    */
   async decrypt(request: DecryptRequest): Promise<ApiResponse<DecryptResponse>> {
-    return this.client.post<DecryptResponse>(this.buildUrl('/decrypt'), request);
+    return this.client.post<DecryptResponse>(
+      this.buildUrl(`/decrypt/${this.encodePathSegment(request.keyId)}`),
+      wireBody({ ciphertext: request.ciphertext, context: request.context, version: request.keyVersion })
+    );
   }
 
   /**
-   * Sign a message
+   * Sign a message: POST /v1/kms/sign/{name} with { data, hash, version, pre_hashed }
    *
    * @param request - Signing request
    * @returns Signature
    */
   async sign(request: SignRequest): Promise<ApiResponse<SignResponse>> {
-    return this.client.post<SignResponse>(this.buildUrl('/sign'), request);
+    assertHandledHash('sign', request.hashAlgorithm);
+    // The REST Sign handler never reads a version and always signs with the
+    // current key, so a selected older version would be silently ignored:
+    // refuse it before sending.
+    if (request.keyVersion) {
+      throw new RangeError(
+        'sign key version selection is not supported: the daemon always signs with the current key'
+      );
+    }
+    return this.client.post<SignResponse>(
+      this.buildUrl(`/sign/${this.encodePathSegment(request.keyId)}`),
+      wireBody({
+        data: request.message,
+        hash: request.hashAlgorithm,
+        pre_hashed: request.preHashed,
+      })
+    );
   }
 
   /**
-   * Verify a signature
+   * Verify a signature: POST /v1/kms/verify/{name} with { data, signature, hash }.
+   * The daemon always verifies with the current key, so a nonzero keyVersion is refused.
    *
    * @param request - Verification request
    * @returns Verification result
    */
   async verify(request: VerifyRequest): Promise<ApiResponse<VerifyResponse>> {
-    return this.client.post<VerifyResponse>(this.buildUrl('/verify'), request);
+    assertHandledHash('verify', request.hashAlgorithm);
+    // The REST Verify handler never forwards a version, and the crypto client
+    // it calls has no version field: a selected older version would be
+    // silently checked against the current key, so refuse it before sending.
+    if (request.keyVersion) {
+      throw new RangeError(
+        'verify key version selection is not supported: the daemon always verifies with the current key'
+      );
+    }
+    return this.client.post<VerifyResponse>(
+      this.buildUrl(`/verify/${this.encodePathSegment(request.keyId)}`),
+      wireBody({
+        data: request.message,
+        signature: request.signature,
+        hash: request.hashAlgorithm,
+      })
+    );
   }
 
   /**
-   * Compute hash
+   * Compute hash: `POST /hash` with `{ data, hash }`.
    *
    * @param request - Hash request
    * @returns Hash value
    */
   async hash(request: HashRequest): Promise<ApiResponse<HashResponse>> {
-    return this.client.post<HashResponse>(this.buildUrl('/hash'), request);
+    assertHandledHash('hash', request.algorithm);
+    return this.client.post<HashResponse>(this.buildUrl('/hash'), { data: request.data, hash: request.algorithm });
   }
 
   /**
-   * Compute HMAC
+   * Compute HMAC: `POST /hmac/{name}` with `{ data, hash }`.
    *
    * @param request - HMAC request
    * @returns HMAC value
    */
   async hmac(request: HMACRequest): Promise<ApiResponse<HMACResponse>> {
-    return this.client.post<HMACResponse>(this.buildUrl('/hmac'), request);
+    assertHandledHash('hmac', request.hashAlgorithm);
+    return this.client.post<HMACResponse>(
+      this.buildUrl(`/hmac/${this.encodePathSegment(request.keyId)}`),
+      wireBody({ data: request.message, hash: request.hashAlgorithm })
+    );
   }
 
   /**
-   * Verify HMAC
+   * Verify HMAC: `POST /hmac/{name}/verify` with `{ data, hmac, hash }`.
    *
    * @param request - HMAC verification request
    * @returns Verification result
    */
   async verifyHMAC(request: VerifyHMACRequest): Promise<ApiResponse<VerifyHMACResponse>> {
-    return this.client.post<VerifyHMACResponse>(this.buildUrl('/hmac/verify'), request);
+    assertHandledHash('verifyHMAC', request.hashAlgorithm);
+    return this.client.post<VerifyHMACResponse>(
+      this.buildUrl(`/hmac/${this.encodePathSegment(request.keyId)}/verify`),
+      wireBody({ data: request.message, hmac: request.hmac, hash: request.hashAlgorithm })
+    );
   }
 
   // =========================================================================
@@ -290,33 +375,45 @@ export class KMSService extends BaseService {
   // =========================================================================
 
   /**
-   * Generate random bytes
+   * Generate random bytes: `POST /random` with `{ num_bytes }`.
    *
    * @param request - Random generation request
    * @returns Random bytes
    */
   async generateRandom(request: GenerateRandomRequest): Promise<ApiResponse<GenerateRandomResponse>> {
-    return this.client.post<GenerateRandomResponse>(this.buildUrl('/random'), request);
+    return this.client.post<GenerateRandomResponse>(this.buildUrl('/random'), { num_bytes: request.numBytes });
   }
 
   /**
-   * Generate a data key (plaintext + encrypted)
+   * Generate a data key (plaintext + encrypted): `POST /data-keys` with
+   * `{ key_id, algorithm, key_size, context }`.
    *
    * @param request - Data key generation request
    * @returns Plaintext and encrypted data key
    */
   async generateDataKey(request: GenerateDataKeyRequest): Promise<ApiResponse<GenerateDataKeyResponse>> {
-    return this.client.post<GenerateDataKeyResponse>(this.buildUrl('/datakey'), request);
+    return this.client.post<GenerateDataKeyResponse>(this.buildUrl('/data-keys'), wireBody({
+      key_id: request.keyId,
+      algorithm: request.algorithm,
+      key_size: request.keySize,
+      context: request.context,
+    }));
   }
 
   /**
-   * Generate a wrapped data key (encrypted only)
+   * Generate a wrapped data key (encrypted only): `POST /data-keys/wrapped`
+   * with `{ wrapping_key_id, key_algorithm, key_size, context }`.
    *
    * @param request - Wrapped data key generation request
    * @returns Wrapped data key
    */
   async generateWrappedDataKey(request: GenerateWrappedDataKeyRequest): Promise<ApiResponse<GenerateWrappedDataKeyResponse>> {
-    return this.client.post<GenerateWrappedDataKeyResponse>(this.buildUrl('/datakey/wrapped'), request);
+    return this.client.post<GenerateWrappedDataKeyResponse>(this.buildUrl('/data-keys/wrapped'), wireBody({
+      wrapping_key_id: request.wrappingKeyId,
+      key_algorithm: request.keyAlgorithm,
+      key_size: request.keySize,
+      context: request.context,
+    }));
   }
 
   // =========================================================================

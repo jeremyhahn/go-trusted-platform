@@ -26,19 +26,14 @@ import type {
   RecordAttestCertResponse,
   CreateDeviceResponse,
   GetDeviceResponse,
-  UpdateDeviceResponse,
   DeleteDeviceResponse,
   ListDevicesResponse,
-  FindDeviceBySerialResponse,
   CountDevicesResponse,
   CreateProfileResponse,
   GetProfileResponse,
-  UpdateProfileResponse,
   DeleteProfileResponse,
   ListProfilesResponse,
-  FindProfileByMACAddressResponse,
-  FindProfileBySerialResponse,
-  FindMatchingProfileResponse,
+  Device,
   CountProfilesResponse,
   ActivateDeviceResponse,
   DeviceTemplate,
@@ -64,6 +59,28 @@ import type { DeviceSelfServiceProfile } from '../types/device-self-service.js';
 import type { NetworkPhaseConfig } from '../types/device.js';
 import { AUTH_METHOD_WIRE_NAMES } from '../types/device.js';
 import { encodeOptionalEnum } from './wire-enum.js';
+
+const UINT64_MAX = 18446744073709551615n;
+
+/**
+ * Validates a device profile ID (a server uint64) and returns it as an encoded
+ * path segment. A free-form string would otherwise be interpolated into the
+ * route, so '7/unassign?' could reach another action.
+ */
+function profileIdSegment(profileId: number | string): string {
+  // A number past Number.MAX_SAFE_INTEGER is already rounded, so it would
+  // name a different profile: large IDs must come as decimal strings.
+  if (typeof profileId === 'number' && !Number.isSafeInteger(profileId)) {
+    throw new RangeError(
+      `device profile id ${profileId} is not a safe integer: pass large IDs as a decimal string`
+    );
+  }
+  const id = String(profileId);
+  if (!/^[0-9]{1,20}$/.test(id) || BigInt(id) > UINT64_MAX) {
+    throw new RangeError(`device profile id must be a decimal uint64, got ${JSON.stringify(id)}`);
+  }
+  return encodeURIComponent(id);
+}
 
 /** A network phase as pkg/webservice/v1/device/types.go decodes it. */
 type WireNetworkPhase = Omit<NetworkPhaseConfig, 'auth_method' | 'firewallZone'> & {
@@ -174,8 +191,8 @@ export class DeviceService extends BaseService {
    * @param request - Device update request
    * @returns Updated device
    */
-  async updateDevice(request: UpdateDeviceRequest): Promise<ApiResponse<UpdateDeviceResponse>> {
-    return this.client.put<UpdateDeviceResponse>(
+  async updateDevice(request: UpdateDeviceRequest): Promise<ApiResponse<Device>> {
+    return this.client.put<Device>(
       this.buildUrl(`/${request.device.id}`),
       request
     );
@@ -279,8 +296,8 @@ export class DeviceService extends BaseService {
    * @param serial - Serial number
    * @returns Found device
    */
-  async findDeviceBySerial(serial: string): Promise<ApiResponse<FindDeviceBySerialResponse>> {
-    return this.client.get<FindDeviceBySerialResponse>(
+  async findDeviceBySerial(serial: string): Promise<ApiResponse<Device>> {
+    return this.client.get<Device>(
       this.buildUrl(`/serial/${this.encodePathSegment(serial)}`)
     );
   }
@@ -306,7 +323,12 @@ export class DeviceService extends BaseService {
    * @returns Activation result
    */
   async activateDevice(request: ActivateDeviceRequest): Promise<ApiResponse<ActivateDeviceResponse>> {
-    return this.client.post<ActivateDeviceResponse>(this.singularUrl('/activate-json'), request);
+    // The server decodes snake_case: map the MAC and omit it when empty.
+    const body: { serial: string; mac_address?: string } = { serial: request.serial };
+    if (request.macAddress !== undefined && request.macAddress !== '') {
+      body.mac_address = request.macAddress;
+    }
+    return this.client.post<ActivateDeviceResponse>(this.singularUrl('/activate-json'), body);
   }
 
   // =========================================================================
@@ -339,8 +361,10 @@ export class DeviceService extends BaseService {
    * @param request - Profile update request
    * @returns Updated profile
    */
-  async updateProfile(request: UpdateProfileRequest): Promise<ApiResponse<UpdateProfileResponse>> {
-    return this.client.put<UpdateProfileResponse>(
+  async updateProfile(request: UpdateProfileRequest): Promise<ApiResponse<DeviceProfile>> {
+    // The server decodes a flat profile and replaces every field the body
+    // omits: send the whole profile, not the request envelope.
+    return this.client.put<DeviceProfile>(
       this.singularUrl(`/profiles/${request.profile.id}`),
       toWireProfile(request.profile)
     );
@@ -375,8 +399,8 @@ export class DeviceService extends BaseService {
    * @param macAddress - MAC address
    * @returns Found profile
    */
-  async findProfileByMACAddress(macAddress: string): Promise<ApiResponse<FindProfileByMACAddressResponse>> {
-    return this.client.get<FindProfileByMACAddressResponse>(
+  async findProfileByMACAddress(macAddress: string): Promise<ApiResponse<DeviceProfile>> {
+    return this.client.get<DeviceProfile>(
       this.singularUrl(`/profiles/mac/${this.encodePathSegment(macAddress)}`)
     );
   }
@@ -387,8 +411,8 @@ export class DeviceService extends BaseService {
    * @param serial - Serial number
    * @returns Found profile
    */
-  async findProfileBySerial(serial: string): Promise<ApiResponse<FindProfileBySerialResponse>> {
-    return this.client.get<FindProfileBySerialResponse>(
+  async findProfileBySerial(serial: string): Promise<ApiResponse<DeviceProfile>> {
+    return this.client.get<DeviceProfile>(
       this.singularUrl(`/profiles/serial/${this.encodePathSegment(serial)}`)
     );
   }
@@ -399,11 +423,19 @@ export class DeviceService extends BaseService {
    * @param request - Match request
    * @returns Matched profile
    */
-  async findMatchingProfile(request: FindMatchingProfileRequest): Promise<ApiResponse<FindMatchingProfileResponse>> {
-    return this.client.post<FindMatchingProfileResponse>(
-      this.singularUrl('/profiles/match'),
-      request
-    );
+  async findMatchingProfile(request: FindMatchingProfileRequest): Promise<ApiResponse<DeviceProfile>> {
+    // The server decodes snake_case: map the MAC and omit empty criteria.
+    const body: { mac_address?: string; serial?: string; model?: string } = {};
+    if (request.macAddress !== undefined && request.macAddress !== '') {
+      body.mac_address = request.macAddress;
+    }
+    if (request.serial !== undefined && request.serial !== '') {
+      body.serial = request.serial;
+    }
+    if (request.model !== undefined && request.model !== '') {
+      body.model = request.model;
+    }
+    return this.client.post<DeviceProfile>(this.singularUrl('/profiles/match'), body);
   }
 
   /**
@@ -514,7 +546,8 @@ export class DeviceService extends BaseService {
    *
    * @param request - Device identifier request; at least one of ekSerial or
    *   macAddress must be set, or the server answers 400.
-   * @returns Matching profile, or null if none matches
+   * @returns Matching profile; when no profile matches, the server answers
+   *   404 and the call fails with that status (it does not resolve to null)
    */
   async findConfigForDevice(
     request: FindConfigForDeviceRequest
@@ -558,9 +591,35 @@ export class DeviceService extends BaseService {
   async assignProfileToDevice(
     request: AssignProfileToDeviceRequest
   ): Promise<ApiResponse<DeviceProfile>> {
+    // The server's AssignProfileToDeviceRequest decodes snake_case names. The
+    // profile id travels in the path only: its body field is a plain uint64,
+    // so a string fails decoding and a number loses precision above 2^53.
+    const body: Record<string, string> = {};
+    if (request.ekSerial !== undefined && request.ekSerial !== '') {
+      body.ek_serial = request.ekSerial;
+    }
+    if (request.macAddress !== undefined && request.macAddress !== '') {
+      body.mac_address = request.macAddress;
+    }
     return this.client.post<DeviceProfile>(
-      this.singularUrl(`/profiles/${request.profileId}/assign`),
-      request
+      this.singularUrl(`/profiles/${profileIdSegment(request.profileId)}/assign`),
+      body
+    );
+  }
+
+  /**
+   * Unassign a profile from its device
+   *
+   * Server route: `POST /api/v1/device/profiles/{id}/unassign`. The route
+   * reads no body; it clears the profile's device binding and returns the
+   * updated profile.
+   * @param profileId - Profile ID
+   * @returns The updated profile
+   */
+  async unassignProfileFromDevice(profileId: number | string): Promise<ApiResponse<DeviceProfile>> {
+    return this.client.post<DeviceProfile>(
+      this.singularUrl(`/profiles/${profileIdSegment(profileId)}/unassign`),
+      {}
     );
   }
 

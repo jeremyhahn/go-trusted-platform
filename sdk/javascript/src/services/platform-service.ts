@@ -20,7 +20,50 @@ import type {
   GetMetricsRequest,
   GetMetricsResponse,
   ReloadConfigResponse,
+  DaemonStatusResponse,
+  DaemonServiceInfo,
+  ListDaemonServicesResponse,
+  DaemonServiceAction,
+  DaemonServiceActionResponse,
 } from '../types/platform.js';
+
+/**
+ * Which listener's route layout the platform service speaks for getStatus
+ * and the service-management methods. The webservice listener serves them
+ * under /api/v1/platform; the daemon REST listener registers /api/v1/status
+ * and /api/v1/services (pkg/api/daemon/rest_service.go).
+ */
+export type PlatformRouteLayout = 'webservice' | 'daemon';
+
+/**
+ * Platform service options
+ */
+export interface PlatformServiceOptions {
+  /** Route layout; defaults to 'webservice' */
+  routeLayout?: PlatformRouteLayout | undefined;
+}
+
+/**
+ * The daemon layout returns `timestamp` as an RFC 3339 string (Go time.Time).
+ * Normalize it to Unix seconds so callers always see the declared number;
+ * an unparseable string is dropped rather than returned as NaN.
+ */
+function withUnixTimestamp<T extends { timestamp?: number | undefined }>(
+  response: ApiResponse<T>
+): ApiResponse<T> {
+  const data = response.data as (T & { timestamp?: unknown }) | undefined;
+  if (data === undefined || data === null || typeof data.timestamp !== 'string') {
+    return response;
+  }
+  const ms = Date.parse(data.timestamp);
+  const normalized = { ...data } as T & { timestamp?: number | undefined };
+  if (Number.isNaN(ms)) {
+    delete normalized.timestamp;
+  } else {
+    normalized.timestamp = Math.floor(ms / 1000);
+  }
+  return { ...response, data: normalized };
+}
 
 /**
  * Platform Service class
@@ -52,9 +95,13 @@ export class PlatformService extends BaseService {
    *
    * @param client - The API client to use for requests
    */
-  constructor(client: Transport | ApiClient) {
+  constructor(client: Transport | ApiClient, options?: PlatformServiceOptions) {
     super(client, '/v1/platform');
+    this.lifecycleBasePath = (options?.routeLayout ?? 'webservice') === 'daemon' ? '/v1' : '/v1/platform';
   }
+
+  /** Base path of getStatus and the service-management routes. */
+  private readonly lifecycleBasePath: string;
 
   // =========================================================================
   // Information Operations
@@ -151,5 +198,83 @@ export class PlatformService extends BaseService {
   // =========================================================================
   // Lifecycle Operations
   // =========================================================================
+
+  /**
+   * Get the daemon status
+   *
+   * @returns Daemon status
+   */
+  async getStatus(): Promise<ApiResponse<DaemonStatusResponse>> {
+    return withUnixTimestamp(
+      await this.client.get<DaemonStatusResponse>(this.buildUrlUnder(this.lifecycleBasePath, '/status'))
+    );
+  }
+
+  /**
+   * List the daemon services
+   *
+   * @returns Services and their status
+   */
+  async listServices(): Promise<ApiResponse<ListDaemonServicesResponse>> {
+    return withUnixTimestamp(
+      await this.client.get<ListDaemonServicesResponse>(this.buildUrlUnder(this.lifecycleBasePath, '/services'))
+    );
+  }
+
+  /**
+   * Get one daemon service's status
+   *
+   * @param service - Service name
+   * @returns Service status
+   */
+  async getServiceStatus(service: string): Promise<ApiResponse<DaemonServiceInfo>> {
+    return this.client.get<DaemonServiceInfo>(
+      this.buildUrlUnder(this.lifecycleBasePath, `/services/${encodeURIComponent(service)}`)
+    );
+  }
+
+  /**
+   * Start a daemon service
+   *
+   * @param service - Service name
+   * @returns Action result
+   */
+  async startService(service: string): Promise<ApiResponse<DaemonServiceActionResponse>> {
+    return this.serviceAction(service, 'start');
+  }
+
+  /**
+   * Stop a daemon service
+   *
+   * @param service - Service name
+   * @returns Action result
+   */
+  async stopService(service: string): Promise<ApiResponse<DaemonServiceActionResponse>> {
+    return this.serviceAction(service, 'stop');
+  }
+
+  /**
+   * Restart a daemon service
+   *
+   * @param service - Service name
+   * @returns Action result
+   */
+  async restartService(service: string): Promise<ApiResponse<DaemonServiceActionResponse>> {
+    return this.serviceAction(service, 'restart');
+  }
+
+  private async serviceAction(
+    service: string,
+    action: DaemonServiceAction
+  ): Promise<ApiResponse<DaemonServiceActionResponse>> {
+    // No automatic retries: a network error can arrive after the daemon
+    // acted, and the REST handler has no idempotency key, so a resend could
+    // stop or restart the service a second time.
+    return this.client.post<DaemonServiceActionResponse>(
+      this.buildUrlUnder(this.lifecycleBasePath, `/services/${encodeURIComponent(service)}/${action}`),
+      {},
+      { retry: { enabled: false } }
+    );
+  }
 
 }

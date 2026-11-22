@@ -138,6 +138,49 @@ func TestSDNService_ApplyPolicy_FailsWhenAFlowIsNotInstalled(t *testing.T) {
 	assert.Empty(t, list.GetPolicies(), "a failed apply must record no policy")
 }
 
+// bridgeTargets returns BRIDGE policy targets with the given IDs.
+func bridgeTargets(ids ...string) []*platformv1.PolicyTarget {
+	targets := make([]*platformv1.PolicyTarget, len(ids))
+	for i, id := range ids {
+		targets[i] = &platformv1.PolicyTarget{Type: platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE, Id: id}
+	}
+	return targets
+}
+
+// assertPolicyRefusedOnUnknownBridge applies a deny policy to the given
+// targets and checks it is refused with NotFound, installs no flow and
+// records no policy (#2022 Codex P1).
+func assertPolicyRefusedOnUnknownBridge(t *testing.T, targets ...string) {
+	t.Helper()
+	svc, mock, mods := newPolicyFlowFixture(t)
+	req := denyPolicy("p", denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}))
+	req.Config.Targets = bridgeTargets(targets...)
+
+	_, err := svc.ApplyPolicy(context.Background(), req)
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err))
+	assert.Empty(t, *mods, "a policy on an unknown bridge must install no flow")
+	assert.Zero(t, mock.GetCallCount("AddFlow"))
+
+	list, err := svc.ListPolicies(context.Background(), &platformv1.ListPoliciesRequest{})
+	require.NoError(t, err)
+	assert.Empty(t, list.GetPolicies(), "a refused apply must record no policy")
+}
+
+// TestSDNService_ApplyPolicy_RefusesAnUnknownBridgeTarget checks that a
+// policy whose targets mix a known and an unknown bridge is refused before
+// any flow reaches the known one, so it is never reported active while only
+// partly enforced.
+func TestSDNService_ApplyPolicy_RefusesAnUnknownBridgeTarget(t *testing.T) {
+	assertPolicyRefusedOnUnknownBridge(t, "br0", "br-missing")
+}
+
+// TestSDNService_ApplyPolicy_RefusesASingleUnknownBridgeTarget checks that a
+// policy on one mistyped bridge is refused, not recorded active with no flow.
+func TestSDNService_ApplyPolicy_RefusesASingleUnknownBridgeTarget(t *testing.T) {
+	assertPolicyRefusedOnUnknownBridge(t, "br-missing")
+}
+
 // A failed update of an existing policy must leave the old policy enforced:
 // the update's AddFlow replaced the old flow (same table, priority and
 // match), so deleting it on rollback must be followed by re-installing the
