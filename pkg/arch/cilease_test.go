@@ -572,8 +572,10 @@ func TestCIImageJobOutputsHoldNoRegistry(t *testing.T) {
 	mask, pull := -1, -1
 	for i, step := range legSteps {
 		switch step.Name {
-		case "Mask the LAN registry":
+		case "Mask the LAN addresses":
 			mask = i
+			require.Equal(t, "scripts/ci-mask-lan.sh", strings.TrimSpace(step.Run),
+				"the mask step of job %s does not run scripts/ci-mask-lan.sh", ciLegJob)
 			require.Equal(t, ciRegistryValue, step.Env["CI_IMAGE_REGISTRY"],
 				"the mask step of job %s does not read the guarded secret CI_IMAGE_REGISTRY", ciLegJob)
 			require.Empty(t, step.Env["VARS_CI_IMAGE_REGISTRY"],
@@ -586,7 +588,7 @@ func TestCIImageJobOutputsHoldNoRegistry(t *testing.T) {
 				"the pull step does not take IT_IMAGE_TAG from the image job's image_tag")
 		}
 	}
-	require.NotEqual(t, -1, mask, "job %s has no step \"Mask the LAN registry\"", ciLegJob)
+	require.NotEqual(t, -1, mask, "job %s has no step \"Mask the LAN addresses\"", ciLegJob)
 	require.NotEqual(t, -1, pull, "job %s has no step \"Pull the integration image from the LAN registry\"", ciLegJob)
 	require.Less(t, mask, pull, "job %s masks the LAN registry after its pull step", ciLegJob)
 }
