@@ -22,6 +22,9 @@ import type {
   DeleteEABCredentialResponse,
   GetEABQRCodeResponse,
   GetEnrollmentURLResponse,
+  MarkEABCredentialUsedResponse,
+  CleanupExpiredEABCredentialsRequest,
+  CleanupExpiredEABCredentialsResponse,
 } from '../types/eab.js';
 
 /**
@@ -106,19 +109,23 @@ export class EABService extends BaseService {
    * @returns List of credentials
    */
   async list(request?: ListEABCredentialsRequest): Promise<ApiResponse<ListEABCredentialsResponse>> {
+    // Query names and status values as ListCredentials reads them
+    // (pkg/webservice/v1/rest/eab/handlers.go listCredentialsRequestFromQuery).
     const filters: Record<string, string | number | boolean | undefined> = {};
     if (request?.profileId !== undefined) {
-      filters.profileId = request.profileId;
+      filters.profile_id = request.profileId;
     }
     if (request?.tenantId !== undefined) {
-      filters.tenantId = request.tenantId;
+      filters.tenant_id = request.tenantId;
     }
     if (request?.status !== undefined) {
-      filters.status = request.status;
+      filters.status = `EAB_CREDENTIAL_STATUS_${request.status}`;
+    }
+    if (request?.pageSize !== undefined) {
+      filters.page_size = request.pageSize;
     }
     return this.client.get<ListEABCredentialsResponse>(this.buildUrl('/credentials', {
       page: request?.page,
-      limit: request?.pageSize,
       filters,
     }));
   }
@@ -166,16 +173,20 @@ export class EABService extends BaseService {
   // =========================================================================
 
   /**
-   * Get QR code for an EAB credential
+   * Get QR code for an EAB credential (GET /credentials/{id}/qrcode)
+   *
+   * The server reads `size` as an unsigned integer and answers 400 to a
+   * fraction, so a fractional size is floored and a negative or non-finite
+   * size is left out (the server then uses its default of 256 pixels).
    *
    * @param id - Credential ID
-   * @param size - QR code size in pixels (optional)
-   * @returns Base64-encoded QR code image
+   * @param size - QR code size in pixels (optional, integer)
+   * @returns The base64-encoded PNG and its content type
    */
   async getQRCode(id: number, size?: number): Promise<ApiResponse<GetEABQRCodeResponse>> {
     const filters: Record<string, string | number | boolean | undefined> = {};
-    if (size !== undefined) {
-      filters.size = size;
+    if (size !== undefined && Number.isFinite(size) && size >= 0) {
+      filters.size = Math.floor(size);
     }
     return this.client.get<GetEABQRCodeResponse>(
       this.buildUrl(`/credentials/${id}/qrcode`, { filters })
@@ -185,12 +196,46 @@ export class EABService extends BaseService {
   /**
    * Get enrollment URL for an EAB credential
    *
+   * Calls GET /v1/eab/credentials/{id}/url.
+   *
    * @param id - Credential ID
+   * @param path - Enrolment path to append to the URL (optional)
    * @returns Enrollment URL with expiration
    */
-  async getEnrollmentURL(id: number): Promise<ApiResponse<GetEnrollmentURLResponse>> {
+  async getEnrollmentURL(id: number, path?: string): Promise<ApiResponse<GetEnrollmentURLResponse>> {
     return this.client.get<GetEnrollmentURLResponse>(
-      this.buildUrl(`/credentials/${id}/enrollment-url`)
+      this.buildUrl(`/credentials/${id}/url`, path ? { filters: { path } } : undefined)
+    );
+  }
+
+  /**
+   * Mark an EAB credential as used
+   *
+   * Calls POST /v1/eab/credentials/{id}/used.
+   *
+   * @param id - Credential ID
+   * @returns Operation status
+   */
+  async markUsed(id: number): Promise<ApiResponse<MarkEABCredentialUsedResponse>> {
+    return this.client.post<MarkEABCredentialUsedResponse>(
+      this.buildUrl(`/credentials/${id}/used`),
+      {}
+    );
+  }
+
+  /**
+   * Delete expired EAB credentials
+   *
+   * Calls POST /v1/eab/credentials/cleanup.
+   *
+   * @param tenantId - Restrict the cleanup to one tenant (optional)
+   * @returns Number of credentials deleted
+   */
+  async cleanupExpired(tenantId?: string): Promise<ApiResponse<CleanupExpiredEABCredentialsResponse>> {
+    const body: CleanupExpiredEABCredentialsRequest = tenantId ? { tenantId } : {};
+    return this.client.post<CleanupExpiredEABCredentialsResponse>(
+      this.buildUrl('/credentials/cleanup'),
+      body
     );
   }
 }

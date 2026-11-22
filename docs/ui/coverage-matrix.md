@@ -243,17 +243,17 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `EABService.CreateCredential` | `POST /credentials` | - | - | - | missing |
-| `EABService.GetCredential` | `GET /credentials/{id:[0-9]+}` | - | - | - | missing |
-| `EABService.GetCredentialByKeyID` | `GET /credentials/key/{key}` | - | - | - | missing |
-| `EABService.ListCredentials` | `GET /credentials` | - | - | - | missing |
-| `EABService.RevokeCredential` | `POST /credentials/{id:[0-9]+}/revoke` | - | - | - | missing |
-| `EABService.ValidateCredential` | `POST /credentials/validate` | - | - | - | missing |
-| `EABService.DeleteCredential` | `DELETE /credentials/{id:[0-9]+}` | - | - | - | missing |
-| `EABService.GetCredentialQRCode` | `GET /credentials/{id:[0-9]+}/qrcode` | - | - | - | missing |
-| `EABService.GetEnrollmentURL` | `GET /credentials/{id:[0-9]+}/url` | - | - | - | missing |
-| `EABService.MarkCredentialUsed` | `POST /credentials/{id:[0-9]+}/used` | - | - | - | missing |
-| `EABService.CleanupExpiredCredentials` | `POST /credentials/cleanup` | - | - | - | missing |
+| `EABService.CreateCredential` | `POST /credentials` | `(dashboard)/ca/eab/page.tsx`<br>`(dashboard)/ca/eab/new/page.tsx` | - | `real-server/eab.spec.ts` | covered |
+| `EABService.GetCredential` | `GET /credentials/{id:[0-9]+}` | `(dashboard)/ca/eab/page.tsx` | - | `real-server/eab.spec.ts` | covered |
+| `EABService.GetCredentialByKeyID` | `GET /credentials/key/{key}` | `(dashboard)/ca/eab/page.tsx` | - | `real-server/eab.spec.ts` | covered |
+| `EABService.ListCredentials` | `GET /credentials` | `(dashboard)/ca/eab/page.tsx` | - | `real-server/eab.spec.ts` | covered |
+| `EABService.RevokeCredential` | `POST /credentials/{id:[0-9]+}/revoke` | `(dashboard)/ca/eab/page.tsx` | - | `real-server/eab.spec.ts` | covered |
+| `EABService.ValidateCredential` | `POST /credentials/validate` | `(dashboard)/ca/eab/page.tsx` | - | `real-server/eab.spec.ts` | covered |
+| `EABService.DeleteCredential` | `DELETE /credentials/{id:[0-9]+}` | `(dashboard)/ca/eab/page.tsx` | - | `real-server/eab.spec.ts` | covered |
+| `EABService.GetCredentialQRCode` | `GET /credentials/{id:[0-9]+}/qrcode` | `(dashboard)/ca/eab/page.tsx` | - | `real-server/eab.spec.ts` | covered |
+| `EABService.GetEnrollmentURL` | `GET /credentials/{id:[0-9]+}/url` | `(dashboard)/ca/eab/page.tsx` | - | `real-server/eab.spec.ts` | covered |
+| `EABService.MarkCredentialUsed` | `POST /credentials/{id:[0-9]+}/used` | - | - | - | not-UI: ACME account binding marks it |
+| `EABService.CleanupExpiredCredentials` | `POST /credentials/cleanup` | `(dashboard)/ca/eab/page.tsx` | - | `real-server/eab.spec.ts` | covered |
 
 ## FIDO2Service (`fido2.proto`)
 

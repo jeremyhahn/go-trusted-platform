@@ -235,21 +235,18 @@ export interface RevokeEABCredentialResponse {
 }
 
 /**
- * Validate EAB credential response
+ * Validate EAB credential response: the platform.v1
+ * ValidateEABCredentialResponse message as the server sends it in protojson.
  */
 export interface ValidateEABCredentialResponse {
-  /** Operation status */
-  status: EABStatus;
-  /** Whether credential is valid */
+  /** Whether the key identifier and HMAC key match a usable credential */
   valid: boolean;
-  /** Validation details */
-  details?: {
-    keyId: string;
-    profileId: number;
-    tenantId: string;
-    expiresAt: string;
-    status: EABCredentialStatus;
-  };
+  /** The matched credential, without its HMAC key */
+  credential?: EABCredentialSummary;
+  /** Why the credential is not valid */
+  errorMessage?: string;
+  /** Response timestamp */
+  timestamp?: string;
 }
 
 /**
@@ -261,15 +258,16 @@ export interface DeleteEABCredentialResponse {
 }
 
 /**
- * Get EAB QR code response
+ * Get EAB QR code response: the platform.v1 GetEABCredentialQRCodeResponse
+ * message as the server sends it in protojson.
  */
 export interface GetEABQRCodeResponse {
-  /** Base64-encoded QR code image */
+  /** The PNG image bytes, base64-encoded (protojson bytes encoding) */
   qrCode: string;
-  /** Image format (e.g., "png") */
-  format: string;
-  /** Image size in pixels */
-  size: number;
+  /** Image MIME type (e.g. "image/png") */
+  contentType: string;
+  /** Response timestamp */
+  timestamp?: string;
 }
 
 /**
@@ -280,4 +278,34 @@ export interface GetEnrollmentURLResponse {
   url: string;
   /** URL expiration timestamp */
   expiresAt: string;
+}
+
+/**
+ * Mark EAB credential used response (platform.v1.MarkEABCredentialUsedResponse)
+ */
+export interface MarkEABCredentialUsedResponse {
+  /** Operation status */
+  status: EABStatus;
+  /** Response timestamp */
+  timestamp?: string;
+}
+
+/**
+ * Cleanup expired EAB credentials request (platform.v1.CleanupExpiredEABCredentialsRequest)
+ */
+export interface CleanupExpiredEABCredentialsRequest {
+  /** Restrict the cleanup to one tenant (optional) */
+  tenantId?: string;
+}
+
+/**
+ * Cleanup expired EAB credentials response (platform.v1.CleanupExpiredEABCredentialsResponse)
+ */
+export interface CleanupExpiredEABCredentialsResponse {
+  /** Number of credentials deleted */
+  deletedCount: number;
+  /** Operation status */
+  status: EABStatus;
+  /** Response timestamp */
+  timestamp?: string;
 }

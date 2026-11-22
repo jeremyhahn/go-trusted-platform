@@ -1007,6 +1007,9 @@ export type {
   DeleteEABCredentialResponse,
   GetEABQRCodeResponse,
   GetEnrollmentURLResponse,
+  MarkEABCredentialUsedResponse,
+  CleanupExpiredEABCredentialsRequest,
+  CleanupExpiredEABCredentialsResponse,
 } from './types/eab.js';
 
 // vTPM Instance types
