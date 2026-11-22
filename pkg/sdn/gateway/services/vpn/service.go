@@ -78,6 +78,10 @@ type Service struct {
 	// reclaim treats these addresses as held. Allocated on first use, like
 	// peerRetry. Guarded by mu.
 	tearingDown map[netip.Addr]int
+	// sweepGateHook, when set by a test, runs in retryPeerReconcile after
+	// its pending check and before it takes enrolGate: it parks one sweep
+	// at that point while an overlapping one runs. Nil in production.
+	sweepGateHook func()
 	// reclaimOwed records that orphan addresses still wait to be reclaimed
 	// (a reconciliation or a reclaim failed); retryPeerReconcile pays it
 	// once every plane reconciles. Guarded by mu.

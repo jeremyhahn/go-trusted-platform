@@ -70,7 +70,48 @@ var serviceBuilders = map[string]serviceBuilder{
 	ServiceOverlay:       buildOverlay,
 	ServiceTransit:       buildTransit,
 	ServiceManagementVPN: buildManagementVPN,
+	ServiceVPNWireGuard:  buildVPNWireGuard,
 }
+
+// buildVPNWireGuard is the vpn-wireguard service of the `wireguard` process
+// (ruling 942, #1698). The process itself hosts the WireGuard plane: its
+// serveProcess starts the planes before the gateway and starts the gateway
+// only once they are up, and reports a plane that failed to start to the
+// supervisor itself (SetVPNPlanesFailed). So this backend owns nothing: it
+// is active and healthy from Start to Stop. Out of process, with no
+// supervisor, the management VPN hosts its planes in-process and this
+// service only records that it was started.
+func buildVPNWireGuard(*Gateway) (backedService, error) {
+	return &vpnWireGuardBackend{}, nil
+}
+
+// vpnWireGuardBackend records whether the vpn-wireguard service is started.
+type vpnWireGuardBackend struct {
+	mu     sync.Mutex
+	active bool
+}
+
+func (b *vpnWireGuardBackend) Start(context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.active = true
+	return nil
+}
+
+func (b *vpnWireGuardBackend) Stop(context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.active = false
+	return nil
+}
+
+func (b *vpnWireGuardBackend) Active() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.active
+}
+
+func (b *vpnWireGuardBackend) Healthy() bool { return b.Active() }
 
 // serviceRefusals names, per unbuildable section, the blocker that stands
 // between the config surface and a running service. The text is what the
