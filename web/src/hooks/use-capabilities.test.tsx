@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PlatformClient, PlatformProvider } from "trusted-platform-sdk";
 
@@ -133,5 +133,23 @@ describe("useCapabilities", () => {
     await waitFor(() => expect(second.result.current.loading).toBe(false));
     expect(second.result.current.capability("POST /api/v1/ntp/step").enabled).toBe(true);
     expect(capabilityCalls()).toHaveLength(1);
+  });
+
+  it("reload after a failed read asks again and every hook on the client sees the recovery", async () => {
+    fetchMock.mockImplementationOnce(() => Promise.resolve(failure(500, "boom")));
+    fetchMock.mockImplementation(() => Promise.resolve(ok(capabilities)));
+
+    const first = renderHook(() => useCapabilities(), { wrapper });
+    const second = renderHook(() => useCapabilities(), { wrapper });
+
+    await waitFor(() => expect(first.result.current.error).toBeTruthy());
+    await waitFor(() => expect(second.result.current.error).toBeTruthy());
+
+    act(() => first.result.current.reload());
+
+    await waitFor(() => expect(first.result.current.error).toBeUndefined());
+    await waitFor(() => expect(second.result.current.error).toBeUndefined());
+    expect(first.result.current.capability("POST /api/v1/ntp/step").enabled).toBe(true);
+    expect(second.result.current.capability("POST /api/v1/ntp/step").enabled).toBe(true);
   });
 });

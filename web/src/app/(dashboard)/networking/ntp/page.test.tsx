@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PlatformClient, PlatformProvider } from "trusted-platform-sdk";
 
@@ -143,5 +143,32 @@ describe("NTPPage", () => {
     expect(card.textContent).toContain("NTP is not enabled on this server");
     expect(card.textContent).toContain("not offered by this server");
     expect(callsUnder("/api/v1/ntp")).toHaveLength(0);
+  });
+
+  it("a failed capabilities read shows a retry, not ntp-not-enabled, and Retry recovers the NTP reads", async () => {
+    const recovered = routes([statusCap, sourcesCap, stepCap]);
+    let capsFailed = false;
+    fetchMock.mockImplementation((input, init) => {
+      const url = new URL(String(input));
+      if (!capsFailed && (init?.method ?? "GET") === "GET" && url.pathname === "/api/v1/capabilities") {
+        capsFailed = true;
+        return Promise.resolve(failure(500, "boom"));
+      }
+      return recovered(input, init);
+    });
+
+    renderPage();
+
+    const card = await screen.findByTestId("ntp-capabilities-error");
+    expect(screen.queryByTestId("ntp-not-enabled")).toBeNull();
+    const retry = within(card).getByRole("button", { name: "Retry" });
+    expect(callsUnder("/api/v1/ntp")).toHaveLength(0);
+
+    fireEvent.click(retry);
+
+    expect(await screen.findByText("ntp.reference.test")).toBeTruthy();
+    expect(callsUnder("/api/v1/ntp/status").length).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.queryByTestId("ntp-capabilities-error")).toBeNull());
+    await waitFor(() => expect(stepButton().getAttribute("data-capability-enabled")).toBe("true"));
   });
 });
