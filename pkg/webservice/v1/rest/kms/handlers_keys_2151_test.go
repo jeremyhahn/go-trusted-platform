@@ -143,3 +143,28 @@ func TestListKeys2151_FiltersAndPaginates(t *testing.T) {
 		})
 	}
 }
+
+// TestListKeys2151_HugeLimitDoesNotOverflow pins the maximum-integer limit
+// boundary: start+limit must not wrap negative and panic the slice (#2151
+// Codex round 1).
+func TestListKeys2151_HugeLimitDoesNotOverflow(t *testing.T) {
+	f := &keys2151KMS{keys: []kmsclient.KeyInfo{
+		{KeyID: "c", Name: "c", Algorithm: kmsclient.AlgorithmRSA2048, Version: 1},
+		{KeyID: "a", Name: "a", Algorithm: kmsclient.AlgorithmAES256GCM, Version: 1},
+		{KeyID: "b", Name: "b", Algorithm: kmsclient.AlgorithmAES256GCM, Version: 1},
+	}}
+	w := covServe(keys2151Handlers(f).ListKeys, covRequest(http.MethodGet,
+		"/api/v1/kms/keys?cursor=1&limit=9223372036854775807", "", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+	var got keys2151ListPayload
+	decodeEnvelope(t, w, &got)
+	if len(got.Keys) != 2 || got.Keys[0].KeyID != "b" || got.Keys[1].KeyID != "c" {
+		t.Fatalf("keys = %+v, want [b c]", got.Keys)
+	}
+	if got.NextCursor != "" || got.HasMore || got.TotalCount != 3 {
+		t.Fatalf("next_cursor %q has_more %v total_count %d, want \"\" false 3",
+			got.NextCursor, got.HasMore, got.TotalCount)
+	}
+}
