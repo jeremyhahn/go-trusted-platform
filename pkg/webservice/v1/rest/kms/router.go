@@ -85,6 +85,7 @@ func NewKMSRouter(
 //	POST   /api/v1/kms/hmac/{name}/verify       - VerifyHMAC
 //	POST   /api/v1/kms/hash                     - Hash
 //	POST   /api/v1/kms/random                   - GenerateRandom
+//	POST   /api/v1/kms/rewrap                   - Rewrap
 //
 //	# DEKs
 //	GET    /api/v1/kms/deks                     - ListDEKs
@@ -140,6 +141,7 @@ func (r *KMSRouter) RegisterRoutes(parent *mux.Router) {
 	sr.HandleFunc("/hmac/{name}", r.handlers.HMAC).Methods("POST")
 	sr.HandleFunc("/hash", r.handlers.Hash).Methods("POST")
 	sr.HandleFunc("/random", r.handlers.GenerateRandom).Methods("POST")
+	sr.HandleFunc("/rewrap", r.handlers.Rewrap).Methods("POST")
 
 	// Data keys: minted and returned, never stored (stored DEKs are /deks)
 	sr.HandleFunc("/data-keys", r.handlers.GenerateDataKey).Methods("POST")
