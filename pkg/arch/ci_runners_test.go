@@ -167,19 +167,20 @@ func TestCIRunsHostedFirst(t *testing.T) {
 	}
 }
 
-// The v1.48 runner selection (ci-template v1.48, Tenant Agent rulings 1024
-// and 1031, #2128): the preflight step `Hosted or overflow runner (ruling
-// 1024)` decides once per run whether its jobs run on the GitHub-hosted
-// default or overflow to the self-hosted overflow runners, and every hosted
-// job reads that decision. Off github.com each job keeps its label.
+// The runner selection (ci-template v1.48, Tenant Agent rulings 1024 and
+// 1031; v1.54, ruling 1137, #2128): the preflight step `Balanced runner pool
+// (ruling 1137)` decides once per run whether its jobs run on the
+// GitHub-hosted default or on the self-hosted runners, whichever pool this
+// repository uses less, and every hosted job reads that decision. Off
+// github.com each job keeps its label.
 const (
-	selectionStep        = "Hosted or overflow runner (ruling 1024)"
-	selectionRunner      = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}"
-	selectionDocker      = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}"
-	selectionGate        = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner || '\"ubuntu-latest\"') || 'ubuntu-latest' }}"
-	selectionForkEvents  = "case \"$EVENT\" in\n  pull_request|pull_request_target)\n"
-	selectionForkGuard   = `if [ "$HEAD_REPO" != "$REPO" ]; then`
-	selectionOverflowMsg = "the self-hosted overflow runners (bigdisk, bigdisk-docker)"
+	selectionStep          = "Balanced runner pool (ruling 1137)"
+	selectionRunner        = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}"
+	selectionDocker        = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}"
+	selectionGate          = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner || '\"ubuntu-latest\"') || 'ubuntu-latest' }}"
+	selectionForkEvents    = "case \"$EVENT\" in\n  pull_request|pull_request_target)\n"
+	selectionForkGuard     = `if [ "$HEAD_REPO" != "$REPO" ]; then`
+	selectionSelfHostedMsg = "the self-hosted runners (bigdisk, bigdisk-docker)"
 )
 
 // selectionRunsOn is the runs-on every job of ci.yml carries under v1.48:
@@ -219,9 +220,9 @@ func selectionProblems(body []byte) []string {
 	root := doc.Content[0]
 	var problems []string
 	env := mapValue(root, "env")
-	for key, want := range map[string]string{"HOSTED_JOBS_PER_REPO": "12", "HOSTED_QUEUE_GRACE_SECONDS": "60"} {
-		if v := mapValue(env, key); v == nil || v.Value != want {
-			problems = append(problems, "env "+key+" is not "+want)
+	for _, key := range []string{"HOSTED_JOBS_PER_REPO", "HOSTED_QUEUE_GRACE_SECONDS"} {
+		if mapValue(env, key) != nil {
+			problems = append(problems, "env "+key+" is removed in v1.54")
 		}
 	}
 	jobs := mapValue(root, "jobs")
@@ -288,11 +289,21 @@ func selectionProblems(body []byte) []string {
 	if id := mapValue(first, "id"); id == nil || id.Value != "runner" {
 		problems = append(problems, "the selection step's id is not runner")
 	}
+	stepEnv := mapValue(first, "env")
+	for _, kv := range [][2]string{
+		{"HS", "${{ vars.CI_HOSTED_SHARE }}"},
+		{"C1", "${{ vars.CI_SELF_HOSTED_BIGDISK }}"},
+		{"C2", "${{ vars.CI_SELF_HOSTED_BIGDISK_DOCKER }}"},
+	} {
+		if v := mapValue(stepEnv, kv[0]); v == nil || v.Value != kv[1] {
+			problems = append(problems, "the selection step's env "+kv[0]+" is not "+kv[1])
+		}
+	}
 	run := ""
 	if r := mapValue(first, "run"); r != nil {
 		run = r.Value
 	}
-	for _, want := range []string{selectionForkEvents + "    " + selectionForkGuard, selectionOverflowMsg, `emit "$(overflow bigdisk)" "$(overflow bigdisk-docker)"`} {
+	for _, want := range []string{selectionForkEvents + "    " + selectionForkGuard, selectionSelfHostedMsg, `emit "$(selfhosted bigdisk)" "$(selfhosted bigdisk-docker)"`} {
 		if !strings.Contains(run, want) {
 			problems = append(problems, "the selection step's run lacks "+strconv.Quote(want))
 		}
@@ -319,12 +330,15 @@ func TestSelectionProblems_Mutations(t *testing.T) {
 		{"a hosted job back on a plain label", func(b string) string { return replaceJobRunner(t, b, "race", hostedRunner) }, "job race runs on"},
 		{"a Docker job reading runner", func(b string) string { return replaceJobRunner(t, b, "integration", selectionRunner) }, "job integration runs on"},
 		{"the gate without its fallback", func(b string) string { return replaceJobRunner(t, b, "ci-gate", selectionRunner) }, "job ci-gate runs on"},
-		{"another limit", func(b string) string {
-			return strings.Replace(b, "HOSTED_JOBS_PER_REPO: 12", "HOSTED_JOBS_PER_REPO: 20", 1)
-		}, "env HOSTED_JOBS_PER_REPO is not 12"},
-		{"another grace", func(b string) string {
-			return strings.Replace(b, "HOSTED_QUEUE_GRACE_SECONDS: 60", "HOSTED_QUEUE_GRACE_SECONDS: 5", 1)
-		}, "env HOSTED_QUEUE_GRACE_SECONDS is not 60"},
+		{"the old limit put back", func(b string) string {
+			return strings.Replace(b, "  RELEASABILITY_TEST: \"\"\n", "  RELEASABILITY_TEST: \"\"\n  HOSTED_JOBS_PER_REPO: 12\n", 1)
+		}, "is removed in v1.54"},
+		{"a fixed share", func(b string) string {
+			return strings.Replace(b, "HS: ${{ vars.CI_HOSTED_SHARE }}", "HS: '12'", 1)
+		}, "env HS is not"},
+		{"the self-hosted emit dropped", func(b string) string {
+			return strings.Replace(b, `emit "$(selfhosted bigdisk)" "$(selfhosted bigdisk-docker)"`, `emit "$HOSTED" "$HOSTED"`, 1)
+		}, "lacks"},
 		{"the fork guard dropped", func(b string) string { return strings.Replace(b, selectionForkGuard, "if false; then", 1) }, "lacks"},
 		{"the step renamed", func(b string) string { return strings.Replace(b, "name: "+selectionStep, "name: Runner", 1) }, "first step"},
 	} {
