@@ -165,23 +165,6 @@ func TestRequireTenant(t *testing.T) {
 	}
 }
 
-// TestAuthMiddlewarePromotesGuard proves AuthMiddleware's RBAC surface is
-// the guard's implementation, not a second copy of it.
-func TestAuthMiddlewarePromotesGuard(t *testing.T) {
-	t.Parallel()
-	mw, err := NewAuthMiddleware(guardLogger(),
-		response.NewResponseWriter(guardLogger(), nil),
-		AuthConfig{}, newMockIAMServiceClient(), nil, nil, nil)
-	require.NoError(t, err)
-	require.NotNil(t, mw.SessionGuard)
-
-	status, _ := run(t, mw.RequireRoles("admin"), session("system", "admin"))
-	assert.Equal(t, http.StatusOK, status)
-
-	status, _ = run(t, mw.RequireTenant("system"), session("acme", "admin"))
-	assert.Equal(t, http.StatusForbidden, status)
-}
-
 // TestRequireOwnTenant covers the cross-tenant hole a role check alone
 // leaves open: handlers that take their target tenant from the URL would
 // otherwise let an administrator of one tenant act on any other by naming

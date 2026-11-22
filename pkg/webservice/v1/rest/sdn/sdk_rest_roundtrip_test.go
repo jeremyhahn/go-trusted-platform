@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
@@ -26,6 +27,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
@@ -181,4 +183,92 @@ func TestSDKRESTServiceRefusalIsInvalidArgument(t *testing.T) {
 	_, err := client.ApplyPolicy(context.Background(), &platformv1.ApplyPolicyRequest{Config: &platformv1.PolicyConfig{}})
 
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "err = %v", err)
+}
+
+// zoneSDNServer answers the four network zone methods with scripted
+// replies and records the request each one received.
+type zoneSDNServer struct {
+	platformv1.UnimplementedSDNServiceServer
+	zone *platformv1.NetworkZone
+	got  proto.Message
+}
+
+func (s *zoneSDNServer) CreateNetworkZone(_ context.Context, req *platformv1.CreateNetworkZoneRequest) (*platformv1.CreateNetworkZoneResponse, error) {
+	s.got = req
+	return &platformv1.CreateNetworkZoneResponse{Zone: s.zone}, nil
+}
+
+func (s *zoneSDNServer) ListNetworkZones(_ context.Context, req *platformv1.ListNetworkZonesRequest) (*platformv1.ListNetworkZonesResponse, error) {
+	s.got = req
+	return &platformv1.ListNetworkZonesResponse{Zones: []*platformv1.NetworkZone{s.zone}}, nil
+}
+
+func (s *zoneSDNServer) UpdateNetworkZone(_ context.Context, req *platformv1.UpdateNetworkZoneRequest) (*platformv1.UpdateNetworkZoneResponse, error) {
+	s.got = req
+	return &platformv1.UpdateNetworkZoneResponse{Zone: s.zone}, nil
+}
+
+func (s *zoneSDNServer) DeleteNetworkZone(_ context.Context, req *platformv1.DeleteNetworkZoneRequest) (*platformv1.DeleteNetworkZoneResponse, error) {
+	s.got = req
+	return &platformv1.DeleteNetworkZoneResponse{RestartRequired: true}, nil
+}
+
+// TestSDKRESTZoneRoundTrip drives the four zone methods through the SDK
+// REST transport against the real webservice zone routes: the zone
+// config, numbering, timestamps and restart_required survive both ways.
+func TestSDKRESTZoneRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	cfg := &platformv1.NetworkZoneConfig{
+		Name: "lab", Offset: 12, PortClasses: []string{"hypervisor"}, Isolate: true,
+		IsolateFrom: []string{"dmz"}, Services: []string{"ntp"},
+		AllowTo:          []*platformv1.NetworkZonePath{{Zone: "edge", Services: []string{"dns"}}},
+		PrivilegedAccess: &platformv1.NetworkZonePrivilegedAccess{Reason: "audit", ApprovedBy: "owner"},
+	}
+	stamp := timestamppb.New(time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC))
+	zone := &platformv1.NetworkZone{
+		Config: cfg, CreatedAt: stamp, UpdatedAt: stamp, RestartRequired: true,
+		Numbering: &platformv1.NetworkZoneNumbering{Vlan: 112, Subnet4: "10.0.12.0/24", Gateway: "10.0.12.1"},
+	}
+	server := &zoneSDNServer{zone: zone}
+	client := connectSDNSDK(t, server)
+
+	created, err := client.CreateNetworkZone(ctx, &platformv1.CreateNetworkZoneRequest{Config: cfg})
+	require.NoError(t, err)
+	assert.True(t, proto.Equal(&platformv1.CreateNetworkZoneRequest{Config: cfg}, server.got), "request = %v", server.got)
+	assert.True(t, proto.Equal(zone, created.GetZone()), "zone = %v, want %v", created.GetZone(), zone)
+
+	listed, err := client.ListNetworkZones(ctx, &platformv1.ListNetworkZonesRequest{LifecycleRole: "quarantine"})
+	require.NoError(t, err)
+	assert.Equal(t, "quarantine", server.got.(*platformv1.ListNetworkZonesRequest).GetLifecycleRole())
+	require.Len(t, listed.GetZones(), 1)
+	assert.True(t, proto.Equal(zone, listed.GetZones()[0]), "zone = %v", listed.GetZones()[0])
+
+	updated, err := client.UpdateNetworkZone(ctx, &platformv1.UpdateNetworkZoneRequest{Name: "lab", Config: cfg})
+	require.NoError(t, err)
+	assert.True(t, proto.Equal(&platformv1.UpdateNetworkZoneRequest{Name: "lab", Config: cfg}, server.got), "request = %v", server.got)
+	assert.True(t, proto.Equal(zone, updated.GetZone()), "zone = %v", updated.GetZone())
+
+	deleted, err := client.DeleteNetworkZone(ctx, &platformv1.DeleteNetworkZoneRequest{Name: "lab"})
+	require.NoError(t, err)
+	assert.Equal(t, "lab", server.got.(*platformv1.DeleteNetworkZoneRequest).GetName())
+	assert.True(t, deleted.GetRestartRequired())
+	assert.True(t, deleted.GetStatus().GetSuccess())
+}
+
+// TestSDKRESTZoneOmitMutatesNothing proves an Omit=true Create or Update is
+// refused with InvalidArgument and never reaches the zone service, so no zone
+// is created or replaced for a field the REST document cannot carry.
+func TestSDKRESTZoneOmitMutatesNothing(t *testing.T) {
+	ctx := context.Background()
+	cfg := &platformv1.NetworkZoneConfig{Name: "lab", Offset: 12, Omit: true}
+	server := &zoneSDNServer{zone: &platformv1.NetworkZone{Config: cfg}}
+	client := connectSDNSDK(t, server)
+
+	_, err := client.CreateNetworkZone(ctx, &platformv1.CreateNetworkZoneRequest{Config: cfg})
+	assert.Equal(t, codes.InvalidArgument, status.Code(err), "create err = %v", err)
+	assert.Nil(t, server.got, "create reached the zone service: %v", server.got)
+
+	_, err = client.UpdateNetworkZone(ctx, &platformv1.UpdateNetworkZoneRequest{Name: "lab", Config: cfg})
+	assert.Equal(t, codes.InvalidArgument, status.Code(err), "update err = %v", err)
+	assert.Nil(t, server.got, "update reached the zone service: %v", server.got)
 }

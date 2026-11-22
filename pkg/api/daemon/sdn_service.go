@@ -1159,18 +1159,27 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 
 	client := s.getOVSClient()
 
-	// Install OpenFlow rules for each target bridge without holding the lock
-	var flowIDs []string
+	// Validate every target before any flow is installed: a non-bridge
+	// target or an unresolved bridge fails the whole call (#2234).
+	bridgeNames := make([]string, 0, len(config.GetTargets()))
 	for _, target := range config.GetTargets() {
 		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
-			continue
+			return nil, status.Errorf(codes.InvalidArgument, "policy target %q is not a bridge", target.GetId())
 		}
-
 		bridgeName, found := s.findBridgeName(target.GetId())
 		if !found {
-			continue
+			return nil, status.Errorf(codes.NotFound, "bridge %q not found", target.GetId())
 		}
+		bridgeNames = append(bridgeNames, bridgeName)
+	}
 
+	// Install OpenFlow rules for each target bridge without holding the lock;
+	// a disabled policy is stored but installs nothing.
+	var flowIDs []string
+	if !config.GetEnabled() {
+		bridgeNames = nil
+	}
+	for _, bridgeName := range bridgeNames {
 		// Translate policy rules to OpenFlow rules
 		for _, rule := range config.GetRules() {
 			flowMod := s.policyRuleToFlowMod(rule, config.GetPriority())
@@ -1181,6 +1190,11 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 			flowID := fmt.Sprintf("policy-%s-rule-%s-%s", policyID, rule.GetRuleId(), uuid.NewString())
 			flowIDs = append(flowIDs, flowID)
 		}
+	}
+
+	policyStatus := "disabled"
+	if config.GetEnabled() {
+		policyStatus = "active"
 	}
 
 	now := time.Now()
@@ -1194,7 +1208,7 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		policyType:  policyType,
 		priority:    config.GetPriority(),
 		enabled:     config.GetEnabled(),
-		status:      "active",
+		status:      policyStatus,
 		rules:       config.GetRules(),
 		targets:     config.GetTargets(),
 		schedule:    config.GetSchedule(),
