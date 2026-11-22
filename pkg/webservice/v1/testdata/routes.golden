@@ -241,11 +241,13 @@ GET /api/v1/platform/config/snapshots
 GET /api/v1/platform/config/snapshots/{id}
 GET /api/v1/platform/entity-types
 GET /api/v1/platform/health
+GET /api/v1/platform/liveness
 GET /api/v1/platform/logs
 GET /api/v1/platform/logs/services
 GET /api/v1/platform/logs/stream
 GET /api/v1/platform/metrics
 GET /api/v1/platform/protocols
+GET /api/v1/platform/readiness
 GET /api/v1/platform/service-registry
 GET /api/v1/platform/services
 GET /api/v1/platform/services/{service}
