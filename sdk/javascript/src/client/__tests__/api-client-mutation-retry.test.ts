@@ -6,9 +6,10 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import type { Mock } from 'vitest';
 import { ApiClient } from '../api-client.js';
 
-type FetchMock = ReturnType<typeof vi.fn>;
+type FetchMock = Mock<unknown[], Promise<Response>>;
 
 function clientWith(fetchImpl: FetchMock, headers?: Record<string, string>): ApiClient {
   return new ApiClient({
@@ -38,19 +39,19 @@ function networkError(): TypeError {
 }
 
 function alwaysRejects(): FetchMock {
-  return vi.fn().mockImplementation(() => Promise.reject(networkError()));
+  return vi.fn<unknown[], Promise<Response>>().mockImplementation(() => Promise.reject(networkError()));
 }
 
 function rejectsOnceThenOk(): FetchMock {
   return vi
-    .fn()
+    .fn<unknown[], Promise<Response>>()
     .mockRejectedValueOnce(networkError())
     .mockImplementation(() => Promise.resolve(ok()));
 }
 
 function unavailableOnceThenOk(): FetchMock {
   return vi
-    .fn()
+    .fn<unknown[], Promise<Response>>()
     .mockImplementationOnce(() => Promise.resolve(unavailable()))
     .mockImplementation(() => Promise.resolve(ok()));
 }
@@ -72,7 +73,7 @@ describe('ApiClient mutation retry policy', () => {
   });
 
   it('does not resend a POST answered 503', async () => {
-    const fetchImpl = vi.fn().mockImplementation(() => Promise.resolve(unavailable()));
+    const fetchImpl = vi.fn<unknown[], Promise<Response>>().mockImplementation(() => Promise.resolve(unavailable()));
     const response = await clientWith(fetchImpl).post('/vms', {});
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(response.error?.status).toBe(503);
@@ -100,7 +101,7 @@ describe('ApiClient mutation retry policy', () => {
   });
 
   it('does not resend when a blank per-request key replaces a default one', async () => {
-    const fetchImpl = vi.fn().mockImplementation(async () => unavailable());
+    const fetchImpl = vi.fn<unknown[], Promise<Response>>().mockImplementation(() => Promise.resolve(unavailable()));
     await clientWith(fetchImpl, { 'Idempotency-Key': 'k' }).post(
       '/vms',
       {},
@@ -110,7 +111,7 @@ describe('ApiClient mutation retry policy', () => {
   });
 
   it('does not resend when a blank per-request key of another case replaces a default one', async () => {
-    const fetchImpl = vi.fn().mockImplementation(async () => unavailable());
+    const fetchImpl = vi.fn<unknown[], Promise<Response>>().mockImplementation(() => Promise.resolve(unavailable()));
     await clientWith(fetchImpl, { 'idempotency-key': 'k' }).post(
       '/vms',
       {},

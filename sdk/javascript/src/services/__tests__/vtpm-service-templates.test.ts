@@ -39,7 +39,8 @@ describe('VTPMService.createTemplate', () => {
     });
 
     expect(mockClient.post).toHaveBeenCalledTimes(1);
-    const [path, body] = vi.mocked(mockClient.post).mock.calls[0]!;
+    const path = vi.mocked(mockClient.post).mock.calls[0]?.[0];
+    const body = vi.mocked(mockClient.post).mock.calls[0]?.[1];
     expect(path).toMatch(/\/v1\/vtpm\/templates$/);
     expect(body).toEqual({
       id: 't1',
@@ -53,7 +54,8 @@ describe('VTPMService.createTemplate', () => {
   it('posts only id when the options are bare (an omitted secure_boot_enabled decodes as false)', async () => {
     await service.createTemplate({ options: { id: 't2' } });
 
-    const [path, body] = vi.mocked(mockClient.post).mock.calls[0]!;
+    const path = vi.mocked(mockClient.post).mock.calls[0]?.[0];
+    const body = vi.mocked(mockClient.post).mock.calls[0]?.[1];
     expect(path).toMatch(/\/v1\/vtpm\/templates$/);
     expect(body).toEqual({ id: 't2' });
     expect(body).not.toHaveProperty('options');
@@ -76,7 +78,7 @@ describe('VTPMService.listBundles', () => {
     await service.listBundles({ options: { limit: 100, offset: 200 } });
 
     expect(mockClient.get).toHaveBeenCalledTimes(1);
-    const [path] = vi.mocked(mockClient.get).mock.calls[0]!;
+    const path = vi.mocked(mockClient.get).mock.calls[0]?.[0];
     expect(path).toContain('limit=100');
     expect(path).toContain('offset=200');
     expect(path).not.toContain('page=');

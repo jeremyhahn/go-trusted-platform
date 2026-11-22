@@ -107,7 +107,7 @@ describe('SDNService port state and policies (#1745)', () => {
     // The daemon installs the policy before it answers; with no policyId a
     // resend gets a fresh ID and is refused AlreadyExists on the name.
     const fetchImpl = vi
-      .fn()
+      .fn<unknown[], Promise<Response>>()
       .mockRejectedValueOnce(new TypeError('network error: response lost after the server acted'))
       .mockResolvedValue(
         new Response(JSON.stringify({ success: true, payload: { policyId: 'second' } }), {

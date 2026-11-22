@@ -497,7 +497,7 @@ describe('DeviceService assignProfileToDevice and updateTemplate wire bodies', (
   // #2022 Codex round 3: a number past Number.MAX_SAFE_INTEGER is already
   // rounded (9007199254740993 is held as ...992), so it would reach another
   // profile. Large IDs must come as decimal strings.
-  const unsafeNumericProfileIds = [9007199254740993, Number.MAX_SAFE_INTEGER + 1, 1.5e20];
+  const unsafeNumericProfileIds = [2 ** 53 + 2, Number.MAX_SAFE_INTEGER + 1, 1.5e20];
 
   it.each(unsafeNumericProfileIds)(
     'unassignProfileFromDevice rejects unsafe numeric profile ID %d without a request',

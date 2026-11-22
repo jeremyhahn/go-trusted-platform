@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import type { Mock } from 'vitest';
 import { ApiClient } from '../../client/api-client.js';
 import { CAService } from '../ca-service.js';
 import { ComputeService } from '../compute-service.js';
@@ -28,9 +29,9 @@ function createMockApiClient(): ApiClient {
 }
 
 /** A real ApiClient whose transport loses the first response. */
-function lossyClient(): { client: ApiClient; fetchImpl: ReturnType<typeof vi.fn> } {
+function lossyClient(): { client: ApiClient; fetchImpl: Mock<unknown[], Promise<Response>> } {
   const fetchImpl = vi
-    .fn()
+    .fn<unknown[], Promise<Response>>()
     .mockRejectedValueOnce(new TypeError('network error: response lost after the server acted'))
     .mockResolvedValue(
       new Response(JSON.stringify({ success: true, payload: { id: 'second' } }), {

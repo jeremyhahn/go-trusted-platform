@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Mock } from 'vitest';
 import { ApiClient } from '../../client/api-client.js';
 import { ComputeService } from '../compute-service.js';
 
@@ -34,35 +35,39 @@ describe('ComputeService VM operations', () => {
 
   it('suspends a VM by POST to /vms/{id}/suspend', async () => {
     await service.suspendVM('vm 1');
-    const [url, body] = vi.mocked(mockClient.post).mock.calls[0]!;
+    const url = vi.mocked(mockClient.post).mock.calls[0]?.[0];
+    const body = vi.mocked(mockClient.post).mock.calls[0]?.[1];
     expect(url).toMatch(/\/compute\/vms\/vm%201\/suspend$/);
     expect(body).toEqual({});
   });
 
   it('resumes a VM by POST to /vms/{id}/resume', async () => {
     await service.resumeVM('vm-1');
-    const [url, body] = vi.mocked(mockClient.post).mock.calls[0]!;
+    const url = vi.mocked(mockClient.post).mock.calls[0]?.[0];
+    const body = vi.mocked(mockClient.post).mock.calls[0]?.[1];
     expect(url).toMatch(/\/compute\/vms\/vm-1\/resume$/);
     expect(body).toEqual({});
   });
 
   it('gets one snapshot by GET /vms/{id}/snapshots/{snapshotId}', async () => {
     await service.getSnapshot('vm-1', 'snap/2');
-    const [url] = vi.mocked(mockClient.get).mock.calls[0]!;
+    const url = vi.mocked(mockClient.get).mock.calls[0]?.[0];
     expect(url).toMatch(/\/compute\/vms\/vm-1\/snapshots\/snap%2F2$/);
   });
 
   it('prepares a migration by POST /migrations/prepare with name, mode and spec', async () => {
     const spec = { memoryMb: 2048, cpus: 2, diskSize: '20G', bootMode: 'uefi', arch: 'x86_64', tpmEnabled: true };
     await service.prepareMigration({ vmId: 'vm-1', vmName: 'web', mode: 'live', spec });
-    const [url, body] = vi.mocked(mockClient.post).mock.calls[0]!;
+    const url = vi.mocked(mockClient.post).mock.calls[0]?.[0];
+    const body = vi.mocked(mockClient.post).mock.calls[0]?.[1];
     expect(url).toMatch(/\/compute\/migrations\/prepare$/);
     expect(body).toEqual({ vmId: 'vm-1', vmName: 'web', mode: 'live', spec });
   });
 
   it('finalizes a migration by POST /migrations/{receiverId}/finalize with commit', async () => {
     await service.finalizeMigration({ receiverId: 'rx-9', commit: false });
-    const [url, body] = vi.mocked(mockClient.post).mock.calls[0]!;
+    const url = vi.mocked(mockClient.post).mock.calls[0]?.[0];
+    const body = vi.mocked(mockClient.post).mock.calls[0]?.[1];
     expect(url).toMatch(/\/compute\/migrations\/rx-9\/finalize$/);
     expect(body).toEqual({ commit: false });
   });
@@ -87,22 +92,22 @@ describe('ComputeService VM operations', () => {
       { vmId: 'vm-1', destinationHost: 'dest', liveMigration: true },
       { timeoutMs: 3600000 }
     );
-    const call = vi.mocked(mockClient.post).mock.calls[0]!;
-    expect(call[0]).toMatch(/\/compute\/vms\/vm-1\/migrate$/);
-    expect(call[1]).toEqual({ destinationHost: 'dest', liveMigration: true, bandwidthLimitMbps: undefined });
-    expect(call[2]).toEqual({ retry: { enabled: false }, timeout: 3600000 });
+    const call = vi.mocked(mockClient.post).mock.calls[0];
+    expect(call?.[0]).toMatch(/\/compute\/vms\/vm-1\/migrate$/);
+    expect(call?.[1]).toEqual({ destinationHost: 'dest', liveMigration: true, bandwidthLimitMbps: undefined });
+    expect(call?.[2]).toEqual({ retry: { enabled: false }, timeout: 3600000 });
   });
 
   it('migrateVM without options passes only retry disabled', async () => {
     await service.migrateVM({ vmId: 'vm-1', destinationHost: 'dest', liveMigration: false });
-    expect(vi.mocked(mockClient.post).mock.calls[0]![2]).toEqual({ retry: { enabled: false } });
+    expect(vi.mocked(mockClient.post).mock.calls[0]?.[2]).toEqual({ retry: { enabled: false } });
   });
 });
 
 /** A real ApiClient whose transport loses the first response after the server acted. */
-function lossyClient(): { client: ApiClient; fetchImpl: ReturnType<typeof vi.fn> } {
+function lossyClient(): { client: ApiClient; fetchImpl: Mock<unknown[], Promise<Response>> } {
   const fetchImpl = vi
-    .fn()
+    .fn<unknown[], Promise<Response>>()
     .mockRejectedValueOnce(new TypeError('network error: response lost after the server acted'))
     .mockResolvedValue(
       new Response(JSON.stringify({ success: true, payload: { id: 'vm-1' } }), {

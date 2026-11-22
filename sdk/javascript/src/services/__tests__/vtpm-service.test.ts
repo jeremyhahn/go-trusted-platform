@@ -61,7 +61,8 @@ describe('VTPMService', () => {
       expect(mockClient.post).toHaveBeenCalledTimes(1);
       // The body is pre-encoded JSON in wire names, with device_profile_id
       // as a bare uint64 number (vtpm-service-wire-names.test.ts pins each field).
-      const [url, body] = vi.mocked(mockClient.post).mock.calls[0]!;
+      const url = vi.mocked(mockClient.post).mock.calls[0]?.[0];
+      const body = vi.mocked(mockClient.post).mock.calls[0]?.[1];
       expect(url).toBe('/v1/vtpm/bundles');
       expect(typeof body).toBe('string');
       const wire = JSON.parse(body as string) as Record<string, unknown>;

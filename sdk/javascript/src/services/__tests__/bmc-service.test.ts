@@ -112,7 +112,7 @@ describe('BMCService', () => {
 
   for (const [name, call] of profileCalls) {
     it(`${name} refuses an unsafe or non-numeric profile id with no request`, async () => {
-      await expect(call(9007199254740993)).rejects.toThrow(RangeError);
+      await expect(call(2 ** 53 + 2)).rejects.toThrow(RangeError);
       await expect(call('12a')).rejects.toThrow(RangeError);
       await expect(call('18446744073709551616')).rejects.toThrow(RangeError);
       expect(requestCount()).toBe(0);
@@ -234,7 +234,7 @@ describe('BMCService.provision without client retries', () => {
     // The server starts provisioning before it answers; a resend after a
     // lost response is rejected 409 while the host is being reinstalled.
     const fetchImpl = vi
-      .fn()
+      .fn<unknown[], Promise<Response>>()
       .mockRejectedValueOnce(new TypeError('network error: response lost after the server acted'))
       .mockResolvedValue(
         new Response(JSON.stringify({ success: true, payload: { provision_id: 'second' } }), {
@@ -264,7 +264,7 @@ describe('BMCService.createUser without client retries (#2022 Codex r2)', () => 
     // carries no idempotency key: a resend after a lost response would
     // create the account twice or fail on the slot it already took.
     const fetchImpl = vi
-      .fn()
+      .fn<unknown[], Promise<Response>>()
       .mockRejectedValueOnce(new TypeError('network error: response lost after the BMC created the user'))
       .mockResolvedValue(
         new Response(JSON.stringify({ success: true, payload: { slot: 3, username: 'ops' } }), {
@@ -298,7 +298,7 @@ describe('BMCService.createUser without client retries (#2022 Codex r2)', () => 
 describe('BMCService provision keeps the profile ID string (#2022 Codex r1)', () => {
   // The server sends profile_id as a JSON number; above 2^53 it rounds
   // (9007199254740993 parses as 9007199254740992).
-  const rounded = { success: true, data: { provision_id: 'p-1', profile_id: 9007199254740993, state: 'running' } };
+  const rounded = { success: true, data: { provision_id: 'p-1', profile_id: Number.MAX_SAFE_INTEGER + 1, state: 'running' } };
 
   it('provision returns the requested profile ID', async () => {
     const client = createRouteMockApiClient();

@@ -8,7 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { IAMService } from '../iam-service.js';
-import { ApiClient } from '../../client/api-client.js';
+import type { ApiClient } from '../../client/api-client.js';
 
 function createMockClient(): ApiClient {
   return {
