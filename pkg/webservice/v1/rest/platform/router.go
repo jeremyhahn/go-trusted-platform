@@ -141,8 +141,12 @@ func (r *PlatformRouter) registerLogRoutes(router *mux.Router) {
 
 // registerHealthRoutes registers health check endpoints
 // GET    /api/v1/platform/health                - Get platform health status
+// GET    /api/v1/platform/liveness              - Liveness verdict in the envelope (HTTP 200)
+// GET    /api/v1/platform/readiness             - Readiness verdict in the envelope (HTTP 200)
 func (r *PlatformRouter) registerHealthRoutes(router *mux.Router) {
 	router.HandleFunc("/health", r.handlers.GetHealth).Methods("GET")
+	router.HandleFunc("/liveness", r.handlers.Liveness).Methods("GET")
+	router.HandleFunc("/readiness", r.handlers.Readiness).Methods("GET")
 }
 
 // registerStatusRoutes registers status and version endpoints

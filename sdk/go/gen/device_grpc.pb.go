@@ -37,6 +37,7 @@ const (
 	DeviceService_CountProfiles_FullMethodName                = "/platform.v1.DeviceService/CountProfiles"
 	DeviceService_ActivateDevice_FullMethodName               = "/platform.v1.DeviceService/ActivateDevice"
 	DeviceService_AttestDevice_FullMethodName                 = "/platform.v1.DeviceService/AttestDevice"
+	DeviceService_IssueAttestationChallenge_FullMethodName    = "/platform.v1.DeviceService/IssueAttestationChallenge"
 	DeviceService_RecordAttestationCertificate_FullMethodName = "/platform.v1.DeviceService/RecordAttestationCertificate"
 	DeviceService_DisableDevice_FullMethodName                = "/platform.v1.DeviceService/DisableDevice"
 	DeviceService_EnableDevice_FullMethodName                 = "/platform.v1.DeviceService/EnableDevice"
@@ -86,6 +87,11 @@ type DeviceServiceClient interface {
 	// the verifier half only: it checks evidence the caller supplies, it does
 	// not ask a device for a fresh quote (see #226).
 	AttestDevice(ctx context.Context, in *AttestDeviceRequest, opts ...grpc.CallOption) (*AttestDeviceResponse, error)
+	// IssueAttestationChallenge issues the server-chosen, single-use nonce
+	// AttestDevice binds a quote to (#2136). The challenge is bound to the
+	// device and the caller's tenant, expires after a short time and is
+	// consumed by the first AttestDevice that presents it.
+	IssueAttestationChallenge(ctx context.Context, in *IssueAttestationChallengeRequest, opts ...grpc.CallOption) (*IssueAttestationChallengeResponse, error)
 	// RecordAttestationCertificate records (or re-records) the device's
 	// attestation (IAK/AK) certificate on its platform record without
 	// re-enrolling the device. The certificate is the trust anchor
@@ -340,6 +346,16 @@ func (c *deviceServiceClient) AttestDevice(ctx context.Context, in *AttestDevice
 	return out, nil
 }
 
+func (c *deviceServiceClient) IssueAttestationChallenge(ctx context.Context, in *IssueAttestationChallengeRequest, opts ...grpc.CallOption) (*IssueAttestationChallengeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IssueAttestationChallengeResponse)
+	err := c.cc.Invoke(ctx, DeviceService_IssueAttestationChallenge_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *deviceServiceClient) RecordAttestationCertificate(ctx context.Context, in *RecordAttestationCertificateRequest, opts ...grpc.CallOption) (*RecordAttestationCertificateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RecordAttestationCertificateResponse)
@@ -513,6 +529,11 @@ type DeviceServiceServer interface {
 	// the verifier half only: it checks evidence the caller supplies, it does
 	// not ask a device for a fresh quote (see #226).
 	AttestDevice(context.Context, *AttestDeviceRequest) (*AttestDeviceResponse, error)
+	// IssueAttestationChallenge issues the server-chosen, single-use nonce
+	// AttestDevice binds a quote to (#2136). The challenge is bound to the
+	// device and the caller's tenant, expires after a short time and is
+	// consumed by the first AttestDevice that presents it.
+	IssueAttestationChallenge(context.Context, *IssueAttestationChallengeRequest) (*IssueAttestationChallengeResponse, error)
 	// RecordAttestationCertificate records (or re-records) the device's
 	// attestation (IAK/AK) certificate on its platform record without
 	// re-enrolling the device. The certificate is the trust anchor
@@ -640,6 +661,9 @@ func (UnimplementedDeviceServiceServer) ActivateDevice(context.Context, *Activat
 }
 func (UnimplementedDeviceServiceServer) AttestDevice(context.Context, *AttestDeviceRequest) (*AttestDeviceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AttestDevice not implemented")
+}
+func (UnimplementedDeviceServiceServer) IssueAttestationChallenge(context.Context, *IssueAttestationChallengeRequest) (*IssueAttestationChallengeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method IssueAttestationChallenge not implemented")
 }
 func (UnimplementedDeviceServiceServer) RecordAttestationCertificate(context.Context, *RecordAttestationCertificateRequest) (*RecordAttestationCertificateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RecordAttestationCertificate not implemented")
@@ -1028,6 +1052,24 @@ func _DeviceService_AttestDevice_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DeviceService_IssueAttestationChallenge_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IssueAttestationChallengeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeviceServiceServer).IssueAttestationChallenge(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeviceService_IssueAttestationChallenge_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeviceServiceServer).IssueAttestationChallenge(ctx, req.(*IssueAttestationChallengeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _DeviceService_RecordAttestationCertificate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RecordAttestationCertificateRequest)
 	if err := dec(in); err != nil {
@@ -1358,6 +1400,10 @@ var DeviceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AttestDevice",
 			Handler:    _DeviceService_AttestDevice_Handler,
+		},
+		{
+			MethodName: "IssueAttestationChallenge",
+			Handler:    _DeviceService_IssueAttestationChallenge_Handler,
 		},
 		{
 			MethodName: "RecordAttestationCertificate",
