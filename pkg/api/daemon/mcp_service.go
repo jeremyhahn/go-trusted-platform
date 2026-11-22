@@ -57,6 +57,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -77,6 +79,9 @@ type MCPServiceProviderConfig struct {
 	// AttestCertRecorder backs device_record_attest_cert; nil means the
 	// tool answers that no certificate authority is configured.
 	AttestCertRecorder AttestCertRecorder
+	// AttestChallengeIssuer backs device_attest_challenge; nil means the
+	// tool answers Unavailable.
+	AttestChallengeIssuer AttestChallengeIssuer
 	// DeviceLifecycle backs device_disable and device_enable; nil means
 	// the tools answer that no SDN policy engine enforces them.
 	DeviceLifecycle DeviceLifecycle
@@ -145,6 +150,7 @@ type MCPServiceProvider struct {
 	deviceTemplateService device.DeviceTemplateService
 	deviceVerdicts        verdict.Sink
 	attestCertRecorder    AttestCertRecorder
+	attestChallengeIssuer AttestChallengeIssuer
 	lifecycle             DeviceLifecycle
 	attestationReporting  *ReportingHandles
 	attestationServer     *AttestationServiceServer
@@ -214,6 +220,7 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		deviceTemplateService: config.DeviceTemplateService,
 		deviceVerdicts:        config.VerdictSink,
 		attestCertRecorder:    config.AttestCertRecorder,
+		attestChallengeIssuer: config.AttestChallengeIssuer,
 		lifecycle:             config.DeviceLifecycle,
 		attestationReporting:  config.AttestationReporting,
 		attestationServer:     config.AttestationServer,
@@ -917,6 +924,33 @@ func (p *MCPServiceProvider) DeviceAttest(ctx context.Context, deviceID string, 
 // same refusal as gRPC, Unix, QUIC and REST.
 func (p *MCPServiceProvider) DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue, clearOnRefusal bool) (interface{}, error) {
 	return recordAttestCertForMCP(ctx, p.attestCertRecorder, deviceID, reissue, clearOnRefusal, p.logger)
+}
+
+// AttestChallengeIssuer issues the server-chosen, single-use attestation
+// challenge a later attest call binds its quote to. *DeviceGRPCService
+// satisfies it.
+type AttestChallengeIssuer interface {
+	IssueAttestationChallenge(ctx context.Context, req *platformv1.IssueAttestationChallengeRequest) (*platformv1.IssueAttestationChallengeResponse, error)
+}
+
+// attestChallengeIssuerOf returns svc as an AttestChallengeIssuer, or a nil
+// interface when svc is nil: a nil *DeviceGRPCService inside the interface
+// would not compare equal to nil.
+func attestChallengeIssuerOf(svc *DeviceGRPCService) AttestChallengeIssuer {
+	if svc == nil {
+		return nil
+	}
+	return svc
+}
+
+// DeviceAttestChallenge issues an attestation challenge for deviceID, as the
+// REST challenge route does. The result is the pb response so it marshals
+// with proto field names (challenge_id, nonce, expires_at).
+func (p *MCPServiceProvider) DeviceAttestChallenge(ctx context.Context, deviceID string) (interface{}, error) {
+	if p.attestChallengeIssuer == nil {
+		return nil, status.Error(codes.Unavailable, "attestation challenges are not configured on this daemon")
+	}
+	return p.attestChallengeIssuer.IssueAttestationChallenge(ctx, &platformv1.IssueAttestationChallengeRequest{DeviceId: deviceID})
 }
 
 // DeviceDisable serves the MCP device_disable tool with the gRPC answer.

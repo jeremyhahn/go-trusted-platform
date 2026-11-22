@@ -15,6 +15,7 @@ package health
 
 import (
 	"context"
+	"log/slog"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -68,6 +69,18 @@ type registryImpl struct {
 	mu       sync.RWMutex
 	config   RegistryConfig
 	closed   atomic.Bool
+	logger   *slog.Logger
+}
+
+// WithLogger sets the logger the registry uses to name unhealthy and degraded
+// components when an aggregate check is not healthy. Without it the registry
+// uses slog.Default().
+func WithLogger(logger *slog.Logger) RegistryOption {
+	return func(r *registryImpl) {
+		if logger != nil {
+			r.logger = logger
+		}
+	}
 }
 
 // NewRegistry creates a new health check registry.
@@ -75,6 +88,7 @@ func NewRegistry(opts ...RegistryOption) Registry {
 	r := &registryImpl{
 		checkers: make(map[string]HealthChecker),
 		config:   DefaultRegistryConfig(),
+		logger:   slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -211,6 +225,19 @@ func (r *registryImpl) Check(ctx context.Context) SystemHealth {
 	// Determine overall status
 	health.Status = r.calculateOverallStatus(health)
 	health.TotalDuration = time.Since(start)
+
+	if health.Status != StatusHealthy {
+		for _, c := range health.Components {
+			if c.Status == StatusHealthy {
+				continue
+			}
+			r.logger.Warn("health component not healthy",
+				"component", c.Name,
+				"status", string(c.Status),
+				"message", c.Message,
+				"overall", string(health.Status))
+		}
+	}
 
 	return health
 }

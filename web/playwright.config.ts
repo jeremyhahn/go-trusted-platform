@@ -6,6 +6,9 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e',
+  // e2e/real-server needs a real daemon and its own globalSetup: it runs
+  // only under playwright.real-server.config.ts (`make web-e2e`).
+  testIgnore: ['**/real-server/**'],
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,

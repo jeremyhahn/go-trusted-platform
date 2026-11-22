@@ -44,6 +44,8 @@ DELETE /api/v1/object-storage/object
 DELETE /api/v1/overlay/macs
 DELETE /api/v1/overlay/vnis/{vni:[0-9]+}
 DELETE /api/v1/platform/config/snapshots/{id}
+DELETE /api/v1/proxy/pools/{id}
+DELETE /api/v1/proxy/routes/{id}
 DELETE /api/v1/pxe/devices/{id}
 DELETE /api/v1/quicbaas/kv/{key}
 DELETE /api/v1/quicbaas/storage/buckets/{name}
@@ -258,6 +260,14 @@ GET /api/v1/provisioning/devices
 GET /api/v1/provisioning/sessions
 GET /api/v1/provisioning/sessions/{sessionID}
 GET /api/v1/provisioning/sessions/{sessionID}/poll
+GET /api/v1/proxy
+GET /api/v1/proxy/config
+GET /api/v1/proxy/pools
+GET /api/v1/proxy/pools/{id}
+GET /api/v1/proxy/routes
+GET /api/v1/proxy/routes/{id}
+GET /api/v1/proxy/status
+GET /api/v1/proxy/zone-matrix
 GET /api/v1/pubkey
 GET /api/v1/pxe
 GET /api/v1/pxe/devices
@@ -412,6 +422,7 @@ POST /api/v1/devices/{id:[0-9]+}/attest-cert/record
 POST /api/v1/devices/{id:[0-9]+}/disable
 POST /api/v1/devices/{id:[0-9]+}/enable
 POST /api/v1/devices/{id}/attest
+POST /api/v1/devices/{id}/attest/challenge
 POST /api/v1/dns/register
 POST /api/v1/dns/zones
 POST /api/v1/dns/zones/{zone}/records
@@ -498,6 +509,9 @@ POST /api/v1/provisioning/devices/{mac}/register
 POST /api/v1/provisioning/devices/{mac}/state
 POST /api/v1/provisioning/sessions/{sessionID}/fulfill
 POST /api/v1/provisioning/sign
+POST /api/v1/proxy/pools
+POST /api/v1/proxy/reload
+POST /api/v1/proxy/routes
 POST /api/v1/pxe/devices
 POST /api/v1/pxe/devices/{id}/authorize
 POST /api/v1/pxe/devices/{id}/enrolled
@@ -592,6 +606,8 @@ PUT /api/v1/kms/keys/{name}/policy
 PUT /api/v1/kms/keys/{name}/status
 PUT /api/v1/kms/secrets/{name}/policy
 PUT /api/v1/kms/secrets/{name}/status
+PUT /api/v1/proxy/pools/{id}
+PUT /api/v1/proxy/routes/{id}
 PUT /api/v1/pxe/devices/{id}/state
 PUT /api/v1/sdn/bridges/{name}/ports/{port}/state
 PUT /api/v1/sdn/gateway/ipam/pools/{id}
