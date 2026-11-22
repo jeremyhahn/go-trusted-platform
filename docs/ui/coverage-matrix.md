@@ -538,20 +538,20 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
 | `PXEService.RegisterDevice` | - | `(dashboard)/networking/pxe/page.tsx` | - | `networking.spec.ts` | covered |
-| `PXEService.GetDevice` | - | - | - | - | missing |
-| `PXEService.GetDeviceByMAC` | - | - | - | - | missing |
+| `PXEService.GetDevice` | `GET /devices/{id}` | `(dashboard)/networking/pxe/devices/[mac]/page.tsx` | - | `pxe.spec.ts` | covered |
+| `PXEService.GetDeviceByMAC` | `GET /devices/mac/{mac}` | `(dashboard)/networking/pxe/devices/[mac]/page.tsx` | - | `pxe.spec.ts` | covered |
 | `PXEService.ListDevices` | - | `(dashboard)/networking/pxe/page.tsx` | - | `networking.spec.ts` | covered |
-| `PXEService.RemoveDevice` | - | `(dashboard)/networking/pxe/page.tsx` (read-only) | - | - | partial |
-| `PXEService.UpdateState` | - | - | - | - | missing |
-| `PXEService.SetDeviceEnrolled` | - | - | - | - | missing |
-| `PXEService.Authorize` | - | - | - | - | missing |
-| `PXEService.Quarantine` | - | - | - | - | missing |
-| `PXEService.Retry` | - | - | - | - | missing |
-| `PXEService.GetEvents` | - | - | - | - | missing |
+| `PXEService.RemoveDevice` | `DELETE /devices/{id}` | `(dashboard)/networking/pxe/page.tsx` | - | `pxe.spec.ts` | covered |
+| `PXEService.UpdateState` | `PUT /devices/{id}/state` | `(dashboard)/networking/pxe/devices/[mac]/page.tsx` | - | `pxe.spec.ts` | covered |
+| `PXEService.SetDeviceEnrolled` | `POST /devices/{id}/enrolled` | `(dashboard)/networking/pxe/devices/[mac]/page.tsx` | - | `pxe.spec.ts` | covered |
+| `PXEService.Authorize` | `POST /devices/{id}/authorize` | `(dashboard)/networking/pxe/page.tsx` | - | `pxe.spec.ts` | covered |
+| `PXEService.Quarantine` | `POST /devices/{id}/quarantine` | `(dashboard)/networking/pxe/page.tsx` | - | `pxe.spec.ts` | covered |
+| `PXEService.Retry` | `POST /devices/{id}/retry` | `(dashboard)/networking/pxe/page.tsx` | - | `pxe.spec.ts` | covered |
+| `PXEService.GetEvents` | `GET /devices/{id}/events` | `(dashboard)/networking/pxe/devices/[mac]/page.tsx` | - | `pxe.spec.ts` | covered |
 | `PXEService.GetStatus` | - | `(dashboard)/networking/pxe/page.tsx` | - | `networking.spec.ts` | covered |
-| `PXEService.StartService` | - | - | - | - | missing |
-| `PXEService.StopService` | - | - | - | - | missing |
-| `PXEService.WebhookComplete` | `POST /webhook/complete` | - | - | - | missing |
+| `PXEService.StartService` | `POST /start` | `(dashboard)/networking/pxe/devices/[mac]/page.tsx` | - | `pxe.spec.ts` | covered |
+| `PXEService.StopService` | `POST /stop` | `(dashboard)/networking/pxe/devices/[mac]/page.tsx` | - | `pxe.spec.ts` | covered |
+| `PXEService.WebhookComplete` | `POST /webhook/complete` | - | - | - | not-UI: installer callback, no operator session |
 
 ## RegistryService (`registry.proto`)
 
@@ -756,7 +756,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | DNSService | 13 | 3 | 7 | 3 | 0 | 0 |
 | ProvisioningGateway | 4 | 0 | 0 | 0 | 4 | 0 |
 | ProxyService | 14 | 0 | 0 | 14 | 0 | 0 |
-| PXEService | 15 | 3 | 1 | 11 | 0 | 0 |
+| PXEService | 15 | 14 | 0 | 0 | 1 | 0 |
 | RegistryService | 6 | 0 | 0 | 4 | 2 | 0 |
 | SchedulerService | 11 | 0 | 0 | 0 | 0 | 11 |
 | SDNService | 29 | 11 | 1 | 16 | 1 | 0 |

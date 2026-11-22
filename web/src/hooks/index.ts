@@ -95,6 +95,8 @@ export { useVTPMRuntime, base64ToText, hexToBase64 } from './use-vtpm-runtime';
 export type { VTPMRunState } from './use-vtpm-runtime';
 
 export { useReportedGateways } from './use-reported-gateways';
+export { usePXEDeviceActions } from './use-pxe-device-actions';
+export type { UsePXEDeviceActionsResult } from './use-pxe-device-actions';
 export { useOverlayVteps } from './use-overlay-vteps';
 export { useRegistry, encodeRepository } from './use-registry';
 export type {
