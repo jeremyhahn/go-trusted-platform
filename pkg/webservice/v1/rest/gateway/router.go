@@ -63,6 +63,7 @@ func NewGatewayRouter(
 //	GET    /api/v1/gateway/lb/vips/{protocol}/{address}/{port} - GetVIP
 //	GET    /api/v1/gateway/lb/status                - GetLBStatus
 //	POST   /api/v1/gateway/perf/flows               - GetPerfFlows (installs temporary flows; admin)
+//	GET    /api/v1/gateway/nat64/status             - GetNAT64Status
 func (r *GatewayRouter) RegisterRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix(basePath).Subrouter()
 	sr.HandleFunc("/status", r.getStatus).Methods("GET")
@@ -81,6 +82,9 @@ func (r *GatewayRouter) RegisterRoutes(parent *mux.Router) {
 	sr.HandleFunc("/lb/vips", r.listVIPs).Methods("GET")
 	sr.HandleFunc("/lb/vips/{protocol}/{address}/{port}", r.getVIP).Methods("GET")
 	sr.HandleFunc("/lb/status", r.getLBStatus).Methods("GET")
+	// NAT64 translator status. The daemon keeps /api/v1/sdn/gateway/nat64;
+	// the webservice serves the read here in protojson (#2052).
+	sr.HandleFunc("/nat64/status", r.getNAT64Status).Methods("GET")
 	// GetPerfFlows installs and removes temporary flows in OpenFlow table
 	// 250, so it is a POST (a write), never a GET.
 	sr.HandleFunc("/perf/flows", r.getPerfFlows).Methods("POST")
@@ -174,6 +178,21 @@ func (r *GatewayRouter) getLBStatus(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	resp, err := r.server.GetLBStatus(req.Context(), &platformv1.GetLBStatusRequest{})
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+// getNAT64Status reads the NAT64 translator status. The service answers
+// Unavailable (503) when no translator is wired and FailedPrecondition (409)
+// when the kernel module is missing.
+func (r *GatewayRouter) getNAT64Status(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	resp, err := r.server.GetNAT64Status(req.Context(), &platformv1.GetNAT64StatusRequest{})
 	if err != nil {
 		protorest.WriteError(w, req, r.respWriter, err)
 		return

@@ -33,6 +33,7 @@ import type {
   GetVIPResponse,
   ListVIPsResponse,
   GetLBStatusResponse,
+  GetGatewayNAT64StatusResponse,
   GetPerfFlowsRequest,
   GetPerfFlowsResponse,
 } from '../types/gateway.js';
@@ -309,6 +310,16 @@ export class GatewayService extends BaseService {
    */
   async getLBStatus(): Promise<ApiResponse<GetLBStatusResponse>> {
     return this.client.get<GetLBStatusResponse>(this.buildUrl('/lb/status'));
+  }
+
+  /**
+   * Get the NAT64 translator status from the webservice.
+   * Route: GET /api/v1/gateway/nat64/status (protojson camelCase).
+   * getNAT64Status stays the daemon-transport read of
+   * /v1/sdn/gateway/nat64/status.
+   */
+  async getGatewayNAT64Status(): Promise<ApiResponse<GetGatewayNAT64StatusResponse>> {
+    return this.client.get<GetGatewayNAT64StatusResponse>(this.buildUrl('/nat64/status'));
   }
 
   /**

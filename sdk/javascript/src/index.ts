@@ -802,6 +802,8 @@ export type {
   GetVIPResponse,
   ListVIPsResponse,
   GetLBStatusResponse,
+  GatewayNAT64Status,
+  GetGatewayNAT64StatusResponse,
   GetPerfFlowsRequest,
   GetPerfFlowsResponse,
 } from './types/gateway.js';
