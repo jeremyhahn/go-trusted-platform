@@ -22,6 +22,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { DNSZoneTable } from '@/components/features/networking/dns-zone-table';
 import { useDNS, useApi, useToast } from '@/hooks';
+import { DNSLookupCard } from '@/components/features/networking/dns-lookup-card';
 import type { DNSZone } from '@/types/infrastructure';
 import { readZone } from '@/lib/dns-wire';
 
@@ -185,6 +186,7 @@ export default function DNSZonesPage() {
       ) : (
         <DNSZoneTable zones={zones} onRefresh={() => fetchZones()} />
       )}
+      <DNSLookupCard onRegistered={() => fetchZones()} />
     </div>
   );
 }
