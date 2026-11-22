@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -110,7 +110,7 @@ describe('DeviceProfilesPage profile lookup (#2048)', () => {
     const result = await screen.findByTestId('profile-lookup-result');
     await waitFor(() => expect(result.textContent).toContain('edge-gw'));
     expect(sent).toContainEqual({ method: 'GET', path: SERIAL_PATH, body: undefined });
-    expect(screen.getByRole('link', { name: 'edge-gw' }).getAttribute('href')).toBe('/devices/profiles/42');
+    expect(within(result).queryByRole('link')).toBeNull();
   });
 
   it('finds a profile by MAC address', async () => {
@@ -126,7 +126,62 @@ describe('DeviceProfilesPage profile lookup (#2048)', () => {
     const result = await screen.findByTestId('profile-lookup-result');
     await waitFor(() => expect(result.textContent).toContain('lab-node'));
     expect(sent).toContainEqual({ method: 'GET', path: MAC_PATH, body: undefined });
-    expect(screen.getByRole('link', { name: 'lab-node' }).getAttribute('href')).toBe('/devices/profiles/7');
+    expect(within(result).queryByRole('link')).toBeNull();
+  });
+
+  it('shows the matched profile in place, with no link to a missing route', async () => {
+    stubControlPlane({
+      ...routes(2, 2, ok({ count: 2 })),
+      ['GET ' + SERIAL_PATH]: ok({ id: '42', name: 'edge-gw', role: 'server' }),
+    });
+    render(withControlPlane(<DeviceProfilesPage />));
+
+    await typeQuery('SN-001');
+    fireEvent.click(screen.getByRole('button', { name: 'Find by serial' }));
+
+    const result = await screen.findByTestId('profile-lookup-result');
+    await waitFor(() => expect(result.textContent).toContain('edge-gw'));
+    expect(document.querySelector('a[href^="/devices/profiles/"]')).toBeNull();
+  });
+
+  it('ignores a lookup answer that arrives after the query changed', async () => {
+    stubControlPlane({
+      ...routes(2, 2, ok({ count: 2 })),
+      ['GET ' + SERIAL_PATH]: ok({ id: '42', name: 'edge-gw', role: 'server' }),
+    });
+    const stubbed = globalThis.fetch;
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let answered = false;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        if (url.pathname === SERIAL_PATH) {
+          await held;
+          const response = await stubbed(input, init);
+          answered = true;
+          return response;
+        }
+        return stubbed(input, init);
+      })
+    );
+    render(withControlPlane(<DeviceProfilesPage />));
+
+    await typeQuery('SN-001');
+    fireEvent.click(screen.getByRole('button', { name: 'Find by serial' }));
+    fireEvent.change(query(), { target: { value: 'SN-002' } });
+
+    release();
+    await waitFor(() => expect(answered).toBe(true));
+    await act(async () => {});
+
+    expect(screen.queryByTestId('profile-lookup-result')).toBeNull();
+    expect(screen.queryByTestId('profile-lookup-error')).toBeNull();
+    expect((screen.getByRole('button', { name: 'Find by serial' }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: 'Find by MAC' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('says no profile matches on a 404', async () => {
