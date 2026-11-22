@@ -109,6 +109,7 @@ type testHandlerRegistry struct {
 	eabService            platformv1.EABServiceServer
 	ntpService            platformv1.NTPServiceServer
 	vpnService            platformv1.VPNServiceServer
+	proxyService          platformv1.ProxyServiceServer
 	appServices           restapi.AppServiceServers
 	clusterService        platformv1.ClusterServiceServer
 	overlayService        platformv1.OverlayServiceServer
@@ -296,6 +297,10 @@ func (r *testHandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer {
 
 func (r *testHandlerRegistry) VPNServiceServer() platformv1.VPNServiceServer {
 	return r.vpnService
+}
+
+func (r *testHandlerRegistry) ProxyServiceServer() platformv1.ProxyServiceServer {
+	return r.proxyService
 }
 
 func (r *testHandlerRegistry) AppServiceServers() restapi.AppServiceServers {

@@ -161,6 +161,10 @@ type stubClusterServer struct {
 	platformv1.UnimplementedClusterServiceServer
 }
 
+type stubProxyServer struct {
+	platformv1.UnimplementedProxyServiceServer
+}
+
 type stubOverlayServer struct {
 	platformv1.UnimplementedOverlayServiceServer
 }
@@ -322,6 +326,7 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.eabService = &stubEABServer{}
 	registry.ntpService = &stubNTPServer{}
 	registry.vpnService = &stubVPNServer{}
+	registry.proxyService = &stubProxyServer{}
 	if registry.clusterService == nil {
 		registry.clusterService = &stubClusterServer{}
 	}

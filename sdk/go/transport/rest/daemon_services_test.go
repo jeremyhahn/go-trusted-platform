@@ -306,6 +306,30 @@ func TestDaemonServices_ConflictKeepsTheGRPCCode(t *testing.T) {
 	}
 }
 
+// TestDeviceAttest_ConflictIsFailedPrecondition reads a 409 from the attest
+// route as the challenge refusing (FailedPrecondition, #2136), not the
+// generic POST-409-is-AlreadyExists.
+func TestDeviceAttest_ConflictIsFailedPrecondition(t *testing.T) {
+	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			_, _ = io.WriteString(w, `{"status":"ok"}`)
+			return
+		}
+		w.WriteHeader(http.StatusConflict)
+		_, _ = io.WriteString(w, `{"error":"attestation challenge expired"}`)
+	})
+	err := a.Connection().Invoke(context.Background(), platformv1.DeviceService_AttestDevice_FullMethodName,
+		&platformv1.AttestDeviceRequest{DeviceId: "1", Evidence: []byte("{}"), ChallengeId: "c"},
+		&platformv1.AttestDeviceResponse{})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("code = %s (%v), want FailedPrecondition", status.Code(err), err)
+	}
+	if msg := status.Convert(err).Message(); msg == "" || msg[0] == '{' {
+		t.Errorf("message = %q, want the envelope's error", msg)
+	}
+}
+
 func TestDaemonServices_RefusedBeforeTheWire(t *testing.T) {
 	dns := platformv1.ServiceType_SERVICE_TYPE_DNS
 	cases := []struct {
