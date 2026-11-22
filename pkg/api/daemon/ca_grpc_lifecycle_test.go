@@ -250,7 +250,7 @@ func TestCAGRPCService_UninstallCACertificates(t *testing.T) {
 			&platformv1.InstallCACertificatesRequest{IncludeIntermediates: true})
 		require.NoError(t, err)
 
-		resp, err := svc.UninstallCACertificates(context.Background(), &platformv1.UninstallCACertificatesRequest{})
+		resp, err := svc.UninstallCACertificates(context.Background(), &platformv1.UninstallCACertificatesRequest{IncludeIntermediates: true})
 		require.NoError(t, err)
 		assert.True(t, resp.Status.Success)
 		assert.Equal(t, inst.CertificatesInstalled, resp.CertificatesRemoved)
@@ -260,7 +260,7 @@ func TestCAGRPCService_UninstallCACertificates(t *testing.T) {
 		_, statErr = os.Stat(filepath.Join(filepath.Dir(path), "ca-intermediate-1.crt"))
 		assert.True(t, os.IsNotExist(statErr))
 
-		resp, err = svc.UninstallCACertificates(context.Background(), &platformv1.UninstallCACertificatesRequest{})
+		resp, err = svc.UninstallCACertificates(context.Background(), &platformv1.UninstallCACertificatesRequest{IncludeIntermediates: true})
 		require.NoError(t, err)
 		assert.True(t, resp.Status.Success)
 		assert.Equal(t, int32(0), resp.CertificatesRemoved)
@@ -273,7 +273,7 @@ func TestCAGRPCService_UninstallCACertificates(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, other, 0o644))
 		svc := NewCAGRPCService(nil, ca, nil).WithTrustInstallPath(path)
 
-		_, err := svc.UninstallCACertificates(context.Background(), &platformv1.UninstallCACertificatesRequest{})
+		_, err := svc.UninstallCACertificates(context.Background(), &platformv1.UninstallCACertificatesRequest{IncludeIntermediates: true})
 		assert.Equal(t, codes.FailedPrecondition, status.Code(err))
 		kept, readErr := os.ReadFile(path)
 		require.NoError(t, readErr)
@@ -290,7 +290,7 @@ func TestCAGRPCService_UninstallCACertificates(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(interPath, other, 0o644))
 
-		_, err = svc.UninstallCACertificates(context.Background(), &platformv1.UninstallCACertificatesRequest{})
+		_, err = svc.UninstallCACertificates(context.Background(), &platformv1.UninstallCACertificatesRequest{IncludeIntermediates: true})
 		assert.Equal(t, codes.FailedPrecondition, status.Code(err))
 		keptRoot, readErr := os.ReadFile(path)
 		require.NoError(t, readErr)
@@ -305,7 +305,7 @@ func TestCAGRPCService_UninstallCACertificates(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, pemOf(ca.trustedRoot.Raw, ca.trustedInter.Raw), 0o644))
 		svc := NewCAGRPCService(nil, ca, nil).WithTrustInstallPath(path)
 
-		resp, err := svc.UninstallCACertificates(context.Background(), &platformv1.UninstallCACertificatesRequest{})
+		resp, err := svc.UninstallCACertificates(context.Background(), &platformv1.UninstallCACertificatesRequest{IncludeIntermediates: true})
 		require.NoError(t, err)
 		assert.True(t, resp.Status.Success)
 		assert.Equal(t, int32(2), resp.CertificatesRemoved)
@@ -318,6 +318,47 @@ func TestCAGRPCService_UninstallCACertificates(t *testing.T) {
 			UninstallCACertificates(context.Background(), &platformv1.UninstallCACertificatesRequest{})
 		assert.Equal(t, codes.FailedPrecondition, status.Code(err))
 	})
+}
+
+// TestCAGRPCService_UninstallCACertificates_WithoutIntermediatesKeepsTheIntermediateFile pins the
+// include_intermediates contract: without it the uninstall removes the root file only.
+func TestCAGRPCService_UninstallCACertificates_WithoutIntermediatesKeepsTheIntermediateFile(t *testing.T) {
+	ca := lifecycleCA(t)
+	path := filepath.Join(t.TempDir(), "ca.crt")
+	interPath := filepath.Join(filepath.Dir(path), "ca-intermediate-1.crt")
+	svc := NewCAGRPCService(nil, ca, nil).WithTrustInstallPath(path)
+	_, err := svc.InstallCACertificates(context.Background(),
+		&platformv1.InstallCACertificatesRequest{IncludeIntermediates: true})
+	require.NoError(t, err)
+
+	resp, err := svc.UninstallCACertificates(context.Background(),
+		&platformv1.UninstallCACertificatesRequest{IncludeIntermediates: false})
+	require.NoError(t, err)
+	assert.True(t, resp.Status.Success)
+	assert.Equal(t, int32(1), resp.CertificatesRemoved)
+	_, statErr := os.Stat(path)
+	assert.True(t, os.IsNotExist(statErr))
+	keptInter, readErr := os.ReadFile(interPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, pemOf(ca.trustedInter.Raw), keptInter)
+}
+
+// TestCAGRPCService_UninstallCACertificates_WithoutIntermediatesRefusesTheCombinedBundle: a legacy
+// root-plus-intermediate bundle cannot be split, so without include_intermediates it is refused
+// and left in place.
+func TestCAGRPCService_UninstallCACertificates_WithoutIntermediatesRefusesTheCombinedBundle(t *testing.T) {
+	ca := lifecycleCA(t)
+	path := filepath.Join(t.TempDir(), "ca.crt")
+	bundle := pemOf(ca.trustedRoot.Raw, ca.trustedInter.Raw)
+	require.NoError(t, os.WriteFile(path, bundle, 0o644))
+	svc := NewCAGRPCService(nil, ca, nil).WithTrustInstallPath(path)
+
+	_, err := svc.UninstallCACertificates(context.Background(),
+		&platformv1.UninstallCACertificatesRequest{IncludeIntermediates: false})
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	kept, readErr := os.ReadFile(path)
+	require.NoError(t, readErr)
+	assert.Equal(t, bundle, kept)
 }
 
 // TestCAGRPCService_TrustLifecycle_Concurrent runs an uninstall and an
@@ -334,7 +375,7 @@ func TestCAGRPCService_TrustLifecycle_Concurrent(t *testing.T) {
 
 		errs := make(chan error, 2)
 		go func() {
-			_, err := svc.UninstallCACertificates(context.Background(), &platformv1.UninstallCACertificatesRequest{})
+			_, err := svc.UninstallCACertificates(context.Background(), &platformv1.UninstallCACertificatesRequest{IncludeIntermediates: true})
 			errs <- err
 		}()
 		go func() {
@@ -345,7 +386,7 @@ func TestCAGRPCService_TrustLifecycle_Concurrent(t *testing.T) {
 		require.NoError(t, <-errs, "round %d", round)
 	}
 
-	_, err := svc.UninstallCACertificates(context.Background(), &platformv1.UninstallCACertificatesRequest{})
+	_, err := svc.UninstallCACertificates(context.Background(), &platformv1.UninstallCACertificatesRequest{IncludeIntermediates: true})
 	require.NoError(t, err)
 	_, statErr := os.Stat(path)
 	assert.True(t, os.IsNotExist(statErr))

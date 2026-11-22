@@ -26,6 +26,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -125,9 +126,12 @@ func startDaemonCAServer(t *testing.T, ca quicbaasca.CACertificateAuthority, tru
 func TestRunInstallUninstall_ThroughTheDaemonCAService(t *testing.T) {
 	ca := newCLILifecycleCA(t)
 	rootPEM := certPEM(ca.root)
-	fullPEM := append(append([]byte{}, rootPEM...), certPEM(ca.inter)...)
+	interPEM := certPEM(ca.inter)
 	newTrustPath := func(t *testing.T) string {
 		return filepath.Join(t.TempDir(), "trusted-platform-ca.crt")
+	}
+	interPathOf := func(trustPath string) string {
+		return strings.TrimSuffix(trustPath, ".crt") + "-intermediate-1.crt"
 	}
 
 	t.Run("install root only", func(t *testing.T) {
@@ -166,7 +170,10 @@ func TestRunInstallUninstall_ThroughTheDaemonCAService(t *testing.T) {
 		assert.Regexp(t, "^CA certificates installed", msg)
 		file, err := os.ReadFile(trustPath)
 		require.NoError(t, err)
-		assert.Equal(t, fullPEM, file)
+		assert.Equal(t, rootPEM, file)
+		interFile, err := os.ReadFile(interPathOf(trustPath))
+		require.NoError(t, err)
+		assert.Equal(t, interPEM, interFile)
 	})
 
 	t.Run("uninstall after the full install", func(t *testing.T) {
@@ -180,6 +187,23 @@ func TestRunInstallUninstall_ThroughTheDaemonCAService(t *testing.T) {
 			"Certificates Removed: 2\n", out)
 		_, err = os.Stat(trustPath)
 		assert.ErrorIs(t, err, os.ErrNotExist)
+		_, err = os.Stat(interPathOf(trustPath))
+		assert.ErrorIs(t, err, os.ErrNotExist)
+	})
+
+	t.Run("uninstall without intermediates keeps the intermediate file", func(t *testing.T) {
+		trustPath := newTrustPath(t)
+		flags := startDaemonCAServer(t, ca, trustPath)
+		_, err := captureStdout(t, func() error { return runInstall(flags(cli.OutputFormatTable), true) })
+		require.NoError(t, err)
+		out, err := captureStdout(t, func() error { return runUninstall(flags(cli.OutputFormatTable), false) })
+		require.NoError(t, err)
+		assert.Contains(t, out, "Certificates Removed: 1\n")
+		_, err = os.Stat(trustPath)
+		assert.ErrorIs(t, err, os.ErrNotExist)
+		interFile, err := os.ReadFile(interPathOf(trustPath))
+		require.NoError(t, err)
+		assert.Equal(t, interPEM, interFile)
 	})
 
 	t.Run("uninstall with nothing installed", func(t *testing.T) {
