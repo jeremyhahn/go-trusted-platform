@@ -28,6 +28,7 @@ import {
   nodeStateLabel,
   useCluster,
 } from "@/hooks/use-cluster";
+import { ClusterMembershipCard } from "./cluster-membership-card";
 
 export default function ClusterPage() {
   const cluster = useCluster();
@@ -137,6 +138,8 @@ export default function ClusterPage() {
               )}
             </CardContent>
           </Card>
+
+          <ClusterMembershipCard localNodeId={status.data?.local_node?.id} onChanged={() => { void status.refetch(); void nodes.refetch(); }} />
         </>
       )}
     </div>

@@ -1,0 +1,217 @@
+"use client";
+
+/**
+ * Membership card on the cluster page: bootstrap a cluster, join one through
+ * its seeds, or leave it (behind a confirm). Every write goes through the
+ * useCluster hook (SDK ApiClient, POST /v1/cluster/{bootstrap,join,leave}).
+ */
+
+import * as React from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/hooks";
+import { useCluster } from "@/hooks/use-cluster";
+
+/** "192.0.2.11:7946, 192.0.2.12:7946\n" -> ["192.0.2.11:7946", "192.0.2.12:7946"]: split on commas and newlines, trimmed, blanks dropped. */
+export function parseSeedAddresses(s: string): string[] {
+  return s
+    .split(/[,\n]/)
+    .map((p) => p.trim())
+    .filter((p) => p !== "");
+}
+
+/** "" -> undefined; an integer 1-65535 -> that number; anything else -> NaN. */
+export function parsePort(s: string): number | undefined {
+  const t = s.trim();
+  if (t === "") return undefined;
+  if (!/^\d+$/.test(t)) return NaN;
+  const n = Number(t);
+  return n >= 1 && n <= 65535 ? n : NaN;
+}
+
+interface WriteResult {
+  success: boolean;
+  data?: { status?: { success?: boolean; message?: string } } | null;
+  error?: { message?: string } | null;
+}
+
+export function ClusterMembershipCard(props: { localNodeId?: string; onChanged: () => void }) {
+  const { localNodeId, onChanged } = props;
+  const cluster = useCluster();
+  const { toast } = useToast();
+
+  const [clusterName, setClusterName] = React.useState("");
+  const [nodeName, setNodeName] = React.useState("");
+  const [bindAddress, setBindAddress] = React.useState("");
+  const [bindPort, setBindPort] = React.useState("");
+
+  const [joinName, setJoinName] = React.useState("");
+  const [joinAddress, setJoinAddress] = React.useState("");
+  const [joinPort, setJoinPort] = React.useState("");
+  const [seeds, setSeeds] = React.useState("");
+
+  const [nodeId, setNodeId] = React.useState(localNodeId ?? "");
+  const [nodeIdTouched, setNodeIdTouched] = React.useState(false);
+  const [force, setForce] = React.useState(false);
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+
+  const [pending, setPending] = React.useState<"bootstrap" | "join" | "leave" | null>(null);
+
+  React.useEffect(() => {
+    if (!nodeIdTouched) setNodeId(localNodeId ?? "");
+  }, [localNodeId, nodeIdTouched]);
+
+  const bootPort = parsePort(bindPort);
+  const joinBindPort = parsePort(joinPort);
+  const seedList = parseSeedAddresses(seeds);
+
+  const bindFields = (address: string, port: number | undefined) => {
+    const a = address.trim();
+    return { ...(a ? { bind_address: a } : {}), ...(port ? { bind_port: port } : {}) };
+  };
+
+  const settle = (res: WriteResult, title: string, fallback: string) => {
+    if (res.success && res.data?.status?.success !== false) {
+      toast({ title, description: res.data?.status?.message || fallback });
+      setConfirmOpen(false);
+      onChanged();
+      return;
+    }
+    toast({
+      title: "Cluster request failed",
+      description: res.error?.message ?? res.data?.status?.message,
+      variant: "destructive",
+    });
+  };
+
+  const run = async (kind: "bootstrap" | "join" | "leave", write: () => Promise<WriteResult>, title: string, fallback: string) => {
+    setPending(kind);
+    try {
+      settle(await write(), title, fallback);
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const onBootstrap = () => {
+    const name = clusterName.trim();
+    const node = nodeName.trim();
+    void run(
+      "bootstrap",
+      () => cluster.bootstrap({ cluster_name: name, node_name: node, ...bindFields(bindAddress, bootPort) } as Parameters<typeof cluster.bootstrap>[0]),
+      "Cluster bootstrapped",
+      name,
+    );
+  };
+
+  const onJoin = () => {
+    const node = joinName.trim();
+    void run(
+      "join",
+      () => cluster.join({ node_name: node, seed_addresses: seedList, ...bindFields(joinAddress, joinBindPort) }),
+      "Node joined",
+      node,
+    );
+  };
+
+  const onLeave = () => {
+    const id = nodeId.trim();
+    void run("leave", () => cluster.leave({ node_id: id, ...(force ? { force: true } : {}) }), "Node left", id);
+  };
+
+  const bootstrapDisabled =
+    pending === "bootstrap" || clusterName.trim() === "" || nodeName.trim() === "" || Number.isNaN(bootPort);
+  const joinDisabled = pending === "join" || joinName.trim() === "" || seedList.length === 0 || Number.isNaN(joinBindPort);
+  const leaveDisabled = pending === "leave" || nodeId.trim() === "";
+
+  return (
+    <Card data-testid="cluster-membership">
+      <CardHeader>
+        <CardTitle>Membership</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <section data-testid="cluster-bootstrap" className="space-y-2">
+          <h3 className="text-sm font-medium">Bootstrap</h3>
+          <div className="grid gap-2 sm:grid-cols-4">
+            <Input aria-label="Cluster name" value={clusterName} onChange={(e) => setClusterName(e.target.value)} />
+            <Input aria-label="Node name" value={nodeName} onChange={(e) => setNodeName(e.target.value)} />
+            <Input aria-label="Bind address" value={bindAddress} onChange={(e) => setBindAddress(e.target.value)} />
+            <Input aria-label="Bind port" value={bindPort} onChange={(e) => setBindPort(e.target.value)} />
+          </div>
+          <Button size="sm" disabled={bootstrapDisabled} onClick={onBootstrap}>
+            Bootstrap
+          </Button>
+        </section>
+
+        <section data-testid="cluster-join" className="space-y-2">
+          <h3 className="text-sm font-medium">Join</h3>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <Input aria-label="Join node name" value={joinName} onChange={(e) => setJoinName(e.target.value)} />
+            <Input aria-label="Join bind address" value={joinAddress} onChange={(e) => setJoinAddress(e.target.value)} />
+            <Input aria-label="Join bind port" value={joinPort} onChange={(e) => setJoinPort(e.target.value)} />
+          </div>
+          <Textarea
+            aria-label="Seed addresses"
+            placeholder="192.0.2.11:7946"
+            value={seeds}
+            onChange={(e) => setSeeds(e.target.value)}
+          />
+          <Button size="sm" disabled={joinDisabled} onClick={onJoin}>
+            Join
+          </Button>
+        </section>
+
+        <section data-testid="cluster-leave" className="space-y-2">
+          <h3 className="text-sm font-medium">Leave</h3>
+          <div className="flex flex-wrap items-center gap-4">
+            <Input
+              aria-label="Node ID"
+              className="max-w-xs"
+              value={nodeId}
+              onChange={(e) => {
+                setNodeIdTouched(true);
+                setNodeId(e.target.value);
+              }}
+            />
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" aria-label="Force" checked={force} onChange={(e) => setForce(e.target.checked)} />
+              Force
+            </label>
+          </div>
+          <Button size="sm" variant="destructive" disabled={leaveDisabled} onClick={() => setConfirmOpen(true)}>
+            Leave
+          </Button>
+        </section>
+
+        <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Leave cluster</DialogTitle>
+              <DialogDescription>
+                {`Remove node ${nodeId.trim()} from the cluster? It stops taking part in elections and replication.`}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setConfirmOpen(false)}>
+                Cancel
+              </Button>
+              <Button variant="destructive" disabled={pending === "leave"} onClick={onLeave}>
+                Leave cluster
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </CardContent>
+    </Card>
+  );
+}
