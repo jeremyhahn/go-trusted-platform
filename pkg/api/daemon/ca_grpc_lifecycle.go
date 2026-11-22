@@ -199,7 +199,7 @@ func (s *CAGRPCService) InstallCACertificates(ctx context.Context, req *platform
 	if req.GetIncludeIntermediates() && interPEM != nil {
 		wanted = append(wanted, trustFile{path: intermediateTrustPath(s.trustPath), pem: interPEM})
 	}
-	wrote := false
+	var written int32
 	for _, f := range wanted {
 		if current, rerr := os.ReadFile(f.path); rerr == nil && bytes.Equal(current, f.pem) {
 			continue
@@ -207,9 +207,9 @@ func (s *CAGRPCService) InstallCACertificates(ctx context.Context, req *platform
 		if err := trust.InstallToSystemTrust(f.pem, f.path); err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
-		wrote = true
+		written++
 	}
-	if !wrote {
+	if written == 0 {
 		return &platformv1.InstallCACertificatesResponse{
 			Status:      &platformv1.Status{Success: true, Message: "CA certificates already installed"},
 			InstallPath: s.trustPath,
@@ -218,7 +218,7 @@ func (s *CAGRPCService) InstallCACertificates(ctx context.Context, req *platform
 	}
 	return &platformv1.InstallCACertificatesResponse{
 		Status:                &platformv1.Status{Success: true, Message: "CA certificates installed; run update-ca-certificates to refresh the system trust store"},
-		CertificatesInstalled: int32(len(wanted)),
+		CertificatesInstalled: written,
 		InstallPath:           s.trustPath,
 		Timestamp:             timestamppb.Now(),
 	}, nil
@@ -260,7 +260,7 @@ func (s *CAGRPCService) UninstallCACertificates(ctx context.Context, req *platfo
 		return nil, status.Error(codes.FailedPrecondition, s.trustPath+
 			" also holds the intermediate certificate; uninstall with include_intermediates to remove it")
 	}
-	if rootErr == nil && !bytes.Equal(currentRoot, rootPEM) && !(inter && bytes.Equal(currentRoot, fullPEM)) {
+	if rootErr == nil && !bytes.Equal(currentRoot, rootPEM) && (!inter || !bytes.Equal(currentRoot, fullPEM)) {
 		return nil, status.Error(codes.FailedPrecondition, trust.ErrSystemTrustBundleMismatch{Path: s.trustPath}.Error())
 	}
 	if inter {

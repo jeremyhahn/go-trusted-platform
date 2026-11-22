@@ -32,10 +32,13 @@ func newInstallCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Long: `Ask the daemon to install this CA's certificates into its system trust
 path.
 
-The daemon writes one PEM bundle (the root certificate, plus the intermediate
-with --include-intermediates) to its trust path, by default
-/usr/local/share/ca-certificates/trusted-platform-ca.crt. When the same
-bundle is already there it answers "already installed" and writes nothing.
+The daemon writes one certificate per file. The root certificate goes to its
+trust path, by default
+/usr/local/share/ca-certificates/trusted-platform-ca.crt. With
+--include-intermediates (the default) the intermediate certificate goes to the
+sibling file trusted-platform-ca-intermediate-1.crt in the same directory.
+Each file that already holds the same bytes is left alone; when every file is
+already in place the daemon answers "already installed" and writes nothing.
 The daemon does not run update-ca-certificates: run it afterwards to refresh
 the system trust store.
 

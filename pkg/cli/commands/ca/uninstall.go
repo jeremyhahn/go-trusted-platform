@@ -32,18 +32,31 @@ func newUninstallCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Long: `Ask the daemon to remove this CA's certificates from its system trust
 path.
 
-The daemon removes the PEM bundle at its trust path, by default
-/usr/local/share/ca-certificates/trusted-platform-ca.crt, only when it is a
-bundle this CA wrote (the root, or the root plus the intermediate). It
-answers "nothing installed" when there is no bundle and refuses any other
-file. The daemon does not run update-ca-certificates: run it afterwards to
-refresh the system trust store.
+The daemon removes the trust files this CA wrote: the root certificate at its
+trust path, by default
+/usr/local/share/ca-certificates/trusted-platform-ca.crt, and, with
+--include-intermediates (the default), the intermediate certificate at the
+sibling file trusted-platform-ca-intermediate-1.crt. It also removes a legacy
+combined root-plus-intermediate bundle at the trust path when
+--include-intermediates is set.
+
+With --include-intermediates=false only the root file is removed: the
+intermediate file is left in place, and a legacy combined
+root-plus-intermediate bundle at the trust path is refused, because removing
+it would also remove the intermediate.
+
+The daemon answers "nothing installed" when there is no file to remove and
+refuses a trust-path file this CA did not write. It does not run
+update-ca-certificates: run it afterwards to refresh the system trust store.
 
 The caller needs the trust:write scope.
 
 Examples:
-  # Remove the CA bundle from the daemon's trust path
+  # Remove the root and intermediate trust files
   platformctl ca uninstall-ca-certificates
+
+  # Remove the root trust file only, keeping the intermediate
+  platformctl ca uninstall-ca-certificates --include-intermediates=false
 
   # Then refresh the system trust store on the daemon's host
   sudo update-ca-certificates`,
