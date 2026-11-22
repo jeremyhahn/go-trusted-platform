@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   RefreshCw,
   Shield,
@@ -31,12 +32,14 @@ import {
   Key,
   AlertCircle,
 } from "lucide-react";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { useTPM, useIDevID, useApi, useToast } from "@/hooks";
+import { useIDevIDCerts, looksLikePem } from "@/hooks/use-idevid-certs";
 import type {
   ApiResponse,
   GetEKResponse,
   GetIAKInfoResponse,
-  GetIDevIDInfoResponse,
   GetSRKResponse,
   TPMCapability,
   TPMVersion,
@@ -136,11 +139,24 @@ export default function TPMStatusPage() {
     [],
     { onError: () => {} }
   );
-  const { data: idevidProbe, refetch: refetchIDevID } = useApi(
-    () => idevid.getIDevIDInfo().catch((): ApiResponse<GetIDevIDInfoResponse> => ({ success: false })),
+  // HasIDevID / HasIAK answer presence directly. useApi keeps the last data
+  // when a fetch fails, so a set error means the current answer is unknown,
+  // whatever an earlier check said (#2170 Codex).
+  const { data: idevidExists, error: idevidExistsError, refetch: refetchIDevID } = useApi(
+    () => idevid.hasIDevID(),
     [],
     { onError: () => {} }
   );
+  const { data: iakExists, error: iakExistsError, refetch: refetchIAKExists } = useApi(
+    () => idevid.hasIAK(),
+    [],
+    { onError: () => {} }
+  );
+  const {
+    data: deviceAttributes,
+    error: deviceAttributesError,
+    refetch: refetchAttributes,
+  } = useApi(() => idevid.getDeviceAttributes(), [], { onError: () => {} });
 
   const refetchAll = React.useCallback(() => {
     loadStatus();
@@ -148,7 +164,139 @@ export default function TPMStatusPage() {
     refetchSRK();
     refetchIAK();
     refetchIDevID();
-  }, [loadStatus, refetchEK, refetchSRK, refetchIAK, refetchIDevID]);
+    refetchIAKExists();
+    refetchAttributes();
+  }, [loadStatus, refetchEK, refetchSRK, refetchIAK, refetchIDevID, refetchIAKExists, refetchAttributes]);
+
+  // GenerateIAK / DeleteIAK: each call re-reads HasIAK and the IAK info
+  // afterwards, whether it was accepted or refused (a refused GenerateIAK can
+  // still leave an IAK). The buttons stay disabled until both reads answer, so
+  // nobody acts on a stale badge (#2186 Codex). The SDK does not throw; a
+  // refusal comes back as res.error, and useApi's refetch never rejects.
+  const [iakBusy, setIakBusy] = React.useState(false);
+  const [confirmDeleteIAK, setConfirmDeleteIAK] = React.useState(false);
+
+  const rereadIAK = React.useCallback(
+    () => Promise.all([refetchIAKExists(), refetchIAK()]),
+    [refetchIAKExists, refetchIAK]
+  );
+
+  const generateIAK = React.useCallback(async () => {
+    setIakBusy(true);
+    try {
+      const res = await idevid.generateIAK();
+      if (res.error) {
+        toast({ title: "IAK generation failed", description: res.error.message, variant: "destructive" });
+      } else {
+        toast({ title: "IAK generated", description: res.data?.status?.message || "The IAK was created" });
+      }
+    } finally {
+      await rereadIAK();
+      setIakBusy(false);
+    }
+  }, [idevid, toast, rereadIAK]);
+
+  const deleteIAK = React.useCallback(async () => {
+    setConfirmDeleteIAK(false);
+    setIakBusy(true);
+    try {
+      const res = await idevid.deleteIAK();
+      if (res.error) {
+        toast({ title: "IAK delete refused", description: res.error.message, variant: "destructive" });
+      } else {
+        toast({ title: "IAK deleted", description: res.data?.status?.message || "The IAK was deleted" });
+      }
+    } finally {
+      await rereadIAK();
+      setIakBusy(false);
+    }
+  }, [idevid, toast, rereadIAK]);
+
+  // FlushTransientContexts: flushes every transient TPM context. The SDK does
+  // not throw; a refusal comes back as res.error.
+  const [flushBusy, setFlushBusy] = React.useState(false);
+  const [confirmFlush, setConfirmFlush] = React.useState(false);
+
+  const flushContexts = React.useCallback(async () => {
+    setConfirmFlush(false);
+    setFlushBusy(true);
+    try {
+      const res = await idevid.flushTransientContexts();
+      if (res.error) {
+        toast({ title: "Flush refused", description: res.error.message, variant: "destructive" });
+      } else {
+        toast({
+          title: "Transient contexts flushed",
+          description: res.data?.status?.message || "The transient contexts were flushed",
+        });
+      }
+    } finally {
+      setFlushBusy(false);
+    }
+  }, [idevid, toast]);
+
+  // InstallIDevIDCertificate / InstallIAKCertificate / DeleteIAKCertificate
+  // through useIDevIDCerts (#2055). The SDK does not throw; a refusal comes
+  // back as res.error and shows the server's message. The IAK CSR control is
+  // deferred: the daemon's CreateIAKCSR (pkg/api/daemon/idevid_grpc_service.go)
+  // cannot yet return a usable PEM CSR.
+  const certs = useIDevIDCerts();
+  const [idevidCertText, setIdevidCertText] = React.useState("");
+  const [iakCertText, setIakCertText] = React.useState("");
+  const [certBusy, setCertBusy] = React.useState(false);
+  const [confirmDeleteIAKCert, setConfirmDeleteIAKCert] = React.useState(false);
+
+  const installIDevIDCert = React.useCallback(async () => {
+    setCertBusy(true);
+    try {
+      const res = await certs.installIDevIDCertificate(idevidCertText);
+      if (res.error) {
+        toast({ title: "IDevID certificate install refused", description: res.error.message, variant: "destructive" });
+      } else {
+        toast({
+          title: "IDevID certificate installed",
+          description: res.data?.status?.message || "The IDevID certificate was installed",
+        });
+      }
+    } finally {
+      setCertBusy(false);
+    }
+  }, [certs, idevidCertText, toast]);
+
+  const installIAKCert = React.useCallback(async () => {
+    setCertBusy(true);
+    try {
+      const res = await certs.installIAKCertificate(iakCertText);
+      if (res.error) {
+        toast({ title: "IAK certificate install refused", description: res.error.message, variant: "destructive" });
+      } else {
+        toast({
+          title: "IAK certificate installed",
+          description: res.data?.status?.message || "The IAK certificate was installed",
+        });
+      }
+    } finally {
+      setCertBusy(false);
+    }
+  }, [certs, iakCertText, toast]);
+
+  const deleteIAKCert = React.useCallback(async () => {
+    setConfirmDeleteIAKCert(false);
+    setCertBusy(true);
+    try {
+      const res = await certs.deleteIAKCertificate();
+      if (res.error) {
+        toast({ title: "IAK certificate delete refused", description: res.error.message, variant: "destructive" });
+      } else {
+        toast({
+          title: "IAK certificate deleted",
+          description: res.data?.status?.message || "The IAK certificate was deleted",
+        });
+      }
+    } finally {
+      setCertBusy(false);
+    }
+  }, [certs, toast]);
 
   // Helper to find capability by name
   const findCapability = (caps: TPMCapability[] | undefined, name: string) => {
@@ -229,13 +377,33 @@ export default function TPMStatusPage() {
         isEndorsementHierarchyEnabled: findCapability(caps, 'endorsementHierarchy')?.supported ?? true,
       },
     };
-  }, [infoData, ekProbe, srkProbe, iakProbe, idevidProbe]);
+  }, [infoData, ekProbe, srkProbe, iakProbe]);
 
   const getStatusBadge = (enabled: boolean, label: string) => (
     <Badge variant={enabled ? "default" : "secondary"}>
       {enabled ? label : `Not ${label}`}
     </Badge>
   );
+
+  // Presence from HasIDevID / HasIAK: undefined means the check was
+  // refused or failed, now or on the latest refresh, which is not the
+  // same as "not provisioned".
+  const presenceBadge = (exists: boolean | undefined, label: string) => {
+    if (exists === true) return <Badge variant="default">{label} Present</Badge>;
+    if (exists === false) return <Badge variant="secondary">No {label}</Badge>;
+    return <Badge variant="outline">{label} Unknown</Badge>;
+  };
+
+  const attributes = deviceAttributes?.attributes;
+  const attributeRows: Array<[string, string | undefined]> = [
+    ["TPM Manufacturer", attributes?.tpmManufacturer],
+    ["TPM Model", attributes?.tpmModel],
+    ["TPM Version", attributes?.tpmVersion],
+    ["Platform Manufacturer", attributes?.platformManufacturer],
+    ["Platform Model", attributes?.platformModel],
+    ["Platform Version", attributes?.platformVersion],
+    ["Platform Serial", attributes?.platformSerial],
+  ];
 
   if (loading && !status) {
     return (
@@ -421,15 +589,24 @@ export default function TPMStatusPage() {
                       <Badge variant={status.capabilities.hasSRK ? "default" : "secondary"}>
                         {status.capabilities.hasSRK ? "SRK Present" : "No SRK"}
                       </Badge>
-                      <Badge variant={iakProbe ? "default" : "secondary"}>
-                        {iakProbe ? "IAK Present" : "No IAK"}
-                      </Badge>
-                      <Badge variant={idevidProbe ? "default" : "secondary"}>
-                        {idevidProbe ? "IDevID Present" : "No IDevID"}
-                      </Badge>
+                      {presenceBadge(iakExistsError ? undefined : iakExists?.exists, "IAK")}
+                      {presenceBadge(idevidExistsError ? undefined : idevidExists?.exists, "IDevID")}
                       <Badge variant={status.capabilities.hasOwner ? "default" : "secondary"}>
                         {status.capabilities.hasOwner ? "Owner Set" : "No Owner"}
                       </Badge>
+                    </div>
+                    <div className="flex flex-wrap gap-2 mt-2" data-testid="iak-actions">
+                      <Button size="sm" variant="outline" onClick={() => void generateIAK()} disabled={iakBusy}>
+                        Generate IAK
+                      </Button>
+                      <Button size="sm" variant="destructive" onClick={() => setConfirmDeleteIAK(true)} disabled={iakBusy}>
+                        Delete IAK
+                      </Button>
+                    </div>
+                    <div className="flex flex-wrap gap-2 mt-2" data-testid="tpm-maintenance">
+                      <Button size="sm" variant="outline" onClick={() => setConfirmFlush(true)} disabled={flushBusy}>
+                        Flush transient contexts
+                      </Button>
                     </div>
                   </div>
 
@@ -472,7 +649,136 @@ export default function TPMStatusPage() {
                 </div>
               </CardContent>
             </Card>
+
+            <Card data-testid="device-attributes">
+              <CardHeader>
+                <CardTitle>Device Attributes</CardTitle>
+                <CardDescription>
+                  TCG device attributes reported by the IDevID service
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {deviceAttributesError ? (
+                  <p className="text-sm text-destructive">
+                    Device attributes unavailable: {deviceAttributesError.message}
+                  </p>
+                ) : (
+                  <dl className="space-y-3">
+                    {attributeRows.map(([label, value]) => (
+                      <div key={label} className="flex justify-between">
+                        <dt className="text-sm text-muted-foreground">{label}</dt>
+                        <dd className="text-sm font-medium">{value || "—"}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card data-testid="identity-certificates">
+              <CardHeader>
+                <CardTitle>Identity Certificates</CardTitle>
+                <CardDescription>
+                  IDevID / IAK certificate install through the IDevID service
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="idevid-cert-pem">IDevID certificate PEM</Label>
+                    <Textarea
+                      id="idevid-cert-pem"
+                      value={idevidCertText}
+                      onChange={(e) => setIdevidCertText(e.target.value)}
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void installIDevIDCert()}
+                      disabled={certBusy || !looksLikePem(idevidCertText, "CERTIFICATE")}
+                    >
+                      Install IDevID certificate
+                    </Button>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="iak-cert-pem">IAK certificate PEM</Label>
+                    <Textarea
+                      id="iak-cert-pem"
+                      value={iakCertText}
+                      onChange={(e) => setIakCertText(e.target.value)}
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void installIAKCert()}
+                      disabled={certBusy || !looksLikePem(iakCertText, "CERTIFICATE")}
+                    >
+                      Install IAK certificate
+                    </Button>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => setConfirmDeleteIAKCert(true)}
+                    disabled={certBusy}
+                  >
+                    Delete IAK certificate
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
           </div>
+
+          <Dialog open={confirmDeleteIAK} onOpenChange={setConfirmDeleteIAK}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Delete the IAK?</DialogTitle>
+                <DialogDescription>
+                  The IDevID service is asked to delete the Initial Attestation Key. The service may refuse: a TPM-resident IAK is not evicted by it.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setConfirmDeleteIAK(false)}>Cancel</Button>
+                <Button type="button" variant="destructive" onClick={() => void deleteIAK()}>Delete IAK</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+          <Dialog open={confirmFlush} onOpenChange={setConfirmFlush}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Flush the transient contexts?</DialogTitle>
+                <DialogDescription>
+                  Every transient object and session loaded in the TPM is flushed. Persistent keys are not touched.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setConfirmFlush(false)}>
+                  Cancel
+                </Button>
+                <Button type="button" onClick={() => void flushContexts()}>
+                  Flush
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+          <Dialog open={confirmDeleteIAKCert} onOpenChange={setConfirmDeleteIAKCert}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Delete the IAK certificate?</DialogTitle>
+                <DialogDescription>
+                  The IDevID service removes the installed IAK certificate. This cannot be undone.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setConfirmDeleteIAKCert(false)}>
+                  Cancel
+                </Button>
+                <Button type="button" variant="destructive" onClick={() => void deleteIAKCert()}>
+                  Delete certificate
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </>
       )}
     </div>
