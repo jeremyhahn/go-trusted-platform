@@ -190,25 +190,3 @@ func TestGatewayRouter_LBNilServerAnswers503(t *testing.T) {
 		})
 	}
 }
-
-// TestGatewayRouter_LBHasNoWriteRoutes pins that this slice serves only the
-// reads; the next slice adds AddVIP, RemoveVIP and SetVIPBackends and
-// removes this guard.
-func TestGatewayRouter_LBHasNoWriteRoutes(t *testing.T) {
-	for _, tc := range []gatewayRouteCase{
-		{name: "add vip", method: http.MethodPost, path: "/api/v1/gateway/lb/vips", body: `{"vip":{}}`},
-		{name: "remove vip", method: http.MethodDelete, path: "/api/v1/gateway/lb/vips/tcp/10.0.0.5/443"},
-		{name: "set backends", method: http.MethodPut, path: "/api/v1/gateway/lb/vips/tcp/10.0.0.5/443/backends", body: `{"backends":[]}`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			svc := &fakeGatewayService{reply: &platformv1.GetVIPResponse{}}
-			rec := serveGatewayCase(newGatewayTestRouter(svc), tc, tc.body)
-			if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
-				t.Fatalf("status = %d, want 404 or 405 (body=%s)", rec.Code, rec.Body.String())
-			}
-			if svc.lastReq != nil {
-				t.Fatalf("the service was called with %v", svc.lastReq)
-			}
-		})
-	}
-}

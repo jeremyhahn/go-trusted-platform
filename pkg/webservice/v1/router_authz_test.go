@@ -1576,6 +1576,9 @@ func TestGatewayOperatorRoutes_AreRegisteredAndGated(t *testing.T) {
 		"DELETE /api/v1/gateway/bgp/prefixes",
 		"POST /api/v1/gateway/ipam/allocations",
 		"POST /api/v1/gateway/perf/flows",
+		"POST /api/v1/gateway/lb/vips",
+		"DELETE /api/v1/gateway/lb/vips/{protocol}/{address}/{port}",
+		"PUT /api/v1/gateway/lb/vips/{protocol}/{address}/{port}/backends",
 		"GET /api/v1/gateway/state",
 		"DELETE /api/v1/gateway/state/{id}",
 	} {
@@ -1589,6 +1592,9 @@ func TestGatewayOperatorRoutes_AreRegisteredAndGated(t *testing.T) {
 		{"ipam allocate", http.MethodPost, "/api/v1/gateway/ipam/allocations"},
 		{"set gateway mode", http.MethodPost, "/api/v1/gateway/mode"},
 		{"perf flows benchmark", http.MethodPost, "/api/v1/gateway/perf/flows"},
+		{"add vip", http.MethodPost, "/api/v1/gateway/lb/vips"},
+		{"remove vip", http.MethodDelete, "/api/v1/gateway/lb/vips/tcp/192.0.2.10/443"},
+		{"set vip backends", http.MethodPut, "/api/v1/gateway/lb/vips/tcp/192.0.2.10/443/backends"},
 		{"fleet state list", http.MethodGet, "/api/v1/gateway/state"},
 		{"clear gateway record", http.MethodDelete, "/api/v1/gateway/state/g1"},
 	} {
