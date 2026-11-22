@@ -89,6 +89,19 @@ describe("MigrationsPage receiver spec", () => {
     await waitFor(() => expect(ops.prepareMigration).toHaveBeenCalledTimes(1));
     expect(ops.prepareMigration.mock.calls[0][0].mode).toBe("cold");
   });
+
+  // The receiver provisions no vTPM and carries no TPM state, so the page
+  // offers no TPM option (#2021 Codex round 2).
+  it("prepares a receiver without a vTPM and offers no TPM option", async () => {
+    render(<MigrationsPage />);
+    fillSpec();
+    const tpm = screen.getByRole("checkbox", { name: "TPM" }) as HTMLInputElement;
+    expect(tpm.disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Prepare Migration" }));
+
+    await waitFor(() => expect(ops.prepareMigration).toHaveBeenCalledTimes(1));
+    expect(ops.prepareMigration.mock.calls[0][0].spec.tpmEnabled).toBe(false);
+  });
 });
 
 // #1727: each receiver holds a QEMU process until finalized, so the page keeps

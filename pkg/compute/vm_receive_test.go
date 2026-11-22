@@ -773,6 +773,52 @@ func TestReceiveIncoming_RefusesAMismatchedGuestArch(t *testing.T) {
 	}
 }
 
+// TestReceiveIncoming_RefusesALiveReceiver checks that a live (shared-storage)
+// receive is refused before any credential is issued or QEMU started: the
+// receiver creates a fresh disk and never opens the source's shared disk, so
+// the guest would run on a blank disk (#2021 Codex round 2).
+func TestReceiveIncoming_RefusesALiveReceiver(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	tlsProv := &fakeServerTLS{dir: t.TempDir()}
+	orch.config.MigrationTLS = tlsProv
+	swapReceiverLauncher(t, func(context.Context, *incomingReceiverParams) (incomingReceiver, error) {
+		t.Fatal("a receiver was launched for a live migration")
+		return nil, nil
+	})
+
+	_, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Mode:   MigrateModeLive,
+		Config: &InstanceConfig{Memory: 1024},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "live migration receive is not supported")
+	assert.False(t, tlsProv.materialized, "no credentials are issued for a live receive")
+}
+
+// TestReceiveIncoming_RefusesATPMReceiver checks that a guest with a vTPM is
+// refused before any credential is issued or QEMU started: the receiver
+// provisions no vTPM and carries no TPM state (#2021 Codex round 2).
+func TestReceiveIncoming_RefusesATPMReceiver(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	tlsProv := &fakeServerTLS{dir: t.TempDir()}
+	orch.config.MigrationTLS = tlsProv
+	swapReceiverLauncher(t, func(context.Context, *incomingReceiverParams) (incomingReceiver, error) {
+		t.Fatal("a receiver was launched for a vTPM guest")
+		return nil, nil
+	})
+
+	_, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Config: &InstanceConfig{Memory: 1024, TPMEnabled: true},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "vTPM migration receive is not supported")
+	assert.False(t, tlsProv.materialized, "no credentials are issued for a vTPM receive")
+}
+
 func TestReceiveIncoming_EmptySourceArchMatchesAnX86_64Host(t *testing.T) {
 	orch := newOpsOrchestrator(t)
 	orch.config.Arch = qemu.ArchX86_64
