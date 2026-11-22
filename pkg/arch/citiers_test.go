@@ -710,6 +710,45 @@ func TestCIGateTiersMatchTheJobs(t *testing.T) {
 	}
 }
 
+// TestCIGateRequiresTheHostedJobs pins the jobs the gate must require on a
+// named tier and runner: web-e2e runs the real-server Playwright specs on a
+// GitHub-hosted runner, which installs chromium in the job (ruling 1031).
+func TestCIGateRequiresTheHostedJobs(t *testing.T) {
+	wf := loadCIWorkflow(t, repoRoot(t), ciWorkflowFile)
+	jobs := make(map[string]ciJob, len(wf.Jobs))
+	for _, j := range wf.Jobs {
+		jobs[j.ID] = j
+	}
+	gate, ok := jobs[ciGateJobID]
+	if !ok {
+		t.Fatal("the workflow has no ci-gate job")
+	}
+	checked, _ := gateFindings(wf, gate, jobs)
+	for _, tc := range []struct {
+		job, tier, runsOn string
+	}{
+		{job: "web-e2e", tier: tierFull, runsOn: "ubuntu-latest"},
+	} {
+		j, ok := jobs[tc.job]
+		if !ok {
+			t.Errorf("%s: the workflow has no such job", tc.job)
+			continue
+		}
+		if got := tierByIf[j.If]; got != tc.tier {
+			t.Errorf("%s: its if: puts it in tier %q, want %q", tc.job, got, tc.tier)
+		}
+		if j.RunsOn != tc.runsOn {
+			t.Errorf("%s: runs-on is %q, want %q", tc.job, j.RunsOn, tc.runsOn)
+		}
+		if !slices.Contains(gate.Needs, tc.job) {
+			t.Errorf("%s: not in ci-gate's needs", tc.job)
+		}
+		if c, ok := checked[tc.job]; !ok || c.Tier != tc.tier {
+			t.Errorf("%s: ci-gate has no %s check line for it", tc.job, tc.tier)
+		}
+	}
+}
+
 // TestPullRequestWorkflowsCancelSupersededRuns holds every workflow a
 // pull_request triggers to the ref-keyed, cancelling concurrency block.
 func TestPullRequestWorkflowsCancelSupersededRuns(t *testing.T) {
