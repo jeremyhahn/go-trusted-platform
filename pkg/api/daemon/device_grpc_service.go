@@ -60,7 +60,13 @@ type DeviceGRPCService struct {
 	// answers Unavailable.
 	bootCA BootCABundle
 	boot   BootProvider
-	logger *slog.Logger
+	// challenges holds the single-use nonces IssueAttestationChallenge
+	// issues and AttestDevice consumes (#2136).
+	challenges *attestChallengeStore
+	// challengeRequired makes AttestDevice refuse a request without a
+	// challenge_id (WithDeviceAttestChallengeRequired).
+	challengeRequired bool
+	logger            *slog.Logger
 }
 
 // DeviceGRPCOption configures optional dependencies of a DeviceGRPCService.
@@ -91,6 +97,7 @@ func NewDeviceGRPCService(
 	s := &DeviceGRPCService{
 		deviceService:  deviceService,
 		profileService: profileService,
+		challenges:     newAttestChallengeStore(),
 		logger:         logger,
 	}
 	for _, opt := range opts {
@@ -1169,6 +1176,13 @@ func containsSubstring(s, substr string) bool {
 // rather than parsing a status message. Errors are reserved for calls that
 // could not be evaluated at all — an unknown device, unusable evidence, a
 // device with no trustworthy attestation key.
+//
+// A challenge_id binds the quote to a server-issued single-use nonce
+// (IssueAttestationChallenge, #2136): the challenge is consumed, then must be
+// live, for this device and the caller's tenant, and its nonce must be the
+// evidence nonce, all before the verifier runs. Without a challenge_id the
+// call is refused only when the service was built with
+// WithDeviceAttestChallengeRequired.
 func (s *DeviceGRPCService) AttestDevice(
 	ctx context.Context,
 	req *platformv1.AttestDeviceRequest,
@@ -1178,6 +1192,9 @@ func (s *DeviceGRPCService) AttestDevice(
 	}
 	if len(req.GetEvidence()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "evidence is required")
+	}
+	if err := s.checkAttestChallenge(ctx, req); err != nil {
+		return nil, err
 	}
 
 	result, err := s.verifier.Verify(ctx, req.GetDeviceId(), req.GetEvidence())

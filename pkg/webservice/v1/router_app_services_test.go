@@ -206,3 +206,25 @@ func TestAppServiceRoutes_RefusedWithoutAScopeAuthorizer(t *testing.T) {
 	}
 	assert.Zero(t, cache.calls+scheduler.calls+messaging.calls+objects.calls)
 }
+
+// TestProxyRoutes_RefusedWithoutAScopeAuthorizer pins that the proxy reads,
+// like the other scoped routes, fail closed under the legacy JWT handler: an
+// admin session without scopes is refused, one with every scope gets through
+// to the (stub) service (#2157 Codex).
+func TestProxyRoutes_RefusedWithoutAScopeAuthorizer(t *testing.T) {
+	targets := []string{"/api/v1/proxy/routes", "/api/v1/proxy/zone-matrix"}
+
+	roleOnly := &testHandlerRegistry{
+		tokenHandler: &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"},
+	}
+	for _, target := range targets {
+		assert.Equal(t, http.StatusForbidden, appServiceServing(t, roleOnly, target), target)
+	}
+
+	scoped := &testHandlerRegistry{
+		tokenHandler: &allScopesSessionAuth{sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"}},
+	}
+	for _, target := range targets {
+		assert.NotEqual(t, http.StatusForbidden, appServiceServing(t, scoped, target), target)
+	}
+}
