@@ -15,6 +15,7 @@ package rest
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -108,8 +109,8 @@ func (h *ClusterHandlers) bootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in platformv1.BootstrapClusterRequest
-	if err := decodeClusterBody(r, &in); err != nil {
-		writeClusterError(w, http.StatusBadRequest, err.Error())
+	if err := decodeClusterBody(w, r, &in); err != nil {
+		writeClusterError(w, clusterBodyStatus(err), err.Error())
 		return
 	}
 	resp, err := h.server.Bootstrap(r.Context(), &in)
@@ -122,8 +123,8 @@ func (h *ClusterHandlers) join(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in platformv1.JoinClusterRequest
-	if err := decodeClusterBody(r, &in); err != nil {
-		writeClusterError(w, http.StatusBadRequest, err.Error())
+	if err := decodeClusterBody(w, r, &in); err != nil {
+		writeClusterError(w, clusterBodyStatus(err), err.Error())
 		return
 	}
 	resp, err := h.server.Join(r.Context(), &in)
@@ -136,8 +137,8 @@ func (h *ClusterHandlers) leave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in platformv1.LeaveClusterRequest
-	if err := decodeClusterBody(r, &in); err != nil {
-		writeClusterError(w, http.StatusBadRequest, err.Error())
+	if err := decodeClusterBody(w, r, &in); err != nil {
+		writeClusterError(w, clusterBodyStatus(err), err.Error())
 		return
 	}
 	resp, err := h.server.Leave(r.Context(), &in)
@@ -214,14 +215,19 @@ func parseClusterQueryUint32(v string) (uint32, error) {
 	return uint32(n), nil
 }
 
-// decodeClusterBody decodes a JSON request body; an absent or empty body
-// leaves out untouched.
-func decodeClusterBody(r *http.Request, out any) error {
+// maxClusterBodyBytes bounds a cluster write request body: the bootstrap,
+// join and leave requests carry a few names and seed addresses, so 64 KiB
+// is ample, and a larger body answers 413 before it is buffered or decoded.
+const maxClusterBodyBytes = 64 << 10
+
+// decodeClusterBody decodes a JSON request body of at most
+// maxClusterBodyBytes; an absent or empty body leaves out untouched.
+func decodeClusterBody(w http.ResponseWriter, r *http.Request, out any) error {
 	if r.Body == nil {
 		return nil
 	}
 	defer func() { _ = r.Body.Close() }()
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxClusterBodyBytes))
 	if err != nil {
 		return err
 	}
@@ -229,6 +235,15 @@ func decodeClusterBody(r *http.Request, out any) error {
 		return nil
 	}
 	return json.Unmarshal(body, out)
+}
+
+// clusterBodyStatus maps a decodeClusterBody error to 413 when the body
+// exceeded maxClusterBodyBytes and to 400 otherwise.
+func clusterBodyStatus(err error) int {
+	if errors.As(err, new(*http.MaxBytesError)) {
+		return http.StatusRequestEntityTooLarge
+	}
+	return http.StatusBadRequest
 }
 
 // writeClusterResult writes resp with 200, or err's mapped status with an

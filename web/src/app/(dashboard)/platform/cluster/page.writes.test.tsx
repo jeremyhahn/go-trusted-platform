@@ -170,13 +170,14 @@ describe('ClusterPage writes', () => {
     type('Node name', 'alpha');
     fireEvent.click(button);
     expect(await findToast('refused', 'destructive')).toBeTruthy();
-    expect(screen.queryAllByTestId('toast').some((t) => t.textContent?.includes('Cluster bootstrapped'))).toBe(false);
+    // Earlier tests leave their own success toasts behind, so match this response's success text.
+    expect(screen.queryAllByTestId('toast').some((t) => t.textContent?.includes('Cluster bootstrapped: refused'))).toBe(false);
 
     await waitFor(() => expect((screen.getByLabelText('Node ID') as HTMLInputElement).value).toBe('n1'));
     fireEvent.click(screen.getByRole('button', { name: 'Leave' }));
     fireEvent.click(await within(await screen.findByRole('dialog')).findByRole('button', { name: 'Leave cluster' }));
     expect(await findToast('leave refused', 'destructive')).toBeTruthy();
-    expect(screen.queryAllByTestId('toast').some((t) => t.textContent?.includes('Node left'))).toBe(false);
+    expect(screen.queryAllByTestId('toast').some((t) => t.textContent?.includes('Node left: leave refused'))).toBe(false);
     expect(within(screen.getByRole('dialog')).getByRole('heading', { name: 'Leave cluster' })).toBeTruthy();
   });
 

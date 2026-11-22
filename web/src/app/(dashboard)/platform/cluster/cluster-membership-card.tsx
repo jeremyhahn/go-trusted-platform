@@ -63,7 +63,9 @@ export function ClusterMembershipCard(props: { localNodeId?: string; onChanged: 
   const seedList = parseSeedAddresses(seeds);
 
   const settle = (res: WriteResult, title: string, fallback: string) => {
-    if (res.success && res.data?.status?.success !== false) {
+    // The server encodes Status with encoding/json and omits success when it
+    // is false, so only an explicit true is a success.
+    if (res.success && res.data?.status?.success === true) {
       toast({ title, description: res.data?.status?.message || fallback });
       setConfirmOpen(false);
       onChanged();
