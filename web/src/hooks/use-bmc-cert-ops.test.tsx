@@ -1,5 +1,6 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
 import type { ReactNode } from 'react';
+import { BMCCertService } from 'trusted-platform-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ok, refused, stubControlPlane, withControlPlane } from '@/test/control-plane-fetch';
@@ -19,6 +20,7 @@ describe('useBMCCertOps', () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it('enrolls with its overrides through POST /bmc/{id}/enroll', async () => {
@@ -119,5 +121,25 @@ describe('useBMCCertOps', () => {
     expect(replaceCertProblem({ cert_pem: 'c', key_pem: 'k' })).toBeNull();
     expect(failedCeremonySteps(undefined)).toEqual([]);
     expect(bmcPath('a/b', 'cert')).toBe('/v1/bmc/a%2Fb/cert');
+  });
+
+  it('goes through the SDK BMCCertService', async () => {
+    const enrollSpy = vi.spyOn(BMCCertService.prototype, 'enrollBMC');
+    const restoreSpy = vi.spyOn(BMCCertService.prototype, 'restoreFactoryCert');
+    const replaceSpy = vi.spyOn(BMCCertService.prototype, 'replaceWebCertificate');
+    stubControlPlane({
+      'POST /api/v1/bmc/42/enroll': ok({ device_id: '42', steps: [] }),
+      'POST /api/v1/bmc/42/cert/restore': ok({ device_id: '42', steps: [] }),
+      'PUT /api/v1/bmc/42/cert': ok({ status: 'ok' }),
+    });
+    const { result } = renderOps();
+    await act(async () => {
+      await result.current.enroll({ replace_certificate: true, dns_register: false });
+      await result.current.restoreFactoryCert();
+      await result.current.replaceWebCertificate({ cert_pem: CERT_PEM, key_pem: KEY_PEM });
+    });
+    expect(enrollSpy).toHaveBeenCalledWith('42', { replaceCertificate: true, dnsRegister: false });
+    expect(restoreSpy).toHaveBeenCalledWith('42');
+    expect(replaceSpy).toHaveBeenCalledWith('42', { certPem: CERT_PEM, keyPem: KEY_PEM });
   });
 });

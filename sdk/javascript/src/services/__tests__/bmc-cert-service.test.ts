@@ -146,4 +146,23 @@ describe('BMCCertService', () => {
       expect(result).toEqual(answer);
     });
   });
+
+  describe('replaceWebCertificate', () => {
+    it('puts the PEM pair as snake_case to the cert route', async () => {
+      const answer = { success: true, data: { status: 'ok' } };
+      vi.mocked(mockClient.put).mockResolvedValue(answer);
+
+      const result = await service.replaceWebCertificate(7, { certPem: 'C', keyPem: 'K' });
+
+      expect(mockClient.put).toHaveBeenCalledWith('/v1/bmc/7/cert', { cert_pem: 'C', key_pem: 'K' });
+      expect(result).toEqual(answer);
+    });
+
+    it('is wired on the platform client as bmcCert', async () => {
+      const { PlatformClient } = await import('../../index.js');
+      const client = new PlatformClient({ baseUrl: 'https://api.example.com' });
+
+      expect(client.bmcCert).toBeInstanceOf(BMCCertService);
+    });
+  });
 });
