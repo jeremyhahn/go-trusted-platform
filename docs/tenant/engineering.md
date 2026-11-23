@@ -15,7 +15,7 @@
 | `entity.go` | The tenant entity |
 | `state.go` | The five-state lifecycle and its transition map |
 | `quotas.go`, `quota/` | Quota limits and usage accounting |
-| `keyspace.go` | Per-tenant keyspace |
+| `keyspace.go` | Per-tenant keyspace: nodes, networks, clusters, ca, vrfs, services |
 | `dek_client.go` | Per-tenant DEK operations; `NewTenantDEKClient(dek quicbaas.DEKClient) TenantDEKClient` |
 | `config.go` | `Config`, `ManagerConfig` |
 | `errors.go` | Typed errors |
