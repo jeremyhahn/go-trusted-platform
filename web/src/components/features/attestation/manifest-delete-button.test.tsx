@@ -47,6 +47,15 @@ async function enabledButton() {
   return button;
 }
 
+// The live toast carrying text; toasts from an earlier case may still be listed.
+async function toastWith(text: string) {
+  return waitFor(() => {
+    const found = screen.queryAllByTestId('toast').find((t) => t.textContent?.includes(text));
+    expect(found).toBeTruthy();
+    return found as HTMLElement;
+  });
+}
+
 describe('ManifestDeleteButton', () => {
   it('deletes only after the confirm', async () => {
     const sent = stubControlPlane(routes());
@@ -61,9 +70,8 @@ describe('ManifestDeleteButton', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     await waitFor(() => expect(onDeleted).toHaveBeenCalledTimes(1));
     expect(deletes(sent).map((r) => r.path)).toEqual(['/api/v1/attestation/manifests/m-1']);
-    const toast = await screen.findByTestId('toast');
+    const toast = await toastWith('Manifest deleted');
     expect(toast.getAttribute('data-variant')).not.toBe('destructive');
-    expect(toast.textContent).toContain('Manifest deleted');
   });
 
   it('encodes the manifest id in the path', async () => {
@@ -99,9 +107,8 @@ describe('ManifestDeleteButton', () => {
 
     fireEvent.click(await enabledButton());
     fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
-    const toast = await screen.findByTestId('toast');
+    const toast = await toastWith('manifest not found');
     expect(toast.getAttribute('data-variant')).toBe('destructive');
-    expect(toast.textContent).toContain('manifest not found');
     expect(onDeleted).not.toHaveBeenCalled();
   });
 });
