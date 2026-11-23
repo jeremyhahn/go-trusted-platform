@@ -18,6 +18,19 @@ vi.mock("@/hooks", () => ({
   useOptionalAuth: () => auth.current,
 }));
 
+const capsOff: { current: Record<string, string> } = { current: {} };
+
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: (op: string) =>
+      op in capsOff.current ? { enabled: false, reason: capsOff.current[op] } : { enabled: true },
+  }),
+}));
+
+const FLOWS_OP = "POST /api/v1/gateway/perf/flows";
+
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -33,6 +46,7 @@ describe("GatewayPerfFlowsCard", () => {
   beforeEach(() => {
     fetchMock.mockReset();
     auth.current = { user: { roles: ["admin"] } };
+    capsOff.current = {};
   });
 
   afterEach(() => {
@@ -139,5 +153,34 @@ describe("GatewayPerfFlowsCard", () => {
     expect(text).toContain("flow teardown on br-int failed");
     expect(text).toContain("expires any left behind within 60 seconds");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("the run and the confirm carry their capability op", async () => {
+    render(<GatewayPerfFlowsCard />);
+
+    const run = screen.getByTestId("perf-flows-run");
+    expect(run.getAttribute("data-capability-op")).toBe(FLOWS_OP);
+    expect(run.getAttribute("data-capability-enabled")).toBe("true");
+
+    await openDialog();
+
+    const confirm = screen.getByTestId("perf-flows-confirm");
+    expect(confirm.getAttribute("data-capability-op")).toBe(FLOWS_OP);
+    expect(confirm.getAttribute("data-capability-enabled")).toBe("true");
+  });
+
+  it("an admin sees the run the server does not offer disabled with its reason and sends nothing", async () => {
+    capsOff.current = { [FLOWS_OP]: "not-configured: gateway perf" };
+    render(<GatewayPerfFlowsCard />);
+
+    const run = screen.getByTestId("perf-flows-run") as HTMLButtonElement;
+    expect(run.disabled).toBe(true);
+    expect(run.title).toBe("not-configured: gateway perf");
+    expect(run.getAttribute("data-capability-enabled")).toBe("false");
+
+    await act(async () => run.click());
+
+    expect(screen.queryByTestId("perf-flows-dialog")).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

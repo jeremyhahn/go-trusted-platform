@@ -19,6 +19,20 @@ vi.mock("@/hooks", () => ({
   useOptionalAuth: () => auth.current,
 }));
 
+const capsOff: { current: Record<string, string> } = { current: {} };
+
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: (op: string) =>
+      op in capsOff.current ? { enabled: false, reason: capsOff.current[op] } : { enabled: true },
+  }),
+}));
+
+const DATAPATH_OP = "GET /api/v1/gateway/perf/datapath";
+const CONNTRACK_OP = "GET /api/v1/gateway/perf/conntrack";
+
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -45,6 +59,7 @@ describe("GatewayPerfCountersCard", () => {
   beforeEach(() => {
     fetchMock.mockReset();
     auth.current = { user: { roles: ["admin"] } };
+    capsOff.current = {};
   });
 
   afterEach(() => {
@@ -148,5 +163,30 @@ describe("GatewayPerfCountersCard", () => {
     const error = await screen.findByTestId("perf-counters-error");
     expect(error.textContent).toContain("bridge not found");
     expect(button("perf-datapath-load").disabled).toBe(false);
+  });
+
+  it("each read carries its capability op", () => {
+    render(<GatewayPerfCountersCard />);
+
+    expect(button("perf-datapath-load").getAttribute("data-capability-op")).toBe(DATAPATH_OP);
+    expect(button("perf-datapath-load").getAttribute("data-capability-enabled")).toBe("true");
+    expect(button("perf-conntrack-load").getAttribute("data-capability-op")).toBe(CONNTRACK_OP);
+    expect(button("perf-conntrack-load").getAttribute("data-capability-enabled")).toBe("true");
+  });
+
+  it("a read the server does not offer is disabled with its reason and sends nothing", async () => {
+    capsOff.current = { [CONNTRACK_OP]: "not-configured: gateway perf" };
+    render(<GatewayPerfCountersCard />);
+
+    const conntrack = button("perf-conntrack-load");
+    expect(conntrack.disabled).toBe(true);
+    expect(conntrack.title).toBe("not-configured: gateway perf");
+    expect(conntrack.getAttribute("data-capability-enabled")).toBe("false");
+    expect(button("perf-datapath-load").disabled).toBe(false);
+    expect(button("perf-datapath-load").getAttribute("data-capability-enabled")).toBe("true");
+
+    await act(async () => conntrack.click());
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
