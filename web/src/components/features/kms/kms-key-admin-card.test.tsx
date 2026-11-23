@@ -4,6 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ok, refused, stubControlPlane, withControlPlane } from '@/test/control-plane-fetch';
 import { KmsKeyAdminCard } from './kms-key-admin-card';
 
+vi.mock('@/hooks/use-capabilities', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/use-capabilities')>()),
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
+
 // #2057: the KMS key admin card sets a key's status through the API client at
 // the served PUT /v1/kms/keys/{name}/status route. Every status but ENABLED
 // asks first, because a disabled or compromised key refuses every operation.
