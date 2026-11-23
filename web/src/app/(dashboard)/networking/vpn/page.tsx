@@ -81,6 +81,9 @@ export default function VPNPage() {
   const [enrolSubmitting, setEnrolSubmitting] = useState(false);
   const [deleting, setDeleting] = useState<VPNPosturePolicy | null>(null);
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
+  const [tenantInput, setTenantInput] = useState('');
+  const [gatewayInput, setGatewayInput] = useState('');
+  const [filters, setFilters] = useState({ tenant: '', gateway: '' });
 
   const notConfiguredQuiet = (title: string) => ({
     onError: (err: Error) => {
@@ -98,14 +101,14 @@ export default function VPNPage() {
     isLoading: statusLoading,
     error: statusError,
     refetch: refetchStatus,
-  } = useApi(() => vpn.getStatus(), [], notConfiguredQuiet('Error loading VPN status'));
+  } = useApi(() => vpn.getStatus(filters.gateway || undefined), [filters.gateway], notConfiguredQuiet('Error loading VPN status'));
 
   const {
     data: peersData,
     isLoading: peersLoading,
     error: peersError,
     refetch: refetchPeers,
-  } = useApi(() => vpn.listPeers(), [], notConfiguredQuiet('Error loading VPN peers'));
+  } = useApi(() => vpn.listPeers(filters.tenant || undefined), [filters.tenant], notConfiguredQuiet('Error loading VPN peers'));
 
   const {
     data: policiesData,
@@ -113,8 +116,8 @@ export default function VPNPage() {
     error: policiesError,
     refetch: refetchPolicies,
   } = useApi(
-    () => vpn.listPosturePolicies(),
-    [],
+    () => vpn.listPosturePolicies(filters.tenant || undefined),
+    [filters.tenant],
     notConfiguredQuiet('Error loading posture policies')
   );
 
@@ -303,6 +306,51 @@ export default function VPNPage() {
           <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
         </Button>
       </div>
+
+      <form
+        role="search"
+        aria-label="VPN filters"
+        data-testid="vpn-filters"
+        className="flex flex-wrap items-end gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setFilters({ tenant: tenantInput.trim(), gateway: gatewayInput.trim() });
+        }}
+      >
+        <div className="space-y-1">
+          <Label htmlFor="vpn-filter-tenant">Tenant</Label>
+          <Input
+            id="vpn-filter-tenant"
+            placeholder="every tenant"
+            value={tenantInput}
+            onChange={(e) => setTenantInput(e.target.value)}
+          />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="vpn-filter-gateway">Gateway</Label>
+          <Input
+            id="vpn-filter-gateway"
+            placeholder="every gateway"
+            value={gatewayInput}
+            onChange={(e) => setGatewayInput(e.target.value)}
+          />
+        </div>
+        <Button type="submit" size="sm" variant="outline">
+          Apply filters
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            setTenantInput('');
+            setGatewayInput('');
+            setFilters({ tenant: '', gateway: '' });
+          }}
+        >
+          Clear filters
+        </Button>
+      </form>
 
       <Card data-testid="vpn-gateways-card">
         <CardHeader>
