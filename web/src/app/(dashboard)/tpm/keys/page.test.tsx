@@ -49,6 +49,14 @@ vi.mock("@/hooks", async (importOriginal) => ({
   useApi: (fetcher: () => Promise<Resp>) => useApiMock(fetcher),
 }));
 
+vi.mock("@/components/features/tpm/tpm-key-lifecycle-card", () => ({
+  TPMKeyLifecycleCard: () => <div data-testid="tpm-key-lifecycle-card" />,
+}));
+
+vi.mock("@/components/features/tpm/tpm-certify-card", () => ({
+  TPMCertifyCard: () => <div data-testid="tpm-certify-card" />,
+}));
+
 vi.mock("@/components/ui/dropdown-menu", async (importOriginal) => {
   const Pass = ({ children }: { children?: React.ReactNode }) => <>{children}</>;
   const Item = ({
@@ -115,5 +123,14 @@ describe("TPM keys View Details certificate", () => {
     tpm.getEKCertificate.mockRejectedValue(new Error("network down"));
     await openEKDetails();
     expect(await screen.findByText("network down")).toBeTruthy();
+  });
+});
+
+// #2068: the key lifecycle and certify cards are reachable from /tpm/keys.
+describe("TPM keys page cards", () => {
+  it("shows the key lifecycle and certify cards", async () => {
+    render(<TPMKeysPage />);
+    expect(await screen.findByTestId("tpm-key-lifecycle-card")).toBeTruthy();
+    expect(await screen.findByTestId("tpm-certify-card")).toBeTruthy();
   });
 });
