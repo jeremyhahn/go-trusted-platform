@@ -1225,23 +1225,32 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 				"policy %q already installs a flow on bridge %s with priority %d and match %q",
 				owner, flow.bridge, flow.mod.Priority, flow.mod.Match)
 		}
-		installed, err := s.installPolicyFlows(ctx, client, flows)
+		attempted, err := s.installPolicyFlows(ctx, client, flows)
 		if err != nil {
-			// OFPFC_ADD replaced any prior flow with the same table, priority
-			// and match, so removing this call's flows can remove a prior
-			// rule too: remove them, then re-add the prior enabled rules.
-			rollbackErr := s.removePolicyFlows(ctx, client, flows[:installed])
+			// The failing AddFlow may have reached the switch (a barrier
+			// can time out after the write), so every attempted flow is
+			// removed. OFPFC_ADD replaced any prior flow with the same
+			// table, priority and match, so removing them can remove a
+			// prior rule too: remove them, then re-add the prior enabled
+			// rules.
+			rollbackErr := s.removePolicyFlows(ctx, client, flows[:attempted])
 			if prior != nil && prior.enabled {
 				priorFlows := s.policyFlows(prior.bridgeNames, prior.rules, prior.priority)
 				if _, reErr := s.installPolicyFlows(ctx, client, priorFlows); reErr != nil {
 					rollbackErr = errors.Join(rollbackErr, reErr)
 				}
 			}
-			if rollbackErr != nil {
-				s.markPolicyError(policyID)
-				return nil, status.Errorf(codes.Internal, "install policy flows: %v; rollback: %v", err, rollbackErr)
+			if rollbackErr == nil {
+				return nil, status.Errorf(codes.Internal, "install policy flows: %v", err)
 			}
-			return nil, status.Errorf(codes.Internal, "install policy flows: %v", err)
+			if prior != nil {
+				s.markPolicyError(policyID)
+			} else {
+				// Keep a record of the flows that may still be installed,
+				// so a later disable or delete can remove them.
+				s.storePolicy(policyID, policyType, config, bridgeNames, "error", nil)
+			}
+			return nil, status.Errorf(codes.Internal, "install policy flows: %v; rollback: %v", err, rollbackErr)
 		}
 		for _, flow := range flows {
 			flowIDs = append(flowIDs, fmt.Sprintf("policy-%s-rule-%s-%s", policyID, flow.ruleID, uuid.NewString()))
@@ -1256,29 +1265,7 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		}
 	}
 
-	now := time.Now()
-
-	// Track the policy under write lock
-	s.mu.Lock()
-	s.policies[policyID] = &policyResource{
-		id:          policyID,
-		name:        config.GetName(),
-		description: config.GetDescription(),
-		policyType:  policyType,
-		priority:    config.GetPriority(),
-		enabled:     config.GetEnabled(),
-		status:      policyStatus,
-		rules:       config.GetRules(),
-		targets:     config.GetTargets(),
-		bridgeNames: bridgeNames,
-		schedule:    config.GetSchedule(),
-		createdAt:   now,
-		updatedAt:   now,
-		flowIDs:     flowIDs,
-	}
-
-	policy := s.policyResourceToPb(policyID, s.policies[policyID])
-	s.mu.Unlock()
+	policy := s.storePolicy(policyID, policyType, config, bridgeNames, policyStatus, flowIDs)
 
 	return &platformv1.ApplyPolicyResponse{
 		Status: &platformv1.Status{
@@ -1518,12 +1505,38 @@ func (s *SDNService) conflictingPolicyFlow(flows []policyFlow, others []policyRe
 	return "", policyFlow{}, false
 }
 
-// installPolicyFlows adds the flows in order and stops at the first failure,
-// returning how many were installed before it.
+// storePolicy writes the policy record under the write lock and returns
+// its protobuf form.
+func (s *SDNService) storePolicy(policyID, policyType string, config *platformv1.PolicyConfig, bridgeNames []string, policyStatus string, flowIDs []string) *platformv1.Policy {
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.policies[policyID] = &policyResource{
+		id:          policyID,
+		name:        config.GetName(),
+		description: config.GetDescription(),
+		policyType:  policyType,
+		priority:    config.GetPriority(),
+		enabled:     config.GetEnabled(),
+		status:      policyStatus,
+		rules:       config.GetRules(),
+		targets:     config.GetTargets(),
+		bridgeNames: bridgeNames,
+		schedule:    config.GetSchedule(),
+		createdAt:   now,
+		updatedAt:   now,
+		flowIDs:     flowIDs,
+	}
+	return s.policyResourceToPb(policyID, s.policies[policyID])
+}
+
+// installPolicyFlows adds the flows in order and stops at the first failure.
+// It returns how many flows it attempted, the failing one included: an
+// AddFlow that returns an error may still have installed its flow.
 func (s *SDNService) installPolicyFlows(ctx context.Context, client ovs.ClientInterface, flows []policyFlow) (int, error) {
 	for i, flow := range flows {
 		if err := client.AddFlow(ctx, flow.bridge, flow.mod); err != nil {
-			return i, fmt.Errorf("bridge %s rule %s: %w", flow.bridge, flow.ruleID, err)
+			return i + 1, fmt.Errorf("bridge %s rule %s: %w", flow.bridge, flow.ruleID, err)
 		}
 	}
 	return len(flows), nil
