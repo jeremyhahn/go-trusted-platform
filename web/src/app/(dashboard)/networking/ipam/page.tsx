@@ -37,7 +37,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
-import { useSDNIPAMPools, type SDNIPAMPool } from '@/hooks/use-sdn-ipam-pools';
+import { useSDNIPAMPools, type SDNIPAMAllocation, type SDNIPAMPool } from '@/hooks/use-sdn-ipam-pools';
 import { Gated } from '@/components/features/capabilities/gated';
 
 // The pool as SDNService answers it (pkg/webservice/v1/rest/gateway/ipam.go).
@@ -47,15 +47,8 @@ const LIST_POOLS = 'GET /api/v1/sdn/gateway/ipam/pools';
 const CREATE_POOL = 'POST /api/v1/sdn/gateway/ipam/pools';
 const UPDATE_POOL = 'PUT /api/v1/sdn/gateway/ipam/pools/{id}';
 const DELETE_POOL = 'DELETE /api/v1/sdn/gateway/ipam/pools/{id}';
-
-interface IPAllocationResponse {
-  ip: string;
-  pool_id: string;
-  device_id: string;
-  hostname: string;
-  allocated_at: string;
-  expires_at: string;
-}
+const GET_POOL = 'GET /api/v1/sdn/gateway/ipam/pools/{id}';
+const LIST_ALLOCATIONS = 'GET /api/v1/sdn/gateway/ipam/allocations';
 
 interface PoolFormState {
   id: string;
@@ -119,6 +112,8 @@ export default function IPAMPage() {
     create: createPool,
     update: updatePool,
     remove: removePool,
+    get: getPool,
+    listAllocations,
   } = useSDNIPAMPools(zoneFilter || undefined);
   // Unique zone values of the last listing feed the filter dropdown.
   const zoneOptions = React.useMemo(
@@ -138,36 +133,58 @@ export default function IPAMPage() {
 
   // Allocations panel for selected pool
   const [allocationsPool, setAllocationsPool] = React.useState<IPAMPoolResponse | null>(null);
-  const [allocations, setAllocations] = React.useState<IPAllocationResponse[]>([]);
+  const [allocations, setAllocations] = React.useState<SDNIPAMAllocation[]>([]);
   const [allocationsLoading, setAllocationsLoading] = React.useState(false);
   const [allocationsOpen, setAllocationsOpen] = React.useState(false);
+  const [allocationsError, setAllocationsError] = React.useState<string | null>(null);
 
   const fetchAllocations = React.useCallback(async (pool: IPAMPoolResponse) => {
     setAllocationsPool(pool);
+    setAllocations([]);
+    setAllocationsError(null);
     setAllocationsLoading(true);
     setAllocationsOpen(true);
     try {
-      const res = await fetch(
-        `/api/v1/sdn/gateway/ipam/allocations?pool_id=${encodeURIComponent(pool.id)}`,
-        { credentials: 'include' }
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `HTTP ${res.status}`);
-      }
-      const body = await res.json();
-      setAllocations(body.payload?.allocations ?? body.allocations ?? []);
+      setAllocations(await listAllocations(pool.id));
     } catch (err) {
-      toast({
-        title: 'Failed to load allocations',
-        description: err instanceof Error ? err.message : 'Unknown error',
-        variant: 'destructive',
-      });
-      setAllocations([]);
+      setAllocationsError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setAllocationsLoading(false);
     }
-  }, [toast]);
+  }, [listAllocations]);
+
+  const closeAllocations = React.useCallback(() => {
+    setAllocationsOpen(false);
+    setAllocationsPool(null);
+    setAllocations([]);
+    setAllocationsError(null);
+  }, []);
+
+  // Details dialog: one pool read again through GET /pools/{id}.
+  const [detailPool, setDetailPool] = React.useState<IPAMPoolResponse | null>(null);
+  const [detail, setDetail] = React.useState<IPAMPoolResponse | null>(null);
+  const [detailError, setDetailError] = React.useState<string | null>(null);
+  const [detailLoading, setDetailLoading] = React.useState(false);
+
+  const openDetails = React.useCallback(async (pool: IPAMPoolResponse) => {
+    setDetailPool(pool);
+    setDetail(null);
+    setDetailError(null);
+    setDetailLoading(true);
+    try {
+      setDetail(await getPool(pool.id));
+    } catch (err) {
+      setDetailError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setDetailLoading(false);
+    }
+  }, [getPool]);
+
+  const closeDetails = React.useCallback(() => {
+    setDetailPool(null);
+    setDetail(null);
+    setDetailError(null);
+  }, []);
 
   const openCreate = React.useCallback(() => {
     setEditTarget(null);
@@ -366,9 +383,11 @@ export default function IPAMPage() {
             row={row.original}
             actions={[
               { label: 'Edit', onClick: openEdit, op: UPDATE_POOL },
+              { label: 'Details', onClick: openDetails, op: GET_POOL },
               {
                 label: 'View Allocations',
                 onClick: fetchAllocations,
+                op: LIST_ALLOCATIONS,
               },
               {
                 label: 'Delete',
@@ -382,7 +401,7 @@ export default function IPAMPage() {
         ),
       },
     ],
-    [openEdit, openDeleteConfirm, fetchAllocations]
+    [openEdit, openDeleteConfirm, fetchAllocations, openDetails]
   );
 
   const stats = React.useMemo(() => ({
@@ -696,15 +715,62 @@ export default function IPAMPage() {
         </DialogContent>
       </Dialog>
 
+      {/* Pool details */}
+      <Dialog
+        open={detailPool !== null}
+        onOpenChange={(open) => {
+          if (!open) closeDetails();
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Pool {detailPool?.name}</DialogTitle>
+            <DialogDescription>The pool as the server answers it now.</DialogDescription>
+          </DialogHeader>
+          {detailLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin mr-2" />
+              <span>Loading pool...</span>
+            </div>
+          ) : detailError ? (
+            <Alert variant="destructive" data-testid="ipam-pool-detail-error">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Failed to load pool</AlertTitle>
+              <AlertDescription>{detailError}</AlertDescription>
+            </Alert>
+          ) : detail ? (
+            <dl data-testid="ipam-pool-detail" className="grid grid-cols-2 gap-2 text-sm">
+              <dt className="text-muted-foreground">Name</dt>
+              <dd>{detail.name}</dd>
+              <dt className="text-muted-foreground">CIDR</dt>
+              <dd className="font-mono">{detail.cidr}</dd>
+              <dt className="text-muted-foreground">Zone</dt>
+              <dd>{detail.zone || '—'}</dd>
+              <dt className="text-muted-foreground">Gateway</dt>
+              <dd className="font-mono">{detail.gateway || '—'}</dd>
+              <dt className="text-muted-foreground">Dynamic window</dt>
+              <dd className="font-mono">{windowLabel(detail)}</dd>
+              <dt className="text-muted-foreground">Total</dt>
+              <dd className="font-mono">{detail.total}</dd>
+              <dt className="text-muted-foreground">Used</dt>
+              <dd className="font-mono">{detail.allocated}</dd>
+              <dt className="text-muted-foreground">Available</dt>
+              <dd className="font-mono">{detail.available}</dd>
+            </dl>
+          ) : null}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={closeDetails}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Allocations panel */}
       <Dialog
         open={allocationsOpen}
         onOpenChange={(open) => {
-          if (!open) {
-            setAllocationsOpen(false);
-            setAllocationsPool(null);
-            setAllocations([]);
-          }
+          if (!open) closeAllocations();
         }}
       >
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
@@ -721,6 +787,12 @@ export default function IPAMPage() {
               <Loader2 className="h-6 w-6 animate-spin mr-2" />
               <span>Loading allocations...</span>
             </div>
+          ) : allocationsError ? (
+            <Alert variant="destructive" data-testid="ipam-allocations-error">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Failed to load allocations</AlertTitle>
+              <AlertDescription>{allocationsError}</AlertDescription>
+            </Alert>
           ) : allocations.length === 0 ? (
             <p className="text-center text-muted-foreground py-8">No active allocations.</p>
           ) : (
@@ -738,7 +810,7 @@ export default function IPAMPage() {
                 {allocations.map((a) => (
                   <TableRow key={a.ip}>
                     <TableCell className="font-mono text-sm">{a.ip}</TableCell>
-                    <TableCell className="font-mono text-xs">{a.device_id}</TableCell>
+                    <TableCell className="font-mono text-xs">{a.device_id || '—'}</TableCell>
                     <TableCell>{a.hostname || '—'}</TableCell>
                     <TableCell className="text-xs">
                       {a.allocated_at ? new Date(a.allocated_at).toLocaleString() : '—'}
@@ -755,11 +827,7 @@ export default function IPAMPage() {
             <Button
               type="button"
               variant="outline"
-              onClick={() => {
-                setAllocationsOpen(false);
-                setAllocationsPool(null);
-                setAllocations([]);
-              }}
+              onClick={closeAllocations}
             >
               Close
             </Button>
