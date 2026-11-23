@@ -832,6 +832,40 @@ func TestCopySecureBootKeys_PrivateKeyStagedOwnerOnly(t *testing.T) {
 	require.Equal(t, certPEM, gotCert)
 }
 
+// TestCopySecureBootKeys_StagedKeyOwnerOnlyOverStaleTree: a stale 0644 DB.key
+// already in the staging tree does not survive a customize-path staging (#62).
+func TestCopySecureBootKeys_StagedKeyOwnerOnlyOverStaleTree(t *testing.T) {
+	isoDir := t.TempDir()
+	keysDir := t.TempDir()
+	keyPEM, certPEM := genTestSigningPairPEM(t)
+	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "DB.key"), keyPEM, 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "DB.crt"), certPEM, 0644))
+
+	staged := filepath.Join(isoDir, SecureBootKeysISODirName)
+	require.NoError(t, os.MkdirAll(staged, 0755))
+	staleKey := filepath.Join(staged, "DB.key")
+	require.NoError(t, os.WriteFile(staleKey, []byte("stale"), 0644))
+	require.NoError(t, os.Chmod(staleKey, 0644))
+
+	c := NewCustomizer(&PlatformISOConfig{
+		Security: SecurityConfig{SecureBoot: false},
+		Directories: DirectoryConfig{
+			Work: t.TempDir(),
+			ISO:  isoDir,
+			Keys: keysDir,
+		},
+	}, logging.DefaultLogger())
+	require.NoError(t, c.CopySecureBootKeys(context.Background()))
+
+	info, err := os.Stat(staleKey)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), info.Mode().Perm(),
+		"a stale 0644 DB.key must be re-staged owner-only")
+	gotKey, err := os.ReadFile(staleKey)
+	require.NoError(t, err)
+	require.Equal(t, keyPEM, gotKey)
+}
+
 // TestCopySecureBootKeys_RejectsSelfReferentialKeysDir asserts staging
 // refuses to run when the configured keys directory IS the ISO staging
 // directory (directly or through a symlink): replacement would delete the
