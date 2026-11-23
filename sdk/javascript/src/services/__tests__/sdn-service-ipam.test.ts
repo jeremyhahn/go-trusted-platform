@@ -132,7 +132,7 @@ describe('SDNService IPAM pools', () => {
     const result = await service.listIPAMAllocations({ poolId: 'pool-1' });
 
     expect(mockClient.get).toHaveBeenCalledTimes(1);
-    const url = new URL(vi.mocked(mockClient.get).mock.calls[0][0] as string, 'https://api.example.com');
+    const url = new URL(vi.mocked(mockClient.get).mock.calls[0]?.[0] as string, 'https://api.example.com');
     expect(url.pathname).toBe('/v1/sdn/gateway/ipam/allocations');
     expect(url.searchParams.get('pool_id')).toBe('pool-1');
     expect(result.data).toEqual(data);
