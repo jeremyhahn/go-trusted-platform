@@ -7,6 +7,7 @@
  */
 
 import { useState } from 'react';
+import { Gated } from '@/components/features/capabilities/gated';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -176,9 +177,11 @@ export function TPMCertifyCard() {
             />
           </div>
         </div>
-        <Button onClick={handleCertify} disabled={busy}>
-          Certify
-        </Button>
+        <Gated op="POST /api/v1/tpm/certify">
+          <Button onClick={handleCertify} disabled={busy}>
+            Certify
+          </Button>
+        </Gated>
 
         {result && (
           <dl data-testid="tpm-certify-result" className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
@@ -198,9 +201,11 @@ export function TPMCertifyCard() {
           <p className="text-sm text-muted-foreground">
             The IAK is the device identity; the server refuses to evict it.
           </p>
-          <Button variant="outline" onClick={openEvict} disabled={busy}>
-            Evict AK
-          </Button>
+          <Gated op="DELETE /api/v1/tpm/ak">
+            <Button variant="outline" onClick={openEvict} disabled={busy}>
+              Evict AK
+            </Button>
+          </Gated>
         </section>
       </CardContent>
 

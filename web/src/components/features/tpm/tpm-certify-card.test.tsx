@@ -14,7 +14,27 @@ function type(label: string, value: string) {
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
 }
 
+// The card's controls are capability-gated (#2068): the server here offers them all.
+const CAPS_OPS = [
+  'POST /api/v1/tpm/ek',
+  'DELETE /api/v1/tpm/ek',
+  'POST /api/v1/tpm/srk',
+  'DELETE /api/v1/tpm/srk',
+  'POST /api/v1/tpm/ek/certificate',
+  'POST /api/v1/tpm/certify',
+  'DELETE /api/v1/tpm/ak',
+];
+const CAPS_ON = ok({
+  capabilities: CAPS_OPS.map((op) => ({ op, kind: 'route', enabled: true })),
+  total: CAPS_OPS.length,
+  enabled: CAPS_OPS.length,
+});
+
 async function click(name: string) {
+  // A gated control is withheld until the capabilities answer arrives.
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name }).getAttribute('data-capability-enabled')).not.toBe('false')
+  );
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name }));
   });
@@ -28,6 +48,7 @@ describe('TPMCertifyCard Certify', () => {
 
   it('certifies a key with a nonce', async () => {
     const sent = stubControlPlane({
+      'GET /api/v1/capabilities': CAPS_ON,
       [CERTIFY]: ok({
         certifyInfo: 'AQID',
         signature: 'BAUG',
@@ -54,7 +75,7 @@ describe('TPMCertifyCard Certify', () => {
 
   it('sends the key password', async () => {
     // Toasts are global and outlive a test: this one names another algorithm.
-    const sent = stubControlPlane({ [CERTIFY]: ok({ signatureAlgorithm: 'SHA256-RSASSA' }) });
+    const sent = stubControlPlane({ 'GET /api/v1/capabilities': CAPS_ON, [CERTIFY]: ok({ signatureAlgorithm: 'SHA256-RSASSA' }) });
     render(withControlPlane(<TPMCertifyCard />));
     type('Key handle', '0x81000002');
     type('Key password', 'pw');
@@ -67,7 +88,7 @@ describe('TPMCertifyCard Certify', () => {
   });
 
   it('refuses a non-persistent handle without a request', async () => {
-    const sent = stubControlPlane({ [CERTIFY]: ok({}) });
+    const sent = stubControlPlane({ 'GET /api/v1/capabilities': CAPS_ON, [CERTIFY]: ok({}) });
     render(withControlPlane(<TPMCertifyCard />));
     type('Key handle', '0x80000001');
     await click('Certify');
@@ -80,7 +101,7 @@ describe('TPMCertifyCard Certify', () => {
   });
 
   it('shows a refusal verbatim', async () => {
-    stubControlPlane({ [CERTIFY]: refused(404, 'certify: no key at handle 0x81000009') });
+    stubControlPlane({ 'GET /api/v1/capabilities': CAPS_ON, [CERTIFY]: refused(404, 'certify: no key at handle 0x81000009') });
     render(withControlPlane(<TPMCertifyCard />));
     type('Key handle', '0x81000009');
     await click('Certify');

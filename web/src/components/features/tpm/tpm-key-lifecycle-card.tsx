@@ -11,6 +11,7 @@
 
 import { useState } from 'react';
 import type { ApiResponse } from 'trusted-platform-sdk';
+import { Gated } from '@/components/features/capabilities/gated';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -141,18 +142,26 @@ export function TPMKeyLifecycleCard(): JSX.Element {
           />
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button onClick={() => void run('EK created', () => createEK({ persistent: true }))} disabled={busy}>
-            Create EK
-          </Button>
-          <Button variant="destructive" onClick={() => askEvict('ek')} disabled={busy}>
-            Evict EK
-          </Button>
-          <Button onClick={() => void run('SRK created', () => createSRK({ persistent: true }))} disabled={busy}>
-            Create SRK
-          </Button>
-          <Button variant="destructive" onClick={() => askEvict('srk')} disabled={busy}>
-            Evict SRK
-          </Button>
+          <Gated op="POST /api/v1/tpm/ek">
+            <Button onClick={() => void run('EK created', () => createEK({ persistent: true }))} disabled={busy}>
+              Create EK
+            </Button>
+          </Gated>
+          <Gated op="DELETE /api/v1/tpm/ek">
+            <Button variant="destructive" onClick={() => askEvict('ek')} disabled={busy}>
+              Evict EK
+            </Button>
+          </Gated>
+          <Gated op="POST /api/v1/tpm/srk">
+            <Button onClick={() => void run('SRK created', () => createSRK({ persistent: true }))} disabled={busy}>
+              Create SRK
+            </Button>
+          </Gated>
+          <Gated op="DELETE /api/v1/tpm/srk">
+            <Button variant="destructive" onClick={() => askEvict('srk')} disabled={busy}>
+              Evict SRK
+            </Button>
+          </Gated>
         </div>
         <div className="space-y-2">
           <Label htmlFor="tpm-ek-certificate">EK certificate</Label>
@@ -165,9 +174,11 @@ export function TPMKeyLifecycleCard(): JSX.Element {
             disabled={busy}
             className="font-mono text-xs"
           />
-          <Button variant="outline" onClick={importCertificate} disabled={busy}>
-            Import certificate
-          </Button>
+          <Gated op="POST /api/v1/tpm/ek/certificate">
+            <Button variant="outline" onClick={importCertificate} disabled={busy}>
+              Import certificate
+            </Button>
+          </Gated>
         </div>
       </CardContent>
 

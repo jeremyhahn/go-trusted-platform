@@ -12,7 +12,27 @@ const EK = 'POST /api/v1/tpm/ek';
 const EK_DELETE = 'DELETE /api/v1/tpm/ek';
 const EK_CERT = 'POST /api/v1/tpm/ek/certificate';
 
+// The card's controls are capability-gated (#2068): the server here offers them all.
+const CAPS_OPS = [
+  'POST /api/v1/tpm/ek',
+  'DELETE /api/v1/tpm/ek',
+  'POST /api/v1/tpm/srk',
+  'DELETE /api/v1/tpm/srk',
+  'POST /api/v1/tpm/ek/certificate',
+  'POST /api/v1/tpm/certify',
+  'DELETE /api/v1/tpm/ak',
+];
+const CAPS_ON = ok({
+  capabilities: CAPS_OPS.map((op) => ({ op, kind: 'route', enabled: true })),
+  total: CAPS_OPS.length,
+  enabled: CAPS_OPS.length,
+});
+
 async function click(name: string) {
+  // A gated control is withheld until the capabilities answer arrives.
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name }).getAttribute('data-capability-enabled')).not.toBe('false')
+  );
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name }));
   });
@@ -30,6 +50,7 @@ describe('TPMKeyLifecycleCard EK', () => {
 
   it('creates a persistent EK', async () => {
     const sent = stubControlPlane({
+      'GET /api/v1/capabilities': CAPS_ON,
       [EK]: ok({
         status: { success: true, message: 'EK created successfully' },
         publicKey: 'AQID',
@@ -50,6 +71,7 @@ describe('TPMKeyLifecycleCard EK', () => {
 
   it('evicts the EK only after the confirm', async () => {
     const sent = stubControlPlane({
+      'GET /api/v1/capabilities': CAPS_ON,
       [EK_DELETE]: ok({ status: { success: true, message: 'EK evicted' } }),
     });
     render(withControlPlane(<TPMKeyLifecycleCard />));
@@ -71,6 +93,7 @@ describe('TPMKeyLifecycleCard EK', () => {
 
   it('sends nothing on Cancel or a bad handle', async () => {
     const sent = stubControlPlane({
+      'GET /api/v1/capabilities': CAPS_ON,
       [EK_DELETE]: ok({ status: { success: true, message: 'EK evicted' } }),
     });
     render(withControlPlane(<TPMKeyLifecycleCard />));
@@ -92,6 +115,7 @@ describe('TPMKeyLifecycleCard EK', () => {
 
   it('imports a pasted PEM certificate', async () => {
     const sent = stubControlPlane({
+      'GET /api/v1/capabilities': CAPS_ON,
       [EK_CERT]: ok({ status: { success: true, message: 'EK certificate imported successfully' } }),
     });
     render(withControlPlane(<TPMKeyLifecycleCard />));
@@ -110,6 +134,7 @@ describe('TPMKeyLifecycleCard EK', () => {
 
   it('shows a refusal verbatim and needs a certificate', async () => {
     const sent = stubControlPlane({
+      'GET /api/v1/capabilities': CAPS_ON,
       [EK]: refused(409, 'EK already exists at 0x81010001'),
     });
     render(withControlPlane(<TPMKeyLifecycleCard />));
@@ -117,7 +142,7 @@ describe('TPMKeyLifecycleCard EK', () => {
     await click('Import certificate');
     const required = await screen.findByText('Certificate required: paste the PEM certificate');
     expect(required.getAttribute('data-variant')).toBe('destructive');
-    expect(sent).toHaveLength(0);
+    expect(sent.filter((r) => r.path.startsWith('/api/v1/tpm/'))).toHaveLength(0);
 
     await click('Create EK');
     const toast = await screen.findByText('EK created failed: EK already exists at 0x81010001');

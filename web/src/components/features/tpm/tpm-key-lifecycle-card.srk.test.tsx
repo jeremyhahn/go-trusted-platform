@@ -11,7 +11,27 @@ import { TPMKeyLifecycleCard } from './tpm-key-lifecycle-card';
 const SRK = 'POST /api/v1/tpm/srk';
 const SRK_DELETE = 'DELETE /api/v1/tpm/srk';
 
+// The card's controls are capability-gated (#2068): the server here offers them all.
+const CAPS_OPS = [
+  'POST /api/v1/tpm/ek',
+  'DELETE /api/v1/tpm/ek',
+  'POST /api/v1/tpm/srk',
+  'DELETE /api/v1/tpm/srk',
+  'POST /api/v1/tpm/ek/certificate',
+  'POST /api/v1/tpm/certify',
+  'DELETE /api/v1/tpm/ak',
+];
+const CAPS_ON = ok({
+  capabilities: CAPS_OPS.map((op) => ({ op, kind: 'route', enabled: true })),
+  total: CAPS_OPS.length,
+  enabled: CAPS_OPS.length,
+});
+
 async function click(name: string) {
+  // A gated control is withheld until the capabilities answer arrives.
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name }).getAttribute('data-capability-enabled')).not.toBe('false')
+  );
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name }));
   });
@@ -29,6 +49,7 @@ describe('TPMKeyLifecycleCard SRK', () => {
 
   it('creates a persistent SRK', async () => {
     const sent = stubControlPlane({
+      'GET /api/v1/capabilities': CAPS_ON,
       [SRK]: ok({ status: { success: true, message: 'SRK created successfully' }, handle: 2164260865 }),
     });
     render(withControlPlane(<TPMKeyLifecycleCard />));
@@ -45,6 +66,7 @@ describe('TPMKeyLifecycleCard SRK', () => {
 
   it('evicts the SRK after the confirm', async () => {
     const sent = stubControlPlane({
+      'GET /api/v1/capabilities': CAPS_ON,
       [SRK_DELETE]: ok({ status: { success: true, message: 'SRK evicted' } }),
     });
     render(withControlPlane(<TPMKeyLifecycleCard />));
@@ -66,6 +88,7 @@ describe('TPMKeyLifecycleCard SRK', () => {
 
   it('sends nothing on Cancel', async () => {
     const sent = stubControlPlane({
+      'GET /api/v1/capabilities': CAPS_ON,
       [SRK_DELETE]: ok({ status: { success: true, message: 'SRK evicted' } }),
     });
     render(withControlPlane(<TPMKeyLifecycleCard />));
@@ -80,6 +103,7 @@ describe('TPMKeyLifecycleCard SRK', () => {
 
   it('shows an unknown handle verbatim', async () => {
     stubControlPlane({
+      'GET /api/v1/capabilities': CAPS_ON,
       [SRK_DELETE]: refused(404, 'GetSRK: handle 0x81000009 not found'),
     });
     render(withControlPlane(<TPMKeyLifecycleCard />));

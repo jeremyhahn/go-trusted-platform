@@ -14,7 +14,27 @@ function type(label: string, value: string) {
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
 }
 
+// The card's controls are capability-gated (#2068): the server here offers them all.
+const CAPS_OPS = [
+  'POST /api/v1/tpm/ek',
+  'DELETE /api/v1/tpm/ek',
+  'POST /api/v1/tpm/srk',
+  'DELETE /api/v1/tpm/srk',
+  'POST /api/v1/tpm/ek/certificate',
+  'POST /api/v1/tpm/certify',
+  'DELETE /api/v1/tpm/ak',
+];
+const CAPS_ON = ok({
+  capabilities: CAPS_OPS.map((op) => ({ op, kind: 'route', enabled: true })),
+  total: CAPS_OPS.length,
+  enabled: CAPS_OPS.length,
+});
+
 async function click(name: string) {
+  // A gated control is withheld until the capabilities answer arrives.
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name }).getAttribute('data-capability-enabled')).not.toBe('false')
+  );
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name }));
   });
@@ -31,7 +51,7 @@ describe('TPMCertifyCard Evict AK', () => {
   });
 
   it('asks before evicting and sends nothing on Cancel', async () => {
-    const sent = stubControlPlane({ [DELETE_AK]: ok({}) });
+    const sent = stubControlPlane({ 'GET /api/v1/capabilities': CAPS_ON, [DELETE_AK]: ok({}) });
     render(withControlPlane(<TPMCertifyCard />));
     type('Key handle', '0x81010002');
     await click('Evict AK');
@@ -45,6 +65,7 @@ describe('TPMCertifyCard Evict AK', () => {
 
   it('shows the IAK refusal verbatim', async () => {
     const sent = stubControlPlane({
+      'GET /api/v1/capabilities': CAPS_ON,
       [DELETE_AK]: refused(409, 'IAK is a device identity key and cannot be deleted'),
     });
     render(withControlPlane(<TPMCertifyCard />));
@@ -64,7 +85,7 @@ describe('TPMCertifyCard Evict AK', () => {
   });
 
   it('evicts when the server allows it', async () => {
-    stubControlPlane({ [DELETE_AK]: ok({ status: { success: true, message: 'AK evicted' } }) });
+    stubControlPlane({ 'GET /api/v1/capabilities': CAPS_ON, [DELETE_AK]: ok({ status: { success: true, message: 'AK evicted' } }) });
     render(withControlPlane(<TPMCertifyCard />));
     type('Key handle', '0x81010002');
     await click('Evict AK');
@@ -76,7 +97,7 @@ describe('TPMCertifyCard Evict AK', () => {
   });
 
   it('refuses a bad handle without a dialog', async () => {
-    const sent = stubControlPlane({ [DELETE_AK]: ok({}) });
+    const sent = stubControlPlane({ 'GET /api/v1/capabilities': CAPS_ON, [DELETE_AK]: ok({}) });
     render(withControlPlane(<TPMCertifyCard />));
     type('Key handle', 'zz');
     await click('Evict AK');
