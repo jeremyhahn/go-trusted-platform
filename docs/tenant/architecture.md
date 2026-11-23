@@ -697,6 +697,11 @@ is made once, by the issuer, at creation time:
 | `NewInitialAdminInvitation` | issuer | owner invitation, `InitialAdmin` true |
 | `*InvitationService.CreateInitialAdmin` | issuer | the only service path that persists the marker |
 
+`CreateInitialAdminInvitation` on `TenantService` (system tenant only, on every
+transport but QUIC, whose opcode is pending) is the call site that holds the
+concrete `*InvitationService` and calls `CreateInitialAdmin`; see
+[api.md §2](api.md#2-tenant-lifecycle).
+
 A redeemer cannot ask for ownership, and an ordinary invitation cannot be
 promoted to an owner invitation after the fact. `CreateInitialAdmin` is a
 distinct service method rather than a field on `CreateInvitationRequest`

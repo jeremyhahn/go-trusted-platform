@@ -14,12 +14,12 @@
 over a Unix domain socket**, so gRPC and Unix share a column.
 `ServiceRegistry.Tenant` carries the service in-process.
 
-gRPC: `TenantService`, 19 RPCs (`pkg/api/grpc/proto/tenant.proto`).
+gRPC: `TenantService`, 20 RPCs (`pkg/api/grpc/proto/tenant.proto`).
 REST: base path `/api/v1/tenants` (`pkg/webservice/v1/rest/tenant/router.go`).
 QUIC: tenant management opcodes in the `0xDB`–`0xEB` range, plus a **tenant
 barrier category opcode `0x9E`** that multiplexes the per-tenant barrier
 sub-operations.
-MCP: 19 tools in two naming families — see §5.
+MCP: 20 tools in two naming families — see §5.
 
 ---
 
@@ -36,6 +36,12 @@ MCP: 19 tools in two naming families — see §5.
 | Suspend tenant | `POST /api/v1/tenants/{id}/suspend` | `SuspendTenant` | as above | `tenant_suspend` | ✅ |
 | Resume tenant | `POST /api/v1/tenants/{id}/resume` | `ResumeTenant` | as above | `tenant_resume` | ✅ |
 | Sync tenants | `POST /api/v1/tenants/sync` | `Sync` | as above | `tenant_sync` | ✅ |
+| Create initial admin invitation | `POST /api/v1/tenants/{id}/initial-admin-invitation` | `CreateInitialAdminInvitation` | not carried yet (opcode allocation pending) | `tenant_create_initial_admin_invitation` | ✅ |
+
+`CreateInitialAdminInvitation` is system-tenant only: an admin of any other
+tenant, its own tenant included, gets 403. It is how a new tenant gets its
+first owner: the system tenant mints the owner invitation for `{id}`, and the
+invitee who redeems it becomes the tenant's initial admin.
 
 `by-name` is a separate route because tenant IDs and tenant names are different
 keys; `{id}` will not match a name.
@@ -183,7 +189,7 @@ its `TenantService` method (`toolPermissionCatalog`, `pkg/api/mcp/authz.go`):
 | Permission | Tools |
 |---|---|
 | `tenant:read` | `tenant_get`, `tenant_get_by_name`, `tenant_list`, `tenant_get_quotas`, `tenant_check_quota`, `tenant_get_usage`, `platform_tenant_barrier_status`, `tenant_get_dek_status` |
-| `tenant:write` | `tenant_create`, `tenant_update`, `tenant_update_quotas`, `tenant_suspend`, `tenant_resume`, `tenant_sync`, `platform_tenant_barrier_init`, `platform_tenant_barrier_seal`, `platform_tenant_barrier_unseal`, `tenant_rotate_dek` |
+| `tenant:write` | `tenant_create`, `tenant_update`, `tenant_update_quotas`, `tenant_suspend`, `tenant_resume`, `tenant_sync`, `tenant_create_initial_admin_invitation`, `platform_tenant_barrier_init`, `platform_tenant_barrier_seal`, `platform_tenant_barrier_unseal`, `tenant_rotate_dek` |
 | `tenant:delete` | `tenant_delete` |
 
 Every tool calls the daemon's shared `TenantGRPCServer`, so an MCP call gets
