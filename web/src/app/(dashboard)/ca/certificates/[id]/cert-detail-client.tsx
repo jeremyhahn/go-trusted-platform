@@ -92,8 +92,9 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
     if (!cert) return null;
 
     const status: string = cert.status ?? cert.Status ?? 'VALID';
+    // The server sends the proto enum name (CERTIFICATE_STATUS_EXPIRED); older payloads send the bare word (#2041).
     const mapStatus = (s: string): 'active' | 'revoked' | 'expired' => {
-      const u = String(s).toUpperCase();
+      const u = String(s).toUpperCase().replace(/^CERTIFICATE_STATUS_/, '');
       if (u === 'REVOKED') return 'revoked';
       if (u === 'EXPIRED') return 'expired';
       return 'active';
