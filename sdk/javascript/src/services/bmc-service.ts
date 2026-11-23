@@ -43,6 +43,67 @@ export interface BMCBootDeviceResponse {
   device: string;
 }
 
+/** Answer to `GET /api/v1/bmc/{profileID}/virtual-media` (pkg/bmc VirtualMediaInfo). */
+export interface BMCVirtualMediaStatus {
+  mounted: boolean;
+  image_url?: string;
+  media_type?: string;
+}
+
+/** Answer to `POST /api/v1/bmc/{profileID}/virtual-media`. */
+export interface BMCMountISOResponse {
+  status: string;
+  iso_url: string;
+}
+
+/** A plain `{ status }` answer, as `DELETE .../virtual-media` sends. */
+export interface BMCStatusResponse {
+  status: string;
+}
+
+/** One reading of `GET /api/v1/bmc/{profileID}/sensors`; status ok, warning or critical. */
+export interface BMCSensorReading {
+  name: string;
+  value: number;
+  units: string;
+  status: string;
+}
+
+/** Answer to `GET /api/v1/bmc/{profileID}/system-info`. */
+export interface BMCSystemInfo {
+  manufacturer: string;
+  product: string;
+  serial_number: string;
+  firmware_version: string;
+  bios_version: string;
+  power_state: string;
+}
+
+/** Answer to `GET /api/v1/bmc/{profileID}/cert`. */
+export interface BMCWebCertificate {
+  subject: string;
+  issuer: string;
+  serial_number: string;
+  not_before: string;
+  not_after: string;
+  days_remaining: number;
+}
+
+/** Body of `POST /api/v1/bmc/{profileID}/provision`. */
+export interface BMCProvisionRequest {
+  iso_url?: string;
+}
+
+/** Answer to `POST` and `GET /api/v1/bmc/{profileID}/provision`. */
+export interface BMCProvisionResult {
+  provision_id: string;
+  profile_id: number;
+  status: string;
+  message?: string;
+  started_at: string;
+  updated_at: string;
+}
+
 /**
  * Writes that change host state are never retried: a repeated power off,
  * reset or cycle would stop the host a second time.
@@ -69,8 +130,8 @@ export class BMCService extends BaseService {
     super(client, '/v1/bmc');
   }
 
-  private profilePath(profileID: number, suffix: string): string {
-    return this.buildUrl(`/${profileID}${suffix}`);
+  private profilePath(profileID: string | number, suffix: string): string {
+    return this.buildUrl(`/${encodeURIComponent(String(profileID))}${suffix}`);
   }
 
   /**
@@ -81,7 +142,7 @@ export class BMCService extends BaseService {
    * @param action - on, off, reset or cycle
    */
   async powerAction(
-    profileID: number,
+    profileID: string | number,
     action: BMCPowerAction,
   ): Promise<ApiResponse<BMCPowerActionResponse>> {
     return this.client.post<BMCPowerActionResponse>(
@@ -92,32 +153,32 @@ export class BMCService extends BaseService {
   }
 
   /** Power the host on (`POST .../power`, action on). */
-  async powerOn(profileID: number): Promise<ApiResponse<BMCPowerActionResponse>> {
+  async powerOn(profileID: string | number): Promise<ApiResponse<BMCPowerActionResponse>> {
     return this.powerAction(profileID, 'on');
   }
 
   /** Power the host off (`POST .../power`, action off); stops the host. */
-  async powerOff(profileID: number): Promise<ApiResponse<BMCPowerActionResponse>> {
+  async powerOff(profileID: string | number): Promise<ApiResponse<BMCPowerActionResponse>> {
     return this.powerAction(profileID, 'off');
   }
 
   /** Reset the host (`POST .../power`, action reset); stops the host. */
-  async powerReset(profileID: number): Promise<ApiResponse<BMCPowerActionResponse>> {
+  async powerReset(profileID: string | number): Promise<ApiResponse<BMCPowerActionResponse>> {
     return this.powerAction(profileID, 'reset');
   }
 
   /** Power-cycle the host (`POST .../power`, action cycle); stops the host. */
-  async powerCycle(profileID: number): Promise<ApiResponse<BMCPowerActionResponse>> {
+  async powerCycle(profileID: string | number): Promise<ApiResponse<BMCPowerActionResponse>> {
     return this.powerAction(profileID, 'cycle');
   }
 
   /** Read the power state: `GET /api/v1/bmc/{profileID}/power`. */
-  async getPowerStatus(profileID: number): Promise<ApiResponse<BMCPowerStatusResponse>> {
+  async getPowerStatus(profileID: string | number): Promise<ApiResponse<BMCPowerStatusResponse>> {
     return this.client.get<BMCPowerStatusResponse>(this.profilePath(profileID, '/power'));
   }
 
   /** Read the boot device: `GET /api/v1/bmc/{profileID}/boot-device`. */
-  async getBootDevice(profileID: number): Promise<ApiResponse<BMCBootDeviceResponse>> {
+  async getBootDevice(profileID: string | number): Promise<ApiResponse<BMCBootDeviceResponse>> {
     return this.client.get<BMCBootDeviceResponse>(this.profilePath(profileID, '/boot-device'));
   }
 
@@ -126,7 +187,7 @@ export class BMCService extends BaseService {
    * The request is never retried.
    */
   async setBootDevice(
-    profileID: number,
+    profileID: string | number,
     request: BMCSetBootDeviceRequest,
   ): Promise<ApiResponse<BMCSetBootDeviceResponse>> {
     return this.client.post<BMCSetBootDeviceResponse>(
@@ -134,5 +195,73 @@ export class BMCService extends BaseService {
       request,
       NO_RETRY,
     );
+  }
+
+  /** Read the virtual media: `GET /api/v1/bmc/{profileID}/virtual-media`. */
+  async getVirtualMediaStatus(
+    profileID: string | number,
+  ): Promise<ApiResponse<BMCVirtualMediaStatus>> {
+    return this.client.get<BMCVirtualMediaStatus>(this.profilePath(profileID, '/virtual-media'));
+  }
+
+  /**
+   * Mount an ISO as virtual media: `POST /api/v1/bmc/{profileID}/virtual-media`.
+   * The request is never retried.
+   */
+  async mountISO(
+    profileID: string | number,
+    isoURL: string,
+  ): Promise<ApiResponse<BMCMountISOResponse>> {
+    return this.client.post<BMCMountISOResponse>(
+      this.profilePath(profileID, '/virtual-media'),
+      { iso_url: isoURL },
+      NO_RETRY,
+    );
+  }
+
+  /**
+   * Eject the virtual media: `DELETE /api/v1/bmc/{profileID}/virtual-media`.
+   * The request is never retried: a late retry could eject media mounted since.
+   */
+  async unmountISO(profileID: string | number): Promise<ApiResponse<BMCStatusResponse>> {
+    return this.client.delete<BMCStatusResponse>(
+      this.profilePath(profileID, '/virtual-media'),
+      NO_RETRY,
+    );
+  }
+
+  /** Read the sensors: `GET /api/v1/bmc/{profileID}/sensors`. */
+  async getSensors(profileID: string | number): Promise<ApiResponse<BMCSensorReading[]>> {
+    return this.client.get<BMCSensorReading[]>(this.profilePath(profileID, '/sensors'));
+  }
+
+  /** Read the system info: `GET /api/v1/bmc/{profileID}/system-info`. */
+  async getSystemInfo(profileID: string | number): Promise<ApiResponse<BMCSystemInfo>> {
+    return this.client.get<BMCSystemInfo>(this.profilePath(profileID, '/system-info'));
+  }
+
+  /** Read the BMC web certificate: `GET /api/v1/bmc/{profileID}/cert`. */
+  async getWebCertificate(profileID: string | number): Promise<ApiResponse<BMCWebCertificate>> {
+    return this.client.get<BMCWebCertificate>(this.profilePath(profileID, '/cert'));
+  }
+
+  /**
+   * Start a provision: `POST /api/v1/bmc/{profileID}/provision`.
+   * It reboots the host into the installer; the request is never retried.
+   */
+  async provision(
+    profileID: string | number,
+    request: BMCProvisionRequest = {},
+  ): Promise<ApiResponse<BMCProvisionResult>> {
+    return this.client.post<BMCProvisionResult>(
+      this.profilePath(profileID, '/provision'),
+      request,
+      NO_RETRY,
+    );
+  }
+
+  /** Read the provision status: `GET /api/v1/bmc/{profileID}/provision`. */
+  async getProvisionStatus(profileID: string | number): Promise<ApiResponse<BMCProvisionResult>> {
+    return this.client.get<BMCProvisionResult>(this.profilePath(profileID, '/provision'));
   }
 }

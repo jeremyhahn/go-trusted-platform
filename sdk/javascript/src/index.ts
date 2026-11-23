@@ -156,6 +156,14 @@ export type {
   BMCSetBootDeviceRequest,
   BMCSetBootDeviceResponse,
   BMCBootDeviceResponse,
+  BMCVirtualMediaStatus,
+  BMCMountISOResponse,
+  BMCStatusResponse,
+  BMCSensorReading,
+  BMCSystemInfo,
+  BMCWebCertificate,
+  BMCProvisionRequest,
+  BMCProvisionResult,
 } from './services/bmc-service.js';
 
 export type { Capability, CapabilitiesResponse } from './services/capabilities-service.js';
