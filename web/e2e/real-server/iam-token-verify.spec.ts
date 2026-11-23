@@ -18,8 +18,9 @@ async function verifyOffered(sdk: PlatformClient): Promise<boolean> {
 }
 
 test.describe('IAM token verify (real server)', () => {
-  test('a malformed token is reported invalid', async ({ adminPage, sdk }) => {
-    const res = await sdk.iam.verifyToken({ token: 'not-a-token' });
+  test('a malformed token is reported invalid', async ({ adminPage, sdk, tenant }) => {
+    // The flat verify route's own-tenant guard needs the caller's tenant_id.
+    const res = await sdk.iam.verifyToken({ tenantId: tenant.id, token: 'not-a-token' });
     await adminPage.goto('/iam/tokens');
     const verify = adminPage.getByRole('button', { name: /^Verify$/ });
     if (!res.success) {

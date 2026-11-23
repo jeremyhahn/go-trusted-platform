@@ -515,7 +515,7 @@ export default function TokensPage() {
       </Card>
 
       {/* Verify a token (#2053) */}
-      <TokenVerifyCard />
+      <TokenVerifyCard tenantId={tenantId} />
 
       {/* Register Application Dialog */}
       <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>

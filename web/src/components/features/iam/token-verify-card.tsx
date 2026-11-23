@@ -16,13 +16,18 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Gated } from "@/components/features/capabilities/gated";
 
-export function TokenVerifyCard() {
+/**
+ * tenantId is the signed-in tenant: the daemon's own-tenant guard on the flat
+ * verify route reads it from the tenant_id query, so without one the card
+ * sends nothing.
+ */
+export function TokenVerifyCard({ tenantId }: { tenantId?: string | null }) {
   const iam = useIAM();
   const [token, setToken] = useState("");
   // The token the shown verdict belongs to: a verdict is shown only while
   // the textarea still holds that token.
   const [verified, setVerified] = useState<string | null>(null);
-  const verify = useMutation((value: string) => iam.verifyToken({ token: value }));
+  const verify = useMutation((value: string) => iam.verifyToken({ tenantId: tenantId ?? "", token: value }));
 
   const trimmed = token.trim();
   const data = verify.data as VerifyIAMTokenResponse | undefined;
@@ -41,7 +46,7 @@ export function TokenVerifyCard() {
           className="space-y-4"
           onSubmit={(e: React.FormEvent) => {
             e.preventDefault();
-            if (trimmed) {
+            if (trimmed && tenantId) {
               setVerified(trimmed);
               verify.mutate(trimmed);
             }
@@ -59,7 +64,11 @@ export function TokenVerifyCard() {
             />
           </div>
           <Gated op="POST /api/v1/iam/tokens/verify">
-            <Button type="submit" disabled={verify.isLoading || !trimmed}>
+            <Button
+              type="submit"
+              disabled={verify.isLoading || !trimmed || !tenantId}
+              title={tenantId ? undefined : "Sign in to a tenant to verify tokens"}
+            >
               {verify.isLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Verify
             </Button>
