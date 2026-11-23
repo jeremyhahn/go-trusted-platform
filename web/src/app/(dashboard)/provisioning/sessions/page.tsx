@@ -59,6 +59,8 @@ import {
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast, useProvisioningSessions, useDeviceTemplates } from '@/hooks';
 import type { ProvisioningSession } from 'trusted-platform-sdk';
+import { Gated } from '@/components/features/capabilities/gated';
+import { useCapabilities } from '@/hooks/use-capabilities';
 
 // ============================================================================
 // Types
@@ -234,6 +236,9 @@ export default function ProvisioningSessionsPage() {
   const [assignSession, setAssignSession] = useState<ProvisioningSession | null>(null);
 
   const { sessions, isLoading, error, refetch, fulfill } = useProvisioningSessions();
+  const fulfillCap = useCapabilities().capability(
+    'POST /api/v1/provisioning/sessions/{sessionID}/fulfill'
+  );
 
   // Auto-refresh every 10 seconds
   useEffect(() => {
@@ -302,14 +307,16 @@ export default function ProvisioningSessionsPage() {
           <AlertTitle>Error Loading Sessions</AlertTitle>
           <AlertDescription>
             {error.message}
-            <Button
-              variant="outline"
-              size="sm"
-              className="ml-4"
-              onClick={() => refetch()}
-            >
-              Retry
-            </Button>
+            <Gated op="GET /api/v1/provisioning/sessions">
+              <Button
+                variant="outline"
+                size="sm"
+                className="ml-4"
+                onClick={() => refetch()}
+              >
+                Retry
+              </Button>
+            </Gated>
           </AlertDescription>
         </Alert>
       </div>
@@ -326,10 +333,12 @@ export default function ProvisioningSessionsPage() {
             Live dashboard of device provisioning sessions — auto-refreshes every 10 seconds
           </p>
         </div>
-        <Button variant="outline" onClick={() => refetch()} disabled={isLoading}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
+        <Gated op="GET /api/v1/provisioning/sessions">
+          <Button variant="outline" onClick={() => refetch()} disabled={isLoading}>
+            <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+        </Gated>
       </div>
 
       {/* Statistics Cards */}
@@ -509,7 +518,12 @@ export default function ProvisioningSessionsPage() {
                             </DropdownMenuItem>
                             {status === 'pending' && (
                               <DropdownMenuItem
-                                onClick={() => setAssignSession(session)}
+                                disabled={!fulfillCap.enabled}
+                                title={fulfillCap.enabled ? undefined : fulfillCap.reason}
+                                onClick={() => {
+                                  if (!fulfillCap.enabled) return;
+                                  setAssignSession(session);
+                                }}
                               >
                                 <CheckCircle2 className="mr-2 h-4 w-4" />
                                 Assign Template
