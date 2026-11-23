@@ -160,4 +160,16 @@ describe('useBMCStatus', () => {
     expect(bmcStatusPath('7', 'sensors')).toBe('/v1/bmc/7/sensors');
     expect(bmcStatusPath('a/b', 'cert')).toBe('/v1/bmc/a%2Fb/cert');
   });
+
+  it('never retries a provision after a dropped reply', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderStatus();
+
+    await act(async () => {
+      await result.current.provision('https://example.com/a.iso').catch(() => undefined);
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

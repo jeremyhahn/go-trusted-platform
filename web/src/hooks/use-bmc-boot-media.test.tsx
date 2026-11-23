@@ -132,4 +132,18 @@ describe('useBMCBootMedia', () => {
     expect(bmcPath('7', 'boot-device')).toBe('/v1/bmc/7/boot-device');
     expect(bmcPath('a/b', 'virtual-media')).toBe('/v1/bmc/a%2Fb/virtual-media');
   });
+
+  it('never retries a boot device, mount or eject write after a dropped reply', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderBootMedia();
+
+    await act(async () => {
+      await result.current.setBootDevice('pxe').catch(() => undefined);
+      await result.current.mountISO('https://example.com/a.iso').catch(() => undefined);
+      await result.current.unmountISO().catch(() => undefined);
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
 });
