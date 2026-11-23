@@ -45,10 +45,21 @@ describe('useVMMigration', () => {
 
     let res: Awaited<ReturnType<typeof result.current.prepare>> | undefined;
     await act(async () => {
-      res = await result.current.prepare({ vmId: 'vm-1', vmName: 'web-1', mode: 'cold' });
+      res = await result.current.prepare({
+        vmId: 'vm-1',
+        vmName: 'web-1',
+        mode: 'cold',
+        spec: { memoryMb: 2048, cpus: 2, arch: 'x86_64' },
+      });
     });
 
-    expect(sent[0].body).toEqual({ vmId: 'vm-1', vmName: 'web-1', mode: 'cold' });
+    // #2044: the receiver needs the guest spec; PrepareMigration refuses without it.
+    expect(sent[0].body).toEqual({
+      vmId: 'vm-1',
+      vmName: 'web-1',
+      mode: 'cold',
+      spec: { memoryMb: 2048, cpus: 2, arch: 'x86_64' },
+    });
     expect(res?.data?.receiverId).toBe('rx-1');
   });
 
