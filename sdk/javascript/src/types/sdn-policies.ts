@@ -108,3 +108,8 @@ export interface ListPoliciesResponse {
   policies: Policy[];
   pagination?: Record<string, unknown>;
 }
+
+/** DeletePolicyResponse is the answer of DELETE /api/v1/sdn/policies/{id}. */
+export interface DeletePolicyResponse {
+  status?: PolicyOperationStatus;
+}
