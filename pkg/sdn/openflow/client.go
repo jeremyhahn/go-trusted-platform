@@ -668,7 +668,8 @@ func (c *Client) sendAndWaitOn(ctx context.Context, s *session, xid uint32, data
 	}
 }
 
-// AddFlow adds a flow entry to the bridge
+// AddFlow adds a flow entry to the bridge. An error the switch reports for
+// the flow mod (an OFPT_ERROR on its xid) is returned.
 func (c *Client) AddFlow(ctx context.Context, flow *FlowMod) error {
 	if !c.connected.Load() {
 		return ErrNotConnected
@@ -683,11 +684,13 @@ func (c *Client) AddFlow(ctx context.Context, flow *FlowMod) error {
 		return err
 	}
 
-	// No response is expected: the barrier confirms the switch processed it
-	return c.writeConfirmed(ctx, data, "failed to send flow mod")
+	// No response is expected: the barrier confirms the switch processed it,
+	// and an error the switch raised for this xid is returned.
+	return c.sendConfirmed(ctx, xid, data)
 }
 
-// DeleteFlow deletes flows matching the criteria
+// DeleteFlow deletes flows matching the criteria. An error the switch
+// reports for the flow mod is returned.
 func (c *Client) DeleteFlow(ctx context.Context, flow *FlowMod) error {
 	if !c.connected.Load() {
 		return ErrNotConnected
@@ -702,13 +705,15 @@ func (c *Client) DeleteFlow(ctx context.Context, flow *FlowMod) error {
 		return err
 	}
 
-	return c.writeConfirmed(ctx, data, "failed to send flow mod")
+	return c.sendConfirmed(ctx, xid, data)
 }
 
 // DeleteFlowStrict deletes the single flow whose match, priority, and table
 // exactly equal the given FlowMod (OFPFC_DELETE_STRICT). When the FlowMod
 // carries a non-zero CookieMask the delete is additionally restricted to
-// flows whose cookie matches Cookie under that mask.
+// flows whose cookie matches Cookie under that mask. An error the switch
+// reports for the flow mod (for example a slave-controller rejection) is
+// returned even though the barrier that follows it succeeds.
 func (c *Client) DeleteFlowStrict(ctx context.Context, flow *FlowMod) error {
 	if !c.connected.Load() {
 		return ErrNotConnected
@@ -723,7 +728,7 @@ func (c *Client) DeleteFlowStrict(ctx context.Context, flow *FlowMod) error {
 		return err
 	}
 
-	return c.writeConfirmed(ctx, data, "failed to send flow mod")
+	return c.sendConfirmed(ctx, xid, data)
 }
 
 // DeleteAllFlows deletes all flows from the bridge
@@ -735,7 +740,8 @@ func (c *Client) DeleteAllFlows(ctx context.Context) error {
 	return c.DeleteFlow(ctx, flow)
 }
 
-// ModifyFlow modifies existing flows
+// ModifyFlow modifies existing flows. An error the switch reports for the
+// flow mod is returned.
 func (c *Client) ModifyFlow(ctx context.Context, flow *FlowMod) error {
 	if !c.connected.Load() {
 		return ErrNotConnected
@@ -750,7 +756,7 @@ func (c *Client) ModifyFlow(ctx context.Context, flow *FlowMod) error {
 		return err
 	}
 
-	return c.writeConfirmed(ctx, data, "failed to send flow mod")
+	return c.sendConfirmed(ctx, xid, data)
 }
 
 // GetFlowStats retrieves flow statistics from every table.
@@ -1060,7 +1066,8 @@ func (c *Client) SendFlowMods(ctx context.Context, flows []*FlowMod) error {
 	return nil
 }
 
-// sendGroupMod sends a group mod and confirms processing with a barrier
+// sendGroupMod sends a group mod and confirms processing with a barrier. An
+// error the switch reports for the group mod's xid is returned.
 func (c *Client) sendGroupMod(ctx context.Context, group *GroupMod) error {
 	if !c.connected.Load() {
 		return ErrNotConnected
@@ -1074,7 +1081,7 @@ func (c *Client) sendGroupMod(ctx context.Context, group *GroupMod) error {
 		return err
 	}
 
-	return c.writeConfirmed(ctx, data, "failed to send group mod")
+	return c.sendConfirmed(ctx, xid, data)
 }
 
 // AddGroup adds a group entry to the bridge
