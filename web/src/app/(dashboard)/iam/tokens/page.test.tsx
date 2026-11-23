@@ -11,7 +11,7 @@ type Col = {
   header?: unknown;
   cell?: (ctx: { row: { original: Row } }) => React.ReactNode;
 };
-type BulkAction = { label: string; onClick: (rows: Row[]) => unknown };
+type BulkAction = { label: string; onClick: (rows: Row[]) => unknown; disabled?: boolean; title?: string };
 type ApiOptions = { onError?: (err: Error) => void };
 type MutationOptions = {
   onSuccess?: (result: unknown) => void;
@@ -108,7 +108,7 @@ vi.mock("@/components/ui/data-table", async (importOriginal) => ({
           </div>
         ))}
         {bulkActions?.map((a) => (
-          <button key={a.label} onClick={() => void a.onClick(data)}>
+          <button key={a.label} onClick={() => void a.onClick(data)} disabled={a.disabled} title={a.title}>
             {a.label}
           </button>
         ))}
@@ -485,6 +485,26 @@ describe("TokensPage capability gate", () => {
       expect(button.disabled).toBe(false);
       expect(button.hasAttribute("title")).toBe(false);
     }
+  });
+
+  it("withholds Delete selected with the server's reason when the app delete is not offered", () => {
+    caps.capability.mockImplementation((op: string) =>
+      op === deleteOp ? { enabled: false, reason: "not-configured: iam" } : { enabled: true },
+    );
+    render(<TokensPage />);
+    const bulk = screen.getByRole("button", { name: "Delete selected" }) as HTMLButtonElement;
+    expect(bulk.disabled).toBe(true);
+    expect(bulk.getAttribute("title")).toBe("not-configured: iam");
+    fireEvent.click(bulk);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(iam.deleteApp).not.toHaveBeenCalled();
+  });
+
+  it("leaves Delete selected enabled with no title when the server offers the app delete", () => {
+    render(<TokensPage />);
+    const bulk = screen.getByRole("button", { name: "Delete selected" }) as HTMLButtonElement;
+    expect(bulk.disabled).toBe(false);
+    expect(bulk.hasAttribute("title")).toBe(false);
   });
 });
 
