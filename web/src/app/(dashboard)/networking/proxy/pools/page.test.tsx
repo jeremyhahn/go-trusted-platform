@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { CAPABILITIES_LOADING_REASON } from '@/hooks/use-capabilities';
 import { ok, refused, stubControlPlane, withControlPlane, type Answer } from '@/test/control-plane-fetch';
 import ProxyPoolsPage from './page';
 import { parseProxyBackends, proxyPoolToForm } from './proxy-pool-dialog';
@@ -76,6 +77,18 @@ function shared(): Record<string, Answer> {
 async function renderPage() {
   render(withControlPlane(<ProxyPoolsPage />));
   await within(await screen.findByTestId('proxy-pools')).findByText('p1');
+  await capabilitiesAnswered();
+}
+
+// The rows can render before the capabilities listing answers; until it does
+// every gated control is disabled with the loading reason, so a click on it
+// opens nothing. Wait until no gated control is still loading.
+async function capabilitiesAnswered() {
+  await waitFor(() => {
+    const gated = Array.from(document.querySelectorAll('[data-capability-op]'));
+    expect(gated.length).toBeGreaterThan(0);
+    expect(gated.filter((el) => el.getAttribute('title') === CAPABILITIES_LOADING_REASON)).toEqual([]);
+  });
 }
 
 async function click(name: string) {
