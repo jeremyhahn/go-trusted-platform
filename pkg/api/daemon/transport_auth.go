@@ -297,9 +297,12 @@ func (a mtlsPeerAuthenticator) AuthenticatePeer(ctx context.Context, chain []*x5
 // newRESTScopeGuard builds the guard that checks each daemon REST route's
 // scope. It accepts the same credentials as QUIC: a platform token through
 // the shared validator, else a client certificate verified against the mTLS
-// client CA pool, admitted as the operator. A credential with no verifier
-// configured is refused, so the guard never admits by default.
-func newRESTScopeGuard(config *Config, shared *platformTokenValidator, logger *logging.Logger) (*restapi.ScopeGuard, error) {
+// client CA pool, whose principal the IAM PEP decides per route (#2016): the
+// certificate's stored IAM user and roles are checked against the route's
+// permission. Without a PEP or an IAM client every certificate caller is
+// refused, while the listener still serves bearer tokens. A credential with
+// no verifier configured is refused, so the guard never admits by default.
+func newRESTScopeGuard(config *Config, shared *platformTokenValidator, pep quicbaassdk.IAMPEPClient, iam quicbaassdk.IAMClient, logger *logging.Logger) (*restapi.ScopeGuard, error) {
 	var tokens restapi.TokenAuthorizer
 	// A nil *platformTokenValidator must not become a non-nil interface.
 	if shared != nil {
@@ -317,7 +320,18 @@ func newRESTScopeGuard(config *Config, shared *platformTokenValidator, logger *l
 		}
 		peers = mtlsPeerAuthenticator{authenticator: mtlsAuth}
 	}
-	return restapi.NewScopeGuard(tokens, peers, logger.Slog()), nil
+	var opts []restapi.ScopeGuardOption
+	if peers != nil {
+		switch {
+		case pep == nil:
+			logger.Warn("REST server: no IAM policy enforcement point; mTLS callers are refused")
+		case iam == nil:
+			logger.Warn("REST server: no IAM client to resolve certificate principals' roles; mTLS callers are refused")
+		default:
+			opts = append(opts, restapi.WithPeerAuthorizationChecker(&iamTokenAuthorizer{pep: pep, iam: iam}))
+		}
+	}
+	return restapi.NewScopeGuard(tokens, peers, logger.Slog(), opts...), nil
 }
 
 // newMCPPeerAuthenticator builds the authenticator that admits a tokenless

@@ -1498,7 +1498,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	var restGuard *restapi.ScopeGuard
 	if daemon.concreteRestServer != nil {
 		var guardErr error
-		restGuard, guardErr = newRESTScopeGuard(config, platformTokenValidatorShared, logger)
+		restGuard, guardErr = newRESTScopeGuard(config, platformTokenValidatorShared, iamPEP, iamClient, logger)
 		if guardErr != nil {
 			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: guardErr}
 			logger.Error(constructErr, "component", "rest_server")

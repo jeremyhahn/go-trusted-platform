@@ -105,8 +105,8 @@ func (a iamRESTAuthorization) requireScope(next http.Handler) http.Handler {
 			return
 		}
 		scope := iamScopeResource + ":" + action
-		if err := caller.RequireScope(scope); err != nil {
-			a.respWriter.Error403(w, r, restapi.ErrRouteForbidden{Scope: scope, Reason: err.Error()}, nil)
+		if err := a.guard.AuthorizeCaller(r, caller, scope); err != nil {
+			a.respWriter.Error403(w, r, err, nil)
 			return
 		}
 		next.ServeHTTP(w, r)
