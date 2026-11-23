@@ -10,6 +10,7 @@ import type { ApiResponse } from '../types/api.js';
 import { BaseService } from './base-service.js';
 import type { ListOptions } from './base-service.js';
 import type {
+  Device,
   CreateDeviceRequest,
   UpdateDeviceRequest,
   ListDevicesRequest,
@@ -27,7 +28,6 @@ import type {
   RecordAttestCertResponse,
   CreateDeviceResponse,
   GetDeviceResponse,
-  UpdateDeviceResponse,
   DeleteDeviceResponse,
   ListDevicesResponse,
   FindDeviceBySerialResponse,
@@ -173,10 +173,10 @@ export class DeviceService extends BaseService {
    * Update a device
    *
    * @param request - Device update request
-   * @returns Updated device
+   * @returns The updated device as the server sends it (flat, not wrapped)
    */
-  async updateDevice(request: UpdateDeviceRequest): Promise<ApiResponse<UpdateDeviceResponse>> {
-    return this.client.put<UpdateDeviceResponse>(
+  async updateDevice(request: UpdateDeviceRequest): Promise<ApiResponse<Device>> {
+    return this.client.put<Device>(
       this.buildUrl(`/${request.device.id}`),
       request
     );
