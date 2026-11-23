@@ -20,6 +20,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Plus, AppWindow, AlertCircle, Loader2 } from 'lucide-react';
+import { Gated } from '@/components/features/capabilities/gated';
+import { useCapabilities } from '@/hooks/use-capabilities';
 
 /**
  * UI representation of an application for display purposes
@@ -42,6 +44,8 @@ export default function AppsPage() {
   const { toast } = useToast();
   const { tenantId, isLoading: authLoading } = useAuth();
   const iam = useIAM();
+  const { capability } = useCapabilities();
+  const deleteCap = capability('DELETE /api/v1/iam/tenants/{tenant}/apps/{id}');
 
   // Fetch applications using SDK
   const {
@@ -117,12 +121,14 @@ export default function AppsPage() {
   }, [router]);
 
   const handleDelete = useCallback((app: DisplayApplication) => {
+    if (!deleteCap.enabled) return;
     if (window.confirm(`Are you sure you want to delete "${app.name}"?`)) {
       deleteAppMutation.mutate(app.clientId);
     }
-  }, [deleteAppMutation]);
+  }, [deleteAppMutation, deleteCap.enabled]);
 
   const handleBulkDelete = useCallback(async (appsToDelete: DisplayApplication[]) => {
+    if (!deleteCap.enabled) return;
     if (!tenantId) {
       toast({
         title: 'Error',
@@ -155,7 +161,7 @@ export default function AppsPage() {
         });
       }
     }
-  }, [tenantId, iam, toast, refetchApps]);
+  }, [tenantId, iam, toast, refetchApps, deleteCap.enabled]);
 
   const columns: ColumnDef<DisplayApplication>[] = useMemo(() => [
     createSelectColumn<DisplayApplication>(),
@@ -246,13 +252,15 @@ export default function AppsPage() {
                 label: 'Delete',
                 onClick: () => handleDelete(app),
                 variant: 'destructive',
+                disabled: !deleteCap.enabled,
+                title: deleteCap.enabled ? undefined : deleteCap.reason,
               },
             ]}
           />
         );
       },
     },
-  ], [handleView, handleEdit, handleDelete, toast]);
+  ], [handleView, handleEdit, handleDelete, toast, deleteCap.enabled, deleteCap.reason]);
 
   // Show auth loading state
   if (authLoading) {
@@ -315,10 +323,12 @@ export default function AppsPage() {
             Manage OAuth client applications and their configurations
           </p>
         </div>
-        <Button onClick={() => router.push('/iam/apps/new')}>
-          <Plus className="mr-2 h-4 w-4" />
-          Register Application
-        </Button>
+        <Gated op="POST /api/v1/iam/tenants/{tenant}/apps">
+          <Button onClick={() => router.push('/iam/apps/new')}>
+            <Plus className="mr-2 h-4 w-4" />
+            Register Application
+          </Button>
+        </Gated>
       </div>
 
       {/* Stats Cards */}
@@ -371,6 +381,8 @@ export default function AppsPage() {
                 label: 'Delete selected',
                 onClick: handleBulkDelete,
                 variant: 'destructive',
+                disabled: !deleteCap.enabled,
+                title: deleteCap.enabled ? undefined : deleteCap.reason,
               },
             ]}
           />

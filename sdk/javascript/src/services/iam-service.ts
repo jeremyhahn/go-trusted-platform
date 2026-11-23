@@ -578,7 +578,7 @@ export class IAMService extends BaseService {
    */
   async rotateAppSecret(tenantId: string, clientId: string): Promise<ApiResponse<RotateIAMAppSecretResponse>> {
     return this.client.post<RotateIAMAppSecretResponse>(
-      this.buildUrl(`/tenants/${this.encodePathSegment(tenantId)}/apps/${this.encodePathSegment(clientId)}/rotate-secret`),
+      this.buildUrl(`/tenants/${this.encodePathSegment(tenantId)}/apps/${this.encodePathSegment(clientId)}/rotate`),
       {}
     );
   }
