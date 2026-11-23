@@ -4,6 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ok, refused, stubControlPlane, withControlPlane, type Answer } from '@/test/control-plane-fetch';
 import { GatewaySnapshotsCard } from './gateway-snapshots-card';
 
+// The card is gated; these cases test the reads with every op offered.
+vi.mock('@/hooks/use-capabilities', () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
+
 // #2051: the gateway snapshots card lists the reported snapshots through the
 // SDK GatewayService and opens one in the existing GatewaySnapshotDetail; a
 // refusal is shown verbatim.
