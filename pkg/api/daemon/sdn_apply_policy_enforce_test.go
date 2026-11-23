@@ -21,6 +21,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
@@ -242,4 +243,43 @@ func TestSDNService_ApplyPolicy_AddFlowFailureInstallsNothing(t *testing.T) {
 	svc.mu.RLock()
 	defer svc.mu.RUnlock()
 	assert.Empty(t, svc.policies)
+}
+
+// createTestVLAN creates VLAN 100 on br0 tagging port p1.
+func createTestVLAN(t *testing.T, svc *SDNService) {
+	t.Helper()
+	_, err := svc.CreateVLAN(context.Background(), &platformv1.CreateVLANRequest{
+		Config: &platformv1.VLANConfig{BridgeId: "br0", VlanId: 100, Name: "v100", Ports: []string{"p1"}},
+	})
+	require.NoError(t, err)
+}
+
+// A failed port untag fails DeleteVLAN and keeps the VLAN (#1951 (e)).
+func TestSDNService_DeleteVLAN_UntagFailureKeepsVLAN(t *testing.T) {
+	svc, mockOVS := newEnforcePolicyFixture(t)
+	ctx := context.Background()
+	createTestVLAN(t, svc)
+	mockOVS.setPortVLANErr = errors.New("ovsdb transaction failed")
+
+	_, err := svc.DeleteVLAN(ctx, &platformv1.DeleteVLANRequest{BridgeId: "br0", VlanId: 100})
+	assert.Equal(t, codes.Internal, status.Code(err))
+
+	list, err := svc.ListVLANs(ctx, &platformv1.ListVLANsRequest{BridgeId: "br0"})
+	require.NoError(t, err)
+	assert.Len(t, list.GetVlans(), 1)
+}
+
+// A port that no longer exists does not block DeleteVLAN.
+func TestSDNService_DeleteVLAN_MissingPortSucceeds(t *testing.T) {
+	svc, mockOVS := newEnforcePolicyFixture(t)
+	ctx := context.Background()
+	createTestVLAN(t, svc)
+	mockOVS.setPortVLANErr = fmt.Errorf("untag p1: %w", ovs.ErrPortNotFound)
+
+	_, err := svc.DeleteVLAN(ctx, &platformv1.DeleteVLANRequest{BridgeId: "br0", VlanId: 100})
+	require.NoError(t, err)
+
+	list, err := svc.ListVLANs(ctx, &platformv1.ListVLANsRequest{BridgeId: "br0"})
+	require.NoError(t, err)
+	assert.Empty(t, list.GetVlans())
 }
