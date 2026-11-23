@@ -93,6 +93,23 @@ describe('ManifestsPage verify and delete', () => {
     expect(verifies[0].body).toEqual({ manifest: M2, expectedNonce: 'bg==' });
   });
 
+  it('sends the public key PEM as base64 bytes', async () => {
+    // public_key_pem is a proto `bytes` field: the JSON gateway base64-decodes it.
+    const AK_PEM = '-----BEGIN PUBLIC KEY-----\nAA==\n-----END PUBLIC KEY-----';
+    const sent = stubControlPlane(routes({ [MANIFEST_VERIFY]: ok({ status: STATUS, result: VERIFIED }) }));
+    render(withControlPlane(<ManifestsPage />));
+    const card = await screen.findByTestId('manifest-actions');
+
+    fireEvent.change(within(card).getByLabelText('Manifest'), { target: { value: 'm2' } });
+    fireEvent.change(within(card).getByLabelText(/public key/i), { target: { value: AK_PEM } });
+    fireEvent.click(await within(card).findByRole('button', { name: 'Verify manifest' }));
+
+    await screen.findByTestId('manifest-verdict');
+    const verifies = sent.filter((r) => r.path === '/api/v1/attestation/manifests/verify');
+    expect(verifies).toHaveLength(1);
+    expect((verifies[0].body as { publicKeyPem?: string }).publicKeyPem).toBe(btoa(AK_PEM));
+  });
+
   it('shows the verification errors and a refused verify', async () => {
     const r = routes({
       [MANIFEST_VERIFY]: ok({

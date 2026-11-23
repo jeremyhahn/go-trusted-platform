@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/dialog";
 import { useAttestation, useToast } from "@/hooks";
 import { useAttestationVerify } from "@/hooks/use-attestation-verify";
+import { textToBase64 } from "@/hooks/use-tpm-ops";
 
 function yesNo(v: boolean | undefined): string {
   return v ? "Yes" : "No";
@@ -64,7 +65,8 @@ export function ManifestActionsCard({
       const res = await verify.verifyManifest({
         manifest: selected,
         ...(n ? { expectedNonce: n } : {}),
-        ...(p ? { publicKeyPem: p } : {}),
+        // public_key_pem is a proto `bytes` field: send the PEM text as base64.
+        ...(p ? { publicKeyPem: textToBase64(p) } : {}),
       });
       if (!res.success || !res.data?.result) {
         toast({

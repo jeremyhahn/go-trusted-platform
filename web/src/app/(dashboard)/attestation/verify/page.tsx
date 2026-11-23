@@ -227,7 +227,14 @@ export default function VerifyPage() {
       const pcrMismatches = 0;
       const errors: string[] = [];
 
-      switch (results[manifest.id]?.result?.status) {
+      // The server emits the proto enum names (MANIFEST_VERIFICATION_STATUS_*);
+      // map those and the short names alike.
+      switch (
+        String(results[manifest.id]?.result?.status ?? "").replace(
+          /^MANIFEST_VERIFICATION_STATUS_/,
+          "",
+        )
+      ) {
         case "VERIFIED":
           status = "passed";
           break;

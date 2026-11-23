@@ -387,7 +387,33 @@ export class KMSService extends BaseService {
    * @returns Plaintext and encrypted data key
    */
   async generateDataKey(request: GenerateDataKeyRequest): Promise<ApiResponse<GenerateDataKeyResponse>> {
-    return this.client.post<GenerateDataKeyResponse>(this.buildUrl('/data-keys'), request);
+    const body: { key_id: string; algorithm?: string; key_size?: number; context?: string } = {
+      key_id: request.keyId,
+    };
+    if (request.algorithm !== undefined) {
+      body.algorithm = request.algorithm;
+    }
+    if (request.keySize !== undefined) {
+      body.key_size = request.keySize;
+    }
+    if (request.context !== undefined) {
+      body.context = request.context;
+    }
+    const res = await this.client.post<{ key_id?: string; plaintext_key?: string; encrypted_key?: string }>(
+      this.buildUrl('/data-keys'),
+      body
+    );
+    if (!res.success || !res.data) {
+      return res as unknown as ApiResponse<GenerateDataKeyResponse>;
+    }
+    return {
+      ...res,
+      data: {
+        keyId: res.data.key_id,
+        plaintextKey: res.data.plaintext_key,
+        encryptedKey: res.data.encrypted_key,
+      },
+    } as unknown as ApiResponse<GenerateDataKeyResponse>;
   }
 
   /**
@@ -399,7 +425,34 @@ export class KMSService extends BaseService {
    * @returns Wrapped data key
    */
   async generateWrappedDataKey(request: GenerateWrappedDataKeyRequest): Promise<ApiResponse<GenerateWrappedDataKeyResponse>> {
-    return this.client.post<GenerateWrappedDataKeyResponse>(this.buildUrl('/data-keys/wrapped'), request);
+    // The server's request has no wrapping algorithm, so wrappingAlgorithm is
+    // not sent.
+    const body: { wrapping_key_id: string; key_algorithm?: string; key_size?: number; context?: string } = {
+      wrapping_key_id: request.wrappingKeyId,
+    };
+    if (request.keyAlgorithm !== undefined) {
+      body.key_algorithm = request.keyAlgorithm;
+    }
+    if (request.keySize !== undefined) {
+      body.key_size = request.keySize;
+    }
+    if (request.context !== undefined) {
+      body.context = request.context;
+    }
+    const res = await this.client.post<{ wrapping_key_id?: string; wrapped_key?: string }>(
+      this.buildUrl('/data-keys/wrapped'),
+      body
+    );
+    if (!res.success || !res.data) {
+      return res as unknown as ApiResponse<GenerateWrappedDataKeyResponse>;
+    }
+    return {
+      ...res,
+      data: {
+        wrappingKeyId: res.data.wrapping_key_id,
+        wrappedKey: res.data.wrapped_key,
+      },
+    } as unknown as ApiResponse<GenerateWrappedDataKeyResponse>;
   }
 
   // =========================================================================

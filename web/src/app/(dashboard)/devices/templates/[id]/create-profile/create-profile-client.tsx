@@ -25,6 +25,9 @@ import { useToast, useApi, useDevice, useMutation } from '@/hooks';
 import type { DeviceRole, CreateProfileFromTemplateRequest } from 'trusted-platform-sdk';
 import { deviceRoleLabel } from '@/lib/device-role';
 import { profileOverrides } from '@/lib/device-profile-networks';
+import { Gated } from '@/components/features/capabilities/gated';
+
+const CREATE_PROFILE_OP = 'POST /api/v1/device/templates/{id:[0-9]+}/create-profile';
 
 // ============================================================================
 // Helper Functions
@@ -280,12 +283,14 @@ export default function CreateProfileClient() {
           >
             Cancel
           </Button>
-          <Button type="submit" disabled={createProfileMutation.isLoading}>
-            {createProfileMutation.isLoading && (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            )}
-            Create Profile
-          </Button>
+          <Gated op={CREATE_PROFILE_OP}>
+            <Button type="submit" disabled={createProfileMutation.isLoading}>
+              {createProfileMutation.isLoading && (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              )}
+              Create Profile
+            </Button>
+          </Gated>
         </div>
       </form>
     </div>

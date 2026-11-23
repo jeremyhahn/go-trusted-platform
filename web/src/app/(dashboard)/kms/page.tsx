@@ -18,6 +18,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { Gated } from "@/components/features/capabilities/gated";
 import {
   Dialog,
   DialogContent,
@@ -35,6 +36,8 @@ import { Plus, AlertCircle, RefreshCw } from "lucide-react";
 import { usePlatformClient } from "trusted-platform-sdk";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { KmsDigestCard } from "@/components/features/kms/kms-digest-card";
+import { KmsKeyAdminCard } from "@/components/features/kms/kms-key-admin-card";
 
 // A key as the platform KMS REST handler emits it: snake_case or camelCase
 // names and ISO-string or epoch-second timestamps, which differs from the
@@ -441,9 +444,11 @@ export default function KMSKeysPage() {
                 className="w-32"
               />
             </div>
-            <Button variant="outline" onClick={() => void generateRandom()} disabled={randomBusy}>
-              Generate random bytes
-            </Button>
+            <Gated op="POST /api/v1/kms/random">
+              <Button variant="outline" onClick={() => void generateRandom()} disabled={randomBusy}>
+                Generate random bytes
+              </Button>
+            </Gated>
           </div>
           {randomHex !== null && (
             <code data-testid="kms-random-hex" className="break-all font-mono text-sm">
@@ -452,6 +457,9 @@ export default function KMSKeysPage() {
           )}
         </CardContent>
       </Card>
+
+      <KmsDigestCard />
+      <KmsKeyAdminCard />
 
       {/* Keys Table */}
       <KeyTable

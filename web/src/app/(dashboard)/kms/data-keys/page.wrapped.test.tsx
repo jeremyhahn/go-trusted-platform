@@ -4,6 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ok, refused, stubControlPlane, withControlPlane } from '@/test/control-plane-fetch';
 import DataKeysPage from './page';
 
+vi.mock('@/hooks/use-capabilities', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/use-capabilities')>()),
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
+
 // #2057: the data-keys page calls GenerateWrappedDataKey through the SDK
 // client; the plaintext never leaves the service, so none is shown.
 
