@@ -65,6 +65,7 @@ in-process and is the only way to use them with no daemon listening.
 | `update` | `<id>` | Change a device's model and key material, §2.10 |
 | `delete` | `<id>` | Delete a device by id |
 | `attest` | `<id>` | Submit attestation evidence for a device, §2.6 |
+| `attest-challenge` | `<id>` | Issue a single-use attestation challenge for a device, §2.6.1 |
 | `attest-cert` | — | Sub-group (`record <id>`): the attestation certificate on a device record, §2.7 |
 | `boot` | — | Sub-group (`certificate`, `delivery`), §2.8 |
 | `disable` | `<id>` | Block the device's switch port and record it suspended, §2.9 |
@@ -174,6 +175,33 @@ read evidence file <path>: <reason>`) and an empty one (`device attest:
 evidence file <path> is empty`). An unknown device fails with the `NOT_FOUND`
 error of §2; evidence that cannot be evaluated fails with `device attest:
 failed to attest device <id>: <reason>`.
+
+`--challenge-id <challenge_id>` sends a server-issued challenge (§2.6.1): the
+evidence's `nonce` must be that challenge's nonce. Without it no challenge is
+sent.
+
+```bash
+platformctl device attest 123 --evidence-file quote.json --challenge-id <challenge_id>
+```
+
+#### 2.6.1 `device attest-challenge <id>`
+
+Asks the server for a single-use attestation challenge for a registered device
+(`IssueAttestationChallenge`). The device quotes with the challenge's nonce as
+qualifying data; the evidence then goes to `device attest <id>
+--challenge-id <challenge_id>`.
+
+```bash
+platformctl device attest-challenge 123 --output json
+```
+
+The output keys are `device_id`, `challenge_id`, `nonce` (base64) and
+`expires_at` (RFC 3339, UTC). A challenge is single-use: the first attest that
+names it consumes it, whatever the result. It expires at `expires_at`, and an
+attest after that is refused. A non-numeric or zero id fails before
+connecting; an unknown device fails with the `NOT_FOUND` error of §2; any other
+server failure fails with `device attest-challenge: failed to issue a challenge
+for device <id>: <reason>`.
 
 ### 2.7 `device attest-cert record <id> [--reissue] [--clear-on-refusal]`
 
