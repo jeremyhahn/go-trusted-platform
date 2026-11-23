@@ -24,11 +24,12 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
-// vpnHubForwardRule is one rule of the vpn-hub0 forward-hook chain, compiled
-// from the zone matrix (#2093). A rule with no Family is either the leading
-// established/related accept or, with Drop, the closing drop.
+// vpnHubForwardRule is one rule of the vpn-hub0 ingress chain, compiled from
+// the zone matrix (#2093). Every rule but the closing drop (Drop, no Family)
+// is bound to a lease's address and a subnet of a zone the matrix opens for
+// it.
 type vpnHubForwardRule struct {
-	// Family is 4 or 6 for a lease rule, 0 for the chain's framing rules.
+	// Family is 4 or 6; the closing drop alone has none.
 	Family int
 	// Source is the lease's address as a host prefix.
 	Source netip.Prefix
@@ -38,6 +39,11 @@ type vpnHubForwardRule struct {
 	Protocol string
 	// Port is the destination port; 0 opens every port of Destination.
 	Port uint16
+	// Reply marks a reply-direction established/related accept from the
+	// lease's Source to Destination, never with a Port: replies to
+	// connections opened toward the peer, bound to the current lease, so
+	// conntrack state that outlives a lease opens nothing.
+	Reply bool
 	// Drop marks the closing drop for the hub interface.
 	Drop bool
 	// Comment names the lease's destination zone and service.
@@ -50,15 +56,16 @@ func (r vpnHubForwardRule) text() string {
 	if r.Drop {
 		return in + " drop"
 	}
-	if r.Family == 0 {
-		return in + " ct state established,related accept"
-	}
 	ip := "ip"
 	if r.Family == 6 {
 		ip = "ip6"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s %s saddr %s %s daddr %s", in, ip, r.Source, ip, r.Destination)
+	b.WriteString(in)
+	if r.Reply {
+		b.WriteString(" ct direction reply ct state established,related")
+	}
+	fmt.Fprintf(&b, " %s saddr %s %s daddr %s", ip, r.Source, ip, r.Destination)
 	if r.Port != 0 {
 		fmt.Fprintf(&b, " %s dport %d", r.Protocol, r.Port)
 	}
@@ -89,17 +96,21 @@ var vpnHubServicePorts = map[string][]vpnHubServicePort{
 }
 
 // compileVPNHubForwardRules renders the vpn-hub0 forwarding rules for leases
-// from the enforcement's matrix: replies first, then for each lease and each
-// of its zones the matrix opens from the management-VPN zone, an accept from
-// the lease's address to each subnet of that zone in the lease's family
-// (port rules only when the cell names services), and last a drop of
+// from the enforcement's matrix: for each lease and each of its zones the
+// matrix opens from the management-VPN zone, an accept from the lease's
+// address to each subnet of that zone in the lease's family (port rules only
+// when the cell names services), led by a reply-direction established/related
+// accept from the same address to the same subnet, so conntrack state that
+// outlives a lease, or a narrower re-lease of its address, opens nothing the
+// current lease does not. A subnet that gets no accept gets no reply accept
+// either. Last comes a drop of
 // everything else entering on the hub interface. A lease zone with no
 // network summary, or with no subnet, is an error: it cannot be enforced.
 func compileVPNHubForwardRules(e *vpnHubZoneEnforcement, nets map[zone.Zone]zoneflows.NetworkSummary, leases []*vpn.Lease) ([]vpnHubForwardRule, error) {
 	if e == nil {
 		return nil, errors.New("no destination-zone enforcement to compile the " + vpnHubInterface + " forwarding rules from")
 	}
-	rules := []vpnHubForwardRule{{Comment: "replies to admitted flows"}}
+	rules := []vpnHubForwardRule{}
 	for _, lease := range leases {
 		if lease == nil {
 			continue
@@ -138,19 +149,27 @@ func compileVPNHubForwardRules(e *vpnHubZoneEnforcement, nets map[zone.Zone]zone
 					continue
 				}
 				base := vpnHubForwardRule{Family: family, Source: source, Destination: subnet.Masked()}
+				var accepts []vpnHubForwardRule
 				if len(v.Services) == 0 {
 					base.Comment = "vpn lease to " + string(dst)
-					rules = append(rules, base)
-					continue
+					accepts = append(accepts, base)
 				}
 				for _, service := range v.Services {
 					for _, p := range vpnHubServicePorts[service] {
 						r := base
 						r.Protocol, r.Port = p.protocol, p.port
 						r.Comment = "vpn lease to " + string(dst) + " " + service
-						rules = append(rules, r)
+						accepts = append(accepts, r)
 					}
 				}
+				if len(accepts) == 0 {
+					// A service cell whose services open no port gets
+					// neither accepts nor replies.
+					continue
+				}
+				reply := vpnHubForwardRule{Family: family, Source: source, Destination: subnet.Masked(), Reply: true, Comment: "vpn lease replies from " + string(dst)}
+				rules = append(rules, reply)
+				rules = append(rules, accepts...)
 			}
 		}
 	}

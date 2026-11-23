@@ -88,7 +88,7 @@ func TestVPNHubForward_ServiceScopedCellOpensOnlyItsPorts(t *testing.T) {
 
 	var ports []string
 	for _, r := range rules {
-		if r.Drop || !r.Source.IsValid() {
+		if r.Drop || r.Reply || !r.Source.IsValid() {
 			continue
 		}
 		assert.Equal(t, netip.MustParsePrefix("10.4.20.0/24"), r.Destination)

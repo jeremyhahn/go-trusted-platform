@@ -107,7 +107,7 @@ func compileVPNHubZoneEnforcement(zones []zone.ZoneConfig) (*vpnHubZoneEnforceme
 
 // installVPNHubForwardFilter installs the filter on the kernel forwarding
 // path of vpn-hub0: it opens netlink, programs the inet tp_vpn_hub forward
-// chain for the empty lease set (the reply accept and the closing drop) and
+// chain for the empty lease set (the closing drop alone) and
 // sets e.forward, so each peer's accepts follow its install. It fails closed
 // on either error. A variable so tests can stand one in.
 var installVPNHubForwardFilter = func(e *vpnHubZoneEnforcement, _ *slog.Logger) error {

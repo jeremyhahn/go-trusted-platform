@@ -82,6 +82,12 @@ func (p *vpnHubForwardProgrammer) program(ctx context.Context, rules []vpnHubFor
 		return err
 	}
 	for _, r := range rules {
+		if !r.Drop && r.Family != 4 && r.Family != 6 {
+			return fmt.Errorf("vpn hub forward rule %q: family %d is neither 4 nor 6", r.Comment, r.Family)
+		}
+		if r.Reply && r.Port != 0 {
+			return fmt.Errorf("vpn hub forward rule %q: a reply accept carries no port", r.Comment)
+		}
 		if r.Port != 0 {
 			if _, ok := vpnHubL4Proto(r.Protocol); !ok {
 				return fmt.Errorf("vpn hub forward rule %q: unknown protocol %q", r.Comment, r.Protocol)
@@ -138,8 +144,9 @@ func (p *vpnHubForwardProgrammer) remove(ctx context.Context) error {
 }
 
 // vpnHubForwardExprs renders r as nftables expressions: the vpn-hub0
-// ingress match, then the closing drop, the established/related accept, or
-// the lease's family, source, destination and optional port, and accept.
+// ingress match, then either the closing drop or, for a Reply rule, the
+// reply-direction and established/related matches, then the lease's family,
+// source, destination and optional port, and accept.
 // The rules sit in the ingress chain, so they decide both forwarded and
 // locally delivered vpn-hub0 traffic.
 func vpnHubForwardExprs(r vpnHubForwardRule) []expr.Any {
@@ -147,9 +154,9 @@ func vpnHubForwardExprs(r vpnHubForwardRule) []expr.Any {
 	if r.Drop {
 		return append(e, &expr.Verdict{Kind: expr.VerdictDrop})
 	}
-	if r.Family == 0 {
+	if r.Reply {
+		e = append(e, vpnHubExprCtDirectionReply()...)
 		e = append(e, vpnHubExprCtState(expr.CtStateBitESTABLISHED|expr.CtStateBitRELATED)...)
-		return append(e, &expr.Verdict{Kind: expr.VerdictAccept})
 	}
 	e = append(e, vpnHubExprNFProto(r.Family)...)
 	e = append(e, vpnHubExprAddrPrefix(r.Source, false)...)
@@ -226,6 +233,15 @@ func vpnHubExprCtState(bits uint32) []expr.Any {
 		&expr.Ct{Key: expr.CtKeySTATE, Register: 1},
 		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: mask, Xor: []byte{0, 0, 0, 0}},
 		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: []byte{0, 0, 0, 0}},
+	}
+}
+
+// vpnHubExprCtDirectionReply matches packets travelling in the reply
+// direction of their conntrack entry.
+func vpnHubExprCtDirectionReply() []expr.Any {
+	return []expr.Any{
+		&expr.Ct{Key: expr.CtKeyDIRECTION, Register: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{1}}, // IP_CT_DIR_REPLY
 	}
 }
 
