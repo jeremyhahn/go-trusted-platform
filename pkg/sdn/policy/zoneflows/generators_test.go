@@ -246,6 +246,52 @@ func TestProvisioning_TFTPReachesOnlyBootServers(t *testing.T) {
 	}
 }
 
+// The TFTP server answers each transfer from an ephemeral UDP port, so the
+// device's ACKs to that port need an allowance: UDP 1024-65535, to the boot
+// servers only.
+func TestProvisioning_TFTPTransferPortReachesOnlyBootServers(t *testing.T) {
+	deny := zoneflows.FlowRule{Table: 0, Priority: 200,
+		Match: "in_port=7,dl_vlan=100,dl_type=0x0800,nw_dst=198.51.100.0/24", Actions: "drop"}
+	udp4 := func(dst, port string) map[string]string {
+		return map[string]string{"dl_type": "0x0800", "nw_proto": "17", "nw_dst": dst, "tp_dst": port}
+	}
+	udp6 := func(dst, port string) map[string]string {
+		return map[string]string{"dl_type": "0x86dd", "nw_proto": "17", "ipv6_dst": dst, "tp_dst": port}
+	}
+
+	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{})
+	rules := append(gs.Generate("7", zone.ZoneProvisioning, zoneflows.Untagged(100)), deny)
+	if w, ok := winner(rules, udp4("192.0.2.10", "49152")); !ok || w.Actions != "drop" {
+		t.Errorf("UDP 49152 with no boot server: winner %q (%s), want a drop", w.Match, w.Actions)
+	}
+
+	gs.SetProvisioningBootServers(net.ParseIP("192.0.2.10"), net.ParseIP("2001:db8::10"))
+	rules = append(gs.Generate("7", zone.ZoneProvisioning, zoneflows.Untagged(100)), deny)
+	for _, r := range rules {
+		if strings.Contains(r.Match, "tp_dst=0x") {
+			t.Logf("provisioning flow: priority=%d %s actions=%s", r.Priority, r.Match, r.Actions)
+		}
+	}
+	for _, port := range []string{"49152", "1024", "65535"} {
+		if w, ok := winner(rules, udp4("192.0.2.10", port)); !ok || w.Actions != "normal" {
+			t.Errorf("UDP %s to the IPv4 boot server: winner %q (%s), want a normal rule", port, w.Match, w.Actions)
+		}
+		if w, ok := winner(rules, udp6("2001:db8::10", port)); !ok || w.Actions != "normal" {
+			t.Errorf("UDP %s to the IPv6 boot server: winner %q (%s), want a normal rule", port, w.Match, w.Actions)
+		}
+	}
+	if w, ok := winner(rules, udp4("198.51.100.7", "49152")); !ok || w.Actions != "drop" {
+		t.Errorf("UDP 49152 to a denied destination: winner %q (%s), want a drop", w.Match, w.Actions)
+	}
+	if w, ok := winner(rules, udp4("192.0.2.10", "1023")); !ok || w.Actions != "drop" {
+		t.Errorf("UDP 1023 to the boot server: winner %q (%s, priority %d), want a drop", w.Match, w.Actions, w.Priority)
+	}
+	tcp := map[string]string{"dl_type": "0x0800", "nw_proto": "6", "nw_dst": "192.0.2.10", "tp_dst": "49152"}
+	if w, ok := winner(rules, tcp); !ok || w.Actions != "drop" {
+		t.Errorf("TCP 49152 to the boot server: winner %q (%s), want a drop", w.Match, w.Actions)
+	}
+}
+
 // matchFields splits an OVS match string into its key=value fields.
 func matchFields(match string) map[string]string {
 	out := map[string]string{}
@@ -267,10 +313,13 @@ func winner(rules []zoneflows.FlowRule, pkt map[string]string) (zoneflows.FlowRu
 	for _, r := range rules {
 		f := matchFields(r.Match)
 		fits := true
-		for _, k := range []string{"dl_type", "nw_proto", "tp_dst"} {
+		for _, k := range []string{"dl_type", "nw_proto"} {
 			if v, ok := f[k]; ok && v != pkt[k] {
 				fits = false
 			}
+		}
+		if v, ok := f["tp_dst"]; ok && !tpDstMatches(v, pkt["tp_dst"]) {
+			fits = false
 		}
 		for _, k := range []string{"nw_dst", "ipv6_dst"} {
 			if v, ok := f[k]; ok && !dstContains(v, pkt[k]) {
@@ -282,6 +331,23 @@ func winner(rules []zoneflows.FlowRule, pkt map[string]string) (zoneflows.FlowRu
 		}
 	}
 	return best, found
+}
+
+// tpDstMatches reports whether a rule's tp_dst field matches a probe port:
+// an exact number compares as today, and the OVS masked form value/mask
+// (hex) matches when port&mask == value&mask.
+func tpDstMatches(rule, port string) bool {
+	value, mask, masked := strings.Cut(rule, "/")
+	if !masked {
+		return rule == port
+	}
+	v, err1 := strconv.ParseUint(value, 0, 16)
+	m, err2 := strconv.ParseUint(mask, 0, 16)
+	p, err3 := strconv.ParseUint(port, 10, 16)
+	if err1 != nil || err2 != nil || err3 != nil {
+		return false
+	}
+	return p&m == v&m
 }
 
 // dstContains reports whether the rule destination dst covers addr.

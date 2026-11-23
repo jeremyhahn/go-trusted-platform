@@ -1751,6 +1751,22 @@ func TestPXEGRPC_BootingAllowsTheIPXEHTTPPort(t *testing.T) {
 	assert.True(t, allowed, "no provisioning allow rule for the iPXE HTTP port %d", ipxe.DefaultHTTPPort)
 }
 
+// http-port 65535 leaves no adjacent port for the device-script server
+// (http-port+1), so the daemon backend refuses it rather than starting with
+// no provisioning HTTP allowance.
+func TestDaemonPXEBackendRefusesHTTPPort65535(t *testing.T) {
+	ctx := context.Background()
+	port := &pxeRecordingPort{}
+	section := pxeEnabledSection(t)
+	section.HTTPPort = 65535
+	svc, err := pxeGRPCServiceFromConfig(ctx, logging.DefaultLogger(), pxeSectionApp(), section, pxeTestFlowManager(t, port))
+	require.Error(t, err)
+	assert.Nil(t, svc)
+	var cfgErr pxe.ErrInvalidConfiguration
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "pxe.http-port", cfgErr.Field)
+}
+
 // Codex round 5 P1 on #1896: docs/SPEC.md (ipxe row) requires the
 // provisioning-zone rules to admit TCP 8080 (iPXE HTTP), 8081 (the
 // bootstrap device-script and UKI server) and 10809 (NBD). A provisioning
