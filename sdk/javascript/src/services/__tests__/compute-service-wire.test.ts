@@ -126,4 +126,22 @@ describe('ComputeService wire shapes', () => {
 
     expect((postedBody(mockClient) as { pcrBank?: string }).pcrBank).toBeUndefined();
   });
+
+  it('suspends and resumes a VM with an empty body on its encoded path', async () => {
+    await service.suspendVM('vm/1');
+    await service.resumeVM('vm/1');
+
+    const calls = vi.mocked(mockClient.post).mock.calls;
+    expect(String(calls[0]?.[0])).toMatch(/\/v1\/compute\/vms\/vm%2F1\/suspend$/);
+    expect(calls[0]?.[1]).toEqual({});
+    expect(String(calls[1]?.[0])).toMatch(/\/v1\/compute\/vms\/vm%2F1\/resume$/);
+    expect(calls[1]?.[1]).toEqual({});
+  });
+
+  it('reads one snapshot on GET /vms/{id}/snapshots/{snapshotId}', async () => {
+    await service.getSnapshot({ vmId: 'vm-1', snapshotId: 's/1' });
+
+    const url = String(vi.mocked(mockClient.get).mock.calls[0]?.[0]);
+    expect(url).toMatch(/\/v1\/compute\/vms\/vm-1\/snapshots\/s%2F1$/);
+  });
 });
