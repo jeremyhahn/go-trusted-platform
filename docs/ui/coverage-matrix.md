@@ -397,17 +397,17 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `KeyManagementService.GetKeyVersions` | `GET /keys/{name}/versions` | `(dashboard)/kms/[id]/page.tsx` | - | `real-server/kms-key-detail.spec.ts` | covered |
 | `KeyManagementService.Encrypt` | `POST /encrypt/{name}` | `(dashboard)/kms/[id]/page.tsx` | - | `kms.spec.ts` | covered |
 | `KeyManagementService.Decrypt` | `POST /decrypt/{name}` | `(dashboard)/kms/[id]/page.tsx` | - | `kms.spec.ts` | covered |
-| `KeyManagementService.BatchEncrypt` | `POST /encrypt/{name}` | - | - | - | missing |
-| `KeyManagementService.BatchDecrypt` | `POST /decrypt/{name}` | - | - | - | missing |
-| `KeyManagementService.Rewrap` | - | - | - | - | missing |
+| `KeyManagementService.BatchEncrypt` | `POST /batch-encrypt` | `(dashboard)/kms/page.tsx` | - | `real-server/kms.spec.ts` | covered |
+| `KeyManagementService.BatchDecrypt` | `POST /batch-decrypt` | `(dashboard)/kms/page.tsx` | - | `real-server/kms.spec.ts` | covered |
+| `KeyManagementService.Rewrap` | `POST /rewrap` | `(dashboard)/kms/page.tsx` | - | `real-server/kms.spec.ts` | covered |
 | `KeyManagementService.Sign` | `POST /sign/{name}` | `(dashboard)/kms/[id]/page.tsx` | - | `kms.spec.ts` | covered |
 | `KeyManagementService.Verify` | `POST /verify/{name}` | `(dashboard)/kms/[id]/page.tsx` | - | `kms.spec.ts` | covered |
 | `KeyManagementService.Hash` | `POST /hash` | `(dashboard)/kms/page.tsx` | - | `real-server/kms.spec.ts` | covered |
 | `KeyManagementService.HMAC` | `POST /hmac/{name}` | `(dashboard)/kms/page.tsx` | - | `real-server/kms.spec.ts` | covered |
 | `KeyManagementService.VerifyHMAC` | `POST /hmac/{name}/verify` | `(dashboard)/kms/page.tsx` | - | `real-server/kms.spec.ts` | covered |
 | `KeyManagementService.GenerateRandom` | `POST /random` | `(dashboard)/kms/page.tsx` | - | `real-server/kms.spec.ts` | covered |
-| `KeyManagementService.GenerateDataKey` | `POST /data-keys` | `(dashboard)/kms/data-keys/page.tsx` | - | `real-server/kms.spec.ts` | partial |
-| `KeyManagementService.GenerateWrappedDataKey` | `POST /data-keys/wrapped` | `(dashboard)/kms/data-keys/page.tsx` | - | `real-server/kms.spec.ts` | partial |
+| `KeyManagementService.GenerateDataKey` | `POST /data-keys` | `(dashboard)/kms/data-keys/page.tsx` | - | `real-server/kms.spec.ts` | covered |
+| `KeyManagementService.GenerateWrappedDataKey` | `POST /data-keys/wrapped` | `(dashboard)/kms/data-keys/page.tsx` | - | `real-server/kms.spec.ts` | covered |
 | `KeyManagementService.BackendStatus` | `GET /backend/status` | `(dashboard)/kms/page.tsx` | - | `real-server/kms.spec.ts` | covered |
 
 ## LUKSService (`luks.proto`)
@@ -746,7 +746,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | PlatformIAMService | 41 | 20 | 8 | 13 | 0 | 0 |
 | IDevIDService | 20 | 19 | 0 | 1 | 0 | 0 |
 | InvitationService | 7 | 4 | 0 | 3 | 0 | 0 |
-| KeyManagementService | 23 | 18 | 2 | 3 | 0 | 0 |
+| KeyManagementService | 23 | 23 | 0 | 0 | 0 | 0 |
 | LUKSService | 10 | 0 | 0 | 0 | 10 | 0 |
 | MessagingService | 8 | 0 | 0 | 0 | 0 | 8 |
 | NTPService | 3 | 0 | 0 | 3 | 0 | 0 |
@@ -765,7 +765,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | TPMService | 31 | 31 | 0 | 0 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **234** | **43** | **170** | **51** | **31** |
+| **Total** | **529** | **239** | **41** | **167** | **51** | **31** |
 
 ## Proposed slices
 
@@ -790,7 +790,7 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 17. **PlatformIAMService (2/2): Policy, App**: 7 operations (2 missing, 5 partial): CreatePolicy, GetPolicy, UpdatePolicy, ValidatePolicy, TestPolicy, GetApp, UpdateApp.
 18. **IDevIDService: IDevID, IAK, IAKCSR, LDevID, IDevIDCertificate, IAKCertificate…**: 12 operations (11 missing, 1 partial): HasIDevID, GenerateIAK, HasIAK, DeleteIAK, CreateIAKCSR, CreateLDevID, InstallIDevIDCertificate, InstallIAKCertificate, DeleteIAKCertificate, GetDeviceAttributes, FlushTransientContexts, ActivateCredential. (done except CreateIAKCSR, deferred: the daemon cannot yet return a PEM CSR)
 19. **InvitationService: Invitation, InvitationByToken, AcceptInvitation**: 3 operations (3 missing, 0 partial): GetInvitation, GetInvitationByToken, AcceptInvitation.
-20. **KeyManagementService: Key, KeyStatus, KeyVersion, Encrypt, Decrypt, Rewrap…**: 13 operations (12 missing, 1 partial): ImportKey, UpdateKeyStatus, GetKeyVersions, BatchEncrypt, BatchDecrypt, Rewrap, Hash, HMAC, VerifyHMAC, GenerateRandom, GenerateDataKey, GenerateWrappedDataKey, BackendStatus. (done except BatchEncrypt, BatchDecrypt and Rewrap, which have no UI yet; GenerateDataKey and GenerateWrappedDataKey partial until the SDK body fix)
+20. **KeyManagementService: Key, KeyStatus, KeyVersion, Encrypt, Decrypt, Rewrap…**: 13 operations (12 missing, 1 partial): ImportKey, UpdateKeyStatus, GetKeyVersions, BatchEncrypt, BatchDecrypt, Rewrap, Hash, HMAC, VerifyHMAC, GenerateRandom, GenerateDataKey, GenerateWrappedDataKey, BackendStatus. (done)
 21. **NTPService: Status, Source, Step**: 3 operations (3 missing, 0 partial): GetStatus, ListSources, Step.
 22. **OverlayService: VTEP, VNI, Tunnel, TunnelStat, RemoteMAC, MAC…**: 8 operations (7 missing, 1 partial): ListVTEPs, GetVTEP, DeleteVNI, ListTunnels, GetTunnelStats, ListRemoteMACs, ForgetMAC, GetOverlayStatus.
 23. **DNSService: Zone, Record, DNSSECStatus, Resolve, Register**: 10 operations (5 missing, 5 partial): GetZone, UpdateZone, SignZone, AddRecord, DeleteRecord, UpdateRecord, ListRecords, GetDNSSECStatus, Resolve, Register. (done: real-server/dns.spec.ts)
