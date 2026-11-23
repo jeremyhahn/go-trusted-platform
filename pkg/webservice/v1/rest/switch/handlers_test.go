@@ -443,3 +443,57 @@ func TestPortMutators_PortNotFound(t *testing.T) {
 		}
 	}
 }
+
+// TestPortOperations_InvalidInputIs400 checks that a manager's invalid-config
+// and invalid-port-range errors, bare or wrapped in an SSH command failure,
+// answer 400 on every port route rather than 500.
+func TestPortOperations_InvalidInputIs400(t *testing.T) {
+	invalidConfig := switchmgmt.ErrInvalidConfig{Field: "vlan", Reason: "out of range"}
+	invalidRange := switchmgmt.ErrInvalidPortRange{Port: "Eth1/1-x", Reason: "malformed"}
+	wrap := func(cause error) error {
+		return switchmgmt.ErrSSHCommandFailed{Command: "interface Eth1/3", Cause: cause}
+	}
+	for _, invalid := range []struct {
+		name string
+		err  error
+	}{
+		{"invalid-config", invalidConfig},
+		{"invalid-port-range", invalidRange},
+		{"wrapped-invalid-config", wrap(invalidConfig)},
+		{"wrapped-invalid-port-range", wrap(invalidRange)},
+	} {
+		mgr := &mockManager{
+			getPortStatusFunc: func(_ context.Context, _ string) (*switchwire.PortStatus, error) {
+				return nil, invalid.err
+			},
+			setPortVLANFunc: func(_ context.Context, _ string, _ uint16) error { return invalid.err },
+			enablePortFunc:  func(_ context.Context, _ string) error { return invalid.err },
+			disablePortFunc: func(_ context.Context, _ string) error { return invalid.err },
+		}
+		router := newTestRouter(newTestHandlers(&mockSwitchService{managers: map[string]switchmgmt.Manager{"core-01": mgr}}))
+
+		for _, route := range []struct {
+			method string
+			suffix string
+		}{
+			{http.MethodGet, ""},
+			{http.MethodPost, "/vlan"},
+			{http.MethodPost, "/enable"},
+			{http.MethodPost, "/disable"},
+		} {
+			t.Run(invalid.name+"/"+route.method+route.suffix, func(t *testing.T) {
+				var body *bytes.Reader
+				if route.method == http.MethodPost {
+					body = bytes.NewReader([]byte(`{"vlan_id":200}`))
+				} else {
+					body = bytes.NewReader(nil)
+				}
+				req := httptest.NewRequest(route.method, "/api/v1/switches/core-01/ports/Eth1%2F3"+route.suffix, body)
+				rec := httptest.NewRecorder()
+				router.ServeHTTP(rec, req)
+
+				assert.Equal(t, http.StatusBadRequest, rec.Code)
+			})
+		}
+	}
+}
