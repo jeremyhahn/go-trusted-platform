@@ -140,6 +140,7 @@ describe('ProvisioningSessionsPage capability gate', () => {
 
   it('leaves the controls on when the server offers them', () => {
     render(<ProvisioningSessionsPage />);
+    expect(screen.getByTestId('provisioning-session-sess-1')).not.toBeNull();
 
     const refresh = screen.getByRole('button', { name: /Refresh/ });
     expect((refresh as HTMLButtonElement).disabled).toBe(false);
