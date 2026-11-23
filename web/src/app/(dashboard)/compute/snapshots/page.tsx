@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import { Plus, RefreshCw, RotateCcw, Trash2, AlertCircle, Loader2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Button } from '@/components/ui/button';
@@ -467,7 +468,12 @@ export default function SnapshotsPage() {
                 <TableRow key={`${snapshot.vmId}-${snapshot.id}`}>
                   <TableCell>
                     <div>
-                      <div className="font-medium">{snapshot.config?.name || snapshot.id}</div>
+                      <Link
+                        href={`/compute/snapshots/${encodeURIComponent(snapshot.id)}?vm=${encodeURIComponent(snapshot.vmId)}`}
+                        className="font-medium hover:underline"
+                      >
+                        {snapshot.config?.name || snapshot.id}
+                      </Link>
                       {snapshot.config?.description && (
                         <div className="text-sm text-muted-foreground">{snapshot.config.description}</div>
                       )}
