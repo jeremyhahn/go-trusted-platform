@@ -23,6 +23,12 @@ assert.ok(config.split('\n').includes(want), `platformd.test.yaml carries "${wan
 assert.ok(config.split('\n').includes('vtpm:'), 'platformd.test.yaml has a vtpm block');
 assert.ok(config.split('\n').includes('  base-dir: trusted-data/vtpm'), 'the vtpm base-dir sits in the run directory');
 
+const vtpmSpec = fs.readFileSync(path.join(import.meta.dirname, 'vtpm-runtime.spec.ts'), 'utf8');
+assert.ok(
+  vtpmSpec.includes("test('drives a running bundle through every runtime control'"),
+  'vtpm-runtime.spec.ts has the runtime flow test',
+);
+
 const spec = fs.readFileSync(path.join(import.meta.dirname, 'auth.spec.ts'), 'utf8');
 const calls = [...spec.matchAll(/browser\.newContext\(([^)]*)\)/g)];
 assert.ok(calls.length > 0, 'auth.spec.ts creates at least one browser context');
