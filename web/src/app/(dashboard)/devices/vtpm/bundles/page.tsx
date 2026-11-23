@@ -19,7 +19,11 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { Gated } from '@/components/features/capabilities/gated';
+import { useCapabilities } from '@/hooks/use-capabilities';
 import { useVTPMTemplates, type VTPMBundleWire } from '@/hooks/use-vtpm-templates';
+
+const IMPORT_OP = 'POST /api/v1/vtpm/bundles/import';
 
 function bundleHref(id: string): string {
   return `/devices/vtpm/bundles/${encodeURIComponent(id)}`;
@@ -27,12 +31,15 @@ function bundleHref(id: string): string {
 
 export default function VTPMBundlesPage() {
   const vt = useVTPMTemplates();
+  const capabilities = useCapabilities();
   const [file, setFile] = useState<File | null>(null);
   const [imported, setImported] = useState<VTPMBundleWire | null>(null);
 
   const handleImport = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!file) return;
+    // A disabled button does not stop a submit by Enter: refuse here too.
+    if (!capabilities.capability(IMPORT_OP).enabled) return;
     try {
       setImported(await vt.importBundle.mutateAsync(file));
     } catch {
@@ -65,9 +72,11 @@ export default function VTPMBundlesPage() {
                 onChange={(e) => setFile(e.target.files?.[0] ?? null)}
               />
             </div>
-            <Button type="submit" disabled={!file || vt.importBundle.isLoading}>
-              Import bundle
-            </Button>
+            <Gated op={IMPORT_OP}>
+              <Button type="submit" disabled={!file || vt.importBundle.isLoading}>
+                Import bundle
+              </Button>
+            </Gated>
           </form>
           {imported && (
             <p data-testid="vtpm-import-result" className="mt-4 text-sm">

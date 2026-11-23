@@ -676,7 +676,8 @@ func (s *Service) ListBundles(ctx context.Context, opts *ListOptions) ([]*Bundle
 		return nil, &WrappedError{Msg: "failed to list bundles", Err: err}
 	}
 
-	var bundles []*Bundle
+	// Non-nil so a list with no match answers an empty list, not null.
+	bundles := []*Bundle{}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -723,7 +724,13 @@ func (s *Service) ListBundles(ctx context.Context, opts *ListOptions) ([]*Bundle
 
 	// Apply pagination
 	if opts != nil {
-		if opts.Offset > 0 && opts.Offset < len(bundles) {
+		// An offset at or past the end answers an empty page, so a client
+		// paging a multiple of the page size stops at the end instead of
+		// receiving the first page again.
+		if opts.Offset > 0 {
+			if opts.Offset >= len(bundles) {
+				return []*Bundle{}, nil
+			}
 			bundles = bundles[opts.Offset:]
 		}
 		if opts.Limit > 0 && opts.Limit < len(bundles) {

@@ -52,6 +52,43 @@ function ok(res: Result<unknown>): void {
   expect(res.success, JSON.stringify(res.error)).toBe(true);
 }
 
+interface CapabilityAnswer {
+  op: string;
+  enabled: boolean;
+  reason?: string;
+}
+
+interface CapabilitiesSdk {
+  capabilities: { list(): Promise<Result<{ capabilities?: CapabilityAnswer[] }>> };
+}
+
+/** The server's own capability answers, by op (sdk.capabilities.list()). */
+async function offered(sdk: CapabilitiesSdk): Promise<Map<string, CapabilityAnswer>> {
+  const res = await sdk.capabilities.list();
+  ok(res);
+  return new Map((res.data?.capabilities ?? []).map((c) => [c.op, c]));
+}
+
+/**
+ * Every <Gated> control on the page (data-capability-op) carries the answer
+ * the server gives for its op; at least one such control is on the page.
+ */
+async function expectGatedMatches(page: Page, caps: Map<string, CapabilityAnswer>): Promise<void> {
+  await expect(page.locator('[data-capability-op]').first()).toBeAttached();
+  await expect
+    .poll(async () => {
+      const gated = await page
+        .locator('[data-capability-op]')
+        .evaluateAll((els) =>
+          els.map((el) => [el.getAttribute('data-capability-op') ?? '', el.getAttribute('data-capability-enabled') ?? '']),
+        );
+      return gated
+        .filter(([op, enabled]) => enabled !== String(caps.get(op)?.enabled ?? false))
+        .map(([op, enabled]) => `${op}: page ${enabled}, server ${String(caps.get(op)?.enabled ?? false)}`);
+    })
+    .toEqual([]);
+}
+
 test.describe('IAM groups, members, permission check and tenants', () => {
   test('CreateGroup from the new group page lands in the server', async ({ adminPage, sdk, tenant }) => {
     const name = `Operations-${suffix()}`;
@@ -230,5 +267,50 @@ test.describe('IAM groups, members, permission check and tenants', () => {
     const req = await second;
     expect(new URL(req.url()).searchParams.get('limit')).toBe('50');
     await expect(adminPage.getByText(/Page 2 of \d+/)).toBeVisible();
+  });
+
+  test("gated controls on /iam/groups carry the server's capability answer", async ({ adminPage, sdk }) => {
+    const caps = await offered(sdk);
+    const list = caps.get('GET /api/v1/iam/groups');
+
+    await adminPage.goto('/iam/groups');
+    if (list?.enabled) {
+      await expectGatedMatches(adminPage, caps);
+      await expect(adminPage.getByTestId('groups-not-enabled')).toHaveCount(0);
+    } else {
+      const card = adminPage.getByTestId('groups-not-enabled');
+      await expect(card).toBeVisible();
+      if (list?.reason) {
+        await expect(card).toContainText(list.reason);
+      }
+    }
+  });
+
+  test("gated controls on the group detail carry the server's capability answer", async ({ adminPage, sdk, tenant }) => {
+    const caps = await offered(sdk);
+    const created = await sdk.iam.createGroup({ tenantId: tenant.id, name: `Gated-${suffix()}` });
+    ok(created);
+    const id = (record(created).id ?? record(created).groupId) as string;
+
+    await adminPage.goto(`/iam/groups/${id}`);
+    await expect(adminPage.getByRole('button', { name: 'Save group' })).toHaveAttribute(
+      'data-capability-op',
+      'PUT /api/v1/iam/groups/{id}',
+    );
+    await expect(adminPage.getByRole('button', { name: 'Delete', exact: true })).toHaveAttribute(
+      'data-capability-op',
+      'DELETE /api/v1/iam/groups/{id}',
+    );
+    await expectGatedMatches(adminPage, caps);
+  });
+
+  test("gated controls on /iam/tenants carry the server's capability answer", async ({ adminPage, sdk }) => {
+    const caps = await offered(sdk);
+    const id = `gated-${suffix()}`;
+    ok(await sdk.iam.createTenant({ id, name: `Gated ${id}` }));
+
+    await adminPage.goto('/iam/tenants');
+    await expect(adminPage.getByRole('heading', { name: 'Tenants', exact: true })).toBeVisible();
+    await expectGatedMatches(adminPage, caps);
   });
 });

@@ -84,4 +84,12 @@ describe('BMCProfileClient provisioning is unavailable (#1675 F28)', () => {
     expect(screen.queryByTestId('bmc-provisionStatus-error')).toBeNull();
     expect(screen.queryByText(/baremetal provisioning not configured/)).toBeNull();
   });
+
+  it('the card says provisioning is not available without any status error', () => {
+    hook = state({});
+    render(<BMCProfileClient />);
+
+    expect(screen.getByText(/Provisioning is not available on this server/)).toBeTruthy();
+    expect(screen.queryByTestId('bmc-provisionStatus-error')).toBeNull();
+  });
 });
