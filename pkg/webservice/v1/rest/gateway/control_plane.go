@@ -107,6 +107,8 @@ func (c *ControlPlane) RegisterRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix("/gateway").Subrouter()
 	sr.HandleFunc("/state", c.listState).Methods("GET")
 	sr.HandleFunc("/state/{id}", c.getState).Methods("GET")
+	sr.HandleFunc("/state/{id}/admitted-vteps", c.listAdmittedVTEPs).Methods("GET")
+	sr.HandleFunc("/state/{id}/admitted-vteps/{vtep}", c.getAdmittedVTEP).Methods("GET")
 	sr.HandleFunc("/state/{id}", c.deleteState).Methods("DELETE")
 }
 
@@ -173,6 +175,74 @@ func (c *ControlPlane) getState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.respWriter.Success200(w, r, snap)
+}
+
+// overlayOf resolves the {id} gateway's latest snapshot and answers its
+// overlay section. It writes the failure response itself and reports false
+// when there is none: 500 without a store or on a store error, 400 for an
+// empty id, 404 for an unknown gateway and 503 when the gateway reports no
+// overlay (the gRPC handlers' "not configured").
+func (c *ControlPlane) overlayOf(w http.ResponseWriter, r *http.Request) (*gwstate.OverlayState, bool) {
+	if c.store == nil {
+		c.respWriter.Error500(w, r, ErrGatewayControlNotConfigured{})
+		return nil, false
+	}
+	id := mux.Vars(r)["id"]
+	if id == "" {
+		c.respWriter.Error400(w, r, ErrGatewayIDRequired{})
+		return nil, false
+	}
+	snap, err := c.store.Get(id)
+	if err != nil {
+		var nf gwstate.ErrSnapshotNotFound
+		if errors.As(err, &nf) {
+			c.respWriter.Error404(w, r, err)
+			return nil, false
+		}
+		c.respWriter.Error500(w, r, err)
+		return nil, false
+	}
+	if snap.Overlay == nil {
+		c.respWriter.Error503(w, r, ErrGatewayOverlayNotReported{})
+		return nil, false
+	}
+	return snap.Overlay, true
+}
+
+// listAdmittedVTEPs answers the VTEPs the gateway last reported as admitted.
+func (c *ControlPlane) listAdmittedVTEPs(w http.ResponseWriter, r *http.Request) {
+	overlay, ok := c.overlayOf(w, r)
+	if !ok {
+		return
+	}
+	vteps := overlay.AdmittedVTEPs
+	if vteps == nil {
+		vteps = []gwstate.AdmittedVTEPState{}
+	}
+	c.respWriter.Success200(w, r, map[string]interface{}{
+		"admitted_vteps": vteps,
+		"total":          len(vteps),
+	})
+}
+
+// getAdmittedVTEP answers one admitted VTEP by its address.
+func (c *ControlPlane) getAdmittedVTEP(w http.ResponseWriter, r *http.Request) {
+	vtep := strings.TrimSpace(mux.Vars(r)["vtep"])
+	if vtep == "" {
+		c.respWriter.Error400(w, r, ErrGatewayVTEPRequired{})
+		return
+	}
+	overlay, ok := c.overlayOf(w, r)
+	if !ok {
+		return
+	}
+	for i := range overlay.AdmittedVTEPs {
+		if overlay.AdmittedVTEPs[i].VTEP == vtep {
+			c.respWriter.Success200(w, r, overlay.AdmittedVTEPs[i])
+			return
+		}
+	}
+	c.respWriter.Error404(w, r, ErrGatewayAdmittedVTEPNotFound{VTEP: vtep})
 }
 
 func (c *ControlPlane) deleteState(w http.ResponseWriter, r *http.Request) {
@@ -393,6 +463,29 @@ func (ErrGatewayControlNotConfigured) Error() string {
 }
 
 // ErrGatewayIDRequired signals a missing path or body parameter.
+// ErrGatewayOverlayNotReported is returned when the gateway's latest
+// snapshot carries no overlay section (the gRPC handlers' wording).
+type ErrGatewayOverlayNotReported struct{}
+
+func (ErrGatewayOverlayNotReported) Error() string {
+	return "overlay telemetry is not available for this gateway"
+}
+
+// ErrGatewayVTEPRequired is returned when the {vtep} path value is empty.
+type ErrGatewayVTEPRequired struct{}
+
+func (ErrGatewayVTEPRequired) Error() string {
+	return "gateway: vtep is required"
+}
+
+// ErrGatewayAdmittedVTEPNotFound is returned when the gateway reports no
+// admitted VTEP with the requested address.
+type ErrGatewayAdmittedVTEPNotFound struct{ VTEP string }
+
+func (e ErrGatewayAdmittedVTEPNotFound) Error() string {
+	return "gateway admitted VTEP " + e.VTEP + " was not found"
+}
+
 type ErrGatewayIDRequired struct{}
 
 func (ErrGatewayIDRequired) Error() string {
