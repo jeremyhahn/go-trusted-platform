@@ -11,6 +11,7 @@ import (
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"google.golang.org/grpc/codes"
@@ -126,8 +127,15 @@ func TestAuthorizeIAMTenant(t *testing.T) {
 		}
 	})
 
-	t.Run("unbound caller is allowed", func(t *testing.T) {
-		if err := authorizeIAMTenant(context.Background(), "tenant-a"); err != nil {
+	t.Run("unbound caller is refused", func(t *testing.T) {
+		err := authorizeIAMTenant(context.Background(), "tenant-a")
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+		}
+	})
+
+	t.Run("Unix-socket operator is allowed", func(t *testing.T) {
+		if err := authorizeIAMTenant(unixOperatorContext(), "tenant-a"); err != nil {
 			t.Fatalf("authorizeIAMTenant() = %v, want nil", err)
 		}
 	})
@@ -147,6 +155,59 @@ func TestAuthorizeIAMTenant(t *testing.T) {
 		err := authorizeIAMTenant(tokenCallerContext(""), "tenant-b")
 		if status.Code(err) != codes.PermissionDenied {
 			t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+		}
+	})
+}
+
+// unixOperatorContext is the context the Unix-socket gRPC server gives a
+// request: no tenant-bound identity, and the kernel-verified peer
+// credentials its interceptor attaches.
+func unixOperatorContext() context.Context {
+	return peercred.ContextWithUnixCredentials(context.Background(), peercred.UnixCredentials{PID: 1, UID: 0, GID: 0})
+}
+
+func TestAuthorizeSystemCaller_UnboundCaller(t *testing.T) {
+	t.Run("unbound caller is refused", func(t *testing.T) {
+		err := authorizeSystemCaller(context.Background(), "system", "CreateTenant")
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+		}
+	})
+
+	t.Run("Unix-socket operator is allowed", func(t *testing.T) {
+		if err := authorizeSystemCaller(unixOperatorContext(), "system", "CreateTenant"); err != nil {
+			t.Fatalf("authorizeSystemCaller() = %v, want nil", err)
+		}
+	})
+}
+
+func TestTenantGRPCServer_UnboundCaller(t *testing.T) {
+	s := &TenantGRPCServer{}
+	s.SetSystemTenant("system")
+
+	t.Run("unbound caller is refused by authorizeTenant", func(t *testing.T) {
+		err := s.authorizeTenant(context.Background(), "tenant-a")
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+		}
+	})
+
+	t.Run("unbound caller is refused by authorizeTenantName", func(t *testing.T) {
+		err := s.authorizeTenantName(context.Background(), "tenant-a")
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+		}
+	})
+
+	t.Run("Unix-socket operator is allowed by authorizeTenant", func(t *testing.T) {
+		if err := s.authorizeTenant(unixOperatorContext(), "tenant-a"); err != nil {
+			t.Fatalf("authorizeTenant() = %v, want nil", err)
+		}
+	})
+
+	t.Run("Unix-socket operator is allowed by authorizeTenantName", func(t *testing.T) {
+		if err := s.authorizeTenantName(unixOperatorContext(), "tenant-a"); err != nil {
+			t.Fatalf("authorizeTenantName() = %v, want nil", err)
 		}
 	})
 }
