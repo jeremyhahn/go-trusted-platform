@@ -2240,6 +2240,25 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 			return nil, err
 		}
 		mcpConfig.PeerAuthenticator = peers
+		// A certificate caller's tool permission is decided by the IAM
+		// PEP for its stored roles (#2016); without both, certificate
+		// callers are refused (bearer tokens are still served).
+		if peers != nil {
+			var pep quicbaassdk.IAMPEPClient
+			var iamClient quicbaassdk.IAMClient
+			if d.iamService != nil {
+				pep = d.iamService.PEP()
+				iamClient = d.iamService.Client()
+			}
+			switch {
+			case pep == nil:
+				d.logger.Warn("MCP server: no IAM policy enforcement point; mTLS callers are refused")
+			case iamClient == nil:
+				d.logger.Warn("MCP server: no IAM client to resolve certificate principals' roles; mTLS callers are refused")
+			default:
+				mcpConfig.PeerAuthorizationChecker = &iamTokenAuthorizer{pep: pep, iam: iamClient}
+			}
+		}
 	}
 
 	// Try to set up MCP auth. Prefer the shared broker platform-token

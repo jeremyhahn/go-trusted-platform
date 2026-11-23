@@ -40,6 +40,23 @@ func WithPeerAuthenticator(a PeerAuthenticator) AuthorizationCheckerOption {
 	}
 }
 
+// PeerAuthorizationChecker decides whether the principal a verified client
+// certificate authenticated holds a tool permission. The daemon wires the
+// IAM PEP; the certificate principal carries no scopes to decide by. It is
+// the contract the REST scope guard uses for the same purpose.
+type PeerAuthorizationChecker interface {
+	CheckPeerPermission(ctx context.Context, authCtx *platformtoken.AuthorizedContext, resource, action string) (bool, error)
+}
+
+// WithPeerAuthorizationChecker decides a certificate caller's tool
+// permission. Without one (nil), every certificate caller is refused a tool
+// that needs a permission.
+func WithPeerAuthorizationChecker(checker PeerAuthorizationChecker) AuthorizationCheckerOption {
+	return func(c *AuthorizationChecker) {
+		c.peerChecker = checker
+	}
+}
+
 // authorizePeer authenticates a tokenless request by its connection's
 // verified client certificate, then enforces the tool's scope against the
 // principal the certificate authenticates. Only VerifiedChains is read:

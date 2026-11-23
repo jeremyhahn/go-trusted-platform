@@ -79,6 +79,11 @@ type Config struct {
 	// token backend.
 	PeerAuthenticator PeerAuthenticator
 
+	// PeerAuthorizationChecker decides a certificate caller's tool
+	// permission (the IAM PEP in the daemon). Without one, certificate
+	// callers are refused every permissioned tool.
+	PeerAuthorizationChecker PeerAuthorizationChecker
+
 	// OAuthMetadata is the OAuth 2.1 Protected Resource Metadata configuration.
 	// Required for OAuth 2.1 compliance per RFC 9728.
 	OAuthMetadata *OAuthMetadataConfig
@@ -141,7 +146,8 @@ func NewServer(svc ServiceProvider, config *Config, log *logging.Logger) *Server
 
 	// Initialize authorization checker
 	s.authChecker = NewAuthorizationChecker(config.AuthorizationService, config.AuthManager,
-		WithPeerAuthenticator(config.PeerAuthenticator), WithPEPClient(config.PEPClient))
+		WithPeerAuthenticator(config.PeerAuthenticator), WithPEPClient(config.PEPClient),
+		WithPeerAuthorizationChecker(config.PeerAuthorizationChecker))
 
 	// Initialize OAuth 2.1 metadata handler
 	s.oauthMetadata = NewOAuthMetadataHandler(config.OAuthMetadata)
@@ -161,11 +167,14 @@ func (s *Server) SetAuthorizationService(authService AuthorizationService, authM
 	// Keep the certificate authenticator the server was built with.
 	var peers PeerAuthenticator
 	var pep iam.PEPClient
+	var peerChecker PeerAuthorizationChecker
 	if s.authChecker != nil {
 		peers = s.authChecker.peerAuthenticator
 		pep = s.authChecker.pep
+		peerChecker = s.authChecker.peerChecker
 	}
-	s.authChecker = NewAuthorizationChecker(authService, authManager, WithPeerAuthenticator(peers), WithPEPClient(pep))
+	s.authChecker = NewAuthorizationChecker(authService, authManager, WithPeerAuthenticator(peers), WithPEPClient(pep),
+		WithPeerAuthorizationChecker(peerChecker))
 	s.tools.SetAuthorizationChecker(s.authChecker)
 }
 
