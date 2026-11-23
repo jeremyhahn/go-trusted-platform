@@ -67,6 +67,12 @@ vi.mock("@/hooks", async (importOriginal) => ({
   }),
 }));
 
+// #2033 item 5: Gated reads the server's capabilities through this hook.
+const caps = vi.hoisted(() => ({ capability: vi.fn() }));
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: caps.capability }),
+}));
+
 // The real table needs tanstack state; this one renders the page's own
 // column cells and hands its bulk actions to buttons.
 vi.mock("@/components/ui/data-table", async (importOriginal) => ({
@@ -165,12 +171,15 @@ const apps = [
   // No name, grant types or creation time: the client id stands in.
   { clientId: "client-bare" },
 ];
+const registerOp = "POST /api/v1/iam/tenants/{tenant}/apps";
 
 const confirm = vi.spyOn(window, "confirm");
 const writeText = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  caps.capability.mockReset();
+  caps.capability.mockImplementation(() => ({ enabled: true }));
   authResult.tenantId = "tenant-1";
   authResult.isLoading = false;
   apiResult.data = { apps };
@@ -398,6 +407,34 @@ describe("TokensPage register", () => {
     expect((screen.getByText("Register").closest("button") as HTMLButtonElement).disabled).toBe(
       true,
     );
+  });
+});
+
+describe("TokensPage capability gate", () => {
+  it("withholds Register Application with the server's reason when the tenant app register is not offered", () => {
+    caps.capability.mockImplementation((op: string) =>
+      op === registerOp ? { enabled: false, reason: "not-configured: iam" } : { enabled: true },
+    );
+    render(<TokensPage />);
+    const open = screen.getByText("Register Application").closest("button") as HTMLButtonElement;
+    expect(open.disabled).toBe(true);
+    expect(open.getAttribute("title")).toBe("not-configured: iam");
+    expect(open.getAttribute("data-capability-op")).toBe(registerOp);
+    expect(open.getAttribute("data-capability-enabled")).toBe("false");
+    fireEvent.click(open);
+    expect(screen.queryByPlaceholderText("My Application")).toBeNull();
+    expect(iam.registerApp).not.toHaveBeenCalled();
+  });
+
+  it("asks the gate for the tenant app register and gates both register buttons on it when offered", () => {
+    render(<TokensPage />);
+    expect(caps.capability).toHaveBeenCalledWith(registerOp);
+    const open = screen.getByText("Register Application").closest("button") as HTMLButtonElement;
+    expect(open.getAttribute("data-capability-enabled")).toBe("true");
+    fireEvent.click(open);
+    const register = screen.getByText("Register").closest("button") as HTMLButtonElement;
+    expect(register.getAttribute("data-capability-op")).toBe(registerOp);
+    expect(register.getAttribute("data-capability-enabled")).toBe("true");
   });
 });
 
