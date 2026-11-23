@@ -143,8 +143,12 @@ const emailLookupPageSize = 100
 // login's workspace-role lookup (WorkspaceRoleResolver) would fail there;
 // only on that unknown-method error does GetUserByEmail read the tenant's
 // users instead, page by page, and return the first user whose email equals
-// email exactly, or an SDK not-found error when none does. Every other
-// GetByEmail error, and any List error, is returned.
+// email exactly. It answers an SDK not-found error only when the listing is
+// provably complete: the last page holds fewer than emailLookupPageSize users.
+// A full page with no next-page token may hide later users (the v0.12.0-alpha
+// embedded user list ignores PageToken), so that miss fails closed with an SDK
+// unavailable error naming the truncated listing. Every other GetByEmail
+// error, and any List error, is returned.
 func (a *QuicBaaSIAMAdapter) GetUserByEmail(ctx context.Context, tenantID, email string) (*iamsdk.User, error) {
 	users := a.client.User()
 	user, err := users.GetByEmail(ctx, tenantID, email)
@@ -168,6 +172,10 @@ func (a *QuicBaaSIAMAdapter) GetUserByEmail(ctx context.Context, tenantID, email
 		}
 		tok = resp.Pagination.NextPageToken
 		if tok == "" {
+			if len(resp.Users) >= emailLookupPageSize {
+				return nil, sdkerrors.NewUnavailable("iam.GetUserByEmail",
+					"the user listing of tenant "+tenantID+" was truncated at a full page with no next-page token; cannot tell whether a user has the email "+email)
+			}
 			break
 		}
 	}
