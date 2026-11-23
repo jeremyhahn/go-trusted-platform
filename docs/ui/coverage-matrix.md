@@ -608,10 +608,10 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `SDNService.GetPolicy` | `GET /policies/{id}` | - | - | - | missing |
 | `SDNService.ListPolicies` | `GET /policies` | - | - | - | missing |
 | `SDNService.DeletePolicy` | - | - | - | - | missing |
-| `SDNService.CreateNetworkZone` | `POST /zones` | `(dashboard)/networking/zones/page.tsx` | - | - | partial |
-| `SDNService.UpdateNetworkZone` | `PUT /zones/{name}` | `(dashboard)/networking/zones/page.tsx` | - | - | partial |
-| `SDNService.DeleteNetworkZone` | `DELETE /zones/{name}` | `(dashboard)/networking/zones/page.tsx` | - | - | partial |
-| `SDNService.ListNetworkZones` | `GET /zones` | `(dashboard)/networking/zones/page.tsx` | - | - | partial |
+| `SDNService.CreateNetworkZone` | `POST /zones` | `(dashboard)/networking/zones/page.tsx` | - | `real-server/networking-zones.spec.ts` | covered |
+| `SDNService.UpdateNetworkZone` | `PUT /zones/{name}` | `(dashboard)/networking/zones/page.tsx` | - | `real-server/networking-zones.spec.ts` | covered |
+| `SDNService.DeleteNetworkZone` | `DELETE /zones/{name}` | `(dashboard)/networking/zones/page.tsx` | - | `real-server/networking-zones.spec.ts` | covered |
+| `SDNService.ListNetworkZones` | `GET /zones` | `(dashboard)/networking/zones/page.tsx` | - | `real-server/networking-zones.spec.ts` | covered |
 | `SDNService.StreamFlowLogs` | - | - | - | - | not-UI: streaming plumbing |
 
 ## SwitchService (`switch.proto`)
@@ -759,13 +759,13 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | PXEService | 15 | 3 | 1 | 11 | 0 | 0 |
 | RegistryService | 6 | 0 | 0 | 4 | 2 | 0 |
 | SchedulerService | 11 | 0 | 0 | 0 | 0 | 11 |
-| SDNService | 29 | 11 | 5 | 12 | 1 | 0 |
+| SDNService | 29 | 15 | 1 | 12 | 1 | 0 |
 | SwitchService | 5 | 0 | 0 | 5 | 0 | 0 |
 | TenantService | 19 | 4 | 4 | 11 | 0 | 0 |
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **122** | **65** | **261** | **50** | **31** |
+| **Total** | **529** | **126** | **61** | **261** | **50** | **31** |
 
 ## Proposed slices
 
@@ -798,7 +798,7 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 25. **PXEService: Device, DeviceByMAC, State, DeviceEnrolled, Authorize, Quarantine…**: 12 operations (11 missing, 1 partial): GetDevice, RemoveDevice, GetDeviceByMAC, UpdateState, SetDeviceEnrolled, Authorize, Quarantine, Retry, GetEvents, StartService, StopService, WebhookComplete.
 26. **RegistryService: List, Inspect, Delete, Status**: 4 operations (4 missing, 0 partial): List, Inspect, Delete, Status.
 27. **SDNService (1/2): Bridge, Port, PortState, Flow, PortAuth, PortStat…**: 13 operations (12 missing, 1 partial): DeleteBridge, GetBridge, GetPort, AuthenticatePort, SetPortState, FlushFlows, RevokePortAuth, GetPortStats, GetFlowStats, ApplyPolicy, GetPolicy, ListPolicies, DeletePolicy.
-28. **SDNService (2/2): NetworkZone**: 4 operations (4 missing, 0 partial): CreateNetworkZone, UpdateNetworkZone, DeleteNetworkZone, ListNetworkZones.
+28. **SDNService (2/2): NetworkZone**: 4 operations (4 missing, 0 partial): CreateNetworkZone, UpdateNetworkZone, DeleteNetworkZone, ListNetworkZones. Done: `(dashboard)/networking/zones/page.tsx`, `real-server/networking-zones.spec.ts` (#2065).
 29. **SwitchService: Port, PortStatus, PortVLAN**: 5 operations (5 missing, 0 partial): ListPorts, EnablePort, DisablePort, GetPortStatus, SetPortVLAN.
 30. **TenantService: Tenant, TenantByName, Quota, Sync, TenantDEK, TenantDEKStatus…**: 15 operations (11 missing, 4 partial): ListTenants, CreateTenant, UpdateTenant, DeleteTenant, SuspendTenant, ResumeTenant, GetTenantByName, UpdateQuotas, CheckQuota, Sync, RotateTenantDEK, GetTenantDEKStatus, InitTenantBarrier, UnsealTenantBarrier, SealTenantBarrier.
 31. **TPMService (1/2): Provision, Clear, Capability, PlatformAttribute, EK, EKCertificate…**: 15 operations (8 missing, 7 partial): Provision, Clear, GetCapabilities, GetPlatformAttributes, CreateEK, DeleteEK, ImportEKCertificate, CreateSRK, DeleteSRK, CreateAK, GetAK, DeleteAK, Quote, VerifyQuote, Certify.
