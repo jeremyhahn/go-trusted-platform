@@ -33,6 +33,8 @@ import {
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Separator } from '@/components/ui/separator';
 import { useToast, useApi, useDevice, useMutation } from '@/hooks';
+import { useCapabilities } from '@/hooks/use-capabilities';
+import { Gated } from '@/components/features/capabilities/gated';
 import type { DeviceRole } from 'trusted-platform-sdk';
 import { deviceRoleLabel } from '@/lib/device-role';
 
@@ -70,6 +72,8 @@ export default function TemplateDetailClient() {
   const { toast } = useToast();
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const deviceService = useDevice();
+  const { loading: capsLoading, capability } = useCapabilities();
+  const getCap = capability('GET /api/v1/device/templates/{id:[0-9]+}');
 
   const {
     data: template,
@@ -80,6 +84,7 @@ export default function TemplateDetailClient() {
     () => deviceService.getTemplate(templateId),
     [templateId],
     {
+      enabled: !capsLoading && getCap.enabled,
       onError: (err) => {
         toast({
           title: 'Error loading template',
@@ -113,6 +118,25 @@ export default function TemplateDetailClient() {
       },
     }
   );
+
+  if (!capsLoading && !getCap.enabled) {
+    return (
+      <div className="flex flex-col gap-6">
+        <Button variant="ghost" className="w-fit" onClick={() => router.push('/devices/templates')}>
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          Back to Templates
+        </Button>
+        <Card data-testid="template-not-enabled">
+          <CardHeader>
+            <CardTitle>Device templates are not enabled on this server</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">{getCap.reason}</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (
@@ -184,27 +208,33 @@ export default function TemplateDetailClient() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            onClick={() => router.push(`/devices/templates/${templateId}/edit`)}
-          >
-            <Pencil className="mr-2 h-4 w-4" />
-            Edit Template
-          </Button>
-          <Button
-            onClick={() => router.push(`/devices/templates/${templateId}/create-profile`)}
-          >
-            <Plus className="mr-2 h-4 w-4" />
-            Create Profile from Template
-          </Button>
-          <Button
-            variant="destructive"
-            size="icon"
-            onClick={() => setIsDeleteDialogOpen(true)}
-          >
-            <Trash2 className="h-4 w-4" />
-            <span className="sr-only">Delete template</span>
-          </Button>
+          <Gated op="PUT /api/v1/device/templates/{id:[0-9]+}">
+            <Button
+              variant="outline"
+              onClick={() => router.push(`/devices/templates/${templateId}/edit`)}
+            >
+              <Pencil className="mr-2 h-4 w-4" />
+              Edit Template
+            </Button>
+          </Gated>
+          <Gated op="POST /api/v1/device/templates/{id:[0-9]+}/create-profile">
+            <Button
+              onClick={() => router.push(`/devices/templates/${templateId}/create-profile`)}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Create Profile from Template
+            </Button>
+          </Gated>
+          <Gated op="DELETE /api/v1/device/templates/{id:[0-9]+}">
+            <Button
+              variant="destructive"
+              size="icon"
+              onClick={() => setIsDeleteDialogOpen(true)}
+            >
+              <Trash2 className="h-4 w-4" />
+              <span className="sr-only">Delete template</span>
+            </Button>
+          </Gated>
         </div>
       </div>
 
@@ -340,16 +370,18 @@ export default function TemplateDetailClient() {
             >
               Cancel
             </Button>
-            <Button
-              variant="destructive"
-              onClick={() => deleteTemplateMutation.mutate(undefined)}
-              disabled={deleteTemplateMutation.isLoading}
-            >
-              {deleteTemplateMutation.isLoading && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
-              Delete Template
-            </Button>
+            <Gated op="DELETE /api/v1/device/templates/{id:[0-9]+}">
+              <Button
+                variant="destructive"
+                onClick={() => deleteTemplateMutation.mutate(undefined)}
+                disabled={deleteTemplateMutation.isLoading}
+              >
+                {deleteTemplateMutation.isLoading && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                Delete Template
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
