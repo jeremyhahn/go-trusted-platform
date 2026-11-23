@@ -9,7 +9,7 @@ type MutationOpts = {
 type ApiOpts = { onError?: (err: Error) => void };
 type Cell = (ctx: { row: { original: unknown } }) => React.ReactNode;
 type Action = { label: string; onClick: () => void; disabled?: boolean; title?: string };
-type Bulk = { label: string; onClick: (rows: unknown[]) => void };
+type Bulk = { label: string; onClick: (rows: unknown[]) => void; disabled?: boolean; title?: string };
 
 const push = vi.fn();
 const toast = vi.fn();
@@ -69,7 +69,7 @@ vi.mock("@/components/ui/data-table", () => ({
         </div>
       ))}
       {props.bulkActions?.map((a) => (
-        <button key={a.label} onClick={() => a.onClick(props.data)}>
+        <button key={a.label} onClick={() => a.onClick(props.data)} disabled={a.disabled} title={a.title}>
           {a.label}
         </button>
       ))}
@@ -324,5 +324,25 @@ describe("GroupsPage capability gate", () => {
     const del = within(rows()[0]).getByRole("button", { name: "Delete" });
     expect((del as HTMLButtonElement).disabled).toBe(false);
     expect(del.hasAttribute("title")).toBe(false);
+  });
+
+  it("withholds Delete selected with the server's reason when DELETE /api/v1/iam/groups/{id} is not offered", () => {
+    caps.capability.mockImplementation((op: string) =>
+      op === "DELETE /api/v1/iam/groups/{id}" ? { enabled: false, reason: "unimplemented" } : { enabled: true },
+    );
+    render(<GroupsPage />);
+    const bulk = screen.getByRole("button", { name: "Delete selected" }) as HTMLButtonElement;
+    expect(bulk.disabled).toBe(true);
+    expect(bulk.getAttribute("title")).toBe("unimplemented");
+    fireEvent.click(bulk);
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(deleteGroup).not.toHaveBeenCalled();
+  });
+
+  it("leaves Delete selected enabled with no title when the server offers the delete", () => {
+    render(<GroupsPage />);
+    const bulk = screen.getByRole("button", { name: "Delete selected" }) as HTMLButtonElement;
+    expect(bulk.disabled).toBe(false);
+    expect(bulk.hasAttribute("title")).toBe(false);
   });
 });
