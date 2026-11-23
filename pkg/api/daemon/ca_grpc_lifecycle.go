@@ -74,23 +74,24 @@ func (e ErrQuicBaaSCAInject) Unwrap() error { return e.Cause }
 // AppCAInitializer runs the app's CA bring-up path, (*app.App).LoadOrInitCA,
 // the same path AttachNodeCA takes at start-up, then hands the CA to the
 // embedded QuicBaaS CertificateService and ceremony CA as start-up does, so
-// SDK certificate issuance and ceremonies use it. A refusal fails InitCA
-// with ErrQuicBaaSCAInject. It returns nil for a nil app and for an app with
-// no CA configuration: there is nothing InitCA can bring up, so the daemon
-// expects no CA.
+// SDK certificate issuance and ceremonies use it. Both steps run through
+// (*app.App).ActivateCA: a refusal fails InitCA with ErrQuicBaaSCAInject and
+// leaves nothing published (App.CA and the embedded ceremony CA go back to
+// what they were, and InitCA does not set the daemon holder), so every CA
+// reader agrees; a retried InitCA loads the stored CA and injects it again.
+// It returns nil for a nil app and for an app with no CA configuration:
+// there is nothing InitCA can bring up, so the daemon expects no CA.
 func AppCAInitializer(a *app.App) CAInitializer {
 	if a == nil || a.CAConfig == nil {
 		return nil
 	}
 	return func(ctx context.Context) (quicbaasca.CACertificateAuthority, error) {
-		if err := a.LoadOrInitCA(ctx, nil); err != nil {
-			return nil, err
-		}
-		ca := a.CurrentCA()
-		if err := injectQuicBaaSCA(a, ca); err != nil {
-			return nil, ErrQuicBaaSCAInject{Cause: err}
-		}
-		return ca, nil
+		return a.ActivateCA(ctx, func(ca quicbaasca.CACertificateAuthority) error {
+			if err := injectQuicBaaSCA(a, ca); err != nil {
+				return ErrQuicBaaSCAInject{Cause: err}
+			}
+			return nil
+		})
 	}
 }
 
