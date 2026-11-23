@@ -70,4 +70,9 @@ describe("links to pages", () => {
       expect(hrefs.filter((href) => !hasPage(href))).toEqual([]);
     },
   );
+
+  it("the sidebar links each href once", () => {
+    const hrefs = linkedHrefs("components/layout/app-sidebar.tsx");
+    expect(hrefs.filter((h, i) => hrefs.indexOf(h) !== i)).toEqual([]);
+  });
 });
