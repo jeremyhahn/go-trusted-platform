@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Plus, RefreshCw, MoreHorizontal, RotateCcw, Trash2, Copy, Download, AlertCircle, Loader2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Button } from '@/components/ui/button';
@@ -23,6 +23,10 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { ServiceUnavailableState } from '@/components/features/platform';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Gated } from '@/components/features/capabilities/gated';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { useApi, useCompute, useMutation, useToast } from '@/hooks';
 import type { Snapshot, VM } from 'trusted-platform-sdk';
@@ -41,6 +45,10 @@ const sourceTypeColors = {
 export default function SnapshotsPage() {
   const { toast } = useToast();
   const compute = useCompute();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createVmId, setCreateVmId] = useState('');
+  const [createName, setCreateName] = useState('');
+  const [createMemory, setCreateMemory] = useState(false);
 
   // Fetch all VMs to get their snapshots
   const {
@@ -152,6 +160,45 @@ export default function SnapshotsPage() {
       },
     }
   );
+
+  const resetCreate = () => {
+    setCreateVmId('');
+    setCreateName('');
+    setCreateMemory(false);
+  };
+
+  // Create snapshot mutation
+  const createSnapshotMutation = useMutation(
+    async ({ vmId, name, memorySnapshot }: { vmId: string; name: string; memorySnapshot: boolean }) => {
+      return compute.createSnapshot({ vmId, config: { name: name.trim(), memorySnapshot } });
+    },
+    {
+      onSuccess: () => {
+        toast({
+          title: 'Snapshot created',
+          description: 'The snapshot has been created successfully',
+          variant: 'success',
+        });
+        setCreateOpen(false);
+        resetCreate();
+        refetchSnapshots();
+      },
+      onError: (error) => {
+        toast({
+          title: 'Error creating snapshot',
+          description: error.message,
+          variant: 'destructive',
+        });
+      },
+    }
+  );
+
+  const handleCreate = () => {
+    if (!createVmId || !createName.trim()) {
+      return;
+    }
+    createSnapshotMutation.mutate({ vmId: createVmId, name: createName, memorySnapshot: createMemory });
+  };
 
   // Restore snapshot mutation
   const restoreSnapshotMutation = useMutation(
@@ -283,20 +330,76 @@ export default function SnapshotsPage() {
           <Button variant="outline" size="icon" onClick={handleRefresh} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button
-            onClick={() =>
-              toast({
-                title: 'Feature Not Available',
-                description: 'Create snapshot from this page coming soon. Use VM details page to create snapshots.',
-                variant: 'default',
-              })
-            }
-          >
-            <Plus className="mr-2 h-4 w-4" />
-            Create Snapshot
-          </Button>
+          <Gated op="POST /api/v1/compute/vms/{id}/snapshots">
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Create Snapshot
+            </Button>
+          </Gated>
         </div>
       </div>
+
+      <Dialog
+        open={createOpen}
+        onOpenChange={(open) => {
+          setCreateOpen(open);
+          if (!open) {
+            resetCreate();
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create snapshot</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="create-snapshot-vm">Source VM</Label>
+              <select
+                id="create-snapshot-vm"
+                aria-label="Source VM"
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                value={createVmId}
+                onChange={(e) => setCreateVmId(e.target.value)}
+              >
+                <option value="">Choose a VM</option>
+                {vms.map((vm: VM) => (
+                  <option key={vm.id} value={vm.id}>
+                    {vm.config?.name || vm.id}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="create-snapshot-name">Snapshot name</Label>
+              <Input
+                id="create-snapshot-name"
+                aria-label="Snapshot name"
+                value={createName}
+                onChange={(e) => setCreateName(e.target.value)}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                id="create-snapshot-memory"
+                type="checkbox"
+                aria-label="Include memory"
+                checked={createMemory}
+                onChange={(e) => setCreateMemory(e.target.checked)}
+              />
+              <Label htmlFor="create-snapshot-memory">Include memory</Label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              onClick={handleCreate}
+              disabled={!createVmId || !createName.trim() || createSnapshotMutation.isLoading}
+            >
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="grid gap-4 md:grid-cols-3">
         <div className="rounded-lg border border-border bg-card p-6">
@@ -324,7 +427,7 @@ export default function SnapshotsPage() {
           <AlertDescription>
             {vms.length === 0
               ? 'No VMs are currently running. Create a VM first to take snapshots.'
-              : 'No snapshots have been created yet. Navigate to a VM details page to create a snapshot.'}
+              : 'No snapshots have been created yet. Use Create Snapshot to take one.'}
           </AlertDescription>
         </Alert>
       ) : (
