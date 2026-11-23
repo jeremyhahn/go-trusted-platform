@@ -3,9 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DNSRecord } from "@/types/infrastructure";
 
-const { dns, toast } = vi.hoisted(() => ({
+const { dns, toast, off } = vi.hoisted(() => ({
   dns: { addRecord: vi.fn(), updateRecord: vi.fn() },
   toast: vi.fn(),
+  off: new Set<string>(),
 }));
 
 vi.mock("@/hooks", async (importOriginal) => ({
@@ -13,6 +14,18 @@ vi.mock("@/hooks", async (importOriginal) => ({
   useDNS: () => dns,
   useToast: () => ({ toast }),
 }));
+
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: (op: string) =>
+      off.has(op) ? { enabled: false, reason: "not-configured: dns" } : { enabled: true },
+  }),
+}));
+
+const CREATE_OP = "POST /api/v1/dns/zones/{zone}/records";
+const UPDATE_OP = "PUT /api/v1/dns/zones/{zone}/records";
 
 import { DNSRecordForm } from "./dns-record-form";
 
@@ -52,6 +65,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  off.clear();
 });
 
 describe("DNSRecordForm (#2060)", () => {
@@ -175,5 +189,87 @@ describe("DNSRecordForm (#2060)", () => {
     await waitFor(() => expect(textbox("Name").value).toBe(""));
     expect(textbox("Value").value).toBe("");
     expect(screen.getByRole("heading", { name: "Add DNS Record" })).toBeTruthy();
+  });
+
+  it("withholds Create with the server's reason when POST /api/v1/dns/zones/{zone}/records is not offered", async () => {
+    off.add(CREATE_OP);
+    render(
+      <DNSRecordForm zoneName={zoneName} open onOpenChange={vi.fn()} onSuccess={vi.fn()} />,
+    );
+
+    fireEvent.change(textbox("Name"), { target: { value: "www" } });
+    fireEvent.change(textbox("Value"), { target: { value: "www-target" } });
+    const button = screen.getByRole("button", { name: "Create" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("title")).toBe("not-configured: dns");
+    expect(button.getAttribute("data-capability-op")).toBe(CREATE_OP);
+    expect(button.getAttribute("data-capability-enabled")).toBe("false");
+
+    fireEvent.click(button);
+    fireEvent.submit(button.closest("form") as HTMLFormElement);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(dns.addRecord).not.toHaveBeenCalled();
+  });
+
+  it("withholds Update when PUT /api/v1/dns/zones/{zone}/records is not offered", async () => {
+    off.add(UPDATE_OP);
+    render(
+      <DNSRecordForm
+        zoneName={zoneName}
+        open
+        onOpenChange={vi.fn()}
+        onSuccess={vi.fn()}
+        record={mxRecord}
+      />,
+    );
+
+    fireEvent.change(textbox("Value"), { target: { value: "mx2.example.com." } });
+    const button = screen.getByRole("button", { name: "Update" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("data-capability-op")).toBe(UPDATE_OP);
+
+    fireEvent.click(button);
+    fireEvent.submit(button.closest("form") as HTMLFormElement);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(dns.updateRecord).not.toHaveBeenCalled();
+  });
+
+  it("gates Create on POST and Update on PUT when the server offers both", () => {
+    render(
+      <DNSRecordForm zoneName={zoneName} open onOpenChange={vi.fn()} onSuccess={vi.fn()} />,
+    );
+    const create = screen.getByRole("button", { name: "Create" });
+    expect(create.getAttribute("data-capability-op")).toBe(CREATE_OP);
+    expect(create.getAttribute("data-capability-enabled")).toBe("true");
+
+    cleanup();
+    render(
+      <DNSRecordForm
+        zoneName={zoneName}
+        open
+        onOpenChange={vi.fn()}
+        onSuccess={vi.fn()}
+        record={mxRecord}
+      />,
+    );
+    const update = screen.getByRole("button", { name: "Update" });
+    expect(update.getAttribute("data-capability-op")).toBe(UPDATE_OP);
+    expect(update.getAttribute("data-capability-enabled")).toBe("true");
+  });
+
+  it("keeps Update enabled when only POST is withheld", () => {
+    off.add(CREATE_OP);
+    render(
+      <DNSRecordForm
+        zoneName={zoneName}
+        open
+        onOpenChange={vi.fn()}
+        onSuccess={vi.fn()}
+        record={mxRecord}
+      />,
+    );
+    const update = screen.getByRole("button", { name: "Update" }) as HTMLButtonElement;
+    expect(update.disabled).toBe(false);
+    expect(update.getAttribute("data-capability-enabled")).toBe("true");
   });
 });
