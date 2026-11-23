@@ -7,10 +7,13 @@ import { unwrapPayload } from './fixtures/wire';
  * Compute pages against the real platformd (#2044, epic #1665).
  *
  * The test daemon's config (web/e2e/real-server/platformd.test.yaml) has no
- * compute section, so the server answers the compute routes 503 not
- * configured. Each test reads what the server answered the page itself and
- * asserts the page shows that: the not-configured state today, the listed
- * VMs and their links when a server answers with compute configured.
+ * compute section, so the server answers the compute routes with the
+ * structured 503 reason SERVICE_NOT_CONFIGURED. Each test reads what the
+ * server answered the page itself and asserts the page shows that: the
+ * "Compute is not available on this node" state today on the VM list, the
+ * snapshots list, the snapshot detail and the VM detail (no error toast or
+ * alert), and the listed VMs and their links when a server answers with
+ * compute configured.
  *
  * Read-only: no page.route, no writes, and no write control is clicked. Each
  * gate is checked against GET /api/v1/capabilities; an offered control is
@@ -65,6 +68,17 @@ async function expectGated(control: Locator, op: string, listed: Capabilities): 
 }
 
 const UNAVAILABLE = 'Compute is not available on this node';
+
+// The SDK retries a 5xx refusal with backoff (1 s, 2 s, 4 s) before the page
+// sees it.
+const AFTER_RETRIES = { timeout: 20_000 };
+
+/** Whether res is the structured 503 for a node without compute. */
+async function notConfigured(res: Response): Promise<boolean> {
+  if (res.status() !== 503) return false;
+  const body = (await res.json().catch(() => undefined)) as { reason?: unknown } | undefined;
+  return body?.reason === 'SERVICE_NOT_CONFIGURED';
+}
 
 test.describe('Compute pages', () => {
   test('the VM list shows what GET /api/v1/compute/vms answered', async ({ adminPage, sdk }) => {
@@ -133,7 +147,13 @@ test.describe('Compute pages', () => {
       if (!snapshot) await expect(adminPage.getByText('Snapshot not found')).toBeVisible();
       return;
     }
-    // snapshot-detail-client.tsx toasts every refused answer, and shows
+    if (await notConfigured(res)) {
+      // No compute on this node: the unavailable state, not an error toast.
+      await expect(adminPage.getByText(UNAVAILABLE)).toBeVisible(AFTER_RETRIES);
+      await expect(adminPage.getByText('Error loading snapshot')).toHaveCount(0);
+      return;
+    }
+    // snapshot-detail-client.tsx toasts every other refused answer, and shows
     // "Snapshot not found" when the refusal is a 404.
     await expect(adminPage.getByText('Error loading snapshot').first()).toBeVisible();
     if (res.status() === 404) {
@@ -158,8 +178,14 @@ test.describe('Compute pages', () => {
       }
       return;
     }
+    if (await notConfigured(res)) {
+      // No compute on this node: the unavailable state, not the error alert.
+      await expect(adminPage.getByText(UNAVAILABLE)).toBeVisible(AFTER_RETRIES);
+      await expect(adminPage.getByTestId('vm-detail-error')).toHaveCount(0);
+      return;
+    }
     // The SDK retries a 5xx refusal 1 s, 2 s, 4 s before the page shows its error state.
-    await expect(adminPage.getByTestId('vm-detail-error')).toBeVisible({ timeout: 20_000 });
+    await expect(adminPage.getByTestId('vm-detail-error')).toBeVisible(AFTER_RETRIES);
     await expect(adminPage.getByText('Virtual Machine Details')).toHaveCount(0);
   });
 });

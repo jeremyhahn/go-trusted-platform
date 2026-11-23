@@ -55,4 +55,18 @@ test.describe('Migrations page', () => {
       listed,
     );
   });
+
+  test('the server lists the finalize op the receiver controls gate', async ({ adminPage, sdk }) => {
+    // The Finalize control lives in the receiver card, which only a Prepare
+    // the page made shows; this read-only spec checks its op against the
+    // server's list so the control can never read NOT_OFFERED.
+    const listed = await capabilityMap(sdk);
+    const finalize = listed.get('POST /api/v1/compute/migrations/{receiverId}/finalize');
+    expect(finalize, 'the capability list carries the finalize op').toBeDefined();
+    expect(finalize?.kind).toBe('route');
+
+    await adminPage.goto('/compute/migrations');
+    await expect(adminPage.getByRole('button', { name: 'Prepare receiver' })).toBeVisible();
+    await expect(adminPage.getByTestId('migration-receiver')).toHaveCount(0);
+  });
 });
