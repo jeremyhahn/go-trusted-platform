@@ -167,6 +167,35 @@ describe('InvitationService', () => {
     });
   });
 
+  describe('delete', () => {
+    it('sends DELETE /v1/invitations/{id} with no body', async () => {
+      vi.mocked(mockClient.delete).mockResolvedValue({
+        success: true,
+        data: { success: true, message: 'invitation deleted' },
+      });
+
+      await service.delete('inv-1');
+
+      expect(mockClient.delete).toHaveBeenCalledWith('/v1/invitations/inv-1');
+      expect(mockClient.post).not.toHaveBeenCalled();
+    });
+
+    it('encodes the id as one path segment', async () => {
+      vi.mocked(mockClient.delete).mockResolvedValue({ success: true, data: { success: true } });
+
+      await service.delete('a/b');
+
+      expect(mockClient.delete).toHaveBeenCalledWith('/v1/invitations/a%2Fb');
+    });
+
+    it('propagates a transport error unchanged', async () => {
+      const failure = new Error('404 Not Found: invitation not found');
+      vi.mocked(mockClient.delete).mockRejectedValue(failure);
+
+      await expect(service.delete('inv-1')).rejects.toBe(failure);
+    });
+  });
+
   describe('accept', () => {
     it('POSTs the request to /v1/invitations/accept', async () => {
       const data = { user: { id: 'u-1' }, tenant: { id: 't-1' } };
