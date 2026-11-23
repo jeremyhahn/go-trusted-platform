@@ -114,3 +114,29 @@ func TestIAMScopeAction_TokensVerifyIsRead(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "read", action)
 }
+
+// TestDaemon_IAMRESTTokenVerifier: the accessor serve.go hands the console's
+// IAM router answers through the daemon's token service, and is an untyped
+// nil when the daemon has none, so the console keeps its 503 (#2053).
+func TestDaemon_IAMRESTTokenVerifier(t *testing.T) {
+	t.Run("no token service is a nil interface", func(t *testing.T) {
+		d := &Daemon{}
+		assert.True(t, d.IAMRESTTokenVerifier() == nil)
+	})
+	t.Run("a token service answers its claims", func(t *testing.T) {
+		d := &Daemon{iamTokenService: newIAMTokenService(stubIAMTokenVerifier{claims: &IAMTokenClaims{
+			Subject:   "svc-a",
+			TenantID:  iamRESTTenantA,
+			Roles:     []string{"viewer"},
+			ExpiresAt: 1893456000,
+		}})}
+		v := d.IAMRESTTokenVerifier()
+		require.NotNil(t, v)
+		got, err := v.Verify(context.Background(), "tok-a")
+		require.NoError(t, err)
+		assert.True(t, got.Valid)
+		assert.Equal(t, "svc-a", got.Subject)
+		assert.Equal(t, iamRESTTenantA, got.TenantID)
+		assert.Equal(t, int64(1893456000), got.ExpiresAt.Unix())
+	})
+}
