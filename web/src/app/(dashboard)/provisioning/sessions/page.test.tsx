@@ -8,12 +8,14 @@ const FULFILL_OP = 'POST /api/v1/provisioning/sessions/{sessionID}/fulfill';
 
 type Answer = { enabled: boolean; reason?: string };
 
-const { push, toast, refetch, sessionsState, caps } = vi.hoisted(() => ({
+const { push, toast, refetch, sessionsState, sessionsArgs, caps } = vi.hoisted(() => ({
   push: vi.fn(),
   toast: vi.fn(),
   refetch: vi.fn(),
   sessionsState: { result: {} as Record<string, unknown> },
+  sessionsArgs: [] as unknown[],
   caps: {
+    loading: false,
     capability: (_op: string): { enabled: boolean; reason?: string } => ({ enabled: true }),
   },
 }));
@@ -24,13 +26,16 @@ vi.mock('next/navigation', () => ({
 
 vi.mock('@/hooks', () => ({
   useToast: () => ({ toast }),
-  useProvisioningSessions: () => sessionsState.result,
+  useProvisioningSessions: (...args: unknown[]) => {
+    sessionsArgs.push(args[0]);
+    return sessionsState.result;
+  },
   useDeviceTemplates: () => ({ templates: [], isLoading: false }),
 }));
 
 vi.mock('@/hooks/use-capabilities', () => ({
   useCapabilities: () => ({
-    loading: false,
+    loading: caps.loading,
     error: undefined,
     capability: (op: string) => caps.capability(op),
   }),
@@ -87,6 +92,8 @@ beforeEach(() => {
   push.mockReset();
   toast.mockReset();
   refetch.mockReset();
+  sessionsArgs.length = 0;
+  caps.loading = false;
   setCaps({});
   setSessions();
 });
@@ -126,16 +133,16 @@ describe('ProvisioningSessionsPage capability gate', () => {
     expect(push).toHaveBeenCalledWith('/provisioning/sessions/sess-1');
   });
 
-  it('withholds Retry on a failed list when the server does not offer it', () => {
+  it('shows the not-enabled notice, not a load error, when the server does not offer the list', () => {
     setCaps({ [LIST_OP]: { enabled: false, reason: 'not-configured: provisioning' } });
     setSessions({ error: new Error('boom') });
     render(<ProvisioningSessionsPage />);
 
-    const retry = screen.getByRole('button', { name: /Retry/ });
-    expect((retry as HTMLButtonElement).disabled).toBe(true);
-    expect(retry.getAttribute('title')).toBe('not-configured: provisioning');
-    fireEvent.click(retry);
-    expect(refetch).not.toHaveBeenCalled();
+    expect(screen.getByTestId('sessions-not-enabled').textContent).toContain(
+      'not-configured: provisioning',
+    );
+    expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull();
+    expect(screen.queryByText('boom')).toBeNull();
   });
 
   it('leaves the controls on when the server offers them', () => {
@@ -150,5 +157,66 @@ describe('ProvisioningSessionsPage capability gate', () => {
     expect(assign.getAttribute('aria-disabled')).not.toBe('true');
     fireEvent.click(assign);
     expect(screen.queryByText('Assign Template to Session')).not.toBeNull();
+  });
+});
+
+function recordedEnabled(): unknown[] {
+  return sessionsArgs.map((opts) => (opts as { enabled?: unknown } | undefined)?.enabled);
+}
+
+describe('ProvisioningSessionsPage list capability', () => {
+  const listOff = { [LIST_OP]: { enabled: false, reason: 'not-configured: provisioning' } };
+
+  it('does not ask for the list when the server does not offer it', () => {
+    setCaps(listOff);
+    render(<ProvisioningSessionsPage />);
+
+    expect(sessionsArgs.length).toBeGreaterThan(0);
+    expect(recordedEnabled().every((v) => v === false)).toBe(true);
+  });
+
+  it('shows the not-enabled notice with the reason', () => {
+    setCaps(listOff);
+    render(<ProvisioningSessionsPage />);
+
+    expect(screen.getByTestId('sessions-not-enabled').textContent).toContain(
+      'not-configured: provisioning',
+    );
+    expect(screen.queryByTestId('provisioning-session-sess-1')).toBeNull();
+    expect(screen.queryByText('No provisioning sessions found')).toBeNull();
+  });
+
+  it('does not poll when the list is off', () => {
+    vi.useFakeTimers();
+    try {
+      setCaps(listOff);
+      render(<ProvisioningSessionsPage />);
+      vi.advanceTimersByTime(30_000);
+      expect(refetch).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('polls every 10 seconds when the list is on', () => {
+    vi.useFakeTimers();
+    try {
+      render(<ProvisioningSessionsPage />);
+      expect(sessionsArgs.length).toBeGreaterThan(0);
+      expect(recordedEnabled().every((v) => v === true)).toBe(true);
+      vi.advanceTimersByTime(10_000);
+      expect(refetch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('waits for the capability answer before asking', () => {
+    caps.loading = true;
+    render(<ProvisioningSessionsPage />);
+
+    expect(sessionsArgs.length).toBeGreaterThan(0);
+    expect(recordedEnabled().every((v) => v === false)).toBe(true);
+    expect(screen.queryByTestId('sessions-not-enabled')).toBeNull();
   });
 });
