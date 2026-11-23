@@ -88,6 +88,14 @@ vi.mock("@/components/features/ca/issue-cert-form", () => ({
   ),
 }));
 
+// #2033 item 5: Gated reads the server's capabilities through this hook.
+const caps = vi.hoisted(() => ({ capability: vi.fn() }));
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: caps.capability }),
+}));
+
+const issueOp = "POST /api/v1/ca/certificates";
+
 function state(over: Partial<ApiState> = {}): ApiState {
   return { data: null, isLoading: false, error: null, refetch: vi.fn(), ...over };
 }
@@ -115,6 +123,8 @@ describe("CertificatesPage", () => {
     tableRows = [];
     alertSpy = vi.fn();
     vi.stubGlobal("alert", alertSpy);
+    caps.capability.mockReset();
+    caps.capability.mockImplementation(() => ({ enabled: true }));
   });
 
   afterEach(() => {
@@ -364,5 +374,32 @@ describe("CertificatesPage", () => {
     });
     render(<CertificatesPage />);
     expect(tableRows.map((r) => r.status)).toEqual(["expired", "revoked", "active", "active", "expired"]);
+  });
+
+  it("withholds Issue Certificate with the server's reason when POST /api/v1/ca/certificates is not offered", () => {
+    caps.capability.mockImplementation((op: string) =>
+      op === issueOp ? { enabled: false, reason: "not-configured: ca" } : { enabled: true }
+    );
+    render(<CertificatesPage />);
+    const issue = screen.getByRole("button", { name: /Issue Certificate/ }) as HTMLButtonElement;
+    expect(issue.disabled).toBe(true);
+    expect(issue.title).toBe("not-configured: ca");
+    expect(issue.getAttribute("data-capability-op")).toBe(issueOp);
+    expect(issue.getAttribute("data-capability-enabled")).toBe("false");
+    fireEvent.click(issue);
+    expect(screen.queryByText("submit issue")).toBeNull();
+    expect(ca.issueCertificate).not.toHaveBeenCalled();
+    const refresh = screen.getByRole("button", { name: /Refresh/ }) as HTMLButtonElement;
+    expect(refresh.disabled).toBe(false);
+  });
+
+  it("asks the gate for the certificate issue op and opens the issue dialog when it is offered", async () => {
+    render(<CertificatesPage />);
+    expect(caps.capability).toHaveBeenCalledWith(issueOp);
+    const issue = screen.getByRole("button", { name: /Issue Certificate/ }) as HTMLButtonElement;
+    expect(issue.getAttribute("data-capability-enabled")).toBe("true");
+    expect(issue.disabled).toBe(false);
+    fireEvent.click(issue);
+    expect(await screen.findByText("submit issue")).toBeTruthy();
   });
 });
