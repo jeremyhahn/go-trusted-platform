@@ -171,9 +171,14 @@ describe('EABCredentialsPage capability gate', () => {
 
   it('withholds each list-page control the server does not offer, with its reason', () => {
     addCredential();
-    caps.capability.mockImplementation(() => ({ enabled: false, reason: 'not-configured: eab' }));
+    // The list read stays on so the rows and their controls render; the
+    // list read's own gate (and Refresh) is covered in the list gate below.
+    caps.capability.mockImplementation((op: string) =>
+      op === LIST_OP ? { enabled: true } : { enabled: false, reason: 'not-configured: eab' },
+    );
     render(<EABCredentialsPage />);
-    for (const [name] of CONTROLS) {
+    for (const [name, op] of CONTROLS) {
+      if (op === LIST_OP) continue;
       const button = button_(name);
       expect(button.disabled, name).toBe(true);
       expect(button.getAttribute('title'), name).toBe('not-configured: eab');
@@ -233,6 +238,9 @@ describe('EABCredentialsPage list gate', () => {
     expect(state.textContent).toContain('EAB credentials are not enabled');
     expect(state.textContent).toContain('not-configured: eab');
     expect(screen.queryByTestId('eab-row-1700000000000000001')).toBeNull();
+    const refresh = button_('Refresh');
+    expect(refresh.disabled).toBe(true);
+    expect(refresh.getAttribute('title')).toBe('not-configured: eab');
   });
 
   it('does not enable the list query when the list is withheld', () => {
