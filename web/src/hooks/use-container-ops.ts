@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useCompute } from 'trusted-platform-sdk';
+import { isServiceNotConfigured, useCompute } from 'trusted-platform-sdk';
 import { containerStatus } from '@/lib/compute-state';
 import type {
   ApiResponse,
@@ -99,6 +99,8 @@ export interface UseContainerOpsResult {
   metrics: ContainerMetrics | null;
   loading: boolean;
   error: string | null;
+  /** The node has no compute service (the structured not-configured 503). */
+  unavailable: boolean;
   refresh: () => Promise<void>;
   refreshMetrics: () => Promise<void>;
   exec: (command: string[]) => Promise<ExecContainerResponse>;
@@ -135,6 +137,7 @@ export function useContainerOps(containerId: string): UseContainerOpsResult {
   const [containerState, setContainerState] = useState<Tagged<Container | null> | null>(null);
   const [metricsState, setMetricsState] = useState<Tagged<ContainerMetrics | null> | null>(null);
   const [errorState, setErrorState] = useState<Tagged<string | null> | null>(null);
+  const [unavailableState, setUnavailableState] = useState<Tagged<boolean> | null>(null);
   const [loadedId, setLoadedId] = useState<string | null>(null);
 
   // The fetches set state only in promise callbacks, never synchronously
@@ -146,13 +149,30 @@ export function useContainerOps(containerId: string): UseContainerOpsResult {
       return compute
         .getContainer(id)
         .then((response) => {
+          // A node without compute answers with the structured
+          // not-configured 503: that is not a failed load.
+          if (!response.success && isServiceNotConfigured(response.error)) {
+            if (!newest()) return;
+            setUnavailableState({ id, value: true });
+            setContainerState({ id, value: null });
+            setErrorState({ id, value: null });
+            return;
+          }
           const value = unwrap(response, 'GetContainer').container;
           if (!newest()) return;
           setContainerState({ id, value });
           setErrorState({ id, value: null });
+          setUnavailableState({ id, value: false });
         })
         .catch((err: unknown) => {
           if (!newest()) return;
+          if (isServiceNotConfigured(err)) {
+            setUnavailableState({ id, value: true });
+            setContainerState({ id, value: null });
+            setErrorState({ id, value: null });
+            return;
+          }
+          setUnavailableState({ id, value: false });
           setErrorState({ id, value: err instanceof Error ? err.message : String(err) });
         })
         .finally(() => {
@@ -198,6 +218,7 @@ export function useContainerOps(containerId: string): UseContainerOpsResult {
   const container = valueFor(containerState, containerId, null);
   const metrics = valueFor(metricsState, containerId, null);
   const error = valueFor(errorState, containerId, null);
+  const unavailable = valueFor(unavailableState, containerId, false);
   // No id means nothing to load.
   const loading = Boolean(containerId) && loadedId !== containerId;
 
@@ -216,7 +237,7 @@ export function useContainerOps(containerId: string): UseContainerOpsResult {
     [compute, containerId]
   );
 
-  return { container, metrics, loading, error, refresh, refreshMetrics, exec, attest };
+  return { container, metrics, loading, error, unavailable, refresh, refreshMetrics, exec, attest };
 }
 
 /**

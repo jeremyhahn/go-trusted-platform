@@ -286,6 +286,16 @@ test.describe('IAM groups, members, permission check and tenants', () => {
     }
   });
 
+  test("the Create Group button on /iam/groups/new carries the server's capability answer", async ({ adminPage, sdk }) => {
+    const caps = await offered(sdk);
+    const create = caps.get('POST /api/v1/iam/groups');
+
+    await adminPage.goto('/iam/groups/new');
+    const button = adminPage.getByRole('button', { name: 'Create Group' });
+    await expect(button).toHaveAttribute('data-capability-op', 'POST /api/v1/iam/groups');
+    await expect(button).toHaveAttribute('data-capability-enabled', create?.enabled ? 'true' : 'false');
+  });
+
   test("gated controls on the group detail carry the server's capability answer", async ({ adminPage, sdk, tenant }) => {
     const caps = await offered(sdk);
     const created = await sdk.iam.createGroup({ tenantId: tenant.id, name: `Gated-${suffix()}` });

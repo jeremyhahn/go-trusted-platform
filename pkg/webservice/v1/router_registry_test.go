@@ -145,6 +145,9 @@ type testHandlerRegistry struct {
 	// assert the skip.
 	iamClient restiam.IAMClient
 	pepClient restiam.PEPClient
+	// The daemon's token verifier the console's IAM router answers
+	// POST /iam/tokens/verify through. Nil keeps the route at 503.
+	tokenVerifier restiam.TokenVerifier
 	// The admin-claim ceremony handler. Nil in the older tests, which assert
 	// the skip; the route-table fixture builds one so the five claim routes
 	// are walked (#420).
@@ -172,6 +175,9 @@ func (r *testHandlerRegistry) DeviceBootHandler() device.BootHandler {
 
 func (r *testHandlerRegistry) IAMClients() (restiam.IAMClient, restiam.PEPClient) {
 	return r.iamClient, r.pepClient
+}
+func (r *testHandlerRegistry) IAMTokenVerifier() restiam.TokenVerifier {
+	return r.tokenVerifier
 }
 
 func (r *testHandlerRegistry) JSONWebTokenHandler() jwt.TokenHandler {

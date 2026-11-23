@@ -92,7 +92,7 @@ describe("TokenVerifyCard", () => {
         tenant_id: "t-1",
         scopes: ["iam:read"],
         roles: ["admin"],
-        expires_at: "2026-12-01T00:00:00Z",
+        expires_at: 1922832000,
       }),
     });
     const targets = recordTargets();
@@ -107,6 +107,10 @@ describe("TokenVerifyCard", () => {
     expect(screen.getByText("t-1")).toBeDefined();
     expect(screen.getByText("iam:read")).toBeDefined();
     expect(screen.getByText("admin")).toBeDefined();
+    expect(
+      screen.getByText(new Date(1922832000 * 1000).toLocaleString()),
+    ).toBeDefined();
+    expect(screen.queryByText(/1970/)).toBeNull();
     expect(sent).toHaveLength(1);
     expect(sent[0].path).toBe("/api/v1/iam/tokens/verify");
     expect(sent[0].body).toEqual({ token: "abc.def.ghi" });
