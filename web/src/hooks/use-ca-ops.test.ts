@@ -28,8 +28,6 @@ vi.mock('@/hooks', () => ({
 }));
 
 import {
-  CA_GATED_CONTROLS,
-  caOperationReason,
   normalizeCAInfo,
   pemToVerifyRequest,
   useCAInfo,
@@ -84,20 +82,6 @@ describe('pemToVerifyRequest', () => {
   it('sends the base64 body of the PEM and asks for revocation', () => {
     const pem = '-----BEGIN CERTIFICATE-----\nAAAA\nBBBB\n-----END CERTIFICATE-----\n';
     expect(pemToVerifyRequest(pem)).toEqual({ certificateDer: 'AAAABBBB', verifyRevocation: true });
-  });
-});
-
-describe('gated CA controls', () => {
-  it('lists InitCA, InstallCACertificates and UninstallCACertificates with a reason each', () => {
-    expect(CA_GATED_CONTROLS.map((c) => c.operation)).toEqual([
-      'InitCA',
-      'InstallCACertificates',
-      'UninstallCACertificates',
-    ]);
-    for (const c of CA_GATED_CONTROLS) {
-      expect(caOperationReason(c.operation)).toMatch(/^Not available: /);
-      expect(caOperationReason(c.operation)).toContain(c.operation);
-    }
   });
 });
 

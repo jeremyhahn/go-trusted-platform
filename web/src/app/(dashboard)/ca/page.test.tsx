@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, fireEvent } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 
 afterEach(cleanup);
 
-// The overview reads GetCAInfo and shows the three lifecycle controls the
-// daemon serves no REST route for (InitCA, InstallCACertificates,
-// UninstallCACertificates), disabled with their reason.
+// The overview reads GetCAInfo and renders the gated lifecycle controls
+// (InitCA, InstallCACertificates, UninstallCACertificates) in its Lifecycle card.
 const getInfo = vi.fn();
+
+vi.mock('@/components/features/ca/ca-lifecycle-controls', () => ({
+  CALifecycleControls: () => <div data-testid="ca-lifecycle-controls" />,
+}));
 
 vi.mock('next/link', () => ({
   default: ({ children, href, ...rest }: { children: React.ReactNode; href: string }) => (
@@ -50,21 +53,14 @@ describe('CA overview page', () => {
     expect(screen.getByTestId('ca-root-cert').textContent).toContain('serial 0a');
   });
 
-  it.each([
-    ['ca-init-control', 'Initialize CA', 'InitCA'],
-    ['ca-install-control', 'Install CA certificates', 'InstallCACertificates'],
-    ['ca-uninstall-control', 'Uninstall CA certificates', 'UninstallCACertificates'],
-  ])('%s is disabled with its reason and calls nothing', (id, label, op) => {
+  it('renders the lifecycle controls in the Lifecycle card', () => {
     render(<CAOverviewPage />);
-    const control = screen.getByTestId(id) as HTMLButtonElement;
-    expect(control.textContent).toBe(label);
-    expect(control.disabled).toBe(true);
-    const reason = screen.getByTestId(`${id}-reason`);
-    expect(reason.textContent).toMatch(/^Not available: /);
-    expect(reason.textContent).toContain(op);
-    expect(control.getAttribute('aria-describedby')).toBe(reason.id);
-    getInfo.mockClear();
-    fireEvent.click(control);
-    expect(getInfo).not.toHaveBeenCalled();
+    // CardTitle sits in CardHeader, which sits in the Card.
+    const card = screen.getByText('Lifecycle').parentElement?.parentElement as HTMLElement;
+    expect(within(card).getByTestId('ca-lifecycle-controls')).toBeTruthy();
+    const placeholders = Array.from(document.body.querySelectorAll('*')).filter((el) =>
+      (el.textContent ?? '').startsWith('Not available: '),
+    );
+    expect(placeholders).toHaveLength(0);
   });
 });
