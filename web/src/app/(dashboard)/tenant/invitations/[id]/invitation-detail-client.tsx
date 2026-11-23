@@ -3,7 +3,7 @@
 import * as React from "react";
 import { use } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { AlertCircle, ArrowLeft, Loader2, Mail } from "lucide-react";
+import { AlertCircle, ArrowLeft, Loader2, Mail, Trash2 } from "lucide-react";
 import { resolveDynamicId } from "@/utils/dynamic-route";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -48,7 +48,7 @@ export default function InvitationDetailClient({ params }: { params: Promise<{ i
 
   const { data, isLoading, error, refetch } = useInvitationById(id);
   const invitation = React.useMemo(() => toInvitationView(data), [data]);
-  const { revoke } = useInvitation();
+  const { revoke, remove } = useInvitation();
   const { toast } = useToast();
 
   const handleRevoke = async () => {
@@ -66,6 +66,26 @@ export default function InvitationDetailClient({ params }: { params: Promise<{ i
       toast({
         title: "Failed to revoke invitation",
         description: err instanceof Error ? err.message : "Failed to revoke invitation",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!invitation) return;
+    if (!window.confirm(`Delete the invitation to ${invitation.email}? The record is removed.`)) return;
+    try {
+      await remove.mutateAsync(invitation.id);
+      toast({
+        title: "Invitation deleted",
+        description: `The invitation to ${invitation.email} has been removed`,
+        variant: "success",
+      });
+      router.push("/tenant/invitations");
+    } catch (err) {
+      toast({
+        title: "Failed to delete invitation",
+        description: err instanceof Error ? err.message : "Failed to delete invitation",
         variant: "destructive",
       });
     }
@@ -148,6 +168,21 @@ export default function InvitationDetailClient({ params }: { params: Promise<{ i
                 onClick={() => void handleRevoke()}
               >
                 Revoke
+              </Button>
+            </Gated>
+          </div>
+        )}
+        {invitation.status !== "pending" && (
+          <div className="ml-auto">
+            <Gated op="DELETE /api/v1/invitations/{id:[0-9]+}">
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={remove?.isLoading ?? false}
+                onClick={() => void handleDelete()}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete Invitation
               </Button>
             </Gated>
           </div>

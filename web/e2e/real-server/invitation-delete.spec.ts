@@ -77,4 +77,15 @@ test.describe('Invitation delete', () => {
       await sdk.invitation.delete(inv.id);
     }
   });
+
+  test('Delete Invitation on the detail page removes a revoked invitation', async ({ adminPage, sdk }) => {
+    const inv = await revokedInvitation(sdk, 'detail-delete');
+    await adminPage.goto(`/tenant/invitations/${encodeURIComponent(inv.id)}/`);
+    await expect(adminPage.getByTestId('invitation-status')).toHaveText('Revoked');
+    adminPage.once('dialog', (d) => void d.accept());
+    await adminPage.getByRole('button', { name: 'Delete Invitation' }).click();
+
+    await expect(adminPage).toHaveURL(/\/tenant\/invitations\/?$/);
+    await expect.poll(() => exists(sdk, inv.id)).toBe(false);
+  });
 });
