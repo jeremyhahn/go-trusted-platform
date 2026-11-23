@@ -69,4 +69,8 @@ for (const confirm of confirms) {
   assert.ok(!spec.includes(confirm), `platform-daemon.spec.ts never clicks the confirm ${confirm}`);
 }
 
+// A real-server spec fails, never skips (Refs #2047): the test daemon registers its configured services.
+assert.ok(!spec.includes('test.skip('), 'platform-daemon.spec.ts has no test.skip(');
+assert.ok(!spec.includes('test.fixme('), 'platform-daemon.spec.ts has no test.fixme(');
+
 console.log('platform-daemon.check: ok');
