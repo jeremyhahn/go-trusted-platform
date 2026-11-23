@@ -123,11 +123,11 @@ export default function GatewayIPAMPage() {
       </form>
 
       {ipam.error ? (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" data-testid="gateway-allocations-error" className="text-sm text-destructive">
           {ipam.error}
         </p>
       ) : ipam.allocations.length === 0 ? (
-        <p className="text-sm text-muted-foreground py-4">{ipam.isLoading ? 'Loading…' : 'No allocations'}</p>
+        <p data-testid="gateway-allocations-empty" className="text-sm text-muted-foreground py-4">{ipam.isLoading ? 'Loading…' : 'No allocations'}</p>
       ) : (
         <Table data-testid="gateway-allocations">
           <TableHeader>
@@ -142,7 +142,7 @@ export default function GatewayIPAMPage() {
           </TableHeader>
           <TableBody>
             {ipam.allocations.map((a) => (
-              <TableRow key={a.ip}>
+              <TableRow key={a.ip} data-testid="gateway-allocation-row">
                 <TableCell className="font-mono text-sm">{a.ip}</TableCell>
                 <TableCell>{a.poolId}</TableCell>
                 <TableCell>{a.hostname ?? '—'}</TableCell>

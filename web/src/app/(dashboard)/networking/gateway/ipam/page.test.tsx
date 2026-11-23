@@ -129,7 +129,8 @@ describe('GatewayIPAMPage', () => {
     stubControlPlane({ [`GET ${PATH}`]: refused(503, 'gateway not configured') });
     render(withControlPlane(<GatewayIPAMPage />));
 
-    const error = await screen.findByTestId('gateway-allocations-error');
+    // The SDK retries a 503 three times (1 s, 2 s, 4 s) before it reports it.
+    const error = await screen.findByTestId('gateway-allocations-error', {}, { timeout: 12_000 });
     expect(error.textContent).toContain('gateway not configured');
-  });
+  }, 15_000);
 });
