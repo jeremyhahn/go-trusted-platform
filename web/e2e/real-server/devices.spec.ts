@@ -6,7 +6,7 @@ import { unwrapPayload } from './fixtures/wire';
 /**
  * Devices against the real platformd (#2048, epic #1665).
  *
- * No page.route mock: two devices are seeded through the SDK per test and
+ * No route mock: two devices are seeded through the SDK per test and
  * each assertion compares the page with what the server answered.
  *
  * Covered: the device count and find-by-serial on /devices, the model edit

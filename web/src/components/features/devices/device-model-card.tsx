@@ -68,7 +68,7 @@ export function DeviceModelCard({ deviceId, model, onSaved }: DeviceModelCardPro
           <Input id="device-model-input" value={value} onChange={(e) => setValue(e.target.value)} />
         </div>
         <Gated op={DEVICE_UPDATE_OP}>
-          <Button disabled={saveMutation.isLoading || unchanged} onClick={() => saveMutation.mutate(trimmed)}>
+          <Button data-testid="device-model-save" disabled={saveMutation.isLoading || unchanged} onClick={() => saveMutation.mutate(trimmed)}>
             Save
           </Button>
         </Gated>

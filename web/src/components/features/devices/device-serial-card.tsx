@@ -68,7 +68,7 @@ export function DeviceSerialCard({ deviceId, serial, onSaved }: DeviceSerialCard
           <Input id="device-serial-input" value={value} onChange={(e) => setValue(e.target.value)} />
         </div>
         <Gated op={DEVICE_UPDATE_OP}>
-          <Button disabled={saveMutation.isLoading || unchanged} onClick={() => saveMutation.mutate(trimmed)}>
+          <Button data-testid="device-serial-save" disabled={saveMutation.isLoading || unchanged} onClick={() => saveMutation.mutate(trimmed)}>
             Save serial
           </Button>
         </Gated>
