@@ -521,3 +521,26 @@ func (f *Factory) SetCA(ca xkmssdk.TrustedCA) error {
 
 	return f.embeddedServer.SetCA(ca)
 }
+
+// ActiveCA returns the embedded server's ceremony CA, or nil in remote mode,
+// once closed, or without an embedded server.
+func (f *Factory) ActiveCA() xkmssdk.TrustedCA {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if f.closed || !f.config.IsEmbedded() || f.embeddedServer == nil {
+		return nil
+	}
+	return f.embeddedServer.ActiveCA()
+}
+
+// RestoreCA puts prev back as the embedded server's ceremony CA (nil clears
+// it) without UpdateCA, undoing the store of a SetCA that failed. It is a
+// no-op in remote mode, once closed, or without an embedded server.
+func (f *Factory) RestoreCA(prev xkmssdk.TrustedCA) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if f.closed || !f.config.IsEmbedded() || f.embeddedServer == nil {
+		return
+	}
+	f.embeddedServer.RestoreActiveCA(prev)
+}
