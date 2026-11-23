@@ -4,12 +4,12 @@
  * Platform daemon services hook: ListServices, GetServiceStatus and the
  * StartService, StopService and RestartService actions (#2047).
  *
- * The daemon services are reached on the API client at the served
- * `/v1/platform/services` routes until the SDK PlatformService has them.
+ * The hook calls the SDK PlatformService (listServices, getServiceStatus,
+ * startService, stopService, restartService) on the mounted client.
  */
 
 import { useMemo } from 'react';
-import { usePlatformClient } from 'trusted-platform-sdk';
+import { usePlatform } from 'trusted-platform-sdk';
 
 export type ServiceAction = 'start' | 'stop' | 'restart';
 
@@ -38,14 +38,18 @@ export interface ServiceActionResult {
 }
 
 export function usePlatformServices() {
-  const client = usePlatformClient();
-  return useMemo(() => {
-    const api = client.getApiClient();
-    const one = (name: string) => `/v1/platform/services/${encodeURIComponent(name)}`;
-    return {
-      listServices: () => api.get<PlatformServiceList>('/v1/platform/services'),
-      getService: (name: string) => api.get<PlatformServiceInfo>(one(name)),
-      act: (name: string, action: ServiceAction) => api.post<ServiceActionResult>(`${one(name)}/${action}`),
-    };
-  }, [client]);
+  const platform = usePlatform();
+  return useMemo(
+    () => ({
+      listServices: () => platform.listServices(),
+      getService: (name: string) => platform.getServiceStatus(name),
+      act: (name: string, action: ServiceAction) =>
+        action === 'start'
+          ? platform.startService(name)
+          : action === 'stop'
+            ? platform.stopService(name)
+            : platform.restartService(name),
+    }),
+    [platform]
+  );
 }
