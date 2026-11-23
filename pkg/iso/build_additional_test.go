@@ -314,6 +314,80 @@ func TestBuilderCopySecureBootKeys_PrivateKeyStagedOwnerOnly(t *testing.T) {
 	assert.Equal(t, os.FileMode(0644), info.Mode().Perm(), "staged DB.crt stays world-readable")
 }
 
+// TestBuilderCopySecureBootKeys_OverwritesStaleWorldReadableKey: the legacy
+// builder merges into an existing ISO tree, so a DB.key left 0644 by an
+// earlier build must come out owner-only, and a DB.crt left 0600 must come
+// out 0644 (#62).
+func TestBuilderCopySecureBootKeys_OverwritesStaleWorldReadableKey(t *testing.T) {
+	tempDir := t.TempDir()
+	isoDir := filepath.Join(tempDir, "iso")
+	keysDir := filepath.Join(tempDir, "keys")
+	stagedDir := filepath.Join(isoDir, "keys")
+	require.NoError(t, os.MkdirAll(stagedDir, 0755))
+	require.NoError(t, os.MkdirAll(keysDir, 0755))
+
+	keyPEM, certPEM := genTestSigningPairPEM(t)
+	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "DB.key"), keyPEM, 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "DB.crt"), certPEM, 0644))
+
+	stagedKey := filepath.Join(stagedDir, "DB.key")
+	stagedCrt := filepath.Join(stagedDir, "DB.crt")
+	require.NoError(t, os.WriteFile(stagedKey, []byte("stale"), 0644))
+	require.NoError(t, os.Chmod(stagedKey, 0644))
+	require.NoError(t, os.WriteFile(stagedCrt, []byte("stale"), 0600))
+
+	require.NoError(t, NewBuilder(nil).copySecureBootKeys(&ISOConfig{ISODir: isoDir, KeysDir: keysDir}))
+
+	info, err := os.Stat(stagedKey)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm(), "stale 0644 DB.key must be re-staged owner-only")
+	got, err := os.ReadFile(stagedKey)
+	require.NoError(t, err)
+	assert.Equal(t, keyPEM, got)
+
+	info, err = os.Stat(stagedCrt)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0644), info.Mode().Perm(), "stale 0600 DB.crt must be re-staged 0644")
+	got, err = os.ReadFile(stagedCrt)
+	require.NoError(t, err)
+	assert.Equal(t, certPEM, got)
+}
+
+// TestBuilderCopySecureBootKeys_DoesNotWriteThroughSymlink: a symlink at the
+// staged DB.key path is replaced by a regular owner-only file; the link target
+// is left untouched (#62).
+func TestBuilderCopySecureBootKeys_DoesNotWriteThroughSymlink(t *testing.T) {
+	tempDir := t.TempDir()
+	isoDir := filepath.Join(tempDir, "iso")
+	keysDir := filepath.Join(tempDir, "keys")
+	stagedDir := filepath.Join(isoDir, "keys")
+	require.NoError(t, os.MkdirAll(stagedDir, 0755))
+	require.NoError(t, os.MkdirAll(keysDir, 0755))
+
+	keyPEM, certPEM := genTestSigningPairPEM(t)
+	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "DB.key"), keyPEM, 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "DB.crt"), certPEM, 0644))
+
+	outside := filepath.Join(tempDir, "outside.txt")
+	require.NoError(t, os.WriteFile(outside, []byte("outside"), 0644))
+	stagedKey := filepath.Join(stagedDir, "DB.key")
+	require.NoError(t, os.Symlink(outside, stagedKey))
+
+	require.NoError(t, NewBuilder(nil).copySecureBootKeys(&ISOConfig{ISODir: isoDir, KeysDir: keysDir}))
+
+	got, err := os.ReadFile(outside)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("outside"), got, "symlink target must not be written through")
+
+	info, err := os.Lstat(stagedKey)
+	require.NoError(t, err)
+	assert.True(t, info.Mode().IsRegular(), "staged DB.key must be a regular file, not a symlink")
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm(), "staged DB.key must be owner-only")
+	got, err = os.ReadFile(stagedKey)
+	require.NoError(t, err)
+	assert.Equal(t, keyPEM, got)
+}
+
 func TestRunXorriso_ContextCancellation(t *testing.T) {
 	tempDir := t.TempDir()
 	isoDir := filepath.Join(tempDir, "iso")
