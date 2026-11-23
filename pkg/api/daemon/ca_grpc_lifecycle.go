@@ -153,9 +153,11 @@ func intermediateTrustPath(rootPath string) string {
 
 // caTrustBundles returns the PEM of the trusted root, the PEM of the
 // intermediate (nil when the CA has none), and the two-certificate bundle
-// (root followed by the intermediate). The full bundle is no longer written;
-// it is kept only so UninstallCACertificates recognises the bundle an earlier
-// install or start-up wrote.
+// (root followed by the intermediate). The full bundle is no longer written by
+// the install; it is kept only so UninstallCACertificates recognises the bundle
+// an earlier install wrote. The CA bundle and the bootstrap write the same two
+// certificates intermediate first (interFirstBundle); isCombinedBundle accepts
+// either order.
 func (s *CAGRPCService) caTrustBundles(ca quicbaasca.CACertificateAuthority) (rootPEM, interPEM, fullPEM []byte, err error) {
 	root, err := ca.TrustedRoot()
 	if err != nil {
@@ -171,6 +173,31 @@ func (s *CAGRPCService) caTrustBundles(ca quicbaasca.CACertificateAuthority) (ro
 		fullPEM = append(fullPEM, interPEM...)
 	}
 	return rootPEM, interPEM, fullPEM, nil
+}
+
+// interFirstBundle returns the intermediate followed by the root, the order the
+// CA bundle, GetBootstrapBundle and App.BootstrapTrust write. It returns nil
+// when the CA has no intermediate.
+func interFirstBundle(rootPEM, interPEM []byte) []byte {
+	if interPEM == nil {
+		return nil
+	}
+	out := make([]byte, 0, len(interPEM)+len(rootPEM))
+	out = append(out, interPEM...)
+	return append(out, rootPEM...)
+}
+
+// isCombinedBundle reports whether current holds the root and the intermediate
+// together, in either order: root first (an earlier install) or intermediate
+// first (the CA bundle the bootstrap writes).
+func isCombinedBundle(current, rootPEM, interPEM []byte) bool {
+	if interPEM == nil {
+		return false
+	}
+	rootFirst := make([]byte, 0, len(rootPEM)+len(interPEM))
+	rootFirst = append(rootFirst, rootPEM...)
+	rootFirst = append(rootFirst, interPEM...)
+	return bytes.Equal(current, rootFirst) || bytes.Equal(current, interFirstBundle(rootPEM, interPEM))
 }
 
 // InstallCACertificates writes the CA's trust anchors to the system trust
@@ -256,11 +283,12 @@ func (s *CAGRPCService) UninstallCACertificates(ctx context.Context, req *platfo
 	if rootErr != nil && !errors.Is(rootErr, fs.ErrNotExist) {
 		return nil, status.Error(codes.Internal, rootErr.Error())
 	}
-	if rootErr == nil && !inter && interPEM != nil && bytes.Equal(currentRoot, fullPEM) {
+	combined := rootErr == nil && isCombinedBundle(currentRoot, rootPEM, interPEM)
+	if !inter && combined {
 		return nil, status.Error(codes.FailedPrecondition, s.trustPath+
 			" also holds the intermediate certificate; uninstall with include_intermediates to remove it")
 	}
-	if rootErr == nil && !bytes.Equal(currentRoot, rootPEM) && (!inter || !bytes.Equal(currentRoot, fullPEM)) {
+	if rootErr == nil && !bytes.Equal(currentRoot, rootPEM) && (!inter || !combined) {
 		return nil, status.Error(codes.FailedPrecondition, trust.ErrSystemTrustBundleMismatch{Path: s.trustPath}.Error())
 	}
 	if inter {
@@ -275,7 +303,7 @@ func (s *CAGRPCService) UninstallCACertificates(ctx context.Context, req *platfo
 
 	accepted := [][]byte{rootPEM}
 	if inter {
-		accepted = append(accepted, fullPEM)
+		accepted = append(accepted, fullPEM, interFirstBundle(rootPEM, interPEM))
 	}
 	var count int32
 	removed, err := trust.UninstallFromSystemTrust(s.trustPath, accepted...)
@@ -284,7 +312,7 @@ func (s *CAGRPCService) UninstallCACertificates(ctx context.Context, req *platfo
 	}
 	if removed {
 		count = 1
-		if inter && bytes.Equal(currentRoot, fullPEM) {
+		if inter && combined {
 			count = 2
 		}
 	}
