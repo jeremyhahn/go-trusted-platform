@@ -31,9 +31,10 @@ import {
   type BMCEnrollOptions,
 } from '@/hooks/use-bmc-cert-ops';
 
-export const BMC_ENROLL_OPTIONS: { key: keyof BMCEnrollOptions; label: string }[] = [
-  { key: 'replace_certificate', label: 'Replace certificate' },
-  { key: 'rotate_password', label: 'Rotate password' },
+// The options the profile enrollment path performs. Certificate replacement
+// and password rotation are not performed there yet, so the card offers
+// neither and always sends both false.
+export const BMC_ENROLL_OPTIONS: { key: 'dns_register' | 'dane_publish'; label: string }[] = [
   { key: 'dns_register', label: 'Register DNS' },
   { key: 'dane_publish', label: 'Publish DANE' },
 ];
@@ -56,7 +57,8 @@ function stepLine(step: BMCCeremonyStep): string {
 export function BMCCertCard({ profileID }: BMCCertCardProps) {
   const { enroll, restoreFactoryCert, replaceWebCertificate } = useBMCCertOps(profileID);
   const { toast } = useToast();
-  const [opts, setOpts] = useState<BMCEnrollOptions>({});
+  // Start from the server defaults (DNS registration and DANE publication on).
+  const [opts, setOpts] = useState<BMCEnrollOptions>({ dns_register: true, dane_publish: true });
   const [busy, setBusy] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [certPEM, setCertPEM] = useState('');
@@ -76,9 +78,11 @@ export function BMCCertCard({ profileID }: BMCCertCardProps) {
   };
 
   const onEnroll = async () => {
-    const body: BMCEnrollOptions = {};
+    // Every option goes explicitly, so the server never applies a default the
+    // card does not show.
+    const body: BMCEnrollOptions = { replace_certificate: false, rotate_password: false };
     for (const { key } of BMC_ENROLL_OPTIONS) {
-      if (opts[key] !== undefined) body[key] = opts[key];
+      body[key] = opts[key] === true;
     }
     setBusy(true);
     try {

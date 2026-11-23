@@ -858,6 +858,10 @@ func (s *BMCGRPCService) toGRPCError(operation string, err error) error {
 	if errors.As(err, &profileNotFound) {
 		return status.Error(codes.NotFound, profileNotFound.Error())
 	}
+	var slotOccupied bmc.ErrSlotOccupied
+	if errors.As(err, &slotOccupied) {
+		return status.Error(codes.AlreadyExists, slotOccupied.Error())
+	}
 	var nilConfig bmc.ErrNilConfig
 	if errors.As(err, &nilConfig) {
 		return status.Error(codes.InvalidArgument, nilConfig.Error())

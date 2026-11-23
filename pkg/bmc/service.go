@@ -21,10 +21,13 @@ import (
 
 // Service manages BMC client lifecycle and provides the business logic layer.
 type Service struct {
-	clients  sync.Map // map[uint64]Client
-	factory  ClientFactory
-	profiles ProfileStore
-	logger   *slog.Logger
+	clients sync.Map // map[uint64]Client
+	// userLocks serializes the slot check and the write of CreateUser per
+	// profile, so two creates for one free slot cannot both pass the check.
+	userLocks sync.Map // map[uint64]*sync.Mutex
+	factory   ClientFactory
+	profiles  ProfileStore
+	logger    *slog.Logger
 }
 
 // ServiceParams holds dependencies for creating a BMC Service.

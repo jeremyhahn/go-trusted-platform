@@ -15,6 +15,7 @@ package bmc
 
 import (
 	"context"
+	"sync"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/memguard"
 )
@@ -53,6 +54,12 @@ func (s *Service) CreateUser(ctx context.Context, profileID uint64, user User, p
 		return err
 	}
 	defer mgr.Close()
+
+	// Hold the profile's user lock from the slot check through the write.
+	lock, _ := s.userLocks.LoadOrStore(profileID, &sync.Mutex{})
+	mu := lock.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
 
 	// Refuse a slot that already holds an account: writing it would silently
 	// overwrite that account (on most BMCs slot 1 or 2 is the administrator).
