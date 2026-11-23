@@ -2030,6 +2030,20 @@ const provisioningDeviceScriptPortOffset = 1
 // provisioning device mounts its root from.
 const provisioningNBDPort uint16 = 10809
 
+// refuseProvisioningHTTPPort refuses an iPXE HTTP port that leaves no room
+// for the device-script server at http-port+1: such a backend would start
+// with no provisioning HTTP allowance and booting devices would drop every
+// connection to it.
+func refuseProvisioningHTTPPort(port int) error {
+	if port+provisioningDeviceScriptPortOffset > 65535 {
+		return pxe.ErrInvalidConfiguration{
+			Field:  "pxe.http-port",
+			Reason: "must be between 1 and 65534 (the device-script server listens on http-port+1), got " + strconv.Itoa(port),
+		}
+	}
+	return nil
+}
+
 func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *app.App, section *pxe.DaemonConfig, flows *policy.ZoneFlowManager) (*PXEGRPCService, error) {
 	svc := NewPXEGRPCService(logger, nil)
 	if section == nil || !section.Enabled {
@@ -2045,6 +2059,11 @@ func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *ap
 			return nil, err
 		}
 		plan = p
+	}
+	// http-port+1 is the device-script port, so 65535 cannot carry both;
+	// refused here as well as by the config (a second line).
+	if err := refuseProvisioningHTTPPort(section.HTTPPort); err != nil {
+		return nil, err
 	}
 	cfg, err := section.ToServiceConfig(plan)
 	if err != nil {
@@ -2084,7 +2103,10 @@ func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *ap
 			bootServer = ip
 		}
 	}
-	if cfg.IPXEConfig != nil && cfg.IPXEConfig.HTTPPort > 0 && cfg.IPXEConfig.HTTPPort < 65535 {
+	if cfg.IPXEConfig != nil && cfg.IPXEConfig.HTTPPort > 0 {
+		if err := refuseProvisioningHTTPPort(cfg.IPXEConfig.HTTPPort); err != nil {
+			return nil, err
+		}
 		flows.AllowProvisioningBootPorts(bootServer,
 			uint16(cfg.IPXEConfig.HTTPPort),
 			uint16(cfg.IPXEConfig.HTTPPort+provisioningDeviceScriptPortOffset),

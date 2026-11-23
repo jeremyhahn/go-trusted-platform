@@ -649,6 +649,13 @@ func (gs *GeneratorSet) provisioning(portID string, in Ingress) []FlowRule {
 	// UDP 69.
 	flows = append(flows, gs.serverRules(portID, in, prioTFTP, "nw_proto=17", cfg.BootServerIPs, []uint16{portTFTP})...)
 
+	// TFTP transfers: the TFTP server answers each read request from a
+	// fresh ephemeral UDP port, and table 0 forwards with normal (no
+	// conntrack), so the device's ACKs to that port need their own
+	// allowance. UDP 1024-65535, to the boot servers only; with no boot
+	// server nothing opens.
+	flows = append(flows, gs.serverMaskedPortRules(portID, in, prioTFTP, "nw_proto=17", cfg.BootServerIPs, tftpTransferPorts)...)
+
 	// PXE boot server ports (iPXE boot script and payloads, NBD), each only
 	// to a boot server in its own family. A destination-unrestricted allow
 	// at this priority would outrank the matrix deny at prioMatrixDeny, so
@@ -717,6 +724,36 @@ func (gs *GeneratorSet) serverRules(portID string, in Ingress, priority int, pro
 				Table:    0,
 				Priority: priority,
 				Match:    matchInVLAN(portID, in, f.ipMatch(proto, f.toDst(ip.String()), fmt.Sprintf("tp_dst=%d", p))),
+				Actions:  "normal",
+			})
+		}
+	}
+	return flows
+}
+
+// tftpTransferPorts is UDP 1024-65535 as OVS masked tp_dst matches
+// (value/mask): the range a TFTP server picks its transfer port from.
+var tftpTransferPorts = []string{
+	"0x0400/0xfc00", // 1024-2047
+	"0x0800/0xf800", // 2048-4095
+	"0x1000/0xf000", // 4096-8191
+	"0x2000/0xe000", // 8192-16383
+	"0x4000/0xc000", // 16384-32767
+	"0x8000/0x8000", // 32768-65535
+}
+
+// serverMaskedPortRules is serverRules for masked port matches: each server
+// address gets one rule per value/mask port in its own family, and with no
+// server configured it emits nothing.
+func (gs *GeneratorSet) serverMaskedPortRules(portID string, in Ingress, priority int, proto string, servers []net.IP, ports []string) []FlowRule {
+	var flows []FlowRule
+	for _, ip := range servers {
+		f := familyOf(ip)
+		for _, p := range ports {
+			flows = append(flows, FlowRule{
+				Table:    0,
+				Priority: priority,
+				Match:    matchInVLAN(portID, in, f.ipMatch(proto, f.toDst(ip.String()), "tp_dst="+p)),
 				Actions:  "normal",
 			})
 		}

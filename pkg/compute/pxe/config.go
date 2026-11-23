@@ -297,6 +297,9 @@ func (d *DaemonConfig) ToServiceConfig(plan *netplan.Plan) (*ServiceConfig, erro
 		if d.HTTPPort < 0 || d.HTTPPort > 65535 {
 			return nil, &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: fmt.Sprintf("http-port must be between 1 and 65535, got %d", d.HTTPPort)}}
 		}
+		if d.HTTPPort > 65534 {
+			return nil, &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "http-port must be between 1 and 65534: the device-script server listens on http-port+1"}}
+		}
 		cfg.IPXEConfig.HTTPPort = d.HTTPPort
 	}
 	if d.LocalFilesDir != "" {
