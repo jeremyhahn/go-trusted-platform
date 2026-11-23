@@ -2,7 +2,10 @@
  * Real-server spec for the tenant barrier page, /tenant/barrier (#2067,
  * UI epic #1665). It runs against the real-server harness: no page.route
  * mocks. Every expectation is checked against what the server answered:
- * the barrier status read and the capabilities listing.
+ * the barrier status read and the capabilities listing. The spec does not
+ * seal the fixture tenant, because the server refuses an empty unseal key
+ * (pkg/tenant/manager.go:1033-1035) and the harness holds no tenant barrier
+ * key to unseal it again.
  */
 import type { Page, Response } from '@playwright/test';
 import { expect, test } from './fixtures';
@@ -125,41 +128,39 @@ test.describe('Tenant barrier (real server)', () => {
     }
   });
 
-  test('Seal then Unseal round-trips the barrier', async ({ adminPage, sdk, tenant }) => {
+  test('keeps Unseal off until a key is typed and leaves the fixture barrier as it found it', async ({
+    adminPage,
+    sdk,
+    tenant,
+  }) => {
     const capabilities = await listCapabilities(sdk);
     const caps = capabilities as Capability[];
     const statusOn = capabilityOf(caps, STATUS_OP).enabled;
-    const sealOn = capabilityOf(caps, SEAL_OP).enabled;
     const unsealOn = capabilityOf(caps, UNSEAL_OP).enabled;
-    test.skip(!statusOn || !sealOn || !unsealOn, 'the server does not enable the barrier status, seal and unseal ops');
+    test.skip(!statusOn || !unsealOn, 'the server does not enable the barrier status and unseal ops');
 
     const before = await readStatus(adminPage, tenant.id);
-    test.skip(
-      !before.initialized || before.sealed === true,
-      'the tenant barrier is not initialized and unsealed on this server',
-    );
-
-    const card = adminPage.getByTestId('tenant-barrier-status');
-    try {
-      await adminPage.goto('/tenant/barrier');
-      await expect(card).toContainText('Unsealed');
-
-      const sealRes = barrierResponse(adminPage, 'POST', barrierPath(tenant.id, '/seal'));
-      await adminPage.getByRole('button', { name: 'Seal', exact: true }).click();
-      expect((await sealRes).ok()).toBeTruthy();
-      await expect(card).toContainText('Sealed'); // case-sensitive: "Unsealed" does not match
-
-      // An empty key falls back to the deterministic init credential (tenant.proto).
-      await expect(adminPage.locator('#tenant-barrier-unseal-key')).toHaveValue('');
-      const unsealRes = barrierResponse(adminPage, 'POST', barrierPath(tenant.id, '/unseal'));
-      await adminPage.getByRole('button', { name: 'Unseal', exact: true }).click();
-      expect((await unsealRes).ok()).toBeTruthy();
-      await expect(card).toContainText('Unsealed');
-    } finally {
-      const after = await readStatus(adminPage, tenant.id).catch(() => ({ sealed: true }) as BarrierStatus);
-      if (after.sealed) {
-        await adminPage.request.post(barrierPath(tenant.id, '/unseal'), { data: {} });
+    const actions = [barrierPath(tenant.id, '/unseal'), barrierPath(tenant.id, '/seal')];
+    const posts: string[] = [];
+    adminPage.on('request', (r) => {
+      const path = new URL(r.url()).pathname;
+      if (r.method() === 'POST' && actions.includes(path)) {
+        posts.push(path);
       }
-    }
+    });
+
+    await adminPage.goto('/tenant/barrier');
+    const key = adminPage.locator('#tenant-barrier-unseal-key');
+    const unseal = adminPage.getByRole('button', { name: 'Unseal', exact: true });
+    await expect(key).toHaveValue('');
+    await expect(unseal).toBeDisabled();
+    await key.fill('a2V5');
+    await expect(unseal).toBeEnabled();
+    await key.fill('');
+    await expect(unseal).toBeDisabled();
+    expect(posts).toEqual([]);
+
+    const after = await readStatus(adminPage, tenant.id);
+    expect(after.sealed).toBe(before.sealed);
   });
 });
