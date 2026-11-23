@@ -377,7 +377,11 @@ export default function SDNPortsPage() {
           row={row.original}
           actions={[
             { label: 'View Details', onClick: handleViewPort },
-            { label: 'Port Statistics', onClick: handlePortStats },
+            {
+              label: 'Port Statistics',
+              op: 'GET /api/v1/sdn/bridges/{name}/ports/{port}/stats',
+              onClick: handlePortStats,
+            },
             { label: 'Port Authentication', onClick: (port: SDNPort) => setAuthPort(port) },
             { label: 'Port State', onClick: (port: SDNPort) => setStatePort(port) },
             { label: 'Edit', onClick: handleEditPort },

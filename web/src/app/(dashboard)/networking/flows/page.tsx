@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import { Plus, RefreshCw, ArrowRightLeft, Play, Pause, Trash2, AlertCircle, Loader2 } from 'lucide-react';
 import { ColumnDef } from '@tanstack/react-table';
 import { Button } from '@/components/ui/button';
@@ -22,8 +22,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { useSDN, useApi } from '@/hooks';
-import type { Flow, FlowMatch, FlowAction } from 'trusted-platform-sdk';
+import type { Flow, FlowMatch, FlowAction, FlowStats } from 'trusted-platform-sdk';
 import { flowActionKind, flowTableNumber, readUint64 } from '@/lib/sdn-wire';
+import { Gated } from '@/components/features/capabilities/gated';
+
+// The server's ops for the two controls (routes.golden), gated by capability.
+const FLUSH_OP = 'POST /api/v1/sdn/bridges/{name}/flows/flush';
+const FLOW_STATS_OP = 'GET /api/v1/sdn/bridges/{name}/flows/{flow}/stats';
 
 // Types for OpenFlow flow management
 interface OpenFlowRule {
@@ -108,6 +113,12 @@ export default function OpenFlowsPage() {
   const [createPriority, setCreatePriority] = useState('100');
   const [createInPort, setCreateInPort] = useState('');
   const [createSubmitting, setCreateSubmitting] = useState(false);
+  const [flushOpen, setFlushOpen] = useState(false);
+  const [flushSubmitting, setFlushSubmitting] = useState(false);
+  const [statsFlow, setStatsFlow] = useState<OpenFlowRule | null>(null);
+  const [flowStats, setFlowStats] = useState<FlowStats | null>(null);
+  const [statsError, setStatsError] = useState<string | null>(null);
+  const statsRequest = useRef(0);
 
   // Fetch bridges to get the first bridge ID
   const {
@@ -229,6 +240,59 @@ export default function OpenFlowsPage() {
         description: err instanceof Error ? err.message : 'Unknown error',
         variant: 'destructive',
       });
+    }
+  };
+
+  /**
+   * confirmFlush removes every flow on the selected bridge through FlushFlows
+   * (POST /sdn/bridges/{name}/flows/flush) after the operator confirmed it.
+   * A refusal is a destructive toast with the server's message.
+   */
+  const confirmFlush = async () => {
+    if (!selectedBridgeId) return;
+    setFlushSubmitting(true);
+    try {
+      const response = await sdn.flushFlows({ bridgeId: selectedBridgeId });
+      if (response.error !== undefined) {
+        toast({ title: 'Flush failed', description: response.error.message, variant: 'destructive' });
+        return;
+      }
+      const deleted = response.data?.deletedCount ?? 0;
+      toast({ title: 'Flows flushed', description: `${deleted} flows removed` });
+      setFlushOpen(false);
+      refetchFlows();
+    } catch (err) {
+      toast({
+        title: 'Flush failed',
+        description: err instanceof Error ? err.message : String(err),
+        variant: 'destructive',
+      });
+    } finally {
+      setFlushSubmitting(false);
+    }
+  };
+
+  /**
+   * handleFlowStats reads one flow's counters through GetFlowStats
+   * (GET /sdn/bridges/{name}/flows/{flow}/stats). A superseded answer is
+   * dropped; a refusal is shown in the dialog, never as zeros.
+   */
+  const handleFlowStats = async (flow: OpenFlowRule) => {
+    const generation = ++statsRequest.current;
+    setStatsFlow(flow);
+    setFlowStats(null);
+    setStatsError(null);
+    try {
+      const response = await sdn.getFlowStats(selectedBridgeId, flow.id);
+      if (generation !== statsRequest.current) return;
+      if (response.error !== undefined) {
+        setStatsError(response.error.message);
+        return;
+      }
+      setFlowStats(response.data?.stats ?? null);
+    } catch (err) {
+      if (generation !== statsRequest.current) return;
+      setStatsError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -357,6 +421,7 @@ export default function OpenFlowsPage() {
           row={row.original}
           actions={[
             { label: 'View Details', onClick: handleViewFlow },
+            { label: 'Flow Statistics', onClick: handleFlowStats, op: FLOW_STATS_OP },
             { label: 'Edit', onClick: handleEditFlow },
             { label: 'Duplicate', onClick: handleDuplicateFlow },
             {
@@ -462,6 +527,12 @@ export default function OpenFlowsPage() {
           <Button variant="outline" size="icon" onClick={fetchFlows} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
+          <Gated op={FLUSH_OP}>
+            <Button variant="outline" onClick={() => setFlushOpen(true)} disabled={!selectedBridgeId}>
+              <Trash2 className="mr-2 h-4 w-4" />
+              Flush flows
+            </Button>
+          </Gated>
           <Button onClick={() => setCreateOpen(true)} disabled={!selectedBridgeId}>
             <Plus className="mr-2 h-4 w-4" />
             Add Flow Rule
@@ -535,6 +606,64 @@ export default function OpenFlowsPage() {
               Add
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={flushOpen} onOpenChange={setFlushOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Flush all flows on {selectedBridgeId}?</DialogTitle>
+            <DialogDescription>
+              Every OpenFlow rule on this bridge is removed. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setFlushOpen(false)}>Cancel</Button>
+            <Button variant="destructive" disabled={flushSubmitting || !selectedBridgeId} onClick={confirmFlush}>
+              {flushSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Flush
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={statsFlow !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            statsRequest.current++;
+            setStatsFlow(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Flow statistics: {statsFlow?.name}</DialogTitle>
+            <DialogDescription>
+              Counters the switch reports for this flow on bridge {selectedBridgeId}.
+            </DialogDescription>
+          </DialogHeader>
+          {statsError !== null ? (
+            <Alert variant="destructive" data-testid="flow-stats-error">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Statistics unavailable</AlertTitle>
+              <AlertDescription>{statsError}</AlertDescription>
+            </Alert>
+          ) : flowStats === null ? (
+            <div className="flex items-center text-sm text-muted-foreground">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Reading counters...
+            </div>
+          ) : (
+            <dl className="grid grid-cols-2 gap-2 text-sm">
+              <dt className="text-muted-foreground">Packets</dt>
+              <dd className="font-mono" data-testid="flow-stats-packets">{readUint64(flowStats.packetCount)}</dd>
+              <dt className="text-muted-foreground">Bytes</dt>
+              <dd className="font-mono" data-testid="flow-stats-bytes">{readUint64(flowStats.byteCount)}</dd>
+              <dt className="text-muted-foreground">Duration</dt>
+              <dd className="font-mono" data-testid="flow-stats-duration">{readUint64(String(flowStats.durationSeconds ?? 0))} s</dd>
+            </dl>
+          )}
         </DialogContent>
       </Dialog>
 
