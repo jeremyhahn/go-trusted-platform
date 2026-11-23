@@ -58,6 +58,11 @@ export function ClusterMembershipCard(props: { localNodeId?: string; onChanged: 
   const [confirmOpen, setConfirmOpen] = React.useState(false);
 
   const [pending, setPending] = React.useState<"bootstrap" | "join" | "leave" | null>(null);
+  // One cluster write at a time: busy disables every write control while any
+  // write is pending, and inFlight drops a second call made before the
+  // disabled state renders.
+  const busy = pending !== null;
+  const inFlight = React.useRef(false);
 
   React.useEffect(() => {
     if (!nodeIdTouched) setNodeId(localNodeId ?? "");
@@ -82,10 +87,13 @@ export function ClusterMembershipCard(props: { localNodeId?: string; onChanged: 
   };
 
   const run = async (kind: "bootstrap" | "join" | "leave", write: () => Promise<WriteResult>, title: string, fallback: string) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setPending(kind);
     try {
       settle(await write(), title, fallback);
     } finally {
+      inFlight.current = false;
       setPending(null);
     }
   };
@@ -116,9 +124,9 @@ export function ClusterMembershipCard(props: { localNodeId?: string; onChanged: 
     void run("leave", () => cluster.leave({ node_id: id }), "Node left", id);
   };
 
-  const bootstrapDisabled = pending === "bootstrap" || clusterName.trim() === "" || nodeName.trim() === "";
-  const joinDisabled = pending === "join" || joinName.trim() === "" || seedList.length === 0;
-  const leaveDisabled = pending === "leave" || nodeId.trim() === "";
+  const bootstrapDisabled = busy || clusterName.trim() === "" || nodeName.trim() === "";
+  const joinDisabled = busy || joinName.trim() === "" || seedList.length === 0;
+  const leaveDisabled = busy || nodeId.trim() === "";
 
   return (
     <Card data-testid="cluster-membership">
@@ -188,7 +196,7 @@ export function ClusterMembershipCard(props: { localNodeId?: string; onChanged: 
                 Cancel
               </Button>
               <Gated op="POST /api/v1/cluster/leave">
-                <Button variant="destructive" disabled={pending === "leave"} onClick={onLeave}>
+                <Button variant="destructive" disabled={busy} onClick={onLeave}>
                   Leave cluster
                 </Button>
               </Gated>
