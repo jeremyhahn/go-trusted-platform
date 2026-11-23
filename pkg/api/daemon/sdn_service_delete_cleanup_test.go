@@ -185,3 +185,90 @@ func TestSDNService_DeleteVLAN_MissingPortCountsAsCleared(t *testing.T) {
 	svc.mu.RUnlock()
 	assert.False(t, kept)
 }
+
+// A reapply whose rule changed must keep the policy's cookie: the flows
+// of the first apply stay on the switch under it, and DeletePolicy only
+// knows the cookie in the record.
+func TestSDNService_DeletePolicy_RemovesFlowsOfEveryApply(t *testing.T) {
+	mock := NewConfigurableMockOVSClient()
+	var mu sync.Mutex
+	var added []*ovs.FlowMod
+	mock.OnAddFlow(func(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error {
+		mu.Lock()
+		defer mu.Unlock()
+		added = append(added, flow)
+		return nil
+	})
+	svc := newDeleteCleanupSDNService(t, mock)
+	ctx := context.Background()
+
+	_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "a", Config: vlanPolicyConfig("pa", 10)})
+	require.NoError(t, err)
+	changed := vlanPolicyConfig("pa", 10)
+	changed.Rules[0].Match.SourceIp = "198.51.100.0/24"
+	_, err = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "a", Config: changed})
+	require.NoError(t, err)
+
+	require.Len(t, added, 2)
+	firstCookie := added[0].Cookie
+	require.NotEmpty(t, firstCookie)
+	assert.Equal(t, firstCookie, added[1].Cookie, "a reapply must keep the policy's flow cookie")
+
+	_, err = svc.DeletePolicy(ctx, &platformv1.DeletePolicyRequest{PolicyId: "a"})
+	require.NoError(t, err)
+
+	calls := mock.GetCalls("DeleteFlowsByCookie")
+	require.Len(t, calls, 1)
+	assert.Equal(t, "br0", calls[0].Args[0])
+	cookie, ok := calls[0].Args[1].(uint64)
+	require.True(t, ok)
+	assert.Equal(t, firstCookie, ovsCookieString(cookie))
+}
+
+// A bridge that no longer exists took its flows with it: DeletePolicy
+// counts it as cleared. Any other switch error keeps the record.
+func TestSDNService_DeletePolicy_DeletedBridgeCountsAsCleared(t *testing.T) {
+	cases := []struct {
+		name       string
+		bridgeGone bool
+	}{
+		{name: "bridge gone", bridgeGone: true},
+		{name: "bridge present", bridgeGone: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewConfigurableMockOVSClient()
+			svc := newDeleteCleanupSDNService(t, mock)
+			ctx := context.Background()
+
+			_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "a", Config: vlanPolicyConfig("pa", 10)})
+			require.NoError(t, err)
+
+			mock.OnDeleteFlowsByCookie(func(ctx context.Context, bridgeName string, cookie, cookieMask uint64) error {
+				return errors.New("failed to connect OpenFlow client")
+			})
+			if tc.bridgeGone {
+				mock.OnGetBridge(func(ctx context.Context, name string) (*ovs.Bridge, error) {
+					return nil, ovs.ErrBridgeNotFound
+				})
+			} else {
+				mock.OnGetBridge(func(ctx context.Context, name string) (*ovs.Bridge, error) {
+					return &ovs.Bridge{UUID: "uuid-br0", Name: name}, nil
+				})
+			}
+
+			_, err = svc.DeletePolicy(ctx, &platformv1.DeletePolicyRequest{PolicyId: "a"})
+			svc.mu.RLock()
+			_, kept := svc.policies["a"]
+			svc.mu.RUnlock()
+			if tc.bridgeGone {
+				require.NoError(t, err)
+				assert.False(t, kept)
+				return
+			}
+			require.Error(t, err)
+			assert.Equal(t, codes.Internal, status.Code(err))
+			assert.True(t, kept, "policy record must survive a failed cleanup on a live bridge")
+		})
+	}
+}
