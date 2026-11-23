@@ -103,7 +103,8 @@ describe('AttestationQuoteCard', () => {
     expect(verifies).toHaveLength(1);
     const body = verifies[0].body as { quote: typeof QUOTE; akPublicKeyPem: string; expectedNonce: string };
     expect(body.quote).toEqual(QUOTE);
-    expect(body.akPublicKeyPem).toBe(PEM);
+    // ak_public_key_pem is a proto bytes field: protojson wants it base64.
+    expect(body.akPublicKeyPem).toBe(btoa(PEM));
     expect(body.expectedNonce).toBe('bm9uY2U=');
     expect(verdict.textContent).toContain('verified');
     expect(verdict.textContent).not.toContain('not verified');
@@ -123,6 +124,56 @@ describe('AttestationQuoteCard', () => {
     const verdict = await screen.findByTestId('attestation-quote-verdict');
     expect(verdict.textContent).toContain('not verified');
     expect(verdict.textContent).toContain('nonce mismatch');
+  });
+
+  it('verifies a fetched quote with the nonce it was requested with, not the bound quote nonce', async () => {
+    // The quote carries SHA-256(nonce || channelBinding); sending that bound
+    // value as expectedNonce makes the server hash it again.
+    const bound = { ...QUOTE, nonce: 'Ym91bmQ=' };
+    const sent = stubControlPlane(routes({ [QUOTE_OP]: ok({ status: 'ok', quote: bound, channelBinding: 'Y2I=' }) }));
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    const get = await ready('Get quote');
+    await waitFor(() => expect(get.getAttribute('data-capability-enabled')).toBe('true'));
+    fireEvent.change(screen.getByTestId('attestation-quote-nonce'), { target: { value: 'bm9uY2U=' } });
+    fireEvent.click(get);
+    await screen.findByTestId('attestation-quote-result');
+
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: PEM } });
+    fireEvent.click(await ready('Verify quote'));
+    await screen.findByTestId('attestation-quote-verdict');
+
+    const verifies = posts(sent, '/api/v1/attestation/quote/verify');
+    expect(verifies).toHaveLength(1);
+    const body = verifies[0].body as { expectedNonce: string; channelBinding?: string };
+    expect(body.expectedNonce).toBe('bm9uY2U=');
+    expect(body.channelBinding).toBe('Y2I=');
+  });
+
+  it('clears the previous verdict when an input changes or a verify is refused', async () => {
+    const table = routes();
+    stubControlPlane(table);
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    const button = await ready('Verify quote');
+    await waitFor(() => expect(button.getAttribute('data-capability-enabled')).toBe('true'));
+    fireEvent.change(screen.getByTestId('attestation-verify-quote'), { target: { value: JSON.stringify(QUOTE) } });
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: PEM } });
+    fireEvent.change(screen.getByTestId('attestation-verify-nonce'), { target: { value: 'bm9uY2U=' } });
+    fireEvent.click(button);
+    await screen.findByTestId('attestation-quote-verdict');
+
+    // Editing an input makes the shown verdict stale.
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: `${PEM}\n` } });
+    expect(screen.queryByTestId('attestation-quote-verdict')).toBeNull();
+
+    // A verify again yields a verdict, then a refused verify must not leave it.
+    fireEvent.click(button);
+    await screen.findByTestId('attestation-quote-verdict');
+    table[VERIFY_OP] = refused(400, 'bad key');
+    fireEvent.click(button);
+    await screen.findByTestId('toast');
+    expect(screen.queryByTestId('attestation-quote-verdict')).toBeNull();
   });
 
   it('withholds the controls the server does not offer', async () => {
