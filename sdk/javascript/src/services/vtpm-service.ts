@@ -33,6 +33,7 @@ import type {
   GetNVRAMPathResponse,
   StartBundleResponse,
   StopBundleResponse,
+  GetBundleStateResponse,
   QuoteBundleRequest,
   QuoteBundleResponse,
   SealBundleRequest,
@@ -495,10 +496,22 @@ export class VTPMService extends BaseService {
 
   // =========================================================================
   // Bundle Runtime Operations
-  //
-  // IsVTPMRunning has no REST route: callers track the running state from
-  // the start and stop results.
   // =========================================================================
+
+  /**
+   * Whether the vTPM of a bundle is running (IsVTPMRunning,
+   * GET /bundles/{id}/state). Resolves to the server's answer; rejects when
+   * the read fails (the server answers 404 for an unknown bundle).
+   */
+  async getBundleState(id: string): Promise<GetBundleStateResponse> {
+    const r = await this.client.get<GetBundleStateResponse>(
+      this.buildUrl(`/bundles/${this.encodePathSegment(id)}/state`)
+    );
+    if (r.success !== true || !r.data) {
+      throw new Error(r.error?.message ?? `vTPM state read failed for bundle ${id}`);
+    }
+    return r.data;
+  }
 
   /**
    * Start the vTPM of a bundle (POST /bundles/{id}/start).
