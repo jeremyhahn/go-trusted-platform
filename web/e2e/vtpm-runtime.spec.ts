@@ -12,12 +12,40 @@ import { mockTenantApi, mockHealthApi, mockVTPMRuntimeApi, VTPMRuntimeCall, VTPM
 
 const BUNDLE = 'vm-1';
 
+/** The eight runtime ops the page's controls are gated on (as in real-server/vtpm-runtime.spec.ts). */
+const RUNTIME_OPS = [
+  'GET /api/v1/vtpm/bundles/{id}/state',
+  'POST /api/v1/vtpm/bundles/{id}/start',
+  'POST /api/v1/vtpm/bundles/{id}/stop',
+  'POST /api/v1/vtpm/bundles/{id}/quote',
+  'POST /api/v1/vtpm/bundles/{id}/seal',
+  'POST /api/v1/vtpm/bundles/{id}/unseal',
+  'GET /api/v1/vtpm/bundles/{id}/pcrs',
+  'POST /api/v1/vtpm/bundles/{id}/pcrs/extend',
+] as const;
+
+// #2072: the runtime controls are capability-gated and fail closed; the mocked server offers all eight runtime ops.
+async function mockRuntimeCapabilities(page: Page): Promise<void> {
+  await page.route('**/api/v1/capabilities*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        capabilities: RUNTIME_OPS.map((op) => ({ op, kind: 'route', enabled: true })),
+        total: RUNTIME_OPS.length,
+        enabled: RUNTIME_OPS.length,
+      }),
+    })
+  );
+}
+
 async function openRuntimePage(
   page: Page,
   config: VTPMRuntimeApiMockConfig = {}
 ): Promise<VTPMRuntimeCall[]> {
   await mockTenantApi(page);
   await mockHealthApi(page);
+  await mockRuntimeCapabilities(page);
   const { calls } = await mockVTPMRuntimeApi(page, config);
   await page.goto('/tpm/vtpm/__placeholder__/');
   await expect(page.getByRole('heading', { name: 'vTPM Runtime' })).toBeVisible();
@@ -38,6 +66,7 @@ test.describe('vTPM runtime page', () => {
     const calls = await openRuntimePage(page);
     await expect(page.getByTestId('vtpm-run-state')).toHaveText('Unknown');
 
+    await expect(page.getByRole('button', { name: 'Start vTPM', exact: true })).toHaveAttribute('data-capability-enabled', 'true');
     await page.getByRole('button', { name: 'Start vTPM' }).click();
 
     await expect(page.getByTestId('vtpm-run-state')).toHaveText('Running');
