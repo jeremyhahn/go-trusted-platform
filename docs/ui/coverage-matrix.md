@@ -628,19 +628,19 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `TenantService.ListTenants` | - | - | - | - | missing |
+| `TenantService.ListTenants` | `GET /` | `(dashboard)/tenant/directory/page.tsx` | - | `tenant-directory.spec.ts` | covered |
 | `TenantService.GetTenant` | `GET /{id}` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx`<br>`admin/tenant/page.tsx` | - | `auth.spec.ts`<br>`dashboard.spec.ts`<br>`tenant.spec.ts`<br>`admin-workspace.spec.ts` | covered |
-| `TenantService.GetTenantByName` | `GET /by-name/{name}` | - | - | - | missing |
-| `TenantService.CreateTenant` | - | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` (read-only) | - | - | partial |
-| `TenantService.UpdateTenant` | `PUT /{id}` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` (read-only) | - | - | partial |
-| `TenantService.DeleteTenant` | `DELETE /{id}` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` (read-only) | - | - | partial |
-| `TenantService.SuspendTenant` | `POST /{id}/suspend` | - | - | - | missing |
-| `TenantService.ResumeTenant` | `POST /{id}/resume` | - | - | - | missing |
+| `TenantService.GetTenantByName` | `GET /by-name/{name}` | `(dashboard)/tenant/directory/page.tsx` | - | `tenant-directory.spec.ts` | covered |
+| `TenantService.CreateTenant` | `POST /` | `(dashboard)/tenant/directory/page.tsx`<br>`(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` (read-only) | - | `tenant-directory.spec.ts` | covered |
+| `TenantService.UpdateTenant` | `PUT /{id}` | `(dashboard)/tenant/directory/page.tsx`<br>`(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` (read-only) | - | `tenant-directory.spec.ts` | covered |
+| `TenantService.DeleteTenant` | `DELETE /{id}` | `(dashboard)/tenant/directory/page.tsx`<br>`(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` (read-only) | - | `tenant-directory.spec.ts` | covered |
+| `TenantService.SuspendTenant` | `POST /{id}/suspend` | `(dashboard)/tenant/directory/page.tsx` | - | `tenant-directory.spec.ts` | covered |
+| `TenantService.ResumeTenant` | `POST /{id}/resume` | `(dashboard)/tenant/directory/page.tsx` | - | `tenant-directory.spec.ts` | covered |
 | `TenantService.GetQuotas` | `GET /{id}/quotas` | `(dashboard)/tenant/quotas/page.tsx` | - | `tenant-management.spec.ts` | covered |
 | `TenantService.UpdateQuotas` | `PUT /{id}/quotas` | `(dashboard)/tenant/quotas/page.tsx` (read-only) | - | - | partial |
 | `TenantService.GetUsage` | `GET /{id}/usage` | `(dashboard)/tenant/quotas/page.tsx` | - | `tenant-management.spec.ts` | covered |
 | `TenantService.CheckQuota` | `POST /{id}/quota-check` | - | - | - | missing |
-| `TenantService.Sync` | `POST /sync` | - | - | - | missing |
+| `TenantService.Sync` | `POST /sync` | `(dashboard)/tenant/directory/page.tsx` | - | `tenant-directory.spec.ts` | covered |
 | `TenantService.RotateTenantDEK` | `POST /{id}/dek/rotate` | - | - | - | missing |
 | `TenantService.GetTenantDEKStatus` | `GET /{id}/dek` | - | - | - | missing |
 | `TenantService.InitTenantBarrier` | `POST /{id}/barrier/init` | `(dashboard)/tenant/barrier/page.tsx` | - | `tenant-barrier.spec.ts` | covered |
@@ -761,11 +761,11 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | SchedulerService | 11 | 0 | 0 | 0 | 0 | 11 |
 | SDNService | 29 | 11 | 1 | 16 | 1 | 0 |
 | SwitchService | 5 | 0 | 0 | 5 | 0 | 0 |
-| TenantService | 19 | 7 | 4 | 8 | 0 | 0 |
+| TenantService | 19 | 15 | 1 | 3 | 0 | 0 |
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **122** | **61** | **265** | **50** | **31** |
+| **Total** | **529** | **130** | **58** | **260** | **50** | **31** |
 
 ## Proposed slices
 
