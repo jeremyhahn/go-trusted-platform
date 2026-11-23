@@ -12,7 +12,9 @@
  * capability for its route (<Gated>): an op the server does not offer leaves
  * its control disabled with the server's reason. The SDK sends each write once, never
  * retried. A successful write re-reads the list once; a refused one shows the
- * server's message.
+ * server's message. The mount read and every re-read share one generation: a
+ * newer list read supersedes an older one, so a slow first read never restores
+ * the list a write has already replaced.
  *
  * Each row's Details button reads that VIP through GetVIP
  * (GET /lb/vips/{protocol}/{address}/{port}) and shows its conntrack zone,
@@ -21,7 +23,7 @@
  * route like the writes.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Network } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -104,6 +106,9 @@ export function GatewayVIPsCard() {
   const [removing, setRemoving] = useState<VIPStatus | null>(null);
   const [detail, setDetail] = useState<{ key: string; vip: VIPStatus | null; error: string | null } | null>(null);
   const [detailBusy, setDetailBusy] = useState(false);
+  // Each list read takes the next generation; only the newest one applies.
+  const generation = useRef(0);
+  const mounted = useRef(true);
 
   // Reads the list without touching state, so the mount effect and the
   // post-write re-read share it.
@@ -128,19 +133,21 @@ export function GatewayVIPsCard() {
     setLoaded(true);
   }, []);
 
-  const load = async () => applyList(await readList());
+  const load = useCallback(async () => {
+    const gen = ++generation.current;
+    const list = await readList();
+    if (mounted.current && gen === generation.current) {
+      applyList(list);
+    }
+  }, [readList, applyList]);
 
   useEffect(() => {
-    let live = true;
-    void readList().then((list) => {
-      if (live) {
-        applyList(list);
-      }
-    });
+    mounted.current = true;
+    void load();
     return () => {
-      live = false;
+      mounted.current = false;
     };
-  }, [readList, applyList]);
+  }, [load]);
 
   // Runs one write; on success re-reads the list once.
   const write = async (send: () => Promise<{ error?: { message?: string } | null }>): Promise<boolean> => {
