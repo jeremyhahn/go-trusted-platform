@@ -38,7 +38,9 @@ describe('ceremony status helpers', () => {
 
   it('counts the officers', () => {
     expect(officerProgress({ officersEnrolled: 2, officersRequired: 3 })).toBe('2 of 3');
-    expect(officerProgress(undefined)).toBe('0 of 0');
+    expect(officerProgress(undefined)).toBe('Unavailable');
+    expect(officerProgress({ officersEnrolled: 0, officersRequired: 0 })).toBe('Unavailable');
+    expect(officerProgress({ officersEnrolled: 0, officersRequired: 3 })).toBe('0 of 3');
   });
 });
 
@@ -73,7 +75,18 @@ describe('CeremonyStatusCard', () => {
     render(withControlPlane(<CeremonyStatusCard />));
 
     expect(await screen.findAllByText('Not initialized')).toHaveLength(2);
-    expect(screen.getByText('0 of 0')).toBeDefined();
+    expect(screen.getAllByText('Unavailable')).toHaveLength(2);
+  });
+
+  it('shows what the server does not report as unavailable', async () => {
+    // The real backend reports only the ceremony ID and state today.
+    stubControlPlane({ [STATUS_PATH]: ok({ ceremonyId: 'c-1', state: 'CEREMONY_STATE_IN_PROGRESS' }) });
+    render(withControlPlane(<CeremonyStatusCard />));
+
+    expect(await screen.findByText('In progress')).toBeDefined();
+    expect(screen.getAllByText('Unavailable')).toHaveLength(3);
+    expect(screen.queryByText('Not initialized')).toBeNull();
+    expect(screen.queryByText('0 of 0')).toBeNull();
   });
 
   it('shows a refusal', async () => {
