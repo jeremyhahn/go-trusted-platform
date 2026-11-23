@@ -5,10 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import EABCredentialsPage from "./page";
 
 // The rows the server writes: protojson sends the uint64 id as a string and
-// the status as the enum name.
+// the status as the enum name. The ids sit above 2^53 (UnixNano-based), so a
+// Number() round trip would change their digits.
+const ACTIVE_ID = "1795456021769983013";
+const REVOKED_ID = "1795456021769983014";
 const credentials = [
   {
-    id: "7",
+    id: ACTIVE_ID,
     keyId: "kid-active",
     profileId: "3",
     tenantId: "t1",
@@ -17,7 +20,7 @@ const credentials = [
     createdAt: "2026-11-01T00:00:00Z",
   },
   {
-    id: "8",
+    id: REVOKED_ID,
     keyId: "kid-revoked",
     profileId: "3",
     tenantId: "t1",
@@ -38,13 +41,30 @@ const listResult = {
   refetch: vi.fn(),
 };
 const toastResult = { toast: vi.fn() };
+const detailCredential = {
+  id: ACTIVE_ID,
+  keyId: "kid-active",
+  profileId: "3",
+  tenantId: "t1",
+  status: "EAB_CREDENTIAL_STATUS_ACTIVE",
+  expiresAt: "2099-01-01T00:00:00Z",
+  createdAt: "2026-11-01T00:00:00Z",
+};
+const eabClient = {
+  get: vi.fn().mockResolvedValue({ success: true, data: { credential: detailCredential } }),
+  getQRCode: vi.fn().mockResolvedValue({ success: true, data: { qrCode: "iVBORw0KGgo=", contentType: "image/png" } }),
+  getEnrollmentURL: vi
+    .fn()
+    .mockResolvedValue({ success: true, data: { url: "https://acme.example/enroll", expiresAt: "2099-01-01T00:00:00Z" } }),
+};
+const platformClient = { eab: eabClient };
 
 vi.mock("@/hooks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks")>()),
   useToast: () => toastResult,
   useEAB: () => eabHooks,
   useEABList: () => listResult,
-  usePlatformClient: () => ({ eab: {} }),
+  usePlatformClient: () => platformClient,
 }));
 
 vi.mock("@/hooks/use-capabilities", () => ({
@@ -73,11 +93,11 @@ describe("EABCredentialsPage", () => {
     expect(within(rowFor("kid-revoked")).getByText("Revoked")).toBeTruthy();
   });
 
-  it("revokes the active credential by its numeric id and refetches", async () => {
+  it("revokes the active credential by its exact decimal id and refetches", async () => {
     render(<EABCredentialsPage />);
     fireEvent.click(within(rowFor("kid-active")).getByRole("button", { name: "Revoke" }));
     await waitFor(() => expect(listResult.refetch).toHaveBeenCalled());
-    expect(revoke.mutateAsync).toHaveBeenCalledWith(7);
+    expect(revoke.mutateAsync).toHaveBeenCalledWith("1795456021769983013");
   });
 
   it("offers no Revoke on a revoked credential", () => {
@@ -85,9 +105,16 @@ describe("EABCredentialsPage", () => {
     expect(within(rowFor("kid-revoked")).queryByRole("button", { name: "Revoke" })).toBeNull();
   });
 
-  it("deletes the revoked credential by its numeric id", async () => {
+  it("deletes the revoked credential by its exact decimal id", async () => {
     render(<EABCredentialsPage />);
     fireEvent.click(within(rowFor("kid-revoked")).getByRole("button", { name: "Delete" }));
-    await waitFor(() => expect(deleteCredential.mutateAsync).toHaveBeenCalledWith(8));
+    await waitFor(() => expect(deleteCredential.mutateAsync).toHaveBeenCalledWith("1795456021769983014"));
+  });
+
+  it("opens the detail for the exact decimal id", async () => {
+    render(<EABCredentialsPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Details kid-active" }));
+    await waitFor(() => expect(eabClient.get).toHaveBeenCalled());
+    expect(eabClient.get).toHaveBeenCalledWith("1795456021769983013");
   });
 });
