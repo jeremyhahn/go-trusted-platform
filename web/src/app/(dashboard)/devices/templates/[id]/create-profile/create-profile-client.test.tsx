@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_POST_ENROLLMENT_NETWORK } from 'trusted-platform-sdk';
 
 import { ok, refused, stubControlPlane, withControlPlane, type Answer } from '@/test/control-plane-fetch';
+import { assignTemplateHref } from '@/lib/provisioning-assign';
 import CreateProfileClient from './create-profile-client';
 
 // #413: every input the create-from-template page collects reaches the
@@ -115,8 +116,8 @@ function provisionedToasts() {
     .length;
 }
 
-async function renderSessionPage(routes: Record<string, Answer> = {}) {
-  query.value = SESSION_QUERY;
+async function renderSessionPage(routes: Record<string, Answer> = {}, q = SESSION_QUERY) {
+  query.value = q;
   const sent = stubControlPlane({
     'GET /api/v1/device/templates/42': ok({ id: 42, name: 'edge-node', role: 'edge' }),
     'GET /api/v1/capabilities': caps(),
@@ -217,6 +218,41 @@ describe('CreateProfileClient for a provisioning session', () => {
     expect((button as HTMLButtonElement).disabled).toBe(true);
     await act(async () => {
       fireEvent.click(button);
+    });
+
+    expect(sent.some((r) => r.method === 'POST')).toBe(false);
+  });
+
+  // Codex P1 on #2367: a reported EK serial with reserved characters must not
+  // steer the fulfil to another session.
+  it('prefills a reserved-character EK serial and still fulfils the one session', async () => {
+    const href = assignTemplateHref('42', {
+      id: 'sess-1',
+      ek_serial: 'EK&sessionId=other-session',
+      mac_address: '02:00:00:00:00:07',
+    });
+    const sent = await renderSessionPage(
+      { [`POST ${FULFIL_PATH}`]: ok({ status: 'fulfilled' }) },
+      new URL(href, 'http://x').search.slice(1)
+    );
+
+    expect((screen.getByLabelText('EK Serial Number') as HTMLInputElement).value).toBe('EK&sessionId=other-session');
+    await submitSession();
+
+    await waitFor(() => expect(sent.some((r) => r.method === 'POST' && r.path === FULFIL_PATH)).toBe(true));
+    expect(sent.some((r) => r.path.includes('other-session'))).toBe(false);
+  });
+
+  it('refuses a link that names more than one session', async () => {
+    const sent = await renderSessionPage({}, 'ekSerial=EK-0007&sessionId=other-session&sessionId=sess-1');
+
+    expect(screen.getByTestId('create-profile-session-ambiguous')).toBeDefined();
+    expect(screen.queryByTestId('create-profile-session')).toBeNull();
+    const button = screen.getByRole('button', { name: SUBMIT_SESSION }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    await act(async () => {
+      fireEvent.click(button);
+      fireEvent.submit(button.closest('form') as HTMLFormElement);
     });
 
     expect(sent.some((r) => r.method === 'POST')).toBe(false);
