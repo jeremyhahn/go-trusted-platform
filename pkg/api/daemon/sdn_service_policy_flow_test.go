@@ -465,6 +465,59 @@ func TestNormalizeFlowMatch_PrefixesKeyByTheirNetwork(t *testing.T) {
 	assert.NotEqual(t, normalizeFlowMatch("ip,nw_src=10.0.0.0/24"), normalizeFlowMatch("ip,nw_src=10.0.1.0/24"))
 }
 
+// TestNormalizeFlowMatch_BareAddressesKeyByTheEncodedForm checks that a bare
+// address keys by the IPv4 form the OpenFlow encoder writes, so an
+// IPv4-mapped IPv6 spelling is the same switch entry as the IPv4 address.
+func TestNormalizeFlowMatch_BareAddressesKeyByTheEncodedForm(t *testing.T) {
+	assert.Equal(t, normalizeFlowMatch("ip,nw_src=::ffff:192.0.2.1"), normalizeFlowMatch("ip,nw_src=192.0.2.1"))
+	assert.Equal(t, normalizeFlowMatch("ip,nw_dst=::ffff:192.0.2.1"), normalizeFlowMatch("ip,nw_dst=192.0.2.1"))
+	assert.NotEqual(t, normalizeFlowMatch("ip,nw_src=192.0.2.1"), normalizeFlowMatch("ip,nw_src=192.0.2.2"))
+}
+
+// TestSDNService_ApplyPolicy_FailedApplyRestoresAFlowWithAMappedAddress
+// checks that a source address spelled as an IPv4-mapped IPv6 address
+// (::ffff:192.0.2.1) keys the same switch entry as its IPv4 form, which is
+// what the OpenFlow encoder writes: a failed apply that overwrote it restores
+// it (#2021 Codex r3).
+func TestSDNService_ApplyPolicy_FailedApplyRestoresAFlowWithAMappedAddress(t *testing.T) {
+	svc, mock, _ := newPolicyFlowFixture(t)
+	ctx := context.Background()
+
+	var aMatch string
+	mock.OnAddFlow(func(_ context.Context, _ string, flow *ovs.FlowMod) error {
+		aMatch = flow.Match
+		return nil
+	})
+	a := denyPolicy("a", denyRule("r1", &platformv1.PolicyRuleMatch{SourceIp: "192.0.2.1"}))
+	a.PolicyId = "pol-a"
+	_, err := svc.ApplyPolicy(ctx, a)
+	require.NoError(t, err)
+	require.NotEmpty(t, aMatch)
+
+	var adds []ovs.FlowMod
+	calls := 0
+	mock.OnAddFlow(func(_ context.Context, _ string, flow *ovs.FlowMod) error {
+		calls++
+		if calls == 2 {
+			return errFlowInstall
+		}
+		adds = append(adds, *flow)
+		return nil
+	})
+	b := denyPolicy("b",
+		denyRule("r1", &platformv1.PolicyRuleMatch{SourceIp: "::ffff:192.0.2.1"}),
+		denyRule("r2", &platformv1.PolicyRuleMatch{Protocol: "udp", DestinationPort: 53}),
+	)
+	b.PolicyId = "pol-b"
+	_, err = svc.ApplyPolicy(ctx, b)
+	require.Error(t, err)
+
+	require.GreaterOrEqual(t, len(adds), 2, "policy a's deny must be re-installed although b spells the address as IPv4-mapped IPv6")
+	last := adds[len(adds)-1]
+	assert.Equal(t, aMatch, last.Match)
+	assert.Equal(t, "drop", last.Actions)
+}
+
 // TestSDNService_DeletePolicy_UsesTheSameMatch checks that deleting a policy
 // removes flows by the match its apply installed.
 func TestSDNService_DeletePolicy_UsesTheSameMatch(t *testing.T) {
