@@ -201,7 +201,9 @@ tracked here as
 - **Staging.** Install-media staging (`stageSecureBootFile` in
   `pkg/iso`) writes any file not positively identified as a public
   enrollment artifact owner-only (0600) and wipes its read buffer after
-  the write, as `writeConfiguredNTSMaterial` does. The key file on the
+  the write, as `writeConfiguredNTSMaterial` does. An existing destination
+  file or symlink is removed and the file re-created with the staging
+  mode, so a stale world-readable copy is never written through. The key file on the
   media is still plaintext, because sbsign and the installer need a key
   file; only a KMS handle (go-quicbaas#136) removes it.
 
