@@ -69,9 +69,18 @@ describe('DeviceService attestation challenge', () => {
 
     await service.attestDevice(7, { evidence: 'ZQ==', challenge_id: 'ch-1' });
 
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/devices/7/attest', {
-      evidence: 'ZQ==',
-      challenge_id: 'ch-1',
-    });
+    expect(mockClient.post).toHaveBeenCalledWith(
+      '/v1/devices/7/attest',
+      { evidence: 'ZQ==', challenge_id: 'ch-1' },
+      { retry: { enabled: false } }
+    );
+  });
+
+  it('attestDevice never retries, with or without a challenge', async () => {
+    vi.mocked(mockClient.post).mockResolvedValue({ success: true });
+
+    await service.attestDevice(7, { evidence: 'ZQ==' });
+
+    expect(vi.mocked(mockClient.post).mock.calls[0]?.[2]).toEqual({ retry: { enabled: false } });
   });
 });
