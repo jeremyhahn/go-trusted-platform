@@ -1515,11 +1515,19 @@ type policyFlowKey struct {
 // flowKey holds the table and priority as the wire encodes them (uint8 and
 // uint16), so two flows that land on the same entry share a key.
 func flowKey(flow policyFlow) policyFlowKey {
+	// Key on the OXM match the switch receives, so match strings that
+	// encode the same entry (host bits under a CIDR, a /32 against the bare
+	// address) collide. An unparseable match keys on its raw text: AddFlow
+	// refuses it as before.
+	match := flow.mod.Match
+	if canonical, err := ovs.CanonicalMatch(flow.mod.Match); err == nil {
+		match = canonical
+	}
 	return policyFlowKey{
 		bridge:   flow.bridge,
 		table:    uint8(flow.mod.Table),
 		priority: uint16(flow.mod.Priority),
-		match:    flow.mod.Match,
+		match:    match,
 	}
 }
 
