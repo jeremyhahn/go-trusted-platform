@@ -39,6 +39,10 @@ test.describe('TPM event log', () => {
     const card = adminPage.locator('div').filter({ hasText: /^Total Events/ }).first();
     await expect(card).toBeVisible();
     await expect(card).toContainText(String(total));
+
+    // The read is offered, so Refresh is enabled and no withheld notice shows (#2069).
+    await expect(adminPage.getByRole('button', { name: 'Refresh' })).toHaveAttribute('data-capability-enabled', 'true');
+    await expect(adminPage.getByTestId('eventlog-withheld')).toHaveCount(0);
   });
 });
 
@@ -84,13 +88,20 @@ test.describe('TPM credential and random', () => {
   test('makes then activates a credential for the AK', async ({ adminPage, sdk }) => {
     const ak = await sdk.tpm.getAK();
     expect(ak.success, JSON.stringify(ak.error)).toBeTruthy();
-    // GetAKResponse carries the public key, handle and algorithm; the AK
-    // name MakeCredential needs is read when the server adds it.
-    const akName = (ak.data as { name?: string } | undefined)?.name;
-    test.skip(!akName, 'GetAK answers no AK name to make a credential for (#2069 gap)');
+    // GetAKResponse carries the AK's TPM name once the server reports it
+    // (PR #2373); the page's Use attestation key control fills it.
+    const akName = ak.data?.name;
 
     await adminPage.goto('/tpm/credential');
-    await adminPage.getByLabel('AK name (base64)').fill(akName as string);
+    const useAK = adminPage.getByRole('button', { name: 'Use attestation key' });
+    await expect(useAK).toHaveAttribute('data-capability-enabled', 'true');
+    await useAK.click();
+    if (!akName) {
+      await expect(adminPage.getByTestId('ak-name-missing')).toBeVisible();
+      test.skip(true, 'GetAK answers no AK name until PR #2373 is on this branch (#2069 gap)');
+      return;
+    }
+    await expect(adminPage.getByLabel('AK name (base64)')).toHaveValue(akName);
     await adminPage.getByLabel('Secret (optional)').fill('e2e-secret');
     const make = adminPage.getByRole('button', { name: 'Make Credential' });
     await expect(make).toHaveAttribute('data-capability-enabled', 'true');
