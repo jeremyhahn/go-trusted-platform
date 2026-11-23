@@ -747,6 +747,24 @@ func requireQUICProfileLookupGap(t *testing.T, adapter DeviceCommands, op string
 	return true
 }
 
+// requireQUICChallengeIssueGap asserts the declared QUIC gap for issuing an
+// attestation challenge (owner ruling 1234: challenges are issued over MCP,
+// gRPC, REST and the Unix socket; the QUIC attest opcode 0x3A only carries
+// challenge_id). Over QUIC the issue must fail with
+// ErrAttestationTransportUnavailable and the helper returns true; on any other
+// adapter it returns false, so a refusal there fails the caller's err check.
+func requireQUICChallengeIssueGap(t *testing.T, adapter DeviceCommands, err error) bool {
+	t.Helper()
+	if adapter.Name() != "QUIC" {
+		return false
+	}
+	var unavailable ErrAttestationTransportUnavailable
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("IssueAttestationChallenge over QUIC: got %v, want ErrAttestationTransportUnavailable (owner ruling 1234)", err)
+	}
+	return true
+}
+
 // ============================================================================
 // Attestation Tests
 //
@@ -953,9 +971,7 @@ func testAttestation(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 		opts := IssueAttestationChallengeOptions{TenantID: tenantID, DeviceID: deviceID}
 
 		first, err := adapter.IssueAttestationChallenge(ctx, opts)
-		var unavailable ErrAttestationTransportUnavailable
-		if errors.As(err, &unavailable) {
-			t.Logf("%s: %v", adapter.Name(), unavailable)
+		if requireQUICChallengeIssueGap(t, adapter, err) {
 			return
 		}
 		if err != nil {
@@ -989,9 +1005,7 @@ func testAttestation(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 			TenantID: tenantID,
 			DeviceID: deviceID,
 		})
-		var unavailable ErrAttestationTransportUnavailable
-		if errors.As(err, &unavailable) {
-			t.Logf("%s: %v", adapter.Name(), unavailable)
+		if requireQUICChallengeIssueGap(t, adapter, err) {
 			return
 		}
 		if err != nil {
@@ -1005,6 +1019,7 @@ func testAttestation(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 			ChallengeID: challenge.ChallengeID,
 		}
 		attestResult, err := adapter.AttestDevice(ctx, attestOpts)
+		var unavailable ErrAttestationTransportUnavailable
 		if errors.As(err, &unavailable) {
 			t.Logf("%s: %v", adapter.Name(), unavailable)
 			return
@@ -1030,9 +1045,7 @@ func testAttestation(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 			TenantID: tenantID,
 			DeviceID: deviceID,
 		})
-		var unavailable ErrAttestationTransportUnavailable
-		if errors.As(err, &unavailable) {
-			t.Logf("%s: %v", adapter.Name(), unavailable)
+		if requireQUICChallengeIssueGap(t, adapter, err) {
 			return
 		}
 		if err != nil {
@@ -1045,6 +1058,7 @@ func testAttestation(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 			Evidence:    forgedQuoteEvidence(t, testID),
 			ChallengeID: challenge.ChallengeID,
 		})
+		var unavailable ErrAttestationTransportUnavailable
 		if errors.As(err, &unavailable) {
 			t.Logf("%s: %v", adapter.Name(), unavailable)
 			return

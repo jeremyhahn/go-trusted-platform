@@ -518,12 +518,14 @@ func (a *QUICAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions
 	return attestResultFromProto(opts.DeviceID, &resp), nil
 }
 
-// IssueAttestationChallenge reports that QUIC has no challenge-issue opcode
-// yet; the attest opcode already carries challenge_id.
+// IssueAttestationChallenge reports the declared QUIC gap: attestation
+// challenges are not issued over QUIC (owner ruling 1234). Issue one over MCP,
+// gRPC, REST or the Unix socket; the QUIC attest opcode 0x3A carries its
+// challenge_id.
 func (a *QUICAdapter) IssueAttestationChallenge(ctx context.Context, opts IssueAttestationChallengeOptions) (*IssueAttestationChallengeResult, error) {
 	return nil, ErrAttestationTransportUnavailable{
 		Transport: "QUIC",
-		Reason:    "no attestation-challenge opcode yet (#2136: the sub-opcode waits on an owner ruling)",
+		Reason:    "attestation challenges are not issued over QUIC (owner ruling 1234): issue one over MCP, gRPC, REST or the Unix socket; the QUIC attest opcode 0x3A carries its challenge_id",
 	}
 }
 
