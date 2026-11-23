@@ -33,6 +33,7 @@ import {
 import type { AttestContainerResponse, ExecContainerResponse } from 'trusted-platform-sdk';
 import { containerStatus } from '@/lib/compute-state';
 import { Gated } from '@/components/features/capabilities/gated';
+import { ServiceUnavailableState } from '@/components/features/platform';
 
 type PendingAction = 'exec' | 'attest' | null;
 
@@ -51,8 +52,17 @@ export default function ContainerDetailPage() {
   const router = useRouter();
   const containerId = resolveDynamicId(params, pathname, 'containers');
   const { toast } = useToast();
-  const { container, metrics, loading, error, refresh, refreshMetrics, exec, attest } =
-    useContainerOps(containerId);
+  const {
+    container,
+    metrics,
+    loading,
+    error,
+    unavailable,
+    refresh,
+    refreshMetrics,
+    exec,
+    attest,
+  } = useContainerOps(containerId);
 
   const [command, setCommand] = useState('');
   const [pending, setPending] = useState<PendingAction>(null);
@@ -101,6 +111,22 @@ export default function ContainerDetailPage() {
     return (
       <div className="flex items-center justify-center h-64">
         <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (unavailable) {
+    return (
+      <div className="space-y-4">
+        <Button variant="ghost" onClick={() => router.push('/compute/containers')}>
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          Back to containers
+        </Button>
+        <h1 className="text-3xl font-bold">Container</h1>
+        <ServiceUnavailableState
+          service="Compute"
+          description="The compute service is not configured on this node; containers run on compute nodes."
+        />
       </div>
     );
   }
