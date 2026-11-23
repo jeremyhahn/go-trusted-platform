@@ -79,17 +79,17 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `CAService.GetCAInfo` | `GET /info` | `(dashboard)/ca/page.tsx` | - | - | partial |
+| `CAService.GetCAInfo` | `GET /info` | `(dashboard)/ca/page.tsx` | - | `real-server/ca-operations.spec.ts` | covered |
 | `CAService.InitCA` | - | `(dashboard)/ca/page.tsx` (gated: run at daemon start, no API route) | - | - | partial |
 | `CAService.InstallCACertificates` | - | `(dashboard)/ca/page.tsx` (gated: run at daemon start, no API route) | - | - | partial |
 | `CAService.UninstallCACertificates` | - | `(dashboard)/ca/page.tsx` (gated: run at daemon start, no API route) | - | - | partial |
 | `CAService.IssueCertificate` | `POST /certificates` | `(dashboard)/ca/certificates/page.tsx` | - | `ca.spec.ts`<br>`dashboard.spec.ts` | covered |
-| `CAService.SignCSR` | `POST /sign-csr` | `(dashboard)/ca/sign/page.tsx` | - | - | partial |
+| `CAService.SignCSR` | `POST /sign-csr` | `(dashboard)/ca/sign/page.tsx` | - | `real-server/ca-operations.spec.ts` | covered |
 | `CAService.GetCertificate` | `GET /certificates/{serial}` | `(dashboard)/ca/certificates/[id]/page.tsx` | - | `ca.spec.ts` | covered |
 | `CAService.ListCertificates` | `GET /certificates` | `(dashboard)/ca/certificates/page.tsx`<br>`(dashboard)/dashboard/page.tsx` | - | `auth.spec.ts`<br>`ca.spec.ts`<br>`dashboard.spec.ts` (+1) | covered |
 | `CAService.RevokeCertificate` | `DELETE /certificates/{serial}` | `(dashboard)/ca/certificates/[id]/page.tsx`<br>`(dashboard)/ca/certificates/page.tsx` | - | `ca.spec.ts`<br>`dashboard.spec.ts` | covered |
 | `CAService.RenewCertificate` | `POST /certificates/{serial}/renew` | `(dashboard)/ca/certificates/page.tsx` | - | `ca.spec.ts`<br>`dashboard.spec.ts` | covered |
-| `CAService.VerifyCertificate` | `POST /certificates/verify` | `(dashboard)/ca/verify/page.tsx` | - | - | partial |
+| `CAService.VerifyCertificate` | `POST /certificates/verify` | `(dashboard)/ca/verify/page.tsx` | - | `real-server/ca-operations.spec.ts` | covered |
 | `CAService.GetCRL` | `GET /crl` | `(dashboard)/ca/crl/page.tsx` | - | `ca.spec.ts` | covered |
 | `CAService.GetCABundle` | - | `(dashboard)/ca/bundle/page.tsx` | - | `ca.spec.ts` | covered |
 
@@ -826,7 +826,7 @@ Eleven rows were checked against the page source. Two disagreed and the join was
 | `OverlayService.ListVNIs`, `CreateVNI` | covered | `networking/overlays` calls `overlay.listVNIs` and `overlay.createVNI` | agrees |
 | `GatewayService.GetGatewayStatus` | missing | `networking/gateway` calls `gateway.getStatus` | fixed: the area noun is dropped before matching |
 | `CAService.GetCABundle` | covered | `ca/bundle` calls `ca.getBundle` | agrees |
-| `CAService.GetCAInfo` | partial | `ca` calls `ca.getInfo` through `useCAInfo` | agrees |
+| `CAService.GetCAInfo` | covered | `ca` calls `ca.getInfo` through `useCAInfo` | agrees |
 | `TenantService.ListTenants` | missing | `admin/tenant` is a landing page with a raw fetch and no SDK call | agrees |
 | `PXEService.RegisterDevice` | covered | `networking/pxe` calls `pxe.registerDevice` | agrees |
 | `ConfigDeliveryService.GetSession` | not-UI | `provisioning/sessions/[sessionId]` calls `device.getProvisioningSession` and `fulfillProvisioningSession` | fixed: mapped to `GetSession` and `FulfillSession` |
