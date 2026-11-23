@@ -98,6 +98,8 @@ type RESTServer struct {
 	gatewayHandlers       *restapi.GatewayHandlers
 	gatewayService        *gatewayRESTService
 	idevidService         *IDevIDGRPCService
+	// authFactorPEP decides user_authfactors:add on certificate issuance.
+	authFactorPEP restapi.AuthFactorPEP
 }
 
 // NewRESTServer creates a new REST server for the daemon
@@ -571,6 +573,13 @@ func (s *RESTServer) SetOverlayHandlers(svc restapi.OverlayServiceInterface, gua
 // guard authorizes POST /api/v1/ca/sign-csr, which needs a platform token
 // granting ca:sign-csr (a client certificate alone is refused); when it is
 // nil, sign-csr refuses every request.
+// SetAuthFactorPEP sets the IAM PEP that decides user_authfactors:add on the
+// auth-factor certificate issuance route. Call it before SetCAHandlers; with
+// no PEP the route refuses every caller.
+func (s *RESTServer) SetAuthFactorPEP(pep restapi.AuthFactorPEP) {
+	s.authFactorPEP = pep
+}
+
 func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, guard *restapi.ScopeGuard) {
 	if ca == nil {
 		return
@@ -594,7 +603,9 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, guard *
 	// Wire auth factor endpoints (AAGUID lookup, mTLS probe, cert issuance,
 	// MFA policy). These share the same CA instance as the CA handlers so
 	// certificate issuance goes through the live platform CA.
-	authFactorHandlers := restapi.NewAuthFactorHandlers(ca, s.logger)
+	// Issuance is decided by the IAM PEP for the principal the guard
+	// authenticates; a nil PEP (IAM off) refuses it.
+	authFactorHandlers := restapi.NewAuthFactorHandlers(ca, s.logger).WithAuthorization(guard, s.authFactorPEP)
 	authFactorHandlers.RegisterRoutes(s.router)
 	s.logger.Info("Auth factor REST routes registered")
 }

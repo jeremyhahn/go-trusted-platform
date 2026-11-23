@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 )
 
@@ -234,6 +235,34 @@ type AuthFactorHandlers struct {
 	// MFA policy store — keyed by tenant ID
 	policyMu sync.RWMutex
 	policies map[string]mfaPolicy
+
+	// guard authenticates the session principal; pep decides
+	// user_authfactors:add for it. Both nil refuses certificate issuance.
+	guard *ScopeGuard
+	pep   AuthFactorPEP
+}
+
+// AuthFactorPEP is the narrow IAM decision surface the auth-factor routes
+// need; the quicbaas IAMPEPClient satisfies it.
+type AuthFactorPEP interface {
+	Check(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error)
+}
+
+const (
+	// authFactorResource and authFactorAddAction are go-qrdb's
+	// user_authfactors:add permission.
+	authFactorResource  = "user_authfactors"
+	authFactorAddAction = "add"
+	// authFactorPEPTimeout bounds one IAM decision.
+	authFactorPEPTimeout = 5 * time.Second
+)
+
+// WithAuthorization sets the guard that authenticates the session principal
+// and the PEP that decides user_authfactors:add for it.
+func (h *AuthFactorHandlers) WithAuthorization(guard *ScopeGuard, pep AuthFactorPEP) *AuthFactorHandlers {
+	h.guard = guard
+	h.pep = pep
+	return h
 }
 
 // NewAuthFactorHandlers creates an AuthFactorHandlers. ca may be nil when the
@@ -364,10 +393,10 @@ func (h *AuthFactorHandlers) handleMTLSProbe(w http.ResponseWriter, r *http.Requ
 // handleIssueCert handles POST /api/v1/users/{id}/factors/mtls/issue-cert.
 //
 // The handler signs the supplied CSR with the platform CA using a clientAuth
-// EKU profile. Authentication is caller-context: the request is accepted when
-// the caller's mTLS cert subject CN matches the user ID, or when the caller
-// presents an admin certificate. When mTLS is not configured the endpoint
-// accepts any authenticated request (IAM layer upstream is responsible).
+// EKU profile. The request is decided by IAMPEPClient.Check on
+// user_authfactors:add for the session principal the ScopeGuard
+// authenticates; without a principal, or without a configured guard and PEP,
+// it is refused with 403.
 func (h *AuthFactorHandlers) handleIssueCert(w http.ResponseWriter, r *http.Request) {
 	if h.ca == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrAuthServiceNotAvailable{})
@@ -380,8 +409,8 @@ func (h *AuthFactorHandlers) handleIssueCert(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Authorization check: caller must be the user or admin.
-	if !h.callerAuthorized(r, userID) {
+	// Authorization: the IAM PEP decides for the session principal.
+	if !h.issueAuthorized(r) {
 		h.writeError(w, http.StatusForbidden, ErrForbiddenUserID{})
 		return
 	}
@@ -433,31 +462,34 @@ func (h *AuthFactorHandlers) handleIssueCert(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// callerAuthorized returns true when the caller is allowed to act on the
-// given userID. The caller is allowed when:
-//   - mTLS is not in use (IAM layer is authoritative), OR
-//   - the client cert CN matches userID, OR
-//   - the client cert has the "admin" OID in its SubjectAltName or CN prefix.
-func (h *AuthFactorHandlers) callerAuthorized(r *http.Request, userID string) bool {
-	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-		// No mTLS — IAM/JWT layer is authoritative; permit.
-		return true
+// issueAuthorized reports whether the IAM PEP allows the authenticated
+// session principal user_authfactors:add. A caller the guard cannot identify,
+// a principal without a subject or tenant, a PEP error or a missing guard or
+// PEP all refuse: the TLS peer certificate alone authorizes nothing.
+func (h *AuthFactorHandlers) issueAuthorized(r *http.Request) bool {
+	if h.guard == nil || h.pep == nil {
+		return false
 	}
-	leaf := r.TLS.PeerCertificates[0]
-	cn := leaf.Subject.CommonName
-
-	// Admin prefix or org unit.
-	if strings.HasPrefix(cn, "admin") || strings.EqualFold(cn, "admin") {
-		return true
+	caller, err := h.guard.identify(r)
+	if err != nil || caller == nil || caller.Subject == "" || caller.TenantID == "" {
+		return false
 	}
-	for _, ou := range leaf.Subject.OrganizationalUnit {
-		if strings.EqualFold(ou, "admin") {
-			return true
-		}
+	ctx, cancel := context.WithTimeout(r.Context(), authFactorPEPTimeout)
+	defer cancel()
+	resp, err := h.pep.Check(ctx, &sdkiam.CheckRequest{
+		Subject: sdkiam.CheckSubject{
+			ID:       caller.Subject,
+			TenantID: caller.TenantID,
+			Roles:    caller.Roles,
+		},
+		Resource: authFactorResource,
+		Action:   authFactorAddAction,
+	})
+	if err != nil {
+		h.logger.Warn("auth-factor permission check failed", "subject", caller.Subject, "error", err)
+		return false
 	}
-
-	// Caller is the user themselves.
-	return cn == userID
+	return resp != nil && resp.Allowed
 }
 
 // =============================================================================
