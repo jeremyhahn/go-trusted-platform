@@ -208,13 +208,13 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 |---|---|---|---|---|---|
 | `DeviceService.CreateDevice` | `POST /devices` | `(dashboard)/devices/page.tsx` | - | `attestation-reports.spec.ts`<br>`dashboard.spec.ts`<br>`devices.spec.ts` | covered |
 | `DeviceService.GetDevice` | `GET /devices/{id:[0-9]+}` | `(dashboard)/devices/[id]/page.tsx` | - | `attest-cert-record.spec.ts`<br>`attestation-reports.spec.ts`<br>`devices.spec.ts` | covered |
-| `DeviceService.UpdateDevice` | `PUT /devices/{id:[0-9]+}` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/devices/[id]/page.tsx`<br>`(dashboard)/devices/idevid/page.tsx` (+1) (read-only) | - | - | partial |
+| `DeviceService.UpdateDevice` | `PUT /devices/{id:[0-9]+}` | `(dashboard)/devices/[id]/page.tsx` | - | `real-server/devices.spec.ts` | covered |
 | `DeviceService.DeleteDevice` | `DELETE /devices/{id:[0-9]+}` | `(dashboard)/devices/[id]/page.tsx`<br>`(dashboard)/devices/page.tsx` | - | `attest-cert-record.spec.ts`<br>`attestation-reports.spec.ts`<br>`dashboard.spec.ts` (+1) | covered |
 | `DeviceService.ListDevices` | `GET /devices` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/devices/idevid/page.tsx`<br>`(dashboard)/devices/page.tsx` | - | `attestation-reports.spec.ts`<br>`auth.spec.ts`<br>`dashboard.spec.ts` (+2) | covered |
-| `DeviceService.FindDeviceBySerial` | `GET /devices/serial/{serial}` | - | - | - | missing |
-| `DeviceService.CountDevices` | `GET /devices/count` | - | - | - | missing |
+| `DeviceService.FindDeviceBySerial` | `GET /devices/serial/{serial}` | `(dashboard)/devices/page.tsx` | - | `real-server/devices.spec.ts` | covered |
+| `DeviceService.CountDevices` | `GET /devices/count` | `(dashboard)/devices/page.tsx` | - | `real-server/devices.spec.ts` | covered |
 | `DeviceService.CreateProfile` | `POST /templates/{id:[0-9]+}/create-profile` | `(dashboard)/devices/profiles/page.tsx`<br>`(dashboard)/provisioning/sessions/[sessionId]/page.tsx` | - | `devices.spec.ts` | covered |
-| `DeviceService.GetProfile` | `GET /device/profile` | - | - | - | missing |
+| `DeviceService.GetProfile` | `GET /device/profile` | - | - | - | not-UI: machine-facing mTLS device route |
 | `DeviceService.UpdateProfile` | `PUT /device/profiles/{id:[0-9]+}` | `(dashboard)/devices/profiles/page.tsx`<br>`(dashboard)/provisioning/sessions/[sessionId]/page.tsx` (read-only) | - | - | partial |
 | `DeviceService.DeleteProfile` | `DELETE /device/profiles/{id:[0-9]+}` | `(dashboard)/devices/profiles/page.tsx` | - | `devices.spec.ts` | covered |
 | `DeviceService.ListProfiles` | `GET /device/profiles` | `(dashboard)/devices/profiles/page.tsx` | - | `devices.spec.ts` | covered |
@@ -227,8 +227,8 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `DeviceService.RecordAttestationCertificate` | - | - | - | - | missing |
 | `DeviceService.DisableDevice` | `POST /devices/{id:[0-9]+}/disable` | `(dashboard)/devices/[id]/page.tsx`<br>`(dashboard)/devices/page.tsx` | - | `attest-cert-record.spec.ts`<br>`attestation-reports.spec.ts`<br>`dashboard.spec.ts` (+1) | covered |
 | `DeviceService.EnableDevice` | `POST /devices/{id:[0-9]+}/enable` | `(dashboard)/devices/[id]/page.tsx`<br>`(dashboard)/devices/page.tsx` | - | `attest-cert-record.spec.ts`<br>`attestation-reports.spec.ts`<br>`dashboard.spec.ts` (+1) | covered |
-| `DeviceService.BootCertificate` | `POST /device/boot/certificate` | - | - | - | missing |
-| `DeviceService.BootDelivery` | `POST /device/boot` | - | - | - | missing |
+| `DeviceService.BootCertificate` | `POST /device/boot/certificate` | - | - | - | not-UI: machine-facing diskless boot route |
+| `DeviceService.BootDelivery` | `POST /device/boot` | - | - | - | not-UI: machine-facing diskless boot route (mTLS) |
 | `DeviceService.CreateTemplate` | `POST /device/templates` | `(dashboard)/devices/templates/page.tsx` | - | - | partial |
 | `DeviceService.GetTemplate` | `GET /device/templates/{id:[0-9]+}` | `(dashboard)/devices/templates/[id]/create-profile/page.tsx`<br>`(dashboard)/devices/templates/[id]/page.tsx` | - | - | partial |
 | `DeviceService.ListTemplates` | `GET /device/templates` | `(dashboard)/devices/templates/page.tsx`<br>`(dashboard)/provisioning/sessions/[sessionId]/page.tsx`<br>`(dashboard)/provisioning/sessions/page.tsx` | - | `provisioning.spec.ts` | covered |
