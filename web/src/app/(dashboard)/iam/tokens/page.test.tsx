@@ -25,6 +25,7 @@ const iam = {
   registerApp: vi.fn(),
   deleteApp: vi.fn(),
   rotateAppSecret: vi.fn(),
+  verifyToken: vi.fn(),
 };
 const toastResult = { toast };
 const authResult: { user: null; tenantId: string | undefined; isLoading: boolean } = {
@@ -115,6 +116,10 @@ vi.mock("@/components/ui/data-table", async (importOriginal) => ({
       </div>
     );
   },
+}));
+
+vi.mock("@/components/features/iam/token-verify-card", () => ({
+  TokenVerifyCard: () => <div data-testid="token-verify-card" />,
 }));
 
 vi.mock("@/components/ui/data-table-column-header", () => ({
@@ -229,6 +234,11 @@ describe("TokensPage states", () => {
     render(<TokensPage />);
     expect(screen.getByText("Loading authentication...")).toBeTruthy();
     expect(screen.queryByTestId("table")).toBeNull();
+  });
+
+  it("shows the token verify card", () => {
+    render(<TokensPage />);
+    expect(screen.getByTestId("token-verify-card")).toBeTruthy();
   });
 
   it("asks for a login when there is no tenant", () => {
