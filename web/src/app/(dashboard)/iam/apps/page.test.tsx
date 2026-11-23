@@ -16,6 +16,7 @@ const toast = vi.fn();
 const refetch = vi.fn();
 const listApps = vi.fn();
 const deleteApp = vi.fn();
+const rotateAppSecret = vi.fn();
 const auth = { user: null, tenantId: "t1" as string | null, isLoading: false };
 const api: { data: unknown; isLoading: boolean; error: Error | null } = {
   data: null,
@@ -27,7 +28,7 @@ const captured: { fetcher?: () => unknown; opts?: ApiOpts } = {};
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => auth }));
 vi.mock("@/hooks", () => ({
-  useIAM: () => ({ listApps, deleteApp }),
+  useIAM: () => ({ listApps, deleteApp, rotateAppSecret }),
   useToast: () => ({ toast }),
   useApi: (fetcher: () => unknown, _deps: unknown[], opts: ApiOpts) => {
     captured.fetcher = fetcher;
@@ -110,7 +111,7 @@ const stat = (title: string) =>
 const confirmSpy = vi.fn<(message?: string) => boolean>();
 
 beforeEach(() => {
-  for (const f of [push, toast, refetch, listApps, deleteApp]) f.mockReset();
+  for (const f of [push, toast, refetch, listApps, deleteApp, rotateAppSecret]) f.mockReset();
   auth.tenantId = "t1";
   auth.isLoading = false;
   api.data = { apps };
@@ -229,11 +230,46 @@ describe("AppsPage", () => {
     }
   });
 
-  it("Rotate Secret only announces the feature", () => {
+  it("rotates a confirmed app's secret and shows the new secret once", async () => {
+    rotateAppSecret.mockResolvedValue({
+      clientId: "client-0123456789abcdef",
+      clientSecret: "example-secret",
+      name: "App One",
+    });
     render(<AppsPage />);
     fireEvent.click(within(rows()[0]).getByRole("button", { name: "Rotate Secret" }));
-    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Feature coming soon" }));
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("rotate the secret"));
+    await waitFor(() => expect(rotateAppSecret).toHaveBeenCalledWith("t1", "client-0123456789abcdef"));
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Secret rotated" })),
+    );
+    expect(await screen.findByText("example-secret")).toBeTruthy();
+    expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Feature coming soon" }));
     expect(deleteApp).not.toHaveBeenCalled();
+  });
+
+  it("does not rotate when the confirm is declined", () => {
+    confirmSpy.mockReturnValue(false);
+    render(<AppsPage />);
+    fireEvent.click(within(rows()[0]).getByRole("button", { name: "Rotate Secret" }));
+    expect(rotateAppSecret).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Feature coming soon" }));
+  });
+
+  it("disables Rotate Secret when the server does not offer POST /api/v1/iam/tenants/{tenant}/apps/{id}/rotate", () => {
+    caps.capability.mockImplementation((o: string) =>
+      o === "POST /api/v1/iam/tenants/{tenant}/apps/{id}/rotate"
+        ? { enabled: false, reason: "not-configured: iam" }
+        : { enabled: true },
+    );
+    render(<AppsPage />);
+    const rotate = within(rows()[0]).getByRole("button", { name: "Rotate Secret" }) as HTMLButtonElement;
+    expect(rotate.disabled).toBe(true);
+    expect(rotate.getAttribute("title")).toBe("not-configured: iam");
+    fireEvent.click(rotate);
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(rotateAppSecret).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalled();
   });
 
   it("deletes a confirmed app and refetches", async () => {
