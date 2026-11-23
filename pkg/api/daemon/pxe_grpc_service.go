@@ -213,6 +213,16 @@ func (s *PXEGRPCService) UpdateState(ctx context.Context, req *platformv1.Update
 		return nil, status.Error(codes.InvalidArgument, "device ID is required")
 	}
 
+	// No transition leads to UNKNOWN, and UNSPECIFIED is what a short enum
+	// name the REST decoder discarded becomes: both are bad requests, not
+	// state-machine refusals.
+	switch req.GetState() {
+	case platformv1.ProvisioningState_PROVISIONING_STATE_UNSPECIFIED:
+		return nil, status.Error(codes.InvalidArgument, "state is required (send the PROVISIONING_STATE_* name)")
+	case platformv1.ProvisioningState_PROVISIONING_STATE_UNKNOWN:
+		return nil, status.Error(codes.InvalidArgument, "state UNKNOWN cannot be set")
+	}
+
 	state := s.stateFromProto(req.GetState())
 	reason := req.GetReason()
 
