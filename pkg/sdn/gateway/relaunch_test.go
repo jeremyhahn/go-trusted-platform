@@ -3,9 +3,11 @@ package gateway_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -253,17 +255,43 @@ func startRelaunchSupervisor(t *testing.T, ctx context.Context, launcher *gatewa
 // that child. Every one of services is reported up.
 func awaitRelaunch(t *testing.T, supervisor *process.Supervisor, launcher *gatewayLauncher, services ...string) *gatewayChild {
 	t.Helper()
-	require.Eventually(t, func() bool {
-		if launcher.child(2) == nil {
-			return false
-		}
+	// The last value of each condition, so a timeout says which one was
+	// never met rather than only that the wait ran out.
+	var mu sync.Mutex
+	relaunched := false
+	health := make(map[string]error, len(services))
+	up := func() bool {
+		child := launcher.child(2)
+		ok := child != nil
+		mu.Lock()
+		defer mu.Unlock()
+		relaunched = child != nil
 		for _, service := range services {
-			if supervisor.ServiceHealth(service) != nil {
-				return false
+			err := supervisor.ServiceHealth(service)
+			health[service] = err
+			if err != nil {
+				ok = false
 			}
 		}
-		return true
-	}, 15*time.Second, 10*time.Millisecond, "the relaunched child is reported up once it holds its document")
+		return ok
+	}
+	describe := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		var b strings.Builder
+		fmt.Fprintf(&b, "the relaunched child is reported up once it holds its document: launcher.child(2) exists=%t", relaunched)
+		for _, service := range services {
+			fmt.Fprintf(&b, "; %s health: %v", service, health[service])
+		}
+		return b.String()
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for !up() {
+		if time.Now().After(deadline) {
+			require.FailNow(t, "Condition never satisfied", describe())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	return launcher.child(2)
 }
 
