@@ -81,6 +81,6 @@ describe('AttestationService device verdicts', () => {
     const result = await service.pollDeviceVerdicts();
 
     expect(result.data?.cursor).toBe('c2');
-    expect(result.data?.verdicts[0].deviceId).toBe('18446744073709551615');
+    expect(result.data?.verdicts[0]?.deviceId).toBe('18446744073709551615');
   });
 });

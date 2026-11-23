@@ -734,3 +734,47 @@ export function classifyDeviceReport(response: {
     message: response.error?.message ?? 'attestation report unavailable',
   };
 }
+
+/**
+ * The longest wait, in milliseconds, the server holds a verdicts poll open
+ * (GET /api/v1/attestation/verdicts caps wait_ms at this value).
+ */
+export const POLL_DEVICE_VERDICTS_MAX_WAIT_MS = 20000;
+
+/** The query of a device verdicts poll. */
+export interface PollDeviceVerdictsRequest {
+  /** Where the poll continues from: the cursor of the previous answer; omit to start at the beginning. */
+  cursor?: string;
+  /** How long the server may wait for a new verdict, in milliseconds; clamped to 0..20000. */
+  waitMs?: number;
+}
+
+/** One device verdict as platformd recorded it in the attestation event log. */
+export interface DeviceVerdictEvent {
+  /** The attestation event log entry that made the verdict durable. */
+  eventId: string;
+  /** When the verdict was logged (RFC 3339). */
+  recordedAt: string;
+  /** The device the verdict is about: a uint64 carried as a decimal string. */
+  deviceId: string;
+  /** The tenant the device belongs to. */
+  tenantId: string;
+  /** The host the device was attested on. */
+  hostId: string;
+  /** The device serial number. */
+  serial: string;
+  /** True when the device passed attestation. */
+  passed: boolean;
+  /** True when a failed verdict was evidence of compromise rather than an absence of evidence; meaningless when passed. */
+  cryptographic: boolean;
+  /** The failure detail; empty when passed. */
+  reason: string;
+}
+
+/** The answer to a device verdicts poll. */
+export interface PollDeviceVerdictsResponse {
+  /** Where the next poll continues from. */
+  cursor: string;
+  /** The verdicts recorded after the request's cursor that the caller may see, in recorded order. */
+  verdicts: DeviceVerdictEvent[];
+}

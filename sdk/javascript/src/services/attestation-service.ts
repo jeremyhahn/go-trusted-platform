@@ -31,11 +31,13 @@ import type {
   ListDeviceReportsResponse,
   RefreshDeviceReportResponse,
   CallerPolicyDescription,
+  PollDeviceVerdictsRequest,
+  PollDeviceVerdictsResponse,
   AttestationHashAlgorithm,
   AttestationHashAlgorithmProtoName,
   AttestationPCRValue,
 } from '../types/attestation.js';
-import { ATTESTATION_HASH_ALGORITHM_PROTO_NAMES } from '../types/attestation.js';
+import { ATTESTATION_HASH_ALGORITHM_PROTO_NAMES, POLL_DEVICE_VERDICTS_MAX_WAIT_MS } from '../types/attestation.js';
 import { encodeEnum } from './wire-enum.js';
 
 /**
@@ -248,6 +250,32 @@ export class AttestationService extends BaseService {
    */
   async describeCallers(): Promise<ApiResponse<CallerPolicyDescription>> {
     return this.client.get<CallerPolicyDescription>(this.buildUrl('/callers'));
+  }
+
+
+  /**
+   * Polls the device verdicts the caller's tenant may see:
+   * `GET /api/v1/attestation/verdicts?cursor=&wait_ms=`. Pass the previous
+   * answer's cursor to continue; `waitMs` (clamped to 0..20000, the server's
+   * cap) lets the server hold the poll open for a new verdict. The server
+   * answers 503 when it has no verdict poller and 403 when the session has
+   * no tenant.
+   */
+  async pollDeviceVerdicts(
+    request: PollDeviceVerdictsRequest = {},
+  ): Promise<ApiResponse<PollDeviceVerdictsResponse>> {
+    const params = new URLSearchParams();
+    if (request.cursor) {
+      params.set('cursor', request.cursor);
+    }
+    if (request.waitMs !== undefined) {
+      params.set(
+        'wait_ms',
+        String(Math.min(Math.max(0, Math.floor(request.waitMs)), POLL_DEVICE_VERDICTS_MAX_WAIT_MS)),
+      );
+    }
+    const qs = params.toString();
+    return this.client.get<PollDeviceVerdictsResponse>(this.buildUrl(qs ? '/verdicts?' + qs : '/verdicts'));
   }
 
   async collectHostAttestation(request: CollectHostAttestationRequest): Promise<ApiResponse<CollectHostAttestationResponse>> {
