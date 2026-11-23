@@ -54,6 +54,7 @@ import type {
   GetPolicyResponse,
   ListPoliciesRequest,
   ListPoliciesResponse,
+  DeletePolicyResponse,
 } from '../types/sdn-policies.js';
 
 /**
@@ -459,6 +460,15 @@ export class SDNService extends BaseService {
    */
   async getPolicy(id: string): Promise<ApiResponse<GetPolicyResponse>> {
     return this.client.get<GetPolicyResponse>(
+      this.buildUrl(`/policies/${this.encodePathSegment(id)}`)
+    );
+  }
+
+  /**
+   * Delete a policy: DELETE /api/v1/sdn/policies/{id}.
+   */
+  async deletePolicy(id: string): Promise<ApiResponse<DeletePolicyResponse>> {
+    return this.client.delete<DeletePolicyResponse>(
       this.buildUrl(`/policies/${this.encodePathSegment(id)}`)
     );
   }

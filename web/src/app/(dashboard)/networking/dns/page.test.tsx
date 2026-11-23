@@ -4,9 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // #1844: the page lists zones through useDNS (network boundary, mocked here),
 // maps each protojson Zone with readZone and creates zones from a dialog.
 
-const { dns, toast } = vi.hoisted(() => ({
+const { dns, toast, off } = vi.hoisted(() => ({
   dns: { listZones: vi.fn(), createZone: vi.fn() },
   toast: vi.fn(),
+  off: new Set<string>(),
 }));
 
 vi.mock("@/hooks", async (importOriginal) => ({
@@ -17,9 +18,14 @@ vi.mock("@/hooks", async (importOriginal) => ({
 
 // The table is its own component; the page only hands it the mapped zones.
 // The page mounts the DNS lookup card, whose Resolve and Register are gated
-// on the server's capabilities (#2060); every op is offered here.
+// on the server's capabilities (#2060); every op not in `off` is offered here.
 vi.mock("@/hooks/use-capabilities", () => ({
-  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: (op: string) =>
+      off.has(op) ? { enabled: false, reason: "not-configured: dns" } : { enabled: true },
+  }),
 }));
 
 vi.mock("@/components/features/networking/dns-zone-table", () => ({
@@ -56,9 +62,23 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  off.clear();
 });
 
 describe("DNSZonesPage", () => {
+  it("withholds Add Zone when POST /api/v1/dns/zones is not offered", async () => {
+    off.add("POST /api/v1/dns/zones");
+    dns.listZones.mockResolvedValue({ data: { zones: [] } });
+    render(<DNSZonesPage />);
+    await waitFor(() => expect(dns.listZones).toHaveBeenCalledTimes(1));
+
+    const add = screen.getByRole("button", { name: "Add Zone" }) as HTMLButtonElement;
+    expect(add.getAttribute("data-capability-op")).toBe("POST /api/v1/dns/zones");
+    expect(add.getAttribute("data-capability-enabled")).toBe("false");
+    expect(add.disabled).toBe(true);
+    expect(add.getAttribute("title")).toBe("not-configured: dns");
+  });
+
   it("lists the zones and computes the stat cards", async () => {
     dns.listZones.mockResolvedValue({ data: { zones } });
     render(<DNSZonesPage />);

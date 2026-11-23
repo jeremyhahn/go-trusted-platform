@@ -315,6 +315,16 @@ func (h *SDNHandlers) GetPolicy(w http.ResponseWriter, r *http.Request) {
 	h.reply(w, r, resp, err)
 }
 
+// DeletePolicy handles DELETE /api/v1/sdn/policies/{id}.
+func (h *SDNHandlers) DeletePolicy(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	req := &platformv1.DeletePolicyRequest{PolicyId: mux.Vars(r)["id"]}
+	resp, err := h.sdnService.DeletePolicy(r.Context(), req)
+	h.reply(w, r, resp, err)
+}
+
 // VLAN Handlers
 
 // CreateVLAN handles POST /api/v1/sdn/vlans and
