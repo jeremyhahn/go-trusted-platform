@@ -1097,3 +1097,25 @@ func TestNetworkQuota_OverflowIsRefused(t *testing.T) {
 		{"ports", [2]int64{0, math.MaxInt64}},
 	})
 }
+
+// TestStorageQuota_OverflowIsRefused checks that volume storage and snapshots
+// compare a request against the remaining capacity, so math.MaxInt64 cannot
+// wrap Used+n negative and be admitted.
+func TestStorageQuota_OverflowIsRefused(t *testing.T) {
+	newQuota := func() pairQuota {
+		q := &StorageQuota{MaxVolumesGB: 2, MaxSnapshots: 2, UsedVolumesGB: 1, UsedSnapshots: 1}
+		return pairQuota{
+			hasCapacity: q.HasCapacity,
+			reserve:     q.Reserve,
+			max:         [2]*int64{&q.MaxVolumesGB, &q.MaxSnapshots},
+			used:        [2]*int64{&q.UsedVolumesGB, &q.UsedSnapshots},
+		}
+	}
+	checkPairOverflowIsRefused(t, newQuota, []struct {
+		resource string
+		counts   [2]int64
+	}{
+		{"volume storage", [2]int64{math.MaxInt64, 0}},
+		{"snapshots", [2]int64{0, math.MaxInt64}},
+	})
+}
