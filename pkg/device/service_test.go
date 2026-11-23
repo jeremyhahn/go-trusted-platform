@@ -16,6 +16,7 @@ package device
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -1291,6 +1292,90 @@ func TestService_Update_KeepsItsOwnSerial(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "b", stored.Model)
 	assert.Equal(t, "SN-SELF", stored.Serial)
+}
+
+// raceOntoOneSerial releases both writers on one start channel and returns
+// their errors in order.
+func raceOntoOneSerial(first, second func() error) (error, error) {
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var errFirst, errSecond error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		errFirst = first()
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		errSecond = second()
+	}()
+	close(start)
+	wg.Wait()
+	return errFirst, errSecond
+}
+
+// assertOneWinner checks that exactly one writer succeeded, the other was
+// refused for the serial, and exactly one stored device holds it.
+func assertOneWinner(t *testing.T, service *Service, ids []uint64, errA, errB error) {
+	t.Helper()
+	ctx := context.Background()
+	refused := ErrDeviceSerialExists{Serial: "SN-RACE"}
+	if errA == nil {
+		assert.Equal(t, refused, errB)
+	} else {
+		assert.Equal(t, refused, errA)
+		assert.NoError(t, errB)
+	}
+	holders := 0
+	for _, id := range ids {
+		stored, err := service.Get(ctx, id)
+		require.NoError(t, err)
+		if stored.Serial == "SN-RACE" {
+			holders++
+		}
+	}
+	assert.Equal(t, 1, holders, "exactly one device may hold the serial")
+}
+
+func TestService_Update_ConcurrentUpdatesClaimOneSerialOnce(t *testing.T) {
+	ctx := context.Background()
+	for round := 0; round < 20; round++ {
+		service, err := NewService(testServiceDatastore(t))
+		require.NoError(t, err)
+		a := &entities.Device{Serial: "SN-A", Model: "a"}
+		require.NoError(t, service.Create(ctx, a))
+		b := &entities.Device{Serial: "SN-B", Model: "b"}
+		require.NoError(t, service.Create(ctx, b))
+
+		errA, errB := raceOntoOneSerial(
+			func() error { return service.Update(ctx, &entities.Device{ID: a.ID, Serial: "SN-RACE"}) },
+			func() error { return service.Update(ctx, &entities.Device{ID: b.ID, Serial: "SN-RACE"}) },
+		)
+		assertOneWinner(t, service, []uint64{a.ID, b.ID}, errA, errB)
+	}
+}
+
+func TestService_Update_ConcurrentUpdateAndCreateClaimOneSerialOnce(t *testing.T) {
+	ctx := context.Background()
+	for round := 0; round < 20; round++ {
+		service, err := NewService(testServiceDatastore(t))
+		require.NoError(t, err)
+		a := &entities.Device{Serial: "SN-A", Model: "a"}
+		require.NoError(t, service.Create(ctx, a))
+		created := &entities.Device{Serial: "SN-RACE", Model: "new"}
+
+		errUpdate, errCreate := raceOntoOneSerial(
+			func() error { return service.Update(ctx, &entities.Device{ID: a.ID, Serial: "SN-RACE"}) },
+			func() error { return service.Create(ctx, created) },
+		)
+		ids := []uint64{a.ID}
+		if errCreate == nil {
+			ids = append(ids, created.ID)
+		}
+		assertOneWinner(t, service, ids, errUpdate, errCreate)
+	}
 }
 
 func TestService_Create_SerialCheckStorageFaultIsNotADuplicate(t *testing.T) {
