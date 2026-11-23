@@ -43,6 +43,7 @@ export type {
   BMCCeremonyStep,
   BMCEnrollResult,
   BMCRestoreResult,
+  BMCReplaceWebCertRequest,
 } from './bmc-cert-service.js';
 export { GatewayService } from './gateway-service.js';
 export { IAMService } from './iam-service.js';

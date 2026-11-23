@@ -1,10 +1,13 @@
 /**
  * BMC Certificate Service
  *
- * The BMC enrollment ceremony and the factory-certificate restore ceremony.
+ * The BMC enrollment ceremony, the factory-certificate restore ceremony and
+ * the web-certificate replacement.
  * Wire contract: pkg/webservice/v1/bmc/enroll.go (`POST /api/v1/bmc/{profileID}/enroll`,
- * EnrollRequest / EnrollResponse) and pkg/webservice/v1/bmc/cert_restore.go
- * (`POST /api/v1/bmc/{profileID}/cert/restore`, no request body, RestoreResponse).
+ * EnrollRequest / EnrollResponse), pkg/webservice/v1/bmc/cert_restore.go
+ * (`POST /api/v1/bmc/{profileID}/cert/restore`, no request body, RestoreResponse)
+ * and pkg/webservice/v1/bmc/handler.go ReplaceWebCertificate
+ * (`PUT /api/v1/bmc/{profileID}/cert`, `cert_pem` / `key_pem`).
  * Field names follow the Go encoding/json tags (snake_case).
  */
 
@@ -64,6 +67,12 @@ export interface BMCRestoreResult {
   new_cert_meta: BMCCertMeta;
   new_cert_pem?: string;
   steps: BMCCeremonyStep[];
+}
+
+/** A replacement web certificate and its private key, both PEM. */
+export interface BMCReplaceWebCertRequest {
+  certPem: string;
+  keyPem: string;
 }
 
 /**
@@ -133,5 +142,27 @@ export class BMCCertService extends BaseService {
    */
   async restoreFactoryCert(profileId: string | number): Promise<ApiResponse<BMCRestoreResult>> {
     return this.client.post<BMCRestoreResult>(this.buildUrl(`/${profileId}/cert/restore`));
+  }
+
+  /**
+   * Replace the BMC's web certificate with a given certificate and key
+   * (`PUT /api/v1/bmc/{profileID}/cert`, handler ReplaceWebCertificate in
+   * pkg/webservice/v1/bmc/handler.go).
+   *
+   * The server answers 400 when either PEM is blank; the answer is returned
+   * unchanged.
+   *
+   * @param profileId - The BMC profile ID
+   * @param req - The certificate and private key PEM
+   * @returns The server's status answer
+   */
+  async replaceWebCertificate(
+    profileId: string | number,
+    req: BMCReplaceWebCertRequest
+  ): Promise<ApiResponse<{ status: string }>> {
+    return this.client.put<{ status: string }>(this.buildUrl(`/${profileId}/cert`), {
+      cert_pem: req.certPem,
+      key_pem: req.keyPem,
+    });
   }
 }

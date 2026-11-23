@@ -6,10 +6,11 @@
  * `/cert/restore` and `PUT /cert` (pkg/webservice/v1/bmc enroll.go,
  * cert_restore.go, handler.go).
  *
- * It calls the SDK API client directly, as use-ntp.ts does, because the SDK
- * has no BMC service on main. Fields are snake_case and `device_id` is a
- * decimal string. Enroll always sends a JSON object because the server
- * refuses an empty body.
+ * It calls the SDK BMCCertService (`client.bmcCert`), mapping the hook's
+ * snake_case options to the SDK's camelCase ones; the SDK drops options left
+ * out, so the wire body is the subset given. Results are snake_case and
+ * `device_id` is a decimal string. Enroll always sends a JSON object because
+ * the server refuses an empty body; restore sends none.
  */
 
 import { useMemo } from "react";
@@ -87,17 +88,22 @@ export function bmcPath(profileID: string, op: string): string {
 
 export function useBMCCertOps(profileID: string) {
   const client = usePlatformClient();
-  return useMemo(() => {
-    const api = client.getApiClient();
-    return {
+  return useMemo(
+    () => ({
       enroll: (opts?: BMCEnrollOptions) =>
-        api.post<BMCEnrollResult>(bmcPath(profileID, "enroll"), { ...(opts ?? {}) }),
-      restoreFactoryCert: () => api.post<BMCRestoreResult>(bmcPath(profileID, "cert/restore"), {}),
-      replaceWebCertificate: (req: BMCReplaceCertRequest) =>
-        api.put<{ status: string }>(bmcPath(profileID, "cert"), {
-          cert_pem: req.cert_pem,
-          key_pem: req.key_pem,
+        client.bmcCert.enrollBMC(profileID, {
+          replaceCertificate: opts?.replace_certificate,
+          rotatePassword: opts?.rotate_password,
+          dnsRegister: opts?.dns_register,
+          danePublish: opts?.dane_publish,
         }),
-    };
-  }, [client, profileID]);
+      restoreFactoryCert: () => client.bmcCert.restoreFactoryCert(profileID),
+      replaceWebCertificate: (req: BMCReplaceCertRequest) =>
+        client.bmcCert.replaceWebCertificate(profileID, {
+          certPem: req.cert_pem,
+          keyPem: req.key_pem,
+        }),
+    }),
+    [client, profileID],
+  );
 }
