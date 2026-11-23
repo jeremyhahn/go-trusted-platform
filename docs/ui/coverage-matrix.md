@@ -560,8 +560,8 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `RegistryService.Push` | `POST /` | - | - | - | not-UI: streaming plumbing |
 | `RegistryService.Pull` | - | - | - | - | not-UI: streaming plumbing |
 | `RegistryService.List` | `GET /{name:.+}/tags/list` | `(dashboard)/compute/registry/page.tsx` | - | `registry.spec.ts` | covered |
-| `RegistryService.Inspect` | `GET /compute/images/{repository:.+}` | `(dashboard)/compute/registry/page.tsx` | - | `registry.spec.ts` | partial: the harness seeds no image and the SDK has no push, so the spec inspects no real tag |
-| `RegistryService.Delete` | `DELETE /{name:.+}/manifests/{reference}` | `(dashboard)/compute/registry/page.tsx` | - | `registry.spec.ts` | partial: no real tag to delete (no seeded image, no SDK push); the OCI route is not in GET /api/v1/capabilities, so it is gated on read-only status only |
+| `RegistryService.Inspect` | `GET /compute/images/{repository:.+}` | `(dashboard)/compute/registry/page.tsx` | - | `registry-seeded.spec.ts` | covered |
+| `RegistryService.Delete` | `DELETE /{name:.+}/manifests/{reference}` | `(dashboard)/compute/registry/page.tsx` | - | `registry-seeded.spec.ts` | covered |
 | `RegistryService.Status` | `GET /status` | `(dashboard)/compute/registry/page.tsx` | - | `registry.spec.ts` | covered |
 
 ## SchedulerService (`scheduler.proto`)
@@ -757,7 +757,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | ProvisioningGateway | 4 | 0 | 0 | 0 | 4 | 0 |
 | ProxyService | 14 | 0 | 0 | 14 | 0 | 0 |
 | PXEService | 15 | 14 | 0 | 0 | 1 | 0 |
-| RegistryService | 6 | 2 | 2 | 0 | 2 | 0 |
+| RegistryService | 6 | 4 | 0 | 0 | 2 | 0 |
 | SchedulerService | 11 | 0 | 0 | 0 | 0 | 11 |
 | SDNService | 29 | 24 | 0 | 4 | 1 | 0 |
 | SwitchService | 5 | 0 | 0 | 5 | 0 | 0 |
@@ -765,7 +765,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | TPMService | 31 | 31 | 0 | 0 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **239** | **41** | **167** | **51** | **31** |
+| **Total** | **529** | **241** | **39** | **167** | **51** | **31** |
 
 ## Proposed slices
 
@@ -796,7 +796,7 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 23. **DNSService: Zone, Record, DNSSECStatus, Resolve, Register**: 10 operations (5 missing, 5 partial): GetZone, UpdateZone, SignZone, AddRecord, DeleteRecord, UpdateRecord, ListRecords, GetDNSSECStatus, Resolve, Register. (done: real-server/dns.spec.ts)
 24. **ProxyService: Route, Pool, ProxyConfig, ProxyStatus, ZoneMatrix**: 14 operations (14 missing, 0 partial): CreateRoute, GetRoute, UpdateRoute, DeleteRoute, ListRoutes, CreatePool, GetPool, UpdatePool, DeletePool, ListPools, GetProxyConfig, ReloadProxyConfig, GetProxyStatus, GetZoneMatrix.
 25. **PXEService: Device, DeviceByMAC, State, DeviceEnrolled, Authorize, Quarantine…**: 12 operations (11 missing, 1 partial): GetDevice, RemoveDevice, GetDeviceByMAC, UpdateState, SetDeviceEnrolled, Authorize, Quarantine, Retry, GetEvents, StartService, StopService, WebhookComplete.
-26. **RegistryService: List, Inspect, Delete, Status**: 4 operations (4 missing, 0 partial): List, Inspect, Delete, Status.
+26. **RegistryService: List, Inspect, Delete, Status**: 4 operations (4 missing, 0 partial): List, Inspect, Delete, Status. (done: real-server/registry.spec.ts, real-server/registry-seeded.spec.ts)
 27. **SDNService (1/2): Bridge, Port, PortState, Flow, PortAuth, PortStat…**: 13 operations (12 missing, 1 partial): DeleteBridge, GetBridge, GetPort, AuthenticatePort, SetPortState, FlushFlows, RevokePortAuth, GetPortStats, GetFlowStats, ApplyPolicy, GetPolicy, ListPolicies, DeletePolicy. (done)
 28. **SDNService (2/2): NetworkZone**: 4 operations (4 missing, 0 partial): CreateNetworkZone, UpdateNetworkZone, DeleteNetworkZone, ListNetworkZones.
 29. **SwitchService: Port, PortStatus, PortVLAN**: 5 operations (5 missing, 0 partial): ListPorts, EnablePort, DisablePort, GetPortStatus, SetPortVLAN.
