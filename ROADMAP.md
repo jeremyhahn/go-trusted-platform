@@ -46,6 +46,7 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **sdk** — the full composed go-quicbaas surface re-exported — [#704](../../issues/704) — open
 - **vpn** — the attested remote-access VPN: multi-protocol surface, CLI and client agent — [#584](../../issues/584) — open
 - **installer** — a booting node authenticates to the control-plane API with its IDevID over mTLS, the install-completion webhook included — [#238](../../issues/238) — open
+- **maintenance** — standing row for dependency updates and CI configuration (owner ruling 1234) — [#2376](../../issues/2376) — open
 
 ## Next
 - **bootstrap** — every NBD package behind one build tag, omitted from a client binary that does not use NBD — [#883](../../issues/883) — open
