@@ -290,3 +290,48 @@ func TestLoadModuleSigningKeyErrors(t *testing.T) {
 		t.Errorf("garbage error = %v, want ErrModuleKeyMalformed", err)
 	}
 }
+
+// TestParseModuleSigningBundleWipesTheKeyBuffer pins that parsing a bundle
+// zeroes the read buffer it was handed (the file's private key bytes) on
+// success and on error, while the parsed certificate stays intact.
+func TestParseModuleSigningBundleWipesTheKeyBuffer(t *testing.T) {
+	t.Run("valid bundle", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "module-signing-key.pem")
+		cfg := &ModuleSigningKeyConfig{Path: path, KeyBits: 2048}
+		if _, err := GenerateModuleSigningKey(context.Background(), cfg); err != nil {
+			t.Fatalf("generate: %v", err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read bundle: %v", err)
+		}
+
+		msk, err := parseModuleSigningBundle(path, data)
+		if err != nil {
+			t.Fatalf("parseModuleSigningBundle: %v", err)
+		}
+		if _, err := x509.ParseCertificate(msk.Certificate.Raw); err != nil {
+			t.Errorf("certificate Raw no longer parses: %v", err)
+		}
+		assertAllZero(t, data)
+	})
+
+	t.Run("not PEM", func(t *testing.T) {
+		data := []byte("not pem at all")
+		_, err := parseModuleSigningBundle("bundle.pem", data)
+		var malformed ErrModuleKeyMalformed
+		if !errors.As(err, &malformed) {
+			t.Fatalf("err = %v, want ErrModuleKeyMalformed", err)
+		}
+		assertAllZero(t, data)
+	})
+}
+
+func assertAllZero(t *testing.T, data []byte) {
+	t.Helper()
+	for i, b := range data {
+		if b != 0 {
+			t.Fatalf("buffer byte %d = %#x, want the whole %d-byte buffer zeroed", i, b, len(data))
+		}
+	}
+}
