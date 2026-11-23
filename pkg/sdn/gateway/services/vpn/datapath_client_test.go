@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	ipcv1 "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc/gen"
 )
@@ -238,6 +239,37 @@ func TestPeerOf_LeavesAnInvalidAddressEmpty(t *testing.T) {
 	lease := clientLease("l1")
 	lease.Address = netip.Prefix{}
 	assert.Empty(t, peerOf(DataPlaneMASQUE, lease).GetAddress())
+}
+
+// The lease zones cross the datapath IPC: the hub's forward filter opens
+// only a lease's zones, so a peer installed in the child must keep them.
+func TestPeerOf_CarriesTheLeaseZonesOverTheWire(t *testing.T) {
+	roundTrip := func(t *testing.T, lease *Lease) (*ipcv1.VPNPeer, *Lease) {
+		t.Helper()
+		b, err := proto.Marshal(peerOf(DataPlaneMASQUE, lease))
+		require.NoError(t, err)
+		var got ipcv1.VPNPeer
+		require.NoError(t, proto.Unmarshal(b, &got))
+		back, err := leaseFromPeer(&got)
+		require.NoError(t, err)
+		return &got, back
+	}
+
+	t.Run("zones", func(t *testing.T) {
+		lease := clientLease("l1")
+		lease.Zones = []string{"management", "services"}
+		got, back := roundTrip(t, lease)
+		assert.Equal(t, []string{"management", "services"}, got.GetZones())
+		assert.Equal(t, []string{"management", "services"}, back.Zones)
+	})
+
+	t.Run("no zones", func(t *testing.T) {
+		lease := clientLease("l1")
+		lease.Zones = nil
+		got, back := roundTrip(t, lease)
+		assert.Empty(t, got.GetZones())
+		assert.Empty(t, back.Zones)
+	})
 }
 
 func TestErrorOfRefusal_NoRefusalIsSuccess(t *testing.T) {

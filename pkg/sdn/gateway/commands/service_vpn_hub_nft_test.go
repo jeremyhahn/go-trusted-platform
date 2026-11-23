@@ -27,7 +27,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+	"google.golang.org/protobuf/proto"
 
+	ipcv1 "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/vpn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
@@ -406,6 +408,61 @@ func TestHubNetworkPlane_InstallPeerProgramsTheLeasesRules(t *testing.T) {
 	assert.Equal(t, []string{"10.99.0.7->10.4.10.0"}, hubAccepts(conn.lastBatch()))
 	_, _, installed := inner.state()
 	assert.Equal(t, []vpn.LeaseID{"a"}, installed)
+}
+
+// wirePeers is the datapath IPC without the socket: every request is
+// marshalled and unmarshalled into a fresh message before it reaches the
+// child's PlaneHost, so only what the VPNPeer message carries arrives.
+type wirePeers struct {
+	host *vpn.PlaneHost
+}
+
+func overTheWire[M proto.Message](req M, fresh M) (M, error) {
+	b, err := proto.Marshal(req)
+	if err != nil {
+		return fresh, err
+	}
+	return fresh, proto.Unmarshal(b, fresh)
+}
+
+func (w wirePeers) InstallVPNPeer(ctx context.Context, req *ipcv1.InstallVPNPeerRequest) (*ipcv1.InstallVPNPeerResponse, error) {
+	got, err := overTheWire(req, &ipcv1.InstallVPNPeerRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return w.host.InstallVPNPeer(ctx, got), nil
+}
+
+func (w wirePeers) RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerRequest) (*ipcv1.RemoveVPNPeerResponse, error) {
+	got, err := overTheWire(req, &ipcv1.RemoveVPNPeerRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return w.host.RemoveVPNPeer(ctx, got), nil
+}
+
+func (w wirePeers) ReconcileVPNPeers(ctx context.Context, req *ipcv1.ReconcileVPNPeersRequest) (*ipcv1.ReconcileVPNPeersResponse, error) {
+	got, err := overTheWire(req, &ipcv1.ReconcileVPNPeersRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return w.host.ReconcileVPNPeers(ctx, got), nil
+}
+
+// A peer installed over the datapath IPC gets the same forwarding accepts
+// in tp_vpn_hub as a peer installed in-process: its lease zones survive the
+// VPNPeer message.
+func TestHubNetworkPlane_AnIPCInstallProgramsTheLeasesRules(t *testing.T) {
+	ctx := context.Background()
+	conn := &recordingHubConn{}
+	plane, _ := hubPlaneWithFilter(conn)
+	host, err := vpn.NewPlaneHost(plane)
+	require.NoError(t, err)
+	dp, err := vpn.NewDatapathPlane(vpn.DataPlaneMASQUE, wirePeers{host: host})
+	require.NoError(t, err)
+
+	require.NoError(t, dp.InstallPeer(ctx, hubLease("a", "10.99.0.7/32")))
+	assert.Equal(t, []string{"10.99.0.7->10.4.10.0"}, hubAccepts(conn.lastBatch()))
 }
 
 func TestHubNetworkPlane_RemovePeerAndReconcileWithdrawTheRules(t *testing.T) {
