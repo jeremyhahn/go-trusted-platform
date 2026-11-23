@@ -8,7 +8,7 @@ import { expect, test } from './fixtures';
  * checks that a disabled service greys out its controls. The harness config
  * (platformd.test.yaml) has no sdn: section, so the server reports the SDN
  * routes dark with a not-configured reason; it has a dns: section, so the
- * DNS zone create stays offered. No page.route: each page reads the
+ * DNS zone create stays offered. No mocked routes: each page reads the
  * capabilities from the daemon itself, and each assertion compares the
  * control with what the daemon answered the SDK.
  */
