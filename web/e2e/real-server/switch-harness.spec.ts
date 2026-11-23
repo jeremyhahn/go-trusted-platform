@@ -1,3 +1,4 @@
+import type { Page, Response } from '@playwright/test';
 import { expect, test } from './fixtures';
 
 /**
@@ -8,6 +9,10 @@ import { expect, test } from './fixtures';
  * and Eth1/5 a trunk carrying VLANs 10 and 20. Each test drives one of the
  * five SwitchService operations through the SDK (ListPorts, GetPortStatus,
  * EnablePort, DisablePort, SetPortVLAN) and puts every port it changes back.
+ *
+ * The page tests drive the same five operations through the page itself:
+ * /networking/switches as the seeded admin, asserting on the responses the
+ * server gave the page, and put every port they change back through the SDK.
  *
  * The memory vendor keeps one state for the daemon, so the tests run in
  * order: a port one test changes is never read by another mid-change.
@@ -93,5 +98,85 @@ test.describe('SwitchService on the memory switch harness-1', () => {
   test('an unknown switch is refused', async ({ sdk }) => {
     const res = await sdk.switches.listPorts(`e2e-unmanaged-${Date.now().toString(36)}`);
     expect(res.success).toBe(false);
+  });
+});
+
+/** Waits for the page's own request to the switch API path with method. */
+function switchResponse(page: Page, method: string, path: string): Promise<Response> {
+  return page.waitForResponse((r) => r.request().method() === method && new URL(r.url()).pathname === path);
+}
+
+const PORTS_PATH = `/api/v1/switches/${SWITCH}/ports`;
+
+test.describe('the switches page on harness-1', () => {
+  /** Opens /networking/switches and shows the named switch's ports. */
+  async function open(page: Page, name: string = SWITCH): Promise<Response> {
+    await page.goto('/networking/switches');
+    await page.getByLabel('Switch name').fill(name);
+    const listed = page.waitForResponse(
+      (r) => r.request().method() === 'GET' && new URL(r.url()).pathname === `/api/v1/switches/${name}/ports`,
+    );
+    await page.getByRole('button', { name: 'Show ports' }).click();
+    return listed;
+  }
+
+  test('the page lists the five seeded ports', async ({ adminPage }) => {
+    const r = await open(adminPage);
+    expect(r.ok(), `${r.url()} answered ${r.status()}`).toBeTruthy();
+    for (const port of ['Eth1/1', 'Eth1/2', 'Eth1/3', 'Eth1/4', 'Eth1/5']) {
+      await expect(adminPage.getByTestId(`switch-port-${port}`)).toBeVisible();
+    }
+    await expect(adminPage.getByTestId('switch-port-Eth1/5').locator('td').nth(2)).toContainText('10, 20');
+  });
+
+  test('Disable then Enable on Eth1/3 from the page', async ({ adminPage, sdk }) => {
+    const port = 'Eth1/3';
+    try {
+      expect((await open(adminPage)).ok()).toBeTruthy();
+      const row = adminPage.getByTestId(`switch-port-${port}`);
+
+      const disabled = switchResponse(adminPage, 'POST', `${PORTS_PATH}/Eth1%2F3/disable`);
+      await row.getByRole('button', { name: 'Disable' }).click();
+      expect((await disabled).ok()).toBeTruthy();
+      await expect(row).toContainText('Disabled');
+
+      const enabled = switchResponse(adminPage, 'POST', `${PORTS_PATH}/Eth1%2F3/enable`);
+      await row.getByRole('button', { name: 'Enable' }).click();
+      expect((await enabled).ok()).toBeTruthy();
+      await expect(row).toContainText('Enabled');
+    } finally {
+      await sdk.switches.enablePort(SWITCH, port);
+    }
+  });
+
+  test('Set VLAN moves Eth1/4 to VLAN 30 from the page', async ({ adminPage, sdk }) => {
+    const port = 'Eth1/4';
+    try {
+      expect((await open(adminPage)).ok()).toBeTruthy();
+      const row = adminPage.getByTestId(`switch-port-${port}`);
+      await adminPage.getByLabel(`VLAN for ${port}`).fill('30');
+      const moved = switchResponse(adminPage, 'POST', `${PORTS_PATH}/Eth1%2F4/vlan`);
+      await row.getByRole('button', { name: 'Set VLAN' }).click();
+      expect((await moved).ok()).toBeTruthy();
+      await expect(row.locator('td').nth(2)).toHaveText('30');
+    } finally {
+      await sdk.switches.setPortVLAN(SWITCH, port, 10);
+    }
+  });
+
+  test("the page reads one port's status", async ({ adminPage }) => {
+    expect((await open(adminPage)).ok()).toBeTruthy();
+    await adminPage.getByLabel('Port', { exact: true }).fill('Eth1/2');
+    const read = switchResponse(adminPage, 'GET', `${PORTS_PATH}/Eth1%2F2`);
+    await adminPage.getByRole('button', { name: 'Read port status' }).click();
+    expect((await read).ok()).toBeTruthy();
+    await expect(adminPage.getByTestId('switch-port-status')).toContainText('access');
+  });
+
+  test("an unknown switch shows the server's refusal", async ({ adminPage }) => {
+    const r = await open(adminPage, `e2e-unmanaged-${Date.now().toString(36)}`);
+    expect(r.ok()).toBe(false);
+    await expect(adminPage.getByRole('alert').filter({ hasText: /\S/ }).first()).toBeVisible();
+    await expect(adminPage.locator('[data-testid^="switch-port-"]')).toHaveCount(0);
   });
 });
