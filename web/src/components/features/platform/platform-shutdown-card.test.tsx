@@ -48,6 +48,9 @@ describe('PlatformShutdownCard', () => {
       fireEvent.click(confirm);
     });
     await waitFor(() => expect(shutdowns(sent)).toBe(1));
+    // The handler's Graceful default does not survive decoding `{}`.
+    const posted = sent.find((r) => r.method === 'POST' && r.path === '/api/v1/platform/shutdown');
+    expect(posted?.body).toEqual({ graceful: true });
   });
 
   it('shutdown is disabled when the server does not enable it', async () => {
