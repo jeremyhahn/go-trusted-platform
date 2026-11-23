@@ -159,6 +159,26 @@ func TestIAMTokenAuthorizer_CheckPermission_Errors(t *testing.T) {
 	})
 }
 
+// TestIAMTokenAuthorizer_CheckPermission_CarriesTheTokenTenant pins that a
+// token caller's PEP check carries the token's tenant both as the subject's
+// tenant and as the request's TenantID (docs/SPEC.md:123, PR #2082 Codex
+// round 3).
+func TestIAMTokenAuthorizer_CheckPermission_CarriesTheTokenTenant(t *testing.T) {
+	validator := newGRPCTokenValidator(nil, nil)
+	validator.SetJWTVerifier(alwaysValidJWTVerifier{claims: jwt.TokenClaims{UserIDStr: "7", TenantID: "acme", Roles: []string{"kms-operator"}}})
+
+	var asked []*sdkiam.CheckRequest
+	authz, err := newIAMTokenAuthorizer(validator, pepGrantingRole("kms-operator", "kms", "delete", &asked))
+	require.NoError(t, err)
+
+	allowed, err := authz.CheckPermission(context.Background(), "jwt", "kms", "delete")
+	require.NoError(t, err)
+	assert.True(t, allowed)
+	require.Len(t, asked, 1)
+	assert.Equal(t, "acme", asked[0].TenantID, "the PEP request carries the token's tenant (docs/SPEC.md:123)")
+	assert.Equal(t, "acme", asked[0].Subject.TenantID)
+}
+
 func TestErrPEPClientNotAvailable_Error(t *testing.T) {
 	err := ErrPEPClientNotAvailable{}
 	if err.Error() != "PEP client is not available" {
@@ -285,6 +305,7 @@ func TestIAMTokenAuthorizer_CheckPeerPermission_ResolvesStoredRoles(t *testing.T
 		assert.Equal(t, "7301", asked[0].Subject.ID, "the PEP decides on the canonical user ID")
 		assert.Equal(t, "acme", asked[0].Subject.TenantID)
 		assert.Equal(t, []string{"kms-operator"}, asked[0].Subject.Roles)
+		assert.Equal(t, "acme", asked[0].TenantID, "the PEP request carries the certificate's tenant (docs/SPEC.md:123)")
 	})
 	t.Run("CN resolves to the stored user by username", func(t *testing.T) {
 		var asked []*sdkiam.CheckRequest
@@ -298,6 +319,7 @@ func TestIAMTokenAuthorizer_CheckPeerPermission_ResolvesStoredRoles(t *testing.T
 		require.Len(t, asked, 1)
 		assert.Equal(t, "7302", asked[0].Subject.ID)
 		assert.Equal(t, []string{"kms-operator"}, asked[0].Subject.Roles)
+		assert.Equal(t, "acme", asked[0].TenantID, "the PEP request carries the certificate's tenant (docs/SPEC.md:123)")
 	})
 	t.Run("mixed-case email SAN resolves to the normalized stored email", func(t *testing.T) {
 		// The IAM store keeps every email lowercased and trimmed; the
@@ -314,6 +336,7 @@ func TestIAMTokenAuthorizer_CheckPeerPermission_ResolvesStoredRoles(t *testing.T
 		require.Len(t, asked, 1)
 		assert.Equal(t, "7301", asked[0].Subject.ID)
 		assert.Equal(t, []string{"kms-operator"}, asked[0].Subject.Roles)
+		assert.Equal(t, "acme", asked[0].TenantID, "the PEP request carries the certificate's tenant (docs/SPEC.md:123)")
 	})
 	t.Run("stored user without the role is denied", func(t *testing.T) {
 		var asked []*sdkiam.CheckRequest
@@ -443,6 +466,7 @@ func TestIAMTokenAuthorizer_CheckPeerPermission_ResolvesThroughPinnedRESTTranspo
 		require.Len(t, asked, 1, tc.subject)
 		assert.Equal(t, tc.wantID, asked[0].Subject.ID, tc.subject)
 		assert.Equal(t, []string{"kms-operator"}, asked[0].Subject.Roles, tc.subject)
+		assert.Equal(t, "acme", asked[0].TenantID, tc.subject)
 	}
 
 	var asked []*sdkiam.CheckRequest

@@ -530,6 +530,7 @@ func TestSelectQUICAuth_MTLS_AuthenticatesByCertificate(t *testing.T) {
 	require.NotNil(t, last, "the IAM PEP must be asked for a certificate principal")
 	assert.Equal(t, "1001", last.Subject.ID)
 	assert.Equal(t, "Test Platform Client", last.Subject.TenantID)
+	assert.Equal(t, "Test Platform Client", last.TenantID, "the PEP request carries the certificate's tenant")
 	assert.Equal(t, "kms", last.Resource)
 	assert.Equal(t, "delete", last.Action)
 	// ...which refuses what the principal does not hold, whatever the
