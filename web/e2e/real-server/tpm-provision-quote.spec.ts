@@ -41,11 +41,25 @@ async function refusalMessage(r: Response): Promise<string | undefined> {
 test.describe('TPM provisioning', () => {
   test('shows the platform the server answered and offers Provision and Clear', async ({ adminPage }) => {
     const platformRes = apiResponse(adminPage, 'GET', /\/api\/v1\/tpm\/platform$/);
+    const capabilitiesRes = apiResponse(adminPage, 'GET', /\/api\/v1\/tpm\/capabilities$/);
     await adminPage.goto('/tpm/provision');
     const platform = await json<{ device?: string; manufacturer?: string }>(await platformRes);
 
     await expect(adminPage.getByTestId('platform-device')).toHaveText(platform.device ?? '');
     await expect(adminPage.getByTestId('platform-manufacturer')).toHaveText(platform.manufacturer ?? '');
+
+    const capAnswer = await capabilitiesRes;
+    if (capAnswer.ok()) {
+      const caps = unwrapPayload<{ algorithms?: string[]; commands?: string[]; eccCurves?: string[] }>(
+        await capAnswer.json(),
+      );
+      await expect(adminPage.getByTestId('cap-counts')).toHaveText(
+        `${caps.algorithms?.length ?? 0} algorithms, ${caps.commands?.length ?? 0} commands, ` +
+          `${caps.eccCurves?.length ?? 0} ECC curves`,
+      );
+    } else {
+      await expect(adminPage.getByTestId('capabilities-error')).toBeVisible();
+    }
 
     const provision = adminPage.getByRole('button', { name: 'Provision TPM' });
     await expect(provision).toHaveAttribute('data-capability-op', 'POST /api/v1/tpm/provision');
@@ -78,6 +92,11 @@ test.describe('TPM quote', () => {
       expect(ak.handle, 'GET /api/v1/tpm/ak answered no AK handle').toBeDefined();
       await expect(adminPage.getByTestId('ak-handle')).toHaveText(handleHex(ak.handle as number));
     }
+
+    // Verify Quote stays disabled until a quote is pasted; only its gate is checked.
+    const verify = adminPage.getByRole('button', { name: 'Verify Quote' });
+    await expect(verify).toHaveAttribute('data-capability-op', 'POST /api/v1/tpm/quote/verify');
+    await expect(verify).toHaveAttribute('data-capability-enabled', 'true');
 
     await adminPage.getByRole('checkbox', { name: /^PCR 0\b/ }).check();
     const generate = adminPage.getByRole('button', { name: /Generate Quote/ });

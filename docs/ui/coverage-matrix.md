@@ -270,24 +270,24 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
 | `GatewayService.GetGatewayStatus` | - | `(dashboard)/networking/gateway/page.tsx` | - | `networking.spec.ts` | covered |
-| `GatewayService.SetGatewayMode` | - | - | - | - | missing |
-| `GatewayService.GetGatewaySnapshot` | - | - | - | - | missing |
-| `GatewayService.ListGatewaySnapshots` | - | - | - | - | missing |
+| `GatewayService.SetGatewayMode` | `POST /mode` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-snapshots.spec.ts` | covered |
+| `GatewayService.GetGatewaySnapshot` | `GET /state/{id}` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-snapshots.spec.ts` | covered |
+| `GatewayService.ListGatewaySnapshots` | `GET /state` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-snapshots.spec.ts` | covered |
 | `GatewayService.GetGatewayAdmittedVTEP` | - | - | - | - | missing |
 | `GatewayService.ListGatewayAdmittedVTEPs` | - | - | - | - | missing |
 | `GatewayService.GetBGPStatus` | `GET /bgp/status` | `(dashboard)/networking/gateway/page.tsx` | - | `networking.spec.ts` | covered |
-| `GatewayService.ListBGPPeers` | `GET /bgp/peers` | - | - | - | missing |
-| `GatewayService.AnnouncePrefix` | `POST /bgp/prefixes` | - | - | - | missing |
-| `GatewayService.WithdrawPrefix` | `DELETE /bgp/prefixes` | - | - | - | missing |
+| `GatewayService.ListBGPPeers` | `GET /bgp/peers` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-snapshots.spec.ts` | covered |
+| `GatewayService.AnnouncePrefix` | `POST /bgp/prefixes` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-snapshots.spec.ts` | covered |
+| `GatewayService.WithdrawPrefix` | `DELETE /bgp/prefixes` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-snapshots.spec.ts` | covered |
 | `GatewayService.ListAnnouncedPrefixes` | `GET /bgp/prefixes` | `(dashboard)/networking/gateway/page.tsx` | - | `networking.spec.ts` | covered |
 | `GatewayService.CreateIPAMPool` | - | `(dashboard)/networking/gateway/page.tsx` (read-only) | - | - | partial |
 | `GatewayService.GetIPAMPool` | - | - | - | - | missing |
 | `GatewayService.UpdateIPAMPool` | - | `(dashboard)/networking/gateway/page.tsx` (read-only) | - | - | partial |
 | `GatewayService.DeleteIPAMPool` | - | `(dashboard)/networking/gateway/page.tsx` (read-only) | - | - | partial |
 | `GatewayService.ListIPAMPools` | `GET /ipam/pools` | `(dashboard)/networking/gateway/page.tsx` | - | `networking.spec.ts` | covered |
-| `GatewayService.AllocateIP` | `POST /ipam/allocations` | - | - | - | missing |
-| `GatewayService.ReleaseIP` | `DELETE /ipam/allocations` | - | - | - | missing |
-| `GatewayService.ListAllocations` | `GET /allocations` | - | - | - | missing |
+| `GatewayService.AllocateIP` | `POST /ipam/allocations` | `(dashboard)/networking/gateway/ipam/page.tsx` | - | `real-server/gateway.spec.ts` | covered |
+| `GatewayService.ReleaseIP` | `DELETE /ipam/allocations` | `(dashboard)/networking/gateway/ipam/page.tsx` | - | `real-server/gateway.spec.ts` | covered |
+| `GatewayService.ListAllocations` | `GET /ipam/allocations` | `(dashboard)/networking/gateway/ipam/page.tsx` | - | `real-server/gateway.spec.ts` | covered |
 | `GatewayService.AddVIP` | - | - | - | - | missing |
 | `GatewayService.RemoveVIP` | - | - | - | - | missing |
 | `GatewayService.GetVIP` | - | - | - | - | missing |
@@ -493,7 +493,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 |---|---|---|---|---|---|
 | `DNSService.CreateZone` | `POST /zones` | `(dashboard)/networking/dns/page.tsx` | - | `networking.spec.ts`<br>`real-server/dns.spec.ts` | covered |
 | `DNSService.GetZone` | `GET /zones/{zone}` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
-| `DNSService.UpdateZone` | `PUT /zones/{zone}` | `(dashboard)/networking/dns/[zone]/page.tsx`<br>`(dashboard)/networking/dns/page.tsx` (read-only) | - | - | partial |
+| `DNSService.UpdateZone` | `PUT /zones/{zone}` | `(dashboard)/networking/dns/[zone]/page.tsx`<br>`(dashboard)/networking/dns/page.tsx` (read-only) | - | `real-server/dns.spec.ts` | covered |
 | `DNSService.DeleteZone` | `DELETE /zones/{zone}` | `(dashboard)/networking/dns/page.tsx` | - | `networking.spec.ts`<br>`real-server/dns.spec.ts` | covered |
 | `DNSService.ListZones` | `GET /zones` | `(dashboard)/networking/dns/page.tsx` | - | `networking.spec.ts`<br>`real-server/dns.spec.ts` | covered |
 | `DNSService.AddRecord` | `POST /zones/{zone}/records` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
@@ -653,26 +653,26 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
 | `TPMService.Info` | `GET /info` | `(dashboard)/tpm/lockout/page.tsx`<br>`(dashboard)/tpm/nvram/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `TPMService.Provision` | `POST /provision` | - | - | - | missing |
-| `TPMService.Clear` | `POST /clear` | - | - | - | missing |
-| `TPMService.GetCapabilities` | `GET /capabilities` | - | - | - | missing |
-| `TPMService.GetPlatformAttributes` | `GET /platform` | - | - | - | missing |
-| `TPMService.CreateEK` | `POST /ek` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | - | partial |
+| `TPMService.Provision` | `POST /provision` | `(dashboard)/tpm/provision/page.tsx` | - | `real-server/tpm-provision-quote.spec.ts` | covered |
+| `TPMService.Clear` | `POST /clear` | `(dashboard)/tpm/provision/page.tsx` | - | `real-server/tpm-provision-quote.spec.ts` | covered |
+| `TPMService.GetCapabilities` | `GET /capabilities` | `(dashboard)/tpm/provision/page.tsx` | - | `real-server/tpm-provision-quote.spec.ts` | covered |
+| `TPMService.GetPlatformAttributes` | `GET /platform` | `(dashboard)/tpm/provision/page.tsx` | - | `real-server/tpm-provision-quote.spec.ts` | covered |
+| `TPMService.CreateEK` | `POST /ek` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | `real-server/tpm-keys.spec.ts` | covered |
 | `TPMService.GetEK` | `GET /ek` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.GetEKCertificate` | `GET /ek/certificate` | `(dashboard)/tpm/keys/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `TPMService.ImportEKCertificate` | `POST /ek/certificate` | `(dashboard)/tpm/keys/page.tsx` (read-only) | - | - | partial |
-| `TPMService.DeleteEK` | `DELETE /ek` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | - | partial |
-| `TPMService.CreateSRK` | `POST /srk` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | - | partial |
+| `TPMService.ImportEKCertificate` | `POST /ek/certificate` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-keys.spec.ts` | covered |
+| `TPMService.DeleteEK` | `DELETE /ek` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | `real-server/tpm-keys.spec.ts` | covered |
+| `TPMService.CreateSRK` | `POST /srk` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | `real-server/tpm-keys.spec.ts` | covered |
 | `TPMService.GetSRK` | `GET /srk` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `TPMService.DeleteSRK` | `DELETE /srk` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | - | partial |
-| `TPMService.CreateAK` | `POST /ak` | - | - | - | missing |
-| `TPMService.GetAK` | `GET /ak` | - | - | - | missing |
-| `TPMService.DeleteAK` | `DELETE /ak` | - | - | - | missing |
+| `TPMService.DeleteSRK` | `DELETE /srk` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | `real-server/tpm-keys.spec.ts` | covered |
+| `TPMService.CreateAK` | `POST /ak` | `(dashboard)/tpm/quote/page.tsx` | - | `real-server/tpm-provision-quote.spec.ts` | covered |
+| `TPMService.GetAK` | `GET /ak` | `(dashboard)/tpm/quote/page.tsx` | - | `real-server/tpm-provision-quote.spec.ts` | covered |
+| `TPMService.DeleteAK` | `DELETE /ak` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-keys.spec.ts` | covered |
 | `TPMService.Seal` | `POST /seal` | `(dashboard)/tpm/seal/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.Unseal` | `POST /unseal` | `(dashboard)/tpm/seal/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `TPMService.Quote` | `POST /quote` | `(dashboard)/tpm/quote/page.tsx` | - | - | partial |
-| `TPMService.VerifyQuote` | `POST /quote/verify` | `(dashboard)/tpm/quote/page.tsx` | - | - | partial |
-| `TPMService.Certify` | `POST /certify` | - | - | - | missing |
+| `TPMService.Quote` | `POST /quote` | `(dashboard)/tpm/quote/page.tsx` | - | `real-server/tpm-provision-quote.spec.ts` | covered |
+| `TPMService.VerifyQuote` | `POST /quote/verify` | `(dashboard)/tpm/quote/page.tsx` | - | `real-server/tpm-provision-quote.spec.ts` | covered |
+| `TPMService.Certify` | `POST /certify` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-keys.spec.ts` | covered |
 | `TPMService.GetEventLog` | `GET /eventlog` | `(dashboard)/tpm/eventlog/page.tsx` | - | `tpm.spec.ts` | covered |
 | `TPMService.GetPCRs` | `GET /pcrs` | `(dashboard)/tpm/pcrs/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.ExtendPCR` | `POST /pcrs/extend` | `(dashboard)/tpm/pcrs/page.tsx` | - | `tpm.spec.ts` | covered |
@@ -742,7 +742,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | DeviceService | 32 | 10 | 7 | 15 | 0 | 0 |
 | EABService | 11 | 0 | 0 | 11 | 0 | 0 |
 | FIDO2Service | 5 | 0 | 0 | 0 | 5 | 0 |
-| GatewayService | 29 | 4 | 3 | 22 | 0 | 0 |
+| GatewayService | 29 | 13 | 3 | 13 | 0 | 0 |
 | PlatformIAMService | 41 | 20 | 8 | 13 | 0 | 0 |
 | IDevIDService | 20 | 8 | 1 | 11 | 0 | 0 |
 | InvitationService | 7 | 4 | 0 | 3 | 0 | 0 |
@@ -753,7 +753,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | ObjectStorageService | 8 | 0 | 0 | 0 | 0 | 8 |
 | OverlayService | 10 | 2 | 1 | 7 | 0 | 0 |
 | PIVService | 8 | 0 | 0 | 0 | 8 | 0 |
-| DNSService | 13 | 12 | 1 | 0 | 0 | 0 |
+| DNSService | 13 | 13 | 0 | 0 | 0 | 0 |
 | ProvisioningGateway | 4 | 0 | 0 | 0 | 4 | 0 |
 | ProxyService | 14 | 0 | 0 | 14 | 0 | 0 |
 | PXEService | 15 | 14 | 0 | 0 | 1 | 0 |
@@ -762,10 +762,10 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | SDNService | 29 | 11 | 1 | 16 | 1 | 0 |
 | SwitchService | 5 | 0 | 0 | 5 | 0 | 0 |
 | TenantService | 19 | 4 | 4 | 11 | 0 | 0 |
-| TPMService | 31 | 16 | 7 | 8 | 0 | 0 |
+| TPMService | 31 | 31 | 0 | 0 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **163** | **56** | **228** | **51** | **31** |
+| **Total** | **529** | **188** | **48** | **211** | **51** | **31** |
 
 ## Proposed slices
 
@@ -784,7 +784,7 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 11. **DeviceService (1/2): Device, DeviceBySerial, Profile, ProfileByMACAddress, ProfileBySerial, MatchingProfile…**: 14 operations (12 missing, 2 partial): UpdateDevice, CountDevices, ActivateDevice, AttestDevice, FindDeviceBySerial, GetProfile, UpdateProfile, CountProfiles, FindProfileByMACAddress, FindProfileBySerial, FindMatchingProfile, RecordAttestationCertificate, BootCertificate, BootDelivery.
 12. **DeviceService (2/2): Template, ProfileFromTemplate, ConfigForDevice, ProfileToDevice, ProfileFromDevice**: 8 operations (3 missing, 5 partial): CreateTemplate, GetTemplate, UpdateTemplate, DeleteTemplate, CreateProfileFromTemplate, FindConfigForDevice, AssignProfileToDevice, UnassignProfileFromDevice.
 13. **EABService: Credential, CredentialByKeyID, CredentialQRCode, EnrollmentURL, CredentialUsed, ExpiredCredential**: 11 operations (11 missing, 0 partial): CreateCredential, GetCredential, ListCredentials, RevokeCredential, ValidateCredential, DeleteCredential, GetCredentialByKeyID, GetCredentialQRCode, GetEnrollmentURL, MarkCredentialUsed, CleanupExpiredCredentials.
-14. **GatewayService (1/2): GatewayMode, GatewaySnapshot, GatewayAdmittedVTEP, BGPPeer, Prefix, IPAMPool…**: 15 operations (12 missing, 3 partial): SetGatewayMode, GetGatewaySnapshot, ListGatewaySnapshots, GetGatewayAdmittedVTEP, ListGatewayAdmittedVTEPs, ListBGPPeers, AnnouncePrefix, WithdrawPrefix, CreateIPAMPool, GetIPAMPool, UpdateIPAMPool, DeleteIPAMPool, AllocateIP, ReleaseIP, ListAllocations.
+14. **GatewayService (1/2): GatewayMode, GatewaySnapshot, GatewayAdmittedVTEP, BGPPeer, Prefix, IPAMPool…**: 15 operations (12 missing, 3 partial): SetGatewayMode, GetGatewaySnapshot, ListGatewaySnapshots, GetGatewayAdmittedVTEP, ListGatewayAdmittedVTEPs, ListBGPPeers, AnnouncePrefix, WithdrawPrefix, CreateIPAMPool, GetIPAMPool, UpdateIPAMPool, DeleteIPAMPool, AllocateIP, ReleaseIP, ListAllocations. (done except GetGatewayAdmittedVTEP, ListGatewayAdmittedVTEPs and the IPAM pool CRUD rows)
 15. **GatewayService (2/2): VIP, VIPBackend, LBStatus, NAT64Status, PerfFlow, PerfDatapath…**: 10 operations (10 missing, 0 partial): AddVIP, RemoveVIP, GetVIP, ListVIPs, SetVIPBackends, GetLBStatus, GetNAT64Status, GetPerfFlows, GetPerfDatapath, GetPerfConntrack.
 16. **PlatformIAMService (1/2): Group, GroupMember, Permission, Token, Tenant**: 14 operations (11 missing, 3 partial): CreateGroup, GetGroup, UpdateGroup, AddGroupMember, RemoveGroupMember, CheckPermission, CreateToken, RevokeToken, VerifyToken, CreateTenant, GetTenant, ListTenants, UpdateTenant, DeleteTenant.
 17. **PlatformIAMService (2/2): Policy, App**: 7 operations (2 missing, 5 partial): CreatePolicy, GetPolicy, UpdatePolicy, ValidatePolicy, TestPolicy, GetApp, UpdateApp.
@@ -793,7 +793,7 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 20. **KeyManagementService: Key, KeyStatus, KeyVersion, Encrypt, Decrypt, Rewrap…**: 13 operations (12 missing, 1 partial): ImportKey, UpdateKeyStatus, GetKeyVersions, BatchEncrypt, BatchDecrypt, Rewrap, Hash, HMAC, VerifyHMAC, GenerateRandom, GenerateDataKey, GenerateWrappedDataKey, BackendStatus.
 21. **NTPService: Status, Source, Step**: 3 operations (3 missing, 0 partial): GetStatus, ListSources, Step.
 22. **OverlayService: VTEP, VNI, Tunnel, TunnelStat, RemoteMAC, MAC…**: 8 operations (7 missing, 1 partial): ListVTEPs, GetVTEP, DeleteVNI, ListTunnels, GetTunnelStats, ListRemoteMACs, ForgetMAC, GetOverlayStatus.
-23. **DNSService: Zone, Record, DNSSECStatus, Resolve, Register**: 10 operations (5 missing, 5 partial): GetZone, UpdateZone, SignZone, AddRecord, DeleteRecord, UpdateRecord, ListRecords, GetDNSSECStatus, Resolve, Register. (done except UpdateZone: real-server/dns.spec.ts)
+23. **DNSService: Zone, Record, DNSSECStatus, Resolve, Register**: 10 operations (5 missing, 5 partial): GetZone, UpdateZone, SignZone, AddRecord, DeleteRecord, UpdateRecord, ListRecords, GetDNSSECStatus, Resolve, Register. (done: real-server/dns.spec.ts)
 24. **ProxyService: Route, Pool, ProxyConfig, ProxyStatus, ZoneMatrix**: 14 operations (14 missing, 0 partial): CreateRoute, GetRoute, UpdateRoute, DeleteRoute, ListRoutes, CreatePool, GetPool, UpdatePool, DeletePool, ListPools, GetProxyConfig, ReloadProxyConfig, GetProxyStatus, GetZoneMatrix.
 25. **PXEService: Device, DeviceByMAC, State, DeviceEnrolled, Authorize, Quarantine…**: 12 operations (11 missing, 1 partial): GetDevice, RemoveDevice, GetDeviceByMAC, UpdateState, SetDeviceEnrolled, Authorize, Quarantine, Retry, GetEvents, StartService, StopService, WebhookComplete.
 26. **RegistryService: List, Inspect, Delete, Status**: 4 operations (4 missing, 0 partial): List, Inspect, Delete, Status.
@@ -801,8 +801,8 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 28. **SDNService (2/2): NetworkZone**: 4 operations (4 missing, 0 partial): CreateNetworkZone, UpdateNetworkZone, DeleteNetworkZone, ListNetworkZones.
 29. **SwitchService: Port, PortStatus, PortVLAN**: 5 operations (5 missing, 0 partial): ListPorts, EnablePort, DisablePort, GetPortStatus, SetPortVLAN.
 30. **TenantService: Tenant, TenantByName, Quota, Sync, TenantDEK, TenantDEKStatus…**: 15 operations (11 missing, 4 partial): ListTenants, CreateTenant, UpdateTenant, DeleteTenant, SuspendTenant, ResumeTenant, GetTenantByName, UpdateQuotas, CheckQuota, Sync, RotateTenantDEK, GetTenantDEKStatus, InitTenantBarrier, UnsealTenantBarrier, SealTenantBarrier.
-31. **TPMService (1/2): Provision, Clear, Capability, PlatformAttribute, EK, EKCertificate…**: 15 operations (8 missing, 7 partial): Provision, Clear, GetCapabilities, GetPlatformAttributes, CreateEK, DeleteEK, ImportEKCertificate, CreateSRK, DeleteSRK, CreateAK, GetAK, DeleteAK, Quote, VerifyQuote, Certify.
-32. **TPMService (2/2): EventLog, PCR, Credential, Random**: 5 operations (4 missing, 1 partial): GetEventLog, ExtendPCR, MakeCredential, ActivateCredential, GetRandom.
+31. **TPMService (1/2): Provision, Clear, Capability, PlatformAttribute, EK, EKCertificate…**: 15 operations (8 missing, 7 partial): Provision, Clear, GetCapabilities, GetPlatformAttributes, CreateEK, DeleteEK, ImportEKCertificate, CreateSRK, DeleteSRK, CreateAK, GetAK, DeleteAK, Quote, VerifyQuote, Certify. (done)
+32. **TPMService (2/2): EventLog, PCR, Credential, Random**: 5 operations (4 missing, 1 partial): GetEventLog, ExtendPCR, MakeCredential, ActivateCredential, GetRandom. (done)
 33. **VPNService: Peer, Status, PosturePolicy**: 8 operations (0 missing, 8 partial): EnrolPeer, ListPeers, RevokePeer, GetStatus, GetPosturePolicy, SetPosturePolicy, DeletePosturePolicy, ListPosturePolicies.
 34. **VTPMService (1/2): Bundle, Template, BundlePath, TPMSocketPath, NVRAMPath**: 11 operations (9 missing, 2 partial): GetBundle, ImportBundle, ValidateBundle, CreateTemplate, GetTemplate, DeleteTemplate, ListTemplates, CloneTemplate, GetBundlePath, GetTPMSocketPath, GetNVRAMPath.
 35. **VTPMService (2/2): VTPM, VTPMRunning, VTPMPCR**: 8 operations (8 missing, 0 partial): StartVTPM, StopVTPM, QuoteVTPM, SealVTPM, UnsealVTPM, IsVTPMRunning, ExtendVTPMPCR, ReadVTPMPCR.
