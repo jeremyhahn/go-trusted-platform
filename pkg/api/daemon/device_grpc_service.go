@@ -511,7 +511,7 @@ func (s *DeviceGRPCService) CountProfiles(
 	}, nil
 }
 
-// ActivateDevice activates a device and transitions it to production network.
+// ActivateDevice checks the profile and VLAN a device would be admitted to; it changes no state.
 func (s *DeviceGRPCService) ActivateDevice(
 	ctx context.Context,
 	req *platformv1.ActivateDeviceRequest,
@@ -524,6 +524,11 @@ func (s *DeviceGRPCService) ActivateDevice(
 	device, err := s.deviceService.FindBySerial(ctx, req.GetSerial())
 	if err != nil {
 		return nil, s.toGRPCError(err)
+	}
+	// Revoked and suspended devices are refused, as the boot route refuses
+	// them: never report a VLAN the device would not be admitted to.
+	if device.State == entities.DeviceStateRevoked || device.State == entities.DeviceStateSuspended {
+		return nil, status.Errorf(codes.FailedPrecondition, "device cannot be admitted: serial=%s state=%s", device.Serial, device.State)
 	}
 
 	// Find matching profile
@@ -543,7 +548,7 @@ func (s *DeviceGRPCService) ActivateDevice(
 		vlan = uint32(prodNet.VLAN)
 	}
 
-	s.logger.Info("device activated",
+	s.logger.Info("device activation check",
 		"serial", req.GetSerial(),
 		"vlan", vlan,
 	)
