@@ -13,6 +13,8 @@ interface CertDetailProps {
   onDownloadPEM?: () => void;
   onDownloadDER?: () => void;
   onRevoke?: () => void;
+  /** #2033 item 5: the server's capability for revoke; disables Revoke when off. */
+  revokeGate?: { enabled: boolean; reason?: string };
 }
 
 /**
@@ -30,6 +32,7 @@ export function CertDetail({
   onDownloadPEM,
   onDownloadDER,
   onRevoke,
+  revokeGate,
 }: CertDetailProps) {
   const isExpired = new Date(certificate.notAfter) < new Date();
   const isRevoked = certificate.status === "revoked";
@@ -73,7 +76,14 @@ export function CertDetail({
             </Button>
           )}
           {onRevoke && !isRevoked && !isExpired && (
-            <Button variant="destructive" size="sm" onClick={onRevoke}>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={onRevoke}
+              disabled={revokeGate ? !revokeGate.enabled : undefined}
+              title={revokeGate && !revokeGate.enabled ? revokeGate.reason : undefined}
+              data-capability-op="DELETE /api/v1/ca/certificates/{serial}"
+            >
               <ShieldAlert className="h-4 w-4 mr-2" />
               Revoke
             </Button>
