@@ -86,7 +86,6 @@ API Endpoints Used:
 
 ### 8. E2E Test Infrastructure
 - **Files**:
-  - `web/e2e/fixtures/webauthn-mock.ts` - WebAuthn mocks for CI
   - `web/e2e/auth.spec.ts` - Auth flow tests
   - `web/e2e/invitations.spec.ts` - Invitations tests (skipped, needs auth)
   - `web/e2e/tenant.spec.ts` - Tenant dashboard tests (skipped, needs auth)
@@ -96,8 +95,6 @@ API Endpoints Used:
 ```
 web/
 ├── e2e/
-│   ├── fixtures/
-│   │   └── webauthn-mock.ts
 │   ├── auth.spec.ts
 │   ├── invitations.spec.ts
 │   └── tenant.spec.ts
