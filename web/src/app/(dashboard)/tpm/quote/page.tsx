@@ -54,6 +54,7 @@ import {
   KeyRound,
 } from "lucide-react";
 import { useTPM, useToast } from "@/hooks";
+import { Gated } from "@/components/features/capabilities/gated";
 import { checkQuoteBinding } from "trusted-platform-sdk";
 import type { GetAKResponse, QuoteResponse, VerifyQuoteResponse } from "trusted-platform-sdk";
 import { errorMessage } from "@/utils/errors";
@@ -342,10 +343,12 @@ export default function TPMQuotePage() {
           {akMissing && (
             <>
               <p className="text-sm text-muted-foreground">No attestation key on this TPM</p>
-              <Button onClick={handleCreateAK} disabled={creatingAK}>
-                <KeyRound className="mr-2 h-4 w-4" />
-                {creatingAK ? "Creating AK…" : "Create AK"}
-              </Button>
+              <Gated op="POST /api/v1/tpm/ak">
+                <Button onClick={handleCreateAK} disabled={creatingAK}>
+                  <KeyRound className="mr-2 h-4 w-4" />
+                  {creatingAK ? "Creating AK…" : "Create AK"}
+                </Button>
+              </Gated>
             </>
           )}
 
@@ -422,18 +425,20 @@ export default function TPMQuotePage() {
               </div>
             </div>
 
-            <Button
-              onClick={handleQuote}
-              disabled={quoting || selectedPCRs.length === 0}
-              className="w-full"
-            >
-              {quoting ? (
-                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Shield className="mr-2 h-4 w-4" />
-              )}
-              {quoting ? "Generating quote…" : "Generate Quote"}
-            </Button>
+            <Gated op="POST /api/v1/tpm/quote">
+              <Button
+                onClick={handleQuote}
+                disabled={quoting || selectedPCRs.length === 0}
+                className="w-full"
+              >
+                {quoting ? (
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Shield className="mr-2 h-4 w-4" />
+                )}
+                {quoting ? "Generating quote…" : "Generate Quote"}
+              </Button>
+            </Gated>
 
             {quoteError && (
               <div className="flex items-center gap-2 p-3 bg-destructive/10 border border-destructive rounded">
@@ -555,19 +560,21 @@ export default function TPMQuotePage() {
               />
             </div>
 
-            <Button
-              onClick={handleVerify}
-              disabled={verifying || !verifyQuote || !verifySignature}
-              className="w-full"
-              variant="outline"
-            >
-              {verifying ? (
-                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <ShieldCheck className="mr-2 h-4 w-4" />
-              )}
-              {verifying ? "Verifying…" : "Verify Quote"}
-            </Button>
+            <Gated op="POST /api/v1/tpm/quote/verify">
+              <Button
+                onClick={handleVerify}
+                disabled={verifying || !verifyQuote || !verifySignature}
+                className="w-full"
+                variant="outline"
+              >
+                {verifying ? (
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <ShieldCheck className="mr-2 h-4 w-4" />
+                )}
+                {verifying ? "Verifying…" : "Verify Quote"}
+              </Button>
+            </Gated>
 
             {verifyError && (
               <div className="flex items-center gap-2 p-3 bg-destructive/10 border border-destructive rounded">
