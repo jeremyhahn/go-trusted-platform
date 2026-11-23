@@ -106,13 +106,13 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `CeremonyService.Init` | `POST /init` | - | - | - | missing |
-| `CeremonyService.Status` | `GET /status` | `(dashboard)/platform/ceremony/page.tsx` | - | - | partial |
-| `CeremonyService.ClaimCertBegin` | `POST /claim-cert/begin` | - | - | - | missing |
-| `CeremonyService.ClaimCertComplete` | `POST /claim-cert/complete` | - | - | - | missing |
-| `CeremonyService.ClaimShareBegin` | `POST /claim-share/begin` | - | - | - | missing |
-| `CeremonyService.ClaimShareComplete` | `POST /claim-share/complete` | - | - | - | missing |
-| `CeremonyService.SignCSR` | `POST /sign-csr` | - | - | - | missing |
+| `CeremonyService.Init` | `POST /init` | `(dashboard)/platform/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
+| `CeremonyService.Status` | `GET /status` | `(dashboard)/platform/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
+| `CeremonyService.ClaimCertBegin` | `POST /claim-cert/begin` | `(dashboard)/platform/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
+| `CeremonyService.ClaimCertComplete` | `POST /claim-cert/complete` | `(dashboard)/platform/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
+| `CeremonyService.ClaimShareBegin` | `POST /claim-share/begin` | `(dashboard)/platform/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
+| `CeremonyService.ClaimShareComplete` | `POST /claim-share/complete` | `(dashboard)/platform/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
+| `CeremonyService.SignCSR` | `POST /sign-csr` | `(dashboard)/platform/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
 
 ## ClusterService (`cluster.proto`)
 
@@ -734,7 +734,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | BMCService | 23 | 0 | 0 | 23 | 0 | 0 |
 | CAService | 13 | 7 | 0 | 6 | 0 | 0 |
 | CacheService | 4 | 0 | 0 | 0 | 0 | 4 |
-| CeremonyService | 7 | 0 | 1 | 6 | 0 | 0 |
+| CeremonyService | 7 | 7 | 0 | 0 | 0 | 0 |
 | ClusterService | 5 | 0 | 0 | 5 | 0 | 0 |
 | ComputeService | 37 | 14 | 2 | 16 | 5 | 0 |
 | ConfigDeliveryService | 7 | 1 | 2 | 0 | 4 | 0 |
@@ -765,7 +765,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **122** | **61** | **265** | **50** | **31** |
+| **Total** | **529** | **129** | **60** | **259** | **50** | **31** |
 
 ## Proposed slices
 
