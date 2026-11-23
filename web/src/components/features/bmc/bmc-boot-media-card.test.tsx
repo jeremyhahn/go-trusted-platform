@@ -280,4 +280,98 @@ describe('BMCBootMediaCard', () => {
     await click('Mount ISO');
     expect(count(sent, 'POST', '/api/v1/bmc/42/virtual-media')).toBe(0);
   });
+
+  // A lost reply does not show the write was skipped: the card rereads the
+  // media after every write, so the status shows what the BMC really did.
+  it('rereads the media after a mount whose reply is lost, and shows the image the BMC mounted', async () => {
+    const routes: Record<string, Answer> = {
+      'GET /api/v1/capabilities': caps(),
+      ...baseRoutes(),
+      [MEDIA_POST]: refused(504, 'upstream timeout'),
+    };
+    const sent = stubControlPlane(routes);
+    renderCard();
+    await waitForFirstRead();
+    await waitFor(() => {
+      expect(screen.getByTestId('bmc-media-status').textContent).toContain('No image mounted');
+    });
+
+    routes[MEDIA_GET] = MOUNTED;
+    fireEvent.change(screen.getByLabelText('ISO URL'), { target: { value: 'https://images.example/os.iso' } });
+    await click('Mount ISO');
+
+    const toast = await screen.findByText(/Mount ISO failed/);
+    expect(toast.getAttribute('data-variant')).toBe('destructive');
+    await waitFor(() => {
+      expect(count(sent, 'GET', '/api/v1/bmc/42/virtual-media')).toBe(2);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('bmc-media-status').textContent).toContain(
+        'Mounted: https://images.example/os.iso'
+      );
+    });
+    expect(screen.getByRole('button', { name: 'Unmount' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Mount ISO' })).toBeNull();
+    expect(count(sent, 'POST', '/api/v1/bmc/42/virtual-media')).toBe(1);
+  });
+
+  it('keeps Mount ISO off when the reread after a lost mount reply fails', async () => {
+    const routes: Record<string, Answer> = {
+      'GET /api/v1/capabilities': caps(),
+      ...baseRoutes(),
+      [MEDIA_POST]: refused(504, 'upstream timeout'),
+    };
+    const sent = stubControlPlane(routes);
+    renderCard();
+    await waitForFirstRead();
+    await waitFor(() => {
+      expect(screen.getByTestId('bmc-media-status').textContent).toContain('No image mounted');
+    });
+
+    routes[MEDIA_GET] = refused(409, 'bmc: virtual media read failed');
+    fireEvent.change(screen.getByLabelText('ISO URL'), { target: { value: 'https://images.example/os.iso' } });
+    await click('Mount ISO');
+
+    await waitFor(() => {
+      expect(count(sent, 'GET', '/api/v1/bmc/42/virtual-media')).toBe(2);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('bmc-media-status').textContent).toContain('Virtual media status unavailable');
+    });
+    expect(screen.getByTestId('bmc-media-status').textContent).not.toContain('No image mounted');
+    expect(button('Mount ISO').disabled).toBe(true);
+    await click('Mount ISO');
+    expect(count(sent, 'POST', '/api/v1/bmc/42/virtual-media')).toBe(1);
+  });
+
+  it('rereads the media after an unmount whose reply is lost', async () => {
+    const routes: Record<string, Answer> = {
+      'GET /api/v1/capabilities': caps(),
+      ...baseRoutes(),
+      [MEDIA_GET]: MOUNTED,
+      [MEDIA_DELETE]: refused(504, 'upstream timeout'),
+    };
+    const sent = stubControlPlane(routes);
+    renderCard();
+    await waitFor(() => {
+      expect(screen.getByTestId('bmc-media-status').textContent).toContain(
+        'Mounted: https://images.example/os.iso'
+      );
+    });
+    await waitEnabled('Unmount');
+
+    routes[MEDIA_GET] = ok({ mounted: false });
+    await click('Unmount');
+    await screen.findByRole('dialog');
+    await click('Confirm');
+
+    const toast = await screen.findByText(/Unmount failed/);
+    expect(toast.getAttribute('data-variant')).toBe('destructive');
+    await waitFor(() => {
+      expect(count(sent, 'GET', '/api/v1/bmc/42/virtual-media')).toBe(2);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('bmc-media-status').textContent).toContain('No image mounted');
+    });
+  });
 });
