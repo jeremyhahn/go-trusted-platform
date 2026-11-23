@@ -99,4 +99,12 @@ describe('DeviceModelCard', () => {
     expect(save().hasAttribute('disabled')).toBe(true);
     expect(puts(sent)).toHaveLength(0);
   });
+
+  it('carries the device-model-save test id on its Save button', async () => {
+    stubControlPlane(routes());
+    render(withControlPlane(<DeviceModelCard deviceId="7" model="X10" onSaved={vi.fn()} />));
+
+    await screen.findByLabelText('Model');
+    expect(screen.getByTestId('device-model-save')).toBe(save());
+  });
 });
