@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -749,6 +750,33 @@ func TestPXEGRPCService_Authorize(t *testing.T) {
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
+	})
+
+	outOfRange, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{
+		MacAddress: "02:00:00:00:00:01",
+		PortId:     "port-1",
+	})
+	require.NoError(t, err)
+	outOfRangeID := outOfRange.GetDevice().GetId()
+
+	t.Run("refuses a target VLAN outside 1-4094", func(t *testing.T) {
+		// 65556 would wrap to VLAN 20 through a uint16 conversion.
+		for _, vlan := range []uint32{4095, 65535, 65556} {
+			t.Run(fmt.Sprintf("vlan %d", vlan), func(t *testing.T) {
+				resp, err := svc.Authorize(ctx, &platformv1.AuthorizePXEDeviceRequest{
+					DeviceId:   outOfRangeID,
+					TargetVlan: vlan,
+				})
+
+				require.Error(t, err)
+				assert.Nil(t, resp)
+				st, ok := status.FromError(err)
+				require.True(t, ok)
+				assert.Equal(t, codes.InvalidArgument, st.Code())
+				assert.NotEqual(t, pxe.StateAuthorized, mockService.devices[outOfRangeID].State)
+				assert.Equal(t, uint16(0), mockService.devices[outOfRangeID].TargetVLAN)
+			})
+		}
 	})
 }
 
