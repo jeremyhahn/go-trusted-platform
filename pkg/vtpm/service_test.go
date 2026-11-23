@@ -1567,6 +1567,83 @@ func TestService_ListBundles_Pagination(t *testing.T) {
 
 }
 
+// TestService_ListBundles_OffsetAtOrPastTheEndIsEmpty checks that an offset
+// at or beyond the number of matching bundles answers an empty page, so a
+// client paging a multiple of the page size stops instead of receiving the
+// first page again.
+func TestService_ListBundles_OffsetAtOrPastTheEndIsEmpty(t *testing.T) {
+	config := createTestConfig(t)
+	service, err := NewService(config, nil, &mockCA{})
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+
+	// Create 5 test bundles
+	for i := 0; i < 5; i++ {
+		bundlePath := filepath.Join(config.BundlesDir(), "bundle-"+string(rune('a'+i)))
+		if err := os.MkdirAll(bundlePath, 0700); err != nil {
+			t.Fatalf("MkdirAll failed: %v", err)
+		}
+
+		manifest := &Manifest{
+			Version:   ManifestVersion,
+			ID:        "bundle-" + string(rune('a'+i)),
+			Mode:      BundleModePreAssigned,
+			CreatedAt: time.Now(),
+		}
+		manifestData, _ := json.Marshal(manifest)
+		if err := os.WriteFile(filepath.Join(bundlePath, "manifest.json"), manifestData, 0600); err != nil {
+			t.Fatalf("WriteFile failed: %v", err)
+		}
+	}
+
+	ctx := context.Background()
+
+	for _, opts := range []*ListOptions{{Offset: 5}, {Offset: 6, Limit: 2}} {
+		result, err := service.ListBundles(ctx, opts)
+		if err != nil {
+			t.Fatalf("ListBundles(offset %d, limit %d) failed: %v", opts.Offset, opts.Limit, err)
+		}
+		if result == nil {
+			t.Errorf("ListBundles(offset %d, limit %d) returned nil, want an empty list", opts.Offset, opts.Limit)
+		}
+		if len(result) != 0 {
+			t.Errorf("ListBundles(offset %d, limit %d) returned %d bundles, want 0", opts.Offset, opts.Limit, len(result))
+		}
+	}
+
+	result, err := service.ListBundles(ctx, &ListOptions{Offset: 4, Limit: 2})
+	if err != nil {
+		t.Fatalf("ListBundles failed: %v", err)
+	}
+	if len(result) != 1 {
+		t.Errorf("Expected 1 bundle with offset 4 and limit 2, got %d", len(result))
+	}
+
+	// Walk the list a page at a time: the pages end at the end and no
+	// bundle is seen twice.
+	seen := make(map[string]bool)
+	want := []int{2, 2, 1, 0}
+	for page, offset := range []int{0, 2, 4, 6} {
+		result, err := service.ListBundles(ctx, &ListOptions{Offset: offset, Limit: 2})
+		if err != nil {
+			t.Fatalf("ListBundles(offset %d) failed: %v", offset, err)
+		}
+		if len(result) != want[page] {
+			t.Errorf("page at offset %d: got %d bundles, want %d", offset, len(result), want[page])
+		}
+		for _, b := range result {
+			if seen[b.ID] {
+				t.Errorf("bundle %s seen twice (offset %d)", b.ID, offset)
+			}
+			seen[b.ID] = true
+		}
+	}
+	if len(seen) != 5 {
+		t.Errorf("walk saw %d distinct bundles, want 5", len(seen))
+	}
+}
+
 // =============================================================================
 // Template Clone Tests
 // =============================================================================

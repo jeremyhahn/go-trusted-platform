@@ -8,8 +8,8 @@ type MutationOpts = {
 };
 type ApiOpts = { onError?: (err: Error) => void };
 type Cell = (ctx: { row: { original: unknown } }) => React.ReactNode;
-type Action = { label: string; onClick: () => void };
-type Bulk = { label: string; onClick: (rows: unknown[]) => void };
+type Action = { label: string; onClick: () => void; disabled?: boolean; title?: string };
+type Bulk = { label: string; onClick: (rows: unknown[]) => void; disabled?: boolean; title?: string };
 
 const push = vi.fn();
 const toast = vi.fn();
@@ -64,12 +64,16 @@ vi.mock("@/components/ui/data-table", () => ({
         </div>
       ))}
       {props.bulkActions?.map((a) => (
-        <button key={a.label} onClick={() => a.onClick(props.data)}>
+        <button key={a.label} onClick={() => a.onClick(props.data)} disabled={a.disabled} title={a.title}>
           {a.label}
         </button>
       ))}
     </div>
   ),
+}));
+const caps = vi.hoisted(() => ({ capability: vi.fn() }));
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: caps.capability }),
 }));
 vi.mock("@/components/ui/data-table-column-header", () => ({
   DataTableColumnHeader: ({ title }: { title: string }) => <span>{title}</span>,
@@ -78,7 +82,7 @@ vi.mock("@/components/ui/data-table-row-actions", () => ({
   DataTableRowActions: ({ actions }: { actions: Action[] }) => (
     <div>
       {actions.map((a) => (
-        <button key={a.label} onClick={a.onClick}>
+        <button key={a.label} onClick={a.onClick} disabled={a.disabled} title={a.title}>
           {a.label}
         </button>
       ))}
@@ -115,6 +119,8 @@ beforeEach(() => {
   confirmSpy.mockReset();
   confirmSpy.mockReturnValue(true);
   vi.stubGlobal("confirm", confirmSpy);
+  caps.capability.mockReset();
+  caps.capability.mockImplementation(() => ({ enabled: true }));
 });
 afterEach(() => {
   cleanup();
@@ -290,6 +296,51 @@ describe("AppsPage", () => {
     confirmSpy.mockReturnValue(false);
     render(<AppsPage />);
     fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+    expect(deleteApp).not.toHaveBeenCalled();
+  });
+
+  it("gates Register Application on POST /api/v1/iam/tenants/{tenant}/apps", () => {
+    const op = "POST /api/v1/iam/tenants/{tenant}/apps";
+    caps.capability.mockImplementation((o: string) =>
+      o === op ? { enabled: false, reason: "not-configured: iam" } : { enabled: true },
+    );
+    render(<AppsPage />);
+    const register = screen.getByRole("button", { name: /Register Application/ }) as HTMLButtonElement;
+    expect(register.disabled).toBe(true);
+    expect(register.getAttribute("title")).toBe("not-configured: iam");
+    expect(register.getAttribute("data-capability-op")).toBe(op);
+    expect(register.getAttribute("data-capability-enabled")).toBe("false");
+    fireEvent.click(register);
+    expect(push).not.toHaveBeenCalledWith("/iam/apps/new");
+  });
+
+  it("gates the row Delete on DELETE /api/v1/iam/tenants/{tenant}/apps/{id}", () => {
+    caps.capability.mockImplementation((o: string) =>
+      o === "DELETE /api/v1/iam/tenants/{tenant}/apps/{id}"
+        ? { enabled: false, reason: "not-configured: iam" }
+        : { enabled: true },
+    );
+    render(<AppsPage />);
+    const del = within(rows()[0]).getByRole("button", { name: "Delete" }) as HTMLButtonElement;
+    expect(del.disabled).toBe(true);
+    expect(del.getAttribute("title")).toBe("not-configured: iam");
+    fireEvent.click(del);
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(deleteApp).not.toHaveBeenCalled();
+  });
+
+  it("gates Delete selected on the same op", () => {
+    caps.capability.mockImplementation((o: string) =>
+      o === "DELETE /api/v1/iam/tenants/{tenant}/apps/{id}"
+        ? { enabled: false, reason: "not-configured: iam" }
+        : { enabled: true },
+    );
+    render(<AppsPage />);
+    const bulk = screen.getByRole("button", { name: "Delete selected" }) as HTMLButtonElement;
+    expect(bulk.disabled).toBe(true);
+    expect(bulk.getAttribute("title")).toBe("not-configured: iam");
+    fireEvent.click(bulk);
+    expect(confirmSpy).not.toHaveBeenCalled();
     expect(deleteApp).not.toHaveBeenCalled();
   });
 });
