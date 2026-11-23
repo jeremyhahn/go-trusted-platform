@@ -1182,7 +1182,17 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 
 	// Install OpenFlow rules for each target bridge without holding the lock
 	var flowIDs []string
+	// A reapply keeps the policy's per-bridge cookies, including those of
+	// bridges the new config no longer targets, so DeletePolicy still
+	// removes the flows of every earlier apply.
 	flowCookies := make(map[string]uint64)
+	s.mu.RLock()
+	if old, ok := s.policies[policyID]; ok {
+		for bridge, cookie := range old.flowCookies {
+			flowCookies[bridge] = cookie
+		}
+	}
+	s.mu.RUnlock()
 	for _, target := range config.GetTargets() {
 		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
 			continue
@@ -1345,6 +1355,11 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 	// bridges already cleared) so a retry can finish the cleanup.
 	for bridgeName, cookie := range cookies {
 		if err := client.DeleteFlowsByCookie(ctx, bridgeName, cookie, ^uint64(0)); err != nil {
+			if _, gerr := client.GetBridge(ctx, bridgeName); errors.Is(gerr, ovs.ErrBridgeNotFound) {
+				// The bridge is gone, and its flows went with it.
+				delete(cookies, bridgeName)
+				continue
+			}
 			s.mu.Lock()
 			if p, ok := s.policies[foundID]; ok {
 				for cleared := range p.flowCookies {
