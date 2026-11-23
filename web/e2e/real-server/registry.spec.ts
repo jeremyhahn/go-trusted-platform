@@ -8,13 +8,7 @@ import { unwrapPayload } from './fixtures/wire';
  * No page.route mocks: each assertion compares the page with what the
  * server answered the page itself.
  *
- * Not covered, and why:
- *   - Inspect and Delete of a real tag: the harness config seeds no image
- *     and the SDK has no push, so there is no tag to inspect or delete.
- *   - Delete's capability gate: Delete goes through the OCI route
- *     DELETE /v2/{name}/manifests/{reference}, which GET /api/v1/capabilities
- *     does not list; the page gates it on the registry's read-only status
- *     only.
+ * Inspect, Delete and the OCI capability gates of a real pushed tag are in registry-seeded.spec.ts.
  */
 
 /** Waits for the page's own GET whose path matches. */
