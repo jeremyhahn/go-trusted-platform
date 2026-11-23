@@ -518,20 +518,20 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `ProxyService.CreateRoute` | `POST /routes` | - | - | - | missing |
-| `ProxyService.GetRoute` | `GET /routes/{id}` | - | - | - | missing |
-| `ProxyService.UpdateRoute` | `PUT /routes/{id}` | - | - | - | missing |
-| `ProxyService.DeleteRoute` | `DELETE /routes/{id}` | - | - | - | missing |
-| `ProxyService.ListRoutes` | `GET /routes` | - | - | - | missing |
-| `ProxyService.CreatePool` | `POST /pools` | - | - | - | missing |
-| `ProxyService.GetPool` | `GET /pools/{id}` | - | - | - | missing |
-| `ProxyService.UpdatePool` | `PUT /pools/{id}` | - | - | - | missing |
-| `ProxyService.DeletePool` | `DELETE /pools/{id}` | - | - | - | missing |
-| `ProxyService.ListPools` | `GET /pools` | - | - | - | missing |
-| `ProxyService.GetProxyConfig` | `GET /config` | - | - | - | missing |
-| `ProxyService.GetProxyStatus` | `GET /status` | - | - | - | missing |
-| `ProxyService.ReloadProxyConfig` | `POST /reload` | - | - | - | missing |
-| `ProxyService.GetZoneMatrix` | `GET /zone-matrix` | - | - | - | missing |
+| `ProxyService.CreateRoute` | `POST /routes` | `(dashboard)/networking/proxy/page.tsx` | - | `real-server/proxy-routes.spec.ts` | covered |
+| `ProxyService.GetRoute` | `GET /routes/{id}` | `(dashboard)/networking/proxy/page.tsx` | - | `real-server/proxy-routes.spec.ts` | covered |
+| `ProxyService.UpdateRoute` | `PUT /routes/{id}` | `(dashboard)/networking/proxy/page.tsx` | - | `real-server/proxy-routes.spec.ts` | covered |
+| `ProxyService.DeleteRoute` | `DELETE /routes/{id}` | `(dashboard)/networking/proxy/page.tsx` | - | `real-server/proxy-routes.spec.ts` | covered |
+| `ProxyService.ListRoutes` | `GET /routes` | `(dashboard)/networking/proxy/page.tsx` | - | `real-server/proxy-routes.spec.ts` | covered |
+| `ProxyService.CreatePool` | `POST /pools` | `(dashboard)/networking/proxy/pools/page.tsx` | - | `real-server/proxy-pools.spec.ts` | covered |
+| `ProxyService.GetPool` | `GET /pools/{id}` | `(dashboard)/networking/proxy/pools/page.tsx` | - | `real-server/proxy-pools.spec.ts` | covered |
+| `ProxyService.UpdatePool` | `PUT /pools/{id}` | `(dashboard)/networking/proxy/pools/page.tsx` | - | `real-server/proxy-pools.spec.ts` | covered |
+| `ProxyService.DeletePool` | `DELETE /pools/{id}` | `(dashboard)/networking/proxy/pools/page.tsx` | - | `real-server/proxy-pools.spec.ts` | covered |
+| `ProxyService.ListPools` | `GET /pools` | `(dashboard)/networking/proxy/pools/page.tsx` | - | `real-server/proxy-pools.spec.ts` | covered |
+| `ProxyService.GetProxyConfig` | `GET /config` | `(dashboard)/networking/proxy/pools/page.tsx` | - | `real-server/proxy-pools.spec.ts` | covered |
+| `ProxyService.GetProxyStatus` | `GET /status` | `(dashboard)/networking/proxy/page.tsx` | - | `real-server/proxy-routes.spec.ts` | covered |
+| `ProxyService.ReloadProxyConfig` | `POST /reload` | `(dashboard)/networking/proxy/page.tsx` | - | `real-server/proxy-routes.spec.ts` | covered |
+| `ProxyService.GetZoneMatrix` | `GET /zone-matrix` | `(dashboard)/networking/proxy/pools/page.tsx` | - | `real-server/proxy-pools.spec.ts` | covered |
 
 ## PXEService (`pxe.proto`)
 
@@ -755,7 +755,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | PIVService | 8 | 0 | 0 | 0 | 8 | 0 |
 | DNSService | 13 | 3 | 5 | 5 | 0 | 0 |
 | ProvisioningGateway | 4 | 0 | 0 | 0 | 4 | 0 |
-| ProxyService | 14 | 0 | 0 | 14 | 0 | 0 |
+| ProxyService | 14 | 14 | 0 | 0 | 0 | 0 |
 | PXEService | 15 | 3 | 1 | 11 | 0 | 0 |
 | RegistryService | 6 | 0 | 0 | 4 | 2 | 0 |
 | SchedulerService | 11 | 0 | 0 | 0 | 0 | 11 |
