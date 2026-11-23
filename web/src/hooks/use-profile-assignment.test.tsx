@@ -56,7 +56,7 @@ describe('useProfileAssignment', () => {
   });
 
   it('unassigns through POST /device/profiles/{id}/unassign', async () => {
-    const sent = stubControlPlane({ [UNASSIGN]: ok({ ...PROFILE.body as object, assigned: false }) });
+    const sent = stubControlPlane({ [UNASSIGN]: ok({ ...(PROFILE.body as { payload: object }).payload, assigned: false }) });
     const { result } = renderAssignment();
 
     await act(async () => {
