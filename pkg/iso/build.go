@@ -312,6 +312,10 @@ func copyFile(src, dst string) error {
 	return os.WriteFile(dst, data, 0644)
 }
 
+// copyDir stages a secure boot keys tree from src to dst. Each file goes
+// through stageSecureBootFile, so anything that is not a public enrollment
+// artifact (IsSecureBootPublicArtifact) is written 0600 and its read buffer
+// is wiped (#62); public certificates and signature lists stay 0644.
 func copyDir(src, dst string) error {
 	if err := os.MkdirAll(dst, 0755); err != nil {
 		return err
@@ -331,7 +335,7 @@ func copyDir(src, dst string) error {
 				return err
 			}
 		} else {
-			if err := copyFile(srcPath, dstPath); err != nil {
+			if err := stageSecureBootFile(srcPath, dstPath); err != nil {
 				return err
 			}
 		}
