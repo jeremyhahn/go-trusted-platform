@@ -383,11 +383,15 @@ func testKeyStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefix st
 }
 
 // keyStatusSDKGapAdapters are the adapters whose key status update reaches
-// kms.Client.UpdateKeyStatus through the daemon's KMS adapter, which the
-// pinned SDK's embedded transport refuses (helpers.KMSKeyStatusSDKGap).
+// kms.Client.UpdateKeyStatus, which the pinned SDK's embedded transport
+// refuses (helpers.KMSKeyStatusSDKGap): every adapter, the CLI through
+// platformctl and the rest through the daemon's KMS adapter.
 var keyStatusSDKGapAdapters = map[string]bool{
+	"CLI":  true,
 	"gRPC": true,
+	"MCP":  true,
 	"QUIC": true,
+	"REST": true,
 	"Unix": true,
 }
 
@@ -1217,7 +1221,7 @@ func testSecretsRotate(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 		}
 
 		result, err := cmd.SecretsRotate(testCtx, rotateOpts)
-		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if helpers.RequireSDKGapRefusal(t, cmd.Name(), helpers.SecretsSDKGapIssue, err) {
 			wantData = originalData
 			return
 		}
@@ -1239,7 +1243,7 @@ func testSecretsRotate(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 			NewData: []byte("data"),
 		}
 		_, err := cmd.SecretsRotate(testCtx, rotateOpts)
-		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if helpers.RequireSDKGapRefusal(t, cmd.Name(), helpers.SecretsSDKGapIssue, err) {
 			return
 		}
 		require.Error(t, err, "SecretsRotate should fail for nonexistent secret")
@@ -1266,14 +1270,14 @@ func testSecretsVersions(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 			NewData: []byte(fmt.Sprintf("version-%d-data", i)),
 		}
 		_, err := cmd.SecretsRotate(testCtx, rotateOpts)
-		if !helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if !helpers.RequireSDKGapRefusal(t, cmd.Name(), helpers.SecretsSDKGapIssue, err) {
 			require.NoError(t, err, "Setup: SecretsRotate should succeed")
 		}
 	}
 
 	t.Run("ListSecretVersions", func(t *testing.T) {
 		result, err := cmd.SecretsVersions(testCtx, secretName, SecretsVersionsOptions{Limit: 10})
-		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if helpers.RequireSDKGapRefusal(t, cmd.Name(), helpers.SecretsSDKGapIssue, err) {
 			return
 		}
 		require.NoError(t, err, "SecretsVersions should succeed")
@@ -1283,7 +1287,7 @@ func testSecretsVersions(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 
 	t.Run("GetSpecificSecretVersion", func(t *testing.T) {
 		result, err := cmd.SecretsVersion(testCtx, secretName, 1)
-		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if helpers.RequireSDKGapRefusal(t, cmd.Name(), helpers.SecretsSDKGapIssue, err) {
 			return
 		}
 		require.NoError(t, err, "SecretsVersion should succeed")
@@ -1307,19 +1311,30 @@ func testSecretsRollback(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 	_, err := cmd.SecretsStore(testCtx, storeOpts)
 	require.NoError(t, err, "Setup: SecretsStore should succeed")
 
-	// Rotate to create version 2
+	// Rotate to create version 2. wantData is what SecretsGet must answer
+	// after the rollback: version 1's data when the rollback succeeded or the
+	// rotate was the declared SDK refusal, the rotated data when the rotate
+	// succeeded and the rollback was refused.
+	rotatedData := []byte("rotated-data")
 	rotateOpts := SecretsRotateOptions{
 		Name:    secretName,
-		NewData: []byte("rotated-data"),
+		NewData: rotatedData,
 	}
+	rotated := true
 	_, err = cmd.SecretsRotate(testCtx, rotateOpts)
-	if !helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+	if helpers.RequireSDKGapRefusal(t, cmd.Name(), helpers.SecretsSDKGapIssue, err) {
+		rotated = false
+	} else {
 		require.NoError(t, err, "Setup: SecretsRotate should succeed")
 	}
+	wantData := originalData
 
 	t.Run("RollbackToVersion1", func(t *testing.T) {
 		result, err := cmd.SecretsRollback(testCtx, secretName, 1)
-		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if helpers.RequireSDKGapRefusal(t, cmd.Name(), helpers.SecretsSDKGapIssue, err) {
+			if rotated {
+				wantData = rotatedData
+			}
 			return
 		}
 		require.NoError(t, err, "SecretsRollback should succeed")
@@ -1330,7 +1345,7 @@ func testSecretsRollback(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 	t.Run("VerifyRollbackData", func(t *testing.T) {
 		result, err := cmd.SecretsGet(testCtx, secretName)
 		require.NoError(t, err, "SecretsGet should succeed")
-		assert.True(t, bytes.Equal(originalData, result.Data), "Data should match version 1 after rollback")
+		assert.True(t, bytes.Equal(wantData, result.Data), "Data should match version 1 after rollback, or the latest data after a refused rollback")
 	})
 }
 
@@ -1381,7 +1396,7 @@ func testSecretsStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 
 	t.Run("DisableSecret", func(t *testing.T) {
 		result, err := cmd.SecretsStatus(testCtx, secretName, false)
-		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if helpers.RequireSDKGapRefusal(t, cmd.Name(), helpers.SecretsSDKGapIssue, err) {
 			return
 		}
 		require.NoError(t, err, "SecretsStatus (disable) should succeed")
@@ -1392,7 +1407,7 @@ func testSecretsStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 
 	t.Run("EnableSecret", func(t *testing.T) {
 		result, err := cmd.SecretsStatus(testCtx, secretName, true)
-		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if helpers.RequireSDKGapRefusal(t, cmd.Name(), helpers.SecretsSDKGapIssue, err) {
 			return
 		}
 		require.NoError(t, err, "SecretsStatus (enable) should succeed")
@@ -1402,7 +1417,7 @@ func testSecretsStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 
 	t.Run("StatusNonexistentSecretFails", func(t *testing.T) {
 		_, err := cmd.SecretsStatus(testCtx, prefix+"-nonexistent-status", true)
-		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if helpers.RequireSDKGapRefusal(t, cmd.Name(), helpers.SecretsSDKGapIssue, err) {
 			return
 		}
 		require.Error(t, err, "SecretsStatus should fail for nonexistent secret")
