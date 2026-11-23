@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -258,7 +259,7 @@ func (s *PXEGRPCService) SetDeviceEnrolled(ctx context.Context, req *platformv1.
 		return nil, status.Error(codes.InvalidArgument, "device ID is required")
 	}
 
-	certSerial := req.GetCertificateSerial()
+	certSerial := strings.TrimSpace(req.GetCertificateSerial())
 	if certSerial == "" {
 		return nil, status.Error(codes.InvalidArgument, "certificate serial is required")
 	}
@@ -337,7 +338,7 @@ func (s *PXEGRPCService) Quarantine(ctx context.Context, req *platformv1.Quarant
 		return nil, status.Error(codes.InvalidArgument, "device ID is required")
 	}
 
-	reason := req.GetReason()
+	reason := strings.TrimSpace(req.GetReason())
 	if reason == "" {
 		return nil, status.Error(codes.InvalidArgument, "reason is required")
 	}
