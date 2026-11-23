@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { EmbeddedIamGate } from '../../embedded-iam-gate';
+import { Gated } from '@/components/features/capabilities/gated';
 
 // Application record as the REST API sends it: camelCase or snake_case keys (#445).
 interface AppWire {
@@ -109,17 +110,19 @@ export default function AppDetailClient() {
           <EmbeddedIamGate method="App.Update" variant="outline">
             <Pencil className="h-4 w-4 mr-2" /> Edit
           </EmbeddedIamGate>
-          <Button
-            variant="destructive"
-            disabled={deleteMutation.isLoading}
-            onClick={() => {
-              if (window.confirm(`Delete application "${a?.name || clientId}"?`)) {
-                deleteMutation.mutate(undefined);
-              }
-            }}
-          >
-            <Trash2 className="h-4 w-4 mr-2" /> Delete
-          </Button>
+          <Gated op="DELETE /api/v1/iam/apps/{id}">
+            <Button
+              variant="destructive"
+              disabled={deleteMutation.isLoading}
+              onClick={() => {
+                if (window.confirm(`Delete application "${a?.name || clientId}"?`)) {
+                  deleteMutation.mutate(undefined);
+                }
+              }}
+            >
+              <Trash2 className="h-4 w-4 mr-2" /> Delete
+            </Button>
+          </Gated>
         </div>
       </div>
 

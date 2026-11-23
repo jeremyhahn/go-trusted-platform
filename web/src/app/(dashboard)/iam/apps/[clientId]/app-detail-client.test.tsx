@@ -84,10 +84,8 @@ describe("AppDetailClient on the embedded IAM backend", () => {
 // #2054: the Delete control carries its server op and is disabled with the
 // server's reason when the server does not offer DeleteApp.
 describe("AppDetailClient Delete capability gate", () => {
-  let confirmSpy: ReturnType<typeof vi.spyOn>;
-
   beforeEach(() => {
-    confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     caps.capability.mockImplementation(() => ({ enabled: true }));
   });
 
@@ -108,7 +106,7 @@ describe("AppDetailClient Delete capability gate", () => {
     expect(del.getAttribute("data-capability-op")).toBe(DELETE_OP);
     expect(del.getAttribute("data-capability-enabled")).toBe("false");
     fireEvent.click(del);
-    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(window.confirm).not.toHaveBeenCalled();
     expect(iam.deleteApp).not.toHaveBeenCalled();
   });
 
@@ -117,7 +115,7 @@ describe("AppDetailClient Delete capability gate", () => {
     const del = screen.getByRole("button", { name: /Delete/ }) as HTMLButtonElement;
     expect(del.getAttribute("data-capability-enabled")).toBe("true");
     fireEvent.click(del);
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(window.confirm).toHaveBeenCalledTimes(1);
     expect(iam.deleteApp).toHaveBeenCalledWith("t1", "c1");
   });
 });
