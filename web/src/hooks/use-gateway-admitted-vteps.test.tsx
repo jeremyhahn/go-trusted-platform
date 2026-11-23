@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { PlatformProvider } from 'trusted-platform-sdk';
 import { ok, refused, stubControlPlane, withControlPlane } from '@/test/control-plane-fetch';
 import { useGatewayAdmittedVTEPs } from './use-gateway-admitted-vteps';
@@ -20,6 +20,12 @@ const V2 = { vtep: '2001:db8::2', hostname: 'node-b.example.com' };
 
 function render(gatewayId: string) {
   return renderHook(() => useGatewayAdmittedVTEPs(gatewayId), {
+    wrapper: ({ children }) => withControlPlane(children),
+  });
+}
+
+function renderAuto(gatewayId: string, auto: boolean) {
+  return renderHook(() => useGatewayAdmittedVTEPs(gatewayId, { auto }), {
     wrapper: ({ children }) => withControlPlane(children),
   });
 }
@@ -49,6 +55,19 @@ describe('useGatewayAdmittedVTEPs', () => {
     expect(result.current.vteps).toEqual([V1, V2]);
     expect(result.current.error).toBeNull();
     expect(sent).toContainEqual({ method: 'GET', path: LIST, body: undefined });
+  });
+
+  it('lists nothing on mount with auto false and lists on refetch', async () => {
+    const sent = stubControlPlane({ [`GET ${LIST}`]: ok({ admitted_vteps: [V1], total: 1 }) });
+    const { result } = renderAuto('gw-1', false);
+
+    expect(result.current.isLoading).toBe(false);
+    expect(sent.filter((r) => r.method === 'GET' && r.path === LIST)).toEqual([]);
+
+    await act(() => result.current.refetch());
+
+    expect(result.current.vteps).toEqual([V1]);
+    expect(sent.filter((r) => r.method === 'GET' && r.path === LIST)).toHaveLength(1);
   });
 
   it('reads one VTEP with get', async () => {

@@ -28,10 +28,18 @@ function apiFailure(error: { status?: number; message: string }): Error {
   return new Error(error.status !== undefined ? `HTTP ${error.status}: ${error.message}` : error.message);
 }
 
-export function useGatewayAdmittedVTEPs(gatewayId: string): UseGatewayAdmittedVTEPsResult {
+export interface UseGatewayAdmittedVTEPsOptions {
+  /** List on mount and when the gateway changes (default true); false lists only on refetch. */
+  auto?: boolean;
+}
+
+export function useGatewayAdmittedVTEPs(
+  gatewayId: string,
+  { auto = true }: UseGatewayAdmittedVTEPsOptions = {}
+): UseGatewayAdmittedVTEPsResult {
   const gateway = useGateway();
   const [vteps, setVteps] = React.useState<GatewayAdmittedVTEPList['admitted_vteps']>([]);
-  const [isLoading, setIsLoading] = React.useState(Boolean(gatewayId));
+  const [isLoading, setIsLoading] = React.useState(auto && Boolean(gatewayId));
   const [error, setError] = React.useState<string | null>(null);
 
   // Every read takes a sequence number and publishes only while it is still
@@ -63,11 +71,11 @@ export function useGatewayAdmittedVTEPs(gatewayId: string): UseGatewayAdmittedVT
   }, [gateway, gatewayId]);
 
   React.useEffect(() => {
-    void read();
+    if (auto) void read();
     return () => {
       seq.current++;
     };
-  }, [read]);
+  }, [read, auto]);
 
   const get = React.useCallback(
     async (vtep: GatewayAdmittedVTEPId) => {
