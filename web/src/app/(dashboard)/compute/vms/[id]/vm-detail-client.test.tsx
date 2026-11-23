@@ -88,7 +88,7 @@ describe('VMDetailPage Suspend / Resume', () => {
     await renderPage();
 
     // The control plane records the transition; the re-read returns it.
-    routes[VM_PATH] = storedVM('VM_STATE_SUSPENDED');
+    routes[VM_PATH] = storedVM('VM_STATE_PAUSED');
     await click('Suspend');
 
     expect(sent).toContainEqual({ method: 'POST', path: '/api/v1/compute/vms/vm-1/suspend', body: {} });
@@ -103,11 +103,14 @@ describe('VMDetailPage Suspend / Resume', () => {
   it('resumes a suspended VM through POST /compute/vms/{id}/resume', async () => {
     const sent = stubControlPlane({
       'GET /api/v1/capabilities': caps(),
-      [VM_PATH]: storedVM('VM_STATE_SUSPENDED'),
+      [VM_PATH]: storedVM('VM_STATE_PAUSED'),
       'POST /api/v1/compute/vms/vm-1/resume': ok({ status: { code: 0, message: 'resumed' } }),
     });
     await renderPage();
 
+    // The server reports a suspended VM as VM_STATE_PAUSED: the status badge
+    // reads suspended and Resume is offered.
+    await waitFor(() => expect(screen.getByTestId('vm-info').textContent).toContain('suspended'));
     await click('Resume');
 
     expect(sent).toContainEqual({ method: 'POST', path: '/api/v1/compute/vms/vm-1/resume', body: {} });
