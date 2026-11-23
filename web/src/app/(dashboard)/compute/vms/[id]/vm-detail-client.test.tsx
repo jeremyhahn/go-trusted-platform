@@ -252,6 +252,38 @@ describe('VMDetailPage loads the SDK VM', () => {
     expect(document.querySelector('.animate-spin')).toBeNull();
   }, 20000);
 
+  it('shows the Compute unavailable state and stops polling when compute is not configured', async () => {
+    const notConfigured: Answer = {
+      status: 503,
+      body: {
+        code: 503,
+        success: false,
+        error: 'compute service not configured',
+        service: 'compute',
+        reason: 'SERVICE_NOT_CONFIGURED',
+      },
+    };
+    const sent = stubControlPlane({
+      'GET /api/v1/capabilities': caps(),
+      [VM_PATH]: notConfigured,
+    });
+    render(withControlPlane(<VMDetailPage />));
+
+    // The SDK retries a 503 three times with backoff (1 s, 2 s, 4 s) before
+    // it hands the refusal to the page.
+    await screen.findByText('Compute is not available on this node', {}, { timeout: 15000 });
+    expect(screen.queryByTestId('vm-detail-error')).toBeNull();
+    expect(document.querySelector('.animate-spin')).toBeNull();
+
+    // The page polls GetVM every 5 s; a node without compute is not polled.
+    const reads = () => sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/compute/vms/vm-1').length;
+    const n = reads();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 6000));
+    });
+    expect(reads()).toBe(n);
+  }, 30000);
+
   it('renders the info card from config', async () => {
     stubControlPlane(sdkRoutes());
     await renderSDKPage();
