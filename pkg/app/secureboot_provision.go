@@ -32,6 +32,7 @@ import (
 	quicbaassecret "github.com/jeremyhahn/go-quicbaas/sdk/go/secret"
 	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/memguard"
 )
 
 // Package app / secureboot_provision.go provisions the Secure Boot PK, KEK and
@@ -264,11 +265,11 @@ func (app *App) provisionSecureBootEntry(
 		return &ErrSecureBootProvision{Role: role, Stage: "self-sign certificate", Cause: err}
 	}
 
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	keyEnclave, err := enclaveSecureBootKey(key)
 	if err != nil {
 		return &ErrSecureBootProvision{Role: role, Stage: "marshal private key", Cause: err}
 	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	defer keyEnclave.Destroy()
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 
 	createdAt := time.Now().UTC().Format(time.RFC3339)
@@ -299,12 +300,9 @@ func (app *App) provisionSecureBootEntry(
 		return &ErrSecureBootProvision{Role: role, Stage: "store certificate at " + certPath, Cause: err}
 	}
 
-	if _, err := store.StoreSecret(ctx, &baasservice.StoreSecretRequest{
-		Name:        keyPath,
-		Description: "Secure Boot " + strings.ToUpper(string(role)) + " private key",
-		Data:        keyPEM,
-		Metadata:    baseMeta("private-key"),
-	}); err != nil {
+	if err := storeNTSKey(ctx, store, keyPath,
+		"Secure Boot "+strings.ToUpper(string(role))+" private key",
+		keyEnclave, baseMeta("private-key")); err != nil {
 		return &ErrSecureBootProvision{Role: role, Stage: "store private key at " + keyPath, Cause: err}
 	}
 
@@ -402,6 +400,25 @@ func generateSecureBootKey(ref *installer.SecureBootKeyRef) (crypto.PrivateKey, 
 	default:
 		return nil, "", &MessageError{Msg: "unsupported secure boot key algorithm: " + ref.KeyAlgorithm}
 	}
+}
+
+// enclaveSecureBootKey marshals a generated Secure Boot private key to PKCS#8
+// PEM inside a memguard enclave and clears the intermediate DER and PEM
+// buffers; it takes the same custody, with the same limits, as enclaveNTSKey.
+func enclaveSecureBootKey(key crypto.PrivateKey) (*memguard.MemoryEnclave, error) {
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	clear(keyDER)
+
+	enclave := memguard.NewMemoryEnclave(keyPEM)
+	clear(keyPEM)
+	if !enclave.IsAlive() {
+		return nil, &MessageError{Msg: "Secure Boot private key could not be placed in protected memory"}
+	}
+	return enclave, nil
 }
 
 // secureBootCurve resolves the configured ECC curve, defaulting to P-256.

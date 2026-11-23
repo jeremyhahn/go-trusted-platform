@@ -187,7 +187,10 @@ tracked here as
   exposes no zeroization API. Wiping `D` would clear one copy, leave the
   cached one, and read as a stronger guarantee than it is — so the code
   deliberately does not do it. This is the single strongest argument for
-  moving generation behind the upstream handle.
+  moving generation behind the upstream handle. The Secure Boot
+  provisioner (`enclaveSecureBootKey`) takes the same custody of each
+  generated PK/KEK/DB key, with the same generation limit for its RSA and
+  ECDSA keys.
 - **Resolution.** `ProcessSecrets` substitutes `kms://` references into
   the configuration as plain Go strings before the NTP service starts, so
   the startup material reaches `writeConfiguredNTSMaterial` as a string
