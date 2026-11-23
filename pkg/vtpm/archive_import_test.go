@@ -4,6 +4,9 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -11,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // readBundleFiles returns every regular file under dir except manifest.json,
@@ -275,4 +279,139 @@ func TestArchiver_ImportFromFile_RefusesAnArchiveWithoutManifestJSON(t *testing.
 		t.Fatalf("bundle published without manifest.json: stat err %v", statErr)
 	}
 	assertNoStagingLeft(t, config)
+}
+
+// checksumOf returns the manifest checksum ("sha256:<hex>") of body.
+func checksumOf(body string) string {
+	sum := sha256.Sum256([]byte(body))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// importChecksumArchive writes the archive of entries to a temp file and
+// imports it into a fresh bundle store, returning the store's config.
+func importChecksumArchive(t *testing.T, entries []tarEntry) (*Config, *Bundle, error) {
+	t.Helper()
+	archivePath := filepath.Join(t.TempDir(), "checksum.tar.gz")
+	if err := os.WriteFile(archivePath, buildArchive(t, entries, 0), 0600); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	config := &Config{BaseDir: t.TempDir()}
+	if err := os.MkdirAll(config.BundlesDir(), 0o700); err != nil {
+		t.Fatalf("create bundles dir: %v", err)
+	}
+	bundle, err := NewArchiver(config, nil).ImportFromFile(context.Background(), archivePath)
+	return config, bundle, err
+}
+
+// assertChecksumRefused checks the import failed with ErrChecksumMismatch
+// naming file, published no bundle id and left no staging behind.
+func assertChecksumRefused(t *testing.T, config *Config, err error, id, file string) {
+	t.Helper()
+	var mismatch ErrChecksumMismatch
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("ImportFromFile error = %v, want ErrChecksumMismatch", err)
+	}
+	if mismatch.File != file {
+		t.Fatalf("ErrChecksumMismatch.File = %q, want %q", mismatch.File, file)
+	}
+	if _, statErr := os.Stat(config.BundlePath(id)); !os.IsNotExist(statErr) {
+		t.Fatalf("bundle %s published despite a checksum mismatch: stat err %v", id, statErr)
+	}
+	assertNoStagingLeft(t, config)
+}
+
+// TestArchiver_ChecksumGate_RefusesAnAlteredFile imports an archive whose
+// TPM state differs from the manifest checksum: nothing is published.
+func TestArchiver_ChecksumGate_RefusesAnAlteredFile(t *testing.T) {
+	config, _, err := importChecksumArchive(t, []tarEntry{
+		{name: "p/manifest.json", typeflag: tar.TypeReg, body: `{"id":"altered","checksums":{"tpm/tpm2-00.permall":"` + checksumOf("original-state") + `"}}`},
+		{name: "p/tpm/tpm2-00.permall", typeflag: tar.TypeReg, body: "altered-state"},
+	})
+	assertChecksumRefused(t, config, err, "altered", "tpm/tpm2-00.permall")
+}
+
+// TestArchiver_ChecksumGate_RefusesAMissingFile imports an archive that
+// lacks a file the manifest checksums: nothing is published.
+func TestArchiver_ChecksumGate_RefusesAMissingFile(t *testing.T) {
+	config, _, err := importChecksumArchive(t, []tarEntry{
+		{name: "p/manifest.json", typeflag: tar.TypeReg, body: `{"id":"missing","checksums":{"tpm/tpm2-00.permall":"` + checksumOf("state") + `","ovmf/OVMF_VARS.fd":"` + checksumOf("nvram") + `"}}`},
+		{name: "p/tpm/tpm2-00.permall", typeflag: tar.TypeReg, body: "state"},
+	})
+	assertChecksumRefused(t, config, err, "missing", "ovmf/OVMF_VARS.fd")
+}
+
+// TestArchiver_ChecksumGate_RefusesAPathOutsideTheBundle refuses a manifest
+// whose checksum path climbs out of the bundle directory.
+func TestArchiver_ChecksumGate_RefusesAPathOutsideTheBundle(t *testing.T) {
+	config, _, err := importChecksumArchive(t, []tarEntry{
+		{name: "p/manifest.json", typeflag: tar.TypeReg, body: `{"id":"escape","checksums":{"../escape/tpm2-00.permall":"` + checksumOf("state") + `"}}`},
+		{name: "p/tpm/tpm2-00.permall", typeflag: tar.TypeReg, body: "state"},
+	})
+	if !errors.As(err, &ErrInvalidManifest{}) {
+		t.Fatalf("ImportFromFile error = %v, want ErrInvalidManifest", err)
+	}
+	if _, statErr := os.Stat(config.BundlePath("escape")); !os.IsNotExist(statErr) {
+		t.Fatalf("bundle published with an escaping checksum path: stat err %v", statErr)
+	}
+	assertNoStagingLeft(t, config)
+}
+
+// TestArchiver_ChecksumGate_PublishesMatchingFiles imports an archive whose
+// files all match the manifest checksums.
+func TestArchiver_ChecksumGate_PublishesMatchingFiles(t *testing.T) {
+	_, bundle, err := importChecksumArchive(t, []tarEntry{
+		{name: "p/manifest.json", typeflag: tar.TypeReg, body: `{"id":"matching","checksums":{"tpm/tpm2-00.permall":"` + checksumOf("state") + `","ovmf/OVMF_VARS.fd":"` + checksumOf("nvram") + `"}}`},
+		{name: "p/tpm/tpm2-00.permall", typeflag: tar.TypeReg, body: "state"},
+		{name: "p/ovmf/OVMF_VARS.fd", typeflag: tar.TypeReg, body: "nvram"},
+	})
+	if err != nil {
+		t.Fatalf("ImportFromFile failed: %v", err)
+	}
+	data, err := os.ReadFile(bundle.TPMState.PermallFile)
+	if err != nil {
+		t.Fatalf("read imported TPM state: %v", err)
+	}
+	if string(data) != "state" {
+		t.Fatalf("imported TPM state = %q, want %q", data, "state")
+	}
+}
+
+// TestArchiver_ChecksumGate_ExportRefreshesChangedState exports a bundle
+// whose TPM state changed after creation: the archived manifest carries the
+// current checksum, so the archive imports.
+func TestArchiver_ChecksumGate_ExportRefreshesChangedState(t *testing.T) {
+	srcDir := t.TempDir()
+	bundleDir := filepath.Join(srcDir, "bundles", "refresh")
+	if err := os.MkdirAll(filepath.Join(bundleDir, "tpm"), 0o700); err != nil {
+		t.Fatalf("create bundle: %v", err)
+	}
+	manifest, err := json.Marshal(&Manifest{
+		Version:   ManifestVersion,
+		ID:        "refresh",
+		Mode:      BundleModePreAssigned,
+		CreatedAt: time.Now(),
+		Checksums: map[string]string{"tpm/tpm2-00.permall": checksumOf("created-state")},
+	})
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bundleDir, "manifest.json"), manifest, 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bundleDir, "tpm", "tpm2-00.permall"), []byte("running-state"), 0o600); err != nil {
+		t.Fatalf("write TPM state: %v", err)
+	}
+
+	ctx := context.Background()
+	var buf bytes.Buffer
+	if err := NewArchiver(&Config{BaseDir: srcDir}, nil).Export(ctx, "refresh", &buf); err != nil {
+		t.Fatalf("Export failed: %v", err)
+	}
+	bundle, err := NewArchiver(&Config{BaseDir: t.TempDir()}, nil).Import(ctx, &buf)
+	if err != nil {
+		t.Fatalf("Import of an exported used bundle failed: %v", err)
+	}
+	if got, want := bundle.Manifest.Checksums["tpm/tpm2-00.permall"], checksumOf("running-state"); got != want {
+		t.Fatalf("imported checksum = %q, want %q", got, want)
+	}
 }
