@@ -26,6 +26,7 @@ interface CertLister {
       success: boolean;
       data?: { certificates?: Array<{ serial: string; commonName: string; status: unknown }> };
     }>;
+    getCRL(): Promise<{ success: boolean; data?: { crl?: { revokedCerts?: Array<{ serial: string }> } } }>;
   };
 }
 
@@ -41,6 +42,23 @@ async function listCerts(sdk: CertLister): Promise<ListedCert[]> {
 
 function isRevoked(c: ListedCert): boolean {
   return c.status.includes('REVOKED');
+}
+
+/** The server's summary status for a valid certificate (an exact match: INVALID is not valid). */
+function isValid(c: ListedCert): boolean {
+  return c.status === 'CERTIFICATE_STATUS_VALID' || c.status === 'VALID';
+}
+
+/** A serial in one form on both sides: lowercase, no colons, no leading zeros. */
+function normSerial(serial: string): string {
+  return serial.toLowerCase().replace(/:/g, '').replace(/^0+(?=.)/, '');
+}
+
+/** The serials the CA's CRL (GET /ca/crl) lists as revoked; empty on a failed read. */
+async function crlSerials(sdk: CertLister): Promise<Set<string>> {
+  const res = await sdk.ca.getCRL().catch(() => ({ success: false, data: undefined }));
+  if (!res.success) return new Set();
+  return new Set((res.data?.crl?.revokedCerts ?? []).map((e) => normSerial(e.serial)));
 }
 
 function isCertList(r: Response): boolean {
@@ -157,7 +175,7 @@ test.describe('Issue Certificate, real server', () => {
 test.describe('Revoke Certificate, real server', () => {
   test('an active certificate offers Revoke, a revoked one does not', async ({ adminPage, sdk }) => {
     const certs = await listCerts(sdk);
-    const active = certs.find((c) => c.status.includes('ACTIVE'));
+    const active = certs.find(isValid);
     const revoked = certs.find(isRevoked);
     test.skip(!active && !revoked, 'the harness CA lists no active or revoked certificate');
     await adminPage.goto('/ca/certificates');
@@ -175,6 +193,13 @@ test.describe('Revoke Certificate, real server', () => {
   test('revoking a certificate issued here leaves it revoked on the server', async ({ adminPage, sdk }) => {
     const { commonName, res } = await issueThroughPage(adminPage);
     test.skip(!res.ok(), 'the harness CA refused the issue');
+    let serial = '';
+    await expect
+      .poll(async () => {
+        serial = (await listCerts(sdk)).find((c) => c.commonName === commonName)?.serial ?? '';
+        return serial;
+      })
+      .not.toBe('');
     await adminPage.goto('/ca/certificates');
     await openRowMenu(adminPage, commonName);
     const answer = adminPage.waitForResponse(
@@ -184,8 +209,7 @@ test.describe('Revoke Certificate, real server', () => {
     const confirm = adminPage.getByRole('alertdialog').or(adminPage.getByRole('dialog'));
     if (await confirm.count()) await confirm.getByRole('button', { name: /revoke|confirm/i }).last().click();
     const revoke = await answer;
-    const after = (await listCerts(sdk)).find((c) => c.commonName === commonName);
-    expect(Boolean(after && isRevoked(after))).toBe(revoke.ok());
+    expect((await crlSerials(sdk)).has(normSerial(serial))).toBe(revoke.ok());
   });
 });
 
@@ -202,7 +226,7 @@ test.describe('Certificate Details, real server', () => {
     await expect(adminPage.getByRole('button', { name: /der/i })).toBeVisible();
     const revoke = adminPage.getByRole('button', { name: /revoke/i });
     if (isRevoked(cert)) await expect(revoke).toHaveCount(0);
-    else if (cert.status.includes('ACTIVE')) await expect(revoke).toBeVisible();
+    else if (isValid(cert)) await expect(revoke).toBeVisible();
 
     await adminPage.getByRole('link', { name: /certificates/i }).first().click();
     await expect(adminPage).toHaveURL(/\/ca\/certificates\/?$/);
