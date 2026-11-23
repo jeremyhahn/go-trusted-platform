@@ -3,6 +3,7 @@
 package device
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -774,6 +775,23 @@ func forgedQuoteEvidence(t *testing.T, testID string) []byte {
 	return raw
 }
 
+// forgedQuoteEvidenceWithNonce is forgedQuoteEvidence carrying the given
+// nonce, so the evidence binds to a server-issued challenge (#2136) while
+// the quote itself stays forged.
+func forgedQuoteEvidenceWithNonce(t *testing.T, testID string, nonce []byte) []byte {
+	t.Helper()
+	evidence := map[string][]byte{
+		"quote":     []byte("not-a-tpms-attest-structure-" + testID),
+		"signature": []byte("not-a-signature-" + testID),
+		"nonce":     nonce,
+	}
+	raw, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatalf("marshal forged evidence: %v", err)
+	}
+	return raw
+}
+
 func testAttestation(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 	tenantID := DefaultTenantID()
 	testID := uuid.New().String()[:8]
@@ -912,6 +930,130 @@ func testAttestation(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 		if err == nil && attestResult != nil && attestResult.Verified {
 			t.Fatalf("%s reported verified=true for a device that does not exist: %+v",
 				adapter.Name(), attestResult)
+		}
+	})
+
+	// registerChallengeDevice registers a fresh device for one challenge
+	// subtest and returns its ID.
+	registerChallengeDevice := func(t *testing.T, suffix string) string {
+		t.Helper()
+		registerResult, err := adapter.RegisterDevice(ctx, RegisterDeviceOptions{
+			TenantID: tenantID,
+			Serial:   GenerateTestSerial(testID + "-" + suffix),
+			Model:    "test-model-attest",
+		})
+		if err != nil {
+			t.Fatalf("RegisterDevice failed: %v", err)
+		}
+		return fmt.Sprintf("%d", registerResult.Device.ID)
+	}
+
+	t.Run("ChallengeIsIssuedForTheDevice", func(t *testing.T) {
+		deviceID := registerChallengeDevice(t, "chal-issue")
+		opts := IssueAttestationChallengeOptions{TenantID: tenantID, DeviceID: deviceID}
+
+		first, err := adapter.IssueAttestationChallenge(ctx, opts)
+		var unavailable ErrAttestationTransportUnavailable
+		if errors.As(err, &unavailable) {
+			t.Logf("%s: %v", adapter.Name(), unavailable)
+			return
+		}
+		if err != nil {
+			t.Fatalf("%s IssueAttestationChallenge: %v", adapter.Name(), err)
+		}
+		if first.ChallengeID == "" {
+			t.Fatalf("%s issued a challenge with no ID: %+v", adapter.Name(), first)
+		}
+		if len(first.Nonce) < 16 {
+			t.Fatalf("%s issued a nonce of %d bytes, want at least 16", adapter.Name(), len(first.Nonce))
+		}
+		if !first.ExpiresAt.After(time.Now()) {
+			t.Fatalf("%s issued a challenge that is already expired: %v", adapter.Name(), first.ExpiresAt)
+		}
+
+		second, err := adapter.IssueAttestationChallenge(ctx, opts)
+		if err != nil {
+			t.Fatalf("%s second IssueAttestationChallenge: %v", adapter.Name(), err)
+		}
+		if second.ChallengeID == first.ChallengeID {
+			t.Fatalf("%s issued the same challenge ID twice: %q", adapter.Name(), first.ChallengeID)
+		}
+		if bytes.Equal(second.Nonce, first.Nonce) {
+			t.Fatalf("%s issued the same nonce twice", adapter.Name())
+		}
+	})
+
+	t.Run("ChallengeIsSingleUse", func(t *testing.T) {
+		deviceID := registerChallengeDevice(t, "chal-once")
+		challenge, err := adapter.IssueAttestationChallenge(ctx, IssueAttestationChallengeOptions{
+			TenantID: tenantID,
+			DeviceID: deviceID,
+		})
+		var unavailable ErrAttestationTransportUnavailable
+		if errors.As(err, &unavailable) {
+			t.Logf("%s: %v", adapter.Name(), unavailable)
+			return
+		}
+		if err != nil {
+			t.Fatalf("%s IssueAttestationChallenge: %v", adapter.Name(), err)
+		}
+
+		attestOpts := AttestDeviceOptions{
+			TenantID:    tenantID,
+			DeviceID:    deviceID,
+			Evidence:    forgedQuoteEvidenceWithNonce(t, testID, challenge.Nonce),
+			ChallengeID: challenge.ChallengeID,
+		}
+		attestResult, err := adapter.AttestDevice(ctx, attestOpts)
+		if errors.As(err, &unavailable) {
+			t.Logf("%s: %v", adapter.Name(), unavailable)
+			return
+		}
+		if err == nil && attestResult != nil && attestResult.Verified {
+			t.Fatalf("%s reported verified=true for a forged quote on a challenge: %+v",
+				adapter.Name(), attestResult)
+		}
+
+		_, err = adapter.AttestDevice(ctx, attestOpts)
+		if err == nil {
+			t.Fatalf("%s accepted a challenge a second time", adapter.Name())
+		}
+		msg := strings.ToLower(err.Error())
+		if !strings.Contains(msg, "already used") && !strings.Contains(msg, "unknown") {
+			t.Fatalf("%s: a reused challenge must be refused as used or unknown, got: %v", adapter.Name(), err)
+		}
+	})
+
+	t.Run("ChallengeNonceMustMatch", func(t *testing.T) {
+		deviceID := registerChallengeDevice(t, "chal-nonce")
+		challenge, err := adapter.IssueAttestationChallenge(ctx, IssueAttestationChallengeOptions{
+			TenantID: tenantID,
+			DeviceID: deviceID,
+		})
+		var unavailable ErrAttestationTransportUnavailable
+		if errors.As(err, &unavailable) {
+			t.Logf("%s: %v", adapter.Name(), unavailable)
+			return
+		}
+		if err != nil {
+			t.Fatalf("%s IssueAttestationChallenge: %v", adapter.Name(), err)
+		}
+
+		_, err = adapter.AttestDevice(ctx, AttestDeviceOptions{
+			TenantID:    tenantID,
+			DeviceID:    deviceID,
+			Evidence:    forgedQuoteEvidence(t, testID),
+			ChallengeID: challenge.ChallengeID,
+		})
+		if errors.As(err, &unavailable) {
+			t.Logf("%s: %v", adapter.Name(), unavailable)
+			return
+		}
+		if err == nil {
+			t.Fatalf("%s accepted evidence whose nonce is not the challenge's", adapter.Name())
+		}
+		if !strings.Contains(strings.ToLower(err.Error()), "nonce") {
+			t.Fatalf("%s: a nonce mismatch must name the nonce, got: %v", adapter.Name(), err)
 		}
 	})
 }
