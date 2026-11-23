@@ -702,28 +702,28 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
 | `VTPMService.CreateBundle` | `POST /bundles` | `(dashboard)/devices/vtpm/page.tsx` | - | `devices.spec.ts` | covered |
-| `VTPMService.GetBundle` | `GET /bundles/{id}` | `(dashboard)/devices/vtpm/[id]/page.tsx`<br>`(dashboard)/devices/vtpm/bundles/[id]/page.tsx` | - | - | partial |
-| `VTPMService.DeleteBundle` | `DELETE /bundles/{id}` | `(dashboard)/devices/vtpm/[id]/page.tsx`<br>`(dashboard)/devices/vtpm/page.tsx` | - | `devices.spec.ts` | covered |
+| `VTPMService.GetBundle` | `GET /bundles/{id}` | `(dashboard)/devices/vtpm/[id]/page.tsx`<br>`(dashboard)/devices/vtpm/bundles/[id]/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
+| `VTPMService.DeleteBundle` | `DELETE /bundles/{id}` | `(dashboard)/devices/vtpm/[id]/page.tsx`<br>`(dashboard)/devices/vtpm/page.tsx` | - | `devices.spec.ts`<br>`real-server/vtpm.spec.ts` | covered |
 | `VTPMService.ListBundles` | `GET /bundles` | `(dashboard)/devices/vtpm/page.tsx`<br>`(dashboard)/devices/vtpm/bundles/page.tsx` | - | `devices.spec.ts` | covered |
-| `VTPMService.CreateTemplate` | `POST /templates` | `(dashboard)/devices/vtpm/templates/page.tsx` | - | - | partial |
-| `VTPMService.GetTemplate` | `GET /templates/{id}` | `(dashboard)/devices/vtpm/templates/page.tsx` | - | - | partial |
-| `VTPMService.DeleteTemplate` | `DELETE /templates/{id}` | `(dashboard)/devices/vtpm/templates/page.tsx` | - | - | partial |
-| `VTPMService.ListTemplates` | `GET /templates` | `(dashboard)/devices/vtpm/templates/page.tsx` | - | - | partial |
-| `VTPMService.CloneTemplate` | `POST /templates/{id}/clone` | `(dashboard)/devices/vtpm/templates/page.tsx` | - | - | partial |
+| `VTPMService.CreateTemplate` | `POST /templates` | `(dashboard)/devices/vtpm/templates/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
+| `VTPMService.GetTemplate` | `GET /templates/{id}` | `(dashboard)/devices/vtpm/templates/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
+| `VTPMService.DeleteTemplate` | `DELETE /templates/{id}` | `(dashboard)/devices/vtpm/templates/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
+| `VTPMService.ListTemplates` | `GET /templates` | `(dashboard)/devices/vtpm/templates/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
+| `VTPMService.CloneTemplate` | `POST /templates/{id}/clone` | `(dashboard)/devices/vtpm/templates/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
 | `VTPMService.ExportBundle` | `GET /bundles/{id}/export` | - | - | - | not-UI: streaming plumbing |
-| `VTPMService.ImportBundle` | `POST /bundles/import` | `(dashboard)/devices/vtpm/bundles/page.tsx` | - | - | partial |
-| `VTPMService.ValidateBundle` | `POST /bundles/{id}/validate` | `(dashboard)/devices/vtpm/bundles/[id]/page.tsx` | - | - | partial |
-| `VTPMService.GetBundlePath` | `GET /bundles/{id}/path` | `(dashboard)/devices/vtpm/bundles/[id]/page.tsx` | - | - | partial |
-| `VTPMService.GetTPMSocketPath` | `GET /bundles/{id}/tpm-socket` | `(dashboard)/devices/vtpm/bundles/[id]/page.tsx` | - | - | partial |
-| `VTPMService.GetNVRAMPath` | `GET /bundles/{id}/nvram` | `(dashboard)/devices/vtpm/bundles/[id]/page.tsx` | - | - | partial |
-| `VTPMService.StartVTPM` | `POST /bundles/{id}/start` | - | - | - | missing |
-| `VTPMService.StopVTPM` | `POST /bundles/{id}/stop` | - | - | - | missing |
-| `VTPMService.IsVTPMRunning` | - | - | - | - | missing |
-| `VTPMService.QuoteVTPM` | `POST /bundles/{id}/quote` | - | - | - | missing |
-| `VTPMService.SealVTPM` | `POST /bundles/{id}/seal` | - | - | - | missing |
-| `VTPMService.UnsealVTPM` | `POST /bundles/{id}/unseal` | - | - | - | missing |
-| `VTPMService.ExtendVTPMPCR` | `POST /bundles/{id}/pcrs/extend` | - | - | - | missing |
-| `VTPMService.ReadVTPMPCR` | `GET /bundles/{id}/pcrs` | - | - | - | missing |
+| `VTPMService.ImportBundle` | `POST /bundles/import` | `(dashboard)/devices/vtpm/bundles/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
+| `VTPMService.ValidateBundle` | `POST /bundles/{id}/validate` | `(dashboard)/devices/vtpm/bundles/[id]/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
+| `VTPMService.GetBundlePath` | `GET /bundles/{id}/path` | `(dashboard)/devices/vtpm/bundles/[id]/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
+| `VTPMService.GetTPMSocketPath` | `GET /bundles/{id}/tpm-socket` | `(dashboard)/devices/vtpm/bundles/[id]/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
+| `VTPMService.GetNVRAMPath` | `GET /bundles/{id}/nvram` | `(dashboard)/devices/vtpm/bundles/[id]/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
+| `VTPMService.StartVTPM` | `POST /bundles/{id}/start` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` | covered |
+| `VTPMService.StopVTPM` | `POST /bundles/{id}/stop` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` | covered |
+| `VTPMService.IsVTPMRunning` | `GET /bundles/{id}/state` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` | covered |
+| `VTPMService.QuoteVTPM` | `POST /bundles/{id}/quote` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` | covered |
+| `VTPMService.SealVTPM` | `POST /bundles/{id}/seal` | `(dashboard)/tpm/vtpm/[id]/page.tsx`<br>`(dashboard)/devices/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts`<br>`real-server/vtpm.spec.ts` | covered |
+| `VTPMService.UnsealVTPM` | `POST /bundles/{id}/unseal` | `(dashboard)/tpm/vtpm/[id]/page.tsx`<br>`(dashboard)/devices/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` | covered |
+| `VTPMService.ExtendVTPMPCR` | `POST /bundles/{id}/pcrs/extend` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` | covered |
+| `VTPMService.ReadVTPMPCR` | `GET /bundles/{id}/pcrs` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` | covered |
 
 ## Status summary by area
 
