@@ -34,8 +34,17 @@ const (
 	// vpnHubTableName is the hub's own inet table, so programming it never
 	// touches the host filter's or the IPsec filter's tables (#2093).
 	vpnHubTableName = "tp_vpn_hub"
-	// vpnHubChainForward is the table's forward-hook chain.
+	// vpnHubChainForward is the table's forward-hook chain: forwarded
+	// vpn-hub0 traffic jumps from it to the ingress chain.
 	vpnHubChainForward = "forward"
+	// vpnHubChainInput is the table's input-hook chain: vpn-hub0 traffic
+	// addressed to the gateway's own addresses jumps from it to the ingress
+	// chain, so locally delivered traffic is held to the same lease rules.
+	vpnHubChainInput = "input"
+	// vpnHubChainIngress is the table's regular chain holding the compiled
+	// lease rules, the one rule set that decides both forwarded and locally
+	// delivered vpn-hub0 traffic.
+	vpnHubChainIngress = "ingress"
 )
 
 // vpnHubNFTConn is the part of *nftables.Conn the hub's forward chain uses.
@@ -62,9 +71,12 @@ type vpnHubForwardProgrammer struct {
 	conn vpnHubNFTConn
 }
 
-// program replaces the forward chain's rules with rules in one netlink
-// batch. The chain's policy is accept, as in the IPsec filter's forward
-// chain: only traffic entering on vpn-hub0 reaches the closing drop.
+// program replaces the hub table's rules with rules in one netlink batch.
+// The rules sit in the regular ingress chain; the forward and input hook
+// chains each jump there for traffic entering on vpn-hub0, so forwarded and
+// locally delivered hub traffic are decided by the one rule set. The hook
+// chains' policy is accept, as in the IPsec filter's forward chain: only
+// traffic entering on vpn-hub0 reaches the closing drop.
 func (p *vpnHubForwardProgrammer) program(ctx context.Context, rules []vpnHubForwardRule) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -78,8 +90,9 @@ func (p *vpnHubForwardProgrammer) program(ctx context.Context, rules []vpnHubFor
 	}
 	table := p.conn.AddTable(vpnHubTable())
 	p.conn.FlushTable(table)
+	ingress := p.conn.AddChain(&nftables.Chain{Name: vpnHubChainIngress, Table: table})
 	policy := nftables.ChainPolicyAccept
-	chain := p.conn.AddChain(&nftables.Chain{
+	forward := p.conn.AddChain(&nftables.Chain{
 		Name:     vpnHubChainForward,
 		Table:    table,
 		Type:     nftables.ChainTypeFilter,
@@ -87,11 +100,27 @@ func (p *vpnHubForwardProgrammer) program(ctx context.Context, rules []vpnHubFor
 		Priority: nftables.ChainPriorityFilter,
 		Policy:   &policy,
 	})
+	input := p.conn.AddChain(&nftables.Chain{
+		Name:     vpnHubChainInput,
+		Table:    table,
+		Type:     nftables.ChainTypeFilter,
+		Hooknum:  nftables.ChainHookInput,
+		Priority: nftables.ChainPriorityFilter,
+		Policy:   &policy,
+	})
 	for _, r := range rules {
-		p.conn.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: vpnHubForwardExprs(r), UserData: vpnHubUserData(r.Comment)})
+		p.conn.AddRule(&nftables.Rule{Table: table, Chain: ingress, Exprs: vpnHubForwardExprs(r), UserData: vpnHubUserData(r.Comment)})
+	}
+	for _, hook := range []*nftables.Chain{forward, input} {
+		p.conn.AddRule(&nftables.Rule{
+			Table:    table,
+			Chain:    hook,
+			Exprs:    append(vpnHubExprIfname(vpnHubInterface), &expr.Verdict{Kind: expr.VerdictJump, Chain: vpnHubChainIngress}),
+			UserData: vpnHubUserData("vpn-hub0 traffic passes the lease rules"),
+		})
 	}
 	if err := p.conn.Flush(); err != nil {
-		return fmt.Errorf("program the %s forward chain: %w", vpnHubInterface, err)
+		return fmt.Errorf("program the %s chains: %w", vpnHubInterface, err)
 	}
 	return nil
 }
@@ -111,6 +140,8 @@ func (p *vpnHubForwardProgrammer) remove(ctx context.Context) error {
 // vpnHubForwardExprs renders r as nftables expressions: the vpn-hub0
 // ingress match, then the closing drop, the established/related accept, or
 // the lease's family, source, destination and optional port, and accept.
+// The rules sit in the ingress chain, so they decide both forwarded and
+// locally delivered vpn-hub0 traffic.
 func vpnHubForwardExprs(r vpnHubForwardRule) []expr.Any {
 	e := vpnHubExprIfname(vpnHubInterface)
 	if r.Drop {

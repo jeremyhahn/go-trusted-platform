@@ -167,11 +167,15 @@ revoked device either.
    install. The hub plane is built only once this enforcement, including a
    filter on the forwarding path of `vpn-hub0`, is installed; a missing or
    failed install refuses the plane (`ErrVPNHubZoneUnenforced`), failing
-   closed (#2093). That filter is the `forward` chain of the gateway's own
+   closed (#2093). That filter is the `ingress` chain of the gateway's own
    `inet tp_vpn_hub` table: it accepts replies, then each lease's address to
    the subnets of the zones the matrix opens for it, and drops everything
    else entering on `vpn-hub0`; it is reprogrammed at every peer install,
-   removal and reconcile.
+   removal and reconcile. The table's `forward` and `input` hook chains both
+   jump to it for `vpn-hub0` traffic, so traffic addressed to the gateway's
+   own addresses is held to the same lease zones as forwarded traffic: an
+   address outside every lease-opened zone subnet, such as the hub's own, is
+   dropped from `vpn-hub0`.
 5. **Keys.** The WireGuard server private key and the MASQUE listener's TLS
    identity are issued and stored through the SDK KMS; the WireGuard key is
    handed to the kernel at start and never written to disk in the clear.
