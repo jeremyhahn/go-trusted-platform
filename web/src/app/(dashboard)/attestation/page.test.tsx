@@ -135,4 +135,14 @@ describe("AttestationPage links", () => {
     expect(screen.getByTestId("attestation-link-verdicts")).toBeTruthy();
     await screen.findAllByText("Unsigned");
   });
+
+  it("links to the collect attestation page", async () => {
+    render(<AttestationPage />);
+
+    expect(screen.getByRole("link", { name: "Collect attestation" }).getAttribute("href")).toBe(
+      "/attestation/collect"
+    );
+    expect(screen.getByTestId("attestation-link-collect")).toBeTruthy();
+    await screen.findAllByText("Unsigned");
+  });
 });
