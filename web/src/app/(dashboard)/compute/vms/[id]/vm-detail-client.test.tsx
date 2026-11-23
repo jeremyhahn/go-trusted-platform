@@ -22,7 +22,11 @@ afterEach(() => {
 const VM_PATH = 'GET /api/v1/compute/vms/vm-1';
 const SUSPEND_OP = 'POST /api/v1/compute/vms/{id}/suspend';
 const RESUME_OP = 'POST /api/v1/compute/vms/{id}/resume';
-const COMPUTE_OPS = [SUSPEND_OP, RESUME_OP] as const;
+const START_OP = 'POST /api/v1/compute/vms/{id}/start';
+const STOP_OP = 'POST /api/v1/compute/vms/{id}/stop';
+const REBOOT_OP = 'POST /api/v1/compute/vms/{id}/reboot';
+const DELETE_OP = 'DELETE /api/v1/compute/vms/{id}';
+const COMPUTE_OPS = [SUSPEND_OP, RESUME_OP, START_OP, STOP_OP, REBOOT_OP, DELETE_OP] as const;
 
 // The server's capabilities listing: every compute op enabled except those in off.
 function caps(off: string[] = []): Answer {
@@ -145,5 +149,52 @@ describe('VMDetailPage Suspend / Resume', () => {
         .find((t) => t.getAttribute('data-variant') === 'destructive');
       expect(toast?.textContent).toContain('not running');
     });
+  });
+});
+
+describe('VMDetailPage power and delete gating', () => {
+  it('starts a stopped VM through POST /compute/vms/{id}/start', async () => {
+    const sent = stubControlPlane({
+      'GET /api/v1/capabilities': caps(),
+      [VM_PATH]: storedVM('VM_STATE_STOPPED'),
+      'POST /api/v1/compute/vms/vm-1/start': ok({ status: { code: 0, message: 'started' } }),
+    });
+    await renderPage();
+
+    await click('Start');
+
+    await waitFor(() => {
+      expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/compute/vms/vm-1/start')).toBe(true);
+    });
+  });
+
+  it.each([
+    ['Start', START_OP, 'VM_STATE_STOPPED'],
+    ['Stop', STOP_OP, 'VM_STATE_RUNNING'],
+    ['Reboot', REBOOT_OP, 'VM_STATE_RUNNING'],
+    ['Delete', DELETE_OP, 'VM_STATE_RUNNING'],
+  ])('withholds %s when the server does not offer it', async (name, op, state) => {
+    stubControlPlane({
+      'GET /api/v1/capabilities': caps([op]),
+      [VM_PATH]: storedVM(state),
+    });
+    await renderPage();
+
+    await waitFor(() => {
+      const button = screen.getByRole('button', { name }) as HTMLButtonElement;
+      expect(button.getAttribute('data-capability-enabled')).toBe('false');
+      expect(button.disabled).toBe(true);
+      expect(button.title).toBe('not-configured: compute');
+    });
+  });
+
+  it('has no Clone control', async () => {
+    stubControlPlane({
+      'GET /api/v1/capabilities': caps(),
+      [VM_PATH]: storedVM('VM_STATE_RUNNING'),
+    });
+    await renderPage();
+
+    expect(screen.queryByRole('button', { name: 'Clone' })).toBeNull();
   });
 });
