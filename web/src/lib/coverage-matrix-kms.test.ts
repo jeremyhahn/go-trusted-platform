@@ -4,9 +4,9 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 // #2057 (epic #1665): the KeyManagementService rows the KMS pages and their
-// real-server specs ship are covered; GenerateDataKey and GenerateWrappedDataKey
-// stay partial until the SDK sends the body the server reads; BatchEncrypt,
-// BatchDecrypt and Rewrap stay missing (no UI yet).
+// real-server specs ship are covered, every one of them: the data-key rows since
+// the SDK sends the body the server reads, and BatchEncrypt, BatchDecrypt and
+// Rewrap through the /kms Batch and rewrap card.
 
 const matrixPath = path.resolve(process.cwd(), '..', 'docs', 'ui', 'coverage-matrix.md');
 const lines = fs.readFileSync(matrixPath, 'utf8').split('\n');
@@ -32,10 +32,11 @@ const rows: Array<[string, string, string, string, string]> = [
   ['VerifyHMAC', 'POST /hmac/{name}/verify', md(kmsPage), md(kmsSpec), 'covered'],
   ['GenerateRandom', 'POST /random', md(kmsPage), md(kmsSpec), 'covered'],
   ['BackendStatus', 'GET /backend/status', md(kmsPage), md(kmsSpec), 'covered'],
-  ['GenerateDataKey', 'POST /data-keys', md(dataKeysPage), md(kmsSpec), 'partial'],
-  ['GenerateWrappedDataKey', 'POST /data-keys/wrapped', md(dataKeysPage), md(kmsSpec), 'partial'],
-  ['BatchEncrypt', 'POST /encrypt/{name}', '-', '-', 'missing'],
-  ['BatchDecrypt', 'POST /decrypt/{name}', '-', '-', 'missing'],
+  ['GenerateDataKey', 'POST /data-keys', md(dataKeysPage), md(kmsSpec), 'covered'],
+  ['GenerateWrappedDataKey', 'POST /data-keys/wrapped', md(dataKeysPage), md(kmsSpec), 'covered'],
+  ['BatchEncrypt', 'POST /batch-encrypt', md(kmsPage), md(kmsSpec), 'covered'],
+  ['BatchDecrypt', 'POST /batch-decrypt', md(kmsPage), md(kmsSpec), 'covered'],
+  ['Rewrap', 'POST /rewrap', md(kmsPage), md(kmsSpec), 'covered'],
 ];
 
 describe('coverage matrix: KeyManagementService rows (#2057)', () => {
@@ -46,13 +47,8 @@ describe('coverage matrix: KeyManagementService rows (#2057)', () => {
     });
   }
 
-  it('keeps Rewrap missing', () => {
-    const want = '| `KeyManagementService.Rewrap` | - | - | - | - | missing |';
-    expect(lines.filter((l) => l === want)).toHaveLength(1);
-  });
-
   it('counts the KeyManagementService rows in the summary', () => {
-    expect(lines.filter((l) => l === '| KeyManagementService | 23 | 18 | 2 | 3 | 0 | 0 |')).toHaveLength(1);
+    expect(lines.filter((l) => l === '| KeyManagementService | 23 | 23 | 0 | 0 | 0 | 0 |')).toHaveLength(1);
   });
 
   it('names files that exist', () => {
