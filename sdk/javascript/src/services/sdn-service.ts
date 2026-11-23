@@ -56,6 +56,13 @@ import type {
   ListPoliciesResponse,
   DeletePolicyResponse,
 } from '../types/sdn-policies.js';
+import type {
+  ListSDNIPAMPoolsRequest,
+  ListSDNIPAMPoolsResponse,
+  SDNIPAMActionResponse,
+  SDNIPAMPool,
+  SDNIPAMPoolRequest,
+} from '../types/sdn-ipam.js';
 
 /**
  * Builds the query parameters of an SDN list request under the proto field
@@ -470,6 +477,49 @@ export class SDNService extends BaseService {
   async deletePolicy(id: string): Promise<ApiResponse<DeletePolicyResponse>> {
     return this.client.delete<DeletePolicyResponse>(
       this.buildUrl(`/policies/${this.encodePathSegment(id)}`)
+    );
+  }
+
+  // ========================================================================
+  // Gateway IPAM pools (/sdn/gateway/ipam/pools)
+  // ========================================================================
+
+  /** Create a gateway IPAM pool. */
+  async createIPAMPool(request: SDNIPAMPoolRequest): Promise<ApiResponse<SDNIPAMPool>> {
+    return this.client.post<SDNIPAMPool>(this.buildUrl('/gateway/ipam/pools'), request);
+  }
+
+  /** List the gateway IPAM pools, optionally of one zone. */
+  async listIPAMPools(
+    request: ListSDNIPAMPoolsRequest = {}
+  ): Promise<ApiResponse<ListSDNIPAMPoolsResponse>> {
+    return this.client.get<ListSDNIPAMPoolsResponse>(
+      this.buildUrl('/gateway/ipam/pools', { filters: { zone: request.zone } })
+    );
+  }
+
+  /** Get one gateway IPAM pool. */
+  async getIPAMPool(id: string): Promise<ApiResponse<SDNIPAMPool>> {
+    return this.client.get<SDNIPAMPool>(
+      this.buildUrl(`/gateway/ipam/pools/${this.encodePathSegment(id)}`)
+    );
+  }
+
+  /** Update a gateway IPAM pool. */
+  async updateIPAMPool(
+    id: string,
+    request: SDNIPAMPoolRequest
+  ): Promise<ApiResponse<SDNIPAMPool>> {
+    return this.client.put<SDNIPAMPool>(
+      this.buildUrl(`/gateway/ipam/pools/${this.encodePathSegment(id)}`),
+      request
+    );
+  }
+
+  /** Delete a gateway IPAM pool. */
+  async deleteIPAMPool(id: string): Promise<ApiResponse<SDNIPAMActionResponse>> {
+    return this.client.delete<SDNIPAMActionResponse>(
+      this.buildUrl(`/gateway/ipam/pools/${this.encodePathSegment(id)}`)
     );
   }
 }
