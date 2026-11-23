@@ -170,6 +170,13 @@ export default function AttestationPage() {
           >
             Device verdicts
           </Link>
+          <Link
+            href="/attestation/collect"
+            data-testid="attestation-link-collect"
+            className="text-sm text-muted-foreground hover:underline"
+          >
+            Collect attestation
+          </Link>
           <Button variant="outline" onClick={() => loadData()} disabled={loading || reportsLoading}>
             <RefreshCw className={`mr-2 h-4 w-4 ${loading || reportsLoading ? "animate-spin" : ""}`} />
             Refresh
