@@ -10,6 +10,7 @@
  *
  * #2069: a refusal shows the server's message, and MakeCredential shows the
  * wrapped secret, so an operator can compare it with the recovered one.
+ * The AK name can be read from GetAK through the SDK (#2069).
  */
 import * as React from "react";
 import {
@@ -32,7 +33,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
-import { base64ToHex, textToBase64, useTPMOps, useToast } from "@/hooks";
+import { base64ToHex, textToBase64, useTPM, useTPMOps, useToast } from "@/hooks";
 
 /**
  * failureMessage reads the server's reason from a refused mutation:
@@ -50,7 +51,10 @@ export default function TPMCredentialPage() {
   const { toast } = useToast();
   const { makeCredential, activateCredential, getRandom } = useTPMOps();
 
+  const tpm = useTPM();
   const [akName, setAkName] = React.useState("");
+  const [akLoading, setAkLoading] = React.useState(false);
+  const [akNameMissing, setAkNameMissing] = React.useState(false);
   const [secret, setSecret] = React.useState("");
   const [credentialBlob, setCredentialBlob] = React.useState("");
   const [encryptedSecret, setEncryptedSecret] = React.useState("");
@@ -65,6 +69,28 @@ export default function TPMCredentialPage() {
       description: failureMessage(err),
       variant: "destructive",
     });
+  };
+
+  const onUseAK = async () => {
+    setAkLoading(true);
+    setAkNameMissing(false);
+    try {
+      const res = await tpm.getAK();
+      if (res.success === false) {
+        fail("Reading the attestation key failed")(res.error);
+        return;
+      }
+      const name = res.data?.name;
+      if (name) {
+        setAkName(name);
+      } else {
+        setAkNameMissing(true);
+      }
+    } catch (err) {
+      fail("Reading the attestation key failed")(err);
+    } finally {
+      setAkLoading(false);
+    }
   };
 
   const onMake = async () => {
@@ -124,6 +150,17 @@ export default function TPMCredentialPage() {
           <div className="space-y-2">
             <Label htmlFor="ak-name">AK name (base64)</Label>
             <Input id="ak-name" value={akName} onChange={(e) => setAkName(e.target.value)} />
+            <Gated op="GET /api/v1/tpm/ak">
+              <Button variant="outline" size="sm" onClick={onUseAK} disabled={akLoading}>
+                {akLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Use attestation key
+              </Button>
+            </Gated>
+            {akNameMissing && (
+              <p data-testid="ak-name-missing" className="text-sm text-muted-foreground">
+                The server&apos;s GetAK answer carries no AK name.
+              </p>
+            )}
           </div>
           <div className="space-y-2">
             <Label htmlFor="secret">Secret (optional)</Label>
