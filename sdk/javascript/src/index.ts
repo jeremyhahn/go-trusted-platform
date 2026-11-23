@@ -905,6 +905,16 @@ export type {
   GetPortStatsResponse,
   GetFlowStatsResponse,
 } from './types/sdn.js';
+export type {
+  SDNIPAMPool,
+  SDNIPAMPoolRequest,
+  ListSDNIPAMPoolsRequest,
+  ListSDNIPAMPoolsResponse,
+  SDNIPAMActionResponse,
+  SDNIPAMAllocation,
+  ListSDNIPAMAllocationsRequest,
+  ListSDNIPAMAllocationsResponse,
+} from './types/sdn-ipam.js';
 
 // PXE types
 export type {

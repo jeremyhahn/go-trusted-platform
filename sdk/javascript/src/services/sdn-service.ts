@@ -57,6 +57,8 @@ import type {
   DeletePolicyResponse,
 } from '../types/sdn-policies.js';
 import type {
+  ListSDNIPAMAllocationsRequest,
+  ListSDNIPAMAllocationsResponse,
   ListSDNIPAMPoolsRequest,
   ListSDNIPAMPoolsResponse,
   SDNIPAMActionResponse,
@@ -520,6 +522,15 @@ export class SDNService extends BaseService {
   async deleteIPAMPool(id: string): Promise<ApiResponse<SDNIPAMActionResponse>> {
     return this.client.delete<SDNIPAMActionResponse>(
       this.buildUrl(`/gateway/ipam/pools/${this.encodePathSegment(id)}`)
+    );
+  }
+
+  /** List the gateway IPAM allocations, optionally of one pool. */
+  async listIPAMAllocations(
+    request: ListSDNIPAMAllocationsRequest = {}
+  ): Promise<ApiResponse<ListSDNIPAMAllocationsResponse>> {
+    return this.client.get<ListSDNIPAMAllocationsResponse>(
+      this.buildUrl('/gateway/ipam/allocations', { filters: { pool_id: request.poolId } })
     );
   }
 }
