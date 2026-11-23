@@ -7,11 +7,14 @@
  * The daemon takes the node's bind and announced network addresses from its
  * cluster configuration (pkg/api/daemon/cluster_grpc_backend.go Bootstrap and
  * Join), and its Leave has no Force option, so the card offers no such fields.
+ * Bootstrap, Join and Leave are gated on the server's
+ * POST /api/v1/cluster/{bootstrap,join,leave} capabilities (#2033).
  */
 
 import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Gated } from "@/components/features/capabilities/gated";
 import {
   Dialog,
   DialogContent,
@@ -129,9 +132,11 @@ export function ClusterMembershipCard(props: { localNodeId?: string; onChanged: 
             <Input aria-label="Cluster name" value={clusterName} onChange={(e) => setClusterName(e.target.value)} />
             <Input aria-label="Node name" value={nodeName} onChange={(e) => setNodeName(e.target.value)} />
           </div>
-          <Button size="sm" disabled={bootstrapDisabled} onClick={onBootstrap}>
-            Bootstrap
-          </Button>
+          <Gated op="POST /api/v1/cluster/bootstrap">
+            <Button size="sm" disabled={bootstrapDisabled} onClick={onBootstrap}>
+              Bootstrap
+            </Button>
+          </Gated>
         </section>
 
         <section data-testid="cluster-join" className="space-y-2">
@@ -143,9 +148,11 @@ export function ClusterMembershipCard(props: { localNodeId?: string; onChanged: 
             value={seeds}
             onChange={(e) => setSeeds(e.target.value)}
           />
-          <Button size="sm" disabled={joinDisabled} onClick={onJoin}>
-            Join
-          </Button>
+          <Gated op="POST /api/v1/cluster/join">
+            <Button size="sm" disabled={joinDisabled} onClick={onJoin}>
+              Join
+            </Button>
+          </Gated>
         </section>
 
         <section data-testid="cluster-leave" className="space-y-2">
@@ -161,9 +168,11 @@ export function ClusterMembershipCard(props: { localNodeId?: string; onChanged: 
               }}
             />
           </div>
-          <Button size="sm" variant="destructive" disabled={leaveDisabled} onClick={() => setConfirmOpen(true)}>
-            Leave
-          </Button>
+          <Gated op="POST /api/v1/cluster/leave">
+            <Button size="sm" variant="destructive" disabled={leaveDisabled} onClick={() => setConfirmOpen(true)}>
+              Leave
+            </Button>
+          </Gated>
         </section>
 
         <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
@@ -178,9 +187,11 @@ export function ClusterMembershipCard(props: { localNodeId?: string; onChanged: 
               <Button variant="outline" onClick={() => setConfirmOpen(false)}>
                 Cancel
               </Button>
-              <Button variant="destructive" disabled={pending === "leave"} onClick={onLeave}>
-                Leave cluster
-              </Button>
+              <Gated op="POST /api/v1/cluster/leave">
+                <Button variant="destructive" disabled={pending === "leave"} onClick={onLeave}>
+                  Leave cluster
+                </Button>
+              </Gated>
             </DialogFooter>
           </DialogContent>
         </Dialog>
