@@ -34,6 +34,7 @@ import { PXEServiceControls } from '@/components/features/pxe/pxe-service-contro
 import Link from 'next/link';
 import { PXEMacLookup } from '@/components/features/pxe/pxe-mac-lookup';
 import { Gated } from '@/components/features/capabilities/gated';
+import { provisioningStateName } from '@/components/features/pxe/provisioning-state';
 
 export default function PXEBootPage() {
   const { toast } = useToast();
@@ -114,7 +115,7 @@ export default function PXEBootPage() {
   // Calculate stats from devices
   const stats = useMemo(() => {
     const stateGroups = devices.reduce((acc: Record<string, number>, device: PXEDeviceInfo) => {
-      const state = device.state || 'UNKNOWN';
+      const state = provisioningStateName(device.state);
       acc[state] = (acc[state] || 0) + 1;
       return acc;
     }, {});
@@ -465,9 +466,9 @@ export default function PXEBootPage() {
                       <TableCell>
                         <Badge
                           variant="outline"
-                          className={getStateColor(device.state)}
+                          className={getStateColor(provisioningStateName(device.state))}
                         >
-                          {device.state}
+                          {provisioningStateName(device.state)}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-sm">
@@ -533,9 +534,9 @@ export default function PXEBootPage() {
                       <TableCell>
                         <Badge
                           variant="outline"
-                          className={getStateColor(device.state)}
+                          className={getStateColor(provisioningStateName(device.state))}
                         >
-                          {device.state}
+                          {provisioningStateName(device.state)}
                         </Badge>
                       </TableCell>
                       <TableCell>

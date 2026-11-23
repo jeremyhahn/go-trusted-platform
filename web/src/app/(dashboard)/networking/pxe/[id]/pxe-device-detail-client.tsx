@@ -20,6 +20,7 @@ import {
 import { useApi, usePXE, useToast } from "@/hooks";
 import { useCapabilities } from "@/hooks/use-capabilities";
 import { Gated } from "@/components/features/capabilities/gated";
+import { provisioningStateName } from "@/components/features/pxe/provisioning-state";
 
 const GET_DEVICE_OP = "GET /api/v1/pxe/devices/{id}";
 const GET_EVENTS_OP = "GET /api/v1/pxe/devices/{id}/events";
@@ -133,7 +134,7 @@ export default function PXEDeviceDetailClient() {
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">State</span>
-                  <Badge variant="outline">{info.state}</Badge>
+                  <Badge variant="outline">{provisioningStateName(info.state)}</Badge>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Current VLAN</span>
@@ -218,8 +219,8 @@ export default function PXEDeviceDetailClient() {
                       <TableRow key={e.id}>
                         <TableCell className="font-mono text-xs">{e.timestamp}</TableCell>
                         <TableCell>{e.eventType}</TableCell>
-                        <TableCell>{e.fromState ?? "-"}</TableCell>
-                        <TableCell>{e.toState ?? "-"}</TableCell>
+                        <TableCell>{e.fromState ? provisioningStateName(e.fromState) : "-"}</TableCell>
+                        <TableCell>{e.toState ? provisioningStateName(e.toState) : "-"}</TableCell>
                         <TableCell>{eventDetail(e.details, e.error)}</TableCell>
                       </TableRow>
                     ))
