@@ -217,6 +217,7 @@ export default function TokensPage() {
   }, [rotateSecretMutation, rotateCap.enabled]);
 
   const handleBulkDelete = useCallback(async (appsToDelete: DisplayApplication[]) => {
+    if (!deleteCap.enabled) return;
     if (!tenantId) {
       toast({
         title: 'Error',
@@ -249,7 +250,7 @@ export default function TokensPage() {
         });
       }
     }
-  }, [tenantId, iam, toast, refetchApps]);
+  }, [tenantId, iam, toast, refetchApps, deleteCap.enabled]);
 
   const handleCreateApp = () => {
     if (!newAppName.trim()) {
@@ -503,6 +504,8 @@ export default function TokensPage() {
                 label: 'Delete selected',
                 onClick: handleBulkDelete,
                 variant: 'destructive',
+                disabled: !deleteCap.enabled,
+                title: deleteCap.enabled ? undefined : deleteCap.reason,
               },
             ]}
           />
