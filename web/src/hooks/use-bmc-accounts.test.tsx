@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ApiResponse } from 'trusted-platform-sdk';
+import { BMCService } from 'trusted-platform-sdk';
 
 import { ok, refused, stubControlPlane, withControlPlane } from '@/test/control-plane-fetch';
 import {
@@ -27,6 +28,7 @@ describe('useBMCAccounts', () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it('lists the users with their privilege names', async () => {
@@ -137,5 +139,36 @@ describe('useBMCAccounts', () => {
     expect(bmcUsersPath('7')).toBe('/v1/bmc/7/users');
     expect(bmcUsersPath('7', 3, 'password')).toBe('/v1/bmc/7/users/3/password');
     expect(bmcUsersPath('a/b', 0)).toBe('/v1/bmc/a%2Fb/users/0');
+  });
+
+  it('goes through the SDK BMCService', async () => {
+    const listUsers = vi.spyOn(BMCService.prototype, 'listUsers');
+    const createUser = vi.spyOn(BMCService.prototype, 'createUser');
+    const deleteUser = vi.spyOn(BMCService.prototype, 'deleteUser');
+    const setUserPassword = vi.spyOn(BMCService.prototype, 'setUserPassword');
+    const setUserPrivilege = vi.spyOn(BMCService.prototype, 'setUserPrivilege');
+    stubControlPlane({
+      'GET /api/v1/bmc/42/users': ok([]),
+      'POST /api/v1/bmc/42/users': ok({ slot: 5, username: 'svc', enabled: true, privilege: 2, channel: 1 }),
+      'DELETE /api/v1/bmc/42/users/5': ok({ status: 'ok' }),
+      'PUT /api/v1/bmc/42/users/5/password': ok({ status: 'ok' }),
+      'PUT /api/v1/bmc/42/users/5/privilege': ok({ status: 'ok' }),
+    });
+    const { result } = renderAccounts();
+    await act(async () => {
+      await result.current.listUsers();
+      await result.current.createUser({ slot: 5, username: ' svc ', password: 's3cret', privilege: 'user' });
+      await result.current.deleteUser(5);
+      await result.current.setPassword(5, 'n3w');
+      await result.current.setPrivilege(5, 'operator');
+    });
+    expect(listUsers).toHaveBeenCalledWith('42');
+    expect(createUser).toHaveBeenCalledWith(
+      '42',
+      expect.objectContaining({ slot: 5, username: 'svc', password: 's3cret', privilege: 'user' })
+    );
+    expect(deleteUser).toHaveBeenCalledWith('42', 5);
+    expect(setUserPassword).toHaveBeenCalledWith('42', 5, 'n3w');
+    expect(setUserPrivilege).toHaveBeenCalledWith('42', 5, 'operator', 1);
   });
 });
