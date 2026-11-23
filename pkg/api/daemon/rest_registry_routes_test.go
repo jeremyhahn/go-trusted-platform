@@ -82,6 +82,83 @@ func TestDaemonREST_ServesRegistryImages(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, get("outsider"), "a caller without registry:read reached the registry")
 }
 
+// roleTokens is a test TokenAuthorizer whose tokens carry both scopes and
+// roles, for a route that also requires a role.
+type roleTokens map[string]platformtoken.AuthorizedContext
+
+func (s roleTokens) AuthorizeToken(_ context.Context, token, _, _, _, _ string) (*platformtoken.AuthorizedContext, error) {
+	authCtx, ok := s[token]
+	if !ok {
+		return nil, errors.New("unknown test token")
+	}
+	authCtx.Subject = token
+	return &authCtx, nil
+}
+
+// deleteRecordingRegistry records whether the registry received a push or
+// a delete.
+type deleteRecordingRegistry struct {
+	pushRecordingRegistry
+	deleted bool
+}
+
+func (d *deleteRecordingRegistry) Delete(context.Context, *grpcapi.RegistryDeleteRequest) (*grpcapi.RegistryDeleteResponse, error) {
+	d.deleted = true
+	return &grpcapi.RegistryDeleteResponse{}, nil
+}
+
+// TestDaemonREST_RegistryWritesNeedAdmin: the daemon listener keeps the
+// web listener's admin requirement on the registry image routes
+// (docs/registry/api.md): registry:write and registry:delete scopes alone
+// do not let a caller mutate the platform registry.
+func TestDaemonREST_RegistryWritesNeedAdmin(t *testing.T) {
+	scopes := []string{"registry:read", "registry:write", "registry:delete"}
+	for _, tc := range []struct {
+		name  string
+		roles []string
+		want  bool
+	}{
+		{name: "scoped non-admin", roles: []string{"operator"}, want: false},
+		{name: "admin", roles: []string{"admin"}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.RESTListenAddr = "127.0.0.1:0"
+			svc, err := NewService(cfg)
+			require.NoError(t, err)
+			s, err := NewRESTServer(cfg, svc, slog.Default())
+			require.NoError(t, err)
+
+			reg := &deleteRecordingRegistry{}
+			guard := restapi.NewScopeGuard(roleTokens{
+				"caller": {Scopes: scopes, Roles: tc.roles},
+			}, nil, nil)
+			s.SetRegistryHandlers(reg, guard)
+
+			push := httptest.NewRequest(http.MethodPost, "/api/v1/compute/images", strings.NewReader("layer"))
+			push.Header.Set("Authorization", "Bearer caller")
+			push.Header.Set("X-Trusted-Platform-Repository", "library/alpine")
+			pushRec := httptest.NewRecorder()
+			s.Router().ServeHTTP(pushRec, push)
+
+			del := httptest.NewRequest(http.MethodDelete, "/api/v1/compute/images/x", nil)
+			del.Header.Set("Authorization", "Bearer caller")
+			delRec := httptest.NewRecorder()
+			s.Router().ServeHTTP(delRec, del)
+
+			if tc.want {
+				assert.True(t, reg.pushed, "an admin push did not reach the registry: %d %s", pushRec.Code, pushRec.Body.String())
+				assert.True(t, reg.deleted, "an admin delete did not reach the registry: %d %s", delRec.Code, delRec.Body.String())
+				return
+			}
+			assert.Equal(t, http.StatusForbidden, pushRec.Code, pushRec.Body.String())
+			assert.Equal(t, http.StatusForbidden, delRec.Code, delRec.Body.String())
+			assert.False(t, reg.pushed, "a non-admin push reached the registry")
+			assert.False(t, reg.deleted, "a non-admin delete reached the registry")
+		})
+	}
+}
+
 // pushRecordingRegistry records whether a push reached the service.
 type pushRecordingRegistry struct {
 	grpcapi.RegistryService

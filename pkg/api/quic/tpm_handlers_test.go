@@ -1062,7 +1062,74 @@ func TestTPM2Handler_HandleSeal_PassesCNAndPassword(t *testing.T) {
 	require.NotNil(t, mock.sealOpts.KeyAttributes)
 	assert.Equal(t, "k1", mock.sealOpts.KeyAttributes.CN)
 	assert.NotNil(t, mock.sealOpts.KeyAttributes.Password, "the password was dropped")
-	assert.Equal(t, mock.ssrkAttrs, mock.sealOpts.KeyAttributes.Parent)
+	assert.Equal(t, mock.psrkAttrs, mock.sealOpts.KeyAttributes.Parent, "the key was not parented on the platform SRK")
+}
+
+// TestTPM2Handler_HandleSeal_PrefersPlatformSRK: a QUIC seal parents the
+// key as go-xkms does for a request without options: on the platform SRK
+// when it exists, keeping its policy when no password is given, and on the
+// SSRK when the platform SRK cannot be read.
+func TestTPM2Handler_HandleSeal_PrefersPlatformSRK(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		psrkErr error
+	}{
+		{name: "platform srk"},
+		{name: "ssrk fallback", psrkErr: errors.New("no platform srk")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewTPM2Handler(logging.DefaultLogger())
+			mock := newMockTPM()
+			mock.psrkAttrs.PlatformPolicy = true
+			mock.psrkAttrsErr = tc.psrkErr
+			h.SetTPM2Service(mock)
+			payload, err := quicwire.EncodePayload(&sealWireRequest{Data: []byte("secret"), CN: "k1"})
+			require.NoError(t, err)
+			resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Seal}, payload...)})
+			require.Equal(t, quicwire.StatusOK, resp.Status)
+			require.NotNil(t, mock.sealOpts)
+			require.NotNil(t, mock.sealOpts.KeyAttributes)
+			if tc.psrkErr != nil {
+				assert.Equal(t, mock.ssrkAttrs, mock.sealOpts.KeyAttributes.Parent)
+				return
+			}
+			assert.Equal(t, mock.psrkAttrs, mock.sealOpts.KeyAttributes.Parent)
+			assert.True(t, mock.sealOpts.KeyAttributes.PlatformPolicy, "the platform SRK policy was dropped")
+		})
+	}
+}
+
+// TestTPM2Handler_HandleUnseal_PrefersPlatformSRK is the unseal side of
+// TestTPM2Handler_HandleSeal_PrefersPlatformSRK.
+func TestTPM2Handler_HandleUnseal_PrefersPlatformSRK(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		psrkErr error
+	}{
+		{name: "platform srk"},
+		{name: "ssrk fallback", psrkErr: errors.New("no platform srk")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewTPM2Handler(logging.DefaultLogger())
+			mock := newMockTPM()
+			mock.unsealResult = []byte("secret")
+			mock.psrkAttrs.PlatformPolicy = true
+			mock.psrkAttrsErr = tc.psrkErr
+			h.SetTPM2Service(mock)
+			payload, err := quicwire.EncodePayload(&unsealWireRequest{CN: "k1"})
+			require.NoError(t, err)
+			resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Unseal}, payload...)})
+			require.Equal(t, quicwire.StatusOK, resp.Status)
+			require.NotNil(t, mock.unsealOpts)
+			require.NotNil(t, mock.unsealOpts.KeyAttributes)
+			if tc.psrkErr != nil {
+				assert.Equal(t, mock.ssrkAttrs, mock.unsealOpts.KeyAttributes.Parent)
+				return
+			}
+			assert.Equal(t, mock.psrkAttrs, mock.unsealOpts.KeyAttributes.Parent)
+			assert.True(t, mock.unsealOpts.KeyAttributes.PlatformPolicy, "the platform SRK policy was dropped")
+		})
+	}
 }
 
 // The seal handler clears the password it held once Seal returns, on
