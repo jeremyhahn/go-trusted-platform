@@ -68,14 +68,6 @@ func (f *covKMS) GetKey(_ context.Context, keyID string) (*kmsclient.KeyInfo, er
 	}, nil
 }
 
-func (f *covKMS) GetKeyMetadata(_ context.Context, keyID string) (*kmsclient.KeyMetadataResponse, error) {
-	f.keyID = keyID
-	if f.err != nil {
-		return nil, f.err
-	}
-	return &kmsclient.KeyMetadataResponse{}, nil
-}
-
 func (f *covKMS) DeleteKey(_ context.Context, keyID string) error {
 	f.keyID = keyID
 	return f.err

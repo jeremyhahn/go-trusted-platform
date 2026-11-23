@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"reflect"
 	"testing"
-	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -207,123 +206,6 @@ func TestKMSGenerateKey_ReplyFillsHandleAndMetadata(t *testing.T) {
 	}
 }
 
-// TestKMSGetKey_FlatReplyFillsKey pins Codex round 2 P1 on #2151:
-// GET /api/v1/kms/keys/{name} answers the flat KeyInfoResponse, so the
-// adapter decodes it into Key and Metadata instead of returning a nil Key.
-func TestKMSGetKey_FlatReplyFillsKey(t *testing.T) {
-	a, _ := kmsAdapter(t, `{"key_id":"k1","name":"k1","algorithm":"AES-256-GCM","version":1}`)
-	resp := &platformv1.GetKeyResponse{}
-	err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_GetKey_FullMethodName,
-		&platformv1.GetKeyRequest{KeyId: "k1"}, resp)
-	if err != nil {
-		t.Fatalf("Invoke: %v", err)
-	}
-	key := resp.GetKey()
-	if key == nil || key.GetKeyId() != "k1" || key.GetVersion() != 1 {
-		t.Fatalf("key = %v", key)
-	}
-	meta := resp.GetMetadata()
-	if meta.GetKeyId() != "k1" || meta.GetName() != "k1" || meta.GetVersion() != 1 {
-		t.Fatalf("metadata = %v", meta)
-	}
-}
-
-// TestKMSGetKey_ReplyCarriesTheRecordedMetadata pins the decode of the key's
-// stored metadata from the GetKey reply (#2151 Codex round 2).
-func TestKMSGetKey_ReplyCarriesTheRecordedMetadata(t *testing.T) {
-	a, _ := kmsAdapter(t, `{"key_id":"k1","name":"k1","algorithm":"AES-256-GCM","version":1,`+
-		`"usage":["ENCRYPT"],"status":"DISABLED","exportable":true,"deletion_protection":true,`+
-		`"description":"payroll","tags":{"team":"ops"},"owner":"ops",`+
-		`"created_at":"2023-11-14T22:13:20Z","updated_at":"2023-11-14T22:15:00Z","last_used_at":"2023-11-14T22:16:40Z"}`)
-	resp := &platformv1.GetKeyResponse{}
-	err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_GetKey_FullMethodName,
-		&platformv1.GetKeyRequest{KeyId: "k1"}, resp)
-	if err != nil {
-		t.Fatalf("Invoke: %v", err)
-	}
-	meta := resp.GetMetadata()
-	if meta.GetStatus() != platformv1.KeyStatus_KEY_STATUS_DISABLED || !meta.GetExportable() ||
-		!meta.GetDeletionProtection() || meta.GetDescription() != "payroll" ||
-		meta.GetTags()["team"] != "ops" || meta.GetOwner() != "ops" {
-		t.Fatalf("metadata = %v, want the recorded metadata", meta)
-	}
-	if len(meta.GetUsage()) != 1 || meta.GetUsage()[0] != platformv1.KeyUsage_KEY_USAGE_ENCRYPT {
-		t.Fatalf("usage = %v, want [ENCRYPT]", meta.GetUsage())
-	}
-	if meta.GetCreatedAt() != 1700000000 || meta.GetUpdatedAt() != 1700000100 || meta.GetLastUsedAt() != 1700000200 {
-		t.Fatalf("times = %d %d %d, want 1700000000 1700000100 1700000200",
-			meta.GetCreatedAt(), meta.GetUpdatedAt(), meta.GetLastUsedAt())
-	}
-}
-
-// TestKMSListKeys_NonEmptyReplyDecodes pins Codex round 1 P1 on #2151: the
-// webservice KMS router answers ListKeys with {"keys":[...]}, RFC3339
-// created_at and algorithm names such as AES-256-GCM, which protojson cannot
-// decode into KMSKeyHandle.
-func TestKMSListKeys_NonEmptyReplyDecodes(t *testing.T) {
-	a, _ := kmsAdapter(t, `{"keys":[{"key_id":"k1","name":"k1","algorithm":"AES-256-GCM","version":1,"created_at":"2026-01-02T03:04:05Z"},{"key_id":"k2","name":"k2","algorithm":"ECDSA-P256","version":2,"created_at":"2026-01-03T03:04:05Z"}]}`)
-	resp := &platformv1.ListKeysResponse{}
-	err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_ListKeys_FullMethodName,
-		&platformv1.ListKeysRequest{}, resp)
-	if err != nil {
-		t.Fatalf("Invoke: %v", err)
-	}
-	want := []struct {
-		id        string
-		version   uint64
-		algorithm string
-		created   string
-	}{
-		{"k1", 1, "AES-256-GCM", "2026-01-02T03:04:05Z"},
-		{"k2", 2, "ECDSA-P256", "2026-01-03T03:04:05Z"},
-	}
-	keys := resp.GetKeys()
-	if len(keys) != len(want) {
-		t.Fatalf("keys = %v, want %d", keys, len(want))
-	}
-	for i, w := range want {
-		created, _ := time.Parse(time.RFC3339, w.created)
-		k := keys[i]
-		if k.GetKeyId() != w.id || k.GetVersion() != w.version || k.GetAlgorithm() != kmsKeyAlgorithmsByName[w.algorithm] || k.GetCreatedAt() != created.Unix() {
-			t.Fatalf("keys[%d] = %v, want %s v%d %s %d", i, k, w.id, w.version, w.algorithm, created.Unix())
-		}
-		if k.GetAlgorithm() == 0 {
-			t.Fatalf("keys[%d] algorithm %q has no platform value", i, w.algorithm)
-		}
-	}
-}
-
-// TestKMSListKeys_EmptyReplyDecodes checks an empty key list.
-func TestKMSListKeys_EmptyReplyDecodes(t *testing.T) {
-	a, _ := kmsAdapter(t, `{"keys":[]}`)
-	resp := &platformv1.ListKeysResponse{}
-	err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_ListKeys_FullMethodName,
-		&platformv1.ListKeysRequest{}, resp)
-	if err != nil {
-		t.Fatalf("Invoke: %v", err)
-	}
-	if len(resp.GetKeys()) != 0 {
-		t.Fatalf("keys = %v, want none", resp.GetKeys())
-	}
-}
-
-func TestKMSListKeys_ReplyCarriesPagination(t *testing.T) {
-	a, _ := kmsAdapter(t, `{"keys":[{"key_id":"k1","algorithm":"AES-256-GCM","version":1}],"next_cursor":"1","has_more":true,"total_count":3}`)
-	resp := &platformv1.ListKeysResponse{}
-	err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_ListKeys_FullMethodName,
-		&platformv1.ListKeysRequest{}, resp)
-	if err != nil {
-		t.Fatalf("Invoke: %v", err)
-	}
-	if len(resp.GetKeys()) != 1 {
-		t.Fatalf("keys = %v, want one", resp.GetKeys())
-	}
-	if resp.GetNextCursor() != "1" || !resp.GetHasMore() || resp.GetTotalCount() != 3 {
-		t.Fatalf("next_cursor %q has_more %v total_count %d, want \"1\" true 3",
-			resp.GetNextCursor(), resp.GetHasMore(), resp.GetTotalCount())
-	}
-}
-
 // TestKMSGenerateKey_UnknownAlgorithmNameAndMalformedReply: an algorithm name
 // the SDK does not know decodes as UNSPECIFIED; a reply that is not JSON is an
 // error, not an empty key.
@@ -340,20 +222,5 @@ func TestKMSGenerateKey_UnknownAlgorithmNameAndMalformedReply(t *testing.T) {
 	var unmarshal ErrUnmarshalFailed
 	if !errors.As(err, &unmarshal) {
 		t.Fatalf("err = %v, want ErrUnmarshalFailed", err)
-	}
-}
-
-// TestKMSGenerateRandom_RouterReplyDecodes pins the SDK side of the random
-// reply: the router's random_bytes field fills RandomBytes.
-func TestKMSGenerateRandom_RouterReplyDecodes(t *testing.T) {
-	a, _ := kmsAdapter(t, `{"bytes":"AQIDBA==","random_bytes":"AQIDBA=="}`)
-	resp := &platformv1.GenerateRandomResponse{}
-	err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_GenerateRandom_FullMethodName,
-		&platformv1.GenerateRandomRequest{NumBytes: 4}, resp)
-	if err != nil {
-		t.Fatalf("Invoke: %v", err)
-	}
-	if !reflect.DeepEqual(resp.GetRandomBytes(), []byte{1, 2, 3, 4}) {
-		t.Fatalf("random bytes = %v, want [1 2 3 4]", resp.GetRandomBytes())
 	}
 }

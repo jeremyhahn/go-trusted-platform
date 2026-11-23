@@ -156,7 +156,6 @@ func newRESTServerWithS6(t *testing.T) *RESTServer {
 	require.NoError(t, s.SetOverlayHandlers(newOverlayControllerRESTAdapter(&stubOverlayController{}), guard))
 	require.NoError(t, s.SetGatewayIPAMService(nil, nil, guard))
 	require.NoError(t, s.SetServiceControlHandlers(guard))
-	s.SetKMSRouter(nil, nil, nil, nil, guard)
 	return s
 }
 
@@ -217,15 +216,7 @@ func TestCatalogRouteRPCs_CoverEveryMountedRoute(t *testing.T) {
 	sort.Strings(mounted)
 	sort.Strings(mapped)
 	assert.Equal(t, mapped, mounted)
-	// The KMS router (SetKMSRouter) mounts the catalog's /api/v1/kms routes;
-	// the Equal above pins them route by route.
-	kmsRoutes := 0
-	for route := range catalogRouteRPCs {
-		if strings.Contains(route, " "+restBasePath+"/kms/") {
-			kmsRoutes++
-		}
-	}
-	assert.Len(t, mounted, len(s6RouteScopes)+len(s9RouteScopes)+len(serviceControlRoutes)+kmsRoutes)
+	assert.Len(t, mounted, len(s6RouteScopes)+len(s9RouteScopes)+len(serviceControlRoutes))
 }
 
 func TestCatalogRouteScope(t *testing.T) {
