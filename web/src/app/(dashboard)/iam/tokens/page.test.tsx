@@ -122,10 +122,14 @@ vi.mock("@/components/ui/data-table-column-header", () => ({
 }));
 
 vi.mock("@/components/ui/data-table-row-actions", () => ({
-  DataTableRowActions: ({ actions }: { actions: { label: string; onClick: () => void }[] }) => (
+  DataTableRowActions: ({
+    actions,
+  }: {
+    actions: { label: string; onClick: () => void; disabled?: boolean; title?: string }[];
+  }) => (
     <>
       {actions.map((a) => (
-        <button key={a.label} onClick={a.onClick}>
+        <button key={a.label} onClick={a.onClick} disabled={a.disabled} title={a.title}>
           {a.label}
         </button>
       ))}
@@ -172,6 +176,8 @@ const apps = [
   { clientId: "client-bare" },
 ];
 const registerOp = "POST /api/v1/iam/tenants/{tenant}/apps";
+const rotateOp = "POST /api/v1/iam/tenants/{tenant}/apps/{id}/rotate";
+const deleteOp = "DELETE /api/v1/iam/tenants/{tenant}/apps/{id}";
 
 const confirm = vi.spyOn(window, "confirm");
 const writeText = vi.fn();
@@ -435,6 +441,50 @@ describe("TokensPage capability gate", () => {
     const register = screen.getByText("Register").closest("button") as HTMLButtonElement;
     expect(register.getAttribute("data-capability-op")).toBe(registerOp);
     expect(register.getAttribute("data-capability-enabled")).toBe("true");
+  });
+
+  it("withholds Rotate Secret with the server's reason when the app secret rotate is not offered", () => {
+    caps.capability.mockImplementation((op: string) =>
+      op === rotateOp ? { enabled: false, reason: "unimplemented" } : { enabled: true },
+    );
+    render(<TokensPage />);
+    const row = rowFor("ci-runner");
+    const rotate = within(row).getByText("Rotate Secret").closest("button") as HTMLButtonElement;
+    expect(rotate.disabled).toBe(true);
+    expect(rotate.getAttribute("title")).toBe("unimplemented");
+    fireEvent.click(rotate);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(iam.rotateAppSecret).not.toHaveBeenCalled();
+    const del = within(row).getByText("Delete").closest("button") as HTMLButtonElement;
+    expect(del.disabled).toBe(false);
+  });
+
+  it("withholds Delete with the server's reason when the app delete is not offered", () => {
+    caps.capability.mockImplementation((op: string) =>
+      op === deleteOp ? { enabled: false, reason: "not-configured: iam" } : { enabled: true },
+    );
+    render(<TokensPage />);
+    const row = rowFor("ci-runner");
+    const del = within(row).getByText("Delete").closest("button") as HTMLButtonElement;
+    expect(del.disabled).toBe(true);
+    expect(del.getAttribute("title")).toBe("not-configured: iam");
+    fireEvent.click(del);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(iam.deleteApp).not.toHaveBeenCalled();
+    const rotate = within(row).getByText("Rotate Secret").closest("button") as HTMLButtonElement;
+    expect(rotate.disabled).toBe(false);
+  });
+
+  it("asks the gate for the rotate and delete ops and leaves both row actions enabled when offered", () => {
+    render(<TokensPage />);
+    expect(caps.capability).toHaveBeenCalledWith(rotateOp);
+    expect(caps.capability).toHaveBeenCalledWith(deleteOp);
+    const row = rowFor("ci-runner");
+    for (const label of ["Rotate Secret", "Delete"]) {
+      const button = within(row).getByText(label).closest("button") as HTMLButtonElement;
+      expect(button.disabled).toBe(false);
+      expect(button.hasAttribute("title")).toBe(false);
+    }
   });
 });
 

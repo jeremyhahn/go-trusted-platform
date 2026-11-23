@@ -211,6 +211,34 @@ describe('DataTable', () => {
 
     expect(screen.queryAllByRole('button', { name: /\(\d+\)$/ })).toHaveLength(0);
   });
+
+  it('disables a bulk action with its title and does not run it', () => {
+    const onDelete = vi.fn();
+    const onExport = vi.fn();
+    const data = items(3);
+    render(
+      <DataTable
+        columns={[createSelectColumn<Item>(), ...nameColumns]}
+        data={data}
+        bulkActions={[
+          { label: 'Delete', onClick: onDelete, variant: 'destructive', disabled: true, title: 'unimplemented' },
+          { label: 'Export', onClick: onExport },
+        ]}
+      />
+    );
+
+    fireEvent.click(screen.getAllByRole('checkbox', { name: 'Select row' })[1]);
+
+    const del = screen.getByRole('button', { name: 'Delete (1)' }) as HTMLButtonElement;
+    expect(del.disabled).toBe(true);
+    expect(del.getAttribute('title')).toBe('unimplemented');
+    fireEvent.click(del);
+    expect(onDelete).not.toHaveBeenCalled();
+
+    const exp = screen.getByRole('button', { name: 'Export (1)' }) as HTMLButtonElement;
+    expect(exp.disabled).toBe(false);
+    expect(exp.hasAttribute('title')).toBe(false);
+  });
 });
 
 describe('createSelectColumn', () => {
