@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/select';
 import { VMTable } from '@/components/features/compute/vm-table';
 import { VMForm } from '@/components/features/compute/vm-form';
+import { Gated } from '@/components/features/capabilities/gated';
 import { ServiceUnavailableState } from '@/components/features/platform';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { useCompute, useApi, useToast } from '@/hooks';
@@ -119,10 +120,12 @@ export default function VMsPage() {
           <Button variant="outline" size="icon" onClick={() => fetchVMs()} disabled={loading}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button onClick={() => setFormOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            Create VM
-          </Button>
+          <Gated op="POST /api/v1/compute/vms">
+            <Button onClick={() => setFormOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Create VM
+            </Button>
+          </Gated>
         </div>
       </div>
 
