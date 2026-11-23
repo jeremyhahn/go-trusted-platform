@@ -139,6 +139,12 @@ export default function VPNPage() {
     refetchPolicies();
   };
 
+  const clearFilters = () => {
+    setTenantInput('');
+    setGatewayInput('');
+    setFilters({ tenant: '', gateway: '' });
+  };
+
   const revokePeer = async (peer: VPNPeer) => {
     setRevokeSubmitting(true);
     try {
@@ -264,9 +270,52 @@ export default function VPNPage() {
     );
   }
 
+  // The filter form stays on the error state too: a filtered read the server
+  // refuses (a tenant the caller may not read) is fixed by changing or
+  // clearing the filter, not by retrying the same read.
+  const filterForm = (
+    <form
+      role="search"
+      aria-label="VPN filters"
+      data-testid="vpn-filters"
+      className="flex flex-wrap items-end gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        setFilters({ tenant: tenantInput.trim(), gateway: gatewayInput.trim() });
+      }}
+    >
+      <div className="space-y-1">
+        <Label htmlFor="vpn-filter-tenant">Tenant</Label>
+        <Input
+          id="vpn-filter-tenant"
+          placeholder="every tenant"
+          value={tenantInput}
+          onChange={(e) => setTenantInput(e.target.value)}
+        />
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor="vpn-filter-gateway">Gateway</Label>
+        <Input
+          id="vpn-filter-gateway"
+          placeholder="every gateway"
+          value={gatewayInput}
+          onChange={(e) => setGatewayInput(e.target.value)}
+        />
+      </div>
+      <Button type="submit" size="sm" variant="outline">
+        Apply filters
+      </Button>
+      <Button type="button" size="sm" variant="ghost" onClick={clearFilters}>
+        Clear filters
+      </Button>
+    </form>
+  );
+
   if (error) {
     return (
-      <div className="container mx-auto py-6">
+      <div className="container mx-auto py-6 space-y-6">
+        {header}
+        {filterForm}
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
           <AlertTitle>Error Loading VPN</AlertTitle>
@@ -275,6 +324,11 @@ export default function VPNPage() {
             <Button variant="outline" size="sm" className="ml-4" onClick={fetchData}>
               Retry
             </Button>
+            {(filters.tenant || filters.gateway) && (
+              <Button variant="outline" size="sm" className="ml-2" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            )}
           </AlertDescription>
         </Alert>
       </div>
@@ -307,50 +361,7 @@ export default function VPNPage() {
         </Button>
       </div>
 
-      <form
-        role="search"
-        aria-label="VPN filters"
-        data-testid="vpn-filters"
-        className="flex flex-wrap items-end gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          setFilters({ tenant: tenantInput.trim(), gateway: gatewayInput.trim() });
-        }}
-      >
-        <div className="space-y-1">
-          <Label htmlFor="vpn-filter-tenant">Tenant</Label>
-          <Input
-            id="vpn-filter-tenant"
-            placeholder="every tenant"
-            value={tenantInput}
-            onChange={(e) => setTenantInput(e.target.value)}
-          />
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor="vpn-filter-gateway">Gateway</Label>
-          <Input
-            id="vpn-filter-gateway"
-            placeholder="every gateway"
-            value={gatewayInput}
-            onChange={(e) => setGatewayInput(e.target.value)}
-          />
-        </div>
-        <Button type="submit" size="sm" variant="outline">
-          Apply filters
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          onClick={() => {
-            setTenantInput('');
-            setGatewayInput('');
-            setFilters({ tenant: '', gateway: '' });
-          }}
-        >
-          Clear filters
-        </Button>
-      </form>
+      {filterForm}
 
       <Card data-testid="vpn-gateways-card">
         <CardHeader>

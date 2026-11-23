@@ -89,4 +89,44 @@ test.describe('VPN', () => {
     await expect(page.getByRole('button', { name: 'Enrol Peer' })).toHaveAttribute('data-capability-enabled', 'true');
     await expect(page.getByRole('button', { name: 'New Policy' })).toHaveAttribute('data-capability-enabled', 'true');
   });
+
+  test('filter the peers by tenant and the status by gateway', async ({ adminPage: page, tenant }) => {
+    const device = `e2e-vpn-filter-${Date.now()}`;
+    await openVPNPage(page);
+    const peers = page.getByTestId('vpn-peers-card');
+    const filters = page.getByTestId('vpn-filters');
+
+    await page.getByRole('button', { name: 'Enrol Peer' }).click();
+    await page.getByLabel('Tenant *').fill(tenant.id);
+    await page.getByLabel('Device ID *').fill(device);
+    await page.getByLabel('Zones').fill('management');
+    await page.getByRole('button', { name: 'Enrol', exact: true }).click();
+    await expect(peers.getByText(device)).toBeVisible();
+
+    // #vpn-filter-tenant, not getByLabel('Tenant'): the enrol dialog's
+    // 'Tenant *' would match it too.
+    await page.locator('#vpn-filter-tenant').fill(tenant.id);
+    const filteredPeers = page.waitForResponse(
+      (r) => r.url().includes('/api/v1/vpn/peers?tenant_id=') && r.request().method() === 'GET'
+    );
+    await filters.getByRole('button', { name: 'Apply filters' }).click();
+    expect((await filteredPeers).status()).toBe(200);
+    await expect(peers.getByText(device)).toBeVisible();
+
+    await page.locator('#vpn-filter-gateway').fill('e2e-no-such-gateway');
+    const filteredStatus = page.waitForResponse(
+      (r) => r.url().includes('/api/v1/vpn/status?gateway_id=e2e-no-such-gateway') && r.request().method() === 'GET'
+    );
+    await page.locator('#vpn-filter-gateway').press('Enter');
+    expect((await filteredStatus).status()).toBe(200);
+    await expect(page.getByTestId('vpn-gateways-card').getByText('No gateway has reported yet.')).toBeVisible();
+
+    await filters.getByRole('button', { name: 'Clear filters' }).click();
+    await expect(page.locator('#vpn-filter-tenant')).toHaveValue('');
+    await expect(peers.getByText(device)).toBeVisible();
+
+    await page.getByRole('button', { name: `Revoke ${device}` }).click();
+    await page.getByRole('button', { name: 'Confirm Revoke' }).click();
+    await expect(peers.getByText(device)).toHaveCount(0);
+  });
 });
