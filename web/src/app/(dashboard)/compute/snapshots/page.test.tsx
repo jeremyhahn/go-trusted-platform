@@ -219,6 +219,13 @@ describe('SnapshotsPage row actions', () => {
     return screen.queryAllByTestId('toast').filter((t) => t.getAttribute('data-variant') === variant);
   }
 
+  it('links the snapshot name to its detail page', async () => {
+    stubControlPlane(withSnapshot());
+    await renderWithRow();
+    const link = screen.getByRole('link', { name: 'nightly' });
+    expect(link.getAttribute('href')).toBe('/compute/snapshots/s1?vm=vm-1');
+  });
+
   it('restores a snapshot only after the confirm', async () => {
     const sent = stubControlPlane({
       ...withSnapshot(),
