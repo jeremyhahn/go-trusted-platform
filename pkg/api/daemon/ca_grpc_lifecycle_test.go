@@ -578,6 +578,33 @@ func TestAppCAInitializer_QuicBaaSRefusalFailsInitCA(t *testing.T) {
 	assert.Nil(t, svc.authority(), "a CA the embedded QuicBaaS refused was swapped in")
 }
 
+// A refusal goes through App.ActivateCA: InitCA fails Internal, the daemon
+// holder stays empty, App.CA is the CA from before InitCA, and the
+// initializer's own error is ErrQuicBaaSCAInject. Publication from an empty
+// App is covered in pkg/app (TestActivateCA_*), which reaches the seam.
+func TestAppCAInitializer_QuicBaaSRefusalGoesThroughActivateCA(t *testing.T) {
+	rec := &quicBaaSCARecorder{err: errors.New("embedded CA adapter not ready")}
+	rec.install(t)
+	before := lifecycleCA(t)
+	a := &app.App{CAConfig: &trustedca.CAConfig{}, CA: before}
+	initializer := AppCAInitializer(a)
+	svc := NewCAGRPCService(nil, nil, nil).WithCAInitializer(initializer)
+
+	_, err := svc.InitCA(context.Background(), &platformv1.InitCARequest{})
+	require.Error(t, err)
+	assert.Equal(t, codes.Internal, status.Code(err))
+	assert.Contains(t, status.Convert(err).Message(), "embedded CA adapter not ready")
+	assert.Nil(t, svc.authority())
+	assert.Same(t, before, a.CurrentCA(), "a refusal changed the CA published before InitCA")
+
+	ca, err := initializer(context.Background())
+	assert.Nil(t, ca)
+	var injectErr ErrQuicBaaSCAInject
+	require.True(t, errors.As(err, &injectErr), "err = %v, want ErrQuicBaaSCAInject", err)
+	assert.Same(t, before, a.CurrentCA())
+	assert.Equal(t, 2, rec.calls)
+}
+
 func TestNew_NoStartupCAMountsTheQUICCAHandler(t *testing.T) {
 	config := testConfig("/tmp/test-quic-ca-holder.sock")
 	config.EnableQUIC = true
