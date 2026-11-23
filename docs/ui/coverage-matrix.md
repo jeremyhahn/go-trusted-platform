@@ -643,9 +643,9 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `TenantService.Sync` | `POST /sync` | - | - | - | missing |
 | `TenantService.RotateTenantDEK` | `POST /{id}/dek/rotate` | - | - | - | missing |
 | `TenantService.GetTenantDEKStatus` | `GET /{id}/dek` | - | - | - | missing |
-| `TenantService.InitTenantBarrier` | - | - | - | - | missing |
-| `TenantService.UnsealTenantBarrier` | - | - | - | - | missing |
-| `TenantService.SealTenantBarrier` | - | - | - | - | missing |
+| `TenantService.InitTenantBarrier` | `POST /{id}/barrier/init` | `(dashboard)/tenant/barrier/page.tsx` | - | `tenant-barrier.spec.ts` | covered |
+| `TenantService.UnsealTenantBarrier` | `POST /{id}/barrier/unseal` | `(dashboard)/tenant/barrier/page.tsx` | - | `tenant-barrier.spec.ts` | covered |
+| `TenantService.SealTenantBarrier` | `POST /{id}/barrier/seal` | `(dashboard)/tenant/barrier/page.tsx` | - | `tenant-barrier.spec.ts` | covered |
 | `TenantService.GetTenantBarrierStatus` | `GET /{id}` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` | - | `auth.spec.ts`<br>`dashboard.spec.ts`<br>`tenant.spec.ts` | covered |
 
 ## TPMService (`tpm.proto`)
@@ -761,7 +761,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | SchedulerService | 11 | 0 | 0 | 0 | 0 | 11 |
 | SDNService | 29 | 11 | 1 | 16 | 1 | 0 |
 | SwitchService | 5 | 0 | 0 | 5 | 0 | 0 |
-| TenantService | 19 | 4 | 4 | 11 | 0 | 0 |
+| TenantService | 19 | 7 | 4 | 8 | 0 | 0 |
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
