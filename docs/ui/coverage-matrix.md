@@ -35,7 +35,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `AttestationService.RefreshDeviceReport` | - | `(dashboard)/devices/[id]/page.tsx`<br>`(dashboard)/devices/page.tsx` | - | `attest-cert-record.spec.ts`<br>`attestation-reports.spec.ts`<br>`dashboard.spec.ts` (+1) | covered |
 | `AttestationService.DescribeCallerPolicy` | `GET /callers` | `(dashboard)/attestation/callers/page.tsx` | - | `attestation-callers.spec.ts` | covered |
 | `AttestationService.StreamDeviceVerdicts` | - | - | - | - | not-UI: streaming plumbing |
-| `AttestationService.PollDeviceVerdicts` | - | - | - | - | missing |
+| `AttestationService.PollDeviceVerdicts` | `GET /verdicts` | `(dashboard)/attestation/verdicts/page.tsx` | - | `attestation-verdicts.spec.ts` | covered |
 
 ## BarrierService (`barrier.proto`)
 
@@ -729,7 +729,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Area (service) | Operations | covered | partial | missing | not-UI | blocked: integration |
 |---|---|---|---|---|---|---|
-| AttestationService | 16 | 7 | 1 | 7 | 1 | 0 |
+| AttestationService | 16 | 8 | 1 | 6 | 1 | 0 |
 | BarrierService | 5 | 0 | 0 | 0 | 5 | 0 |
 | BMCService | 23 | 0 | 0 | 23 | 0 | 0 |
 | CAService | 13 | 7 | 0 | 6 | 0 | 0 |
@@ -765,7 +765,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **123** | **61** | **264** | **50** | **31** |
+| **Total** | **529** | **124** | **61** | **263** | **50** | **31** |
 
 ## Proposed slices
 

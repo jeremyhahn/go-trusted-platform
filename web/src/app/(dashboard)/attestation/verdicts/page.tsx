@@ -98,7 +98,7 @@ export default function DeviceVerdictsPage() {
       ) : (
         <Card>
           <CardContent className="pt-6">
-            <Table>
+            <Table data-testid="verdicts-table">
               <TableHeader>
                 <TableRow>
                   <TableHead>Recorded</TableHead>
@@ -118,7 +118,7 @@ export default function DeviceVerdictsPage() {
                   </TableRow>
                 ) : (
                   verdicts.map((v) => (
-                    <TableRow key={v.eventId}>
+                    <TableRow key={v.eventId} data-testid={`verdict-${v.eventId}`}>
                       <TableCell className="font-mono text-xs">{v.recordedAt}</TableCell>
                       <TableCell className="font-mono">{v.deviceId}</TableCell>
                       <TableCell className="font-mono">{v.serial}</TableCell>
