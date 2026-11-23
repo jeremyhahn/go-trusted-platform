@@ -9,6 +9,10 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useIAM, useToast, useMutation } from '@/hooks';
+import { Gated } from '@/components/features/capabilities/gated';
+import { useCapabilities } from '@/hooks/use-capabilities';
+
+const CREATE_GROUP_OP = 'POST /api/v1/iam/groups';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -33,9 +37,14 @@ export default function NewGroupPage() {
   const { tenantId, isLoading: authLoading } = useAuth();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const { capability } = useCapabilities();
+  const createCap = capability(CREATE_GROUP_OP);
 
   const createMutation = useMutation(
     async () => {
+      if (!createCap.enabled) {
+        throw new Error(createCap.reason ?? 'Creating groups is not offered by the server');
+      }
       if (!tenantId) throw new Error('No tenant available');
       const id = name.toLowerCase().replace(/[^a-z0-9-]+/g, '-');
       return iam.createGroup({ tenantId, id, name, description });
@@ -95,15 +104,17 @@ export default function NewGroupPage() {
             <Button variant="outline" onClick={() => router.push('/iam/groups')}>
               Cancel
             </Button>
-            <Button
-              onClick={() => createMutation.mutate(undefined)}
-              disabled={!name || createMutation.isLoading}
-            >
-              {createMutation.isLoading && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
-              Create Group
-            </Button>
+            <Gated op={CREATE_GROUP_OP}>
+              <Button
+                onClick={() => createMutation.mutate(undefined)}
+                disabled={!name || createMutation.isLoading}
+              >
+                {createMutation.isLoading && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                Create Group
+              </Button>
+            </Gated>
           </div>
         </CardContent>
       </Card>
