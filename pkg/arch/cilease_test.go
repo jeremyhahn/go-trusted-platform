@@ -624,6 +624,9 @@ func registryPathFindings(t *testing.T, wf ciWorkflow) []error {
 		if step.Env[ciRegistryEnv] != ciLegRegistryValue || !strings.Contains(step.Run, ciLegRegistryRef) {
 			finding(ciLegJob, step.Line, reasonLegNoRegistry)
 		}
+		if step.Env["IT_IMAGE_PATH"] != ciLegImagePathValue {
+			finding(ciLegJob, step.Line, reasonLegNoImagePath)
+		}
 		if strings.Contains(step.Run, ciPullRemoveRef) {
 			finding(ciLegJob, step.Line, reasonPullRemovesRef)
 		}
