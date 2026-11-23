@@ -73,14 +73,19 @@ export function PXEDeviceActions({ device, onChanged }: PXEDeviceActionsProps) {
     }
   };
 
-  const authorize = () => {
-    const vlan = targetVlan.trim() === '' ? undefined : Number(targetVlan);
-    return write('Device authorized', () => pxe.authorizeDevice({ deviceId: id, targetVlan: vlan }));
-  };
-  const quarantine = () =>
-    write('Device quarantined', () =>
-      pxe.quarantineDevice({ deviceId: id, reason: reason.trim() === '' ? undefined : reason.trim() }),
+  const vlanValid = /^\d+$/.test(targetVlan.trim()) && Number(targetVlan) >= 1 && Number(targetVlan) <= 4094;
+  const reasonValid = reason.trim() !== '';
+
+  const authorize = async () => {
+    if (!vlanValid) return;
+    return write('Device authorized', () =>
+      pxe.authorizeDevice({ deviceId: id, targetVlan: Number(targetVlan.trim()) }),
     );
+  };
+  const quarantine = async () => {
+    if (!reasonValid) return;
+    return write('Device quarantined', () => pxe.quarantineDevice({ deviceId: id, reason: reason.trim() }));
+  };
   const retry = () => write('Device retry started', () => pxe.retryDevice(id));
   const remove = () => write('Device removed', () => pxe.removeDevice(id));
   const markEnrolled = () =>
@@ -149,7 +154,7 @@ export function PXEDeviceActions({ device, onChanged }: PXEDeviceActionsProps) {
           <DialogHeader>
             <DialogTitle>Authorize device</DialogTitle>
             <DialogDescription>
-              Authorize {device.macAddress} to boot. The target VLAN is optional.
+              Authorize {device.macAddress} to boot on a target VLAN (1-4094).
             </DialogDescription>
           </DialogHeader>
           <Input
@@ -165,7 +170,7 @@ export function PXEDeviceActions({ device, onChanged }: PXEDeviceActionsProps) {
             <Button variant="outline" onClick={() => setPending(null)} disabled={busy}>
               Cancel
             </Button>
-            <Button onClick={() => void authorize()} disabled={busy}>
+            <Button onClick={() => void authorize()} disabled={busy || !vlanValid}>
               Authorize
             </Button>
           </DialogFooter>
@@ -188,7 +193,7 @@ export function PXEDeviceActions({ device, onChanged }: PXEDeviceActionsProps) {
             <Button variant="outline" onClick={() => setPending(null)} disabled={busy}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={() => void quarantine()} disabled={busy}>
+            <Button variant="destructive" onClick={() => void quarantine()} disabled={busy || !reasonValid}>
               Quarantine
             </Button>
           </DialogFooter>
