@@ -35,6 +35,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { InvitationForm } from "@/components/features/tenant/invitation-form";
+import { Gated } from "@/components/features/capabilities/gated";
 import { useAuth } from "@/contexts/AuthContext";
 import { useInvitation, useInvitationList, useToast } from "@/hooks";
 import type { SendInvitationInput } from "@/types/tenant";
@@ -57,6 +58,23 @@ const statusColors: Record<InvitationStatus, "secondary" | "default" | "destruct
   expired: "destructive",
   revoked: "outline",
 };
+
+// The dialog trigger hands its open handler and ref to its child: this
+// passes them on to the Button that Gated disables when the server does not
+// offer the send op (#2056).
+const SendInvitationTrigger = React.forwardRef<
+  HTMLButtonElement,
+  React.ComponentPropsWithoutRef<typeof Button> & { sending: boolean }
+>(function SendInvitationTrigger({ sending, disabled, ...props }, ref) {
+  return (
+    <Gated op="POST /api/v1/invitations">
+      <Button ref={ref} {...props} disabled={disabled || sending}>
+        <MailPlus className="h-4 w-4 mr-2" />
+        {sending ? "Sending..." : "Send Invitation"}
+      </Button>
+    </Gated>
+  );
+});
 
 export default function InvitationsPage() {
   const { isLoading: authLoading } = useAuth();
@@ -254,13 +272,15 @@ export default function InvitationsPage() {
               <DropdownMenuLabel>Actions</DropdownMenuLabel>
               <DropdownMenuSeparator />
               {canCancel && (
-                <DropdownMenuItem
-                  onClick={() => handleCancel(invitation.id)}
-                  className="text-destructive focus:text-destructive"
-                >
-                  <X className="h-4 w-4 mr-2" />
-                  Cancel Invitation
-                </DropdownMenuItem>
+                <Gated op="POST /api/v1/invitations/{id:[0-9]+}/revoke">
+                  <DropdownMenuItem
+                    onClick={() => handleCancel(invitation.id)}
+                    className="text-destructive focus:text-destructive"
+                  >
+                    <X className="h-4 w-4 mr-2" />
+                    Cancel Invitation
+                  </DropdownMenuItem>
+                </Gated>
               )}
               {!canCancel && (
                 <DropdownMenuItem disabled>
@@ -310,10 +330,7 @@ export default function InvitationsPage() {
         <InvitationForm
           onSubmit={handleSendInvitation}
           trigger={
-            <Button disabled={create.isLoading}>
-              <MailPlus className="h-4 w-4 mr-2" />
-              {create.isLoading ? "Sending..." : "Send Invitation"}
-            </Button>
+            <SendInvitationTrigger sending={create.isLoading} />
           }
         />
       </div>
