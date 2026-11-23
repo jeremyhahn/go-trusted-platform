@@ -198,3 +198,76 @@ describe('VMDetailPage power and delete gating', () => {
     expect(screen.queryByRole('button', { name: 'Clone' })).toBeNull();
   });
 });
+
+// The control plane answers GetVM with the SDK VM: name, CPU, memory and
+// disks live under config; snapshots come from ListSnapshots and metrics from
+// GetVMMetrics, not from the VM itself.
+function sdkVM(): Answer {
+  return ok({
+    vm: {
+      id: 'vm-1',
+      state: 'VM_STATE_RUNNING',
+      createdAt: '2026-11-01T00:00:00Z',
+      updatedAt: '2026-11-02T00:00:00Z',
+      config: {
+        name: 'vm-one',
+        cpu: { cores: 2 },
+        memory: { sizeMb: 2048 },
+        disks: [{ id: 'd1', path: '/var/lib/vm/d1.qcow2', sizeGb: 10, type: 'disk' }],
+      },
+    },
+  });
+}
+
+function sdkRoutes(): Record<string, Answer> {
+  return {
+    'GET /api/v1/capabilities': caps(),
+    [VM_PATH]: sdkVM(),
+    'GET /api/v1/compute/vms/vm-1/snapshots': ok({
+      snapshots: [{ id: 'snap-1', name: 'before-upgrade', vmId: 'vm-1' }],
+    }),
+    'GET /api/v1/compute/vms/vm-1/metrics': ok({
+      metrics: { cpuUsagePercent: 12.5, memoryUsedMb: 512, memoryAvailableMb: 1536 },
+    }),
+  };
+}
+
+async function renderSDKPage() {
+  render(withControlPlane(<VMDetailPage />));
+  await screen.findByRole('heading', { level: 1, name: 'vm-one' });
+}
+
+describe('VMDetailPage loads the SDK VM', () => {
+  it('shows an error state when the VM load is refused', async () => {
+    stubControlPlane({
+      'GET /api/v1/capabilities': caps(),
+      [VM_PATH]: refused(503, 'not-configured: compute'),
+    });
+    render(withControlPlane(<VMDetailPage />));
+
+    const error = await screen.findByTestId('vm-detail-error');
+    expect(error.textContent).toContain('not-configured: compute');
+    expect(document.querySelector('.animate-spin')).toBeNull();
+  });
+
+  it('renders the info card from config', async () => {
+    stubControlPlane(sdkRoutes());
+    await renderSDKPage();
+
+    const info = screen.getByTestId('vm-info');
+    expect(info.textContent).toContain('2 vCPUs');
+    expect(info.textContent).toContain('2048 MB');
+    expect(info.textContent).toContain('/var/lib/vm/d1.qcow2');
+  });
+
+  it('lists snapshots through the SDK and has no ungated placeholder buttons', async () => {
+    const sent = stubControlPlane(sdkRoutes());
+    await renderSDKPage();
+
+    const link = await screen.findByRole('link', { name: 'before-upgrade' });
+    expect(link.getAttribute('href')).toBe('/compute/snapshots/snap-1?vm=vm-1');
+    expect(sent.some((r) => r.method === 'GET' && r.path === '/api/v1/compute/vms/vm-1/snapshots')).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Create Snapshot' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Restore' })).toBeNull();
+  });
+});
