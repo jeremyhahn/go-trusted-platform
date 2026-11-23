@@ -46,12 +46,13 @@ describe('useSDNIPAMPools', () => {
   });
 
   it('reports a refused list as the error with the HTTP status', async () => {
-    stubControlPlane({ [`GET ${PATH}`]: refused(503, 'gateway not running') });
+    // A 403 is not retried by the SDK client, so the refusal lands at once.
+    stubControlPlane({ [`GET ${PATH}`]: refused(403, 'not permitted') });
     const { result } = render();
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.pools).toEqual([]);
-    expect(result.current.error).toBe('HTTP 503: gateway not running');
+    expect(result.current.error).toBe('HTTP 403: not permitted');
   });
 
   it('refetch lists again', async () => {
