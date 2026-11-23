@@ -62,7 +62,8 @@ interface DetailState {
 }
 
 export interface EABCredentialDetailProps {
-  id: number;
+  /** The credential id as the server writes it: a uint64 decimal string. */
+  id: string;
 }
 
 export function EABCredentialDetail({ id }: EABCredentialDetailProps) {

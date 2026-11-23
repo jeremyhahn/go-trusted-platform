@@ -19,6 +19,7 @@ import type {
   DeleteEABCredentialResponse,
   GetEABQRCodeResponse,
   GetEnrollmentURLResponse,
+  EABCredentialId,
 } from '../../types/eab.js';
 import type { ApiResponse } from '../../types/api.js';
 import { usePlatformClient } from '../context.js';
@@ -38,19 +39,19 @@ export interface UseEABResult {
   create: UseMutationResult<CreateEABCredentialResponse, CreateEABCredentialRequest>;
 
   /** Mutation for revoking EAB credentials */
-  revoke: UseMutationResult<RevokeEABCredentialResponse, number>;
+  revoke: UseMutationResult<RevokeEABCredentialResponse, EABCredentialId>;
 
   /** Mutation for validating EAB credentials */
   validate: UseMutationResult<ValidateEABCredentialResponse, ValidateEABCredentialRequest>;
 
   /** Mutation for deleting EAB credentials */
-  deleteCredential: UseMutationResult<DeleteEABCredentialResponse, number>;
+  deleteCredential: UseMutationResult<DeleteEABCredentialResponse, EABCredentialId>;
 
   /** Mutation for getting QR code */
-  getQRCode: UseMutationResult<GetEABQRCodeResponse, { id: number; size?: number }>;
+  getQRCode: UseMutationResult<GetEABQRCodeResponse, { id: EABCredentialId; size?: number }>;
 
   /** Mutation for getting enrollment URL */
-  getEnrollmentURL: UseMutationResult<GetEnrollmentURLResponse, number>;
+  getEnrollmentURL: UseMutationResult<GetEnrollmentURLResponse, EABCredentialId>;
 }
 
 /**
@@ -74,7 +75,8 @@ export interface UseEABResult {
  *     });
  *   };
  *
- *   const handleRevoke = (id: number) => {
+ *   // credential.id is the decimal string the server writes; keep it a string.
+ *   const handleRevoke = (id: string) => {
  *     revoke.mutate(id);
  *   };
  *
@@ -102,8 +104,8 @@ export function useEAB(): UseEABResult {
       service.create(request)
   );
 
-  const revoke = useMutation<RevokeEABCredentialResponse, number>(
-    (id: number): Promise<ApiResponse<RevokeEABCredentialResponse>> =>
+  const revoke = useMutation<RevokeEABCredentialResponse, EABCredentialId>(
+    (id: EABCredentialId): Promise<ApiResponse<RevokeEABCredentialResponse>> =>
       service.revoke(id)
   );
 
@@ -112,18 +114,18 @@ export function useEAB(): UseEABResult {
       service.validate(request)
   );
 
-  const deleteCredential = useMutation<DeleteEABCredentialResponse, number>(
-    (id: number): Promise<ApiResponse<DeleteEABCredentialResponse>> =>
+  const deleteCredential = useMutation<DeleteEABCredentialResponse, EABCredentialId>(
+    (id: EABCredentialId): Promise<ApiResponse<DeleteEABCredentialResponse>> =>
       service.delete(id)
   );
 
-  const getQRCode = useMutation<GetEABQRCodeResponse, { id: number; size?: number }>(
-    (params: { id: number; size?: number }): Promise<ApiResponse<GetEABQRCodeResponse>> =>
+  const getQRCode = useMutation<GetEABQRCodeResponse, { id: EABCredentialId; size?: number }>(
+    (params: { id: EABCredentialId; size?: number }): Promise<ApiResponse<GetEABQRCodeResponse>> =>
       service.getQRCode(params.id, params.size)
   );
 
-  const getEnrollmentURL = useMutation<GetEnrollmentURLResponse, number>(
-    (id: number): Promise<ApiResponse<GetEnrollmentURLResponse>> =>
+  const getEnrollmentURL = useMutation<GetEnrollmentURLResponse, EABCredentialId>(
+    (id: EABCredentialId): Promise<ApiResponse<GetEnrollmentURLResponse>> =>
       service.getEnrollmentURL(id)
   );
 

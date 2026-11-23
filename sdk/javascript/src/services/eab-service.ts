@@ -25,6 +25,7 @@ import type {
   MarkEABCredentialUsedResponse,
   CleanupExpiredEABCredentialsRequest,
   CleanupExpiredEABCredentialsResponse,
+  EABCredentialId,
 } from '../types/eab.js';
 
 /**
@@ -84,9 +85,9 @@ export class EABService extends BaseService {
    * @param id - Credential ID
    * @returns Credential information (without HMAC key)
    */
-  async get(id: number): Promise<ApiResponse<GetEABCredentialResponse>> {
+  async get(id: EABCredentialId): Promise<ApiResponse<GetEABCredentialResponse>> {
     return this.client.get<GetEABCredentialResponse>(
-      this.buildUrl(`/credentials/${id}`)
+      this.buildUrl(`/credentials/${encodeURIComponent(String(id))}`)
     );
   }
 
@@ -136,9 +137,9 @@ export class EABService extends BaseService {
    * @param id - Credential ID
    * @returns Revocation result
    */
-  async revoke(id: number): Promise<ApiResponse<RevokeEABCredentialResponse>> {
+  async revoke(id: EABCredentialId): Promise<ApiResponse<RevokeEABCredentialResponse>> {
     return this.client.post<RevokeEABCredentialResponse>(
-      this.buildUrl(`/credentials/${id}/revoke`),
+      this.buildUrl(`/credentials/${encodeURIComponent(String(id))}/revoke`),
       {}
     );
   }
@@ -162,9 +163,9 @@ export class EABService extends BaseService {
    * @param id - Credential ID
    * @returns Deletion result
    */
-  async delete(id: number): Promise<ApiResponse<DeleteEABCredentialResponse>> {
+  async delete(id: EABCredentialId): Promise<ApiResponse<DeleteEABCredentialResponse>> {
     return this.client.delete<DeleteEABCredentialResponse>(
-      this.buildUrl(`/credentials/${id}`)
+      this.buildUrl(`/credentials/${encodeURIComponent(String(id))}`)
     );
   }
 
@@ -183,13 +184,13 @@ export class EABService extends BaseService {
    * @param size - QR code size in pixels (optional, integer)
    * @returns The base64-encoded PNG and its content type
    */
-  async getQRCode(id: number, size?: number): Promise<ApiResponse<GetEABQRCodeResponse>> {
+  async getQRCode(id: EABCredentialId, size?: number): Promise<ApiResponse<GetEABQRCodeResponse>> {
     const filters: Record<string, string | number | boolean | undefined> = {};
     if (size !== undefined && Number.isFinite(size) && size >= 0) {
       filters.size = Math.floor(size);
     }
     return this.client.get<GetEABQRCodeResponse>(
-      this.buildUrl(`/credentials/${id}/qrcode`, { filters })
+      this.buildUrl(`/credentials/${encodeURIComponent(String(id))}/qrcode`, { filters })
     );
   }
 
@@ -202,9 +203,9 @@ export class EABService extends BaseService {
    * @param path - Enrolment path to append to the URL (optional)
    * @returns Enrollment URL with expiration
    */
-  async getEnrollmentURL(id: number, path?: string): Promise<ApiResponse<GetEnrollmentURLResponse>> {
+  async getEnrollmentURL(id: EABCredentialId, path?: string): Promise<ApiResponse<GetEnrollmentURLResponse>> {
     return this.client.get<GetEnrollmentURLResponse>(
-      this.buildUrl(`/credentials/${id}/url`, path ? { filters: { path } } : undefined)
+      this.buildUrl(`/credentials/${encodeURIComponent(String(id))}/url`, path ? { filters: { path } } : undefined)
     );
   }
 
@@ -216,9 +217,9 @@ export class EABService extends BaseService {
    * @param id - Credential ID
    * @returns Operation status
    */
-  async markUsed(id: number): Promise<ApiResponse<MarkEABCredentialUsedResponse>> {
+  async markUsed(id: EABCredentialId): Promise<ApiResponse<MarkEABCredentialUsedResponse>> {
     return this.client.post<MarkEABCredentialUsedResponse>(
-      this.buildUrl(`/credentials/${id}/used`),
+      this.buildUrl(`/credentials/${encodeURIComponent(String(id))}/used`),
       {}
     );
   }

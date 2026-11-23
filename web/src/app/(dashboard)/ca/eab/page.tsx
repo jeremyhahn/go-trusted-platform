@@ -176,14 +176,15 @@ export default function EABCredentialsPage() {
   const runAction = async (
     row: EABCredentialWire,
     question: string,
-    action: (id: number) => Promise<unknown>,
+    action: (id: string) => Promise<unknown>,
     done: string,
     failed: string,
   ) => {
     if (!confirm(question)) return;
     setProcessingId(row.id);
     try {
-      await action(Number(row.id));
+      // The id is a uint64 above 2^53: Number() would change its digits.
+      await action(row.id);
       toast({ title: done, description: row.keyId, variant: "success" });
     } catch (err) {
       toast({
@@ -310,7 +311,7 @@ export default function EABCredentialsPage() {
       {detailId && (
         <Card>
           <CardContent className="pt-6">
-            <EABCredentialDetail id={Number(detailId)} />
+            <EABCredentialDetail id={detailId} />
           </CardContent>
         </Card>
       )}

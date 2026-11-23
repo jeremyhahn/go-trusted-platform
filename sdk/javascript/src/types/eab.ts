@@ -21,9 +21,17 @@ export type EABCredentialStatus = 'ACTIVE' | 'REVOKED' | 'EXPIRED' | 'USED';
 /**
  * EAB credential
  */
+/**
+ * EAB credential id. The server mints a uint64 (UnixNano-based) that protojson
+ * writes as a decimal string; a JavaScript number above 2^53 loses digits, so
+ * carry the id as that string end to end. A number is still accepted for
+ * small ids.
+ */
+export type EABCredentialId = string | number;
+
 export interface EABCredential {
   /** Unique identifier */
-  id: number;
+  id: EABCredentialId;
   /** Key identifier for ACME binding */
   keyId: string;
   /** HMAC key for signing */
@@ -47,7 +55,7 @@ export interface EABCredential {
  */
 export interface EABCredentialSummary {
   /** Unique identifier */
-  id: number;
+  id: EABCredentialId;
   /** Key identifier for ACME binding */
   keyId: string;
   /** Associated profile ID */
@@ -85,7 +93,7 @@ export interface CreateEABCredentialRequest {
  */
 export interface GetEABCredentialRequest {
   /** Credential ID */
-  id: number;
+  id: EABCredentialId;
 }
 
 /**
@@ -117,7 +125,7 @@ export interface ListEABCredentialsRequest {
  */
 export interface RevokeEABCredentialRequest {
   /** Credential ID */
-  id: number;
+  id: EABCredentialId;
 }
 
 /**
@@ -135,7 +143,7 @@ export interface ValidateEABCredentialRequest {
  */
 export interface DeleteEABCredentialRequest {
   /** Credential ID */
-  id: number;
+  id: EABCredentialId;
 }
 
 /**
@@ -143,7 +151,7 @@ export interface DeleteEABCredentialRequest {
  */
 export interface GetEABQRCodeRequest {
   /** Credential ID */
-  id: number;
+  id: EABCredentialId;
   /** QR code size in pixels (optional) */
   size?: number;
 }
@@ -153,7 +161,7 @@ export interface GetEABQRCodeRequest {
  */
 export interface GetEnrollmentURLRequest {
   /** Credential ID */
-  id: number;
+  id: EABCredentialId;
 }
 
 // =============================================================================
