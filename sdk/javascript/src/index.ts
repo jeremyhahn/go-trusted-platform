@@ -609,6 +609,13 @@ export type {
   BackendStatusResponse,
   RewrapRequest,
   RewrapResponse,
+  BatchEncryptItem,
+  BatchEncryptRequest,
+  BatchDecryptItem,
+  BatchDecryptRequest,
+  BatchItemResult,
+  BatchResponse,
+  GetKeyMetadataResponse,
 } from './types/kms.js';
 
 // Compute types

@@ -50,6 +50,10 @@ import type {
   BackendStatusResponse,
   RewrapRequest,
   RewrapResponse,
+  BatchEncryptRequest,
+  BatchDecryptRequest,
+  BatchResponse,
+  GetKeyMetadataResponse,
 } from '../types/kms.js';
 
 /**
@@ -124,6 +128,16 @@ export class KMSService extends BaseService {
       ? this.buildUrl(`/keys/${this.encodePathSegment(keyId)}?version=${version}`)
       : this.buildUrl(`/keys/${this.encodePathSegment(keyId)}`);
     return this.client.get<GetKeyResponse>(url);
+  }
+
+  /**
+   * Get a key's metadata, including its whole-key status
+   * (GET /api/v1/kms/keys/{name}/metadata). GetKey carries no status.
+   */
+  async getKeyMetadata(keyId: string): Promise<ApiResponse<GetKeyMetadataResponse>> {
+    return this.client.get<GetKeyMetadataResponse>(
+      this.buildUrl(`/keys/${this.encodePathSegment(keyId)}/metadata`)
+    );
   }
 
   /**
@@ -362,6 +376,40 @@ export class KMSService extends BaseService {
       body.source_nonce = request.sourceNonce;
     }
     return this.client.post<RewrapResponse>(this.buildUrl('/rewrap'), body);
+  }
+
+  /**
+   * Encrypt several plaintexts under one key
+   * (POST /api/v1/kms/batch-encrypt). Items carry no context: the server
+   * refuses one, because the crypto service does not bind a batch context.
+   */
+  async batchEncrypt(request: BatchEncryptRequest): Promise<ApiResponse<BatchResponse>> {
+    const body = {
+      key_id: request.keyId,
+      items: request.items.map((item) => ({ item_id: item.itemId, plaintext: item.plaintext })),
+    };
+    return this.client.post<BatchResponse>(this.buildUrl('/batch-encrypt'), body);
+  }
+
+  /**
+   * Decrypt several ciphertexts of one key
+   * (POST /api/v1/kms/batch-decrypt). The nonce is sent only when given.
+   */
+  async batchDecrypt(request: BatchDecryptRequest): Promise<ApiResponse<BatchResponse>> {
+    const body = {
+      key_id: request.keyId,
+      items: request.items.map((item) => {
+        const out: { item_id: string; ciphertext: string; nonce?: string } = {
+          item_id: item.itemId,
+          ciphertext: item.ciphertext,
+        };
+        if (item.nonce !== undefined) {
+          out.nonce = item.nonce;
+        }
+        return out;
+      }),
+    };
+    return this.client.post<BatchResponse>(this.buildUrl('/batch-decrypt'), body);
   }
 
   // =========================================================================

@@ -422,13 +422,12 @@ export interface GenerateDataKeyRequest {
 }
 
 /**
- * Generate wrapped data key request
+ * Generate wrapped data key request. The server takes no wrapping
+ * algorithm: the wrapping key's own algorithm wraps the data key.
  */
 export interface GenerateWrappedDataKeyRequest {
   /** Wrapping key ID */
   wrappingKeyId: string;
-  /** Wrapping algorithm */
-  wrappingAlgorithm?: WrappingAlgorithm;
   /** Algorithm for the data key */
   keyAlgorithm?: KMSKeyAlgorithm;
   /** Key size in bits */
@@ -815,12 +814,102 @@ export interface RewrapResponse {
   source_key_id: string;
   /** Key id the new ciphertext is encrypted under (same as the source) */
   destination_key_id: string;
-  /** Key version the input ciphertext was encrypted under */
-  source_key_version: number;
-  /** Key version the new ciphertext is encrypted under */
-  dest_key_version: number;
+  /**
+   * Key version the input ciphertext was encrypted under. The server leaves
+   * it unset until the crypto service reports real versions.
+   */
+  source_key_version?: number;
+  /**
+   * Key version the new ciphertext is encrypted under. The server leaves it
+   * unset until the crypto service reports real versions.
+   */
+  dest_key_version?: number;
   /** Re-encrypted ciphertext (base64) */
   ciphertext: string;
   /** Nonce of the new ciphertext (base64) */
   nonce?: string;
+}
+
+/**
+ * One item of a batch encrypt request. There is no item context: the server
+ * refuses one, because the crypto service does not bind a batch context.
+ */
+export interface BatchEncryptItem {
+  /** Caller's id for the item, echoed in its result */
+  itemId: string;
+  /** Plaintext (base64) */
+  plaintext: string;
+}
+
+/** Batch encrypt request (POST /api/v1/kms/batch-encrypt). */
+export interface BatchEncryptRequest {
+  /** Key id to encrypt under */
+  keyId: string;
+  /** Items to encrypt */
+  items: BatchEncryptItem[];
+}
+
+/**
+ * One item of a batch decrypt request. There is no item context and no key
+ * version: the server refuses both.
+ */
+export interface BatchDecryptItem {
+  /** Caller's id for the item, echoed in its result */
+  itemId: string;
+  /** Ciphertext (base64) */
+  ciphertext: string;
+  /** Nonce of the ciphertext (base64) */
+  nonce?: string;
+}
+
+/** Batch decrypt request (POST /api/v1/kms/batch-decrypt). */
+export interface BatchDecryptRequest {
+  /** Key id the ciphertexts were encrypted under */
+  keyId: string;
+  /** Items to decrypt */
+  items: BatchDecryptItem[];
+}
+
+/**
+ * One result of a batch reply, in the snake_case wire names of
+ * pkg/webservice/v1/rest/kms/handlers_batch.go. error is set exactly when
+ * the item failed; the byte fields are base64.
+ */
+export interface BatchItemResult {
+  item_id: string;
+  ciphertext?: string;
+  nonce?: string;
+  plaintext?: string;
+  error?: string;
+}
+
+/**
+ * Reply of both batch routes. It carries no key version: the server
+ * publishes none until the crypto service reports a real one.
+ */
+export interface BatchResponse {
+  key_id: string;
+  results: BatchItemResult[];
+  success_count: number;
+  failure_count: number;
+}
+
+/**
+ * Reply of GET /api/v1/kms/keys/{name}/metadata, in the snake_case wire
+ * names of pkg/webservice/v1/rest/kms/types.go KeyMetadataResponse. status
+ * is the whole-key status (ENABLED, DISABLED, PENDING_DELETION, ...).
+ */
+export interface GetKeyMetadataResponse {
+  key_id: string;
+  name?: string;
+  description?: string;
+  algorithm: string;
+  status: string;
+  version: number;
+  exportable: boolean;
+  deletion_protection: boolean;
+  usage?: string[];
+  owner?: string;
+  created_at?: string;
+  updated_at?: string;
 }
