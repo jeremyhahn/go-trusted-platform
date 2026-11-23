@@ -26,9 +26,8 @@ const GET_DEVICE_OP = "GET /api/v1/pxe/devices/{id}";
 const GET_EVENTS_OP = "GET /api/v1/pxe/devices/{id}/events";
 const UPDATE_STATE_OP = "PUT /api/v1/pxe/devices/{id}/state";
 
-/** The states an operator may set (ProvisioningState without UNSPECIFIED). */
+/** The states an operator may set: no transition leads to UNSPECIFIED or UNKNOWN. */
 const SETTABLE_STATES: ProvisioningState[] = [
-  "UNKNOWN",
   "DISCOVERED",
   "BOOTING",
   "INSTALLING",
