@@ -106,10 +106,11 @@ describe('CeremonyInitCard', () => {
 
     const button = screen.getByRole('button', { name: 'Initialize' }) as HTMLButtonElement;
     await offered(button);
-    const hint = 'Threshold must be M-of-N, for example 3-of-5';
+    const hint = 'Threshold must be M-of-N with M at least 2, for example 3-of-5';
     fill('SO PIN', 'so-pin-test');
     expect(screen.queryByText(hint)).toBeNull();
-    for (const bad of ['garbage', '3of5', '4-of-3', '0-of-3']) {
+    // Upstream runs single-admin for a threshold below 2, so 1-of-N is refused.
+    for (const bad of ['garbage', '3of5', '4-of-3', '0-of-3', '1-of-5', '1-of-1']) {
       fill('Threshold', bad);
       expect(button.disabled).toBe(true);
       expect(screen.getByText(hint)).toBeDefined();
@@ -117,6 +118,29 @@ describe('CeremonyInitCard', () => {
     fill('Threshold', '3-of-5');
     expect(button.disabled).toBe(false);
     expect(screen.queryByText(hint)).toBeNull();
+  });
+
+  it('initializes a single-admin ceremony only through the explicit checkbox', async () => {
+    const sent = stubControlPlane({
+      [CAPS_PATH]: caps(),
+      [INIT_PATH]: refused(409, 'ceremony: already initialized'),
+    });
+    render(withControlPlane(<CeremonyInitCard />));
+
+    const button = screen.getByRole('button', { name: 'Initialize' }) as HTMLButtonElement;
+    await offered(button);
+    fill('SO PIN', 'so-pin-test');
+    expect(button.disabled).toBe(true);
+    expect(input('Threshold').disabled).toBe(false);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Single admin (no officer shares)' }));
+    expect(input('Threshold').disabled).toBe(true);
+    expect(button.disabled).toBe(false);
+    await confirm();
+
+    await screen.findByRole('alert');
+    expect(writes(sent)).toHaveLength(1);
+    expect(writes(sent)[0].body).toEqual({ soPin: 'so-pin-test' });
+    expect(writes(sent)[0].body).not.toHaveProperty('threshold');
   });
 
   it('sends nothing when the confirm is cancelled', async () => {
