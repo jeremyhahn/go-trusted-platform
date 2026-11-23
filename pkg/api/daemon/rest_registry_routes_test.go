@@ -15,6 +15,8 @@ package daemon
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"log/slog"
@@ -29,6 +31,7 @@ import (
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 )
 
 // registryTokens maps a bearer token to the scopes its caller holds; every
@@ -159,6 +162,65 @@ func TestDaemonREST_RegistryWritesNeedAdmin(t *testing.T) {
 			assert.False(t, reg.deleted, "a non-admin delete reached the registry")
 		})
 	}
+}
+
+// TestDaemonREST_RegistryAdmitsTheMTLSOperator drives the registry image
+// routes through the real mTLS peer authenticator: the operator certificate
+// /init issues is the platform admin, so it reaches the registry without a
+// bearer token, while a non-admin bearer token stays refused even when it
+// arrives over an mTLS connection (the guard takes the token first).
+func TestDaemonREST_RegistryAdmitsTheMTLSOperator(t *testing.T) {
+	bundle := testutil.GenerateTestTLSBundle(t)
+	verified := &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{leafOf(t, bundle.ClientCert), bundle.CACert}}}
+
+	newServer := func(t *testing.T) (*RESTServer, *deleteRecordingRegistry) {
+		t.Helper()
+		cfg := DefaultConfig()
+		cfg.RESTListenAddr = "127.0.0.1:0"
+		svc, err := NewService(cfg)
+		require.NoError(t, err)
+		s, err := NewRESTServer(cfg, svc, slog.Default())
+		require.NoError(t, err)
+		reg := &deleteRecordingRegistry{}
+		guard := restapi.NewScopeGuard(roleTokens{
+			"scoped": {Scopes: []string{"registry:read", "registry:write", "registry:delete"}, Roles: []string{"operator"}},
+		}, newTestMTLSPeerAuthenticator(t, bundle.CAPool), nil)
+		s.SetRegistryHandlers(reg, guard)
+		return s, reg
+	}
+	serve := func(s *RESTServer, method, path, bearer string, body io.Reader) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, body)
+		req.TLS = verified
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		if method == http.MethodPost {
+			req.Header.Set("X-Trusted-Platform-Repository", "library/alpine")
+		}
+		rec := httptest.NewRecorder()
+		s.Router().ServeHTTP(rec, req)
+		return rec
+	}
+
+	t.Run("operator certificate", func(t *testing.T) {
+		s, reg := newServer(t)
+		status := serve(s, http.MethodGet, "/api/v1/compute/images/status", "", nil)
+		assert.Equal(t, http.StatusOK, status.Code, status.Body.String())
+		push := serve(s, http.MethodPost, "/api/v1/compute/images", "", strings.NewReader("layer"))
+		assert.True(t, reg.pushed, "the operator certificate's push did not reach the registry: %d %s", push.Code, push.Body.String())
+		del := serve(s, http.MethodDelete, "/api/v1/compute/images/x", "", nil)
+		assert.True(t, reg.deleted, "the operator certificate's delete did not reach the registry: %d %s", del.Code, del.Body.String())
+	})
+
+	t.Run("non-admin bearer token over mTLS", func(t *testing.T) {
+		s, reg := newServer(t)
+		push := serve(s, http.MethodPost, "/api/v1/compute/images", "scoped", strings.NewReader("layer"))
+		assert.Equal(t, http.StatusForbidden, push.Code, push.Body.String())
+		del := serve(s, http.MethodDelete, "/api/v1/compute/images/x", "scoped", nil)
+		assert.Equal(t, http.StatusForbidden, del.Code, del.Body.String())
+		assert.False(t, reg.pushed, "a non-admin bearer token's push reached the registry")
+		assert.False(t, reg.deleted, "a non-admin bearer token's delete reached the registry")
+	})
 }
 
 // pushRecordingRegistry records whether a push reached the service.
