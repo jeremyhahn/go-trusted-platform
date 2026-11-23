@@ -198,6 +198,8 @@ type TPM2KeyResponse struct {
 	PublicKey []byte `codec:"public_key"`
 	Algorithm string `codec:"algorithm"`
 	Timestamp int64  `codec:"timestamp"`
+	// Name is the key's TPM name (TPM2B_NAME bytes); set by GetIAK (#2069).
+	Name []byte `codec:"name,omitempty"`
 }
 
 // TPM2CertificateResponse represents a TPM certificate response.
@@ -746,6 +748,7 @@ func (h *TPM2Handler) handleGetIAK(ctx context.Context, payload []byte) *quicwir
 		PublicKey: iakAttrs.TPMAttributes.PublicKeyBytes,
 		Algorithm: iakAttrs.KeyAlgorithm.String(),
 		Timestamp: time.Now().Unix(),
+		Name:      iakAttrs.TPMAttributes.Name.Buffer,
 	})
 }
 

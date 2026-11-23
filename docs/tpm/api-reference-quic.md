@@ -355,6 +355,26 @@ type TPM2KeyResponse struct {
 }
 ```
 
+### GetIAK (0x0C)
+
+**Request Payload:**
+```messagepack
+{}
+```
+
+**Response Payload:**
+```go
+type TPM2KeyResponse struct {
+    Handle    uint32 `codec:"handle"`
+    PublicKey []byte `codec:"public_key"`
+    Algorithm string `codec:"algorithm"`
+    Timestamp int64  `codec:"timestamp"`
+    Name      []byte `codec:"name,omitempty"`
+}
+```
+
+`name` is the IAK's TPM name (the nameAlg digest of its public area), as on gRPC `GetAKResponse.name`; other key responses leave it unset.
+
 ### Quote (0x0F)
 
 **Request Payload:**

@@ -3223,6 +3223,7 @@ func (p *MCPServiceProvider) TPMGetIAK(ctx context.Context) (interface{}, error)
 		"handle":     uint32(iakAttrs.TPMAttributes.Handle),
 		"public_key": base64.StdEncoding.EncodeToString(iakAttrs.TPMAttributes.PublicKeyBytes),
 		"algorithm":  iakAttrs.KeyAlgorithm.String(),
+		"name":       base64.StdEncoding.EncodeToString(iakAttrs.TPMAttributes.Name.Buffer),
 	}, nil
 }
 
