@@ -164,3 +164,122 @@ describe('SnapshotsPage Create Snapshot', () => {
     expect(screen.getByRole('dialog')).toBeTruthy();
   });
 });
+
+// #2044: each snapshot row offers Restore and Delete as gated buttons; the
+// operation is sent through the SDK only after the operator confirms it in a
+// dialog, and the Clone and Export placeholders are gone.
+describe('SnapshotsPage row actions', () => {
+  const ROW = '/api/v1/compute/vms/vm-1/snapshots/s1';
+  const RESTORE_OP = 'POST /api/v1/compute/vms/{id}/snapshots/{snapshotId}/restore';
+  const DELETE_OP = 'DELETE /api/v1/compute/vms/{id}/snapshots/{snapshotId}';
+
+  function withSnapshot(): Record<string, Answer> {
+    return {
+      ...shared(),
+      [`GET ${LIST}`]: ok({
+        snapshots: [
+          {
+            id: 's1',
+            vmId: 'vm-1',
+            config: { name: 'nightly' },
+            createdAt: '2026-11-01T00:00:00Z',
+            sizeBytes: 1048576,
+            vmState: 'VM_STATE_RUNNING',
+          },
+        ],
+      }),
+    };
+  }
+
+  async function renderWithRow() {
+    render(withControlPlane(<SnapshotsPage />));
+    await screen.findByText('nightly');
+  }
+
+  function rowButton(name: string) {
+    return screen.getByRole('button', { name }) as HTMLButtonElement;
+  }
+
+  async function clickWhenEnabled(name: string) {
+    await waitFor(() => expect(rowButton(name).getAttribute('data-capability-enabled')).toBe('true'));
+    await act(async () => {
+      fireEvent.click(rowButton(name));
+    });
+  }
+
+  async function confirm(title: string, button: string) {
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(title)).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: button }));
+    });
+  }
+
+  function toasts(variant: string) {
+    return screen.queryAllByTestId('toast').filter((t) => t.getAttribute('data-variant') === variant);
+  }
+
+  it('restores a snapshot only after the confirm', async () => {
+    const sent = stubControlPlane({
+      ...withSnapshot(),
+      [`POST ${ROW}/restore`]: ok({ status: { success: true } }),
+    });
+    await renderWithRow();
+
+    await clickWhenEnabled('Restore nightly');
+    const restores = () => sent.filter((r) => r.method === 'POST' && r.path === `${ROW}/restore`);
+    expect(restores()).toHaveLength(0);
+
+    await confirm('Restore snapshot?', 'Restore');
+    await waitFor(() => expect(restores()).toHaveLength(1));
+    expect(restores()[0].method).toBe('POST');
+    expect(restores()[0].path).toBe('/api/v1/compute/vms/vm-1/snapshots/s1/restore');
+    await waitFor(() => expect(toasts('success').length).toBeGreaterThan(0));
+    expect(screen.queryByText('Clone to New Instance')).toBeNull();
+    expect(screen.queryByText('Export')).toBeNull();
+  });
+
+  it('deletes a snapshot after the confirm and re-lists', async () => {
+    const sent = stubControlPlane({
+      ...withSnapshot(),
+      [`DELETE ${ROW}`]: ok({ status: { success: true } }),
+    });
+    await renderWithRow();
+
+    await clickWhenEnabled('Delete nightly');
+    const deletes = () => sent.filter((r) => r.method === 'DELETE' && r.path === ROW);
+    expect(deletes()).toHaveLength(0);
+
+    await confirm('Delete snapshot?', 'Delete');
+    await waitFor(() => expect(deletes()).toHaveLength(1));
+    await waitFor(() => {
+      const deleteAt = sent.findIndex((r) => r.method === 'DELETE' && r.path === ROW);
+      expect(sent.slice(deleteAt + 1).some((r) => r.method === 'GET' && r.path === LIST)).toBe(true);
+    });
+  });
+
+  it('withholds Restore and Delete when the server does not offer them', async () => {
+    stubControlPlane({ ...withSnapshot(), 'GET /api/v1/capabilities': caps([RESTORE_OP, DELETE_OP]) });
+    await renderWithRow();
+
+    await waitFor(() => {
+      for (const name of ['Restore nightly', 'Delete nightly']) {
+        const button = rowButton(name);
+        expect(button.getAttribute('data-capability-enabled')).toBe('false');
+        expect(button.disabled).toBe(true);
+        expect(button.title).toBe('not-configured: compute');
+      }
+    });
+  });
+
+  it('shows a refused delete as a destructive toast', async () => {
+    stubControlPlane({ ...withSnapshot(), [`DELETE ${ROW}`]: refused(409, 'compute: snapshot in use') });
+    await renderWithRow();
+
+    await clickWhenEnabled('Delete nightly');
+    await confirm('Delete snapshot?', 'Delete');
+    await waitFor(() =>
+      expect(toasts('destructive').some((t) => (t.textContent ?? '').includes('in use'))).toBe(true),
+    );
+  });
+});
