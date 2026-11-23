@@ -18,6 +18,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -67,15 +68,17 @@ type MockOVSClientInterface struct {
 	getOFPortErr      error
 	addFlowErr        error
 	deleteFlowErr     error
-	listFlowsErr      error
-	deleteAllFlowsErr error
-	modifyFlowErr     error
-	getFlowStatsErr   error
-	listDatabasesErr  error
-	getSchemaErr      error
-	echoErr           error
-	transactErr       error
-	selectErr         error
+	// deleteFlowsByCookieErr fails DeleteFlowsByCookie.
+	deleteFlowsByCookieErr error
+	listFlowsErr           error
+	deleteAllFlowsErr      error
+	modifyFlowErr          error
+	getFlowStatsErr        error
+	listDatabasesErr       error
+	getSchemaErr           error
+	echoErr                error
+	transactErr            error
+	selectErr              error
 }
 
 // Verify MockOVSClientInterface implements ovs.ClientInterface at compile time
@@ -501,6 +504,20 @@ func (m *MockOVSClientInterface) ListFlows(ctx context.Context, bridgeName strin
 }
 
 func (m *MockOVSClientInterface) DeleteFlowsByCookie(ctx context.Context, bridgeName string, cookie, cookieMask uint64) error {
+	if m.deleteFlowsByCookieErr != nil {
+		return m.deleteFlowsByCookieErr
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	kept := make([]*ovs.Flow, 0, len(m.flows[bridgeName]))
+	for _, f := range m.flows[bridgeName] {
+		fc, err := strconv.ParseUint(f.Cookie, 0, 64)
+		if err == nil && fc&cookieMask == cookie&cookieMask {
+			continue
+		}
+		kept = append(kept, f)
+	}
+	m.flows[bridgeName] = kept
 	return nil
 }
 
