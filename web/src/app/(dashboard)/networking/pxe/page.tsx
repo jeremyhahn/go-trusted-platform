@@ -32,6 +32,7 @@ import type { PXEDeviceInfo } from 'trusted-platform-sdk';
 import { PXEDeviceActions } from '@/components/features/pxe/pxe-device-actions';
 import { PXEServiceControls } from '@/components/features/pxe/pxe-service-controls';
 import Link from 'next/link';
+import { PXEMacLookup } from '@/components/features/pxe/pxe-mac-lookup';
 
 export default function PXEBootPage() {
   const { toast } = useToast();
@@ -471,8 +472,9 @@ export default function PXEBootPage() {
       </div>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>All Devices</CardTitle>
+          <PXEMacLookup />
         </CardHeader>
         <CardContent>
           {isLoading ? (
