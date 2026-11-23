@@ -223,7 +223,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `DeviceService.FindMatchingProfile` | `POST /device/profiles/match` | - | - | - | missing |
 | `DeviceService.CountProfiles` | `GET /device/profiles/count` | - | - | - | missing |
 | `DeviceService.ActivateDevice` | `POST /device/activate-json` | - | - | - | missing |
-| `DeviceService.AttestDevice` | `POST /devices/{id}/attest` | - | - | - | missing |
+| `DeviceService.AttestDevice` | `POST /devices/{id}/attest` | `(dashboard)/devices/[id]/page.tsx` | - | - | partial |
 | `DeviceService.RecordAttestationCertificate` | - | - | - | - | missing |
 | `DeviceService.DisableDevice` | `POST /devices/{id:[0-9]+}/disable` | `(dashboard)/devices/[id]/page.tsx`<br>`(dashboard)/devices/page.tsx` | - | `attest-cert-record.spec.ts`<br>`attestation-reports.spec.ts`<br>`dashboard.spec.ts` (+1) | covered |
 | `DeviceService.EnableDevice` | `POST /devices/{id:[0-9]+}/enable` | `(dashboard)/devices/[id]/page.tsx`<br>`(dashboard)/devices/page.tsx` | - | `attest-cert-record.spec.ts`<br>`attestation-reports.spec.ts`<br>`dashboard.spec.ts` (+1) | covered |

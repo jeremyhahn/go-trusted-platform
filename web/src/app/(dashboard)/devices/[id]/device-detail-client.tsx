@@ -26,6 +26,7 @@ import { DeviceCard } from '@/components/features/devices/device-card';
 import { TPMInfo } from '@/components/features/devices/tpm-info';
 import { DeviceReportCard } from '@/components/features/attestation/device-report-card';
 import { AttestCertCard } from '@/components/features/attestation/attest-cert-card';
+import { DeviceAttestCard } from '@/components/features/attestation/device-attest-card';
 import { useToast } from '@/hooks/use-toast';
 import { useDevice, useMutation } from '@/hooks';
 import { useDeviceToggle } from '@/hooks/use-device-toggle';
@@ -359,6 +360,8 @@ export default function DeviceDetailPage() {
       {(device.tpm || device.attestCert) && (
         <AttestCertCard deviceId={device.id} attestCert={device.attestCert} onRecorded={fetchDevice} />
       )}
+
+      {device.tpm && <DeviceAttestCard deviceId={device.id} />}
 
       <Tabs defaultValue="attestations" className="space-y-4">
         <TabsList>
