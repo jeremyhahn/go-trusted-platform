@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { Gated } from "@/components/features/capabilities/gated";
 import type { CertificateDetail } from "@/types/security";
 import { Download, ShieldAlert } from "lucide-react";
 
@@ -73,10 +74,12 @@ export function CertDetail({
             </Button>
           )}
           {onRevoke && !isRevoked && !isExpired && (
-            <Button variant="destructive" size="sm" onClick={onRevoke}>
-              <ShieldAlert className="h-4 w-4 mr-2" />
-              Revoke
-            </Button>
+            <Gated op="DELETE /api/v1/ca/certificates/{serial}">
+              <Button variant="destructive" size="sm" onClick={onRevoke}>
+                <ShieldAlert className="h-4 w-4 mr-2" />
+                Revoke
+              </Button>
+            </Gated>
           )}
         </div>
       </div>
