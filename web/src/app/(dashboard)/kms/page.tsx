@@ -38,6 +38,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { KmsDigestCard } from "@/components/features/kms/kms-digest-card";
 import { KmsKeyAdminCard } from "@/components/features/kms/kms-key-admin-card";
+import { KmsBatchCard } from "@/components/features/kms/kms-batch-card";
 
 // A key as the platform KMS REST handler emits it: snake_case or camelCase
 // names and ISO-string or epoch-second timestamps, which differs from the
@@ -460,6 +461,7 @@ export default function KMSKeysPage() {
 
       <KmsDigestCard />
       <KmsKeyAdminCard />
+      <KmsBatchCard />
 
       {/* Keys Table */}
       <KeyTable
