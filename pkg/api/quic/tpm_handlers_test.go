@@ -1062,19 +1062,19 @@ func TestTPM2Handler_HandleSeal_PassesCNAndPassword(t *testing.T) {
 	require.NotNil(t, mock.sealOpts.KeyAttributes)
 	assert.Equal(t, "k1", mock.sealOpts.KeyAttributes.CN)
 	assert.NotNil(t, mock.sealOpts.KeyAttributes.Password, "the password was dropped")
-	assert.Equal(t, mock.psrkAttrs, mock.sealOpts.KeyAttributes.Parent, "the key was not parented on the platform SRK")
+	assert.Equal(t, mock.ssrkAttrs, mock.sealOpts.KeyAttributes.Parent, "the key was not parented on the SSRK")
 }
 
 // TestTPM2Handler_HandleSeal_PrefersPlatformSRK: a QUIC seal parents the
 // key as go-xkms does for a request without options: on the platform SRK
 // when it exists, and on the SSRK when the platform SRK cannot be read.
-func TestTPM2Handler_HandleSeal_PrefersPlatformSRK(t *testing.T) {
+func TestTPM2Handler_HandleSeal_UsesSSRKLikeGRPC(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		psrkErr error
 	}{
-		{name: "platform srk"},
-		{name: "ssrk fallback", psrkErr: errors.New("no platform srk")},
+		{name: "platform srk present"},
+		{name: "no platform srk", psrkErr: errors.New("no platform srk")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := NewTPM2Handler(logging.DefaultLogger())
@@ -1087,24 +1087,21 @@ func TestTPM2Handler_HandleSeal_PrefersPlatformSRK(t *testing.T) {
 			require.Equal(t, quicwire.StatusOK, resp.Status)
 			require.NotNil(t, mock.sealOpts)
 			require.NotNil(t, mock.sealOpts.KeyAttributes)
-			if tc.psrkErr != nil {
-				assert.Equal(t, mock.ssrkAttrs, mock.sealOpts.KeyAttributes.Parent)
-				return
-			}
-			assert.Equal(t, mock.psrkAttrs, mock.sealOpts.KeyAttributes.Parent)
+			assert.Equal(t, mock.ssrkAttrs, mock.sealOpts.KeyAttributes.Parent,
+				"QUIC seal must parent on the SSRK, as gRPC/REST buildSealOptions does")
 		})
 	}
 }
 
 // TestTPM2Handler_HandleUnseal_PrefersPlatformSRK is the unseal side of
 // TestTPM2Handler_HandleSeal_PrefersPlatformSRK.
-func TestTPM2Handler_HandleUnseal_PrefersPlatformSRK(t *testing.T) {
+func TestTPM2Handler_HandleUnseal_UsesSSRKLikeGRPC(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		psrkErr error
 	}{
-		{name: "platform srk"},
-		{name: "ssrk fallback", psrkErr: errors.New("no platform srk")},
+		{name: "platform srk present"},
+		{name: "no platform srk", psrkErr: errors.New("no platform srk")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := NewTPM2Handler(logging.DefaultLogger())
@@ -1118,11 +1115,8 @@ func TestTPM2Handler_HandleUnseal_PrefersPlatformSRK(t *testing.T) {
 			require.Equal(t, quicwire.StatusOK, resp.Status)
 			require.NotNil(t, mock.unsealOpts)
 			require.NotNil(t, mock.unsealOpts.KeyAttributes)
-			if tc.psrkErr != nil {
-				assert.Equal(t, mock.ssrkAttrs, mock.unsealOpts.KeyAttributes.Parent)
-				return
-			}
-			assert.Equal(t, mock.psrkAttrs, mock.unsealOpts.KeyAttributes.Parent)
+			assert.Equal(t, mock.ssrkAttrs, mock.unsealOpts.KeyAttributes.Parent,
+				"QUIC unseal must parent on the SSRK, as gRPC/REST buildUnsealOptions does")
 		})
 	}
 }
