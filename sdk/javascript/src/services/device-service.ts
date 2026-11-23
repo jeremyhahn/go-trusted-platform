@@ -36,9 +36,6 @@ import type {
   UpdateProfileResponse,
   DeleteProfileResponse,
   ListProfilesResponse,
-  FindProfileByMACAddressResponse,
-  FindProfileBySerialResponse,
-  FindMatchingProfileResponse,
   CountProfilesResponse,
   ActivateDeviceResponse,
   DeviceTemplate,
@@ -388,10 +385,10 @@ export class DeviceService extends BaseService {
    * Find profile by MAC address
    *
    * @param macAddress - MAC address
-   * @returns Found profile
+   * @returns The profile as the server sends it (flat, not wrapped)
    */
-  async findProfileByMACAddress(macAddress: string): Promise<ApiResponse<FindProfileByMACAddressResponse>> {
-    return this.client.get<FindProfileByMACAddressResponse>(
+  async findProfileByMACAddress(macAddress: string): Promise<ApiResponse<DeviceProfile>> {
+    return this.client.get<DeviceProfile>(
       this.singularUrl(`/profiles/mac/${this.encodePathSegment(macAddress)}`)
     );
   }
@@ -400,10 +397,10 @@ export class DeviceService extends BaseService {
    * Find profile by serial number
    *
    * @param serial - Serial number
-   * @returns Found profile
+   * @returns The profile as the server sends it (flat, not wrapped)
    */
-  async findProfileBySerial(serial: string): Promise<ApiResponse<FindProfileBySerialResponse>> {
-    return this.client.get<FindProfileBySerialResponse>(
+  async findProfileBySerial(serial: string): Promise<ApiResponse<DeviceProfile>> {
+    return this.client.get<DeviceProfile>(
       this.singularUrl(`/profiles/serial/${this.encodePathSegment(serial)}`)
     );
   }
@@ -412,12 +409,19 @@ export class DeviceService extends BaseService {
    * Find matching profile for a device
    *
    * @param request - Match request
-   * @returns Matched profile
+   * @returns The profile as the server sends it (flat, not wrapped)
    */
-  async findMatchingProfile(request: FindMatchingProfileRequest): Promise<ApiResponse<FindMatchingProfileResponse>> {
-    return this.client.post<FindMatchingProfileResponse>(
+  async findMatchingProfile(request: FindMatchingProfileRequest): Promise<ApiResponse<DeviceProfile>> {
+    // The server decodes mac_address, serial and model; a camelCase
+    // macAddress key is silently ignored.
+    const body = {
+      ...(request.macAddress && { mac_address: request.macAddress }),
+      ...(request.serial && { serial: request.serial }),
+      ...(request.model && { model: request.model }),
+    };
+    return this.client.post<DeviceProfile>(
       this.singularUrl('/profiles/match'),
-      request
+      body
     );
   }
 
