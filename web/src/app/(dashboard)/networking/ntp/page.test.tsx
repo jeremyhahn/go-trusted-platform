@@ -171,4 +171,17 @@ describe("NTPPage", () => {
     await waitFor(() => expect(screen.queryByTestId("ntp-capabilities-error")).toBeNull());
     await waitFor(() => expect(stepButton().getAttribute("data-capability-enabled")).toBe("true"));
   });
+
+  it("with sources not offered the page makes no /v1/ntp/sources call and shows the reason in the Sources card", async () => {
+    fetchMock.mockImplementation(
+      routes([statusCap, stepCap, { ...sourcesCap, enabled: false, reason: "unimplemented" }])
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("ntp.reference.test")).toBeTruthy();
+    const reason = await screen.findByTestId("ntp-sources-not-enabled");
+    expect(reason.textContent).toContain("unimplemented");
+    expect(callsUnder("/api/v1/ntp/sources")).toHaveLength(0);
+  });
 });
