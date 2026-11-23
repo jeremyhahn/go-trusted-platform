@@ -134,3 +134,33 @@ describe('VMTable capability gate', () => {
     });
   });
 });
+
+describe('VMTable rows', () => {
+  it('links each VM name to its detail page', () => {
+    stubControlPlane({ 'GET /api/v1/capabilities': caps() });
+    renderTable();
+
+    const first = screen.getByTestId('vm-link-vm-1');
+    expect(first.tagName).toBe('A');
+    expect(first.getAttribute('href')?.endsWith('/compute/vms/vm-1')).toBe(true);
+    expect(first.textContent).toBe('web-1');
+    const second = screen.getByTestId('vm-link-vm-2');
+    expect(second.getAttribute('href')?.endsWith('/compute/vms/vm-2')).toBe(true);
+  });
+
+  it('marks the table and one row per VM', () => {
+    stubControlPlane({ 'GET /api/v1/capabilities': caps() });
+    renderTable();
+
+    expect(screen.getByTestId('vm-table')).toBeTruthy();
+    expect(screen.getAllByTestId('vm-row')).toHaveLength(2);
+  });
+
+  it('marks the empty table', () => {
+    stubControlPlane({ 'GET /api/v1/capabilities': caps() });
+    render(withControlPlane(<VMTable vms={[]} onRefresh={vi.fn()} />));
+
+    expect(screen.getByTestId('vm-table-empty').textContent).toBe('No virtual machines found');
+    expect(screen.queryAllByTestId('vm-row')).toHaveLength(0);
+  });
+});
