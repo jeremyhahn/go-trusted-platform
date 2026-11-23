@@ -44,11 +44,13 @@ func TestManager_BarrierConfigured(t *testing.T) {
 
 	t.Run("a manager with a barrier client has one", func(t *testing.T) {
 		iamClient := newMockIAMClient()
+		cfg := DefaultConfig()
+		cfg.EnableDEKIsolation = false
 		m, err := NewManager(&ManagerConfig{
 			IAMTenantClient:     iamClient,
 			IAMRoleClient:       iamClient,
 			TenantBarrierClient: newTestBarrierClient(),
-			Config:              DefaultConfig(),
+			Config:              cfg,
 		})
 		require.NoError(t, err)
 		assert.True(t, m.BarrierConfigured())
