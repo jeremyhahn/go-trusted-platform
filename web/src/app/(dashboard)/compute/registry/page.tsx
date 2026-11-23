@@ -290,10 +290,12 @@ export default function RegistryPage() {
               value={repository}
               onChange={(e) => setRepository(e.target.value)}
             />
-            <Button type="submit" disabled={isTagsLoading || !repository.trim()}>
-              <Search className="h-4 w-4 mr-2" />
-              List tags
-            </Button>
+            <Gated op="GET /v2/{name:.+}/tags/list">
+              <Button type="submit" disabled={isTagsLoading || !repository.trim()}>
+                <Search className="h-4 w-4 mr-2" />
+                List tags
+              </Button>
+            </Gated>
           </form>
         </CardHeader>
         <CardContent>
@@ -336,16 +338,18 @@ export default function RegistryPage() {
                           <Search className="h-4 w-4" />
                         </Button>
                       </Gated>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setPending(tag)}
-                        disabled={status?.ReadOnly === true}
-                        aria-label={`Delete ${tag}`}
-                        title={status?.ReadOnly ? "Registry is read-only" : "Delete manifest"}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      <Gated op="DELETE /v2/{name:.+}/manifests/{reference}">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setPending(tag)}
+                          disabled={status?.ReadOnly === true}
+                          aria-label={`Delete ${tag}`}
+                          title={status?.ReadOnly ? "Registry is read-only" : "Delete manifest"}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </Gated>
                     </TableCell>
                   </TableRow>
                 ))}
