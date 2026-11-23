@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ok, refused, stubControlPlane, withControlPlane, type Answer } from '@/test/control-plane-fetch';
+import { ok, refused, stubControlPlane, withControlPlane, type Answer, type SentRequest } from '@/test/control-plane-fetch';
 import { DeviceModelCard } from './device-model-card';
 
 // #2048: the device page edits the device model through the SDK
@@ -38,7 +38,7 @@ async function editAndSave(value: string) {
   });
 }
 
-const puts = (sent: { method: string }[]) => sent.filter((r) => r.method === 'PUT');
+const puts = (sent: SentRequest[]) => sent.filter((r) => r.method === 'PUT');
 
 describe('DeviceModelCard', () => {
   afterEach(() => {

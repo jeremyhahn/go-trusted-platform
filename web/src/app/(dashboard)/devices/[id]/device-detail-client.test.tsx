@@ -106,4 +106,11 @@ describe('DeviceDetailPage Enable / Disable', () => {
     expect(button.disabled).toBe(true);
     expect(button.title).toMatch(/revocation is terminal/);
   });
+
+  it('shows the model edit card with the stored model', async () => {
+    stubControlPlane({ [DEVICE_PATH]: storedDevice('active') });
+    await renderPage();
+
+    expect((screen.getByLabelText('Model') as HTMLInputElement).value).toBe('X10');
+  });
 });

@@ -27,6 +27,7 @@ import { TPMInfo } from '@/components/features/devices/tpm-info';
 import { DeviceReportCard } from '@/components/features/attestation/device-report-card';
 import { AttestCertCard } from '@/components/features/attestation/attest-cert-card';
 import { DeviceAttestCard } from '@/components/features/attestation/device-attest-card';
+import { DeviceModelCard } from '@/components/features/devices/device-model-card';
 import { useToast } from '@/hooks/use-toast';
 import { useDevice, useMutation } from '@/hooks';
 import { useDeviceToggle } from '@/hooks/use-device-toggle';
@@ -320,6 +321,8 @@ export default function DeviceDetailPage() {
       </div>
 
       <DeviceReportCard deviceId={device.id} />
+
+      <DeviceModelCard deviceId={device.id} model={device.model} onSaved={fetchDevice} />
 
       {device.endorsementKey && (
         <Card>
