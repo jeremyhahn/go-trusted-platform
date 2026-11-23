@@ -507,14 +507,24 @@ func (a *QUICAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCer
 // this transport rather than logging an absent surface.
 func (a *QUICAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error) {
 	req := &pb.AttestDeviceRequest{
-		DeviceId: opts.DeviceID,
-		Evidence: opts.Evidence,
+		DeviceId:    opts.DeviceID,
+		Evidence:    opts.Evidence,
+		ChallengeId: opts.ChallengeID,
 	}
 	var resp pb.AttestDeviceResponse
 	if err := a.call(ctx, "AttestDevice", quicwire.OpDeviceAttest, req, &resp); err != nil {
 		return nil, err
 	}
 	return attestResultFromProto(opts.DeviceID, &resp), nil
+}
+
+// IssueAttestationChallenge reports that QUIC has no challenge-issue opcode
+// yet; the attest opcode already carries challenge_id.
+func (a *QUICAdapter) IssueAttestationChallenge(ctx context.Context, opts IssueAttestationChallengeOptions) (*IssueAttestationChallengeResult, error) {
+	return nil, ErrAttestationTransportUnavailable{
+		Transport: "QUIC",
+		Reason:    "no attestation-challenge opcode yet (#2136: the sub-opcode waits on an owner ruling)",
+	}
 }
 
 // =============================================================================
