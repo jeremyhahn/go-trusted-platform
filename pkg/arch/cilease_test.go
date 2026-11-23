@@ -496,6 +496,7 @@ const (
 	reasonRegistryUnmasked   = "writes IT_REGISTRY to GITHUB_ENV without masking a non-empty value first"
 	reasonRefCarriesRegistry = "puts the registry host in the image_ref job output, which the runner drops as secret-derived"
 	reasonLegNoRegistry      = "pulls without prefixing the image path with the CI_IMAGE_REGISTRY secret"
+	reasonLegNoImagePath     = "pulls without IT_IMAGE_PATH bound to the image job's image_ref output"
 
 	// The selection masks a non-empty registry before GITHUB_ENV carries it,
 	// the push outputs the host-free path, and the leg prefixes the secret.
@@ -504,6 +505,7 @@ const (
 	ciImageRefOutput    = "echo \"image_ref=$path\""
 	ciLegRegistryRef    = "IT_IMAGE_REF=\"$IT_REGISTRY/$IT_IMAGE_PATH\""
 	ciLegRegistryValue  = "${{ secrets.CI_IMAGE_REGISTRY }}"
+	ciLegImagePathValue = "${{ needs.integration-image.outputs.image_ref }}"
 
 	// ciPullRemoveRef is the removal of the shared registry reference; a
 	// leg that already pulled it and waits on the image lock re-tags from it.
@@ -622,6 +624,9 @@ func registryPathFindings(t *testing.T, wf ciWorkflow) []error {
 		if step.Env[ciRegistryEnv] != ciLegRegistryValue || !strings.Contains(step.Run, ciLegRegistryRef) {
 			finding(ciLegJob, step.Line, reasonLegNoRegistry)
 		}
+		if step.Env["IT_IMAGE_PATH"] != ciLegImagePathValue {
+			finding(ciLegJob, step.Line, reasonLegNoImagePath)
+		}
 		if strings.Contains(step.Run, ciPullRemoveRef) {
 			finding(ciLegJob, step.Line, reasonPullRemovesRef)
 		}
@@ -692,6 +697,12 @@ func TestRegistryPathFindingsRejectArtifactsBesideTheRegistry(t *testing.T) {
 			old:    ciLegRegistryRef,
 			new:    `IT_IMAGE_REF="$IT_IMAGE_PATH"`,
 			reason: reasonLegNoRegistry,
+		},
+		{
+			name:   "leg pull without the image path binding",
+			old:    "IT_IMAGE_PATH: " + ciLegImagePathValue + "\n          IT_REGISTRY: " + ciLegRegistryValue,
+			new:    "IT_REGISTRY: " + ciLegRegistryValue,
+			reason: reasonLegNoImagePath,
 		},
 		{
 			name:   "GitHub download beside the registry",
