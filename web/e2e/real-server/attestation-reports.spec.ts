@@ -25,9 +25,15 @@ interface DeviceSeeder {
   device: {
     createDevice(request: { device: { serial: string; model?: string } }): Promise<{
       success: boolean;
-      data?: { device?: { id?: string | number } };
+      // The server answers the created device itself as the payload.
+      data?: unknown;
     }>;
   };
+}
+
+/** The id of the device the server answered (res.data is the device, not {device}). */
+function deviceIdOf(data: unknown): string | number | undefined {
+  return ((data ?? {}) as { id?: string | number }).id;
 }
 
 function unwrap<T>(body: unknown): T {
@@ -62,7 +68,7 @@ test.describe('Device attestation report (#428), real server', () => {
     const serial = `e2e-${label}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
     const res = await sdk.device.createDevice({ device: { serial, model: serial } });
     expect(res.success).toBe(true);
-    const id = String(res.data?.device?.id ?? '');
+    const id = String(deviceIdOf(res.data) ?? '');
     expect(id).not.toBe('');
     ids.push(id);
     return id;
@@ -127,7 +133,7 @@ test.describe('Fleet table attestation column (#428), real server', () => {
     for (const serial of serials) {
       const res = await sdk.device.createDevice({ device: { serial, model: serial } });
       expect(res.success).toBe(true);
-      ids.push(String(res.data?.device?.id ?? ''));
+      ids.push(String(deviceIdOf(res.data) ?? ''));
     }
 
     try {

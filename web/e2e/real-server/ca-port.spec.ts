@@ -66,7 +66,9 @@ async function openRowMenu(page: Page, commonName: string): Promise<void> {
 /** Issues one certificate through the page; returns its common name and the server answer. */
 async function issueThroughPage(page: Page): Promise<{ commonName: string; res: Response }> {
   const commonName = `e2e-${Date.now()}-${Math.floor(Math.random() * 1e6)}.example.com`;
-  page.on('dialog', (d) => d.accept().catch(() => undefined));
+  // Revoke asks prompt('Enter revocation reason:') and returns on an empty
+  // answer, so a prompt gets a reason; the alerts and confirms are accepted.
+  page.on('dialog', (d) => (d.type() === 'prompt' ? d.accept('UNSPECIFIED') : d.accept()).catch(() => undefined));
   await page.goto('/ca/certificates');
   await page.getByRole('button', { name: /issue certificate/i }).first().click();
   const dialog = page.getByRole('dialog');

@@ -7,10 +7,20 @@ import { test, expect } from './fixtures';
  *
  * POST /api/v1/devices/{id}/attest-cert/record records the device's
  * attestation certificate without re-enrolling; the server fails closed with
- * no override. The device is seeded through the SDK with no attestation key
- * material, so the server has nothing it can record: each case asserts on the
- * request the console sends and on the answer the server really gives.
+ * no override. The device is seeded through the SDK with an attestation key
+ * the server cannot certify (a placeholder that does not parse as a key): the
+ * page renders the certificate card for it, and the server refuses every
+ * record attempt, so each case asserts on the request the console sends and on
+ * the answer the server really gives.
  */
+
+/** A placeholder attest_pub: the page shows the card, the server cannot parse it. */
+const UNCERTIFIABLE_ATTEST_PUB = 'e2e-not-a-key';
+
+/** The device the server answered: res.data is the device itself, not {device}. */
+function deviceOf(data: unknown): { id?: string | number; attest_cert?: string } {
+  return (data ?? {}) as { id?: string | number; attest_cert?: string };
+}
 
 /** The message of a platform error envelope, in either of its two shapes. */
 function serverMessage(body: unknown): string {
@@ -40,9 +50,11 @@ test.describe('Record attestation certificate (#491), real server', () => {
 
   test.beforeEach(async ({ sdk }) => {
     const serial = `e2e-acr-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
-    const res = await sdk.device.createDevice({ device: { serial, model: serial } });
+    const res = await sdk.device.createDevice({
+      device: { serial, model: serial, attest_pub: UNCERTIFIABLE_ATTEST_PUB },
+    });
     expect(res.success).toBe(true);
-    deviceId = String(res.data?.device?.id ?? '');
+    deviceId = String(deviceOf(res.data).id ?? '');
     expect(deviceId).not.toBe('');
   });
 
@@ -52,7 +64,7 @@ test.describe('Record attestation certificate (#491), real server', () => {
 
   test('a device with no certificate says so and records without re-issuing by default', async ({ adminPage, sdk }) => {
     const before = await sdk.device.getDevice(deviceId);
-    expect(before.data?.device?.attest_cert ?? '').toBe('');
+    expect(deviceOf(before.data).attest_cert ?? '').toBe('');
     await openDetail(adminPage, deviceId);
     await expect(adminPage.getByTestId('attest-cert-absent')).toBeVisible();
 
@@ -67,7 +79,7 @@ test.describe('Record attestation certificate (#491), real server', () => {
     if (res.ok()) {
       await expect(adminPage.getByText('Certificate recorded')).toBeVisible();
       const after = await sdk.device.getDevice(deviceId);
-      expect(after.data?.device?.attest_cert ?? '').not.toBe('');
+      expect(deviceOf(after.data).attest_cert ?? '').not.toBe('');
     } else {
       await expect(adminPage.getByTestId('attest-cert-refusal')).toHaveText(serverMessage(body));
     }
@@ -93,7 +105,7 @@ test.describe('Record attestation certificate (#491), real server', () => {
     }
   });
 
-  test('a device with no key material is refused verbatim and nothing is recorded', async ({ adminPage, sdk }) => {
+  test('a device whose attestation key the server cannot certify is refused verbatim and nothing is recorded', async ({ adminPage, sdk }) => {
     await openDetail(adminPage, deviceId);
 
     await adminPage.getByRole('button', { name: /record certificate/i }).click();
@@ -109,6 +121,6 @@ test.describe('Record attestation certificate (#491), real server', () => {
     await expect(adminPage.getByTestId('attest-cert-absent')).toBeVisible();
 
     const after = await sdk.device.getDevice(deviceId);
-    expect(after.data?.device?.attest_cert ?? '').toBe('');
+    expect(deviceOf(after.data).attest_cert ?? '').toBe('');
   });
 });

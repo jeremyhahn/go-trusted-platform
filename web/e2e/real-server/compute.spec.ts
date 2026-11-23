@@ -1,6 +1,7 @@
 import type { Page, Response } from '@playwright/test';
 import type { PlatformClient } from 'trusted-platform-sdk';
 import { test, expect } from './fixtures';
+import { unwrapPayload } from './fixtures/wire';
 
 /**
  * Compute pages (VMs, containers, snapshots) against the real-server harness
@@ -29,6 +30,13 @@ async function answerOf(res: Response): Promise<Answer> {
     body = (await res.json()) as Record<string, unknown>;
   } catch {
     // no JSON body
+  }
+  // protorest.WriteSuccess puts vms, containers, snapshots and created
+  // resources inside payload: assert on that. An error envelope stays whole,
+  // so notConfigured still reads its reason.
+  const payload = body.payload;
+  if (res.ok() && body.success === true && typeof payload === 'object' && payload !== null && !Array.isArray(payload)) {
+    body = unwrapPayload<Record<string, unknown>>(body);
   }
   return { status: res.status(), body };
 }
@@ -74,9 +82,10 @@ async function expectListShows(page: Page, a: Answer, key: string, errorText: Re
 
 const badge = (state: string | undefined, prefix: string) => (state ?? '').replace(prefix, '').toLowerCase();
 
-async function seedVM(sdk: PlatformClient, name: string): Promise<string | null> {
+async function seedVM(sdk: PlatformClient, name: string, start?: boolean): Promise<string | null> {
   const res = await sdk.compute.createVM({
     config: { name, cpu: { cores: 1 }, memory: { sizeMb: 256 }, disks: [], networks: [] },
+    ...(start ? { start: true } : {}),
   });
   return res.success && res.data?.vm?.id ? res.data.vm.id : null;
 }
@@ -222,12 +231,13 @@ test.describe('Compute, real server', () => {
 
     for (const op of [
       { item: /start/i, success: /vm started successfully/i, label: 'starts a stopped VM' },
-      { item: /stop/i, success: /vm stopped successfully/i, label: 'stops a VM' },
-      { item: /reboot/i, success: /vm rebooted successfully/i, label: 'reboots a VM' },
+      // VMTable shows Stop and Reboot only for a running VM: these seed one started.
+      { item: /stop/i, success: /vm stopped successfully/i, label: 'stops a VM', start: true },
+      { item: /reboot/i, success: /vm rebooted successfully/i, label: 'reboots a VM', start: true },
     ]) {
       test(`${op.label}, or shows the server's refusal`, async ({ adminPage, sdk }) => {
         const name = unique('e2e-op-vm');
-        const id = await seedVM(sdk, name);
+        const id = await seedVM(sdk, name, op.start);
         try {
           const a = await open(adminPage, '/compute/vms', '/api/v1/compute/vms');
           if (!id) {
@@ -237,6 +247,26 @@ test.describe('Compute, real server', () => {
             return;
           }
           await expect(adminPage.getByRole('cell', { name })).toBeVisible();
+          if (op.start) {
+            const vmState = async () => {
+              const res = await sdk.compute.getVM(id).catch(() => null);
+              return String(res?.data?.vm?.state ?? '');
+            };
+            const running = await expect
+              .poll(vmState, { timeout: 30_000 })
+              .toBe('VM_STATE_RUNNING')
+              .then(() => true)
+              .catch(() => false);
+            if (!running) {
+              // The backend did not start the VM: the page offers no Stop or Reboot.
+              await adminPage.getByRole('row', { name: new RegExp(name, 'i') }).getByRole('button').click();
+              await expect(adminPage.getByRole('menuitem', { name: op.item })).toHaveCount(0);
+              return;
+            }
+            // The list the page loaded predates the start: reload it.
+            await open(adminPage, '/compute/vms', '/api/v1/compute/vms');
+            await expect(adminPage.getByRole('cell', { name })).toBeVisible();
+          }
           await rowAction(adminPage, name, op.item, 'POST', id, op.success);
         } finally {
           if (id) await sdk.compute.deleteVM({ id });
