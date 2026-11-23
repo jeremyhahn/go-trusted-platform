@@ -325,25 +325,25 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `PlatformIAMService.CheckPermission` | `POST /tenants/{tenant}/permissions/check` | `(dashboard)/iam/permissions/page.tsx` (PermissionCheckCard) | - | `real-server/iam.spec.ts`<br>`real-server/iam-groups-tenants.spec.ts` | covered |
 | `PlatformIAMService.CreateToken` | - | - | - | - | missing |
 | `PlatformIAMService.RevokeToken` | - | - | - | - | missing |
-| `PlatformIAMService.VerifyToken` | - | - | - | - | missing |
+| `PlatformIAMService.VerifyToken` | `POST /tokens/verify` | `(dashboard)/iam/tokens/page.tsx` (token verify card) | - | `real-server/iam-token-verify.spec.ts` | covered |
 | `PlatformIAMService.CreateTenant` | `POST /tenants` | `(dashboard)/iam/tenants/page.tsx` | - | `real-server/iam-groups-tenants.spec.ts` | covered |
 | `PlatformIAMService.GetTenant` | `GET /tenants/{tenant}` | `(dashboard)/iam/tenants/page.tsx` | - | `real-server/iam-groups-tenants.spec.ts` | covered |
 | `PlatformIAMService.ListTenants` | `GET /tenants` | `(dashboard)/iam/tenants/page.tsx` | - | `real-server/iam-groups-tenants.spec.ts` | covered |
 | `PlatformIAMService.UpdateTenant` | `PUT /tenants/{tenant}` | `(dashboard)/iam/tenants/page.tsx` | - | `real-server/iam-groups-tenants.spec.ts` | covered |
 | `PlatformIAMService.DeleteTenant` | `DELETE /tenants/{tenant}` | `(dashboard)/iam/tenants/page.tsx` | - | `real-server/iam-groups-tenants.spec.ts` | covered |
-| `PlatformIAMService.CreatePolicy` | `POST /policies` | `(dashboard)/iam/policies/new/page.tsx` | - | - | partial |
-| `PlatformIAMService.GetPolicy` | `GET /policies/{id}` | `(dashboard)/iam/policies/[name]/page.tsx` | - | - | partial |
-| `PlatformIAMService.ListPolicies` | `GET /policies` | `(dashboard)/iam/permissions/page.tsx`<br>`(dashboard)/iam/policies/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.UpdatePolicy` | `PUT /policies/{id}` | `(dashboard)/iam/permissions/page.tsx`<br>`(dashboard)/iam/policies/[name]/page.tsx`<br>`(dashboard)/iam/policies/new/page.tsx` (+1) (read-only) | - | - | partial |
-| `PlatformIAMService.DeletePolicy` | `DELETE /policies/{id}` | `(dashboard)/iam/policies/[name]/page.tsx`<br>`(dashboard)/iam/policies/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.ValidatePolicy` | `POST /policies/validate` | - | - | - | missing |
-| `PlatformIAMService.TestPolicy` | `POST /policies/test` | - | - | - | missing |
-| `PlatformIAMService.RegisterApp` | `POST /apps` | `(dashboard)/iam/apps/new/page.tsx`<br>`(dashboard)/iam/tokens/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.GetApp` | `GET /apps/{id}` | `(dashboard)/iam/apps/[clientId]/page.tsx` | - | - | partial |
-| `PlatformIAMService.ListApps` | `GET /apps` | `(dashboard)/iam/apps/page.tsx`<br>`(dashboard)/iam/tokens/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.UpdateApp` | `PUT /apps/{id}` | `(dashboard)/iam/apps/[clientId]/page.tsx`<br>`(dashboard)/iam/apps/page.tsx`<br>`(dashboard)/iam/tokens/page.tsx` (read-only) | - | - | partial |
-| `PlatformIAMService.DeleteApp` | `DELETE /apps/{id}` | `(dashboard)/iam/apps/[clientId]/page.tsx`<br>`(dashboard)/iam/apps/page.tsx`<br>`(dashboard)/iam/tokens/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.RotateAppSecret` | `POST /apps/{id}/rotate` | `(dashboard)/iam/tokens/page.tsx` | - | `iam.spec.ts` | covered |
+| `PlatformIAMService.CreatePolicy` | `POST /policies` | `(dashboard)/iam/policies/new/page.tsx` | - | `real-server/iam-policies.spec.ts` | covered |
+| `PlatformIAMService.GetPolicy` | `GET /policies/{id}` | `(dashboard)/iam/policies/[name]/page.tsx` | - | `real-server/iam-policies.spec.ts` | covered |
+| `PlatformIAMService.ListPolicies` | `GET /policies` | `(dashboard)/iam/permissions/page.tsx`<br>`(dashboard)/iam/policies/page.tsx` | - | `real-server/iam.spec.ts`<br>`real-server/iam-groups-tenants.spec.ts` | covered |
+| `PlatformIAMService.UpdatePolicy` | `PUT /policies/{id}` | `(dashboard)/iam/permissions/page.tsx`<br>`(dashboard)/iam/policies/[name]/page.tsx`<br>`(dashboard)/iam/policies/new/page.tsx` (+1) (gated off by EmbeddedIamGate: the embedded IAM backend has no Policy.Update handler) | - | `real-server/iam-policies.spec.ts` | partial |
+| `PlatformIAMService.DeletePolicy` | `DELETE /policies/{id}` | `(dashboard)/iam/policies/[name]/page.tsx`<br>`(dashboard)/iam/policies/page.tsx` | - | `real-server/iam.spec.ts`<br>`real-server/iam-policies.spec.ts` | covered |
+| `PlatformIAMService.ValidatePolicy` | `POST /policies/validate` | `(dashboard)/iam/policies/test/page.tsx` (gated off by EmbeddedIamGate: no Policy.Validate / Policy.Simulate handler) | - | `real-server/iam-policies.spec.ts` | partial |
+| `PlatformIAMService.TestPolicy` | `POST /policies/test` | `(dashboard)/iam/policies/test/page.tsx` (gated off by EmbeddedIamGate: no Policy.Validate / Policy.Simulate handler) | - | `real-server/iam-policies.spec.ts` | partial |
+| `PlatformIAMService.RegisterApp` | `POST /apps` | `(dashboard)/iam/apps/new/page.tsx`<br>`(dashboard)/iam/tokens/page.tsx` | - | `real-server/iam.spec.ts`<br>`real-server/iam-apps-tokens.spec.ts` | covered |
+| `PlatformIAMService.GetApp` | `GET /apps/{id}` | `(dashboard)/iam/apps/[clientId]/page.tsx` | - | `real-server/iam-policies.spec.ts`<br>`real-server/iam-apps-tokens.spec.ts` | covered |
+| `PlatformIAMService.ListApps` | `GET /apps` | `(dashboard)/iam/apps/page.tsx`<br>`(dashboard)/iam/tokens/page.tsx` | - | `real-server/iam.spec.ts`<br>`real-server/iam-apps-tokens.spec.ts` | covered |
+| `PlatformIAMService.UpdateApp` | `PUT /apps/{id}` | `(dashboard)/iam/apps/[clientId]/page.tsx`<br>`(dashboard)/iam/apps/page.tsx`<br>`(dashboard)/iam/tokens/page.tsx` (gated off by EmbeddedIamGate: no App.Update handler) | - | - | partial |
+| `PlatformIAMService.DeleteApp` | `DELETE /apps/{id}` | `(dashboard)/iam/apps/[clientId]/page.tsx`<br>`(dashboard)/iam/apps/page.tsx`<br>`(dashboard)/iam/tokens/page.tsx` | - | `real-server/iam.spec.ts`<br>`real-server/iam-apps-tokens.spec.ts`<br>`real-server/iam-policies.spec.ts` | covered |
+| `PlatformIAMService.RotateAppSecret` | `POST /apps/{id}/rotate` | `(dashboard)/iam/apps/page.tsx`<br>`(dashboard)/iam/tokens/page.tsx` | - | `real-server/iam.spec.ts`<br>`real-server/iam-apps-tokens.spec.ts` | covered |
 
 ## IDevIDService (`idevid.proto`)
 
@@ -380,7 +380,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `InvitationService.ListInvitations` | - | `(dashboard)/tenant/invitations/page.tsx` | - | `real-server/tenant-management.spec.ts`<br>`real-server/invitation-revoke.spec.ts` | covered |
 | `InvitationService.RevokeInvitation` | `POST /{id:[0-9]+}/revoke` | `(dashboard)/tenant/invitations/page.tsx` | - | `real-server/tenant-management.spec.ts`<br>`real-server/invitation-revoke.spec.ts` | covered |
 | `InvitationService.AcceptInvitation` | `POST /accept` | `invite/page.tsx` (marks the invitation accepted; grants no membership, #2056) | - | `real-server/invitation-accept-flow.spec.ts` | covered |
-| `InvitationService.DeleteInvitation` | `DELETE /{id:[0-9]+}` | `(dashboard)/tenant/invitations/page.tsx` | - | `tenant-management.spec.ts` | covered |
+| `InvitationService.DeleteInvitation` | `DELETE /{id:[0-9]+}` | `(dashboard)/tenant/invitations/page.tsx` | - | `real-server/invitation-delete.spec.ts` | covered |
 
 ## KeyManagementService (`kms.proto`)
 
@@ -636,9 +636,9 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `TenantService.DeleteTenant` | `DELETE /{id}` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` (read-only) | - | - | partial |
 | `TenantService.SuspendTenant` | `POST /{id}/suspend` | - | - | - | missing |
 | `TenantService.ResumeTenant` | `POST /{id}/resume` | - | - | - | missing |
-| `TenantService.GetQuotas` | `GET /{id}/quotas` | `(dashboard)/tenant/quotas/page.tsx` | - | `tenant-management.spec.ts` | covered |
+| `TenantService.GetQuotas` | `GET /{id}/quotas` | `(dashboard)/tenant/quotas/page.tsx` | - | `real-server/tenant-management.spec.ts` | covered |
 | `TenantService.UpdateQuotas` | `PUT /{id}/quotas` | `(dashboard)/tenant/quotas/page.tsx` (read-only) | - | - | partial |
-| `TenantService.GetUsage` | `GET /{id}/usage` | `(dashboard)/tenant/quotas/page.tsx` | - | `tenant-management.spec.ts` | covered |
+| `TenantService.GetUsage` | `GET /{id}/usage` | `(dashboard)/tenant/quotas/page.tsx` | - | `real-server/tenant-management.spec.ts` | covered |
 | `TenantService.CheckQuota` | `POST /{id}/quota-check` | - | - | - | missing |
 | `TenantService.Sync` | `POST /sync` | - | - | - | missing |
 | `TenantService.RotateTenantDEK` | `POST /{id}/dek/rotate` | - | - | - | missing |
@@ -743,7 +743,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | EABService | 11 | 0 | 0 | 11 | 0 | 0 |
 | FIDO2Service | 5 | 0 | 0 | 0 | 5 | 0 |
 | GatewayService | 29 | 4 | 3 | 22 | 0 | 0 |
-| PlatformIAMService | 41 | 29 | 7 | 5 | 0 | 0 |
+| PlatformIAMService | 41 | 33 | 6 | 2 | 0 | 0 |
 | IDevIDService | 20 | 8 | 1 | 11 | 0 | 0 |
 | InvitationService | 7 | 7 | 0 | 0 | 0 | 0 |
 | KeyManagementService | 23 | 10 | 1 | 12 | 0 | 0 |
@@ -765,7 +765,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 22 | 0 | 0 | 1 | 0 |
-| **Total** | **529** | **161** | **61** | **226** | **50** | **31** |
+| **Total** | **529** | **165** | **60** | **223** | **50** | **31** |
 
 ## Proposed slices
 
@@ -786,8 +786,8 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 13. **EABService: Credential, CredentialByKeyID, CredentialQRCode, EnrollmentURL, CredentialUsed, ExpiredCredential**: 11 operations (11 missing, 0 partial): CreateCredential, GetCredential, ListCredentials, RevokeCredential, ValidateCredential, DeleteCredential, GetCredentialByKeyID, GetCredentialQRCode, GetEnrollmentURL, MarkCredentialUsed, CleanupExpiredCredentials.
 14. **GatewayService (1/2): GatewayMode, GatewaySnapshot, GatewayAdmittedVTEP, BGPPeer, Prefix, IPAMPool…**: 15 operations (12 missing, 3 partial): SetGatewayMode, GetGatewaySnapshot, ListGatewaySnapshots, GetGatewayAdmittedVTEP, ListGatewayAdmittedVTEPs, ListBGPPeers, AnnouncePrefix, WithdrawPrefix, CreateIPAMPool, GetIPAMPool, UpdateIPAMPool, DeleteIPAMPool, AllocateIP, ReleaseIP, ListAllocations.
 15. **GatewayService (2/2): VIP, VIPBackend, LBStatus, NAT64Status, PerfFlow, PerfDatapath…**: 10 operations (10 missing, 0 partial): AddVIP, RemoveVIP, GetVIP, ListVIPs, SetVIPBackends, GetLBStatus, GetNAT64Status, GetPerfFlows, GetPerfDatapath, GetPerfConntrack.
-16. **PlatformIAMService (1/2): GroupMember, Token**: 5 operations (3 missing, 2 partial): AddGroupMember, RemoveGroupMember, CreateToken, RevokeToken, VerifyToken.
-17. **PlatformIAMService (2/2): Policy, App**: 7 operations (2 missing, 5 partial): CreatePolicy, GetPolicy, UpdatePolicy, ValidatePolicy, TestPolicy, GetApp, UpdateApp.
+16. **PlatformIAMService (1/2): GroupMember, Token**: 4 operations (2 missing, 2 partial): AddGroupMember, RemoveGroupMember, CreateToken, RevokeToken.
+17. **PlatformIAMService (2/2): Policy, App**: 4 operations (0 missing, 4 partial): UpdatePolicy, ValidatePolicy, TestPolicy, UpdateApp.
 18. **IDevIDService: IDevID, IAK, IAKCSR, LDevID, IDevIDCertificate, IAKCertificate…**: 12 operations (11 missing, 1 partial): HasIDevID, GenerateIAK, HasIAK, DeleteIAK, CreateIAKCSR, CreateLDevID, InstallIDevIDCertificate, InstallIAKCertificate, DeleteIAKCertificate, GetDeviceAttributes, FlushTransientContexts, ActivateCredential.
 19. **InvitationService**: all covered on the branch (#2041).
 20. **KeyManagementService: Key, KeyStatus, KeyVersion, Encrypt, Decrypt, Rewrap…**: 13 operations (12 missing, 1 partial): ImportKey, UpdateKeyStatus, GetKeyVersions, BatchEncrypt, BatchDecrypt, Rewrap, Hash, HMAC, VerifyHMAC, GenerateRandom, GenerateDataKey, GenerateWrappedDataKey, BackendStatus.
