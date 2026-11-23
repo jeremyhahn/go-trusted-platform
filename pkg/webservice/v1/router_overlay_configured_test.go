@@ -80,7 +80,7 @@ func newOverlayTestRouter(t *testing.T, server platformv1.OverlayServiceServer) 
 		serviceRegistry: NewServiceRegistry(logger, writer),
 	}
 	v1Router.overlayRoutes()
-	registerCapabilitiesEndpoint(api, v1Router.serviceRegistry, nil, writer, nil)
+	registerCapabilitiesEndpoint(api, v1Router.serviceRegistry, nil, writer, nil, nil)
 	return root
 }
 
