@@ -148,4 +148,24 @@ for (const helper of [
   assert.ok(!apiMock.includes(helper), `fixtures/api-mock.ts no longer defines ${helper}`);
 }
 
+// Fixtures no spec imports are gone (#2036).
+for (const name of ['index.ts', 'dashboard-api-mocks.ts', 'webauthn-mock.ts']) {
+  assert.ok(
+    !fs.existsSync(path.join(import.meta.dirname, '..', 'fixtures', name)),
+    `web/e2e/fixtures/${name} (no spec imports it) does not exist`,
+  );
+}
+for (const helper of [
+  'mockInvitationApi',
+  'mockInvitationValidation',
+  'createMockInvitation',
+  'InvitationApiMockConfig',
+  'HealthApiMockConfig',
+  'HealthResponse',
+  'mockWebAuthnRegistration',
+  'mockWebAuthnLogin',
+]) {
+  assert.ok(!apiMock.includes(helper), `fixtures/api-mock.ts no longer defines ${helper}`);
+}
+
 console.log('specs.check: ok');
