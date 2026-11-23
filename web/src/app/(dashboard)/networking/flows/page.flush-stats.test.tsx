@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
@@ -204,6 +204,6 @@ describe("OpenFlowsPage flush and flow statistics", () => {
     expect(error.textContent).toContain("flow not found");
     expect(screen.queryByTestId("flow-stats-packets")).toBeNull();
     expect(screen.queryByTestId("flow-stats-bytes")).toBeNull();
-    expect(screen.queryByText("0")).toBeNull();
+    expect(within(screen.getByRole("dialog")).queryByText("0")).toBeNull();
   });
 });
