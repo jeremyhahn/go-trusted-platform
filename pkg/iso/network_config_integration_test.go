@@ -233,12 +233,12 @@ func TestVLANExtractionFromProfile(t *testing.T) {
 			name: "Only provisioning and admitted",
 			profile: &entities.DeviceProfile{
 				Networks: map[string]*entities.NetworkPhaseConfig{
-					entities.DefaultEnrollmentNetwork:     {VLAN: 101},
-					entities.DefaultPostEnrollmentNetwork: {VLAN: 201},
+					entities.DefaultEnrollmentNetwork:     {VLAN: 110},
+					entities.DefaultPostEnrollmentNetwork: {VLAN: 210},
 				},
 			},
-			wantProv:     101,
-			wantAdmitted: 201,
+			wantProv:     110,
+			wantAdmitted: 210,
 			wantQuar:     0,
 		},
 	}

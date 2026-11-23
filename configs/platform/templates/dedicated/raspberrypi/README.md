@@ -83,7 +83,7 @@ for three Pis.
 ## A Pi on a flat DHCP network
 
 `rpi4/compute.yaml` assumes the rack: `eth0` is a trunk with the zone VLANs.
-A Pi on a flat network instead, such as an access port on the office VLAN 101
+A Pi on a flat network instead, such as an access port on an office VLAN
 with its own DHCP server, is built from the same template with an override
 that deletes the rack's network sections and makes `eth0` a DHCP client:
 
