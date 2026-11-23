@@ -3,6 +3,13 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { ok, refused, stubControlPlane, withControlPlane, type Answer } from '@/test/control-plane-fetch';
 import GatewayIPAMPage from './page';
 
+// Every op is offered here so these cases keep testing the writes; the gate
+// itself (it fails closed) is tested in page.capability-gate.test.tsx.
+vi.mock('@/hooks/use-capabilities', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/use-capabilities')>()),
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
+
 const PATH = '/api/v1/gateway/ipam/allocations';
 
 const A1 = { ip: '10.0.0.10', poolId: 'pool-a', hostname: 'node-a', allocatedAt: '2026-11-20T00:00:00Z' };
