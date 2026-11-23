@@ -97,6 +97,7 @@ describe('ProxyRoutesPage', () => {
     expect(table.getByText('a.example, b.example /api')).toBeTruthy();
     expect(table.getByText('p1')).toBeTruthy();
     expect(table.getByText('mtls')).toBeTruthy();
+    expect(screen.getByTestId('proxy-route-r1')).toBeTruthy();
   });
 
   it('creates a route', async () => {
