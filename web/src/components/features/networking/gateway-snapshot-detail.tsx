@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import type { GatewaySnapshot } from 'trusted-platform-sdk';
+import { GatewayAdmittedVTEPs, type GatewayOverlay } from './gateway-admitted-vteps';
 
 /**
  * Renders one gateway's datapath: what its services actually programmed,
@@ -58,6 +59,8 @@ export function GatewaySnapshotDetail({ snapshot }: GatewaySnapshotDetailProps) 
   const peers = snapshot.bgp?.peers ?? [];
   const tunnels = snapshot.tunnels ?? [];
   const uplinks = snapshot.uplinks ?? [];
+  // The SDK type has no overlay field yet (#2051); the snapshot GET carries it.
+  const overlay = (snapshot as GatewaySnapshot & { overlay?: GatewayOverlay }).overlay;
 
   return (
     <div className="space-y-6" data-testid="gateway-snapshot-detail">
@@ -326,6 +329,7 @@ export function GatewaySnapshotDetail({ snapshot }: GatewaySnapshotDetailProps) 
                 </dl>
               </div>
             )}
+            {overlay && <GatewayAdmittedVTEPs overlay={overlay} />}
           </section>
         </CardContent>
       </Card>

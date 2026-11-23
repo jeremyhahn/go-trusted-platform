@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { GatewaySnapshot } from 'trusted-platform-sdk';
 
 import { GatewaySnapshotDetail } from './gateway-snapshot-detail';
+import type { GatewayOverlay } from './gateway-admitted-vteps';
 
 // The datapath detail renders only the sections a gateway actually
 // reports (#594): an absent section means "not running", and must not be
@@ -139,5 +140,21 @@ describe('GatewaySnapshotDetail', () => {
     );
 
     expect(screen.getByText('Last error: netlink: device busy')).toBeDefined();
+  });
+
+  it('renders the overlay section only when the snapshot reports one', () => {
+    render(<GatewaySnapshotDetail snapshot={snapshot()} />);
+    expect(screen.queryByTestId('gateway-overlay-summary')).toBeNull();
+    cleanup();
+
+    // The SDK type has no overlay field yet (#2051): the same cast the
+    // component reads it through.
+    const withOverlay = {
+      ...snapshot(),
+      overlay: { running: true, admitted_vteps: [{ vtep: '192.0.2.10' }] },
+    } as GatewaySnapshot & { overlay?: GatewayOverlay };
+    render(<GatewaySnapshotDetail snapshot={withOverlay} />);
+    expect(screen.getByTestId('gateway-overlay-summary')).toBeDefined();
+    expect(screen.getAllByTestId('gateway-admitted-vtep-row')).toHaveLength(1);
   });
 });
