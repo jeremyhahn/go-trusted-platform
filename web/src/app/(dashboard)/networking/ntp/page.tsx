@@ -65,6 +65,10 @@ export default function NTPPage() {
   } = useCapabilities();
   const statusCapability = capability('GET /api/v1/ntp/status');
   const ntpEnabled = !capsLoading && statusCapability.enabled;
+  // The sources read follows its own op: a server can offer the status read
+  // without GET /api/v1/ntp/sources.
+  const sourcesCapability = capability('GET /api/v1/ntp/sources');
+  const sourcesEnabled = !capsLoading && sourcesCapability.enabled;
 
   const {
     data: statusData,
@@ -94,7 +98,7 @@ export default function NTPPage() {
     isFetching: sourcesFetching,
     refetch: fetchSources,
   } = useApi(() => ntp.listSources(), [], {
-    enabled: ntpEnabled,
+    enabled: sourcesEnabled,
     onError: (err) => {
       toast({
         title: 'Error',
@@ -122,7 +126,9 @@ export default function NTPPage() {
       return;
     }
     void fetchStatus();
-    void fetchSources();
+    if (sourcesEnabled) {
+      void fetchSources();
+    }
   };
 
   const handleStep = async () => {
@@ -294,48 +300,54 @@ export default function NTPPage() {
           <CardDescription>Configured time sources</CardDescription>
         </CardHeader>
         <CardContent>
-          <Table data-testid="ntp-sources-table">
-            <TableHeader>
-              <TableRow>
-                <TableHead>Address</TableHead>
-                <TableHead>Mode</TableHead>
-                <TableHead>State</TableHead>
-                <TableHead>Stratum</TableHead>
-                <TableHead>Poll (s)</TableHead>
-                <TableHead>Reach</TableHead>
-                <TableHead>Offset</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {sourcesError && !sourcesLoading ? (
-                <TableRow data-testid="ntp-sources-error">
-                  <TableCell colSpan={7} className="text-center text-destructive">
-                    Failed to load NTP sources: {sourcesError.message}
-                  </TableCell>
-                </TableRow>
-              ) : sources.length === 0 ? (
+          {!capsLoading && !capsError && !sourcesCapability.enabled ? (
+            <p data-testid="ntp-sources-not-enabled" className="text-muted-foreground">
+              {sourcesCapability.reason}
+            </p>
+          ) : (
+            <Table data-testid="ntp-sources-table">
+              <TableHeader>
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground">
-                    {sourcesLoading ? 'Loading…' : 'No sources configured'}
-                  </TableCell>
+                  <TableHead>Address</TableHead>
+                  <TableHead>Mode</TableHead>
+                  <TableHead>State</TableHead>
+                  <TableHead>Stratum</TableHead>
+                  <TableHead>Poll (s)</TableHead>
+                  <TableHead>Reach</TableHead>
+                  <TableHead>Offset</TableHead>
                 </TableRow>
-              ) : (
-                sources.map((s) => (
-                  <TableRow key={s.address}>
-                    <TableCell className="font-mono">{s.address}</TableCell>
-                    <TableCell>{s.mode}</TableCell>
-                    <TableCell>
-                      <Badge variant={s.reachable ? 'secondary' : 'destructive'}>{s.state}</Badge>
+              </TableHeader>
+              <TableBody>
+                {sourcesError && !sourcesLoading ? (
+                  <TableRow data-testid="ntp-sources-error">
+                    <TableCell colSpan={7} className="text-center text-destructive">
+                      Failed to load NTP sources: {sourcesError.message}
                     </TableCell>
-                    <TableCell>{s.stratum}</TableCell>
-                    <TableCell>{s.pollSeconds}</TableCell>
-                    <TableCell>{s.reach.toString(8)}</TableCell>
-                    <TableCell>{formatOffset(s.offsetSeconds)}</TableCell>
                   </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
+                ) : sources.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center text-muted-foreground">
+                      {sourcesLoading ? 'Loading…' : 'No sources configured'}
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  sources.map((s) => (
+                    <TableRow key={s.address}>
+                      <TableCell className="font-mono">{s.address}</TableCell>
+                      <TableCell>{s.mode}</TableCell>
+                      <TableCell>
+                        <Badge variant={s.reachable ? 'secondary' : 'destructive'}>{s.state}</Badge>
+                      </TableCell>
+                      <TableCell>{s.stratum}</TableCell>
+                      <TableCell>{s.pollSeconds}</TableCell>
+                      <TableCell>{s.reach.toString(8)}</TableCell>
+                      <TableCell>{formatOffset(s.offsetSeconds)}</TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
     </div>
