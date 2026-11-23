@@ -629,7 +629,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
 | `TenantService.ListTenants` | - | - | - | - | missing |
-| `TenantService.GetTenant` | `GET /{id}` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` | - | `auth.spec.ts`<br>`dashboard.spec.ts`<br>`tenant.spec.ts` | covered |
+| `TenantService.GetTenant` | `GET /{id}` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx`<br>`admin/tenant/page.tsx` | - | `auth.spec.ts`<br>`dashboard.spec.ts`<br>`tenant.spec.ts`<br>`admin-workspace.spec.ts` | covered |
 | `TenantService.GetTenantByName` | `GET /by-name/{name}` | - | - | - | missing |
 | `TenantService.CreateTenant` | - | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` (read-only) | - | - | partial |
 | `TenantService.UpdateTenant` | `PUT /{id}` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` (read-only) | - | - | partial |
@@ -646,7 +646,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `TenantService.InitTenantBarrier` | `POST /{id}/barrier/init` | `(dashboard)/tenant/barrier/page.tsx` | - | `tenant-barrier.spec.ts` | covered |
 | `TenantService.UnsealTenantBarrier` | `POST /{id}/barrier/unseal` | `(dashboard)/tenant/barrier/page.tsx` | - | `tenant-barrier.spec.ts` | covered |
 | `TenantService.SealTenantBarrier` | `POST /{id}/barrier/seal` | `(dashboard)/tenant/barrier/page.tsx` | - | `tenant-barrier.spec.ts` | covered |
-| `TenantService.GetTenantBarrierStatus` | `GET /{id}` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` | - | `auth.spec.ts`<br>`dashboard.spec.ts`<br>`tenant.spec.ts` | covered |
+| `TenantService.GetTenantBarrierStatus` | `GET /{id}/barrier` | `(dashboard)/tenant/barrier/page.tsx` | - | `tenant-barrier.spec.ts` | covered |
 
 ## TPMService (`tpm.proto`)
 
