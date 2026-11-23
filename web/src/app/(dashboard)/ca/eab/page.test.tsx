@@ -13,6 +13,7 @@ type Verdict = { valid: boolean };
 const { validate } = vi.hoisted(() => ({ validate: vi.fn() }));
 const listState = vi.hoisted(() => ({ credentials: [] as Array<Record<string, unknown>> }));
 const caps = vi.hoisted(() => ({ capability: vi.fn() }));
+const listArgs = vi.hoisted(() => ({ calls: [] as unknown[] }));
 
 vi.mock('next/link', () => ({
   default: ({ href, children }: { href: string; children: ReactNode }) => (
@@ -29,13 +30,16 @@ vi.mock('@/hooks', () => ({
     validate: { mutateAsync: validate },
     service: { getByKeyId: vi.fn() },
   }),
-  useEABList: () => ({
-    data: { credentials: listState.credentials },
-    error: null,
-    isLoading: false,
-    isFetching: false,
-    refetch: vi.fn(),
-  }),
+  useEABList: (opts?: unknown) => {
+    listArgs.calls.push(opts);
+    return {
+      data: { credentials: listState.credentials },
+      error: null,
+      isLoading: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    };
+  },
 }));
 
 vi.mock('@/hooks/use-capabilities', () => ({
@@ -46,6 +50,7 @@ beforeEach(() => {
   caps.capability.mockReset();
   caps.capability.mockImplementation(() => ({ enabled: true }));
   listState.credentials.length = 0;
+  listArgs.calls.length = 0;
 });
 
 function deferred() {
@@ -200,5 +205,47 @@ describe('EABCredentialsPage capability gate', () => {
     fill('key-a', 'hmac-a');
     await clickValidate();
     expect(validate).not.toHaveBeenCalled();
+  });
+});
+
+// #2050: the list read itself is gated on GET /api/v1/eab/credentials. When
+// the server does not offer it, the page does not query and says why.
+const LIST_OP = 'GET /api/v1/eab/credentials';
+
+function listOff() {
+  caps.capability.mockImplementation((op: string) =>
+    op === LIST_OP ? { enabled: false, reason: 'not-configured: eab' } : { enabled: true },
+  );
+}
+
+function lastListOpts(): { enabled?: boolean } | undefined {
+  return listArgs.calls[listArgs.calls.length - 1] as { enabled?: boolean } | undefined;
+}
+
+describe('EABCredentialsPage list gate', () => {
+  afterEach(cleanup);
+
+  it('shows the not-enabled state with the reason and no table when the list is not offered', () => {
+    listOff();
+    addCredential();
+    render(<EABCredentialsPage />);
+    const state = screen.getByTestId('eab-list-not-enabled');
+    expect(state.textContent).toContain('EAB credentials are not enabled');
+    expect(state.textContent).toContain('not-configured: eab');
+    expect(screen.queryByTestId('eab-row-1700000000000000001')).toBeNull();
+  });
+
+  it('does not enable the list query when the list is withheld', () => {
+    listOff();
+    render(<EABCredentialsPage />);
+    expect(lastListOpts()?.enabled).toBe(false);
+  });
+
+  it('enables the list query and shows the table when the list is offered', () => {
+    addCredential();
+    render(<EABCredentialsPage />);
+    expect(lastListOpts()?.enabled).toBe(true);
+    expect(screen.getByTestId('eab-row-1700000000000000001')).not.toBeNull();
+    expect(screen.queryByTestId('eab-list-not-enabled')).toBeNull();
   });
 });
