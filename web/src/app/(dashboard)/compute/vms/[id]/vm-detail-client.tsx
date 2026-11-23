@@ -48,6 +48,8 @@ import type { VerifyVMAttestationResponse } from 'trusted-platform-sdk';
 import type { VMDetail } from '@/types/infrastructure';
 import { toVMDetail, VM_PCRS_NOT_APPRAISED, vmVerifyHeadline } from '@/lib/vm-detail';
 import { VMOperations } from './vm-operations';
+import { useCapabilities } from '@/hooks/use-capabilities';
+import { Gated } from '@/components/features/capabilities/gated';
 
 const statusColors = {
   running: 'bg-green-500/10 text-green-500 border-green-500/20',
@@ -67,6 +69,7 @@ export default function VMDetailPage() {
   const compute = useCompute();
   const { toast } = useToast();
   const verifyAttestation = useVMAttestationVerify(vmId);
+  const { capability } = useCapabilities();
   const [verifyConfirmOpen, setVerifyConfirmOpen] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerifyVMAttestationResponse | null>(null);
   const [verifyError, setVerifyError] = useState<string | null>(null);
@@ -324,6 +327,7 @@ export default function VMDetailPage() {
   const formatMemory = (mb: number) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
   const formatStorage = (mb: number) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
   const verifyGate = vmVerifyGate(vm.status, actionLoading);
+  const attestCap = capability('POST /api/v1/compute/vms/{id}/attest');
 
   return (
     <div className="space-y-6">
@@ -386,15 +390,17 @@ export default function VMDetailPage() {
               Resume
             </Button>
           )}
-          <Button
-            variant="outline"
-            onClick={() => setVerifyConfirmOpen(true)}
-            disabled={!verifyGate.enabled}
-            title={verifyGate.reason ?? undefined}
-          >
-            <ShieldCheck className="mr-2 h-4 w-4" />
-            Verify Attestation
-          </Button>
+          <Gated op="POST /api/v1/compute/vms/{id}/attest/verify">
+            <Button
+              variant="outline"
+              onClick={() => setVerifyConfirmOpen(true)}
+              disabled={!verifyGate.enabled || !attestCap.enabled}
+              title={verifyGate.reason ?? (attestCap.enabled ? undefined : attestCap.reason) ?? undefined}
+            >
+              <ShieldCheck className="mr-2 h-4 w-4" />
+              Verify Attestation
+            </Button>
+          </Gated>
           <Button variant="outline" onClick={handleClone} disabled={actionLoading}>
             <Copy className="mr-2 h-4 w-4" />
             Clone
