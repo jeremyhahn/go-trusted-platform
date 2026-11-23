@@ -79,16 +79,21 @@ function summaryRows(): { areas: Array<[string, Counts]>; total: Counts } {
   throw new Error('no **Total** row in the status summary');
 }
 
+// The operation tables end at the summary; the audit table after it reuses the
+// `<Area>.` prefix with the status in its second cell, so it is not counted.
+const operationLines = lines.slice(0, lines.indexOf('## Status summary by area'));
+
 function countRows(area: string): Counts {
   const counts: Counts = [0, 0, 0, 0, 0, 0];
-  for (const l of lines) {
+  for (const l of operationLines) {
     if (!l.startsWith(`| \`${area}.`)) continue;
     const c = cells(l);
     const status = c[c.length - 1];
     counts[0]++;
-    if (status === 'covered') counts[1]++;
-    else if (status === 'partial') counts[2]++;
-    else if (status === 'missing') counts[3]++;
+    // A status may carry a reason after it (`partial: ...`, `not-UI: ...`).
+    if (status.startsWith('covered')) counts[1]++;
+    else if (status.startsWith('partial')) counts[2]++;
+    else if (status.startsWith('missing')) counts[3]++;
     else if (status.startsWith('not-UI')) counts[4]++;
     else if (status.startsWith('blocked')) counts[5]++;
   }
