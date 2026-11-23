@@ -17,6 +17,12 @@ import type {
   RenewCertificateRequest,
   VerifyCertificateRequest,
   SignCSRRequest,
+  InitCARequest,
+  InitCAResponse,
+  InstallCACertificatesRequest,
+  InstallCACertificatesResponse,
+  UninstallCACertificatesRequest,
+  UninstallCACertificatesResponse,
   GetCAInfoResponse,
   IssueCertificateResponse,
   GetCertificateResponse,
@@ -187,6 +193,38 @@ export class CAService extends BaseService {
    */
   async signCSR(request: SignCSRRequest): Promise<ApiResponse<IssueCertificateResponse>> {
     return this.client.post<IssueCertificateResponse>(this.buildUrl('/sign-csr'), request);
+  }
+
+  /**
+   * Initialize the CA: POST /v1/ca/init (scope ca:create).
+   * `force` defaults to false, so an initialized CA is left as it is.
+   */
+  async initCA(request: InitCARequest = {}): Promise<ApiResponse<InitCAResponse>> {
+    return this.client.post<InitCAResponse>(this.buildUrl('/init'), { force: request.force ?? false });
+  }
+
+  /**
+   * Install the CA certificates into the host trust store:
+   * POST /v1/ca/trust/install (scope trust:write).
+   */
+  async installCACertificates(
+    request: InstallCACertificatesRequest = {}
+  ): Promise<ApiResponse<InstallCACertificatesResponse>> {
+    return this.client.post<InstallCACertificatesResponse>(this.buildUrl('/trust/install'), {
+      includeIntermediates: request.includeIntermediates ?? false,
+    });
+  }
+
+  /**
+   * Remove the CA certificates from the host trust store:
+   * POST /v1/ca/trust/uninstall (scope trust:write).
+   */
+  async uninstallCACertificates(
+    request: UninstallCACertificatesRequest = {}
+  ): Promise<ApiResponse<UninstallCACertificatesResponse>> {
+    return this.client.post<UninstallCACertificatesResponse>(this.buildUrl('/trust/uninstall'), {
+      includeIntermediates: request.includeIntermediates ?? false,
+    });
   }
 
   /**
