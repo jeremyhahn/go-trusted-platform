@@ -16,6 +16,7 @@ package v1
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gorilla/mux"
@@ -115,6 +116,32 @@ func TestTenantRoutes_BarrierAndDEKLiveWithBackends(t *testing.T) {
 		c := requireCapability(t, caps, op)
 		assert.True(t, c.Enabled, op)
 		assert.Empty(t, c.Reason, op)
+	}
+}
+
+// TestTenantRoutes_BarrierLiveDEKDarkWithBarrierOnly is the shape the
+// shipping daemon has: the barrier backend is wired from the QRDB tenant
+// client, DEK isolation is off. The barrier ops list live and the DEK ops
+// stay dark with their reason.
+func TestTenantRoutes_BarrierLiveDEKDarkWithBarrierOnly(t *testing.T) {
+	router := tenantFeatureRouter(t, &featureTenantServer{barrier: true, dek: false})
+
+	seal := serveTenant(router, http.MethodPost, "/api/v1/tenants/tenant-a/barrier/seal")
+	assert.NotEqual(t, http.StatusServiceUnavailable, seal.Code, seal.Body.String())
+
+	dek := serveTenant(router, http.MethodGet, "/api/v1/tenants/tenant-a/dek")
+	assert.Equal(t, http.StatusServiceUnavailable, dek.Code, dek.Body.String())
+
+	caps := getCapabilities(t, router)
+	for _, op := range tenantBarrierOps {
+		c := requireCapability(t, caps, op)
+		assert.True(t, c.Enabled, op)
+		assert.Empty(t, c.Reason, op)
+	}
+	for _, op := range tenantDEKOps {
+		c := requireCapability(t, caps, op)
+		assert.False(t, c.Enabled, op)
+		assert.True(t, strings.HasPrefix(c.Reason, "not-configured"), "%s reason %q", op, c.Reason)
 	}
 }
 
