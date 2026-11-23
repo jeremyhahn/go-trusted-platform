@@ -534,7 +534,7 @@ overrides) and the resolved zone set, and returns an immutable `Plan`:
 | The reserved, never-allocatable ranges | gateway HA sync `/31`, host services, every gateway address |
 | A port class's VLANs | the zones that are members of the class |
 | An overlay network's VNI | `E·100000+n` |
-| Whether a tenant's own subnet fits its VRF | CheckTenantSubnet: network prefix, IPv4 /30 or wider, IPv6 /64 or wider, unicast, clear of the reserved ranges and the service VIP pool |
+| Whether a tenant's own subnet fits its VRF | CheckTenantSubnet: network prefix, IPv4 /30 or wider, IPv6 /64 or wider, unicast across the whole prefix, clear of every zone gateway in both families, the reserved ranges and the service VIP pool |
 | A tenant's VRF | TenantVRF: the L3VNI and one L2VNI per network (`E·100000+n`), each network's anycast gateway at `.1`, each subnet passing CheckTenantSubnet and clear of the VRF's other subnets; RD and auto-RT come from the VNIs in the EVPN speaker |
 | A host's platform-VRF address | PlatformHost: host n of the platform-hosts range (`<base>.E.144.0/20`), 1 to 4094; PlatformHostNumber is the reverse |
 

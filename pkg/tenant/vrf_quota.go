@@ -13,6 +13,8 @@
 
 package tenant
 
+import "fmt"
+
 // VRFQuota defines the routing resource quotas for a tenant: its VRFs, the
 // networks inside them and the services it publishes.
 type VRFQuota struct {
@@ -28,7 +30,11 @@ type VRFQuota struct {
 }
 
 // HasCapacity checks if the quota has capacity for the requested resources.
+// A negative count is never valid, so it reports false.
 func (q *VRFQuota) HasCapacity(vrfs, networks, services int64) bool {
+	if vrfs < 0 || networks < 0 || services < 0 {
+		return false
+	}
 	if vrfs > 0 && q.UsedVRFs+vrfs > q.MaxVRFs {
 		return false
 	}
@@ -43,8 +49,14 @@ func (q *VRFQuota) HasCapacity(vrfs, networks, services int64) bool {
 
 // Reserve reserves the specified resources from the quota.
 // It checks every resource before changing any counter, so a refusal
-// returns ErrQuotaExceeded and leaves the quota unchanged.
+// returns ErrQuotaExceeded and leaves the quota unchanged. A negative count
+// returns ErrInvalidRequest before any counter changes.
 func (q *VRFQuota) Reserve(tenantID string, vrfs, networks, services int64) error {
+	if vrfs < 0 || networks < 0 || services < 0 {
+		return ErrInvalidRequest{Reason: fmt.Sprintf(
+			"tenant %s: negative VRF quota reservation (vrfs=%d networks=%d services=%d)",
+			tenantID, vrfs, networks, services)}
+	}
 	if vrfs > 0 && q.UsedVRFs+vrfs > q.MaxVRFs {
 		return ErrQuotaExceeded{
 			TenantID:  tenantID,
@@ -78,11 +90,11 @@ func (q *VRFQuota) Reserve(tenantID string, vrfs, networks, services int64) erro
 }
 
 // Release releases the specified resources back to the quota. No counter
-// goes below zero.
+// goes below zero, and a negative count is treated as zero.
 func (q *VRFQuota) Release(vrfs, networks, services int64) {
-	q.UsedVRFs = max(0, q.UsedVRFs-vrfs)
-	q.UsedNetworks = max(0, q.UsedNetworks-networks)
-	q.UsedServices = max(0, q.UsedServices-services)
+	q.UsedVRFs = max(0, q.UsedVRFs-max(0, vrfs))
+	q.UsedNetworks = max(0, q.UsedNetworks-max(0, networks))
+	q.UsedServices = max(0, q.UsedServices-max(0, services))
 }
 
 // SetLimits copies the limits of l into q and leaves q's usage counters
