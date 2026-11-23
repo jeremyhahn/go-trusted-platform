@@ -62,6 +62,16 @@ func (v iamRESTTokenVerifier) Verify(ctx context.Context, token string) (*restia
 	return out, nil
 }
 
+// IAMRESTTokenVerifier returns the daemon's IAM token service as the REST
+// TokenVerifier, for the console's IAM router (serve.go). It is an untyped
+// nil when the daemon has no token service, so the route keeps its 503.
+func (d *Daemon) IAMRESTTokenVerifier() restiam.TokenVerifier {
+	if d.iamTokenService == nil {
+		return nil
+	}
+	return iamRESTTokenVerifier{svc: d.iamTokenService}
+}
+
 // iamWriteDeletes are the DELETE routes that change a membership rather than
 // delete an entity: RevokeRole and RemoveGroupMember, both iam:write in the
 // gRPC catalog (pkg/api/grpc/method_permissions.go). They are matched as a
