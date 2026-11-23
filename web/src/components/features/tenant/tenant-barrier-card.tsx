@@ -107,9 +107,10 @@ export function TenantBarrierCard({ tenantId }: { tenantId: string }) {
               value={unsealKey}
               onChange={(e) => setUnsealKey(e.target.value)}
             />
+            <p className="text-xs text-muted-foreground">The tenant barrier key, base64-encoded. The server refuses an empty key.</p>
           </div>
           <Gated op="POST /api/v1/tenants/{id}/barrier/unseal">
-            <Button disabled={busy} onClick={() => run(() => barrier.unseal(tenantId, unsealKey), () => setUnsealKey(''))}>
+            <Button disabled={busy || unsealKey.trim() === ''} onClick={() => run(() => barrier.unseal(tenantId, unsealKey), () => setUnsealKey(''))}>
               Unseal
             </Button>
           </Gated>
