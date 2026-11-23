@@ -9,6 +9,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Gated } from '@/components/features/capabilities/gated';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Dialog,
@@ -114,10 +115,12 @@ export default function VTPMTemplatesPage() {
             Golden vTPM state that new bundles are cloned from.
           </p>
         </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="mr-2 h-4 w-4" />
-          New template
-        </Button>
+        <Gated op="POST /api/v1/vtpm/templates">
+          <Button onClick={() => setCreateOpen(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            New template
+          </Button>
+        </Gated>
       </div>
 
       <Card>
@@ -148,15 +151,21 @@ export default function VTPMTemplatesPage() {
                     </Badge>
                   </TableCell>
                   <TableCell className="space-x-2 text-right">
-                    <Button variant="outline" size="sm" onClick={() => handleDetails(t.id)}>
-                      Details
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => setCloneFrom(t.id)}>
-                      Clone
-                    </Button>
-                    <Button variant="destructive" size="sm" onClick={() => setDeleteId(t.id)}>
-                      Delete
-                    </Button>
+                    <Gated op="GET /api/v1/vtpm/templates/{id}">
+                      <Button variant="outline" size="sm" onClick={() => handleDetails(t.id)}>
+                        Details
+                      </Button>
+                    </Gated>
+                    <Gated op="POST /api/v1/vtpm/templates/{id}/clone">
+                      <Button variant="outline" size="sm" onClick={() => setCloneFrom(t.id)}>
+                        Clone
+                      </Button>
+                    </Gated>
+                    <Gated op="DELETE /api/v1/vtpm/templates/{id}">
+                      <Button variant="destructive" size="sm" onClick={() => setDeleteId(t.id)}>
+                        Delete
+                      </Button>
+                    </Gated>
                   </TableCell>
                 </TableRow>
               ))}
