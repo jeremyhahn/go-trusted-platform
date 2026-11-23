@@ -716,6 +716,30 @@ func TestPXEGRPCService_SetDeviceEnrolled(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
 	})
+
+	t.Run("refuses a blank certificate serial", func(t *testing.T) {
+		blank, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{
+			MacAddress: "02:00:00:00:00:03",
+			PortId:     "port-1",
+		})
+		require.NoError(t, err)
+		blankID := blank.GetDevice().GetId()
+		beforeState := mockService.devices[blankID].State
+		beforeSerial := mockService.devices[blankID].CertificateSerial
+
+		resp, err := svc.SetDeviceEnrolled(ctx, &platformv1.SetPXEDeviceEnrolledRequest{
+			DeviceId:          blankID,
+			CertificateSerial: "   ",
+		})
+
+		require.Error(t, err)
+		assert.Nil(t, resp)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.InvalidArgument, st.Code())
+		assert.Equal(t, beforeState, mockService.devices[blankID].State)
+		assert.Equal(t, beforeSerial, mockService.devices[blankID].CertificateSerial)
+	})
 }
 
 // TestPXEGRPCService_Authorize tests authorizing a device.
@@ -862,6 +886,30 @@ func TestPXEGRPCService_Quarantine(t *testing.T) {
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
+	})
+
+	t.Run("refuses a blank reason", func(t *testing.T) {
+		blank, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{
+			MacAddress: "02:00:00:00:00:02",
+			PortId:     "port-1",
+		})
+		require.NoError(t, err)
+		blankID := blank.GetDevice().GetId()
+		beforeState := mockService.devices[blankID].State
+		beforeSerial := mockService.devices[blankID].CertificateSerial
+
+		resp, err := svc.Quarantine(ctx, &platformv1.QuarantinePXEDeviceRequest{
+			DeviceId: blankID,
+			Reason:   "   ",
+		})
+
+		require.Error(t, err)
+		assert.Nil(t, resp)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.InvalidArgument, st.Code())
+		assert.Equal(t, beforeState, mockService.devices[blankID].State)
+		assert.Equal(t, beforeSerial, mockService.devices[blankID].CertificateSerial)
 	})
 }
 
