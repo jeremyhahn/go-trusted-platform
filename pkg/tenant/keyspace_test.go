@@ -34,6 +34,10 @@ func TestKeyspacePaths(t *testing.T) {
 		{"node param", func() (string, error) { return NodeParam("acme", "n1", NodeParamHostname) }, "tenants/acme/nodes/n1/params/hostname"},
 		{"node secret", func() (string, error) { return NodeSecret("acme", "n1", NodeSecretTPMSRKAuth) }, "tenants/acme/nodes/n1/secrets/tpm/srk_auth"},
 		{"node prefix", func() (string, error) { return NodePrefix("acme", "n1") }, "tenants/acme/nodes/n1"},
+		{"vrf resource", func() (string, error) { return ResourcePath("acme", KindVRFs, "v1") }, "tenants/acme/vrfs/v1"},
+		{"service resource", func() (string, error) { return ResourcePath("acme", KindServices, "s1") }, "tenants/acme/services/s1"},
+		{"vrf param", func() (string, error) { return VRFParam("acme", "v1", VRFParamL3VNI) }, "tenants/acme/vrfs/v1/params/l3vni"},
+		{"vrf prefix", func() (string, error) { return VRFPrefix("acme", "v1") }, "tenants/acme/vrfs/v1"},
 	}
 	for _, tc := range tests {
 		got, err := tc.got()
