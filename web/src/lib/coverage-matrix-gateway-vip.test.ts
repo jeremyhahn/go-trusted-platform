@@ -74,4 +74,28 @@ describe('coverage matrix: GatewayService VIPs, status and perf', () => {
       expect(text, file).toContain("from './fixtures'");
     }
   });
+
+  it('the VIP spec drives each VIP write, the VIP read and the conntrack read through its control', () => {
+    // Codex round 4 on #2163: rows marked covered must be exercised, not
+    // only visited. AddVIP from the form, GetVIP through Details,
+    // SetVIPBackends through Save, RemoveVIP through the confirm, and
+    // GetPerfConntrack through its load button; each write counted once.
+    const text = fs.readFileSync(path.resolve(process.cwd(), 'e2e/real-server/gateway-vips.spec.ts'), 'utf8');
+    for (const want of [
+      "getByTestId('vip-add').click()",
+      'vip-details-',
+      'vip-save-',
+      'vip-remove-confirm',
+      "getByTestId('perf-conntrack-load').click()",
+      "r.method() === 'POST'",
+      "r.method() === 'PUT'",
+      "r.method() === 'DELETE'",
+      'VIPS_PATH',
+      'toHaveLength(1)',
+      'sdk.gateway.removeVIP(',
+    ]) {
+      expect(text, want).toContain(want);
+    }
+    expect(text).not.toContain('send nothing');
+  });
 });
