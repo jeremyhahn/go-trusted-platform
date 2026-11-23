@@ -376,7 +376,19 @@ func TestRegistryList(t *testing.T) {
 // TestRegistryListHonoursOffsetAndWalksEveryPage proves List skips Offset
 // entries and follows the storage cursor past the first page (#2063).
 func TestRegistryListHonoursOffsetAndWalksEveryPage(t *testing.T) {
-	reg := newTestRegistry(t)
+	// Storage hands out at most 7 entries per List call, so the 120 entries
+	// below span many storage pages and Registry.List must follow the cursor.
+	mock := newMockStorageClient()
+	mock.maxPage = 7
+	storage, err := NewQuicBaaSStorage(mock)
+	if err != nil {
+		t.Fatalf("NewQuicBaaSStorage: %v", err)
+	}
+	reg, err := NewRegistry(validTestConfig(), testLogger(), WithStorage(storage))
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = reg.Close() })
 	ctx := context.Background()
 
 	// Each PutManifest stores the tag and its digest-keyed copy; a distinct
@@ -391,12 +403,41 @@ func TestRegistryListHonoursOffsetAndWalksEveryPage(t *testing.T) {
 		}
 	}
 
+	mock.mu.Lock()
+	mock.listCalls = 0
+	mock.mu.Unlock()
 	full, err := reg.List(ctx, RegistryListOptions{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if len(full) != 120 {
 		t.Fatalf("List with no limit returned %d manifests, want 120", len(full))
+	}
+	mock.mu.Lock()
+	calls := mock.listCalls
+	mock.mu.Unlock()
+	if calls <= 1 {
+		t.Errorf("List made %d storage List calls, want more than 1 (page size 7)", calls)
+	}
+	seen := make(map[string]bool, len(full))
+	for _, m := range full {
+		seen[m.Reference] = true
+	}
+	if len(seen) != 120 {
+		t.Errorf("List returned %d distinct References, want 120", len(seen))
+	}
+
+	window, err := reg.List(ctx, RegistryListOptions{Offset: 5, Limit: 4})
+	if err != nil {
+		t.Fatalf("List offset 5 limit 4: %v", err)
+	}
+	if len(window) != 4 {
+		t.Fatalf("List offset 5 limit 4 returned %d manifests, want 4", len(window))
+	}
+	for i := range window {
+		if window[i].Reference != full[5+i].Reference {
+			t.Errorf("window[%d].Reference = %q, want %q (full[%d])", i, window[i].Reference, full[5+i].Reference, 5+i)
+		}
 	}
 
 	page, err := reg.List(ctx, RegistryListOptions{Offset: 2, Limit: 2})
