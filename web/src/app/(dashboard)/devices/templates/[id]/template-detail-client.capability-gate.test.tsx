@@ -13,10 +13,10 @@ vi.mock('next/navigation', () => ({
   useRouter: () => router,
 }));
 
-const caps = vi.hoisted(() => ({ capability: vi.fn() }));
+const caps = vi.hoisted(() => ({ capability: vi.fn(), loading: false }));
 vi.mock('@/hooks/use-capabilities', () => ({
   useCapabilities: () => ({
-    loading: false,
+    loading: caps.loading,
     error: undefined,
     capability: caps.capability,
   }),
@@ -30,9 +30,11 @@ vi.mock('@/hooks', () => ({
   useDevice: () => h.device,
   useToast: () => ({ toast: h.toast }),
   useApi: (fetcher: () => unknown, _deps: unknown[], opts?: { enabled?: boolean }) => {
-    if (opts?.enabled !== false) {
-      fetcher();
+    // A disabled query neither fetches nor reports loading, like the real hook.
+    if (opts?.enabled === false) {
+      return { data: undefined, isLoading: false, loading: false, error: null, refetch: vi.fn() };
     }
+    fetcher();
     return {
       data: {
         id: '42',
@@ -85,6 +87,7 @@ function expectWithheld(el: HTMLButtonElement, op: string) {
 
 describe('TemplateDetailClient capability gate', () => {
   beforeEach(() => {
+    caps.loading = false;
     caps.capability.mockReset();
     caps.capability.mockImplementation(() => ({ enabled: true }));
     h.device.getTemplate.mockReset();
@@ -97,6 +100,16 @@ describe('TemplateDetailClient capability gate', () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+  });
+
+  it('shows the loading state, not an error, while the capabilities load', () => {
+    caps.loading = true;
+    render(<TemplateDetailClient />);
+
+    expect(screen.getByText('Loading template...')).toBeTruthy();
+    expect(screen.queryByText('Error Loading Template')).toBeNull();
+    expect(screen.queryByText('Template not found')).toBeNull();
+    expect(h.device.getTemplate).not.toHaveBeenCalled();
   });
 
   it('does not fetch the template and shows the reason when the get op is off', () => {
