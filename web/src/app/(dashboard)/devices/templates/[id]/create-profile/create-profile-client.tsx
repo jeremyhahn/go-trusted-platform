@@ -26,6 +26,7 @@ import { useToast, useApi, useDevice, useMutation } from '@/hooks';
 import type { DeviceRole, CreateProfileFromTemplateRequest } from 'trusted-platform-sdk';
 import { deviceRoleLabel } from '@/lib/device-role';
 import { profileOverrides } from '@/lib/device-profile-networks';
+import { assignedSessionId } from '@/lib/provisioning-assign';
 
 // ============================================================================
 // Helper Functions
@@ -52,8 +53,9 @@ export default function CreateProfileClient() {
 
   const [staticIp, setStaticIp] = useState('');
   // #2046: the sessions list's Assign Template opens this page with the
-  // session's identifiers and id; the created profile then fulfils it.
-  const sessionId = searchParams?.get('sessionId') ?? '';
+  // session's identifiers and id; the created profile then fulfils it. A link
+  // naming more than one session fulfils none (Codex P1 on #2367).
+  const { sessionId, ambiguous: sessionAmbiguous } = assignedSessionId(searchParams);
   const [ekSerial, setEkSerial] = useState(() => searchParams?.get('ekSerial') ?? '');
   const [macAddress, setMacAddress] = useState(() => searchParams?.get('macAddress') ?? '');
   const [createdProfileId, setCreatedProfileId] = useState<string | null>(null);
@@ -130,6 +132,7 @@ export default function CreateProfileClient() {
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (sessionAmbiguous) return;
     setFulfilError(null);
 
     try {
@@ -255,6 +258,17 @@ export default function CreateProfileClient() {
 
       <Separator />
 
+      {sessionAmbiguous && (
+        <Alert variant="destructive" data-testid="create-profile-session-ambiguous">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Ambiguous provisioning link</AlertTitle>
+          <AlertDescription>
+            This link names more than one provisioning session, so no session can be fulfilled from it. Open
+            Assign Template from the provisioning sessions list again.
+          </AlertDescription>
+        </Alert>
+      )}
+
       {sessionId && (
         <Alert data-testid="create-profile-session">
           <AlertCircle className="h-4 w-4" />
@@ -337,9 +351,9 @@ export default function CreateProfileClient() {
           >
             Cancel
           </Button>
-          {sessionId ? (
+          {sessionId || sessionAmbiguous ? (
             <Gated op="POST /api/v1/provisioning/sessions/{sessionID}/fulfill">
-              <Button type="submit" disabled={createProfileMutation.isLoading}>
+              <Button type="submit" disabled={createProfileMutation.isLoading || sessionAmbiguous}>
                 {createProfileMutation.isLoading && (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 )}

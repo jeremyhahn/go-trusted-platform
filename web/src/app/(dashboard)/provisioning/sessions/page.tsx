@@ -61,6 +61,7 @@ import { useToast, useProvisioningSessions, useDeviceTemplates } from '@/hooks';
 import type { ProvisioningSession } from 'trusted-platform-sdk';
 import { Gated } from '@/components/features/capabilities/gated';
 import { useCapabilities } from '@/hooks/use-capabilities';
+import { assignTemplateHref } from '@/lib/provisioning-assign';
 
 // ============================================================================
 // Types
@@ -151,9 +152,7 @@ function AssignTemplateDialog({ session, onClose, onAssign, isLoading }: AssignT
       });
       return;
     }
-    router.push(
-      `/devices/templates/${selectedTemplateId}/create-profile?ekSerial=${session.ek_serial ?? ''}&macAddress=${session.mac_address ?? ''}&sessionId=${session.id}`
-    );
+    router.push(assignTemplateHref(selectedTemplateId, session));
   };
 
   return (
