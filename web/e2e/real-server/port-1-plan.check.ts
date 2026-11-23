@@ -5,8 +5,11 @@
  *   node web/e2e/real-server/port-1-plan.check.ts
  *
  * (Node strips the types.) The nine mocked part-1 specs are removed, and
- * docs/plans/1665-port-1.md lists each of the nine port specs as done and
- * every `// gap:` and `// covered:` line of them for the route audit.
+ * docs/plans/1665-port-1.md lists each of the fifteen port specs as done and
+ * every `// gap:` and `// covered:` line of the nine devices/iam/invitations
+ * ports for the route audit. All fifteen run on the real-server fixtures
+ * with no route mock or mock import, each `// covered:` reference is a test
+ * line, and the round-4 page fixes are listed as fixed, not as defects.
  * Exits non-zero on the first failure.
  */
 import assert from 'node:assert/strict';
