@@ -223,8 +223,8 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `DeviceService.FindMatchingProfile` | `POST /device/profiles/match` | - | - | - | missing |
 | `DeviceService.CountProfiles` | `GET /device/profiles/count` | - | - | - | missing |
 | `DeviceService.ActivateDevice` | `POST /device/activate-json` | - | - | - | missing |
-| `DeviceService.AttestDevice` | `POST /devices/{id}/attest` | `(dashboard)/devices/[id]/page.tsx` | - | - | partial |
-| `DeviceService.RecordAttestationCertificate` | - | - | - | - | missing |
+| `DeviceService.AttestDevice` | `POST /devices/{id}/attest` | `(dashboard)/devices/[id]/page.tsx` | - | `real-server/device-attestation.spec.ts` | covered |
+| `DeviceService.RecordAttestationCertificate` | `POST /devices/{id:[0-9]+}/attest-cert/record` | `(dashboard)/devices/[id]/page.tsx` | - | `real-server/device-attestation.spec.ts` | covered |
 | `DeviceService.DisableDevice` | `POST /devices/{id:[0-9]+}/disable` | `(dashboard)/devices/[id]/page.tsx`<br>`(dashboard)/devices/page.tsx` | - | `attest-cert-record.spec.ts`<br>`attestation-reports.spec.ts`<br>`dashboard.spec.ts` (+1) | covered |
 | `DeviceService.EnableDevice` | `POST /devices/{id:[0-9]+}/enable` | `(dashboard)/devices/[id]/page.tsx`<br>`(dashboard)/devices/page.tsx` | - | `attest-cert-record.spec.ts`<br>`attestation-reports.spec.ts`<br>`dashboard.spec.ts` (+1) | covered |
 | `DeviceService.BootCertificate` | `POST /device/boot/certificate` | - | - | - | not-UI: machine-facing diskless boot route |
@@ -739,7 +739,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | ComputeService | 37 | 14 | 2 | 16 | 5 | 0 |
 | ConfigDeliveryService | 7 | 1 | 2 | 0 | 4 | 0 |
 | PlatformDaemon | 19 | 1 | 6 | 8 | 4 | 0 |
-| DeviceService | 32 | 10 | 7 | 15 | 0 | 0 |
+| DeviceService | 32 | 12 | 6 | 14 | 0 | 0 |
 | EABService | 11 | 0 | 0 | 11 | 0 | 0 |
 | FIDO2Service | 5 | 0 | 0 | 0 | 5 | 0 |
 | GatewayService | 29 | 4 | 3 | 22 | 0 | 0 |
