@@ -76,6 +76,9 @@ describe('DeviceVerdictsPage', () => {
     expect(second.textContent).toContain('Failed');
     expect(second.textContent).toContain('Compromise');
     expect(second.textContent).toContain('pcr mismatch');
+    expect(screen.getByTestId('verdicts-table')).toBeTruthy();
+    expect(screen.getByTestId('verdict-e1').textContent).toContain('SN-1');
+    expect(screen.getByTestId('verdict-e2').textContent).toContain('SN-2');
   });
 
   it('appends the next poll from the previous cursor', async () => {
