@@ -155,6 +155,20 @@ REST. An unknown name reads as `UNSPECIFIED`. `PENDING_IMPORT` and
 `UNSPECIFIED` have no server name and are refused before sending with
 `key status <status> has no REST name`.
 
+**What the pinned go-quicbaas backend drops (#1948).** With go-quicbaas
+`sdk/go` v0.12.0-alpha (the `go.mod` pin), the embedded KMS transport accepts
+only its own service request types for `ImportKey` and `UpdateKeyStatus`
+(`transport/embedded/handlers_kms.go` `handleKMSImportKey`,
+`handleKMSUpdateKeyStatus`), while the client hands it the client's request
+types. On an embedded KMS backend `POST /api/v1/kms/keys/import` and
+`PUT /api/v1/kms/keys/{name}/status` therefore answer 400 (invalid request
+type) until go-quicbaas converts the client request; treat that backend
+configuration as unsupported for these two calls. The pinned client's
+`ListKeyVersions` conversion also carries no `DisabledAt`, so `disabled_at` in
+`GET /api/v1/kms/keys/{name}/versions` reads 0 even for a disabled version.
+The SDK codecs (`sdk/go/transport/rest/kms_admin.go`) already encode and
+decode both and need no change when the upstream fix lands.
+
 ---
 
 ## 3. Cryptographic operations
