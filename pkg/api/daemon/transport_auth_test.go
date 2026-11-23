@@ -32,7 +32,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
@@ -813,4 +815,34 @@ func TestNew_RefusesEmbeddedQUICPEPPathBeforeSubsystems(t *testing.T) {
 	require.True(t, errors.As(err, &want), "New() error is %T (%v), want ErrEmbeddedPEPUnavailable", err, err)
 	assert.Equal(t, transportQUIC, want.Transport)
 	assert.Nil(t, d, "New() returned a daemon alongside the refusal")
+}
+
+// The interceptor selectGRPCTCPAuth builds under mTLS resolves the
+// certificate's IAM user through the lookup it is given (#1989): a verified
+// certificate that names no IAM user is PermissionDenied, not the
+// Unavailable a missing lookup would give, and the PEP is never asked.
+func TestSelectGRPCTCPAuth_MTLSPassesUserLookup(t *testing.T) {
+	t.Parallel()
+	config := failClosedConfig()
+	config.EnableMTLS = true
+	config.CAService = newMockCAForMCPCoverage()
+	bundle := testutil.GenerateTestTLSBundle(t)
+	config.MTLSClientCAPool = bundle.CAPool
+
+	calls := 0
+	users := &mtlsFakeUsers{}
+	sel, err := selectGRPCTCPAuth(config, nil, mtlsDenyingPEP(&calls), users, logging.DefaultLogger(), nil)
+	require.NoError(t, err)
+	require.NotNil(t, sel.unary)
+
+	ctx := peer.NewContext(context.Background(), &peer.Peer{
+		AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{
+			VerifiedChains: [][]*x509.Certificate{{leafOf(t, bundle.ClientCert), bundle.CACert}},
+		}},
+	})
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) { return "ok", nil }
+	_, err = sel.unary(ctx, "req", &grpc.UnaryServerInfo{FullMethod: mtlsPEPTestMethod}, handler)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err), "err = %v", err)
+	assert.Positive(t, users.calls, "the given user lookup was not consulted")
+	assert.Zero(t, calls, "the PEP was asked for a certificate that names no IAM user")
 }
