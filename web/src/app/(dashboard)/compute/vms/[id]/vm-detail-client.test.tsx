@@ -245,10 +245,12 @@ describe('VMDetailPage loads the SDK VM', () => {
     });
     render(withControlPlane(<VMDetailPage />));
 
-    const error = await screen.findByTestId('vm-detail-error');
+    // The SDK retries a 503 three times with backoff (1 s, 2 s, 4 s) before
+    // it hands the refusal to the page.
+    const error = await screen.findByTestId('vm-detail-error', {}, { timeout: 15000 });
     expect(error.textContent).toContain('not-configured: compute');
     expect(document.querySelector('.animate-spin')).toBeNull();
-  });
+  }, 20000);
 
   it('renders the info card from config', async () => {
     stubControlPlane(sdkRoutes());

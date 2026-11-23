@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { useParams, usePathname, useRouter } from 'next/navigation';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import {
@@ -9,7 +10,6 @@ import {
   Square,
   RotateCw,
   Trash2,
-  Camera,
   RefreshCw,
   Pause,
 } from 'lucide-react';
@@ -25,11 +25,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import type { Snapshot, VM } from 'trusted-platform-sdk';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { VMMetricsCard } from '@/components/features/compute/vm-metrics';
 import { Gated } from '@/components/features/capabilities/gated';
 import { VMMigrateButton } from '@/components/features/compute/vm-migrate-dialog';
 import { useCompute, useMutation, useToast, type MutationError } from '@/hooks';
-import type { VMDetail } from '@/types/infrastructure';
+import type { VMMetrics as WebVMMetrics } from '@/types/infrastructure';
 import { vmStatus } from '@/lib/compute-state';
 
 const statusColors = {
@@ -44,41 +46,59 @@ export default function VMDetailPage() {
   const pathname = usePathname();
   const router = useRouter();
   const vmId = resolveDynamicId(params, pathname, 'vms');
-  const [vm, setVM] = useState<VMDetail | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [vm, setVM] = useState<(VM & { status: ReturnType<typeof vmStatus> }) | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
+  const [snapshotsError, setSnapshotsError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const compute = useCompute();
   const { toast } = useToast();
 
+  const loadErrorText = (err: unknown): string => {
+    if (typeof err === 'string') return err;
+    if (err && typeof err === 'object' && 'message' in err && typeof err.message === 'string') {
+      return err.message;
+    }
+    return 'the control plane refused the request';
+  };
+
   const fetchVM = async () => {
     if (!vmId) {
-      setLoading(false);
+      setLoadError('No VM ID in the address');
       return;
     }
     try {
-      setLoading(true);
       const response = await compute.getVM(vmId);
-      if (response.success && response.data) {
-        // SDK returns { vm: VM }, but we need VMDetail
-        // For now, cast to VMDetail - proper type mapping would be handled by backend
-        setVM({
-          ...(response.data.vm as unknown as VMDetail),
-          status: vmStatus(response.data.vm.state),
-        });
+      if (response.success === false || !response.data?.vm) {
+        setLoadError(loadErrorText(response.error ?? 'the control plane returned no VM'));
+        return;
       }
+      const loaded: VM = response.data.vm;
+      setVM({ ...loaded, status: vmStatus(loaded.state) });
+      setLoadError(null);
     } catch (error) {
-      toast({
-        title: 'Error',
-        description: `Failed to fetch VM details: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        variant: 'destructive',
-      });
-    } finally {
-      setLoading(false);
+      setLoadError(loadErrorText(error));
+    }
+  };
+
+  const fetchSnapshots = async () => {
+    if (!vmId) return;
+    try {
+      const response = await compute.listSnapshots(vmId);
+      if (response.success === false) {
+        setSnapshotsError(loadErrorText(response.error));
+        return;
+      }
+      setSnapshots(response.data?.snapshots ?? []);
+      setSnapshotsError(null);
+    } catch (error) {
+      setSnapshotsError(loadErrorText(error));
     }
   };
 
   useEffect(() => {
     fetchVM();
+    fetchSnapshots();
     if (!vmId) return;
     const interval = setInterval(fetchVM, 5000);
     return () => clearInterval(interval);
@@ -246,7 +266,15 @@ export default function VMDetailPage() {
   };
 
 
-  if (loading || !vm) {
+  if (!vm && loadError) {
+    return (
+      <Alert variant="destructive" data-testid="vm-detail-error">
+        <AlertDescription>Could not load the VM: {loadError}</AlertDescription>
+      </Alert>
+    );
+  }
+
+  if (!vm) {
     return (
       <div className="flex items-center justify-center h-64">
         <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -254,8 +282,9 @@ export default function VMDetailPage() {
     );
   }
 
-  const formatMemory = (mb: number) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
-  const formatStorage = (mb: number) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
+  const vmName = vm.config?.name || vm.id;
+  const disks = vm.config?.disks ?? [];
+  const snapshotName = (s: Snapshot) => s.config?.name || (s as Snapshot & { name?: string }).name || s.id;
 
   return (
     <div className="space-y-6">
@@ -265,7 +294,7 @@ export default function VMDetailPage() {
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div>
-            <h1 className="text-3xl font-bold">{vm.name}</h1>
+            <h1 className="text-3xl font-bold">{vmName}</h1>
             <p className="text-muted-foreground mt-1">Virtual Machine Details</p>
           </div>
         </div>
@@ -347,57 +376,68 @@ export default function VMDetailPage() {
           <CardHeader>
             <CardTitle>VM Information</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-4" data-testid="vm-info">
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground">Status</span>
-              <Badge variant="outline" className={statusColors[vm.status]}>
+              <Badge variant="outline" className={statusColors[vm.status as keyof typeof statusColors]}>
                 {vm.status}
               </Badge>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">vCPUs</span>
-              <span className="font-medium">{vm.vcpus}</span>
+              <span className="text-muted-foreground">CPU</span>
+              <span className="font-medium">
+                {vm.config?.cpu?.cores != null ? `${vm.config.cpu.cores} vCPUs` : '-'}
+              </span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground">Memory</span>
-              <span className="font-medium">{formatMemory(vm.memoryMB)}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Storage</span>
-              <span className="font-medium">{formatStorage(vm.storageMB)}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">IP Address</span>
-              <span className="font-mono text-sm">{vm.ipAddress || '-'}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">OS Type</span>
-              <span className="font-medium capitalize">{vm.osType}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Created</span>
               <span className="font-medium">
-                {formatDistanceToNow(new Date(vm.createdAt), { addSuffix: true })}
+                {vm.config?.memory?.sizeMb != null ? `${vm.config.memory.sizeMb} MB` : '-'}
               </span>
             </div>
+            <div className="flex items-start justify-between gap-4">
+              <span className="text-muted-foreground">Disks</span>
+              <span className="text-right font-mono text-sm">
+                {disks.length === 0
+                  ? '-'
+                  : disks.map((d) => (
+                      <span key={d.id ?? d.path} className="block">
+                        {d.path}
+                        {d.sizeGb != null ? ` (${d.sizeGb} GB)` : ''}
+                      </span>
+                    ))}
+              </span>
+            </div>
+            {vm.hostId && (
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Host</span>
+                <span className="font-mono text-sm">{vm.hostId}</span>
+              </div>
+            )}
+            {vm.createdAt && (
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Created</span>
+                <span className="font-medium">
+                  {formatDistanceToNow(new Date(vm.createdAt), { addSuffix: true })}
+                </span>
+              </div>
+            )}
           </CardContent>
         </Card>
 
-        <VMMetricsCard metrics={vm.metrics} />
+        {vm.metrics && <VMMetricsCard metrics={vm.metrics as unknown as WebVMMetrics} />}
       </div>
 
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle>Snapshots</CardTitle>
-            <Button size="sm">
-              <Camera className="mr-2 h-4 w-4" />
-              Create Snapshot
-            </Button>
-          </div>
+          <CardTitle>Snapshots</CardTitle>
         </CardHeader>
         <CardContent>
-          {vm.snapshots.length === 0 ? (
+          {snapshotsError ? (
+            <p className="text-center text-muted-foreground py-8" data-testid="vm-snapshots-error">
+              Could not list snapshots: {snapshotsError}
+            </p>
+          ) : snapshots.length === 0 ? (
             <p className="text-center text-muted-foreground py-8">No snapshots</p>
           ) : (
             <Table>
@@ -406,23 +446,26 @@ export default function VMDetailPage() {
                   <TableHead>Name</TableHead>
                   <TableHead>Size</TableHead>
                   <TableHead>Created</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {vm.snapshots.map((snapshot) => (
+                {snapshots.map((snapshot) => (
                   <TableRow key={snapshot.id}>
-                    <TableCell className="font-medium">{snapshot.name}</TableCell>
-                    <TableCell>{formatStorage(snapshot.sizeMB)}</TableCell>
-                    <TableCell>
-                      {formatDistanceToNow(new Date(snapshot.createdAt), {
-                        addSuffix: true,
-                      })}
+                    <TableCell className="font-medium">
+                      <Link
+                        href={`/compute/snapshots/${encodeURIComponent(snapshot.id)}?vm=${encodeURIComponent(vmId)}`}
+                        className="hover:underline"
+                      >
+                        {snapshotName(snapshot)}
+                      </Link>
                     </TableCell>
-                    <TableCell className="text-right">
-                      <Button variant="ghost" size="sm">
-                        Restore
-                      </Button>
+                    <TableCell>
+                      {snapshot.sizeBytes != null ? formatStorage(Math.round(snapshot.sizeBytes / (1024 * 1024))) : '-'}
+                    </TableCell>
+                    <TableCell>
+                      {snapshot.createdAt
+                        ? formatDistanceToNow(new Date(snapshot.createdAt), { addSuffix: true })
+                        : '-'}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -433,4 +476,8 @@ export default function VMDetailPage() {
       </Card>
     </div>
   );
+}
+
+function formatStorage(mb: number): string {
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`;
 }
