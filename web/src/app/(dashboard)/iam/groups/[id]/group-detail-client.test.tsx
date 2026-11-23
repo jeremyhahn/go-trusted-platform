@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import GroupDetailClient from "./group-detail-client";
 
@@ -42,7 +42,29 @@ vi.mock("@/hooks", async (importOriginal) => ({
   }),
 }));
 
+const caps = vi.hoisted(() => ({ capability: vi.fn() }));
+
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: caps.capability }),
+}));
+
+const PUT_GROUP = "PUT /api/v1/iam/groups/{id}";
+const DELETE_GROUP = "DELETE /api/v1/iam/groups/{id}";
+const REASON = "not-configured: iam";
+
+function offExcept(off: string) {
+  caps.capability.mockImplementation((op: string) =>
+    op === off ? { enabled: false, reason: REASON } : { enabled: true },
+  );
+}
+
 describe("GroupDetailClient on the embedded IAM backend", () => {
+  beforeEach(() => {
+    caps.capability.mockImplementation(() => ({ enabled: true }));
+    iam.updateGroup.mockReset();
+    iam.deleteGroup.mockReset();
+  });
+
   afterEach(() => {
     cleanup();
     iam.addGroupMember.mockReset();
@@ -82,5 +104,65 @@ describe("GroupDetailClient on the embedded IAM backend", () => {
   it("keeps the read-only member list", () => {
     render(<GroupDetailClient />);
     expect(screen.getByText("u1")).toBeTruthy();
+  });
+});
+
+describe("GroupDetailClient capability gating", () => {
+  beforeEach(() => {
+    caps.capability.mockImplementation(() => ({ enabled: true }));
+    iam.updateGroup.mockReset();
+    iam.deleteGroup.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("gates Save group on PUT /api/v1/iam/groups/{id}", () => {
+    offExcept(PUT_GROUP);
+    render(<GroupDetailClient />);
+    const save = screen.getByRole("button", { name: "Save group" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    expect(save.title).toBe(REASON);
+    expect(save.getAttribute("data-capability-op")).toBe(PUT_GROUP);
+    expect(save.getAttribute("data-capability-enabled")).toBe("false");
+    fireEvent.submit(save.closest("form")!);
+    expect(iam.updateGroup).not.toHaveBeenCalled();
+  });
+
+  it("gates Delete on DELETE /api/v1/iam/groups/{id}", () => {
+    offExcept(DELETE_GROUP);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<GroupDetailClient />);
+    const del = screen.getByRole("button", { name: "Delete" }) as HTMLButtonElement;
+    expect(del.disabled).toBe(true);
+    expect(del.title).toBe(REASON);
+    expect(del.getAttribute("data-capability-op")).toBe(DELETE_GROUP);
+    expect(del.getAttribute("data-capability-enabled")).toBe("false");
+    fireEvent.click(del);
+    expect(iam.deleteGroup).not.toHaveBeenCalled();
+  });
+
+  it("saves through the SDK when the server offers it", () => {
+    render(<GroupDetailClient />);
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "ops2" } });
+    const save = screen.getByRole("button", { name: "Save group" }) as HTMLButtonElement;
+    fireEvent.submit(save.closest("form")!);
+    expect(iam.updateGroup).toHaveBeenCalledTimes(1);
+    expect(iam.updateGroup).toHaveBeenCalledWith({
+      tenantId: "t1",
+      groupId: "g1",
+      name: "ops2",
+      description: "",
+    });
+  });
+
+  it("deletes through the SDK after the confirm when offered", () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<GroupDetailClient />);
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(iam.deleteGroup).toHaveBeenCalledWith("t1", "g1");
   });
 });

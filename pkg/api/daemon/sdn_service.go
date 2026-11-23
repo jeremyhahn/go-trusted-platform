@@ -1574,6 +1574,7 @@ var flowMatchShorthands = map[string][]string{
 // normalizeFlowMatch returns a canonical form of an OpenFlow match: protocol
 // shorthands expanded to their fields, numeric values in decimal, fields
 // de-duplicated and sorted, so two spellings of one switch entry are equal.
+// A bare address keys by the IPv4 form the encoder writes when it has one.
 func normalizeFlowMatch(match string) string {
 	fields := make(map[string]struct{})
 	for _, part := range strings.Split(match, ",") {
@@ -1594,6 +1595,14 @@ func normalizeFlowMatch(match string) string {
 			}
 			if n, err := strconv.ParseUint(v, 0, 64); err == nil {
 				v = strconv.FormatUint(n, 10)
+			} else if ip := net.ParseIP(v); ip != nil {
+				// The encoder writes a bare address as ip.To4(), so
+				// ::ffff:192.0.2.1 and 192.0.2.1 are one switch entry.
+				if ip4 := ip.To4(); ip4 != nil {
+					v = ip4.String()
+				} else {
+					v = ip.String()
+				}
 			} else if _, prefix, err := net.ParseCIDR(v); err == nil {
 				// The OpenFlow encoder writes a prefix's masked network
 				// (10.0.0.1/24 and 10.0.0.0/24 are one switch entry), and

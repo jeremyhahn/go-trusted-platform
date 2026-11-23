@@ -18,6 +18,11 @@ import {
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { EmbeddedIamGate } from '../../embedded-iam-gate';
+import { Gated } from '@/components/features/capabilities/gated';
+import { useCapabilities } from '@/hooks/use-capabilities';
+
+const UPDATE_GROUP_OP = 'PUT /api/v1/iam/groups/{id}';
+const DELETE_GROUP_OP = 'DELETE /api/v1/iam/groups/{id}';
 
 // The SDK rejects with an error object carrying the server's message; it is
 // not always an Error instance.
@@ -50,6 +55,9 @@ export default function GroupDetailClient() {
   const { toast } = useToast();
 
   const groupId = resolveDynamicId(params, pathname, 'groups');
+  const { capability } = useCapabilities();
+  const updateCap = capability(UPDATE_GROUP_OP);
+  const deleteCap = capability(DELETE_GROUP_OP);
 
   const { data: group, isLoading, error, refetch } = useApi(
     () => {
@@ -144,17 +152,20 @@ export default function GroupDetailClient() {
         <Button variant="ghost" size="sm" onClick={() => router.push('/iam/groups')}>
           <ArrowLeft className="h-4 w-4 mr-2" /> Back to Groups
         </Button>
-        <Button
-          variant="destructive"
-          disabled={deleteMutation.isLoading}
-          onClick={() => {
-            if (window.confirm(`Delete group "${g?.name || groupId}"?`)) {
-              deleteMutation.mutate(undefined);
-            }
-          }}
-        >
-          <Trash2 className="h-4 w-4 mr-2" /> Delete
-        </Button>
+        <Gated op={DELETE_GROUP_OP}>
+          <Button
+            variant="destructive"
+            disabled={deleteMutation.isLoading}
+            onClick={() => {
+              if (!deleteCap.enabled) return;
+              if (window.confirm(`Delete group "${g?.name || groupId}"?`)) {
+                deleteMutation.mutate(undefined);
+              }
+            }}
+          >
+            <Trash2 className="h-4 w-4 mr-2" /> Delete
+          </Button>
+        </Gated>
       </div>
 
       <Card>
@@ -247,6 +258,7 @@ export default function GroupDetailClient() {
             className="space-y-4"
             onSubmit={(e) => {
               e.preventDefault();
+              if (!updateCap.enabled) return;
               updateMutation.mutate({
                 name: editName ?? g?.name ?? '',
                 description: editDescription ?? g?.description ?? '',
@@ -269,9 +281,11 @@ export default function GroupDetailClient() {
                 onChange={(e) => setEditDescription(e.target.value)}
               />
             </div>
-            <Button type="submit" disabled={updateMutation.isLoading}>
-              Save group
-            </Button>
+            <Gated op={UPDATE_GROUP_OP}>
+              <Button type="submit" disabled={updateMutation.isLoading}>
+                Save group
+              </Button>
+            </Gated>
           </form>
         </CardContent>
       </Card>
