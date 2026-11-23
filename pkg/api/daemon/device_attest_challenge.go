@@ -224,6 +224,20 @@ func WithDeviceAttestChallengeRequired() DeviceGRPCOption {
 	return func(s *DeviceGRPCService) { s.challengeRequired = true }
 }
 
+// withDeviceAttestChallengesOf makes the service share src's challenge store
+// and challenge requirement. QUIC's delegate uses it to share the daemon's
+// store, so a challenge is single use across every transport (#2136). A nil
+// src keeps the service's own store.
+func withDeviceAttestChallengesOf(src *DeviceGRPCService) DeviceGRPCOption {
+	return func(s *DeviceGRPCService) {
+		if src == nil {
+			return
+		}
+		s.challenges = src.challenges
+		s.challengeRequired = src.challengeRequired
+	}
+}
+
 // WithDeviceAttestChallengeStorage keeps issued attestation challenges in
 // an object store, so they survive a restart (#2136). A backend is honoured
 // once per process: the pinned object store has no atomic take or

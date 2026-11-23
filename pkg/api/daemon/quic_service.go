@@ -56,6 +56,11 @@ type QUICServiceHandler struct {
 	// delegate to so the QUIC transport has identical semantics to gRPC.
 	// It is (re)built by the device service setters (rebuildDeviceGRPC).
 	deviceGRPC *DeviceGRPCService
+	// attestChallengesOf is the daemon's DeviceGRPCService whose challenge
+	// store and challenge requirement the QUIC delegate shares, so a
+	// challenge issued over another transport is honoured and consumed once
+	// (#2136); nil keeps a private store.
+	attestChallengesOf *DeviceGRPCService
 	// akTrust and deviceVerdicts are the device quote verifier's
 	// dependencies, threaded into deviceGRPC on every rebuild.
 	akTrust        AKTrustAnchor
@@ -383,6 +388,15 @@ func (h *QUICServiceHandler) SetDeviceLifecycle(lifecycle DeviceLifecycle) {
 // construction.
 func (h *QUICServiceHandler) SetDeviceBootCA(ca BootCABundle) {
 	h.bootCA = ca
+	h.rebuildDeviceGRPC()
+}
+
+// SetDeviceAttestChallenges makes the QUIC attest delegate check challenges
+// against src's challenge store and follow src's challenge requirement, so
+// a challenge issued over MCP, gRPC, REST or the Unix socket is single use
+// across every transport, QUIC included (#2136, ruling 1234).
+func (h *QUICServiceHandler) SetDeviceAttestChallenges(src *DeviceGRPCService) {
+	h.attestChallengesOf = src
 	h.rebuildDeviceGRPC()
 }
 
