@@ -4,7 +4,8 @@
  * CeremonyStatusCard shows CeremonyService.Status, read through the SDK
  * client on `useCeremony()`. It is read-only and has no controls: the write
  * flows (Init, claim cert, claim share, Sign CSR) come with the capability
- * gate.
+ * gate. The backend reports only the ceremony ID and state today, so the
+ * officers, threshold and initialization time it leaves out read Unavailable.
  */
 import * as React from "react";
 
@@ -25,11 +26,26 @@ export function ceremonyStateLabel(state?: string): string {
   }
 }
 
-/** officerProgress gives the enrolled officers out of those required. */
+/** UNAVAILABLE stands for a value the server does not report. */
+export const UNAVAILABLE = "Unavailable";
+
+/**
+ * officerProgress gives the enrolled officers out of those required, or
+ * UNAVAILABLE when the server does not report how many are required.
+ */
 export function officerProgress(
-  s?: Pick<CeremonyStatusResponse, "officersEnrolled" | "officersRequired">
+  s?: Partial<Pick<CeremonyStatusResponse, "officersEnrolled" | "officersRequired">>
 ): string {
-  return `${s?.officersEnrolled ?? 0} of ${s?.officersRequired ?? 0}`;
+  const required = s?.officersRequired;
+  if (typeof required !== "number" || required <= 0) return UNAVAILABLE;
+  return `${s?.officersEnrolled ?? 0} of ${required}`;
+}
+
+/** initializedLabel gives the initialization time, if the server reports one. */
+function initializedLabel(status?: CeremonyStatusResponse): string {
+  if (status?.initializedAt) return status.initializedAt;
+  const label = ceremonyStateLabel(status?.state);
+  return label === "Not initialized" ? label : UNAVAILABLE;
 }
 
 interface StatusState {
@@ -76,11 +92,11 @@ export function CeremonyStatusCard() {
             <dt className="text-muted-foreground">Officers</dt>
             <dd>{officerProgress(status)}</dd>
             <dt className="text-muted-foreground">Threshold</dt>
-            <dd>{status?.threshold || "-"}</dd>
+            <dd>{status?.threshold || UNAVAILABLE}</dd>
             <dt className="text-muted-foreground">Ceremony ID</dt>
             <dd>{status?.ceremonyId || "-"}</dd>
             <dt className="text-muted-foreground">Initialized</dt>
-            <dd>{status?.initializedAt ?? "Not initialized"}</dd>
+            <dd>{initializedLabel(status)}</dd>
           </dl>
         )}
       </CardContent>
