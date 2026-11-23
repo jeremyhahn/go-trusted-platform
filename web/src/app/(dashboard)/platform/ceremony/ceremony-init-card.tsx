@@ -12,6 +12,7 @@ import * as React from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Gated } from "@/components/features/capabilities/gated";
 import {
   Dialog,
   DialogContent,
@@ -147,9 +148,11 @@ export function CeremonyInitCard({ onInitialized }: { onInitialized?: () => void
             onChange={(e) => setSans(e.target.value)}
           />
         </div>
-        <Button disabled={disabled} onClick={() => setConfirmOpen(true)}>
-          Initialize
-        </Button>
+        <Gated op="POST /api/v1/ceremony/init">
+          <Button disabled={disabled} onClick={() => setConfirmOpen(true)}>
+            Initialize
+          </Button>
+        </Gated>
 
         {refusal !== null && <p role="alert">Init refused: {refusal}</p>}
 

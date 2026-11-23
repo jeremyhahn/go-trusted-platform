@@ -14,6 +14,7 @@ import * as React from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Gated } from "@/components/features/capabilities/gated";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -85,9 +86,11 @@ export function CeremonyClaimShareCard() {
             onChange={(e) => setUsername(e.target.value)}
           />
         </div>
-        <Button onClick={begin} disabled={busy || username.trim() === ""}>
-          Request challenge
-        </Button>
+        <Gated op="POST /api/v1/ceremony/claim-share/begin">
+          <Button onClick={begin} disabled={busy || username.trim() === ""}>
+            Request challenge
+          </Button>
+        </Gated>
 
         {challenge && !claimed && (
           <div className="space-y-4">
@@ -109,9 +112,11 @@ export function CeremonyClaimShareCard() {
                 onChange={(e) => setSignature(e.target.value)}
               />
             </div>
-            <Button onClick={complete} disabled={busy || signature.trim() === ""}>
-              Complete claim
-            </Button>
+            <Gated op="POST /api/v1/ceremony/claim-share/complete">
+              <Button onClick={complete} disabled={busy || signature.trim() === ""}>
+                Complete claim
+              </Button>
+            </Gated>
           </div>
         )}
 

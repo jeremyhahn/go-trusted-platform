@@ -10,6 +10,7 @@ import * as React from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Gated } from "@/components/features/capabilities/gated";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -122,9 +123,11 @@ export function CeremonySignCSRCard() {
             ))}
           </select>
         </div>
-        <Button disabled={disabled} onClick={handleSign}>
-          Sign CSR
-        </Button>
+        <Gated op="POST /api/v1/ceremony/sign-csr">
+          <Button disabled={disabled} onClick={handleSign}>
+            Sign CSR
+          </Button>
+        </Gated>
 
         {refusal !== null && <p role="alert">Sign CSR refused: {refusal}</p>}
 
