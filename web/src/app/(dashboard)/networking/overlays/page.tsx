@@ -129,7 +129,7 @@ export default function NetworkOverlaysPage() {
               disabled={!createVni || createSubmitting}
               onClick={async () => {
                 const v = Number.parseInt(createVni, 10);
-                if (!Number.isFinite(v) || v < 1) {
+                if (!Number.isFinite(v) || v < 1 || v > 16777215) {
                   toast({ title: 'Invalid VNI', variant: 'destructive' });
                   return;
                 }
