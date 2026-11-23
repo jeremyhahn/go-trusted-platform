@@ -11,6 +11,7 @@
  */
 
 import { useState } from 'react';
+import { Gated } from '@/components/features/capabilities/gated';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -156,9 +157,11 @@ export function LDevIDCard() {
           />
           <Label htmlFor="ldevid-overwrite">Overwrite the existing key</Label>
         </div>
-        <Button onClick={onCreate} disabled={busy || commonName.trim() === ''}>
-          Create LDevID
-        </Button>
+        <Gated op="POST /api/v1/idevid/ldevid">
+          <Button onClick={onCreate} disabled={busy || commonName.trim() === ''}>
+            Create LDevID
+          </Button>
+        </Gated>
         {handleTaken && (
           <p data-testid="ldevid-overwrite-hint" className="text-sm text-muted-foreground">
             A key exists at the handle. Check Overwrite the existing key to replace it.

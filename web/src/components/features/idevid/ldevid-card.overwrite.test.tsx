@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ok, refused, stubControlPlane, withControlPlane, type SentRequest } from '@/test/control-plane-fetch';
 import { LDevIDCard } from './ldevid-card';
@@ -8,6 +8,15 @@ import { LDevIDCard } from './ldevid-card';
 
 const ROUTE = 'POST /api/v1/idevid/ldevid';
 const CN = 'ldevid-1.example.test';
+
+// Create LDevID is capability-gated (#2055): the server offers it here.
+const CAPS = {
+  'GET /api/v1/capabilities': ok({
+    capabilities: [{ op: 'POST /api/v1/idevid/ldevid', kind: 'route', enabled: true }],
+    total: 1,
+    enabled: 1,
+  }),
+};
 
 const issued = ok({
   status: { success: true, message: 'issued' },
@@ -24,9 +33,14 @@ function checkOverwrite() {
   fireEvent.click(screen.getByRole('checkbox', { name: 'Overwrite the existing key' }));
 }
 
+// click waits for a gated control's capabilities answer before clicking it.
 async function click(name: string) {
+  const control = screen.getByRole('button', { name });
+  if (control.hasAttribute('data-capability-op')) {
+    await waitFor(() => expect(control.getAttribute('data-capability-enabled')).toBe('true'));
+  }
   await act(async () => {
-    fireEvent.click(screen.getByRole('button', { name }));
+    fireEvent.click(control);
   });
 }
 
@@ -41,7 +55,7 @@ describe('LDevIDCard overwrite', () => {
   });
 
   it('sends no overwrite field while the box is unchecked', async () => {
-    const sent = stubControlPlane({ [ROUTE]: issued });
+    const sent = stubControlPlane({ ...CAPS, [ROUTE]: issued });
     render(withControlPlane(<LDevIDCard />));
     // The box exists and is unchecked.
     expect(screen.getByRole('checkbox', { name: 'Overwrite the existing key' }).getAttribute('aria-checked')).toBe('false');
@@ -56,7 +70,7 @@ describe('LDevIDCard overwrite', () => {
   });
 
   it('asks before an overwrite and sends nothing on Cancel', async () => {
-    const sent = stubControlPlane({ [ROUTE]: issued });
+    const sent = stubControlPlane({ ...CAPS, [ROUTE]: issued });
     render(withControlPlane(<LDevIDCard />));
     typeCommonName();
     checkOverwrite();
@@ -71,7 +85,7 @@ describe('LDevIDCard overwrite', () => {
   });
 
   it('overwrites after the confirm', async () => {
-    const sent = stubControlPlane({ [ROUTE]: issued });
+    const sent = stubControlPlane({ ...CAPS, [ROUTE]: issued });
     render(withControlPlane(<LDevIDCard />));
     typeCommonName();
     checkOverwrite();
@@ -87,7 +101,7 @@ describe('LDevIDCard overwrite', () => {
   });
 
   it('shows the taken-handle refusal and the overwrite hint', async () => {
-    stubControlPlane({ [ROUTE]: refused(409, 'LDevID key already exists at handle') });
+    stubControlPlane({ ...CAPS, [ROUTE]: refused(409, 'LDevID key already exists at handle') });
     render(withControlPlane(<LDevIDCard />));
     typeCommonName();
     await click('Create LDevID');
@@ -100,7 +114,7 @@ describe('LDevIDCard overwrite', () => {
   });
 
   it('shows no hint for other refusals', async () => {
-    stubControlPlane({ [ROUTE]: refused(409, 'TPM2 service not initialized') });
+    stubControlPlane({ ...CAPS, [ROUTE]: refused(409, 'TPM2 service not initialized') });
     render(withControlPlane(<LDevIDCard />));
     typeCommonName();
     await click('Create LDevID');

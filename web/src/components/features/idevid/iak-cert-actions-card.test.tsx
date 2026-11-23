@@ -1,15 +1,33 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ok, refused, stubControlPlane, withControlPlane } from '@/test/control-plane-fetch';
 import { IAKCertActionsCard } from './iak-cert-actions-card';
 
-// #2055: the IAK actions card deletes the IAK certificate only after the
-// operator confirms, and runs ActivateCredential through the real SDK client;
-// a refusal reaches the operator verbatim as a destructive toast.
+// #2055: the Activate credential card runs ActivateCredential through the
+// real SDK client; a refusal reaches the operator verbatim as a destructive
+// toast. The control is capability-gated: the server offers it here.
+
+const CAPS = {
+  'GET /api/v1/capabilities': ok({
+    capabilities: [
+      { op: 'POST /api/v1/idevid/ldevid', kind: 'route', enabled: true },
+      { op: 'POST /api/v1/idevid/activate-credential', kind: 'route', enabled: true },
+    ],
+    total: 2,
+    enabled: 2,
+  }),
+};
 
 function renderCard() {
   render(withControlPlane(<IAKCertActionsCard />));
+}
+
+// enabledButton waits for the capabilities answer to enable a gated control.
+async function enabledButton(name: string): Promise<HTMLButtonElement> {
+  const control = (await screen.findByRole('button', { name })) as HTMLButtonElement;
+  await waitFor(() => expect(control.getAttribute('data-capability-enabled')).toBe('true'));
+  return control;
 }
 
 async function click(name: string) {
@@ -28,51 +46,9 @@ describe('IAKCertActionsCard', () => {
     vi.unstubAllGlobals();
   });
 
-  it('asks before deleting and sends nothing on Cancel', async () => {
-    const sent = stubControlPlane({});
-    renderCard();
-
-    await click('Delete IAK certificate');
-    const dialog = await screen.findByRole('dialog');
-    expect(dialog.textContent).toContain('Delete the IAK certificate?');
-    await click('Cancel');
-
-    expect(sent.some((r) => r.method === 'DELETE')).toBe(false);
-  });
-
-  it('deletes the IAK certificate after the confirm', async () => {
-    const sent = stubControlPlane({
-      'DELETE /api/v1/idevid/iak/certificate': ok({ status: { success: true, message: 'deleted' } }),
-    });
-    renderCard();
-
-    await click('Delete IAK certificate');
-    await screen.findByRole('dialog');
-    await click('Confirm');
-
-    const toast = await screen.findByText('IAK certificate deleted: deleted');
-    expect(toast.getAttribute('data-variant')).toBe('success');
-    const deletes = sent.filter((r) => r.method === 'DELETE');
-    expect(deletes).toHaveLength(1);
-    expect(deletes[0].path).toBe('/api/v1/idevid/iak/certificate');
-  });
-
-  it('shows the delete refusal', async () => {
-    stubControlPlane({
-      'DELETE /api/v1/idevid/iak/certificate': refused(409, 'TPM2 service not initialized'),
-    });
-    renderCard();
-
-    await click('Delete IAK certificate');
-    await screen.findByRole('dialog');
-    await click('Confirm');
-
-    const toast = await screen.findByText('Delete IAK certificate failed: TPM2 service not initialized');
-    expect(toast.getAttribute('data-variant')).toBe('destructive');
-  });
-
   it('activates a credential with trimmed inputs and hides the secret', async () => {
     const sent = stubControlPlane({
+      ...CAPS,
       'POST /api/v1/idevid/activate-credential': ok({
         status: { success: true, message: 'ok' },
         decryptedSecret: 'c2VjcmV0',
@@ -80,6 +56,7 @@ describe('IAKCertActionsCard', () => {
     });
     renderCard();
 
+    await enabledButton('Activate credential');
     const activate = () => screen.getByRole('button', { name: 'Activate credential' }) as HTMLButtonElement;
     expect(activate().disabled).toBe(true);
     type('Credential blob (base64)', ' YmxvYg== ');
@@ -90,8 +67,9 @@ describe('IAKCertActionsCard', () => {
 
     const toast = await screen.findByText('Credential activated: ok');
     expect(toast.getAttribute('data-variant')).toBe('success');
-    expect(sent[0]).toMatchObject({ method: 'POST', path: '/api/v1/idevid/activate-credential' });
-    expect(sent[0].body).toEqual({ credentialBlob: 'YmxvYg==', secret: 'c2Vj' });
+    const posts = sent.filter((r) => r.method === 'POST');
+    expect(posts[0]).toMatchObject({ method: 'POST', path: '/api/v1/idevid/activate-credential' });
+    expect(posts[0].body).toEqual({ credentialBlob: 'YmxvYg==', secret: 'c2Vj' });
     expect(screen.getByTestId('activate-secret').textContent).toBe('c2VjcmV0');
 
     await click('Hide');
@@ -100,10 +78,12 @@ describe('IAKCertActionsCard', () => {
 
   it('shows the activate refusal', async () => {
     stubControlPlane({
+      ...CAPS,
       'POST /api/v1/idevid/activate-credential': refused(404, 'IAK not found'),
     });
     renderCard();
 
+    await enabledButton('Activate credential');
     type('Credential blob (base64)', 'YmxvYg==');
     type('Secret (base64)', 'c2Vj');
     await click('Activate credential');

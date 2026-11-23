@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ok, refused, stubControlPlane, withControlPlane } from '@/test/control-plane-fetch';
 import { LDevIDCard } from './ldevid-card';
@@ -8,6 +8,15 @@ import { LDevIDCard } from './ldevid-card';
 
 const ROUTE = 'POST /api/v1/idevid/ldevid';
 const CN = 'ldevid-1.example.test';
+
+// Create LDevID is capability-gated (#2055): the server offers it here.
+const CAPS = {
+  'GET /api/v1/capabilities': ok({
+    capabilities: [{ op: 'POST /api/v1/idevid/ldevid', kind: 'route', enabled: true }],
+    total: 1,
+    enabled: 1,
+  }),
+};
 
 const issued = ok({
   status: { success: true, message: 'issued' },
@@ -20,9 +29,14 @@ function type(label: string, value: string) {
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
 }
 
+// click waits for a gated control's capabilities answer before clicking it.
 async function click(name: string) {
+  const control = screen.getByRole('button', { name });
+  if (control.hasAttribute('data-capability-op')) {
+    await waitFor(() => expect(control.getAttribute('data-capability-enabled')).toBe('true'));
+  }
   await act(async () => {
-    fireEvent.click(screen.getByRole('button', { name }));
+    fireEvent.click(control);
   });
 }
 
@@ -32,10 +46,11 @@ describe('LDevIDCard', () => {
     vi.unstubAllGlobals();
   });
 
-  it('keeps Create disabled until a common name is typed', () => {
-    stubControlPlane({});
+  it('keeps Create disabled until a common name is typed', async () => {
+    stubControlPlane(CAPS);
     render(withControlPlane(<LDevIDCard />));
     const create = screen.getByRole('button', { name: 'Create LDevID' }) as HTMLButtonElement;
+    await waitFor(() => expect(create.getAttribute('data-capability-enabled')).toBe('true'));
     expect(create.disabled).toBe(true);
     type('Common name', '  ');
     expect(create.disabled).toBe(true);
@@ -54,7 +69,7 @@ describe('LDevIDCard', () => {
   });
 
   it('creates an LDevID with the defaults', async () => {
-    const sent = stubControlPlane({ [ROUTE]: issued });
+    const sent = stubControlPlane({ ...CAPS, [ROUTE]: issued });
     render(withControlPlane(<LDevIDCard />));
     type('Common name', ` ${CN} `);
     await click('Create LDevID');
@@ -71,7 +86,7 @@ describe('LDevIDCard', () => {
   });
 
   it('sends the organization, algorithm and validity', async () => {
-    const sent = stubControlPlane({ [ROUTE]: issued });
+    const sent = stubControlPlane({ ...CAPS, [ROUTE]: issued });
     render(withControlPlane(<LDevIDCard />));
     type('Common name', CN);
     type('Organization', 'Example Org');
@@ -91,7 +106,7 @@ describe('LDevIDCard', () => {
   });
 
   it('shows the CSR and certificate PEM', async () => {
-    stubControlPlane({ [ROUTE]: issued });
+    stubControlPlane({ ...CAPS, [ROUTE]: issued });
     render(withControlPlane(<LDevIDCard />));
     type('Common name', CN);
     await click('Create LDevID');
@@ -103,7 +118,7 @@ describe('LDevIDCard', () => {
 
   it('shows the no-IDevID refusal', async () => {
     const msg = 'idevid: LDevID refused, device has no proven IDevID: no IDevID certificate installed';
-    stubControlPlane({ [ROUTE]: refused(409, msg) });
+    stubControlPlane({ ...CAPS, [ROUTE]: refused(409, msg) });
     render(withControlPlane(<LDevIDCard />));
     type('Common name', CN);
     await click('Create LDevID');
@@ -114,7 +129,7 @@ describe('LDevIDCard', () => {
   });
 
   it('shows the bad request refusal', async () => {
-    stubControlPlane({ [ROUTE]: refused(400, 'common name is required') });
+    stubControlPlane({ ...CAPS, [ROUTE]: refused(400, 'common name is required') });
     render(withControlPlane(<LDevIDCard />));
     type('Common name', CN);
     await click('Create LDevID');
