@@ -11,13 +11,13 @@
  *   PUT    /bmc/{profileID}/users/{slot}/password       SetUserPassword
  *   PUT    /bmc/{profileID}/users/{slot}/privilege      SetUserPrivilege
  *
- * It calls the SDK API client directly, as use-ntp.ts does, because the SDK
- * has no BMC service on main. ListUsers answers the privilege as the IPMI
- * number; the writes take it as a name.
+ * It calls the SDK BMCService (`client.bmc`), which sends the same requests.
+ * ListUsers answers the privilege as the IPMI number; the writes take it as a
+ * name.
  */
 
 import { useMemo } from "react";
-import { usePlatformClient } from "trusted-platform-sdk";
+import { usePlatformClient, type ApiResponse } from "trusted-platform-sdk";
 
 /** A privilege name the BMC handler accepts on CreateUser and SetUserPrivilege. */
 export type BMCPrivilegeName = "callback" | "user" | "operator" | "administrator" | "no-access";
@@ -71,24 +71,17 @@ export function bmcUsersPath(profileID: string, slot?: number, op?: "password" |
 /** useBMCAccounts returns the user-account operations of one BMC profile. */
 export function useBMCAccounts(profileID: string) {
   const client = usePlatformClient();
-  return useMemo(() => {
-    const api = client.getApiClient();
-    return {
-      listUsers: () => api.get<BMCUser[]>(bmcUsersPath(profileID)),
-      createUser: (input: CreateBMCUserInput) =>
-        api.post<BMCUser>(bmcUsersPath(profileID), {
-          slot: input.slot,
-          username: input.username.trim(),
-          password: input.password,
-          privilege: input.privilege,
-          enabled: input.enabled ?? true,
-          channel: input.channel ?? 1,
-        }),
-      deleteUser: (slot: number) => api.delete<BMCStatusOK>(bmcUsersPath(profileID, slot)),
-      setPassword: (slot: number, password: string) =>
-        api.put<BMCStatusOK>(bmcUsersPath(profileID, slot, "password"), { password }),
-      setPrivilege: (slot: number, privilege: BMCPrivilegeName, channel = 1) =>
-        api.put<BMCStatusOK>(bmcUsersPath(profileID, slot, "privilege"), { privilege, channel }),
-    };
-  }, [client, profileID]);
+  return useMemo(
+    () => ({
+      listUsers: (): Promise<ApiResponse<BMCUser[]>> => client.bmc.listUsers(profileID),
+      createUser: (input: CreateBMCUserInput): Promise<ApiResponse<BMCUser>> =>
+        client.bmc.createUser(profileID, { ...input, username: input.username.trim() }),
+      deleteUser: (slot: number): Promise<ApiResponse<BMCStatusOK>> => client.bmc.deleteUser(profileID, slot),
+      setPassword: (slot: number, password: string): Promise<ApiResponse<BMCStatusOK>> =>
+        client.bmc.setUserPassword(profileID, slot, password),
+      setPrivilege: (slot: number, privilege: BMCPrivilegeName, channel = 1): Promise<ApiResponse<BMCStatusOK>> =>
+        client.bmc.setUserPrivilege(profileID, slot, privilege, channel),
+    }),
+    [client, profileID]
+  );
 }
