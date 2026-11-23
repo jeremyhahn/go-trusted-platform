@@ -4,6 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ok, refused, stubControlPlane, withControlPlane } from '@/test/control-plane-fetch';
 import { BGPPeersCard } from './bgp-peers-card';
 
+// The server offers every op here; bgp-cards.capability.test.tsx covers the gate.
+vi.mock('@/hooks/use-capabilities', () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
+
 // The card runs on the real SDK GatewayService through useBGPPrefixes; fetch is the only stub.
 const PEERS = [
   { address: '192.0.2.1', asn: 65001, state: 'ESTABLISHED', prefixesReceived: 4, prefixesSent: 2, uptime: '3h' },
