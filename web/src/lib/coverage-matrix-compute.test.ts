@@ -7,6 +7,8 @@ const matrixPath = path.resolve(process.cwd(), '..', 'docs', 'ui', 'coverage-mat
 const lines = fs.readFileSync(matrixPath, 'utf8').split('\n')
 
 const spec = '`real-server/compute.spec.ts`'
+const detailSpec = '`real-server/compute-vm-detail.spec.ts`'
+const migrationsSpec = '`real-server/compute-migrations.spec.ts`'
 
 const coveredRows = [
   `| \`ComputeService.SuspendVM\` | \`POST /vms/{id}/suspend\` | \`(dashboard)/compute/vms/[id]/page.tsx\` | - | ${spec} | covered |`,
@@ -14,6 +16,14 @@ const coveredRows = [
   `| \`ComputeService.GetVM\` | \`GET /vms/{id}\` | \`(dashboard)/compute/vms/[id]/page.tsx\` | - | ${spec} | covered |`,
   `| \`ComputeService.CreateSnapshot\` | \`POST /vms/{id}/snapshots\` | \`(dashboard)/compute/snapshots/page.tsx\` | - | ${spec} | covered |`,
   `| \`ComputeService.GetSnapshot\` | \`GET /vms/{id}/snapshots/{snapshotId}\` | \`(dashboard)/compute/snapshots/[snapshotId]/page.tsx\` | - | ${spec} | covered |`,
+  `| \`ComputeService.GetVMMetrics\` | \`GET /vms/{id}/metrics\` | \`(dashboard)/compute/vms/[id]/page.tsx\` | - | ${detailSpec} | covered |`,
+  `| \`ComputeService.AttachDisk\` | \`POST /vms/{id}/disks\` | \`(dashboard)/compute/vms/[id]/page.tsx\` | - | ${detailSpec} | covered |`,
+  `| \`ComputeService.DetachDisk\` | \`DELETE /vms/{id}/disks/{diskId}\` | \`(dashboard)/compute/vms/[id]/page.tsx\` | - | ${detailSpec} | covered |`,
+  `| \`ComputeService.ResizeDisk\` | \`PATCH /vms/{id}/disks/{diskId}\` | \`(dashboard)/compute/vms/[id]/page.tsx\` | - | ${detailSpec} | covered |`,
+  `| \`ComputeService.MigrateVM\` | \`POST /vms/{id}/migrate\` | \`(dashboard)/compute/vms/[id]/page.tsx\` | - | ${detailSpec} | covered |`,
+  `| \`ComputeService.AttestVM\` | \`POST /vms/{id}/attest\` | \`(dashboard)/compute/vms/[id]/page.tsx\` | - | ${detailSpec} | covered |`,
+  `| \`ComputeService.PrepareMigration\` | \`POST /migrations/prepare\` | \`(dashboard)/compute/migrations/page.tsx\` | - | ${migrationsSpec} | covered |`,
+  `| \`ComputeService.FinalizeMigration\` | \`POST /migrations/{receiverId}/finalize\` | \`(dashboard)/compute/migrations/page.tsx\` | - | ${migrationsSpec} | covered |`,
 ]
 
 function lastCell(line: string): string {
@@ -43,7 +53,7 @@ describe('coverage matrix: ComputeService (1/2)', () => {
     }
     const summary = lines.filter((l) => l.startsWith('| ComputeService |'))
     expect(summary).toHaveLength(1)
-    expect(summary[0]).toBe('| ComputeService | 37 | 19 | 0 | 13 | 5 | 0 |')
+    expect(summary[0]).toBe('| ComputeService | 37 | 27 | 0 | 5 | 5 | 0 |')
     expect(
       `| ComputeService | ${ops.length} | ${counts.covered} | ${counts.partial} | ${counts.missing} | ${counts.notUI} | ${counts.blocked} |`,
     ).toBe(summary[0])
@@ -54,6 +64,7 @@ describe('coverage matrix: ComputeService (1/2)', () => {
       'src/app/(dashboard)/compute/vms/[id]/page.tsx',
       'src/app/(dashboard)/compute/snapshots/page.tsx',
       'src/app/(dashboard)/compute/snapshots/[snapshotId]/page.tsx',
+      'src/app/(dashboard)/compute/migrations/page.tsx',
     ]) {
       expect(fs.existsSync(path.resolve(process.cwd(), page)), page).toBe(true)
     }
