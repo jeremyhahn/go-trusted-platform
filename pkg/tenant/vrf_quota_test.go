@@ -221,3 +221,34 @@ func TestVRFQuota_Available(t *testing.T) {
 		t.Errorf("AvailableServices() = %d, want 0", got)
 	}
 }
+
+func TestVRFQuota_NegativeCounts(t *testing.T) {
+	newQuota := func() *VRFQuota {
+		return &VRFQuota{
+			MaxVRFs: 1, MaxNetworks: 2, MaxServices: 2,
+			UsedVRFs: 1, UsedNetworks: 1, UsedServices: 1,
+		}
+	}
+	check := func(t *testing.T, q *VRFQuota) {
+		t.Helper()
+		if q.UsedVRFs != 1 || q.UsedNetworks != 1 || q.UsedServices != 1 {
+			t.Errorf("usage changed: vrfs=%d networks=%d services=%d", q.UsedVRFs, q.UsedNetworks, q.UsedServices)
+		}
+	}
+	counts := [][3]int64{{-1, 0, 0}, {0, -1, 0}, {0, 0, -1}}
+	for _, c := range counts {
+		q := newQuota()
+		err := q.Reserve("acme", c[0], c[1], c[2])
+		var invalid ErrInvalidRequest
+		if !errors.As(err, &invalid) {
+			t.Errorf("Reserve(%v) = %v, want ErrInvalidRequest", c, err)
+		}
+		check(t, q)
+		if q.HasCapacity(c[0], c[1], c[2]) {
+			t.Errorf("HasCapacity(%v) = true, want false", c)
+		}
+	}
+	q := newQuota()
+	q.Release(-1, -1, -1)
+	check(t, q)
+}
