@@ -56,6 +56,12 @@ vi.mock("@/hooks", async (importOriginal) => ({
 
 // Radix tabs render only the active panel in jsdom; render every panel
 // inline so the policies and permissions panels can be asserted too.
+// The permission-check card's Check sits in the capability gate (#2053);
+// every op is offered here, so the page renders as before.
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
+
 vi.mock("@/components/ui/tabs", async (importOriginal) => {
   const Pass = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>;
   const Trigger = ({ children }: { children?: React.ReactNode }) => (

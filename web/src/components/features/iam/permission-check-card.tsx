@@ -3,6 +3,7 @@
 /**
  * Checks one subject/action/resource triple against the tenant's policies
  * through POST /tenants/{tenant}/permissions/check (#1744).
+ * Check is gated on the server's capability for that op (#2033, #2053).
  */
 
 import React, { useState } from "react";
@@ -13,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Gated } from "@/components/features/capabilities/gated";
 
 export interface PermissionCheckCardProps {
   tenantId: string;
@@ -131,10 +133,12 @@ export function PermissionCheckCard({ tenantId, defaultSubjectId = "" }: Permiss
               onChange={(e) => setGroups(e.target.value)}
             />
           </div>
-          <Button type="submit" disabled={check.isLoading || !ready}>
-            {check.isLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-            Check
-          </Button>
+          <Gated op="POST /api/v1/iam/tenants/{tenant}/permissions/check">
+            <Button type="submit" disabled={check.isLoading || !ready}>
+              {check.isLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Check
+            </Button>
+          </Gated>
         </form>
         {check.error && (
           <p role="status" className="text-sm text-destructive">
