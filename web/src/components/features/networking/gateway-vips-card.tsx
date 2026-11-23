@@ -8,7 +8,9 @@
  * (PUT /lb/vips/{protocol}/{address}/{port}/backends) and removes it after a
  * confirm (DELETE /lb/vips/{protocol}/{address}/{port}). Every write
  * reprograms the gateway's switch, so a non-admin sees the controls disabled
- * with the reason and sends nothing; the SDK sends each write once, never
+ * with the reason and sends nothing. Each write is also gated on the server's
+ * capability for its route (<Gated>): an op the server does not offer leaves
+ * its control disabled with the server's reason. The SDK sends each write once, never
  * retried. A successful write re-reads the list once; a refused one shows the
  * server's message.
  */
@@ -30,8 +32,14 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useGateway, useOptionalAuth } from '@/hooks';
 import type { VIPBackend, VIPStatus } from 'trusted-platform-sdk';
+import { Gated } from '@/components/features/capabilities/gated';
 
 const BACKEND_LINE = /^(\S+):(\d+)(?:\s+(\d+))?$/;
+
+// The server's op strings for the writes (routes.golden).
+const ADD_OP = 'POST /api/v1/gateway/lb/vips';
+const BACKENDS_OP = 'PUT /api/v1/gateway/lb/vips/{protocol}/{address}/{port}/backends';
+const REMOVE_OP = 'DELETE /api/v1/gateway/lb/vips/{protocol}/{address}/{port}';
 
 /**
  * Parse one backend per line as `address:port [weight]` (weight defaults to
@@ -244,27 +252,31 @@ export function GatewayVIPsCard() {
                     </span>
                   </div>
                   <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      data-testid={`vip-edit-${key}`}
-                      disabled={writesDisabled}
-                      onClick={() => {
-                        setEditKey(key);
-                        setEditText(formatBackends(cfg?.backends ?? []));
-                      }}
-                    >
-                      Edit backends
-                    </Button>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      data-testid={`vip-remove-${key}`}
-                      disabled={writesDisabled}
-                      onClick={() => setRemoving(vip)}
-                    >
-                      Remove
-                    </Button>
+                    <Gated op={BACKENDS_OP}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        data-testid={`vip-edit-${key}`}
+                        disabled={writesDisabled}
+                        onClick={() => {
+                          setEditKey(key);
+                          setEditText(formatBackends(cfg?.backends ?? []));
+                        }}
+                      >
+                        Edit backends
+                      </Button>
+                    </Gated>
+                    <Gated op={REMOVE_OP}>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        data-testid={`vip-remove-${key}`}
+                        disabled={writesDisabled}
+                        onClick={() => setRemoving(vip)}
+                      >
+                        Remove
+                      </Button>
+                    </Gated>
                   </div>
                 </div>
                 {editKey === key && isAdmin && (
@@ -276,14 +288,16 @@ export function GatewayVIPsCard() {
                       onChange={(e) => setEditText(e.target.value)}
                     />
                     <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        data-testid={`vip-save-${key}`}
-                        disabled={writesDisabled}
-                        onClick={() => void handleSave(vip)}
-                      >
-                        Save backends
-                      </Button>
+                      <Gated op={BACKENDS_OP}>
+                        <Button
+                          size="sm"
+                          data-testid={`vip-save-${key}`}
+                          disabled={writesDisabled}
+                          onClick={() => void handleSave(vip)}
+                        >
+                          Save backends
+                        </Button>
+                      </Gated>
                       <Button variant="outline" size="sm" onClick={() => setEditKey(null)}>
                         Cancel
                       </Button>
@@ -340,9 +354,11 @@ export function GatewayVIPsCard() {
               {formError}
             </p>
           )}
-          <Button size="sm" data-testid="vip-add" disabled={writesDisabled} onClick={() => void handleAdd()}>
-            Add VIP
-          </Button>
+          <Gated op={ADD_OP}>
+            <Button size="sm" data-testid="vip-add" disabled={writesDisabled} onClick={() => void handleAdd()}>
+              Add VIP
+            </Button>
+          </Gated>
         </div>
       </CardContent>
 
@@ -361,9 +377,11 @@ export function GatewayVIPsCard() {
             <Button variant="outline" data-testid="vip-remove-cancel" onClick={() => setRemoving(null)}>
               Cancel
             </Button>
-            <Button variant="destructive" data-testid="vip-remove-confirm" onClick={() => void handleRemove()}>
-              Remove VIP
-            </Button>
+            <Gated op={REMOVE_OP}>
+              <Button variant="destructive" data-testid="vip-remove-confirm" onClick={() => void handleRemove()}>
+                Remove VIP
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
