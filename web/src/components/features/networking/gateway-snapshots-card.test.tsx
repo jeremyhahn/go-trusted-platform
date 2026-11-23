@@ -77,7 +77,9 @@ describe('GatewaySnapshotsCard', () => {
   });
 
   it('clears the refusal once a Refresh lists', async () => {
-    const routes: Record<string, Answer> = { [LIST_PATH]: refused(500, 'gateway control plane not configured') };
+    // 501, not the server's 500: the SDK retries a 500 with backoff (1 s, 2 s,
+    // 4 s), past the test's timeout; the card treats any refusal alike.
+    const routes: Record<string, Answer> = { [LIST_PATH]: refused(501, 'gateway control plane not configured') };
     stubControlPlane(routes);
     render(withControlPlane(<GatewaySnapshotsCard />));
 

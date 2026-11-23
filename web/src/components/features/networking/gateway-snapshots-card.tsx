@@ -26,6 +26,9 @@ export function GatewaySnapshotsCard() {
   const [snapshots, setSnapshots] = useState<GatewaySnapshot[] | null>(null);
   const [open, setOpen] = useState<GatewaySnapshot | null>(null);
   const [busy, setBusy] = useState(false);
+  // The list refusal, shown in the card as well as the toast so the
+  // real-server spec can tell it from an empty list.
+  const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     setBusy(true);
@@ -33,7 +36,9 @@ export function GatewaySnapshotsCard() {
       const res = await listSnapshots();
       if (res.success) {
         setSnapshots(res.data?.gateways ?? []);
+        setError(null);
       } else {
+        setError(res.error?.message ?? 'request failed');
         toast({ title: 'Gateway snapshots unavailable', description: res.error?.message, variant: 'destructive' });
       }
     } finally {
@@ -73,10 +78,17 @@ export function GatewaySnapshotsCard() {
         </Gated>
       </CardHeader>
       <CardContent className="space-y-4">
+        {error && (
+          <p role="alert" data-testid="gateway-snapshots-error" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
         {snapshots !== null && snapshots.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No gateway has reported state</p>
-        ) : (
-          <Table>
+          <p data-testid="gateway-snapshots-empty" className="text-sm text-muted-foreground">
+            No gateway has reported state
+          </p>
+        ) : error && snapshots === null ? null : (
+          <Table data-testid="gateway-snapshots-table">
             <TableHeader>
               <TableRow>
                 <TableHead>Gateway</TableHead>
