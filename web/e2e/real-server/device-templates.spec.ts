@@ -34,6 +34,38 @@ function apiResponse(page: Page, path: string): Promise<Response> {
   );
 }
 
+/** Waits for the page's own request with this method on this path (exact, or a pattern). */
+function apiWrite(page: Page, method: string, path: string | RegExp): Promise<Response> {
+  return page.waitForResponse((r) => {
+    if (r.request().method() !== method) return false;
+    const pathname = new URL(r.url()).pathname;
+    return typeof path === 'string' ? pathname === path : path.test(pathname);
+  });
+}
+
+/** The id of a created object, bare or wrapped in { template } / { profile }. */
+function createdId(payload: unknown): string {
+  const p = payload as { id?: unknown; template?: { id?: unknown }; profile?: { id?: unknown } };
+  const id = p?.id ?? p?.template?.id ?? p?.profile?.id;
+  if (id === undefined || id === null || id === '') {
+    throw new Error(`no id in ${JSON.stringify(payload)}`);
+  }
+  return String(id);
+}
+
+/** A profile answer, bare or wrapped in { profile }. */
+function profileOf(data: unknown): { id: string; mac_address?: string } | undefined {
+  const wrapped = (data as { profile?: { id: string; mac_address?: string } } | undefined)?.profile;
+  return wrapped ?? (data as { id: string; mac_address?: string } | undefined);
+}
+
+/** A locally administered MAC (02:00:00 prefix) unique to this run. */
+function uniqueMac(): string {
+  const n = Date.now();
+  const octet = (shift: number) => ((n >> shift) & 0xff).toString(16).padStart(2, '0');
+  return `02:00:00:${octet(16)}:${octet(8)}:${octet(0)}`;
+}
+
 /** The templates a list answer carries, bare or wrapped in { templates }. */
 function templatesOf(payload: unknown): ListedTemplate[] {
   if (Array.isArray(payload)) return payload as ListedTemplate[];
@@ -207,6 +239,106 @@ test.describe('Device templates page', () => {
       expect(gone.success).toBeFalsy();
     } else {
       await expectGate(deleteButton, DELETE_OP, listed.get(DELETE_OP));
+    }
+  });
+
+  test('a template is created through the Create Template dialog', async ({ adminPage, sdk }) => {
+    const res = await sdk.capabilities.list();
+    expect(res.success, JSON.stringify(res.error)).toBeTruthy();
+    const listed = new Map<string, Capability>(
+      (res.data?.capabilities ?? []).map((c) => [c.op, c as Capability]),
+    );
+
+    await adminPage.goto('/devices/templates');
+    const trigger = adminPage.getByRole('button', { name: 'Create Template', exact: true });
+    if (listed.get(CREATE_OP)?.enabled !== true) {
+      await expectGate(trigger, CREATE_OP, listed.get(CREATE_OP));
+      return;
+    }
+
+    await trigger.click();
+    const dialog = adminPage.getByRole('dialog', { name: 'Create Device Template' });
+    await expect(dialog).toBeVisible();
+    const name = `e2e-template-dialog-${Date.now()}`;
+    await dialog.getByLabel('Template Name', { exact: true }).fill(name);
+    const created = apiWrite(adminPage, 'POST', '/api/v1/device/templates');
+    await dialog.getByRole('button', { name: 'Create Template', exact: true }).click();
+    const answer = await created;
+    expect(answer.ok(), `create answered ${answer.status()}`).toBeTruthy();
+    const id = createdId(unwrapPayload<unknown>(await answer.json()));
+
+    try {
+      await expect(dialog).toBeHidden();
+      await expect(adminPage.getByText(name, { exact: true }).first()).toBeVisible();
+      const viaSdk = await sdk.device.getTemplate(id);
+      expect(viaSdk.success, JSON.stringify(viaSdk.error)).toBeTruthy();
+      expect(viaSdk.data?.name).toBe(name);
+    } finally {
+      await sdk.device.deleteTemplate(id);
+    }
+  });
+
+  test('a profile is created through the Create Profile from Template form', async ({
+    adminPage,
+    sdk,
+  }) => {
+    const res = await sdk.capabilities.list();
+    expect(res.success, JSON.stringify(res.error)).toBeTruthy();
+    const listed = new Map<string, Capability>(
+      (res.data?.capabilities ?? []).map((c) => [c.op, c as Capability]),
+    );
+
+    if (listed.get(CREATE_OP)?.enabled !== true || listed.get(PROFILE_OP)?.enabled !== true) {
+      // A template to open: one the server lists, else the create gate is all there is.
+      const existing = await sdk.device.listTemplates();
+      const template = existing.success ? templatesOf(existing.data)[0] : undefined;
+      if (!template) {
+        await adminPage.goto('/devices/templates');
+        await expectGate(
+          adminPage.getByRole('button', { name: 'Create Template', exact: true }),
+          CREATE_OP,
+          listed.get(CREATE_OP),
+        );
+        return;
+      }
+      await adminPage.goto(`/devices/templates/${template.id}/create-profile`);
+      await expectGate(
+        adminPage.getByRole('button', { name: 'Create Profile', exact: true }),
+        PROFILE_OP,
+        listed.get(PROFILE_OP),
+      );
+      return;
+    }
+
+    const created = await sdk.device.createTemplate({
+      name: `e2e-template-profile-${Date.now()}`,
+      role: 'worker',
+    });
+    expect(created.success, JSON.stringify(created.error)).toBeTruthy();
+    const templateId = String((created.data as ListedTemplate).id);
+    let profileId: string | undefined;
+
+    try {
+      await adminPage.goto(`/devices/templates/${templateId}/create-profile`);
+      const mac = uniqueMac();
+      await adminPage.getByLabel('MAC Address', { exact: true }).fill(mac);
+      const posted = apiWrite(
+        adminPage,
+        'POST',
+        new RegExp(`^/api/v1/device/templates/${templateId}/create-profile$`),
+      );
+      await adminPage.getByRole('button', { name: 'Create Profile', exact: true }).click();
+      const answer = await posted;
+      expect(answer.ok(), `create-profile answered ${answer.status()}`).toBeTruthy();
+      profileId = createdId(unwrapPayload<unknown>(await answer.json()));
+      await expect(adminPage.getByRole('heading', { name: 'Profile Created' })).toBeVisible();
+
+      const viaSdk = await sdk.device.getProfile(profileId);
+      expect(viaSdk.success, JSON.stringify(viaSdk.error)).toBeTruthy();
+      expect(profileOf(viaSdk.data)?.mac_address).toBe(mac);
+    } finally {
+      if (profileId) await sdk.device.deleteProfile(profileId);
+      await sdk.device.deleteTemplate(templateId);
     }
   });
 });
