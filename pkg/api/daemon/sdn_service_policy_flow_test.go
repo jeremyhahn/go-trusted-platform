@@ -681,31 +681,129 @@ func TestSDNService_ApplyPolicy_ConcurrentRollbackKeepsTheOtherApplysFlow(t *tes
 // A replacement whose rules no longer cover an entry the old policy installed
 // would leave that flow on the switch with no owner: it is refused before any
 // switch write, and the recorded policy is unchanged.
-func TestSDNService_ApplyPolicy_RefusesAReplacementThatDropsAnEntry(t *testing.T) {
+func TestSDNService_ApplyPolicy_ReplacementRemovesTheDroppedEntry(t *testing.T) {
 	svc, sw := newSwitchModelSDNService(t)
 
-	first := denyPolicy("p", allowRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp"}))
+	first := denyPolicy("p",
+		denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}),
+		allowRule("r2", &platformv1.PolicyRuleMatch{Protocol: "tcp"}),
+	)
 	first.PolicyId = "pol-1"
 	_, err := svc.ApplyPolicy(context.Background(), first)
 	require.NoError(t, err)
+	_, ok := sw.entry("tcp")
+	require.True(t, ok)
 
-	adds, deletes := countSwitchCalls(sw)
+	sw.mu.Lock()
+	sw.deletes = nil
+	sw.mu.Unlock()
 
-	second := denyPolicy("p", allowRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", SourceIp: "10.0.0.0/8"}))
+	added := denyRule("r3", &platformv1.PolicyRuleMatch{SourceIp: "10.0.0.0/8"})
+	second := denyPolicy("p",
+		denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}),
+		added,
+	)
 	second.PolicyId = "pol-1"
 	_, err = svc.ApplyPolicy(context.Background(), second)
-	require.Error(t, err)
-	assert.Equal(t, codes.FailedPrecondition, status.Code(err), "err: %v", err)
+	require.NoError(t, err, "a replacement that drops an entry is applied, not refused")
 
-	assert.Zero(t, *adds, "no flow may be installed by a refused replacement")
-	assert.Zero(t, *deletes, "no flow may be removed by a refused replacement")
+	_, ok = sw.entry("tcp")
+	assert.False(t, ok, "the dropped entry must be removed from the switch")
+	assert.Contains(t, sw.deleted(), "tcp")
+	assert.NotContains(t, sw.deleted(), "tcp,tp_dst=22", "a kept entry must not be deleted")
+	_, ok = sw.entry("tcp,tp_dst=22")
+	assert.True(t, ok)
+
+	addedMod, err := svc.policyRuleToFlowMod(added, second.GetConfig().GetPriority())
+	require.NoError(t, err)
+	_, ok = sw.entry(addedMod.Match)
+	assert.True(t, ok, "the new entry %q must be installed", addedMod.Match)
 
 	svc.mu.RLock()
 	recorded := svc.policies["pol-1"]
 	svc.mu.RUnlock()
 	require.NotNil(t, recorded)
-	require.Len(t, recorded.rules, 1)
-	assert.Empty(t, recorded.rules[0].GetMatch().GetSourceIp(), "the recorded policy must still hold the first rule")
+	require.Len(t, recorded.rules, 2)
+	assert.Equal(t, "r3", recorded.rules[1].GetRuleId(), "the recorded policy must be the new version")
+}
+
+func TestSDNService_ApplyPolicy_ReplacementKeepsAnEntryAnotherPolicyOwns(t *testing.T) {
+	svc, sw := newSwitchModelSDNService(t)
+
+	first := denyPolicy("p",
+		denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}),
+		allowRule("r2", &platformv1.PolicyRuleMatch{Protocol: "tcp"}),
+	)
+	first.PolicyId = "pol-1"
+	_, err := svc.ApplyPolicy(context.Background(), first)
+	require.NoError(t, err)
+
+	other := denyPolicy("q", allowRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp"}))
+	other.PolicyId = "pol-2"
+	_, err = svc.ApplyPolicy(context.Background(), other)
+	require.NoError(t, err)
+
+	sw.mu.Lock()
+	sw.deletes = nil
+	sw.mu.Unlock()
+
+	second := denyPolicy("p", denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}))
+	second.PolicyId = "pol-1"
+	_, err = svc.ApplyPolicy(context.Background(), second)
+	require.NoError(t, err)
+
+	_, ok := sw.entry("tcp")
+	assert.True(t, ok, "an entry another policy owns must stay installed")
+	assert.NotContains(t, sw.deleted(), "tcp")
+}
+
+func TestSDNService_ApplyPolicy_FailedObsoleteDeleteIsStrandedAndRetried(t *testing.T) {
+	svc, sw := newSwitchModelSDNService(t)
+
+	first := denyPolicy("p",
+		denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}),
+		allowRule("r2", &platformv1.PolicyRuleMatch{Protocol: "tcp"}),
+	)
+	first.PolicyId = "pol-1"
+	_, err := svc.ApplyPolicy(context.Background(), first)
+	require.NoError(t, err)
+
+	errDelete := errors.New("test: delete refused")
+	failed := false
+	sw.mu.Lock()
+	sw.deleteHook = func(flow *ovs.FlowMod) error {
+		if flow.Match == "tcp" && !failed {
+			failed = true
+			return errDelete
+		}
+		return nil
+	}
+	sw.mu.Unlock()
+
+	second := denyPolicy("p", denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}))
+	second.PolicyId = "pol-1"
+	_, err = svc.ApplyPolicy(context.Background(), second)
+	require.NoError(t, err, "a failed removal of an obsolete entry does not fail the replacement")
+	require.True(t, failed)
+
+	_, ok := sw.entry("tcp")
+	require.True(t, ok, "the model keeps the entry the delete failed on")
+	droppedMod, err := svc.policyRuleToFlowMod(allowRule("r2", &platformv1.PolicyRuleMatch{Protocol: "tcp"}), first.GetConfig().GetPriority())
+	require.NoError(t, err)
+	_, stranded := svc.strandedFlows[newFlowEntryKey("br0", droppedMod)]
+	assert.True(t, stranded, "the entry the delete failed on must be recorded as stranded")
+
+	// The next apply on the bridge removes the stranded entry.
+	sw.mu.Lock()
+	sw.deletes = nil
+	sw.mu.Unlock()
+	y := denyPolicy("y", denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 80}))
+	_, err = svc.ApplyPolicy(context.Background(), y)
+	require.NoError(t, err)
+	assert.Contains(t, sw.deleted(), "tcp", "the stranded entry must be removed by the next apply")
+	_, ok = sw.entry("tcp")
+	assert.False(t, ok)
+	assert.Empty(t, svc.strandedFlows)
 }
 
 // A replacement that keeps every entry the old policy installed (here the
