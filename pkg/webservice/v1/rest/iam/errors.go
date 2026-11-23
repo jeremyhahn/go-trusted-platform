@@ -218,6 +218,15 @@ func (e ErrPEPClientMissing) Error() string {
 	return "rest/iam: no policy enforcement point is wired to check permissions"
 }
 
+// ErrTokenVerifierMissing is returned when a token verification reaches a
+// router built without a TokenVerifier: the route answers 503 rather than
+// a verdict.
+type ErrTokenVerifierMissing struct{}
+
+func (e ErrTokenVerifierMissing) Error() string {
+	return "rest/iam: no token verifier is wired to verify tokens"
+}
+
 // ErrRoleClientMissing is returned when role references are resolved without
 // an IAM role client to read the tenant's roles through.
 type ErrRoleClientMissing struct{}
