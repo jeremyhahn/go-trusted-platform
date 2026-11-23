@@ -316,16 +316,7 @@ func (app *App) EnrollBMC(ctx context.Context, deviceID uint64, bmcCfg *bmc.Conf
 			leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: newLeaf.Raw})
 
 			// Fetch the issuing CA cert for chain verification and DANE.
-			var caPEM []byte
-			if app.CA != nil {
-				var ca *x509.Certificate
-				if ca, err = app.CA.TrustedIntermediate(); err != nil || ca == nil {
-					ca, _ = app.CA.TrustedRoot()
-				}
-				if ca != nil {
-					caPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Raw})
-				}
-			}
+			caPEM := app.bmcIssuerCAPEM()
 			return newLeaf, leafPEM, caPEM, nil
 		}
 	}
@@ -359,6 +350,25 @@ func (app *App) EnrollBMC(ctx context.Context, deviceID uint64, bmcCfg *bmc.Conf
 	}
 
 	return runEnrollCore(ctx, deviceID, host, endpoint, internalZone, effective, core)
+}
+
+// bmcIssuerCAPEM returns the PEM of the platform CA certificate that issues
+// BMC leaves (the intermediate, or the root when there is none), or nil when
+// no CA is published. It runs while InitCA may publish the CA, so it reads
+// the CA once through CurrentCA.
+func (app *App) bmcIssuerCAPEM() []byte {
+	ca := app.CurrentCA()
+	if ca == nil {
+		return nil
+	}
+	issuer, err := ca.TrustedIntermediate()
+	if err != nil || issuer == nil {
+		issuer, _ = ca.TrustedRoot()
+	}
+	if issuer == nil {
+		return nil
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuer.Raw})
 }
 
 // runEnrollCore executes the ordered enrollment ceremony steps using the
