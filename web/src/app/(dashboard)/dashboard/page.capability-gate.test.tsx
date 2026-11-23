@@ -52,7 +52,7 @@ const STAT_IDS = [
   "dashboard-stat-network",
 ];
 
-const reads = () => ({
+const reads = (): Record<string, ReturnType<typeof vi.fn>> => ({
   [USERS_OP]: iam.listUsers,
   [DEVICES_OP]: device.listDevices,
   [CERTS_OP]: ca.listCertificates,
