@@ -16,6 +16,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -166,17 +167,26 @@ func sortedTopLevelSections() []string {
 	return out
 }
 
-// ApplySection applies a set of key/value overrides under a named
+// ApplySection applies a set of key/value values under a named
 // configuration section to the live viper state and, when target is
 // non-nil, re-decodes the whole configuration into target so the
 // running daemon observes the change immediately.
 //
+// The update is validated first: the values are applied to a candidate
+// copy of the current configuration, which is decoded into a fresh
+// value of target's type. A value that does not decode returns
+// ErrInvalidSectionValue (wrapped in ErrApplySectionFailed) before the
+// live state or the config file changes.
+//
+// The values are merged into Viper's config layer (MergeConfigMap), not
+// set as viper.Set overrides, so ReloadFromDisk and RollbackTo, which
+// re-read the file into that layer, undo an unpersisted update, while
+// startup overrides and flags keep their values.
+//
 // When persist is true the merged configuration is written back to the
-// active config file (viper.WriteConfig) before the re-decode, making
-// the change durable across restarts; the re-decode then reads the
-// canonical on-disk state. When persist is false the change is applied
-// in memory only (viper.Set overrides), which survives until the next
-// ReloadFromDisk.
+// active config file (viper.WriteConfig) and re-read before the
+// re-decode, making the change durable across restarts. When persist is
+// false the change lives in memory until the next ReloadFromDisk.
 //
 // section must be non-empty; each entry in values is applied under the
 // dotted key "<section>.<key>". Returns the sorted top-level section
@@ -185,18 +195,38 @@ func ApplySection(target interface{}, section string, values map[string]string, 
 	if section == "" {
 		return nil, ErrApplySectionFailed{Cause: errEmptySection}
 	}
-	for k, v := range values {
+	for k := range values {
 		if k == "" {
 			return nil, ErrApplySectionFailed{Cause: errEmptyKey}
 		}
-		viper.Set(section+"."+k, v)
+	}
+	if persist && viper.ConfigFileUsed() == "" {
+		return nil, ErrApplySectionFailed{Cause: errNoConfigFile}
+	}
+
+	// Validate a candidate configuration before touching live state.
+	if rt := reflect.TypeOf(target); rt != nil && rt.Kind() == reflect.Ptr {
+		cand := viper.New()
+		if err := cand.MergeConfigMap(viper.AllSettings()); err != nil {
+			return nil, ErrApplySectionFailed{Cause: err}
+		}
+		for k, v := range values {
+			cand.Set(section+"."+k, v)
+		}
+		probe := reflect.New(rt.Elem()).Interface()
+		if err := cand.Unmarshal(probe, DecodeHook()); err != nil {
+			return nil, ErrApplySectionFailed{Cause: ErrInvalidSectionValue{Section: section, cause: err}}
+		}
+	}
+
+	if err := viper.MergeConfigMap(nestSectionValues(section, values)); err != nil {
+		return nil, ErrApplySectionFailed{Cause: err}
 	}
 
 	if persist {
-		if viper.ConfigFileUsed() == "" {
-			return nil, ErrApplySectionFailed{Cause: errNoConfigFile}
-		}
 		if err := viper.WriteConfig(); err != nil {
+			// Drop the merged values: the file is the source of truth.
+			_ = viper.ReadInConfig()
 			return nil, ErrApplySectionFailed{Cause: err}
 		}
 		if err := viper.ReadInConfig(); err != nil {
@@ -212,6 +242,26 @@ func ApplySection(target interface{}, section string, values map[string]string, 
 	return sortedTopLevelSections(), nil
 }
 
+// nestSectionValues turns the dotted keys "<section>.<key>" into the
+// nested map shape MergeConfigMap expects.
+func nestSectionValues(section string, values map[string]string) map[string]interface{} {
+	root := map[string]interface{}{}
+	for k, v := range values {
+		path := append(strings.Split(section, "."), strings.Split(k, ".")...)
+		node := root
+		for _, p := range path[:len(path)-1] {
+			child, ok := node[p].(map[string]interface{})
+			if !ok {
+				child = map[string]interface{}{}
+				node[p] = child
+			}
+			node = child
+		}
+		node[path[len(path)-1]] = v
+	}
+	return root
+}
+
 // ErrApplySectionFailed wraps a failure while applying a config section
 // override at runtime.
 type ErrApplySectionFailed struct {
@@ -224,6 +274,24 @@ func (e ErrApplySectionFailed) Error() string {
 
 func (e ErrApplySectionFailed) Unwrap() error {
 	return e.Cause
+}
+
+// ErrInvalidSectionValue is returned (wrapped in ErrApplySectionFailed)
+// when a section update does not decode into the configuration. Its
+// message names the section only: the decoder's message quotes the
+// rejected value, which can be a secret, so it is reachable only
+// through Unwrap.
+type ErrInvalidSectionValue struct {
+	Section string
+	cause   error
+}
+
+func (e ErrInvalidSectionValue) Error() string {
+	return fmt.Sprintf("config: section %q has a value that does not decode into the configuration", e.Section)
+}
+
+func (e ErrInvalidSectionValue) Unwrap() error {
+	return e.cause
 }
 
 var (
