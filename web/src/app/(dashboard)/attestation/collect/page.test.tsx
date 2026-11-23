@@ -51,25 +51,30 @@ function routes(extra: Record<string, Answer> = {}, off: string[] = []): Record<
       },
     }),
     'POST /api/v1/attestation/vm/vm-1': ok({
-      vm_id: 'vm-1',
-      host_id: 'lab-node-1',
-      verified: true,
-      quote_data: 'cXVvdGU=',
-      signature: 'c2ln',
-      signature_algorithm: 'ES256',
-      pcrs: [],
-      pcr_digest: 'ZGln',
-      nonce: 'bm9uY2U=',
-      timestamp: '2026-11-01T00:00:00Z',
-      hash_algorithm: 'SHA256',
+      status: { success: true, message: 'ok' },
+      attestation: {
+        vmId: 'vm-1',
+        hostId: 'host-1',
+        quoteData: 'cXVvdGU=',
+        signature: 'c2ln',
+        signatureAlgorithm: 'ES256',
+        pcrs: [],
+        pcrDigest: 'ZGln',
+        nonce: 'bm9uY2U=',
+        timestamp: '2026-11-01T00:00:00Z',
+        hashAlgorithm: 'ATTESTATION_HASH_ALGORITHM_SHA256',
+      },
     }),
     'POST /api/v1/attestation/container/c-1': ok({
-      container_id: 'c-1',
-      image_digest: 'sha256:00',
-      verified: false,
-      digest: 'ZGln',
-      pcr_value: 'cGNy',
-      timestamp: '2026-11-01T00:00:00Z',
+      status: { success: true, message: 'ok' },
+      attestation: {
+        containerId: 'c-1',
+        imageId: 'img-1',
+        imageDigest: 'sha256:00',
+        digest: 'ZGln',
+        pcrValue: 'cGNy',
+        timestamp: '2026-11-01T00:00:00Z',
+      },
     }),
     ...extra,
   };
@@ -128,9 +133,10 @@ describe('CollectAttestationPage', () => {
     const result = await screen.findByTestId('attestation-collect-vm-result');
     expect(posts(sent).filter((r) => r.path === '/api/v1/attestation/vm/vm-1')).toHaveLength(1);
     expect(result.textContent).toContain('vm-1');
-    expect(result.textContent).toContain('lab-node-1');
-    expect(result.textContent).toContain('Verified');
-    expect(result.textContent).not.toContain('Not verified');
+    expect(result.textContent).toContain('host-1');
+    expect(result.textContent).toContain('ZGln');
+    // Collecting evidence is not verifying it: the answer has no verdict.
+    expect(result.textContent).not.toContain('erified');
   });
 
   it('collects a container attestation by id', async () => {
@@ -144,8 +150,10 @@ describe('CollectAttestationPage', () => {
 
     const result = await screen.findByTestId('attestation-collect-container-result');
     expect(posts(sent).filter((r) => r.path === '/api/v1/attestation/container/c-1')).toHaveLength(1);
+    expect(result.textContent).toContain('c-1');
     expect(result.textContent).toContain('sha256:00');
-    expect(result.textContent).toContain('Not verified');
+    expect(result.textContent).toContain('cGNy');
+    expect(result.textContent).not.toContain('erified');
   });
 
   it('needs an id and a nonce before it sends', async () => {
