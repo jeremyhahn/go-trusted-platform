@@ -19,6 +19,23 @@ vi.mock("@/hooks", () => ({
   useOptionalAuth: () => auth.current,
 }));
 
+// The card's writes sit in <Gated>; the ops listed here are the ones the
+// server does not offer, with their reason.
+const capsOff: { current: Record<string, string> } = { current: {} };
+
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: (op: string) =>
+      op in capsOff.current ? { enabled: false, reason: capsOff.current[op] } : { enabled: true },
+  }),
+}));
+
+const ADD_OP = "POST /api/v1/gateway/lb/vips";
+const BACKENDS_OP = "PUT /api/v1/gateway/lb/vips/{protocol}/{address}/{port}/backends";
+const REMOVE_OP = "DELETE /api/v1/gateway/lb/vips/{protocol}/{address}/{port}";
+
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -85,6 +102,7 @@ describe("GatewayVIPsCard", () => {
     auth.current = { user: { roles: ["admin"] } };
     vips = [listedVIP];
     writeAnswer = null;
+    capsOff.current = {};
     fetchMock.mockImplementation(async (url, init) => {
       if (methodOf(init) === "GET" && String(url) === LIST_URL) {
         return jsonResponse(200, { code: 200, success: true, payload: { vips } });
@@ -223,6 +241,48 @@ describe("GatewayVIPsCard", () => {
 
     expect((await screen.findByTestId("vips-error")).textContent).toContain("exists");
     expect((screen.getByTestId("vip-add") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("each write carries its capability op", async () => {
+    await renderCard();
+    await screen.findByTestId(`vip-${KEY}`);
+
+    const expectOp = (testId: string, op: string) => {
+      const el = screen.getByTestId(testId);
+      expect(el.getAttribute("data-capability-op")).toBe(op);
+      expect(el.getAttribute("data-capability-enabled")).toBe("true");
+    };
+    expectOp("vip-add", ADD_OP);
+    expect((screen.getByTestId("vip-add") as HTMLButtonElement).disabled).toBe(false);
+    expectOp(`vip-edit-${KEY}`, BACKENDS_OP);
+    expectOp(`vip-remove-${KEY}`, REMOVE_OP);
+
+    await click(`vip-edit-${KEY}`);
+    expectOp(`vip-save-${KEY}`, BACKENDS_OP);
+
+    await click(`vip-remove-${KEY}`);
+    expectOp("vip-remove-confirm", REMOVE_OP);
+  });
+
+  it("an admin sees each write the server does not offer disabled with its reason and sends nothing", async () => {
+    const reason = "not-configured: gateway lb";
+    capsOff.current = { [ADD_OP]: reason, [BACKENDS_OP]: reason, [REMOVE_OP]: reason };
+    await renderCard();
+    await screen.findByTestId(`vip-${KEY}`);
+
+    for (const testId of ["vip-add", `vip-edit-${KEY}`, `vip-remove-${KEY}`]) {
+      const button = screen.getByTestId(testId) as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
+      expect(button.title).toBe(reason);
+      expect(button.getAttribute("data-capability-enabled")).toBe("false");
+    }
+
+    fireEvent.change(screen.getByTestId("vip-address"), { target: { value: "192.0.2.11" } });
+    fireEvent.change(screen.getByTestId("vip-port"), { target: { value: "80" } });
+    fireEvent.change(screen.getByTestId("vip-backends"), { target: { value: "192.0.2.21:8080" } });
+    await click("vip-add");
+
+    expect(writeCalls()).toHaveLength(0);
   });
 });
 
