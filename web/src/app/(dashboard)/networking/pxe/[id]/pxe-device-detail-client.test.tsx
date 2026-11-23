@@ -74,6 +74,35 @@ async function setState(state: string, reason: string) {
 }
 
 describe('PXEDeviceDetailClient', () => {
+  it('shows the server enum names under their short names', async () => {
+    stubControlPlane({
+      ...shared(),
+      'GET /api/v1/pxe/devices/d1': ok({
+        device: { id: 'd1', macAddress: '02:00:00:00:00:01', state: 'PROVISIONING_STATE_ENROLLED', currentVlan: 10 },
+      }),
+      'GET /api/v1/pxe/devices/d1/events': ok({
+        events: [
+          {
+            id: 'e1',
+            deviceId: 'd1',
+            timestamp: '2026-11-01T00:00:00Z',
+            eventType: 'state_change',
+            fromState: 'PROVISIONING_STATE_ENROLLING',
+            toState: 'PROVISIONING_STATE_ENROLLED',
+          },
+        ],
+      }),
+    });
+    await renderPage();
+
+    expect(within(screen.getByTestId('pxe-device')).getByText('ENROLLED')).toBeTruthy();
+    const events = await screen.findByTestId('pxe-device-events');
+    const row = (await within(events).findByText('state_change')).closest('tr') as HTMLElement;
+    expect(within(row).getByText('ENROLLING')).toBeTruthy();
+    expect(within(row).getByText('ENROLLED')).toBeTruthy();
+    expect(screen.queryByText(/PROVISIONING_STATE_/)).toBeNull();
+  });
+
   it('shows the device and its events', async () => {
     stubControlPlane(shared());
     await renderPage();
