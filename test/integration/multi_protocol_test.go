@@ -1474,6 +1474,14 @@ func testIAMCheckPermission(t *testing.T, ctx context.Context, adapter ProtocolA
 		}
 		return
 	}
+	// The pinned SDK's other answer to the same call: its embedded handler
+	// refuses the client's request type.
+	if err != nil && strings.Contains(err.Error(), "invalid request type for quicbaas.IAM.PEP/Check") {
+		if gerr := helpers.GapEmbeddedIAMPEPCheck.CheckDefect("Check", true, "invalid request type", err.Error()); gerr != nil {
+			t.Fatal(gerr)
+		}
+		return
+	}
 	if missing := surfaceMissing(adapter, "IAM", "CheckPermission", err); missing != nil {
 		t.Fatal(missing)
 	}

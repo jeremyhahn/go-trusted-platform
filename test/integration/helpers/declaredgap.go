@@ -61,8 +61,11 @@ var (
 	// embedded handler in the pinned SDK (v0.12.0-alpha); go-quicbaas main
 	// routes it since #1556, untagged.
 	GapEmbeddedIAMUserAssignRole = DeclaredGap{Issue: "go-quicbaas #1556", Service: "quicbaas.IAM.User"}
-	// GapEmbeddedIAMPEPCheck: the pinned SDK's embedded IAM.PEP/Check is a
-	// stub that answers service not configured.
+	// GapEmbeddedIAMPEPCheck: the pinned SDK's embedded IAM.PEP/Check does not
+	// serve a check. Where the stub is registered it answers service not
+	// configured; where the handler is registered it refuses the client's
+	// request with invalid request type (expected *iam.CheckRequest, got
+	// *iam.checkRequestInternal).
 	GapEmbeddedIAMPEPCheck = DeclaredGap{Issue: "go-quicbaas #2615", Service: "quicbaas.IAM.PEP"}
 	// GapEmbeddedKVCancelledContext: the embedded transport dispatches a
 	// request without checking its context, so a KV Put on a context already
