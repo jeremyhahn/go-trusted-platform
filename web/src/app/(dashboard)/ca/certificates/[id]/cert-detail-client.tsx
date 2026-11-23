@@ -9,6 +9,7 @@ import { CertDetail } from "@/components/features/ca/cert-detail";
 import { CertChain } from "@/components/features/ca/cert-chain";
 import { useCA, useApi, useMutation, useToast } from "@/hooks";
 import type { RevocationReason } from "trusted-platform-sdk";
+import { REVOCATION_REASONS, isRevocationReason } from "@/components/features/ca/revocation-reasons";
 import type { CertificateDetail } from "@/types/security";
 import { ArrowLeft, Loader2, AlertCircle } from "lucide-react";
 
@@ -21,16 +22,6 @@ import { ArrowLeft, Loader2, AlertCircle } from "lucide-react";
  * - Download certificate in PEM/DER format
  * - Revoke certificate
  */
-// The SDK enum, spelled out once so the prompt and the guard cannot drift.
-const REVOCATION_REASONS = [
-  "UNSPECIFIED", "KEY_COMPROMISE", "CA_COMPROMISE", "AFFILIATION_CHANGED", "SUPERSEDED",
-  "CESSATION_OF_OPERATION", "CERTIFICATE_HOLD", "REMOVE_FROM_CRL", "PRIVILEGE_WITHDRAWN", "AA_COMPROMISE",
-] as const satisfies readonly RevocationReason[];
-
-function isRevocationReason(value: string): value is RevocationReason {
-  return (REVOCATION_REASONS as readonly string[]).includes(value);
-}
-
 // The certificate as the platform CA REST handler returns it: snake_case
 // or camelCase keys and Unix-second timestamps, which differs from the
 // SDK/proto declaration (#445).
