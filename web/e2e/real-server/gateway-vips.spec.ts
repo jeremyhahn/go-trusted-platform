@@ -9,8 +9,12 @@ import { unwrapPayload } from './fixtures/wire';
  * api-mock), with an admin session the server issues through its WebAuthn
  * flow; without that session they fail, never skip. Each read the page makes
  * shows what the server answered, or the refusal it wrote as its JSON error
- * envelope. Each control follows GET /api/v1/capabilities. The perf test
- * clicks the datapath and conntrack reads, each sent once. The VIP write
+ * envelope. Each control follows GET /api/v1/capabilities. Reads are counted
+ * with the page's SDK retry policy: one request on a 2xx or a non-retryable
+ * refusal, 1 + READ_RETRIES on a retryable status, and a refusal assertion
+ * waits out the retry backoff, since the card shows a retried refusal only
+ * after the last retry. The perf test clicks the datapath and conntrack
+ * reads. Writes are not retried and are each sent once. The VIP write
  * test sends AddVIP once from the form on a TEST-NET VIP (192.0.2.200, a port
  * no other run picks); the row controls (Details = GetVIP, Save =
  * SetVIPBackends, Remove + confirm = RemoveVIP) run only when the server
@@ -30,6 +34,19 @@ const ADD_OP = `POST ${VIPS_PATH}`;
 const DATAPATH_OP = `GET ${DATAPATH_PATH}`;
 const CONNTRACK_PATH = `${GATEWAY}/perf/conntrack`;
 const CONNTRACK_OP = `GET ${CONNTRACK_PATH}`;
+
+// These mirror the PlatformProvider retry in web/src/app/providers.tsx:63-69
+// (src/lib/coverage-matrix-gateway-vip.test.ts keeps them in step): a read
+// answered with a retryable status is sent again up to READ_RETRIES times.
+const READ_RETRIES = 3;
+const RETRYABLE = [408, 429, 500, 502, 503, 504];
+// The retry backoff is 1 s + 2 s + 4 s; wait for it with margin.
+const RETRY_WAIT_MS = 20_000;
+
+/** expectedReads is how many requests the page's SDK sends for one read answered `status`. */
+function expectedReads(status: number): number {
+  return RETRYABLE.includes(status) ? 1 + READ_RETRIES : 1;
+}
 
 interface Capability {
   op: string;
@@ -115,8 +132,8 @@ test.describe('Gateway VIPs, LB/NAT64 status and perf counters (real server)', (
       await expect(error).toHaveCount(0);
     } else {
       const message = await refusal(res);
-      await expect(error).toBeVisible();
-      await expect(error).toContainText(message);
+      await expect(error).toBeVisible({ timeout: RETRY_WAIT_MS });
+      await expect(error).toContainText(message, { timeout: RETRY_WAIT_MS });
     }
   });
 
@@ -142,8 +159,8 @@ test.describe('Gateway VIPs, LB/NAT64 status and perf counters (real server)', (
         await expect(error).toHaveCount(0);
       } else {
         const message = await refusal(res);
-        await expect(error).toBeVisible();
-        await expect(error).toContainText(message);
+        await expect(error).toBeVisible({ timeout: RETRY_WAIT_MS });
+        await expect(error).toContainText(message, { timeout: RETRY_WAIT_MS });
       }
     }
   });
@@ -170,6 +187,8 @@ test.describe('Gateway VIPs, LB/NAT64 status and perf counters (real server)', (
         adminPage.getByTestId('perf-datapath-load').click(),
       ]);
       expect([401, 403]).not.toContain(res.status());
+      // A retryable refusal is sent 1 + READ_RETRIES times before the card shows it.
+      await expect.poll(() => reads.length, { timeout: RETRY_WAIT_MS }).toBe(expectedReads(res.status()));
       const result = adminPage.getByTestId('perf-datapath-result');
       const error = adminPage.getByTestId('perf-counters-error');
       if (res.ok()) {
@@ -178,12 +197,10 @@ test.describe('Gateway VIPs, LB/NAT64 status and perf counters (real server)', (
         await expect(error).toHaveCount(0);
       } else {
         const message = await refusal(res);
-        await expect(error).toBeVisible();
-        await expect(error).toContainText(message);
+        await expect(error).toBeVisible({ timeout: RETRY_WAIT_MS });
+        await expect(error).toContainText(message, { timeout: RETRY_WAIT_MS });
         await expect(result).toHaveCount(0);
       }
-      await adminPage.waitForLoadState('networkidle');
-      expect(reads).toHaveLength(1);
     }
 
     if (caps.get(CONNTRACK_OP)?.enabled) {
@@ -197,6 +214,8 @@ test.describe('Gateway VIPs, LB/NAT64 status and perf counters (real server)', (
         adminPage.getByTestId('perf-conntrack-load').click(),
       ]);
       expect([401, 403]).not.toContain(res.status());
+      // A retryable refusal is sent 1 + READ_RETRIES times before the card shows it.
+      await expect.poll(() => reads.length, { timeout: RETRY_WAIT_MS }).toBe(expectedReads(res.status()));
       const result = adminPage.getByTestId('perf-conntrack-result');
       const error = adminPage.getByTestId('perf-counters-error');
       if (res.ok()) {
@@ -205,12 +224,10 @@ test.describe('Gateway VIPs, LB/NAT64 status and perf counters (real server)', (
         await expect(error).toHaveCount(0);
       } else {
         const message = await refusal(res);
-        await expect(error).toBeVisible();
-        await expect(error).toContainText(message);
+        await expect(error).toBeVisible({ timeout: RETRY_WAIT_MS });
+        await expect(error).toContainText(message, { timeout: RETRY_WAIT_MS });
         await expect(result).toHaveCount(0);
       }
-      await adminPage.waitForLoadState('networkidle');
-      expect(reads).toHaveLength(1);
     }
   });
 
@@ -285,7 +302,9 @@ test.describe('Gateway VIPs, LB/NAT64 status and perf counters (real server)', (
         await expect(adminPage.getByTestId(`vip-detail-${key}`)).toBeVisible();
       } else {
         const message = await refusal(getRes);
-        await expect(adminPage.getByTestId(`vip-detail-error-${key}`)).toContainText(message);
+        await expect(adminPage.getByTestId(`vip-detail-error-${key}`)).toContainText(message, {
+          timeout: RETRY_WAIT_MS,
+        });
       }
 
       // Save replaces the backends through SetVIPBackends.
