@@ -210,6 +210,15 @@ func LoadModuleSigningKey(path string) (*ModuleSigningKey, error) {
 	if err != nil {
 		return nil, ErrModuleKeyNotFound{Path: path, Err: err}
 	}
+	return parseModuleSigningBundle(path, data)
+}
+
+// parseModuleSigningBundle parses a PEM bundle read from path. It owns data
+// and zeroes it on return, and zeroes the decoded private-key DER after
+// parsing it. A CERTIFICATE block's bytes are kept: the parsed
+// x509.Certificate's Raw aliases them.
+func parseModuleSigningBundle(path string, data []byte) (*ModuleSigningKey, error) {
+	defer clear(data)
 
 	var signer crypto.Signer
 	var cert *x509.Certificate
@@ -224,6 +233,7 @@ func LoadModuleSigningKey(path string) (*ModuleSigningKey, error) {
 		switch block.Type {
 		case pemTypePrivateKey:
 			parsed, parseErr := x509.ParsePKCS8PrivateKey(block.Bytes)
+			clear(block.Bytes)
 			if parseErr != nil {
 				return nil, ErrModuleKeyMalformed{Path: path, Reason: "invalid PKCS#8 private key: " + parseErr.Error()}
 			}
@@ -234,6 +244,7 @@ func LoadModuleSigningKey(path string) (*ModuleSigningKey, error) {
 			signer = s
 		case "RSA PRIVATE KEY":
 			parsed, parseErr := x509.ParsePKCS1PrivateKey(block.Bytes)
+			clear(block.Bytes)
 			if parseErr != nil {
 				return nil, ErrModuleKeyMalformed{Path: path, Reason: "invalid PKCS#1 private key: " + parseErr.Error()}
 			}
