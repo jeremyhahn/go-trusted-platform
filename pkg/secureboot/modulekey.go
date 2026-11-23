@@ -21,6 +21,8 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
+	"io/fs"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -141,7 +143,10 @@ type ModuleSigningKey struct {
 // The certificate carries the extensions the kernel's x509 parser expects
 // (basicConstraints CA:FALSE, keyUsage digitalSignature, subject and
 // authority key identifiers). An existing key file is never overwritten
-// unless cfg.Force is set; see ErrModuleKeyExists.
+// unless cfg.Force is set; see ErrModuleKeyExists. A forced overwrite
+// replaces the file (or a symlink at the path) with a fresh owner-only
+// regular file; it never truncates or writes through what was there. The
+// marshalled PKCS#8 DER is wiped once the bundle is written.
 func GenerateModuleSigningKey(ctx context.Context, cfg *ModuleSigningKeyConfig) (*ModuleSigningKey, error) {
 	if cfg == nil {
 		return nil, ErrConfigNil
@@ -301,7 +306,7 @@ func buildModuleSigningCert(key *rsa.PrivateKey, cn, org, country string, validY
 
 // writeModuleSigningBundle writes the PKCS#8 key + certificate PEM bundle with
 // owner-only permissions.
-func writeModuleSigningBundle(path string, key *rsa.PrivateKey, cert *x509.Certificate) error {
+func writeModuleSigningBundle(path string, key *rsa.PrivateKey, cert *x509.Certificate) (retErr error) {
 	if dir := filepath.Dir(path); dir != "." {
 		if err := os.MkdirAll(dir, 0700); err != nil {
 			return &SentinelCauseError{Sentinel: ErrWriteFailed, Cause: err}
@@ -312,17 +317,38 @@ func writeModuleSigningBundle(path string, key *rsa.PrivateKey, cert *x509.Certi
 	if err != nil {
 		return &SentinelCauseError{Sentinel: ErrWriteFailed, Cause: err}
 	}
+	defer clear(keyDER)
 
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	// Replace, never write through: truncating an existing file keeps its
+	// mode (a stale 0644 file would stay world-readable) and follows a
+	// symlink at the path. Remove whatever is there and create the bundle
+	// exclusively, owner-only. A directory at the path is refused, not
+	// removed.
+	if info, err := os.Lstat(path); err == nil && info.IsDir() {
+		return &SentinelCauseError{Sentinel: ErrWriteFailed, Cause: &fs.PathError{Op: "write", Path: path, Err: fs.ErrExist}}
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return &SentinelCauseError{Sentinel: ErrWriteFailed, Cause: err}
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return &SentinelCauseError{Sentinel: ErrWriteFailed, Cause: err}
 	}
-	defer f.Close()
+	defer func() {
+		if retErr != nil {
+			_ = os.Remove(path)
+		}
+	}()
 
 	if err := pem.Encode(f, &pem.Block{Type: pemTypePrivateKey, Bytes: keyDER}); err != nil {
+		_ = f.Close()
 		return &SentinelCauseError{Sentinel: ErrWriteFailed, Cause: err}
 	}
 	if err := pem.Encode(f, &pem.Block{Type: pemTypeCertificate, Bytes: cert.Raw}); err != nil {
+		_ = f.Close()
+		return &SentinelCauseError{Sentinel: ErrWriteFailed, Cause: err}
+	}
+	if err := f.Close(); err != nil {
 		return &SentinelCauseError{Sentinel: ErrWriteFailed, Cause: err}
 	}
 	return nil
