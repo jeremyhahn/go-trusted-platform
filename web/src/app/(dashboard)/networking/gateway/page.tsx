@@ -26,6 +26,7 @@ import { GatewaySnapshotDetail } from '@/components/features/networking/gateway-
 import { GatewayPerfFlowsCard } from '@/components/features/networking/gateway-perf-flows-card';
 import { GatewayVIPsCard } from '@/components/features/networking/gateway-vips-card';
 import { GatewayPerfCountersCard } from '@/components/features/networking/gateway-perf-counters-card';
+import { GatewayLBNAT64StatusCard } from '@/components/features/networking/gateway-lb-nat64-status-card';
 
 export default function APIGatewayPage() {
   const { toast } = useToast();
@@ -462,6 +463,7 @@ export default function APIGatewayPage() {
       <GatewayPerfFlowsCard />
 
       <GatewayVIPsCard />
+      <GatewayLBNAT64StatusCard />
       <GatewayPerfCountersCard />
     </div>
   );
