@@ -37,6 +37,11 @@ vi.mock("@/hooks", async (importOriginal) => ({
   useToast: () => toastResult,
 }));
 
+// #2033 item 5: the page gates its controls on the server's capabilities; every op is on here.
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
+
 // The Radix menu's portal does not settle in jsdom, so row menus render inline.
 vi.mock("@/components/ui/dropdown-menu", async (importOriginal) => {
   const Pass = ({ children }: { children?: React.ReactNode }) => <>{children}</>;
