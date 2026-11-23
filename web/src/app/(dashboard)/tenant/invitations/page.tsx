@@ -35,7 +35,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { InvitationForm } from "@/components/features/tenant/invitation-form";
 import { useAuth } from "@/contexts/AuthContext";
-import { useInvitation, useInvitationList, useToast } from "@/hooks";
+import { useApi, useIAM, useInvitation, useInvitationList, useToast } from "@/hooks";
 import type { SendInvitationInput } from "@/types/tenant";
 import type { Invitation, InvitationStatus } from "trusted-platform-sdk";
 
@@ -58,8 +58,19 @@ const statusColors: Record<InvitationStatus, "secondary" | "default" | "destruct
 };
 
 export default function InvitationsPage() {
-  const { isLoading: authLoading } = useAuth();
+  const { isLoading: authLoading, tenantId } = useAuth();
   const { toast } = useToast();
+  const iam = useIAM();
+
+  // #1992: the server accepts only the tenant's IAM roles, so the form offers those.
+  const { data: rolesData } = useApi(
+    () => (tenantId ? iam.listRoles({ tenantId }) : Promise.resolve({ success: true, data: null })),
+    [tenantId],
+  );
+  const roleNames = React.useMemo(
+    () => (rolesData?.roles ?? []).map((r) => r.name).filter((name): name is string => !!name),
+    [rolesData],
+  );
   const [processingId, setProcessingId] = React.useState<string | null>(null);
 
   // Use SDK invitation hooks
@@ -332,6 +343,7 @@ export default function InvitationsPage() {
         />
         <InvitationForm
           onSubmit={handleSendInvitation}
+          roles={roleNames}
           trigger={
             <Button disabled={create.isLoading}>
               <MailPlus className="h-4 w-4 mr-2" />
