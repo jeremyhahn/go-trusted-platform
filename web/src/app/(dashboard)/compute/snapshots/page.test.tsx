@@ -5,8 +5,10 @@ import { ok, refused, stubControlPlane, withControlPlane, type Answer, type Sent
 import SnapshotsPage from './page';
 
 // #2044: the Snapshots page's Create Snapshot opens a gated dialog (source
-// VM, name, include memory) that sends CreateSnapshot through the real SDK
-// client; a refusal reaches the operator as a destructive toast.
+// VM, name) that sends CreateSnapshot through the real SDK client with
+// memorySnapshot and diskSnapshot both true (the server refuses unequal
+// flags: a snapshot captures memory and disk); a refusal reaches the
+// operator as a destructive toast.
 
 vi.mock('next/navigation', () => ({
   useParams: () => ({}),
@@ -87,7 +89,6 @@ describe('SnapshotsPage Create Snapshot', () => {
     const dialog = await openDialog();
     fireEvent.change(dialog.getByLabelText('Source VM'), { target: { value: 'vm-1' } });
     fireEvent.change(dialog.getByLabelText('Snapshot name'), { target: { value: 'nightly' } });
-    fireEvent.click(dialog.getByLabelText('Include memory'));
     await act(async () => {
       fireEvent.click(dialog.getByRole('button', { name: 'Create' }));
     });
@@ -96,7 +97,7 @@ describe('SnapshotsPage Create Snapshot', () => {
     expect(posts(sent)[0]).toEqual({
       method: 'POST',
       path: LIST,
-      body: { config: { name: 'nightly', memorySnapshot: true } },
+      body: { config: { name: 'nightly', memorySnapshot: true, diskSnapshot: true } },
     });
     await waitFor(() =>
       expect(screen.getAllByTestId('toast').some((t) => t.getAttribute('data-variant') === 'success')).toBe(true),
@@ -106,6 +107,15 @@ describe('SnapshotsPage Create Snapshot', () => {
       const postAt = sent.findIndex((r) => r.method === 'POST' && r.path === LIST);
       expect(sent.slice(postAt + 1).some((r) => r.method === 'GET' && r.path === LIST)).toBe(true);
     });
+  });
+
+  it('offers no memory-only choice: a snapshot captures memory and disk', async () => {
+    stubControlPlane(shared());
+    await renderPage();
+
+    const dialog = await openDialog();
+    expect(dialog.queryByLabelText('Include memory')).toBeNull();
+    expect(dialog.getByText(/Snapshots capture memory and disk/)).toBeTruthy();
   });
 
   it('does not send without a VM and a name', async () => {
