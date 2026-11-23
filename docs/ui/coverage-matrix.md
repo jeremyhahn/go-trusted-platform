@@ -641,8 +641,8 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `TenantService.GetUsage` | `GET /{id}/usage` | `(dashboard)/tenant/quotas/page.tsx` | - | `tenant-management.spec.ts` | covered |
 | `TenantService.CheckQuota` | `POST /{id}/quota-check` | `(dashboard)/tenant/quotas/page.tsx` | - | `tenant-quotas.spec.ts` | covered |
 | `TenantService.Sync` | `POST /sync` | `(dashboard)/tenant/directory/page.tsx` | - | `tenant-directory.spec.ts` | covered |
-| `TenantService.RotateTenantDEK` | `POST /{id}/dek/rotate` | `(dashboard)/tenant/barrier/page.tsx` (gated off: no DEK backend wired) | - | `tenant-dek.spec.ts` | partial |
-| `TenantService.GetTenantDEKStatus` | `GET /{id}/dek` | `(dashboard)/tenant/barrier/page.tsx` (gated off: no DEK backend wired) | - | `tenant-dek.spec.ts` | partial |
+| `TenantService.RotateTenantDEK` | `POST /{id}/dek/rotate` | `(dashboard)/tenant/barrier/page.tsx` (gated off: the daemon wires no DEK backend; DEK isolation is off, see PR body) | - | `tenant-dek.spec.ts` | partial |
+| `TenantService.GetTenantDEKStatus` | `GET /{id}/dek` | `(dashboard)/tenant/barrier/page.tsx` (gated off: the daemon wires no DEK backend; DEK isolation is off, see PR body) | - | `tenant-dek.spec.ts` | partial |
 | `TenantService.InitTenantBarrier` | `POST /{id}/barrier/init` | `(dashboard)/tenant/barrier/page.tsx` | - | `tenant-barrier.spec.ts` | covered |
 | `TenantService.UnsealTenantBarrier` | `POST /{id}/barrier/unseal` | `(dashboard)/tenant/barrier/page.tsx` | - | `tenant-barrier.spec.ts` | covered |
 | `TenantService.SealTenantBarrier` | `POST /{id}/barrier/seal` | `(dashboard)/tenant/barrier/page.tsx` | - | `tenant-barrier.spec.ts` | covered |
