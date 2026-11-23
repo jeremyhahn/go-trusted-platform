@@ -169,6 +169,10 @@ func TestAdminBundleIssuer_MintsAdminClientCert(t *testing.T) {
 	if len(cert.Subject.Organization) != 1 || cert.Subject.Organization[0] != app.SystemTenantID {
 		t.Errorf("Organization = %v, want [%s]", cert.Subject.Organization, app.SystemTenantID)
 	}
+	// mTLS takes the tenant from the subject OU only (pkg/auth/mtls.go:211-222, #2020).
+	if ou := cert.Subject.OrganizationalUnit; len(ou) != 1 || ou[0] != app.SystemTenantID {
+		t.Errorf("OrganizationalUnit = %v, want [%s]", ou, app.SystemTenantID)
+	}
 	if len(cert.ExtKeyUsage) != 1 || cert.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth {
 		t.Errorf("ExtKeyUsage = %v, want client auth only", cert.ExtKeyUsage)
 	}
@@ -262,6 +266,10 @@ func TestAdminBundleIssuer_SDKIssuerGetsTheAdminRequest(t *testing.T) {
 	}
 	if issuer.req.Organization != app.SystemTenantID {
 		t.Errorf("request Organization = %q, want the system tenant %q", issuer.req.Organization, app.SystemTenantID)
+	}
+	// mTLS takes the tenant from the subject OU only (pkg/auth/mtls.go:211-222, #2020).
+	if issuer.req.OrganizationalUnit != app.SystemTenantID {
+		t.Errorf("request OrganizationalUnit = %q, want the system tenant %q", issuer.req.OrganizationalUnit, app.SystemTenantID)
 	}
 	if bundle.CertPEM != "cert" || bundle.KeyPEM != "key" {
 		t.Errorf("bundle = %+v, want the issuer's answer", bundle)
