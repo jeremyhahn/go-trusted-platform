@@ -244,10 +244,10 @@ const cases: WireCase[] = [
   },
   {
     method: 'verifyToken',
-    name: 'posts the token to the tokens verify path',
-    call: (s) => s.verifyToken({ token: 'tok' }),
+    name: 'posts only the token to the tokens verify path, the tenant in the tenant_id query',
+    call: (s) => s.verifyToken({ tenantId: 't-1', token: 'tok' }),
     verb: 'post',
-    url: '/v1/iam/tokens/verify',
+    url: '/v1/iam/tokens/verify?tenant_id=t-1',
     body: { token: 'tok' },
   },
   // Tenants
@@ -519,7 +519,20 @@ describe('IAMService', () => {
   // (pkg/webservice/v1/rest/iam/types.go): valid, reason, subject, tenant_id,
   // scopes, roles, expires_at.
   describe('verifyToken REST envelope', () => {
-    const request = { token: 'tok' };
+    const request = { tenantId: 't-1', token: 'tok' };
+
+    // The daemon's flat IAM routes run the own-tenant guard, which reads the
+    // caller's tenant from the tenant_id query (#2021 Codex round 5).
+    it('encodes the tenant in the tenant_id query', async () => {
+      vi.mocked(client.post).mockResolvedValue({ success: true, data: { valid: true } });
+
+      await service.verifyToken({ tenantId: 't 1/x', token: 'tok' });
+
+      expect(client.post).toHaveBeenCalledTimes(1);
+      const [url, body] = vi.mocked(client.post).mock.calls[0];
+      expect(url.endsWith('tenant_id=t%201%2Fx')).toBe(true);
+      expect(body).toEqual({ token: 'tok' });
+    });
 
     it('maps subject, tenant_id and expires_at to userId, tenantId and expiresAt and keeps reason and roles', async () => {
       vi.mocked(client.post).mockResolvedValue({
