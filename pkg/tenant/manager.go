@@ -1121,6 +1121,20 @@ func (m *Manager) BarrierManager() *barrier.Manager {
 	return m.barrierManager
 }
 
+// BarrierConfigured reports whether the manager has a per-tenant barrier
+// backend. Without one, every barrier operation fails (GetStatus and Seal
+// with ErrBarrierNotSupported, Init and Unseal on the missing client), so a
+// transport mounts those operations as not configured instead.
+func (m *Manager) BarrierConfigured() bool {
+	return m != nil && m.tenantBarrierClient != nil
+}
+
+// DEKConfigured reports whether the manager has a per-tenant DEK backend.
+// Without one, RotateTenantDEK and GetTenantDEKStatus cannot answer.
+func (m *Manager) DEKConfigured() bool {
+	return m != nil && m.dekClient != nil
+}
+
 // ---------------------------------------------------------------------------
 // Sync and cache operations
 // ---------------------------------------------------------------------------
