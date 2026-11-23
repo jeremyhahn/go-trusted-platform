@@ -50,4 +50,28 @@ describe('coverage matrix: GatewayService VIPs, status and perf', () => {
       expect(fs.existsSync(path.resolve(process.cwd(), file)), file).toBe(true);
     }
   });
+
+  it('keeps no skip-on-missing-session fixture and the gateway real-server specs never skip', () => {
+    // Codex round 3 on #2163: the old integration fixture skipped when no
+    // admin token was set; the specs now take a server-issued session and fail.
+    const fixture = path.resolve(
+      process.cwd(),
+      '..',
+      'test',
+      'integration',
+      'web',
+      'fixtures',
+      'admin-session.fixture.ts',
+    );
+    expect(fs.existsSync(fixture), fixture).toBe(false);
+    for (const file of [
+      'e2e/real-server/gateway-vips.spec.ts',
+      'e2e/real-server/gateway-perf-flows.spec.ts',
+    ]) {
+      const text = fs.readFileSync(path.resolve(process.cwd(), file), 'utf8');
+      expect(text, file).not.toMatch(/\.skip\(/);
+      expect(text, file).not.toMatch(/E2E_ADMIN_JWT/);
+      expect(text, file).toContain("from './fixtures'");
+    }
+  });
 });
