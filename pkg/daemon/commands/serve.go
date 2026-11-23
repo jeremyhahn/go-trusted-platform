@@ -1399,9 +1399,11 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 				params.ConfigUpdater = svc
 				params.ConfigReloader = svc
 				params.EntityTypeLister = svc
-				params.Shutdowner = svc
 			}
 		}
+		// The serve loop owns the coordinated stop (HTTP, Noise, daemon):
+		// a shutdown request signals it, as a SIGTERM would.
+		params.Shutdowner = platformShutdowner(sigChan)
 		if jsonlQuerier != nil {
 			params.LogQuerier = jsonlQuerier
 		}
