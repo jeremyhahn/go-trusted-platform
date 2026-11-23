@@ -361,6 +361,43 @@ func TestCAGRPCService_UninstallCACertificates_WithoutIntermediatesRefusesTheCom
 	assert.Equal(t, bundle, kept)
 }
 
+// TestCAGRPCService_UninstallCACertificates_IntermediateFirstBundle pins that the
+// intermediate-first bundle (the order the CA bundle and the bootstrap write) is the
+// same combined bundle as the root-first one: removed with include_intermediates and
+// refused, byte for byte kept, without it.
+func TestCAGRPCService_UninstallCACertificates_IntermediateFirstBundle(t *testing.T) {
+	ca := lifecycleCA(t)
+
+	t.Run("removed with include_intermediates", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "ca.crt")
+		require.NoError(t, os.WriteFile(path, pemOf(ca.trustedInter.Raw, ca.trustedRoot.Raw), 0o644))
+		svc := NewCAGRPCService(nil, ca, nil).WithTrustInstallPath(path)
+
+		resp, err := svc.UninstallCACertificates(context.Background(),
+			&platformv1.UninstallCACertificatesRequest{IncludeIntermediates: true})
+		require.NoError(t, err)
+		assert.True(t, resp.Status.Success)
+		assert.Equal(t, int32(2), resp.CertificatesRemoved)
+		_, statErr := os.Stat(path)
+		assert.True(t, os.IsNotExist(statErr))
+	})
+
+	t.Run("refused without include_intermediates", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "ca.crt")
+		bundle := pemOf(ca.trustedInter.Raw, ca.trustedRoot.Raw)
+		require.NoError(t, os.WriteFile(path, bundle, 0o644))
+		svc := NewCAGRPCService(nil, ca, nil).WithTrustInstallPath(path)
+
+		_, err := svc.UninstallCACertificates(context.Background(),
+			&platformv1.UninstallCACertificatesRequest{IncludeIntermediates: false})
+		assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+		assert.Contains(t, status.Convert(err).Message(), "include_intermediates")
+		kept, readErr := os.ReadFile(path)
+		require.NoError(t, readErr)
+		assert.Equal(t, bundle, kept)
+	})
+}
+
 // TestCAGRPCService_TrustLifecycle_Concurrent runs an uninstall and an
 // install at once: neither may fail because the other replaced or removed
 // the bundle between its read and its write or remove.
