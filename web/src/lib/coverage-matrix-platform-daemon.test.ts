@@ -56,4 +56,32 @@ describe('coverage matrix: PlatformDaemon', () => {
       expect(fs.existsSync(path.resolve(process.cwd(), f)), f).toBe(true);
     }
   });
+
+  it('the status summary counts the PlatformDaemon rows', () => {
+    // Count the operation rows of the "## PlatformDaemon" section only: later
+    // tables (the audit) also start lines with the operation name.
+    const start = lines.findIndex((l) => l.startsWith('## PlatformDaemon'));
+    expect(start).toBeGreaterThanOrEqual(0);
+    const next = lines.findIndex((l, i) => i > start && l.startsWith('## '));
+    const cells = lines
+      .slice(start, next < 0 ? undefined : next)
+      .filter((l) => l.startsWith('| `PlatformDaemon.'))
+      .map((l) => {
+        const parts = l.split('|');
+        return parts[parts.length - 2].trim();
+      });
+    const total = cells.length;
+    const covered = cells.filter((c) => c === 'covered').length;
+    const partial = cells.filter((c) => c === 'partial').length;
+    const missing = cells.filter((c) => c === 'missing').length;
+    const notUI = cells.filter((c) => c.startsWith('not-UI')).length;
+    const blocked = cells.filter((c) => c.startsWith('blocked')).length;
+    const summary = lines.filter((l) => l.startsWith('| PlatformDaemon |'));
+    expect(summary).toEqual([
+      `| PlatformDaemon | ${total} | ${covered} | ${partial} | ${missing} | ${notUI} | ${blocked} |`,
+    ]);
+    expect(
+      lines.filter((l) => l === '| **Total** | **529** | **136** | **55** | **257** | **50** | **31** |'),
+    ).toHaveLength(1);
+  });
 });
