@@ -66,11 +66,13 @@ type SDNService struct {
 	applyMu sync.Mutex
 	// strandedFlows holds, under applyMu, the entries a rollback failed to
 	// remove: they are on the switch but no policy owns them, so the next
-	// apply removes them first.
+	// apply removes them first. A successful raw AddFlow on the same entry
+	// retires it: the raw flow owns the entry then.
 	strandedFlows map[flowEntryKey]attemptedFlow
 	// unrestoredFlows holds, under applyMu, the entries a restore failed to
 	// put back: a recorded policy's flow is missing from the switch, so the
-	// next apply retries them.
+	// next apply retries them. A successful raw AddFlow on the same entry
+	// retires it: the raw flow owns the entry then.
 	unrestoredFlows map[flowEntryKey]bool
 }
 
@@ -588,6 +590,11 @@ func (s *SDNService) AddFlow(ctx context.Context, req *platformv1.AddFlowRequest
 	if err := client.AddFlow(ctx, bridgeName, flowMod); err != nil {
 		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to add flow: %v", err))
 	}
+	// The raw flow now owns its entry: a deferred policy delete or restore
+	// replayed over it would remove or replace it, so retire both.
+	key := newFlowEntryKey(bridgeName, flowMod)
+	delete(s.strandedFlows, key)
+	delete(s.unrestoredFlows, key)
 
 	flow := &platformv1.Flow{
 		Id:        ovs.FlowID(cookie),
