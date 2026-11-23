@@ -263,13 +263,6 @@ func selectQUICAuth(config *Config, shared *platformTokenValidator, pep quicbaas
 	), local, nil
 }
 
-// mtlsOperatorScope is the grant of a principal authenticated by an mTLS
-// client certificate. The daemon's client CA pool admits only operator
-// certificates (the admin bundle /init issues), and gRPC and REST authorize
-// such a caller for every operation without a scope check, so QUIC grants the
-// same authority rather than refusing the operator its own platform.
-const mtlsOperatorScope = "*:*"
-
 // mtlsPeerAuthenticator turns the verified client certificate of a QUIC
 // connection or REST request into the principal it acts as, through the same
 // certificate authenticator the gRPC mTLS interceptor uses.
@@ -290,7 +283,6 @@ func (a mtlsPeerAuthenticator) AuthenticatePeer(ctx context.Context, chain []*x5
 		Subject:  identity.ID,
 		Username: identity.Name,
 		TenantID: identity.TenantID,
-		Scopes:   []string{mtlsOperatorScope},
 	}, nil
 }
 
