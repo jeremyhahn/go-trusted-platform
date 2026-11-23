@@ -64,6 +64,26 @@ describe('OverlayService', () => {
     );
   });
 
+  it('getTunnelStats returns the uint64 byte counters as the server sent them', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({
+      success: true,
+      data: {
+        tunnel: {
+          localVtep: 'node-a',
+          remoteVtep: 'node-b',
+          vni: 7,
+          state: 'up',
+          bytesTx: '18446744073709551615',
+          bytesRx: 42,
+        },
+      },
+    });
+    const res = await service.getTunnelStats({ remoteVtep: 'node-b', vni: 7 });
+    const tx: string | number | undefined = res.data?.tunnel.bytesTx;
+    expect(tx).toBe('18446744073709551615');
+    expect(res.data?.tunnel.bytesRx).toBe(42);
+  });
+
   it('forgetMAC DELETEs /macs with mac and vni', async () => {
     vi.mocked(mockClient.delete).mockResolvedValue({ success: true, data: {} });
     await service.forgetMAC({ mac: 'aa:bb:cc:dd:ee:ff', vni: 7 });
