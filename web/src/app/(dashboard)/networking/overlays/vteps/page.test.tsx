@@ -139,6 +139,13 @@ describe("OverlayVtepsPage", () => {
     });
   }
 
+  /** The named control once the capability gate has opened it (#2059). */
+  async function openControl(name: string) {
+    const control = await screen.findByRole("button", { name });
+    await waitFor(() => expect((control as HTMLButtonElement).disabled).toBe(false));
+    return control;
+  }
+
   beforeEach(() => {
     fetchMock.mockReset();
     auth.current = { user: { roles: ["admin"] } };
@@ -205,7 +212,7 @@ describe("OverlayVtepsPage", () => {
     fetchMock.mockImplementation(routes());
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Delete VNI 5001" }));
+    fireEvent.click(await openControl("Delete VNI 5001"));
     fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
 
     await waitFor(() => expect(callsTo("DELETE", `${base}/vnis/5001`)).toHaveLength(1));
@@ -215,7 +222,7 @@ describe("OverlayVtepsPage", () => {
     fetchMock.mockImplementation(routes());
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Forget aa:bb:cc:dd:ee:ff on VNI 5001" }));
+    fireEvent.click(await openControl("Forget aa:bb:cc:dd:ee:ff on VNI 5001"));
     fireEvent.click(await screen.findByRole("button", { name: "Forget" }));
 
     await waitFor(() => expect(callsTo("DELETE", `${base}/macs`)).toHaveLength(1));
@@ -230,7 +237,7 @@ describe("OverlayVtepsPage", () => {
     renderPage();
 
     await waitFor(() => expect(screen.getByTestId("overlay-status").textContent).toContain("VNI count1"));
-    fireEvent.click(await screen.findByRole("button", { name: "Delete VNI 5001" }));
+    fireEvent.click(await openControl("Delete VNI 5001"));
     fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
 
     await waitFor(() => {

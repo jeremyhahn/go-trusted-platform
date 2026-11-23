@@ -178,9 +178,12 @@ describe("OverlayVtepsPage admin gate (#2059)", () => {
     renderPage();
     await screen.findByText("tenant-blue");
     await screen.findByText("aa:bb:cc:dd:ee:ff");
-    for (const name of destructive) {
-      expect((screen.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(false);
-    }
+    // #2059: the capability gate opens once the capabilities read lands.
+    await waitFor(() => {
+      for (const name of destructive) {
+        expect((screen.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(false);
+      }
+    });
     expect(screen.queryByTestId("overlay-admin-note")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Delete VNI 5001" }));

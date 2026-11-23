@@ -24,6 +24,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { useOptionalAuth, useOverlayVteps, useToast } from '@/hooks';
 import type { TunnelInfo, VTEPInfo } from 'trusted-platform-sdk';
+import { Gated } from '@/components/features/capabilities/gated';
 
 interface PendingAction {
   title: string;
@@ -275,23 +276,25 @@ export default function OverlayVtepsPage() {
                     <TableCell>{v.config.name || '-'}</TableCell>
                     <TableCell>{v.macCount}</TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        aria-label={`Delete VNI ${v.config.vni}`}
-                        disabled={!isAdmin}
-                        onClick={() =>
-                          setPending({
-                            title: 'Delete VNI',
-                            description: `Delete VNI ${v.config.vni}? Its tunnels and MAC entries go with it.`,
-                            confirmLabel: 'Delete',
-                            run: () => deleteVNI(v.config.vni),
-                            success: 'VNI deleted',
-                          })
-                        }
-                      >
-                        Delete
-                      </Button>
+                      <Gated op="DELETE /api/v1/overlay/vnis/{vni:[0-9]+}">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={`Delete VNI ${v.config.vni}`}
+                          disabled={!isAdmin}
+                          onClick={() =>
+                            setPending({
+                              title: 'Delete VNI',
+                              description: `Delete VNI ${v.config.vni}? Its tunnels and MAC entries go with it.`,
+                              confirmLabel: 'Delete',
+                              run: () => deleteVNI(v.config.vni),
+                              success: 'VNI deleted',
+                            })
+                          }
+                        >
+                          Delete
+                        </Button>
+                      </Gated>
                     </TableCell>
                   </TableRow>
                 ))
@@ -380,23 +383,25 @@ export default function OverlayVtepsPage() {
                     <TableCell>{m.remoteVtep}</TableCell>
                     <TableCell>{m.learnedAt}</TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        aria-label={`Forget ${m.mac} on VNI ${m.vni}`}
-                        disabled={!isAdmin}
-                        onClick={() =>
-                          setPending({
-                            title: 'Forget MAC',
-                            description: `Forget MAC ${m.mac} on VNI ${m.vni}?`,
-                            confirmLabel: 'Forget',
-                            run: () => forgetMAC(m.mac, m.vni),
-                            success: 'MAC forgotten',
-                          })
-                        }
-                      >
-                        Forget
-                      </Button>
+                      <Gated op="DELETE /api/v1/overlay/macs">
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          aria-label={`Forget ${m.mac} on VNI ${m.vni}`}
+                          disabled={!isAdmin}
+                          onClick={() =>
+                            setPending({
+                              title: 'Forget MAC',
+                              description: `Forget MAC ${m.mac} on VNI ${m.vni}?`,
+                              confirmLabel: 'Forget',
+                              run: () => forgetMAC(m.mac, m.vni),
+                              success: 'MAC forgotten',
+                            })
+                          }
+                        >
+                          Forget
+                        </Button>
+                      </Gated>
                     </TableCell>
                   </TableRow>
                 ))
@@ -431,9 +436,11 @@ export default function OverlayVtepsPage() {
               placeholder="10000"
             />
           </div>
-          <Button variant="destructive" disabled={!isAdmin} onClick={askForgetMac}>
-            Forget MAC
-          </Button>
+          <Gated op="DELETE /api/v1/overlay/macs">
+            <Button variant="destructive" disabled={!isAdmin} onClick={askForgetMac}>
+              Forget MAC
+            </Button>
+          </Gated>
         </div>
       </section>
 
