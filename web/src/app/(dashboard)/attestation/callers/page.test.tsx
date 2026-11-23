@@ -79,7 +79,8 @@ describe('CallerPolicyPage', () => {
   it('shows a refused read', async () => {
     stubControlPlane({
       'GET /api/v1/capabilities': caps(),
-      [OP]: refused(503, 'caller policy not configured'),
+      // 400, not 503: the SDK retries 5xx with backoff (retryableStatuses).
+      [OP]: refused(400, 'caller policy not configured'),
     });
     render(withControlPlane(<CallerPolicyPage />));
 
