@@ -6,7 +6,11 @@
  * media (VirtualMediaStatus / MountISO / UnmountISO) through useBMCBootMedia,
  * which calls the SDK API client. A boot-device change takes effect at the
  * next boot. Unmount asks first in a dialog. A refusal from the control plane
- * is shown verbatim in a destructive toast.
+ * is shown verbatim in a destructive toast. A media write (Mount ISO or
+ * Unmount) invalidates the shown status when it starts, and the card rereads
+ * the virtual media after every write, successful or not: a lost reply does
+ * not show the write was skipped, so Mount ISO stays off until a fresh read
+ * shows an empty drive.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -116,6 +120,10 @@ export function BMCBootMediaCard({ profileID }: BMCBootMediaCardProps) {
 
   const mountISO = async () => {
     setBusy(true);
+    // The write may change the drive whatever the reply says: the shown
+    // status is stale from here until the reread in finally.
+    setMedia(null);
+    setMediaState('loading');
     try {
       const res = await ops.mountISO(isoURL);
       if (res.success) {
@@ -125,7 +133,6 @@ export function BMCBootMediaCard({ profileID }: BMCBootMediaCardProps) {
           variant: 'success',
         });
         setIsoURL('');
-        await reload();
       } else {
         toast({
           title: 'Mount ISO failed',
@@ -133,7 +140,14 @@ export function BMCBootMediaCard({ profileID }: BMCBootMediaCardProps) {
           variant: 'destructive',
         });
       }
+    } catch (e) {
+      toast({
+        title: 'Mount ISO failed',
+        description: e instanceof Error ? e.message : 'The control plane did not answer',
+        variant: 'destructive',
+      });
     } finally {
+      await reload().catch(() => setMediaState('error'));
       setBusy(false);
     }
   };
@@ -141,6 +155,8 @@ export function BMCBootMediaCard({ profileID }: BMCBootMediaCardProps) {
   const unmountISO = async () => {
     setConfirmUnmount(false);
     setBusy(true);
+    setMedia(null);
+    setMediaState('loading');
     try {
       const res = await ops.unmountISO();
       if (res.success) {
@@ -149,7 +165,6 @@ export function BMCBootMediaCard({ profileID }: BMCBootMediaCardProps) {
           description: `BMC profile ${profileID}`,
           variant: 'success',
         });
-        await reload();
       } else {
         toast({
           title: 'Unmount failed',
@@ -157,7 +172,14 @@ export function BMCBootMediaCard({ profileID }: BMCBootMediaCardProps) {
           variant: 'destructive',
         });
       }
+    } catch (e) {
+      toast({
+        title: 'Unmount failed',
+        description: e instanceof Error ? e.message : 'The control plane did not answer',
+        variant: 'destructive',
+      });
     } finally {
+      await reload().catch(() => setMediaState('error'));
       setBusy(false);
     }
   };
