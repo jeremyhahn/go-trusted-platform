@@ -68,12 +68,12 @@ func TestIPAMWindow_GRPC(t *testing.T) {
 	assert.Equal(t, windowStart, alloc.GetAllocation().GetIp(), "dynamic allocation starts at the window")
 
 	_, err = svc.CreateIPAMPool(ctx, &platformv1.CreateIPAMPoolRequest{
-		Name: "bad", Cidr: "10.4.6.0/24", RangeStart: "10.4.6.50",
+		Name: "bad", Cidr: "198.18.6.0/24", RangeStart: "198.18.6.50",
 	})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "a half-set range is refused")
 
 	_, err = svc.CreateIPAMPool(ctx, &platformv1.CreateIPAMPoolRequest{
-		Name: "bad2", Cidr: "10.4.7.0/24", Reserved: []string{"not-a-prefix"},
+		Name: "bad2", Cidr: "198.18.7.0/24", Reserved: []string{"not-a-prefix"},
 	})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 
@@ -128,7 +128,7 @@ func TestIPAMWindow_REST(t *testing.T) {
 	var window rest.ErrIPAMWindow
 	require.True(t, errors.As(err, &window), "a half-cleared range is refused: %v", err)
 
-	_, err = svc.CreateIPAMPool(ctx, &rest.CreateIPAMPoolRequest{Name: "bad", CIDR: "10.4.6.0/24", Reserved: []string{"x"}})
+	_, err = svc.CreateIPAMPool(ctx, &rest.CreateIPAMPoolRequest{Name: "bad", CIDR: "198.18.6.0/24", Reserved: []string{"x"}})
 	require.True(t, errors.As(err, &window))
 }
 
@@ -158,7 +158,7 @@ func TestIPAMWindow_QUIC(t *testing.T) {
 	_, err = a.UpdateIPAMPool(ctx, "prov", &quic.UpdateIPAMPoolOptions{UpdateWindow: true, RangeStart: windowStart})
 	assert.ErrorIs(t, err, quic.ErrGatewayIPAMWindow)
 
-	_, err = a.CreateIPAMPool(ctx, &quic.CreateIPAMPoolOptions{Name: "bad", CIDR: "10.4.6.0/24", Reserved: []string{"x"}})
+	_, err = a.CreateIPAMPool(ctx, &quic.CreateIPAMPoolOptions{Name: "bad", CIDR: "198.18.6.0/24", Reserved: []string{"x"}})
 	assert.ErrorIs(t, err, quic.ErrGatewayIPAMWindow)
 }
 
@@ -185,6 +185,6 @@ func TestIPAMWindow_MCP(t *testing.T) {
 	var window *ipam.ErrInvalidWindow
 	require.True(t, errors.As(err, &window))
 
-	_, err = p.GatewayIPAMPoolCreate(ctx, &mcp.IPAMPoolCreateRequest{Name: "bad", CIDR: "10.4.6.0/24", RangeEnd: "10.4.6.9"})
+	_, err = p.GatewayIPAMPoolCreate(ctx, &mcp.IPAMPoolCreateRequest{Name: "bad", CIDR: "198.18.6.0/24", RangeEnd: "198.18.6.9"})
 	require.True(t, errors.As(err, &window), "a half-set range is refused")
 }

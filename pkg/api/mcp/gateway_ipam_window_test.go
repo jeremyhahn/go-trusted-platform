@@ -44,15 +44,15 @@ func TestGatewayIPAMPoolTools_Window(t *testing.T) {
 
 	_, err := registry.ExecuteTool(ctx, "gateway_ipam_pool_create", map[string]interface{}{
 		"name":        "lab",
-		"cidr":        "10.4.9.0/24",
-		"reserved":    []interface{}{"10.4.9.1/32"},
-		"range_start": "10.4.9.50",
-		"range_end":   "10.4.9.254",
+		"cidr":        "198.18.9.0/24",
+		"reserved":    []interface{}{"198.18.9.1/32"},
+		"range_start": "198.18.9.50",
+		"range_end":   "198.18.9.254",
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if len(svc.create.Reserved) != 1 || svc.create.RangeStart != "10.4.9.50" || svc.create.RangeEnd != "10.4.9.254" {
+	if len(svc.create.Reserved) != 1 || svc.create.RangeStart != "198.18.9.50" || svc.create.RangeEnd != "198.18.9.254" {
 		t.Fatalf("create window not passed: %+v", svc.create)
 	}
 

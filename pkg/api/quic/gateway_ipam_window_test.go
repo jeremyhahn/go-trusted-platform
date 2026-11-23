@@ -41,16 +41,16 @@ func (s *windowGatewayService) UpdateIPAMPool(_ context.Context, poolID string, 
 func TestGatewayIPAMWindow_CreateCarriesWindow(t *testing.T) {
 	handler, service := createTestGatewayHandler()
 	payload, err := quicwire.EncodePayload(&GatewayCreateIPAMPoolRequest{
-		Name: "lab", CIDR: "10.4.9.0/24",
-		Reserved: []string{"10.4.9.1/32"}, RangeStart: "10.4.9.50", RangeEnd: "10.4.9.254",
+		Name: "lab", CIDR: "198.18.9.0/24",
+		Reserved: []string{"198.18.9.1/32"}, RangeStart: "198.18.9.50", RangeEnd: "198.18.9.254",
 	})
 	require.NoError(t, err)
 
 	resp := handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpGatewayCreateIPAMPool, Payload: payload})
 	require.Equal(t, quicwire.StatusOK, resp.Status)
-	assert.Equal(t, []string{"10.4.9.1/32"}, service.lastCreatePoolOpts.Reserved)
-	assert.Equal(t, "10.4.9.50", service.lastCreatePoolOpts.RangeStart)
-	assert.Equal(t, "10.4.9.254", service.lastCreatePoolOpts.RangeEnd)
+	assert.Equal(t, []string{"198.18.9.1/32"}, service.lastCreatePoolOpts.Reserved)
+	assert.Equal(t, "198.18.9.50", service.lastCreatePoolOpts.RangeStart)
+	assert.Equal(t, "198.18.9.254", service.lastCreatePoolOpts.RangeEnd)
 }
 
 // TestGatewayIPAMWindow_UpdateCarriesWindow verifies update_window and the
@@ -59,26 +59,26 @@ func TestGatewayIPAMWindow_UpdateCarriesWindow(t *testing.T) {
 	svc := &windowGatewayService{testGatewayService: newTestGatewayService()}
 	handler := NewGatewayHandler(newGatewayTestLogger(), svc)
 	payload, err := quicwire.EncodePayload(&GatewayUpdateIPAMPoolRequest{
-		PoolID: "lab", UpdateWindow: true, RangeStart: "10.4.9.60", RangeEnd: "10.4.9.200",
+		PoolID: "lab", UpdateWindow: true, RangeStart: "198.18.9.60", RangeEnd: "198.18.9.200",
 	})
 	require.NoError(t, err)
 
 	resp := handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpGatewayUpdateIPAMPool, Payload: payload})
 	require.Equal(t, quicwire.StatusOK, resp.Status)
 	require.True(t, svc.lastUpdate.UpdateWindow)
-	assert.Equal(t, "10.4.9.60", svc.lastUpdate.RangeStart)
+	assert.Equal(t, "198.18.9.60", svc.lastUpdate.RangeStart)
 
 	var out GatewayUpdateIPAMPoolResponse
 	require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
-	assert.Equal(t, "10.4.9.200", out.Pool.RangeEnd)
+	assert.Equal(t, "198.18.9.200", out.Pool.RangeEnd)
 }
 
 // TestGatewayIPAMWindow_ErrorStatus maps a window refusal to
 // StatusInvalidArgument, and the detail error matches the sentinel.
 func TestGatewayIPAMWindow_ErrorStatus(t *testing.T) {
 	handler, service := createTestGatewayHandler()
-	service.createPoolErr = ErrGatewayIPAMWindowDetail{Reason: "IP 10.4.9.1 is reserved"}
-	payload, err := quicwire.EncodePayload(&GatewayCreateIPAMPoolRequest{Name: "lab", CIDR: "10.4.9.0/24"})
+	service.createPoolErr = ErrGatewayIPAMWindowDetail{Reason: "IP 198.18.9.1 is reserved"}
+	payload, err := quicwire.EncodePayload(&GatewayCreateIPAMPoolRequest{Name: "lab", CIDR: "198.18.9.0/24"})
 	require.NoError(t, err)
 
 	resp := handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpGatewayCreateIPAMPool, Payload: payload})
