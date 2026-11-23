@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
 // TestCheckTenantSubnet_Accepts takes tenant subnets that leave room for
@@ -64,6 +65,12 @@ func TestCheckTenantSubnet_Refuses(t *testing.T) {
 		{"zone gateway", netip.MustParsePrefix("10.4.1.0/24"), "reserved 10.4.1.1/32"},
 		{"service VIPs", netip.MustParsePrefix("10.4.136.0/24"), "service-vips 10.4.136.0/21"},
 		{"whole environment", netip.MustParsePrefix("10.4.0.0/16"), "reserved"},
+		{"ipv4 spans loopback", netip.MustParsePrefix("126.0.0.0/7"), "not a unicast"},
+		{"ipv4 spans multicast and class E", netip.MustParsePrefix("192.0.0.0/2"), "not a unicast"},
+		{"ipv4 this-network", netip.MustParsePrefix("0.0.0.0/8"), "not a unicast"},
+		{"ipv6 spans link-local and multicast", netip.MustParsePrefix("fe00::/7"), "not a unicast"},
+		{"ipv6 multicast", netip.MustParsePrefix("ff00::/8"), "not a unicast"},
+		{"zone gateway v6 derived", netip.MustParsePrefix("fd12:3456:789a:401::/64"), "reserved fd12:3456:789a:401::1/128"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -74,4 +81,20 @@ func TestCheckTenantSubnet_Refuses(t *testing.T) {
 			assert.Contains(t, e.Error(), tc.reason)
 		})
 	}
+}
+
+// TestCheckTenantSubnet_RefusesOverriddenZoneGateway6 checks that an
+// override's IPv6 zone prefix reserves its gateway too.
+func TestCheckTenantSubnet_RefusesOverriddenZoneGateway6(t *testing.T) {
+	p, err := netplan.New(netplan.Environment{ID: 4, ULA: ula, Overrides: []netplan.Override{
+		{Zone: zone.ZoneManagement, Subnet: netip.MustParsePrefix("198.51.100.0/24"), Subnet6: netip.MustParsePrefix("2001:db8:1::/64")},
+		{Zone: zone.ZoneProvisioning, Subnet: netip.MustParsePrefix("192.0.2.0/24")},
+	}}, zone.Defaults())
+	require.NoError(t, err)
+	prefix := netip.MustParsePrefix("2001:db8:1::/64")
+	err = p.CheckTenantSubnet(prefix)
+	var e netplan.ErrTenantSubnet
+	require.ErrorAs(t, err, &e)
+	assert.Equal(t, prefix, e.Subnet)
+	assert.Contains(t, e.Error(), "reserved 2001:db8:1::1/128")
 }
