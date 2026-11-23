@@ -18,6 +18,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"strings"
 	"testing"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
@@ -739,4 +740,93 @@ func TestAuthorizeTool_MalformedDeclarationRefusedBeforeAuth(t *testing.T) {
 			}
 		})
 	}
+}
+
+// recordingPeerChecker is a PeerAuthorizationChecker that records every
+// question as "subject resource:action" and answers allowed or err.
+type recordingPeerChecker struct {
+	allowed bool
+	err     error
+	asked   []string
+}
+
+func (p *recordingPeerChecker) CheckPeerPermission(_ context.Context, authCtx *platformtoken.AuthorizedContext, resource, action string) (bool, error) {
+	p.asked = append(p.asked, authCtx.Subject+" "+resource+":"+action)
+	return p.allowed, p.err
+}
+
+// TestAuthorizeTool_CertificatePrincipalDecidedByPeerChecker pins #2016: a
+// tokenless mTLS caller's tool permission is decided by the peer checker (the
+// IAM PEP in the daemon), never by scopes on the certificate principal. No
+// checker, a denial or a checker error refuses the tool.
+func TestAuthorizeTool_CertificatePrincipalDecidedByPeerChecker(t *testing.T) {
+	module := declaredTools{"power": quicbaas.Permission("bmc:power")}
+	principal := func(scopes ...string) *platformtoken.AuthorizedContext {
+		return &platformtoken.AuthorizedContext{Subject: "operator.example.com", TenantID: "t", Scopes: scopes}
+	}
+	tlsCtx := func() context.Context {
+		state := &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{&x509.Certificate{}}}}
+		return channelbind.WithConnectionTLS(context.Background(), "mcp", state)
+	}
+	checker := func(peer *fixedPeer, opts ...AuthorizationCheckerOption) *AuthorizationChecker {
+		opts = append([]AuthorizationCheckerOption{WithToolPermissions(module), WithPeerAuthenticator(peer)}, opts...)
+		return NewAuthorizationChecker(nil, legacyCaller(), opts...)
+	}
+
+	t.Run("no checker", func(t *testing.T) {
+		_, err := checker(&fixedPeer{authCtx: principal()}).AuthorizeTool(tlsCtx(), "power", "")
+		if err == nil || err.Type != AuthErrorPermissionDenied {
+			t.Fatalf("no peer checker: want permission denied, got %v", err)
+		}
+	})
+
+	t.Run("wildcard scopes without a checker", func(t *testing.T) {
+		_, err := checker(&fixedPeer{authCtx: principal("*:*", "bmc:power")}).AuthorizeTool(tlsCtx(), "power", "")
+		if err == nil || err.Type != AuthErrorPermissionDenied {
+			t.Fatalf("certificate scopes must not decide: want permission denied, got %v", err)
+		}
+	})
+
+	t.Run("checker denies", func(t *testing.T) {
+		pc := &recordingPeerChecker{}
+		_, err := checker(&fixedPeer{authCtx: principal("*:*")}, WithPeerAuthorizationChecker(pc)).AuthorizeTool(tlsCtx(), "power", "")
+		if err == nil || err.Type != AuthErrorPermissionDenied {
+			t.Fatalf("checker denies: want permission denied, got %v", err)
+		}
+		if len(pc.asked) != 1 {
+			t.Errorf("checker asked %v, want one question", pc.asked)
+		}
+	})
+
+	t.Run("checker fails", func(t *testing.T) {
+		pc := &recordingPeerChecker{allowed: true, err: errors.New("PEP unreachable")}
+		_, err := checker(&fixedPeer{authCtx: principal()}, WithPeerAuthorizationChecker(pc)).AuthorizeTool(tlsCtx(), "power", "")
+		if err == nil || err.Type != AuthErrorPermissionDenied {
+			t.Fatalf("checker error: want permission denied, got %v", err)
+		}
+	})
+
+	t.Run("checker allows", func(t *testing.T) {
+		pc := &recordingPeerChecker{allowed: true}
+		ctx, err := checker(&fixedPeer{authCtx: principal()}, WithPeerAuthorizationChecker(pc)).AuthorizeTool(tlsCtx(), "power", "")
+		if err != nil {
+			t.Fatalf("checker allows: want authorized, got %v", err)
+		}
+		if got := strings.Join(pc.asked, ","); got != "operator.example.com bmc:power" {
+			t.Errorf("checker asked %q, want %q", got, "operator.example.com bmc:power")
+		}
+		if ctx == nil {
+			t.Fatal("authorized context is nil")
+		}
+	})
+
+	t.Run("Authenticate asks no permission", func(t *testing.T) {
+		pc := &recordingPeerChecker{}
+		if err := checker(&fixedPeer{authCtx: principal()}, WithPeerAuthorizationChecker(pc)).Authenticate(tlsCtx(), ""); err != nil {
+			t.Fatalf("Authenticate with a verified certificate: want nil, got %v", err)
+		}
+		if len(pc.asked) != 0 {
+			t.Errorf("checker asked %v, want nothing", pc.asked)
+		}
+	})
 }
