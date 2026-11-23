@@ -168,4 +168,26 @@ for (const helper of [
   assert.ok(!apiMock.includes(helper), `fixtures/api-mock.ts no longer defines ${helper}`);
 }
 
+// The DeleteInvitation matrix row names every page invitation-delete.spec.ts
+// deletes from: the list page and the invitation detail page (#2056).
+const matrix = fs.readFileSync(
+  path.join(import.meta.dirname, '..', '..', '..', 'docs', 'ui', 'coverage-matrix.md'),
+  'utf8',
+);
+const deleteRows = matrix.split('\n').filter((line) => line.startsWith('| `InvitationService.DeleteInvitation`'));
+assert.equal(deleteRows.length, 1, 'coverage-matrix.md has exactly one InvitationService.DeleteInvitation row');
+const deleteRow = deleteRows[0];
+for (const cell of [
+  '`(dashboard)/tenant/invitations/page.tsx`',
+  '`(dashboard)/tenant/invitations/[id]/page.tsx`',
+  '`real-server/invitation-delete.spec.ts`',
+]) {
+  assert.ok(deleteRow.includes(cell), `the DeleteInvitation matrix row names ${cell}`);
+}
+assert.ok(deleteRow.trimEnd().endsWith('| covered |'), 'the DeleteInvitation matrix row is covered');
+const deleteSpec = fs.readFileSync(path.join(import.meta.dirname, 'invitation-delete.spec.ts'), 'utf8');
+for (const goto of ["goto('/tenant/invitations')", 'goto(`/tenant/invitations/${']) {
+  assert.ok(deleteSpec.includes(goto), `invitation-delete.spec.ts calls ${goto}`);
+}
+
 console.log('specs.check: ok');
