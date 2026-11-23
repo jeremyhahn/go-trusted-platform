@@ -122,6 +122,11 @@ machine boots (provisioning zone: enrollment traffic only)
                                             → attestation
 ```
 
+The IDevID fingerprint recorded at enrolment is advisory until the webhook:
+a re-enrolment before install completion replaces the recorded fingerprint;
+once the install-complete webhook has presented it, the fingerprint is binding
+and a later enrolment does not change it (owner ruling 1234).
+
 Two states have no forward path without an external decision: **pending**
 (needs fulfilment) and **quarantined** (needs an operator).
 
