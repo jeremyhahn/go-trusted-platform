@@ -1324,6 +1324,26 @@ func validSignatureList(data []byte) bool {
 	return true
 }
 
+// stageSecureBootFile copies one keys-directory file onto the install-media
+// staging tree. Anything not positively identified as a public enrollment
+// artifact (IsSecureBootPublicArtifact) is written owner-only (0600), so a
+// private signing key is never world-readable on the staging tree, and the
+// plaintext read buffer is wiped once written — matching
+// writeConfiguredNTSMaterial in pkg/ntp, which wipes its copy after the
+// write (#62).
+func stageSecureBootFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	defer clear(data)
+	mode := os.FileMode(0o600)
+	if IsSecureBootPublicArtifact(filepath.Base(src), data) {
+		mode = 0o644
+	}
+	return os.WriteFile(dst, data, mode)
+}
+
 // CopySecureBootKeys copies Secure Boot keys to the ISO for installation.
 // If keys don't exist, they are automatically generated.
 // Keys are always embedded in the ISO regardless of the SecureBoot setting,
@@ -1451,14 +1471,18 @@ func (c *Customizer) CopySecureBootKeys(ctx context.Context) error {
 		// material.
 		if skipPrivateKeys {
 			data, readErr := os.ReadFile(srcPath)
-			if readErr != nil || !IsSecureBootPublicArtifact(entry.Name(), data) {
+			public := readErr == nil && IsSecureBootPublicArtifact(entry.Name(), data)
+			// The allowlist check is the only use of this copy: wipe it so
+			// a rejected (private) file's bytes do not linger.
+			clear(data)
+			if !public {
 				c.logger.Warn("Skipping artifact not identified as public enrollment material (remote/KMS signing configured)",
 					"file", entry.Name())
 				continue
 			}
 		}
 
-		if err := copyFile(srcPath, destPath); err != nil {
+		if err := stageSecureBootFile(srcPath, destPath); err != nil {
 			if mediaSigning {
 				return &WrappedError{Msg: "Secure Boot media signing configured but key file copy failed: " + entry.Name(), Err: err}
 			}

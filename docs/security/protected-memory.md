@@ -198,6 +198,12 @@ tracked here as
   which narrows the window; closing it needs handle-preserving resolution
   below Layer 5. The same pipeline feeds the secure-boot provisioner, so
   this is a platform-wide gap, not an NTS one.
+- **Staging.** Install-media staging (`stageSecureBootFile` in
+  `pkg/iso`) writes any file not positively identified as a public
+  enrollment artifact owner-only (0600) and wipes its read buffer after
+  the write, as `writeConfiguredNTSMaterial` does. The key file on the
+  media is still plaintext, because sbsign and the installer need a key
+  file; only a KMS handle (go-quicbaas#136) removes it.
 
 The store write in between is bounded rather than protected: the SDK
 request field is a plain `[]byte` whose retention the platform cannot
