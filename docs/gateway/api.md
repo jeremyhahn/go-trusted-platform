@@ -370,10 +370,10 @@ The response payload is `{"gateway_id": …, "config": <DesiredConfig>}`, where
 {
   "gateway_id": "edge-01-gateway",
   "version": "rev-4",
-  "load_balancer": {"vips": [{"address": "10.0.200.10", "port": 443, "protocol": "tcp",
-                             "backends": [{"address": "10.0.100.11", "port": 8443, "weight": 2}]}]},
-  "nat": {"snat_internal_cidr": "10.0.100.0/24",
-          "dnat": [{"protocol": "tcp", "external": "203.0.113.10:2022", "internal": "10.0.100.5:22"}]}
+  "load_balancer": {"vips": [{"address": "198.18.200.10", "port": 443, "protocol": "tcp",
+                             "backends": [{"address": "198.18.100.11", "port": 8443, "weight": 2}]}]},
+  "nat": {"snat_internal_cidr": "198.18.100.0/24",
+          "dnat": [{"protocol": "tcp", "external": "203.0.113.10:2022", "internal": "198.18.100.5:22"}]}
 }
 ```
 

@@ -51,11 +51,11 @@ pxeboot \
   --manifest /data/manifest.yaml \
   --media-dir /data/media \
   --interface eth0 \
-  --dhcp-server-ip 10.10.0.1 \
-  --dhcp-range-start 10.10.0.100 \
-  --dhcp-range-end 10.10.0.200 \
-  --dhcp-gateway 10.10.0.1 \
-  --dhcp-dns 10.10.0.1
+  --dhcp-server-ip 192.0.2.1 \
+  --dhcp-range-start 192.0.2.100 \
+  --dhcp-range-end 192.0.2.200 \
+  --dhcp-gateway 192.0.2.1 \
+  --dhcp-dns 192.0.2.1
 ```
 
 Five flags are required — `--manifest`, `--media-dir` (it defaults to
@@ -103,16 +103,16 @@ Stage the per-node values before the machine boots:
 
 ```bash
 curl -X PUT --data-binary "node-01.example.com" \
-  http://10.10.0.1:8080/config/mac/aa-bb-cc-dd-ee-ff/hostname
+  http://192.0.2.1:8080/config/mac/aa-bb-cc-dd-ee-ff/hostname
 
 curl -X PUT --data-binary @node-01-installer.yaml \
-  http://10.10.0.1:8080/config/mac/aa-bb-cc-dd-ee-ff/installer.yaml
+  http://192.0.2.1:8080/config/mac/aa-bb-cc-dd-ee-ff/installer.yaml
 ```
 
 Read them back to confirm:
 
 ```bash
-curl http://10.10.0.1:8080/config/mac/aa-bb-cc-dd-ee-ff/hostname
+curl http://192.0.2.1:8080/config/mac/aa-bb-cc-dd-ee-ff/hostname
 ```
 
 **The MAC must be lowercase and dash-separated here.** `AA:BB:CC:DD:EE:FF` and
@@ -157,9 +157,9 @@ success or failure, so you have a post-mortem even though the install
 environment has already rebooted.
 
 ```
-http://10.10.0.1:8080/installs/
-http://10.10.0.1:8080/installs/node-01.example.com/
-http://10.10.0.1:8080/installs/node-01.example.com/install.log
+http://192.0.2.1:8080/installs/
+http://192.0.2.1:8080/installs/node-01.example.com/
+http://192.0.2.1:8080/installs/node-01.example.com/install.log
 ```
 
 Browse the index in a browser or `curl` the file. On disk it is under
@@ -327,7 +327,7 @@ it, prove it, configure the EEPROM. Its step 5 sets:
 
 ```ini
 BOOT_ORDER=0xf17          # nibbles read right to left: 7 = HTTP, 1 = SD card, f = start over
-HTTP_HOST=10.99.99.1      # the container address
+HTTP_HOST=192.0.2.1       # the container address
 HTTP_PORT=8080            # bootstrap_http_port from bootstrap.yaml
 HTTP_PATH=data/http-boot
 SIGNED_BOOT=1
@@ -340,7 +340,7 @@ record, not from the server
 ([probe rpi-http](../bootstrap/cli.md#6a-1-platformctl-bootstrap-probe-rpi-http)):
 
 ```sh
-platformctl bootstrap probe rpi-http --http-host 10.99.99.1:8080 \
+platformctl bootstrap probe rpi-http --http-host 192.0.2.1:8080 \
   --pubkey bin/netboot-media/http-boot/pubkey.bin --otp-key-hash 3f9a…c1
 ```
 

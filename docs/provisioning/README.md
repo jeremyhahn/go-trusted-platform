@@ -88,7 +88,7 @@ and the enrollment network config as `provisioningNetwork`
     "vlan": 100,
     "useDHCP": true,
     "gateway": "198.51.100.1",
-    "dns": ["10.99.99.2"]
+    "dns": ["192.0.2.2"]
   },
   "acls": [
     {"name": "acl-0", "priority": 100, "match": {"dst_port": "443"}, "action": "allow"}

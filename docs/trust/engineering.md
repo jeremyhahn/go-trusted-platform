@@ -100,7 +100,7 @@ trust:
     per-method-timeout: 15s
     install-to-system-trust: true
     ca-file: /etc/trusted-platform/bmc-ca.pem  # ca-file strategy
-    dane:  { dns-server: "10.0.0.2:8053" }
+    dane:  { dns-server: "192.0.2.2:8053" }
     noise: { server-addr: "cp.example.com:9446", server-static-key: "<64-hex>" }
     spki:  { pin: "<64-hex-sha256>" }          # or pin-file: /etc/trusted-platform/bootstrap-spki-pin
 platform-ca-file: /etc/gatewayd/cp-ca.pem      # gatewayd only: the anchor's source

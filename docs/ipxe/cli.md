@@ -94,11 +94,11 @@ pxeboot \
   --manifest /data/manifest.yaml \
   --media-dir /data/media \
   --interface eth0 \
-  --dhcp-server-ip 10.10.0.1 \
-  --dhcp-range-start 10.10.0.100 \
-  --dhcp-range-end 10.10.0.200 \
-  --dhcp-gateway 10.10.0.1 \
-  --dhcp-dns 10.10.0.1 \
+  --dhcp-server-ip 192.0.2.1 \
+  --dhcp-range-start 192.0.2.100 \
+  --dhcp-range-end 192.0.2.200 \
+  --dhcp-gateway 192.0.2.1 \
+  --dhcp-dns 192.0.2.1 \
   --apk-mirror http://mirror.example.com:8080 \
   --alpine-version 3.22.2
 ```

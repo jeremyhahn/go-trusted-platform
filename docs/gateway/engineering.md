@@ -2174,7 +2174,7 @@ NewActionNATDst(addr, port))`:
 ```
 ffff0030000023200023000100000000002a1c0000000000
 ffff00180000232000240000000200110a0001051f900000
-  = ct(commit,table=28,zone=42,nat(dst=10.0.1.5:8080))
+  = ct(commit,table=28,zone=42,nat(dst=198.18.1.5:8080))
 ```
 
 `TestBucketActionEncoding` (`services/loadbalancer/service_test.go`) pins
@@ -2184,7 +2184,7 @@ pins the bare `nat` argument of the table-20 divert.
 #### Conntrack zones and group IDs
 
 - Each VIP gets its own conntrack zone from the shared `ct.ZoneAllocator`
-  (owner `lb`, key `<proto>/<vip>:<port>`, e.g. `tcp/10.100.0.10:443`). The
+  (owner `lb`, key `<proto>/<vip>:<port>`, e.g. `tcp/198.19.100.10:443`). The
   hairpin source NAT has one more zone, shared by every VIP (owner `lb`, key
   `hairpin`), allocated at `Start` and released at `Stop`.
 - OpenFlow group IDs carry no cookie, so the load balancer owns the dedicated

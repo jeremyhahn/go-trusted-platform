@@ -27,7 +27,7 @@ The installer does this for you from the kernel command line. To do it by hand:
 platformctl bootstrap trust \
   --server-url https://cp.example.com:8443 \
   --strategy auto \
-  --dns-server 10.0.0.2:8053 \
+  --dns-server 192.0.2.2:8053 \
   --install-to-system-trust
 ```
 

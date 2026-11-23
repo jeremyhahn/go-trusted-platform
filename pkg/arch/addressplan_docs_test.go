@@ -30,8 +30,15 @@ var privateRanges = []netip.Prefix{
 //     and docs/bootstrap/user.md derive the reference plan from
 //     netplan.DefaultBase (pkg/sdn/netplan/number.go), an IPv4 /8 that no
 //     documentation range can hold;
+//   - docs/gateway/user.md, docs/installer/user.md, docs/ntp/architecture.md,
+//     docs/ntp/user.md, docs/operations/gateway-bringup.md and
+//     docs/plans/1994.md quote addresses of that same block-4 reference plan;
+//   - docs/ipxe/cli.md, docs/ipxe/engineering.md and docs/ipxe/user.md quote
+//     the PXE test environment constants of pkg/ipxe/testenv.go;
 //   - docs/dns/configuration.md quotes the default forwarders of
 //     pkg/dns/config.go.
+//
+// Their other example addresses use the documentation ranges all the same.
 var docsAddressFiles = []string{
 	"docs/bootstrap/cli.md",
 	"docs/bootstrap/dane-bootstrap-flow.mmd",
@@ -46,17 +53,8 @@ var docsAddressFiles = []string{
 	"docs/gateway/api.md",
 	"docs/gateway/cli.md",
 	"docs/gateway/engineering.md",
-	"docs/gateway/user.md",
 	"docs/iam/configuration.md",
-	"docs/installer/user.md",
-	"docs/ipxe/cli.md",
-	"docs/ipxe/engineering.md",
-	"docs/ipxe/user.md",
-	"docs/ntp/architecture.md",
 	"docs/ntp/engineering.md",
-	"docs/ntp/user.md",
-	"docs/operations/gateway-bringup.md",
-	"docs/plans/1994.md",
 	"docs/provisioning/README.md",
 	"docs/provisioning/client.md",
 	"docs/sdn/INDEX.md",
