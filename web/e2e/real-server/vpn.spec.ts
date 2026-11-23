@@ -82,4 +82,11 @@ test.describe('VPN', () => {
     await page.getByRole('button', { name: 'Confirm Delete' }).click();
     await expect(policies.getByText(name)).toHaveCount(0);
   });
+
+  test('the write controls are open on a server that runs the VPN control plane', async ({ adminPage: page }) => {
+    await openVPNPage(page);
+
+    await expect(page.getByRole('button', { name: 'Enrol Peer' })).toHaveAttribute('data-capability-enabled', 'true');
+    await expect(page.getByRole('button', { name: 'New Policy' })).toHaveAttribute('data-capability-enabled', 'true');
+  });
 });

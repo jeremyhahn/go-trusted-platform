@@ -26,6 +26,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { ServiceUnavailableState } from '@/components/features/platform';
+import { Gated } from '@/components/features/capabilities/gated';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { useApi, useToast, useVPN } from '@/hooks';
 import type { ApiResponse, VPNPeer, VPNPosturePolicy } from 'trusted-platform-sdk';
@@ -415,10 +416,12 @@ export default function VPNPage() {
               <Users className="h-5 w-5" />
               Enrolled Peers
             </CardTitle>
-            <Button size="sm" onClick={() => setEnrolling({ tenantId: '', deviceId: '', zones: '' })}>
-              <Plus className="mr-2 h-4 w-4" />
-              Enrol Peer
-            </Button>
+            <Gated op="POST /api/v1/vpn/peers">
+              <Button size="sm" onClick={() => setEnrolling({ tenantId: '', deviceId: '', zones: '' })}>
+                <Plus className="mr-2 h-4 w-4" />
+                Enrol Peer
+              </Button>
+            </Gated>
           </div>
         </CardHeader>
         <CardContent>
@@ -443,14 +446,16 @@ export default function VPNPage() {
                     <TableCell>{peer.zones.length > 0 ? peer.zones.join(', ') : 'all allowed'}</TableCell>
                     <TableCell className="text-xs">{formatUnix(peer.enrolledAtUnix)}</TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={() => setRevoking(peer)}
-                        aria-label={`Revoke ${peer.deviceId}`}
-                      >
-                        Revoke
-                      </Button>
+                      <Gated op="DELETE /api/v1/vpn/peers/{device_id}">
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => setRevoking(peer)}
+                          aria-label={`Revoke ${peer.deviceId}`}
+                        >
+                          Revoke
+                        </Button>
+                      </Gated>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -467,13 +472,15 @@ export default function VPNPage() {
               <FileCode className="h-5 w-5" />
               Posture Policies
             </CardTitle>
-            <Button
-              size="sm"
-              onClick={() => setDraft({ tenantId: '', name: '', module: 'package vpn.posture\n', isNew: true })}
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              New Policy
-            </Button>
+            <Gated op="PUT /api/v1/vpn/posture-policies/{name}">
+              <Button
+                size="sm"
+                onClick={() => setDraft({ tenantId: '', name: '', module: 'package vpn.posture\n', isNew: true })}
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                New Policy
+              </Button>
+            </Gated>
           </div>
         </CardHeader>
         <CardContent>
@@ -496,23 +503,27 @@ export default function VPNPage() {
                     <TableCell className="font-mono text-sm">{policy.name}</TableCell>
                     <TableCell className="text-xs">{formatUnix(policy.updatedAtUnix)}</TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => openPolicy(policy)}
-                        aria-label={`Edit ${policy.name}`}
-                      >
-                        View / Edit
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        className="ml-2"
-                        onClick={() => setDeleting(policy)}
-                        aria-label={`Delete ${policy.name}`}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      <Gated op="GET /api/v1/vpn/posture-policies/{name}">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openPolicy(policy)}
+                          aria-label={`Edit ${policy.name}`}
+                        >
+                          View / Edit
+                        </Button>
+                      </Gated>
+                      <Gated op="DELETE /api/v1/vpn/posture-policies/{name}">
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="ml-2"
+                          onClick={() => setDeleting(policy)}
+                          aria-label={`Delete ${policy.name}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </Gated>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -536,14 +547,16 @@ export default function VPNPage() {
             <Button variant="outline" onClick={() => setRevoking(null)}>
               Cancel
             </Button>
-            <Button
-              variant="destructive"
-              disabled={revokeSubmitting}
-              onClick={() => revoking && revokePeer(revoking)}
-            >
-              {revokeSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Confirm Revoke
-            </Button>
+            <Gated op="DELETE /api/v1/vpn/peers/{device_id}">
+              <Button
+                variant="destructive"
+                disabled={revokeSubmitting}
+                onClick={() => revoking && revokePeer(revoking)}
+              >
+                {revokeSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Confirm Revoke
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -592,15 +605,17 @@ export default function VPNPage() {
             <Button variant="outline" onClick={() => setEnrolling(null)}>
               Cancel
             </Button>
-            <Button
-              disabled={
-                !enrolling || !enrolling.tenantId.trim() || !enrolling.deviceId.trim() || enrolSubmitting
-              }
-              onClick={() => enrolling && enrolPeer(enrolling)}
-            >
-              {enrolSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Enrol
-            </Button>
+            <Gated op="POST /api/v1/vpn/peers">
+              <Button
+                disabled={
+                  !enrolling || !enrolling.tenantId.trim() || !enrolling.deviceId.trim() || enrolSubmitting
+                }
+                onClick={() => enrolling && enrolPeer(enrolling)}
+              >
+                {enrolSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Enrol
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -619,14 +634,16 @@ export default function VPNPage() {
             <Button variant="outline" onClick={() => setDeleting(null)}>
               Cancel
             </Button>
-            <Button
-              variant="destructive"
-              disabled={deleteSubmitting}
-              onClick={() => deleting && deletePolicy(deleting)}
-            >
-              {deleteSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Confirm Delete
-            </Button>
+            <Gated op="DELETE /api/v1/vpn/posture-policies/{name}">
+              <Button
+                variant="destructive"
+                disabled={deleteSubmitting}
+                onClick={() => deleting && deletePolicy(deleting)}
+              >
+                {deleteSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Confirm Delete
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -676,13 +693,15 @@ export default function VPNPage() {
             <Button variant="outline" onClick={() => setDraft(null)}>
               Cancel
             </Button>
-            <Button
-              disabled={!draft || !draft.tenantId || !draft.name || !draft.module || draftSubmitting}
-              onClick={() => draft && savePolicy(draft)}
-            >
-              {draftSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Save
-            </Button>
+            <Gated op="PUT /api/v1/vpn/posture-policies/{name}">
+              <Button
+                disabled={!draft || !draft.tenantId || !draft.name || !draft.module || draftSubmitting}
+                onClick={() => draft && savePolicy(draft)}
+              >
+                {draftSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Save
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
