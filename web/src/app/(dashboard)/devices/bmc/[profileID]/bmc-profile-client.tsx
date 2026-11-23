@@ -31,6 +31,11 @@ import type { BMCPart } from "@/hooks";
 // The boot devices the server accepts (pkg/bmc/types.go); any other is a 400.
 const BOOT_DEVICES = ["none", "pxe", "disk", "cdrom", "virtual_media"];
 
+// The daemon builds the BMC service without a baremetal provisioning service,
+// so Provision and ProvisionStatus always answer 503 (#2021 Codex round 3).
+const PROVISIONING_UNAVAILABLE =
+  "Provisioning is not available on this server: the daemon has no baremetal provisioning service configured.";
+
 interface PendingAction {
   title: string;
   description: string;
@@ -271,27 +276,19 @@ export default function BMCProfileClient() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground" data-testid="bmc-provision-unavailable">
+              {PROVISIONING_UNAVAILABLE}
+            </p>
             {bmc.provisionStatus && (
               <p className="text-sm">
                 Status: <span data-testid="bmc-provision-state">{bmc.provisionStatus.status}</span>
                 {bmc.provisionStatus.message ? ` — ${bmc.provisionStatus.message}` : ""}
               </p>
             )}
-            <PartError errors={bmc.errors} part="provisionStatus" />
-            <Button
-              variant="destructive"
-              onClick={() =>
-                ask({
-                  title: "Provision host",
-                  description:
-                    "Provisioning powers the host off, boots it once from the network (PXE), installs an operating " +
-                    "system, then sets disk boot and power-cycles it. Running workloads stop and the host's disks " +
-                    "can be overwritten.",
-                  run: () => bmc.provision(),
-                  done: "Host provisioning started",
-                })
-              }
-            >
+            {!bmc.errors.provisionStatus?.startsWith("503") && (
+              <PartError errors={bmc.errors} part="provisionStatus" />
+            )}
+            <Button variant="destructive" disabled title={PROVISIONING_UNAVAILABLE}>
               Provision
             </Button>
           </CardContent>
