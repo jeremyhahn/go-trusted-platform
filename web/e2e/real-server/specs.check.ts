@@ -28,4 +28,8 @@ for (const call of calls) {
   assert.match(call[1], /\bbaseURL\b/, `newContext call names baseURL: ${call[0]}`);
 }
 
+const caPort = fs.readFileSync(path.join(import.meta.dirname, 'ca-port.spec.ts'), 'utf8');
+assert.ok(!caPort.includes("includes('ACTIVE')"), 'ca-port.spec.ts reads the server status CERTIFICATE_STATUS_VALID, not ACTIVE');
+assert.ok(caPort.includes('getCRL('), 'ca-port.spec.ts reads revocation from the CA CRL, not the listing');
+
 console.log('specs.check: ok');
