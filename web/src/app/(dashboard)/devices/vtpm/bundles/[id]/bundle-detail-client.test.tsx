@@ -66,6 +66,9 @@ const button = (name: string) => screen.getByRole('button', { name }) as HTMLBut
 async function renderAndWaitFor(id: string) {
   const view = render(withControlPlane(<BundleDetailClient />));
   await screen.findByRole('heading', { level: 1, name: `vTPM bundle ${id}` });
+  // The gate reads every op as off until the capabilities answer lands; wait
+  // for it on Get bundle path, which every case leaves on.
+  await waitFor(() => expect(button('Get bundle path').getAttribute('data-capability-enabled')).toBe('true'));
   return view;
 }
 
