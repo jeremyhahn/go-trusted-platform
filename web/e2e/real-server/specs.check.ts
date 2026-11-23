@@ -141,6 +141,9 @@ for (const helper of [
   'mockIAMGroupsTenantsApi',
   'mockIAMPolicyAppApi',
   'mockIDevIDApi',
+  // No spec uses these either (#2037).
+  'mockHealthApi',
+  'mockAllApis',
 ]) {
   assert.ok(!apiMock.includes(helper), `fixtures/api-mock.ts no longer defines ${helper}`);
 }
