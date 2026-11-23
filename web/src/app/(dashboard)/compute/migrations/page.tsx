@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Gated } from '@/components/features/capabilities/gated';
 import { useToast } from '@/hooks/use-toast';
-import { useVMMigration } from '@/hooks/use-vm-migration';
+import { useVMMigration, type MigrationGuestSpec } from '@/hooks/use-vm-migration';
 
 const PREPARE_OP = 'POST /api/v1/compute/migrations/prepare';
 const FINALIZE_OP = 'POST /api/v1/compute/migrations/{receiverId}/finalize';
@@ -29,17 +29,37 @@ function errorText(err: unknown): string {
   return 'the control plane refused the migration request';
 }
 
+// positiveInt reads a form field as a positive whole number, or null.
+function positiveInt(value: string): number | null {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  const n = Number(trimmed);
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
 /**
  * MigrationsPage readies a receiver on this host for an incoming VM
  * (PrepareMigration) and commits or aborts it after a confirm
  * (FinalizeMigration), through the SDK ComputeService (useVMMigration),
- * each control behind the server's capability gate (#2044).
+ * each control behind the server's capability gate (#2044). The receiver
+ * needs the guest spec (memory, vCPUs, arch, disk size, KVM, vTPM, secure
+ * boot) to build the incoming VM: PrepareMigration refuses a request without
+ * one ("migration spec is required").
  */
 export default function MigrationsPage() {
   const { toast } = useToast();
   const [vmId, setVmId] = useState('');
   const [vmName, setVmName] = useState('');
   const [mode, setMode] = useState<'cold' | 'live'>('cold');
+  const [memoryMb, setMemoryMb] = useState('');
+  const [cpus, setCpus] = useState('');
+  const [arch, setArch] = useState<'x86_64' | 'aarch64'>('x86_64');
+  const [diskSize, setDiskSize] = useState('');
+  const [enableKvm, setEnableKvm] = useState(true);
+  const [tpmEnabled, setTpmEnabled] = useState(false);
+  const [secureBoot, setSecureBoot] = useState(false);
   const [pending, setPending] = useState(false);
   const [receiver, setReceiver] = useState<Receiver | null>(null);
   const [confirm, setConfirm] = useState<'commit' | 'abort' | null>(null);
@@ -49,15 +69,23 @@ export default function MigrationsPage() {
     toast({ title: 'Migration request failed', description: message, variant: 'destructive' });
   };
 
+  const memory = positiveInt(memoryMb);
+  const vcpus = positiveInt(cpus);
+  const canPrepare = !!vmId.trim() && !!vmName.trim() && memory !== null && vcpus !== null && !pending;
+
   const handlePrepare = async () => {
     const id = vmId.trim();
     const name = vmName.trim();
-    if (!id || !name || pending) {
+    if (!id || !name || memory === null || vcpus === null || pending) {
       return;
+    }
+    const spec: MigrationGuestSpec = { memoryMb: memory, cpus: vcpus, arch, enableKvm, tpmEnabled, secureBoot };
+    if (diskSize.trim()) {
+      spec.diskSize = diskSize.trim();
     }
     setPending(true);
     try {
-      const res = await prepare({ vmId: id, vmName: name, mode });
+      const res = await prepare({ vmId: id, vmName: name, mode, spec });
       if (!res || res.success === false || !res.data) {
         fail(errorText(res?.error));
         return;
@@ -142,8 +170,63 @@ export default function MigrationsPage() {
               <option value="live">live</option>
             </select>
           </div>
+          <div className="space-y-2">
+            <Label htmlFor="migration-memory">Memory (MB)</Label>
+            <Input
+              id="migration-memory"
+              type="number"
+              min={1}
+              value={memoryMb}
+              onChange={(e) => setMemoryMb(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="migration-cpus">vCPUs</Label>
+            <Input
+              id="migration-cpus"
+              type="number"
+              min={1}
+              value={cpus}
+              onChange={(e) => setCpus(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="migration-arch">Arch</Label>
+            <select
+              id="migration-arch"
+              className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm"
+              value={arch}
+              onChange={(e) => setArch(e.target.value === 'aarch64' ? 'aarch64' : 'x86_64')}
+            >
+              <option value="x86_64">x86_64</option>
+              <option value="aarch64">aarch64</option>
+            </select>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="migration-disk-size">Disk size</Label>
+            <Input
+              id="migration-disk-size"
+              placeholder="20G"
+              value={diskSize}
+              onChange={(e) => setDiskSize(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-wrap gap-4 text-sm">
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={enableKvm} onChange={(e) => setEnableKvm(e.target.checked)} />
+              KVM acceleration
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={tpmEnabled} onChange={(e) => setTpmEnabled(e.target.checked)} />
+              vTPM
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={secureBoot} onChange={(e) => setSecureBoot(e.target.checked)} />
+              Secure boot
+            </label>
+          </div>
           <Gated op={PREPARE_OP}>
-            <Button onClick={handlePrepare} disabled={!vmId.trim() || !vmName.trim() || pending}>
+            <Button onClick={handlePrepare} disabled={!canPrepare}>
               Prepare receiver
             </Button>
           </Gated>

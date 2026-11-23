@@ -55,6 +55,8 @@ function fillForm() {
   fireEvent.change(screen.getByLabelText('VM ID'), { target: { value: 'vm-1' } });
   fireEvent.change(screen.getByLabelText('VM name'), { target: { value: 'vm-one' } });
   fireEvent.change(screen.getByLabelText('Mode'), { target: { value: 'cold' } });
+  fireEvent.change(screen.getByLabelText('Memory (MB)'), { target: { value: '2048' } });
+  fireEvent.change(screen.getByLabelText('vCPUs'), { target: { value: '2' } });
 }
 
 async function prepareReceiver() {
@@ -79,12 +81,42 @@ describe('MigrationsPage', () => {
     expect(sent).toContainEqual({
       method: 'POST',
       path: '/api/v1/compute/migrations/prepare',
-      body: { vmId: 'vm-1', vmName: 'vm-one', mode: 'cold' },
+      body: {
+        vmId: 'vm-1',
+        vmName: 'vm-one',
+        mode: 'cold',
+        spec: { memoryMb: 2048, cpus: 2, arch: 'x86_64', enableKvm: true, tpmEnabled: false, secureBoot: false },
+      },
     });
     const receiver = screen.getByTestId('migration-receiver');
     expect(receiver.textContent).toContain('rx-1');
     expect(receiver.textContent).toContain('7443');
     expect(receiver.textContent).toContain('receiver.example.test');
+  });
+
+  it('keeps Prepare receiver disabled until the guest memory and vCPUs are set', async () => {
+    const sent = stubControlPlane(routes());
+    render(withControlPlane(<MigrationsPage />));
+    fireEvent.change(screen.getByLabelText('VM ID'), { target: { value: 'vm-1' } });
+    fireEvent.change(screen.getByLabelText('VM name'), { target: { value: 'vm-one' } });
+
+    const prepare = () => screen.getByRole('button', { name: 'Prepare receiver' }) as HTMLButtonElement;
+    await waitFor(() => expect(prepare().getAttribute('data-capability-enabled')).toBe('true'));
+    expect(prepare().disabled).toBe(true);
+
+    fireEvent.change(screen.getByLabelText('Memory (MB)'), { target: { value: '2048' } });
+    expect(prepare().disabled).toBe(true);
+
+    fireEvent.change(screen.getByLabelText('vCPUs'), { target: { value: '0' } });
+    expect(prepare().disabled).toBe(true);
+
+    fireEvent.change(screen.getByLabelText('vCPUs'), { target: { value: '2' } });
+    expect(prepare().disabled).toBe(false);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Prepare receiver' }));
+    });
+    await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/compute/migrations/prepare')).toBe(true));
   });
 
   it('commits only after the confirm', async () => {

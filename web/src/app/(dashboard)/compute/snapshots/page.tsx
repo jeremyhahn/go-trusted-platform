@@ -41,7 +41,6 @@ export default function SnapshotsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [createVmId, setCreateVmId] = useState('');
   const [createName, setCreateName] = useState('');
-  const [createMemory, setCreateMemory] = useState(false);
   // The row action waiting for the operator's confirm.
   const [pending, setPending] = useState<{ kind: 'restore' | 'delete'; snapshot: SnapshotWithSource } | null>(null);
 
@@ -159,13 +158,14 @@ export default function SnapshotsPage() {
   const resetCreate = () => {
     setCreateVmId('');
     setCreateName('');
-    setCreateMemory(false);
   };
 
   // Create snapshot mutation
   const createSnapshotMutation = useMutation(
-    async ({ vmId, name, memorySnapshot }: { vmId: string; name: string; memorySnapshot: boolean }) => {
-      return compute.createSnapshot({ vmId, config: { name: name.trim(), memorySnapshot } });
+    // The server refuses unequal memory and disk flags: an internal snapshot
+    // always captures both.
+    async ({ vmId, name }: { vmId: string; name: string }) => {
+      return compute.createSnapshot({ vmId, config: { name: name.trim(), memorySnapshot: true, diskSnapshot: true } });
     },
     {
       onSuccess: () => {
@@ -192,7 +192,7 @@ export default function SnapshotsPage() {
     if (!createVmId || !createName.trim()) {
       return;
     }
-    createSnapshotMutation.mutate({ vmId: createVmId, name: createName, memorySnapshot: createMemory });
+    createSnapshotMutation.mutate({ vmId: createVmId, name: createName });
   };
 
   // Restore snapshot mutation
@@ -370,16 +370,7 @@ export default function SnapshotsPage() {
                 onChange={(e) => setCreateName(e.target.value)}
               />
             </div>
-            <div className="flex items-center gap-2">
-              <input
-                id="create-snapshot-memory"
-                type="checkbox"
-                aria-label="Include memory"
-                checked={createMemory}
-                onChange={(e) => setCreateMemory(e.target.checked)}
-              />
-              <Label htmlFor="create-snapshot-memory">Include memory</Label>
-            </div>
+            <p className="text-sm text-muted-foreground">Snapshots capture memory and disk.</p>
           </div>
           <DialogFooter>
             <Button
