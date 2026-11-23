@@ -93,6 +93,7 @@ export type { VTPMRunState } from './use-vtpm-runtime';
 
 export { useReportedGateways } from './use-reported-gateways';
 export { useOverlayVteps } from './use-overlay-vteps';
+export { useSwitches } from './use-switches';
 export { useRegistry, encodeRepository } from './use-registry';
 export type {
   RegistryHealthCode,
