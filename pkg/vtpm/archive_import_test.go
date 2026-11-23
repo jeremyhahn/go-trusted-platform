@@ -415,3 +415,43 @@ func TestArchiver_ChecksumGate_ExportRefreshesChangedState(t *testing.T) {
 		t.Fatalf("imported checksum = %q, want %q", got, want)
 	}
 }
+
+// assertImportRefusedUnpublished checks the import failed, published none
+// of ids and left no staging behind.
+func assertImportRefusedUnpublished(t *testing.T, config *Config, err error, ids ...string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("ImportFromFile succeeded, want a refusal")
+	}
+	for _, id := range ids {
+		if _, statErr := os.Stat(config.BundlePath(id)); !os.IsNotExist(statErr) {
+			t.Errorf("bundle %s published despite the refusal: stat err %v", id, statErr)
+		}
+	}
+	assertNoStagingLeft(t, config)
+}
+
+// TestArchiver_ChecksumGate_RefusesADuplicateManifest imports an archive
+// whose second manifest.json (an equivalent cleaned path) would replace the
+// validated one in the stage: the import is refused and nothing is
+// published (#2021 Codex round 5).
+func TestArchiver_ChecksumGate_RefusesADuplicateManifest(t *testing.T) {
+	config, _, err := importChecksumArchive(t, []tarEntry{
+		{name: "p/manifest.json", typeflag: tar.TypeReg, body: `{"id":"dup","checksums":{}}`},
+		{name: "p/./manifest.json", typeflag: tar.TypeReg, body: `{"id":"dup","checksums":{"tpm/tpm2-00.permall":"` + checksumOf("original-state") + `"}}`},
+		{name: "p/tpm/tpm2-00.permall", typeflag: tar.TypeReg, body: "altered-state"},
+	})
+	assertImportRefusedUnpublished(t, config, err, "dup")
+}
+
+// TestArchiver_ChecksumGate_RefusesAStagedManifestWithAnotherID imports an
+// archive whose later manifest.json names another bundle ID than the one
+// validated: neither ID is published (#2021 Codex round 5).
+func TestArchiver_ChecksumGate_RefusesAStagedManifestWithAnotherID(t *testing.T) {
+	config, _, err := importChecksumArchive(t, []tarEntry{
+		{name: "p/manifest.json", typeflag: tar.TypeReg, body: `{"id":"first","checksums":{}}`},
+		{name: "p/tpm/tpm2-00.permall", typeflag: tar.TypeReg, body: "state"},
+		{name: "p/manifest.json", typeflag: tar.TypeReg, body: `{"id":"second","checksums":{}}`},
+	})
+	assertImportRefusedUnpublished(t, config, err, "first", "second")
+}
