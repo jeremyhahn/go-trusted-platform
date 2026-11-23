@@ -66,4 +66,9 @@ for (const t of MOCKED) {
   assert.ok(port.includes(t), `iam-users-port.spec.ts ports or lists: ${t}`);
 }
 
+// Codex round 4 P1: Response.json() is the raw envelope; the user is under payload.
+assert.ok(port.includes('unwrapPayload('), 'iam-users-port.spec.ts unwraps raw answers with unwrapPayload');
+assert.ok(port.includes("from './fixtures/wire'"), "iam-users-port.spec.ts imports unwrapPayload from './fixtures/wire'");
+assert.ok(!port.includes('userOf(await res.json())'), 'iam-users-port.spec.ts reads no user from the raw envelope');
+
 console.log('iam-users-port.check: ok');

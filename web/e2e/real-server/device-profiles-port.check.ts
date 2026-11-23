@@ -64,4 +64,9 @@ for (const t of MOCKED) {
   assert.ok(port.includes(t), `device-profiles-port.spec.ts ports or lists: ${t}`);
 }
 
+// Codex round 4 P1: Response.json() is the raw envelope; the profile is under payload.
+assert.ok(port.includes('unwrapPayload('), 'device-profiles-port.spec.ts unwraps raw answers with unwrapPayload');
+assert.ok(port.includes("from './fixtures/wire'"), "device-profiles-port.spec.ts imports unwrapPayload from './fixtures/wire'");
+assert.ok(!port.includes('isRecord(body) && body.name'), 'device-profiles-port.spec.ts reads no profile from the raw envelope');
+
 console.log('device-profiles-port.check: ok');

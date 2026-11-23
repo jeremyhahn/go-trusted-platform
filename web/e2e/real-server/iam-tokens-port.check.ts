@@ -54,4 +54,9 @@ for (const t of MOCKED) {
   assert.ok(port.includes(t), `iam-tokens-port.spec.ts ports or lists: ${t}`);
 }
 
+// Codex round 4 P1: Response.json() is the raw envelope; the app record is under payload, not data.
+assert.ok(port.includes('unwrapPayload('), 'iam-tokens-port.spec.ts unwraps raw answers with unwrapPayload');
+assert.ok(port.includes("from './fixtures/wire'"), "iam-tokens-port.spec.ts imports unwrapPayload from './fixtures/wire'");
+assert.ok(!port.includes('const data = b.data;'), 'iam-tokens-port.spec.ts reads no app record from the envelope data field');
+
 console.log('iam-tokens-port.check: ok');

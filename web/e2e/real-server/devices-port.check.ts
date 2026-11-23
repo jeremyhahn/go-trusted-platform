@@ -80,4 +80,10 @@ for (const t of MOCKED) {
   assert.ok(port.includes(t), `devices-port.spec.ts ports or lists: ${t}`);
 }
 
+// Codex round 4 P1: Response.json() is the raw envelope; the device is under payload.
+assert.ok(port.includes('unwrapPayload('), 'devices-port.spec.ts unwraps raw answers with unwrapPayload');
+assert.ok(port.includes("from './fixtures/wire'"), "devices-port.spec.ts imports unwrapPayload from './fixtures/wire'");
+assert.ok(!port.includes('deviceOf(await res.json())'), 'devices-port.spec.ts reads no device from the raw envelope');
+assert.ok(!port.includes('deviceOf(body)'), 'devices-port.spec.ts reads no created device from the raw envelope');
+
 console.log('devices-port.check: ok');
