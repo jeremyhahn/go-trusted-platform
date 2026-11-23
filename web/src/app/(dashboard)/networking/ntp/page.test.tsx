@@ -59,7 +59,10 @@ const sourcesCap: Capability = { op: "GET /api/v1/ntp/sources", kind: "route", e
 const stepCap: Capability = { op: "POST /api/v1/ntp/step", kind: "route", enabled: true };
 
 /** Answers the capabilities read with `caps` and the two NTP reads with one status and one source. */
-function routes(caps: Capability[]) {
+/** Answers that override the default sources read and add a step answer. */
+type RouteAnswers = { sources?: () => Response; step?: () => Response };
+
+function routes(caps: Capability[], answers: RouteAnswers = {}) {
   return (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     const method = init?.method ?? "GET";
@@ -72,7 +75,10 @@ function routes(caps: Capability[]) {
       return Promise.resolve(ok({ status }));
     }
     if (method === "GET" && url.pathname === "/api/v1/ntp/sources") {
-      return Promise.resolve(ok({ sources: [source] }));
+      return Promise.resolve(answers.sources ? answers.sources() : ok({ sources: [source] }));
+    }
+    if (method === "POST" && url.pathname === "/api/v1/ntp/step" && answers.step) {
+      return Promise.resolve(answers.step());
     }
     return Promise.resolve(failure(404, `no route ${method} ${url.pathname}`));
   };
@@ -183,5 +189,90 @@ describe("NTPPage", () => {
     const reason = await screen.findByTestId("ntp-sources-not-enabled");
     expect(reason.textContent).toContain("unimplemented");
     expect(callsUnder("/api/v1/ntp/sources")).toHaveLength(0);
+  });
+
+  /** The POST calls fetch saw to the step route. */
+  function stepPosts() {
+    return callsUnder("/api/v1/ntp/step").filter(([, init]) => init?.method === "POST");
+  }
+
+  it("lists each source's address, state and octal reach", async () => {
+    const sources = [
+      { ...source, address: "192.0.2.10", state: "selected", reach: 255 },
+      { ...source, address: "192.0.2.11", state: "candidate", reach: 7, reachable: false },
+    ];
+    fetchMock.mockImplementation(
+      routes([statusCap, sourcesCap, stepCap], { sources: () => ok({ sources }) })
+    );
+
+    renderPage();
+
+    const table = await screen.findByTestId("ntp-sources-table");
+    const first = (await within(table).findByText("192.0.2.10")).closest("tr") as HTMLElement;
+    const second = within(table).getByText("192.0.2.11").closest("tr") as HTMLElement;
+    expect(within(first).getByText("selected")).toBeTruthy();
+    expect(within(first).getByText("377")).toBeTruthy();
+    expect(within(second).getByText("candidate")).toBeTruthy();
+    expect(within(second).getByText("7")).toBeTruthy();
+    expect(within(table).queryByText("No sources configured")).toBeNull();
+  });
+
+  it("a failed sources read shows the ntp-sources-error row, not No sources configured", async () => {
+    fetchMock.mockImplementation(
+      routes([statusCap, sourcesCap, stepCap], { sources: () => failure(503, "chrony down") })
+    );
+
+    renderPage();
+
+    const row = await screen.findByTestId("ntp-sources-error");
+    expect(row.textContent).toContain("chrony down");
+    expect(screen.queryByText("No sources configured")).toBeNull();
+  });
+
+  it("Step Clock opens the confirm and a confirmed step posts once and shows the stepped status", async () => {
+    fetchMock.mockImplementation(
+      routes([statusCap, sourcesCap, stepCap], {
+        step: () => ok({ status: { ...status, referenceName: "stepped.reference.test" } }),
+      })
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("ntp.reference.test")).toBeTruthy();
+    await waitFor(() => expect(stepButton().disabled).toBe(false));
+    fireEvent.click(stepButton());
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Step the clock?")).toBeTruthy();
+    expect(stepPosts()).toHaveLength(0);
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Confirm Step" }));
+
+    expect(await screen.findByText("stepped.reference.test")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(stepPosts()).toHaveLength(1);
+  });
+
+  it("a refused step keeps the status, keeps the dialog open and posts once", async () => {
+    fetchMock.mockImplementation(
+      routes([statusCap, sourcesCap, stepCap], { step: () => failure(409, "step refused") })
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("ntp.reference.test")).toBeTruthy();
+    await waitFor(() => expect(stepButton().disabled).toBe(false));
+    fireEvent.click(stepButton());
+
+    const dialog = await screen.findByRole("dialog");
+    const confirm = within(dialog).getByRole("button", { name: "Confirm Step" }) as HTMLButtonElement;
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(stepPosts()).toHaveLength(1));
+    await waitFor(() => expect(confirm.disabled).toBe(false));
+    expect(screen.getByText("ntp.reference.test")).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(within(screen.getByRole("dialog")).getByText("Step the clock?")).toBeTruthy();
+    expect(stepPosts()).toHaveLength(1);
   });
 });
