@@ -1300,6 +1300,46 @@ func TestDeviceGRPCService_ActivateDevice_NoProductionNetwork(t *testing.T) {
 	assert.Equal(t, uint32(0), resp.Vlan) // No VLAN when no production network
 }
 
+// TestDeviceGRPCService_ActivateDevice_RefusesRevokedAndSuspended: the gRPC
+// activation check refuses the two states the boot route refuses, instead of
+// reporting a VLAN the device would never be admitted to.
+func TestDeviceGRPCService_ActivateDevice_RefusesRevokedAndSuspended(t *testing.T) {
+	for _, state := range []entities.DeviceState{
+		entities.DeviceStateRevoked,
+		entities.DeviceStateSuspended,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			deviceSvc := newMockDeviceService()
+			deviceSvc.devices[1] = &entities.Device{
+				ID:     1,
+				Model:  "TestModel",
+				Serial: "SN001",
+				State:  state,
+			}
+			profileSvc := newMockProfileService()
+			profileSvc.profiles[1] = &entities.DeviceProfile{
+				ID:   1,
+				Name: "TestProfile",
+				MatchRules: &entities.ProfileMatchRules{
+					Model: "TestModel",
+				},
+				Networks: map[string]*entities.NetworkPhaseConfig{
+					entities.DefaultPostEnrollmentNetwork: {
+						VLAN: 100,
+					},
+				},
+			}
+			svc := NewDeviceGRPCService(deviceSvc, profileSvc, nil)
+
+			resp, err := svc.ActivateDevice(context.Background(), &platformv1.ActivateDeviceRequest{Serial: "SN001"})
+			assert.Nil(t, resp)
+			require.Error(t, err)
+			assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+			assert.Contains(t, status.Convert(err).Message(), "state="+string(state))
+		})
+	}
+}
+
 func TestDeviceGRPCService_ConversionHelpers(t *testing.T) {
 	deviceSvc := newMockDeviceService()
 	profileSvc := newMockProfileService()
