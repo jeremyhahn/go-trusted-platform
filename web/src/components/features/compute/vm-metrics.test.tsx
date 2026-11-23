@@ -39,6 +39,22 @@ function metrics(): Answer {
   });
 }
 
+// #2044: protojson writes uint64 fields as JSON strings; the card must add them as numbers.
+function wireMetrics(): Answer {
+  return ok({
+    metrics: {
+      cpuUsagePercent: 12.5,
+      memoryUsedMb: '512',
+      memoryAvailableMb: '1536',
+      diskReadBytes: '4096',
+      diskWriteBytes: '8192',
+      networkRxBytes: '1024',
+      networkTxBytes: '2048',
+      uptimeSeconds: 3600,
+    },
+  });
+}
+
 function metricsGets(sent: { method: string; path: string }[]): number {
   return sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/compute/vms/vm-1/metrics').length;
 }
@@ -53,6 +69,24 @@ describe('VMMetricsCard', () => {
       expect(card.textContent).toContain('12.5');
       expect(card.textContent).toContain('512');
     });
+  });
+
+  it('adds the wire uint64 strings as numbers', async () => {
+    stubControlPlane({ 'GET /api/v1/capabilities': caps(), [METRICS_PATH]: wireMetrics() });
+    render(withControlPlane(<VMMetricsCard vmId="vm-1" />));
+
+    const card = await screen.findByTestId('vm-metrics');
+    await waitFor(() => {
+      expect(card.textContent).toContain('512 MB / 1536 MB');
+    });
+    expect(card.textContent).toContain('4.0 KiB');
+    expect(card.textContent).not.toContain('5121536');
+    // The second progress bar is memory: 512 of 2048 MB is 25 percent, so
+    // the indicator sits 75 percent to the left.
+    const bars = card.querySelectorAll('[role="progressbar"]');
+    expect(bars.length).toBe(2);
+    const indicator = bars[1].firstElementChild as HTMLElement;
+    expect(indicator.style.transform).toBe('translateX(-75%)');
   });
 
   it('re-sends the GET on Refresh metrics', async () => {
