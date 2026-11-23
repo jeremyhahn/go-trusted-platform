@@ -98,6 +98,35 @@ describe('InvitationForm', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it('says the tenant has no IAM roles only for a loaded empty list', () => {
+    render(<InvitationForm onSubmit={vi.fn()} roles={[]} />);
+    const dialog = openDialog();
+    expect(within(dialog).getByText(/no IAM roles/i)).toBeTruthy();
+  });
+
+  it('shows a loading state while the roles load', () => {
+    render(<InvitationForm onSubmit={vi.fn()} roles={[]} rolesLoading />);
+    const dialog = openDialog();
+    fireEvent.change(emailInput(dialog), { target: { value: 'l@example.com' } });
+    expect(within(dialog).getByText(/loading roles/i)).toBeTruthy();
+    expect(within(dialog).queryByText(/no IAM roles/i)).toBeNull();
+    expect(submitButton(dialog).disabled).toBe(true);
+  });
+
+  it('shows a failed role lookup with a retry instead of an empty list', () => {
+    const onRetryRoles = vi.fn();
+    render(
+      <InvitationForm onSubmit={vi.fn()} roles={[]} rolesError="roles unavailable" onRetryRoles={onRetryRoles} />,
+    );
+    const dialog = openDialog();
+    fireEvent.change(emailInput(dialog), { target: { value: 'x@example.com' } });
+    expect(within(dialog).getByText(/roles unavailable/)).toBeTruthy();
+    expect(within(dialog).queryByText(/no IAM roles/i)).toBeNull();
+    expect(submitButton(dialog).disabled).toBe(true);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Retry' }));
+    expect(onRetryRoles).toHaveBeenCalledTimes(1);
+  });
+
   it('does not send when the form is submitted with an empty email', () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     render(<InvitationForm onSubmit={onSubmit} roles={ROLES} />);
