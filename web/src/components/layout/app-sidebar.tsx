@@ -74,6 +74,7 @@ const navigation = [
       { title: "Invitations", href: "/tenant/invitations" },
       { title: "Quotas", href: "/tenant/quotas" },
       { title: "Barrier", href: "/tenant/barrier" },
+      { title: "Directory", href: "/tenant/directory" },
     ],
   },
   {
