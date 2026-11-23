@@ -15,6 +15,7 @@ package tenant
 
 import (
 	"errors"
+	"math"
 	"testing"
 )
 
@@ -251,4 +252,108 @@ func TestVRFQuota_NegativeCounts(t *testing.T) {
 	q := newQuota()
 	q.Release(-1, -1, -1)
 	check(t, q)
+}
+
+// TestVRFQuota_OverflowIsRefused pins that a request large enough to wrap
+// Used+n negative is refused, that exactly the remaining capacity is
+// admitted, and that a quota already over its limit admits nothing.
+func TestVRFQuota_OverflowIsRefused(t *testing.T) {
+	newQuota := func() *VRFQuota {
+		return &VRFQuota{
+			MaxVRFs: 2, MaxNetworks: 2, MaxServices: 2,
+			UsedVRFs: 1, UsedNetworks: 1, UsedServices: 1,
+		}
+	}
+	used := func(q *VRFQuota, resource string) int64 {
+		switch resource {
+		case "VRFs":
+			return q.UsedVRFs
+		case "networks":
+			return q.UsedNetworks
+		default:
+			return q.UsedServices
+		}
+	}
+	rows := []struct {
+		resource string
+		counts   [3]int64
+	}{
+		{"VRFs", [3]int64{math.MaxInt64, 0, 0}},
+		{"networks", [3]int64{0, math.MaxInt64, 0}},
+		{"services", [3]int64{0, 0, math.MaxInt64}},
+	}
+	scale := func(c [3]int64, n int64) [3]int64 {
+		var out [3]int64
+		for i, v := range c {
+			if v != 0 {
+				out[i] = n
+			}
+		}
+		return out
+	}
+	for _, row := range rows {
+		t.Run(row.resource, func(t *testing.T) {
+			c := row.counts
+
+			q := newQuota()
+			if q.HasCapacity(c[0], c[1], c[2]) {
+				t.Errorf("HasCapacity(%v) = true, want false for math.MaxInt64 %s", c, row.resource)
+			}
+			err := q.Reserve("acme", c[0], c[1], c[2])
+			var exceeded ErrQuotaExceeded
+			if !errors.As(err, &exceeded) {
+				t.Fatalf("Reserve(%v) = %v, want ErrQuotaExceeded for math.MaxInt64 %s", c, err, row.resource)
+			}
+			if exceeded.Resource != row.resource || exceeded.Requested != math.MaxInt64 {
+				t.Errorf("ErrQuotaExceeded = %+v, want Resource %q Requested math.MaxInt64", exceeded, row.resource)
+			}
+			if q.UsedVRFs != 1 || q.UsedNetworks != 1 || q.UsedServices != 1 {
+				t.Errorf("usage changed: vrfs=%d networks=%d services=%d", q.UsedVRFs, q.UsedNetworks, q.UsedServices)
+			}
+
+			// Exactly the remaining capacity is admitted.
+			one := scale(c, 1)
+			q = newQuota()
+			if !q.HasCapacity(one[0], one[1], one[2]) {
+				t.Errorf("HasCapacity(%v) = false, want true for the remaining 1", one)
+			}
+			if err := q.Reserve("acme", one[0], one[1], one[2]); err != nil {
+				t.Errorf("Reserve(%v) = %v, want nil for the remaining 1", one, err)
+			}
+			if got := used(q, row.resource); got != 2 {
+				t.Errorf("used %s = %d after reserving the remaining 1, want 2", row.resource, got)
+			}
+
+			// One more than the remaining capacity is refused.
+			two := scale(c, 2)
+			q = newQuota()
+			if q.HasCapacity(two[0], two[1], two[2]) {
+				t.Errorf("HasCapacity(%v) = true, want false past the remaining 1", two)
+			}
+			if err := q.Reserve("acme", two[0], two[1], two[2]); !errors.As(err, &exceeded) {
+				t.Errorf("Reserve(%v) = %v, want ErrQuotaExceeded", two, err)
+			}
+			if got := used(q, row.resource); got != 1 {
+				t.Errorf("used %s = %d after a refused request, want 1", row.resource, got)
+			}
+
+			// A quota already over its limit refuses 1 and math.MaxInt64 alike.
+			for _, n := range []int64{1, math.MaxInt64} {
+				over := &VRFQuota{
+					MaxVRFs: 1, MaxNetworks: 1, MaxServices: 1,
+					UsedVRFs: 3, UsedNetworks: 3, UsedServices: 3,
+				}
+				req := scale(c, n)
+				if over.HasCapacity(req[0], req[1], req[2]) {
+					t.Errorf("over-limit HasCapacity(%v) = true, want false", req)
+				}
+				if err := over.Reserve("acme", req[0], req[1], req[2]); !errors.As(err, &exceeded) {
+					t.Errorf("over-limit Reserve(%v) = %v, want ErrQuotaExceeded", req, err)
+				}
+				if got := used(over, row.resource); got != 3 {
+					t.Errorf("over-limit used %s = %d after a refused request, want 3", row.resource, got)
+				}
+			}
+		})
+	}
 }
