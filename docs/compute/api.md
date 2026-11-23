@@ -271,7 +271,18 @@ same `ComputeService` as gRPC (§6).
 **The Go SDK carries each verb the daemon answers.** Its REST adapter maps all
 six lifecycle verbs to the routes above, with the id in the path and
 `delete_disks` as a query parameter, and sends the full `CreateVMRequest` as
-the body of `POST /api/v1/compute/vms`. Its MCP adapter maps all six, plus
+the body of `POST /api/v1/compute/vms`. It also maps `GetVM`
+(`GET /api/v1/compute/vms/{id}`), `GetVMMetrics`
+(`GET /api/v1/compute/vms/{id}/metrics`), `GetContainerMetrics`
+(`GET /api/v1/compute/containers/{id}/metrics`) and `ExecContainer`
+(`POST /api/v1/compute/containers/{id}/exec`, with `command`, `env`,
+`working_dir` and `tty` in the body), the id in the path; an empty id is
+refused with InvalidArgument before any request is sent. It maps `AttachDisk`,
+`DetachDisk`, `ResizeDisk` and `MigrateVM` to
+`POST /api/v1/compute/vms/{id}/disks`, `DELETE` and
+`PATCH /api/v1/compute/vms/{id}/disks/{diskId}` and
+`POST /api/v1/compute/vms/{id}/migrate`, with `vm_id` and `disk_id` in the
+path and the rest of the request in the body. Its MCP adapter maps all six, plus
 create, get and list, to the `vm_*` tools and sends each RPC's full request,
 `force`, `timeout_seconds` and `delete_disks` included
 (`sdk/go/transport/mcp/compute_vm.go`). Its QUIC adapter maps all six, and
@@ -529,8 +540,9 @@ A verb's failure keeps its class: a missing id or VM config is
 `StatusInvalidArgument`, an unknown VM or snapshot `StatusNotFound`, and a VM
 in the wrong state `StatusFailedPrecondition`.
 
-The top-level bytes `0x61`–`0x68` and `0x6A` are unassigned, and `0x60` is
-object storage's category (#704). The flat VM
+The top-level bytes `0x62`–`0x65`, `0x68` and `0x6A` are unassigned; `0x66`/`0x67`
+are the attestation manifest list/delete opcodes (#1686), `0x61` is the DNS
+category, and `0x60` is object storage's category (#704). The flat VM
 handler that once answered them was never wired into platformd and has been
 removed. `0x60`–`0x65` survive only as sub-opcodes under `0x69`. Of the
 sub-opcodes `0xB9`–`0xBF` that went with it, `0xBA`–`0xBE` now carry the

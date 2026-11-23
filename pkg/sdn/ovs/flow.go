@@ -556,6 +556,54 @@ func parseMatchString(match *openflow.Match, matchStr string) error {
 			}
 			match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBVlanVid, raw, mask)
 
+		case "vlan_tci":
+			// The 802.1Q TCI, value[/mask]. Its CFI bit (0x1000) is what
+			// OpenFlow 1.3 calls OFPVID_PRESENT and its low 12 bits are the
+			// VID, so the VID and CFI bits map onto OXM VLAN_VID as they
+			// are: vlan_tci=0x0000/0x1fff (an untagged frame) is
+			// VLAN_VID=OFPVID_NONE. The PCP bits (0xe000) become an exact
+			// VLAN_PCP on a tagged match; OXM has no masked PCP, so a
+			// partial PCP mask, or a PCP on a frame not known to be
+			// tagged, is refused rather than dropped. The one exception
+			// is PCP 0 with the CFI bit masked and clear: the frame is
+			// known untagged and its TCI reads 0. PCP 0 without the CFI
+			// bit in the mask is refused too, since dropping it would
+			// leave a rule that matches every frame (#1896 F49).
+			tci, tciMask, err := parseValueMask(value, 16)
+			if err != nil {
+				return &MessageError{Msg: fmt.Sprintf("invalid vlan_tci: %s", value)}
+			}
+			pcpMask := tciMask & 0xe000
+			tagged := tciMask&0x1000 != 0 && tci&0x1000 != 0
+			matchPCP := false
+			switch {
+			case pcpMask == 0:
+			case pcpMask == 0xe000 && tagged:
+				matchPCP = true
+			case pcpMask == 0xe000 && tciMask&0x1000 != 0 && tci&0xf000 == 0:
+				// A known untagged frame's TCI reads 0, PCP included.
+			default:
+				return &MessageError{Msg: fmt.Sprintf("unsupported vlan_tci PCP match: %s", value)}
+			}
+			// tagged needs the CFI bit in the mask, so a PCP match always
+			// has a VLAN_VID to follow, as its OXM prerequisite.
+			vidMask := tciMask & 0x1fff
+			if vidMask == 0 {
+				break
+			}
+			raw := make([]byte, 2)
+			openflow.ByteOrder.PutUint16(raw, uint16(tci&vidMask))
+			var mask []byte
+			if vidMask != 0x1fff {
+				mask = make([]byte, 2)
+				openflow.ByteOrder.PutUint16(mask, uint16(vidMask))
+			}
+			match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBVlanVid, raw, mask)
+			if matchPCP {
+				match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBVlanPcp,
+					[]byte{byte(tci >> 13)}, nil)
+			}
+
 		case "nw_src":
 			// Check for CIDR notation (e.g., 192.168.1.0/24)
 			if strings.Contains(value, "/") {

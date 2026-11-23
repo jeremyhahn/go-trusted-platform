@@ -114,6 +114,22 @@ func (gs *GeneratorSet) AddProvisioningBootHTTPPorts(ports ...uint16) {
 	}
 }
 
+// SetProvisioningBootServers replaces the addresses the provisioning
+// template's boot ports are open to; nil addresses are skipped, and an empty
+// list leaves the boot ports closed. It is not safe for concurrent use with
+// Generate: the caller serialises the two (ZoneFlowManager holds its lock
+// across both).
+func (gs *GeneratorSet) SetProvisioningBootServers(ips ...net.IP) {
+	servers := make([]net.IP, 0, len(ips))
+	for _, ip := range ips {
+		if ip == nil {
+			continue
+		}
+		servers = append(servers, ip)
+	}
+	gs.cfg.Provisioning.BootServerIPs = servers
+}
+
 func (gs *GeneratorSet) Generate(portID string, z zone.Zone, in Ingress) []FlowRule {
 	gen, ok := gs.generators[z]
 	if !ok || gen == nil {
@@ -254,6 +270,13 @@ const (
 // DefaultPolicyAllow is the MatrixRuleConfig.DefaultPolicy value that makes
 // the conntrack verdict table-miss continue the pipeline instead of dropping.
 const DefaultPolicyAllow = "allow"
+
+// QuarantineCookie tags the quarantine default-drop rule. The switch takes
+// only a numeric cookie, so it sits in the 0xF1BE owner family next to the
+// gateway pipeline (0x0000), firewall (0x0001), NAT (0x0002), load
+// balancer (0x0003), NAT64 (0x0004), overlay (0x0005, 0x0006), the ovs
+// generation tests (0x0007, 0x0008) and perf (0x00FF) owners.
+const QuarantineCookie = "0xF1BE000900000000"
 
 // CompileStatefulMatrixRules derives the conntrack-based stateful firewall
 // rule set from the compiled zone.Matrix. It emits rules for the ct
@@ -557,7 +580,7 @@ func (gs *GeneratorSet) quarantine(portID string, in Ingress) []FlowRule {
 		Priority: prioQDropDefault,
 		Match:    matchInVLAN(portID, in, ""),
 		Actions:  "drop",
-		Cookie:   fmt.Sprintf("quarantine:%s", portID),
+		Cookie:   QuarantineCookie,
 	})
 
 	return flows
@@ -598,7 +621,7 @@ func (gs *GeneratorSet) provisioning(portID string, in Ingress) []FlowRule {
 
 	cfg := gs.cfg.Provisioning
 
-	// DNS
+	// DNS, only to the configured DNS servers; none configured opens nothing.
 	flows = append(flows, gs.serverRules(portID, in, prioDNS, "nw_proto=17",
 		cfg.DNSServerIPs, []uint16{portDNS, portDNSAlt1, portDNSAlt2})...)
 
@@ -612,23 +635,30 @@ func (gs *GeneratorSet) provisioning(portID string, in Ingress) []FlowRule {
 		})
 	}
 
-	// PXE boot server HTTP (iPXE boot script and payloads), both families.
+	// PXE boot server ports (iPXE boot script and payloads, NBD), each only
+	// to a boot server in its own family. A destination-unrestricted allow
+	// at this priority would outrank the matrix deny at prioMatrixDeny, so
+	// the ports are open only to the boot server, and with no boot server
+	// they stay closed.
 	for _, p := range cfg.BootHTTPPorts {
-		for _, f := range families {
+		for _, ip := range cfg.BootServerIPs {
+			f := familyOf(ip)
 			flows = append(flows, FlowRule{
 				Table:    0,
 				Priority: prioTFTP,
-				Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=6", fmt.Sprintf("tp_dst=%d", p))),
+				Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=6", f.toDst(ip.String()), fmt.Sprintf("tp_dst=%d", p))),
 				Actions:  "normal",
 			})
 		}
 	}
 
-	// ACME / HTTPS
+	// ACME / HTTPS, only to the configured ACME servers; none configured
+	// opens nothing.
 	flows = append(flows, gs.serverRules(portID, in, prioACME, "nw_proto=6",
 		cfg.ACMEServerIPs, []uint16{portHTTPS, portHTTPSAlt1, portHTTPSAlt2})...)
 
-	// Package repos (HTTP + HTTPS)
+	// Package repos (HTTP + HTTPS), only to the configured repositories;
+	// none configured opens nothing.
 	flows = append(flows, gs.serverRules(portID, in, prioPackageRepo, "nw_proto=6",
 		cfg.PackageRepoIPs, []uint16{portHTTP, portHTTPS})...)
 
@@ -656,24 +686,16 @@ func (gs *GeneratorSet) provisioning(portID string, in Ingress) []FlowRule {
 }
 
 // serverRules emits the "reach these servers on these ports" allowances a
-// provisioning-style template uses. With no server addresses configured the
-// ports are open to any destination in both families; with addresses, each
-// address gets rules in its own family only.
+// provisioning-style template uses. Each address gets rules in its own family
+// only. With no server addresses configured it emits nothing: the ports stay
+// closed (fail closed, like the boot ports), because a destination-unrestricted
+// allow at these priorities would outrank the inter-zone denies at
+// prioMatrixDeny and forward traffic to a zone the matrix denies.
 func (gs *GeneratorSet) serverRules(portID string, in Ingress, priority int, proto string, servers []net.IP, ports []uint16) []FlowRule {
-	var flows []FlowRule
 	if len(servers) == 0 {
-		for _, f := range families {
-			for _, p := range ports {
-				flows = append(flows, FlowRule{
-					Table:    0,
-					Priority: priority,
-					Match:    matchInVLAN(portID, in, f.ipMatch(proto, fmt.Sprintf("tp_dst=%d", p))),
-					Actions:  "normal",
-				})
-			}
-		}
-		return flows
+		return nil
 	}
+	var flows []FlowRule
 	for _, ip := range servers {
 		f := familyOf(ip)
 		for _, p := range ports {

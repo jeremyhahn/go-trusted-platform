@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -175,6 +176,13 @@ func (m *mockPXEService) RemoveDevice(ctx context.Context, deviceID string) erro
 	}
 	delete(m.devices, deviceID)
 	return nil
+}
+
+func (m *mockPXEService) UpdateDeviceStateForIDevID(ctx context.Context, deviceID, fingerprint string, state pxe.ProvisioningState, reason string) error {
+	if d, ok := m.devices[deviceID]; ok && d.IDevIDFingerprint != fingerprint {
+		return pxe.ErrIDevIDMismatch{DeviceID: deviceID}
+	}
+	return m.UpdateDeviceState(ctx, deviceID, state, reason)
 }
 
 func (m *mockPXEService) UpdateDeviceState(ctx context.Context, deviceID string, state pxe.ProvisioningState, reason string) error {
@@ -1625,6 +1633,65 @@ func TestDaemonRollbackKeepsPXEBackendUsable(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 }
 
+// startingPXEService models a backend whose Start is still binding its
+// listeners: IsRunning is false, and Stop is the call that waits on the
+// lifecycle lock Start holds. It records each Stop and what the daemon's
+// transports looked like at that moment.
+type startingPXEService struct {
+	pxe.Service
+	stops             int
+	grpcListenerAlive bool
+	daemon            *Daemon
+}
+
+func (s *startingPXEService) IsRunning() bool { return false }
+
+func (s *startingPXEService) Stop(context.Context) error {
+	s.stops++
+	if s.daemon != nil {
+		s.grpcListenerAlive = s.daemon.grpcListener != nil
+	}
+	return pxe.ErrServiceNotRunning{}
+}
+
+func TestPXEStopBackendWaitsForAnInFlightStart(t *testing.T) {
+	backend := &startingPXEService{}
+	svc := NewPXEGRPCService(logging.DefaultLogger(), nil)
+	svc.SetPXEService(backend)
+
+	require.NoError(t, svc.StopBackend(context.Background()), "a backend Start left not running is not an error")
+	assert.Equal(t, 1, backend.stops, "StopBackend must call Stop, which serialises with an in-flight Start, even while IsRunning is false")
+}
+
+func TestPXEStopBackendStopsTheRunAConcurrentStartLeft(t *testing.T) {
+	svc, addr := pxeStartedBackend(t)
+
+	require.NoError(t, svc.StopBackend(context.Background()))
+	l, err := net.Listen("tcp", addr)
+	require.NoError(t, err, "the iPXE listener is still bound after StopBackend")
+	_ = l.Close()
+	require.NoError(t, svc.StopBackend(context.Background()), "a second StopBackend on a stopped backend is not an error")
+}
+
+func TestDaemonRollbackStopsPXEAfterTheTransports(t *testing.T) {
+	config := DefaultConfig()
+	config.Logger = logging.DefaultLogger()
+	service, err := NewService(config)
+	require.NoError(t, err)
+	backend := &startingPXEService{}
+	svc := NewPXEGRPCService(logging.DefaultLogger(), nil)
+	svc.SetPXEService(backend)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	d := &Daemon{logger: config.Logger, config: config, service: service, pxeGRPCService: svc, grpcListener: l}
+	backend.daemon = d
+
+	d.rollbackPartialStart(context.Background())
+
+	require.Equal(t, 1, backend.stops, "rollback must stop the PXE backend")
+	assert.False(t, backend.grpcListenerAlive, "rollback stopped the PXE backend while the gRPC transport still accepted StartService")
+}
+
 // TestPXEGRPC_UpdateStateFailsWhenTheVLANMoveFails checks that the
 // UpdateState RPC on the configured backend fails, and the device keeps
 // its state, when the flow manager cannot move the device (#1694).
@@ -1716,6 +1783,175 @@ func TestPXEGRPC_BootingAllowsEveryProvisioningBootPort(t *testing.T) {
 			}
 		}
 		assert.True(t, allowed, "no provisioning allow rule for TCP port %d", p)
+	}
+}
+
+// TestPXEGRPC_BootPortsReachOnlyTheBootServer pins that a booting device's
+// boot-port allowances name only the boot server: the bind host when it is a
+// usable address, otherwise the provisioning zone's own addresses, never a
+// destination in another zone.
+func TestPXEGRPC_BootPortsReachOnlyTheBootServer(t *testing.T) {
+	zones, env := zoneServiceSeed(pxeSectionApp())
+	require.NotNil(t, env)
+	if len(zones) == 0 {
+		zones = zone.Defaults()
+	}
+	plan, err := netplan.New(*env, zones)
+	require.NoError(t, err)
+	prov, err := plan.MustZone(zone.ZoneProvisioning)
+	require.NoError(t, err)
+	cp, err := plan.MustZone(zone.ZoneControlPlane)
+	require.NoError(t, err)
+
+	bootRules := func(t *testing.T, bindHost string) map[int][]string {
+		t.Helper()
+		ctx := context.Background()
+		section := pxeEnabledSection(t)
+		section.BindHost = bindHost
+		port := &pxeRecordingPort{}
+		svc, err := pxeGRPCServiceFromConfig(ctx, logging.DefaultLogger(), pxeSectionApp(), section, pxeTestFlowManager(t, port))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = svc.Close() })
+		reg, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{MacAddress: "00:11:22:33:44:e0", PortId: "port-1"})
+		require.NoError(t, err)
+		port.flows = nil
+		_, err = svc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
+			DeviceId: reg.GetDevice().GetId(),
+			State:    platformv1.ProvisioningState_PROVISIONING_STATE_BOOTING,
+			Reason:   "boot",
+		})
+		require.NoError(t, err)
+
+		out := map[int][]string{}
+		for _, p := range []int{8080, 8081, 10809} {
+			want := fmt.Sprintf("tp_dst=%d", p)
+			for _, f := range port.flows {
+				if f.Actions == "drop" || !strings.Contains(f.Match, "nw_proto=6") {
+					continue
+				}
+				hasPort, dst := false, ""
+				for _, field := range strings.Split(f.Match, ",") {
+					if field == want {
+						hasPort = true
+					}
+					if k, v, ok := strings.Cut(field, "="); ok && (k == "nw_dst" || k == "ipv6_dst") {
+						dst = v
+					}
+				}
+				if hasPort {
+					out[p] = append(out[p], dst)
+				}
+			}
+		}
+		return out
+	}
+
+	t.Run("loopback bind host scopes to the provisioning zone", func(t *testing.T) {
+		rules := bootRules(t, "127.0.0.1")
+		for _, p := range []int{8080, 8081, 10809} {
+			require.NotEmpty(t, rules[p], "no allow rule for TCP port %d", p)
+			for _, dst := range rules[p] {
+				a, err := netip.ParseAddr(dst)
+				require.NoError(t, err, "port %d allow rule has destination %q, want a boot server address", p, dst)
+				assert.True(t, prov.Subnet4.Contains(a) || (prov.Subnet6.IsValid() && prov.Subnet6.Contains(a)),
+					"port %d allows %s, outside the provisioning zone", p, dst)
+				assert.NotEqual(t, cp.Gateway, a, "port %d allows the control-plane gateway", p)
+			}
+		}
+	})
+
+	t.Run("routable bind host is the only destination", func(t *testing.T) {
+		rules := bootRules(t, "192.0.2.10")
+		for _, p := range []int{8080, 8081, 10809} {
+			require.NotEmpty(t, rules[p], "no allow rule for TCP port %d", p)
+			for _, dst := range rules[p] {
+				assert.Equal(t, "192.0.2.10", dst, "port %d allow rule destination", p)
+			}
+		}
+	})
+
+	t.Run("wildcard bind host allows the address iPXE advertises", func(t *testing.T) {
+		for _, bindHost := range []string{"", "0.0.0.0"} {
+			// ipxe.NewServer advertises this address in its boot URL.
+			want, err := (&ipxe.ServerConfig{BindHost: bindHost}).GetServerIP()
+			if err != nil {
+				t.Skipf("no host address to advertise for bind host %q: %v", bindHost, err)
+			}
+			if want == prov.Gateway.String() {
+				t.Skipf("the detected host address is the provisioning gateway %s, so it cannot tell the two apart", want)
+			}
+			rules := bootRules(t, bindHost)
+			for _, p := range []int{8080, 8081, 10809} {
+				require.NotEmpty(t, rules[p], "bind host %q: no allow rule for TCP port %d", bindHost, p)
+				for _, dst := range rules[p] {
+					assert.Equal(t, want, dst, "bind host %q: port %d allow rule destination", bindHost, p)
+				}
+			}
+		}
+	})
+}
+
+// TestPXEGRPC_BootingDeviceReachesNoStorageAddressOverHTTP pins, through the
+// daemon's own PXE wiring, that a Booting device's HTTP(S) allowances do not
+// reach the storage zone, which the default matrix denies to provisioning
+// (#1896 Codex round 1).
+func TestPXEGRPC_BootingDeviceReachesNoStorageAddressOverHTTP(t *testing.T) {
+	zones, env := zoneServiceSeed(pxeSectionApp())
+	require.NotNil(t, env)
+	if len(zones) == 0 {
+		zones = zone.Defaults()
+	}
+	plan, err := netplan.New(*env, zones)
+	require.NoError(t, err)
+	storage, err := plan.MustZone(zone.ZoneStorage)
+	require.NoError(t, err)
+	target := storage.Gateway
+	require.True(t, target.IsValid(), "storage zone has no gateway address")
+
+	ctx := context.Background()
+	port := &pxeRecordingPort{}
+	svc, err := pxeGRPCServiceFromConfig(ctx, logging.DefaultLogger(), pxeSectionApp(), pxeEnabledSection(t), pxeTestFlowManager(t, port))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	reg, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{MacAddress: "00:11:22:33:44:e1", PortId: "port-1"})
+	require.NoError(t, err)
+	port.flows = nil
+	_, err = svc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
+		DeviceId: reg.GetDevice().GetId(),
+		State:    platformv1.ProvisioningState_PROVISIONING_STATE_BOOTING,
+		Reason:   "boot",
+	})
+	require.NoError(t, err)
+
+	covers := func(dst string) bool {
+		if pfx, err := netip.ParsePrefix(dst); err == nil {
+			return pfx.Contains(target)
+		}
+		a, err := netip.ParseAddr(dst)
+		return err == nil && a == target
+	}
+	for _, p := range []int{80, 443, 8443, 9443} {
+		want := fmt.Sprintf("tp_dst=%d", p)
+		for _, f := range port.flows {
+			if f.Actions == "drop" || !strings.Contains(f.Match, "nw_proto=6") {
+				continue
+			}
+			hasPort, dst := false, ""
+			for _, field := range strings.Split(f.Match, ",") {
+				if field == want {
+					hasPort = true
+				}
+				if k, v, ok := strings.Cut(field, "="); ok && (k == "nw_dst" || k == "ipv6_dst") {
+					dst = v
+				}
+			}
+			if !hasPort {
+				continue
+			}
+			assert.False(t, dst == "" || covers(dst),
+				"TCP %d: Booting device reaches the storage gateway %s through %q", p, target, f.Match)
+		}
 	}
 }
 

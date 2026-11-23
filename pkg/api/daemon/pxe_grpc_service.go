@@ -68,10 +68,16 @@ func (s *PXEGRPCService) StopBackend(ctx context.Context) error {
 	if s == nil || s.pxeService == nil {
 		return nil
 	}
-	if s.pxeService.IsRunning() {
-		return s.pxeService.Stop(ctx)
+	// Stop takes the backend's lifecycle lock, which an in-flight Start
+	// holds until its listeners are bound: calling it unconditionally
+	// waits for that Start and stops the run it leaves. An IsRunning
+	// pre-check would read false mid-Start and skip the stop.
+	err := s.pxeService.Stop(ctx)
+	var notRunning pxe.ErrServiceNotRunning
+	if errors.As(err, &notRunning) {
+		return nil
 	}
-	return nil
+	return err
 }
 
 // requireService returns the canonical not-configured error when this
@@ -590,6 +596,23 @@ func (s *PXEGRPCService) StopService(ctx context.Context, req *platformv1.StopPX
 
 // WebhookComplete handles the callback when OS installation completes.
 func (s *PXEGRPCService) WebhookComplete(ctx context.Context, req *platformv1.PXEWebhookCompleteRequest) (*platformv1.PXEWebhookCompleteResponse, error) {
+	return s.webhookComplete(ctx, req, "")
+}
+
+// WebhookCompleteForIDevID is WebhookComplete for a report authenticated
+// with an IDevID: the service compares fingerprint with the recorded one
+// under the device lock it transitions under (#1896 Codex r2). A mismatch
+// is PermissionDenied.
+func (s *PXEGRPCService) WebhookCompleteForIDevID(ctx context.Context, req *platformv1.PXEWebhookCompleteRequest, fingerprint string) (*platformv1.PXEWebhookCompleteResponse, error) {
+	if fingerprint == "" {
+		return nil, status.Error(codes.PermissionDenied, "no authenticated IDevID fingerprint")
+	}
+	return s.webhookComplete(ctx, req, fingerprint)
+}
+
+// webhookComplete applies an install report; a non-empty fingerprint is
+// compared with the recorded IDevID with the transition.
+func (s *PXEGRPCService) webhookComplete(ctx context.Context, req *platformv1.PXEWebhookCompleteRequest, fingerprint string) (*platformv1.PXEWebhookCompleteResponse, error) {
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
@@ -623,7 +646,17 @@ func (s *PXEGRPCService) WebhookComplete(ctx context.Context, req *platformv1.PX
 		}
 	}
 
-	if err := s.pxeService.UpdateDeviceState(ctx, device.ID, newState, reason); err != nil {
+	var updateErr error
+	if fingerprint != "" {
+		updateErr = s.pxeService.UpdateDeviceStateForIDevID(ctx, device.ID, fingerprint, newState, reason)
+	} else {
+		updateErr = s.pxeService.UpdateDeviceState(ctx, device.ID, newState, reason)
+	}
+	if err := updateErr; err != nil {
+		var mismatch pxe.ErrIDevIDMismatch
+		if errors.As(err, &mismatch) {
+			return nil, status.Error(codes.PermissionDenied, "the authenticated IDevID is not the reported device's")
+		}
 		s.logger.Error(err, "Failed to update device state from webhook", "device_id", device.ID)
 		return nil, s.mapPXEError(err, "update state from webhook")
 	}

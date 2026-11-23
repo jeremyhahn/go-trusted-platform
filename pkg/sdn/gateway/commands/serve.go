@@ -16,6 +16,7 @@ package commands
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -228,6 +229,14 @@ func serve(v *viper.Viper, logger *slog.Logger, signals <-chan os.Signal, sweep 
 		return err
 	}
 
+	// A killed predecessor's hub and peers pass traffic past their leases
+	// until removed. When the WireGuard child does not launch, it never
+	// removes them, so the start does, before deciding what launches
+	// (#2029 round 1).
+	if err := supervisorRemoveVPNHub(logger); err != nil {
+		return fmt.Errorf("remove stale VPN hub: %w", err)
+	}
+
 	// With the `process:` section enabled, the supervised services run in
 	// child processes. The children outlive gw.Stop, which stops the
 	// services they host, so they are shut down after it on every exit path.
@@ -377,5 +386,12 @@ func shutdownSupervisor(supervisor processShutdowner, logger *slog.Logger) {
 	defer cancel()
 	if err := supervisor.Shutdown(ctx); err != nil {
 		logger.Warn("Process supervisor shutdown failed", slog.Any("error", err))
+	}
+	// A child stopped by the shutdown runs no exit hook, and one killed
+	// at the deadline leaves its hub and peers up, passing traffic past
+	// their leases until the next start; the children are gone now, so
+	// the hub goes too (#2029 round 1).
+	if err := supervisorRemoveVPNHub(logger); err != nil {
+		logger.Warn("Stale VPN hub removal at shutdown failed", slog.Any("error", err))
 	}
 }

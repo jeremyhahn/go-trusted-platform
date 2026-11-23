@@ -39,10 +39,12 @@ func (m *mockTokenValidator) ValidateToken(ctx context.Context, token string) (*
 type mockPEPClient struct {
 	checkResp  *iam.CheckResponse
 	checkErr   error
+	lastReq    *iam.CheckRequest
 	checkCalls int
 }
 
 func (m *mockPEPClient) Check(ctx context.Context, req *iam.CheckRequest) (*iam.CheckResponse, error) {
+	m.lastReq = req
 	m.checkCalls++
 	if m.checkErr != nil {
 		return nil, m.checkErr
@@ -163,6 +165,58 @@ func TestQuicBaaSAuthAdapter_ValidateToken(t *testing.T) {
 		}
 		if valid {
 			t.Error("expected valid to be false")
+		}
+	})
+}
+
+// TestQuicBaaSAuthAdapter_TenantlessTokenFailsAuthentication: a token the
+// validator accepts but that names no tenant is not a principal (SPEC row
+// 123), so authentication refuses it and the catalogue listings
+// (tools/list, resources/list call Authenticate) disclose nothing, while a
+// token naming its tenant still authenticates (#2080 Codex).
+func TestQuicBaaSAuthAdapter_TenantlessTokenFailsAuthentication(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("adapter refuses a verified token with no tenant", func(t *testing.T) {
+		adapter := NewQuicBaaSAuthAdapter(&QuicBaaSAuthConfig{
+			TokenValidator: &mockTokenValidator{result: &TokenValidationResult{Valid: true, UserID: "user-123"}},
+		})
+		valid, err := adapter.ValidateToken(ctx, "tenantless-token")
+		if valid {
+			t.Fatal("ValidateToken accepted a token naming no tenant")
+		}
+		var authErr *QuicBaaSAuthError
+		if !errors.As(err, &authErr) || authErr.Code != QuicBaaSAuthErrorMissingTenant {
+			t.Fatalf("err = %v, want missing-tenant QuicBaaSAuthError", err)
+		}
+		if _, ok := adapter.cachedClaims["tenantless-token"]; ok {
+			t.Error("tenantless token was cached")
+		}
+	})
+
+	t.Run("catalogue listing refuses a verified token with no tenant", func(t *testing.T) {
+		adapter := NewQuicBaaSAuthAdapter(&QuicBaaSAuthConfig{
+			TokenValidator: &mockTokenValidator{result: &TokenValidationResult{Valid: true, UserID: "user-123"}},
+			PEPClient:      &mockPEPClient{},
+		})
+		checker := NewAuthorizationChecker(adapter, adapter)
+		authErr := checker.Authenticate(ctx, "tenantless-token")
+		if authErr == nil {
+			t.Fatal("Authenticate (tools/list, resources/list) accepted a token naming no tenant")
+		}
+		if authErr.Type != AuthErrorInvalidToken {
+			t.Fatalf("Authenticate error type = %v, want invalid token", authErr.Type)
+		}
+	})
+
+	t.Run("catalogue listing accepts a verified token naming its tenant", func(t *testing.T) {
+		adapter := NewQuicBaaSAuthAdapter(&QuicBaaSAuthConfig{
+			TokenValidator: &mockTokenValidator{result: &TokenValidationResult{Valid: true, UserID: "user-123", TenantID: "tenant-456"}},
+			PEPClient:      &mockPEPClient{},
+		})
+		checker := NewAuthorizationChecker(adapter, adapter)
+		if authErr := checker.Authenticate(ctx, "tenant-token"); authErr != nil {
+			t.Fatalf("Authenticate = %v, want nil", authErr)
 		}
 	})
 }
@@ -468,18 +522,45 @@ func TestQuicBaaSAuthAdapter_CheckPermission(t *testing.T) {
 
 		allowed, err := adapter.CheckPermission(context.Background(), "test-token", "vtpm", "read")
 
+		var authErr *QuicBaaSAuthError
+		if !errors.As(err, &authErr) || authErr.Code != QuicBaaSAuthErrorMissingTenant {
+			t.Fatalf("expected QuicBaaSAuthErrorMissingTenant, got %v", err)
+		}
 		if allowed {
 			t.Error("expected allowed to be false")
 		}
-		var authErr *QuicBaaSAuthError
-		if !errors.As(err, &authErr) {
-			t.Fatalf("expected *QuicBaaSAuthError, got %v", err)
+		if pepClient.lastReq != nil {
+			t.Error("PEP must not be consulted for a token with no tenant")
 		}
-		if authErr.Code != QuicBaaSAuthErrorMissingTenant {
-			t.Errorf("error code = %d, want %d", authErr.Code, QuicBaaSAuthErrorMissingTenant)
+	})
+
+	t.Run("check request carries the token tenant", func(t *testing.T) {
+		validator := &mockTokenValidator{
+			result: &TokenValidationResult{
+				Valid:    true,
+				UserID:   "user-123",
+				TenantID: "tenant-456",
+			},
 		}
-		if pepClient.checkCalls != 0 {
-			t.Errorf("PEP Check called %d times, want 0", pepClient.checkCalls)
+		pepClient := &mockPEPClient{
+			checkResp: &iam.CheckResponse{Allowed: true},
+		}
+		adapter := NewQuicBaaSAuthAdapter(&QuicBaaSAuthConfig{
+			TokenValidator: validator,
+			PEPClient:      pepClient,
+		})
+
+		if _, err := adapter.CheckPermission(context.Background(), "test-token", "vtpm", "read"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if pepClient.lastReq == nil {
+			t.Fatal("expected a PEP check request")
+		}
+		if pepClient.lastReq.TenantID != "tenant-456" {
+			t.Errorf("CheckRequest.TenantID = %q, want tenant-456", pepClient.lastReq.TenantID)
+		}
+		if pepClient.lastReq.Subject.TenantID != "tenant-456" {
+			t.Errorf("CheckRequest.Subject.TenantID = %q, want tenant-456", pepClient.lastReq.Subject.TenantID)
 		}
 	})
 

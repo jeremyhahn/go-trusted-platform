@@ -16,6 +16,7 @@ package pxe
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -46,6 +47,11 @@ type Service interface {
 
 	// State Transitions
 	UpdateDeviceState(ctx context.Context, deviceID string, state ProvisioningState, reason string) error
+
+	// UpdateDeviceStateForIDevID is UpdateDeviceState for a change the
+	// device reported: it compares fingerprint with the recorded IDevID
+	// fingerprint under the same device lock as the transition.
+	UpdateDeviceStateForIDevID(ctx context.Context, deviceID, fingerprint string, state ProvisioningState, reason string) error
 	SetDeviceEnrolled(ctx context.Context, deviceID, certSerial string) error
 	// RecordIDevIDFingerprint stores the device's IDevID fingerprint at
 	// enrolment, before install completion (ruling 673).
@@ -262,6 +268,11 @@ func (s *service) Start(ctx context.Context) error {
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
 
+	// A Close that ran while this Start waited for lifecycle has cleared
+	// the config: check again under the lock (#1896 Codex).
+	if !s.initialized.Load() {
+		return ErrServiceNotInitialized{}
+	}
 	if s.running.Load() {
 		return ErrServiceAlreadyRunning{}
 	}
@@ -362,7 +373,11 @@ func (s *service) watchIPXERun(run *ipxeRun) {
 func (s *service) Stop(ctx context.Context) error {
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
+	return s.stopLocked(ctx)
+}
 
+// stopLocked stops the running iPXE server. Callers hold s.lifecycle.
+func (s *service) stopLocked(ctx context.Context) error {
 	if !s.running.Load() {
 		return ErrServiceNotRunning{}
 	}
@@ -397,17 +412,22 @@ func (s *service) IsRunning() bool {
 
 // Close releases all resources held by the service.
 func (s *service) Close() error {
+	// Wait for the device operations in flight: they read s.config.
+	s.ops.Lock()
+	defer s.ops.Unlock()
+
+	// The running check, the stop and the teardown are one step under
+	// lifecycle, which Start holds until its server is running: a Start
+	// in flight finishes first and its run is stopped here, never cleared
+	// while it listens on (#1896 Codex).
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
 	if s.running.Load() {
-		if err := s.Stop(context.Background()); err != nil {
+		if err := s.stopLocked(context.Background()); err != nil {
 			return err
 		}
 	}
 
-	// Wait for the device operations in flight: they read s.config.
-	s.ops.Lock()
-	defer s.ops.Unlock()
-	s.lifecycle.Lock()
-	defer s.lifecycle.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -593,7 +613,46 @@ func (s *service) UpdateDeviceState(ctx context.Context, deviceID string, state 
 	}
 	defer s.ops.RUnlock()
 	defer s.lockDevice(deviceID)()
+	return s.updateDeviceStateLocked(ctx, deviceID, state, reason)
+}
 
+// UpdateDeviceStateForIDevID applies a device-reported state change only
+// when fingerprint is the IDevID fingerprint recorded for the device. The
+// comparison and the transition run under one device lock, so an
+// enrolment recording a new IDevID cannot land between them (#1896 Codex
+// r2). A missing or different fingerprint is ErrIDevIDMismatch.
+func (s *service) UpdateDeviceStateForIDevID(ctx context.Context, deviceID, fingerprint string, state ProvisioningState, reason string) error {
+	if !s.beginOp() {
+		return ErrServiceNotInitialized{}
+	}
+	defer s.ops.RUnlock()
+	defer s.lockDevice(deviceID)()
+
+	device, err := s.stateManager.Get(deviceID)
+	if err != nil {
+		return ErrDeviceNotFound{DeviceID: deviceID}
+	}
+	if device.IDevIDFingerprint == "" || fingerprint == "" ||
+		subtle.ConstantTimeCompare([]byte(device.IDevIDFingerprint), []byte(fingerprint)) != 1 {
+		return ErrIDevIDMismatch{DeviceID: deviceID}
+	}
+	return s.updateDeviceStateLocked(ctx, deviceID, state, reason)
+}
+
+// ErrIDevIDMismatch is returned when a device-reported change is
+// authenticated with an IDevID other than the one recorded for the device.
+type ErrIDevIDMismatch struct {
+	DeviceID string
+}
+
+// Error implements error.
+func (e ErrIDevIDMismatch) Error() string {
+	return "pxe: the authenticated IDevID is not the one recorded for device " + e.DeviceID
+}
+
+// updateDeviceStateLocked is UpdateDeviceState's body; the caller holds
+// the operation read lock and the device lock.
+func (s *service) updateDeviceStateLocked(ctx context.Context, deviceID string, state ProvisioningState, reason string) error {
 	if !state.IsValid() {
 		return ErrInvalidState{
 			DeviceID: deviceID,
@@ -720,11 +779,12 @@ func (s *service) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial st
 // enrolment. Per ruling 70 and ruling 673, enrolment comes before install
 // completion: the fingerprint is accepted while the device is discovered,
 // booting or installing, and refused once the install is complete. It
-// makes no state transition. The fingerprint is fixed for one provisioning
-// attempt: re-recording the same fingerprint is a no-op and a different one
-// is refused, until RetryDevice starts a new attempt and clears it; the one
-// exception is a re-enrolment while the device is installing (a certificate
-// delivery that failed after the finalize hook), which replaces it.
+// makes no state transition. Re-recording the same fingerprint is a no-op.
+// A different fingerprint is a re-enrolment (for example a certificate
+// delivery that failed after the finalize hook): it replaces the recorded
+// one in every pre-completion state (discovered, booting, installing), and
+// is refused once the install is complete; RetryDevice starts a new
+// attempt and clears it.
 func (s *service) RecordIDevIDFingerprint(ctx context.Context, deviceID, fingerprint string) error {
 	if !s.beginOp() {
 		return ErrServiceNotInitialized{}
@@ -755,18 +815,13 @@ func (s *service) RecordIDevIDFingerprint(ctx context.Context, deviceID, fingerp
 			}
 		}
 		// The finalize hook records before the CA commits the certificate,
-		// so a storage failure there is followed by a re-enrolment that
-		// issues a different IDevID. While the device is installing it has
-		// reported no certificate in use, so the later fingerprint replaces
-		// the earlier one; the install-complete webhook then accepts only
-		// the IDevID the device actually received.
-		if d.IDevIDFingerprint != "" && d.IDevIDFingerprint != fingerprint && d.State != StateInstalling {
-			return ErrInvalidState{
-				DeviceID: deviceID,
-				State:    string(d.State),
-				Reason:   "a different IDevID fingerprint is already recorded",
-			}
-		}
+		// so a storage or delivery failure there is followed by a
+		// re-enrolment that issues a different IDevID. Before install
+		// completion (discovered, booting or installing) the device has
+		// reported no certificate in use, so the later fingerprint
+		// replaces the earlier one in every one of those states; the
+		// install-complete webhook then accepts only the IDevID the device
+		// actually received, and past it the state check above refuses.
 		d.IDevIDFingerprint = fingerprint
 		return nil
 	})

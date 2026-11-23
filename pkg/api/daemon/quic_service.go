@@ -639,9 +639,14 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	// get/list/logs/attest, whose direct opcodes are shadowed by the PXE
 	// ranges) in payload[0]; handleVMServiceOperation routes each to its
 	// handler. 0x60 and 0x61 are the object storage and DNS categories
-	// above; the rest of 0x62-0x6A is unassigned.
+	// above. 0x66/0x67 are attestation manifest list/delete (below);
+	// 0x62-0x65, 0x68 and 0x6A are unassigned.
 	case req.Opcode == quicwire.OpVMExtendedCategory:
 		return h.handleVMServiceOperation(ctx, req)
+
+	// Attestation manifest list/delete (0x66, 0x67; #1686, ruling 931).
+	case req.Opcode == quicwire.OpAttestListManifests || req.Opcode == quicwire.OpAttestDeleteManifest:
+		return h.handleAttestationOperation(ctx, req)
 
 	// IAK Extended Operations (0x6B-0x6E)
 	case req.Opcode >= quicwire.OpIAKInstallCert && req.Opcode <= quicwire.OpActivateCredential:

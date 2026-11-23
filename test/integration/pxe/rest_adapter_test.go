@@ -52,6 +52,12 @@ func TestPXERESTGRPCParity(t *testing.T) {
 		})
 	}
 
+	// The daemon only initializes the PXE backend; it never starts it.
+	// The suite starts it and checks readiness before the running-service
+	// and stop/restart cases.
+	restartPXEService(t, grpc)
+	requireServiceRunning(t, ctx, grpc, true)
+
 	t.Run("StartServiceRefusedWhileRunning", func(t *testing.T) {
 		testStartServiceParity(t, ctx, rest, grpc)
 	})
@@ -68,7 +74,7 @@ func TestPXERESTGRPCParity(t *testing.T) {
 // it again over REST, and requires the restarted service to list the same
 // devices over REST and gRPC, including one registered before the stop.
 func testStopStartParity(t *testing.T, ctx context.Context, rest, grpc *SDKAdapter) {
-	device, err := grpc.RegisterDevice(ctx, DefaultRegisterOptions(fmt.Sprintf("rest-restart-%d", time.Now().UnixNano())))
+	device, err := grpc.RegisterDevice(ctx, RegisterOptionsOnBridge(t, fmt.Sprintf("rest-restart-%d", time.Now().UnixNano())))
 	require.NoError(t, err, "Setup: RegisterDevice should succeed")
 	t.Cleanup(func() {
 		if err := CleanupDevice(context.Background(), grpc, device.ID); err != nil {
@@ -127,8 +133,8 @@ func restartPXEService(t *testing.T, adapter *SDKAdapter) {
 }
 
 // testStartServiceParity starts the already-running PXE service over both
-// transports. StopService is not driven: the shared platformd's iPXE server
-// is single-use, so a stopped service cannot be started again.
+// transports and expects both to refuse it. StopService is not driven here;
+// the stop and restart round trip is StopThenStartOverREST's.
 func testStartServiceParity(t *testing.T, ctx context.Context, rest, grpc *SDKAdapter) {
 	statusResult, err := grpc.GetStatus(ctx)
 	require.NoError(t, err, "GetStatus should succeed")
@@ -149,7 +155,7 @@ func testFilteredListParity(t *testing.T, ctx context.Context, rest, grpc *SDKAd
 	prefix := fmt.Sprintf("rest-parity-%d", time.Now().UnixNano())
 	var devices []*RegisterDeviceResult
 	for i := 0; i < 3; i++ {
-		device, err := grpc.RegisterDevice(ctx, DefaultRegisterOptions(fmt.Sprintf("%s-%d", prefix, i)))
+		device, err := grpc.RegisterDevice(ctx, RegisterOptionsOnBridge(t, fmt.Sprintf("%s-%d", prefix, i)))
 		require.NoError(t, err, "Setup: RegisterDevice should succeed")
 		devices = append(devices, device)
 	}

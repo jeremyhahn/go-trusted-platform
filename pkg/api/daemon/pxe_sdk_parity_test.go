@@ -215,6 +215,10 @@ func (f *recordingPXEService) RemoveDevice(_ context.Context, deviceID string) e
 	return err
 }
 
+func (f *recordingPXEService) UpdateDeviceStateForIDevID(ctx context.Context, deviceID, _ string, state pxe.ProvisioningState, reason string) error {
+	return f.UpdateDeviceState(ctx, deviceID, state, reason)
+}
+
 func (f *recordingPXEService) UpdateDeviceState(_ context.Context, deviceID string, state pxe.ProvisioningState, reason string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

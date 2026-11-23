@@ -613,18 +613,18 @@ func TestService_RecordIDevIDFingerprint(t *testing.T) {
 		assert.Empty(t, got.IDevIDFingerprint)
 	})
 
-	t.Run("refuses a second, different fingerprint", func(t *testing.T) {
+	t.Run("a re-enrolment before install completion replaces the fingerprint", func(t *testing.T) {
 		svc, _ := initializeTestService(t)
 		device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
 		require.NoError(t, err)
 		require.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fp))
 
 		assert.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fp), "re-recording the same fingerprint is a no-op")
-		assert.Error(t, svc.RecordIDevIDFingerprint(ctx, device.ID, otherFP))
+		assert.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, otherFP), "a re-enrolment in discovered is refused")
 
 		got, err := svc.GetDevice(ctx, device.ID)
 		require.NoError(t, err)
-		assert.Equal(t, fp, got.IDevIDFingerprint)
+		assert.Equal(t, otherFP, got.IDevIDFingerprint)
 	})
 
 	t.Run("needs an initialized service", func(t *testing.T) {
@@ -650,27 +650,44 @@ func TestService_RecordIDevIDFingerprint(t *testing.T) {
 func TestService_RecordIDevIDFingerprint_ReEnrolmentWhileInstallingReplaces(t *testing.T) {
 	const fpA = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	const fpB = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
-	svc, _ := initializeTestService(t)
-	ctx := context.Background()
-
-	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
-	require.NoError(t, err)
-	for _, st := range []ProvisioningState{StateBooting, StateInstalling} {
-		require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, st, string(st)))
+	paths := map[ProvisioningState][]ProvisioningState{
+		StateDiscovered: nil,
+		StateBooting:    {StateBooting},
+		StateInstalling: {StateBooting, StateInstalling},
 	}
+	for _, want := range []ProvisioningState{StateDiscovered, StateBooting, StateInstalling} {
+		t.Run(string(want), func(t *testing.T) {
+			svc, _ := initializeTestService(t)
+			ctx := context.Background()
 
-	require.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fpA))
-	require.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fpB), "a re-enrolment while installing is refused")
-	got, err := svc.GetDevice(ctx, device.ID)
-	require.NoError(t, err)
-	assert.Equal(t, fpB, got.IDevIDFingerprint)
-	assert.Equal(t, StateInstalling, got.State)
+			device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+			require.NoError(t, err)
+			for _, st := range paths[want] {
+				require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, st, string(st)))
+			}
 
-	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateInstallComplete, "complete"))
-	assert.Error(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fpA))
-	got, err = svc.GetDevice(ctx, device.ID)
-	require.NoError(t, err)
-	assert.Equal(t, fpB, got.IDevIDFingerprint)
+			require.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fpA))
+			require.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fpB), "a re-enrolment in %s is refused", want)
+			got, err := svc.GetDevice(ctx, device.ID)
+			require.NoError(t, err)
+			assert.Equal(t, fpB, got.IDevIDFingerprint)
+			assert.Equal(t, want, got.State)
+
+			if want != StateInstalling {
+				for _, st := range []ProvisioningState{StateBooting, StateInstalling} {
+					if st == want {
+						continue
+					}
+					require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, st, string(st)))
+				}
+			}
+			require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateInstallComplete, "complete"))
+			assert.Error(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fpA), "a re-enrolment past install completion is accepted")
+			got, err = svc.GetDevice(ctx, device.ID)
+			require.NoError(t, err)
+			assert.Equal(t, fpB, got.IDevIDFingerprint)
+		})
+	}
 }
 
 func TestService_AuthorizeDevice_NotInitialized(t *testing.T) {

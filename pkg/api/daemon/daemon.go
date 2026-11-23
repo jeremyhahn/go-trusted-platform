@@ -15,10 +15,13 @@ package daemon
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -311,6 +314,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		return nil, err
 	}
 	if err := config.validateGRPCAuthorization(); err != nil {
+		return nil, err
+	}
+	if err := config.validateQUICAuthorization(); err != nil {
 		return nil, err
 	}
 
@@ -973,7 +979,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// socket. It is the pkg/api/grpc implementation over the daemon's
 	// ClusterServicer — the same servicer the MCP cluster tools use, set
 	// through Daemon.SetClusterService. Until one is set every RPC returns
-	// Unavailable.
+	// Unavailable. That is true on every build, with or without -tags
+	// cluster, until #336 lands.
 	clusterGRPCService, clusterBackend := registerClusterGRPCService(logger, grpcServer, grpcUDSServer)
 	logger.Info("Cluster gRPC service registered")
 
@@ -1119,7 +1126,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	logger.Info("Creating health registry...")
 	// Create health registry
-	healthRegistry := health.NewRegistry()
+	healthRegistry := health.NewRegistry(health.WithLogger(logger.Slog()))
 
 	// Create QUIC service handler and server if enabled
 	var quicServerIntf QUICServerInterface // Use interface type to avoid typed nil issue
@@ -1150,7 +1157,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if poolErr != nil {
 			return nil, poolErr
 		}
-		quicAuthMiddleware, quicLocalValidator, quicAuthErr := selectQUICAuth(config, platformTokenValidatorShared, quicClientCAPool, logger)
+		quicAuthMiddleware, quicLocalValidator, quicAuthErr := selectQUICAuth(config, platformTokenValidatorShared, iamPEP, quicClientCAPool, logger)
 		if quicAuthErr != nil {
 			return nil, quicAuthErr
 		}
@@ -1507,6 +1514,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 		daemon.concreteRestServer.SetVPNHandlers(vpnGRPCService, restGuard)
 		daemon.concreteRestServer.SetAppServiceHandlers(appServices.restServers(), restGuard)
+		if err := daemon.concreteRestServer.SetServiceControlHandlers(restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
 		if computeService != nil {
 			daemon.concreteRestServer.SetComputeHandlers(computeService, restGuard)
 		}
@@ -2125,14 +2137,26 @@ func pxeGRPCServiceWithStore(ctx context.Context, logger *logging.Logger, a *app
 	// root over NBD. docs/SPEC.md (ipxe) requires the provisioning-zone
 	// rules to admit TCP 8080, 8081 and 10809; a provisioning transition
 	// replaces the port's flows, so all three are carried into the
-	// generator.
+	// generator. They are open only to the address the iPXE server
+	// advertises in its boot URL (GetServerIP, the same resolution
+	// ipxe.NewServer makes), which with a wildcard bind host is a detected
+	// host address rather than the provisioning gateway; a loopback or
+	// unresolvable address still falls back to the provisioning zone's own
+	// addresses, so an inter-zone deny still wins on them.
+	bootServer := ""
+	if cfg.IPXEConfig != nil {
+		bootServer = cfg.IPXEConfig.BindHost
+		if ip, err := cfg.IPXEConfig.GetServerIP(); err == nil {
+			bootServer = ip
+		}
+	}
 	if cfg.IPXEConfig != nil && cfg.IPXEConfig.HTTPPort > 0 && cfg.IPXEConfig.HTTPPort < 65535 {
-		flows.AllowProvisioningBootPorts(
+		flows.AllowProvisioningBootPorts(bootServer,
 			uint16(cfg.IPXEConfig.HTTPPort),
 			uint16(cfg.IPXEConfig.HTTPPort+provisioningDeviceScriptPortOffset),
 		)
 	}
-	flows.AllowProvisioningBootPorts(provisioningNBDPort)
+	flows.AllowProvisioningBootPorts(bootServer, provisioningNBDPort)
 	var stateOpts []pxe.StateManagerOption
 	if store != nil {
 		stateOpts = append(stateOpts, pxe.WithDeviceStore(store))
@@ -2213,6 +2237,7 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		DeviceTemplateService: d.config.DeviceTemplateService,
 		VerdictSink:           deviceVerdictSink(d.config),
 		AttestCertRecorder:    newDeviceAttestCertRecorder(d.config, d.logger.Slog()),
+		AttestChallengeIssuer: attestChallengeIssuerOf(d.deviceService),
 		DeviceLifecycle:       d.config.DeviceLifecycle,
 		AttestationReporting:  d.config.AttestationReporting,
 		AttestationServer:     d.attestationService,
@@ -2410,6 +2435,13 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 			// error (#444) rather than run without the enabled transport.
 			return nil, ErrMCPAuthorizationBackendRequired{}
 		}
+		// A token without a scope grant has its tool permission decided by
+		// the IAM PEP (SPEC row 116, #1995).
+		if d.iamService != nil {
+			if pep := d.iamService.PEP(); pep != nil {
+				mcpConfig.PEPClient = pep
+			}
+		}
 	}
 
 	// Get logging.Logger from App if available
@@ -2522,6 +2554,7 @@ func (w *quicbaasServiceWrapper) ValidateToken(ctx context.Context, token string
 	return &mcp.TokenValidationResult{
 		Valid:     resp.Valid,
 		UserID:    resp.UserID,
+		TenantID:  resp.TenantID,
 		Roles:     resp.Roles,
 		ExpiresAt: resp.ExpiresAt,
 	}, nil
@@ -2541,13 +2574,42 @@ func (a *quicbaasServiceAdapter) ValidateToken(ctx context.Context, req *quicbaa
 		return nil, err
 	}
 
-	return &quicbaas.ValidateTokenResponse{
+	out := &quicbaas.ValidateTokenResponse{
 		Valid:     resp.Valid,
 		UserID:    resp.UserID,
 		Username:  resp.Username,
 		Roles:     resp.Roles,
 		ExpiresAt: resp.ExpiresAt,
-	}, nil
+	}
+	// The service response carries no tenant, so read it from the token
+	// the service has just verified; an unverified token names none.
+	if resp.Valid {
+		out.TenantID = verifiedTokenTenant(req.AccessToken)
+	}
+	return out, nil
+}
+
+// verifiedTokenTenant returns the tenant_id claim of a JWT access token the
+// QuicBaaS service has already verified. It does not verify the token
+// itself: call it only after the service accepted the token. An opaque
+// token, a malformed payload or a token naming no tenant yields "".
+func verifiedTokenTenant(token string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		TenantID interface{} `json:"tenant_id"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return ""
+	}
+	tid, _ := claims.TenantID.(string)
+	return tid
 }
 
 // =============================================================================
@@ -2765,8 +2827,6 @@ func (d *Daemon) tlsPreflight() error {
 // cleanup path, and a retry could meet duplicate workers (#32). Stop
 // errors are logged, never masked over the original startup error.
 func (d *Daemon) rollbackPartialStart(ctx context.Context) {
-	d.stopPXEBackend(ctx, "startup rollback")
-
 	// QUIC first: a QUIC Start that acquired resources (bound its
 	// listener, started workers) before returning an error can leave the
 	// surface reachable; IsRunning gates the stop so an unstarted server
@@ -2810,6 +2870,11 @@ func (d *Daemon) rollbackPartialStart(ctx context.Context) {
 			d.logger.Warn("startup rollback: REST server stop failed", "error", err)
 		}
 	}
+	// PXE last among the surfaces: until every transport is down a
+	// StartService call can still start the backend, and its run context
+	// outlives the RPC. StopBackend takes the backend's lifecycle lock, so
+	// it also waits for a Start already in flight and stops what it left.
+	d.stopPXEBackend(ctx, "startup rollback")
 	if d.tenantService != nil {
 		if err := d.tenantService.Stop(ctx); err != nil {
 			d.logger.Warn("startup rollback: tenant service stop failed", "error", err)
@@ -2988,6 +3053,9 @@ func (d *Daemon) Start(ctx context.Context) error {
 		d.logger.Info("QUIC server started successfully", "addr", d.quicServer.ListenAddr())
 	}
 
+	if d.deviceService != nil {
+		d.deviceService.StartChallengeSweeper(attestChallengeSweepInterval)
+	}
 	d.running.Store(true)
 
 	// Attach overlay IPsec to charon behind the floor New installed.
@@ -3019,6 +3087,9 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	}
 	if d.verdictFeed != nil {
 		d.verdictFeed.Close()
+	}
+	if d.deviceService != nil {
+		d.deviceService.StopChallengeSweeper()
 	}
 
 	d.mu.Lock()
@@ -3163,6 +3234,9 @@ func (d *Daemon) stopPXEBackend(ctx context.Context, phase string) {
 func (d *Daemon) ForceStop() error {
 	if !d.running.Load() {
 		return ErrDaemonNotRunning{}
+	}
+	if d.deviceService != nil {
+		d.deviceService.StopChallengeSweeper()
 	}
 
 	d.mu.Lock()
@@ -3454,6 +3528,11 @@ func (d *Daemon) VPNGRPCServiceServer() *VPNGRPCService {
 	return d.vpnGRPCService
 }
 
+// ProxyGRPCServiceServer returns the proxy gRPC service backing /api/v1/proxy.
+func (d *Daemon) ProxyGRPCServiceServer() *grpccreds.ProxyGRPCService {
+	return d.proxyGRPCService
+}
+
 // VPNControlPlane returns the control-plane VPN service, or nil when the
 // daemon runs without a platform store.
 func (d *Daemon) VPNControlPlane() *vpn.Service {
@@ -3529,7 +3608,7 @@ func (d *Daemon) MCPServiceProvider() *MCPServiceProvider {
 // wiring that constructs a *ClusterService and injects it here, so every
 // cluster operation reports the service as not configured — with -tags
 // cluster exactly as without it. Do not read the build tag as the
-// difference. See #334.
+// difference. See #334; wiring is #336.
 func (d *Daemon) SetClusterService(svc ClusterServicer) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

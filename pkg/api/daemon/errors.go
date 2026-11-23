@@ -1278,6 +1278,16 @@ func (e ErrOverlayRESTUnavailable) Error() string {
 	return "overlay REST routes unavailable: " + e.Reason
 }
 
+// ErrServiceRESTUnavailable reports that the service-control routes could
+// not be mounted on the daemon REST listener.
+type ErrServiceRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrServiceRESTUnavailable) Error() string {
+	return "service-control REST routes unavailable: " + e.Reason
+}
+
 // ErrGatewayRESTUnavailable reports that the SDN gateway routes could not be
 // mounted on the daemon REST listener, or that a gateway service was wired
 // before they were mounted.

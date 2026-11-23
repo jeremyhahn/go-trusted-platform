@@ -34,7 +34,7 @@ import (
 // `-tags cluster` — but nothing calls NewClusterServiceAdapter in any
 // build, so no ClusterServicer is set and every cluster transport answers
 // Unavailable with the tag as well as without it. This bridge is written
-// and unused. See #334.
+// and unused. See #334; wiring is #336.
 
 // clusterCore is the minimal subset of *ClusterService the adapter
 // depends on. Defining it as an interface (rather than wrapping the
