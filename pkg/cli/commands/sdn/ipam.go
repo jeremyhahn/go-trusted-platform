@@ -47,7 +47,7 @@ Examples:
   platformctl sdn ipam allocate --pool-id pool1 --device-id vm-123
 
   # Release an IP
-  platformctl sdn ipam release --ip 10.0.0.5`,
+  platformctl sdn ipam release --ip 198.18.9.50`,
 	}
 
 	cmd.AddCommand(newIPAMPoolCommand(getFlags))
@@ -167,7 +167,7 @@ Examples:
 
 	cmd.Flags().StringVar(&id, "id", "", "Optional pool ID (generated if omitted)")
 	cmd.Flags().StringVar(&name, "name", "", "Display name for the pool (required)")
-	cmd.Flags().StringVar(&cidr, "cidr", "", "CIDR range for the pool, e.g. 10.0.0.0/24 (required, immutable)")
+	cmd.Flags().StringVar(&cidr, "cidr", "", "CIDR range for the pool, e.g. 198.18.9.0/24 (required, immutable)")
 	cmd.Flags().StringVar(&gatewayAddr, "gateway", "", "Gateway IP address within the CIDR")
 	cmd.Flags().StringVar(&zone, "zone", "", "Underlay zone the pool serves, e.g. 'control-plane'")
 	cmd.Flags().StringVar(&description, "description", "", "Description of the pool's purpose")
@@ -323,7 +323,7 @@ func newIPAMReleaseCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Long: `Release an allocated IP address back to its pool.
 
 Examples:
-  platformctl sdn ipam release --ip 10.0.0.5
+  platformctl sdn ipam release --ip 198.18.9.50
   platformctl sdn ipam release --ip 2001:DB8::1`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runIPAMRelease(getFlags(), ip)
