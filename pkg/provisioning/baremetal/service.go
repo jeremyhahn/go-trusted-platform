@@ -85,6 +85,14 @@ func (s *Service) Provision(ctx context.Context, req *ProvisionRequest) (*Provis
 	if req.ProfileID == 0 {
 		return nil, ErrInvalidProvisionRequest{Reason: "profile ID is required"}
 	}
+	// Refuse an ISO URL the BMC cannot fetch before the workflow powers the
+	// host off, for every caller (REST, gRPC, embedded).
+	if req.ISOURL != "" {
+		spec := bmc.MediaSpec{URL: req.ISOURL}
+		if err := spec.Validate(); err != nil {
+			return nil, ErrInvalidProvisionRequest{Reason: "iso_url: " + err.Error()}
+		}
+	}
 
 	// Verify the profile exists.
 	if _, err := s.profiles.Get(ctx, req.ProfileID); err != nil {

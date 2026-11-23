@@ -16,6 +16,7 @@ package bmc
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 
@@ -98,12 +99,35 @@ func powerActionRoute(h RestHandler, guard RouteGuard) http.HandlerFunc {
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
-		r.Body = io.NopCloser(bytes.NewReader(body))
+		// The scope check and the handler must see the same action: decode
+		// the one JSON value strictly and refuse trailing data before any
+		// guard runs.
 		var req PowerActionRequest
-		if json.Unmarshal(body, &req) == nil && req.Action == "on" {
+		if err := decodeSingleJSON(bytes.NewReader(body), &req); err != nil {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		if req.Action == "on" {
 			powerOn(w, r)
 			return
 		}
 		powerOther(w, r)
 	}
+}
+
+// errTrailingData reports a JSON body that carries data after its one value.
+var errTrailingData = errors.New("unexpected data after the JSON value")
+
+// decodeSingleJSON decodes exactly one JSON value from r into v and refuses
+// any data after it, so every reader of the body sees the same value.
+func decodeSingleJSON(r io.Reader, v any) error {
+	dec := json.NewDecoder(r)
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return errTrailingData
+	}
+	return nil
 }

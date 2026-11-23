@@ -143,7 +143,7 @@ func (h *handler) PowerAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req PowerActionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeSingleJSON(r.Body, &req); err != nil {
 		h.logger.Debug("bmc: failed to decode request body", slog.String("error", err.Error()))
 		h.responseWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
 		return
