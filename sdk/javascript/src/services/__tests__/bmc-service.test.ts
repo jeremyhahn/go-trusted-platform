@@ -93,4 +93,76 @@ describe('BMCService', () => {
       noRetry,
     );
   });
+
+  it('getVirtualMediaStatus gets /v1/bmc/{id}/virtual-media', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: { mounted: false } });
+
+    await service.getVirtualMediaStatus(7);
+
+    expect(mockClient.get).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(mockClient.get).mock.calls[0]?.[0]).toBe('/v1/bmc/7/virtual-media');
+  });
+
+  it('mountISO posts the ISO URL to /v1/bmc/{id}/virtual-media with retries off', async () => {
+    vi.mocked(mockClient.post).mockResolvedValue({
+      success: true,
+      data: { status: 'mounted', iso_url: 'https://example.com/a.iso' },
+    });
+
+    await service.mountISO(7, 'https://example.com/a.iso');
+
+    expect(mockClient.post).toHaveBeenCalledTimes(1);
+    expect(mockClient.post).toHaveBeenCalledWith(
+      '/v1/bmc/7/virtual-media',
+      { iso_url: 'https://example.com/a.iso' },
+      noRetry,
+    );
+  });
+
+  it('unmountISO deletes /v1/bmc/{id}/virtual-media with retries off', async () => {
+    vi.mocked(mockClient.delete).mockResolvedValue({ success: true, data: { status: 'unmounted' } });
+
+    await service.unmountISO(7);
+
+    expect(mockClient.delete).toHaveBeenCalledTimes(1);
+    expect(mockClient.delete).toHaveBeenCalledWith('/v1/bmc/7/virtual-media', noRetry);
+  });
+
+  it('getSensors, getSystemInfo, getWebCertificate and getProvisionStatus get their routes', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: {} });
+
+    await service.getSensors(7);
+    await service.getSystemInfo(7);
+    await service.getWebCertificate(7);
+    await service.getProvisionStatus(7);
+
+    const paths = vi.mocked(mockClient.get).mock.calls.map((call) => call[0]);
+    expect(paths).toEqual([
+      '/v1/bmc/7/sensors',
+      '/v1/bmc/7/system-info',
+      '/v1/bmc/7/cert',
+      '/v1/bmc/7/provision',
+    ]);
+  });
+
+  it('provision posts the request, or an empty body, to /v1/bmc/{id}/provision with retries off', async () => {
+    vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: { status: 'pending' } });
+
+    await service.provision(7, { iso_url: 'https://example.com/a.iso' });
+    await service.provision(7);
+
+    const calls = vi.mocked(mockClient.post).mock.calls;
+    expect(calls).toEqual([
+      ['/v1/bmc/7/provision', { iso_url: 'https://example.com/a.iso' }, noRetry],
+      ['/v1/bmc/7/provision', {}, noRetry],
+    ]);
+  });
+
+  it('escapes a string profile id in the path', async () => {
+    vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: { status: 'ok', action: 'on' } });
+
+    await service.powerOn('a/b');
+
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/a%2Fb/power', { action: 'on' }, noRetry);
+  });
 });
