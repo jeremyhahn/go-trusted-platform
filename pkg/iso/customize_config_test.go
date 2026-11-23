@@ -797,6 +797,41 @@ secure-boot:
 	}
 }
 
+// A Secure Boot private key copied onto the install-media staging tree
+// must be owner-only: the staging tree is a build artifact other local
+// users can read, so a 0644 DB.key exposes the signing key (#62).
+func TestCopySecureBootKeys_PrivateKeyStagedOwnerOnly(t *testing.T) {
+	isoDir := t.TempDir()
+	keysDir := t.TempDir()
+	keyPEM, certPEM := genTestSigningPairPEM(t)
+	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "DB.key"), keyPEM, 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "DB.crt"), certPEM, 0644))
+
+	// Standalone invocation (no applySecurityOverrides): media signing is
+	// assumed, so the private key IS staged.
+	c := NewCustomizer(&PlatformISOConfig{
+		Security: SecurityConfig{SecureBoot: false},
+		Directories: DirectoryConfig{
+			Work: t.TempDir(),
+			ISO:  isoDir,
+			Keys: keysDir,
+		},
+	}, logging.DefaultLogger())
+	require.NoError(t, c.CopySecureBootKeys(context.Background()))
+
+	staged := filepath.Join(isoDir, SecureBootKeysISODirName)
+	info, err := os.Stat(filepath.Join(staged, "DB.key"))
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), info.Mode().Perm(),
+		"a staged Secure Boot private key must be owner-only, not 0644")
+	gotKey, err := os.ReadFile(filepath.Join(staged, "DB.key"))
+	require.NoError(t, err)
+	require.Equal(t, keyPEM, gotKey)
+	gotCert, err := os.ReadFile(filepath.Join(staged, "DB.crt"))
+	require.NoError(t, err)
+	require.Equal(t, certPEM, gotCert)
+}
+
 // TestCopySecureBootKeys_RejectsSelfReferentialKeysDir asserts staging
 // refuses to run when the configured keys directory IS the ISO staging
 // directory (directly or through a symlink): replacement would delete the
