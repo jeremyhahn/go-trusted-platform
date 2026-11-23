@@ -217,7 +217,9 @@ test.describe('Platform services (real server)', () => {
 
   test('Details shows GET /api/v1/platform/services/{service}', async ({ adminPage }) => {
     const { services } = await openServices(adminPage);
-    test.skip(services.length === 0, 'the test daemon reports no services');
+    // The daemon's default Services (pkg/api/daemon/config.go:329: tpm, sdn, compute and dns, all enabled) are registered
+    // by registerConfiguredServices (pkg/api/daemon/daemon.go:3550, called at :2886) whether or not each subsystem is wired, so an empty list is a failure.
+    expect(services.length, 'the test daemon registers its configured services').toBeGreaterThan(0);
 
     const first = services[0];
     const [r] = await Promise.all([
@@ -239,7 +241,7 @@ test.describe('Platform services (real server)', () => {
   }) => {
     const sent = recordRequests(adminPage);
     const { services, caps } = await openServices(adminPage);
-    test.skip(services.length === 0, 'the test daemon reports no services');
+    expect(services.length, 'the test daemon registers its configured services').toBeGreaterThan(0);
 
     const name = services[0].name;
     const row = adminPage.getByTestId(`service-row-${name}`);
