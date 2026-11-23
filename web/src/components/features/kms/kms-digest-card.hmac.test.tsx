@@ -4,6 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ok, refused, stubControlPlane, withControlPlane } from '@/test/control-plane-fetch';
 import { KmsDigestCard } from './kms-digest-card';
 
+vi.mock('@/hooks/use-capabilities', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/use-capabilities')>()),
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
+
 // #2057: the KMS digest card computes an HMAC under a named KMS key at
 // POST /v1/kms/hmac/{name} and checks a tag at POST /v1/kms/hmac/{name}/verify,
 // with base64 bodies; a refusal is shown verbatim as a destructive toast.

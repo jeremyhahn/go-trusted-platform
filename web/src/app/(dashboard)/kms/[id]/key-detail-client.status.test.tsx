@@ -18,12 +18,17 @@ const KEY_PATH = 'GET /api/v1/kms/keys/key-1';
 const VERSIONS_PATH = 'GET /api/v1/kms/keys/key-1/versions';
 const STATUS_PATH = 'PUT /api/v1/kms/keys/key-1/status';
 
-const servedVersions = ok({
-  versions: [
-    { version: 1, status: 'DISABLED', algorithm: 'AES_256_GCM', created_at: '2026-10-01T00:00:00Z' },
-    { version: 2, status: 'ENABLED', algorithm: 'AES_256_GCM', created_at: '2026-11-01T00:00:00Z' },
-  ],
-});
+// GetKey answers KeyInfoResponse, which has no status
+// (pkg/webservice/v1/rest/kms/types.go): the key's status is the status of
+// its current version in ListKeyVersions.
+function servedVersions(keyStatus: string): Answer {
+  return ok({
+    versions: [
+      { version: 1, status: 'DISABLED', algorithm: 'AES_256_GCM', created_at: '2026-10-01T00:00:00Z' },
+      { version: 2, status: keyStatus, algorithm: 'AES_256_GCM', created_at: '2026-11-01T00:00:00Z' },
+    ],
+  });
+}
 
 function routes(status: Answer, keyStatus = 'ENABLED'): Record<string, Answer> {
   return {
@@ -31,11 +36,10 @@ function routes(status: Answer, keyStatus = 'ENABLED'): Record<string, Answer> {
       key_id: 'key-1',
       name: 'payments',
       algorithm: 'AES_256_GCM',
-      status: keyStatus,
       version: 2,
       created_at: '2026-10-01T00:00:00Z',
     }),
-    [VERSIONS_PATH]: servedVersions,
+    [VERSIONS_PATH]: servedVersions(keyStatus),
     [STATUS_PATH]: status,
   };
 }
@@ -102,6 +106,14 @@ describe('KeyDetailPage key status (#2057)', () => {
       })
     );
     await waitFor(() => expect(toasts()).toContain('Key status updated: Key "payments" is now enabled'));
+  });
+
+  it('shows Enable when the served current version is disabled and GetKey has no status', async () => {
+    stubControlPlane(routes(STATUS_OK, 'DISABLED'));
+    await renderPage();
+
+    expect(await screen.findByRole('button', { name: 'Enable' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Disable' })).toBeNull();
   });
 
   it("changes one version's status from the versions table", async () => {

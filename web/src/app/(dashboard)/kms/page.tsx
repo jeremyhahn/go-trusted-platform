@@ -18,6 +18,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { Gated } from "@/components/features/capabilities/gated";
 import {
   Dialog,
   DialogContent,
@@ -441,9 +442,11 @@ export default function KMSKeysPage() {
                 className="w-32"
               />
             </div>
-            <Button variant="outline" onClick={() => void generateRandom()} disabled={randomBusy}>
-              Generate random bytes
-            </Button>
+            <Gated op="POST /api/v1/kms/random">
+              <Button variant="outline" onClick={() => void generateRandom()} disabled={randomBusy}>
+                Generate random bytes
+              </Button>
+            </Gated>
           </div>
           {randomHex !== null && (
             <code data-testid="kms-random-hex" className="break-all font-mono text-sm">

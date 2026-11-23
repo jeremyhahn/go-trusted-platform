@@ -10,6 +10,7 @@
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
+import { Gated } from '@/components/features/capabilities/gated';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -78,9 +79,11 @@ export function WrappedDataKeyCard() {
           />
         </div>
         <div>
-          <Button disabled={busy || wrappingKeyId.trim() === ''} onClick={generate}>
-            Generate wrapped data key
-          </Button>
+          <Gated op="POST /api/v1/kms/data-keys/wrapped">
+            <Button disabled={busy || wrappingKeyId.trim() === ''} onClick={generate}>
+              Generate wrapped data key
+            </Button>
+          </Gated>
         </div>
         {result && (
           <div className="flex flex-col gap-2">
