@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import { peersDown, useBGPPrefixes, type BGPPeer } from '@/hooks/use-bgp-prefixes';
+import { Gated } from '@/components/features/capabilities/gated';
 
 export function BGPPeersCard() {
   const ops = useBGPPrefixes();
@@ -74,9 +75,11 @@ export function BGPPeersCard() {
             </TableBody>
           </Table>
         )}
-        <Button variant="outline" disabled={busy} onClick={() => void reload()}>
-          Refresh
-        </Button>
+        <Gated op="GET /api/v1/gateway/bgp/peers">
+          <Button variant="outline" disabled={busy} onClick={() => void reload()}>
+            Refresh
+          </Button>
+        </Gated>
       </CardContent>
     </Card>
   );

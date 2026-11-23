@@ -16,6 +16,12 @@ vi.mock("@/hooks", async (importOriginal) => ({
 }));
 
 // The table is its own component; the page only hands it the mapped zones.
+// The page mounts the DNS lookup card, whose Resolve and Register are gated
+// on the server's capabilities (#2060); every op is offered here.
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
+
 vi.mock("@/components/features/networking/dns-zone-table", () => ({
   DNSZoneTable: ({ zones, onRefresh }: { zones: { id: string; name: string; type: string; recordCount: number }[]; onRefresh: () => void }) => (
     <div data-testid="zone-table">

@@ -25,6 +25,8 @@ import { useGateway, useApi, useToast, useReportedGateways } from '@/hooks';
 import { GatewaySnapshotDetail } from '@/components/features/networking/gateway-snapshot-detail';
 import { GatewayModeCard } from '@/components/features/networking/gateway-mode-card';
 import { maskToModes } from '@/hooks/use-gateway-mode';
+import { BGPPeersCard } from '@/components/features/networking/bgp-peers-card';
+import { BGPPrefixesCard } from '@/components/features/networking/bgp-prefixes-card';
 
 export default function APIGatewayPage() {
   const { toast } = useToast();
@@ -344,6 +346,11 @@ export default function APIGatewayPage() {
           // The key re-seeds the checkboxes when a refresh reports other modes.
           <GatewayModeCard key={status.modes} initialModes={maskToModes(status.modes)} />
         )}
+
+        <div className="grid gap-6 md:grid-cols-2">
+          <BGPPeersCard />
+          <BGPPrefixesCard />
+        </div>
 
         <div className="grid gap-6 md:grid-cols-2">
           <Card>

@@ -23,6 +23,7 @@ import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import { normalizePrefix, useBGPPrefixes } from '@/hooks/use-bgp-prefixes';
+import { Gated } from '@/components/features/capabilities/gated';
 
 /** The SDK root does not export AnnouncedPrefix; this is its wire shape. */
 interface AnnouncedPrefixRow {
@@ -116,15 +117,17 @@ export function BGPPrefixesCard() {
                   <TableCell>{p.nextHop || '-'}</TableCell>
                   <TableCell>{p.announcedAt}</TableCell>
                   <TableCell>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      aria-label={`Withdraw ${p.prefix}`}
-                      disabled={busy}
-                      onClick={() => setPendingWithdraw(p.prefix)}
-                    >
-                      Withdraw
-                    </Button>
+                    <Gated op="DELETE /api/v1/gateway/bgp/prefixes">
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        aria-label={`Withdraw ${p.prefix}`}
+                        disabled={busy}
+                        onClick={() => setPendingWithdraw(p.prefix)}
+                      >
+                        Withdraw
+                      </Button>
+                    </Gated>
                   </TableCell>
                 </TableRow>
               ))}
@@ -147,9 +150,11 @@ export function BGPPrefixesCard() {
             Not a CIDR prefix
           </p>
         )}
-        <Button disabled={busy || normalized === null} onClick={() => void onAnnounce()}>
-          Announce
-        </Button>
+        <Gated op="POST /api/v1/gateway/bgp/prefixes">
+          <Button disabled={busy || normalized === null} onClick={() => void onAnnounce()}>
+            Announce
+          </Button>
+        </Gated>
       </CardContent>
 
       <Dialog
@@ -167,9 +172,11 @@ export function BGPPrefixesCard() {
             <Button variant="outline" onClick={() => setPendingWithdraw(null)}>
               Cancel
             </Button>
-            <Button variant="destructive" disabled={busy} onClick={() => void onConfirmWithdraw()}>
-              Confirm
-            </Button>
+            <Gated op="DELETE /api/v1/gateway/bgp/prefixes">
+              <Button variant="destructive" disabled={busy} onClick={() => void onConfirmWithdraw()}>
+                Confirm
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
