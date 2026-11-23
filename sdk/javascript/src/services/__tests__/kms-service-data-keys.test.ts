@@ -36,11 +36,11 @@ describe('KMSService data keys', () => {
   });
 
   it('generateDataKey POSTs the snake_case body to /v1/kms/data-keys', async () => {
-    await service.generateDataKey({ keyId: 'kek-1', algorithm: 'AES_256_GCM', keySize: 256, context: 'Y3R4' });
+    await service.generateDataKey({ keyId: 'kek-1', algorithm: 'AES_256', keySize: 256, context: 'Y3R4' });
     expect(mockClient.post).toHaveBeenCalledTimes(1);
     expect(mockClient.post).toHaveBeenCalledWith('/v1/kms/data-keys', {
       key_id: 'kek-1',
-      algorithm: 'AES_256_GCM',
+      algorithm: 'AES_256',
       key_size: 256,
       context: 'Y3R4',
     });
@@ -54,14 +54,14 @@ describe('KMSService data keys', () => {
   it('generateWrappedDataKey POSTs the snake_case body to /v1/kms/data-keys/wrapped', async () => {
     await service.generateWrappedDataKey({
       wrappingKeyId: 'wk-1',
-      keyAlgorithm: 'AES_256_GCM',
+      keyAlgorithm: 'AES_256',
       keySize: 256,
       context: 'Y3R4',
     });
     expect(mockClient.post).toHaveBeenCalledTimes(1);
     expect(mockClient.post).toHaveBeenCalledWith('/v1/kms/data-keys/wrapped', {
       wrapping_key_id: 'wk-1',
-      key_algorithm: 'AES_256_GCM',
+      key_algorithm: 'AES_256',
       key_size: 256,
       context: 'Y3R4',
     });
