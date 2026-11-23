@@ -30,7 +30,6 @@ import type {
   GetDeviceResponse,
   DeleteDeviceResponse,
   ListDevicesResponse,
-  FindDeviceBySerialResponse,
   CountDevicesResponse,
   CreateProfileResponse,
   GetProfileResponse,
@@ -293,10 +292,10 @@ export class DeviceService extends BaseService {
    * Find device by serial number
    *
    * @param serial - Serial number
-   * @returns Found device
+   * @returns The device as the server sends it (flat, not wrapped)
    */
-  async findDeviceBySerial(serial: string): Promise<ApiResponse<FindDeviceBySerialResponse>> {
-    return this.client.get<FindDeviceBySerialResponse>(
+  async findDeviceBySerial(serial: string): Promise<ApiResponse<Device>> {
+    return this.client.get<Device>(
       this.buildUrl(`/serial/${this.encodePathSegment(serial)}`)
     );
   }

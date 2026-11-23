@@ -45,6 +45,8 @@ vi.mock('@/components/features/devices/device-table', () => ({
   ),
 }));
 
+vi.mock('@/components/features/devices/device-serial-lookup', () => ({ DeviceSerialLookup: () => null }));
+
 vi.mock('@/components/features/devices/device-form', () => ({
   DeviceForm: ({ onSuccess, onCancel }: { onSuccess: () => void; onCancel: () => void }) => (
     <div>
