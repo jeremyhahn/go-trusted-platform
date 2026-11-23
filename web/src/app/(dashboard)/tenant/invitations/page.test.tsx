@@ -1,5 +1,5 @@
 import * as React from "react";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import InvitationsPage from "./page";
@@ -41,7 +41,23 @@ const mutation = { mutateAsync: vi.fn(), isLoading: false };
 const invitationHooks = { create: mutation, revoke: mutation, resend: mutation };
 const listResult = { data: { invitations }, isLoading: false, error: null, refetch: vi.fn() };
 const toastResult = { toast: vi.fn() };
-const authResult = { isLoading: false };
+const authResult = { isLoading: false, tenantId: "tenant-1" };
+// #1992: the page offers the tenant's IAM role names in the invitation form.
+const iamRoles = ["so", "admin", "operator", "user", "auditor", "custodian"];
+const listRoles = vi.fn(() =>
+  Promise.resolve({ success: true, data: { roles: iamRoles.map((name) => ({ id: name, name })) } }),
+);
+const iamResult = { listRoles };
+const rolesResult = {
+  data: { roles: iamRoles.map((name) => ({ id: name, name })) },
+  isLoading: false,
+  error: null,
+  refetch: vi.fn(),
+};
+const useApiMock = vi.fn((fetcher: () => unknown, _deps?: unknown[]) => {
+  void fetcher;
+  return rolesResult;
+});
 
 vi.mock("@/contexts/AuthContext", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/contexts/AuthContext")>()),
@@ -53,6 +69,8 @@ vi.mock("@/hooks", async (importOriginal) => ({
   useToast: () => toastResult,
   useInvitation: () => invitationHooks,
   useInvitationList: () => listResult,
+  useIAM: () => iamResult,
+  useApi: (fetcher: () => unknown, deps?: unknown[]) => useApiMock(fetcher, deps),
 }));
 
 // The Radix menu's portal and popper do not settle in jsdom once opened, so
@@ -106,5 +124,22 @@ describe("InvitationsPage status mapping", () => {
     const row = rowFor("pending-invitee");
     expect(within(row).getByText("Pending")).toBeTruthy();
     expect(menuItems(row)).toEqual(["Resend Invitation", "Cancel Invitation"]);
+  });
+});
+
+describe("InvitationsPage invitation roles", () => {
+  it("offers the tenant's IAM role names from listRoles", async () => {
+    listRoles.mockClear();
+    render(<InvitationsPage />);
+    // The page's role fetch asks IAM for this tenant's roles.
+    const fetchers = useApiMock.mock.calls.map(([fetcher]) => fetcher);
+    await Promise.all(fetchers.map((f) => f()));
+    expect(listRoles).toHaveBeenCalledWith({ tenantId: "tenant-1" });
+
+    fireEvent.click(screen.getByRole("button", { name: /^send invitation$/i }));
+    const dialog = screen.getByRole("dialog");
+    const select = within(dialog).getByLabelText("Role") as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(iamRoles);
+    expect(select.value).toBe("user");
   });
 });
