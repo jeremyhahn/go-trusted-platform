@@ -5,6 +5,7 @@
  *
  * Displays all groups in a searchable table with actions.
  * Uses the trusted-platform-sdk for API interactions.
+ * Add Group and the row Delete are gated on the server's capabilities (#2033, #2053).
  */
 
 import React, { useMemo, useCallback } from 'react';
@@ -19,6 +20,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Plus, Users2, AlertCircle, Loader2 } from 'lucide-react';
+import { Gated } from '@/components/features/capabilities/gated';
+import { useCapabilities } from '@/hooks/use-capabilities';
 
 /**
  * UI representation of a group for display purposes
@@ -39,6 +42,7 @@ export default function GroupsPage() {
   const router = useRouter();
   const { toast } = useToast();
   const { tenantId, isLoading: authLoading } = useAuth();
+  const deleteCap = useCapabilities().capability('DELETE /api/v1/iam/groups/{id}');
   const iam = useIAM();
 
   // Fetch groups using SDK
@@ -110,10 +114,13 @@ export default function GroupsPage() {
   }, [router]);
 
   const handleDelete = useCallback((group: DisplayGroup) => {
+    if (!deleteCap.enabled) {
+      return;
+    }
     if (window.confirm(`Are you sure you want to delete ${group.name}?`)) {
       deleteGroupMutation.mutate(group.id);
     }
-  }, [deleteGroupMutation]);
+  }, [deleteGroupMutation, deleteCap.enabled]);
 
   const handleBulkDelete = useCallback(async (groupsToDelete: DisplayGroup[]) => {
     if (!tenantId) {
@@ -203,13 +210,15 @@ export default function GroupsPage() {
                 onClick: () => handleDelete(group),
                 variant: 'destructive',
                 separator: true,
+                disabled: !deleteCap.enabled,
+                title: deleteCap.enabled ? undefined : deleteCap.reason,
               },
             ]}
           />
         );
       },
     },
-  ], [handleView, handleEdit, handleDelete]);
+  ], [handleView, handleEdit, handleDelete, deleteCap.enabled, deleteCap.reason]);
 
   // Show auth loading state
   if (authLoading) {
@@ -272,10 +281,12 @@ export default function GroupsPage() {
             Manage user groups and their memberships
           </p>
         </div>
-        <Button onClick={() => router.push('/iam/groups/new')}>
-          <Plus className="mr-2 h-4 w-4" />
-          Add Group
-        </Button>
+        <Gated op="POST /api/v1/iam/groups">
+          <Button onClick={() => router.push('/iam/groups/new')}>
+            <Plus className="mr-2 h-4 w-4" />
+            Add Group
+          </Button>
+        </Gated>
       </div>
 
       {/* Stats Cards */}
