@@ -31,10 +31,19 @@ const CAPABILITIES: Answer = ok({
   eccCurves: ['NIST_P256'],
 });
 
+// The server's own capability list (#2068): Provision and Clear are gated on it.
+const PAGE_OPS = ['POST /api/v1/tpm/provision', 'POST /api/v1/tpm/clear'];
+const CAPS_ON: Answer = ok({
+  capabilities: PAGE_OPS.map((op) => ({ op, kind: 'route', enabled: true })),
+  total: PAGE_OPS.length,
+  enabled: PAGE_OPS.length,
+});
+
 function stub(extra: Record<string, Answer> = {}) {
   return stubControlPlane({
     'GET /api/v1/tpm/platform': PLATFORM,
     'GET /api/v1/tpm/capabilities': CAPABILITIES,
+    'GET /api/v1/capabilities': CAPS_ON,
     ...extra,
   });
 }
@@ -45,6 +54,10 @@ async function renderPage() {
 }
 
 async function click(name: string) {
+  // A gated control is held until the server's capabilities have loaded.
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name }).getAttribute('data-capability-enabled')).not.toBe('false'),
+  );
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name }));
   });
