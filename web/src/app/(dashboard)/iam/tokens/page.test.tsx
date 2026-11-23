@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,6 +13,21 @@ import TokensPage from './page';
 
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ tenantId: 't-1', isLoading: false }),
+}));
+
+// The Radix row menu does not open in jsdom; the row actions call
+// action.onClick(row) from DropdownMenuItem's onClick, so a flat menu serves.
+vi.mock('@/components/ui/dropdown-menu', () => ({
+  DropdownMenu: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DropdownMenuTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  DropdownMenuContent: ({ children }: { children: ReactNode }) => <div role="menu">{children}</div>,
+  DropdownMenuLabel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DropdownMenuSeparator: () => <hr />,
+  DropdownMenuItem: ({ children, onClick }: { children: ReactNode; onClick?: () => void }) => (
+    <div role="menuitem" onClick={onClick}>
+      {children}
+    </div>
+  ),
 }));
 
 const APPS = '/api/v1/iam/tenants/t-1/apps';
@@ -68,14 +84,8 @@ describe('API credentials page', () => {
     render(withControlPlane(<TokensPage />));
     await screen.findByText('demo');
 
-    const trigger = screen.getByRole('button', { name: 'Open menu' });
     await act(async () => {
-      // The Radix menu opens from the keyboard in jsdom (it has no PointerEvent).
-      fireEvent.keyDown(trigger, { key: 'Enter' });
-    });
-    const item = await screen.findByRole('menuitem', { name: 'Rotate Secret' });
-    await act(async () => {
-      fireEvent.click(item);
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Rotate Secret' }));
     });
 
     await waitFor(() =>
@@ -84,5 +94,29 @@ describe('API credentials page', () => {
     const dialog = await credentialsDialog();
     expect(within(dialog).getByText('secret-rotated')).toBeTruthy();
     expect(within(dialog).getByText('app-1')).toBeTruthy();
+  });
+
+  it('copies the one-time secret', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    stubControlPlane(routes());
+    render(withControlPlane(<TokensPage />));
+    await screen.findByText('demo');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Register Application/ }));
+    });
+    fireEvent.change(await screen.findByLabelText('Application Name'), { target: { value: 'fresh' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Register' }));
+    });
+
+    const dialog = await credentialsDialog();
+    const secret = within(dialog).getByText('secret-new');
+    await act(async () => {
+      fireEvent.click(within(secret.parentElement as HTMLElement).getByRole('button'));
+    });
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(writeText).toHaveBeenCalledWith('secret-new');
   });
 });
