@@ -9,6 +9,19 @@ import { unwrapPayload } from './fixtures/wire';
  * response the server gave it; nothing is canned.
  */
 
+interface Capability {
+  op: string;
+  enabled: boolean;
+  reason?: string;
+}
+
+/** The CA lifecycle controls and the op each is gated on (#2041). */
+const LIFECYCLE_CONTROLS = [
+  { testId: 'ca-init-control', op: 'POST /api/v1/ca/init' },
+  { testId: 'ca-install-control', op: 'POST /api/v1/ca/trust/install' },
+  { testId: 'ca-uninstall-control', op: 'POST /api/v1/ca/trust/uninstall' },
+] as const;
+
 function apiResponse(page: Page, method: string, path: RegExp): Promise<Response> {
   return page.waitForResponse(
     (r) => r.request().method() === method && path.test(new URL(r.url()).pathname),
@@ -107,5 +120,36 @@ test.describe('CA operations', () => {
     expect(answered.ok(), `sign-csr with an unknown token answered ${answered.status()}`).toBeFalsy();
     await expect(adminPage.getByTestId('signed-serial')).toHaveCount(0);
     await expect(adminPage.getByTestId('signed-pem')).toHaveCount(0);
+  });
+
+  test('Lifecycle: InitCA, Install and Uninstall follow the server capabilities', async ({ adminPage }) => {
+    const capsRes = apiResponse(adminPage, 'GET', /\/api\/v1\/capabilities$/);
+    await adminPage.goto('/ca');
+    const listing = await json<{ capabilities?: Capability[] }>(await capsRes);
+    const capabilities = listing.capabilities ?? [];
+
+    for (const { testId, op } of LIFECYCLE_CONTROLS) {
+      const entry = capabilities.find((c) => c.op === op);
+      const control = adminPage.getByTestId(testId);
+      await expect(control).toHaveAttribute('data-capability-op', op);
+      if (entry?.enabled) {
+        await expect(control).toHaveAttribute('data-capability-enabled', 'true');
+      } else {
+        await expect(control).toHaveAttribute('data-capability-enabled', 'false');
+        await expect(control).toHaveAttribute('title', entry?.reason ?? 'not offered by this server');
+        await expect(control).toBeDisabled();
+      }
+    }
+
+    // Install and Uninstall change the shared daemon's host trust store: never clicked here.
+    const init = capabilities.find((c) => c.op === LIFECYCLE_CONTROLS[0].op);
+    if (!init?.enabled) {
+      return;
+    }
+    const initRes = apiResponse(adminPage, 'POST', /\/api\/v1\/ca\/init$/);
+    await adminPage.getByTestId('ca-init-control').click();
+    const answer = await initRes;
+    expect([404, 405], `POST /api/v1/ca/init answered ${answer.status()}`).not.toContain(answer.status());
+    await expect(adminPage.getByRole('alert').filter({ hasText: /CA request (done|failed)/ })).toBeVisible();
   });
 });
