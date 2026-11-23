@@ -497,6 +497,17 @@ func (m *ZoneFlowManager) RemoveFlows(portID string) error {
 // generated in_port matches and DeleteFlowsByPort need; OVSDB calls and the
 // manager's maps keep the name.
 func (m *ZoneFlowManager) openFlowPort(ctx context.Context, portID string) (string, error) {
+	// OpenFlow port numbers are per bridge: a port on another bridge may
+	// share a number with one on ours, so check membership first.
+	if checker, ok := m.portController.(PortBridgeChecker); ok {
+		on, err := checker.PortOnBridge(ctx, m.bridgeName, portID)
+		if err != nil {
+			return "", ErrPortNotOnBridge{Port: portID, Bridge: m.bridgeName, Cause: err}
+		}
+		if !on {
+			return "", ErrPortNotOnBridge{Port: portID, Bridge: m.bridgeName}
+		}
+	}
 	n, err := m.portController.GetOFPort(ctx, portID)
 	if err != nil {
 		return "", ErrNoOpenFlowPort{Port: portID, Cause: err}

@@ -396,5 +396,29 @@ func (e ErrNoOpenFlowPort) Error() string {
 	return fmt.Sprintf("sdn/policy: port %q has no OpenFlow port number (ofport %d)", e.Port, e.OFPort)
 }
 
+// ErrPortNotOnBridge is returned when a port is not on the bridge a flow
+// manager programs, or its membership cannot be checked. OpenFlow port
+// numbers are per bridge, so the manager refuses such a port before it
+// deletes or installs any flow or changes any VLAN.
+type ErrPortNotOnBridge struct {
+	// Port is the OVS interface name.
+	Port string
+	// Bridge is the manager's bridge.
+	Bridge string
+	// Cause is the membership check error, nil when the port is elsewhere.
+	Cause error
+}
+
+func (e ErrPortNotOnBridge) Error() string {
+	msg := fmt.Sprintf("sdn/policy: port %q is not on bridge %q", e.Port, e.Bridge)
+	if e.Cause != nil {
+		return msg + fmt.Sprintf(": %v", e.Cause)
+	}
+	return msg
+}
+
+// Unwrap returns the membership check error, if any.
+func (e ErrPortNotOnBridge) Unwrap() error { return e.Cause }
+
 // Unwrap returns the lookup error.
 func (e ErrNoOpenFlowPort) Unwrap() error { return e.Cause }

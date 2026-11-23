@@ -32,6 +32,7 @@ type ovsClient interface {
 	UpdatePort(ctx context.Context, name string, updates map[string]interface{}) error
 	SetPortState(ctx context.Context, portName string, state ovs.PortState) error
 	GetOFPort(ctx context.Context, portName string) (int32, error)
+	ListPorts(ctx context.Context, bridgeName string) ([]*ovs.Port, error)
 }
 
 // OVSFlowController implements FlowController using an OVS client
@@ -263,6 +264,25 @@ func (c *OVSFlowController) GetOFPort(ctx context.Context, portName string) (int
 	}
 
 	return ofPort, nil
+}
+
+// PortOnBridge reports whether portName is a port of bridgeName, from the
+// bridge's OVSDB port list. It implements PortBridgeChecker.
+func (c *OVSFlowController) PortOnBridge(ctx context.Context, bridgeName, portName string) (bool, error) {
+	if portName == "" {
+		return false, ErrInvalidPortID
+	}
+
+	ports, err := c.client.ListPorts(ctx, bridgeName)
+	if err != nil {
+		return false, &WrappedError{Msg: fmt.Sprintf("failed to list ports of bridge %s", bridgeName), Err: err}
+	}
+	for _, p := range ports {
+		if p != nil && p.Name == portName {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // formatFlow formats a Flow into a string representation
