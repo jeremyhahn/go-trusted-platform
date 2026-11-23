@@ -13,6 +13,12 @@
  * its control disabled with the server's reason. The SDK sends each write once, never
  * retried. A successful write re-reads the list once; a refused one shows the
  * server's message.
+ *
+ * Each row's Details button reads that VIP through GetVIP
+ * (GET /lb/vips/{protocol}/{address}/{port}) and shows its conntrack zone,
+ * select group and per-backend health in the row; a refused read shows the
+ * server's message there. It is a read, open to every role, and gated on its
+ * route like the writes.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -40,6 +46,7 @@ const BACKEND_LINE = /^(\S+):(\d+)(?:\s+(\d+))?$/;
 const ADD_OP = 'POST /api/v1/gateway/lb/vips';
 const BACKENDS_OP = 'PUT /api/v1/gateway/lb/vips/{protocol}/{address}/{port}/backends';
 const REMOVE_OP = 'DELETE /api/v1/gateway/lb/vips/{protocol}/{address}/{port}';
+const GET_OP = 'GET /api/v1/gateway/lb/vips/{protocol}/{address}/{port}';
 
 /**
  * Parse one backend per line as `address:port [weight]` (weight defaults to
@@ -95,6 +102,8 @@ export function GatewayVIPsCard() {
   const [editKey, setEditKey] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
   const [removing, setRemoving] = useState<VIPStatus | null>(null);
+  const [detail, setDetail] = useState<{ key: string; vip: VIPStatus | null; error: string | null } | null>(null);
+  const [detailBusy, setDetailBusy] = useState(false);
 
   // Reads the list without touching state, so the mount effect and the
   // post-write re-read share it.
@@ -203,6 +212,28 @@ export function GatewayVIPsCard() {
     await write(() => gateway.removeVIP(cfg.protocol, cfg.address, cfg.port));
   };
 
+  // Reads one VIP through GetVIP. A read: open to every role, no list re-read.
+  const handleDetails = async (vip: VIPStatus) => {
+    const cfg = vip.vip;
+    if (!cfg) {
+      return;
+    }
+    const key = keyOf(vip);
+    setDetailBusy(true);
+    try {
+      const res = await gateway.getVIP(cfg.protocol, cfg.address, cfg.port);
+      if (res.error) {
+        setDetail({ key, vip: null, error: res.error.message || 'The gateway did not return the VIP' });
+      } else {
+        setDetail({ key, vip: res.data?.vip ?? null, error: null });
+      }
+    } catch (err) {
+      setDetail({ key, vip: null, error: errorText(err) });
+    } finally {
+      setDetailBusy(false);
+    }
+  };
+
   const writesDisabled = !isAdmin || busy;
 
   return (
@@ -252,6 +283,17 @@ export function GatewayVIPsCard() {
                     </span>
                   </div>
                   <div className="flex gap-2">
+                    <Gated op={GET_OP}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        data-testid={`vip-details-${key}`}
+                        disabled={detailBusy}
+                        onClick={() => void handleDetails(vip)}
+                      >
+                        Details
+                      </Button>
+                    </Gated>
                     <Gated op={BACKENDS_OP}>
                       <Button
                         variant="outline"
@@ -304,6 +346,31 @@ export function GatewayVIPsCard() {
                     </div>
                   </div>
                 )}
+                {detail?.key === key &&
+                  (detail.error !== null ? (
+                    <p className="mt-2 text-sm text-destructive" data-testid={`vip-detail-error-${key}`}>
+                      {detail.error}
+                    </p>
+                  ) : (
+                    <dl className="mt-2 text-sm" data-testid={`vip-detail-${key}`}>
+                      <div>
+                        <dt className="inline text-muted-foreground">Conntrack: </dt>
+                        <dd className="inline font-mono">{`ct zone ${detail.vip?.ctZone ?? '-'}`}</dd>
+                      </div>
+                      <div>
+                        <dt className="inline text-muted-foreground">Select group: </dt>
+                        <dd className="inline font-mono">{`group ${detail.vip?.groupId ?? '-'}`}</dd>
+                      </div>
+                      {(detail.vip?.backends ?? []).map((b, i) => (
+                        <div key={`${b.backend?.address ?? ''}:${b.backend?.port ?? i}`}>
+                          <dt className="inline text-muted-foreground">Backend: </dt>
+                          <dd className="inline font-mono">
+                            {`${b.backend?.address ?? '?'}:${b.backend?.port ?? '?'} ${b.healthy ? 'healthy' : 'unhealthy'}`}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  ))}
               </li>
             );
           })}

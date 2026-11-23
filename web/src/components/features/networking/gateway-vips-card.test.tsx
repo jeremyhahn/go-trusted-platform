@@ -326,7 +326,7 @@ describe("GatewayVIPsCard", () => {
 
     const err = await screen.findByTestId(`vip-detail-error-${KEY}`);
     expect(err.textContent).toContain("vip not found");
-    expect(screen.queryByTestId("vips-error")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("vips-error")).toBeNull();
   });
 
   it("Details the server does not offer is disabled with its reason and reads nothing", async () => {
