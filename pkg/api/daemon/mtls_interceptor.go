@@ -17,13 +17,16 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"strings"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
+	grpccreds "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -44,9 +47,15 @@ type MTLSInterceptorConfig struct {
 	// Logger for interceptor operations.
 	Logger *logging.Logger
 
-	// SkipMethods lists gRPC method names that bypass mTLS authentication.
-	// Health check endpoints are typically skipped.
+	// SkipMethods lists gRPC method names that bypass mTLS authentication
+	// and the permission check. Health check endpoints are typically skipped.
 	SkipMethods []string
+
+	// PEP is the IAM policy enforcement point that decides every other call
+	// for the certificate principal and the method's catalog permission
+	// (grpc.ScopeForMethod). A nil PEP fails each such call closed with
+	// codes.Unavailable (#1989).
+	PEP quicbaassdk.IAMPEPClient
 }
 
 // ErrMTLSNoPeerInfo indicates no peer info was found in the gRPC context.
@@ -71,7 +80,9 @@ func (e ErrMTLSNoCertificates) Error() string {
 }
 
 // MTLSUnaryInterceptor returns a gRPC unary server interceptor that validates
-// client certificates via mTLS and attaches the extracted identity to the context.
+// client certificates via mTLS, attaches the extracted identity to the context
+// and lets the call through only when cfg.PEP allows the certificate principal
+// the method's catalog permission (see authorizeMTLSCall).
 func MTLSUnaryInterceptor(cfg *MTLSInterceptorConfig) grpc.UnaryServerInterceptor {
 	skipMap := buildSkipMap(cfg.SkipMethods)
 
@@ -91,13 +102,18 @@ func MTLSUnaryInterceptor(cfg *MTLSInterceptorConfig) grpc.UnaryServerIntercepto
 		if err != nil {
 			return nil, err
 		}
+		if err := authorizeMTLSCall(enrichedCtx, cfg, info.FullMethod); err != nil {
+			return nil, err
+		}
 
 		return handler(enrichedCtx, req)
 	}
 }
 
 // MTLSStreamInterceptor returns a gRPC stream server interceptor that validates
-// client certificates via mTLS and attaches the extracted identity to the context.
+// client certificates via mTLS, attaches the extracted identity to the context
+// and lets the stream through only when cfg.PEP allows the certificate
+// principal the method's catalog permission (see authorizeMTLSCall).
 func MTLSStreamInterceptor(cfg *MTLSInterceptorConfig) grpc.StreamServerInterceptor {
 	skipMap := buildSkipMap(cfg.SkipMethods)
 
@@ -115,6 +131,9 @@ func MTLSStreamInterceptor(cfg *MTLSInterceptorConfig) grpc.StreamServerIntercep
 		// Extract and validate client certificate
 		enrichedCtx, err := authenticateFromPeer(ss.Context(), cfg)
 		if err != nil {
+			return err
+		}
+		if err := authorizeMTLSCall(enrichedCtx, cfg, info.FullMethod); err != nil {
 			return err
 		}
 
@@ -173,6 +192,36 @@ func authenticateFromPeer(ctx context.Context, cfg *MTLSInterceptorConfig) (cont
 
 	// Attach identity to context
 	return context.WithValue(ctx, ContextKeyIdentity, identity), nil
+}
+
+// authorizeMTLSCall decides an authenticated mTLS call with the IAM policy
+// enforcement point. A certificate is no longer a grant for every method
+// (#1989): the call needs the "resource:action" permission the gRPC method
+// catalog names for it, checked for the certificate's subject and tenant. A
+// method absent from the catalog, a malformed permission or a denial is
+// codes.PermissionDenied; a nil PEP or a check that fails is
+// codes.Unavailable, so a PEP that cannot answer never lets a call through.
+func authorizeMTLSCall(ctx context.Context, cfg *MTLSInterceptorConfig, fullMethod string) error {
+	resource, action, ok := strings.Cut(grpccreds.ScopeForMethod(fullMethod), ":")
+	if !ok || strings.TrimSpace(resource) == "" || strings.TrimSpace(action) == "" {
+		return status.Error(codes.PermissionDenied, grpccreds.ErrMethodNotClassified{Method: fullMethod}.Error())
+	}
+	identity := IdentityFromContext(ctx)
+	if identity == nil {
+		return status.Error(codes.Unauthenticated, ErrMTLSNoCertificates{}.Error())
+	}
+	principal := &tokenPrincipal{Subject: identity.ID, TenantID: identity.TenantID}
+	allowed, err := checkPrincipalPermission(ctx, cfg.PEP, principal, resource, action)
+	if err != nil {
+		if cfg.Logger != nil {
+			cfg.Logger.Debug("mtls: permission check failed", "method", fullMethod, "error", err)
+		}
+		return status.Errorf(codes.Unavailable, "mtls: %v", err)
+	}
+	if !allowed {
+		return status.Errorf(codes.PermissionDenied, "mtls: %s may not %s %s", identity.ID, action, resource)
+	}
+	return nil
 }
 
 // extractClientCerts returns client certificates from TLS connection state.
