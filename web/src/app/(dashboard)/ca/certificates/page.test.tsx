@@ -348,4 +348,21 @@ describe("CertificatesPage", () => {
       expect.objectContaining({ subject: {}, key_algorithm: "RSA-4096", is_ca: true })
     );
   });
+
+  // The REST list is protojson: status is the CertificateStatus enum name (pkg/webservice/v1/rest/ca/handlers.go certToSummaryProto).
+  it("maps the server's CERTIFICATE_STATUS_ enum: EXPIRED to expired, REVOKED to revoked, VALID and PENDING to active", () => {
+    apiState = state({
+      data: {
+        certificates: [
+          { serial: "20", commonName: "a", issuer: "x", status: "CERTIFICATE_STATUS_EXPIRED" },
+          { serial: "21", commonName: "b", issuer: "x", status: "CERTIFICATE_STATUS_REVOKED" },
+          { serial: "22", commonName: "c", issuer: "x", status: "CERTIFICATE_STATUS_VALID" },
+          { serial: "23", commonName: "d", issuer: "x", status: "CERTIFICATE_STATUS_PENDING" },
+          { serial: "24", commonName: "e", issuer: "x", status: "certificate_status_expired" },
+        ],
+      },
+    });
+    render(<CertificatesPage />);
+    expect(tableRows.map((r) => r.status)).toEqual(["expired", "revoked", "active", "active", "expired"]);
+  });
 });
