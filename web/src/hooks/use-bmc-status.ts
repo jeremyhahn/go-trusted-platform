@@ -8,8 +8,8 @@
  * Provision (`POST /provision`) and ProvisionStatus (`GET /provision`), served
  * under `/api/v1/bmc/{profileID}` (pkg/webservice/v1/bmc/handler.go).
  *
- * It calls the SDK API client directly, as use-ntp.ts does, because the SDK
- * has no BMC service on main yet.
+ * It goes through the SDK BMCService (`client.bmc`), which sends Provision
+ * with retries off.
  *
  * Provision reboots the host into the installer, so a control that calls it
  * must confirm first.
@@ -82,21 +82,17 @@ export function bmcStatusPath(profileID: string, op: string): string {
 export function useBMCStatus(profileID: string) {
   const client = usePlatformClient();
   return useMemo(() => {
-    const api = client.getApiClient();
+    const bmc = client.bmc;
     return {
-      getPower: () => api.get<BMCPowerState>(bmcStatusPath(profileID, "power")),
-      getSensors: () => api.get<BMCSensorReading[]>(bmcStatusPath(profileID, "sensors")),
-      getSystemInfo: () => api.get<BMCSystemInfo>(bmcStatusPath(profileID, "system-info")),
-      getWebCertificate: () => api.get<BMCWebCertificate>(bmcStatusPath(profileID, "cert")),
-      // A provision reboots the host into the installer: a dropped reply
-      // must not start it twice.
+      getPower: () => bmc.getPowerStatus(profileID),
+      getSensors: () => bmc.getSensors(profileID),
+      getSystemInfo: () => bmc.getSystemInfo(profileID),
+      getWebCertificate: () => bmc.getWebCertificate(profileID),
+      // A provision reboots the host into the installer: the SDK sends it
+      // with retries off, so a dropped reply does not start it twice.
       provision: (isoURL?: string) =>
-        api.post<BMCProvisionResult>(
-          bmcStatusPath(profileID, "provision"),
-          isoURL?.trim() ? { iso_url: isoURL.trim() } : {},
-          { retry: { enabled: false } }
-        ),
-      getProvisionStatus: () => api.get<BMCProvisionResult>(bmcStatusPath(profileID, "provision")),
+        bmc.provision(profileID, isoURL?.trim() ? { iso_url: isoURL.trim() } : {}),
+      getProvisionStatus: () => bmc.getProvisionStatus(profileID),
     };
   }, [client, profileID]);
 }

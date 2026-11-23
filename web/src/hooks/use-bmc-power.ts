@@ -5,8 +5,8 @@
  *
  * All four share one route, `POST /api/v1/bmc/{profileID}/power` with the
  * body `{ action }` (pkg/webservice/v1/bmc/handler.go PowerAction). The hook
- * calls the SDK API client directly, as use-ntp.ts does, because the SDK has
- * no BMC service on main.
+ * goes through the SDK BMCService (`client.bmc.powerAction`), which never
+ * retries a power action.
  *
  * off, reset and cycle stop the host, so a control that calls them must ask
  * for confirmation first (see bmcPowerActionStopsHost).
@@ -55,11 +55,9 @@ export function bmcPowerActionStopsHost(a: BMCPowerAction): boolean {
 export function useBMCPower(profileID: string) {
   const client = usePlatformClient();
   return useMemo(() => {
-    const api = client.getApiClient();
-    const run = (action: BMCPowerAction) =>
-      // A power action is not idempotent: a dropped reply must not
-      // power-cycle the host twice.
-      api.post<BMCPowerActionResult>(bmcPowerPath(profileID), { action }, { retry: { enabled: false } });
+    // A power action is not idempotent: the SDK sends it with retries off,
+    // so a dropped reply does not power-cycle the host twice.
+    const run = (action: BMCPowerAction) => client.bmc.powerAction(profileID, action);
     return {
       run,
       powerOn: () => run("on"),

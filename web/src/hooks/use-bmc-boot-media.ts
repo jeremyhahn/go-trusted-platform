@@ -7,8 +7,8 @@
  * /api/v1/bmc/{profileID}/virtual-media`), served by
  * pkg/webservice/v1/bmc/handler.go.
  *
- * Calls the SDK API client directly, as use-ntp.ts does, because the SDK has
- * no BMC service on main. A boot-device change takes effect at the next boot.
+ * Goes through the SDK BMCService (`client.bmc`), which sends the writes with
+ * retries off. A boot-device change takes effect at the next boot.
  */
 
 import { useMemo } from "react";
@@ -69,27 +69,17 @@ export function bmcPath(profileID: string, op: string): string {
 export function useBMCBootMedia(profileID: string) {
   const client = usePlatformClient();
   return useMemo(() => {
-    const api = client.getApiClient();
+    const bmc = client.bmc;
     return {
-      getBootDevice: () => api.get<BMCBootDeviceResult>(bmcPath(profileID, "boot-device")),
+      getBootDevice: () => bmc.getBootDevice(profileID),
       // Boot device, mount and eject are writes: a dropped reply does not
-      // show the server skipped them, so they are sent once and never
-      // replayed (a late eject retry could remove media mounted since).
+      // show the server skipped them, so the SDK sends them once and never
+      // replays them (a late eject retry could remove media mounted since).
       setBootDevice: (device: BMCBootDevice, persistent = false) =>
-        api.post<BMCSetBootDeviceResult>(
-          bmcPath(profileID, "boot-device"),
-          { device, persistent },
-          { retry: { enabled: false } }
-        ),
-      getVirtualMedia: () => api.get<BMCVirtualMediaStatus>(bmcPath(profileID, "virtual-media")),
-      mountISO: (isoURL: string) =>
-        api.post<BMCMountISOResult>(
-          bmcPath(profileID, "virtual-media"),
-          { iso_url: isoURL.trim() },
-          { retry: { enabled: false } }
-        ),
-      unmountISO: () =>
-        api.delete<BMCStatusResult>(bmcPath(profileID, "virtual-media"), { retry: { enabled: false } }),
+        bmc.setBootDevice(profileID, { device, persistent }),
+      getVirtualMedia: () => bmc.getVirtualMediaStatus(profileID),
+      mountISO: (isoURL: string) => bmc.mountISO(profileID, isoURL.trim()),
+      unmountISO: () => bmc.unmountISO(profileID),
     };
   }, [client, profileID]);
 }
