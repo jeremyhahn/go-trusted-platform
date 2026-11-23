@@ -7,12 +7,16 @@
  *
  * Setting a port down cuts its traffic, so the card asks first. A zero rate
  * leaves the port's policing as it is. Refusals are shown verbatim.
+ *
+ * Apply and Set down are gated on the server's PUT .../state capability and
+ * Refresh on GET .../state (#2033); the read on mount is not gated.
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Gated } from '@/components/features/capabilities/gated';
 import {
   Dialog,
   DialogContent,
@@ -163,9 +167,11 @@ export function SDNPortStateCard({ bridgeId, portId }: SDNPortStateCardProps) {
               </Badge>
             </>
           )}
-          <Button variant="outline" size="sm" onClick={() => void reload()}>
-            Refresh
-          </Button>
+          <Gated op="GET /api/v1/sdn/bridges/{name}/ports/{port}/state">
+            <Button variant="outline" size="sm" onClick={() => void reload()}>
+              Refresh
+            </Button>
+          </Gated>
         </div>
         {loadError && (
           <p role="alert" className="text-sm text-destructive">
@@ -195,9 +201,11 @@ export function SDNPortStateCard({ bridgeId, portId }: SDNPortStateCardProps) {
               />
             ))}
           </div>
-          <Button onClick={apply} disabled={busy}>
-            Apply
-          </Button>
+          <Gated op="PUT /api/v1/sdn/bridges/{name}/ports/{port}/state">
+            <Button onClick={apply} disabled={busy}>
+              Apply
+            </Button>
+          </Gated>
         </div>
       </CardContent>
       <Dialog open={confirmDown} onOpenChange={setConfirmDown}>
@@ -212,15 +220,17 @@ export function SDNPortStateCard({ bridgeId, portId }: SDNPortStateCardProps) {
             <Button variant="outline" onClick={() => setConfirmDown(false)}>
               Cancel
             </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                setConfirmDown(false);
-                void send();
-              }}
-            >
-              Set down
-            </Button>
+            <Gated op="PUT /api/v1/sdn/bridges/{name}/ports/{port}/state">
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  setConfirmDown(false);
+                  void send();
+                }}
+              >
+                Set down
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>

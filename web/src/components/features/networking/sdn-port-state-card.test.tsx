@@ -4,6 +4,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ok, refused, stubControlPlane, withControlPlane, type Answer } from '@/test/control-plane-fetch';
 import { SDNPortStateCard, parseRate, portStatusLabel } from './sdn-port-state-card';
 
+const { off } = vi.hoisted(() => ({ off: new Set<string>() }));
+
+vi.mock('@/hooks/use-capabilities', () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: (op: string) => (off.has(op) ? { enabled: false, reason: 'not-configured: sdn' } : { enabled: true }),
+  }),
+}));
+
+const SET_OP = 'PUT /api/v1/sdn/bridges/{name}/ports/{port}/state';
+const GET_OP = 'GET /api/v1/sdn/bridges/{name}/ports/{port}/state';
+
 // #2064: the SDN port state card reads a port's state with GetPort on
 // `GET /api/v1/sdn/bridges/{name}/ports/{port}/state` through the real SDK
 // client, and shows a refusal verbatim.
@@ -26,6 +39,7 @@ describe('SDNPortStateCard read', () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    off.clear();
   });
 
   it('reads the port on mount', async () => {
@@ -72,5 +86,54 @@ describe('SDNPortStateCard read', () => {
     expect(parseRate('2000')).toBe(2000);
     expect(Number.isNaN(parseRate('-1'))).toBe(true);
     expect(Number.isNaN(parseRate('ten'))).toBe(true);
+  });
+});
+
+describe('SDNPortStateCard capability gate (#2064)', () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    off.clear();
+  });
+
+  it("withholds Apply with the server's reason when PUT .../state is not offered", async () => {
+    off.add(SET_OP);
+    const sent = stubControlPlane({ [`GET ${STATE}`]: storedPort('PORT_STATUS_UP') });
+    renderCard();
+    await screen.findByTestId('sdn-port-status');
+    const apply = screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement;
+    expect(apply.disabled).toBe(true);
+    expect(apply.getAttribute('title')).toBe('not-configured: sdn');
+    expect(apply.getAttribute('data-capability-op')).toBe(SET_OP);
+    expect(apply.getAttribute('data-capability-enabled')).toBe('false');
+    await act(async () => {
+      fireEvent.click(apply);
+    });
+    expect(sent.filter((r) => r.method === 'PUT')).toHaveLength(0);
+  });
+
+  it('withholds Refresh when GET .../state is not offered', async () => {
+    off.add(GET_OP);
+    const sent = stubControlPlane({ [`GET ${STATE}`]: storedPort('PORT_STATUS_UP') });
+    renderCard();
+    await screen.findByTestId('sdn-port-status');
+    const refresh = screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement;
+    expect(refresh.disabled).toBe(true);
+    expect(refresh.getAttribute('data-capability-op')).toBe(GET_OP);
+    await act(async () => {
+      fireEvent.click(refresh);
+    });
+    expect(gets(sent)).toBe(1);
+  });
+
+  it('leaves Apply and Refresh enabled when the server offers them', async () => {
+    stubControlPlane({ [`GET ${STATE}`]: storedPort('PORT_STATUS_UP') });
+    renderCard();
+    await screen.findByTestId('sdn-port-status');
+    for (const name of ['Apply', 'Refresh']) {
+      const button = screen.getByRole('button', { name }) as HTMLButtonElement;
+      expect(button.getAttribute('data-capability-enabled')).toBe('true');
+      expect(button.disabled).toBe(false);
+    }
   });
 });

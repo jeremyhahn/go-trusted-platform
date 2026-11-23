@@ -22,6 +22,7 @@ import { Badge } from '@/components/ui/badge';
 import { useDNS, useMutation, useToast } from '@/hooks';
 import { toRecordType } from "@/utils/dns-record-type";
 import type { DNSRecord } from '@/types/infrastructure';
+import { Gated } from '@/components/features/capabilities/gated';
 
 interface DNSRecordTableProps {
   zoneName: string;
@@ -151,22 +152,27 @@ export function DNSRecordTable({
                         <MoreHorizontal className="h-4 w-4" />
                       </Button>
                     </DropdownMenuTrigger>
+                    {/* Edit and Delete are gated on the server's PUT and DELETE record capabilities (#2060). */}
                     <DropdownMenuContent align="end">
                       <DropdownMenuLabel>Actions</DropdownMenuLabel>
                       <DropdownMenuSeparator />
                       {onEdit && (
-                        <DropdownMenuItem onClick={() => onEdit(record)}>
-                          <Edit className="mr-2 h-4 w-4" />
-                          Edit
-                        </DropdownMenuItem>
+                        <Gated op="PUT /api/v1/dns/zones/{zone}/records">
+                          <DropdownMenuItem onClick={() => onEdit(record)}>
+                            <Edit className="mr-2 h-4 w-4" />
+                            Edit
+                          </DropdownMenuItem>
+                        </Gated>
                       )}
-                      <DropdownMenuItem
-                        onClick={() => handleDelete(record)}
-                        className="text-destructive"
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Delete
-                      </DropdownMenuItem>
+                      <Gated op="DELETE /api/v1/dns/zones/{zone}/records/{type}/{name}">
+                        <DropdownMenuItem
+                          onClick={() => handleDelete(record)}
+                          className="text-destructive"
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          Delete
+                        </DropdownMenuItem>
+                      </Gated>
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </TableCell>
