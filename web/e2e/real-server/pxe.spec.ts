@@ -23,6 +23,16 @@ const START_OP = 'POST /api/v1/pxe/start';
 const STOP_OP = 'POST /api/v1/pxe/stop';
 const GET_DEVICE_OP = 'GET /api/v1/pxe/devices/{id}';
 const UPDATE_STATE_OP = 'PUT /api/v1/pxe/devices/{id}/state';
+const BY_MAC_OP = 'GET /api/v1/pxe/devices/mac/{mac}';
+
+// The row actions of the All Devices list: aria-label `<prefix> <id>`, each gated on its op.
+const ROW_ACTIONS: ReadonlyArray<readonly [string, string]> = [
+  ['Authorize', 'POST /api/v1/pxe/devices/{id}/authorize'],
+  ['Quarantine', 'POST /api/v1/pxe/devices/{id}/quarantine'],
+  ['Retry', 'POST /api/v1/pxe/devices/{id}/retry'],
+  ['Remove', 'DELETE /api/v1/pxe/devices/{id}'],
+  ['Mark enrolled', 'POST /api/v1/pxe/devices/{id}/enrolled'],
+];
 
 const NOT_CONFIGURED = 'PXE is not available on this node';
 
@@ -115,6 +125,64 @@ test.describe('PXE against the real platformd (#2062)', () => {
 
     if (!updateCap.enabled) {
       await expectGatedOff(adminPage.getByRole('button', { name: 'Set state' }), updateCap);
+    }
+  });
+
+  test('Find by MAC follows the server capability for GET /api/v1/pxe/devices/mac/{mac}', async ({
+    adminPage,
+    sdk,
+  }) => {
+    const caps = sdkData(await sdk.capabilities.list(), 'capabilities');
+    await adminPage.goto('/networking/pxe');
+    if (!capabilityOf(caps, LIST_DEVICES_OP).enabled) {
+      await expectNotConfigured(adminPage);
+      await expect(adminPage.getByLabel('MAC address')).toHaveCount(0);
+      return;
+    }
+
+    const cap = capabilityOf(caps, BY_MAC_OP);
+    await expect(adminPage.getByLabel('MAC address')).toBeVisible();
+    const find = adminPage.getByRole('button', { name: 'Find by MAC' });
+    await expect(find).toHaveAttribute('data-capability-op', BY_MAC_OP);
+    await expect(find).toHaveAttribute('data-capability-enabled', String(cap.enabled));
+    if (!cap.enabled) {
+      await expectGatedOff(find, cap);
+      return;
+    }
+
+    // A read only: no device carries this example MAC on a fresh test server.
+    await adminPage.getByLabel('MAC address').fill('02:00:00:00:00:01');
+    await find.click();
+    await expect(adminPage.getByText('PXE lookup failed').first()).toBeVisible();
+    await expect(adminPage).toHaveURL(/\/networking\/pxe$/);
+  });
+
+  test('every listed device row action follows its server capability', async ({ adminPage, sdk }) => {
+    const caps = sdkData(await sdk.capabilities.list(), 'capabilities');
+    await adminPage.goto('/networking/pxe');
+    if (!capabilityOf(caps, LIST_DEVICES_OP).enabled) {
+      await expectNotConfigured(adminPage);
+      return;
+    }
+
+    // No writes from this spec: the row actions are checked on what the server already lists.
+    const devices = sdkData(await sdk.pxe.listDevices(), 'pxe devices').devices ?? [];
+    if (devices.length === 0) {
+      await expect(adminPage.getByText('No devices found').first()).toBeVisible();
+      return;
+    }
+
+    const id = devices[0].id;
+    await expect(adminPage.getByTestId(`pxe-device-link-${id}`)).toBeVisible();
+    for (const [prefix, op] of ROW_ACTIONS) {
+      const button = adminPage.getByRole('button', { name: `${prefix} ${id}`, exact: true });
+      if (prefix === 'Mark enrolled' && (await button.count()) === 0) continue;
+      await expect(button).toHaveAttribute('data-capability-op', op);
+      await expect(button).toHaveAttribute(
+        'data-capability-enabled',
+        String(capabilityOf(caps, op).enabled),
+      );
+      // Never click a row action: each one writes the device record.
     }
   });
 });
