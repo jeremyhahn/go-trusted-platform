@@ -146,6 +146,20 @@ func TestSDKREST_TenantItemOperations(t *testing.T) {
 			},
 			want: &platformv1.GetUsageRequest{TenantId: "acme-prod"},
 		},
+		{
+			name: "CreateInitialAdminInvitation keeps the email in the body",
+			call: func(c platformv1.TenantServiceClient) error {
+				_, err := c.CreateInitialAdminInvitation(ctx, &platformv1.CreateInitialAdminInvitationRequest{
+					TenantId: "acme-prod",
+					Email:    "owner@example.com",
+				})
+				return err
+			},
+			want: &platformv1.CreateInitialAdminInvitationRequest{
+				TenantId: "acme-prod",
+				Email:    "owner@example.com",
+			},
+		},
 	}
 
 	for _, tc := range cases {
