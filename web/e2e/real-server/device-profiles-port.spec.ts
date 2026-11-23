@@ -1,6 +1,7 @@
 import type { Page } from '@playwright/test';
 import type { PlatformClient } from 'trusted-platform-sdk';
 import { test, expect } from './fixtures';
+import { unwrapPayload } from './fixtures/wire';
 
 /**
  * Device Profiles against the real server (#2035, epic #1665): the port of the
@@ -10,8 +11,9 @@ import { test, expect } from './fixtures';
  *
  * The server answers POST /api/v1/device/profiles with the profile itself
  * (201, profileToResponse) and GET with { profiles, pagination }
- * (rest_handlers.go CreateProfile, ListProfiles): read res.data as a record,
- * not as an SDK wrapper type.
+ * (rest_handlers.go CreateProfile, ListProfiles) under the envelope's payload:
+ * read the SDK's res.data as a record, not as an SDK wrapper type, and a raw
+ * Response.json() through unwrapPayload.
  */
 
 type ProfileSeed = Parameters<PlatformClient['device']['createProfile']>[0]['profile'];
@@ -144,9 +146,11 @@ test.describe('Device profiles, real server', () => {
       const res = await answer;
       const body: unknown = await res.json();
       expect(res.status(), serverMessage(body)).toBe(201);
-      expect(isRecord(body) && body.name).toBe(name);
-      if (isRecord(body)) created.push(String(body.id));
-      expect(isRecord(body) && body.role).toBe('server');
+      // The raw answer is the envelope: the profile is its payload.
+      const profile: Record<string, unknown> = unwrapPayload(body);
+      created.push(String(profile.id));
+      expect(profile.name).toBe(name);
+      expect(profile.role).toBe('server');
       await expect(adminPage.getByText('Profile created', { exact: true })).toBeVisible();
       await expect(dialog).toBeHidden();
       const r = row(adminPage, name);

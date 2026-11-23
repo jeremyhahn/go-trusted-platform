@@ -1,6 +1,7 @@
 import type { Page, Response } from '@playwright/test';
 import type { PlatformClient } from 'trusted-platform-sdk';
 import { test, expect, type Tenant } from './fixtures';
+import { unwrapPayload } from './fixtures/wire';
 
 /**
  * IAM users console (/iam/users and /iam/users/<id>) against the real-server
@@ -246,7 +247,7 @@ test.describe('IAM users, real server', () => {
       const res = await answer;
 
       if (res.ok()) {
-        const created = userOf(await res.json());
+        const created = userOf(unwrapPayload(await res.json()));
         expect(created.email).toBe(u.email);
         await expect(adminPage.getByText('User created', { exact: true })).toBeVisible();
         await expect(adminPage.getByText(u.email)).toBeVisible();
@@ -366,7 +367,7 @@ test.describe('IAM users, real server', () => {
       const a = await seedUser(sdk, tenant, seeded);
       const res = await openDetail(adminPage, a.id);
       expect(res.ok()).toBe(true);
-      const answered = userOf(await res.json());
+      const answered = userOf(unwrapPayload(await res.json()));
 
       await expect(adminPage.getByRole('heading', { name: 'User Details' })).toBeVisible();
       await expect(adminPage.getByText(answered.email ?? a.email, { exact: true })).toBeVisible();
@@ -390,7 +391,7 @@ test.describe('IAM users, real server', () => {
       const a = await seedUser(sdk, tenant, seeded, { roles: [roleId] });
       const res = await openDetail(adminPage, a.id);
       expect(res.ok()).toBe(true);
-      const answeredRoles = userOf(await res.json()).roles ?? [];
+      const answeredRoles = userOf(unwrapPayload(await res.json())).roles ?? [];
 
       // The page names a role by its id until the edit form loads the roles.
       for (const r of answeredRoles) {

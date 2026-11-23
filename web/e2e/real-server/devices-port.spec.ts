@@ -1,6 +1,7 @@
 import type { Page, Response } from '@playwright/test';
 import type { PlatformClient } from 'trusted-platform-sdk';
 import { test, expect } from './fixtures';
+import { unwrapPayload } from './fixtures/wire';
 
 /**
  * The Devices Management cases of the mocked web/e2e/devices.spec.ts, against
@@ -25,7 +26,10 @@ interface DeviceAnswer {
   attest_cert?: string;
 }
 
-/** The device the server answered: res.data is the device itself, not {device}. */
+/**
+ * The device the server answered: the SDK's res.data is the device itself,
+ * not {device}; a raw Response.json() is the envelope, read through unwrapPayload.
+ */
 function deviceOf(data: unknown): DeviceAnswer {
   return (data ?? {}) as DeviceAnswer;
 }
@@ -218,7 +222,7 @@ test.describe('Devices management, real server', () => {
       const dev = await seed(sdk);
       const res = await openDetail(adminPage, dev.id);
       expect(res.ok()).toBe(true);
-      expect(deviceOf(await res.json()).serial).toBe(dev.serial);
+      expect(deviceOf(unwrapPayload(await res.json())).serial).toBe(dev.serial);
       await expect(adminPage.getByRole('heading', { name: dev.serial, exact: true })).toBeVisible();
       await expect(adminPage.getByText('Device details and management')).toBeVisible();
     });
@@ -229,7 +233,7 @@ test.describe('Devices management, real server', () => {
       expect(res.ok()).toBe(true);
       await expect(adminPage.getByRole('heading', { name: dev.serial, exact: true })).toBeVisible();
       // The server holds the attestation key and no certificate for it.
-      expect(deviceOf(await res.json()).attest_cert ?? '').toBe('');
+      expect(deviceOf(unwrapPayload(await res.json())).attest_cert ?? '').toBe('');
       await expect(adminPage.getByTestId('attest-cert-card')).toBeVisible();
       await expect(adminPage.getByTestId('attest-cert-absent')).toBeVisible();
     });
@@ -296,7 +300,7 @@ test.describe('Devices management, real server', () => {
       const res = await answer;
       const body = await res.json().catch(() => null);
       expect(res.ok(), serverMessage(body)).toBe(true);
-      const created = deviceOf(body);
+      const created = deviceOf(unwrapPayload(body));
       seeded.push(String(created.id ?? ''));
       expect(created.serial).toBe(serial);
 
@@ -413,7 +417,7 @@ test.describe('Devices management, real server', () => {
       const body = await res.json().catch(() => null);
       if (res.ok()) {
         // The server accepts a repeated serial: the page reports the device it registered.
-        seeded.push(String(deviceOf(body).id ?? ''));
+        seeded.push(String(deviceOf(unwrapPayload(body)).id ?? ''));
         await expect(adminPage.getByText('Device registered successfully')).toBeVisible();
       } else {
         expect(serverMessage(body)).not.toBe('');

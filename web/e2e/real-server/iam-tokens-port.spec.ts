@@ -1,6 +1,7 @@
 import type { Locator, Page, Response } from '@playwright/test';
 import type { PlatformClient } from 'trusted-platform-sdk';
 import { test, expect, type Tenant } from './fixtures';
+import { unwrapPayload } from './fixtures/wire';
 
 /**
  * The API Credentials / Tokens cases of the mocked web/e2e/iam.spec.ts, on the
@@ -10,12 +11,12 @@ import { test, expect, type Tenant } from './fixtures';
  *
  * Response shapes (pkg/webservice/v1/rest/iam/handlers.go): ListApps writes
  * the protojson ListIAMAppsResponse ({ apps: [{ clientId, name, grantTypes,
- * createdAt }], total }); RegisterApp writes the AppResponse itself, snake
- * case and unwrapped ({ client_id, client_secret, name, grant_types });
- * RotateAppSecret writes { client_id, client_secret, client_secret_expires_at }.
- * The page reads `result.app.clientSecret` after register and
- * `result.clientId/clientSecret/name` after rotate, so the credentials dialog
- * is asserted against what the page reads from the real answer.
+ * createdAt }], total }); RegisterApp answers the AppResponse ({ client_id,
+ * client_secret, name, grant_types }) and RotateAppSecret the
+ * RotateSecretResponse ({ client_id, name, client_secret }), snake case, under
+ * the envelope's payload, which the SDK hands the page as res.data. The page
+ * shows the one-time secret in the Application Credentials dialog after a
+ * register and a rotate; the cases require the dialog and the copied secret.
  */
 
 interface ListedApp {
@@ -26,11 +27,9 @@ interface ListedApp {
 
 const APPS_PATH = (tenantId: string) => `/tenants/${encodeURIComponent(tenantId)}/apps`;
 
-/** The payload the SDK hands the page: the envelope's data, or the body itself. */
+/** The record a raw answer carries: the envelope's payload, which the SDK hands the page as res.data. */
 function payloadOf(body: unknown): Record<string, unknown> {
-  const b = (body ?? {}) as Record<string, unknown>;
-  const data = b.data;
-  return (data && typeof data === 'object' ? data : b) as Record<string, unknown>;
+  return unwrapPayload(body);
 }
 
 /** The refusal text of an SDK answer. */
