@@ -351,24 +351,24 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 |---|---|---|---|---|---|
 | `IDevIDService.GenerateIDevID` | `POST /generate` | `(dashboard)/devices/idevid/[id]/page.tsx`<br>`(dashboard)/devices/idevid/page.tsx` | - | `devices.spec.ts` | covered |
 | `IDevIDService.GetIDevIDInfo` | `GET /info` | `(dashboard)/devices/idevid/[id]/page.tsx`<br>`(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `IDevIDService.HasIDevID` | `GET /exists` | - | - | - | missing |
+| `IDevIDService.HasIDevID` | `GET /exists` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
 | `IDevIDService.DeleteIDevID` | `DELETE /tpm/idevid` | `(dashboard)/devices/idevid/[id]/page.tsx`<br>`(dashboard)/devices/idevid/page.tsx` | - | `devices.spec.ts` | covered |
-| `IDevIDService.GenerateIAK` | `POST /iak/generate` | - | - | - | missing |
+| `IDevIDService.GenerateIAK` | `POST /iak/generate` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
 | `IDevIDService.GetIAKInfo` | `GET /iak` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `IDevIDService.HasIAK` | `GET /iak/exists` | - | - | - | missing |
-| `IDevIDService.DeleteIAK` | `DELETE /iak` | - | - | - | missing |
+| `IDevIDService.HasIAK` | `GET /iak/exists` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
+| `IDevIDService.DeleteIAK` | `DELETE /iak` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
 | `IDevIDService.CreateIDevIDCSR` | `POST /csr` | `(dashboard)/devices/idevid/page.tsx` | - | `devices.spec.ts` | covered |
 | `IDevIDService.CreateIAKCSR` | `POST /iak/csr` | - | - | - | missing |
-| `IDevIDService.CreateLDevID` | `POST /ldevid` | - | - | - | missing |
-| `IDevIDService.InstallIDevIDCertificate` | `POST /certificate` | - | - | - | missing |
-| `IDevIDService.InstallIAKCertificate` | `POST /iak/certificate` | - | - | - | missing |
+| `IDevIDService.CreateLDevID` | `POST /ldevid` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
+| `IDevIDService.InstallIDevIDCertificate` | `POST /certificate` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
+| `IDevIDService.InstallIAKCertificate` | `POST /iak/certificate` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
 | `IDevIDService.GetIDevIDCertificate` | `GET /certificate` | `(dashboard)/devices/idevid/[id]/page.tsx`<br>`(dashboard)/devices/idevid/page.tsx`<br>`(dashboard)/tpm/keys/page.tsx` | - | `devices.spec.ts`<br>`tpm-attestation.spec.ts` | covered |
 | `IDevIDService.GetIAKCertificate` | `GET /iak/certificate` | `(dashboard)/tpm/keys/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `IDevIDService.DeleteIDevIDCertificate` | `DELETE /certificate` | `(dashboard)/devices/idevid/[id]/page.tsx`<br>`(dashboard)/devices/idevid/page.tsx` | - | `devices.spec.ts` | covered |
-| `IDevIDService.DeleteIAKCertificate` | `DELETE /iak/certificate` | `(dashboard)/tpm/keys/page.tsx` (read-only) | - | - | partial |
-| `IDevIDService.GetDeviceAttributes` | `GET /attributes` | - | - | - | missing |
-| `IDevIDService.FlushTransientContexts` | `POST /flush` | - | - | - | missing |
-| `IDevIDService.ActivateCredential` | `POST /activate-credential` | - | - | - | missing |
+| `IDevIDService.DeleteIAKCertificate` | `DELETE /iak/certificate` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
+| `IDevIDService.GetDeviceAttributes` | `GET /attributes` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
+| `IDevIDService.FlushTransientContexts` | `POST /flush` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
+| `IDevIDService.ActivateCredential` | `POST /activate-credential` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
 
 ## InvitationService (`invitation.proto`)
 
@@ -744,7 +744,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | FIDO2Service | 5 | 0 | 0 | 0 | 5 | 0 |
 | GatewayService | 29 | 19 | 0 | 10 | 0 | 0 |
 | PlatformIAMService | 41 | 20 | 8 | 13 | 0 | 0 |
-| IDevIDService | 20 | 8 | 1 | 11 | 0 | 0 |
+| IDevIDService | 20 | 19 | 0 | 1 | 0 | 0 |
 | InvitationService | 7 | 4 | 0 | 3 | 0 | 0 |
 | KeyManagementService | 23 | 10 | 1 | 12 | 0 | 0 |
 | LUKSService | 10 | 0 | 0 | 0 | 10 | 0 |
@@ -765,7 +765,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | TPMService | 31 | 31 | 0 | 0 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **215** | **43** | **189** | **51** | **31** |
+| **Total** | **529** | **226** | **42** | **179** | **51** | **31** |
 
 ## Proposed slices
 
@@ -788,7 +788,7 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 15. **GatewayService (2/2): VIP, VIPBackend, LBStatus, NAT64Status, PerfFlow, PerfDatapath…**: 10 operations (10 missing, 0 partial): AddVIP, RemoveVIP, GetVIP, ListVIPs, SetVIPBackends, GetLBStatus, GetNAT64Status, GetPerfFlows, GetPerfDatapath, GetPerfConntrack.
 16. **PlatformIAMService (1/2): Group, GroupMember, Permission, Token, Tenant**: 14 operations (11 missing, 3 partial): CreateGroup, GetGroup, UpdateGroup, AddGroupMember, RemoveGroupMember, CheckPermission, CreateToken, RevokeToken, VerifyToken, CreateTenant, GetTenant, ListTenants, UpdateTenant, DeleteTenant.
 17. **PlatformIAMService (2/2): Policy, App**: 7 operations (2 missing, 5 partial): CreatePolicy, GetPolicy, UpdatePolicy, ValidatePolicy, TestPolicy, GetApp, UpdateApp.
-18. **IDevIDService: IDevID, IAK, IAKCSR, LDevID, IDevIDCertificate, IAKCertificate…**: 12 operations (11 missing, 1 partial): HasIDevID, GenerateIAK, HasIAK, DeleteIAK, CreateIAKCSR, CreateLDevID, InstallIDevIDCertificate, InstallIAKCertificate, DeleteIAKCertificate, GetDeviceAttributes, FlushTransientContexts, ActivateCredential.
+18. **IDevIDService: IDevID, IAK, IAKCSR, LDevID, IDevIDCertificate, IAKCertificate…**: 12 operations (11 missing, 1 partial): HasIDevID, GenerateIAK, HasIAK, DeleteIAK, CreateIAKCSR, CreateLDevID, InstallIDevIDCertificate, InstallIAKCertificate, DeleteIAKCertificate, GetDeviceAttributes, FlushTransientContexts, ActivateCredential. (done except CreateIAKCSR, deferred: the daemon cannot yet return a PEM CSR)
 19. **InvitationService: Invitation, InvitationByToken, AcceptInvitation**: 3 operations (3 missing, 0 partial): GetInvitation, GetInvitationByToken, AcceptInvitation.
 20. **KeyManagementService: Key, KeyStatus, KeyVersion, Encrypt, Decrypt, Rewrap…**: 13 operations (12 missing, 1 partial): ImportKey, UpdateKeyStatus, GetKeyVersions, BatchEncrypt, BatchDecrypt, Rewrap, Hash, HMAC, VerifyHMAC, GenerateRandom, GenerateDataKey, GenerateWrappedDataKey, BackendStatus.
 21. **NTPService: Status, Source, Step**: 3 operations (3 missing, 0 partial): GetStatus, ListSources, Step.
