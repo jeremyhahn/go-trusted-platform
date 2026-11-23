@@ -37,6 +37,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useTPM, useIDevID, useApi, useToast } from "@/hooks";
 import { useIDevIDCerts, looksLikePem } from "@/hooks/use-idevid-certs";
+import { LDevIDCard } from "@/components/features/idevid/ldevid-card";
+import { IAKCertActionsCard } from "@/components/features/idevid/iak-cert-actions-card";
 import type {
   ApiResponse,
   GetEKResponse,
@@ -740,6 +742,10 @@ export default function TPMStatusPage() {
                 </div>
               </CardContent>
             </Card>
+
+            <LDevIDCard />
+
+            <IAKCertActionsCard />
           </div>
 
           <Dialog open={confirmDeleteIAK} onOpenChange={setConfirmDeleteIAK}>
