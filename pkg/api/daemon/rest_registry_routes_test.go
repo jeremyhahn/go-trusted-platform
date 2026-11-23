@@ -185,7 +185,7 @@ func TestDaemonREST_RegistryAdmitsTheMTLSOperator(t *testing.T) {
 		guard := restapi.NewScopeGuard(roleTokens{
 			"scoped": {Scopes: []string{"registry:read", "registry:write", "registry:delete"}, Roles: []string{"operator"}},
 		}, newTestMTLSPeerAuthenticator(t, bundle.CAPool), nil)
-		s.SetRegistryHandlers(reg, guard)
+		s.SetRegistryHandlers(statusRecordingRegistry{reg}, guard)
 		return s, reg
 	}
 	serve := func(s *RESTServer, method, path, bearer string, body io.Reader) *httptest.ResponseRecorder {
@@ -221,6 +221,16 @@ func TestDaemonREST_RegistryAdmitsTheMTLSOperator(t *testing.T) {
 		assert.False(t, reg.pushed, "a non-admin bearer token's push reached the registry")
 		assert.False(t, reg.deleted, "a non-admin bearer token's delete reached the registry")
 	})
+}
+
+// statusRecordingRegistry answers Status and records push and delete through
+// the wrapped deleteRecordingRegistry.
+type statusRecordingRegistry struct {
+	*deleteRecordingRegistry
+}
+
+func (statusRecordingRegistry) Status(context.Context) (*grpcapi.RegistryStatusResponse, error) {
+	return &grpcapi.RegistryStatusResponse{}, nil
 }
 
 // pushRecordingRegistry records whether a push reached the service.
