@@ -110,6 +110,42 @@ func TestTemplateHandler_TemplateLifecycle(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, rec.Code, "a deleted template is gone")
 }
 
+// TestTemplateHandler_UpdateKeepsOmittedFields pins that a PUT replaces only
+// the fields it carries: a rename keeps the stored tenant, config and match
+// rules, and an explicit field still replaces the stored one (#2049).
+func TestTemplateHandler_UpdateKeepsOmittedFields(t *testing.T) {
+	h, _, _ := newServiceTemplateHandler(t)
+
+	rec := serveTemplateRoute(h.CreateTemplate, http.MethodPost, "/device/templates", "/device/templates",
+		`{"id":7101,"tenant_id":"t-1","name":"workers","role":"worker","config":"bmFtZTogeAo=","match_rules":{"mac_prefix":"52:54:00"}}`)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+
+	rec = serveTemplateRoute(h.UpdateTemplate, http.MethodPut, "/device/templates/{id}", "/device/templates/7101",
+		`{"name":"workers-v2","role":"worker"}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	rec = serveTemplateRoute(h.GetTemplate, http.MethodGet, "/device/templates/{id}", "/device/templates/7101", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	got := decodeTemplate(t, rec)
+	assert.Equal(t, "workers-v2", got.Name)
+	assert.Equal(t, "t-1", got.TenantID, "a rename keeps the stored tenant")
+	assert.Equal(t, []byte("name: x\n"), got.Config, "a rename keeps the stored config")
+	require.NotNil(t, got.MatchRules, "a rename keeps the stored match rules")
+	assert.Equal(t, "52:54:00", got.MatchRules.MACPrefix)
+
+	rec = serveTemplateRoute(h.UpdateTemplate, http.MethodPut, "/device/templates/{id}", "/device/templates/7101",
+		`{"name":"workers-v3","role":"worker","match_rules":{"mac_prefix":"02:00:00"}}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	rec = serveTemplateRoute(h.GetTemplate, http.MethodGet, "/device/templates/{id}", "/device/templates/7101", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	got = decodeTemplate(t, rec)
+	assert.Equal(t, "workers-v3", got.Name)
+	require.NotNil(t, got.MatchRules)
+	assert.Equal(t, "02:00:00", got.MatchRules.MACPrefix, "an explicit field still replaces")
+	assert.Equal(t, "t-1", got.TenantID)
+}
+
 // TestTemplateHandler_TemplateRequestErrors covers the boundary failures of
 // the template routes: a malformed id or body is the caller's fault, an
 // unknown template is not found, and nothing answers 200.
