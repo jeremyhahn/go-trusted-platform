@@ -18,6 +18,7 @@ package commands
 import (
 	"net/netip"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/vpn"
@@ -56,7 +57,11 @@ func TestVPNHubForward_AcceptsOnlyTheLeasesOpenedZones(t *testing.T) {
 	texts := hubForwardTexts(rules)
 
 	require.NotEmpty(t, texts)
-	assert.Equal(t, `iifname "vpn-hub0" ct state established,related accept`, texts[0], "replies to admitted flows pass first")
+	for _, s := range texts {
+		if strings.Contains(s, "ct state established,related accept") {
+			assert.Contains(t, s, "ct direction reply", "only reply-direction state is accepted: %s", s)
+		}
+	}
 	assert.Contains(t, texts, `iifname "vpn-hub0" ip saddr 10.99.0.7/32 ip daddr 10.4.10.0/24 accept comment "vpn lease to management"`)
 	for _, s := range texts {
 		assert.NotContains(t, s, "10.4.30.0/24", "the matrix does not open storage, so no rule reaches it")

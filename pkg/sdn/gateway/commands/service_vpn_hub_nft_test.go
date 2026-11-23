@@ -99,8 +99,11 @@ func hubAccepts(rules []*nftables.Rule) []string {
 	for _, r := range rules {
 		var src, dst netip.Addr
 		var off uint32
+		reply := false
 		for _, x := range r.Exprs {
 			switch v := x.(type) {
+			case *expr.Ct:
+				reply = true
 			case *expr.Payload:
 				off = 0
 				if v.Base == expr.PayloadBaseNetworkHeader {
@@ -118,7 +121,7 @@ func hubAccepts(rules []*nftables.Rule) []string {
 				off = 0
 			}
 		}
-		if src.IsValid() && dst.IsValid() {
+		if !reply && src.IsValid() && dst.IsValid() {
 			out = append(out, src.String()+"->"+dst.String())
 		}
 	}
@@ -366,23 +369,6 @@ func TestVPNHubNFT_EndsInADropOfTheHubInterface(t *testing.T) {
 	require.Len(t, drop, 3)
 	assertHubIfname(t, drop)
 	assertVerdict(t, drop[2], expr.VerdictDrop)
-
-	reply := vpnHubForwardExprs(vpnHubForwardRule{})
-	require.Len(t, reply, 6)
-	assertHubIfname(t, reply)
-	ct, ok := reply[2].(*expr.Ct)
-	require.True(t, ok)
-	assert.Equal(t, expr.CtKeySTATE, ct.Key)
-	b, ok := reply[3].(*expr.Bitwise)
-	require.True(t, ok)
-	mask := make([]byte, 4)
-	binary.LittleEndian.PutUint32(mask, expr.CtStateBitESTABLISHED|expr.CtStateBitRELATED)
-	assert.Equal(t, mask, b.Mask)
-	cmp, ok := reply[4].(*expr.Cmp)
-	require.True(t, ok)
-	assert.Equal(t, expr.CmpOpNeq, cmp.Op)
-	assert.Equal(t, []byte{0, 0, 0, 0}, cmp.Data)
-	assertVerdict(t, reply[5], expr.VerdictAccept)
 }
 
 // hubPlaneWithFilter builds a hub plane whose enforcement carries a forward
@@ -480,8 +466,8 @@ func TestHubNetworkPlane_RemovePeerAndReconcileWithdrawTheRules(t *testing.T) {
 	require.NoError(t, plane.ReconcilePeers(ctx, []vpn.LeaseID{}))
 	last := conn.lastBatch()
 	assert.Empty(t, hubAccepts(last))
-	require.Len(t, last, 4, "only the reply accept, the closing drop and the two hook jumps are left")
-	assertVerdict(t, last[1].Exprs[len(last[1].Exprs)-1], expr.VerdictDrop)
+	require.Len(t, last, 3, "only the closing drop and the two hook jumps are left")
+	assertVerdict(t, last[0].Exprs[len(last[0].Exprs)-1], expr.VerdictDrop)
 
 	require.NoError(t, plane.Stop(ctx))
 	assert.Equal(t, []string{"tp_vpn_hub"}, conn.deleted)
@@ -504,8 +490,12 @@ func TestVPNHubZone_ProductionFilterProgramsAnEmptyChainAtInstall(t *testing.T) 
 	require.NoError(t, err)
 	require.NotNil(t, e.forward)
 	last := conn.lastBatch()
-	require.Len(t, last, 4, "reply accept, closing drop and the forward and input jumps")
-	_, ok := last[0].Exprs[2].(*expr.Ct)
-	assert.True(t, ok, "the chain opens with the reply accept")
-	assertVerdict(t, last[1].Exprs[len(last[1].Exprs)-1], expr.VerdictDrop)
+	require.Len(t, last, 3, "closing drop and the forward and input jumps")
+	for _, r := range last {
+		for _, x := range r.Exprs {
+			_, ok := x.(*expr.Ct)
+			assert.False(t, ok, "an empty lease set leaves no conntrack accept")
+		}
+	}
+	assertVerdict(t, last[0].Exprs[len(last[0].Exprs)-1], expr.VerdictDrop)
 }
