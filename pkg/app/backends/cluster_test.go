@@ -188,27 +188,54 @@ func TestClusterBackend_TopologyIsNotHealth(t *testing.T) {
 }
 
 func TestClusterBackend_LeaderAndNodeID(t *testing.T) {
-	leaderOne := &fakeClusterSurface{leader: &quicbaasservice.GetLeaderResponse{ShardID: 1, LeaderID: 1}}
+	leaderOne := &fakeClusterSurface{status: threeNodeStatus()}
 	b := NewClusterBackend(leaderOne, 1, "")
 	if !b.IsLeader() {
-		t.Error("IsLeader = false with LeaderID 1 and node ID 1")
+		t.Error("IsLeader = false for listed node 1 leading shard 1")
 	}
-	if leaderOne.leaderReq == nil || leaderOne.leaderReq.ShardID != 1 {
-		t.Errorf("GetLeader request = %+v, want ShardID 1", leaderOne.leaderReq)
+	if leaderOne.leaderCalls != 0 {
+		t.Errorf("GetLeader calls = %d, want 0 (leadership comes from ClusterStatus)", leaderOne.leaderCalls)
 	}
 	if b.NodeID() != 1 {
 		t.Errorf("NodeID = %d, want 1", b.NodeID())
 	}
 
-	if NewClusterBackend(&fakeClusterSurface{leader: &quicbaasservice.GetLeaderResponse{ShardID: 1, LeaderID: 2}}, 1, "").IsLeader() {
-		t.Error("IsLeader = true with LeaderID 2")
+	if NewClusterBackend(&fakeClusterSurface{status: threeNodeStatus()}, 2, "").IsLeader() {
+		t.Error("IsLeader = true for node 2 when shard 1 leader is 1")
 	}
-	if NewClusterBackend(&fakeClusterSurface{leaderErr: errors.New("no leader")}, 1, "").IsLeader() {
-		t.Error("IsLeader = true on a GetLeader error")
+	if NewClusterBackend(&fakeClusterSurface{statusErr: errors.New("no status")}, 1, "").IsLeader() {
+		t.Error("IsLeader = true on a ClusterStatus error")
 	}
-	if NewClusterBackend(&fakeClusterSurface{leader: &quicbaasservice.GetLeaderResponse{ShardID: 1}}, 0, "").IsLeader() {
-		t.Error("IsLeader = true with node ID 0 and LeaderID 0")
+	if NewClusterBackend(&fakeClusterSurface{status: threeNodeStatus()}, 0, "").IsLeader() {
+		t.Error("IsLeader = true with node ID 0")
 	}
+}
+
+// TestClusterBackend_StandaloneIsNotLeader pins the standalone service's
+// answer pair: the go-qrdb LocalBackend reports an empty topology through
+// ClusterStatus but always answers leader 1 from GetLeader. This node must
+// not report itself leader when no Raft cluster exists.
+func TestClusterBackend_StandaloneIsNotLeader(t *testing.T) {
+	standalone := &fakeClusterSurface{leader: &quicbaasservice.GetLeaderResponse{ShardID: 1, LeaderID: 1}}
+	b := NewClusterBackend(standalone, 1, "")
+	if b.IsLeader() {
+		t.Error("IsLeader = true for a standalone service with no members")
+	}
+	st, err := b.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.State != "uninitialized" {
+		t.Errorf("Status State = %q, want uninitialized", st.State)
+	}
+
+	t.Run("leader not a listed member", func(t *testing.T) {
+		resp := threeNodeStatus()
+		resp.Shards[0].LeaderID = 7
+		if NewClusterBackend(&fakeClusterSurface{status: resp}, 7, "").IsLeader() {
+			t.Error("IsLeader = true for node 7 that leads shard 1 but is not in Nodes")
+		}
+	})
 }
 
 func TestClusterBackend_Bootstrap(t *testing.T) {
