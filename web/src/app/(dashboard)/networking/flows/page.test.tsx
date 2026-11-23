@@ -18,6 +18,12 @@ vi.mock("@/hooks", async (importOriginal) => ({
 
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast }) }));
 
+// The header's Flush flows control is capability-gated (#2064); every op is
+// offered here.
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
+
 type Row = Record<string, unknown> & { id: string };
 type Column = { id?: string; accessorKey?: string; cell?: (ctx: { row: { getValue: (k: string) => unknown; original: Row } }) => ReactNode };
 type Action = { label: string; onClick: (rows: Row[]) => void };

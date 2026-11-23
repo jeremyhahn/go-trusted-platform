@@ -9,38 +9,21 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Gated } from '@/components/features/capabilities/gated';
+import { useGatewayAdmittedVTEPs } from '@/hooks/use-gateway-admitted-vteps';
+import type { GatewayAdmittedVTEP, GatewayOverlay } from 'trusted-platform-sdk';
 
-/**
- * One VTEP the gateway admitted to its overlay, with the admission record it
- * reported. Field names are the json tags of the Go state.AdmittedVTEPState.
- * TODO(#2051): move to the SDK as GatewaySnapshot.overlay's types.
- */
-export interface GatewayAdmittedVTEP {
+export type { GatewayAdmittedVTEP, GatewayOverlay };
+
+/** The server's op strings of the two admitted-VTEP reads (routes.golden). */
+const LIST_OP = 'GET /api/v1/gateway/state/{id}/admitted-vteps';
+const GET_OP = 'GET /api/v1/gateway/state/{id}/admitted-vteps/{vtep}';
+
+/** The Details panel: the VTEP asked for and its answer or refusal. */
+interface DetailState {
   vtep: string;
-  device_id?: number;
-  host_id?: string;
-  serial?: string;
-  hostname?: string;
-  allocation_id?: string;
-  baseline_source?: string;
-  profile_id?: number;
-  verdict_at?: string;
-}
-
-/** The overlay section of a gateway snapshot (Go state.OverlayState). */
-export interface GatewayOverlay {
-  running: boolean;
-  local_vtep?: string;
-  vni_count?: number;
-  remote_vtep_count?: number;
-  local_mac_count?: number;
-  remote_mac_count?: number;
-  prefix_count?: number;
-  refused_bindings?: number;
-  refused_replays?: number;
-  l3_vni?: number;
-  admitted_vteps?: GatewayAdmittedVTEP[];
-  nd_counters?: Record<string, number>;
+  entry?: GatewayAdmittedVTEP;
+  error?: string;
 }
 
 function stateBadgeClass(good: boolean): string {
@@ -65,13 +48,43 @@ function Field({ label, value }: { label: string; value: string | number | undef
 
 /**
  * Renders the overlay a gateway reported in its telemetry snapshot and the
- * VTEPs it admitted. Pure: it shows data the snapshot read already returned,
- * which is gated where the snapshots card opens it.
+ * VTEPs it admitted. The list starts as the snapshot reported it; Refresh
+ * lists the VTEPs again and Details reads one, through the SDK, each behind
+ * the capability gate of its route.
  */
-export function GatewayAdmittedVTEPs({ overlay }: { overlay: GatewayOverlay }) {
-  const vteps = overlay.admitted_vteps ?? [];
-  const [openVtep, setOpenVtep] = React.useState<string | null>(null);
-  const opened = vteps.find((v) => v.vtep === openVtep);
+export function GatewayAdmittedVTEPs({ gatewayId, overlay }: { gatewayId: string; overlay: GatewayOverlay }) {
+  const admitted = useGatewayAdmittedVTEPs(gatewayId, { auto: false });
+  const [refreshed, setRefreshed] = React.useState(false);
+  const [detail, setDetail] = React.useState<DetailState | null>(null);
+  // Each Details read takes a sequence number; only the newest one publishes.
+  const detailSeq = React.useRef(0);
+
+  const vteps: GatewayAdmittedVTEP[] =
+    refreshed && !admitted.error ? (admitted.vteps ?? []) : (overlay.admitted_vteps ?? []);
+
+  const refresh = async () => {
+    await admitted.refetch();
+    setRefreshed(true);
+  };
+
+  const openDetails = async (vtep: string) => {
+    const id = ++detailSeq.current;
+    try {
+      const entry = await admitted.get(vtep);
+      if (id === detailSeq.current) setDetail({ vtep, entry });
+    } catch (err) {
+      if (id === detailSeq.current) {
+        setDetail({ vtep, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  };
+
+  const closeDetails = () => {
+    detailSeq.current++;
+    setDetail(null);
+  };
+
+  const opened = detail?.entry;
 
   return (
     <div className="rounded-lg border p-4 space-y-4">
@@ -95,7 +108,19 @@ export function GatewayAdmittedVTEPs({ overlay }: { overlay: GatewayOverlay }) {
       </dl>
 
       <div>
-        <h4 className="text-sm font-medium mb-2">Admitted VTEPs</h4>
+        <div className="flex items-center justify-between mb-2">
+          <h4 className="text-sm font-medium">Admitted VTEPs</h4>
+          <Gated op={LIST_OP}>
+            <Button variant="outline" size="sm" disabled={admitted.isLoading} onClick={() => void refresh()}>
+              Refresh
+            </Button>
+          </Gated>
+        </div>
+        {admitted.error && (
+          <p className="text-xs text-red-600 mb-2" role="alert">
+            {admitted.error}
+          </p>
+        )}
         {vteps.length === 0 ? (
           <p className="text-xs text-muted-foreground">No VTEP is admitted</p>
         ) : (
@@ -119,14 +144,16 @@ export function GatewayAdmittedVTEPs({ overlay }: { overlay: GatewayOverlay }) {
                   <TableCell className="text-xs">{show(v.baseline_source)}</TableCell>
                   <TableCell className="text-xs">{show(v.verdict_at)}</TableCell>
                   <TableCell>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      aria-label={`Details ${v.vtep}`}
-                      onClick={() => setOpenVtep(v.vtep)}
-                    >
-                      Details
-                    </Button>
+                    <Gated op={GET_OP}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label={`Details ${v.vtep}`}
+                        onClick={() => void openDetails(v.vtep)}
+                      >
+                        Details
+                      </Button>
+                    </Gated>
                   </TableCell>
                 </TableRow>
               ))}
@@ -135,25 +162,33 @@ export function GatewayAdmittedVTEPs({ overlay }: { overlay: GatewayOverlay }) {
         )}
       </div>
 
-      {opened && (
+      {detail && (
         <div className="rounded-md border p-3 space-y-2" data-testid="gateway-admitted-vtep-detail">
           <div className="flex items-center justify-between">
-            <div className="text-sm font-medium">VTEP {opened.vtep}</div>
-            <Button variant="ghost" size="sm" onClick={() => setOpenVtep(null)}>
+            <div className="text-sm font-medium">VTEP {detail.vtep}</div>
+            <Button variant="ghost" size="sm" onClick={closeDetails}>
               Close
             </Button>
           </div>
-          <dl className="text-xs space-y-1">
-            <Field label="VTEP" value={opened.vtep} />
-            <Field label="Device" value={opened.device_id} />
-            <Field label="Host ID" value={opened.host_id} />
-            <Field label="Hostname" value={opened.hostname} />
-            <Field label="Serial" value={opened.serial} />
-            <Field label="Allocation" value={opened.allocation_id} />
-            <Field label="Baseline" value={opened.baseline_source} />
-            <Field label="Profile" value={opened.profile_id} />
-            <Field label="Verdict at" value={opened.verdict_at} />
-          </dl>
+          {detail.error ? (
+            <p className="text-xs text-red-600" role="alert">
+              {detail.error}
+            </p>
+          ) : (
+            opened && (
+              <dl className="text-xs space-y-1">
+                <Field label="VTEP" value={opened.vtep} />
+                <Field label="Device" value={opened.device_id} />
+                <Field label="Host ID" value={opened.host_id} />
+                <Field label="Hostname" value={opened.hostname} />
+                <Field label="Serial" value={opened.serial} />
+                <Field label="Allocation" value={opened.allocation_id} />
+                <Field label="Baseline" value={opened.baseline_source} />
+                <Field label="Profile" value={opened.profile_id} />
+                <Field label="Verdict at" value={opened.verdict_at} />
+              </dl>
+            )
+          )}
         </div>
       )}
     </div>
