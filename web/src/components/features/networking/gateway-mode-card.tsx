@@ -7,11 +7,15 @@
  *
  * Changing the modes reconfigures the gateway's data plane, so the card asks
  * the operator to confirm before it writes. A refusal is shown verbatim.
+ *
+ * Apply modes and Confirm are gated on the server's POST /api/v1/gateway/mode
+ * capability (#2033).
  */
 
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Gated } from '@/components/features/capabilities/gated';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
@@ -112,9 +116,11 @@ export function GatewayModeCard({ initialModes = [] }: GatewayModeCardProps) {
             );
           })}
         </div>
-        <Button disabled={busy || selected.length === 0} onClick={() => setConfirming(true)}>
-          Apply modes
-        </Button>
+        <Gated op="POST /api/v1/gateway/mode">
+          <Button disabled={busy || selected.length === 0} onClick={() => setConfirming(true)}>
+            Apply modes
+          </Button>
+        </Gated>
       </CardContent>
 
       <Dialog open={confirming} onOpenChange={setConfirming}>
@@ -129,9 +135,11 @@ export function GatewayModeCard({ initialModes = [] }: GatewayModeCardProps) {
             <Button variant="outline" onClick={() => setConfirming(false)}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={() => void apply()}>
-              Confirm
-            </Button>
+            <Gated op="POST /api/v1/gateway/mode">
+              <Button variant="destructive" onClick={() => void apply()}>
+                Confirm
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>

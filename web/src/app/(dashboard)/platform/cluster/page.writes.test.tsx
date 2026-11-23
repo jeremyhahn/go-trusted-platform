@@ -5,6 +5,20 @@ import { stubControlPlane, withControlPlane, type Answer } from '@/test/control-
 
 import ClusterPage from './page';
 
+const { off } = vi.hoisted(() => ({ off: new Set<string>() }));
+vi.mock('@/hooks/use-capabilities', () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: (op: string) => (off.has(op) ? { enabled: false, reason: 'not-configured: cluster' } : { enabled: true }),
+  }),
+}));
+
+const BOOTSTRAP_OP = 'POST /api/v1/cluster/bootstrap';
+const JOIN_OP = 'POST /api/v1/cluster/join';
+const LEAVE_OP = 'POST /api/v1/cluster/leave';
+const gated = (op: string) => document.querySelector(`[data-capability-op="${op}"]`) as HTMLButtonElement | null;
+
 const STATUS = '/api/v1/cluster/status';
 const NODES = '/api/v1/cluster/nodes';
 const BOOTSTRAP = '/api/v1/cluster/bootstrap';
@@ -44,6 +58,7 @@ describe('ClusterPage writes', () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    off.clear();
   });
 
   it('bootstraps a cluster', async () => {
@@ -188,5 +203,58 @@ describe('ClusterPage writes', () => {
       /* @vite-ignore */ card
     );
     expect(parseSeedAddresses(' 192.0.2.11:7946, \n\n192.0.2.12:7946 ')).toEqual(['192.0.2.11:7946', '192.0.2.12:7946']);
+  });
+
+  async function fillWrites() {
+    await screen.findByRole('button', { name: 'Bootstrap' });
+    type('Cluster name', 'lab');
+    type('Node name', 'alpha');
+    type('Join node name', 'beta');
+    type('Seed addresses', '192.0.2.11:7946');
+    await waitFor(() => expect((screen.getByLabelText('Node ID') as HTMLInputElement).value).toBe('n1'));
+  }
+
+  it("withholds Bootstrap, Join and Leave with the server's reason when the server does not offer them", async () => {
+    off.add(BOOTSTRAP_OP);
+    off.add(JOIN_OP);
+    off.add(LEAVE_OP);
+    const sent = stubControlPlane({ [`GET ${STATUS}`]: statusOK, [`GET ${NODES}`]: noNodes });
+    render(withControlPlane(<ClusterPage />));
+    await fillWrites();
+
+    for (const op of [BOOTSTRAP_OP, JOIN_OP, LEAVE_OP]) {
+      const button = gated(op);
+      expect(button).not.toBeNull();
+      expect(button?.disabled).toBe(true);
+      expect(button?.getAttribute('title')).toBe('not-configured: cluster');
+      expect(button?.getAttribute('data-capability-enabled')).toBe('false');
+      fireEvent.click(button as HTMLButtonElement);
+    }
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(sent.filter((r) => r.method === 'POST')).toHaveLength(0);
+  });
+
+  it('gates Leave alone when only POST /api/v1/cluster/leave is withheld', async () => {
+    off.add(LEAVE_OP);
+    stubControlPlane({ [`GET ${STATUS}`]: statusOK, [`GET ${NODES}`]: noNodes });
+    render(withControlPlane(<ClusterPage />));
+    await fillWrites();
+
+    for (const op of [BOOTSTRAP_OP, JOIN_OP]) {
+      expect(gated(op)?.getAttribute('data-capability-enabled')).toBe('true');
+      expect(gated(op)?.disabled).toBe(false);
+    }
+    expect(gated(LEAVE_OP)?.disabled).toBe(true);
+  });
+
+  it('gates the Leave cluster confirm on POST /api/v1/cluster/leave', async () => {
+    stubControlPlane({ [`GET ${STATUS}`]: statusOK, [`GET ${NODES}`]: noNodes });
+    render(withControlPlane(<ClusterPage />));
+    await waitFor(() => expect((screen.getByLabelText('Node ID') as HTMLInputElement).value).toBe('n1'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Leave' }));
+    const confirm = await within(await screen.findByRole('dialog')).findByRole('button', { name: 'Leave cluster' });
+    expect(confirm.getAttribute('data-capability-op')).toBe(LEAVE_OP);
+    expect(confirm.getAttribute('data-capability-enabled')).toBe('true');
   });
 });
