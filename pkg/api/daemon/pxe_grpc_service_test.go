@@ -631,6 +631,31 @@ func TestPXEGRPCService_UpdateState(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
 	})
+
+	t.Run("refuses an unspecified or UNKNOWN target state", func(t *testing.T) {
+		// UNSPECIFIED is what a short enum name the REST decoder discarded becomes.
+		for _, target := range []platformv1.ProvisioningState{
+			platformv1.ProvisioningState_PROVISIONING_STATE_UNSPECIFIED,
+			platformv1.ProvisioningState_PROVISIONING_STATE_UNKNOWN,
+		} {
+			t.Run(target.String(), func(t *testing.T) {
+				before := mockService.devices[deviceID].State
+
+				resp, err := svc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
+					DeviceId: deviceID,
+					State:    target,
+					Reason:   "test",
+				})
+
+				require.Error(t, err)
+				assert.Nil(t, resp)
+				st, ok := status.FromError(err)
+				require.True(t, ok)
+				assert.Equal(t, codes.InvalidArgument, st.Code())
+				assert.Equal(t, before, mockService.devices[deviceID].State)
+			})
+		}
+	})
 }
 
 // TestPXEGRPCService_SetDeviceEnrolled tests setting device enrolled.
