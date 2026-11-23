@@ -202,6 +202,11 @@ func authenticateFromPeer(ctx context.Context, cfg *MTLSInterceptorConfig) (cont
 // codes.PermissionDenied; a nil PEP or a check that fails is
 // codes.Unavailable, so a PEP that cannot answer never lets a call through.
 func authorizeMTLSCall(ctx context.Context, cfg *MTLSInterceptorConfig, fullMethod string) error {
+	// Pre-auth methods are served without a token on the token path; the
+	// certificate has already been authenticated, so they skip the PEP here too.
+	if grpccreds.IsPreAuthMethod(fullMethod) {
+		return nil
+	}
 	resource, action, ok := strings.Cut(grpccreds.ScopeForMethod(fullMethod), ":")
 	if !ok || strings.TrimSpace(resource) == "" || strings.TrimSpace(action) == "" {
 		return status.Error(codes.PermissionDenied, grpccreds.ErrMethodNotClassified{Method: fullMethod}.Error())
