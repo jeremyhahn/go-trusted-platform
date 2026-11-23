@@ -605,6 +605,8 @@ export type {
   GenerateDataKeyResponse,
   GenerateWrappedDataKeyResponse,
   BackendStatusResponse,
+  RewrapRequest,
+  RewrapResponse,
 } from './types/kms.js';
 
 // Compute types

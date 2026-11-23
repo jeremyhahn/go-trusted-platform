@@ -784,3 +784,43 @@ export interface BackendStatusResponse {
   /** Timestamp (unix epoch) */
   timestamp: number;
 }
+
+/**
+ * Rewrap request for POST /api/v1/kms/rewrap.
+ *
+ * Mapped by KMSService.rewrap to the served snake_case body of
+ * pkg/webservice/v1/rest/kms/handlers_rewrap.go: `source_key_id`,
+ * `ciphertext`, `source_context`, `source_nonce`. The server re-encrypts
+ * under the key's current version and refuses a destination key other than
+ * the source, a dest_context and a pinned source_key_version, so the request
+ * carries none of them.
+ */
+export interface RewrapRequest {
+  /** Key id the ciphertext was encrypted under (sent as source_key_id) */
+  sourceKeyId: string;
+  /** Ciphertext to re-encrypt (base64) */
+  ciphertext: string;
+  /** Additional authenticated data used at encryption (base64) */
+  sourceContext?: string;
+  /** Nonce used at encryption (base64) */
+  sourceNonce?: string;
+}
+
+/**
+ * Rewrap response served by POST /api/v1/kms/rewrap, in the snake_case wire
+ * names of pkg/webservice/v1/rest/kms/handlers_rewrap.go.
+ */
+export interface RewrapResponse {
+  /** Key id the ciphertext was encrypted under */
+  source_key_id: string;
+  /** Key id the new ciphertext is encrypted under (same as the source) */
+  destination_key_id: string;
+  /** Key version the input ciphertext was encrypted under */
+  source_key_version: number;
+  /** Key version the new ciphertext is encrypted under */
+  dest_key_version: number;
+  /** Re-encrypted ciphertext (base64) */
+  ciphertext: string;
+  /** Nonce of the new ciphertext (base64) */
+  nonce?: string;
+}

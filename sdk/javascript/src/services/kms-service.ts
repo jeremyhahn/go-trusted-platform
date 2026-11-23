@@ -48,6 +48,8 @@ import type {
   GenerateDataKeyResponse,
   GenerateWrappedDataKeyResponse,
   BackendStatusResponse,
+  RewrapRequest,
+  RewrapResponse,
 } from '../types/kms.js';
 
 /**
@@ -328,6 +330,38 @@ export class KMSService extends BaseService {
       this.buildUrl(`/hmac/${this.encodePathSegment(request.keyId)}/verify`),
       body
     );
+  }
+
+  /**
+   * Rewrap a ciphertext under the key's current version
+   *
+   * Reaches the served route POST /api/v1/kms/rewrap: the REST body is
+   * `{ source_key_id, ciphertext, source_context?, source_nonce? }` (base64
+   * strings; the key id goes in the body, not the path). The server
+   * re-encrypts under the key's current version and refuses a destination
+   * key other than the source, a dest_context and a pinned
+   * source_key_version, so the SDK does not send them.
+   *
+   * @param request - Rewrap request
+   * @returns The new key version, ciphertext and nonce
+   */
+  async rewrap(request: RewrapRequest): Promise<ApiResponse<RewrapResponse>> {
+    const body: {
+      source_key_id: string;
+      ciphertext: string;
+      source_context?: string;
+      source_nonce?: string;
+    } = {
+      source_key_id: request.sourceKeyId,
+      ciphertext: request.ciphertext,
+    };
+    if (request.sourceContext !== undefined) {
+      body.source_context = request.sourceContext;
+    }
+    if (request.sourceNonce !== undefined) {
+      body.source_nonce = request.sourceNonce;
+    }
+    return this.client.post<RewrapResponse>(this.buildUrl('/rewrap'), body);
   }
 
   // =========================================================================
