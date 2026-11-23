@@ -1,10 +1,16 @@
 import React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PlatformProvider } from "trusted-platform-sdk";
 
 import { ok, refused, stubControlPlane, withControlPlane, type Answer } from "@/test/control-plane-fetch";
 import { PermissionCheckCard } from "./permission-check-card";
+
+// #2033 item 5: Gated reads the server's capabilities through this hook; the card's own requests stay on the control-plane stub.
+const caps = vi.hoisted(() => ({ capability: vi.fn() }));
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: caps.capability }),
+}));
 
 /**
  * PermissionCheckCard shows a verdict only for the tenant and the inputs
@@ -15,6 +21,7 @@ import { PermissionCheckCard } from "./permission-check-card";
  */
 
 const route = "POST /api/v1/iam/tenants/t-1/permissions/check";
+const checkOp = "POST /api/v1/iam/tenants/{tenant}/permissions/check";
 
 function fill(subject: string, action: string, resource: string) {
   fireEvent.change(screen.getByLabelText("Subject ID"), { target: { value: subject } });
@@ -72,6 +79,11 @@ function stubNetworkFailure() {
 }
 
 describe("PermissionCheckCard", () => {
+  beforeEach(() => {
+    caps.capability.mockReset();
+    caps.capability.mockImplementation(() => ({ enabled: true }));
+  });
+
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
@@ -233,5 +245,37 @@ describe("PermissionCheckCard", () => {
     expect(await screen.findByText(/Check failed/)).toBeDefined();
     expect(screen.queryByText("Allowed")).toBeNull();
     expect(screen.queryByText("Denied")).toBeNull();
+  });
+
+  it("withholds Check with the server's reason when the tenant permission check is not offered", async () => {
+    caps.capability.mockImplementation((op: string) =>
+      op === checkOp ? { enabled: false, reason: "not-configured: iam" } : { enabled: true }
+    );
+    const sent = stubControlPlane({ [route]: ok({ allowed: true }) });
+    render(withControlPlane(<PermissionCheckCard tenantId="t-1" />));
+
+    fill("u-1", "read", "fleet");
+    const button = screen.getByRole("button", { name: /Check/ }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("title")).toBe("not-configured: iam");
+    expect(button.getAttribute("data-capability-op")).toBe(checkOp);
+    expect(button.getAttribute("data-capability-enabled")).toBe("false");
+
+    await submit();
+    expect(sent).toHaveLength(0);
+    expect(screen.queryByText("Allowed")).toBeNull();
+  });
+
+  it("asks the gate for the tenant permission check and keeps the fill rule when it is offered", () => {
+    stubControlPlane({ [route]: ok({ allowed: true }) });
+    render(withControlPlane(<PermissionCheckCard tenantId="t-1" />));
+
+    expect(caps.capability).toHaveBeenCalledWith(checkOp);
+    const button = screen.getByRole("button", { name: /Check/ }) as HTMLButtonElement;
+    expect(button.getAttribute("data-capability-enabled")).toBe("true");
+    expect(button.disabled).toBe(true);
+
+    fill("u-1", "read", "fleet");
+    expect(button.disabled).toBe(false);
   });
 });
