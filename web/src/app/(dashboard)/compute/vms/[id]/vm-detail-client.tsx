@@ -99,7 +99,9 @@ export default function VMDetailPage() {
         return;
       }
       const loaded: VM = response.data.vm;
-      setVM({ ...loaded, status: vmStatus(loaded.state) });
+      // The server reports a suspended VM as VM_STATE_PAUSED (#2044).
+      const status = vmStatus(loaded.state);
+      setVM({ ...loaded, status: (status as string) === 'paused' ? 'suspended' : status });
       setLoadError(null);
     } catch (error) {
       if (isServiceNotConfigured(error)) {
