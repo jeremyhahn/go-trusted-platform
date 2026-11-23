@@ -8,6 +8,8 @@ import type { ApiClient } from '../client/api-client.js';
 import type { Transport } from '../transport/transport.js';
 import type { ApiResponse } from '../types/api.js';
 import { BaseService } from './base-service.js';
+import { encodeEnum } from './wire-enum.js';
+import { PROVISIONING_STATE_PROTO_NAMES } from '../types/pxe.js';
 import type {
   RegisterPXEDeviceRequest,
   RegisterPXEDeviceResponse,
@@ -162,7 +164,7 @@ export class PXEService extends BaseService {
   async updateState(request: UpdatePXEStateRequest): Promise<ApiResponse<UpdatePXEStateResponse>> {
     return this.client.put<UpdatePXEStateResponse>(
       this.buildUrl(`/devices/${this.encodePathSegment(request.deviceId)}/state`),
-      { state: request.state, reason: request.reason }
+      { state: encodeEnum('state', PROVISIONING_STATE_PROTO_NAMES, request.state), reason: request.reason }
     );
   }
 
