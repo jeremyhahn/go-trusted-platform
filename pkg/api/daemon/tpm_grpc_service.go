@@ -622,6 +622,7 @@ func (s *TPMGRPCService) GetAK(
 		Handle:    uint32(iakAttrs.TPMAttributes.Handle),
 		PublicKey: iakAttrs.TPMAttributes.PublicKeyBytes,
 		Algorithm: keyAlgorithmToProto(iakAttrs.KeyAlgorithm),
+		Name:      iakAttrs.TPMAttributes.Name.Buffer,
 	}, nil
 }
 
