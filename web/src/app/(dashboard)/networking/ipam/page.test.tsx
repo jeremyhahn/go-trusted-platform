@@ -3,9 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChangeEvent, ReactNode } from "react";
 
 // #1844, #2051: the page's pools go through useSDNIPAMPools (SDNService on
-// /api/v1/sdn/gateway/ipam/pools), mocked here; the allocations read is
-// still a fetch, stubbed at the boundary the browser crosses. Every pool
-// control is gated on its route.
+// /api/v1/sdn/gateway/ipam/pools), mocked here, and so do the allocations
+// read and the one-pool read. Every pool control is gated on its route.
 
 const { toast } = vi.hoisted(() => ({ toast: vi.fn() }));
 
@@ -30,6 +29,8 @@ type HookState = {
   create: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
   remove: ReturnType<typeof vi.fn>;
+  get: ReturnType<typeof vi.fn>;
+  listAllocations: ReturnType<typeof vi.fn>;
 };
 
 // A small store so a test can change what the hook answers and the page
@@ -121,6 +122,8 @@ const LIST = "GET /api/v1/sdn/gateway/ipam/pools";
 const CREATE = "POST /api/v1/sdn/gateway/ipam/pools";
 const UPDATE = "PUT /api/v1/sdn/gateway/ipam/pools/{id}";
 const DELETE = "DELETE /api/v1/sdn/gateway/ipam/pools/{id}";
+const GET_POOL = "GET /api/v1/sdn/gateway/ipam/pools/{id}";
+const LIST_ALLOCATIONS = "GET /api/v1/sdn/gateway/ipam/allocations";
 
 const poolA = {
   id: "pool-a",
@@ -147,6 +150,8 @@ function hookWith(pools: unknown[], patch: Partial<HookState> = {}) {
     create: vi.fn(async () => ({})),
     update: vi.fn(async () => ({})),
     remove: vi.fn(async () => undefined),
+    get: vi.fn(async () => ({})),
+    listAllocations: vi.fn(async () => []),
     ...patch,
   });
   return store.get();
@@ -364,31 +369,24 @@ describe("IPAMPage", () => {
     await waitFor(() => expect(screen.queryByText("Delete Pool: prod")).toBeNull());
   });
 
-  it("lists a pool's allocations", async () => {
-    hookWith([poolA]);
-    serve((method, url) =>
-      url.pathname.endsWith("/allocations")
-        ? json(200, {
-            payload: {
-              allocations: [
-                { ip: "192.0.2.51", pool_id: "pool-a", device_id: "dev-1", hostname: "node-1.example.com", allocated_at: "2026-11-01T00:00:00Z", expires_at: "" },
-              ],
-            },
-          })
-        : undefined,
-    );
+  it("lists a pool's allocations through the hook", async () => {
+    const hook = hookWith([poolA], {
+      listAllocations: vi.fn(async () => [
+        { ip: "192.0.2.51", pool_id: "pool-a", device_id: "dev-1", hostname: "node-1.example.com", status: "allocated", allocated_at: "2026-11-01T00:00:00Z" },
+      ]),
+    });
     render(<IPAMPage />);
     const row = await screen.findByTestId("row-pool-a");
 
     fireEvent.click(within(row).getByText("View Allocations"));
     expect(await screen.findByText("192.0.2.51")).toBeTruthy();
     expect(screen.getByText(/Allocations: prod \(192\.0\.2\.0\/24\)/)).toBeTruthy();
-    expect(calls.some((c) => c.url === "/api/v1/sdn/gateway/ipam/allocations?pool_id=pool-a")).toBe(true);
+    expect(hook.listAllocations).toHaveBeenCalledWith("pool-a");
+    expect(calls.some((c) => c.url.includes("/allocations"))).toBe(false);
   });
 
   it("shows no allocations for an empty pool", async () => {
-    hookWith([poolB]);
-    serve((method, url) => (url.pathname.endsWith("/allocations") ? json(200, { allocations: [] }) : undefined));
+    hookWith([poolB], { listAllocations: vi.fn(async () => []) });
     render(<IPAMPage />);
     const row = await screen.findByTestId("row-pool-b");
 
@@ -396,17 +394,56 @@ describe("IPAMPage", () => {
     expect(await screen.findByText("No active allocations.")).toBeTruthy();
   });
 
-  it("toasts a failed allocations read", async () => {
-    hookWith([poolA]);
-    serve((method, url) => (url.pathname.endsWith("/allocations") ? json(403, { error: "forbidden" }) : undefined));
+  it("shows a refused allocations read inside the dialog", async () => {
+    hookWith([poolA], { listAllocations: vi.fn(async () => Promise.reject(new Error("HTTP 403: forbidden"))) });
     render(<IPAMPage />);
     const row = await screen.findByTestId("row-pool-a");
 
     fireEvent.click(within(row).getByText("View Allocations"));
-    await waitFor(() =>
-      expect(toast).toHaveBeenCalledWith({ title: "Failed to load allocations", description: "forbidden", variant: "destructive" }),
-    );
-    expect(await screen.findByText("No active allocations.")).toBeTruthy();
+    const error = await screen.findByTestId("ipam-allocations-error");
+    expect(error.textContent).toContain("HTTP 403: forbidden");
+    expect(screen.queryByText("No active allocations.")).toBeNull();
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it("shows one pool's details read through the hook", async () => {
+    const hook = hookWith([poolA], {
+      get: vi.fn(async () => ({
+        id: "pool-a",
+        name: "prod",
+        cidr: "192.0.2.0/24",
+        zone: "control-plane",
+        gateway: "192.0.2.1",
+        range_start: "192.0.2.50",
+        range_end: "192.0.2.99",
+        total: 254,
+        allocated: 7,
+        available: 247,
+      })),
+    });
+    render(<IPAMPage />);
+    const row = await screen.findByTestId("row-pool-a");
+
+    fireEvent.click(within(row).getByText("Details"));
+    const detail = await screen.findByTestId("ipam-pool-detail");
+    expect(hook.get).toHaveBeenCalledWith("pool-a");
+    expect(screen.getByText("Pool prod")).toBeTruthy();
+    expect(detail.textContent).toContain("192.0.2.0/24");
+    expect(detail.textContent).toContain("control-plane");
+    expect(detail.textContent).toContain("192.0.2.1");
+    expect(detail.textContent).toContain("192.0.2.50 – 192.0.2.99");
+    expect(detail.textContent).toContain("247");
+  });
+
+  it("shows a refused details read inside the dialog", async () => {
+    hookWith([poolA], { get: vi.fn(async () => Promise.reject(new Error("HTTP 404: pool not found"))) });
+    render(<IPAMPage />);
+    const row = await screen.findByTestId("row-pool-a");
+
+    fireEvent.click(within(row).getByText("Details"));
+    const error = await screen.findByTestId("ipam-pool-detail-error");
+    expect(error.textContent).toContain("HTTP 404: pool not found");
+    expect(screen.queryByTestId("ipam-pool-detail")).toBeNull();
   });
 });
 
@@ -449,7 +486,15 @@ describe("IPAMPage capability gates", () => {
 
     expect(within(row).getByText("Edit").getAttribute("data-capability-op")).toBe(UPDATE);
     expect(within(row).getByText("Delete").getAttribute("data-capability-op")).toBe(DELETE);
-    expect(within(row).getByText("View Allocations").hasAttribute("data-capability-op")).toBe(false);
+  });
+
+  it("gates View Allocations on the allocations route and Details on the one-pool read", async () => {
+    hookWith([poolA]);
+    render(<IPAMPage />);
+    const row = await screen.findByTestId("row-pool-a");
+
+    expect(within(row).getByText("View Allocations").getAttribute("data-capability-op")).toBe(LIST_ALLOCATIONS);
+    expect(within(row).getByText("Details").getAttribute("data-capability-op")).toBe(GET_POOL);
   });
 
   it("gates the form's save on create in create mode and on update in edit mode", async () => {
