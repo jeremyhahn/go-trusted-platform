@@ -40,6 +40,8 @@ import { Separator } from '@/components/ui/separator';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast, useApi, useDevice, useMutation, useDeviceTemplates } from '@/hooks';
+import { Gated } from '@/components/features/capabilities/gated';
+import { useCapabilities } from '@/hooks/use-capabilities';
 import type {
   DeviceRole,
   CreateProfileFromTemplateRequest,
@@ -150,6 +152,10 @@ export default function SessionDetailClient() {
 
   const { templates, isLoading: templatesLoading } = useDeviceTemplates();
 
+  // #2046: the page reads the session only when the server offers GetSession.
+  const { loading: capsLoading, capability } = useCapabilities();
+  const readCap = capability('GET /api/v1/provisioning/sessions/{sessionID}');
+
   const {
     data: session,
     isLoading: sessionLoading,
@@ -159,6 +165,7 @@ export default function SessionDetailClient() {
     () => deviceService.getProvisioningSession(sessionId),
     [sessionId],
     {
+      enabled: !capsLoading && readCap.enabled,
       onSuccess: (data) => {
         if (data) {
           setTemplateEkSerial(data.ek_serial ?? '');
@@ -283,7 +290,27 @@ export default function SessionDetailClient() {
     });
   };
 
-  if (sessionLoading) {
+  if (!capsLoading && !readCap.enabled) {
+    return (
+      <div className="flex flex-col gap-6">
+        <Button
+          variant="ghost"
+          className="w-fit"
+          onClick={() => router.push('/provisioning/sessions')}
+        >
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          Back to Sessions
+        </Button>
+        <Card data-testid="session-not-enabled">
+          <CardContent className="pt-6 text-sm text-muted-foreground">
+            Session reads are not enabled on this server: {readCap.reason ?? 'not offered'}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (capsLoading || sessionLoading) {
     return (
       <div className="flex items-center justify-center py-24">
         <div className="text-center">
@@ -532,6 +559,7 @@ export default function SessionDetailClient() {
                       />
                     </div>
 
+                    <Gated op="POST /api/v1/provisioning/sessions/{sessionID}/fulfill">
                     <Button
                       type="submit"
                       className="w-full"
@@ -546,6 +574,7 @@ export default function SessionDetailClient() {
                       )}
                       Create Profile and Provision Device
                     </Button>
+                    </Gated>
                   </form>
                 </CardContent>
               </Card>
@@ -611,6 +640,7 @@ export default function SessionDetailClient() {
                       />
                     </div>
 
+                    <Gated op="POST /api/v1/provisioning/sessions/{sessionID}/fulfill">
                     <Button
                       type="submit"
                       className="w-full"
@@ -621,6 +651,7 @@ export default function SessionDetailClient() {
                       )}
                       Create Profile and Provision Device
                     </Button>
+                    </Gated>
                   </form>
                 </CardContent>
               </Card>
