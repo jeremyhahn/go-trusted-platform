@@ -14,6 +14,12 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), back: vi.fn() }),
 }));
 
+// The key controls are capability-gated; these cases need every op on.
+vi.mock('@/hooks/use-capabilities', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/use-capabilities')>()),
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
+
 const KEY_PATH = 'GET /api/v1/kms/keys/key-1';
 const VERSIONS_PATH = 'GET /api/v1/kms/keys/key-1/versions';
 
