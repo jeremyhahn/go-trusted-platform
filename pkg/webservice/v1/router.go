@@ -836,17 +836,26 @@ func (v1Router *Router) invitationRoutes() {
 
 func (v1Router *Router) overlayRoutes() {
 	server := v1Router.restHandlerRegistry.OverlayServiceServer()
+	// A daemon without an overlay controller still builds the service;
+	// its routes go dark (503, not-configured) rather than listing live.
+	var svc any = server
 	if server == nil {
-		v1Router.logger.Debug("Overlay service server is nil - overlay routes not registered")
-		return
+		svc = nil
+	} else if c, ok := server.(interface{ Configured() bool }); ok && !c.Configured() {
+		svc = nil
 	}
-	r := restoverlay.NewOverlayRouter(
-		v1Router.logger,
-		server,
-		v1Router.responseWriter)
-	// VXLAN overlay: VNI create and delete, VTEP and tunnel inventory.
-	// A VNI is a tenant's layer-2 isolation boundary.
-	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+	v1Router.serviceRegistry.requireService(
+		v1Router.router, "overlay", "/overlay", svc,
+		func() {
+			r := restoverlay.NewOverlayRouter(
+				v1Router.logger,
+				server,
+				v1Router.responseWriter)
+			// VXLAN overlay: VNI create and delete, VTEP and tunnel inventory.
+			// A VNI is a tenant's layer-2 isolation boundary.
+			r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+		},
+	)
 }
 
 func (v1Router *Router) ntpRoutes() {
