@@ -57,6 +57,22 @@ function serve(setup: () => unknown) {
   vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => current(input, init));
 }
 
+/**
+ * The control-plane stub records the path only; this wraps the installed
+ * fetch to record each request's path and query, which carries tenant_id
+ * (#2021 Codex round 5: the daemon's own-tenant guard reads it).
+ */
+function recordTargets(): string[] {
+  const targets: string[] = [];
+  const inner = globalThis.fetch;
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    targets.push(`${(init?.method ?? "GET").toUpperCase()} ${url.pathname}${url.search}`);
+    return inner(input, init);
+  });
+  return targets;
+}
+
 describe("TokenVerifyCard", () => {
   beforeEach(() => {
     caps.capability.mockReset();
@@ -79,12 +95,14 @@ describe("TokenVerifyCard", () => {
         expires_at: "2026-12-01T00:00:00Z",
       }),
     });
-    render(withControlPlane(<TokenVerifyCard />));
+    const targets = recordTargets();
+    render(withControlPlane(<TokenVerifyCard tenantId="tenant-a" />));
 
     paste("abc.def.ghi");
     await verify();
 
     expect(await screen.findByText("Valid")).toBeDefined();
+    expect(targets).toEqual(["POST /api/v1/iam/tokens/verify?tenant_id=tenant-a"]);
     expect(screen.getByText("u-1")).toBeDefined();
     expect(screen.getByText("t-1")).toBeDefined();
     expect(screen.getByText("iam:read")).toBeDefined();
@@ -96,7 +114,7 @@ describe("TokenVerifyCard", () => {
 
   it("shows an invalid verdict with the server's reason", async () => {
     stubControlPlane({ [route]: ok({ valid: false, reason: "token expired" }) });
-    render(withControlPlane(<TokenVerifyCard />));
+    render(withControlPlane(<TokenVerifyCard tenantId="tenant-a" />));
 
     paste("abc.def.ghi");
     await verify();
@@ -111,7 +129,7 @@ describe("TokenVerifyCard", () => {
       op === verifyOp ? { enabled: false, reason: "not-configured: iam" } : { enabled: true }
     );
     const sent = stubControlPlane({ [route]: ok({ valid: true }) });
-    render(withControlPlane(<TokenVerifyCard />));
+    render(withControlPlane(<TokenVerifyCard tenantId="tenant-a" />));
 
     paste("abc.def.ghi");
     const button = screen.getByRole("button", { name: /Verify/ }) as HTMLButtonElement;
@@ -125,9 +143,23 @@ describe("TokenVerifyCard", () => {
     expect(screen.queryByText("Valid")).toBeNull();
   });
 
+  it("disables Verify without a signed-in tenant", async () => {
+    const sent = stubControlPlane({ [route]: ok({ valid: true }) });
+    render(withControlPlane(<TokenVerifyCard tenantId={null} />));
+
+    paste("abc.def.ghi");
+    const button = screen.getByRole("button", { name: /Verify/ }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("title")).toBe("Sign in to a tenant to verify tokens");
+
+    await verify();
+    expect(sent).toHaveLength(0);
+    expect(screen.queryByText("Valid")).toBeNull();
+  });
+
   it("shows a refused request as an error, never a stale verdict", async () => {
     serve(() => stubControlPlane({ [route]: ok({ valid: true, subject: "u-1" }) }));
-    render(withNoRetry(<TokenVerifyCard />));
+    render(withNoRetry(<TokenVerifyCard tenantId="tenant-a" />));
 
     paste("abc.def.ghi");
     await verify();
