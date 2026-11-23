@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { DNSRecordTable } from '@/components/features/networking/dns-record-table';
 import { DNSRecordForm } from '@/components/features/networking/dns-record-form';
 import { DNSSECStatusCard } from '@/components/features/networking/dnssec-status-card';
+import { DNSRecordsCard } from '@/components/features/networking/dns-records-card';
 import { useDNS, useApi, useToast } from '@/hooks';
 import type { DNSZoneDetail, DNSRecord } from '@/types/infrastructure';
 import type { GetZoneResponse } from 'trusted-platform-sdk';
@@ -175,6 +176,8 @@ export default function DNSZoneDetailPage() {
       </div>
 
       <DNSSECStatusCard zoneName={zoneName} onSigned={fetchZone} />
+
+      <DNSRecordsCard zoneName={zoneName} />
 
       <Card>
         <CardHeader>
