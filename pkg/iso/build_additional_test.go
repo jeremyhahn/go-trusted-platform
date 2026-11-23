@@ -283,6 +283,37 @@ func TestCopySecureBootKeys_SourceNotFound(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestBuilderCopySecureBootKeys_PrivateKeyStagedOwnerOnly holds the legacy
+// builder path to the same staging rule as the customize path (#62): a
+// private key lands owner-only on the ISO tree, a public certificate stays
+// world-readable.
+func TestBuilderCopySecureBootKeys_PrivateKeyStagedOwnerOnly(t *testing.T) {
+	tempDir := t.TempDir()
+	isoDir := filepath.Join(tempDir, "iso")
+	keysDir := filepath.Join(tempDir, "keys")
+	require.NoError(t, os.MkdirAll(isoDir, 0755))
+	require.NoError(t, os.MkdirAll(keysDir, 0755))
+
+	keyPEM, certPEM := genTestSigningPairPEM(t)
+	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "DB.key"), keyPEM, 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "DB.crt"), certPEM, 0644))
+
+	builder := NewBuilder(nil)
+	require.NoError(t, builder.copySecureBootKeys(&ISOConfig{ISODir: isoDir, KeysDir: keysDir}))
+
+	stagedKey := filepath.Join(isoDir, "keys", "DB.key")
+	info, err := os.Stat(stagedKey)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm(), "staged DB.key must be owner-only")
+	got, err := os.ReadFile(stagedKey)
+	require.NoError(t, err)
+	assert.Equal(t, keyPEM, got)
+
+	info, err = os.Stat(filepath.Join(isoDir, "keys", "DB.crt"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0644), info.Mode().Perm(), "staged DB.crt stays world-readable")
+}
+
 func TestRunXorriso_ContextCancellation(t *testing.T) {
 	tempDir := t.TempDir()
 	isoDir := filepath.Join(tempDir, "iso")
