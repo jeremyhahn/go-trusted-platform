@@ -322,7 +322,29 @@ export class DeviceService extends BaseService {
    * @returns Activation result
    */
   async activateDevice(request: ActivateDeviceRequest): Promise<ApiResponse<ActivateDeviceResponse>> {
-    return this.client.post<ActivateDeviceResponse>(this.singularUrl('/activate-json'), request);
+    // The server decodes serial and mac_address (omitempty); a camelCase
+    // macAddress key is silently ignored. It answers a flat
+    // { status, vlan, transitioned_at }, mapped here to the camel-case type.
+    const body = {
+      serial: request.serial,
+      ...(request.macAddress && { mac_address: request.macAddress }),
+    };
+    const res = await this.client.post<{ status: string; vlan?: number; transitioned_at?: string }>(
+      this.singularUrl('/activate-json'),
+      body
+    );
+    if (!res.data) {
+      return res as unknown as ApiResponse<ActivateDeviceResponse>;
+    }
+    const { status, vlan, transitioned_at: transitionedAt } = res.data;
+    return {
+      ...res,
+      data: {
+        status,
+        ...(vlan !== undefined && { vlan }),
+        ...(transitionedAt !== undefined && { transitionedAt }),
+      },
+    };
   }
 
   // =========================================================================

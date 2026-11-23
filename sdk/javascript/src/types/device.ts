@@ -566,8 +566,8 @@ export interface DeviceLifecycleResponse {
 export interface ActivateDeviceRequest {
   /** Serial number */
   serial: string;
-  /** MAC address */
-  macAddress: string;
+  /** MAC address (the server's mac_address is omitempty) */
+  macAddress?: string;
 }
 
 // =============================================================================
@@ -837,13 +837,11 @@ export interface RecordAttestCertResponse {
  * Activate device response
  */
 export interface ActivateDeviceResponse {
-  /** Operation status */
-  status: DeviceStatus;
-  /** Activation status */
-  activationStatus?: string;
+  /** Activation status the server reports (e.g. "activated") */
+  status: string;
   /** VLAN assigned */
   vlan?: number;
-  /** Transition timestamp */
+  /** Transition timestamp (RFC 3339) */
   transitionedAt?: string;
 }
 
