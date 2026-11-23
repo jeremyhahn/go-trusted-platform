@@ -804,7 +804,8 @@ export type {
 } from './types/dns.js';
 
 // Gateway types: the telemetry snapshot the control plane caches for each
-// reporting gatewayd (#594), and the fleet read that returns them.
+// reporting gatewayd (#594), and the fleet read that returns them; the
+// load-balancer VIP, NAT64 status and perf types (#2052).
 export type {
   GatewaySnapshot,
   GatewaySnapshotHealth,
