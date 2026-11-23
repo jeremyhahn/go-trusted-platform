@@ -130,6 +130,21 @@ func (a *Archiver) Export(ctx context.Context, bundleID string, w io.Writer) err
 			return nil
 		}
 
+		// The archived manifest carries checksums of the files as exported.
+		if relPath == "manifest.json" {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			data := exportManifest(bundlePath, raw)
+			header.Size = int64(len(data))
+			if err := tw.WriteHeader(header); err != nil {
+				return err
+			}
+			_, err = tw.Write(data)
+			return err
+		}
+
 		// Write file header
 		if err := tw.WriteHeader(header); err != nil {
 			return err
@@ -409,6 +424,10 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 	if _, err := os.Stat(filepath.Join(stagePath, "manifest.json")); err != nil {
 		return nil, ErrInvalidManifest{Reason: "manifest.json not extracted"}
 	}
+	// A refused checksum publishes nothing: the deferred clean-up removes the stage.
+	if err := verifyStagedChecksums(stagePath, manifest.Checksums); err != nil {
+		return nil, err
+	}
 	if err := publishStagedBundle(stagePath, bundlePath); err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return nil, ErrBundleAlreadyExists{ID: manifest.ID}
@@ -492,6 +511,47 @@ func publishStagedBundle(stagePath, bundlePath string) error {
 		return err
 	}
 	return nil
+}
+
+// verifyStagedChecksums requires every file the manifest checksums to be
+// staged under stagePath with that SHA-256 before the bundle is published.
+// A checksum path outside the bundle is an invalid manifest.
+func verifyStagedChecksums(stagePath string, checksums map[string]string) error {
+	for rel, expected := range checksums {
+		local := filepath.FromSlash(rel)
+		if !filepath.IsLocal(local) {
+			return ErrInvalidManifest{Reason: fmt.Sprintf("checksum path %q is not inside the bundle", rel)}
+		}
+		actual, err := fileChecksum(filepath.Join(stagePath, local))
+		if err != nil {
+			return ErrChecksumMismatch{File: rel, Expected: expected, Actual: "file not found"}
+		}
+		if actual != expected {
+			return ErrChecksumMismatch{File: rel, Expected: expected, Actual: actual}
+		}
+	}
+	return nil
+}
+
+// exportManifest returns the manifest raw with each checksum recomputed from
+// the file now in bundlePath, so state a running VM changed still verifies on
+// import. A checksummed file that is missing keeps its old value; raw is
+// returned unchanged when it does not parse.
+func exportManifest(bundlePath string, raw []byte) []byte {
+	var m Manifest
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return raw
+	}
+	for key := range m.Checksums {
+		if sum, err := fileChecksum(filepath.Join(bundlePath, filepath.FromSlash(key))); err == nil {
+			m.Checksums[key] = sum
+		}
+	}
+	data, err := json.MarshalIndent(&m, "", "  ")
+	if err != nil {
+		return raw
+	}
+	return data
 }
 
 // ValidateArchive checks archive integrity without extracting.

@@ -494,7 +494,8 @@ qemu-system-x86_64 \
 ### Bundle Integrity
 
 - All files are checksummed in manifest
-- Import validates checksums before extraction
+- Import checks every checksummed file in the staged bundle and publishes nothing on a mismatch, a missing file or a path outside the bundle
+- Export refreshes the manifest checksums from the files it archives
 - Export includes all required files
 
 ### Template Security
