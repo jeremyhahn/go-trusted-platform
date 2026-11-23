@@ -37,6 +37,16 @@ export function parseSANs(text: string): string[] {
     .filter((s) => s !== "");
 }
 
+// thresholdValid reports whether spec is "M-of-N" with 1 <= M <= N, the only
+// threshold the backend accepts besides none at all (single-admin).
+export function thresholdValid(spec: string): boolean {
+  const match = /^(\d+)-of-(\d+)$/.exec(spec);
+  if (!match) return false;
+  const m = Number(match[1]);
+  const n = Number(match[2]);
+  return m >= 1 && m <= n;
+}
+
 export function CeremonyInitCard({ onInitialized }: { onInitialized?: () => void }) {
   const ceremony = useCeremony();
   const [soPin, setSoPin] = React.useState("");
@@ -49,7 +59,8 @@ export function CeremonyInitCard({ onInitialized }: { onInitialized?: () => void
   const [refusal, setRefusal] = React.useState<string | null>(null);
   const [result, setResult] = React.useState<CeremonyInitResponse | null>(null);
 
-  const disabled = soPin === "" || threshold === "" || running;
+  const thresholdOk = thresholdValid(threshold);
+  const disabled = soPin === "" || !thresholdOk || running;
 
   const handleInit = async () => {
     setConfirmOpen(false);
@@ -113,7 +124,11 @@ export function CeremonyInitCard({ onInitialized }: { onInitialized?: () => void
             placeholder="3-of-5"
             value={threshold}
             onChange={(e) => setThreshold(e.target.value)}
+            aria-invalid={threshold !== "" && !thresholdOk}
           />
+          {threshold !== "" && !thresholdOk && (
+            <p className="text-sm text-destructive">Threshold must be M-of-N, for example 3-of-5</p>
+          )}
         </div>
         <div className="space-y-2">
           <Label htmlFor="ceremony-init-hostname">Hostname</Label>

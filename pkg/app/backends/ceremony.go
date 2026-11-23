@@ -14,6 +14,7 @@
 package backends
 
 import (
+	"fmt"
 	"context"
 	"errors"
 	"strconv"
@@ -70,6 +71,16 @@ type ErrAdminBundleIncomplete struct{}
 // Error returns a human-readable description.
 func (e *ErrAdminBundleIncomplete) Error() string {
 	return "admin bundle is missing its certificate or key"
+}
+
+// ErrInvalidCeremonyThreshold is returned by Initialize when the threshold is
+// not empty and not "M-of-N" with 1 <= M <= N.
+type ErrInvalidCeremonyThreshold struct {
+	Spec string
+}
+
+func (e *ErrInvalidCeremonyThreshold) Error() string {
+	return fmt.Sprintf("ceremony backend: threshold must be \"M-of-N\" with 1 <= M <= N: %q", e.Spec)
 }
 
 // AdminBundle is the one-shot admin client credential returned by init.
@@ -154,18 +165,37 @@ func parseExpiresAt(s string) time.Time {
 
 // thresholdQuorum returns M from an "M-of-N" threshold spec: the number of
 // officer shares that reconstruct the secret, which is what the ceremony's
-// Threshold field means. N is the officer count. A spec that does not match,
-// including the empty one, yields zero, the ceremony's single-admin mode.
-func thresholdQuorum(spec string) int {
-	quorum, _, found := strings.Cut(spec, "-of-")
+// Threshold field means. N is the officer count. The empty spec is the
+// explicit single-admin request and yields zero. Any other spec must be
+// "M-of-N" with decimal M and N and 1 <= M <= N, else ErrInvalidCeremonyThreshold:
+// a typo must never fall back to single-admin, which has no quorum.
+func thresholdQuorum(spec string) (int, error) {
+	if spec == "" {
+		return 0, nil
+	}
+	quorum, total, found := strings.Cut(spec, "-of-")
 	if !found {
-		return 0
+		return 0, &ErrInvalidCeremonyThreshold{Spec: spec}
 	}
-	m, err := strconv.Atoi(quorum)
-	if err != nil || m < 0 {
-		return 0
+	m, okM := unsignedDecimal(quorum)
+	n, okN := unsignedDecimal(total)
+	if !okM || !okN || m < 1 || m > n {
+		return 0, &ErrInvalidCeremonyThreshold{Spec: spec}
 	}
-	return m
+	return m, nil
+}
+
+// unsignedDecimal parses s as a decimal integer with no sign; strconv.Atoi
+// alone would accept a leading "+" or "-".
+func unsignedDecimal(s string) (int, bool) {
+	if s == "" || s[0] < '0' || s[0] > '9' {
+		return 0, false
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
 }
 
 // ceremonyOfficers maps the service-layer officers onto the SDK ceremony
@@ -221,6 +251,10 @@ var ceremonyStateMap = map[string]daemon.CeremonyStateValue{
 // the platform, so if it fails, init can simply be retried. Once the ceremony
 // has succeeded, the result always carries the bundle.
 func (b *CeremonyBackend) Initialize(ctx context.Context, req *daemon.CeremonyInitRequest) (*daemon.CeremonyInitResult, error) {
+	quorum, err := thresholdQuorum(req.Threshold)
+	if err != nil {
+		return nil, err
+	}
 	c, err := b.transport()
 	if err != nil {
 		return nil, err
@@ -240,7 +274,7 @@ func (b *CeremonyBackend) Initialize(ctx context.Context, req *daemon.CeremonyIn
 		SOPin:                  req.SOPIN,
 		UserPin:                req.UserPIN,
 		CredentialSealStrategy: req.CredentialSealStrategy,
-		Threshold:              thresholdQuorum(req.Threshold),
+		Threshold:              quorum,
 		Hostname:               req.Hostname,
 		SANs:                   req.SANs,
 		Officers:               ceremonyOfficers(req.Officers),
