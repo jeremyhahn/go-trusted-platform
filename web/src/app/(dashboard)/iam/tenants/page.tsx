@@ -3,6 +3,7 @@
 /**
  * IAM tenants: list, create, view, update and delete (#1744).
  * Routes: GET/POST /tenants, GET/PUT/DELETE /tenants/{tenant}.
+ * Create, View, Save and Delete are gated on the server's capabilities (#2033, #2053).
  */
 
 import React, { useRef, useState } from "react";
@@ -30,6 +31,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Gated } from "@/components/features/capabilities/gated";
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : "Unknown error";
@@ -165,9 +167,11 @@ export default function TenantsPage() {
               <Label htmlFor="tenant-new-name">Tenant name</Label>
               <Input id="tenant-new-name" value={newName} onChange={(e) => setNewName(e.target.value)} />
             </div>
-            <Button type="submit" disabled={busy || !newId.trim() || !newName.trim()}>
-              <Plus className="h-4 w-4 mr-2" /> Create tenant
-            </Button>
+            <Gated op="POST /api/v1/iam/tenants">
+              <Button type="submit" disabled={busy || !newId.trim() || !newName.trim()}>
+                <Plus className="h-4 w-4 mr-2" /> Create tenant
+              </Button>
+            </Gated>
           </form>
         </CardContent>
       </Card>
@@ -205,24 +209,28 @@ export default function TenantsPage() {
                       </TableCell>
                       <TableCell className="font-mono text-xs">{t.id}</TableCell>
                       <TableCell className="text-right space-x-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          aria-label={`View tenant ${t.id}`}
-                          disabled={busy}
-                          onClick={() => onView(t.id)}
-                        >
-                          View
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          aria-label={`Delete tenant ${t.id}`}
-                          disabled={busy}
-                          onClick={() => setPendingDelete(t)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                        <Gated op="GET /api/v1/iam/tenants/{tenant}">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            aria-label={`View tenant ${t.id}`}
+                            disabled={busy}
+                            onClick={() => onView(t.id)}
+                          >
+                            View
+                          </Button>
+                        </Gated>
+                        <Gated op="DELETE /api/v1/iam/tenants/{tenant}">
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            aria-label={`Delete tenant ${t.id}`}
+                            disabled={busy}
+                            onClick={() => setPendingDelete(t)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </Gated>
                       </TableCell>
                     </TableRow>
                   ))
@@ -272,9 +280,11 @@ export default function TenantsPage() {
                   onChange={(e) => setEditName(e.target.value)}
                 />
               </div>
-              <Button type="submit" disabled={busy || !editName.trim()}>
-                Save tenant
-              </Button>
+              <Gated op="PUT /api/v1/iam/tenants/{tenant}">
+                <Button type="submit" disabled={busy || !editName.trim()}>
+                  Save tenant
+                </Button>
+              </Gated>
             </form>
           </CardContent>
         </Card>
@@ -292,9 +302,11 @@ export default function TenantsPage() {
             <Button variant="outline" onClick={() => setPendingDelete(null)}>
               Cancel
             </Button>
-            <Button variant="destructive" disabled={busy} onClick={onConfirmDelete}>
-              Delete tenant
-            </Button>
+            <Gated op="DELETE /api/v1/iam/tenants/{tenant}">
+              <Button variant="destructive" disabled={busy} onClick={onConfirmDelete}>
+                Delete tenant
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
