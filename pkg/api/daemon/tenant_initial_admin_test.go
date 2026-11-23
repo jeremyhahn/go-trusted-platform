@@ -5,9 +5,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -46,6 +48,15 @@ var _ initialAdminInviter = (*platformservice.InvitationService)(nil)
 
 const initialAdminSystemTenant = "system"
 
+// systemAdminCallerContext is a system-tenant platform-token caller whose
+// token subject is the given user id.
+func systemAdminCallerContext(subject string) context.Context {
+	return grpcapi.ContextWithAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{
+		TenantID: initialAdminSystemTenant,
+		Subject:  subject,
+	})
+}
+
 func newInitialAdminServer(inviter initialAdminInviter) *TenantGRPCServer {
 	s := NewTenantGRPCServer()
 	s.SetSystemTenant(initialAdminSystemTenant)
@@ -71,7 +82,7 @@ func TestTenantGRPCServer_CreateInitialAdminInvitation_SystemTenantOnly(t *testi
 		t.Fatalf("own-tenant caller reached the inviter %d times", fake.calls)
 	}
 
-	resp, err := s.CreateInitialAdminInvitation(tokenCallerContext(initialAdminSystemTenant), req)
+	resp, err := s.CreateInitialAdminInvitation(systemAdminCallerContext("42"), req)
 	if err != nil {
 		t.Fatalf("system tenant: %v", err)
 	}
@@ -102,5 +113,41 @@ func TestTenantGRPCServer_CreateInitialAdminInvitation_NoInviter(t *testing.T) {
 		&platformv1.CreateInitialAdminInvitationRequest{TenantId: "tenant-a", Email: "owner@example.com"})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("got %v, want FailedPrecondition", err)
+	}
+}
+
+// The invitation service refuses an empty role and a zero inviter, so the
+// handler must supply the tenant owner role and the caller's user id.
+func TestCreateInitialAdminInvitation_SendsOwnerRoleAndInviter(t *testing.T) {
+	fake := &fakeInitialAdminInviter{}
+	s := newInitialAdminServer(fake)
+	_, err := s.CreateInitialAdminInvitation(systemAdminCallerContext("42"),
+		&platformv1.CreateInitialAdminInvitationRequest{TenantId: "tenant-a", Email: "owner@example.com"})
+	if err != nil {
+		t.Fatalf("system tenant: %v", err)
+	}
+	if fake.calls != 1 {
+		t.Fatalf("inviter calls = %d, want 1", fake.calls)
+	}
+	if fake.got.Role != platformservice.DefaultTenantOwnerRole {
+		t.Fatalf("role = %q, want %q", fake.got.Role, platformservice.DefaultTenantOwnerRole)
+	}
+	if fake.got.InvitedByID != 42 {
+		t.Fatalf("invited_by = %d, want 42", fake.got.InvitedByID)
+	}
+}
+
+func TestCreateInitialAdminInvitation_NoNumericCallerIDIsRefused(t *testing.T) {
+	for _, subject := range []string{"", "alice", "0"} {
+		fake := &fakeInitialAdminInviter{}
+		s := newInitialAdminServer(fake)
+		_, err := s.CreateInitialAdminInvitation(systemAdminCallerContext(subject),
+			&platformv1.CreateInitialAdminInvitationRequest{TenantId: "tenant-a", Email: "owner@example.com"})
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("subject %q: got %v, want FailedPrecondition", subject, err)
+		}
+		if fake.calls != 0 {
+			t.Fatalf("subject %q reached the inviter %d times", subject, fake.calls)
+		}
 	}
 }
