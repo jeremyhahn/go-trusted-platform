@@ -10,7 +10,7 @@
  * list, the op is disabled with a reason (#2033 item 4, #2058).
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePlatformClient, type Capability, type PlatformClient } from "trusted-platform-sdk";
 
 export interface CapabilityAnswer {
@@ -31,6 +31,10 @@ export const CAPABILITY_NOT_OFFERED_REASON = "not offered by this server";
 type CapabilityMap = Map<string, Capability>;
 
 const cache = new WeakMap<PlatformClient, Promise<CapabilityMap>>();
+// The answers of a read that has resolved: a control mounted after it (a table
+// row, a dialog button) answers on its first render instead of "loading" until
+// its own effect settles, so it is never disabled for a render it need not be.
+const settled = new WeakMap<PlatformClient, CapabilityMap>();
 
 function loadCapabilities(client: PlatformClient): Promise<CapabilityMap> {
   let pending = cache.get(client);
@@ -39,7 +43,9 @@ function loadCapabilities(client: PlatformClient): Promise<CapabilityMap> {
       if (!res.success || !res.data) {
         throw new Error(res.error?.message ?? CAPABILITIES_UNAVAILABLE_REASON);
       }
-      return new Map((res.data.capabilities ?? []).map((c) => [c.op, c]));
+      const caps: CapabilityMap = new Map((res.data.capabilities ?? []).map((c) => [c.op, c]));
+      settled.set(client, caps);
+      return caps;
     });
     // A failed read is not cached, so a later mount asks again.
     pending.catch(() => {
@@ -80,7 +86,13 @@ export function useCapabilities(): UseCapabilitiesResult {
     };
   }, [client]);
 
-  const current = loaded?.client === client ? loaded : undefined;
+  const known = settled.get(client);
+  const current = useMemo<Loaded | undefined>(() => {
+    if (loaded?.client === client) {
+      return loaded;
+    }
+    return known ? { client, error: undefined, caps: known } : undefined;
+  }, [loaded, client, known]);
 
   const capability = useCallback(
     (op: string): CapabilityAnswer => {
