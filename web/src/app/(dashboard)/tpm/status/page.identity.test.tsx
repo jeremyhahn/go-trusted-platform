@@ -9,6 +9,21 @@ import TPMStatusPage from "./page";
 // attributes (GetDeviceAttributes), through the real SDK client over a
 // stubbed fetch, the same boundary the browser crosses.
 
+// The page's IDevID write controls are capability-gated (#2055): the server
+// offers all six here.
+const capsOn = ok({
+  capabilities: [
+    "POST /api/v1/idevid/iak/generate",
+    "DELETE /api/v1/idevid/iak",
+    "POST /api/v1/idevid/flush",
+    "POST /api/v1/idevid/certificate",
+    "POST /api/v1/idevid/iak/certificate",
+    "DELETE /api/v1/idevid/iak/certificate",
+  ].map((op) => ({ op, kind: "route", enabled: true })),
+  total: 6,
+  enabled: 6,
+});
+
 const tpmInfo = {
   version: "TPM_VERSION_2_0",
   manufacturer: null,
@@ -30,6 +45,7 @@ describe("TPMStatusPage identity keys and device attributes", () => {
   it("shows IDevID and IAK presence from HasIDevID and HasIAK", async () => {
     const sent = stubControlPlane({
       "GET /api/v1/tpm/info": ok(tpmInfo),
+      "GET /api/v1/capabilities": capsOn,
       "GET /api/v1/idevid/exists": ok({ exists: true }),
       "GET /api/v1/idevid/iak/exists": ok({ exists: false }),
       "GET /api/v1/idevid/iak": ok({ keyInfo: { handle: 2164260865 } }),
@@ -46,6 +62,7 @@ describe("TPMStatusPage identity keys and device attributes", () => {
   it("shows a refused HasIDevID as Unknown, not as absent", async () => {
     stubControlPlane({
       "GET /api/v1/tpm/info": ok(tpmInfo),
+      "GET /api/v1/capabilities": capsOn,
       "GET /api/v1/idevid/exists": refused(503, "idevid service is not available"),
     });
 
@@ -60,6 +77,7 @@ describe("TPMStatusPage identity keys and device attributes", () => {
   it("a failed HasIDevID refresh shows IDevID Unknown, not the old Present", async () => {
     const routes: Record<string, Answer> = {
       "GET /api/v1/tpm/info": ok(tpmInfo),
+      "GET /api/v1/capabilities": capsOn,
       "GET /api/v1/idevid/exists": ok({ exists: true }),
       "GET /api/v1/idevid/iak/exists": ok({ exists: true }),
     };
@@ -81,6 +99,7 @@ describe("TPMStatusPage identity keys and device attributes", () => {
   it("a failed HasIAK refresh shows IAK Unknown, not the old No IAK", async () => {
     const routes: Record<string, Answer> = {
       "GET /api/v1/tpm/info": ok(tpmInfo),
+      "GET /api/v1/capabilities": capsOn,
       "GET /api/v1/idevid/exists": ok({ exists: true }),
       "GET /api/v1/idevid/iak/exists": ok({ exists: false }),
     };
@@ -102,6 +121,7 @@ describe("TPMStatusPage identity keys and device attributes", () => {
   it("shows the TCG device attributes", async () => {
     stubControlPlane({
       "GET /api/v1/tpm/info": ok(tpmInfo),
+      "GET /api/v1/capabilities": capsOn,
       "GET /api/v1/idevid/attributes": ok({
         attributes: {
           tpmManufacturer: "IFX",
@@ -128,6 +148,7 @@ describe("TPMStatusPage identity keys and device attributes", () => {
   it("says why the device attributes are unavailable", async () => {
     stubControlPlane({
       "GET /api/v1/tpm/info": ok(tpmInfo),
+      "GET /api/v1/capabilities": capsOn,
       "GET /api/v1/idevid/attributes": refused(403, "permission denied"),
     });
 

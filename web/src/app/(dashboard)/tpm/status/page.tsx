@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Gated } from "@/components/features/capabilities/gated";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   RefreshCw,
@@ -596,17 +597,23 @@ export default function TPMStatusPage() {
                       </Badge>
                     </div>
                     <div className="flex flex-wrap gap-2 mt-2" data-testid="iak-actions">
-                      <Button size="sm" variant="outline" onClick={() => void generateIAK()} disabled={iakBusy}>
-                        Generate IAK
-                      </Button>
-                      <Button size="sm" variant="destructive" onClick={() => setConfirmDeleteIAK(true)} disabled={iakBusy}>
-                        Delete IAK
-                      </Button>
+                      <Gated op="POST /api/v1/idevid/iak/generate">
+                        <Button size="sm" variant="outline" onClick={() => void generateIAK()} disabled={iakBusy}>
+                          Generate IAK
+                        </Button>
+                      </Gated>
+                      <Gated op="DELETE /api/v1/idevid/iak">
+                        <Button size="sm" variant="destructive" onClick={() => setConfirmDeleteIAK(true)} disabled={iakBusy}>
+                          Delete IAK
+                        </Button>
+                      </Gated>
                     </div>
                     <div className="flex flex-wrap gap-2 mt-2" data-testid="tpm-maintenance">
-                      <Button size="sm" variant="outline" onClick={() => setConfirmFlush(true)} disabled={flushBusy}>
-                        Flush transient contexts
-                      </Button>
+                      <Gated op="POST /api/v1/idevid/flush">
+                        <Button size="sm" variant="outline" onClick={() => setConfirmFlush(true)} disabled={flushBusy}>
+                          Flush transient contexts
+                        </Button>
+                      </Gated>
                     </div>
                   </div>
 
@@ -691,14 +698,16 @@ export default function TPMStatusPage() {
                       value={idevidCertText}
                       onChange={(e) => setIdevidCertText(e.target.value)}
                     />
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => void installIDevIDCert()}
-                      disabled={certBusy || !looksLikePem(idevidCertText, "CERTIFICATE")}
-                    >
-                      Install IDevID certificate
-                    </Button>
+                    <Gated op="POST /api/v1/idevid/certificate">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void installIDevIDCert()}
+                        disabled={certBusy || !looksLikePem(idevidCertText, "CERTIFICATE")}
+                      >
+                        Install IDevID certificate
+                      </Button>
+                    </Gated>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="iak-cert-pem">IAK certificate PEM</Label>
@@ -707,23 +716,27 @@ export default function TPMStatusPage() {
                       value={iakCertText}
                       onChange={(e) => setIakCertText(e.target.value)}
                     />
+                    <Gated op="POST /api/v1/idevid/iak/certificate">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void installIAKCert()}
+                        disabled={certBusy || !looksLikePem(iakCertText, "CERTIFICATE")}
+                      >
+                        Install IAK certificate
+                      </Button>
+                    </Gated>
+                  </div>
+                  <Gated op="DELETE /api/v1/idevid/iak/certificate">
                     <Button
                       size="sm"
-                      variant="outline"
-                      onClick={() => void installIAKCert()}
-                      disabled={certBusy || !looksLikePem(iakCertText, "CERTIFICATE")}
+                      variant="destructive"
+                      onClick={() => setConfirmDeleteIAKCert(true)}
+                      disabled={certBusy}
                     >
-                      Install IAK certificate
+                      Delete IAK certificate
                     </Button>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    onClick={() => setConfirmDeleteIAKCert(true)}
-                    disabled={certBusy}
-                  >
-                    Delete IAK certificate
-                  </Button>
+                  </Gated>
                 </div>
               </CardContent>
             </Card>

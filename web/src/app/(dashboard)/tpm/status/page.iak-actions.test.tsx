@@ -15,6 +15,29 @@ import TPMStatusPage from "./page";
 // confirm, asks the IDevID service to delete it (DeleteIAK), through the
 // real SDK client over a stubbed fetch, and re-reads HasIAK after each.
 
+// The page's IDevID write controls are capability-gated (#2055): the server
+// offers all six here.
+const capsOn = ok({
+  capabilities: [
+    "POST /api/v1/idevid/iak/generate",
+    "DELETE /api/v1/idevid/iak",
+    "POST /api/v1/idevid/flush",
+    "POST /api/v1/idevid/certificate",
+    "POST /api/v1/idevid/iak/certificate",
+    "DELETE /api/v1/idevid/iak/certificate",
+  ].map((op) => ({ op, kind: "route", enabled: true })),
+  total: 6,
+  enabled: 6,
+});
+
+// enabledButton waits for the capabilities answer to enable a gated control
+// before the test clicks it.
+async function enabledButton(name: string): Promise<HTMLElement> {
+  const control = await screen.findByRole("button", { name });
+  await waitFor(() => expect(control.getAttribute("data-capability-enabled")).toBe("true"));
+  return control;
+}
+
 const tpmInfo = {
   version: "TPM_VERSION_2_0",
   manufacturer: null,
@@ -56,6 +79,7 @@ describe("TPMStatusPage IAK generate and delete", () => {
   it("generates the IAK and re-reads HasIAK", async () => {
     const routes: Record<string, Answer> = {
       "GET /api/v1/tpm/info": ok(tpmInfo),
+      "GET /api/v1/capabilities": capsOn,
       "GET /api/v1/idevid/iak/exists": ok({ exists: false }),
       "GET /api/v1/idevid/iak": ok(iakInfo),
       "POST /api/v1/idevid/iak/generate": ok({ status: { success: true, message: "IAK generated successfully" } }),
@@ -66,7 +90,7 @@ describe("TPMStatusPage IAK generate and delete", () => {
 
     await screen.findByText("No IAK");
     routes["GET /api/v1/idevid/iak/exists"] = ok({ exists: true });
-    fireEvent.click(await screen.findByRole("button", { name: "Generate IAK" }));
+    fireEvent.click(await enabledButton("Generate IAK"));
 
     expect(await screen.findByText("IAK Present")).toBeTruthy();
     expect(sent).toContainEqual(expect.objectContaining({ method: "POST", path: "/api/v1/idevid/iak/generate" }));
@@ -77,6 +101,7 @@ describe("TPMStatusPage IAK generate and delete", () => {
   it("shows a refused GenerateIAK and keeps the IAK absent", async () => {
     const routes: Record<string, Answer> = {
       "GET /api/v1/tpm/info": ok(tpmInfo),
+      "GET /api/v1/capabilities": capsOn,
       "GET /api/v1/idevid/iak/exists": ok({ exists: false }),
       "GET /api/v1/idevid/iak": ok(iakInfo),
       "POST /api/v1/idevid/iak/generate": refused(403, "permission denied"),
@@ -86,7 +111,7 @@ describe("TPMStatusPage IAK generate and delete", () => {
     render(withControlPlane(<TPMStatusPage />));
 
     await screen.findByText("No IAK");
-    fireEvent.click(await screen.findByRole("button", { name: "Generate IAK" }));
+    fireEvent.click(await enabledButton("Generate IAK"));
 
     await waitFor(() => expect(toasts()).toContain("IAK generation failed: permission denied"));
     const toast = screen
@@ -100,6 +125,7 @@ describe("TPMStatusPage IAK generate and delete", () => {
   it("asks before deleting the IAK, and Cancel sends nothing", async () => {
     const routes: Record<string, Answer> = {
       "GET /api/v1/tpm/info": ok(tpmInfo),
+      "GET /api/v1/capabilities": capsOn,
       "GET /api/v1/idevid/iak/exists": ok({ exists: true }),
       "GET /api/v1/idevid/iak": ok(iakInfo),
     };
@@ -108,7 +134,7 @@ describe("TPMStatusPage IAK generate and delete", () => {
     render(withControlPlane(<TPMStatusPage />));
 
     await screen.findByText("IAK Present");
-    fireEvent.click(await screen.findByRole("button", { name: "Delete IAK" }));
+    fireEvent.click(await enabledButton("Delete IAK"));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Delete the IAK?")).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
@@ -120,6 +146,7 @@ describe("TPMStatusPage IAK generate and delete", () => {
   it("deletes the IAK after the confirm and re-reads HasIAK", async () => {
     const routes: Record<string, Answer> = {
       "GET /api/v1/tpm/info": ok(tpmInfo),
+      "GET /api/v1/capabilities": capsOn,
       "GET /api/v1/idevid/iak/exists": ok({ exists: true }),
       "GET /api/v1/idevid/iak": ok(iakInfo),
       "DELETE /api/v1/idevid/iak": ok({ status: { success: true, message: "IAK deleted" } }),
@@ -130,7 +157,7 @@ describe("TPMStatusPage IAK generate and delete", () => {
 
     await screen.findByText("IAK Present");
     routes["GET /api/v1/idevid/iak/exists"] = ok({ exists: false });
-    fireEvent.click(await screen.findByRole("button", { name: "Delete IAK" }));
+    fireEvent.click(await enabledButton("Delete IAK"));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete IAK" }));
 
     expect(await screen.findByText("No IAK")).toBeTruthy();
@@ -143,6 +170,7 @@ describe("TPMStatusPage IAK generate and delete", () => {
     const refusal = "the IAK key is TPM-resident and is not evicted by this service";
     const routes: Record<string, Answer> = {
       "GET /api/v1/tpm/info": ok(tpmInfo),
+      "GET /api/v1/capabilities": capsOn,
       "GET /api/v1/idevid/iak/exists": ok({ exists: true }),
       "GET /api/v1/idevid/iak": ok(iakInfo),
       "DELETE /api/v1/idevid/iak": refused(403, refusal),
@@ -152,7 +180,7 @@ describe("TPMStatusPage IAK generate and delete", () => {
     render(withControlPlane(<TPMStatusPage />));
 
     await screen.findByText("IAK Present");
-    fireEvent.click(await screen.findByRole("button", { name: "Delete IAK" }));
+    fireEvent.click(await enabledButton("Delete IAK"));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete IAK" }));
 
     await waitFor(() => expect(toasts()).toContain(`IAK delete refused: ${refusal}`));
@@ -164,6 +192,7 @@ describe("TPMStatusPage IAK generate and delete", () => {
     const failure = "IAK created but its attributes were not stored";
     const routes: Record<string, Answer> = {
       "GET /api/v1/tpm/info": ok(tpmInfo),
+      "GET /api/v1/capabilities": capsOn,
       "GET /api/v1/idevid/iak/exists": ok({ exists: false }),
       "GET /api/v1/idevid/iak": ok(iakInfo),
       "POST /api/v1/idevid/iak/generate": refused(500, failure),
@@ -174,7 +203,7 @@ describe("TPMStatusPage IAK generate and delete", () => {
 
     await screen.findByText("No IAK");
     routes["GET /api/v1/idevid/iak/exists"] = ok({ exists: true });
-    fireEvent.click(await screen.findByRole("button", { name: "Generate IAK" }));
+    fireEvent.click(await enabledButton("Generate IAK"));
 
     await waitFor(() => expect(toasts()).toContain(`IAK generation failed: ${failure}`));
     const toast = screen
@@ -188,6 +217,7 @@ describe("TPMStatusPage IAK generate and delete", () => {
   it("shows No IAK after a refused DeleteIAK whose re-read finds none", async () => {
     const routes: Record<string, Answer> = {
       "GET /api/v1/tpm/info": ok(tpmInfo),
+      "GET /api/v1/capabilities": capsOn,
       "GET /api/v1/idevid/iak/exists": ok({ exists: true }),
       "GET /api/v1/idevid/iak": ok(iakInfo),
       "DELETE /api/v1/idevid/iak": refused(403, "permission denied"),
@@ -197,7 +227,7 @@ describe("TPMStatusPage IAK generate and delete", () => {
     render(withControlPlane(<TPMStatusPage />));
 
     await screen.findByText("IAK Present");
-    fireEvent.click(await screen.findByRole("button", { name: "Delete IAK" }));
+    fireEvent.click(await enabledButton("Delete IAK"));
     routes["GET /api/v1/idevid/iak/exists"] = ok({ exists: false });
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete IAK" }));
 
@@ -213,6 +243,7 @@ describe("TPMStatusPage IAK generate and delete", () => {
   it("keeps the IAK buttons disabled until the HasIAK re-read answers", async () => {
     const routes: Record<string, Answer> = {
       "GET /api/v1/tpm/info": ok(tpmInfo),
+      "GET /api/v1/capabilities": capsOn,
       "GET /api/v1/idevid/iak/exists": ok({ exists: false }),
       "GET /api/v1/idevid/iak": ok(iakInfo),
       "POST /api/v1/idevid/iak/generate": ok({ status: { success: true, message: "IAK generated successfully" } }),
@@ -237,7 +268,7 @@ describe("TPMStatusPage IAK generate and delete", () => {
 
     await screen.findByText("No IAK");
     routes["GET /api/v1/idevid/iak/exists"] = ok({ exists: true });
-    fireEvent.click(await screen.findByRole("button", { name: "Generate IAK" }));
+    fireEvent.click(await enabledButton("Generate IAK"));
 
     await waitFor(() => expect(toasts()).toContain("IAK generated: IAK generated successfully"));
     const generate = screen.getByRole("button", { name: "Generate IAK" }) as HTMLButtonElement;
