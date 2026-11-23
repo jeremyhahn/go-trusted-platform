@@ -4,9 +4,9 @@
 // It runs against the real platformd of the real-server harness: no
 // page.route and no api-mock. Every assertion reads the server's own answer
 // (GET /api/v1/capabilities and GET /api/v1/sdn/zones), so the spec holds
-// whether the zone ops are offered or reported not configured. A zone change
-// applies at the next daemon restart, so the spec does not assert that a
-// deleted zone leaves the list.
+// whether the zone ops are offered or reported not configured. Create, Update
+// and Delete commit the new zone set at once and List reads that set, so the
+// spec reads every change back; only network enforcement waits for a restart.
 import type { Locator, Page, Response } from '@playwright/test';
 import { expect, test } from './fixtures';
 import { unwrapPayload } from './fixtures/wire';
@@ -175,6 +175,8 @@ test.describe('Network Zones against the real platformd', () => {
     const listed = await sdk.sdn.listNetworkZones();
     expect(listed.success, JSON.stringify(listed.error)).toBeTruthy();
     expect((listed.data?.zones ?? []).map((z) => z.name)).toContain(name);
+    const before = listed.data?.zones?.find((z) => z.name === name);
+    const isolateBefore = before?.isolate ?? false;
 
     const zonePath = `/api/v1/sdn/zones/${encodeURIComponent(name)}`;
     const row = adminPage.getByRole('row').filter({ hasText: name });
@@ -200,6 +202,13 @@ test.describe('Network Zones against the real platformd', () => {
       expect(updatedRes.ok(), `update answered ${updatedRes.status()}`).toBeTruthy();
       await expect(adminPage.getByText('Zone updated', { exact: true }).first()).toBeVisible();
       await expect(editDialog).toBeHidden();
+
+      // The update is committed at once: List answers the toggled isolate.
+      const afterUpdate = await sdk.sdn.listNetworkZones();
+      expect(afterUpdate.success, JSON.stringify(afterUpdate.error)).toBeTruthy();
+      const after = afterUpdate.data?.zones?.find((z) => z.name === name);
+      expect(after, `zone ${name} missing after update`).toBeDefined();
+      expect(after?.isolate ?? false).toBe(!isolateBefore);
     }
 
     // Delete.
@@ -219,5 +228,16 @@ test.describe('Network Zones against the real platformd', () => {
     const deletedRes = await deleted;
     expect(deletedRes.ok(), `delete answered ${deletedRes.status()}`).toBeTruthy();
     await expect(adminPage.getByText('Zone deleted', { exact: true }).first()).toBeVisible();
+
+    // The delete is committed at once: List no longer answers the zone, and
+    // the refreshed page no longer shows its row.
+    const afterDelete = await sdk.sdn.listNetworkZones();
+    expect(afterDelete.success, JSON.stringify(afterDelete.error)).toBeTruthy();
+    const names = (afterDelete.data?.zones ?? []).map((z) => z.name);
+    expect(names).not.toContain(name);
+    const refreshed = apiResponse(adminPage, ZONES_PATH);
+    await adminPage.reload();
+    await json<{ zones: { name: string }[] }>(await refreshed);
+    await expect(row).toBeHidden();
   });
 });
