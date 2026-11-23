@@ -65,7 +65,7 @@ func TestSDNService_ApplyPolicy_GeneratedIDsAreUnique(t *testing.T) {
 	assert.NotEqual(t, firstID, second.GetPolicy().GetId())
 
 	svc.mu.RLock()
-	flowIDs := svc.policies[firstID].flowIDs
+	flowIDs := svc.policies[firstID].flows
 	svc.mu.RUnlock()
 	require.Len(t, flowIDs, 2)
 	assert.NotEqual(t, flowIDs[0], flowIDs[1])

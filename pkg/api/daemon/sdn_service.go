@@ -95,8 +95,27 @@ type policyResource struct {
 	byteCount   uint64
 	createdAt   time.Time
 	updatedAt   time.Time
-	// flowIDs tracks OpenFlow rules installed for this policy
-	flowIDs []string
+	// flows records the OpenFlow rules this policy installed, by bridge
+	// and cookie, so disable and delete remove exactly those (#1951).
+	flows []policyFlow
+}
+
+// policyFlow is one installed policy flow: its bridge and its cookie.
+type policyFlow struct {
+	bridge string
+	cookie uint64
+}
+
+// removePolicyFlows removes the recorded flows by cookie. It stops at the
+// first failure and returns the flows not yet removed with the error.
+func (s *SDNService) removePolicyFlows(ctx context.Context, flows []policyFlow) ([]policyFlow, error) {
+	client := s.getOVSClient()
+	for i, f := range flows {
+		if err := client.DeleteFlowsByCookie(ctx, f.bridge, f.cookie, ^uint64(0)); err != nil {
+			return flows[i:], err
+		}
+	}
+	return nil, nil
 }
 
 // SDNServiceOption is a functional option for configuring the SDNService
@@ -1173,26 +1192,51 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		bridgeNames = append(bridgeNames, bridgeName)
 	}
 
+	// A re-apply of an existing policy first removes the flows the earlier
+	// apply installed, so a disable leaves nothing on the switch (#1951).
+	s.mu.RLock()
+	var oldFlows []policyFlow
+	if prev, ok := s.policies[policyID]; ok {
+		oldFlows = append(oldFlows, prev.flows...)
+	}
+	s.mu.RUnlock()
+	if len(oldFlows) > 0 {
+		left, err := s.removePolicyFlows(ctx, oldFlows)
+		s.mu.Lock()
+		if prev, ok := s.policies[policyID]; ok {
+			prev.flows = left
+		}
+		s.mu.Unlock()
+		if err != nil {
+			return nil, status.Error(codes.Internal, fmt.Sprintf("failed to remove the policy's flows: %v", err))
+		}
+	}
+
 	// Install OpenFlow rules for each target bridge without holding the lock;
-	// a disabled policy is stored but installs nothing.
-	var flowIDs []string
+	// a disabled policy is stored but installs nothing. Every flow carries
+	// its own cookie, recorded on the policy.
+	var flows []policyFlow
 	if !config.GetEnabled() {
 		bridgeNames = nil
 	}
 	for _, bridgeName := range bridgeNames {
-		// Translate policy rules to OpenFlow rules
 		for _, rule := range config.GetRules() {
 			flowMod := s.policyRuleToFlowMod(rule, config.GetPriority())
-			if err := client.AddFlow(ctx, bridgeName, flowMod); err != nil {
-				// Best-effort: log flow installation failures but continue
-				continue
+			cookie, err := ovs.NewAPIFlowCookie()
+			if err == nil {
+				flowMod.Cookie = fmt.Sprintf("0x%x", cookie)
+				err = client.AddFlow(ctx, bridgeName, flowMod)
 			}
-			flowID := fmt.Sprintf("policy-%s-rule-%s-%s", policyID, rule.GetRuleId(), uuid.NewString())
-			flowIDs = append(flowIDs, flowID)
+			if err != nil {
+				// Remove what this call installed; report the failure.
+				_, _ = s.removePolicyFlows(ctx, flows)
+				return nil, status.Error(codes.Internal, fmt.Sprintf("failed to install policy flow: %v", err))
+			}
+			flows = append(flows, policyFlow{bridge: bridgeName, cookie: cookie})
 		}
 	}
 
-	policyStatus := "disabled"
+	policyStatus := "inactive"
 	if config.GetEnabled() {
 		policyStatus = "active"
 	}
@@ -1214,7 +1258,7 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		schedule:    config.GetSchedule(),
 		createdAt:   now,
 		updatedAt:   now,
-		flowIDs:     flowIDs,
+		flows:       flows,
 	}
 
 	policy := s.policyResourceToPb(policyID, s.policies[policyID])
@@ -1301,13 +1345,11 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 	// Find policy by ID or name and snapshot its data under read lock
 	s.mu.RLock()
 	var foundID string
-	var policyTargets []*platformv1.PolicyTarget
-	var policyRules []*platformv1.PolicyRule
+	var policyFlows []policyFlow
 	for id, p := range s.policies {
 		if id == req.GetPolicyId() || p.name == req.GetPolicyId() {
 			foundID = id
-			policyTargets = p.targets
-			policyRules = p.rules
+			policyFlows = append(policyFlows, p.flows...)
 			break
 		}
 	}
@@ -1317,24 +1359,16 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 		return nil, status.Error(codes.NotFound, "policy not found")
 	}
 
-	client := s.getOVSClient()
-
-	// Remove associated OpenFlow rules from target bridges without holding the lock
-	for _, target := range policyTargets {
-		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
-			continue
+	// Remove exactly the flows this policy installed, by cookie (#1951);
+	// a failure keeps the record with the flows still installed.
+	left, err := s.removePolicyFlows(ctx, policyFlows)
+	if err != nil {
+		s.mu.Lock()
+		if p, ok := s.policies[foundID]; ok {
+			p.flows = left
 		}
-		bridgeName, found := s.findBridgeName(target.GetId())
-		if !found {
-			continue
-		}
-		for _, rule := range policyRules {
-			match := s.policyRuleToMatchString(rule)
-			if match != "" {
-				// Best-effort cleanup of flow rules
-				_ = client.DeleteFlow(ctx, bridgeName, match)
-			}
-		}
+		s.mu.Unlock()
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to remove the policy's flows: %v", err))
 	}
 
 	// Remove from tracking under write lock
@@ -1407,28 +1441,6 @@ func (s *SDNService) policyRuleToFlowMod(rule *platformv1.PolicyRule, policyPrio
 }
 
 // policyRuleToMatchString converts a policy rule to an OVS match string for deletion
-func (s *SDNService) policyRuleToMatchString(rule *platformv1.PolicyRule) string {
-	var matchParts []string
-	if match := rule.GetMatch(); match != nil {
-		if match.GetSourceIp() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("nw_src=%s", match.GetSourceIp()))
-		}
-		if match.GetDestinationIp() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("nw_dst=%s", match.GetDestinationIp()))
-		}
-		if match.GetProtocol() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("nw_proto=%s", match.GetProtocol()))
-		}
-		if match.GetSourcePort() > 0 {
-			matchParts = append(matchParts, fmt.Sprintf("tp_src=%d", match.GetSourcePort()))
-		}
-		if match.GetDestinationPort() > 0 {
-			matchParts = append(matchParts, fmt.Sprintf("tp_dst=%d", match.GetDestinationPort()))
-		}
-	}
-	return strings.Join(matchParts, ",")
-}
-
 // policyResourceToPb converts a policyResource to a protobuf Policy message
 func (s *SDNService) policyResourceToPb(id string, p *policyResource) *platformv1.Policy {
 	policyType := platformv1.PolicyType_POLICY_TYPE_UNSPECIFIED

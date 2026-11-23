@@ -115,7 +115,7 @@ func TestSDNService_ApplyPolicy_DisabledInstallsNothing(t *testing.T) {
 	require.True(t, ok)
 	assert.False(t, stored.enabled)
 	assert.Equal(t, "inactive", stored.status)
-	assert.Empty(t, stored.flowIDs)
+	assert.Empty(t, stored.flows)
 }
 
 // TestSDNService_ApplyPolicy_EnabledInstallsFlows checks an enabled policy on a
