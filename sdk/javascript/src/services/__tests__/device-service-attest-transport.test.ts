@@ -19,7 +19,7 @@ const consumed409 = {
 };
 
 function lostThen409() {
-  const fetchImpl = vi.fn();
+  const fetchImpl = vi.fn<typeof fetch>();
   fetchImpl.mockRejectedValueOnce(new TypeError('fetch failed'));
   fetchImpl.mockImplementation(() =>
     Promise.resolve(
@@ -32,7 +32,7 @@ function lostThen409() {
 
   const client = new ApiClient({
     baseUrl: 'https://platform.test/api',
-    fetch: fetchImpl as unknown as typeof fetch,
+    fetch: fetchImpl,
     retry: { maxRetries: 3, initialDelayMs: 1, maxDelayMs: 1 },
   });
 
