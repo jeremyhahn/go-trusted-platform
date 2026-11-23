@@ -35,6 +35,7 @@ vi.mock("@/hooks/use-capabilities", () => ({
 const ADD_OP = "POST /api/v1/gateway/lb/vips";
 const BACKENDS_OP = "PUT /api/v1/gateway/lb/vips/{protocol}/{address}/{port}/backends";
 const REMOVE_OP = "DELETE /api/v1/gateway/lb/vips/{protocol}/{address}/{port}";
+const GET_OP = "GET /api/v1/gateway/lb/vips/{protocol}/{address}/{port}";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -283,6 +284,64 @@ describe("GatewayVIPsCard", () => {
     await click("vip-add");
 
     expect(writeCalls()).toHaveLength(0);
+  });
+
+  it("Details reads the VIP and shows its zone, group and backend health", async () => {
+    writeAnswer = () =>
+      jsonResponse(200, { code: 200, success: true, payload: { vip: { ...listedVIP, ctZone: 9, groupId: 4 } } });
+    await renderCard();
+    await screen.findByTestId(`vip-${KEY}`);
+
+    await click(`vip-details-${KEY}`);
+
+    const detail = await screen.findByTestId(`vip-detail-${KEY}`);
+    expect(detail.textContent).toContain("ct zone 9");
+    expect(detail.textContent).toContain("group 4");
+    expect(detail.textContent).toContain("192.0.2.21:8443 healthy");
+    expect(detail.textContent).toContain("192.0.2.22:8443 unhealthy");
+    expect(calls("GET", VIP_URL)).toHaveLength(1);
+    expect(writeCalls()).toHaveLength(0);
+  });
+
+  it("a non-admin can read the details", async () => {
+    auth.current = { user: { roles: ["user"] } };
+    writeAnswer = () =>
+      jsonResponse(200, { code: 200, success: true, payload: { vip: { ...listedVIP, ctZone: 9, groupId: 4 } } });
+    await renderCard();
+    await screen.findByTestId(`vip-${KEY}`);
+
+    expect((screen.getByTestId(`vip-details-${KEY}`) as HTMLButtonElement).disabled).toBe(false);
+    await click(`vip-details-${KEY}`);
+
+    await screen.findByTestId(`vip-detail-${KEY}`);
+    expect(calls("GET", VIP_URL)).toHaveLength(1);
+  });
+
+  it("a refused read shows the server message in the row", async () => {
+    writeAnswer = () => jsonResponse(404, { code: 404, error: "vip not found", success: false, payload: null });
+    await renderCard();
+    await screen.findByTestId(`vip-${KEY}`);
+
+    await click(`vip-details-${KEY}`);
+
+    const err = await screen.findByTestId(`vip-detail-error-${KEY}`);
+    expect(err.textContent).toContain("vip not found");
+    expect(screen.queryByTestId("vips-error")).not.toBeInTheDocument();
+  });
+
+  it("Details the server does not offer is disabled with its reason and reads nothing", async () => {
+    capsOff.current = { [GET_OP]: "not-configured: gateway lb" };
+    await renderCard();
+    await screen.findByTestId(`vip-${KEY}`);
+
+    const button = screen.getByTestId(`vip-details-${KEY}`) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.title).toBe("not-configured: gateway lb");
+    expect(button.getAttribute("data-capability-op")).toBe(GET_OP);
+    expect(button.getAttribute("data-capability-enabled")).toBe("false");
+    await click(`vip-details-${KEY}`);
+
+    expect(calls("GET", VIP_URL)).toHaveLength(0);
   });
 });
 
