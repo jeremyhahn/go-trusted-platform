@@ -114,3 +114,73 @@ describe('DeviceDetailPage Enable / Disable', () => {
     expect((screen.getByLabelText('Model') as HTMLInputElement).value).toBe('X10');
   });
 });
+
+// Codex round 2 (#2364): a card action re-reads the device; the re-read must
+// not unmount the page, or the Activate result is lost right after it shows.
+describe('DeviceDetailPage refresh after a card action', () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps the Activate result on screen after the device is re-read', async () => {
+    const routes: Record<string, Answer> = {
+      [DEVICE_PATH]: storedDevice('attested'),
+      'GET /api/v1/capabilities': ok({
+        capabilities: [{ op: 'POST /api/v1/device/activate-json', kind: 'route', enabled: true }],
+        total: 1,
+        enabled: 1,
+      }),
+      'POST /api/v1/device/activate-json': ok({
+        status: 'activated',
+        vlan: 101,
+        transitioned_at: '2026-01-01T00:00:00Z',
+      }),
+    };
+    const sent = stubControlPlane(routes);
+
+    // Hold the re-read open so the page is observed while it is in flight;
+    // an instant answer would let React batch the loading flag away.
+    const answer = globalThis.fetch;
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let deviceReads = 0;
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (`${method} ${url.pathname}` === DEVICE_PATH && ++deviceReads === 2) {
+        await held;
+      }
+      return answer(input, init);
+    });
+    await renderPage();
+
+    await waitFor(() => {
+      const button = screen.getByRole('button', { name: 'Activate device' }) as HTMLButtonElement;
+      expect(button.disabled).toBe(false);
+    });
+    await click('Activate device');
+
+    const result = await screen.findByTestId('device-activate-result');
+    expect(result.textContent).toContain('activated');
+    expect(result.textContent).toContain('VLAN 101');
+
+    // The card asked for the re-read; while it is in flight the page stays.
+    await waitFor(() => expect(deviceReads).toBe(2));
+    expect(screen.queryByText('Loading device details...')).toBeNull();
+    expect(screen.getByTestId('device-activate-result').textContent).toContain('VLAN 101');
+
+    await act(async () => {
+      release();
+      await held;
+    });
+    await waitFor(() =>
+      expect(sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/devices/7')).toHaveLength(2)
+    );
+    expect(screen.queryByText('Loading device details...')).toBeNull();
+    expect(screen.getByTestId('device-activate-result').textContent).toContain('VLAN 101');
+    expect(screen.getByRole('heading', { level: 1, name: 'node-07' })).toBeDefined();
+  });
+});
