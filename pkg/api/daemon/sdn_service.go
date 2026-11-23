@@ -41,6 +41,10 @@ type SDNService struct {
 	netlinkManager *netlink.Manager
 	zoneSvc        gateway.ZoneService
 	mu             sync.RWMutex
+	// policyMu serializes ApplyPolicy and DeletePolicy across their OVS
+	// calls, so a delete cannot erase a record a concurrent re-apply just
+	// swapped new flows into (#1951). Never taken while holding mu.
+	policyMu sync.Mutex
 
 	// Track created resources for cleanup
 	bridges  map[string]*bridgeResource
@@ -111,9 +115,19 @@ type policyFlow struct {
 func (s *SDNService) removePolicyFlows(ctx context.Context, flows []policyFlow) ([]policyFlow, error) {
 	client := s.getOVSClient()
 	for i, f := range flows {
-		if err := client.DeleteFlowsByCookie(ctx, f.bridge, f.cookie, ^uint64(0)); err != nil {
-			return flows[i:], err
+		err := client.DeleteFlowsByCookie(ctx, f.bridge, f.cookie, ^uint64(0))
+		if err == nil {
+			continue
 		}
+		// A deleted bridge took its flows with it: the flow is gone.
+		_, berr := client.GetBridge(ctx, f.bridge)
+		if berr != nil && errors.Is(berr, ovs.ErrBridgeNotFound) {
+			continue
+		}
+		if berr != nil {
+			err = errors.Join(err, berr)
+		}
+		return flows[i:], err
 	}
 	return nil, nil
 }
@@ -1160,6 +1174,11 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		return nil, status.Error(codes.InvalidArgument, "policy name is required")
 	}
 
+	// Serialize with DeletePolicy and other applies across the OVS calls
+	// and the record's publication (#1951).
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
+
 	// Determine policy ID
 	policyID := req.GetPolicyId()
 	if policyID == "" {
@@ -1197,29 +1216,20 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		bridgeNames = append(bridgeNames, bridgeName)
 	}
 
-	// A re-apply of an existing policy first removes the flows the earlier
-	// apply installed, so a disable leaves nothing on the switch (#1951).
+	// A re-apply installs the new flows first and removes the earlier
+	// apply's flows only once every new flow is in, so a failed update
+	// leaves the old policy enforced (#1951).
 	s.mu.RLock()
 	var oldFlows []policyFlow
 	if prev, ok := s.policies[policyID]; ok {
 		oldFlows = append(oldFlows, prev.flows...)
 	}
 	s.mu.RUnlock()
-	if len(oldFlows) > 0 {
-		left, err := s.removePolicyFlows(ctx, oldFlows)
-		s.mu.Lock()
-		if prev, ok := s.policies[policyID]; ok {
-			prev.flows = left
-		}
-		s.mu.Unlock()
-		if err != nil {
-			return nil, status.Error(codes.Internal, fmt.Sprintf("failed to remove the policy's flows: %v", err))
-		}
-	}
 
 	// Install OpenFlow rules for each target bridge without holding the lock;
 	// a disabled policy is stored but installs nothing. Every flow carries
-	// its own cookie, recorded on the policy.
+	// its own cookie, recorded before AddFlow: AddFlow can write the rule
+	// and still fail its barrier.
 	var flows []policyFlow
 	if !config.GetEnabled() {
 		bridgeNames = nil
@@ -1230,14 +1240,23 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 			cookie, err := ovs.NewAPIFlowCookie()
 			if err == nil {
 				flowMod.Cookie = fmt.Sprintf("0x%x", cookie)
+				flows = append(flows, policyFlow{bridge: bridgeName, cookie: cookie})
 				err = client.AddFlow(ctx, bridgeName, flowMod)
 			}
 			if err != nil {
-				// Remove what this call installed; report the failure.
-				_, _ = s.removePolicyFlows(ctx, flows)
-				return nil, status.Error(codes.Internal, fmt.Sprintf("failed to install policy flow: %v", err))
+				return nil, s.abandonPolicyInstall(ctx, policyID, config, policyType, flows, err)
 			}
-			flows = append(flows, policyFlow{bridge: bridgeName, cookie: cookie})
+		}
+	}
+
+	// Every new flow is in: remove the earlier apply's flows. Whatever
+	// cannot be removed stays owned by the new record.
+	var removeErr error
+	if len(oldFlows) > 0 {
+		left, err := s.removePolicyFlows(ctx, oldFlows)
+		if err != nil {
+			flows = append(flows, left...)
+			removeErr = err
 		}
 	}
 
@@ -1269,6 +1288,10 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 	policy := s.policyResourceToPb(policyID, s.policies[policyID])
 	s.mu.Unlock()
 
+	if removeErr != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to remove the policy's previous flows: %v", removeErr))
+	}
+
 	return &platformv1.ApplyPolicyResponse{
 		Status: &platformv1.Status{
 			Success: true,
@@ -1276,6 +1299,47 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		},
 		Policy: policy,
 	}, nil
+}
+
+// abandonPolicyInstall removes the flows a failed ApplyPolicy attempted and
+// keeps whatever it cannot remove owned (#1951): an existing record gains
+// the leftovers, otherwise a disabled record with status "failed" holds
+// them so DeletePolicy can retry. The old record is otherwise untouched.
+// The caller holds policyMu.
+func (s *SDNService) abandonPolicyInstall(ctx context.Context, policyID string, config *platformv1.PolicyConfig, policyType string, attempted []policyFlow, installErr error) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	left, cleanupErr := s.removePolicyFlows(cleanupCtx, attempted)
+	cancel()
+
+	if len(left) > 0 {
+		s.mu.Lock()
+		if prev, ok := s.policies[policyID]; ok {
+			prev.flows = append(prev.flows, left...)
+		} else {
+			now := time.Now()
+			s.policies[policyID] = &policyResource{
+				id:          policyID,
+				name:        config.GetName(),
+				description: config.GetDescription(),
+				policyType:  policyType,
+				priority:    config.GetPriority(),
+				enabled:     false,
+				status:      "failed",
+				rules:       config.GetRules(),
+				targets:     config.GetTargets(),
+				schedule:    config.GetSchedule(),
+				createdAt:   now,
+				updatedAt:   now,
+				flows:       left,
+			}
+		}
+		s.mu.Unlock()
+	}
+
+	if cleanupErr != nil {
+		return status.Error(codes.Internal, fmt.Sprintf("failed to install policy flow: %v (cleanup left %d flows: %v)", installErr, len(left), cleanupErr))
+	}
+	return status.Error(codes.Internal, fmt.Sprintf("failed to install policy flow: %v", installErr))
 }
 
 // GetPolicy retrieves a policy by ID
@@ -1346,6 +1410,10 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 	if req.GetPolicyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "policy_id is required")
 	}
+
+	// Serialize with ApplyPolicy from the lookup to the record's removal.
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
 
 	// Find policy by ID or name and snapshot its data under read lock
 	s.mu.RLock()
