@@ -1,6 +1,7 @@
 'use client';
 
 import { TenantBarrierCard } from '@/components/features/tenant/tenant-barrier-card';
+import { TenantDEKCard } from '@/components/features/tenant/tenant-dek-card';
 import { PageHeader } from '@/components/layout/page-header';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -9,9 +10,12 @@ export default function TenantBarrierPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Tenant barrier" description="Initialize, unseal and seal the tenant's key barrier" />
+      <PageHeader title="Tenant keys" description="The tenant's key barrier and data encryption key" />
       {tenantId ? (
-        <TenantBarrierCard tenantId={tenantId} />
+        <>
+          <TenantBarrierCard tenantId={tenantId} />
+          <TenantDEKCard tenantId={tenantId} />
+        </>
       ) : (
         <p className="text-sm text-muted-foreground">No tenant selected</p>
       )}
