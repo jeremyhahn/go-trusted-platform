@@ -1482,6 +1482,13 @@ func (s *ComputeGRPCService) instanceToVMProto(instance *compute.Instance) *plat
 		}
 	}
 
+	if disks := instanceDisksToProto(instance); len(disks) > 0 {
+		if vm.Config == nil {
+			vm.Config = &platformv1.VMConfig{Name: instance.Name}
+		}
+		vm.Config.Disks = disks
+	}
+
 	return vm
 }
 
