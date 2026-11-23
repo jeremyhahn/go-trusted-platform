@@ -178,33 +178,38 @@ type NetworkQuota struct {
 }
 
 // HasCapacity checks if the quota has capacity for the requested resources.
+// Each positive request is compared against the remaining capacity
+// (max(0, Max-Used)), so no request size can overflow the check.
 func (q *NetworkQuota) HasCapacity(bridges, ports int64) bool {
-	if bridges > 0 && q.UsedBridges+bridges > q.MaxBridges {
+	if bridges > 0 && bridges > q.AvailableBridges() {
 		return false
 	}
-	if ports > 0 && q.UsedPorts+ports > q.MaxPorts {
+	if ports > 0 && ports > q.AvailablePorts() {
 		return false
 	}
 	return true
 }
 
 // Reserve reserves the specified resources from the quota.
-// Returns an error if insufficient capacity.
+// Returns an error if insufficient capacity. Each positive request is
+// compared against the remaining capacity (max(0, Max-Used)), so no request
+// size can overflow the check, and ErrQuotaExceeded.Available reports that
+// clamped remaining capacity.
 func (q *NetworkQuota) Reserve(tenantID string, bridges, ports int64) error {
-	if bridges > 0 && q.UsedBridges+bridges > q.MaxBridges {
+	if bridges > 0 && bridges > q.AvailableBridges() {
 		return ErrQuotaExceeded{
 			TenantID:  tenantID,
 			Resource:  "bridges",
 			Requested: bridges,
-			Available: q.MaxBridges - q.UsedBridges,
+			Available: q.AvailableBridges(),
 		}
 	}
-	if ports > 0 && q.UsedPorts+ports > q.MaxPorts {
+	if ports > 0 && ports > q.AvailablePorts() {
 		return ErrQuotaExceeded{
 			TenantID:  tenantID,
 			Resource:  "ports",
 			Requested: ports,
-			Available: q.MaxPorts - q.UsedPorts,
+			Available: q.AvailablePorts(),
 		}
 	}
 
