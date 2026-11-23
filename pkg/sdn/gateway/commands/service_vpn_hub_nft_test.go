@@ -200,21 +200,21 @@ func TestVPNHubNFT_ProgramIsOneBatchInItsOwnForwardChain(t *testing.T) {
 	assert.Equal(t, "tp_vpn_hub", conn.tables[0].Name)
 	assert.Equal(t, nftables.TableFamilyINet, conn.tables[0].Family)
 	assert.Equal(t, []string{"tp_vpn_hub"}, conn.flushed, "only the hub's own table is flushed")
-	require.Len(t, conn.chains, 1)
-	c := conn.chains[0]
-	assert.Equal(t, "forward", c.Name)
+	require.Len(t, conn.chains, 3)
+	c := hubChain(t, conn, "forward")
 	assert.Equal(t, nftables.ChainTypeFilter, c.Type)
 	require.NotNil(t, c.Hooknum)
 	assert.Equal(t, *nftables.ChainHookForward, *c.Hooknum)
 	require.NotNil(t, c.Policy)
 	assert.Equal(t, nftables.ChainPolicyAccept, *c.Policy)
-	require.Len(t, conn.rules, len(rules))
+	require.Len(t, conn.rules, len(rules)+2)
 	for _, r := range conn.rules {
-		assert.Equal(t, "forward", r.Chain.Name)
 		assert.Equal(t, "tp_vpn_hub", r.Table.Name)
 	}
+	ingress := hubChainRules(conn.rules, "ingress")
+	assert.Len(t, ingress, len(rules), "the compiled rules are in the ingress chain")
 	assert.Equal(t, 1, conn.flushes, "the whole program is one batch")
-	assert.Equal(t, []string{"10.99.0.7->10.4.10.0"}, hubAccepts(conn.rules))
+	assert.Equal(t, []string{"10.99.0.7->10.4.10.0"}, hubAccepts(ingress))
 
 	failing := &recordingHubConn{flushErr: errors.New("netlink refused")}
 	require.Error(t, (&vpnHubForwardProgrammer{conn: failing}).program(context.Background(), rules))
@@ -225,6 +225,83 @@ func TestVPNHubNFT_ProgramIsOneBatchInItsOwnForwardChain(t *testing.T) {
 	err = (&vpnHubForwardProgrammer{conn: idle}).program(ctx, rules)
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Zero(t, idle.flushes)
+}
+
+// hubChain is the recorded chain called name.
+func hubChain(t *testing.T, conn *recordingHubConn, name string) *nftables.Chain {
+	t.Helper()
+	for _, c := range conn.chains {
+		if c.Name == name {
+			return c
+		}
+	}
+	require.Failf(t, "no chain", "chain %q was not added", name)
+	return nil
+}
+
+// hubChainRules is the rules among rules that sit in the chain called name.
+func hubChainRules(rules []*nftables.Rule, name string) []*nftables.Rule {
+	var out []*nftables.Rule
+	for _, r := range rules {
+		if r.Chain != nil && r.Chain.Name == name {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// assertHubJumpToIngress checks the one rule of a hook chain: vpn-hub0
+// ingress jumps to the ingress chain.
+func assertHubJumpToIngress(t *testing.T, rules []*nftables.Rule) {
+	t.Helper()
+	require.Len(t, rules, 1)
+	e := rules[0].Exprs
+	assertHubIfname(t, e)
+	assert.Equal(t, &expr.Verdict{Kind: expr.VerdictJump, Chain: "ingress"}, e[len(e)-1])
+}
+
+func TestVPNHubNFT_HostLocalHubTrafficPassesTheSameRules(t *testing.T) {
+	e := newVPNHubZoneEnforcement(hubZoneMatrix())
+	rules, err := compileVPNHubForwardRules(e, hubForwardNetworks(), []*vpn.Lease{hubLease("a", "10.99.0.7/32")})
+	require.NoError(t, err)
+
+	conn := &recordingHubConn{}
+	require.NoError(t, (&vpnHubForwardProgrammer{conn: conn}).program(context.Background(), rules))
+
+	require.Len(t, conn.chains, 3)
+	ingress := hubChain(t, conn, "ingress")
+	assert.Nil(t, ingress.Hooknum, "ingress is a regular chain")
+	in := hubChainRules(conn.rules, "ingress")
+	require.Len(t, in, len(rules), "every compiled rule is in ingress")
+	assert.Equal(t, []string{"10.99.0.7->10.4.10.0"}, hubAccepts(in))
+	lastExprs := in[len(in)-1].Exprs
+	assertVerdict(t, lastExprs[len(lastExprs)-1], expr.VerdictDrop)
+
+	for name, hook := range map[string]nftables.ChainHook{
+		"forward": *nftables.ChainHookForward,
+		"input":   *nftables.ChainHookInput,
+	} {
+		c := hubChain(t, conn, name)
+		assert.Equal(t, nftables.ChainTypeFilter, c.Type, name)
+		require.NotNil(t, c.Hooknum, name)
+		assert.Equal(t, hook, *c.Hooknum, name)
+		require.NotNil(t, c.Policy, name)
+		assert.Equal(t, nftables.ChainPolicyAccept, *c.Policy, name)
+		assertHubJumpToIngress(t, hubChainRules(conn.rules, name))
+	}
+	assert.Equal(t, 1, conn.flushes, "the whole program is one batch")
+
+	planeConn := &recordingHubConn{}
+	plane, _ := hubPlaneWithFilter(planeConn)
+	require.NoError(t, plane.InstallPeer(context.Background(), hubLease("a", "10.99.0.7/32")))
+	var names []string
+	for _, r := range planeConn.lastBatch() {
+		names = append(names, r.Chain.Name)
+	}
+	assert.Contains(t, names, "ingress")
+	assert.Contains(t, names, "forward")
+	assert.Contains(t, names, "input")
+	assertHubJumpToIngress(t, hubChainRules(planeConn.lastBatch(), "input"))
 }
 
 func TestVPNHubNFT_LeaseRuleMatchesIngressFamilySourceAndDestination(t *testing.T) {
@@ -346,7 +423,7 @@ func TestHubNetworkPlane_RemovePeerAndReconcileWithdrawTheRules(t *testing.T) {
 	require.NoError(t, plane.ReconcilePeers(ctx, []vpn.LeaseID{}))
 	last := conn.lastBatch()
 	assert.Empty(t, hubAccepts(last))
-	require.Len(t, last, 2, "only the reply accept and the closing drop are left")
+	require.Len(t, last, 4, "only the reply accept, the closing drop and the two hook jumps are left")
 	assertVerdict(t, last[1].Exprs[len(last[1].Exprs)-1], expr.VerdictDrop)
 
 	require.NoError(t, plane.Stop(ctx))
@@ -370,7 +447,7 @@ func TestVPNHubZone_ProductionFilterProgramsAnEmptyChainAtInstall(t *testing.T) 
 	require.NoError(t, err)
 	require.NotNil(t, e.forward)
 	last := conn.lastBatch()
-	require.Len(t, last, 2)
+	require.Len(t, last, 4, "reply accept, closing drop and the forward and input jumps")
 	_, ok := last[0].Exprs[2].(*expr.Ct)
 	assert.True(t, ok, "the chain opens with the reply accept")
 	assertVerdict(t, last[1].Exprs[len(last[1].Exprs)-1], expr.VerdictDrop)
