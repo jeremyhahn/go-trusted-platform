@@ -5,7 +5,7 @@
  *
  * Displays all groups in a searchable table with actions.
  * Uses the trusted-platform-sdk for API interactions.
- * Add Group and the row Delete are gated on the server's capabilities (#2033, #2053).
+ * Add Group, the row Delete and Delete selected are gated on the server's capabilities (#2033, #2053).
  */
 
 import React, { useMemo, useCallback } from 'react';
@@ -123,6 +123,7 @@ export default function GroupsPage() {
   }, [deleteGroupMutation, deleteCap.enabled]);
 
   const handleBulkDelete = useCallback(async (groupsToDelete: DisplayGroup[]) => {
+    if (!deleteCap.enabled) return;
     if (!tenantId) {
       toast({
         title: 'Error',
@@ -155,7 +156,7 @@ export default function GroupsPage() {
         });
       }
     }
-  }, [tenantId, iam, toast, refetchGroups]);
+  }, [deleteCap.enabled, tenantId, iam, toast, refetchGroups]);
 
   const columns: ColumnDef<DisplayGroup>[] = useMemo(() => [
     createSelectColumn<DisplayGroup>(),
@@ -339,6 +340,8 @@ export default function GroupsPage() {
                 label: 'Delete selected',
                 onClick: handleBulkDelete,
                 variant: 'destructive',
+                disabled: !deleteCap.enabled,
+                title: deleteCap.enabled ? undefined : deleteCap.reason,
               },
             ]}
           />
