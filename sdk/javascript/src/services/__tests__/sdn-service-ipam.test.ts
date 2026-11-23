@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SDNService } from '../sdn-service.js';
 import type { ApiClient } from '../../client/api-client.js';
 import type {
+  ListSDNIPAMAllocationsResponse,
   ListSDNIPAMPoolsResponse,
   SDNIPAMPool,
   SDNIPAMPoolRequest,
@@ -121,6 +122,30 @@ describe('SDNService IPAM pools', () => {
     expect(result.data).toEqual(data);
   });
 
+  it('lists the allocations of one pool with GET /sdn/gateway/ipam/allocations?pool_id=', async () => {
+    const data: ListSDNIPAMAllocationsResponse = {
+      allocations: [{ ip: '192.0.2.10', pool_id: 'pool-1', status: 'allocated' }],
+      count: 1,
+    };
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data });
+
+    const result = await service.listIPAMAllocations({ poolId: 'pool-1' });
+
+    expect(mockClient.get).toHaveBeenCalledTimes(1);
+    const url = new URL(vi.mocked(mockClient.get).mock.calls[0][0] as string, 'https://api.example.com');
+    expect(url.pathname).toBe('/v1/sdn/gateway/ipam/allocations');
+    expect(url.searchParams.get('pool_id')).toBe('pool-1');
+    expect(result.data).toEqual(data);
+  });
+
+  it('lists every allocation when no pool is given', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: { allocations: [], count: 0 } });
+
+    await service.listIPAMAllocations();
+
+    expect(mockClient.get).toHaveBeenCalledWith('/v1/sdn/gateway/ipam/allocations');
+  });
+
   describe('errors', () => {
     type Verb = 'get' | 'post' | 'put' | 'delete';
     const cases: Array<[string, Verb, (s: SDNService) => Promise<unknown>]> = [
@@ -129,6 +154,7 @@ describe('SDNService IPAM pools', () => {
       ['getIPAMPool', 'get', (s) => s.getIPAMPool('pool-a')],
       ['updateIPAMPool', 'put', (s) => s.updateIPAMPool('pool-a', { name: 'p' })],
       ['deleteIPAMPool', 'delete', (s) => s.deleteIPAMPool('pool-a')],
+      ['listIPAMAllocations', 'get', (s) => s.listIPAMAllocations({ poolId: 'pool-a' })],
     ];
 
     it.each(cases)('%s propagates a transport rejection', async (_name, verb, call) => {
