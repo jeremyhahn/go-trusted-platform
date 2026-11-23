@@ -43,4 +43,31 @@ for (const route of ['/ca', '/ca/sign', '/ca/verify']) {
   assert.ok(caSpec.includes(`goto('${route}')`), `ca-operations.spec.ts visits ${route}`);
 }
 
+// The invitation lookup pages run on the real server only (#2056): the mocked specs are gone.
+for (const name of ['invitation-accept.spec.ts', 'invitation-accept-flow.spec.ts']) {
+  assert.ok(
+    !fs.existsSync(path.join(import.meta.dirname, '..', name)),
+    `web/e2e/${name} (the mocked invitation spec) does not exist`,
+  );
+}
+const invitationSpecs: Record<string, string[]> = {
+  'invitation-accept.spec.ts': ['goto(`/tenant/invitations/', 'goto(`/invite/'],
+  'invitation-accept-flow.spec.ts': ["goto('/admin/invitations')", 'goto(`/invite/?token='],
+};
+for (const [name, gotos] of Object.entries(invitationSpecs)) {
+  const specPath = path.join(import.meta.dirname, name);
+  assert.ok(fs.existsSync(specPath), `real-server/${name} exists`);
+  const body = fs.readFileSync(specPath, 'utf8');
+  assert.ok(body.includes("from './fixtures'"), `${name} imports from './fixtures'`);
+  assert.ok(!body.includes('api-mock'), `${name} does not use api-mock`);
+  assert.ok(!body.includes('page.route('), `${name} does not route requests`);
+  for (const goto of gotos) {
+    assert.ok(body.includes(goto), `${name} calls ${goto}`);
+  }
+}
+const apiMock = fs.readFileSync(path.join(import.meta.dirname, '..', 'fixtures', 'api-mock.ts'), 'utf8');
+for (const helper of ['mockInvitationLookupApi', 'mockInvitationFlowApi']) {
+  assert.ok(!apiMock.includes(helper), `fixtures/api-mock.ts no longer defines ${helper}`);
+}
+
 console.log('specs.check: ok');
