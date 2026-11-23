@@ -393,6 +393,17 @@ func (e ErrBootRefused) Error() string {
 
 func (e ErrBootRefused) Unwrap() error { return e.Cause }
 
+// ErrDeviceNotAdmissible reports an activation check on a device whose state
+// (revoked or suspended) keeps it off every network, so no VLAN is reported.
+type ErrDeviceNotAdmissible struct {
+	Serial string
+	State  string
+}
+
+func (e ErrDeviceNotAdmissible) Error() string {
+	return "device cannot be admitted: serial=" + e.Serial + " state=" + e.State
+}
+
 // ErrBootProfileUnbound reports an attested node with no profile to deliver.
 type ErrBootProfileUnbound struct{ Serial string }
 
