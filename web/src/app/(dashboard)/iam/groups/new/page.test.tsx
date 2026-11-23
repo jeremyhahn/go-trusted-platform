@@ -29,6 +29,14 @@ vi.mock("@/hooks", () => ({
   }),
 }));
 
+const caps = vi.hoisted(() => ({ capability: vi.fn() }));
+
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: caps.capability }),
+}));
+
+const CREATE_GROUP = "POST /api/v1/iam/groups";
+
 import NewGroupPage from "./page";
 
 const submit = () => screen.getByRole("button", { name: /Create Group/ });
@@ -42,6 +50,7 @@ beforeEach(() => {
   auth.tenantId = "t1";
   auth.isLoading = false;
   mutationState.isLoading = false;
+  caps.capability.mockImplementation(() => ({ enabled: true }));
 });
 afterEach(() => cleanup());
 
@@ -143,6 +152,23 @@ describe("NewGroupPage", () => {
         expect.objectContaining({ description: "42" }),
       ),
     );
+  });
+
+  it("withholds Create Group when the server does not offer POST /api/v1/iam/groups", async () => {
+    caps.capability.mockImplementation((op: string) =>
+      op === CREATE_GROUP
+        ? { enabled: false, reason: "not-configured: iam" }
+        : { enabled: true },
+    );
+    render(<NewGroupPage />);
+    setField(/^Name/, "eng");
+    const button = submit();
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(button.getAttribute("data-capability-op")).toBe(CREATE_GROUP);
+    expect(button.getAttribute("data-capability-enabled")).toBe("false");
+    fireEvent.click(button);
+    await Promise.resolve();
+    expect(createGroup).not.toHaveBeenCalled();
   });
 
   it("Cancel navigates back to the group list without creating", () => {
