@@ -8,7 +8,7 @@ type MutationOpts = {
 };
 type ApiOpts = { onError?: (err: Error) => void };
 type Cell = (ctx: { row: { original: unknown } }) => React.ReactNode;
-type Action = { label: string; onClick: () => void };
+type Action = { label: string; onClick: () => void; disabled?: boolean; title?: string };
 type Bulk = { label: string; onClick: (rows: unknown[]) => void };
 
 const push = vi.fn();
@@ -45,6 +45,11 @@ vi.mock("@/hooks", () => ({
     },
   }),
 }));
+// #2033 item 5: Gated and the row Delete read the server's capabilities through this hook.
+const caps = vi.hoisted(() => ({ capability: vi.fn() }));
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: caps.capability }),
+}));
 vi.mock("@/components/ui/data-table", () => ({
   createSelectColumn: () => ({ id: "select" }),
   DataTable: (props: {
@@ -78,7 +83,7 @@ vi.mock("@/components/ui/data-table-row-actions", () => ({
   DataTableRowActions: ({ actions }: { actions: Action[] }) => (
     <div>
       {actions.map((a) => (
-        <button key={a.label} onClick={a.onClick}>
+        <button key={a.label} onClick={a.onClick} disabled={a.disabled} title={a.title}>
           {a.label}
         </button>
       ))}
@@ -110,6 +115,8 @@ beforeEach(() => {
   confirmSpy.mockReset();
   confirmSpy.mockReturnValue(true);
   vi.stubGlobal("confirm", confirmSpy);
+  caps.capability.mockReset();
+  caps.capability.mockImplementation(() => ({ enabled: true }));
 });
 afterEach(() => {
   cleanup();
@@ -272,5 +279,50 @@ describe("GroupsPage", () => {
     render(<GroupsPage />);
     fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
     expect(deleteGroup).not.toHaveBeenCalled();
+  });
+});
+
+describe("GroupsPage capability gate", () => {
+  it("withholds Add Group with the server's reason when POST /api/v1/iam/groups is not offered", () => {
+    caps.capability.mockImplementation((op: string) =>
+      op === "POST /api/v1/iam/groups" ? { enabled: false, reason: "not-configured: iam" } : { enabled: true },
+    );
+    render(<GroupsPage />);
+    const add = screen.getByRole("button", { name: /Add Group/ });
+    expect((add as HTMLButtonElement).disabled).toBe(true);
+    expect(add.getAttribute("title")).toBe("not-configured: iam");
+    expect(add.getAttribute("data-capability-op")).toBe("POST /api/v1/iam/groups");
+    expect(add.getAttribute("data-capability-enabled")).toBe("false");
+    fireEvent.click(add);
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("withholds the row Delete with the server's reason when DELETE /api/v1/iam/groups/{id} is not offered", () => {
+    caps.capability.mockImplementation((op: string) =>
+      op === "DELETE /api/v1/iam/groups/{id}" ? { enabled: false, reason: "unimplemented" } : { enabled: true },
+    );
+    render(<GroupsPage />);
+    const r = within(rows()[0]);
+    const del = r.getByRole("button", { name: "Delete" });
+    expect((del as HTMLButtonElement).disabled).toBe(true);
+    expect(del.getAttribute("title")).toBe("unimplemented");
+    fireEvent.click(del);
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(deleteGroup).not.toHaveBeenCalled();
+    expect((r.getByRole("button", { name: "View" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((r.getByRole("button", { name: "Edit" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("asks the gate for the group create and delete ops and leaves Add Group and Delete enabled when the server offers them", () => {
+    render(<GroupsPage />);
+    for (const op of ["POST /api/v1/iam/groups", "DELETE /api/v1/iam/groups/{id}"]) {
+      expect(caps.capability).toHaveBeenCalledWith(op);
+    }
+    const add = screen.getByRole("button", { name: /Add Group/ });
+    expect(add.getAttribute("data-capability-enabled")).toBe("true");
+    expect((add as HTMLButtonElement).disabled).toBe(false);
+    const del = within(rows()[0]).getByRole("button", { name: "Delete" });
+    expect((del as HTMLButtonElement).disabled).toBe(false);
+    expect(del.hasAttribute("title")).toBe(false);
   });
 });
