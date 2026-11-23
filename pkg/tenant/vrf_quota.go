@@ -30,24 +30,30 @@ type VRFQuota struct {
 }
 
 // HasCapacity checks if the quota has capacity for the requested resources.
-// A negative count is never valid, so it reports false.
+// Each request is compared against the remaining capacity (AvailableVRFs,
+// AvailableNetworks, AvailableServices), never summed onto the usage, so no
+// request size can overflow the check. A negative count is never valid, so it
+// reports false.
 func (q *VRFQuota) HasCapacity(vrfs, networks, services int64) bool {
 	if vrfs < 0 || networks < 0 || services < 0 {
 		return false
 	}
-	if vrfs > 0 && q.UsedVRFs+vrfs > q.MaxVRFs {
+	if vrfs > 0 && vrfs > q.AvailableVRFs() {
 		return false
 	}
-	if networks > 0 && q.UsedNetworks+networks > q.MaxNetworks {
+	if networks > 0 && networks > q.AvailableNetworks() {
 		return false
 	}
-	if services > 0 && q.UsedServices+services > q.MaxServices {
+	if services > 0 && services > q.AvailableServices() {
 		return false
 	}
 	return true
 }
 
 // Reserve reserves the specified resources from the quota.
+// Each request is compared against the remaining capacity, never summed onto
+// the usage, so no request size can overflow the check; ErrQuotaExceeded
+// reports that remaining capacity (never negative) as Available.
 // It checks every resource before changing any counter, so a refusal
 // returns ErrQuotaExceeded and leaves the quota unchanged. A negative count
 // returns ErrInvalidRequest before any counter changes.
@@ -57,28 +63,28 @@ func (q *VRFQuota) Reserve(tenantID string, vrfs, networks, services int64) erro
 			"tenant %s: negative VRF quota reservation (vrfs=%d networks=%d services=%d)",
 			tenantID, vrfs, networks, services)}
 	}
-	if vrfs > 0 && q.UsedVRFs+vrfs > q.MaxVRFs {
+	if vrfs > 0 && vrfs > q.AvailableVRFs() {
 		return ErrQuotaExceeded{
 			TenantID:  tenantID,
 			Resource:  "VRFs",
 			Requested: vrfs,
-			Available: q.MaxVRFs - q.UsedVRFs,
+			Available: q.AvailableVRFs(),
 		}
 	}
-	if networks > 0 && q.UsedNetworks+networks > q.MaxNetworks {
+	if networks > 0 && networks > q.AvailableNetworks() {
 		return ErrQuotaExceeded{
 			TenantID:  tenantID,
 			Resource:  "networks",
 			Requested: networks,
-			Available: q.MaxNetworks - q.UsedNetworks,
+			Available: q.AvailableNetworks(),
 		}
 	}
-	if services > 0 && q.UsedServices+services > q.MaxServices {
+	if services > 0 && services > q.AvailableServices() {
 		return ErrQuotaExceeded{
 			TenantID:  tenantID,
 			Resource:  "services",
 			Requested: services,
-			Available: q.MaxServices - q.UsedServices,
+			Available: q.AvailableServices(),
 		}
 	}
 
