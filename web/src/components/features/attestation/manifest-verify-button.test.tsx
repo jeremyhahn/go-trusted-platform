@@ -117,6 +117,23 @@ describe('ManifestVerifyButton', () => {
     expect(screen.getByTestId('manifest-verify-check-containerAttestationsValid').textContent).not.toContain('invalid');
   });
 
+  it('sends the public key base64-encoded', async () => {
+    // public_key_pem is a proto bytes field: protojson decodes it from base64.
+    const PEM = '-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\n-----END PUBLIC KEY-----';
+    const sent = stubControlPlane(routes());
+    render(withControlPlane(<ManifestVerifyButton manifestId="m-1" manifest={MANIFEST} />));
+
+    fireEvent.click(await enabledButton());
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Public key (PEM)'), { target: { value: PEM } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Verify' }));
+    await screen.findByTestId('manifest-verify-result');
+
+    const calls = manifestCalls(sent);
+    expect(calls).toHaveLength(1);
+    expect((calls[0].body as { publicKeyPem?: string }).publicKeyPem).toBe(btoa(PEM));
+  });
+
   it('uses the manifest it was given without fetching', async () => {
     const sent = stubControlPlane(routes());
     render(withControlPlane(<ManifestVerifyButton manifestId="m-1" manifest={MANIFEST} />));
