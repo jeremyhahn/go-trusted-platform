@@ -14,13 +14,16 @@ import { unwrapPayload } from './fixtures/wire';
  * refusal, 1 + READ_RETRIES on a retryable status, and a refusal assertion
  * waits out the retry backoff, since the card shows a retried refusal only
  * after the last retry. The perf test clicks the datapath and conntrack
- * reads. Writes are not retried and are each sent once. The VIP write
- * test sends AddVIP once from the form on a TEST-NET VIP (192.0.2.200, a port
- * no other run picks); the row controls (Details = GetVIP, Save =
- * SetVIPBackends, Remove + confirm = RemoveVIP) run only when the server
- * accepted the add, and the test removes that VIP again through the SDK in
- * `finally`. A node without a gateway refuses the add with its 503 envelope,
- * and the spec then checks the card shows that refusal and no row.
+ * reads. Writes are not retried and are each sent once.
+ *
+ * The harness serves an in-memory gateway datapath (bin/e2e-datapath, from
+ * test/e2e/datapath) on the run's sdn.gateway.datapath-socket, so platformd
+ * has a load-balancer backend. The VIP write test therefore requires AddVIP,
+ * sent once from the form on a TEST-NET VIP (192.0.2.200, a port no other
+ * run picks), to answer 201, and requires each row control to succeed on
+ * that VIP: Details = GetVIP, Save = SetVIPBackends (read back by Details),
+ * Remove + confirm = RemoveVIP. The test removes the VIP again through the
+ * SDK in `finally` if a step failed before RemoveVIP.
  */
 
 const GATEWAY = '/api/v1/gateway';
@@ -249,12 +252,9 @@ test.describe('Gateway VIPs, LB/NAT64 status and perf counters (real server)', (
     const caps = await capabilitiesOf(capsRes);
     await expect(adminPage.getByTestId('vips-card')).toBeVisible();
     await expectGated(adminPage, 'vip-add', ADD_OP, caps);
-
-    if (!caps.get(ADD_OP)?.enabled) {
-      await adminPage.waitForLoadState('networkidle');
-      expect(lbWrites().map((r) => `${r.method()} ${r.url()}`)).toEqual([]);
-      return;
-    }
+    // The harness datapath backs the load balancer, so the add is offered.
+    expect(caps.get(ADD_OP)?.enabled, `${ADD_OP} capability`).toBe(true);
+    expect(lbWrites()).toHaveLength(0);
 
     // A TEST-NET VIP on a port no other run is likely to pick.
     const address = '192.0.2.200';
@@ -281,31 +281,22 @@ test.describe('Gateway VIPs, LB/NAT64 status and perf counters (real server)', (
     expect(sent.vip?.address).toBe(address);
     expect(sent.vip?.port).toBe(port);
 
-    if (!addRes.ok()) {
-      const message = await refusal(addRes);
-      await expect(error).toBeVisible();
-      await expect(error).toContainText(message);
-      await expect(row).toHaveCount(0);
-      return;
-    }
+    // The in-memory datapath accepts the add: the row controls run on it.
+    expect(addRes.status()).toBe(201);
 
     try {
       await expect(row).toBeVisible();
+      await expect(error).toHaveCount(0);
 
       // Details reads the VIP through GetVIP.
+      const detail = adminPage.getByTestId(`vip-detail-${key}`);
       const [getRes] = await Promise.all([
         answerOf(adminPage, vipPath),
         adminPage.getByTestId(`vip-details-${key}`).click(),
       ]);
-      expect([401, 403]).not.toContain(getRes.status());
-      if (getRes.ok()) {
-        await expect(adminPage.getByTestId(`vip-detail-${key}`)).toBeVisible();
-      } else {
-        const message = await refusal(getRes);
-        await expect(adminPage.getByTestId(`vip-detail-error-${key}`)).toContainText(message, {
-          timeout: RETRY_WAIT_MS,
-        });
-      }
+      expect(getRes.status()).toBe(200);
+      await expect(detail).toBeVisible();
+      await expect(detail).toContainText('192.0.2.201');
 
       // Save replaces the backends through SetVIPBackends.
       await adminPage.getByTestId(`vip-edit-${key}`).click();
@@ -316,13 +307,15 @@ test.describe('Gateway VIPs, LB/NAT64 status and perf counters (real server)', (
         ),
         adminPage.getByTestId(`vip-save-${key}`).click(),
       ]);
-      expect([401, 403]).not.toContain(putRes.status());
+      expect(putRes.ok(), `SetVIPBackends answered ${putRes.status()}`).toBe(true);
       const puts = requests.filter((r) => r.method() === 'PUT' && new URL(r.url()).pathname === `${vipPath}/backends`);
       expect(puts).toHaveLength(1);
       expect(puts[0].postData() ?? '').toContain('192.0.2.202');
-      if (!putRes.ok()) {
-        await expect(error).toContainText(await refusal(putRes));
-      }
+      await expect(error).toHaveCount(0);
+
+      // The datapath holds the new backend: GetVIP reads it back.
+      const after = await sdk.gateway.getVIP('tcp', address, port);
+      expect(JSON.stringify(after.data ?? {})).toContain('192.0.2.202');
 
       // Remove asks first; only the confirm sends RemoveVIP.
       const deletes = () => requests.filter((r) => r.method() === 'DELETE' && new URL(r.url()).pathname === vipPath);
@@ -332,13 +325,10 @@ test.describe('Gateway VIPs, LB/NAT64 status and perf counters (real server)', (
         adminPage.waitForResponse((r) => r.request().method() === 'DELETE' && new URL(r.url()).pathname === vipPath),
         adminPage.getByTestId('vip-remove-confirm').click(),
       ]);
-      expect([401, 403]).not.toContain(delRes.status());
+      expect(delRes.ok(), `RemoveVIP answered ${delRes.status()}`).toBe(true);
       expect(deletes()).toHaveLength(1);
-      if (delRes.ok()) {
-        await expect(row).toHaveCount(0);
-      } else {
-        await expect(error).toContainText(await refusal(delRes));
-      }
+      await expect(row).toHaveCount(0);
+      await expect(error).toHaveCount(0);
     } finally {
       const listed = await sdk.gateway.listVIPs();
       const still = (listed.data?.vips ?? []).some(

@@ -525,6 +525,20 @@ proxy:
         mode: public
 
 # =============================================================================
+# GATEWAY DATAPATH: an in-memory datapath served by the harness
+# =============================================================================
+# global-setup starts bin/e2e-datapath (test/e2e/datapath) on the run
+# directory's socket and fills __E2E_DATAPATH_SOCKET__ in. platformd reaches
+# its load balancer, NAT64 and perf verbs there, so the VIP row's writes have a
+# backend, as tpm.simulator and the in-memory quicbaas stand in for theirs.
+# The SDN controller itself stays off.
+
+sdn:
+  enabled: false
+  gateway:
+    datapath-socket: __E2E_DATAPATH_SOCKET__
+
+# =============================================================================
 # Default-config sections NOT enabled here (no simulator path)
 # =============================================================================
 # - acme.client: the default daemon enrols its own account against the
