@@ -66,7 +66,7 @@ func TestCheckTenantSubnet_Refuses(t *testing.T) {
 		{"service VIPs", netip.MustParsePrefix("10.4.136.0/24"), "service-vips 10.4.136.0/21"},
 		{"whole environment", netip.MustParsePrefix("10.4.0.0/16"), "reserved"},
 		{"ipv4 spans loopback", netip.MustParsePrefix("126.0.0.0/7"), "not a unicast"},
-		{"ipv4 spans multicast and class E", netip.MustParsePrefix("192.0.0.0/2"), "not a unicast"},
+		{"ipv4 spans multicast and class E", netip.MustParsePrefix("224.0.0.0/3"), "not a unicast"},
 		{"ipv4 this-network", netip.MustParsePrefix("0.0.0.0/8"), "not a unicast"},
 		{"ipv6 spans link-local and multicast", netip.MustParsePrefix("fe00::/7"), "not a unicast"},
 		{"ipv6 multicast", netip.MustParsePrefix("ff00::/8"), "not a unicast"},
