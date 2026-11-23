@@ -529,9 +529,9 @@ describe('IAMService', () => {
       await service.verifyToken({ tenantId: 't 1/x', token: 'tok' });
 
       expect(client.post).toHaveBeenCalledTimes(1);
-      const [url, body] = vi.mocked(client.post).mock.calls[0];
-      expect(url.endsWith('tenant_id=t%201%2Fx')).toBe(true);
-      expect(body).toEqual({ token: 'tok' });
+      expect(client.post).toHaveBeenCalledWith(expect.stringMatching(/tenant_id=t%201%2Fx$/), {
+        token: 'tok',
+      });
     });
 
     it('maps subject, tenant_id and expires_at to userId, tenantId and expiresAt and keeps reason and roles', async () => {

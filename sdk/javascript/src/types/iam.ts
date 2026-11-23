@@ -457,6 +457,11 @@ export interface RevokeIAMTokenRequest {
  * Verify token request
  */
 export interface VerifyIAMTokenRequest {
+  /**
+   * The caller's tenant, sent as the tenant_id query the daemon's
+   * own-tenant guard checks on the flat IAM routes
+   */
+  tenantId: string;
   /** Token to verify */
   token: string;
 }

@@ -387,9 +387,11 @@ export class IAMService extends BaseService {
    * Verify token
    */
   async verifyToken(request: VerifyIAMTokenRequest): Promise<ApiResponse<VerifyIAMTokenResponse>> {
-    // The server serves POST /api/v1/iam/tokens/verify (flat; the tenant
-    // comes from the session) with body {"token"}.
-    const res = await this.client.post<VerifyIAMTokenResponse>(this.buildUrl('/tokens/verify'), {
+    // The server serves POST /api/v1/iam/tokens/verify (flat) with body
+    // {"token"}; the daemon's own-tenant guard reads the caller's tenant from
+    // the tenant_id query, so the request names it there.
+    const url = `${this.buildUrl('/tokens/verify')}?tenant_id=${encodeURIComponent(request.tenantId)}`;
+    const res = await this.client.post<VerifyIAMTokenResponse>(url, {
       token: request.token,
     });
     // The REST handler sends snake_case (pkg/webservice/v1/rest/iam/types.go
