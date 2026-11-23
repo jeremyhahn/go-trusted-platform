@@ -55,6 +55,43 @@ describe('GatewaySnapshotsCard', () => {
     expect(second.getByText('gw2')).toBeDefined();
     expect(second.getAllByText('-').length).toBeGreaterThan(0);
     expect(screen.queryByTestId('gateway-snapshot-detail')).toBeNull();
+    expect(screen.getByTestId('gateway-snapshots-table')).toBeDefined();
+  });
+
+  it('marks the empty list for the real-server spec', async () => {
+    stubControlPlane({ [LIST_PATH]: ok({ gateways: [], total: 0 }) });
+    render(withControlPlane(<GatewaySnapshotsCard />));
+
+    const empty = await screen.findByTestId('gateway-snapshots-empty');
+    expect(empty.textContent).toContain('No gateway has reported state');
+    expect(screen.queryByTestId('gateway-snapshots-table')).toBeNull();
+  });
+
+  it('shows a list refusal in the card as well as the toast', async () => {
+    stubControlPlane({ [LIST_PATH]: refused(403, 'permission denied: sdn read') });
+    render(withControlPlane(<GatewaySnapshotsCard />));
+
+    const error = await screen.findByTestId('gateway-snapshots-error');
+    expect(error.textContent).toContain('permission denied: sdn read');
+    expect(screen.queryAllByTestId('gateway-snapshot-row')).toHaveLength(0);
+  });
+
+  it('clears the refusal once a Refresh lists', async () => {
+    const routes: Record<string, Answer> = { [LIST_PATH]: refused(500, 'gateway control plane not configured') };
+    stubControlPlane(routes);
+    render(withControlPlane(<GatewaySnapshotsCard />));
+
+    await screen.findByTestId('gateway-snapshots-error');
+    routes[LIST_PATH] = baseRoutes()[LIST_PATH];
+    await waitFor(() => {
+      expect((screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement).disabled).toBe(false);
+    });
+    await clickButton('Refresh');
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('gateway-snapshot-row')).toHaveLength(2);
+    });
+    expect(screen.queryByTestId('gateway-snapshots-error')).toBeNull();
   });
 
   it('shows an empty list', async () => {
