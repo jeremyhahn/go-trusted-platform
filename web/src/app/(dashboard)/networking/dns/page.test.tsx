@@ -241,4 +241,36 @@ describe("DNSZonesPage", () => {
     expect(add.getAttribute("data-capability-enabled")).toBe("true");
     expect(add.disabled).toBe(false);
   });
+
+  it("does not list zones and says DNS is not enabled when the server does not offer GET /api/v1/dns/zones", async () => {
+    capability.mockImplementation((op: string) =>
+      op === "GET /api/v1/dns/zones" ? { enabled: false, reason: "not-configured: dns" } : { enabled: true },
+    );
+    dns.listZones.mockResolvedValue({ data: { zones } });
+    const { container } = render(<DNSZonesPage />);
+
+    const notEnabled = await screen.findByTestId("dns-not-enabled");
+    expect(notEnabled.textContent).toContain("DNS is not enabled on this server");
+    expect(notEnabled.textContent).toContain("not-configured: dns");
+    expect(dns.listZones).not.toHaveBeenCalled();
+
+    const refresh = container.querySelector('[data-capability-op="GET /api/v1/dns/zones"]') as HTMLButtonElement;
+    expect(refresh).not.toBeNull();
+    expect(refresh.disabled).toBe(true);
+    expect(refresh.title).toBe("not-configured: dns");
+    expect(refresh.getAttribute("data-capability-enabled")).toBe("false");
+  });
+
+  it("asks the gate for GET /api/v1/dns/zones and lists the zones when the server offers it", async () => {
+    dns.listZones.mockResolvedValue({ data: { zones } });
+    const { container } = render(<DNSZonesPage />);
+
+    expect(capability).toHaveBeenCalledWith("GET /api/v1/dns/zones");
+    await waitFor(() => expect(dns.listZones).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId("dns-not-enabled")).toBeNull();
+
+    const refresh = container.querySelector('[data-capability-op="GET /api/v1/dns/zones"]') as HTMLButtonElement;
+    expect(refresh).not.toBeNull();
+    expect(refresh.getAttribute("data-capability-enabled")).toBe("true");
+  });
 });
