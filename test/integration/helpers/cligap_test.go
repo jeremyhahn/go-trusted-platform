@@ -21,6 +21,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // errTestCLIFailed stands in for a CLI adapter's command failure, whose text
@@ -142,4 +144,60 @@ func TestCLIHasCommandGroupRejectsAbsentGroups(t *testing.T) {
 	assert.False(t, CLIHasCommandGroup(platformctlHelp, "dns"), "a prefix or a flag is not the group")
 	assert.False(t, CLIHasCommandGroup("", "dns"), "empty help lists nothing")
 	assert.False(t, CLIHasCommandGroup("Usage:\n  dns\n", "dns"), "only Available Commands counts")
+}
+
+// TestRequireSDKGapRefusal checks that the pinned SDK's embedded refusals, as
+// each adapter reports them in CI, count as the declared gap on every
+// adapter, and that nil or any other error does not.
+func TestRequireSDKGapRefusal(t *testing.T) {
+	cases := []struct {
+		name    string
+		adapter string
+		err     error
+		want    bool
+	}{
+		{
+			name:    "gRPC unknown method",
+			adapter: "gRPC",
+			err:     status.Error(codes.Unimplemented, "secret rotation failed: UNIMPLEMENTED: embedded: unknown method: quicbaas.Secrets/Rotate"),
+			want:    true,
+		},
+		{
+			name:    "QUIC unknown method",
+			adapter: "QUIC",
+			err:     errors.New("QUIC request PolicySet failed (status 0x04): QUIC operation SecretsSetRotationPolicy failed: rpc error: code = Unimplemented desc = rotation policy update failed: UNIMPLEMENTED: embedded: unknown method: quicbaas.Secrets/SetRotationPolicy"),
+			want:    true,
+		},
+		{
+			name:    "MCP invalid request type",
+			adapter: "MCP",
+			err:     errors.New("MCP tool \"tools/call\" call failed (code -32603): INVALID_INPUT: embedded: invalid request type for quicbaas.KMS/UpdateKeyStatus: expected *service.UpdateKeyStatusRequest, got *kms.UpdateKeyStatusRequest"),
+			want:    true,
+		},
+		{
+			name:    "REST unknown method",
+			adapter: "REST",
+			err:     errors.New("REST API error (status 500): UNIMPLEMENTED: embedded: unknown method: quicbaas.Secrets/UpdateStatus"),
+			want:    true,
+		},
+		{
+			name:    "CLI typed refusal",
+			adapter: "CLI",
+			err:     ErrCLIUpstreamGap{Operation: "kms secrets rotate", Issue: SecretsSDKGapIssue, Err: errors.New("x")},
+			want:    true,
+		},
+		{name: "gRPC nil", adapter: "gRPC", err: nil, want: false},
+		{name: "REST nil", adapter: "REST", err: nil, want: false},
+		{
+			name:    "REST other error",
+			adapter: "REST",
+			err:     errors.New("REST API error (status 400): invalid kms request"),
+			want:    false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, RequireSDKGapRefusal(t, tc.adapter, SecretsSDKGapIssue, tc.err))
+		})
+	}
 }
