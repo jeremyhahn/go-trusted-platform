@@ -35,10 +35,28 @@ import (
 // each with err when it is set.
 type countingClusterServer struct {
 	platformv1.UnimplementedClusterServiceServer
-	status int
-	nodes  int
-	leave  int
-	err    error
+	status    int
+	nodes     int
+	bootstrap int
+	join      int
+	leave     int
+	err       error
+}
+
+func (s *countingClusterServer) Bootstrap(context.Context, *platformv1.BootstrapClusterRequest) (*platformv1.BootstrapClusterResponse, error) {
+	s.bootstrap++
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &platformv1.BootstrapClusterResponse{}, nil
+}
+
+func (s *countingClusterServer) Join(context.Context, *platformv1.JoinClusterRequest) (*platformv1.JoinClusterResponse, error) {
+	s.join++
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &platformv1.JoinClusterResponse{}, nil
 }
 
 func (s *countingClusterServer) GetStatus(context.Context, *platformv1.GetClusterStatusRequest) (*platformv1.GetClusterStatusResponse, error) {
@@ -131,4 +149,93 @@ func TestClusterRoutes_AreGated(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 
 	assert.Zero(t, srv.status+srv.nodes+srv.leave)
+}
+
+// TestClusterRoutes_BootstrapAndJoinOnTheConsole pins the round-2 finding on
+// #2180: Bootstrap and Join reach their servers through the console listener.
+func TestClusterRoutes_BootstrapAndJoinOnTheConsole(t *testing.T) {
+	srv := &countingClusterServer{}
+	rec := serveCluster(t, srv, clusterAdmin(), http.MethodPost, "/api/v1/cluster/bootstrap", "{}")
+	assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, 1, srv.bootstrap)
+
+	rec = serveCluster(t, srv, clusterAdmin(), http.MethodPost, "/api/v1/cluster/join", "{}")
+	assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, 1, srv.join)
+}
+
+// clusterRoute is one console cluster route, the scope it needs and the
+// counter of the server call it reaches.
+type clusterRoute struct {
+	name, method, target, body, scope string
+	count                             func(*countingClusterServer) int
+}
+
+func clusterRoutesUnderTest() []clusterRoute {
+	return []clusterRoute{
+		{"status", http.MethodGet, "/api/v1/cluster/status", "", "cluster:read", func(s *countingClusterServer) int { return s.status }},
+		{"nodes", http.MethodGet, "/api/v1/cluster/nodes", "", "cluster:read", func(s *countingClusterServer) int { return s.nodes }},
+		{"bootstrap", http.MethodPost, "/api/v1/cluster/bootstrap", "{}", "cluster:write", func(s *countingClusterServer) int { return s.bootstrap }},
+		{"join", http.MethodPost, "/api/v1/cluster/join", "{}", "cluster:write", func(s *countingClusterServer) int { return s.join }},
+		{"leave", http.MethodPost, "/api/v1/cluster/leave", "{}", "cluster:write", func(s *countingClusterServer) int { return s.leave }},
+	}
+}
+
+// clusterGrant is the set of scopes an admin session holds in
+// TestClusterRoutes_ScopeEnforced.
+type clusterGrant map[string]bool
+
+func (g clusterGrant) list() []string {
+	out := []string{}
+	for scope, ok := range g {
+		if ok {
+			out = append(out, scope)
+		}
+	}
+	return out
+}
+
+// TestClusterRoutes_ScopeEnforced pins the round-2 finding on #2180: every
+// console cluster route checks its own scope, and a refused route reaches no
+// server.
+func TestClusterRoutes_ScopeEnforced(t *testing.T) {
+	grants := []struct {
+		name   string
+		scopes clusterGrant
+	}{
+		{"no scope", clusterGrant{}},
+		{"cluster:read only", clusterGrant{"cluster:read": true}},
+		{"cluster:write only", clusterGrant{"cluster:write": true}},
+		{"cluster:read and cluster:write", clusterGrant{"cluster:read": true, "cluster:write": true}},
+	}
+	for _, g := range grants {
+		for _, route := range clusterRoutesUnderTest() {
+			t.Run(g.name+"/"+route.name, func(t *testing.T) {
+				srv := &countingClusterServer{}
+				auth := &scopedSessionAuth{
+					sessionAuth: sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"},
+					scopes:      g.scopes.list(),
+				}
+				rec := serveCluster(t, srv, auth, route.method, route.target, route.body)
+				if g.scopes[route.scope] {
+					assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+					assert.Equal(t, 1, route.count(srv))
+				} else {
+					assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+					assert.Zero(t, route.count(srv))
+				}
+				assert.Equal(t, route.count(srv), srv.status+srv.nodes+srv.bootstrap+srv.join+srv.leave)
+			})
+		}
+	}
+
+	t.Run("admin under a token handler with no ScopeAuthorizer is refused", func(t *testing.T) {
+		for _, route := range clusterRoutesUnderTest() {
+			srv := &countingClusterServer{}
+			auth := &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"}
+			rec := serveCluster(t, srv, auth, route.method, route.target, route.body)
+			assert.Equal(t, http.StatusForbidden, rec.Code, route.name)
+			assert.Zero(t, srv.status+srv.nodes+srv.bootstrap+srv.join+srv.leave, route.name)
+		}
+	})
 }
