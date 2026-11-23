@@ -161,6 +161,91 @@ func TestProvisioning_ServerPortsFailClosedWithoutServers(t *testing.T) {
 	}
 }
 
+// TestQuarantine_DNSFailsClosedWithoutServer: the quarantine DNS allow sits
+// above the inter-zone denies, so it may only reach the configured DNS
+// server; with none configured it opens nothing.
+func TestQuarantine_DNSFailsClosedWithoutServer(t *testing.T) {
+	deny := zoneflows.FlowRule{Table: 0, Priority: 200,
+		Match: "in_port=7,dl_vlan=100,dl_type=0x0800,nw_dst=198.51.100.0/24", Actions: "drop"}
+	dns := func(dst string) map[string]string {
+		return map[string]string{"dl_type": "0x0800", "nw_proto": "17", "nw_dst": dst, "tp_dst": "53"}
+	}
+
+	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{})
+	rules := append(gs.Generate("7", zone.ZoneQuarantine, zoneflows.Untagged(100)), deny)
+	for _, r := range rules {
+		if r.Actions == "drop" {
+			continue
+		}
+		f := matchFields(r.Match)
+		if f["tp_dst"] != "53" {
+			continue
+		}
+		_, v4 := f["nw_dst"]
+		_, v6 := f["ipv6_dst"]
+		if !v4 && !v6 {
+			t.Errorf("no DNS server configured, yet UDP 53 is open to any destination by %q (priority %d)", r.Match, r.Priority)
+		}
+	}
+	if w, ok := winner(rules, dns("198.51.100.7")); !ok || w.Actions != "drop" {
+		t.Errorf("UDP 53 to a denied destination with no DNS server: winner %q (%s), want a drop", w.Match, w.Actions)
+	}
+
+	gs = zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{
+		Quarantine: zoneflows.QuarantineConfig{DNSServerIP: net.ParseIP("192.0.2.53")},
+	})
+	rules = append(gs.Generate("7", zone.ZoneQuarantine, zoneflows.Untagged(100)), deny)
+	if w, ok := winner(rules, dns("192.0.2.53")); !ok || w.Actions != "normal" {
+		t.Errorf("UDP 53 to the configured DNS server: winner %q (%s), want a normal rule", w.Match, w.Actions)
+	}
+	if w, ok := winner(rules, dns("198.51.100.7")); !ok || w.Actions != "drop" {
+		t.Errorf("UDP 53 to a denied destination with a DNS server set: winner %q (%s), want a drop", w.Match, w.Actions)
+	}
+}
+
+// TestProvisioning_TFTPReachesOnlyBootServers: the provisioning TFTP allow
+// sits above the inter-zone denies, so it may only reach the boot servers;
+// with none configured it opens nothing.
+func TestProvisioning_TFTPReachesOnlyBootServers(t *testing.T) {
+	deny := zoneflows.FlowRule{Table: 0, Priority: 200,
+		Match: "in_port=7,dl_vlan=100,dl_type=0x0800,nw_dst=198.51.100.0/24", Actions: "drop"}
+	tftp := func(dst string) map[string]string {
+		return map[string]string{"dl_type": "0x0800", "nw_proto": "17", "nw_dst": dst, "tp_dst": "69"}
+	}
+
+	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{})
+	rules := append(gs.Generate("7", zone.ZoneProvisioning, zoneflows.Untagged(100)), deny)
+	for _, r := range rules {
+		if r.Actions != "drop" && matchFields(r.Match)["tp_dst"] == "69" {
+			t.Errorf("no boot server configured, yet UDP 69 is open by %q (priority %d)", r.Match, r.Priority)
+		}
+	}
+	if w, ok := winner(rules, tftp("198.51.100.7")); !ok || w.Actions != "drop" {
+		t.Errorf("UDP 69 to a denied destination with no boot server: winner %q (%s), want a drop", w.Match, w.Actions)
+	}
+
+	gs.SetProvisioningBootServers(net.ParseIP("192.0.2.10"), net.ParseIP("2001:db8::10"))
+	rules = append(gs.Generate("7", zone.ZoneProvisioning, zoneflows.Untagged(100)), deny)
+	for _, r := range rules {
+		if r.Actions == "drop" {
+			continue
+		}
+		f := matchFields(r.Match)
+		if f["tp_dst"] != "69" {
+			continue
+		}
+		if f["nw_dst"] != "192.0.2.10" && f["ipv6_dst"] != "2001:db8::10" {
+			t.Errorf("UDP 69 allowed beyond the boot servers by %q (priority %d)", r.Match, r.Priority)
+		}
+	}
+	if w, ok := winner(rules, tftp("192.0.2.10")); !ok || w.Actions != "normal" {
+		t.Errorf("UDP 69 to the boot server: winner %q (%s), want a normal rule", w.Match, w.Actions)
+	}
+	if w, ok := winner(rules, tftp("198.51.100.7")); !ok || w.Actions != "drop" {
+		t.Errorf("UDP 69 to a denied destination with a boot server set: winner %q (%s), want a drop", w.Match, w.Actions)
+	}
+}
+
 // matchFields splits an OVS match string into its key=value fields.
 func matchFields(match string) map[string]string {
 	out := map[string]string{}
