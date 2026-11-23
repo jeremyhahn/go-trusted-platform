@@ -51,9 +51,11 @@ describe('DeviceService.attestDevice', () => {
 
     const result = await service.attestDevice('9007199254740993', { evidence: 'ZXZpZGVuY2U=' });
 
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/devices/9007199254740993/attest', {
-      evidence: 'ZXZpZGVuY2U=',
-    });
+    expect(mockClient.post).toHaveBeenCalledWith(
+      '/v1/devices/9007199254740993/attest',
+      { evidence: 'ZXZpZGVuY2U=' },
+      { retry: { enabled: false } }
+    );
     expect(result.data?.ak_certificate_verified).toBe(false);
     expect(result.data?.pcr_baseline_source).toBe('tofu');
   });
