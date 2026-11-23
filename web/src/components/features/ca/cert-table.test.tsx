@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Certificate } from '@/types/security';
 import { CertTable } from './cert-table';
@@ -18,16 +18,36 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
     children,
     className,
     onClick,
+    disabled,
+    title,
   }: {
     children: ReactNode;
     className?: string;
     onClick?: () => void;
+    disabled?: boolean;
+    title?: string;
   }) => (
-    <div role="menuitem" className={className} onClick={onClick}>
+    // A disabled Radix item does not fire its select.
+    <div
+      role="menuitem"
+      className={className}
+      title={title}
+      aria-disabled={disabled ? 'true' : undefined}
+      onClick={disabled ? undefined : onClick}
+    >
       {children}
     </div>
   ),
 }));
+
+// #2033 item 5: the table reads the server's capabilities through this hook.
+const caps = vi.hoisted(() => ({ capability: vi.fn() }));
+vi.mock('@/hooks/use-capabilities', () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: caps.capability }),
+}));
+
+const renewOp = 'POST /api/v1/ca/certificates/{serial}/renew';
+const revokeOp = 'DELETE /api/v1/ca/certificates/{serial}';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -69,6 +89,10 @@ function item(name: string): HTMLElement {
 
 describe('CertTable', () => {
   afterEach(() => cleanup());
+  beforeEach(() => {
+    caps.capability.mockReset();
+    caps.capability.mockImplementation(() => ({ enabled: true }));
+  });
 
   it('shows an empty table for no certificates', () => {
     render(<CertTable certificates={[]} />);
@@ -180,5 +204,49 @@ describe('CertTable', () => {
     render(<CertTable certificates={many} />);
     expect(screen.getByText('CN=device-00')).toBeDefined();
     expect(screen.queryByText('CN=device-10')).toBeNull();
+  });
+
+  it('withholds Renew with the server\'s reason when the renew op is not offered', () => {
+    caps.capability.mockImplementation((op: string) =>
+      op === renewOp ? { enabled: false, reason: 'unimplemented' } : { enabled: true }
+    );
+    const c = cert();
+    const onView = vi.fn();
+    const onRenew = vi.fn();
+    const onRevoke = vi.fn();
+    render(<CertTable certificates={[c]} onView={onView} onRenew={onRenew} onRevoke={onRevoke} />);
+    expect(item('Renew').getAttribute('aria-disabled')).toBe('true');
+    expect(item('Renew').getAttribute('title')).toBe('unimplemented');
+    fireEvent.click(item('Renew'));
+    expect(onRenew).not.toHaveBeenCalled();
+    expect(item('Revoke').getAttribute('aria-disabled')).toBeNull();
+    expect(item('View Details').getAttribute('aria-disabled')).toBeNull();
+  });
+
+  it('withholds Revoke with the server\'s reason when the revoke op is not offered', () => {
+    caps.capability.mockImplementation((op: string) =>
+      op === revokeOp ? { enabled: false, reason: 'not-configured: ca' } : { enabled: true }
+    );
+    const c = cert();
+    const onView = vi.fn();
+    const onRenew = vi.fn();
+    const onRevoke = vi.fn();
+    render(<CertTable certificates={[c]} onView={onView} onRenew={onRenew} onRevoke={onRevoke} />);
+    expect(item('Revoke').getAttribute('aria-disabled')).toBe('true');
+    expect(item('Revoke').getAttribute('title')).toBe('not-configured: ca');
+    fireEvent.click(item('Revoke'));
+    expect(onRevoke).not.toHaveBeenCalled();
+    expect(item('Renew').getAttribute('aria-disabled')).toBeNull();
+  });
+
+  it('asks the gate for the renew and revoke ops and leaves both enabled when offered', () => {
+    const c = cert();
+    render(<CertTable certificates={[c]} onView={vi.fn()} onRenew={vi.fn()} onRevoke={vi.fn()} />);
+    expect(caps.capability).toHaveBeenCalledWith(renewOp);
+    expect(caps.capability).toHaveBeenCalledWith(revokeOp);
+    for (const name of ['Renew', 'Revoke']) {
+      expect(item(name).getAttribute('aria-disabled')).toBeNull();
+      expect(item(name).getAttribute('title')).toBeNull();
+    }
   });
 });
