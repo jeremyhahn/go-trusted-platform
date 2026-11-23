@@ -97,4 +97,12 @@ describe('DeviceSerialCard', () => {
     expect(save().hasAttribute('disabled')).toBe(true);
     expect(puts(sent)).toHaveLength(0);
   });
+
+  it('carries the device-serial-save test id on its Save serial button', async () => {
+    stubControlPlane(routes());
+    render(withControlPlane(<DeviceSerialCard deviceId="7" serial="node-07" onSaved={vi.fn()} />));
+
+    await screen.findByLabelText('Serial');
+    expect(screen.getByTestId('device-serial-save')).toBe(save());
+  });
 });
