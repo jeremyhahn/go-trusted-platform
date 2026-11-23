@@ -1584,6 +1584,8 @@ func TestGatewayOperatorRoutes_AreRegisteredAndGated(t *testing.T) {
 		"POST /api/v1/gateway/ipam/allocations",
 		"GET /api/v1/gateway/state",
 		"DELETE /api/v1/gateway/state/{id}",
+		"GET /api/v1/gateway/state/{id}/admitted-vteps",
+		"GET /api/v1/gateway/state/{id}/admitted-vteps/{vtep}",
 	} {
 		require.True(t, registered[want],
 			"%s did not register; the gate assertion below would be vacuous", want)
@@ -1596,6 +1598,8 @@ func TestGatewayOperatorRoutes_AreRegisteredAndGated(t *testing.T) {
 		{"set gateway mode", http.MethodPost, "/api/v1/gateway/mode"},
 		{"fleet state list", http.MethodGet, "/api/v1/gateway/state"},
 		{"clear gateway record", http.MethodDelete, "/api/v1/gateway/state/g1"},
+		{"admitted vteps list", http.MethodGet, "/api/v1/gateway/state/g1/admitted-vteps"},
+		{"admitted vtep get", http.MethodGet, "/api/v1/gateway/state/g1/admitted-vteps/192.0.2.10"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, http.StatusUnauthorized, probe(router, tc.method, tc.path))
