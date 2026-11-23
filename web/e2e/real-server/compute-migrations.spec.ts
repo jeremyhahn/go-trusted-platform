@@ -54,6 +54,9 @@ test.describe('Migrations page', () => {
       'POST /api/v1/compute/migrations/prepare',
       listed,
     );
+    // The receiver needs the guest spec: the form asks for memory and vCPUs.
+    await expect(adminPage.getByLabel('Memory (MB)')).toBeVisible();
+    await expect(adminPage.getByLabel('vCPUs')).toBeVisible();
   });
 
   test('the server lists the finalize op the receiver controls gate', async ({ adminPage, sdk }) => {

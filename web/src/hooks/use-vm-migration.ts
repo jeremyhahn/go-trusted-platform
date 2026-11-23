@@ -20,11 +20,31 @@ export interface MigrationStatus {
   message?: string;
 }
 
+/**
+ * The guest spec the receiver builds the incoming VM from: the fields of the
+ * SDK's VMMigrationSpec (which its index does not export), with memory and
+ * vCPUs required. PrepareMigration refuses a request without a spec.
+ */
+export interface MigrationGuestSpec {
+  memoryMb: number;
+  cpus: number;
+  diskSize?: string;
+  bootMode?: string;
+  secureBoot?: boolean;
+  enableKvm?: boolean;
+  tpmEnabled?: boolean;
+  networkMode?: string;
+  macAddress?: string;
+  /** "x86_64" | "aarch64"; empty means x86_64. */
+  arch?: string;
+}
+
 /** Body of PrepareMigration: the destination readies a receiver for the VM. */
 export interface PrepareMigrationBody {
   vmId: string;
   vmName: string;
   mode: 'cold' | 'live';
+  spec: MigrationGuestSpec;
 }
 
 /** PrepareMigration's answer: where the source sends the VM. */
