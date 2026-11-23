@@ -46,7 +46,7 @@ func TestNewMCPPeerAuthenticator_MTLS_AdmitsTheOperatorCertificate(t *testing.T)
 	require.NoError(t, err)
 	require.NotEmpty(t, leaf.Subject.Organization)
 	assert.Equal(t, leaf.Subject.Organization[0], authCtx.TenantID, "the tenant is the certificate's")
-	assert.Equal(t, []string{mtlsOperatorScope}, authCtx.Scopes)
+	assert.Empty(t, authCtx.Scopes, "the IAM PEP decides a certificate principal's permissions")
 
 	_, err = peers.AuthenticatePeer(context.Background(), []*x509.Certificate{leafOf(t, foreign.ClientCert)})
 	assert.Error(t, err, "a certificate from another CA is not the operator")

@@ -604,8 +604,7 @@ func TestMTLSPeerAuthenticator_TrustedCertificate_IsTheOperator(t *testing.T) {
 	assert.Equal(t, "test-client", authCtx.Subject)
 	assert.Equal(t, "test-client", authCtx.Username)
 	assert.Equal(t, "Test Platform Client", authCtx.TenantID)
-	assert.True(t, authCtx.HasScope("piv:sign"), "an operator certificate holds every scope, as on gRPC and REST")
-	assert.True(t, authCtx.HasScope("ceremony:init"))
+	assert.Empty(t, authCtx.Scopes, "a certificate principal carries no scopes: the IAM PEP decides its permissions (#2016)")
 }
 
 func TestMTLSPeerAuthenticator_UntrustedCertificate_ReturnsError(t *testing.T) {
