@@ -18,6 +18,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +27,7 @@ import (
 	"testing"
 
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	restdevice "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"github.com/stretchr/testify/assert"
@@ -150,4 +152,68 @@ func TestCAHolder_WithCAHolderSeedsAnEmptyHolder(t *testing.T) {
 	info, err := svc.GetCAInfo(context.Background(), &platformv1.GetCAInfoRequest{})
 	require.NoError(t, err)
 	assert.Equal(t, "lifecycle-ca", info.GetCaInfo().GetCommonName())
+}
+
+// TestCAHolder_ServesAsAKTrustAndBootCA pins that device attestation and
+// boot delivery can hold the CAHolder itself: they then read the CA InitCA
+// brings up, and an empty holder answers ErrCANotInitialized.
+func TestCAHolder_ServesAsAKTrustAndBootCA(t *testing.T) {
+	var _ AKTrustAnchor = (*CAHolder)(nil)
+	var _ BootCABundle = (*CAHolder)(nil)
+
+	holder := NewCAHolder(nil)
+	var notInit ErrCANotInitialized
+	_, err := holder.TrustedRoot()
+	assert.True(t, errors.As(err, &notInit), "TrustedRoot of an empty holder: %v", err)
+	_, err = holder.TrustedIntermediate()
+	assert.True(t, errors.As(err, &notInit), "TrustedIntermediate of an empty holder: %v", err)
+	_, err = holder.CABundle()
+	assert.True(t, errors.As(err, &notInit), "CABundle of an empty holder: %v", err)
+
+	follows := func(ca interface {
+		AKTrustAnchor
+		BootCABundle
+	}) {
+		t.Helper()
+		wantRoot, wantRootErr := ca.TrustedRoot()
+		gotRoot, gotRootErr := holder.TrustedRoot()
+		assert.Equal(t, wantRoot, gotRoot)
+		assert.Equal(t, wantRootErr, gotRootErr)
+		wantInt, wantIntErr := ca.TrustedIntermediate()
+		gotInt, gotIntErr := holder.TrustedIntermediate()
+		assert.Equal(t, wantInt, gotInt)
+		assert.Equal(t, wantIntErr, gotIntErr)
+		wantBundle, wantBundleErr := ca.CABundle()
+		gotBundle, gotBundleErr := holder.CABundle()
+		assert.Equal(t, wantBundle, gotBundle)
+		assert.Equal(t, wantBundleErr, gotBundleErr)
+	}
+
+	first := lifecycleCA(t)
+	holder.Set(first)
+	follows(first)
+
+	second := lifecycleCA(t)
+	holder.Set(second)
+	follows(second)
+}
+
+// TestDeviceGRPCService_EmptyHolderBootAnswersUnavailable pins that a boot
+// service handed an empty CAHolder answers boot RPCs as one with no boot CA
+// does: Unavailable, including when the boot service reaches the bundle.
+func TestDeviceGRPCService_EmptyHolderBootAnswersUnavailable(t *testing.T) {
+	ctx := context.Background()
+	without := NewDeviceGRPCService(nil, nil, slog.Default())
+	_, wantErr := without.BootDelivery(ctx, &platformv1.BootDeliveryRequest{})
+	require.Equal(t, codes.Unavailable, status.Code(wantErr))
+
+	svc := NewDeviceGRPCService(nil, nil, slog.Default(), WithDeviceBootCA(NewCAHolder(nil)))
+	_, err := svc.BootDelivery(ctx, &platformv1.BootDeliveryRequest{})
+	assert.Equal(t, status.Code(wantErr), status.Code(err))
+	_, err = svc.BootCertificate(ctx, &platformv1.BootCertificateRequest{})
+	assert.Equal(t, codes.Unavailable, status.Code(err))
+
+	_, bundleErr := NewCAHolder(nil).CABundle()
+	mapped := svc.bootErrorToGRPC(restdevice.ErrBootUnavailable{Reason: "platform CA bundle unavailable", Cause: bundleErr})
+	assert.Equal(t, codes.Unavailable, status.Code(mapped))
 }
