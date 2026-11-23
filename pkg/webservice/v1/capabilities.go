@@ -72,13 +72,16 @@ func recordNewRoutes(router *mux.Router, register func()) map[*mux.Route]struct{
 // registerCapabilitiesEndpoint mounts GET /capabilities on router. The
 // listing is built per request from the route table router has by then,
 // the services the registry recorded, and the stub routes. middlewares,
-// when given, guard the endpoint.
+// when given, guard the endpoint. rootRoutes returns the routes mounted on
+// the root router that the listing also reports; nil means the table has
+// no root routes.
 func registerCapabilitiesEndpoint(
 	router *mux.Router,
 	services *ServiceRegistry,
 	stubs map[*mux.Route]struct{},
 	writer response.HttpWriter,
 	middlewares []mux.MiddlewareFunc,
+	rootRoutes func() map[*mux.Route]struct{},
 ) {
 	host := router
 	if len(middlewares) > 0 {
@@ -96,19 +99,25 @@ func registerCapabilitiesEndpoint(
 				http.StatusInternalServerError)
 			return
 		}
+		var root map[*mux.Route]struct{}
+		if rootRoutes != nil {
+			root = rootRoutes()
+		}
 		writer.Success200(w, req, buildCapabilities(router, base, services, stubs,
-			services.unavailableRoutes()))
+			services.unavailableRoutes(), root))
 	})
 }
 
 // buildCapabilities lists every service the registry recorded and every
-// method + path template in router's table.
+// method + path template in router's table, and the root routes the caller
+// recorded (the OCI Distribution surface, #2063).
 func buildCapabilities(
 	router *mux.Router,
 	base string,
 	services *ServiceRegistry,
 	stubs map[*mux.Route]struct{},
 	unavailable map[*mux.Route]string,
+	root map[*mux.Route]struct{},
 ) CapabilitiesResponse {
 	var entries []*ServiceEntry
 	if services != nil {
@@ -122,13 +131,13 @@ func buildCapabilities(
 
 	seen := map[string]bool{}
 	var routes []Capability
-	_ = router.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
+	add := func(route *mux.Route) {
 		if route.GetHandler() == nil {
-			return nil
+			return
 		}
 		template, err := route.GetPathTemplate()
 		if err != nil {
-			return nil
+			return
 		}
 		methods, err := route.GetMethods()
 		if err != nil || len(methods) == 0 {
@@ -161,8 +170,15 @@ func buildCapabilities(
 			}
 			routes = append(routes, c)
 		}
+	}
+	_ = router.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
+		add(route)
 		return nil
 	})
+	// A root route under /v2 matches no service prefix, so it gets no owner.
+	for route := range root {
+		add(route)
+	}
 	sort.Slice(routes, func(i, j int) bool { return routes[i].Op < routes[j].Op })
 	caps = append(caps, routes...)
 
