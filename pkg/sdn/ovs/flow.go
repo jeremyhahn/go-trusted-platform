@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -446,6 +447,59 @@ func convertToOpenFlow(flow *FlowMod) (*openflow.FlowMod, error) {
 }
 
 // parseMatchString parses ovs-ofctl style match string into OpenFlow match
+// CanonicalMatch returns the OXM match that matchStr encodes in a canonical
+// text form: the parsed fields sorted by (class, field), an all-ones mask
+// dropped (a /32 is the bare address), each field rendered as the hex of its
+// class, field, mask flag, value and mask. Two match strings that the switch
+// would receive as the same match share one canonical form. The empty string
+// returns "".
+func CanonicalMatch(matchStr string) (string, error) {
+	if strings.TrimSpace(matchStr) == "" {
+		return "", nil
+	}
+	match := openflow.NewMatch()
+	if err := parseMatchString(match, matchStr); err != nil {
+		return "", err
+	}
+	fields := make([]openflow.OXMField, len(match.Fields))
+	copy(fields, match.Fields)
+	for i := range fields {
+		if fields[i].HasMask && allOnes(fields[i].Mask) {
+			fields[i].HasMask = false
+			fields[i].Mask = nil
+			fields[i].Length /= 2
+		}
+	}
+	sort.SliceStable(fields, func(i, j int) bool {
+		if fields[i].Class != fields[j].Class {
+			return fields[i].Class < fields[j].Class
+		}
+		return fields[i].Field < fields[j].Field
+	})
+	parts := make([]string, 0, len(fields))
+	for _, f := range fields {
+		hasMask := 0
+		if f.HasMask {
+			hasMask = 1
+		}
+		parts = append(parts, fmt.Sprintf("%04x:%02x:%d:%x/%x", f.Class, f.Field, hasMask, f.Value, f.Mask))
+	}
+	return strings.Join(parts, ","), nil
+}
+
+// allOnes reports whether every byte of mask is 0xff.
+func allOnes(mask []byte) bool {
+	if len(mask) == 0 {
+		return false
+	}
+	for _, b := range mask {
+		if b != 0xff {
+			return false
+		}
+	}
+	return true
+}
+
 func parseMatchString(match *openflow.Match, matchStr string) error {
 	// Parse key=value pairs from match string
 	parts := strings.Split(matchStr, ",")
