@@ -12,6 +12,7 @@ import * as React from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Gated } from "@/components/features/capabilities/gated";
 import {
   Dialog,
@@ -38,14 +39,16 @@ export function parseSANs(text: string): string[] {
     .filter((s) => s !== "");
 }
 
-// thresholdValid reports whether spec is "M-of-N" with 1 <= M <= N, the only
-// threshold the backend accepts besides none at all (single-admin).
+// thresholdValid reports whether spec is "M-of-N" with 2 <= M <= N, the only
+// threshold the backend accepts. Upstream runs single-admin for a threshold
+// below 2, so a quorum of one is refused: single-admin is the explicit
+// checkbox, which sends no threshold at all.
 export function thresholdValid(spec: string): boolean {
   const match = /^(\d+)-of-(\d+)$/.exec(spec);
   if (!match) return false;
   const m = Number(match[1]);
   const n = Number(match[2]);
-  return m >= 1 && m <= n;
+  return m >= 2 && m <= n;
 }
 
 export function CeremonyInitCard({ onInitialized }: { onInitialized?: () => void }) {
@@ -53,6 +56,7 @@ export function CeremonyInitCard({ onInitialized }: { onInitialized?: () => void
   const [soPin, setSoPin] = React.useState("");
   const [userPin, setUserPin] = React.useState("");
   const [threshold, setThreshold] = React.useState("");
+  const [singleAdmin, setSingleAdmin] = React.useState(false);
   const [hostname, setHostname] = React.useState("");
   const [sans, setSans] = React.useState("");
   const [confirmOpen, setConfirmOpen] = React.useState(false);
@@ -61,7 +65,7 @@ export function CeremonyInitCard({ onInitialized }: { onInitialized?: () => void
   const [result, setResult] = React.useState<CeremonyInitResponse | null>(null);
 
   const thresholdOk = thresholdValid(threshold);
-  const disabled = soPin === "" || !thresholdOk || running;
+  const disabled = soPin === "" || (!singleAdmin && !thresholdOk) || running;
 
   const handleInit = async () => {
     setConfirmOpen(false);
@@ -70,9 +74,9 @@ export function CeremonyInitCard({ onInitialized }: { onInitialized?: () => void
     const request: CeremonyInitRequest = {
       soPin,
       userPin: userPin || undefined,
-      threshold,
       hostname: hostname || undefined,
     };
+    if (!singleAdmin) request.threshold = threshold;
     const sanList = parseSANs(sans);
     if (sanList.length > 0) request.sans = sanList;
     try {
@@ -118,17 +122,28 @@ export function CeremonyInitCard({ onInitialized }: { onInitialized?: () => void
             onChange={(e) => setUserPin(e.target.value)}
           />
         </div>
+        <div className="flex items-center space-x-2">
+          <Checkbox
+            id="ceremony-init-single-admin"
+            checked={singleAdmin}
+            onCheckedChange={(checked) => setSingleAdmin(checked === true)}
+          />
+          <Label htmlFor="ceremony-init-single-admin">Single admin (no officer shares)</Label>
+        </div>
         <div className="space-y-2">
           <Label htmlFor="ceremony-init-threshold">Threshold</Label>
           <Input
             id="ceremony-init-threshold"
             placeholder="3-of-5"
             value={threshold}
+            disabled={singleAdmin}
             onChange={(e) => setThreshold(e.target.value)}
-            aria-invalid={threshold !== "" && !thresholdOk}
+            aria-invalid={!singleAdmin && threshold !== "" && !thresholdOk}
           />
-          {threshold !== "" && !thresholdOk && (
-            <p className="text-sm text-destructive">Threshold must be M-of-N, for example 3-of-5</p>
+          {!singleAdmin && threshold !== "" && !thresholdOk && (
+            <p className="text-sm text-destructive">
+              Threshold must be M-of-N with M at least 2, for example 3-of-5
+            </p>
           )}
         </div>
         <div className="space-y-2">
