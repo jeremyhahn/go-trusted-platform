@@ -177,9 +177,15 @@ func (p hubNetworkPlane) ReconcilePeers(ctx context.Context, keep []vpn.LeaseID)
 	return errors.Join(err, p.forward().keep(ctx, keep))
 }
 
-// Stop stops the plane, then deletes the hub's forward chain table.
+// Stop stops the plane first. When that fails the hub's device and its
+// kernel peers may still be up, so the forward chain table, with its
+// closing drop and lease accepts, is kept and the error returned; the
+// table is deleted only after a clean stop (#2093).
 func (p hubNetworkPlane) Stop(ctx context.Context) error {
-	return errors.Join(p.ManagedDataPlane.Stop(ctx), p.forward().remove(ctx))
+	if err := p.ManagedDataPlane.Stop(ctx); err != nil {
+		return err
+	}
+	return p.forward().remove(ctx)
 }
 
 // vpnHubListeners is the WireGuard hub's UDP listener for the host
