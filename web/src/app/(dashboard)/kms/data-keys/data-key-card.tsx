@@ -11,6 +11,7 @@
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
+import { Gated } from '@/components/features/capabilities/gated';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -81,9 +82,11 @@ export function DataKeyCard() {
           />
         </div>
         <div>
-          <Button disabled={busy || keyId.trim() === ''} onClick={generate}>
-            Generate data key
-          </Button>
+          <Gated op="POST /api/v1/kms/data-keys">
+            <Button disabled={busy || keyId.trim() === ''} onClick={generate}>
+              Generate data key
+            </Button>
+          </Gated>
         </div>
         {result && (
           <div className="flex flex-col gap-2">

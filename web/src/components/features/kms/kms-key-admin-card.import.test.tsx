@@ -4,6 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ok, refused, stubControlPlane, withControlPlane } from '@/test/control-plane-fetch';
 import { KmsKeyAdminCard } from './kms-key-admin-card';
 
+vi.mock('@/hooks/use-capabilities', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/use-capabilities')>()),
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
+
 // #2057: the KMS key admin card imports base64 key material as a new key
 // through the API client at the served POST /v1/kms/keys/import route; a
 // refusal is toasted verbatim and keeps every field.

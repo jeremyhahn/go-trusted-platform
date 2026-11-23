@@ -5,6 +5,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ok, refused, stubControlPlane, withControlPlane, type Answer } from '@/test/control-plane-fetch';
 import KMSKeysPage from './page';
 
+vi.mock('@/hooks/use-capabilities', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/use-capabilities')>()),
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
+
 // #2057: the KMS keys page shows which backend holds the keys and what it
 // can do, read from GET /kms/backend/status.
 

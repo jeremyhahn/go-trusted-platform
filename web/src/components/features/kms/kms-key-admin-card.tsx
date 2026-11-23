@@ -11,6 +11,7 @@
 
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { Gated } from '@/components/features/capabilities/gated';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Dialog,
@@ -178,9 +179,11 @@ export function KmsKeyAdminCard(): JSX.Element {
               onChange={(e) => setVersionText(e.target.value)}
             />
           </div>
-          <Button onClick={onUpdateStatus} disabled={busy || key.trim() === ''}>
-            Update status
-          </Button>
+          <Gated op="PUT /api/v1/kms/keys/{name}/status">
+            <Button onClick={onUpdateStatus} disabled={busy || key.trim() === ''}>
+              Update status
+            </Button>
+          </Gated>
         </section>
 
         <section className="space-y-3" aria-labelledby="kms-import-heading">
@@ -227,12 +230,14 @@ export function KmsKeyAdminCard(): JSX.Element {
             <Label htmlFor="kms-import-desc">Description (optional)</Label>
             <Input id="kms-import-desc" value={description} onChange={(e) => setDescription(e.target.value)} />
           </div>
-          <Button
-            onClick={() => void runImport()}
-            disabled={busy || importName.trim() === '' || material.trim() === ''}
-          >
-            Import key
-          </Button>
+          <Gated op="POST /api/v1/kms/keys/import">
+            <Button
+              onClick={() => void runImport()}
+              disabled={busy || importName.trim() === '' || material.trim() === ''}
+            >
+              Import key
+            </Button>
+          </Gated>
           {imported && (
             <dl data-testid="kms-import-result" className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
               <dt className="text-muted-foreground">Key ID</dt>
@@ -258,9 +263,11 @@ export function KmsKeyAdminCard(): JSX.Element {
             <Button variant="outline" onClick={() => setConfirmOpen(false)}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={onConfirm}>
-              Set status
-            </Button>
+            <Gated op="PUT /api/v1/kms/keys/{name}/status">
+              <Button variant="destructive" onClick={onConfirm}>
+                Set status
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
