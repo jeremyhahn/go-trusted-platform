@@ -54,6 +54,18 @@ func (s *Service) CreateUser(ctx context.Context, profileID uint64, user User, p
 	}
 	defer mgr.Close()
 
+	// Refuse a slot that already holds an account: writing it would silently
+	// overwrite that account (on most BMCs slot 1 or 2 is the administrator).
+	existing, err := mgr.ListUsers(ctx)
+	if err != nil {
+		return err
+	}
+	for _, u := range existing {
+		if u.Slot == user.Slot {
+			return ErrSlotOccupied{Slot: user.Slot}
+		}
+	}
+
 	pwSecret := memguard.NewMemoryEnclaveFromString(password)
 	defer pwSecret.Destroy()
 

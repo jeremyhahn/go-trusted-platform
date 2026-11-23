@@ -78,7 +78,7 @@ export function BMCCertCard({ profileID }: BMCCertCardProps) {
   const onEnroll = async () => {
     const body: BMCEnrollOptions = {};
     for (const { key } of BMC_ENROLL_OPTIONS) {
-      if (opts[key]) body[key] = true;
+      if (opts[key] !== undefined) body[key] = opts[key];
     }
     setBusy(true);
     try {

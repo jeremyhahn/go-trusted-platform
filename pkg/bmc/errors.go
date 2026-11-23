@@ -213,6 +213,16 @@ func (e ErrProfileNotFound) Error() string {
 	return fmt.Sprintf("bmc: profile not found: %d", e.ProfileID)
 }
 
+// ErrSlotOccupied indicates a user create named a BMC user slot that already
+// holds an account.
+type ErrSlotOccupied struct {
+	Slot uint8
+}
+
+func (e ErrSlotOccupied) Error() string {
+	return fmt.Sprintf("bmc: user slot %d is occupied", e.Slot)
+}
+
 // ErrInvalidBootDevice indicates an unrecognized boot device value.
 type ErrInvalidBootDevice struct {
 	Device string

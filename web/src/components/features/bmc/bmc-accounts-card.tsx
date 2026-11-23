@@ -63,6 +63,8 @@ export function BMCAccountsCard({ profileID }: BMCAccountsCardProps) {
   const [users, setUsers] = useState<BMCUser[]>([]);
   const [choices, setChoices] = useState<Record<number, BMCPrivilegeName>>({});
   const [busy, setBusy] = useState(false);
+  // The list must have loaded before Create is offered, so a used slot is known.
+  const [loaded, setLoaded] = useState(false);
 
   const [slot, setSlot] = useState('');
   const [username, setUsername] = useState('');
@@ -83,6 +85,7 @@ export function BMCAccountsCard({ profileID }: BMCAccountsCardProps) {
     const res = await accounts.listUsers();
     if (res.success) {
       setUsers(res.data ?? []);
+      setLoaded(true);
     } else {
       failed('BMC users unavailable', res.error?.message);
     }
@@ -110,6 +113,8 @@ export function BMCAccountsCard({ profileID }: BMCAccountsCardProps) {
     }
   };
 
+  const slotTaken = slot !== '' && users.some((u) => u.slot === Number(slot));
+
   const handleCreate = async () => {
     setBusy(true);
     try {
@@ -118,12 +123,13 @@ export function BMCAccountsCard({ profileID }: BMCAccountsCardProps) {
         toast({ title: 'User created', description: `${res.data.username} in slot ${res.data.slot}` });
         setSlot('');
         setUsername('');
-        setPassword('');
         await reload();
       } else {
         failed('Create user failed', res.error?.message);
       }
     } finally {
+      // The password never stays in the form, after a refusal either.
+      setPassword('');
       setBusy(false);
     }
   };
@@ -263,6 +269,7 @@ export function BMCAccountsCard({ profileID }: BMCAccountsCardProps) {
             value={slot}
             onChange={(e) => setSlot(e.target.value)}
           />
+          {slotTaken && <p className="text-sm text-destructive">Slot {slot} is in use</p>}
           <Input
             aria-label="Username"
             placeholder="Username"
@@ -292,7 +299,7 @@ export function BMCAccountsCard({ profileID }: BMCAccountsCardProps) {
             ))}
           </select>
           <Button
-            disabled={busy || !slot || !username.trim() || !password}
+            disabled={busy || !loaded || slotTaken || !slot || !username.trim() || !password}
             onClick={() => void handleCreate()}
           >
             Create user

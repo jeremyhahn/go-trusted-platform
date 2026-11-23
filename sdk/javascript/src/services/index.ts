@@ -36,6 +36,14 @@ export type {
   CreateBMCUserRequest,
   BMCStatusOK,
 } from './bmc-service.js';
+export { BMCCertService } from './bmc-cert-service.js';
+export type {
+  BMCEnrollOptions,
+  BMCCertMeta,
+  BMCCeremonyStep,
+  BMCEnrollResult,
+  BMCRestoreResult,
+} from './bmc-cert-service.js';
 export { GatewayService } from './gateway-service.js';
 export { IAMService } from './iam-service.js';
 export { IDevIDService } from './idevid-service.js';

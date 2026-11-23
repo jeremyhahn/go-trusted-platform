@@ -85,6 +85,7 @@ export {
   DNSService,
   NTPService,
   BMCService,
+  BMCCertService,
   GatewayService,
   IAMService,
   IDevIDService,
@@ -156,6 +157,13 @@ export type {
   CreateBMCUserRequest,
   BMCStatusOK,
 } from './services/bmc-service.js';
+export type {
+  BMCEnrollOptions,
+  BMCCertMeta,
+  BMCCeremonyStep,
+  BMCEnrollResult,
+  BMCRestoreResult,
+} from './services/bmc-cert-service.js';
 
 export type { Capability, CapabilitiesResponse } from './services/capabilities-service.js';
 
