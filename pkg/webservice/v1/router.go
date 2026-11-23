@@ -73,6 +73,8 @@ type Router struct {
 	// stubRoutes are the placeholder routes quicbaasStubRoutes adds; the
 	// capabilities listing reports them blocked on integration.
 	stubRoutes map[*mux.Route]struct{}
+	// rootRoutes are the OCI Distribution routes RegisterRootRoutes mounts on the root router; the capabilities listing reports them too (#2063).
+	rootRoutes map[*mux.Route]struct{}
 	router.WebServiceRouter
 }
 
@@ -132,8 +134,12 @@ func (v1Router *Router) RegisterRootRoutes(root *mux.Router) error {
 		Read:  func(next http.Handler) http.Handler { return gate.Wrap(next, operator) },
 		Write: func(next http.Handler) http.Handler { return gate.Wrap(next, operator) },
 	}
-	return restregistry.RegisterOCIDistRoutes(root, v1Router.logger, backend, gates,
-		restregistry.DefaultOCIDistLimits())
+	var err error
+	v1Router.rootRoutes = recordNewRoutes(root, func() {
+		err = restregistry.RegisterOCIDistRoutes(root, v1Router.logger, backend, gates,
+			restregistry.DefaultOCIDistLimits())
+	})
+	return err
 }
 
 // RegisterEdgeRoutes mounts on root the one API group a public edge
@@ -244,7 +250,8 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	// the table per request, so it sees every route registered above.
 	// Any authenticated caller may read it.
 	registerCapabilitiesEndpoint(v1Router.router, v1Router.serviceRegistry,
-		v1Router.stubRoutes, v1Router.responseWriter, v1Router.authenticatedOnly())
+		v1Router.stubRoutes, v1Router.responseWriter, v1Router.authenticatedOnly(),
+		func() map[*mux.Route]struct{} { return v1Router.rootRoutes })
 }
 
 // quicbaasStubRoutes registers placeholder GET handlers for QuicBaaS
