@@ -371,6 +371,34 @@ func TestPushImage_QueryFallbackDefaultsTagToLatest(t *testing.T) {
 	}, svc.pushMeta)
 }
 
+// A push body past the handler's cap is refused with 413 before the
+// service sees it, so a caller cannot make the handler buffer an
+// unbounded upload (#1690, Codex round 6).
+func TestPushImage_OversizedBodyIs413(t *testing.T) {
+	const limit = 1024
+	svc := &fakeRegistryService{push: &grpcapi.RegistryPushResponse{}}
+	logger := logging.DefaultLogger()
+	h := NewHandlers(logger, svc, response.NewResponseWriter(logger, nil))
+	h.SetMaxPushBytes(limit)
+
+	req := httptest.NewRequest(http.MethodPost, "/compute/images", strings.NewReader(strings.Repeat("x", limit+1)))
+	req.Header.Set("X-Trusted-Platform-Repository", "library/alpine")
+	rec := httptest.NewRecorder()
+	h.PushImage(rec, req)
+
+	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code, rec.Body.String())
+	assert.Contains(t, decodeEnvelope(t, rec).Error, (&ErrUploadTooLarge{Limit: limit}).Error())
+	assert.Nil(t, svc.pushMeta, "the service received an oversized push")
+
+	// A body at the cap still reaches the service.
+	req = httptest.NewRequest(http.MethodPost, "/compute/images", strings.NewReader(strings.Repeat("x", limit)))
+	req.Header.Set("X-Trusted-Platform-Repository", "library/alpine")
+	rec = httptest.NewRecorder()
+	h.PushImage(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Len(t, svc.pushBody, limit)
+}
+
 func TestPushImage_Errors(t *testing.T) {
 	errRead := errors.New("client hung up")
 	exists := grpcapi.ErrArtifactAlreadyExists{Repository: "busybox", Reference: "latest"}
