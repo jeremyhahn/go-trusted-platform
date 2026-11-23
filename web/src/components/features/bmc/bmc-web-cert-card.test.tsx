@@ -74,6 +74,25 @@ describe('BMCWebCertCard', () => {
     expect(await expiryText()).toBe('Expired 3 days ago');
   });
 
+  it('says a certificate expired earlier today expired', async () => {
+    // days_remaining is a whole-day count, so a certificate whose not_after
+    // passed a few hours ago still reports 0: expiry comes from not_after.
+    await renderCard(
+      ok({
+        subject: 'CN=bmc.example',
+        issuer: 'CN=Example CA',
+        serial_number: '0A1B2C',
+        not_before: '2026-01-01T00:00:00Z',
+        not_after: new Date(Date.now() - 6 * 3600 * 1000).toISOString(),
+        days_remaining: 0,
+      }),
+    );
+
+    const warning = await screen.findByTestId('bmc-cert-warning');
+    expect(warning.textContent).toContain('has expired');
+    expect(await expiryText()).toBe('Expired today');
+  });
+
   it('shows an unknown profile verbatim', async () => {
     await renderCard(refused(404, 'bmc: profile not found: 42'));
 
