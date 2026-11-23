@@ -102,6 +102,8 @@ func (r *SDNRouter) registerPortRoutes(router *mux.Router) {
 // POST   /api/v1/sdn/flows             - Add flow
 // DELETE /api/v1/sdn/flows             - Delete flow
 // GET    /api/v1/sdn/flows             - List flows (query param: bridge_id)
+// POST   /api/v1/sdn/bridges/{name}/flows/flush        - Flush a bridge's flows (body: table)
+// GET    /api/v1/sdn/bridges/{name}/flows/{flow}/stats - Read one flow's counters
 func (r *SDNRouter) registerFlowRoutes(router *mux.Router) {
 	router.HandleFunc("/flows", r.handlers.AddFlow).Methods("POST")
 	router.HandleFunc("/flows", r.handlers.DeleteFlow).Methods("DELETE")
@@ -109,6 +111,8 @@ func (r *SDNRouter) registerFlowRoutes(router *mux.Router) {
 	// Nested aliases so the SDK can use a bridge-scoped URL.
 	router.HandleFunc("/bridges/{name}/flows", r.handlers.AddFlow).Methods("POST")
 	router.HandleFunc("/bridges/{name}/flows", r.handlers.ListFlows).Methods("GET")
+	router.HandleFunc("/bridges/{name}/flows/flush", r.handlers.FlushFlows).Methods("POST")
+	router.HandleFunc("/bridges/{name}/flows/{flow}/stats", r.handlers.GetFlowStats).Methods("GET")
 }
 
 // registerPolicyRoutes registers policy management endpoints
