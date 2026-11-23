@@ -30,8 +30,6 @@ export {
   createMockTenantInfo,
   mockInvitationApi,
   mockTenantApi,
-  mockHealthApi,
-  mockAllApis,
   mockWebAuthnRegistration,
   mockWebAuthnLogin,
   mockInvitationValidation,

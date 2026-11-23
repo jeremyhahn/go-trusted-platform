@@ -109,4 +109,43 @@ for (const name of part3) {
   assert.ok(!body.includes('page.route('), `${name}.spec.ts does not route requests`);
 }
 
+// Part 2 leftovers (#2036): mocked copies with real-server ports are gone.
+for (const [mocked, port] of [
+  ['auth', 'auth'],
+  ['dashboard', 'dashboard'],
+  ['iam-groups-tenants', 'iam-groups-tenants'],
+  ['iam-policies', 'iam-policies'],
+  ['idevid', 'idevid-port'],
+]) {
+  assert.ok(
+    !fs.existsSync(path.join(import.meta.dirname, '..', `${mocked}.spec.ts`)),
+    `web/e2e/${mocked}.spec.ts (the mocked spec) does not exist`,
+  );
+  assert.ok(fs.existsSync(path.join(import.meta.dirname, `${port}.spec.ts`)), `real-server/${port}.spec.ts exists`);
+}
+for (const helper of [
+  'mockAdminTenantsApi',
+  'mockTenantLifecycleApi',
+  'mockRegistryApi',
+  'mockGatewayBgpApi',
+  'mockSwitchApi',
+  'mockPlatformDaemonApi',
+  'mockKmsOpsApi',
+  'mockSdnBridgeApi',
+  'mockTPMOpsApi',
+  'mockTPMKeyOperationsApi',
+  'mockOverlayApi',
+  'mockVTPMRuntimeApi',
+  'mockDeviceTemplateApi',
+  'mockDeviceLookupApi',
+  'mockIAMGroupsTenantsApi',
+  'mockIAMPolicyAppApi',
+  'mockIDevIDApi',
+  // No spec uses these either (#2037).
+  'mockHealthApi',
+  'mockAllApis',
+]) {
+  assert.ok(!apiMock.includes(helper), `fixtures/api-mock.ts no longer defines ${helper}`);
+}
+
 console.log('specs.check: ok');
