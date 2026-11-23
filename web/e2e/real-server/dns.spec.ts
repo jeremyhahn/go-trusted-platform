@@ -149,5 +149,10 @@ test.describe('DNS pages', () => {
       'POST /api/v1/dns/zones/{zone}/sign',
       listed,
     );
+    await expectGated(
+      adminPage.getByRole('button', { name: 'Edit Zone', exact: true }),
+      'PUT /api/v1/dns/zones/{zone}',
+      listed,
+    );
   });
 });
