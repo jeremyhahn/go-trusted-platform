@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
@@ -29,6 +30,36 @@ var iamReadOnlyPosts = []string{
 	"/policies/validate",
 	"/policies/test",
 	"/permissions/check",
+	"/tokens/verify",
+}
+
+// SetIAMTokenService wires the daemon's IAM token service into the IAM REST
+// router, so POST /iam/tokens/verify answers through the same verifier the
+// gRPC, QUIC and MCP transports use. It must be called before
+// SetIAMHandlers; without it the route answers 503.
+func (s *RESTServer) SetIAMTokenService(t *IAMTokenService) { s.iamTokens = t }
+
+// iamRESTTokenVerifier adapts the daemon's IAMTokenService to the IAM REST
+// router's TokenVerifier.
+type iamRESTTokenVerifier struct{ svc *IAMTokenService }
+
+// Verify asks the daemon's token service and maps its verdict for the router.
+func (v iamRESTTokenVerifier) Verify(ctx context.Context, token string) (*restiam.TokenVerification, error) {
+	res, err := v.svc.Verify(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	out := &restiam.TokenVerification{Valid: res.Valid, Reason: string(res.Reason)}
+	if c := res.Claims; c != nil {
+		out.Subject = c.Subject
+		out.TenantID = c.TenantID
+		out.Scopes = c.Scopes
+		out.Roles = c.Roles
+		if c.ExpiresAt > 0 {
+			out.ExpiresAt = time.Unix(c.ExpiresAt, 0)
+		}
+	}
+	return out, nil
 }
 
 // iamWriteDeletes are the DELETE routes that change a membership rather than
@@ -70,6 +101,9 @@ func (s *RESTServer) SetIAMHandlers(logger *logging.Logger, iamClient restiam.IA
 	})
 	if err != nil {
 		return ErrIAMRESTUnavailable{Reason: err.Error()}
+	}
+	if s.iamTokens != nil {
+		router.SetTokenVerifier(iamRESTTokenVerifier{svc: s.iamTokens})
 	}
 	// The IAM router's base path is relative to the /api/v1 parent.
 	router.RegisterRoutes(s.router.PathPrefix(iamRESTParentPath).Subrouter())

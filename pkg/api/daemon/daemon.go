@@ -1615,6 +1615,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			if sdkPEP := iamService.PEP(); sdkPEP != nil {
 				iamRESTPEP = restiam.NewQuicBaaSPEPAdapter(sdkPEP)
 			}
+			daemon.concreteRestServer.SetIAMTokenService(iamTokenService)
 			iamErr := daemon.concreteRestServer.SetIAMHandlers(logger, restiam.NewQuicBaaSIAMAdapter(iamService.Client()), iamRESTPEP, restGuard, config.PlatformTenantID)
 			if iamErr != nil {
 				constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: iamErr}
