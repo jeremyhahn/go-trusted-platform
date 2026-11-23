@@ -46,7 +46,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/baremetal"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc"
@@ -1857,25 +1856,12 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Warn("BMC service creation failed", "error", bmcErr)
 	} else {
 		// Register BMC gRPC service with both TCP and UDS endpoints.
-		// The bare metal orchestrator is wired when a device profile store
-		// exists, so Provision and ProvisionStatus run the workflow; without
-		// one they return Unavailable (gRPC) and 503 (REST).
+		// The bare metal orchestrator is not wired: its workflow waits for
+		// an install-completion event, and nothing in production calls
+		// baremetal.Service.CompleteInstall yet. Provision and
+		// ProvisionStatus answer Unavailable (gRPC) and 503 (REST) until an
+		// authenticated install-completion event calls CompleteInstall.
 		bmcGRPCService := NewBMCGRPCService(bmcSvc, nil, logger.Slog())
-		var baremetalSvc *baremetal.Service
-		if bmcProfileStore != nil {
-			bm, bmErr := baremetal.NewService(baremetal.ServiceParams{
-				BMC:      bmcSvc,
-				Profiles: bmcProfileStore,
-				Logger:   logger.Slog(),
-			})
-			if bmErr != nil {
-				logger.Warn("Bare metal orchestrator creation failed", "error", bmErr)
-			} else {
-				baremetalSvc = bm
-				bmcGRPCService.SetBaremetalService(bm)
-				logger.Info("Bare metal orchestrator wired into BMC gRPC service")
-			}
-		}
 
 		// Wire the BMCEnroller into the gRPC service so EnrollBMC RPCs
 		// execute the real ceremony rather than returning Unimplemented.
@@ -1905,11 +1891,6 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 				BMCService:     bmcSvc,
 				ResponseWriter: respWriter,
 				Logger:         logger,
-			}
-			// Only a non-nil orchestrator goes into the interface: a typed
-			// nil would pass the handler's nil check and panic on use.
-			if baremetalSvc != nil {
-				bmcParams.BaremetalService = newRESTBaremetalAdapter(baremetalSvc)
 			}
 			bmcHandler, bmcHandlerErr := bmcwebsvc.NewHandler(bmcParams)
 			if bmcHandlerErr == nil {

@@ -88,10 +88,13 @@ export function useBMCStatus(profileID: string) {
       getSensors: () => api.get<BMCSensorReading[]>(bmcStatusPath(profileID, "sensors")),
       getSystemInfo: () => api.get<BMCSystemInfo>(bmcStatusPath(profileID, "system-info")),
       getWebCertificate: () => api.get<BMCWebCertificate>(bmcStatusPath(profileID, "cert")),
+      // A provision reboots the host into the installer: a dropped reply
+      // must not start it twice.
       provision: (isoURL?: string) =>
         api.post<BMCProvisionResult>(
           bmcStatusPath(profileID, "provision"),
-          isoURL?.trim() ? { iso_url: isoURL.trim() } : {}
+          isoURL?.trim() ? { iso_url: isoURL.trim() } : {},
+          { retry: { enabled: false } }
         ),
       getProvisionStatus: () => api.get<BMCProvisionResult>(bmcStatusPath(profileID, "provision")),
     };
