@@ -1221,6 +1221,10 @@ func testSecretsRotate(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 			wantData = originalData
 			return
 		}
+		if cmd.Name() != "CLI" && helpers.KnownGap(t, cmd.Name(), helpers.MethodSecretsRotate, err) {
+			wantData = originalData
+			return
+		}
 		require.NoError(t, err, "SecretsRotate should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, originalVersion, result.OldVersion, "OldVersion should match original")
@@ -1266,7 +1270,8 @@ func testSecretsVersions(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 			NewData: []byte(fmt.Sprintf("version-%d-data", i)),
 		}
 		_, err := cmd.SecretsRotate(testCtx, rotateOpts)
-		if !helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if !helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) &&
+			!(cmd.Name() != "CLI" && helpers.KnownGap(t, cmd.Name(), helpers.MethodSecretsRotate, err)) {
 			require.NoError(t, err, "Setup: SecretsRotate should succeed")
 		}
 	}

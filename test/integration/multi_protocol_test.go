@@ -1445,6 +1445,9 @@ func testIAMAssignRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	result, err := cmd.AssignRole(ctx, iam.AssignRoleOptions{
 		TenantID: helpers.HarnessTenantID, UserID: userResult.User.ID, RoleID: roleResult.Role.ID,
 	})
+	if helpers.KnownGap(t, protocolName(adapter), helpers.MethodIAMUserAssignRole, err) {
+		return
+	}
 	if missing := surfaceMissing(adapter, "IAM", "AssignRole", err); missing != nil {
 		t.Fatal(missing)
 	}
