@@ -5,8 +5,10 @@ import { unwrapPayload } from './fixtures/wire';
 /**
  * The BMC page (row #2039) against the real server: every write control is
  * gated on the server's own GET /api/v1/capabilities answer, and the cards
- * show the server's refusal for a BMC profile the test daemon does not have.
- * No control is clicked: the spec reads, it never powers, boots, mounts or
+ * show the server's refusal for a BMC profile the test daemon does not have:
+ * power state, system info, sensors, web certificate, boot device, virtual
+ * media (Mount ISO stays disabled) and provision status, each read through
+ * the SDK BMCService. No control is clicked: the spec reads, it never powers, boots, mounts or
  * provisions anything.
  */
 
@@ -69,5 +71,20 @@ test.describe('BMC page', () => {
   test('the power state shows the server refusal for an unknown profile', async ({ adminPage }) => {
     await openBMCPage(adminPage);
     await expect(adminPage.getByTestId('bmc-power-state')).toContainText('Power state unavailable:');
+  });
+
+  test('every read card shows the server refusal for an unknown profile', async ({ adminPage }) => {
+    await openBMCPage(adminPage);
+
+    await expect(adminPage.getByTestId('bmc-system-card')).toContainText('System info unavailable:');
+    await expect(adminPage.getByTestId('bmc-sensors-card')).toContainText('Sensors unavailable:');
+    await expect(adminPage.getByText('Web certificate unavailable:')).toBeVisible();
+    await expect(adminPage.getByTestId('bmc-boot-current')).toContainText('unknown');
+    await expect(adminPage.getByTestId('bmc-media-status')).toContainText('Virtual media status unavailable');
+    await expect(adminPage.getByTestId('bmc-provision-status')).toContainText('No provision:');
+
+    // With the media status unknown the mount stays disabled, even with a URL.
+    await adminPage.getByLabel('ISO URL', { exact: true }).fill('https://images.example/os.iso');
+    await expect(adminPage.getByRole('button', { name: 'Mount ISO' })).toBeDisabled();
   });
 });
