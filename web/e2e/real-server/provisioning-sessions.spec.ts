@@ -59,6 +59,9 @@ test.describe('provisioning sessions against the real server', () => {
       await adminPage.goto('/provisioning/sessions');
       await expect(refresh).toBeDisabled();
       await expect(refresh).toHaveAttribute('title', caps.reason(LIST_OP));
+      await expect(adminPage.getByTestId('sessions-not-enabled')).toContainText(
+        caps.reason(LIST_OP),
+      );
       return;
     }
 
