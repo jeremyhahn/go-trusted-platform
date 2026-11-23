@@ -512,7 +512,9 @@ func (gs *GeneratorSet) quarantine(portID string, in Ingress) []FlowRule {
 		})
 	}
 
-	// DNS (to configured server, or any server in both families)
+	// DNS only to the configured server; none configured opens nothing
+	// (fail closed): an allow with no destination at prioDNS would outrank
+	// the inter-zone denies at prioMatrixDeny.
 	cfg := gs.cfg.Quarantine
 	if cfg.DNSServerIP != nil {
 		f := familyOf(cfg.DNSServerIP)
@@ -522,15 +524,6 @@ func (gs *GeneratorSet) quarantine(portID string, in Ingress) []FlowRule {
 			Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=17", f.toDst(cfg.DNSServerIP.String()), fmt.Sprintf("tp_dst=%d", portDNS))),
 			Actions:  "normal",
 		})
-	} else {
-		for _, f := range families {
-			flows = append(flows, FlowRule{
-				Table:    0,
-				Priority: prioDNS,
-				Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=17", fmt.Sprintf("tp_dst=%d", portDNS))),
-				Actions:  "normal",
-			})
-		}
 	}
 
 	// Remediation servers (auth + remediation): HTTPS only by default
@@ -625,15 +618,10 @@ func (gs *GeneratorSet) provisioning(portID string, in Ingress) []FlowRule {
 	flows = append(flows, gs.serverRules(portID, in, prioDNS, "nw_proto=17",
 		cfg.DNSServerIPs, []uint16{portDNS, portDNSAlt1, portDNSAlt2})...)
 
-	// TFTP (PXE boot), both families.
-	for _, f := range families {
-		flows = append(flows, FlowRule{
-			Table:    0,
-			Priority: prioTFTP,
-			Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=17", fmt.Sprintf("tp_dst=%d", portTFTP))),
-			Actions:  "normal",
-		})
-	}
+	// TFTP (PXE boot), only to the boot servers SetProvisioningBootServers
+	// set; none configured opens nothing, so the inter-zone denies hold on
+	// UDP 69.
+	flows = append(flows, gs.serverRules(portID, in, prioTFTP, "nw_proto=17", cfg.BootServerIPs, []uint16{portTFTP})...)
 
 	// PXE boot server ports (iPXE boot script and payloads, NBD), each only
 	// to a boot server in its own family. A destination-unrestricted allow
