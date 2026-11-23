@@ -531,60 +531,6 @@ export async function mockVMOperationsApi(
 }
 
 /**
- * Mock the health API endpoint.
- *
- * Handles:
- * - GET /api/v1/health - Health check
- *
- * @param page - Playwright page object
- * @param config - Mock configuration options
- */
-export async function mockHealthApi(
-  page: Page,
-  config: HealthApiMockConfig = {}
-): Promise<void> {
-  const status = config.status || 'healthy';
-  const version = config.version || '1.0.0';
-
-  // Match both /health and /health/ (trailing slash due to Next.js config)
-  await page.route('**/api/v1/health*', async (route: Route, request: Request) => {
-    if (request.method() === 'GET') {
-      if (config.error) {
-        await route.fulfill({
-          status: config.error.status,
-          contentType: 'application/json',
-          body: JSON.stringify({
-            message: config.error.error,
-            code: config.error.errorCode || `HTTP_${config.error.status}`,
-          }),
-        });
-        return;
-      }
-
-      const response: HealthResponse = {
-        status,
-        version,
-        timestamp: new Date().toISOString(),
-        services: {
-          database: { status: 'healthy', latency_ms: 5 },
-          cache: { status: 'healthy', latency_ms: 1 },
-          tpm: { status: 'healthy', latency_ms: 10 },
-        },
-      };
-
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify(response),
-      });
-      return;
-    }
-
-    await route.continue();
-  });
-}
-
-/**
  * BMC API mock (#1736): the `/api/v1/bmc/{profileID}/...` routes with the
  * platform envelope. Mutations change the state the next read returns, and
  * every mutating request is recorded in order. A non-numeric profile ID is
@@ -778,32 +724,6 @@ export async function mockBmcApi(
   });
 
   return { state, requests };
-}
-
-/**
- * Mock all common API endpoints with default configurations.
- *
- * @param page - Playwright page object
- * @param options - Configuration for each API mock
- */
-export async function mockAllApis(
-  page: Page,
-  options: {
-    invitation?: InvitationApiMockConfig;
-    tenant?: TenantApiMockConfig;
-    health?: HealthApiMockConfig;
-  } = {}
-): Promise<{
-  invitation: Awaited<ReturnType<typeof mockInvitationApi>>;
-  tenant: Awaited<ReturnType<typeof mockTenantApi>>;
-}> {
-  const [invitation, tenant] = await Promise.all([
-    mockInvitationApi(page, options.invitation),
-    mockTenantApi(page, options.tenant),
-    mockHealthApi(page, options.health),
-  ]);
-
-  return { invitation, tenant };
 }
 
 /**
