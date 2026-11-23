@@ -90,9 +90,16 @@ async function seedVM(sdk: PlatformClient, name: string, start?: boolean): Promi
   return res.success && res.data?.vm?.id ? res.data.vm.id : null;
 }
 
-async function seedContainer(sdk: PlatformClient, name: string): Promise<string | null> {
-  const res = await sdk.compute.createContainer({ config: { name, image: 'busybox:latest' } });
-  return res.success && res.data?.container?.id ? res.data.container.id : null;
+async function seedContainer(sdk: PlatformClient, name: string, start?: boolean): Promise<string | null> {
+  // The orchestrator creates a container that is not running; a started one
+  // runs a long-lived command so it stays running until the test stops it.
+  const config = start
+    ? { name, image: 'busybox:latest', command: ['sleep', '3600'] }
+    : { name, image: 'busybox:latest' };
+  const res = await sdk.compute.createContainer({ config });
+  const id = res.success && res.data?.container?.id ? res.data.container.id : null;
+  if (id && start) await sdk.compute.startContainer(id).catch(() => null);
+  return id;
 }
 
 const unique = (prefix: string) => `${prefix}-${Date.now().toString(36)}`;
@@ -322,12 +329,13 @@ test.describe('Compute, real server', () => {
 
     for (const op of [
       { item: /start/i, method: 'POST', success: /container started successfully/i, label: 'starts a container' },
-      { item: /stop/i, method: 'POST', success: /container stopped successfully/i, label: 'stops a container' },
+      // ContainerTable shows Stop only for a running container: this seeds one started.
+      { item: /stop/i, method: 'POST', success: /container stopped successfully/i, label: 'stops a container', start: true },
       { item: /delete/i, method: 'DELETE', success: /container deleted successfully/i, label: 'deletes a container' },
     ]) {
       test(`${op.label}, or shows the server's refusal`, async ({ adminPage, sdk }) => {
         const name = unique('e2e-op-ctr');
-        const id = await seedContainer(sdk, name);
+        const id = await seedContainer(sdk, name, op.start);
         try {
           const a = await open(adminPage, '/compute/containers', '/api/v1/compute/containers');
           if (!id) {
@@ -336,6 +344,26 @@ test.describe('Compute, real server', () => {
             return;
           }
           await expect(adminPage.getByRole('cell', { name })).toBeVisible();
+          if (op.start) {
+            const containerState = async () => {
+              const res = await sdk.compute.getContainer(id).catch(() => null);
+              return String(res?.data?.container?.state ?? '');
+            };
+            const running = await expect
+              .poll(containerState, { timeout: 30_000 })
+              .toBe('CONTAINER_STATE_RUNNING')
+              .then(() => true)
+              .catch(() => false);
+            if (!running) {
+              // The orchestrator did not run the container: the page offers no Stop.
+              await adminPage.getByRole('row', { name: new RegExp(name, 'i') }).getByRole('button').click();
+              await expect(adminPage.getByRole('menuitem', { name: op.item })).toHaveCount(0);
+              return;
+            }
+            // The list the page loaded predates the start: reload it.
+            await open(adminPage, '/compute/containers', '/api/v1/compute/containers');
+            await expect(adminPage.getByRole('cell', { name })).toBeVisible();
+          }
           const res = await rowAction(adminPage, name, op.item, op.method, id, op.success);
           if (op.method === 'DELETE' && res.status < 400) {
             const list = await sdk.compute.listContainers();

@@ -31,8 +31,9 @@ interface CertLister {
 }
 
 async function listCerts(sdk: CertLister): Promise<ListedCert[]> {
-  const res = await sdk.ca.listCertificates().catch(() => ({ success: false, data: undefined }));
-  if (!res.success) return [];
+  // A failed read fails the test: it is not an empty listing.
+  const res = await sdk.ca.listCertificates();
+  expect(res.success, 'GET /api/v1/ca/certificates').toBe(true);
   return (res.data?.certificates ?? []).map((c) => ({
     serial: c.serial,
     commonName: c.commonName,
@@ -56,8 +57,9 @@ function normSerial(serial: string): string {
 
 /** The serials the CA's CRL (GET /ca/crl) lists as revoked; empty on a failed read. */
 async function crlSerials(sdk: CertLister): Promise<Set<string>> {
-  const res = await sdk.ca.getCRL().catch(() => ({ success: false, data: undefined }));
-  if (!res.success) return new Set();
+  // A failed read fails the test: it is not an empty CRL.
+  const res = await sdk.ca.getCRL();
+  expect(res.success, 'GET /api/v1/ca/crl').toBe(true);
   return new Set((res.data?.crl?.revokedCerts ?? []).map((e) => normSerial(e.serial)));
 }
 
@@ -82,18 +84,31 @@ async function openRowMenu(page: Page, commonName: string): Promise<void> {
 }
 
 /** Issues one certificate through the page; returns its common name and the server answer. */
-async function issueThroughPage(page: Page): Promise<{ commonName: string; res: Response }> {
+/** The message of the server's error envelope, in either shape. */
+function serverMessage(body: unknown): string {
+  const b = body as { error?: string | { message?: string } } | null;
+  if (typeof b?.error === 'string') return b.error;
+  return b?.error?.message ?? '';
+}
+
+async function issueThroughPage(page: Page): Promise<{ commonName: string; res: Response; alerts: string[] }> {
   const commonName = `e2e-${Date.now()}-${Math.floor(Math.random() * 1e6)}.example.com`;
   // Revoke asks prompt('Enter revocation reason:') and returns on an empty
   // answer, so a prompt gets a reason; the alerts and confirms are accepted.
-  page.on('dialog', (d) => (d.type() === 'prompt' ? d.accept('UNSPECIFIED') : d.accept()).catch(() => undefined));
+  // Every dialog's message is recorded, so a test can assert what the
+  // console told the user.
+  const alerts: string[] = [];
+  page.on('dialog', (d) => {
+    alerts.push(d.message());
+    (d.type() === 'prompt' ? d.accept('UNSPECIFIED') : d.accept()).catch(() => undefined);
+  });
   await page.goto('/ca/certificates');
   await page.getByRole('button', { name: /issue certificate/i }).first().click();
   const dialog = page.getByRole('dialog');
   await page.locator('#subject').fill(`CN=${commonName},O=E2E`);
   const answer = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === CERTS);
   await dialog.getByRole('button', { name: /issue certificate/i }).click();
-  return { commonName, res: await answer };
+  return { commonName, res: await answer, alerts };
 }
 
 test.describe('Certificate Authority - Certificates Page, real server', () => {
@@ -162,11 +177,18 @@ test.describe('Issue Certificate, real server', () => {
   });
 
   test('submitting the form issues a certificate the server then lists', async ({ adminPage, sdk }) => {
-    const { commonName, res } = await issueThroughPage(adminPage);
+    const { commonName, res, alerts } = await issueThroughPage(adminPage);
     if (res.ok()) {
+      await expect.poll(() => alerts.includes('Certificate issued successfully')).toBe(true);
       await expect.poll(async () => (await listCerts(sdk)).some((c) => c.commonName === commonName)).toBe(true);
     } else {
-      // A refused issue adds nothing.
+      // The console shows the server's refusal, and a refused issue adds nothing.
+      const message = serverMessage(await res.json().catch(() => null));
+      if (message) {
+        await expect.poll(() => alerts.includes(`Failed to issue certificate: ${message}`)).toBe(true);
+      } else {
+        await expect.poll(() => alerts.some((a) => a.startsWith('Failed to issue certificate: '))).toBe(true);
+      }
       expect((await listCerts(sdk)).some((c) => c.commonName === commonName)).toBe(false);
     }
   });
@@ -191,7 +213,7 @@ test.describe('Revoke Certificate, real server', () => {
   });
 
   test('revoking a certificate issued here leaves it revoked on the server', async ({ adminPage, sdk }) => {
-    const { commonName, res } = await issueThroughPage(adminPage);
+    const { commonName, res, alerts } = await issueThroughPage(adminPage);
     test.skip(!res.ok(), 'the harness CA refused the issue');
     let serial = '';
     await expect
@@ -209,7 +231,19 @@ test.describe('Revoke Certificate, real server', () => {
     const confirm = adminPage.getByRole('alertdialog').or(adminPage.getByRole('dialog'));
     if (await confirm.count()) await confirm.getByRole('button', { name: /revoke|confirm/i }).last().click();
     const revoke = await answer;
-    expect((await crlSerials(sdk)).has(normSerial(serial))).toBe(revoke.ok());
+    if (revoke.ok()) {
+      await expect.poll(() => alerts.includes('Certificate revoked successfully')).toBe(true);
+      await expect.poll(async () => (await crlSerials(sdk)).has(normSerial(serial))).toBe(true);
+    } else {
+      // The console shows the server's refusal, and the CRL lacks the serial.
+      const message = serverMessage(await revoke.json().catch(() => null));
+      if (message) {
+        await expect.poll(() => alerts.includes(`Failed to revoke certificate: ${message}`)).toBe(true);
+      } else {
+        await expect.poll(() => alerts.some((a) => a.startsWith('Failed to revoke certificate: '))).toBe(true);
+      }
+      expect((await crlSerials(sdk)).has(normSerial(serial))).toBe(false);
+    }
   });
 });
 
