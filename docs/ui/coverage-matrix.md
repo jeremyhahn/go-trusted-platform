@@ -85,13 +85,13 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `CAService.UninstallCACertificates` | - | `(dashboard)/ca/page.tsx` (gated: run at daemon start, no API route) | - | - | partial |
 | `CAService.IssueCertificate` | `POST /certificates` | `(dashboard)/ca/certificates/page.tsx` | - | `ca.spec.ts`<br>`dashboard.spec.ts` | covered |
 | `CAService.SignCSR` | `POST /sign-csr` | `(dashboard)/ca/sign/page.tsx` | - | `real-server/ca-operations.spec.ts` | covered |
-| `CAService.GetCertificate` | `GET /certificates/{serial}` | `(dashboard)/ca/certificates/[id]/page.tsx` | - | `ca.spec.ts` | covered |
-| `CAService.ListCertificates` | `GET /certificates` | `(dashboard)/ca/certificates/page.tsx`<br>`(dashboard)/dashboard/page.tsx` | - | `auth.spec.ts`<br>`ca.spec.ts`<br>`dashboard.spec.ts` (+1) | covered |
+| `CAService.GetCertificate` | `GET /certificates/{serial}` | `(dashboard)/ca/certificates/[id]/page.tsx` | - | `real-server/ca-certificates.spec.ts`<br>`ca.spec.ts` | covered |
+| `CAService.ListCertificates` | `GET /certificates` | `(dashboard)/ca/certificates/page.tsx`<br>`(dashboard)/dashboard/page.tsx` | - | `real-server/ca-certificates.spec.ts`<br>`auth.spec.ts`<br>`ca.spec.ts`<br>`dashboard.spec.ts` (+1) | covered |
 | `CAService.RevokeCertificate` | `DELETE /certificates/{serial}` | `(dashboard)/ca/certificates/[id]/page.tsx`<br>`(dashboard)/ca/certificates/page.tsx` | - | `ca.spec.ts`<br>`dashboard.spec.ts` | covered |
 | `CAService.RenewCertificate` | `POST /certificates/{serial}/renew` | `(dashboard)/ca/certificates/page.tsx` | - | `ca.spec.ts`<br>`dashboard.spec.ts` | covered |
 | `CAService.VerifyCertificate` | `POST /certificates/verify` | `(dashboard)/ca/verify/page.tsx` | - | `real-server/ca-operations.spec.ts` | covered |
-| `CAService.GetCRL` | `GET /crl` | `(dashboard)/ca/crl/page.tsx` | - | `ca.spec.ts` | covered |
-| `CAService.GetCABundle` | - | `(dashboard)/ca/bundle/page.tsx` | - | `ca.spec.ts` | covered |
+| `CAService.GetCRL` | `GET /crl` | `(dashboard)/ca/crl/page.tsx` | - | `real-server/ca-certificates.spec.ts`<br>`ca.spec.ts` | covered |
+| `CAService.GetCABundle` | - | `(dashboard)/ca/bundle/page.tsx` | - | `real-server/ca-certificates.spec.ts`<br>`ca.spec.ts` | covered |
 
 ## CacheService (`cache.proto`)
 
