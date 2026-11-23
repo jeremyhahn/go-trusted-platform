@@ -5,6 +5,7 @@
  *
  * Displays and manages API tokens with generation and revocation.
  * Uses the trusted-platform-sdk for API interactions.
+ * Register Application is gated on the server's POST /api/v1/iam/tenants/{tenant}/apps capability (#2033, #2054).
  */
 
 import React, { useState, useMemo, useCallback } from 'react';
@@ -30,6 +31,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Plus, Key, Clock, AlertCircle, Loader2, Copy, Check } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
+import { Gated } from '@/components/features/capabilities/gated';
 
 /**
  * Display type for applications used as API tokens
@@ -417,10 +419,12 @@ export default function TokensPage() {
             Manage OAuth applications for programmatic API access
           </p>
         </div>
-        <Button onClick={() => setIsFormOpen(true)}>
-          <Plus className="mr-2 h-4 w-4" />
-          Register Application
-        </Button>
+        <Gated op="POST /api/v1/iam/tenants/{tenant}/apps">
+          <Button onClick={() => setIsFormOpen(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            Register Application
+          </Button>
+        </Gated>
       </div>
 
       {/* Info Alert */}
@@ -512,15 +516,17 @@ export default function TokensPage() {
             <Button variant="outline" onClick={() => setIsFormOpen(false)}>
               Cancel
             </Button>
-            <Button
-              onClick={handleCreateApp}
-              disabled={registerAppMutation.isLoading}
-            >
-              {registerAppMutation.isLoading && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
-              Register
-            </Button>
+            <Gated op="POST /api/v1/iam/tenants/{tenant}/apps">
+              <Button
+                onClick={handleCreateApp}
+                disabled={registerAppMutation.isLoading}
+              >
+                {registerAppMutation.isLoading && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                Register
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
