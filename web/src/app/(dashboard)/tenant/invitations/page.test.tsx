@@ -52,6 +52,16 @@ const listResult = { data: { invitations }, isLoading: false, error: null, refet
 const toastResult = { toast: vi.fn() };
 const authResult = { isLoading: false };
 
+// The server offers every op here: the gates have their own test.
+vi.mock("@/hooks/use-capabilities", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/use-capabilities")>()),
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: () => ({ enabled: true }),
+  }),
+}));
+
 vi.mock("@/contexts/AuthContext", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/contexts/AuthContext")>()),
   useAuth: () => authResult,

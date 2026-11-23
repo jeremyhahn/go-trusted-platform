@@ -43,8 +43,11 @@ func verifyServer(t *testing.T, svc *IAMTokenService) *RESTServer {
 	return s
 }
 
+// postVerify posts body to the flat verify route naming tenant-a, the
+// callers' tenant: a tenant-bound caller on a flat IAM route names its
+// tenant with tenant_id, as the own-tenant guard requires.
 func postVerify(s *RESTServer, token, body string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/iam/tokens/verify", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/iam/tokens/verify?tenant_id="+iamRESTTenantA, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
