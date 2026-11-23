@@ -23,6 +23,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
+	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	"sync/atomic"
 	"time"
 
@@ -1611,6 +1614,20 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// the same QuicBaaS SDK clients as the gRPC and embedded transports so
 	// all transports return identical results.
 	if daemon.concreteRestServer != nil && kmsPlatformBackend != nil {
+		// The docs/kms/api.md routes (key name in the path, /deks,
+		// /secrets) the SDK REST transport calls go first; the legacy
+		// bare-path handlers serve what that router does not (#646).
+		var dekSDK dekclient.Client
+		var secretsSDK secretsclient.Client
+		if config.App != nil {
+			if sdk := config.App.QuicBaaSSDKClient(); sdk != nil {
+				if security := sdk.Security(); security != nil {
+					dekSDK = security.DEK()
+					secretsSDK = security.Secrets()
+				}
+			}
+		}
+		daemon.concreteRestServer.SetKMSRouter(kmsPlatformBackend.kmsClient, kmsPlatformBackend.cryptoClient, dekSDK, secretsSDK, restGuard)
 		daemon.concreteRestServer.SetKMSHandlers(NewPlatformKMSRESTFacade(kmsPlatformBackend))
 	}
 

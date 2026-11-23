@@ -57,6 +57,20 @@ func (e *ErrCertIssue) Unwrap() error {
 	return e.Cause
 }
 
+// ErrCertOUUnsupported is returned by the SDK certificate issuer for a
+// request that carries a subject OU: the SDK Certificate service does not
+// carry the OU to the CA, so only the local platform CA can issue it.
+type ErrCertOUUnsupported struct {
+	// OrganizationalUnit is the subject OU the request asked for.
+	OrganizationalUnit string
+}
+
+// Error returns a human-readable description.
+func (e *ErrCertOUUnsupported) Error() string {
+	return "certificate issuer: the SDK certificate service cannot carry the subject OU \"" +
+		e.OrganizationalUnit + "\"; a local CA is required"
+}
+
 // CertIssuer is the certificate surface the daemon mints the admin client
 // certificate through, with the CA bundle that trusts it. The daemon's TLS
 // server certificate is not issued here: its key is generated in, and never
@@ -92,9 +106,12 @@ func AdminCertificateRequest() *certclient.IssueCertificateRequest {
 	return &certclient.IssueCertificateRequest{
 		CommonName:   common.AdminUsername,
 		Organization: app.SystemTenantID,
-		Usage:        "client",
-		KeyAlgorithm: "ecdsa",
-		ValidityDays: 365,
+		// The mTLS authenticator reads the tenant from the subject OU
+		// only (#2020), so the admin certificate must carry it there.
+		OrganizationalUnit: app.SystemTenantID,
+		Usage:              "client",
+		KeyAlgorithm:       "ecdsa",
+		ValidityDays:       365,
 	}
 }
 
@@ -176,7 +193,13 @@ type sdkCertIssuer struct {
 }
 
 // IssueCertificate delegates to Security().Certificate().IssueCertificate.
+// It refuses a request that carries a subject OU: the SDK Certificate
+// service drops it, and a client certificate without its tenant OU can
+// never pass mTLS authentication (#2020).
 func (i *sdkCertIssuer) IssueCertificate(ctx context.Context, req *certclient.IssueCertificateRequest) (*certclient.IssueCertificateResponse, error) {
+	if req != nil && req.OrganizationalUnit != "" {
+		return nil, &ErrCertOUUnsupported{OrganizationalUnit: req.OrganizationalUnit}
+	}
 	return i.client.Security().Certificate().IssueCertificate(ctx, req)
 }
 
@@ -230,6 +253,10 @@ func (i *localCACertIssuer) issue(ctx context.Context, req *certclient.IssueCert
 		},
 		DNSNames:    req.DNSNames,
 		IPAddresses: ips,
+	}
+	// mTLS takes the tenant from the subject OU only; never write an empty OU.
+	if req.OrganizationalUnit != "" {
+		csrTpl.Subject.OrganizationalUnit = []string{req.OrganizationalUnit}
 	}
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTpl, priv)
 	if err != nil {

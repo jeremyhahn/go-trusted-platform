@@ -84,8 +84,11 @@ func (r *RESTAdapter) Setup(ctx context.Context) error {
 	// The REST listener is mTLS: present the runner's client certificate.
 	r.httpClient = helpers.NewHTTPClient(30 * time.Second)
 
-	// Verify connectivity by checking backend status
-	_, statusCode, err := r.doRequest(ctx, http.MethodGet, "/api/v1/kms/backend/status", nil)
+	// Verify connectivity with a core KMS route the router serves. The
+	// backend/status probe answered 404 on the embedded QuicBaaS backend
+	// (an upstream "not found" mapped by the handler), which failed every
+	// REST subtest at setup although the KMS routes were mounted.
+	_, statusCode, err := r.doRequest(ctx, http.MethodGet, "/api/v1/kms/keys", nil)
 	if err != nil {
 		return ErrRESTConnectionFailed{URL: r.baseURL, Err: err}
 	}
@@ -223,12 +226,16 @@ func (r *RESTAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) 
 		return nil, err
 	}
 
+	// The daemon serves this route with the webservice KMS handler, whose
+	// 201 body is the response envelope around a GenerateKeyResponse.
 	var restResp resttypes.GenerateKeyResponse
 	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
 		return nil, err
 	}
-
-	result := r.convertToKeyGenerateResult(&restResp)
+	result, err := convertGenerateKeyResponse(&restResp)
+	if err != nil {
+		return nil, err
+	}
 	if err := applyKeyDisplay(ctx, r, opts, result); err != nil {
 		return nil, err
 	}
@@ -1424,6 +1431,8 @@ func (r *RESTAdapter) purposeToKeyUsage(purpose string) []service.KeyUsage {
 // REST wire contract, including the generate-time protection flags now
 // carried end-to-end by the QuicBaaS SDK kms client.
 func (r *RESTAdapter) convertToGenerateKeyRequest(req *service.GenerateKeyRequest) *resttypes.GenerateKeyRequest {
+	// The flat body the webservice KMS handler reads; the key size is
+	// carried by the algorithm name.
 	restReq := &resttypes.GenerateKeyRequest{
 		Name:               req.Name,
 		Description:        req.Description,
@@ -1433,28 +1442,49 @@ func (r *RESTAdapter) convertToGenerateKeyRequest(req *service.GenerateKeyReques
 		Exportable:         req.Exportable,
 		DeletionProtection: req.DeletionProtection,
 	}
-
 	if req.KeyAttributes != nil {
 		restReq.Algorithm = r.keyAttributesToAlgorithmString(req.KeyAttributes)
-		restReq.KeySpec = &resttypes.KMSKeySpec{
-			Algorithm: restReq.Algorithm,
-			KeySize:   int(r.getKeySize(req.KeyAttributes)),
-			Usage:     restReq.Usage,
-		}
 	}
-
 	return restReq
 }
 
 // convertToKeyGenerateResult converts REST response to KeyGenerateResult.
-func (r *RESTAdapter) convertToKeyGenerateResult(resp *resttypes.GenerateKeyResponse) *KeyGenerateResult {
+// convertDaemonGenerateKeyResult maps the mounted handler's generate-key
+// response (nested key handle and metadata) onto KeyGenerateResult. The wire
+// algorithm is an enum, so the result carries the requested algorithm name.
+// A response without a key ID is an error.
+// restGeneratedKeyAlgorithms is the set of algorithm names the webservice
+// KMS handler writes in a GenerateKeyResponse (kmsclient.KeyAlgorithm.String).
+var restGeneratedKeyAlgorithms = map[string]struct{}{
+	"AES-256-GCM":       {},
+	"CHACHA20-POLY1305": {},
+	"RSA-2048":          {},
+	"RSA-4096":          {},
+	"ECDSA-P256":        {},
+	"ECDSA-P384":        {},
+	"ED25519":           {},
+}
+
+// convertGenerateKeyResponse turns the webservice handler's
+// GenerateKeyResponse into a result. The algorithm is the server's; an
+// unknown or missing one is an error, never the request echo.
+func convertGenerateKeyResponse(resp *resttypes.GenerateKeyResponse) (*KeyGenerateResult, error) {
+	if resp.KeyID == "" {
+		return nil, ErrRESTMissingParameter{Parameter: "key_id in generate-key response"}
+	}
+	if resp.Version < 0 {
+		return nil, fmt.Errorf("generate-key response: negative key version %d", resp.Version)
+	}
+	if _, ok := restGeneratedKeyAlgorithms[resp.Algorithm]; !ok {
+		return nil, fmt.Errorf("generate-key response: unsupported key algorithm %q", resp.Algorithm)
+	}
 	return &KeyGenerateResult{
-		Exportable:         resp.Exportable,
-		DeletionProtection: resp.DeletionProtection,
 		KeyID:              resp.KeyID,
 		Version:            uint64(resp.Version),
 		Algorithm:          resp.Algorithm,
-	}
+		Exportable:         resp.Exportable,
+		DeletionProtection: resp.DeletionProtection,
+	}, nil
 }
 
 // convertToKeyGetResult converts REST response to KeyGetResult. The

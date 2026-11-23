@@ -118,7 +118,10 @@ type KeyInfoResponse struct {
 
 // ListKeysResponse is the response from listing keys.
 type ListKeysResponse struct {
-	Keys []KeyInfoResponse `json:"keys"`
+	Keys       []KeyInfoResponse `json:"keys"`
+	NextCursor string            `json:"next_cursor,omitempty"`
+	HasMore    bool              `json:"has_more"`
+	TotalCount int               `json:"total_count"`
 }
 
 // RotateKeyResponse is the response from key rotation.

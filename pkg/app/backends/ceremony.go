@@ -63,6 +63,24 @@ func (e *ErrCeremonyAdminBundle) Unwrap() error {
 	return e.Cause
 }
 
+// ErrCeremonyLocalCARequired is returned by Initialize when no local CA is
+// configured: the admin bundle must carry the tenant in its subject OU, and
+// the SDK certificate service cannot carry the OU, so the ceremony fails
+// closed rather than issue an OU-less admin certificate.
+type ErrCeremonyLocalCARequired struct {
+	Cause error
+}
+
+// Error returns a human-readable description.
+func (e *ErrCeremonyLocalCARequired) Error() string {
+	return "ceremony backend: the admin bundle needs a local CA, because the SDK certificate service cannot carry the tenant OU: " + e.Cause.Error()
+}
+
+// Unwrap returns the underlying failure.
+func (e *ErrCeremonyLocalCARequired) Unwrap() error {
+	return e.Cause
+}
+
 // ErrAdminBundleIncomplete indicates an AdminBundleIssuer returned no error
 // but also no certificate or no key.
 type ErrAdminBundleIncomplete struct{}
@@ -230,6 +248,10 @@ func (b *CeremonyBackend) Initialize(ctx context.Context, req *daemon.CeremonyIn
 	}
 	bundle, err := b.admin.IssueAdminBundle(ctx)
 	if err != nil {
+		var ouErr *ErrCertOUUnsupported
+		if errors.As(err, &ouErr) {
+			return nil, &ErrCeremonyLocalCARequired{Cause: err}
+		}
 		return nil, &ErrCeremonyAdminBundle{Cause: err}
 	}
 	if bundle == nil || bundle.CertPEM == "" || bundle.KeyPEM == "" {

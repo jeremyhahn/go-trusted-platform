@@ -16,8 +16,10 @@
 package helpers
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+	"testing"
 
 	"github.com/stretchr/testify/require"
 )
@@ -112,6 +114,23 @@ func RequireCLIRefusal(t require.TestingT, adapter string, err, want error) bool
 		return false
 	}
 	require.ErrorIs(t, err, want)
+	return true
+}
+
+// RequireSDKGapRefusal reports whether err is the pinned go-quicbaas SDK's
+// declared refusal of a method it does not serve, on any adapter. For the CLI
+// adapter it asserts the typed ErrCLIUpstreamGap refusal, as RequireCLIRefusal
+// does. For every other adapter it reports true, and logs the gap, only when
+// the error text carries one of the SDK's unserved-method answers; nil and any
+// other error report false, so the leaf goes on to assert success.
+func RequireSDKGapRefusal(t testing.TB, adapter, issue string, err error) bool {
+	if adapter == "CLI" {
+		return RequireCLIRefusal(t, adapter, err, ErrCLIUpstreamGap{})
+	}
+	if err == nil || !errors.Is(CLIUpstreamGap("", issue, err), ErrCLIUpstreamGap{}) {
+		return false
+	}
+	t.Logf("%s: the go-quicbaas SDK does not serve this method (%s): %v", adapter, issue, err)
 	return true
 }
 
