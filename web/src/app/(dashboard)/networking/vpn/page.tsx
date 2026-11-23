@@ -29,7 +29,7 @@ import { ServiceUnavailableState } from '@/components/features/platform';
 import { Gated } from '@/components/features/capabilities/gated';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { useApi, useToast, useVPN } from '@/hooks';
-import type { ApiResponse, VPNPeer, VPNPosturePolicy } from 'trusted-platform-sdk';
+import type { ApiResponse, VPNGatewayStatus, VPNPeer, VPNPosturePolicy } from 'trusted-platform-sdk';
 
 /** A posture policy in the editor; `isNew` unlocks the tenant and name. */
 interface PolicyDraft {
@@ -61,6 +61,24 @@ function formatUnix(seconds: string): string {
     return '—';
   }
   return new Date(value * 1000).toLocaleString();
+}
+
+/** Renders a protojson count map as `key: value` pairs; an empty map reads none. */
+function formatCounts(counts: Record<string, string | number> | null | undefined): string {
+  const entries = Object.entries(counts ?? {});
+  if (entries.length === 0) {
+    return 'none';
+  }
+  return entries.map(([key, value]) => `${key}: ${value}`).join(', ');
+}
+
+/** Renders a re-attestation histogram as its count and mean time. */
+function formatReattest(reattest: VPNGatewayStatus['reattest']): string {
+  const count = Number(reattest?.count ?? 0);
+  if (!reattest || !Number.isFinite(count) || count <= 0) {
+    return 'no re-attestations';
+  }
+  return `${count} re-attestations, mean ${Math.round((reattest.sumSeconds / count) * 1000)} ms`;
 }
 
 /** The SDK reports a failed call in the response; mutations need it thrown. */
@@ -179,6 +197,7 @@ export default function VPNPage() {
       toast({ title: `Enrolled ${peer.deviceId.trim()}`, variant: 'success' });
       setEnrolling(null);
       refetchPeers();
+      refetchStatus();
     } catch (err) {
       toast({
         title: 'Failed to enrol peer',
@@ -383,6 +402,7 @@ export default function VPNPage() {
                 <TableRow>
                   <TableHead>Gateway</TableHead>
                   <TableHead>VPN</TableHead>
+                  <TableHead>Peers</TableHead>
                   <TableHead>Admissions</TableHead>
                   <TableHead>Refusals</TableHead>
                   <TableHead>Last Refusal</TableHead>
@@ -398,6 +418,7 @@ export default function VPNPage() {
                         {!gateway.reporting ? 'not configured' : gateway.running ? 'running' : 'stopped'}
                       </Badge>
                     </TableCell>
+                    <TableCell>{gateway.enrolledPeers}</TableCell>
                     <TableCell>{gateway.admissions}</TableCell>
                     <TableCell>{gateway.refusals}</TableCell>
                     <TableCell className="text-sm">{gateway.lastRefusal || '—'}</TableCell>
@@ -407,6 +428,33 @@ export default function VPNPage() {
               </TableBody>
             </Table>
           )}
+          {gateways
+            .filter((gateway) => gateway.reporting)
+            .map((gateway) => (
+              <div
+                key={gateway.gatewayId}
+                data-testid={`vpn-gateway-detail-${gateway.gatewayId}`}
+                className="mt-4 space-y-1 rounded-md border p-3 text-sm"
+              >
+                <p className="font-mono font-medium">{gateway.gatewayId}</p>
+                <p>
+                  <span className="text-muted-foreground">Leases by data plane: </span>
+                  <span>{formatCounts(gateway.leasesByDataPlane)}</span>
+                </p>
+                <p>
+                  <span className="text-muted-foreground">Revocations: </span>
+                  <span>{formatCounts(gateway.revocations)}</span>
+                </p>
+                <p>
+                  <span className="text-muted-foreground">Posture violations: </span>
+                  <span>{formatCounts(gateway.postureViolations)}</span>
+                </p>
+                <p>
+                  <span className="text-muted-foreground">Re-attestation: </span>
+                  <span>{formatReattest(gateway.reattest)}</span>
+                </p>
+              </div>
+            ))}
           {gateways.flatMap((gateway) =>
             gateway.rejectedPeers.map((rejected) => (
               <Alert key={`${gateway.gatewayId}/${rejected.tenantId}/${rejected.deviceId}`} variant="destructive">
@@ -447,7 +495,9 @@ export default function VPNPage() {
                   <TableHead>Address</TableHead>
                   <TableHead>Data Plane</TableHead>
                   <TableHead>Zones</TableHead>
+                  <TableHead>Issued</TableHead>
                   <TableHead>Expires</TableHead>
+                  <TableHead>Renewals</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -459,7 +509,9 @@ export default function VPNPage() {
                     <TableCell className="font-mono text-sm">{lease.address}</TableCell>
                     <TableCell>{lease.dataPlane}</TableCell>
                     <TableCell>{lease.zones.length > 0 ? lease.zones.join(', ') : 'all allowed'}</TableCell>
+                    <TableCell className="text-xs">{formatUnix(lease.issuedAtUnix)}</TableCell>
                     <TableCell className="text-xs">{formatUnix(lease.expiresAtUnix)}</TableCell>
+                    <TableCell>{lease.renewals}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
