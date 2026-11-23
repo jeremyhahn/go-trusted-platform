@@ -26,6 +26,8 @@ import type {
   SuspendVMResponse,
   ResumeVMResponse,
   MigrateVMRequest,
+  PrepareMigrationRequest,
+  FinalizeMigrationRequest,
   CreateContainerRequest,
   StopContainerRequest,
   DeleteContainerRequest,
@@ -49,6 +51,8 @@ import type {
   DeleteSnapshotResponse,
   ListSnapshotsResponse,
   MigrateVMResponse,
+  PrepareMigrationResponse,
+  FinalizeMigrationResponse,
   CreateContainerResponse,
   StartContainerResponse,
   StopContainerResponse,
@@ -377,6 +381,32 @@ export class ComputeService extends BaseService {
         liveMigration: request.liveMigration,
         bandwidthLimitMbps: request.bandwidthLimitMbps,
       }
+    );
+  }
+
+
+  /** PrepareMigration: POST /api/v1/compute/migrations/prepare readies a receiver on this host. */
+  async prepareMigration(
+    request: PrepareMigrationRequest
+  ): Promise<ApiResponse<PrepareMigrationResponse>> {
+    const body: Record<string, unknown> = {
+      vmId: request.vmId,
+      vmName: request.vmName,
+      mode: request.mode,
+    };
+    if (request.spec !== undefined) {
+      body.spec = request.spec;
+    }
+    return this.client.post<PrepareMigrationResponse>(this.buildUrl('/migrations/prepare'), body);
+  }
+
+  /** FinalizeMigration: POST /api/v1/compute/migrations/{receiverId}/finalize commits or aborts a receiver. */
+  async finalizeMigration(
+    request: FinalizeMigrationRequest
+  ): Promise<ApiResponse<FinalizeMigrationResponse>> {
+    return this.client.post<FinalizeMigrationResponse>(
+      this.buildUrl(`/migrations/${this.encodePathSegment(request.receiverId)}/finalize`),
+      { commit: request.commit }
     );
   }
 

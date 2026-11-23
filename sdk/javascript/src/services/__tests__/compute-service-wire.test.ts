@@ -144,4 +144,36 @@ describe('ComputeService wire shapes', () => {
     const url = String(vi.mocked(mockClient.get).mock.calls[0]?.[0]);
     expect(url).toMatch(/\/v1\/compute\/vms\/vm-1\/snapshots\/s%2F1$/);
   });
+
+  it('prepares a migration receiver on POST /migrations/prepare', async () => {
+    await service.prepareMigration({
+      vmId: 'vm-1',
+      vmName: 'web-1',
+      mode: 'live',
+      spec: { memoryMb: 2048, cpus: 2, arch: 'x86_64' },
+    });
+
+    const url = String(vi.mocked(mockClient.post).mock.calls[0]?.[0]);
+    expect(url).toMatch(/\/v1\/compute\/migrations\/prepare$/);
+    expect(postedBody(mockClient)).toEqual({
+      vmId: 'vm-1',
+      vmName: 'web-1',
+      mode: 'live',
+      spec: { memoryMb: 2048, cpus: 2, arch: 'x86_64' },
+    });
+  });
+
+  it('omits the spec when the caller supplied none', async () => {
+    await service.prepareMigration({ vmId: 'vm-1', vmName: 'web-1', mode: 'cold' });
+
+    expect((postedBody(mockClient) as { spec?: unknown }).spec).toBeUndefined();
+  });
+
+  it('finalizes a receiver on its encoded path with only the commit flag in the body', async () => {
+    await service.finalizeMigration({ receiverId: 'rx/1', commit: false });
+
+    const url = String(vi.mocked(mockClient.post).mock.calls[0]?.[0]);
+    expect(url).toMatch(/\/v1\/compute\/migrations\/rx%2F1\/finalize$/);
+    expect(postedBody(mockClient)).toEqual({ commit: false });
+  });
 });

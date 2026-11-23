@@ -654,6 +654,50 @@ export interface MigrateVMRequest {
   bandwidthLimitMbps?: number;
 }
 
+/** Guest shape the destination needs to build a migration receiver (proto VMMigrationSpec) */
+export interface VMMigrationSpec {
+  /** Memory in MB */
+  memoryMb?: number;
+  /** Number of vCPUs */
+  cpus?: number;
+  /** Disk size */
+  diskSize?: string;
+  /** Boot mode */
+  bootMode?: string;
+  /** Secure boot enabled */
+  secureBoot?: boolean;
+  /** KVM acceleration enabled */
+  enableKvm?: boolean;
+  /** vTPM enabled */
+  tpmEnabled?: boolean;
+  /** Network mode */
+  networkMode?: string;
+  /** MAC address */
+  macAddress?: string;
+  /** Source guest arch: "x86_64" | "aarch64"; empty means x86_64 */
+  arch?: string;
+}
+
+/** Ask the destination to ready a receiver for an incoming VM */
+export interface PrepareMigrationRequest {
+  /** Source instance id (informational) */
+  vmId: string;
+  /** Guest name */
+  vmName: string;
+  /** Migration mode */
+  mode: 'cold' | 'live';
+  /** Guest shape for the receiver */
+  spec?: VMMigrationSpec;
+}
+
+/** Commit or abort a prepared receiver */
+export interface FinalizeMigrationRequest {
+  /** Receiver id returned by PrepareMigration */
+  receiverId: string;
+  /** true registers and resumes the received VM, false aborts */
+  commit: boolean;
+}
+
 /**
  * Create container request
  */
@@ -949,6 +993,24 @@ export interface GetSnapshotResponse {
 export interface MigrateVMResponse {
   /** Operation status */
   status: ComputeStatus;
+}
+
+/** Where the source sends the VM */
+export interface PrepareMigrationResponse {
+  /** Operation status */
+  status?: ComputeStatus;
+  /** Token passed back to FinalizeMigration */
+  receiverId: string;
+  /** TCP port the receiver listens on */
+  port: number;
+  /** Hostname the source pins in the migration TLS credentials */
+  tlsHostname: string;
+}
+
+/** Result of finalizing a receiver */
+export interface FinalizeMigrationResponse {
+  /** Operation status */
+  status?: ComputeStatus;
 }
 
 /**
