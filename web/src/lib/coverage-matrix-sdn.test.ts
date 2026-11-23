@@ -37,7 +37,7 @@ describe('coverage matrix: SDNService bridge and port rows (#2064)', () => {
   }
 
   it('counts the SDNService rows in the summary', () => {
-    expect(lines.filter((l) => l === '| SDNService | 29 | 18 | 0 | 10 | 1 | 0 |')).toHaveLength(1);
+    expect(lines.filter((l) => l === '| SDNService | 29 | 24 | 0 | 4 | 1 | 0 |')).toHaveLength(1);
   });
 
   it('names files that exist', () => {
