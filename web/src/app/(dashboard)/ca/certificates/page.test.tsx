@@ -256,20 +256,30 @@ describe("CertificatesPage", () => {
     expect(ca.revokeCertificate).not.toHaveBeenCalled();
   });
 
-  it("revokes with reason UNSPECIFIED and reloads", async () => {
-    vi.stubGlobal("prompt", vi.fn(() => "key leaked"));
+  it("revokes with the reason the operator typed and reloads", async () => {
+    vi.stubGlobal("prompt", vi.fn(() => "KEY_COMPROMISE"));
     ca.revokeCertificate.mockResolvedValue({});
     const refetch = vi.fn();
     apiState = state({ data: { certificates: [root] }, refetch });
     render(<CertificatesPage />);
     fireEvent.click(screen.getByText("revoke 01"));
     await waitFor(() => expect(alertSpy).toHaveBeenCalledWith("Certificate revoked successfully"));
-    expect(ca.revokeCertificate).toHaveBeenCalledWith({ serial: "01", reason: "UNSPECIFIED" });
+    expect(ca.revokeCertificate).toHaveBeenCalledWith({ serial: "01", reason: "KEY_COMPROMISE" });
     expect(refetch).toHaveBeenCalledTimes(1);
   });
 
+  it("refuses an unknown revocation reason", () => {
+    vi.stubGlobal("prompt", vi.fn(() => "key leaked"));
+    apiState = state({ data: { certificates: [root] } });
+    render(<CertificatesPage />);
+    fireEvent.click(screen.getByText("revoke 01"));
+    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining("KEY_COMPROMISE"));
+    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining("AA_COMPROMISE"));
+    expect(ca.revokeCertificate).not.toHaveBeenCalled();
+  });
+
   it("alerts the revoke failure", async () => {
-    vi.stubGlobal("prompt", vi.fn(() => "r"));
+    vi.stubGlobal("prompt", vi.fn(() => "SUPERSEDED"));
     ca.revokeCertificate.mockRejectedValue(new Error("denied"));
     apiState = state({ data: { certificates: [root] } });
     render(<CertificatesPage />);
