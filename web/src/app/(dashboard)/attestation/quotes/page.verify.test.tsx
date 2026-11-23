@@ -16,6 +16,9 @@ const QUOTE_VERIFY = 'POST /api/v1/attestation/quote/verify';
 
 const Q = { quoteData: 'cQ==', signature: 'c2ln', signatureAlgorithm: 'SHA256-RSAPSS', pcrValues: [], nonce: 'bg==' };
 const STATUS = { success: true, message: '' };
+// The AK public key field is a proto `bytes` field: the card sends the PEM
+// text base64-encoded, so the JSON gateway decodes it back to the PEM.
+const AK_PEM = '-----BEGIN PUBLIC KEY-----\nAA==\n-----END PUBLIC KEY-----';
 
 const M1: HostManifest = {
   id: 'm1',
@@ -93,14 +96,14 @@ describe('QuotesPage quote verify', () => {
     const card = await askForQuote();
     await screen.findByTestId('quote-result');
 
-    fireEvent.change(within(card).getByLabelText('AK public key (PEM)'), { target: { value: 'UEVN' } });
+    fireEvent.change(within(card).getByLabelText('AK public key (PEM)'), { target: { value: AK_PEM } });
     fireEvent.click(within(card).getByRole('button', { name: 'Verify quote' }));
 
     const verdict = await screen.findByTestId('quote-verdict');
     expect(verdict.textContent).toContain('Verified');
     const verifies = sent.filter((r) => r.path === '/api/v1/attestation/quote/verify');
     expect(verifies).toHaveLength(1);
-    expect(verifies[0].body).toEqual({ quote: Q, akPublicKeyPem: 'UEVN', expectedNonce: 'bm9uY2U=', channelBinding: 'Y2I=' });
+    expect(verifies[0].body).toEqual({ quote: Q, akPublicKeyPem: btoa(AK_PEM), expectedNonce: 'bm9uY2U=', channelBinding: 'Y2I=' });
   });
 
   it('shows a failed verification and a refused quote', async () => {
@@ -113,7 +116,7 @@ describe('QuotesPage quote verify', () => {
     const card = await askForQuote();
     await screen.findByTestId('quote-result');
 
-    fireEvent.change(within(card).getByLabelText('AK public key (PEM)'), { target: { value: 'UEVN' } });
+    fireEvent.change(within(card).getByLabelText('AK public key (PEM)'), { target: { value: AK_PEM } });
     fireEvent.click(within(card).getByRole('button', { name: 'Verify quote' }));
     const verdict = await screen.findByTestId('quote-verdict');
     expect(verdict.textContent).toContain('Not verified: nonce mismatch');

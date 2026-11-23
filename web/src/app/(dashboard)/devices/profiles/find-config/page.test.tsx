@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ok, refused, stubControlPlane, withControlPlane, type Answer } from '@/test/control-plane-fetch';
@@ -8,6 +8,19 @@ vi.mock('next/navigation', () => ({
   usePathname: () => '/devices/profiles/find-config',
   useRouter: () => ({ push: vi.fn(), back: vi.fn() }),
 }));
+
+// The page's gated controls read the capabilities through this hook; mocked
+// so the page sends no GET /api/v1/capabilities and stubAnswers' call order
+// holds. Every op is enabled.
+vi.mock('@/hooks/use-capabilities', () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: () => ({ enabled: true }),
+  }),
+}));
+
+const UNASSIGN = 'POST /api/v1/device/profiles/12/unassign';
 
 const ROUTE = 'GET /api/v1/device/profiles/find-config';
 
@@ -38,9 +51,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** lookupField is the lookup form's field; the Assign card below it reuses the labels. */
+function lookupField(label: string): HTMLElement {
+  return screen.getAllByLabelText(label)[0];
+}
+
 async function findByEKSerial(ekSerial: string) {
   render(withControlPlane(<FindDeviceConfigPage />));
-  fireEvent.change(screen.getByLabelText('EK serial'), { target: { value: ekSerial } });
+  fireEvent.change(lookupField('EK serial'), { target: { value: ekSerial } });
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: 'Find config' }));
   });
@@ -70,13 +88,57 @@ function stubAnswers(...answers: Array<Answer | Promise<Answer>>) {
 }
 
 async function submit(ekSerial: string) {
-  fireEvent.change(screen.getByLabelText('EK serial'), { target: { value: ekSerial } });
+  fireEvent.change(lookupField('EK serial'), { target: { value: ekSerial } });
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: 'Find config' }));
   });
 }
 
 describe('FindDeviceConfigPage', () => {
+  it('offers Unassign on an assigned profile only', async () => {
+    stubControlPlane({ [ROUTE]: PROFILE });
+    await findByEKSerial('EK-1');
+    await screen.findByText('edge-gw');
+    expect(screen.getByRole('button', { name: 'Unassign' })).toBeTruthy();
+    cleanup();
+
+    stubControlPlane({ [ROUTE]: PROFILE_B });
+    await findByEKSerial('EK-2');
+    await screen.findByText('core-gw');
+    expect(screen.getByText('Not assigned')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Unassign' })).toBeNull();
+  });
+
+  it('unassigns the shown profile through the confirm dialog', async () => {
+    const sent = stubControlPlane({
+      [ROUTE]: PROFILE,
+      [UNASSIGN]: ok({ ...(PROFILE.body as { payload: object }).payload, ek_serial: null, mac_address: null, assigned: false }),
+    });
+    await findByEKSerial('EK-1');
+    await screen.findByText('edge-gw');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Unassign' }));
+    });
+    const dialog = await screen.findByRole('dialog');
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Unassign' }));
+    });
+
+    expect(sent).toContainEqual({ method: 'POST', path: '/api/v1/device/profiles/12/unassign', body: {} });
+    await screen.findByText('Not assigned');
+    expect(screen.getByText('edge-gw')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Unassign' })).toBeNull();
+  });
+
+  it('shows the Assign a profile card', () => {
+    stubControlPlane({});
+    render(withControlPlane(<FindDeviceConfigPage />));
+
+    expect(screen.getByText('Assign a profile')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Assign profile' })).toBeTruthy();
+  });
+
   it('keeps Find config disabled until an identity is typed', () => {
     stubControlPlane({ [ROUTE]: PROFILE });
     render(withControlPlane(<FindDeviceConfigPage />));
@@ -84,7 +146,7 @@ describe('FindDeviceConfigPage', () => {
     const button = screen.getByRole('button', { name: 'Find config' });
     expect((button as HTMLButtonElement).disabled).toBe(true);
 
-    fireEvent.change(screen.getByLabelText('MAC address'), { target: { value: 'aa:bb:cc:dd:ee:ff' } });
+    fireEvent.change(lookupField('MAC address'), { target: { value: 'aa:bb:cc:dd:ee:ff' } });
     expect((button as HTMLButtonElement).disabled).toBe(false);
   });
 
