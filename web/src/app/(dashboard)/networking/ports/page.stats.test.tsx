@@ -39,11 +39,32 @@ vi.mock('@/components/ui/data-table', () => ({
   ),
 }));
 
+const STATS_OP = 'GET /api/v1/sdn/bridges/{name}/ports/{port}/stats';
+
+// Ops the capability gate withholds; every other op is enabled.
+const { off } = vi.hoisted(() => ({ off: new Set<string>() }));
+
+vi.mock('@/hooks/use-capabilities', () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: (op: string) =>
+      off.has(op) ? { enabled: false, reason: 'not-configured: sdn' } : { enabled: true },
+  }),
+}));
+
+// Each row action carries its op; a withheld op disables it, as the real
+// row actions' Gated does.
 vi.mock('@/components/ui/data-table-row-actions', () => ({
-  DataTableRowActions: ({ row, actions }: { row: Row; actions: { label: string; onClick: (r: Row) => void }[] }) => (
+  DataTableRowActions: ({ row, actions }: { row: Row; actions: { label: string; op?: string; onClick: (r: Row) => void }[] }) => (
     <div>
       {actions.map((a) => (
-        <button key={a.label} onClick={() => a.onClick(row)}>
+        <button
+          key={a.label}
+          data-op={a.op}
+          disabled={a.op !== undefined && off.has(a.op)}
+          onClick={() => a.onClick(row)}
+        >
           {a.label}
         </button>
       ))}
@@ -83,6 +104,22 @@ describe('SDNPortsPage port statistics', () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    off.clear();
+  });
+
+  it('gates Port Statistics on GET /api/v1/sdn/bridges/{name}/ports/{port}/stats', async () => {
+    stubControlPlane(routes(ok({ stats: {} })));
+    render(withControlPlane(<PortsPage />));
+    await screen.findByText('eth0');
+    const action = screen.getByRole('button', { name: 'Port Statistics' }) as HTMLButtonElement;
+    expect(action.getAttribute('data-op')).toBe(STATS_OP);
+    expect(action.disabled).toBe(false);
+    cleanup();
+
+    off.add(STATS_OP);
+    render(withControlPlane(<PortsPage />));
+    await screen.findByText('eth0');
+    expect((screen.getByRole('button', { name: 'Port Statistics' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("reads a port's counters through GET /sdn/bridges/{name}/ports/{port}/stats", async () => {
