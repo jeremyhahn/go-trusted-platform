@@ -9,6 +9,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks';
 import { useDNSLookup } from '@/hooks/use-dns-lookup';
+import { Gated } from '@/components/features/capabilities/gated';
+import { useCapabilities } from '@/hooks/use-capabilities';
+
+const RESOLVE_OP = 'GET /api/v1/dns/resolve';
+const REGISTER_OP = 'POST /api/v1/dns/register';
 
 const RECORD_TYPES: ResolveRequest['type'][] = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT', 'SRV', 'CAA', 'TLSA'];
 
@@ -54,6 +59,7 @@ function describeRecord(record: DNSRecord): string {
 export function DNSLookupCard({ onRegistered }: { onRegistered?: () => void }) {
   const { resolve, isResolving, register, isRegistering } = useDNSLookup();
   const { toast } = useToast();
+  const { capability } = useCapabilities();
 
   const [fqdn, setFqdn] = useState('');
   const [type, setType] = useState<ResolveRequest['type']>('A');
@@ -64,6 +70,10 @@ export function DNSLookupCard({ onRegistered }: { onRegistered?: () => void }) {
   const [ip, setIp] = useState('');
 
   const handleResolve = async () => {
+    // A withheld op sends nothing, whatever triggered the handler.
+    if (!capability(RESOLVE_OP).enabled) {
+      return;
+    }
     try {
       const res = await resolve({ fqdn, type });
       setResult(res);
@@ -75,6 +85,9 @@ export function DNSLookupCard({ onRegistered }: { onRegistered?: () => void }) {
   };
 
   const handleRegister = async () => {
+    if (!capability(REGISTER_OP).enabled) {
+      return;
+    }
     try {
       await register({ fqdn: hostName, ip });
       toast({ title: 'Registered', description: `${hostName} -> ${ip}`, variant: 'success' });
@@ -120,9 +133,11 @@ export function DNSLookupCard({ onRegistered }: { onRegistered?: () => void }) {
                 ))}
               </select>
             </div>
-            <Button onClick={handleResolve} disabled={fqdn === '' || isResolving}>
-              Resolve
-            </Button>
+            <Gated op={RESOLVE_OP}>
+              <Button onClick={handleResolve} disabled={fqdn === '' || isResolving}>
+                Resolve
+              </Button>
+            </Gated>
           </div>
           {resolveError !== undefined && (
             <p data-testid="dns-resolve-error" className="text-sm text-destructive">
@@ -162,9 +177,11 @@ export function DNSLookupCard({ onRegistered }: { onRegistered?: () => void }) {
               placeholder="10.0.0.10"
             />
           </div>
-          <Button onClick={handleRegister} disabled={hostName === '' || ip === '' || isRegistering}>
-            Register
-          </Button>
+          <Gated op={REGISTER_OP}>
+            <Button onClick={handleRegister} disabled={hostName === '' || ip === '' || isRegistering}>
+              Register
+            </Button>
+          </Gated>
         </div>
       </CardContent>
     </Card>

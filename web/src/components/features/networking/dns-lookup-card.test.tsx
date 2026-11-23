@@ -21,6 +21,12 @@ vi.mock("@/hooks", async (importOriginal) => ({
   useToast: () => ({ toast }),
 }));
 
+// Resolve and Register are gated on the server's capabilities (#2060); every
+// op is offered here (dns-lookup-card.capability.test.tsx covers the gate).
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
+
 vi.mock("@/hooks/use-dns-lookup", () => ({
   useDNSLookup: () => lookup,
 }));
