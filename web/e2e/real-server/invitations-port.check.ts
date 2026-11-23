@@ -56,4 +56,10 @@ for (const t of MOCKED) {
   assert.ok(port.includes(t), `invitations-port.spec.ts ports or lists: ${t}`);
 }
 
+// Codex round 4 on #2341: the owner cases run for real.
+assert.ok(!port.includes("if (view.kind !== 'owner') return;"), 'the owner cases do not return early off the owner view');
+assert.ok(!port.includes('if (!(await expectListed('), 'the owner cases do not return early on a missing seeded row');
+assert.ok(port.includes("from './fixtures/wire'"), 'the port reads the unwrapped payload of the answers');
+assert.ok(port.includes("toBe('owner')"), 'the owner cases require the owner view');
+
 console.log('invitations-port.check: ok');
