@@ -151,6 +151,7 @@ const navigation = [
       { title: "IPAM Pools", href: "/networking/ipam" },
       { title: "Ports", href: "/networking/ports" },
       { title: "Flows", href: "/networking/flows" },
+      { title: "SDN Policies", href: "/networking/policies" },
       { title: "VLANs", href: "/networking/vlans" },
       { title: "DNS Zones", href: "/networking/dns" },
       { title: "NTP", href: "/networking/ntp" },
