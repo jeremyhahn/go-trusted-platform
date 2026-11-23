@@ -285,10 +285,16 @@ func (s *TenantGRPCServer) CreateInitialAdminInvitation(
 	if req.GetEmail() == "" {
 		return nil, status.Error(codes.InvalidArgument, "email is required")
 	}
+	inviterID, ok := callerUserID(ctx)
+	if !ok {
+		return nil, status.Error(codes.FailedPrecondition, "the caller has no user id to record as the inviter")
+	}
 
 	createReq := &platformservice.CreateInvitationRequest{
-		TenantID: req.GetTenantId(),
-		Email:    req.GetEmail(),
+		TenantID:    req.GetTenantId(),
+		Email:       req.GetEmail(),
+		Role:        platformservice.DefaultTenantOwnerRole,
+		InvitedByID: inviterID,
 	}
 	if secs := req.GetExpiresInSeconds(); secs > 0 {
 		createReq.ExpiresIn = time.Duration(secs) * time.Second
