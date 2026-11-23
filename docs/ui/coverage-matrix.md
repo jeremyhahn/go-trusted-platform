@@ -24,7 +24,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `AttestationService.BuildManifest` | `POST /manifests/build` | `(dashboard)/attestation/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `AttestationService.VerifyManifest` | `POST /manifests/verify` | - | - | - | missing |
 | `AttestationService.ListManifests` | `GET /manifests` | `(dashboard)/attestation/eventlogs/page.tsx`<br>`(dashboard)/attestation/manifests/page.tsx`<br>`(dashboard)/attestation/page.tsx` (+2) | - | `tpm-attestation.spec.ts` | covered |
-| `AttestationService.DeleteManifest` | `DELETE /manifests/{id}` | `(dashboard)/attestation/[id]/page.tsx`<br>`(dashboard)/attestation/eventlogs/page.tsx`<br>`(dashboard)/attestation/manifests/page.tsx` (+3) (read-only) | - | - | partial |
+| `AttestationService.DeleteManifest` | `DELETE /manifests/{id}` | `(dashboard)/attestation/manifests/page.tsx`<br>`(dashboard)/attestation/[id]/page.tsx` | - | `real-server/attestation-manifests.spec.ts` | covered |
 | `AttestationService.GetAttestationQuote` | - | - | - | - | missing |
 | `AttestationService.VerifyAttestationQuote` | - | - | - | - | missing |
 | `AttestationService.CollectHostAttestation` | `POST /host` | - | - | - | missing |
@@ -729,7 +729,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Area (service) | Operations | covered | partial | missing | not-UI | blocked: integration |
 |---|---|---|---|---|---|---|
-| AttestationService | 16 | 8 | 1 | 6 | 1 | 0 |
+| AttestationService | 16 | 9 | 0 | 6 | 1 | 0 |
 | BarrierService | 5 | 0 | 0 | 0 | 5 | 0 |
 | BMCService | 23 | 0 | 0 | 23 | 0 | 0 |
 | CAService | 13 | 7 | 0 | 6 | 0 | 0 |
