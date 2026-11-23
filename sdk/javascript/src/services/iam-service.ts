@@ -387,7 +387,28 @@ export class IAMService extends BaseService {
    * Verify token
    */
   async verifyToken(request: VerifyIAMTokenRequest): Promise<ApiResponse<VerifyIAMTokenResponse>> {
-    return this.client.post<VerifyIAMTokenResponse>(this.buildUrl('/auth/token/verify'), request);
+    // The server serves POST /api/v1/iam/tokens/verify (flat; the tenant
+    // comes from the session) with body {"token"}.
+    const res = await this.client.post<VerifyIAMTokenResponse>(this.buildUrl('/tokens/verify'), {
+      token: request.token,
+    });
+    // The REST handler sends snake_case (pkg/webservice/v1/rest/iam/types.go
+    // VerifyTokenResponse): set the camelCase fields on the same response
+    // object, never over a camelCase value already present.
+    if (res.success && res.data) {
+      const data = res.data as unknown as Record<string, unknown>;
+      const fields: Array<[string, string]> = [
+        ['userId', 'subject'],
+        ['tenantId', 'tenant_id'],
+        ['expiresAt', 'expires_at'],
+      ];
+      for (const [camel, wire] of fields) {
+        if (data[camel] === undefined && data[wire] !== undefined) {
+          data[camel] = data[wire];
+        }
+      }
+    }
+    return res;
   }
 
   // =========================================================================
