@@ -115,17 +115,22 @@ func TestSetIAMHandlers_RefusesAMissingDependency(t *testing.T) {
 func TestSetIAMHandlers_MountsEveryIAMRoute(t *testing.T) {
 	s := iamRESTServer(t)
 	routes := 0
+	var seen []string
 	require.NoError(t, s.router.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
 		template, err := route.GetPathTemplate()
 		if err != nil || !strings.HasPrefix(template, "/api/v1/iam") {
 			return nil
 		}
-		if _, err := route.GetMethods(); err == nil {
+		if methods, err := route.GetMethods(); err == nil {
 			routes++
+			if len(methods) > 0 {
+				seen = append(seen, methods[0]+" "+template)
+			}
 		}
 		return nil
 	}))
-	assert.Equal(t, 71, routes)
+	assert.Equal(t, 72, routes, "71 IAM routes plus POST /api/v1/iam/tokens/verify")
+	assert.Contains(t, seen, "POST /api/v1/iam/tokens/verify")
 }
 
 func TestIAMREST_ScopePerMethod(t *testing.T) {
