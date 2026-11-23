@@ -69,6 +69,7 @@ case "$1" in
   push) echo "$ctx" >> "$s/push-context"; resolve "$2" >/dev/null || exit 1; echo "$2" >> "$s/pushed" ;;
   pull)
     echo "$ctx" >> "$s/pull-context"
+    echo "$2" >> "$s/pulled"
     [ -z "${FAKE_PULL_FAILS:-}" ] || { echo "Error response from daemon: pull failed" >&2; exit 1; }
     echo "${FAKE_PULLED_ID:-$FAKE_IMAGE_ID}" > "$s/tags/$(enc "$2")" ;;
   tag) echo "$ctx" >> "$s/tag-context"; id=$(resolve "$2") || exit 1; echo "$id" > "$s/tags/$(enc "$3")" ;;
@@ -115,7 +116,18 @@ type pullLeg struct {
 	rc     string
 	output string
 	log    string
+	// pulled is every reference the shared fake daemon was asked to pull,
+	// one per line (set on leg B only: both legs share the daemon).
+	pulled string
 }
+
+// The fixture registry and the path:tag the image job's push step emits as
+// image_ref for IT_LEASE_ID sha256:1111; a leg pulls the two joined.
+const (
+	ciFixtureRegistry  = "registry.invalid:5000"
+	ciFixtureImagePath = "go-trusted-platform/it-image:1111"
+	ciFixtureImageRef  = ciFixtureRegistry + "/" + ciFixtureImagePath
+)
 
 // runTwoLegPull runs the pull step as two legs on one cold daemon: both
 // pulls succeed before either leg acquires the image lock, then leg A and
@@ -171,6 +183,8 @@ func runTwoLegPull(t *testing.T, step string) (a, b pullLeg) {
 	}
 	a = pullLeg{rc: read("a.rc"), output: read("a.out"), log: read("a.log")}
 	b.output = read("b.out")
+	data, _ := os.ReadFile(filepath.Join(state, "pulled"))
+	b.pulled = strings.TrimSpace(string(data))
 	return a, b
 }
 
@@ -194,6 +208,8 @@ func TestCIRegistryPullSurvivesTwoLegsOnOneDaemon(t *testing.T) {
 	require.Contains(t, a.output, "leased=true", "leg A:\n%s", a.log)
 	require.Equal(t, "0", b.rc, "leg B, second to take the lock:\n%s", b.log)
 	require.Contains(t, b.output, "leased=true", "leg B:\n%s", b.log)
+	require.Equal(t, []string{ciFixtureImageRef, ciFixtureImageRef}, strings.Fields(b.pulled),
+		"each leg pulls the registry-prefixed image path:\nA:\n%s\nB:\n%s", a.log, b.log)
 }
 
 // twoProducerLock is the image lock both producers source. Producer B
@@ -429,4 +445,21 @@ func TestCIRegistryPullFallsBackToALeasedBuild(t *testing.T) {
 			require.Equal(t, "sha256:2222", r.read(filepath.Join("containers", "lease-leg")), "the lease is on the rebuilt image")
 		})
 	}
+}
+
+// TestCIRegistryPullTakesThePushedReference runs the image job's push step and
+// then the leg's pull step on one daemon: the pull must ask for exactly the
+// registry-prefixed path the push emitted as image_ref, and lease it.
+func TestCIRegistryPullTakesThePushedReference(t *testing.T) {
+	r := runRegistrySteps(t, nil, nil, ciStepRun(t, ciImageJob, "push"), ciStepRun(t, ciLegJob, "pull"))
+	require.NoError(t, r.err, r.log)
+	var path string
+	for _, line := range strings.Split(r.output, "\n") {
+		if v, ok := strings.CutPrefix(line, "image_ref="); ok {
+			path = v
+		}
+	}
+	require.NotEmpty(t, path, "the push step emits no image_ref:\n%s", r.log)
+	require.Equal(t, ciFixtureRegistry+"/"+path, r.read("pulled"), "the pull step's reference:\n%s", r.log)
+	require.Contains(t, r.output, "leased=true", r.log)
 }
