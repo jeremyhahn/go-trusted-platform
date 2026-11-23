@@ -272,4 +272,14 @@ describe('VMDetailPage loads the SDK VM', () => {
     expect(screen.queryByRole('button', { name: 'Create Snapshot' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Restore' })).toBeNull();
   });
+
+  it('mounts the gated disks card with the config disks', async () => {
+    stubControlPlane(sdkRoutes());
+    await renderSDKPage();
+
+    // The disks card's resize field exists only for a disk it lists.
+    expect(screen.getByRole('spinbutton', { name: 'New size (GB) for d1' })).toBeDefined();
+    const attach = screen.getByRole('button', { name: 'Attach disk' });
+    expect(attach.getAttribute('data-capability-op')).toBe('POST /api/v1/compute/vms/{id}/disks');
+  });
 });
