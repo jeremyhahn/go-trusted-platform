@@ -126,6 +126,28 @@ describe("NetworkOverlaysPage", () => {
     expect(overlay.createVNI).not.toHaveBeenCalled();
   });
 
+  it("refuses a VNI above the 24-bit range without calling the API", async () => {
+    overlay.listVNIs.mockResolvedValue({ data: { vnis: [] } });
+    render(<NetworkOverlaysPage />);
+
+    fireEvent.change(await openDialog(), { target: { value: "16777216" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(toast).toHaveBeenCalledWith({ title: "Invalid VNI", variant: "destructive" }));
+    expect(overlay.createVNI).not.toHaveBeenCalled();
+  });
+
+  it("accepts the largest 24-bit VNI", async () => {
+    overlay.listVNIs.mockResolvedValue({ data: { vnis: [] } });
+    overlay.createVNI.mockResolvedValue({});
+    render(<NetworkOverlaysPage />);
+
+    fireEvent.change(await openDialog(), { target: { value: "16777215" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(overlay.createVNI).toHaveBeenCalledWith({ config: { vni: 16777215, name: undefined } }));
+  });
+
   it("refuses a negative VNI", async () => {
     overlay.listVNIs.mockResolvedValue({ data: { vnis: [] } });
     render(<NetworkOverlaysPage />);
