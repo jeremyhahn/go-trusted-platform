@@ -33,13 +33,36 @@ test.describe('VPN', () => {
   test('the page lists gateways, sessions, peers and policies', async ({ adminPage: page, tenant }) => {
     const status = await openVPNPage(page);
 
-    expect((await status).status()).toBe(200);
+    const response = await status;
+    expect(response.status()).toBe(200);
     await expect(page.getByTestId('vpn-status-error')).toHaveCount(0);
     const gateways = page.getByTestId('vpn-gateways-card');
-    await expect(
-      gateways.getByTestId('vpn-gateways-table').or(gateways.getByText('No gateway has reported yet.'))
-    ).toBeVisible();
-    await expect(page.getByTestId('vpn-sessions-card')).toBeVisible();
+    const sessions = page.getByTestId('vpn-sessions-card');
+    await expect(sessions).toBeVisible();
+
+    // The GetStatus payload the server sent reaches the gateways and sessions cards.
+    const body = (await response.json()) as {
+      payload?: {
+        gateways?: { gatewayId: string; reporting: boolean; leases?: { address: string }[] }[];
+      };
+    };
+    const reported = body.payload?.gateways ?? [];
+    if (reported.length === 0) {
+      await expect(gateways.getByText('No gateway has reported yet.')).toBeVisible();
+      await expect(sessions.getByText('No live sessions.')).toBeVisible();
+    } else {
+      const table = gateways.getByTestId('vpn-gateways-table');
+      await expect(table).toBeVisible();
+      for (const gateway of reported) {
+        await expect(table.getByText(gateway.gatewayId, { exact: true })).toBeVisible();
+        if (gateway.reporting) {
+          await expect(gateways.getByTestId(`vpn-gateway-detail-${gateway.gatewayId}`)).toBeVisible();
+        }
+        for (const lease of gateway.leases ?? []) {
+          await expect(sessions.getByText(lease.address, { exact: true })).toBeVisible();
+        }
+      }
+    }
     await expect(page.getByTestId('vpn-peers-card')).toBeVisible();
     await expect(page.getByTestId('vpn-policies-card')).toBeVisible();
   });
