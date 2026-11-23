@@ -32,6 +32,7 @@ import {
 } from '@/hooks';
 import type { AttestContainerResponse, ExecContainerResponse } from 'trusted-platform-sdk';
 import { containerStatus } from '@/lib/compute-state';
+import { Gated } from '@/components/features/capabilities/gated';
 
 type PendingAction = 'exec' | 'attest' | null;
 
@@ -149,15 +150,17 @@ export default function ContainerDetailPage() {
             <RefreshCw className="mr-2 h-4 w-4" />
             Refresh
           </Button>
-          <Button
-            variant="outline"
-            disabled={!gates.attest.enabled}
-            title={gates.attest.reason ?? undefined}
-            onClick={() => setPending('attest')}
-          >
-            <ShieldCheck className="mr-2 h-4 w-4" />
-            Attest
-          </Button>
+          <Gated op="POST /api/v1/compute/containers/{id}/attest">
+            <Button
+              variant="outline"
+              disabled={!gates.attest.enabled}
+              title={gates.attest.reason ?? undefined}
+              onClick={() => setPending('attest')}
+            >
+              <ShieldCheck className="mr-2 h-4 w-4" />
+              Attest
+            </Button>
+          </Gated>
         </div>
       </div>
 
@@ -222,14 +225,16 @@ export default function ContainerDetailPage() {
                 onChange={(e) => setCommand(e.target.value)}
               />
             </div>
-            <Button
-              type="submit"
-              disabled={!gates.exec.enabled || command.trim().length === 0}
-              title={gates.exec.reason ?? undefined}
-            >
-              <Terminal className="mr-2 h-4 w-4" />
-              Run
-            </Button>
+            <Gated op="POST /api/v1/compute/containers/{id}/exec">
+              <Button
+                type="submit"
+                disabled={!gates.exec.enabled || command.trim().length === 0}
+                title={gates.exec.reason ?? undefined}
+              >
+                <Terminal className="mr-2 h-4 w-4" />
+                Run
+              </Button>
+            </Gated>
           </form>
           {(execResult || execError) && (
             <div data-testid="exec-result" className="space-y-2">
