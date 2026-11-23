@@ -29,6 +29,7 @@ import type { Snapshot, VM } from 'trusted-platform-sdk';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { VMMetricsCard } from '@/components/features/compute/vm-metrics';
 import { VMDisksCard } from '@/components/features/compute/vm-disks-card';
+import { VMAttestCard } from '@/components/features/compute/vm-attest-card';
 import { Gated } from '@/components/features/capabilities/gated';
 import { VMMigrateButton } from '@/components/features/compute/vm-migrate-dialog';
 import { useCompute, useMutation, useToast, type MutationError } from '@/hooks';
@@ -427,6 +428,8 @@ export default function VMDetailPage() {
 
         <VMMetricsCard vmId={vmId} />
       </div>
+
+      <VMAttestCard vmId={vmId} />
 
       <VMDisksCard
         vmId={vmId}

@@ -55,8 +55,8 @@ describe('VMAttestCard', () => {
     const result = await screen.findByTestId('vm-attest-result');
     const post = sent.find((r) => r.method === 'POST' && r.path === '/api/v1/compute/vms/vm-1/attest');
     expect(post).toBeDefined();
-    const body = post?.body as { vmId?: string; nonce?: string };
-    expect(body.vmId).toBe('vm-1');
+    // The SDK carries the VM id in the path (matched above); the body holds the nonce.
+    const body = post?.body as { nonce?: string };
     expect(body.nonce).toMatch(/^[A-Za-z0-9+/]+=*$/);
     expect(atob(body.nonce ?? '').length).toBe(32);
 
