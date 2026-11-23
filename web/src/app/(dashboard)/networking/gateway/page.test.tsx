@@ -41,6 +41,9 @@ vi.mock("@/components/features/networking/gateway-mode-card", () => ({
     <div data-testid="gateway-mode-card">{initialModes.join(",")}</div>
   ),
 }));
+// The BGP cards read through the SDK client; page.bgp-cards.test.tsx covers their mount.
+vi.mock("@/components/features/networking/bgp-peers-card", () => ({ BGPPeersCard: () => null }));
+vi.mock("@/components/features/networking/bgp-prefixes-card", () => ({ BGPPrefixesCard: () => null }));
 
 import APIGatewayPage from "./page";
 

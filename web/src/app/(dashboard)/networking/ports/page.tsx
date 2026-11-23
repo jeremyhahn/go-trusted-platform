@@ -33,6 +33,7 @@ import type { Port, PortStats, PortType } from 'trusted-platform-sdk';
 import { portState, readUint64, type SDNPortState } from '@/lib/sdn-wire';
 import { useSDNPortState } from '@/hooks/use-sdn-port-state';
 import { SDNPortAuthCard } from '@/components/features/networking/sdn-port-auth-card';
+import { SDNPortStateCard } from '@/components/features/networking/sdn-port-state-card';
 
 // Types for SDN Port management
 interface SDNPort {
@@ -73,6 +74,7 @@ export default function SDNPortsPage() {
   const [statsPort, setStatsPort] = useState<SDNPort | null>(null);
   // authPort is the port whose authentication dialog is open.
   const [authPort, setAuthPort] = useState<SDNPort | null>(null);
+  const [statePort, setStatePort] = useState<SDNPort | null>(null);
   const [portStats, setPortStats] = useState<PortStats | null>(null);
   const [statsError, setStatsError] = useState<string | null>(null);
   // statsRequest is the generation of the current stats read.
@@ -374,6 +376,7 @@ export default function SDNPortsPage() {
             { label: 'View Details', onClick: handleViewPort },
             { label: 'Port Statistics', onClick: handlePortStats },
             { label: 'Port Authentication', onClick: (port: SDNPort) => setAuthPort(port) },
+            { label: 'Port State', onClick: (port: SDNPort) => setStatePort(port) },
             { label: 'Edit', onClick: handleEditPort },
             {
               label: row.original.status === 'up' ? 'Disable' : 'Enable',
@@ -639,6 +642,23 @@ export default function SDNPortsPage() {
             </DialogDescription>
           </DialogHeader>
           {authPort && <SDNPortAuthCard bridgeId={selectedBridgeId} portId={authPort.id} />}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={statePort !== null}
+        onOpenChange={(open) => {
+          if (!open) setStatePort(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Port state: {statePort?.name}</DialogTitle>
+            <DialogDescription>
+              Read the port and set its admin state and rate limits on bridge {selectedBridgeId || 'unknown'}.
+            </DialogDescription>
+          </DialogHeader>
+          {statePort && <SDNPortStateCard bridgeId={selectedBridgeId} portId={statePort.id} />}
         </DialogContent>
       </Dialog>
 
