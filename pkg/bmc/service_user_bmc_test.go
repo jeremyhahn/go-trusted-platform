@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
@@ -107,6 +108,38 @@ func TestService_UserMethods_Simulator(t *testing.T) {
 		got, ok := userInSlot(t, svc, 1)
 		if !ok || got.Username != "admin" {
 			t.Errorf("slot 1 after refused create = %+v (found %v), want admin", got, ok)
+		}
+	})
+
+	t.Run("ConcurrentCreatesSameSlotOneWins", func(t *testing.T) {
+		t.Parallel()
+		svc := newSimUserService(t)
+		names := []string{"racer-a", "racer-b", "racer-c", "racer-d", "racer-e", "racer-f", "racer-g", "racer-h"}
+		errs := make([]error, len(names))
+		var wg sync.WaitGroup
+		for i, name := range names {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errs[i] = svc.CreateUser(ctx, 1, bmc.User{Slot: 6, Username: name, Privilege: bmc.PrivilegeUser}, "x-pass-1")
+			}()
+		}
+		wg.Wait()
+
+		var ok, occupied int
+		for _, err := range errs {
+			var slotErr bmc.ErrSlotOccupied
+			switch {
+			case err == nil:
+				ok++
+			case errors.As(err, &slotErr):
+				occupied++
+			default:
+				t.Fatalf("CreateUser: unexpected error %v", err)
+			}
+		}
+		if ok != 1 || occupied != len(names)-1 {
+			t.Fatalf("concurrent creates: %d succeeded, %d refused as occupied; want 1 and %d", ok, occupied, len(names)-1)
 		}
 	})
 

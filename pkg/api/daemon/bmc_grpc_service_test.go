@@ -1302,6 +1302,20 @@ func TestBMCCreateUser_ServiceError(t *testing.T) {
 	}
 }
 
+func TestBMCGRPCCreateUser_SlotOccupiedIsAlreadyExists(t *testing.T) {
+	fake := &fakeBMCService{createUserErr: bmc.ErrSlotOccupied{Slot: 4}}
+	svc := newTestService(fake, nil)
+	_, err := svc.CreateUser(context.Background(), &platformv1.BMCCreateUserRequest{
+		ProfileId: 1,
+		User: &platformv1.BMCUser{
+			Slot: 4, Privilege: platformv1.BMCUserPrivilege_BMC_USER_PRIVILEGE_USER,
+		},
+	})
+	if got := statusCode(err); got != codes.AlreadyExists {
+		t.Fatalf("code = %v, want AlreadyExists", got)
+	}
+}
+
 func TestBMCCreateUser_NilService(t *testing.T) {
 	svc := NewBMCGRPCService(nil, nil, slog.Default())
 	_, err := svc.CreateUser(context.Background(), &platformv1.BMCCreateUserRequest{

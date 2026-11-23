@@ -39,7 +39,6 @@ describe('BMCCertCard', () => {
       }),
     });
     renderCard();
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Replace certificate' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Publish DANE' }));
     await click('Enroll');
 
@@ -49,7 +48,7 @@ describe('BMCCertCard', () => {
       {
         method: 'POST',
         path: '/api/v1/bmc/42/enroll',
-        body: { replace_certificate: true, dane_publish: true },
+        body: { replace_certificate: false, rotate_password: false, dns_register: true, dane_publish: false },
       },
     ]);
     expect(screen.getByTestId('bmc-cert-pin').textContent).toContain('ab12');
@@ -59,7 +58,17 @@ describe('BMCCertCard', () => {
     expect(steps).toContain('replace: ok');
   });
 
-  it('sends an explicit false for an option checked then unchecked', async () => {
+  it('shows the server enroll defaults checked and offers no option the server does not perform', () => {
+    stubControlPlane({});
+    renderCard();
+
+    expect(screen.getByRole('checkbox', { name: 'Register DNS' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('checkbox', { name: 'Publish DANE' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.queryByRole('checkbox', { name: 'Rotate password' })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: 'Replace certificate' })).toBeNull();
+  });
+
+  it('sends an explicit false for an unchecked default', async () => {
     const sent = stubControlPlane({
       'POST /api/v1/bmc/42/enroll': ok({
         device_id: '7',
@@ -71,11 +80,15 @@ describe('BMCCertCard', () => {
     });
     renderCard();
     fireEvent.click(screen.getByRole('checkbox', { name: 'Register DNS' }));
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Register DNS' }));
     await click('Enroll');
 
     await screen.findByText('Enrolled: BMC profile 42');
-    expect(sent[0].body).toEqual({ dns_register: false });
+    expect(sent[0].body).toEqual({
+      replace_certificate: false,
+      rotate_password: false,
+      dns_register: false,
+      dane_publish: true,
+    });
   });
 
   it('reports the failed ceremony steps', async () => {
@@ -97,7 +110,13 @@ describe('BMCCertCard', () => {
 
     const toast = await screen.findByText('Enrolment incomplete: failed steps: dns');
     expect(toast.getAttribute('data-variant')).toBe('destructive');
-    expect(sent[0].body).toEqual({});
+    // Untouched, every option goes explicitly, with the server defaults.
+    expect(sent[0].body).toEqual({
+      replace_certificate: false,
+      rotate_password: false,
+      dns_register: true,
+      dane_publish: true,
+    });
     expect(screen.getByTestId('bmc-cert-steps').textContent).toContain('dns: failed (zone refused)');
   });
 
