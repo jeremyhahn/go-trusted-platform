@@ -9,7 +9,7 @@ import { unwrapPayload } from './fixtures/wire';
  * the server answered: the verdicts polled from GET /api/v1/attestation/verdicts,
  * the error card when the server refuses the poll (it answers 503 when it has
  * no verdict poller), or, when the server does not offer that route, the
- * not-enabled card with the server's reason. No page.route mocks.
+ * not-enabled card with the server's reason. No mocked routes.
  */
 
 const OP = 'GET /api/v1/attestation/verdicts';
