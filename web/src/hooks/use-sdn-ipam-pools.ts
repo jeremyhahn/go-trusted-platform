@@ -18,6 +18,8 @@ export type SDNIPAMPoolList = Data<SDNService['listIPAMPools']>;
 export type SDNIPAMPool = SDNIPAMPoolList['pools'][number];
 /** SDNIPAMPoolRequest is the create and update request body. */
 export type SDNIPAMPoolRequest = Parameters<SDNService['createIPAMPool']>[0];
+/** SDNIPAMAllocation is one address allocation of a pool. */
+export type SDNIPAMAllocation = Data<SDNService['listIPAMAllocations']>['allocations'][number];
 
 export interface UseSDNIPAMPoolsResult {
   pools: SDNIPAMPool[];
@@ -27,6 +29,10 @@ export interface UseSDNIPAMPoolsResult {
   create: (request: SDNIPAMPoolRequest) => Promise<SDNIPAMPool | undefined>;
   update: (id: string, request: SDNIPAMPoolRequest) => Promise<SDNIPAMPool | undefined>;
   remove: (id: string) => Promise<void>;
+  /** get reads one pool (GET /sdn/gateway/ipam/pools/{id}). */
+  get: (id: string) => Promise<SDNIPAMPool>;
+  /** listAllocations lists one pool's allocations (GET /sdn/gateway/ipam/allocations?pool_id=). */
+  listAllocations: (poolId: string) => Promise<SDNIPAMAllocation[]>;
 }
 
 /** apiFailure turns an SDK refusal into the hook's Error, keeping the HTTP status. */
@@ -112,5 +118,24 @@ export function useSDNIPAMPools(zone?: string): UseSDNIPAMPoolsResult {
     [sdn, refetch]
   );
 
-  return { pools, isLoading, error, refetch, create, update, remove };
+  const get = React.useCallback(
+    async (id: string) => {
+      const res = await sdn.getIPAMPool(id);
+      if (res.error) throw apiFailure(res.error);
+      if (!res.data) throw new Error(`pool ${id} was not returned`);
+      return res.data;
+    },
+    [sdn]
+  );
+
+  const listAllocations = React.useCallback(
+    async (poolId: string) => {
+      const res = await sdn.listIPAMAllocations({ poolId });
+      if (res.error) throw apiFailure(res.error);
+      return res.data?.allocations ?? [];
+    },
+    [sdn]
+  );
+
+  return { pools, isLoading, error, refetch, create, update, remove, get, listAllocations };
 }
