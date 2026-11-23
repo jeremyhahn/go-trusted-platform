@@ -293,6 +293,7 @@ GET /api/v1/sdn/bridges
 GET /api/v1/sdn/bridges/{bridge_id}/vlans
 GET /api/v1/sdn/bridges/{name}
 GET /api/v1/sdn/bridges/{name}/flows
+GET /api/v1/sdn/bridges/{name}/flows/{flow}/stats
 GET /api/v1/sdn/bridges/{name}/ports
 GET /api/v1/sdn/bridges/{name}/ports/{port}/state
 GET /api/v1/sdn/bridges/{name}/ports/{port}/stats
@@ -542,6 +543,7 @@ POST /api/v1/scheduler/jobs/{job_id}/trigger
 POST /api/v1/sdn/bridges
 POST /api/v1/sdn/bridges/{bridge_id}/vlans
 POST /api/v1/sdn/bridges/{name}/flows
+POST /api/v1/sdn/bridges/{name}/flows/flush
 POST /api/v1/sdn/bridges/{name}/ports
 POST /api/v1/sdn/bridges/{name}/ports/{port}/auth
 POST /api/v1/sdn/flows
