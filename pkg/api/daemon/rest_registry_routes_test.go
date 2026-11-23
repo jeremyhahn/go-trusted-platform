@@ -31,7 +31,9 @@ import (
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 )
 
-// registryTokens maps a bearer token to the scopes its caller holds.
+// registryTokens maps a bearer token to the scopes its caller holds; every
+// caller holds the admin role the registry image routes require, so a test
+// sees the scope decision alone (roleTokens tests the role).
 type registryTokens map[string][]string
 
 func (s registryTokens) AuthorizeToken(_ context.Context, token, _, _, _, _ string) (*platformtoken.AuthorizedContext, error) {
@@ -39,7 +41,7 @@ func (s registryTokens) AuthorizeToken(_ context.Context, token, _, _, _, _ stri
 	if !ok {
 		return nil, errors.New("unknown test token")
 	}
-	return &platformtoken.AuthorizedContext{Subject: token, Scopes: scopes}, nil
+	return &platformtoken.AuthorizedContext{Subject: token, Scopes: scopes, Roles: []string{"admin"}}, nil
 }
 
 // statusOnlyRegistry answers Status; the other methods are not reached.

@@ -1133,16 +1133,22 @@ func tpmUnsealOptions(tpm xkmssdk.TrustedPlatformModule, cn string, held xkmssdk
 	return opts, nil
 }
 
-// tpmSealingKeyAttributes names the sealing key cn under the SSRK and
-// holds its password when one is given.
+// tpmSealingKeyAttributes names the sealing key cn and holds its password
+// when one is given. It parents the key as go-xkms does for a seal request
+// without options: on the Platform SRK when the TPM has one, and on the
+// SSRK when the Platform SRK cannot be read, so forwarding the CN and
+// password does not move the key to a weaker parent.
 func tpmSealingKeyAttributes(tpm xkmssdk.TrustedPlatformModule, cn string, held xkmssdk.Password) (*xkmssdk.KeyAttributes, error) {
-	ssrkAttrs, err := tpm.SSRKAttributes()
+	parent, err := tpm.PlatformSRKAttributes()
 	if err != nil {
-		return nil, fmt.Errorf("read SSRK attributes: %w", err)
+		parent, err = tpm.SSRKAttributes()
+		if err != nil {
+			return nil, fmt.Errorf("read SRK attributes: %w", err)
+		}
 	}
 	keyAttrs := &xkmssdk.KeyAttributes{
 		CN:     cn,
-		Parent: ssrkAttrs,
+		Parent: parent,
 	}
 	if held != nil {
 		keyAttrs.Password = held

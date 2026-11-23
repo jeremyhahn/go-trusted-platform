@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -30,6 +31,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
@@ -37,6 +39,7 @@ import (
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
@@ -508,14 +511,27 @@ func (s *RESTServer) SetRegistryHandlers(svc grpcapi.RegistryService, guard *res
 	if s.registryMaxPushBytes > 0 {
 		h.SetMaxPushBytes(s.registryMaxPushBytes)
 	}
+	// The web listener mounts these routes through gated(ROLE_ADMIN), and
+	// docs/registry/api.md requires the admin role on
+	// /api/v1/compute/images/**: a registry scope alone does not let a
+	// caller read or mutate the platform registry here either.
+	admin := func(scope string, next http.HandlerFunc) http.HandlerFunc {
+		return guard.RequireCaller(scope, func(w http.ResponseWriter, r *http.Request, caller *platformtoken.AuthorizedContext) {
+			if caller == nil || !slices.Contains(caller.Roles, common.ROLE_ADMIN) {
+				http.Error(w, "the registry image routes require the admin role", http.StatusForbidden)
+				return
+			}
+			next(w, r)
+		})
+	}
 	sr := s.router.PathPrefix("/api/v1/compute/images").Subrouter()
-	sr.HandleFunc("", guard.Require("registry:read", h.ListImages)).Methods(http.MethodGet)
-	sr.HandleFunc("/", guard.Require("registry:read", h.ListImages)).Methods(http.MethodGet)
-	sr.HandleFunc("", guard.Require("registry:write", h.PushImage)).Methods(http.MethodPost)
-	sr.HandleFunc("/", guard.Require("registry:write", h.PushImage)).Methods(http.MethodPost)
-	sr.HandleFunc("/status", guard.Require("registry:read", h.Status)).Methods(http.MethodGet)
-	sr.HandleFunc("/{repository:.+}", guard.Require("registry:read", h.GetImage)).Methods(http.MethodGet)
-	sr.HandleFunc("/{repository:.+}", guard.Require("registry:delete", h.DeleteImage)).Methods(http.MethodDelete)
+	sr.HandleFunc("", admin("registry:read", h.ListImages)).Methods(http.MethodGet)
+	sr.HandleFunc("/", admin("registry:read", h.ListImages)).Methods(http.MethodGet)
+	sr.HandleFunc("", admin("registry:write", h.PushImage)).Methods(http.MethodPost)
+	sr.HandleFunc("/", admin("registry:write", h.PushImage)).Methods(http.MethodPost)
+	sr.HandleFunc("/status", admin("registry:read", h.Status)).Methods(http.MethodGet)
+	sr.HandleFunc("/{repository:.+}", admin("registry:read", h.GetImage)).Methods(http.MethodGet)
+	sr.HandleFunc("/{repository:.+}", admin("registry:delete", h.DeleteImage)).Methods(http.MethodDelete)
 }
 
 // SetOverlayHandlers wires the overlay REST handlers onto the daemon's REST
