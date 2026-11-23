@@ -19,7 +19,7 @@ afterEach(() => {
 });
 
 function renderCard(overrides: {
-  save?: (input: { description: string; priority: number; specYaml: string }) => Promise<void>;
+  save?: (input: { description: string; priority: number }) => Promise<void>;
   onSaved?: () => void;
   onCancel?: () => void;
 } = {}) {
@@ -41,48 +41,49 @@ function renderCard(overrides: {
 
 const description = () => screen.getByLabelText('Description') as HTMLInputElement;
 const priority = () => screen.getByLabelText('Priority') as HTMLInputElement;
-const spec = () => screen.getByLabelText('Spec (YAML)') as HTMLTextAreaElement;
+// The server refuses every non-empty spec_yaml on update, so the card offers
+// no spec field to edit.
+const expectNoSpecField = () => expect(screen.queryByLabelText('Spec (YAML)')).toBeNull();
 const saveButton = () => screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement;
 
 describe('PolicyEditCard', () => {
-  it('starts the fields with the initial values', () => {
+  it('starts the fields with the initial values and offers no spec field', () => {
     renderCard();
     expect(description().value).toBe('old desc');
     expect(priority().type).toBe('number');
     expect(priority().value).toBe('3');
-    expect(spec().value).toBe('rules:\n  - allow\n');
+    expectNoSpecField();
+    expect(screen.getByText('To change the spec, delete and re-create the policy')).toBeTruthy();
   });
 
-  it('saves the edited description, priority and spec and then reports saved', async () => {
+  it('saves the edited description and priority only, then reports saved', async () => {
     const { save, onSaved } = renderCard();
     fireEvent.change(description(), { target: { value: 'new desc' } });
     fireEvent.change(priority(), { target: { value: '7' } });
-    fireEvent.change(spec(), { target: { value: 'rules: []\n' } });
     fireEvent.click(saveButton());
     await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
     expect(save).toHaveBeenCalledTimes(1);
-    expect(save).toHaveBeenCalledWith({ description: 'new desc', priority: 7, specYaml: 'rules: []\n' });
+    expect(save).toHaveBeenCalledWith({ description: 'new desc', priority: 7 });
   });
 
-  it('shows a refused save in place and keeps the edited spec', async () => {
-    const save = vi.fn().mockRejectedValue(new Error('policy spec is invalid'));
+  it('shows a refused save in place and keeps the edited description', async () => {
+    const save = vi.fn().mockRejectedValue(new Error('policy update refused'));
     const { onSaved } = renderCard({ save });
-    fireEvent.change(spec(), { target: { value: 'rules: bad' } });
+    fireEvent.change(description(), { target: { value: 'edited desc' } });
     fireEvent.click(saveButton());
     const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toContain('policy spec is invalid');
+    expect(alert.textContent).toContain('policy update refused');
     expect(onSaved).not.toHaveBeenCalled();
-    expect(spec().value).toBe('rules: bad');
+    expect(description().value).toBe('edited desc');
   });
 
-  it('disables Save when the spec is empty or only spaces', () => {
-    const { save } = renderCard();
-    fireEvent.change(spec(), { target: { value: '' } });
-    expect(saveButton().disabled).toBe(true);
-    fireEvent.change(spec(), { target: { value: '   ' } });
-    expect(saveButton().disabled).toBe(true);
+  it('enables Save with the fields unchanged', async () => {
+    const { save, onSaved } = renderCard();
+    expect(saveButton().disabled).toBe(false);
     fireEvent.click(saveButton());
-    expect(save).not.toHaveBeenCalled();
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith({ description: 'old desc', priority: 3 });
   });
 
   it('cancels without saving', () => {
