@@ -294,8 +294,8 @@ func TestThresholdQuorum(t *testing.T) {
 		{"10-of-25", 10},
 	}
 	for _, tc := range cases {
-		if got := thresholdQuorum(tc.in); got != tc.want {
-			t.Errorf("thresholdQuorum(%q) = %d, want %d", tc.in, got, tc.want)
+		if got, err := thresholdQuorum(tc.in); got != tc.want || err != nil {
+			t.Errorf("thresholdQuorum(%q) = %d, %v; want %d, nil", tc.in, got, err, tc.want)
 		}
 	}
 }
@@ -303,10 +303,42 @@ func TestThresholdQuorum(t *testing.T) {
 // TestThresholdQuorum_Malformed falls back to zero, the ceremony's
 // single-admin mode, for any spec that is not "M-of-N".
 func TestThresholdQuorum_Malformed(t *testing.T) {
-	for _, in := range []string{"", "garbage", "x-of-5", "-1-of-3", "3of5"} {
-		if got := thresholdQuorum(in); got != 0 {
-			t.Errorf("thresholdQuorum(%q) = %d, want 0", in, got)
+	if got, err := thresholdQuorum(""); got != 0 || err != nil {
+		t.Errorf("thresholdQuorum(\"\") = %d, %v; want 0, nil (single-admin)", got, err)
+	}
+	for _, in := range []string{"garbage", "x-of-5", "-1-of-3", "3of5", "0-of-3", "4-of-3", "+3-of-5", "3-of-x"} {
+		got, err := thresholdQuorum(in)
+		var bad *ErrInvalidCeremonyThreshold
+		if !errors.As(err, &bad) {
+			t.Errorf("thresholdQuorum(%q) = %d, %v; want *ErrInvalidCeremonyThreshold", in, got, err)
+			continue
 		}
+		if bad.Spec != in {
+			t.Errorf("thresholdQuorum(%q) error Spec = %q", in, bad.Spec)
+		}
+	}
+}
+
+func TestCeremonyBackend_Initialize_RefusesMalformedThreshold(t *testing.T) {
+	var calls []string
+	ceremony := &fakeQRDBCeremony{
+		calls: &calls,
+		resp:  &quicbaassdk.QRDBCeremonyInitializeResponse{SPKIPin: "pin", State: "enrolling"},
+	}
+	issuer := &fakeAdminIssuer{calls: &calls, bundle: &AdminBundle{CertPEM: "CERT", KeyPEM: "KEY"}}
+	b := NewCeremonyBackend(logging.DefaultLogger(), &fakeQuicbaasClient{ceremony: ceremony}, issuer)
+
+	_, err := b.Initialize(context.Background(), &daemon.CeremonyInitRequest{
+		SOPIN:     "so",
+		UserPIN:   "user",
+		Threshold: "garbage",
+	})
+	var bad *ErrInvalidCeremonyThreshold
+	if !errors.As(err, &bad) {
+		t.Fatalf("Initialize error = %v, want *ErrInvalidCeremonyThreshold", err)
+	}
+	if len(calls) != 0 {
+		t.Errorf("calls = %v, want none: a malformed threshold must be refused before any minting or ceremony call", calls)
 	}
 }
 

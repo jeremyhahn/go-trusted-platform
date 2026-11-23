@@ -58,6 +58,24 @@ describe('CeremonyInitCard', () => {
     expect(button.disabled).toBe(false);
   });
 
+  it('keeps Initialize disabled and explains the format for a threshold that is not M-of-N', () => {
+    stubControlPlane({});
+    render(withControlPlane(<CeremonyInitCard />));
+
+    const button = screen.getByRole('button', { name: 'Initialize' }) as HTMLButtonElement;
+    const hint = 'Threshold must be M-of-N, for example 3-of-5';
+    fill('SO PIN', 'so-pin-test');
+    expect(screen.queryByText(hint)).toBeNull();
+    for (const bad of ['garbage', '3of5', '4-of-3', '0-of-3']) {
+      fill('Threshold', bad);
+      expect(button.disabled).toBe(true);
+      expect(screen.getByText(hint)).toBeDefined();
+    }
+    fill('Threshold', '3-of-5');
+    expect(button.disabled).toBe(false);
+    expect(screen.queryByText(hint)).toBeNull();
+  });
+
   it('sends nothing when the confirm is cancelled', async () => {
     const sent = stubControlPlane({});
     render(withControlPlane(<CeremonyInitCard />));
