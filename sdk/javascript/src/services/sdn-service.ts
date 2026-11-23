@@ -48,6 +48,13 @@ import type {
   NetworkZoneDeleteResponse,
   UpdateNetworkZoneRequest,
 } from '../types/sdn-zones.js';
+import type {
+  ApplyPolicyRequest,
+  ApplyPolicyResponse,
+  GetPolicyResponse,
+  ListPoliciesRequest,
+  ListPoliciesResponse,
+} from '../types/sdn-policies.js';
 
 /**
  * Builds the query parameters of an SDN list request under the proto field
@@ -420,6 +427,39 @@ export class SDNService extends BaseService {
   async deleteNetworkZone(name: string): Promise<ApiResponse<NetworkZoneDeleteResponse>> {
     return this.client.delete<NetworkZoneDeleteResponse>(
       this.buildUrl(`/zones/${this.encodePathSegment(name)}`)
+    );
+  }
+
+  // =========================================================================
+  // Policy Operations
+  // =========================================================================
+
+  /**
+   * Apply a policy: POST /api/v1/sdn/policies.
+   */
+  async applyPolicy(request: ApplyPolicyRequest): Promise<ApiResponse<ApplyPolicyResponse>> {
+    return this.client.post<ApplyPolicyResponse>(this.buildUrl('/policies'), request);
+  }
+
+  /**
+   * List policies: GET /api/v1/sdn/policies, optionally narrowed by `type` and `target_id`.
+   */
+  async listPolicies(
+    request: ListPoliciesRequest = {}
+  ): Promise<ApiResponse<ListPoliciesResponse>> {
+    return this.client.get<ListPoliciesResponse>(
+      this.buildUrl('/policies', {
+        filters: { type: request.type, target_id: request.targetId },
+      })
+    );
+  }
+
+  /**
+   * Get one policy: GET /api/v1/sdn/policies/{id}.
+   */
+  async getPolicy(id: string): Promise<ApiResponse<GetPolicyResponse>> {
+    return this.client.get<GetPolicyResponse>(
+      this.buildUrl(`/policies/${this.encodePathSegment(id)}`)
     );
   }
 }
