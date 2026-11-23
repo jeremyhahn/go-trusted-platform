@@ -4,8 +4,8 @@ import Link from "next/link";
 import { AlertCircle, FileSignature, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { CA_GATED_CONTROLS, useCAInfo } from "@/hooks/use-ca-ops";
-import { CAOperationGate } from "./ca-operation-gate";
+import { useCAInfo } from "@/hooks/use-ca-ops";
+import { CALifecycleControls } from "@/components/features/ca/ca-lifecycle-controls";
 
 /** A chain entry as the REST layer sends it (camelCase or snake_case). */
 interface CertSummaryWire {
@@ -103,9 +103,7 @@ export default function CAOverviewPage() {
           <CardDescription>Initialization and trust-store installation of the CA certificates</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-4">
-          {CA_GATED_CONTROLS.map((control) => (
-            <CAOperationGate key={control.operation} control={control} />
-          ))}
+          <CALifecycleControls />
         </CardContent>
       </Card>
 

@@ -1,35 +1,9 @@
 "use client";
 
 // CAService operations for the CA pages (#2041, epic #1665): GetCAInfo,
-// VerifyCertificate and SignCSR through the SDK client, and the three
-// lifecycle operations the daemon serves no route for (InitCA,
-// InstallCACertificates, UninstallCACertificates), which the pages show as
-// disabled controls with the reason below.
+// VerifyCertificate and SignCSR through the SDK client.
 import { createPlatformClient } from "trusted-platform-sdk";
 import { useApi, useCA, useMutation, usePlatformClient } from "@/hooks";
-
-export type CAGatedOperation = "InitCA" | "InstallCACertificates" | "UninstallCACertificates";
-
-export interface CAGatedControl {
-  operation: CAGatedOperation;
-  testId: string;
-  label: string;
-}
-
-export const CA_GATED_CONTROLS: readonly CAGatedControl[] = [
-  { operation: "InitCA", testId: "ca-init-control", label: "Initialize CA" },
-  { operation: "InstallCACertificates", testId: "ca-install-control", label: "Install CA certificates" },
-  { operation: "UninstallCACertificates", testId: "ca-uninstall-control", label: "Uninstall CA certificates" },
-];
-
-/**
- * Why a lifecycle control is off: the daemon runs these at start
- * (LoadOrInitCA, with the SO and user PINs from its own configuration), and
- * neither its gRPC CAService nor the REST API serves them.
- */
-export function caOperationReason(operation: CAGatedOperation): string {
-  return `Not available: the daemon runs ${operation} at start-up with its own PINs and serves no API route for it`;
-}
 
 export interface CACertView {
   serial?: string;
