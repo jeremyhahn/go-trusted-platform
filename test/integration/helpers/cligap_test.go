@@ -186,6 +186,12 @@ func TestRequireSDKGapRefusal(t *testing.T) {
 			err:     ErrCLIUpstreamGap{Operation: "kms secrets rotate", Issue: SecretsSDKGapIssue, Err: errors.New("x")},
 			want:    true,
 		},
+		{
+			name:    "MCP unknown method",
+			adapter: "MCP",
+			err:     errors.New("MCP tool \"tools/call\" call failed (code -32601): secrets operation RollbackSecret failed: rpc error: code = Unimplemented desc = secret rollback failed: UNIMPLEMENTED: embedded: unknown method: quicbaas.Secrets/Rollback"),
+			want:    true,
+		},
 		{name: "gRPC nil", adapter: "gRPC", err: nil, want: false},
 		{name: "REST nil", adapter: "REST", err: nil, want: false},
 		{
