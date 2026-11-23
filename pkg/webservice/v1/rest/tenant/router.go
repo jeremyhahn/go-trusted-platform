@@ -32,7 +32,80 @@ const basePath = "/tenants"
 type TenantRouter struct {
 	handlers *Handlers
 	authz    Authorization
+	server   platformv1.TenantServiceServer
+	// dark and record mount an operation whose backend the daemon did not
+	// configure: dark answers it, record lists its routes as not
+	// configured. Both nil mounts every route live.
+	dark   func(name string) http.Handler
+	record func(name string, routes ...*mux.Route)
 	router.WebServiceRouter
+}
+
+// Capability names for the tenant operations that need a backend beyond
+// IAM. A route mounted dark lists as "not-configured: <name>".
+const (
+	FeatureTenantBarrier = "tenant-barrier"
+	FeatureTenantDEK     = "tenant-dek"
+)
+
+// Features is implemented by a tenant server that can say which backends
+// the daemon wired into it. A server without it keeps every route live.
+type Features interface {
+	BarrierConfigured() bool
+	DEKConfigured() bool
+}
+
+// SetUnavailable gives the router the handler that answers an operation
+// whose backend is not configured, and the hook that records its routes
+// for the capability listing. Call it before RegisterRoutes.
+func (r *TenantRouter) SetUnavailable(
+	dark func(name string) http.Handler,
+	record func(name string, routes ...*mux.Route),
+) {
+	r.dark = dark
+	r.record = record
+}
+
+// configured reports whether the server says the named backend is wired.
+// Without Features or without the unavailable hooks every route is live.
+func (r *TenantRouter) configured(name string) bool {
+	features, ok := r.server.(Features)
+	if !ok || r.dark == nil {
+		return true
+	}
+	switch name {
+	case FeatureTenantBarrier:
+		return features.BarrierConfigured()
+	case FeatureTenantDEK:
+		return features.DEKConfigured()
+	}
+	return true
+}
+
+// featureRoute is a route whose handler needs a backend beyond IAM.
+type featureRoute struct {
+	path    string
+	method  string
+	handler http.HandlerFunc
+}
+
+// mountFeature mounts routes live when the named backend is configured,
+// otherwise behind the dark handler, recording them as not configured.
+func (r *TenantRouter) mountFeature(sr *mux.Router, name string, routes []featureRoute) {
+	if r.configured(name) {
+		for _, fr := range routes {
+			sr.Handle(fr.path, r.tenantScoped(fr.handler)).Methods(fr.method)
+		}
+		return
+	}
+	dark := r.dark(name)
+	mounted := make([]*mux.Route, 0, len(routes))
+	for _, fr := range routes {
+		mounted = append(mounted, sr.Handle(fr.path, r.tenantScoped(dark.ServeHTTP)).Methods(fr.method))
+	}
+	if r.record != nil {
+		r.record(name, mounted...)
+	}
 }
 
 // Authorization carries the two guards this router mounts, neither of which
@@ -91,6 +164,7 @@ func NewTenantRouter(
 	return &TenantRouter{
 		handlers: NewHandlers(logger, server, respWriter),
 		authz:    authz,
+		server:   server,
 	}, nil
 }
 
@@ -168,10 +242,17 @@ func (r *TenantRouter) RegisterRoutes(parent *mux.Router) {
 	sr.Handle("/{id}/quotas", r.tenantScoped(r.handlers.UpdateQuotas)).Methods("PUT")
 	sr.Handle("/{id}/usage", r.tenantScoped(r.handlers.GetUsage)).Methods("GET")
 	sr.Handle("/{id}/quota-check", r.tenantScoped(r.handlers.CheckQuota)).Methods("POST")
-	sr.Handle("/{id}/dek/rotate", r.tenantScoped(r.handlers.RotateTenantDEK)).Methods("POST")
-	sr.Handle("/{id}/dek", r.tenantScoped(r.handlers.GetTenantDEKStatus)).Methods("GET")
-	sr.Handle("/{id}/barrier/init", r.tenantScoped(r.handlers.InitBarrier)).Methods("POST")
-	sr.Handle("/{id}/barrier/unseal", r.tenantScoped(r.handlers.UnsealBarrier)).Methods("POST")
-	sr.Handle("/{id}/barrier/seal", r.tenantScoped(r.handlers.SealBarrier)).Methods("POST")
-	sr.Handle("/{id}/barrier", r.tenantScoped(r.handlers.GetBarrierStatus)).Methods("GET")
+	// The DEK and barrier operations need backends the IAM-only tenant
+	// manager may not have; without one they answer not configured, and
+	// the capability listing says so, rather than failing every call.
+	r.mountFeature(sr, FeatureTenantDEK, []featureRoute{
+		{"/{id}/dek/rotate", "POST", r.handlers.RotateTenantDEK},
+		{"/{id}/dek", "GET", r.handlers.GetTenantDEKStatus},
+	})
+	r.mountFeature(sr, FeatureTenantBarrier, []featureRoute{
+		{"/{id}/barrier/init", "POST", r.handlers.InitBarrier},
+		{"/{id}/barrier/unseal", "POST", r.handlers.UnsealBarrier},
+		{"/{id}/barrier/seal", "POST", r.handlers.SealBarrier},
+		{"/{id}/barrier", "GET", r.handlers.GetBarrierStatus},
+	})
 }

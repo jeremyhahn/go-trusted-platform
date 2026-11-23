@@ -74,6 +74,20 @@ func (s *TenantGRPCServer) SetManager(manager *tenant.Manager) {
 	s.manager = manager
 }
 
+// BarrierConfigured reports whether the tenant manager has a per-tenant
+// barrier backend; the REST router mounts the barrier routes as not
+// configured when it does not (resttenant.Features).
+func (s *TenantGRPCServer) BarrierConfigured() bool {
+	return s != nil && s.manager.BarrierConfigured()
+}
+
+// DEKConfigured reports whether the tenant manager has a per-tenant DEK
+// backend; the REST router mounts the DEK routes as not configured when it
+// does not (resttenant.Features).
+func (s *TenantGRPCServer) DEKConfigured() bool {
+	return s != nil && s.manager.DEKConfigured()
+}
+
 // =============================================================================
 // Tenant CRUD Operations
 // =============================================================================
