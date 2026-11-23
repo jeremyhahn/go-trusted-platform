@@ -41,6 +41,20 @@ interface DisplayApplication {
   createdAt?: string;
 }
 
+// credentialsOf reads the one-time secret of a RegisterApp or RotateAppSecret
+// answer: the SDK hands onSuccess the envelope's payload, which the server
+// writes in snake_case ({client_id, client_secret, name}); an `app` wrapper
+// and camelCase are read too.
+function credentialsOf(result: unknown): { clientId: string; clientSecret: string; name: string } | null {
+  if (!result || typeof result !== 'object') return null;
+  const outer = result as Record<string, unknown>;
+  const rec = (outer.app && typeof outer.app === 'object' ? outer.app : outer) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === 'string' ? v : '');
+  const clientSecret = str(rec.clientSecret ?? rec.client_secret);
+  if (!clientSecret) return null;
+  return { clientId: str(rec.clientId ?? rec.client_id), clientSecret, name: str(rec.name) };
+}
+
 /**
  * API Tokens page component
  */
@@ -113,14 +127,8 @@ export default function TokensPage() {
         setIsFormOpen(false);
         setNewAppName('');
         // Show the client secret in the display dialog
-        const app = result?.app;
-        if (app?.clientSecret) {
-          setDisplaySecret({
-            clientId: app.clientId,
-            clientSecret: app.clientSecret,
-            name: app.name,
-          });
-        }
+        const creds = credentialsOf(result);
+        if (creds) setDisplaySecret(creds);
       },
       onError: (error) => {
         toast({
@@ -174,13 +182,8 @@ export default function TokensPage() {
           description: 'The application secret has been rotated successfully',
           variant: 'success',
         });
-        if (result) {
-          setDisplaySecret({
-            clientId: result.clientId,
-            clientSecret: result.clientSecret,
-            name: result.name,
-          });
-        }
+        const creds = credentialsOf(result);
+        if (creds) setDisplaySecret(creds);
       },
       onError: (error) => {
         toast({
