@@ -98,4 +98,28 @@ describe('coverage matrix: GatewayService VIPs, status and perf', () => {
     }
     expect(text).not.toContain('send nothing');
   });
+
+  it('the VIP spec counts reads with the page retry policy', () => {
+    // Codex round 5 on #2163: the page's PlatformProvider retries a retryable
+    // read, so a refused read is sent 1 + maxRetries times and reaches the
+    // card only after the backoff. The spec must count reads that way.
+    const providers = fs.readFileSync(path.resolve(process.cwd(), 'src/app/providers.tsx'), 'utf8');
+    const retries = /maxRetries:\s*(\d+)/.exec(providers)?.[1];
+    const statuses = /retryableStatuses:\s*\[([^\]]*)\]/.exec(providers)?.[1];
+    expect(retries, 'providers.tsx maxRetries').toBeDefined();
+    expect(statuses, 'providers.tsx retryableStatuses').toBeDefined();
+    const list = (statuses ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s !== '')
+      .join(', ');
+
+    const text = fs.readFileSync(path.resolve(process.cwd(), 'e2e/real-server/gateway-vips.spec.ts'), 'utf8');
+    expect(text).toContain(`const READ_RETRIES = ${retries};`);
+    expect(text).toContain(`const RETRYABLE = [${list}];`);
+    expect(text).toContain('expectedReads(');
+    expect(text).toContain('expect.poll(');
+    expect(text).not.toContain('expect(reads).toHaveLength(1)');
+    expect(text).not.toContain("waitForLoadState('networkidle');\n      expect(reads)");
+  });
 });
