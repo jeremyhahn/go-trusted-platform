@@ -112,7 +112,7 @@ describe('FindDeviceConfigPage', () => {
   it('unassigns the shown profile through the confirm dialog', async () => {
     const sent = stubControlPlane({
       [ROUTE]: PROFILE,
-      [UNASSIGN]: ok({ ...(PROFILE.body as object), ek_serial: null, mac_address: null, assigned: false }),
+      [UNASSIGN]: ok({ ...(PROFILE.body as { payload: object }).payload, ek_serial: null, mac_address: null, assigned: false }),
     });
     await findByEKSerial('EK-1');
     await screen.findByText('edge-gw');
