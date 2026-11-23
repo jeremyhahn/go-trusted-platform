@@ -110,3 +110,29 @@ describe("AttestationPage verdict summary", () => {
     expect(problems.textContent).toContain("Attestation reporting is not configured on this node");
   });
 });
+
+describe("AttestationPage links", () => {
+  beforeEach(() => {
+    service.listManifests.mockResolvedValue(unsignedManifests);
+    service.listDeviceReports.mockResolvedValue(reports());
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("links to the caller policy and device verdicts pages", async () => {
+    render(<AttestationPage />);
+
+    expect(screen.getByRole("link", { name: "Caller policy" }).getAttribute("href")).toBe(
+      "/attestation/callers"
+    );
+    expect(screen.getByRole("link", { name: "Device verdicts" }).getAttribute("href")).toBe(
+      "/attestation/verdicts"
+    );
+    expect(screen.getByTestId("attestation-link-callers")).toBeTruthy();
+    expect(screen.getByTestId("attestation-link-verdicts")).toBeTruthy();
+    await screen.findAllByText("Unsigned");
+  });
+});
