@@ -14,7 +14,6 @@
 package daemon
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -42,7 +41,7 @@ func TestNewInvitationGRPCService(t *testing.T) {
 func TestInvitationGRPCService_AllMethodsReturnUnimplemented(t *testing.T) {
 	logger := logging.DefaultLogger()
 	service := NewInvitationGRPCService(logger, nil)
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	tests := []struct {
 		name string
@@ -119,7 +118,7 @@ func TestInvitationGRPCService_AllMethodsReturnUnimplemented(t *testing.T) {
 func TestInvitationGRPCService_NilReturns(t *testing.T) {
 	logger := logging.DefaultLogger()
 	service := NewInvitationGRPCService(logger, nil)
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	t.Run("CreateInvitation_returns_nil_response", func(t *testing.T) {
 		resp, err := service.CreateInvitation(ctx, &platformv1.CreateInvitationRequest{})
@@ -157,7 +156,7 @@ func TestInvitationGRPCService_WithService_Create(t *testing.T) {
 	fake := &fakeInvitationServicer{createResult: inv}
 	svc := NewInvitationGRPCService(logger, fake)
 
-	resp, err := svc.CreateInvitation(context.Background(), &platformv1.CreateInvitationRequest{
+	resp, err := svc.CreateInvitation(unixOperatorContext(), &platformv1.CreateInvitationRequest{
 		TenantId:         "tenant-1",
 		Email:            "alice@example.com",
 		Role:             "member",
@@ -185,7 +184,7 @@ func TestInvitationGRPCService_WithService_NilRequestRejected(t *testing.T) {
 	logger := logging.DefaultLogger()
 	fake := &fakeInvitationServicer{}
 	svc := NewInvitationGRPCService(logger, fake)
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	calls := []func() error{
 		func() error { _, err := svc.CreateInvitation(ctx, nil); return err },
@@ -213,7 +212,7 @@ func TestInvitationGRPCService_WithService_GetByID(t *testing.T) {
 	fake := &fakeInvitationServicer{getByIDResult: newTestInvitation()}
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
 
-	resp, err := svc.GetInvitation(context.Background(), &platformv1.GetInvitationRequest{InvitationId: 42})
+	resp, err := svc.GetInvitation(unixOperatorContext(), &platformv1.GetInvitationRequest{InvitationId: 42})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -227,7 +226,7 @@ func TestInvitationGRPCService_WithService_GetByID_Error(t *testing.T) {
 	fake := &fakeInvitationServicer{getByIDErr: sentinel}
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
 
-	_, err := svc.GetInvitation(context.Background(), &platformv1.GetInvitationRequest{InvitationId: 1})
+	_, err := svc.GetInvitation(unixOperatorContext(), &platformv1.GetInvitationRequest{InvitationId: 1})
 	assertInvitationStatus(t, err, codes.Internal, sentinel.Error())
 }
 
@@ -235,7 +234,7 @@ func TestInvitationGRPCService_WithService_GetByToken(t *testing.T) {
 	fake := &fakeInvitationServicer{getByTokenResult: newTestInvitation()}
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
 
-	resp, err := svc.GetInvitationByToken(context.Background(), &platformv1.GetInvitationByTokenRequest{Token: "tok-1"})
+	resp, err := svc.GetInvitationByToken(unixOperatorContext(), &platformv1.GetInvitationByTokenRequest{Token: "tok-1"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -249,7 +248,7 @@ func TestInvitationGRPCService_WithService_GetByToken_Error(t *testing.T) {
 	fake := &fakeInvitationServicer{getByTokenErr: sentinel}
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
 
-	_, err := svc.GetInvitationByToken(context.Background(), &platformv1.GetInvitationByTokenRequest{Token: "x"})
+	_, err := svc.GetInvitationByToken(unixOperatorContext(), &platformv1.GetInvitationByTokenRequest{Token: "x"})
 	assertInvitationStatus(t, err, codes.Internal, sentinel.Error())
 }
 
@@ -261,7 +260,7 @@ func TestInvitationGRPCService_WithService_List(t *testing.T) {
 	accepted.Status = entities.InvitationStatusAccepted
 	fake := &fakeInvitationServicer{listResult: []*entities.Invitation{pending, accepted}}
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	// All
 	resp, err := svc.ListInvitations(ctx, &platformv1.ListInvitationsRequest{TenantId: "tenant-1"})
@@ -355,7 +354,7 @@ func TestInvitationGRPCService_WithService_List_Error(t *testing.T) {
 	fake := &fakeInvitationServicer{listErr: sentinel}
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
 
-	_, err := svc.ListInvitations(context.Background(), &platformv1.ListInvitationsRequest{TenantId: "t"})
+	_, err := svc.ListInvitations(unixOperatorContext(), &platformv1.ListInvitationsRequest{TenantId: "t"})
 	assertInvitationStatus(t, err, codes.Internal, sentinel.Error())
 }
 
@@ -363,7 +362,7 @@ func TestInvitationGRPCService_WithService_Revoke(t *testing.T) {
 	fake := &fakeInvitationServicer{}
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
 
-	resp, err := svc.RevokeInvitation(context.Background(), &platformv1.RevokeInvitationRequest{InvitationId: 42, RevokerId: 99})
+	resp, err := svc.RevokeInvitation(unixOperatorContext(), &platformv1.RevokeInvitationRequest{InvitationId: 42, RevokerId: 99})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -380,7 +379,7 @@ func TestInvitationGRPCService_WithService_Revoke_Error(t *testing.T) {
 	fake := &fakeInvitationServicer{revokeReturned: sentinel}
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
 
-	_, err := svc.RevokeInvitation(context.Background(), &platformv1.RevokeInvitationRequest{InvitationId: 1, RevokerId: 2})
+	_, err := svc.RevokeInvitation(unixOperatorContext(), &platformv1.RevokeInvitationRequest{InvitationId: 1, RevokerId: 2})
 	assertInvitationStatus(t, err, codes.Internal, sentinel.Error())
 }
 
@@ -392,7 +391,7 @@ func TestInvitationGRPCService_WithService_Accept(t *testing.T) {
 	fake := &fakeInvitationServicer{getByTokenResult: inv}
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
 
-	resp, err := svc.AcceptInvitation(context.Background(), &platformv1.AcceptInvitationRequest{Token: "tok-1", UserId: 7})
+	resp, err := svc.AcceptInvitation(unixOperatorContext(), &platformv1.AcceptInvitationRequest{Token: "tok-1", UserId: 7})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -409,7 +408,7 @@ func TestInvitationGRPCService_WithService_Accept_Error(t *testing.T) {
 	fake := &fakeInvitationServicer{acceptReturned: sentinel}
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
 
-	_, err := svc.AcceptInvitation(context.Background(), &platformv1.AcceptInvitationRequest{Token: "t", UserId: 1})
+	_, err := svc.AcceptInvitation(unixOperatorContext(), &platformv1.AcceptInvitationRequest{Token: "t", UserId: 1})
 	assertInvitationStatus(t, err, codes.Internal, sentinel.Error())
 }
 
@@ -417,7 +416,7 @@ func TestInvitationGRPCService_WithService_Accept_ReadbackFailure(t *testing.T) 
 	fake := &fakeInvitationServicer{getByTokenErr: errors.New("disk")}
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
 
-	resp, err := svc.AcceptInvitation(context.Background(), &platformv1.AcceptInvitationRequest{Token: "tok-1", UserId: 7})
+	resp, err := svc.AcceptInvitation(unixOperatorContext(), &platformv1.AcceptInvitationRequest{Token: "tok-1", UserId: 7})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -433,7 +432,7 @@ func TestInvitationGRPCService_WithService_Delete(t *testing.T) {
 	fake := &fakeInvitationServicer{}
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
 
-	resp, err := svc.DeleteInvitation(context.Background(), &platformv1.DeleteInvitationRequest{InvitationId: 42})
+	resp, err := svc.DeleteInvitation(unixOperatorContext(), &platformv1.DeleteInvitationRequest{InvitationId: 42})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -450,7 +449,7 @@ func TestInvitationGRPCService_WithService_Delete_Error(t *testing.T) {
 	fake := &fakeInvitationServicer{deleteReturned: sentinel}
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
 
-	_, err := svc.DeleteInvitation(context.Background(), &platformv1.DeleteInvitationRequest{InvitationId: 1})
+	_, err := svc.DeleteInvitation(unixOperatorContext(), &platformv1.DeleteInvitationRequest{InvitationId: 1})
 	assertInvitationStatus(t, err, codes.Internal, sentinel.Error())
 }
 
@@ -546,7 +545,7 @@ func TestInvitationGRPCService_ServiceErrorsKeepTheirClass(t *testing.T) {
 			fake := &fakeInvitationServicer{getByIDErr: c.err}
 			svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
 
-			_, err := svc.GetInvitation(context.Background(), &platformv1.GetInvitationRequest{InvitationId: 7})
+			_, err := svc.GetInvitation(unixOperatorContext(), &platformv1.GetInvitationRequest{InvitationId: 7})
 			assertInvitationStatus(t, err, c.want, c.err.Error())
 		})
 	}

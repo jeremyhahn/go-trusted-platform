@@ -56,7 +56,7 @@ func seedEABCredential(t *testing.T, svc *fakeEABService, tenantID string, credS
 }
 
 func TestEABParity_ErrorClass(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	cases := []struct {
 		name    string
 		arrange func(f eabParityFixture)
@@ -246,7 +246,7 @@ func TestEABParity_ErrorClass(t *testing.T) {
 }
 
 func TestEABParity_NotConfiguredIsUnavailable(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	grpcService := NewEABGRPCService(nil, nil, nil)
 	provider := newEABProvider(nil, nil)
 
@@ -271,7 +271,7 @@ func TestEABParity_UnknownStatusFilterRefused(t *testing.T) {
 	f := newEABParityFixture()
 	seedEABCredential(t, f.svc, "t", eab.StatusActive)
 
-	_, err := f.mcp.EABListCredentials(context.Background(), mcp.EABListParams{Status: "bogus"})
+	_, err := f.mcp.EABListCredentials(unixOperatorContext(), mcp.EABListParams{Status: "bogus"})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("class = %v, want InvalidArgument", status.Code(err))
 	}
@@ -313,7 +313,7 @@ func sameIDs(a, b []string) bool {
 }
 
 func TestEABParity_ListAnswer(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	f := newEABParityFixture()
 	for i := 0; i < 6; i++ {
 		seedEABCredential(t, f.svc, "t", eab.StatusActive)
@@ -361,7 +361,7 @@ func TestEABParity_ListAnswer(t *testing.T) {
 }
 
 func TestEABParity_ReadAnswers(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	f := newEABParityFixture()
 	cred := seedEABCredential(t, f.svc, "t", eab.StatusActive)
 
@@ -423,7 +423,7 @@ func TestEABParity_ReadAnswers(t *testing.T) {
 }
 
 func TestEABParity_TenantScopedCleanup(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	seed := func(f eabParityFixture) *eab.Credential {
 		seedEABCredential(t, f.svc, "a", eab.StatusExpired)
 		seedEABCredential(t, f.svc, "a", eab.StatusActive)

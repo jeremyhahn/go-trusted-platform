@@ -280,7 +280,7 @@ func newEABProvider(svc EABServicer, del EABDeliveryServicer) *MCPServiceProvide
 
 func TestEAB_NotConfigured(t *testing.T) {
 	p := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	checks := []struct {
 		name string
@@ -317,7 +317,7 @@ func TestEAB_NotConfigured(t *testing.T) {
 func TestEAB_CreateCredential_HappyPath(t *testing.T) {
 	svc := newFakeEABService()
 	p := newEABProvider(svc, nil)
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	result, err := p.EABCreateCredential(ctx, 7, "tenant-1", 3600, 64)
 	if err != nil {
@@ -347,7 +347,7 @@ func TestEAB_CreateCredential_HappyPath(t *testing.T) {
 func TestEAB_CreateCredential_NoExpiry(t *testing.T) {
 	svc := newFakeEABService()
 	p := newEABProvider(svc, nil)
-	result, err := p.EABCreateCredential(context.Background(), 1, "t", 0, 0)
+	result, err := p.EABCreateCredential(unixOperatorContext(), 1, "t", 0, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -364,7 +364,7 @@ func TestEAB_CreateCredential_PropagatesError(t *testing.T) {
 	svc := newFakeEABService()
 	svc.errGenerate = eab.ErrInvalidProfileID{ProfileID: 0}
 	p := newEABProvider(svc, nil)
-	_, err := p.EABCreateCredential(context.Background(), 0, "", 0, 0)
+	_, err := p.EABCreateCredential(unixOperatorContext(), 0, "", 0, 0)
 	if err == nil {
 		t.Fatal("expected error from underlying service")
 	}
@@ -375,7 +375,7 @@ func TestEAB_GetCredential(t *testing.T) {
 	cred, _ := svc.Generate(context.Background(), eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 	p := newEABProvider(svc, nil)
 
-	result, err := p.EABGetCredential(context.Background(), cred.ID)
+	result, err := p.EABGetCredential(unixOperatorContext(), cred.ID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -391,7 +391,7 @@ func TestEAB_GetCredential(t *testing.T) {
 func TestEAB_GetCredential_NotFound(t *testing.T) {
 	svc := newFakeEABService()
 	p := newEABProvider(svc, nil)
-	_, err := p.EABGetCredential(context.Background(), 99)
+	_, err := p.EABGetCredential(unixOperatorContext(), 99)
 	var notFound eab.ErrCredentialNotFound
 	if !errors.As(err, &notFound) {
 		t.Errorf("expected ErrCredentialNotFound, got %v", err)
@@ -403,7 +403,7 @@ func TestEAB_GetCredentialByKeyID(t *testing.T) {
 	cred, _ := svc.Generate(context.Background(), eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 	p := newEABProvider(svc, nil)
 
-	result, err := p.EABGetCredentialByKeyID(context.Background(), cred.KeyID)
+	result, err := p.EABGetCredentialByKeyID(unixOperatorContext(), cred.KeyID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestEAB_GetCredentialByKeyID(t *testing.T) {
 		t.Errorf("key_id mismatch: %v", m["key_id"])
 	}
 
-	_, err = p.EABGetCredentialByKeyID(context.Background(), "nope")
+	_, err = p.EABGetCredentialByKeyID(unixOperatorContext(), "nope")
 	var notFound eab.ErrCredentialNotFound
 	if !errors.As(err, &notFound) {
 		t.Errorf("expected ErrCredentialNotFound, got %v", err)
@@ -421,7 +421,7 @@ func TestEAB_GetCredentialByKeyID(t *testing.T) {
 
 func TestEAB_ListCredentials_ByTenant(t *testing.T) {
 	svc := newFakeEABService()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 2, TenantID: "t1"})
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 3, TenantID: "t2"})
@@ -439,7 +439,7 @@ func TestEAB_ListCredentials_ByTenant(t *testing.T) {
 
 func TestEAB_ListCredentials_AllTenantsViaPage(t *testing.T) {
 	svc := newFakeEABService()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 2, TenantID: "t2"})
 	p := newEABProvider(svc, nil)
@@ -457,7 +457,7 @@ func TestEAB_ListCredentials_AllTenantsViaPage(t *testing.T) {
 
 func TestEAB_ListCredentials_StatusAndPagination(t *testing.T) {
 	svc := newFakeEABService()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	c1, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	_ = svc.Revoke(ctx, c1.ID)
@@ -501,14 +501,14 @@ func TestEAB_ListCredentials_PagePropagatesError(t *testing.T) {
 	svc := newFakeEABService()
 	svc.errPage = errors.New("storage down")
 	p := newEABProvider(svc, nil)
-	if _, err := p.EABListCredentials(context.Background(), mcp.EABListParams{}); err == nil {
+	if _, err := p.EABListCredentials(unixOperatorContext(), mcp.EABListParams{}); err == nil {
 		t.Fatal("expected error from page walk")
 	}
 }
 
 func TestEAB_ListCredentials_ByProfileFiltersTenant(t *testing.T) {
 	svc := newFakeEABService()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t2"})
 	p := newEABProvider(svc, nil)
@@ -526,7 +526,7 @@ func TestEAB_ListCredentials_ByProfileFiltersTenant(t *testing.T) {
 
 func TestEAB_ListCredentials_ActiveOnlyFiltersExpired(t *testing.T) {
 	svc := newFakeEABService()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	cred, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	// Force expiry in the past so IsValid() == false.
 	cred.ExpiresAt = time.Now().Add(-time.Hour)
@@ -546,12 +546,12 @@ func TestEAB_ListCredentials_PropagatesError(t *testing.T) {
 	svc := newFakeEABService()
 	svc.errListByTenant = errors.New("storage down")
 	p := newEABProvider(svc, nil)
-	if _, err := p.EABListCredentials(context.Background(), mcp.EABListParams{TenantID: "t1"}); err == nil {
+	if _, err := p.EABListCredentials(unixOperatorContext(), mcp.EABListParams{TenantID: "t1"}); err == nil {
 		t.Fatal("expected error from underlying service")
 	}
 	svc.errListByTenant = nil
 	svc.errListByProfile = errors.New("storage down")
-	if _, err := p.EABListCredentials(context.Background(), mcp.EABListParams{TenantID: "t1", ProfileID: 1}); err == nil {
+	if _, err := p.EABListCredentials(unixOperatorContext(), mcp.EABListParams{TenantID: "t1", ProfileID: 1}); err == nil {
 		t.Fatal("expected error from underlying service")
 	}
 }
@@ -561,7 +561,7 @@ func TestEAB_RevokeCredential(t *testing.T) {
 	cred, _ := svc.Generate(context.Background(), eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 	p := newEABProvider(svc, nil)
 
-	result, err := p.EABRevokeCredential(context.Background(), cred.ID, 99)
+	result, err := p.EABRevokeCredential(unixOperatorContext(), cred.ID, 99)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -580,7 +580,7 @@ func TestEAB_RevokeCredential(t *testing.T) {
 func TestEAB_RevokeCredential_PropagatesError(t *testing.T) {
 	svc := newFakeEABService()
 	p := newEABProvider(svc, nil)
-	_, err := p.EABRevokeCredential(context.Background(), 99, 0)
+	_, err := p.EABRevokeCredential(unixOperatorContext(), 99, 0)
 	var notFound eab.ErrCredentialNotFound
 	if !errors.As(err, &notFound) {
 		t.Errorf("expected ErrCredentialNotFound, got %v", err)
@@ -593,7 +593,7 @@ func TestEAB_ValidateCredential_HappyPath(t *testing.T) {
 	p := newEABProvider(svc, nil)
 
 	encoded := base64.RawURLEncoding.EncodeToString(cred.HMACKey)
-	result, err := p.EABValidateCredential(context.Background(), cred.KeyID, encoded)
+	result, err := p.EABValidateCredential(unixOperatorContext(), cred.KeyID, encoded)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -614,7 +614,7 @@ func TestEAB_ValidateCredential_StdBase64(t *testing.T) {
 
 	// Use std base64 (with padding) to confirm fallback decoders work.
 	encoded := base64.StdEncoding.EncodeToString(cred.HMACKey)
-	if _, err := p.EABValidateCredential(context.Background(), cred.KeyID, encoded); err != nil {
+	if _, err := p.EABValidateCredential(unixOperatorContext(), cred.KeyID, encoded); err != nil {
 		t.Fatalf("unexpected error with std base64: %v", err)
 	}
 }
@@ -622,7 +622,7 @@ func TestEAB_ValidateCredential_StdBase64(t *testing.T) {
 func TestEAB_ValidateCredential_BadBase64(t *testing.T) {
 	svc := newFakeEABService()
 	p := newEABProvider(svc, nil)
-	_, err := p.EABValidateCredential(context.Background(), "k", "!!!not-base64!!!")
+	_, err := p.EABValidateCredential(unixOperatorContext(), "k", "!!!not-base64!!!")
 	var bad ErrEABInvalidHMACKey
 	if !errors.As(err, &bad) {
 		t.Errorf("expected ErrEABInvalidHMACKey, got %v", err)
@@ -633,7 +633,7 @@ func TestEAB_ValidateCredential_NotFoundReturnsErrorMessage(t *testing.T) {
 	svc := newFakeEABService()
 	p := newEABProvider(svc, nil)
 	encoded := base64.RawURLEncoding.EncodeToString([]byte{1, 2, 3})
-	result, err := p.EABValidateCredential(context.Background(), "missing", encoded)
+	result, err := p.EABValidateCredential(unixOperatorContext(), "missing", encoded)
 	// Validation failures should return valid=false, not a Go error.
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -652,7 +652,7 @@ func TestEAB_DeleteCredential(t *testing.T) {
 	cred, _ := svc.Generate(context.Background(), eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 	p := newEABProvider(svc, nil)
 
-	result, err := p.EABDeleteCredential(context.Background(), cred.ID)
+	result, err := p.EABDeleteCredential(unixOperatorContext(), cred.ID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -661,7 +661,7 @@ func TestEAB_DeleteCredential(t *testing.T) {
 		t.Errorf("expected status=deleted, got %v", m["status"])
 	}
 
-	_, err = p.EABDeleteCredential(context.Background(), 999)
+	_, err = p.EABDeleteCredential(unixOperatorContext(), 999)
 	var notFound eab.ErrCredentialNotFound
 	if !errors.As(err, &notFound) {
 		t.Errorf("expected ErrCredentialNotFound, got %v", err)
@@ -673,7 +673,7 @@ func TestEAB_MarkCredentialUsed(t *testing.T) {
 	cred, _ := svc.Generate(context.Background(), eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 	p := newEABProvider(svc, nil)
 
-	result, err := p.EABMarkCredentialUsed(context.Background(), cred.ID)
+	result, err := p.EABMarkCredentialUsed(unixOperatorContext(), cred.ID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -685,7 +685,7 @@ func TestEAB_MarkCredentialUsed(t *testing.T) {
 		t.Errorf("expected credential to be marked used, got %v", cred.Status)
 	}
 
-	_, err = p.EABMarkCredentialUsed(context.Background(), 999)
+	_, err = p.EABMarkCredentialUsed(unixOperatorContext(), 999)
 	var notFound eab.ErrCredentialNotFound
 	if !errors.As(err, &notFound) {
 		t.Errorf("expected ErrCredentialNotFound, got %v", err)
@@ -697,7 +697,7 @@ func TestEAB_CleanupExpiredCredentials(t *testing.T) {
 	svc.cleanupCount = 5
 	p := newEABProvider(svc, nil)
 
-	result, err := p.EABCleanupExpiredCredentials(context.Background(), "")
+	result, err := p.EABCleanupExpiredCredentials(unixOperatorContext(), "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -711,7 +711,7 @@ func TestEAB_CleanupExpiredCredentials_PropagatesError(t *testing.T) {
 	svc := newFakeEABService()
 	svc.errCleanupExpired = errors.New("storage down")
 	p := newEABProvider(svc, nil)
-	if _, err := p.EABCleanupExpiredCredentials(context.Background(), ""); err == nil {
+	if _, err := p.EABCleanupExpiredCredentials(unixOperatorContext(), ""); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -722,7 +722,7 @@ func TestEAB_GetCredentialQRCode_HappyPath(t *testing.T) {
 	del := &fakeEABDelivery{qrPayload: []byte{0x89, 0x50, 0x4e, 0x47}}
 	p := newEABProvider(svc, del)
 
-	result, err := p.EABGetCredentialQRCode(context.Background(), cred.ID, 512)
+	result, err := p.EABGetCredentialQRCode(unixOperatorContext(), cred.ID, 512)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -747,7 +747,7 @@ func TestEAB_GetCredentialQRCode_DeliveryNotConfigured(t *testing.T) {
 	svc := newFakeEABService()
 	_, _ = svc.Generate(context.Background(), eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 	p := newEABProvider(svc, nil)
-	_, err := p.EABGetCredentialQRCode(context.Background(), 1, 256)
+	_, err := p.EABGetCredentialQRCode(unixOperatorContext(), 1, 256)
 	var notConfigured ErrEABDeliveryNotConfigured
 	if !errors.As(err, &notConfigured) {
 		t.Errorf("expected ErrEABDeliveryNotConfigured, got %v", err)
@@ -758,7 +758,7 @@ func TestEAB_GetCredentialQRCode_GetError(t *testing.T) {
 	svc := newFakeEABService()
 	del := &fakeEABDelivery{qrPayload: []byte{1}}
 	p := newEABProvider(svc, del)
-	_, err := p.EABGetCredentialQRCode(context.Background(), 999, 256)
+	_, err := p.EABGetCredentialQRCode(unixOperatorContext(), 999, 256)
 	var notFound eab.ErrCredentialNotFound
 	if !errors.As(err, &notFound) {
 		t.Errorf("expected ErrCredentialNotFound, got %v", err)
@@ -770,7 +770,7 @@ func TestEAB_GetCredentialQRCode_DeliveryError(t *testing.T) {
 	cred, _ := svc.Generate(context.Background(), eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 	del := &fakeEABDelivery{errQR: errors.New("png encode failed")}
 	p := newEABProvider(svc, del)
-	_, err := p.EABGetCredentialQRCode(context.Background(), cred.ID, 256)
+	_, err := p.EABGetCredentialQRCode(unixOperatorContext(), cred.ID, 256)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -782,7 +782,7 @@ func TestEAB_GetEnrollmentURL_NoPath(t *testing.T) {
 	del := &fakeEABDelivery{url: "https://acme.example/enroll?kid=x"}
 	p := newEABProvider(svc, del)
 
-	result, err := p.EABGetEnrollmentURL(context.Background(), cred.ID, "")
+	result, err := p.EABGetEnrollmentURL(unixOperatorContext(), cred.ID, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -798,7 +798,7 @@ func TestEAB_GetEnrollmentURL_WithPath(t *testing.T) {
 	del := &fakeEABDelivery{urlWithPath: "https://acme.example/custom/path?kid=x"}
 	p := newEABProvider(svc, del)
 
-	result, err := p.EABGetEnrollmentURL(context.Background(), cred.ID, "/custom/path")
+	result, err := p.EABGetEnrollmentURL(unixOperatorContext(), cred.ID, "/custom/path")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -812,7 +812,7 @@ func TestEAB_GetEnrollmentURL_DeliveryNotConfigured(t *testing.T) {
 	svc := newFakeEABService()
 	_, _ = svc.Generate(context.Background(), eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 	p := newEABProvider(svc, nil)
-	_, err := p.EABGetEnrollmentURL(context.Background(), 1, "")
+	_, err := p.EABGetEnrollmentURL(unixOperatorContext(), 1, "")
 	var notConfigured ErrEABDeliveryNotConfigured
 	if !errors.As(err, &notConfigured) {
 		t.Errorf("expected ErrEABDeliveryNotConfigured, got %v", err)
@@ -823,7 +823,7 @@ func TestEAB_GetEnrollmentURL_GetError(t *testing.T) {
 	svc := newFakeEABService()
 	del := &fakeEABDelivery{url: "https://x"}
 	p := newEABProvider(svc, del)
-	_, err := p.EABGetEnrollmentURL(context.Background(), 999, "")
+	_, err := p.EABGetEnrollmentURL(unixOperatorContext(), 999, "")
 	var notFound eab.ErrCredentialNotFound
 	if !errors.As(err, &notFound) {
 		t.Errorf("expected ErrCredentialNotFound, got %v", err)
@@ -835,14 +835,14 @@ func TestEAB_GetEnrollmentURL_DeliveryError(t *testing.T) {
 	cred, _ := svc.Generate(context.Background(), eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 	del := &fakeEABDelivery{errURL: errors.New("base url not configured")}
 	p := newEABProvider(svc, del)
-	_, err := p.EABGetEnrollmentURL(context.Background(), cred.ID, "")
+	_, err := p.EABGetEnrollmentURL(unixOperatorContext(), cred.ID, "")
 	if err == nil {
 		t.Fatal("expected error")
 	}
 
 	del.errURL = nil
 	del.errURLPath = errors.New("bad path")
-	_, err = p.EABGetEnrollmentURL(context.Background(), cred.ID, "/x")
+	_, err = p.EABGetEnrollmentURL(unixOperatorContext(), cred.ID, "/x")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -850,22 +850,22 @@ func TestEAB_GetEnrollmentURL_DeliveryError(t *testing.T) {
 
 func TestEAB_SettersInjectAfterConstruction(t *testing.T) {
 	p := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-	if _, err := p.EABGetCredential(context.Background(), 1); err == nil {
+	if _, err := p.EABGetCredential(unixOperatorContext(), 1); err == nil {
 		t.Fatal("expected ErrEABNotConfigured before SetEABService")
 	}
 
 	svc := newFakeEABService()
 	cred, _ := svc.Generate(context.Background(), eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 	p.SetEABService(svc)
-	if _, err := p.EABGetCredential(context.Background(), cred.ID); err != nil {
+	if _, err := p.EABGetCredential(unixOperatorContext(), cred.ID); err != nil {
 		t.Errorf("expected success after SetEABService, got %v", err)
 	}
 
-	if _, err := p.EABGetEnrollmentURL(context.Background(), cred.ID, ""); err == nil {
+	if _, err := p.EABGetEnrollmentURL(unixOperatorContext(), cred.ID, ""); err == nil {
 		t.Fatal("expected ErrEABDeliveryNotConfigured before SetEABDelivery")
 	}
 	p.SetEABDelivery(&fakeEABDelivery{url: "https://x"})
-	if _, err := p.EABGetEnrollmentURL(context.Background(), cred.ID, ""); err != nil {
+	if _, err := p.EABGetEnrollmentURL(unixOperatorContext(), cred.ID, ""); err != nil {
 		t.Errorf("expected success after SetEABDelivery, got %v", err)
 	}
 }
@@ -1077,9 +1077,9 @@ func TestEAB_CallerTenantIsEnforced(t *testing.T) {
 		ok(t, "EABDeleteCredential", err)
 	})
 
-	t.Run("unbound local operator is unchanged", func(t *testing.T) {
+	t.Run("Unix-socket operator is unchanged", func(t *testing.T) {
 		p, svc := newFixture()
-		ctx := context.Background()
+		ctx := unixOperatorContext()
 		other, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "tenant-b"})
 		svc.cleanupCount = 2
 		_, err := p.EABCreateCredential(ctx, 1, "tenant-b", 0, 0)

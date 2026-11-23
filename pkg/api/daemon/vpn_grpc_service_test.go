@@ -127,7 +127,7 @@ func newVPNTestServer(t *testing.T) (*VPNGRPCService, *quicbaas.MockStorage) {
 
 func TestVPNGRPCService_PeerLifecycle(t *testing.T) {
 	server, _ := newVPNTestServer(t)
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	enrolled, err := server.EnrolPeer(ctx, &platformv1.EnrolVPNPeerRequest{
 		Peer: &platformv1.VPNPeer{TenantId: "acme", DeviceId: "laptop-1", Zones: []string{"management"}},
@@ -158,7 +158,7 @@ func TestVPNGRPCService_PeerLifecycle(t *testing.T) {
 // (which would list every tenant), is PermissionDenied and reaches no store.
 func TestVPNGRPCService_RefusesCrossTenantCaller(t *testing.T) {
 	server, _ := newVPNTestServer(t)
-	_, err := server.EnrolPeer(context.Background(), &platformv1.EnrolVPNPeerRequest{
+	_, err := server.EnrolPeer(unixOperatorContext(), &platformv1.EnrolVPNPeerRequest{
 		Peer: &platformv1.VPNPeer{TenantId: "globex", DeviceId: "phone-1"},
 	})
 	require.NoError(t, err)
@@ -208,7 +208,7 @@ func TestVPNGRPCService_RefusesCrossTenantCaller(t *testing.T) {
 	}
 
 	// The globex peer survived the refused revocation.
-	listed, err := server.ListPeers(context.Background(), &platformv1.ListVPNPeersRequest{TenantId: "globex"})
+	listed, err := server.ListPeers(unixOperatorContext(), &platformv1.ListVPNPeersRequest{TenantId: "globex"})
 	require.NoError(t, err)
 	assert.Len(t, listed.GetPeers(), 1)
 
@@ -223,7 +223,7 @@ func TestVPNGRPCService_RefusesCrossTenantCaller(t *testing.T) {
 // the backend, so the refusal must come before the backend is reached.
 func TestVPNGRPC_TenantlessCallerCannotListAllTenants(t *testing.T) {
 	server, storage := newVPNTestServer(t)
-	_, err := server.EnrolPeer(context.Background(), &platformv1.EnrolVPNPeerRequest{
+	_, err := server.EnrolPeer(unixOperatorContext(), &platformv1.EnrolVPNPeerRequest{
 		Peer: &platformv1.VPNPeer{TenantId: "globex", DeviceId: "phone-1"},
 	})
 	require.NoError(t, err)
@@ -254,13 +254,13 @@ func TestVPNGRPCService_StoreFailureIsUnavailable(t *testing.T) {
 	server, storage := newVPNTestServer(t)
 	storage.ListError = errors.New("raft leader lost")
 
-	_, err := server.ListPeers(context.Background(), &platformv1.ListVPNPeersRequest{})
+	_, err := server.ListPeers(unixOperatorContext(), &platformv1.ListVPNPeersRequest{})
 	assert.Equal(t, codes.Unavailable, status.Code(err))
 }
 
 func TestVPNGRPCService_GetStatusReportsGatewayTelemetry(t *testing.T) {
 	server, _ := newVPNTestServer(t)
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	resp, err := server.GetStatus(ctx, &platformv1.GetVPNStatusRequest{})
 	require.NoError(t, err)
@@ -311,7 +311,7 @@ func TestVPNGRPCService_GetStatusWithoutTelemetryIsUnavailable(t *testing.T) {
 
 func TestVPNGRPCService_WithoutBackendEveryRPCIsUnavailable(t *testing.T) {
 	server := NewVPNGRPCService(nil, nil)
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	calls := map[string]func() error{
 		"EnrolPeer": func() error {

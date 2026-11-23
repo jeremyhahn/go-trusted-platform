@@ -77,7 +77,7 @@ func invokeInvitationServer(server platformv1.InvitationServiceServer, method st
 			proto.Merge(in.(proto.Message), req)
 			return nil
 		}
-		resp, err := desc.Handler(server, context.Background(), decode, nil)
+		resp, err := desc.Handler(server, unixOperatorContext(), decode, nil)
 		if err != nil {
 			return nil, err
 		}
