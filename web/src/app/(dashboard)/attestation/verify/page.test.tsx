@@ -89,7 +89,7 @@ describe("VerifyPage verifier verdicts", () => {
         success: true,
         data: {
           status: "SUCCESS",
-          result: { status: manifest.id === "m-1" ? "VERIFIED" : "FAILED" },
+          result: { status: manifest.id === "m-1" ? "MANIFEST_VERIFICATION_STATUS_VERIFIED" : "MANIFEST_VERIFICATION_STATUS_FAILED" },
         },
       })
     );

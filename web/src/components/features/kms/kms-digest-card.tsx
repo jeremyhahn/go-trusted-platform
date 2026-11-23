@@ -14,6 +14,7 @@
 import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Gated } from '@/components/features/capabilities/gated';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -136,9 +137,11 @@ export function KmsDigestCard(): JSX.Element {
               ))}
             </select>
           </div>
-          <Button onClick={handleHash} disabled={busy || text === ''}>
-            Hash
-          </Button>
+          <Gated op="POST /api/v1/kms/hash">
+            <Button onClick={handleHash} disabled={busy || text === ''}>
+              Hash
+            </Button>
+          </Gated>
           {hashResult && (
             <dl data-testid="kms-hash-result" className="space-y-1 text-sm">
               <dt className="font-medium">Algorithm</dt>
@@ -204,16 +207,20 @@ export function KmsDigestCard(): JSX.Element {
             />
           </div>
           <div className="flex gap-2">
-            <Button onClick={handleHmac} disabled={busy || macKey.trim() === ''}>
-              Compute HMAC
-            </Button>
-            <Button
-              variant="outline"
-              onClick={handleVerify}
-              disabled={busy || macKey.trim() === '' || tag.trim() === ''}
-            >
-              Verify HMAC
-            </Button>
+            <Gated op="POST /api/v1/kms/hmac/{name}">
+              <Button onClick={handleHmac} disabled={busy || macKey.trim() === ''}>
+                Compute HMAC
+              </Button>
+            </Gated>
+            <Gated op="POST /api/v1/kms/hmac/{name}/verify">
+              <Button
+                variant="outline"
+                onClick={handleVerify}
+                disabled={busy || macKey.trim() === '' || tag.trim() === ''}
+              >
+                Verify HMAC
+              </Button>
+            </Gated>
           </div>
           {tagOut !== null && (
             <code
