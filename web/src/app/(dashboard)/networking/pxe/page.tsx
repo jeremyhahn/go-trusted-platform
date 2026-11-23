@@ -29,6 +29,7 @@ import { ServiceUnavailableState } from '@/components/features/platform';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { usePXE, useApi, useToast, useReportedGateways } from '@/hooks';
 import type { PXEDeviceInfo } from 'trusted-platform-sdk';
+import { PXEDeviceActions } from '@/components/features/pxe/pxe-device-actions';
 
 export default function PXEBootPage() {
   const { toast } = useToast();
@@ -486,13 +487,14 @@ export default function PXEBootPage() {
                   <TableHead>Certificate</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead>Updated</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {devices.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={7}
+                      colSpan={8}
                       className="text-center text-muted-foreground"
                     >
                       No devices found
@@ -538,6 +540,9 @@ export default function PXEBootPage() {
                         {device.updatedAt ? formatDistanceToNow(new Date(device.updatedAt), {
                           addSuffix: true,
                         }) : '-'}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <PXEDeviceActions device={device} onChanged={() => void refetchDevices()} />
                       </TableCell>
                     </TableRow>
                   ))
