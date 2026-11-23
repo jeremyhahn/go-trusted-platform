@@ -71,22 +71,26 @@ type CreateOptions struct {
 	PlatformVersion string
 	PlatformConfig  string
 	PlatformType    string
-	SecureBoot      bool
-	TPMUnseal       bool
-	LUKS            bool
-	FIPS            bool
-	FIDO2           bool
-	Overlay         string
-	Output          string
-	KeysDir         string
-	GenerateKeys    bool
-	KeyBackend      string
-	Force           bool
-	WebUI           string
-	ConfigFile      string
-	WorkDir         string
-	Debug           bool
-	Verbose         bool
+	// PlatformctlStaticPath names the CGO_ENABLED=0 platformctl iso create
+	// installs on the media; the running CLI is a CGO build the
+	// customize step refuses as the installer.
+	PlatformctlStaticPath string
+	SecureBoot            bool
+	TPMUnseal             bool
+	LUKS                  bool
+	FIPS                  bool
+	FIDO2                 bool
+	Overlay               string
+	Output                string
+	KeysDir               string
+	GenerateKeys          bool
+	KeyBackend            string
+	Force                 bool
+	WebUI                 string
+	ConfigFile            string
+	WorkDir               string
+	Debug                 bool
+	Verbose               bool
 }
 
 // CreateResult contains the result of ISO creation.
