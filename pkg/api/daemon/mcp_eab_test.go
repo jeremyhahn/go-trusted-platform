@@ -21,6 +21,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
+	"google.golang.org/grpc/codes"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
@@ -973,4 +976,134 @@ func TestEAB_ErrorTypes(t *testing.T) {
 	if !errors.Is(bad, cause) {
 		t.Error("ErrEABInvalidHMACKey: unwrap to cause failed")
 	}
+}
+
+// TestEAB_CallerTenantIsEnforced pins #2008 on MCP: a tenant-bound caller
+// cannot create, list, clean up or act on another tenant's EAB
+// credentials, its own tenant works, and the unbound local operator keeps
+// today's behaviour.
+func TestEAB_CallerTenantIsEnforced(t *testing.T) {
+	tenantA := mcp.ContextWithAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{TenantID: "tenant-a"})
+	newFixture := func() (*MCPServiceProvider, *fakeEABService) {
+		svc := newFakeEABService()
+		return newEABProvider(svc, &fakeEABDelivery{qrPayload: []byte{1}, url: "https://acme.example/enroll"}), svc
+	}
+	denied := func(t *testing.T, what string, err error) {
+		t.Helper()
+		var failure ErrEABToolFailure
+		if !errors.As(err, &failure) || failure.Class != codes.PermissionDenied {
+			t.Errorf("%s: err = %v, want an ErrEABToolFailure of class PermissionDenied", what, err)
+		}
+	}
+	ok := func(t *testing.T, what string, err error) {
+		t.Helper()
+		if err != nil {
+			t.Errorf("%s: %v", what, err)
+		}
+	}
+
+	t.Run("create, list and cleanup naming another tenant", func(t *testing.T) {
+		p, svc := newFixture()
+		_, err := p.EABCreateCredential(tenantA, 1, "tenant-b", 0, 0)
+		denied(t, "EABCreateCredential tenant-b", err)
+		if len(svc.byID) != 0 {
+			t.Error("EABCreateCredential for another tenant reached Generate")
+		}
+		_, err = p.EABListCredentials(tenantA, mcp.EABListParams{TenantID: "tenant-b"})
+		denied(t, "EABListCredentials tenant-b", err)
+		_, err = p.EABListCredentials(tenantA, mcp.EABListParams{ProfileID: 1})
+		denied(t, "EABListCredentials profile without tenant", err)
+
+		expired, _ := svc.Generate(context.Background(), eab.GenerateParams{ProfileID: 1, TenantID: "tenant-b"})
+		expired.ExpiresAt = time.Now().Add(-time.Hour)
+		_, err = p.EABCleanupExpiredCredentials(tenantA, "tenant-b")
+		denied(t, "EABCleanupExpiredCredentials tenant-b", err)
+		_, err = p.EABCleanupExpiredCredentials(tenantA, "")
+		denied(t, "EABCleanupExpiredCredentials empty tenant", err)
+		if _, getErr := svc.Get(context.Background(), expired.ID); getErr != nil {
+			t.Error("a refused cleanup deleted another tenant's credential")
+		}
+	})
+
+	t.Run("credential-ID tools on another tenant's credential", func(t *testing.T) {
+		p, svc := newFixture()
+		other, _ := svc.Generate(context.Background(), eab.GenerateParams{ProfileID: 1, TenantID: "tenant-b"})
+		_, err := p.EABGetCredential(tenantA, other.ID)
+		denied(t, "EABGetCredential", err)
+		_, err = p.EABGetCredentialByKeyID(tenantA, other.KeyID)
+		denied(t, "EABGetCredentialByKeyID", err)
+		_, err = p.EABGetCredentialQRCode(tenantA, other.ID, 256)
+		denied(t, "EABGetCredentialQRCode", err)
+		_, err = p.EABGetEnrollmentURL(tenantA, other.ID, "")
+		denied(t, "EABGetEnrollmentURL", err)
+		_, err = p.EABRevokeCredential(tenantA, other.ID, 0)
+		denied(t, "EABRevokeCredential", err)
+		_, err = p.EABMarkCredentialUsed(tenantA, other.ID)
+		denied(t, "EABMarkCredentialUsed", err)
+		if other.Status != eab.StatusActive {
+			t.Errorf("refused tools changed the credential status to %v", other.Status)
+		}
+		_, err = p.EABDeleteCredential(tenantA, other.ID)
+		denied(t, "EABDeleteCredential", err)
+		if _, getErr := svc.Get(context.Background(), other.ID); getErr != nil {
+			t.Error("a refused EABDeleteCredential removed another tenant's credential")
+		}
+	})
+
+	t.Run("own tenant succeeds", func(t *testing.T) {
+		p, svc := newFixture()
+		_, err := p.EABCreateCredential(tenantA, 1, "tenant-a", 0, 0)
+		ok(t, "EABCreateCredential", err)
+		own, _ := svc.Generate(context.Background(), eab.GenerateParams{ProfileID: 1, TenantID: "tenant-a"})
+		_, err = p.EABListCredentials(tenantA, mcp.EABListParams{TenantID: "tenant-a"})
+		ok(t, "EABListCredentials", err)
+		_, err = p.EABListCredentials(tenantA, mcp.EABListParams{ProfileID: 1, TenantID: "tenant-a"})
+		ok(t, "EABListCredentials profile+tenant", err)
+		_, err = p.EABGetCredential(tenantA, own.ID)
+		ok(t, "EABGetCredential", err)
+		_, err = p.EABGetCredentialByKeyID(tenantA, own.KeyID)
+		ok(t, "EABGetCredentialByKeyID", err)
+		_, err = p.EABGetCredentialQRCode(tenantA, own.ID, 256)
+		ok(t, "EABGetCredentialQRCode", err)
+		_, err = p.EABGetEnrollmentURL(tenantA, own.ID, "")
+		ok(t, "EABGetEnrollmentURL", err)
+		_, err = p.EABMarkCredentialUsed(tenantA, own.ID)
+		ok(t, "EABMarkCredentialUsed", err)
+		_, err = p.EABRevokeCredential(tenantA, own.ID, 0)
+		ok(t, "EABRevokeCredential", err)
+		_, err = p.EABCleanupExpiredCredentials(tenantA, "tenant-a")
+		ok(t, "EABCleanupExpiredCredentials", err)
+		_, err = p.EABDeleteCredential(tenantA, own.ID)
+		ok(t, "EABDeleteCredential", err)
+	})
+
+	t.Run("unbound local operator is unchanged", func(t *testing.T) {
+		p, svc := newFixture()
+		ctx := context.Background()
+		other, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "tenant-b"})
+		svc.cleanupCount = 2
+		_, err := p.EABCreateCredential(ctx, 1, "tenant-b", 0, 0)
+		ok(t, "EABCreateCredential", err)
+		_, err = p.EABListCredentials(ctx, mcp.EABListParams{ProfileID: 1})
+		ok(t, "EABListCredentials", err)
+		_, err = p.EABGetCredential(ctx, other.ID)
+		ok(t, "EABGetCredential", err)
+		_, err = p.EABGetCredentialByKeyID(ctx, other.KeyID)
+		ok(t, "EABGetCredentialByKeyID", err)
+		_, err = p.EABGetCredentialQRCode(ctx, other.ID, 256)
+		ok(t, "EABGetCredentialQRCode", err)
+		_, err = p.EABGetEnrollmentURL(ctx, other.ID, "")
+		ok(t, "EABGetEnrollmentURL", err)
+		_, err = p.EABMarkCredentialUsed(ctx, other.ID)
+		ok(t, "EABMarkCredentialUsed", err)
+		_, err = p.EABRevokeCredential(ctx, other.ID, 0)
+		ok(t, "EABRevokeCredential", err)
+		result, err := p.EABCleanupExpiredCredentials(ctx, "")
+		ok(t, "EABCleanupExpiredCredentials", err)
+		if m, _ := result.(map[string]interface{}); m["deleted_count"] != 2 {
+			t.Errorf("store-wide cleanup deleted_count = %v, want 2", m["deleted_count"])
+		}
+		_, err = p.EABDeleteCredential(ctx, other.ID)
+		ok(t, "EABDeleteCredential", err)
+	})
 }
