@@ -25,8 +25,6 @@ export function TenantBarrierCard({ tenantId }: { tenantId: string }) {
   const barrier = useTenantBarrier();
   const statusCap = useCapabilities().capability('GET /api/v1/tenants/{id}/barrier');
   const [status, setStatus] = useState<TenantBarrierStatus | null>(null);
-  const [threshold, setThreshold] = useState('3');
-  const [shares, setShares] = useState('5');
   const [unsealKey, setUnsealKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,12 +49,14 @@ export function TenantBarrierCard({ tenantId }: { tenantId: string }) {
     void load();
   }, [load]);
 
-  const run = async (action: () => Promise<ActionResult>) => {
+  const run = async (action: () => Promise<ActionResult>, onSuccess?: () => void) => {
     setBusy(true);
     setError(null);
     try {
       const res = await action();
-      if (!res.success) {
+      if (res.success) {
+        onSuccess?.();
+      } else {
         setError(res.error?.message ?? 'request failed');
       }
     } catch (e) {
@@ -90,31 +90,8 @@ export function TenantBarrierCard({ tenantId }: { tenantId: string }) {
         )}
 
         <div className="flex flex-wrap items-end gap-4">
-          <div className="space-y-1">
-            <Label htmlFor="tenant-barrier-threshold">Threshold</Label>
-            <Input
-              id="tenant-barrier-threshold"
-              type="number"
-              min={1}
-              value={threshold}
-              onChange={(e) => setThreshold(e.target.value)}
-            />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="tenant-barrier-shares">Shares</Label>
-            <Input
-              id="tenant-barrier-shares"
-              type="number"
-              min={1}
-              value={shares}
-              onChange={(e) => setShares(e.target.value)}
-            />
-          </div>
           <Gated op="POST /api/v1/tenants/{id}/barrier/init">
-            <Button
-              disabled={busy}
-              onClick={() => run(() => barrier.init(tenantId, Number(threshold), Number(shares)))}
-            >
+            <Button disabled={busy} onClick={() => run(() => barrier.init(tenantId))}>
               Initialize
             </Button>
           </Gated>
@@ -125,12 +102,14 @@ export function TenantBarrierCard({ tenantId }: { tenantId: string }) {
             <Label htmlFor="tenant-barrier-unseal-key">Unseal key</Label>
             <Input
               id="tenant-barrier-unseal-key"
+              type="password"
+              autoComplete="off"
               value={unsealKey}
               onChange={(e) => setUnsealKey(e.target.value)}
             />
           </div>
           <Gated op="POST /api/v1/tenants/{id}/barrier/unseal">
-            <Button disabled={busy} onClick={() => run(() => barrier.unseal(tenantId, unsealKey))}>
+            <Button disabled={busy} onClick={() => run(() => barrier.unseal(tenantId, unsealKey), () => setUnsealKey(''))}>
               Unseal
             </Button>
           </Gated>
