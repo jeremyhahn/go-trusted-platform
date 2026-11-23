@@ -235,18 +235,24 @@ export default function ProvisioningSessionsPage() {
   const [filters, setFilters] = useState<SessionFilters>({ status: 'all' });
   const [assignSession, setAssignSession] = useState<ProvisioningSession | null>(null);
 
-  const { sessions, isLoading, error, refetch, fulfill } = useProvisioningSessions();
-  const fulfillCap = useCapabilities().capability(
-    'POST /api/v1/provisioning/sessions/{sessionID}/fulfill'
-  );
+  const { loading: capsLoading, capability } = useCapabilities();
+  const listCap = capability('GET /api/v1/provisioning/sessions');
+  const fulfillCap = capability('POST /api/v1/provisioning/sessions/{sessionID}/fulfill');
+  // Ask for (and poll) the list only once the server has said it offers it.
+  const listOn = !capsLoading && listCap.enabled;
 
-  // Auto-refresh every 10 seconds
+  const { sessions, isLoading, error, refetch, fulfill } = useProvisioningSessions({
+    enabled: listOn,
+  });
+
+  // Auto-refresh every 10 seconds while the list is offered
   useEffect(() => {
+    if (!listOn) return;
     const interval = setInterval(() => {
       refetch();
     }, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [refetch]);
+  }, [refetch, listOn]);
 
   // Filtered sessions
   const filteredSessions = useMemo(() => {
@@ -299,6 +305,36 @@ export default function ProvisioningSessionsPage() {
     }
   };
 
+  const header = (
+    <div className="flex items-center justify-between">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Provisioning Sessions</h1>
+        <p className="text-muted-foreground">
+          Live dashboard of device provisioning sessions — auto-refreshes every 10 seconds
+        </p>
+      </div>
+      <Gated op="GET /api/v1/provisioning/sessions">
+        <Button variant="outline" onClick={() => refetch()} disabled={isLoading}>
+          <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+          Refresh
+        </Button>
+      </Gated>
+    </div>
+  );
+
+  if (!capsLoading && !listCap.enabled) {
+    return (
+      <div className="flex flex-col gap-6">
+        {header}
+        <Card data-testid="sessions-not-enabled">
+          <CardContent className="pt-6 text-sm text-muted-foreground">
+            Session lists are not enabled on this server: {listCap.reason ?? 'not offered'}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   if (error) {
     return (
       <div className="container mx-auto py-6">
@@ -326,20 +362,7 @@ export default function ProvisioningSessionsPage() {
   return (
     <div className="flex flex-col gap-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Provisioning Sessions</h1>
-          <p className="text-muted-foreground">
-            Live dashboard of device provisioning sessions — auto-refreshes every 10 seconds
-          </p>
-        </div>
-        <Gated op="GET /api/v1/provisioning/sessions">
-          <Button variant="outline" onClick={() => refetch()} disabled={isLoading}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
-            Refresh
-          </Button>
-        </Gated>
-      </div>
+      {header}
 
       {/* Statistics Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
