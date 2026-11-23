@@ -133,3 +133,27 @@ func TestGetUserByEmailFallbackMatchesExactly(t *testing.T) {
 	assert.Nil(t, user)
 	assert.True(t, sdkerrors.IsNotFound(err), "got %v", err)
 }
+
+// TestGetUserByEmail_FallbackFullPageWithoutTokenIsNotNotFound covers a
+// listing that ignores PageToken: a full page with no NextPageToken may hide
+// the user on a later page, so the miss must not be reported as not found.
+func TestGetUserByEmail_FallbackFullPageWithoutTokenIsNotNotFound(t *testing.T) {
+	t.Parallel()
+	full := make([]iamsdk.User, emailLookupPageSize)
+	for i := range full {
+		full[i] = iamsdk.User{ID: "u", Email: "someone@example.com"}
+	}
+	users := &emailLookupUserClient{
+		getErr: unknownGetByEmail(),
+		pages:  map[string]iamsdk.ListUsersResponse{"": {Users: full}},
+	}
+	adapter := NewQuicBaaSIAMAdapter(&emailLookupSDKClient{users: users})
+
+	user, err := adapter.GetUserByEmail(context.Background(), "tenant-a", "owner@example.com")
+
+	require.Error(t, err)
+	assert.Nil(t, user)
+	assert.False(t, sdkerrors.IsNotFound(err), "a truncated listing is not proof of absence: %v", err)
+	assert.True(t, sdkerrors.IsUnavailable(err), "got %v", err)
+	assert.Equal(t, []string{""}, users.listTokens)
+}
