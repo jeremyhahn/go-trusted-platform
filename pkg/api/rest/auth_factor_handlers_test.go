@@ -342,6 +342,39 @@ func TestIssueCert_NoCAService_Returns503(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }
 
+// TestAuthFactorHandlers_WithCASource_FollowsTheSwap pins that the handlers
+// read their CA source on every request: 503 while it is empty, the held CA
+// signs once one is swapped in, and 503 again when it is taken away.
+func TestAuthFactorHandlers_WithCASource_FollowsTheSwap(t *testing.T) {
+	var current AuthFactorCA
+	h := NewAuthFactorHandlers(nil, nil).WithCASource(func() AuthFactorCA { return current })
+	router := registerRoutes(h)
+
+	issue := func() *httptest.ResponseRecorder {
+		csrPEM := generateAuthTestCSRPEM(t)
+		body, _ := json.Marshal(IssueMTLSCertRequest{CSRPEM: csrPEM})
+		req := httptest.NewRequest(http.MethodPost,
+			"/api/v1/users/user-abc/factors/mtls/issue-cert",
+			bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		return rr
+	}
+
+	assert.Equal(t, http.StatusServiceUnavailable, issue().Code)
+
+	current = newAuthTestCA(t)
+	rr := issue()
+	require.Equal(t, http.StatusCreated, rr.Code)
+	var resp IssueMTLSCertResponse
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	assert.True(t, strings.Contains(resp.CertPEM, "BEGIN CERTIFICATE"))
+
+	current = nil
+	assert.Equal(t, http.StatusServiceUnavailable, issue().Code)
+}
+
 func TestIssueCert_NonAdminOtherUser_Returns403(t *testing.T) {
 	testCA := newAuthTestCA(t)
 	router := registerRoutes(newHandlerWithCA(testCA))

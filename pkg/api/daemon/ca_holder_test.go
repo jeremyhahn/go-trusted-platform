@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -134,6 +135,35 @@ func TestCAHolder_SharedByGRPCAndREST(t *testing.T) {
 	assert.Equal(t, "lifecycle-ca", restInfo.CommonName)
 
 	assert.NotNil(t, svc.TrustAnchor())
+}
+
+// TestCAHolder_AuthFactorRoutesFollowTheHolder pins that the auth-factor
+// routes are mounted on an empty holder (503) and reach the CA the holder
+// holds once one is set, with no restart.
+func TestCAHolder_AuthFactorRoutesFollowTheHolder(t *testing.T) {
+	config := DefaultConfig()
+	service, err := NewService(config)
+	require.NoError(t, err)
+	server, err := NewRESTServer(config, service, slog.Default())
+	require.NoError(t, err)
+
+	holder := NewCAHolder(nil)
+	server.SetCAHolder(holder, nil)
+
+	issue := func() int {
+		req := httptest.NewRequest(http.MethodPost,
+			"/api/v1/users/user-abc/factors/mtls/issue-cert",
+			strings.NewReader(`{"csr_pem":"not-a-pem"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		server.router.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	assert.Equal(t, http.StatusServiceUnavailable, issue())
+
+	holder.Set(lifecycleCA(t))
+	assert.Equal(t, http.StatusBadRequest, issue())
 }
 
 func TestCAHolder_ServiceWithoutHolderKeepsItsCA(t *testing.T) {
