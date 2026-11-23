@@ -116,6 +116,11 @@ export default function CertificatesPage() {
     const subjectOf = (c: CertificateWire): string =>
       c.commonName ?? c.common_name ?? c.subject?.common_name ?? c.subject?.commonName ?? "Unknown";
     const issuerOf = (c: CertificateWire): string => c.issuer ?? "Unknown";
+    // The server sends the proto enum name (CERTIFICATE_STATUS_EXPIRED); older payloads send the bare word (#2041).
+    const statusOf = (s: unknown): "active" | "revoked" | "expired" => {
+      const u = String(s).toUpperCase().replace(/^CERTIFICATE_STATUS_/, "");
+      return u === "REVOKED" ? "revoked" : u === "EXPIRED" ? "expired" : "active";
+    };
 
     // Pre-compute the set of CN's that appear as someone's issuer; those CN's
     // are CAs we have visibility into.
@@ -142,8 +147,7 @@ export default function CertificatesPage() {
       subject: subjectOf(cert),
       issuer: issuerOf(cert),
       type: resolveType(cert),
-      status: String(cert.status).toUpperCase() === "REVOKED" ? "revoked" as const :
-              String(cert.status).toUpperCase() === "EXPIRED" ? "expired" as const : "active" as const,
+      status: statusOf(cert.status),
       notBefore: toIso(cert.notBefore ?? cert.not_before),
       notAfter: toIso(cert.notAfter ?? cert.not_after),
       publicKeyAlgorithm: cert.keyAlgorithm ?? cert.key_algorithm ?? "RSA",
