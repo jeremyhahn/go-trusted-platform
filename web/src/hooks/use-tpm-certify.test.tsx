@@ -51,10 +51,10 @@ describe('useTPMCertify', () => {
     deleteSpy.mockResolvedValue(answer);
     const { result } = renderHook(() => useTPMCertify());
 
-    const req = { keyHandle: 0x81000010 };
+    const req = { handle: 0x81000010 };
     let res: unknown;
     await act(async () => {
-      res = await result.current.deleteAK(req as Parameters<typeof result.current.deleteAK>[0]);
+      res = await result.current.deleteAK(req);
     });
 
     expect(res).toEqual(answer);
