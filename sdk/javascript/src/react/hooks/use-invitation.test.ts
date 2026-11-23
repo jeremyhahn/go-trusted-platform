@@ -28,6 +28,7 @@ const service = {
   accept: vi.fn(),
   resend: vi.fn(),
   list: vi.fn(),
+  delete: vi.fn(),
 };
 
 function mutationFn(result: unknown): Fn {
@@ -56,9 +57,9 @@ describe('useInvitation', () => {
     expect(useInvitation().service).toBe(service);
   });
 
-  it('builds exactly four mutations', () => {
+  it('builds exactly five mutations', () => {
     useInvitation();
-    expect(useMutation).toHaveBeenCalledTimes(4);
+    expect(useMutation).toHaveBeenCalledTimes(5);
   });
 
   it('create forwards the request to service.create', async () => {
@@ -73,6 +74,11 @@ describe('useInvitation', () => {
   it('revoke forwards the id to service.revoke', async () => {
     await mutationFn(useInvitation().revoke)('inv-1');
     expect(service.revoke).toHaveBeenCalledWith('inv-1');
+  });
+
+  it('remove forwards the id to service.delete', async () => {
+    await mutationFn(useInvitation().remove)('inv-1');
+    expect(service.delete).toHaveBeenCalledWith('inv-1');
   });
 
   it('accept forwards the request to service.accept', async () => {
