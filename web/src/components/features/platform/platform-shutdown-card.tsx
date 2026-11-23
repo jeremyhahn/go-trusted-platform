@@ -33,7 +33,7 @@ export function PlatformShutdownCard() {
   const shutdown = async () => {
     setBusy(true);
     try {
-      const res = await api.post<unknown>("/v1/platform/shutdown", {});
+      const res = await api.post<unknown>("/v1/platform/shutdown", { graceful: true });
       if (res.error) {
         toast({
           title: "Shutdown refused",
