@@ -100,12 +100,16 @@ type mockTPM struct {
 	sealErr            error
 	unsealResult       []byte
 	unsealErr          error
-	deviceResult       string
-	isFIPSResult       bool
-	isFIPSErr          error
-	isPCRExtResult     bool
-	isPCRExtErr        error
-	canSealResult      bool
+	// sealPassword and unsealPassword record the password the TPM call
+	// saw, read while the handler still holds it.
+	sealPassword   string
+	unsealPassword string
+	deviceResult   string
+	isFIPSResult   bool
+	isFIPSErr      error
+	isPCRExtResult bool
+	isPCRExtErr    error
+	canSealResult  bool
 	// The options and sealed data the handler passed, so a test can see
 	// the key name, password and backend reach the TPM (#1690).
 	sealOpts     *xkmssdk.SealOptions
@@ -303,6 +307,9 @@ func (m *mockTPM) RandomBytes(n int) ([]byte, error) {
 }
 func (m *mockTPM) Seal(ctx context.Context, data []byte, opts *xkmssdk.SealOptions) (*xkmssdk.SealedData, error) {
 	m.sealOpts = opts
+	if opts != nil && opts.KeyAttributes != nil && opts.KeyAttributes.Password != nil {
+		m.sealPassword, _ = opts.KeyAttributes.Password.String()
+	}
 	if m.sealErr != nil {
 		return nil, m.sealErr
 	}
@@ -314,6 +321,9 @@ func (m *mockTPM) Seal(ctx context.Context, data []byte, opts *xkmssdk.SealOptio
 func (m *mockTPM) Unseal(ctx context.Context, sealed *xkmssdk.SealedData, opts *xkmssdk.UnsealOptions) ([]byte, error) {
 	m.unsealSealed = sealed
 	m.unsealOpts = opts
+	if opts != nil && opts.Password != nil {
+		m.unsealPassword, _ = opts.Password.String()
+	}
 	if m.unsealErr != nil {
 		return nil, m.unsealErr
 	}
@@ -1053,6 +1063,72 @@ func TestTPM2Handler_HandleSeal_PassesCNAndPassword(t *testing.T) {
 	assert.Equal(t, "k1", mock.sealOpts.KeyAttributes.CN)
 	assert.NotNil(t, mock.sealOpts.KeyAttributes.Password, "the password was dropped")
 	assert.Equal(t, mock.ssrkAttrs, mock.sealOpts.KeyAttributes.Parent)
+}
+
+// The seal handler clears the password it held once Seal returns, on
+// success and on a TPM error: the held password is mlocked memory.
+func TestTPM2Handler_HandleSeal_ClearsPassword(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sealErr error
+	}{
+		{name: "success"},
+		{name: "tpm error", sealErr: errors.New("seal failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewTPM2Handler(logging.DefaultLogger())
+			mock := newMockTPM()
+			mock.sealErr = tc.sealErr
+			h.SetTPM2Service(mock)
+			payload, err := quicwire.EncodePayload(&sealWireRequest{Data: []byte("secret"), CN: "k1", Password: "pw"})
+			require.NoError(t, err)
+			resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Seal}, payload...)})
+			if tc.sealErr == nil {
+				require.Equal(t, quicwire.StatusOK, resp.Status)
+			} else {
+				require.NotEqual(t, quicwire.StatusOK, resp.Status)
+			}
+			assert.Equal(t, "pw", mock.sealPassword, "Seal did not see the password")
+			require.NotNil(t, mock.sealOpts)
+			require.NotNil(t, mock.sealOpts.KeyAttributes)
+			require.NotNil(t, mock.sealOpts.KeyAttributes.Password)
+			assert.Empty(t, mock.sealOpts.KeyAttributes.Password.Bytes(), "the held password was not cleared")
+		})
+	}
+}
+
+// The unseal handler holds one password for the key and the unseal
+// options and clears it once Unseal returns, on success and on a TPM error.
+func TestTPM2Handler_HandleUnseal_ClearsPassword(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		unsealErr error
+	}{
+		{name: "success"},
+		{name: "tpm error", unsealErr: errors.New("unseal failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewTPM2Handler(logging.DefaultLogger())
+			mock := newMockTPM()
+			mock.unsealResult = []byte("secret")
+			mock.unsealErr = tc.unsealErr
+			h.SetTPM2Service(mock)
+			payload, err := quicwire.EncodePayload(&unsealWireRequest{CN: "k1", Password: "pw"})
+			require.NoError(t, err)
+			resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Unseal}, payload...)})
+			if tc.unsealErr == nil {
+				require.Equal(t, quicwire.StatusOK, resp.Status)
+			} else {
+				require.NotEqual(t, quicwire.StatusOK, resp.Status)
+			}
+			assert.Equal(t, "pw", mock.unsealPassword, "Unseal did not see the password")
+			require.NotNil(t, mock.unsealOpts)
+			require.NotNil(t, mock.unsealOpts.Password)
+			require.NotNil(t, mock.unsealOpts.KeyAttributes)
+			assert.Same(t, mock.unsealOpts.Password, mock.unsealOpts.KeyAttributes.Password, "unseal held two passwords")
+			assert.Empty(t, mock.unsealOpts.Password.Bytes(), "the held password was not cleared")
+		})
+	}
 }
 
 // The unseal request names the TPM backend and the key, as the gRPC
