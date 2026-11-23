@@ -61,18 +61,28 @@ func (e ErrTransportAuthRequired) Error() string {
 	return msg + "; refusing to start the transport without one"
 }
 
-// ErrEmbeddedPEPUnavailable is returned by New when gRPC TCP
-// would authorize every scoped call through the IAM policy enforcement point
-// and that point is the embedded quicbaas SDK, which does not implement it:
+// ErrEmbeddedPEPUnavailable is returned by New when a transport would
+// authorize scoped calls through the IAM policy enforcement point and that
+// point is the embedded quicbaas SDK, which does not implement it:
 // go-quicbaas sdk/go transport/embedded handleIAMPEPCheck answers every Check
 // with ServiceNotConfigured. The listener would start and then answer every
-// scoped call Unavailable. Platform tokens carry their own scope claims and
-// mTLS authorizes by certificate, so either one keeps the PEP off the path.
+// scoped call Unavailable. Platform tokens carry their own scope claims, so
+// they keep the PEP off the token path. Under gRPC TCP mTLS is no longer a
+// way around the PEP: every scoped mTLS call is decided per method by it
+// (#1989), so only a remote quicbaas transport serves that configuration.
+// QUIC under mTLS still authorizes by certificate.
 type ErrEmbeddedPEPUnavailable struct {
 	Transport string
+	// MTLS is set when the calls the PEP would decide are mTLS calls.
+	MTLS bool
 }
 
 func (e ErrEmbeddedPEPUnavailable) Error() string {
+	if e.MTLS {
+		return e.Transport + ": mTLS calls are authorized per method by the IAM policy enforcement point, " +
+			"which the embedded quicbaas SDK does not implement (IAM.PEP Check is not configured); " +
+			"use a remote quicbaas transport (quicbaas transport grpc)"
+	}
 	return e.Transport + ": tokens without scope claims are authorized by the IAM policy enforcement point, " +
 		"which the embedded quicbaas SDK does not implement (IAM.PEP Check is not configured); " +
 		"enable platform tokens (webservice jwt.platform-token.enabled) or enable mTLS (--enable-mtls)"
