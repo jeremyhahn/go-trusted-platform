@@ -23,6 +23,8 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { useGateway, useApi, useToast, useReportedGateways } from '@/hooks';
 import { GatewaySnapshotDetail } from '@/components/features/networking/gateway-snapshot-detail';
+import { GatewayModeCard } from '@/components/features/networking/gateway-mode-card';
+import { maskToModes } from '@/hooks/use-gateway-mode';
 
 export default function APIGatewayPage() {
   const { toast } = useToast();
@@ -337,6 +339,11 @@ export default function APIGatewayPage() {
             <div className="text-3xl font-bold mt-2">{ipamPools.length}</div>
           </div>
         </div>
+
+        {typeof status?.modes === 'number' && (
+          // The key re-seeds the checkboxes when a refresh reports other modes.
+          <GatewayModeCard key={status.modes} initialModes={maskToModes(status.modes)} />
+        )}
 
         <div className="grid gap-6 md:grid-cols-2">
           <Card>
