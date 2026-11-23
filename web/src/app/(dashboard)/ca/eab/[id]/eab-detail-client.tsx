@@ -16,6 +16,8 @@ import {
 import { useApi, useEAB } from "@/hooks";
 import { resolveDynamicId } from "@/utils/dynamic-route";
 import { normalizeEABStatus } from "@/utils/eab-status";
+import { Gated } from "@/components/features/capabilities/gated";
+import { useCapabilities } from "@/hooks/use-capabilities";
 import type {
   GetEABCredentialResponse,
   GetEABQRCodeResponse,
@@ -41,10 +43,12 @@ export default function EABCredentialDetailClient() {
   const validId = /^[1-9][0-9]{0,19}$/.test(id);
 
   const eab = useEAB();
+  const { loading: capsLoading, capability } = useCapabilities();
+  const readCap = capability("GET /api/v1/eab/credentials/{id:[0-9]+}");
   const credential = useApi<GetEABCredentialResponse>(
     () => eab.service.get(id),
     [id],
-    { enabled: validId }
+    { enabled: validId && !capsLoading && readCap.enabled }
   );
   const cred = credential.data?.credential;
   const status = normalizeEABStatus(cred?.status);
@@ -92,20 +96,38 @@ export default function EABCredentialDetailClient() {
       : `data:image/${qrCode.format || "png"};base64,${qrCode.qrCode}`
     : null;
 
+  const header = (
+    <div className="flex items-center gap-4">
+      <Button variant="ghost" size="sm" asChild>
+        <Link href="/ca/eab">
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          Back
+        </Link>
+      </Button>
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">EAB Credential {validId ? id : ""}</h1>
+        <p className="text-muted-foreground">Credential details and enrollment</p>
+      </div>
+    </div>
+  );
+
+  if (!capsLoading && !readCap.enabled) {
+    return (
+      <div className="flex flex-col gap-6">
+        {header}
+        <Card data-testid="eab-not-enabled">
+          <CardHeader>
+            <CardTitle>EAB credentials are not enabled</CardTitle>
+            <CardDescription>{readCap.reason}</CardDescription>
+          </CardHeader>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center gap-4">
-        <Button variant="ghost" size="sm" asChild>
-          <Link href="/ca/eab">
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Back
-          </Link>
-        </Button>
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">EAB Credential {validId ? id : ""}</h1>
-          <p className="text-muted-foreground">Credential details and enrollment</p>
-        </div>
-      </div>
+      {header}
 
       {message && (
         <div role="status" data-testid="eab-message" className="p-4 rounded-lg border bg-muted">
@@ -147,15 +169,21 @@ export default function EABCredentialDetailClient() {
               <dd>{cred.createdAt}</dd>
             </dl>
             <div className="mt-4 flex gap-2">
-              <Button variant="outline" onClick={handleQRCode}>
-                Show QR Code
-              </Button>
-              <Button variant="outline" onClick={handleEnrollmentURL}>
-                Get Enrollment URL
-              </Button>
-              <Button onClick={handleMarkUsed} disabled={status !== "ACTIVE"}>
-                Mark Used
-              </Button>
+              <Gated op="GET /api/v1/eab/credentials/{id:[0-9]+}/qrcode">
+                <Button variant="outline" onClick={handleQRCode}>
+                  Show QR Code
+                </Button>
+              </Gated>
+              <Gated op="GET /api/v1/eab/credentials/{id:[0-9]+}/url">
+                <Button variant="outline" onClick={handleEnrollmentURL}>
+                  Get Enrollment URL
+                </Button>
+              </Gated>
+              <Gated op="POST /api/v1/eab/credentials/{id:[0-9]+}/used">
+                <Button onClick={handleMarkUsed} disabled={status !== "ACTIVE"}>
+                  Mark Used
+                </Button>
+              </Gated>
             </div>
           </CardContent>
         </Card>

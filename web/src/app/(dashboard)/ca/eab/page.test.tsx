@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import EABCredentialsPage from './page';
 
@@ -11,6 +11,8 @@ import EABCredentialsPage from './page';
 type Verdict = { valid: boolean };
 
 const { validate } = vi.hoisted(() => ({ validate: vi.fn() }));
+const listState = vi.hoisted(() => ({ credentials: [] as Array<Record<string, unknown>> }));
+const caps = vi.hoisted(() => ({ capability: vi.fn() }));
 
 vi.mock('next/link', () => ({
   default: ({ href, children }: { href: string; children: ReactNode }) => (
@@ -28,13 +30,23 @@ vi.mock('@/hooks', () => ({
     service: { getByKeyId: vi.fn() },
   }),
   useEABList: () => ({
-    data: { credentials: [] },
+    data: { credentials: listState.credentials },
     error: null,
     isLoading: false,
     isFetching: false,
     refetch: vi.fn(),
   }),
 }));
+
+vi.mock('@/hooks/use-capabilities', () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: caps.capability }),
+}));
+
+beforeEach(() => {
+  caps.capability.mockReset();
+  caps.capability.mockImplementation(() => ({ enabled: true }));
+  listState.credentials.length = 0;
+});
 
 function deferred() {
   let resolve: (v: Verdict) => void = () => {};
@@ -117,5 +129,76 @@ describe('EABCredentialsPage validate verdict', () => {
     });
     expect(verdict()).toBeNull();
     expect(screen.queryByTestId('eab-message')).toBeNull();
+  });
+});
+
+// #2050: every control on the list page is gated on the server's
+// capabilities, named by the route's mux path template.
+const CONTROLS: Array<[string, string]> = [
+  ['Clean Up Expired', 'POST /api/v1/eab/credentials/cleanup'],
+  ['Refresh', 'GET /api/v1/eab/credentials'],
+  ['Revoke', 'POST /api/v1/eab/credentials/{id:[0-9]+}/revoke'],
+  ['Delete', 'DELETE /api/v1/eab/credentials/{id:[0-9]+}'],
+  ['Create', 'POST /api/v1/eab/credentials'],
+  ['Validate', 'POST /api/v1/eab/credentials/validate'],
+  ['Look Up', 'GET /api/v1/eab/credentials/key/{key}'],
+];
+
+function button_(name: string): HTMLButtonElement {
+  return screen.getByRole('button', { name }) as HTMLButtonElement;
+}
+
+function addCredential() {
+  listState.credentials.push({
+    id: '1700000000000000001',
+    keyId: 'kid-1',
+    profileId: '1',
+    status: 'EAB_CREDENTIAL_STATUS_ACTIVE',
+    expiresAt: '2026-12-31T00:00:00Z',
+  });
+}
+
+describe('EABCredentialsPage capability gate', () => {
+  afterEach(() => {
+    cleanup();
+    validate.mockReset();
+  });
+
+  it('withholds each list-page control the server does not offer, with its reason', () => {
+    addCredential();
+    caps.capability.mockImplementation(() => ({ enabled: false, reason: 'not-configured: eab' }));
+    render(<EABCredentialsPage />);
+    for (const [name] of CONTROLS) {
+      const button = button_(name);
+      expect(button.disabled, name).toBe(true);
+      expect(button.getAttribute('title'), name).toBe('not-configured: eab');
+      expect(button.getAttribute('data-capability-enabled'), name).toBe('false');
+    }
+  });
+
+  it('names the server op on each control', () => {
+    addCredential();
+    render(<EABCredentialsPage />);
+    for (const [name, op] of CONTROLS) {
+      const button = button_(name);
+      expect(button.getAttribute('data-capability-op'), name).toBe(op);
+      expect(button.getAttribute('data-capability-enabled'), name).toBe('true');
+      expect(button.disabled, name).toBe(false);
+    }
+  });
+
+  it('withholds only the op that is off', async () => {
+    caps.capability.mockImplementation((op: string) =>
+      op === 'POST /api/v1/eab/credentials/validate'
+        ? { enabled: false, reason: 'not-configured: eab' }
+        : { enabled: true },
+    );
+    render(<EABCredentialsPage />);
+    expect(button_('Validate').disabled).toBe(true);
+    expect(button_('Create').disabled).toBe(false);
+    expect(button_('Look Up').disabled).toBe(false);
+    fill('key-a', 'hmac-a');
+    await clickValidate();
+    expect(validate).not.toHaveBeenCalled();
   });
 });
