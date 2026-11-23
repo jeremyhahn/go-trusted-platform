@@ -164,18 +164,16 @@ test.describe('IAM API credentials, real server', () => {
       expect(answer.ok()).toBe(true);
       const app = payloadOf(await answer.json());
       // The server answers the new app with its one-time secret.
-      expect(str(app.client_secret) || str(app.clientSecret)).not.toBe('');
+      const secret = str(app.client_secret);
+      expect(secret).not.toBe('');
       await expect(toast(adminPage, 'Application registered')).toBeVisible();
       await expect(rowOf(adminPage, name)).toBeVisible();
       expect((await listApps(sdk, tenant)).some((a) => a.name === name)).toBe(true);
-      // The page shows the secret only when the answer carries it under `app`.
-      const pageRead = (app.app ?? {}) as { clientSecret?: string };
+      // The page shows that secret, once, in the credentials dialog.
       const credentials = adminPage.getByRole('dialog').filter({ hasText: 'Application Credentials' });
-      if (pageRead.clientSecret) {
-        await expect(credentials.getByText(pageRead.clientSecret, { exact: true })).toBeVisible();
-      } else {
-        await expect(credentials).toBeHidden();
-      }
+      await expect(credentials).toBeVisible();
+      await expect(credentials.getByText(secret, { exact: true })).toBeVisible();
+      await expect(credentials.getByText(str(app.client_id), { exact: true })).toBeVisible();
     });
 
     test('should validate application name is required', async ({ adminPage, sdk, tenant }) => {
@@ -200,15 +198,13 @@ test.describe('IAM API credentials, real server', () => {
       const answer = await rotated;
       expect(answer.ok()).toBe(true);
       const first = payloadOf(await answer.json());
-      const firstSecret = str(first.client_secret) || str(first.clientSecret);
+      const firstSecret = str(first.client_secret);
       expect(firstSecret).not.toBe('');
       await expect(toast(adminPage, 'Secret rotated')).toBeVisible();
-      // The page opens the credentials dialog with what it reads from the answer.
+      // The page opens the credentials dialog with the rotated secret the server answered.
       const credentials = adminPage.getByRole('dialog').filter({ hasText: 'Application Credentials' });
       await expect(credentials).toBeVisible();
-      const pageSecret = str(first.clientSecret);
-      if (pageSecret) await expect(credentials.getByText(pageSecret, { exact: true })).toBeVisible();
-      else await expect(credentials.getByText(firstSecret, { exact: true })).toHaveCount(0);
+      await expect(credentials.getByText(firstSecret, { exact: true })).toBeVisible();
       // A second rotation answers a different secret (never printed).
       const again = await sdk.iam.rotateAppSecret(tenant.id, clientId);
       expect(again.success, JSON.stringify(again.error)).toBe(true);
@@ -351,20 +347,16 @@ test.describe('IAM API credentials, real server', () => {
       const answer = await registered;
       expect(answer.ok()).toBe(true);
       const app = payloadOf(await answer.json());
-      expect(str(app.client_secret) || str(app.clientSecret)).not.toBe('');
-      const pageRead = (app.app ?? {}) as { clientSecret?: string };
+      const secret = str(app.client_secret);
+      expect(secret).not.toBe('');
       const credentials = adminPage.getByRole('dialog').filter({ hasText: 'Application Credentials' });
-      if (pageRead.clientSecret) {
-        const shown = (await credentials.locator('code').last().textContent()) ?? '';
-        expect(shown).toBe(pageRead.clientSecret);
-        await credentials.locator('code').last().locator('..').getByRole('button').click();
-        const copied = await adminPage.evaluate(() => navigator.clipboard.readText());
-        expect(copied === shown).toBe(true);
-      } else {
-        // The answer is not under `app`: the page opens no dialog, so there is no secret to copy.
-        await expect(toast(adminPage, 'Application registered')).toBeVisible();
-        await expect(credentials).toBeHidden();
-      }
+      await expect(credentials).toBeVisible();
+      await expect(credentials.getByText(secret, { exact: true })).toBeVisible();
+      const shown = (await credentials.locator('code').last().textContent()) ?? '';
+      expect(shown).toBe(secret);
+      await credentials.locator('code').last().locator('..').getByRole('button').click();
+      const copied = await adminPage.evaluate(() => navigator.clipboard.readText());
+      expect(copied).toBe(secret);
     });
 
     test('should show OAuth info alert', async ({ adminPage, tenant }) => {

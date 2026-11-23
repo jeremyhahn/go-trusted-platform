@@ -59,4 +59,12 @@ assert.ok(port.includes('unwrapPayload('), 'iam-tokens-port.spec.ts unwraps raw 
 assert.ok(port.includes("from './fixtures/wire'"), "iam-tokens-port.spec.ts imports unwrapPayload from './fixtures/wire'");
 assert.ok(!port.includes('const data = b.data;'), 'iam-tokens-port.spec.ts reads no app record from the envelope data field');
 
+// Codex round 4 P1: the register, rotate and copy cases require the credentials
+// dialog with the one-time secret; no branch accepts a page that drops it.
+assert.ok(!port.includes('pageRead'), 'iam-tokens-port.spec.ts has no pageRead branch that accepts a missing secret');
+assert.ok(
+  !port.includes('await expect(credentials).toBeHidden()'),
+  'iam-tokens-port.spec.ts never accepts a hidden credentials dialog',
+);
+
 console.log('iam-tokens-port.check: ok');
