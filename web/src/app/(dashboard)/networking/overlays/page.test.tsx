@@ -15,6 +15,18 @@ vi.mock("@/hooks", async (importOriginal) => ({
   useToast: () => ({ toast }),
 }));
 
+// The capability gate answers enabled unless a test names the op in capsOff.
+const capsOff: { current: Record<string, string> } = vi.hoisted(() => ({ current: {} }));
+
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: (op: string) =>
+      op in capsOff.current ? { enabled: false, reason: capsOff.current[op] } : { enabled: true },
+  }),
+}));
+
 import NetworkOverlaysPage from "./page";
 
 const vnis = [
@@ -36,6 +48,7 @@ beforeEach(() => {
   overlay.listVNIs.mockReset();
   overlay.createVNI.mockReset();
   toast.mockReset();
+  capsOff.current = {};
 });
 
 afterEach(() => {
@@ -73,11 +86,12 @@ describe("NetworkOverlaysPage", () => {
     expect(statValue("Total Overlays")).toBe("0");
   });
 
-  it("shows the empty state when listing returns an error", async () => {
+  it("shows the listing error, not the empty state, when listing returns an error", async () => {
     overlay.listVNIs.mockResolvedValue({ error: { message: "down", status: 503 } });
     render(<NetworkOverlaysPage />);
 
-    expect(await screen.findByText("No network overlays found")).toBeTruthy();
+    expect((await screen.findByTestId("overlays-list-error")).textContent).toContain("down");
+    expect(screen.queryByText("No network overlays found")).toBeNull();
   });
 
   it("refetches on the refresh button", async () => {
@@ -110,6 +124,28 @@ describe("NetworkOverlaysPage", () => {
 
     await waitFor(() => expect(toast).toHaveBeenCalledWith({ title: "Invalid VNI", variant: "destructive" }));
     expect(overlay.createVNI).not.toHaveBeenCalled();
+  });
+
+  it("refuses a VNI above the 24-bit range without calling the API", async () => {
+    overlay.listVNIs.mockResolvedValue({ data: { vnis: [] } });
+    render(<NetworkOverlaysPage />);
+
+    fireEvent.change(await openDialog(), { target: { value: "16777216" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(toast).toHaveBeenCalledWith({ title: "Invalid VNI", variant: "destructive" }));
+    expect(overlay.createVNI).not.toHaveBeenCalled();
+  });
+
+  it("accepts the largest 24-bit VNI", async () => {
+    overlay.listVNIs.mockResolvedValue({ data: { vnis: [] } });
+    overlay.createVNI.mockResolvedValue({});
+    render(<NetworkOverlaysPage />);
+
+    fireEvent.change(await openDialog(), { target: { value: "16777215" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(overlay.createVNI).toHaveBeenCalledWith({ config: { vni: 16777215, name: undefined } }));
   });
 
   it("refuses a negative VNI", async () => {
@@ -189,5 +225,74 @@ describe("NetworkOverlaysPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByText("Create Overlay (VXLAN VNI)")).toBeNull());
     expect(overlay.createVNI).not.toHaveBeenCalled();
+  });
+});
+
+describe("NetworkOverlaysPage capability gate and refusals", () => {
+  it("withholds Create Overlay when the server does not offer CreateVNI", async () => {
+    capsOff.current = { "POST /api/v1/overlay/vnis": "not-configured: overlay" };
+    overlay.listVNIs.mockResolvedValue({ data: { vnis: [] } });
+    render(<NetworkOverlaysPage />);
+    await screen.findByText("No network overlays found");
+
+    const create = screen.getByRole("button", { name: "Create Overlay" }) as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+    expect(create.getAttribute("title")).toBe("not-configured: overlay");
+    expect(create.getAttribute("data-capability-op")).toBe("POST /api/v1/overlay/vnis");
+    expect(create.getAttribute("data-capability-enabled")).toBe("false");
+    fireEvent.click(create);
+    expect(screen.queryByText("Create Overlay (VXLAN VNI)")).toBeNull();
+  });
+
+  it("withholds Refresh when the server does not offer ListVNIs", async () => {
+    capsOff.current = { "GET /api/v1/overlay/vnis": "not-configured: overlay" };
+    overlay.listVNIs.mockResolvedValue({ data: { vnis: [] } });
+    render(<NetworkOverlaysPage />);
+    await screen.findByText("No network overlays found");
+
+    const refresh = screen.getByRole("button", { name: "Refresh overlays" }) as HTMLButtonElement;
+    expect(refresh.disabled).toBe(true);
+    expect(refresh.getAttribute("title")).toBe("not-configured: overlay");
+    expect(refresh.getAttribute("data-capability-op")).toBe("GET /api/v1/overlay/vnis");
+  });
+
+  it("a refused create keeps the dialog open and toasts the server message", async () => {
+    overlay.listVNIs.mockResolvedValue({ data: { vnis: [] } });
+    overlay.createVNI.mockResolvedValue({ success: false, error: { message: "VNI 9 exists" } });
+    render(<NetworkOverlaysPage />);
+    await waitFor(() => expect(overlay.listVNIs).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(await openDialog(), { target: { value: "9" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith({
+        title: "Failed to create overlay",
+        description: "VNI 9 exists",
+        variant: "destructive",
+      }),
+    );
+    expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Overlay created" }));
+    expect(screen.getByText("Create Overlay (VXLAN VNI)")).toBeTruthy();
+    expect(overlay.listVNIs).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the server refusal of the list, not the empty state", async () => {
+    overlay.listVNIs.mockResolvedValue({ success: false, error: { message: "overlay: no controller configured" } });
+    render(<NetworkOverlaysPage />);
+
+    const alert = await screen.findByTestId("overlays-list-error");
+    expect(alert.textContent).toContain("overlay: no controller configured");
+    expect(screen.queryByText("No network overlays found")).toBeNull();
+  });
+
+  it("Manage links to the VTEPs page", async () => {
+    overlay.listVNIs.mockResolvedValue({ data: { vnis } });
+    render(<NetworkOverlaysPage />);
+    await screen.findByText("tenant-default");
+
+    const manage = screen.getByTestId("overlay-manage-vni-1");
+    expect(manage.tagName).toBe("A");
+    expect(manage.getAttribute("href")).toBe("/networking/overlays/vteps");
   });
 });
