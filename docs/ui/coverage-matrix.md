@@ -25,11 +25,11 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `AttestationService.VerifyManifest` | `POST /manifests/verify` | - | - | - | missing |
 | `AttestationService.ListManifests` | `GET /manifests` | `(dashboard)/attestation/eventlogs/page.tsx`<br>`(dashboard)/attestation/manifests/page.tsx`<br>`(dashboard)/attestation/page.tsx` (+2) | - | `tpm-attestation.spec.ts` | covered |
 | `AttestationService.DeleteManifest` | `DELETE /manifests/{id}` | `(dashboard)/attestation/manifests/page.tsx`<br>`(dashboard)/attestation/[id]/page.tsx` | - | `real-server/attestation-manifests.spec.ts` | covered |
-| `AttestationService.GetAttestationQuote` | - | - | - | - | missing |
-| `AttestationService.VerifyAttestationQuote` | - | - | - | - | missing |
-| `AttestationService.CollectHostAttestation` | `POST /host` | - | - | - | missing |
-| `AttestationService.CollectVMAttestation` | `POST /vm/{id}` | - | - | - | missing |
-| `AttestationService.CollectContainerAttestation` | `POST /container/{id}` | - | - | - | missing |
+| `AttestationService.GetAttestationQuote` | `POST /quote` | `(dashboard)/attestation/quotes/page.tsx` | - | `real-server/attestation-quotes.spec.ts` | covered |
+| `AttestationService.VerifyAttestationQuote` | `POST /quote/verify` | `(dashboard)/attestation/quotes/page.tsx` | - | `real-server/attestation-quotes.spec.ts` | covered |
+| `AttestationService.CollectHostAttestation` | `POST /host` | `(dashboard)/attestation/collect/page.tsx` | - | `real-server/attestation-collect.spec.ts` | covered |
+| `AttestationService.CollectVMAttestation` | `POST /vm/{id}` | `(dashboard)/attestation/collect/page.tsx` | - | `real-server/attestation-collect.spec.ts` | covered |
+| `AttestationService.CollectContainerAttestation` | `POST /container/{id}` | `(dashboard)/attestation/collect/page.tsx` | - | `real-server/attestation-collect.spec.ts` | covered |
 | `AttestationService.GetDeviceReport` | - | `(dashboard)/devices/[id]/page.tsx` | - | `attest-cert-record.spec.ts`<br>`attestation-reports.spec.ts`<br>`devices.spec.ts` | covered |
 | `AttestationService.ListDeviceReports` | - | `(dashboard)/attestation/page.tsx`<br>`(dashboard)/devices/page.tsx` | - | `attestation-reports.spec.ts`<br>`dashboard.spec.ts`<br>`devices.spec.ts` (+1) | covered |
 | `AttestationService.RefreshDeviceReport` | - | `(dashboard)/devices/[id]/page.tsx`<br>`(dashboard)/devices/page.tsx` | - | `attest-cert-record.spec.ts`<br>`attestation-reports.spec.ts`<br>`dashboard.spec.ts` (+1) | covered |
@@ -729,7 +729,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Area (service) | Operations | covered | partial | missing | not-UI | blocked: integration |
 |---|---|---|---|---|---|---|
-| AttestationService | 16 | 9 | 0 | 6 | 1 | 0 |
+| AttestationService | 16 | 14 | 0 | 1 | 1 | 0 |
 | BarrierService | 5 | 0 | 0 | 0 | 5 | 0 |
 | BMCService | 23 | 0 | 0 | 23 | 0 | 0 |
 | CAService | 13 | 7 | 0 | 6 | 0 | 0 |
@@ -765,7 +765,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **124** | **61** | **263** | **50** | **31** |
+| **Total** | **529** | **129** | **61** | **258** | **50** | **31** |
 
 ## Proposed slices
 
