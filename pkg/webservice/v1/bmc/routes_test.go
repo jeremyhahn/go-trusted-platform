@@ -112,6 +112,74 @@ func TestRegisterRoutes_PowerScopes(t *testing.T) {
 	}
 }
 
+// TestRegisterRoutes_PowerBodyOverLimit: a body past maxPowerActionBody is
+// refused with 413, never truncated into a prefix that decodes and runs.
+func TestRegisterRoutes_PowerBodyOverLimit(t *testing.T) {
+	serve := func(router *mux.Router, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/bmc/7/power", strings.NewReader(body)))
+		return rec
+	}
+
+	t.Run("trailing_json_past_limit", func(t *testing.T) {
+		prefix := `{"action":"on"}`
+		body := prefix + strings.Repeat(" ", maxPowerActionBody-len(prefix)) + `{"action":"off"}`
+		stub := &powerStub{}
+		router := mux.NewRouter()
+		RegisterRoutes(router, stub, powerOnlyGuard{})
+
+		rec := serve(router, body)
+		if rec.Code == http.StatusOK || rec.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("status = %d, want 413", rec.Code)
+		}
+		if stub.calls != 0 {
+			t.Fatalf("PowerAction calls = %d, want 0", stub.calls)
+		}
+	})
+
+	t.Run("oversized_off_refused", func(t *testing.T) {
+		body := `{"action":"off"}` + strings.Repeat(" ", maxPowerActionBody)
+		guard := &recordingGuard{}
+		stub := &powerStub{}
+		router := mux.NewRouter()
+		RegisterRoutes(router, stub, guard)
+
+		rec := serve(router, body)
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("status = %d, want 413", rec.Code)
+		}
+		if stub.calls != 0 {
+			t.Fatalf("PowerAction calls = %d, want 0", stub.calls)
+		}
+		if len(guard.scopes) != 0 {
+			t.Fatalf("scopes = %v, want none", guard.scopes)
+		}
+	})
+
+	t.Run("body_at_limit_accepted", func(t *testing.T) {
+		prefix := `{"action":"off"}`
+		body := prefix + strings.Repeat(" ", maxPowerActionBody-len(prefix))
+		guard := &recordingGuard{}
+		stub := &powerStub{}
+		router := mux.NewRouter()
+		RegisterRoutes(router, stub, guard)
+
+		rec := serve(router, body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		if len(guard.scopes) != 1 || guard.scopes[0] != ScopePower {
+			t.Fatalf("scopes = %v, want [%s]", guard.scopes, ScopePower)
+		}
+		if stub.calls != 1 {
+			t.Fatalf("PowerAction calls = %d, want 1", stub.calls)
+		}
+		if stub.body != body {
+			t.Fatalf("handler body differs from the request body (len %d, want %d)", len(stub.body), len(body))
+		}
+	})
+}
+
 // powerOnlyGuard grants bmc:power and refuses every other scope with 403.
 type powerOnlyGuard struct{}
 
