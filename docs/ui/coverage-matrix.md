@@ -33,9 +33,9 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `AttestationService.GetDeviceReport` | - | `(dashboard)/devices/[id]/page.tsx` | - | `attest-cert-record.spec.ts`<br>`attestation-reports.spec.ts`<br>`devices.spec.ts` | covered |
 | `AttestationService.ListDeviceReports` | - | `(dashboard)/attestation/page.tsx`<br>`(dashboard)/devices/page.tsx` | - | `attestation-reports.spec.ts`<br>`dashboard.spec.ts`<br>`devices.spec.ts` (+1) | covered |
 | `AttestationService.RefreshDeviceReport` | - | `(dashboard)/devices/[id]/page.tsx`<br>`(dashboard)/devices/page.tsx` | - | `attest-cert-record.spec.ts`<br>`attestation-reports.spec.ts`<br>`dashboard.spec.ts` (+1) | covered |
-| `AttestationService.DescribeCallerPolicy` | `GET /callers` | `(dashboard)/attestation/callers/page.tsx` | - | `attestation-callers.spec.ts` | covered |
+| `AttestationService.DescribeCallerPolicy` | `GET /callers` | `(dashboard)/attestation/callers/page.tsx` | - | `real-server/attestation-callers.spec.ts` | covered |
 | `AttestationService.StreamDeviceVerdicts` | - | - | - | - | not-UI: streaming plumbing |
-| `AttestationService.PollDeviceVerdicts` | `GET /verdicts` | `(dashboard)/attestation/verdicts/page.tsx` | - | `attestation-verdicts.spec.ts` | covered |
+| `AttestationService.PollDeviceVerdicts` | `GET /verdicts` | `(dashboard)/attestation/verdicts/page.tsx` | - | `real-server/attestation-verdicts.spec.ts` | covered |
 
 ## BarrierService (`barrier.proto`)
 
@@ -771,7 +771,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 Each slice builds the missing pages and the missing specs for at most 15 operations of one area. `missing` rows need a page and a spec; `partial` rows need a spec, or the write added to an existing read-only page. Slices are listed in proto order; within an area, operations on the same resource stay together.
 
-1. **AttestationService: Manifest, AttestationQuote, HostAttestation, VMAttestation, ContainerAttestation, DeviceVerdicts**: 8 operations (7 missing, 1 partial): VerifyManifest, DeleteManifest, GetAttestationQuote, VerifyAttestationQuote, CollectHostAttestation, CollectVMAttestation, CollectContainerAttestation, PollDeviceVerdicts.
+1. **AttestationService: Manifest, AttestationQuote, HostAttestation, VMAttestation, ContainerAttestation, DeviceVerdicts**: 0 operations left: the 9 operations of #2038 (DescribeCallerPolicy, VerifyManifest, DeleteManifest, GetAttestationQuote, VerifyAttestationQuote, CollectHostAttestation, CollectVMAttestation, CollectContainerAttestation, PollDeviceVerdicts) are covered.
 2. **BMCService (1/2): On, Off, Reset, Cycle, Status, BootDevice…**: 15 operations (15 missing, 0 partial): PowerOn, PowerOff, PowerReset, PowerCycle, PowerStatus, ProvisionStatus, SetBootDevice, GetBootDevice, MountISO, UnmountISO, VirtualMediaStatus, GetSensors, GetSystemInfo, Provision, GetWebCertificate.
 3. **BMCService (2/2): ReplaceWebCertificate, BMC, FactoryCert, User, UserPassword, UserPrivilege**: 8 operations (8 missing, 0 partial): ReplaceWebCertificate, EnrollBMC, RestoreFactoryCert, ListUsers, CreateUser, DeleteUser, SetUserPassword, SetUserPrivilege.
 4. **CAService: CAInfo, CA, CACertificate, CSR, Certificate**: 6 operations (6 missing, 0 partial): GetCAInfo, InitCA, InstallCACertificates, UninstallCACertificates, SignCSR, VerifyCertificate.
