@@ -1,14 +1,16 @@
 /**
- * The registry page against the real platformd: #2063 RegistryService List
- * and Delete with a real tag. The image is pushed through /v2 by
- * fixtures/registry-seed.ts, because the SDK has no push; no page.route mocks,
- * every answer comes from the server. Inspect of a real tag is added to this
- * spec once the Inspect control from open PR #2180 is on this branch.
+ * The registry page against the real platformd: #2063 RegistryService List,
+ * Inspect and Delete with a real tag, and the two OCI capability gates
+ * (List tags on GET /v2/{name:.+}/tags/list, Delete on
+ * DELETE /v2/{name:.+}/manifests/{reference}). The image is pushed through
+ * /v2 by fixtures/registry-seed.ts, because the SDK has no push; no page.route
+ * mocks, every answer comes from the server.
  */
 import type { Page, Response } from '@playwright/test';
 
 import { expect, requestFetch, test } from './fixtures';
 import { pushTestImage } from './fixtures/registry-seed';
+import { unwrapPayload } from './fixtures/wire';
 
 /** Pushes two tags with distinct labels (so distinct manifest digests) to a fresh repository. */
 async function seed(adminPage: Page, baseURL: string | undefined): Promise<string> {
@@ -95,5 +97,49 @@ test.describe('Registry with a seeded image', () => {
     expect(deletes).toEqual([]);
     expect((await serverTags(adminPage, baseURL, name)).sort()).toEqual(['v1', 'v2']);
     await expect(adminPage.getByRole('cell', { name: 'v2', exact: true })).toBeVisible();
+  });
+
+  test('inspects a pushed tag and shows what the server answers', async ({ adminPage, baseURL }) => {
+    const name = await seed(adminPage, baseURL);
+    await listTags(adminPage, name);
+
+    const inspected = adminPage.waitForResponse((r) => {
+      if (r.request().method() !== 'GET') return false;
+      const pathname = new URL(r.url()).pathname;
+      return pathname.startsWith('/api/v1/compute/images/') && pathname.endsWith(':v1');
+    });
+    await adminPage.getByRole('button', { name: 'Inspect v1' }).click();
+    const res = await inspected;
+    expect(res.ok(), `${res.url()} answered ${res.status()}`).toBe(true);
+    const body = unwrapPayload<{
+      Artifact?: { Digest?: string; Manifest?: { Layers?: unknown[] } };
+      Tags?: string[];
+    }>(await res.json());
+    const digest = body.Artifact?.Digest ?? '';
+    expect(digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const layers = body.Artifact?.Manifest?.Layers ?? [];
+
+    const panel = adminPage.getByTestId('registry-inspect-panel');
+    await expect(panel).toBeVisible();
+    await expect(panel).toContainText(`${name}:v1`);
+    await expect(adminPage.getByTestId('registry-inspect-digest')).toHaveText(digest);
+    await expect(adminPage.getByTestId('registry-inspect-layers')).toHaveText(String(layers.length));
+  });
+
+  test('List tags and Delete follow GET /api/v1/capabilities', async ({ adminPage, baseURL }) => {
+    const name = await seed(adminPage, baseURL);
+    await listTags(adminPage, name);
+
+    const list = adminPage.getByRole('button', { name: 'List tags' });
+    await expect(list).toHaveAttribute('data-capability-op', 'GET /v2/{name:.+}/tags/list');
+    await expect(list).toHaveAttribute('data-capability-enabled', 'true');
+
+    const del = adminPage.getByRole('button', { name: 'Delete v1' });
+    await expect(del).toHaveAttribute('data-capability-op', 'DELETE /v2/{name:.+}/manifests/{reference}');
+    await expect(del).toHaveAttribute('data-capability-enabled', 'true');
+
+    const inspect = adminPage.getByRole('button', { name: 'Inspect v1' });
+    await expect(inspect).toHaveAttribute('data-capability-op', 'GET /api/v1/compute/images/{repository:.+}');
+    await expect(inspect).toHaveAttribute('data-capability-enabled', 'true');
   });
 });
