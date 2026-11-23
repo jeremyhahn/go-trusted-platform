@@ -17,6 +17,10 @@ vi.mock('next/link', () => ({
   ),
 }));
 vi.mock('@/components/features/devices/device-profile-lookup', () => ({ DeviceProfileLookup: () => null }));
+vi.mock('@/components/features/devices/device-profile-edit-dialog', () => ({
+  DeviceProfileEditDialog: ({ profile }: { profile: { name?: string } | null }) =>
+    profile ? <div data-testid="edit-dialog">{profile.name}</div> : null,
+}));
 
 // useApi and useMutation are the SDK's real hooks; only the service is mocked.
 vi.mock('@/hooks', async () => {
@@ -294,12 +298,13 @@ describe('DeviceProfilesPage: filters', () => {
 });
 
 describe('DeviceProfilesPage: row actions', () => {
-  it('navigates to the detail and edit pages', async () => {
+  it('navigates to the detail page and edits in a dialog', async () => {
     await renderLoaded();
     fireEvent.click(within(row('Edge Box')).getByText('View Details'));
     expect(push).toHaveBeenCalledWith('/devices/profiles/p-1');
     fireEvent.click(within(row('Edge Box')).getByText('Edit Profile'));
-    expect(push).toHaveBeenCalledWith('/devices/profiles/p-1/edit');
+    expect((await screen.findByTestId('edit-dialog')).textContent).toBe('Edge Box');
+    expect(push).not.toHaveBeenCalledWith('/devices/profiles/p-1/edit');
   });
 
   it('duplicates a profile as a copy and refetches', async () => {

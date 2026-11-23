@@ -73,6 +73,7 @@ import {
 import { networkPhaseRows } from '@/lib/device-profile-networks';
 import { baselineAge, baselineRegisters, baselineSourceLabel } from '@/lib/pcr-baseline';
 import { DeviceProfileLookup } from '@/components/features/devices/device-profile-lookup';
+import { DeviceProfileEditDialog } from '@/components/features/devices/device-profile-edit-dialog';
 
 // ============================================================================
 // Types
@@ -196,6 +197,7 @@ export default function DeviceProfilesPage() {
   const { toast } = useToast();
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [filters, setFilters] = useState<ProfileFilters>({});
+  const [editing, setEditing] = useState<DeviceProfile | null>(null);
   const deviceService = useDevice();
 
   // Fetch profiles using SDK
@@ -310,7 +312,7 @@ export default function DeviceProfilesPage() {
   };
 
   const handleEditProfile = (profile: DeviceProfile) => {
-    router.push(`/devices/profiles/${profile.id}/edit`);
+    setEditing(profile);
   };
 
   const handleDuplicateProfile = async (profile: DeviceProfile) => {
@@ -665,6 +667,12 @@ export default function DeviceProfilesPage() {
           </Table>
         </div>
       )}
+      <DeviceProfileEditDialog
+        profile={editing}
+        open={editing !== null}
+        onOpenChange={(o) => !o && setEditing(null)}
+        onSaved={() => refetchProfiles()}
+      />
     </div>
   );
 }
