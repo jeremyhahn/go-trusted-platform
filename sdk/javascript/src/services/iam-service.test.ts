@@ -244,10 +244,10 @@ const cases: WireCase[] = [
   },
   {
     method: 'verifyToken',
-    name: 'posts the token to the token verify path',
+    name: 'posts the token to the tokens verify path',
     call: (s) => s.verifyToken({ token: 'tok' }),
     verb: 'post',
-    url: '/v1/iam/auth/token/verify',
+    url: '/v1/iam/tokens/verify',
     body: { token: 'tok' },
   },
   // Tenants
@@ -512,6 +512,83 @@ describe('IAMService', () => {
         matchedRule: 'camel-r',
         evaluationTimeNs: 7,
       });
+    });
+  });
+
+  // The REST handler sends VerifyTokenResponse in snake_case
+  // (pkg/webservice/v1/rest/iam/types.go): valid, reason, subject, tenant_id,
+  // scopes, roles, expires_at.
+  describe('verifyToken REST envelope', () => {
+    const request = { token: 'tok' };
+
+    it('maps subject, tenant_id and expires_at to userId, tenantId and expiresAt and keeps reason and roles', async () => {
+      vi.mocked(client.post).mockResolvedValue({
+        success: true,
+        data: {
+          valid: true,
+          subject: 'svc-a',
+          tenant_id: 't-1',
+          scopes: ['iam:read'],
+          roles: ['viewer'],
+          expires_at: 1893456000,
+        },
+      });
+
+      const result = await service.verifyToken(request);
+
+      expect(result.data).toMatchObject({
+        valid: true,
+        userId: 'svc-a',
+        tenantId: 't-1',
+        scopes: ['iam:read'],
+        roles: ['viewer'],
+        expiresAt: 1893456000,
+      });
+    });
+
+    it('keeps a rejection reason', async () => {
+      vi.mocked(client.post).mockResolvedValue({
+        success: true,
+        data: { valid: false, reason: 'expired' },
+      });
+
+      const result = await service.verifyToken(request);
+
+      expect(result.data?.valid).toBe(false);
+      expect(result.data?.reason).toBe('expired');
+    });
+
+    it('does not overwrite camelCase fields already present', async () => {
+      vi.mocked(client.post).mockResolvedValue({
+        success: true,
+        data: {
+          valid: true,
+          userId: 'camel-u',
+          subject: 'snake-u',
+          tenantId: 'camel-t',
+          tenant_id: 'snake-t',
+          expiresAt: 7,
+          expires_at: 42,
+        },
+      });
+
+      const result = await service.verifyToken(request);
+
+      expect(result.data).toMatchObject({
+        userId: 'camel-u',
+        tenantId: 'camel-t',
+        expiresAt: 7,
+      });
+    });
+
+    it('keeps the identity of the resolved response', async () => {
+      const response = { success: true, data: { valid: true, subject: 'svc-b' } };
+      vi.mocked(client.post).mockResolvedValue(response);
+
+      const result = await service.verifyToken(request);
+
+      expect(result).toBe(response);
+      expect(result.data?.userId).toBe('svc-b');
     });
   });
 });
