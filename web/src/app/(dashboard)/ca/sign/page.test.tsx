@@ -34,6 +34,12 @@ vi.mock('@/hooks/use-ca-ops', () => ({
   },
 }));
 
+// #2041: Gated reads the server's capabilities through this hook.
+const caps = vi.hoisted(() => ({ capability: vi.fn() }));
+vi.mock('@/hooks/use-capabilities', () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: caps.capability }),
+}));
+
 import SignCSRPage from './page';
 
 const CSR = '-----BEGIN CERTIFICATE REQUEST-----\nMIIB\n-----END CERTIFICATE REQUEST-----';
@@ -66,6 +72,8 @@ beforeEach(() => {
   hook.error = null;
   hook.isLoading = false;
   hook.onSuccess = undefined;
+  caps.capability.mockReset();
+  caps.capability.mockImplementation(() => ({ enabled: true }));
 });
 
 describe('Sign CSR page', () => {
@@ -130,5 +138,31 @@ describe('Sign CSR page', () => {
     fireEvent.change(csr(), { target: { value: `${CSR}\n` } });
     expect(screen.queryByTestId('signed-serial')).toBeNull();
     expect(screen.queryByTestId('signed-pem')).toBeNull();
+  });
+
+  it("withholds Sign CSR with the server's reason when POST /api/v1/ca/sign-csr is not offered", () => {
+    caps.capability.mockImplementation((op: string) =>
+      op === 'POST /api/v1/ca/sign-csr' ? { enabled: false, reason: 'not-configured: ca' } : { enabled: true },
+    );
+    render(<SignCSRPage />);
+    fireEvent.change(csr(), { target: { value: CSR } });
+    fireEvent.change(token(), { target: { value: 'tok-1' } });
+    expect(submit().disabled).toBe(true);
+    expect(submit().getAttribute('title')).toBe('not-configured: ca');
+    expect(submit().getAttribute('data-capability-op')).toBe('POST /api/v1/ca/sign-csr');
+    expect(submit().getAttribute('data-capability-enabled')).toBe('false');
+    fireEvent.click(submit());
+    expect(hook.sign).not.toHaveBeenCalled();
+  });
+
+  it('asks the gate for POST /api/v1/ca/sign-csr and keeps the fill rule when it is offered', () => {
+    render(<SignCSRPage />);
+    expect(caps.capability).toHaveBeenCalledWith('POST /api/v1/ca/sign-csr');
+    expect(submit().getAttribute('data-capability-enabled')).toBe('true');
+    expect(submit().disabled).toBe(true);
+    fireEvent.change(csr(), { target: { value: CSR } });
+    expect(submit().disabled).toBe(true);
+    fireEvent.change(token(), { target: { value: 'tok-1' } });
+    expect(submit().disabled).toBe(false);
   });
 });

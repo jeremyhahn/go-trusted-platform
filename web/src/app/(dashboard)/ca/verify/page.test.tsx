@@ -27,6 +27,12 @@ vi.mock('@/hooks/use-ca-ops', () => ({
   },
 }));
 
+// #2041: Gated reads the server's capabilities through this hook.
+const caps = vi.hoisted(() => ({ capability: vi.fn() }));
+vi.mock('@/hooks/use-capabilities', () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: caps.capability }),
+}));
+
 import VerifyCertificatePage from './page';
 
 const PEM = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----';
@@ -46,6 +52,8 @@ beforeEach(() => {
   hook.error = null;
   hook.isLoading = false;
   hook.onSuccess = undefined;
+  caps.capability.mockReset();
+  caps.capability.mockImplementation(() => ({ enabled: true }));
 });
 
 describe('Verify certificate page', () => {
@@ -104,5 +112,30 @@ describe('Verify certificate page', () => {
     act(() => hook.onSuccess?.(hook.data, PEM));
     expect(screen.getByTestId('verify-result').textContent).toBe('Certificate is valid');
     expect(screen.queryByTestId('verify-chain')).toBeNull();
+  });
+
+  it("withholds Verify with the server's reason when POST /api/v1/ca/certificates/verify is not offered", () => {
+    caps.capability.mockImplementation((op: string) =>
+      op === 'POST /api/v1/ca/certificates/verify'
+        ? { enabled: false, reason: 'not-configured: ca' }
+        : { enabled: true },
+    );
+    render(<VerifyCertificatePage />);
+    fireEvent.change(pem(), { target: { value: PEM } });
+    expect(submit().disabled).toBe(true);
+    expect(submit().getAttribute('title')).toBe('not-configured: ca');
+    expect(submit().getAttribute('data-capability-op')).toBe('POST /api/v1/ca/certificates/verify');
+    expect(submit().getAttribute('data-capability-enabled')).toBe('false');
+    fireEvent.click(submit());
+    expect(hook.verify).not.toHaveBeenCalled();
+  });
+
+  it('asks the gate for POST /api/v1/ca/certificates/verify and keeps the fill rule when it is offered', () => {
+    render(<VerifyCertificatePage />);
+    expect(caps.capability).toHaveBeenCalledWith('POST /api/v1/ca/certificates/verify');
+    expect(submit().getAttribute('data-capability-enabled')).toBe('true');
+    expect(submit().disabled).toBe(true);
+    fireEvent.change(pem(), { target: { value: PEM } });
+    expect(submit().disabled).toBe(false);
   });
 });
