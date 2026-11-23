@@ -98,6 +98,8 @@ export { useReportedGateways } from './use-reported-gateways';
 export { usePXEDeviceActions } from './use-pxe-device-actions';
 export type { UsePXEDeviceActionsResult } from './use-pxe-device-actions';
 export { useOverlayVteps } from './use-overlay-vteps';
+export { useProfileAssignment } from './use-profile-assignment';
+export type { ProfileAssignmentInput, UseProfileAssignmentResult } from './use-profile-assignment';
 export { useRegistry, encodeRepository } from './use-registry';
 export type {
   RegistryHealthCode,
