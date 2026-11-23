@@ -8,7 +8,7 @@ This document describes the testing strategy, setup, and best practices for the 
 - [Playwright Setup](#playwright-setup)
 - [Running Tests](#running-tests)
 - [CI Integration](#ci-integration)
-- [WebAuthn Mocking](#webauthn-mocking)
+- [WebAuthn Virtual Authenticator](#webauthn-virtual-authenticator)
 - [Test Patterns](#test-patterns)
 - [Best Practices](#best-practices)
 
@@ -236,7 +236,7 @@ jobs:
 | Artifacts | Upload reports and screenshots on failure |
 | Timeout | Increase timeouts for slower CI machines |
 
-## WebAuthn Mocking
+## WebAuthn Virtual Authenticator
 
 WebAuthn requires special handling in headless testing environments since hardware authenticators are not available.
 
@@ -320,54 +320,6 @@ test.describe('WebAuthn Registration', () => {
     await expect(page).toHaveURL('/dashboard');
     await expect(page.locator('[data-testid="tenant-name"]')).toHaveText('Engineering');
   });
-});
-```
-
-### Mock API Responses
-
-For tests that need specific API behavior:
-
-```typescript
-// e2e/auth/login.spec.ts
-import { test, expect } from '@playwright/test';
-
-test('should handle WebAuthn login', async ({ page }) => {
-  // Mock the WebAuthn begin endpoint
-  await page.route('**/api/v1/webauthn/login/begin', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        publicKey: {
-          challenge: 'mock-challenge',
-          timeout: 60000,
-          rpId: 'localhost',
-          allowCredentials: [
-            { type: 'public-key', id: 'mock-credential-id' }
-          ],
-        },
-      }),
-    });
-  });
-
-  // Mock the WebAuthn finish endpoint
-  await page.route('**/api/v1/webauthn/login/finish', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        access_token: 'mock-jwt-token',
-        token_type: 'Bearer',
-        expires_in: 3600,
-      }),
-    });
-  });
-
-  await page.goto('/login');
-  await page.fill('[data-testid="email-input"]', 'test@example.com');
-  await page.click('[data-testid="login-button"]');
-
-  await expect(page).toHaveURL('/dashboard');
 });
 ```
 

@@ -57,8 +57,7 @@ web/
 ├── e2e/                        # Playwright E2E tests
 │   ├── fixtures/               # Test fixtures
 │   │   ├── auth-setup.ts       # JWT session mocking
-│   │   ├── api-mock.ts         # API response mocking
-│   │   └── webauthn-mock.ts    # WebAuthn API mocking
+│   │   └── api-mock.ts         # API response mocking
 │   ├── auth.spec.ts            # Authentication tests
 │   ├── invitations.spec.ts     # Invitation management tests
 │   ├── tenant.spec.ts          # Tenant dashboard tests

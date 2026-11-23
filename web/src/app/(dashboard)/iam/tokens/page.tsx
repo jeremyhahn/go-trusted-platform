@@ -6,6 +6,7 @@
  * Displays and manages API tokens with generation and revocation.
  * Uses the trusted-platform-sdk for API interactions.
  * Register Application, the row Rotate Secret and the row Delete are gated on the server's capabilities (#2033, #2054).
+ * The Verify a token card checks a pasted token through the SDK, gated on its op (#2053).
  */
 
 import React, { useState, useMemo, useCallback } from 'react';
@@ -32,6 +33,7 @@ import { Label } from '@/components/ui/label';
 import { Plus, Key, Clock, AlertCircle, Loader2, Copy, Check } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Gated } from '@/components/features/capabilities/gated';
+import { TokenVerifyCard } from '@/components/features/iam/token-verify-card';
 import { useCapabilities } from '@/hooks/use-capabilities';
 
 /**
@@ -511,6 +513,9 @@ export default function TokensPage() {
           />
         </CardContent>
       </Card>
+
+      {/* Verify a token (#2053) */}
+      <TokenVerifyCard />
 
       {/* Register Application Dialog */}
       <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>

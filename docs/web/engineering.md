@@ -415,7 +415,7 @@ a blank into `undefined` (#451).
 | Go unit | `pkg/webservice/v1/*_test.go` | `config_test.go`, `router_test.go`, `router_registry_test.go`, `registry_test.go`, `handler_registry_test.go`, `hooks_test.go`, `keycache_test.go` |
 | Go unit | `pkg/webservice/v1/middleware/**` | CORS, mTLS, IAM auth/authz/session/JWT/platform-token, tenant context |
 | Go unit | `pkg/webservice/v1/jwt/*_test.go` | Token issue, refresh, signing method, expiry |
-| Frontend E2E | `web/e2e/*.spec.ts` (22 files) | `auth`, `webauthn-flow`, `dashboard`, `iam`, `tenant`, `tenant-isolation`, `tenant-management`, `invitations`, `ca`, `kms`, `devices`, `compute`, `networking`, `storage`, `platform`, `tpm-attestation`, `api-routes-regression`. Backend **mocked** — `e2e/fixtures/{api-mock,dashboard-api-mocks,webauthn-mock,auth-setup}.ts` |
+| Frontend E2E | `web/e2e/*.spec.ts` (22 files) | `auth`, `webauthn-flow`, `dashboard`, `iam`, `tenant`, `tenant-isolation`, `tenant-management`, `invitations`, `ca`, `kms`, `devices`, `compute`, `networking`, `storage`, `platform`, `tpm-attestation`, `api-routes-regression`. Backend **mocked** — `e2e/fixtures/{api-mock,auth-setup}.ts` |
 | Frontend integration | `test/integration/web/*.spec.ts` (13 files) | The same surfaces against a **real** backend, driven by `web/playwright.integration.config.ts` |
 
 **The two Playwright configurations differ in ways that matter:**
