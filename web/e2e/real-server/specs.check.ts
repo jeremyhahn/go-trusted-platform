@@ -28,4 +28,19 @@ for (const call of calls) {
   assert.match(call[1], /\bbaseURL\b/, `newContext call names baseURL: ${call[0]}`);
 }
 
+// The CA pages run on the real server only (#2041): the mocked spec is gone.
+assert.ok(
+  !fs.existsSync(path.join(import.meta.dirname, '..', 'ca-operations.spec.ts')),
+  'web/e2e/ca-operations.spec.ts (the mocked CA spec) does not exist',
+);
+const caSpecPath = path.join(import.meta.dirname, 'ca-operations.spec.ts');
+assert.ok(fs.existsSync(caSpecPath), 'real-server/ca-operations.spec.ts exists');
+const caSpec = fs.readFileSync(caSpecPath, 'utf8');
+assert.ok(caSpec.includes("from './fixtures'"), "ca-operations.spec.ts imports from './fixtures'");
+assert.ok(!caSpec.includes('api-mock'), 'ca-operations.spec.ts does not use api-mock');
+assert.ok(!caSpec.includes('page.route('), 'ca-operations.spec.ts does not route requests');
+for (const route of ['/ca', '/ca/sign', '/ca/verify']) {
+  assert.ok(caSpec.includes(`goto('${route}')`), `ca-operations.spec.ts visits ${route}`);
+}
+
 console.log('specs.check: ok');
