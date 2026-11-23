@@ -93,6 +93,7 @@ type RESTServer struct {
 	gatewayHandlers       *restapi.GatewayHandlers
 	gatewayService        *gatewayRESTService
 	idevidService         *IDevIDGRPCService
+	iamTokens             *IAMTokenService
 }
 
 // NewRESTServer creates a new REST server for the daemon
