@@ -28,6 +28,7 @@ import {
 } from '@/components/ui/table';
 import { VMMetricsCard } from '@/components/features/compute/vm-metrics';
 import { Gated } from '@/components/features/capabilities/gated';
+import { VMMigrateButton } from '@/components/features/compute/vm-migrate-dialog';
 import { useCompute, useMutation, useToast, type MutationError } from '@/hooks';
 import type { VMDetail } from '@/types/infrastructure';
 import { vmStatus } from '@/lib/compute-state';
@@ -333,6 +334,7 @@ export default function VMDetailPage() {
                 <RotateCw className="mr-2 h-4 w-4" />
                 Reboot
               </Button>
+              <VMMigrateButton vmId={vmId} disabled={actionLoading} onMigrated={fetchVM} />
             </>
           )}
           {vm.status === 'suspended' && (
