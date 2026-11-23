@@ -29,6 +29,9 @@ import {
 import { Label } from '@/components/ui/label';
 import { useDevice, useToast } from '@/hooks';
 import type { RecordAttestCertResponse } from 'trusted-platform-sdk';
+import { Gated } from '@/components/features/capabilities/gated';
+
+export const ATTEST_CERT_RECORD_OP = 'POST /api/v1/devices/{id:[0-9]+}/attest-cert/record';
 
 interface AttestCertCardProps {
   deviceId: string;
@@ -96,15 +99,17 @@ export function AttestCertCard({ deviceId, attestCert, onRecorded }: AttestCertC
             platform CA and carries tcg-cap-verifiedTPMRestricted.
           </CardDescription>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={openDialog}
-          title="Record a certificate that chains to the platform CA, carries tcg-cap-verifiedTPMRestricted and certifies the enrolled attestation key"
-        >
-          <FileBadge className="mr-2 h-4 w-4" />
-          Record certificate
-        </Button>
+        <Gated op={ATTEST_CERT_RECORD_OP}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={openDialog}
+            title="Record a certificate that chains to the platform CA, carries tcg-cap-verifiedTPMRestricted and certifies the enrolled attestation key"
+          >
+            <FileBadge className="mr-2 h-4 w-4" />
+            Record certificate
+          </Button>
+        </Gated>
       </CardHeader>
       <CardContent>
         {attestCert ? (

@@ -29,6 +29,7 @@ import { AttestCertCard } from '@/components/features/attestation/attest-cert-ca
 import { DeviceAttestCard } from '@/components/features/attestation/device-attest-card';
 import { DeviceModelCard } from '@/components/features/devices/device-model-card';
 import { DeviceSerialCard } from '@/components/features/devices/device-serial-card';
+import { DeviceActivateCard } from '@/components/features/devices/device-activate-card';
 import { useToast } from '@/hooks/use-toast';
 import { useDevice, useMutation } from '@/hooks';
 import { useDeviceToggle } from '@/hooks/use-device-toggle';
@@ -326,6 +327,7 @@ export default function DeviceDetailPage() {
       <DeviceModelCard deviceId={device.id} model={device.model} onSaved={fetchDevice} />
 
       <DeviceSerialCard deviceId={device.id} serial={device.serial} onSaved={fetchDevice} />
+      <DeviceActivateCard serial={device.serial} onActivated={fetchDevice} />
 
       {device.endorsementKey && (
         <Card>
