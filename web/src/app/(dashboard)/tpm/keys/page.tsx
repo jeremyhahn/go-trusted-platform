@@ -46,6 +46,8 @@ import {
 import { useApi, useIDevID, useTPM, useToast } from "@/hooks";
 import type { KeyAlgorithm } from "trusted-platform-sdk";
 import { errorMessage } from "@/utils/errors";
+import { TPMKeyLifecycleCard } from "@/components/features/tpm/tpm-key-lifecycle-card";
+import { TPMCertifyCard } from "@/components/features/tpm/tpm-certify-card";
 
 /**
  * TPM Key types — covers the full TCG-prescribed key inventory of a
@@ -600,6 +602,11 @@ export default function TPMKeysPage() {
           </div>
         </CardContent>
       </Card>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <TPMKeyLifecycleCard />
+        <TPMCertifyCard />
+      </div>
 
       <Dialog open={detail !== null} onOpenChange={(o) => { if (!o) setDetail(null); }}>
         <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
