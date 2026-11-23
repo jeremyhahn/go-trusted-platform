@@ -765,6 +765,32 @@ func requireQUICChallengeIssueGap(t *testing.T, adapter DeviceCommands, err erro
 	return true
 }
 
+// issueChallengeForAttest issues an attestation challenge the adapter can
+// then attest with. QUIC issues none (owner ruling 1234): over QUIC it
+// asserts that declared gap, then issues the challenge over gRPC, which
+// authenticates with the same client certificate, so the QUIC attest is
+// checked against the daemon's one challenge store (#2136).
+func issueChallengeForAttest(t *testing.T, ctx context.Context, adapter DeviceCommands, opts IssueAttestationChallengeOptions) *IssueAttestationChallengeResult {
+	t.Helper()
+	challenge, err := adapter.IssueAttestationChallenge(ctx, opts)
+	if requireQUICChallengeIssueGap(t, adapter, err) {
+		issuer := NewGRPCAdapter()
+		if err := issuer.Setup(ctx); err != nil {
+			t.Fatalf("gRPC issuer Setup: %v", err)
+		}
+		t.Cleanup(func() { _ = issuer.Teardown(context.Background()) })
+		challenge, err = issuer.IssueAttestationChallenge(ctx, opts)
+		if err != nil {
+			t.Fatalf("gRPC IssueAttestationChallenge for a QUIC attest: %v", err)
+		}
+		return challenge
+	}
+	if err != nil {
+		t.Fatalf("%s IssueAttestationChallenge: %v", adapter.Name(), err)
+	}
+	return challenge
+}
+
 // ============================================================================
 // Attestation Tests
 //
@@ -1001,16 +1027,10 @@ func testAttestation(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 	t.Run("ChallengeIsSingleUse", func(t *testing.T) {
 		deviceID := registerChallengeDevice(t, "chal-once")
-		challenge, err := adapter.IssueAttestationChallenge(ctx, IssueAttestationChallengeOptions{
+		challenge := issueChallengeForAttest(t, ctx, adapter, IssueAttestationChallengeOptions{
 			TenantID: tenantID,
 			DeviceID: deviceID,
 		})
-		if requireQUICChallengeIssueGap(t, adapter, err) {
-			return
-		}
-		if err != nil {
-			t.Fatalf("%s IssueAttestationChallenge: %v", adapter.Name(), err)
-		}
 
 		attestOpts := AttestDeviceOptions{
 			TenantID:    tenantID,
@@ -1041,18 +1061,12 @@ func testAttestation(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 
 	t.Run("ChallengeNonceMustMatch", func(t *testing.T) {
 		deviceID := registerChallengeDevice(t, "chal-nonce")
-		challenge, err := adapter.IssueAttestationChallenge(ctx, IssueAttestationChallengeOptions{
+		challenge := issueChallengeForAttest(t, ctx, adapter, IssueAttestationChallengeOptions{
 			TenantID: tenantID,
 			DeviceID: deviceID,
 		})
-		if requireQUICChallengeIssueGap(t, adapter, err) {
-			return
-		}
-		if err != nil {
-			t.Fatalf("%s IssueAttestationChallenge: %v", adapter.Name(), err)
-		}
 
-		_, err = adapter.AttestDevice(ctx, AttestDeviceOptions{
+		_, err := adapter.AttestDevice(ctx, AttestDeviceOptions{
 			TenantID:    tenantID,
 			DeviceID:    deviceID,
 			Evidence:    forgedQuoteEvidence(t, testID),
