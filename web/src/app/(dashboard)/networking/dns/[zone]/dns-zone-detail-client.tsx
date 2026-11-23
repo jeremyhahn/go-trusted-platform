@@ -194,6 +194,7 @@ export default function DNSZoneDetailPage() {
             records={zone.records}
             onRefresh={fetchZone}
             onEdit={handleEdit}
+            confirmDelete
           />
         </CardContent>
       </Card>
