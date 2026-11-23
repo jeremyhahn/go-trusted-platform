@@ -446,6 +446,15 @@ func convertToOpenFlow(flow *FlowMod) (*openflow.FlowMod, error) {
 	return ofFlow, nil
 }
 
+// ValidateFlowMod reports whether flow converts to an OpenFlow flow mod (cookie, match and actions), without contacting a switch.
+func ValidateFlowMod(flow *FlowMod) error {
+	if flow == nil {
+		return ErrInvalidFlow
+	}
+	_, err := convertToOpenFlow(flow)
+	return err
+}
+
 // parseMatchString parses ovs-ofctl style match string into OpenFlow match
 // CanonicalMatch returns the OXM match that matchStr encodes in a canonical
 // text form: the parsed fields sorted by (class, field), an all-ones mask

@@ -1143,7 +1143,10 @@ func (s *SDNService) SetPortState(ctx context.Context, req *platformv1.SetPortSt
 // ApplyPolicy applies a network policy by translating it into OpenFlow rules
 // on its bridge targets. Every effective priority (the rule's, else the
 // policy's) must fit OpenFlow's 16 bits, or the call is InvalidArgument
-// before anything changes. An enabled policy whose flow install fails
+// before anything changes. Every flow of an enabled policy must encode (its
+// cookie, match and actions convert to an OpenFlow flow mod), or the call
+// is InvalidArgument with the record and switch untouched. An enabled
+// policy whose flow install fails
 // returns Internal: every flow this call attempted, the failing one
 // included, is removed and the prior enabled record's rules re-added
 // (OFPFC_ADD replaces a same-match flow), and the prior record stays in
@@ -1259,6 +1262,14 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 			return nil, status.Errorf(codes.FailedPrecondition,
 				"policy %q already installs a flow on bridge %s with priority %d and match %q",
 				owner, flow.bridge, flow.mod.Priority, flow.mod.Match)
+		}
+		// A flow that does not encode fails locally, in AddFlow and in the
+		// strict delete of a rollback alike: refuse it before anything is
+		// installed or stored, so an error never means an uncertain write.
+		for _, flow := range flows {
+			if err := ovs.ValidateFlowMod(flow.mod); err != nil {
+				return nil, status.Errorf(codes.InvalidArgument, "rule %q does not encode as an OpenFlow flow: %v", flow.ruleID, err)
+			}
 		}
 		attempted, err := s.installPolicyFlows(ctx, client, flows)
 		if err != nil {
@@ -1455,7 +1466,7 @@ func (s *SDNService) policyRuleToFlowMod(rule *platformv1.PolicyRule, policyPrio
 			matchParts = append(matchParts, fmt.Sprintf("nw_dst=%s", match.GetDestinationIp()))
 		}
 		if match.GetProtocol() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("nw_proto=%s", match.GetProtocol()))
+			matchParts = append(matchParts, fmt.Sprintf("nw_proto=%s", policyProtocolNumber(match.GetProtocol())))
 		}
 		if match.GetSourcePort() > 0 {
 			matchParts = append(matchParts, fmt.Sprintf("tp_src=%d", match.GetSourcePort()))
@@ -1494,6 +1505,26 @@ func (s *SDNService) policyRuleToFlowMod(rule *platformv1.PolicyRule, policyPrio
 
 // policyRuleToMatchString converts a policy rule to an OVS match string for deletion
 // policyFlow is one OpenFlow rule a policy rule installs on one bridge.
+// policyProtocolNumber returns the IP protocol number nw_proto encodes for
+// a policy rule's protocol: the OpenFlow match takes a number, so a name
+// (tcp, udp, icmp, icmpv6, sctp) is translated; anything else is returned as
+// given, and a value that is not a number fails flow validation.
+func policyProtocolNumber(protocol string) string {
+	switch strings.ToLower(protocol) {
+	case "icmp":
+		return "1"
+	case "tcp":
+		return "6"
+	case "udp":
+		return "17"
+	case "icmpv6", "ipv6-icmp":
+		return "58"
+	case "sctp":
+		return "132"
+	}
+	return protocol
+}
+
 type policyFlow struct {
 	bridge string
 	ruleID string
