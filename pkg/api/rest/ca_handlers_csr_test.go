@@ -179,7 +179,7 @@ func TestCAHandlers_SignCSR_RefusesAClientCertificate(t *testing.T) {
 	require.NoError(t, err)
 	req := certificateRequest(http.MethodPost, "/api/v1/ca/sign-csr", "operator")
 	req.Body = io.NopCloser(bytes.NewReader(body))
-	guard := NewScopeGuard(nil, grantingPeers{scopes: []string{"*:*"}}, nil)
+	guard := NewScopeGuard(nil, grantingPeers{}, nil, WithPeerAuthorizationChecker(stubPeerChecker{allow: true}))
 
 	rr := httptest.NewRecorder()
 	signCSRRouterWith(ca, fleetKMS(t, key), guard).ServeHTTP(rr, req)

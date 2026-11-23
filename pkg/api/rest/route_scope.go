@@ -26,11 +26,33 @@ import (
 )
 
 // PeerAuthenticator turns a verified mTLS client chain into the caller's
-// authorized context. The daemon admits a verified certificate as the
-// operator principal (docs/daemon/api.md).
+// authorized context. The certificate names the principal; what it may do
+// is decided per route by the guard's PeerAuthorizationChecker.
 type PeerAuthenticator interface {
 	AuthenticatePeer(ctx context.Context, chain []*x509.Certificate) (*platformtoken.AuthorizedContext, error)
 }
+
+// PeerAuthorizationChecker decides whether a caller authenticated by its
+// client certificate may perform action on resource (the IAM PEP behind
+// the daemon). It has the signature of quic.PeerAuthorizationChecker.
+type PeerAuthorizationChecker interface {
+	CheckPeerPermission(ctx context.Context, authCtx *platformtoken.AuthorizedContext, resource, action string) (bool, error)
+}
+
+// ScopeGuardOption configures a ScopeGuard.
+type ScopeGuardOption func(*ScopeGuard)
+
+// WithPeerAuthorizationChecker sets the checker that decides certificate
+// callers. Without one every certificate caller is refused 403.
+func WithPeerAuthorizationChecker(checker PeerAuthorizationChecker) ScopeGuardOption {
+	return func(g *ScopeGuard) {
+		g.peerChecker = checker
+	}
+}
+
+// certificateCallerKey marks a request context whose caller the guard
+// authenticated by its client certificate.
+type certificateCallerKey struct{}
 
 // ErrRouteUnauthenticated is returned when a request carries no credential
 // the guard can verify.
@@ -58,20 +80,30 @@ func (e ErrRouteForbidden) Error() string {
 // ScopeGuard enforces a per-route scope on the daemon REST listener, the
 // same scope the gRPC method catalog requires for the RPC behind the route.
 // A bearer platform token is preferred; without one the verified mTLS
-// client certificate is the credential. A nil guard denies every request.
+// client certificate is the credential, and the guard's peer checker
+// decides what a certificate caller may do. A nil guard denies every
+// request.
 type ScopeGuard struct {
-	tokens TokenAuthorizer
-	peers  PeerAuthenticator
-	logger *slog.Logger
+	tokens      TokenAuthorizer
+	peers       PeerAuthenticator
+	peerChecker PeerAuthorizationChecker
+	logger      *slog.Logger
 }
 
 // NewScopeGuard creates a guard. Either authenticator may be nil, which
-// refuses the credentials it would have verified.
-func NewScopeGuard(tokens TokenAuthorizer, peers PeerAuthenticator, logger *slog.Logger) *ScopeGuard {
+// refuses the credentials it would have verified; without a
+// WithPeerAuthorizationChecker option certificate callers are refused 403.
+func NewScopeGuard(tokens TokenAuthorizer, peers PeerAuthenticator, logger *slog.Logger, opts ...ScopeGuardOption) *ScopeGuard {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &ScopeGuard{tokens: tokens, peers: peers, logger: logger}
+	guard := &ScopeGuard{tokens: tokens, peers: peers, logger: logger}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(guard)
+		}
+	}
+	return guard
 }
 
 // Require wraps next so it runs only for a caller holding scope: 401 when
@@ -125,72 +157,116 @@ func (g *ScopeGuard) authorize(r *http.Request, scope string, tokenOnly bool) (*
 	if tokenOnly && !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 		return nil, http.StatusUnauthorized, ErrRouteUnauthenticated{Reason: "this route requires a platform bearer token granting " + scope}
 	}
-	authCtx, err := g.identify(r)
+	authCtx, certificate, err := g.identify(r)
 	if err != nil {
 		return nil, http.StatusUnauthorized, err
 	}
-	if err := authCtx.RequireScope(scope); err != nil {
-		return nil, http.StatusForbidden, ErrRouteForbidden{Scope: scope, Reason: err.Error()}
+	if err := g.decide(r.Context(), authCtx, certificate, scope); err != nil {
+		return nil, http.StatusForbidden, err
 	}
 	return authCtx, http.StatusOK, nil
 }
 
+// decide checks that caller may use scope. A caller authenticated by its
+// client certificate is decided by the peer checker for the scope's
+// resource and action (refused when none is wired, it errors or it says
+// no); any other caller must hold the scope.
+func (g *ScopeGuard) decide(ctx context.Context, caller *platformtoken.AuthorizedContext, certificate bool, scope string) error {
+	if !certificate {
+		if err := caller.RequireScope(scope); err != nil {
+			return ErrRouteForbidden{Scope: scope, Reason: err.Error()}
+		}
+		return nil
+	}
+	resource, action, ok := strings.Cut(scope, ":")
+	if !ok || resource == "" || action == "" {
+		return ErrRouteForbidden{Scope: scope, Reason: "the scope names no resource and action"}
+	}
+	if g.peerChecker == nil {
+		return ErrRouteForbidden{Scope: scope, Reason: "no authorization checker is configured for client certificates"}
+	}
+	allowed, err := g.peerChecker.CheckPeerPermission(ctx, caller, resource, action)
+	if err != nil {
+		return ErrRouteForbidden{Scope: scope, Reason: "the certificate principal's permission could not be checked: " + err.Error()}
+	}
+	if !allowed {
+		return ErrRouteForbidden{Scope: scope, Reason: "the certificate principal is not granted the permission"}
+	}
+	return nil
+}
+
+// AuthorizeCaller makes the guard's decision for a caller that Authenticate
+// handed to a router deciding its own per-route scope: a certificate caller
+// is decided by the peer checker, any other caller must hold scope. It
+// returns ErrRouteForbidden when the caller may not use scope.
+func (g *ScopeGuard) AuthorizeCaller(r *http.Request, caller *platformtoken.AuthorizedContext, scope string) error {
+	if g == nil {
+		return ErrRouteForbidden{Scope: scope, Reason: "no authorization is configured for this route"}
+	}
+	if caller == nil {
+		return ErrRouteForbidden{Scope: scope, Reason: "no authenticated caller"}
+	}
+	certificate, _ := r.Context().Value(certificateCallerKey{}).(bool)
+	return g.decide(r.Context(), caller, certificate, scope)
+}
+
 // Authenticate serves next to any authenticated caller, without a scope
 // check, and hands it the caller. It is for a router that makes its own
-// per-route scope decision on the caller (the daemon's IAM REST plane). A
-// nil guard answers 403 and a missing or invalid credential 401, as Require
-// does.
+// per-route scope decision on the caller through AuthorizeCaller (the
+// daemon's IAM REST plane). A nil guard answers 403 and a missing or
+// invalid credential 401, as Require does.
 func (g *ScopeGuard) Authenticate(next CallerHandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if g == nil {
 			writeGuardError(w, g.loggerOrDefault(), http.StatusForbidden, ErrRouteForbidden{Reason: "no authorization is configured for this route"})
 			return
 		}
-		caller, err := g.identify(r)
+		caller, certificate, err := g.identify(r)
 		if err != nil {
 			writeGuardError(w, g.loggerOrDefault(), http.StatusUnauthorized, err)
 			return
 		}
-		next(w, r, caller)
+		next(w, r.WithContext(context.WithValue(r.Context(), certificateCallerKey{}, certificate)), caller)
 	}
 }
 
-// identify authenticates r and returns the caller its credential names.
-func (g *ScopeGuard) identify(r *http.Request) (*platformtoken.AuthorizedContext, error) {
-	authCtx, err := g.authenticate(r)
+// identify authenticates r and returns the caller its credential names and
+// whether that credential was the client certificate.
+func (g *ScopeGuard) identify(r *http.Request) (*platformtoken.AuthorizedContext, bool, error) {
+	authCtx, certificate, err := g.authenticate(r)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if authCtx == nil {
-		return nil, ErrRouteUnauthenticated{Reason: "the credential authorized no caller"}
+		return nil, false, ErrRouteUnauthenticated{Reason: "the credential authorized no caller"}
 	}
-	return authCtx, nil
+	return authCtx, certificate, nil
 }
 
 // authenticate resolves the caller from its bearer token, or else from its
-// verified client certificate.
-func (g *ScopeGuard) authenticate(r *http.Request) (*platformtoken.AuthorizedContext, error) {
+// verified client certificate; certificate reports the latter.
+func (g *ScopeGuard) authenticate(r *http.Request) (authCtx *platformtoken.AuthorizedContext, certificate bool, err error) {
 	if token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
 		if g.tokens == nil {
-			return nil, ErrRouteUnauthenticated{Reason: "bearer tokens are not accepted on this listener"}
+			return nil, false, ErrRouteUnauthenticated{Reason: "bearer tokens are not accepted on this listener"}
 		}
 		authCtx, err := g.tokens.AuthorizeToken(r.Context(), strings.TrimSpace(token), "", r.Header.Get("DPoP"), r.Method, requestURL(r))
 		if err != nil {
-			return nil, ErrRouteUnauthenticated{Reason: err.Error()}
+			return nil, false, ErrRouteUnauthenticated{Reason: err.Error()}
 		}
-		return authCtx, nil
+		return authCtx, false, nil
 	}
 	if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.VerifiedChains[0]) == 0 {
-		return nil, ErrRouteUnauthenticated{Reason: "no bearer token or verified client certificate"}
+		return nil, false, ErrRouteUnauthenticated{Reason: "no bearer token or verified client certificate"}
 	}
 	if g.peers == nil {
-		return nil, ErrRouteUnauthenticated{Reason: "client certificates are not accepted on this listener"}
+		return nil, false, ErrRouteUnauthenticated{Reason: "client certificates are not accepted on this listener"}
 	}
-	authCtx, err := g.peers.AuthenticatePeer(r.Context(), r.TLS.VerifiedChains[0])
+	authCtx, err = g.peers.AuthenticatePeer(r.Context(), r.TLS.VerifiedChains[0])
 	if err != nil {
-		return nil, ErrRouteUnauthenticated{Reason: err.Error()}
+		return nil, false, ErrRouteUnauthenticated{Reason: err.Error()}
 	}
-	return authCtx, nil
+	return authCtx, true, nil
 }
 
 func (g *ScopeGuard) loggerOrDefault() *slog.Logger {
