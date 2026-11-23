@@ -9,12 +9,16 @@
  * The switch may refuse with 409 while port authentication is not enforced;
  * the card shows that refusal verbatim and never claims the port is
  * authenticated unless the answer says so.
+ *
+ * Authenticate and Revoke are gated on the server's POST and DELETE .../auth
+ * capabilities (#2033).
  */
 
 import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Gated } from '@/components/features/capabilities/gated';
 import {
   Dialog,
   DialogContent,
@@ -168,12 +172,16 @@ export function SDNPortAuthCard({ bridgeId, portId }: SDNPortAuthCardProps) {
           </p>
         )}
         <div className="flex gap-2">
-          <Button onClick={onAuthenticate} disabled={busy || certificate.trim() === ''}>
-            Authenticate
-          </Button>
-          <Button variant="destructive" onClick={() => setConfirmRevoke(true)} disabled={busy}>
-            Revoke
-          </Button>
+          <Gated op="POST /api/v1/sdn/bridges/{name}/ports/{port}/auth">
+            <Button onClick={onAuthenticate} disabled={busy || certificate.trim() === ''}>
+              Authenticate
+            </Button>
+          </Gated>
+          <Gated op="DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth">
+            <Button variant="destructive" onClick={() => setConfirmRevoke(true)} disabled={busy}>
+              Revoke
+            </Button>
+          </Gated>
         </div>
         <Dialog open={confirmRevoke} onOpenChange={setConfirmRevoke}>
           <DialogContent>
@@ -187,9 +195,11 @@ export function SDNPortAuthCard({ bridgeId, portId }: SDNPortAuthCardProps) {
               <Button variant="outline" onClick={() => setConfirmRevoke(false)}>
                 Cancel
               </Button>
-              <Button variant="destructive" onClick={onRevoke}>
-                Revoke
-              </Button>
+              <Gated op="DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth">
+                <Button variant="destructive" onClick={onRevoke}>
+                  Revoke
+                </Button>
+              </Gated>
             </DialogFooter>
           </DialogContent>
         </Dialog>
