@@ -14,14 +14,12 @@
 package kms
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -241,10 +239,7 @@ func (h *Handlers) ensureKMS(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// GenerateKey handles POST /api/v1/kms/keys. It keeps the semantics of the
-// facade handler it shadows on the daemon listener: a supplied description
-// or tags are recorded through UpdateKeyMetadata after generation, and a
-// failed update fails the request.
+// GenerateKey handles POST /api/v1/kms/keys.
 func (h *Handlers) GenerateKey(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureKMS(w, r) {
 		return
@@ -278,16 +273,6 @@ func (h *Handlers) GenerateKey(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	if req.Description != "" || len(req.Tags) > 0 {
-		if _, err := h.kms.UpdateKeyMetadata(ctx, &kmsclient.UpdateKeyMetadataRequest{
-			KeyID:       resp.KeyID,
-			Description: req.Description,
-			Tags:        req.Tags,
-		}); err != nil {
-			h.fail(w, r, err)
-			return
-		}
-	}
 	h.success201(w, r, &GenerateKeyResponse{
 		KeyID:              resp.KeyID,
 		Version:            resp.Version,
@@ -307,7 +292,6 @@ func (h *Handlers) ImportKey(w http.ResponseWriter, r *http.Request) {
 		h.respWriter.Error400(w, r, err)
 		return
 	}
-	req.Resolve()
 	alg, err := parseKeyAlgorithm(req.Algorithm)
 	if err != nil {
 		h.respWriter.Error400(w, r, err)
@@ -340,19 +324,9 @@ func (h *Handlers) ImportKey(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ListKeys handles GET /api/v1/kms/keys. It keeps the semantics of the
-// facade handler it shadows on the daemon listener: the name (exact) and
-// algorithm (case-insensitive) filters, limit and cursor (a decimal offset)
-// select from the keys sorted by key ID then version, and the reply carries
-// next_cursor, has_more and total_count. Any other query key, a bad limit or
-// a bad cursor answers 400.
+// ListKeys handles GET /api/v1/kms/keys.
 func (h *Handlers) ListKeys(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureKMS(w, r) {
-		return
-	}
-	q, err := parseListKeysQuery(r.URL.Query())
-	if err != nil {
-		h.respWriter.Error400(w, r, err)
 		return
 	}
 	ctx, cancel := h.ctx(r)
@@ -362,35 +336,8 @@ func (h *Handlers) ListKeys(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	keys := make([]kmsclient.KeyInfo, 0, len(resp.Keys))
+	out := &ListKeysResponse{Keys: make([]KeyInfoResponse, 0, len(resp.Keys))}
 	for _, k := range resp.Keys {
-		if q.name != "" && k.Name != q.name {
-			continue
-		}
-		if q.algorithm != "" && !strings.EqualFold(k.Algorithm.String(), q.algorithm) {
-			continue
-		}
-		keys = append(keys, k)
-	}
-	slices.SortFunc(keys, func(a, b kmsclient.KeyInfo) int {
-		if c := cmp.Compare(a.KeyID, b.KeyID); c != 0 {
-			return c
-		}
-		return cmp.Compare(a.Version, b.Version)
-	})
-	start := q.offset
-	if start > len(keys) {
-		start = len(keys)
-	}
-	end := len(keys)
-	out := &ListKeysResponse{TotalCount: len(keys)}
-	if q.limit > 0 && q.limit < len(keys)-start {
-		end = start + q.limit
-		out.HasMore = true
-		out.NextCursor = strconv.Itoa(end)
-	}
-	out.Keys = make([]KeyInfoResponse, 0, end-start)
-	for _, k := range keys[start:end] {
 		out.Keys = append(out.Keys, KeyInfoResponse{
 			KeyID:     k.KeyID,
 			Name:      k.Name,
@@ -404,60 +351,6 @@ func (h *Handlers) ListKeys(w http.ResponseWriter, r *http.Request) {
 	h.success200(w, r, out)
 }
 
-// listKeysQuery is the parsed query of GET /api/v1/kms/keys.
-type listKeysQuery struct {
-	name      string
-	algorithm string
-	limit     int
-	offset    int
-}
-
-// parseListKeysQuery reads the name and algorithm filters, limit and cursor
-// of GET /api/v1/kms/keys and refuses any other key, a limit that is not a
-// non-negative integer and a cursor that is not a non-negative offset.
-func parseListKeysQuery(values url.Values) (listKeysQuery, error) {
-	var q listKeysQuery
-	for key := range values {
-		switch key {
-		case "name", "algorithm", "limit", "cursor":
-		default:
-			return q, &ErrInvalidRequest{Field: key, Reason: "unknown query parameter"}
-		}
-	}
-	q.name = values.Get("name")
-	q.algorithm = values.Get("algorithm")
-	if raw := values.Get("limit"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 0 {
-			return q, &ErrInvalidRequest{Field: "limit", Reason: "must be a non-negative integer"}
-		}
-		q.limit = n
-	}
-	if raw := values.Get("cursor"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 0 {
-			return q, &ErrInvalidRequest{Field: "cursor", Reason: "must be a non-negative offset"}
-		}
-		q.offset = n
-	}
-	return q, nil
-}
-
-// parseListLimit reads the optional limit query parameter with the rule
-// parseListKeysQuery applies: a non-negative integer, where 0 (or no
-// limit) means no limit.
-func parseListLimit(values url.Values) (int, error) {
-	raw := values.Get("limit")
-	if raw == "" {
-		return 0, nil
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n < 0 {
-		return 0, &ErrInvalidRequest{Field: "limit", Reason: "must be a non-negative integer"}
-	}
-	return n, nil
-}
-
 // GetKey handles GET /api/v1/kms/keys/{name}.
 func (h *Handlers) GetKey(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureKMS(w, r) {
@@ -465,38 +358,19 @@ func (h *Handlers) GetKey(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
-	name := h.name(r)
-	k, err := h.kms.GetKey(ctx, name)
+	k, err := h.kms.GetKey(ctx, h.name(r))
 	if err != nil {
 		h.fail(w, r, err)
 		return
-	}
-	// The facade's GetKey answered the stored metadata too; a failed
-	// metadata read fails the request rather than answering a partial key.
-	meta, err := h.kms.GetKeyMetadata(ctx, name)
-	if err != nil {
-		h.fail(w, r, err)
-		return
-	}
-	if meta == nil {
-		meta = &kmsclient.KeyMetadataResponse{}
 	}
 	h.success200(w, r, &KeyInfoResponse{
-		KeyID:              k.KeyID,
-		Name:               k.Name,
-		Algorithm:          k.Algorithm.String(),
-		Version:            k.Version,
-		Usage:              keyUsageToStrings(k.Usage),
-		CreatedAt:          k.CreatedAt,
-		RotatedAt:          k.RotatedAt,
-		Status:             meta.Status.String(),
-		Description:        meta.Description,
-		Tags:               meta.Tags,
-		Owner:              meta.Owner,
-		Exportable:         meta.Exportable,
-		DeletionProtection: meta.DeletionProtection,
-		UpdatedAt:          meta.UpdatedAt,
-		LastUsedAt:         meta.LastUsedAt,
+		KeyID:     k.KeyID,
+		Name:      k.Name,
+		Algorithm: k.Algorithm.String(),
+		Version:   k.Version,
+		Usage:     keyUsageToStrings(k.Usage),
+		CreatedAt: k.CreatedAt,
+		RotatedAt: k.RotatedAt,
 	})
 }
 
@@ -881,27 +755,12 @@ func (h *Handlers) Decrypt(w http.ResponseWriter, r *http.Request) {
 		h.respWriter.Error400(w, r, err)
 		return
 	}
+	if req.Version != 0 {
+		h.respWriter.Error400(w, r, &ErrKeyVersionUnsupported{Version: req.Version})
+		return
+	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
-	// The SDK decrypt call carries no version: the service decrypts under
-	// the key's current version. A request naming that version (the one
-	// Encrypt answered) is honoured; any other version is refused rather
-	// than silently dropped.
-	if req.Version != 0 {
-		if req.Version < 0 || h.kms == nil {
-			h.respWriter.Error400(w, r, &ErrKeyVersionUnsupported{Version: req.Version})
-			return
-		}
-		k, err := h.kms.GetKey(ctx, h.name(r))
-		if err != nil {
-			h.fail(w, r, err)
-			return
-		}
-		if k == nil || k.Version != req.Version {
-			h.respWriter.Error400(w, r, &ErrKeyVersionUnsupported{Version: req.Version})
-			return
-		}
-	}
 	resp, err := h.crypto.Decrypt(ctx, &cryptoclient.DecryptRequest{
 		KeyID:      h.name(r),
 		Ciphertext: req.Ciphertext,
@@ -1062,7 +921,7 @@ func (h *Handlers) GenerateRandom(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	h.success200(w, r, &GenerateRandomResponse{Bytes: resp.RandomBytes, RandomBytes: resp.RandomBytes})
+	h.success200(w, r, &GenerateRandomResponse{Bytes: resp.RandomBytes})
 }
 
 // GenerateDataKey handles POST /api/v1/kms/data-keys. It mints a data key
@@ -1242,11 +1101,6 @@ func (h *Handlers) ListDEKs(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureDEK(w, r) {
 		return
 	}
-	limit, err := parseListLimit(r.URL.Query())
-	if err != nil {
-		h.respWriter.Error400(w, r, err)
-		return
-	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
 	resp, err := h.dek.ListDEKs(ctx, &dekclient.ListDEKsRequest{})
@@ -1254,13 +1108,9 @@ func (h *Handlers) ListDEKs(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	deks := resp.DEKs
-	if limit > 0 && len(deks) > limit {
-		deks = deks[:limit]
-	}
-	out := &ListDEKsResponse{DEKs: make([]DEKInfoResponse, 0, len(deks))}
-	for i := range deks {
-		out.DEKs = append(out.DEKs, encodeDEK(&deks[i]))
+	out := &ListDEKsResponse{DEKs: make([]DEKInfoResponse, 0, len(resp.DEKs))}
+	for i := range resp.DEKs {
+		out.DEKs = append(out.DEKs, encodeDEK(&resp.DEKs[i]))
 	}
 	h.success200(w, r, out)
 }
@@ -1400,11 +1250,6 @@ func (h *Handlers) ListSecrets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	prefix := r.URL.Query().Get("prefix")
-	limit, err := parseListLimit(r.URL.Query())
-	if err != nil {
-		h.respWriter.Error400(w, r, err)
-		return
-	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
 	resp, err := h.secrets.List(ctx, prefix)
@@ -1412,12 +1257,8 @@ func (h *Handlers) ListSecrets(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	paths := resp.Paths
-	if limit > 0 && len(paths) > limit {
-		paths = paths[:limit]
-	}
-	out := &ListSecretsResponse{Secrets: make([]SecretSummary, 0, len(paths))}
-	for _, path := range paths {
+	out := &ListSecretsResponse{Secrets: make([]SecretSummary, 0, len(resp.Paths))}
+	for _, path := range resp.Paths {
 		out.Secrets = append(out.Secrets, SecretSummary{Path: path})
 	}
 	h.success200(w, r, out)

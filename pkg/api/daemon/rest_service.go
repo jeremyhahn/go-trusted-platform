@@ -29,11 +29,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	cryptoclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
-	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
-	kmsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
-	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
@@ -46,7 +42,6 @@ import (
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
-	restkms "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -482,41 +477,6 @@ func (s *RESTServer) SetKMSHandlers(service restapi.KMSService) {
 	handlers := restapi.NewKMSHandlers(service, s.logger)
 	handlers.RegisterRoutes(s.router)
 	s.logger.Info("KMS REST routes registered")
-}
-
-// SetKMSRouter mounts the KMS routes of docs/kms/api.md, the contract the SDK
-// REST transport and the integration REST adapter speak: the key name in the
-// path of the crypto routes (POST /api/v1/kms/sign/{name}), the stored DEKs
-// under /deks and the secrets under /secrets. It is the webservice listener's
-// KMS router, so both REST listeners answer one contract. Call it before
-// SetKMSHandlers: a path this router does not serve (the bare-path crypto
-// routes, export, batch, rewrap, status) falls through to those handlers. A
-// nil client answers its routes 503, never 404.
-//
-// Every route runs behind guard and needs the scope the gRPC catalog gives
-// the method it serves (catalogRouteRPCs): with no credential it answers 401,
-// without the scope 403, and a route with no mapping fails closed.
-func (s *RESTServer) SetKMSRouter(kms kmsclient.Client, crypto cryptoclient.Client, dek dekclient.Client, secrets secretsclient.Client, guard *restapi.ScopeGuard) {
-	logger := logging.NewFromSlog(s.logger)
-	restkms.NewKMSRouter(logger, kms, crypto, dek, secrets, response.NewResponseWriter(logger, nil)).
-		RegisterRoutes(s.catalogGuardedAPIWith(guard, s.kmsPlatformTenantGate))
-	s.logger.Info("KMS REST routes registered (docs/kms/api.md contract)")
-}
-
-// kmsPlatformTenantGate refuses the secrets and DEK routes to every caller
-// but the platform tenant. The secrets and DEK backends read the tenant from
-// the request context, which this listener does not bind yet, and an absent
-// tenant selects the platform namespace: until the tenant is bound, a caller
-// of another tenant must not reach them. Other KMS routes keep their
-// scope-only check.
-func (s *RESTServer) kmsPlatformTenantGate(callerTenantID, route string) error {
-	if !strings.HasPrefix(route, restBasePath+"/kms/secrets") && !strings.HasPrefix(route, restBasePath+"/kms/deks") {
-		return nil
-	}
-	if s.config == nil || callerTenantID != s.config.PlatformTenantID {
-		return restapi.ErrRouteForbidden{Scope: route, Reason: "the secrets and DEK routes serve the platform tenant only"}
-	}
-	return nil
 }
 
 // SetComputeHandlers wires the compute (VM and container) REST handlers onto

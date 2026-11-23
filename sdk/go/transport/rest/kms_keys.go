@@ -14,8 +14,6 @@ package rest
 
 import (
 	"encoding/json"
-	"strings"
-	"time"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -70,10 +68,6 @@ func init() {
 
 	restResponseDecoders[platformv1.KeyManagementService_GenerateKey_FullMethodName] =
 		wireDecoder(platformv1.KeyManagementService_GenerateKey_FullMethodName, decodeKMSGenerateKey)
-	restResponseDecoders[platformv1.KeyManagementService_GetKey_FullMethodName] =
-		wireDecoder(platformv1.KeyManagementService_GetKey_FullMethodName, decodeKMSGetKey)
-	restResponseDecoders[platformv1.KeyManagementService_ListKeys_FullMethodName] =
-		wireDecoder(platformv1.KeyManagementService_ListKeys_FullMethodName, decodeKMSListKeys)
 }
 
 // encodeKMSGenerateKey flattens the key spec onto the route's top-level
@@ -182,120 +176,6 @@ func decodeKMSGenerateKey(raw []byte) (*platformv1.GenerateKeyResponse, error) {
 			DeletionProtection: reply.DeletionProtection,
 		},
 	}, nil
-}
-
-// kmsKeyInfoReply is the flat KeyInfoResponse GET /api/v1/kms/keys/{name}
-// answers (pkg/webservice/v1/rest/kms).
-type kmsKeyInfoReply struct {
-	KeyID              string            `json:"key_id"`
-	Name               string            `json:"name"`
-	Algorithm          string            `json:"algorithm"`
-	Version            uint64            `json:"version"`
-	Usage              []string          `json:"usage,omitempty"`
-	CreatedAt          time.Time         `json:"created_at"`
-	Status             string            `json:"status,omitempty"`
-	Description        string            `json:"description,omitempty"`
-	Tags               map[string]string `json:"tags,omitempty"`
-	Owner              string            `json:"owner,omitempty"`
-	Exportable         bool              `json:"exportable,omitempty"`
-	DeletionProtection bool              `json:"deletion_protection,omitempty"`
-	UpdatedAt          time.Time         `json:"updated_at,omitempty"`
-	LastUsedAt         time.Time         `json:"last_used_at,omitempty"`
-}
-
-// kmsKeyStatusesByName maps the KMS key status names the REST server
-// answers onto the proto key status; any other name is UNSPECIFIED.
-var kmsKeyStatusesByName = map[string]platformv1.KeyStatus{
-	"ENABLED":          platformv1.KeyStatus_KEY_STATUS_ENABLED,
-	"DISABLED":         platformv1.KeyStatus_KEY_STATUS_DISABLED,
-	"PENDING_DELETION": platformv1.KeyStatus_KEY_STATUS_PENDING_DELETION,
-	"DELETED":          platformv1.KeyStatus_KEY_STATUS_DESTROYED,
-}
-
-// kmsUnixOrZero answers t in unix seconds, 0 for the zero time.
-func kmsUnixOrZero(t time.Time) int64 {
-	if t.IsZero() {
-		return 0
-	}
-	return t.Unix()
-}
-
-// decodeKMSGetKey reads the route's flat KeyInfoResponse into the key handle
-// and metadata, so a successful lookup never returns a nil Key. An algorithm
-// name the SDK does not know decodes as UNSPECIFIED.
-func decodeKMSGetKey(raw []byte) (*platformv1.GetKeyResponse, error) {
-	var reply kmsKeyInfoReply
-	if err := json.Unmarshal(raw, &reply); err != nil {
-		return nil, ErrUnmarshalFailed{Err: err}
-	}
-	algorithm := kmsKeyAlgorithmsByName[reply.Algorithm]
-	meta := &platformv1.KMSKeyMetadata{
-		KeyId:              reply.KeyID,
-		Name:               reply.Name,
-		Algorithm:          algorithm,
-		Version:            reply.Version,
-		Status:             kmsKeyStatusesByName[strings.ToUpper(reply.Status)],
-		Description:        reply.Description,
-		Tags:               reply.Tags,
-		Owner:              reply.Owner,
-		Exportable:         reply.Exportable,
-		DeletionProtection: reply.DeletionProtection,
-		CreatedAt:          kmsUnixOrZero(reply.CreatedAt),
-		UpdatedAt:          kmsUnixOrZero(reply.UpdatedAt),
-		LastUsedAt:         kmsUnixOrZero(reply.LastUsedAt),
-	}
-	for _, name := range reply.Usage {
-		for usage, usageName := range kmsKeyUsageNames {
-			if strings.EqualFold(usageName, name) {
-				meta.Usage = append(meta.Usage, usage)
-				break
-			}
-		}
-	}
-	return &platformv1.GetKeyResponse{
-		Key: &platformv1.KMSKeyHandle{
-			KeyId:     reply.KeyID,
-			Version:   reply.Version,
-			Algorithm: algorithm,
-		},
-		Metadata: meta,
-	}, nil
-}
-
-// kmsListKeysReply is the webservice KMS router's ListKeys reply.
-type kmsListKeysReply struct {
-	Keys       []kmsKeyInfoReply `json:"keys"`
-	NextCursor string            `json:"next_cursor"`
-	HasMore    bool              `json:"has_more"`
-	TotalCount int32             `json:"total_count"`
-}
-
-// decodeKMSListKeys reads the webservice {"keys":[...]} reply, whose
-// created_at is RFC3339 and whose algorithm is a name such as AES-256-GCM,
-// into the platform key handles.
-func decodeKMSListKeys(raw []byte) (*platformv1.ListKeysResponse, error) {
-	var reply kmsListKeysReply
-	if err := json.Unmarshal(raw, &reply); err != nil {
-		return nil, ErrUnmarshalFailed{Err: err}
-	}
-	resp := &platformv1.ListKeysResponse{
-		Keys:       make([]*platformv1.KMSKeyHandle, 0, len(reply.Keys)),
-		NextCursor: reply.NextCursor,
-		HasMore:    reply.HasMore,
-		TotalCount: reply.TotalCount,
-	}
-	for _, k := range reply.Keys {
-		handle := &platformv1.KMSKeyHandle{
-			KeyId:     k.KeyID,
-			Version:   k.Version,
-			Algorithm: kmsKeyAlgorithmsByName[k.Algorithm],
-		}
-		if !k.CreatedAt.IsZero() {
-			handle.CreatedAt = k.CreatedAt.Unix()
-		}
-		resp.Keys = append(resp.Keys, handle)
-	}
-	return resp, nil
 }
 
 func invertKMSKeyAlgorithmNames() map[string]platformv1.KMSKeyAlgorithm {

@@ -43,9 +43,6 @@ type GenerateKeyRequest struct {
 	Owner       string            `json:"owner,omitempty"`
 	KeySpec     *KMSKeySpec       `json:"keySpec,omitempty"`
 
-	// FacadeKeySpec is the facade's snake_case key_spec envelope.
-	FacadeKeySpec *FacadeKeySpec `json:"key_spec,omitempty"`
-
 	// Exportable marks the key material as exportable from the KMS.
 	Exportable bool `json:"exportable,omitempty"`
 
@@ -63,36 +60,17 @@ type KMSKeySpec struct {
 	Curve     string   `json:"curve,omitempty"`
 }
 
-// FacadeKeySpec is the snake_case key_spec envelope the facade REST handlers
-// accepted on key generation and import (#2151 Codex round 2).
-type FacadeKeySpec struct {
-	Algorithm          string   `json:"algorithm,omitempty"`
-	KeySize            int32    `json:"key_size,omitempty"`
-	Usage              []string `json:"usage,omitempty"`
-	Exportable         bool     `json:"exportable,omitempty"`
-	DeletionProtection bool     `json:"deletion_protection,omitempty"`
-}
-
 // Resolve flattens the optional KeySpec nested envelope into top-level
 // Algorithm/Usage so handlers can stay agnostic of the wire shape.
 func (r *GenerateKeyRequest) Resolve() {
-	if r.KeySpec != nil {
-		if r.Algorithm == "" {
-			r.Algorithm = r.KeySpec.Algorithm
-		}
-		if len(r.Usage) == 0 {
-			r.Usage = r.KeySpec.Usage
-		}
+	if r.KeySpec == nil {
+		return
 	}
-	if fs := r.FacadeKeySpec; fs != nil {
-		if r.Algorithm == "" {
-			r.Algorithm = fs.Algorithm
-		}
-		if len(r.Usage) == 0 {
-			r.Usage = fs.Usage
-		}
-		r.Exportable = r.Exportable || fs.Exportable
-		r.DeletionProtection = r.DeletionProtection || fs.DeletionProtection
+	if r.Algorithm == "" {
+		r.Algorithm = r.KeySpec.Algorithm
+	}
+	if len(r.Usage) == 0 {
+		r.Usage = r.KeySpec.Usage
 	}
 }
 
@@ -118,24 +96,6 @@ type ImportKeyRequest struct {
 	Algorithm     string            `json:"algorithm"`
 	Usage         []string          `json:"usage,omitempty"`
 	Tags          map[string]string `json:"tags,omitempty"`
-
-	// FacadeKeySpec is the facade's snake_case key_spec envelope.
-	FacadeKeySpec *FacadeKeySpec `json:"key_spec,omitempty"`
-}
-
-// Resolve fills Algorithm and Usage from the facade's key_spec envelope
-// when the top-level fields are empty.
-func (r *ImportKeyRequest) Resolve() {
-	fs := r.FacadeKeySpec
-	if fs == nil {
-		return
-	}
-	if r.Algorithm == "" {
-		r.Algorithm = fs.Algorithm
-	}
-	if len(r.Usage) == 0 {
-		r.Usage = fs.Usage
-	}
 }
 
 // ImportKeyResponse is the response from importing a key.
@@ -154,24 +114,11 @@ type KeyInfoResponse struct {
 	Usage     []string  `json:"usage,omitempty"`
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	RotatedAt time.Time `json:"rotated_at,omitempty"`
-
-	// The key's stored metadata, as the facade's GetKey answered it.
-	Status             string            `json:"status,omitempty"`
-	Description        string            `json:"description,omitempty"`
-	Tags               map[string]string `json:"tags,omitempty"`
-	Owner              string            `json:"owner,omitempty"`
-	Exportable         bool              `json:"exportable,omitempty"`
-	DeletionProtection bool              `json:"deletion_protection,omitempty"`
-	UpdatedAt          time.Time         `json:"updated_at,omitempty"`
-	LastUsedAt         time.Time         `json:"last_used_at,omitempty"`
 }
 
 // ListKeysResponse is the response from listing keys.
 type ListKeysResponse struct {
-	Keys       []KeyInfoResponse `json:"keys"`
-	NextCursor string            `json:"next_cursor,omitempty"`
-	HasMore    bool              `json:"has_more"`
-	TotalCount int               `json:"total_count"`
+	Keys []KeyInfoResponse `json:"keys"`
 }
 
 // RotateKeyResponse is the response from key rotation.
@@ -413,8 +360,7 @@ type GenerateRandomRequest struct {
 
 // GenerateRandomResponse contains random bytes.
 type GenerateRandomResponse struct {
-	Bytes       []byte `json:"bytes"`
-	RandomBytes []byte `json:"random_bytes"`
+	Bytes []byte `json:"bytes"`
 }
 
 // GenerateDataKeyRequest asks for a fresh data key wrapped by the key-encryption

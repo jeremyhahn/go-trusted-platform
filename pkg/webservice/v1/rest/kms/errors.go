@@ -49,10 +49,9 @@ func (e *ErrUnknownAlgorithm) Error() string {
 }
 
 // ErrKeyVersionUnsupported is returned when a decrypt request names a key
-// version other than the key's current one. The SDK crypto DecryptRequest
-// has no version field and the service decrypts under the current version,
-// so any other version cannot be honoured; it is refused rather than
-// decrypted under whatever version the service picks.
+// version. The SDK crypto DecryptRequest has no version field, so the
+// request cannot be honoured; it is refused rather than decrypted under
+// whatever version the service picks.
 type ErrKeyVersionUnsupported struct {
 	Version int
 }
