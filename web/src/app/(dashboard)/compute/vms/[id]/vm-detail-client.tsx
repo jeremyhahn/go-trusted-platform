@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useParams, usePathname, useRouter } from 'next/navigation';
 import { resolveDynamicId } from '@/utils/dynamic-route';
@@ -34,6 +34,8 @@ import { Gated } from '@/components/features/capabilities/gated';
 import { VMMigrateButton } from '@/components/features/compute/vm-migrate-dialog';
 import { useCompute, useMutation, useToast, type MutationError } from '@/hooks';
 import { vmStatus } from '@/lib/compute-state';
+import { isServiceNotConfigured } from 'trusted-platform-sdk';
+import { ServiceUnavailableState } from '@/components/features/platform';
 
 const statusColors = {
   running: 'bg-green-500/10 text-green-500 border-green-500/20',
@@ -49,6 +51,11 @@ export default function VMDetailPage() {
   const vmId = resolveDynamicId(params, pathname, 'vms');
   const [vm, setVM] = useState<(VM & { status: ReturnType<typeof vmStatus> }) | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Set when the server answers that compute is not configured on this node:
+  // the page shows the unavailable state and stops polling GetVM.
+  const [computeUnavailable, setComputeUnavailable] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const vmReadInFlight = useRef(false);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [snapshotsError, setSnapshotsError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
@@ -63,13 +70,30 @@ export default function VMDetailPage() {
     return 'the control plane refused the request';
   };
 
+  const stopPolling = () => {
+    if (pollRef.current !== null) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  const markComputeUnavailable = () => {
+    stopPolling();
+    setComputeUnavailable(true);
+  };
+
   const fetchVM = async () => {
     if (!vmId) {
       setLoadError('No VM ID in the address');
       return;
     }
+    vmReadInFlight.current = true;
     try {
       const response = await compute.getVM(vmId);
+      if (response.success === false && isServiceNotConfigured(response.error)) {
+        markComputeUnavailable();
+        return;
+      }
       if (response.success === false || !response.data?.vm) {
         setLoadError(loadErrorText(response.error ?? 'the control plane returned no VM'));
         return;
@@ -78,7 +102,13 @@ export default function VMDetailPage() {
       setVM({ ...loaded, status: vmStatus(loaded.state) });
       setLoadError(null);
     } catch (error) {
+      if (isServiceNotConfigured(error)) {
+        markComputeUnavailable();
+        return;
+      }
       setLoadError(loadErrorText(error));
+    } finally {
+      vmReadInFlight.current = false;
     }
   };
 
@@ -101,8 +131,12 @@ export default function VMDetailPage() {
     fetchVM();
     fetchSnapshots();
     if (!vmId) return;
-    const interval = setInterval(fetchVM, 5000);
-    return () => clearInterval(interval);
+    // A poll tick never stacks a read on one still in flight (the SDK retries
+    // a 503 for 7 s), so a not-configured answer ends every read at once.
+    pollRef.current = setInterval(() => {
+      if (!vmReadInFlight.current) fetchVM();
+    }, 5000);
+    return stopPolling;
   }, [vmId]);
 
   const startVMMutation = useMutation(
@@ -266,6 +300,26 @@ export default function VMDetailPage() {
     deleteVMMutation.mutate(vmId);
   };
 
+
+  if (computeUnavailable) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-4">
+          <Button variant="ghost" size="icon" onClick={() => router.back()}>
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <div>
+            <h1 className="text-3xl font-bold">{vmId}</h1>
+            <p className="text-muted-foreground mt-1">Virtual Machine Details</p>
+          </div>
+        </div>
+        <ServiceUnavailableState
+          service="Compute"
+          description="The compute service is not configured on this node. In this topology, VMs and containers run on compute nodes; this node does not host workloads."
+        />
+      </div>
+    );
+  }
 
   if (!vm && loadError) {
     return (
