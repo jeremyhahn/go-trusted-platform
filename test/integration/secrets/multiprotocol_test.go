@@ -38,7 +38,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
@@ -314,31 +313,16 @@ func testDelete(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 // Version Management Tests
 // =============================================================================
 
-// embeddedGapAdapters are the adapters whose daemon handlers reach the
-// secrets service through the SDK's embedded transport. At the pinned
-// go-quicbaas that transport serves only quicbaas.Secrets/{Store,Get,List,
-// Delete,Ensure} and answers GetVersion, ListVersions, Rotate, Rollback,
-// UpdateStatus, SetRotationPolicy and GetRotationPolicy with
-// *embedded.UnknownMethodError, which the daemon returns as Unimplemented.
-var embeddedGapAdapters = map[string]bool{
-	"gRPC": true,
-	"Unix": true,
-}
-
 // requireSecretsGapRefusal reports true, so the leaf returns, when err is
-// the declared SDK refusal of a versioned secrets method: the CLI's typed
-// ErrCLIUpstreamGap, or Unimplemented from an embedded-transport adapter.
-// Any other answer, success included, reports false and the leaf's own
-// assertions decide.
+// the declared SDK refusal of a versioned secrets method on any adapter: the
+// CLI's typed ErrCLIUpstreamGap, or the embedded transport's answer as gRPC,
+// Unix, QUIC, MCP or REST carry it. At the pinned go-quicbaas that transport
+// serves only quicbaas.Secrets/{Store,Get,List,Delete,Ensure} and answers
+// GetVersion, ListVersions, Rotate, Rollback, UpdateStatus, SetRotationPolicy
+// and GetRotationPolicy with "unknown method". Any other answer, success
+// included, reports false and the leaf's own assertions decide.
 func requireSecretsGapRefusal(t *testing.T, adapter string, err error) bool {
-	if helpers.RequireCLIRefusal(t, adapter, err, helpers.ErrCLIUpstreamGap{}) {
-		return true
-	}
-	if !embeddedGapAdapters[adapter] || !surface.IsNotImplemented(err) {
-		return false
-	}
-	t.Logf("%s: the go-quicbaas SDK does not serve this secrets method (%s): %v", adapter, helpers.SecretsSDKGapIssue, err)
-	return true
+	return helpers.RequireSDKGapRefusal(t, adapter, helpers.SecretsSDKGapIssue, err)
 }
 
 func testRotate(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix string) {
@@ -404,12 +388,16 @@ func testVersions(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix
 	require.NoError(t, err, "Setup: Store should succeed")
 	defer CleanupSecret(cmd, testCtx, secretName)
 
-	// Rotate a few times
+	// Rotate a few times. wantVersions counts the versions the secret has:
+	// a rotate that is the declared SDK refusal adds none.
+	wantVersions := 1
 	for i := 2; i <= 3; i++ {
 		_, err := cmd.Rotate(testCtx, secretName, []byte(fmt.Sprintf("version-%d-data", i)))
-		if !requireSecretsGapRefusal(t, cmd.Name(), err) {
-			require.NoError(t, err, "Setup: Rotate should succeed")
+		if requireSecretsGapRefusal(t, cmd.Name(), err) {
+			continue
 		}
+		require.NoError(t, err, "Setup: Rotate should succeed")
+		wantVersions++
 	}
 
 	t.Run("ListSecretVersions", func(t *testing.T) {
@@ -419,7 +407,7 @@ func testVersions(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix
 		}
 		require.NoError(t, err, "Versions should succeed")
 		require.NotNil(t, result, "Result should not be nil")
-		assert.GreaterOrEqual(t, len(result.Versions), 3, "Should have at least 3 versions")
+		assert.GreaterOrEqual(t, len(result.Versions), wantVersions, "Should list every stored and rotated version")
 	})
 }
 
@@ -437,9 +425,13 @@ func testVersion(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix 
 	require.NoError(t, err, "Setup: Store should succeed")
 	defer CleanupSecret(cmd, testCtx, secretName)
 
-	// Rotate once
+	// Rotate once. When the rotate is the declared SDK refusal there is no
+	// version 2, and asking for it must fail.
+	rotated := true
 	_, err = cmd.Rotate(testCtx, secretName, []byte("version-2-data"))
-	if !requireSecretsGapRefusal(t, cmd.Name(), err) {
+	if requireSecretsGapRefusal(t, cmd.Name(), err) {
+		rotated = false
+	} else {
 		require.NoError(t, err, "Setup: Rotate should succeed")
 	}
 
@@ -457,6 +449,10 @@ func testVersion(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix 
 	t.Run("GetLatestVersion", func(t *testing.T) {
 		result, err := cmd.Version(testCtx, secretName, 2)
 		if requireSecretsGapRefusal(t, cmd.Name(), err) {
+			return
+		}
+		if !rotated {
+			require.Error(t, err, "Version 2 should not exist after a refused rotate")
 			return
 		}
 		require.NoError(t, err, "Version should succeed")
@@ -481,15 +477,26 @@ func testRollback(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix
 	require.NoError(t, err, "Setup: Store should succeed")
 	defer CleanupSecret(cmd, testCtx, secretName)
 
-	// Rotate to create version 2
-	_, err = cmd.Rotate(testCtx, secretName, []byte("rotated-data"))
-	if !requireSecretsGapRefusal(t, cmd.Name(), err) {
+	// Rotate to create version 2. wantData is what Get must answer after the
+	// rollback: version 1's data when the rollback succeeded or the rotate
+	// was the declared SDK refusal, the rotated data when the rotate
+	// succeeded and the rollback was refused.
+	rotatedData := []byte("rotated-data")
+	rotated := true
+	_, err = cmd.Rotate(testCtx, secretName, rotatedData)
+	if requireSecretsGapRefusal(t, cmd.Name(), err) {
+		rotated = false
+	} else {
 		require.NoError(t, err, "Setup: Rotate should succeed")
 	}
+	wantData := originalData
 
 	t.Run("RollbackToVersion1", func(t *testing.T) {
 		result, err := cmd.Rollback(testCtx, secretName, 1)
 		if requireSecretsGapRefusal(t, cmd.Name(), err) {
+			if rotated {
+				wantData = rotatedData
+			}
 			return
 		}
 		require.NoError(t, err, "Rollback should succeed")
@@ -500,7 +507,7 @@ func testRollback(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix
 	t.Run("VerifyRollbackData", func(t *testing.T) {
 		result, err := cmd.Get(testCtx, secretName)
 		require.NoError(t, err, "Get should succeed")
-		assert.True(t, bytes.Equal(originalData, result.Data), "Data should match version 1 after rollback")
+		assert.True(t, bytes.Equal(wantData, result.Data), "Data should match version 1 after rollback, or the latest data after a refused rollback")
 	})
 }
 
@@ -557,6 +564,11 @@ func testPolicy(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 	require.NoError(t, err, "Setup: Store should succeed")
 	defer CleanupSecret(cmd, testCtx, secretName)
 
+	// policySet records whether SetRotationPolicy stored the policy; when it
+	// was the declared SDK refusal, GetRotationPolicy answers the secret's
+	// default policy and the set values are not asserted.
+	policySet := true
+
 	t.Run("SetRotationPolicy", func(t *testing.T) {
 		policyOpts := PolicySetOptions{
 			Enabled:         true,
@@ -566,6 +578,7 @@ func testPolicy(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 
 		result, err := cmd.PolicySet(testCtx, secretName, policyOpts)
 		if requireSecretsGapRefusal(t, cmd.Name(), err) {
+			policySet = false
 			return
 		}
 		require.NoError(t, err, "PolicySet should succeed")
@@ -579,6 +592,10 @@ func testPolicy(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 		}
 		require.NoError(t, err, "Policy should succeed")
 		require.NotNil(t, result, "Result should not be nil")
+		if !policySet {
+			t.Logf("%s: SetRotationPolicy was refused (%s); the default policy is answered", cmd.Name(), helpers.SecretsSDKGapIssue)
+			return
+		}
 		assert.True(t, result.Enabled, "Policy should be enabled")
 		assert.Equal(t, int64(86400), result.IntervalSeconds, "Interval should match")
 		assert.Equal(t, int32(10), result.RetainVersions, "RetainVersions should match")
