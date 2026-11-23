@@ -12,7 +12,9 @@
 #   - nothing when only docs changed (*.md anywhere, anything under docs/);
 #   - ALL for a shared change, a test directory in no feature, a failure to
 #     read the table or the packages (fail closed), or when every feature is
-#     touched: run `make integration-test`;
+#     touched: run `make integration-test`. ALL is followed by the table's
+#     features outside the runner's ALL_TARGETS, sorted: run
+#     `make integration-test-<feature>` for each of those too;
 #   - otherwise the touched features, sorted, one per line: the features
 #     whose pattern covers a changed directory or one of its direct
 #     importers inside test/integration. Run `make integration-test-<feature>`
@@ -30,13 +32,21 @@ set -euo pipefail
 base=$1 tip=$2
 runner=build/docker/devcontainer/run-integration-tests.sh
 
+# all: run everything. `make integration-test` runs the runner's `all`, which
+# is ALL_TARGETS and compute; the table's other features (their own make
+# targets only) follow ALL, so a shared change never runs less than a change
+# to one of them alone. Before the table is read, ALL alone.
+declare -A table=() in_all=()
 all() {
 	echo ALL
+	local key
+	for key in "${!table[@]}"; do
+		[ -n "${in_all[$key]:-}" ] || echo "$key"
+	done | LC_ALL=C sort
 	exit 0
 }
 
 # The table: the rows between `declare -A TARGET_PACKAGES=(` and the next `)`.
-declare -A table=()
 script=$(git show "$tip:$runner") || all
 in=0
 row='^[[:space:]]*\[([A-Za-z0-9_.-]+)\]="([^"]*)"'
@@ -52,6 +62,23 @@ while IFS= read -r line; do
 	fi
 done <<<"$script"
 [ "${#table[@]}" -gt 0 ] || all
+
+# The suites `all` runs: the words between `ALL_TARGETS=(` and the next `)`,
+# and compute (the runner's `all` adds it). An unreadable list leaves in_all
+# empty, so ALL is followed by every feature (fail closed).
+in=0
+while IFS= read -r line; do
+	if [ "$in" = 0 ]; then
+		[ "$line" = 'ALL_TARGETS=(' ] && in=1
+		continue
+	fi
+	line=${line%%#*}
+	[ "${line//[[:space:]]/}" = ')' ] && break
+	for word in $line; do
+		in_all[$word]=1
+	done
+done <<<"$script"
+[ "${#in_all[@]}" -eq 0 ] || in_all[compute]=1
 
 # covers PATTERN DIR: a pattern ending /... covers its directory and
 # everything under it; any other pattern is that one package.
@@ -81,6 +108,9 @@ mark() {
 	return "$hit"
 }
 
+# The diff is read into a variable first: a failed git diff (an unknown
+# <base>) is a failure to read the changes, which fails closed.
+diff=$(git diff --name-only "$base" "$tip") || all
 declare -A dirs=()
 while IFS= read -r path; do
 	[ -n "$path" ] || continue
@@ -96,7 +126,7 @@ while IFS= read -r path; do
 	d=${d%%/testdata/*}
 	d=${d%/testdata}
 	dirs[$d]=1
-done < <(git diff --name-only "$base" "$tip")
+done <<<"$diff"
 [ "${#dirs[@]}" -gt 0 ] || exit 0
 
 # The direct importers of each test/integration package, by directory.

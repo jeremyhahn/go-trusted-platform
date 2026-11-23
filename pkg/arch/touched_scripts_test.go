@@ -25,6 +25,12 @@ declare -A TARGET_PACKAGES=(
     [root]="./test/integration"
 )
 
+# beta runs through its own make target only.
+ALL_TARGETS=(
+    alpha # the first suite
+    root
+)
+
 declare -A LATER=(
     [gamma]="./test/integration/gamma/..."
 )
@@ -47,11 +53,16 @@ var touchedBase = map[string]string{
 	"test/integration/beta/beta_test.go":   "package beta\n\nimport \"testing\"\n\nfunc TestB(t *testing.T) { _ = B() }\n",
 	"pkg/a/a.go":                           "package a\n\nfunc A() int { return 1 }\n",
 	"pkg/b/b.go":                           "package b\n\nimport \"example.com/m/pkg/a\"\n\nfunc B() int { return a.A() }\n",
+	"pkg/a/testdata/in.txt":                "in\n",
+	"pkg/c/c.go":                           "package c\n\nimport _ \"embed\"\n\n//go:embed policies/p.rego\nvar P string\n",
+	"pkg/c/policies/p.rego":                "package p\n",
+	"web/src/app.ts":                       "export {}\n",
 }
 
 type touchedCase struct {
 	name  string
 	files map[string]string
+	base  string // the <base> argument; empty means HEAD^
 	want  []string
 }
 
@@ -96,13 +107,13 @@ func touchedRepo(t *testing.T) (string, func(map[string]string)) {
 
 // runTouched runs a touched script on HEAD^..HEAD of dir and returns its
 // stdout lines.
-func runTouched(t *testing.T, dir, name string) []string {
+func runTouched(t *testing.T, dir, name, base string) []string {
 	t.Helper()
 	script, err := filepath.Abs("../../scripts/" + name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("bash", script, "HEAD^", "HEAD") // #nosec G204 -- the repository's own script
+	cmd := exec.Command("bash", script, base, "HEAD") // #nosec G204 -- the repository's own script
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOWORK=off", "GOTOOLCHAIN=local", "GOFLAGS=-mod=mod")
 	var stdout, stderr bytes.Buffer
@@ -123,7 +134,11 @@ func runTouchedCases(t *testing.T, script string, cases []touchedCase) {
 	dir, commit := touchedRepo(t)
 	for _, c := range cases {
 		commit(c.files)
-		if got := runTouched(t, dir, script); !reflect.DeepEqual(got, c.want) {
+		base := c.base
+		if base == "" {
+			base = "HEAD^"
+		}
+		if got := runTouched(t, dir, script, base); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: %s printed %q, want %q", c.name, script, got, c.want)
 		}
 	}
@@ -141,14 +156,15 @@ func TestTouchedFeatures(t *testing.T) {
 		}, want: []string{"root"}},
 		{name: "alpha imported by the root package", files: map[string]string{"test/integration/alpha/alpha.go": "package alpha\n\nfunc A() int { return 3 }\n"}, want: []string{"alpha", "root"}},
 		{name: "beta only", files: map[string]string{"test/integration/beta/beta.go": "package beta\n\nfunc B() int { return 2 }\n"}, want: []string{"beta"}},
-		{name: "a Makefile change", files: map[string]string{"Makefile": "print-build-tags:\n\t@echo\n\n# changed\n"}, want: []string{"ALL"}},
-		{name: "a package outside test/integration", files: map[string]string{"pkg/a/a.go": "package a\n\nfunc A() int { return 2 }\n"}, want: []string{"ALL"}},
-		{name: "a workflow change", files: map[string]string{".github/workflows/ci.yml": "name: ci2\n"}, want: []string{"ALL"}},
-		{name: "a test directory in no feature", files: map[string]string{"test/integration/gamma/gamma_test.go": "package gamma\n\nimport \"testing\"\n\nfunc TestG(t *testing.T) {}\n"}, want: []string{"ALL"}},
+		{name: "a Makefile change", files: map[string]string{"Makefile": "print-build-tags:\n\t@echo\n\n# changed\n"}, want: []string{"ALL", "beta"}},
+		{name: "a package outside test/integration", files: map[string]string{"pkg/a/a.go": "package a\n\nfunc A() int { return 2 }\n"}, want: []string{"ALL", "beta"}},
+		{name: "a workflow change", files: map[string]string{".github/workflows/ci.yml": "name: ci2\n"}, want: []string{"ALL", "beta"}},
+		{name: "a test directory in no feature", files: map[string]string{"test/integration/gamma/gamma_test.go": "package gamma\n\nimport \"testing\"\n\nfunc TestG(t *testing.T) {}\n"}, want: []string{"ALL", "beta"}},
 		{name: "every feature touched", files: map[string]string{
 			"test/integration/alpha/alpha.go": "package alpha\n\nfunc A() int { return 4 }\n",
 			"test/integration/beta/beta.go":   "package beta\n\nfunc B() int { return 3 }\n",
-		}, want: []string{"ALL"}},
+		}, want: []string{"ALL", "beta"}},
+		{name: "a docs change against an unknown base", files: map[string]string{"README.md": "# m3\n"}, base: "no-such-rev", want: []string{"ALL", "beta"}},
 	})
 }
 
@@ -158,7 +174,12 @@ func TestTouchedPackages(t *testing.T) {
 	runTouchedCases(t, "touched-packages.sh", []touchedCase{
 		{name: "pkg/a and its importer", files: map[string]string{"pkg/a/a.go": "package a\n\nfunc A() int { return 2 }\n"}, want: []string{"./pkg/a", "./pkg/b"}},
 		{name: "pkg/b alone", files: map[string]string{"pkg/b/b.go": "package b\n\nimport \"example.com/m/pkg/a\"\n\nfunc B() int { return a.A() + 1 }\n"}, want: []string{"./pkg/b"}},
-		{name: "docs only", files: map[string]string{"README.md": "# m2\n"}},
+		{name: "docs only", files: map[string]string{"README.md": "# m2\n", "docs/guide.txt": "guide 2\n"}},
+		{name: "an embedded policy", files: map[string]string{"pkg/c/policies/p.rego": "package p2\n"}, want: []string{"./pkg/c"}},
+		{name: "testdata of pkg/a", files: map[string]string{"pkg/a/testdata/in.txt": "in 2\n"}, want: []string{"./pkg/a", "./pkg/b"}},
+		{name: "a Makefile change", files: map[string]string{"Makefile": "print-build-tags:\n\t@echo\n\n# changed\n"}, want: []string{"./..."}},
+		{name: "a file in no package", files: map[string]string{"web/src/app.ts": "export const x = 1\n"}, want: []string{"./..."}},
+		{name: "a docs change against an unknown base", files: map[string]string{"README.md": "# m3\n"}, base: "no-such-rev", want: []string{"./..."}},
 		{name: "a go.mod change", files: map[string]string{"go.mod": "module example.com/m\n\ngo 1.21\n\n// changed\n"}, want: []string{"./..."}},
 	})
 }
