@@ -175,4 +175,19 @@ describe('PXEDeviceDetailClient', () => {
     expect(count(sent, 'GET', '/api/v1/pxe/devices/d1')).toBe(0);
     expect(count(sent, 'GET', '/api/v1/pxe/devices/d1/events')).toBe(0);
   });
+
+  it('offers only the states the server can set', async () => {
+    stubControlPlane(shared());
+    await renderPage();
+
+    const select = screen.getByLabelText('New state');
+    const values = within(select)
+      .getAllByRole('option')
+      .map((o) => o.getAttribute('value'));
+    expect(values).toContain('FAILED');
+    expect(values).toContain('QUARANTINED');
+    expect(values).toContain('DISCOVERED');
+    expect(values).not.toContain('UNKNOWN');
+    expect(values).not.toContain('UNSPECIFIED');
+  });
 });
