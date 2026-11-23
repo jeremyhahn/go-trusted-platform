@@ -31,66 +31,71 @@ type ComputeQuota struct {
 }
 
 // HasCapacity checks if the quota has capacity for the requested resources.
+// Each positive request is compared against the remaining capacity
+// (max(0, Max-Used)), so no request size can overflow the check.
 func (q *ComputeQuota) HasCapacity(vms, containers, vcpus, memoryMB, diskGB int64) bool {
-	if vms > 0 && q.UsedVMs+vms > q.MaxVMs {
+	if vms > 0 && vms > q.AvailableVMs() {
 		return false
 	}
-	if containers > 0 && q.UsedContainers+containers > q.MaxContainers {
+	if containers > 0 && containers > q.AvailableContainers() {
 		return false
 	}
-	if vcpus > 0 && q.UsedVCPUs+vcpus > q.MaxVCPUs {
+	if vcpus > 0 && vcpus > q.AvailableVCPUs() {
 		return false
 	}
-	if memoryMB > 0 && q.UsedMemoryMB+memoryMB > q.MaxMemoryMB {
+	if memoryMB > 0 && memoryMB > q.AvailableMemoryMB() {
 		return false
 	}
-	if diskGB > 0 && q.UsedDiskGB+diskGB > q.MaxDiskGB {
+	if diskGB > 0 && diskGB > q.AvailableDiskGB() {
 		return false
 	}
 	return true
 }
 
 // Reserve reserves the specified resources from the quota.
-// Returns an error if insufficient capacity.
+// Returns an error if insufficient capacity. Each positive request is
+// compared against the remaining capacity (max(0, Max-Used)), so no request
+// size can overflow the check, and ErrQuotaExceeded.Available reports that
+// clamped remaining capacity.
 func (q *ComputeQuota) Reserve(tenantID string, vms, containers, vcpus, memoryMB, diskGB int64) error {
-	if vms > 0 && q.UsedVMs+vms > q.MaxVMs {
+	if vms > 0 && vms > q.AvailableVMs() {
 		return ErrQuotaExceeded{
 			TenantID:  tenantID,
 			Resource:  "VMs",
 			Requested: vms,
-			Available: q.MaxVMs - q.UsedVMs,
+			Available: q.AvailableVMs(),
 		}
 	}
-	if containers > 0 && q.UsedContainers+containers > q.MaxContainers {
+	if containers > 0 && containers > q.AvailableContainers() {
 		return ErrQuotaExceeded{
 			TenantID:  tenantID,
 			Resource:  "containers",
 			Requested: containers,
-			Available: q.MaxContainers - q.UsedContainers,
+			Available: q.AvailableContainers(),
 		}
 	}
-	if vcpus > 0 && q.UsedVCPUs+vcpus > q.MaxVCPUs {
+	if vcpus > 0 && vcpus > q.AvailableVCPUs() {
 		return ErrQuotaExceeded{
 			TenantID:  tenantID,
 			Resource:  "vCPUs",
 			Requested: vcpus,
-			Available: q.MaxVCPUs - q.UsedVCPUs,
+			Available: q.AvailableVCPUs(),
 		}
 	}
-	if memoryMB > 0 && q.UsedMemoryMB+memoryMB > q.MaxMemoryMB {
+	if memoryMB > 0 && memoryMB > q.AvailableMemoryMB() {
 		return ErrQuotaExceeded{
 			TenantID:  tenantID,
 			Resource:  "memory",
 			Requested: memoryMB,
-			Available: q.MaxMemoryMB - q.UsedMemoryMB,
+			Available: q.AvailableMemoryMB(),
 		}
 	}
-	if diskGB > 0 && q.UsedDiskGB+diskGB > q.MaxDiskGB {
+	if diskGB > 0 && diskGB > q.AvailableDiskGB() {
 		return ErrQuotaExceeded{
 			TenantID:  tenantID,
 			Resource:  "disk",
 			Requested: diskGB,
-			Available: q.MaxDiskGB - q.UsedDiskGB,
+			Available: q.AvailableDiskGB(),
 		}
 	}
 
