@@ -92,4 +92,23 @@ for (const name of allPorts) {
   }
 }
 
+const defectsAt = plan.indexOf('- Likely page defects found while porting');
+assert.ok(defectsAt >= 0, 'plan has the "Likely page defects" section');
+const defects = plan.slice(defectsAt);
+for (const fixed of [
+  'web/src/app/admin/invitations/page.tsx',
+  'web/src/app/(dashboard)/iam/tokens/page.tsx',
+]) {
+  assert.ok(!defects.includes(fixed), `plan no longer lists ${fixed} as a page defect`);
+}
+assert.ok(
+  defects.includes('web/src/app/(dashboard)/devices/idevid/page.tsx'),
+  'plan still lists the IDevID page defect',
+);
+const fixedAt = plan.indexOf('Fixed on this branch');
+assert.ok(fixedAt >= 0, 'plan has a "Fixed on this branch" list');
+for (const sha of ['ef7863f4a', '22a9f62f8']) {
+  assert.ok(plan.slice(fixedAt).includes(sha), `plan's fixed list names ${sha}`);
+}
+
 console.log('port-1-plan.check: ok');
