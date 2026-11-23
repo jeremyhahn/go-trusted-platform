@@ -23,10 +23,12 @@ import (
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"google.golang.org/grpc/codes"
@@ -1048,6 +1050,96 @@ func TestEABGRPCService_MTLSCallerWithoutUserDirectory(t *testing.T) {
 	}
 	if called || svc.lastGenerate.TenantID != "" {
 		t.Fatal("an unresolved mTLS caller reached the PEP or the service")
+	}
+}
+
+// TestEABGRPCService_EveryBoundCallerSourceIsBound pins that every
+// authenticated caller source callerTenant reads binds an EAB call to its
+// tenant, so none of them passes as an unbound local caller.
+func TestEABGRPCService_EveryBoundCallerSourceIsBound(t *testing.T) {
+	calls := map[string]func(*EABGRPCService, context.Context, string) error{
+		"CreateCredential": func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+			_, err := s.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: tenantID})
+			return err
+		},
+		"ListCredentials": func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+			_, err := s.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{TenantId: tenantID})
+			return err
+		},
+		"CleanupExpiredCredentials": func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+			_, err := s.CleanupExpiredCredentials(ctx, &platformv1.CleanupExpiredEABCredentialsRequest{TenantId: tenantID})
+			return err
+		},
+	}
+	sources := map[string]func() context.Context{
+		"QUIC legacy principal": func() context.Context {
+			return quic.ContextWithLegacyPrincipal(context.Background(), &platformtoken.AuthorizedContext{Subject: "legacy-1", TenantID: "tenant-a"})
+		},
+		"REST platform token": func() context.Context {
+			return iammw.SetAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{Subject: "rest-1", TenantID: "tenant-a", Scopes: []string{"eab:write"}})
+		},
+		"REST session": func() context.Context {
+			return iammw.SetSessionInContext(context.Background(), iammw.NewIAMSession(&sdkiam.User{ID: "u1", TenantID: "tenant-a"}))
+		},
+	}
+	cases := []struct {
+		name     string
+		tenantID string
+		wantCode codes.Code
+	}{
+		{name: "own tenant", tenantID: "tenant-a", wantCode: codes.OK},
+		{name: "another tenant", tenantID: "tenant-b", wantCode: codes.PermissionDenied},
+		{name: "every tenant", tenantID: "", wantCode: codes.PermissionDenied},
+	}
+	for method, call := range calls {
+		for source, ctxFor := range sources {
+			for _, tc := range cases {
+				t.Run(method+"/"+source+"/"+tc.name, func(t *testing.T) {
+					service, svc, _ := newEABGRPCFixture()
+					err := call(service, ctxFor(), tc.tenantID)
+					if got := status.Code(err); got != tc.wantCode {
+						t.Fatalf("code = %v, want %v (err %v)", got, tc.wantCode, err)
+					}
+					if tc.wantCode == codes.PermissionDenied && svc.lastGenerate.TenantID != "" {
+						t.Fatalf("refused create reached the service: %+v", svc.lastGenerate)
+					}
+				})
+			}
+		}
+	}
+}
+
+// TestEABGRPCService_WildcardBearerTokenIsNotACertificate pins that a bearer
+// token carrying only the operator scope and no roles keeps its own subject:
+// only a peer-certificate context, which has no token, is resolved through
+// the IAM user directory.
+func TestEABGRPCService_WildcardBearerTokenIsNotACertificate(t *testing.T) {
+	authCtx := &platformtoken.AuthorizedContext{Subject: "tok-2", TenantID: "tenant-a", Scopes: []string{mtlsOperatorScope}}
+	contexts := map[string]context.Context{
+		"QUIC": quic.ContextWithToken(quic.ContextWithAuthorizedContext(context.Background(), authCtx), "bearer"),
+		"MCP":  mcp.ContextWithToken(mcp.ContextWithAuthorizedContext(context.Background(), authCtx), "bearer"),
+	}
+	for name, ctx := range contexts {
+		t.Run(name, func(t *testing.T) {
+			service, _, _ := newEABGRPCFixture()
+			// An empty directory denies any lookup, so OK proves none was made.
+			service.SetUserClient(&eabUserStub{})
+			var got *sdkiam.CheckRequest
+			service.SetPEPClient(&mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+				got = req
+				return &sdkiam.CheckResponse{Allowed: true}, nil
+			}})
+			_, err := service.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: "tenant-a"})
+			if code := status.Code(err); code != codes.OK {
+				t.Fatalf("code = %v, want OK (err %v)", code, err)
+			}
+			if got == nil {
+				t.Fatal("PEP not called")
+			}
+			if got.Subject.ID != "tok-2" || got.Subject.TenantID != "tenant-a" {
+				t.Fatalf("subject = %+v, want ID tok-2 in tenant-a", got.Subject)
+			}
+		})
 	}
 }
 
