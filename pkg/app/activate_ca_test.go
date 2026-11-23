@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 )
 
 // stubActivateSeam replaces loadOrInitCAForActivate for one test.
@@ -101,5 +102,30 @@ func TestActivateCA_LoadErrorPublishesNothing(t *testing.T) {
 
 	require.ErrorContains(t, err, "load failed")
 	assert.False(t, called, "no injection without a CA")
+	assert.Nil(t, app.CurrentCA())
+}
+
+// SetCA stores the CA for the embedded ceremony adapter before UpdateCA, so
+// a refused injection has already handed the ceremony the CA. ActivateCA
+// puts the ceremony CA from before the call back with App.CA.
+func TestActivateCA_InjectionFailureRestoresTheEmbeddedCeremonyCA(t *testing.T) {
+	factory, err := quicbaas.NewFactory(quicbaas.TestConfig(t), logging.DefaultLogger(), nil)
+	require.NoError(t, err)
+	es := factory.EmbeddedServer()
+	require.NotNil(t, es)
+	app := &App{Logger: logging.DefaultLogger(), CAConfig: &trustedca.CAConfig{}, daoFactory: factory}
+	published := &anchorCA{}
+	stubActivateSeam(t, func(_ context.Context, a *App) error {
+		a.publishCA(published)
+		return nil
+	})
+
+	_, err = app.ActivateCA(context.Background(), func(ca quicbaasca.CACertificateAuthority) error {
+		es.RestoreActiveCA(ca) // what SetCA's store does before UpdateCA fails
+		return errors.New("embedded CA adapter not ready")
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, es.ActiveCA(), "the ceremony must not keep a CA the platform refused")
 	assert.Nil(t, app.CurrentCA())
 }
