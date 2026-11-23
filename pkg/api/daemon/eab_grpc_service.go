@@ -29,6 +29,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"google.golang.org/grpc/codes"
@@ -137,32 +138,41 @@ func (s *EABGRPCService) resolveEABMTLSCaller(ctx context.Context, caller eabCal
 }
 
 // eabCallerFromContext returns the authenticated caller, or false for an
-// unbound local caller. A certificate caller on QUIC, which
-// mtlsPeerAuthenticator turns into an operator-scoped AuthorizedContext with
-// no roles, carries its identity so it is resolved through IAM the same way
-// as a certificate caller on gRPC.
+// unbound local caller. It reads every caller source callerTenant reads, in
+// the same order: the gRPC, QUIC and MCP AuthorizedContext, the QUIC legacy
+// principal, the REST platform token and IAM session, then the mTLS
+// identity. Token callers keep their subject, tenant and roles. Only a QUIC
+// or MCP peer-certificate context, which mtlsPeerAuthenticator stores as an
+// operator-scoped AuthorizedContext with no roles and no bearer token in ctx,
+// carries its identity so it is resolved through IAM the same way as a
+// certificate caller on gRPC.
 func eabCallerFromContext(ctx context.Context) (eabCaller, bool) {
-	for _, from := range []func(context.Context) (*platformtoken.AuthorizedContext, bool){
-		grpcapi.AuthorizedContextFromContext,
-		quic.AuthorizedContextFromContext,
-		mcp.AuthorizedContextFromContext,
-	} {
-		if authCtx, ok := from(ctx); ok && authCtx != nil {
-			if isMTLSPeerAuthorizedContext(authCtx) {
-				identity := &auth.Identity{ID: authCtx.Subject, Name: authCtx.Username, TenantID: authCtx.TenantID}
-				// The mTLS adapter takes the certificate identity from the email
-				// SAN by default; carry it as Email so resolution tries it first.
-				if strings.Contains(authCtx.Subject, "@") {
-					identity.Email = authCtx.Subject
-				}
-				return eabCaller{
-					id:       authCtx.Subject,
-					tenantID: authCtx.TenantID,
-					identity: identity,
-				}, true
-			}
-			return eabCaller{id: authCtx.Subject, tenantID: authCtx.TenantID, roles: authCtx.Roles}, true
+	tokenCaller := func(authCtx *platformtoken.AuthorizedContext) eabCaller {
+		return eabCaller{id: authCtx.Subject, tenantID: authCtx.TenantID, roles: authCtx.Roles}
+	}
+	if authCtx, ok := grpcapi.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
+		return tokenCaller(authCtx), true
+	}
+	if authCtx, ok := quic.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
+		if _, hasToken := quic.TokenFromContext(ctx); !hasToken && isMTLSPeerAuthorizedContext(authCtx) {
+			return certificateCaller(authCtx), true
 		}
+		return tokenCaller(authCtx), true
+	}
+	if p, ok := quic.LegacyPrincipalFromContext(ctx); ok {
+		return tokenCaller(p), true
+	}
+	if authCtx, ok := mcp.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
+		if mcp.TokenFromContext(ctx) == "" && isMTLSPeerAuthorizedContext(authCtx) {
+			return certificateCaller(authCtx), true
+		}
+		return tokenCaller(authCtx), true
+	}
+	if authCtx, ok := iammw.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
+		return tokenCaller(authCtx), true
+	}
+	if session, ok := iammw.GetSessionFromContext(ctx); ok && session != nil {
+		return eabCaller{id: session.UserID(), tenantID: session.TenantID(), roles: session.Roles()}, true
 	}
 	if identity := IdentityFromContext(ctx); identity != nil {
 		id := identity.UserID
@@ -174,9 +184,23 @@ func eabCallerFromContext(ctx context.Context) (eabCaller, bool) {
 	return eabCaller{}, false
 }
 
+// certificateCaller is the caller of a QUIC or MCP peer-certificate context:
+// its identity is resolved through IAM before the PEP is asked.
+func certificateCaller(authCtx *platformtoken.AuthorizedContext) eabCaller {
+	identity := &auth.Identity{ID: authCtx.Subject, Name: authCtx.Username, TenantID: authCtx.TenantID}
+	// The mTLS adapter takes the certificate identity from the email
+	// SAN by default; carry it as Email so resolution tries it first.
+	if strings.Contains(authCtx.Subject, "@") {
+		identity.Email = authCtx.Subject
+	}
+	return eabCaller{id: authCtx.Subject, tenantID: authCtx.TenantID, identity: identity}
+}
+
 // isMTLSPeerAuthorizedContext reports whether authCtx has the shape
 // mtlsPeerAuthenticator builds for a client certificate: exactly the operator
-// scope and no roles.
+// scope and no roles. The shape alone does not prove a certificate, since a
+// bearer token can be minted with it; callers also check that ctx carries no
+// bearer token.
 func isMTLSPeerAuthorizedContext(authCtx *platformtoken.AuthorizedContext) bool {
 	return len(authCtx.Roles) == 0 && len(authCtx.Scopes) == 1 && authCtx.Scopes[0] == mtlsOperatorScope
 }
