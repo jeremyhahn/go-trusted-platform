@@ -106,29 +106,35 @@ export class PXEService extends BaseService {
   /**
    * List devices
    *
+   * The filter goes out under the query parameters the server reads
+   * (pkg/webservice/v1/rest/pxe/filter.go:27-33): `state`, `mac_address`,
+   * `vlan`, `limit` and `offset`. The server ignores `macAddress` and
+   * `page`, so sending those would list every device from the start.
+   *
    * @param request - List request with filters
    * @returns List of devices
    */
   async listDevices(request?: ListPXEDevicesRequest): Promise<ApiResponse<ListPXEDevicesResponse>> {
     const filters: Record<string, string | number | undefined> = {};
-    if (request?.filter !== undefined) {
-      if (request.filter.state !== undefined) {
-        filters.state = request.filter.state;
+    const filter = request?.filter;
+    if (filter !== undefined) {
+      if (filter.state !== undefined) {
+        filters.state = filter.state;
       }
-      if (request.filter.macAddress !== undefined) {
-        filters.macAddress = request.filter.macAddress;
+      if (filter.macAddress !== undefined) {
+        filters.mac_address = filter.macAddress;
       }
-      if (request.filter.vlan !== undefined) {
-        filters.vlan = request.filter.vlan;
+      if (filter.vlan !== undefined) {
+        filters.vlan = filter.vlan;
+      }
+      if (filter.limit !== undefined) {
+        filters.limit = filter.limit;
+      }
+      if (filter.offset !== undefined) {
+        filters.offset = filter.offset;
       }
     }
-    return this.client.get<ListPXEDevicesResponse>(this.buildUrl('/devices', {
-      page: request?.filter?.offset !== undefined && request?.filter?.limit !== undefined
-        ? Math.floor(request.filter.offset / request.filter.limit) + 1
-        : undefined,
-      limit: request?.filter?.limit,
-      filters,
-    }));
+    return this.client.get<ListPXEDevicesResponse>(this.buildUrl('/devices', { filters }));
   }
 
   /**
