@@ -90,7 +90,7 @@ test.describe('Network Zones against the real platformd', () => {
 
     if (!list?.enabled) {
       await adminPage.goto('/networking/zones');
-      await expect(adminPage.getByRole('heading', { name: 'Network Zones' })).toBeVisible();
+      await expect(adminPage.getByRole('heading', { level: 1, name: 'Network Zones' })).toBeVisible();
       await expectUnavailable(adminPage, list);
       return;
     }
@@ -99,7 +99,7 @@ test.describe('Network Zones against the real platformd', () => {
     await adminPage.goto('/networking/zones');
     const { zones } = await json<{ zones: { name: string }[] }>(await res);
 
-    await expect(adminPage.getByRole('heading', { name: 'Network Zones' })).toBeVisible();
+    await expect(adminPage.getByRole('heading', { level: 1, name: 'Network Zones' })).toBeVisible();
     for (const zone of zones ?? []) {
       await expect(adminPage.getByRole('cell', { name: zone.name, exact: true })).toBeVisible();
     }
@@ -114,7 +114,7 @@ test.describe('Network Zones against the real platformd', () => {
     const list = caps.get(LIST);
 
     await adminPage.goto('/networking/zones');
-    await expect(adminPage.getByRole('heading', { name: 'Network Zones' })).toBeVisible();
+    await expect(adminPage.getByRole('heading', { level: 1, name: 'Network Zones' })).toBeVisible();
 
     await expectGated(adminPage.locator(`[data-capability-op="${LIST}"]`).first(), list);
 
@@ -140,7 +140,7 @@ test.describe('Network Zones against the real platformd', () => {
     const remove = caps.get(REMOVE);
 
     await adminPage.goto('/networking/zones');
-    await expect(adminPage.getByRole('heading', { name: 'Network Zones' })).toBeVisible();
+    await expect(adminPage.getByRole('heading', { level: 1, name: 'Network Zones' })).toBeVisible();
 
     if (!list?.enabled) {
       await expectUnavailable(adminPage, list);
@@ -164,8 +164,9 @@ test.describe('Network Zones against the real platformd', () => {
     await expect(dialog).toBeVisible();
     await dialog.locator('#zone-name').fill(name);
     await dialog.locator('#zone-offset').fill(String(90 + (worker % 10)));
-    await dialog.locator('#port-class-hypervisor').click();
+    await expect(dialog.locator('#port-class-hypervisor')).toHaveAttribute('data-state', 'checked');
     const created = mutation(adminPage, 'POST', '/api/v1/sdn/zones');
+    await expect(dialog.getByRole('button', { name: 'Create Zone' })).toBeEnabled();
     await dialog.getByRole('button', { name: 'Create Zone' }).click();
     const createdRes = await created;
     expect(createdRes.ok(), `create answered ${createdRes.status()}`).toBeTruthy();
