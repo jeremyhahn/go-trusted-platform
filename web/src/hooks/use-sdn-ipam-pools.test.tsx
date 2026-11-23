@@ -6,6 +6,7 @@ import { useSDNIPAMPools } from './use-sdn-ipam-pools';
 // #2051: the IPAM page's pools go through SDNService on
 // /api/v1/sdn/gateway/ipam/pools, not a hand-written fetch.
 const PATH = '/api/v1/sdn/gateway/ipam/pools';
+const ALLOCATIONS = '/api/v1/sdn/gateway/ipam/allocations';
 
 const P1 = { id: 'pool-a', name: 'pool-a', cidr: '192.0.2.0/25', zone: 'control-plane', total: 126, allocated: 1, available: 125 };
 const P2 = { id: 'pool-b', name: 'pool-b', cidr: '192.0.2.128/25', total: 126, allocated: 0, available: 126 };
@@ -127,5 +128,63 @@ describe('useSDNIPAMPools', () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     await expect(call(result.current)).rejects.toThrow('HTTP 409: pool in use');
+  });
+
+  it('reads one pool with get', async () => {
+    const sent = stubControlPlane({
+      [`GET ${PATH}`]: ok({ pools: [P1], count: 1 }),
+      [`GET ${PATH}/pool-a`]: ok(P1),
+    });
+    const { result } = render();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    let got: unknown;
+    await act(async () => {
+      got = await result.current.get('pool-a');
+    });
+
+    expect(got).toEqual(P1);
+    expect(sent).toContainEqual({ method: 'GET', path: `${PATH}/pool-a`, body: undefined });
+  });
+
+  it('rejects get with the HTTP status', async () => {
+    stubControlPlane({
+      [`GET ${PATH}`]: ok({ pools: [P1], count: 1 }),
+      [`GET ${PATH}/pool-a`]: refused(404, 'pool not found'),
+    });
+    const { result } = render();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await expect(result.current.get('pool-a')).rejects.toThrow('HTTP 404: pool not found');
+  });
+
+  it("lists one pool's allocations with listAllocations", async () => {
+    const allocation = { ip: '192.0.2.10', pool_id: 'pool-1', status: 'allocated', hostname: 'node.example.com' };
+    const sent = stubControlPlane({
+      [`GET ${PATH}`]: ok({ pools: [P1], count: 1 }),
+      [`GET ${ALLOCATIONS}`]: ok({ allocations: [allocation], count: 1 }),
+    });
+    const { result } = render();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    let got: unknown;
+    await act(async () => {
+      got = await result.current.listAllocations('pool-1');
+    });
+
+    expect(got).toEqual([allocation]);
+    expect(sent.some((r) => r.method === 'GET' && r.path === ALLOCATIONS)).toBe(true);
+    expect(urls().some((u) => u.includes(`${ALLOCATIONS}?pool_id=pool-1`))).toBe(true);
+  });
+
+  it('rejects listAllocations with the HTTP status', async () => {
+    stubControlPlane({
+      [`GET ${PATH}`]: ok({ pools: [P1], count: 1 }),
+      [`GET ${ALLOCATIONS}`]: refused(403, 'not permitted'),
+    });
+    const { result } = render();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await expect(result.current.listAllocations('pool-1')).rejects.toThrow('HTTP 403: not permitted');
   });
 });
