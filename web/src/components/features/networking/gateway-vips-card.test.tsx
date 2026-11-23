@@ -343,6 +343,55 @@ describe("GatewayVIPsCard", () => {
 
     expect(calls("GET", VIP_URL)).toHaveLength(0);
   });
+
+  it("an initial list read that lands after an add's re-read does not restore the old list", async () => {
+    let resolveFirst!: (r: Response) => void;
+    const first = new Promise<Response>((r) => (resolveFirst = r));
+    const addedVIP = {
+      vip: {
+        address: "192.0.2.11",
+        port: 80,
+        protocol: "tcp",
+        algorithm: "",
+        backends: [{ address: "192.0.2.21", port: 8080, weight: 0 }],
+      },
+      ctZone: 8,
+      groupId: 5,
+      backends: [{ backend: { address: "192.0.2.21", port: 8080, weight: 0 }, healthy: true }],
+    };
+    let listReads = 0;
+    fetchMock.mockImplementation(async (url, init) => {
+      const method = methodOf(init);
+      if (method === "GET" && String(url) === LIST_URL) {
+        listReads += 1;
+        if (listReads === 1) {
+          return first;
+        }
+        return jsonResponse(200, { code: 200, success: true, payload: { vips: [listedVIP, addedVIP] } });
+      }
+      if (method === "POST" && String(url) === LIST_URL) {
+        return jsonResponse(201, { code: 201, success: true, payload: {} });
+      }
+      return jsonResponse(404, { code: 404, success: false, error: "unexpected" });
+    });
+    await renderCard();
+
+    fireEvent.change(screen.getByTestId("vip-protocol"), { target: { value: "tcp" } });
+    fireEvent.change(screen.getByTestId("vip-address"), { target: { value: "192.0.2.11" } });
+    fireEvent.change(screen.getByTestId("vip-port"), { target: { value: "80" } });
+    fireEvent.change(screen.getByTestId("vip-backends"), { target: { value: "192.0.2.21:8080" } });
+    await click("vip-add");
+
+    await waitFor(() => expect(calls("GET", LIST_URL).length).toBe(2));
+    await screen.findByTestId("vip-tcp-192.0.2.11-80");
+
+    await act(async () => {
+      resolveFirst(jsonResponse(200, { code: 200, success: true, payload: { vips: [listedVIP] } }));
+    });
+
+    expect(screen.getByTestId("vip-tcp-192.0.2.11-80")).toBeTruthy();
+    expect(screen.getByTestId(`vip-${KEY}`)).toBeTruthy();
+  });
 });
 
 describe("parseBackends", () => {
