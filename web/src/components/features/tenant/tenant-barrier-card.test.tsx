@@ -123,6 +123,28 @@ describe('TenantBarrierCard', () => {
     await waitFor(() => expect(key.value).toBe(''));
   });
 
+  it('keeps Unseal off until a key is typed, since the server refuses an empty key', async () => {
+    const sent = stubControlPlane({
+      'GET /api/v1/capabilities': caps(),
+      'GET /api/v1/tenants/t1/barrier': barrier({ sealed: true, initialized: true }),
+      'POST /api/v1/tenants/t1/barrier/unseal': ok({ status: { code: 0 } }),
+    });
+    renderCard();
+
+    await waitFor(() => expect(statusReads(sent)).toBe(1));
+    await enabledButton('Seal');
+    const unseal = screen.getByRole('button', { name: 'Unseal' }) as HTMLButtonElement;
+    expect(unseal.disabled).toBe(true);
+    fireEvent.click(unseal);
+    expect(sent.some((r) => r.path === '/api/v1/tenants/t1/barrier/unseal')).toBe(false);
+
+    const key = screen.getByLabelText('Unseal key');
+    fireEvent.change(key, { target: { value: '   ' } });
+    expect(unseal.disabled).toBe(true);
+    fireEvent.change(key, { target: { value: 'a2V5' } });
+    await enabledButton('Unseal');
+  });
+
   it('seals and shows a refusal in an alert', async () => {
     stubControlPlane({
       'GET /api/v1/capabilities': caps(),
