@@ -87,4 +87,49 @@ describe('PXEService device routes', () => {
       expect(mockClient.post).not.toHaveBeenCalled();
     });
   });
+
+  // pkg/webservice/v1/rest/pxe/filter.go:27-33 reads state, mac_address,
+  // vlan, limit and offset; macAddress and page are ignored, so a filtered
+  // or second-page list would silently come back unfiltered from the start.
+  describe('listDevices', () => {
+    function sentUrl(): { path: string; params: URLSearchParams } {
+      const url = String(vi.mocked(mockClient.get).mock.calls[0]?.[0]);
+      return { path: url.split('?')[0] ?? '', params: new URLSearchParams(url.split('?')[1] ?? '') };
+    }
+
+    beforeEach(() => {
+      vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: { devices: [] } });
+    });
+
+    it('sends the filter under the names the server reads', async () => {
+      await service.listDevices({
+        filter: { state: 'QUARANTINED', macAddress: '02:00:00', vlan: 20, limit: 10, offset: 20 },
+      });
+
+      expect(mockClient.get).toHaveBeenCalledTimes(1);
+      const { path, params } = sentUrl();
+      expect(path).toBe('/v1/pxe/devices');
+      expect(params.get('state')).toBe('QUARANTINED');
+      expect(params.get('mac_address')).toBe('02:00:00');
+      expect(params.get('vlan')).toBe('20');
+      expect(params.get('limit')).toBe('10');
+      expect(params.get('offset')).toBe('20');
+      expect(params.has('macAddress')).toBe(false);
+      expect(params.has('page')).toBe(false);
+    });
+
+    it('sends an offset without a limit', async () => {
+      await service.listDevices({ filter: { offset: 5 } });
+
+      const { params } = sentUrl();
+      expect(params.get('offset')).toBe('5');
+      expect(params.has('page')).toBe(false);
+    });
+
+    it('sends no query without a filter', async () => {
+      await service.listDevices();
+
+      expect(mockClient.get).toHaveBeenCalledWith('/v1/pxe/devices');
+    });
+  });
 });
