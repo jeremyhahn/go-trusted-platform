@@ -265,33 +265,38 @@ type StorageQuota struct {
 }
 
 // HasCapacity checks if the quota has capacity for the requested resources.
+// Each positive request is compared against the remaining capacity
+// (max(0, Max-Used)), so no request size can overflow the check.
 func (q *StorageQuota) HasCapacity(volumesGB, snapshots int64) bool {
-	if volumesGB > 0 && q.UsedVolumesGB+volumesGB > q.MaxVolumesGB {
+	if volumesGB > 0 && volumesGB > q.AvailableVolumesGB() {
 		return false
 	}
-	if snapshots > 0 && q.UsedSnapshots+snapshots > q.MaxSnapshots {
+	if snapshots > 0 && snapshots > q.AvailableSnapshots() {
 		return false
 	}
 	return true
 }
 
 // Reserve reserves the specified resources from the quota.
-// Returns an error if insufficient capacity.
+// Returns an error if insufficient capacity. Each positive request is
+// compared against the remaining capacity (max(0, Max-Used)), so no request
+// size can overflow the check, and ErrQuotaExceeded.Available reports that
+// clamped remaining capacity.
 func (q *StorageQuota) Reserve(tenantID string, volumesGB, snapshots int64) error {
-	if volumesGB > 0 && q.UsedVolumesGB+volumesGB > q.MaxVolumesGB {
+	if volumesGB > 0 && volumesGB > q.AvailableVolumesGB() {
 		return ErrQuotaExceeded{
 			TenantID:  tenantID,
 			Resource:  "volume storage",
 			Requested: volumesGB,
-			Available: q.MaxVolumesGB - q.UsedVolumesGB,
+			Available: q.AvailableVolumesGB(),
 		}
 	}
-	if snapshots > 0 && q.UsedSnapshots+snapshots > q.MaxSnapshots {
+	if snapshots > 0 && snapshots > q.AvailableSnapshots() {
 		return ErrQuotaExceeded{
 			TenantID:  tenantID,
 			Resource:  "snapshots",
 			Requested: snapshots,
-			Available: q.MaxSnapshots - q.UsedSnapshots,
+			Available: q.AvailableSnapshots(),
 		}
 	}
 
