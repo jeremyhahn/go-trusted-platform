@@ -8,7 +8,8 @@
  * Both calls only read counters, so there is no confirm dialog. The server
  * serves them to the admin role only; a non-admin sees both reads disabled
  * with the reason. A refused read shows the server's message and can be
- * tried again.
+ * tried again. Each read is also gated on the server's capability for its
+ * route (GET /api/v1/gateway/perf/datapath, GET /api/v1/gateway/perf/conntrack).
  */
 
 import { useState } from 'react';
@@ -20,6 +21,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useGateway, useOptionalAuth } from '@/hooks';
 import type { GetPerfConntrackResponse, GetPerfDatapathResponse } from 'trusted-platform-sdk';
+import { Gated } from '@/components/features/capabilities/gated';
+
+/** The server's capability ops for the two reads. */
+const DATAPATH_OP = 'GET /api/v1/gateway/perf/datapath';
+const CONNTRACK_OP = 'GET /api/v1/gateway/perf/conntrack';
 
 /** Largest conntrack zone (zones are 16-bit). */
 const MAX_ZONE = 65535;
@@ -126,15 +132,17 @@ export function GatewayPerfCountersCard() {
                 onChange={(e) => setBridge(e.target.value)}
               />
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              data-testid="perf-datapath-load"
-              disabled={!isAdmin || loading}
-              onClick={readDatapath}
-            >
-              Read datapath
-            </Button>
+            <Gated op={DATAPATH_OP}>
+              <Button
+                variant="outline"
+                size="sm"
+                data-testid="perf-datapath-load"
+                disabled={!isAdmin || loading}
+                onClick={readDatapath}
+              >
+                Read datapath
+              </Button>
+            </Gated>
           </div>
           {datapath && (
             <dl className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4" data-testid="perf-datapath-result">
@@ -170,15 +178,17 @@ export function GatewayPerfCountersCard() {
                 onChange={(e) => setZone(e.target.value)}
               />
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              data-testid="perf-conntrack-load"
-              disabled={!isAdmin || loading || zoneValue === null}
-              onClick={readConntrack}
-            >
-              Read conntrack
-            </Button>
+            <Gated op={CONNTRACK_OP}>
+              <Button
+                variant="outline"
+                size="sm"
+                data-testid="perf-conntrack-load"
+                disabled={!isAdmin || loading || zoneValue === null}
+                onClick={readConntrack}
+              >
+                Read conntrack
+              </Button>
+            </Gated>
           </div>
           {conntrack && (
             <div className="text-sm" data-testid="perf-conntrack-result">

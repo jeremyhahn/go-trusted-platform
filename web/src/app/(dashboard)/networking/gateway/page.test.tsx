@@ -45,6 +45,14 @@ vi.mock("@/components/features/networking/gateway-lb-nat64-status-card", () => (
   GatewayLBNAT64StatusCard: () => <div data-testid="lb-nat64-status-card" />,
 }));
 
+vi.mock("@/components/features/networking/gateway-perf-flows-card", () => ({
+  GatewayPerfFlowsCard: () => <div data-testid="perf-flows-card" />,
+}));
+
+vi.mock("@/components/features/networking/gateway-perf-counters-card", () => ({
+  GatewayPerfCountersCard: () => <div data-testid="perf-counters-card" />,
+}));
+
 import APIGatewayPage from "./page";
 
 const notConfigured = { error: { status: 503, message: "gateway not configured", details: { reason: SERVICE_NOT_CONFIGURED } } };

@@ -9,7 +9,8 @@
  * Per the Tenant Agent ruling it is one admin-only action behind a confirm
  * dialog that says what it installs and when the flows expire. A non-admin
  * sees it disabled with the reason; a refused run shows the server's message
- * and can be run again.
+ * and can be run again. The Run and confirm buttons are also gated on the
+ * server's capability for POST /api/v1/gateway/perf/flows.
  */
 
 import { useState } from 'react';
@@ -27,6 +28,10 @@ import {
 } from '@/components/ui/dialog';
 import { useGateway, useOptionalAuth } from '@/hooks';
 import type { GetPerfFlowsResponse } from 'trusted-platform-sdk';
+import { Gated } from '@/components/features/capabilities/gated';
+
+/** The server's capability op for a benchmark run. */
+const FLOWS_OP = 'POST /api/v1/gateway/perf/flows';
 
 /** Flows one run installs. */
 export const PERF_FLOW_COUNT = 1000;
@@ -83,15 +88,17 @@ export function GatewayPerfFlowsCard() {
           </CardTitle>
           <CardDescription>Measures how fast this gateway&apos;s switch installs flows.</CardDescription>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          data-testid="perf-flows-run"
-          disabled={!isAdmin || running}
-          onClick={() => setDialogOpen(true)}
-        >
-          {running ? 'Running…' : 'Run flow benchmark'}
-        </Button>
+        <Gated op={FLOWS_OP}>
+          <Button
+            variant="outline"
+            size="sm"
+            data-testid="perf-flows-run"
+            disabled={!isAdmin || running}
+            onClick={() => setDialogOpen(true)}
+          >
+            {running ? 'Running…' : 'Run flow benchmark'}
+          </Button>
+        </Gated>
       </CardHeader>
       <CardContent className="space-y-3">
         {!isAdmin && (
@@ -145,9 +152,11 @@ export function GatewayPerfFlowsCard() {
             <Button variant="outline" data-testid="perf-flows-cancel" onClick={() => setDialogOpen(false)}>
               Cancel
             </Button>
-            <Button data-testid="perf-flows-confirm" onClick={handleConfirm}>
-              Install and measure
-            </Button>
+            <Gated op={FLOWS_OP}>
+              <Button data-testid="perf-flows-confirm" onClick={handleConfirm}>
+                Install and measure
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
