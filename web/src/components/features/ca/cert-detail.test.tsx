@@ -1,8 +1,15 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CertificateDetail } from '@/types/security';
 import { CertDetail } from './cert-detail';
+
+const caps = vi.hoisted(() => ({ capability: vi.fn() }));
+vi.mock('@/hooks/use-capabilities', () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: caps.capability }),
+}));
+
+const revokeOp = 'DELETE /api/v1/ca/certificates/{serial}';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -33,6 +40,25 @@ function detail(overrides: Partial<CertificateDetail> = {}): CertificateDetail {
 
 describe('CertDetail', () => {
   afterEach(() => cleanup());
+  beforeEach(() => {
+    caps.capability.mockReset();
+    caps.capability.mockImplementation(() => ({ enabled: true }));
+  });
+
+  it('withholds Revoke when the server does not offer it', () => {
+    caps.capability.mockImplementation((op: string) =>
+      op === revokeOp ? { enabled: false, reason: 'not-configured: ca' } : { enabled: true }
+    );
+    const onRevoke = vi.fn();
+    render(<CertDetail certificate={detail()} onRevoke={onRevoke} />);
+    const revoke = screen.getByRole('button', { name: 'Revoke' }) as HTMLButtonElement;
+    expect(revoke.disabled).toBe(true);
+    expect(revoke.title).toBe('not-configured: ca');
+    expect(revoke.getAttribute('data-capability-op')).toBe(revokeOp);
+    expect(revoke.getAttribute('data-capability-enabled')).toBe('false');
+    fireEvent.click(revoke);
+    expect(onRevoke).not.toHaveBeenCalled();
+  });
 
   it('shows the certificate fields', () => {
     const cert = detail();

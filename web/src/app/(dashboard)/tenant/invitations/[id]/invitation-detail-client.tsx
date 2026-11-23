@@ -14,7 +14,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { toInvitationView, useInvitationById } from "@/hooks";
+import { Gated } from "@/components/features/capabilities/gated";
+import { toInvitationView, useInvitation, useInvitationById, useToast } from "@/hooks";
 
 const statusColors: Record<string, "secondary" | "default" | "destructive" | "outline"> = {
   pending: "secondary",
@@ -47,6 +48,28 @@ export default function InvitationDetailClient({ params }: { params: Promise<{ i
 
   const { data, isLoading, error, refetch } = useInvitationById(id);
   const invitation = React.useMemo(() => toInvitationView(data), [data]);
+  const { revoke } = useInvitation();
+  const { toast } = useToast();
+
+  const handleRevoke = async () => {
+    if (!invitation) return;
+    if (!window.confirm(`Revoke the invitation to ${invitation.email}?`)) return;
+    try {
+      await revoke.mutateAsync(invitation.id);
+      toast({
+        title: "Invitation revoked",
+        description: `The invitation to ${invitation.email} has been revoked`,
+        variant: "success",
+      });
+      void refetch();
+    } catch (err) {
+      toast({
+        title: "Failed to revoke invitation",
+        description: err instanceof Error ? err.message : "Failed to revoke invitation",
+        variant: "destructive",
+      });
+    }
+  };
 
   const back = (
     <Button variant="outline" onClick={() => router.push("/tenant/invitations")}>
@@ -115,6 +138,20 @@ export default function InvitationDetailClient({ params }: { params: Promise<{ i
           <h1 className="text-3xl font-bold tracking-tight">Invitation Details</h1>
           <p className="text-muted-foreground">{invitation.id}</p>
         </div>
+        {invitation.status === "pending" && (
+          <div className="ml-auto">
+            <Gated op="POST /api/v1/invitations/{id:[0-9]+}/revoke">
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={revoke.isLoading}
+                onClick={() => void handleRevoke()}
+              >
+                Revoke
+              </Button>
+            </Gated>
+          </div>
+        )}
       </div>
 
       <Card>

@@ -16,6 +16,8 @@ import { IssueCertForm } from "@/components/features/ca/issue-cert-form";
 import { useCA, useApi, useMutation } from "@/hooks";
 import type { Certificate, IssueCertInput } from "@/types/security";
 import { Gated } from "@/components/features/capabilities/gated";
+import { REVOCATION_REASONS, isRevocationReason } from "@/components/features/ca/revocation-reasons";
+import type { RevocationReason } from "trusted-platform-sdk";
 
 // SDK types (from sdk/javascript/src/types/ca.ts)
 // Certificate summary as the REST endpoint emits it: camelCase or
@@ -38,18 +40,6 @@ interface CertificateWire {
   signatureAlgorithm?: string;
   signature_algorithm?: string;
 }
-
-type RevocationReason =
-  | 'UNSPECIFIED'
-  | 'KEY_COMPROMISE'
-  | 'CA_COMPROMISE'
-  | 'AFFILIATION_CHANGED'
-  | 'SUPERSEDED'
-  | 'CESSATION_OF_OPERATION'
-  | 'CERTIFICATE_HOLD'
-  | 'REMOVE_FROM_CRL'
-  | 'PRIVILEGE_WITHDRAWN'
-  | 'AA_COMPROMISE';
 
 type KeyAlgorithm =
   | 'UNSPECIFIED'
@@ -283,10 +273,14 @@ export default function CertificatesPage() {
   };
 
   const handleRevoke = (cert: Certificate) => {
-    const reason = prompt("Enter revocation reason:");
-    if (!reason) return;
-    // Map user input to SDK RevocationReason enum
-    revokeCertMutation.mutate({ serial: cert.serialNumber, reason: "UNSPECIFIED" as RevocationReason });
+    const answer = prompt(`Enter revocation reason (${REVOCATION_REASONS.join(", ")}):`);
+    if (!answer) return;
+    const reason = answer.trim().toUpperCase();
+    if (!isRevocationReason(reason)) {
+      alert(`Invalid revocation reason. Use one of: ${REVOCATION_REASONS.join(", ")}`);
+      return;
+    }
+    revokeCertMutation.mutate({ serial: cert.serialNumber, reason });
   };
 
   const handleRenew = (cert: Certificate) => {
