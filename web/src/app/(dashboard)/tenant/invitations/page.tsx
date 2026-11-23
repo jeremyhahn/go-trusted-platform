@@ -63,7 +63,14 @@ export default function InvitationsPage() {
   const iam = useIAM();
 
   // #1992: the server accepts only the tenant's IAM roles, so the form offers those.
-  const { data: rolesData } = useApi(
+  // A failed lookup keeps its error and refetch, so the form offers a retry
+  // instead of claiming the tenant has no roles.
+  const {
+    data: rolesData,
+    isLoading: rolesLoading,
+    error: rolesError,
+    refetch: refetchRoles,
+  } = useApi(
     () => (tenantId ? iam.listRoles({ tenantId }) : Promise.resolve({ success: true, data: null })),
     [tenantId],
   );
@@ -320,7 +327,13 @@ export default function InvitationsPage() {
                 <p className="font-medium text-destructive">Error loading invitations</p>
                 <p className="text-sm text-muted-foreground mt-1">{error}</p>
               </div>
-              <Button onClick={() => refetch()} variant="outline">
+              <Button
+                onClick={() => {
+                  void refetch();
+                  void refetchRoles();
+                }}
+                variant="outline"
+              >
                 <RefreshCw className="h-4 w-4 mr-2" />
                 Retry
               </Button>
@@ -344,6 +357,9 @@ export default function InvitationsPage() {
         <InvitationForm
           onSubmit={handleSendInvitation}
           roles={roleNames}
+          rolesLoading={rolesLoading}
+          rolesError={rolesError ? rolesError.message || "the role lookup failed" : null}
+          onRetryRoles={() => void refetchRoles()}
           trigger={
             <Button disabled={create.isLoading}>
               <MailPlus className="h-4 w-4 mr-2" />

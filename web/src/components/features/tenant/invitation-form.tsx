@@ -20,6 +20,12 @@ interface InvitationFormProps {
   onSubmit: (data: SendInvitationInput) => Promise<void>;
   /** The tenant's IAM role names; the server accepts only these (#1992). */
   roles: string[];
+  /** The role lookup is still running. */
+  rolesLoading?: boolean;
+  /** The role lookup failed with this message; `roles` is then not the tenant's list. */
+  rolesError?: string | null;
+  /** Runs the role lookup again after a failure. */
+  onRetryRoles?: () => void;
   trigger?: React.ReactNode;
 }
 
@@ -29,7 +35,15 @@ function defaultRole(roles: string[]): string {
   return roles[0] ?? "";
 }
 
-export function InvitationForm({ onSubmit, roles, trigger }: InvitationFormProps) {
+export function InvitationForm({
+  onSubmit,
+  roles,
+  rolesLoading = false,
+  rolesError = null,
+  onRetryRoles,
+  trigger,
+}: InvitationFormProps) {
+  const rolesReady = !rolesLoading && !rolesError;
   const [open, setOpen] = React.useState(false);
   const [isLoading, setIsLoading] = React.useState(false);
   const [email, setEmail] = React.useState("");
@@ -43,7 +57,7 @@ export function InvitationForm({ onSubmit, roles, trigger }: InvitationFormProps
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!email || !role) return;
+    if (!email || !role || !rolesReady) return;
 
     setIsLoading(true);
     try {
@@ -103,21 +117,38 @@ export function InvitationForm({ onSubmit, roles, trigger }: InvitationFormProps
             </div>
             <div className="grid gap-2">
               <Label htmlFor="role">Role</Label>
-              <select
-                id="role"
-                value={role}
-                onChange={(e) => setRole(e.target.value)}
-                disabled={isLoading || roles.length === 0}
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {roles.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
+              {rolesLoading ? (
+                <p className="text-sm text-muted-foreground" role="status">
+                  Loading roles...
+                </p>
+              ) : rolesError ? (
+                <div className="flex items-center justify-between gap-2" role="alert">
+                  <p className="text-sm text-destructive">
+                    Could not load this tenant&apos;s IAM roles: {rolesError}
+                  </p>
+                  {onRetryRoles && (
+                    <Button type="button" variant="outline" size="sm" onClick={onRetryRoles}>
+                      Retry
+                    </Button>
+                  )}
+                </div>
+              ) : (
+                <select
+                  id="role"
+                  value={role}
+                  onChange={(e) => setRole(e.target.value)}
+                  disabled={isLoading || roles.length === 0}
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {roles.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              )}
               <p className="text-xs text-muted-foreground">
-                {roles.length === 0
+                {rolesReady && roles.length === 0
                   ? "This tenant has no IAM roles to invite with"
                   : "Choose one of this tenant's IAM roles for the new member"}
               </p>
@@ -132,7 +163,7 @@ export function InvitationForm({ onSubmit, roles, trigger }: InvitationFormProps
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={isLoading || !email || !role}>
+            <Button type="submit" disabled={isLoading || !email || !role || !rolesReady}>
               {isLoading ? (
                 <>
                   <span className="animate-spin mr-2">⏳</span>
