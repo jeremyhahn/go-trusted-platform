@@ -23,8 +23,8 @@ import { expect, test } from './fixtures';
  * Not covered, and why (gaps):
  *  - bundle creation and Start need the swtpm binary on PATH. The Web
  *    Console E2E runner installs none, so there the flow test records
- *    createBundle's refusal (a `gap` annotation) instead of driving the
- *    controls.
+ *    createBundle's missing-swtpm refusal (a `gap` annotation) instead of
+ *    driving the controls; any other refusal fails the test.
  */
 
 const STATE_OP = 'GET /api/v1/vtpm/bundles/{id}/state';
@@ -54,6 +54,19 @@ async function enabledOps(page: Page): Promise<Set<string>> {
 
 function gap(description: string): void {
   test.info().annotations.push({ type: 'gap', description });
+}
+
+/**
+ * The one createBundle refusal that is a harness gap: the runner has no swtpm
+ * binary (pkg/swtpm "swtpm not installed", wrapped by pkg/vtpm as "vtpm: swtpm
+ * create failed: ..."; the REST handler's error body keeps the cause text).
+ */
+const MISSING_SWTPM = /swtpm not installed/;
+
+/** Records a createBundle refusal as a gap, and fails on any other refusal. */
+function createRefusedGap(message: string | undefined): void {
+  expect(message ?? '', 'createBundle refused for a reason other than a missing swtpm binary').toMatch(MISSING_SWTPM);
+  gap(`createBundle refused: ${message}`);
 }
 
 test.describe('vTPM runtime page against the real server', () => {
@@ -90,7 +103,7 @@ test.describe('vTPM runtime page against the real server', () => {
     const created = await sdk.vtpm.createBundle({ options: {} });
     const bundleId = created.success && created.data ? created.data.id : 'e2e-missing-bundle';
     if (!created.success) {
-      gap(`createBundle refused: ${created.error?.message ?? 'no message'}`);
+      createRefusedGap(created.error?.message);
     }
 
     try {
@@ -138,9 +151,9 @@ test.describe('vTPM runtime page against the real server', () => {
 
     const created = await sdk.vtpm.createBundle({ options: {} });
     if (!created.success || !created.data) {
-      // A runner without the swtpm binary lands here: the server refuses.
-      expect(created.error?.message ?? '').not.toBe('');
-      gap(`createBundle refused: ${created.error?.message ?? 'no message'}`);
+      // A runner without the swtpm binary lands here: the server refuses, and
+      // only that refusal is a gap; any other refusal fails the test.
+      createRefusedGap(created.error?.message);
       return;
     }
 
