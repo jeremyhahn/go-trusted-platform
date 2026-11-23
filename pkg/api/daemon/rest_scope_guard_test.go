@@ -187,7 +187,10 @@ func TestNewRESTScopeGuard_MTLS_IAMAndDeviceRoutersAskThePEP(t *testing.T) {
 			iam := newMemIAM()
 			s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
 			require.NoError(t, s.SetIAMHandlers(logging.DefaultLogger(), restiam.NewQuicBaaSIAMAdapter(iam), restiam.NewQuicBaaSPEPAdapter(iam.PEP()), guard, iamRESTSystemTenant))
-			return serveWithChain(s.router, http.MethodGet, "/api/v1/iam/users", operator)
+			// The flat users route names the caller's own tenant (the
+			// certificate's "Test Platform Client"), so requireOwnTenant
+			// admits it and the PEP alone decides.
+			return serveWithChain(s.router, http.MethodGet, "/api/v1/iam/users?tenant_id=Test+Platform+Client", operator)
 		}
 		assert.Equal(t, http.StatusForbidden, serve(guardGranting(t)), "the PEP grants nothing")
 		code := serve(guardGranting(t, iamScopeResource+":read"))
