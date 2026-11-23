@@ -17,21 +17,48 @@ vi.mock('next/navigation', () => ({
 const KEY_PATH = 'GET /api/v1/kms/keys/key-1';
 const VERSIONS_PATH = 'GET /api/v1/kms/keys/key-1/versions';
 const STATUS_PATH = 'PUT /api/v1/kms/keys/key-1/status';
+const METADATA_PATH = 'GET /api/v1/kms/keys/key-1/metadata';
 
-// GetKey answers KeyInfoResponse, which has no status
-// (pkg/webservice/v1/rest/kms/types.go): the key's status is the status of
-// its current version in ListKeyVersions.
-function servedVersions(keyStatus: string): Answer {
+const ROTATE_OP = 'POST /api/v1/kms/keys/{name}/rotate';
+const STATUS_OP = 'PUT /api/v1/kms/keys/{name}/status';
+const KMS_OPS = [ROTATE_OP, STATUS_OP] as const;
+const REASON = 'not-configured: kms';
+
+// The server's capabilities listing: every key op enabled except those in off.
+function caps(off: string[] = []): Answer {
+  const capabilities = KMS_OPS.map((op) =>
+    off.includes(op) ? { op, kind: 'route', enabled: false, reason: REASON } : { op, kind: 'route', enabled: true },
+  );
+  return ok({ capabilities, total: capabilities.length, enabled: capabilities.filter((c) => c.enabled).length });
+}
+
+function servedVersions(currentStatus: string): Answer {
   return ok({
     versions: [
       { version: 1, status: 'DISABLED', algorithm: 'AES_256_GCM', created_at: '2026-10-01T00:00:00Z' },
-      { version: 2, status: keyStatus, algorithm: 'AES_256_GCM', created_at: '2026-11-01T00:00:00Z' },
+      { version: 2, status: currentStatus, algorithm: 'AES_256_GCM', created_at: '2026-11-01T00:00:00Z' },
     ],
   });
 }
 
-function routes(status: Answer, keyStatus = 'ENABLED'): Record<string, Answer> {
+// GetKey answers KeyInfoResponse, which has no status
+// (pkg/webservice/v1/rest/kms/types.go): the whole-key status is served by
+// GET /kms/keys/{name}/metadata (KeyMetadataResponse).
+function servedMetadata(keyStatus: string): Answer {
+  return ok({
+    key_id: 'key-1',
+    name: 'payments',
+    algorithm: 'AES_256_GCM',
+    status: keyStatus,
+    version: 2,
+    exportable: false,
+    deletion_protection: false,
+  });
+}
+
+function routes(status: Answer, keyStatus = 'ENABLED', off: string[] = []): Record<string, Answer> {
   return {
+    'GET /api/v1/capabilities': caps(off),
     [KEY_PATH]: ok({
       key_id: 'key-1',
       name: 'payments',
@@ -39,6 +66,7 @@ function routes(status: Answer, keyStatus = 'ENABLED'): Record<string, Answer> {
       version: 2,
       created_at: '2026-10-01T00:00:00Z',
     }),
+    [METADATA_PATH]: servedMetadata(keyStatus),
     [VERSIONS_PATH]: servedVersions(keyStatus),
     [STATUS_PATH]: status,
   };
@@ -114,6 +142,44 @@ describe('KeyDetailPage key status (#2057)', () => {
 
     expect(await screen.findByRole('button', { name: 'Enable' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Disable' })).toBeNull();
+  });
+
+  it('shows Enable for a key the metadata reports disabled', async () => {
+    // The current version is enabled; the whole key is disabled. The key's
+    // status is the metadata's, not the current version's.
+    stubControlPlane({
+      ...routes(STATUS_OK, 'DISABLED'),
+      [VERSIONS_PATH]: servedVersions('ENABLED'),
+    });
+    await renderPage();
+
+    expect(await screen.findByRole('button', { name: 'Enable' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Disable' })).toBeNull();
+  });
+
+  it('withholds the status controls the server does not offer', async () => {
+    const sent = stubControlPlane(routes(STATUS_OK, 'ENABLED', [STATUS_OP]));
+    await renderPage();
+
+    const button = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement;
+    await screen.findByRole('button', { name: 'Disable version 2' });
+    await waitFor(() => {
+      for (const name of ['Disable', 'Disable version 2']) {
+        const b = button(name);
+        expect(b.getAttribute('data-capability-op')).toBe(STATUS_OP);
+        expect(b.getAttribute('data-capability-enabled')).toBe('false');
+        expect(b.disabled).toBe(true);
+        expect(b.title).toBe(REASON);
+      }
+      const rotate = button('Rotate');
+      expect(rotate.getAttribute('data-capability-op')).toBe(ROTATE_OP);
+      expect(rotate.getAttribute('data-capability-enabled')).toBe('true');
+      expect(rotate.disabled).toBe(false);
+    });
+
+    fireEvent.click(button('Disable'));
+    fireEvent.click(button('Disable version 2'));
+    expect(sent.some((r) => r.method === 'PUT')).toBe(false);
   });
 
   it("changes one version's status from the versions table", async () => {
