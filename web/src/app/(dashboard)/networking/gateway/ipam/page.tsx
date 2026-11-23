@@ -24,6 +24,8 @@ import {
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks';
 import { useGatewayIPAM } from '@/hooks/use-gateway-ipam';
+import { Gated } from '@/components/features/capabilities/gated';
+import { useCapabilities } from '@/hooks/use-capabilities';
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -42,6 +44,8 @@ export default function GatewayIPAMPage() {
   const [confirmIP, setConfirmIP] = React.useState<string | null>(null);
 
   const ipam = useGatewayIPAM(poolId || undefined);
+  const { loading: capsLoading, capability } = useCapabilities();
+  const listCap = capability('GET /api/v1/gateway/ipam/allocations');
 
   const onAllocate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -75,20 +79,31 @@ export default function GatewayIPAMPage() {
         title="Gateway IP allocations"
         description="Addresses leased from the gateway's IP pools"
         actions={
-          <Button variant="outline" size="icon" aria-label="Refresh" onClick={() => void ipam.refetch()}>
-            <RefreshCw className={`h-4 w-4 ${ipam.isLoading ? 'animate-spin' : ''}`} />
-          </Button>
+          <Gated op="GET /api/v1/gateway/ipam/allocations">
+            <Button variant="outline" size="icon" aria-label="Refresh" onClick={() => void ipam.refetch()}>
+              <RefreshCw className={`h-4 w-4 ${ipam.isLoading ? 'animate-spin' : ''}`} />
+            </Button>
+          </Gated>
         }
       />
+
+      {!capsLoading && !listCap.enabled ? (
+        <div role="status" data-testid="gateway-ipam-not-enabled" className="rounded-md border p-4 text-sm">
+          <p className="font-medium">Gateway IP allocations are not enabled on this server</p>
+          <p className="text-muted-foreground">{listCap.reason}</p>
+        </div>
+      ) : null}
 
       <div className="flex items-end gap-2">
         <div className="space-y-1">
           <Label htmlFor="pool-filter">Pool</Label>
           <Input id="pool-filter" value={poolInput} onChange={(e) => setPoolInput(e.target.value)} />
         </div>
-        <Button variant="outline" onClick={() => setPoolId(poolInput.trim())}>
-          Filter
-        </Button>
+        <Gated op="GET /api/v1/gateway/ipam/allocations">
+          <Button variant="outline" onClick={() => setPoolId(poolInput.trim())}>
+            Filter
+          </Button>
+        </Gated>
       </div>
 
       <form aria-label="Allocate an IP" className="flex items-end gap-2" onSubmit={(e) => void onAllocate(e)}>
@@ -100,9 +115,11 @@ export default function GatewayIPAMPage() {
           <Label htmlFor="alloc-host">Hostname</Label>
           <Input id="alloc-host" value={allocHost} onChange={(e) => setAllocHost(e.target.value)} />
         </div>
-        <Button type="submit" disabled={busy || !allocPool.trim()}>
-          Allocate
-        </Button>
+        <Gated op="POST /api/v1/gateway/ipam/allocations">
+          <Button type="submit" disabled={busy || !allocPool.trim()}>
+            Allocate
+          </Button>
+        </Gated>
       </form>
 
       {ipam.error ? (
@@ -134,14 +151,16 @@ export default function GatewayIPAMPage() {
                   {a.allocatedAt ? new Date(a.allocatedAt).toLocaleString() : '—'}
                 </TableCell>
                 <TableCell className="text-right">
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    aria-label={`Release ${a.ip}`}
-                    onClick={() => setConfirmIP(a.ip)}
-                  >
-                    Release
-                  </Button>
+                  <Gated op="DELETE /api/v1/gateway/ipam/allocations">
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      aria-label={`Release ${a.ip}`}
+                      onClick={() => setConfirmIP(a.ip)}
+                    >
+                      Release
+                    </Button>
+                  </Gated>
                 </TableCell>
               </TableRow>
             ))}
