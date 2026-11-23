@@ -1365,13 +1365,11 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 	// Find policy by ID or name and snapshot its data under read lock
 	s.mu.RLock()
 	var foundID string
-	var policyTargets []*platformv1.PolicyTarget
-	var policyRules []*platformv1.PolicyRule
+	var record policyResource
 	for id, p := range s.policies {
 		if id == req.GetPolicyId() || p.name == req.GetPolicyId() {
 			foundID = id
-			policyTargets = p.targets
-			policyRules = p.rules
+			record = *p
 			break
 		}
 	}
@@ -1381,23 +1379,15 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 		return nil, status.Error(codes.NotFound, "policy not found")
 	}
 
-	client := s.getOVSClient()
-
-	// Remove associated OpenFlow rules from target bridges without holding the lock
-	for _, target := range policyTargets {
-		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
-			continue
-		}
-		bridgeName, found := s.findBridgeName(target.GetId())
-		if !found {
-			continue
-		}
-		for _, rule := range policyRules {
-			match := s.policyRuleToMatchString(rule)
-			if match != "" {
-				// Best-effort cleanup of flow rules
-				_ = client.DeleteFlow(ctx, bridgeName, match)
-			}
+	// Only an enabled record has flows on the switch: remove exactly those
+	// by their strict key, on the bridges they were installed on. A
+	// disabled policy installed none, and a match-based delete would remove
+	// another policy's flow with the same match (#2234).
+	if record.enabled {
+		flows := s.policyFlows(record.bridgeNames, record.rules, record.priority)
+		if err := s.removePolicyFlows(ctx, s.getOVSClient(), flows); err != nil {
+			s.markPolicyError(foundID)
+			return nil, status.Errorf(codes.Internal, "remove policy flows: %v", err)
 		}
 	}
 
@@ -1471,28 +1461,6 @@ func (s *SDNService) policyRuleToFlowMod(rule *platformv1.PolicyRule, policyPrio
 }
 
 // policyRuleToMatchString converts a policy rule to an OVS match string for deletion
-func (s *SDNService) policyRuleToMatchString(rule *platformv1.PolicyRule) string {
-	var matchParts []string
-	if match := rule.GetMatch(); match != nil {
-		if match.GetSourceIp() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("nw_src=%s", match.GetSourceIp()))
-		}
-		if match.GetDestinationIp() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("nw_dst=%s", match.GetDestinationIp()))
-		}
-		if match.GetProtocol() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("nw_proto=%s", match.GetProtocol()))
-		}
-		if match.GetSourcePort() > 0 {
-			matchParts = append(matchParts, fmt.Sprintf("tp_src=%d", match.GetSourcePort()))
-		}
-		if match.GetDestinationPort() > 0 {
-			matchParts = append(matchParts, fmt.Sprintf("tp_dst=%d", match.GetDestinationPort()))
-		}
-	}
-	return strings.Join(matchParts, ",")
-}
-
 // policyFlow is one OpenFlow rule a policy rule installs on one bridge.
 type policyFlow struct {
 	bridge string
