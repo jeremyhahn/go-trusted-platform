@@ -6,12 +6,10 @@ import { Gated } from '@/components/features/capabilities/gated';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 
 export interface PolicyEditInput {
   description: string;
   priority: number;
-  specYaml: string;
 }
 
 export interface PolicyEditCardProps {
@@ -23,7 +21,11 @@ export interface PolicyEditCardProps {
   onCancel: () => void;
 }
 
-/** Edits a policy's description, priority and spec; the caller's save reaches the SDK updatePolicy. */
+/**
+ * Edits a policy's description and priority; the caller's save reaches the SDK
+ * updatePolicy. The server refuses every non-empty spec_yaml on update, so the
+ * spec is shown read-only: to change it, delete and re-create the policy.
+ */
 /** The server's op the Save button performs (#2054). */
 export const UPDATE_POLICY_OP = 'PUT /api/v1/iam/tenants/{tenant}/policies/{id}';
 
@@ -37,11 +39,10 @@ export function PolicyEditCard({
 }: PolicyEditCardProps) {
   const [description, setDescription] = useState(initialDescription);
   const [priority, setPriority] = useState(String(initialPriority));
-  const [specYaml, setSpecYaml] = useState(initialSpecYaml);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const canSave = specYaml.trim() !== '' && !pending;
+  const canSave = !pending;
 
   const handleSave = async () => {
     if (!canSave) return;
@@ -49,7 +50,7 @@ export function PolicyEditCard({
     setError(null);
     try {
       const parsed = priority.trim() === '' ? 0 : Number(priority);
-      await save({ description, priority: parsed, specYaml });
+      await save({ description, priority: parsed });
       onSaved();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update policy');
@@ -84,14 +85,18 @@ export function PolicyEditCard({
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="policy-edit-spec">Spec (YAML)</Label>
-          <Textarea
-            id="policy-edit-spec"
-            className="font-mono text-xs min-h-[240px]"
-            value={specYaml}
-            disabled={pending}
-            onChange={(e) => setSpecYaml(e.target.value)}
-          />
+          <p id="policy-edit-spec-label" className="text-sm font-medium">
+            Spec (YAML, read-only)
+          </p>
+          <pre
+            aria-labelledby="policy-edit-spec-label"
+            className="font-mono text-xs whitespace-pre-wrap rounded-md border bg-muted p-3"
+          >
+            {initialSpecYaml}
+          </pre>
+          <p className="text-xs text-muted-foreground">
+            To change the spec, delete and re-create the policy
+          </p>
         </div>
         {error && (
           <p role="alert" className="text-sm text-destructive">

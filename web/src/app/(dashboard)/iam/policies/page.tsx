@@ -19,7 +19,6 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { PolicyTestCard } from '@/components/features/iam/policy-test-card';
 import { Plus, FileCheck, AlertCircle, Loader2 } from 'lucide-react';
 
 /**
@@ -357,14 +356,8 @@ export default function PoliciesPage() {
         </CardContent>
       </Card>
 
-      {/* Policy test (PlatformIAMService.TestPolicy) */}
-      <PolicyTestCard
-        test={async (req) => {
-          const r = await iam.testPolicy({ tenantId, ...req });
-          if (!r.success || !r.data) throw new Error(r.error?.message ?? 'Policy test failed');
-          return r.data;
-        }}
-      />
+      {/* No policy test card: PlatformIAMService.TestPolicy waits on the IAM
+          service evaluating a request (the server answers 501 until then). */}
     </div>
   );
 }
