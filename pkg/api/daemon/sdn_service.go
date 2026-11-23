@@ -97,6 +97,15 @@ type policyResource struct {
 	updatedAt   time.Time
 	// flowIDs tracks OpenFlow rules installed for this policy
 	flowIDs []string
+	// flows records the bridge and cookie of every installed policy flow,
+	// so DeletePolicy removes exactly those flows.
+	flows []policyFlow
+}
+
+// policyFlow is one OpenFlow rule a policy installed on a bridge.
+type policyFlow struct {
+	bridge string
+	cookie uint64
 }
 
 // SDNServiceOption is a functional option for configuring the SDNService
@@ -651,6 +660,12 @@ func (s *SDNService) FlushFlows(ctx context.Context, req *platformv1.FlushFlowsR
 		return nil, status.Error(codes.NotFound, "bridge not found")
 	}
 
+	// The OVS client has no table-scoped delete: refuse rather than flush
+	// every table when the caller asked for one.
+	if req.GetTable() != platformv1.FlowTable_FLOW_TABLE_UNSPECIFIED {
+		return nil, status.Error(codes.InvalidArgument, "flushing one table is not supported; omit table to flush every flow of the bridge")
+	}
+
 	client := s.getOVSClient()
 
 	// Get current flow count before deletion (without holding the lock)
@@ -1161,6 +1176,7 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 
 	// Install OpenFlow rules for each target bridge without holding the lock
 	var flowIDs []string
+	var flows []policyFlow
 	for _, target := range config.GetTargets() {
 		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
 			continue
@@ -1174,12 +1190,18 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		// Translate policy rules to OpenFlow rules
 		for _, rule := range config.GetRules() {
 			flowMod := s.policyRuleToFlowMod(rule, config.GetPriority())
+			cookie, err := ovs.NewAPIFlowCookie()
+			if err != nil {
+				// Best-effort: a flow without a cookie could not be removed later
+				continue
+			}
+			flowMod.Cookie = fmt.Sprintf("0x%x", cookie)
 			if err := client.AddFlow(ctx, bridgeName, flowMod); err != nil {
 				// Best-effort: log flow installation failures but continue
 				continue
 			}
-			flowID := fmt.Sprintf("policy-%s-rule-%s-%s", policyID, rule.GetRuleId(), uuid.NewString())
-			flowIDs = append(flowIDs, flowID)
+			flows = append(flows, policyFlow{bridge: bridgeName, cookie: cookie})
+			flowIDs = append(flowIDs, ovs.FlowID(cookie))
 		}
 	}
 
@@ -1201,6 +1223,7 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		createdAt:   now,
 		updatedAt:   now,
 		flowIDs:     flowIDs,
+		flows:       flows,
 	}
 
 	policy := s.policyResourceToPb(policyID, s.policies[policyID])
@@ -1250,9 +1273,11 @@ func (s *SDNService) ListPolicies(ctx context.Context, req *platformv1.ListPolic
 	defer s.mu.RUnlock()
 
 	policies := make([]*platformv1.Policy, 0, len(s.policies))
+	// Accept the enum name ("POLICY_TYPE_ACL") as well as the short name ("acl").
+	want := strings.ToLower(strings.TrimPrefix(strings.ToUpper(req.GetType()), "POLICY_TYPE_"))
 	for id, p := range s.policies {
 		// Filter by type if specified
-		if req.GetType() != "" && p.policyType != strings.ToLower(req.GetType()) {
+		if req.GetType() != "" && p.policyType != want {
 			continue
 		}
 
@@ -1287,13 +1312,11 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 	// Find policy by ID or name and snapshot its data under read lock
 	s.mu.RLock()
 	var foundID string
-	var policyTargets []*platformv1.PolicyTarget
-	var policyRules []*platformv1.PolicyRule
+	var policyFlows []policyFlow
 	for id, p := range s.policies {
 		if id == req.GetPolicyId() || p.name == req.GetPolicyId() {
 			foundID = id
-			policyTargets = p.targets
-			policyRules = p.rules
+			policyFlows = append([]policyFlow(nil), p.flows...)
 			break
 		}
 	}
@@ -1305,21 +1328,12 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 
 	client := s.getOVSClient()
 
-	// Remove associated OpenFlow rules from target bridges without holding the lock
-	for _, target := range policyTargets {
-		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
-			continue
-		}
-		bridgeName, found := s.findBridgeName(target.GetId())
-		if !found {
-			continue
-		}
-		for _, rule := range policyRules {
-			match := s.policyRuleToMatchString(rule)
-			if match != "" {
-				// Best-effort cleanup of flow rules
-				_ = client.DeleteFlow(ctx, bridgeName, match)
-			}
+	// Remove the policy's OpenFlow rules by the cookie each was installed
+	// with, without holding the lock. A failed removal keeps the policy so
+	// the caller can retry instead of leaving orphaned flows behind.
+	for _, f := range policyFlows {
+		if err := client.DeleteFlowsByCookie(ctx, f.bridge, f.cookie, ^uint64(0)); err != nil {
+			return nil, status.Error(codes.Internal, fmt.Sprintf("failed to remove policy flows: %v", err))
 		}
 	}
 

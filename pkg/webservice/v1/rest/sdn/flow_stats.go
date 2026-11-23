@@ -9,7 +9,7 @@ import (
 )
 
 // FlushFlows serves POST /api/v1/sdn/bridges/{name}/flows/flush: it deletes
-// the flows of the path bridge, in the body's table when one is given.
+// every flow of the path bridge; a request naming a table is refused.
 func (h *SDNHandlers) FlushFlows(w http.ResponseWriter, r *http.Request) {
 	req := &platformv1.FlushFlowsRequest{}
 	if !h.decode(w, r, req) {
