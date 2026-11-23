@@ -470,7 +470,10 @@ export default function ProvisioningSessionsPage() {
                 filteredSessions.map((session) => {
                   const status = getSessionStatus(session);
                   return (
-                    <TableRow key={session.id}>
+                    <TableRow
+                      key={session.id}
+                      data-testid={`provisioning-session-${session.id}`}
+                    >
                       <TableCell>
                         <span
                           className="font-mono text-sm cursor-pointer hover:underline"
