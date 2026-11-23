@@ -296,3 +296,35 @@ func dstContains(dst, addr string) bool {
 	d, err := netip.ParseAddr(dst)
 	return err == nil && d == a
 }
+
+// TestProvisioning_SetProvisioningServersOpensOnlyThoseServers pins the
+// setter the daemon uses to carry the pxe: section's ACME and DNS servers
+// into the provisioning template: TCP 443 and UDP 53 win as normal to the
+// configured servers and lose to a deny for any other destination.
+func TestProvisioning_SetProvisioningServersOpensOnlyThoseServers(t *testing.T) {
+	deny := zoneflows.FlowRule{Table: 0, Priority: 200,
+		Match: "in_port=7,dl_vlan=100,dl_type=0x0800,nw_dst=198.51.100.0/24", Actions: "drop"}
+	https := func(dst string) map[string]string {
+		return map[string]string{"dl_type": "0x0800", "nw_proto": "6", "nw_dst": dst, "tp_dst": "443"}
+	}
+	dns := func(dst string) map[string]string {
+		return map[string]string{"dl_type": "0x0800", "nw_proto": "17", "nw_dst": dst, "tp_dst": "53"}
+	}
+
+	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{})
+	gs.SetProvisioningServers([]net.IP{net.ParseIP("192.0.2.10")}, []net.IP{net.ParseIP("192.0.2.53")})
+	rules := append(gs.Generate("7", zone.ZoneProvisioning, zoneflows.Untagged(100)), deny)
+
+	if w, ok := winner(rules, https("192.0.2.10")); !ok || w.Actions != "normal" {
+		t.Errorf("TCP 443 to the ACME server: winner %q (%s), want a normal rule", w.Match, w.Actions)
+	}
+	if w, ok := winner(rules, dns("192.0.2.53")); !ok || w.Actions != "normal" {
+		t.Errorf("UDP 53 to the DNS server: winner %q (%s), want a normal rule", w.Match, w.Actions)
+	}
+	if w, ok := winner(rules, https("198.51.100.7")); !ok || w.Actions != "drop" {
+		t.Errorf("TCP 443 to a denied destination: winner %q (%s), want a drop", w.Match, w.Actions)
+	}
+	if w, ok := winner(rules, dns("198.51.100.7")); !ok || w.Actions != "drop" {
+		t.Errorf("UDP 53 to a denied destination: winner %q (%s), want a drop", w.Match, w.Actions)
+	}
+}

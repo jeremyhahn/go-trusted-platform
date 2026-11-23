@@ -1955,6 +1955,109 @@ func TestPXEGRPC_BootingDeviceReachesNoStorageAddressOverHTTP(t *testing.T) {
 	}
 }
 
+// TestPXEGRPC_BootingDeviceReachesConfiguredDNSAndACME drives the pxe:
+// section's dns-servers and acme-servers through pxeGRPCServiceFromConfig
+// and the shared flow manager (Codex round 2 P1): a Booting device gets a
+// destination-scoped UDP 53 allow to the configured resolver and a TCP 443
+// allow to the configured ACME server, none open to any destination or to
+// the storage gateway; with no acme-servers TCP 443 opens to the boot
+// server addresses, the same destinations the boot HTTP port got.
+func TestPXEGRPC_BootingDeviceReachesConfiguredDNSAndACME(t *testing.T) {
+	zones, env := zoneServiceSeed(pxeSectionApp())
+	require.NotNil(t, env)
+	if len(zones) == 0 {
+		zones = zone.Defaults()
+	}
+	plan, err := netplan.New(*env, zones)
+	require.NoError(t, err)
+	storage, err := plan.MustZone(zone.ZoneStorage)
+	require.NoError(t, err)
+	target := storage.Gateway
+	require.True(t, target.IsValid(), "storage zone has no gateway address")
+
+	covers := func(dst string) bool {
+		if pfx, err := netip.ParsePrefix(dst); err == nil {
+			return pfx.Contains(target)
+		}
+		a, err := netip.ParseAddr(dst)
+		return err == nil && a == target
+	}
+	type allow struct{ proto, port, dst string }
+	booting := func(t *testing.T, section *pxe.DaemonConfig) []allow {
+		t.Helper()
+		ctx := context.Background()
+		port := &pxeRecordingPort{}
+		svc, err := pxeGRPCServiceFromConfig(ctx, logging.DefaultLogger(), pxeSectionApp(), section, pxeTestFlowManager(t, port))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = svc.Close() })
+		reg, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{MacAddress: "00:11:22:33:44:e2", PortId: "port-1"})
+		require.NoError(t, err)
+		port.flows = nil
+		_, err = svc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
+			DeviceId: reg.GetDevice().GetId(),
+			State:    platformv1.ProvisioningState_PROVISIONING_STATE_BOOTING,
+			Reason:   "boot",
+		})
+		require.NoError(t, err)
+		var out []allow
+		for _, f := range port.flows {
+			if f.Actions == "drop" {
+				continue
+			}
+			var a allow
+			for _, field := range strings.Split(f.Match, ",") {
+				k, v, ok := strings.Cut(field, "=")
+				if !ok {
+					continue
+				}
+				switch k {
+				case "nw_proto":
+					a.proto = v
+				case "tp_dst":
+					a.port = v
+				case "nw_dst", "ipv6_dst":
+					a.dst = v
+				}
+			}
+			if a.port != "" {
+				out = append(out, a)
+			}
+		}
+		return out
+	}
+	check := func(t *testing.T, allows []allow, proto, port string) map[string]bool {
+		t.Helper()
+		dsts := map[string]bool{}
+		for _, a := range allows {
+			if a.proto != proto || a.port != port {
+				continue
+			}
+			assert.False(t, a.dst == "" || covers(a.dst),
+				"proto %s port %s: Booting device reaches %q (storage gateway %s)", proto, port, a.dst, target)
+			dsts[a.dst] = true
+		}
+		return dsts
+	}
+
+	t.Run("configured servers", func(t *testing.T) {
+		section := pxeEnabledSection(t)
+		section.DNSServers = []string{"192.0.2.53"}
+		section.ACMEServers = []string{"192.0.2.10"}
+		allows := booting(t, section)
+		assert.True(t, check(t, allows, "17", "53")["192.0.2.53"], "no UDP 53 allow to the configured DNS server: %v", allows)
+		assert.True(t, check(t, allows, "6", "443")["192.0.2.10"], "no TCP 443 allow to the configured ACME server: %v", allows)
+	})
+
+	t.Run("no acme-servers opens 443 to the boot servers", func(t *testing.T) {
+		section := pxeEnabledSection(t)
+		section.DNSServers = []string{"192.0.2.53"}
+		allows := booting(t, section)
+		boot := check(t, allows, "6", "8080")
+		require.NotEmpty(t, boot, "no boot HTTP allow: %v", allows)
+		assert.Equal(t, boot, check(t, allows, "6", "443"), "TCP 443 destinations differ from the boot HTTP port's")
+	})
+}
+
 // TestDaemonPXEBackendRefusesABridgeMismatch: the VLAN wrapper only
 // delegates to the shared flow manager, so a pxe.bridge-name other than
 // the manager's sdn.ovs.bridge is refused at startup (#1694).
