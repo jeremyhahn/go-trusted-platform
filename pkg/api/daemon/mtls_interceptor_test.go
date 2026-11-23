@@ -1275,3 +1275,69 @@ func TestMTLSUnaryInterceptor_NilPEPFailsClosed(t *testing.T) {
 		t.Fatal("handler ran when the PEP could not answer")
 	}
 }
+
+// mtlsPreAuthTestMethod is a pre-auth method: the token path serves it
+// without a credential, so the mTLS path must not send it to the PEP either.
+const mtlsPreAuthTestMethod = "/grpc.health.v1.Health/Check"
+
+// mtlsDenyingPEP denies every check and counts how often it was asked.
+func mtlsDenyingPEP(calls *int) *mockSDKPEPClient {
+	return &mockSDKPEPClient{
+		checkFunc: func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+			*calls++
+			return &sdkiam.CheckResponse{Allowed: false}, nil
+		},
+	}
+}
+
+func TestMTLSUnaryInterceptor_PreAuthMethodSkipsThePEPCheck(t *testing.T) {
+	identity := &auth.Identity{ID: "probe", TenantID: "acme-corp"}
+	calls := 0
+	interceptor := MTLSUnaryInterceptor(mtlsPEPTestConfig(identity, mtlsDenyingPEP(&calls)))
+
+	handlerCalled := false
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		handlerCalled = true
+		if IdentityFromContext(ctx) == nil {
+			t.Error("pre-auth handler ran without the authenticated certificate identity")
+		}
+		return "ok", nil
+	}
+	ctx := createTLSPeerContext(generateTestCert("probe"))
+	_, err := interceptor(ctx, "req", &grpc.UnaryServerInfo{FullMethod: mtlsPreAuthTestMethod}, handler)
+	if err != nil {
+		t.Fatalf("pre-auth method refused under mTLS: %v", err)
+	}
+	if !handlerCalled {
+		t.Fatal("handler did not run for a pre-auth method")
+	}
+	if calls != 0 {
+		t.Fatalf("PEP was asked %d times for a pre-auth method, want 0", calls)
+	}
+}
+
+func TestMTLSStreamInterceptor_PreAuthMethodSkipsThePEPCheck(t *testing.T) {
+	identity := &auth.Identity{ID: "probe", TenantID: "acme-corp"}
+	calls := 0
+	interceptor := MTLSStreamInterceptor(mtlsPEPTestConfig(identity, mtlsDenyingPEP(&calls)))
+
+	handlerCalled := false
+	handler := func(srv interface{}, stream grpc.ServerStream) error {
+		handlerCalled = true
+		if IdentityFromContext(stream.Context()) == nil {
+			t.Error("pre-auth handler ran without the authenticated certificate identity")
+		}
+		return nil
+	}
+	ss := &mockServerStream{ctx: createTLSPeerContext(generateTestCert("probe"))}
+	err := interceptor(nil, ss, &grpc.StreamServerInfo{FullMethod: mtlsPreAuthTestMethod}, handler)
+	if err != nil {
+		t.Fatalf("pre-auth method refused under mTLS: %v", err)
+	}
+	if !handlerCalled {
+		t.Fatal("handler did not run for a pre-auth method")
+	}
+	if calls != 0 {
+		t.Fatalf("PEP was asked %d times for a pre-auth method, want 0", calls)
+	}
+}
