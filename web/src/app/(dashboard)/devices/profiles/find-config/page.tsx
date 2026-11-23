@@ -3,13 +3,21 @@
 /**
  * Find device config: an operator types a device's EK serial, its MAC
  * address or both, and the page shows the profile the control plane would
- * deliver to it (DeviceService.findConfigForDevice, #2049).
+ * deliver to it (DeviceService.findConfigForDevice, #2049). An assigned
+ * profile can be unassigned after a confirm
+ * (DeviceService.unassignProfileFromDevice), and the Assign a profile card
+ * binds a profile to a device (DeviceService.assignProfileToDevice); both
+ * controls are gated on the server's capabilities.
  */
 
 import { useRef, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import type { DeviceProfile } from 'trusted-platform-sdk';
 
+import {
+  ProfileAssignmentCard,
+  ProfileUnassignButton,
+} from '@/components/features/devices/profile-assignment-card';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -110,12 +118,20 @@ export default function FindDeviceConfigPage() {
             <span>EK serial {shown.profile.ek_serial ?? '-'}</span>
             <span>MAC address {shown.profile.mac_address ?? '-'}</span>
             <span>{shown.profile.assigned ? 'Assigned' : 'Not assigned'}</span>
+            {shown.profile.assigned && (
+              <ProfileUnassignButton
+                profileId={shown.profile.id}
+                onUnassigned={(p) => setResult({ identity: shown.identity, profile: p })}
+              />
+            )}
             <Link href="/devices/profiles" className="underline">
               Open profiles
             </Link>
           </CardContent>
         </Card>
       )}
+
+      <ProfileAssignmentCard />
     </div>
   );
 }

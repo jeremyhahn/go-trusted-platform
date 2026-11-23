@@ -35,6 +35,12 @@ import { Separator } from '@/components/ui/separator';
 import { useToast, useApi, useDevice, useMutation } from '@/hooks';
 import type { DeviceRole } from 'trusted-platform-sdk';
 import { deviceRoleLabel } from '@/lib/device-role';
+import { Gated } from '@/components/features/capabilities/gated';
+import { TemplateEditDialog } from '@/components/features/devices/template-edit-dialog';
+
+const UPDATE_TEMPLATE_OP = 'PUT /api/v1/device/templates/{id:[0-9]+}';
+const DELETE_TEMPLATE_OP = 'DELETE /api/v1/device/templates/{id:[0-9]+}';
+const CREATE_PROFILE_OP = 'POST /api/v1/device/templates/{id:[0-9]+}/create-profile';
 
 // ============================================================================
 // Helper Functions
@@ -69,6 +75,7 @@ export default function TemplateDetailClient() {
   const router = useRouter();
   const { toast } = useToast();
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [isEditOpen, setIsEditOpen] = useState(false);
   const deviceService = useDevice();
 
   const {
@@ -184,27 +191,30 @@ export default function TemplateDetailClient() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            onClick={() => router.push(`/devices/templates/${templateId}/edit`)}
-          >
-            <Pencil className="mr-2 h-4 w-4" />
-            Edit Template
-          </Button>
-          <Button
-            onClick={() => router.push(`/devices/templates/${templateId}/create-profile`)}
-          >
-            <Plus className="mr-2 h-4 w-4" />
-            Create Profile from Template
-          </Button>
-          <Button
-            variant="destructive"
-            size="icon"
-            onClick={() => setIsDeleteDialogOpen(true)}
-          >
-            <Trash2 className="h-4 w-4" />
-            <span className="sr-only">Delete template</span>
-          </Button>
+          <Gated op={UPDATE_TEMPLATE_OP}>
+            <Button variant="outline" onClick={() => setIsEditOpen(true)}>
+              <Pencil className="mr-2 h-4 w-4" />
+              Edit Template
+            </Button>
+          </Gated>
+          <Gated op={CREATE_PROFILE_OP}>
+            <Button
+              onClick={() => router.push(`/devices/templates/${templateId}/create-profile`)}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Create Profile from Template
+            </Button>
+          </Gated>
+          <Gated op={DELETE_TEMPLATE_OP}>
+            <Button
+              variant="destructive"
+              size="icon"
+              onClick={() => setIsDeleteDialogOpen(true)}
+            >
+              <Trash2 className="h-4 w-4" />
+              <span className="sr-only">Delete template</span>
+            </Button>
+          </Gated>
         </div>
       </div>
 
@@ -340,19 +350,31 @@ export default function TemplateDetailClient() {
             >
               Cancel
             </Button>
-            <Button
-              variant="destructive"
-              onClick={() => deleteTemplateMutation.mutate(undefined)}
+            <Gated op={DELETE_TEMPLATE_OP}>
+              <Button
+                variant="destructive"
+                onClick={() => deleteTemplateMutation.mutate(undefined)}
               disabled={deleteTemplateMutation.isLoading}
             >
               {deleteTemplateMutation.isLoading && (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               )}
-              Delete Template
-            </Button>
+                Delete Template
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <TemplateEditDialog
+        template={template}
+        open={isEditOpen}
+        onOpenChange={setIsEditOpen}
+        onSaved={() => {
+          setIsEditOpen(false);
+          refetch();
+        }}
+      />
     </div>
   );
 }
