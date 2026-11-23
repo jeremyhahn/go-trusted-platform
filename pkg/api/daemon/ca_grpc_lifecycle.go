@@ -129,15 +129,15 @@ func (s *CAGRPCService) InitCA(ctx context.Context, req *platformv1.InitCAReques
 	if ca == nil || !ca.IsInitialized() {
 		return nil, status.Error(codes.Internal, "CA bring-up returned no initialised CA")
 	}
-	// The gRPC/UDS CA service, the REST CA handlers and the QUIC CA
-	// handler read one CAHolder, so all three serve the new CA now. QUIC
-	// device attestation (the device AK trust and boot CA) keeps the
-	// start-up CA until platformd restarts.
+	// The gRPC/UDS CA service, the REST CA and auth-factor handlers, the
+	// QUIC CA handler, device attestation (the AK trust anchor), boot
+	// delivery (the boot CA bundle) and LDevID issuance read one CAHolder,
+	// so all of them serve the new CA now, with no platformd restart.
 	s.setAuthority(ca)
 	return &platformv1.InitCAResponse{
 		Status: &platformv1.Status{
 			Success: true,
-			Message: "CA initialised; the gRPC, REST and QUIC CA services serve it now; restart platformd for QUIC device attestation to use it",
+			Message: "CA initialised; the gRPC, REST and QUIC CA services, device attestation and boot delivery serve it now",
 		},
 		CaInfo:    s.caInfoOf(ca),
 		Timestamp: timestamppb.Now(),
