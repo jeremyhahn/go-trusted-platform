@@ -277,6 +277,36 @@ type CheckPermissionResponse struct {
 	EvaluationTimeNs int64  `json:"evaluation_time_ns"`
 }
 
+// TokenVerification is a TokenVerifier's answer for one token: whether it
+// is valid, the reason when it is not, and its claims when it is.
+type TokenVerification struct {
+	Valid     bool
+	Reason    string
+	Subject   string
+	TenantID  string
+	Scopes    []string
+	Roles     []string
+	ExpiresAt time.Time
+}
+
+// VerifyTokenRequest is the request body for verifying a token.
+type VerifyTokenRequest struct {
+	BodyTenant
+	Token string `json:"token"`
+}
+
+// VerifyTokenResponse is the verdict on a token. Claims are present only
+// for a valid token of the caller's tenant; ExpiresAt is in unix seconds.
+type VerifyTokenResponse struct {
+	Valid     bool     `json:"valid"`
+	Reason    string   `json:"reason,omitempty"`
+	Subject   string   `json:"subject,omitempty"`
+	TenantID  string   `json:"tenant_id,omitempty"`
+	Scopes    []string `json:"scopes,omitempty"`
+	Roles     []string `json:"roles,omitempty"`
+	ExpiresAt int64    `json:"expires_at,omitempty"`
+}
+
 // RegisterAppRequest is the request body for registering an application.
 // Accepts both snake_case (canonical REST) and camelCase (JS SDK) field
 // names so the WebUI's `{grantTypes: [...]}` payload reaches the

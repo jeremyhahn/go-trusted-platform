@@ -88,4 +88,19 @@ for (const helper of ['mockEABApi', 'createMockEABCredential']) {
   assert.ok(!apiMock.includes(helper), `fixtures/api-mock.ts no longer defines ${helper}`);
 }
 
+// Part 3 of the port (#2037): these pages run on the real server only.
+const part3 = ['kms-ops', 'platform-services', 'sdn-ports', 'switch-ports', 'tenant-admin', 'tenant-lifecycle', 'tpm-keys', 'vtpm'];
+for (const name of part3) {
+  assert.ok(
+    !fs.existsSync(path.join(import.meta.dirname, '..', `${name}.spec.ts`)),
+    `web/e2e/${name}.spec.ts (the mocked spec) does not exist`,
+  );
+  const specPath = path.join(import.meta.dirname, `${name}.spec.ts`);
+  assert.ok(fs.existsSync(specPath), `real-server/${name}.spec.ts exists`);
+  const body = fs.readFileSync(specPath, 'utf8');
+  assert.ok(body.includes("from './fixtures'"), `${name}.spec.ts imports from './fixtures'`);
+  assert.ok(!body.includes('api-mock'), `${name}.spec.ts does not use api-mock`);
+  assert.ok(!body.includes('page.route('), `${name}.spec.ts does not route requests`);
+}
+
 console.log('specs.check: ok');

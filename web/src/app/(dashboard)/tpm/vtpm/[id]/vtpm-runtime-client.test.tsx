@@ -43,7 +43,10 @@ function caps(off: string[] = []): Answer {
 }
 
 async function renderPage(off: string[] = []) {
-  stubControlPlane({ 'GET /api/v1/capabilities': caps(off) });
+  stubControlPlane({
+    'GET /api/v1/capabilities': caps(off),
+    'GET /api/v1/vtpm/bundles/b1/state': ok({ bundle_id: 'b1', running: true, socket_path: '/run/x' }),
+  });
   await act(async () => {
     render(
       withControlPlane(
@@ -95,5 +98,10 @@ describe('VTPMRuntimeClient capability gate', () => {
       expect(button(name).disabled).toBe(false);
       expect(button(name).getAttribute('data-capability-enabled')).toBe('true');
     }
+  });
+
+  it('the run-state badge shows the server state on load', async () => {
+    await renderPage();
+    await waitFor(() => expect(screen.getByTestId('vtpm-run-state').textContent).toBe('Running'));
   });
 });

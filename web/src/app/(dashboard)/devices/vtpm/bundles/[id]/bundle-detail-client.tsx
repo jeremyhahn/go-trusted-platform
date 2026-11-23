@@ -16,6 +16,7 @@ import {
   type VTPMBundleWire,
   type VTPMValidationWire,
 } from '@/hooks/use-vtpm-templates';
+import { Gated } from '@/components/features/capabilities/gated';
 
 export default function BundleDetailClient() {
   const params = useParams();
@@ -122,37 +123,45 @@ function BundleDetail({ bundleId }: { bundleId: string }) {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-wrap gap-2">
-            <Button
-              variant="outline"
-              disabled={vt.validateBundle.isLoading || validating === 'pending'}
-              onClick={validate}
-            >
-              Validate bundle
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() =>
-                run(bundleId, () => vt.getBundlePath.mutateAsync(bundleId), (r) => setBundlePath(r.path))
-              }
-            >
-              Get bundle path
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() =>
-                run(bundleId, () => vt.getTPMSocketPath.mutateAsync(bundleId), (r) => setSocketPath(r.path))
-              }
-            >
-              Get TPM socket path
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() =>
-                run(bundleId, () => vt.getNVRAMPath.mutateAsync(bundleId), (r) => setNvramPath(r.path))
-              }
-            >
-              Get NVRAM path
-            </Button>
+            <Gated op="POST /api/v1/vtpm/bundles/{id}/validate">
+              <Button
+                variant="outline"
+                disabled={vt.validateBundle.isLoading || validating === 'pending'}
+                onClick={validate}
+              >
+                Validate bundle
+              </Button>
+            </Gated>
+            <Gated op="GET /api/v1/vtpm/bundles/{id}/path">
+              <Button
+                variant="outline"
+                onClick={() =>
+                  run(bundleId, () => vt.getBundlePath.mutateAsync(bundleId), (r) => setBundlePath(r.path))
+                }
+              >
+                Get bundle path
+              </Button>
+            </Gated>
+            <Gated op="GET /api/v1/vtpm/bundles/{id}/tpm-socket">
+              <Button
+                variant="outline"
+                onClick={() =>
+                  run(bundleId, () => vt.getTPMSocketPath.mutateAsync(bundleId), (r) => setSocketPath(r.path))
+                }
+              >
+                Get TPM socket path
+              </Button>
+            </Gated>
+            <Gated op="GET /api/v1/vtpm/bundles/{id}/nvram">
+              <Button
+                variant="outline"
+                onClick={() =>
+                  run(bundleId, () => vt.getNVRAMPath.mutateAsync(bundleId), (r) => setNvramPath(r.path))
+                }
+              >
+                Get NVRAM path
+              </Button>
+            </Gated>
           </div>
 
           {validating === 'pending' && (
