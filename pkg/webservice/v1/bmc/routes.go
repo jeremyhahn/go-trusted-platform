@@ -88,7 +88,8 @@ func RegisterRoutes(api *mux.Router, h RestHandler, guard RouteGuard) (provision
 }
 
 // maxPowerActionBody bounds the power action body the route reads to pick
-// the scope.
+// the scope. A larger body is refused with 413, not truncated: a truncated
+// prefix could decode to an action the full body does not carry.
 const maxPowerActionBody = 1 << 16
 
 // powerActionRoute checks a power action's scope by its action, as the gRPC
@@ -99,9 +100,14 @@ func powerActionRoute(h RestHandler, guard RouteGuard) http.HandlerFunc {
 	powerOn := guard.Require(ScopeWrite, h.PowerAction)
 	powerOther := guard.Require(ScopePower, h.PowerAction)
 	return func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(io.LimitReader(r.Body, maxPowerActionBody))
+		// Read one byte past the limit so an oversized body is seen, not cut.
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxPowerActionBody+1))
 		if err != nil {
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+		if len(body) > maxPowerActionBody {
+			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
 			return
 		}
 		// The scope check and the handler must see the same action: decode
