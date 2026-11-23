@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 func TestApplySection_InMemory(t *testing.T) {
@@ -208,6 +209,109 @@ func TestApplySection_RollbackUndoesApplyAndKeepsStartupOverride(t *testing.T) {
 	}
 	if !viper.GetBool("debug") {
 		t.Fatalf("after rollback the startup override debug=true was lost")
+	}
+}
+
+// A persisted section update writes the config file's own keys plus the
+// section, not Viper's merged settings: startup overrides, defaults and
+// environment values stay in memory only.
+func TestApplySection_PersistWritesOnlyTheFileLayer(t *testing.T) {
+	viper.Reset()
+	defer viper.Reset()
+	cfgPath, _ := writeDNSConfig(t)
+
+	viper.Set("debug", true)
+	viper.SetDefault("tenant-id", "default")
+	t.Setenv("W2047_PROBE_SECRET", "env-only-value-9c1e")
+	if err := viper.BindEnv("probe.secret", "W2047_PROBE_SECRET"); err != nil {
+		t.Fatalf("bind env: %v", err)
+	}
+
+	if _, err := ApplySection(nil, "dns", map[string]string{"default-ttl": "120"}, true); err != nil {
+		t.Fatalf("ApplySection: %v", err)
+	}
+
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	var doc map[string]interface{}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse written file: %v", err)
+	}
+	for _, k := range []string{"debug", "tenant-id", "probe"} {
+		if _, ok := doc[k]; ok {
+			t.Errorf("persisted file carries %q, which never came from the file:\n%s", k, raw)
+		}
+	}
+	if len(doc) != 1 {
+		t.Errorf("persisted file top-level keys = %v, want only dns", doc)
+	}
+	if contains(string(raw), "env-only-value-9c1e") {
+		t.Errorf("persisted file carries the environment value:\n%s", raw)
+	}
+	dns, _ := doc["dns"].(map[string]interface{})
+	switch v := dns["default-ttl"].(type) {
+	case int:
+		if v != 120 {
+			t.Errorf("dns.default-ttl = %d, want 120", v)
+		}
+	case string:
+		if v != "120" {
+			t.Errorf("dns.default-ttl = %q, want 120", v)
+		}
+	default:
+		t.Errorf("dns.default-ttl = %#v, want 120", v)
+	}
+
+	if !viper.GetBool("debug") {
+		t.Errorf("live debug override lost")
+	}
+	if got := viper.GetString("tenant-id"); got != "default" {
+		t.Errorf("live tenant-id = %q, want default", got)
+	}
+	if got := viper.GetString("probe.secret"); got != "env-only-value-9c1e" {
+		t.Errorf("live probe.secret = %q, want the env value", got)
+	}
+	if got := viper.GetInt("dns.default-ttl"); got != 120 {
+		t.Errorf("live dns.default-ttl = %d, want 120", got)
+	}
+}
+
+// A persisted section update keeps the file's other sections.
+func TestApplySection_PersistKeepsOtherFileSections(t *testing.T) {
+	viper.Reset()
+	defer viper.Reset()
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	orig := []byte("dns:\n  default-ttl: 60\ndaemon:\n  socket_group: original\n")
+	if err := os.WriteFile(cfgPath, orig, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	viper.SetConfigFile(cfgPath)
+	if err := viper.ReadInConfig(); err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+
+	if _, err := ApplySection(nil, "dns", map[string]string{"default-ttl": "120"}, true); err != nil {
+		t.Fatalf("ApplySection: %v", err)
+	}
+
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	var doc struct {
+		DNS    map[string]interface{} `yaml:"dns"`
+		Daemon map[string]interface{} `yaml:"daemon"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse written file: %v", err)
+	}
+	if got := doc.Daemon["socket_group"]; got != "original" {
+		t.Errorf("daemon.socket_group = %#v, want original:\n%s", got, raw)
+	}
+	if got := doc.DNS["default-ttl"]; got != 120 && got != "120" {
+		t.Errorf("dns.default-ttl = %#v, want 120:\n%s", got, raw)
 	}
 }
 
