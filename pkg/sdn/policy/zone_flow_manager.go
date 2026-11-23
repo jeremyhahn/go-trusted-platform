@@ -468,6 +468,20 @@ func (m *ZoneFlowManager) AllowProvisioningBootPorts(bindHost string, ports ...u
 	m.generators.SetProvisioningBootServers(servers...)
 }
 
+// AllowProvisioningServers opens the provisioning template's ACME (TCP 443)
+// and DNS (port 53) allowances to the given servers only. An empty acme list
+// means the boot servers AllowProvisioningBootPorts resolved (the platform
+// serves ACME itself), so call it after AllowProvisioningBootPorts; an empty
+// dns list keeps provisioning DNS closed.
+func (m *ZoneFlowManager) AllowProvisioningServers(acme, dns []net.IP) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(acme) == 0 {
+		acme = m.generators.ProvisioningBootServers()
+	}
+	m.generators.SetProvisioningServers(acme, dns)
+}
+
 func (m *ZoneFlowManager) RemoveFlows(portID string) error {
 	if portID == "" {
 		return ErrInvalidPortID

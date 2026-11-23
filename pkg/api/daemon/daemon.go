@@ -2091,6 +2091,14 @@ func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *ap
 		)
 	}
 	flows.AllowProvisioningBootPorts(bootServer, provisioningNBDPort)
+	// The pxe: section's acme-servers and dns-servers scope the provisioning
+	// template's TCP 443 and port 53 allowances; ACME defaults to the boot
+	// servers resolved above, and with no DNS server provisioning DNS stays
+	// closed.
+	flows.AllowProvisioningServers(cfg.ACMEServerIPs, cfg.DNSServerIPs)
+	if len(cfg.DNSServerIPs) == 0 {
+		logger.Warn("PXE: no pxe.dns-servers configured; provisioning devices get no DNS access")
+	}
 	backend := pxe.NewService(
 		pxe.WithLogger(logger),
 		pxe.WithStateManager(pxe.NewStateManager()),

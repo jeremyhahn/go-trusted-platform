@@ -130,6 +130,32 @@ func (gs *GeneratorSet) SetProvisioningBootServers(ips ...net.IP) {
 	gs.cfg.Provisioning.BootServerIPs = servers
 }
 
+// ProvisioningBootServers returns a copy of the addresses the provisioning
+// template's boot ports are open to. Like SetProvisioningBootServers it is
+// not safe for concurrent use with Generate or the setters.
+func (gs *GeneratorSet) ProvisioningBootServers() []net.IP {
+	return append([]net.IP(nil), gs.cfg.Provisioning.BootServerIPs...)
+}
+
+// SetProvisioningServers replaces the ACME (TCP 443) and DNS (port 53)
+// server addresses the provisioning template opens; nil addresses are
+// skipped, and an empty list leaves that service closed (fail closed). It is
+// not safe for concurrent use with Generate: the caller serialises the two
+// (ZoneFlowManager holds its lock across both).
+func (gs *GeneratorSet) SetProvisioningServers(acme, dns []net.IP) {
+	keep := func(ips []net.IP) []net.IP {
+		out := make([]net.IP, 0, len(ips))
+		for _, ip := range ips {
+			if ip != nil {
+				out = append(out, ip)
+			}
+		}
+		return out
+	}
+	gs.cfg.Provisioning.ACMEServerIPs = keep(acme)
+	gs.cfg.Provisioning.DNSServerIPs = keep(dns)
+}
+
 func (gs *GeneratorSet) Generate(portID string, z zone.Zone, in Ingress) []FlowRule {
 	gen, ok := gs.generators[z]
 	if !ok || gen == nil {
