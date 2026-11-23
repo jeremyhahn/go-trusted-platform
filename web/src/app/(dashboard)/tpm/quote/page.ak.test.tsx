@@ -5,6 +5,21 @@ import { ok, refused, stubControlPlane, withControlPlane } from "@/test/control-
 
 import TPMQuotePage from "./page";
 
+// The page's controls are gated on the server's capabilities (#2068): this
+// server offers every TPM operation the page calls.
+const CAPABILITIES = "GET /api/v1/capabilities";
+const TPM_OPS = [
+  "GET /api/v1/tpm/ak",
+  "POST /api/v1/tpm/ak",
+  "POST /api/v1/tpm/quote",
+  "POST /api/v1/tpm/quote/verify",
+];
+const CAPS_ON = ok({
+  capabilities: TPM_OPS.map((op) => ({ op, kind: "route", enabled: true })),
+  total: TPM_OPS.length,
+  enabled: TPM_OPS.length,
+});
+
 // These tests drive the Attestation Key card through the real SDK client
 // (PlatformProvider), with fetch as the only mock. GetAK answers 404 when the
 // TPM has no AK: that is the "create one" state, not an error.
@@ -30,6 +45,8 @@ function toasts() {
 
 async function clickCreateAK() {
   const button = await screen.findByRole("button", { name: /Create AK/ });
+  // The gate holds the button until the server's capabilities have loaded.
+  await waitFor(() => expect(button.getAttribute("data-capability-enabled")).toBe("true"));
   await act(async () => {
     fireEvent.click(button);
   });
@@ -37,7 +54,7 @@ async function clickCreateAK() {
 
 describe("TPM quote page: attestation key card", () => {
   it("shows the attestation key the server returns", async () => {
-    const sent = stubControlPlane({ [GET_AK]: ok(AK) });
+    const sent = stubControlPlane({ [CAPABILITIES]: CAPS_ON, [GET_AK]: ok(AK) });
     await renderPage();
 
     expect((await screen.findByTestId("ak-handle")).textContent).toBe("0x81010002");
@@ -48,7 +65,7 @@ describe("TPM quote page: attestation key card", () => {
   });
 
   it("offers Create AK when the server has no AK", async () => {
-    stubControlPlane({ [GET_AK]: refused(404, "IAK not found") });
+    stubControlPlane({ [CAPABILITIES]: CAPS_ON, [GET_AK]: refused(404, "IAK not found") });
     await renderPage();
 
     expect(await screen.findByText("No attestation key on this TPM")).toBeTruthy();
@@ -59,6 +76,7 @@ describe("TPM quote page: attestation key card", () => {
 
   it("creates the AK, then reads it again", async () => {
     const routes = {
+      [CAPABILITIES]: CAPS_ON,
       [GET_AK]: refused(404, "IAK not found"),
       [CREATE_AK]: ok({ status: { success: true, message: "AK created successfully" }, handle: 0x81010002 }),
     };
@@ -87,6 +105,7 @@ describe("TPM quote page: attestation key card", () => {
 
   it("shows a refused create with the server's message", async () => {
     stubControlPlane({
+      [CAPABILITIES]: CAPS_ON,
       [GET_AK]: refused(404, "IAK not found"),
       [CREATE_AK]: refused(403, "iam: tpm:ak:create denied"),
     });
@@ -109,7 +128,7 @@ describe("TPM quote page: attestation key card", () => {
   });
 
   it("shows a refused read as an error, without Create AK", async () => {
-    stubControlPlane({ [GET_AK]: refused(403, "iam: tpm:ak:read denied") });
+    stubControlPlane({ [CAPABILITIES]: CAPS_ON, [GET_AK]: refused(403, "iam: tpm:ak:read denied") });
     await renderPage();
 
     expect((await screen.findByTestId("ak-error")).textContent).toBe("iam: tpm:ak:read denied");

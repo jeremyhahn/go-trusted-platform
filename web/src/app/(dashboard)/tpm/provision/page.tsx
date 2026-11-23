@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
 import { useToast } from "@/hooks";
+import { Gated } from "@/components/features/capabilities/gated";
 import {
   provisionRequest,
   tpmKeyRefLabel,
@@ -257,10 +258,12 @@ export default function TPMProvisionPage() {
               </div>
             ))}
           </div>
-          <Button onClick={onProvision} disabled={provisioning}>
-            {provisioning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Provision TPM
-          </Button>
+          <Gated op="POST /api/v1/tpm/provision">
+            <Button onClick={onProvision} disabled={provisioning}>
+              {provisioning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Provision TPM
+            </Button>
+          </Gated>
           {provisionedKeys !== undefined && (
             <p className="text-sm">
               Public keys returned: <span data-testid="provisioned-keys">{provisionedKeys}</span>
@@ -286,10 +289,12 @@ export default function TPMProvisionPage() {
               onChange={(e) => setLockoutPassword(e.target.value)}
             />
           </div>
-          <Button variant="destructive" onClick={() => setConfirmOpen(true)} disabled={clearing}>
-            {clearing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Clear TPM…
-          </Button>
+          <Gated op="POST /api/v1/tpm/clear">
+            <Button variant="destructive" onClick={() => setConfirmOpen(true)} disabled={clearing}>
+              {clearing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Clear TPM…
+            </Button>
+          </Gated>
         </CardContent>
       </Card>
 
