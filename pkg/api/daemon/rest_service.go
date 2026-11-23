@@ -555,14 +555,20 @@ func (s *RESTServer) SetCAHolder(holder *CAHolder, guard *restapi.ScopeGuard) {
 	s.logger.Info("CA REST routes registered")
 
 	// Wire auth factor endpoints (AAGUID lookup, mTLS probe, cert issuance,
-	// MFA policy). They still hold the CA the holder held at start-up; they
-	// follow the holder in a later slice.
-	// They cannot run on a nil CA.
-	if ca := holder.Get(); ca != nil {
-		authFactorHandlers := restapi.NewAuthFactorHandlers(ca, s.logger)
-		authFactorHandlers.RegisterRoutes(s.router)
-		s.logger.Info("Auth factor REST routes registered")
+	// MFA policy). They read the holder on every request, so an empty holder
+	// answers 503 and a CA InitCA swaps in is served without a restart.
+	authFactorSource := func() restapi.AuthFactorCA {
+		ca := holder.Get()
+		if ca == nil {
+			// Untyped nil: a typed nil CA in the interface would pass the
+			// handlers' nil check.
+			return nil
+		}
+		return ca
 	}
+	authFactorHandlers := restapi.NewAuthFactorHandlers(nil, s.logger).WithCASource(authFactorSource)
+	authFactorHandlers.RegisterRoutes(s.router)
+	s.logger.Info("Auth factor REST routes registered")
 }
 
 // SetCALifecycle mounts POST /api/v1/ca/init, /ca/trust/install and
