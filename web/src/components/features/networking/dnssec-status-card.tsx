@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useDNSSEC, useToast } from '@/hooks';
 import { describeDnssecKeys } from '@/lib/dnssec-key';
+import { Gated } from '@/components/features/capabilities/gated';
 
 interface DNSSECStatusCardProps {
   zoneName: string;
@@ -25,6 +26,7 @@ function errorMessage(err: unknown): string {
 /**
  * The zone's DNSSEC status (client.dns.getDNSSECStatus) and a Sign Zone
  * control (client.dns.signZone) (#2060).
+ * Sign Zone is gated on the server's POST /api/v1/dns/zones/{zone}/sign capability (#2033).
  */
 export function DNSSECStatusCard({ zoneName, onSigned }: DNSSECStatusCardProps) {
   const { status, isLoading, error, signZone, isSigning } = useDNSSEC(zoneName);
@@ -87,14 +89,16 @@ export function DNSSECStatusCard({ zoneName, onSigned }: DNSSECStatusCardProps) 
           </div>
         )}
         <div className="pt-4">
-          <Button onClick={handleSign} disabled={isSigning || notEnabled}>
-            {isSigning ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <ShieldCheck className="mr-2 h-4 w-4" />
-            )}
-            Sign Zone
-          </Button>
+          <Gated op="POST /api/v1/dns/zones/{zone}/sign">
+            <Button onClick={handleSign} disabled={isSigning || notEnabled}>
+              {isSigning ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <ShieldCheck className="mr-2 h-4 w-4" />
+              )}
+              Sign Zone
+            </Button>
+          </Gated>
           {notEnabled && (
             <p className="mt-2 text-sm text-muted-foreground">DNSSEC is not enabled on this server</p>
           )}

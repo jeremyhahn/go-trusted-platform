@@ -12,6 +12,7 @@ import { DNSRecordForm } from '@/components/features/networking/dns-record-form'
 import { DNSSECStatusCard } from '@/components/features/networking/dnssec-status-card';
 import { DNSRecordsCard } from '@/components/features/networking/dns-records-card';
 import { useDNS, useApi, useToast } from '@/hooks';
+import { Gated } from '@/components/features/capabilities/gated';
 import type { DNSZoneDetail, DNSRecord } from '@/types/infrastructure';
 import type { GetZoneResponse } from 'trusted-platform-sdk';
 import { readZoneDetail } from '@/lib/dns-wire';
@@ -91,10 +92,12 @@ export default function DNSZoneDetailPage() {
             <Upload className="mr-2 h-4 w-4" />
             Import
           </Button>
-          <Button onClick={() => setFormOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            Add Record
-          </Button>
+          <Gated op="POST /api/v1/dns/zones/{zone}/records">
+            <Button onClick={() => setFormOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Add Record
+            </Button>
+          </Gated>
         </div>
       </div>
 
