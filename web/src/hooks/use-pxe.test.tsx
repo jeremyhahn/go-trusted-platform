@@ -98,7 +98,7 @@ describe('usePXE', () => {
       { method: 'POST', path: '/api/v1/pxe/devices/d1/quarantine', body: { reason: 'bad image' } },
       { method: 'POST', path: '/api/v1/pxe/devices/d1/retry', body: {} },
       { method: 'POST', path: '/api/v1/pxe/devices/d1/enrolled', body: { certificateSerial: '0A1B2C' } },
-      { method: 'PUT', path: '/api/v1/pxe/devices/d1/state', body: { state: 'INSTALLING', reason: 'operator retry' } },
+      { method: 'PUT', path: '/api/v1/pxe/devices/d1/state', body: { state: 'PROVISIONING_STATE_INSTALLING', reason: 'operator retry' } },
       { method: 'DELETE', path: '/api/v1/pxe/devices/d1', body: undefined },
     ]);
   });

@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PXEService } from '../pxe-service.js';
 import type { ApiClient } from '../../client/api-client.js';
 import type { UpdatePXEStateRequest } from '../../types/pxe.js';
+import { InvalidEnumValueError } from '../../errors/index.js';
 
 function createMockApiClient(): ApiClient {
   return {
@@ -73,7 +74,7 @@ describe('PXEService device routes', () => {
       expect(result.success).toBe(true);
       expect(mockClient.put).toHaveBeenCalledTimes(1);
       expect(mockClient.put).toHaveBeenCalledWith('/v1/pxe/devices/node-3/state', {
-        state: 'INSTALLING',
+        state: 'PROVISIONING_STATE_INSTALLING',
         reason: 'operator retry',
       });
       expect(mockClient.post).not.toHaveBeenCalled();
@@ -85,6 +86,32 @@ describe('PXEService device routes', () => {
 
       await expect(service.updateState(request)).rejects.toBe(failure);
       expect(mockClient.post).not.toHaveBeenCalled();
+    });
+
+    it('passes a protobuf enum name through unchanged', async () => {
+      vi.mocked(mockClient.put).mockResolvedValue({ success: true, data: { device: { id: 'node-3' } } });
+
+      await service.updateState({
+        deviceId: 'node-3',
+        state: 'PROVISIONING_STATE_FAILED' as UpdatePXEStateRequest['state'],
+        reason: 'disk',
+      });
+
+      expect(mockClient.put).toHaveBeenCalledWith('/v1/pxe/devices/node-3/state', {
+        state: 'PROVISIONING_STATE_FAILED',
+        reason: 'disk',
+      });
+    });
+
+    it('refuses a state that is not a provisioning state', async () => {
+      await expect(
+        service.updateState({
+          deviceId: 'node-3',
+          state: 'BOGUS' as UpdatePXEStateRequest['state'],
+          reason: 'disk',
+        }),
+      ).rejects.toBeInstanceOf(InvalidEnumValueError);
+      expect(mockClient.put).not.toHaveBeenCalled();
     });
   });
 

@@ -98,7 +98,7 @@ describe('PXEDeviceDetailClient', () => {
 
     await waitFor(() => {
       const put = sent.find((r) => r.method === 'PUT' && r.path === '/api/v1/pxe/devices/d1/state');
-      expect(put?.body).toEqual({ state: 'FAILED', reason: 'bad image' });
+      expect(put?.body).toEqual({ state: 'PROVISIONING_STATE_FAILED', reason: 'bad image' });
     });
     await waitFor(() => {
       const toast = screen.getAllByTestId('toast').find((t) => t.textContent?.includes('FAILED'));
