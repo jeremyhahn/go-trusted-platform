@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -1135,10 +1136,17 @@ func (s *SDNService) SetPortState(ctx context.Context, req *platformv1.SetPortSt
 }
 
 // ApplyPolicy applies a network policy by translating it into OpenFlow rules
-// on its bridge targets. An enabled policy whose flow install fails returns
-// Internal: the flows this call installed are removed and the prior enabled
-// record's rules re-added (OFPFC_ADD replaces a same-match flow), and the
-// prior record stays in place, marked "error" only if that rollback failed.
+// on its bridge targets. Every effective priority (the rule's, else the
+// policy's) must fit OpenFlow's 16 bits, or the call is InvalidArgument
+// before anything changes. An enabled policy whose flow install fails
+// returns Internal: every flow this call attempted, the failing one
+// included, is removed and the prior enabled record's rules re-added
+// (OFPFC_ADD replaces a same-match flow), and the prior record stays in
+// place, marked "error" only if that rollback failed; a new policy whose
+// rollback failed is stored "error" so a disable or delete can clean up.
+// An enabled reapply that succeeds removes the prior enabled flows the new
+// set does not replace (another bridge, priority or match); if that fails
+// the new record is stored "error" and the call returns Internal.
 // Reapplying with enabled=false removes the prior enabled record's flows and
 // stores the policy "inactive"; if the removal fails the call returns
 // Internal and the prior record stays, marked "error". Withdrawal and
@@ -1146,7 +1154,8 @@ func (s *SDNService) SetPortState(ctx context.Context, req *platformv1.SetPortSt
 // A target bridge that does not exist is NotFound; a bridge lookup that
 // fails is Unavailable. An enabled policy whose flow (bridge, table,
 // priority, match) another enabled policy already installs is refused
-// FailedPrecondition, so withdrawing one never deletes the other's flow.
+// FailedPrecondition, so withdrawing one never deletes the other's flow;
+// the key compares the table and priority as encoded on the wire.
 // The whole call runs under policyMu.
 func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolicyRequest) (*platformv1.ApplyPolicyResponse, error) {
 	if req.GetConfig() == nil {
@@ -1164,6 +1173,20 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		// Random, not a timestamp: two policies applied within the clock's
 		// resolution would otherwise share an ID (#284).
 		policyID = "policy-" + uuid.NewString()
+	}
+
+	// OpenFlow priorities are 16-bit: refuse an effective priority (the
+	// rule's, else the policy's) the wire encoding would truncate, before
+	// any lock or switch change (#2234).
+	for _, rule := range config.GetRules() {
+		priority := rule.GetPriority()
+		if priority == 0 {
+			priority = config.GetPriority()
+		}
+		if priority < 0 || priority > math.MaxUint16 {
+			return nil, status.Errorf(codes.InvalidArgument,
+				"rule %q priority %d is outside the OpenFlow range 0..%d", rule.GetRuleId(), priority, math.MaxUint16)
+		}
 	}
 
 	// Serialize the whole transaction: snapshot, OVS changes and record
@@ -1484,13 +1507,20 @@ func (s *SDNService) policyFlows(bridgeNames []string, rules []*platformv1.Polic
 // replaces, and DeleteFlowStrict removes, whatever shares it.
 type policyFlowKey struct {
 	bridge   string
-	table    int
-	priority int
+	table    uint8
+	priority uint16
 	match    string
 }
 
+// flowKey holds the table and priority as the wire encodes them (uint8 and
+// uint16), so two flows that land on the same entry share a key.
 func flowKey(flow policyFlow) policyFlowKey {
-	return policyFlowKey{bridge: flow.bridge, table: int(flow.mod.Table), priority: int(flow.mod.Priority), match: flow.mod.Match}
+	return policyFlowKey{
+		bridge:   flow.bridge,
+		table:    uint8(flow.mod.Table),
+		priority: uint16(flow.mod.Priority),
+		match:    flow.mod.Match,
+	}
 }
 
 // stalePolicyFlows returns the flows of old whose key no flow of current
