@@ -136,3 +136,29 @@ func TestSDNService_ApplyPolicy_FailedAddRollsBackTheFailingFlow(t *testing.T) {
 		assert.Empty(t, fake.matches(t, "br0"))
 	})
 }
+
+// An enabled reapply that moves a policy to another bridge withdraws its
+// flows from the old one, so a later disable leaves no flow behind (#2234).
+func TestSDNService_ApplyPolicy_ReapplyWithdrawsOldBridgeFlows(t *testing.T) {
+	svc, fake := newReplacingOVSFixture(t)
+	fake.AddBridgeToMock("br1", &ovs.Bridge{UUID: "uuid-br1", Name: "br1"})
+	ctx := context.Background()
+
+	_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
+	require.NoError(t, err)
+	require.Len(t, fake.matches(t, "br0"), 2)
+
+	cfg := twoRulePolicyConfig()
+	cfg.Targets = []*platformv1.PolicyTarget{bridgeTarget("br1")}
+	_, err = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: cfg})
+	require.NoError(t, err)
+	assert.Empty(t, fake.matches(t, "br0"))
+	assert.Len(t, fake.matches(t, "br1"), 2)
+
+	cfg.Enabled = false
+	_, err = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: cfg})
+	require.NoError(t, err)
+	assert.Empty(t, fake.matches(t, "br0"))
+	assert.Empty(t, fake.matches(t, "br1"))
+	assert.Equal(t, platformv1.PolicyStatus_POLICY_STATUS_INACTIVE, getPolicy(t, svc, "p1").GetStatus())
+}
