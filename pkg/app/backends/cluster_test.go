@@ -228,6 +228,16 @@ func TestClusterBackend_StandaloneIsNotLeader(t *testing.T) {
 	if st.State != "uninitialized" {
 		t.Errorf("Status State = %q, want uninitialized", st.State)
 	}
+	nodes, err := b.Nodes(context.Background())
+	if err != nil {
+		t.Fatalf("Nodes: %v", err)
+	}
+	if len(nodes.Nodes) != 0 {
+		t.Errorf("Nodes = %+v, want none for a standalone service", nodes.Nodes)
+	}
+	if nodes.Leader != nil {
+		t.Errorf("Leader = %+v, want nil for a standalone service", nodes.Leader)
+	}
 
 	t.Run("leader not a listed member", func(t *testing.T) {
 		resp := threeNodeStatus()
