@@ -1,7 +1,11 @@
 package arch
 
 // Behavioural tests of ci.yml's runner selection (ci-template v1.48, Tenant
-// Agent rulings 1024 and 1031, #2128; Codex P1 on #2129). The run: script of
+// Agent rulings 1024 and 1031, #2128; Codex P1 on #2129; v1.54, the balanced
+// runner pool of ruling 1137, whose cases port the template's
+// testdata/runner-select-tests.py; v1.59, a short listing is a lower bound,
+// and the handbook's copy of that file runs in preflight from
+// .github/workflows/testdata). The run: script of
 // the preflight step `id: runner` is taken from ci.yml as is and run with
 // bash against fixture Actions API replies. A stub curl first on PATH serves
 // the replies from files and logs every URL it is asked for, so the test
@@ -29,8 +33,8 @@ const (
 	selAPI      = "https://api.github.invalid/repos/" + selRepo + "/actions"
 	selRunID    = 1000
 	selHosted   = `"ubuntu-latest"`
-	selOverflow = `["self-hosted","linux","x64","bigdisk"]`
-	selOverDock = `["self-hosted","linux","x64","bigdisk-docker"]`
+	selSelf     = `["self-hosted","linux","x64","bigdisk"]`
+	selSelfDock = `["self-hosted","linux","x64","bigdisk-docker"]`
 )
 
 // selStubCurl answers `curl ... -o FILE -w FMT URL` from $SEL_FIXTURES:
@@ -79,6 +83,7 @@ type selReply struct {
 var (
 	selUbuntu     = []string{"ubuntu-latest"}
 	selSelfHosted = []string{"self-hosted", "linux", "x64", "bigdisk"}
+	selDocker     = []string{"self-hosted", "linux", "x64", "bigdisk-docker"}
 )
 
 // selJobs returns n jobs of run with the given status and labels, created
@@ -204,6 +209,7 @@ type selResult struct {
 // selEnv is the step env of a case; the keys match the step's env: block.
 type selEnv struct {
 	server, event, headRepo string
+	hs, c1, c2              string
 }
 
 // runSel runs script with the fixture replies and env and returns its result.
@@ -258,8 +264,9 @@ func runSel(t *testing.T, script string, replies map[string]selReply, e selEnv) 
 		"API=" + selAPI,
 		"RUN_ID=" + fmt.Sprint(selRunID),
 		"JOB_TOKEN=fixture-token",
-		"LIMIT=" + selEnvValue(t, "HOSTED_JOBS_PER_REPO"),
-		"GRACE=" + selEnvValue(t, "HOSTED_QUEUE_GRACE_SECONDS"),
+		"HS=" + e.hs,
+		"C1=" + e.c1,
+		"C2=" + e.c2,
 		"REPO=" + selRepo,
 		"HEAD_REPO=" + e.headRepo,
 		"EVENT=" + e.event,
@@ -296,30 +303,14 @@ func runSel(t *testing.T, script string, replies map[string]selReply, e selEnv) 
 }
 
 // selEnvValue is the workflow-level env value of key in ci.yml.
-func selEnvValue(t *testing.T, key string) string {
-	t.Helper()
-	var doc yaml.Node
-	if err := yaml.Unmarshal(readCI(t), &doc); err != nil || len(doc.Content) == 0 {
-		t.Fatalf("ci.yml does not parse: %s", errString(err))
-	}
-	v := mapValue(mapValue(doc.Content[0], "env"), key)
-	if v == nil {
-		t.Fatalf("ci.yml has no env %s", key)
-	}
-	return v.Value
-}
-
 // TestRunnerSelectionStepEnv pins the env the step reads to the env this
 // test sets, so a new input of the script is not left at its zero value.
 func TestRunnerSelectionStepEnv(t *testing.T) {
 	got := readSelStep(t, readCI(t)).env
 	sort.Strings(got)
-	want := []string{"API", "EVENT", "GRACE", "HEAD_REPO", "JOB_TOKEN", "LIMIT", "REPO", "RUN_ID", "SERVER"}
+	want := []string{"API", "C1", "C2", "EVENT", "HEAD_REPO", "HS", "JOB_TOKEN", "REPO", "RUN_ID", "SERVER"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("the selection step's env keys are %v; this test sets %v", got, want)
-	}
-	if l, g := selEnvValue(t, "HOSTED_JOBS_PER_REPO"), selEnvValue(t, "HOSTED_QUEUE_GRACE_SECONDS"); l != "12" || g != "60" {
-		t.Fatalf("HOSTED_JOBS_PER_REPO=%s HOSTED_QUEUE_GRACE_SECONDS=%s; the cases below assume 12 and 60", l, g)
 	}
 }
 
@@ -328,108 +319,167 @@ func TestRunnerSelectionStepEnv(t *testing.T) {
 func TestRunnerSelectionScript(t *testing.T) {
 	script := readSelStep(t, readCI(t)).run
 	const (
-		hosted   = "hosted"
-		overflow = "overflow"
+		hosted     = "hosted"
+		selfHosted = "selfHosted"
 	)
 	self := selJobs(1, selRunID, "in_progress", selUbuntu, 5*time.Second) // this preflight job
-	gh := selEnv{server: "https://github.com", event: "push"}
-	sameRepoPR := selEnv{server: "https://github.com", event: "pull_request", headRepo: selRepo}
-	forkPR := selEnv{server: "https://github.com", event: "pull_request", headRepo: "someone/repo"}
+	// bal is a push on github.com with the limits CI_HOSTED_SHARE=hs,
+	// CI_SELF_HOSTED_BIGDISK=c1 and CI_SELF_HOSTED_BIGDISK_DOCKER=c2.
+	bal := func(hs, c1, c2 string) selEnv {
+		return selEnv{server: "https://github.com", event: "push", hs: hs, c1: c1, c2: c2}
+	}
+	gh := bal("10", "10", "10")
+	as := func(e selEnv, event, headRepo string) selEnv {
+		e.event, e.headRepo = event, headRepo
+		return e
+	}
+	sameRepoPR := as(gh, "pull_request", selRepo)
+	forkPR := as(gh, "pull_request", "someone/repo")
 	// v1.52: a deleted fork leaves the head repository empty; it is still
 	// not this repository.
-	deletedForkPR := selEnv{server: "https://github.com", event: "pull_request"}
-	forkPRT := selEnv{server: "https://github.com", event: "pull_request_target", headRepo: "someone/repo"}
+	deletedForkPR := as(gh, "pull_request", "")
+	forkPRT := as(gh, "pull_request_target", "someone/repo")
 	// A push has no pull request head: the fork check does not apply.
-	pushForeignHead := selEnv{server: "https://github.com", event: "push", headRepo: "someone/repo"}
-	saturated := slices.Concat(self, selJobs(30, 7, "in_progress", selUbuntu, time.Minute), selJobs(5, 8, "queued", selUbuntu, 10*time.Minute))
+	pushForeignHead := as(gh, "push", "someone/repo")
+	offGH := gh
+	offGH.server = "https://gitea.example"
+	offGHUnset := bal("10", "", "")
+	offGHUnset.server = "https://gitea.example"
+	// in is this run's job plus, in run 7, h hosted, s1 bigdisk and s2
+	// bigdisk-docker jobs in progress and hq, s1q and s2q of each queued,
+	// and more.
+	in := func(h, s1, s2, hq, s1q, s2q int, more ...[]selJob) []selJob {
+		return slices.Concat(append([][]selJob{self,
+			selJobs(h, 7, "in_progress", selUbuntu, time.Minute),
+			selJobs(s1, 7, "in_progress", selSelfHosted, time.Minute),
+			selJobs(s2, 7, "in_progress", selDocker, time.Minute),
+			selJobs(hq, 7, "queued", selUbuntu, time.Minute),
+			selJobs(s1q, 7, "queued", selSelfHosted, time.Minute),
+			selJobs(s2q, 7, "queued", selDocker, time.Minute),
+		}, more...)...)
+	}
+	busy := in(9, 0, 0, 0, 0, 0)
+	// 30 hosted jobs of run 7: the hosted pool is full, so a complete read
+	// goes self-hosted.
+	thirty := in(30, 0, 0, 0, 0, 0)
 	// 150 jobs of one run: the first page all done, the 12 in progress on
-	// the second page, so only a complete read overflows.
+	// the second page, so only a complete read finds the hosted pool full.
 	paged := slices.Concat(selJobs(100, 9, "completed", selUbuntu, time.Hour), selJobs(38, 9, "completed", selUbuntu, time.Hour), selJobs(12, 9, "in_progress", selUbuntu, time.Minute))
 	jobsURL := func(run, page int) string {
 		return selPage(fmt.Sprintf("%s/runs/%d/jobs?filter=latest", selAPI, run), page)
 	}
 	runsURL := func(st string, page int) string { return selPage(selAPI+"/runs?status="+st, page) }
 
-	for _, c := range []struct {
+	type selCase struct {
 		name    string
 		env     selEnv
 		jobs    []selJob
 		break_  func(map[string]selReply)
 		want    string
-		warning bool // a ::warning names why there is no count
-		noCalls bool // the step must not call the API
-	}{
-		{name: "no other jobs", env: gh, jobs: self, want: hosted},
-		{name: "11 hosted jobs in progress, under the limit", env: gh,
-			jobs: slices.Concat(self, selJobs(10, 7, "in_progress", selUbuntu, time.Minute)), want: hosted},
-		{name: "12 hosted jobs in progress, at the limit", env: gh,
-			jobs: slices.Concat(self, selJobs(11, 7, "in_progress", selUbuntu, time.Minute)), want: overflow},
-		{name: "12 hosted jobs in progress across runs", env: gh,
-			jobs: slices.Concat(self, selJobs(4, 7, "in_progress", selUbuntu, time.Minute), selJobs(7, 8, "in_progress", selUbuntu, time.Minute)), want: overflow},
-		{name: "self-hosted jobs in progress do not count", env: gh,
-			jobs: slices.Concat(self, selJobs(10, 7, "in_progress", selUbuntu, time.Minute), selJobs(20, 7, "in_progress", selSelfHosted, time.Minute)), want: hosted},
-		{name: "completed jobs do not count", env: gh,
-			jobs: slices.Concat(self, selJobs(10, 7, "in_progress", selUbuntu, time.Minute), selJobs(20, 7, "completed", selUbuntu, time.Minute)), want: hosted},
-		{name: "12 hosted jobs of another run queued under 60s", env: gh,
-			jobs: slices.Concat(self, selJobs(12, 7, "queued", selUbuntu, 45*time.Second)), want: hosted},
-		{name: "12 hosted jobs of another run queued 60s", env: gh,
-			jobs: slices.Concat(self, selJobs(12, 7, "queued", selUbuntu, 60*time.Second)), want: overflow},
-		{name: "one hosted job of another run queued 90s", env: gh,
-			jobs: slices.Concat(self, selJobs(1, 7, "queued", selUbuntu, 90*time.Second)), want: overflow},
-		{name: "this run's own jobs queued 90s do not count", env: gh,
-			jobs: slices.Concat(self, selJobs(12, selRunID, "queued", selUbuntu, 90*time.Second)), want: hosted},
-		{name: "a self-hosted job queued 90s does not count", env: gh,
-			jobs: slices.Concat(self, selJobs(3, 7, "queued", selSelfHosted, 90*time.Second)), want: hosted},
-		{name: "a same-repository pull request at saturation", env: sameRepoPR, jobs: saturated, want: overflow},
-		{name: "a fork pull request at saturation", env: forkPR, jobs: saturated, want: hosted, noCalls: true},
-		{name: "a deleted-fork pull request at saturation", env: deletedForkPR, jobs: saturated, want: hosted, noCalls: true},
-		{name: "a fork pull_request_target at saturation", env: forkPRT, jobs: saturated, want: hosted, noCalls: true},
-		{name: "a push at saturation takes no fork check", env: pushForeignHead, jobs: saturated, want: overflow},
-		{name: "off github.com at saturation", env: selEnv{server: "https://gitea.example", event: "push"}, jobs: saturated, want: hosted, noCalls: true},
-		{name: "a second jobs page read in full", env: gh, jobs: slices.Concat(self, paged), want: overflow},
-		{name: "a failed second jobs page at saturation", env: gh, jobs: slices.Concat(saturated, paged),
+		out     []string // substrings the step's stdout holds
+		warning bool     // a ::warning names why there is no count
+		noCalls bool     // the step must not call the API
+	}
+	cases := []selCase{
+		{name: "hosted use below bigdisk use", env: gh, jobs: in(2, 5, 0, 0, 0, 0), want: hosted,
+			out: []string{"hosted 2 of CI_HOSTED_SHARE=10", "bigdisk 5 of CI_SELF_HOSTED_BIGDISK=10"}},
+		{name: "self-hosted use below hosted use", env: gh, jobs: in(5, 2, 2, 0, 0, 0), want: selfHosted},
+		{name: "bigdisk-docker use equal to hosted use", env: gh, jobs: in(3, 0, 3, 0, 0, 0), want: hosted,
+			out: []string{"use hosted 3/10, bigdisk 0/10, bigdisk-docker 3/10"}},
+		{name: "a tie across limits goes hosted", env: bal("10", "20", "10"), jobs: in(2, 4, 0, 0, 0, 0), want: hosted},
+		{name: "bigdisk-docker use above hosted use across limits", env: bal("20", "10", "6"), jobs: in(4, 0, 3, 0, 0, 0), want: hosted},
+		{name: "both self-hosted kinds below hosted use across limits", env: bal("20", "6", "6"), jobs: in(9, 1, 1, 0, 0, 0), want: selfHosted},
+		{name: "one each is a tie", env: gh, jobs: in(1, 1, 0, 0, 0, 0), want: hosted},
+		{name: "nothing in flight", env: gh, jobs: self, want: hosted, out: []string{"hosted 0 of"}},
+		{name: "queued jobs count", env: gh, jobs: in(1, 1, 0, 3, 1, 1), want: selfHosted,
+			out: []string{"hosted 4 of", "(3 queued)", "(2 self-hosted queued)"}},
+		{name: "completed, unlabelled and other self-hosted jobs do not count", env: gh,
+			jobs: in(1, 0, 0, 0, 0, 0, selJobs(30, 7, "completed", selDocker, time.Minute), selJobs(5, 7, "in_progress", nil, time.Minute),
+				selJobs(1, 7, "in_progress", []string{"self-hosted", "linux", "x64", "release"}, time.Minute)),
+			want: selfHosted, out: []string{"bigdisk 0 of"}},
+		{name: "a job labelled bigdisk and bigdisk-docker is bigdisk-docker", env: gh,
+			jobs: in(5, 0, 0, 0, 0, 0, selJobs(1, 7, "in_progress", []string{"self-hosted", "bigdisk", "bigdisk-docker"}, time.Minute)),
+			want: selfHosted, out: []string{"bigdisk 0 of", "bigdisk-docker 1 of"}},
+		{name: "this run's jobs do not count", env: gh,
+			jobs: in(1, 0, 0, 0, 0, 0, selJobs(50, selRunID, "in_progress", selDocker, time.Minute)),
+			want: selfHosted, out: []string{"bigdisk-docker 0 of"}},
+		{name: "a second jobs page read in full", env: gh, jobs: slices.Concat(self, paged), want: selfHosted,
+			out: []string{"the hosted pool is full (12 of 10)"}},
+		{name: "the hosted pool full", env: gh, jobs: in(10, 9, 9, 0, 0, 0), want: selfHosted,
+			out: []string{"the hosted pool is full (10 of 10)"}},
+		{name: "the self-hosted pool full", env: gh, jobs: in(9, 10, 10, 0, 0, 0), want: hosted,
+			out: []string{"the self-hosted pool is full"}},
+		{name: "bigdisk alone full", env: bal("10", "2", "10"), jobs: in(9, 2, 0, 0, 0, 0), want: hosted,
+			out: []string{"bigdisk 2 of 2, bigdisk-docker 0 of 10"}},
+		{name: "both pools full, fewer queued self-hosted", env: gh, jobs: in(6, 9, 0, 4, 1, 0), want: selfHosted,
+			out: []string{"both pools full: hosted 4 queued, self-hosted 1 queued"}},
+		{name: "both pools full, fewer queued hosted", env: gh, jobs: in(10, 5, 8, 1, 0, 2), want: hosted},
+		{name: "both pools full, a queued tie", env: gh, jobs: in(12, 12, 0, 0, 0, 0), want: hosted,
+			out: []string{"hosted 0 queued, self-hosted 0 queued"}},
+		{name: "a leading zero limit", env: bal("10", "08", "10"), jobs: in(5, 1, 0, 0, 0, 0), want: selfHosted,
+			out: []string{"CI_SELF_HOSTED_BIGDISK=8"}},
+		{name: "a fork pull request", env: forkPR, jobs: busy, want: hosted, noCalls: true},
+		{name: "a deleted-fork pull request", env: deletedForkPR, jobs: busy, want: hosted, noCalls: true},
+		{name: "a fork pull_request_target", env: forkPRT, jobs: busy, want: hosted, noCalls: true},
+		{name: "a same-repository pull request", env: sameRepoPR, jobs: busy, want: selfHosted},
+		{name: "a push takes no fork check", env: pushForeignHead, jobs: busy, want: selfHosted},
+		{name: "off github.com", env: offGH, jobs: busy, want: hosted, noCalls: true},
+		{name: "off github.com with no self-hosted limits", env: offGHUnset, jobs: busy, want: hosted, noCalls: true},
+		{name: "a failed second jobs page", env: gh, jobs: slices.Concat(thirty, paged),
 			break_: func(r map[string]selReply) { r[jobsURL(9, 2)] = selReply{code: 502, body: `{"message":"Bad Gateway"}`} },
 			want:   hosted, warning: true},
-		// v1.50: a list short of its total_count is a lower bound, so it
-		// still overflows at saturation.
-		{name: "a jobs list short of its total_count at saturation", env: gh, jobs: saturated,
+		// v1.59: a list short of its total_count is a lower bound, named in a
+		// ::notice, and the choice still uses it: 30 hosted jobs fill the
+		// hosted pool, so the run goes self-hosted with no ::warning.
+		{name: "a jobs list short of its total_count", env: gh, jobs: thirty,
 			break_: func(r map[string]selReply) {
 				r[jobsURL(7, 1)] = selReply{code: 200, body: strings.Replace(r[jobsURL(7, 1)].body, `"total_count":30`, `"total_count":31`, 1)}
 				r[jobsURL(7, 2)] = selReply{code: 200, body: `{"total_count":31,"jobs":[]}`}
 			},
-			want: overflow},
-		// v1.50: a short list that reaches no trigger stays hosted with a
-		// ::warning naming the shortfall.
-		{name: "a jobs list short of its total_count under the limit", env: gh,
-			jobs: slices.Concat(self, selJobs(10, 7, "in_progress", selUbuntu, time.Minute)),
+			want: selfHosted, out: []string{"::notice::runner selection: the listing returned fewer entries than its total (runs/7/jobs?filter=latest: 30 of 31 entries); the counts are a lower bound", "the hosted pool is full (30 of 10)"}},
+		// A short list below every limit: still chosen, here self-hosted.
+		{name: "a short jobs list below every limit", env: gh, jobs: in(1, 0, 0, 0, 0, 0),
 			break_: func(r map[string]selReply) {
-				r[jobsURL(7, 1)] = selReply{code: 200, body: strings.Replace(r[jobsURL(7, 1)].body, `"total_count":10`, `"total_count":11`, 1)}
-				r[jobsURL(7, 2)] = selReply{code: 200, body: `{"total_count":11,"jobs":[]}`}
+				r[jobsURL(7, 1)] = selReply{code: 200, body: strings.Replace(r[jobsURL(7, 1)].body, `"total_count":1`, `"total_count":2`, 1)}
+				r[jobsURL(7, 2)] = selReply{code: 200, body: `{"total_count":2,"jobs":[]}`}
 			},
-			want: hosted, warning: true},
-		// v1.50: the Actions API lists at most 1000 entries, so a total_count
-		// over 1000 is no lower bound the short-list path may trust: it keeps
-		// the hosted default, as before v1.50, even with an early empty page.
-		{name: "a jobs list with a total_count over 1000 and an early empty page at saturation", env: gh, jobs: saturated,
+			want: selfHosted, out: []string{"1 of 2 entries", "use hosted 1/10, bigdisk 0/10, bigdisk-docker 0/10"}},
+		{name: "a jobs page that cannot be counted", env: gh, jobs: thirty,
 			break_: func(r map[string]selReply) {
-				r[jobsURL(7, 1)] = selReply{code: 200, body: strings.Replace(r[jobsURL(7, 1)].body, `"total_count":30`, `"total_count":1001`, 1)}
-				r[jobsURL(7, 2)] = selReply{code: 200, body: `{"total_count":1001,"jobs":[]}`}
+				r[jobsURL(7, 1)] = selReply{code: 200, body: `{"total_count":1,"jobs":[7]}`}
 			},
-			want: hosted, warning: true},
-		{name: "a run list reply that is not 200 at saturation", env: gh, jobs: saturated,
+			want: hosted, warning: true, out: []string{"could not be counted"}},
+		{name: "a run list reply that is not 200", env: gh, jobs: thirty,
 			break_: func(r map[string]selReply) {
 				r[runsURL("in_progress", 1)] = selReply{code: 403, body: `{"message":"Forbidden"}`}
 			},
 			want: hosted, warning: true},
-		{name: "a run list with no total_count at saturation", env: gh, jobs: saturated,
+		{name: "a run list with no total_count", env: gh, jobs: thirty,
 			break_: func(r map[string]selReply) {
 				r[runsURL("queued", 1)] = selReply{code: 200, body: `{"workflow_runs":[]}`}
 			},
 			want: hosted, warning: true},
-		{name: "curl fails at saturation", env: gh, jobs: saturated,
+		{name: "curl fails", env: gh, jobs: thirty,
 			break_: func(r map[string]selReply) { r[jobsURL(7, 1)] = selReply{exit: 28} },
 			want:   hosted, warning: true},
-	} {
+	}
+	for _, v := range []string{"", "0", "ten", "-3", "00", "1.5"} {
+		cases = append(cases,
+			selCase{name: "CI_SELF_HOSTED_BIGDISK=" + v, env: bal("10", v, "10"), jobs: busy, want: hosted, warning: true, noCalls: true,
+				out: []string{"CI_SELF_HOSTED_BIGDISK='" + v + "'"}},
+			selCase{name: "CI_SELF_HOSTED_BIGDISK_DOCKER=" + v, env: bal("10", "10", v), jobs: busy, want: hosted, warning: true, noCalls: true,
+				out: []string{"CI_SELF_HOSTED_BIGDISK_DOCKER='" + v + "'"}})
+	}
+	for _, v := range []string{"", "0", "x12"} {
+		cases = append(cases, selCase{name: "CI_HOSTED_SHARE=" + v, env: bal(v, "10", "10"), jobs: in(11, 1, 0, 0, 0, 0),
+			want: selfHosted, warning: true, out: []string{"HS=12", "hosted 11 of CI_HOSTED_SHARE=12"}})
+	}
+	cases = append(cases, selCase{name: "CI_HOSTED_SHARE unset, the hosted pool full", env: bal("", "10", "10"), jobs: in(12, 9, 0, 0, 0, 0),
+		want: selfHosted, warning: true, out: []string{"the hosted pool is full (12 of 12)"}})
+
+	const selfNotice = "this run's jobs run on the Dells (bigdisk, bigdisk-docker)"
+	ownJobs := fmt.Sprintf("/runs/%d/jobs", selRunID)
+	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			replies := selFixture(c.jobs)
 			if c.break_ != nil {
@@ -440,8 +490,8 @@ func TestRunnerSelectionScript(t *testing.T) {
 				t.Fatalf("the step exited %d:\n%s", res.rc, res.stdout)
 			}
 			wantRunner, wantDocker := selHosted, selHosted
-			if c.want == overflow {
-				wantRunner, wantDocker = selOverflow, selOverDock
+			if c.want == selfHosted {
+				wantRunner, wantDocker = selSelf, selSelfDock
 			}
 			if res.runner != wantRunner || res.runnerDocker != wantDocker || res.outputEntries != 2 {
 				t.Fatalf("outputs runner=%s runner_docker=%s (%d entries); want runner=%s runner_docker=%s\n%s",
@@ -450,15 +500,20 @@ func TestRunnerSelectionScript(t *testing.T) {
 			if has := strings.Contains(res.stdout, "::warning::"); has != c.warning {
 				t.Errorf("a ::warning printed: %v, want %v\n%s", has, c.warning, res.stdout)
 			}
+			for _, o := range c.out {
+				if !strings.Contains(res.stdout, o) {
+					t.Errorf("the step's output lacks %q\n%s", o, res.stdout)
+				}
+			}
 			// v1.52 prints a ::notice for a fork pull request (an empty head
-			// repository is one too); any other ::notice is the overflow's.
+			// repository is one too).
 			const forkNotice = "::notice::runner selection: this pull request's head repository is not this repository (a fork)"
 			wantFork := (c.env.event == "pull_request" || c.env.event == "pull_request_target") && c.env.headRepo != selRepo
 			if has := strings.Contains(res.stdout, forkNotice); has != wantFork {
 				t.Errorf("the fork ::notice printed: %v, want %v\n%s", has, wantFork, res.stdout)
 			}
-			if has := strings.Contains(strings.ReplaceAll(res.stdout, forkNotice, ""), "::notice::"); has != (c.want == overflow) {
-				t.Errorf("the overflow ::notice printed: %v, want %v\n%s", has, c.want == overflow, res.stdout)
+			if has := strings.Contains(res.stdout, selfNotice); has != (c.want == selfHosted) {
+				t.Errorf("the self-hosted ::notice printed: %v, want %v\n%s", has, c.want == selfHosted, res.stdout)
 			}
 			if c.noCalls && len(res.calls) != 0 {
 				t.Errorf("the step called the API: %v", res.calls)
@@ -469,6 +524,9 @@ func TestRunnerSelectionScript(t *testing.T) {
 			for _, u := range res.calls {
 				if !strings.HasPrefix(u, selAPI+"/") {
 					t.Errorf("the step called %q, outside %s", u, selAPI)
+				}
+				if strings.Contains(u, ownJobs) {
+					t.Errorf("the step read this run's own jobs: %q", u)
 				}
 			}
 		})
