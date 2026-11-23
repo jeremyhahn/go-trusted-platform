@@ -114,7 +114,8 @@ func (s *MediaSpec) Validate() error {
 	if parsed.Opaque != "" {
 		return ErrVirtualMediaInvalidSpec{Field: "URL", Reason: "must be hierarchical (scheme://host/path)"}
 	}
-	if parsed.Host == "" {
+	// Hostname, not Host: "https://:443/x.iso" has Host ":443" and no server.
+	if parsed.Hostname() == "" {
 		return ErrVirtualMediaInvalidSpec{Field: "URL", Reason: "missing host"}
 	}
 	inferred, ok := schemeToProtocol[scheme]
