@@ -175,7 +175,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `ConfigDeliveryService.SignDigest` | - | - | - | - | not-UI: device-side pre-enrollment protocol |
 | `ConfigDeliveryService.PollSession` | - | - | - | - | not-UI: device-side pre-enrollment protocol |
 | `ConfigDeliveryService.FulfillSession` | `POST /provisioning/sessions/{sessionID}/fulfill` | `(dashboard)/provisioning/sessions/[sessionId]/page.tsx` | - | `real-server/provisioning-sessions.spec.ts` | covered |
-| `ConfigDeliveryService.ListSessions` | - | `(dashboard)/provisioning/sessions/page.tsx` | - | `provisioning.spec.ts` | covered |
+| `ConfigDeliveryService.ListSessions` | `GET /provisioning/sessions` | `(dashboard)/provisioning/sessions/page.tsx` | - | `real-server/provisioning-sessions.spec.ts` | covered |
 | `ConfigDeliveryService.GetSession` | `GET /provisioning/sessions/{sessionID}` | `(dashboard)/provisioning/sessions/[sessionId]/page.tsx` | - | `real-server/provisioning-sessions.spec.ts` | covered |
 
 ## PlatformDaemon (`daemon.proto`)
