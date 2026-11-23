@@ -88,6 +88,18 @@ func (e ErrEmbeddedPEPUnavailable) Error() string {
 		"enable platform tokens (webservice jwt.platform-token.enabled) or enable mTLS (--enable-mtls)"
 }
 
+// ErrMTLSUserNotFound is returned when a verified client certificate names
+// no IAM user in its tenant: neither its email SAN nor its identity, as a
+// tenant-scoped username, resolves. The call is denied (#1989).
+type ErrMTLSUserNotFound struct {
+	Subject  string
+	TenantID string
+}
+
+func (e ErrMTLSUserNotFound) Error() string {
+	return fmt.Sprintf("mtls: certificate subject %q names no IAM user in tenant %q", e.Subject, e.TenantID)
+}
+
 // ErrTransportConstructionFailed is returned by New when an enabled transport
 // (QUIC, REST or MCP) cannot be constructed. Until #444 New logged a Warn and
 // continued, so a daemon reported healthy without a transport its
