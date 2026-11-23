@@ -17,6 +17,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { KeyOperations } from "@/components/features/kms/key-operations";
+import { Gated } from "@/components/features/capabilities/gated";
 import { useKMS, useApi, useMutation, useToast } from "@/hooks";
 import type { KeyDetail } from "@/types/security";
 
@@ -78,6 +79,13 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
     [id]
   );
 
+  // GET /kms/keys/{name}/metadata carries the whole key's status (GetKey's
+  // KeyInfoResponse has none, #2057).
+  const { data: metadataResponse, refetch: refetchMetadata } = useApi(
+    () => kms.getKeyMetadata(id),
+    [id]
+  );
+
   // Transform server response to UI KeyDetail. The platform KMS REST
   // handler returns the key record directly (snake_case) so the older
   // {key, metadata} envelope expected here was always missing. Read
@@ -101,15 +109,18 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
     const createdRaw = metadata.createdAt ?? metadata.created_at ?? key.createdAt ?? key.created_at;
     const served = (versionsResponse as unknown as KeyVersionsWire | null | undefined)?.versions;
     const currentVersion = Number(metadata.version ?? key.version ?? 0);
-    // GetKey (KeyInfoResponse) carries no status: take the status of the
-    // served current version, else of the highest served version.
+    // GetKey (KeyInfoResponse) carries no status: the key's status comes from
+    // its metadata (GET /kms/keys/{name}/metadata). When that read fails or
+    // has no status, take the status of the served current version, else of
+    // the highest served version.
+    const metaStatus = (metadataResponse as unknown as { status?: string } | null | undefined)?.status;
     const servedStatus = (() => {
       if (!Array.isArray(served) || served.length === 0) return undefined;
       const current = served.find((v) => (v.version ?? 0) === currentVersion);
       if (current) return current.status;
       return served.reduce((a, b) => ((b.version ?? 0) > (a.version ?? 0) ? b : a)).status;
     })();
-    const status: string = String(key.status ?? metadata.status ?? servedStatus ?? '').toUpperCase();
+    const status: string = String(metaStatus ?? key.status ?? metadata.status ?? servedStatus ?? '').toUpperCase();
     const versions: KeyDetail["versions"] = Array.isArray(served)
       ? served
           .map((v) => ({
@@ -139,7 +150,7 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
       usageHistory: [],
       metadata: metadata.tags || {},
     };
-  }, [response, versionsResponse]);
+  }, [response, versionsResponse, metadataResponse]);
 
   // Enable or disable the key, or one of its versions, through UpdateKeyStatus
   // (PUT /kms/keys/{name}/status, #2057).
@@ -159,6 +170,7 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
         });
         refetch();
         refetchVersions();
+        refetchMetadata();
       },
       onError: (error) => {
         toast({
@@ -300,20 +312,26 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
         <div className="flex gap-2">
           {keyDetail.status === "active" && (
             <>
-              <Button variant="outline" size="sm" onClick={handleRotate}>
-                <RefreshCw className="mr-2 h-4 w-4" />
-                Rotate
-              </Button>
-              <Button variant="outline" size="sm" onClick={handleDisable}>
-                <Ban className="mr-2 h-4 w-4" />
-                Disable
-              </Button>
+              <Gated op="POST /api/v1/kms/keys/{name}/rotate">
+                <Button variant="outline" size="sm" onClick={handleRotate}>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Rotate
+                </Button>
+              </Gated>
+              <Gated op="PUT /api/v1/kms/keys/{name}/status">
+                <Button variant="outline" size="sm" onClick={handleDisable}>
+                  <Ban className="mr-2 h-4 w-4" />
+                  Disable
+                </Button>
+              </Gated>
             </>
           )}
           {keyDetail.status === "disabled" && (
-            <Button variant="outline" size="sm" onClick={handleEnable} disabled={statusMutation.isLoading}>
-              Enable
-            </Button>
+            <Gated op="PUT /api/v1/kms/keys/{name}/status">
+              <Button variant="outline" size="sm" onClick={handleEnable} disabled={statusMutation.isLoading}>
+                Enable
+              </Button>
+            </Gated>
           )}
         </div>
       </div>
@@ -425,6 +443,7 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
                         </Badge>
                       </TableCell>
                       <TableCell>
+                        <Gated op="PUT /api/v1/kms/keys/{name}/status">
                         <Button
                           variant="outline"
                           size="sm"
@@ -436,6 +455,7 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
                         >
                           {version.status === "active" ? "Disable" : "Enable"}
                         </Button>
+                        </Gated>
                       </TableCell>
                     </TableRow>
                   ))}
