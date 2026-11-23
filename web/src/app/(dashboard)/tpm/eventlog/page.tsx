@@ -14,6 +14,8 @@
  * Modeled after the xkey TPM Svelte view's "Measurements"
  * (Event Log Viewer + replay) tab; see memory
  * `reference_xkey_tpm_gui.md`.
+ *
+ * The read and Refresh are gated on the server's capabilities (#2069).
  */
 
 import * as React from "react";
@@ -43,6 +45,8 @@ import {
   Hash,
 } from "lucide-react";
 import { useApi, useTPM, useToast } from "@/hooks";
+import { Gated } from "@/components/features/capabilities/gated";
+import { useCapabilities, CAPABILITIES_LOADING_REASON } from "@/hooks/use-capabilities";
 import type { EventLogEntry } from "trusted-platform-sdk";
 
 
@@ -69,6 +73,7 @@ const PCR_LABELS: Record<number, string> = {
 export default function TPMEventLogPage() {
   const { toast } = useToast();
   const tpm = useTPM();
+  const readCap = useCapabilities().capability("GET /api/v1/tpm/eventlog");
 
   const {
     data: logData,
@@ -77,8 +82,9 @@ export default function TPMEventLogPage() {
     refetch,
   } = useApi(
     () => tpm.getEventLog(),
-    [],
+    [readCap.enabled],
     {
+      enabled: readCap.enabled,
       onError: (err) => {
         toast({
           title: "Error loading event log",
@@ -163,12 +169,20 @@ export default function TPMEventLogPage() {
               Download .bin
             </Button>
           )}
-          <Button variant="outline" onClick={() => refetch()} disabled={loading}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
+          <Gated op="GET /api/v1/tpm/eventlog">
+            <Button variant="outline" onClick={() => refetch()} disabled={loading}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          </Gated>
         </div>
       </div>
+
+      {!readCap.enabled && readCap.reason && readCap.reason !== CAPABILITIES_LOADING_REASON && (
+        <p data-testid="eventlog-withheld" className="text-sm text-muted-foreground">
+          The event log is not available on this server: <span>{readCap.reason}</span>
+        </p>
+      )}
 
       {error && (
         <div className="flex items-center gap-2 p-4 bg-destructive/10 border border-destructive rounded-lg">

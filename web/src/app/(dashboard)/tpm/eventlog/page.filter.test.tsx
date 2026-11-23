@@ -4,6 +4,8 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import TPMEventLogPage from './page';
 import { ok, stubControlPlane, withControlPlane } from '@/test/control-plane-fetch';
 
+const CAPS_ON = ok({ capabilities: [{ op: 'GET /api/v1/tpm/eventlog', kind: 'route', enabled: true }] });
+
 // 250 parsed entries: five on PCR 7 (spread past the first 200 rows),
 // the rest on PCR 0.
 const pcr7Indexes = [3, 50, 199, 210, 249];
@@ -33,6 +35,7 @@ afterEach(() => {
 describe('TPM event log page PCR filter', () => {
   it('narrows the table to the PCR typed into the filter', async () => {
     stubControlPlane({
+      'GET /api/v1/capabilities': CAPS_ON,
       'GET /api/v1/tpm/eventlog': ok({ format: 'tcg2', eventCount: 250, entries: entries() }),
     });
     render(withControlPlane(<TPMEventLogPage />));
@@ -54,6 +57,7 @@ describe('TPM event log page PCR filter', () => {
 
   it('restores the first 200 rows when the filter is cleared', async () => {
     stubControlPlane({
+      'GET /api/v1/capabilities': CAPS_ON,
       'GET /api/v1/tpm/eventlog': ok({ format: 'tcg2', eventCount: 250, entries: entries() }),
     });
     render(withControlPlane(<TPMEventLogPage />));
