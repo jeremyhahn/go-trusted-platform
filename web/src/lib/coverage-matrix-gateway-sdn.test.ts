@@ -50,7 +50,7 @@ describe('coverage matrix: GatewayService and SDNService rows (#2051, #2064)', (
     for (const want of [
       '| GatewayService | 29 | 19 | 0 | 10 | 0 | 0 |',
       '| SDNService | 29 | 24 | 0 | 4 | 1 | 0 |',
-      '| **Total** | **529** | **234** | **43** | **170** | **51** | **31** |',
+      '| **Total** | **529** | **239** | **41** | **167** | **51** | **31** |',
     ]) {
       expect(lines.filter((l) => l === want), want).toHaveLength(1);
     }

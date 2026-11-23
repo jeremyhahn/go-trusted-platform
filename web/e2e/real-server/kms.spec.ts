@@ -69,6 +69,9 @@ test.describe('KMS page', () => {
         ['Verify HMAC', 'POST /api/v1/kms/hmac/{name}/verify'],
         ['Update status', 'PUT /api/v1/kms/keys/{name}/status'],
         ['Import key', 'POST /api/v1/kms/keys/import'],
+        ['Batch encrypt', 'POST /api/v1/kms/batch-encrypt'],
+        ['Batch decrypt', 'POST /api/v1/kms/batch-decrypt'],
+        ['Rewrap', 'POST /api/v1/kms/rewrap'],
       ],
       listed,
     );
