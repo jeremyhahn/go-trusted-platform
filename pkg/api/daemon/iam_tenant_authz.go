@@ -146,10 +146,10 @@ func authorizeUnboundCaller(ctx context.Context, pep quicbaassdk.IAMPEPClient, t
 	if pep == nil {
 		return status.Error(codes.PermissionDenied, ErrPEPClientNotAvailable{}.Error())
 	}
+	// The PEP's RBAC check takes the registered resource name as is and
+	// matches resource:action; the target tenant is the principal's
+	// TenantID (unixPeerPrincipal), not part of the resource.
 	principal := unixPeerPrincipal(creds, tenantID)
-	// The PEP takes a type://path resource URI: the registered resource
-	// type, scoped to the tenant the principal carries.
-	resource = resource + "://" + tenantID
 	allowed, err := checkPrincipalPermission(ctx, pep, principal, resource, action)
 	if err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
