@@ -7,7 +7,7 @@
  * Uses the trusted-platform-sdk for API interactions.
  */
 
-import React, { useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { ColumnDef } from '@tanstack/react-table';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
@@ -19,6 +19,15 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
 import { Plus, AppWindow, AlertCircle, Loader2 } from 'lucide-react';
 import { Gated } from '@/components/features/capabilities/gated';
 import { useCapabilities } from '@/hooks/use-capabilities';
@@ -46,6 +55,12 @@ export default function AppsPage() {
   const iam = useIAM();
   const { capability } = useCapabilities();
   const deleteCap = capability('DELETE /api/v1/iam/tenants/{tenant}/apps/{id}');
+  const rotateCap = capability('POST /api/v1/iam/tenants/{tenant}/apps/{id}/rotate');
+  const [displaySecret, setDisplaySecret] = useState<{
+    clientId: string;
+    clientSecret: string;
+    name: string;
+  } | null>(null);
 
   // Fetch applications using SDK
   const {
@@ -126,6 +141,50 @@ export default function AppsPage() {
       deleteAppMutation.mutate(app.clientId);
     }
   }, [deleteAppMutation, deleteCap.enabled]);
+
+  // Rotate secret mutation: the new secret is shown once in the dialog.
+  const rotateSecretMutation = useMutation(
+    async (clientId: string) => {
+      if (!tenantId) {
+        throw new Error('No tenant ID available');
+      }
+      return iam.rotateAppSecret(tenantId, clientId);
+    },
+    {
+      onSuccess: (result) => {
+        toast({
+          title: 'Secret rotated',
+          description: 'The application secret has been rotated successfully',
+          variant: 'success',
+        });
+        if (result) {
+          setDisplaySecret({
+            clientId: result.clientId,
+            clientSecret: result.clientSecret,
+            name: result.name,
+          });
+        }
+      },
+      onError: (error) => {
+        toast({
+          title: 'Error rotating secret',
+          description: error.message,
+          variant: 'destructive',
+        });
+      },
+    }
+  );
+
+  const handleRotateSecret = useCallback((app: DisplayApplication) => {
+    if (!rotateCap.enabled) return;
+    if (
+      window.confirm(
+        `Are you sure you want to rotate the secret for "${app.name}"? The old secret will stop working immediately.`
+      )
+    ) {
+      rotateSecretMutation.mutate(app.clientId);
+    }
+  }, [rotateSecretMutation, rotateCap.enabled]);
 
   const handleBulkDelete = useCallback(async (appsToDelete: DisplayApplication[]) => {
     if (!deleteCap.enabled) return;
@@ -240,13 +299,10 @@ export default function AppsPage() {
               },
               {
                 label: 'Rotate Secret',
-                onClick: () => {
-                  toast({
-                    title: 'Feature coming soon',
-                    description: 'Secret rotation will be available in a future update',
-                  });
-                },
+                onClick: () => handleRotateSecret(app),
                 separator: true,
+                disabled: !rotateCap.enabled,
+                title: rotateCap.enabled ? undefined : rotateCap.reason,
               },
               {
                 label: 'Delete',
@@ -260,7 +316,16 @@ export default function AppsPage() {
         );
       },
     },
-  ], [handleView, handleEdit, handleDelete, toast, deleteCap.enabled, deleteCap.reason]);
+  ], [
+    handleView,
+    handleEdit,
+    handleDelete,
+    handleRotateSecret,
+    rotateCap.enabled,
+    rotateCap.reason,
+    deleteCap.enabled,
+    deleteCap.reason,
+  ]);
 
   // Show auth loading state
   if (authLoading) {
@@ -388,6 +453,50 @@ export default function AppsPage() {
           />
         </CardContent>
       </Card>
+
+      {/* Secret Display Dialog: the rotated secret is shown once */}
+      <Dialog
+        open={!!displaySecret}
+        onOpenChange={(open) => !open && setDisplaySecret(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Application Credentials</DialogTitle>
+            <DialogDescription>
+              Save these credentials securely. The client secret will not be shown again.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Application Name</Label>
+              <div className="font-medium">{displaySecret?.name}</div>
+            </div>
+            <div className="space-y-2">
+              <Label>Client ID</Label>
+              <code className="block bg-muted p-2 rounded text-sm break-all">
+                {displaySecret?.clientId}
+              </code>
+            </div>
+            <div className="space-y-2">
+              <Label>Client Secret</Label>
+              <code className="block bg-muted p-2 rounded text-sm break-all">
+                {displaySecret?.clientSecret}
+              </code>
+            </div>
+            <Alert>
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Important</AlertTitle>
+              <AlertDescription>
+                Store the client secret securely. It will not be displayed again.
+                If you lose it, you will need to rotate the secret.
+              </AlertDescription>
+            </Alert>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setDisplaySecret(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
