@@ -72,14 +72,6 @@ function ErrorLine({ message }: { message: string | null }) {
   ) : null;
 }
 
-function Verdict({ verified }: { verified: boolean }) {
-  return (
-    <span className={verified ? "font-semibold text-green-600" : "font-semibold text-destructive"}>
-      {verified ? "Verified" : "Not verified"}
-    </span>
-  );
-}
-
 function HostCard() {
   const attestation = useAttestation();
   const [nonce, setNonce] = React.useState("");
@@ -201,7 +193,7 @@ function VMCard() {
     setBusy(true);
     try {
       const res = await attestation.collectVMAttestation({ vmId: vmId.trim(), nonce: nonce.trim(), config });
-      if (!res.success || !res.data) {
+      if (!res.success || !res.data?.attestation) {
         setError(res.error?.message ?? "no attestation in the answer");
         return;
       }
@@ -235,21 +227,19 @@ function VMCard() {
           {result && (
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm" data-testid="attestation-collect-vm-result">
               <dt className="text-muted-foreground">VM</dt>
-              <dd className="font-mono break-all">{result.vm_id}</dd>
+              <dd className="font-mono break-all">{result.attestation?.vmId || "none"}</dd>
               <dt className="text-muted-foreground">Host</dt>
-              <dd className="font-mono break-all">{result.host_id || "none"}</dd>
-              <dt className="text-muted-foreground">Verdict</dt>
-              <dd>
-                <Verdict verified={result.verified === true} />
-              </dd>
+              <dd className="font-mono break-all">{result.attestation?.hostId || "none"}</dd>
               <dt className="text-muted-foreground">PCR digest</dt>
-              <dd className="font-mono break-all">{result.pcr_digest || "none"}</dd>
+              <dd className="font-mono break-all">{result.attestation?.pcrDigest || "none"}</dd>
               <dt className="text-muted-foreground">Signature algorithm</dt>
-              <dd className="font-mono">{result.signature_algorithm || "none"}</dd>
+              <dd className="font-mono">{result.attestation?.signatureAlgorithm || "none"}</dd>
+              <dt className="text-muted-foreground">Hash algorithm</dt>
+              <dd className="font-mono">{result.attestation?.hashAlgorithm || "none"}</dd>
               <dt className="text-muted-foreground">PCRs</dt>
-              <dd>{result.pcrs?.length ?? 0}</dd>
+              <dd>{result.attestation?.pcrs?.length ?? 0}</dd>
               <dt className="text-muted-foreground">Timestamp</dt>
-              <dd>{result.timestamp || "none"}</dd>
+              <dd>{result.attestation?.timestamp || "none"}</dd>
             </dl>
           )}
         </form>
@@ -274,7 +264,7 @@ function ContainerCard() {
     setBusy(true);
     try {
       const res = await attestation.collectContainerAttestation({ containerId: containerId.trim() });
-      if (!res.success || !res.data) {
+      if (!res.success || !res.data?.attestation) {
         setError(res.error?.message ?? "no attestation in the answer");
         return;
       }
@@ -306,19 +296,15 @@ function ContainerCard() {
           {result && (
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm" data-testid="attestation-collect-container-result">
               <dt className="text-muted-foreground">Container</dt>
-              <dd className="font-mono break-all">{result.container_id}</dd>
+              <dd className="font-mono break-all">{result.attestation?.containerId || "none"}</dd>
               <dt className="text-muted-foreground">Image digest</dt>
-              <dd className="font-mono break-all">{result.image_digest || "none"}</dd>
-              <dt className="text-muted-foreground">Verdict</dt>
-              <dd>
-                <Verdict verified={result.verified === true} />
-              </dd>
+              <dd className="font-mono break-all">{result.attestation?.imageDigest || "none"}</dd>
               <dt className="text-muted-foreground">Digest</dt>
-              <dd className="font-mono break-all">{result.digest || "none"}</dd>
+              <dd className="font-mono break-all">{result.attestation?.digest || "none"}</dd>
               <dt className="text-muted-foreground">PCR value</dt>
-              <dd className="font-mono break-all">{result.pcr_value || "none"}</dd>
+              <dd className="font-mono break-all">{result.attestation?.pcrValue || "none"}</dd>
               <dt className="text-muted-foreground">Timestamp</dt>
-              <dd>{result.timestamp || "none"}</dd>
+              <dd>{result.attestation?.timestamp || "none"}</dd>
             </dl>
           )}
         </form>

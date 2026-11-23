@@ -163,8 +163,9 @@ test.describe('Collect attestation cards (real server)', () => {
     const answer = unwrapPayload<CollectVMAttestationResponse>(await r.json());
     const result = card.getByTestId('attestation-collect-vm-result');
     await expect(result).toBeVisible();
-    await expect(result).toContainText(answer.vm_id);
-    await expect(result).toContainText(answer.verified ? 'Verified' : 'Not verified');
+    await expect(result).toContainText(answer.attestation?.vmId ?? '');
+    // Collecting is not verifying: the answer carries no verdict to show.
+    await expect(result).not.toContainText('erified');
   });
 
   test('Collect container attestation shows what the server answers, or is withheld', async ({ adminPage, sdk }) => {
@@ -187,7 +188,7 @@ test.describe('Collect attestation cards (real server)', () => {
     const answer = unwrapPayload<CollectContainerAttestationResponse>(await r.json());
     const result = card.getByTestId('attestation-collect-container-result');
     await expect(result).toBeVisible();
-    await expect(result).toContainText(answer.container_id);
-    await expect(result).toContainText(answer.verified ? 'Verified' : 'Not verified');
+    await expect(result).toContainText(answer.attestation?.containerId ?? '');
+    await expect(result).not.toContainText('erified');
   });
 });
