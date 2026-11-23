@@ -1802,6 +1802,8 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeTenantRotateDEK(ctx, args)
 	case "tenant_get_dek_status":
 		return r.executeTenantGetDEKStatus(ctx, args)
+	case "tenant_create_initial_admin_invitation":
+		return r.executeTenantCreateInitialAdminInvitation(ctx, args)
 
 	// Per-Tenant Barrier Operations (cryptographic barrier lifecycle)
 	case "platform_tenant_barrier_init":

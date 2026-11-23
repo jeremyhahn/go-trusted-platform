@@ -41,25 +41,26 @@ import (
 func init() {
 	// Tool routing — mirrors pkg/api/mcp/tenant_tools.go registrations.
 	for method, tool := range map[string]string{
-		platformv1.TenantService_CreateTenant_FullMethodName:           "tenant_create",
-		platformv1.TenantService_DeleteTenant_FullMethodName:           "tenant_delete",
-		platformv1.TenantService_GetTenant_FullMethodName:              "tenant_get",
-		platformv1.TenantService_GetTenantByName_FullMethodName:        "tenant_get_by_name",
-		platformv1.TenantService_ListTenants_FullMethodName:            "tenant_list",
-		platformv1.TenantService_UpdateTenant_FullMethodName:           "tenant_update",
-		platformv1.TenantService_SuspendTenant_FullMethodName:          "tenant_suspend",
-		platformv1.TenantService_ResumeTenant_FullMethodName:           "tenant_resume",
-		platformv1.TenantService_GetQuotas_FullMethodName:              "tenant_get_quotas",
-		platformv1.TenantService_UpdateQuotas_FullMethodName:           "tenant_update_quotas",
-		platformv1.TenantService_GetUsage_FullMethodName:               "tenant_get_usage",
-		platformv1.TenantService_CheckQuota_FullMethodName:             "tenant_check_quota",
-		platformv1.TenantService_Sync_FullMethodName:                   "tenant_sync",
-		platformv1.TenantService_RotateTenantDEK_FullMethodName:        "tenant_rotate_dek",
-		platformv1.TenantService_GetTenantDEKStatus_FullMethodName:     "tenant_get_dek_status",
-		platformv1.TenantService_InitTenantBarrier_FullMethodName:      "platform_tenant_barrier_init",
-		platformv1.TenantService_UnsealTenantBarrier_FullMethodName:    "platform_tenant_barrier_unseal",
-		platformv1.TenantService_SealTenantBarrier_FullMethodName:      "platform_tenant_barrier_seal",
-		platformv1.TenantService_GetTenantBarrierStatus_FullMethodName: "platform_tenant_barrier_status",
+		platformv1.TenantService_CreateTenant_FullMethodName:                 "tenant_create",
+		platformv1.TenantService_DeleteTenant_FullMethodName:                 "tenant_delete",
+		platformv1.TenantService_GetTenant_FullMethodName:                    "tenant_get",
+		platformv1.TenantService_GetTenantByName_FullMethodName:              "tenant_get_by_name",
+		platformv1.TenantService_ListTenants_FullMethodName:                  "tenant_list",
+		platformv1.TenantService_UpdateTenant_FullMethodName:                 "tenant_update",
+		platformv1.TenantService_SuspendTenant_FullMethodName:                "tenant_suspend",
+		platformv1.TenantService_ResumeTenant_FullMethodName:                 "tenant_resume",
+		platformv1.TenantService_GetQuotas_FullMethodName:                    "tenant_get_quotas",
+		platformv1.TenantService_UpdateQuotas_FullMethodName:                 "tenant_update_quotas",
+		platformv1.TenantService_GetUsage_FullMethodName:                     "tenant_get_usage",
+		platformv1.TenantService_CheckQuota_FullMethodName:                   "tenant_check_quota",
+		platformv1.TenantService_Sync_FullMethodName:                         "tenant_sync",
+		platformv1.TenantService_RotateTenantDEK_FullMethodName:              "tenant_rotate_dek",
+		platformv1.TenantService_GetTenantDEKStatus_FullMethodName:           "tenant_get_dek_status",
+		platformv1.TenantService_InitTenantBarrier_FullMethodName:            "platform_tenant_barrier_init",
+		platformv1.TenantService_UnsealTenantBarrier_FullMethodName:          "platform_tenant_barrier_unseal",
+		platformv1.TenantService_SealTenantBarrier_FullMethodName:            "platform_tenant_barrier_seal",
+		platformv1.TenantService_GetTenantBarrierStatus_FullMethodName:       "platform_tenant_barrier_status",
+		platformv1.TenantService_CreateInitialAdminInvitation_FullMethodName: "tenant_create_initial_admin_invitation",
 	} {
 		grpcMethodToMCPToolMap[method] = tool
 	}
@@ -72,6 +73,8 @@ func init() {
 			platformv1.TenantService_UpdateQuotas_FullMethodName, buildTenantUpdateQuotasArgs),
 		platformv1.TenantService_CheckQuota_FullMethodName: argBuilder(
 			platformv1.TenantService_CheckQuota_FullMethodName, buildTenantCheckQuotaArgs),
+		platformv1.TenantService_CreateInitialAdminInvitation_FullMethodName: protoJSONArgs(
+			platformv1.TenantService_CreateInitialAdminInvitation_FullMethodName),
 	} {
 		mcpArgBuilders[method] = build
 	}
@@ -99,6 +102,8 @@ func init() {
 			platformv1.TenantService_GetTenantDEKStatus_FullMethodName, decodeTenantDEKStatusJSON),
 		platformv1.TenantService_GetTenantBarrierStatus_FullMethodName: wireDecoder(
 			platformv1.TenantService_GetTenantBarrierStatus_FullMethodName, decodeTenantBarrierStatusJSON),
+		platformv1.TenantService_CreateInitialAdminInvitation_FullMethodName: protoJSONReply(
+			platformv1.TenantService_CreateInitialAdminInvitation_FullMethodName),
 
 		platformv1.TenantService_DeleteTenant_FullMethodName:        decodeTenantStatusResult,
 		platformv1.TenantService_SuspendTenant_FullMethodName:       decodeTenantStatusResult,

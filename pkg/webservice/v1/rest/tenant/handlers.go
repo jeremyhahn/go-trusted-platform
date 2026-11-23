@@ -270,6 +270,27 @@ func (h *Handlers) RotateTenantDEK(w http.ResponseWriter, r *http.Request) {
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
 }
 
+// CreateInitialAdminInvitation handles POST /api/v1/tenants/{id}/initial-admin-invitation:
+// the system tenant mints the tenant's owner invitation. The tenant always
+// comes from the path.
+func (h *Handlers) CreateInitialAdminInvitation(w http.ResponseWriter, r *http.Request) {
+	if !h.ensure(w, r) {
+		return
+	}
+	req := &platformv1.CreateInitialAdminInvitationRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	req.TenantId = mux.Vars(r)["id"]
+	resp, err := h.server.CreateInitialAdminInvitation(r.Context(), req)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccessStatus(w, r, h.respWriter, http.StatusCreated, resp)
+}
+
 // GetTenantDEKStatus handles GET /api/v1/tenants/{id}/dek.
 func (h *Handlers) GetTenantDEKStatus(w http.ResponseWriter, r *http.Request) {
 	if !h.ensure(w, r) {

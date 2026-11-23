@@ -156,10 +156,11 @@ var daemonDivergentClaims = map[string]string{
 	"/platform.v1.ProvisioningGateway/RegisterPXEDevice":     pxeGatewayOnWebservice,
 	"/platform.v1.ProvisioningGateway/ReportDeviceState":     pxeGatewayOnWebservice,
 
-	"/platform.v1.TenantService/CheckQuota":             "#452 (claim from #304): the daemon checks at POST /api/v1/tenants/{id}/check-quota with its own JSON; the claim is the webservice's /quota-check (sdk_rest_roundtrip_test.go)",
-	"/platform.v1.TenantService/GetTenantBarrierStatus": "#452: the daemon serves GET /api/v1/tenants/{id}/barrier/status (docs/tenant/api.md); the claim is the webservice's /barrier",
-	"/platform.v1.TenantService/GetTenantByName":        "#452 (claim from #304): the daemon looks up at GET /api/v1/tenants/name/{name}; the claim is the webservice's system-only /by-name/{name} (sdk_rest_roundtrip_test.go)",
-	"/platform.v1.TenantService/GetTenantDEKStatus":     "#452 (claim from #304): the daemon serves GET /api/v1/tenants/{id}/dek/status with its own JSON; the claim is the webservice's /dek (sdk_rest_roundtrip_test.go)",
+	"/platform.v1.TenantService/CreateInitialAdminInvitation": "#301 (claim from #2362): the daemon serves no owner-invitation route; the claim is the webservice's system-only POST /api/v1/tenants/{id}/initial-admin-invitation (sdk_rest_roundtrip_test.go)",
+	"/platform.v1.TenantService/CheckQuota":                   "#452 (claim from #304): the daemon checks at POST /api/v1/tenants/{id}/check-quota with its own JSON; the claim is the webservice's /quota-check (sdk_rest_roundtrip_test.go)",
+	"/platform.v1.TenantService/GetTenantBarrierStatus":       "#452: the daemon serves GET /api/v1/tenants/{id}/barrier/status (docs/tenant/api.md); the claim is the webservice's /barrier",
+	"/platform.v1.TenantService/GetTenantByName":              "#452 (claim from #304): the daemon looks up at GET /api/v1/tenants/name/{name}; the claim is the webservice's system-only /by-name/{name} (sdk_rest_roundtrip_test.go)",
+	"/platform.v1.TenantService/GetTenantDEKStatus":           "#452 (claim from #304): the daemon serves GET /api/v1/tenants/{id}/dek/status with its own JSON; the claim is the webservice's /dek (sdk_rest_roundtrip_test.go)",
 
 	"/platform.v1.RegistryService/Delete": "#452: DELETE /api/v1/compute/images/{repository} is the webservice's (rest/registry/router.go); the daemon mounts none",
 

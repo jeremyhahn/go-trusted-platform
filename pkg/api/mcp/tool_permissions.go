@@ -698,6 +698,7 @@ func platformToolTable() map[string]string {
 	permissions["tenant_get_usage"] = "tenant:read"
 	permissions["tenant_check_quota"] = "tenant:read"
 	permissions["tenant_get_dek_status"] = "tenant:read"
+	permissions["tenant_create_initial_admin_invitation"] = "tenant:write"
 	permissions["platform_tenant_barrier_status"] = "tenant:read"
 
 	permissions["tenant_create"] = "tenant:write"

@@ -1286,9 +1286,10 @@ var templatedRouteTable = map[string]templatedRoute{
 	// The quota check and the DEK routes. CheckQuota keeps the prospective
 	// allocation (resource, amount) in the POST body, and RotateTenantDEK
 	// keeps background there.
-	"/platform.v1.TenantService/CheckQuota":         itemRoute("/api/v1/tenants/{id}/quota-check", http.MethodPost, "{id}", "tenant_id"),
-	"/platform.v1.TenantService/RotateTenantDEK":    itemRoute("/api/v1/tenants/{id}/dek/rotate", http.MethodPost, "{id}", "tenant_id"),
-	"/platform.v1.TenantService/GetTenantDEKStatus": itemRoute("/api/v1/tenants/{id}/dek", http.MethodGet, "{id}", "tenant_id"),
+	"/platform.v1.TenantService/CheckQuota":                   itemRoute("/api/v1/tenants/{id}/quota-check", http.MethodPost, "{id}", "tenant_id"),
+	"/platform.v1.TenantService/RotateTenantDEK":              itemRoute("/api/v1/tenants/{id}/dek/rotate", http.MethodPost, "{id}", "tenant_id"),
+	"/platform.v1.TenantService/GetTenantDEKStatus":           itemRoute("/api/v1/tenants/{id}/dek", http.MethodGet, "{id}", "tenant_id"),
+	"/platform.v1.TenantService/CreateInitialAdminInvitation": itemRoute("/api/v1/tenants/{id}/initial-admin-invitation", http.MethodPost, "{id}", "tenant_id"),
 
 	// GET /api/v1/iam/tenants/{tenant}/users/{id} --
 	// pkg/webservice/v1/rest/iam/router.go registerUserRoutes.
