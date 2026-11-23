@@ -154,7 +154,7 @@ func TestWebserviceDeviceAttest_Challenge_RoundTrip(t *testing.T) {
 	})
 
 	t.Run("another device's challenge is 409", func(t *testing.T) {
-		c := issueFor(t, tenantA, "some-other-device")
+		c := issueFor(t, tenantA, createOtherDevice(t, f))
 		code, env := attest(t, tenantA, wsdevice.AttestRequest{
 			Evidence:    f.evidence(t, c.Nonce, goldenPCRs()),
 			ChallengeID: c.ChallengeID,

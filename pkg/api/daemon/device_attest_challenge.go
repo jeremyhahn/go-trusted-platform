@@ -261,6 +261,19 @@ func (s *DeviceGRPCService) IssueAttestationChallenge(
 	if req.GetDeviceId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "device_id is required")
 	}
+	// The device is looked up before a nonce is minted, so every transport
+	// refuses an unknown device the way GetDevice does (NotFound) instead of
+	// issuing a challenge nothing can ever answer.
+	if s.deviceService == nil {
+		return nil, status.Error(codes.Unavailable, ErrServiceNotAvailable{Service: "device"}.Error())
+	}
+	deviceID, err := parseDeviceID(req.GetDeviceId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if _, err := s.deviceService.Get(ctx, deviceID); err != nil {
+		return nil, s.toGRPCError(err)
+	}
 	tenant, bound := callerTenant(ctx)
 	id, entry, err := s.challenges.issue(ctx, req.GetDeviceId(), tenant, bound)
 	if err != nil {
