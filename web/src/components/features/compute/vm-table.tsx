@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { MoreHorizontal, Play, Square, RotateCw, Trash2, Monitor } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Gated } from '@/components/features/capabilities/gated';
 import {
@@ -166,7 +167,7 @@ export function VMTable({ vms, onRefresh, onConsole }: VMTableProps) {
   };
 
   return (
-    <div className="rounded-md border border-border">
+    <div className="rounded-md border border-border" data-testid="vm-table">
       <Table>
         <TableHeader>
           <TableRow>
@@ -183,14 +184,22 @@ export function VMTable({ vms, onRefresh, onConsole }: VMTableProps) {
         <TableBody>
           {vms.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={8} className="text-center text-muted-foreground">
+              <TableCell colSpan={8} className="text-center text-muted-foreground" data-testid="vm-table-empty">
                 No virtual machines found
               </TableCell>
             </TableRow>
           ) : (
             vms.map((vm) => (
-              <TableRow key={vm.id}>
-                <TableCell className="font-medium">{vm.name}</TableCell>
+              <TableRow key={vm.id} data-testid="vm-row">
+                <TableCell className="font-medium">
+                  <Link
+                    href={`/compute/vms/${encodeURIComponent(vm.id)}`}
+                    className="hover:underline"
+                    data-testid={`vm-link-${vm.id}`}
+                  >
+                    {vm.name}
+                  </Link>
+                </TableCell>
                 <TableCell>
                   <Badge variant="outline" className={statusColors[vm.status]}>
                     {vm.status}
