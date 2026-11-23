@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TPMService } from '../tpm-service.js';
-import { ApiClient } from '../../client/api-client.js';
+import type { ApiClient } from '../../client/api-client.js';
 
 function createMockApiClient(): ApiClient {
   return {
@@ -55,7 +55,10 @@ describe('TPMService certify', () => {
   });
 
   it('certify passes a refusal through', async () => {
-    const refusal = { success: false, error: { message: 'certify: no key at handle 0x81000009' } };
+    const refusal = {
+      success: false,
+      error: { code: 'NOT_FOUND', message: 'certify: no key at handle 0x81000009' },
+    };
     vi.mocked(mockClient.post).mockResolvedValue(refusal);
 
     const result = await service.certify({ keyHandle: 0x81000009 });

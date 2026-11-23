@@ -913,3 +913,39 @@ export interface TPMActivateCredentialResponse {
   /** The recovered secret (base64) */
   secret: string;
 }
+
+/**
+ * Certify request (tpm.proto CertifyRequest)
+ */
+export interface TPMCertifyRequest {
+  /** The persistent handle of the key to certify */
+  keyHandle: number;
+  /** The key's authorization value, if it has one */
+  keyPassword?: string;
+  /** Caller nonce, the qualifying data (base64) */
+  nonce?: string;
+}
+
+/**
+ * Certify response (tpm.proto CertifyResponse in protojson; bytes as base64)
+ */
+export interface TPMCertifyResponse {
+  /** The TPMS_ATTEST structure the IAK signed (base64) */
+  certifyInfo?: string;
+  /** Signature over certifyInfo (base64) */
+  signature?: string;
+  /** Signature scheme, such as SHA256-RSASSA */
+  signatureAlgorithm?: string;
+  /** Marshalled TPMT_SIGNATURE over certifyInfo (base64) */
+  certifyInfoSignature?: string;
+  /** The attesting key's public key (base64) */
+  attestingKeyPublic?: string;
+  /** The certified key's public key (base64) */
+  attestedKeyPublic?: string;
+  /** The attesting key's TPMT_PUBLIC area (base64) */
+  attestingKeyPublicArea?: string;
+  /** The certified key's TPMT_PUBLIC area (base64) */
+  attestedKeyPublicArea?: string;
+  /** The nonce the TPM signed over (base64) */
+  nonce?: string;
+}

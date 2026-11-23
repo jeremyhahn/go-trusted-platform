@@ -466,6 +466,8 @@ export type {
   TPMMakeCredentialResponse,
   TPMActivateCredentialRequest,
   TPMActivateCredentialResponse,
+  TPMCertifyRequest,
+  TPMCertifyResponse,
 } from './types/tpm.js';
 
 // Device values: the server's network phase selector defaults and their resolver

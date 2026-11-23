@@ -66,6 +66,8 @@ import type {
   TPMMakeCredentialResponse,
   TPMActivateCredentialRequest,
   TPMActivateCredentialResponse,
+  TPMCertifyRequest,
+  TPMCertifyResponse,
   KeyAttributes,
   PCRBank,
   PCRBankName,
@@ -554,5 +556,20 @@ export class TPMService extends BaseService {
    */
   async activateCredential(request: TPMActivateCredentialRequest): Promise<ApiResponse<TPMActivateCredentialResponse>> {
     return this.client.post<TPMActivateCredentialResponse>(this.buildUrl('/activate-credential'), request);
+  }
+
+  // ===========================================================================
+  // Certify
+  // ===========================================================================
+
+  /**
+   * Certify a key (TPM2_Certify): the IAK signs that the key at keyHandle is
+   * loaded in this TPM. A refusal comes back as the error response.
+   *
+   * @param request - Persistent handle of the key, its password and a nonce
+   * @returns The signed attestation and both keys' public areas
+   */
+  async certify(request: TPMCertifyRequest): Promise<ApiResponse<TPMCertifyResponse>> {
+    return this.client.post<TPMCertifyResponse>(this.buildUrl('/certify'), request);
   }
 }
