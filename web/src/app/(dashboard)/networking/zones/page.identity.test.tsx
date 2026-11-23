@@ -28,6 +28,9 @@ vi.mock("@/components/ui/data-table-row-actions", () => ({
   ),
 }));
 
+// #2065: the page gates its controls on the server's capabilities; these cases have every op offered.
+vi.mock("@/hooks/use-capabilities", () => ({ useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }) }));
+
 // #2065: the page offers only the zone changes the server accepts. The
 // required built-ins (pkg/sdn/zone/defaults.go requiredBuiltins) are never
 // omitted, and an owner-defined zone needs an offset 9-99 and at least one

@@ -11,6 +11,9 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), back: vi.fn() }),
 }));
 
+// #2065: the page gates its controls on the server's capabilities; these cases have every op offered.
+vi.mock('@/hooks/use-capabilities', () => ({ useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }) }));
+
 const LIST_PATH = 'GET /api/v1/sdn/zones';
 const CREATE_PATH = 'POST /api/v1/sdn/zones';
 

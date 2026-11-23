@@ -28,6 +28,9 @@ vi.mock("@/components/ui/data-table-row-actions", () => ({
   ),
 }));
 
+// #2065: the page gates its controls on the server's capabilities; these cases have every op offered.
+vi.mock("@/hooks/use-capabilities", () => ({ useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }) }));
+
 // #2065: the page drives the network zones through client.sdn on the REST
 // zone shape (pkg/webservice/v1/rest/sdn/zones.go). These tests stub the
 // client's fetch with the {code,error,success,payload} envelopes the

@@ -30,6 +30,8 @@ import {
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { useSDN } from '@/hooks';
+import { Gated } from '@/components/features/capabilities/gated';
+import { useCapabilities } from '@/hooks/use-capabilities';
 import type { ApiResponse, NetworkZoneSpec } from 'trusted-platform-sdk';
 import { zoneChangeToast } from './zone-change';
 
@@ -260,6 +262,11 @@ function AllowToRow({
 export default function ZonesPage() {
   const { toast } = useToast();
   const sdn = useSDN();
+  const { loading: capsLoading, capability } = useCapabilities();
+  const listCap = capability('GET /api/v1/sdn/zones');
+  const createCap = capability('POST /api/v1/sdn/zones');
+  const updateCap = capability('PUT /api/v1/sdn/zones/{name}');
+  const deleteCap = capability('DELETE /api/v1/sdn/zones/{name}');
 
   const [zones, setZones] = React.useState<ZoneResponse[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -292,8 +299,10 @@ export default function ZonesPage() {
   }, [sdn]);
 
   React.useEffect(() => {
-    void fetchZones();
-  }, [fetchZones]);
+    if (!capsLoading && listCap.enabled) {
+      void fetchZones();
+    }
+  }, [fetchZones, capsLoading, listCap.enabled]);
 
   const zoneNames = React.useMemo(() => zones.map((z) => z.name), [zones]);
 
@@ -562,6 +571,8 @@ export default function ZonesPage() {
                 {
                   label: isBuiltin ? 'Override (Edit)' : 'Edit',
                   onClick: openEdit,
+                  disabled: !updateCap.enabled,
+                  title: updateCap.enabled ? undefined : updateCap.reason,
                 },
                 // The server never omits a required built-in (ErrOmitRequired).
                 ...(REQUIRED_BUILTIN_ZONES.has(zone.name)
@@ -572,6 +583,8 @@ export default function ZonesPage() {
                         onClick: openDeleteConfirm,
                         variant: 'destructive' as const,
                         separator: true,
+                        disabled: !deleteCap.enabled,
+                        title: deleteCap.enabled ? undefined : deleteCap.reason,
                       },
                     ]),
               ]}
@@ -580,7 +593,14 @@ export default function ZonesPage() {
         },
       },
     ],
-    [openEdit, openDeleteConfirm]
+    [
+      openEdit,
+      openDeleteConfirm,
+      updateCap.enabled,
+      updateCap.reason,
+      deleteCap.enabled,
+      deleteCap.reason,
+    ]
   );
 
   const stats = React.useMemo(
@@ -594,6 +614,32 @@ export default function ZonesPage() {
     [zones]
   );
 
+  if (!capsLoading && !listCap.enabled) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <h1 className="text-3xl font-bold">Network Zones</h1>
+          <Gated op="GET /api/v1/sdn/zones">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label="Refresh zones"
+              onClick={fetchZones}
+            >
+              <RefreshCw className="h-4 w-4" />
+            </Button>
+          </Gated>
+        </div>
+        <Alert data-testid="zones-unavailable">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Zones unavailable</AlertTitle>
+          <AlertDescription>{listCap.reason}</AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
   if (loadError && zones.length === 0) {
     return (
       <div className="container mx-auto py-6">
@@ -602,15 +648,17 @@ export default function ZonesPage() {
           <AlertTitle>Error Loading Zones</AlertTitle>
           <AlertDescription>
             {loadError}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="ml-4"
-              onClick={fetchZones}
-            >
-              Retry
-            </Button>
+            <Gated op="GET /api/v1/sdn/zones">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="ml-4"
+                onClick={fetchZones}
+              >
+                Retry
+              </Button>
+            </Gated>
           </AlertDescription>
         </Alert>
       </div>
@@ -640,19 +688,24 @@ export default function ZonesPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            onClick={fetchZones}
-            disabled={loading}
-          >
-            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          </Button>
-          <Button type="button" onClick={openCreate}>
-            <Plus className="mr-2 h-4 w-4" />
-            Create Zone
-          </Button>
+          <Gated op="GET /api/v1/sdn/zones">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label="Refresh zones"
+              onClick={fetchZones}
+              disabled={loading}
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            </Button>
+          </Gated>
+          <Gated op="POST /api/v1/sdn/zones">
+            <Button type="button" onClick={openCreate}>
+              <Plus className="mr-2 h-4 w-4" />
+              Create Zone
+            </Button>
+          </Gated>
         </div>
       </div>
 
@@ -962,14 +1015,16 @@ export default function ZonesPage() {
             <Button type="button" variant="outline" onClick={() => setFormOpen(false)}>
               Cancel
             </Button>
-            <Button
-              type="button"
-              disabled={(!editTarget && !form.name.trim()) || submitting || !identityOk}
-              onClick={handleSubmit}
-            >
-              {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {editTarget ? 'Save Changes' : 'Create Zone'}
-            </Button>
+            <Gated op={editTarget ? 'PUT /api/v1/sdn/zones/{name}' : 'POST /api/v1/sdn/zones'}>
+              <Button
+                type="button"
+                disabled={(!editTarget && !form.name.trim()) || submitting || !identityOk}
+                onClick={handleSubmit}
+              >
+                {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {editTarget ? 'Save Changes' : 'Create Zone'}
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1013,15 +1068,17 @@ export default function ZonesPage() {
             >
               Cancel
             </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              onClick={handleDelete}
-              disabled={deleting}
-            >
-              {deleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Delete
-            </Button>
+            <Gated op="DELETE /api/v1/sdn/zones/{name}">
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={handleDelete}
+                disabled={deleting}
+              >
+                {deleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Delete
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
