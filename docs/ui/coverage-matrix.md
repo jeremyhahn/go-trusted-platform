@@ -33,7 +33,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `AttestationService.GetDeviceReport` | - | `(dashboard)/devices/[id]/page.tsx` | - | `attest-cert-record.spec.ts`<br>`attestation-reports.spec.ts`<br>`devices.spec.ts` | covered |
 | `AttestationService.ListDeviceReports` | - | `(dashboard)/attestation/page.tsx`<br>`(dashboard)/devices/page.tsx` | - | `attestation-reports.spec.ts`<br>`dashboard.spec.ts`<br>`devices.spec.ts` (+1) | covered |
 | `AttestationService.RefreshDeviceReport` | - | `(dashboard)/devices/[id]/page.tsx`<br>`(dashboard)/devices/page.tsx` | - | `attest-cert-record.spec.ts`<br>`attestation-reports.spec.ts`<br>`dashboard.spec.ts` (+1) | covered |
-| `AttestationService.DescribeCallerPolicy` | - | - | - | - | missing |
+| `AttestationService.DescribeCallerPolicy` | `GET /callers` | `(dashboard)/attestation/callers/page.tsx` | - | `attestation-callers.spec.ts` | covered |
 | `AttestationService.StreamDeviceVerdicts` | - | - | - | - | not-UI: streaming plumbing |
 | `AttestationService.PollDeviceVerdicts` | - | - | - | - | missing |
 
@@ -729,7 +729,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Area (service) | Operations | covered | partial | missing | not-UI | blocked: integration |
 |---|---|---|---|---|---|---|
-| AttestationService | 16 | 6 | 1 | 8 | 1 | 0 |
+| AttestationService | 16 | 7 | 1 | 7 | 1 | 0 |
 | BarrierService | 5 | 0 | 0 | 0 | 5 | 0 |
 | BMCService | 23 | 0 | 0 | 23 | 0 | 0 |
 | CAService | 13 | 7 | 0 | 6 | 0 | 0 |
@@ -765,13 +765,13 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **122** | **61** | **265** | **50** | **31** |
+| **Total** | **529** | **123** | **61** | **264** | **50** | **31** |
 
 ## Proposed slices
 
 Each slice builds the missing pages and the missing specs for at most 15 operations of one area. `missing` rows need a page and a spec; `partial` rows need a spec, or the write added to an existing read-only page. Slices are listed in proto order; within an area, operations on the same resource stay together.
 
-1. **AttestationService: Manifest, AttestationQuote, HostAttestation, VMAttestation, ContainerAttestation, CallerPolicy…**: 9 operations (8 missing, 1 partial): VerifyManifest, DeleteManifest, GetAttestationQuote, VerifyAttestationQuote, CollectHostAttestation, CollectVMAttestation, CollectContainerAttestation, DescribeCallerPolicy, PollDeviceVerdicts.
+1. **AttestationService: Manifest, AttestationQuote, HostAttestation, VMAttestation, ContainerAttestation, DeviceVerdicts**: 8 operations (7 missing, 1 partial): VerifyManifest, DeleteManifest, GetAttestationQuote, VerifyAttestationQuote, CollectHostAttestation, CollectVMAttestation, CollectContainerAttestation, PollDeviceVerdicts.
 2. **BMCService (1/2): On, Off, Reset, Cycle, Status, BootDevice…**: 15 operations (15 missing, 0 partial): PowerOn, PowerOff, PowerReset, PowerCycle, PowerStatus, ProvisionStatus, SetBootDevice, GetBootDevice, MountISO, UnmountISO, VirtualMediaStatus, GetSensors, GetSystemInfo, Provision, GetWebCertificate.
 3. **BMCService (2/2): ReplaceWebCertificate, BMC, FactoryCert, User, UserPassword, UserPrivilege**: 8 operations (8 missing, 0 partial): ReplaceWebCertificate, EnrollBMC, RestoreFactoryCert, ListUsers, CreateUser, DeleteUser, SetUserPassword, SetUserPrivilege.
 4. **CAService: CAInfo, CA, CACertificate, CSR, Certificate**: 6 operations (6 missing, 0 partial): GetCAInfo, InitCA, InstallCACertificates, UninstallCACertificates, SignCSR, VerifyCertificate.
