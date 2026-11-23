@@ -153,6 +153,9 @@ export default function SDNPortsPage() {
 
   const isLoading = bridgesLoading || portsLoading;
   const error = bridgesError || portsError;
+  // platformd answers 503 when it runs without an SDN service (the cluster
+  // page's rule): that is a state of the server, not an error.
+  const notConfigured = bridgesError?.status === 503;
 
   const fetchPorts = useCallback(() => {
     refetchBridges();
@@ -420,6 +423,21 @@ export default function SDNPortsPage() {
       });
     }
   };
+
+  if (notConfigured) {
+    return (
+      <div className="container mx-auto py-6">
+        <Card data-testid="sdn-not-configured">
+          <CardHeader>
+            <CardTitle>SDN not configured</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">{bridgesError?.message}</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   // Show error state
   if (error) {
