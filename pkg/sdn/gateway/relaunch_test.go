@@ -259,13 +259,28 @@ func awaitRelaunch(t *testing.T, supervisor *process.Supervisor, launcher *gatew
 	// never met rather than only that the wait ran out.
 	var mu sync.Mutex
 	relaunched := false
+	launches := 0
 	health := make(map[string]error, len(services))
+	// The newest child past the first: a relaunch attempt that failed (a
+	// readiness or restore timeout on a loaded runner) is followed by
+	// another, and that one is the child that must come up.
+	latest := func() *gatewayChild {
+		launcher.mu.Lock()
+		defer launcher.mu.Unlock()
+		if len(launcher.children) < 2 {
+			return nil
+		}
+		return launcher.children[len(launcher.children)-1]
+	}
 	up := func() bool {
-		child := launcher.child(2)
+		child := latest()
 		ok := child != nil
 		mu.Lock()
 		defer mu.Unlock()
 		relaunched = child != nil
+		launcher.mu.Lock()
+		launches = len(launcher.children)
+		launcher.mu.Unlock()
 		for _, service := range services {
 			err := supervisor.ServiceHealth(service)
 			health[service] = err
@@ -279,7 +294,7 @@ func awaitRelaunch(t *testing.T, supervisor *process.Supervisor, launcher *gatew
 		mu.Lock()
 		defer mu.Unlock()
 		var b strings.Builder
-		fmt.Fprintf(&b, "the relaunched child is reported up once it holds its document: launcher.child(2) exists=%t", relaunched)
+		fmt.Fprintf(&b, "the relaunched child is reported up once it holds its document: a child past the first exists=%t (launches=%d)", relaunched, launches)
 		for _, service := range services {
 			fmt.Fprintf(&b, "; %s health: %v", service, health[service])
 		}
@@ -292,7 +307,7 @@ func awaitRelaunch(t *testing.T, supervisor *process.Supervisor, launcher *gatew
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	return launcher.child(2)
+	return latest()
 }
 
 func TestSupervisedRelaunch_TheNewChildHoldsTheDesiredVIPsAndDNATRules(t *testing.T) {
@@ -374,15 +389,21 @@ func TestSupervisedRelaunch_AKilledVPNChildKeepsItsLeasesAndPendingRevocations(t
 	journal := filepath.Join(stateDir, "pending-revocations.json")
 	control := gateway.NewDeleteRefusingLeaseControl()
 	// Built here, on the test goroutine, and handed out one per launch.
-	gateways := make(chan *gateway.Gateway, 2)
-	gateways <- gateway.NewVPNChildGateway(t, control, journal)
-	gateways <- gateway.NewVPNChildGateway(t, control, journal)
+	// The first launch and the relaunch need two; the spares let the
+	// supervisor's retry of a relaunch attempt that failed (a readiness or
+	// restore timeout on a loaded runner) launch a child rather than fail
+	// for want of a gateway on every later attempt.
+	const relaunchGateways = 6
+	gateways := make(chan *gateway.Gateway, relaunchGateways)
+	for range relaunchGateways {
+		gateways <- gateway.NewVPNChildGateway(t, control, journal)
+	}
 	launcher := &gatewayLauncher{t: t, build: func() (*gateway.Gateway, error) {
 		select {
 		case gw := <-gateways:
 			return gw, nil
 		default:
-			return nil, errors.New("no gateway left for a third launch")
+			return nil, errors.New("no gateway left for another launch")
 		}
 	}}
 	supervisor := newRelaunchSupervisor(t, launcher, process.Inherited{DataDir: dataDir})
