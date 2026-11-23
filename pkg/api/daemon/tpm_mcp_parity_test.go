@@ -114,6 +114,8 @@ func TestTPMParity_IAK(t *testing.T) {
 		if got := string(resp.GetName()); got != "iak-name" {
 			t.Fatalf("GetAK name = %q, want %q (#2069)", got, "iak-name")
 		}
+		assert.Equal(t, base64.StdEncoding.EncodeToString(resp.GetName()), answer["name"], "MCP TPMGetIAK answers the AK name (#2069)")
+		assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("iak-name")), answer["name"])
 	})
 
 	t.Run("absent", func(t *testing.T) {
