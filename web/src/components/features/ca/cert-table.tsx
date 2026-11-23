@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import type { Certificate } from "@/types/security";
 import type { TypedFilterColumn, TypedRowAction } from "@/components/ui/data-table.types";
 import { RefreshCw, Download, Eye, XCircle } from "lucide-react";
+import { useCapabilities } from "@/hooks/use-capabilities";
 
 interface CertTableProps {
   certificates: Certificate[];
@@ -27,6 +28,7 @@ interface CertTableProps {
  * - Filter by type and status
  * - Row actions (view, download, revoke, renew)
  * - Status badges with semantic colors
+ * - Renew and Revoke are gated on the server's capabilities (#2033, #2041)
  */
 export function CertTable({
   certificates,
@@ -36,6 +38,9 @@ export function CertTable({
   onRenew,
   loading = false,
 }: CertTableProps) {
+  const capabilities = useCapabilities();
+  const renewCap = capabilities.capability("POST /api/v1/ca/certificates/{serial}/renew");
+  const revokeCap = capabilities.capability("DELETE /api/v1/ca/certificates/{serial}");
   const columns: ColumnDef<Certificate>[] = React.useMemo(
     () => [
       createSelectColumn<Certificate>(),
@@ -157,6 +162,8 @@ export function CertTable({
               onClick: onRenew,
               icon: RefreshCw,
               separator: actions.length > 0,
+              disabled: !renewCap.enabled,
+              title: renewCap.enabled ? undefined : renewCap.reason,
             });
           }
 
@@ -167,6 +174,8 @@ export function CertTable({
               variant: "destructive",
               icon: XCircle,
               separator: true,
+              disabled: !revokeCap.enabled,
+              title: revokeCap.enabled ? undefined : revokeCap.reason,
             });
           }
 
@@ -174,7 +183,16 @@ export function CertTable({
         },
       },
     ],
-    [onView, onDownload, onRevoke, onRenew]
+    [
+      onView,
+      onDownload,
+      onRevoke,
+      onRenew,
+      renewCap.enabled,
+      renewCap.reason,
+      revokeCap.enabled,
+      revokeCap.reason,
+    ]
   );
 
   const filterableColumns: TypedFilterColumn<Certificate>[] = [
