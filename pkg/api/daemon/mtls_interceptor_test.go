@@ -29,6 +29,8 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -478,6 +480,7 @@ func TestMTLSUnaryInterceptorSuccess(t *testing.T) {
 			},
 		},
 		Logger: logging.DefaultLogger(),
+		PEP:    mtlsAllowingPEP("test-client", "acme-corp", "platform", "admin", nil),
 	}
 
 	interceptor := MTLSUnaryInterceptor(cfg)
@@ -501,7 +504,7 @@ func TestMTLSUnaryInterceptorSuccess(t *testing.T) {
 	}
 
 	info := &grpc.UnaryServerInfo{
-		FullMethod: "/platform.Daemon/Shutdown",
+		FullMethod: mtlsPEPTestMethod,
 	}
 
 	cert := generateTestCert("test-client")
@@ -711,6 +714,7 @@ func TestMTLSStreamInterceptorSuccess(t *testing.T) {
 			},
 		},
 		Logger: logging.DefaultLogger(),
+		PEP:    mtlsAllowingPEP("stream-client", "stream-tenant", "platform", "read", nil),
 	}
 
 	interceptor := MTLSStreamInterceptor(cfg)
@@ -734,7 +738,7 @@ func TestMTLSStreamInterceptorSuccess(t *testing.T) {
 	}
 
 	info := &grpc.StreamServerInfo{
-		FullMethod: "/platform.Daemon/StreamEvents",
+		FullMethod: mtlsPEPTestStreamMethod,
 	}
 
 	cert := generateTestCert("stream-client")
@@ -1119,5 +1123,155 @@ func TestExtractClientCertsMultipleVerifiedChains(t *testing.T) {
 	}
 	if certs[0].Subject.CommonName != "chain1-leaf" {
 		t.Errorf("first cert CN = %q, want %q", certs[0].Subject.CommonName, "chain1-leaf")
+	}
+}
+
+// mtlsPEPTestMethod is a catalogued gRPC method whose permission is
+// platform:admin in pkg/api/grpc/method_permissions.go.
+const mtlsPEPTestMethod = "/platform.v1.PlatformDaemon/Shutdown"
+
+// mtlsPEPTestStreamMethod is a catalogued streaming method whose permission
+// is platform:read.
+const mtlsPEPTestStreamMethod = "/platform.v1.PlatformDaemon/StreamEvents"
+
+// mtlsPEPTestConfig builds an interceptor config whose authenticator returns
+// the given identity and whose PEP is pep.
+func mtlsPEPTestConfig(identity *auth.Identity, pep *mockSDKPEPClient) *MTLSInterceptorConfig {
+	cfg := &MTLSInterceptorConfig{
+		Authenticator: &mockAuthenticator{
+			authenticateFunc: func(ctx context.Context, cert *x509.Certificate) (*auth.Identity, error) {
+				return identity, nil
+			},
+		},
+		Logger: logging.DefaultLogger(),
+	}
+	if pep != nil {
+		cfg.PEP = pep
+	}
+	return cfg
+}
+
+// mtlsAllowingPEP allows exactly the subject, tenant, resource and action given
+// and records the last request it saw.
+func mtlsAllowingPEP(subject, tenant, resource, action string, seen **sdkiam.CheckRequest) *mockSDKPEPClient {
+	return &mockSDKPEPClient{
+		checkFunc: func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+			if seen != nil {
+				*seen = req
+			}
+			allowed := req.Subject.ID == subject && req.Subject.TenantID == tenant &&
+				req.Resource == resource && req.Action == action
+			return &sdkiam.CheckResponse{Allowed: allowed}, nil
+		},
+	}
+}
+
+func TestMTLSUnaryInterceptor_PrincipalWithoutMethodPermissionIsDenied(t *testing.T) {
+	identity := &auth.Identity{ID: "reader", TenantID: "acme-corp"}
+	// The PEP grants platform:read only; Shutdown needs platform:admin.
+	pep := mtlsAllowingPEP("reader", "acme-corp", "platform", "read", nil)
+	interceptor := MTLSUnaryInterceptor(mtlsPEPTestConfig(identity, pep))
+
+	handlerCalled := false
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		handlerCalled = true
+		return "ok", nil
+	}
+	ctx := createTLSPeerContext(generateTestCert("reader"))
+	_, err := interceptor(ctx, "req", &grpc.UnaryServerInfo{FullMethod: mtlsPEPTestMethod}, handler)
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("code = %v (err %v), want PermissionDenied", status.Code(err), err)
+	}
+	if handlerCalled {
+		t.Fatal("handler ran for a principal without the method permission")
+	}
+}
+
+func TestMTLSUnaryInterceptor_PrincipalWithMethodPermissionSucceeds(t *testing.T) {
+	identity := &auth.Identity{ID: "operator", TenantID: "acme-corp"}
+	var seen *sdkiam.CheckRequest
+	pep := mtlsAllowingPEP("operator", "acme-corp", "platform", "admin", &seen)
+	interceptor := MTLSUnaryInterceptor(mtlsPEPTestConfig(identity, pep))
+
+	handlerCalled := false
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		handlerCalled = true
+		if got := IdentityFromContext(ctx); got == nil || got.ID != "operator" {
+			t.Errorf("identity in context = %v, want operator", got)
+		}
+		return "ok", nil
+	}
+	ctx := createTLSPeerContext(generateTestCert("operator"))
+	resp, err := interceptor(ctx, "req", &grpc.UnaryServerInfo{FullMethod: mtlsPEPTestMethod}, handler)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !handlerCalled || resp != "ok" {
+		t.Fatalf("handler called = %v, resp = %v; want the handler's response", handlerCalled, resp)
+	}
+	if seen == nil || seen.Resource != "platform" || seen.Action != "admin" {
+		t.Fatalf("PEP request = %+v, want resource platform action admin", seen)
+	}
+
+	// A method with no catalog entry is denied even for this principal.
+	handlerCalled = false
+	_, err = interceptor(ctx, "req", &grpc.UnaryServerInfo{FullMethod: "/platform.v1.PlatformDaemon/NotInCatalog"}, handler)
+	if status.Code(err) != codes.PermissionDenied || handlerCalled {
+		t.Fatalf("unclassified method: code = %v, handler called = %v; want PermissionDenied and no handler", status.Code(err), handlerCalled)
+	}
+}
+
+func TestMTLSStreamInterceptor_PrincipalWithoutMethodPermissionIsDenied(t *testing.T) {
+	identity := &auth.Identity{ID: "nobody", TenantID: "acme-corp"}
+	// The PEP grants this principal nothing.
+	pep := mtlsAllowingPEP("someone-else", "acme-corp", "platform", "read", nil)
+	interceptor := MTLSStreamInterceptor(mtlsPEPTestConfig(identity, pep))
+
+	handlerCalled := false
+	handler := func(srv interface{}, stream grpc.ServerStream) error {
+		handlerCalled = true
+		return nil
+	}
+	ss := &mockServerStream{ctx: createTLSPeerContext(generateTestCert("nobody"))}
+	err := interceptor(nil, ss, &grpc.StreamServerInfo{FullMethod: mtlsPEPTestStreamMethod}, handler)
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("code = %v (err %v), want PermissionDenied", status.Code(err), err)
+	}
+	if handlerCalled {
+		t.Fatal("handler ran for a principal without the method permission")
+	}
+}
+
+func TestMTLSUnaryInterceptor_NilPEPFailsClosed(t *testing.T) {
+	identity := &auth.Identity{ID: "operator", TenantID: "acme-corp"}
+	interceptor := MTLSUnaryInterceptor(mtlsPEPTestConfig(identity, nil))
+
+	handlerCalled := false
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		handlerCalled = true
+		return "ok", nil
+	}
+	ctx := createTLSPeerContext(generateTestCert("operator"))
+	_, err := interceptor(ctx, "req", &grpc.UnaryServerInfo{FullMethod: mtlsPEPTestMethod}, handler)
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("nil PEP: code = %v (err %v), want Unavailable", status.Code(err), err)
+	}
+	if handlerCalled {
+		t.Fatal("handler ran without a PEP")
+	}
+
+	// A PEP that errors fails closed the same way.
+	failing := &mockSDKPEPClient{
+		checkFunc: func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+			return nil, errors.New("pep unreachable")
+		},
+	}
+	interceptor = MTLSUnaryInterceptor(mtlsPEPTestConfig(identity, failing))
+	_, err = interceptor(ctx, "req", &grpc.UnaryServerInfo{FullMethod: mtlsPEPTestMethod}, handler)
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("failing PEP: code = %v (err %v), want Unavailable", status.Code(err), err)
+	}
+	if handlerCalled {
+		t.Fatal("handler ran when the PEP could not answer")
 	}
 }
