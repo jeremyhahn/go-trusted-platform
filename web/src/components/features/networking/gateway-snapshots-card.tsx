@@ -11,6 +11,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { Gated } from '@/components/features/capabilities/gated';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -65,9 +66,11 @@ export function GatewaySnapshotsCard() {
           <CardTitle>Gateway snapshots</CardTitle>
           <CardDescription>The last state each gateway reported.</CardDescription>
         </div>
-        <Button variant="outline" disabled={busy} onClick={() => void reload()}>
-          Refresh
-        </Button>
+        <Gated op="GET /api/v1/gateway/state">
+          <Button variant="outline" disabled={busy} onClick={() => void reload()}>
+            Refresh
+          </Button>
+        </Gated>
       </CardHeader>
       <CardContent className="space-y-4">
         {snapshots !== null && snapshots.length === 0 ? (
@@ -91,15 +94,17 @@ export function GatewaySnapshotsCard() {
                   <TableCell>{s.mode ?? '-'}</TableCell>
                   <TableCell>{s.reported_at}</TableCell>
                   <TableCell>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      aria-label={`View ${s.gateway_id}`}
-                      disabled={busy}
-                      onClick={() => void view(s.gateway_id)}
-                    >
-                      View
-                    </Button>
+                    <Gated op="GET /api/v1/gateway/state/{id}">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        aria-label={`View ${s.gateway_id}`}
+                        disabled={busy}
+                        onClick={() => void view(s.gateway_id)}
+                      >
+                        View
+                      </Button>
+                    </Gated>
                   </TableCell>
                 </TableRow>
               ))}
