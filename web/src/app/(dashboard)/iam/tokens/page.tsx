@@ -5,7 +5,7 @@
  *
  * Displays and manages API tokens with generation and revocation.
  * Uses the trusted-platform-sdk for API interactions.
- * Register Application is gated on the server's POST /api/v1/iam/tenants/{tenant}/apps capability (#2033, #2054).
+ * Register Application, the row Rotate Secret and the row Delete are gated on the server's capabilities (#2033, #2054).
  */
 
 import React, { useState, useMemo, useCallback } from 'react';
@@ -32,6 +32,7 @@ import { Label } from '@/components/ui/label';
 import { Plus, Key, Clock, AlertCircle, Loader2, Copy, Check } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Gated } from '@/components/features/capabilities/gated';
+import { useCapabilities } from '@/hooks/use-capabilities';
 
 /**
  * Display type for applications used as API tokens
@@ -49,6 +50,9 @@ interface DisplayApplication {
 export default function TokensPage() {
   const { toast } = useToast();
   const { tenantId, isLoading: authLoading } = useAuth();
+  const capabilities = useCapabilities();
+  const rotateCap = capabilities.capability('POST /api/v1/iam/tenants/{tenant}/apps/{id}/rotate');
+  const deleteCap = capabilities.capability('DELETE /api/v1/iam/tenants/{tenant}/apps/{id}');
   const iam = useIAM();
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [displaySecret, setDisplaySecret] = useState<{
@@ -195,12 +199,14 @@ export default function TokensPage() {
   );
 
   const handleDelete = useCallback((app: DisplayApplication) => {
+    if (!deleteCap.enabled) return;
     if (window.confirm(`Are you sure you want to delete "${app.name}"?`)) {
       deleteAppMutation.mutate(app.clientId);
     }
-  }, [deleteAppMutation]);
+  }, [deleteAppMutation, deleteCap.enabled]);
 
   const handleRotateSecret = useCallback((app: DisplayApplication) => {
+    if (!rotateCap.enabled) return;
     if (
       window.confirm(
         `Are you sure you want to rotate the secret for "${app.name}"? The old secret will stop working immediately.`
@@ -208,7 +214,7 @@ export default function TokensPage() {
     ) {
       rotateSecretMutation.mutate(app.clientId);
     }
-  }, [rotateSecretMutation]);
+  }, [rotateSecretMutation, rotateCap.enabled]);
 
   const handleBulkDelete = useCallback(async (appsToDelete: DisplayApplication[]) => {
     if (!tenantId) {
@@ -344,19 +350,30 @@ export default function TokensPage() {
               {
                 label: 'Rotate Secret',
                 onClick: () => handleRotateSecret(app),
+                disabled: !rotateCap.enabled,
+                title: rotateCap.enabled ? undefined : rotateCap.reason,
               },
               {
                 label: 'Delete',
                 onClick: () => handleDelete(app),
                 variant: 'destructive',
                 separator: true,
+                disabled: !deleteCap.enabled,
+                title: deleteCap.enabled ? undefined : deleteCap.reason,
               },
             ]}
           />
         );
       },
     },
-  ], [handleRotateSecret, handleDelete]);
+  ], [
+    handleRotateSecret,
+    handleDelete,
+    rotateCap.enabled,
+    rotateCap.reason,
+    deleteCap.enabled,
+    deleteCap.reason,
+  ]);
 
   // Show auth loading state
   if (authLoading) {

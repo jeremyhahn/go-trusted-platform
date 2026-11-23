@@ -25,6 +25,7 @@ import {
 import { useEAB, useEABList } from "@/hooks";
 import { parseExpiresIn } from "@/utils/eab-expiry";
 import { normalizeEABStatus } from "@/utils/eab-status";
+import { Gated } from "@/components/features/capabilities/gated";
 import type {
   CreateEABCredentialResponse,
   EABCredentialSummary,
@@ -53,6 +54,7 @@ function statusVariant(status: string): "default" | "secondary" | "destructive" 
   }
 }
 
+// Every control is gated on the server's capabilities (#2050).
 export default function EABCredentialsPage() {
   const eab = useEAB();
   const list = useEABList();
@@ -193,14 +195,18 @@ export default function EABCredentialsPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={handleCleanup}>
-            <Trash2 className="mr-2 h-4 w-4" />
-            Clean Up Expired
-          </Button>
-          <Button variant="outline" onClick={() => void list.refetch()} disabled={list.isFetching}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${list.isFetching ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
+          <Gated op="POST /api/v1/eab/credentials/cleanup">
+            <Button variant="outline" onClick={handleCleanup}>
+              <Trash2 className="mr-2 h-4 w-4" />
+              Clean Up Expired
+            </Button>
+          </Gated>
+          <Gated op="GET /api/v1/eab/credentials">
+            <Button variant="outline" onClick={() => void list.refetch()} disabled={list.isFetching}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${list.isFetching ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          </Gated>
         </div>
       </div>
 
@@ -263,17 +269,21 @@ export default function EABCredentialsPage() {
                   </TableCell>
                   <TableCell>{cred.expiresAt}</TableCell>
                   <TableCell className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={normalizeEABStatus(cred.status) !== "ACTIVE"}
-                      onClick={() => handleRevoke(cred.id)}
-                    >
-                      Revoke
-                    </Button>
-                    <Button size="sm" variant="destructive" onClick={() => handleDelete(cred.id)}>
-                      Delete
-                    </Button>
+                    <Gated op="POST /api/v1/eab/credentials/{id:[0-9]+}/revoke">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={normalizeEABStatus(cred.status) !== "ACTIVE"}
+                        onClick={() => handleRevoke(cred.id)}
+                      >
+                        Revoke
+                      </Button>
+                    </Gated>
+                    <Gated op="DELETE /api/v1/eab/credentials/{id:[0-9]+}">
+                      <Button size="sm" variant="destructive" onClick={() => handleDelete(cred.id)}>
+                        Delete
+                      </Button>
+                    </Gated>
                   </TableCell>
                 </TableRow>
               ))}
@@ -319,7 +329,9 @@ export default function EABCredentialsPage() {
                   onChange={(e) => setExpiresIn(e.target.value)}
                 />
               </div>
-              <Button type="submit">Create</Button>
+              <Gated op="POST /api/v1/eab/credentials">
+                <Button type="submit">Create</Button>
+              </Gated>
             </form>
             {created?.credential && (
               <div className="mt-4 space-y-1 text-sm" data-testid="eab-created">
@@ -359,7 +371,9 @@ export default function EABCredentialsPage() {
                   onChange={(e) => editValidate(setValidateHmac, e.target.value)}
                 />
               </div>
-              <Button type="submit">Validate</Button>
+              <Gated op="POST /api/v1/eab/credentials/validate">
+                <Button type="submit">Validate</Button>
+              </Gated>
             </form>
             {validation && (
               <div className="mt-4" data-testid="eab-validation">
@@ -386,7 +400,9 @@ export default function EABCredentialsPage() {
                   onChange={(e) => setLookupKeyId(e.target.value)}
                 />
               </div>
-              <Button type="submit">Look Up</Button>
+              <Gated op="GET /api/v1/eab/credentials/key/{key}">
+                <Button type="submit">Look Up</Button>
+              </Gated>
             </form>
             {lookupResult && (
               <div className="mt-4 space-y-1 text-sm" data-testid="eab-lookup-result">
