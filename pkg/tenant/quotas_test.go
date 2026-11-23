@@ -877,3 +877,245 @@ func TestStorageQuota_LargeValues(t *testing.T) {
 		t.Error("Should not have capacity for 2 GB")
 	}
 }
+
+// TestComputeQuota_OverflowIsRefused checks that every compute resource
+// compares a request against the remaining capacity, so a request of
+// math.MaxInt64 cannot wrap Used+n negative and be admitted.
+func TestComputeQuota_OverflowIsRefused(t *testing.T) {
+	newQuota := func() *ComputeQuota {
+		return &ComputeQuota{MaxVMs: 2, MaxContainers: 2, MaxVCPUs: 2, MaxMemoryMB: 2, MaxDiskGB: 2,
+			UsedVMs: 1, UsedContainers: 1, UsedVCPUs: 1, UsedMemoryMB: 1, UsedDiskGB: 1}
+	}
+	fields := func(q *ComputeQuota) (max, used [5]*int64) {
+		return [5]*int64{&q.MaxVMs, &q.MaxContainers, &q.MaxVCPUs, &q.MaxMemoryMB, &q.MaxDiskGB},
+			[5]*int64{&q.UsedVMs, &q.UsedContainers, &q.UsedVCPUs, &q.UsedMemoryMB, &q.UsedDiskGB}
+	}
+	usedValues := func(q *ComputeQuota) [5]int64 {
+		_, used := fields(q)
+		var out [5]int64
+		for i, p := range used {
+			out[i] = *p
+		}
+		return out
+	}
+	tests := []struct {
+		resource string
+		counts   [5]int64
+	}{
+		{"VMs", [5]int64{math.MaxInt64, 0, 0, 0, 0}},
+		{"containers", [5]int64{0, math.MaxInt64, 0, 0, 0}},
+		{"vCPUs", [5]int64{0, 0, math.MaxInt64, 0, 0}},
+		{"memory", [5]int64{0, 0, 0, math.MaxInt64, 0}},
+		{"disk", [5]int64{0, 0, 0, 0, math.MaxInt64}},
+	}
+	// scaled returns the row's request with math.MaxInt64 replaced by n.
+	scaled := func(c [5]int64, n int64) [5]int64 {
+		for i := range c {
+			if c[i] != 0 {
+				c[i] = n
+			}
+		}
+		return c
+	}
+	idx := func(c [5]int64) int {
+		for i := range c {
+			if c[i] != 0 {
+				return i
+			}
+		}
+		return -1
+	}
+	refused := func(t *testing.T, q *ComputeQuota, resource string, c [5]int64, requested, available int64) {
+		t.Helper()
+		before := usedValues(q)
+		if q.HasCapacity(c[0], c[1], c[2], c[3], c[4]) {
+			t.Errorf("HasCapacity(%v) = true, want false", c)
+		}
+		err := q.Reserve("acme", c[0], c[1], c[2], c[3], c[4])
+		var qe ErrQuotaExceeded
+		if !errors.As(err, &qe) {
+			t.Fatalf("Reserve(%v) error = %v, want ErrQuotaExceeded", c, err)
+		}
+		if qe.Resource != resource || qe.Requested != requested || qe.Available != available {
+			t.Errorf("Reserve(%v) = {Resource %q, Requested %d, Available %d}, want {%q, %d, %d}",
+				c, qe.Resource, qe.Requested, qe.Available, resource, requested, available)
+		}
+		if after := usedValues(q); after != before {
+			t.Errorf("Reserve(%v) changed usage from %v to %v", c, before, after)
+		}
+	}
+	for _, tt := range tests {
+		t.Run(tt.resource, func(t *testing.T) {
+			i := idx(tt.counts)
+
+			t.Run("MaxInt64 refused", func(t *testing.T) {
+				q := newQuota()
+				refused(t, q, tt.resource, tt.counts, math.MaxInt64, 1)
+				if got := usedValues(q); got != [5]int64{1, 1, 1, 1, 1} {
+					t.Errorf("usage = %v, want all 1", got)
+				}
+			})
+
+			t.Run("exactly remaining accepted", func(t *testing.T) {
+				q := newQuota()
+				c := scaled(tt.counts, 1)
+				if !q.HasCapacity(c[0], c[1], c[2], c[3], c[4]) {
+					t.Errorf("HasCapacity(%v) = false, want true", c)
+				}
+				if err := q.Reserve("acme", c[0], c[1], c[2], c[3], c[4]); err != nil {
+					t.Fatalf("Reserve(%v) error = %v, want nil", c, err)
+				}
+				if got := usedValues(q)[i]; got != 2 {
+					t.Errorf("used %s = %d, want 2", tt.resource, got)
+				}
+			})
+
+			t.Run("more than remaining refused", func(t *testing.T) {
+				q := newQuota()
+				refused(t, q, tt.resource, scaled(tt.counts, 2), 2, 1)
+			})
+
+			t.Run("over limit refused", func(t *testing.T) {
+				for _, n := range []int64{1, math.MaxInt64} {
+					q := newQuota()
+					max, used := fields(q)
+					*max[i], *used[i] = 1, 3
+					refused(t, q, tt.resource, scaled(tt.counts, n), n, 0)
+				}
+			})
+		})
+	}
+}
+
+// pairQuota adapts a two-resource quota (network or storage) for
+// checkPairOverflowIsRefused.
+type pairQuota struct {
+	hasCapacity func(a, b int64) bool
+	reserve     func(tenantID string, a, b int64) error
+	max, used   [2]*int64
+}
+
+// checkPairOverflowIsRefused runs the overflow and boundary cases shared by
+// the network and storage quotas. newQuota must return a quota with Max 2 and
+// Used 1 for both resources.
+func checkPairOverflowIsRefused(t *testing.T, newQuota func() pairQuota, tests []struct {
+	resource string
+	counts   [2]int64
+}) {
+	t.Helper()
+	usedValues := func(q pairQuota) [2]int64 { return [2]int64{*q.used[0], *q.used[1]} }
+	scaled := func(c [2]int64, n int64) [2]int64 {
+		for i := range c {
+			if c[i] != 0 {
+				c[i] = n
+			}
+		}
+		return c
+	}
+	refused := func(t *testing.T, q pairQuota, resource string, c [2]int64, requested, available int64) {
+		t.Helper()
+		before := usedValues(q)
+		if q.hasCapacity(c[0], c[1]) {
+			t.Errorf("HasCapacity(%v) = true, want false", c)
+		}
+		err := q.reserve("acme", c[0], c[1])
+		var qe ErrQuotaExceeded
+		if !errors.As(err, &qe) {
+			t.Fatalf("Reserve(%v) error = %v, want ErrQuotaExceeded", c, err)
+		}
+		if qe.Resource != resource || qe.Requested != requested || qe.Available != available {
+			t.Errorf("Reserve(%v) = {Resource %q, Requested %d, Available %d}, want {%q, %d, %d}",
+				c, qe.Resource, qe.Requested, qe.Available, resource, requested, available)
+		}
+		if after := usedValues(q); after != before {
+			t.Errorf("Reserve(%v) changed usage from %v to %v", c, before, after)
+		}
+	}
+	for _, tt := range tests {
+		t.Run(tt.resource, func(t *testing.T) {
+			i := 0
+			if tt.counts[0] == 0 {
+				i = 1
+			}
+
+			t.Run("MaxInt64 refused", func(t *testing.T) {
+				q := newQuota()
+				refused(t, q, tt.resource, tt.counts, math.MaxInt64, 1)
+				if got := usedValues(q); got != [2]int64{1, 1} {
+					t.Errorf("usage = %v, want all 1", got)
+				}
+			})
+
+			t.Run("exactly remaining accepted", func(t *testing.T) {
+				q := newQuota()
+				c := scaled(tt.counts, 1)
+				if !q.hasCapacity(c[0], c[1]) {
+					t.Errorf("HasCapacity(%v) = false, want true", c)
+				}
+				if err := q.reserve("acme", c[0], c[1]); err != nil {
+					t.Fatalf("Reserve(%v) error = %v, want nil", c, err)
+				}
+				if got := usedValues(q)[i]; got != 2 {
+					t.Errorf("used %s = %d, want 2", tt.resource, got)
+				}
+			})
+
+			t.Run("more than remaining refused", func(t *testing.T) {
+				q := newQuota()
+				refused(t, q, tt.resource, scaled(tt.counts, 2), 2, 1)
+			})
+
+			t.Run("over limit refused", func(t *testing.T) {
+				for _, n := range []int64{1, math.MaxInt64} {
+					q := newQuota()
+					*q.max[i], *q.used[i] = 1, 3
+					refused(t, q, tt.resource, scaled(tt.counts, n), n, 0)
+				}
+			})
+		})
+	}
+}
+
+// TestNetworkQuota_OverflowIsRefused checks that bridges and ports compare a
+// request against the remaining capacity, so math.MaxInt64 cannot wrap
+// Used+n negative and be admitted.
+func TestNetworkQuota_OverflowIsRefused(t *testing.T) {
+	newQuota := func() pairQuota {
+		q := &NetworkQuota{MaxBridges: 2, MaxPorts: 2, UsedBridges: 1, UsedPorts: 1}
+		return pairQuota{
+			hasCapacity: q.HasCapacity,
+			reserve:     q.Reserve,
+			max:         [2]*int64{&q.MaxBridges, &q.MaxPorts},
+			used:        [2]*int64{&q.UsedBridges, &q.UsedPorts},
+		}
+	}
+	checkPairOverflowIsRefused(t, newQuota, []struct {
+		resource string
+		counts   [2]int64
+	}{
+		{"bridges", [2]int64{math.MaxInt64, 0}},
+		{"ports", [2]int64{0, math.MaxInt64}},
+	})
+}
+
+// TestStorageQuota_OverflowIsRefused checks that volume storage and snapshots
+// compare a request against the remaining capacity, so math.MaxInt64 cannot
+// wrap Used+n negative and be admitted.
+func TestStorageQuota_OverflowIsRefused(t *testing.T) {
+	newQuota := func() pairQuota {
+		q := &StorageQuota{MaxVolumesGB: 2, MaxSnapshots: 2, UsedVolumesGB: 1, UsedSnapshots: 1}
+		return pairQuota{
+			hasCapacity: q.HasCapacity,
+			reserve:     q.Reserve,
+			max:         [2]*int64{&q.MaxVolumesGB, &q.MaxSnapshots},
+			used:        [2]*int64{&q.UsedVolumesGB, &q.UsedSnapshots},
+		}
+	}
+	checkPairOverflowIsRefused(t, newQuota, []struct {
+		resource string
+		counts   [2]int64
+	}{
+		{"volume storage", [2]int64{math.MaxInt64, 0}},
+		{"snapshots", [2]int64{0, math.MaxInt64}},
+	})
+}
