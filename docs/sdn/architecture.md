@@ -534,6 +534,7 @@ overrides) and the resolved zone set, and returns an immutable `Plan`:
 | The reserved, never-allocatable ranges | gateway HA sync `/31`, host services, every gateway address |
 | A port class's VLANs | the zones that are members of the class |
 | An overlay network's VNI | `E·100000+n` |
+| Whether a tenant's own subnet fits its VRF | CheckTenantSubnet: network prefix, IPv4 /30 or wider, IPv6 /64 or wider, unicast, clear of the reserved ranges and the service VIP pool |
 
 `sdn.Config.Validate` resolves the zones, validates them and builds the plan;
 `Config.Plan()` hands it to the policy engine, the gateway runtime, the

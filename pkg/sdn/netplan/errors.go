@@ -187,3 +187,16 @@ type ErrEmptyPortClass struct {
 func (e ErrEmptyPortClass) Error() string {
 	return fmt.Sprintf("netplan: port class %q carries no zone in this plan", e.Class)
 }
+
+// ErrTenantSubnet reports a tenant's own subnet that cannot live in the
+// tenant's VRF.
+type ErrTenantSubnet struct {
+	// Subnet is the refused subnet.
+	Subnet netip.Prefix
+	// Reason says why it is refused.
+	Reason string
+}
+
+func (e ErrTenantSubnet) Error() string {
+	return fmt.Sprintf("netplan: tenant subnet %s %s", e.Subnet, e.Reason)
+}
