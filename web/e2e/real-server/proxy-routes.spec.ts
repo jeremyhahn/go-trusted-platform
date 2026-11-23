@@ -11,6 +11,11 @@ import { unwrapPayload, wireCount } from './fixtures/wire';
  * the server's capability answer first and asserts the enabled control or
  * the disabled one with the server's reason. The seeded pool and route come
  * from platformd.test.yaml (pool control-plane-console, route console).
+ *
+ * The proxy API is system-tenant only (pkg/webservice/v1/router.go,
+ * proxyRoutes requires the system tenant), so the cases run as the
+ * system-tenant admin (systemAdminPage, systemSdk), and one case asserts a
+ * tenant admin is refused with 403.
  */
 
 /** The data of a successful SDK answer; fails the test on an error answer. */
@@ -51,7 +56,7 @@ const UPDATE = 'PUT /api/v1/proxy/routes/{id}';
 const DELETE = 'DELETE /api/v1/proxy/routes/{id}';
 
 test.describe('proxy routes against the real platformd (#2061)', () => {
-  test('lists the routes the server answers', async ({ adminPage, sdk }) => {
+  test('lists the routes the server answers', async ({ systemAdminPage: adminPage, systemSdk: sdk }) => {
     const caps = sdkData(await sdk.capabilities.list(), 'capabilities');
     const on = (op: string) => capabilityOf(caps, op);
 
@@ -76,7 +81,7 @@ test.describe('proxy routes against the real platformd (#2061)', () => {
     await expect(seeded).toContainText('public');
   });
 
-  test('shows the status the server answers and reloads it', async ({ adminPage, sdk }) => {
+  test('shows the status the server answers and reloads it', async ({ systemAdminPage: adminPage, systemSdk: sdk }) => {
     const caps = sdkData(await sdk.capabilities.list(), 'capabilities');
     const on = (op: string) => capabilityOf(caps, op);
 
@@ -100,7 +105,7 @@ test.describe('proxy routes against the real platformd (#2061)', () => {
     expect(r.ok(), `${r.url()} answered ${r.status()}`).toBeTruthy();
   });
 
-  test('creates, edits and deletes a route', async ({ adminPage, sdk }) => {
+  test('creates, edits and deletes a route', async ({ systemAdminPage: adminPage, systemSdk: sdk }) => {
     const caps = sdkData(await sdk.capabilities.list(), 'capabilities');
     const on = (op: string) => capabilityOf(caps, op);
 
@@ -155,5 +160,10 @@ test.describe('proxy routes against the real platformd (#2061)', () => {
       const left = await sdk.proxy.getRoute(id);
       if (left.success && left.data?.route) await sdk.proxy.deleteRoute(id);
     }
+  });
+
+  test('a tenant admin is refused the proxy routes', async ({ adminPage }) => {
+    const res = await adminPage.context().request.get('/api/v1/proxy/routes', { failOnStatusCode: false });
+    expect(res.status()).toBe(403);
   });
 });

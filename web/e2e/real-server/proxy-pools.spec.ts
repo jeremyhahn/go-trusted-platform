@@ -11,6 +11,11 @@ import { unwrapPayload, wireCount } from './fixtures/wire';
  * compares the page with what the server answered, and every case follows
  * the server's capability answer (a dark op shows its not-enabled state or
  * a disabled control whose title is the reason).
+ *
+ * The proxy API is system-tenant only (pkg/webservice/v1/router.go,
+ * proxyRoutes requires the system tenant), so the cases run as the
+ * system-tenant admin (systemAdminPage, systemSdk), and one case asserts a
+ * tenant admin is refused with 403.
  */
 
 const LIST_POOLS = 'GET /api/v1/proxy/pools';
@@ -66,7 +71,7 @@ function definition(page: Page, card: string, term: string) {
 }
 
 test.describe('proxy pools against the real platformd (#2061)', () => {
-  test('lists the pools the server answers', async ({ adminPage, sdk }) => {
+  test('lists the pools the server answers', async ({ systemAdminPage: adminPage, systemSdk: sdk }) => {
     const caps = await capabilities(sdk);
     const on = caps.on;
 
@@ -88,7 +93,7 @@ test.describe('proxy pools against the real platformd (#2061)', () => {
     await expect(adminPage.getByTestId('proxy-not-enabled')).toHaveCount(0);
   });
 
-  test('shows the merged config and the zone matrix the server answers', async ({ adminPage, sdk }) => {
+  test('shows the merged config and the zone matrix the server answers', async ({ systemAdminPage: adminPage, systemSdk: sdk }) => {
     const caps = await capabilities(sdk);
     const on = caps.on;
     await adminPage.goto('/networking/proxy/pools');
@@ -127,7 +132,7 @@ test.describe('proxy pools against the real platformd (#2061)', () => {
     }
   });
 
-  test('creates, edits and deletes a pool', async ({ adminPage, sdk }) => {
+  test('creates, edits and deletes a pool', async ({ systemAdminPage: adminPage, systemSdk: sdk }) => {
     const caps = await capabilities(sdk);
     const on = caps.on;
 
@@ -203,5 +208,10 @@ test.describe('proxy pools against the real platformd (#2061)', () => {
         await sdk.proxy.deletePool(id);
       }
     }
+  });
+
+  test('a tenant admin is refused the proxy pools', async ({ adminPage }) => {
+    const res = await adminPage.context().request.get('/api/v1/proxy/pools', { failOnStatusCode: false });
+    expect(res.status()).toBe(403);
   });
 });

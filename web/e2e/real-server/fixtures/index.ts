@@ -1,7 +1,9 @@
 import { test as base, expect, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test';
 import { PlatformClient } from 'trusted-platform-sdk';
-import { runAttestation } from '../global-setup';
+import { readFileSync } from 'node:fs';
+import { e2ePort, runAttestation, stateFile, type ServerState } from '../global-setup';
 import { SoftAuthenticator } from './soft-authenticator';
+import { claimSystemAdmin } from './system-admin';
 
 /**
  * Real-server fixtures (#2034, epic #1665).
@@ -14,6 +16,12 @@ import { SoftAuthenticator } from './soft-authenticator';
  *  - sdk: the SDK PlatformClient on adminPage's session (the context's
  *    cookie jar, so the jwt cookie the server set).
  *  - tenant: the tenant the admin's session belongs to (its jwt tenant_id).
+ *  - systemAdminPage: a page signed in as the system-tenant admin, for APIs
+ *    only the system tenant may call (the proxy API). The node's admin is
+ *    claimed through the admin claim ceremony (system-admin.ts) once per
+ *    run; the bearer is persisted in the run directory and set as the jwt
+ *    cookie of each test's context.
+ *  - systemSdk: the SDK PlatformClient on systemAdminPage's session.
  *
  * The config seeds no tenant (platformd.test.yaml): the admin and its tenant
  * are created over the API here.
@@ -32,12 +40,20 @@ export interface AdminAccount {
 
 interface WorkerFixtures {
   adminAccount: AdminAccount;
+  systemAuthenticator: SoftAuthenticator;
 }
 
 interface TestFixtures {
   adminPage: Page;
   sdk: PlatformClient;
   tenant: Tenant;
+  systemAdminPage: Page;
+  systemSdk: PlatformClient;
+}
+
+/** The directory of the daemon global-setup started (its cwd). */
+function runDir(): string {
+  return (JSON.parse(readFileSync(stateFile(e2ePort()), 'utf8')) as ServerState).dir;
 }
 
 /** A context with the software authenticator answering every page of it. */
@@ -105,6 +121,13 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
     { scope: 'worker' },
   ],
 
+  systemAuthenticator: [
+    async ({}, use) => {
+      await use(new SoftAuthenticator(runAttestation()));
+    },
+    { scope: 'worker' },
+  ],
+
   adminPage: async ({ browser, adminAccount, baseURL }, use) => {
     const context = await authenticatedContext(
       await browser.newContext({ baseURL, ignoreHTTPSErrors: true }),
@@ -128,6 +151,31 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
       new PlatformClient({
         baseUrl: new URL('/api', baseURL).href,
         fetch: requestFetch(adminPage.context().request),
+        retry: { maxRetries: 0 },
+      }),
+    );
+  },
+
+  systemAdminPage: async ({ browser, systemAuthenticator, baseURL }, use) => {
+    if (!baseURL) throw new Error('[real-server] no baseURL');
+    const context = await browser.newContext({ baseURL, ignoreHTTPSErrors: true });
+    try {
+      const token = await claimSystemAdmin(context.request, runDir(), systemAuthenticator, new URL(baseURL).origin);
+      // The cookie the server reads the session from (pkg/webservice/v1/jwt).
+      await context.addCookies([{ name: 'jwt', value: token, url: baseURL }]);
+      const page = await context.newPage();
+      await page.goto('/dashboard');
+      await use(page);
+    } finally {
+      await context.close();
+    }
+  },
+
+  systemSdk: async ({ systemAdminPage, baseURL }, use) => {
+    await use(
+      new PlatformClient({
+        baseUrl: new URL('/api', baseURL).href,
+        fetch: requestFetch(systemAdminPage.context().request),
         retry: { maxRetries: 0 },
       }),
     );
