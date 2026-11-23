@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -9,6 +9,7 @@ import {
   type Answer,
   type SentRequest,
 } from '@/test/control-plane-fetch';
+import { useToast } from '@/hooks';
 import { AttestationQuoteCard } from './attestation-quote-card';
 
 // #2038: GetAttestationQuote and VerifyAttestationQuote through the real SDK
@@ -174,6 +175,10 @@ describe('AttestationQuoteCard', () => {
     fireEvent.click(button);
     await screen.findByTestId('toast');
     expect(screen.queryByTestId('attestation-quote-verdict')).toBeNull();
+
+    // The toast store is global: dismiss this toast so it cannot leak into the next case.
+    const toasts = renderHook(() => useToast()).result.current;
+    act(() => toasts.toasts.forEach((t) => toasts.dismiss(t.id)));
   });
 
   it('withholds the controls the server does not offer', async () => {
