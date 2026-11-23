@@ -42,4 +42,9 @@ for (const op of [
   assert.ok(spec.includes(op), `switch-harness.spec.ts calls ${op}`);
 }
 
+// The spec also drives the switches page itself as the seeded admin.
+for (const text of ["page.goto('/networking/switches')", "getByLabel('Switch name')", 'adminPage']) {
+  assert.ok(spec.includes(text), `switch-harness.spec.ts drives the switches page (${text})`);
+}
+
 console.log('switch-harness.check: ok');
