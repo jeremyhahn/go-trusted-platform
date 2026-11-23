@@ -47,6 +47,11 @@ func TestProvision_ISOURL(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
+			name:       "empty_hostname_with_port_refused",
+			body:       `{"iso_url":"https://:443/installer.iso"}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
 			name:       "https_accepted",
 			body:       `{"iso_url":"https://iso.example.com/os.iso"}`,
 			wantStatus: http.StatusCreated,

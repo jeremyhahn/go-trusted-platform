@@ -338,7 +338,7 @@ func TestService_Provision_InvalidRequest_ZeroProfile(t *testing.T) {
 // service refuses an ISO URL the BMC cannot fetch before any workflow
 // starts, so gRPC and embedded callers get the REST preflight too.
 func TestService_Provision_InvalidRequest_UnfetchableISOURL(t *testing.T) {
-	for _, isoURL := range []string{"https://", "https:installer.iso", "http:///x.iso"} {
+	for _, isoURL := range []string{"https://", "https:installer.iso", "http:///x.iso", "https://:443/installer.iso"} {
 		t.Run(isoURL, func(t *testing.T) {
 			svc, err := NewService(ServiceParams{
 				BMC:      newMockBMC(),

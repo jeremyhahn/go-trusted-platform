@@ -99,6 +99,8 @@ func TestMediaSpec_Validate(t *testing.T) {
 			wantErr:   true,
 			wantField: "URL",
 		},
+		{name: "empty hostname with port", spec: &MediaSpec{URL: "https://:443/installer.iso"}, wantErr: true, wantField: "URL"},
+		{name: "empty hostname with port and no path", spec: &MediaSpec{URL: "http://:80"}, wantErr: true, wantField: "URL"},
 		{
 			name:      "explicit protocol mismatched scheme",
 			spec:      &MediaSpec{URL: "https://example.com/boot.iso", Protocol: MediaProtocolCIFS},
