@@ -16,10 +16,12 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc/codes"
@@ -1277,6 +1279,37 @@ func TestService_UpdateConfig(t *testing.T) {
 	}
 	if got := viper.GetString("daemon.socket_group"); got != "trusted" {
 		t.Fatalf("viper daemon.socket_group = %q, want %q", got, "trusted")
+	}
+}
+
+func TestService_UpdateConfig_UndecodableValueIsInvalidArgument(t *testing.T) {
+	viper.Reset()
+	defer viper.Reset()
+
+	const badValue = "not-a-number-7f3a"
+	cfg := DefaultConfig()
+	cfg.App = &app.App{}
+	svc, err := NewService(cfg)
+	if err != nil {
+		t.Fatalf("NewService() error: %v", err)
+	}
+
+	_, err = svc.UpdateConfig(context.Background(), &platformv1.UpdateConfigRequest{
+		Section: &platformv1.ConfigSection{
+			Section: "dns",
+			Values:  map[string]string{"default-ttl": badValue},
+		},
+		Persist: false,
+	})
+	if err == nil {
+		t.Fatal("UpdateConfig() accepted a value that does not decode")
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.InvalidArgument {
+		t.Fatalf("error code = %v, want InvalidArgument", status.Code(err))
+	}
+	if strings.Contains(st.Message(), badValue) {
+		t.Fatalf("error message leaks the value: %q", st.Message())
 	}
 }
 
