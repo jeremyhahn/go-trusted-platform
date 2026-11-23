@@ -100,6 +100,7 @@ describe('ProxyPoolsPage', () => {
     const pools = screen.getByTestId('proxy-pools');
     expect(within(pools).getByText('2 backends, least-conn')).toBeTruthy();
     expect(within(pools).getByText('internal')).toBeTruthy();
+    expect(screen.getByTestId('proxy-pool-p1')).toBeTruthy();
 
     const config = screen.getByTestId('proxy-config');
     await within(config).findByText('4');
