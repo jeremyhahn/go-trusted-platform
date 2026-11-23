@@ -14,10 +14,14 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -232,5 +236,59 @@ func TestDeviceMCP_AttestDevice_NoChallengeAndZeroBaseline(t *testing.T) {
 	}
 	if reply.GetPcrBaselineRecordedAt() != nil {
 		t.Errorf("pcr_baseline_recorded_at = %v, want nil for a zero time", reply.GetPcrBaselineRecordedAt())
+	}
+}
+
+// TestDeviceMCP_IssueAttestationChallenge_CallsTheToolAndDecodesTheChallenge
+// pins the MCP challenge issue (owner ruling 1234: challenges are issued over
+// MCP, not QUIC): the SDK calls device_attest_challenge with the device id and
+// decodes the daemon's reply, which pkg/api/mcp marshalResult builds by
+// json.Marshal of the IssueAttestationChallengeResponse then json.Unmarshal
+// into interface{}.
+func TestDeviceMCP_IssueAttestationChallenge_CallsTheToolAndDecodesTheChallenge(t *testing.T) {
+	expiresAt := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	sent := &platformv1.IssueAttestationChallengeResponse{
+		ChallengeId: "ch-1",
+		Nonce:       []byte{1, 2, 3, 4},
+		ExpiresAt:   timestamppb.New(expiresAt),
+	}
+	data, err := json.Marshal(sent)
+	if err != nil {
+		t.Fatalf("marshal reply: %v", err)
+	}
+	var daemonReply interface{}
+	if err := json.Unmarshal(data, &daemonReply); err != nil {
+		t.Fatalf("unmarshal reply: %v", err)
+	}
+
+	var calls []toolCall
+	a := provisioningTestServer(t, map[string]interface{}{
+		"device_attest_challenge": daemonReply,
+	}, &calls)
+
+	reply := &platformv1.IssueAttestationChallengeResponse{}
+	err = a.Connection().Invoke(context.Background(),
+		platformv1.DeviceService_IssueAttestationChallenge_FullMethodName,
+		&platformv1.IssueAttestationChallengeRequest{DeviceId: "42"},
+		reply)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	if len(calls) != 1 || calls[0].Name != "device_attest_challenge" {
+		t.Fatalf("calls = %+v, want one device_attest_challenge call", calls)
+	}
+	if got := calls[0].Arguments["device_id"]; got != "42" {
+		t.Fatalf("device_id argument = %#v, want \"42\"", got)
+	}
+
+	if reply.GetChallengeId() != "ch-1" {
+		t.Errorf("challenge_id = %q, want ch-1", reply.GetChallengeId())
+	}
+	if !bytes.Equal(reply.GetNonce(), []byte{1, 2, 3, 4}) {
+		t.Errorf("nonce = %v, want [1 2 3 4]", reply.GetNonce())
+	}
+	if reply.GetExpiresAt() == nil || !reply.GetExpiresAt().AsTime().Equal(expiresAt) {
+		t.Errorf("expires_at = %v, want %v", reply.GetExpiresAt(), expiresAt)
 	}
 }
