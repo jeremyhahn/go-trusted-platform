@@ -12,6 +12,7 @@ import { PCRValues } from "@/components/features/attestation/pcr-values";
 import { EventLogViewer } from "@/components/features/attestation/event-log-viewer";
 import { ManifestDeleteButton } from "@/components/features/attestation/manifest-delete-button";
 import { useAttestation, useApi } from "@/hooks";
+import { ManifestVerifyButton } from "@/components/features/attestation/manifest-verify-button";
 import type { AttestationDetail } from "@/types/security";
 import { ArrowLeft, Loader2, AlertCircle, ShieldQuestion } from "lucide-react";
 
@@ -126,6 +127,7 @@ export default function AttestationDetailPage({ params }: { params: Promise<{ id
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <ManifestVerifyButton manifestId={id} manifest={attestationData} />
           <ManifestDeleteButton id={id} onDeleted={() => router.push("/attestation/manifests")} />
           <Badge
             variant={attestationDetail.status === "signed" ? "outline" : "secondary"}
