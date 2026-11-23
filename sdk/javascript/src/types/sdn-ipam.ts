@@ -62,3 +62,27 @@ export interface SDNIPAMActionResponse {
   success: boolean;
   message?: string;
 }
+
+/** One address allocation of GET /sdn/gateway/ipam/allocations. */
+export interface SDNIPAMAllocation {
+  ip: string;
+  pool_id: string;
+  device_id?: string;
+  hostname?: string;
+  status: string;
+  allocated_at?: string;
+  expires_at?: string;
+}
+
+/** Filters of GET /sdn/gateway/ipam/allocations. */
+export interface ListSDNIPAMAllocationsRequest {
+  /** Only the allocations of this pool; every pool's when omitted. */
+  poolId?: string;
+}
+
+/** Answer of GET /sdn/gateway/ipam/allocations. */
+export interface ListSDNIPAMAllocationsResponse {
+  allocations: SDNIPAMAllocation[];
+  count: number;
+  timestamp?: string;
+}
