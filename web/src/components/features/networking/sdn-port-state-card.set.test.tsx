@@ -4,6 +4,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ok, refused, stubControlPlane, withControlPlane, type Answer } from '@/test/control-plane-fetch';
 import { SDNPortStateCard } from './sdn-port-state-card';
 
+vi.mock('@/hooks/use-capabilities', () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
+
 // #2064: the SDN port state card sets a port's admin state and rate limits
 // with SetPortState on `PUT /api/v1/sdn/bridges/{name}/ports/{port}/state`,
 // asks before setting a port down, and shows a refusal verbatim.
