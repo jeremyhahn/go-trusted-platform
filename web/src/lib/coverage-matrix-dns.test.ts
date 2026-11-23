@@ -18,6 +18,7 @@ const rows: Array<[string, string, string, string]> = [
   ['Resolve', 'GET /resolve', listPage, realSpec],
   ['Register', 'POST /register', listPage, realSpec],
   ['GetZone', 'GET /zones/{zone}', zonePage, realSpec],
+  ['UpdateZone', 'PUT /zones/{zone}', zonePage + '<br>' + listPage + ' (read-only)', realSpec],
   ['AddRecord', 'POST /zones/{zone}/records', zonePage, realSpec],
   ['DeleteRecord', 'DELETE /zones/{zone}/records/{type}/{name}', zonePage, realSpec],
   ['UpdateRecord', 'PUT /zones/{zone}/records', zonePage, realSpec],

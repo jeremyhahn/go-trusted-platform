@@ -37,30 +37,16 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
+import { useSDNIPAMPools, type SDNIPAMPool } from '@/hooks/use-sdn-ipam-pools';
+import { Gated } from '@/components/features/capabilities/gated';
 
-// uint64 arrives as JSON string — render as-is, never parseInt
-type Uint64String = string;
+// The pool as SDNService answers it (pkg/webservice/v1/rest/gateway/ipam.go).
+type IPAMPoolResponse = SDNIPAMPool;
 
-interface IPAMPoolResponse {
-  id: string;
-  name: string;
-  cidr: string;
-  gateway: string;
-  zone: string;
-  description: string;
-  total: Uint64String;
-  allocated: Uint64String;
-  available: Uint64String;
-  default_lease_duration_nanos: number;
-  inactivity_timeout_nanos: number;
-  /** Prefixes (CIDR) that are never allocatable; the gateway is always reserved. */
-  reserved?: string[];
-  /** Dynamic allocation window; both empty means the whole CIDR. */
-  range_start?: string;
-  range_end?: string;
-  created_at: string;
-  updated_at: string;
-}
+const LIST_POOLS = 'GET /api/v1/sdn/gateway/ipam/pools';
+const CREATE_POOL = 'POST /api/v1/sdn/gateway/ipam/pools';
+const UPDATE_POOL = 'PUT /api/v1/sdn/gateway/ipam/pools/{id}';
+const DELETE_POOL = 'DELETE /api/v1/sdn/gateway/ipam/pools/{id}';
 
 interface IPAllocationResponse {
   ip: string;
@@ -124,11 +110,21 @@ function utilization(pool: IPAMPoolResponse): number {
 export default function IPAMPage() {
   const { toast } = useToast();
 
-  const [pools, setPools] = React.useState<IPAMPoolResponse[]>([]);
-  const [loading, setLoading] = React.useState(true);
-  const [loadError, setLoadError] = React.useState<string | null>(null);
   const [zoneFilter, setZoneFilter] = React.useState('');
-  const [zoneOptions, setZoneOptions] = React.useState<string[]>([]);
+  const {
+    pools,
+    isLoading: loading,
+    error: loadError,
+    refetch,
+    create: createPool,
+    update: updatePool,
+    remove: removePool,
+  } = useSDNIPAMPools(zoneFilter || undefined);
+  // Unique zone values of the last listing feed the filter dropdown.
+  const zoneOptions = React.useMemo(
+    () => Array.from(new Set(pools.map((p) => p.zone).filter((z): z is string => Boolean(z)))),
+    [pools]
+  );
 
   const [formOpen, setFormOpen] = React.useState(false);
   const [editTarget, setEditTarget] = React.useState<IPAMPoolResponse | null>(null);
@@ -145,37 +141,6 @@ export default function IPAMPage() {
   const [allocations, setAllocations] = React.useState<IPAllocationResponse[]>([]);
   const [allocationsLoading, setAllocationsLoading] = React.useState(false);
   const [allocationsOpen, setAllocationsOpen] = React.useState(false);
-
-  const fetchPools = React.useCallback(async (zone?: string) => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const params = zone ? `?zone=${encodeURIComponent(zone)}` : '';
-      const res = await fetch(`/api/v1/sdn/gateway/ipam/pools${params}`, {
-        credentials: 'include',
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `HTTP ${res.status}`);
-      }
-      const body = await res.json();
-      // The webservice wraps payloads in {payload}; the daemon REST
-      // stack returns the body bare — accept both.
-      const list: IPAMPoolResponse[] = body.payload?.pools ?? body.pools ?? [];
-      setPools(list);
-      // Collect unique zone values for the filter dropdown
-      const seenZones = Array.from(new Set(list.map((p) => p.zone).filter(Boolean)));
-      setZoneOptions(seenZones);
-    } catch (err) {
-      setLoadError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  React.useEffect(() => {
-    void fetchPools(zoneFilter || undefined);
-  }, [fetchPools, zoneFilter]);
 
   const fetchAllocations = React.useCallback(async (pool: IPAMPoolResponse) => {
     setAllocationsPool(pool);
@@ -243,19 +208,7 @@ export default function IPAMPage() {
           range_start: form.rangeStart.trim(),
           range_end: form.rangeEnd.trim(),
         };
-        const res = await fetch(
-          `/api/v1/sdn/gateway/ipam/pools/${encodeURIComponent(editTarget.id)}`,
-          {
-            method: 'PUT',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-          }
-        );
-        if (!res.ok) {
-          const b = await res.json().catch(() => ({}));
-          throw new Error(b.error || `HTTP ${res.status}`);
-        }
+        await updatePool(editTarget.id, body);
         toast({ title: 'Pool updated', variant: 'success' });
       } else {
         const body = {
@@ -269,20 +222,10 @@ export default function IPAMPage() {
           range_start: form.rangeStart.trim() || undefined,
           range_end: form.rangeEnd.trim() || undefined,
         };
-        const res = await fetch('/api/v1/sdn/gateway/ipam/pools', {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        if (!res.ok) {
-          const b = await res.json().catch(() => ({}));
-          throw new Error(b.error || `HTTP ${res.status}`);
-        }
+        await createPool(body);
         toast({ title: 'Pool created', variant: 'success' });
       }
       setFormOpen(false);
-      void fetchPools(zoneFilter || undefined);
     } catch (err) {
       toast({
         title: editTarget ? 'Failed to update pool' : 'Failed to create pool',
@@ -292,7 +235,7 @@ export default function IPAMPage() {
     } finally {
       setSubmitting(false);
     }
-  }, [form, editTarget, fetchPools, zoneFilter, toast]);
+  }, [form, editTarget, createPool, updatePool, toast]);
 
   const openDeleteConfirm = React.useCallback((pool: IPAMPoolResponse) => {
     setDeleteTarget(pool);
@@ -305,24 +248,16 @@ export default function IPAMPage() {
     setDeleting(true);
     setDeleteError(null);
     try {
-      const res = await fetch(
-        `/api/v1/sdn/gateway/ipam/pools/${encodeURIComponent(deleteTarget.id)}`,
-        { method: 'DELETE', credentials: 'include' }
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `HTTP ${res.status}`);
-      }
+      await removePool(deleteTarget.id);
       toast({ title: 'Pool deleted', variant: 'success' });
       setDeleteConfirmOpen(false);
       setDeleteTarget(null);
-      void fetchPools(zoneFilter || undefined);
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setDeleting(false);
     }
-  }, [deleteTarget, fetchPools, zoneFilter, toast]);
+  }, [deleteTarget, removePool, toast]);
 
   const columns: ColumnDef<IPAMPoolResponse>[] = React.useMemo(
     () => [
@@ -430,7 +365,7 @@ export default function IPAMPage() {
           <DataTableRowActions
             row={row.original}
             actions={[
-              { label: 'Edit', onClick: openEdit },
+              { label: 'Edit', onClick: openEdit, op: UPDATE_POOL },
               {
                 label: 'View Allocations',
                 onClick: fetchAllocations,
@@ -440,6 +375,7 @@ export default function IPAMPage() {
                 onClick: openDeleteConfirm,
                 variant: 'destructive',
                 separator: true,
+                op: DELETE_POOL,
               },
             ]}
           />
@@ -469,7 +405,7 @@ export default function IPAMPage() {
               variant="outline"
               size="sm"
               className="ml-4"
-              onClick={() => void fetchPools(zoneFilter || undefined)}
+              onClick={() => void refetch()}
             >
               Retry
             </Button>
@@ -502,19 +438,24 @@ export default function IPAMPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            onClick={() => void fetchPools(zoneFilter || undefined)}
-            disabled={loading}
-          >
-            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          </Button>
-          <Button type="button" onClick={openCreate}>
-            <Plus className="mr-2 h-4 w-4" />
-            Create Pool
-          </Button>
+          <Gated op={LIST_POOLS}>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label="Refresh pools"
+              onClick={() => void refetch()}
+              disabled={loading}
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            </Button>
+          </Gated>
+          <Gated op={CREATE_POOL}>
+            <Button type="button" onClick={openCreate}>
+              <Plus className="mr-2 h-4 w-4" />
+              Create Pool
+            </Button>
+          </Gated>
         </div>
       </div>
 
@@ -686,6 +627,7 @@ export default function IPAMPage() {
             <Button type="button" variant="outline" onClick={() => setFormOpen(false)}>
               Cancel
             </Button>
+            <Gated op={editTarget ? UPDATE_POOL : CREATE_POOL}>
             <Button
               type="button"
               disabled={
@@ -696,6 +638,7 @@ export default function IPAMPage() {
               {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {editTarget ? 'Save Changes' : 'Create Pool'}
             </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -738,6 +681,7 @@ export default function IPAMPage() {
             >
               Cancel
             </Button>
+            <Gated op={DELETE_POOL}>
             <Button
               type="button"
               variant="destructive"
@@ -747,6 +691,7 @@ export default function IPAMPage() {
               {deleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Delete
             </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
