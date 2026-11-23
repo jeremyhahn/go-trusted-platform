@@ -112,7 +112,11 @@ export function TokenVerifyCard({ tenantId }: { tenantId?: string | null }) {
               {result.expiresAt && (
                 <>
                   <dt className="text-muted-foreground">Expires</dt>
-                  <dd>{new Date(result.expiresAt).toLocaleString()}</dd>
+                  <dd>
+                    {new Date(
+                      Number(result.expiresAt) * 1000,
+                    ).toLocaleString()}
+                  </dd>
                 </>
               )}
               {result.reason && (
