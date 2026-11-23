@@ -1236,6 +1236,50 @@ belongs to the second REST server tracked on #232.
 Tracked on #165 (the seven routes) and #420 (the audit's reach) — do not read
 this section as a claim that the platform is fully gated.
 
+### What row #646 still owes after its interim landing (owner ruling 1234)
+
+The owner ruled (2026-11-23) that the row PR lands as an interim step: the
+SPEC row `auth` stays open on #646. What the landing does close is sub-row
+#2006: an IAM or tenant gRPC call from a caller with no tenant-bound
+identity is refused with `PermissionDenied`, unless its context carries the
+kernel-verified peer credentials the Unix-socket server attaches
+(`admitUnbound`, `pkg/api/daemon/iam_tenant_authz.go`). A daemon run with
+`SkipIAMValidation` is no longer an admitted caller. What the row still
+owes, each with the place that shows the gap today:
+
+- **Platform permission vocabulary (F28, F19, F24; upstream).** The mTLS
+  principal's PEP asks over a catalog this repo derives itself:
+  `concretePermissionCatalog` (`pkg/api/daemon/mtls_principal.go:71-95`)
+  crosses every scope resource with the REST method actions, which yields
+  permissions such as `device:read` that the pinned IAM vocabulary does not
+  define. The vocabulary belongs to go-qrdb, re-exported through the
+  go-quicbaas SDK; it needs their release and a tagged bump.
+- **User lookup past the first page (F5; upstream).** The pinned embedded
+  transport's `User/List` drops the page size, so the fallback lookup sees
+  one page of 100 users and fails closed with `ErrTruncated` rather than
+  report "no such user" (`pkg/auth/iamuser/iamuser.go:56-65`). It needs the
+  go-quicbaas embedded transport to page.
+- **Test fixture behind an SDK seam (F8; upstream).** `iamusertest` builds
+  its embedded IAM from go-quicbaas internals, `pkg/iam` and `pkg/service`
+  (`pkg/auth/iamuser/iamusertest/embedded.go:23-24`). It needs a public
+  go-quicbaas SDK seam for an in-process IAM.
+- **Tenant-bound policy evaluation through the SDK (F23; upstream).** The
+  PEP imports go-qrdb's SDK and go-quicbaas `pkg/iam` directly
+  (`pkg/api/daemon/iam_policy_engine_pep.go:21-22`) instead of evaluating
+  through the go-quicbaas SDK.
+- **A per-request PEP decision (F10; this repo, later on the row).** The PEP
+  decides once per authentication, over the fixed catalog
+  (`pkg/api/daemon/mtls_principal.go:181-222`), not per request at each
+  transport enforcement point (the REST `ScopeGuard`, QUIC and MCP). It
+  follows the vocabulary above.
+- **Invitation roles against `ListRoles` (#1992; upstream).** An invitation's
+  role is checked against the fixed `ValidRoles` set
+  (`pkg/webservice/v1/invitation/types.go:106-117`), not against the
+  tenant's IAM roles from `ListRoles`.
+
+This list is the row's remaining work. Do not read the interim landing as
+the row closed.
+
 ## 6d. Second authorization models (audit, #926)
 
 The owner ruled on 2026-10-15 that IAM and RBAC form one model for every
