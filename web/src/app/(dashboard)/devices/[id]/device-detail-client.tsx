@@ -254,7 +254,9 @@ export default function DeviceDetailPage() {
     return <Badge variant={variant}>{label}</Badge>;
   };
 
-  if (isLoading) {
+  // Only the first load shows the spinner: a re-read after a card action keeps
+  // every card mounted, so the Activate result and the edit cards' state stay.
+  if (isLoading && !device) {
     return (
       <div className="flex items-center justify-center py-12">
         <div className="text-center">
