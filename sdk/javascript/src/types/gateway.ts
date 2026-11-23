@@ -362,7 +362,40 @@ export interface GatewaySnapshot {
   pipeline?: GatewaySnapshotPipeline;
   pxe?: { status?: string; listen_address?: string; boots_served?: number; started_at?: string };
   dhcp?: { status?: string; lease_count?: number };
+  overlay?: GatewayOverlay;
   annotations?: Record<string, string>;
+}
+
+/**
+ * One VTEP the gateway admitted to its overlay, with the admission record it
+ * reported. Field names are the json tags of the Go state.AdmittedVTEPState.
+ */
+export interface GatewayAdmittedVTEP {
+  vtep: string;
+  device_id?: number;
+  host_id?: string;
+  serial?: string;
+  hostname?: string;
+  allocation_id?: string;
+  baseline_source?: string;
+  profile_id?: number;
+  verdict_at?: string;
+}
+
+/** The overlay section of a gateway snapshot (Go state.OverlayState). */
+export interface GatewayOverlay {
+  running: boolean;
+  local_vtep?: string;
+  vni_count?: number;
+  remote_vtep_count?: number;
+  local_mac_count?: number;
+  remote_mac_count?: number;
+  prefix_count?: number;
+  refused_bindings?: number;
+  refused_replays?: number;
+  l3_vni?: number;
+  admitted_vteps?: GatewayAdmittedVTEP[];
+  nd_counters?: Record<string, number>;
 }
 
 /** Overall and per-component health. */
@@ -513,6 +546,12 @@ export interface GatewaySnapshotPipeline {
  */
 export interface ListGatewayStateResponse {
   gateways: GatewaySnapshot[];
+}
+
+/** Response of the admitted-VTEP list of one gateway's overlay. */
+export interface ListGatewayAdmittedVTEPsResponse {
+  admitted_vteps: GatewayAdmittedVTEP[];
+  total: number;
 }
 
 /**

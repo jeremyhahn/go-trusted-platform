@@ -94,6 +94,20 @@ describe('GatewayService', () => {
 
       expect(mockClient.delete).toHaveBeenCalledWith('/v1/gateway/state/a%2Fb');
     });
+
+    it('listAdmittedVTEPs GETs /v1/gateway/state/{id}/admitted-vteps with the id encoded', async () => {
+      await service.listAdmittedVTEPs('gw/1');
+
+      expectOnly('get');
+      expect(mockClient.get).toHaveBeenCalledWith('/v1/gateway/state/gw%2F1/admitted-vteps');
+    });
+
+    it('getAdmittedVTEP GETs /v1/gateway/state/{id}/admitted-vteps/{vtep} with both encoded', async () => {
+      await service.getAdmittedVTEP('gw-1', '2001:db8::1');
+
+      expectOnly('get');
+      expect(mockClient.get).toHaveBeenCalledWith('/v1/gateway/state/gw-1/admitted-vteps/2001%3Adb8%3A%3A1');
+    });
   });
 
   describe('NAT64', () => {
@@ -222,6 +236,8 @@ describe('GatewayService', () => {
       ['listState', 'get', (s) => s.listState()],
       ['getState', 'get', (s) => s.getState('example-gateway')],
       ['deleteState', 'delete', (s) => s.deleteState('example-gateway')],
+      ['listAdmittedVTEPs', 'get', (s) => s.listAdmittedVTEPs('example-gateway')],
+      ['getAdmittedVTEP', 'get', (s) => s.getAdmittedVTEP('example-gateway', '192.0.2.10')],
       ['getNAT64Status', 'get', (s) => s.getNAT64Status()],
       ['getBGPStatus', 'get', (s) => s.getBGPStatus()],
       ['listBGPPeers', 'get', (s) => s.listBGPPeers()],
