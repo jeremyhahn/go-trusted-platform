@@ -14,6 +14,7 @@ import type {
   ListInvitationsRequest,
   ListInvitationsResponse,
   RevokeInvitationResponse,
+  DeleteInvitationResponse,
   AcceptInvitationRequest,
   AcceptInvitationResponse,
 } from '../../types/invitation.js';
@@ -42,6 +43,9 @@ export interface UseInvitationResult {
 
   /** Mutation for resending invitation emails */
   resend: UseMutationResult<CreateInvitationResponse, string>;
+
+  /** Mutation for deleting invitation records (DELETE /v1/invitations/{id}) */
+  remove: UseMutationResult<DeleteInvitationResponse, string>;
 }
 
 /**
@@ -108,12 +112,18 @@ export function useInvitation(): UseInvitationResult {
       service.resend(id)
   );
 
+  const remove = useMutation<DeleteInvitationResponse, string>(
+    (id: string): Promise<ApiResponse<DeleteInvitationResponse>> =>
+      service.delete(id)
+  );
+
   return {
     service,
     create,
     revoke,
     accept,
     resend,
+    remove,
   };
 }
 

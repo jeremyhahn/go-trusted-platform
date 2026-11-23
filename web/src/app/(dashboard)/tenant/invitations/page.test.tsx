@@ -47,7 +47,7 @@ const invitations = [
 // Hook results are stable objects: a fresh `data` per render would re-key the
 // page's memoised rows and the table on every pass.
 const mutation = { mutateAsync: vi.fn(), isLoading: false };
-const invitationHooks = { create: mutation, revoke: mutation, resend: mutation };
+const invitationHooks = { create: mutation, revoke: mutation, resend: mutation, remove: mutation };
 const listResult = { data: { invitations }, isLoading: false, error: null, refetch: vi.fn() };
 const toastResult = { toast: vi.fn() };
 const authResult = { isLoading: false };
@@ -116,7 +116,7 @@ describe("InvitationsPage status mapping", () => {
       render(<InvitationsPage />);
       const row = rowFor(email);
       expect(within(row).getByText("Revoked")).toBeTruthy();
-      expect(menuItems(row)).toEqual(["No actions available"]);
+      expect(menuItems(row)).toEqual(["Delete Invitation"]);
     },
   );
 
@@ -131,6 +131,6 @@ describe("InvitationsPage status mapping", () => {
   it("offers no action on an expired invitation", () => {
     render(<InvitationsPage />);
     const row = rowFor("expired-invitee");
-    expect(menuItems(row)).toEqual(["No actions available"]);
+    expect(menuItems(row)).toEqual(["Delete Invitation"]);
   });
 });

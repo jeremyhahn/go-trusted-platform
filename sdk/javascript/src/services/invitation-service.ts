@@ -17,6 +17,7 @@ import type {
   ListInvitationsRequest,
   ListInvitationsResponse,
   RevokeInvitationResponse,
+  DeleteInvitationResponse,
   AcceptInvitationRequest,
   AcceptInvitationResponse,
 } from '../types/invitation.js';
@@ -125,6 +126,21 @@ export class InvitationService extends BaseService {
     return this.client.post<RevokeInvitationResponse>(
       this.buildUrl(`/${this.encodePathSegment(id)}/revoke`),
       {}
+    );
+  }
+
+  /**
+   * Delete an invitation
+   *
+   * Sends DELETE /v1/invitations/{id} with no body. Unlike revoke, this
+   * removes the invitation record itself rather than marking it revoked.
+   *
+   * @param id - Invitation ID
+   * @returns Deletion result
+   */
+  async delete(id: string): Promise<ApiResponse<DeleteInvitationResponse>> {
+    return this.client.delete<DeleteInvitationResponse>(
+      this.buildUrl(`/${this.encodePathSegment(id)}`)
     );
   }
 

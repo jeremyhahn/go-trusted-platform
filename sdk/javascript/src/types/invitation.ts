@@ -190,6 +190,16 @@ export interface RevokeInvitationResponse {
 }
 
 /**
+ * Delete invitation response (DELETE /v1/invitations/{id})
+ */
+export interface DeleteInvitationResponse {
+  /** Operation status */
+  success: boolean;
+  /** Status message */
+  message?: string;
+}
+
+/**
  * Accept invitation response
  */
 export interface AcceptInvitationResponse {

@@ -1030,6 +1030,7 @@ export type {
   GetInvitationByTokenResponse,
   ListInvitationsResponse,
   RevokeInvitationResponse,
+  DeleteInvitationResponse,
   AcceptInvitationResponse,
 } from './types/invitation.js';
 

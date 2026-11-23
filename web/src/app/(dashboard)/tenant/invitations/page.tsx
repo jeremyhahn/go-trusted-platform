@@ -9,6 +9,7 @@ import {
   MoreHorizontal,
   RefreshCw,
   Shield,
+  Trash2,
   User,
   X,
   AlertCircle,
@@ -82,7 +83,7 @@ export default function InvitationsPage() {
   const [processingId, setProcessingId] = React.useState<string | null>(null);
 
   // Use SDK invitation hooks
-  const { create, revoke } = useInvitation();
+  const { create, revoke, remove } = useInvitation();
   const {
     data: invitationsResponse,
     isLoading,
@@ -156,6 +157,30 @@ export default function InvitationsPage() {
       const errorMessage = err instanceof Error ? err.message : "Failed to cancel invitation";
       toast({
         title: "Failed to cancel invitation",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("Delete this invitation? The record is removed.")) return;
+
+    setProcessingId(id);
+    try {
+      await remove.mutateAsync(id);
+      toast({
+        title: "Invitation deleted",
+        description: "The invitation record has been removed",
+        variant: "success",
+      });
+      void refetch();
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Failed to delete invitation";
+      toast({
+        title: "Failed to delete invitation",
         description: errorMessage,
         variant: "destructive",
       });
@@ -283,9 +308,15 @@ export default function InvitationsPage() {
                 </Gated>
               )}
               {!canCancel && (
-                <DropdownMenuItem disabled>
-                  No actions available
-                </DropdownMenuItem>
+                <Gated op="DELETE /api/v1/invitations/{id:[0-9]+}">
+                  <DropdownMenuItem
+                    onClick={() => handleDelete(invitation.id)}
+                    className="text-destructive focus:text-destructive"
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete Invitation
+                  </DropdownMenuItem>
+                </Gated>
               )}
             </DropdownMenuContent>
           </DropdownMenu>
