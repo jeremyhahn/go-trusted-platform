@@ -71,7 +71,7 @@ test.describe('Tenant barrier (real server)', () => {
     await adminPage.goto('/tenant');
     await adminPage.getByRole('link', { name: 'Barrier', exact: true }).click();
     await expect(adminPage).toHaveURL(/\/tenant\/barrier$/);
-    await expect(adminPage.getByRole('heading', { name: 'Tenant barrier' })).toBeVisible();
+    await expect(adminPage.getByRole('heading', { name: 'Tenant keys' })).toBeVisible();
   });
 
   test('shows the barrier status the server answers', async ({ adminPage, sdk, tenant }) => {
@@ -87,9 +87,10 @@ test.describe('Tenant barrier (real server)', () => {
         }
       });
       await adminPage.goto('/tenant/barrier');
-      if (statusCap.reason) {
-        await expect(adminPage.getByText(statusCap.reason)).toBeVisible();
-      }
+      // The server lists a disabled op with its reason, e.g.
+      // `not-configured: tenant-barrier` when no barrier backend is wired.
+      expect(statusCap.reason).toBeTruthy();
+      await expect(adminPage.getByText(statusCap.reason ?? '', { exact: true })).toBeVisible();
       await expect(card).toHaveCount(0);
       expect(reads).toEqual([]);
       return;
