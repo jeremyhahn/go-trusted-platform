@@ -6,7 +6,7 @@ type MutationOpts = {
   onSuccess?: (data: unknown) => void;
   onError?: (err: Error) => void;
 };
-type ApiOpts = { onError?: (err: Error) => void };
+type ApiOpts = { onError?: (err: Error) => void; enabled?: boolean };
 type Cell = (ctx: { row: { original: unknown } }) => React.ReactNode;
 type Action = { label: string; onClick: () => void; disabled?: boolean; title?: string };
 type Bulk = { label: string; onClick: (rows: unknown[]) => void; disabled?: boolean; title?: string };
@@ -344,5 +344,36 @@ describe("GroupsPage capability gate", () => {
     const bulk = screen.getByRole("button", { name: "Delete selected" }) as HTMLButtonElement;
     expect(bulk.disabled).toBe(false);
     expect(bulk.hasAttribute("title")).toBe(false);
+  });
+});
+
+describe("GroupsPage list gate", () => {
+  const withholdList = () =>
+    caps.capability.mockImplementation((op: string) =>
+      op === "GET /api/v1/iam/groups" ? { enabled: false, reason: "not-configured: iam" } : { enabled: true },
+    );
+
+  it("shows the not-enabled card with the server's reason and no table when GET /api/v1/iam/groups is not offered", () => {
+    withholdList();
+    render(<GroupsPage />);
+    const card = screen.getByTestId("groups-not-enabled");
+    expect(card.textContent).toContain("Groups are not enabled on this server");
+    expect(card.textContent).toContain("not-configured: iam");
+    expect(screen.queryByTestId("table")).toBeNull();
+    expect(captured.opts?.enabled).toBe(false);
+  });
+
+  it("does not list groups when the read is withheld", async () => {
+    withholdList();
+    render(<GroupsPage />);
+    await captured.fetcher?.();
+    expect(listGroups).not.toHaveBeenCalled();
+  });
+
+  it("asks the gate for GET /api/v1/iam/groups and lists when the server offers it", () => {
+    render(<GroupsPage />);
+    expect(caps.capability).toHaveBeenCalledWith("GET /api/v1/iam/groups");
+    expect(captured.opts?.enabled).toBe(true);
+    expect(screen.queryByTestId("groups-not-enabled")).toBeNull();
   });
 });
