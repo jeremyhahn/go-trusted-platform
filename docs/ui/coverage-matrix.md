@@ -337,7 +337,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `PlatformIAMService.UpdatePolicy` | `PUT /policies/{id}` | `(dashboard)/iam/policies/[name]/page.tsx` | - | `iam-policies-apps.spec.ts` | covered |
 | `PlatformIAMService.DeletePolicy` | `DELETE /policies/{id}` | `(dashboard)/iam/policies/[name]/page.tsx`<br>`(dashboard)/iam/policies/page.tsx` | - | `iam.spec.ts` | covered |
 | `PlatformIAMService.ValidatePolicy` | `POST /policies/validate` | `(dashboard)/iam/policies/[name]/page.tsx` | - | `iam-policies-apps.spec.ts` | covered |
-| `PlatformIAMService.TestPolicy` | `POST /policies/test` | `(dashboard)/iam/policies/page.tsx` | - | `iam-policies-apps.spec.ts` | covered |
+| `PlatformIAMService.TestPolicy` | `POST /policies/test` | - | - | - | missing |
 | `PlatformIAMService.RegisterApp` | `POST /apps` | `(dashboard)/iam/apps/new/page.tsx`<br>`(dashboard)/iam/tokens/page.tsx` | - | `iam.spec.ts` | covered |
 | `PlatformIAMService.GetApp` | `GET /apps/{id}` | `(dashboard)/iam/apps/[clientId]/page.tsx` | - | `iam-policies-apps.spec.ts` | covered |
 | `PlatformIAMService.ListApps` | `GET /apps` | `(dashboard)/iam/apps/page.tsx`<br>`(dashboard)/iam/tokens/page.tsx` | - | `iam.spec.ts` | covered |

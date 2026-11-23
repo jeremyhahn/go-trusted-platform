@@ -138,9 +138,10 @@ export default function PolicyDetailClient() {
           initialDescription={p?.description ?? ''}
           initialPriority={p?.priority ?? 0}
           initialSpecYaml={yaml}
-          save={async ({ description, priority, specYaml }) => {
+          save={async ({ description, priority }) => {
             if (!tenantId) throw new Error('No tenant ID');
-            const r = await iam.updatePolicy({ tenantId, policyName, description, priority, specYaml });
+            // The server refuses a spec on update: description and priority only.
+            const r = await iam.updatePolicy({ tenantId, policyName, description, priority });
             if (!r.success) throw new Error(r.error?.message ?? 'Failed to update policy');
           }}
           onSaved={() => {
