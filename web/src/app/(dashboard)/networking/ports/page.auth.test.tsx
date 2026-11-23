@@ -52,6 +52,10 @@ vi.mock('@/components/ui/data-table-row-actions', () => ({
   ),
 }));
 
+vi.mock('@/hooks/use-capabilities', () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
+
 import PortsPage from './page';
 
 const AUTH = '/api/v1/sdn/bridges/br-int/ports/p1/auth';

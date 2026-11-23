@@ -4,6 +4,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ok, refused, stubControlPlane, withControlPlane } from '@/test/control-plane-fetch';
 import { SDNPortAuthCard } from './sdn-port-auth-card';
 
+vi.mock('@/hooks/use-capabilities', () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
+
 const AUTH = '/api/v1/sdn/bridges/br0/ports/p1/auth';
 // Made-up bytes, no real certificate.
 const PEM = '-----BEGIN CERTIFICATE-----\nTUlJQg==\n-----END CERTIFICATE-----';
