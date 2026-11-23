@@ -16,6 +16,7 @@ vi.mock('next/link', () => ({
     </a>
   ),
 }));
+vi.mock('@/components/features/devices/device-profile-lookup', () => ({ DeviceProfileLookup: () => null }));
 
 // useApi and useMutation are the SDK's real hooks; only the service is mocked.
 vi.mock('@/hooks', async () => {

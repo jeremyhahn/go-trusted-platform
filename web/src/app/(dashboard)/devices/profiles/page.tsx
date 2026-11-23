@@ -72,6 +72,7 @@ import {
 } from '@/lib/device-role';
 import { networkPhaseRows } from '@/lib/device-profile-networks';
 import { baselineAge, baselineRegisters, baselineSourceLabel } from '@/lib/pcr-baseline';
+import { DeviceProfileLookup } from '@/components/features/devices/device-profile-lookup';
 
 // ============================================================================
 // Types
@@ -393,6 +394,7 @@ export default function DeviceProfilesPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <DeviceProfileLookup />
           <Button variant="outline" onClick={() => refetchProfiles()} disabled={isLoading}>
             <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
             Refresh
