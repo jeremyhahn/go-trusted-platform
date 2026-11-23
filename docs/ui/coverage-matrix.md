@@ -491,19 +491,19 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `DNSService.CreateZone` | `POST /zones` | `(dashboard)/networking/dns/page.tsx` | - | `networking.spec.ts` | covered |
-| `DNSService.GetZone` | `GET /zones/{zone}` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | - | partial |
+| `DNSService.CreateZone` | `POST /zones` | `(dashboard)/networking/dns/page.tsx` | - | `networking.spec.ts`<br>`real-server/dns.spec.ts` | covered |
+| `DNSService.GetZone` | `GET /zones/{zone}` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
 | `DNSService.UpdateZone` | `PUT /zones/{zone}` | `(dashboard)/networking/dns/[zone]/page.tsx`<br>`(dashboard)/networking/dns/page.tsx` (read-only) | - | - | partial |
-| `DNSService.DeleteZone` | `DELETE /zones/{zone}` | `(dashboard)/networking/dns/page.tsx` | - | `networking.spec.ts` | covered |
-| `DNSService.ListZones` | `GET /zones` | `(dashboard)/networking/dns/page.tsx` | - | `networking.spec.ts` | covered |
-| `DNSService.AddRecord` | `POST /zones/{zone}/records` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | - | partial |
-| `DNSService.DeleteRecord` | `DELETE /zones/{zone}/records/{type}/{name}` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | - | partial |
-| `DNSService.UpdateRecord` | `PUT /zones/{zone}/records` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | - | partial |
-| `DNSService.ListRecords` | `GET /zones/{zone}/records` | - | - | - | missing |
-| `DNSService.SignZone` | `POST /zones/{zone}/sign` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | - | partial |
-| `DNSService.GetDNSSECStatus` | `GET /zones/{zone}/dnssec` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | - | partial |
-| `DNSService.Resolve` | `GET /resolve` | - | - | - | missing |
-| `DNSService.Register` | `POST /register` | - | - | - | missing |
+| `DNSService.DeleteZone` | `DELETE /zones/{zone}` | `(dashboard)/networking/dns/page.tsx` | - | `networking.spec.ts`<br>`real-server/dns.spec.ts` | covered |
+| `DNSService.ListZones` | `GET /zones` | `(dashboard)/networking/dns/page.tsx` | - | `networking.spec.ts`<br>`real-server/dns.spec.ts` | covered |
+| `DNSService.AddRecord` | `POST /zones/{zone}/records` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.DeleteRecord` | `DELETE /zones/{zone}/records/{type}/{name}` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.UpdateRecord` | `PUT /zones/{zone}/records` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.ListRecords` | `GET /zones/{zone}/records` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.SignZone` | `POST /zones/{zone}/sign` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.GetDNSSECStatus` | `GET /zones/{zone}/dnssec` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.Resolve` | `GET /resolve` | `(dashboard)/networking/dns/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.Register` | `POST /register` | `(dashboard)/networking/dns/page.tsx` | - | `real-server/dns.spec.ts` | covered |
 
 ## ProvisioningGateway (`provisioning.proto`)
 
@@ -729,13 +729,13 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Area (service) | Operations | covered | partial | missing | not-UI | blocked: integration |
 |---|---|---|---|---|---|---|
-| AttestationService | 16 | 6 | 1 | 8 | 1 | 0 |
+| AttestationService | 16 | 15 | 0 | 0 | 1 | 0 |
 | BarrierService | 5 | 0 | 0 | 0 | 5 | 0 |
 | BMCService | 23 | 0 | 0 | 23 | 0 | 0 |
 | CAService | 13 | 7 | 0 | 6 | 0 | 0 |
 | CacheService | 4 | 0 | 0 | 0 | 0 | 4 |
 | CeremonyService | 7 | 0 | 0 | 7 | 0 | 0 |
-| ClusterService | 5 | 0 | 0 | 5 | 0 | 0 |
+| ClusterService | 5 | 5 | 0 | 0 | 0 | 0 |
 | ComputeService | 37 | 14 | 2 | 16 | 5 | 0 |
 | ConfigDeliveryService | 7 | 1 | 2 | 0 | 4 | 0 |
 | PlatformDaemon | 19 | 1 | 6 | 8 | 4 | 0 |
@@ -753,19 +753,19 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | ObjectStorageService | 8 | 0 | 0 | 0 | 0 | 8 |
 | OverlayService | 10 | 2 | 1 | 7 | 0 | 0 |
 | PIVService | 8 | 0 | 0 | 0 | 8 | 0 |
-| DNSService | 13 | 3 | 7 | 3 | 0 | 0 |
+| DNSService | 13 | 12 | 1 | 0 | 0 | 0 |
 | ProvisioningGateway | 4 | 0 | 0 | 0 | 4 | 0 |
 | ProxyService | 14 | 0 | 0 | 14 | 0 | 0 |
 | PXEService | 15 | 14 | 0 | 0 | 1 | 0 |
-| RegistryService | 6 | 0 | 0 | 4 | 2 | 0 |
+| RegistryService | 6 | 2 | 2 | 0 | 2 | 0 |
 | SchedulerService | 11 | 0 | 0 | 0 | 0 | 11 |
 | SDNService | 29 | 11 | 1 | 16 | 1 | 0 |
 | SwitchService | 5 | 0 | 0 | 5 | 0 | 0 |
 | TenantService | 19 | 4 | 4 | 11 | 0 | 0 |
-| TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
+| TPMService | 31 | 16 | 7 | 8 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **122** | **63** | **263** | **50** | **31** |
+| **Total** | **529** | **163** | **56** | **228** | **51** | **31** |
 
 ## Proposed slices
 
@@ -776,7 +776,7 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 3. **BMCService (2/2): ReplaceWebCertificate, BMC, FactoryCert, User, UserPassword, UserPrivilege**: 8 operations (8 missing, 0 partial): ReplaceWebCertificate, EnrollBMC, RestoreFactoryCert, ListUsers, CreateUser, DeleteUser, SetUserPassword, SetUserPrivilege.
 4. **CAService: CAInfo, CA, CACertificate, CSR, Certificate**: 6 operations (6 missing, 0 partial): GetCAInfo, InitCA, InstallCACertificates, UninstallCACertificates, SignCSR, VerifyCertificate.
 5. **CeremonyService: Init, Status, Cert, Share, CSR**: 7 operations (7 missing, 0 partial): Init, Status, ClaimCertBegin, ClaimCertComplete, ClaimShareBegin, ClaimShareComplete, SignCSR.
-6. **ClusterService: Bootstrap, Join, Leave, Status, Node**: 5 operations (5 missing, 0 partial): Bootstrap, Join, Leave, GetStatus, ListNodes.
+6. **ClusterService: Bootstrap, Join, Leave, Status, Node**: 5 operations (5 missing, 0 partial): Bootstrap, Join, Leave, GetStatus, ListNodes. (done: real-server/cluster.spec.ts)
 7. **ComputeService (1/2): VM, VMMetric, Disk, Snapshot, Migration**: 13 operations (11 missing, 2 partial): SuspendVM, ResumeVM, GetVM, MigrateVM, AttestVM, GetVMMetrics, AttachDisk, DetachDisk, ResizeDisk, CreateSnapshot, GetSnapshot, PrepareMigration, FinalizeMigration.
 8. **ComputeService (2/2): Container, ContainerMetric, VMAttestation**: 5 operations (5 missing, 0 partial): GetContainer, ExecContainer, AttestContainer, GetContainerMetrics, VerifyVMAttestation.
 9. **ConfigDeliveryService: FulfillSession, Session**: 2 operations (0 missing, 2 partial): FulfillSession, GetSession.
@@ -793,7 +793,7 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 20. **KeyManagementService: Key, KeyStatus, KeyVersion, Encrypt, Decrypt, Rewrap…**: 13 operations (12 missing, 1 partial): ImportKey, UpdateKeyStatus, GetKeyVersions, BatchEncrypt, BatchDecrypt, Rewrap, Hash, HMAC, VerifyHMAC, GenerateRandom, GenerateDataKey, GenerateWrappedDataKey, BackendStatus.
 21. **NTPService: Status, Source, Step**: 3 operations (3 missing, 0 partial): GetStatus, ListSources, Step.
 22. **OverlayService: VTEP, VNI, Tunnel, TunnelStat, RemoteMAC, MAC…**: 8 operations (7 missing, 1 partial): ListVTEPs, GetVTEP, DeleteVNI, ListTunnels, GetTunnelStats, ListRemoteMACs, ForgetMAC, GetOverlayStatus.
-23. **DNSService: Zone, Record, DNSSECStatus, Resolve, Register**: 10 operations (5 missing, 5 partial): GetZone, UpdateZone, SignZone, AddRecord, DeleteRecord, UpdateRecord, ListRecords, GetDNSSECStatus, Resolve, Register.
+23. **DNSService: Zone, Record, DNSSECStatus, Resolve, Register**: 10 operations (5 missing, 5 partial): GetZone, UpdateZone, SignZone, AddRecord, DeleteRecord, UpdateRecord, ListRecords, GetDNSSECStatus, Resolve, Register. (done except UpdateZone: real-server/dns.spec.ts)
 24. **ProxyService: Route, Pool, ProxyConfig, ProxyStatus, ZoneMatrix**: 14 operations (14 missing, 0 partial): CreateRoute, GetRoute, UpdateRoute, DeleteRoute, ListRoutes, CreatePool, GetPool, UpdatePool, DeletePool, ListPools, GetProxyConfig, ReloadProxyConfig, GetProxyStatus, GetZoneMatrix.
 25. **PXEService: Device, DeviceByMAC, State, DeviceEnrolled, Authorize, Quarantine…**: 12 operations (11 missing, 1 partial): GetDevice, RemoveDevice, GetDeviceByMAC, UpdateState, SetDeviceEnrolled, Authorize, Quarantine, Retry, GetEvents, StartService, StopService, WebhookComplete.
 26. **RegistryService: List, Inspect, Delete, Status**: 4 operations (4 missing, 0 partial): List, Inspect, Delete, Status.
