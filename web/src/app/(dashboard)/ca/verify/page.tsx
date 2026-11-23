@@ -7,11 +7,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useVerifyCertificate } from "@/hooks/use-ca-ops";
+import { Gated } from "@/components/features/capabilities/gated";
 
 /**
  * Verify Certificate: POST /v1/ca/certificates/verify. The certificate
  * travels as the base64 of its PEM (a proto bytes field); it need not be
- * one this CA issued.
+ * one this CA issued. Submit is gated on the server's
+ * POST /api/v1/ca/certificates/verify capability (#2033, #2041).
  */
 export default function VerifyCertificatePage() {
   const [certificatePem, setCertificatePem] = React.useState("");
@@ -63,9 +65,11 @@ export default function VerifyCertificatePage() {
               />
             </div>
             <div>
-              <Button type="submit" disabled={!certificatePem.trim() || verifyMutation.isLoading}>
-                Verify
-              </Button>
+              <Gated op="POST /api/v1/ca/certificates/verify">
+                <Button type="submit" disabled={!certificatePem.trim() || verifyMutation.isLoading}>
+                  Verify
+                </Button>
+              </Gated>
             </div>
           </form>
         </CardContent>

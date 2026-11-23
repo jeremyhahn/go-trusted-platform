@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useSignCSR } from "@/hooks/use-ca-ops";
+import { Gated } from "@/components/features/capabilities/gated";
 import { base64ToPem } from "@/utils/pem-base64";
 
 /** The issued certificate as the REST layer sends it. */
@@ -23,7 +24,8 @@ interface IssuedCertWire {
  * KMS key the CSR names. The server refuses a session alone: the request
  * carries a platform token with the ca:sign-csr scope as a Bearer header,
  * so it goes through a per-call client (CAService.signCSR takes no
- * per-request headers).
+ * per-request headers). Submit is gated on the server's
+ * POST /api/v1/ca/sign-csr capability (#2033, #2041).
  */
 export default function SignCSRPage() {
   const [csrPem, setCsrPem] = React.useState("");
@@ -119,9 +121,11 @@ export default function SignCSRPage() {
               />
             </div>
             <div>
-              <Button type="submit" disabled={!csrPem.trim() || !token.trim() || signMutation.isLoading}>
-                Sign CSR
-              </Button>
+              <Gated op="POST /api/v1/ca/sign-csr">
+                <Button type="submit" disabled={!csrPem.trim() || !token.trim() || signMutation.isLoading}>
+                  Sign CSR
+                </Button>
+              </Gated>
             </div>
           </form>
         </CardContent>
