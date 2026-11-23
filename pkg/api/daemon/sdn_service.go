@@ -1255,6 +1255,15 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		for _, flow := range flows {
 			flowIDs = append(flowIDs, fmt.Sprintf("policy-%s-rule-%s-%s", policyID, flow.ruleID, uuid.NewString()))
 		}
+		// Withdraw the prior enabled flows the new set does not replace
+		// (another bridge, priority or match): once the prior record is
+		// overwritten nothing would remove them.
+		if prior != nil && prior.enabled {
+			if err := s.removePolicyFlows(ctx, client, stalePolicyFlows(s.policyFlows(prior.bridgeNames, prior.rules, prior.priority), flows)); err != nil {
+				s.storePolicy(policyID, policyType, config, bridgeNames, "error", flowIDs)
+				return nil, status.Errorf(codes.Internal, "remove replaced policy flows: %v", err)
+			}
+		}
 	} else if prior != nil && prior.enabled {
 		// Withdraw the flows the prior enabled apply installed; if that
 		// fails they stay enforced, so the record must not say inactive.
@@ -1482,6 +1491,22 @@ type policyFlowKey struct {
 
 func flowKey(flow policyFlow) policyFlowKey {
 	return policyFlowKey{bridge: flow.bridge, table: int(flow.mod.Table), priority: int(flow.mod.Priority), match: flow.mod.Match}
+}
+
+// stalePolicyFlows returns the flows of old whose key no flow of current
+// shares: an OFPFC_ADD of current did not replace them.
+func stalePolicyFlows(old, current []policyFlow) []policyFlow {
+	keep := make(map[policyFlowKey]struct{}, len(current))
+	for _, flow := range current {
+		keep[flowKey(flow)] = struct{}{}
+	}
+	var stale []policyFlow
+	for _, flow := range old {
+		if _, ok := keep[flowKey(flow)]; !ok {
+			stale = append(stale, flow)
+		}
+	}
+	return stale
 }
 
 // conflictingPolicyFlow returns the ID of the first of others (enabled
