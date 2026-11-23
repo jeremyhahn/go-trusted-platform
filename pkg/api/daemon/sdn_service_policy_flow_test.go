@@ -954,6 +954,106 @@ func TestSDNService_ApplyPolicy_FailedRollbackDeleteIsReportedAndRetried(t *test
 	assert.Empty(t, sw.deleted())
 }
 
+// rawFlowOnPolicyEntry is a raw flow config whose switch entry is the one
+// the policy rule installs; the test requires the two keys to be equal.
+func rawFlowOnPolicyEntry(t *testing.T, svc *SDNService, rule *platformv1.PolicyRule) (*platformv1.FlowConfig, flowEntryKey) {
+	t.Helper()
+	policyMod, err := svc.policyRuleToFlowMod(rule, 100)
+	require.NoError(t, err)
+	config := &platformv1.FlowConfig{
+		BridgeId: "br0",
+		Priority: uint32(policyMod.Priority),
+		Match:    &platformv1.FlowMatch{TcpDst: 22},
+	}
+	rawMod, err := svc.pbToOvsFlowMod(config)
+	require.NoError(t, err)
+	key := newFlowEntryKey("br0", policyMod)
+	require.Equal(t, key, newFlowEntryKey("br0", rawMod), "the raw flow must take over the policy rule's entry")
+	return config, key
+}
+
+// A failed rollback leaves a policy entry stranded; a raw AddFlow then
+// replaces that entry with its own cookie. The next apply must not delete
+// the raw flow with the stranded policy flow's cookie-less strict delete
+// (#2021 Codex round 5).
+func TestSDNService_AddFlow_RetiresTheStrandedEntryItTakesOver(t *testing.T) {
+	svc, sw := newSwitchModelSDNService(t)
+
+	errDelete := errors.New("test: delete refused")
+	sw.addHook = func(*ovs.FlowMod) error { return errFlowInstall }
+	sw.deleteHook = func(*ovs.FlowMod) error { return errDelete }
+
+	rule := allowRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22})
+	_, err := svc.ApplyPolicy(context.Background(), denyPolicy("x", rule))
+	require.Error(t, err)
+
+	sw.mu.Lock()
+	sw.addHook = nil
+	sw.deleteHook = nil
+	sw.deletes = nil
+	sw.mu.Unlock()
+
+	config, key := rawFlowOnPolicyEntry(t, svc, rule)
+	svc.applyMu.Lock()
+	_, stranded := svc.strandedFlows[key]
+	svc.applyMu.Unlock()
+	require.True(t, stranded, "the failed rollback strands the policy entry")
+
+	_, err = svc.AddFlow(context.Background(), &platformv1.AddFlowRequest{Config: config})
+	require.NoError(t, err)
+
+	svc.applyMu.Lock()
+	_, stranded = svc.strandedFlows[key]
+	svc.applyMu.Unlock()
+	assert.False(t, stranded, "the raw flow owns the entry: it is no longer stranded")
+
+	y := denyPolicy("y", denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 80}))
+	_, err = svc.ApplyPolicy(context.Background(), y)
+	require.NoError(t, err)
+	assert.NotContains(t, sw.deleted(), "tcp,tp_dst=22", "the next apply must not delete the raw flow")
+	_, ok := sw.entry("tcp,tp_dst=22")
+	assert.True(t, ok, "the raw flow stays on the switch")
+}
+
+// A failed restore records a policy entry in unrestoredFlows; a raw AddFlow
+// then installs its own flow on that entry. The next apply must not restore
+// the policy flow over the raw flow (#2021 Codex round 5).
+func TestSDNService_AddFlow_RetiresTheUnrestoredEntryItTakesOver(t *testing.T) {
+	svc, sw := newSwitchModelSDNService(t)
+
+	rule := allowRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22})
+	_, err := svc.ApplyPolicy(context.Background(), denyPolicy("x", rule))
+	require.NoError(t, err)
+
+	config, key := rawFlowOnPolicyEntry(t, svc, rule)
+	// The state a failed restore of x's entry leaves behind.
+	svc.applyMu.Lock()
+	svc.unrestoredFlows = map[flowEntryKey]bool{key: true}
+	svc.applyMu.Unlock()
+
+	_, err = svc.AddFlow(context.Background(), &platformv1.AddFlowRequest{Config: config})
+	require.NoError(t, err)
+
+	svc.applyMu.Lock()
+	_, unrestored := svc.unrestoredFlows[key]
+	svc.applyMu.Unlock()
+	assert.False(t, unrestored, "the raw flow owns the entry: it is no longer to be restored")
+
+	var policyAdds []string
+	sw.mu.Lock()
+	sw.addHook = func(f *ovs.FlowMod) error {
+		if f.Cookie == "" {
+			policyAdds = append(policyAdds, f.Match)
+		}
+		return nil
+	}
+	sw.mu.Unlock()
+	y := denyPolicy("y", denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 80}))
+	_, err = svc.ApplyPolicy(context.Background(), y)
+	require.NoError(t, err)
+	assert.NotContains(t, policyAdds, "tcp,tp_dst=22", "the next apply must not restore the policy flow over the raw flow")
+}
+
 // A failed update whose rollback delete also fails still puts the old deny
 // back (an OpenFlow ADD replaces the same-match entry), or reports the old
 // policy as erroneous: never a permissive flow under an ACTIVE deny (#2021 Codex).
