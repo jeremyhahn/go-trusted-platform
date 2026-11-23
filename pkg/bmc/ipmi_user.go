@@ -216,9 +216,27 @@ func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memgua
 	if !u.Privilege.IsValid() {
 		return ErrInvalidConfig{Field: "privilege", Reason: "unrecognized privilege level"}
 	}
+	// Refuse an oversized password before the first write, so a refusal
+	// leaves the slot untouched.
+	if password != nil && password.Size() > ipmiMaxPasswordLen {
+		return ErrInvalidConfig{Field: "password", Reason: "password exceeds 20 bytes"}
+	}
 	if err := m.setUserName(u.Slot, u.Username); err != nil {
 		return err
 	}
+	if err := m.finishCreate(u, password); err != nil {
+		// The name is already written: clear it again so the slot reads as
+		// free and a retry is not refused as occupied. A clear failure is
+		// dropped; the first error is the one the caller needs.
+		_ = m.setUserName(u.Slot, "")
+		return err
+	}
+	return nil
+}
+
+// finishCreate sets the password, the channel access and, for an Enabled
+// user, the IPMI enable flag of a slot whose name CreateUser has written.
+func (m *ipmiUserManager) finishCreate(u User, password *memguard.MemoryEnclave) error {
 	if password != nil && password.Size() > 0 {
 		if err := m.setUserPassword(u.Slot, pwdOpSet, password); err != nil {
 			return err
@@ -228,7 +246,16 @@ func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memgua
 	if channel == 0 {
 		channel = m.channel
 	}
-	return m.setUserAccess(u.Slot, channel, u.Privilege, u.Enabled)
+	if err := m.setUserAccess(u.Slot, channel, u.Privilege, u.Enabled); err != nil {
+		return err
+	}
+	if !u.Enabled {
+		return nil
+	}
+	// Set User Password operation 01b enables the user; it carries no
+	// password data. A new IPMI account stays disabled for login without it.
+	_, err := m.sender.Send(netFnApp, cmdSetUserPassword, []byte{u.Slot & ipmiMaxUserSlot, pwdOpEnable})
+	return err
 }
 
 // SetUserPassword changes the password of an existing slot.
