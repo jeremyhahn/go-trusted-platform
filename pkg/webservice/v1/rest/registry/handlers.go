@@ -16,7 +16,6 @@ package registry
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,6 +27,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/registry"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 // Handlers is the REST surface bound to a RegistryService.
@@ -35,12 +35,22 @@ type Handlers struct {
 	logger     *logging.Logger
 	service    grpcapi.RegistryService
 	respWriter response.HttpWriter
+	// maxPushBytes bounds the PushImage body; past it the push is 413.
+	maxPushBytes int64
 }
 
 // NewHandlers constructs a Handlers value. service may be nil — every
 // handler nil-checks and returns 503 in that case.
 func NewHandlers(logger *logging.Logger, service grpcapi.RegistryService, respWriter response.HttpWriter) *Handlers {
-	return &Handlers{logger: logger, service: service, respWriter: respWriter}
+	return &Handlers{logger: logger, service: service, respWriter: respWriter, maxPushBytes: defaultMaxBlobBytes}
+}
+
+// SetMaxPushBytes sets the largest PushImage body the handler reads;
+// a non-positive n keeps the current cap.
+func (h *Handlers) SetMaxPushBytes(n int64) {
+	if n > 0 {
+		h.maxPushBytes = n
+	}
 }
 
 // ImageSummary is the wire-shape returned by ListImages. It is
@@ -158,8 +168,21 @@ func (h *Handlers) PushImage(w http.ResponseWriter, r *http.Request) {
 		h.respWriter.Error500(w, r, ErrRegistryNotConfigured{})
 		return
 	}
-	body, err := io.ReadAll(r.Body)
+	limit := h.maxPushBytes
+	if limit <= 0 {
+		limit = defaultMaxBlobBytes
+	}
+	body, err := readBounded(w, r, limit)
 	if err != nil {
+		var tooLarge *ErrUploadTooLarge
+		if errors.As(err, &tooLarge) {
+			h.respWriter.Write(w, r, http.StatusRequestEntityTooLarge, restwire.WebServiceResponse{
+				Code:    http.StatusRequestEntityTooLarge,
+				Error:   err.Error(),
+				Success: false,
+			})
+			return
+		}
 		h.respWriter.Error400(w, r, err)
 		return
 	}

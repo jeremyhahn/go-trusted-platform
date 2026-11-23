@@ -95,6 +95,8 @@ type RESTServer struct {
 	gatewayHandlers       *restapi.GatewayHandlers
 	gatewayService        *gatewayRESTService
 	idevidService         *IDevIDGRPCService
+	// registryMaxPushBytes overrides the image push body cap when non-zero.
+	registryMaxPushBytes int64
 }
 
 // NewRESTServer creates a new REST server for the daemon
@@ -503,6 +505,9 @@ func (s *RESTServer) SetRegistryHandlers(svc grpcapi.RegistryService, guard *res
 	}
 	logger := logging.NewFromSlog(s.logger)
 	h := restregistry.NewHandlers(logger, svc, response.NewResponseWriter(logger, nil))
+	if s.registryMaxPushBytes > 0 {
+		h.SetMaxPushBytes(s.registryMaxPushBytes)
+	}
 	sr := s.router.PathPrefix("/api/v1/compute/images").Subrouter()
 	sr.HandleFunc("", guard.Require("registry:read", h.ListImages)).Methods(http.MethodGet)
 	sr.HandleFunc("/", guard.Require("registry:read", h.ListImages)).Methods(http.MethodGet)
