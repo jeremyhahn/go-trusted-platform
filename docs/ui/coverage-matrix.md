@@ -463,16 +463,16 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `OverlayService.ListVTEPs` | `GET /vteps` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | - | partial |
-| `OverlayService.GetVTEP` | `GET /vteps/{nodeId}` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | - | partial |
+| `OverlayService.ListVTEPs` | `GET /vteps` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
+| `OverlayService.GetVTEP` | `GET /vteps/{nodeId}` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
 | `OverlayService.CreateVNI` | `POST /vnis` | `(dashboard)/networking/overlays/page.tsx` | - | `networking.spec.ts` | covered |
-| `OverlayService.DeleteVNI` | `DELETE /vnis/{vni:[0-9]+}` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | - | partial |
+| `OverlayService.DeleteVNI` | `DELETE /vnis/{vni:[0-9]+}` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
 | `OverlayService.ListVNIs` | `GET /vnis` | `(dashboard)/networking/overlays/page.tsx` | - | `networking.spec.ts` | covered |
-| `OverlayService.ListTunnels` | `GET /tunnels` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | - | partial |
-| `OverlayService.GetTunnelStats` | `GET /tunnels/stats` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | - | partial |
-| `OverlayService.ListRemoteMACs` | `GET /macs` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | - | partial |
-| `OverlayService.ForgetMAC` | `DELETE /macs` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | - | partial |
-| `OverlayService.GetOverlayStatus` | `GET /status` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | - | partial |
+| `OverlayService.ListTunnels` | `GET /tunnels` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
+| `OverlayService.GetTunnelStats` | `GET /tunnels/stats` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
+| `OverlayService.ListRemoteMACs` | `GET /macs` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
+| `OverlayService.ForgetMAC` | `DELETE /macs` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
+| `OverlayService.GetOverlayStatus` | `GET /status` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
 
 ## PIVService (`piv.proto`)
 
