@@ -1598,6 +1598,13 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// the same CA instance as the gRPC, QUIC, MCP and Unix-socket adapters
 	// so all transports return identical results.
 	if daemon.concreteRestServer != nil && config.CAService != nil {
+		// The auth-factor issuance route asks the IAM PEP; with IAM off
+		// the PEP stays nil and the route refuses.
+		if iamService != nil {
+			if pep := iamService.PEP(); pep != nil {
+				daemon.concreteRestServer.SetAuthFactorPEP(pep)
+			}
+		}
 		daemon.concreteRestServer.SetCAHandlers(config.CAService, restGuard)
 	}
 
