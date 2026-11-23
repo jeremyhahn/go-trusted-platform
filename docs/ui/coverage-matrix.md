@@ -463,16 +463,16 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `OverlayService.ListVTEPs` | `GET /vteps` | - | - | - | missing |
-| `OverlayService.GetVTEP` | `GET /vteps/{nodeId}` | - | - | - | missing |
-| `OverlayService.CreateVNI` | `POST /vnis` | `(dashboard)/networking/overlays/page.tsx` | - | `networking.spec.ts` | covered |
-| `OverlayService.DeleteVNI` | `DELETE /vnis/{vni:[0-9]+}` | `(dashboard)/networking/overlays/page.tsx` (read-only) | - | - | partial |
-| `OverlayService.ListVNIs` | `GET /vnis` | `(dashboard)/networking/overlays/page.tsx` | - | `networking.spec.ts` | covered |
-| `OverlayService.ListTunnels` | `GET /tunnels` | - | - | - | missing |
-| `OverlayService.GetTunnelStats` | `GET /tunnels/stats` | - | - | - | missing |
-| `OverlayService.ListRemoteMACs` | - | - | - | - | missing |
-| `OverlayService.ForgetMAC` | `DELETE /macs` | - | - | - | missing |
-| `OverlayService.GetOverlayStatus` | - | - | - | - | missing |
+| `OverlayService.ListVTEPs` | `GET /vteps` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
+| `OverlayService.GetVTEP` | `GET /vteps/{nodeId}` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
+| `OverlayService.CreateVNI` | `POST /vnis` | `(dashboard)/networking/overlays/page.tsx` | - | `real-server/overlay-vnis.spec.ts` | covered |
+| `OverlayService.DeleteVNI` | `DELETE /vnis/{vni:[0-9]+}` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
+| `OverlayService.ListVNIs` | `GET /vnis` | `(dashboard)/networking/overlays/page.tsx` | - | `real-server/overlay-vnis.spec.ts` | covered |
+| `OverlayService.ListTunnels` | `GET /tunnels` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
+| `OverlayService.GetTunnelStats` | `GET /tunnels/stats` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
+| `OverlayService.ListRemoteMACs` | `GET /macs` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
+| `OverlayService.ForgetMAC` | `DELETE /macs` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
+| `OverlayService.GetOverlayStatus` | `GET /status` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
 
 ## PIVService (`piv.proto`)
 
@@ -751,7 +751,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | MessagingService | 8 | 0 | 0 | 0 | 0 | 8 |
 | NTPService | 3 | 0 | 0 | 3 | 0 | 0 |
 | ObjectStorageService | 8 | 0 | 0 | 0 | 0 | 8 |
-| OverlayService | 10 | 2 | 1 | 7 | 0 | 0 |
+| OverlayService | 10 | 10 | 0 | 0 | 0 | 0 |
 | PIVService | 8 | 0 | 0 | 0 | 8 | 0 |
 | DNSService | 13 | 3 | 5 | 5 | 0 | 0 |
 | ProvisioningGateway | 4 | 0 | 0 | 0 | 4 | 0 |
@@ -765,7 +765,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **131** | **60** | **254** | **53** | **31** |
+| **Total** | **529** | **141** | **58** | **246** | **53** | **31** |
 
 ## Proposed slices
 
