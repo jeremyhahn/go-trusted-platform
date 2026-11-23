@@ -390,10 +390,10 @@ const cases: WireCase[] = [
   },
   {
     method: 'rotateAppSecret',
-    name: 'posts an empty body to the rotate-secret path',
+    name: 'posts an empty body to the rotate path',
     call: (s) => s.rotateAppSecret('acme', 'c1'),
     verb: 'post',
-    url: '/v1/iam/tenants/acme/apps/c1/rotate-secret',
+    url: '/v1/iam/tenants/acme/apps/c1/rotate',
     body: {},
   },
 ];
