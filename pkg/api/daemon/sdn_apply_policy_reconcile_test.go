@@ -162,3 +162,58 @@ func TestSDNService_ApplyPolicy_ReapplyWithdrawsOldBridgeFlows(t *testing.T) {
 	assert.Empty(t, fake.matches(t, "br1"))
 	assert.Equal(t, platformv1.PolicyStatus_POLICY_STATUS_INACTIVE, getPolicy(t, svc, "p1").GetStatus())
 }
+
+// OpenFlow priorities are 16-bit: an effective priority outside 0..65535
+// would be truncated on the wire, so it is refused before any flow is
+// installed (#2234).
+func TestSDNService_ApplyPolicy_PriorityOutsideOpenFlowRangeIsRefused(t *testing.T) {
+	ctx := context.Background()
+	cases := map[string]func(*platformv1.PolicyConfig){
+		"rule above 65535": func(c *platformv1.PolicyConfig) { c.Rules[1].Priority = 65536 + 200 },
+		"rule below 0":     func(c *platformv1.PolicyConfig) { c.Rules[1].Priority = -1 },
+		"policy above 65535": func(c *platformv1.PolicyConfig) {
+			c.Priority = 70000
+			c.Rules[1].Priority = 0
+		},
+		"policy below 0": func(c *platformv1.PolicyConfig) {
+			c.Priority = -5
+			c.Rules[1].Priority = 0
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			svc, fake := newReplacingOVSFixture(t)
+			cfg := twoRulePolicyConfig()
+			mutate(cfg)
+
+			_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: cfg})
+			assert.Equal(t, codes.InvalidArgument, status.Code(err), "err = %v", err)
+			assert.Empty(t, fake.matches(t, "br0"))
+			_, err = svc.GetPolicy(ctx, &platformv1.GetPolicyRequest{PolicyId: "p1"})
+			assert.Equal(t, codes.NotFound, status.Code(err))
+		})
+	}
+}
+
+// Two policies whose effective priorities are equal on the wire occupy the
+// same flow entry and conflict, whichever field the priority came from
+// (#2234).
+func TestSDNService_ApplyPolicy_ConflictKeyUsesWirePriority(t *testing.T) {
+	svc, fake := newReplacingOVSFixture(t)
+	ctx := context.Background()
+
+	cfgA := twoRulePolicyConfig()
+	cfgA.Rules[0].Priority = 100
+	_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "pa", Config: cfgA})
+	require.NoError(t, err)
+	before := fake.matches(t, "br0")
+
+	cfgB := twoRulePolicyConfig()
+	cfgB.Name = "web-b"
+	cfgB.Priority = 100
+	cfgB.Rules = cfgB.Rules[:1]
+	cfgB.Rules[0].Priority = 0
+	_, err = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "pb", Config: cfgB})
+	require.Equal(t, codes.FailedPrecondition, status.Code(err), "err = %v", err)
+	assert.ElementsMatch(t, before, fake.matches(t, "br0"))
+}
