@@ -112,6 +112,105 @@ func TestApplySection_Errors(t *testing.T) {
 	}
 }
 
+// writeDNSConfig writes a config file with dns.default-ttl 60, points
+// Viper at it and reads it. It returns the path and the original bytes.
+func writeDNSConfig(t *testing.T) (string, []byte) {
+	t.Helper()
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	orig := []byte("dns:\n  default-ttl: 60\n")
+	if err := os.WriteFile(cfgPath, orig, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	viper.SetConfigFile(cfgPath)
+	if err := viper.ReadInConfig(); err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	return cfgPath, orig
+}
+
+func TestApplySection_InvalidValueChangesNothing(t *testing.T) {
+	const badValue = "not-a-number-7f3a"
+	defer viper.Reset()
+	for _, persist := range []bool{true, false} {
+		viper.Reset()
+		cfgPath, orig := writeDNSConfig(t)
+
+		var tgt struct {
+			DNS struct {
+				DefaultTTL int `mapstructure:"default-ttl"`
+			} `mapstructure:"dns"`
+		}
+		_, err := ApplySection(&tgt, "dns", map[string]string{"default-ttl": badValue}, persist)
+		if err == nil {
+			t.Fatalf("persist=%v: ApplySection with an undecodable value returned nil", persist)
+		}
+		if !errors.As(err, &ErrInvalidSectionValue{}) {
+			t.Fatalf("persist=%v: error %v is not ErrInvalidSectionValue", persist, err)
+		}
+		if contains(err.Error(), badValue) {
+			t.Fatalf("persist=%v: error message leaks the value: %q", persist, err.Error())
+		}
+		data, rerr := os.ReadFile(cfgPath)
+		if rerr != nil {
+			t.Fatalf("read back: %v", rerr)
+		}
+		if string(data) != string(orig) {
+			t.Fatalf("persist=%v: config file changed: %q", persist, data)
+		}
+		if got := viper.GetInt("dns.default-ttl"); got != 60 {
+			t.Fatalf("persist=%v: live dns.default-ttl = %d, want 60", persist, got)
+		}
+	}
+}
+
+func TestApplySection_ReloadUndoesInMemoryApply(t *testing.T) {
+	viper.Reset()
+	defer viper.Reset()
+	writeDNSConfig(t)
+
+	if _, err := ApplySection(nil, "dns", map[string]string{"default-ttl": "120"}, false); err != nil {
+		t.Fatalf("ApplySection: %v", err)
+	}
+	if got := viper.GetInt("dns.default-ttl"); got != 120 {
+		t.Fatalf("after apply dns.default-ttl = %d, want 120", got)
+	}
+	if _, err := ReloadFromDisk(nil); err != nil {
+		t.Fatalf("ReloadFromDisk: %v", err)
+	}
+	if got := viper.GetInt("dns.default-ttl"); got != 60 {
+		t.Fatalf("after reload dns.default-ttl = %d, want 60", got)
+	}
+}
+
+func TestApplySection_RollbackUndoesApplyAndKeepsStartupOverride(t *testing.T) {
+	viper.Reset()
+	defer viper.Reset()
+	writeDNSConfig(t)
+	// Stands in for a startup flag bound as an override.
+	viper.Set("debug", true)
+
+	store := newTestStore(t)
+	snap, err := CaptureCurrent(store, "pre-update", "tester")
+	if err != nil {
+		t.Fatalf("CaptureCurrent: %v", err)
+	}
+	if _, err := ApplySection(nil, "dns", map[string]string{"default-ttl": "120"}, false); err != nil {
+		t.Fatalf("ApplySection: %v", err)
+	}
+	if got := viper.GetInt("dns.default-ttl"); got != 120 {
+		t.Fatalf("after apply dns.default-ttl = %d, want 120", got)
+	}
+	if _, err := RollbackTo(store, snap.ID, "tester", nil); err != nil {
+		t.Fatalf("RollbackTo: %v", err)
+	}
+	if got := viper.GetInt("dns.default-ttl"); got != 60 {
+		t.Fatalf("after rollback dns.default-ttl = %d, want 60", got)
+	}
+	if !viper.GetBool("debug") {
+		t.Fatalf("after rollback the startup override debug=true was lost")
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {
