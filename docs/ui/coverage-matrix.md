@@ -751,7 +751,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | MessagingService | 8 | 0 | 0 | 0 | 0 | 8 |
 | NTPService | 3 | 0 | 0 | 3 | 0 | 0 |
 | ObjectStorageService | 8 | 0 | 0 | 0 | 0 | 8 |
-| OverlayService | 10 | 2 | 8 | 0 | 0 | 0 |
+| OverlayService | 10 | 10 | 0 | 0 | 0 | 0 |
 | PIVService | 8 | 0 | 0 | 0 | 8 | 0 |
 | DNSService | 13 | 3 | 5 | 5 | 0 | 0 |
 | ProvisioningGateway | 4 | 0 | 0 | 0 | 4 | 0 |
@@ -765,7 +765,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **122** | **68** | **258** | **50** | **31** |
+| **Total** | **529** | **130** | **60** | **258** | **50** | **31** |
 
 ## Proposed slices
 
