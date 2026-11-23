@@ -90,10 +90,12 @@ describe('ConfigPage through the SDK', () => {
     await waitFor(() => expect(count(sent, 'GET', '/api/v1/platform/config')).toBe(2));
   });
 
+  // A 4xx refusal: the SDK client retries a GET on 5xx with backoff, which
+  // would outlast the findBy timeout.
   it('shows a refused read inline', async () => {
     stubControlPlane({
       ...shared(),
-      'GET /api/v1/platform/config': refused(503, 'config tree unavailable'),
+      'GET /api/v1/platform/config': refused(403, 'config tree unavailable'),
     });
     render(withControlPlane(<ConfigPage />));
 

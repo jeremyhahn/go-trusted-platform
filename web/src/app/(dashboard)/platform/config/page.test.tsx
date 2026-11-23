@@ -58,7 +58,9 @@ beforeEach(() => {
     if (url === '/api/v1/platform/config/snapshots') {
       return reply({ payload: { snapshots: [] } });
     }
-    return reply(configBody);
+    return Promise.resolve(
+      new Response(JSON.stringify({ success: true, ...configBody }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    );
   });
   vi.stubGlobal('fetch', fetchMock);
 });
