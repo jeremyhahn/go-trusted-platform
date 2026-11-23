@@ -13,13 +13,18 @@ import { expect, test } from './fixtures';
  *  - Check state (IsVTPMRunning, GET /bundles/{id}/state): when the server
  *    offers the vTPM routes and creates a bundle, the run state the page shows
  *    is the page's own state reply; when it does not, the page shows the
- *    server's refusal.
+ *    server's refusal;
+ *  - the runtime flow: on a bundle the server creates, Start, Check state,
+ *    Quote, Seal, Unseal, Read PCR, Extend PCR (the new value differs from
+ *    the one read before) and Stop, each driven by its page control. The
+ *    harness config (platformd.test.yaml) gives the daemon a vtpm block in
+ *    its run directory, so the vTPM routes are served.
  *
  * Not covered, and why (gaps):
- *  - Start, Stop, Quote, Seal, Unseal, Read PCR and Extend PCR are not driven:
- *    the harness config (platformd.test.yaml) has no vtpm block and no software
- *    TPM to start, so a bundle cannot run and these operations have nothing to
- *    act on. The mocked spec e2e/vtpm-runtime.spec.ts drives their UI.
+ *  - bundle creation and Start need the swtpm binary on PATH. The Web
+ *    Console E2E runner installs none, so there the flow test records
+ *    createBundle's refusal (a `gap` annotation) instead of driving the
+ *    controls.
  */
 
 const STATE_OP = 'GET /api/v1/vtpm/bundles/{id}/state';
@@ -117,6 +122,92 @@ test.describe('vTPM runtime page against the real server', () => {
       if (created.success && created.data) {
         await sdk.vtpm.deleteBundle(created.data.id);
       }
+    }
+  });
+
+  test('drives a running bundle through every runtime control', async ({ adminPage, sdk }) => {
+    const START_OP = 'POST /api/v1/vtpm/bundles/{id}/start';
+    const enabled = await enabledOps(adminPage);
+
+    if (!enabled.has(START_OP)) {
+      await adminPage.goto('/tpm/vtpm/e2e-probe');
+      await expect(adminPage.getByRole('button', { name: 'Start vTPM', exact: true })).toBeDisabled();
+      gap(`${START_OP} is not offered by the harness server: no runtime flow`);
+      return;
+    }
+
+    const created = await sdk.vtpm.createBundle({ options: {} });
+    if (!created.success || !created.data) {
+      // A runner without the swtpm binary lands here: the server refuses.
+      expect(created.error?.message ?? '').not.toBe('');
+      gap(`createBundle refused: ${created.error?.message ?? 'no message'}`);
+      return;
+    }
+
+    const bundleId = created.data.id;
+    const page = adminPage;
+    const runState = page.getByTestId('vtpm-run-state');
+    const button = (name: string) => page.getByRole('button', { name, exact: true });
+    const confirm = async (title: string) => {
+      const dialog = page.getByRole('dialog', { name: title });
+      await expect(dialog).toBeVisible();
+      await dialog.getByRole('button', { name: 'Confirm', exact: true }).click();
+    };
+    const checkState = async (want: 'Running' | 'Stopped') => {
+      const reply = page.waitForResponse(
+        (r) => r.request().method() === 'GET' && r.url().includes(`/vtpm/bundles/${encodeURIComponent(bundleId)}/state`),
+      );
+      await button('Check state').click();
+      expect((await reply).ok(), 'GET /bundles/{id}/state').toBe(true);
+      await expect(runState).toHaveText(want);
+    };
+
+    try {
+      await page.goto(`/tpm/vtpm/${encodeURIComponent(bundleId)}`);
+
+      // Start
+      await button('Start vTPM').click();
+      await expect(runState).toHaveText('Running');
+      await expect(page.getByTestId('vtpm-socket')).toBeVisible();
+
+      // Check state (IsVTPMRunning)
+      await checkState('Running');
+
+      // Quote
+      await button('Quote').click();
+      await expect(page.getByTestId('vtpm-quote-result')).toContainText('Hash algorithm');
+
+      // Seal, then Unseal the blob Seal returned
+      await page.getByLabel('Data to seal', { exact: true }).fill('e2e-sealed-secret');
+      await button('Seal').click();
+      await expect(page.getByTestId('vtpm-sealed-blob')).not.toHaveValue('');
+      await button('Unseal').click();
+      await expect(page.getByTestId('vtpm-unsealed-data')).toContainText('e2e-sealed-secret');
+
+      // Read PCR
+      const pcrValue = page.getByTestId('vtpm-pcr-value');
+      await page.getByLabel('Read PCR index', { exact: true }).fill('16');
+      await button('Read PCR').click();
+      await expect(pcrValue).not.toHaveText('');
+      const before = (await pcrValue.textContent()) ?? '';
+
+      // Extend PCR, then Read PCR shows a new value
+      await page.getByLabel('Extend PCR index', { exact: true }).fill('16');
+      await page.getByLabel('Data to extend (hex)', { exact: true }).fill('00112233');
+      await button('Extend PCR').click();
+      await confirm('Extend this PCR?');
+      await expect(page.getByTestId('vtpm-extend-result')).toContainText('PCR 16 extended');
+      await button('Read PCR').click();
+      await expect(pcrValue).not.toHaveText(before);
+
+      // Stop
+      await button('Stop vTPM').click();
+      await confirm('Stop this vTPM?');
+      await expect(runState).toHaveText('Stopped');
+      await checkState('Stopped');
+    } finally {
+      await sdk.vtpm.stopBundle(bundleId).catch(() => undefined);
+      await sdk.vtpm.deleteBundle(bundleId);
     }
   });
 });
