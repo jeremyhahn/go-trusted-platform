@@ -176,6 +176,9 @@ func (p *MCPServiceProvider) EABCreateCredential(
 	if err := p.requireEABService(); err != nil {
 		return nil, err
 	}
+	if err := eabToolTenantCheck(ctx, tenantID); err != nil {
+		return nil, err
+	}
 	params := eab.GenerateParams{
 		ProfileID:  profileID,
 		TenantID:   tenantID,
@@ -194,6 +197,30 @@ func (p *MCPServiceProvider) EABCreateCredential(
 	return eabCredentialJSON(cred, true), nil
 }
 
+// eabToolTenantCheck applies authorizeIAMTenant to an EAB tool call and
+// reports a refusal as a PermissionDenied tool failure, so a tenant-bound
+// caller never acts on another tenant's credentials.
+func eabToolTenantCheck(ctx context.Context, tenantID string) error {
+	if err := authorizeIAMTenant(ctx, tenantID); err != nil {
+		return ErrEABToolFailure{Class: codes.PermissionDenied, Cause: err}
+	}
+	return nil
+}
+
+// eabToolCredentialCheck admits a bound caller to a credential-ID tool
+// only for a credential of its own tenant. An unbound caller is admitted
+// without the extra fetch, so its calls behave exactly as before (#2006).
+func (p *MCPServiceProvider) eabToolCredentialCheck(ctx context.Context, credentialID uint64) error {
+	if _, bound := callerTenant(ctx); !bound {
+		return nil
+	}
+	cred, err := p.eabService.Get(ctx, credentialID)
+	if err != nil {
+		return eabServiceFailure(err)
+	}
+	return eabToolTenantCheck(ctx, cred.TenantID)
+}
+
 // EABGetCredential retrieves a credential by its numeric ID. The HMAC
 // key is omitted from the response.
 func (p *MCPServiceProvider) EABGetCredential(ctx context.Context, credentialID uint64) (interface{}, error) {
@@ -203,6 +230,9 @@ func (p *MCPServiceProvider) EABGetCredential(ctx context.Context, credentialID 
 	cred, err := p.eabService.Get(ctx, credentialID)
 	if err != nil {
 		return nil, eabServiceFailure(err)
+	}
+	if err := eabToolTenantCheck(ctx, cred.TenantID); err != nil {
+		return nil, err
 	}
 	return eabCredentialJSON(cred, false), nil
 }
@@ -216,6 +246,9 @@ func (p *MCPServiceProvider) EABGetCredentialByKeyID(ctx context.Context, keyID 
 	cred, err := p.eabService.GetByKeyID(ctx, keyID)
 	if err != nil {
 		return nil, eabServiceFailure(err)
+	}
+	if err := eabToolTenantCheck(ctx, cred.TenantID); err != nil {
+		return nil, err
 	}
 	return eabCredentialJSON(cred, false), nil
 }
@@ -245,6 +278,9 @@ func (p *MCPServiceProvider) EABListCredentials(
 		filter.status, filter.byStatus = statusFilter, true
 	}
 
+	if err := eabToolTenantCheck(ctx, params.TenantID); err != nil {
+		return nil, err
+	}
 	creds, err := collectEABCredentials(ctx, p.eabService, params.ProfileID, params.TenantID)
 	if err != nil {
 		return nil, eabServiceFailure(err)
@@ -303,6 +339,9 @@ func (p *MCPServiceProvider) EABRevokeCredential(
 	if err := p.requireEABService(); err != nil {
 		return nil, err
 	}
+	if err := p.eabToolCredentialCheck(ctx, credentialID); err != nil {
+		return nil, err
+	}
 	if err := p.eabService.Revoke(ctx, credentialID); err != nil {
 		return nil, eabServiceFailure(err)
 	}
@@ -347,6 +386,9 @@ func (p *MCPServiceProvider) EABDeleteCredential(ctx context.Context, credential
 	if err := p.requireEABService(); err != nil {
 		return nil, err
 	}
+	if err := p.eabToolCredentialCheck(ctx, credentialID); err != nil {
+		return nil, err
+	}
 	if err := p.eabService.Delete(ctx, credentialID); err != nil {
 		return nil, eabServiceFailure(err)
 	}
@@ -360,6 +402,9 @@ func (p *MCPServiceProvider) EABDeleteCredential(ctx context.Context, credential
 // ACME enrollment.
 func (p *MCPServiceProvider) EABMarkCredentialUsed(ctx context.Context, credentialID uint64) (interface{}, error) {
 	if err := p.requireEABService(); err != nil {
+		return nil, err
+	}
+	if err := p.eabToolCredentialCheck(ctx, credentialID); err != nil {
 		return nil, err
 	}
 	if err := p.eabService.MarkUsed(ctx, credentialID); err != nil {
@@ -376,6 +421,9 @@ func (p *MCPServiceProvider) EABMarkCredentialUsed(ctx context.Context, credenti
 // CleanupExpiredCredentials RPC does.
 func (p *MCPServiceProvider) EABCleanupExpiredCredentials(ctx context.Context, tenantID string) (interface{}, error) {
 	if err := p.requireEABService(); err != nil {
+		return nil, err
+	}
+	if err := eabToolTenantCheck(ctx, tenantID); err != nil {
 		return nil, err
 	}
 	deleted, err := cleanupExpiredEABCredentials(ctx, p.eabService, tenantID)
@@ -413,6 +461,9 @@ func (p *MCPServiceProvider) EABGetCredentialQRCode(
 	if err != nil {
 		return nil, eabServiceFailure(err)
 	}
+	if err := eabToolTenantCheck(ctx, cred.TenantID); err != nil {
+		return nil, err
+	}
 	png, err := p.eabDelivery.ToQRCodeSized(cred, size)
 	if err != nil {
 		return nil, eabServiceFailure(err)
@@ -441,6 +492,9 @@ func (p *MCPServiceProvider) EABGetEnrollmentURL(
 	cred, err := p.eabService.Get(ctx, credentialID)
 	if err != nil {
 		return nil, eabServiceFailure(err)
+	}
+	if err := eabToolTenantCheck(ctx, cred.TenantID); err != nil {
+		return nil, err
 	}
 	var url string
 	if path != "" {
