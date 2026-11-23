@@ -10,6 +10,7 @@
 import { useMemo, useState } from 'react';
 import { Loader2, Plus, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Gated } from '@/components/features/capabilities/gated';
 import {
   Dialog,
   DialogContent,
@@ -79,10 +80,12 @@ export default function DNSZonesPage() {
           <Button variant="outline" size="icon" onClick={() => fetchZones()} disabled={loading}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            Add Zone
-          </Button>
+          <Gated op="POST /api/v1/dns/zones">
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Add Zone
+            </Button>
+          </Gated>
         </div>
       </div>
 
