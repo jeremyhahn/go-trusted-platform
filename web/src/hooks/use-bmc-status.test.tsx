@@ -1,4 +1,5 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
+import { usePlatformClient } from 'trusted-platform-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 
@@ -171,5 +172,53 @@ describe('useBMCStatus', () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('goes through the SDK BMCService', async () => {
+    const provisionResult: BMCProvisionResult = {
+      provision_id: 'p1',
+      profile_id: 42,
+      status: 'pending',
+      started_at: '2026-11-21T10:00:00Z',
+      updated_at: '2026-11-21T10:00:00Z',
+    };
+    stubControlPlane({
+      'GET /api/v1/bmc/42/power': ok({ state: 'on' }),
+      'GET /api/v1/bmc/42/sensors': ok([]),
+      'GET /api/v1/bmc/42/system-info': ok({}),
+      'GET /api/v1/bmc/42/cert': ok({}),
+      'POST /api/v1/bmc/42/provision': ok(provisionResult),
+      'GET /api/v1/bmc/42/provision': ok(provisionResult),
+    });
+    const { result } = renderHook(() => ({ hook: useBMCStatus('42'), client: usePlatformClient() }), {
+      wrapper,
+    });
+    const bmc = result.current.client.bmc;
+    const getPowerStatus = vi.spyOn(bmc, 'getPowerStatus');
+    const getSensors = vi.spyOn(bmc, 'getSensors');
+    const getSystemInfo = vi.spyOn(bmc, 'getSystemInfo');
+    const getWebCertificate = vi.spyOn(bmc, 'getWebCertificate');
+    const provision = vi.spyOn(bmc, 'provision');
+    const getProvisionStatus = vi.spyOn(bmc, 'getProvisionStatus');
+
+    await act(async () => {
+      await result.current.hook.getPower();
+      await result.current.hook.getSensors();
+      await result.current.hook.getSystemInfo();
+      await result.current.hook.getWebCertificate();
+      await result.current.hook.provision(' https://example.com/a.iso ');
+      await result.current.hook.provision();
+      await result.current.hook.getProvisionStatus();
+    });
+
+    expect(getPowerStatus.mock.calls).toEqual([['42']]);
+    expect(getSensors.mock.calls).toEqual([['42']]);
+    expect(getSystemInfo.mock.calls).toEqual([['42']]);
+    expect(getWebCertificate.mock.calls).toEqual([['42']]);
+    expect(provision.mock.calls).toEqual([
+      ['42', { iso_url: 'https://example.com/a.iso' }],
+      ['42', {}],
+    ]);
+    expect(getProvisionStatus.mock.calls).toEqual([['42']]);
   });
 });

@@ -1,5 +1,6 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
 import type { ReactNode } from 'react';
+import { usePlatformClient } from 'trusted-platform-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ok, refused, stubControlPlane, withControlPlane } from '@/test/control-plane-fetch';
@@ -107,5 +108,27 @@ describe('useBMCPower', () => {
   it('escapes the profile id in the path', () => {
     expect(bmcPowerPath('7')).toBe('/v1/bmc/7/power');
     expect(bmcPowerPath('a/b')).toBe('/v1/bmc/a%2Fb/power');
+  });
+
+  it('goes through the SDK BMCService', async () => {
+    stubControlPlane({ [POWER]: ok({ status: 'ok', action: 'x' }) });
+    const { result } = renderHook(() => ({ hook: useBMCPower('42'), client: usePlatformClient() }), {
+      wrapper: ({ children }: { children: ReactNode }) => withControlPlane(children),
+    });
+    const powerAction = vi.spyOn(result.current.client.bmc, 'powerAction');
+
+    await act(async () => {
+      await result.current.hook.powerOn();
+      await result.current.hook.powerOff();
+      await result.current.hook.reset();
+      await result.current.hook.cycle();
+    });
+
+    expect(powerAction.mock.calls).toEqual([
+      ['42', 'on'],
+      ['42', 'off'],
+      ['42', 'reset'],
+      ['42', 'cycle'],
+    ]);
   });
 });

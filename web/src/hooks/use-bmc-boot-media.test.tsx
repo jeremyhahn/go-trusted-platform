@@ -1,4 +1,5 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
+import { usePlatformClient } from 'trusted-platform-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ok, refused, stubControlPlane, withControlPlane } from '@/test/control-plane-fetch';
@@ -145,5 +146,38 @@ describe('useBMCBootMedia', () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('goes through the SDK BMCService', async () => {
+    stubControlPlane({
+      'GET /api/v1/bmc/42/boot-device': ok({ device: 'pxe' }),
+      'POST /api/v1/bmc/42/boot-device': ok({ status: 'ok', device: 'pxe' }),
+      'GET /api/v1/bmc/42/virtual-media': ok({ mounted: false }),
+      'POST /api/v1/bmc/42/virtual-media': ok({ status: 'ok', iso_url: 'https://example.com/a.iso' }),
+      'DELETE /api/v1/bmc/42/virtual-media': ok({ status: 'ok' }),
+    });
+    const { result } = renderHook(() => ({ hook: useBMCBootMedia('42'), client: usePlatformClient() }), {
+      wrapper: ({ children }) => withControlPlane(children),
+    });
+    const bmc = result.current.client.bmc;
+    const getBootDevice = vi.spyOn(bmc, 'getBootDevice');
+    const setBootDevice = vi.spyOn(bmc, 'setBootDevice');
+    const getVirtualMediaStatus = vi.spyOn(bmc, 'getVirtualMediaStatus');
+    const mountISO = vi.spyOn(bmc, 'mountISO');
+    const unmountISO = vi.spyOn(bmc, 'unmountISO');
+
+    await act(async () => {
+      await result.current.hook.getBootDevice();
+      await result.current.hook.setBootDevice('pxe', true);
+      await result.current.hook.getVirtualMedia();
+      await result.current.hook.mountISO(' https://example.com/a.iso ');
+      await result.current.hook.unmountISO();
+    });
+
+    expect(getBootDevice.mock.calls).toEqual([['42']]);
+    expect(setBootDevice.mock.calls).toEqual([['42', { device: 'pxe', persistent: true }]]);
+    expect(getVirtualMediaStatus.mock.calls).toEqual([['42']]);
+    expect(mountISO.mock.calls).toEqual([['42', 'https://example.com/a.iso']]);
+    expect(unmountISO.mock.calls).toEqual([['42']]);
   });
 });
