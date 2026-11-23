@@ -40,6 +40,14 @@ import type {
   GetFlowStatsResponse,
   SDNLabelSelector,
 } from '../types/sdn.js';
+import type {
+  CreateNetworkZoneRequest,
+  ListNetworkZonesRequest,
+  ListNetworkZonesResponse,
+  NetworkZone,
+  NetworkZoneDeleteResponse,
+  UpdateNetworkZoneRequest,
+} from '../types/sdn-zones.js';
 
 /**
  * Builds the query parameters of an SDN list request under the proto field
@@ -367,6 +375,51 @@ export class SDNService extends BaseService {
   async deleteVLAN(bridgeId: string, vlanId: number): Promise<ApiResponse<DeleteVLANResponse>> {
     return this.client.delete<DeleteVLANResponse>(
       this.buildUrl(`/bridges/${this.encodePathSegment(bridgeId)}/vlans/${vlanId}`)
+    );
+  }
+
+  // =========================================================================
+  // Network Zone Operations
+  // =========================================================================
+
+  /**
+   * List network zones: GET /api/v1/sdn/zones, optionally narrowed by
+   * the `lifecycle_role` query parameter.
+   */
+  async listNetworkZones(
+    request: ListNetworkZonesRequest = {}
+  ): Promise<ApiResponse<ListNetworkZonesResponse>> {
+    return this.client.get<ListNetworkZonesResponse>(
+      this.buildUrl('/zones', { filters: { lifecycle_role: request.lifecycleRole } })
+    );
+  }
+
+  /**
+   * Create a network zone: POST /api/v1/sdn/zones.
+   */
+  async createNetworkZone(zone: CreateNetworkZoneRequest): Promise<ApiResponse<NetworkZone>> {
+    return this.client.post<NetworkZone>(this.buildUrl('/zones'), zone);
+  }
+
+  /**
+   * Update a network zone: PUT /api/v1/sdn/zones/{name}.
+   */
+  async updateNetworkZone(
+    name: string,
+    zone: UpdateNetworkZoneRequest
+  ): Promise<ApiResponse<NetworkZone>> {
+    return this.client.put<NetworkZone>(
+      this.buildUrl(`/zones/${this.encodePathSegment(name)}`),
+      zone
+    );
+  }
+
+  /**
+   * Delete a network zone: DELETE /api/v1/sdn/zones/{name}.
+   */
+  async deleteNetworkZone(name: string): Promise<ApiResponse<NetworkZoneDeleteResponse>> {
+    return this.client.delete<NetworkZoneDeleteResponse>(
+      this.buildUrl(`/zones/${this.encodePathSegment(name)}`)
     );
   }
 }

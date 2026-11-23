@@ -608,10 +608,10 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `SDNService.GetPolicy` | `GET /policies/{id}` | - | - | - | missing |
 | `SDNService.ListPolicies` | `GET /policies` | - | - | - | missing |
 | `SDNService.DeletePolicy` | - | - | - | - | missing |
-| `SDNService.CreateNetworkZone` | - | - | - | - | missing |
-| `SDNService.UpdateNetworkZone` | - | - | - | - | missing |
-| `SDNService.DeleteNetworkZone` | - | - | - | - | missing |
-| `SDNService.ListNetworkZones` | - | - | - | - | missing |
+| `SDNService.CreateNetworkZone` | `POST /sdn/zones` | - | - | - | missing |
+| `SDNService.UpdateNetworkZone` | `PUT /sdn/zones/{name}` | - | - | - | missing |
+| `SDNService.DeleteNetworkZone` | `DELETE /sdn/zones/{name}` | - | - | - | missing |
+| `SDNService.ListNetworkZones` | `GET /sdn/zones` | - | - | - | missing |
 | `SDNService.StreamFlowLogs` | - | - | - | - | not-UI: streaming plumbing |
 
 ## SwitchService (`switch.proto`)
