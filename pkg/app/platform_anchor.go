@@ -40,14 +40,15 @@ func (app *App) PlatformAnchor() (*trust.Anchor, error) {
 // platformAnchorCertificates resolves the root of this node's IDevID
 // issuing chain.
 func (app *App) platformAnchorCertificates(_ context.Context) ([]*x509.Certificate, error) {
-	if app.TPM == nil || app.CA == nil {
+	ca := app.CurrentCA()
+	if app.TPM == nil || ca == nil {
 		return nil, ErrPlatformAnchorNoIdentity{}
 	}
 	idevid, err := app.TPM.IDevIDCertificate()
 	if err != nil {
 		return nil, err
 	}
-	root, err := app.CA.RootCertificate(idevid)
+	root, err := ca.RootCertificate(idevid)
 	if err != nil {
 		return nil, err
 	}

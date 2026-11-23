@@ -534,19 +534,20 @@ func (app *App) ntsExpectedHostnames() []string {
 // would accept, so the sweep repairs it instead of reporting it healthy
 // until expiry.
 func (app *App) ntsServedCertInvalid(cert *x509.Certificate) (string, bool) {
-	if app.CA == nil {
+	ca := app.CurrentCA()
+	if ca == nil {
 		return "platform CA unavailable to verify the served NTS certificate", true
 	}
-	rootCert, err := app.CA.TrustedRoot()
+	rootCert, err := ca.TrustedRoot()
 	if err != nil {
 		return "cannot load the platform CA root: " + err.Error(), true
 	}
-	pool, err := app.CA.TrustedRootCertPool(rootCert)
+	pool, err := ca.TrustedRootCertPool(rootCert)
 	if err != nil {
 		return "cannot build the platform CA pool: " + err.Error(), true
 	}
 	intermediates := x509.NewCertPool()
-	if inter, interErr := app.CA.TrustedIntermediate(); interErr == nil && inter != nil {
+	if inter, interErr := ca.TrustedIntermediate(); interErr == nil && inter != nil {
 		intermediates.AddCert(inter)
 	}
 	// Every name a client may dial must verify. Checking only one would
@@ -587,7 +588,8 @@ func (app *App) reissueNTSCertificateFromCA(ctx context.Context, keyPath, certPa
 // provisionNTSKeys is split: the CSR contents and the deploy handoff are
 // exercisable without a live QuicBaaS.
 func (app *App) reissueNTSCertificate(ctx context.Context, store secretStore, keyPath, certPath string) error {
-	if app.CA == nil {
+	ca := app.CurrentCA()
+	if ca == nil {
 		return &ErrNTSProvision{Stage: "reissue", Cause: &MessageError{Msg: "platform CA not available"}}
 	}
 
@@ -607,7 +609,7 @@ func (app *App) reissueNTSCertificate(ctx context.Context, store secretStore, ke
 	}
 	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
 
-	cert, err := app.CA.SignCSR(ctx, csrPEM, &quicbaasca.SignOptions{ValidityDays: 365})
+	cert, err := ca.SignCSR(ctx, csrPEM, &quicbaasca.SignOptions{ValidityDays: 365})
 	if err != nil {
 		return &ErrNTSProvision{Stage: "CA sign", Cause: err}
 	}
