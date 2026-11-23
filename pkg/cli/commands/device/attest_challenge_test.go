@@ -34,17 +34,15 @@ import (
 // testChallengeExpiry is the expires_at the in-process server answers.
 var testChallengeExpiry = time.Date(2026, 11, 23, 12, 5, 0, 0, time.UTC)
 
-// IssueAttestationChallenge answers a challenge for device 42, the one
-// registered device, and NotFound for any other.
+// IssueAttestationChallenge answers a fixed challenge for any device id.
+// Whether a device exists is the real issuer's call, tested against
+// DeviceGRPCService in attest_challenge_real_issuer_test.go.
 func (s *inProcProfileServer) IssueAttestationChallenge(_ context.Context, r *platformv1.IssueAttestationChallengeRequest) (*platformv1.IssueAttestationChallengeResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastChallenge = r
 	if s.fail != nil {
 		return nil, s.fail
-	}
-	if r.GetDeviceId() != "42" {
-		return nil, status.Error(codes.NotFound, "device not found")
 	}
 	return &platformv1.IssueAttestationChallengeResponse{
 		ChallengeId: "c-42",
@@ -86,10 +84,6 @@ func TestRunAttestChallenge_Errors(t *testing.T) {
 		for _, id := range []string{"0", "abc"} {
 			assert.Equal(t, ErrInvalidDeviceID{ID: id}, runAttestChallenge(&cli.CommonFlags{}, id))
 		}
-	})
-
-	t.Run("UnknownDevice", func(t *testing.T) {
-		assert.Equal(t, ErrDeviceNotFound{ID: 4242}, runAttestChallenge(f, "4242"))
 	})
 
 	t.Run("ServerFailure", func(t *testing.T) {
