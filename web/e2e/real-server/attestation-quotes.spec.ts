@@ -147,7 +147,7 @@ test.describe('TPM quote card (real server)', () => {
       await adminPage.getByTestId('attestation-verify-quote').fill(JSON.stringify(JUNK_QUOTE));
     }
     await adminPage.getByTestId('attestation-verify-ak-pem').fill(JUNK_PEM);
-    await adminPage.getByTestId('attestation-verify-nonce').fill(quoted?.quote?.nonce || NONCE);
+    await adminPage.getByTestId('attestation-verify-nonce').fill(NONCE);
 
     const button = adminPage.getByRole('button', { name: 'Verify quote' });
     await expect(button).toHaveAttribute('data-capability-enabled', 'true');

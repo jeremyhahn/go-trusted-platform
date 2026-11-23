@@ -51,6 +51,17 @@ export function parsePcrIndices(text: string): number[] {
   });
 }
 
+/**
+ * Encode a PEM key for a proto `bytes` field: protojson decodes bytes from
+ * base64, so a raw PEM would be refused before verification runs.
+ */
+export function pemToBase64(pem: string): string {
+  const bytes = new TextEncoder().encode(pem);
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary);
+}
+
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -102,9 +113,12 @@ export function AttestationQuoteCard() {
         return;
       }
       setResult({ quote: res.data.quote, channelBinding: res.data.channelBinding });
+      setVerdict(null);
       if (res.data.quote) {
         setQuoteJson(JSON.stringify(res.data.quote, null, 2));
-        setExpectedNonce(res.data.quote.nonce || nonce.trim());
+        // The quote's own nonce is SHA-256(nonce || channelBinding) when bound;
+        // the verify wants the nonce the quote was requested with.
+        setExpectedNonce(nonce.trim());
       }
     } catch (err) {
       failed("Quote request failed", errorText(err));
@@ -116,6 +130,7 @@ export function AttestationQuoteCard() {
   const verifyQuote = async (e: React.FormEvent) => {
     e.preventDefault();
     setVerifyError(null);
+    setVerdict(null);
     let quote: Quote;
     try {
       quote = JSON.parse(quoteJson) as Quote;
@@ -130,7 +145,7 @@ export function AttestationQuoteCard() {
     try {
       const request: VerifyRequest = {
         quote,
-        akPublicKeyPem: akPem,
+        akPublicKeyPem: pemToBase64(akPem.trim()),
         expectedNonce: expectedNonce.trim(),
       };
       if (result?.channelBinding && result.quote && JSON.stringify(result.quote) === JSON.stringify(quote)) {
@@ -230,7 +245,10 @@ export function AttestationQuoteCard() {
               rows={5}
               className="font-mono text-xs"
               value={quoteJson}
-              onChange={(e) => setQuoteJson(e.target.value)}
+              onChange={(e) => {
+                setQuoteJson(e.target.value);
+                setVerdict(null);
+              }}
             />
           </div>
           <div className="grid gap-1">
@@ -241,7 +259,10 @@ export function AttestationQuoteCard() {
               rows={4}
               className="font-mono text-xs"
               value={akPem}
-              onChange={(e) => setAkPem(e.target.value)}
+              onChange={(e) => {
+                setAkPem(e.target.value);
+                setVerdict(null);
+              }}
             />
           </div>
           <div className="grid gap-1">
@@ -250,7 +271,10 @@ export function AttestationQuoteCard() {
               id="attestation-verify-nonce"
               data-testid="attestation-verify-nonce"
               value={expectedNonce}
-              onChange={(e) => setExpectedNonce(e.target.value)}
+              onChange={(e) => {
+                setExpectedNonce(e.target.value);
+                setVerdict(null);
+              }}
             />
           </div>
           {verifyError && (
