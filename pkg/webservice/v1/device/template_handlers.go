@@ -127,7 +127,10 @@ func (h *TemplateHandler) GetTemplate(w http.ResponseWriter, r *http.Request) {
 	h.responseWriter.Success200(w, r, h.templateToResponse(templateEntity))
 }
 
-// UpdateTemplate handles PUT /api/v1/device/templates/{id}
+// UpdateTemplate handles PUT /api/v1/device/templates/{id}. A PUT replaces
+// only the fields it carries: an empty tenant_id or config, or an absent
+// match_rules, keeps the stored value, so a rename does not wipe them. The
+// merge lives here, not in TemplateService.Update, which gRPC and MCP share.
 func (h *TemplateHandler) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
 	if h.templateService == nil {
 		h.responseWriter.Error500(w, r, ErrTemplateServiceNotInitialized{})
@@ -151,6 +154,22 @@ func (h *TemplateHandler) UpdateTemplate(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		h.responseWriter.Error400(w, r, err)
 		return
+	}
+
+	stored, err := h.templateService.Get(r.Context(), uint64(id))
+	if err != nil {
+		h.logger.Errorf("failed to load template for update: id=%d error=%v", id, err)
+		handleServiceErr(h.responseWriter, w, r, err)
+		return
+	}
+	if templateEntity.TenantID == "" {
+		templateEntity.TenantID = stored.TenantID
+	}
+	if len(templateEntity.Config) == 0 {
+		templateEntity.Config = stored.Config
+	}
+	if templateEntity.MatchRules == nil {
+		templateEntity.MatchRules = stored.MatchRules
 	}
 
 	if err := h.templateService.Update(r.Context(), templateEntity); err != nil {
