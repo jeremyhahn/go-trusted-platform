@@ -855,12 +855,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Warn("IDevID gRPC service created but app.TPM is nil; IDevID/IAK ops will return FailedPrecondition")
 	}
 
-	if config.CAService != nil {
-		idevidService.SetCAService(config.CAService)
-		logger.Info("IDevID gRPC service wired to CA for LDevID issuance")
-	} else {
-		logger.Warn("IDevID gRPC service created without CA; CreateLDevID will return FailedPrecondition")
-	}
+	idevidService.SetCASource(caHolder.Get)
+	logger.Info("IDevID gRPC service follows the shared CA holder for LDevID issuance; CreateLDevID answers FailedPrecondition until a CA is initialised")
 
 	// Register with TCP gRPC server if enabled
 	if grpcServer != nil {
