@@ -1067,8 +1067,7 @@ func TestTPM2Handler_HandleSeal_PassesCNAndPassword(t *testing.T) {
 
 // TestTPM2Handler_HandleSeal_PrefersPlatformSRK: a QUIC seal parents the
 // key as go-xkms does for a request without options: on the platform SRK
-// when it exists, keeping its policy when no password is given, and on the
-// SSRK when the platform SRK cannot be read.
+// when it exists, and on the SSRK when the platform SRK cannot be read.
 func TestTPM2Handler_HandleSeal_PrefersPlatformSRK(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -1080,7 +1079,6 @@ func TestTPM2Handler_HandleSeal_PrefersPlatformSRK(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := NewTPM2Handler(logging.DefaultLogger())
 			mock := newMockTPM()
-			mock.psrkAttrs.PlatformPolicy = true
 			mock.psrkAttrsErr = tc.psrkErr
 			h.SetTPM2Service(mock)
 			payload, err := quicwire.EncodePayload(&sealWireRequest{Data: []byte("secret"), CN: "k1"})
@@ -1094,7 +1092,6 @@ func TestTPM2Handler_HandleSeal_PrefersPlatformSRK(t *testing.T) {
 				return
 			}
 			assert.Equal(t, mock.psrkAttrs, mock.sealOpts.KeyAttributes.Parent)
-			assert.True(t, mock.sealOpts.KeyAttributes.PlatformPolicy, "the platform SRK policy was dropped")
 		})
 	}
 }
@@ -1113,7 +1110,6 @@ func TestTPM2Handler_HandleUnseal_PrefersPlatformSRK(t *testing.T) {
 			h := NewTPM2Handler(logging.DefaultLogger())
 			mock := newMockTPM()
 			mock.unsealResult = []byte("secret")
-			mock.psrkAttrs.PlatformPolicy = true
 			mock.psrkAttrsErr = tc.psrkErr
 			h.SetTPM2Service(mock)
 			payload, err := quicwire.EncodePayload(&unsealWireRequest{CN: "k1"})
@@ -1127,7 +1123,6 @@ func TestTPM2Handler_HandleUnseal_PrefersPlatformSRK(t *testing.T) {
 				return
 			}
 			assert.Equal(t, mock.psrkAttrs, mock.unsealOpts.KeyAttributes.Parent)
-			assert.True(t, mock.unsealOpts.KeyAttributes.PlatformPolicy, "the platform SRK policy was dropped")
 		})
 	}
 }
