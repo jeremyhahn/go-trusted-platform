@@ -210,7 +210,7 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
             </Badge>
           </div>
           <CardDescription>
-            The running state comes from the last start or stop result for this bundle.
+            The running state comes from the server on load, then from the last start or stop result for this bundle.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
