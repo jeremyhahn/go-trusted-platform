@@ -184,6 +184,8 @@ export class DeviceService extends BaseService {
    * `POST /api/v1/devices/{id}/attest` (docs/device/api.md §4.4). The
    * response reports each check separately; a negative verdict is a 200 with
    * `verified: false`, so callers read the result rather than catching.
+   * The evidence is single-use, so the call never retries: a replay after a
+   * lost response would be refused for a consumed challenge.
    *
    * @param id - Device ID
    * @param request - Base64 quote evidence
@@ -193,7 +195,9 @@ export class DeviceService extends BaseService {
     id: number | string,
     request: DeviceAttestRequest
   ): Promise<ApiResponse<DeviceAttestResponse>> {
-    return this.client.post<DeviceAttestResponse>(this.buildUrl(`/${id}/attest`), request);
+    return this.client.post<DeviceAttestResponse>(this.buildUrl(`/${id}/attest`), request, {
+      retry: { enabled: false },
+    });
   }
 
   /**
