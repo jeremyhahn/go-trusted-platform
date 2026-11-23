@@ -206,6 +206,16 @@ tracked here as
   mode, so a stale world-readable copy is never written through. The key file on the
   media is still plaintext, because sbsign and the installer need a key
   file; only a KMS handle (go-quicbaas#136) removes it.
+- **Loading.** The Secure Boot DB-key loader (`authenticode.LoadPrivateKeyPEM`,
+  used by the installer, UKI rebuild and ISO build) and the module-signing
+  bundle (`secureboot.LoadModuleSigningKey` / `writeModuleSigningBundle`)
+  wipe the file buffer and the private-key DER they own; certificate bytes
+  are kept, because the parsed certificate's `Raw` aliases them. A forced
+  bundle write removes any existing file or symlink and re-creates the
+  bundle owner-only (0600, exclusive create) instead of truncating through
+  it. The parsed key object stays unscrubbable for the same reason as
+  generation (crypto/rsa and crypto/ecdsa expose no zeroization), and only
+  a KMS handle (go-quicbaas#136) removes the key file.
 
 The store write in between is bounded rather than protected: the SDK
 request field is a plain `[]byte` whose retention the platform cannot
