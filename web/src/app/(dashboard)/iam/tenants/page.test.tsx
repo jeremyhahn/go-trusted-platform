@@ -24,11 +24,16 @@ const tenantsHook = {
   deleteTenant: vi.fn(),
 };
 const toast = vi.fn();
+// #2033 item 5: Gated reads the server's capabilities through this hook.
+const capability = vi.fn();
 
 vi.mock("@/hooks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks")>()),
   useIAMTenants: () => tenantsHook,
   useToast: () => ({ toast }),
+}));
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability }),
 }));
 
 function deferred<T>() {
@@ -41,6 +46,8 @@ function deferred<T>() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  capability.mockReset();
+  capability.mockImplementation(() => ({ enabled: true }));
   tenantsHook.getTenant.mockImplementation(async (id: string) => ({
     data: { tenant: id === tenantA.id ? tenantA : tenantB },
   }));
@@ -104,5 +111,72 @@ describe("TenantsPage selection", () => {
     await waitFor(() =>
       expect((screen.getByRole("button", { name: "View tenant t-b" }) as HTMLButtonElement).disabled).toBe(false),
     );
+  });
+});
+
+function offering(off: Record<string, string>) {
+  capability.mockImplementation((op: string) =>
+    op in off ? { enabled: false, reason: off[op] } : { enabled: true },
+  );
+}
+
+describe("TenantsPage capability gate", () => {
+  it("withholds Create tenant with the server's reason when POST /api/v1/iam/tenants is not offered", () => {
+    offering({ "POST /api/v1/iam/tenants": "not-configured: iam" });
+    render(<TenantsPage />);
+    fireEvent.change(screen.getByLabelText("Tenant ID"), { target: { value: "t-c" } });
+    fireEvent.change(screen.getByLabelText("Tenant name"), { target: { value: "Gamma" } });
+
+    const create = screen.getByRole("button", { name: /Create tenant/ }) as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+    expect(create.getAttribute("title")).toBe("not-configured: iam");
+    expect(create.getAttribute("data-capability-op")).toBe("POST /api/v1/iam/tenants");
+    expect(create.getAttribute("data-capability-enabled")).toBe("false");
+    fireEvent.click(create);
+    expect(tenantsHook.createTenant).not.toHaveBeenCalled();
+  });
+
+  it("withholds View, Save tenant and Delete when the server does not offer the tenant reads and writes", async () => {
+    offering({
+      "DELETE /api/v1/iam/tenants/{tenant}": "unimplemented",
+      "PUT /api/v1/iam/tenants/{tenant}": "unimplemented",
+    });
+    render(<TenantsPage />);
+
+    for (const id of ["t-a", "t-b"]) {
+      const del = screen.getByRole("button", { name: `Delete tenant ${id}` }) as HTMLButtonElement;
+      expect(del.disabled).toBe(true);
+      expect(del.getAttribute("data-capability-op")).toBe("DELETE /api/v1/iam/tenants/{tenant}");
+      expect(del.getAttribute("title")).toBe("unimplemented");
+    }
+
+    const view = screen.getByRole("button", { name: "View tenant t-a" }) as HTMLButtonElement;
+    expect(view.disabled).toBe(false);
+    expect(view.getAttribute("data-capability-op")).toBe("GET /api/v1/iam/tenants/{tenant}");
+    fireEvent.click(view);
+    await waitFor(() => expect(screen.getByTestId("tenant-detail")).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("New name"), { target: { value: "Alpha 2" } });
+
+    const save = screen.getByRole("button", { name: "Save tenant" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    expect(save.getAttribute("data-capability-op")).toBe("PUT /api/v1/iam/tenants/{tenant}");
+    fireEvent.click(save);
+    expect(tenantsHook.updateTenant).not.toHaveBeenCalled();
+  });
+
+  it("asks the gate for each tenant op and leaves the controls enabled when the server offers them", () => {
+    render(<TenantsPage />);
+    for (const op of [
+      "POST /api/v1/iam/tenants",
+      "GET /api/v1/iam/tenants/{tenant}",
+      "DELETE /api/v1/iam/tenants/{tenant}",
+    ]) {
+      expect(capability).toHaveBeenCalledWith(op);
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete tenant t-b" }));
+    const confirm = screen.getByRole("button", { name: "Delete tenant" });
+    expect(confirm.getAttribute("data-capability-op")).toBe("DELETE /api/v1/iam/tenants/{tenant}");
+    expect(confirm.getAttribute("data-capability-enabled")).toBe("true");
   });
 });
