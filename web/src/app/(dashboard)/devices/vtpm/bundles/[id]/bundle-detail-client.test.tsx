@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ok, refused, stubControlPlane, withControlPlane, type Answer } from '@/test/control-plane-fetch';
@@ -35,11 +35,33 @@ function storedBundle(id: string): Answer {
 
 const bundlePath = (id: string) => `GET /api/v1/vtpm/bundles/${id}`;
 
-// The hook also reads the template and bundle lists.
+// The Operations card's controls in order, with the server op each is gated on.
+const CONTROLS = ['Validate bundle', 'Get bundle path', 'Get TPM socket path', 'Get NVRAM path'];
+const BUNDLE_OPS = [
+  'POST /api/v1/vtpm/bundles/{id}/validate',
+  'GET /api/v1/vtpm/bundles/{id}/path',
+  'GET /api/v1/vtpm/bundles/{id}/tpm-socket',
+  'GET /api/v1/vtpm/bundles/{id}/nvram',
+];
+
+// The server's capabilities answer: every bundle op on except those in off.
+function caps(off: string[] = []): Answer {
+  const capabilities = BUNDLE_OPS.map((op) =>
+    off.includes(op)
+      ? { op, kind: 'route', enabled: false, reason: 'not-configured: vtpm' }
+      : { op, kind: 'route', enabled: true },
+  );
+  return ok({ capabilities, total: capabilities.length, enabled: capabilities.filter((c) => c.enabled).length });
+}
+
+// The hook also reads the template and bundle lists; the gate reads the capabilities.
 const LISTS: Record<string, Answer> = {
   'GET /api/v1/vtpm/templates': ok({ templates: [] }),
   'GET /api/v1/vtpm/bundles': ok({ bundles: [], total: 0 }),
+  'GET /api/v1/capabilities': caps(),
 };
+
+const button = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement;
 
 async function renderAndWaitFor(id: string) {
   const view = render(withControlPlane(<BundleDetailClient />));
@@ -164,5 +186,53 @@ describe('BundleDetailClient keyed to the bundle ID', () => {
       release();
     });
     expect(await screen.findByRole('heading', { level: 1, name: 'vTPM bundle bundle-b' })).toBeDefined();
+  });
+});
+
+describe('BundleDetailClient capability gate', () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    currentId = 'bundle-a';
+  });
+
+  it('each operation carries its server op', async () => {
+    stubControlPlane({
+      ...LISTS,
+      [bundlePath('bundle-a')]: storedBundle('bundle-a'),
+    });
+    await renderAndWaitFor('bundle-a');
+
+    CONTROLS.forEach((name, i) => {
+      expect(button(name).getAttribute('data-capability-op')).toBe(BUNDLE_OPS[i]);
+    });
+    for (const name of CONTROLS) {
+      await waitFor(() => expect(button(name).getAttribute('data-capability-enabled')).toBe('true'));
+    }
+  });
+
+  it('an op the server does not offer disables its control with the reason and sends nothing', async () => {
+    const sent = stubControlPlane({
+      ...LISTS,
+      'GET /api/v1/capabilities': caps([
+        'POST /api/v1/vtpm/bundles/{id}/validate',
+        'GET /api/v1/vtpm/bundles/{id}/nvram',
+      ]),
+      [bundlePath('bundle-a')]: storedBundle('bundle-a'),
+      'POST /api/v1/vtpm/bundles/bundle-a/validate': ok({ valid: true }),
+    });
+    await renderAndWaitFor('bundle-a');
+
+    await waitFor(() => expect(button('Get bundle path').getAttribute('data-capability-enabled')).toBe('true'));
+    expect(button('Get bundle path').disabled).toBe(false);
+    for (const name of ['Validate bundle', 'Get NVRAM path']) {
+      expect(button(name).disabled).toBe(true);
+      expect(button(name).getAttribute('title')).toBe('not-configured: vtpm');
+    }
+
+    await act(async () => {
+      fireEvent.click(button('Validate bundle'));
+    });
+    expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/vtpm/bundles/bundle-a/validate')).toBe(false);
   });
 });
