@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"strconv"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
@@ -34,6 +35,28 @@ func callerTenant(ctx context.Context) (string, bool) {
 		return identity.TenantID, true
 	}
 	return "", false
+}
+
+// callerUserID returns the authenticated caller's numeric user id: the
+// subject of a platform token (gRPC, QUIC or MCP) or the IAM user id an mTLS
+// identity resolved to. It reports false when the caller has none, or when
+// the id is not a positive decimal integer.
+func callerUserID(ctx context.Context) (uint64, bool) {
+	var subject string
+	if authCtx, ok := grpcapi.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
+		subject = authCtx.Subject
+	} else if authCtx, ok := quic.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
+		subject = authCtx.Subject
+	} else if authCtx, ok := mcp.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
+		subject = authCtx.Subject
+	} else if identity := IdentityFromContext(ctx); identity != nil {
+		subject = identity.UserID
+	}
+	id, err := strconv.ParseUint(subject, 10, 64)
+	if err != nil || id == 0 {
+		return 0, false
+	}
+	return id, true
 }
 
 // authorizeIAMTenant refuses an IAM request that names a tenant other than
