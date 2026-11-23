@@ -183,10 +183,12 @@ func sortedTopLevelSections() []string {
 // re-read the file into that layer, undo an unpersisted update, while
 // startup overrides and flags keep their values.
 //
-// When persist is true the merged configuration is written back to the
-// active config file (viper.WriteConfig) and re-read before the
-// re-decode, making the change durable across restarts. When persist is
-// false the change lives in memory until the next ReloadFromDisk.
+// When persist is true the active config file is rewritten with its own
+// contents plus the section values; startup flags, environment values
+// and defaults are not written to it. The live state then re-reads the
+// file before the re-decode, making the change durable across restarts.
+// When persist is false the change lives in memory until the next
+// ReloadFromDisk.
 //
 // section must be non-empty; each entry in values is applied under the
 // dotted key "<section>.<key>". Returns the sorted top-level section
@@ -224,7 +226,7 @@ func ApplySection(target interface{}, section string, values map[string]string, 
 	}
 
 	if persist {
-		if err := viper.WriteConfig(); err != nil {
+		if err := persistSectionToFile(section, values); err != nil {
 			// Drop the merged values: the file is the source of truth.
 			_ = viper.ReadInConfig()
 			return nil, ErrApplySectionFailed{Cause: err}
@@ -244,6 +246,23 @@ func ApplySection(target interface{}, section string, values map[string]string, 
 
 // nestSectionValues turns the dotted keys "<section>.<key>" into the
 // nested map shape MergeConfigMap expects.
+// persistSectionToFile rewrites the active config file with the file's
+// own contents plus the section values. It works on a file-layer Viper,
+// not the global one, whose WriteConfig would marshal AllSettings and so
+// write every bound flag, default and environment value into the file.
+func persistSectionToFile(section string, values map[string]string) error {
+	fv := viper.New()
+	fv.SetConfigFile(viper.ConfigFileUsed())
+	fv.SetConfigType(viperFormat())
+	if err := fv.ReadInConfig(); err != nil {
+		return err
+	}
+	if err := fv.MergeConfigMap(nestSectionValues(section, values)); err != nil {
+		return err
+	}
+	return fv.WriteConfig()
+}
+
 func nestSectionValues(section string, values map[string]string) map[string]interface{} {
 	root := map[string]interface{}{}
 	for k, v := range values {
