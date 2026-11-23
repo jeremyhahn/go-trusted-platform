@@ -8,7 +8,6 @@ import {
   Play,
   Square,
   RotateCw,
-  Copy,
   Trash2,
   Camera,
   RefreshCw,
@@ -216,24 +215,6 @@ export default function VMDetailPage() {
     }
   );
 
-  // TODO: Clone functionality not available in SDK yet
-  // This would require VM snapshot + restore to new VM functionality
-  const cloneVMMutation = useMutation(
-    async ({ vmId, name }: { vmId: string; name: string }) => {
-      throw new Error('Clone operation not yet implemented in SDK');
-    },
-    {
-      onError: (error: MutationError) => {
-        toast({
-          title: 'Error',
-          description: `Failed to clone VM: ${error.message}`,
-          variant: 'destructive',
-        });
-        setActionLoading(false);
-      },
-    }
-  );
-
   const handleStart = () => {
     setActionLoading(true);
     startVMMutation.mutate(vmId);
@@ -264,13 +245,6 @@ export default function VMDetailPage() {
     deleteVMMutation.mutate(vmId);
   };
 
-  const handleClone = () => {
-    const name = prompt('Enter name for cloned VM:');
-    if (!name) return;
-
-    setActionLoading(true);
-    cloneVMMutation.mutate({ vmId: vmId, name });
-  };
 
   if (loading || !vm) {
     return (
@@ -297,25 +271,29 @@ export default function VMDetailPage() {
         </div>
         <div className="flex gap-2">
           {vm.status !== 'running' && (
-            <Button
-              variant="outline"
-              onClick={handleStart}
-              disabled={actionLoading}
-            >
-              <Play className="mr-2 h-4 w-4" />
-              Start
-            </Button>
+            <Gated op="POST /api/v1/compute/vms/{id}/start">
+              <Button
+                variant="outline"
+                onClick={handleStart}
+                disabled={actionLoading}
+              >
+                <Play className="mr-2 h-4 w-4" />
+                Start
+              </Button>
+            </Gated>
           )}
           {vm.status === 'running' && (
             <>
-              <Button
-                variant="outline"
-                onClick={handleStop}
-                disabled={actionLoading}
-              >
-                <Square className="mr-2 h-4 w-4" />
-                Stop
-              </Button>
+              <Gated op="POST /api/v1/compute/vms/{id}/stop">
+                <Button
+                  variant="outline"
+                  onClick={handleStop}
+                  disabled={actionLoading}
+                >
+                  <Square className="mr-2 h-4 w-4" />
+                  Stop
+                </Button>
+              </Gated>
               <Gated op="POST /api/v1/compute/vms/{id}/suspend">
                 <Button
                   variant="outline"
@@ -326,14 +304,16 @@ export default function VMDetailPage() {
                   Suspend
                 </Button>
               </Gated>
-              <Button
-                variant="outline"
-                onClick={handleReboot}
-                disabled={actionLoading}
-              >
-                <RotateCw className="mr-2 h-4 w-4" />
-                Reboot
-              </Button>
+              <Gated op="POST /api/v1/compute/vms/{id}/reboot">
+                <Button
+                  variant="outline"
+                  onClick={handleReboot}
+                  disabled={actionLoading}
+                >
+                  <RotateCw className="mr-2 h-4 w-4" />
+                  Reboot
+                </Button>
+              </Gated>
               <VMMigrateButton vmId={vmId} disabled={actionLoading} onMigrated={fetchVM} />
             </>
           )}
@@ -349,18 +329,16 @@ export default function VMDetailPage() {
               </Button>
             </Gated>
           )}
-          <Button variant="outline" onClick={handleClone} disabled={actionLoading}>
-            <Copy className="mr-2 h-4 w-4" />
-            Clone
-          </Button>
-          <Button
-            variant="destructive"
-            onClick={handleDelete}
-            disabled={actionLoading}
-          >
-            <Trash2 className="mr-2 h-4 w-4" />
-            Delete
-          </Button>
+          <Gated op="DELETE /api/v1/compute/vms/{id}">
+            <Button
+              variant="destructive"
+              onClick={handleDelete}
+              disabled={actionLoading}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete
+            </Button>
+          </Gated>
         </div>
       </div>
 
