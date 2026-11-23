@@ -19,6 +19,7 @@ import type {
   FindMatchingProfileRequest,
   ActivateDeviceRequest,
   DeviceAttestRequest,
+  DeviceAttestChallengeResponse,
   DeviceAttestResponse,
   DisableDeviceRequest,
   DeviceLifecycleResponse,
@@ -197,6 +198,21 @@ export class DeviceService extends BaseService {
     request: DeviceAttestRequest
   ): Promise<ApiResponse<DeviceAttestResponse>> {
     return this.client.post<DeviceAttestResponse>(this.buildUrl(`/${id}/attest`), request);
+  }
+
+  /**
+   * Issue a single-use attestation challenge for a device
+   * (`POST /api/v1/devices/{id}/attest/challenge`). The quote evidence must be
+   * made over the returned nonce, and the next attestDevice that names its
+   * challenge_id consumes it.
+   */
+  async issueAttestationChallenge(
+    id: number | string
+  ): Promise<ApiResponse<DeviceAttestChallengeResponse>> {
+    return this.client.post<DeviceAttestChallengeResponse>(
+      this.buildUrl(`/${this.encodePathSegment(String(id))}/attest/challenge`),
+      {}
+    );
   }
 
   /**

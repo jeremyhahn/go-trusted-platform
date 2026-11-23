@@ -498,6 +498,7 @@ export type {
   FindMatchingProfileRequest,
   ActivateDeviceRequest,
   DeviceAttestRequest,
+  DeviceAttestChallengeResponse,
   DeviceAttestResponse,
   DisableDeviceRequest,
   DeviceLifecycleResponse,
