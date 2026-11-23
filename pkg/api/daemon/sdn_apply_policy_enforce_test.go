@@ -21,7 +21,9 @@ package daemon
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -338,4 +340,143 @@ func TestSDNService_ApplyPolicy_AddFlowFailureIsNotStored(t *testing.T) {
 	svc.mu.RLock()
 	defer svc.mu.RUnlock()
 	assert.Empty(t, svc.policies)
+}
+
+// A second policy installing the same (bridge, table, priority, match) as an
+// enabled one would replace its flow, and withdrawing either would delete
+// the other's: it is refused, and the first keeps its flow (#2234).
+func TestSDNService_ApplyPolicy_RefusesFlowKeyOwnedByAnotherPolicy(t *testing.T) {
+	svc, fake := newReplacingOVSFixture(t)
+	ctx := context.Background()
+
+	_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{
+		PolicyId: "p1", Config: enforcePolicyConfig(true, bridgeTarget("br0")),
+	})
+	require.NoError(t, err)
+
+	cfg2 := enforcePolicyConfig(true, bridgeTarget("br0"))
+	cfg2.Name = "web2"
+	_, err = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p2", Config: cfg2})
+	require.Equal(t, codes.FailedPrecondition, status.Code(err), "err = %v", err)
+	assert.Contains(t, status.Convert(err).Message(), "p1")
+
+	_, err = svc.GetPolicy(ctx, &platformv1.GetPolicyRequest{PolicyId: "p2"})
+	assert.Equal(t, codes.NotFound, status.Code(err))
+	require.Len(t, fake.matches(t, "br0"), 1)
+
+	_, err = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{
+		PolicyId: "p1", Config: enforcePolicyConfig(false, bridgeTarget("br0")),
+	})
+	require.NoError(t, err)
+	assert.Empty(t, fake.matches(t, "br0"))
+}
+
+// A disable withdraws from the bridges the flows were installed on, not
+// from a fresh lookup of the targets, which may fail or be empty (#2234).
+func TestSDNService_ApplyPolicy_DisableUsesInstalledBridges(t *testing.T) {
+	svc, fake := newReplacingOVSFixture(t)
+	ctx := context.Background()
+
+	_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{
+		PolicyId: "p1", Config: enforcePolicyConfig(true, bridgeTarget("br0")),
+	})
+	require.NoError(t, err)
+	require.Len(t, fake.matches(t, "br0"), 1)
+
+	fake.listBridgesErr = errInjectedOVS
+	_, err = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{
+		PolicyId: "p1", Config: enforcePolicyConfig(false),
+	})
+	require.NoError(t, err)
+	fake.listBridgesErr = nil
+	assert.Empty(t, fake.matches(t, "br0"))
+	assert.Equal(t, platformv1.PolicyStatus_POLICY_STATUS_INACTIVE, getPolicy(t, svc, "p1").GetStatus())
+}
+
+// A bridge lookup that fails is not a confirmed absence: Unavailable, and
+// nothing is stored (#2234).
+func TestSDNService_ApplyPolicy_BridgeLookupFailureIsUnavailable(t *testing.T) {
+	svc, fake := newReplacingOVSFixture(t)
+	fake.listBridgesErr = errInjectedOVS
+
+	_, err := svc.ApplyPolicy(context.Background(), &platformv1.ApplyPolicyRequest{
+		PolicyId: "p1", Config: enforcePolicyConfig(true, bridgeTarget("br0")),
+	})
+	assert.Equal(t, codes.Unavailable, status.Code(err), "err = %v", err)
+
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
+	assert.Empty(t, svc.policies)
+}
+
+// gatedOVS blocks AddFlow, after the flow is in place, while gate is set,
+// so a test can run a second call in the middle of the first.
+type gatedOVS struct {
+	*replacingOVS
+
+	gate    chan struct{}
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (g *gatedOVS) AddFlow(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error {
+	err := g.replacingOVS.AddFlow(ctx, bridgeName, flow)
+	if g.gate != nil {
+		g.once.Do(func() { close(g.entered) })
+		<-g.gate
+	}
+	return err
+}
+
+// A disable that arrives while an enabled reapply is installing must not
+// leave an active record without its flow, or the reverse (#2234).
+func TestSDNService_ApplyPolicy_SerializesReapplyAndDisable(t *testing.T) {
+	inner := &replacingOVS{MockOVSClientInterface: NewMockOVSClientInterface()}
+	inner.AddBridgeToMock("br0", &ovs.Bridge{UUID: "uuid-br0", Name: "br0"})
+	fake := &gatedOVS{replacingOVS: inner, entered: make(chan struct{})}
+	svc, err := NewSDNService("", WithOVSClient(fake))
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	_, err = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{
+		PolicyId: "p1", Config: enforcePolicyConfig(true, bridgeTarget("br0")),
+	})
+	require.NoError(t, err)
+
+	fake.gate = make(chan struct{})
+	var errA, errB error
+	aDone := make(chan struct{})
+	bDone := make(chan struct{})
+	go func() {
+		defer close(aDone)
+		_, errA = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{
+			PolicyId: "p1", Config: enforcePolicyConfig(true, bridgeTarget("br0")),
+		})
+	}()
+	<-fake.entered
+	go func() {
+		defer close(bDone)
+		_, errB = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{
+			PolicyId: "p1", Config: enforcePolicyConfig(false, bridgeTarget("br0")),
+		})
+	}()
+	select {
+	case <-bDone:
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(fake.gate)
+	<-aDone
+	<-bDone
+	require.NoError(t, errA)
+	require.NoError(t, errB)
+
+	flows := fake.matches(t, "br0")
+	switch got := getPolicy(t, svc, "p1").GetStatus(); got {
+	case platformv1.PolicyStatus_POLICY_STATUS_ACTIVE:
+		assert.Len(t, flows, 1, "active policy without its flow")
+	case platformv1.PolicyStatus_POLICY_STATUS_INACTIVE:
+		assert.Empty(t, flows, "inactive policy with flows left")
+	default:
+		t.Fatalf("status = %v", got)
+	}
 }
