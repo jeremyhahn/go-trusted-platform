@@ -64,6 +64,13 @@ test.describe('Tenant barrier (real server)', () => {
     await expect(page).toHaveURL(/\/auth\/webauthn/);
   });
 
+  test('the sidebar Tenant group links to the barrier page', async ({ adminPage }) => {
+    await adminPage.goto('/tenant');
+    await adminPage.getByRole('link', { name: 'Barrier', exact: true }).click();
+    await expect(adminPage).toHaveURL(/\/tenant\/barrier$/);
+    await expect(adminPage.getByRole('heading', { name: 'Tenant barrier' })).toBeVisible();
+  });
+
   test('shows the barrier status the server answers', async ({ adminPage, sdk, tenant }) => {
     const capabilities = await listCapabilities(sdk);
     const statusCap = capabilityOf(capabilities as Capability[], STATUS_OP);
