@@ -55,9 +55,12 @@ func (PassThroughGuard) Require(_ string, next http.HandlerFunc) http.HandlerFun
 // virtual media under bmc:media, and provisioning, certificates, enrolment
 // and users under bmc:admin. The web console and the daemon REST listener
 // share this one table.
-func RegisterRoutes(api *mux.Router, h RestHandler, guard RouteGuard) {
-	route := func(path, method, scope string, fn http.HandlerFunc) {
-		api.HandleFunc(path, guard.Require(scope, fn)).Methods(method)
+//
+// It returns the provision routes, so a caller can report them as not
+// configured when no bare metal backend is wired.
+func RegisterRoutes(api *mux.Router, h RestHandler, guard RouteGuard) (provisionRoutes []*mux.Route) {
+	route := func(path, method, scope string, fn http.HandlerFunc) *mux.Route {
+		return api.HandleFunc(path, guard.Require(scope, fn)).Methods(method)
 	}
 	const profile = "/bmc/{profileID:[0-9]+}"
 	api.HandleFunc(profile+"/power", powerActionRoute(h, guard)).Methods(http.MethodPost)
@@ -69,8 +72,9 @@ func RegisterRoutes(api *mux.Router, h RestHandler, guard RouteGuard) {
 	route(profile+"/virtual-media", http.MethodGet, ScopeRead, h.VirtualMediaStatus)
 	route(profile+"/sensors", http.MethodGet, ScopeRead, h.GetSensors)
 	route(profile+"/system-info", http.MethodGet, ScopeRead, h.GetSystemInfo)
-	route(profile+"/provision", http.MethodPost, ScopeAdmin, h.Provision)
-	route(profile+"/provision", http.MethodGet, ScopeRead, h.ProvisionStatus)
+	provisionRoutes = append(provisionRoutes,
+		route(profile+"/provision", http.MethodPost, ScopeAdmin, h.Provision),
+		route(profile+"/provision", http.MethodGet, ScopeRead, h.ProvisionStatus))
 	route(profile+"/enroll", http.MethodPost, ScopeAdmin, h.EnrollBMC)
 	route(profile+"/cert/restore", http.MethodPost, ScopeAdmin, h.RestoreBMC)
 	route(profile+"/cert", http.MethodGet, ScopeRead, h.GetWebCertificate)
@@ -80,6 +84,7 @@ func RegisterRoutes(api *mux.Router, h RestHandler, guard RouteGuard) {
 	route(profile+"/users/{slot:[0-9]+}", http.MethodDelete, ScopeAdmin, h.DeleteUser)
 	route(profile+"/users/{slot:[0-9]+}/password", http.MethodPut, ScopeAdmin, h.SetUserPassword)
 	route(profile+"/users/{slot:[0-9]+}/privilege", http.MethodPut, ScopeAdmin, h.SetUserPrivilege)
+	return provisionRoutes
 }
 
 // maxPowerActionBody bounds the power action body the route reads to pick

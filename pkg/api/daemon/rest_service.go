@@ -323,7 +323,7 @@ func (s *RESTServer) SetBMCHandler(handler bmcwebsvc.RestHandler) {
 
 	// The same route table the web console mounts; this listener
 	// authenticates by mTLS only, so no scope is checked here.
-	bmcwebsvc.RegisterRoutes(s.router.PathPrefix(restBasePath).Subrouter(), handler, bmcwebsvc.PassThroughGuard{})
+	_ = bmcwebsvc.RegisterRoutes(s.router.PathPrefix(restBasePath).Subrouter(), handler, bmcwebsvc.PassThroughGuard{})
 
 	s.logger.Info("BMC management routes registered")
 }

@@ -908,7 +908,12 @@ func (v1Router *Router) bmcRoutes() {
 		scopes:       scopes,
 		systemTenant: sessions.RequireTenant(v1Router.restHandlerRegistry.TenantID()),
 	}
-	bmcwebsvc.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN), handler, guard)
+	provisionRoutes := bmcwebsvc.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN), handler, guard)
+	// The provision handlers answer 503 until a bare metal backend is
+	// wired, so capabilities must not list those routes as enabled.
+	if !handler.ProvisioningConfigured() && v1Router.serviceRegistry != nil {
+		v1Router.serviceRegistry.recordUnavailable("baremetal", provisionRoutes...)
+	}
 }
 
 // proxyRoutes mounts the ProxyService routes on /api/v1/proxy (#2061), the

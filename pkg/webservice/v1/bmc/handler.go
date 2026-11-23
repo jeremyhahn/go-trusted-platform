@@ -465,6 +465,11 @@ func (h *handler) Provision(w http.ResponseWriter, r *http.Request) {
 
 // ProvisionStatus returns the status of a provisioning workflow.
 // GET /api/v1/bmc/{profileID}/provision
+// ProvisioningConfigured reports whether a bare metal service is wired.
+func (h *handler) ProvisioningConfigured() bool {
+	return h.baremetalService != nil
+}
+
 func (h *handler) ProvisionStatus(w http.ResponseWriter, r *http.Request) {
 	h.logger.Debug("bmc: provision status request received")
 

@@ -52,6 +52,9 @@ export function BMCBootMediaCard({ profileID }: BMCBootMediaCardProps) {
   const [device, setDevice] = useState<BMCBootDevice>('pxe');
   const [persistent, setPersistent] = useState(false);
   const [media, setMedia] = useState<BMCVirtualMediaStatus | null>(null);
+  // A failed status read is not an empty drive: Mount ISO stays off until
+  // a read has succeeded and shows nothing mounted.
+  const [mediaState, setMediaState] = useState<'loading' | 'error' | 'ready'>('loading');
   const [isoURL, setIsoURL] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirmUnmount, setConfirmUnmount] = useState(false);
@@ -72,7 +75,10 @@ export function BMCBootMediaCard({ profileID }: BMCBootMediaCardProps) {
     }
     if (vm.success && vm.data) {
       setMedia(vm.data);
+      setMediaState('ready');
     } else {
+      setMedia(null);
+      setMediaState('error');
       toast({
         title: 'Virtual media unavailable',
         description: vm.error?.message ?? 'The control plane did not answer',
@@ -205,7 +211,13 @@ export function BMCBootMediaCard({ profileID }: BMCBootMediaCardProps) {
 
         <section className="space-y-3">
           <p data-testid="bmc-media-status">
-            {media?.mounted ? `Mounted: ${media.image_url ?? 'an image'}` : 'No image mounted'}
+            {mediaState === 'error'
+              ? 'Virtual media status unavailable'
+              : mediaState === 'loading'
+                ? 'Reading virtual media status'
+                : media?.mounted
+                  ? `Mounted: ${media.image_url ?? 'an image'}`
+                  : 'No image mounted'}
           </p>
           {media?.mounted ? (
             <Gated op={BMC_UNMOUNT_OP}>
@@ -223,7 +235,8 @@ export function BMCBootMediaCard({ profileID }: BMCBootMediaCardProps) {
                 onChange={(e) => setIsoURL(e.target.value)}
               />
               <Gated op={BMC_MOUNT_OP}>
-                <Button onClick={() => void mountISO()} disabled={busy || isoURL.trim() === ''}>
+                <Button onClick={() => void mountISO()} disabled={busy || mediaState !== 'ready' || media?.mounted === true || isoURL.trim() === ''}
+                >
                   Mount ISO
                 </Button>
               </Gated>
