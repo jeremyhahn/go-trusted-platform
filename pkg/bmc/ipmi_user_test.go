@@ -29,6 +29,8 @@ type mockSender struct {
 	calls     []mockCall
 	responses map[uint16][]byte
 	err       error
+	// cmdErr fails only the listed commands (after recording the call).
+	cmdErr map[byte]error
 }
 
 type mockCall struct {
@@ -46,6 +48,9 @@ func (m *mockSender) Send(netFn, cmd byte, data []byte) ([]byte, error) {
 	m.calls = append(m.calls, mockCall{netFn: netFn, cmd: cmd, data: cp})
 	if m.err != nil {
 		return nil, m.err
+	}
+	if e, ok := m.cmdErr[cmd]; ok {
+		return nil, e
 	}
 	if r, ok := m.responses[key(netFn, cmd)]; ok {
 		return append([]byte(nil), r...), nil
@@ -254,8 +259,9 @@ func TestCreateUser_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if len(m.calls) != 3 {
-		t.Fatalf("want 3 calls, got %d", len(m.calls))
+	// name, password set, access, then enable for an Enabled user.
+	if len(m.calls) != 4 {
+		t.Fatalf("want 4 calls, got %d", len(m.calls))
 	}
 	if m.calls[0].cmd != cmdSetUserName {
 		t.Errorf("call[0] = 0x%02x, want SetUserName", m.calls[0].cmd)
@@ -388,6 +394,123 @@ func TestCreateUser_PasswordSendError(t *testing.T) {
 	}, pwd)
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestCreateUser_EnablesUser(t *testing.T) {
+	m := newMock()
+	um := newUM(m)
+	pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
+	defer pwd.Destroy()
+	if err := um.CreateUser(context.Background(), User{
+		Slot: 5, Username: "bob", Enabled: true, Privilege: PrivilegeOperator,
+	}, pwd); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	setIdx, enableIdx := -1, -1
+	for i, c := range m.calls {
+		if c.cmd != cmdSetUserPassword || len(c.data) < 2 {
+			continue
+		}
+		switch c.data[1] & 0x03 {
+		case pwdOpSet:
+			setIdx = i
+		case pwdOpEnable:
+			enableIdx = i
+			if c.data[0]&ipmiMaxUserSlot != 5 {
+				t.Errorf("enable slot = %d, want 5", c.data[0]&ipmiMaxUserSlot)
+			}
+		}
+	}
+	if setIdx < 0 {
+		t.Fatal("no pwdOpSet call")
+	}
+	if enableIdx < 0 {
+		t.Fatal("an Enabled user got no pwdOpEnable call")
+	}
+	if enableIdx < setIdx {
+		t.Errorf("pwdOpEnable (call %d) precedes pwdOpSet (call %d)", enableIdx, setIdx)
+	}
+}
+
+func TestCreateUser_DisabledUserNotEnabled(t *testing.T) {
+	m := newMock()
+	um := newUM(m)
+	pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
+	defer pwd.Destroy()
+	if err := um.CreateUser(context.Background(), User{
+		Slot: 5, Username: "bob", Enabled: false, Privilege: PrivilegeUser,
+	}, pwd); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	for i, c := range m.calls {
+		if c.cmd == cmdSetUserPassword && len(c.data) >= 2 && c.data[1]&0x03 == pwdOpEnable {
+			t.Errorf("call %d enables a disabled user", i)
+		}
+	}
+}
+
+func TestCreateUser_LongPasswordWritesNothing(t *testing.T) {
+	m := newMock()
+	um := newUM(m)
+	pwd := memguard.NewMemoryEnclave([]byte("abcdefghijklmnopqrstu")) // 21 bytes
+	defer pwd.Destroy()
+	err := um.CreateUser(context.Background(), User{
+		Slot: 2, Username: "x", Privilege: PrivilegeUser, Enabled: true,
+	}, pwd)
+	var cfgErr ErrInvalidConfig
+	if !errors.As(err, &cfgErr) {
+		t.Fatalf("err = %v, want ErrInvalidConfig", err)
+	}
+	if len(m.calls) != 0 {
+		t.Fatalf("want no BMC write, got %d calls (first cmd 0x%02x)", len(m.calls), m.calls[0].cmd)
+	}
+}
+
+func TestCreateUser_PartialFailureClearsName(t *testing.T) {
+	m := newMock()
+	pwdErr := errors.New("pwd-fail")
+	m.cmdErr = map[byte]error{cmdSetUserPassword: pwdErr}
+	um := newUM(m)
+	pwd := memguard.NewMemoryEnclave([]byte("p"))
+	defer pwd.Destroy()
+	u := User{Slot: 2, Username: "x", Privilege: PrivilegeUser, Enabled: true}
+	err := um.CreateUser(context.Background(), u, pwd)
+	if !errors.Is(err, pwdErr) {
+		t.Fatalf("err = %v, want the password error", err)
+	}
+	failIdx := -1
+	for i, c := range m.calls {
+		if c.cmd == cmdSetUserPassword {
+			failIdx = i
+			break
+		}
+	}
+	if failIdx < 0 {
+		t.Fatal("no SetUserPassword call")
+	}
+	cleared := false
+	for _, c := range m.calls[failIdx+1:] {
+		if c.cmd != cmdSetUserName || len(c.data) < 2 || c.data[0] != 2 {
+			continue
+		}
+		allZero := true
+		for _, b := range c.data[1:] {
+			if b != 0 {
+				allZero = false
+			}
+		}
+		if allZero {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Fatal("the slot name was not cleared after the password failure")
+	}
+	// A retry on the same slot goes through once the BMC accepts the password.
+	m.cmdErr = nil
+	if err := um.CreateUser(context.Background(), u, pwd); err != nil {
+		t.Fatalf("retry CreateUser: %v", err)
 	}
 }
 

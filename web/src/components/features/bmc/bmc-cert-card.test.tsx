@@ -39,7 +39,6 @@ describe('BMCCertCard', () => {
       }),
     });
     renderCard();
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Publish DANE' }));
     await click('Enroll');
 
     const toast = await screen.findByText('Enrolled: BMC profile 42');
@@ -63,7 +62,9 @@ describe('BMCCertCard', () => {
     renderCard();
 
     expect(screen.getByRole('checkbox', { name: 'Register DNS' }).getAttribute('aria-checked')).toBe('true');
-    expect(screen.getByRole('checkbox', { name: 'Publish DANE' }).getAttribute('aria-checked')).toBe('true');
+    // DANE is published only when the certificate is replaced, which the
+    // server does not do yet, so the card offers no DANE option.
+    expect(screen.queryByRole('checkbox', { name: 'Publish DANE' })).toBeNull();
     expect(screen.queryByRole('checkbox', { name: 'Rotate password' })).toBeNull();
     expect(screen.queryByRole('checkbox', { name: 'Replace certificate' })).toBeNull();
   });
@@ -87,7 +88,7 @@ describe('BMCCertCard', () => {
       replace_certificate: false,
       rotate_password: false,
       dns_register: false,
-      dane_publish: true,
+      dane_publish: false,
     });
   });
 
@@ -115,7 +116,7 @@ describe('BMCCertCard', () => {
       replace_certificate: false,
       rotate_password: false,
       dns_register: true,
-      dane_publish: true,
+      dane_publish: false,
     });
     expect(screen.getByTestId('bmc-cert-steps').textContent).toContain('dns: failed (zone refused)');
   });
