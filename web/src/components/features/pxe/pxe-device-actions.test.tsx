@@ -19,7 +19,8 @@ const AUTHORIZE = 'POST /api/v1/pxe/devices/{id}/authorize';
 const QUARANTINE = 'POST /api/v1/pxe/devices/{id}/quarantine';
 const RETRY = 'POST /api/v1/pxe/devices/{id}/retry';
 const REMOVE = 'DELETE /api/v1/pxe/devices/{id}';
-const PXE_OPS = [AUTHORIZE, QUARANTINE, RETRY, REMOVE];
+const ENROLLED = 'POST /api/v1/pxe/devices/{id}/enrolled';
+const PXE_OPS = [AUTHORIZE, QUARANTINE, RETRY, REMOVE, ENROLLED];
 
 function caps(off: string[] = []): Answer {
   const capabilities = PXE_OPS.map((op) =>
@@ -37,6 +38,7 @@ function routes(extra: Record<string, Answer> = {}, off: string[] = []): Record<
     'POST /api/v1/pxe/devices/d1/quarantine': ok({ deviceId: 'd1', state: 'QUARANTINED' }),
     'POST /api/v1/pxe/devices/d1/retry': ok({ deviceId: 'd1', state: 'DISCOVERED' }),
     'DELETE /api/v1/pxe/devices/d1': ok({ deviceId: 'd1' }),
+    'POST /api/v1/pxe/devices/d1/enrolled': ok({ deviceId: 'd1', state: 'ENROLLED' }),
     ...extra,
   };
 }
@@ -173,6 +175,59 @@ describe('PXEDeviceActions', () => {
         .filter((t) => t.getAttribute('data-variant') === 'destructive');
       expect(failed.map((t) => t.textContent).join(' ')).toContain('device busy');
     });
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it('marks the device enrolled with the certificate serial', async () => {
+    const sent = stubControlPlane(routes());
+    const onChanged = vi.fn();
+    renderActions(onChanged);
+    await capabilitiesLoaded(sent);
+
+    await click('Mark enrolled d1');
+    type('Certificate serial', '0A1B2C');
+    await click('Mark enrolled');
+
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    expect(writes(sent)).toEqual([
+      { method: 'POST', path: '/api/v1/pxe/devices/d1/enrolled', body: { certificateSerial: '0A1B2C' } },
+    ]);
+    await waitFor(() =>
+      expect(screen.getAllByTestId('toast').map((t) => t.getAttribute('data-variant'))).toContain('success'),
+    );
+  });
+
+  it('withholds Mark enrolled when the server does not offer it and needs a serial', async () => {
+    const offSent = stubControlPlane(routes({}, [ENROLLED]));
+    renderActions(vi.fn());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Mark enrolled d1' }).getAttribute('data-capability-enabled')).toBe(
+        'false',
+      ),
+    );
+    const enrolled = screen.getByRole('button', { name: 'Mark enrolled d1' }) as HTMLButtonElement;
+    expect(enrolled.disabled).toBe(true);
+    expect(enrolled.getAttribute('title')).toBe('not-configured: pxe');
+    const authorize = screen.getByRole('button', { name: 'Authorize d1' }) as HTMLButtonElement;
+    expect(authorize.disabled).toBe(false);
+    expect(authorize.getAttribute('data-capability-enabled')).toBe('true');
+    expect(writes(offSent)).toEqual([]);
+    cleanup();
+    vi.unstubAllGlobals();
+
+    const sent = stubControlPlane(routes());
+    const onChanged = vi.fn();
+    renderActions(onChanged);
+    await capabilitiesLoaded(sent);
+
+    await click('Mark enrolled d1');
+    type('Certificate serial', '   ');
+    const submit = screen.getByRole('button', { name: 'Mark enrolled' }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    await act(async () => {
+      fireEvent.click(submit);
+    });
+    expect(writes(sent).filter((r) => r.path.endsWith('/enrolled'))).toEqual([]);
     expect(onChanged).not.toHaveBeenCalled();
   });
 });
