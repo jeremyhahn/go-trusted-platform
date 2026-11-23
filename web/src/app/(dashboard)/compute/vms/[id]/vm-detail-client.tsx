@@ -28,6 +28,7 @@ import {
 import type { Snapshot, VM } from 'trusted-platform-sdk';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { VMMetricsCard } from '@/components/features/compute/vm-metrics';
+import { VMDisksCard } from '@/components/features/compute/vm-disks-card';
 import { Gated } from '@/components/features/capabilities/gated';
 import { VMMigrateButton } from '@/components/features/compute/vm-migrate-dialog';
 import { useCompute, useMutation, useToast, type MutationError } from '@/hooks';
@@ -427,6 +428,19 @@ export default function VMDetailPage() {
 
         {vm.metrics && <VMMetricsCard metrics={vm.metrics as unknown as WebVMMetrics} />}
       </div>
+
+      <VMDisksCard
+        vmId={vmId}
+        disks={disks.map((d) => ({
+          id: d.id ?? d.path,
+          path: d.path,
+          sizeMB: (d.sizeGb ?? 0) * 1024,
+          // The SDK DiskType is the image format (raw, qcow2, ...); config disks are never CD-ROMs.
+          type: 'disk' as const,
+          readonly: Boolean(d.readonly),
+        }))}
+        onChanged={fetchVM}
+      />
 
       <Card>
         <CardHeader>
