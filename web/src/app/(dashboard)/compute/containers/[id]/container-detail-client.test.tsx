@@ -53,6 +53,7 @@ beforeEach(() => {
     metrics: null,
     loading: false,
     error: null,
+    unavailable: false,
     refresh: vi.fn().mockResolvedValue(undefined),
     refreshMetrics: vi.fn().mockResolvedValue(undefined),
     exec: vi.fn(),
