@@ -845,10 +845,15 @@ func (s *SDNService) DeleteVLAN(ctx context.Context, req *platformv1.DeleteVLANR
 
 	client := s.getOVSClient()
 
-	// Remove VLAN from all ports without holding the lock
+	// Remove VLAN from all ports without holding the lock. A port that no
+	// longer exists has nothing to untag; any other failure keeps the VLAN
+	// record, since the tag is still on the port (#1951).
 	for _, portName := range ports {
 		if err := client.SetPortVLAN(ctx, portName, 0); err != nil {
-			continue // port may no longer exist
+			if errors.Is(err, ovs.ErrPortNotFound) {
+				continue
+			}
+			return nil, status.Error(codes.Internal, fmt.Sprintf("failed to remove VLAN from port %s: %v", portName, err))
 		}
 	}
 
