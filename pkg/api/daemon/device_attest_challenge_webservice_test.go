@@ -162,6 +162,19 @@ func TestWebserviceDeviceAttest_Challenge_RoundTrip(t *testing.T) {
 		assert.Equal(t, http.StatusConflict, code, env)
 	})
 
+	t.Run("an unknown device is 404 and gets no challenge", func(t *testing.T) {
+		unknown := itoa(f.device.ID + 1000)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+unknown+"/attest/challenge", nil)
+		req = mux.SetURLVars(req.WithContext(tenantA), map[string]string{"id": unknown})
+		w := httptest.NewRecorder()
+		ch.HandleIssueAttestationChallenge(w, req)
+		require.Equal(t, http.StatusNotFound, w.Code, w.Body.String())
+		var env envelope
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &env), w.Body.String())
+		assert.False(t, env.Success)
+		assert.True(t, len(env.Payload) == 0 || string(env.Payload) == "null", "no challenge in the body: %s", w.Body.String())
+	})
+
 	t.Run("nonce mismatch is 409", func(t *testing.T) {
 		c := issue(t, tenantA)
 		code, env := attest(t, tenantA, wsdevice.AttestRequest{

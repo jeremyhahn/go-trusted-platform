@@ -86,6 +86,23 @@ func TestMCPServiceProvider_DeviceAttestChallenge(t *testing.T) {
 		assert.Equal(t, codes.Unavailable, status.Code(err))
 	})
 
+	t.Run("the device service refuses an unknown device with NotFound", func(t *testing.T) {
+		f := newQuoteFixture(t)
+		clock := f.now
+		svc := challengeService(t, f, &clock, WithDeviceAttestChallengeRequired())
+		ctx := tokenCallerContext("tenant-a")
+		p := NewMCPServiceProvider(&MCPServiceProviderConfig{
+			DeviceService:         newMockDeviceService(),
+			AttestChallengeIssuer: svc,
+			Logger:                slog.Default(),
+		})
+
+		out, err := p.DeviceAttestChallenge(ctx, itoa(f.device.ID+1000))
+		require.Error(t, err)
+		assert.Nil(t, out)
+		assert.Equal(t, codes.NotFound, status.Code(err), "error: %v", err)
+	})
+
 	t.Run("a challenge from the device service verifies through AttestDevice", func(t *testing.T) {
 		f := newQuoteFixture(t)
 		clock := f.now
