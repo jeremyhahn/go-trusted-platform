@@ -73,6 +73,21 @@ test.describe('KMS page', () => {
       listed,
     );
   });
+
+  test('the KMS page shows the backend status the server reports', async ({ adminPage }) => {
+    const statusRes = apiResponse(adminPage, '/api/v1/kms/backend/status');
+    await adminPage.goto('/kms');
+    const status = await statusRes;
+
+    const card = adminPage.getByTestId('kms-backend-status');
+    if (status.ok()) {
+      const body = unwrapPayload<{ backend_type?: string; status?: string }>(await status.json());
+      await expect(adminPage.getByTestId('kms-backend-type')).toHaveText(body.backend_type || '-');
+      await expect(adminPage.getByTestId('kms-backend-state')).toHaveText(body.status || '-');
+    } else {
+      await expect(card.getByText('Backend status could not be read')).toBeVisible();
+    }
+  });
 });
 
 test.describe('KMS data keys page', () => {
