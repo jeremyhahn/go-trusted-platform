@@ -110,9 +110,20 @@ async function globalSetup(): Promise<void> {
   // `serve` explicitly: --socket-path is a serve flag. The socket lives in
   // the run directory, never the daemon default under /run (#2034). gRPC
   // off: the console uses REST only, and gRPC TCP over the embedded
-  // quicbaas refuses to start without platform tokens or mTLS.
+  // quicbaas refuses to start without platform tokens or mTLS. QUIC off for
+  // the same reason: its listener refuses the embedded quicbaas PEP too
+  // (ErrEmbeddedPEPUnavailable, #2000).
   const socket = path.join(dir, 'platformd.sock');
-  const args = ['serve', '--config', 'config.yaml', '--init', '--socket-path', socket, '--enable-grpc=false'];
+  const args = [
+    'serve',
+    '--config',
+    'config.yaml',
+    '--init',
+    '--socket-path',
+    socket,
+    '--enable-grpc=false',
+    '--enable-quic=false',
+  ];
   const child = spawn(binary, args, {
     cwd: dir,
     detached: true,
