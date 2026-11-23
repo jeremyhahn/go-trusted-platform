@@ -55,4 +55,30 @@ for (const name of ports) {
   }
 }
 
+const allPorts = [
+  'attest-cert-record',
+  'attestation-reports',
+  'auth-port',
+  'ca-port',
+  'compute',
+  'dashboard-port',
+  ...ports,
+];
+for (const name of allPorts) {
+  const file = `${name}.spec.ts`;
+  const spec = fs.readFileSync(path.join(import.meta.dirname, file), 'utf8');
+  assert.match(
+    spec,
+    /import\s*\{[^}]*\btest\b[^}]*\}\s*from\s*'\.\/fixtures'/,
+    `${file} runs on the real-server fixtures`,
+  );
+  assert.ok(!spec.includes('page.route'), `${file} names no page.route`);
+  assert.ok(!spec.includes('route.fulfill'), `${file} names no route.fulfill`);
+  assert.ok(!/from\s*'\.\.\/fixtures\//.test(spec), `${file} imports no mocked-spec fixture`);
+  assert.ok(
+    !/api-mock|dashboard-api-mocks|device-api-mock/.test(spec),
+    `${file} imports no API mock helper`,
+  );
+}
+
 console.log('port-1-plan.check: ok');
