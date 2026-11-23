@@ -225,6 +225,9 @@ func (d *Daemon) embeddedServices() *embedded.ServiceRegistry {
 	if svc := d.BarrierGRPCService(); svc != nil {
 		registry.Barrier = svc
 	}
+	if svc := d.VPNGRPCServiceServer(); svc != nil {
+		registry.VPN = svc
+	}
 	if svc := d.SwitchService(); svc != nil {
 		registry.Switch = svc
 	}
