@@ -182,6 +182,22 @@ describe("useOverlayVteps", () => {
     expect(callsTo("GET", `${base}/macs`).length).toBeGreaterThanOrEqual(2);
   });
 
+  it("deleteVNI re-reads the tunnels, which go with the VNI", async () => {
+    let n = 0;
+    const tunnelReads: Route = (method, url) =>
+      method === "GET" && url.pathname === `${base}/tunnels`
+        ? ok({ tunnels: n++ === 0 ? [tunnel] : [] })
+        : undefined;
+    fetchMock.mockImplementation(overlayRoutes(tunnelReads));
+    const { result } = renderOverlay();
+    await waitFor(() => expect(result.current.tunnels).toHaveLength(1));
+
+    await act(() => result.current.deleteVNI(5001));
+
+    await waitFor(() => expect(result.current.tunnels).toHaveLength(0));
+    expect(callsTo("GET", `${base}/tunnels`)).toHaveLength(2);
+  });
+
   it("forgetMAC sends mac and vni and re-reads the MACs", async () => {
     fetchMock.mockImplementation(overlayRoutes());
     const { result } = renderOverlay();
