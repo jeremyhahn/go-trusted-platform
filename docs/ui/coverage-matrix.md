@@ -215,14 +215,14 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `DeviceService.CountDevices` | `GET /devices/count` | `(dashboard)/devices/page.tsx` | - | `real-server/devices.spec.ts` | covered |
 | `DeviceService.CreateProfile` | `POST /templates/{id:[0-9]+}/create-profile` | `(dashboard)/devices/profiles/page.tsx`<br>`(dashboard)/provisioning/sessions/[sessionId]/page.tsx` | - | `devices.spec.ts` | covered |
 | `DeviceService.GetProfile` | `GET /device/profile` | - | - | - | not-UI: machine-facing mTLS device route |
-| `DeviceService.UpdateProfile` | `PUT /device/profiles/{id:[0-9]+}` | `(dashboard)/devices/profiles/page.tsx`<br>`(dashboard)/provisioning/sessions/[sessionId]/page.tsx` (read-only) | - | - | partial |
+| `DeviceService.UpdateProfile` | `PUT /device/profiles/{id:[0-9]+}` | `(dashboard)/devices/profiles/page.tsx` | - | `real-server/device-profiles.spec.ts` | covered |
 | `DeviceService.DeleteProfile` | `DELETE /device/profiles/{id:[0-9]+}` | `(dashboard)/devices/profiles/page.tsx` | - | `devices.spec.ts` | covered |
 | `DeviceService.ListProfiles` | `GET /device/profiles` | `(dashboard)/devices/profiles/page.tsx` | - | `devices.spec.ts` | covered |
-| `DeviceService.FindProfileByMACAddress` | `GET /device/profiles/mac/{mac}` | - | - | - | missing |
-| `DeviceService.FindProfileBySerial` | `GET /device/profiles/serial/{serial}` | - | - | - | missing |
-| `DeviceService.FindMatchingProfile` | `POST /device/profiles/match` | - | - | - | missing |
-| `DeviceService.CountProfiles` | `GET /device/profiles/count` | - | - | - | missing |
-| `DeviceService.ActivateDevice` | `POST /device/activate-json` | - | - | - | missing |
+| `DeviceService.FindProfileByMACAddress` | `GET /device/profiles/mac/{mac}` | `(dashboard)/devices/profiles/page.tsx` | - | `real-server/device-profiles.spec.ts` | covered |
+| `DeviceService.FindProfileBySerial` | `GET /device/profiles/serial/{serial}` | `(dashboard)/devices/profiles/page.tsx` | - | `real-server/device-profiles.spec.ts` | covered |
+| `DeviceService.FindMatchingProfile` | `POST /device/profiles/match` | `(dashboard)/devices/profiles/page.tsx` | - | `real-server/device-profiles.spec.ts` | covered |
+| `DeviceService.CountProfiles` | `GET /device/profiles/count` | `(dashboard)/devices/profiles/page.tsx` | - | `real-server/device-profiles.spec.ts` | covered |
+| `DeviceService.ActivateDevice` | `POST /device/activate-json` | `(dashboard)/devices/[id]/page.tsx` | - | `real-server/device-activate.spec.ts` | covered |
 | `DeviceService.AttestDevice` | `POST /devices/{id}/attest` | `(dashboard)/devices/[id]/page.tsx` | - | `real-server/device-attestation.spec.ts` | covered |
 | `DeviceService.RecordAttestationCertificate` | `POST /devices/{id:[0-9]+}/attest-cert/record` | `(dashboard)/devices/[id]/page.tsx` | - | `real-server/device-attestation.spec.ts` | covered |
 | `DeviceService.DisableDevice` | `POST /devices/{id:[0-9]+}/disable` | `(dashboard)/devices/[id]/page.tsx`<br>`(dashboard)/devices/page.tsx` | - | `attest-cert-record.spec.ts`<br>`attestation-reports.spec.ts`<br>`dashboard.spec.ts` (+1) | covered |
@@ -739,7 +739,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | ComputeService | 37 | 14 | 2 | 16 | 5 | 0 |
 | ConfigDeliveryService | 7 | 1 | 2 | 0 | 4 | 0 |
 | PlatformDaemon | 19 | 1 | 6 | 8 | 4 | 0 |
-| DeviceService | 32 | 12 | 6 | 14 | 0 | 0 |
+| DeviceService | 32 | 21 | 5 | 3 | 3 | 0 |
 | EABService | 11 | 0 | 0 | 11 | 0 | 0 |
 | FIDO2Service | 5 | 0 | 0 | 0 | 5 | 0 |
 | GatewayService | 29 | 4 | 3 | 22 | 0 | 0 |
@@ -765,7 +765,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **122** | **61** | **265** | **50** | **31** |
+| **Total** | **529** | **131** | **60** | **254** | **53** | **31** |
 
 ## Proposed slices
 
@@ -781,7 +781,7 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 8. **ComputeService (2/2): Container, ContainerMetric, VMAttestation**: 5 operations (5 missing, 0 partial): GetContainer, ExecContainer, AttestContainer, GetContainerMetrics, VerifyVMAttestation.
 9. **ConfigDeliveryService: FulfillSession, Session**: 2 operations (0 missing, 2 partial): FulfillSession, GetSession.
 10. **PlatformDaemon: Status, Liveness, Readiness, Shutdown, Version, Config…**: 14 operations (8 missing, 6 partial): GetStatus, Liveness, Readiness, Shutdown, GetVersion, GetConfig, UpdateConfig, ReloadConfig, StartService, StopService, RestartService, ListServices, GetServiceStatus, ListEntityTypes.
-11. **DeviceService (1/2): Device, DeviceBySerial, Profile, ProfileByMACAddress, ProfileBySerial, MatchingProfile…**: 14 operations (12 missing, 2 partial): UpdateDevice, CountDevices, ActivateDevice, AttestDevice, FindDeviceBySerial, GetProfile, UpdateProfile, CountProfiles, FindProfileByMACAddress, FindProfileBySerial, FindMatchingProfile, RecordAttestationCertificate, BootCertificate, BootDelivery.
+11. **DeviceService (1/2): Device, DeviceBySerial, Profile, ProfileByMACAddress, ProfileBySerial, MatchingProfile…**: 14 operations, now covered or not-UI (#2048): UpdateDevice, CountDevices and FindDeviceBySerial by `real-server/devices.spec.ts`; AttestDevice and RecordAttestationCertificate by `real-server/device-attestation.spec.ts`; ActivateDevice by `real-server/device-activate.spec.ts`; UpdateProfile, CountProfiles, FindProfileByMACAddress, FindProfileBySerial and FindMatchingProfile by `real-server/device-profiles.spec.ts`; GetProfile, BootCertificate and BootDelivery are not-UI machine-facing routes. FindConfigForDevice, AssignProfileToDevice and UnassignProfileFromDevice stay with slice 12.
 12. **DeviceService (2/2): Template, ProfileFromTemplate, ConfigForDevice, ProfileToDevice, ProfileFromDevice**: 8 operations (3 missing, 5 partial): CreateTemplate, GetTemplate, UpdateTemplate, DeleteTemplate, CreateProfileFromTemplate, FindConfigForDevice, AssignProfileToDevice, UnassignProfileFromDevice.
 13. **EABService: Credential, CredentialByKeyID, CredentialQRCode, EnrollmentURL, CredentialUsed, ExpiredCredential**: 11 operations (11 missing, 0 partial): CreateCredential, GetCredential, ListCredentials, RevokeCredential, ValidateCredential, DeleteCredential, GetCredentialByKeyID, GetCredentialQRCode, GetEnrollmentURL, MarkCredentialUsed, CleanupExpiredCredentials.
 14. **GatewayService (1/2): GatewayMode, GatewaySnapshot, GatewayAdmittedVTEP, BGPPeer, Prefix, IPAMPool…**: 15 operations (12 missing, 3 partial): SetGatewayMode, GetGatewaySnapshot, ListGatewaySnapshots, GetGatewayAdmittedVTEP, ListGatewayAdmittedVTEPs, ListBGPPeers, AnnouncePrefix, WithdrawPrefix, CreateIPAMPool, GetIPAMPool, UpdateIPAMPool, DeleteIPAMPool, AllocateIP, ReleaseIP, ListAllocations.
