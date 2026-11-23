@@ -6,7 +6,7 @@
  */
 
 import { useState } from 'react';
-import { useRouter, useParams, usePathname } from 'next/navigation';
+import { useRouter, useParams, usePathname, useSearchParams } from 'next/navigation';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import {
   ArrowLeft,
@@ -21,6 +21,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Gated } from '@/components/features/capabilities/gated';
 import { useToast, useApi, useDevice, useMutation } from '@/hooks';
 import type { DeviceRole, CreateProfileFromTemplateRequest } from 'trusted-platform-sdk';
 import { deviceRoleLabel } from '@/lib/device-role';
@@ -45,13 +46,18 @@ export default function CreateProfileClient() {
   // values above 2^53 and break the URL round trip.
   const templateId = resolveDynamicId(params, pathname, 'templates');
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { toast } = useToast();
   const deviceService = useDevice();
 
   const [staticIp, setStaticIp] = useState('');
-  const [ekSerial, setEkSerial] = useState('');
-  const [macAddress, setMacAddress] = useState('');
+  // #2046: the sessions list's Assign Template opens this page with the
+  // session's identifiers and id; the created profile then fulfils it.
+  const sessionId = searchParams?.get('sessionId') ?? '';
+  const [ekSerial, setEkSerial] = useState(() => searchParams?.get('ekSerial') ?? '');
+  const [macAddress, setMacAddress] = useState(() => searchParams?.get('macAddress') ?? '');
   const [createdProfileId, setCreatedProfileId] = useState<string | null>(null);
+  const [fulfilError, setFulfilError] = useState<string | null>(null);
 
   const {
     data: template,
@@ -71,13 +77,41 @@ export default function CreateProfileClient() {
     }
   );
 
+  // Create the profile; opened for a provisioning session, then fulfil the
+  // session with it. A refused fulfilment fails the mutation, but the created
+  // profile is still shown, with the refusal beside it.
   const createProfileMutation = useMutation(
     async (request: CreateProfileFromTemplateRequest) => {
-      return deviceService.createProfileFromTemplate(request);
+      const profileResponse = await deviceService.createProfileFromTemplate(request);
+      if (!sessionId || profileResponse.error !== undefined) return profileResponse;
+      const profileId = profileResponse.data?.id;
+      if (!profileId) {
+        throw new Error('The server returned no profile id, so the session was not fulfilled.');
+      }
+      const response = await deviceService.fulfillProvisioningSession({
+        session_id: sessionId,
+        profile_id: String(profileId),
+      });
+      if (response.error !== undefined) {
+        const message = `Profile ${profileId} was created, but the session was not fulfilled: ${response.error.message}`;
+        setFulfilError(message);
+        setCreatedProfileId(String(profileId));
+        throw new Error(message);
+      }
+      return profileResponse;
     },
     {
       onSuccess: (profile) => {
         setCreatedProfileId(profile?.id ?? null);
+        if (sessionId) {
+          toast({
+            title: 'Device provisioned',
+            description: 'Profile created and session fulfilled. The device will resume installation.',
+            variant: 'success',
+          });
+          router.push(`/provisioning/sessions/${encodeURIComponent(sessionId)}`);
+          return;
+        }
         toast({
           title: 'Profile created',
           description: 'The device profile has been created from the template',
@@ -86,7 +120,7 @@ export default function CreateProfileClient() {
       },
       onError: (err) => {
         toast({
-          title: 'Error creating profile',
+          title: sessionId ? 'Error provisioning device' : 'Error creating profile',
           description: err.message,
           variant: 'destructive',
         });
@@ -96,11 +130,16 @@ export default function CreateProfileClient() {
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    setFulfilError(null);
 
-    await createProfileMutation.mutateAsync({
-      templateId,
-      overrides: profileOverrides({ staticIp, ekSerial, macAddress }),
-    });
+    try {
+      await createProfileMutation.mutateAsync({
+        templateId,
+        overrides: profileOverrides({ staticIp, ekSerial, macAddress }),
+      });
+    } catch {
+      // Reported through onError.
+    }
   };
 
   if (templateLoading) {
@@ -152,6 +191,13 @@ export default function CreateProfileClient() {
             <p className="text-muted-foreground text-center">
               A new device profile has been created from the &quot;{template.name}&quot; template.
             </p>
+            {fulfilError && (
+              <Alert variant="destructive" data-testid="create-profile-session-not-fulfilled">
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle>Session not fulfilled</AlertTitle>
+                <AlertDescription>{fulfilError}</AlertDescription>
+              </Alert>
+            )}
             <div className="flex gap-3">
               <Button
                 variant="outline"
@@ -208,6 +254,17 @@ export default function CreateProfileClient() {
       </Card>
 
       <Separator />
+
+      {sessionId && (
+        <Alert data-testid="create-profile-session">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Provisioning session</AlertTitle>
+          <AlertDescription>
+            The profile created here fulfils provisioning session{' '}
+            <span className="font-mono">{sessionId}</span>, so the device resumes installation.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Customization Form */}
       <form onSubmit={handleSubmit} className="flex flex-col gap-6">
@@ -280,12 +337,23 @@ export default function CreateProfileClient() {
           >
             Cancel
           </Button>
-          <Button type="submit" disabled={createProfileMutation.isLoading}>
-            {createProfileMutation.isLoading && (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            )}
-            Create Profile
-          </Button>
+          {sessionId ? (
+            <Gated op="POST /api/v1/provisioning/sessions/{sessionID}/fulfill">
+              <Button type="submit" disabled={createProfileMutation.isLoading}>
+                {createProfileMutation.isLoading && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                Create Profile and Provision Device
+              </Button>
+            </Gated>
+          ) : (
+            <Button type="submit" disabled={createProfileMutation.isLoading}>
+              {createProfileMutation.isLoading && (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              )}
+              Create Profile
+            </Button>
+          )}
         </div>
       </form>
     </div>
