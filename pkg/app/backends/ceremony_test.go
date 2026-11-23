@@ -290,7 +290,7 @@ func TestThresholdQuorum(t *testing.T) {
 	}{
 		{"3-of-5", 3},
 		{"2-of-3", 2},
-		{"1-of-1", 1},
+		{"2-of-2", 2},
 		{"10-of-25", 10},
 	}
 	for _, tc := range cases {
@@ -306,7 +306,7 @@ func TestThresholdQuorum_Malformed(t *testing.T) {
 	if got, err := thresholdQuorum(""); got != 0 || err != nil {
 		t.Errorf("thresholdQuorum(\"\") = %d, %v; want 0, nil (single-admin)", got, err)
 	}
-	for _, in := range []string{"garbage", "x-of-5", "-1-of-3", "3of5", "0-of-3", "4-of-3", "+3-of-5", "3-of-x"} {
+	for _, in := range []string{"garbage", "x-of-5", "-1-of-3", "3of5", "0-of-3", "4-of-3", "+3-of-5", "3-of-x", "1-of-5", "1-of-1", "2-of-1"} {
 		got, err := thresholdQuorum(in)
 		var bad *ErrInvalidCeremonyThreshold
 		if !errors.As(err, &bad) {
@@ -339,6 +339,33 @@ func TestCeremonyBackend_Initialize_RefusesMalformedThreshold(t *testing.T) {
 	}
 	if len(calls) != 0 {
 		t.Errorf("calls = %v, want none: a malformed threshold must be refused before any minting or ceremony call", calls)
+	}
+}
+
+// TestCeremonyBackend_Initialize_RefusesQuorumOfOne pins that a 1-of-N
+// threshold is refused before any call: upstream go-qrdb selects M-of-N only
+// when Threshold >= 2 and silently runs single-admin otherwise, so a quorum of
+// one would create a ceremony without officer shares.
+func TestCeremonyBackend_Initialize_RefusesQuorumOfOne(t *testing.T) {
+	var calls []string
+	ceremony := &fakeQRDBCeremony{
+		calls: &calls,
+		resp:  &quicbaassdk.QRDBCeremonyInitializeResponse{SPKIPin: "pin", State: "enrolling"},
+	}
+	issuer := &fakeAdminIssuer{calls: &calls, bundle: &AdminBundle{CertPEM: "CERT", KeyPEM: "KEY"}}
+	b := NewCeremonyBackend(logging.DefaultLogger(), &fakeQuicbaasClient{ceremony: ceremony}, issuer)
+
+	_, err := b.Initialize(context.Background(), &daemon.CeremonyInitRequest{
+		SOPIN:     "so",
+		UserPIN:   "user",
+		Threshold: "1-of-5",
+	})
+	var bad *ErrInvalidCeremonyThreshold
+	if !errors.As(err, &bad) {
+		t.Fatalf("Initialize error = %v, want *ErrInvalidCeremonyThreshold", err)
+	}
+	if len(calls) != 0 {
+		t.Errorf("calls = %v, want none: a quorum of one must be refused before any minting or ceremony call", calls)
 	}
 }
 
