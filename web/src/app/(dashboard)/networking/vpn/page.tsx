@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { AlertCircle, FileCode, Loader2, Plus, RefreshCw, Shield, Trash2, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -88,6 +88,17 @@ function throwOnError<T>(response: ApiResponse<T>): void {
   }
 }
 
+/**
+ * latest numbers each read on gen and answers with neither data nor error
+ * when a newer read on the same counter started meanwhile: useApi then keeps
+ * the newer answer, raises no error state and shows no toast.
+ */
+async function latest<T>(gen: { current: number }, read: () => Promise<ApiResponse<T>>): Promise<ApiResponse<T>> {
+  const mine = ++gen.current;
+  const response = await read();
+  return mine === gen.current ? response : ({} as ApiResponse<T>);
+}
+
 export default function VPNPage() {
   const { toast } = useToast();
   const vpn = useVPN();
@@ -101,7 +112,11 @@ export default function VPNPage() {
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
   const [tenantInput, setTenantInput] = useState('');
   const [gatewayInput, setGatewayInput] = useState('');
+  // Filter answers that arrive after a newer filter was applied are dropped (#2070).
   const [filters, setFilters] = useState({ tenant: '', gateway: '' });
+  const statusGen = useRef(0);
+  const tenantGen = useRef(0);
+  const policiesGen = useRef(0);
 
   const notConfiguredQuiet = (title: string) => ({
     onError: (err: Error) => {
@@ -119,14 +134,14 @@ export default function VPNPage() {
     isLoading: statusLoading,
     error: statusError,
     refetch: refetchStatus,
-  } = useApi(() => vpn.getStatus(filters.gateway || undefined), [filters.gateway], notConfiguredQuiet('Error loading VPN status'));
+  } = useApi(() => latest(statusGen, () => vpn.getStatus(filters.gateway || undefined)), [filters.gateway], notConfiguredQuiet('Error loading VPN status'));
 
   const {
     data: peersData,
     isLoading: peersLoading,
     error: peersError,
     refetch: refetchPeers,
-  } = useApi(() => vpn.listPeers(filters.tenant || undefined), [filters.tenant], notConfiguredQuiet('Error loading VPN peers'));
+  } = useApi(() => latest(tenantGen, () => vpn.listPeers(filters.tenant || undefined)), [filters.tenant], notConfiguredQuiet('Error loading VPN peers'));
 
   const {
     data: policiesData,
@@ -134,7 +149,7 @@ export default function VPNPage() {
     error: policiesError,
     refetch: refetchPolicies,
   } = useApi(
-    () => vpn.listPosturePolicies(filters.tenant || undefined),
+    () => latest(policiesGen, () => vpn.listPosturePolicies(filters.tenant || undefined)),
     [filters.tenant],
     notConfiguredQuiet('Error loading posture policies')
   );
