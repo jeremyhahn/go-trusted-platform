@@ -1,9 +1,16 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import type { ReactElement } from 'react';
+import { cleanup, render as rtlRender, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { GatewaySnapshot } from 'trusted-platform-sdk';
 
 import { GatewaySnapshotDetail } from './gateway-snapshot-detail';
-import type { GatewayOverlay } from './gateway-admitted-vteps';
+import { withControlPlane } from '@/test/control-plane-fetch';
+
+// The overlay section reads admitted VTEPs through the SDK hook, so the
+// detail renders inside the control-plane provider.
+function render(ui: ReactElement) {
+  return rtlRender(withControlPlane(ui));
+}
 
 // The datapath detail renders only the sections a gateway actually
 // reports (#594): an absent section means "not running", and must not be
@@ -147,12 +154,10 @@ describe('GatewaySnapshotDetail', () => {
     expect(screen.queryByTestId('gateway-overlay-summary')).toBeNull();
     cleanup();
 
-    // The SDK type has no overlay field yet (#2051): the same cast the
-    // component reads it through.
-    const withOverlay = {
+    const withOverlay: GatewaySnapshot = {
       ...snapshot(),
       overlay: { running: true, admitted_vteps: [{ vtep: '192.0.2.10' }] },
-    } as GatewaySnapshot & { overlay?: GatewayOverlay };
+    };
     render(<GatewaySnapshotDetail snapshot={withOverlay} />);
     expect(screen.getByTestId('gateway-overlay-summary')).toBeDefined();
     expect(screen.getAllByTestId('gateway-admitted-vtep-row')).toHaveLength(1);
