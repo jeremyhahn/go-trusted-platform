@@ -380,7 +380,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `InvitationService.ListInvitations` | - | `(dashboard)/tenant/invitations/page.tsx` | - | `real-server/tenant-management.spec.ts`<br>`real-server/invitation-revoke.spec.ts` | covered |
 | `InvitationService.RevokeInvitation` | `POST /{id:[0-9]+}/revoke` | `(dashboard)/tenant/invitations/page.tsx` | - | `real-server/tenant-management.spec.ts`<br>`real-server/invitation-revoke.spec.ts` | covered |
 | `InvitationService.AcceptInvitation` | `POST /accept` | `invite/page.tsx` (marks the invitation accepted; grants no membership, #2056) | - | `real-server/invitation-accept-flow.spec.ts` | covered |
-| `InvitationService.DeleteInvitation` | `DELETE /{id:[0-9]+}` | `(dashboard)/tenant/invitations/page.tsx` | - | `real-server/invitation-delete.spec.ts` | covered |
+| `InvitationService.DeleteInvitation` | `DELETE /{id:[0-9]+}` | `(dashboard)/tenant/invitations/page.tsx`<br>`(dashboard)/tenant/invitations/[id]/page.tsx` | - | `real-server/invitation-delete.spec.ts` | covered |
 
 ## KeyManagementService (`kms.proto`)
 
