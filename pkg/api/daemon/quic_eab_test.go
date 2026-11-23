@@ -37,6 +37,9 @@ func newEABQUICHandler(t *testing.T, configured bool) (*QUICServiceHandler, *fak
 		return handler, nil, nil
 	}
 	grpcSvc, svc, del := newEABGRPCFixture()
+	// Tenant-scoped EAB calls need an IAM decision: the round trips call
+	// as a Unix operator the wired PEP allows.
+	grpcSvc.SetPEPClient(allowAllPEP(nil))
 	handler.SetEABService(grpcSvc)
 	return handler, svc, del
 }
@@ -152,7 +155,7 @@ func TestEABQUIC_MalformedPayloadInvalidRequest(t *testing.T) {
 
 func TestEABQUIC_CreateGetRoundTrip(t *testing.T) {
 	handler, _, _ := newEABQUICHandler(t, true)
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	var createResp platformv1.CreateEABCredentialResponse
 	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quicwire.EABSubCreateCredential,
@@ -191,7 +194,7 @@ func TestEABQUIC_CreateGetRoundTrip(t *testing.T) {
 
 func TestEABQUIC_ListRoundTrip(t *testing.T) {
 	handler, svc, _ := newEABQUICHandler(t, true)
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 2, TenantID: "t2"})
@@ -310,14 +313,19 @@ func TestEABQUIC_DeliveryRoundTrip(t *testing.T) {
 
 func TestEABQUIC_CleanupRoundTrip(t *testing.T) {
 	handler, svc, _ := newEABQUICHandler(t, true)
-	svc.cleanupCount = 3
+	ctx := unixOperatorContext()
+	// A store-wide cleanup names no tenant and no caller holds an IAM
+	// decision for that, so the round trip cleans one tenant's credentials.
+	expired, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
+	expired.ExpiresAt = time.Now().Add(-time.Hour)
+	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 
 	var cleanupResp platformv1.CleanupExpiredEABCredentialsResponse
-	decodeEABOK(t, handler.HandleRequest(context.Background(),
+	decodeEABOK(t, handler.HandleRequest(ctx,
 		eabQUICRequest(t, quicwire.EABSubCleanupExpiredCredentials,
-			&platformv1.CleanupExpiredEABCredentialsRequest{})), &cleanupResp)
-	if cleanupResp.GetDeletedCount() != 3 {
-		t.Errorf("deleted_count = %d, want 3", cleanupResp.GetDeletedCount())
+			&platformv1.CleanupExpiredEABCredentialsRequest{TenantId: "t1"})), &cleanupResp)
+	if cleanupResp.GetDeletedCount() != 1 {
+		t.Errorf("deleted_count = %d, want 1", cleanupResp.GetDeletedCount())
 	}
 }
 

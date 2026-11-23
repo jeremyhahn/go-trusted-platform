@@ -47,6 +47,15 @@ func newEABGRPCFixture() (*EABGRPCService, *fakeEABService, *fakeEABDelivery) {
 	return NewEABGRPCService(logging.DefaultLogger(), svc, del), svc, del
 }
 
+// sameTenantPEP is a decision point that allows a check only when the
+// request tenant is the subject's own tenant, so tests of the caller-tenant
+// rule run with a PEP wired (a nil PEP refuses every tenant-scoped call).
+func sameTenantPEP() *mockSDKPEPClient {
+	return &mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		return &sdkiam.CheckResponse{Allowed: req.TenantID != "" && req.TenantID == req.Subject.TenantID}, nil
+	}}
+}
+
 func TestNewEABGRPCService_NilLoggerDefaults(t *testing.T) {
 	service := NewEABGRPCService(nil, nil, nil)
 	if service == nil {
@@ -153,7 +162,8 @@ func TestEABGRPCService_NilDeliveryReturnsUnavailable(t *testing.T) {
 
 func TestEABGRPCService_CreateCredential(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
+	service.SetPEPClient(allowAllPEP(nil))
 
 	resp, err := service.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{
 		ProfileId:        7,
@@ -191,7 +201,8 @@ func TestEABGRPCService_CreateCredential(t *testing.T) {
 
 func TestEABGRPCService_CreateCredential_Errors(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
+	service.SetPEPClient(allowAllPEP(nil))
 
 	// Negative expiry rejected up front.
 	if _, err := service.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{
@@ -266,22 +277,28 @@ func TestEABGRPCService_GetCredentialByKeyID(t *testing.T) {
 
 func TestEABGRPCService_ListCredentials_FilterCascade(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
+	service.SetPEPClient(allowAllPEP(nil))
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t2"})
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 2, TenantID: "t1"})
 
-	// Unfiltered: full store via Page walk.
-	resp, err := service.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{})
+	// Unfiltered over gRPC spans every tenant: no caller holds an IAM
+	// decision for the empty tenant, so it is refused.
+	if _, err := service.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("unfiltered list: code = %v, want PermissionDenied", status.Code(err))
+	}
+	// The shared cascade still walks the full store for the MCP surface.
+	all, err := collectEABCredentials(ctx, svc, 0, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if resp.GetTotal() != 3 {
-		t.Errorf("unfiltered total = %d, want 3", resp.GetTotal())
+	if len(all) != 3 {
+		t.Errorf("unfiltered total = %d, want 3", len(all))
 	}
 
 	// By tenant.
-	resp, err = service.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{TenantId: "t1"})
+	resp, err := service.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{TenantId: "t1"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -310,7 +327,8 @@ func TestEABGRPCService_ListCredentials_FilterCascade(t *testing.T) {
 
 func TestEABGRPCService_ListCredentials_StatusAndActiveFilters(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
+	service.SetPEPClient(allowAllPEP(nil))
 	c1, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	_ = svc.Revoke(ctx, c1.ID)
@@ -340,7 +358,8 @@ func TestEABGRPCService_ListCredentials_StatusAndActiveFilters(t *testing.T) {
 
 func TestEABGRPCService_ListCredentials_Pagination(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
+	service.SetPEPClient(allowAllPEP(nil))
 	for i := 0; i < 5; i++ {
 		_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	}
@@ -382,7 +401,8 @@ func TestEABGRPCService_ListCredentials_Pagination(t *testing.T) {
 
 func TestEABGRPCService_ListCredentials_SortOptions(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
+	service.SetPEPClient(allowAllPEP(nil))
 	for i := 0; i < 3; i++ {
 		_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	}
@@ -423,7 +443,8 @@ func TestEABGRPCService_ListCredentials_SortOptions(t *testing.T) {
 
 func TestEABGRPCService_ListCredentials_PropagatesErrors(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
+	service.SetPEPClient(allowAllPEP(nil))
 
 	svc.errListByTenant = eab.ErrInvalidTenantID{TenantID: "x"}
 	if _, err := service.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{
@@ -434,8 +455,7 @@ func TestEABGRPCService_ListCredentials_PropagatesErrors(t *testing.T) {
 
 	svc.errListByTenant = nil
 	svc.errPage = context.DeadlineExceeded
-	if _, err := service.ListCredentials(ctx,
-		&platformv1.ListEABCredentialsRequest{}); status.Code(err) != codes.Internal {
+	if _, err := collectEABCredentials(ctx, svc, 0, ""); status.Code(eabErrorToStatus(err)) != codes.Internal {
 		t.Errorf("expected Internal for unknown error, got %v", err)
 	}
 }
@@ -661,16 +681,22 @@ func TestEABGRPCService_MarkCredentialUsed(t *testing.T) {
 
 func TestEABGRPCService_CleanupExpiredCredentials(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
+	service.SetPEPClient(allowAllPEP(nil))
 	svc.cleanupCount = 4
 
-	// Global cleanup delegates to CleanupExpired.
-	resp, err := service.CleanupExpiredCredentials(ctx, &platformv1.CleanupExpiredEABCredentialsRequest{})
+	// Global cleanup over gRPC spans every tenant: no caller holds an IAM
+	// decision for the empty tenant, so it is refused.
+	if _, err := service.CleanupExpiredCredentials(ctx, &platformv1.CleanupExpiredEABCredentialsRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("global cleanup: code = %v, want PermissionDenied", status.Code(err))
+	}
+	// The shared helper still delegates a global cleanup to CleanupExpired.
+	deleted, err := cleanupExpiredEABCredentials(ctx, svc, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if resp.GetDeletedCount() != 4 {
-		t.Errorf("deleted_count = %d, want 4", resp.GetDeletedCount())
+	if deleted != 4 {
+		t.Errorf("deleted = %d, want 4", deleted)
 	}
 
 	// Tenant-scoped cleanup deletes only that tenant's expired creds.
@@ -680,7 +706,7 @@ func TestEABGRPCService_CleanupExpiredCredentials(t *testing.T) {
 	otherTenant, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t2"})
 	otherTenant.ExpiresAt = time.Now().Add(-time.Hour)
 
-	resp, err = service.CleanupExpiredCredentials(ctx, &platformv1.CleanupExpiredEABCredentialsRequest{
+	resp, err := service.CleanupExpiredCredentials(ctx, &platformv1.CleanupExpiredEABCredentialsRequest{
 		TenantId: "t1",
 	})
 	if err != nil {
@@ -730,6 +756,7 @@ func TestEABGRPCService_CallerTenantBinding(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(method+"/"+tc.name, func(t *testing.T) {
 				service, svc, _ := newEABGRPCFixture()
+				service.SetPEPClient(sameTenantPEP())
 				err := call(service, tc.ctx, tc.tenantID)
 				if got := status.Code(err); got != tc.wantCode {
 					t.Fatalf("code = %v, want %v (err %v)", got, tc.wantCode, err)
@@ -1202,6 +1229,7 @@ func TestEABGRPCService_EveryBoundCallerSourceIsBound(t *testing.T) {
 			for _, tc := range cases {
 				t.Run(method+"/"+source+"/"+tc.name, func(t *testing.T) {
 					service, svc, _ := newEABGRPCFixture()
+					service.SetPEPClient(sameTenantPEP())
 					err := call(service, ctxFor(), tc.tenantID)
 					if got := status.Code(err); got != tc.wantCode {
 						t.Fatalf("code = %v, want %v (err %v)", got, tc.wantCode, err)
@@ -1251,11 +1279,11 @@ func TestEABGRPCService_WildcardBearerTokenIsNotACertificate(t *testing.T) {
 
 func TestEABGRPCService_CleanupExpiredCredentials_Errors(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
+	service.SetPEPClient(allowAllPEP(nil))
 
 	svc.errCleanupExpired = context.DeadlineExceeded
-	if _, err := service.CleanupExpiredCredentials(ctx,
-		&platformv1.CleanupExpiredEABCredentialsRequest{}); status.Code(err) != codes.Internal {
+	if _, err := cleanupExpiredEABCredentials(ctx, svc, ""); status.Code(eabErrorToStatus(err)) != codes.Internal {
 		t.Errorf("expected Internal, got %v", err)
 	}
 
