@@ -42,7 +42,9 @@ export default function GroupsPage() {
   const router = useRouter();
   const { toast } = useToast();
   const { tenantId, isLoading: authLoading } = useAuth();
-  const deleteCap = useCapabilities().capability('DELETE /api/v1/iam/groups/{id}');
+  const { loading: capsLoading, capability } = useCapabilities();
+  const deleteCap = capability('DELETE /api/v1/iam/groups/{id}');
+  const listCap = capability('GET /api/v1/iam/groups');
   const iam = useIAM();
 
   // Fetch groups using SDK
@@ -52,9 +54,10 @@ export default function GroupsPage() {
     error: groupsError,
     refetch: refetchGroups,
   } = useApi(
-    () => tenantId ? iam.listGroups({ tenantId }) : Promise.resolve({ success: true, data: null }),
-    [tenantId],
+    () => tenantId && listCap.enabled ? iam.listGroups({ tenantId }) : Promise.resolve({ success: true, data: null }),
+    [tenantId, listCap.enabled],
     {
+      enabled: !capsLoading && listCap.enabled,
       onError: (err) => {
         toast({
           title: 'Error loading groups',
@@ -246,6 +249,19 @@ export default function GroupsPage() {
             No tenant ID available. Please log in again to access IAM management.
           </AlertDescription>
         </Alert>
+      </div>
+    );
+  }
+
+  if (!capsLoading && !listCap.enabled) {
+    return (
+      <div className="container mx-auto py-6">
+        <Card data-testid="groups-not-enabled">
+          <CardHeader>
+            <CardTitle>Groups are not enabled on this server</CardTitle>
+          </CardHeader>
+          <CardContent className="text-muted-foreground">{listCap.reason}</CardContent>
+        </Card>
       </div>
     );
   }
