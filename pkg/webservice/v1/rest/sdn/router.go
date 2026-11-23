@@ -115,10 +115,12 @@ func (r *SDNRouter) registerFlowRoutes(router *mux.Router) {
 // POST   /api/v1/sdn/policies          - Apply policy
 // GET    /api/v1/sdn/policies          - List policies
 // GET    /api/v1/sdn/policies/{id}     - Get policy
+// DELETE /api/v1/sdn/policies/{id}     - Delete policy
 func (r *SDNRouter) registerPolicyRoutes(router *mux.Router) {
 	router.HandleFunc("/policies", r.handlers.ApplyPolicy).Methods("POST")
 	router.HandleFunc("/policies", r.handlers.ListPolicies).Methods("GET")
 	router.HandleFunc("/policies/{id}", r.handlers.GetPolicy).Methods("GET")
+	router.HandleFunc("/policies/{id}", r.handlers.DeletePolicy).Methods("DELETE")
 }
 
 // registerVLANRoutes registers VLAN management endpoints.

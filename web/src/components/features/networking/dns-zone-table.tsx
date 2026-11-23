@@ -21,6 +21,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import { Gated } from '@/components/features/capabilities/gated';
 import { useDNS, useMutation, useToast } from '@/hooks';
 import type { DNSZone } from '@/types/infrastructure';
 
@@ -75,7 +76,7 @@ export function DNSZoneTable({ zones, onRefresh }: DNSZoneTableProps) {
 
   return (
     <div className="rounded-md border border-border">
-      <Table>
+      <Table data-testid="dns-zone-table">
         <TableHeader>
           <TableRow>
             <TableHead>Zone Name</TableHead>
@@ -95,7 +96,7 @@ export function DNSZoneTable({ zones, onRefresh }: DNSZoneTableProps) {
             </TableRow>
           ) : (
             zones.map((zone) => (
-              <TableRow key={zone.id}>
+              <TableRow key={zone.id} data-testid="dns-zone-row">
                 <TableCell className="font-medium font-mono">{zone.name}</TableCell>
                 <TableCell>
                   <Badge
@@ -133,13 +134,15 @@ export function DNSZoneTable({ zones, onRefresh }: DNSZoneTableProps) {
                         View Records
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        onClick={() => handleDelete(zone.name)}
-                        className="text-destructive"
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Delete
-                      </DropdownMenuItem>
+                      <Gated op="DELETE /api/v1/dns/zones/{zone}">
+                        <DropdownMenuItem
+                          onClick={() => handleDelete(zone.name)}
+                          className="text-destructive"
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          Delete
+                        </DropdownMenuItem>
+                      </Gated>
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </TableCell>

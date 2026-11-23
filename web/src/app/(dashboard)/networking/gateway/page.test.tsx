@@ -44,6 +44,9 @@ vi.mock("@/components/features/networking/gateway-mode-card", () => ({
 // The BGP cards read through the SDK client; page.bgp-cards.test.tsx covers their mount.
 vi.mock("@/components/features/networking/bgp-peers-card", () => ({ BGPPeersCard: () => null }));
 vi.mock("@/components/features/networking/bgp-prefixes-card", () => ({ BGPPrefixesCard: () => null }));
+vi.mock("@/components/features/networking/gateway-snapshots-card", () => ({
+  GatewaySnapshotsCard: () => <div data-testid="gateway-snapshots-card-stub" />,
+}));
 
 import APIGatewayPage from "./page";
 
@@ -272,5 +275,20 @@ describe("APIGatewayPage", () => {
 
     expect(await screen.findByText(/This node does not run gatewayd/)).toBeTruthy();
     expect(screen.queryByTestId("gateway-mode-card")).toBeNull();
+  });
+
+  it("mounts the gateway snapshots card", async () => {
+    allOk();
+    render(<APIGatewayPage />);
+    expect(await screen.findByTestId("gateway-snapshots-card-stub")).toBeTruthy();
+
+    cleanup();
+    gateway.getStatus.mockResolvedValue(notConfigured);
+    gateway.getBGPStatus.mockResolvedValue(notConfigured);
+    gateway.listAnnouncedPrefixes.mockResolvedValue(notConfigured);
+    gateway.listIPAMPools.mockResolvedValue(notConfigured);
+    render(<APIGatewayPage />);
+    expect(await screen.findByText(/This node does not run gatewayd/)).toBeTruthy();
+    expect(screen.getByTestId("gateway-snapshots-card-stub")).toBeTruthy();
   });
 });

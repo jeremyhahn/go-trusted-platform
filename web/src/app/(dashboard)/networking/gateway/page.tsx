@@ -27,6 +27,7 @@ import { GatewayModeCard } from '@/components/features/networking/gateway-mode-c
 import { maskToModes } from '@/hooks/use-gateway-mode';
 import { BGPPeersCard } from '@/components/features/networking/bgp-peers-card';
 import { BGPPrefixesCard } from '@/components/features/networking/bgp-prefixes-card';
+import { GatewaySnapshotsCard } from '@/components/features/networking/gateway-snapshots-card';
 
 export default function APIGatewayPage() {
   const { toast } = useToast();
@@ -284,6 +285,8 @@ export default function APIGatewayPage() {
       </Card>
 
       {selectedGateway && <GatewaySnapshotDetail snapshot={selectedGateway} />}
+
+      <GatewaySnapshotsCard />
 
       {allUnavailable ? (
         <Card>

@@ -46,6 +46,9 @@ vi.mock("@/components/features/networking/bgp-peers-card", () => ({
 vi.mock("@/components/features/networking/bgp-prefixes-card", () => ({
   BGPPrefixesCard: () => <div data-testid="bgp-prefixes-card" />,
 }));
+vi.mock("@/components/features/networking/gateway-snapshots-card", () => ({
+  GatewaySnapshotsCard: () => <div data-testid="gateway-snapshots-card-stub" />,
+}));
 
 import APIGatewayPage from "./page";
 
