@@ -176,6 +176,10 @@ func (s *EABGRPCService) CreateCredential(
 		return nil, err
 	}
 
+	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
+	}
+
 	params := eab.GenerateParams{
 		ProfileID:  req.GetProfileId(),
 		TenantID:   req.GetTenantId(),
@@ -213,6 +217,9 @@ func (s *EABGRPCService) GetCredential(
 	if err != nil {
 		return nil, eabErrorToStatus(err)
 	}
+	if err := authorizeIAMTenant(ctx, cred.TenantID); err != nil {
+		return nil, err
+	}
 
 	return &platformv1.GetEABCredentialResponse{
 		Credential: eabCredentialToPb(cred, false),
@@ -234,6 +241,9 @@ func (s *EABGRPCService) GetCredentialByKeyID(
 	if err != nil {
 		return nil, eabErrorToStatus(err)
 	}
+	if err := authorizeIAMTenant(ctx, cred.TenantID); err != nil {
+		return nil, err
+	}
 
 	return &platformv1.GetEABCredentialResponse{
 		Credential: eabCredentialToPb(cred, false),
@@ -251,6 +261,10 @@ func (s *EABGRPCService) ListCredentials(
 	req *platformv1.ListEABCredentialsRequest,
 ) (*platformv1.ListEABCredentialsResponse, error) {
 	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
+	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 
@@ -387,6 +401,9 @@ func (s *EABGRPCService) RevokeCredential(
 		return nil, err
 	}
 
+	if _, err := s.authorizeEABCredential(ctx, req.GetCredentialId()); err != nil {
+		return nil, err
+	}
 	if err := s.service.Revoke(ctx, req.GetCredentialId()); err != nil {
 		return nil, eabErrorToStatus(err)
 	}
@@ -443,6 +460,9 @@ func (s *EABGRPCService) DeleteCredential(
 		return nil, err
 	}
 
+	if _, err := s.authorizeEABCredential(ctx, req.GetCredentialId()); err != nil {
+		return nil, err
+	}
 	if err := s.service.Delete(ctx, req.GetCredentialId()); err != nil {
 		return nil, eabErrorToStatus(err)
 	}
@@ -473,6 +493,9 @@ func (s *EABGRPCService) GetCredentialQRCode(
 	cred, err := s.service.Get(ctx, req.GetCredentialId())
 	if err != nil {
 		return nil, eabErrorToStatus(err)
+	}
+	if err := authorizeIAMTenant(ctx, cred.TenantID); err != nil {
+		return nil, err
 	}
 
 	png, err := s.delivery.ToQRCodeSized(cred, int(req.GetSize()))
@@ -506,6 +529,9 @@ func (s *EABGRPCService) GetEnrollmentURL(
 	if err != nil {
 		return nil, eabErrorToStatus(err)
 	}
+	if err := authorizeIAMTenant(ctx, cred.TenantID); err != nil {
+		return nil, err
+	}
 
 	var url string
 	if path := req.GetPath(); path != "" {
@@ -535,6 +561,9 @@ func (s *EABGRPCService) MarkCredentialUsed(
 		return nil, err
 	}
 
+	if _, err := s.authorizeEABCredential(ctx, req.GetCredentialId()); err != nil {
+		return nil, err
+	}
 	if err := s.service.MarkUsed(ctx, req.GetCredentialId()); err != nil {
 		return nil, eabErrorToStatus(err)
 	}
@@ -556,6 +585,10 @@ func (s *EABGRPCService) CleanupExpiredCredentials(
 		return nil, err
 	}
 
+	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
+	}
+
 	deleted, err := cleanupExpiredEABCredentials(ctx, s.service, req.GetTenantId())
 	if err != nil {
 		return nil, eabErrorToStatus(err)
@@ -572,6 +605,25 @@ func (s *EABGRPCService) CleanupExpiredCredentials(
 // tenant, or of every tenant when tenantID is empty, and returns how many
 // it deleted. The gRPC and MCP surfaces share it so a tenant-scoped
 // cleanup never touches another tenant's credentials on either.
+// authorizeEABCredential fetches a credential by ID and admits the caller
+// only when authorizeIAMTenant admits it for the credential's tenant, so a
+// tenant-bound caller never reads or changes another tenant's credential.
+// An unbound caller is admitted without the extra fetch (cred is nil), so
+// its calls behave exactly as before (#2006 decides unbound callers).
+func (s *EABGRPCService) authorizeEABCredential(ctx context.Context, id uint64) (*eab.Credential, error) {
+	if _, bound := callerTenant(ctx); !bound {
+		return nil, nil
+	}
+	cred, err := s.service.Get(ctx, id)
+	if err != nil {
+		return nil, eabErrorToStatus(err)
+	}
+	if err := authorizeIAMTenant(ctx, cred.TenantID); err != nil {
+		return nil, err
+	}
+	return cred, nil
+}
+
 func cleanupExpiredEABCredentials(ctx context.Context, svc EABServicer, tenantID string) (int, error) {
 	if tenantID == "" {
 		return svc.CleanupExpired(ctx)
