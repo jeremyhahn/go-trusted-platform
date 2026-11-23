@@ -69,6 +69,11 @@ import {
   deviceRoleLabel,
   toDeviceRole,
 } from '@/lib/device-role';
+import { Gated } from '@/components/features/capabilities/gated';
+
+const CREATE_TEMPLATE_OP = 'POST /api/v1/device/templates';
+const UPDATE_TEMPLATE_OP = 'PUT /api/v1/device/templates/{id:[0-9]+}';
+const DELETE_TEMPLATE_OP = 'DELETE /api/v1/device/templates/{id:[0-9]+}';
 
 // ============================================================================
 // Types
@@ -158,8 +163,9 @@ export default function DeviceTemplatesPage() {
     router.push(`/devices/templates/${template.id}`);
   };
 
+  // The detail page carries the Edit template dialog.
   const handleEditTemplate = (template: DeviceTemplate) => {
-    router.push(`/devices/templates/${template.id}/edit`);
+    router.push(`/devices/templates/${template.id}`);
   };
 
   const handleDuplicateTemplate = async (template: DeviceTemplate) => {
@@ -272,12 +278,14 @@ export default function DeviceTemplatesPage() {
             Refresh
           </Button>
           <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="mr-2 h-4 w-4" />
-                Create Template
-              </Button>
-            </DialogTrigger>
+            <Gated op={CREATE_TEMPLATE_OP}>
+              <DialogTrigger asChild>
+                <Button>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Create Template
+                </Button>
+              </DialogTrigger>
+            </Gated>
             <DialogContent className="max-w-lg">
               <DialogHeader>
                 <DialogTitle>Create Device Template</DialogTitle>
@@ -494,22 +502,28 @@ export default function DeviceTemplatesPage() {
                             <Eye className="mr-2 h-4 w-4" />
                             View Details
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleEditTemplate(template)}>
-                            <Pencil className="mr-2 h-4 w-4" />
-                            Edit Template
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleDuplicateTemplate(template)}>
-                            <Copy className="mr-2 h-4 w-4" />
-                            Duplicate
-                          </DropdownMenuItem>
+                          <Gated op={UPDATE_TEMPLATE_OP}>
+                            <DropdownMenuItem onClick={() => handleEditTemplate(template)}>
+                              <Pencil className="mr-2 h-4 w-4" />
+                              Edit Template
+                            </DropdownMenuItem>
+                          </Gated>
+                          <Gated op={CREATE_TEMPLATE_OP}>
+                            <DropdownMenuItem onClick={() => handleDuplicateTemplate(template)}>
+                              <Copy className="mr-2 h-4 w-4" />
+                              Duplicate
+                            </DropdownMenuItem>
+                          </Gated>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            onClick={() => handleDeleteTemplate(template)}
-                            className="text-destructive"
-                          >
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            Delete
-                          </DropdownMenuItem>
+                          <Gated op={DELETE_TEMPLATE_OP}>
+                            <DropdownMenuItem
+                              onClick={() => handleDeleteTemplate(template)}
+                              className="text-destructive"
+                            >
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              Delete
+                            </DropdownMenuItem>
+                          </Gated>
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </TableCell>

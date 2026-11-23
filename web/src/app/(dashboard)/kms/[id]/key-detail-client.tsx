@@ -99,9 +99,17 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
       return s;
     };
     const createdRaw = metadata.createdAt ?? metadata.created_at ?? key.createdAt ?? key.created_at;
-    const status: string = String(key.status ?? metadata.status ?? '').toUpperCase();
     const served = (versionsResponse as unknown as KeyVersionsWire | null | undefined)?.versions;
     const currentVersion = Number(metadata.version ?? key.version ?? 0);
+    // GetKey (KeyInfoResponse) carries no status: take the status of the
+    // served current version, else of the highest served version.
+    const servedStatus = (() => {
+      if (!Array.isArray(served) || served.length === 0) return undefined;
+      const current = served.find((v) => (v.version ?? 0) === currentVersion);
+      if (current) return current.status;
+      return served.reduce((a, b) => ((b.version ?? 0) > (a.version ?? 0) ? b : a)).status;
+    })();
+    const status: string = String(key.status ?? metadata.status ?? servedStatus ?? '').toUpperCase();
     const versions: KeyDetail["versions"] = Array.isArray(served)
       ? served
           .map((v) => ({

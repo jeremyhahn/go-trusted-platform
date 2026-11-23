@@ -26,6 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks";
 import { quoteVerdictLabel, useAttestationVerify } from "@/hooks/use-attestation-verify";
+import { textToBase64 } from "@/hooks/use-tpm-ops";
 
 type HashAlgorithm = NonNullable<AttestationQuoteConfig["hashAlgorithm"]>;
 
@@ -105,7 +106,9 @@ export function QuoteVerifyCard(): React.JSX.Element {
     try {
       const res = await verify.verifyQuote({
         quote,
-        akPublicKeyPem: pem.trim(),
+        // ak_public_key_pem is a proto `bytes` field: the JSON gateway
+        // base64-decodes it, so the PEM text goes as base64.
+        akPublicKeyPem: textToBase64(pem.trim()),
         expectedNonce: nonce.trim(),
         ...(channelBinding ? { channelBinding } : {}),
       });

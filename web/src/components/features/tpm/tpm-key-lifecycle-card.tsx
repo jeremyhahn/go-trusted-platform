@@ -27,7 +27,6 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import { parseHandle, useTPMKeyLifecycle } from '@/hooks/use-tpm-key-lifecycle';
-import { textToBase64 } from '@/hooks/use-tpm-ops';
 
 type Confirm = 'ek' | 'srk' | null;
 
@@ -42,6 +41,12 @@ const CONFIRM_TEXT: Record<'ek' | 'srk', { title: string; description: string }>
     description: 'The storage root key is removed from the TPM; keys sealed under it can no longer be loaded.',
   },
 };
+
+// pemToDerBase64 strips the PEM armour (BEGIN/END lines) and all whitespace and
+// returns the base64 DER body; a bare base64 body comes back as-is.
+function pemToDerBase64(text: string): string {
+  return text.replace(/-----(BEGIN|END)[^-]*-----/g, '').replace(/\s+/g, '');
+}
 
 export function TPMKeyLifecycleCard(): JSX.Element {
   const { createEK, deleteEK, importEKCertificate, createSRK, deleteSRK } = useTPMKeyLifecycle();
@@ -114,7 +119,7 @@ export function TPMKeyLifecycleCard(): JSX.Element {
       return;
     }
     void run('EK certificate imported', () =>
-      importEKCertificate({ certificate: textToBase64(text), format: 'PEM' })
+      importEKCertificate({ certificate: pemToDerBase64(text), format: 'DER' })
     );
   };
 
