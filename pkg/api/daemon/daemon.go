@@ -747,12 +747,12 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			config.DeviceService,
 			config.DeviceProfileService,
 			logger.Slog(),
-			WithDeviceAKTrust(deviceAKTrust(config)),
+			WithDeviceAKTrust(caHolder),
 			WithDeviceVerdictSink(deviceVerdictSink(config)),
 			WithDeviceAttestCertRecorder(newDeviceAttestCertRecorder(config, logger.Slog())),
 			WithDeviceLifecycle(config.DeviceLifecycle),
 			WithDeviceTemplateService(config.DeviceTemplateService),
-			WithDeviceBootCA(config.CAService),
+			WithDeviceBootCA(caHolder),
 		)
 
 		// Register with TCP gRPC server if enabled
@@ -1180,9 +1180,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			quicObjStorage = config.App.Storage
 		}
 		quicHandler.SetCAHandler(quic.NewCAHandler(quicLogger, config.CAService, quicObjStorage).WithKMS(config.csrKMS()).WithCASource(caHolder.Get))
-		if config.CAService != nil {
-			quicHandler.SetDeviceAKTrust(config.CAService)
-		}
+		quicHandler.SetDeviceAKTrust(caHolder)
 
 		// Set vTPM service if available
 		if config.VTPMService != nil {
@@ -1207,9 +1205,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if config.DeviceService != nil {
 			quicHandler.SetDeviceAttestCertRecorder(newDeviceAttestCertRecorder(config, quicLogger.Slog()))
 			quicHandler.SetDeviceLifecycle(config.DeviceLifecycle)
-			if config.CAService != nil {
-				quicHandler.SetDeviceBootCA(config.CAService)
-			}
+			quicHandler.SetDeviceBootCA(caHolder)
 		}
 
 		// Set Container orchestrator if available
@@ -3948,16 +3944,6 @@ func (d *Daemon) SetFIDO2Backend(b FIDO2Backend) {
 	}
 	svc.service.SetBackend(b)
 	d.logger.Info("FIDO2 backend wired")
-}
-
-// deviceAKTrust returns the platform CA as the trust anchor for device
-// attestation certificates, or nil when no CA is configured so that device
-// quotes fail closed rather than chain against nothing.
-func deviceAKTrust(config *Config) AKTrustAnchor {
-	if config == nil || config.CAService == nil {
-		return nil
-	}
-	return config.CAService
 }
 
 // deviceVerdictSink returns the attestation service as the sink for device

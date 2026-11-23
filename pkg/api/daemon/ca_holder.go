@@ -14,14 +14,18 @@
 package daemon
 
 import (
+	"crypto/x509"
 	"sync"
 
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 )
 
 // CAHolder is the one CA the daemon's CA transports serve. daemon.New
-// builds it once and hands it to the gRPC CA service and the REST CA
-// handlers, so a CA InitCA swaps in is served by both without a restart.
+// builds it once and hands it to the gRPC CA service, the REST CA handlers,
+// the QUIC CA handler, device attestation (the AK trust anchor, over gRPC
+// and QUIC), boot delivery (the boot CA bundle, over gRPC and QUIC), LDevID
+// issuance and the auth-factor REST handlers, so a CA InitCA swaps in is
+// served by all of them without a restart.
 type CAHolder struct {
 	mu sync.RWMutex
 	ca quicbaasca.CACertificateAuthority
@@ -53,4 +57,34 @@ func (h *CAHolder) Set(ca quicbaasca.CACertificateAuthority) {
 func (h *CAHolder) Initialized() bool {
 	ca := h.Get()
 	return ca != nil && ca.IsInitialized()
+}
+
+// TrustedRoot makes the holder an AKTrustAnchor: it answers the held CA's
+// root, or ErrCANotInitialized while the holder is empty.
+func (h *CAHolder) TrustedRoot() (*x509.Certificate, error) {
+	ca := h.Get()
+	if ca == nil {
+		return nil, ErrCANotInitialized{}
+	}
+	return ca.TrustedRoot()
+}
+
+// TrustedIntermediate makes the holder an AKTrustAnchor: it answers the held
+// CA's intermediate, or ErrCANotInitialized while the holder is empty.
+func (h *CAHolder) TrustedIntermediate() (*x509.Certificate, error) {
+	ca := h.Get()
+	if ca == nil {
+		return nil, ErrCANotInitialized{}
+	}
+	return ca.TrustedIntermediate()
+}
+
+// CABundle makes the holder a BootCABundle: it answers the held CA's PEM
+// bundle, or ErrCANotInitialized while the holder is empty.
+func (h *CAHolder) CABundle() ([]byte, error) {
+	ca := h.Get()
+	if ca == nil {
+		return nil, ErrCANotInitialized{}
+	}
+	return ca.CABundle()
 }
