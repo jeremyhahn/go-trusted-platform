@@ -97,6 +97,10 @@ type policyResource struct {
 	updatedAt   time.Time
 	// flowIDs tracks OpenFlow rules installed for this policy
 	flowIDs []string
+	// flowCookies maps each target bridge name to the cookie stamped on
+	// every flow this policy installed there, so DeletePolicy removes
+	// exactly this policy's flows and no other policy's.
+	flowCookies map[string]uint64
 }
 
 // SDNServiceOption is a functional option for configuring the SDNService
@@ -826,11 +830,28 @@ func (s *SDNService) DeleteVLAN(ctx context.Context, req *platformv1.DeleteVLANR
 
 	client := s.getOVSClient()
 
-	// Remove VLAN from all ports without holding the lock
+	// Remove VLAN from all ports without holding the lock. A port that no
+	// longer exists counts as cleared; any other error keeps that port.
+	var failed []string
+	var firstErr error
 	for _, portName := range ports {
-		if err := client.SetPortVLAN(ctx, portName, 0); err != nil {
-			continue // port may no longer exist
+		if err := client.SetPortVLAN(ctx, portName, 0); err != nil && !errors.Is(err, ovs.ErrPortNotFound) {
+			failed = append(failed, portName)
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
+	}
+
+	if len(failed) > 0 {
+		// Keep the VLAN with only the ports still tagged, so a retry can
+		// finish the cleanup.
+		s.mu.Lock()
+		if res, ok := s.vlans[vlanKey]; ok {
+			res.ports = failed
+		}
+		s.mu.Unlock()
+		return nil, status.Errorf(codes.Internal, "failed to clear VLAN from ports %s: %v", strings.Join(failed, ", "), firstErr)
 	}
 
 	// Remove from tracking under write lock
@@ -1161,6 +1182,7 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 
 	// Install OpenFlow rules for each target bridge without holding the lock
 	var flowIDs []string
+	flowCookies := make(map[string]uint64)
 	for _, target := range config.GetTargets() {
 		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
 			continue
@@ -1171,9 +1193,21 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 			continue
 		}
 
+		// One cookie per policy per bridge identifies this policy's flows.
+		cookie, ok := flowCookies[bridgeName]
+		if !ok {
+			var err error
+			cookie, err = ovs.NewAPIFlowCookie()
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to mint policy flow cookie: %v", err)
+			}
+			flowCookies[bridgeName] = cookie
+		}
+
 		// Translate policy rules to OpenFlow rules
 		for _, rule := range config.GetRules() {
 			flowMod := s.policyRuleToFlowMod(rule, config.GetPriority())
+			flowMod.Cookie = fmt.Sprintf("0x%x", cookie)
 			if err := client.AddFlow(ctx, bridgeName, flowMod); err != nil {
 				// Best-effort: log flow installation failures but continue
 				continue
@@ -1201,6 +1235,7 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		createdAt:   now,
 		updatedAt:   now,
 		flowIDs:     flowIDs,
+		flowCookies: flowCookies,
 	}
 
 	policy := s.policyResourceToPb(policyID, s.policies[policyID])
@@ -1287,13 +1322,13 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 	// Find policy by ID or name and snapshot its data under read lock
 	s.mu.RLock()
 	var foundID string
-	var policyTargets []*platformv1.PolicyTarget
-	var policyRules []*platformv1.PolicyRule
+	cookies := make(map[string]uint64)
 	for id, p := range s.policies {
 		if id == req.GetPolicyId() || p.name == req.GetPolicyId() {
 			foundID = id
-			policyTargets = p.targets
-			policyRules = p.rules
+			for bridge, cookie := range p.flowCookies {
+				cookies[bridge] = cookie
+			}
 			break
 		}
 	}
@@ -1305,22 +1340,23 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 
 	client := s.getOVSClient()
 
-	// Remove associated OpenFlow rules from target bridges without holding the lock
-	for _, target := range policyTargets {
-		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
-			continue
-		}
-		bridgeName, found := s.findBridgeName(target.GetId())
-		if !found {
-			continue
-		}
-		for _, rule := range policyRules {
-			match := s.policyRuleToMatchString(rule)
-			if match != "" {
-				// Best-effort cleanup of flow rules
-				_ = client.DeleteFlow(ctx, bridgeName, match)
+	// Remove exactly this policy's flows, by its per-bridge cookie, without
+	// holding the lock. On a switch error keep the record (minus the
+	// bridges already cleared) so a retry can finish the cleanup.
+	for bridgeName, cookie := range cookies {
+		if err := client.DeleteFlowsByCookie(ctx, bridgeName, cookie, ^uint64(0)); err != nil {
+			s.mu.Lock()
+			if p, ok := s.policies[foundID]; ok {
+				for cleared := range p.flowCookies {
+					if _, pending := cookies[cleared]; !pending {
+						delete(p.flowCookies, cleared)
+					}
+				}
 			}
+			s.mu.Unlock()
+			return nil, status.Errorf(codes.Internal, "failed to remove policy flows from bridge %s: %v", bridgeName, err)
 		}
+		delete(cookies, bridgeName)
 	}
 
 	// Remove from tracking under write lock
@@ -1390,29 +1426,6 @@ func (s *SDNService) policyRuleToFlowMod(rule *platformv1.PolicyRule, policyPrio
 	}
 
 	return flowMod
-}
-
-// policyRuleToMatchString converts a policy rule to an OVS match string for deletion
-func (s *SDNService) policyRuleToMatchString(rule *platformv1.PolicyRule) string {
-	var matchParts []string
-	if match := rule.GetMatch(); match != nil {
-		if match.GetSourceIp() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("nw_src=%s", match.GetSourceIp()))
-		}
-		if match.GetDestinationIp() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("nw_dst=%s", match.GetDestinationIp()))
-		}
-		if match.GetProtocol() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("nw_proto=%s", match.GetProtocol()))
-		}
-		if match.GetSourcePort() > 0 {
-			matchParts = append(matchParts, fmt.Sprintf("tp_src=%d", match.GetSourcePort()))
-		}
-		if match.GetDestinationPort() > 0 {
-			matchParts = append(matchParts, fmt.Sprintf("tp_dst=%d", match.GetDestinationPort()))
-		}
-	}
-	return strings.Join(matchParts, ",")
 }
 
 // policyResourceToPb converts a policyResource to a protobuf Policy message
