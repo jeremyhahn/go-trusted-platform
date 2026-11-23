@@ -140,18 +140,18 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `ComputeService.AttachVMConsole` | - | - | - | - | not-UI: streaming plumbing |
 | `ComputeService.SendVMConsoleInput` | - | - | - | - | not-UI: streaming plumbing |
 | `ComputeService.GetVMLogs` | - | - | - | - | not-UI: streaming plumbing |
-| `ComputeService.GetVMMetrics` | `GET /vms/{id}/metrics` | - | - | - | missing |
-| `ComputeService.AttachDisk` | `POST /vms/{id}/disks` | - | - | - | missing |
-| `ComputeService.DetachDisk` | `DELETE /vms/{id}/disks/{diskId}` | - | - | - | missing |
-| `ComputeService.ResizeDisk` | `PATCH /vms/{id}/disks/{diskId}` | - | - | - | missing |
+| `ComputeService.GetVMMetrics` | `GET /vms/{id}/metrics` | `(dashboard)/compute/vms/[id]/page.tsx` | - | `real-server/compute-vm-detail.spec.ts` | covered |
+| `ComputeService.AttachDisk` | `POST /vms/{id}/disks` | `(dashboard)/compute/vms/[id]/page.tsx` | - | `real-server/compute-vm-detail.spec.ts` | covered |
+| `ComputeService.DetachDisk` | `DELETE /vms/{id}/disks/{diskId}` | `(dashboard)/compute/vms/[id]/page.tsx` | - | `real-server/compute-vm-detail.spec.ts` | covered |
+| `ComputeService.ResizeDisk` | `PATCH /vms/{id}/disks/{diskId}` | `(dashboard)/compute/vms/[id]/page.tsx` | - | `real-server/compute-vm-detail.spec.ts` | covered |
 | `ComputeService.CreateSnapshot` | `POST /vms/{id}/snapshots` | `(dashboard)/compute/snapshots/page.tsx` | - | `real-server/compute.spec.ts` | covered |
 | `ComputeService.RestoreSnapshot` | `POST /vms/{id}/snapshots/{snapshotId}/restore` | `(dashboard)/compute/snapshots/page.tsx` | - | `compute.spec.ts` | covered |
 | `ComputeService.DeleteSnapshot` | `DELETE /vms/{id}/snapshots/{snapshotId}` | `(dashboard)/compute/snapshots/page.tsx` | - | `compute.spec.ts` | covered |
 | `ComputeService.ListSnapshots` | `GET /vms/{id}/snapshots` | `(dashboard)/compute/snapshots/page.tsx` | - | `compute.spec.ts` | covered |
 | `ComputeService.GetSnapshot` | `GET /vms/{id}/snapshots/{snapshotId}` | `(dashboard)/compute/snapshots/[snapshotId]/page.tsx` | - | `real-server/compute.spec.ts` | covered |
-| `ComputeService.MigrateVM` | `POST /vms/{id}/migrate` | - | - | - | missing |
-| `ComputeService.PrepareMigration` | `POST /migrations/prepare` | - | - | - | missing |
-| `ComputeService.FinalizeMigration` | `POST /migrations/{receiverId}/finalize` | - | - | - | missing |
+| `ComputeService.MigrateVM` | `POST /vms/{id}/migrate` | `(dashboard)/compute/vms/[id]/page.tsx` | - | `real-server/compute-vm-detail.spec.ts` | covered |
+| `ComputeService.PrepareMigration` | `POST /migrations/prepare` | `(dashboard)/compute/migrations/page.tsx` | - | `real-server/compute-migrations.spec.ts` | covered |
+| `ComputeService.FinalizeMigration` | `POST /migrations/{receiverId}/finalize` | `(dashboard)/compute/migrations/page.tsx` | - | `real-server/compute-migrations.spec.ts` | covered |
 | `ComputeService.CreateContainer` | `POST /containers` | `(dashboard)/compute/containers/page.tsx` | - | `compute.spec.ts` | covered |
 | `ComputeService.StartContainer` | `POST /containers/{id}/start` | `(dashboard)/compute/containers/page.tsx` | - | `compute.spec.ts` | covered |
 | `ComputeService.StopContainer` | `POST /containers/{id}/stop` | `(dashboard)/compute/containers/page.tsx` | - | `compute.spec.ts` | covered |
@@ -162,7 +162,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `ComputeService.ExecContainer` | `POST /containers/{id}/exec` | - | - | - | missing |
 | `ComputeService.GetContainerLogs` | `GET /containers/{id}` | - | - | - | not-UI: streaming plumbing |
 | `ComputeService.GetContainerMetrics` | `GET /containers/{id}/metrics` | - | - | - | missing |
-| `ComputeService.AttestVM` | `POST /vms/{id}/attest` | - | - | - | missing |
+| `ComputeService.AttestVM` | `POST /vms/{id}/attest` | `(dashboard)/compute/vms/[id]/page.tsx` | - | `real-server/compute-vm-detail.spec.ts` | covered |
 | `ComputeService.VerifyVMAttestation` | `POST /vms/{id}/attest/verify` | - | - | - | missing |
 | `ComputeService.AttestContainer` | `POST /containers/{id}/attest` | - | - | - | missing |
 
@@ -736,7 +736,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | CacheService | 4 | 0 | 0 | 0 | 0 | 4 |
 | CeremonyService | 7 | 0 | 0 | 7 | 0 | 0 |
 | ClusterService | 5 | 0 | 0 | 5 | 0 | 0 |
-| ComputeService | 37 | 19 | 0 | 13 | 5 | 0 |
+| ComputeService | 37 | 27 | 0 | 5 | 5 | 0 |
 | ConfigDeliveryService | 7 | 1 | 2 | 0 | 4 | 0 |
 | PlatformDaemon | 19 | 1 | 6 | 8 | 4 | 0 |
 | DeviceService | 32 | 10 | 7 | 15 | 0 | 0 |
@@ -765,7 +765,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **127** | **59** | **262** | **50** | **31** |
+| **Total** | **529** | **135** | **59** | **254** | **50** | **31** |
 
 ## Proposed slices
 
@@ -777,7 +777,7 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 4. **CAService: CAInfo, CA, CACertificate, CSR, Certificate**: 6 operations (6 missing, 0 partial): GetCAInfo, InitCA, InstallCACertificates, UninstallCACertificates, SignCSR, VerifyCertificate.
 5. **CeremonyService: Init, Status, Cert, Share, CSR**: 7 operations (7 missing, 0 partial): Init, Status, ClaimCertBegin, ClaimCertComplete, ClaimShareBegin, ClaimShareComplete, SignCSR.
 6. **ClusterService: Bootstrap, Join, Leave, Status, Node**: 5 operations (5 missing, 0 partial): Bootstrap, Join, Leave, GetStatus, ListNodes.
-7. **ComputeService (1/2): VM, VMMetric, Disk, Snapshot, Migration**: 13 operations (11 missing, 2 partial): SuspendVM, ResumeVM, GetVM, MigrateVM, AttestVM, GetVMMetrics, AttachDisk, DetachDisk, ResizeDisk, CreateSnapshot, GetSnapshot, PrepareMigration, FinalizeMigration. (done: SuspendVM, ResumeVM, GetVM, CreateSnapshot, GetSnapshot; open: MigrateVM, AttestVM, GetVMMetrics, AttachDisk, DetachDisk, ResizeDisk, PrepareMigration, FinalizeMigration)
+7. **ComputeService (1/2): VM, VMMetric, Disk, Snapshot, Migration**: 13 operations (11 missing, 2 partial): SuspendVM, ResumeVM, GetVM, MigrateVM, AttestVM, GetVMMetrics, AttachDisk, DetachDisk, ResizeDisk, CreateSnapshot, GetSnapshot, PrepareMigration, FinalizeMigration. (done: all 13)
 8. **ComputeService (2/2): Container, ContainerMetric, VMAttestation**: 5 operations (5 missing, 0 partial): GetContainer, ExecContainer, AttestContainer, GetContainerMetrics, VerifyVMAttestation.
 9. **ConfigDeliveryService: FulfillSession, Session**: 2 operations (0 missing, 2 partial): FulfillSession, GetSession.
 10. **PlatformDaemon: Status, Liveness, Readiness, Shutdown, Version, Config…**: 14 operations (8 missing, 6 partial): GetStatus, Liveness, Readiness, Shutdown, GetVersion, GetConfig, UpdateConfig, ReloadConfig, StartService, StopService, RestartService, ListServices, GetServiceStatus, ListEntityTypes.
