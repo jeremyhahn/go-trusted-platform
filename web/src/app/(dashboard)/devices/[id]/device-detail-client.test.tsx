@@ -158,13 +158,13 @@ describe('DeviceDetailPage refresh after a card action', () => {
     await renderPage();
 
     await waitFor(() => {
-      const button = screen.getByRole('button', { name: 'Activate device' }) as HTMLButtonElement;
+      const button = screen.getByRole('button', { name: 'Check activation' }) as HTMLButtonElement;
       expect(button.disabled).toBe(false);
     });
-    await click('Activate device');
+    await click('Check activation');
 
     const result = await screen.findByTestId('device-activate-result');
-    expect(result.textContent).toContain('activated');
+    expect(result.textContent).toContain('Profile matched');
     expect(result.textContent).toContain('VLAN 101');
 
     // The card asked for the re-read; while it is in flight the page stays.

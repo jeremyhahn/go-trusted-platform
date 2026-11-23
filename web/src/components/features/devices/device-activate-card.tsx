@@ -1,14 +1,17 @@
 'use client';
 
 /**
- * DeviceActivateCard — activate a device from its detail page (#2048).
+ * DeviceActivateCard — check a device's activation from its detail page (#2048).
  *
- * "Activate device" calls the SDK DeviceService activateDevice, POST
+ * "Check activation" calls the SDK DeviceService activateDevice, POST
  * /api/v1/device/activate-json, with the serial and an optional MAC address
- * (sent as serial and mac_address). The server matches a profile and answers
- * a flat { status, vlan, transitioned_at }; the card shows the VLAN and the
- * transition time. The control sits behind the capability gate. A refusal
- * (no serial, no device, no matching profile) is a destructive toast.
+ * (sent as serial and mac_address). That route is a lookup: it matches the
+ * device to a profile and reports the VLAN the profile admits. It changes
+ * nothing on the server and moves no port; a device activates itself over
+ * mTLS (POST /device/activate). The card shows the profile match and the
+ * admitted VLAN, never that the device was activated. The control sits behind
+ * the capability gate. A refusal (no serial, no device, no matching profile)
+ * is a destructive toast.
  */
 
 import { useEffect, useState } from 'react';
@@ -25,7 +28,8 @@ export const DEVICE_ACTIVATE_OP = 'POST /api/v1/device/activate-json';
 
 export interface DeviceActivateCardProps {
   serial?: string | undefined;
-  onActivated: () => void;
+  /** Called after a successful check; the page re-reads the device. */
+  onChecked: () => void;
 }
 
 interface ActivateVars {
@@ -33,7 +37,7 @@ interface ActivateVars {
   macAddress: string;
 }
 
-export function DeviceActivateCard({ serial, onActivated }: DeviceActivateCardProps) {
+export function DeviceActivateCard({ serial, onChecked }: DeviceActivateCardProps) {
   const deviceService = useDevice();
   const { toast } = useToast();
   const [serialValue, setSerialValue] = useState(serial ?? '');
@@ -51,14 +55,17 @@ export function DeviceActivateCard({ serial, onActivated }: DeviceActivateCardPr
       onSuccess: (answer: ActivateDeviceResponse) => {
         setResult(answer);
         toast({
-          title: 'Device activated',
-          description: answer.vlan !== undefined ? `Assigned VLAN ${answer.vlan}.` : `Status ${answer.status}.`,
+          title: 'Activation check',
+          description:
+            answer.vlan !== undefined
+              ? `Admitted VLAN ${answer.vlan}. The device activates itself over mTLS.`
+              : 'Profile matched. The device activates itself over mTLS.',
         });
-        onActivated();
+        onChecked();
       },
       onError: (error) => {
         setResult(undefined);
-        toast({ title: 'Activation failed', description: error.message, variant: 'destructive' });
+        toast({ title: 'Activation check failed', description: error.message, variant: 'destructive' });
       },
     }
   );
@@ -69,8 +76,11 @@ export function DeviceActivateCard({ serial, onActivated }: DeviceActivateCardPr
   return (
     <Card data-testid="device-activate-card">
       <CardHeader>
-        <CardTitle>Activation</CardTitle>
-        <CardDescription>Match the device to a profile and assign its VLAN.</CardDescription>
+        <CardTitle>Activation check</CardTitle>
+        <CardDescription>
+          Look up the profile and VLAN this device would be admitted to. This does not activate the device or move its
+          port.
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="grid gap-3 sm:grid-cols-2">
@@ -94,14 +104,13 @@ export function DeviceActivateCard({ serial, onActivated }: DeviceActivateCardPr
             disabled={activateMutation.isLoading || trimmedSerial === ''}
             onClick={() => activateMutation.mutate({ serial: trimmedSerial, macAddress: trimmedMac })}
           >
-            Activate device
+            Check activation
           </Button>
         </Gated>
         {result && (
           <p data-testid="device-activate-result" className="text-sm text-muted-foreground">
-            {result.status}
-            {result.vlan !== undefined && <> · VLAN {result.vlan}</>}
-            {result.transitionedAt && <> · {new Date(result.transitionedAt).toLocaleString()}</>}
+            Profile matched
+            {result.vlan !== undefined && <> · admitted VLAN {result.vlan}</>}
           </p>
         )}
       </CardContent>

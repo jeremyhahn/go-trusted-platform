@@ -4,15 +4,16 @@ import { expect, test } from './fixtures';
 import { unwrapPayload } from './fixtures/wire';
 
 /**
- * Device activation against the real platformd (#2048, epic #1665).
+ * Device activation check against the real platformd (#2048, epic #1665).
  *
  * No route mock: a device is seeded through the SDK per test and the
- * Activation card on /devices/{id} posts POST /api/v1/device/activate-json
- * with its serial and an example MAC. The server either matches a profile
- * and answers { status, vlan, transitioned_at }, or refuses (for example
- * no matching profile); the page is compared with that answer. When the
- * server lists the op disabled, the control is disabled with the server's
- * reason and no POST is sent.
+ * Activation check card on /devices/{id} posts POST
+ * /api/v1/device/activate-json with its serial and an example MAC. That route
+ * is a lookup, not an activation: the server either matches a profile and
+ * reports the VLAN it admits, or refuses (for example no matching profile);
+ * the page is compared with that answer and never says the device was
+ * activated. When the server lists the op disabled, the control is disabled
+ * with the server's reason and no POST is sent.
  */
 
 const ACTIVATE_OP = 'POST /api/v1/device/activate-json';
@@ -77,7 +78,7 @@ test.describe('Device activation against the real server', () => {
     await expect(page).toHaveURL(/\/auth\/webauthn/);
   });
 
-  test('Activate device shows what the server answered', async ({ adminPage, sdk }) => {
+  test('Check activation shows what the server answered', async ({ adminPage, sdk }) => {
     const dev = await seedDevice(sdk);
     const reason = await activateDisabledReason(sdk);
     const posts = countPosts(adminPage);
@@ -87,7 +88,7 @@ test.describe('Device activation against the real server', () => {
     await expect(card).toBeVisible();
     await expect(card.getByLabel('Serial')).toHaveValue(dev.serial);
     await card.getByLabel('MAC address').fill(MAC);
-    const activate = card.getByRole('button', { name: 'Activate device' });
+    const activate = card.getByRole('button', { name: 'Check activation' });
 
     if (reason !== null) {
       await expect(activate).toBeDisabled();
@@ -103,12 +104,13 @@ test.describe('Device activation against the real server', () => {
 
     if (res.ok()) {
       const answer = unwrapPayload<{ status: string; vlan?: number; transitioned_at?: string }>(await res.json());
-      await expect(adminPage.getByText('Device activated').first()).toBeVisible();
+      await expect(adminPage.getByText('Activation check').first()).toBeVisible();
+      await expect(adminPage.getByText('Device activated')).toHaveCount(0);
       if (answer.vlan !== undefined) {
-        await expect(adminPage.getByText(`Assigned VLAN ${answer.vlan}.`).first()).toBeVisible();
+        await expect(adminPage.getByText(`Admitted VLAN ${answer.vlan}.`).first()).toBeVisible();
       }
     } else {
-      await expect(adminPage.getByText('Activation failed').first()).toBeVisible();
+      await expect(adminPage.getByText('Activation check failed').first()).toBeVisible();
       const message = await errorMessage(res);
       if (message !== '') {
         await expect(adminPage.getByText(message, { exact: false }).first()).toBeVisible();

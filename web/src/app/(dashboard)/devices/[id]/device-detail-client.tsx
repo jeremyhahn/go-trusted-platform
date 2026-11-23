@@ -329,7 +329,7 @@ export default function DeviceDetailPage() {
       <DeviceModelCard deviceId={device.id} model={device.model} onSaved={fetchDevice} />
 
       <DeviceSerialCard deviceId={device.id} serial={device.serial} onSaved={fetchDevice} />
-      <DeviceActivateCard serial={device.serial} onActivated={fetchDevice} />
+      <DeviceActivateCard serial={device.serial} onChecked={fetchDevice} />
 
       {device.endorsementKey && (
         <Card>
