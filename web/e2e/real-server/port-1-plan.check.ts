@@ -79,6 +79,17 @@ for (const name of allPorts) {
     !/api-mock|dashboard-api-mocks|device-api-mock/.test(spec),
     `${file} imports no API mock helper`,
   );
+  assert.ok(plan.includes(file), `plan names ${file}`);
+  for (const m of spec.matchAll(
+    /^\s*\/\/ covered: .+?: web\/e2e\/real-server\/([\w.-]+\.spec\.ts):(\d+)\s*$/gm,
+  )) {
+    const target = fs.readFileSync(path.join(import.meta.dirname, m[1]), 'utf8').split('\n');
+    assert.match(
+      target[Number(m[2]) - 1] ?? '',
+      /^\s*test(\.describe)?\(/,
+      `covered reference ${m[1]}:${m[2]} is a test line`,
+    );
+  }
 }
 
 console.log('port-1-plan.check: ok');
