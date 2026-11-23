@@ -4,6 +4,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ok, refused, stubControlPlane, withControlPlane } from '@/test/control-plane-fetch';
 import { GatewayModeCard } from './gateway-mode-card';
 
+const { off } = vi.hoisted(() => ({ off: new Set<string>() }));
+
+vi.mock('@/hooks/use-capabilities', () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: (op: string) =>
+      off.has(op) ? { enabled: false, reason: 'not-configured: gateway' } : { enabled: true },
+  }),
+}));
+
 // #2051: the gateway mode card sets the Overlay / Edge / Transit modes
 // through the SDK GatewayService after the operator confirms, and shows a
 // refusal verbatim.
@@ -26,6 +37,7 @@ describe('GatewayModeCard', () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    off.clear();
   });
 
   it('keeps Apply disabled until a mode is picked', async () => {
@@ -101,5 +113,43 @@ describe('GatewayModeCard', () => {
 
     const toast = await screen.findByText('Set gateway modes failed: modes is required');
     expect(toast.getAttribute('data-variant')).toBe('destructive');
+  });
+
+  it("withholds Apply modes with the server's reason when POST /api/v1/gateway/mode is not offered", async () => {
+    off.add(MODE_PATH);
+    const sent = stubControlPlane({});
+    render(withControlPlane(<GatewayModeCard initialModes={['EDGE']} />));
+
+    const apply = screen.getByRole('button', { name: 'Apply modes' }) as HTMLButtonElement;
+    expect(apply.disabled).toBe(true);
+    expect(apply.getAttribute('title')).toBe('not-configured: gateway');
+    expect(apply.getAttribute('data-capability-op')).toBe(MODE_PATH);
+    expect(apply.getAttribute('data-capability-enabled')).toBe('false');
+
+    await clickButton('Apply modes');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(sent.some((r) => r.method === 'POST')).toBe(false);
+  });
+
+  it('keeps Apply modes disabled until a mode is picked when the server offers the op', async () => {
+    stubControlPlane({});
+    render(withControlPlane(<GatewayModeCard />));
+
+    const apply = screen.getByRole('button', { name: 'Apply modes' }) as HTMLButtonElement;
+    expect(apply.getAttribute('data-capability-enabled')).toBe('true');
+    expect(apply.disabled).toBe(true);
+    await clickMode('Edge');
+    expect(apply.disabled).toBe(false);
+  });
+
+  it('gates the Confirm button on the same op', async () => {
+    stubControlPlane({});
+    render(withControlPlane(<GatewayModeCard initialModes={['EDGE']} />));
+
+    await clickButton('Apply modes');
+    const dialog = await screen.findByRole('dialog');
+    const confirm = within(dialog).getByRole('button', { name: 'Confirm' });
+    expect(confirm.getAttribute('data-capability-op')).toBe(MODE_PATH);
+    expect(confirm.getAttribute('data-capability-enabled')).toBe('true');
   });
 });
