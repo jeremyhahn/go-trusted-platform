@@ -9,9 +9,14 @@ import { unwrapPayload } from './fixtures/wire';
  * api-mock), with an admin session the server issues through its WebAuthn
  * flow; without that session they fail, never skip. Each read the page makes
  * shows what the server answered, or the refusal it wrote as its JSON error
- * envelope. Each control follows GET /api/v1/capabilities. The daemon is
- * shared by every spec, so nothing here fills a form or sends a write: the
- * only click is the perf datapath read.
+ * envelope. Each control follows GET /api/v1/capabilities. The perf test
+ * clicks the datapath and conntrack reads, each sent once. The VIP write
+ * test sends AddVIP once from the form on a TEST-NET VIP (192.0.2.200, a port
+ * no other run picks); the row controls (Details = GetVIP, Save =
+ * SetVIPBackends, Remove + confirm = RemoveVIP) run only when the server
+ * accepted the add, and the test removes that VIP again through the SDK in
+ * `finally`. A node without a gateway refuses the add with its 503 envelope,
+ * and the spec then checks the card shows that refusal and no row.
  */
 
 const GATEWAY = '/api/v1/gateway';
@@ -23,7 +28,8 @@ const CAPABILITIES_PATH = '/api/v1/capabilities';
 
 const ADD_OP = `POST ${VIPS_PATH}`;
 const DATAPATH_OP = `GET ${DATAPATH_PATH}`;
-const CONNTRACK_OP = `GET ${GATEWAY}/perf/conntrack`;
+const CONNTRACK_PATH = `${GATEWAY}/perf/conntrack`;
+const CONNTRACK_OP = `GET ${CONNTRACK_PATH}`;
 
 interface Capability {
   op: string;
@@ -179,27 +185,149 @@ test.describe('Gateway VIPs, LB/NAT64 status and perf counters (real server)', (
       await adminPage.waitForLoadState('networkidle');
       expect(reads).toHaveLength(1);
     }
+
+    if (caps.get(CONNTRACK_OP)?.enabled) {
+      const reads: Request[] = [];
+      adminPage.on('request', (r) => {
+        if (isGet(r, CONNTRACK_PATH)) reads.push(r);
+      });
+      // The zone field stays empty: the read asks for every zone.
+      const [res] = await Promise.all([
+        answerOf(adminPage, CONNTRACK_PATH),
+        adminPage.getByTestId('perf-conntrack-load').click(),
+      ]);
+      expect([401, 403]).not.toContain(res.status());
+      const result = adminPage.getByTestId('perf-conntrack-result');
+      const error = adminPage.getByTestId('perf-counters-error');
+      if (res.ok()) {
+        expect(res.status()).toBe(200);
+        await expect(result).toBeVisible();
+        await expect(error).toHaveCount(0);
+      } else {
+        const message = await refusal(res);
+        await expect(error).toBeVisible();
+        await expect(error).toContainText(message);
+        await expect(result).toHaveCount(0);
+      }
+      await adminPage.waitForLoadState('networkidle');
+      expect(reads).toHaveLength(1);
+    }
   });
 
-  test('the VIP writes follow the server capability and send nothing', async ({ adminPage }) => {
+  test('AddVIP sends the form once and the VIP row drives GetVIP, SetVIPBackends and RemoveVIP', async ({
+    adminPage,
+    sdk,
+  }) => {
     const requests: Request[] = [];
     adminPage.on('request', (r) => requests.push(r));
+    const lbWrites = () =>
+      requests.filter(
+        (r) => ['POST', 'PUT', 'DELETE'].includes(r.method()) && new URL(r.url()).pathname.startsWith(`${GATEWAY}/lb/`),
+      );
 
     const [capsRes] = await Promise.all([
       answerOf(adminPage, CAPABILITIES_PATH),
       adminPage.goto('/networking/gateway'),
     ]);
     const caps = await capabilitiesOf(capsRes);
-
     await expect(adminPage.getByTestId('vips-card')).toBeVisible();
-    const add = adminPage.getByTestId('vip-add');
-    await expect(add).toHaveAttribute('data-capability-op', ADD_OP);
-    await expect(add).toHaveAttribute('data-capability-enabled', caps.get(ADD_OP)?.enabled ? 'true' : 'false');
+    await expectGated(adminPage, 'vip-add', ADD_OP, caps);
 
-    await adminPage.waitForLoadState('networkidle');
-    const writes = requests.filter(
-      (r) => ['POST', 'PUT', 'DELETE'].includes(r.method()) && new URL(r.url()).pathname.startsWith(`${GATEWAY}/lb/`),
-    );
-    expect(writes.map((r) => `${r.method()} ${r.url()}`)).toEqual([]);
+    if (!caps.get(ADD_OP)?.enabled) {
+      await adminPage.waitForLoadState('networkidle');
+      expect(lbWrites().map((r) => `${r.method()} ${r.url()}`)).toEqual([]);
+      return;
+    }
+
+    // A TEST-NET VIP on a port no other run is likely to pick.
+    const address = '192.0.2.200';
+    const port = 40000 + (Date.now() % 20000);
+    const key = `tcp-${address}-${port}`;
+    const vipPath = `${VIPS_PATH}/tcp/${address}/${port}`;
+    const row = adminPage.getByTestId(`vip-${key}`);
+    const error = adminPage.getByTestId('vips-error');
+
+    await adminPage.getByTestId('vip-protocol').selectOption('tcp');
+    await adminPage.getByTestId('vip-address').fill(address);
+    await adminPage.getByTestId('vip-port').fill(String(port));
+    await adminPage.getByTestId('vip-backends').fill('192.0.2.201:8080');
+    const [addRes] = await Promise.all([
+      adminPage.waitForResponse(
+        (r) => r.request().method() === 'POST' && new URL(r.url()).pathname === VIPS_PATH,
+      ),
+      adminPage.getByTestId('vip-add').click(),
+    ]);
+    expect([401, 403]).not.toContain(addRes.status());
+    const posts = requests.filter((r) => r.method() === 'POST' && new URL(r.url()).pathname === VIPS_PATH);
+    expect(posts).toHaveLength(1);
+    const sent = posts[0].postDataJSON() as { vip?: { address?: string; port?: number } };
+    expect(sent.vip?.address).toBe(address);
+    expect(sent.vip?.port).toBe(port);
+
+    if (!addRes.ok()) {
+      const message = await refusal(addRes);
+      await expect(error).toBeVisible();
+      await expect(error).toContainText(message);
+      await expect(row).toHaveCount(0);
+      return;
+    }
+
+    try {
+      await expect(row).toBeVisible();
+
+      // Details reads the VIP through GetVIP.
+      const [getRes] = await Promise.all([
+        answerOf(adminPage, vipPath),
+        adminPage.getByTestId(`vip-details-${key}`).click(),
+      ]);
+      expect([401, 403]).not.toContain(getRes.status());
+      if (getRes.ok()) {
+        await expect(adminPage.getByTestId(`vip-detail-${key}`)).toBeVisible();
+      } else {
+        const message = await refusal(getRes);
+        await expect(adminPage.getByTestId(`vip-detail-error-${key}`)).toContainText(message);
+      }
+
+      // Save replaces the backends through SetVIPBackends.
+      await adminPage.getByTestId(`vip-edit-${key}`).click();
+      await adminPage.getByTestId(`vip-edit-backends-${key}`).fill('192.0.2.202:8080');
+      const [putRes] = await Promise.all([
+        adminPage.waitForResponse(
+          (r) => r.request().method() === 'PUT' && new URL(r.url()).pathname === `${vipPath}/backends`,
+        ),
+        adminPage.getByTestId(`vip-save-${key}`).click(),
+      ]);
+      expect([401, 403]).not.toContain(putRes.status());
+      const puts = requests.filter((r) => r.method() === 'PUT' && new URL(r.url()).pathname === `${vipPath}/backends`);
+      expect(puts).toHaveLength(1);
+      expect(puts[0].postData() ?? '').toContain('192.0.2.202');
+      if (!putRes.ok()) {
+        await expect(error).toContainText(await refusal(putRes));
+      }
+
+      // Remove asks first; only the confirm sends RemoveVIP.
+      const deletes = () => requests.filter((r) => r.method() === 'DELETE' && new URL(r.url()).pathname === vipPath);
+      await adminPage.getByTestId(`vip-remove-${key}`).click();
+      expect(deletes()).toHaveLength(0);
+      const [delRes] = await Promise.all([
+        adminPage.waitForResponse((r) => r.request().method() === 'DELETE' && new URL(r.url()).pathname === vipPath),
+        adminPage.getByTestId('vip-remove-confirm').click(),
+      ]);
+      expect([401, 403]).not.toContain(delRes.status());
+      expect(deletes()).toHaveLength(1);
+      if (delRes.ok()) {
+        await expect(row).toHaveCount(0);
+      } else {
+        await expect(error).toContainText(await refusal(delRes));
+      }
+    } finally {
+      const listed = await sdk.gateway.listVIPs();
+      const still = (listed.data?.vips ?? []).some(
+        (v) => v.vip?.protocol === 'tcp' && v.vip?.address === address && v.vip?.port === port,
+      );
+      if (still) {
+        await sdk.gateway.removeVIP('tcp', address, port);
+      }
+    }
   });
 });
