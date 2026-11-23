@@ -22,9 +22,12 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Deleting a disabled policy must not touch the switch: it installed no
@@ -50,4 +53,86 @@ func TestSDNService_DeletePolicy_DisabledPolicyKeepsEnabledPolicyFlows(t *testin
 
 	assert.ElementsMatch(t, before, fake.matches(t, "br0"))
 	assert.Equal(t, platformv1.PolicyStatus_POLICY_STATUS_ACTIVE, getPolicy(t, svc, "pa").GetStatus())
+}
+
+// writeThenFailOVS installs the flow of AddFlow call failOn and then
+// returns an error, as a barrier that times out after the write would: the
+// caller cannot tell whether that flow is on the switch.
+type writeThenFailOVS struct {
+	*replacingOVS
+
+	calls  int
+	failOn int // the 1-based AddFlow call that installs and then fails
+}
+
+func (w *writeThenFailOVS) AddFlow(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error {
+	w.calls++
+	if err := w.replacingOVS.AddFlow(ctx, bridgeName, flow); err != nil {
+		return err
+	}
+	if w.calls == w.failOn {
+		return errInjectedOVS
+	}
+	return nil
+}
+
+func newWriteThenFailFixture(t *testing.T) (*SDNService, *writeThenFailOVS) {
+	t.Helper()
+	inner := &replacingOVS{MockOVSClientInterface: NewMockOVSClientInterface()}
+	inner.AddBridgeToMock("br0", &ovs.Bridge{UUID: "uuid-br0", Name: "br0"})
+	fake := &writeThenFailOVS{replacingOVS: inner}
+	svc, err := NewSDNService("", WithOVSClient(fake))
+	require.NoError(t, err)
+	return svc, fake
+}
+
+// The flow whose AddFlow failed may be installed: the rollback removes it
+// too, and keeps a record to clean up with when the rollback fails (#2234).
+func TestSDNService_ApplyPolicy_FailedAddRollsBackTheFailingFlow(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("new policy", func(t *testing.T) {
+		svc, fake := newWriteThenFailFixture(t)
+		fake.failOn = 2
+
+		_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
+		assert.Equal(t, codes.Internal, status.Code(err), "err = %v", err)
+		assert.Empty(t, fake.matches(t, "br0"))
+		_, err = svc.GetPolicy(ctx, &platformv1.GetPolicyRequest{PolicyId: "p1"})
+		assert.Equal(t, codes.NotFound, status.Code(err))
+	})
+
+	t.Run("reapply restores the prior flows", func(t *testing.T) {
+		svc, fake := newWriteThenFailFixture(t)
+		_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
+		require.NoError(t, err)
+		prior := fake.matches(t, "br0")
+		require.Len(t, prior, 2)
+
+		cfg := twoRulePolicyConfig()
+		cfg.Rules[0].Match.SourceIp = "192.0.2.30"
+		cfg.Rules[1].Match.SourceIp = "192.0.2.40"
+		fake.failOn = fake.calls + 2
+		_, err = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: cfg})
+		assert.Equal(t, codes.Internal, status.Code(err), "err = %v", err)
+
+		assert.ElementsMatch(t, prior, fake.matches(t, "br0"))
+		assert.Equal(t, platformv1.PolicyStatus_POLICY_STATUS_ACTIVE, getPolicy(t, svc, "p1").GetStatus())
+	})
+
+	t.Run("failed rollback keeps an error record to clean up with", func(t *testing.T) {
+		svc, fake := newWriteThenFailFixture(t)
+		fake.failOn = 2
+		fake.deleteErr = errInjectedOVS
+
+		_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
+		assert.Equal(t, codes.Internal, status.Code(err), "err = %v", err)
+		require.Len(t, fake.matches(t, "br0"), 2)
+		assert.Equal(t, platformv1.PolicyStatus_POLICY_STATUS_ERROR, getPolicy(t, svc, "p1").GetStatus())
+
+		fake.deleteErr = nil
+		_, err = svc.DeletePolicy(ctx, &platformv1.DeletePolicyRequest{PolicyId: "p1"})
+		require.NoError(t, err)
+		assert.Empty(t, fake.matches(t, "br0"))
+	})
 }
