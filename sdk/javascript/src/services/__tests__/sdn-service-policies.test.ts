@@ -101,4 +101,13 @@ describe('SDNService policies', () => {
     expect(mockClient.get).toHaveBeenCalledWith('/v1/sdn/policies/a%2Fb');
     expect(result.data?.policy?.id).toBe('a/b');
   });
+
+  it('deletes one policy on DELETE /v1/sdn/policies/{id} with the id path-encoded', async () => {
+    vi.mocked(mockClient.delete).mockResolvedValue({ success: true, data: {} });
+
+    const result = await service.deletePolicy('a/b');
+
+    expect(mockClient.delete).toHaveBeenCalledWith('/v1/sdn/policies/a%2Fb');
+    expect(result.success).toBe(true);
+  });
 });
