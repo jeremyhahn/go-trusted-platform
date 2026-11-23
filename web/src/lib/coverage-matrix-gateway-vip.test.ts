@@ -122,4 +122,30 @@ describe('coverage matrix: GatewayService VIPs, status and perf', () => {
     expect(text).not.toContain('expect(reads).toHaveLength(1)');
     expect(text).not.toContain("waitForLoadState('networkidle');\n      expect(reads)");
   });
+
+  it('the real-server harness serves the e2e datapath and the VIP spec requires AddVIP to succeed', () => {
+    // Codex round 5 on #2163: without a datapath socket platformd refuses
+    // AddVIP with 503 and the row controls never ran. The harness serves an
+    // in-memory datapath platformd reaches through sdn.gateway.datapath-socket.
+    const read = (...p: string[]) => fs.readFileSync(path.resolve(process.cwd(), ...p), 'utf8');
+
+    const yaml = read('e2e/real-server/platformd.test.yaml');
+    const sdn = /^sdn:\n((?:[ \t#].*\n|\n)*)/m.exec(yaml)?.[1] ?? '';
+    expect(sdn, 'platformd.test.yaml sdn: section').not.toBe('');
+    expect(sdn).toMatch(/^ {2}gateway:\n(?: {4}.*\n)*? {4}datapath-socket: __E2E_DATAPATH_SOCKET__$/m);
+
+    const setup = read('e2e/real-server/global-setup.ts');
+    expect(setup).toContain('E2E_DATAPATH_BIN');
+    expect(setup).toContain('__E2E_DATAPATH_SOCKET__');
+
+    const makefile = read('..', 'Makefile');
+    const recipe = /^web-e2e-platformd:.*\n((?:\t.*\n)*)/m.exec(makefile)?.[1] ?? '';
+    expect(recipe, 'web-e2e-platformd recipe').not.toBe('');
+    expect(recipe).toContain('./test/e2e/datapath');
+
+    const spec = read('e2e/real-server/gateway-vips.spec.ts');
+    const addTest = spec.slice(spec.indexOf('AddVIP'));
+    expect(addTest).not.toContain('if (!addRes.ok())');
+    expect(addTest).toContain('expect(addRes.status()).toBe(201)');
+  });
 });
