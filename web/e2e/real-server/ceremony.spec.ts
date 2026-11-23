@@ -64,8 +64,12 @@ test.describe('Bootstrap ceremony against the real platformd', () => {
       const payload = unwrapPayload<WireCeremonyStatus>(await r.json());
       await expect(definition(status, 'Ceremony ID')).toHaveText(payload.ceremonyId || '-');
       await expect(definition(status, 'Threshold')).toHaveText(
-        payload.threshold ? String(payload.threshold) : '-',
+        // The card's UNAVAILABLE (ceremony-status-card.tsx) for an unreported threshold.
+        payload.threshold ? String(payload.threshold) : 'Unavailable',
       );
+      const state = definition(status, 'State');
+      await expect(state).toBeVisible();
+      await expect(state).not.toHaveText('');
       await expect(status.getByRole('alert')).toHaveCount(0);
     } else {
       await expect(status.getByRole('alert')).toContainText('Ceremony status unavailable:');
