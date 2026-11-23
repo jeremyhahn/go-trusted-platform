@@ -53,7 +53,6 @@ import (
 	ipambackends "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vpn"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
@@ -425,13 +424,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Create gRPC UDS server if enabled
 	var grpcUDSServer *grpc.Server
 	if config.EnableGRPCUDS {
-		grpcOpts := []grpc.ServerOption{
-			grpc.Creds(peercred.NewUnixTransportCredentials()),
-			grpc.ChainUnaryInterceptor(RecoveryUnaryInterceptor(logger)),
-			grpc.ChainStreamInterceptor(RecoveryStreamInterceptor(logger)),
-			grpc.ChainUnaryInterceptor(peercred.UnixCredentialsUnaryInterceptor()),
-			grpc.ChainStreamInterceptor(peercred.UnixCredentialsStreamInterceptor()),
-		}
+		grpcOpts := unixGRPCServerOptions(logger)
 		grpcUDSServer = grpc.NewServer(grpcOpts...)
 
 		// Register platform daemon service with UDS gRPC server

@@ -97,7 +97,7 @@ func AppCAInitializer(a *app.App) CAInitializer {
 // InitCA initialises the node CA through the app's bring-up path. It is
 // idempotent: an initialised CA answers "already initialised". Re-initialising
 // an existing CA (Force) is not supported. Admin capability: catalog scope
-// ca:create.
+// ca:create on the network transports, root on the Unix socket.
 func (s *CAGRPCService) InitCA(ctx context.Context, req *platformv1.InitCARequest) (*platformv1.InitCAResponse, error) {
 	// initMu serializes InitCA: concurrent calls run the initializer once,
 	// and the later ones see the swapped CA as already initialised.
@@ -207,7 +207,8 @@ func isCombinedBundle(current, rootPEM, interPEM []byte) bool {
 // intermediate at the sibling <name>-intermediate-1.crt (see
 // intermediateTrustPath). Each file is idempotent: one already holding exactly
 // those bytes is left alone, and when every wanted file matched the call
-// answers "already installed". Admin capability: catalog scope trust:write.
+// answers "already installed". Admin capability: catalog scope trust:write on
+// the network transports, root on the Unix socket.
 func (s *CAGRPCService) InstallCACertificates(ctx context.Context, req *platformv1.InstallCACertificatesRequest) (*platformv1.InstallCACertificatesResponse, error) {
 	ca := s.authority()
 	if ca == nil || !ca.IsInitialized() {
@@ -262,7 +263,7 @@ func (s *CAGRPCService) InstallCACertificates(ctx context.Context, req *platform
 // intermediate). It is a no-op ("nothing installed") when no file it would
 // remove is present, and refuses, before removing anything, when a file it
 // would remove holds anything this CA did not write. Admin capability: catalog
-// scope trust:write.
+// scope trust:write on the network transports, root on the Unix socket.
 func (s *CAGRPCService) UninstallCACertificates(ctx context.Context, req *platformv1.UninstallCACertificatesRequest) (*platformv1.UninstallCACertificatesResponse, error) {
 	ca := s.authority()
 	if ca == nil || !ca.IsInitialized() {
