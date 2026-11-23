@@ -128,8 +128,24 @@ describe('TPMKeyLifecycleCard EK', () => {
     const posts = sent.filter((r) => r.path === '/api/v1/tpm/ek/certificate');
     expect(posts).toHaveLength(1);
     const body = posts[0].body as { certificate: string; format: string };
-    expect(body.format).toBe('PEM');
-    expect(atob(body.certificate).startsWith('-----BEGIN CERTIFICATE-----')).toBe(true);
+    // The armour is stripped: the server takes the DER bytes.
+    expect(body).toEqual({ certificate: 'AA==', format: 'DER' });
+  });
+
+  it('sends a bare base64 certificate body as DER', async () => {
+    const sent = stubControlPlane({
+      'GET /api/v1/capabilities': CAPS_ON,
+      [EK_CERT]: ok({ status: { success: true, message: 'EK certificate imported successfully' } }),
+    });
+    render(withControlPlane(<TPMKeyLifecycleCard />));
+
+    type('EK certificate (PEM)', 'AA==');
+    await click('Import certificate');
+
+    await screen.findByText('EK certificate imported: EK certificate imported successfully');
+    const posts = sent.filter((r) => r.path === '/api/v1/tpm/ek/certificate');
+    expect(posts).toHaveLength(1);
+    expect(posts[0].body).toEqual({ certificate: 'AA==', format: 'DER' });
   });
 
   it('shows a refusal verbatim and needs a certificate', async () => {
