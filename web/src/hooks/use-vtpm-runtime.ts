@@ -4,8 +4,10 @@
  * vTPM bundle runtime hook (#1726).
  *
  * Wraps the SDK's bundle runtime routes (start, stop, quote, seal, unseal,
- * PCR extend and PCR read) for one bundle. IsVTPMRunning has no REST route,
- * so the running state is tracked from the start and stop results.
+ * PCR extend and PCR read) for one bundle. The running state is seeded from
+ * the server (IsVTPMRunning, GET /bundles/{id}/state) on load, then tracked
+ * from the start and stop results; a late state answer never overwrites a
+ * start or stop result.
  */
 
 import * as React from "react";
@@ -17,12 +19,30 @@ import type {
   ExtendBundlePCRRequest,
 } from "trusted-platform-sdk";
 
-/** Running state as the last start or stop result left it. */
+/** Running state as the server reported it or the last start or stop result left it. */
 export type VTPMRunState = "unknown" | "running" | "stopped";
 
 export function useVTPMRuntime(bundleId: string) {
   const vtpm = useVTPM();
   const [runState, setRunState] = React.useState<VTPMRunState>("unknown");
+
+  // Seed the state from the server once per bundle. Only an unknown state is
+  // replaced, so a start or stop result wins over a late answer; a failed
+  // read leaves the state unknown.
+  React.useEffect(() => {
+    let cancelled = false;
+    vtpm.getBundleState(bundleId).then(
+      (s) => {
+        if (cancelled) return;
+        setRunState((prev) => (prev === "unknown" ? (s.running ? "running" : "stopped") : prev));
+      },
+      () => {}
+    );
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per bundle
+  }, [bundleId]);
 
   const start = useMutation(() => vtpm.startBundle(bundleId), {
     onSuccess: (r) => setRunState(r.running ? "running" : "stopped"),

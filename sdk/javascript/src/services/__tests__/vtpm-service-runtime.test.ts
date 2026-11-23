@@ -38,6 +38,16 @@ describe('VTPMService bundle runtime', () => {
     expect(mockClient.post).toHaveBeenCalledWith('/v1/vtpm/bundles/vm%201/start', {});
   });
 
+  it('getBundleState reads the bundle state route', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({
+      success: true,
+      data: { bundle_id: 'vm-1', running: true, socket_path: '/run/vtpm/vm-1.sock' },
+    });
+    const r = await service.getBundleState('vm-1');
+    expect(mockClient.get).toHaveBeenCalledWith('/v1/vtpm/bundles/vm-1/state');
+    expect(r.running).toBe(true);
+  });
+
   it('stopBundle POSTs /bundles/{id}/stop', async () => {
     await service.stopBundle('vm-1');
     expect(mockClient.post).toHaveBeenCalledWith('/v1/vtpm/bundles/vm-1/stop', {});
