@@ -1255,6 +1255,44 @@ func TestService_Create_RefusesATakenSerial(t *testing.T) {
 	assert.Equal(t, "first", stored.Model)
 }
 
+func TestService_Update_RefusesATakenSerial(t *testing.T) {
+	service, err := NewService(testServiceDatastore(t))
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	first := &entities.Device{Serial: "SN-HELD", Model: "first"}
+	require.NoError(t, service.Create(ctx, first))
+	second := &entities.Device{Serial: "SN-OWN", Model: "second"}
+	require.NoError(t, service.Create(ctx, second))
+
+	err = service.Update(ctx, &entities.Device{ID: second.ID, Serial: "SN-HELD"})
+	assert.Equal(t, ErrDeviceSerialExists{Serial: "SN-HELD"}, err)
+
+	stored, err := service.Get(ctx, second.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "SN-OWN", stored.Serial, "the refused update must not move the serial")
+	assert.Equal(t, "second", stored.Model)
+	held, err := service.Get(ctx, first.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "SN-HELD", held.Serial)
+}
+
+func TestService_Update_KeepsItsOwnSerial(t *testing.T) {
+	service, err := NewService(testServiceDatastore(t))
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	d := &entities.Device{Serial: "SN-SELF", Model: "a"}
+	require.NoError(t, service.Create(ctx, d))
+
+	require.NoError(t, service.Update(ctx, &entities.Device{ID: d.ID, Serial: "SN-SELF", Model: "b"}))
+
+	stored, err := service.Get(ctx, d.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "b", stored.Model)
+	assert.Equal(t, "SN-SELF", stored.Serial)
+}
+
 func TestService_Create_SerialCheckStorageFaultIsNotADuplicate(t *testing.T) {
 	ds, mockStorage := testServiceDatastoreWithMock(t)
 	service, err := NewService(ds)
