@@ -66,14 +66,14 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `BMCService.Provision` | `POST /bmc/{profileID:[0-9]+}/provision` | - | - | - | missing |
 | `BMCService.ProvisionStatus` | `GET /bmc/{profileID:[0-9]+}/provision` | - | - | - | missing |
 | `BMCService.GetWebCertificate` | `GET /bmc/{profileID:[0-9]+}/cert` | - | - | - | missing |
-| `BMCService.ReplaceWebCertificate` | `PUT /bmc/{profileID:[0-9]+}/cert` | - | - | - | missing |
-| `BMCService.EnrollBMC` | - | - | - | - | missing |
-| `BMCService.RestoreFactoryCert` | - | - | - | - | missing |
-| `BMCService.ListUsers` | `GET /bmc/{profileID:[0-9]+}/users` | - | - | - | missing |
-| `BMCService.CreateUser` | `POST /bmc/{profileID:[0-9]+}/users` | - | - | - | missing |
-| `BMCService.DeleteUser` | `DELETE /bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}` | - | - | - | missing |
-| `BMCService.SetUserPassword` | `PUT /bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/password` | - | - | - | missing |
-| `BMCService.SetUserPrivilege` | `PUT /bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/privilege` | - | - | - | missing |
+| `BMCService.ReplaceWebCertificate` | `PUT /bmc/{profileID:[0-9]+}/cert` | `(dashboard)/devices/bmc/accounts/page.tsx` | - | `bmc-accounts.spec.ts` | covered |
+| `BMCService.EnrollBMC` | `POST /bmc/{profileID:[0-9]+}/enroll` | `(dashboard)/devices/bmc/accounts/page.tsx` | - | `bmc-accounts.spec.ts` | covered |
+| `BMCService.RestoreFactoryCert` | `POST /bmc/{profileID:[0-9]+}/cert/restore` | `(dashboard)/devices/bmc/accounts/page.tsx` | - | `bmc-accounts.spec.ts` | covered |
+| `BMCService.ListUsers` | `GET /bmc/{profileID:[0-9]+}/users` | `(dashboard)/devices/bmc/accounts/page.tsx` | - | `bmc-accounts.spec.ts` | covered |
+| `BMCService.CreateUser` | `POST /bmc/{profileID:[0-9]+}/users` | `(dashboard)/devices/bmc/accounts/page.tsx` | - | `bmc-accounts.spec.ts` | covered |
+| `BMCService.DeleteUser` | `DELETE /bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}` | `(dashboard)/devices/bmc/accounts/page.tsx` | - | `bmc-accounts.spec.ts` | covered |
+| `BMCService.SetUserPassword` | `PUT /bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/password` | `(dashboard)/devices/bmc/accounts/page.tsx` | - | `bmc-accounts.spec.ts` | covered |
+| `BMCService.SetUserPrivilege` | `PUT /bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/privilege` | `(dashboard)/devices/bmc/accounts/page.tsx` | - | `bmc-accounts.spec.ts` | covered |
 
 ## CAService (`ca.proto`)
 
