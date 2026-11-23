@@ -765,7 +765,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **129** | **60** | **259** | **50** | **31** |
+| **Total** | **529** | **129** | **61** | **258** | **50** | **31** |
 
 ## Proposed slices
 
