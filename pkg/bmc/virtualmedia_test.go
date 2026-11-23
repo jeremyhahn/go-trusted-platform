@@ -82,6 +82,24 @@ func TestMediaSpec_Validate(t *testing.T) {
 			wantField: "URL",
 		},
 		{
+			name:      "missing host",
+			spec:      &MediaSpec{URL: "https://"},
+			wantErr:   true,
+			wantField: "URL",
+		},
+		{
+			name:      "empty host with path",
+			spec:      &MediaSpec{URL: "http:///x.iso"},
+			wantErr:   true,
+			wantField: "URL",
+		},
+		{
+			name:      "opaque URL",
+			spec:      &MediaSpec{URL: "https:installer.iso"},
+			wantErr:   true,
+			wantField: "URL",
+		},
+		{
 			name:      "explicit protocol mismatched scheme",
 			spec:      &MediaSpec{URL: "https://example.com/boot.iso", Protocol: MediaProtocolCIFS},
 			wantErr:   true,

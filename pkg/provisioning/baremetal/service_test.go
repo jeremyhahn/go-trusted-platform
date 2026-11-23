@@ -334,6 +334,33 @@ func TestService_Provision_InvalidRequest_ZeroProfile(t *testing.T) {
 	}
 }
 
+// TestService_Provision_InvalidRequest_UnfetchableISOURL pins that the
+// service refuses an ISO URL the BMC cannot fetch before any workflow
+// starts, so gRPC and embedded callers get the REST preflight too.
+func TestService_Provision_InvalidRequest_UnfetchableISOURL(t *testing.T) {
+	for _, isoURL := range []string{"https://", "https:installer.iso", "http:///x.iso"} {
+		t.Run(isoURL, func(t *testing.T) {
+			svc, err := NewService(ServiceParams{
+				BMC:      newMockBMC(),
+				Profiles: testProfiles(),
+				Config:   testConfig(),
+			})
+			if err != nil {
+				t.Fatalf("NewService() error = %v", err)
+			}
+
+			_, err = svc.Provision(context.Background(), &ProvisionRequest{ProfileID: 1, ISOURL: isoURL})
+			var target ErrInvalidProvisionRequest
+			if !errors.As(err, &target) {
+				t.Fatalf("expected ErrInvalidProvisionRequest, got: %T (%v)", err, err)
+			}
+			if _, loaded := svc.inFlight.Load(uint64(1)); loaded {
+				t.Error("a workflow started for a refused ISO URL")
+			}
+		})
+	}
+}
+
 func TestService_Provision_AlreadyInProgress(t *testing.T) {
 	svc, err := NewService(ServiceParams{
 		BMC:      newMockBMC(),

@@ -86,4 +86,40 @@ func TestRegisterRoutes_PowerScopes(t *testing.T) {
 			}
 		})
 	}
+
+	// A caller holding bmc:power but not bmc:write must not reach PowerOn by
+	// hiding the action behind trailing data the scope check fails to parse.
+	for name, body := range map[string]string{
+		"trailing_object": `{"action":"on"}{}`,
+		"trailing_text":   `{"action":"on"} trailing`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			guard := powerOnlyGuard{}
+			stub := &powerStub{}
+			router := mux.NewRouter()
+			RegisterRoutes(router, stub, guard)
+
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/bmc/7/power", strings.NewReader(body)))
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400", rec.Code)
+			}
+			if stub.calls != 0 {
+				t.Fatalf("PowerAction calls = %d, want 0", stub.calls)
+			}
+		})
+	}
+}
+
+// powerOnlyGuard grants bmc:power and refuses every other scope with 403.
+type powerOnlyGuard struct{}
+
+func (powerOnlyGuard) Require(scope string, next http.HandlerFunc) http.HandlerFunc {
+	if scope == ScopePower {
+		return next
+	}
+	return func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+	}
 }
