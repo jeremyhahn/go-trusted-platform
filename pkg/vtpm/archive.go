@@ -351,6 +351,10 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 	}
 	remaining := a.maxExpandedBytes
 	entries := 0
+	// Destinations already written: a later entry with the same cleaned
+	// destination would replace the file (a second manifest.json the
+	// validation above never saw), so it is refused.
+	written := make(map[string]bool)
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -389,6 +393,11 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 			}
 
 		case tar.TypeReg:
+			if written[relPath] {
+				return nil, ErrInvalidManifest{Reason: fmt.Sprintf("duplicate archive entry %q", relPath)}
+			}
+			written[relPath] = true
+
 			// Create parent directory
 			if err := os.MkdirAll(filepath.Dir(destPath), 0700); err != nil {
 				return refuse(err)
@@ -421,9 +430,20 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 	}
 	// An archive whose entries all fell outside the manifest's prefix would
 	// otherwise publish an empty bundle that GetBundle cannot find (#2021).
-	if _, err := os.Stat(filepath.Join(stagePath, "manifest.json")); err != nil {
+	stagedData, err := os.ReadFile(filepath.Join(stagePath, "manifest.json"))
+	if err != nil {
 		return nil, ErrInvalidManifest{Reason: "manifest.json not extracted"}
 	}
+	// The staged manifest is the one published: validate it, not only the
+	// one the first pass read (#2021 Codex round 5).
+	staged := &Manifest{}
+	if err := json.Unmarshal(stagedData, staged); err != nil {
+		return nil, ErrInvalidManifest{Reason: err.Error()}
+	}
+	if staged.ID != id {
+		return nil, ErrInvalidManifest{Reason: fmt.Sprintf("staged manifest ID %q differs from the validated ID %q", staged.ID, id)}
+	}
+	manifest = staged
 	// A refused checksum publishes nothing: the deferred clean-up removes the stage.
 	if err := verifyStagedChecksums(stagePath, manifest.Checksums); err != nil {
 		return nil, err
