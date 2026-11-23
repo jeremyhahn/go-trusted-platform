@@ -180,16 +180,28 @@ func (b *clusterBackend) Nodes(ctx context.Context) (*daemon.ClusterNodesInfo, e
 	return out, nil
 }
 
-// IsLeader reports whether this node leads shard 1.
+// IsLeader reports whether this node leads shard 1. Leadership comes from
+// the same ClusterStatus topology Status and Nodes use: this node leads only
+// when it is a listed member and the shard 1 leader. A standalone service
+// (no members, whose GetLeader answers a synthetic leader 1) is never leader.
 func (b *clusterBackend) IsLeader() bool {
 	if b.nodeID == 0 {
 		return false
 	}
-	resp, err := b.svc.GetLeader(context.Background(), &quicbaasservice.GetLeaderRequest{ShardID: clusterLeaderShardID})
-	if err != nil || resp == nil {
+	resp, err := b.clusterStatus(context.Background(), "leader")
+	if err != nil {
 		return false
 	}
-	return resp.LeaderID == b.nodeID
+	leader := clusterLeaderID(resp)
+	if leader == 0 || leader != b.nodeID {
+		return false
+	}
+	for _, n := range resp.Nodes {
+		if n != nil && n.NodeID == b.nodeID {
+			return true
+		}
+	}
+	return false
 }
 
 // NodeID returns this node's configured Raft node ID.
