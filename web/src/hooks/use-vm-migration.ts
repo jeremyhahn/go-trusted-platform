@@ -8,10 +8,8 @@
  *   - PrepareMigration:  POST /api/v1/compute/migrations/prepare
  *   - FinalizeMigration: POST /api/v1/compute/migrations/{receiverId}/finalize
  *
- * MigrateVM goes through the SDK's ComputeService.migrateVM. PrepareMigration
- * and FinalizeMigration go on the SDK API client, because the SDK
- * ComputeService has no method for them yet; the receiver id is
- * path-encoded the same way the SDK encodes its own path segments.
+ * All three go through the SDK's ComputeService (migrateVM, prepareMigration
+ * and finalizeMigration), which path-encodes the VM and receiver ids.
  */
 
 import { useMemo } from 'react';
@@ -45,17 +43,12 @@ export function useVMMigration(vmId: string) {
   const client = usePlatformClient();
 
   return useMemo(() => {
-    const api = client.getApiClient();
     return {
       migrate: (destinationHost: string, liveMigration: boolean, bandwidthLimitMbps?: number) =>
         client.compute.migrateVM({ vmId, destinationHost, liveMigration, bandwidthLimitMbps }),
-      prepare: (req: PrepareMigrationBody) =>
-        api.post<PrepareMigrationResult>('/v1/compute/migrations/prepare', req),
+      prepare: (req: PrepareMigrationBody) => client.compute.prepareMigration(req),
       finalize: (receiverId: string, commit: boolean) =>
-        api.post<FinalizeMigrationResult>(
-          `/v1/compute/migrations/${encodeURIComponent(receiverId)}/finalize`,
-          { commit }
-        ),
+        client.compute.finalizeMigration({ receiverId, commit }),
     };
   }, [client, vmId]);
 }
