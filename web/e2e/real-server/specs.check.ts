@@ -70,4 +70,22 @@ for (const helper of ['mockInvitationLookupApi', 'mockInvitationFlowApi']) {
   assert.ok(!apiMock.includes(helper), `fixtures/api-mock.ts no longer defines ${helper}`);
 }
 
+// The EAB pages run on the real server only (#2050): the mocked spec is gone.
+assert.ok(
+  !fs.existsSync(path.join(import.meta.dirname, '..', 'eab.spec.ts')),
+  'web/e2e/eab.spec.ts (the mocked EAB spec) does not exist',
+);
+const eabSpecPath = path.join(import.meta.dirname, 'eab.spec.ts');
+assert.ok(fs.existsSync(eabSpecPath), 'real-server/eab.spec.ts exists');
+const eabSpec = fs.readFileSync(eabSpecPath, 'utf8');
+assert.ok(eabSpec.includes("from './fixtures'"), "eab.spec.ts imports from './fixtures'");
+assert.ok(!eabSpec.includes('api-mock'), 'eab.spec.ts does not use api-mock');
+assert.ok(!eabSpec.includes('page.route('), 'eab.spec.ts does not route requests');
+for (const goto of ["goto('/ca/eab')", 'goto(`/ca/eab/']) {
+  assert.ok(eabSpec.includes(goto), `eab.spec.ts calls ${goto}`);
+}
+for (const helper of ['mockEABApi', 'createMockEABCredential']) {
+  assert.ok(!apiMock.includes(helper), `fixtures/api-mock.ts no longer defines ${helper}`);
+}
+
 console.log('specs.check: ok');
