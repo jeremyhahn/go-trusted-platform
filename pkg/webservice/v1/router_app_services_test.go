@@ -239,6 +239,10 @@ type countingBMCHandler struct {
 	actionCalls int
 }
 
+// ProvisioningConfigured reports the provisioning routes as wired, so the
+// router fixtures list them as ordinary routes.
+func (h *countingBMCHandler) ProvisioningConfigured() bool { return true }
+
 func (h *countingBMCHandler) PowerStatus(w http.ResponseWriter, _ *http.Request) {
 	h.statusCalls++
 	w.WriteHeader(http.StatusOK)

@@ -260,4 +260,24 @@ describe('BMCBootMediaCard', () => {
     expect(media.getAttribute('data-variant')).toBe('destructive');
     expect(screen.getByTestId('bmc-boot-current').textContent).toContain('unknown');
   });
+
+  it('keeps Mount ISO disabled when the virtual media status read fails', async () => {
+    const sent = stub({
+      ...baseRoutes(),
+      [MEDIA_GET]: refused(409, 'bmc: virtual media read failed'),
+      [MEDIA_POST]: ok({ status: 'ok', iso_url: 'https://images.example/os.iso' }),
+    });
+    renderCard();
+    await waitForFirstRead();
+    await screen.findByText('Virtual media unavailable: bmc: virtual media read failed');
+
+    const status = screen.getByTestId('bmc-media-status').textContent ?? '';
+    expect(status).toContain('Virtual media status unavailable');
+    expect(status).not.toContain('No image mounted');
+
+    fireEvent.change(screen.getByLabelText('ISO URL'), { target: { value: 'https://images.example/os.iso' } });
+    expect(button('Mount ISO').disabled).toBe(true);
+    await click('Mount ISO');
+    expect(count(sent, 'POST', '/api/v1/bmc/42/virtual-media')).toBe(0);
+  });
 });
