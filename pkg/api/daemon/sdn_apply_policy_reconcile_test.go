@@ -217,3 +217,40 @@ func TestSDNService_ApplyPolicy_ConflictKeyUsesWirePriority(t *testing.T) {
 	require.Equal(t, codes.FailedPrecondition, status.Code(err), "err = %v", err)
 	assert.ElementsMatch(t, before, fake.matches(t, "br0"))
 }
+
+// Two policies whose match strings differ in text but encode the same
+// OpenFlow match (host bits under a CIDR, a /32 against the bare address)
+// install the same switch entry: the second is a conflict, not a new flow.
+func TestSDNService_ApplyPolicy_ConflictKeyUsesCanonicalMatch(t *testing.T) {
+	cases := []struct {
+		name string
+		srcA string
+		srcB string
+	}{
+		{"host bits under a CIDR", "192.0.2.0/24", "192.0.2.7/24"},
+		{"slash 32 against the bare address", "192.0.2.1", "192.0.2.1/32"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, fake := newReplacingOVSFixture(t)
+			ctx := context.Background()
+
+			cfgA := twoRulePolicyConfig()
+			cfgA.Rules = cfgA.Rules[:1]
+			cfgA.Rules[0].Priority = 100
+			cfgA.Rules[0].Match = &platformv1.PolicyRuleMatch{SourceIp: tc.srcA}
+			_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "pa", Config: cfgA})
+			require.NoError(t, err)
+			before := fake.matches(t, "br0")
+
+			cfgB := twoRulePolicyConfig()
+			cfgB.Name = "web-b"
+			cfgB.Rules = cfgB.Rules[:1]
+			cfgB.Rules[0].Priority = 100
+			cfgB.Rules[0].Match = &platformv1.PolicyRuleMatch{SourceIp: tc.srcB}
+			_, err = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "pb", Config: cfgB})
+			require.Equal(t, codes.FailedPrecondition, status.Code(err), "err = %v", err)
+			assert.ElementsMatch(t, before, fake.matches(t, "br0"))
+		})
+	}
+}
