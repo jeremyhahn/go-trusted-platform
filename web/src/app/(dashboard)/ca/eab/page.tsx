@@ -26,6 +26,7 @@ import { useEAB, useEABList } from "@/hooks";
 import { parseExpiresIn } from "@/utils/eab-expiry";
 import { normalizeEABStatus } from "@/utils/eab-status";
 import { Gated } from "@/components/features/capabilities/gated";
+import { useCapabilities } from "@/hooks/use-capabilities";
 import type {
   CreateEABCredentialResponse,
   EABCredentialSummary,
@@ -54,10 +55,14 @@ function statusVariant(status: string): "default" | "secondary" | "destructive" 
   }
 }
 
-// Every control is gated on the server's capabilities (#2050).
+// Every control, and the list read itself, is gated on the server's
+// capabilities (#2050).
 export default function EABCredentialsPage() {
   const eab = useEAB();
-  const list = useEABList();
+  const { loading: capsLoading, capability } = useCapabilities();
+  const listCap = capability("GET /api/v1/eab/credentials");
+  const listOff = !capsLoading && !listCap.enabled;
+  const list = useEABList({ enabled: !capsLoading && listCap.enabled });
   const credentials: EABCredentialSummary[] = list.data?.credentials ?? [];
 
   const [message, setMessage] = React.useState<string | null>(null);
@@ -234,6 +239,12 @@ export default function EABCredentialsPage() {
           <CardDescription>Every EAB credential visible to you</CardDescription>
         </CardHeader>
         <CardContent>
+          {listOff ? (
+            <div data-testid="eab-list-not-enabled" className="text-sm text-muted-foreground">
+              <p className="font-medium">EAB credentials are not enabled</p>
+              <p>{listCap.reason}</p>
+            </div>
+          ) : (
           <Table>
             <TableHeader>
               <TableRow>
@@ -289,6 +300,7 @@ export default function EABCredentialsPage() {
               ))}
             </TableBody>
           </Table>
+          )}
         </CardContent>
       </Card>
 
