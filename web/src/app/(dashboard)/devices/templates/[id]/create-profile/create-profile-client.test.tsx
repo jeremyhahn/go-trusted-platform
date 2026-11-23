@@ -9,6 +9,15 @@ import CreateProfileClient from './create-profile-client';
 // POST /device/templates/{id}/create-profile body. A field the route cannot
 // carry (the old Hostname input) is not rendered at all.
 
+// The submit is gated on the create-profile route; the server offers it here.
+vi.mock('@/hooks/use-capabilities', () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: () => ({ enabled: true }),
+  }),
+}));
+
 vi.mock('next/navigation', () => ({
   useParams: () => ({ id: '42' }),
   usePathname: () => '/devices/templates/42/create-profile',
