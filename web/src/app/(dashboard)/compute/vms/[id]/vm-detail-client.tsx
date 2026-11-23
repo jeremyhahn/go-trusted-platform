@@ -32,7 +32,6 @@ import { VMDisksCard } from '@/components/features/compute/vm-disks-card';
 import { Gated } from '@/components/features/capabilities/gated';
 import { VMMigrateButton } from '@/components/features/compute/vm-migrate-dialog';
 import { useCompute, useMutation, useToast, type MutationError } from '@/hooks';
-import type { VMMetrics as WebVMMetrics } from '@/types/infrastructure';
 import { vmStatus } from '@/lib/compute-state';
 
 const statusColors = {
@@ -426,7 +425,7 @@ export default function VMDetailPage() {
           </CardContent>
         </Card>
 
-        {vm.metrics && <VMMetricsCard metrics={vm.metrics as unknown as WebVMMetrics} />}
+        <VMMetricsCard vmId={vmId} />
       </div>
 
       <VMDisksCard
