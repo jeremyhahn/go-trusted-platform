@@ -30,6 +30,8 @@ import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { usePXE, useApi, useToast, useReportedGateways } from '@/hooks';
 import type { PXEDeviceInfo } from 'trusted-platform-sdk';
 import { PXEDeviceActions } from '@/components/features/pxe/pxe-device-actions';
+import { PXEServiceControls } from '@/components/features/pxe/pxe-service-controls';
+import Link from 'next/link';
 
 export default function PXEBootPage() {
   const { toast } = useToast();
@@ -363,6 +365,7 @@ export default function PXEBootPage() {
                 <Settings className="h-5 w-5" />
                 PXE Service Status
               </CardTitle>
+              <PXEServiceControls running={Boolean(status?.running)} onChanged={() => void refetchStatus()} />
             </div>
           </CardHeader>
           <CardContent>
@@ -504,7 +507,13 @@ export default function PXEBootPage() {
                   devices.map((device: PXEDeviceInfo) => (
                     <TableRow key={device.id}>
                       <TableCell className="font-mono text-sm">
-                        {device.macAddress}
+                        <Link
+                          href={`/networking/pxe/${encodeURIComponent(device.id)}`}
+                          className="hover:underline"
+                          data-testid={`pxe-device-link-${device.id}`}
+                        >
+                          {device.macAddress}
+                        </Link>
                       </TableCell>
                       <TableCell>
                         <Badge
