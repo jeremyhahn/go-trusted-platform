@@ -15,6 +15,7 @@ import { CertTable } from "@/components/features/ca/cert-table";
 import { IssueCertForm } from "@/components/features/ca/issue-cert-form";
 import { useCA, useApi, useMutation } from "@/hooks";
 import type { Certificate, IssueCertInput } from "@/types/security";
+import { Gated } from "@/components/features/capabilities/gated";
 
 // SDK types (from sdk/javascript/src/types/ca.ts)
 // Certificate summary as the REST endpoint emits it: camelCase or
@@ -76,6 +77,7 @@ import { Plus, AlertCircle, RefreshCw } from "lucide-react";
  * - useCA(): Access to CAService
  * - useApi(): Declarative data fetching
  * - useMutation(): Declarative mutations for issue/revoke/renew
+ * Issue Certificate is gated on the server's POST /api/v1/ca/certificates capability (#2033, #2041).
  */
 export default function CertificatesPage() {
   const router = useRouter();
@@ -314,12 +316,14 @@ export default function CertificatesPage() {
             Refresh
           </Button>
           <Dialog open={isIssueDialogOpen} onOpenChange={setIsIssueDialogOpen}>
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="mr-2 h-4 w-4" />
-                Issue Certificate
-              </Button>
-            </DialogTrigger>
+            <Gated op="POST /api/v1/ca/certificates">
+              <DialogTrigger asChild>
+                <Button>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Issue Certificate
+                </Button>
+              </DialogTrigger>
+            </Gated>
             <DialogContent className="max-w-2xl">
               <DialogHeader>
                 <DialogTitle>Issue New Certificate</DialogTitle>
