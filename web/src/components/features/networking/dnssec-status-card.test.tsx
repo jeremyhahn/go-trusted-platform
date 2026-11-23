@@ -12,15 +12,24 @@ type Dnssec = {
   isSigning: boolean;
 };
 
-const { dnssec, toast } = vi.hoisted(() => ({
+const { dnssec, toast, off } = vi.hoisted(() => ({
   dnssec: {} as Dnssec,
   toast: vi.fn(),
+  off: new Set<string>(),
 }));
 
 vi.mock("@/hooks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks")>()),
   useDNSSEC: () => dnssec,
   useToast: () => ({ toast }),
+}));
+
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: (op: string) => (off.has(op) ? { enabled: false, reason: "not-configured: dns" } : { enabled: true }),
+  }),
 }));
 
 import { DNSSECStatusCard } from "./dnssec-status-card";
@@ -55,6 +64,7 @@ beforeEach(() => {
   dnssec.signZone = vi.fn();
   dnssec.isSigning = false;
   toast.mockReset();
+  off.clear();
 });
 
 afterEach(() => {
@@ -145,5 +155,25 @@ describe("DNSSECStatusCard", () => {
     render(<DNSSECStatusCard zoneName="example.com." />);
     expect(screen.getByText("DNSSEC status unavailable: boom")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Sign Zone/ })).toBeNull();
+  });
+
+  it("withholds Sign Zone with the server's reason when POST /api/v1/dns/zones/{zone}/sign is not offered", () => {
+    off.add("POST /api/v1/dns/zones/{zone}/sign");
+    render(<DNSSECStatusCard zoneName="example.com." />);
+    const button = signButton();
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("title")).toBe("not-configured: dns");
+    expect(button.getAttribute("data-capability-op")).toBe("POST /api/v1/dns/zones/{zone}/sign");
+    expect(button.getAttribute("data-capability-enabled")).toBe("false");
+
+    fireEvent.click(button);
+    expect(dnssec.signZone).not.toHaveBeenCalled();
+  });
+
+  it("keeps Sign Zone enabled when the server offers POST /api/v1/dns/zones/{zone}/sign", () => {
+    render(<DNSSECStatusCard zoneName="example.com." />);
+    const button = signButton();
+    expect(button.getAttribute("data-capability-enabled")).toBe("true");
+    expect(button.disabled).toBe(false);
   });
 });

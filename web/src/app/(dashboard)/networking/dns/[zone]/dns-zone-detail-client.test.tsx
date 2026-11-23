@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ok, stubControlPlane, withControlPlane } from '@/test/control-plane-fetch';
@@ -12,6 +12,15 @@ vi.mock('next/navigation', () => ({
   useParams: () => ({ zone: 'example.test' }),
   usePathname: () => '/networking/dns/example.test',
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn() }),
+}));
+
+const { off } = vi.hoisted(() => ({ off: new Set<string>() }));
+vi.mock('@/hooks/use-capabilities', () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: (op: string) => (off.has(op) ? { enabled: false, reason: 'not-configured: dns' } : { enabled: true }),
+  }),
 }));
 
 const ZONE_PATH = 'GET /api/v1/dns/zones/example.test';
@@ -39,6 +48,7 @@ describe('DNSZoneDetailPage records card', () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    off.clear();
   });
 
   it("lists the zone's records through GET /dns/zones/{zone}/records on the zone page", async () => {
@@ -57,5 +67,50 @@ describe('DNSZoneDetailPage records card', () => {
 
     expect(await screen.findByText('DNS Records')).toBeDefined();
     expect(screen.getAllByRole('button', { name: /Add Record/ }).length).toBeGreaterThan(0);
+  });
+});
+
+describe('DNSZoneDetailPage capability gate', () => {
+  const ADD_RECORD_OP = 'POST /api/v1/dns/zones/{zone}/records';
+
+  function addRecordButton(): HTMLButtonElement | null {
+    return document.querySelector(`[data-capability-op="${ADD_RECORD_OP}"]`) as HTMLButtonElement | null;
+  }
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    off.clear();
+  });
+
+  it("withholds Add Record with the server's reason when POST /api/v1/dns/zones/{zone}/records is not offered", async () => {
+    off.add(ADD_RECORD_OP);
+    stubControlPlane(routes());
+    render(withControlPlane(<DNSZoneDetailPage />));
+
+    expect(await screen.findByText('DNS Records')).toBeDefined();
+    const button = addRecordButton();
+    expect(button).not.toBeNull();
+    expect(button?.textContent).toContain('Add Record');
+    expect(button?.disabled).toBe(true);
+    expect(button?.getAttribute('title')).toBe('not-configured: dns');
+    expect(button?.getAttribute('data-capability-enabled')).toBe('false');
+
+    fireEvent.click(button as HTMLButtonElement);
+    expect(screen.queryByText('Add DNS Record')).toBeNull();
+  });
+
+  it('leaves Add Record enabled and opens the record form when the server offers it', async () => {
+    stubControlPlane(routes());
+    render(withControlPlane(<DNSZoneDetailPage />));
+
+    expect(await screen.findByText('DNS Records')).toBeDefined();
+    const button = addRecordButton();
+    expect(button).not.toBeNull();
+    expect(button?.getAttribute('data-capability-enabled')).toBe('true');
+    expect(button?.disabled).toBe(false);
+
+    fireEvent.click(button as HTMLButtonElement);
+    expect(await screen.findByText('Add DNS Record')).toBeDefined();
   });
 });
