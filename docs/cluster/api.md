@@ -111,7 +111,7 @@ What each RPC does with the servicer:
 | `Bootstrap` | `Bootstrap`, then `Status` | `cluster.name` echoes `cluster_name`; `node` is the serving node. Bind/advertise addresses, labels and metadata are not applied — the node's own configuration decides them |
 | `Join` | `Join(seed_addresses)`, then `Status` | `node` is the serving node; the same request fields are not applied |
 | `Leave` | `Leave` | Removes the **serving** node. A non-empty `node_id` naming another node is refused (`ErrLeaveNodeNotLocal`, `InvalidArgument`). `timeout_seconds > 0` bounds the call; running out is `ErrLeaveTimeout`. `force` is not applied |
-| `GetStatus` | `Status`, plus `Nodes` when `include_nodes` | `local_node` is the serving node — its full record when nodes are included; `leader_address` is filled only then |
+| `GetStatus` | `Status` and `Nodes`, for both request forms | `local_node` is the serving node's member record from `Nodes` in both forms, its state as membership reports it; an unknown state, or a node absent from membership, reads unspecified (never a fixed ACTIVE). `nodes` and `leader_address` are filled only when `include_nodes` |
 | `ListNodes` | `Nodes` | Filters by `roles`, `states` and `selector.match_labels` (matched against node metadata), sorts by `id` or `address`, then pages (§5) |
 
 ### Everything else is a Go call with no wire form
