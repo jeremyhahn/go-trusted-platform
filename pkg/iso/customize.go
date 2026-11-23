@@ -1330,7 +1330,11 @@ func validSignatureList(data []byte) bool {
 // private signing key is never world-readable on the staging tree, and the
 // plaintext read buffer is wiped once written — matching
 // writeConfiguredNTSMaterial in pkg/ntp, which wipes its copy after the
-// write (#62).
+// write (#62). An existing destination is replaced, never written through:
+// any file or symlink at dst is removed and dst is re-created O_EXCL with the
+// staging mode, so a stale world-readable copy left by an earlier build (the
+// legacy builder merges into an existing tree) or a symlink cannot keep the
+// key exposed (#62).
 func stageSecureBootFile(src, dst string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
@@ -1341,7 +1345,20 @@ func stageSecureBootFile(src, dst string) error {
 	if IsSecureBootPublicArtifact(filepath.Base(src), data) {
 		mode = 0o644
 	}
-	return os.WriteFile(dst, data, mode)
+	if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return err
+	}
+	_, werr := f.Write(data)
+	cerr := f.Close()
+	if werr != nil {
+		_ = os.Remove(dst)
+		return werr
+	}
+	return cerr
 }
 
 // CopySecureBootKeys copies Secure Boot keys to the ISO for installation.
