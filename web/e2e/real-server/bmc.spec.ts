@@ -59,7 +59,7 @@ test.describe('BMC page', () => {
       'POST /api/v1/bmc/{profileID:[0-9]+}/power',
       'POST /api/v1/bmc/{profileID:[0-9]+}/boot-device',
       'POST /api/v1/bmc/{profileID:[0-9]+}/virtual-media',
-      'DELETE /api/v1/bmc/{profileID:[0-9]+}/virtual-media',
+      // Unmount renders only with media mounted; the component test covers its gate.
       'POST /api/v1/bmc/{profileID:[0-9]+}/provision',
     ]) {
       expect(ops.has(op), `a control is gated on ${op}`).toBe(true);

@@ -17,6 +17,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gorilla/mux"
@@ -273,4 +274,29 @@ func TestBMCRoutes_ServedOnTheConsole(t *testing.T) {
 		withoutBMC:   true,
 	}
 	assert.Equal(t, http.StatusNotFound, appServiceServing(t, none, target))
+}
+
+// TestBMCRoutes_RefuseAnotherTenant pins that BMC profiles are system
+// resources: an admin session of another tenant holding every scope is
+// refused on the reads and the writes, and no handler is reached.
+func TestBMCRoutes_RefuseAnotherTenant(t *testing.T) {
+	const target = "/api/v1/bmc/7/power"
+
+	handler := &countingBMCHandler{}
+	registry := &testHandlerRegistry{
+		tokenHandler: &allScopesSessionAuth{sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "tenant-a"}},
+		bmcHandler:   handler,
+	}
+	router := newGatedTestRouter(t, registry)
+
+	get := httptest.NewRecorder()
+	router.ServeHTTP(get, httptest.NewRequest(http.MethodGet, target, nil))
+	assert.Equal(t, http.StatusForbidden, get.Code)
+
+	post := httptest.NewRecorder()
+	router.ServeHTTP(post, httptest.NewRequest(http.MethodPost, target, strings.NewReader(`{"action":"off"}`)))
+	assert.Equal(t, http.StatusForbidden, post.Code)
+
+	assert.Equal(t, 0, handler.statusCalls)
+	assert.Equal(t, 0, handler.actionCalls)
 }

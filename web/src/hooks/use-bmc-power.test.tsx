@@ -81,6 +81,18 @@ describe('useBMCPower', () => {
     expect(res?.error?.message).toBe('bmc: invalid action: on');
   });
 
+  it('never retries a power action after a dropped reply', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderPower();
+
+    await act(async () => {
+      await result.current.cycle().catch(() => undefined);
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('knows the four actions', () => {
     expect(BMC_POWER_ACTIONS).toEqual(['on', 'off', 'reset', 'cycle']);
     expect(isBMCPowerAction('cycle')).toBe(true);
