@@ -42,6 +42,12 @@ assert.ok(!caSpec.includes('page.route('), 'ca-operations.spec.ts does not route
 for (const route of ['/ca', '/ca/sign', '/ca/verify']) {
   assert.ok(caSpec.includes(`goto('${route}')`), `ca-operations.spec.ts visits ${route}`);
 }
+const caCertsSpecPath = path.join(import.meta.dirname, 'ca-certificates.spec.ts');
+assert.ok(fs.existsSync(caCertsSpecPath), 'real-server/ca-certificates.spec.ts exists');
+const caCertsSpec = fs.readFileSync(caCertsSpecPath, 'utf8');
+assert.ok(caCertsSpec.includes("from './fixtures'"), "ca-certificates.spec.ts imports from './fixtures'");
+assert.ok(!caCertsSpec.includes('api-mock'), 'ca-certificates.spec.ts does not use api-mock');
+assert.ok(!caCertsSpec.includes('page.route('), 'ca-certificates.spec.ts does not route requests');
 
 // The invitation lookup pages run on the real server only (#2056): the mocked specs are gone.
 for (const name of ['invitation-accept.spec.ts', 'invitation-accept-flow.spec.ts']) {
