@@ -23,19 +23,29 @@ export interface BMCWebCertCardProps {
   profileID: string;
 }
 
+/**
+ * certExpired reports whether a certificate has expired. days_remaining is a
+ * whole-day count from the server, so a certificate whose not_after passed
+ * earlier today still reports 0: not_after decides, and an unparsable
+ * not_after falls back to days_remaining.
+ */
+export function certExpired(cert: BMCWebCertificate, now = Date.now()): boolean {
+  return cert.days_remaining < 0 || Date.parse(cert.not_after) <= now;
+}
+
 /** certExpiryText words the days remaining of a certificate. */
-export function certExpiryText(days: number): string {
+export function certExpiryText(days: number, expired = days < 0): string {
   if (days < 0) {
     const ago = -days;
     return `Expired ${ago} ${ago === 1 ? 'day' : 'days'} ago`;
   }
-  if (days === 0) return 'Expires today';
+  if (days === 0) return expired ? 'Expired today' : 'Expires today';
   if (days === 1) return 'Expires in 1 day';
   return `Expires in ${days} days`;
 }
 
-function expiryVariant(days: number): 'destructive' | 'secondary' | 'outline' {
-  if (days < 0) return 'destructive';
+function expiryVariant(days: number, expired: boolean): 'destructive' | 'secondary' | 'outline' {
+  if (expired) return 'destructive';
   if (days < BMC_CERT_WARN_DAYS) return 'secondary';
   return 'outline';
 }
@@ -63,6 +73,8 @@ export function BMCWebCertCard({ profileID }: BMCWebCertCardProps) {
     void reload();
   }, [reload]);
 
+  const expired = cert !== null && certExpired(cert);
+
   return (
     <Card>
       <CardHeader>
@@ -86,15 +98,15 @@ export function BMCWebCertCard({ profileID }: BMCWebCertCardProps) {
               <dd>{cert.not_after}</dd>
               <dt>Expiry</dt>
               <dd>
-                <Badge variant={expiryVariant(cert.days_remaining)}>
-                  <span data-testid="bmc-cert-expiry">{certExpiryText(cert.days_remaining)}</span>
+                <Badge variant={expiryVariant(cert.days_remaining, expired)}>
+                  <span data-testid="bmc-cert-expiry">{certExpiryText(cert.days_remaining, expired)}</span>
                 </Badge>
               </dd>
             </dl>
-            {cert.days_remaining < BMC_CERT_WARN_DAYS && (
-              <Alert data-testid="bmc-cert-warning" variant={cert.days_remaining < 0 ? 'destructive' : 'default'}>
+            {(expired || cert.days_remaining < BMC_CERT_WARN_DAYS) && (
+              <Alert data-testid="bmc-cert-warning" variant={expired ? 'destructive' : 'default'}>
                 <AlertDescription>
-                  {cert.days_remaining < 0
+                  {expired
                     ? 'The BMC web certificate has expired.'
                     : `The BMC web certificate expires in fewer than ${BMC_CERT_WARN_DAYS} days.`}
                 </AlertDescription>
