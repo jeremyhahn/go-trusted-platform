@@ -203,7 +203,9 @@ func (a *iamTokenAuthorizer) CheckPermission(ctx context.Context, token, resourc
 // principal may perform action on resource. An empty resource or action is
 // refused before the PEP is asked: no permission names nothing (#926). A
 // principal without a subject or tenant is denied, and a PEP that cannot
-// answer fails the check closed.
+// answer fails the check closed. The principal's tenant goes to the PEP both
+// as the subject's tenant and as the request's TenantID, the tenant context
+// docs/SPEC.md requires (PR #2082 Codex round 3).
 func checkPrincipalPermission(ctx context.Context, pep quicbaassdk.IAMPEPClient, principal *tokenPrincipal, resource, action string) (bool, error) {
 	if strings.TrimSpace(resource) == "" || strings.TrimSpace(action) == "" {
 		return false, ErrEmptyPermission{Resource: resource, Action: action}
@@ -224,6 +226,7 @@ func checkPrincipalPermission(ctx context.Context, pep quicbaassdk.IAMPEPClient,
 			TenantID: principal.TenantID,
 			Roles:    principal.Roles,
 		},
+		TenantID: principal.TenantID,
 		Action:   action,
 		Resource: resource,
 	})
