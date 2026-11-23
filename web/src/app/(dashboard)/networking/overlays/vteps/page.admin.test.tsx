@@ -68,6 +68,16 @@ function routes() {
     const method = init?.method ?? "GET";
     const key = `${method} ${url.pathname}`;
     switch (key) {
+      case `GET /api/v1/capabilities`:
+        // #2059: the destructive controls sit in the capability gate, which
+        // fails closed; this server offers every overlay op.
+        return Promise.resolve(
+          ok({
+            capabilities: [`DELETE ${base}/vnis/{vni:[0-9]+}`, `DELETE ${base}/macs`].map((op) => ({ op, kind: "route", enabled: true })),
+            total: 2,
+            enabled: 2,
+          })
+        );
       case `GET ${base}/status`:
         return Promise.resolve(ok({ status }));
       case `GET ${base}/vteps`:
