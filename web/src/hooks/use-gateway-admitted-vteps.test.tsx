@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, renderHook, waitFor } from '@testing-library/react';
+import { PlatformProvider } from 'trusted-platform-sdk';
 import { ok, refused, stubControlPlane, withControlPlane } from '@/test/control-plane-fetch';
 import { useGatewayAdmittedVTEPs } from './use-gateway-admitted-vteps';
 
@@ -20,6 +21,17 @@ const V2 = { vtep: '2001:db8::2', hostname: 'node-b.example.com' };
 function render(gatewayId: string) {
   return renderHook(() => useGatewayAdmittedVTEPs(gatewayId), {
     wrapper: ({ children }) => withControlPlane(children),
+  });
+}
+
+// The SDK retries a 5xx answer; the refused-list case reads it once.
+function renderNoRetry(gatewayId: string) {
+  return renderHook(() => useGatewayAdmittedVTEPs(gatewayId), {
+    wrapper: ({ children }) => (
+      <PlatformProvider config={{ baseUrl: 'https://control-plane.test/api', retry: { maxRetries: 0 } }}>
+        <>{children}</>
+      </PlatformProvider>
+    ),
   });
 }
 
@@ -66,7 +78,7 @@ describe('useGatewayAdmittedVTEPs', () => {
     stubControlPlane({
       [`GET ${LIST}`]: refused(503, 'overlay telemetry is not available for this gateway'),
     });
-    const { result } = render('gw-1');
+    const { result } = renderNoRetry('gw-1');
 
     await waitFor(() =>
       expect(result.current.error).toBe('HTTP 503: overlay telemetry is not available for this gateway')
