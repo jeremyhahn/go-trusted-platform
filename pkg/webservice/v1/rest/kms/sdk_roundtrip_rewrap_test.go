@@ -48,7 +48,8 @@ func (f *rewrapCrypto) Rewrap(_ context.Context, req *cryptoclient.RewrapRequest
 
 // TestSDKRoundTrip_Rewrap drives the platform SDK's REST Rewrap through the
 // served router: the call reaches the crypto client with the request's key,
-// ciphertext, context and nonce, and the reply carries both versions.
+// ciphertext, context and nonce, and the reply carries no versions (the
+// pinned crypto service does not report them truthfully).
 func TestSDKRoundTrip_Rewrap(t *testing.T) {
 	fake := &rewrapCrypto{}
 	client := kmsOverSDK(t, nil, fake)
@@ -69,7 +70,7 @@ func TestSDKRoundTrip_Rewrap(t *testing.T) {
 		string(fake.got.Context) != "aad" || string(fake.got.Nonce) != "on" {
 		t.Fatalf("crypto request = %+v", fake.got)
 	}
-	if resp.GetKeyId() != "kek" || resp.GetSourceVersion() != 1 || resp.GetTargetVersion() != 2 ||
+	if resp.GetKeyId() != "kek" || resp.GetSourceVersion() != 0 || resp.GetTargetVersion() != 0 ||
 		string(resp.GetCiphertext()) != "new" || string(resp.GetNonce()) != "nn" {
 		t.Fatalf("reply = %+v", resp)
 	}

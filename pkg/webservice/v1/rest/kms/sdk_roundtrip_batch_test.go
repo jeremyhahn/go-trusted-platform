@@ -69,7 +69,7 @@ func TestSDKRoundTrip_BatchEncrypt(t *testing.T) {
 	resp, err := client.BatchEncrypt(context.Background(), &platformv1.BatchEncryptRequest{
 		KeyId: "kek",
 		Items: []*platformv1.BatchEncryptItem{
-			{ItemId: "a", Plaintext: []byte("one"), Context: []byte("aad")},
+			{ItemId: "a", Plaintext: []byte("one")},
 			{ItemId: "b", Plaintext: []byte("two")},
 		},
 	})
@@ -85,8 +85,8 @@ func TestSDKRoundTrip_BatchEncrypt(t *testing.T) {
 	if len(fake.encReq.Items) != 2 {
 		t.Fatalf("items = %d, want 2", len(fake.encReq.Items))
 	}
-	if got := fake.encReq.Items[0]; string(got.Plaintext) != "one" || string(got.Context) != "aad" {
-		t.Errorf("item 0 = %q/%q, want one/aad", got.Plaintext, got.Context)
+	if got := fake.encReq.Items[0]; string(got.Plaintext) != "one" || len(got.Context) != 0 {
+		t.Errorf("item 0 = %q/%q, want one and no context", got.Plaintext, got.Context)
 	}
 	if got := fake.encReq.Items[1]; string(got.Plaintext) != "two" || len(got.Context) != 0 {
 		t.Errorf("item 1 = %q/%q, want two/empty", got.Plaintext, got.Context)
@@ -100,8 +100,8 @@ func TestSDKRoundTrip_BatchEncrypt(t *testing.T) {
 	}
 	a, b := resp.GetResults()[0], resp.GetResults()[1]
 	if a.GetItemId() != "a" || string(a.GetCiphertext()) != "ct" || string(a.GetNonce()) != "nn" ||
-		a.GetKeyVersion() != 4 || !a.GetStatus().GetSuccess() {
-		t.Errorf("item a = %+v, want ct/nn version 4 success", a)
+		a.GetKeyVersion() != 0 || !a.GetStatus().GetSuccess() {
+		t.Errorf("item a = %+v, want ct/nn, no version, success", a)
 	}
 	if b.GetItemId() != "b" || b.GetStatus().GetSuccess() || b.GetStatus().GetMessage() != "plaintext too large" {
 		t.Errorf("item b = %+v, want failed with plaintext too large", b)

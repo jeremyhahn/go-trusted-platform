@@ -111,7 +111,14 @@ func (h *Handlers) BatchEncrypt(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		items[i] = cryptoclient.BatchEncryptItem{Plaintext: item.Plaintext, Context: item.Context}
+		if len(item.Context) != 0 {
+			h.respWriter.Error400(w, r, &ErrInvalidRequest{
+				Field:  fmt.Sprintf("items[%d].context", i),
+				Reason: "the crypto service does not bind a batch context",
+			})
+			return
+		}
+		items[i] = cryptoclient.BatchEncryptItem{Plaintext: item.Plaintext}
 	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
@@ -126,9 +133,6 @@ func (h *Handlers) BatchEncrypt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := &BatchResponse{KeyID: resp.KeyID, Results: make([]BatchItemResult, len(resp.Results))}
-	if resp.KeyVersion > 0 {
-		out.KeyVersion = uint64(resp.KeyVersion)
-	}
 	for i, res := range resp.Results {
 		out.Results[i] = BatchItemResult{
 			ItemID:     req.Items[i].ItemID,
@@ -168,7 +172,14 @@ func (h *Handlers) BatchDecrypt(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		items[i] = cryptoclient.BatchDecryptItem{Ciphertext: item.Ciphertext, Context: item.Context, Nonce: item.Nonce}
+		if len(item.Context) != 0 {
+			h.respWriter.Error400(w, r, &ErrInvalidRequest{
+				Field:  fmt.Sprintf("items[%d].context", i),
+				Reason: "the crypto service does not bind a batch context",
+			})
+			return
+		}
+		items[i] = cryptoclient.BatchDecryptItem{Ciphertext: item.Ciphertext, Nonce: item.Nonce}
 	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()

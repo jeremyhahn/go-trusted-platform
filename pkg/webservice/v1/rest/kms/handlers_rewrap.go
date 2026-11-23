@@ -37,8 +37,10 @@ type RewrapRequest struct {
 type RewrapResponse struct {
 	SourceKeyID      string `json:"source_key_id"`
 	DestinationKeyID string `json:"destination_key_id"`
-	SourceKeyVersion uint64 `json:"source_key_version"`
-	DestKeyVersion   uint64 `json:"dest_key_version"`
+	// SourceKeyVersion and DestKeyVersion stay unset until the crypto
+	// service reports real versions; the pinned one does not.
+	SourceKeyVersion uint64 `json:"source_key_version,omitempty"`
+	DestKeyVersion   uint64 `json:"dest_key_version,omitempty"`
 	Ciphertext       []byte `json:"ciphertext"`
 	Nonce            []byte `json:"nonce,omitempty"`
 }
@@ -76,8 +78,6 @@ func (h *Handlers) Rewrap(w http.ResponseWriter, r *http.Request) {
 	h.success200(w, r, &RewrapResponse{
 		SourceKeyID:      keyID,
 		DestinationKeyID: keyID,
-		SourceKeyVersion: nonNegative(resp.OldKeyVersion),
-		DestKeyVersion:   nonNegative(resp.NewKeyVersion),
 		Ciphertext:       resp.Ciphertext,
 		Nonce:            resp.Nonce,
 	})
@@ -98,12 +98,4 @@ func (req *RewrapRequest) validate() error {
 		return &ErrInvalidRequest{Field: "source_key_version", Reason: "is not supported: the ciphertext names its version"}
 	}
 	return nil
-}
-
-// nonNegative converts a key version to the wire's unsigned form.
-func nonNegative(v int) uint64 {
-	if v < 0 {
-		return 0
-	}
-	return uint64(v)
 }
