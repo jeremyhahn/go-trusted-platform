@@ -75,7 +75,7 @@ export default function InvitationsPage() {
       }
 
       const data = await response.json();
-      setInvitations(data.invitations || []);
+      setInvitations(data?.payload?.invitations ?? data?.invitations ?? []);
     } catch (error) {
       showNotification(
         error instanceof Error ? error.message : "Failed to fetch invitations",
@@ -115,7 +115,8 @@ export default function InvitationsPage() {
       }
 
       const data = await response.json();
-      setInvitations([data.invitation, ...invitations]);
+      const created = data?.payload?.invitation ?? data?.invitation;
+      if (created) setInvitations([created, ...invitations]);
       setEmail("");
       setRole("member");
       showNotification("Invitation created successfully!", "success");
