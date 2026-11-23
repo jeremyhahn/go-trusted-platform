@@ -40,7 +40,7 @@ export default function BMCPage() {
       </div>
 
       {id !== '' && (
-        <div className="grid gap-6 lg:grid-cols-2">
+        <div key={id} className="grid gap-6 lg:grid-cols-2">
           <BMCSystemCard profileID={id} />
           <BMCPowerCard profileID={id} />
           <BMCBootMediaCard profileID={id} />

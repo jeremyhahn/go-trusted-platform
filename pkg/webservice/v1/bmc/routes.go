@@ -14,6 +14,9 @@
 package bmc
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"net/http"
 
 	"github.com/gorilla/mux"
@@ -46,7 +49,8 @@ func (PassThroughGuard) Require(_ string, next http.HandlerFunc) http.HandlerFun
 
 // RegisterRoutes mounts the twenty BMC routes on api (a router whose paths
 // are relative to /api/v1), each behind guard with its scope: reads under
-// bmc:read, power actions under bmc:power, the boot device under bmc:write,
+// bmc:read, power on under bmc:write and the other power actions under
+// bmc:power, the boot device under bmc:write,
 // virtual media under bmc:media, and provisioning, certificates, enrolment
 // and users under bmc:admin. The web console and the daemon REST listener
 // share this one table.
@@ -55,7 +59,7 @@ func RegisterRoutes(api *mux.Router, h RestHandler, guard RouteGuard) {
 		api.HandleFunc(path, guard.Require(scope, fn)).Methods(method)
 	}
 	const profile = "/bmc/{profileID:[0-9]+}"
-	route(profile+"/power", http.MethodPost, ScopePower, h.PowerAction)
+	api.HandleFunc(profile+"/power", powerActionRoute(h, guard)).Methods(http.MethodPost)
 	route(profile+"/power", http.MethodGet, ScopeRead, h.PowerStatus)
 	route(profile+"/boot-device", http.MethodPost, ScopeWrite, h.SetBootDevice)
 	route(profile+"/boot-device", http.MethodGet, ScopeRead, h.GetBootDevice)
@@ -75,4 +79,31 @@ func RegisterRoutes(api *mux.Router, h RestHandler, guard RouteGuard) {
 	route(profile+"/users/{slot:[0-9]+}", http.MethodDelete, ScopeAdmin, h.DeleteUser)
 	route(profile+"/users/{slot:[0-9]+}/password", http.MethodPut, ScopeAdmin, h.SetUserPassword)
 	route(profile+"/users/{slot:[0-9]+}/privilege", http.MethodPut, ScopeAdmin, h.SetUserPrivilege)
+}
+
+// maxPowerActionBody bounds the power action body the route reads to pick
+// the scope.
+const maxPowerActionBody = 1 << 16
+
+// powerActionRoute checks a power action's scope by its action, as the gRPC
+// service does: PowerOn needs bmc:write, off, reset and cycle need
+// bmc:power. It reads the body to find the action and restores it for the
+// handler, which decodes and validates it.
+func powerActionRoute(h RestHandler, guard RouteGuard) http.HandlerFunc {
+	powerOn := guard.Require(ScopeWrite, h.PowerAction)
+	powerOther := guard.Require(ScopePower, h.PowerAction)
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxPowerActionBody))
+		if err != nil {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		var req PowerActionRequest
+		if json.Unmarshal(body, &req) == nil && req.Action == "on" {
+			powerOn(w, r)
+			return
+		}
+		powerOther(w, r)
+	}
 }

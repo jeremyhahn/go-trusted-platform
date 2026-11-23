@@ -892,9 +892,21 @@ func (v1Router *Router) bmcRoutes() {
 		v1Router.logger.Debug("BMC REST handler is nil - BMC routes not registered")
 		return
 	}
-	guard := scopeRouteGuard{}
+	_, sessions, err := v1Router.authorization()
+	if err != nil {
+		v1Router.logger.Error(err,
+			"BMC routes not registered: the RBAC guard could not be built")
+		return
+	}
+	scopes := scopeRouteGuard{}
 	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
-		guard.authorizer = scoped
+		scopes.authorizer = scoped
+	}
+	// BMC profiles carry no tenant: they are system resources, so only
+	// sessions of the system tenant reach them.
+	guard := systemTenantScopeGuard{
+		scopes:       scopes,
+		systemTenant: sessions.RequireTenant(v1Router.restHandlerRegistry.TenantID()),
 	}
 	bmcwebsvc.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN), handler, guard)
 }
@@ -963,6 +975,22 @@ func (g scopeRouteGuard) Require(scope string, next http.HandlerFunc) http.Handl
 		}
 	}
 	return g.authorizer.RequireScope(scope)(next).ServeHTTP
+}
+
+// systemTenantScopeGuard checks the system tenant, then the route's scope.
+// Without a tenant check it fails closed: every guarded route answers 403.
+type systemTenantScopeGuard struct {
+	scopes       scopeRouteGuard
+	systemTenant func(http.Handler) http.Handler
+}
+
+func (g systemTenantScopeGuard) Require(scope string, next http.HandlerFunc) http.HandlerFunc {
+	if g.systemTenant == nil {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		}
+	}
+	return g.systemTenant(g.scopes.Require(scope, next)).ServeHTTP
 }
 
 func (v1Router *Router) pxeRoutes() {

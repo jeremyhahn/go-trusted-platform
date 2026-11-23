@@ -57,7 +57,9 @@ export function useBMCPower(profileID: string) {
   return useMemo(() => {
     const api = client.getApiClient();
     const run = (action: BMCPowerAction) =>
-      api.post<BMCPowerActionResult>(bmcPowerPath(profileID), { action });
+      // A power action is not idempotent: a dropped reply must not
+      // power-cycle the host twice.
+      api.post<BMCPowerActionResult>(bmcPowerPath(profileID), { action }, { retry: { enabled: false } });
     return {
       run,
       powerOn: () => run("on"),
