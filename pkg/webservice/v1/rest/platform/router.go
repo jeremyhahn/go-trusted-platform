@@ -31,6 +31,11 @@ const (
 // PlatformRouter provides REST routing for platform daemon operations
 type PlatformRouter struct {
 	handlers *PlatformHandlers
+
+	// configUpdateRoute and shutdownRoute are the writes that answer 503
+	// while their backend is nil; UnavailableRoutes reports them.
+	configUpdateRoute *mux.Route
+	shutdownRoute     *mux.Route
 }
 
 // NewPlatformRouter creates a new PlatformRouter instance
@@ -140,7 +145,7 @@ func (r *PlatformRouter) registerConfigRoutes(router *mux.Router) {
 	router.HandleFunc("/config/snapshots/{id}", r.handlers.GetSnapshot).Methods("GET")
 	router.HandleFunc("/config/snapshots/{id}", r.handlers.DeleteSnapshot).Methods("DELETE")
 	router.HandleFunc("/config/snapshots/{id}/rollback", r.handlers.Rollback).Methods("POST")
-	router.HandleFunc("/config/sections/{section}", r.handlers.UpdateConfigSection).Methods("PUT")
+	r.configUpdateRoute = router.HandleFunc("/config/sections/{section}", r.handlers.UpdateConfigSection).Methods("PUT")
 }
 
 // registerLogRoutes registers structured log query / stream endpoints.
@@ -193,7 +198,7 @@ func (r *PlatformRouter) registerServiceRoutes(router *mux.Router) {
 	router.HandleFunc("/services/{service}/restart", r.handlers.RestartService).Methods("POST")
 
 	// POST /api/v1/platform/shutdown - Shut the daemon down (202, runs after the reply)
-	router.HandleFunc("/shutdown", r.handlers.Shutdown).Methods("POST")
+	r.shutdownRoute = router.HandleFunc("/shutdown", r.handlers.Shutdown).Methods("POST")
 }
 
 // registerProtocolRoutes registers protocol status endpoints
@@ -214,4 +219,18 @@ func (r *PlatformRouter) registerMetricsRoutes(router *mux.Router) {
 func (r *PlatformRouter) registerEntityTypeRoutes(router *mux.Router) {
 	// GET    /api/v1/platform/entity-types         - List storage entity types and counts
 	router.HandleFunc("/entity-types", r.handlers.ListEntityTypes).Methods("GET")
+}
+
+// UnavailableRoutes returns the registered write routes whose backend is
+// not wired, keyed to the name /capabilities reports them under. Both
+// answer 503 until SetConfigUpdater or SetShutdowner wires them.
+func (r *PlatformRouter) UnavailableRoutes() map[*mux.Route]string {
+	routes := map[*mux.Route]string{}
+	if r.configUpdateRoute != nil && r.handlers.configUpdater == nil {
+		routes[r.configUpdateRoute] = "platform-config-update"
+	}
+	if r.shutdownRoute != nil && r.handlers.shutdowner == nil {
+		routes[r.shutdownRoute] = "platform-shutdown"
+	}
+	return routes
 }
