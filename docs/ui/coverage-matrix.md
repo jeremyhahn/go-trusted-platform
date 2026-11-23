@@ -83,12 +83,12 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `CAService.InitCA` | - | `(dashboard)/ca/page.tsx` (gated: run at daemon start, no API route) | - | - | partial |
 | `CAService.InstallCACertificates` | - | `(dashboard)/ca/page.tsx` (gated: run at daemon start, no API route) | - | - | partial |
 | `CAService.UninstallCACertificates` | - | `(dashboard)/ca/page.tsx` (gated: run at daemon start, no API route) | - | - | partial |
-| `CAService.IssueCertificate` | `POST /certificates` | `(dashboard)/ca/certificates/page.tsx` | - | `ca.spec.ts`<br>`dashboard.spec.ts` | covered |
+| `CAService.IssueCertificate` | `POST /certificates` | `(dashboard)/ca/certificates/page.tsx` | - | `real-server/ca-certificates.spec.ts`<br>`ca.spec.ts` | covered |
 | `CAService.SignCSR` | `POST /sign-csr` | `(dashboard)/ca/sign/page.tsx` | - | `real-server/ca-operations.spec.ts` | covered |
 | `CAService.GetCertificate` | `GET /certificates/{serial}` | `(dashboard)/ca/certificates/[id]/page.tsx` | - | `real-server/ca-certificates.spec.ts`<br>`ca.spec.ts` | covered |
-| `CAService.ListCertificates` | `GET /certificates` | `(dashboard)/ca/certificates/page.tsx`<br>`(dashboard)/dashboard/page.tsx` | - | `real-server/ca-certificates.spec.ts`<br>`auth.spec.ts`<br>`ca.spec.ts`<br>`dashboard.spec.ts` (+1) | covered |
-| `CAService.RevokeCertificate` | `DELETE /certificates/{serial}` | `(dashboard)/ca/certificates/[id]/page.tsx`<br>`(dashboard)/ca/certificates/page.tsx` | - | `ca.spec.ts`<br>`dashboard.spec.ts` | covered |
-| `CAService.RenewCertificate` | `POST /certificates/{serial}/renew` | `(dashboard)/ca/certificates/page.tsx` | - | `ca.spec.ts`<br>`dashboard.spec.ts` | covered |
+| `CAService.ListCertificates` | `GET /certificates` | `(dashboard)/ca/certificates/page.tsx`<br>`(dashboard)/dashboard/page.tsx` | - | `real-server/ca-certificates.spec.ts`<br>`real-server/dashboard.spec.ts`<br>`ca.spec.ts` | covered |
+| `CAService.RevokeCertificate` | `DELETE /certificates/{serial}` | `(dashboard)/ca/certificates/[id]/page.tsx`<br>`(dashboard)/ca/certificates/page.tsx` | - | `real-server/ca-revoke-renew.spec.ts`<br>`ca.spec.ts` | covered |
+| `CAService.RenewCertificate` | `POST /certificates/{serial}/renew` | `(dashboard)/ca/certificates/page.tsx` | - | `real-server/ca-revoke-renew.spec.ts`<br>`ca.spec.ts` | covered |
 | `CAService.VerifyCertificate` | `POST /certificates/verify` | `(dashboard)/ca/verify/page.tsx` | - | `real-server/ca-operations.spec.ts` | covered |
 | `CAService.GetCRL` | `GET /crl` | `(dashboard)/ca/crl/page.tsx` | - | `real-server/ca-certificates.spec.ts`<br>`ca.spec.ts` | covered |
 | `CAService.GetCABundle` | - | `(dashboard)/ca/bundle/page.tsx` | - | `real-server/ca-certificates.spec.ts`<br>`ca.spec.ts` | covered |
@@ -303,34 +303,34 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `PlatformIAMService.CreateUser` | `POST /users` | `(dashboard)/iam/users/page.tsx` | - | `dashboard.spec.ts`<br>`iam.spec.ts` | covered |
-| `PlatformIAMService.GetUser` | `GET /users/{id}` | `(dashboard)/iam/users/[id]/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.ListUsers` | `GET /users` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/iam/users/page.tsx`<br>`(dashboard)/tenant/members/page.tsx` (+1) | - | `auth.spec.ts`<br>`dashboard.spec.ts`<br>`iam.spec.ts` (+2) | covered |
-| `PlatformIAMService.UpdateUser` | `PUT /users/{id}` | `(dashboard)/iam/users/[id]/page.tsx`<br>`(dashboard)/iam/users/page.tsx` | - | `dashboard.spec.ts`<br>`iam.spec.ts` | covered |
-| `PlatformIAMService.DeleteUser` | `DELETE /users/{id}` | `(dashboard)/iam/users/page.tsx`<br>`(dashboard)/tenant/members/page.tsx` | - | `dashboard.spec.ts`<br>`iam.spec.ts`<br>`tenant-management.spec.ts` | covered |
-| `PlatformIAMService.CreateRole` | `POST /roles` | `(dashboard)/iam/roles/new/page.tsx`<br>`(dashboard)/iam/users/[id]/page.tsx`<br>`(dashboard)/tenant/members/page.tsx` | - | `iam.spec.ts`<br>`tenant-management.spec.ts` | covered |
-| `PlatformIAMService.GetRole` | `GET /roles/{id}` | `(dashboard)/iam/roles/[id]/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.ListRoles` | `GET /roles` | `(dashboard)/iam/permissions/page.tsx`<br>`(dashboard)/iam/roles/page.tsx`<br>`(dashboard)/iam/users/[id]/page.tsx` (+1) | - | `dashboard.spec.ts`<br>`iam.spec.ts` | covered |
-| `PlatformIAMService.UpdateRole` | `PUT /roles/{id}` | `(dashboard)/iam/roles/[id]/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.DeleteRole` | `DELETE /roles/{id}` | `(dashboard)/iam/roles/page.tsx`<br>`(dashboard)/iam/users/[id]/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.AssignRole` | - | `(dashboard)/iam/users/[id]/page.tsx`<br>`(dashboard)/tenant/members/page.tsx` | - | `iam.spec.ts`<br>`tenant-management.spec.ts` | covered |
-| `PlatformIAMService.RevokeRole` | - | `(dashboard)/iam/users/[id]/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.CreateGroup` | `POST /groups` | `(dashboard)/iam/groups/new/page.tsx` | - | - | partial |
-| `PlatformIAMService.GetGroup` | `GET /groups/{id}` | `(dashboard)/iam/groups/[id]/page.tsx` | - | - | partial |
-| `PlatformIAMService.ListGroups` | `GET /groups` | `(dashboard)/iam/groups/page.tsx`<br>`(dashboard)/iam/permissions/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.UpdateGroup` | `PUT /groups/{id}` | `(dashboard)/iam/groups/[id]/page.tsx`<br>`(dashboard)/iam/groups/new/page.tsx`<br>`(dashboard)/iam/groups/page.tsx` (+1) (read-only) | - | - | partial |
-| `PlatformIAMService.DeleteGroup` | `DELETE /groups/{id}` | `(dashboard)/iam/groups/[id]/page.tsx`<br>`(dashboard)/iam/groups/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.AddGroupMember` | `POST /groups/{id}/members/{user}` | `(dashboard)/iam/groups/[id]/page.tsx` | - | - | partial |
-| `PlatformIAMService.RemoveGroupMember` | `DELETE /groups/{id}/members/{user}` | `(dashboard)/iam/groups/[id]/page.tsx` | - | - | partial |
-| `PlatformIAMService.CheckPermission` | `POST /permissions/check` | - | - | - | missing |
+| `PlatformIAMService.CreateUser` | `POST /users` | `(dashboard)/iam/users/page.tsx` | - | `real-server/iam.spec.ts` | covered |
+| `PlatformIAMService.GetUser` | `GET /users/{id}` | `(dashboard)/iam/users/[id]/page.tsx` | - | `real-server/iam.spec.ts` | covered |
+| `PlatformIAMService.ListUsers` | `GET /users` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/iam/users/page.tsx`<br>`(dashboard)/tenant/members/page.tsx` (+1) | - | `real-server/dashboard.spec.ts`<br>`real-server/iam.spec.ts`<br>`real-server/tenant-management.spec.ts` | covered |
+| `PlatformIAMService.UpdateUser` | `PUT /users/{id}` | `(dashboard)/iam/users/[id]/page.tsx`<br>`(dashboard)/iam/users/page.tsx` | - | `real-server/iam.spec.ts` | covered |
+| `PlatformIAMService.DeleteUser` | `DELETE /users/{id}` | `(dashboard)/iam/users/page.tsx`<br>`(dashboard)/tenant/members/page.tsx` | - | `real-server/iam.spec.ts`<br>`real-server/tenant-management.spec.ts` | covered |
+| `PlatformIAMService.CreateRole` | `POST /roles` | `(dashboard)/iam/roles/new/page.tsx`<br>`(dashboard)/iam/users/[id]/page.tsx`<br>`(dashboard)/tenant/members/page.tsx` | - | `real-server/iam.spec.ts`<br>`real-server/tenant-management.spec.ts` | covered |
+| `PlatformIAMService.GetRole` | `GET /roles/{id}` | `(dashboard)/iam/roles/[id]/page.tsx` | - | `real-server/iam.spec.ts` | covered |
+| `PlatformIAMService.ListRoles` | `GET /roles` | `(dashboard)/iam/permissions/page.tsx`<br>`(dashboard)/iam/roles/page.tsx`<br>`(dashboard)/iam/users/[id]/page.tsx` (+1) | - | `real-server/iam.spec.ts`<br>`real-server/iam-groups-tenants.spec.ts` | covered |
+| `PlatformIAMService.UpdateRole` | `PUT /roles/{id}` | `(dashboard)/iam/roles/[id]/page.tsx` | - | `real-server/iam.spec.ts` | covered |
+| `PlatformIAMService.DeleteRole` | `DELETE /roles/{id}` | `(dashboard)/iam/roles/page.tsx`<br>`(dashboard)/iam/users/[id]/page.tsx` | - | `real-server/iam.spec.ts` | covered |
+| `PlatformIAMService.AssignRole` | - | `(dashboard)/iam/users/[id]/page.tsx`<br>`(dashboard)/tenant/members/page.tsx` | - | `real-server/iam.spec.ts`<br>`real-server/tenant-management.spec.ts` | covered |
+| `PlatformIAMService.RevokeRole` | - | `(dashboard)/iam/users/[id]/page.tsx` | - | `real-server/iam.spec.ts` | covered |
+| `PlatformIAMService.CreateGroup` | `POST /groups` | `(dashboard)/iam/groups/new/page.tsx` | - | `real-server/iam-groups-tenants.spec.ts` | covered |
+| `PlatformIAMService.GetGroup` | `GET /groups/{id}` | `(dashboard)/iam/groups/[id]/page.tsx` | - | `real-server/iam-groups-tenants.spec.ts` | covered |
+| `PlatformIAMService.ListGroups` | `GET /groups` | `(dashboard)/iam/groups/page.tsx`<br>`(dashboard)/iam/permissions/page.tsx` | - | `real-server/iam.spec.ts`<br>`real-server/iam-groups-tenants.spec.ts` | covered |
+| `PlatformIAMService.UpdateGroup` | `PUT /groups/{id}` | `(dashboard)/iam/groups/[id]/page.tsx`<br>`(dashboard)/iam/groups/new/page.tsx`<br>`(dashboard)/iam/groups/page.tsx` (+1) | - | `real-server/iam-groups-tenants.spec.ts` | covered |
+| `PlatformIAMService.DeleteGroup` | `DELETE /groups/{id}` | `(dashboard)/iam/groups/[id]/page.tsx`<br>`(dashboard)/iam/groups/page.tsx` | - | `real-server/iam.spec.ts`<br>`real-server/iam-groups-tenants.spec.ts` | covered |
+| `PlatformIAMService.AddGroupMember` | `POST /groups/{id}/members/{user}` | `(dashboard)/iam/groups/[id]/page.tsx` (gated off by EmbeddedIamGate: the embedded IAM backend has no member handler) | - | - | partial |
+| `PlatformIAMService.RemoveGroupMember` | `DELETE /groups/{id}/members/{user}` | `(dashboard)/iam/groups/[id]/page.tsx` (gated off by EmbeddedIamGate: the embedded IAM backend has no member handler) | - | - | partial |
+| `PlatformIAMService.CheckPermission` | `POST /tenants/{tenant}/permissions/check` | `(dashboard)/iam/permissions/page.tsx` (PermissionCheckCard) | - | `real-server/iam.spec.ts`<br>`real-server/iam-groups-tenants.spec.ts` | covered |
 | `PlatformIAMService.CreateToken` | - | - | - | - | missing |
 | `PlatformIAMService.RevokeToken` | - | - | - | - | missing |
 | `PlatformIAMService.VerifyToken` | - | - | - | - | missing |
-| `PlatformIAMService.CreateTenant` | `POST /tenants` | `(dashboard)/iam/tenants/page.tsx` | - | - | partial |
-| `PlatformIAMService.GetTenant` | `GET /tenants/{tenant}` | `(dashboard)/iam/tenants/page.tsx` | - | - | partial |
-| `PlatformIAMService.ListTenants` | `GET /tenants` | `(dashboard)/iam/tenants/page.tsx` | - | - | partial |
-| `PlatformIAMService.UpdateTenant` | `PUT /tenants/{tenant}` | `(dashboard)/iam/tenants/page.tsx` | - | - | partial |
-| `PlatformIAMService.DeleteTenant` | `DELETE /tenants/{tenant}` | `(dashboard)/iam/tenants/page.tsx` | - | - | partial |
+| `PlatformIAMService.CreateTenant` | `POST /tenants` | `(dashboard)/iam/tenants/page.tsx` | - | `real-server/iam-groups-tenants.spec.ts` | covered |
+| `PlatformIAMService.GetTenant` | `GET /tenants/{tenant}` | `(dashboard)/iam/tenants/page.tsx` | - | `real-server/iam-groups-tenants.spec.ts` | covered |
+| `PlatformIAMService.ListTenants` | `GET /tenants` | `(dashboard)/iam/tenants/page.tsx` | - | `real-server/iam-groups-tenants.spec.ts` | covered |
+| `PlatformIAMService.UpdateTenant` | `PUT /tenants/{tenant}` | `(dashboard)/iam/tenants/page.tsx` | - | `real-server/iam-groups-tenants.spec.ts` | covered |
+| `PlatformIAMService.DeleteTenant` | `DELETE /tenants/{tenant}` | `(dashboard)/iam/tenants/page.tsx` | - | `real-server/iam-groups-tenants.spec.ts` | covered |
 | `PlatformIAMService.CreatePolicy` | `POST /policies` | `(dashboard)/iam/policies/new/page.tsx` | - | - | partial |
 | `PlatformIAMService.GetPolicy` | `GET /policies/{id}` | `(dashboard)/iam/policies/[name]/page.tsx` | - | - | partial |
 | `PlatformIAMService.ListPolicies` | `GET /policies` | `(dashboard)/iam/permissions/page.tsx`<br>`(dashboard)/iam/policies/page.tsx` | - | `iam.spec.ts` | covered |
@@ -374,12 +374,12 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `InvitationService.CreateInvitation` | - | `(dashboard)/tenant/invitations/page.tsx` | - | `tenant-management.spec.ts` | covered |
+| `InvitationService.CreateInvitation` | - | `(dashboard)/tenant/invitations/page.tsx` | - | `real-server/tenant-management.spec.ts`<br>`real-server/invitation-revoke.spec.ts` | covered |
 | `InvitationService.GetInvitation` | `GET /{id:[0-9]+}` | `(dashboard)/tenant/invitations/[id]/page.tsx`<br>`admin/invitations/detail/page.tsx` | - | `real-server/invitation-accept.spec.ts`<br>`real-server/invitation-accept-flow.spec.ts` | covered |
 | `InvitationService.GetInvitationByToken` | `GET /token/{token}` | `(auth)/invite/[token]/page.tsx`<br>`invite/page.tsx` | - | `real-server/invitation-accept.spec.ts`<br>`real-server/invitation-accept-flow.spec.ts` | covered |
-| `InvitationService.ListInvitations` | - | `(dashboard)/tenant/invitations/page.tsx` | - | `tenant-management.spec.ts` | covered |
-| `InvitationService.RevokeInvitation` | `POST /{id:[0-9]+}/revoke` | `(dashboard)/tenant/invitations/page.tsx` | - | `tenant-management.spec.ts` | covered |
-| `InvitationService.AcceptInvitation` | `POST /accept` | - | - | - | missing |
+| `InvitationService.ListInvitations` | - | `(dashboard)/tenant/invitations/page.tsx` | - | `real-server/tenant-management.spec.ts`<br>`real-server/invitation-revoke.spec.ts` | covered |
+| `InvitationService.RevokeInvitation` | `POST /{id:[0-9]+}/revoke` | `(dashboard)/tenant/invitations/page.tsx` | - | `real-server/tenant-management.spec.ts`<br>`real-server/invitation-revoke.spec.ts` | covered |
+| `InvitationService.AcceptInvitation` | `POST /accept` | `invite/page.tsx` (marks the invitation accepted; grants no membership, #2056) | - | `real-server/invitation-accept-flow.spec.ts` | covered |
 | `InvitationService.DeleteInvitation` | `DELETE /{id:[0-9]+}` | `(dashboard)/tenant/invitations/page.tsx` | - | `tenant-management.spec.ts` | covered |
 
 ## KeyManagementService (`kms.proto`)
@@ -618,11 +618,11 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `SwitchService.ListPorts` | `GET /{switch}/ports` | `/networking/switches/[switch]` | - | - | partial |
-| `SwitchService.GetPortStatus` | `GET /{switch}/ports/{port}` | `/networking/switches/[switch]` | - | - | partial |
-| `SwitchService.SetPortVLAN` | `POST /{switch}/ports/{port}/vlan` | `/networking/switches/[switch]` | - | - | partial |
-| `SwitchService.EnablePort` | `POST /{switch}/ports/{port}/enable` | `/networking/switches/[switch]` | - | - | partial |
-| `SwitchService.DisablePort` | `POST /{switch}/ports/{port}/disable` | `/networking/switches/[switch]` | - | - | partial |
+| `SwitchService.ListPorts` | `GET /{switch}/ports` | `/networking/switches/[switch]` | - | `real-server/switch-ports.spec.ts` | covered |
+| `SwitchService.GetPortStatus` | `GET /{switch}/ports/{port}` | `/networking/switches/[switch]` | - | `real-server/switch-ports.spec.ts` | covered |
+| `SwitchService.SetPortVLAN` | `POST /{switch}/ports/{port}/vlan` | `/networking/switches/[switch]` | - | `real-server/switch-ports.spec.ts` | covered |
+| `SwitchService.EnablePort` | `POST /{switch}/ports/{port}/enable` | `/networking/switches/[switch]` | - | `real-server/switch-ports.spec.ts` | covered |
+| `SwitchService.DisablePort` | `POST /{switch}/ports/{port}/disable` | `/networking/switches/[switch]` | - | `real-server/switch-ports.spec.ts` | covered |
 
 ## TenantService (`tenant.proto`)
 
@@ -701,10 +701,10 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `VTPMService.CreateBundle` | `POST /bundles` | `(dashboard)/devices/vtpm/page.tsx` | - | `devices.spec.ts` | covered |
+| `VTPMService.CreateBundle` | `POST /bundles` | `(dashboard)/devices/vtpm/page.tsx` | - | `real-server/devices.spec.ts` | covered |
 | `VTPMService.GetBundle` | `GET /bundles/{id}` | `(dashboard)/devices/vtpm/[id]/page.tsx`<br>`(dashboard)/devices/vtpm/bundles/[id]/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
-| `VTPMService.DeleteBundle` | `DELETE /bundles/{id}` | `(dashboard)/devices/vtpm/[id]/page.tsx`<br>`(dashboard)/devices/vtpm/page.tsx` | - | `devices.spec.ts`<br>`real-server/vtpm.spec.ts` | covered |
-| `VTPMService.ListBundles` | `GET /bundles` | `(dashboard)/devices/vtpm/page.tsx`<br>`(dashboard)/devices/vtpm/bundles/page.tsx` | - | `devices.spec.ts` | covered |
+| `VTPMService.DeleteBundle` | `DELETE /bundles/{id}` | `(dashboard)/devices/vtpm/[id]/page.tsx`<br>`(dashboard)/devices/vtpm/page.tsx` | - | `real-server/devices.spec.ts`<br>`real-server/vtpm.spec.ts` | covered |
+| `VTPMService.ListBundles` | `GET /bundles` | `(dashboard)/devices/vtpm/page.tsx`<br>`(dashboard)/devices/vtpm/bundles/page.tsx` | - | `real-server/devices.spec.ts`<br>`real-server/vtpm.spec.ts` | covered |
 | `VTPMService.CreateTemplate` | `POST /templates` | `(dashboard)/devices/vtpm/templates/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
 | `VTPMService.GetTemplate` | `GET /templates/{id}` | `(dashboard)/devices/vtpm/templates/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
 | `VTPMService.DeleteTemplate` | `DELETE /templates/{id}` | `(dashboard)/devices/vtpm/templates/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
@@ -732,7 +732,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | AttestationService | 16 | 6 | 1 | 8 | 1 | 0 |
 | BarrierService | 5 | 0 | 0 | 0 | 5 | 0 |
 | BMCService | 23 | 0 | 0 | 23 | 0 | 0 |
-| CAService | 13 | 7 | 6 | 0 | 0 | 0 |
+| CAService | 13 | 10 | 3 | 0 | 0 | 0 |
 | CacheService | 4 | 0 | 0 | 0 | 0 | 4 |
 | CeremonyService | 7 | 0 | 0 | 7 | 0 | 0 |
 | ClusterService | 5 | 0 | 0 | 5 | 0 | 0 |
@@ -743,9 +743,9 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | EABService | 11 | 0 | 0 | 11 | 0 | 0 |
 | FIDO2Service | 5 | 0 | 0 | 0 | 5 | 0 |
 | GatewayService | 29 | 4 | 3 | 22 | 0 | 0 |
-| PlatformIAMService | 41 | 20 | 8 | 13 | 0 | 0 |
+| PlatformIAMService | 41 | 29 | 7 | 5 | 0 | 0 |
 | IDevIDService | 20 | 8 | 1 | 11 | 0 | 0 |
-| InvitationService | 7 | 6 | 0 | 1 | 0 | 0 |
+| InvitationService | 7 | 7 | 0 | 0 | 0 | 0 |
 | KeyManagementService | 23 | 10 | 1 | 12 | 0 | 0 |
 | LUKSService | 10 | 0 | 0 | 0 | 10 | 0 |
 | MessagingService | 8 | 0 | 0 | 0 | 0 | 8 |
@@ -760,12 +760,12 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | RegistryService | 6 | 0 | 0 | 4 | 2 | 0 |
 | SchedulerService | 11 | 0 | 0 | 0 | 0 | 11 |
 | SDNService | 29 | 11 | 1 | 16 | 1 | 0 |
-| SwitchService | 5 | 0 | 5 | 0 | 0 | 0 |
+| SwitchService | 5 | 5 | 0 | 0 | 0 | 0 |
 | TenantService | 19 | 4 | 4 | 11 | 0 | 0 |
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
-| VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **124** | **66** | **258** | **50** | **31** |
+| VTPMService | 23 | 22 | 0 | 0 | 1 | 0 |
+| **Total** | **529** | **161** | **61** | **226** | **50** | **31** |
 
 ## Proposed slices
 
@@ -774,7 +774,7 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 1. **AttestationService: Manifest, AttestationQuote, HostAttestation, VMAttestation, ContainerAttestation, CallerPolicy…**: 9 operations (8 missing, 1 partial): VerifyManifest, DeleteManifest, GetAttestationQuote, VerifyAttestationQuote, CollectHostAttestation, CollectVMAttestation, CollectContainerAttestation, DescribeCallerPolicy, PollDeviceVerdicts.
 2. **BMCService (1/2): On, Off, Reset, Cycle, Status, BootDevice…**: 15 operations (15 missing, 0 partial): PowerOn, PowerOff, PowerReset, PowerCycle, PowerStatus, ProvisionStatus, SetBootDevice, GetBootDevice, MountISO, UnmountISO, VirtualMediaStatus, GetSensors, GetSystemInfo, Provision, GetWebCertificate.
 3. **BMCService (2/2): ReplaceWebCertificate, BMC, FactoryCert, User, UserPassword, UserPrivilege**: 8 operations (8 missing, 0 partial): ReplaceWebCertificate, EnrollBMC, RestoreFactoryCert, ListUsers, CreateUser, DeleteUser, SetUserPassword, SetUserPrivilege.
-4. **CAService: CAInfo, CA, CACertificate, CSR, Certificate**: 6 operations (0 missing, 6 partial): GetCAInfo, InitCA, InstallCACertificates, UninstallCACertificates, SignCSR, VerifyCertificate.
+4. **CAService: CA, CACertificate**: 3 operations (0 missing, 3 partial): InitCA, InstallCACertificates, UninstallCACertificates.
 5. **CeremonyService: Init, Status, Cert, Share, CSR**: 7 operations (7 missing, 0 partial): Init, Status, ClaimCertBegin, ClaimCertComplete, ClaimShareBegin, ClaimShareComplete, SignCSR.
 6. **ClusterService: Bootstrap, Join, Leave, Status, Node**: 5 operations (5 missing, 0 partial): Bootstrap, Join, Leave, GetStatus, ListNodes.
 7. **ComputeService (1/2): VM, VMMetric, Disk, Snapshot, Migration**: 13 operations (11 missing, 2 partial): SuspendVM, ResumeVM, GetVM, MigrateVM, AttestVM, GetVMMetrics, AttachDisk, DetachDisk, ResizeDisk, CreateSnapshot, GetSnapshot, PrepareMigration, FinalizeMigration.
@@ -786,10 +786,10 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 13. **EABService: Credential, CredentialByKeyID, CredentialQRCode, EnrollmentURL, CredentialUsed, ExpiredCredential**: 11 operations (11 missing, 0 partial): CreateCredential, GetCredential, ListCredentials, RevokeCredential, ValidateCredential, DeleteCredential, GetCredentialByKeyID, GetCredentialQRCode, GetEnrollmentURL, MarkCredentialUsed, CleanupExpiredCredentials.
 14. **GatewayService (1/2): GatewayMode, GatewaySnapshot, GatewayAdmittedVTEP, BGPPeer, Prefix, IPAMPool…**: 15 operations (12 missing, 3 partial): SetGatewayMode, GetGatewaySnapshot, ListGatewaySnapshots, GetGatewayAdmittedVTEP, ListGatewayAdmittedVTEPs, ListBGPPeers, AnnouncePrefix, WithdrawPrefix, CreateIPAMPool, GetIPAMPool, UpdateIPAMPool, DeleteIPAMPool, AllocateIP, ReleaseIP, ListAllocations.
 15. **GatewayService (2/2): VIP, VIPBackend, LBStatus, NAT64Status, PerfFlow, PerfDatapath…**: 10 operations (10 missing, 0 partial): AddVIP, RemoveVIP, GetVIP, ListVIPs, SetVIPBackends, GetLBStatus, GetNAT64Status, GetPerfFlows, GetPerfDatapath, GetPerfConntrack.
-16. **PlatformIAMService (1/2): Group, GroupMember, Permission, Token, Tenant**: 14 operations (11 missing, 3 partial): CreateGroup, GetGroup, UpdateGroup, AddGroupMember, RemoveGroupMember, CheckPermission, CreateToken, RevokeToken, VerifyToken, CreateTenant, GetTenant, ListTenants, UpdateTenant, DeleteTenant.
+16. **PlatformIAMService (1/2): GroupMember, Token**: 5 operations (3 missing, 2 partial): AddGroupMember, RemoveGroupMember, CreateToken, RevokeToken, VerifyToken.
 17. **PlatformIAMService (2/2): Policy, App**: 7 operations (2 missing, 5 partial): CreatePolicy, GetPolicy, UpdatePolicy, ValidatePolicy, TestPolicy, GetApp, UpdateApp.
 18. **IDevIDService: IDevID, IAK, IAKCSR, LDevID, IDevIDCertificate, IAKCertificate…**: 12 operations (11 missing, 1 partial): HasIDevID, GenerateIAK, HasIAK, DeleteIAK, CreateIAKCSR, CreateLDevID, InstallIDevIDCertificate, InstallIAKCertificate, DeleteIAKCertificate, GetDeviceAttributes, FlushTransientContexts, ActivateCredential.
-19. **InvitationService: Invitation, InvitationByToken, AcceptInvitation**: 3 operations (3 missing, 0 partial): GetInvitation, GetInvitationByToken, AcceptInvitation.
+19. **InvitationService**: all covered on the branch (#2041).
 20. **KeyManagementService: Key, KeyStatus, KeyVersion, Encrypt, Decrypt, Rewrap…**: 13 operations (12 missing, 1 partial): ImportKey, UpdateKeyStatus, GetKeyVersions, BatchEncrypt, BatchDecrypt, Rewrap, Hash, HMAC, VerifyHMAC, GenerateRandom, GenerateDataKey, GenerateWrappedDataKey, BackendStatus.
 21. **NTPService: Status, Source, Step**: 3 operations (3 missing, 0 partial): GetStatus, ListSources, Step.
 22. **OverlayService: VTEP, VNI, Tunnel, TunnelStat, RemoteMAC, MAC…**: 8 operations (7 missing, 1 partial): ListVTEPs, GetVTEP, DeleteVNI, ListTunnels, GetTunnelStats, ListRemoteMACs, ForgetMAC, GetOverlayStatus.
@@ -799,13 +799,13 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 26. **RegistryService: List, Inspect, Delete, Status**: 4 operations (4 missing, 0 partial): List, Inspect, Delete, Status.
 27. **SDNService (1/2): Bridge, Port, PortState, Flow, PortAuth, PortStat…**: 13 operations (12 missing, 1 partial): DeleteBridge, GetBridge, GetPort, AuthenticatePort, SetPortState, FlushFlows, RevokePortAuth, GetPortStats, GetFlowStats, ApplyPolicy, GetPolicy, ListPolicies, DeletePolicy.
 28. **SDNService (2/2): NetworkZone**: 4 operations (4 missing, 0 partial): CreateNetworkZone, UpdateNetworkZone, DeleteNetworkZone, ListNetworkZones.
-29. **SwitchService: Port, PortStatus, PortVLAN**: 5 operations (5 missing, 0 partial): ListPorts, EnablePort, DisablePort, GetPortStatus, SetPortVLAN.
+29. **SwitchService**: all covered on the branch (#2041).
 30. **TenantService: Tenant, TenantByName, Quota, Sync, TenantDEK, TenantDEKStatus…**: 15 operations (11 missing, 4 partial): ListTenants, CreateTenant, UpdateTenant, DeleteTenant, SuspendTenant, ResumeTenant, GetTenantByName, UpdateQuotas, CheckQuota, Sync, RotateTenantDEK, GetTenantDEKStatus, InitTenantBarrier, UnsealTenantBarrier, SealTenantBarrier.
 31. **TPMService (1/2): Provision, Clear, Capability, PlatformAttribute, EK, EKCertificate…**: 15 operations (8 missing, 7 partial): Provision, Clear, GetCapabilities, GetPlatformAttributes, CreateEK, DeleteEK, ImportEKCertificate, CreateSRK, DeleteSRK, CreateAK, GetAK, DeleteAK, Quote, VerifyQuote, Certify.
 32. **TPMService (2/2): EventLog, PCR, Credential, Random**: 5 operations (4 missing, 1 partial): GetEventLog, ExtendPCR, MakeCredential, ActivateCredential, GetRandom.
 33. **VPNService: Peer, Status, PosturePolicy**: 8 operations (0 missing, 8 partial): EnrolPeer, ListPeers, RevokePeer, GetStatus, GetPosturePolicy, SetPosturePolicy, DeletePosturePolicy, ListPosturePolicies.
-34. **VTPMService (1/2): Bundle, Template, BundlePath, TPMSocketPath, NVRAMPath**: 11 operations (9 missing, 2 partial): GetBundle, ImportBundle, ValidateBundle, CreateTemplate, GetTemplate, DeleteTemplate, ListTemplates, CloneTemplate, GetBundlePath, GetTPMSocketPath, GetNVRAMPath.
-35. **VTPMService (2/2): VTPM, VTPMRunning, VTPMPCR**: 8 operations (8 missing, 0 partial): StartVTPM, StopVTPM, QuoteVTPM, SealVTPM, UnsealVTPM, IsVTPMRunning, ExtendVTPMPCR, ReadVTPMPCR.
+34. **VTPMService (1/2)**: all covered on the branch (#2041).
+35. **VTPMService (2/2)**: all covered on the branch (#2041).
 
 ## Method and limits
 
