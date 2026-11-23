@@ -21,6 +21,10 @@ import type {
   CreateSnapshotRequest,
   RestoreSnapshotRequest,
   DeleteSnapshotRequest,
+  GetSnapshotRequest,
+  GetSnapshotResponse,
+  SuspendVMResponse,
+  ResumeVMResponse,
   MigrateVMRequest,
   CreateContainerRequest,
   StopContainerRequest,
@@ -181,6 +185,26 @@ export class ComputeService extends BaseService {
   }
 
   /**
+   * Suspend a running VM (POST /vms/{id}/suspend).
+   */
+  async suspendVM(id: string): Promise<ApiResponse<SuspendVMResponse>> {
+    return this.client.post<SuspendVMResponse>(
+      this.buildUrl(`/vms/${this.encodePathSegment(id)}/suspend`),
+      {}
+    );
+  }
+
+  /**
+   * Resume a suspended VM (POST /vms/{id}/resume).
+   */
+  async resumeVM(id: string): Promise<ApiResponse<ResumeVMResponse>> {
+    return this.client.post<ResumeVMResponse>(
+      this.buildUrl(`/vms/${this.encodePathSegment(id)}/resume`),
+      {}
+    );
+  }
+
+  /**
    * Delete a VM
    *
    * @param request - Delete request
@@ -323,6 +347,15 @@ export class ComputeService extends BaseService {
   async listSnapshots(vmId: string): Promise<ApiResponse<ListSnapshotsResponse>> {
     return this.client.get<ListSnapshotsResponse>(
       this.buildUrl(`/vms/${this.encodePathSegment(vmId)}/snapshots`)
+    );
+  }
+
+  /**
+   * Get one snapshot of a VM (GET /vms/{id}/snapshots/{snapshotId}).
+   */
+  async getSnapshot(request: GetSnapshotRequest): Promise<ApiResponse<GetSnapshotResponse>> {
+    return this.client.get<GetSnapshotResponse>(
+      this.buildUrl(`/vms/${this.encodePathSegment(request.vmId)}/snapshots/${this.encodePathSegment(request.snapshotId)}`)
     );
   }
 

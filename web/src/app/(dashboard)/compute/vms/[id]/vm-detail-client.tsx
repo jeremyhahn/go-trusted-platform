@@ -27,6 +27,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { VMMetricsCard } from '@/components/features/compute/vm-metrics';
+import { Gated } from '@/components/features/capabilities/gated';
 import { useCompute, useMutation, useToast, type MutationError } from '@/hooks';
 import type { VMDetail } from '@/types/infrastructure';
 import { vmStatus } from '@/lib/compute-state';
@@ -149,14 +150,17 @@ export default function VMDetailPage() {
     }
   );
 
-  // TODO: Suspend/Resume functionality not available in SDK yet
-  // SDK only provides start/stop/reboot operations
-  // Placeholder mutations for future implementation
   const suspendVMMutation = useMutation(
-    async (vmId: string) => {
-      throw new Error('Suspend operation not yet implemented in SDK');
-    },
+    (vmId: string) => compute.suspendVM(vmId),
     {
+      onSuccess: () => {
+        toast({
+          title: 'Success',
+          description: 'VM suspended',
+        });
+        setActionLoading(false);
+        fetchVM();
+      },
       onError: (error: MutationError) => {
         toast({
           title: 'Error',
@@ -169,10 +173,16 @@ export default function VMDetailPage() {
   );
 
   const resumeVMMutation = useMutation(
-    async (vmId: string) => {
-      throw new Error('Resume operation not yet implemented in SDK');
-    },
+    (vmId: string) => compute.resumeVM(vmId),
     {
+      onSuccess: () => {
+        toast({
+          title: 'Success',
+          description: 'VM resumed',
+        });
+        setActionLoading(false);
+        fetchVM();
+      },
       onError: (error: MutationError) => {
         toast({
           title: 'Error',
@@ -305,14 +315,16 @@ export default function VMDetailPage() {
                 <Square className="mr-2 h-4 w-4" />
                 Stop
               </Button>
-              <Button
-                variant="outline"
-                onClick={handleSuspend}
-                disabled={actionLoading}
-              >
-                <Pause className="mr-2 h-4 w-4" />
-                Suspend
-              </Button>
+              <Gated op="POST /api/v1/compute/vms/{id}/suspend">
+                <Button
+                  variant="outline"
+                  onClick={handleSuspend}
+                  disabled={actionLoading}
+                >
+                  <Pause className="mr-2 h-4 w-4" />
+                  Suspend
+                </Button>
+              </Gated>
               <Button
                 variant="outline"
                 onClick={handleReboot}
@@ -324,14 +336,16 @@ export default function VMDetailPage() {
             </>
           )}
           {vm.status === 'suspended' && (
-            <Button
-              variant="outline"
-              onClick={handleResume}
-              disabled={actionLoading}
-            >
-              <Play className="mr-2 h-4 w-4" />
-              Resume
-            </Button>
+            <Gated op="POST /api/v1/compute/vms/{id}/resume">
+              <Button
+                variant="outline"
+                onClick={handleResume}
+                disabled={actionLoading}
+              >
+                <Play className="mr-2 h-4 w-4" />
+                Resume
+              </Button>
+            </Gated>
           )}
           <Button variant="outline" onClick={handleClone} disabled={actionLoading}>
             <Copy className="mr-2 h-4 w-4" />

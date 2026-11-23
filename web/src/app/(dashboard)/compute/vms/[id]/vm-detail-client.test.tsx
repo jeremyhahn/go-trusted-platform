@@ -64,6 +64,10 @@ async function renderPage() {
 }
 
 async function click(name: string) {
+  // The gate holds the control disabled until the capabilities listing arrives.
+  await waitFor(() => {
+    expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(false);
+  });
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name }));
   });

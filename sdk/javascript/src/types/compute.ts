@@ -623,6 +623,16 @@ export interface DeleteSnapshotRequest {
 }
 
 /**
+ * Get snapshot request (GetSnapshotRequest).
+ */
+export interface GetSnapshotRequest {
+  /** VM ID */
+  vmId: string;
+  /** Snapshot ID */
+  snapshotId: string;
+}
+
+/**
  * List snapshots request
  */
 export interface ListSnapshotsRequest {
@@ -813,6 +823,22 @@ export interface RebootVMResponse {
 }
 
 /**
+ * Suspend VM response (SuspendVMResponse).
+ */
+export interface SuspendVMResponse {
+  /** Operation status */
+  status: ComputeStatus;
+}
+
+/**
+ * Resume VM response (ResumeVMResponse).
+ */
+export interface ResumeVMResponse {
+  /** Operation status */
+  status: ComputeStatus;
+}
+
+/**
  * Delete VM response
  */
 export interface DeleteVMResponse {
@@ -907,6 +933,14 @@ export interface DeleteSnapshotResponse {
 export interface ListSnapshotsResponse {
   /** Snapshots */
   snapshots: Snapshot[];
+}
+
+/**
+ * Get snapshot response (GetSnapshotResponse).
+ */
+export interface GetSnapshotResponse {
+  /** The snapshot */
+  snapshot?: Snapshot;
 }
 
 /**
