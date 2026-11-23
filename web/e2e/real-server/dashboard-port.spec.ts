@@ -3,7 +3,7 @@ import { test, expect } from './fixtures';
 /**
  * Dashboard cases from the mocked dashboard.spec.ts that the harness's
  * real-server dashboard.spec.ts (#2034) neither ports nor lists under
- * "Not ported" (#2035). The data is the server's; no page.route.
+ * "Not ported" (#2035). The data is the server's; no route is mocked.
  */
 
 test.describe('Dashboard, extra cases', () => {
