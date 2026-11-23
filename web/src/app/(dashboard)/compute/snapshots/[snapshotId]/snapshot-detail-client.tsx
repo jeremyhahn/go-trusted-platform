@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams, usePathname, useSearchParams } from 'next/navigation';
 import { RefreshCw } from 'lucide-react';
-import type { Snapshot } from 'trusted-platform-sdk';
+import { isServiceNotConfigured, type Snapshot } from 'trusted-platform-sdk';
+import { ServiceUnavailableState } from '@/components/features/platform';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Gated } from '@/components/features/capabilities/gated';
@@ -46,6 +47,8 @@ export default function SnapshotDetailClient() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [loading, setLoading] = useState(false);
+  // Set when the server answers that compute is not configured on this node.
+  const [unavailable, setUnavailable] = useState(false);
 
   const load = useCallback(async () => {
     if (!vmId || !snapshotId) return;
@@ -65,6 +68,13 @@ export default function SnapshotDetailClient() {
       setLoading(false);
     }
 
+    if (failure && isServiceNotConfigured(failure)) {
+      setSnapshot(null);
+      setNotFound(false);
+      setUnavailable(true);
+      return;
+    }
+    setUnavailable(false);
     if (failure) {
       toast({
         title: 'Error loading snapshot',
@@ -108,6 +118,13 @@ export default function SnapshotDetailClient() {
           </Button>
         </Gated>
       </div>
+
+      {unavailable && (
+        <ServiceUnavailableState
+          service="Compute"
+          description="The compute service is not configured on this node. In this topology, VMs and containers run on compute nodes; this node does not host workloads."
+        />
+      )}
 
       {notFound && <p>Snapshot not found</p>}
 
