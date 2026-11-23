@@ -158,9 +158,8 @@ test.describe('Compute pages', () => {
       }
       return;
     }
-    // vm-detail-client.tsx keeps its loading spinner when getVM is refused:
-    // no details are shown for an answer that is not ok.
-    await expect(adminPage.locator('.animate-spin').first()).toBeVisible();
+    // The SDK retries a 5xx refusal 1 s, 2 s, 4 s before the page shows its error state.
+    await expect(adminPage.getByTestId('vm-detail-error')).toBeVisible({ timeout: 20_000 });
     await expect(adminPage.getByText('Virtual Machine Details')).toHaveCount(0);
   });
 });
