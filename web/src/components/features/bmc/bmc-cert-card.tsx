@@ -23,6 +23,7 @@ import {
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
+import { Gated } from '@/components/features/capabilities/gated';
 import {
   failedCeremonySteps,
   replaceCertProblem,
@@ -39,6 +40,11 @@ import {
 export const BMC_ENROLL_OPTIONS: { key: 'dns_register'; label: string }[] = [
   { key: 'dns_register', label: 'Register DNS' },
 ];
+
+// The webservice's route ops each write control is gated on.
+const ENROLL_OP = 'POST /api/v1/bmc/{profileID:[0-9]+}/enroll';
+const RESTORE_OP = 'POST /api/v1/bmc/{profileID:[0-9]+}/cert/restore';
+const REPLACE_OP = 'PUT /api/v1/bmc/{profileID:[0-9]+}/cert';
 
 export interface BMCCertCardProps {
   profileID: string;
@@ -167,15 +173,19 @@ export function BMCCertCard({ profileID }: BMCCertCardProps) {
               </div>
             ))}
           </div>
-          <Button onClick={onEnroll} disabled={busy}>
-            Enroll
-          </Button>
+          <Gated op={ENROLL_OP}>
+            <Button onClick={onEnroll} disabled={busy}>
+              Enroll
+            </Button>
+          </Gated>
         </section>
 
         <section>
-          <Button variant="destructive" onClick={() => setConfirmOpen(true)} disabled={busy}>
-            Restore factory certificate
-          </Button>
+          <Gated op={RESTORE_OP}>
+            <Button variant="destructive" onClick={() => setConfirmOpen(true)} disabled={busy}>
+              Restore factory certificate
+            </Button>
+          </Gated>
         </section>
 
         {view && (
@@ -207,9 +217,11 @@ export function BMCCertCard({ profileID }: BMCCertCardProps) {
             onChange={(e) => setKeyPEM(e.target.value)}
             disabled={busy}
           />
-          <Button onClick={onReplace} disabled={busy}>
-            Replace web certificate
-          </Button>
+          <Gated op={REPLACE_OP}>
+            <Button onClick={onReplace} disabled={busy}>
+              Replace web certificate
+            </Button>
+          </Gated>
         </section>
       </CardContent>
 
@@ -225,9 +237,11 @@ export function BMCCertCard({ profileID }: BMCCertCardProps) {
             <Button variant="outline" onClick={() => setConfirmOpen(false)} disabled={busy}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={onRestore} disabled={busy}>
-              Confirm
-            </Button>
+            <Gated op={RESTORE_OP}>
+              <Button variant="destructive" onClick={onRestore} disabled={busy}>
+                Confirm
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
