@@ -114,6 +114,29 @@ describe('SnapshotDetailClient', () => {
     );
   });
 
+  it('shows the Compute unavailable state, not an error toast, when compute is not configured', async () => {
+    const notConfigured: Answer = {
+      status: 503,
+      body: {
+        code: 503,
+        success: false,
+        error: 'compute service not configured',
+        service: 'compute',
+        reason: 'SERVICE_NOT_CONFIGURED',
+      },
+    };
+    stubControlPlane({ 'GET /api/v1/capabilities': caps(), [`GET ${SNAPSHOT_PATH}`]: notConfigured });
+    render(withControlPlane(<SnapshotDetailClient />));
+
+    // The SDK retries a 503 three times with backoff (1 s, 2 s, 4 s) before
+    // it hands the refusal to the page.
+    await screen.findByText('Compute is not available on this node', {}, { timeout: 15000 });
+    expect(
+      screen.queryAllByTestId('toast').some((t) => t.getAttribute('data-variant') === 'destructive'),
+    ).toBe(false);
+    expect(screen.queryByText('Snapshot not found')).toBeNull();
+  }, 20000);
+
   it('asks for the VM when the vm query is missing', async () => {
     search = new URLSearchParams();
     const sent = stubControlPlane({ 'GET /api/v1/capabilities': caps(), [`GET ${SNAPSHOT_PATH}`]: storedSnapshot() });
