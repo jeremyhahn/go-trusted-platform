@@ -14,6 +14,29 @@ const NOT_OFFERED = 'not offered by this server';
 
 const PAGE = '/devices/profiles/find-config';
 const ASSIGN_OP = 'POST /api/v1/device/profiles/{id:[0-9]+}/assign';
+const UNASSIGN_OP = 'POST /api/v1/device/profiles/{id:[0-9]+}/unassign';
+const CREATE_TEMPLATE_OP = 'POST /api/v1/device/templates';
+const CREATE_PROFILE_OP = 'POST /api/v1/device/templates/{id:[0-9]+}/create-profile';
+
+/** The profile fields this spec reads from an SDK answer. */
+interface ProfileFields {
+  id: string;
+  name: string;
+  mac_address?: string;
+}
+
+/** A profile answer, bare or wrapped in { profile }. */
+function profileOf(data: unknown): ProfileFields | undefined {
+  const wrapped = (data as { profile?: ProfileFields } | undefined)?.profile;
+  return wrapped ?? (data as ProfileFields | undefined);
+}
+
+/** A locally administered MAC (02:00:00 prefix) unique to this run. */
+function uniqueMac(): string {
+  const n = Date.now();
+  const octet = (shift: number) => ((n >> shift) & 0xff).toString(16).padStart(2, '0');
+  return `02:00:00:${octet(16)}:${octet(8)}:${octet(0)}`;
+}
 
 /** Waits for the page's own request with this method on exactly this path. */
 function apiResponse(page: Page, method: string, path: string): Promise<Response> {
@@ -99,6 +122,86 @@ test.describe('Find config page', () => {
     const message = errorText(await answer.json().catch(() => undefined));
     if (message !== undefined) {
       await expect(alert).toContainText(message);
+    }
+  });
+
+  test('a profile is assigned, found and unassigned through the page', async ({ adminPage, sdk }) => {
+    const res = await sdk.capabilities.list();
+    expect(res.success, JSON.stringify(res.error)).toBeTruthy();
+    const caps = res.data?.capabilities ?? [];
+    const on = (op: string) => caps.find((c) => c.op === op)?.enabled === true;
+
+    if (![CREATE_TEMPLATE_OP, CREATE_PROFILE_OP, ASSIGN_OP, UNASSIGN_OP].every(on)) {
+      // Without every write the round trip needs, only the Assign gate is checked.
+      const cap = caps.find((c) => c.op === ASSIGN_OP);
+      const enabled = cap?.enabled === true;
+      await adminPage.goto(PAGE);
+      const button = adminPage.getByRole('button', { name: 'Assign profile', exact: true });
+      await expect(button).toHaveAttribute('data-capability-op', ASSIGN_OP);
+      await expect(button).toHaveAttribute('data-capability-enabled', enabled ? 'true' : 'false');
+      if (!enabled) {
+        await expect(button).toBeDisabled();
+        await expect(button).toHaveAttribute('title', cap ? (cap.reason ?? '') : NOT_OFFERED);
+      }
+      return;
+    }
+
+    const name = `e2e-assign-${Date.now()}`;
+    const template = await sdk.device.createTemplate({ name, role: 'worker' });
+    expect(template.success, JSON.stringify(template.error)).toBeTruthy();
+    const templateId = String((template.data as { id: string }).id);
+    const created = await sdk.device.createProfileFromTemplate({ templateId });
+    expect(created.success, JSON.stringify(created.error)).toBeTruthy();
+    const profile = profileOf(created.data);
+    expect(profile?.id, 'the created profile carries an id').toBeTruthy();
+    const profileId = String(profile?.id);
+    const mac = uniqueMac();
+
+    try {
+      await adminPage.goto(PAGE);
+
+      // Assign through the card.
+      await adminPage.getByLabel('Profile ID', { exact: true }).fill(profileId);
+      await adminPage.getByLabel('MAC address', { exact: true }).last().fill(mac);
+      const assigned = apiResponse(adminPage, 'POST', `/api/v1/device/profiles/${profileId}/assign`);
+      await adminPage.getByRole('button', { name: 'Assign profile', exact: true }).click();
+      const assignAnswer = await assigned;
+      expect(assignAnswer.ok(), `assign answered ${assignAnswer.status()}`).toBeTruthy();
+      const assignedName = profile?.name ?? '';
+      // The toast repeats the line; the card's own line is the paragraph.
+      await expect(
+        adminPage.locator('p').filter({ hasText: `Profile ${assignedName} assigned` }),
+      ).toBeVisible();
+
+      // Find it through the lookup form.
+      await adminPage.getByLabel('MAC address', { exact: true }).first().fill(mac);
+      const found = apiResponse(adminPage, 'GET', '/api/v1/device/profiles/find-config');
+      await adminPage.getByRole('button', { name: 'Find config', exact: true }).click();
+      const findAnswer = await found;
+      expect(findAnswer.ok(), `find-config answered ${findAnswer.status()}`).toBeTruthy();
+      await expect(adminPage.getByText(`Profile ID ${profileId}`, { exact: true })).toBeVisible();
+      await expect(adminPage.getByText('Assigned', { exact: true })).toBeVisible();
+
+      // Unassign is gated, and unassigns after the confirm.
+      const unassign = adminPage.getByRole('button', { name: 'Unassign', exact: true }).first();
+      await expect(unassign).toHaveAttribute('data-capability-op', UNASSIGN_OP);
+      await expect(unassign).toHaveAttribute('data-capability-enabled', 'true');
+      await unassign.click();
+      const dialog = adminPage.getByRole('dialog', { name: 'Unassign profile?' });
+      await expect(dialog).toBeVisible();
+      const unassigned = apiResponse(adminPage, 'POST', `/api/v1/device/profiles/${profileId}/unassign`);
+      await dialog.getByRole('button', { name: 'Unassign', exact: true }).click();
+      const unassignAnswer = await unassigned;
+      expect(unassignAnswer.ok(), `unassign answered ${unassignAnswer.status()}`).toBeTruthy();
+      await expect(dialog).toBeHidden();
+      await expect(adminPage.getByText('Not assigned', { exact: true })).toBeVisible();
+
+      const after = await sdk.device.getProfile(profileId);
+      expect(after.success, JSON.stringify(after.error)).toBeTruthy();
+      expect(profileOf(after.data)?.mac_address ?? '').toBe('');
+    } finally {
+      await sdk.device.deleteProfile(profileId);
+      await sdk.device.deleteTemplate(templateId);
     }
   });
 });
