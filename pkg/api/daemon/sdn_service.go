@@ -41,6 +41,11 @@ type SDNService struct {
 	netlinkManager *netlink.Manager
 	zoneSvc        gateway.ZoneService
 	mu             sync.RWMutex
+	// policyMu is held for the whole of ApplyPolicy and DeletePolicy, from
+	// the snapshot of the prior record to the record write, so a policy's
+	// flows and its record change together. It is taken before mu, never
+	// while holding it.
+	policyMu sync.Mutex
 
 	// Track created resources for cleanup
 	bridges  map[string]*bridgeResource
@@ -90,6 +95,10 @@ type policyResource struct {
 	status      string
 	rules       []*platformv1.PolicyRule
 	targets     []*platformv1.PolicyTarget
+	// bridgeNames are the bridges the targets resolved to when the policy
+	// was applied: its flows were installed there, so withdrawal and
+	// rollback use them rather than resolving the targets again.
+	bridgeNames []string
 	schedule    *platformv1.PolicySchedule
 	hitCount    uint64
 	byteCount   uint64
@@ -1132,7 +1141,13 @@ func (s *SDNService) SetPortState(ctx context.Context, req *platformv1.SetPortSt
 // prior record stays in place, marked "error" only if that rollback failed.
 // Reapplying with enabled=false removes the prior enabled record's flows and
 // stores the policy "inactive"; if the removal fails the call returns
-// Internal and the prior record stays, marked "error".
+// Internal and the prior record stays, marked "error". Withdrawal and
+// rollback use the bridges the prior record's flows were installed on.
+// A target bridge that does not exist is NotFound; a bridge lookup that
+// fails is Unavailable. An enabled policy whose flow (bridge, table,
+// priority, match) another enabled policy already installs is refused
+// FailedPrecondition, so withdrawing one never deletes the other's flow.
+// The whole call runs under policyMu.
 func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolicyRequest) (*platformv1.ApplyPolicyResponse, error) {
 	if req.GetConfig() == nil {
 		return nil, status.Error(codes.InvalidArgument, "config is required")
@@ -1151,18 +1166,28 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		policyID = "policy-" + uuid.NewString()
 	}
 
-	// Check for duplicate policy name and snapshot the prior record under
-	// read lock: a reapply that fails must restore what it replaced.
+	// Serialize the whole transaction: snapshot, OVS changes and record
+	// write, so a concurrent disable and reapply cannot interleave (#2234).
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
+
+	// Check for duplicate policy name and snapshot the prior record and the
+	// other enabled policies under read lock: a reapply that fails must
+	// restore what it replaced, and no flow may replace another policy's.
 	s.mu.RLock()
 	var prior *policyResource
 	if p, ok := s.policies[policyID]; ok {
 		snapshot := *p
 		prior = &snapshot
 	}
+	var others []policyResource
 	for id, p := range s.policies {
 		if p.name == config.GetName() && id != policyID {
 			s.mu.RUnlock()
 			return nil, status.Error(codes.AlreadyExists, "policy with this name already exists")
+		}
+		if id != policyID && p.enabled {
+			others = append(others, *p)
 		}
 	}
 	s.mu.RUnlock()
@@ -1179,7 +1204,10 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
 			return nil, status.Errorf(codes.InvalidArgument, "policy target %q is not a bridge", target.GetId())
 		}
-		bridgeName, found := s.findBridgeName(target.GetId())
+		bridgeName, found, err := s.lookupBridgeName(ctx, target.GetId())
+		if err != nil {
+			return nil, status.Errorf(codes.Unavailable, "look up bridge %q: %v", target.GetId(), err)
+		}
 		if !found {
 			return nil, status.Errorf(codes.NotFound, "bridge %q not found", target.GetId())
 		}
@@ -1192,6 +1220,11 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 	if config.GetEnabled() {
 		policyStatus = "active"
 		flows := s.policyFlows(bridgeNames, config.GetRules(), config.GetPriority())
+		if owner, flow, ok := s.conflictingPolicyFlow(flows, others); ok {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"policy %q already installs a flow on bridge %s with priority %d and match %q",
+				owner, flow.bridge, flow.mod.Priority, flow.mod.Match)
+		}
 		installed, err := s.installPolicyFlows(ctx, client, flows)
 		if err != nil {
 			// OFPFC_ADD replaced any prior flow with the same table, priority
@@ -1199,7 +1232,7 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 			// rule too: remove them, then re-add the prior enabled rules.
 			rollbackErr := s.removePolicyFlows(ctx, client, flows[:installed])
 			if prior != nil && prior.enabled {
-				priorFlows := s.policyFlows(s.policyBridgeNames(prior.targets), prior.rules, prior.priority)
+				priorFlows := s.policyFlows(prior.bridgeNames, prior.rules, prior.priority)
 				if _, reErr := s.installPolicyFlows(ctx, client, priorFlows); reErr != nil {
 					rollbackErr = errors.Join(rollbackErr, reErr)
 				}
@@ -1216,7 +1249,7 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 	} else if prior != nil && prior.enabled {
 		// Withdraw the flows the prior enabled apply installed; if that
 		// fails they stay enforced, so the record must not say inactive.
-		priorFlows := s.policyFlows(s.policyBridgeNames(prior.targets), prior.rules, prior.priority)
+		priorFlows := s.policyFlows(prior.bridgeNames, prior.rules, prior.priority)
 		if err := s.removePolicyFlows(ctx, client, priorFlows); err != nil {
 			s.markPolicyError(policyID)
 			return nil, status.Errorf(codes.Internal, "remove policy flows: %v", err)
@@ -1237,6 +1270,7 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		status:      policyStatus,
 		rules:       config.GetRules(),
 		targets:     config.GetTargets(),
+		bridgeNames: bridgeNames,
 		schedule:    config.GetSchedule(),
 		createdAt:   now,
 		updatedAt:   now,
@@ -1323,6 +1357,10 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 	if req.GetPolicyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "policy_id is required")
 	}
+
+	// Serialize with ApplyPolicy from snapshot to record removal.
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
 
 	// Find policy by ID or name and snapshot its data under read lock
 	s.mu.RLock()
@@ -1478,19 +1516,38 @@ func (s *SDNService) policyFlows(bridgeNames []string, rules []*platformv1.Polic
 	return flows
 }
 
-// policyBridgeNames resolves a policy's bridge targets, skipping non-bridge
-// targets and bridges that no longer resolve.
-func (s *SDNService) policyBridgeNames(targets []*platformv1.PolicyTarget) []string {
-	var names []string
-	for _, target := range targets {
-		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
-			continue
-		}
-		if name, found := s.findBridgeName(target.GetId()); found {
-			names = append(names, name)
+// policyFlowKey identifies the OpenFlow entry a flow occupies: OFPFC_ADD
+// replaces, and DeleteFlowStrict removes, whatever shares it.
+type policyFlowKey struct {
+	bridge   string
+	table    int
+	priority int
+	match    string
+}
+
+func flowKey(flow policyFlow) policyFlowKey {
+	return policyFlowKey{bridge: flow.bridge, table: int(flow.mod.Table), priority: int(flow.mod.Priority), match: flow.mod.Match}
+}
+
+// conflictingPolicyFlow returns the ID of the first of others (enabled
+// policies other than the one being applied) whose installed flows share a
+// key with flows, and the flow that collides.
+func (s *SDNService) conflictingPolicyFlow(flows []policyFlow, others []policyResource) (string, policyFlow, bool) {
+	if len(flows) == 0 {
+		return "", policyFlow{}, false
+	}
+	wanted := make(map[policyFlowKey]policyFlow, len(flows))
+	for _, flow := range flows {
+		wanted[flowKey(flow)] = flow
+	}
+	for _, other := range others {
+		for _, theirs := range s.policyFlows(other.bridgeNames, other.rules, other.priority) {
+			if flow, ok := wanted[flowKey(theirs)]; ok {
+				return other.id, flow, true
+			}
 		}
 	}
-	return names
+	return "", policyFlow{}, false
 }
 
 // installPolicyFlows adds the flows in order and stops at the first failure,
@@ -1578,13 +1635,21 @@ func (s *SDNService) policyResourceToPb(id string, p *policyResource) *platformv
 }
 
 // findBridgeName looks up a bridge name from a bridge ID or name under a read lock.
-// Returns the bridge name and true if found, or empty string and false if not found.
+// Returns the bridge name and true if found, or empty string and false if not
+// found or if the OVS lookup failed.
 func (s *SDNService) findBridgeName(id string) (string, bool) {
+	name, found, _ := s.lookupBridgeName(context.Background(), id)
+	return name, found
+}
+
+// lookupBridgeName is findBridgeName that tells a failed OVS lookup (an
+// error) apart from a confirmed absence (false, nil).
+func (s *SDNService) lookupBridgeName(ctx context.Context, id string) (string, bool, error) {
 	s.mu.RLock()
 	for name, res := range s.bridges {
 		if res.id == id || name == id {
 			s.mu.RUnlock()
-			return name, true
+			return name, true, nil
 		}
 	}
 	s.mu.RUnlock()
@@ -1594,18 +1659,18 @@ func (s *SDNService) findBridgeName(id string) (string, bool) {
 	// addressable for VLAN/Port operations.
 	client := s.getOVSClient()
 	if client == nil {
-		return "", false
+		return "", false, nil
 	}
-	ovsBridges, err := client.ListBridges(context.Background())
+	ovsBridges, err := client.ListBridges(ctx)
 	if err != nil {
-		return "", false
+		return "", false, err
 	}
 	for _, b := range ovsBridges {
 		if b.UUID == id || b.Name == id {
-			return b.Name, true
+			return b.Name, true, nil
 		}
 	}
-	return "", false
+	return "", false, nil
 }
 
 // findPortName looks up a port name from a port ID or name under a read lock.
