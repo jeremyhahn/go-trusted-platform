@@ -525,6 +525,25 @@ proxy:
         mode: public
 
 # =============================================================================
+# SWITCH, the in-memory vendor (no hardware; #2066)
+# =============================================================================
+# The Playwright switch specs drive these ports: they list Eth1/1-5, disable
+# a port and move an access port to another VLAN. The memory vendor seeds
+# every port enabled and link-up and keeps the state in memory only.
+
+switches:
+  - name: harness-1
+    vendor: memory
+    ports:
+      - port: Eth1/1-4
+        mode: access
+        access_vlan: 10
+      - port: Eth1/5
+        mode: trunk
+        vlans: [10, 20]
+        native_vlan: 1
+
+# =============================================================================
 # Default-config sections NOT enabled here (no simulator path)
 # =============================================================================
 # - acme.client: the default daemon enrols its own account against the
