@@ -104,3 +104,69 @@ func TestBuildISOBuildConfig_PlatformConfigDirWithoutTemplateFails(t *testing.T)
 	var missing *cli.ErrPlatformTemplateMissing
 	require.ErrorAs(t, err, &missing)
 }
+
+// A build file that sets only config-server-url is a dynamic-only build
+// (docs/installer/iso-building.md, Config Delivery Modes, mode 3): the
+// PLATFORM_CONFIG_DIR default must not turn it into a hybrid build.
+func TestBuildISOBuildConfig_ConfigFileDynamicOnlyKeepsEmptyTemplate(t *testing.T) {
+	placeSiblingPlatformd(t)
+	dir := t.TempDir()
+	tmpl := filepath.Join(dir, "templates", "single-node", "default.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(tmpl), 0o750))
+	require.NoError(t, os.WriteFile(tmpl, []byte("{}\n"), 0o600))
+	t.Setenv("PLATFORM_CONFIG_DIR", dir)
+	flags := &createFlags{
+		configFile:   writeConfigFile(t, "config-server-url: https://config.example\n"),
+		platformType: "server",
+	}
+
+	config, err := buildISOBuildConfig(flags)
+	require.NoError(t, err)
+	assert.Equal(t, "", config.PlatformConfigFile, "a dynamic-only build file keeps an empty template")
+	assert.True(t, config.IsDynamicConfigMode())
+}
+
+// A dynamic-only build bakes no template, so a PLATFORM_CONFIG_DIR without
+// the default template is no reason to refuse it.
+func TestBuildISOBuildConfig_ConfigFileDynamicOnlyNeedsNoDefault(t *testing.T) {
+	placeSiblingPlatformd(t)
+	t.Setenv("PLATFORM_CONFIG_DIR", t.TempDir())
+	flags := &createFlags{
+		configFile:   writeConfigFile(t, "config-server-url: https://config.example\n"),
+		platformType: "server",
+	}
+
+	config, err := buildISOBuildConfig(flags)
+	require.NoError(t, err)
+	assert.Equal(t, "", config.PlatformConfigFile)
+}
+
+// A build file that names its own template needs no default template.
+func TestBuildISOBuildConfig_ConfigFileTemplateNeedsNoDefault(t *testing.T) {
+	placeSiblingPlatformd(t)
+	t.Setenv("PLATFORM_CONFIG_DIR", t.TempDir())
+	flags := &createFlags{
+		configFile:   writeConfigFile(t, "platform-config-file: /cfg/own.yaml\n"),
+		platformType: "server",
+	}
+
+	config, err := buildISOBuildConfig(flags)
+	require.NoError(t, err)
+	assert.Equal(t, "/cfg/own.yaml", config.PlatformConfigFile)
+}
+
+// An explicit --platform-config fills a build file that names no template,
+// and needs no default template.
+func TestBuildISOBuildConfig_ExplicitTemplateFillsConfigFileGap(t *testing.T) {
+	placeSiblingPlatformd(t)
+	t.Setenv("PLATFORM_CONFIG_DIR", t.TempDir())
+	flags := &createFlags{
+		configFile:     writeConfigFile(t, "{}\n"),
+		platformConfig: "/cfg/flag.yaml",
+		platformType:   "server",
+	}
+
+	config, err := buildISOBuildConfig(flags)
+	require.NoError(t, err)
+	assert.Equal(t, "/cfg/flag.yaml", config.PlatformConfigFile)
+}
