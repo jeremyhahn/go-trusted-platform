@@ -97,6 +97,9 @@ func peerOf(kind DataPlaneKind, lease *Lease) *ipcv1.VPNPeer {
 	if lease.Address.IsValid() {
 		peer.Address = lease.Address.String()
 	}
+	if len(lease.Zones) > 0 {
+		peer.Zones = append([]string(nil), lease.Zones...)
+	}
 	return peer
 }
 

@@ -190,6 +190,9 @@ func leaseFromPeer(peer *ipcv1.VPNPeer) (*Lease, error) {
 		}
 		lease.Address = address
 	}
+	if zones := peer.GetZones(); len(zones) > 0 {
+		lease.Zones = append([]string(nil), zones...)
+	}
 	return lease, nil
 }
 

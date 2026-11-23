@@ -156,6 +156,8 @@ message VPNPeer {
   // expires_at_unix_nano is the lease's deadline (Unix nanoseconds): the
   // plane removes the peer once it passes. 0 means no deadline was sent.
   int64 expires_at_unix_nano = 6;
+  // zones are the lease's destination zones (vpn.Lease.Zones): the hub's forward filter opens only these.
+  repeated string zones = 7;
 }
 
 message InstallVPNPeerRequest {

@@ -659,8 +659,10 @@ type VPNPeer struct {
 	// expires_at_unix_nano is the lease's deadline (Unix nanoseconds): the
 	// plane removes the peer once it passes. 0 means no deadline was sent.
 	ExpiresAtUnixNano int64 `protobuf:"varint,6,opt,name=expires_at_unix_nano,json=expiresAtUnixNano,proto3" json:"expires_at_unix_nano,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// zones are the lease's destination zones (vpn.Lease.Zones): the hub's forward filter opens only these.
+	Zones         []string `protobuf:"bytes,7,rep,name=zones,proto3" json:"zones,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *VPNPeer) Reset() {
@@ -733,6 +735,13 @@ func (x *VPNPeer) GetExpiresAtUnixNano() int64 {
 		return x.ExpiresAtUnixNano
 	}
 	return 0
+}
+
+func (x *VPNPeer) GetZones() []string {
+	if x != nil {
+		return x.Zones
+	}
+	return nil
 }
 
 type InstallVPNPeerRequest struct {
@@ -2318,7 +2327,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"state_json\x18\x01 \x01(\fR\tstateJson\x12\x1f\n" +
 	"\vapply_error\x18\x02 \x01(\tR\n" +
-	"applyError\"\xfc\x01\n" +
+	"applyError\"\x92\x02\n" +
 	"\aVPNPeer\x12\x19\n" +
 	"\blease_id\x18\x01 \x01(\tR\aleaseId\x12\x1d\n" +
 	"\n" +
@@ -2326,7 +2335,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\aaddress\x18\x03 \x01(\tR\aaddress\x120\n" +
 	"\x14wireguard_public_key\x18\x04 \x01(\fR\x12wireguardPublicKey\x12:\n" +
 	"\x19client_certificate_sha256\x18\x05 \x01(\fR\x17clientCertificateSha256\x12/\n" +
-	"\x14expires_at_unix_nano\x18\x06 \x01(\x03R\x11expiresAtUnixNano\"E\n" +
+	"\x14expires_at_unix_nano\x18\x06 \x01(\x03R\x11expiresAtUnixNano\x12\x14\n" +
+	"\x05zones\x18\a \x03(\tR\x05zones\"E\n" +
 	"\x15InstallVPNPeerRequest\x12,\n" +
 	"\x04peer\x18\x01 \x01(\v2\x18.gatewayd.ipc.v1.VPNPeerR\x04peer\"S\n" +
 	"\x16InstallVPNPeerResponse\x129\n" +
