@@ -1234,12 +1234,15 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		bridgeNames = append(bridgeNames, bridgeName)
 	}
 
-	// A replacement must keep every entry the old policy installed: an
-	// entry it drops would stay on the switch with no owner, since the
-	// apply only installs the new flows. Refuse before any switch write.
+	// A replacement may drop entries the previous version installed: the
+	// apply only installs the new flows, so once the new version is
+	// recorded the dropped entries are deleted (see the tail below).
+	// Resolve them here, before any switch write; findBridgeName takes
+	// s.mu itself, so this runs without it held.
 	s.mu.RLock()
 	previous := s.policies[policyID]
 	s.mu.RUnlock()
+	var dropped []attemptedFlow
 	if previous != nil {
 		newKeys := make(map[flowEntryKey]bool, len(bridgeNames)*len(flowMods))
 		for _, bridgeName := range bridgeNames {
@@ -1247,9 +1250,26 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 				newKeys[newFlowEntryKey(bridgeName, flowMod)] = true
 			}
 		}
-		for key := range s.policyEntryKeys(previous) {
-			if !newKeys[key] {
-				return nil, status.Errorf(codes.FailedPrecondition, "policy %q: the replacement would leave the flow %s installed on %s; delete the policy and apply the new one", policyID, key.match, key.bridge)
+		seen := make(map[flowEntryKey]bool)
+		for _, target := range previous.targets {
+			if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
+				continue
+			}
+			bridgeName, found := s.findBridgeName(target.GetId())
+			if !found {
+				continue
+			}
+			for _, rule := range previous.rules {
+				flowMod, err := s.policyRuleToFlowMod(rule, previous.priority)
+				if err != nil {
+					continue
+				}
+				key := newFlowEntryKey(bridgeName, flowMod)
+				if newKeys[key] || seen[key] {
+					continue
+				}
+				seen[key] = true
+				dropped = append(dropped, attemptedFlow{bridge: bridgeName, flow: flowMod})
 			}
 		}
 	}
@@ -1326,6 +1346,35 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		key := newFlowEntryKey(f.bridge, f.flow)
 		delete(s.strandedFlows, key)
 		delete(s.unrestoredFlows, key)
+	}
+
+	// The entries the previous version installed and this one dropped come
+	// off the switch now that the new version is recorded, unless another
+	// policy owns the same entry. A failed delete does not fail the apply:
+	// the entry is kept in strandedFlows and the next apply removes it. A
+	// policy entry a dropped flow had replaced is put back.
+	if len(dropped) > 0 {
+		owned := s.policyOwnedFlowKeys()
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), policyRollbackTimeout)
+		removed := make(map[flowEntryKey]bool, len(dropped))
+		for _, f := range dropped {
+			key := newFlowEntryKey(f.bridge, f.flow)
+			if owned[key] {
+				continue
+			}
+			if err := client.DeleteFlowStrict(cctx, f.bridge, f.flow); err != nil {
+				if s.strandedFlows == nil {
+					s.strandedFlows = make(map[flowEntryKey]attemptedFlow)
+				}
+				s.strandedFlows[key] = f
+				continue
+			}
+			removed[key] = true
+		}
+		if len(removed) > 0 {
+			_, _ = s.restoreOverwrittenFlows(cctx, client, policyID, removed)
+		}
+		cancel()
 	}
 
 	return &platformv1.ApplyPolicyResponse{
