@@ -138,7 +138,7 @@ export default function TemplateDetailClient() {
     );
   }
 
-  if (isLoading) {
+  if (capsLoading || isLoading) {
     return (
       <div className="flex items-center justify-center py-24">
         <div className="text-center">
