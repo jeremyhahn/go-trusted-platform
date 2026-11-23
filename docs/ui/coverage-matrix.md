@@ -118,11 +118,11 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `ClusterService.Bootstrap` | - | - | - | - | missing |
-| `ClusterService.Join` | - | - | - | - | missing |
-| `ClusterService.Leave` | - | - | - | - | missing |
-| `ClusterService.GetStatus` | - | - | - | - | missing |
-| `ClusterService.ListNodes` | - | - | - | - | missing |
+| `ClusterService.Bootstrap` | `POST /cluster/bootstrap` | `(dashboard)/platform/cluster/page.tsx` | - | `real-server/cluster.spec.ts` | covered |
+| `ClusterService.Join` | `POST /cluster/join` | `(dashboard)/platform/cluster/page.tsx` | - | `real-server/cluster.spec.ts` | covered |
+| `ClusterService.Leave` | `POST /cluster/leave` | `(dashboard)/platform/cluster/page.tsx` | - | `real-server/cluster.spec.ts` | covered |
+| `ClusterService.GetStatus` | `GET /cluster/status` | `(dashboard)/platform/cluster/page.tsx` | - | `real-server/cluster.spec.ts` | covered |
+| `ClusterService.ListNodes` | `GET /cluster/nodes` | `(dashboard)/platform/cluster/page.tsx` | - | `real-server/cluster.spec.ts` | covered |
 
 ## ComputeService (`compute.proto`)
 
