@@ -1574,19 +1574,19 @@ platformd --mode=raft --p2p \
 platformd --mode=node --p2p \
   --node-id=node-1 \
   --raft-peers=node-1:7001,node-2:7001,node-3:7001 \
-  --p2p-bootstrap=/ip4/10.0.0.50/tcp/9999/p2p/QmBootstrap
+  --p2p-bootstrap=/ip4/192.0.2.50/tcp/9999/p2p/QmBootstrap
 
 # Node 2
 platformd --mode=node --p2p \
   --node-id=node-2 \
   --raft-peers=node-1:7001,node-2:7001,node-3:7001 \
-  --p2p-bootstrap=/ip4/10.0.0.50/tcp/9999/p2p/QmBootstrap
+  --p2p-bootstrap=/ip4/192.0.2.50/tcp/9999/p2p/QmBootstrap
 
 # Node 3
 platformd --mode=node --p2p \
   --node-id=node-3 \
   --raft-peers=node-1:7001,node-2:7001,node-3:7001 \
-  --p2p-bootstrap=/ip4/10.0.0.50/tcp/9999/p2p/QmBootstrap
+  --p2p-bootstrap=/ip4/192.0.2.50/tcp/9999/p2p/QmBootstrap
 ```
 
 **First enrollment (new TPM without EK certificate):**

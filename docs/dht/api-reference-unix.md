@@ -490,7 +490,7 @@ Search for services matching criteria.
         "service_id": "svc-abc123",
         "name": "postgresql-primary",
         "type": "database",
-        "endpoint": "/ip4/10.0.1.50/tcp/5432",
+        "endpoint": "/ip4/192.0.2.50/tcp/5432",
         "tags": ["postgresql", "primary"],
         "health": "healthy",
         "metadata": {"version": "15.2"}
@@ -535,7 +535,7 @@ Get detailed service information.
     "name": "postgresql-primary",
     "type": "database",
     "endpoints": [
-      "/ip4/10.0.1.50/tcp/5432",
+      "/ip4/192.0.2.50/tcp/5432",
       "/ip6/::1/tcp/5432"
     ],
     "tags": ["postgresql", "primary"],

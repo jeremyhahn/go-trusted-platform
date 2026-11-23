@@ -139,7 +139,7 @@ therefore answers and fails as gRPC does: the gRPC status passes through, so
 
 - **Arguments.** The arguments are the request message in its JSON form.
   `dns_record_create` takes `zone_name` and a `record` such as
-  `{"type": "RECORD_TYPE_A", "a": {"name": "www", "value": "10.0.0.1", "ttl": 300}}`.
+  `{"type": "RECORD_TYPE_A", "a": {"name": "www", "value": "192.0.2.1", "ttl": 300}}`.
   An argument the request does not have is `InvalidArgument`.
 - **`dns_record_get` has no RPC**, because `DNSService` declares no `GetRecord`.
   It lists the zone's records of `type` and returns the one named `name`, as

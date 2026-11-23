@@ -24,20 +24,24 @@ var privateRanges = []netip.Prefix{
 // documentation ranges (RFC 5737 or 198.18/15), never from RFC 1918 (#2350
 // row 2). Docs quote public addresses and OIDs, so this guard flags only the
 // private blocks; the strict addressPlanFiles guard covers the IPAM docs.
+//
+// Left off, because they state a value the Go code ships as its default:
+//   - docs/architecture/reference-network.md, docs/architecture/deployment-reference.md
+//     and docs/bootstrap/user.md derive the reference plan from
+//     netplan.DefaultBase (pkg/sdn/netplan/number.go), an IPv4 /8 that no
+//     documentation range can hold;
+//   - docs/dns/configuration.md quotes the default forwarders of
+//     pkg/dns/config.go.
 var docsAddressFiles = []string{
-	"docs/architecture/deployment-reference.md",
-	"docs/architecture/reference-network.md",
 	"docs/bootstrap/cli.md",
 	"docs/bootstrap/dane-bootstrap-flow.mmd",
 	"docs/bootstrap/engineering.md",
-	"docs/bootstrap/user.md",
 	"docs/device-templates.md",
 	"docs/device/api-reference-rest.md",
 	"docs/dht/02-network-architecture.md",
 	"docs/dht/18-platformd-p2p.md",
 	"docs/dht/api-reference-unix.md",
 	"docs/dns/api.md",
-	"docs/dns/configuration.md",
 	"docs/factory-image/user.md",
 	"docs/gateway/api.md",
 	"docs/gateway/cli.md",
