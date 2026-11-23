@@ -22,9 +22,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { useOptionalAuth, useOverlayVteps, useToast } from '@/hooks';
+import { useOverlayVteps, useToast } from '@/hooks';
 import type { TunnelInfo, VTEPInfo } from 'trusted-platform-sdk';
-import { Gated } from '@/components/features/capabilities/gated';
 
 interface PendingAction {
   title: string;
@@ -39,13 +38,11 @@ function errorText(err: unknown): string {
 }
 
 /**
- * Overlay status, VTEPs, VNIs, tunnels and remote MACs (#1722, #2059).
+ * Overlay VTEPs, VNIs, tunnels and remote MACs (#1722).
  */
 export default function OverlayVtepsPage() {
   const { toast } = useToast();
   const {
-    status,
-    statusError,
     vteps,
     vnis,
     tunnels,
@@ -61,9 +58,6 @@ export default function OverlayVtepsPage() {
     deleteVNI,
     forgetMAC,
   } = useOverlayVteps();
-  // Every overlay route is mounted behind the admin role on the server.
-  const auth = useOptionalAuth();
-  const isAdmin = auth?.user?.roles.includes('admin') ?? false;
 
   const [vtepDetail, setVtepDetail] = useState<VTEPInfo | null>(null);
   const [tunnelStats, setTunnelStats] = useState<TunnelInfo | null>(null);
@@ -109,7 +103,6 @@ export default function OverlayVtepsPage() {
   };
 
   const askForgetMac = () => {
-    if (!isAdmin) return;
     const raw = macVni.trim();
     const vni = Number(raw);
     if (!macAddress || raw === '' || !Number.isInteger(vni) || vni < 1 || vni > 16777215) {
@@ -130,7 +123,7 @@ export default function OverlayVtepsPage() {
   };
 
   const confirmPending = async () => {
-    if (!pending || !isAdmin) return;
+    if (!pending) return;
     setSubmitting(true);
     try {
       await pending.run();
@@ -163,45 +156,7 @@ export default function OverlayVtepsPage() {
         </Button>
       </div>
 
-      {!isAdmin && (
-        <p data-testid="overlay-admin-note" className="text-sm text-muted-foreground">
-          Requires the admin role: deleting a VNI or forgetting a MAC changes the overlay for every tenant on it.
-        </p>
-      )}
-
-      <section className="space-y-2" data-testid="overlay-status">
-        <h2 className="text-xl font-semibold">Status</h2>
-        {statusError ? (
-          <p className="text-destructive" data-testid="overlay-status-error">
-            {statusError.message || 'Failed to load overlay status'}
-          </p>
-        ) : status ? (
-          <dl className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
-            <dt className="text-muted-foreground">Node</dt>
-            <dd>{status.nodeId || '-'}</dd>
-            <dt className="text-muted-foreground">VTEP IP</dt>
-            <dd className="font-mono">{status.vtepIp || '-'}</dd>
-            <dt className="text-muted-foreground">Health</dt>
-            <dd>
-              <Badge variant="outline">{status.healthy ? 'healthy' : 'unhealthy'}</Badge>
-            </dd>
-            <dt className="text-muted-foreground">VTEP count</dt>
-            <dd>{status.vtepCount ?? 0}</dd>
-            <dt className="text-muted-foreground">VNI count</dt>
-            <dd>{status.vniCount ?? 0}</dd>
-            <dt className="text-muted-foreground">Tunnel count</dt>
-            <dd>{status.tunnelCount ?? 0}</dd>
-            <dt className="text-muted-foreground">Remote MAC count</dt>
-            <dd>{status.remoteMacCount ?? 0}</dd>
-            <dt className="text-muted-foreground">VXLAN port</dt>
-            <dd>{status.vxlanPort ?? '-'}</dd>
-            <dt className="text-muted-foreground">Underlay MTU</dt>
-            <dd>{status.underlayMtu ?? '-'}</dd>
-          </dl>
-        ) : null}
-      </section>
-
-      <section className="space-y-2" data-testid="overlay-vteps">
+      <section className="space-y-2">
         <h2 className="text-xl font-semibold">VTEPs</h2>
         <div className="rounded-md border border-border">
           <Table data-testid="vteps-table">
@@ -248,10 +203,10 @@ export default function OverlayVtepsPage() {
         </div>
       </section>
 
-      <section className="space-y-2" data-testid="overlay-vnis">
+      <section className="space-y-2">
         <h2 className="text-xl font-semibold">VNIs</h2>
         <div className="rounded-md border border-border">
-          <Table data-testid="vnis-table">
+          <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>VNI</TableHead>
@@ -276,25 +231,22 @@ export default function OverlayVtepsPage() {
                     <TableCell>{v.config.name || '-'}</TableCell>
                     <TableCell>{v.macCount}</TableCell>
                     <TableCell className="text-right">
-                      <Gated op="DELETE /api/v1/overlay/vnis/{vni:[0-9]+}">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          aria-label={`Delete VNI ${v.config.vni}`}
-                          disabled={!isAdmin}
-                          onClick={() =>
-                            setPending({
-                              title: 'Delete VNI',
-                              description: `Delete VNI ${v.config.vni}? Its tunnels and MAC entries go with it.`,
-                              confirmLabel: 'Delete',
-                              run: () => deleteVNI(v.config.vni),
-                              success: 'VNI deleted',
-                            })
-                          }
-                        >
-                          Delete
-                        </Button>
-                      </Gated>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label={`Delete VNI ${v.config.vni}`}
+                        onClick={() =>
+                          setPending({
+                            title: 'Delete VNI',
+                            description: `Delete VNI ${v.config.vni}? Its tunnels and MAC entries go with it.`,
+                            confirmLabel: 'Delete',
+                            run: () => deleteVNI(v.config.vni),
+                            success: 'VNI deleted',
+                          })
+                        }
+                      >
+                        Delete
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))
@@ -304,10 +256,10 @@ export default function OverlayVtepsPage() {
         </div>
       </section>
 
-      <section className="space-y-2" data-testid="overlay-tunnels">
+      <section className="space-y-2">
         <h2 className="text-xl font-semibold">Tunnels</h2>
         <div className="rounded-md border border-border">
-          <Table data-testid="tunnels-table">
+          <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Local VTEP</TableHead>
@@ -353,10 +305,10 @@ export default function OverlayVtepsPage() {
         </div>
       </section>
 
-      <section className="space-y-2" data-testid="overlay-macs">
+      <section className="space-y-2">
         <h2 className="text-xl font-semibold">Remote MACs</h2>
         <div className="rounded-md border border-border">
-          <Table data-testid="macs-table">
+          <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>MAC</TableHead>
@@ -383,25 +335,22 @@ export default function OverlayVtepsPage() {
                     <TableCell>{m.remoteVtep}</TableCell>
                     <TableCell>{m.learnedAt}</TableCell>
                     <TableCell className="text-right">
-                      <Gated op="DELETE /api/v1/overlay/macs">
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          aria-label={`Forget ${m.mac} on VNI ${m.vni}`}
-                          disabled={!isAdmin}
-                          onClick={() =>
-                            setPending({
-                              title: 'Forget MAC',
-                              description: `Forget MAC ${m.mac} on VNI ${m.vni}?`,
-                              confirmLabel: 'Forget',
-                              run: () => forgetMAC(m.mac, m.vni),
-                              success: 'MAC forgotten',
-                            })
-                          }
-                        >
-                          Forget
-                        </Button>
-                      </Gated>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        aria-label={`Forget ${m.mac} on VNI ${m.vni}`}
+                        onClick={() =>
+                          setPending({
+                            title: 'Forget MAC',
+                            description: `Forget MAC ${m.mac} on VNI ${m.vni}?`,
+                            confirmLabel: 'Forget',
+                            run: () => forgetMAC(m.mac, m.vni),
+                            success: 'MAC forgotten',
+                          })
+                        }
+                      >
+                        Forget
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))
@@ -411,7 +360,7 @@ export default function OverlayVtepsPage() {
         </div>
       </section>
 
-      <section className="space-y-2" data-testid="overlay-forget-mac">
+      <section className="space-y-2">
         <h2 className="text-xl font-semibold">Forget a remote MAC</h2>
         <div className="flex items-end gap-2">
           <div className="space-y-2">
@@ -436,11 +385,9 @@ export default function OverlayVtepsPage() {
               placeholder="10000"
             />
           </div>
-          <Gated op="DELETE /api/v1/overlay/macs">
-            <Button variant="destructive" disabled={!isAdmin} onClick={askForgetMac}>
-              Forget MAC
-            </Button>
-          </Gated>
+          <Button variant="destructive" onClick={askForgetMac}>
+            Forget MAC
+          </Button>
         </div>
       </section>
 

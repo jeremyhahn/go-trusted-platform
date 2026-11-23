@@ -23,8 +23,6 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { useOverlay, useApi, useToast } from '@/hooks';
-import Link from 'next/link';
-import { Gated } from '@/components/features/capabilities/gated';
 import type { NetworkOverlay } from '@/types/infrastructure';
 import type { ListVNIsResponse, VNI } from 'trusted-platform-sdk';
 
@@ -39,7 +37,6 @@ export default function NetworkOverlaysPage() {
   // SDK returns VNI objects, transform to NetworkOverlay format
   const {
     data: vniData,
-    error,
     isLoading,
     refetch: fetchOverlays,
   } = useApi<ListVNIsResponse>(() => overlay.listVNIs(), []);
@@ -72,23 +69,18 @@ export default function NetworkOverlaysPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Gated op="GET /api/v1/overlay/vnis">
-            <Button
-              variant="outline"
-              size="icon"
-              aria-label="Refresh overlays"
-              onClick={fetchOverlays}
-              disabled={isLoading}
-            >
-              <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
-            </Button>
-          </Gated>
-          <Gated op="POST /api/v1/overlay/vnis">
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus className="mr-2 h-4 w-4" />
-              Create Overlay
-            </Button>
-          </Gated>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={fetchOverlays}
+            disabled={isLoading}
+          >
+            <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+          </Button>
+          <Button onClick={() => setCreateOpen(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            Create Overlay
+          </Button>
         </div>
       </div>
 
@@ -129,21 +121,13 @@ export default function NetworkOverlaysPage() {
               disabled={!createVni || createSubmitting}
               onClick={async () => {
                 const v = Number.parseInt(createVni, 10);
-                if (!Number.isFinite(v) || v < 1 || v > 16777215) {
+                if (!Number.isFinite(v) || v < 1) {
                   toast({ title: 'Invalid VNI', variant: 'destructive' });
                   return;
                 }
                 setCreateSubmitting(true);
                 try {
-                  const res = await overlay.createVNI({ config: { vni: v, name: createName || undefined } });
-                  if (res && res.success === false) {
-                    toast({
-                      title: 'Failed to create overlay',
-                      description: res.error?.message ?? 'Unknown error',
-                      variant: 'destructive',
-                    });
-                    return;
-                  }
+                  await overlay.createVNI({ config: { vni: v, name: createName || undefined } });
                   toast({ title: 'Overlay created', variant: 'success' });
                   setCreateOpen(false);
                   setCreateVni('');
@@ -188,20 +172,12 @@ export default function NetworkOverlaysPage() {
         </div>
       </div>
 
-      {error ? (
-        <div
-          role="alert"
-          data-testid="overlays-list-error"
-          className="rounded-md border border-destructive/50 p-4 text-sm text-destructive"
-        >
-          Could not list overlays: {error.message}
-        </div>
-      ) : isLoading ? (
+      {isLoading ? (
         <div className="flex items-center justify-center h-64">
           <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       ) : (
-        <div className="rounded-md border border-border" data-testid="overlays-table">
+        <div className="rounded-md border border-border">
           <Table>
             <TableHeader>
               <TableRow>
@@ -261,13 +237,8 @@ export default function NetworkOverlaysPage() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button variant="ghost" size="sm" asChild>
-                        <Link
-                          href="/networking/overlays/vteps"
-                          data-testid={`overlay-manage-${overlay.id}`}
-                        >
-                          Manage
-                        </Link>
+                      <Button variant="ghost" size="sm">
+                        Manage
                       </Button>
                     </TableCell>
                   </TableRow>
