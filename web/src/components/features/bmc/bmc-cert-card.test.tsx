@@ -59,6 +59,25 @@ describe('BMCCertCard', () => {
     expect(steps).toContain('replace: ok');
   });
 
+  it('sends an explicit false for an option checked then unchecked', async () => {
+    const sent = stubControlPlane({
+      'POST /api/v1/bmc/42/enroll': ok({
+        device_id: '7',
+        endpoint: 'bmc-a.example',
+        hostname: 'bmc-a.example',
+        pin_spki_sha256: 'ab12',
+        steps: [{ name: 'capture', ok: true }],
+      }),
+    });
+    renderCard();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Register DNS' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Register DNS' }));
+    await click('Enroll');
+
+    await screen.findByText('Enrolled: BMC profile 42');
+    expect(sent[0].body).toEqual({ dns_register: false });
+  });
+
   it('reports the failed ceremony steps', async () => {
     const sent = stubControlPlane({
       'POST /api/v1/bmc/42/enroll': ok({

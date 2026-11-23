@@ -103,6 +103,20 @@ describe('BMCAccountsCard', () => {
     const toast = await screen.findByText('Create user failed: bmc: invalid privilege: no-access');
     expect(toast.getAttribute('data-variant')).toBe('destructive');
     expect((screen.getByLabelText('Username') as HTMLInputElement).value).toBe(' viewer ');
+    expect((screen.getByLabelText('Password') as HTMLInputElement).value).toBe('');
+  });
+
+  it('blocks Create for a slot the list shows as used', async () => {
+    const sent = stubControlPlane(baseRoutes());
+    await renderCard();
+
+    fillCreate('user');
+    change('Slot', '2');
+
+    const create = screen.getByRole('button', { name: 'Create user' }) as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+    expect(screen.getByText('Slot 2 is in use')).toBeDefined();
+    expect(sent.some((r) => r.method === 'POST')).toBe(false);
   });
 
   it('asks before deleting and sends nothing on Cancel', async () => {

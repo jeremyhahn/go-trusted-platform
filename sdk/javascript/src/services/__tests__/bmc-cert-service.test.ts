@@ -43,6 +43,11 @@ describe('BMCCertService', () => {
     service = new BMCCertService(mockClient);
   });
 
+  it('is exported from the package entry point', async () => {
+    const mod = await import('../../index.js');
+    expect(mod.BMCCertService).toBe(BMCCertService);
+  });
+
   describe('enrollBMC', () => {
     it('posts an empty JSON object to the enroll route when no option is given', async () => {
       vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: {} });

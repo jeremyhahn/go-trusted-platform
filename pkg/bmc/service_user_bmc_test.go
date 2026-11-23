@@ -15,6 +15,7 @@ package bmc_test
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 
@@ -89,6 +90,23 @@ func TestService_UserMethods_Simulator(t *testing.T) {
 		operator.Channel = 1
 		if !ok || got != operator {
 			t.Errorf("slot 3 = %+v (found %v), want %+v", got, ok, operator)
+		}
+	})
+
+	t.Run("CreateUserRefusesOccupiedSlot", func(t *testing.T) {
+		t.Parallel()
+		svc := newSimUserService(t)
+		err := svc.CreateUser(ctx, 1, bmc.User{Slot: 1, Username: "intruder", Privilege: bmc.PrivilegeUser}, "x-pass-1")
+		var occupied bmc.ErrSlotOccupied
+		if !errors.As(err, &occupied) {
+			t.Fatalf("CreateUser into slot 1 = %v, want ErrSlotOccupied", err)
+		}
+		if occupied.Slot != 1 {
+			t.Errorf("ErrSlotOccupied.Slot = %d, want 1", occupied.Slot)
+		}
+		got, ok := userInSlot(t, svc, 1)
+		if !ok || got.Username != "admin" {
+			t.Errorf("slot 1 after refused create = %+v (found %v), want admin", got, ok)
 		}
 	})
 
