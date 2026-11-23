@@ -74,13 +74,15 @@ func (e *ErrAdminBundleIncomplete) Error() string {
 }
 
 // ErrInvalidCeremonyThreshold is returned by Initialize when the threshold is
-// not empty and not "M-of-N" with 1 <= M <= N.
+// not empty and not "M-of-N" with 2 <= M <= N. A quorum of one is refused:
+// upstream go-qrdb runs single-admin for a threshold below two, which the
+// empty spec already requests explicitly.
 type ErrInvalidCeremonyThreshold struct {
 	Spec string
 }
 
 func (e *ErrInvalidCeremonyThreshold) Error() string {
-	return fmt.Sprintf("ceremony backend: threshold must be \"M-of-N\" with 1 <= M <= N: %q", e.Spec)
+	return fmt.Sprintf("ceremony backend: threshold must be \"M-of-N\" with 2 <= M <= N: %q", e.Spec)
 }
 
 // AdminBundle is the one-shot admin client credential returned by init.
@@ -167,8 +169,9 @@ func parseExpiresAt(s string) time.Time {
 // officer shares that reconstruct the secret, which is what the ceremony's
 // Threshold field means. N is the officer count. The empty spec is the
 // explicit single-admin request and yields zero. Any other spec must be
-// "M-of-N" with decimal M and N and 1 <= M <= N, else ErrInvalidCeremonyThreshold:
-// a typo must never fall back to single-admin, which has no quorum.
+// "M-of-N" with decimal M and N and 2 <= M <= N, else ErrInvalidCeremonyThreshold:
+// a typo must never fall back to single-admin, which has no quorum, and upstream
+// go-qrdb runs single-admin for any threshold below two, so 1-of-N is refused.
 func thresholdQuorum(spec string) (int, error) {
 	if spec == "" {
 		return 0, nil
@@ -179,7 +182,7 @@ func thresholdQuorum(spec string) (int, error) {
 	}
 	m, okM := unsignedDecimal(quorum)
 	n, okN := unsignedDecimal(total)
-	if !okM || !okN || m < 1 || m > n {
+	if !okM || !okN || m < 2 || m > n {
 		return 0, &ErrInvalidCeremonyThreshold{Spec: spec}
 	}
 	return m, nil
