@@ -95,6 +95,29 @@ describe('PXEDeviceActions', () => {
     );
   });
 
+  it('refuses to authorize without a valid target VLAN', async () => {
+    const sent = stubControlPlane(routes());
+    const onChanged = vi.fn();
+    renderActions(onChanged);
+    await capabilitiesLoaded(sent);
+
+    await click('Authorize d1');
+    expect(screen.getByRole('dialog').textContent).not.toContain('optional');
+    const confirm = () => screen.getByRole('button', { name: 'Authorize' }) as HTMLButtonElement;
+    expect(confirm().disabled).toBe(true);
+    await click('Authorize');
+    for (const bad of ['0', '4095', '65556', '2.5']) {
+      type('Target VLAN', bad);
+      expect(confirm().disabled).toBe(true);
+      await click('Authorize');
+    }
+    expect(writes(sent)).toEqual([]);
+    expect(onChanged).not.toHaveBeenCalled();
+
+    type('Target VLAN', '20');
+    expect(confirm().disabled).toBe(false);
+  });
+
   it('quarantines the device with a reason', async () => {
     const sent = stubControlPlane(routes());
     const onChanged = vi.fn();
@@ -109,6 +132,26 @@ describe('PXEDeviceActions', () => {
     expect(writes(sent)).toEqual([
       { method: 'POST', path: '/api/v1/pxe/devices/d1/quarantine', body: { reason: 'tamper' } },
     ]);
+  });
+
+  it('refuses to quarantine without a reason', async () => {
+    const sent = stubControlPlane(routes());
+    const onChanged = vi.fn();
+    renderActions(onChanged);
+    await capabilitiesLoaded(sent);
+
+    await click('Quarantine d1');
+    const confirm = () => screen.getByRole('button', { name: 'Quarantine' }) as HTMLButtonElement;
+    expect(confirm().disabled).toBe(true);
+    await click('Quarantine');
+    type('Quarantine reason', '   ');
+    expect(confirm().disabled).toBe(true);
+    await click('Quarantine');
+    expect(writes(sent)).toEqual([]);
+    expect(onChanged).not.toHaveBeenCalled();
+
+    type('Quarantine reason', 'tamper');
+    expect(confirm().disabled).toBe(false);
   });
 
   it('retries the device', async () => {
