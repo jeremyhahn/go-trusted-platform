@@ -30,6 +30,8 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Gated } from "@/components/features/capabilities/gated";
+import { TenantQuotaCheck } from "@/components/features/tenant/tenant-quota-check";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTenant, useApi, useMutation, useToast } from "@/hooks";
 import type {
@@ -725,14 +727,16 @@ export default function TenantQuotasPage() {
                 </CardDescription>
               </div>
               {!editing && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setEditing(true)}
-                >
-                  <Pencil className="h-4 w-4 mr-2" />
-                  Edit limits
-                </Button>
+                <Gated op="PUT /api/v1/tenants/{id}/quotas">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setEditing(true)}
+                  >
+                    <Pencil className="h-4 w-4 mr-2" />
+                    Edit limits
+                  </Button>
+                </Gated>
               )}
             </CardHeader>
             <CardContent>
@@ -862,6 +866,8 @@ export default function TenantQuotasPage() {
               </div>
             </CardContent>
           </Card>
+
+          {tenantId && <TenantQuotaCheck tenantId={tenantId} />}
         </>
       )}
     </div>
