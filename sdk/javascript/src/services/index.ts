@@ -71,6 +71,13 @@ export type {
   DeleteProxyPoolResponse,
   ReloadProxyConfigResponse,
 } from './proxy-service.js';
+export { SwitchService } from './switch-service.js';
+export type {
+  SwitchPortMode,
+  SwitchPortStatus,
+  SwitchPortActionResponse,
+  SetSwitchPortVLANResponse,
+} from './switch-service.js';
 export { InvitationService } from './invitation-service.js';
 export { EABService } from './eab-service.js';
 
