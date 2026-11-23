@@ -36,6 +36,12 @@ function formatBytes(bytes: number): string {
   return unit === 0 ? `${value} B` : `${value.toFixed(1)} ${units[unit]}`;
 }
 
+// protojson sends uint64 fields as JSON strings: read them as numbers.
+function num(v: number | string | undefined): number {
+  const n = typeof v === 'string' ? Number(v) : v ?? 0;
+  return Number.isFinite(n) ? n : 0;
+}
+
 function formatUptime(seconds: number): string {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
@@ -88,8 +94,8 @@ export function VMMetricsCard({ vmId }: VMMetricsCardProps) {
     // Load once per VM; Refresh reloads on demand.
   }, [vmId]);
 
-  const memoryUsed = metrics?.memoryUsedMb ?? 0;
-  const memoryAvailable = metrics?.memoryAvailableMb ?? 0;
+  const memoryUsed = num(metrics?.memoryUsedMb);
+  const memoryAvailable = num(metrics?.memoryAvailableMb);
   const memoryTotal = memoryUsed + memoryAvailable;
   const memoryPercent = memoryTotal > 0 ? (memoryUsed / memoryTotal) * 100 : 0;
 
@@ -137,12 +143,12 @@ export function VMMetricsCard({ vmId }: VMMetricsCardProps) {
               <Row
                 icon={<HardDrive className="h-4 w-4 text-muted-foreground" />}
                 label="Disk Read"
-                value={formatBytes(metrics.diskReadBytes ?? 0)}
+                value={formatBytes(num(metrics.diskReadBytes))}
               />
               <Row
                 icon={<HardDrive className="h-4 w-4 text-muted-foreground" />}
                 label="Disk Write"
-                value={formatBytes(metrics.diskWriteBytes ?? 0)}
+                value={formatBytes(num(metrics.diskWriteBytes))}
               />
             </div>
 
@@ -150,12 +156,12 @@ export function VMMetricsCard({ vmId }: VMMetricsCardProps) {
               <Row
                 icon={<Network className="h-4 w-4 text-muted-foreground" />}
                 label="Network Received"
-                value={formatBytes(metrics.networkRxBytes ?? 0)}
+                value={formatBytes(num(metrics.networkRxBytes))}
               />
               <Row
                 icon={<Network className="h-4 w-4 text-muted-foreground" />}
                 label="Network Sent"
-                value={formatBytes(metrics.networkTxBytes ?? 0)}
+                value={formatBytes(num(metrics.networkTxBytes))}
               />
             </div>
 
