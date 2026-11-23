@@ -26,6 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Gated } from "@/components/features/capabilities/gated";
+import { pemToBase64 } from "@/components/features/attestation/attestation-quote-card";
 import { useAttestation, useToast } from "@/hooks";
 
 export const VERIFY_MANIFEST_OP = "POST /api/v1/attestation/manifests/verify";
@@ -160,7 +161,7 @@ export function ManifestVerifyButton({ manifestId, manifest }: ManifestVerifyBut
       const res = await attestation.verifyManifest({
         manifest: target,
         ...(nonce !== "" && { expectedNonce: nonce }),
-        ...(pem !== "" && { publicKeyPem: pem }),
+        ...(pem !== "" && { publicKeyPem: pemToBase64(pem) }),
       });
       if (res.success === false) {
         fail(errorMessage(res.error));
