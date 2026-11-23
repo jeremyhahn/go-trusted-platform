@@ -108,4 +108,28 @@ describe('GatewayIPAMPage', () => {
     await waitFor(() => expect(toasts()).toContain('IP released: 10.0.0.10'));
     expect(await screen.findByText('No allocations')).toBeTruthy();
   });
+
+  it('marks each allocation row with a testid', async () => {
+    stubControlPlane({ [`GET ${PATH}`]: ok({ allocations: [A1, A2] }) });
+    render(withControlPlane(<GatewayIPAMPage />));
+
+    await screen.findByText(A1.ip);
+    expect(screen.getAllByTestId('gateway-allocation-row')).toHaveLength(2);
+  });
+
+  it('marks the empty list', async () => {
+    stubControlPlane({ [`GET ${PATH}`]: ok({ allocations: [] }) });
+    render(withControlPlane(<GatewayIPAMPage />));
+
+    const empty = await screen.findByTestId('gateway-allocations-empty');
+    await waitFor(() => expect(empty.textContent).toBe('No allocations'));
+  });
+
+  it('marks a refused list', async () => {
+    stubControlPlane({ [`GET ${PATH}`]: refused(503, 'gateway not configured') });
+    render(withControlPlane(<GatewayIPAMPage />));
+
+    const error = await screen.findByTestId('gateway-allocations-error');
+    expect(error.textContent).toContain('gateway not configured');
+  });
 });
