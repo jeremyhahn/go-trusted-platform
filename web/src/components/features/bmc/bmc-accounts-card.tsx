@@ -25,6 +25,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
+import { Gated } from '@/components/features/capabilities/gated';
 import {
   bmcPrivilegeName,
   useBMCAccounts,
@@ -43,6 +44,12 @@ export const BMC_PRIVILEGE_CHOICES: BMCPrivilegeName[] = [
 export interface BMCAccountsCardProps {
   profileID: string;
 }
+
+// The users routes as the server names them; each write control is gated on its own.
+const CREATE_OP = 'POST /api/v1/bmc/{profileID:[0-9]+}/users';
+const DELETE_OP = 'DELETE /api/v1/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}';
+const PASSWORD_OP = 'PUT /api/v1/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/password';
+const PRIVILEGE_OP = 'PUT /api/v1/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/privilege';
 
 const SELECT_CLASS =
   'h-9 rounded-md border border-input bg-background px-2 text-sm disabled:cursor-not-allowed disabled:opacity-50';
@@ -222,36 +229,42 @@ export function BMCAccountsCard({ profileID }: BMCAccountsCardProps) {
                           </option>
                         ))}
                       </select>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        aria-label={`Set privilege for ${u.username}`}
-                        disabled={busy}
-                        onClick={() => void handleSetPrivilege(u)}
-                      >
-                        Set privilege
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        aria-label={`Set password for ${u.username}`}
-                        disabled={busy}
-                        onClick={() => {
-                          setNewPassword('');
-                          setPasswordTarget({ slot: u.slot, username: u.username });
-                        }}
-                      >
-                        Set password
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        aria-label={`Delete ${u.username}`}
-                        disabled={busy}
-                        onClick={() => setDeleteTarget({ slot: u.slot, username: u.username })}
-                      >
-                        Delete
-                      </Button>
+                      <Gated op={PRIVILEGE_OP}>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-label={`Set privilege for ${u.username}`}
+                          disabled={busy}
+                          onClick={() => void handleSetPrivilege(u)}
+                        >
+                          Set privilege
+                        </Button>
+                      </Gated>
+                      <Gated op={PASSWORD_OP}>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-label={`Set password for ${u.username}`}
+                          disabled={busy}
+                          onClick={() => {
+                            setNewPassword('');
+                            setPasswordTarget({ slot: u.slot, username: u.username });
+                          }}
+                        >
+                          Set password
+                        </Button>
+                      </Gated>
+                      <Gated op={DELETE_OP}>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          aria-label={`Delete ${u.username}`}
+                          disabled={busy}
+                          onClick={() => setDeleteTarget({ slot: u.slot, username: u.username })}
+                        >
+                          Delete
+                        </Button>
+                      </Gated>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -298,12 +311,14 @@ export function BMCAccountsCard({ profileID }: BMCAccountsCardProps) {
               </option>
             ))}
           </select>
-          <Button
-            disabled={busy || !loaded || slotTaken || !slot || !username.trim() || !password}
-            onClick={() => void handleCreate()}
-          >
-            Create user
-          </Button>
+          <Gated op={CREATE_OP}>
+            <Button
+              disabled={busy || !loaded || slotTaken || !slot || !username.trim() || !password}
+              onClick={() => void handleCreate()}
+            >
+              Create user
+            </Button>
+          </Gated>
         </div>
       </CardContent>
 
@@ -326,9 +341,11 @@ export function BMCAccountsCard({ profileID }: BMCAccountsCardProps) {
             <Button variant="outline" onClick={closePasswordDialog} disabled={busy}>
               Cancel
             </Button>
-            <Button onClick={() => void handleSavePassword()} disabled={busy || !newPassword}>
-              Save password
-            </Button>
+            <Gated op={PASSWORD_OP}>
+              <Button onClick={() => void handleSavePassword()} disabled={busy || !newPassword}>
+                Save password
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -345,9 +362,11 @@ export function BMCAccountsCard({ profileID }: BMCAccountsCardProps) {
             <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={busy}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={() => void handleDelete()} disabled={busy}>
-              Confirm
-            </Button>
+            <Gated op={DELETE_OP}>
+              <Button variant="destructive" onClick={() => void handleDelete()} disabled={busy}>
+                Confirm
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
