@@ -61,7 +61,7 @@ describe('TenantBarrierCard', () => {
     expect(status.textContent).toContain('shamir');
   });
 
-  it('initializes with the threshold and share count and re-reads the status', async () => {
+  it('initializes with an empty body, no threshold or shares, and re-reads the status', async () => {
     const sent = stubControlPlane({
       'GET /api/v1/capabilities': caps(),
       'GET /api/v1/tenants/t1/barrier': barrier({ sealed: true, initialized: false }),
@@ -70,15 +70,15 @@ describe('TenantBarrierCard', () => {
     renderCard();
 
     await waitFor(() => expect(statusReads(sent)).toBe(1));
-    fireEvent.change(screen.getByLabelText('Threshold'), { target: { value: '2' } });
-    fireEvent.change(screen.getByLabelText('Shares'), { target: { value: '3' } });
+    expect(screen.queryByLabelText('Threshold')).toBeNull();
+    expect(screen.queryByLabelText('Shares')).toBeNull();
     fireEvent.click(await enabledButton('Initialize'));
 
     await waitFor(() =>
       expect(sent).toContainEqual({
         method: 'POST',
         path: '/api/v1/tenants/t1/barrier/init',
-        body: { threshold: 2, shares: 3 },
+        body: {},
       })
     );
     await waitFor(() => expect(statusReads(sent)).toBe(2));
@@ -102,6 +102,25 @@ describe('TenantBarrierCard', () => {
         body: { key: 'a2V5' },
       })
     );
+  });
+
+  it('masks the unseal key and clears it after a successful unseal', async () => {
+    const sent = stubControlPlane({
+      'GET /api/v1/capabilities': caps(),
+      'GET /api/v1/tenants/t1/barrier': barrier({ sealed: true, initialized: true }),
+      'POST /api/v1/tenants/t1/barrier/unseal': ok({ status: { code: 0 } }),
+    });
+    renderCard();
+
+    const key = screen.getByLabelText('Unseal key') as HTMLInputElement;
+    expect(key.getAttribute('type')).toBe('password');
+    expect(key.getAttribute('autocomplete')).toBe('off');
+    fireEvent.change(key, { target: { value: 'a2V5' } });
+    expect(key.value).toBe('a2V5');
+    fireEvent.click(await enabledButton('Unseal'));
+
+    await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/tenants/t1/barrier/unseal')).toBe(true));
+    await waitFor(() => expect(key.value).toBe(''));
   });
 
   it('seals and shows a refusal in an alert', async () => {
