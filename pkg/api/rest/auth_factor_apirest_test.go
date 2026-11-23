@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -60,8 +59,9 @@ func TestAuthFactorAPIRest_MTLSProbeWithCA(t *testing.T) {
 
 func TestAuthFactorAPIRest_IssueCertErrors(t *testing.T) {
 	t.Run("malformed body", func(t *testing.T) {
-		router := registerRoutes(newHandlerWithCA(newAuthTestCA(t)))
+		router := newPEPIssueRouter(newAuthTestCA(t), &fakeAuthFactorPEP{allowed: true})
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/users/alice/factors/mtls/issue-cert", strings.NewReader(`{"csr_pem":`))
+		req.Header.Set("Authorization", "Bearer alice-token")
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 
@@ -72,10 +72,11 @@ func TestAuthFactorAPIRest_IssueCertErrors(t *testing.T) {
 	t.Run("CA refuses the CSR", func(t *testing.T) {
 		testCA := newAuthTestCA(t)
 		testCA.signErr = errors.New("profile client disabled")
-		router := registerRoutes(newHandlerWithCA(testCA))
+		router := newPEPIssueRouter(testCA, &fakeAuthFactorPEP{allowed: true})
 		body, err := json.Marshal(IssueMTLSCertRequest{CSRPEM: generateAuthTestCSRPEM(t)})
 		require.NoError(t, err)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/users/alice/factors/mtls/issue-cert", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer alice-token")
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 
@@ -99,31 +100,6 @@ func TestAuthFactorAPIRest_EmptyID(t *testing.T) {
 			handle(rec, req)
 			require.Equal(t, http.StatusBadRequest, rec.Code)
 			assert.Equal(t, ErrMissingRequiredField{Field: "id"}.Error(), authFactorErrorMessage(t, rec))
-		})
-	}
-}
-
-func TestAuthFactorAPIRest_CallerAuthorized(t *testing.T) {
-	h := NewAuthFactorHandlers(nil, nil)
-	cases := []struct {
-		name    string
-		subject *pkix.Name
-		want    bool
-	}{
-		{"no client certificate", nil, true},
-		{"the user themselves", &pkix.Name{CommonName: "alice"}, true},
-		{"admin common name", &pkix.Name{CommonName: "admin"}, true},
-		{"admin-prefixed common name", &pkix.Name{CommonName: "admin-ops"}, true},
-		{"admin organizational unit", &pkix.Name{CommonName: "carol", OrganizationalUnit: []string{"eng", "ADMIN"}}, true},
-		{"another user", &pkix.Name{CommonName: "bob", OrganizationalUnit: []string{"eng"}}, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/", nil)
-			if tc.subject != nil {
-				req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{Subject: *tc.subject}}}
-			}
-			assert.Equal(t, tc.want, h.callerAuthorized(req, "alice"))
 		})
 	}
 }
