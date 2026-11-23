@@ -1466,6 +1466,12 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			if daemon.invitationGRPCService != nil {
 				daemon.invitationGRPCService.SetService(svc)
 			}
+			// The owner-invitation path reaches the tenant server through
+			// its own narrow capability; InvitationServicer stays unwidened.
+			if inv, ok := svc.(initialAdminInviter); ok &&
+				daemon.tenantService != nil && daemon.tenantService.grpcServer != nil {
+				daemon.tenantService.grpcServer.SetInitialAdminInviter(inv)
+			}
 		}
 	}
 

@@ -1234,6 +1234,112 @@ func (x *CreateTenantResponse) GetTenant() *Tenant {
 	return nil
 }
 
+// CreateInitialAdminInvitation request/response
+type CreateInitialAdminInvitationRequest struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	TenantId string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Email    string                 `protobuf:"bytes,2,opt,name=email,proto3" json:"email,omitempty"`
+	// 0 keeps the service default.
+	ExpiresInSeconds int64 `protobuf:"varint,3,opt,name=expires_in_seconds,json=expiresInSeconds,proto3" json:"expires_in_seconds,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *CreateInitialAdminInvitationRequest) Reset() {
+	*x = CreateInitialAdminInvitationRequest{}
+	mi := &file_tenant_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateInitialAdminInvitationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateInitialAdminInvitationRequest) ProtoMessage() {}
+
+func (x *CreateInitialAdminInvitationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_tenant_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateInitialAdminInvitationRequest.ProtoReflect.Descriptor instead.
+func (*CreateInitialAdminInvitationRequest) Descriptor() ([]byte, []int) {
+	return file_tenant_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *CreateInitialAdminInvitationRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *CreateInitialAdminInvitationRequest) GetEmail() string {
+	if x != nil {
+		return x.Email
+	}
+	return ""
+}
+
+func (x *CreateInitialAdminInvitationRequest) GetExpiresInSeconds() int64 {
+	if x != nil {
+		return x.ExpiresInSeconds
+	}
+	return 0
+}
+
+type CreateInitialAdminInvitationResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Invitation    *Invitation            `protobuf:"bytes,1,opt,name=invitation,proto3" json:"invitation,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateInitialAdminInvitationResponse) Reset() {
+	*x = CreateInitialAdminInvitationResponse{}
+	mi := &file_tenant_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateInitialAdminInvitationResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateInitialAdminInvitationResponse) ProtoMessage() {}
+
+func (x *CreateInitialAdminInvitationResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_tenant_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateInitialAdminInvitationResponse.ProtoReflect.Descriptor instead.
+func (*CreateInitialAdminInvitationResponse) Descriptor() ([]byte, []int) {
+	return file_tenant_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *CreateInitialAdminInvitationResponse) GetInvitation() *Invitation {
+	if x != nil {
+		return x.Invitation
+	}
+	return nil
+}
+
 // UpdateTenant request/response
 type UpdateTenantRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1247,7 +1353,7 @@ type UpdateTenantRequest struct {
 
 func (x *UpdateTenantRequest) Reset() {
 	*x = UpdateTenantRequest{}
-	mi := &file_tenant_proto_msgTypes[15]
+	mi := &file_tenant_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1259,7 +1365,7 @@ func (x *UpdateTenantRequest) String() string {
 func (*UpdateTenantRequest) ProtoMessage() {}
 
 func (x *UpdateTenantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[15]
+	mi := &file_tenant_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1272,7 +1378,7 @@ func (x *UpdateTenantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateTenantRequest.ProtoReflect.Descriptor instead.
 func (*UpdateTenantRequest) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{15}
+	return file_tenant_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *UpdateTenantRequest) GetTenantId() string {
@@ -1313,7 +1419,7 @@ type UpdateTenantResponse struct {
 
 func (x *UpdateTenantResponse) Reset() {
 	*x = UpdateTenantResponse{}
-	mi := &file_tenant_proto_msgTypes[16]
+	mi := &file_tenant_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1325,7 +1431,7 @@ func (x *UpdateTenantResponse) String() string {
 func (*UpdateTenantResponse) ProtoMessage() {}
 
 func (x *UpdateTenantResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[16]
+	mi := &file_tenant_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1338,7 +1444,7 @@ func (x *UpdateTenantResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateTenantResponse.ProtoReflect.Descriptor instead.
 func (*UpdateTenantResponse) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{16}
+	return file_tenant_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *UpdateTenantResponse) GetStatus() *Status {
@@ -1365,7 +1471,7 @@ type DeleteTenantRequest struct {
 
 func (x *DeleteTenantRequest) Reset() {
 	*x = DeleteTenantRequest{}
-	mi := &file_tenant_proto_msgTypes[17]
+	mi := &file_tenant_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1377,7 +1483,7 @@ func (x *DeleteTenantRequest) String() string {
 func (*DeleteTenantRequest) ProtoMessage() {}
 
 func (x *DeleteTenantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[17]
+	mi := &file_tenant_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1390,7 +1496,7 @@ func (x *DeleteTenantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteTenantRequest.ProtoReflect.Descriptor instead.
 func (*DeleteTenantRequest) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{17}
+	return file_tenant_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *DeleteTenantRequest) GetTenantId() string {
@@ -1409,7 +1515,7 @@ type DeleteTenantResponse struct {
 
 func (x *DeleteTenantResponse) Reset() {
 	*x = DeleteTenantResponse{}
-	mi := &file_tenant_proto_msgTypes[18]
+	mi := &file_tenant_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1421,7 +1527,7 @@ func (x *DeleteTenantResponse) String() string {
 func (*DeleteTenantResponse) ProtoMessage() {}
 
 func (x *DeleteTenantResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[18]
+	mi := &file_tenant_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1434,7 +1540,7 @@ func (x *DeleteTenantResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteTenantResponse.ProtoReflect.Descriptor instead.
 func (*DeleteTenantResponse) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{18}
+	return file_tenant_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *DeleteTenantResponse) GetStatus() *Status {
@@ -1454,7 +1560,7 @@ type SuspendTenantRequest struct {
 
 func (x *SuspendTenantRequest) Reset() {
 	*x = SuspendTenantRequest{}
-	mi := &file_tenant_proto_msgTypes[19]
+	mi := &file_tenant_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1466,7 +1572,7 @@ func (x *SuspendTenantRequest) String() string {
 func (*SuspendTenantRequest) ProtoMessage() {}
 
 func (x *SuspendTenantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[19]
+	mi := &file_tenant_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1479,7 +1585,7 @@ func (x *SuspendTenantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SuspendTenantRequest.ProtoReflect.Descriptor instead.
 func (*SuspendTenantRequest) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{19}
+	return file_tenant_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *SuspendTenantRequest) GetTenantId() string {
@@ -1498,7 +1604,7 @@ type SuspendTenantResponse struct {
 
 func (x *SuspendTenantResponse) Reset() {
 	*x = SuspendTenantResponse{}
-	mi := &file_tenant_proto_msgTypes[20]
+	mi := &file_tenant_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1510,7 +1616,7 @@ func (x *SuspendTenantResponse) String() string {
 func (*SuspendTenantResponse) ProtoMessage() {}
 
 func (x *SuspendTenantResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[20]
+	mi := &file_tenant_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1523,7 +1629,7 @@ func (x *SuspendTenantResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SuspendTenantResponse.ProtoReflect.Descriptor instead.
 func (*SuspendTenantResponse) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{20}
+	return file_tenant_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *SuspendTenantResponse) GetStatus() *Status {
@@ -1543,7 +1649,7 @@ type ResumeTenantRequest struct {
 
 func (x *ResumeTenantRequest) Reset() {
 	*x = ResumeTenantRequest{}
-	mi := &file_tenant_proto_msgTypes[21]
+	mi := &file_tenant_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1555,7 +1661,7 @@ func (x *ResumeTenantRequest) String() string {
 func (*ResumeTenantRequest) ProtoMessage() {}
 
 func (x *ResumeTenantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[21]
+	mi := &file_tenant_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1568,7 +1674,7 @@ func (x *ResumeTenantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResumeTenantRequest.ProtoReflect.Descriptor instead.
 func (*ResumeTenantRequest) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{21}
+	return file_tenant_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ResumeTenantRequest) GetTenantId() string {
@@ -1587,7 +1693,7 @@ type ResumeTenantResponse struct {
 
 func (x *ResumeTenantResponse) Reset() {
 	*x = ResumeTenantResponse{}
-	mi := &file_tenant_proto_msgTypes[22]
+	mi := &file_tenant_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1599,7 +1705,7 @@ func (x *ResumeTenantResponse) String() string {
 func (*ResumeTenantResponse) ProtoMessage() {}
 
 func (x *ResumeTenantResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[22]
+	mi := &file_tenant_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1612,7 +1718,7 @@ func (x *ResumeTenantResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResumeTenantResponse.ProtoReflect.Descriptor instead.
 func (*ResumeTenantResponse) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{22}
+	return file_tenant_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ResumeTenantResponse) GetStatus() *Status {
@@ -1632,7 +1738,7 @@ type GetQuotasRequest struct {
 
 func (x *GetQuotasRequest) Reset() {
 	*x = GetQuotasRequest{}
-	mi := &file_tenant_proto_msgTypes[23]
+	mi := &file_tenant_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1644,7 +1750,7 @@ func (x *GetQuotasRequest) String() string {
 func (*GetQuotasRequest) ProtoMessage() {}
 
 func (x *GetQuotasRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[23]
+	mi := &file_tenant_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1657,7 +1763,7 @@ func (x *GetQuotasRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetQuotasRequest.ProtoReflect.Descriptor instead.
 func (*GetQuotasRequest) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{23}
+	return file_tenant_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *GetQuotasRequest) GetTenantId() string {
@@ -1679,7 +1785,7 @@ type GetQuotasResponse struct {
 
 func (x *GetQuotasResponse) Reset() {
 	*x = GetQuotasResponse{}
-	mi := &file_tenant_proto_msgTypes[24]
+	mi := &file_tenant_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1691,7 +1797,7 @@ func (x *GetQuotasResponse) String() string {
 func (*GetQuotasResponse) ProtoMessage() {}
 
 func (x *GetQuotasResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[24]
+	mi := &file_tenant_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1704,7 +1810,7 @@ func (x *GetQuotasResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetQuotasResponse.ProtoReflect.Descriptor instead.
 func (*GetQuotasResponse) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{24}
+	return file_tenant_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *GetQuotasResponse) GetTenantId() string {
@@ -1748,7 +1854,7 @@ type UpdateQuotasRequest struct {
 
 func (x *UpdateQuotasRequest) Reset() {
 	*x = UpdateQuotasRequest{}
-	mi := &file_tenant_proto_msgTypes[25]
+	mi := &file_tenant_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1760,7 +1866,7 @@ func (x *UpdateQuotasRequest) String() string {
 func (*UpdateQuotasRequest) ProtoMessage() {}
 
 func (x *UpdateQuotasRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[25]
+	mi := &file_tenant_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1773,7 +1879,7 @@ func (x *UpdateQuotasRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateQuotasRequest.ProtoReflect.Descriptor instead.
 func (*UpdateQuotasRequest) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{25}
+	return file_tenant_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *UpdateQuotasRequest) GetTenantId() string {
@@ -1813,7 +1919,7 @@ type UpdateQuotasResponse struct {
 
 func (x *UpdateQuotasResponse) Reset() {
 	*x = UpdateQuotasResponse{}
-	mi := &file_tenant_proto_msgTypes[26]
+	mi := &file_tenant_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1825,7 +1931,7 @@ func (x *UpdateQuotasResponse) String() string {
 func (*UpdateQuotasResponse) ProtoMessage() {}
 
 func (x *UpdateQuotasResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[26]
+	mi := &file_tenant_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1838,7 +1944,7 @@ func (x *UpdateQuotasResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateQuotasResponse.ProtoReflect.Descriptor instead.
 func (*UpdateQuotasResponse) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{26}
+	return file_tenant_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *UpdateQuotasResponse) GetStatus() *Status {
@@ -1858,7 +1964,7 @@ type GetUsageRequest struct {
 
 func (x *GetUsageRequest) Reset() {
 	*x = GetUsageRequest{}
-	mi := &file_tenant_proto_msgTypes[27]
+	mi := &file_tenant_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1870,7 +1976,7 @@ func (x *GetUsageRequest) String() string {
 func (*GetUsageRequest) ProtoMessage() {}
 
 func (x *GetUsageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[27]
+	mi := &file_tenant_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1883,7 +1989,7 @@ func (x *GetUsageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUsageRequest.ProtoReflect.Descriptor instead.
 func (*GetUsageRequest) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{27}
+	return file_tenant_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *GetUsageRequest) GetTenantId() string {
@@ -1902,7 +2008,7 @@ type GetUsageResponse struct {
 
 func (x *GetUsageResponse) Reset() {
 	*x = GetUsageResponse{}
-	mi := &file_tenant_proto_msgTypes[28]
+	mi := &file_tenant_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1914,7 +2020,7 @@ func (x *GetUsageResponse) String() string {
 func (*GetUsageResponse) ProtoMessage() {}
 
 func (x *GetUsageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[28]
+	mi := &file_tenant_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1927,7 +2033,7 @@ func (x *GetUsageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUsageResponse.ProtoReflect.Descriptor instead.
 func (*GetUsageResponse) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{28}
+	return file_tenant_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *GetUsageResponse) GetUsage() *TenantUsage {
@@ -1949,7 +2055,7 @@ type CheckQuotaRequest struct {
 
 func (x *CheckQuotaRequest) Reset() {
 	*x = CheckQuotaRequest{}
-	mi := &file_tenant_proto_msgTypes[29]
+	mi := &file_tenant_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1961,7 +2067,7 @@ func (x *CheckQuotaRequest) String() string {
 func (*CheckQuotaRequest) ProtoMessage() {}
 
 func (x *CheckQuotaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[29]
+	mi := &file_tenant_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1974,7 +2080,7 @@ func (x *CheckQuotaRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckQuotaRequest.ProtoReflect.Descriptor instead.
 func (*CheckQuotaRequest) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{29}
+	return file_tenant_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *CheckQuotaRequest) GetTenantId() string {
@@ -2011,7 +2117,7 @@ type CheckQuotaResponse struct {
 
 func (x *CheckQuotaResponse) Reset() {
 	*x = CheckQuotaResponse{}
-	mi := &file_tenant_proto_msgTypes[30]
+	mi := &file_tenant_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2023,7 +2129,7 @@ func (x *CheckQuotaResponse) String() string {
 func (*CheckQuotaResponse) ProtoMessage() {}
 
 func (x *CheckQuotaResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[30]
+	mi := &file_tenant_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2036,7 +2142,7 @@ func (x *CheckQuotaResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckQuotaResponse.ProtoReflect.Descriptor instead.
 func (*CheckQuotaResponse) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{30}
+	return file_tenant_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *CheckQuotaResponse) GetTenantId() string {
@@ -2083,7 +2189,7 @@ type SyncTenantsRequest struct {
 
 func (x *SyncTenantsRequest) Reset() {
 	*x = SyncTenantsRequest{}
-	mi := &file_tenant_proto_msgTypes[31]
+	mi := &file_tenant_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2095,7 +2201,7 @@ func (x *SyncTenantsRequest) String() string {
 func (*SyncTenantsRequest) ProtoMessage() {}
 
 func (x *SyncTenantsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[31]
+	mi := &file_tenant_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2108,7 +2214,7 @@ func (x *SyncTenantsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncTenantsRequest.ProtoReflect.Descriptor instead.
 func (*SyncTenantsRequest) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{31}
+	return file_tenant_proto_rawDescGZIP(), []int{33}
 }
 
 type SyncTenantsResponse struct {
@@ -2120,7 +2226,7 @@ type SyncTenantsResponse struct {
 
 func (x *SyncTenantsResponse) Reset() {
 	*x = SyncTenantsResponse{}
-	mi := &file_tenant_proto_msgTypes[32]
+	mi := &file_tenant_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2132,7 +2238,7 @@ func (x *SyncTenantsResponse) String() string {
 func (*SyncTenantsResponse) ProtoMessage() {}
 
 func (x *SyncTenantsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[32]
+	mi := &file_tenant_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2145,7 +2251,7 @@ func (x *SyncTenantsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncTenantsResponse.ProtoReflect.Descriptor instead.
 func (*SyncTenantsResponse) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{32}
+	return file_tenant_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *SyncTenantsResponse) GetStatus() *Status {
@@ -2166,7 +2272,7 @@ type RotateTenantDEKRequest struct {
 
 func (x *RotateTenantDEKRequest) Reset() {
 	*x = RotateTenantDEKRequest{}
-	mi := &file_tenant_proto_msgTypes[33]
+	mi := &file_tenant_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2178,7 +2284,7 @@ func (x *RotateTenantDEKRequest) String() string {
 func (*RotateTenantDEKRequest) ProtoMessage() {}
 
 func (x *RotateTenantDEKRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[33]
+	mi := &file_tenant_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2191,7 +2297,7 @@ func (x *RotateTenantDEKRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RotateTenantDEKRequest.ProtoReflect.Descriptor instead.
 func (*RotateTenantDEKRequest) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{33}
+	return file_tenant_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *RotateTenantDEKRequest) GetTenantId() string {
@@ -2220,7 +2326,7 @@ type RotateTenantDEKResponse struct {
 
 func (x *RotateTenantDEKResponse) Reset() {
 	*x = RotateTenantDEKResponse{}
-	mi := &file_tenant_proto_msgTypes[34]
+	mi := &file_tenant_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2232,7 +2338,7 @@ func (x *RotateTenantDEKResponse) String() string {
 func (*RotateTenantDEKResponse) ProtoMessage() {}
 
 func (x *RotateTenantDEKResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[34]
+	mi := &file_tenant_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2245,7 +2351,7 @@ func (x *RotateTenantDEKResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RotateTenantDEKResponse.ProtoReflect.Descriptor instead.
 func (*RotateTenantDEKResponse) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{34}
+	return file_tenant_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *RotateTenantDEKResponse) GetTenantId() string {
@@ -2286,7 +2392,7 @@ type GetTenantDEKStatusRequest struct {
 
 func (x *GetTenantDEKStatusRequest) Reset() {
 	*x = GetTenantDEKStatusRequest{}
-	mi := &file_tenant_proto_msgTypes[35]
+	mi := &file_tenant_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2298,7 +2404,7 @@ func (x *GetTenantDEKStatusRequest) String() string {
 func (*GetTenantDEKStatusRequest) ProtoMessage() {}
 
 func (x *GetTenantDEKStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[35]
+	mi := &file_tenant_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2311,7 +2417,7 @@ func (x *GetTenantDEKStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantDEKStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetTenantDEKStatusRequest) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{35}
+	return file_tenant_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *GetTenantDEKStatusRequest) GetTenantId() string {
@@ -2330,7 +2436,7 @@ type GetTenantDEKStatusResponse struct {
 
 func (x *GetTenantDEKStatusResponse) Reset() {
 	*x = GetTenantDEKStatusResponse{}
-	mi := &file_tenant_proto_msgTypes[36]
+	mi := &file_tenant_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2342,7 +2448,7 @@ func (x *GetTenantDEKStatusResponse) String() string {
 func (*GetTenantDEKStatusResponse) ProtoMessage() {}
 
 func (x *GetTenantDEKStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[36]
+	mi := &file_tenant_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2355,7 +2461,7 @@ func (x *GetTenantDEKStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantDEKStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetTenantDEKStatusResponse) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{36}
+	return file_tenant_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *GetTenantDEKStatusResponse) GetDekStatus() *TenantDEKStatus {
@@ -2379,7 +2485,7 @@ type InitTenantBarrierRequest struct {
 
 func (x *InitTenantBarrierRequest) Reset() {
 	*x = InitTenantBarrierRequest{}
-	mi := &file_tenant_proto_msgTypes[37]
+	mi := &file_tenant_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2391,7 +2497,7 @@ func (x *InitTenantBarrierRequest) String() string {
 func (*InitTenantBarrierRequest) ProtoMessage() {}
 
 func (x *InitTenantBarrierRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[37]
+	mi := &file_tenant_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2404,7 +2510,7 @@ func (x *InitTenantBarrierRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InitTenantBarrierRequest.ProtoReflect.Descriptor instead.
 func (*InitTenantBarrierRequest) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{37}
+	return file_tenant_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *InitTenantBarrierRequest) GetTenantId() string {
@@ -2437,7 +2543,7 @@ type InitTenantBarrierResponse struct {
 
 func (x *InitTenantBarrierResponse) Reset() {
 	*x = InitTenantBarrierResponse{}
-	mi := &file_tenant_proto_msgTypes[38]
+	mi := &file_tenant_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2449,7 +2555,7 @@ func (x *InitTenantBarrierResponse) String() string {
 func (*InitTenantBarrierResponse) ProtoMessage() {}
 
 func (x *InitTenantBarrierResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[38]
+	mi := &file_tenant_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2462,7 +2568,7 @@ func (x *InitTenantBarrierResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InitTenantBarrierResponse.ProtoReflect.Descriptor instead.
 func (*InitTenantBarrierResponse) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{38}
+	return file_tenant_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *InitTenantBarrierResponse) GetStatus() *Status {
@@ -2484,7 +2590,7 @@ type UnsealTenantBarrierRequest struct {
 
 func (x *UnsealTenantBarrierRequest) Reset() {
 	*x = UnsealTenantBarrierRequest{}
-	mi := &file_tenant_proto_msgTypes[39]
+	mi := &file_tenant_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2496,7 +2602,7 @@ func (x *UnsealTenantBarrierRequest) String() string {
 func (*UnsealTenantBarrierRequest) ProtoMessage() {}
 
 func (x *UnsealTenantBarrierRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[39]
+	mi := &file_tenant_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2509,7 +2615,7 @@ func (x *UnsealTenantBarrierRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnsealTenantBarrierRequest.ProtoReflect.Descriptor instead.
 func (*UnsealTenantBarrierRequest) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{39}
+	return file_tenant_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *UnsealTenantBarrierRequest) GetTenantId() string {
@@ -2535,7 +2641,7 @@ type UnsealTenantBarrierResponse struct {
 
 func (x *UnsealTenantBarrierResponse) Reset() {
 	*x = UnsealTenantBarrierResponse{}
-	mi := &file_tenant_proto_msgTypes[40]
+	mi := &file_tenant_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2547,7 +2653,7 @@ func (x *UnsealTenantBarrierResponse) String() string {
 func (*UnsealTenantBarrierResponse) ProtoMessage() {}
 
 func (x *UnsealTenantBarrierResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[40]
+	mi := &file_tenant_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2560,7 +2666,7 @@ func (x *UnsealTenantBarrierResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnsealTenantBarrierResponse.ProtoReflect.Descriptor instead.
 func (*UnsealTenantBarrierResponse) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{40}
+	return file_tenant_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *UnsealTenantBarrierResponse) GetStatus() *Status {
@@ -2581,7 +2687,7 @@ type SealTenantBarrierRequest struct {
 
 func (x *SealTenantBarrierRequest) Reset() {
 	*x = SealTenantBarrierRequest{}
-	mi := &file_tenant_proto_msgTypes[41]
+	mi := &file_tenant_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2593,7 +2699,7 @@ func (x *SealTenantBarrierRequest) String() string {
 func (*SealTenantBarrierRequest) ProtoMessage() {}
 
 func (x *SealTenantBarrierRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[41]
+	mi := &file_tenant_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2606,7 +2712,7 @@ func (x *SealTenantBarrierRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SealTenantBarrierRequest.ProtoReflect.Descriptor instead.
 func (*SealTenantBarrierRequest) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{41}
+	return file_tenant_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *SealTenantBarrierRequest) GetTenantId() string {
@@ -2625,7 +2731,7 @@ type SealTenantBarrierResponse struct {
 
 func (x *SealTenantBarrierResponse) Reset() {
 	*x = SealTenantBarrierResponse{}
-	mi := &file_tenant_proto_msgTypes[42]
+	mi := &file_tenant_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2637,7 +2743,7 @@ func (x *SealTenantBarrierResponse) String() string {
 func (*SealTenantBarrierResponse) ProtoMessage() {}
 
 func (x *SealTenantBarrierResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[42]
+	mi := &file_tenant_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2650,7 +2756,7 @@ func (x *SealTenantBarrierResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SealTenantBarrierResponse.ProtoReflect.Descriptor instead.
 func (*SealTenantBarrierResponse) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{42}
+	return file_tenant_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *SealTenantBarrierResponse) GetStatus() *Status {
@@ -2672,7 +2778,7 @@ type GetTenantBarrierStatusRequest struct {
 
 func (x *GetTenantBarrierStatusRequest) Reset() {
 	*x = GetTenantBarrierStatusRequest{}
-	mi := &file_tenant_proto_msgTypes[43]
+	mi := &file_tenant_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2684,7 +2790,7 @@ func (x *GetTenantBarrierStatusRequest) String() string {
 func (*GetTenantBarrierStatusRequest) ProtoMessage() {}
 
 func (x *GetTenantBarrierStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[43]
+	mi := &file_tenant_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2697,7 +2803,7 @@ func (x *GetTenantBarrierStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantBarrierStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetTenantBarrierStatusRequest) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{43}
+	return file_tenant_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *GetTenantBarrierStatusRequest) GetTenantId() string {
@@ -2720,7 +2826,7 @@ type TenantBarrierStatus struct {
 
 func (x *TenantBarrierStatus) Reset() {
 	*x = TenantBarrierStatus{}
-	mi := &file_tenant_proto_msgTypes[44]
+	mi := &file_tenant_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2732,7 +2838,7 @@ func (x *TenantBarrierStatus) String() string {
 func (*TenantBarrierStatus) ProtoMessage() {}
 
 func (x *TenantBarrierStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[44]
+	mi := &file_tenant_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2745,7 +2851,7 @@ func (x *TenantBarrierStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TenantBarrierStatus.ProtoReflect.Descriptor instead.
 func (*TenantBarrierStatus) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{44}
+	return file_tenant_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *TenantBarrierStatus) GetTenantId() string {
@@ -2792,7 +2898,7 @@ type GetTenantBarrierStatusResponse struct {
 
 func (x *GetTenantBarrierStatusResponse) Reset() {
 	*x = GetTenantBarrierStatusResponse{}
-	mi := &file_tenant_proto_msgTypes[45]
+	mi := &file_tenant_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2804,7 +2910,7 @@ func (x *GetTenantBarrierStatusResponse) String() string {
 func (*GetTenantBarrierStatusResponse) ProtoMessage() {}
 
 func (x *GetTenantBarrierStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tenant_proto_msgTypes[45]
+	mi := &file_tenant_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2817,7 +2923,7 @@ func (x *GetTenantBarrierStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantBarrierStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetTenantBarrierStatusResponse) Descriptor() ([]byte, []int) {
-	return file_tenant_proto_rawDescGZIP(), []int{45}
+	return file_tenant_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *GetTenantBarrierStatusResponse) GetBarrierStatus() *TenantBarrierStatus {
@@ -2831,7 +2937,7 @@ var File_tenant_proto protoreflect.FileDescriptor
 
 const file_tenant_proto_rawDesc = "" +
 	"\n" +
-	"\ftenant.proto\x12\vplatform.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\fcommon.proto\"\x8f\x01\n" +
+	"\ftenant.proto\x12\vplatform.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\fcommon.proto\x1a\x10invitation.proto\"\x8f\x01\n" +
 	"\fComputeQuota\x12\x17\n" +
 	"\amax_vms\x18\x01 \x01(\x03R\x06maxVms\x12%\n" +
 	"\x0emax_containers\x18\x02 \x01(\x03R\rmaxContainers\x12\x1b\n" +
@@ -2955,7 +3061,15 @@ const file_tenant_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\x10vlan_range_startR\x0evlan_range_end\"p\n" +
 	"\x14CreateTenantResponse\x12+\n" +
 	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x12+\n" +
-	"\x06tenant\x18\x02 \x01(\v2\x13.platform.v1.TenantR\x06tenant\"\xeb\x02\n" +
+	"\x06tenant\x18\x02 \x01(\v2\x13.platform.v1.TenantR\x06tenant\"\x86\x01\n" +
+	"#CreateInitialAdminInvitationRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x14\n" +
+	"\x05email\x18\x02 \x01(\tR\x05email\x12,\n" +
+	"\x12expires_in_seconds\x18\x03 \x01(\x03R\x10expiresInSeconds\"_\n" +
+	"$CreateInitialAdminInvitationResponse\x127\n" +
+	"\n" +
+	"invitation\x18\x01 \x01(\v2\x17.platform.v1.InvitationR\n" +
+	"invitation\"\xeb\x02\n" +
 	"\x13UpdateTenantRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12D\n" +
@@ -3061,14 +3175,15 @@ const file_tenant_proto_rawDesc = "" +
 	"\x13TENANT_STATE_ACTIVE\x10\x02\x12\x1a\n" +
 	"\x16TENANT_STATE_SUSPENDED\x10\x03\x12\x19\n" +
 	"\x15TENANT_STATE_DELETING\x10\x04\x12\x18\n" +
-	"\x14TENANT_STATE_DELETED\x10\x052\xa5\r\n" +
+	"\x14TENANT_STATE_DELETED\x10\x052\xab\x0e\n" +
 	"\rTenantService\x12P\n" +
 	"\vListTenants\x12\x1f.platform.v1.ListTenantsRequest\x1a .platform.v1.ListTenantsResponse\x12J\n" +
 	"\tGetTenant\x12\x1d.platform.v1.GetTenantRequest\x1a\x1e.platform.v1.GetTenantResponse\x12\\\n" +
 	"\x0fGetTenantByName\x12#.platform.v1.GetTenantByNameRequest\x1a$.platform.v1.GetTenantByNameResponse\x12S\n" +
 	"\fCreateTenant\x12 .platform.v1.CreateTenantRequest\x1a!.platform.v1.CreateTenantResponse\x12S\n" +
 	"\fUpdateTenant\x12 .platform.v1.UpdateTenantRequest\x1a!.platform.v1.UpdateTenantResponse\x12S\n" +
-	"\fDeleteTenant\x12 .platform.v1.DeleteTenantRequest\x1a!.platform.v1.DeleteTenantResponse\x12V\n" +
+	"\fDeleteTenant\x12 .platform.v1.DeleteTenantRequest\x1a!.platform.v1.DeleteTenantResponse\x12\x83\x01\n" +
+	"\x1cCreateInitialAdminInvitation\x120.platform.v1.CreateInitialAdminInvitationRequest\x1a1.platform.v1.CreateInitialAdminInvitationResponse\x12V\n" +
 	"\rSuspendTenant\x12!.platform.v1.SuspendTenantRequest\x1a\".platform.v1.SuspendTenantResponse\x12S\n" +
 	"\fResumeTenant\x12 .platform.v1.ResumeTenantRequest\x1a!.platform.v1.ResumeTenantResponse\x12J\n" +
 	"\tGetQuotas\x12\x1d.platform.v1.GetQuotasRequest\x1a\x1e.platform.v1.GetQuotasResponse\x12S\n" +
@@ -3097,158 +3212,164 @@ func file_tenant_proto_rawDescGZIP() []byte {
 }
 
 var file_tenant_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_tenant_proto_msgTypes = make([]protoimpl.MessageInfo, 52)
+var file_tenant_proto_msgTypes = make([]protoimpl.MessageInfo, 54)
 var file_tenant_proto_goTypes = []any{
-	(TenantState)(0),                       // 0: platform.v1.TenantState
-	(*ComputeQuota)(nil),                   // 1: platform.v1.ComputeQuota
-	(*NetworkQuota)(nil),                   // 2: platform.v1.NetworkQuota
-	(*StorageQuota)(nil),                   // 3: platform.v1.StorageQuota
-	(*Tenant)(nil),                         // 4: platform.v1.Tenant
-	(*TenantUsage)(nil),                    // 5: platform.v1.TenantUsage
-	(*DEKReencryptionProgress)(nil),        // 6: platform.v1.DEKReencryptionProgress
-	(*TenantDEKStatus)(nil),                // 7: platform.v1.TenantDEKStatus
-	(*ListTenantsRequest)(nil),             // 8: platform.v1.ListTenantsRequest
-	(*ListTenantsResponse)(nil),            // 9: platform.v1.ListTenantsResponse
-	(*GetTenantRequest)(nil),               // 10: platform.v1.GetTenantRequest
-	(*GetTenantResponse)(nil),              // 11: platform.v1.GetTenantResponse
-	(*GetTenantByNameRequest)(nil),         // 12: platform.v1.GetTenantByNameRequest
-	(*GetTenantByNameResponse)(nil),        // 13: platform.v1.GetTenantByNameResponse
-	(*CreateTenantRequest)(nil),            // 14: platform.v1.CreateTenantRequest
-	(*CreateTenantResponse)(nil),           // 15: platform.v1.CreateTenantResponse
-	(*UpdateTenantRequest)(nil),            // 16: platform.v1.UpdateTenantRequest
-	(*UpdateTenantResponse)(nil),           // 17: platform.v1.UpdateTenantResponse
-	(*DeleteTenantRequest)(nil),            // 18: platform.v1.DeleteTenantRequest
-	(*DeleteTenantResponse)(nil),           // 19: platform.v1.DeleteTenantResponse
-	(*SuspendTenantRequest)(nil),           // 20: platform.v1.SuspendTenantRequest
-	(*SuspendTenantResponse)(nil),          // 21: platform.v1.SuspendTenantResponse
-	(*ResumeTenantRequest)(nil),            // 22: platform.v1.ResumeTenantRequest
-	(*ResumeTenantResponse)(nil),           // 23: platform.v1.ResumeTenantResponse
-	(*GetQuotasRequest)(nil),               // 24: platform.v1.GetQuotasRequest
-	(*GetQuotasResponse)(nil),              // 25: platform.v1.GetQuotasResponse
-	(*UpdateQuotasRequest)(nil),            // 26: platform.v1.UpdateQuotasRequest
-	(*UpdateQuotasResponse)(nil),           // 27: platform.v1.UpdateQuotasResponse
-	(*GetUsageRequest)(nil),                // 28: platform.v1.GetUsageRequest
-	(*GetUsageResponse)(nil),               // 29: platform.v1.GetUsageResponse
-	(*CheckQuotaRequest)(nil),              // 30: platform.v1.CheckQuotaRequest
-	(*CheckQuotaResponse)(nil),             // 31: platform.v1.CheckQuotaResponse
-	(*SyncTenantsRequest)(nil),             // 32: platform.v1.SyncTenantsRequest
-	(*SyncTenantsResponse)(nil),            // 33: platform.v1.SyncTenantsResponse
-	(*RotateTenantDEKRequest)(nil),         // 34: platform.v1.RotateTenantDEKRequest
-	(*RotateTenantDEKResponse)(nil),        // 35: platform.v1.RotateTenantDEKResponse
-	(*GetTenantDEKStatusRequest)(nil),      // 36: platform.v1.GetTenantDEKStatusRequest
-	(*GetTenantDEKStatusResponse)(nil),     // 37: platform.v1.GetTenantDEKStatusResponse
-	(*InitTenantBarrierRequest)(nil),       // 38: platform.v1.InitTenantBarrierRequest
-	(*InitTenantBarrierResponse)(nil),      // 39: platform.v1.InitTenantBarrierResponse
-	(*UnsealTenantBarrierRequest)(nil),     // 40: platform.v1.UnsealTenantBarrierRequest
-	(*UnsealTenantBarrierResponse)(nil),    // 41: platform.v1.UnsealTenantBarrierResponse
-	(*SealTenantBarrierRequest)(nil),       // 42: platform.v1.SealTenantBarrierRequest
-	(*SealTenantBarrierResponse)(nil),      // 43: platform.v1.SealTenantBarrierResponse
-	(*GetTenantBarrierStatusRequest)(nil),  // 44: platform.v1.GetTenantBarrierStatusRequest
-	(*TenantBarrierStatus)(nil),            // 45: platform.v1.TenantBarrierStatus
-	(*GetTenantBarrierStatusResponse)(nil), // 46: platform.v1.GetTenantBarrierStatusResponse
-	nil,                                    // 47: platform.v1.Tenant.LabelsEntry
-	nil,                                    // 48: platform.v1.Tenant.AnnotationsEntry
-	nil,                                    // 49: platform.v1.CreateTenantRequest.LabelsEntry
-	nil,                                    // 50: platform.v1.CreateTenantRequest.AnnotationsEntry
-	nil,                                    // 51: platform.v1.UpdateTenantRequest.LabelsEntry
-	nil,                                    // 52: platform.v1.UpdateTenantRequest.AnnotationsEntry
-	(*timestamppb.Timestamp)(nil),          // 53: google.protobuf.Timestamp
-	(*LabelSelector)(nil),                  // 54: platform.v1.LabelSelector
-	(*PaginationResponse)(nil),             // 55: platform.v1.PaginationResponse
-	(*Status)(nil),                         // 56: platform.v1.Status
+	(TenantState)(0),                             // 0: platform.v1.TenantState
+	(*ComputeQuota)(nil),                         // 1: platform.v1.ComputeQuota
+	(*NetworkQuota)(nil),                         // 2: platform.v1.NetworkQuota
+	(*StorageQuota)(nil),                         // 3: platform.v1.StorageQuota
+	(*Tenant)(nil),                               // 4: platform.v1.Tenant
+	(*TenantUsage)(nil),                          // 5: platform.v1.TenantUsage
+	(*DEKReencryptionProgress)(nil),              // 6: platform.v1.DEKReencryptionProgress
+	(*TenantDEKStatus)(nil),                      // 7: platform.v1.TenantDEKStatus
+	(*ListTenantsRequest)(nil),                   // 8: platform.v1.ListTenantsRequest
+	(*ListTenantsResponse)(nil),                  // 9: platform.v1.ListTenantsResponse
+	(*GetTenantRequest)(nil),                     // 10: platform.v1.GetTenantRequest
+	(*GetTenantResponse)(nil),                    // 11: platform.v1.GetTenantResponse
+	(*GetTenantByNameRequest)(nil),               // 12: platform.v1.GetTenantByNameRequest
+	(*GetTenantByNameResponse)(nil),              // 13: platform.v1.GetTenantByNameResponse
+	(*CreateTenantRequest)(nil),                  // 14: platform.v1.CreateTenantRequest
+	(*CreateTenantResponse)(nil),                 // 15: platform.v1.CreateTenantResponse
+	(*CreateInitialAdminInvitationRequest)(nil),  // 16: platform.v1.CreateInitialAdminInvitationRequest
+	(*CreateInitialAdminInvitationResponse)(nil), // 17: platform.v1.CreateInitialAdminInvitationResponse
+	(*UpdateTenantRequest)(nil),                  // 18: platform.v1.UpdateTenantRequest
+	(*UpdateTenantResponse)(nil),                 // 19: platform.v1.UpdateTenantResponse
+	(*DeleteTenantRequest)(nil),                  // 20: platform.v1.DeleteTenantRequest
+	(*DeleteTenantResponse)(nil),                 // 21: platform.v1.DeleteTenantResponse
+	(*SuspendTenantRequest)(nil),                 // 22: platform.v1.SuspendTenantRequest
+	(*SuspendTenantResponse)(nil),                // 23: platform.v1.SuspendTenantResponse
+	(*ResumeTenantRequest)(nil),                  // 24: platform.v1.ResumeTenantRequest
+	(*ResumeTenantResponse)(nil),                 // 25: platform.v1.ResumeTenantResponse
+	(*GetQuotasRequest)(nil),                     // 26: platform.v1.GetQuotasRequest
+	(*GetQuotasResponse)(nil),                    // 27: platform.v1.GetQuotasResponse
+	(*UpdateQuotasRequest)(nil),                  // 28: platform.v1.UpdateQuotasRequest
+	(*UpdateQuotasResponse)(nil),                 // 29: platform.v1.UpdateQuotasResponse
+	(*GetUsageRequest)(nil),                      // 30: platform.v1.GetUsageRequest
+	(*GetUsageResponse)(nil),                     // 31: platform.v1.GetUsageResponse
+	(*CheckQuotaRequest)(nil),                    // 32: platform.v1.CheckQuotaRequest
+	(*CheckQuotaResponse)(nil),                   // 33: platform.v1.CheckQuotaResponse
+	(*SyncTenantsRequest)(nil),                   // 34: platform.v1.SyncTenantsRequest
+	(*SyncTenantsResponse)(nil),                  // 35: platform.v1.SyncTenantsResponse
+	(*RotateTenantDEKRequest)(nil),               // 36: platform.v1.RotateTenantDEKRequest
+	(*RotateTenantDEKResponse)(nil),              // 37: platform.v1.RotateTenantDEKResponse
+	(*GetTenantDEKStatusRequest)(nil),            // 38: platform.v1.GetTenantDEKStatusRequest
+	(*GetTenantDEKStatusResponse)(nil),           // 39: platform.v1.GetTenantDEKStatusResponse
+	(*InitTenantBarrierRequest)(nil),             // 40: platform.v1.InitTenantBarrierRequest
+	(*InitTenantBarrierResponse)(nil),            // 41: platform.v1.InitTenantBarrierResponse
+	(*UnsealTenantBarrierRequest)(nil),           // 42: platform.v1.UnsealTenantBarrierRequest
+	(*UnsealTenantBarrierResponse)(nil),          // 43: platform.v1.UnsealTenantBarrierResponse
+	(*SealTenantBarrierRequest)(nil),             // 44: platform.v1.SealTenantBarrierRequest
+	(*SealTenantBarrierResponse)(nil),            // 45: platform.v1.SealTenantBarrierResponse
+	(*GetTenantBarrierStatusRequest)(nil),        // 46: platform.v1.GetTenantBarrierStatusRequest
+	(*TenantBarrierStatus)(nil),                  // 47: platform.v1.TenantBarrierStatus
+	(*GetTenantBarrierStatusResponse)(nil),       // 48: platform.v1.GetTenantBarrierStatusResponse
+	nil,                                          // 49: platform.v1.Tenant.LabelsEntry
+	nil,                                          // 50: platform.v1.Tenant.AnnotationsEntry
+	nil,                                          // 51: platform.v1.CreateTenantRequest.LabelsEntry
+	nil,                                          // 52: platform.v1.CreateTenantRequest.AnnotationsEntry
+	nil,                                          // 53: platform.v1.UpdateTenantRequest.LabelsEntry
+	nil,                                          // 54: platform.v1.UpdateTenantRequest.AnnotationsEntry
+	(*timestamppb.Timestamp)(nil),                // 55: google.protobuf.Timestamp
+	(*LabelSelector)(nil),                        // 56: platform.v1.LabelSelector
+	(*PaginationResponse)(nil),                   // 57: platform.v1.PaginationResponse
+	(*Status)(nil),                               // 58: platform.v1.Status
+	(*Invitation)(nil),                           // 59: platform.v1.Invitation
 }
 var file_tenant_proto_depIdxs = []int32{
 	0,  // 0: platform.v1.Tenant.state:type_name -> platform.v1.TenantState
 	1,  // 1: platform.v1.Tenant.compute_quota:type_name -> platform.v1.ComputeQuota
 	2,  // 2: platform.v1.Tenant.network_quota:type_name -> platform.v1.NetworkQuota
 	3,  // 3: platform.v1.Tenant.storage_quota:type_name -> platform.v1.StorageQuota
-	47, // 4: platform.v1.Tenant.labels:type_name -> platform.v1.Tenant.LabelsEntry
-	48, // 5: platform.v1.Tenant.annotations:type_name -> platform.v1.Tenant.AnnotationsEntry
-	53, // 6: platform.v1.Tenant.created_at:type_name -> google.protobuf.Timestamp
-	53, // 7: platform.v1.Tenant.updated_at:type_name -> google.protobuf.Timestamp
-	53, // 8: platform.v1.TenantUsage.timestamp:type_name -> google.protobuf.Timestamp
-	53, // 9: platform.v1.DEKReencryptionProgress.started_at:type_name -> google.protobuf.Timestamp
-	53, // 10: platform.v1.DEKReencryptionProgress.estimated_completion:type_name -> google.protobuf.Timestamp
-	53, // 11: platform.v1.TenantDEKStatus.created_at:type_name -> google.protobuf.Timestamp
-	53, // 12: platform.v1.TenantDEKStatus.rotated_at:type_name -> google.protobuf.Timestamp
+	49, // 4: platform.v1.Tenant.labels:type_name -> platform.v1.Tenant.LabelsEntry
+	50, // 5: platform.v1.Tenant.annotations:type_name -> platform.v1.Tenant.AnnotationsEntry
+	55, // 6: platform.v1.Tenant.created_at:type_name -> google.protobuf.Timestamp
+	55, // 7: platform.v1.Tenant.updated_at:type_name -> google.protobuf.Timestamp
+	55, // 8: platform.v1.TenantUsage.timestamp:type_name -> google.protobuf.Timestamp
+	55, // 9: platform.v1.DEKReencryptionProgress.started_at:type_name -> google.protobuf.Timestamp
+	55, // 10: platform.v1.DEKReencryptionProgress.estimated_completion:type_name -> google.protobuf.Timestamp
+	55, // 11: platform.v1.TenantDEKStatus.created_at:type_name -> google.protobuf.Timestamp
+	55, // 12: platform.v1.TenantDEKStatus.rotated_at:type_name -> google.protobuf.Timestamp
 	6,  // 13: platform.v1.TenantDEKStatus.reencrypt_progress:type_name -> platform.v1.DEKReencryptionProgress
-	54, // 14: platform.v1.ListTenantsRequest.selector:type_name -> platform.v1.LabelSelector
+	56, // 14: platform.v1.ListTenantsRequest.selector:type_name -> platform.v1.LabelSelector
 	4,  // 15: platform.v1.ListTenantsResponse.tenants:type_name -> platform.v1.Tenant
-	55, // 16: platform.v1.ListTenantsResponse.pagination:type_name -> platform.v1.PaginationResponse
+	57, // 16: platform.v1.ListTenantsResponse.pagination:type_name -> platform.v1.PaginationResponse
 	4,  // 17: platform.v1.GetTenantResponse.tenant:type_name -> platform.v1.Tenant
 	4,  // 18: platform.v1.GetTenantByNameResponse.tenant:type_name -> platform.v1.Tenant
-	49, // 19: platform.v1.CreateTenantRequest.labels:type_name -> platform.v1.CreateTenantRequest.LabelsEntry
-	50, // 20: platform.v1.CreateTenantRequest.annotations:type_name -> platform.v1.CreateTenantRequest.AnnotationsEntry
+	51, // 19: platform.v1.CreateTenantRequest.labels:type_name -> platform.v1.CreateTenantRequest.LabelsEntry
+	52, // 20: platform.v1.CreateTenantRequest.annotations:type_name -> platform.v1.CreateTenantRequest.AnnotationsEntry
 	1,  // 21: platform.v1.CreateTenantRequest.compute_quota:type_name -> platform.v1.ComputeQuota
 	2,  // 22: platform.v1.CreateTenantRequest.network_quota:type_name -> platform.v1.NetworkQuota
 	3,  // 23: platform.v1.CreateTenantRequest.storage_quota:type_name -> platform.v1.StorageQuota
-	56, // 24: platform.v1.CreateTenantResponse.status:type_name -> platform.v1.Status
+	58, // 24: platform.v1.CreateTenantResponse.status:type_name -> platform.v1.Status
 	4,  // 25: platform.v1.CreateTenantResponse.tenant:type_name -> platform.v1.Tenant
-	51, // 26: platform.v1.UpdateTenantRequest.labels:type_name -> platform.v1.UpdateTenantRequest.LabelsEntry
-	52, // 27: platform.v1.UpdateTenantRequest.annotations:type_name -> platform.v1.UpdateTenantRequest.AnnotationsEntry
-	56, // 28: platform.v1.UpdateTenantResponse.status:type_name -> platform.v1.Status
-	4,  // 29: platform.v1.UpdateTenantResponse.tenant:type_name -> platform.v1.Tenant
-	56, // 30: platform.v1.DeleteTenantResponse.status:type_name -> platform.v1.Status
-	56, // 31: platform.v1.SuspendTenantResponse.status:type_name -> platform.v1.Status
-	56, // 32: platform.v1.ResumeTenantResponse.status:type_name -> platform.v1.Status
-	1,  // 33: platform.v1.GetQuotasResponse.compute:type_name -> platform.v1.ComputeQuota
-	2,  // 34: platform.v1.GetQuotasResponse.network:type_name -> platform.v1.NetworkQuota
-	3,  // 35: platform.v1.GetQuotasResponse.storage:type_name -> platform.v1.StorageQuota
-	1,  // 36: platform.v1.UpdateQuotasRequest.compute:type_name -> platform.v1.ComputeQuota
-	2,  // 37: platform.v1.UpdateQuotasRequest.network:type_name -> platform.v1.NetworkQuota
-	3,  // 38: platform.v1.UpdateQuotasRequest.storage:type_name -> platform.v1.StorageQuota
-	56, // 39: platform.v1.UpdateQuotasResponse.status:type_name -> platform.v1.Status
-	5,  // 40: platform.v1.GetUsageResponse.usage:type_name -> platform.v1.TenantUsage
-	56, // 41: platform.v1.SyncTenantsResponse.status:type_name -> platform.v1.Status
-	53, // 42: platform.v1.RotateTenantDEKResponse.timestamp:type_name -> google.protobuf.Timestamp
-	7,  // 43: platform.v1.GetTenantDEKStatusResponse.dek_status:type_name -> platform.v1.TenantDEKStatus
-	56, // 44: platform.v1.InitTenantBarrierResponse.status:type_name -> platform.v1.Status
-	56, // 45: platform.v1.UnsealTenantBarrierResponse.status:type_name -> platform.v1.Status
-	56, // 46: platform.v1.SealTenantBarrierResponse.status:type_name -> platform.v1.Status
-	45, // 47: platform.v1.GetTenantBarrierStatusResponse.barrier_status:type_name -> platform.v1.TenantBarrierStatus
-	8,  // 48: platform.v1.TenantService.ListTenants:input_type -> platform.v1.ListTenantsRequest
-	10, // 49: platform.v1.TenantService.GetTenant:input_type -> platform.v1.GetTenantRequest
-	12, // 50: platform.v1.TenantService.GetTenantByName:input_type -> platform.v1.GetTenantByNameRequest
-	14, // 51: platform.v1.TenantService.CreateTenant:input_type -> platform.v1.CreateTenantRequest
-	16, // 52: platform.v1.TenantService.UpdateTenant:input_type -> platform.v1.UpdateTenantRequest
-	18, // 53: platform.v1.TenantService.DeleteTenant:input_type -> platform.v1.DeleteTenantRequest
-	20, // 54: platform.v1.TenantService.SuspendTenant:input_type -> platform.v1.SuspendTenantRequest
-	22, // 55: platform.v1.TenantService.ResumeTenant:input_type -> platform.v1.ResumeTenantRequest
-	24, // 56: platform.v1.TenantService.GetQuotas:input_type -> platform.v1.GetQuotasRequest
-	26, // 57: platform.v1.TenantService.UpdateQuotas:input_type -> platform.v1.UpdateQuotasRequest
-	28, // 58: platform.v1.TenantService.GetUsage:input_type -> platform.v1.GetUsageRequest
-	30, // 59: platform.v1.TenantService.CheckQuota:input_type -> platform.v1.CheckQuotaRequest
-	32, // 60: platform.v1.TenantService.Sync:input_type -> platform.v1.SyncTenantsRequest
-	34, // 61: platform.v1.TenantService.RotateTenantDEK:input_type -> platform.v1.RotateTenantDEKRequest
-	36, // 62: platform.v1.TenantService.GetTenantDEKStatus:input_type -> platform.v1.GetTenantDEKStatusRequest
-	38, // 63: platform.v1.TenantService.InitTenantBarrier:input_type -> platform.v1.InitTenantBarrierRequest
-	40, // 64: platform.v1.TenantService.UnsealTenantBarrier:input_type -> platform.v1.UnsealTenantBarrierRequest
-	42, // 65: platform.v1.TenantService.SealTenantBarrier:input_type -> platform.v1.SealTenantBarrierRequest
-	44, // 66: platform.v1.TenantService.GetTenantBarrierStatus:input_type -> platform.v1.GetTenantBarrierStatusRequest
-	9,  // 67: platform.v1.TenantService.ListTenants:output_type -> platform.v1.ListTenantsResponse
-	11, // 68: platform.v1.TenantService.GetTenant:output_type -> platform.v1.GetTenantResponse
-	13, // 69: platform.v1.TenantService.GetTenantByName:output_type -> platform.v1.GetTenantByNameResponse
-	15, // 70: platform.v1.TenantService.CreateTenant:output_type -> platform.v1.CreateTenantResponse
-	17, // 71: platform.v1.TenantService.UpdateTenant:output_type -> platform.v1.UpdateTenantResponse
-	19, // 72: platform.v1.TenantService.DeleteTenant:output_type -> platform.v1.DeleteTenantResponse
-	21, // 73: platform.v1.TenantService.SuspendTenant:output_type -> platform.v1.SuspendTenantResponse
-	23, // 74: platform.v1.TenantService.ResumeTenant:output_type -> platform.v1.ResumeTenantResponse
-	25, // 75: platform.v1.TenantService.GetQuotas:output_type -> platform.v1.GetQuotasResponse
-	27, // 76: platform.v1.TenantService.UpdateQuotas:output_type -> platform.v1.UpdateQuotasResponse
-	29, // 77: platform.v1.TenantService.GetUsage:output_type -> platform.v1.GetUsageResponse
-	31, // 78: platform.v1.TenantService.CheckQuota:output_type -> platform.v1.CheckQuotaResponse
-	33, // 79: platform.v1.TenantService.Sync:output_type -> platform.v1.SyncTenantsResponse
-	35, // 80: platform.v1.TenantService.RotateTenantDEK:output_type -> platform.v1.RotateTenantDEKResponse
-	37, // 81: platform.v1.TenantService.GetTenantDEKStatus:output_type -> platform.v1.GetTenantDEKStatusResponse
-	39, // 82: platform.v1.TenantService.InitTenantBarrier:output_type -> platform.v1.InitTenantBarrierResponse
-	41, // 83: platform.v1.TenantService.UnsealTenantBarrier:output_type -> platform.v1.UnsealTenantBarrierResponse
-	43, // 84: platform.v1.TenantService.SealTenantBarrier:output_type -> platform.v1.SealTenantBarrierResponse
-	46, // 85: platform.v1.TenantService.GetTenantBarrierStatus:output_type -> platform.v1.GetTenantBarrierStatusResponse
-	67, // [67:86] is the sub-list for method output_type
-	48, // [48:67] is the sub-list for method input_type
-	48, // [48:48] is the sub-list for extension type_name
-	48, // [48:48] is the sub-list for extension extendee
-	0,  // [0:48] is the sub-list for field type_name
+	59, // 26: platform.v1.CreateInitialAdminInvitationResponse.invitation:type_name -> platform.v1.Invitation
+	53, // 27: platform.v1.UpdateTenantRequest.labels:type_name -> platform.v1.UpdateTenantRequest.LabelsEntry
+	54, // 28: platform.v1.UpdateTenantRequest.annotations:type_name -> platform.v1.UpdateTenantRequest.AnnotationsEntry
+	58, // 29: platform.v1.UpdateTenantResponse.status:type_name -> platform.v1.Status
+	4,  // 30: platform.v1.UpdateTenantResponse.tenant:type_name -> platform.v1.Tenant
+	58, // 31: platform.v1.DeleteTenantResponse.status:type_name -> platform.v1.Status
+	58, // 32: platform.v1.SuspendTenantResponse.status:type_name -> platform.v1.Status
+	58, // 33: platform.v1.ResumeTenantResponse.status:type_name -> platform.v1.Status
+	1,  // 34: platform.v1.GetQuotasResponse.compute:type_name -> platform.v1.ComputeQuota
+	2,  // 35: platform.v1.GetQuotasResponse.network:type_name -> platform.v1.NetworkQuota
+	3,  // 36: platform.v1.GetQuotasResponse.storage:type_name -> platform.v1.StorageQuota
+	1,  // 37: platform.v1.UpdateQuotasRequest.compute:type_name -> platform.v1.ComputeQuota
+	2,  // 38: platform.v1.UpdateQuotasRequest.network:type_name -> platform.v1.NetworkQuota
+	3,  // 39: platform.v1.UpdateQuotasRequest.storage:type_name -> platform.v1.StorageQuota
+	58, // 40: platform.v1.UpdateQuotasResponse.status:type_name -> platform.v1.Status
+	5,  // 41: platform.v1.GetUsageResponse.usage:type_name -> platform.v1.TenantUsage
+	58, // 42: platform.v1.SyncTenantsResponse.status:type_name -> platform.v1.Status
+	55, // 43: platform.v1.RotateTenantDEKResponse.timestamp:type_name -> google.protobuf.Timestamp
+	7,  // 44: platform.v1.GetTenantDEKStatusResponse.dek_status:type_name -> platform.v1.TenantDEKStatus
+	58, // 45: platform.v1.InitTenantBarrierResponse.status:type_name -> platform.v1.Status
+	58, // 46: platform.v1.UnsealTenantBarrierResponse.status:type_name -> platform.v1.Status
+	58, // 47: platform.v1.SealTenantBarrierResponse.status:type_name -> platform.v1.Status
+	47, // 48: platform.v1.GetTenantBarrierStatusResponse.barrier_status:type_name -> platform.v1.TenantBarrierStatus
+	8,  // 49: platform.v1.TenantService.ListTenants:input_type -> platform.v1.ListTenantsRequest
+	10, // 50: platform.v1.TenantService.GetTenant:input_type -> platform.v1.GetTenantRequest
+	12, // 51: platform.v1.TenantService.GetTenantByName:input_type -> platform.v1.GetTenantByNameRequest
+	14, // 52: platform.v1.TenantService.CreateTenant:input_type -> platform.v1.CreateTenantRequest
+	18, // 53: platform.v1.TenantService.UpdateTenant:input_type -> platform.v1.UpdateTenantRequest
+	20, // 54: platform.v1.TenantService.DeleteTenant:input_type -> platform.v1.DeleteTenantRequest
+	16, // 55: platform.v1.TenantService.CreateInitialAdminInvitation:input_type -> platform.v1.CreateInitialAdminInvitationRequest
+	22, // 56: platform.v1.TenantService.SuspendTenant:input_type -> platform.v1.SuspendTenantRequest
+	24, // 57: platform.v1.TenantService.ResumeTenant:input_type -> platform.v1.ResumeTenantRequest
+	26, // 58: platform.v1.TenantService.GetQuotas:input_type -> platform.v1.GetQuotasRequest
+	28, // 59: platform.v1.TenantService.UpdateQuotas:input_type -> platform.v1.UpdateQuotasRequest
+	30, // 60: platform.v1.TenantService.GetUsage:input_type -> platform.v1.GetUsageRequest
+	32, // 61: platform.v1.TenantService.CheckQuota:input_type -> platform.v1.CheckQuotaRequest
+	34, // 62: platform.v1.TenantService.Sync:input_type -> platform.v1.SyncTenantsRequest
+	36, // 63: platform.v1.TenantService.RotateTenantDEK:input_type -> platform.v1.RotateTenantDEKRequest
+	38, // 64: platform.v1.TenantService.GetTenantDEKStatus:input_type -> platform.v1.GetTenantDEKStatusRequest
+	40, // 65: platform.v1.TenantService.InitTenantBarrier:input_type -> platform.v1.InitTenantBarrierRequest
+	42, // 66: platform.v1.TenantService.UnsealTenantBarrier:input_type -> platform.v1.UnsealTenantBarrierRequest
+	44, // 67: platform.v1.TenantService.SealTenantBarrier:input_type -> platform.v1.SealTenantBarrierRequest
+	46, // 68: platform.v1.TenantService.GetTenantBarrierStatus:input_type -> platform.v1.GetTenantBarrierStatusRequest
+	9,  // 69: platform.v1.TenantService.ListTenants:output_type -> platform.v1.ListTenantsResponse
+	11, // 70: platform.v1.TenantService.GetTenant:output_type -> platform.v1.GetTenantResponse
+	13, // 71: platform.v1.TenantService.GetTenantByName:output_type -> platform.v1.GetTenantByNameResponse
+	15, // 72: platform.v1.TenantService.CreateTenant:output_type -> platform.v1.CreateTenantResponse
+	19, // 73: platform.v1.TenantService.UpdateTenant:output_type -> platform.v1.UpdateTenantResponse
+	21, // 74: platform.v1.TenantService.DeleteTenant:output_type -> platform.v1.DeleteTenantResponse
+	17, // 75: platform.v1.TenantService.CreateInitialAdminInvitation:output_type -> platform.v1.CreateInitialAdminInvitationResponse
+	23, // 76: platform.v1.TenantService.SuspendTenant:output_type -> platform.v1.SuspendTenantResponse
+	25, // 77: platform.v1.TenantService.ResumeTenant:output_type -> platform.v1.ResumeTenantResponse
+	27, // 78: platform.v1.TenantService.GetQuotas:output_type -> platform.v1.GetQuotasResponse
+	29, // 79: platform.v1.TenantService.UpdateQuotas:output_type -> platform.v1.UpdateQuotasResponse
+	31, // 80: platform.v1.TenantService.GetUsage:output_type -> platform.v1.GetUsageResponse
+	33, // 81: platform.v1.TenantService.CheckQuota:output_type -> platform.v1.CheckQuotaResponse
+	35, // 82: platform.v1.TenantService.Sync:output_type -> platform.v1.SyncTenantsResponse
+	37, // 83: platform.v1.TenantService.RotateTenantDEK:output_type -> platform.v1.RotateTenantDEKResponse
+	39, // 84: platform.v1.TenantService.GetTenantDEKStatus:output_type -> platform.v1.GetTenantDEKStatusResponse
+	41, // 85: platform.v1.TenantService.InitTenantBarrier:output_type -> platform.v1.InitTenantBarrierResponse
+	43, // 86: platform.v1.TenantService.UnsealTenantBarrier:output_type -> platform.v1.UnsealTenantBarrierResponse
+	45, // 87: platform.v1.TenantService.SealTenantBarrier:output_type -> platform.v1.SealTenantBarrierResponse
+	48, // 88: platform.v1.TenantService.GetTenantBarrierStatus:output_type -> platform.v1.GetTenantBarrierStatusResponse
+	69, // [69:89] is the sub-list for method output_type
+	49, // [49:69] is the sub-list for method input_type
+	49, // [49:49] is the sub-list for extension type_name
+	49, // [49:49] is the sub-list for extension extendee
+	0,  // [0:49] is the sub-list for field type_name
 }
 
 func init() { file_tenant_proto_init() }
@@ -3257,13 +3378,14 @@ func file_tenant_proto_init() {
 		return
 	}
 	file_common_proto_init()
+	file_invitation_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_tenant_proto_rawDesc), len(file_tenant_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   52,
+			NumMessages:   54,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

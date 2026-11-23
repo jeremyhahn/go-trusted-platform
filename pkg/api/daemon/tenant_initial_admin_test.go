@@ -28,7 +28,7 @@ func (f *fakeInitialAdminInviter) CreateInitialAdmin(
 	f.got = req
 	now := time.Now()
 	return &entities.Invitation{
-		ID:        "inv-1",
+		ID:        1,
 		Token:     "token-1",
 		TenantID:  req.TenantID,
 		Email:     req.Email,
@@ -39,6 +39,10 @@ func (f *fakeInitialAdminInviter) CreateInitialAdmin(
 		UpdatedAt: now,
 	}, nil
 }
+
+// The daemon hands the registry's invitation service to the tenant server
+// by a type assertion; this keeps the concrete service on the capability.
+var _ initialAdminInviter = (*platformservice.InvitationService)(nil)
 
 const initialAdminSystemTenant = "system"
 

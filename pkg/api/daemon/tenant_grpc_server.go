@@ -17,6 +17,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
+
+	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -38,6 +42,22 @@ type TenantGRPCServer struct {
 	// systemTenantID is the platform's operating tenant, the one tenant
 	// that may act on every other (tenant_grpc_authz.go).
 	systemTenantID string
+
+	// initialAdmin mints a tenant's owner invitation; nil until the
+	// daemon wires the invitation service (SetInitialAdminInviter).
+	initialAdmin initialAdminInviter
+}
+
+// initialAdminInviter is the one owner-minting capability the tenant
+// server needs. It is declared here, at its point of use, so the general
+// InvitationServicer never gains a method that confers tenant ownership.
+type initialAdminInviter interface {
+	CreateInitialAdmin(context.Context, *platformservice.CreateInvitationRequest) (*entities.Invitation, error)
+}
+
+// SetInitialAdminInviter wires the owner-invitation path.
+func (s *TenantGRPCServer) SetInitialAdminInviter(inv initialAdminInviter) {
+	s.initialAdmin = inv
 }
 
 // TenantGRPCServerOption is a functional option for configuring TenantGRPCServer.
@@ -242,6 +262,48 @@ func (s *TenantGRPCServer) CreateTenant(
 			Message: "tenant created successfully",
 		},
 		Tenant: s.entityToTenantPb(entity),
+	}, nil
+}
+
+// CreateInitialAdminInvitation mints the invitation whose accepter becomes
+// the named tenant's owner. Only the system tenant may call it: a tenant
+// admin naming their own tenant would otherwise mint themselves an owner.
+// The caller check runs before any argument check.
+func (s *TenantGRPCServer) CreateInitialAdminInvitation(
+	ctx context.Context,
+	req *platformv1.CreateInitialAdminInvitationRequest,
+) (*platformv1.CreateInitialAdminInvitationResponse, error) {
+	if err := s.authorizeSystemTenant(ctx, "CreateInitialAdminInvitation"); err != nil {
+		return nil, err
+	}
+	if s.initialAdmin == nil {
+		return nil, status.Error(codes.FailedPrecondition, "initial-admin invitations not available")
+	}
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	if req.GetEmail() == "" {
+		return nil, status.Error(codes.InvalidArgument, "email is required")
+	}
+
+	createReq := &platformservice.CreateInvitationRequest{
+		TenantID: req.GetTenantId(),
+		Email:    req.GetEmail(),
+	}
+	if secs := req.GetExpiresInSeconds(); secs > 0 {
+		createReq.ExpiresIn = time.Duration(secs) * time.Second
+	}
+	inv, err := s.initialAdmin.CreateInitialAdmin(ctx, createReq)
+	if err != nil {
+		code := invitationErrorCode(err)
+		if code == codes.Internal {
+			s.logger.Error("failed to create initial-admin invitation", "tenant", req.GetTenantId(), "error", err)
+		}
+		return nil, status.Error(code, err.Error())
+	}
+	s.logger.Info("initial-admin invitation created", "tenant", inv.TenantID, "id", inv.ID)
+	return &platformv1.CreateInitialAdminInvitationResponse{
+		Invitation: invitationToProto(inv),
 	}, nil
 }
 
