@@ -24,6 +24,23 @@ vi.mock('@/contexts/AuthContext', async (importOriginal) => ({
 const QUOTAS_PATH = 'GET /api/v1/tenants/t-1/quotas';
 const USAGE_PATH = 'GET /api/v1/tenants/t-1/usage';
 const UPDATE_PATH = 'PUT /api/v1/tenants/t-1/quotas';
+const CAPS_PATH = 'GET /api/v1/capabilities';
+const UPDATE_OP = 'PUT /api/v1/tenants/{id}/quotas';
+const REASON = 'not-configured: tenant';
+
+// The capabilities answer: Edit limits sits in the gate on its PUT op.
+function caps(updateEnabled = true): Answer {
+  const capabilities = [
+    updateEnabled
+      ? { op: UPDATE_OP, kind: 'route', enabled: true }
+      : { op: UPDATE_OP, kind: 'route', enabled: false, reason: REASON },
+  ];
+  return ok({
+    capabilities,
+    total: capabilities.length,
+    enabled: capabilities.filter((c) => c.enabled).length,
+  });
+}
 
 function storedQuotas(maxVms: number): Answer {
   return ok({
@@ -61,6 +78,8 @@ async function click(name: string) {
 
 async function openEditor() {
   await screen.findByText('Quota Limits Reference');
+  const edit = screen.getByRole('button', { name: 'Edit limits' });
+  await waitFor(() => expect(edit.getAttribute('data-capability-enabled')).toBe('true'));
   await click('Edit limits');
 }
 
@@ -79,7 +98,11 @@ describe('TenantQuotasPage UpdateQuotas', () => {
   });
 
   it('reads the limits through GET /tenants/{id}/quotas', async () => {
-    const sent = stubControlPlane({ [QUOTAS_PATH]: storedQuotas(12), [USAGE_PATH]: storedUsage() });
+    const sent = stubControlPlane({
+      [QUOTAS_PATH]: storedQuotas(12),
+      [USAGE_PATH]: storedUsage(),
+      [CAPS_PATH]: caps(),
+    });
     render(withControlPlane(<TenantQuotasPage />));
 
     await screen.findByText('Quota Limits Reference');
@@ -91,6 +114,7 @@ describe('TenantQuotasPage UpdateQuotas', () => {
     const routes: Record<string, Answer> = {
       [QUOTAS_PATH]: storedQuotas(12),
       [USAGE_PATH]: storedUsage(),
+      [CAPS_PATH]: caps(),
       [UPDATE_PATH]: ok({ status: { success: true, message: 'quotas updated successfully' } }),
     };
     const sent = stubControlPlane(routes);
@@ -130,6 +154,7 @@ describe('TenantQuotasPage UpdateQuotas', () => {
     const sent = stubControlPlane({
       [QUOTAS_PATH]: storedQuotas(12),
       [USAGE_PATH]: storedUsage(),
+      [CAPS_PATH]: caps(),
       [UPDATE_PATH]: refused(403, 'quota update denied for tenant t-1'),
     });
     render(withControlPlane(<TenantQuotasPage />));
@@ -155,6 +180,7 @@ describe('TenantQuotasPage UpdateQuotas', () => {
     const sent = stubControlPlane({
       [QUOTAS_PATH]: storedQuotas(12),
       [USAGE_PATH]: storedUsage(),
+      [CAPS_PATH]: caps(),
       [UPDATE_PATH]: ok({ status: { success: true, message: 'quotas updated successfully' } }),
     });
     render(withControlPlane(<TenantQuotasPage />));
@@ -165,6 +191,27 @@ describe('TenantQuotasPage UpdateQuotas', () => {
 
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toBe('Limits must be whole numbers, 0 or more.');
+    expect(sent.some((r) => r.method === 'PUT')).toBe(false);
+  });
+
+  it('withholds Edit limits the server does not offer', async () => {
+    const sent = stubControlPlane({
+      [QUOTAS_PATH]: storedQuotas(12),
+      [USAGE_PATH]: storedUsage(),
+      [CAPS_PATH]: caps(false),
+      [UPDATE_PATH]: ok({ status: { success: true, message: 'quotas updated successfully' } }),
+    });
+    render(withControlPlane(<TenantQuotasPage />));
+
+    await screen.findByText('Quota Limits Reference');
+    const edit = screen.getByRole('button', { name: 'Edit limits' });
+    await waitFor(() => expect(edit.getAttribute('title')).toBe(REASON));
+    expect((edit as HTMLButtonElement).disabled).toBe(true);
+    expect(edit.getAttribute('data-capability-enabled')).toBe('false');
+    expect(edit.getAttribute('data-capability-op')).toBe(UPDATE_OP);
+
+    await click('Edit limits');
+    expect(screen.queryByRole('button', { name: 'Save limits' })).toBeNull();
     expect(sent.some((r) => r.method === 'PUT')).toBe(false);
   });
 });
