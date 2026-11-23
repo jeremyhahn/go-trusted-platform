@@ -38,7 +38,7 @@ Host A                                              Host B
 |    | OVS br-int |         |                       |    | OVS br-int |         |
 |    | vxlan-evpn |         |                       |    | vxlan-evpn |         |
 |    +-----+------+         |                       |    +-----+------+         |
-|          | VTEP 10.0.0.1  |                       |          | VTEP 10.0.0.2  |
+|          | VTEP 192.0.2.1 |                       |          | VTEP 192.0.2.2 |
 +----------|----------------+                       +----------|----------------+
            |      VXLAN, UDP 4789, VNI from the flow           |
            +---------------------------------------------------+
@@ -99,8 +99,8 @@ platformctl sdn overlay vni list
 ovs-vsctl list interface vxlan-evpn
 
 # Underlay reachability and MTU to the remote VTEP
-ping -M do -s 9022 10.0.0.2
-nc -zuv 10.0.0.2 4789
+ping -M do -s 9022 192.0.2.2
+nc -zuv 192.0.2.2 4789
 ```
 
 ## Documentation

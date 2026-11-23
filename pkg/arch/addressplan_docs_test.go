@@ -32,7 +32,11 @@ var privateRanges = []netip.Prefix{
 //     documentation range can hold;
 //   - docs/gateway/user.md, docs/installer/user.md, docs/ntp/architecture.md,
 //     docs/ntp/user.md, docs/operations/gateway-bringup.md and
-//     docs/plans/1994.md quote addresses of that same block-4 reference plan;
+//     docs/plans/1994.md quote addresses of that same block-4 reference plan,
+//     as do docs/sdn/api-reference-rest.md, docs/sdn/configuration.md,
+//     docs/sdn/ipam/configuration.md, docs/sdn/overlay/configuration.md,
+//     docs/sdn/tunnel/README.md, docs/sdn/tunnel/configuration.md and
+//     docs/sdn/user.md;
 //   - docs/ipxe/cli.md, docs/ipxe/engineering.md and docs/ipxe/user.md quote
 //     the PXE test environment constants of pkg/ipxe/testenv.go;
 //   - docs/dns/configuration.md quotes the default forwarders of
@@ -58,9 +62,7 @@ var docsAddressFiles = []string{
 	"docs/provisioning/README.md",
 	"docs/provisioning/client.md",
 	"docs/sdn/INDEX.md",
-	"docs/sdn/api-reference-rest.md",
 	"docs/sdn/cli-usage.md",
-	"docs/sdn/configuration.md",
 	"docs/sdn/dhcp/architecture.md",
 	"docs/sdn/dhcp/cli-usage.md",
 	"docs/sdn/dhcp/configuration.md",
@@ -69,14 +71,9 @@ var docsAddressFiles = []string{
 	"docs/sdn/ipam/README.md",
 	"docs/sdn/ipam/api-reference-unix.md",
 	"docs/sdn/ipam/architecture.md",
-	"docs/sdn/ipam/configuration.md",
 	"docs/sdn/overlay/README.md",
-	"docs/sdn/overlay/configuration.md",
 	"docs/sdn/overlay/operations.md",
 	"docs/sdn/provisioning.md",
-	"docs/sdn/tunnel/README.md",
-	"docs/sdn/tunnel/configuration.md",
-	"docs/sdn/user.md",
 	"docs/trust/engineering.md",
 	"docs/trust/user.md",
 	"docs/vpn/api.md",

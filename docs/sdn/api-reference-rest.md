@@ -185,7 +185,7 @@ carries the VLAN ID.
     "enabled": true,
     "rules": [
       {"ruleId": "r1", "priority": 1,
-       "match": {"sourceIp": "10.0.0.0/24", "destinationPort": 22, "protocol": "tcp"},
+       "match": {"sourceIp": "198.18.0.0/24", "destinationPort": 22, "protocol": "tcp"},
        "action": "POLICY_RULE_ACTION_DENY", "log": true}
     ],
     "targets": [{"type": "POLICY_TARGET_TYPE_BRIDGE", "id": "br0", "direction": "ingress"}]

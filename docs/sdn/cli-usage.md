@@ -492,7 +492,7 @@ platformctl sdn ipam pool delete --id <pool-id>
 
 Examples:
   platformctl sdn ipam pool list
-  platformctl sdn ipam pool create --name prod-v4 --cidr 10.0.0.0/24 --gateway 10.0.0.1
+  platformctl sdn ipam pool create --name prod-v4 --cidr 198.18.0.0/24 --gateway 198.18.0.1
   platformctl sdn ipam pool create --name prod-v6 --cidr 2001:DB8:1234::/64 --gateway 2001:DB8:1234::1
   platformctl sdn ipam pool delete --id prod-v4
 ```
@@ -514,7 +514,7 @@ platformctl sdn ipam allocations [--pool-id <POOL-ID>]
 
 Examples:
   platformctl sdn ipam allocate --pool-id prod-v4 --device-id vm-001 --hostname webserver
-  platformctl sdn ipam release --ip 10.0.0.50
+  platformctl sdn ipam release --ip 198.18.0.50
   platformctl sdn ipam allocations
   platformctl sdn ipam allocations --pool-id prod-v4
 ```

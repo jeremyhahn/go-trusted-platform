@@ -43,7 +43,7 @@ gateway:
     port-range-start: 1024
     port-range-end: 65535
     max-sessions: 65536
-    internal-cidr: 10.0.100.0/24   # optional: SNAT at service start
+    internal-cidr: 198.18.100.0/24 # optional: SNAT at service start
     uplink-port: eth0              # optional: defaults to first uplink
     bridge: br-int                 # optional; overrides the runtime bridge
 ```
@@ -77,12 +77,12 @@ translation rules:
 ```go
 nat, ok := gw.NATService()
 // SNAT
-err := nat.EnableSNAT(ctx, netip.MustParsePrefix("10.0.100.0/24"))
+err := nat.EnableSNAT(ctx, netip.MustParsePrefix("198.18.100.0/24"))
 err  = nat.DisableSNAT(ctx)
-// DNAT: tcp 203.0.113.10:443 → 10.0.100.5:8443
+// DNAT: tcp 203.0.113.10:443 → 198.18.100.5:8443
 err  = nat.AddDNAT(ctx, "tcp",
         netip.MustParseAddrPort("203.0.113.10:443"),
-        netip.MustParseAddrPort("10.0.100.5:8443"))
+        netip.MustParseAddrPort("198.18.100.5:8443"))
 err  = nat.RemoveDNAT(ctx, "tcp", netip.MustParseAddrPort("203.0.113.10:443"))
 ```
 
