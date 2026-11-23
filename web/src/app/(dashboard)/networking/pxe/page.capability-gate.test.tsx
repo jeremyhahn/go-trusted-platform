@@ -51,6 +51,10 @@ async function openDialog(): Promise<void> {
   await screen.findByText('Register PXE Device');
 }
 
+function successToasts(): HTMLElement[] {
+  return screen.queryAllByTestId('toast').filter((t) => t.getAttribute('data-variant') === 'success');
+}
+
 function dialogRegister(): HTMLElement {
   return screen.getByRole('button', { name: /^Register$/ });
 }
@@ -104,6 +108,8 @@ describe('PXEBootPage register gate', () => {
 
     await openDialog();
     fireEvent.change(screen.getByLabelText('MAC Address *'), { target: { value: '02:00:00:00:00:01' } });
+    // The toast store is module state, so a success toast from an earlier case may still be listed.
+    const successBefore = successToasts();
     await act(async () => {
       fireEvent.click(dialogRegister());
     });
@@ -114,7 +120,7 @@ describe('PXEBootPage register gate', () => {
         .filter((t) => t.getAttribute('data-variant') === 'destructive');
       expect(destructive.some((t) => (t.textContent ?? '').includes('device already registered'))).toBe(true);
     });
-    expect(screen.queryAllByTestId('toast').some((t) => t.getAttribute('data-variant') === 'success')).toBe(false);
+    expect(successToasts().filter((t) => !successBefore.includes(t))).toEqual([]);
     expect(screen.getByText('Register PXE Device')).toBeTruthy();
   });
 });

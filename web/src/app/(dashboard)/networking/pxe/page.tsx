@@ -33,6 +33,7 @@ import { PXEDeviceActions } from '@/components/features/pxe/pxe-device-actions';
 import { PXEServiceControls } from '@/components/features/pxe/pxe-service-controls';
 import Link from 'next/link';
 import { PXEMacLookup } from '@/components/features/pxe/pxe-mac-lookup';
+import { Gated } from '@/components/features/capabilities/gated';
 
 export default function PXEBootPage() {
   const { toast } = useToast();
@@ -271,10 +272,12 @@ export default function PXEBootPage() {
           <Button variant="outline" size="icon" onClick={fetchData} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            Register Device
-          </Button>
+          <Gated op="POST /api/v1/pxe/devices">
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Register Device
+            </Button>
+          </Gated>
         </div>
       </div>
 
@@ -299,30 +302,40 @@ export default function PXEBootPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
-            <Button
-              disabled={!createMac || createSubmitting}
-              onClick={async () => {
-                setCreateSubmitting(true);
-                try {
-                  await pxe.registerDevice({ macAddress: createMac });
-                  toast({ title: 'Device registered', variant: 'success' });
-                  setCreateOpen(false);
-                  setCreateMac('');
-                  refetchDevices();
-                } catch (err) {
-                  toast({
-                    title: 'Failed to register device',
-                    description: err instanceof Error ? err.message : 'Unknown error',
-                    variant: 'destructive',
-                  });
-                } finally {
-                  setCreateSubmitting(false);
-                }
-              }}
-            >
-              {createSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Register
-            </Button>
+            <Gated op="POST /api/v1/pxe/devices">
+              <Button
+                disabled={!createMac || createSubmitting}
+                onClick={async () => {
+                  setCreateSubmitting(true);
+                  try {
+                    const res = await pxe.registerDevice({ macAddress: createMac });
+                    if (res.success === false) {
+                      toast({
+                        title: 'Failed to register device',
+                        description: res.error?.message ?? 'Unknown error',
+                        variant: 'destructive',
+                      });
+                      return;
+                    }
+                    toast({ title: 'Device registered', variant: 'success' });
+                    setCreateOpen(false);
+                    setCreateMac('');
+                    refetchDevices();
+                  } catch (err) {
+                    toast({
+                      title: 'Failed to register device',
+                      description: err instanceof Error ? err.message : 'Unknown error',
+                      variant: 'destructive',
+                    });
+                  } finally {
+                    setCreateSubmitting(false);
+                  }
+                }}
+              >
+                {createSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Register
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
