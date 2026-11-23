@@ -28,6 +28,8 @@ import type {
   ListAllocationsResponse,
   GatewaySnapshot,
   ListGatewayStateResponse,
+  GatewayAdmittedVTEP,
+  ListGatewayAdmittedVTEPsResponse,
   GetNAT64StatusResponse,
 } from '../types/gateway.js';
 
@@ -127,6 +129,26 @@ export class GatewayService extends BaseService {
    */
   async deleteState(gatewayId: string): Promise<ApiResponse<void>> {
     return this.client.delete(this.buildUrl(`/state/${encodeURIComponent(gatewayId)}`));
+  }
+
+  /**
+   * List the VTEPs one gateway admitted to its overlay.
+   * GET /v1/gateway/state/{id}/admitted-vteps
+   */
+  async listAdmittedVTEPs(gatewayId: string): Promise<ApiResponse<ListGatewayAdmittedVTEPsResponse>> {
+    return this.client.get<ListGatewayAdmittedVTEPsResponse>(
+      this.buildUrl(`/state/${encodeURIComponent(gatewayId)}/admitted-vteps`)
+    );
+  }
+
+  /**
+   * Read one VTEP a gateway admitted to its overlay.
+   * GET /v1/gateway/state/{id}/admitted-vteps/{vtep}
+   */
+  async getAdmittedVTEP(gatewayId: string, vtep: string): Promise<ApiResponse<GatewayAdmittedVTEP>> {
+    return this.client.get<GatewayAdmittedVTEP>(
+      this.buildUrl(`/state/${encodeURIComponent(gatewayId)}/admitted-vteps/${encodeURIComponent(vtep)}`)
+    );
   }
 
   // =========================================================================

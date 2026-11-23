@@ -140,9 +140,11 @@ func TestRegisterRoutes_OperatorHalfIsExactlyTheStateSurface(t *testing.T) {
 	cp := newControlPlane(nil, nil)
 
 	assert.Equal(t, map[string]bool{
-		"GET /api/v1/gateway/state":         true,
-		"GET /api/v1/gateway/state/{id}":    true,
-		"DELETE /api/v1/gateway/state/{id}": true,
+		"GET /api/v1/gateway/state":                            true,
+		"GET /api/v1/gateway/state/{id}":                       true,
+		"DELETE /api/v1/gateway/state/{id}":                    true,
+		"GET /api/v1/gateway/state/{id}/admitted-vteps":        true,
+		"GET /api/v1/gateway/state/{id}/admitted-vteps/{vtep}": true,
 	}, registeredControlPlanePaths(cp.RegisterRoutes))
 }
 
@@ -173,7 +175,7 @@ func TestControlPlaneHalvesAreDisjointAndCoverTheSurface(t *testing.T) {
 	for route := range operator {
 		assert.False(t, gateway[route], "route is in both halves: %s", route)
 	}
-	assert.Len(t, operator, 3)
+	assert.Len(t, operator, 5)
 	assert.Len(t, gateway, 4)
 }
 
