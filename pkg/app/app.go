@@ -31,6 +31,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -3170,7 +3171,7 @@ func (app *App) ImportEndorsementKeyCertificate(ctx context.Context) (*x509.Cert
 // An already loaded CA is kept. platformd serve and the embedded host
 // both bring up the CA through this one path.
 func (app *App) LoadOrInitCA(ctx context.Context, initParams *AppInitParams) error {
-	if app.CA != nil {
+	if app.CurrentCA() != nil {
 		return nil
 	}
 	if app.CAConfig == nil {
@@ -3195,6 +3196,27 @@ func (app *App) LoadOrInitCA(ctx context.Context, initParams *AppInitParams) err
 	}
 	app.Logger.Info("CA initialized successfully")
 	return nil
+}
+
+// appCAMu guards App.CA between the CA initializer, which publishes it while
+// the daemon serves requests, and the request paths that read it. App is
+// copied by value elsewhere, so the lock is package-level, as certInstallerInit
+// is, not a field.
+var appCAMu sync.RWMutex
+
+// CurrentCA returns the published CA, or nil before LoadCA or InitCA set it.
+// Paths that may run while the CA initializer runs read App.CA through it.
+func (app *App) CurrentCA() quicbaasca.CACertificateAuthority {
+	appCAMu.RLock()
+	defer appCAMu.RUnlock()
+	return app.CA
+}
+
+// publishCA sets App.CA under appCAMu; LoadCA and InitCA publish through it.
+func (app *App) publishCA(ca quicbaasca.CACertificateAuthority) {
+	appCAMu.Lock()
+	defer appCAMu.Unlock()
+	app.CA = ca
 }
 
 func (app *App) LoadCA(ctx context.Context, soPIN, userPIN xkmssdk.Password) error {
@@ -3271,7 +3293,7 @@ func (app *App) LoadCA(ctx context.Context, soPIN, userPIN xkmssdk.Password) err
 		tcg.SetTPM(app.TPM)
 	}
 
-	app.CA = mustTCGCA(caInstance)
+	app.publishCA(mustTCGCA(caInstance))
 	return nil
 }
 
@@ -3348,7 +3370,7 @@ func (app *App) InitCA(ctx context.Context, soPIN, userPIN xkmssdk.Password, ini
 	}
 
 	tcgCA := mustTCGCA(caInstance)
-	app.CA = tcgCA
+	app.publishCA(tcgCA)
 
 	return tcgCA, nil
 }

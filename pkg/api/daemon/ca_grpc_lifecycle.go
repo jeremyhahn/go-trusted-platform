@@ -86,10 +86,11 @@ func AppCAInitializer(a *app.App) CAInitializer {
 		if err := a.LoadOrInitCA(ctx, nil); err != nil {
 			return nil, err
 		}
-		if err := injectQuicBaaSCA(a, a.CA); err != nil {
+		ca := a.CurrentCA()
+		if err := injectQuicBaaSCA(a, ca); err != nil {
 			return nil, ErrQuicBaaSCAInject{Cause: err}
 		}
-		return a.CA, nil
+		return ca, nil
 	}
 }
 

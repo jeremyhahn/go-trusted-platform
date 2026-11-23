@@ -268,8 +268,8 @@ func (app *App) EnrollBMC(ctx context.Context, deviceID uint64, bmcCfg *bmc.Conf
 	// Build the cert-replace closure that calls the existing
 	// issueBMCCertificateCore pipeline.
 	var localCA LocalCAIssuer
-	if app.CA != nil {
-		localCA = app.CA
+	if ca := app.CurrentCA(); ca != nil {
+		localCA = ca
 	}
 
 	core := &enrollCore{
