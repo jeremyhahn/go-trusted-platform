@@ -211,4 +211,12 @@ test.describe('vTPM runtime (real server)', () => {
     await page.goto('/tpm/vtpm/__placeholder__/');
     await expect(page).toHaveURL(/\/auth\/webauthn/);
   });
+
+  // #2072: the page seeds its run state from GET /bundles/{id}/state.
+  test('IsVTPMRunning shows Running for a bundle the server already started', async ({ adminPage, sdk }) => {
+    const id = await newBundle(sdk);
+    must(await sdk.vtpm.startBundle(id), 'vtpm.startBundle');
+    await openRuntime(adminPage, id);
+    await expect(adminPage.getByTestId('vtpm-run-state')).toHaveText('Running');
+  });
 });

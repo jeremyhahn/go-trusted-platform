@@ -332,4 +332,44 @@ test.describe('vTPM bundles and templates (real server)', () => {
     await expect(adminPage.getByTestId('vtpm-nvram-path')).toContainText(path as string);
     expect(count(seen, 'GET', `/api/v1/vtpm/bundles/${id}/nvram`)).toBe(1);
   });
+
+  // #2071: the /devices/vtpm/[id] page seals through the bundle seal route.
+  test('Seal on the bundle page returns a sealed blob', async ({ adminPage, sdk }) => {
+    const id = await newBundle(sdk);
+    must(await sdk.vtpm.startBundle(id), 'vtpm.startBundle');
+    try {
+      const seen = await openBundlePage(adminPage, id);
+      await adminPage.getByRole('button', { name: 'Seal Data' }).first().click();
+      const dialog = adminPage.getByRole('dialog');
+      await dialog.getByLabel('Name').fill('e2e-sealed');
+      await dialog.getByLabel('Data to Seal').fill('hello');
+      await dialog.getByRole('button', { name: 'Seal Data' }).click();
+      await expect(adminPage.getByTestId('vtpm-sealed-blob')).not.toBeEmpty();
+      expect(count(seen, 'POST', `/api/v1/vtpm/bundles/${id}/seal`)).toBe(1);
+    } finally {
+      await sdk.vtpm.stopBundle(id);
+    }
+  });
+
+  // #2071: Delete on the bundle page removes the bundle after the confirm.
+  test('Delete on the bundle page removes the bundle', async ({ adminPage, sdk }) => {
+    const id = await newBundle(sdk);
+    await openBundlePage(adminPage, id);
+    adminPage.once('dialog', (d) => d.accept());
+    await adminPage.getByRole('button', { name: 'Delete' }).click();
+    await expect(adminPage).toHaveURL(/\/devices\/vtpm\/?$/);
+    const res = await sdk.vtpm.getBundle(id);
+    expect(res.success).toBe(false);
+  });
 });
+
+/** openBundlePage opens /devices/vtpm/[id] for a bundle (static export: placeholder, then pushState). */
+async function openBundlePage(page: Page, id: string): Promise<Request[]> {
+  const seen = recordVTPM(page);
+  await page.goto('/devices/vtpm/__placeholder__/');
+  await page.getByText('vTPM not found').waitFor();
+  await page.waitForLoadState('networkidle');
+  await page.evaluate((target) => window.history.pushState(null, '', target), `/devices/vtpm/${id}/`);
+  await expect(page.getByText('vTPM Information')).toBeVisible();
+  return seen;
+}
