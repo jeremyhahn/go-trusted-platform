@@ -136,13 +136,15 @@ test.describe('VPN', () => {
     expect((await filteredPeers).status()).toBe(200);
     await expect(peers.getByText(device)).toBeVisible();
 
+    // An unknown gateway filter: the server answers 404 (the gateway is not
+    // found) and the gateways card shows the status-error line.
     await page.locator('#vpn-filter-gateway').fill('e2e-no-such-gateway');
     const filteredStatus = page.waitForResponse(
       (r) => r.url().includes('/api/v1/vpn/status?gateway_id=e2e-no-such-gateway') && r.request().method() === 'GET'
     );
     await page.locator('#vpn-filter-gateway').press('Enter');
-    expect((await filteredStatus).status()).toBe(200);
-    await expect(page.getByTestId('vpn-gateways-card').getByText('No gateway has reported yet.')).toBeVisible();
+    expect((await filteredStatus).status()).toBe(404);
+    await expect(page.getByTestId('vpn-gateways-card').getByTestId('vpn-status-error')).toBeVisible();
 
     await filters.getByRole('button', { name: 'Clear filters' }).click();
     await expect(page.locator('#vpn-filter-tenant')).toHaveValue('');
