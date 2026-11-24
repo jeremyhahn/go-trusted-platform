@@ -334,9 +334,9 @@ const testOffloadedDump = `recirc_id(0),in_port(2),eth_type(0x0800),ipv4(frag=no
 recirc_id(0),in_port(3),eth_type(0x0800),ipv4(frag=no), packets:11, bytes:900, used:0.1s, offloaded:yes, dp:tc, actions:2
 recirc_id(0),in_port(4),eth_type(0x0800),ipv4(frag=no), packets:12, bytes:950, used:0.1s, offloaded:yes, dp:tc, actions:5`
 
-const testConntrackDump = `tcp,orig=(src=10.0.1.5,dst=10.100.0.10,sport=1,dport=443),reply=(src=10.0.2.7,dst=10.0.1.5,sport=8443,dport=1),zone=12,protoinfo=(state=ESTABLISHED)
-tcp,orig=(src=10.0.1.6,dst=10.100.0.10,sport=2,dport=443),reply=(src=10.0.2.8,dst=10.0.1.6,sport=8443,dport=2),zone=12,protoinfo=(state=ESTABLISHED)
-udp,orig=(src=10.0.1.5,dst=10.0.3.9,sport=5353,dport=53),reply=(src=10.0.3.9,dst=10.0.1.5,sport=53,dport=5353),zone=7`
+const testConntrackDump = `tcp,orig=(src=198.18.1.5,dst=198.19.100.10,sport=1,dport=443),reply=(src=198.18.2.7,dst=198.18.1.5,sport=8443,dport=1),zone=12,protoinfo=(state=ESTABLISHED)
+tcp,orig=(src=198.18.1.6,dst=198.19.100.10,sport=2,dport=443),reply=(src=198.18.2.8,dst=198.18.1.6,sport=8443,dport=2),zone=12,protoinfo=(state=ESTABLISHED)
+udp,orig=(src=198.18.1.5,dst=198.18.3.9,sport=5353,dport=53),reply=(src=198.18.3.9,dst=198.18.1.5,sport=53,dport=5353),zone=7`
 
 func TestDatapath(t *testing.T) {
 	fc := &fakeFlowClient{bridges: testBridges(), otherConfig: map[string]string{"hw-offload": "true"}}
