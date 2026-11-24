@@ -672,13 +672,13 @@ func (e *Executor) createPCRSealedObjects(ctx context.Context, key []byte, pcrSe
 		return nil, nil, &SentinelCauseError{Sentinel: ErrSSRKNotAccessible, Cause: &MessageError{Msg: fmt.Sprintf("SSRK (0x%08x) error: %v", ssrkHandle, err)}}
 	}
 
-	srkAttrs.PlatformPolicy = false
+	srkAttrs.TPMPolicy = tpmPolicyName(false)
 
 	attrs := &xkmssdk.KeyAttributes{
-		CN:             "luks-root-pcr",
-		KeyType:        xkmssdk.KeyTypeHMAC,
-		PlatformPolicy: true,
-		Parent:         srkAttrs,
+		CN:        "luks-root-pcr",
+		KeyType:   xkmssdk.KeyTypeHMAC,
+		TPMPolicy: tpmPolicyName(true),
+		Parent:    srkAttrs,
 	}
 
 	sealOpts := &xkmssdk.SealOptions{
@@ -707,13 +707,13 @@ func (e *Executor) createSealedObjects(ctx context.Context, key []byte) ([]byte,
 		return nil, nil, &SentinelCauseError{Sentinel: ErrSSRKNotAccessible, Cause: &MessageError{Msg: fmt.Sprintf("SSRK (0x%08x) error: %v", ssrkHandle, err)}}
 	}
 
-	srkAttrs.PlatformPolicy = false
+	srkAttrs.TPMPolicy = tpmPolicyName(false)
 
 	attrs := &xkmssdk.KeyAttributes{
-		CN:             "luks-upgrade-seal",
-		KeyType:        xkmssdk.KeyTypeHMAC,
-		PlatformPolicy: false,
-		Parent:         srkAttrs,
+		CN:        "luks-upgrade-seal",
+		KeyType:   xkmssdk.KeyTypeHMAC,
+		TPMPolicy: tpmPolicyName(false),
+		Parent:    srkAttrs,
 	}
 
 	sealOpts := &xkmssdk.SealOptions{
@@ -738,10 +738,10 @@ func (e *Executor) createSealedObjects(ctx context.Context, key []byte) ([]byte,
 // independent of how the parent authorizes.
 func platformKeystoreSealAttrs(parent *xkmssdk.KeyAttributes) *xkmssdk.KeyAttributes {
 	return &xkmssdk.KeyAttributes{
-		CN:             "luks-root-platform",
-		KeyType:        xkmssdk.KeyTypeHMAC,
-		PlatformPolicy: true,
-		Parent:         parent,
+		CN:        "luks-root-platform",
+		KeyType:   xkmssdk.KeyTypeHMAC,
+		TPMPolicy: tpmPolicyName(true),
+		Parent:    parent,
 	}
 }
 
@@ -791,7 +791,7 @@ func (e *Executor) createPlatformKeystoreSealedObjects(ctx context.Context, key 
 		return nil, nil, &SentinelCauseError{Sentinel: ErrPlatformSRKNotAccessible, Cause: &MessageError{Msg: fmt.Sprintf("handle 0x%08x error: %v", platformSRKHandle, err)}}
 	}
 
-	platformSRKAttrs.PlatformPolicy = e.getPlatformPolicy()
+	platformSRKAttrs.TPMPolicy = tpmPolicyName(e.getPlatformPolicy())
 
 	attrs := platformKeystoreSealAttrs(platformSRKAttrs)
 
@@ -858,14 +858,14 @@ func (e *Executor) readKeyFromUpgradeSeals(ctx context.Context) ([]byte, error) 
 		return nil, &WrappedError{Msg: "failed to get SSRK attributes", Err: err}
 	}
 
-	srkAttrs.PlatformPolicy = false
+	srkAttrs.TPMPolicy = tpmPolicyName(false)
 
 	upgradeAttrs := &xkmssdk.KeyAttributes{
-		CN:             "luks-upgrade-seal",
-		KeyType:        xkmssdk.KeyTypeHMAC,
-		PlatformPolicy: false,
-		Parent:         srkAttrs,
-		StoreType:      xkmssdk.StoreSoftware,
+		CN:        "luks-upgrade-seal",
+		KeyType:   xkmssdk.KeyTypeHMAC,
+		TPMPolicy: tpmPolicyName(false),
+		Parent:    srkAttrs,
+		StoreType: xkmssdk.StoreSoftware,
 	}
 
 	sealedData := &xkmssdk.SealedData{
@@ -1880,7 +1880,6 @@ func initializeTPM(tpmConfig *xkmssdk.TPMConfig, logger *logging.Logger) (xkmssd
 		Backend:      backend,
 		BlobStore:    nil,
 		CertStore:    nil,
-		SignerStore:  nil,
 	}
 
 	var tpmModule xkmssdk.TrustedPlatformModule

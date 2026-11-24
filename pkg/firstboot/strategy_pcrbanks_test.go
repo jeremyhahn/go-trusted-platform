@@ -65,7 +65,7 @@ func TestPlatformKeystoreSealAttrs_TwoAxes(t *testing.T) {
 		parent.PlatformPolicy = parentMode
 
 		attrs := platformKeystoreSealAttrs(parent)
-		if !attrs.PlatformPolicy {
+		if !hasPlatformPolicy(attrs) {
 			t.Errorf("parent mode %v: sealed object must ALWAYS be PCR-bound", parentMode)
 		}
 		if attrs.Parent.PlatformPolicy != parentMode {

@@ -251,7 +251,7 @@ func cov964aAssertSealAttrs(t *testing.T, attrs *xkmssdk.KeyAttributes, parentPo
 	if attrs.KeyType != xkmssdk.KeyTypeHMAC {
 		t.Errorf("KeyType = %v, want HMAC", attrs.KeyType)
 	}
-	if attrs.PlatformPolicy {
+	if hasPlatformPolicy(attrs) {
 		t.Error("sealed object PlatformPolicy = true, want false")
 	}
 	if attrs.Parent == nil {

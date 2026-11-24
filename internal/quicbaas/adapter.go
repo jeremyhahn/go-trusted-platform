@@ -395,12 +395,12 @@ func (a *Adapter) Auth() quicbaas.AuthClient {
 	return nil
 }
 
-// Seal returns the Seal client for seal/unseal operations.
-func (a *Adapter) Seal() quicbaas.SealClient {
+// Seal returns the qrdb seal store client for seal/unseal operations.
+func (a *Adapter) Seal() (quicbaas.QRDBSealStoreClient, error) {
 	if client := a.Client(); client != nil {
-		return client.Security().Seal()
+		return client.Security().SealStore()
 	}
-	return nil
+	return nil, nil
 }
 
 // KMS returns the KMS client for key management.

@@ -40,15 +40,12 @@ func NewIAMSession(user *iamsdk.User) IAMSession {
 	session := &iamSession{
 		user:     user,
 		roleSet:  make(map[string]struct{}, len(user.Roles)),
-		groupSet: make(map[string]struct{}, len(user.Groups)),
+		groupSet: make(map[string]struct{}),
 	}
 
 	// Pre-compute role and group sets for O(1) lookups
 	for _, role := range user.Roles {
 		session.roleSet[role] = struct{}{}
-	}
-	for _, group := range user.Groups {
-		session.groupSet[group] = struct{}{}
 	}
 
 	// MFA is not asserted by this constructor. iam.User no longer carries an
@@ -141,10 +138,8 @@ func (s *iamSession) Groups() []string {
 	if s.user == nil {
 		return nil
 	}
-	// Return a copy to prevent modification
-	groups := make([]string, len(s.user.Groups))
-	copy(groups, s.user.Groups)
-	return groups
+	// go-quicbaas IAM has no groups, so no user has a group membership.
+	return nil
 }
 
 // HasRole checks if the user has a specific role.
@@ -230,7 +225,6 @@ func (s *iamSession) ToSubject() *iamsdk.CheckSubject {
 		ID:         s.user.ID,
 		TenantID:   s.user.TenantID,
 		Roles:      s.user.Roles,
-		Groups:     s.user.Groups,
 		Attributes: attrs,
 	}
 

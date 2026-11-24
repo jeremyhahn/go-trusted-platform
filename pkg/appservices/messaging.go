@@ -123,7 +123,7 @@ func (s *MessagingService) DedupStats(ctx context.Context) (*messaging.DedupStat
 	if err != nil {
 		return nil, err
 	}
-	stats, err := client.GetDedupStats(ctx)
+	stats, err := client.GetDedupStats(ctx, "")
 	return stats, callFailed(ServiceMessaging, "dedup stats", err)
 }
 

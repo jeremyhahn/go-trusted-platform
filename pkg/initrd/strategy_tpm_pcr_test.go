@@ -111,7 +111,7 @@ func TestSealedObjectAttrs_TwoAxes(t *testing.T) {
 		}
 		attrs := sealedObjectAttrs("luks-root", parent)
 
-		if !attrs.PlatformPolicy {
+		if !hasPlatformPolicy(attrs) {
 			t.Errorf("parent mode %v: sealed object must ALWAYS be PCR-bound (PlatformPolicy=true)", parentMode)
 		}
 		if attrs.Parent.PlatformPolicy != parentMode {

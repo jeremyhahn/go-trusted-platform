@@ -246,8 +246,8 @@ func TestExecutor_CreateSealedObjects(t *testing.T) {
 			if c.wantCN != "" && attrs.CN != c.wantCN {
 				t.Errorf("sealed object CN = %q, want %q", attrs.CN, c.wantCN)
 			}
-			if attrs.PlatformPolicy != c.wantObjPolicy {
-				t.Errorf("sealed object platform policy = %v, want %v", attrs.PlatformPolicy, c.wantObjPolicy)
+			if hasPlatformPolicy(attrs) != c.wantObjPolicy {
+				t.Errorf("sealed object platform policy = %v, want %v", hasPlatformPolicy(attrs), c.wantObjPolicy)
 			}
 			if string(tpm.sealedKey) != string(key) {
 				t.Error("the key handed to Seal is not the caller's key")
@@ -364,8 +364,8 @@ func TestFirstbootSealStrategy_SealKeyToTPM_Success(t *testing.T) {
 		}
 	}
 	attrs := tpm.sealOpts.KeyAttributes
-	if attrs.CN != "luks-root" || !attrs.PlatformPolicy {
-		t.Errorf("sealed object = %q policy=%v, want luks-root bound to the PCR policy", attrs.CN, attrs.PlatformPolicy)
+	if attrs.CN != "luks-root" || !hasPlatformPolicy(attrs) {
+		t.Errorf("sealed object = %q policy=%v, want luks-root bound to the PCR policy", attrs.CN, hasPlatformPolicy(attrs))
 	}
 	if attrs.Parent.PlatformPolicy {
 		t.Error("parent policy should follow the configured platform-srk policy (false)")

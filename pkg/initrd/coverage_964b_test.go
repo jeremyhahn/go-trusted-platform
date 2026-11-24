@@ -435,9 +435,9 @@ func TestCov964bUnsealPlatformKeyStore(t *testing.T) {
 			t.Errorf("KeyAttributes handles = %v, want [0x81000010]", tpm.keyAttrsHandles)
 		}
 		attrs := tpm.unsealOpts.KeyAttributes
-		if attrs.CN != "luks-root" || attrs.StoreType != xkmssdk.StoreSoftware || !attrs.PlatformPolicy {
+		if attrs.CN != "luks-root" || attrs.StoreType != xkmssdk.StoreSoftware || !hasPlatformPolicy(attrs) {
 			t.Errorf("unseal attrs = CN %q store %v policy %v; want luks-root, software, PCR-bound",
-				attrs.CN, attrs.StoreType, attrs.PlatformPolicy)
+				attrs.CN, attrs.StoreType, hasPlatformPolicy(attrs))
 		}
 		if attrs.Parent == nil || attrs.Parent.CN != "cov964b-srk" || attrs.Parent.PlatformPolicy {
 			t.Errorf("parent = %+v, want the SRK with the configured policy (false)", attrs.Parent)
@@ -542,8 +542,8 @@ func TestCov964bPCRInstall(t *testing.T) {
 		}
 
 		attrs := tpm.sealOpts.KeyAttributes
-		if attrs.CN != "luks-root-platform-cryptroot" || !attrs.PlatformPolicy {
-			t.Errorf("seal attrs = CN %q policy %v; want luks-root-platform-cryptroot, PCR-bound", attrs.CN, attrs.PlatformPolicy)
+		if attrs.CN != "luks-root-platform-cryptroot" || !hasPlatformPolicy(attrs) {
+			t.Errorf("seal attrs = CN %q policy %v; want luks-root-platform-cryptroot, PCR-bound", attrs.CN, hasPlatformPolicy(attrs))
 		}
 		if tpm.sealOpts.Backend != p.Backend {
 			t.Errorf("seal backend = %v, want the platform backend", tpm.sealOpts.Backend)

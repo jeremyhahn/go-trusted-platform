@@ -29,6 +29,7 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	signingstore "github.com/jeremyhahn/go-xkms/pkg/signing/store"
 )
 
 // QuicBaaSKeyStore implements xkmssdk.ServiceBackend using QuicBaaS SDK for all
@@ -670,6 +671,11 @@ func (ks *QuicBaaSKeyStore) Type() xkmssdk.StoreType {
 // CertStorage returns the certificate storage adapter.
 // Returns nil as we use xkmssdk.CertStore directly.
 func (ks *QuicBaaSKeyStore) CertStorage() xkmssdk.CertificateStorageAdapter {
+	return nil
+}
+
+// SignerStore returns nil; QuicBaaS persists no signatures locally.
+func (ks *QuicBaaSKeyStore) SignerStore() signingstore.SignerStorer {
 	return nil
 }
 

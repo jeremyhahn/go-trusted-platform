@@ -335,13 +335,13 @@ func (s *SDKClient) Auth() quicbaas.AuthClient {
 	return client.Security().Auth()
 }
 
-// Seal returns the Seal client for seal/unseal operations.
-func (s *SDKClient) Seal() quicbaas.SealClient {
+// Seal returns the qrdb seal store client for seal/unseal operations.
+func (s *SDKClient) Seal() (quicbaas.QRDBSealStoreClient, error) {
 	client := s.Client()
 	if client == nil {
-		return nil
+		return nil, nil
 	}
-	return client.Security().Seal()
+	return client.Security().SealStore()
 }
 
 // KMS returns the KMS client for key management.

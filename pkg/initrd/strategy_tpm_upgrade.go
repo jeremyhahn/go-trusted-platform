@@ -169,16 +169,16 @@ func (s *TPMUpgradeStrategy) Unlock(ctx context.Context, volume *luks.VolumeConf
 	}
 
 	// SSRK has NO platform policy - this allows unseal without PCR verification
-	srkAttrs.PlatformPolicy = false
+	srkAttrs.TPMPolicy = tpmPolicyName(false)
 
 	// Create key attributes for upgrade seal
 	// Both parent SRK and sealed object have NO PCR policy
 	upgradeAttrs := &xkmssdk.KeyAttributes{
-		CN:             "luks-upgrade-seal",
-		KeyType:        xkmssdk.KeyTypeHMAC,
-		PlatformPolicy: false, // No PCR policy
-		Parent:         srkAttrs,
-		StoreType:      xkmssdk.StoreSoftware,
+		CN:        "luks-upgrade-seal",
+		KeyType:   xkmssdk.KeyTypeHMAC,
+		TPMPolicy: tpmPolicyName(false), // No PCR policy
+		Parent:    srkAttrs,
+		StoreType: xkmssdk.StoreSoftware,
 	}
 
 	// Load sealed data from EFI partition files
@@ -333,15 +333,15 @@ func (s *TPMUpgradeStrategy) CreateUpgradeSeal(key []byte) error {
 	}
 
 	// SSRK has NO platform policy - this allows unseal without PCR verification
-	srkAttrs.PlatformPolicy = false
+	srkAttrs.TPMPolicy = tpmPolicyName(false)
 
 	// Create key attributes for upgrade seal without PCR policy
 	upgradeAttrs := &xkmssdk.KeyAttributes{
-		CN:             "luks-upgrade-seal",
-		KeyType:        xkmssdk.KeyTypeHMAC,
-		PlatformPolicy: false, // No PCR policy
-		Parent:         srkAttrs,
-		StoreType:      xkmssdk.StoreSoftware,
+		CN:        "luks-upgrade-seal",
+		KeyType:   xkmssdk.KeyTypeHMAC,
+		TPMPolicy: tpmPolicyName(false), // No PCR policy
+		Parent:    srkAttrs,
+		StoreType: xkmssdk.StoreSoftware,
 	}
 
 	// Get the backend for storing sealed data

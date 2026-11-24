@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmstypes "github.com/jeremyhahn/go-xkms/pkg/types"
 )
 
 // Compile-time interface check.
@@ -148,6 +149,14 @@ func NewTPMSigner(
 //
 // The Platform KeyStore SRK can optionally have a PCR policy (when PlatformPolicy=true)
 // to bind keys to the measured boot state. When PlatformPolicy=false, PIN auth is used.
+// platformTPMPolicy names the platform TPM policy when platform is set, else none.
+func platformTPMPolicy(platform bool) string {
+	if platform {
+		return xkmstypes.TPMPolicyPlatform
+	}
+	return ""
+}
+
 type PlatformKeyStore struct {
 	tpm         xkmssdk.TrustedPlatformModule
 	backend     xkmssdk.TPMKeyBackend
@@ -356,11 +365,11 @@ func (p *PlatformKeyStore) buildSRKAttributes() (*xkmssdk.KeyAttributes, error) 
 	}
 
 	return &xkmssdk.KeyAttributes{
-		CN:             p.config.CN,
-		KeyAlgorithm:   x509.RSA,
-		KeyType:        xkmssdk.KeyTypeStorage,
-		PlatformPolicy: p.config.PlatformPolicy,
-		StoreType:      xkmssdk.StoreTPM2,
+		CN:           p.config.CN,
+		KeyAlgorithm: x509.RSA,
+		KeyType:      xkmssdk.KeyTypeStorage,
+		TPMPolicy:    platformTPMPolicy(p.config.PlatformPolicy),
+		StoreType:    xkmssdk.StoreTPM2,
 		TPMAttributes: &xkmssdk.TPMAttributes{
 			Handle:     srkHandle,
 			HandleType: xkmssdk.TPMHTPersistent,
@@ -701,7 +710,7 @@ func (kc *XKMS) GenerateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (
 	}
 
 	// For keys with platform policy, seal the password to TPM before generating
-	if attrs.PlatformPolicy && attrs.Password != nil && kc.tpm != nil && kc.platformKS != nil {
+	if attrs.TPMPolicy == xkmstypes.TPMPolicyPlatform && attrs.Password != nil && kc.tpm != nil && kc.platformKS != nil {
 		// Ensure parent SRK attributes are set
 		if attrs.Parent == nil {
 			attrs.Parent = kc.platformKS.SRKAttributes()

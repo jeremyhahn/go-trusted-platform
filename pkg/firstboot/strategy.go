@@ -1296,7 +1296,7 @@ func (s *FirstbootSealStrategy) sealKeyToTPM(ctx context.Context, key []byte, ef
 	if tpmSealCfg != nil && tpmSealCfg.Handle != 0 {
 		platformPolicy = tpmSealCfg.PlatformPolicy
 	}
-	srkAttrs.PlatformPolicy = platformPolicy
+	srkAttrs.TPMPolicy = tpmPolicyName(platformPolicy)
 
 	// PCR selection for sealed object - resolve from installer TPM seal config first,
 	// then fall back to the firstboot executor config (single source of truth)
@@ -1319,10 +1319,10 @@ func (s *FirstbootSealStrategy) sealKeyToTPM(ctx context.Context, key []byte, ef
 	// PARENT SRK is authorized (recorded in pcr-banks, replayed by the
 	// initrd) — the two axes are independent (#52).
 	pcrAttrs := &xkmssdk.KeyAttributes{
-		CN:             "luks-root",
-		KeyType:        xkmssdk.KeyTypeHMAC,
-		PlatformPolicy: true,
-		Parent:         srkAttrs,
+		CN:        "luks-root",
+		KeyType:   xkmssdk.KeyTypeHMAC,
+		TPMPolicy: tpmPolicyName(true),
+		Parent:    srkAttrs,
 	}
 
 	// Seal with PCR policy on the object

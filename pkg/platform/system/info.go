@@ -328,7 +328,7 @@ func identityToKeyConfig(identity *trustedca.CAIdentity, _ ...*trustedca.CAConfi
 		ValidYears: identity.Valid,
 
 		// Backend configuration
-		StoreType: string(identity.KeystoreType),
+		StoreType: identityStoreType(identity),
 
 		// Parent CA (for intermediate CAs)
 		ParentCA: identity.ParentCA,
@@ -372,6 +372,14 @@ func firstOrEmpty(vs []string) string {
 		return ""
 	}
 	return vs[0]
+}
+
+// identityStoreType returns the store type of the identity's first key.
+func identityStoreType(identity *trustedca.CAIdentity) string {
+	if identity == nil || len(identity.Keys) == 0 || identity.Keys[0] == nil {
+		return ""
+	}
+	return string(identity.Keys[0].StoreType)
 }
 
 // signatureAlgorithmHash returns the crypto.Hash for a given signature algorithm
