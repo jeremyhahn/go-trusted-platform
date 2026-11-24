@@ -64,3 +64,25 @@ func wireSwitchService(grpcSvc *daemon.SwitchGRPCService, svc *switchmgmt.Servic
 	}
 	grpcSvc.SetSwitchService(svc)
 }
+
+// daemonOnlySwitchDaemon is the part of the daemon the daemon-only switch
+// wiring needs: the gRPC servicer and the REST listener's switch mount.
+type daemonOnlySwitchDaemon interface {
+	SwitchService() *daemon.SwitchGRPCService
+	MountSwitchREST(device.SwitchServiceProvider) error
+}
+
+// wireDaemonOnlySwitchService wires the switch service on a node without a
+// webservices block: the gRPC servicer (shared by QUIC and MCP) and the
+// guarded /api/v1/switches routes on the daemon REST listener. A nil service
+// wires nothing; a refused REST mount is returned so startup stops.
+func wireDaemonOnlySwitchService(d daemonOnlySwitchDaemon, svc *switchmgmt.Service) error {
+	if svc == nil {
+		return nil
+	}
+	wireSwitchService(d.SwitchService(), svc)
+	if err := d.MountSwitchREST(switchServiceProvider(svc)); err != nil {
+		return fmt.Errorf("switch REST routes: %w", err)
+	}
+	return nil
+}

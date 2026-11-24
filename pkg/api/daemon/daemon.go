@@ -56,6 +56,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vpn"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
@@ -259,7 +260,10 @@ type Daemon struct {
 	zoneSvc     gateway.ZoneService
 
 	// Concrete server references for accessor methods (set only for real servers)
-	concreteRestServer    *RESTServer
+	concreteRestServer *RESTServer
+	// restGuard is the REST scope guard every daemon REST route runs behind;
+	// MountSwitchREST mounts the switch routes behind it after construction.
+	restGuard             *restapi.ScopeGuard
 	concreteMcpServer     *mcp.Server
 	concreteGrpcUDSServer *grpc.Server // Store concrete gRPC UDS server for service registration
 
@@ -1502,6 +1506,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			logger.Error(constructErr, "component", "rest_server")
 			return nil, constructErr
 		}
+		daemon.restGuard = restGuard
 		if ntpGRPCService != nil {
 			daemon.concreteRestServer.SetNTPHandlers(ntpGRPCService, restGuard)
 		}
@@ -3874,6 +3879,16 @@ func (d *Daemon) SwitchService() *SwitchGRPCService {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.switchGRPCService
+}
+
+// MountSwitchREST mounts the switch port routes on the daemon REST listener
+// behind the REST scope guard. It is a no-op without a REST listener or a
+// switch service; a refused mount is returned so startup stops.
+func (d *Daemon) MountSwitchREST(svc device.SwitchServiceProvider) error {
+	if d.concreteRestServer == nil || svc == nil {
+		return nil
+	}
+	return d.concreteRestServer.SetSwitchHandlers(svc, d.restGuard)
 }
 
 // BMCService returns the BMC gRPC service, or nil when not wired.

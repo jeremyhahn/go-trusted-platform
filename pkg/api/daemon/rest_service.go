@@ -40,8 +40,10 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
+	switchapi "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/switch"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -1275,5 +1277,22 @@ func (s *RESTServer) SetClusterService(svc platformv1.ClusterServiceServer, guar
 		return nil
 	}
 	s.logger.Info("Cluster REST routes registered")
+	return nil
+}
+
+// SetSwitchHandlers mounts the switch port routes (the switchapi router) on
+// the daemon REST listener behind the REST scope guard, each route needing
+// the scope of its SwitchService rpc. A nil guard is refused; a nil service
+// mounts nothing, since the node has no switches block.
+func (s *RESTServer) SetSwitchHandlers(svc device.SwitchServiceProvider, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrSwitchRESTUnavailable{Reason: "no REST scope guard"}
+	}
+	if svc == nil {
+		return nil
+	}
+	log := logging.NewFromSlog(s.logger)
+	switchapi.NewSwitchRouter(log, svc, response.NewResponseWriter(log, nil)).RegisterRoutes(s.catalogGuardedAPI(guard))
+	s.logger.Info("Switch REST routes registered")
 	return nil
 }

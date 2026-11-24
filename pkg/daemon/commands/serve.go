@@ -1739,7 +1739,14 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 		cmd.PrintErrln(fmt.Sprintf("Failed to build the switch service: %v", err))
 		return ErrServeStartup{Phase: "switch service", Cause: err}
 	}
-	wireSwitchService(d.SwitchService(), switchSvc)
+	if err := wireDaemonOnlySwitchService(d, switchSvc); err != nil {
+		logger.Error(err, "Failed to wire the switch service")
+		cmd.PrintErrln(fmt.Sprintf("Failed to wire the switch service: %v", err))
+		if closeErr := switchSvc.Close(); closeErr != nil {
+			logger.Warn("Error closing the switch service", "error", closeErr)
+		}
+		return ErrServeStartup{Phase: "switch service", Cause: err}
+	}
 
 	if App != nil && App.TPM != nil {
 		logger.Info("TPM available for IDevID/IAK operations")
