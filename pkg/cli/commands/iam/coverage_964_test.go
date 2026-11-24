@@ -663,7 +663,7 @@ func iamRunCases(policyFile string) []iamRunCase {
 		{
 			name: "PolicyTest", failMsg: "failed to test policy",
 			run: func(f *cli.CommonFlags) error {
-				return runPolicyTest(f, "t1", "u1", "admin", "ops", "read", "vm/1", "ip=10.0.0.1")
+				return runPolicyTest(f, "t1", "u1", "admin", "ops", "read", "vm/1", "ip=198.51.100.1")
 			},
 			want: iamWant{
 				map[string]string{

@@ -11,10 +11,13 @@ import (
 // cliAddressFiles are the platformctl command files whose help text,
 // examples and test fixtures must use documentation-range addresses.
 //
-// Left off, because a literal in them must equal a value shipped by Go
-// code outside pkg/cli/commands:
+// Left off, because a literal in them must equal a value shipped outside
+// pkg/cli/commands:
 //   - pkg/cli/commands/iso/test_pxe.go and test_client_server.go describe
 //     the PXE test network of pkg/ipxe/testenv.go.
+//   - pkg/cli/commands/diskimage/flat_dhcp_test.go asserts the platform-VRF
+//     and upstream DNS addresses of the shipped configs/platform rpi4
+//     compute template (the reference plan, moved in a later slice).
 var cliAddressFiles = []string{
 	// help and Example text
 	"pkg/cli/commands/bmc/cert.go",
@@ -46,7 +49,6 @@ var cliAddressFiles = []string{
 	"pkg/cli/commands/cluster/cluster_test.go",
 	"pkg/cli/commands/cluster/helpers_test.go",
 	"pkg/cli/commands/container/additional_coverage_test.go",
-	"pkg/cli/commands/diskimage/flat_dhcp_test.go",
 	"pkg/cli/commands/iam/coverage_964_test.go",
 	"pkg/cli/commands/iso/coverage_964_test.go",
 	"pkg/cli/commands/iso/host_seams_cs_test.go",

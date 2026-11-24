@@ -145,7 +145,7 @@ func daemonCert() *platformv1.BMCGetWebCertificateResponse {
 		NotBefore:               timestamppb.New(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)),
 		NotAfter:                timestamppb.New(time.Date(2027, 1, 2, 3, 4, 5, 0, time.UTC)),
 		DaysRemaining:           75,
-		SubjectAlternativeNames: []string{"bmc-7.lan", "10.0.0.7"},
+		SubjectAlternativeNames: []string{"bmc-7.lan", "198.51.100.7"},
 		Fingerprint:             "deadbeef",
 	}
 }
@@ -156,7 +156,7 @@ const wantDaemonCertTable = "Subject:        CN=bmc-7\n" +
 	"Not Before:     2026-01-02T03:04:05Z\n" +
 	"Not After:      2027-01-02T03:04:05Z\n" +
 	"Days Remaining: 75\n" +
-	"SANs:           bmc-7.lan, 10.0.0.7\n" +
+	"SANs:           bmc-7.lan, 198.51.100.7\n" +
 	"Fingerprint:    deadbeef\n"
 
 func TestDaemonCertGet_Table(t *testing.T) {
@@ -181,7 +181,7 @@ func TestDaemonCertGet_TableWithoutSANs(t *testing.T) {
 	out, err := runBMC(t, table, "cert", "get", "--profile-id", "7")
 	require.NoError(t, err)
 	assert.NotContains(t, out, "SANs:")
-	assert.Equal(t, strings.Replace(wantDaemonCertTable, "SANs:           bmc-7.lan, 10.0.0.7\n", "", 1), out)
+	assert.Equal(t, strings.Replace(wantDaemonCertTable, "SANs:           bmc-7.lan, 198.51.100.7\n", "", 1), out)
 }
 
 func TestDaemonCertGet_JSON(t *testing.T) {
@@ -195,7 +195,7 @@ func TestDaemonCertGet_JSON(t *testing.T) {
 	assert.Equal(t, "CN=Platform CA", got.Issuer)
 	assert.Equal(t, "0a1b", got.SerialNumber)
 	assert.Equal(t, int32(75), got.DaysRemaining)
-	assert.Equal(t, []string{"bmc-7.lan", "10.0.0.7"}, got.SubjectAlternativeNames)
+	assert.Equal(t, []string{"bmc-7.lan", "198.51.100.7"}, got.SubjectAlternativeNames)
 	assert.True(t, got.NotAfter.Equal(time.Date(2027, 1, 2, 3, 4, 5, 0, time.UTC)))
 }
 

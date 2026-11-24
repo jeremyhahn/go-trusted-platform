@@ -41,7 +41,7 @@ import (
 
 // validBootstrapYAML is a minimal valid bootstrap config for testing.
 const validBootstrapYAML = `deployer:
-  host: 192.168.1.1
+  host: 192.0.2.1
   user: admin
   ssh_key: /tmp/test-key
   container_runtime: docker
@@ -58,7 +58,7 @@ templates:
 nodes:
   - hostname: cp-01
     role: control-plane
-    bmc_address: 192.168.1.10
+    bmc_address: 192.0.2.10
     bmc_user: admin
     bmc_password: password
 `
@@ -345,7 +345,7 @@ platform:
 nodes:
   - hostname: cp-01
     role: control-plane
-    bmc_address: 192.168.1.10
+    bmc_address: 192.0.2.10
 `)
 	config, err := loadAndValidateConfig(path)
 	require.Error(t, err)

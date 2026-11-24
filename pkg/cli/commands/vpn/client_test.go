@@ -168,7 +168,7 @@ func testLease() gwvpn.LeaseWire {
 		ID:            "lease-1",
 		DeviceID:      "laptop-1",
 		TenantID:      "acme",
-		Address:       "10.64.0.2",
+		Address:       "198.51.100.2",
 		Zones:         []string{"management"},
 		DataPlane:     gwvpn.DataPlaneMASQUE,
 		ExpiresAtUnix: 1760303600,
@@ -303,7 +303,7 @@ func TestConnect_AdmitsAndRecordsTheLease(t *testing.T) {
 	assert.Equal(t, gwvpn.LeaseID("lease-1"), st.Lease.ID)
 	table, ok := (*h.out).(cli.TableData)
 	require.True(t, ok, "table output by default")
-	assert.Equal(t, []string{"lease-1", h.gateway, "10.64.0.2", "management", "masque", "vpn0",
+	assert.Equal(t, []string{"lease-1", h.gateway, "198.51.100.2", "management", "masque", "vpn0",
 		formatUnix(1760303600), formatUnix(1760303000)}, table.Rows[0])
 }
 
@@ -868,11 +868,11 @@ func TestClientDataPlanes_MASQUEPresentsTheDeviceCertificate(t *testing.T) {
 	require.Equal(t, gwvpn.DataPlaneMASQUE, masque.Kind())
 	_, err := masque.Up(context.Background(), &gwvpn.LeaseWire{
 		ID:        "lease-1",
-		Address:   "10.8.0.2/32",
+		Address:   "192.0.2.2/32",
 		DataPlane: gwvpn.DataPlaneMASQUE,
 		Endpoint: gwvpn.EndpointWire{MASQUE: &gwvpn.MASQUEEndpointWire{
 			Template: "https://gw.example/.well-known/masque/ip/",
-			Routes:   []string{"10.20.0.0/16"},
+			Routes:   []string{"203.0.113.0/24"},
 		}},
 	})
 	assert.ErrorIs(t, err, certErr, "the session is dialled with the device's certificate")

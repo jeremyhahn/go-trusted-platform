@@ -279,7 +279,7 @@ func TestFormatPorts_WithEmptySlice(t *testing.T) {
 func TestFormatPorts_WithMixedHostIPs(t *testing.T) {
 	ports := []*computesvc.PortMapping{
 		{HostPort: 8080, ContainerPort: 80, Protocol: "tcp"},
-		{HostPort: 8443, ContainerPort: 443, Protocol: "tcp", HostIP: "192.168.1.1"},
+		{HostPort: 8443, ContainerPort: 443, Protocol: "tcp", HostIP: "192.0.2.1"},
 		{HostPort: 53, ContainerPort: 53, Protocol: "udp", HostIP: ""},
 	}
 

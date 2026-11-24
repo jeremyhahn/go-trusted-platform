@@ -51,7 +51,7 @@ func goodEnrollResult() *bmcsvc.EnrollResult {
 	now := time.Now()
 	return &bmcsvc.EnrollResult{
 		DeviceID:       42,
-		Endpoint:       "10.0.0.1:443",
+		Endpoint:       "198.51.100.1:443",
 		Hostname:       "bmc-host",
 		DNSName:        "bmc.internal.example.com",
 		PinSPKISHA256:  "sha256/abc123",

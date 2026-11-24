@@ -107,8 +107,8 @@ func sampleReport() *rpinetboot.Report {
 	mac, _ := net.ParseMAC("dc:a6:32:01:36:c2")
 	_ = mac
 	return &rpinetboot.Report{
-		Offer:  rpinetboot.OfferReport{Server: net.ParseIP("10.99.99.1"), TFTPServer: net.ParseIP("10.99.99.1"), Proxy: false, Option43: rpinetboot.Option43(rpinetboot.Option43Match)},
-		Lease:  &rpinetboot.LeaseReport{IP: net.ParseIP("10.99.99.100"), Mask: net.CIDRMask(24, 32), Router: net.ParseIP("10.99.99.1")},
+		Offer:  rpinetboot.OfferReport{Server: net.ParseIP("192.0.2.1"), TFTPServer: net.ParseIP("192.0.2.1"), Proxy: false, Option43: rpinetboot.Option43(rpinetboot.Option43Match)},
+		Lease:  &rpinetboot.LeaseReport{IP: net.ParseIP("192.0.2.100"), Mask: net.CIDRMask(24, 32), Router: net.ParseIP("192.0.2.1")},
 		Prefix: "9ffefdef/",
 		Files: []rpinetboot.FileReport{
 			{Name: "start4.elf", Path: "9ffefdef/start4.elf", Bytes: 3, SHA256: "abc"},
@@ -139,10 +139,10 @@ func TestPrintProbeReport_JSON(t *testing.T) {
 	})
 	var view probeReportView
 	require.NoError(t, json.Unmarshal([]byte(out), &view), out)
-	assert.Equal(t, "10.99.99.1", view.Offer.TFTPServer)
+	assert.Equal(t, "192.0.2.1", view.Offer.TFTPServer)
 	assert.False(t, view.Offer.Proxy)
 	require.NotNil(t, view.Lease)
-	assert.Equal(t, "10.99.99.100", view.Lease.IP)
+	assert.Equal(t, "192.0.2.100", view.Lease.IP)
 	assert.Equal(t, "255.255.255.0", view.Lease.Mask)
 	assert.Equal(t, "9ffefdef/", view.Prefix)
 	require.Len(t, view.Files, 3)
@@ -157,7 +157,7 @@ func TestPrintProbeReport_Table(t *testing.T) {
 	assert.Contains(t, out, "9ffefdef/start4.elf")
 	assert.Contains(t, out, "absent (optional)")
 	assert.Contains(t, out, "failed", "a file with nothing received is a failure")
-	assert.Contains(t, out, "10.99.99.100/255.255.255.0")
+	assert.Contains(t, out, "192.0.2.100/255.255.255.0")
 
 	assert.NotPanics(t, func() { printProbeReport(nil, nil) }, "nothing to print before the DHCP exchange began")
 	proxy := sampleReport()

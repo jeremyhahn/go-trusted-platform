@@ -425,7 +425,7 @@ func TestRunIssue_InProcess(t *testing.T) {
 
 	out, err := captureStdout(t, func() error {
 		return runIssue(flags(cli.OutputFormatTable), "node-01.example.com", "pkcs8", "ecdsa-p256", 0, 30,
-			"node-01.example.com, node-01", "10.0.0.1", "ops@example.com", "digitalSignature", "serverAuth,clientAuth")
+			"node-01.example.com, node-01", "198.51.100.1", "ops@example.com", "digitalSignature", "serverAuth,clientAuth")
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "[SUCCESS] Certificate issued successfully: 0A1B2C\n\n"+testCertificateDetails(), out)
@@ -436,7 +436,7 @@ func TestRunIssue_InProcess(t *testing.T) {
 	assert.Equal(t, "pkcs8", req.StoreType)
 	assert.Equal(t, int32(30), req.ValidDays)
 	assert.Equal(t, []string{"node-01.example.com", "node-01"}, req.Sans.DnsNames)
-	assert.Equal(t, []string{"10.0.0.1"}, req.Sans.IpAddresses)
+	assert.Equal(t, []string{"198.51.100.1"}, req.Sans.IpAddresses)
 	assert.Equal(t, []string{"ops@example.com"}, req.Sans.EmailAddresses)
 	assert.Equal(t, []string{"digitalSignature"}, req.KeyUsage)
 	assert.Equal(t, []string{"serverAuth", "clientAuth"}, req.ExtKeyUsage)
