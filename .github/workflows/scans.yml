@@ -1,31 +1,4 @@
-# scans-template: v1.0.0 (customized) — the scheduled scans on main.
-# ci-template v1.42 makes the CI Gate hermetic (owner ruling 742 (1)), so
-# every check that fails on the state of the world rather than on a change
-# runs here, and only here: `make deps-check`, govulncheck (`make vuln`), the
-# rest of make security (`make security-novuln`: gosec, go mod verify, trivy
-# fs) and `trivy image` of the integration image. It runs on a schedule and
-# on workflow_dispatch on main, never on a pull_request or a push, and it is
-# not the workflow named CI, so a finding never reads as a red main and never
-# blocks a PR. A finding opens or updates ONE issue, found by its fixed title
-# (SCAN_ISSUE_TITLE), with the run link, and fails this job, so the Actions
-# run is red; a run with no finding closes that issue.
-#
-# CUSTOMIZE (go-trusted-platform), against the template:
-#   - make security is two steps, as it was in ci.yml (#1425): `make vuln`
-#     at 20g with GOMEMLIMIT 18GiB, and `make security-novuln` at 16g with
-#     GOMAXPROCS 8 and GOSEC_CONCURRENCY 2 (#1178).
-#   - The images are built on the project's BuildKit builder, as ci.yml's
-#     jobs build them (`make docker-build-toolchain`, `make
-#     docker-build-integration`), and trivy image keeps ci.yml's flags and
-#     build/docker/devcontainer/trivyignore-image.yaml.
-#   - No bump half yet: the Makefile has no `make deps-bump` (depscheck
-#     v1.1.0), so the template's deps-bump, the commit to ci/deps-bump, the
-#     fix PR and the CI dispatch on it are not taken. They come with the full
-#     ci-template catch-up (v1.39 to v1.42).
-#   - The cron minute: off ci.yml's Friday 04:00 schedule.
-#   - The runner: the self-hosted bigdisk-docker pool, where main's vuln job
-#     ran. `make vuln` needs a 20g container (#1425: govulncheck's symbol
-#     scan reached 16.7 GB), more than a standard hosted runner's memory.
+# scans-template: v1.0.0 (customized). Scheduled scans on main: `make deps-check`, `make vuln`, `make security-novuln` and `trivy image` of the integration image.
 
 name: Scheduled Scans
 
@@ -104,10 +77,7 @@ jobs:
           make docker-build-integration MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE"
           rm -f "$RUNNER_TEMP/gomodauth.env"
 
-      # The checks that left ci.yml (ruling 742 (1)), each with ci.yml's
-      # limits, as its own step so a red one names itself. Each runs to the
-      # end (continue-on-error); "Collect the findings" lists the ones that
-      # failed.
+      # The checks that run only on schedule, each its own step so a red one names itself.
       - name: make deps-check
         id: deps
         if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' }}
@@ -144,7 +114,7 @@ jobs:
         continue-on-error: true
         run: docker save -o "$RUNNER_TEMP/it-image.tar" "$IT_IMAGE"
 
-      # ci.yml's flags and ignore file (#933).
+      # ci.yml's flags and ignore file.
       - name: trivy image (integration image)
         id: trivy
         if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' && steps.save.outcome == 'success' }}
@@ -159,8 +129,7 @@ jobs:
               --ignore-unfixed --skip-dirs /gomodcache \
               --ignorefile build/docker/devcontainer/trivyignore-image.yaml
 
-      # A step that did not succeed is a finding: failed, or skipped because
-      # the images did not build.
+      # A step that did not succeed is a finding.
       - name: Collect the findings
         id: scans
         if: ${{ !cancelled() }}
@@ -180,10 +149,7 @@ jobs:
           echo "scans: ${fired:-none fired}"
           echo "fired=$fired" >> "$GITHUB_OUTPUT"
 
-      # ONE issue for the findings, found by its exact title among the open
-      # issues (pull requests excluded): created when none is open, its body
-      # replaced when one is, and closed with a comment by the first run with
-      # no finding.
+      # One issue for the findings: created, updated, or closed when a run finds nothing.
       - name: Open, update or close the scan issue
         if: ${{ !cancelled() && steps.scans.outcome == 'success' }}
         env:
@@ -213,8 +179,7 @@ jobs:
             echo "updated #$issue"
           fi
 
-      # A finding fails the run, after the issue is open, so it is seen and
-      # fixed. This is not CI: no PR and no main commit status reads it.
+      # A finding fails the run after the issue is updated.
       - name: Fail on a finding
         if: ${{ !cancelled() && steps.scans.outputs.fired != '' }}
         env:
