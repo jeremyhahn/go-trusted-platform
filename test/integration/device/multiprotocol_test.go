@@ -1025,6 +1025,25 @@ func testAttestation(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 		}
 	})
 
+	// The service looks the device up before it issues, so an id no device
+	// has is refused as not found (as GetDevice_NotFound), never answered
+	// with a nonce nothing can use (#2136).
+	t.Run("UnknownDeviceIsNotFound", func(t *testing.T) {
+		got, err := adapter.IssueAttestationChallenge(ctx, IssueAttestationChallengeOptions{
+			TenantID: tenantID,
+			DeviceID: "999999999",
+		})
+		if requireQUICChallengeIssueGap(t, adapter, err) {
+			return
+		}
+		if err == nil {
+			t.Fatalf("%s issued a challenge for a device that does not exist: %+v", adapter.Name(), got)
+		}
+		if got != nil && got.ChallengeID != "" {
+			t.Fatalf("%s refused the unknown device but still returned challenge %q", adapter.Name(), got.ChallengeID)
+		}
+	})
+
 	t.Run("ChallengeIsSingleUse", func(t *testing.T) {
 		deviceID := registerChallengeDevice(t, "chal-once")
 		challenge := issueChallengeForAttest(t, ctx, adapter, IssueAttestationChallengeOptions{
