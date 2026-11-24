@@ -21,6 +21,7 @@ import (
 	"errors"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
@@ -188,7 +189,7 @@ func ones(n int) []byte {
 }
 
 func hubLease(id, addr string) *vpn.Lease {
-	return &vpn.Lease{ID: vpn.LeaseID(id), Address: netip.MustParsePrefix(addr), Zones: []string{string(zone.ZoneManagement)}}
+	return &vpn.Lease{ID: vpn.LeaseID(id), Address: netip.MustParsePrefix(addr), Zones: []string{string(zone.ZoneManagement)}, ExpiresAt: time.Now().Add(time.Hour)}
 }
 
 func TestVPNHubNFT_ProgramIsOneBatchInItsOwnForwardChain(t *testing.T) {

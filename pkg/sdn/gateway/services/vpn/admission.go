@@ -244,6 +244,15 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 	if err := s.deps.Leases.Put(ctx, lease); err != nil {
 		return nil, s.refuse(ctx, lease.DeviceID, &ErrLeaseStoreUnavailable{Cause: err})
 	}
+	// A plane whose host enforces lease deadlines learns the new one here;
+	// the peer is not reinstalled (a MASQUE re-install drops the live
+	// session). A failed extension fails closed: the hosted plane still
+	// removes the peer at the old deadline.
+	if ext, ok := s.deps.DataPlanes[lease.DataPlane].(PeerDeadlineExtender); ok {
+		if err := ext.ExtendPeer(ctx, lease); err != nil {
+			return nil, s.refuse(ctx, lease.DeviceID, &ErrDataPlaneUnavailable{Kind: lease.DataPlane, Cause: err})
+		}
+	}
 	s.logger.Info("vpn.renew", slog.String("lease", string(lease.ID)), slog.Int("renewals", lease.Renewals), slog.Time("expires_at", lease.ExpiresAt))
 	cp := *lease
 	return &cp, nil

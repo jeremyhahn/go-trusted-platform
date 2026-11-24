@@ -16,10 +16,28 @@ package vpn
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/netip"
+	"sync"
+	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	ipcv1 "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc/gen"
 )
+
+// planeHostExpiryTick is how often a started PlaneHost removes the peers
+// whose lease deadline has passed. A variable so tests can shorten it.
+var planeHostExpiryTick = time.Second
+
+// hostedPeer is a peer the host installed with a lease deadline.
+type hostedPeer struct {
+	kind DataPlaneKind
+	// peer is the installed peer with its deadline zeroed, so a re-install
+	// that differs only in the deadline is recognised as a deadline move.
+	peer     *ipcv1.VPNPeer
+	deadline time.Time
+}
 
 // PlaneHost is the datapath child's side of the DataPlane seam (#557): it
 // owns the planes this build offers and applies the DatapathService peer
@@ -28,6 +46,14 @@ import (
 type PlaneHost struct {
 	planes map[DataPlaneKind]ManagedDataPlane
 	order  []ManagedDataPlane
+
+	// mu guards held and the expiry loop. The host removes a peer once its
+	// lease deadline passes, also while the admission service or its lease
+	// store is unavailable (docs/vpn/architecture.md, lease expiry).
+	mu     sync.Mutex
+	held   map[LeaseID]hostedPeer
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 // NewPlaneHost hosts planes, at most one per kind, each a kind this build
@@ -36,7 +62,10 @@ func NewPlaneHost(planes ...ManagedDataPlane) (*PlaneHost, error) {
 	if len(planes) == 0 {
 		return nil, &ErrInvalidConfig{Field: "data-planes", Reason: "the datapath hosts no data plane"}
 	}
-	h := &PlaneHost{planes: make(map[DataPlaneKind]ManagedDataPlane, len(planes))}
+	h := &PlaneHost{
+		planes: make(map[DataPlaneKind]ManagedDataPlane, len(planes)),
+		held:   make(map[LeaseID]hostedPeer),
+	}
 	for _, plane := range planes {
 		if plane == nil {
 			return nil, &ErrDepsMissing{Dep: "DataPlane"}
@@ -62,12 +91,78 @@ func (h *PlaneHost) Start(ctx context.Context) error {
 			return errors.Join(err, stopHostedPlanes(ctx, h.order[:i]))
 		}
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.cancel != nil {
+		return nil
+	}
+	loopCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	done := make(chan struct{})
+	h.cancel, h.done = cancel, done
+	go h.expireLoop(loopCtx, done)
 	return nil
+}
+
+// expireLoop removes, every planeHostExpiryTick, each held peer whose lease
+// deadline has passed, until ctx is cancelled.
+func (h *PlaneHost) expireLoop(ctx context.Context, done chan struct{}) {
+	defer close(done)
+	ticker := time.NewTicker(planeHostExpiryTick)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := h.ExpirePeers(ctx, time.Now()); err != nil {
+				slog.Default().Warn("vpn.plane.peer.expire.failed", "error", err)
+			}
+		}
+	}
+}
+
+// ExpirePeers removes every held peer whose lease deadline is not after now,
+// through its plane's RemovePeer, so a plane's own state (the hub's
+// forwarding accepts) goes with the peer. It needs neither the admission
+// service nor its lease store. A peer whose removal fails stays held and is
+// retried by the next call.
+func (h *PlaneHost) ExpirePeers(ctx context.Context, now time.Time) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var errs []error
+	for id, held := range h.held {
+		if now.Before(held.deadline) {
+			continue
+		}
+		plane, err := h.plane(held.kind)
+		if err == nil {
+			err = plane.RemovePeer(ctx, id)
+		}
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		delete(h.held, id)
+		slog.Default().Info("vpn.plane.peer.expire", "lease_id", string(id), "data_plane", string(held.kind))
+	}
+	return errors.Join(errs...)
 }
 
 // Stop stops the planes in reverse order and joins their errors.
 func (h *PlaneHost) Stop(ctx context.Context) error {
-	return stopHostedPlanes(ctx, h.order)
+	h.mu.Lock()
+	cancel, done := h.cancel, h.done
+	h.cancel, h.done = nil, nil
+	h.mu.Unlock()
+	if cancel != nil {
+		cancel()
+		<-done
+	}
+	err := stopHostedPlanes(ctx, h.order)
+	h.mu.Lock()
+	clear(h.held)
+	h.mu.Unlock()
+	return err
 }
 
 // InstallVPNPeer installs the request's peer on the plane it names.
@@ -122,7 +217,18 @@ func (h *PlaneHost) reconcile(ctx context.Context, req *ipcv1.ReconcileVPNPeersR
 	if !ok {
 		return &ErrDataPlaneUnavailable{Kind: kind, Cause: errors.New("the plane cannot reconcile its peers")}
 	}
-	return r.ReconcilePeers(ctx, keep)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if err := r.ReconcilePeers(ctx, keep); err != nil {
+		// The held deadlines stay, so expiry still removes those peers.
+		return err
+	}
+	for id, held := range h.held {
+		if held.kind == kind && !seen[string(id)] {
+			delete(h.held, id)
+		}
+	}
+	return nil
 }
 
 func (h *PlaneHost) install(ctx context.Context, peer *ipcv1.VPNPeer) error {
@@ -134,7 +240,31 @@ func (h *PlaneHost) install(ctx context.Context, peer *ipcv1.VPNPeer) error {
 	if err != nil {
 		return err
 	}
-	return plane.InstallPeer(ctx, lease)
+	bare := proto.Clone(peer).(*ipcv1.VPNPeer)
+	bare.ExpiresAtUnixNano = 0
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if held, ok := h.held[lease.ID]; ok && held.kind == lease.DataPlane && proto.Equal(held.peer, bare) {
+		// The same peer again is a renewal: only its deadline moves, and
+		// the plane is not touched, so a live session is kept.
+		if !lease.ExpiresAt.IsZero() {
+			held.deadline = lease.ExpiresAt
+			h.held[lease.ID] = held
+		}
+		return nil
+	}
+	if err := plane.InstallPeer(ctx, lease); err != nil {
+		return err
+	}
+	if lease.ExpiresAt.IsZero() {
+		// A peer without a deadline is not tracked; the hub plane refuses
+		// one outright.
+		delete(h.held, lease.ID)
+		return nil
+	}
+	h.held[lease.ID] = hostedPeer{kind: lease.DataPlane, peer: bare, deadline: lease.ExpiresAt}
+	return nil
 }
 
 func (h *PlaneHost) remove(ctx context.Context, req *ipcv1.RemoveVPNPeerRequest) error {
@@ -145,7 +275,13 @@ func (h *PlaneHost) remove(ctx context.Context, req *ipcv1.RemoveVPNPeerRequest)
 	if err != nil {
 		return err
 	}
-	return plane.RemovePeer(ctx, LeaseID(req.GetLeaseId()))
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if err := plane.RemovePeer(ctx, LeaseID(req.GetLeaseId())); err != nil {
+		return err
+	}
+	delete(h.held, LeaseID(req.GetLeaseId()))
+	return nil
 }
 
 func (h *PlaneHost) plane(kind DataPlaneKind) (ManagedDataPlane, error) {
@@ -192,6 +328,9 @@ func leaseFromPeer(peer *ipcv1.VPNPeer) (*Lease, error) {
 	}
 	if zones := peer.GetZones(); len(zones) > 0 {
 		lease.Zones = append([]string(nil), zones...)
+	}
+	if n := peer.GetExpiresAtUnixNano(); n > 0 {
+		lease.ExpiresAt = time.Unix(0, n).UTC()
 	}
 	return lease, nil
 }

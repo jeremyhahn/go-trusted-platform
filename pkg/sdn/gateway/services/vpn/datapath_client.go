@@ -63,6 +63,14 @@ func (p *DatapathPlane) InstallPeer(ctx context.Context, lease *Lease) error {
 	return errorOfRefusal(p.kind, lease.ID, resp.GetRefusal())
 }
 
+// ExtendPeer moves an installed peer's lease deadline in the datapath. It
+// sends the same InstallVPNPeer request as InstallPeer: the PlaneHost treats
+// a peer identical to the one it holds as a deadline move and does not
+// reinstall it, so a live session survives the renewal.
+func (p *DatapathPlane) ExtendPeer(ctx context.Context, lease *Lease) error {
+	return p.InstallPeer(ctx, lease)
+}
+
 // RemovePeer implements DataPlane through the datapath child.
 func (p *DatapathPlane) RemovePeer(ctx context.Context, leaseID LeaseID) error {
 	resp, err := p.peers.RemoveVPNPeer(ctx, &ipcv1.RemoveVPNPeerRequest{DataPlane: string(p.kind), LeaseId: string(leaseID)})
@@ -99,6 +107,9 @@ func peerOf(kind DataPlaneKind, lease *Lease) *ipcv1.VPNPeer {
 	}
 	if len(lease.Zones) > 0 {
 		peer.Zones = append([]string(nil), lease.Zones...)
+	}
+	if !lease.ExpiresAt.IsZero() {
+		peer.ExpiresAtUnixNano = lease.ExpiresAt.UnixNano()
 	}
 	return peer
 }

@@ -79,6 +79,14 @@ type PeerReconciler interface {
 	ReconcilePeers(ctx context.Context, keep []LeaseID) error
 }
 
+// PeerDeadlineExtender is a data plane whose host enforces lease deadlines
+// itself: it removes a peer once its lease's ExpiresAt passes, without the
+// admission service. Renew moves the deadline through it, without
+// reinstalling the peer.
+type PeerDeadlineExtender interface {
+	ExtendPeer(ctx context.Context, lease *Lease) error
+}
+
 // LeaseStore persists leases. The in-memory store is the gateway's
 // projection; the daemon may back it with the control plane.
 type LeaseStore interface {

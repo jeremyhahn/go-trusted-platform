@@ -117,7 +117,9 @@ func resolveVPNHubKeyWith(ctx context.Context, cfg *ServeConfig, resolve bgp.Sec
 // hubNetworkPlane holds the WireGuard plane to the hub's network: a peer
 // whose address is outside it, or is the hub's own, is refused (SPEC.md:80).
 // The plane itself checks only that the address is a single host (Codex
-// #2029 round 1).
+// #2029 round 1). It serves only leases with a deadline, which the datapath's
+// plane host enforces: a peer goes with its accepts once its lease expires,
+// also while the admission service is down.
 type hubNetworkPlane struct {
 	vpn.ManagedDataPlane
 	network netip.Prefix
@@ -126,7 +128,8 @@ type hubNetworkPlane struct {
 	zones *vpnHubZoneEnforcement
 }
 
-// InstallPeer refuses a lease address outside the hub's network.
+// InstallPeer refuses a lease address outside the hub's network and a lease
+// without a deadline.
 func (p hubNetworkPlane) InstallPeer(ctx context.Context, lease *vpn.Lease) error {
 	if lease != nil && lease.Address.IsValid() {
 		addr := lease.Address.Addr()
@@ -139,6 +142,11 @@ func (p hubNetworkPlane) InstallPeer(ctx context.Context, lease *vpn.Lease) erro
 	}
 	if err := p.zones.admitLease(lease); err != nil {
 		return err
+	}
+	// The hub serves only leases with a deadline: the plane host removes
+	// the peer, and with it these accepts, once the deadline passes.
+	if lease != nil && lease.ExpiresAt.IsZero() {
+		return &vpn.ErrInvalidRequest{Field: "expires_at", Reason: "the lease carries no deadline"}
 	}
 	// The lease's accepts are programmed before the peer exists; a failed
 	// program refuses the peer (#2093).

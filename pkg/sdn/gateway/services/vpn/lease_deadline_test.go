@@ -62,7 +62,7 @@ func TestLeaseDeadline_PeerOfCarriesItOverTheWire(t *testing.T) {
 func TestLeaseDeadline_HostRemovesAPeerPastItsDeadline(t *testing.T) {
 	t0 := leaseDeadlineT0
 	ctx := context.Background()
-	plane := newManagedFakePlane(DataPlaneMASQUE, nil)
+	plane := newManagedFakePlane(DataPlaneMASQUE, new([]string))
 	host := hostOf(t, plane)
 
 	require.Nil(t, installHosted(t, host, deadlinePeer("l1", t0.Add(time.Hour))))
@@ -82,7 +82,7 @@ func TestLeaseDeadline_HostRemovesAPeerPastItsDeadline(t *testing.T) {
 func TestLeaseDeadline_AFailedExpiryIsRetried(t *testing.T) {
 	t0 := leaseDeadlineT0
 	ctx := context.Background()
-	plane := newManagedFakePlane(DataPlaneMASQUE, nil)
+	plane := newManagedFakePlane(DataPlaneMASQUE, new([]string))
 	host := hostOf(t, plane)
 	require.Nil(t, installHosted(t, host, deadlinePeer("l1", t0.Add(time.Hour))))
 
@@ -98,7 +98,7 @@ func TestLeaseDeadline_AFailedExpiryIsRetried(t *testing.T) {
 func TestLeaseDeadline_ReinstallOfTheSamePeerOnlyMovesTheDeadline(t *testing.T) {
 	t0 := leaseDeadlineT0
 	ctx := context.Background()
-	plane := newManagedFakePlane(DataPlaneMASQUE, nil)
+	plane := newManagedFakePlane(DataPlaneMASQUE, new([]string))
 	host := hostOf(t, plane)
 	require.Nil(t, installHosted(t, host, deadlinePeer("l1", t0.Add(time.Hour))))
 
@@ -119,7 +119,7 @@ func TestLeaseDeadline_ReinstallOfTheSamePeerOnlyMovesTheDeadline(t *testing.T) 
 func TestLeaseDeadline_RemoveAndReconcileForgetTheDeadline(t *testing.T) {
 	t0 := leaseDeadlineT0
 	ctx := context.Background()
-	plane := newManagedFakePlane(DataPlaneMASQUE, nil)
+	plane := newManagedFakePlane(DataPlaneMASQUE, new([]string))
 	host := hostOf(t, plane)
 	require.Nil(t, installHosted(t, host, deadlinePeer("l1", t0.Add(time.Hour))))
 	l2 := deadlinePeer("l2", t0.Add(time.Hour))
@@ -144,7 +144,7 @@ func TestLeaseDeadline_AStartedHostExpiresPeersOnItsOwn(t *testing.T) {
 	t.Cleanup(func() { planeHostExpiryTick = tick })
 
 	ctx := context.Background()
-	plane := newManagedFakePlane(DataPlaneMASQUE, nil)
+	plane := newManagedFakePlane(DataPlaneMASQUE, new([]string))
 	host := hostOf(t, plane)
 	require.Nil(t, installHosted(t, host, deadlinePeer("l1", time.Now())))
 
@@ -161,11 +161,13 @@ func TestLeaseDeadline_AStartedHostExpiresPeersOnItsOwn(t *testing.T) {
 // in the datapath.
 func hostedHarness(t *testing.T) (*harness, *PlaneHost, *managedFakePlane, *hostPeers) {
 	t.Helper()
-	managed := newManagedFakePlane(DataPlaneMASQUE, nil)
+	managed := newManagedFakePlane(DataPlaneMASQUE, new([]string))
 	host := hostOf(t, managed)
 	peers := &hostPeers{host: host}
+	dp, err := NewDatapathPlane(DataPlaneMASQUE, peers)
+	require.NoError(t, err)
 	h := newHarnessWith(t, testConfig(), func(d *Deps) {
-		d.DataPlanes[DataPlaneMASQUE] = NewDatapathPlane(DataPlaneMASQUE, peers)
+		d.DataPlanes[DataPlaneMASQUE] = dp
 	})
 	return h, host, managed, peers
 }

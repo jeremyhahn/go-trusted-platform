@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -166,7 +167,7 @@ func TestHubNetworkPlane_RefusesAPeerOutsideTheHubNetwork(t *testing.T) {
 	_, _, installed := inner.state()
 	assert.Empty(t, installed, "a refused address reaches no peer")
 
-	require.NoError(t, plane.InstallPeer(ctx, &vpn.Lease{ID: "in-pool", Address: netip.PrefixFrom(hubAddress.Addr().Next(), 32)}))
+	require.NoError(t, plane.InstallPeer(ctx, &vpn.Lease{ID: "in-pool", Address: netip.PrefixFrom(hubAddress.Addr().Next(), 32), ExpiresAt: time.Now().Add(time.Hour)}))
 	_, _, installed = inner.state()
 	assert.Equal(t, []vpn.LeaseID{"in-pool"}, installed, "an in-pool address is installed")
 }
