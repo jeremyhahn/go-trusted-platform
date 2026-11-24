@@ -80,7 +80,7 @@ Examples:
   platformctl proxy route delete web
 
   # Pool operations
-  platformctl proxy pool add --id web-pool --backend https://10.0.0.10:8443 --backend https://10.0.0.11:8443
+  platformctl proxy pool add --id web-pool --backend https://198.51.100.10:8443 --backend https://198.51.100.11:8443
   platformctl proxy pool list
 
   # Configuration lifecycle

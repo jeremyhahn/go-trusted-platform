@@ -49,7 +49,7 @@ Examples:
   platformctl tpm enroll --cn "device-001.example.com"
 
   # Enroll with specific IP address
-  platformctl tpm enroll --ip 192.168.1.100
+  platformctl tpm enroll --ip 192.0.2.100
 
   # Skip confirmation prompts
   platformctl tpm enroll --force`,

@@ -65,7 +65,7 @@ Examples:
   # Issue certificate with Subject Alternative Names
   platformctl ca issue example.com pkcs8 ECDSA-P256 \
     --sans-dns "www.example.com,api.example.com" \
-    --sans-ips "192.168.1.1,10.0.0.1"
+    --sans-ips "192.0.2.1,198.51.100.1"
 
   # Issue certificate to TPM
   platformctl ca issue device.example.com tpm ECDSA-P256`,

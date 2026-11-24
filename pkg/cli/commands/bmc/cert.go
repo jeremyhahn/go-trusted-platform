@@ -92,7 +92,7 @@ Examples:
 
   # Direct standalone
   platformctl bmc cert get \
-    --bmc-host 192.168.1.100 --bmc-user admin --bmc-pass-file /etc/bmc-pass`,
+    --bmc-host 192.0.2.100 --bmc-user admin --bmc-pass-file /etc/bmc-pass`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if standalone.isSet() {
@@ -125,7 +125,7 @@ Examples:
 
   # Direct standalone
   platformctl bmc cert status \
-    --bmc-host 192.168.1.100 --bmc-user admin --bmc-pass-file /etc/bmc-pass`,
+    --bmc-host 192.0.2.100 --bmc-user admin --bmc-pass-file /etc/bmc-pass`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if standalone.isSet() {
@@ -160,7 +160,7 @@ Examples:
 
   # Direct standalone
   platformctl bmc cert replace \
-    --bmc-host 192.168.1.100 --bmc-user admin --bmc-pass-file /etc/bmc-pass \
+    --bmc-host 192.0.2.100 --bmc-user admin --bmc-pass-file /etc/bmc-pass \
     --cert /path/to/cert.pem --key /path/to/key.pem`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

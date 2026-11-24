@@ -168,7 +168,7 @@ Examples:
 
 Examples:
   platformctl sdn gateway bgp announce --prefix 2001:DB8::/36
-  platformctl sdn gateway bgp announce --prefix 203.0.113.0/24 --next-hop 10.0.0.1`,
+  platformctl sdn gateway bgp announce --prefix 203.0.113.0/24 --next-hop 198.51.100.1`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBGPAnnounce(getFlags(), prefix, nextHop)
 		},

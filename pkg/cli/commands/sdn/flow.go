@@ -88,7 +88,7 @@ Supported actions: output, drop, set_vlan, strip_vlan, set_field, goto_table, co
 Examples:
   platformctl sdn flow add --bridge br0 --id flow1 --table 0 --priority 100 --action output --action-port 1
   platformctl sdn flow add --bridge br0 --id flow2 --table 0 --priority 200 --dl-src 00:11:22:33:44:55 --action drop
-  platformctl sdn flow add --bridge br0 --id flow3 --table 0 --priority 150 --nw-src 10.0.0.0/24 --action output --action-port 2`,
+  platformctl sdn flow add --bridge br0 --id flow3 --table 0 --priority 150 --nw-src 198.51.100.0/24 --action output --action-port 2`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runFlowAdd(getFlags(), bridgeID, flowID, table, priority,
 				inPort, dlSrc, dlDst, dlType, nwSrc, nwDst, actions, actionPort)
