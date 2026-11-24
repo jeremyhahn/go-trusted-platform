@@ -169,3 +169,88 @@ func TestSSHManager_CanceledContextSendsNoCommand(t *testing.T) {
 		})
 	}
 }
+
+// stallingExecutor is an SSHExecutor whose Execute never returns until its
+// Close is called, like a session whose channel open the switch never answers.
+type stallingExecutor struct {
+	enterOnce sync.Once
+	closeOnce sync.Once
+	entered   chan struct{}
+	closed    chan struct{}
+	closes    atomic.Int32
+}
+
+func newStallingExecutor() *stallingExecutor {
+	return &stallingExecutor{
+		entered: make(chan struct{}),
+		closed:  make(chan struct{}),
+	}
+}
+
+func (s *stallingExecutor) Execute(context.Context, string) (string, error) {
+	s.enterOnce.Do(func() { close(s.entered) })
+	<-s.closed
+	return "", errors.New("connection closed")
+}
+
+func (s *stallingExecutor) Close() error {
+	s.closes.Add(1)
+	s.closeOnce.Do(func() { close(s.closed) })
+	return nil
+}
+
+func TestSSHManager_CloseInterruptsAnExecuteThatNeverReturns(t *testing.T) {
+	stall := newStallingExecutor()
+	t.Cleanup(func() { _ = stall.Close() })
+	mgr := newSSHManagerWithExecutor(testSSHConfig(), testSSHLogger(), stall)
+	var dials atomic.Int32
+	mgr.dial = func(context.Context, *Config) (SSHExecutor, error) {
+		dials.Add(1)
+		return newSwitchportMock(), nil
+	}
+
+	getDone := make(chan error, 1)
+	go func() {
+		_, err := mgr.GetPortVLAN(context.Background(), "Eth1/3")
+		getDone <- err
+	}()
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-stall.entered:
+	case <-timer.C:
+		t.Fatal("GetPortVLAN never reached the executor")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- mgr.Close() }()
+
+	var getErr error
+	for pending := 2; pending > 0; pending-- {
+		select {
+		case getErr = <-getDone:
+			if getErr == nil {
+				t.Error("GetPortVLAN on a closed connection returned no error")
+			}
+			getDone = nil
+		case err := <-closeDone:
+			if err != nil {
+				t.Errorf("Close: %v", err)
+			}
+			closeDone = nil
+		case <-timer.C:
+			t.Fatalf("Close did not interrupt the stalled Execute (GetPortVLAN returned: %t, Close returned: %t)",
+				getDone == nil, closeDone == nil)
+		}
+	}
+	if n := stall.closes.Load(); n != 1 {
+		t.Errorf("executor closed %d times, want 1", n)
+	}
+
+	if _, err := mgr.GetPortVLAN(context.Background(), "Eth1/3"); err != nil {
+		t.Fatalf("GetPortVLAN after Close: %v", err)
+	}
+	if n := dials.Load(); n != 1 {
+		t.Errorf("dials = %d, want 1 (the call after Close redials)", n)
+	}
+}
