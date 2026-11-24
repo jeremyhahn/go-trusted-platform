@@ -158,6 +158,70 @@ describe('TenantDirectoryCard', () => {
     );
   });
 
+  // Codex P1 on PR #2372: a tenant past the first page must be reachable.
+  const PAGE_ONE = ok({
+    tenants: [
+      { id: 't1', name: 'acme', state: 'TENANT_STATE_ACTIVE' },
+      { id: 't2', name: 'globex', state: 'TENANT_STATE_ACTIVE' },
+    ],
+    total: 3,
+  });
+  const PAGE_TWO = ok({ tenants: [{ id: 't3', name: 'initech', state: 'TENANT_STATE_ACTIVE' }], total: 3 });
+
+  function pageReads(sent: { method: string; path: string; query?: string }[]) {
+    return sent
+      .filter((r) => r.method === 'GET' && r.path === '/api/v1/tenants')
+      .map((r) => new URLSearchParams(r.query ?? ''));
+  }
+
+  it('pages through the directory and shows the total', async () => {
+    const routes: Record<string, Answer> = { 'GET /api/v1/capabilities': caps(), [LIST]: PAGE_ONE };
+    const sent = stubControlPlane(routes);
+    render(withControlPlane(<TenantDirectoryCard pageSize={2} />));
+
+    await screen.findByTestId('tenant-row-t1');
+    await waitFor(() => expect(screen.getByTestId('tenant-directory-total').textContent).toContain('3'));
+    const first = pageReads(sent)[0];
+    expect(first?.get('limit')).toBe('2');
+    expect(first?.get('offset')).toBe('0');
+    expect((screen.getByRole('button', { name: 'Previous page' }) as HTMLButtonElement).disabled).toBe(true);
+
+    routes[LIST] = PAGE_TWO;
+    fireEvent.click(await enabledButton('Next page'));
+    await screen.findByTestId('tenant-row-t3');
+    expect(screen.queryByTestId('tenant-row-t1')).toBeNull();
+    expect(pageReads(sent).at(-1)?.get('offset')).toBe('2');
+    expect((screen.getByRole('button', { name: 'Next page' }) as HTMLButtonElement).disabled).toBe(true);
+
+    routes[LIST] = PAGE_ONE;
+    fireEvent.click(await enabledButton('Previous page'));
+    await screen.findByTestId('tenant-row-t1');
+    expect(pageReads(sent).at(-1)?.get('offset')).toBe('0');
+  });
+
+  it('manages a tenant on the second page', async () => {
+    const routes: Record<string, Answer> = {
+      'GET /api/v1/capabilities': caps(),
+      [LIST]: PAGE_ONE,
+      'POST /api/v1/tenants/t3/suspend': ok({}),
+    };
+    const sent = stubControlPlane(routes);
+    render(withControlPlane(<TenantDirectoryCard pageSize={2} />));
+
+    await screen.findByTestId('tenant-row-t1');
+    routes[LIST] = PAGE_TWO;
+    fireEvent.click(await enabledButton('Next page'));
+    const t3 = await screen.findByTestId('tenant-row-t3');
+    const readsBefore = pageReads(sent).length;
+
+    fireEvent.click(await enabledButton('Suspend', t3));
+    await waitFor(() =>
+      expect(sent).toContainEqual(expect.objectContaining({ method: 'POST', path: '/api/v1/tenants/t3/suspend' }))
+    );
+    await waitFor(() => expect(pageReads(sent).length).toBeGreaterThan(readsBefore));
+    expect(pageReads(sent).at(-1)?.get('offset')).toBe('2');
+  });
+
   it('finds a tenant by name', async () => {
     const sent = stubControlPlane({
       'GET /api/v1/capabilities': caps(),

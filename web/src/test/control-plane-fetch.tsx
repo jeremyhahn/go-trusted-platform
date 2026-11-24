@@ -9,6 +9,8 @@ export interface SentRequest {
   method: string;
   path: string;
   body: unknown;
+  /** The URL's search string (`?limit=2&offset=0`); absent when there is none. */
+  query?: string;
 }
 
 /** A canned control-plane answer: an HTTP status and its JSON body. */
@@ -41,7 +43,7 @@ export function stubControlPlane(routes: Record<string, Answer>): SentRequest[] 
       const url = new URL(input instanceof Request ? input.url : String(input));
       const method = (init?.method ?? 'GET').toUpperCase();
       const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
-      sent.push({ method, path: url.pathname, body });
+      sent.push({ method, path: url.pathname, body, ...(url.search !== '' ? { query: url.search } : {}) });
 
       const answer = routes[`${method} ${url.pathname}`] ?? refused(404, `no route for ${method} ${url.pathname}`);
       return new Response(JSON.stringify(answer.body), {
