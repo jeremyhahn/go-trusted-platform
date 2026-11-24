@@ -10,6 +10,9 @@
  *
  * All three go through the SDK's ComputeService (migrateVM, prepareMigration
  * and finalizeMigration), which path-encodes the VM and receiver ids.
+ *
+ * MigrateVM is sent with a 2-hour timeout (MIGRATE_REQUEST_TIMEOUT_MS) and
+ * retry off, instead of the client's 30 s default and its retries.
  */
 
 import { useMemo } from 'react';
@@ -59,13 +62,24 @@ export interface FinalizeMigrationResult {
   status?: MigrationStatus;
 }
 
+/**
+ * How long MigrateVM may take. A migration copies the guest's memory and
+ * disks to the destination, and the server keeps the reply open for the same
+ * window; a retry would start a second migration, so MigrateVM is never
+ * retried.
+ */
+export const MIGRATE_REQUEST_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+
 export function useVMMigration(vmId: string) {
   const client = usePlatformClient();
 
   return useMemo(() => {
     return {
       migrate: (destinationHost: string, liveMigration: boolean, bandwidthLimitMbps?: number) =>
-        client.compute.migrateVM({ vmId, destinationHost, liveMigration, bandwidthLimitMbps }),
+        client.compute.migrateVM(
+          { vmId, destinationHost, liveMigration, bandwidthLimitMbps },
+          { timeout: MIGRATE_REQUEST_TIMEOUT_MS, retry: { enabled: false } }
+        ),
       prepare: (req: PrepareMigrationBody) => client.compute.prepareMigration(req),
       finalize: (receiverId: string, commit: boolean) =>
         client.compute.finalizeMigration({ receiverId, commit }),
