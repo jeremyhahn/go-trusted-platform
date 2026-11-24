@@ -219,3 +219,16 @@ func TestSDNService_ApplyPolicy_RestoreTriesEveryPriorFlow(t *testing.T) {
 	assert.ElementsMatch(t, priorBr1, fake.matches(t, "br1"))
 	assert.Equal(t, platformv1.PolicyStatus_POLICY_STATUS_ERROR, getPolicy(t, svc, "p1").GetStatus())
 }
+
+// A pre-check that cannot read the installed flows writes nothing.
+func TestSDNService_ApplyPolicy_FlowStatsFailureIsUnavailable(t *testing.T) {
+	svc, fake := newReplacingOVSFixture(t)
+	fake.getFlowStatsErr = errInjectedOVS
+
+	_, err := svc.ApplyPolicy(context.Background(), &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
+	assert.Equal(t, codes.Unavailable, status.Code(err), "err = %v", err)
+	assert.Equal(t, 0, fake.addCalls)
+	assert.Empty(t, fake.matches(t, "br0"))
+	_, err = svc.GetPolicy(context.Background(), &platformv1.GetPolicyRequest{PolicyId: "p1"})
+	assert.Error(t, err, "a refused policy is not stored")
+}
