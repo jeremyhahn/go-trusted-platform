@@ -175,10 +175,10 @@ func TestCIRunsHostedFirst(t *testing.T) {
 // default or overflow to the self-hosted overflow runners, and every hosted
 // job reads that decision. Off github.com each job keeps its label.
 const (
-	selectionStep        = "Hosted or overflow runner (ruling 1024)"
-	selectionRunner      = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}"
-	selectionDocker      = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}"
-	selectionGate        = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner || '\"ubuntu-latest\"') || 'ubuntu-latest' }}"
+	selectionStep   = "Hosted or overflow runner (ruling 1024)"
+	selectionRunner = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}"
+	selectionDocker = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}"
+	selectionGate   = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner || '\"ubuntu-latest\"') || 'ubuntu-latest' }}"
 	// DS-10475: the step's `case "$EVENT" in` is an allow-list. A push
 	// counts only on refs/heads/main, a pull request only from this
 	// repository, and the `*)` arm sends every other event hosted.
