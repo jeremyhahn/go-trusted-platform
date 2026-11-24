@@ -15,6 +15,8 @@ package backends
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -30,11 +32,13 @@ import (
 const clusterLeaderShardID uint64 = 1
 
 // ClusterSurface is the part of the embedded go-quicbaas service the cluster
-// backend reads. The embedded service facade (quicbaasservice.QuicBaaS, from
-// (*app.App).QuicBaaSService) satisfies it.
+// backend reads and the RemoveNode call Leave makes. The embedded service
+// facade (quicbaasservice.QuicBaaS, from (*app.App).QuicBaaSService)
+// satisfies it.
 type ClusterSurface interface {
 	ClusterStatus(ctx context.Context, req *quicbaasservice.ClusterStatusRequest) (*quicbaasservice.ClusterStatusResponse, error)
 	GetLeader(ctx context.Context, req *quicbaasservice.GetLeaderRequest) (*quicbaasservice.GetLeaderResponse, error)
+	RemoveNode(ctx context.Context, req *quicbaasservice.RemoveNodeRequest) (*quicbaasservice.RemoveNodeResponse, error)
 }
 
 var _ ClusterSurface = (quicbaasservice.QuicBaaS)(nil)
@@ -42,7 +46,9 @@ var _ ClusterSurface = (quicbaasservice.QuicBaaS)(nil)
 // clusterBackend is the daemon.ClusterServicer over the Raft cluster the
 // embedded go-quicbaas server already runs in-process. That server's
 // ClusterStatus reports Raft membership, not liveness, so node health is
-// reported as unknown until the SDK exposes liveness.
+// reported as unknown until the SDK exposes liveness. Leave goes through the
+// SDK's RemoveNode; Join answers Unavailable because the pinned go-quicbaas
+// has no join seam.
 type clusterBackend struct {
 	svc         ClusterSurface
 	nodeID      uint64
@@ -225,14 +231,56 @@ func (b *clusterBackend) Bootstrap(ctx context.Context) error {
 	return grpcapi.ErrClusterNotInitialized{}
 }
 
-// Join answers Unavailable: runtime membership (AddNode on the leader) is the
-// next slice of the cluster row.
+// Join answers Unavailable: the pinned go-quicbaas has no join seam (AddNode on
+// the remote leader plus a local replica started in join mode), an upstream
+// gap.
 func (b *clusterBackend) Join(context.Context, []string) error {
 	return grpcapi.ErrClusterServiceUnavailable{}
 }
 
-// Leave answers Unavailable: runtime membership (RemoveNode) is the next
-// slice of the cluster row.
-func (b *clusterBackend) Leave(context.Context) error {
-	return grpcapi.ErrClusterServiceUnavailable{}
+// Leave removes this node from every shard it replicates through the SDK's
+// RemoveNode, in ascending shard order. A node with no ID is not initialized,
+// a node that replicates no shard is not a member, and a node that leads any
+// of its shards is refused before anything is removed: the pinned go-quicbaas
+// has no leadership transfer, so a leader cannot hand its shards off first.
+// The first failed RemoveNode stops the leave and names its shard.
+func (b *clusterBackend) Leave(ctx context.Context) error {
+	if b.nodeID == 0 {
+		return grpcapi.ErrClusterNotInitialized{}
+	}
+	st, err := b.clusterStatus(ctx, "leave")
+	if err != nil {
+		return err
+	}
+
+	var shards []*quicbaasservice.ShardInfo
+	for _, shard := range st.Shards {
+		if shard != nil && slices.Contains(shard.Replicas, b.nodeID) {
+			shards = append(shards, shard)
+		}
+	}
+	if len(shards) == 0 {
+		return grpcapi.ErrNodeNotInCluster{}
+	}
+	sort.Slice(shards, func(i, j int) bool { return shards[i].ShardID < shards[j].ShardID })
+	for _, shard := range shards {
+		if shard.LeaderID == b.nodeID {
+			return grpcapi.ErrCannotLeaveAsLeader{}
+		}
+	}
+
+	for _, shard := range shards {
+		resp, err := b.svc.RemoveNode(ctx, &quicbaasservice.RemoveNodeRequest{ShardID: shard.ShardID, NodeID: b.nodeID})
+		if err != nil {
+			return grpcapi.ErrClusterOperationFailed{Operation: "leave", Reason: fmt.Sprintf("shard %d: %s", shard.ShardID, err)}
+		}
+		if resp == nil || !resp.Success {
+			msg := "remove node was not applied"
+			if resp != nil && resp.Message != "" {
+				msg = resp.Message
+			}
+			return grpcapi.ErrClusterOperationFailed{Operation: "leave", Reason: fmt.Sprintf("shard %d: %s", shard.ShardID, msg)}
+		}
+	}
+	return nil
 }
