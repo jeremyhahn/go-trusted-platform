@@ -15,10 +15,13 @@ package container
 
 import (
 	"crypto/tls"
+	"errors"
 	"log/slog"
 	"net"
+	"strconv"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/nbd"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/volume"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
@@ -77,15 +80,63 @@ func newNBDServer(config *ServerConfig, manifest *Manifest, logger *slog.Logger)
 }
 
 // nbdVolumes is the store behind the diskless-nbd exports, and the one place
-// it is chosen: local files under NBDConfig.VolumeDir on this boot node. The
-// export server and the installed-UKI route both reach volumes through it.
+// it is chosen: by storage class. NBDConfig.StorageClass names a class of
+// ServerConfig.Volume (volume.DefaultConfig() when nil); empty is its default
+// class. The general class is local files under NBDConfig.VolumeDir on this
+// boot node; a class whose provider the platform cannot build yet, or the
+// object class, refuses start-up. The export server and the installed-UKI
+// route both reach volumes through it.
 func nbdVolumes(config *ServerConfig) (nbd.VolumeProvider, error) {
-	volumes, err := nbd.NewLocalVolumes(config.NBD.VolumeDir)
+	cfg := config.Volume
+	if cfg == nil {
+		cfg = volume.DefaultConfig()
+	}
+	resolver, err := volume.New(cfg, localVolumeFactory{dir: config.NBD.VolumeDir})
+	if err != nil {
+		return nil, ErrInvalidServerConfig{Field: "volume", Reason: err.Error(), Err: err}
+	}
+	volumes, err := resolver.Provider(config.NBD.StorageClass)
+	if err != nil {
+		var local nbd.ErrInvalidConfig
+		if errors.As(err, &local) {
+			return nil, err
+		}
+		return nil, ErrInvalidServerConfig{Field: "nbd.storage_class", Reason: err.Error(), Err: err}
+	}
+	return volumes, nil
+}
+
+// localVolumeFactory builds the block providers the platform has today:
+// local files under dir. Every other provider waits on the go-quicbaas SDK's
+// volumes surface, which has none yet.
+type localVolumeFactory struct {
+	dir string
+}
+
+// NewProvider returns the local file store for volume.ProviderLocal and an
+// error wrapping volume.ErrNoProviderFactory for any other provider.
+func (f localVolumeFactory) NewProvider(provider string, _ map[string]string) (volume.Provider, error) {
+	if provider != volume.ProviderLocal {
+		return nil, errNoVolumeProvider{provider: provider}
+	}
+	volumes, err := nbd.NewLocalVolumes(f.dir)
 	if err != nil {
 		return nil, err
 	}
 	return volumes, nil
 }
+
+// errNoVolumeProvider is a storage class whose provider the platform cannot
+// build: it wraps volume.ErrNoProviderFactory and names the provider.
+type errNoVolumeProvider struct {
+	provider string
+}
+
+func (e errNoVolumeProvider) Error() string {
+	return "bootstrap container: no " + strconv.Quote(e.provider) + " volume provider until the go-quicbaas SDK supplies one: " + volume.ErrNoProviderFactory.Error()
+}
+
+func (e errNoVolumeProvider) Unwrap() error { return volume.ErrNoProviderFactory }
 
 // nbdServerAddr is the address a diskless-nbd node attaches its root from:
 // the export server's listener. A listener bound to every address names the
