@@ -10,6 +10,7 @@
  */
 import { test, expect } from './fixtures';
 import type { Page, Response } from '@playwright/test';
+import { unwrapPayload, wireCount } from './fixtures/wire';
 
 const PEM = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----';
 
@@ -184,8 +185,8 @@ test.describe('TPM IDevID and IAK', () => {
     await openPage(adminPage);
     const res = await serverCall(adminPage, 'POST', '/flush', () => confirm(adminPage, 'Flush transient contexts'));
     if (res.ok()) {
-      const body = (await res.json()) as { flushedCount?: number; flushed_count?: number };
-      const count = body.flushedCount ?? body.flushed_count ?? 0;
+      const body = unwrapPayload<{ flushedCount?: unknown; flushed_count?: unknown }>(await res.json());
+      const count = wireCount(body.flushedCount ?? body.flushed_count ?? 0);
       await expect(adminPage.getByTestId('idevid-result')).toContainText(`Flushed ${count}`);
     } else {
       await expectFailureShown(adminPage);
