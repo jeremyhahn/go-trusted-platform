@@ -1867,13 +1867,44 @@ func (s *SDNService) restorePolicyFlows(ctx context.Context, client ovs.ClientIn
 func (s *SDNService) removePolicyFlows(ctx context.Context, client ovs.ClientInterface, flows []policyFlow) ([]policyFlow, error) {
 	var failed []policyFlow
 	var errs []error
+	gone := &bridgeGone{client: client}
 	for _, flow := range flows {
 		if err := client.DeleteFlowStrict(ctx, flow.bridge, flow.mod); err != nil {
+			// A bridge the switch confirms is gone took its flows with it.
+			if gone.check(ctx, flow.bridge) {
+				continue
+			}
 			failed = append(failed, flow)
 			errs = append(errs, fmt.Errorf("bridge %s rule %s: %w", flow.bridge, flow.ruleID, err))
 		}
 	}
 	return failed, errors.Join(errs...)
+}
+
+// bridgeGone answers whether a bridge is absent from the switch, listing the
+// bridges at most once.
+type bridgeGone struct {
+	client ovs.ClientInterface
+	listed bool
+	names  map[string]bool
+}
+
+// check reports true only when the bridge list succeeds and lacks name.
+func (g *bridgeGone) check(ctx context.Context, name string) bool {
+	if !g.listed {
+		g.listed = true
+		bridges, err := g.client.ListBridges(ctx)
+		if err != nil {
+			return false
+		}
+		g.names = make(map[string]bool, len(bridges))
+		for _, b := range bridges {
+			if b != nil {
+				g.names[b.Name] = true
+			}
+		}
+	}
+	return g.names != nil && !g.names[name]
 }
 
 // markPolicyError marks a stored policy "error" when its flows on the switch
