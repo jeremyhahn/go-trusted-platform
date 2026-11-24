@@ -8,6 +8,7 @@ import { CeremonyService } from '../ceremony-service.js';
 import { CeremonyService as IndexedCeremonyService } from '../index.js';
 import { CeremonyService as RootCeremonyService } from '../../index.js';
 import type {
+  CeremonyInitOfficer,
   CeremonyInitRequest,
   CeremonyInitResponse,
   CeremonyStatusResponse,
@@ -58,6 +59,10 @@ describe('CeremonyService', () => {
     };
     const response = { success: true, data: reply };
     vi.mocked(mockClient.post).mockResolvedValue(response);
+    const officers: CeremonyInitOfficer[] = [
+      { username: 'alice', csrPem: 'CSR-A' },
+      { username: 'bob', csrPem: 'CSR-B' },
+    ];
     const request: CeremonyInitRequest = {
       soPin: '1234',
       userPin: '5678',
@@ -65,6 +70,7 @@ describe('CeremonyService', () => {
       hostname: 'ca.example',
       sans: ['ca.example'],
       credentialSealStrategy: 'tpm',
+      officers,
     };
 
     const result = await service.init(request);
