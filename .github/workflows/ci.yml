@@ -41,9 +41,8 @@
 # which skipped an empty head repository) takes the template's form: on a
 # pull_request or pull_request_target event a head repository that is not
 # this one outputs the hosted default with a ::notice and no API call.
-# v1.52's preflight runs-on clause applies to v1.49's bigdisk runs-on, and
-# its Runner labels cases to the v1.38 step; neither is adopted here, since
-# preflight stays on ubuntu-latest, so neither has anything to apply to.
+# preflight runs on the bigdisk pool on a push to main or a same-repository
+# pull request (CI_PREFLIGHT_RUNS_ON overrides it), and hosted otherwise.
 # v1.35.1 (DS-8433, CA m2557): the Signatures job of handbook cd17d28
 # (ci-template v1.35.1) is adopted as is, in CI Gate's needs, env block and a
 # `pr` check line, with .github/allowed_signers synced from handbook
@@ -362,14 +361,12 @@ jobs:
   # xkmsctl and xkey depend only on sdk/go) are further steps in this job.
   # A source check with grep, not a stage: it runs on the runner's shell.
   # v1.23: a lint-class check, so it stays on the PR tier.
-  # Runner (ruling 999): ubuntu-latest on every event. The job needs git,
-  # curl and jq only. It cannot carry the schedule guard (it is the guard),
-  # and it never runs on the self-hosted pool.
+  # Self-hosted only on a push to main or a same-repository pull request.
   # CUSTOMIZE: this repository has no go-objstore seam and no import, so
   # OBJSTORE_SEAMS is empty and any import fails.
   preflight:
     name: Preflight [changed files, schedule guard, architecture gates]
-    runs-on: ubuntu-latest   # v1.48: it decides the runner, so it stays hosted
+    runs-on: ${{ github.server_url == 'https://github.com' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON(vars.CI_PREFLIGHT_RUNS_ON || '["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
     # v1.26: a draft PR runs no CI; every job that needs this one skips with it.
     if: ${{ !github.event.pull_request.draft }}
     timeout-minutes: 10       # v1.34: the three jobs had 5 each
@@ -420,6 +417,7 @@ jobs:
           GRACE: ${{ env.HOSTED_QUEUE_GRACE_SECONDS }}
           REPO: ${{ github.repository }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REF: ${{ github.ref }}
         run: |
           set -uo pipefail
           HOSTED='"ubuntu-latest"'
@@ -448,6 +446,14 @@ jobs:
                 emit "$HOSTED" "$HOSTED"
                 exit 0
               fi ;;
+          esac
+          # The self-hosted runners refuse every event but a push to main and a pull request.
+          case "$EVENT:$REF" in
+            push:refs/heads/main | pull_request:*) ;;
+            *)
+              echo "::notice::runner selection: event $EVENT on $REF is not a push to main or a pull request, which the self-hosted runners refuse; every job of this run takes the GitHub-hosted default, ubuntu-latest"
+              emit "$HOSTED" "$HOSTED"
+              exit 0 ;;
           esac
           case "$LIMIT:$GRACE" in
             *[!0-9:]*|:*|*:) hosted "HOSTED_JOBS_PER_REPO='$LIMIT' or HOSTED_QUEUE_GRACE_SECONDS='$GRACE' is not a whole number" ;;
@@ -495,7 +501,7 @@ jobs:
             pages "$API/runs/$id/jobs?filter=latest" jobs "$RUNNER_TEMP/sel-j.jsonl" || hosted "the Actions API gave no complete job list ($WHY)"
             cat "$RUNNER_TEMP/sel-j.jsonl" >> "$RUNNER_TEMP/sel-jobs.jsonl"
           done
-          # In progress: every hosted job, this one included. Queued: a hosted
+          # In progress: every hosted job. Queued: a hosted
           # job of another run (this run's jobs wait on this one) queued for
           # GRACE seconds or more, so a runner did not take it at once.
           read -r running queued < <(jq -rs --argjson run "$RUN_ID" --argjson grace "$GRACE" '
@@ -672,11 +678,12 @@ jobs:
             echo "$hits"; exit 1
           fi
           echo "OK: no go-objstore import outside the storage seam"
-      - name: The code-review template's v5.12.10, v5.12.11 and v5.12.12 tests
+      - name: The code-review template's v5.12.10 to v5.12.13 tests
         run: |
           python3 -I testdata/code-review-v51210-tests.py .github/workflows/code-review.yml
           python3 -I testdata/code-review-v51211-tests.py .github/workflows/code-review.yml
           python3 -I testdata/code-review-v51212-tests.py .github/workflows/code-review.yml
+          python3 -I testdata/code-review-v51213-tests.py .github/workflows/code-review.yml
 
   # v1.30 (fix 1, parallel jobs; fix 5, gosec on the PR tier): the
   # lint-class stages, moved from the image job, in a job of their own that
