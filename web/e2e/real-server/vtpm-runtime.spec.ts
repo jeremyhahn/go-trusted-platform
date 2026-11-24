@@ -96,7 +96,7 @@ test.describe('vTPM runtime page against the real server', () => {
       return;
     }
 
-    const created = await sdk.vtpm.createBundle({ options: {} });
+    const created = await sdk.vtpm.createBundle({ options: { hostname: `e2e-vtpm-${Date.now()}` } });
     const bundleId = created.success && created.data ? created.data.id : 'e2e-missing-bundle';
     if (!created.success) {
       createRefusedGap(created.error?.message);
@@ -145,7 +145,7 @@ test.describe('vTPM runtime page against the real server', () => {
       return;
     }
 
-    const created = await sdk.vtpm.createBundle({ options: {} });
+    const created = await sdk.vtpm.createBundle({ options: { hostname: `e2e-vtpm-${Date.now()}` } });
     if (!created.success || !created.data) {
       // A runner without the swtpm binary lands here: the server refuses, and
       // only that refusal is a gap; any other refusal fails the test.
