@@ -102,15 +102,15 @@ describe('server-returned enums round-trip through the write bodies', () => {
 
   it('DNS: a record from listRecords is accepted as both oldRecord and newRecord', async () => {
     const service = new DNSService(client);
-    respondWith(client, { records: [{ type: 'RECORD_TYPE_A', a: { address: '10.0.0.5' } }] });
+    respondWith(client, { records: [{ type: 'RECORD_TYPE_A', a: { address: '198.51.100.5' } }] });
 
     const listed = await service.listRecords({ zoneName: 'example.internal' });
     const record = defined(defined(listed.data).records[0]);
     await service.updateRecord({ zoneName: 'example.internal', oldRecord: record, newRecord: record });
 
     expect(sentBody(client.put)).toEqual({
-      oldRecord: { type: 'RECORD_TYPE_A', a: { address: '10.0.0.5' } },
-      newRecord: { type: 'RECORD_TYPE_A', a: { address: '10.0.0.5' } },
+      oldRecord: { type: 'RECORD_TYPE_A', a: { address: '198.51.100.5' } },
+      newRecord: { type: 'RECORD_TYPE_A', a: { address: '198.51.100.5' } },
     });
   });
 

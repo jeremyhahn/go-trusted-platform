@@ -40,7 +40,7 @@ import type {
  *
  * // Add a new node
  * const newNode = await client.quicbaas.cluster.addNode({
- *   address: '192.168.1.10:7946',
+ *   address: '192.0.2.10:7946',
  *   metadata: { rack: 'rack-1' }
  * });
  * ```

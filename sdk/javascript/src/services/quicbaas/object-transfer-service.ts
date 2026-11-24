@@ -32,13 +32,13 @@ import type {
  *   direction: 'peer_to_peer',
  *   source: {
  *     nodeId: 'node-1',
- *     address: '192.168.1.10:9000',
+ *     address: '192.0.2.10:9000',
  *     bucket: 'source-bucket',
  *     key: 'data/file.bin',
  *   },
  *   destination: {
  *     nodeId: 'node-2',
- *     address: '192.168.1.20:9000',
+ *     address: '192.0.2.20:9000',
  *     bucket: 'dest-bucket',
  *     key: 'data/file.bin',
  *   },

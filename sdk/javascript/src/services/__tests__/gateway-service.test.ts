@@ -132,10 +132,10 @@ describe('GatewayService', () => {
     // The router registers DELETE /gateway/bgp/prefixes and reads the CIDR
     // from the `prefix` query parameter (router.go withdrawPrefix).
     it('withdrawPrefix DELETEs /bgp/prefixes with the CIDR in the prefix query, encoded', async () => {
-      await service.withdrawPrefix({ prefix: '10.0.0.0/24' });
+      await service.withdrawPrefix({ prefix: '198.51.100.0/24' });
 
       expectOnly('delete');
-      expect(mockClient.delete).toHaveBeenCalledWith('/v1/gateway/bgp/prefixes?prefix=10.0.0.0%2F24');
+      expect(mockClient.delete).toHaveBeenCalledWith('/v1/gateway/bgp/prefixes?prefix=198.51.100.0%2F24');
     });
 
     it('withdrawPrefix encodes an IPv6 CIDR in the query', async () => {
@@ -225,12 +225,12 @@ describe('GatewayService', () => {
       ['getNAT64Status', 'get', (s) => s.getNAT64Status()],
       ['getBGPStatus', 'get', (s) => s.getBGPStatus()],
       ['listBGPPeers', 'get', (s) => s.listBGPPeers()],
-      ['announcePrefix', 'post', (s) => s.announcePrefix({ prefix: '10.0.0.0/24' })],
-      ['withdrawPrefix', 'delete', (s) => s.withdrawPrefix({ prefix: '10.0.0.0/24' })],
+      ['announcePrefix', 'post', (s) => s.announcePrefix({ prefix: '198.51.100.0/24' })],
+      ['withdrawPrefix', 'delete', (s) => s.withdrawPrefix({ prefix: '198.51.100.0/24' })],
       ['listAnnouncedPrefixes', 'get', (s) => s.listAnnouncedPrefixes()],
       ['listIPAMPools', 'get', (s) => s.listIPAMPools()],
       ['allocateIP', 'post', (s) => s.allocateIP({ poolId: 'p1' })],
-      ['releaseIP', 'delete', (s) => s.releaseIP({ ip: '10.0.0.5' })],
+      ['releaseIP', 'delete', (s) => s.releaseIP({ ip: '198.51.100.5' })],
       ['listAllocations', 'get', (s) => s.listAllocations({ poolId: 'p1' })],
     ];
 
