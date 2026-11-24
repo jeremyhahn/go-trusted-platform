@@ -460,7 +460,7 @@ export default function VMDetailPage() {
                   : disks.map((d) => (
                       <span key={d.id ?? d.path} className="block">
                         {d.path}
-                        {d.sizeGb != null ? ` (${d.sizeGb} GB)` : ''}
+                        {d.sizeGb != null ? ` (${Number(d.sizeGb)} GB)` : ''}
                       </span>
                     ))}
               </span>
@@ -492,10 +492,14 @@ export default function VMDetailPage() {
         disks={disks.map((d) => ({
           id: d.id ?? d.path,
           path: d.path,
-          sizeMB: (d.sizeGb ?? 0) * 1024,
+          // protojson sends the uint64 sizeGb as a string ("20").
+          sizeMB: Number(d.sizeGb ?? 0) * 1024,
           // The SDK DiskType is the image format (raw, qcow2, ...); config disks are never CD-ROMs.
           type: 'disk' as const,
           readonly: Boolean(d.readonly),
+          // The server lists the boot disk first under bootDiskID "hd0"
+          // (compute_grpc_vm_disks.go) and refuses to detach it.
+          boot: d.id === 'hd0',
         }))}
         onChanged={fetchVM}
       />

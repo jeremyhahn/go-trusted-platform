@@ -177,6 +177,7 @@ export function VMDisksCard({ vmId, disks, onChanged }: VMDisksCardProps) {
                 <span className="text-sm text-muted-foreground">{disk.type}</span>
                 <span className="text-sm">{`${disk.sizeMB / 1024} GB`}</span>
                 {disk.readonly && <Badge variant="secondary">readonly</Badge>}
+                {disk.boot && <Badge variant="secondary">boot</Badge>}
                 <Input
                   className="w-28"
                   type="number"
@@ -190,16 +191,18 @@ export function VMDisksCard({ vmId, disks, onChanged }: VMDisksCardProps) {
                     Resize
                   </Button>
                 </Gated>
-                <Gated op={DETACH_OP}>
-                  <Button
-                    variant={confirming === disk.id ? 'destructive' : 'outline'}
-                    size="sm"
-                    disabled={pending}
-                    onClick={() => void handleDetach(disk.id)}
-                  >
-                    {confirming === disk.id ? 'Confirm detach' : 'Detach'}
-                  </Button>
-                </Gated>
+                {!disk.boot && (
+                  <Gated op={DETACH_OP}>
+                    <Button
+                      variant={confirming === disk.id ? 'destructive' : 'outline'}
+                      size="sm"
+                      disabled={pending}
+                      onClick={() => void handleDetach(disk.id)}
+                    >
+                      {confirming === disk.id ? 'Confirm detach' : 'Detach'}
+                    </Button>
+                  </Gated>
+                )}
               </li>
             ))}
           </ul>

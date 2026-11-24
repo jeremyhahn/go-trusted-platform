@@ -216,7 +216,12 @@ function sdkVM(): Answer {
         name: 'vm-one',
         cpu: { cores: 2 },
         memory: { sizeMb: 2048 },
-        disks: [{ id: 'd1', path: '/var/lib/vm/d1.qcow2', sizeGb: 10, type: 'disk' }],
+        // The server's shape (protojson): the boot disk first as hd0, uint64
+        // sizes as strings, the bus as its enum name.
+        disks: [
+          { id: 'hd0', path: '/var/lib/vm/boot.qcow2', sizeGb: '20', bootable: true },
+          { id: 'd1', path: '/var/lib/vm/d1.qcow2', sizeGb: '10', bus: 'DISK_BUS_VIRTIO' },
+        ],
       },
     },
   });
@@ -316,5 +321,15 @@ describe('VMDetailPage loads the SDK VM', () => {
     expect(screen.getByRole('spinbutton', { name: 'New size (GB) for d1' })).toBeDefined();
     const attach = screen.getByRole('button', { name: 'Attach disk' });
     expect(attach.getAttribute('data-capability-op')).toBe('POST /api/v1/compute/vms/{id}/disks');
+  });
+
+  it('lists the server disks with their sizes and no Detach for the boot disk', async () => {
+    stubControlPlane(sdkRoutes());
+    await renderSDKPage();
+
+    expect(screen.getByText('20 GB')).toBeDefined();
+    expect(screen.getByText('10 GB')).toBeDefined();
+    expect(screen.getByRole('spinbutton', { name: 'New size (GB) for hd0' })).toBeDefined();
+    expect(screen.getAllByRole('button', { name: 'Detach' })).toHaveLength(1);
   });
 });

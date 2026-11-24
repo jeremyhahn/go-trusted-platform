@@ -174,6 +174,32 @@ describe('MigrationsPage', () => {
     });
   });
 
+  it('keeps Prepare receiver locked while a receiver is held, until it is finalized', async () => {
+    const sent = stubControlPlane(routes());
+    render(withControlPlane(<MigrationsPage />));
+    await prepareReceiver();
+    const prepares = () => sent.filter((r) => r.method === 'POST' && r.path === '/api/v1/compute/migrations/prepare');
+
+    const prepare = screen.getByRole('button', { name: 'Prepare receiver' }) as HTMLButtonElement;
+    expect(prepare.disabled).toBe(true);
+    await act(async () => {
+      fireEvent.click(prepare);
+    });
+    expect(prepares()).toHaveLength(1);
+
+    await click('Abort');
+    const dialog = screen.getByRole('dialog');
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Abort' }));
+    });
+    await waitFor(() => {
+      expect(toastWith('Migration aborted', 'success')).toBeDefined();
+    });
+
+    await click('Prepare receiver');
+    await waitFor(() => expect(prepares()).toHaveLength(2));
+  });
+
   it('withholds controls the server does not offer', async () => {
     const sent = stubControlPlane(routes([PREPARE_OP, FINALIZE_OP]));
     render(withControlPlane(<MigrationsPage />));

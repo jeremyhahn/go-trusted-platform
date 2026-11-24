@@ -138,6 +138,25 @@ describe('ComputeService wire shapes', () => {
     expect(calls[1]?.[1]).toEqual({});
   });
 
+  it('passes request options through on migrateVM', async () => {
+    const options = { timeout: 7200000, retry: { enabled: false } };
+    await service.migrateVM(
+      { vmId: 'vm-1', destinationHost: 'destination.example.test', liveMigration: true },
+      options
+    );
+    await service.migrateVM({ vmId: 'vm-1', destinationHost: 'destination.example.test', liveMigration: true });
+
+    const calls = vi.mocked(mockClient.post).mock.calls;
+    expect(String(calls[0]?.[0])).toMatch(/\/v1\/compute\/vms\/vm-1\/migrate$/);
+    expect(calls[0]?.[1]).toEqual({
+      destinationHost: 'destination.example.test',
+      liveMigration: true,
+      bandwidthLimitMbps: undefined,
+    });
+    expect(calls[0]?.[2]).toEqual(options);
+    expect(calls[1]?.[2]).toBeUndefined();
+  });
+
   it('reads one snapshot on GET /vms/{id}/snapshots/{snapshotId}', async () => {
     await service.getSnapshot({ vmId: 'vm-1', snapshotId: 's/1' });
 
