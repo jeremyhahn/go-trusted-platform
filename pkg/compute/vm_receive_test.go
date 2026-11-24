@@ -20,6 +20,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	"github.com/spf13/viper"
@@ -152,6 +154,84 @@ func TestReceiveIncoming_ReceiverOutlivesTheRequestContext(t *testing.T) {
 	require.NotNil(t, gotParams)
 	require.NotNil(t, gotParams.lifetime)
 	assert.NoError(t, gotParams.lifetime.Err(), "the receiver QEMU must not die with the PrepareMigration request")
+}
+
+func TestQEMUOrchestrator_CloseAbortsPreparedReceivers(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	tlsProv := &fakeServerTLS{dir: t.TempDir()}
+	orch.config.MigrationTLS = tlsProv
+
+	recv := &fakeIncomingReceiver{port: 49201}
+	var gotParams *incomingReceiverParams
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		gotParams = p
+		return recv, nil
+	})
+
+	handle, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		Arch:       orch.config.Arch,
+		InstanceID: "vm1",
+		VMName:     "guest",
+		Mode:       MigrateModeCold,
+		Config:     &InstanceConfig{Memory: 2048, CPUs: 2, DiskSize: "20G"},
+	})
+	require.NoError(t, err)
+
+	orch.Close()
+
+	assert.True(t, recv.aborted, "Close aborts a prepared receiver")
+	assert.True(t, tlsProv.cleanedUp, "Close releases the receiver's creds")
+	require.NotNil(t, gotParams)
+	assert.Error(t, gotParams.lifetime.Err(), "Close cancels the receiver's lifetime")
+	require.ErrorIs(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true), ErrReceiverNotFound)
+}
+
+func TestReceiveIncoming_AbandonedReceiverExpires(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		orch := newOpsOrchestrator(t)
+		tlsProv := &fakeServerTLS{dir: t.TempDir()}
+		orch.config.MigrationTLS = tlsProv
+
+		recv := &fakeIncomingReceiver{port: 49202}
+		var gotParams *incomingReceiverParams
+		swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+			gotParams = p
+			return recv, nil
+		})
+		spec := MigrationSpec{
+			Arch:   orch.config.Arch,
+			VMName: "guest",
+			Mode:   MigrateModeCold,
+			Config: &InstanceConfig{Memory: 1024, CPUs: 1},
+		}
+
+		handle, err := orch.ReceiveIncoming(context.Background(), spec)
+		require.NoError(t, err)
+
+		time.Sleep(receiverMaxLifetime + time.Minute)
+		synctest.Wait()
+
+		assert.True(t, recv.aborted, "an abandoned receiver is aborted at its deadline")
+		assert.True(t, tlsProv.cleanedUp, "an abandoned receiver's creds are released")
+		require.NotNil(t, gotParams)
+		assert.Error(t, gotParams.lifetime.Err(), "an abandoned receiver's lifetime is cancelled")
+		require.ErrorIs(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true), ErrReceiverNotFound)
+
+		finalized := &fakeIncomingReceiver{port: 49203}
+		swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+			return finalized, nil
+		})
+		handle, err = orch.ReceiveIncoming(context.Background(), spec)
+		require.NoError(t, err)
+		require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, false))
+		finalized.aborted = false
+
+		time.Sleep(receiverMaxLifetime + time.Minute)
+		synctest.Wait()
+		assert.False(t, finalized.aborted, "a finalized receiver is not aborted at the deadline")
+
+		orch.Close()
+	})
 }
 
 func TestReceiveIncoming_ListensOnTheConfiguredAddress(t *testing.T) {
