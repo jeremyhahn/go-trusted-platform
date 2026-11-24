@@ -90,8 +90,8 @@ func (h *proberHarness) lastTransition() (probeTarget, bool) {
 
 func testTarget() probeTarget {
 	return probeTarget{
-		vip:     vipKey{proto: ProtocolTCP, addr: netip.MustParseAddr("10.100.0.10"), port: 443},
-		backend: netip.MustParseAddrPort("10.0.1.5:8443"),
+		vip:     vipKey{proto: ProtocolTCP, addr: netip.MustParseAddr("198.19.100.10"), port: 443},
+		backend: netip.MustParseAddrPort("198.18.1.5:8443"),
 	}
 }
 
@@ -256,10 +256,10 @@ func TestProberRunProbesOnTick(t *testing.T) {
 // TCP backends for probing.
 func TestServiceProbeTargetsExcludesUDP(t *testing.T) {
 	udpVIP := VIP{
-		Address:  netip.MustParseAddr("10.100.0.20"),
+		Address:  netip.MustParseAddr("198.19.100.20"),
 		Port:     53,
 		Protocol: ProtocolUDP,
-		Backends: []Backend{{Address: netip.MustParseAddr("10.0.1.9"), Port: 53}},
+		Backends: []Backend{{Address: netip.MustParseAddr("198.18.1.9"), Port: 53}},
 	}
 	deps, _, _, _ := testDeps(testVIP(), udpVIP)
 	svc := startService(t, deps)
@@ -281,14 +281,14 @@ func TestServiceProbeTransitionRebuildsGroup(t *testing.T) {
 	deps, _, _, groups := testDeps(testVIP())
 	svc := startService(t, deps)
 
-	status, err := svc.GetVIP(ProtocolTCP, netip.MustParseAddrPort("10.100.0.10:443"))
+	status, err := svc.GetVIP(ProtocolTCP, netip.MustParseAddrPort("198.19.100.10:443"))
 	if err != nil {
 		t.Fatalf("GetVIP: %v", err)
 	}
 
 	target := probeTarget{
-		vip:     vipKey{proto: ProtocolTCP, addr: netip.MustParseAddr("10.100.0.10"), port: 443},
-		backend: netip.MustParseAddrPort("10.0.1.5:8443"),
+		vip:     vipKey{proto: ProtocolTCP, addr: netip.MustParseAddr("198.19.100.10"), port: 443},
+		backend: netip.MustParseAddrPort("198.18.1.5:8443"),
 	}
 	svc.applyProbeResult(context.Background(), target, false)
 	if got := groups.bucketCount(status.GroupID); got != 1 {
@@ -298,7 +298,7 @@ func TestServiceProbeTransitionRebuildsGroup(t *testing.T) {
 	// Unknown targets are swallowed (VIP may have been removed between
 	// snapshot and transition).
 	svc.applyProbeResult(context.Background(), probeTarget{
-		vip:     vipKey{proto: ProtocolTCP, addr: netip.MustParseAddr("10.9.9.9"), port: 1},
-		backend: netip.MustParseAddrPort("10.0.1.5:8443"),
+		vip:     vipKey{proto: ProtocolTCP, addr: netip.MustParseAddr("198.19.9.9"), port: 1},
+		backend: netip.MustParseAddrPort("198.18.1.5:8443"),
 	}, false)
 }
