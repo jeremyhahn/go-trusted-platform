@@ -57,6 +57,12 @@ enum CeremonyState {
   CEREMONY_STATE_COMPLETE = 3;
 }
 
+// CeremonyInitOfficer names one Security Officer of an M-of-N init: the ceremony signs csr_pem into the officer's custodian certificate.
+message CeremonyInitOfficer {
+  string username = 1;
+  string csr_pem = 2;
+}
+
 // CeremonyInitRequest seeds a fresh ceremony.
 message CeremonyInitRequest {
   string so_pin = 1;
@@ -66,6 +72,8 @@ message CeremonyInitRequest {
   string hostname = 4;
   repeated string sans = 5;
   string credential_seal_strategy = 6;
+  // officers of an M-of-N init, one per share; empty for single-admin.
+  repeated CeremonyInitOfficer officers = 7;
 }
 
 // CeremonyInitResponse is returned by Init.

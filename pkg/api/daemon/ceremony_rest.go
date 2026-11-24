@@ -88,14 +88,23 @@ func (h *ceremonyRESTHandlers) init(w http.ResponseWriter, r *http.Request) {
 		Hostname               string   `json:"hostname,omitempty"`
 		SANs                   []string `json:"sans,omitempty"`
 		CredentialSealStrategy string   `json:"credential_seal_strategy,omitempty"`
+		Officers               []struct {
+			Username string `json:"username"`
+			CSRPEM   string `json:"csr_pem"`
+		} `json:"officers,omitempty"`
 	}
 	if err := decodeRESTBody(r, &in); err != nil {
 		writeRESTJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	var officers []CeremonyOfficer
+	for _, o := range in.Officers {
+		officers = append(officers, CeremonyOfficer{Username: o.Username, CSRPEM: o.CSRPEM})
+	}
 	out, err := h.service.Init(r.Context(), &CeremonyInitRequest{
 		SOPIN: in.SOPIN, UserPIN: in.UserPIN, Threshold: in.Threshold, Hostname: in.Hostname, SANs: in.SANs,
 		CredentialSealStrategy: in.CredentialSealStrategy,
+		Officers:               officers,
 	})
 	if err != nil {
 		writeRESTJSON(w, ceremonyErrorToHTTP(err), map[string]string{"error": err.Error()})

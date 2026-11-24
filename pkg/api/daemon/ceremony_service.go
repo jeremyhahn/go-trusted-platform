@@ -265,6 +265,16 @@ func (s *CeremonyService) Init(ctx context.Context, req *CeremonyInitRequest) (*
 	if req == nil {
 		req = &CeremonyInitRequest{}
 	}
+	// Each officer of an M-of-N init receives a custodian certificate signed
+	// from its CSR: both the username and the CSR are required.
+	for _, o := range req.Officers {
+		if o.Username == "" {
+			return nil, ErrCeremonyOfficerRequired
+		}
+		if o.CSRPEM == "" {
+			return nil, ErrCeremonyCSRRequired
+		}
+	}
 	b := s.Backend()
 	if b == nil {
 		return nil, ErrCeremonyNotConfigured
