@@ -107,6 +107,7 @@ describe('AttestationQuoteCard', () => {
     // ak_public_key_pem is a proto bytes field: protojson wants it base64.
     expect(body.akPublicKeyPem).toBe(btoa(PEM));
     expect(body.expectedNonce).toBe('bm9uY2U=');
+    expect('channelBinding' in body).toBe(false);
     expect(verdict.textContent).toContain('verified');
     expect(verdict.textContent).not.toContain('not verified');
   });
@@ -148,6 +149,76 @@ describe('AttestationQuoteCard', () => {
     expect(verifies).toHaveLength(1);
     const body = verifies[0].body as { expectedNonce: string; channelBinding?: string };
     expect(body.expectedNonce).toBe('bm9uY2U=');
+    expect(body.channelBinding).toBe('Y2I=');
+  });
+
+  it('sends the channel binding typed for an imported quote', async () => {
+    const sent = stubControlPlane(routes());
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    const button = await ready('Verify quote');
+    await waitFor(() => expect(button.getAttribute('data-capability-enabled')).toBe('true'));
+    fireEvent.change(screen.getByTestId('attestation-verify-quote'), { target: { value: JSON.stringify(QUOTE) } });
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: PEM } });
+    fireEvent.change(screen.getByTestId('attestation-verify-nonce'), { target: { value: 'bm9uY2U=' } });
+    fireEvent.change(screen.getByTestId('attestation-verify-channel-binding'), { target: { value: 'Y2I=' } });
+    fireEvent.click(button);
+    await screen.findByTestId('attestation-quote-verdict');
+
+    const verifies = posts(sent, '/api/v1/attestation/quote/verify');
+    expect(verifies).toHaveLength(1);
+    expect((verifies[0].body as { channelBinding?: string }).channelBinding).toBe('Y2I=');
+  });
+
+  it('keeps a fetched quote binding when the quote JSON is reformatted', async () => {
+    const sent = stubControlPlane(routes());
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    const get = await ready('Get quote');
+    await waitFor(() => expect(get.getAttribute('data-capability-enabled')).toBe('true'));
+    fireEvent.change(screen.getByTestId('attestation-quote-nonce'), { target: { value: 'bm9uY2U=' } });
+    fireEvent.click(get);
+    await screen.findByTestId('attestation-quote-result');
+    await waitFor(() =>
+      expect((screen.getByTestId('attestation-verify-channel-binding') as HTMLInputElement).value).toBe('Y2I='),
+    );
+
+    const reordered = JSON.stringify({
+      nonce: QUOTE.nonce,
+      pcrValues: [],
+      signatureAlgorithm: QUOTE.signatureAlgorithm,
+      signature: QUOTE.signature,
+      quoteData: QUOTE.quoteData,
+    });
+    fireEvent.change(screen.getByTestId('attestation-verify-quote'), { target: { value: reordered } });
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: PEM } });
+    fireEvent.click(await ready('Verify quote'));
+    await screen.findByTestId('attestation-quote-verdict');
+
+    const verifies = posts(sent, '/api/v1/attestation/quote/verify');
+    expect(verifies).toHaveLength(1);
+    expect((verifies[0].body as { channelBinding?: string }).channelBinding).toBe('Y2I=');
+  });
+
+  it('reads the quote and binding from a pasted GetAttestationQuote answer', async () => {
+    const sent = stubControlPlane(routes());
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    const button = await ready('Verify quote');
+    await waitFor(() => expect(button.getAttribute('data-capability-enabled')).toBe('true'));
+    fireEvent.change(screen.getByTestId('attestation-verify-quote'), {
+      target: { value: JSON.stringify({ quote: QUOTE, channelBinding: 'Y2I=' }) },
+    });
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: PEM } });
+    fireEvent.change(screen.getByTestId('attestation-verify-nonce'), { target: { value: 'bm9uY2U=' } });
+    expect((screen.getByTestId('attestation-verify-channel-binding') as HTMLInputElement).value).toBe('');
+    fireEvent.click(button);
+    await screen.findByTestId('attestation-quote-verdict');
+
+    const verifies = posts(sent, '/api/v1/attestation/quote/verify');
+    expect(verifies).toHaveLength(1);
+    const body = verifies[0].body as { quote: typeof QUOTE; channelBinding?: string };
+    expect(body.quote).toEqual(QUOTE);
     expect(body.channelBinding).toBe('Y2I=');
   });
 
