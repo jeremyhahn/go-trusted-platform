@@ -17,6 +17,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 const testMAC = "02:00:00:00:00:01"
@@ -103,5 +105,81 @@ func TestGetByMAC_SendsMAC(t *testing.T) {
 	}
 	if fake.calls != 0 {
 		t.Errorf("get-by-mac not-a-mac: %d RPCs made, want none", fake.calls)
+	}
+}
+
+func TestSetState_SendsStateAndReason(t *testing.T) {
+	fake := &fakePXEClient{}
+	out, err := run(t, fake, "set-state", "dev-1", "--state", "booting", "--reason", "re-image")
+	if err != nil {
+		t.Fatalf("set-state: %v", err)
+	}
+	req := fake.setStateReq
+	if req == nil {
+		t.Fatal("UpdateState was not called")
+	}
+	if req.GetDeviceId() != "dev-1" {
+		t.Errorf("device_id = %q, want dev-1", req.GetDeviceId())
+	}
+	if req.GetState() != platformv1.ProvisioningState_PROVISIONING_STATE_BOOTING {
+		t.Errorf("state = %v, want PROVISIONING_STATE_BOOTING", req.GetState())
+	}
+	if req.GetReason() != "re-image" {
+		t.Errorf("reason = %q, want re-image", req.GetReason())
+	}
+	if !strings.Contains(out, "booting") {
+		t.Errorf("output does not show the new state:\n%s", out)
+	}
+}
+
+func TestSetState_RequiresStateAndReason(t *testing.T) {
+	for _, args := range [][]string{
+		{"set-state", "dev-1", "--reason", "re-image"},
+		{"set-state", "dev-1", "--state", "no-such-state", "--reason", "re-image"},
+	} {
+		fake := &fakePXEClient{}
+		_, err := run(t, fake, args...)
+		var target *ErrInvalidState
+		if !errors.As(err, &target) {
+			t.Errorf("%v: err = %v, want *ErrInvalidState", args, err)
+		}
+		if fake.calls != 0 {
+			t.Errorf("%v: %d RPCs made, want none", args, fake.calls)
+		}
+	}
+
+	fake := &fakePXEClient{}
+	_, err := run(t, fake, "set-state", "dev-1", "--state", "booting")
+	var target *ErrReasonRequired
+	if !errors.As(err, &target) {
+		t.Errorf("set-state without --reason: err = %v, want *ErrReasonRequired", err)
+	}
+	if fake.calls != 0 {
+		t.Errorf("set-state without --reason: %d RPCs made, want none", fake.calls)
+	}
+}
+
+func TestSetEnrolled_SendsSerial(t *testing.T) {
+	fake := &fakePXEClient{}
+	out, err := run(t, fake, "set-enrolled", "dev-1", "--certificate-serial", "0a1b")
+	if err != nil {
+		t.Fatalf("set-enrolled: %v", err)
+	}
+	req := fake.enrolledReq
+	if req == nil || req.GetDeviceId() != "dev-1" || req.GetCertificateSerial() != "0a1b" {
+		t.Fatalf("SetDeviceEnrolled request = %v, want dev-1 serial 0a1b", req)
+	}
+	if !strings.Contains(out, "0a1b") {
+		t.Errorf("output does not show the serial:\n%s", out)
+	}
+
+	fake = &fakePXEClient{}
+	_, err = run(t, fake, "set-enrolled", "dev-1")
+	var target *ErrCertificateSerialRequired
+	if !errors.As(err, &target) {
+		t.Errorf("set-enrolled without serial: err = %v, want *ErrCertificateSerialRequired", err)
+	}
+	if fake.calls != 0 {
+		t.Errorf("set-enrolled without serial: %d RPCs made, want none", fake.calls)
 	}
 }

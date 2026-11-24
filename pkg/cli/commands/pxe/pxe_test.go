@@ -43,8 +43,26 @@ type fakePXEClient struct {
 	registerReq   *platformv1.RegisterPXEDeviceRequest
 	removeReq     *platformv1.RemovePXEDeviceRequest
 	getByMACReq   *platformv1.GetPXEDeviceByMACRequest
+	setStateReq   *platformv1.UpdatePXEStateRequest
+	enrolledReq   *platformv1.SetPXEDeviceEnrolledRequest
 	err           error
 	calls         int
+}
+
+func (f *fakePXEClient) UpdateState(_ context.Context, in *platformv1.UpdatePXEStateRequest, _ ...grpc.CallOption) (*platformv1.UpdatePXEStateResponse, error) {
+	f.calls++
+	f.setStateReq = in
+	return &platformv1.UpdatePXEStateResponse{Device: &platformv1.PXEDeviceInfo{
+		Id: in.GetDeviceId(), State: in.GetState(), StateReason: in.GetReason(),
+	}}, f.err
+}
+
+func (f *fakePXEClient) SetDeviceEnrolled(_ context.Context, in *platformv1.SetPXEDeviceEnrolledRequest, _ ...grpc.CallOption) (*platformv1.SetPXEDeviceEnrolledResponse, error) {
+	f.calls++
+	f.enrolledReq = in
+	return &platformv1.SetPXEDeviceEnrolledResponse{Device: &platformv1.PXEDeviceInfo{
+		Id: in.GetDeviceId(), CertificateSerial: in.GetCertificateSerial(),
+	}}, f.err
 }
 
 func (f *fakePXEClient) RegisterDevice(_ context.Context, in *platformv1.RegisterPXEDeviceRequest, _ ...grpc.CallOption) (*platformv1.RegisterPXEDeviceResponse, error) {
