@@ -14,6 +14,7 @@
 package arch
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -111,7 +112,8 @@ func runnerProblems(body []byte) []string {
 			}
 		case isSelectionRunsOn(j.runsOn.Value):
 			// v1.48: the preflight selection, hosted unless the hosted
-			// pool is full; its step keeps fork pull requests hosted.
+			// pool is full; its step keeps every event but a push to main
+			// and a same-repository pull request hosted (DS-10475).
 		case strings.Contains(j.runsOn.Value, "${{"):
 			problems = append(problems, where+" runs on an expression, which can pick a self-hosted label: "+strconv.Quote(j.runsOn.Value))
 		case j.runsOn.Value != hostedRunner:
@@ -177,10 +179,50 @@ const (
 	selectionRunner      = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}"
 	selectionDocker      = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}"
 	selectionGate        = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner || '\"ubuntu-latest\"') || 'ubuntu-latest' }}"
-	selectionForkEvents  = "case \"$EVENT\" in\n  pull_request|pull_request_target)\n"
+	// DS-10475: the step's `case "$EVENT" in` is an allow-list. A push
+	// counts only on refs/heads/main, a pull request only from this
+	// repository, and the `*)` arm sends every other event hosted.
+	selectionEventCase   = "case \"$EVENT\" in\n"
+	selectionMainEvents  = "  push)\n"
+	selectionMainGuard   = `if [ "$REF" != refs/heads/main ]; then`
+	selectionForkEvents  = "  pull_request)\n"
 	selectionForkGuard   = `if [ "$HEAD_REPO" != "$REPO" ]; then`
+	selectionOtherEvents = "  *)\n    hosted_only "
 	selectionOverflowMsg = "the self-hosted overflow runners (bigdisk, bigdisk-docker)"
 )
+
+// selectionEventArms are the arms of the selection step's event case, in
+// order: nothing but a push and a pull request may reach the API count.
+var selectionEventArms = []string{"push", "pull_request", "*"}
+
+// eventArms returns the patterns of the arms of the `case "$EVENT" in` block
+// of run, an arm being a line at the case's indent plus two that ends its
+// pattern with `)`; nil when run has no such block.
+func eventArms(run string) []string {
+	start := strings.Index(run, selectionEventCase)
+	if start < 0 {
+		return nil
+	}
+	lineStart := strings.LastIndex(run[:start], "\n") + 1
+	indent := run[lineStart:start]
+	if strings.TrimSpace(indent) != "" {
+		return nil
+	}
+	armIndent := indent + "  "
+	var arms []string
+	for _, l := range strings.Split(run[start+len(selectionEventCase):], "\n") {
+		if strings.TrimSpace(l) == "esac" && strings.HasPrefix(l, indent+"esac") {
+			return arms
+		}
+		if !strings.HasPrefix(l, armIndent) || strings.HasPrefix(l, armIndent+" ") {
+			continue
+		}
+		if pattern, _, ok := strings.Cut(strings.TrimPrefix(l, armIndent), ")"); ok {
+			arms = append(arms, pattern)
+		}
+	}
+	return nil
+}
 
 // selectionRunsOn is the runs-on every job of ci.yml carries under v1.48:
 // a job whose steps run Docker reads runner_docker, CI Gate reads runner with
@@ -194,8 +236,9 @@ var selectionRunsOn = map[string]string{
 	"sdkjs":      selectionRunner,
 	"race":       selectionRunner,
 	"web":        selectionRunner,
-	// Hosted only: `playwright install --with-deps` installs system packages.
-	"web-e2e":           hostedRunner,
+	// DS-10475: its `playwright install --with-deps` (sudo) and apt steps
+	// run on a GitHub-hosted runner only.
+	"web-e2e":           selectionDocker,
 	"integration-image": selectionDocker,
 	"integration":       selectionDocker,
 	"soak":              selectionDocker,
@@ -292,10 +335,19 @@ func selectionProblems(body []byte) []string {
 	if r := mapValue(first, "run"); r != nil {
 		run = r.Value
 	}
-	for _, want := range []string{selectionForkEvents + "    " + selectionForkGuard, selectionOverflowMsg, `emit "$(overflow bigdisk)" "$(overflow bigdisk-docker)"`} {
+	for _, want := range []string{
+		selectionEventCase + selectionMainEvents + "    " + selectionMainGuard,
+		selectionForkEvents + "    " + selectionForkGuard,
+		selectionOtherEvents,
+		selectionOverflowMsg,
+		`emit "$(overflow bigdisk)" "$(overflow bigdisk-docker)"`,
+	} {
 		if !strings.Contains(run, want) {
 			problems = append(problems, "the selection step's run lacks "+strconv.Quote(want))
 		}
+	}
+	if arms := eventArms(run); !slices.Equal(arms, selectionEventArms) {
+		problems = append(problems, fmt.Sprintf("the selection step's event case has the arms %q, want %q: only a push to refs/heads/main or a pull request from this repository may reach a self-hosted runner (DS-10475)", arms, selectionEventArms))
 	}
 	return problems
 }
@@ -327,6 +379,23 @@ func TestSelectionProblems_Mutations(t *testing.T) {
 		}, "env HOSTED_QUEUE_GRACE_SECONDS is not 60"},
 		{"the fork guard dropped", func(b string) string { return strings.Replace(b, selectionForkGuard, "if false; then", 1) }, "lacks"},
 		{"the step renamed", func(b string) string { return strings.Replace(b, "name: "+selectionStep, "name: Runner", 1) }, "first step"},
+		// DS-10475: no event but a push to main and a same-repository
+		// pull request may leave the hosted path.
+		{"the push/main condition dropped", func(b string) string {
+			return inSelectionStep(t, b, selectionMainGuard, "if false; then")
+		}, "lacks"},
+		{"a schedule run let through with the push", func(b string) string {
+			return inSelectionStep(t, b, "push)\n", "push|schedule)\n")
+		}, "event case has the arms"},
+		{"a workflow_dispatch run let through", func(b string) string {
+			return inSelectionStep(t, b, "            *)\n", "            workflow_dispatch) ;;\n            *)\n")
+		}, "event case has the arms"},
+		{"pull_request_target let through with the fork check", func(b string) string {
+			return inSelectionStep(t, b, "pull_request)\n", "pull_request|pull_request_target)\n")
+		}, "event case has the arms"},
+		{"the other events no longer hosted", func(b string) string {
+			return inSelectionStep(t, b, "*)\n              hosted_only ", "*)\n              : hosted_only ")
+		}, "lacks"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			mutated := c.mutate(body)
@@ -423,6 +492,20 @@ func replaceJobRunner(t *testing.T, body, job, runsOn string) string {
 	i := strings.Index(body[start:], "    runs-on: ") + start
 	end := strings.Index(body[i:], "\n") + i
 	return body[:i] + "    runs-on: " + runsOn + body[end:]
+}
+
+// inSelectionStep replaces the first old after the selection step's name in
+// the ci.yml body with repl.
+func inSelectionStep(t *testing.T, body, old, repl string) string {
+	t.Helper()
+	start := strings.Index(body, "name: "+selectionStep)
+	if start < 0 {
+		t.Fatalf("ci.yml has no step %q", selectionStep)
+	}
+	if !strings.Contains(body[start:], old) {
+		t.Fatalf("the selection step has no %q", old)
+	}
+	return body[:start] + strings.Replace(body[start:], old, repl, 1)
 }
 
 // replaceJobIf sets (or adds) the job-level if: of job in the ci.yml body.

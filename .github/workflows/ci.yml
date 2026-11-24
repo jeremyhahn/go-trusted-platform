@@ -22,6 +22,13 @@
 # or a hosted job of another run has queued HOSTED_QUEUE_GRACE_SECONDS; a
 # fork pull request always stays hosted. Nothing else of v1.43 to v1.48 is
 # taken.
+# CUSTOMIZE (DS-10475, not in the template): the selection overflows only a
+# push to refs/heads/main or a pull request from this repository. Every other
+# event (schedule, workflow_dispatch, pull_request_target, a push to another
+# branch, a fork's pull request, any event added later) takes the hosted
+# default with a ::notice and no API call, since the self-hosted image hook
+# refuses schedule and dispatch runs and nothing runs self-hosted on
+# pull_request_target. web-e2e reads runner_docker with the other jobs.
 #
 # v1.50 short-list fix only (handbook PR 84, rulings 999/1024, DS-9751,
 # #2128): the overflow never fired under load. The Actions API's listing
@@ -408,11 +415,19 @@ jobs:
       # CUSTOMIZE (#2128, not in the template): a pull request from a fork
       # always takes the hosted default. The self-hosted runners are
       # persistent, and ruling 999 keeps fork code off them.
+      # CUSTOMIZE (DS-10475, not in the template): an allow-list of the
+      # events that may overflow. Only a push to refs/heads/main (REF) or a
+      # pull request whose head repository is this one reaches the API
+      # count; every other event outputs the hosted default with a ::notice
+      # naming why. The self-hosted image hook refuses schedule and
+      # workflow_dispatch runs, and nothing runs self-hosted on
+      # pull_request_target.
       - name: Hosted or overflow runner (ruling 1024)
         id: runner
         env:
           SERVER: ${{ github.server_url }}
           EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
           API: ${{ github.api_url }}/repos/${{ github.repository }}/actions
           RUN_ID: ${{ github.run_id }}
           JOB_TOKEN: ${{ github.token }}
@@ -434,6 +449,13 @@ jobs:
             emit "$HOSTED" "$HOSTED"
             exit 0
           }
+          # hosted_only <why>: an event no self-hosted runner takes, so the
+          # default with no count and the reason shown (DS-10475).
+          hosted_only() {
+            echo "::notice::runner selection: $1; only a push to refs/heads/main or a pull request from this repository may reach a self-hosted runner, so every job of this run takes the GitHub-hosted default, ubuntu-latest (DS-10475)"
+            emit "$HOSTED" "$HOSTED"
+            exit 0
+          }
           if [ "$SERVER" != https://github.com ]; then
             echo "not github.com: each job keeps its forge label; no selection"
             emit "$HOSTED" "$HOSTED"
@@ -441,13 +463,23 @@ jobs:
           fi
           # v1.52: a fork's pull request (a deleted fork too, whose head
           # repository reads empty) runs every job on GitHub-hosted runners.
+          # CUSTOMIZE (DS-10475, not in the template): the case is an
+          # allow-list. A push counts only on refs/heads/main, a pull request
+          # only from this repository, and every other event (schedule,
+          # workflow_dispatch, pull_request_target and any other) is hosted.
           case "$EVENT" in
-            pull_request|pull_request_target)
+            push)
+              if [ "$REF" != refs/heads/main ]; then
+                hosted_only "this push is to '$REF', not refs/heads/main"
+              fi ;;
+            pull_request)
               if [ "$HEAD_REPO" != "$REPO" ]; then
                 echo "::notice::runner selection: this pull request's head repository is not this repository (a fork); every job of this run takes the GitHub-hosted default, ubuntu-latest, and none reaches a self-hosted runner (ci-template v1.52)"
                 emit "$HOSTED" "$HOSTED"
                 exit 0
               fi ;;
+            *)
+              hosted_only "the '$EVENT' event is neither a push to refs/heads/main nor a pull request from this repository" ;;
           esac
           case "$LIMIT:$GRACE" in
             *[!0-9:]*|:*|*:) hosted "HOSTED_JOBS_PER_REPO='$LIMIT' or HOSTED_QUEUE_GRACE_SECONDS='$GRACE' is not a whole number" ;;
@@ -1390,11 +1422,14 @@ jobs:
 
   # Real-server Playwright specs (#2034, epic #1665, ruling 1031): builds the
   # tpm_simulator platformd with the console embedded and runs
-  # web/playwright.real-server.config.ts against it. Hosted (ruling 999): the
-  # job installs chromium itself, which the pool image does not carry.
+  # web/playwright.real-server.config.ts against it. CUSTOMIZE (DS-10475):
+  # it reads the preflight runner_docker selection, hosted unless the hosted
+  # pool is full on a push to main or a same-repository pull request. The job
+  # installs chromium itself; the system packages (apt, and playwright's
+  # --with-deps, both sudo) are installed on a GitHub-hosted runner only.
   web-e2e:
     name: Web Console E2E
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}   # v1.48
     if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     needs: preflight
     timeout-minutes: 30
@@ -1425,8 +1460,16 @@ jobs:
           scripts/ci-go-integrity.sh
           make web-deps
 
-      - name: Install the Playwright chromium
+      # --with-deps installs chromium's system packages through sudo, which
+      # only a GitHub-hosted runner grants. A self-hosted runner installs the
+      # browser alone, so its image must carry those packages.
+      - name: Install the Playwright chromium and its system packages
+        if: runner.environment == 'github-hosted'
         run: cd web && npx playwright install --with-deps chromium
+
+      - name: Install the Playwright chromium
+        if: runner.environment != 'github-hosted'
+        run: cd web && npx playwright install chromium
 
       - name: Real-server Playwright specs
         run: |

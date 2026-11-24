@@ -709,8 +709,10 @@ func TestCIGateTiersMatchTheJobs(t *testing.T) {
 }
 
 // TestCIGateRequiresTheHostedJobs pins the jobs the gate must require on a
-// named tier and runner: web-e2e runs the real-server Playwright specs on a
-// GitHub-hosted runner, which installs chromium in the job (ruling 1031).
+// named tier and runner: web-e2e runs the real-server Playwright specs
+// (ruling 1031) on the preflight runner_docker selection (DS-10475), which is
+// GitHub-hosted unless the hosted pool is full on a push to main or a
+// same-repository pull request.
 func TestCIGateRequiresTheHostedJobs(t *testing.T) {
 	wf := loadCIWorkflow(t, repoRoot(t), ciWorkflowFile)
 	jobs := make(map[string]ciJob, len(wf.Jobs))
@@ -725,7 +727,7 @@ func TestCIGateRequiresTheHostedJobs(t *testing.T) {
 	for _, tc := range []struct {
 		job, tier, runsOn string
 	}{
-		{job: "web-e2e", tier: tierFull, runsOn: "ubuntu-latest"},
+		{job: "web-e2e", tier: tierFull, runsOn: selectionDocker},
 	} {
 		j, ok := jobs[tc.job]
 		if !ok {
