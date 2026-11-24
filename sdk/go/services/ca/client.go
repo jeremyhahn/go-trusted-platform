@@ -33,11 +33,15 @@ type RevocationStatus struct {
 type InstallResult struct {
 	CertificatesInstalled int32
 	InstallPath           string
+	// Message is the daemon's status message, for example "already installed".
+	Message string
 }
 
 // UninstallResult contains the result of uninstalling CA certificates.
 type UninstallResult struct {
 	CertificatesRemoved int32
+	// Message is the daemon's status message, for example "nothing installed".
+	Message string
 }
 
 // Client provides access to CA service operations.
@@ -100,6 +104,7 @@ func (c *Client) InstallCACertificates(ctx context.Context, includeIntermediates
 	return &InstallResult{
 		CertificatesInstalled: resp.CertificatesInstalled,
 		InstallPath:           resp.InstallPath,
+		Message:               resp.GetStatus().GetMessage(),
 	}, nil
 }
 
@@ -114,6 +119,7 @@ func (c *Client) UninstallCACertificates(ctx context.Context, includeIntermediat
 	}
 	return &UninstallResult{
 		CertificatesRemoved: resp.CertificatesRemoved,
+		Message:             resp.GetStatus().GetMessage(),
 	}, nil
 }
 

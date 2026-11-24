@@ -53,7 +53,6 @@ import (
 	ipambackends "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vpn"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
@@ -425,13 +424,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Create gRPC UDS server if enabled
 	var grpcUDSServer *grpc.Server
 	if config.EnableGRPCUDS {
-		grpcOpts := []grpc.ServerOption{
-			grpc.Creds(peercred.NewUnixTransportCredentials()),
-			grpc.ChainUnaryInterceptor(RecoveryUnaryInterceptor(logger)),
-			grpc.ChainStreamInterceptor(RecoveryStreamInterceptor(logger)),
-			grpc.ChainUnaryInterceptor(peercred.UnixCredentialsUnaryInterceptor()),
-			grpc.ChainStreamInterceptor(peercred.UnixCredentialsStreamInterceptor()),
-		}
+		grpcOpts := unixGRPCServerOptions(logger)
 		grpcUDSServer = grpc.NewServer(grpcOpts...)
 
 		// Register platform daemon service with UDS gRPC server
@@ -596,36 +589,41 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("Proxy service initialized and registered successfully")
 
-	// Create CA gRPC service if CAService is configured
+	// Create the CA gRPC service on every start. With no loaded CA (CA
+	// bring-up failed or none is configured yet) the service is still
+	// registered, so InitCA can initialise one through its initializer.
 	var caService *CAGRPCService
+	// caHolder is the CA the gRPC CA service and the REST CA handlers
+	// share, so a CA InitCA swaps in is served by both.
+	caHolder := NewCAHolder(config.CAService)
+	// Get the logging.Logger from the App if available
+	var caLogger *logging.Logger
+	if config.App != nil && config.App.Logger != nil {
+		caLogger = config.App.Logger
+	} else {
+		caLogger = logging.DefaultLogger()
+	}
+
+	var caObjStorage objectstorage.Client
+	if config.App != nil {
+		caObjStorage = config.App.Storage
+	}
+	caService = NewCAGRPCService(caLogger, config.CAService, caObjStorage).WithKMS(config.csrKMS()).WithCAInitializer(AppCAInitializer(config.App)).WithCAHolder(caHolder)
+
+	// Register with TCP gRPC server if available
+	if grpcServer != nil {
+		platformv1.RegisterCAServiceServer(grpcServer, caService)
+	}
+
+	// Register with UDS gRPC server if available
+	if grpcUDSServer != nil {
+		platformv1.RegisterCAServiceServer(grpcUDSServer, caService)
+	}
+
 	if config.CAService != nil {
-		// Get the logging.Logger from the App if available
-		var caLogger *logging.Logger
-		if config.App != nil && config.App.Logger != nil {
-			caLogger = config.App.Logger
-		} else {
-			caLogger = logging.DefaultLogger()
-		}
-
-		var caObjStorage objectstorage.Client
-		if config.App != nil {
-			caObjStorage = config.App.Storage
-		}
-		caService = NewCAGRPCService(caLogger, config.CAService, caObjStorage).WithKMS(config.csrKMS())
-
-		// Register with TCP gRPC server if available
-		if grpcServer != nil {
-			platformv1.RegisterCAServiceServer(grpcServer, caService)
-		}
-
-		// Register with UDS gRPC server if available
-		if grpcUDSServer != nil {
-			platformv1.RegisterCAServiceServer(grpcUDSServer, caService)
-		}
-
 		logger.Info("CA service initialized and registered successfully")
 	} else {
-		logger.Info("CA service not available (CAService not configured)")
+		logger.Info("CA service registered without a loaded CA; InitCA can initialise it")
 	}
 
 	// Create KMS service if QuicBaaS backend is available
@@ -749,12 +747,12 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			config.DeviceService,
 			config.DeviceProfileService,
 			logger.Slog(),
-			WithDeviceAKTrust(deviceAKTrust(config)),
+			WithDeviceAKTrust(caHolder),
 			WithDeviceVerdictSink(deviceVerdictSink(config)),
 			WithDeviceAttestCertRecorder(newDeviceAttestCertRecorder(config, logger.Slog())),
 			WithDeviceLifecycle(config.DeviceLifecycle),
 			WithDeviceTemplateService(config.DeviceTemplateService),
-			WithDeviceBootCA(config.CAService),
+			WithDeviceBootCA(caHolder),
 		)
 
 		// Register with TCP gRPC server if enabled
@@ -857,12 +855,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Warn("IDevID gRPC service created but app.TPM is nil; IDevID/IAK ops will return FailedPrecondition")
 	}
 
-	if config.CAService != nil {
-		idevidService.SetCAService(config.CAService)
-		logger.Info("IDevID gRPC service wired to CA for LDevID issuance")
-	} else {
-		logger.Warn("IDevID gRPC service created without CA; CreateLDevID will return FailedPrecondition")
-	}
+	idevidService.SetCASource(caHolder.Get)
+	logger.Info("IDevID gRPC service follows the shared CA holder for LDevID issuance; CreateLDevID answers FailedPrecondition until a CA is initialised")
 
 	// Register with TCP gRPC server if enabled
 	if grpcServer != nil {
@@ -1174,15 +1168,15 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		quicHandler.SetAppServices(appServices)
 		quicHandler.SetIDevIDService(idevidService)
 
-		// Set CA handler if available
-		if config.CAService != nil {
-			var quicObjStorage objectstorage.Client
-			if config.App != nil {
-				quicObjStorage = config.App.Storage
-			}
-			quicHandler.SetCAHandler(quic.NewCAHandler(quicLogger, config.CAService, quicObjStorage).WithKMS(config.csrKMS()))
-			quicHandler.SetDeviceAKTrust(config.CAService)
+		// The QUIC CA handler reads the shared CA holder per request, so a
+		// daemon that starts with no CA serves the CA InitCA brings up over
+		// QUIC. Device attestation still uses the start-up CA.
+		var quicObjStorage objectstorage.Client
+		if config.App != nil {
+			quicObjStorage = config.App.Storage
 		}
+		quicHandler.SetCAHandler(quic.NewCAHandler(quicLogger, config.CAService, quicObjStorage).WithKMS(config.csrKMS()).WithCASource(caHolder.Get))
+		quicHandler.SetDeviceAKTrust(caHolder)
 
 		// Set vTPM service if available
 		if config.VTPMService != nil {
@@ -1207,9 +1201,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if config.DeviceService != nil {
 			quicHandler.SetDeviceAttestCertRecorder(newDeviceAttestCertRecorder(config, quicLogger.Slog()))
 			quicHandler.SetDeviceLifecycle(config.DeviceLifecycle)
-			if config.CAService != nil {
-				quicHandler.SetDeviceBootCA(config.CAService)
-			}
+			quicHandler.SetDeviceBootCA(caHolder)
 		}
 
 		// Set Container orchestrator if available
@@ -1576,8 +1568,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// `platformctl --protocol rest ca list` would 404. The handlers share
 	// the same CA instance as the gRPC, QUIC, MCP and Unix-socket adapters
 	// so all transports return identical results.
-	if daemon.concreteRestServer != nil && config.CAService != nil {
-		daemon.concreteRestServer.SetCAHandlers(config.CAService, restGuard)
+	if daemon.concreteRestServer != nil {
+		daemon.concreteRestServer.SetCAHolder(caHolder, restGuard)
+		daemon.concreteRestServer.SetCALifecycle(caService, restGuard)
 	}
 
 	// Wire the physical TPM REST handlers. Quote and verify run on the same
@@ -3728,8 +3721,11 @@ func (d *Daemon) registerHealthCheckers() {
 		return
 	}
 
-	// Register CA service health checker if available
-	if d.caService != nil {
+	// Register the CA service health checker when a CA is expected: one is
+	// loaded, or a CA configuration lets InitCA bring one up. The checker reads
+	// the shared CA holder, so a CA InitCA brings up at runtime is monitored
+	// too. A daemon with no CA and no CA configuration has no CA readiness.
+	if d.caService != nil && (d.caService.authority() != nil || d.caService.initCA != nil) {
 		checker := NewCAServiceHealthChecker(d.caService)
 		if checker != nil {
 			if err := d.healthRegistry.Register(checker); err != nil {
@@ -3944,16 +3940,6 @@ func (d *Daemon) SetFIDO2Backend(b FIDO2Backend) {
 	}
 	svc.service.SetBackend(b)
 	d.logger.Info("FIDO2 backend wired")
-}
-
-// deviceAKTrust returns the platform CA as the trust anchor for device
-// attestation certificates, or nil when no CA is configured so that device
-// quotes fail closed rather than chain against nothing.
-func deviceAKTrust(config *Config) AKTrustAnchor {
-	if config == nil || config.CAService == nil {
-		return nil
-	}
-	return config.CAService
 }
 
 // deviceVerdictSink returns the attestation service as the sink for device

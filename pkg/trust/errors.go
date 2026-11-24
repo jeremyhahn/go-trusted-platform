@@ -232,3 +232,11 @@ func (e ErrAnchorFileUnset) Is(target error) bool {
 	_, ok := target.(ErrAnchorFileUnset)
 	return ok
 }
+
+// ErrSystemTrustBundleMismatch is returned by UninstallFromSystemTrust when
+// the file at Path is not a bundle this CA wrote. The file is left in place.
+type ErrSystemTrustBundleMismatch struct{ Path string }
+
+func (e ErrSystemTrustBundleMismatch) Error() string {
+	return "trust: " + e.Path + " is not a CA bundle this CA wrote; left in place"
+}

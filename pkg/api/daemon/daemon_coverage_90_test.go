@@ -751,9 +751,9 @@ func TestDaemon_ServiceAccessors_Coverage(t *testing.T) {
 		t.Error("Service() returned nil")
 	}
 
-	// Test CAGRPCService() - should be nil when not configured
-	if d.CAGRPCService() != nil {
-		t.Error("CAGRPCService() should be nil when not configured")
+	// Test CAGRPCService() - registered even with no CA, so InitCA can create one
+	if d.CAGRPCService() == nil {
+		t.Error("CAGRPCService() should be registered with no CA")
 	}
 
 	// SDNService always returns a non-nil stub; OVSClient is nil when no socket is configured.
@@ -863,8 +863,8 @@ func TestDaemon_SetCAGRPCService_Cov90(t *testing.T) {
 	}
 
 	// Initially should be nil
-	if d.CAGRPCService() != nil {
-		t.Error("CAGRPCService() should initially be nil")
+	if d.CAGRPCService() == nil {
+		t.Error("CAGRPCService() should initially be registered with no CA")
 	}
 
 	// Set a nil service - should not panic

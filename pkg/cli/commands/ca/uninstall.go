@@ -29,27 +29,37 @@ func newUninstallCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "uninstall-ca-certificates",
 		Short: "Uninstall Certificate Authority certificates",
-		Long: `Remove the Root and Intermediate Certificate Authority certificates
-from the operating system trusted certificate store.
+		Long: `Ask the daemon to remove this CA's certificates from its system trust
+path.
 
-This command removes the CA certificates from the system trust store.
-After removal, applications will no longer automatically trust certificates
-issued by this CA.
+The daemon removes the trust files this CA wrote: the root certificate at its
+trust path, by default
+/usr/local/share/ca-certificates/trusted-platform-ca.crt, and, with
+--include-intermediates (the default), the intermediate certificate at the
+sibling file trusted-platform-ca-intermediate-1.crt. It also removes a legacy
+combined root-plus-intermediate bundle at the trust path when
+--include-intermediates is set.
 
-Platform-specific behavior:
-  - Linux: Removes certificates from /usr/local/share/ca-certificates/ and
-           runs update-ca-certificates
-  - macOS: Removes certificates from the system trust store
-  - Windows: Removes certificates from the Trusted Root Certification Authorities
+With --include-intermediates=false only the root file is removed: the
+intermediate file is left in place, and a legacy combined
+root-plus-intermediate bundle at the trust path is refused, because removing
+it would also remove the intermediate.
 
-NOTE: This operation typically requires root/administrator privileges.
+The daemon answers "nothing installed" when there is no file to remove and
+refuses a trust-path file this CA did not write. It does not run
+update-ca-certificates: run it afterwards to refresh the system trust store.
+
+The caller needs the trust:write scope.
 
 Examples:
-  # Uninstall CA certificates from system trust store
-  sudo platformctl ca uninstall-ca-certificates
+  # Remove the root and intermediate trust files
+  platformctl ca uninstall-ca-certificates
 
-  # Uninstall root and intermediate certificates
-  sudo platformctl ca uninstall-ca-certificates --include-intermediates`,
+  # Remove the root trust file only, keeping the intermediate
+  platformctl ca uninstall-ca-certificates --include-intermediates=false
+
+  # Then refresh the system trust store on the daemon's host
+  sudo update-ca-certificates`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
 			return runUninstall(flags, includeIntermediates)
@@ -89,7 +99,11 @@ func runUninstall(flags *cli.CommonFlags, includeIntermediates bool) error {
 		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		printer.PrintInfo("CA certificates uninstalled successfully")
+		if result.Message != "" {
+			printer.PrintInfo(result.Message)
+		} else {
+			printer.PrintInfo("CA certificates uninstalled successfully")
+		}
 		fmt.Println()
 		printer.PrintKeyValue("Certificates Removed", fmt.Sprintf("%d", result.CertificatesRemoved))
 		return nil

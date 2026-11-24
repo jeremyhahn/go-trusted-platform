@@ -255,6 +255,49 @@ func TestCreateLDevID_CANotConfigured(t *testing.T) {
 	}
 }
 
+// TestCreateLDevID_CASourceFollowsTheHolder pins that LDevID issuance reads
+// the shared CA holder per call: FailedPrecondition while it is empty, and
+// the CA InitCA sets is used without a restart.
+func TestCreateLDevID_CASourceFollowsTheHolder(t *testing.T) {
+	svc := newLDevIDTestService(t)
+	svc.SetTPM2Service(ldevidHappyTPM(t))
+	holder := NewCAHolder(nil)
+	svc.SetCASource(holder.Get)
+
+	req := &platformv1.CreateLDevIDRequest{
+		Template: &platformv1.CSRTemplate{
+			CommonName:   "device-01-ldevid",
+			Organization: "Automate The Things",
+			DnsNames:     []string{"device-01.local"},
+		},
+		Algorithm:    platformv1.DeviceKeyAlgorithm_DEVICE_KEY_ALGORITHM_ECDSA_P256,
+		Profile:      "ldevid",
+		ValidityDays: 90,
+	}
+	_, err := svc.CreateLDevID(context.Background(), req)
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("empty holder: expected FailedPrecondition, got %v", err)
+	}
+	if got := status.Convert(err).Message(); got != (ErrLDevIDCANotConfigured{}).Error() {
+		t.Errorf("empty holder: unexpected message: %q", got)
+	}
+
+	now := time.Now()
+	ca := &ldevidMockCA{cert: ldevidTestCert(t, "device-01-ldevid", now, now.Add(90*24*time.Hour))}
+	holder.Set(ca)
+
+	resp, err := svc.CreateLDevID(context.Background(), req)
+	if err != nil {
+		t.Fatalf("after Set: CreateLDevID() error = %v", err)
+	}
+	if resp.GetStatus() == nil || !resp.GetStatus().GetSuccess() {
+		t.Fatalf("after Set: expected success status, got %+v", resp.GetStatus())
+	}
+	if len(ca.gotCSR) == 0 {
+		t.Error("the CA the holder holds did not receive a CSR")
+	}
+}
+
 func TestCreateLDevID_NoIDevIDCertificate(t *testing.T) {
 	svc := newLDevIDTestService(t)
 	svc.SetTPM2Service(&ldevidMockTPM{idevidCertErr: errors.New("not found"), pks: &ldevidMockPKS{}})

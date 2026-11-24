@@ -16,6 +16,7 @@ package app
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
@@ -33,6 +34,51 @@ func TestLoadOrInitCA_KeepsTheLoadedCA(t *testing.T) {
 
 	require.NoError(t, app.LoadOrInitCA(context.Background(), nil))
 	assert.Same(t, loaded, app.CA)
+}
+
+// TestApp_CurrentCA_PublishedConcurrently pins that App.CA is published by the
+// setter and read by CurrentCA under one lock: the daemon's CA initializer
+// publishes while BMC enrolment reads, and every read sees nil or the
+// published CA (go test -race reports the old unsynchronised access).
+func TestApp_CurrentCA_PublishedConcurrently(t *testing.T) {
+	published := &anchorCA{}
+	app := &App{Logger: logging.DefaultLogger()}
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < 200; j++ {
+				if got := app.CurrentCA(); got != nil {
+					assert.Same(t, published, got)
+				}
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		app.publishCA(published)
+	}()
+	close(start)
+	wg.Wait()
+
+	assert.Same(t, published, app.CurrentCA())
+}
+
+// TestLoadOrInitCA_KeepsTheCAPublishedThroughTheSetter pins that LoadOrInitCA
+// reads the CA through CurrentCA and keeps one the setter published.
+func TestLoadOrInitCA_KeepsTheCAPublishedThroughTheSetter(t *testing.T) {
+	published := &anchorCA{}
+	app := &App{Logger: logging.DefaultLogger()}
+	app.publishCA(published)
+
+	require.NoError(t, app.LoadOrInitCA(context.Background(), nil))
+	assert.Same(t, published, app.CurrentCA())
 }
 
 func TestLoadOrInitCA_RefusesANodeWithoutCAConfig(t *testing.T) {

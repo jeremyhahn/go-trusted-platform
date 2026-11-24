@@ -259,9 +259,9 @@ func (app *App) newIDevIDClient(
 // reporter documents the same fallback order. Verification itself is
 // never skipped.
 func (app *App) heartbeatServerPool(clientCert *x509.Certificate) (*x509.CertPool, error) {
-	if app.CA != nil {
-		if rootCert, err := app.CA.RootCertificate(clientCert); err == nil {
-			if caPool, poolErr := app.CA.TrustedRootCertPool(rootCert); poolErr == nil {
+	if ca := app.CurrentCA(); ca != nil {
+		if rootCert, err := ca.RootCertificate(clientCert); err == nil {
+			if caPool, poolErr := ca.TrustedRootCertPool(rootCert); poolErr == nil {
 				return caPool, nil
 			}
 		}
@@ -281,7 +281,7 @@ func (app *App) newHeartbeatClient(serverURL string) (*provisioning.Client, erro
 	if app.HeartbeatConfig.CertFile != "" || app.HeartbeatConfig.KeyFile != "" {
 		return app.newFileHeartbeatClient(serverURL)
 	}
-	if app.TPM == nil || app.CA == nil || app.PlatformKS == nil {
+	if app.TPM == nil || app.CurrentCA() == nil || app.PlatformKS == nil {
 		return nil, provisioning.ErrMissingCertificate
 	}
 	idevidCert, err := app.TPM.IDevIDCertificate()

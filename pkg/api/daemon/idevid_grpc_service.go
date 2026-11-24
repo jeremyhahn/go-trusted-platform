@@ -43,6 +43,9 @@ type IDevIDGRPCService struct {
 	tpm2Service xkmssdk.TrustedPlatformModule
 	// ca issues LDevID (802.1AR) certificates from the platform CA.
 	ca quicbaasca.CACertificateAuthority
+	// caSource, when set, answers the CA per call (the shared CAHolder), so
+	// a CA InitCA brings up issues LDevIDs without a restart.
+	caSource func() quicbaasca.CACertificateAuthority
 }
 
 // NewIDevIDGRPCService creates a new IDevID gRPC service instance.

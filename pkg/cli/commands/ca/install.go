@@ -29,26 +29,30 @@ func newInstallCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "install-ca-certificates",
 		Short: "Install Certificate Authority certificates",
-		Long: `Install the Root and Intermediate Certificate Authority certificates
-to the operating system trusted certificate store.
+		Long: `Ask the daemon to install this CA's certificates into its system trust
+path.
 
-This command installs the CA certificates into the system trust store,
-allowing applications to automatically trust certificates issued by this CA.
+The daemon writes one certificate per file. The root certificate goes to its
+trust path, by default
+/usr/local/share/ca-certificates/trusted-platform-ca.crt. With
+--include-intermediates (the default) the intermediate certificate goes to the
+sibling file trusted-platform-ca-intermediate-1.crt in the same directory.
+Each file that already holds the same bytes is left alone; when every file is
+already in place the daemon answers "already installed" and writes nothing.
+The daemon does not run update-ca-certificates: run it afterwards to refresh
+the system trust store.
 
-Platform-specific behavior:
-  - Linux: Copies certificates to /usr/local/share/ca-certificates/ and
-           runs update-ca-certificates
-  - macOS: Adds certificates to the system trust store
-  - Windows: Adds certificates to the Trusted Root Certification Authorities
-
-NOTE: This operation typically requires root/administrator privileges.
+The caller needs the trust:write scope.
 
 Examples:
-  # Install CA certificates to system trust store
-  sudo platformctl ca install-ca-certificates
+  # Install the root and intermediate certificates (the default)
+  platformctl ca install-ca-certificates
 
-  # Install root and intermediate certificates
-  sudo platformctl ca install-ca-certificates --include-intermediates`,
+  # Install the root certificate only
+  platformctl ca install-ca-certificates --include-intermediates=false
+
+  # Then refresh the system trust store on the daemon's host
+  sudo update-ca-certificates`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
 			return runInstall(flags, includeIntermediates)
@@ -88,7 +92,11 @@ func runInstall(flags *cli.CommonFlags, includeIntermediates bool) error {
 		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		printer.PrintInfo("CA certificates installed successfully")
+		if result.Message != "" {
+			printer.PrintInfo(result.Message)
+		} else {
+			printer.PrintInfo("CA certificates installed successfully")
+		}
 		fmt.Println()
 		printer.PrintKeyValue("Certificates Installed", fmt.Sprintf("%d", result.CertificatesInstalled))
 		if result.InstallPath != "" {

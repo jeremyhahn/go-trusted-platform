@@ -1072,8 +1072,8 @@ func TestAccessorsLifecycle_ServiceMethods(t *testing.T) {
 	}
 
 	// Test all service accessors return correct values
-	if d.CAGRPCService() != nil {
-		t.Error("CAGRPCService() should return nil when not configured")
+	if d.CAGRPCService() == nil {
+		t.Error("CAGRPCService() should be registered with no CA")
 	}
 	// SDNService always returns a non-nil zone-capable stub; OVSClient is nil when no socket is configured.
 	if d.SDNService() == nil {

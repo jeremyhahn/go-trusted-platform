@@ -452,9 +452,9 @@ func TestFinalCov_Daemon_CAServiceAccessors(t *testing.T) {
 		t.Fatalf("New() failed: %v", err)
 	}
 
-	// Test CAGRPCService getter returns nil when not configured
-	if d.CAGRPCService() != nil {
-		t.Error("CAGRPCService() should return nil when not configured")
+	// Test CAGRPCService getter: registered even with no CA configured
+	if d.CAGRPCService() == nil {
+		t.Error("CAGRPCService() should be registered with no CA")
 	}
 
 	// Test SetCAGRPCService

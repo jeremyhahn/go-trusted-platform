@@ -25,7 +25,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance/issuancetest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -33,19 +32,6 @@ import (
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
-
-// scopedTokenValidator accepts every token and grants it scopes.
-type scopedTokenValidator struct {
-	scopes []string
-}
-
-func (v scopedTokenValidator) ValidateToken(ctx context.Context, token string) (bool, error) {
-	return true, nil
-}
-
-func (v scopedTokenValidator) AuthorizeToken(ctx context.Context, token, requiredPerm, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error) {
-	return &platformtoken.AuthorizedContext{Subject: "u", Scopes: v.scopes}, nil
-}
 
 // newSignCSRQUICHandler builds a daemon QUIC handler whose tokens carry
 // scopes, and whose CA certifies CSRs for the KMS key "rpi/fleet".

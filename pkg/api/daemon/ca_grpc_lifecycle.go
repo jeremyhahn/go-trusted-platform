@@ -1,0 +1,352 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package daemon
+
+import (
+	"bytes"
+	"context"
+	"encoding/pem"
+	"errors"
+	"io/fs"
+	"os"
+	"strings"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+)
+
+// defaultCATrustInstallPath is where InstallCACertificates writes the CA
+// bundle. It must match defaultSystemTrustCertPath in pkg/app/app.go:
+// start-up installs the bundle there.
+const defaultCATrustInstallPath = "/usr/local/share/ca-certificates/trusted-platform-ca.crt"
+
+// CAInitializer brings the node CA up for InitCA and returns it.
+type CAInitializer func(ctx context.Context) (quicbaasca.CACertificateAuthority, error)
+
+// WithCAInitializer sets the initializer InitCA runs when no CA is loaded.
+func (s *CAGRPCService) WithCAInitializer(init CAInitializer) *CAGRPCService {
+	s.initCA = init
+	return s
+}
+
+// WithTrustInstallPath sets where the CA bundle is installed and removed.
+func (s *CAGRPCService) WithTrustInstallPath(path string) *CAGRPCService {
+	s.trustPath = path
+	return s
+}
+
+// injectQuicBaaSCA hands the CA InitCA brings up to the embedded QuicBaaS
+// CertificateService and its ceremony CA, as platformd serve does at
+// start-up (pkg/daemon/commands/serve.go:1598-1605). Tests replace it.
+var injectQuicBaaSCA = func(a *app.App, ca quicbaasca.CACertificateAuthority) error {
+	return a.SetQuicBaaSCA(ca)
+}
+
+// ErrQuicBaaSCAInject is returned when the embedded QuicBaaS refuses the CA
+// InitCA brought up.
+type ErrQuicBaaSCAInject struct {
+	Cause error
+}
+
+func (e ErrQuicBaaSCAInject) Error() string {
+	return "embedded QuicBaaS refused the CA: " + e.Cause.Error()
+}
+
+func (e ErrQuicBaaSCAInject) Unwrap() error { return e.Cause }
+
+// AppCAInitializer runs the app's CA bring-up path, (*app.App).LoadOrInitCA,
+// the same path AttachNodeCA takes at start-up, then hands the CA to the
+// embedded QuicBaaS CertificateService and ceremony CA as start-up does, so
+// SDK certificate issuance and ceremonies use it. Both steps run through
+// (*app.App).ActivateCA: a refusal fails InitCA with ErrQuicBaaSCAInject and
+// leaves nothing published (App.CA and the embedded ceremony CA go back to
+// what they were, and InitCA does not set the daemon holder), so every CA
+// reader agrees; a retried InitCA loads the stored CA and injects it again.
+// It returns nil for a nil app and for an app with no CA configuration:
+// there is nothing InitCA can bring up, so the daemon expects no CA.
+func AppCAInitializer(a *app.App) CAInitializer {
+	if a == nil || a.CAConfig == nil {
+		return nil
+	}
+	return func(ctx context.Context) (quicbaasca.CACertificateAuthority, error) {
+		return a.ActivateCA(ctx, func(ca quicbaasca.CACertificateAuthority) error {
+			if err := injectQuicBaaSCA(a, ca); err != nil {
+				return ErrQuicBaaSCAInject{Cause: err}
+			}
+			return nil
+		})
+	}
+}
+
+// InitCA initialises the node CA through the app's bring-up path. It is
+// idempotent: an initialised CA answers "already initialised". Re-initialising
+// an existing CA (Force) is not supported. Admin capability: catalog scope
+// ca:create on the network transports, root on the Unix socket.
+func (s *CAGRPCService) InitCA(ctx context.Context, req *platformv1.InitCARequest) (*platformv1.InitCAResponse, error) {
+	// initMu serializes InitCA: concurrent calls run the initializer once,
+	// and the later ones see the swapped CA as already initialised.
+	s.initMu.Lock()
+	defer s.initMu.Unlock()
+	cur := s.authority()
+	initialised := cur != nil && cur.IsInitialized()
+	if initialised && req.GetForce() {
+		return nil, status.Error(codes.FailedPrecondition, "re-initialising an existing CA is not supported")
+	}
+	if initialised {
+		info, err := s.GetCAInfo(ctx, &platformv1.GetCAInfoRequest{})
+		if err != nil {
+			return nil, err
+		}
+		return &platformv1.InitCAResponse{
+			Status:    &platformv1.Status{Success: true, Message: "CA already initialised"},
+			CaInfo:    info.GetCaInfo(),
+			Timestamp: timestamppb.Now(),
+		}, nil
+	}
+	if s.initCA == nil {
+		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
+	}
+	ca, err := s.initCA(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if ca == nil || !ca.IsInitialized() {
+		return nil, status.Error(codes.Internal, "CA bring-up returned no initialised CA")
+	}
+	// The gRPC/UDS CA service, the REST CA and auth-factor handlers, the
+	// QUIC CA handler, device attestation (the AK trust anchor), boot
+	// delivery (the boot CA bundle) and LDevID issuance read one CAHolder,
+	// so all of them serve the new CA now, with no platformd restart.
+	s.setAuthority(ca)
+	return &platformv1.InitCAResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "CA initialised; the gRPC, REST and QUIC CA services, device attestation and boot delivery serve it now",
+		},
+		CaInfo:    s.caInfoOf(ca),
+		Timestamp: timestamppb.Now(),
+	}, nil
+}
+
+// intermediateTrustPath is the file the intermediate is installed at, beside
+// the root's: update-ca-certificates' `openssl rehash` skips a file holding
+// more than one certificate, so each trusted certificate gets its own .crt
+// file (ca.crt -> ca-intermediate-1.crt).
+func intermediateTrustPath(rootPath string) string {
+	return strings.TrimSuffix(rootPath, ".crt") + "-intermediate-1.crt"
+}
+
+// caTrustBundles returns the PEM of the trusted root, the PEM of the
+// intermediate (nil when the CA has none), and the two-certificate bundle
+// (root followed by the intermediate). The full bundle is no longer written by
+// the install; it is kept only so UninstallCACertificates recognises the bundle
+// an earlier install wrote. The CA bundle and the bootstrap write the same two
+// certificates intermediate first (interFirstBundle); isCombinedBundle accepts
+// either order.
+func (s *CAGRPCService) caTrustBundles(ca quicbaasca.CACertificateAuthority) (rootPEM, interPEM, fullPEM []byte, err error) {
+	root, err := ca.TrustedRoot()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if root == nil {
+		return nil, nil, nil, errors.New("CA has no trusted root")
+	}
+	rootPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw})
+	fullPEM = append([]byte{}, rootPEM...)
+	if inter, ierr := ca.TrustedIntermediate(); ierr == nil && inter != nil {
+		interPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: inter.Raw})
+		fullPEM = append(fullPEM, interPEM...)
+	}
+	return rootPEM, interPEM, fullPEM, nil
+}
+
+// interFirstBundle returns the intermediate followed by the root, the order the
+// CA bundle, GetBootstrapBundle and App.BootstrapTrust write. It returns nil
+// when the CA has no intermediate.
+func interFirstBundle(rootPEM, interPEM []byte) []byte {
+	if interPEM == nil {
+		return nil
+	}
+	out := make([]byte, 0, len(interPEM)+len(rootPEM))
+	out = append(out, interPEM...)
+	return append(out, rootPEM...)
+}
+
+// isCombinedBundle reports whether current holds the root and the intermediate
+// together, in either order: root first (an earlier install) or intermediate
+// first (the CA bundle the bootstrap writes).
+func isCombinedBundle(current, rootPEM, interPEM []byte) bool {
+	if interPEM == nil {
+		return false
+	}
+	rootFirst := make([]byte, 0, len(rootPEM)+len(interPEM))
+	rootFirst = append(rootFirst, rootPEM...)
+	rootFirst = append(rootFirst, interPEM...)
+	return bytes.Equal(current, rootFirst) || bytes.Equal(current, interFirstBundle(rootPEM, interPEM))
+}
+
+// InstallCACertificates writes the CA's trust anchors to the system trust
+// directory through trust.InstallToSystemTrust, one certificate per file: the
+// root at the trust path and, when IncludeIntermediates is set, the
+// intermediate at the sibling <name>-intermediate-1.crt (see
+// intermediateTrustPath). Each file is idempotent: one already holding exactly
+// those bytes is left alone, and when every wanted file matched the call
+// answers "already installed". Admin capability: catalog scope trust:write on
+// the network transports, root on the Unix socket.
+func (s *CAGRPCService) InstallCACertificates(ctx context.Context, req *platformv1.InstallCACertificatesRequest) (*platformv1.InstallCACertificatesResponse, error) {
+	ca := s.authority()
+	if ca == nil || !ca.IsInitialized() {
+		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
+	}
+	s.trustMu.Lock()
+	defer s.trustMu.Unlock()
+	rootPEM, interPEM, _, err := s.caTrustBundles(ca)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	type trustFile struct {
+		path string
+		pem  []byte
+	}
+	wanted := []trustFile{{path: s.trustPath, pem: rootPEM}}
+	if req.GetIncludeIntermediates() && interPEM != nil {
+		wanted = append(wanted, trustFile{path: intermediateTrustPath(s.trustPath), pem: interPEM})
+	}
+	var written int32
+	for _, f := range wanted {
+		if current, rerr := os.ReadFile(f.path); rerr == nil && bytes.Equal(current, f.pem) {
+			continue
+		}
+		if err := trust.InstallToSystemTrust(f.pem, f.path); err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		written++
+	}
+	if written == 0 {
+		return &platformv1.InstallCACertificatesResponse{
+			Status:      &platformv1.Status{Success: true, Message: "CA certificates already installed"},
+			InstallPath: s.trustPath,
+			Timestamp:   timestamppb.Now(),
+		}, nil
+	}
+	return &platformv1.InstallCACertificatesResponse{
+		Status:                &platformv1.Status{Success: true, Message: "CA certificates installed; run update-ca-certificates to refresh the system trust store"},
+		CertificatesInstalled: written,
+		InstallPath:           s.trustPath,
+		Timestamp:             timestamppb.Now(),
+	}, nil
+}
+
+// UninstallCACertificates removes the trust files InstallCACertificates wrote,
+// one certificate per file: the root at the trust path and the intermediate at
+// the sibling <name>-intermediate-1.crt (see intermediateTrustPath). The
+// intermediate file, and the two-certificate bundle an earlier install or
+// start-up wrote at the trust path, are removed only when IncludeIntermediates
+// is set; without it the root file alone is removed, the intermediate file is
+// left untouched, and a two-certificate bundle is refused (it also holds the
+// intermediate). It is a no-op ("nothing installed") when no file it would
+// remove is present, and refuses, before removing anything, when a file it
+// would remove holds anything this CA did not write. Admin capability: catalog
+// scope trust:write on the network transports, root on the Unix socket.
+func (s *CAGRPCService) UninstallCACertificates(ctx context.Context, req *platformv1.UninstallCACertificatesRequest) (*platformv1.UninstallCACertificatesResponse, error) {
+	ca := s.authority()
+	if ca == nil || !ca.IsInitialized() {
+		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
+	}
+	s.trustMu.Lock()
+	defer s.trustMu.Unlock()
+	rootPEM, interPEM, fullPEM, err := s.caTrustBundles(ca)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	interPath := intermediateTrustPath(s.trustPath)
+	// The intermediate file and the legacy two-certificate bundle are in scope
+	// only when the caller asks for intermediates.
+	inter := req.GetIncludeIntermediates() && interPEM != nil
+
+	// Check both files before removing either, so a refusal removes nothing.
+	currentRoot, rootErr := os.ReadFile(s.trustPath)
+	if rootErr != nil && !errors.Is(rootErr, fs.ErrNotExist) {
+		return nil, status.Error(codes.Internal, rootErr.Error())
+	}
+	combined := rootErr == nil && isCombinedBundle(currentRoot, rootPEM, interPEM)
+	if !inter && combined {
+		return nil, status.Error(codes.FailedPrecondition, s.trustPath+
+			" also holds the intermediate certificate; uninstall with include_intermediates to remove it")
+	}
+	if rootErr == nil && !bytes.Equal(currentRoot, rootPEM) && (!inter || !combined) {
+		return nil, status.Error(codes.FailedPrecondition, trust.ErrSystemTrustBundleMismatch{Path: s.trustPath}.Error())
+	}
+	if inter {
+		currentInter, interErr := os.ReadFile(interPath)
+		if interErr != nil && !errors.Is(interErr, fs.ErrNotExist) {
+			return nil, status.Error(codes.Internal, interErr.Error())
+		}
+		if interErr == nil && !bytes.Equal(currentInter, interPEM) {
+			return nil, status.Error(codes.FailedPrecondition, trust.ErrSystemTrustBundleMismatch{Path: interPath}.Error())
+		}
+	}
+
+	accepted := [][]byte{rootPEM}
+	if inter {
+		accepted = append(accepted, fullPEM, interFirstBundle(rootPEM, interPEM))
+	}
+	var count int32
+	removed, err := trust.UninstallFromSystemTrust(s.trustPath, accepted...)
+	if err != nil {
+		return nil, uninstallStatusError(err)
+	}
+	if removed {
+		count = 1
+		if inter && combined {
+			count = 2
+		}
+	}
+	if inter {
+		removedInter, err := trust.UninstallFromSystemTrust(interPath, interPEM)
+		if err != nil {
+			return nil, uninstallStatusError(err)
+		}
+		if removedInter {
+			count++
+		}
+	}
+	if count == 0 {
+		return &platformv1.UninstallCACertificatesResponse{
+			Status:    &platformv1.Status{Success: true, Message: "nothing installed"},
+			Timestamp: timestamppb.Now(),
+		}, nil
+	}
+	return &platformv1.UninstallCACertificatesResponse{
+		Status:              &platformv1.Status{Success: true, Message: "CA certificates removed; run update-ca-certificates to refresh the system trust store"},
+		CertificatesRemoved: count,
+		Timestamp:           timestamppb.Now(),
+	}, nil
+}
+
+// uninstallStatusError maps a trust.UninstallFromSystemTrust error to a gRPC
+// status: a file holding content this CA did not write is FailedPrecondition.
+func uninstallStatusError(err error) error {
+	var mismatch trust.ErrSystemTrustBundleMismatch
+	if errors.As(err, &mismatch) {
+		return status.Error(codes.FailedPrecondition, err.Error())
+	}
+	return status.Error(codes.Internal, err.Error())
+}

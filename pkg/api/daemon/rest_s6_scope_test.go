@@ -156,6 +156,7 @@ func newRESTServerWithS6(t *testing.T) *RESTServer {
 	require.NoError(t, s.SetOverlayHandlers(newOverlayControllerRESTAdapter(&stubOverlayController{}), guard))
 	require.NoError(t, s.SetGatewayIPAMService(nil, nil, guard))
 	require.NoError(t, s.SetServiceControlHandlers(guard))
+	s.SetCALifecycle(&lifecycleStubCA{}, guard)
 	return s
 }
 
@@ -216,7 +217,7 @@ func TestCatalogRouteRPCs_CoverEveryMountedRoute(t *testing.T) {
 	sort.Strings(mounted)
 	sort.Strings(mapped)
 	assert.Equal(t, mapped, mounted)
-	assert.Len(t, mounted, len(s6RouteScopes)+len(s9RouteScopes)+len(serviceControlRoutes))
+	assert.Len(t, mounted, len(s6RouteScopes)+len(s9RouteScopes)+len(serviceControlRoutes)+3) // CA lifecycle routes
 }
 
 func TestCatalogRouteScope(t *testing.T) {

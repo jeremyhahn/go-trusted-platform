@@ -41,6 +41,9 @@ type authCA interface {
 	CABundle() ([]byte, error)
 }
 
+// AuthFactorCA is the CA the auth-factor handlers sign and verify with.
+type AuthFactorCA = authCA
+
 // =============================================================================
 // Auth Factor Handler Errors (typed)
 // =============================================================================
@@ -227,6 +230,9 @@ type AuthFactorHandlers struct {
 	ca     authCA
 	logger *slog.Logger
 
+	// source, when set, supplies the CA on each request in place of ca.
+	source func() AuthFactorCA
+
 	// aaguid cache — keyed by lowercase UUID string
 	cacheMu sync.RWMutex
 	cache   map[string]aaguidEntry
@@ -252,6 +258,23 @@ func NewAuthFactorHandlers(ca quicbaasca.CACertificateAuthority, logger *slog.Lo
 		h.ca = ca
 	}
 	return h
+}
+
+// WithCASource makes the handlers read their CA from src on every request
+// instead of the CA given to NewAuthFactorHandlers, so a CA swapped in at
+// runtime (InitCA) is served without a restart. A nil from src answers 503.
+func (h *AuthFactorHandlers) WithCASource(src func() AuthFactorCA) *AuthFactorHandlers {
+	h.source = src
+	return h
+}
+
+// currentCA returns the CA for this request: the source's when one is set,
+// else the CA fixed at construction. Read it once per request.
+func (h *AuthFactorHandlers) currentCA() authCA {
+	if h.source != nil {
+		return h.source()
+	}
+	return h.ca
 }
 
 // RegisterRoutes attaches all auth factor routes to the provided mux router.
@@ -333,9 +356,9 @@ func (h *AuthFactorHandlers) handleMTLSProbe(w http.ResponseWriter, r *http.Requ
 	// Validate the leaf certificate against the trusted root when a CA is
 	// available. If the CA is not wired we accept presence of the cert as
 	// sufficient (the TLS layer already verified the chain).
-	if h.ca != nil {
+	if ca := h.currentCA(); ca != nil {
 		leaf := r.TLS.PeerCertificates[0]
-		pool, err := h.ca.TrustedRootCertPool(leaf)
+		pool, err := ca.TrustedRootCertPool(leaf)
 		if err != nil {
 			h.logger.Warn("mTLS probe: failed to obtain trusted root pool", "error", err)
 			// Degrade gracefully: accept the cert without chain validation.
@@ -369,7 +392,10 @@ func (h *AuthFactorHandlers) handleMTLSProbe(w http.ResponseWriter, r *http.Requ
 // presents an admin certificate. When mTLS is not configured the endpoint
 // accepts any authenticated request (IAM layer upstream is responsible).
 func (h *AuthFactorHandlers) handleIssueCert(w http.ResponseWriter, r *http.Request) {
-	if h.ca == nil {
+	// Read the CA once: a swap mid-request must not split signing and
+	// the bundle across two CAs.
+	ca := h.currentCA()
+	if ca == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrAuthServiceNotAvailable{})
 		return
 	}
@@ -409,7 +435,7 @@ func (h *AuthFactorHandlers) handleIssueCert(w http.ResponseWriter, r *http.Requ
 		Profile:      "client",
 		ValidityDays: 365,
 	}
-	cert, err := h.ca.SignCSR(r.Context(), []byte(req.CSRPEM), opts)
+	cert, err := ca.SignCSR(r.Context(), []byte(req.CSRPEM), opts)
 	if err != nil {
 		h.logger.Error("CSR signing failed", "user_id", userID, "error", err)
 		h.writeError(w, http.StatusBadRequest, ErrCertIssueFailed{Reason: err.Error()})
@@ -423,7 +449,7 @@ func (h *AuthFactorHandlers) handleIssueCert(w http.ResponseWriter, r *http.Requ
 
 	// Build chain PEM from CA.
 	var chainPEM string
-	if bundle, bundleErr := h.ca.CABundle(); bundleErr == nil {
+	if bundle, bundleErr := ca.CABundle(); bundleErr == nil {
 		chainPEM = string(bundle)
 	}
 

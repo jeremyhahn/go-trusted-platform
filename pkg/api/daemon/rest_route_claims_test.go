@@ -90,6 +90,8 @@ func daemonRouteTable(t *testing.T, guard *restapi.ScopeGuard) (*RESTServer, []s
 	s.SetComputeHandlers(platformv1.UnimplementedComputeServiceServer{}, guard)
 	require.NoError(t, s.SetOverlayHandlers(routeTableOverlay{}, guard))
 	s.SetCAHandlers(routeTableCA{}, guard)
+	// The daemon mounts the CA lifecycle routes on every transport (SetCALifecycle), so the SDK's three lifecycle claims resolve.
+	s.SetCALifecycle(platformv1.UnimplementedCAServiceServer{}, guard)
 	s.SetTPMHandlers(platformv1.UnimplementedTPMServiceServer{}, guard)
 	require.NoError(t, s.SetServiceControlHandlers(guard))
 	require.NoError(t, s.SetVTPMService(routeTableVTPM{}, guard))

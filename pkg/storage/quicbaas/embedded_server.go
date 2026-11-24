@@ -378,6 +378,26 @@ func (s *EmbeddedServer) SetCA(ca xkmssdk.TrustedCA) error {
 	return nil
 }
 
+// ActiveCA returns the CA the ceremony adapter serves, or nil when none is
+// installed. SetCA stores it before UpdateCA, so after a failed SetCA it is
+// the refused CA until RestoreActiveCA puts the earlier one back.
+func (s *EmbeddedServer) ActiveCA() xkmssdk.TrustedCA {
+	return s.loadActiveCA()
+}
+
+// RestoreActiveCA puts prev back as the ceremony adapter's CA (nil clears
+// it) without calling UpdateCA. A caller whose SetCA failed after the store
+// uses it to undo the store, so the ceremony does not run on a CA the rest
+// of the platform did not take.
+func (s *EmbeddedServer) RestoreActiveCA(prev xkmssdk.TrustedCA) {
+	if s == nil {
+		return
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	s.storeActiveCA(prev)
+}
+
 // loadActiveCA returns the currently-installed external CA, or nil when
 // none has been set.
 func (s *EmbeddedServer) loadActiveCA() xkmssdk.TrustedCA {

@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
@@ -55,11 +56,71 @@ func (ErrCANotInitialized) Error() string {
 type CAGRPCService struct {
 	platformv1.UnimplementedCAServiceServer
 
-	logger     *logging.Logger
+	logger *logging.Logger
+	// ca is the CA this service serves. InitCA swaps it at run time, so
+	// every read after construction goes through authority() and every
+	// write through setAuthority(); caMu guards it.
 	ca         quicbaasca.CACertificateAuthority
+	caMu       sync.RWMutex
 	objStorage objectstorage.Client
 	// kms holds the keys SignCSR certifies; without it SignCSR fails closed.
 	kms issuance.KMS
+	// initCA brings the CA up for InitCA; nil leaves InitCA refusing.
+	initCA CAInitializer
+	// initMu serializes InitCA so the initializer runs at most once at a time.
+	initMu sync.Mutex
+	// trustPath is where InstallCACertificates writes the CA bundle.
+	trustPath string
+	// trustMu serializes trust install and uninstall, so neither replaces or
+	// removes the bundle between the other's read and its write or remove.
+	trustMu sync.Mutex
+	// holder, when set, is the CA shared with the REST CA handlers; it
+	// replaces ca for every read and write.
+	holder *CAHolder
+}
+
+// authority returns the CA the service serves now, or nil. Every read of
+// ca after construction goes through it; a method reads it once and uses
+// that value throughout, so one call sees one CA.
+func (s *CAGRPCService) authority() quicbaasca.CACertificateAuthority {
+	if s.holder != nil {
+		return s.holder.Get()
+	}
+	s.caMu.RLock()
+	defer s.caMu.RUnlock()
+	return s.ca
+}
+
+// setAuthority swaps the CA the service serves.
+func (s *CAGRPCService) setAuthority(ca quicbaasca.CACertificateAuthority) {
+	if s.holder != nil {
+		s.holder.Set(ca)
+		return
+	}
+	s.caMu.Lock()
+	defer s.caMu.Unlock()
+	s.ca = ca
+}
+
+// WithCAHolder makes the service read and swap the CA through h, the
+// holder the REST CA handlers share, and returns s. An empty holder is
+// seeded with the CA the service was built with.
+func (s *CAGRPCService) WithCAHolder(h *CAHolder) *CAGRPCService {
+	if h != nil && h.Get() == nil {
+		s.caMu.RLock()
+		ca := s.ca
+		s.caMu.RUnlock()
+		if ca != nil {
+			h.Set(ca)
+		}
+	}
+	s.holder = h
+	return s
+}
+
+// CAHolder returns the holder the service reads its CA through, or nil.
+func (s *CAGRPCService) CAHolder() *CAHolder {
+	return s.holder
 }
 
 // WithKMS sets the KMS whose keys SignCSR certifies, and returns s.
@@ -72,10 +133,14 @@ func (s *CAGRPCService) WithKMS(kms issuance.KMS) *CAGRPCService {
 // device attestation certificates. It returns nil when no CA is wired so the
 // verifier fails closed instead of chaining against nothing.
 func (s *CAGRPCService) TrustAnchor() AKTrustAnchor {
-	if s == nil || s.ca == nil {
+	if s == nil {
 		return nil
 	}
-	return s.ca
+	ca := s.authority()
+	if ca == nil {
+		return nil
+	}
+	return ca
 }
 
 // NewCAGRPCService creates a new CA gRPC service instance.
@@ -84,49 +149,59 @@ func NewCAGRPCService(logger *logging.Logger, ca quicbaasca.CACertificateAuthori
 		logger:     logger,
 		ca:         ca,
 		objStorage: objStorage,
+		trustPath:  defaultCATrustInstallPath,
 	}
 }
 
 // GetCAInfo returns CA certificate information.
 func (s *CAGRPCService) GetCAInfo(ctx context.Context, req *platformv1.GetCAInfoRequest) (*platformv1.GetCAInfoResponse, error) {
-	if s.ca == nil {
+	ca := s.authority()
+	if ca == nil {
 		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
 
 	now := timestamppb.Now()
 
+	return &platformv1.GetCAInfoResponse{
+		CaInfo:    s.caInfoOf(ca),
+		Timestamp: now,
+	}, nil
+}
+
+// caInfoOf converts a CA into the CAInfo message GetCAInfo and InitCA
+// answer: identity, default algorithm and validity, root and intermediate
+// summaries.
+func (s *CAGRPCService) caInfoOf(ca quicbaasca.CACertificateAuthority) *platformv1.CAInfo {
 	caInfo := &platformv1.CAInfo{
-		IsInitialized: s.ca.IsInitialized(),
+		IsInitialized: ca.IsInitialized(),
 	}
 
-	if s.ca.IsInitialized() {
-		caInfo.CommonName = s.ca.Identity()
-		caInfo.DefaultAlgorithm = s.keyAlgorithmToString(s.ca.DefaultKeyAlgorithm())
-		caInfo.DefaultValidityDays = int32(s.ca.DefaultValidityPeriod())
+	if ca.IsInitialized() {
+		caInfo.CommonName = ca.Identity()
+		caInfo.DefaultAlgorithm = s.keyAlgorithmToString(ca.DefaultKeyAlgorithm())
+		caInfo.DefaultValidityDays = int32(ca.DefaultValidityPeriod())
 
 		// Get root certificate info
-		rootCert, err := s.ca.TrustedRoot()
+		rootCert, err := ca.TrustedRoot()
 		if err == nil && rootCert != nil {
 			caInfo.RootCert = s.certToSummaryProto(rootCert)
 		}
 
 		// Get intermediate certificate info
-		intermediateCert, err := s.ca.TrustedIntermediate()
+		intermediateCert, err := ca.TrustedIntermediate()
 		if err == nil && intermediateCert != nil {
 			caInfo.IsIntermediate = true
 			caInfo.Intermediates = append(caInfo.Intermediates, s.certToSummaryProto(intermediateCert))
 		}
 	}
 
-	return &platformv1.GetCAInfoResponse{
-		CaInfo:    caInfo,
-		Timestamp: now,
-	}, nil
+	return caInfo
 }
 
 // IssueCertificate issues a new certificate.
 func (s *CAGRPCService) IssueCertificate(ctx context.Context, req *platformv1.IssueCertificateRequest) (*platformv1.IssueCertificateResponse, error) {
-	if s.ca == nil {
+	ca := s.authority()
+	if ca == nil {
 		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
 
@@ -190,7 +265,7 @@ func (s *CAGRPCService) IssueCertificate(ctx context.Context, req *platformv1.Is
 	}
 
 	// Issue the certificate
-	issued, err := s.ca.IssueCertificate(ctx, caReq)
+	issued, err := ca.IssueCertificate(ctx, caReq)
 	if err != nil {
 		s.logger.Error(err, "failed to issue certificate")
 		return nil, status.Error(codes.Internal, "failed to issue certificate: "+err.Error())
@@ -214,10 +289,11 @@ func (s *CAGRPCService) SignCSR(ctx context.Context, req *platformv1.SignCSRRequ
 	if err := grpcapi.AuthorizeSignCSR(ctx); err != nil {
 		return nil, err
 	}
-	if s.ca == nil {
+	ca := s.authority()
+	if ca == nil {
 		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
-	cert, err := issuance.SignCSR(ctx, s.ca, s.kms, &issuance.CSR{
+	cert, err := issuance.SignCSR(ctx, ca, s.kms, &issuance.CSR{
 		PEM:       []byte(req.GetCsrPem()),
 		ValidDays: int(req.GetValidDays()),
 	})
@@ -242,7 +318,8 @@ func (s *CAGRPCService) SignCSR(ctx context.Context, req *platformv1.SignCSRRequ
 // GetCertificate retrieves a certificate by serial number or common name.
 // The serial field accepts either a hex-encoded serial number or a common name.
 func (s *CAGRPCService) GetCertificate(ctx context.Context, req *platformv1.GetCertificateRequest) (*platformv1.GetCertificateResponse, error) {
-	if s.ca == nil {
+	ca := s.authority()
+	if ca == nil {
 		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
 
@@ -251,7 +328,7 @@ func (s *CAGRPCService) GetCertificate(ctx context.Context, req *platformv1.GetC
 		return nil, status.Error(codes.InvalidArgument, "serial number is required")
 	}
 
-	cert := s.findCertByIdentifier(identifier)
+	cert := s.findCertByIdentifier(ca, identifier)
 	if cert != nil {
 		return &platformv1.GetCertificateResponse{
 			Certificate: s.certToProto(cert, req.GetIncludePem(), req.GetIncludeDer()),
@@ -264,7 +341,8 @@ func (s *CAGRPCService) GetCertificate(ctx context.Context, req *platformv1.GetC
 
 // ListCertificates lists certificates with pagination.
 func (s *CAGRPCService) ListCertificates(ctx context.Context, req *platformv1.ListCertificatesRequest) (*platformv1.ListCertificatesResponse, error) {
-	if s.ca == nil {
+	ca := s.authority()
+	if ca == nil {
 		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
 
@@ -277,7 +355,7 @@ func (s *CAGRPCService) ListCertificates(ctx context.Context, req *platformv1.Li
 		pageSize = caMaxPageSize
 	}
 
-	certStore := s.ca.CertStore()
+	certStore := ca.CertStore()
 	if certStore == nil {
 		return nil, status.Error(codes.FailedPrecondition, "certificate store not available")
 	}
@@ -285,12 +363,12 @@ func (s *CAGRPCService) ListCertificates(ctx context.Context, req *platformv1.Li
 	// Collect certificates (root and intermediate for now)
 	var certificates []*platformv1.CertificateSummary
 
-	rootCert, err := s.ca.TrustedRoot()
+	rootCert, err := ca.TrustedRoot()
 	if err == nil && rootCert != nil {
 		certificates = append(certificates, s.certToSummaryProto(rootCert))
 	}
 
-	intermediateCert, err := s.ca.TrustedIntermediate()
+	intermediateCert, err := ca.TrustedIntermediate()
 	if err == nil && intermediateCert != nil {
 		certificates = append(certificates, s.certToSummaryProto(intermediateCert))
 	}
@@ -324,7 +402,8 @@ func (s *CAGRPCService) ListCertificates(ctx context.Context, req *platformv1.Li
 
 // RevokeCertificate revokes a certificate.
 func (s *CAGRPCService) RevokeCertificate(ctx context.Context, req *platformv1.RevokeCertificateRequest) (*platformv1.RevokeCertificateResponse, error) {
-	if s.ca == nil {
+	ca := s.authority()
+	if ca == nil {
 		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
 
@@ -334,7 +413,7 @@ func (s *CAGRPCService) RevokeCertificate(ctx context.Context, req *platformv1.R
 	}
 
 	// Find the certificate by serial or common name
-	cert := s.findCertByIdentifier(serial)
+	cert := s.findCertByIdentifier(ca, serial)
 	if cert == nil {
 		return nil, status.Error(codes.NotFound, "certificate not found: "+serial)
 	}
@@ -348,7 +427,7 @@ func (s *CAGRPCService) RevokeCertificate(ctx context.Context, req *platformv1.R
 	}
 
 	// Revoke the certificate
-	if err := s.ca.RevokeCert(ctx, cert, quicbaasca.RevokeOptions{DeleteKeys: keyAttrs != nil}); err != nil {
+	if err := ca.RevokeCert(ctx, cert, quicbaasca.RevokeOptions{DeleteKeys: keyAttrs != nil}); err != nil {
 		s.logger.Error(err, "failed to revoke certificate")
 		return nil, status.Error(codes.Internal, "failed to revoke certificate: "+err.Error())
 	}
@@ -369,7 +448,8 @@ func (s *CAGRPCService) RevokeCertificate(ctx context.Context, req *platformv1.R
 
 // RenewCertificate renews an existing certificate with extended validity.
 func (s *CAGRPCService) RenewCertificate(ctx context.Context, req *platformv1.RenewCertificateRequest) (*platformv1.RenewCertificateResponse, error) {
-	if s.ca == nil {
+	ca := s.authority()
+	if ca == nil {
 		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
 
@@ -384,7 +464,7 @@ func (s *CAGRPCService) RenewCertificate(ctx context.Context, req *platformv1.Re
 	}
 
 	// Find the existing certificate by serial or common name
-	existingCert := s.findCertByIdentifier(serial)
+	existingCert := s.findCertByIdentifier(ca, serial)
 	if existingCert == nil {
 		return nil, status.Error(codes.NotFound, "certificate not found: "+serial)
 	}
@@ -402,7 +482,7 @@ func (s *CAGRPCService) RenewCertificate(ctx context.Context, req *platformv1.Re
 		}
 	}
 
-	newCert, err := issuance.Renew(ctx, s.ca, existingCert, renewOpts)
+	newCert, err := issuance.Renew(ctx, ca, existingCert, renewOpts)
 	if err != nil {
 		s.logger.Error(err, "failed to renew certificate")
 		var storesErr *issuance.RenewStoresUnavailableError
@@ -425,7 +505,8 @@ func (s *CAGRPCService) RenewCertificate(ctx context.Context, req *platformv1.Re
 
 // VerifyCertificate verifies a certificate against the CA bundle.
 func (s *CAGRPCService) VerifyCertificate(ctx context.Context, req *platformv1.VerifyCertificateRequest) (*platformv1.VerifyCertificateResponse, error) {
-	if s.ca == nil {
+	ca := s.authority()
+	if ca == nil {
 		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
 
@@ -457,12 +538,12 @@ func (s *CAGRPCService) VerifyCertificate(ctx context.Context, req *platformv1.V
 	roots := x509.NewCertPool()
 	intermediates := x509.NewCertPool()
 
-	rootCert, err := s.ca.TrustedRoot()
+	rootCert, err := ca.TrustedRoot()
 	if err == nil && rootCert != nil {
 		roots.AddCert(rootCert)
 	}
 
-	intermediateCert, err := s.ca.TrustedIntermediate()
+	intermediateCert, err := ca.TrustedIntermediate()
 	if err == nil && intermediateCert != nil {
 		intermediates.AddCert(intermediateCert)
 	}
@@ -504,7 +585,7 @@ func (s *CAGRPCService) VerifyCertificate(ctx context.Context, req *platformv1.V
 	// Check CRL revocation status if requested
 	var revoked bool
 	if req.GetVerifyRevocation() {
-		revoked, _ = s.ca.IsRevoked(cert.SerialNumber)
+		revoked, _ = ca.IsRevoked(cert.SerialNumber)
 		// Workaround: go-trusted-ca's IsRevoked() delegates to go-xkms's
 		// in-memory map which is not updated by Revoke(). Check the object store
 		// directly using the same key pattern that Revoke() uses to persist
@@ -543,7 +624,8 @@ func (s *CAGRPCService) VerifyCertificate(ctx context.Context, req *platformv1.V
 
 // GetCRL returns the Certificate Revocation List.
 func (s *CAGRPCService) GetCRL(ctx context.Context, req *platformv1.GetCRLRequest) (*platformv1.GetCRLResponse, error) {
-	if s.ca == nil {
+	ca := s.authority()
+	if ca == nil {
 		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
 
@@ -555,7 +637,7 @@ func (s *CAGRPCService) GetCRL(ctx context.Context, req *platformv1.GetCRLReques
 	var crlDER []byte
 	var err error
 
-	if gen, ok := s.ca.(crlGenerator); ok {
+	if gen, ok := ca.(crlGenerator); ok {
 		crlDER, err = gen.GenerateCRL(ctx)
 		if err != nil {
 			s.logger.Error(err, "failed to generate CRL")
@@ -609,11 +691,12 @@ func (s *CAGRPCService) GetCRL(ctx context.Context, req *platformv1.GetCRLReques
 // take store-type / key-algorithm filters in the request, so we always take
 // the unfiltered path.
 func (s *CAGRPCService) GetCABundle(ctx context.Context, req *platformv1.GetCABundleRequest) (*platformv1.GetCABundleResponse, error) {
-	if s.ca == nil {
+	ca := s.authority()
+	if ca == nil {
 		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
 
-	bundle, err := s.ca.CABundle()
+	bundle, err := ca.CABundle()
 	if err != nil {
 		s.logger.Error(err, "failed to get CA bundle")
 		return nil, status.Error(codes.Internal, "failed to get CA bundle: "+err.Error())
@@ -625,7 +708,7 @@ func (s *CAGRPCService) GetCABundle(ctx context.Context, req *platformv1.GetCABu
 
 	// Parse bundle to get certificate summaries
 	var certificates []*platformv1.CertificateSummary
-	certs, err := s.ca.ParseBundle(bundle)
+	certs, err := ca.ParseBundle(bundle)
 	if err == nil {
 		for _, cert := range certs {
 			// Skip intermediates if not requested
@@ -669,9 +752,9 @@ func (s *CAGRPCService) certMatchesIdentifier(cert *x509.Certificate, identifier
 // It checks root and intermediate CA certificates first, then the certificate store.
 // For the cert store, it tries a direct CN-based lookup first (fast path), then
 // falls back to iterating all certificates and matching by hex-encoded serial.
-func (s *CAGRPCService) findCertByIdentifier(identifier string) *x509.Certificate {
+func (s *CAGRPCService) findCertByIdentifier(ca quicbaasca.CACertificateAuthority, identifier string) *x509.Certificate {
 	// Check root certificate
-	rootCert, err := s.ca.TrustedRoot()
+	rootCert, err := ca.TrustedRoot()
 	if err == nil && rootCert != nil {
 		if s.certMatchesIdentifier(rootCert, identifier) {
 			return rootCert
@@ -679,7 +762,7 @@ func (s *CAGRPCService) findCertByIdentifier(identifier string) *x509.Certificat
 	}
 
 	// Check intermediate certificate
-	intermediateCert, err := s.ca.TrustedIntermediate()
+	intermediateCert, err := ca.TrustedIntermediate()
 	if err == nil && intermediateCert != nil {
 		if s.certMatchesIdentifier(intermediateCert, identifier) {
 			return intermediateCert
@@ -687,7 +770,7 @@ func (s *CAGRPCService) findCertByIdentifier(identifier string) *x509.Certificat
 	}
 
 	// Try cert store lookup
-	certStore := s.ca.CertStore()
+	certStore := ca.CertStore()
 	if certStore == nil {
 		return nil
 	}
