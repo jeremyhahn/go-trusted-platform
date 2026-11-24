@@ -1077,7 +1077,11 @@ export async function mockVTPMRuntimeApi(
       running = false;
       reply = { status: ok, bundle_id: bundleId, stopped: true };
     } else if (method === 'GET' && op === 'state') {
-      reply = { bundle_id: bundleId, running, socket_path: `/run/vtpm/${bundleId}.sock` };
+      // The daemon REST listener answers BundleStateResponse (id, timestamp);
+      // the webservice answers StateResponse (bundle_id).
+      reply = daemon
+        ? { id: bundleId, running, socket_path: `/run/vtpm/${bundleId}.sock`, timestamp: '2026-11-12T00:00:00Z' }
+        : { bundle_id: bundleId, running, socket_path: `/run/vtpm/${bundleId}.sock` };
     } else if (method === 'POST' && op === 'quote') {
       reply = {
         status: ok,

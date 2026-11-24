@@ -305,6 +305,9 @@ test.describe('vTPM runtime page', () => {
     await page.getByRole('button', { name: 'Stop vTPM' }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
     await expect(page.getByTestId('vtpm-run-state')).toHaveText('Stopped');
+    await page.getByRole('button', { name: 'Check state' }).click();
+    await expect(page.getByTestId('vtpm-run-state')).toHaveText('Stopped');
+    expect(lastCall(calls, 'state')?.method).toBe('GET');
 
     await page.getByLabel('Read PCR index').fill('7');
     await page.getByRole('button', { name: 'Read PCR' }).click();
