@@ -685,6 +685,7 @@ jobs:
           python3 -I testdata/code-review-v51212-tests.py .github/workflows/code-review.yml
           python3 -I testdata/code-review-v51213-tests.py .github/workflows/code-review.yml
           python3 -I testdata/code-review-v51214-tests.py .github/workflows/code-review.yml
+          python3 -I testdata/code-review-v51215-tests.py .github/workflows/code-review.yml
 
   # v1.30 (fix 1, parallel jobs; fix 5, gosec on the PR tier): the
   # lint-class stages, moved from the image job, in a job of their own that
