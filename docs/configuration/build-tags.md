@@ -105,7 +105,7 @@ either implies `qrdb_sql`. SQL builds stay CGO-free via the always-on
 Cloud provider tags enable integration with external cloud services. Disabled by default to minimize dependencies.
 
 The three group variables are umbrellas over the per-service variables of
-their cloud (owner ruling 683 (1), the handbook build-tags convention):
+their cloud:
 
 - unset (the default): the per-service variables decide;
 - `1`: every per-service variable of the cloud is on;

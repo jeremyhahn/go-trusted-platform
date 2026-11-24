@@ -361,7 +361,7 @@ returns 200, not 409.
 ## 9. Versioning
 
 REST under `/api/v1`; gRPC package `platform.v1`. Nothing deprecated. The two
-parallel tenant route trees in §6 are a duplication awaiting an owner ruling,
+parallel tenant route trees in §6 are a duplication awaiting a decision,
 not a deprecation.
 
 ---

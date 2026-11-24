@@ -292,7 +292,7 @@ the TPM alone (`pkg/app/tpm_diskless.go`):
 published for a device, the first delivery captures a trust-on-first-use
 baseline, so that boot's quote proves freshness and IAK possession, not that
 the boot state is the expected one; the node logs which applied. Where a
-stateless node's PIN material lives across boots is an open owner decision
+stateless node's PIN material lives across boots is an open decision
 (the SO PIN is never stored — #681).
 
 ## 5. Trust boundaries

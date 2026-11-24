@@ -79,7 +79,7 @@ risk.
 The umbrella `WITH_AWS` is unset by default, and then the individual toggles
 decide. `WITH_AWS=1` turns on `WITH_AWS_KMS`, `WITH_OBJSTORE_S3`, **and**
 `WITH_AWS_COMPUTE`; `WITH_AWS=0` forces all three off, even a toggle given on
-the command line (owner ruling 683 (1)). `WITH_GCP` and `WITH_AZURE` work the
+the command line. `WITH_GCP` and `WITH_AZURE` work the
 same way.
 
 ```bash

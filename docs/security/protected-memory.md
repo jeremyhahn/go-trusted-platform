@@ -283,7 +283,7 @@ as a redaction marker overstates it.
 Giving the tag real enforcement — a reflective redactor on log/marshal
 paths, and/or enclave typing for the fields — is a platform-wide API change
 across 61 fields on shipped REST/gRPC/QUIC/MCP/Unix surfaces. That is an
-owner decision and part of the coordinated wave.
+open decision.
 
 ### Untagged plaintext credentials found by this audit
 

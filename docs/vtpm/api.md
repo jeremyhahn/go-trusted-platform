@@ -262,4 +262,4 @@ export and import are streaming on gRPC.
 ## 8. Versioning
 
 REST under `/api/v1`; gRPC package `platform.v1`. Nothing deprecated. Both MCP
-families in §5 are served; which one is canonical awaits an owner ruling.
+families in §5 are served; which one is canonical awaits a decision.

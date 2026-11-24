@@ -239,7 +239,7 @@ the registry and degrades to a static answer rather than failing**:
 one behaviour in this feature worth flagging: a misconfiguration that leaves
 `healthRegistry` nil produces a green health endpoint on a daemon that is not
 actually checking anything. It is recorded here rather than changed, because
-changing it is an owner decision.
+changing it is an open decision.
 
 QUIC status bytes for health follow the canonical table in
 [`docs/daemon/api.md`](../daemon/api.md) §4. In practice the health handlers

@@ -353,7 +353,7 @@ now reaches all of those RPCs.
 BMC routes are registered only in `pkg/api/daemon/rest_service.go`: 20
 registrations on 13 paths, including `POST /bmc/{profileID}/enroll` and
 `POST /bmc/{profileID}/cert/restore`. A second registry in the webservice
-router package had no caller and was deleted under ruling 133 (#239). The
+router package had no caller and was deleted (#239). The
 bootstrap orchestrator hardcodes `"/api/v1/bmc/%d/enroll"`, so it depends on
 the daemon registrar.
 

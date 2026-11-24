@@ -365,8 +365,7 @@ names a reference fails closed rather than running unauthenticated.
 ## The supervisor seam: a section can be a handler for a child process
 
 > This section describes the code today, where `gatewayd serve` is the
-> supervisor. The target is [supervisor.md](supervisor.md) (#1191, ruling 240
-> item 4): one process per service under `platformd` as the single supervisor,
+> supervisor. The target is [supervisor.md](supervisor.md) (#1191): one process per service under `platformd` as the single supervisor,
 > with a zebra-role process owning the kernel routes. It supersedes #557's open
 > questions about the supervisor (systemd template units).
 

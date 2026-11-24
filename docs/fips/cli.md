@@ -15,7 +15,7 @@ commands that build or install a system, plus three `make` controls.
 |---|---|---|
 | `WITH_FIPS=1` | Adds the `fips` build tag to every `make` build and test target | `Makefile:94`, `:293-295` |
 | `make -s print-build-tags [WITH_FIPS=1]` | Prints the assembled tag list; use it for any `go` command that `make` does not wrap | `Makefile:674-681` |
-| `make test-fips` | Builds `./...`, then runs `make test`, both tagged `fips` under `GOFIPS140=latest GODEBUG=fips140=only`. The unit-test output also goes to `$(FIPS_LOG)`; when `make test` fails, the verdict is `scripts/foreignfailures -job fips`, which passes only if every failure is a listed panic of `$(FIPS_FOREIGN_BASELINE)` (`.github/foreign-failures-fips.tsv`) and the other tests of each panicked package pass when rerun by name (ruling 125, [the FIPS baseline](../test/integration.md#the-fips-baseline)). So the target's exit status is not simply that of `make test` | `Makefile:1366-1402` |
+| `make test-fips` | Builds `./...`, then runs `make test`, both tagged `fips` under `GOFIPS140=latest GODEBUG=fips140=only`. The unit-test output also goes to `$(FIPS_LOG)`; when `make test` fails, the verdict is `scripts/foreignfailures -job fips`, which passes only if every failure is a listed panic of `$(FIPS_FOREIGN_BASELINE)` (`.github/foreign-failures-fips.tsv`) and the other tests of each panicked package pass when rerun by name. So the target's exit status is not simply that of `make test` | `Makefile:1366-1402` |
 
 ```sh
 make build WITH_FIPS=1
