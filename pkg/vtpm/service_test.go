@@ -1949,6 +1949,65 @@ func TestService_ListBundles_SkipsInvalidBundles(t *testing.T) {
 	}
 }
 
+func TestService_ListBundles_ShowsAnImportedStagingPrefixID(t *testing.T) {
+	config := createTestConfig(t)
+	service, err := NewService(config, nil, &mockCA{})
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+	writeManifest := func(dir, id string) {
+		t.Helper()
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatalf("create %s: %v", dir, err)
+		}
+		data, _ := json.Marshal(&Manifest{Version: ManifestVersion, ID: id, Mode: BundleModePreAssigned, CreatedAt: time.Now()})
+		if err := os.WriteFile(filepath.Join(dir, "manifest.json"), data, 0600); err != nil {
+			t.Fatalf("write manifest: %v", err)
+		}
+	}
+	// No published ID can carry the staging prefix, so a staging directory is
+	// never listed, while a normal bundle beside it is.
+	if err := os.MkdirAll(filepath.Join(config.BundlesDir(), importStagingPrefix+"x-1"), 0700); err != nil {
+		t.Fatalf("create staging dir: %v", err)
+	}
+	writeManifest(filepath.Join(config.BundlesDir(), importStagingPrefix+"normal-2"), "normal")
+	writeManifest(config.BundlePath("normal"), "normal")
+
+	bundles, err := service.ListBundles(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListBundles failed: %v", err)
+	}
+	if len(bundles) != 1 || bundles[0].ID != "normal" {
+		t.Fatalf("ListBundles = %v, want only the bundle normal", bundles)
+	}
+
+	_, err = service.CloneTemplate(context.Background(), &CloneOptions{TemplateID: "t", Hostname: importStagingPrefix + "c"})
+	var cfgErr ErrInvalidConfig
+	if !errors.As(err, &cfgErr) || cfgErr.Field != "Hostname" {
+		t.Fatalf("CloneTemplate error = %v, want ErrInvalidConfig on Hostname", err)
+	}
+}
+
+func TestService_CreateBundle_RefusesAStagingPrefixHostname(t *testing.T) {
+	config := createTestConfig(t)
+	service, err := NewService(config, nil, &mockCA{})
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+	_, err = service.CreateBundle(context.Background(), &CreateBundleOptions{Hostname: importStagingPrefix + "h"})
+	var cfgErr ErrInvalidConfig
+	if !errors.As(err, &cfgErr) || cfgErr.Field != "Hostname" {
+		t.Fatalf("CreateBundle error = %v, want ErrInvalidConfig on Hostname", err)
+	}
+	entries, err := os.ReadDir(config.BundlesDir())
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("read bundles dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("bundles dir holds %d entries after the refusal, want none", len(entries))
+	}
+}
+
 func TestService_ListTemplates_SkipsInvalidTemplates(t *testing.T) {
 	config := createTestConfig(t)
 	service, err := NewService(config, nil, &mockCA{})

@@ -281,6 +281,17 @@ func TestArchiver_ImportFromFile_RefusesAnArchiveWithoutManifestJSON(t *testing.
 	assertNoStagingLeft(t, config)
 }
 
+func TestArchiver_ImportFromFile_RefusesTheStagingPrefix(t *testing.T) {
+	config, _, err := importChecksumArchive(t, []tarEntry{
+		{name: "p/manifest.json", typeflag: tar.TypeReg, body: `{"id":".import-backup","checksums":{"tpm/tpm2-00.permall":"` + checksumOf("state") + `"}}`},
+		{name: "p/tpm/tpm2-00.permall", typeflag: tar.TypeReg, body: "state"},
+	})
+	if !errors.As(err, &ErrInvalidManifest{}) {
+		t.Fatalf("ImportFromFile error = %v, want ErrInvalidManifest", err)
+	}
+	assertImportRefusedUnpublished(t, config, err, ".import-backup")
+}
+
 // checksumOf returns the manifest checksum ("sha256:<hex>") of body.
 func checksumOf(body string) string {
 	sum := sha256.Sum256([]byte(body))
