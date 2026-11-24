@@ -20,16 +20,17 @@ import (
 	"testing"
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
-	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 )
 
 func TestWorkspaceRoleResolverReadsTheRolesOfTheWorkspaceUser(t *testing.T) {
 	t.Parallel()
 	var gotTenant, gotEmail string
 	client := &mockIAMClient{
-		getByEmailFn: func(_ context.Context, tenantID, email string) (*iamsdk.User, error) {
-			gotTenant, gotEmail = tenantID, email
-			return &iamsdk.User{Email: email, Roles: []string{"member"}}, nil
+		listUsersFn: func(_ context.Context, tenantID string, _ *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
+			gotTenant, gotEmail = tenantID, "operator@platform"
+			return &iamsdk.ListUsersResponse{
+				Users: []iamsdk.User{{Email: "operator@platform", Roles: []string{"member"}}},
+			}, nil
 		},
 	}
 	resolver, err := NewWorkspaceRoleResolver(client)
@@ -52,8 +53,10 @@ func TestWorkspaceRoleResolverReadsTheRolesOfTheWorkspaceUser(t *testing.T) {
 func TestWorkspaceRoleResolverAnswersNoRolesForAPrincipalTheWorkspaceDoesNotHold(t *testing.T) {
 	t.Parallel()
 	client := &mockIAMClient{
-		getByEmailFn: func(context.Context, string, string) (*iamsdk.User, error) {
-			return nil, sdkerrors.NewNotFound("iam.user.get_by_email", "user not found")
+		listUsersFn: func(context.Context, string, *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
+			return &iamsdk.ListUsersResponse{
+				Users: []iamsdk.User{{Email: "operator@platform", Roles: []string{"admin"}}},
+			}, nil
 		},
 	}
 	resolver, err := NewWorkspaceRoleResolver(client)
@@ -74,7 +77,7 @@ func TestWorkspaceRoleResolverReturnsALookupFailure(t *testing.T) {
 	t.Parallel()
 	cause := errors.New("iam unavailable")
 	client := &mockIAMClient{
-		getByEmailFn: func(context.Context, string, string) (*iamsdk.User, error) {
+		listUsersFn: func(context.Context, string, *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
 			return nil, cause
 		},
 	}

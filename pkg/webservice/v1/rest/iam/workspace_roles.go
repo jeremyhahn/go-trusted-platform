@@ -15,8 +15,9 @@ package iam
 
 import (
 	"context"
+	"strings"
 
-	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
 
 // WorkspaceRoleResolver answers which roles a principal holds in a tenant
@@ -43,20 +44,30 @@ func NewWorkspaceRoleResolver(client IAMClient) (*WorkspaceRoleResolver, error) 
 
 // Roles returns the role names subject holds in tenantID.
 //
+// The user is found by paging ListUsers and matching the email without
+// regard to case, as MirroredEmails does: ListUsers is dispatched by every
+// IAM transport, GetUserByEmail is not by the embedded one (#2150).
+//
 // A principal the IAM tenant does not hold has no roles there: that is an
 // empty answer, not an error, because an invited member is mirrored only by
 // the startup reconcile and must still be able to sign in as a member. Any
-// other failure is returned, so the caller refuses rather than guesses.
+// listing failure is returned, so the caller refuses rather than guesses.
 func (r *WorkspaceRoleResolver) Roles(ctx context.Context, tenantID, subject string) ([]string, error) {
-	user, err := r.client.GetUserByEmail(ctx, tenantID, subject)
-	if sdkerrors.IsNotFound(err) {
-		return nil, nil
+	req := &iamsdk.ListUsersRequest{PageSize: mirroredEmailsPageSize}
+	for {
+		resp, err := r.client.ListUsers(ctx, tenantID, req)
+		if err != nil {
+			return nil, err
+		}
+		for _, user := range resp.Users {
+			if strings.EqualFold(user.Email, subject) {
+				return append([]string(nil), user.Roles...), nil
+			}
+		}
+		next := resp.Pagination.NextPageToken
+		if !resp.Pagination.HasMore || next == "" || next == req.PageToken {
+			return nil, nil
+		}
+		req.PageToken = next
 	}
-	if err != nil {
-		return nil, err
-	}
-	if user == nil {
-		return nil, nil
-	}
-	return append([]string(nil), user.Roles...), nil
 }
