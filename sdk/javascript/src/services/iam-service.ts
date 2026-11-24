@@ -600,9 +600,23 @@ export class IAMService extends BaseService {
    * Rotate application secret
    */
   async rotateAppSecret(tenantId: string, clientId: string): Promise<ApiResponse<RotateIAMAppSecretResponse>> {
-    return this.client.post<RotateIAMAppSecretResponse>(
+    const res = await this.client.post<RotateIAMAppSecretResponse>(
       this.buildUrl(`/tenants/${this.encodePathSegment(tenantId)}/apps/${this.encodePathSegment(clientId)}/rotate`),
       {}
     );
+    // The REST RotateSecretResponse is snake_case: set the camelCase fields on the same object, never over a present value.
+    if (res.success && res.data) {
+      const data = res.data as unknown as Record<string, unknown>;
+      const fields: Array<[string, string]> = [
+        ['clientId', 'client_id'],
+        ['clientSecret', 'client_secret'],
+      ];
+      for (const [camel, wire] of fields) {
+        if (data[camel] === undefined && data[wire] !== undefined) {
+          data[camel] = data[wire];
+        }
+      }
+    }
+    return res;
   }
 }
