@@ -37,6 +37,29 @@ type fakeIncomingReceiver struct {
 	aborted   bool
 	commitErr error
 	abortErr  error
+	workDir   string
+	diskPath  string
+	exited    chan struct{}
+}
+
+// newFakeIncomingReceiver returns a fake whose Wait returns when the test ends.
+func newFakeIncomingReceiver(t *testing.T, port int) *fakeIncomingReceiver {
+	f := &fakeIncomingReceiver{port: port, exited: make(chan struct{})}
+	t.Cleanup(func() { close(f.exited) })
+	return f
+}
+
+func (f *fakeIncomingReceiver) VM() *qemu.VM { return nil }
+
+func (f *fakeIncomingReceiver) WorkDir() string { return f.workDir }
+
+func (f *fakeIncomingReceiver) DiskPath() string { return f.diskPath }
+
+func (f *fakeIncomingReceiver) Wait() error {
+	if f.exited != nil {
+		<-f.exited
+	}
+	return nil
 }
 
 func (f *fakeIncomingReceiver) Port() int { return f.port }
@@ -487,6 +510,87 @@ func TestFinalizeIncoming_Commit(t *testing.T) {
 	// The receiver is consumed; a second finalize reports not-found.
 	err = orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true)
 	require.ErrorIs(t, err, ErrReceiverNotFound)
+}
+
+// commitReceivedGuest prepares a receiver for spec with a fake launcher and commits it.
+func commitReceivedGuest(t *testing.T, orch *QEMUOrchestrator, spec MigrationSpec) *fakeIncomingReceiver {
+	t.Helper()
+	orch.config.MigrationTLS = &fakeServerTLS{dir: t.TempDir()}
+	recv := newFakeIncomingReceiver(t, 5001)
+	recv.workDir = t.TempDir()
+	recv.diskPath = recv.workDir + "/disk.qcow2"
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		return recv, nil
+	})
+	spec.Arch = orch.config.Arch
+	handle, err := orch.ReceiveIncoming(context.Background(), spec)
+	require.NoError(t, err)
+	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true))
+	return recv
+}
+
+func TestFinalizeIncoming_CommitRegistersTheReceivedGuest(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	ctx := context.Background()
+	recv := commitReceivedGuest(t, orch, MigrationSpec{
+		InstanceID: "vm1",
+		VMName:     "guest",
+		Mode:       MigrateModeCold,
+		Config:     &InstanceConfig{Memory: 1024, CPUs: 1},
+	})
+	assert.False(t, recv.aborted)
+
+	inst, err := orch.Get(ctx, "vm1")
+	require.NoError(t, err)
+	assert.Equal(t, "guest", inst.Name)
+	assert.Equal(t, ComputeTypeVM, inst.Type)
+	assert.Equal(t, StateRunning, inst.State)
+	require.NotNil(t, inst.Config)
+	assert.Equal(t, recv.workDir, inst.Config.WorkDir)
+	assert.Equal(t, recv.diskPath, inst.Config.DiskPath)
+
+	state, err := orch.GetState(ctx, "vm1")
+	require.NoError(t, err)
+	assert.Equal(t, StateRunning, state)
+
+	list, err := orch.List(ctx, nil)
+	require.NoError(t, err)
+	ids := make([]string, 0, len(list))
+	for _, i := range list {
+		ids = append(ids, i.ID)
+	}
+	assert.Contains(t, ids, "vm1")
+}
+
+func TestFinalizeIncoming_CommitKeepsAnExistingInstance(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	ctx := context.Background()
+	existing := insertVMInstance(t, orch, "vm1", false, &InstanceConfig{Memory: 512})
+
+	commitReceivedGuest(t, orch, MigrationSpec{
+		InstanceID: "vm1",
+		VMName:     "guest",
+		Mode:       MigrateModeCold,
+		Config:     &InstanceConfig{Memory: 1024, CPUs: 1},
+	})
+
+	inst, err := orch.Get(ctx, "vm1")
+	require.NoError(t, err)
+	assert.Equal(t, "test-vm", inst.Name, "the existing instance is untouched")
+	assert.Equal(t, StateStopped, inst.State)
+	assert.Same(t, existing, orch.instances["vm1"])
+
+	list, err := orch.List(ctx, nil)
+	require.NoError(t, err)
+	var adopted *Instance
+	for _, i := range list {
+		if i.Name == "guest" {
+			adopted = i
+		}
+	}
+	require.NotNil(t, adopted, "the received guest is registered under a new ID")
+	assert.NotEqual(t, "vm1", adopted.ID)
+	assert.Equal(t, StateRunning, adopted.State)
 }
 
 func TestFinalizeIncoming_Abort(t *testing.T) {
