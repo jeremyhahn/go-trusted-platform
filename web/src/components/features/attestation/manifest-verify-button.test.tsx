@@ -95,7 +95,8 @@ describe('ManifestVerifyButton', () => {
     fireEvent.click(await enabledButton());
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText('Verify manifest')).toBeTruthy();
-    expect(within(dialog).getByLabelText('Public key (PEM)')).toBeTruthy();
+    expect(within(dialog).queryByLabelText('Public key (PEM)')).toBeNull();
+    expect(dialog.textContent).toContain('does not check the manifest signature');
     fireEvent.change(within(dialog).getByLabelText('Expected nonce'), { target: { value: 'bm9uY2U=' } });
     expect(manifestCalls(sent)).toHaveLength(0);
 
@@ -112,26 +113,29 @@ describe('ManifestVerifyButton', () => {
     expect(body.manifest.id).toBe('m-1');
     expect(body.expectedNonce).toBe('bm9uY2U=');
     expect(body.publicKeyPem).toBeUndefined();
-    expect(screen.getByTestId('manifest-verify-check-signatureValid').textContent).toContain('valid');
-    expect(screen.getByTestId('manifest-verify-check-signatureValid').textContent).not.toContain('invalid');
+    // RESULT says signatureValid: true, but the server checks no signature: the row must not echo it.
+    const signature = screen.getByTestId('manifest-verify-check-signatureValid').textContent ?? '';
+    expect(signature).toContain('Signature');
+    expect(signature).toContain('not checked');
+    expect(signature).not.toContain('valid');
     expect(screen.getByTestId('manifest-verify-check-containerAttestationsValid').textContent).not.toContain('invalid');
   });
 
-  it('sends the public key base64-encoded', async () => {
-    // public_key_pem is a proto bytes field: protojson decodes it from base64.
-    const PEM = '-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\n-----END PUBLIC KEY-----';
+  it('offers no public key, since the server refuses one with ErrAttestationManifestSignatureUnchecked', async () => {
     const sent = stubControlPlane(routes());
     render(withControlPlane(<ManifestVerifyButton manifestId="m-1" manifest={MANIFEST} />));
 
     fireEvent.click(await enabledButton());
     const dialog = await screen.findByRole('dialog');
-    fireEvent.change(within(dialog).getByLabelText('Public key (PEM)'), { target: { value: PEM } });
+    expect(within(dialog).queryByLabelText('Public key (PEM)')).toBeNull();
+    expect(within(dialog).queryByRole('textbox', { name: /public key/i })).toBeNull();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Verify' }));
     await screen.findByTestId('manifest-verify-result');
 
     const calls = manifestCalls(sent);
     expect(calls).toHaveLength(1);
-    expect((calls[0].body as { publicKeyPem?: string }).publicKeyPem).toBe(btoa(PEM));
+    const body = calls[0].body as Record<string, unknown>;
+    expect('publicKeyPem' in body).toBe(false);
   });
 
   it('uses the manifest it was given without fetching', async () => {
@@ -164,7 +168,11 @@ describe('ManifestVerifyButton', () => {
     const result = await screen.findByTestId('manifest-verify-result');
     expect(result.textContent).toContain('FAILED');
     expect(screen.getByTestId('manifest-verify-errors').textContent).toContain('signature mismatch');
-    expect(screen.getByTestId('manifest-verify-check-signatureValid').textContent).toContain('invalid');
+    // The signature row reads the same whatever signatureValid says.
+    expect(screen.getByTestId('manifest-verify-check-signatureValid').textContent).toContain('not checked');
+    const merkle = screen.getByTestId('manifest-verify-check-merkleRootValid').textContent ?? '';
+    expect(merkle).toContain('valid');
+    expect(merkle).not.toContain('invalid');
   });
 
   it('withholds the control the server does not offer', async () => {
