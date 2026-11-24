@@ -238,18 +238,20 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 	if err := s.deps.IPAM.Renew(ctx, lease.Address.Addr()); err != nil {
 		return nil, s.refuse(ctx, lease.DeviceID, &ErrPoolExhausted{Pool: s.cfg.Pool, Cause: err})
 	}
+	prevExpiresAt, prevRenewals, prevVerdict := lease.ExpiresAt, lease.Renewals, lease.Verdict
 	lease.ExpiresAt = now.Add(s.cfg.LeaseTTL)
 	lease.Renewals++
 	lease.Verdict = *summary
 	if err := s.deps.Leases.Put(ctx, lease); err != nil {
 		return nil, s.refuse(ctx, lease.DeviceID, &ErrLeaseStoreUnavailable{Cause: err})
 	}
-	// A plane whose host enforces lease deadlines learns the new one here;
-	// the peer is not reinstalled (a MASQUE re-install drops the live
-	// session). A failed extension fails closed: the hosted plane still
-	// removes the peer at the old deadline.
+	// A failed extension restores the stored deadline so the renewal can be retried.
 	if ext, ok := s.deps.DataPlanes[lease.DataPlane].(PeerDeadlineExtender); ok {
 		if err := ext.ExtendPeer(ctx, lease); err != nil {
+			lease.ExpiresAt, lease.Renewals, lease.Verdict = prevExpiresAt, prevRenewals, prevVerdict
+			if pErr := s.deps.Leases.Put(ctx, lease); pErr != nil {
+				err = errors.Join(err, pErr)
+			}
 			return nil, s.refuse(ctx, lease.DeviceID, &ErrDataPlaneUnavailable{Kind: lease.DataPlane, Cause: err})
 		}
 	}
