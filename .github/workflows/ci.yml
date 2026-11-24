@@ -1859,7 +1859,8 @@ jobs:
         run: |
           source "$RUNNER_TEMP/image-lock.sh"
           registry_config=$(mktemp -d "$RUNNER_TEMP/docker-config.XXXXXX") || exit 1
-          trap 'image_unlock; rm -rf "$registry_config"' EXIT
+          trap 'image_unlock; rm -rf "$registry_config" "${pull_log:-}"' EXIT
+          pull_log=$(mktemp "$RUNNER_TEMP/pull-log.XXXXXX") || exit 1
           if ! docker_ctx=$(docker context show); then
             echo "::warning::the runner's Docker context could not be read; building this leg's image"
             exit 0
@@ -1879,10 +1880,32 @@ jobs:
           if [ -n "$json" ]; then
             (umask 077 && printf '{%s}\n' "$json" > "$registry_config/config.json") || true
           fi
-          if ! DOCKER_CONFIG=$registry_config docker pull "$IT_IMAGE_REF"; then
-            echo "::warning::pulling $IT_IMAGE_REF from the LAN registry failed; building this leg's image"
-            exit 0
+          # One pull per digest per daemon: the legs sharing a daemon take the
+          # digest's pull lock in turn, and a leg after the first finds the
+          # image there. Containerd fails a pull that races another on its ref
+          # lock with errors a later attempt clears: 3 attempts for those.
+          case $IT_IMAGE_REF in
+            *@sha256:*) digest=${IT_IMAGE_REF##*@sha256:} ;;
+            *) digest=$(printf '%s' "$IT_IMAGE_REF" | sha256sum | cut -d' ' -f1) ;;
+          esac
+          image_lock "go-trusted-platform-ci-pull-${digest:0:12}" || exit 1
+          if docker image inspect "$IT_IMAGE_REF" >/dev/null 2>&1; then
+            echo "$IT_IMAGE_REF is already on this runner's daemon; not pulling it again"
+          else
+            for delay in 5 15 ''; do
+              if (set -o pipefail; DOCKER_CONFIG=$registry_config docker pull "$IT_IMAGE_REF" 2>&1 | tee "$pull_log"); then
+                break
+              fi
+              if [ -z "$delay" ] || ! grep -Eq 'lease does not exist|failed to extract layer|failed to commit snapshot|failed to cleanup extract' "$pull_log"; then
+                echo "::warning::pulling $IT_IMAGE_REF from the LAN registry failed; building this leg's image"
+                image_unlock
+                exit 0
+              fi
+              echo "pulling $IT_IMAGE_REF hit a transient containerd error; retrying in $delay s"
+              sleep "$delay"
+            done
           fi
+          image_unlock
           image_lock || exit 1
           if ! docker tag "$IT_IMAGE_REF" "$IT_IMAGE"; then
             echo "::warning::re-tagging $IT_IMAGE_REF as $IT_IMAGE failed; building this leg's image"

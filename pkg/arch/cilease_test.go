@@ -917,6 +917,11 @@ func TestRegistryCredentialFindingsRejectTheRunnersDockerConfig(t *testing.T) {
 // DOCKER_CONFIG also selects the Docker context, so the per-step config that
 // isolates the registry credential must keep the runner's context. Push,
 // pull and the tags around them all reach the same daemon.
+// ciPullOtherDaemon runs between the push and the pull on the one fake
+// daemon: the pull step runs on a leg whose daemon lacks the image, so the
+// registry tag the push left is not there, and the step pulls it.
+const ciPullOtherDaemon = `docker rmi "$IT_IMAGE_REF"` + "\n"
+
 func TestCIRegistryStepsKeepTheRunnersDockerContext(t *testing.T) {
 	push := ciStepRun(t, ciImageJob, "push")
 	pull := ciStepRun(t, ciLegJob, "pull")
@@ -934,7 +939,7 @@ func TestCIRegistryStepsKeepTheRunnersDockerContext(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(contexts, "ci-ctx"), nil, 0o644))
 				require.NoError(t, os.WriteFile(filepath.Join(home, ".docker", "config.json"), []byte(`{"currentContext": "ci-ctx"}`), 0o644))
 			}
-			r := runRegistrySteps(t, setup, tc.env, push, pull)
+			r := runRegistrySteps(t, setup, tc.env, push, ciPullOtherDaemon, pull)
 			require.NoError(t, r.err, r.log)
 			require.Contains(t, r.output, "leased=true", r.log)
 			for _, log := range []string{"push-context", "pull-context", "tag-context"} {
@@ -974,7 +979,7 @@ func TestCIRegistryStepsWriteTheirOwnAuths(t *testing.T) {
 		}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			r := runRegistrySteps(t, tc.setup, nil, push, pull)
+			r := runRegistrySteps(t, tc.setup, nil, push, ciPullOtherDaemon, pull)
 			require.NoError(t, r.err, r.log)
 			require.Contains(t, r.output, "leased=true", r.log)
 			require.Empty(t, r.read("login"), "no registry step runs docker login:\n%s", r.log)

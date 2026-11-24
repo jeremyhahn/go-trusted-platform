@@ -594,7 +594,8 @@ func TestCIRegistryPullRetriesTransientContainerdErrors(t *testing.T) {
 	load := ciStepRun(t, ciLegJob, "Load the integration image")
 	const lease = `failed to prepare extraction snapshot "extract-1": lease does not exist: not found`
 	t.Run("lease does not exist once", func(t *testing.T) {
-		r := runRegistrySteps(t, nil, []string{"FAKE_PULL_ERRS=" + lease}, pull, load)
+		// The Load step runs only when the pull leased no image.
+		r := runRegistrySteps(t, nil, []string{"FAKE_PULL_ERRS=" + lease}, pull)
 		require.NoError(t, r.err, r.log)
 		require.Equal(t, 2, strings.Count(r.read("pull-context")+"\n", "\n"), "pull attempts:\n%s", r.log)
 		require.Equal(t, "5", r.read("sleeps"), r.log)
