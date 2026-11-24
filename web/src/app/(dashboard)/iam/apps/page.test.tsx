@@ -1,6 +1,7 @@
 import * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { IAMService } from "trusted-platform-sdk";
 
 type MutationOpts = {
   onSuccess?: (data: unknown) => void;
@@ -246,6 +247,21 @@ describe("AppsPage", () => {
     expect(await screen.findByText("example-secret")).toBeTruthy();
     expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Feature coming soon" }));
     expect(deleteApp).not.toHaveBeenCalled();
+  });
+
+  it("shows the secret from the REST snake_case rotate reply through the SDK", async () => {
+    const post = vi.fn().mockResolvedValue({
+      success: true,
+      data: { client_id: "app-1", name: "n", client_secret: "s3cret" },
+    });
+    const service = new IAMService({ post } as unknown as ConstructorParameters<typeof IAMService>[0]);
+    rotateAppSecret.mockImplementation((tenantId: string, clientId: string) =>
+      service.rotateAppSecret(tenantId, clientId).then((r) => r.data),
+    );
+    render(<AppsPage />);
+    fireEvent.click(within(rows()[0]).getByRole("button", { name: "Rotate Secret" }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("s3cret")).toBeTruthy();
   });
 
   it("does not rotate when the confirm is declined", () => {

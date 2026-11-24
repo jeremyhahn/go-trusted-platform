@@ -1,6 +1,7 @@
 import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { IAMService } from "trusted-platform-sdk";
 
 import TokensPage from "./page";
 
@@ -540,6 +541,21 @@ describe("TokensPage rotate secret", () => {
     expect(toast).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Secret rotated", variant: "success" }),
     );
+  });
+
+  it("shows the secret from the REST snake_case rotate reply through the SDK", async () => {
+    const post = vi.fn().mockResolvedValue({
+      success: true,
+      data: { client_id: "app-1", name: "n", client_secret: "s3cret" },
+    });
+    const service = new IAMService({ post } as unknown as ConstructorParameters<typeof IAMService>[0]);
+    iam.rotateAppSecret.mockImplementation((tenantId: string, clientId: string) =>
+      service.rotateAppSecret(tenantId, clientId).then((r) => r.data),
+    );
+    render(<TokensPage />);
+    fireEvent.click(within(rowFor("ci-runner")).getByText("Rotate Secret"));
+    expect(post).toHaveBeenCalledTimes(1);
+    await screen.findByText("s3cret");
   });
 
   it("shows no dialog when the rotation returns nothing", async () => {
