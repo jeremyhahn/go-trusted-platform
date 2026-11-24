@@ -369,7 +369,7 @@ jobs:
   # OBJSTORE_SEAMS is empty and any import fails.
   preflight:
     name: Preflight [changed files, schedule guard, architecture gates]
-    runs-on: ubuntu-latest   # v1.48: it decides the runner, so it stays hosted
+    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || ((github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && github.event.pull_request.head.repo.full_name == github.repository)) && 'bigdisk' || 'ubuntu-latest' }}   # ruling 443: bigdisk for main and same-repository PRs, forks hosted (ruling 617)
     # v1.26: a draft PR runs no CI; every job that needs this one skips with it.
     if: ${{ !github.event.pull_request.draft }}
     timeout-minutes: 10       # v1.34: the three jobs had 5 each
@@ -2411,7 +2411,7 @@ jobs:
     # Never add a checkout or a `uses:` step here: the gate reads only its
     # needs' results. Runner (ruling 999, which ends CA m2475 (2h)'s bigdisk
     # route): ubuntu-latest on every event; it needs no Docker.
-    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner || '"ubuntu-latest"') || 'ubuntu-latest' }}   # v1.48
+    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || ((github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && github.event.pull_request.head.repo.full_name == github.repository)) && 'bigdisk' || 'ubuntu-latest' }}   # ruling 443: bigdisk for main and same-repository PRs, forks hosted (ruling 617)
     # v1.29.3: on a schedule run the schedule guard decides. `busy` skips the
     # gate, so `CI / CI Gate (schedule)` posts `skipped` (Gitea 1.27.1 posts a
     # skipped job as `skipped`, not `success`), never a green nightly. Every

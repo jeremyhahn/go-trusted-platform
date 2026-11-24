@@ -109,6 +109,8 @@ func runnerProblems(body []byte) []string {
 			if p := waiverProblem(j.runsOn.LineComment); p != "" {
 				problems = append(problems, where+" "+p)
 			}
+		case j.runsOn.Value == routeBigdisk:
+			// Ruling 443: the expression itself keeps fork pull requests hosted.
 		case isSelectionRunsOn(j.runsOn.Value):
 			// v1.48: the preflight selection, hosted unless the hosted
 			// pool is full; its step keeps fork pull requests hosted.
@@ -121,7 +123,7 @@ func runnerProblems(body []byte) []string {
 		}
 		// A self-hosted runner is persistent: fork pull requests must
 		// never reach it, so the job's if: carries the same-repository guard.
-		if j.runsOn != nil && (j.runsOn.Kind != yaml.ScalarNode || (j.runsOn.Value != hostedRunner && !isSelectionRunsOn(j.runsOn.Value))) &&
+		if j.runsOn != nil && (j.runsOn.Kind != yaml.ScalarNode || (j.runsOn.Value != hostedRunner && j.runsOn.Value != routeBigdisk && !isSelectionRunsOn(j.runsOn.Value))) &&
 			!strings.Contains(j.cond, sameRepoExpr) {
 			problems = append(problems, where+": self-hosted runner without the fork guard")
 		}
@@ -180,6 +182,10 @@ const (
 	selectionForkEvents  = "case \"$EVENT\" in\n  pull_request|pull_request_target)\n"
 	selectionForkGuard   = `if [ "$HEAD_REPO" != "$REPO" ]; then`
 	selectionOverflowMsg = "the self-hosted overflow runners (bigdisk, bigdisk-docker)"
+	// routeBigdisk (ruling 443): preflight and CI Gate run on bigdisk for a
+	// main push and a same-repository pull request, pull_request_target
+	// included, and on ubuntu-latest for a fork's pull request (ruling 617).
+	routeBigdisk = "${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || ((github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && github.event.pull_request.head.repo.full_name == github.repository)) && 'bigdisk' || 'ubuntu-latest' }}"
 )
 
 // selectionRunsOn is the runs-on every job of ci.yml carries under v1.48:
@@ -187,7 +193,7 @@ const (
 // the hosted fallback, the others read runner. preflight decides, so it stays
 // hosted; image keeps its ruling 999 oversize waiver.
 var selectionRunsOn = map[string]string{
-	"preflight":  hostedRunner,
+	"preflight":  routeBigdisk,
 	"lint":       selectionDocker,
 	"image":      "bigdisk-docker",
 	"lint-gates": selectionRunner,
@@ -201,7 +207,7 @@ var selectionRunsOn = map[string]string{
 	"soak":              selectionDocker,
 	"fips":              selectionRunner,
 	"signatures":        selectionRunner,
-	"ci-gate":           selectionGate,
+	"ci-gate":           routeBigdisk,
 }
 
 // isSelectionRunsOn reports whether runsOn is one of the v1.48 forms.

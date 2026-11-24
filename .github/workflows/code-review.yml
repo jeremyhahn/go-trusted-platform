@@ -1055,10 +1055,10 @@ jobs:
     # v5.12.3: no concurrency group. Cancelling an older run's scope job
     # skipped that run's requested review (v5.12.2), so each event's guard
     # runs to the end; it is a short API-only job.
-    # Back on the v5.12.11 hosted line: the self-hosted pool's job-started
-    # hook admits only push to main and same-repository pull_request events,
-    # so a pull_request_target guard on it failed before its first step.
-    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
+    # Ruling 443 (Tenant Agent 11-24 03:31Z): bigdisk for a same-repository
+    # pull request, pull_request_target included; a fork's pull request
+    # stays on ubuntu-latest (ruling 617).
+    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || ((github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && github.event.pull_request.head.repo.full_name == github.repository)) && 'bigdisk' || 'ubuntu-latest' }}
     # The guard's python runs at most 240 s (its timeout -k 10 240).
     timeout-minutes: 10
     permissions:
@@ -3900,7 +3900,8 @@ jobs:
     concurrency:
       group: ${{ format('code-review-gate-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) }}
       cancel-in-progress: true
-    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
+    # Ruling 443: the scope job's route; a fork's pull request stays hosted (ruling 617).
+    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || ((github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && github.event.pull_request.head.repo.full_name == github.repository)) && 'bigdisk' || 'ubuntu-latest' }}
     # v5.12.6 (ruling 580): no twin wait is left, so 10 minutes.
     timeout-minutes: 10
     permissions:
