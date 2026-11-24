@@ -60,10 +60,10 @@ func TestOverlayFloodPeers(t *testing.T) {
 		require.NoError(t, f.handler.RemoveVNI(context.Background(), ovlL2VNI))
 
 		assert.Equal(t, []string{
-			"add 10100@10.0.0.2",
-			"add 10100@10.0.0.3",
-			"withdraw 10100@10.0.0.2",
-			"withdraw 10100@10.0.0.3",
+			"add 10100@192.0.2.2",
+			"add 10100@192.0.2.3",
+			"withdraw 10100@192.0.2.2",
+			"withdraw 10100@192.0.2.3",
 		}, peers.changes())
 	})
 
@@ -74,7 +74,7 @@ func TestOverlayFloodPeers(t *testing.T) {
 
 		require.NoError(t, f.handler.RevokeVTEP(context.Background(), ovlVTEPB))
 
-		assert.Equal(t, []string{"add 10100@10.0.0.2", "withdraw 10100@10.0.0.2"}, peers.changes())
+		assert.Equal(t, []string{"add 10100@192.0.2.2", "withdraw 10100@192.0.2.2"}, peers.changes())
 	})
 
 	t.Run("a change the admitter or the switch refuses is not told", func(t *testing.T) {
