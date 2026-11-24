@@ -1036,8 +1036,8 @@ unpacked) is not written to `$HOME/.cache/trivy`. With both in `/tmp`,
 
 Every container CI starts has a memory limit, with swap set to the same size,
 so a container that outgrows it is OOM-killed and its step fails instead of
-swapping the shared runner host (#1178). Unbounded, on the 80-thread
-ci-node-2, `make test test-sdk-go` passed 24.2 GB, `make security` reached
+swapping the shared runner host (#1178). Unbounded, on an 80-thread
+runner host, `make test test-sdk-go` passed 24.2 GB, `make security` reached
 17.0 GB and the integration legs 4.5 to 12.9 GB, and the host swapped.
 
 `scripts/in-toolchain-image.sh` takes the limit from `IN_IMAGE_MEMORY`
@@ -1241,7 +1241,7 @@ go-trusted-platform#937, removed by the go-quicbaas v0.16.0-alpha adoption):
 
 Every veth pair a test creates gives both ends one tx and one rx queue (#1178).
 The kernel's default is one queue per possible CPU, and each queue raises its
-own uevents when the link is added or removed. On ci-node-1 (80 cores, 112
+own uevents when the link is added or removed. On an 80-core host (112
 queues) that was about 450 uevents per pair, and the SDN, IPsec and netboot
 suites' veth churn drove the host to load 660 in a udev storm.
 
