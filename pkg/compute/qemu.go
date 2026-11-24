@@ -695,8 +695,17 @@ func (o *QEMUOrchestrator) recordExit(instanceID string, qemuInst *qemuInstance)
 		o.logger.Warnf("VM %s exited after leaving the lifecycle: %v", instanceID, err)
 		return
 	}
-	if state != StateStopping {
-		o.logger.Warnf("VM %s exited while %s; no stop was requested, so its state stays %s", instanceID, state, state)
+	switch state {
+	case StateStopping:
+	case StateRunning, StateSuspended:
+		// An exit nobody asked for passes through stopping so the lifecycle records it as stopped.
+		if err := o.lifecycle.SetState(instanceID, StateStopping); err != nil {
+			o.logger.Errorf("VM %s exited unasked but could not be marked stopping: %v", instanceID, err)
+			return
+		}
+		o.logger.Warnf("VM %s exited while %s with no stop requested", instanceID, state)
+	default:
+		o.logger.Warnf("VM %s exited while %s; its state stays %s", instanceID, state, state)
 		return
 	}
 	if err := o.lifecycle.SetState(instanceID, StateStopped); err != nil {
