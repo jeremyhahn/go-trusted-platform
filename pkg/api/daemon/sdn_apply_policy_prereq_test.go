@@ -59,7 +59,8 @@ func TestSDNService_PolicyRuleFlowMod_CarriesPrerequisites(t *testing.T) {
 				Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_ALLOW,
 				Match:  tt.match,
 			}
-			mod := svc.policyRuleToFlowMod(rule, 100)
+			mod, err := svc.policyRuleToFlowMod(rule, 100)
+			require.NoError(t, err)
 			require.NotNil(t, mod)
 			assert.Equal(t, tt.want, mod.Match)
 			assert.NoError(t, ovs.ValidateFlowMod(mod))

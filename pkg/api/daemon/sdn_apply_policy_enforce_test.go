@@ -311,7 +311,7 @@ func TestSDNService_ApplyPolicy_FailedReapplyRestoresReplacedFlows(t *testing.T)
 	_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
 	require.NoError(t, err)
 	prior := fake.matches(t, "br0")
-	require.ElementsMatch(t, []string{"nw_src=192.0.2.10", "nw_src=192.0.2.20"}, prior)
+	require.ElementsMatch(t, []string{"dl_type=0x0800,nw_src=192.0.2.10", "dl_type=0x0800,nw_src=192.0.2.20"}, prior)
 
 	fake.failAddOn = fake.addCalls + 2
 	_, err = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})

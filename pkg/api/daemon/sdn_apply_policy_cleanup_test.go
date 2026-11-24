@@ -200,7 +200,7 @@ func TestSDNService_ApplyPolicy_UnencodableReapplyKeepsPrior(t *testing.T) {
 	_, err = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: cfg})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 
-	assert.ElementsMatch(t, []string{"nw_src=192.0.2.10", "nw_src=192.0.2.20"}, fake.matches(t, "br0"))
+	assert.ElementsMatch(t, []string{"dl_type=0x0800,nw_src=192.0.2.10", "dl_type=0x0800,nw_src=192.0.2.20"}, fake.matches(t, "br0"))
 	got := getPolicy(t, svc, "p1")
 	assert.Equal(t, platformv1.PolicyStatus_POLICY_STATUS_ACTIVE, got.GetStatus())
 	require.Len(t, got.GetConfig().GetRules(), 2)

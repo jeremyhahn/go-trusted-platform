@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1257,7 +1258,12 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 	policyStatus := "inactive"
 	if config.GetEnabled() {
 		policyStatus = "active"
-		flows := s.policyFlows(bridgeNames, config.GetRules(), config.GetPriority())
+		flows, err := s.policyFlows(bridgeNames, config.GetRules(), config.GetPriority())
+		if err != nil {
+			// A rule whose match cannot carry its OpenFlow prerequisites
+			// is refused before the conflict check and before any install.
+			return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+		}
 		if owner, flow, ok := s.conflictingPolicyFlow(flows, others); ok {
 			return nil, status.Errorf(codes.FailedPrecondition,
 				"policy %q already installs a flow on bridge %s with priority %d and match %q",
@@ -1281,7 +1287,9 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 			// rules.
 			failed, rollbackErr := s.removePolicyFlows(ctx, client, flows[:attempted])
 			if prior != nil && prior.enabled {
-				priorFlows := s.policyFlows(prior.bridgeNames, prior.rules, prior.priority)
+				// The prior rules were accepted when stored, so every one
+				// encodes; one that did not would add no flow here.
+				priorFlows, _ := s.policyFlows(prior.bridgeNames, prior.rules, prior.priority)
 				if _, reErr := s.installPolicyFlows(ctx, client, priorFlows); reErr != nil {
 					rollbackErr = errors.Join(rollbackErr, reErr)
 				}
@@ -1448,7 +1456,12 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 }
 
 // policyRuleToFlowMod converts a policy rule to an OVS FlowMod
-func (s *SDNService) policyRuleToFlowMod(rule *platformv1.PolicyRule, policyPriority int32) *ovs.FlowMod {
+//
+// The match is built through the flow codec (flowMatchToOVS), so every
+// address, protocol or port term carries the OpenFlow prerequisites a switch
+// requires (dl_type for an address or protocol, nw_proto for a port). A rule
+// whose match cannot carry them is an error naming the field.
+func (s *SDNService) policyRuleToFlowMod(rule *platformv1.PolicyRule, policyPriority int32) (*ovs.FlowMod, error) {
 	flowMod := &ovs.FlowMod{
 		Priority: int(rule.GetPriority()),
 	}
@@ -1456,30 +1469,12 @@ func (s *SDNService) policyRuleToFlowMod(rule *platformv1.PolicyRule, policyPrio
 		flowMod.Priority = int(policyPriority)
 	}
 
-	// Build match from rule match criteria
-	var matchParts []string
-	if match := rule.GetMatch(); match != nil {
-		if match.GetSourceIp() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("nw_src=%s", match.GetSourceIp()))
-		}
-		if match.GetDestinationIp() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("nw_dst=%s", match.GetDestinationIp()))
-		}
-		if match.GetProtocol() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("nw_proto=%s", policyProtocolNumber(match.GetProtocol())))
-		}
-		if match.GetSourcePort() > 0 {
-			matchParts = append(matchParts, fmt.Sprintf("tp_src=%d", match.GetSourcePort()))
-		}
-		if match.GetDestinationPort() > 0 {
-			matchParts = append(matchParts, fmt.Sprintf("tp_dst=%d", match.GetDestinationPort()))
-		}
-		if match.GetVlanId() > 0 {
-			matchParts = append(matchParts, fmt.Sprintf("dl_vlan=%d", match.GetVlanId()))
-		}
+	flowMatch, err := policyRuleFlowMatch(rule.GetMatch())
+	if err != nil {
+		return nil, err
 	}
-	if len(matchParts) > 0 {
-		flowMod.Match = strings.Join(matchParts, ",")
+	if flowMod.Match, err = flowMatchToOVS(flowMatch); err != nil {
+		return nil, err
 	}
 
 	// Map policy action to OpenFlow action
@@ -1500,8 +1495,62 @@ func (s *SDNService) policyRuleToFlowMod(rule *platformv1.PolicyRule, policyPrio
 		flowMod.Actions = "normal"
 	}
 
-	return flowMod
+	return flowMod, nil
 }
+
+// policyRuleFlowMatch maps a policy rule's match to the flow API's match, so
+// the policy path shares the flow codec's encoding. Ports are only matched
+// under tcp or udp; icmp is pinned to IPv4 and icmpv6 to IPv6, so the codec
+// refuses an address of the other family.
+func policyRuleFlowMatch(match *platformv1.PolicyRuleMatch) (*platformv1.FlowMatch, error) {
+	if match == nil {
+		return nil, nil
+	}
+	flowMatch := &platformv1.FlowMatch{
+		IpSrc:  match.GetSourceIp(),
+		IpDst:  match.GetDestinationIp(),
+		VlanId: match.GetVlanId(),
+	}
+	if protocol := match.GetProtocol(); protocol != "" {
+		number := policyProtocolNumber(protocol)
+		proto, err := strconv.ParseUint(number, 10, 8)
+		if err != nil {
+			return nil, ErrUnencodableFlow{Field: "match.protocol", Reason: fmt.Sprintf("%q is not a known protocol or a protocol number", protocol)}
+		}
+		flowMatch.IpProto = uint32(proto)
+		switch proto {
+		case ipProtoICMP:
+			flowMatch.EthType = etherTypeIPv4
+		case ipProtoICMPv6:
+			flowMatch.EthType = etherTypeIPv6
+		}
+	}
+
+	srcPort, dstPort := match.GetSourcePort(), match.GetDestinationPort()
+	if srcPort == 0 && dstPort == 0 {
+		return flowMatch, nil
+	}
+	field := "match.destination_port"
+	if srcPort > 0 {
+		field = "match.source_port"
+	}
+	switch {
+	case match.GetProtocol() == "":
+		return nil, ErrUnencodableFlow{Field: field, Reason: "a port needs protocol tcp or udp"}
+	case flowMatch.GetIpProto() == ipProtoTCP:
+		flowMatch.TcpSrc, flowMatch.TcpDst = srcPort, dstPort
+	case flowMatch.GetIpProto() == ipProtoUDP:
+		flowMatch.UdpSrc, flowMatch.UdpDst = srcPort, dstPort
+	default:
+		return nil, ErrUnencodableFlow{Field: field, Reason: fmt.Sprintf("protocol %q has no ports; a port needs protocol tcp or udp", match.GetProtocol())}
+	}
+	return flowMatch, nil
+}
+
+const (
+	ipProtoICMP   = 1
+	ipProtoICMPv6 = 58
+)
 
 // policyRuleToMatchString converts a policy rule to an OVS match string for deletion
 // policyFlow is one OpenFlow rule a policy rule installs on one bridge.
@@ -1533,18 +1582,31 @@ type policyFlow struct {
 
 // policyFlows lists the flows the rules install on each bridge, bridge by
 // bridge in rule order.
-func (s *SDNService) policyFlows(bridgeNames []string, rules []*platformv1.PolicyRule, priority int32) []policyFlow {
+func (s *SDNService) policyFlows(bridgeNames []string, rules []*platformv1.PolicyRule, priority int32) ([]policyFlow, error) {
+	mods := make([]*ovs.FlowMod, len(rules))
+	var errs []error
+	for i, rule := range rules {
+		mod, err := s.policyRuleToFlowMod(rule, priority)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("rule %q: %w", rule.GetRuleId(), err))
+			continue
+		}
+		mods[i] = mod
+	}
 	flows := make([]policyFlow, 0, len(bridgeNames)*len(rules))
 	for _, bridgeName := range bridgeNames {
-		for _, rule := range rules {
+		for i, rule := range rules {
+			if mods[i] == nil {
+				continue
+			}
 			flows = append(flows, policyFlow{
 				bridge: bridgeName,
 				ruleID: rule.GetRuleId(),
-				mod:    s.policyRuleToFlowMod(rule, priority),
+				mod:    mods[i],
 			})
 		}
 	}
-	return flows
+	return flows, errors.Join(errs...)
 }
 
 // policyFlowKey identifies the OpenFlow entry a flow occupies: OFPFC_ADD
@@ -1596,7 +1658,9 @@ func stalePolicyFlows(old, current []policyFlow) []policyFlow {
 func (s *SDNService) recordFlows(p policyResource) []policyFlow {
 	var flows []policyFlow
 	if p.enabled {
-		flows = s.policyFlows(p.bridgeNames, p.rules, p.priority)
+		// Stored rules were accepted by ApplyPolicy, so every one encodes;
+		// a rule that did not would add no flow to the record.
+		flows, _ = s.policyFlows(p.bridgeNames, p.rules, p.priority)
 	}
 	return mergePolicyFlows(flows, p.pendingFlows)
 }
