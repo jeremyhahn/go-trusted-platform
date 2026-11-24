@@ -37,6 +37,7 @@ func TestTPMReadMethodsAreRouted(t *testing.T) {
 		platformv1.TPMService_GetPCRs_FullMethodName:          "platform_tpm_pcrs",
 		platformv1.TPMService_GetEventLog_FullMethodName:      "platform_tpm_eventlog",
 		platformv1.TPMService_GetRandom_FullMethodName:        "platform_tpm_random",
+		platformv1.TPMService_GetAK_FullMethodName:            "platform_tpm_iak",
 	}
 	for method, tool := range want {
 		if got := grpcMethodToMCPToolMap[method]; got != tool {
@@ -71,6 +72,57 @@ func TestInvoke_TPMGetEK_DecodesTheKey(t *testing.T) {
 	}
 	if reply.GetAlgorithm() != platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED {
 		t.Errorf("algorithm = %v, want unset (the tool reports the family only)", reply.GetAlgorithm())
+	}
+}
+
+// TestInvoke_TPMGetAK_DecodesTheKeyAndName reads the platform AK (the
+// IAK) through platform_tpm_iak and carries its TPM name, which the
+// credential flow needs.
+func TestInvoke_TPMGetAK_DecodesTheKeyAndName(t *testing.T) {
+	var calls []toolCall
+	adapter := provisioningTestServer(t, map[string]interface{}{
+		"platform_tpm_iak": map[string]interface{}{
+			"handle":     0x81010002,
+			"public_key": tpmReadB64("ak-pub"),
+			"algorithm":  "ECDSA",
+			"name":       tpmReadB64("ak-name"),
+		},
+	}, &calls)
+
+	reply := &platformv1.GetAKResponse{}
+	if err := adapter.Connection().Invoke(context.Background(), platformv1.TPMService_GetAK_FullMethodName,
+		&platformv1.GetAKRequest{}, reply); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if len(calls) != 1 || calls[0].Name != "platform_tpm_iak" {
+		t.Fatalf("calls = %v, want one platform_tpm_iak call", calls)
+	}
+	if len(calls[0].Arguments) != 0 {
+		t.Errorf("arguments = %v, want none", calls[0].Arguments)
+	}
+	if reply.GetHandle() != 0x81010002 || string(reply.GetPublicKey()) != "ak-pub" {
+		t.Errorf("reply = %v, want handle 0x81010002 and the public key", reply)
+	}
+	if string(reply.GetName()) != "ak-name" {
+		t.Errorf("name = %q, want the AK name", reply.GetName())
+	}
+	if reply.GetAlgorithm() != platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED {
+		t.Errorf("algorithm = %v, want unset (the tool reports the family only)", reply.GetAlgorithm())
+	}
+}
+
+// TestInvoke_TPMGetAK_RefusesAHandle refuses an AK handle the tool cannot
+// select, before any call is sent.
+func TestInvoke_TPMGetAK_RefusesAHandle(t *testing.T) {
+	var calls []toolCall
+	adapter := provisioningTestServer(t, map[string]interface{}{}, &calls)
+	err := adapter.Connection().Invoke(context.Background(), platformv1.TPMService_GetAK_FullMethodName,
+		&platformv1.GetAKRequest{Handle: 5}, &platformv1.GetAKResponse{})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("err = %v, want InvalidArgument (ErrTPMReadFieldUnsupported)", err)
+	}
+	if len(calls) != 0 {
+		t.Errorf("calls = %v, want none", calls)
 	}
 }
 
