@@ -135,7 +135,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `ComputeService.SuspendVM` | `POST /vms/{id}/suspend` | - | - | - | missing |
 | `ComputeService.ResumeVM` | `POST /vms/{id}/resume` | - | - | - | missing |
 | `ComputeService.DeleteVM` | `DELETE /vms/{id}` | `(dashboard)/compute/vms/[id]/page.tsx`<br>`(dashboard)/compute/vms/page.tsx` | - | `compute.spec.ts` | covered |
-| `ComputeService.GetVM` | `GET /vms/{id}` | `(dashboard)/compute/vms/[id]/page.tsx` | - | - | partial |
+| `ComputeService.GetVM` | `GET /vms/{id}` | `(dashboard)/compute/vms/[id]/page.tsx` | - | `real-server/compute-vm-detail.spec.ts` | covered |
 | `ComputeService.ListVMs` | `GET /vms` | `(dashboard)/compute/snapshots/page.tsx`<br>`(dashboard)/compute/vms/page.tsx` | - | `compute.spec.ts` | covered |
 | `ComputeService.AttachVMConsole` | - | - | - | - | not-UI: streaming plumbing |
 | `ComputeService.SendVMConsoleInput` | - | - | - | - | not-UI: streaming plumbing |
@@ -156,15 +156,15 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `ComputeService.StartContainer` | `POST /containers/{id}/start` | `(dashboard)/compute/containers/page.tsx` | - | `compute.spec.ts` | covered |
 | `ComputeService.StopContainer` | `POST /containers/{id}/stop` | `(dashboard)/compute/containers/page.tsx` | - | `compute.spec.ts` | covered |
 | `ComputeService.DeleteContainer` | `DELETE /containers/{id}` | `(dashboard)/compute/containers/page.tsx` | - | `compute.spec.ts` | covered |
-| `ComputeService.GetContainer` | `GET /containers/{id}` | `(dashboard)/compute/containers/[id]/page.tsx` | - | - | partial |
+| `ComputeService.GetContainer` | `GET /containers/{id}` | `(dashboard)/compute/containers/[id]/page.tsx` | - | `real-server/compute-container-detail.spec.ts` | covered |
 | `ComputeService.ListContainers` | `GET /containers` | `(dashboard)/compute/containers/page.tsx` | - | `compute.spec.ts` | covered |
 | `ComputeService.AttachContainer` | - | - | - | - | not-UI: streaming plumbing |
-| `ComputeService.ExecContainer` | `POST /containers/{id}/exec` | `(dashboard)/compute/containers/[id]/page.tsx` | - | - | partial |
+| `ComputeService.ExecContainer` | `POST /containers/{id}/exec` | `(dashboard)/compute/containers/[id]/page.tsx` | - | `real-server/compute-container-detail.spec.ts` | covered |
 | `ComputeService.GetContainerLogs` | `GET /containers/{id}` | - | - | - | not-UI: streaming plumbing |
-| `ComputeService.GetContainerMetrics` | `GET /containers/{id}/metrics` | `(dashboard)/compute/containers/[id]/page.tsx` | - | - | partial |
+| `ComputeService.GetContainerMetrics` | `GET /containers/{id}/metrics` | `(dashboard)/compute/containers/[id]/page.tsx` | - | `real-server/compute-container-detail.spec.ts` | covered |
 | `ComputeService.AttestVM` | `POST /vms/{id}/attest` | - | - | - | missing |
-| `ComputeService.VerifyVMAttestation` | `POST /vms/{id}/attest/verify` | `(dashboard)/compute/vms/[id]/page.tsx` | - | - | partial |
-| `ComputeService.AttestContainer` | `POST /containers/{id}/attest` | `(dashboard)/compute/containers/[id]/page.tsx` | - | - | partial |
+| `ComputeService.VerifyVMAttestation` | `POST /vms/{id}/attest/verify` | `(dashboard)/compute/vms/[id]/page.tsx` | - | `real-server/compute-vm-detail.spec.ts` | covered |
+| `ComputeService.AttestContainer` | `POST /containers/{id}/attest` | `(dashboard)/compute/containers/[id]/page.tsx` | - | `real-server/compute-container-detail.spec.ts` | covered |
 
 ## ConfigDeliveryService (`configdelivery.proto`)
 
@@ -736,7 +736,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | CacheService | 4 | 0 | 0 | 0 | 0 | 4 |
 | CeremonyService | 7 | 0 | 0 | 7 | 0 | 0 |
 | ClusterService | 5 | 0 | 0 | 5 | 0 | 0 |
-| ComputeService | 37 | 14 | 2 | 16 | 5 | 0 |
+| ComputeService | 37 | 20 | 1 | 11 | 5 | 0 |
 | ConfigDeliveryService | 7 | 1 | 2 | 0 | 4 | 0 |
 | PlatformDaemon | 19 | 1 | 6 | 8 | 4 | 0 |
 | DeviceService | 32 | 10 | 7 | 15 | 0 | 0 |
@@ -778,7 +778,7 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 5. **CeremonyService: Init, Status, Cert, Share, CSR**: 7 operations (7 missing, 0 partial): Init, Status, ClaimCertBegin, ClaimCertComplete, ClaimShareBegin, ClaimShareComplete, SignCSR.
 6. **ClusterService: Bootstrap, Join, Leave, Status, Node**: 5 operations (5 missing, 0 partial): Bootstrap, Join, Leave, GetStatus, ListNodes.
 7. **ComputeService (1/2): VM, VMMetric, Disk, Snapshot, Migration**: 13 operations (11 missing, 2 partial): SuspendVM, ResumeVM, GetVM, MigrateVM, AttestVM, GetVMMetrics, AttachDisk, DetachDisk, ResizeDisk, CreateSnapshot, GetSnapshot, PrepareMigration, FinalizeMigration.
-8. **ComputeService (2/2): Container, ContainerMetric, VMAttestation**: 5 operations (5 missing, 0 partial): GetContainer, ExecContainer, AttestContainer, GetContainerMetrics, VerifyVMAttestation.
+8. **ComputeService (2/2)**: all covered on the branch (#2045).
 9. **ConfigDeliveryService: FulfillSession, Session**: 2 operations (0 missing, 2 partial): FulfillSession, GetSession.
 10. **PlatformDaemon: Status, Liveness, Readiness, Shutdown, Version, Config…**: 14 operations (8 missing, 6 partial): GetStatus, Liveness, Readiness, Shutdown, GetVersion, GetConfig, UpdateConfig, ReloadConfig, StartService, StopService, RestartService, ListServices, GetServiceStatus, ListEntityTypes.
 11. **DeviceService (1/2): Device, DeviceBySerial, Profile, ProfileByMACAddress, ProfileBySerial, MatchingProfile…**: 14 operations (12 missing, 2 partial): UpdateDevice, CountDevices, ActivateDevice, AttestDevice, FindDeviceBySerial, GetProfile, UpdateProfile, CountProfiles, FindProfileByMACAddress, FindProfileBySerial, FindMatchingProfile, RecordAttestationCertificate, BootCertificate, BootDelivery.

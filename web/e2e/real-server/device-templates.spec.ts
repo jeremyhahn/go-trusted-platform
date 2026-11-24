@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures';
 import type { Page, Response } from '@playwright/test';
+import { unwrapPayload } from './fixtures/wire';
 
 /**
  * Device templates page against the real server.
@@ -131,7 +132,7 @@ test.describe('Device templates', () => {
 
     const res = await created;
     expect(res.ok()).toBe(true);
-    const id = idOf(await res.json(), 'template');
+    const id = idOf(unwrapPayload(await res.json()), 'template');
     createdTemplates.push(id);
     await expect(page.getByText('Template created').first()).toBeVisible();
     await expect(page.getByRole('cell', { name, exact: true })).toBeVisible();
@@ -151,7 +152,7 @@ test.describe('Device templates', () => {
 
     const res = await got;
     expect(res.ok()).toBe(true);
-    const body = (await res.json()) as { name: string; description: string };
+    const body = unwrapPayload<{ name: string; description: string }>(await res.json());
     const details = page.getByTestId('template-details');
     await expect(details).toBeVisible();
     await expect(details).toContainText(body.name);
@@ -221,7 +222,7 @@ test.describe('Device templates', () => {
 
     const res = await created;
     expect(res.ok()).toBe(true);
-    const id = idOf(await res.json(), 'profile');
+    const id = idOf(unwrapPayload(await res.json()), 'profile');
     createdProfiles.push(id);
     await expect(page.getByText('Profile created').first()).toBeVisible();
 
@@ -246,7 +247,7 @@ test.describe('Device templates', () => {
     if (res.ok()) {
       // The server matched the seeded profile: the page names it and fills
       // its id for assignment.
-      const body = profileOf(await res.json());
+      const body = profileOf(unwrapPayload(await res.json()));
       expect(String(body.id)).toBe(profile.id);
       await expect(result).toContainText(profile.name);
       await expect(panel.getByLabel('Profile ID')).toHaveValue(profile.id);
