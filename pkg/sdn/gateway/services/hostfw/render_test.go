@@ -38,7 +38,7 @@ func fixtureRuleset() Ruleset {
 		Listeners: []Listener{
 			{Interface: "eth0", Protocol: ProtocolTCP, Port: 8443, Comment: "webservice public tls"},
 			{Interface: "eth0", Protocol: ProtocolTCP, Port: 22, Sources: []netip.Prefix{
-				netip.MustParsePrefix("10.4.6.0/24"), netip.MustParsePrefix("fd00:101::/64")}, Comment: "sshd office"},
+				netip.MustParsePrefix("198.18.6.0/24"), netip.MustParsePrefix("fd00:101::/64")}, Comment: "sshd office"},
 			{Interface: "", Protocol: ProtocolUDP, Port: 3784, Comment: "bfd any"},
 			{Interface: "br-fabric", Protocol: ProtocolTCP, Port: 10443},
 		},
@@ -135,8 +135,8 @@ func TestRender_ValidationErrors(t *testing.T) {
 		"long interface":     {Ruleset{Listeners: []Listener{{Interface: "abcdefghijklmnop", Protocol: ProtocolTCP, Port: 1}}}, ErrInvalidInterface, "listeners"},
 		"invalid prefix":     {Ruleset{Listeners: []Listener{{Protocol: ProtocolTCP, Port: 1, Sources: []netip.Prefix{{}}}}}, ErrInvalidPrefix, "listeners"},
 		"duplicate listener": {Ruleset{Listeners: []Listener{{Protocol: ProtocolTCP, Port: 1}, {Protocol: ProtocolTCP, Port: 1}}}, ErrDuplicateListener, "listeners"},
-		"peer no interface":  {Ruleset{Peers: []PeerAllowance{{Protocol: PeerProtocolESP, Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.1")}}}}, ErrEmptyInterface, "peers"},
-		"peer bad protocol":  {Ruleset{Peers: []PeerAllowance{{Interface: "wan0", Protocol: "ah", Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.1")}}}}, ErrUnknownProtocol, "peers"},
+		"peer no interface":  {Ruleset{Peers: []PeerAllowance{{Protocol: PeerProtocolESP, Addresses: []netip.Addr{netip.MustParseAddr("198.18.0.1")}}}}, ErrEmptyInterface, "peers"},
+		"peer bad protocol":  {Ruleset{Peers: []PeerAllowance{{Interface: "wan0", Protocol: "ah", Addresses: []netip.Addr{netip.MustParseAddr("198.18.0.1")}}}}, ErrUnknownProtocol, "peers"},
 		"peer no addresses":  {Ruleset{Peers: []PeerAllowance{{Interface: "wan0", Protocol: PeerProtocolESP}}}, ErrNoPeerAddresses, "peers"},
 		"peer unspecified":   {Ruleset{Peers: []PeerAllowance{{Interface: "wan0", Protocol: PeerProtocolGRE, Addresses: []netip.Addr{netip.IPv4Unspecified()}}}}, ErrInvalidAddress, "peers"},
 		"tunnel empty":       {Ruleset{Tunnels: []string{""}}, ErrEmptyInterface, "tunnels"},
@@ -195,10 +195,10 @@ func TestRender_VRRPOnInterfaces(t *testing.T) {
 func TestRender_VIPDeny(t *testing.T) {
 	rendered, err := Render(Ruleset{VIPDeny: []VIPDeny{
 		{Interface: "br-int", Address: netip.MustParseAddr("2001:db8::1")},
-		{Interface: "br-int", Address: netip.MustParseAddr("10.4.200.1")},
+		{Interface: "br-int", Address: netip.MustParseAddr("198.19.200.1")},
 	}})
 	require.NoError(t, err)
-	v4 := `ip daddr 10.4.200.1 drop comment "vip 10.4.200.1 accept-mode off"`
+	v4 := `ip daddr 198.19.200.1 drop comment "vip 198.19.200.1 accept-mode off"`
 	v6 := `ip6 daddr 2001:db8::1 meta l4proto != ipv6-icmp drop comment "vip 2001:db8::1 accept-mode off"`
 	v6icmp := `ip6 daddr 2001:db8::1 icmpv6 type != { nd-neighbor-solicit, nd-neighbor-advert } drop comment "vip 2001:db8::1 accept-mode off"`
 	for _, line := range []string{v4, v6, v6icmp} {
@@ -220,8 +220,8 @@ func TestRender_VIPDeny(t *testing.T) {
 // that the rules match every ingress.
 func TestRender_VIPDenyDeduplicatesAddresses(t *testing.T) {
 	rendered, err := Render(Ruleset{VIPDeny: []VIPDeny{
-		{Interface: "br-int", Address: netip.MustParseAddr("10.4.200.1")},
-		{Interface: "eth1", Address: netip.MustParseAddr("10.4.200.1")},
+		{Interface: "br-int", Address: netip.MustParseAddr("198.19.200.1")},
+		{Interface: "eth1", Address: netip.MustParseAddr("198.19.200.1")},
 	}})
 	require.NoError(t, err)
 	assert.Len(t, rendered.Rules, 7, "6 base rules plus 1 VIP deny")
@@ -255,7 +255,7 @@ func TestRender_VIPDenyLinkLocalKeepsItsInterface(t *testing.T) {
 
 func TestRuleset_ValidateVIPDeny(t *testing.T) {
 	bad := []VIPDeny{
-		{Interface: "", Address: netip.MustParseAddr("10.4.200.1")},
+		{Interface: "", Address: netip.MustParseAddr("198.19.200.1")},
 		{Interface: "br-int"},
 	}
 	for _, v := range bad {

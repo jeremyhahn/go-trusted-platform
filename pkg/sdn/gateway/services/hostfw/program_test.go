@@ -204,14 +204,14 @@ func TestBuildExprs_Shapes(t *testing.T) {
 		"icmpv6":      {Rule{Kind: RuleICMPv6}, []string{"meta", "cmp", "meta", "cmp", "limit", "verdict"}},
 		"listener any source": {Rule{Kind: RuleListener, Interface: "eth0", Protocol: ProtocolTCP, Port: 8443},
 			[]string{"meta", "cmp", "meta", "cmp", "payload", "cmp", "verdict"}},
-		"listener v4 source": {Rule{Kind: RuleListener, Interface: "eth0", Family: 4, Protocol: ProtocolTCP, Port: 22, Source: netip.MustParsePrefix("10.4.6.0/24")},
+		"listener v4 source": {Rule{Kind: RuleListener, Interface: "eth0", Family: 4, Protocol: ProtocolTCP, Port: 22, Source: netip.MustParsePrefix("198.18.6.0/24")},
 			[]string{"meta", "cmp", "meta", "cmp", "payload", "bitwise", "cmp", "meta", "cmp", "payload", "cmp", "verdict"}},
 		"peer v6": {Rule{Kind: RulePeer, Interface: "wan0", Family: 6, Peer: netip.MustParseAddr("2001:db8::1"), IPProto: ipProtoESP},
 			[]string{"meta", "cmp", "meta", "cmp", "payload", "bitwise", "cmp", "meta", "cmp", "verdict"}},
 		"tunnel bfd": {Rule{Kind: RuleTunnelPort, Interface: "gre1", Protocol: ProtocolUDP, Port: PortBFD},
 			[]string{"meta", "cmp", "meta", "cmp", "payload", "cmp", "verdict"}},
 		"vrrp": {Rule{Kind: RuleVRRP, Interface: "eth1", IPProto: ipProtoVRRP}, []string{"meta", "cmp", "meta", "cmp", "verdict"}},
-		"vip deny v4": {Rule{Kind: RuleVIPDeny, Interface: "br-int", Family: 4, Destination: netip.MustParseAddr("10.4.200.1")},
+		"vip deny v4": {Rule{Kind: RuleVIPDeny, Interface: "br-int", Family: 4, Destination: netip.MustParseAddr("198.19.200.1")},
 			[]string{"meta", "cmp", "meta", "cmp", "payload", "cmp", "verdict"}},
 		"vip deny v6": {Rule{Kind: RuleVIPDeny, Interface: "br-int", Family: 6, Destination: netip.MustParseAddr("2001:db8::1")},
 			[]string{"meta", "cmp", "meta", "cmp", "payload", "cmp", "meta", "cmp", "verdict"}},
@@ -241,12 +241,12 @@ func TestBuildExprs_Values(t *testing.T) {
 		assert.Equal(t, uint32(2), e[0].(*expr.Payload).Offset)
 	})
 	t.Run("v4 prefix mask", func(t *testing.T) {
-		e := exprSaddrPrefix(netip.MustParsePrefix("10.20.30.40/20"))
+		e := exprSaddrPrefix(netip.MustParsePrefix("198.18.30.40/20"))
 		p := e[0].(*expr.Payload)
 		assert.Equal(t, uint32(12), p.Offset)
 		assert.Equal(t, uint32(4), p.Len)
 		assert.Equal(t, []byte{255, 255, 240, 0}, e[1].(*expr.Bitwise).Mask)
-		assert.Equal(t, []byte{10, 20, 16, 0}, e[2].(*expr.Cmp).Data, "compared against the masked prefix")
+		assert.Equal(t, []byte{198, 18, 16, 0}, e[2].(*expr.Cmp).Data, "compared against the masked prefix")
 	})
 	t.Run("v6 prefix mask", func(t *testing.T) {
 		e := exprSaddrPrefix(netip.MustParsePrefix("fd00:101::/64"))
