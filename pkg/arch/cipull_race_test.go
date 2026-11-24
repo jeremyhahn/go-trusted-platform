@@ -78,6 +78,10 @@ case "$1" in
   pull)
     echo "$ctx" >> "$s/pull-context"
     [ -z "${FAKE_PULL_FAILS:-}" ] || { echo "Error response from daemon: pull failed" >&2; exit 1; }
+    # FAKE_PULL_ERRS: the ;-separated errors of the daemon's successive pulls.
+    n=$(wc -l < "$s/pull-context")
+    IFS=';' read -ra errs <<< "${FAKE_PULL_ERRS:-}"
+    [ -z "${errs[n-1]:-}" ] || { echo "Error response from daemon: ${errs[n-1]}" >&2; exit 1; }
     echo "${FAKE_PULLED_ID:-$FAKE_IMAGE_ID}" > "$s/tags/$(enc "$2")" ;;
   tag) echo "$ctx" >> "$s/tag-context"; id=$(resolve "$2") || exit 1; echo "$id" > "$s/tags/$(enc "$3")" ;;
   rmi) rm "$s/tags/$(enc "$2")" 2>/dev/null || exit 1 ;;
@@ -113,6 +117,7 @@ esac
 // first image_lock waits while leg A, which pulled too, runs its whole pull
 // step under the lock. Leg B then takes the lock.
 const twoLegLock = `image_lock() {
+  echo "${1:-}" >> "$FAKE_DOCKER_STATE/lock-names"
   if [ -z "$LEG_A_DONE" ]; then
     export LEG_A_DONE=1
     if GITHUB_ENV=$LEG_A_ENV GITHUB_OUTPUT=$LEG_A_OUT IT_LEASE=lease-a bash -e "$PULL_STEP" > "$LEG_A_LOG" 2>&1; then
@@ -135,10 +140,11 @@ type pullLeg struct {
 // runTwoLegPull runs the pull step as two legs on one cold daemon: both
 // pulls succeed before either leg acquires the image lock, then leg A and
 // leg B acquire it in turn.
-func runTwoLegPull(t *testing.T, step string) (a, b pullLeg) {
+func runTwoLegPull(t *testing.T, step string, env ...string) (a, b pullLeg, state string) {
 	t.Helper()
 	dir := t.TempDir()
-	bin, state, tmp := filepath.Join(dir, "bin"), filepath.Join(dir, "state"), filepath.Join(dir, "runner-temp")
+	bin, tmp := filepath.Join(dir, "bin"), filepath.Join(dir, "runner-temp")
+	state = filepath.Join(dir, "state")
 	for _, d := range []string{bin, filepath.Join(state, "tags"), filepath.Join(state, "containers"), tmp} {
 		require.NoError(t, os.MkdirAll(d, 0o755))
 	}
@@ -175,6 +181,7 @@ func runTwoLegPull(t *testing.T, step string) (a, b pullLeg) {
 		"LEG_A_LOG="+file("a.log"),
 		"LEG_A_RC="+file("a.rc"),
 	)
+	cmd.Env = append(cmd.Env, env...)
 	out, err := cmd.CombinedOutput()
 	b.rc, b.log = "0", string(out)
 	if err != nil {
@@ -186,7 +193,7 @@ func runTwoLegPull(t *testing.T, step string) (a, b pullLeg) {
 	}
 	a = pullLeg{rc: read("a.rc"), output: read("a.out"), log: read("a.log")}
 	b.output = read("b.out")
-	return a, b
+	return a, b, state
 }
 
 // Codex review of #1919 (P1): two legs on one cold daemon both pull the
@@ -204,7 +211,7 @@ func TestCIRegistryPullSurvivesTwoLegsOnOneDaemon(t *testing.T) {
 	}
 	require.NotEmpty(t, step, "job %s has no step with id pull", ciLegJob)
 
-	a, b := runTwoLegPull(t, step)
+	a, b, _ := runTwoLegPull(t, step)
 	require.Equal(t, "0", a.rc, "leg A, first to take the lock:\n%s", a.log)
 	require.Contains(t, a.output, "leased=true", "leg A:\n%s", a.log)
 	require.Equal(t, "0", b.rc, "leg B, second to take the lock:\n%s", b.log)
@@ -356,6 +363,8 @@ func runRegistrySteps(t *testing.T, setup func(home string), env []string, steps
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "docker"), []byte(fakeRegistryDocker), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "make"), []byte(fakeBuildMake), 0o755))
+	sleep := "#!/usr/bin/env bash\necho \"$*\" >> \"$FAKE_DOCKER_STATE/sleeps\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "sleep"), []byte(sleep), 0o755))
 	for _, h := range []string{"docker-credential-pass", "docker-credential-secretservice"} {
 		helper := "#!/usr/bin/env bash\necho \"" + h + " $* $(cat)\" >> \"$FAKE_DOCKER_STATE/helper-calls\"\n"
 		require.NoError(t, os.WriteFile(filepath.Join(bin, h), []byte(helper), 0o755))
@@ -534,6 +543,82 @@ func TestCIImageLockRemovesOnlyAKnownStaleLock(t *testing.T) {
 			}
 			require.NotContains(t, log, "removing the stale image lock", "the waiter removed a live lock:\n%s", log)
 			require.Contains(t, log, "sleeps=3 ", "the waiter took the lock before its holder released it:\n%s", log)
+		})
+	}
+}
+
+// image_lock takes an optional lock name; every lock is a container of the
+// one go-trusted-platform-ci-image-lock:base image.
+func TestCIImageLockTakesANamedLock(t *testing.T) {
+	const lock = "go-trusted-platform-ci-pull-0123456789ab"
+	log, state := runImageLock(t, "", lock, lock)
+	require.Contains(t, log, "lock="+lock, log)
+	require.Contains(t, log, "sleeps=3 ", "the waiter took the named lock before its holder released it:\n%s", log)
+	require.FileExists(t, filepath.Join(state, "containers", lock))
+	require.NoFileExists(t, filepath.Join(state, "containers", "go-trusted-platform-ci-image-lock"), "a named lock took the default lock too")
+	require.FileExists(t, filepath.Join(state, "tags", "go-trusted-platform-ci-image-lock_base"))
+	require.NoFileExists(t, filepath.Join(state, "tags", lock+"_base"))
+}
+
+// Run 45379249259: five legs on one daemon pulled one digest at once, and
+// containerd failed them on its ref lock. A leg takes the digest's pull lock
+// and skips the pull when a leg before it left the image on the daemon.
+func TestCIRegistryPullPullsADigestOncePerDaemon(t *testing.T) {
+	step := ciStepRun(t, ciLegJob, "pull")
+	const hex64 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	tagRef := "registry.example/go-trusted-platform-it:sha256-1111"
+	tagSum := sha256.Sum256([]byte(tagRef))
+	for name, tc := range map[string]struct{ ref, lock string }{
+		"digest ref": {ref: "registry.example/go-trusted-platform-it@sha256:" + hex64, lock: hex64[:12]},
+		"tag ref":    {ref: tagRef, lock: hex.EncodeToString(tagSum[:])[:12]},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, b, state := runTwoLegPull(t, step, "IT_IMAGE_REF="+tc.ref)
+			require.Equal(t, "0", a.rc, "leg A:\n%s", a.log)
+			require.Contains(t, a.output, "leased=true", "leg A:\n%s", a.log)
+			require.Equal(t, "0", b.rc, "leg B:\n%s", b.log)
+			require.Contains(t, b.output, "leased=true", "leg B:\n%s", b.log)
+			pulls, _ := os.ReadFile(filepath.Join(state, "pull-context"))
+			require.Equal(t, 1, strings.Count(string(pulls), "\n"), "two legs on one daemon pulled %s:\nA:\n%s\nB:\n%s", tc.ref, a.log, b.log)
+			names, _ := os.ReadFile(filepath.Join(state, "lock-names"))
+			require.Contains(t, strings.Split(string(names), "\n"), "go-trusted-platform-ci-pull-"+tc.lock, "lock names taken:\n%s", names)
+		})
+	}
+}
+
+// Containerd fails a pull that races another on its ref lock with errors a
+// second attempt clears; the step retries those, at most 3 attempts, and
+// falls back to the leg's build on any other error at once.
+func TestCIRegistryPullRetriesTransientContainerdErrors(t *testing.T) {
+	pull := ciStepRun(t, ciLegJob, "pull")
+	load := ciStepRun(t, ciLegJob, "Load the integration image")
+	const lease = `failed to prepare extraction snapshot "extract-1": lease does not exist: not found`
+	t.Run("lease does not exist once", func(t *testing.T) {
+		r := runRegistrySteps(t, nil, []string{"FAKE_PULL_ERRS=" + lease}, pull, load)
+		require.NoError(t, r.err, r.log)
+		require.Equal(t, 2, strings.Count(r.read("pull-context")+"\n", "\n"), "pull attempts:\n%s", r.log)
+		require.Equal(t, "5", r.read("sleeps"), r.log)
+		require.Contains(t, r.log, lease, "the pull's output is not in the log:\n%s", r.log)
+		require.Contains(t, r.output, "leased=true", r.log)
+		require.Contains(t, r.env, "IT_LEASE_ID=sha256:1111\n", r.log)
+		require.NotContains(t, r.log, "building this leg's image", r.log)
+	})
+	for name, tc := range map[string]struct {
+		errs     string
+		attempts int
+		sleeps   string
+	}{
+		"transient every attempt": {errs: "failed to extract layer sha256:aaaa;failed to commit snapshot extract-2;failed to cleanup extract", attempts: 3, sleeps: "5\n15"},
+		"unrelated error":         {errs: "manifest unknown", attempts: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := runRegistrySteps(t, nil, []string{"FAKE_PULL_ERRS=" + tc.errs}, pull, load)
+			require.NoError(t, r.err, r.log)
+			require.Equal(t, tc.attempts, strings.Count(r.read("pull-context")+"\n", "\n"), "pull attempts:\n%s", r.log)
+			require.Equal(t, tc.sleeps, r.read("sleeps"), r.log)
+			require.NotContains(t, r.output, "leased=true", r.log)
+			require.Contains(t, r.log, "::warning::pulling "+"registry.invalid:5000/go-trusted-platform/it-image:1111 from the LAN registry failed; building this leg's image", r.log)
+			require.Equal(t, "go-trusted-platform-it:leg-build", r.read("built"), "the Load step's fallback build:\n%s", r.log)
 		})
 	}
 }
