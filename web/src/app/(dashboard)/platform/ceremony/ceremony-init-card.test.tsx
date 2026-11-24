@@ -25,6 +25,9 @@ const INIT_PATH = 'POST /api/v1/ceremony/init';
 const CERT_PEM = '-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----';
 // A placeholder, not key material.
 const ADMIN_KEY = 'test-admin-key-placeholder';
+// A placeholder officer CSR, not a real request.
+const CSR_PEM = '-----BEGIN CERTIFICATE REQUEST-----\nTEST\n-----END CERTIFICATE REQUEST-----';
+const FIVE_OFFICERS = [1, 2, 3, 4, 5].map((i) => ({ username: `officer-${i}`, csrPem: CSR_PEM }));
 
 const CAPS_PATH = 'GET /api/v1/capabilities';
 const CEREMONY_OPS = [
@@ -66,6 +69,14 @@ function fill(label: string, value: string) {
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
 }
 
+// An M-of-N init names one officer per share: fill officers 1..n.
+function fillOfficers(n: number) {
+  for (let i = 1; i <= n; i++) {
+    fill(`Officer ${i} username`, `officer-${i}`);
+    fill(`Officer ${i} CSR`, CSR_PEM);
+  }
+}
+
 async function confirm() {
   const open = screen.getByRole('button', { name: 'Initialize' });
   await offered(open);
@@ -87,7 +98,7 @@ describe('CeremonyInitCard', () => {
     vi.unstubAllGlobals();
   });
 
-  it('keeps Initialize disabled until the SO PIN and threshold are set', async () => {
+  it('keeps Initialize disabled until the SO PIN, threshold and every officer are set', async () => {
     stubControlPlane({ [CAPS_PATH]: caps() });
     render(withControlPlane(<CeremonyInitCard />));
 
@@ -97,7 +108,45 @@ describe('CeremonyInitCard', () => {
     fill('SO PIN', 'so-pin-test');
     expect(button.disabled).toBe(true);
     fill('Threshold', '3-of-5');
+    expect(button.disabled).toBe(true);
+    expect(screen.getAllByLabelText(/^Officer \d+ username$/)).toHaveLength(5);
+    fillOfficers(4);
+    expect(button.disabled).toBe(true);
+    fill('Officer 5 username', 'officer-5');
+    fill('Officer 5 CSR', CSR_PEM);
     expect(button.disabled).toBe(false);
+    fill('Officer 2 CSR', '');
+    expect(button.disabled).toBe(true);
+  });
+
+  it('trims officer usernames and asks for one officer per share', async () => {
+    const sent = stubControlPlane({
+      [CAPS_PATH]: caps(),
+      [INIT_PATH]: refused(409, 'ceremony: already initialized'),
+    });
+    render(withControlPlane(<CeremonyInitCard />));
+
+    fill('SO PIN', 'so-pin-test');
+    fill('Threshold', '2-of-3');
+    expect(screen.getAllByLabelText(/^Officer \d+ username$/)).toHaveLength(3);
+    fill('Officer 1 username', '  alice  ');
+    fill('Officer 1 CSR', CSR_PEM);
+    fill('Threshold', '2-of-2');
+    expect(screen.getAllByLabelText(/^Officer \d+ username$/)).toHaveLength(2);
+    expect(input('Officer 1 username').value).toBe('  alice  ');
+    fill('Officer 2 username', 'bob');
+    fill('Officer 2 CSR', CSR_PEM);
+    await confirm();
+
+    await screen.findByRole('alert');
+    expect(writes(sent)[0].body).toEqual({
+      soPin: 'so-pin-test',
+      threshold: '2-of-2',
+      officers: [
+        { username: 'alice', csrPem: CSR_PEM },
+        { username: 'bob', csrPem: CSR_PEM },
+      ],
+    });
   });
 
   it('keeps Initialize disabled and explains the format for a threshold that is not M-of-N', async () => {
@@ -132,8 +181,11 @@ describe('CeremonyInitCard', () => {
     fill('SO PIN', 'so-pin-test');
     expect(button.disabled).toBe(true);
     expect(input('Threshold').disabled).toBe(false);
+    fill('Threshold', '2-of-2');
+    expect(screen.queryByLabelText('Officer 1 username')).not.toBeNull();
     fireEvent.click(screen.getByRole('checkbox', { name: 'Single admin (no officer shares)' }));
     expect(input('Threshold').disabled).toBe(true);
+    expect(screen.queryByLabelText('Officer 1 username')).toBeNull();
     expect(button.disabled).toBe(false);
     await confirm();
 
@@ -141,6 +193,7 @@ describe('CeremonyInitCard', () => {
     expect(writes(sent)).toHaveLength(1);
     expect(writes(sent)[0].body).toEqual({ soPin: 'so-pin-test' });
     expect(writes(sent)[0].body).not.toHaveProperty('threshold');
+    expect(writes(sent)[0].body).not.toHaveProperty('officers');
   });
 
   it('sends nothing when the confirm is cancelled', async () => {
@@ -149,6 +202,7 @@ describe('CeremonyInitCard', () => {
 
     fill('SO PIN', 'so-pin-test');
     fill('Threshold', '3-of-5');
+    fillOfficers(5);
     const open = screen.getByRole('button', { name: 'Initialize' });
     await offered(open);
     fireEvent.click(open);
@@ -178,6 +232,7 @@ describe('CeremonyInitCard', () => {
     fill('Threshold', '3-of-5');
     fill('Hostname', 'ca.example');
     fill('SANs', 'ca.example, ca2.example');
+    fillOfficers(5);
     await confirm();
 
     expect(await screen.findByText('Save the admin key now: the platform keeps no copy.')).toBeDefined();
@@ -191,6 +246,7 @@ describe('CeremonyInitCard', () => {
           threshold: '3-of-5',
           hostname: 'ca.example',
           sans: ['ca.example', 'ca2.example'],
+          officers: FIVE_OFFICERS,
         },
       },
     ]);
@@ -211,11 +267,12 @@ describe('CeremonyInitCard', () => {
 
     fill('SO PIN', 'so-pin-test');
     fill('Threshold', '3-of-5');
+    fillOfficers(5);
     await confirm();
 
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toBe('Init refused: ceremony: already initialized');
-    expect(writes(sent)[0].body).toEqual({ soPin: 'so-pin-test', threshold: '3-of-5' });
+    expect(writes(sent)[0].body).toEqual({ soPin: 'so-pin-test', threshold: '3-of-5', officers: FIVE_OFFICERS });
     expect(input('SO PIN').value).toBe('so-pin-test');
     expect(screen.queryByLabelText('Admin private key')).toBeNull();
     expect(onInitialized).not.toHaveBeenCalled();
