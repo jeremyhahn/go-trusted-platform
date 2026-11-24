@@ -102,3 +102,27 @@ func TestSSHManager_RejectsUnsafePortNameBeforeSSH(t *testing.T) {
 		}
 	}
 }
+
+func TestCanonicalPortName(t *testing.T) {
+	cases := map[string]string{
+		"Ethernet1/3":    "eth1/3",
+		"Eth1/3":         "eth1/3",
+		"ET1/3":          "eth1/3",
+		"Ethernet1/49/1": "eth1/49/1",
+		"Eth1/1.100":     "eth1/1.100",
+		"port-channel10": "po10",
+		"Po10":           "po10",
+		"mgmt0":          "mgmt0",
+		"MGMT0":          "mgmt0",
+	}
+	for in, want := range cases {
+		if got := canonicalPortName(in); got != want {
+			t.Errorf("canonicalPortName(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for _, pair := range [][2]string{{"Eth1/3", "Eth1/30"}, {"Eth10", "Po10"}} {
+		if samePort(pair[0], pair[1]) {
+			t.Errorf("samePort(%q, %q) = true, want false", pair[0], pair[1])
+		}
+	}
+}

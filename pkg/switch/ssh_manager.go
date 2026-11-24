@@ -168,6 +168,8 @@ func (m *sshManager) GetPortStatus(ctx context.Context, port string) (*switchwir
 
 	// Admin and link state come from the operational interface status:
 	// "Switchport: Enabled" is Layer 2 switching, not administrative state.
+	// The row is matched across interface aliases (Ethernet1/3 = Eth1/3,
+	// port-channel10 = Po10), since the table may spell the port differently.
 	statusCmd := fmt.Sprintf("show interfaces %s status", port)
 	m.logger.Debug("ssh get port interface status", "command", statusCmd)
 	statusOutput, err := m.execute(ctx, statusCmd)
@@ -184,7 +186,7 @@ func (m *sshManager) GetPortStatus(ctx context.Context, port string) (*switchwir
 	}
 	var row *switchwire.PortStatus
 	for _, r := range rows {
-		if strings.EqualFold(r.Port, port) {
+		if samePort(r.Port, port) {
 			row = r
 			break
 		}

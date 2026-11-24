@@ -27,8 +27,10 @@ import (
 // block parsed into a.SwitchConfigs, one manager per configured switch.
 // A nil App or an empty block returns a nil service and no error: the node
 // has no switch, and every switch surface stays dark. A config that
-// switchmgmt refuses (an unsupported vendor, an invalid connection config)
-// returns the wrapped error, so errors.As still finds the cause and serve
+// switchmgmt refuses (an unsupported vendor, an invalid connection config,
+// an entry with neither name nor host, or two entries with the same
+// effective identity, Name else Host, which would send one switch's
+// operations to another) returns the wrapped error, so errors.As still finds the cause and serve
 // refuses to start.
 func newSwitchService(logger *logging.Logger, a *app.App) (*switchmgmt.Service, error) {
 	if a == nil || len(a.SwitchConfigs) == 0 {

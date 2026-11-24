@@ -16,6 +16,7 @@ package switchmgmt
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // maxPortNameLen caps an interface name; vendor interface names are far
@@ -40,4 +41,29 @@ func ValidatePortName(port string) error {
 		}
 	}
 	return nil
+}
+
+// canonicalPortName folds an interface name to one spelling so aliases
+// compare equal: the name is lowercased, and the leading run of letters and
+// '-' is mapped from ethernet, eth or et to eth and from port-channel or po
+// to po. Any other prefix is kept as is.
+func canonicalPortName(port string) string {
+	lower := strings.ToLower(port)
+	i := 0
+	for i < len(lower) && (lower[i] >= 'a' && lower[i] <= 'z' || lower[i] == '-') {
+		i++
+	}
+	prefix, rest := lower[:i], lower[i:]
+	switch prefix {
+	case "ethernet", "eth", "et":
+		prefix = "eth"
+	case "port-channel", "po":
+		prefix = "po"
+	}
+	return prefix + rest
+}
+
+// samePort reports whether a and b name the same interface across aliases.
+func samePort(a, b string) bool {
+	return canonicalPortName(a) == canonicalPortName(b)
 }
