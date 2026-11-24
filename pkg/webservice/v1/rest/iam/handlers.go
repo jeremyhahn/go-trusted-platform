@@ -424,7 +424,13 @@ func (h *IAMHandlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 		users = append(users, UserToProto(&resp.Users[i]))
 	}
 
+	// The total is the count IAM reports; IAM is not sent the offset, so the
+	// offset never enters it. Only an IAM that sends no count (the embedded
+	// one) is answered with the users this page carries.
 	total := int64(resp.Pagination.TotalCount)
+	if total == 0 {
+		total = int64(len(resp.Users))
+	}
 	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.ListIAMUsersResponse{
 		Users:      users,
 		Pagination: ListPagination(limit, offset, total),

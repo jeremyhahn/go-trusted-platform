@@ -203,7 +203,7 @@ type selResult struct {
 
 // selEnv is the step env of a case; the keys match the step's env: block.
 type selEnv struct {
-	server, event, ref, headRepo string
+	server, event, headRepo, ref string
 }
 
 // selMain is the ref of a push to main.
