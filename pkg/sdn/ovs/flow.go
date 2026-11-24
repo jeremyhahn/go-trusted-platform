@@ -458,10 +458,11 @@ func ValidateFlowMod(flow *FlowMod) error {
 // parseMatchString parses ovs-ofctl style match string into OpenFlow match
 // CanonicalMatch returns the OXM match that matchStr encodes in a canonical
 // text form: the parsed fields sorted by (class, field), an all-ones mask
-// dropped (a /32 is the bare address), each field rendered as the hex of its
-// class, field, mask flag, value and mask. Two match strings that the switch
-// would receive as the same match share one canonical form. The empty string
-// returns "".
+// dropped (a /32 is the bare address), a fully wildcarded field (an all-zero
+// mask, such as a /0) omitted because it matches every value, each field
+// rendered as the hex of its class, field, mask flag, value and mask. Two
+// match strings that the switch would receive as the same match share one
+// canonical form. The empty string returns "".
 func CanonicalMatch(matchStr string) (string, error) {
 	if strings.TrimSpace(matchStr) == "" {
 		return "", nil
@@ -470,8 +471,13 @@ func CanonicalMatch(matchStr string) (string, error) {
 	if err := parseMatchString(match, matchStr); err != nil {
 		return "", err
 	}
-	fields := make([]openflow.OXMField, len(match.Fields))
-	copy(fields, match.Fields)
+	fields := make([]openflow.OXMField, 0, len(match.Fields))
+	for _, f := range match.Fields {
+		if f.HasMask && allZeros(f.Mask) {
+			continue
+		}
+		fields = append(fields, f)
+	}
 	for i := range fields {
 		if fields[i].HasMask && allOnes(fields[i].Mask) {
 			fields[i].HasMask = false
@@ -503,6 +509,20 @@ func allOnes(mask []byte) bool {
 	}
 	for _, b := range mask {
 		if b != 0xff {
+			return false
+		}
+	}
+	return true
+}
+
+// allZeros reports whether mask is non-empty and every byte is zero: the
+// field it masks matches every value.
+func allZeros(mask []byte) bool {
+	if len(mask) == 0 {
+		return false
+	}
+	for _, b := range mask {
+		if b != 0 {
 			return false
 		}
 	}
