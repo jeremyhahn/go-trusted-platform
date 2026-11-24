@@ -272,7 +272,10 @@ a report that passes two checks, in this order:
 2. **Device identity (ruling 673).** The TLS connection carries a verified mTLS
    client certificate chain, and the lower-case hex SHA-256 of its leaf
    certificate is the IDevID fingerprint recorded for the device registered
-   under the MAC address the report names.
+   under the MAC address the report names. A re-enrolment before install
+   completion replaces the recorded fingerprint; once the install-complete
+   webhook has presented it, the fingerprint is binding and a later enrolment
+   does not change it (owner ruling 1234).
 
 The refusals:
 

@@ -164,6 +164,79 @@ func TestZoneFlowManager_NoOpenFlowPort_Errors(t *testing.T) {
 	}
 }
 
+// bridgeCheckController is an ofPortController that also answers which
+// ports are on bridge br0.
+type bridgeCheckController struct {
+	*ofPortController
+	onBridge map[string]bool
+	checkErr error
+}
+
+func (c *bridgeCheckController) PortOnBridge(_ context.Context, bridge, port string) (bool, error) {
+	if c.checkErr != nil {
+		return false, c.checkErr
+	}
+	return bridge == "br0" && c.onBridge[port], nil
+}
+
+func newBridgeCheckZFM(t *testing.T, ctrl *bridgeCheckController) *ZoneFlowManager {
+	t.Helper()
+	m, err := NewZoneFlowManager(ZoneFlowManagerConfig{
+		BridgeName:     "br0",
+		FlowController: ctrl,
+		PortController: ctrl,
+		Plan:           testPlan(t),
+	})
+	require.NoError(t, err)
+	return m
+}
+
+func TestZoneFlowManager_PortNotOnBridge_Refused(t *testing.T) {
+	cases := map[string]*bridgeCheckController{
+		"other bridge": {
+			ofPortController: &ofPortController{ofPorts: map[string]int32{"tap9": 7}},
+			onBridge:         map[string]bool{},
+		},
+		"check error": {
+			ofPortController: &ofPortController{ofPorts: map[string]int32{"tap9": 7}},
+			onBridge:         map[string]bool{"tap9": true},
+			checkErr:         errors.New("ovsdb down"),
+		},
+	}
+	for name, ctrl := range cases {
+		t.Run(name, func(t *testing.T) {
+			m := newBridgeCheckZFM(t, ctrl)
+			ctx := context.Background()
+
+			errs := []error{
+				m.ApplyZoneFlows(ctx, "tap9", zone.ZoneQuarantine),
+				m.ApplyPortClassFlows(ctx, "tap9", zone.PortClassHypervisor),
+				m.RemoveFlows("tap9"),
+			}
+			for _, err := range errs {
+				require.Error(t, err)
+				if name == "other bridge" {
+					require.ErrorContains(t, err, "not on bridge")
+				}
+			}
+			require.Empty(t, ctrl.deleted)
+			require.Empty(t, ctrl.installed)
+			require.Empty(t, ctrl.vlanPorts)
+			require.Empty(t, ctrl.trunks)
+		})
+	}
+
+	t.Run("on bridge", func(t *testing.T) {
+		ctrl := &bridgeCheckController{
+			ofPortController: &ofPortController{ofPorts: map[string]int32{"tap0": 7}},
+			onBridge:         map[string]bool{"tap0": true},
+		}
+		m := newBridgeCheckZFM(t, ctrl)
+		require.NoError(t, m.ApplyZoneFlows(context.Background(), "tap0", zone.ZoneQuarantine))
+		require.Contains(t, ctrl.deleted, "7")
+	})
+}
+
 // partialInstallController is an ofPortController whose switch state is
 // tracked: the port's VLAN and the live flows. With failInstall set, a
 // batch install leaves its first rule on the switch and then fails, as the

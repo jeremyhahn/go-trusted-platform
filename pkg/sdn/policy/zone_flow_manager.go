@@ -468,6 +468,20 @@ func (m *ZoneFlowManager) AllowProvisioningBootPorts(bindHost string, ports ...u
 	m.generators.SetProvisioningBootServers(servers...)
 }
 
+// AllowProvisioningServers opens the provisioning template's ACME (TCP 443)
+// and DNS (port 53) allowances to the given servers only. An empty acme list
+// means the boot servers AllowProvisioningBootPorts resolved (the platform
+// serves ACME itself), so call it after AllowProvisioningBootPorts; an empty
+// dns list keeps provisioning DNS closed.
+func (m *ZoneFlowManager) AllowProvisioningServers(acme, dns []net.IP) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(acme) == 0 {
+		acme = m.generators.ProvisioningBootServers()
+	}
+	m.generators.SetProvisioningServers(acme, dns)
+}
+
 func (m *ZoneFlowManager) RemoveFlows(portID string) error {
 	if portID == "" {
 		return ErrInvalidPortID
@@ -497,6 +511,17 @@ func (m *ZoneFlowManager) RemoveFlows(portID string) error {
 // generated in_port matches and DeleteFlowsByPort need; OVSDB calls and the
 // manager's maps keep the name.
 func (m *ZoneFlowManager) openFlowPort(ctx context.Context, portID string) (string, error) {
+	// OpenFlow port numbers are per bridge: a port on another bridge may
+	// share a number with one on ours, so check membership first.
+	if checker, ok := m.portController.(PortBridgeChecker); ok {
+		on, err := checker.PortOnBridge(ctx, m.bridgeName, portID)
+		if err != nil {
+			return "", ErrPortNotOnBridge{Port: portID, Bridge: m.bridgeName, Cause: err}
+		}
+		if !on {
+			return "", ErrPortNotOnBridge{Port: portID, Bridge: m.bridgeName}
+		}
+	}
 	n, err := m.portController.GetOFPort(ctx, portID)
 	if err != nil {
 		return "", ErrNoOpenFlowPort{Port: portID, Cause: err}

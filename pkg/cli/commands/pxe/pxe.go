@@ -18,6 +18,7 @@ package pxe
 import (
 	"context"
 	"io"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -85,7 +86,21 @@ Examples:
   platformctl pxe quarantine <device-id> --reason "attestation mismatch"
 
   # Send a failed device back through provisioning
-  platformctl pxe retry <device-id>`,
+  platformctl pxe retry <device-id>
+
+  # Register a device by MAC ahead of its first PXE boot, look it up, remove it
+  platformctl pxe register --mac 02:00:00:00:00:01 --port <port-id>
+  platformctl pxe get-by-mac 02:00:00:00:00:01
+  platformctl pxe remove <device-id>
+
+  # Move a device to a state by hand, and record its enrolment certificate
+  platformctl pxe set-state <device-id> --state booting --reason "re-image"
+  platformctl pxe set-enrolled <device-id> --certificate-serial <serial>
+
+  # Show, start and stop the PXE provisioning service
+  platformctl pxe status
+  platformctl pxe start
+  platformctl pxe stop`,
 	}
 
 	r := &runner{getFlags: getFlags, open: open}
@@ -95,6 +110,14 @@ Examples:
 	cmd.AddCommand(r.quarantineCommand())
 	cmd.AddCommand(r.retryCommand())
 	cmd.AddCommand(r.eventsCommand())
+	cmd.AddCommand(r.registerCommand())
+	cmd.AddCommand(r.removeCommand())
+	cmd.AddCommand(r.getByMACCommand())
+	cmd.AddCommand(r.setStateCommand())
+	cmd.AddCommand(r.setEnrolledCommand())
+	cmd.AddCommand(r.statusCommand())
+	cmd.AddCommand(r.startCommand())
+	cmd.AddCommand(r.stopCommand())
 	return cmd
 }
 
@@ -325,6 +348,213 @@ func (r *runner) eventsCommand() *cobra.Command {
 	}
 }
 
+// macArg checks a MAC address before any call. It returns the value as
+// given (trimmed): the service matches MACs as stored, so the CLI does not
+// rewrite their case or separators.
+func macArg(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", &ErrInvalidMAC{}
+	}
+	if _, err := net.ParseMAC(value); err != nil {
+		return "", &ErrInvalidMAC{Value: value}
+	}
+	return value, nil
+}
+
+func (r *runner) registerCommand() *cobra.Command {
+	var mac, port string
+	cmd := &cobra.Command{
+		Use:          "register --mac <mac> [--port <port-id>]",
+		Short:        "Register a device by MAC address",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			hw, err := macArg(mac)
+			if err != nil {
+				return err
+			}
+			return r.call(cmd, "RegisterDevice", func(ctx context.Context, c platformv1.PXEServiceClient) (any, *cli.TableData, error) {
+				resp, err := c.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{
+					MacAddress: hw, PortId: strings.TrimSpace(port),
+				})
+				if err != nil {
+					return nil, nil, err
+				}
+				return resp, deviceTable(resp.GetDevice()), nil
+			})
+		},
+	}
+	cmd.Flags().StringVar(&mac, "mac", "", "MAC address of the device (required)")
+	cmd.Flags().StringVar(&port, "port", "", "OVS port ID the device is attached to")
+	return cmd
+}
+
+func (r *runner) removeCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:          "remove <device-id>",
+		Short:        "Remove a device from the provisioning workflow",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := deviceArg("remove", args)
+			if err != nil {
+				return err
+			}
+			return r.call(cmd, "RemoveDevice", func(ctx context.Context, c platformv1.PXEServiceClient) (any, *cli.TableData, error) {
+				resp, err := c.RemoveDevice(ctx, &platformv1.RemovePXEDeviceRequest{DeviceId: id})
+				if err != nil {
+					return nil, nil, err
+				}
+				table := cli.NewTableData("ID", "REMOVED")
+				table.AddRow(id, "true")
+				return resp, table, nil
+			})
+		},
+	}
+}
+
+func (r *runner) getByMACCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:          "get-by-mac <mac>",
+		Short:        "Show the device registered with a MAC address",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			hw, err := macArg(args[0])
+			if err != nil {
+				return err
+			}
+			return r.call(cmd, "GetDeviceByMAC", func(ctx context.Context, c platformv1.PXEServiceClient) (any, *cli.TableData, error) {
+				resp, err := c.GetDeviceByMAC(ctx, &platformv1.GetPXEDeviceByMACRequest{MacAddress: hw})
+				if err != nil {
+					return nil, nil, err
+				}
+				return resp, deviceTable(resp.GetDevice()), nil
+			})
+		},
+	}
+}
+
+func (r *runner) setStateCommand() *cobra.Command {
+	var state, reason string
+	cmd := &cobra.Command{
+		Use:          "set-state <device-id> --state <state> --reason <reason>",
+		Short:        "Move a device to a provisioning state, recording why",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := deviceArg("set-state", args)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(state) == "" {
+				return &ErrInvalidState{Verb: "set-state", Valid: stateLabels()}
+			}
+			value, err := parseState(state)
+			if err != nil {
+				return &ErrInvalidState{Verb: "set-state", Value: state, Valid: stateLabels()}
+			}
+			if strings.TrimSpace(reason) == "" {
+				return &ErrReasonRequired{Verb: "set-state"}
+			}
+			return r.call(cmd, "UpdateState", func(ctx context.Context, c platformv1.PXEServiceClient) (any, *cli.TableData, error) {
+				resp, err := c.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{DeviceId: id, State: value, Reason: reason})
+				if err != nil {
+					return nil, nil, err
+				}
+				return resp, deviceTable(resp.GetDevice()), nil
+			})
+		},
+	}
+	cmd.Flags().StringVar(&state, "state", "", "provisioning state to move the device to (required)")
+	cmd.Flags().StringVar(&reason, "reason", "", "why the state changes (required)")
+	return cmd
+}
+
+func (r *runner) setEnrolledCommand() *cobra.Command {
+	var serial string
+	cmd := &cobra.Command{
+		Use:          "set-enrolled <device-id> --certificate-serial <serial>",
+		Short:        "Record a device's enrolment certificate",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := deviceArg("set-enrolled", args)
+			if err != nil {
+				return err
+			}
+			serial = strings.TrimSpace(serial)
+			if serial == "" {
+				return &ErrCertificateSerialRequired{}
+			}
+			return r.call(cmd, "SetDeviceEnrolled", func(ctx context.Context, c platformv1.PXEServiceClient) (any, *cli.TableData, error) {
+				resp, err := c.SetDeviceEnrolled(ctx, &platformv1.SetPXEDeviceEnrolledRequest{DeviceId: id, CertificateSerial: serial})
+				if err != nil {
+					return nil, nil, err
+				}
+				return resp, deviceTable(resp.GetDevice()), nil
+			})
+		},
+	}
+	cmd.Flags().StringVar(&serial, "certificate-serial", "", "serial of the device's enrolment certificate (required)")
+	return cmd
+}
+
+func (r *runner) statusCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:          "status",
+		Short:        "Show the PXE provisioning service status",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return r.call(cmd, "GetStatus", func(ctx context.Context, c platformv1.PXEServiceClient) (any, *cli.TableData, error) {
+				resp, err := c.GetStatus(ctx, &platformv1.GetPXEStatusRequest{})
+				if err != nil {
+					return nil, nil, err
+				}
+				return resp, statusTable(resp.GetStatus()), nil
+			})
+		},
+	}
+}
+
+func (r *runner) startCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:          "start",
+		Short:        "Start the PXE provisioning service",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return r.call(cmd, "StartService", func(ctx context.Context, c platformv1.PXEServiceClient) (any, *cli.TableData, error) {
+				resp, err := c.StartService(ctx, &platformv1.StartPXEServiceRequest{})
+				if err != nil {
+					return nil, nil, err
+				}
+				return resp, replyStatusTable(resp.GetStatus()), nil
+			})
+		},
+	}
+}
+
+func (r *runner) stopCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:          "stop",
+		Short:        "Stop the PXE provisioning service",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return r.call(cmd, "StopService", func(ctx context.Context, c platformv1.PXEServiceClient) (any, *cli.TableData, error) {
+				resp, err := c.StopService(ctx, &platformv1.StopPXEServiceRequest{})
+				if err != nil {
+					return nil, nil, err
+				}
+				return resp, replyStatusTable(resp.GetStatus()), nil
+			})
+		},
+	}
+}
+
 // devicesTable renders one row per device.
 func devicesTable(devices ...*platformv1.PXEDeviceInfo) *cli.TableData {
 	table := cli.NewTableData("ID", "MAC", "STATE", "VLAN", "TARGET VLAN", "RETRIES", "UPDATED")
@@ -355,6 +585,32 @@ func deviceTable(d *platformv1.PXEDeviceInfo) *cli.TableData {
 	table.AddRow("created", timeLabel(d.GetCreatedAt()))
 	table.AddRow("updated", timeLabel(d.GetUpdatedAt()))
 	table.AddRow("state changed", timeLabel(d.GetStateChangedAt()))
+	return table
+}
+
+// statusTable renders the PXE service status as one row.
+func statusTable(s *platformv1.PXEServiceStatus) *cli.TableData {
+	table := cli.NewTableData("RUNNING", "DEVICES", "IPXE SERVER", "QUARANTINE VLAN", "PROVISIONING VLAN", "STARTED")
+	if s == nil {
+		return table
+	}
+	server := s.GetIpxeServerAddr()
+	if server == "" {
+		server = "-"
+	}
+	table.AddRow(strconv.FormatBool(s.GetRunning()), strconv.Itoa(int(s.GetDeviceCount())), server,
+		vlanLabel(s.GetQuarantineVlan()), vlanLabel(s.GetProvisioningVlan()), timeLabel(s.GetStartTime()))
+	return table
+}
+
+// replyStatusTable renders a start/stop reply's status as one row.
+func replyStatusTable(s *platformv1.Status) *cli.TableData {
+	table := cli.NewTableData("STATUS", "MESSAGE")
+	label := "ok"
+	if s != nil && !s.GetSuccess() {
+		label = "failed"
+	}
+	table.AddRow(label, s.GetMessage())
 	return table
 }
 

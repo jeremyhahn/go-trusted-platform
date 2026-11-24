@@ -34,11 +34,18 @@ func TestDaemonConfigHTTPPort(t *testing.T) {
 	})
 
 	t.Run("an out-of-range port is refused by the service config validation", func(t *testing.T) {
-		for _, port := range []int{-1, 65536} {
+		for _, port := range []int{-1, 65535, 65536} {
 			cfg, err := (&DaemonConfig{Enabled: true, BridgeName: "br-pxe", HTTPPort: port}).ToServiceConfig(plan)
 			require.Error(t, err, "port %d", port)
 			assert.Nil(t, cfg)
 			assert.True(t, errors.Is(err, ErrInvalidConfig), "port %d: %v", port, err)
 		}
+	})
+
+	t.Run("65534 is accepted: the device-script server takes http-port+1", func(t *testing.T) {
+		cfg, err := (&DaemonConfig{Enabled: true, BridgeName: "br-pxe", HTTPPort: 65534}).ToServiceConfig(plan)
+		require.NoError(t, err)
+		require.NotNil(t, cfg)
+		assert.Equal(t, 65534, cfg.IPXEConfig.HTTPPort)
 	})
 }

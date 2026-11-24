@@ -161,6 +161,137 @@ func TestProvisioning_ServerPortsFailClosedWithoutServers(t *testing.T) {
 	}
 }
 
+// TestQuarantine_DNSFailsClosedWithoutServer: the quarantine DNS allow sits
+// above the inter-zone denies, so it may only reach the configured DNS
+// server; with none configured it opens nothing.
+func TestQuarantine_DNSFailsClosedWithoutServer(t *testing.T) {
+	deny := zoneflows.FlowRule{Table: 0, Priority: 200,
+		Match: "in_port=7,dl_vlan=100,dl_type=0x0800,nw_dst=198.51.100.0/24", Actions: "drop"}
+	dns := func(dst string) map[string]string {
+		return map[string]string{"dl_type": "0x0800", "nw_proto": "17", "nw_dst": dst, "tp_dst": "53"}
+	}
+
+	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{})
+	rules := append(gs.Generate("7", zone.ZoneQuarantine, zoneflows.Untagged(100)), deny)
+	for _, r := range rules {
+		if r.Actions == "drop" {
+			continue
+		}
+		f := matchFields(r.Match)
+		if f["tp_dst"] != "53" {
+			continue
+		}
+		_, v4 := f["nw_dst"]
+		_, v6 := f["ipv6_dst"]
+		if !v4 && !v6 {
+			t.Errorf("no DNS server configured, yet UDP 53 is open to any destination by %q (priority %d)", r.Match, r.Priority)
+		}
+	}
+	if w, ok := winner(rules, dns("198.51.100.7")); !ok || w.Actions != "drop" {
+		t.Errorf("UDP 53 to a denied destination with no DNS server: winner %q (%s), want a drop", w.Match, w.Actions)
+	}
+
+	gs = zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{
+		Quarantine: zoneflows.QuarantineConfig{DNSServerIP: net.ParseIP("192.0.2.53")},
+	})
+	rules = append(gs.Generate("7", zone.ZoneQuarantine, zoneflows.Untagged(100)), deny)
+	if w, ok := winner(rules, dns("192.0.2.53")); !ok || w.Actions != "normal" {
+		t.Errorf("UDP 53 to the configured DNS server: winner %q (%s), want a normal rule", w.Match, w.Actions)
+	}
+	if w, ok := winner(rules, dns("198.51.100.7")); !ok || w.Actions != "drop" {
+		t.Errorf("UDP 53 to a denied destination with a DNS server set: winner %q (%s), want a drop", w.Match, w.Actions)
+	}
+}
+
+// TestProvisioning_TFTPReachesOnlyBootServers: the provisioning TFTP allow
+// sits above the inter-zone denies, so it may only reach the boot servers;
+// with none configured it opens nothing.
+func TestProvisioning_TFTPReachesOnlyBootServers(t *testing.T) {
+	deny := zoneflows.FlowRule{Table: 0, Priority: 200,
+		Match: "in_port=7,dl_vlan=100,dl_type=0x0800,nw_dst=198.51.100.0/24", Actions: "drop"}
+	tftp := func(dst string) map[string]string {
+		return map[string]string{"dl_type": "0x0800", "nw_proto": "17", "nw_dst": dst, "tp_dst": "69"}
+	}
+
+	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{})
+	rules := append(gs.Generate("7", zone.ZoneProvisioning, zoneflows.Untagged(100)), deny)
+	for _, r := range rules {
+		if r.Actions != "drop" && matchFields(r.Match)["tp_dst"] == "69" {
+			t.Errorf("no boot server configured, yet UDP 69 is open by %q (priority %d)", r.Match, r.Priority)
+		}
+	}
+	if w, ok := winner(rules, tftp("198.51.100.7")); !ok || w.Actions != "drop" {
+		t.Errorf("UDP 69 to a denied destination with no boot server: winner %q (%s), want a drop", w.Match, w.Actions)
+	}
+
+	gs.SetProvisioningBootServers(net.ParseIP("192.0.2.10"), net.ParseIP("2001:db8::10"))
+	rules = append(gs.Generate("7", zone.ZoneProvisioning, zoneflows.Untagged(100)), deny)
+	for _, r := range rules {
+		if r.Actions == "drop" {
+			continue
+		}
+		f := matchFields(r.Match)
+		if f["tp_dst"] != "69" {
+			continue
+		}
+		if f["nw_dst"] != "192.0.2.10" && f["ipv6_dst"] != "2001:db8::10" {
+			t.Errorf("UDP 69 allowed beyond the boot servers by %q (priority %d)", r.Match, r.Priority)
+		}
+	}
+	if w, ok := winner(rules, tftp("192.0.2.10")); !ok || w.Actions != "normal" {
+		t.Errorf("UDP 69 to the boot server: winner %q (%s), want a normal rule", w.Match, w.Actions)
+	}
+	if w, ok := winner(rules, tftp("198.51.100.7")); !ok || w.Actions != "drop" {
+		t.Errorf("UDP 69 to a denied destination with a boot server set: winner %q (%s), want a drop", w.Match, w.Actions)
+	}
+}
+
+// The TFTP server answers each transfer from an ephemeral UDP port, so the
+// device's ACKs to that port need an allowance: UDP 1024-65535, to the boot
+// servers only.
+func TestProvisioning_TFTPTransferPortReachesOnlyBootServers(t *testing.T) {
+	deny := zoneflows.FlowRule{Table: 0, Priority: 200,
+		Match: "in_port=7,dl_vlan=100,dl_type=0x0800,nw_dst=198.51.100.0/24", Actions: "drop"}
+	udp4 := func(dst, port string) map[string]string {
+		return map[string]string{"dl_type": "0x0800", "nw_proto": "17", "nw_dst": dst, "tp_dst": port}
+	}
+	udp6 := func(dst, port string) map[string]string {
+		return map[string]string{"dl_type": "0x86dd", "nw_proto": "17", "ipv6_dst": dst, "tp_dst": port}
+	}
+
+	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{})
+	rules := append(gs.Generate("7", zone.ZoneProvisioning, zoneflows.Untagged(100)), deny)
+	if w, ok := winner(rules, udp4("192.0.2.10", "49152")); !ok || w.Actions != "drop" {
+		t.Errorf("UDP 49152 with no boot server: winner %q (%s), want a drop", w.Match, w.Actions)
+	}
+
+	gs.SetProvisioningBootServers(net.ParseIP("192.0.2.10"), net.ParseIP("2001:db8::10"))
+	rules = append(gs.Generate("7", zone.ZoneProvisioning, zoneflows.Untagged(100)), deny)
+	for _, r := range rules {
+		if strings.Contains(r.Match, "tp_dst=0x") {
+			t.Logf("provisioning flow: priority=%d %s actions=%s", r.Priority, r.Match, r.Actions)
+		}
+	}
+	for _, port := range []string{"49152", "1024", "65535"} {
+		if w, ok := winner(rules, udp4("192.0.2.10", port)); !ok || w.Actions != "normal" {
+			t.Errorf("UDP %s to the IPv4 boot server: winner %q (%s), want a normal rule", port, w.Match, w.Actions)
+		}
+		if w, ok := winner(rules, udp6("2001:db8::10", port)); !ok || w.Actions != "normal" {
+			t.Errorf("UDP %s to the IPv6 boot server: winner %q (%s), want a normal rule", port, w.Match, w.Actions)
+		}
+	}
+	if w, ok := winner(rules, udp4("198.51.100.7", "49152")); !ok || w.Actions != "drop" {
+		t.Errorf("UDP 49152 to a denied destination: winner %q (%s), want a drop", w.Match, w.Actions)
+	}
+	if w, ok := winner(rules, udp4("192.0.2.10", "1023")); !ok || w.Actions != "drop" {
+		t.Errorf("UDP 1023 to the boot server: winner %q (%s, priority %d), want a drop", w.Match, w.Actions, w.Priority)
+	}
+	tcp := map[string]string{"dl_type": "0x0800", "nw_proto": "6", "nw_dst": "192.0.2.10", "tp_dst": "49152"}
+	if w, ok := winner(rules, tcp); !ok || w.Actions != "drop" {
+		t.Errorf("TCP 49152 to the boot server: winner %q (%s), want a drop", w.Match, w.Actions)
+	}
+}
+
 // matchFields splits an OVS match string into its key=value fields.
 func matchFields(match string) map[string]string {
 	out := map[string]string{}
@@ -182,10 +313,13 @@ func winner(rules []zoneflows.FlowRule, pkt map[string]string) (zoneflows.FlowRu
 	for _, r := range rules {
 		f := matchFields(r.Match)
 		fits := true
-		for _, k := range []string{"dl_type", "nw_proto", "tp_dst"} {
+		for _, k := range []string{"dl_type", "nw_proto"} {
 			if v, ok := f[k]; ok && v != pkt[k] {
 				fits = false
 			}
+		}
+		if v, ok := f["tp_dst"]; ok && !tpDstMatches(v, pkt["tp_dst"]) {
+			fits = false
 		}
 		for _, k := range []string{"nw_dst", "ipv6_dst"} {
 			if v, ok := f[k]; ok && !dstContains(v, pkt[k]) {
@@ -199,6 +333,23 @@ func winner(rules []zoneflows.FlowRule, pkt map[string]string) (zoneflows.FlowRu
 	return best, found
 }
 
+// tpDstMatches reports whether a rule's tp_dst field matches a probe port:
+// an exact number compares as today, and the OVS masked form value/mask
+// (hex) matches when port&mask == value&mask.
+func tpDstMatches(rule, port string) bool {
+	value, mask, masked := strings.Cut(rule, "/")
+	if !masked {
+		return rule == port
+	}
+	v, err1 := strconv.ParseUint(value, 0, 16)
+	m, err2 := strconv.ParseUint(mask, 0, 16)
+	p, err3 := strconv.ParseUint(port, 10, 16)
+	if err1 != nil || err2 != nil || err3 != nil {
+		return false
+	}
+	return p&m == v&m
+}
+
 // dstContains reports whether the rule destination dst covers addr.
 func dstContains(dst, addr string) bool {
 	a, err := netip.ParseAddr(addr)
@@ -210,4 +361,36 @@ func dstContains(dst, addr string) bool {
 	}
 	d, err := netip.ParseAddr(dst)
 	return err == nil && d == a
+}
+
+// TestProvisioning_SetProvisioningServersOpensOnlyThoseServers pins the
+// setter the daemon uses to carry the pxe: section's ACME and DNS servers
+// into the provisioning template: TCP 443 and UDP 53 win as normal to the
+// configured servers and lose to a deny for any other destination.
+func TestProvisioning_SetProvisioningServersOpensOnlyThoseServers(t *testing.T) {
+	deny := zoneflows.FlowRule{Table: 0, Priority: 200,
+		Match: "in_port=7,dl_vlan=100,dl_type=0x0800,nw_dst=198.51.100.0/24", Actions: "drop"}
+	https := func(dst string) map[string]string {
+		return map[string]string{"dl_type": "0x0800", "nw_proto": "6", "nw_dst": dst, "tp_dst": "443"}
+	}
+	dns := func(dst string) map[string]string {
+		return map[string]string{"dl_type": "0x0800", "nw_proto": "17", "nw_dst": dst, "tp_dst": "53"}
+	}
+
+	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{})
+	gs.SetProvisioningServers([]net.IP{net.ParseIP("192.0.2.10")}, []net.IP{net.ParseIP("192.0.2.53")})
+	rules := append(gs.Generate("7", zone.ZoneProvisioning, zoneflows.Untagged(100)), deny)
+
+	if w, ok := winner(rules, https("192.0.2.10")); !ok || w.Actions != "normal" {
+		t.Errorf("TCP 443 to the ACME server: winner %q (%s), want a normal rule", w.Match, w.Actions)
+	}
+	if w, ok := winner(rules, dns("192.0.2.53")); !ok || w.Actions != "normal" {
+		t.Errorf("UDP 53 to the DNS server: winner %q (%s), want a normal rule", w.Match, w.Actions)
+	}
+	if w, ok := winner(rules, https("198.51.100.7")); !ok || w.Actions != "drop" {
+		t.Errorf("TCP 443 to a denied destination: winner %q (%s), want a drop", w.Match, w.Actions)
+	}
+	if w, ok := winner(rules, dns("198.51.100.7")); !ok || w.Actions != "drop" {
+		t.Errorf("UDP 53 to a denied destination: winner %q (%s), want a drop", w.Match, w.Actions)
+	}
 }

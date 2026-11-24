@@ -442,6 +442,37 @@ func TestOVSFlowController_InstallFlows(t *testing.T) {
 type portUpdateRecorder struct {
 	updates map[string]interface{}
 	err     error
+	ports   map[string][]*ovs.Port
+	listErr error
+}
+
+func (r *portUpdateRecorder) ListPorts(_ context.Context, bridge string) ([]*ovs.Port, error) {
+	if r.listErr != nil {
+		return nil, r.listErr
+	}
+	return r.ports[bridge], nil
+}
+
+func TestOVSFlowController_PortOnBridge(t *testing.T) {
+	ctx := context.Background()
+	rec := &portUpdateRecorder{ports: map[string][]*ovs.Port{
+		"br0": {{Name: "tap0"}},
+		"br1": {{Name: "tap9"}},
+	}}
+	c := &OVSFlowController{client: rec}
+
+	on, err := c.PortOnBridge(ctx, "br0", "tap0")
+	assert.NoError(t, err)
+	assert.True(t, on)
+
+	on, err = c.PortOnBridge(ctx, "br0", "tap9")
+	assert.NoError(t, err)
+	assert.False(t, on)
+
+	failing := &OVSFlowController{client: &portUpdateRecorder{listErr: assert.AnError}}
+	on, err = failing.PortOnBridge(ctx, "br0", "tap0")
+	assert.Error(t, err)
+	assert.False(t, on)
 }
 
 func (r *portUpdateRecorder) AddFlow(context.Context, string, *ovs.FlowMod) error       { return nil }

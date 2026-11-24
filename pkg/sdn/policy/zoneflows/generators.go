@@ -130,6 +130,32 @@ func (gs *GeneratorSet) SetProvisioningBootServers(ips ...net.IP) {
 	gs.cfg.Provisioning.BootServerIPs = servers
 }
 
+// ProvisioningBootServers returns a copy of the addresses the provisioning
+// template's boot ports are open to. Like SetProvisioningBootServers it is
+// not safe for concurrent use with Generate or the setters.
+func (gs *GeneratorSet) ProvisioningBootServers() []net.IP {
+	return append([]net.IP(nil), gs.cfg.Provisioning.BootServerIPs...)
+}
+
+// SetProvisioningServers replaces the ACME (TCP 443) and DNS (port 53)
+// server addresses the provisioning template opens; nil addresses are
+// skipped, and an empty list leaves that service closed (fail closed). It is
+// not safe for concurrent use with Generate: the caller serialises the two
+// (ZoneFlowManager holds its lock across both).
+func (gs *GeneratorSet) SetProvisioningServers(acme, dns []net.IP) {
+	keep := func(ips []net.IP) []net.IP {
+		out := make([]net.IP, 0, len(ips))
+		for _, ip := range ips {
+			if ip != nil {
+				out = append(out, ip)
+			}
+		}
+		return out
+	}
+	gs.cfg.Provisioning.ACMEServerIPs = keep(acme)
+	gs.cfg.Provisioning.DNSServerIPs = keep(dns)
+}
+
 func (gs *GeneratorSet) Generate(portID string, z zone.Zone, in Ingress) []FlowRule {
 	gen, ok := gs.generators[z]
 	if !ok || gen == nil {
@@ -512,7 +538,9 @@ func (gs *GeneratorSet) quarantine(portID string, in Ingress) []FlowRule {
 		})
 	}
 
-	// DNS (to configured server, or any server in both families)
+	// DNS only to the configured server; none configured opens nothing
+	// (fail closed): an allow with no destination at prioDNS would outrank
+	// the inter-zone denies at prioMatrixDeny.
 	cfg := gs.cfg.Quarantine
 	if cfg.DNSServerIP != nil {
 		f := familyOf(cfg.DNSServerIP)
@@ -522,15 +550,6 @@ func (gs *GeneratorSet) quarantine(portID string, in Ingress) []FlowRule {
 			Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=17", f.toDst(cfg.DNSServerIP.String()), fmt.Sprintf("tp_dst=%d", portDNS))),
 			Actions:  "normal",
 		})
-	} else {
-		for _, f := range families {
-			flows = append(flows, FlowRule{
-				Table:    0,
-				Priority: prioDNS,
-				Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=17", fmt.Sprintf("tp_dst=%d", portDNS))),
-				Actions:  "normal",
-			})
-		}
 	}
 
 	// Remediation servers (auth + remediation): HTTPS only by default
@@ -625,15 +644,17 @@ func (gs *GeneratorSet) provisioning(portID string, in Ingress) []FlowRule {
 	flows = append(flows, gs.serverRules(portID, in, prioDNS, "nw_proto=17",
 		cfg.DNSServerIPs, []uint16{portDNS, portDNSAlt1, portDNSAlt2})...)
 
-	// TFTP (PXE boot), both families.
-	for _, f := range families {
-		flows = append(flows, FlowRule{
-			Table:    0,
-			Priority: prioTFTP,
-			Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=17", fmt.Sprintf("tp_dst=%d", portTFTP))),
-			Actions:  "normal",
-		})
-	}
+	// TFTP (PXE boot), only to the boot servers SetProvisioningBootServers
+	// set; none configured opens nothing, so the inter-zone denies hold on
+	// UDP 69.
+	flows = append(flows, gs.serverRules(portID, in, prioTFTP, "nw_proto=17", cfg.BootServerIPs, []uint16{portTFTP})...)
+
+	// TFTP transfers: the TFTP server answers each read request from a
+	// fresh ephemeral UDP port, and table 0 forwards with normal (no
+	// conntrack), so the device's ACKs to that port need their own
+	// allowance. UDP 1024-65535, to the boot servers only; with no boot
+	// server nothing opens.
+	flows = append(flows, gs.serverMaskedPortRules(portID, in, prioTFTP, "nw_proto=17", cfg.BootServerIPs, tftpTransferPorts)...)
 
 	// PXE boot server ports (iPXE boot script and payloads, NBD), each only
 	// to a boot server in its own family. A destination-unrestricted allow
@@ -703,6 +724,36 @@ func (gs *GeneratorSet) serverRules(portID string, in Ingress, priority int, pro
 				Table:    0,
 				Priority: priority,
 				Match:    matchInVLAN(portID, in, f.ipMatch(proto, f.toDst(ip.String()), fmt.Sprintf("tp_dst=%d", p))),
+				Actions:  "normal",
+			})
+		}
+	}
+	return flows
+}
+
+// tftpTransferPorts is UDP 1024-65535 as OVS masked tp_dst matches
+// (value/mask): the range a TFTP server picks its transfer port from.
+var tftpTransferPorts = []string{
+	"0x0400/0xfc00", // 1024-2047
+	"0x0800/0xf800", // 2048-4095
+	"0x1000/0xf000", // 4096-8191
+	"0x2000/0xe000", // 8192-16383
+	"0x4000/0xc000", // 16384-32767
+	"0x8000/0x8000", // 32768-65535
+}
+
+// serverMaskedPortRules is serverRules for masked port matches: each server
+// address gets one rule per value/mask port in its own family, and with no
+// server configured it emits nothing.
+func (gs *GeneratorSet) serverMaskedPortRules(portID string, in Ingress, priority int, proto string, servers []net.IP, ports []string) []FlowRule {
+	var flows []FlowRule
+	for _, ip := range servers {
+		f := familyOf(ip)
+		for _, p := range ports {
+			flows = append(flows, FlowRule{
+				Table:    0,
+				Priority: priority,
+				Match:    matchInVLAN(portID, in, f.ipMatch(proto, f.toDst(ip.String()), "tp_dst="+p)),
 				Actions:  "normal",
 			})
 		}

@@ -55,22 +55,59 @@ func (e *ErrDeviceIDRequired) Error() string {
 	return fmt.Sprintf("pxe %s: a device ID is required", e.Verb)
 }
 
-// ErrReasonRequired is returned when quarantine is run without --reason: a
-// quarantine is recorded in the device's audit trail and must say why.
-type ErrReasonRequired struct{}
-
-func (e *ErrReasonRequired) Error() string {
-	return "pxe quarantine: --reason is required"
+// ErrReasonRequired is returned when quarantine or set-state is run without
+// --reason: the change is recorded in the device's audit trail and must say
+// why. An empty Verb is quarantine.
+type ErrReasonRequired struct {
+	Verb string
 }
 
-// ErrInvalidState is returned when --state names no provisioning state.
+func (e *ErrReasonRequired) Error() string {
+	verb := e.Verb
+	if verb == "" {
+		verb = "quarantine"
+	}
+	return fmt.Sprintf("pxe %s: --reason is required", verb)
+}
+
+// ErrInvalidState is returned when --state names no provisioning state (or
+// is missing where it is required). An empty Verb is list.
 type ErrInvalidState struct {
+	Verb  string
 	Value string
 	Valid []string
 }
 
 func (e *ErrInvalidState) Error() string {
-	return fmt.Sprintf("pxe list: unknown --state %q (valid: %v)", e.Value, e.Valid)
+	verb := e.Verb
+	if verb == "" {
+		verb = "list"
+	}
+	if e.Value == "" {
+		return fmt.Sprintf("pxe %s: --state is required (valid: %v)", verb, e.Valid)
+	}
+	return fmt.Sprintf("pxe %s: unknown --state %q (valid: %v)", verb, e.Value, e.Valid)
+}
+
+// ErrCertificateSerialRequired is returned when set-enrolled is run without
+// --certificate-serial.
+type ErrCertificateSerialRequired struct{}
+
+func (e *ErrCertificateSerialRequired) Error() string {
+	return "pxe set-enrolled: --certificate-serial is required"
+}
+
+// ErrInvalidMAC is a missing or unparseable MAC address (--mac or a
+// get-by-mac argument), refused before any call.
+type ErrInvalidMAC struct {
+	Value string
+}
+
+func (e *ErrInvalidMAC) Error() string {
+	if e.Value == "" {
+		return "pxe: --mac is required"
+	}
+	return fmt.Sprintf("pxe: %q is not a MAC address", e.Value)
 }
 
 // ErrRPCFailed wraps a failed PXE service call.

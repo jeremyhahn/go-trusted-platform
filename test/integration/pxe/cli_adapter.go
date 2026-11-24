@@ -60,23 +60,6 @@ func (e ErrCLIBinaryNotFound) Error() string {
 	return fmt.Sprintf("platformctl binary not found at path: %s", e.Path)
 }
 
-// ErrCLIPXENotImplemented is returned by the PXE verbs platformctl does not
-// have. The `platformctl pxe` group (docs/provisioning/cli.md §5) lists,
-// inspects, authorizes, quarantines and retries devices and reads their
-// events; this adapter drives those six through the binary. Registration,
-// removal, lookup by MAC, raw state writes, set-enrolled and service status
-// stay API-only (docs/provisioning/architecture.md), so those verbs refuse
-// with this typed error and the CLI leg of TestPXEMultiProtocol asserts it.
-type ErrCLIPXENotImplemented struct {
-	Method string
-}
-
-func (e ErrCLIPXENotImplemented) Error() string {
-	return fmt.Sprintf(
-		"platformctl pxe has no verb for %s (it stays API-only, docs/provisioning/architecture.md), so CLI %s is refused",
-		e.Method, e.Method)
-}
-
 // ErrCLIDecode is returned when platformctl's JSON reply does not decode.
 type ErrCLIDecode struct {
 	Command string
@@ -217,15 +200,30 @@ func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, er
 // =============================================================================
 // Device Management Commands
 //
-// Get, list, authorize, quarantine, retry and events drive `platformctl pxe`.
-// The verbs the group does not have refuse with ErrCLIPXENotImplemented rather
-// than shelling a command that does not exist or faking a success.
+// Every verb drives `platformctl pxe` (docs/provisioning/cli.md §5) and
+// decodes the gRPC reply the CLI prints as JSON.
 // =============================================================================
 
-// RegisterDevice is refused: platformctl pxe has no such verb; it
-// stays API-only (docs/provisioning/architecture.md).
-func (c *CLIAdapter) RegisterDevice(_ context.Context, _ RegisterDeviceOptions) (*RegisterDeviceResult, error) {
-	return nil, ErrCLIPXENotImplemented{Method: "RegisterDevice"}
+// RegisterDevice runs `platformctl pxe register --mac <mac> [--port <id>]`.
+func (c *CLIAdapter) RegisterDevice(ctx context.Context, opts RegisterDeviceOptions) (*RegisterDeviceResult, error) {
+	args := []string{"register", "--mac", opts.MACAddress}
+	if opts.PortID != "" {
+		args = append(args, "--port", opts.PortID)
+	}
+	var reply platformv1.RegisterPXEDeviceResponse
+	if err := c.runJSON(ctx, &reply, args...); err != nil {
+		return nil, err
+	}
+	d := reply.GetDevice()
+	return &RegisterDeviceResult{
+		ID:          d.GetId(),
+		MACAddress:  d.GetMacAddress(),
+		PortID:      d.GetPortId(),
+		State:       stateName(d.GetState()),
+		StateReason: d.GetStateReason(),
+		CurrentVLAN: uint16(d.GetCurrentVlan()),
+		CreatedAt:   timeOf(d.GetCreatedAt()),
+	}, nil
 }
 
 // GetDevice runs `platformctl pxe get <device-id>`.
@@ -237,10 +235,13 @@ func (c *CLIAdapter) GetDevice(ctx context.Context, deviceID string) (*GetDevice
 	return deviceResult(reply.GetDevice()), nil
 }
 
-// GetDeviceByMAC is refused: platformctl pxe has no such verb; it
-// stays API-only (docs/provisioning/architecture.md).
-func (c *CLIAdapter) GetDeviceByMAC(_ context.Context, _ string) (*GetDeviceResult, error) {
-	return nil, ErrCLIPXENotImplemented{Method: "GetDeviceByMAC"}
+// GetDeviceByMAC runs `platformctl pxe get-by-mac <mac>`.
+func (c *CLIAdapter) GetDeviceByMAC(ctx context.Context, macAddress string) (*GetDeviceResult, error) {
+	var reply platformv1.GetPXEDeviceByMACResponse
+	if err := c.runJSON(ctx, &reply, "get-by-mac", macAddress); err != nil {
+		return nil, err
+	}
+	return deviceResult(reply.GetDevice()), nil
 }
 
 // ListDevices runs `platformctl pxe list` with the options as flags; a zero
@@ -281,26 +282,54 @@ func (c *CLIAdapter) ListDevices(ctx context.Context, opts ListDevicesOptions) (
 	return result, nil
 }
 
-// RemoveDevice is refused: platformctl pxe has no such verb; it
-// stays API-only (docs/provisioning/architecture.md).
-func (c *CLIAdapter) RemoveDevice(_ context.Context, _ string) (*RemoveDeviceResult, error) {
-	return nil, ErrCLIPXENotImplemented{Method: "RemoveDevice"}
+// RemoveDevice runs `platformctl pxe remove <device-id>`. The CLI exits
+// non-zero on a failed call, so a reply is a removal unless its status
+// says otherwise.
+func (c *CLIAdapter) RemoveDevice(ctx context.Context, deviceID string) (*RemoveDeviceResult, error) {
+	var reply platformv1.RemovePXEDeviceResponse
+	if err := c.runJSON(ctx, &reply, "remove", deviceID); err != nil {
+		return nil, err
+	}
+	status := reply.GetStatus()
+	return &RemoveDeviceResult{ID: deviceID, Removed: status == nil || status.GetSuccess()}, nil
 }
 
 // =============================================================================
 // State Management Commands
 // =============================================================================
 
-// UpdateDeviceState is refused: platformctl pxe has no such verb; it
-// stays API-only (docs/provisioning/architecture.md).
-func (c *CLIAdapter) UpdateDeviceState(_ context.Context, _ UpdateStateOptions) (*UpdateStateResult, error) {
-	return nil, ErrCLIPXENotImplemented{Method: "UpdateDeviceState"}
+// UpdateDeviceState runs `platformctl pxe set-state <device-id> --state
+// <state> --reason <reason>`. The reply carries only the device after the
+// change, so FromState is left empty.
+func (c *CLIAdapter) UpdateDeviceState(ctx context.Context, opts UpdateStateOptions) (*UpdateStateResult, error) {
+	var reply platformv1.UpdatePXEStateResponse
+	if err := c.runJSON(ctx, &reply, "set-state", opts.DeviceID,
+		"--state", opts.State, "--reason", opts.Reason); err != nil {
+		return nil, err
+	}
+	d := reply.GetDevice()
+	return &UpdateStateResult{
+		ID:        d.GetId(),
+		ToState:   stateName(d.GetState()),
+		Reason:    d.GetStateReason(),
+		UpdatedAt: timeOf(d.GetUpdatedAt()),
+	}, nil
 }
 
-// SetDeviceEnrolled is refused: platformctl pxe has no such verb; it
-// stays API-only (docs/provisioning/architecture.md).
-func (c *CLIAdapter) SetDeviceEnrolled(_ context.Context, _, _ string) (*SetEnrolledResult, error) {
-	return nil, ErrCLIPXENotImplemented{Method: "SetDeviceEnrolled"}
+// SetDeviceEnrolled runs `platformctl pxe set-enrolled <device-id>
+// --certificate-serial <serial>`.
+func (c *CLIAdapter) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial string) (*SetEnrolledResult, error) {
+	var reply platformv1.SetPXEDeviceEnrolledResponse
+	if err := c.runJSON(ctx, &reply, "set-enrolled", deviceID, "--certificate-serial", certSerial); err != nil {
+		return nil, err
+	}
+	d := reply.GetDevice()
+	return &SetEnrolledResult{
+		ID:                d.GetId(),
+		State:             stateName(d.GetState()),
+		CertificateSerial: d.GetCertificateSerial(),
+		UpdatedAt:         timeOf(d.GetUpdatedAt()),
+	}, nil
 }
 
 // AuthorizeDevice runs `platformctl pxe authorize <device-id> --target-vlan`.
@@ -380,10 +409,21 @@ func (c *CLIAdapter) GetEvents(ctx context.Context, deviceID string) (*GetEvents
 // Service Status Commands
 // =============================================================================
 
-// GetStatus is refused: platformctl pxe has no such verb; it
-// stays API-only (docs/provisioning/architecture.md).
-func (c *CLIAdapter) GetStatus(_ context.Context) (*GetStatusResult, error) {
-	return nil, ErrCLIPXENotImplemented{Method: "GetStatus"}
+// GetStatus runs `platformctl pxe status`.
+func (c *CLIAdapter) GetStatus(ctx context.Context) (*GetStatusResult, error) {
+	var reply platformv1.GetPXEStatusResponse
+	if err := c.runJSON(ctx, &reply, "status"); err != nil {
+		return nil, err
+	}
+	s := reply.GetStatus()
+	return &GetStatusResult{
+		Running:          s.GetRunning(),
+		DeviceCount:      int(s.GetDeviceCount()),
+		StartTime:        timeOf(s.GetStartTime()),
+		IPXEServerAddr:   s.GetIpxeServerAddr(),
+		QuarantineVLAN:   uint16(s.GetQuarantineVlan()),
+		ProvisioningVLAN: uint16(s.GetProvisioningVlan()),
+	}, nil
 }
 
 // Ensure CLIAdapter implements PXECommands interface.

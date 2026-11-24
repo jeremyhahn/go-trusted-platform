@@ -220,6 +220,31 @@ type DaemonConfig struct {
 
 	// BootEntries are the iPXE boot menu entries.
 	BootEntries []ipxe.BootEntry `yaml:"boot-entries,omitempty" json:"boot-entries,omitempty" mapstructure:"boot-entries"`
+
+	// ACMEServers are the ACME server addresses a provisioning device may
+	// reach on TCP 443. Empty means the boot server addresses.
+	ACMEServers []string `yaml:"acme-servers,omitempty" json:"acme-servers,omitempty" mapstructure:"acme-servers"`
+
+	// DNSServers are the DNS resolver addresses a provisioning device may
+	// reach on port 53. Empty keeps provisioning DNS closed.
+	DNSServers []string `yaml:"dns-servers,omitempty" json:"dns-servers,omitempty" mapstructure:"dns-servers"`
+}
+
+// parseServerIPs parses a pxe: section address list, naming the key in the
+// error for the first entry that is not an IP address.
+func parseServerIPs(field string, values []string) ([]net.IP, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	ips := make([]net.IP, 0, len(values))
+	for _, v := range values {
+		ip := net.ParseIP(v)
+		if ip == nil {
+			return nil, ErrInvalidConfiguration{Field: field, Reason: "not an IP address: " + v}
+		}
+		ips = append(ips, ip)
+	}
+	return ips, nil
 }
 
 // Webhook returns whether the install-completion webhook is served and the
@@ -272,6 +297,9 @@ func (d *DaemonConfig) ToServiceConfig(plan *netplan.Plan) (*ServiceConfig, erro
 		if d.HTTPPort < 0 || d.HTTPPort > 65535 {
 			return nil, &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: fmt.Sprintf("http-port must be between 1 and 65535, got %d", d.HTTPPort)}}
 		}
+		if d.HTTPPort > 65534 {
+			return nil, &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "http-port must be between 1 and 65534: the device-script server listens on http-port+1"}}
+		}
 		cfg.IPXEConfig.HTTPPort = d.HTTPPort
 	}
 	if d.LocalFilesDir != "" {
@@ -288,6 +316,12 @@ func (d *DaemonConfig) ToServiceConfig(plan *netplan.Plan) (*ServiceConfig, erro
 	}
 	if len(d.BootEntries) > 0 {
 		cfg.IPXEConfig.BootEntries = d.BootEntries
+	}
+	if cfg.ACMEServerIPs, err = parseServerIPs("pxe.acme-servers", d.ACMEServers); err != nil {
+		return nil, err
+	}
+	if cfg.DNSServerIPs, err = parseServerIPs("pxe.dns-servers", d.DNSServers); err != nil {
+		return nil, err
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err

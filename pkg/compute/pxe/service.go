@@ -60,7 +60,10 @@ type Service interface {
 	UpdateDeviceStateForIDevID(ctx context.Context, deviceID, fingerprint string, state ProvisioningState, reason string) error
 	SetDeviceEnrolled(ctx context.Context, deviceID, certSerial string) error
 	// RecordIDevIDFingerprint stores the device's IDevID fingerprint at
-	// enrolment, before install completion (ruling 673).
+	// enrolment, before install completion (ruling 673). A re-enrolment
+	// before install completion replaces the recorded fingerprint; once the
+	// install-complete webhook has presented it, the fingerprint is binding
+	// and a later enrolment does not change it (owner ruling 1234).
 	RecordIDevIDFingerprint(ctx context.Context, deviceID, fingerprint string) error
 	AuthorizeDevice(ctx context.Context, deviceID string, targetVLAN uint16) error
 	QuarantineDevice(ctx context.Context, deviceID string, reason string) error

@@ -40,8 +40,71 @@ type fakePXEClient struct {
 	retryReq      *platformv1.RetryPXEDeviceRequest
 	eventsReq     *platformv1.GetPXEEventsRequest
 	eventsResp    *platformv1.GetPXEEventsResponse
+	registerReq   *platformv1.RegisterPXEDeviceRequest
+	removeReq     *platformv1.RemovePXEDeviceRequest
+	getByMACReq   *platformv1.GetPXEDeviceByMACRequest
+	setStateReq   *platformv1.UpdatePXEStateRequest
+	enrolledReq   *platformv1.SetPXEDeviceEnrolledRequest
+	statusResp    *platformv1.GetPXEStatusResponse
+	startCalls    int
+	stopCalls     int
 	err           error
 	calls         int
+}
+
+func (f *fakePXEClient) GetStatus(_ context.Context, _ *platformv1.GetPXEStatusRequest, _ ...grpc.CallOption) (*platformv1.GetPXEStatusResponse, error) {
+	f.calls++
+	return f.statusResp, f.err
+}
+
+func (f *fakePXEClient) StartService(_ context.Context, _ *platformv1.StartPXEServiceRequest, _ ...grpc.CallOption) (*platformv1.StartPXEServiceResponse, error) {
+	f.calls++
+	f.startCalls++
+	return &platformv1.StartPXEServiceResponse{Status: &platformv1.Status{Success: true, Message: "started"}}, f.err
+}
+
+func (f *fakePXEClient) StopService(_ context.Context, _ *platformv1.StopPXEServiceRequest, _ ...grpc.CallOption) (*platformv1.StopPXEServiceResponse, error) {
+	f.calls++
+	f.stopCalls++
+	return &platformv1.StopPXEServiceResponse{Status: &platformv1.Status{Success: true, Message: "stopped"}}, f.err
+}
+
+func (f *fakePXEClient) UpdateState(_ context.Context, in *platformv1.UpdatePXEStateRequest, _ ...grpc.CallOption) (*platformv1.UpdatePXEStateResponse, error) {
+	f.calls++
+	f.setStateReq = in
+	return &platformv1.UpdatePXEStateResponse{Device: &platformv1.PXEDeviceInfo{
+		Id: in.GetDeviceId(), State: in.GetState(), StateReason: in.GetReason(),
+	}}, f.err
+}
+
+func (f *fakePXEClient) SetDeviceEnrolled(_ context.Context, in *platformv1.SetPXEDeviceEnrolledRequest, _ ...grpc.CallOption) (*platformv1.SetPXEDeviceEnrolledResponse, error) {
+	f.calls++
+	f.enrolledReq = in
+	return &platformv1.SetPXEDeviceEnrolledResponse{Device: &platformv1.PXEDeviceInfo{
+		Id: in.GetDeviceId(), CertificateSerial: in.GetCertificateSerial(),
+	}}, f.err
+}
+
+func (f *fakePXEClient) RegisterDevice(_ context.Context, in *platformv1.RegisterPXEDeviceRequest, _ ...grpc.CallOption) (*platformv1.RegisterPXEDeviceResponse, error) {
+	f.calls++
+	f.registerReq = in
+	return &platformv1.RegisterPXEDeviceResponse{Device: &platformv1.PXEDeviceInfo{
+		Id: "dev-1", MacAddress: in.GetMacAddress(), PortId: in.GetPortId(),
+	}}, f.err
+}
+
+func (f *fakePXEClient) RemoveDevice(_ context.Context, in *platformv1.RemovePXEDeviceRequest, _ ...grpc.CallOption) (*platformv1.RemovePXEDeviceResponse, error) {
+	f.calls++
+	f.removeReq = in
+	return &platformv1.RemovePXEDeviceResponse{}, f.err
+}
+
+func (f *fakePXEClient) GetDeviceByMAC(_ context.Context, in *platformv1.GetPXEDeviceByMACRequest, _ ...grpc.CallOption) (*platformv1.GetPXEDeviceByMACResponse, error) {
+	f.calls++
+	f.getByMACReq = in
+	return &platformv1.GetPXEDeviceByMACResponse{Device: &platformv1.PXEDeviceInfo{
+		Id: "dev-1", MacAddress: in.GetMacAddress(),
+	}}, f.err
 }
 
 func (f *fakePXEClient) ListDevices(_ context.Context, in *platformv1.ListPXEDevicesRequest, _ ...grpc.CallOption) (*platformv1.ListPXEDevicesResponse, error) {
