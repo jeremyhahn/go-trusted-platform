@@ -686,6 +686,91 @@ func TestListUsers_WithPagination(t *testing.T) {
 	assert.Equal(t, uint32(3), reply.GetPagination().GetPage())
 }
 
+// The embedded IAM transport (go-quicbaas sdk v0.12.0-alpha) returns the
+// users but no Pagination; the list must report the users the page carries.
+func TestListUsers_EmbeddedIAMWithoutCountReportsTheReturnedUsers(t *testing.T) {
+	t.Parallel()
+	iamClient := &mockIAMClient{
+		listUsersFn: func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
+			return &iamsdk.ListUsersResponse{
+				Users: []iamsdk.User{
+					{ID: "user-1", TenantID: tenantID, Email: "admin@example.com"},
+				},
+			}, nil
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants/tenant-1/users", nil, map[string]string{"tenant": "tenant-1"})
+	rec := httptest.NewRecorder()
+
+	handlers.ListUsers(rec, req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+	reply := &platformv1.ListIAMUsersResponse{}
+	decodeProtoReply(t, writer, reply)
+	assert.Len(t, reply.GetUsers(), 1)
+	assert.Equal(t, int64(1), reply.GetTotal())
+	assert.Equal(t, uint64(1), reply.GetPagination().GetTotalItems())
+}
+
+// A total IAM reports is the answer, even when it exceeds the page.
+func TestListUsers_ReportedTotalWins(t *testing.T) {
+	t.Parallel()
+	iamClient := &mockIAMClient{
+		listUsersFn: func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
+			return &iamsdk.ListUsersResponse{
+				Users: []iamsdk.User{
+					{ID: "user-1", TenantID: tenantID, Email: "user1@example.com"},
+					{ID: "user-2", TenantID: tenantID, Email: "user2@example.com"},
+				},
+				Pagination: iamsdk.PaginationInfo{TotalCount: 7},
+			}, nil
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/iam/tenants/tenant-1/users?limit=2", nil)
+	req = mux.SetURLVars(req, map[string]string{"tenant": "tenant-1"})
+	rec := httptest.NewRecorder()
+
+	handlers.ListUsers(rec, req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+	reply := &platformv1.ListIAMUsersResponse{}
+	decodeProtoReply(t, writer, reply)
+	assert.Len(t, reply.GetUsers(), 2)
+	assert.Equal(t, int64(7), reply.GetTotal())
+	assert.Equal(t, uint64(7), reply.GetPagination().GetTotalItems())
+	assert.Equal(t, uint32(4), reply.GetPagination().GetTotalPages())
+}
+
+// An empty page with no count is a total of zero.
+func TestListUsers_EmptyPageWithoutCountIsZero(t *testing.T) {
+	t.Parallel()
+	iamClient := &mockIAMClient{
+		listUsersFn: func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
+			return &iamsdk.ListUsersResponse{}, nil
+		},
+	}
+
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants/tenant-1/users", nil, map[string]string{"tenant": "tenant-1"})
+	rec := httptest.NewRecorder()
+
+	handlers.ListUsers(rec, req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+	reply := &platformv1.ListIAMUsersResponse{}
+	decodeProtoReply(t, writer, reply)
+	assert.Empty(t, reply.GetUsers())
+	assert.Equal(t, int64(0), reply.GetTotal())
+	assert.Equal(t, uint64(0), reply.GetPagination().GetTotalItems())
+}
+
 func TestListUsers_MissingTenantID(t *testing.T) {
 	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
