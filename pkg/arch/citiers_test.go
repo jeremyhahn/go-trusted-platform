@@ -747,6 +747,35 @@ func TestCIGateRequiresTheHostedJobs(t *testing.T) {
 	}
 }
 
+// TestCIIntegrationRunsOnEveryCodePullRequest pins the integration jobs to
+// the docs tier: they run on every pull request but a docs-only one, and the
+// ci:full label is not their switch.
+func TestCIIntegrationRunsOnEveryCodePullRequest(t *testing.T) {
+	wf := loadCIWorkflow(t, repoRoot(t), ciWorkflowFile)
+	jobs := make(map[string]ciJob, len(wf.Jobs))
+	for _, j := range wf.Jobs {
+		jobs[j.ID] = j
+	}
+	gate, ok := jobs[ciGateJobID]
+	if !ok {
+		t.Fatal("the workflow has no ci-gate job")
+	}
+	checked, _ := gateFindings(wf, gate, jobs)
+	for _, id := range []string{"integration-image", "integration"} {
+		j, ok := jobs[id]
+		if !ok {
+			t.Errorf("%s: the workflow has no such job", id)
+			continue
+		}
+		if got := tierByIf[j.If]; got != tierDocs {
+			t.Errorf("%s: its if: %q puts it in tier %q, want %q", id, j.If, got, tierDocs)
+		}
+		if c, ok := checked[id]; !ok || c.Tier != tierDocs {
+			t.Errorf("%s: ci-gate has no %s check line for it", id, tierDocs)
+		}
+	}
+}
+
 // TestPullRequestWorkflowsCancelSupersededRuns holds every workflow a
 // pull_request triggers to the ref-keyed, cancelling concurrency block.
 func TestPullRequestWorkflowsCancelSupersededRuns(t *testing.T) {

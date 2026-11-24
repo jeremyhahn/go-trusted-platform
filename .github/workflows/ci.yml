@@ -1336,8 +1336,9 @@ jobs:
           make test-race SHARD=${{ matrix.shard }} SHARDS=4
 
   # ==========================================================================
-  # The full tier. These gate every push to main, the schedule, and a PR
-  # labelled `ci:full`.
+  # The full tier: web and web-e2e gate every push to main, the schedule, and
+  # a PR labelled `ci:full`. integration-image and integration below run on
+  # every event but a docs-only PR (the docs tier).
   # ==========================================================================
 
   # CUSTOMIZE (web console): `make web-deps` installs both lockfiles and builds
@@ -1458,7 +1459,7 @@ jobs:
   integration-image:
     name: Integration image
     runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}   # v1.48
-    if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
+    if: ${{ needs.preflight.outputs.docs_only != 'true' && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     # As the legs had: nothing is built for a run whose image job failed, so
     # no image is left for legs that never run. v1.29.3: the guard
     # (preflight, v1.34) as the template has it, as on every bigdisk job.
@@ -1714,9 +1715,9 @@ jobs:
   integration:
     name: Integration [build tag integration]
     runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}   # v1.48
-    # v1.26: never on a draft PR, ci:full or not. v1.29.3: on a schedule run,
+    # Every event but a docs-only or draft PR. v1.29.3: on a schedule run,
     # only on the schedule guard's `run`.
-    if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
+    if: ${{ needs.preflight.outputs.docs_only != 'true' && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     # CUSTOMIZE (isolation, not staging): the privileged integration suite and
     # the image job's unit suite starve a shared runner when they
     # overlap. Neither consumes the other's output. `needs: image` holds
@@ -2519,8 +2520,8 @@ jobs:
           check docs race "$RESULT_RACE"
           check full web "$RESULT_WEB"
           check full web-e2e "$RESULT_WEB_E2E"
-          check full integration-image "$RESULT_INTEGRATION_IMAGE"
-          check full integration "$RESULT_INTEGRATION"
+          check docs integration-image "$RESULT_INTEGRATION_IMAGE"
+          check docs integration "$RESULT_INTEGRATION"
           check nightly soak "$RESULT_SOAK"
           check main fips "$RESULT_FIPS"
           check pr signatures "$RESULT_SIGNATURES"
