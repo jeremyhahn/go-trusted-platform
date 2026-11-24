@@ -150,7 +150,16 @@ export default function VPNPage() {
     isLoading: peersLoading,
     error: peersError,
     refetch: refetchPeers,
-  } = useApi(() => latest(tenantGen, () => vpn.listPeers(filters.tenant || undefined)), [filters.tenant], notConfiguredQuiet('Error loading VPN peers'));
+  } = useApi(
+    () =>
+      latest(tenantGen, async (): Promise<ApiResponse<{ peers?: VPNPeer[]; tenant?: string }>> => {
+        const tenant = filters.tenant;
+        const response = await vpn.listPeers(tenant || undefined);
+        return response.data !== undefined ? { ...response, data: { ...response.data, tenant } } : response;
+      }),
+    [filters.tenant],
+    notConfiguredQuiet('Error loading VPN peers')
+  );
 
   const {
     data: policiesData,
@@ -158,15 +167,22 @@ export default function VPNPage() {
     error: policiesError,
     refetch: refetchPolicies,
   } = useApi(
-    () => latest(policiesGen, () => vpn.listPosturePolicies(filters.tenant || undefined)),
+    () =>
+      latest(policiesGen, async (): Promise<ApiResponse<{ policies?: VPNPosturePolicy[]; tenant?: string }>> => {
+        const tenant = filters.tenant;
+        const response = await vpn.listPosturePolicies(tenant || undefined);
+        return response.data !== undefined ? { ...response, data: { ...response.data, tenant } } : response;
+      }),
     [filters.tenant],
     notConfiguredQuiet('Error loading posture policies')
   );
 
-  // Telemetry is shown only for the filter that answered (#2070).
+  // Telemetry is shown only for the filter that answered (#2070). Peers and
+  // posture policies, too, are shown only for the tenant filter that answered,
+  // so a pending tenant read never leaves the previous tenant's rows actionable.
   const gateways = !statusError && statusData?.gateway === filters.gateway ? (statusData?.gateways ?? []) : [];
-  const peers = peersData?.peers ?? [];
-  const policies = policiesData?.policies ?? [];
+  const peers = peersData?.tenant === filters.tenant ? (peersData?.peers ?? []) : [];
+  const policies = policiesData?.tenant === filters.tenant ? (policiesData?.policies ?? []) : [];
   const isLoading = statusLoading || peersLoading || policiesLoading;
   const vpnUnavailable =
     isServiceNotConfigured(statusError) ||
