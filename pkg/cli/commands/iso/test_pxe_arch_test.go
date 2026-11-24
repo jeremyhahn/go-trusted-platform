@@ -246,24 +246,24 @@ func TestPublishBootFiles(t *testing.T) {
 	files := t.TempDir()
 
 	t.Run("local files are copied and served by URL", func(t *testing.T) {
-		entry, err := publishBootFiles(ipxe.BootEntry{Kernel: "file://" + kernel, Initrd: "file://" + initrd}, files, "http://10.99.99.1:8080/files")
+		entry, err := publishBootFiles(ipxe.BootEntry{Kernel: "file://" + kernel, Initrd: "file://" + initrd}, files, "http://192.0.2.1:8080/files")
 		require.NoError(t, err)
-		assert.Equal(t, "http://10.99.99.1:8080/files/vmlinuz-lts", entry.Kernel)
-		assert.Equal(t, "http://10.99.99.1:8080/files/initramfs-lts", entry.Initrd)
+		assert.Equal(t, "http://192.0.2.1:8080/files/vmlinuz-lts", entry.Kernel)
+		assert.Equal(t, "http://192.0.2.1:8080/files/initramfs-lts", entry.Initrd)
 		data, err := os.ReadFile(filepath.Join(files, "initramfs-lts"))
 		require.NoError(t, err)
 		assert.Equal(t, "initramfs-lts", string(data))
 	})
 
 	t.Run("URLs pass through untouched", func(t *testing.T) {
-		in := ipxe.BootEntry{Kernel: "https://mirror/vmlinuz", Initrd: "http://10.99.99.1:8080/files/initramfs"}
-		entry, err := publishBootFiles(in, files, "http://10.99.99.1:8080/files")
+		in := ipxe.BootEntry{Kernel: "https://mirror/vmlinuz", Initrd: "http://192.0.2.1:8080/files/initramfs"}
+		entry, err := publishBootFiles(in, files, "http://192.0.2.1:8080/files")
 		require.NoError(t, err)
 		assert.Equal(t, in, entry)
 	})
 
 	t.Run("a missing local file is reported", func(t *testing.T) {
-		_, err := publishBootFiles(ipxe.BootEntry{Kernel: "file://" + filepath.Join(src, "absent")}, files, "http://10.99.99.1:8080/files")
+		_, err := publishBootFiles(ipxe.BootEntry{Kernel: "file://" + filepath.Join(src, "absent")}, files, "http://192.0.2.1:8080/files")
 		require.Error(t, err)
 		assert.ErrorIs(t, err, os.ErrNotExist)
 	})

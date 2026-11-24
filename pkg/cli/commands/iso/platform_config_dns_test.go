@@ -24,23 +24,23 @@ func TestExtractDNSServerFromConfig_Priority(t *testing.T) {
 dns:
   resolver:
     servers:
-      - address: "10.4.200.1"
+      - address: "203.0.113.1"
         port: 8053
 trust:
   bootstrap:
     dane:
-      dns-server: "10.0.0.53:53"
+      dns-server: "198.51.100.53:53"
 `)
-	assert.Equal(t, "10.4.200.1:8053", extractDNSServerFromConfig(both),
+	assert.Equal(t, "203.0.113.1:8053", extractDNSServerFromConfig(both),
 		"dns.resolver is the platform-wide default and wins")
 
 	bootstrapOnly := []byte(`
 trust:
   bootstrap:
     dane:
-      dns-server: "10.0.0.53:53"
+      dns-server: "198.51.100.53:53"
 `)
-	assert.Equal(t, "10.0.0.53:53", extractDNSServerFromConfig(bootstrapOnly),
+	assert.Equal(t, "198.51.100.53:53", extractDNSServerFromConfig(bootstrapOnly),
 		"the bootstrap class's DANE server is the fallback")
 }
 
@@ -54,7 +54,7 @@ func TestExtractDNSServerFromConfig_NothingUsable(t *testing.T) {
 trust:
   default:
     dane:
-      dns-server: "10.0.0.53:53"
+      dns-server: "198.51.100.53:53"
 `)
 	assert.Empty(t, extractDNSServerFromConfig(retired), "trust.default is retired and is not read")
 
