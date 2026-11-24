@@ -43,6 +43,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 	restntp "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ntp"
 	restoverlay "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/overlay"
+	restproxy "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/proxy"
 	restpxe "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/pxe"
 	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/sdn"
@@ -72,6 +73,8 @@ type Router struct {
 	// stubRoutes are the placeholder routes quicbaasStubRoutes adds; the
 	// capabilities listing reports them blocked on integration.
 	stubRoutes map[*mux.Route]struct{}
+	// rootRoutes are the OCI Distribution routes RegisterRootRoutes mounts on the root router; the capabilities listing reports them too (#2063).
+	rootRoutes map[*mux.Route]struct{}
 	router.WebServiceRouter
 }
 
@@ -131,8 +134,12 @@ func (v1Router *Router) RegisterRootRoutes(root *mux.Router) error {
 		Read:  func(next http.Handler) http.Handler { return gate.Wrap(next, operator) },
 		Write: func(next http.Handler) http.Handler { return gate.Wrap(next, operator) },
 	}
-	return restregistry.RegisterOCIDistRoutes(root, v1Router.logger, backend, gates,
-		restregistry.DefaultOCIDistLimits())
+	var err error
+	v1Router.rootRoutes = recordNewRoutes(root, func() {
+		err = restregistry.RegisterOCIDistRoutes(root, v1Router.logger, backend, gates,
+			restregistry.DefaultOCIDistLimits())
+	})
+	return err
 }
 
 // RegisterEdgeRoutes mounts on root the one API group a public edge
@@ -218,6 +225,7 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.overlayRoutes()
 	v1Router.ntpRoutes()
 	v1Router.vpnRoutes()
+	v1Router.proxyRoutes()
 	v1Router.appServiceRoutes()
 	v1Router.pxeRoutes()
 	v1Router.sdnRoutes()
@@ -242,7 +250,8 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	// the table per request, so it sees every route registered above.
 	// Any authenticated caller may read it.
 	registerCapabilitiesEndpoint(v1Router.router, v1Router.serviceRegistry,
-		v1Router.stubRoutes, v1Router.responseWriter, v1Router.authenticatedOnly())
+		v1Router.stubRoutes, v1Router.responseWriter, v1Router.authenticatedOnly(),
+		func() map[*mux.Route]struct{} { return v1Router.rootRoutes })
 }
 
 // quicbaasStubRoutes registers placeholder GET handlers for QuicBaaS
@@ -827,17 +836,26 @@ func (v1Router *Router) invitationRoutes() {
 
 func (v1Router *Router) overlayRoutes() {
 	server := v1Router.restHandlerRegistry.OverlayServiceServer()
+	// A daemon without an overlay controller still builds the service;
+	// its routes go dark (503, not-configured) rather than listing live.
+	var svc any = server
 	if server == nil {
-		v1Router.logger.Debug("Overlay service server is nil - overlay routes not registered")
-		return
+		svc = nil
+	} else if c, ok := server.(interface{ Configured() bool }); ok && !c.Configured() {
+		svc = nil
 	}
-	r := restoverlay.NewOverlayRouter(
-		v1Router.logger,
-		server,
-		v1Router.responseWriter)
-	// VXLAN overlay: VNI create and delete, VTEP and tunnel inventory.
-	// A VNI is a tenant's layer-2 isolation boundary.
-	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+	v1Router.serviceRegistry.requireService(
+		v1Router.router, "overlay", "/overlay", svc,
+		func() {
+			r := restoverlay.NewOverlayRouter(
+				v1Router.logger,
+				server,
+				v1Router.responseWriter)
+			// VXLAN overlay: VNI create and delete, VTEP and tunnel inventory.
+			// A VNI is a tenant's layer-2 isolation boundary.
+			r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+		},
+	)
 }
 
 func (v1Router *Router) ntpRoutes() {
@@ -874,6 +892,36 @@ func (v1Router *Router) vpnRoutes() {
 	// management network, and a posture policy decides which of them stay
 	// there: operator work behind the admin gate, then vpn:read, vpn:write
 	// or vpn:admin per route, as on gRPC, QUIC and MCP.
+	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+}
+
+// proxyRoutes mounts the ProxyService routes on /api/v1/proxy (#2061), the
+// surface the web SDK's client.proxy calls.
+func (v1Router *Router) proxyRoutes() {
+	server := v1Router.restHandlerRegistry.ProxyServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("Proxy service server is nil - proxy routes not registered")
+		return
+	}
+	_, guard, err := v1Router.authorization()
+	if err != nil {
+		v1Router.logger.Error(err,
+			"Proxy routes not registered: the RBAC guard could not be built")
+		return
+	}
+	r := restproxy.NewRouter(
+		v1Router.logger,
+		server,
+		v1Router.responseWriter)
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		r.SetScopeAuthorizer(scoped)
+	}
+	// The reverse-proxy routes, pools and zone matrix decide what reaches
+	// which backend and are one platform-wide store with no tenant filter:
+	// operator work behind the admin gate, then the system tenant, then
+	// proxy:read, proxy:write or proxy:delete per route, as on gRPC, QUIC
+	// and MCP.
+	r.SetSystemTenantGuard(guard.RequireTenant(v1Router.restHandlerRegistry.TenantID()))
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
