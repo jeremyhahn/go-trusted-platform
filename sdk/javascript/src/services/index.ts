@@ -34,6 +34,7 @@ export type {
   CeremonyState,
   CeremonyAuthenticatorType,
   CeremonyOfficerRole,
+  CeremonyInitOfficer,
   CeremonyInitRequest,
   CeremonyInitResponse,
   CeremonyStatusResponse,

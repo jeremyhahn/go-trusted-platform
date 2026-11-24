@@ -35,6 +35,12 @@ export type CeremonyOfficerRole =
   | 'CEREMONY_OFFICER_ROLE_ADMIN'
   | 'CEREMONY_OFFICER_ROLE_USER';
 
+/** One Security Officer of an M-of-N init: the ceremony signs csrPem into the officer's custodian certificate. */
+export interface CeremonyInitOfficer {
+  username: string;
+  csrPem: string;
+}
+
 /** Seeds a fresh ceremony. */
 export interface CeremonyInitRequest {
   soPin?: string;
@@ -44,6 +50,8 @@ export interface CeremonyInitRequest {
   hostname?: string;
   sans?: string[];
   credentialSealStrategy?: string;
+  /** Officers of an M-of-N init, one per share; omit for single-admin. */
+  officers?: CeremonyInitOfficer[];
 }
 
 /**
