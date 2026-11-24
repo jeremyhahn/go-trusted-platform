@@ -4,7 +4,7 @@
  * Provides operations for VM and container lifecycle management.
  */
 
-import type { ApiClient } from '../client/api-client.js';
+import type { ApiClient, RequestOptions } from '../client/api-client.js';
 import type { Transport } from '../transport/transport.js';
 import type { ApiResponse, QueryParams } from '../types/api.js';
 import { appendQueryParams } from '../types/api.js';
@@ -371,16 +371,20 @@ export class ComputeService extends BaseService {
    * Migrate VM to another host
    *
    * @param request - Migration request
+   * @param options - Request options; a migration copies the guest's memory
+   *   and disks, so callers pass a long timeout and turn retry off (a retry
+   *   would start a second migration)
    * @returns Migration result
    */
-  async migrateVM(request: MigrateVMRequest): Promise<ApiResponse<MigrateVMResponse>> {
+  async migrateVM(request: MigrateVMRequest, options?: RequestOptions): Promise<ApiResponse<MigrateVMResponse>> {
     return this.client.post<MigrateVMResponse>(
       this.buildUrl(`/vms/${this.encodePathSegment(request.vmId)}/migrate`),
       {
         destinationHost: request.destinationHost,
         liveMigration: request.liveMigration,
         bandwidthLimitMbps: request.bandwidthLimitMbps,
-      }
+      },
+      options
     );
   }
 
