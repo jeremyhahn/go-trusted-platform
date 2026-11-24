@@ -1284,13 +1284,17 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 			// removed. OFPFC_ADD replaced any prior flow with the same
 			// table, priority and match, so removing them can remove a
 			// prior rule too: remove them, then re-add the prior enabled
-			// rules.
-			failed, rollbackErr := s.removePolicyFlows(ctx, client, flows[:attempted])
+			// rules. The rollback runs on a context detached from the
+			// request: a canceled or timed-out request must still restore
+			// every prior flow.
+			rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), policyRollbackTimeout)
+			defer cancel()
+			failed, rollbackErr := s.removePolicyFlows(rbCtx, client, flows[:attempted])
 			if prior != nil && prior.enabled {
 				// The prior rules were accepted when stored, so every one
 				// encodes; one that did not would add no flow here.
 				priorFlows, _ := s.policyFlows(prior.bridgeNames, prior.rules, prior.priority)
-				if _, reErr := s.installPolicyFlows(ctx, client, priorFlows); reErr != nil {
+				if _, reErr := s.installPolicyFlows(rbCtx, client, priorFlows); reErr != nil {
 					rollbackErr = errors.Join(rollbackErr, reErr)
 				}
 			}
@@ -1738,6 +1742,12 @@ func (s *SDNService) storePolicy(policyID, policyType string, config *platformv1
 	}
 	return s.policyResourceToPb(policyID, s.policies[policyID])
 }
+
+// policyRollbackTimeout bounds the ApplyPolicy rollback. The rollback runs
+// on a context detached from the request, so it finishes when the request
+// is canceled or timed out; the bound keeps a dead switch from holding
+// policyMu forever.
+const policyRollbackTimeout = 30 * time.Second
 
 // installPolicyFlows adds the flows in order and stops at the first failure.
 // It returns how many flows it attempted, the failing one included: an
