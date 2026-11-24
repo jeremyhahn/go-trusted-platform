@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ok, refused, stubControlPlane, withControlPlane, type Answer } from '@/test/control-plane-fetch';
@@ -78,6 +78,21 @@ describe('VMDisksCard', () => {
 
     expect(screen.getByText('/var/lib/vms/web-1.qcow2')).toBeDefined();
     expect(screen.getByText('20 GB')).toBeDefined();
+  });
+
+  it('offers no Detach for the boot disk', () => {
+    stubControlPlane({ 'GET /api/v1/capabilities': caps() });
+    const withBoot: VMDisk[] = [
+      { id: 'hd0', path: '/var/lib/vms/web-1-boot.qcow2', sizeMB: 20480, type: 'disk', readonly: false, boot: true },
+      ...disks,
+    ];
+    render(withControlPlane(<VMDisksCard vmId="vm-1" disks={withBoot} onChanged={vi.fn()} />));
+
+    expect(screen.getByRole('spinbutton', { name: 'New size (GB) for hd0' })).toBeDefined();
+    expect(screen.getByRole('spinbutton', { name: 'New size (GB) for disk-1' })).toBeDefined();
+    expect(screen.getAllByRole('button', { name: 'Detach' })).toHaveLength(1);
+    const bootRow = screen.getByText('/var/lib/vms/web-1-boot.qcow2').closest('li');
+    expect(bootRow && within(bootRow).getByText('boot')).toBeTruthy();
   });
 
   it('attaches a disk through POST /compute/vms/{id}/disks', async () => {
