@@ -323,3 +323,79 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+// writePendingEditConfig writes a config file with daemon.socket_group
+// "original", loads it into the global Viper and applies an in-memory
+// (persist=false) edit of it to "pending".
+func writePendingEditConfig(t *testing.T) string {
+	t.Helper()
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("daemon:\n  socket_group: original\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	viper.SetConfigFile(cfgPath)
+	if err := viper.ReadInConfig(); err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if _, err := ApplySection(nil, "daemon", map[string]string{"socket_group": "pending"}, false); err != nil {
+		t.Fatalf("ApplySection(in-memory) error: %v", err)
+	}
+	return cfgPath
+}
+
+func TestApplySection_PersistKeepsEarlierInMemoryEdits(t *testing.T) {
+	viper.Reset()
+	defer viper.Reset()
+
+	cfgPath := writePendingEditConfig(t)
+
+	if _, err := ApplySection(nil, "logging", map[string]string{"level": "debug"}, true); err != nil {
+		t.Fatalf("ApplySection(persist) error: %v", err)
+	}
+
+	if got := viper.GetString("daemon.socket_group"); got != "pending" {
+		t.Fatalf("daemon.socket_group = %q after a persisted apply of another section, want the pending %q", got, "pending")
+	}
+	if got := viper.GetString("logging.level"); got != "debug" {
+		t.Fatalf("logging.level = %q, want %q", got, "debug")
+	}
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	var file struct {
+		Daemon  map[string]string `yaml:"daemon"`
+		Logging map[string]string `yaml:"logging"`
+	}
+	if err := yaml.Unmarshal(data, &file); err != nil {
+		t.Fatalf("parse persisted config: %v", err)
+	}
+	if got := file.Logging["level"]; got != "debug" {
+		t.Fatalf("file logging.level = %q, want %q: %s", got, "debug", data)
+	}
+	if got := file.Daemon["socket_group"]; got != "original" {
+		t.Fatalf("file daemon.socket_group = %q, want the file's own %q: %s", got, "original", data)
+	}
+}
+
+func TestApplySection_FailedPersistKeepsEarlierInMemoryEdits(t *testing.T) {
+	viper.Reset()
+	defer viper.Reset()
+
+	cfgPath := writePendingEditConfig(t)
+	if err := os.Remove(cfgPath); err != nil {
+		t.Fatalf("remove config: %v", err)
+	}
+
+	if _, err := ApplySection(nil, "logging", map[string]string{"level": "debug"}, true); err == nil {
+		t.Fatal("ApplySection(persist) succeeded with the config file gone, want an error")
+	}
+
+	if got := viper.GetString("daemon.socket_group"); got != "pending" {
+		t.Fatalf("daemon.socket_group = %q after a failed persist, want the pending %q", got, "pending")
+	}
+	if viper.IsSet("logging.level") {
+		t.Fatalf("logging.level = %q after a failed persist, want it unset", viper.GetString("logging.level"))
+	}
+}
