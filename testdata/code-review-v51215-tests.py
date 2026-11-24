@@ -212,8 +212,10 @@ echo "EVENT=$event"
         check("Not read in full" not in body(""), "B2 ... and says nothing when every file was read")
 
         # ---- P ---------------------------------------------------------------
-        check("say so in one P1 finding" not in codex and "list it in `unread`, never as a finding" in codex,
+        check("say so in one P1 finding" not in codex and "list it in \"unread\", never as a finding" in codex,
               "P1 the large-head prompt lists unread files in `unread`, never as a finding")
+
+        check(not re.search(r"printf '[^']*`", codex), "P2 no backtick inside a single-quoted printf (shellcheck SC2016)")
 
     print(f"{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED'}")
     sys.exit(1 if FAILS else 0)
