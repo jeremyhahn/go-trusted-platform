@@ -663,6 +663,11 @@ func (s *BMCGRPCService) CreateUser(ctx context.Context, req *platformv1.BMCCrea
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	// An Enabled user with no password could activate the slot with its old
+	// or blank password state: refuse before the service is called.
+	if domainUser.Enabled && req.GetPassword() == "" {
+		return nil, status.Error(codes.InvalidArgument, bmc.ErrInvalidConfig{Field: "password", Reason: "an enabled user needs a password"}.Error())
+	}
 	if err := s.service.CreateUser(ctx, req.GetProfileId(), domainUser, req.GetPassword()); err != nil {
 		return nil, s.toGRPCError("create_user", err)
 	}
