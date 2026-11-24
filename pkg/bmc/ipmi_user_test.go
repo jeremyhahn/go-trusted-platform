@@ -323,12 +323,15 @@ func TestCreateUser_DisabledFlags(t *testing.T) {
 func TestCreateUser_HonorsExplicitChannel(t *testing.T) {
 	m := newMock()
 	um := newUM(m)
+	pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
+	defer pwd.Destroy()
 	if err := um.CreateUser(context.Background(), User{
 		Slot: 4, Username: "x", Enabled: true, Privilege: PrivilegeUser, Channel: 0x0E,
-	}, nil); err != nil {
+	}, pwd); err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	flags := m.calls[1].data[0]
+	// Calls: name, password, access, enable.
+	flags := m.calls[2].data[0]
 	if flags&0x0F != 0x0E {
 		t.Errorf("channel nibble = 0x%x, want 0x0E", flags&0x0F)
 	}

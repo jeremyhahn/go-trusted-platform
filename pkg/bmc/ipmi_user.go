@@ -206,6 +206,9 @@ func (m *ipmiUserManager) ListUsers(_ context.Context) ([]User, error) {
 // The sequence follows the IPMI-recommended order: Set User Name, then
 // Set User Password (set), then Set User Access. Most BMCs reject access
 // changes on a slot with no name, so name first is required.
+//
+// An Enabled user needs a password; a name-only entry (nil or empty
+// password) must be created with Enabled false.
 func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memguard.MemoryEnclave) error {
 	if err := validateSlot(u.Slot); err != nil {
 		return err
@@ -220,6 +223,12 @@ func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memgua
 	// leaves the slot untouched.
 	if password != nil && password.Size() > ipmiMaxPasswordLen {
 		return ErrInvalidConfig{Field: "password", Reason: "password exceeds 20 bytes"}
+	}
+	// IPMI keeps a slot's old password state (DeleteUser does not clear
+	// it), so enabling a slot with no password set could activate it with
+	// an old or blank one. Refuse before the first write.
+	if u.Enabled && (password == nil || password.Size() == 0) {
+		return ErrInvalidConfig{Field: "password", Reason: "an enabled user needs a password"}
 	}
 	if err := m.setUserName(u.Slot, u.Username); err != nil {
 		return err
