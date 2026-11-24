@@ -241,6 +241,21 @@ func (e ErrRoleListFailed) Unwrap() error {
 	return e.Err
 }
 
+// ErrWorkspaceUserListingIncomplete is returned when a workspace user is
+// looked up by listing the tenant's users, no listed user matched, and the
+// listing may have stopped short of the whole tenant (a full page came back
+// without a next page, or the reported total exceeds the users seen). The
+// caller must refuse rather than answer "no roles". Listed is the number of
+// users the listing returned.
+type ErrWorkspaceUserListingIncomplete struct {
+	TenantID string
+	Listed   int
+}
+
+func (e ErrWorkspaceUserListingIncomplete) Error() string {
+	return fmt.Sprintf("rest/iam: the user listing of tenant %s may be incomplete after %d users; the workspace user was not found in it", e.TenantID, e.Listed)
+}
+
 // ErrIAMClientMissing is returned when a user's roles are set without an IAM
 // client to read and change them through.
 type ErrIAMClientMissing struct{}
