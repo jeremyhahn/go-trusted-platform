@@ -116,5 +116,5 @@ func (r *FileResolver) Resolve(ctx context.Context, raw string) (*quicbaassecret
 		slog.Int("length", len(data)),
 	)
 
-	return quicbaassecret.NewSecretValue(raw, data, quicbaassecret.StrategyLiteral), nil
+	return quicbaassecret.NewSecretValue(raw, data, quicbaassecret.StrategyLiteral)
 }

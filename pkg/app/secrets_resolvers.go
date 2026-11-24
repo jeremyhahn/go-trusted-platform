@@ -159,7 +159,7 @@ func (r *DynamicSecretsResolver) Resolve(ctx context.Context, uri string) (*quic
 		slog.String("credential_id", resp.Credential.CredentialID),
 		slog.String("lease_id", resp.LeaseID))
 
-	return quicbaassecret.NewSecretValue(uri, data, quicbaassecret.StrategyLiteral), nil
+	return quicbaassecret.NewSecretValue(uri, data, quicbaassecret.StrategyLiteral)
 }
 
 // XKMSSecretsResolver resolves xkms:// URIs via the XKMS service.
@@ -277,7 +277,7 @@ func (r *XKMSSecretsResolver) resolveViaUnseal(ctx context.Context, uri, backend
 		slog.String("key_id", keyID),
 		slog.Int("length", len(resp.Plaintext)))
 
-	return quicbaassecret.NewSecretValue(uri, resp.Plaintext, quicbaassecret.StrategyLiteral), nil
+	return quicbaassecret.NewSecretValue(uri, resp.Plaintext, quicbaassecret.StrategyLiteral)
 }
 
 // resolveViaGetKey retrieves key information using the XKMS GetKey operation.
@@ -302,5 +302,5 @@ func (r *XKMSSecretsResolver) resolveViaGetKey(ctx context.Context, uri, backend
 		slog.String("key_id", keyID),
 		slog.Int("length", len(data)))
 
-	return quicbaassecret.NewSecretValue(uri, data, quicbaassecret.StrategyLiteral), nil
+	return quicbaassecret.NewSecretValue(uri, data, quicbaassecret.StrategyLiteral)
 }

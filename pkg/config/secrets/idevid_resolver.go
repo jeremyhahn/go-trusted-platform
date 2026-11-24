@@ -173,7 +173,7 @@ func (r *IDevIDResolver) Resolve(ctx context.Context, raw string) (*quicbaassecr
 		slog.Int("plaintext_len", len(plaintext)),
 	)
 
-	return quicbaassecret.NewSecretValue(raw, plaintext, quicbaassecret.StrategyLiteral), nil
+	return quicbaassecret.NewSecretValue(raw, plaintext, quicbaassecret.StrategyLiteral)
 }
 
 // decrypt performs the actual decryption using the crypto.Decrypter interface.

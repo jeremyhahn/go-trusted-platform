@@ -229,7 +229,7 @@ func (r *kmsResolver) Resolve(ctx context.Context, raw string) (*secret.SecretVa
 		return nil, err
 	}
 	defer Zeroize(material)
-	return secret.NewSecretValue(raw, material, secret.StrategyRemoteKMS), nil
+	return secret.NewSecretValue(raw, material, secret.StrategyRemoteKMS)
 }
 
 // reference is a parsed kms:// URI.
