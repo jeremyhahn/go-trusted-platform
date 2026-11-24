@@ -128,9 +128,9 @@ func (c *Client) Auth() quicbaas.AuthClient {
 	return c.sdk.Security().Auth()
 }
 
-// Seal returns the seal service client for seal/unseal operations.
-func (c *Client) Seal() quicbaas.SealClient {
-	return c.sdk.Security().Seal()
+// Seal returns the seal store client for seal/unseal operations.
+func (c *Client) Seal() (quicbaas.QRDBSealStoreClient, error) {
+	return c.SealStore()
 }
 
 // KMS returns the key management service client.
@@ -400,12 +400,12 @@ func (c *Client) Tenant() (quicbaas.QRDBTenantClient, error) {
 
 // Discovery returns the service-discovery registry: register, renew,
 // deregister, resolve and watch, built on QRDB leases, watches and KV.
-func (c *Client) Discovery() (*quicbaas.DiscoveryRegistry, error) {
-	discovery, err := c.sdk.Discovery()
-	if err != nil {
-		return nil, ErrServiceUnavailable{Service: "discovery", Cause: err}
+func (c *Client) Discovery() (quicbaas.RegistryClient, error) {
+	registry := c.sdk.Registry()
+	if registry == nil {
+		return nil, ErrServiceUnavailable{Service: "discovery", Cause: ErrNoRegistryClient}
 	}
-	return discovery, nil
+	return registry, nil
 }
 
 // DataStore returns a QRDB key-value store suitable for constructing DAOs.

@@ -89,3 +89,6 @@ func (e ErrServiceUnavailable) Error() string {
 func (e ErrServiceUnavailable) Unwrap() error {
 	return e.Cause
 }
+
+// ErrNoRegistryClient is the cause reported when the SDK client has no service registry client.
+var ErrNoRegistryClient = fmt.Errorf("quicbaas: no service registry client")

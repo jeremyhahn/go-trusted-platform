@@ -38,7 +38,7 @@ type mockSDKClient struct {
 	sdlcClient         quicbaas.SDLCClient
 
 	ragClient quicbaas.RAGClient
-	discovery *quicbaas.DiscoveryRegistry
+	discovery quicbaas.RegistryClient
 	dataStore quicbaas.QRDBKVStore
 	qrdbErr   error
 
@@ -89,17 +89,15 @@ func (m *mockSDKClient) BarrierCeremonyMgmt() quicbaas.BarrierCeremonyService {
 func (m *mockSDKClient) TenantMgmtService() quicbaas.TenantService { return &m.tenantMgmt }
 
 // Backward-compatible service accessors.
-func (m *mockSDKClient) KV() quicbaas.KVClient                   { return m.kvClient }
-func (m *mockSDKClient) Batch() quicbaas.BatchClient             { return m.batchClient }
-func (m *mockSDKClient) Transaction() quicbaas.TransactionClient { return nil }
-func (m *mockSDKClient) Query() quicbaas.QueryClient             { return nil }
-func (m *mockSDKClient) Cluster() quicbaas.ClusterClient         { return nil }
-func (m *mockSDKClient) Health() quicbaas.HealthClient           { return nil }
-func (m *mockSDKClient) Operations() quicbaas.OperationsClient   { return nil }
-func (m *mockSDKClient) Cache() quicbaas.CacheClient             { return m.cacheClient }
-func (m *mockSDKClient) Discovery() (*quicbaas.DiscoveryRegistry, error) {
-	return m.discovery, m.qrdbErr
-}
+func (m *mockSDKClient) KV() quicbaas.KVClient                                 { return m.kvClient }
+func (m *mockSDKClient) Batch() quicbaas.BatchClient                           { return m.batchClient }
+func (m *mockSDKClient) Transaction() quicbaas.TransactionClient               { return nil }
+func (m *mockSDKClient) Query() quicbaas.QueryClient                           { return nil }
+func (m *mockSDKClient) Cluster() quicbaas.ClusterClient                       { return nil }
+func (m *mockSDKClient) Health() quicbaas.HealthClient                         { return nil }
+func (m *mockSDKClient) Operations() quicbaas.OperationsClient                 { return nil }
+func (m *mockSDKClient) Cache() quicbaas.CacheClient                           { return m.cacheClient }
+func (m *mockSDKClient) Registry() quicbaas.RegistryClient                     { return m.discovery }
 func (m *mockSDKClient) IAM() quicbaas.IAMClient                               { return nil }
 func (m *mockSDKClient) Vector() quicbaas.VectorClient                         { return m.vectorClient }
 func (m *mockSDKClient) TimeSeries() quicbaas.TimeSeriesClient                 { return m.timeSeriesClient }
@@ -117,6 +115,8 @@ func (m *mockSDKClient) Project() quicbaas.ProjectClient                       {
 func (m *mockSDKClient) Account() quicbaas.AccountClient                       { return m.accountClient }
 func (m *mockSDKClient) Orchestrator() quicbaas.OrchestratorClient             { return m.orchestratorClient }
 func (m *mockSDKClient) SDLC() quicbaas.SDLCClient                             { return m.sdlcClient }
+func (m *mockSDKClient) Prompts() quicbaas.PromptsClient                       { return nil }
+func (m *mockSDKClient) Agents() quicbaas.AgentsClient                         { return nil }
 
 // QRDB-backed accessors (returning two values, error path always nil).
 func (m *mockSDKClient) SealStore() (quicbaas.QRDBSealStoreClient, error) {
@@ -180,6 +180,7 @@ type stubBarrierClient struct{ quicbaas.QRDBBarrierClient }
 type stubCeremonyClient struct{ quicbaas.QRDBCeremonyClient }
 type stubCredentialClient struct{ quicbaas.QRDBCredentialClient }
 type stubSealStoreClient struct{ quicbaas.QRDBSealStoreClient }
+type stubRegistryClient struct{ quicbaas.RegistryClient }
 
 func (s *mockSecurityService) CertificateExt() quicbaas.CertificateExtensions {
 	return s.certificateExt
@@ -239,7 +240,6 @@ type stubTenantClient struct{ quicbaas.QRDBTenantClient }
 type stubKVStore struct{ quicbaas.QRDBKVStore }
 
 func (mockSecurityService) Auth() quicbaas.AuthService                    { return nil }
-func (mockSecurityService) Seal() quicbaas.SealClient                     { return nil }
 func (mockSecurityService) KMS() quicbaas.KMSClient                       { return nil }
 func (mockSecurityService) Secrets() quicbaas.SecretsClient               { return nil }
 func (mockSecurityService) Crypto() quicbaas.CryptoClient                 { return nil }
@@ -373,7 +373,13 @@ func TestClient_ServiceAccessors(t *testing.T) {
 		{"Operations", func() interface{} { return client.Operations() }},
 		{"Cache", func() interface{} { return client.Cache() }},
 		{"Auth", func() interface{} { return client.Auth() }},
-		{"Seal", func() interface{} { return client.Seal() }},
+		{"Seal", func() interface{} {
+			seal, err := client.Seal()
+			if err != nil {
+				t.Fatalf("Seal() error = %v", err)
+			}
+			return seal
+		}},
 		{"KMS", func() interface{} { return client.KMS() }},
 		{"Secrets", func() interface{} { return client.Secrets() }},
 		{"Crypto", func() interface{} { return client.Crypto() }},
@@ -601,6 +607,10 @@ func TestClient_SecurityAccessors(t *testing.T) {
 	if err != nil || gotSealStore != sealStore {
 		t.Errorf("SealStore() = %v, %v; want the SDK's seal store client", gotSealStore, err)
 	}
+	gotSeal, err := client.Seal()
+	if err != nil || gotSeal != sealStore {
+		t.Errorf("Seal() = %v, %v; want the SDK's seal store client", gotSeal, err)
+	}
 }
 
 // TestClient_SecurityAccessors_ServiceUnavailable proves an SDK that does not
@@ -643,6 +653,7 @@ func TestClient_SecurityAccessors_ServiceUnavailable(t *testing.T) {
 		{"ceremony", func() (interface{}, error) { return client.Ceremony() }},
 		{"credentials", func() (interface{}, error) { return client.Credentials() }},
 		{"seal store", func() (interface{}, error) { return client.SealStore() }},
+		{"seal store", func() (interface{}, error) { return client.Seal() }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.service, func(t *testing.T) {
@@ -679,7 +690,7 @@ func TestClient_ManagementAccessors(t *testing.T) {
 	custodianGroup := &stubCustodianGroupClient{}
 	share := &stubShareClient{}
 	tenant := &stubTenantClient{}
-	discovery := &quicbaas.DiscoveryRegistry{}
+	discovery := &stubRegistryClient{}
 	dataStore := &stubKVStore{}
 	mockSDK := newMockSDKClient()
 	mockSDK.ragClient = rag
@@ -743,13 +754,6 @@ func TestClient_ManagementAccessors_ServiceUnavailable(t *testing.T) {
 		{"custodian group", func() (interface{}, error) { return client.CustodianGroup() }},
 		{"share", func() (interface{}, error) { return client.Share() }},
 		{"tenant", func() (interface{}, error) { return client.Tenant() }},
-		{"discovery", func() (interface{}, error) {
-			registry, err := client.Discovery()
-			if registry == nil {
-				return nil, err
-			}
-			return registry, err
-		}},
 		{"data store", func() (interface{}, error) { return client.DataStore() }},
 	}
 	for _, tt := range tests {
@@ -758,6 +762,14 @@ func TestClient_ManagementAccessors_ServiceUnavailable(t *testing.T) {
 			assertServiceUnavailable(t, tt.service, got, err, cause)
 		})
 	}
+	t.Run("discovery", func(t *testing.T) {
+		registry, err := client.Discovery()
+		var got interface{}
+		if registry != nil {
+			got = registry
+		}
+		assertServiceUnavailable(t, "discovery", got, err, ErrNoRegistryClient)
+	})
 }
 
 // TestClient_Transport tests the Transport accessor.
