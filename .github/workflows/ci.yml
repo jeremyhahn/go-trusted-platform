@@ -923,14 +923,14 @@ jobs:
         run: |
           lease="go-trusted-platform-ci-lease-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
           image_lock() {
-            local lock="go-trusted-platform-ci-image-lock" held at t i
+            local lock=${1:-go-trusted-platform-ci-image-lock} base=go-trusted-platform-ci-image-lock:base held at t i
             for ((i = 0; i < 660; i++)); do
-              docker image inspect "$lock:base" >/dev/null 2>&1 ||
-                head -c 1024 /dev/zero | docker import - "$lock:base" >/dev/null 2>&1 || true
-              IMAGE_LOCK_ID=$(docker create --pull never --name "$lock" "$lock:base" true 2>/dev/null) && return 0
+              docker image inspect "$base" >/dev/null 2>&1 ||
+                head -c 1024 /dev/zero | docker import - "$base" >/dev/null 2>&1 || true
+              IMAGE_LOCK_ID=$(docker create --pull never --name "$lock" "$base" true 2>/dev/null) && return 0
               IMAGE_LOCK_ID=
-              if read -r held at < <(docker inspect -f '{{.Id}} {{.Created}}' "$lock" 2>/dev/null) &&
-                t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge 600 ]; then
+              if read -r held at < <(docker container inspect -f '{{.Id}} {{.Created}}' "$lock" 2>/dev/null) &&
+                [ -n "$at" ] && t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge 600 ]; then
                 echo "removing the stale image lock $lock (created $at)"
                 docker rm "$held" >/dev/null 2>&1 || true
                 continue
@@ -1554,14 +1554,14 @@ jobs:
         run: |
           lease="go-trusted-platform-ci-lease-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
           image_lock() {
-            local lock="go-trusted-platform-ci-image-lock" held at t i
+            local lock=${1:-go-trusted-platform-ci-image-lock} base=go-trusted-platform-ci-image-lock:base held at t i
             for ((i = 0; i < 660; i++)); do
-              docker image inspect "$lock:base" >/dev/null 2>&1 ||
-                head -c 1024 /dev/zero | docker import - "$lock:base" >/dev/null 2>&1 || true
-              IMAGE_LOCK_ID=$(docker create --pull never --name "$lock" "$lock:base" true 2>/dev/null) && return 0
+              docker image inspect "$base" >/dev/null 2>&1 ||
+                head -c 1024 /dev/zero | docker import - "$base" >/dev/null 2>&1 || true
+              IMAGE_LOCK_ID=$(docker create --pull never --name "$lock" "$base" true 2>/dev/null) && return 0
               IMAGE_LOCK_ID=
-              if read -r held at < <(docker inspect -f '{{.Id}} {{.Created}}' "$lock" 2>/dev/null) &&
-                t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge 600 ]; then
+              if read -r held at < <(docker container inspect -f '{{.Id}} {{.Created}}' "$lock" 2>/dev/null) &&
+                [ -n "$at" ] && t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge 600 ]; then
                 echo "removing the stale image lock $lock (created $at)"
                 docker rm "$held" >/dev/null 2>&1 || true
                 continue
@@ -1798,14 +1798,14 @@ jobs:
         run: |
           lease="go-trusted-platform-ci-lease-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
           image_lock() {
-            local lock="go-trusted-platform-ci-image-lock" held at t i
+            local lock=${1:-go-trusted-platform-ci-image-lock} base=go-trusted-platform-ci-image-lock:base held at t i
             for ((i = 0; i < 660; i++)); do
-              docker image inspect "$lock:base" >/dev/null 2>&1 ||
-                head -c 1024 /dev/zero | docker import - "$lock:base" >/dev/null 2>&1 || true
-              IMAGE_LOCK_ID=$(docker create --pull never --name "$lock" "$lock:base" true 2>/dev/null) && return 0
+              docker image inspect "$base" >/dev/null 2>&1 ||
+                head -c 1024 /dev/zero | docker import - "$base" >/dev/null 2>&1 || true
+              IMAGE_LOCK_ID=$(docker create --pull never --name "$lock" "$base" true 2>/dev/null) && return 0
               IMAGE_LOCK_ID=
-              if read -r held at < <(docker inspect -f '{{.Id}} {{.Created}}' "$lock" 2>/dev/null) &&
-                t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge 600 ]; then
+              if read -r held at < <(docker container inspect -f '{{.Id}} {{.Created}}' "$lock" 2>/dev/null) &&
+                [ -n "$at" ] && t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge 600 ]; then
                 echo "removing the stale image lock $lock (created $at)"
                 docker rm "$held" >/dev/null 2>&1 || true
                 continue
@@ -2124,14 +2124,14 @@ jobs:
         run: |
           lease="go-trusted-platform-ci-lease-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
           image_lock() {
-            local lock="go-trusted-platform-ci-image-lock" held at t i
+            local lock=${1:-go-trusted-platform-ci-image-lock} base=go-trusted-platform-ci-image-lock:base held at t i
             for ((i = 0; i < 660; i++)); do
-              docker image inspect "$lock:base" >/dev/null 2>&1 ||
-                head -c 1024 /dev/zero | docker import - "$lock:base" >/dev/null 2>&1 || true
-              IMAGE_LOCK_ID=$(docker create --pull never --name "$lock" "$lock:base" true 2>/dev/null) && return 0
+              docker image inspect "$base" >/dev/null 2>&1 ||
+                head -c 1024 /dev/zero | docker import - "$base" >/dev/null 2>&1 || true
+              IMAGE_LOCK_ID=$(docker create --pull never --name "$lock" "$base" true 2>/dev/null) && return 0
               IMAGE_LOCK_ID=
-              if read -r held at < <(docker inspect -f '{{.Id}} {{.Created}}' "$lock" 2>/dev/null) &&
-                t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge 600 ]; then
+              if read -r held at < <(docker container inspect -f '{{.Id}} {{.Created}}' "$lock" 2>/dev/null) &&
+                [ -n "$at" ] && t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge 600 ]; then
                 echo "removing the stale image lock $lock (created $at)"
                 docker rm "$held" >/dev/null 2>&1 || true
                 continue
