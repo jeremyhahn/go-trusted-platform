@@ -248,4 +248,44 @@ test.describe('Tenant directory (real server)', () => {
       }
     }
   });
+
+  test('pages GET /api/v1/tenants with limit and offset', async ({ adminPage, sdk }) => {
+    const caps = await listCapabilities(sdk);
+    const createCap = capabilityOf(caps, CREATE_OP);
+    const listCap = capabilityOf(caps, LIST_OP);
+    if (!createCap.enabled || !listCap.enabled) {
+      test.skip(true, (createCap.reason ?? listCap.reason) ?? 'the server does not offer CreateTenant and ListTenants');
+      return;
+    }
+
+    let createdId: string | undefined;
+    try {
+      // A throwaway tenant so the directory has at least two tenants.
+      const created = await adminPage.request.post('/api/v1/tenants', { data: { name: `e2e-page-${Date.now()}` } });
+      if (!created.ok()) {
+        test.skip(true, `the server refused CreateTenant (${created.status()})`);
+        return;
+      }
+      createdId = unwrapPayload<{ tenant?: TenantRecord }>(await created.json()).tenant?.id;
+      expect(createdId).toBeTruthy();
+
+      const pageAt = async (offset: number) => {
+        const res = await adminPage.request.get(`/api/v1/tenants?limit=1&offset=${offset}`);
+        expect(res.ok()).toBeTruthy();
+        return unwrapPayload<{ tenants?: TenantRecord[]; total?: number | string }>(await res.json());
+      };
+      const first = await pageAt(0);
+      const second = await pageAt(1);
+      expect(first.tenants ?? []).toHaveLength(1);
+      expect(second.tenants ?? []).toHaveLength(1);
+      expect(first.tenants?.[0]?.id).toBeTruthy();
+      expect(second.tenants?.[0]?.id).not.toBe(first.tenants?.[0]?.id);
+      expect(Number(first.total ?? 0)).toBeGreaterThanOrEqual(2);
+    } finally {
+      if (createdId) {
+        const cleanup = await adminPage.request.delete(`/api/v1/tenants/${createdId}`);
+        expect(cleanup.ok()).toBeTruthy();
+      }
+    }
+  });
 });
