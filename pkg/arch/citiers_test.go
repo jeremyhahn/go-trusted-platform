@@ -608,9 +608,10 @@ func ciTierFindings(wf ciWorkflow) []error {
 		tier, known := tiers[j.ID]
 		c, gated := checked[j.ID]
 		guarded := scheduleGuardedIf[j.If]
-		// preflight (changes and the guard) cannot carry the guard; on bigdiskRoute,
-		// and only on it, a schedule run never reaches the pool.
-		routed := (j.ID == changesJobID || j.ID == scheduleGuardJobID) && j.RunsOn == bigdiskRoute
+		// preflight (changes and the guard) cannot carry the guard; on bigdiskRoute
+		// or ruling 443's routeBigdisk, and only on them, a schedule run never
+		// reaches the pool.
+		routed := (j.ID == changesJobID || j.ID == scheduleGuardJobID) && (j.RunsOn == bigdiskRoute || j.RunsOn == routeBigdisk)
 		if strings.Contains(j.RunsOn, bigdiskLabel) && !guarded && !routed {
 			fail(j.Line, "a bigdisk job's if: carries the schedule guard `("+scheduleGuardExpr+")`: without it a schedule run fills the runner while main is busy")
 		}
