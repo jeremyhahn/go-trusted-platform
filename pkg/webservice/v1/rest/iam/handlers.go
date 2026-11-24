@@ -391,32 +391,6 @@ func (h *IAMHandlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListUsers handles GET /api/v1/iam/tenants/{tenant}/users
-// embeddedUserListCap is the most users the embedded IAM lists in one reply.
-// The embedded IAM ignores the page size and the offset and lists at most the
-// user store's default page of 100 users, with no total, so a count-less reply
-// of 100 or more users cannot be told from a truncated one. (Upstream gap:
-// go-quicbaas sdk/go transport/embedded/handlers_iam.go handleIAMUserList
-// reads the page size only from a bare request and drops the store's total.)
-const embeddedUserListCap = 100
-
-// usersPage returns the users of the requested page, the tenant's user total,
-// and whether that total is known. A reply that carries a count is returned
-// as it is. A count-less reply that is provably the whole list (no more
-// pages, no next token, shorter than embeddedUserListCap) is paged here by
-// limit and offset. Any other count-less reply returns false.
-func usersPage(resp *iamsdk.ListUsersResponse, limit, offset int32) ([]iamsdk.User, int64, bool) {
-	if resp.Pagination.TotalCount > 0 {
-		return resp.Users, int64(resp.Pagination.TotalCount), true
-	}
-	n := len(resp.Users)
-	if resp.Pagination.HasMore || resp.Pagination.NextPageToken != "" || n >= embeddedUserListCap {
-		return nil, 0, false
-	}
-	lo := min(int(max(offset, 0)), n)
-	hi := min(lo+int(max(limit, 0)), n)
-	return resp.Users[lo:hi], int64(n), true
-}
-
 func (h *IAMHandlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 	tenantID := h.getTenantID(r)
 	if tenantID == "" {
@@ -445,21 +419,17 @@ func (h *IAMHandlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// An IAM that counts is trusted for the total and the page it sent. A
-	// count-less reply is paged here when it is provably the whole list;
-	// otherwise the tenant's user count is unknown and the request is
-	// refused rather than answered with the page length as the total.
-	page, total, ok := usersPage(resp, limit, offset)
-	if !ok {
-		h.logger.Warn("rest/iam: IAM listed users with no total; the tenant's user count is unknown",
-			"tenant", tenantID, "listed", len(resp.Users))
-		h.respWriter.Error503(w, r, ErrIAMUserTotalUnknown{TenantID: tenantID, Listed: len(resp.Users)})
-		return
+	users := make([]*platformv1.IAMUser, 0, len(resp.Users))
+	for i := range resp.Users {
+		users = append(users, UserToProto(&resp.Users[i]))
 	}
 
-	users := make([]*platformv1.IAMUser, 0, len(page))
-	for i := range page {
-		users = append(users, UserToProto(&page[i]))
+	// The total is the count IAM reports; IAM is not sent the offset, so the
+	// offset never enters it. Only an IAM that sends no count (the embedded
+	// one) is answered with the users this page carries.
+	total := int64(resp.Pagination.TotalCount)
+	if total == 0 {
+		total = int64(len(resp.Users))
 	}
 	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.ListIAMUsersResponse{
 		Users:      users,

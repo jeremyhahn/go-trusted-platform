@@ -266,16 +266,3 @@ func (e ErrUserRolesSyncFailed) Error() string {
 func (e ErrUserRolesSyncFailed) Unwrap() error {
 	return e.Err
 }
-
-// ErrIAMUserTotalUnknown is returned when IAM lists a tenant's users with no
-// total and the list cannot be shown to be complete (it has more pages, or it
-// is as long as the embedded IAM's truncated page), so the tenant's user
-// count is not known and no total or pagination can be reported.
-type ErrIAMUserTotalUnknown struct {
-	TenantID string
-	Listed   int
-}
-
-func (e ErrIAMUserTotalUnknown) Error() string {
-	return fmt.Sprintf("rest/iam: IAM listed %d users for tenant %q with no total, so the tenant's user count is unknown", e.Listed, e.TenantID)
-}
