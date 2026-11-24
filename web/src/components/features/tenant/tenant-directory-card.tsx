@@ -41,11 +41,13 @@ interface TenantRow {
 
 const SUSPENDED = 'TENANT_STATE_SUSPENDED';
 
-export function TenantDirectoryCard() {
+export function TenantDirectoryCard({ pageSize = 50 }: { pageSize?: number } = {}) {
   const tenants = useTenant();
   const { toast } = useToast();
   const listCap = useCapabilities().capability('GET /api/v1/tenants');
   const [rows, setRows] = useState<TenantRow[]>([]);
+  const [offset, setOffset] = useState(0);
+  const [total, setTotal] = useState(0);
   const [newName, setNewName] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState('');
@@ -60,16 +62,25 @@ export function TenantDirectoryCard() {
       return;
     }
     try {
-      const res = await tenants.listTenants();
+      // One page at a time: the server answers the page and the total.
+      const res = await tenants.listTenants({ limit: pageSize, offset });
       if (res.success) {
-        setRows((res.data?.tenants ?? []) as TenantRow[]);
+        const page = (res.data?.tenants ?? []) as TenantRow[];
+        const count = Number(res.data?.total ?? 0);
+        if (page.length === 0 && offset > 0 && count > 0) {
+          // The last tenant on this page went away: step back a page.
+          setOffset(Math.max(0, offset - pageSize));
+          return;
+        }
+        setRows(page);
+        setTotal(count);
       } else {
         setError(res.error?.message ?? 'request failed');
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'request failed');
     }
-  }, [tenants, listCap.enabled]);
+  }, [tenants, listCap.enabled, pageSize, offset]);
 
   useEffect(() => {
     void load();
@@ -170,6 +181,7 @@ export function TenantDirectoryCard() {
         {!listCap.enabled ? (
           <p className="text-sm text-muted-foreground">{listCap.reason}</p>
         ) : (
+          <div className="space-y-2">
           <ul data-testid="tenant-directory-list" className="divide-y">
             {rows.map((t) => (
               <li key={t.id} data-testid={`tenant-row-${t.id}`} className="flex flex-wrap items-end gap-4 py-2 text-sm">
@@ -238,6 +250,28 @@ export function TenantDirectoryCard() {
               </li>
             ))}
           </ul>
+          <div className="flex flex-wrap items-center gap-4 text-sm">
+            <span data-testid="tenant-directory-total">
+              {rows.length === 0 ? 0 : offset + 1}–{offset + rows.length} of {total}
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy || offset === 0}
+              onClick={() => setOffset(Math.max(0, offset - pageSize))}
+            >
+              Previous page
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy || offset + pageSize >= total}
+              onClick={() => setOffset(offset + pageSize)}
+            >
+              Next page
+            </Button>
+          </div>
+          </div>
         )}
 
         {error && (
