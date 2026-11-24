@@ -1456,6 +1456,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cpio libssl-dev
 
       - name: Install from lockfiles and build the SDK the console consumes
+        # InfoSec O-3: as in the sdkjs job. No dependency lifecycle script
+        # runs on a persistent self-hosted runner (DS-10475).
+        env:
+          npm_config_ignore_scripts: ${{ runner.environment == 'self-hosted' }}
         run: |
           scripts/ci-go-integrity.sh
           make web-deps
@@ -1472,6 +1476,11 @@ jobs:
         run: cd web && npx playwright install chromium
 
       - name: Real-server Playwright specs
+        # InfoSec O-3: make web-e2e runs web-deps and _web-embed-prepare
+        # (npm ci, npm install) again; the setting reaches them through the
+        # environment of the recursive make calls (DS-10475).
+        env:
+          npm_config_ignore_scripts: ${{ runner.environment == 'self-hosted' }}
         run: |
           scripts/ci-go-integrity.sh
           make web-e2e WEB_E2E_BUILD=1
