@@ -123,10 +123,26 @@ export default function DeviceVerdictsPage() {
           <CardHeader>
             <CardTitle>Could not read the device verdicts</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3 text-sm">
             <p role="alert" className="text-sm text-destructive">
               {error}
             </p>
+            {/* A failed resync keeps the way to resume (#2038). */}
+            {missed && (
+              <>
+                <p>
+                  <Link href="/devices" className="underline">
+                    Device reports
+                  </Link>
+                  : read each device&apos;s latest attestation report there to see what was missed.
+                </p>
+                <Gated op={OP}>
+                  <Button size="sm" disabled={busy} onClick={() => void resync()}>
+                    Resynchronize
+                  </Button>
+                </Gated>
+              </>
+            )}
           </CardContent>
         </Card>
       ) : (
