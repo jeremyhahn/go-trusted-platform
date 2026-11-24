@@ -183,3 +183,52 @@ func TestSetEnrolled_SendsSerial(t *testing.T) {
 		t.Errorf("set-enrolled without serial: %d RPCs made, want none", fake.calls)
 	}
 }
+
+func TestStatus_Table(t *testing.T) {
+	fake := &fakePXEClient{statusResp: &platformv1.GetPXEStatusResponse{Status: &platformv1.PXEServiceStatus{
+		Running:          true,
+		DeviceCount:      3,
+		IpxeServerAddr:   "192.0.2.10:8080",
+		QuarantineVlan:   999,
+		ProvisioningVlan: 100,
+	}}}
+	out, err := run(t, fake, "status")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	for _, want := range []string{
+		"RUNNING", "DEVICES", "IPXE SERVER", "QUARANTINE VLAN", "PROVISIONING VLAN", "STARTED",
+		"true", "3", "192.0.2.10:8080", "999", "100",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestStartStop_CallTheService(t *testing.T) {
+	fake := &fakePXEClient{}
+	if _, err := run(t, fake, "start"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if fake.startCalls != 1 || fake.calls != 1 {
+		t.Errorf("start: StartService calls = %d, all calls = %d, want 1 and 1", fake.startCalls, fake.calls)
+	}
+
+	fake = &fakePXEClient{}
+	if _, err := run(t, fake, "stop"); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if fake.stopCalls != 1 || fake.calls != 1 {
+		t.Errorf("stop: StopService calls = %d, all calls = %d, want 1 and 1", fake.stopCalls, fake.calls)
+	}
+
+	for verb, rpc := range map[string]string{"start": "StartService", "stop": "StopService"} {
+		fake = &fakePXEClient{err: errors.New("boom")}
+		_, err := run(t, fake, verb)
+		var target *ErrRPCFailed
+		if !errors.As(err, &target) || target.RPC != rpc {
+			t.Errorf("%s with a failing RPC: err = %v, want *ErrRPCFailed for %s", verb, err, rpc)
+		}
+	}
+}

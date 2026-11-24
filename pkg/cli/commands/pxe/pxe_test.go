@@ -45,8 +45,28 @@ type fakePXEClient struct {
 	getByMACReq   *platformv1.GetPXEDeviceByMACRequest
 	setStateReq   *platformv1.UpdatePXEStateRequest
 	enrolledReq   *platformv1.SetPXEDeviceEnrolledRequest
+	statusResp    *platformv1.GetPXEStatusResponse
+	startCalls    int
+	stopCalls     int
 	err           error
 	calls         int
+}
+
+func (f *fakePXEClient) GetStatus(_ context.Context, _ *platformv1.GetPXEStatusRequest, _ ...grpc.CallOption) (*platformv1.GetPXEStatusResponse, error) {
+	f.calls++
+	return f.statusResp, f.err
+}
+
+func (f *fakePXEClient) StartService(_ context.Context, _ *platformv1.StartPXEServiceRequest, _ ...grpc.CallOption) (*platformv1.StartPXEServiceResponse, error) {
+	f.calls++
+	f.startCalls++
+	return &platformv1.StartPXEServiceResponse{Status: &platformv1.Status{Success: true, Message: "started"}}, f.err
+}
+
+func (f *fakePXEClient) StopService(_ context.Context, _ *platformv1.StopPXEServiceRequest, _ ...grpc.CallOption) (*platformv1.StopPXEServiceResponse, error) {
+	f.calls++
+	f.stopCalls++
+	return &platformv1.StopPXEServiceResponse{Status: &platformv1.Status{Success: true, Message: "stopped"}}, f.err
 }
 
 func (f *fakePXEClient) UpdateState(_ context.Context, in *platformv1.UpdatePXEStateRequest, _ ...grpc.CallOption) (*platformv1.UpdatePXEStateResponse, error) {
