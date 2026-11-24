@@ -439,6 +439,46 @@ func TestRenew_IPAMRenewFailureRefuses(t *testing.T) {
 	assert.True(t, errors.As(err, &exhausted), "got %v", err)
 }
 
+// extendingPlane is a fake plane whose host enforces lease deadlines.
+type extendingPlane struct {
+	*fakePlane
+	extendErr error
+	extended  []time.Time
+}
+
+func (e *extendingPlane) ExtendPeer(_ context.Context, l *Lease) error {
+	if e.extendErr != nil {
+		return e.extendErr
+	}
+	e.extended = append(e.extended, l.ExpiresAt)
+	return nil
+}
+
+func TestRenew_FailedExtensionStaysRetryable(t *testing.T) {
+	plane := &extendingPlane{fakePlane: newFakePlane(DataPlaneMASQUE)}
+	h := newHarnessWith(t, testConfig(), func(d *Deps) {
+		d.DataPlanes = map[DataPlaneKind]DataPlane{DataPlaneMASQUE: plane}
+	})
+	lease, err := h.svc.Admit(context.Background(), h.request(t))
+	require.NoError(t, err)
+	h.intoRenewWindow()
+
+	plane.extendErr = errors.New("datapath unreachable")
+	_, err = h.svc.Renew(context.Background(), lease.ID, h.evidence(t))
+	var unavailable *ErrDataPlaneUnavailable
+	require.True(t, errors.As(err, &unavailable), "got %v", err)
+	stored, err := h.svc.Lease(context.Background(), lease.ID)
+	require.NoError(t, err)
+	assert.Equal(t, lease.ExpiresAt, stored.ExpiresAt, "the store keeps the deadline the host holds")
+	assert.Equal(t, 0, stored.Renewals)
+
+	plane.extendErr = nil
+	renewed, err := h.svc.Renew(context.Background(), lease.ID, h.evidence(t))
+	require.NoError(t, err, "the retry after connectivity recovers renews")
+	assert.Equal(t, 1, renewed.Renewals)
+	assert.Equal(t, []time.Time{renewed.ExpiresAt}, plane.extended, "the host learns the new deadline")
+}
+
 func TestRevoke_OrderAndIdempotence(t *testing.T) {
 	h := newHarness(t, testConfig())
 	lease, err := h.svc.Admit(context.Background(), h.request(t))
