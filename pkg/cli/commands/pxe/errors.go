@@ -73,6 +73,19 @@ func (e *ErrInvalidState) Error() string {
 	return fmt.Sprintf("pxe list: unknown --state %q (valid: %v)", e.Value, e.Valid)
 }
 
+// ErrInvalidMAC is a missing or unparseable MAC address (--mac or a
+// get-by-mac argument), refused before any call.
+type ErrInvalidMAC struct {
+	Value string
+}
+
+func (e *ErrInvalidMAC) Error() string {
+	if e.Value == "" {
+		return "pxe: --mac is required"
+	}
+	return fmt.Sprintf("pxe: %q is not a MAC address", e.Value)
+}
+
 // ErrRPCFailed wraps a failed PXE service call.
 type ErrRPCFailed struct {
 	RPC   string

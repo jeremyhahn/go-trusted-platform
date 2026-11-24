@@ -18,6 +18,7 @@ package pxe
 import (
 	"context"
 	"io"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -85,7 +86,12 @@ Examples:
   platformctl pxe quarantine <device-id> --reason "attestation mismatch"
 
   # Send a failed device back through provisioning
-  platformctl pxe retry <device-id>`,
+  platformctl pxe retry <device-id>
+
+  # Register a device by MAC ahead of its first PXE boot, look it up, remove it
+  platformctl pxe register --mac 02:00:00:00:00:01 --port <port-id>
+  platformctl pxe get-by-mac 02:00:00:00:00:01
+  platformctl pxe remove <device-id>`,
 	}
 
 	r := &runner{getFlags: getFlags, open: open}
@@ -95,6 +101,9 @@ Examples:
 	cmd.AddCommand(r.quarantineCommand())
 	cmd.AddCommand(r.retryCommand())
 	cmd.AddCommand(r.eventsCommand())
+	cmd.AddCommand(r.registerCommand())
+	cmd.AddCommand(r.removeCommand())
+	cmd.AddCommand(r.getByMACCommand())
 	return cmd
 }
 
@@ -320,6 +329,93 @@ func (r *runner) eventsCommand() *cobra.Command {
 					return nil, nil, err
 				}
 				return resp, eventsTable(resp.GetEvents()), nil
+			})
+		},
+	}
+}
+
+// macArg checks a MAC address before any call, returning it normalised.
+func macArg(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", &ErrInvalidMAC{}
+	}
+	hw, err := net.ParseMAC(value)
+	if err != nil {
+		return "", &ErrInvalidMAC{Value: value}
+	}
+	return hw.String(), nil
+}
+
+func (r *runner) registerCommand() *cobra.Command {
+	var mac, port string
+	cmd := &cobra.Command{
+		Use:          "register --mac <mac> [--port <port-id>]",
+		Short:        "Register a device by MAC address",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			hw, err := macArg(mac)
+			if err != nil {
+				return err
+			}
+			return r.call(cmd, "RegisterDevice", func(ctx context.Context, c platformv1.PXEServiceClient) (any, *cli.TableData, error) {
+				resp, err := c.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{
+					MacAddress: hw, PortId: strings.TrimSpace(port),
+				})
+				if err != nil {
+					return nil, nil, err
+				}
+				return resp, deviceTable(resp.GetDevice()), nil
+			})
+		},
+	}
+	cmd.Flags().StringVar(&mac, "mac", "", "MAC address of the device (required)")
+	cmd.Flags().StringVar(&port, "port", "", "OVS port ID the device is attached to")
+	return cmd
+}
+
+func (r *runner) removeCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:          "remove <device-id>",
+		Short:        "Remove a device from the provisioning workflow",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := deviceArg("remove", args)
+			if err != nil {
+				return err
+			}
+			return r.call(cmd, "RemoveDevice", func(ctx context.Context, c platformv1.PXEServiceClient) (any, *cli.TableData, error) {
+				resp, err := c.RemoveDevice(ctx, &platformv1.RemovePXEDeviceRequest{DeviceId: id})
+				if err != nil {
+					return nil, nil, err
+				}
+				table := cli.NewTableData("ID", "REMOVED")
+				table.AddRow(id, "true")
+				return resp, table, nil
+			})
+		},
+	}
+}
+
+func (r *runner) getByMACCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:          "get-by-mac <mac>",
+		Short:        "Show the device registered with a MAC address",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			hw, err := macArg(args[0])
+			if err != nil {
+				return err
+			}
+			return r.call(cmd, "GetDeviceByMAC", func(ctx context.Context, c platformv1.PXEServiceClient) (any, *cli.TableData, error) {
+				resp, err := c.GetDeviceByMAC(ctx, &platformv1.GetPXEDeviceByMACRequest{MacAddress: hw})
+				if err != nil {
+					return nil, nil, err
+				}
+				return resp, deviceTable(resp.GetDevice()), nil
 			})
 		},
 	}
