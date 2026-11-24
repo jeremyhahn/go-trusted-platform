@@ -18,6 +18,7 @@ import (
 	"time"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
 	sdkmcp "github.com/jeremyhahn/go-quicbaas/sdk/go/transport/mcp"
 	mcpclient "github.com/mark3labs/mcp-go/client"
@@ -75,17 +76,17 @@ func newMCPCompatTransport(t *testing.T, httpSrv *httptest.Server, opts ...sdkmc
 	return tr
 }
 
-// qrdbGetTool declares qrdb_get with a required string "key".
+// qrdbGetTool declares quicbaas_kv_get with a required string "key".
 func qrdbGetTool() mcpgo.Tool {
-	return mcpgo.NewTool("qrdb_get",
+	return mcpgo.NewTool("quicbaas_kv_get",
 		mcpgo.WithDescription("compat get"),
 		mcpgo.WithString("key", mcpgo.Required()),
 	)
 }
 
-// echoResult returns a JSON text result echoing key.
+// echoResult returns a JSON GetResponse text result carrying "v-"+key.
 func echoResult(t *testing.T, key string) *mcpgo.CallToolResult {
-	body, err := json.Marshal(map[string]string{"key": key, "value": "v-" + key})
+	body, err := json.Marshal(service.GetResponse{Found: true, Data: []byte("v-" + key)})
 	if err != nil {
 		t.Errorf("marshal echo: %v", err)
 		return mcpgo.NewToolResultError(err.Error())
@@ -93,19 +94,19 @@ func echoResult(t *testing.T, key string) *mcpgo.CallToolResult {
 	return mcpgo.NewToolResultText(string(body))
 }
 
-// requestGet runs quicbaas.KV/Get (mapped to qrdb_get) for key.
+// requestGet runs quicbaas.KV/Get (mapped to quicbaas_kv_get) for key.
 func requestGet(ctx context.Context, tr *sdkmcp.Transport, key string) (interface{}, error) {
 	return tr.Request(ctx, "quicbaas.KV", "Get", map[string]interface{}{"key": key})
 }
 
 func requireEcho(t *testing.T, resp interface{}, key string) {
 	t.Helper()
-	m, ok := resp.(map[string]interface{})
+	got, ok := resp.(*service.GetResponse)
 	if !ok {
-		t.Fatalf("response is %T, want map", resp)
+		t.Fatalf("response is %T, want *service.GetResponse", resp)
 	}
-	if m["key"] != key || m["value"] != "v-"+key {
-		t.Fatalf("response = %v, want key %q value %q", m, key, "v-"+key)
+	if !got.Found || string(got.Data) != "v-"+key {
+		t.Fatalf("response = %+v, want found value %q for key %q", got, "v-"+key, key)
 	}
 }
 
@@ -280,14 +281,14 @@ func TestMCPGoCompat_ModuleServerAlias(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
-	if len(result.Tools) != 1 || result.Tools[0].Name != "qrdb_get" {
-		t.Fatalf("ListTools = %+v, want only qrdb_get", result.Tools)
+	if len(result.Tools) != 1 || result.Tools[0].Name != "quicbaas_kv_get" {
+		t.Fatalf("ListTools = %+v, want only quicbaas_kv_get", result.Tools)
 	}
 	schema := result.Tools[0].InputSchema
 	if len(schema.Required) != 1 || schema.Required[0] != "key" {
-		t.Fatalf("qrdb_get required = %v, want [key]", schema.Required)
+		t.Fatalf("quicbaas_kv_get required = %v, want [key]", schema.Required)
 	}
 	if _, ok := schema.Properties["key"]; !ok {
-		t.Fatalf("qrdb_get properties = %v, want key", schema.Properties)
+		t.Fatalf("quicbaas_kv_get properties = %v, want key", schema.Properties)
 	}
 }

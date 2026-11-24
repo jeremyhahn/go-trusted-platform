@@ -695,6 +695,15 @@ func (m *MockClient) Account() quicbaas.AccountClient { return nil }
 // Orchestrator returns nil (stub for testing).
 func (m *MockClient) Orchestrator() quicbaas.OrchestratorClient { return nil }
 
+// Prompts returns nil (stub for testing).
+func (m *MockClient) Prompts() quicbaas.PromptsClient { return nil }
+
+// Agents returns nil (stub for testing).
+func (m *MockClient) Agents() quicbaas.AgentsClient { return nil }
+
+// Registry returns nil (stub for testing).
+func (m *MockClient) Registry() quicbaas.RegistryClient { return nil }
+
 // Verify MockClient implements quicbaas.Client. This assertion is the
 // source of truth for keeping the mock in lock-step with upstream.
 var _ quicbaas.Client = (*MockClient)(nil)
