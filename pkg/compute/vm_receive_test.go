@@ -458,6 +458,51 @@ func TestFinalizeIncoming_StopRightAfterAdoptionRecordsTheExit(t *testing.T) {
 	require.NoError(t, orch.Close())
 }
 
+func TestFinalizeIncoming_UnsolicitedExitAfterAdoption(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	orch.config.MigrationTLS = &fakeServerTLS{dir: t.TempDir()}
+
+	vm := startReceivedVM(t, orch)
+	recv := &fakeIncomingReceiver{port: 5000, vm: vm}
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		return recv, nil
+	})
+	var killErr error
+	receiverAdoptedHook = func(id string) {
+		killErr = vm.Kill()
+	}
+	t.Cleanup(func() { receiverAdoptedHook = nil })
+
+	spec := MigrationSpec{
+		InstanceID: "vm-migrated",
+		Arch:       orch.config.Arch,
+		VMName:     "guest",
+		Config:     &InstanceConfig{Memory: 1024},
+	}
+	handle, err := orch.ReceiveIncoming(context.Background(), spec)
+	require.NoError(t, err)
+	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true))
+	require.NoError(t, killErr)
+
+	require.Eventually(t, func() bool {
+		state, err := orch.GetState(context.Background(), spec.InstanceID)
+		return err == nil && state != StateRunning
+	}, 10*time.Second, 20*time.Millisecond, "an unsolicited exit must leave the running state")
+
+	state, err := orch.GetState(context.Background(), spec.InstanceID)
+	require.NoError(t, err)
+	require.Equal(t, StateStopped, state)
+	inst, err := orch.Get(context.Background(), spec.InstanceID)
+	require.NoError(t, err)
+	require.Equal(t, 0, inst.PID)
+	require.Equal(t, StateStopped, inst.State)
+
+	if err := orch.Start(context.Background(), spec.InstanceID); err != nil {
+		require.NotErrorIs(t, err, ErrInstanceAlreadyRunning)
+	}
+	require.NoError(t, orch.Close())
+}
+
 // The adopted instance carries the destination's work directory and disk, so
 // disk operations find the migrated image and Delete removes the receiver's
 // directory (Codex P1, PR #2021).
