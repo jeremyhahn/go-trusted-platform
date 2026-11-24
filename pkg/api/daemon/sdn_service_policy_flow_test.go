@@ -1112,6 +1112,51 @@ func TestSDNService_ApplyPolicy_FailedRollbackDeleteRestoresTheOldDeny(t *testin
 	}
 }
 
+func TestSDNService_ApplyPolicy_FailedUpdateKeepsARawTakeover(t *testing.T) {
+	svc, client := newSwitchModelSDNService(t)
+	ctx := context.Background()
+
+	ssh := allowRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22})
+	first := denyPolicy("p", ssh)
+	first.PolicyId = "p1"
+	_, err := svc.ApplyPolicy(ctx, first)
+	require.NoError(t, err)
+	sshFlow, err := svc.policyRuleToFlowMod(ssh, 100)
+	require.NoError(t, err)
+	allowActions, ok := client.entry(sshFlow.Match)
+	require.True(t, ok, "the policy's ssh entry is installed")
+
+	config, _ := rawFlowOnPolicyEntry(t, svc, ssh)
+	config.Actions = []*platformv1.FlowAction{{Type: platformv1.FlowActionType_FLOW_ACTION_DROP}}
+	_, err = svc.AddFlow(ctx, &platformv1.AddFlowRequest{Config: config})
+	require.NoError(t, err)
+	rawActions, ok := client.entry(sshFlow.Match)
+	require.True(t, ok, "the raw flow holds the ssh entry")
+	require.NotEqual(t, allowActions, rawActions, "the raw flow must replace the policy's actions")
+
+	web := allowRule("r2", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 80})
+	broken := allowRule("r3", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 443})
+	brokenFlow, err := svc.policyRuleToFlowMod(broken, 100)
+	require.NoError(t, err)
+	client.mu.Lock()
+	client.addHook = func(flow *ovs.FlowMod) error {
+		if flow.Match == brokenFlow.Match {
+			return errFlowInstall
+		}
+		return nil
+	}
+	client.mu.Unlock()
+
+	update := denyPolicy("p", web, broken)
+	update.PolicyId = "p1"
+	_, err = svc.ApplyPolicy(ctx, update)
+	require.Error(t, err, "the update with a refused flow must fail")
+
+	got, ok := client.entry(sshFlow.Match)
+	require.True(t, ok, "the raw ssh entry is gone after the failed update")
+	require.Equal(t, rawActions, got, "the rollback wrote the old policy entry over the raw flow")
+}
+
 // A policy flow the switch rejected is not deleted by the rollback: a
 // non-policy entry with the same table, priority and match (the gateway's
 // ingress pipeline at table 0, priority 0) survives (#2021 Codex).
