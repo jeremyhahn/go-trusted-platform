@@ -89,7 +89,7 @@ func (m *sshManager) SetPortVLAN(ctx context.Context, port string, vlanID uint16
 	))
 
 	m.logger.Debug("ssh set port vlan", "command", cmd)
-	output, err := m.executor.Execute(ctx, cmd)
+	output, err := m.execute(ctx, cmd)
 	if err != nil {
 		return ErrPortVLANSetFailed{
 			Port:   port,
@@ -123,7 +123,7 @@ func (m *sshManager) GetPortVLAN(ctx context.Context, port string) (uint16, erro
 	cmd := fmt.Sprintf("show interfaces %s switchport", port)
 	m.logger.Debug("ssh get port vlan", "command", cmd)
 
-	output, err := m.executor.Execute(ctx, cmd)
+	output, err := m.execute(ctx, cmd)
 	if err != nil {
 		return 0, ErrSSHCommandFailed{Command: cmd, Cause: err}
 	}
@@ -152,7 +152,7 @@ func (m *sshManager) GetPortStatus(ctx context.Context, port string) (*switchwir
 	cmd := fmt.Sprintf("show interfaces %s switchport", port)
 	m.logger.Debug("ssh get port status", "command", cmd)
 
-	output, err := m.executor.Execute(ctx, cmd)
+	output, err := m.execute(ctx, cmd)
 	if err != nil {
 		return nil, ErrSSHCommandFailed{Command: cmd, Cause: err}
 	}
@@ -165,6 +165,39 @@ func (m *sshManager) GetPortStatus(ctx context.Context, port string) (*switchwir
 			Reason:  parseErr.Error(),
 		}
 	}
+
+	// Admin and link state come from the operational interface status:
+	// "Switchport: Enabled" is Layer 2 switching, not administrative state.
+	statusCmd := fmt.Sprintf("show interfaces %s status", port)
+	m.logger.Debug("ssh get port interface status", "command", statusCmd)
+	statusOutput, err := m.execute(ctx, statusCmd)
+	if err != nil {
+		return nil, ErrSSHCommandFailed{Command: statusCmd, Cause: err}
+	}
+	rows, parseErr := parseInterfaceStatusTable(statusOutput)
+	if parseErr != nil {
+		return nil, ErrSSHParseOutputFailed{
+			Command: statusCmd,
+			Output:  statusOutput,
+			Reason:  parseErr.Error(),
+		}
+	}
+	var row *switchwire.PortStatus
+	for _, r := range rows {
+		if strings.EqualFold(r.Port, port) {
+			row = r
+			break
+		}
+	}
+	if row == nil {
+		return nil, ErrSSHParseOutputFailed{
+			Command: statusCmd,
+			Output:  statusOutput,
+			Reason:  fmt.Sprintf("port %s not in interface status", port),
+		}
+	}
+	status.Enabled = row.Enabled
+	status.LinkUp = row.LinkUp
 	return status, nil
 }
 
@@ -178,7 +211,7 @@ func (m *sshManager) ListPorts(ctx context.Context) ([]*switchwire.PortStatus, e
 	cmd := "show interfaces status"
 	m.logger.Debug("ssh list ports", "command", cmd)
 
-	output, err := m.executor.Execute(ctx, cmd)
+	output, err := m.execute(ctx, cmd)
 	if err != nil {
 		return nil, ErrSSHCommandFailed{Command: cmd, Cause: err}
 	}
@@ -229,7 +262,7 @@ func (m *sshManager) DisablePort(ctx context.Context, port string) error {
 func (m *sshManager) runConfig(ctx context.Context, logMsg string, commands []string) error {
 	cmd := batchCommands(commands)
 	m.logger.Debug(logMsg, "command", cmd)
-	output, err := m.executor.Execute(ctx, cmd)
+	output, err := m.execute(ctx, cmd)
 	if err != nil {
 		return ErrSSHCommandFailed{Command: cmd, Cause: err}
 	}
@@ -250,8 +283,25 @@ func (m *sshManager) Close() error {
 	return err
 }
 
+// execute runs one command on the connection. A command that fails closes
+// and drops the connection, so the next call dials again; the command is
+// not retried, so a failed mutation is never replayed. The caller holds m.mu.
+func (m *sshManager) execute(ctx context.Context, cmd string) (string, error) {
+	output, err := m.executor.Execute(ctx, cmd)
+	if err != nil {
+		if closeErr := m.executor.Close(); closeErr != nil {
+			m.logger.Debug("ssh close after failed command", "error", closeErr)
+		}
+		m.executor = nil
+		return "", err
+	}
+	return output, nil
+}
+
 // ensureConnected dials the SSH connection on first use. The caller holds
-// m.mu, so concurrent first calls dial once and share the connection.
+// m.mu, so concurrent first calls dial once and share the connection. A
+// connection whose command failed is dropped (see execute), and the next
+// call dials again; a failed mutation is never replayed.
 func (m *sshManager) ensureConnected(ctx context.Context) error {
 	if m.executor != nil {
 		return nil
@@ -344,7 +394,9 @@ func parseAccessVLANFromSwitchport(output string) (uint16, error) {
 }
 
 // parseSwitchportOutput parses "show interfaces {port} switchport" text output
-// into a PortStatus.
+// into a PortStatus: mode and VLANs only. Enabled and LinkUp are left false
+// here; GetPortStatus takes them from the interface status ("Switchport:
+// Enabled" is Layer 2 switching, not administrative state).
 func parseSwitchportOutput(port string, output string) (*switchwire.PortStatus, error) {
 	status := &switchwire.PortStatus{Port: port}
 
@@ -382,12 +434,6 @@ func parseSwitchportOutput(port string, output string) (*switchwire.PortStatus, 
 		if vlan, err := strconv.ParseUint(matches[1], 10, 16); err == nil {
 			status.NativeVLAN = uint16(vlan)
 		}
-	}
-
-	// Parse enabled state from Switchport: Enabled/Disabled line.
-	lowerOutput := strings.ToLower(output)
-	if strings.Contains(lowerOutput, "switchport: enabled") {
-		status.Enabled = true
 	}
 
 	return status, nil

@@ -159,9 +159,6 @@ Trunking Native Mode VLAN: 1 (default)
 	if status.AccessVLAN != 100 {
 		t.Fatalf("expected access vlan 100, got %d", status.AccessVLAN)
 	}
-	if !status.Enabled {
-		t.Fatal("expected port to be enabled")
-	}
 }
 
 func TestParseSwitchportOutput_TrunkMode(t *testing.T) {
@@ -221,9 +218,6 @@ Access Mode VLAN: 200 (mgmt)
 	status, err := parseSwitchportOutput("Eth1/3", output)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if status.Enabled {
-		t.Fatal("expected port to be disabled")
 	}
 	if status.AccessVLAN != 200 {
 		t.Fatalf("expected access vlan 200, got %d", status.AccessVLAN)
@@ -459,6 +453,9 @@ Trunking Native Mode VLAN: 1 (default)
 `
 	mock := newMockSSHExecutor()
 	mock.outputs["show interfaces Eth1/3 switchport"] = switchportOutput
+	mock.outputs["show interfaces Eth1/3 status"] = `Port      Name               Status       Vlan       Duplex  Speed   Type
+Eth1/3    --                 connected    100        full    1000    10/100/1000
+`
 	mgr := newSSHManagerWithExecutor(testSSHConfig(), testSSHLogger(), mock)
 	ctx := context.Background()
 
@@ -474,6 +471,9 @@ Trunking Native Mode VLAN: 1 (default)
 	}
 	if status.AccessVLAN != 100 {
 		t.Fatalf("expected vlan 100, got %d", status.AccessVLAN)
+	}
+	if !status.Enabled || !status.LinkUp {
+		t.Fatalf("expected Enabled and LinkUp from the connected status row, got Enabled=%v LinkUp=%v", status.Enabled, status.LinkUp)
 	}
 }
 
