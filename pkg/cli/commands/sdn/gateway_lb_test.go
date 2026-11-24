@@ -131,14 +131,14 @@ func TestGatewayLBVIPKeyedCommandFlags(t *testing.T) {
 }
 
 func TestParseBackendSpecs(t *testing.T) {
-	backends, err := parseBackendSpecs([]string{"10.0.1.5:8443:2", "10.0.1.6:8443"})
+	backends, err := parseBackendSpecs([]string{"203.0.113.5:8443:2", "203.0.113.6:8443"})
 	if err != nil {
 		t.Fatalf("parseBackendSpecs: %v", err)
 	}
 	if len(backends) != 2 {
 		t.Fatalf("backends = %d, want 2", len(backends))
 	}
-	if backends[0].Address != "10.0.1.5" || backends[0].Port != 8443 || backends[0].Weight != 2 {
+	if backends[0].Address != "203.0.113.5" || backends[0].Port != 8443 || backends[0].Weight != 2 {
 		t.Errorf("backend[0] = %+v", backends[0])
 	}
 	if backends[1].Weight != 0 {
@@ -151,11 +151,11 @@ func TestParseBackendSpecsErrors(t *testing.T) {
 		name string
 		spec string
 	}{
-		{"missing port", "10.0.1.5"},
-		{"zero port", "10.0.1.5:0"},
-		{"bad port", "10.0.1.5:notaport"},
-		{"bad weight", "10.0.1.5:8443:heavy"},
-		{"too many parts", "10.0.1.5:8443:2:extra"},
+		{"missing port", "203.0.113.5"},
+		{"zero port", "203.0.113.5:0"},
+		{"bad port", "203.0.113.5:notaport"},
+		{"bad weight", "203.0.113.5:8443:heavy"},
+		{"too many parts", "203.0.113.5:8443:2:extra"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

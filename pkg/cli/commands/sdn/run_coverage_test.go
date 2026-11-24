@@ -79,7 +79,7 @@ func TestRunBridgeDelete_NoContext(t *testing.T) {
 
 func TestRunFlowAdd_NoContext(t *testing.T) {
 	err := runFlowAdd(noContextFlags(), "br0", "flow-1", 0, 100,
-		80, "aa:bb:cc:dd:ee:ff", "", 0x0800, "10.0.0.1", "",
+		80, "aa:bb:cc:dd:ee:ff", "", 0x0800, "198.51.100.1", "",
 		[]string{"output"}, 1)
 	assertNoContextError(t, err)
 }
@@ -119,7 +119,7 @@ func TestRunBGPPeers_NoContext(t *testing.T) {
 }
 
 func TestRunBGPAnnounce_NoContext(t *testing.T) {
-	err := runBGPAnnounce(noContextFlags(), "2001:DB8::/36", "10.0.0.1")
+	err := runBGPAnnounce(noContextFlags(), "2001:DB8::/36", "198.51.100.1")
 	assertNoContextError(t, err)
 }
 
@@ -148,7 +148,7 @@ func TestRunIPAMAllocate_NoContext(t *testing.T) {
 }
 
 func TestRunIPAMRelease_NoContext(t *testing.T) {
-	err := runIPAMRelease(noContextFlags(), "10.0.0.5")
+	err := runIPAMRelease(noContextFlags(), "198.51.100.5")
 	assertNoContextError(t, err)
 }
 

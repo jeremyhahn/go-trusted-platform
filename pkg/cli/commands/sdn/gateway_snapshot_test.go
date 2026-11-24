@@ -42,7 +42,7 @@ func cliSnapshot() *platformv1.GatewaySnapshot {
 		Bgp: &platformv1.SnapshotBGP{
 			LocalAsn: 64512, RouterId: "203.0.113.4", PeerCount: 1, EstablishedPeers: 1,
 			Peers: []*platformv1.SnapshotBGPPeer{{
-				Address: "10.255.0.2", Asn: 64512, State: "Established",
+				Address: "203.0.113.2", Asn: 64512, State: "Established",
 				PrefixesReceived: 120, PrefixesAccepted: 118, PrefixesSent: 2,
 				Bfd: &platformv1.SnapshotBFD{State: "up", RemoteState: "up", FailureTransitions: 2},
 			}},
@@ -84,7 +84,7 @@ func TestPrintGatewaySnapshot_RendersEverySection(t *testing.T) {
 		"tunnels        active=true  healthy=true",
 		"refused: the DHCP service needs an IPAM allocator",
 		"BGP  AS 64512  router-id 203.0.113.4  1/1 established",
-		"10.255.0.2         AS64512    Established  recv=120 accepted=118 sent=2",
+		"203.0.113.2        AS64512    Established  recv=120 accepted=118 sent=2",
 		"bfd up (remote up) failures=2",
 		"gre-pri      ipsec      up     uplink=isp-a    198.51.100.4 -> 198.51.100.100  rx=4096 tx=2048",
 		"isp-a      eth6     table=101  via 198.51.100.6 rules=1 tunnels=gre-pri",

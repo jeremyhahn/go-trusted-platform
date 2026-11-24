@@ -56,44 +56,44 @@ func TestRunGateway_InProcess(t *testing.T) {
 	})
 
 	t.Run("bgp announce", func(t *testing.T) {
-		out, err := captureStdout(t, func() error { return runBGPAnnounce(flags, "10.8.0.0/24", "10.0.0.1") })
+		out, err := captureStdout(t, func() error { return runBGPAnnounce(flags, "192.0.2.0/24", "198.51.100.1") })
 		require.NoError(t, err)
-		assert.Equal(t, "Prefix 10.8.0.0/24 announced successfully\n", out)
+		assert.Equal(t, "Prefix 192.0.2.0/24 announced successfully\n", out)
 		req := rec.request(t, "AnnouncePrefix").(*platformv1.AnnouncePrefixRequest)
-		assert.Equal(t, "10.8.0.0/24", req.GetPrefix())
-		assert.Equal(t, "10.0.0.1", req.GetNextHop())
+		assert.Equal(t, "192.0.2.0/24", req.GetPrefix())
+		assert.Equal(t, "198.51.100.1", req.GetNextHop())
 	})
 
 	t.Run("bgp withdraw", func(t *testing.T) {
-		out, err := captureStdout(t, func() error { return runBGPWithdraw(flags, "10.8.0.0/24") })
+		out, err := captureStdout(t, func() error { return runBGPWithdraw(flags, "192.0.2.0/24") })
 		require.NoError(t, err)
-		assert.Equal(t, "Prefix 10.8.0.0/24 withdrawn successfully\n", out)
+		assert.Equal(t, "Prefix 192.0.2.0/24 withdrawn successfully\n", out)
 		rec.request(t, "WithdrawPrefix")
 	})
 }
 
 func TestRunLBVIP_InProcess(t *testing.T) {
 	rec, flags := startSDNServer(t, cli.OutputFormatJSON)
-	vip := &vipTargetFlags{protocol: "tcp", address: "10.0.0.1", port: 80}
+	vip := &vipTargetFlags{protocol: "tcp", address: "198.51.100.1", port: 80}
 
 	t.Run("add parses backends", func(t *testing.T) {
 		_, err := captureStdout(t, func() error {
-			return runLBVIPAdd(flags, vip, "hash", []string{"10.0.1.1:8080", "10.0.1.2:8080:5"})
+			return runLBVIPAdd(flags, vip, "hash", []string{"203.0.113.1:8080", "203.0.113.2:8080:5"})
 		})
 		require.NoError(t, err)
 		cfg := rec.request(t, "AddVIP").(*platformv1.AddVIPRequest).GetVip()
-		assert.Equal(t, "10.0.0.1", cfg.GetAddress())
+		assert.Equal(t, "198.51.100.1", cfg.GetAddress())
 		assert.Equal(t, uint32(80), cfg.GetPort())
 		assert.Equal(t, "tcp", cfg.GetProtocol())
 		assert.Equal(t, "hash", cfg.GetAlgorithm())
 		require.Len(t, cfg.GetBackends(), 2)
-		assert.Equal(t, "10.0.1.2", cfg.GetBackends()[1].GetAddress())
+		assert.Equal(t, "203.0.113.2", cfg.GetBackends()[1].GetAddress())
 		assert.Equal(t, uint32(5), cfg.GetBackends()[1].GetWeight())
 	})
 
 	invalid := map[string]func() error{
-		"add":          func() error { return runLBVIPAdd(flags, vip, "", []string{"10.0.1.1"}) },
-		"set-backends": func() error { return runLBVIPSetBackends(flags, vip, []string{"10.0.1.1:0"}) },
+		"add":          func() error { return runLBVIPAdd(flags, vip, "", []string{"203.0.113.1"}) },
+		"set-backends": func() error { return runLBVIPSetBackends(flags, vip, []string{"203.0.113.1:0"}) },
 	}
 	for name, run := range invalid {
 		t.Run(name+" rejects a bad backend before dialing", func(t *testing.T) {
@@ -109,9 +109,9 @@ func TestRunLBVIP_InProcess(t *testing.T) {
 	t.Run("remove", func(t *testing.T) {
 		out, err := captureStdout(t, func() error { return runLBVIPRemove(flags, vip) })
 		require.NoError(t, err)
-		assert.Equal(t, "VIP tcp/10.0.0.1:80 removed successfully\n", out)
+		assert.Equal(t, "VIP tcp/198.51.100.1:80 removed successfully\n", out)
 		req := rec.request(t, "RemoveVIP").(*platformv1.RemoveVIPRequest)
-		assert.Equal(t, "10.0.0.1", req.GetAddress())
+		assert.Equal(t, "198.51.100.1", req.GetAddress())
 		assert.Equal(t, uint32(80), req.GetPort())
 	})
 
@@ -120,11 +120,11 @@ func TestRunLBVIP_InProcess(t *testing.T) {
 		require.NoError(t, err)
 		req := rec.request(t, "GetVIP").(*platformv1.GetVIPRequest)
 		assert.Equal(t, "tcp", req.GetProtocol())
-		assert.Equal(t, "10.0.0.1", req.GetAddress())
+		assert.Equal(t, "198.51.100.1", req.GetAddress())
 	})
 
 	t.Run("set backends", func(t *testing.T) {
-		_, err := captureStdout(t, func() error { return runLBVIPSetBackends(flags, vip, []string{"10.0.1.3:9090"}) })
+		_, err := captureStdout(t, func() error { return runLBVIPSetBackends(flags, vip, []string{"203.0.113.3:9090"}) })
 		require.NoError(t, err)
 		req := rec.request(t, "SetVIPBackends").(*platformv1.SetVIPBackendsRequest)
 		assert.Equal(t, uint32(80), req.GetPort())
@@ -226,11 +226,11 @@ func TestRunGatewaySnapshot_InProcess(t *testing.T) {
 
 func TestRunGatewayAdmittedVTEPs_InProcess(t *testing.T) {
 	admitted := &platformv1.GatewayAdmittedVTEP{
-		Vtep: "10.0.0.2", DeviceId: 7, HostId: "h1", Serial: "s1",
+		Vtep: "198.51.100.2", DeviceId: 7, HostId: "h1", Serial: "s1",
 		AllocationId: "a1", BaselineSource: "ek", ProfileId: 3,
 		VerdictAt: timestamppb.New(time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)),
 	}
-	const admittedLine = "  10.0.0.2        device=7 host=h1 serial=s1 allocation=a1 baseline=ek profile=3 verdict=2026-10-19T12:00:00Z\n"
+	const admittedLine = "  198.51.100.2    device=7 host=h1 serial=s1 allocation=a1 baseline=ek profile=3 verdict=2026-10-19T12:00:00Z\n"
 
 	t.Run("empty list as a table", func(t *testing.T) {
 		rec, flags := startSDNServer(t, cli.OutputFormatTable)
@@ -243,23 +243,23 @@ func TestRunGatewayAdmittedVTEPs_InProcess(t *testing.T) {
 	t.Run("list as a table", func(t *testing.T) {
 		rec, flags := startSDNServer(t, cli.OutputFormatTable)
 		rec.respond("ListGatewayAdmittedVTEPs", &platformv1.ListGatewayAdmittedVTEPsResponse{
-			Vteps: []*platformv1.GatewayAdmittedVTEP{admitted, {Vtep: "10.0.0.3"}},
+			Vteps: []*platformv1.GatewayAdmittedVTEP{admitted, {Vtep: "198.51.100.3"}},
 		})
 		cmd, out := tableCommand()
 		require.NoError(t, runGatewayAdmittedVTEPs(cmd, flags, ""))
 		assert.Equal(t, "Admitted VTEPs\n"+admittedLine+
-			"  10.0.0.3        device=0 host= serial= allocation= baseline= profile=0 verdict=-\n", out.String())
+			"  198.51.100.3    device=0 host= serial= allocation= baseline= profile=0 verdict=-\n", out.String())
 	})
 
 	t.Run("one as a table", func(t *testing.T) {
 		rec, flags := startSDNServer(t, cli.OutputFormatTable)
 		rec.respond("GetGatewayAdmittedVTEP", &platformv1.GetGatewayAdmittedVTEPResponse{Vtep: admitted})
 		cmd, out := tableCommand()
-		require.NoError(t, runGatewayAdmittedVTEPGet(cmd, flags, "gw-1", "10.0.0.2"))
+		require.NoError(t, runGatewayAdmittedVTEPGet(cmd, flags, "gw-1", "198.51.100.2"))
 		assert.Equal(t, admittedLine, out.String())
 		req := rec.request(t, "GetGatewayAdmittedVTEP").(*platformv1.GetGatewayAdmittedVTEPRequest)
 		assert.Equal(t, "gw-1", req.GetGatewayId())
-		assert.Equal(t, "10.0.0.2", req.GetVtep())
+		assert.Equal(t, "198.51.100.2", req.GetVtep())
 	})
 
 	t.Run("JSON", func(t *testing.T) {
@@ -268,7 +268,7 @@ func TestRunGatewayAdmittedVTEPs_InProcess(t *testing.T) {
 		rec.respond("ListGatewayAdmittedVTEPs", &platformv1.ListGatewayAdmittedVTEPsResponse{Vteps: []*platformv1.GatewayAdmittedVTEP{admitted}})
 		cmd, table := tableCommand()
 
-		one, err := captureStdout(t, func() error { return runGatewayAdmittedVTEPGet(cmd, flags, "", "10.0.0.2") })
+		one, err := captureStdout(t, func() error { return runGatewayAdmittedVTEPGet(cmd, flags, "", "198.51.100.2") })
 		require.NoError(t, err)
 		assert.Contains(t, one, `"host_id": "h1"`)
 
@@ -306,10 +306,10 @@ func TestRunIPAM_InProcess(t *testing.T) {
 
 	t.Run("pool create", func(t *testing.T) {
 		_, err := captureStdout(t, func() error {
-			return runIPAMPoolCreate(flags, &platformv1.CreateIPAMPoolRequest{Name: "lab", Cidr: "10.9.0.0/24"})
+			return runIPAMPoolCreate(flags, &platformv1.CreateIPAMPoolRequest{Name: "lab", Cidr: "198.18.0.0/24"})
 		})
 		require.NoError(t, err)
-		assert.Equal(t, "10.9.0.0/24", rec.request(t, "CreateIPAMPool").(*platformv1.CreateIPAMPoolRequest).GetCidr())
+		assert.Equal(t, "198.18.0.0/24", rec.request(t, "CreateIPAMPool").(*platformv1.CreateIPAMPoolRequest).GetCidr())
 	})
 
 	t.Run("pool update builds from the current pool", func(t *testing.T) {
@@ -358,10 +358,10 @@ func TestRunIPAM_InProcess(t *testing.T) {
 	})
 
 	t.Run("release", func(t *testing.T) {
-		out, err := captureStdout(t, func() error { return runIPAMRelease(flags, "10.9.0.5") })
+		out, err := captureStdout(t, func() error { return runIPAMRelease(flags, "198.18.0.5") })
 		require.NoError(t, err)
-		assert.JSONEq(t, `{"ip":"10.9.0.5","released":true}`, out)
-		assert.Equal(t, "10.9.0.5", rec.request(t, "ReleaseIP").(*platformv1.ReleaseIPRequest).GetIp())
+		assert.JSONEq(t, `{"ip":"198.18.0.5","released":true}`, out)
+		assert.Equal(t, "198.18.0.5", rec.request(t, "ReleaseIP").(*platformv1.ReleaseIPRequest).GetIp())
 	})
 
 	t.Run("allocations", func(t *testing.T) {
@@ -482,29 +482,29 @@ func TestCommandTree_DispatchesToServer(t *testing.T) {
 		{[]string{"gateway", "mode", "set", "--modes", "edge"}, "SetGatewayMode"},
 		{[]string{"gateway", "bgp", "status"}, "GetBGPStatus"},
 		{[]string{"gateway", "bgp", "peers"}, "ListBGPPeers"},
-		{[]string{"gateway", "bgp", "announce", "--prefix", "10.8.0.0/24"}, "AnnouncePrefix"},
-		{[]string{"gateway", "bgp", "withdraw", "--prefix", "10.8.0.0/24"}, "WithdrawPrefix"},
+		{[]string{"gateway", "bgp", "announce", "--prefix", "192.0.2.0/24"}, "AnnouncePrefix"},
+		{[]string{"gateway", "bgp", "withdraw", "--prefix", "192.0.2.0/24"}, "WithdrawPrefix"},
 		{[]string{"gateway", "bgp", "routes"}, "ListAnnouncedPrefixes"},
 		{[]string{"gateway", "snapshot"}, "GetGatewaySnapshot"},
 		{[]string{"gateway", "overlay", "vteps"}, "ListGatewayAdmittedVTEPs"},
-		{[]string{"gateway", "overlay", "vteps", "get", "10.0.0.2"}, "GetGatewayAdmittedVTEP"},
+		{[]string{"gateway", "overlay", "vteps", "get", "198.51.100.2"}, "GetGatewayAdmittedVTEP"},
 		{[]string{"gateway", "lb", "status"}, "GetLBStatus"},
-		{[]string{"gateway", "lb", "vip", "add", "--address", "10.0.0.1", "--port", "80", "--backend", "10.0.1.1:8080"}, "AddVIP"},
-		{[]string{"gateway", "lb", "vip", "remove", "--address", "10.0.0.1", "--port", "80"}, "RemoveVIP"},
-		{[]string{"gateway", "lb", "vip", "get", "--address", "10.0.0.1", "--port", "80"}, "GetVIP"},
+		{[]string{"gateway", "lb", "vip", "add", "--address", "198.51.100.1", "--port", "80", "--backend", "203.0.113.1:8080"}, "AddVIP"},
+		{[]string{"gateway", "lb", "vip", "remove", "--address", "198.51.100.1", "--port", "80"}, "RemoveVIP"},
+		{[]string{"gateway", "lb", "vip", "get", "--address", "198.51.100.1", "--port", "80"}, "GetVIP"},
 		{[]string{"gateway", "lb", "vip", "list"}, "ListVIPs"},
-		{[]string{"gateway", "lb", "vip", "set-backends", "--address", "10.0.0.1", "--port", "80", "--backend", "10.0.1.1:8080"}, "SetVIPBackends"},
+		{[]string{"gateway", "lb", "vip", "set-backends", "--address", "198.51.100.1", "--port", "80", "--backend", "203.0.113.1:8080"}, "SetVIPBackends"},
 		{[]string{"gateway", "nat64", "status"}, "GetNAT64Status"},
 		{[]string{"gateway", "perf", "flows", "--count", "10"}, "GetPerfFlows"},
 		{[]string{"gateway", "perf", "datapath"}, "GetPerfDatapath"},
 		{[]string{"gateway", "perf", "conntrack", "--zone", "7"}, "GetPerfConntrack"},
 		{[]string{"ipam", "pool", "list"}, "ListIPAMPools"},
 		{[]string{"ipam", "pool", "get", "--id", "pool-1"}, "GetIPAMPool"},
-		{[]string{"ipam", "pool", "create", "--name", "lab", "--cidr", "10.9.0.0/24"}, "CreateIPAMPool"},
+		{[]string{"ipam", "pool", "create", "--name", "lab", "--cidr", "198.18.0.0/24"}, "CreateIPAMPool"},
 		{[]string{"ipam", "pool", "update", "--id", "pool-1", "--name", "renamed"}, "UpdateIPAMPool"},
 		{[]string{"ipam", "pool", "delete", "--id", "pool-1"}, "DeleteIPAMPool"},
 		{[]string{"ipam", "allocate", "--pool-id", "pool-1", "--device-id", "dev-1"}, "AllocateIP"},
-		{[]string{"ipam", "release", "--ip", "10.9.0.5"}, "ReleaseIP"},
+		{[]string{"ipam", "release", "--ip", "198.18.0.5"}, "ReleaseIP"},
 		{[]string{"ipam", "allocations"}, "ListAllocations"},
 	}
 	for _, tc := range cases {
