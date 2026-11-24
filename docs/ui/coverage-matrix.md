@@ -23,9 +23,9 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 |---|---|---|---|---|---|
 | `AttestationService.GetManifest` | `GET /manifests/{id}` | `(dashboard)/attestation/[id]/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `AttestationService.BuildManifest` | `POST /manifests/build` | `(dashboard)/attestation/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `AttestationService.VerifyManifest` | `POST /manifests/verify` | `(dashboard)/attestation/[id]/page.tsx`<br>`(dashboard)/attestation/verify/page.tsx` | - | `real-server/attestation-verify.spec.ts` | gated-off: BuildManifest needs a daemon-managed TPM session (ErrTPMSessionNotConfigured), so the real-server spec cannot seed a manifest and skips |
+| `AttestationService.VerifyManifest` | `POST /manifests/verify` | `(dashboard)/attestation/[id]/page.tsx`<br>`(dashboard)/attestation/verify/page.tsx` | - | `real-server/attestation-verify.spec.ts` | covered |
 | `AttestationService.ListManifests` | `GET /manifests` | `(dashboard)/attestation/eventlogs/page.tsx`<br>`(dashboard)/attestation/manifests/page.tsx`<br>`(dashboard)/attestation/page.tsx` (+2) | - | `tpm-attestation.spec.ts` | covered |
-| `AttestationService.DeleteManifest` | `DELETE /manifests/{id}` | `(dashboard)/attestation/manifests/page.tsx`<br>`(dashboard)/attestation/[id]/page.tsx` | - | `real-server/attestation-manifests.spec.ts` | gated-off: BuildManifest needs a daemon-managed TPM session (ErrTPMSessionNotConfigured), so the real-server spec cannot seed a manifest and skips |
+| `AttestationService.DeleteManifest` | `DELETE /manifests/{id}` | `(dashboard)/attestation/manifests/page.tsx`<br>`(dashboard)/attestation/[id]/page.tsx` | - | `real-server/attestation-manifests.spec.ts` | covered |
 | `AttestationService.GetAttestationQuote` | `POST /quote` | `(dashboard)/attestation/quotes/page.tsx` | - | `real-server/attestation-quotes.spec.ts` | covered |
 | `AttestationService.VerifyAttestationQuote` | `POST /quote/verify` | `(dashboard)/attestation/quotes/page.tsx` | - | `real-server/attestation-quotes.spec.ts` | covered |
 | `AttestationService.CollectHostAttestation` | `POST /host` | `(dashboard)/attestation/collect/page.tsx` | - | `real-server/attestation-collect.spec.ts` | covered |
@@ -730,7 +730,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Area (service) | Operations | covered | partial | missing | not-UI | blocked: integration |
 |---|---|---|---|---|---|---|
-| AttestationService | 16 | 13 | 2 | 0 | 1 | 0 |
+| AttestationService | 16 | 15 | 0 | 0 | 1 | 0 |
 | BarrierService | 5 | 0 | 0 | 0 | 5 | 0 |
 | BMCService | 23 | 0 | 0 | 23 | 0 | 0 |
 | CAService | 13 | 7 | 0 | 6 | 0 | 0 |
@@ -766,7 +766,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **128** | **63** | **257** | **50** | **31** |
+| **Total** | **529** | **131** | **60** | **257** | **50** | **31** |
 
 Gated-off rows are counted in the partial column.
 
@@ -774,7 +774,7 @@ Gated-off rows are counted in the partial column.
 
 Each slice builds the missing pages and the missing specs for at most 15 operations of one area. `missing` rows need a page and a spec; `partial` rows need a spec, or the write added to an existing read-only page. Slices are listed in proto order; within an area, operations on the same resource stay together.
 
-1. **AttestationService: Manifest, AttestationQuote, HostAttestation, VMAttestation, ContainerAttestation, DeviceVerdicts**: 2 operations gated-off: of the 9 operations of #2038, VerifyManifest and DeleteManifest are gated-off on the daemon-managed TPM session (ErrTPMSessionNotConfigured), and the other 7 (DescribeCallerPolicy, GetAttestationQuote, VerifyAttestationQuote, CollectHostAttestation, CollectVMAttestation, CollectContainerAttestation, PollDeviceVerdicts) are covered.
+1. **AttestationService: Manifest, AttestationQuote, HostAttestation, VMAttestation, ContainerAttestation, DeviceVerdicts**: 0 operations left: all 9 operations of #2038 are covered (DescribeCallerPolicy, GetAttestationQuote, VerifyAttestationQuote, CollectHostAttestation, CollectVMAttestation, CollectContainerAttestation, PollDeviceVerdicts, and VerifyManifest and DeleteManifest on manifests the real-server harness seeds into the attestation store).
 2. **BMCService (1/2): On, Off, Reset, Cycle, Status, BootDevice…**: 15 operations (15 missing, 0 partial): PowerOn, PowerOff, PowerReset, PowerCycle, PowerStatus, ProvisionStatus, SetBootDevice, GetBootDevice, MountISO, UnmountISO, VirtualMediaStatus, GetSensors, GetSystemInfo, Provision, GetWebCertificate.
 3. **BMCService (2/2): ReplaceWebCertificate, BMC, FactoryCert, User, UserPassword, UserPrivilege**: 8 operations (8 missing, 0 partial): ReplaceWebCertificate, EnrollBMC, RestoreFactoryCert, ListUsers, CreateUser, DeleteUser, SetUserPassword, SetUserPrivilege.
 4. **CAService: CAInfo, CA, CACertificate, CSR, Certificate**: 6 operations (6 missing, 0 partial): GetCAInfo, InitCA, InstallCACertificates, UninstallCACertificates, SignCSR, VerifyCertificate.
