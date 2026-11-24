@@ -157,13 +157,13 @@ describe('TPMCredentialPage', () => {
   });
 
   it("shows the server's reason when the platform AK read is refused", async () => {
-    stubControlPlane({ [CAPS_PATH]: caps(), [AK_PATH]: refused(503, 'tpm unavailable') });
+    stubControlPlane({ [CAPS_PATH]: caps(), [AK_PATH]: refused(403, 'forbidden') });
     renderPage();
 
     await waitEnabled('Use platform AK');
     await click('Use platform AK');
 
-    const toast = await screen.findByText('GetAK failed: tpm unavailable');
+    const toast = await screen.findByText('GetAK failed: forbidden');
     expect(toast.getAttribute('data-variant')).toBe('destructive');
     expect(inputOf('AK name (base64)').value).toBe('');
   });

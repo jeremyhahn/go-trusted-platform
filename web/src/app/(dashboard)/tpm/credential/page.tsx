@@ -31,6 +31,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
+import { Gated } from "@/components/features/capabilities/gated";
 import { base64ToHex, textToBase64, useTPMOps, useToast } from "@/hooks";
 
 /**
@@ -47,7 +48,7 @@ function failureMessage(err: unknown): string {
 
 export default function TPMCredentialPage() {
   const { toast } = useToast();
-  const { makeCredential, activateCredential, getRandom } = useTPMOps();
+  const { makeCredential, activateCredential, getRandom, getAK } = useTPMOps();
 
   const [akName, setAkName] = React.useState("");
   const [secret, setSecret] = React.useState("");
@@ -77,6 +78,20 @@ export default function TPMCredentialPage() {
       toast({ title: "Credential made", variant: "success" });
     } catch (err) {
       fail("MakeCredential failed")(err);
+    }
+  };
+
+  // onUsePlatformAK fills the AK name from the platform AK (GetAK).
+  const onUsePlatformAK = async () => {
+    try {
+      const resp = await getAK.mutateAsync(undefined);
+      if (!resp.name) {
+        fail("GetAK failed")(new Error("the server returned no AK name"));
+        return;
+      }
+      setAkName(resp.name);
+    } catch (err) {
+      fail("GetAK failed")(err);
     }
   };
 
@@ -120,16 +135,30 @@ export default function TPMCredentialPage() {
         <CardContent className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="ak-name">AK name (base64)</Label>
-            <Input id="ak-name" value={akName} onChange={(e) => setAkName(e.target.value)} />
+            <div className="flex gap-2">
+              <Input id="ak-name" value={akName} onChange={(e) => setAkName(e.target.value)} />
+              <Gated op="GET /api/v1/tpm/ak">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onUsePlatformAK}
+                  disabled={getAK.isLoading}
+                >
+                  Use platform AK
+                </Button>
+              </Gated>
+            </div>
           </div>
           <div className="space-y-2">
             <Label htmlFor="secret">Secret (optional)</Label>
             <Input id="secret" value={secret} onChange={(e) => setSecret(e.target.value)} />
           </div>
-          <Button onClick={onMake} disabled={!akName.trim() || makeCredential.isLoading}>
-            {makeCredential.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Make Credential
-          </Button>
+          <Gated op="POST /api/v1/tpm/make-credential">
+            <Button onClick={onMake} disabled={!akName.trim() || makeCredential.isLoading}>
+              {makeCredential.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Make Credential
+            </Button>
+          </Gated>
           {wrappedSecret && (
             <div className="space-y-1">
               <p className="text-sm font-medium">Wrapped secret</p>
@@ -165,13 +194,15 @@ export default function TPMCredentialPage() {
               onChange={(e) => setEncryptedSecret(e.target.value)}
             />
           </div>
-          <Button
-            variant="destructive"
-            onClick={() => setConfirmOpen(true)}
-            disabled={!credentialBlob || !encryptedSecret || activateCredential.isLoading}
-          >
-            Activate Credential
-          </Button>
+          <Gated op="POST /api/v1/tpm/activate-credential">
+            <Button
+              variant="destructive"
+              onClick={() => setConfirmOpen(true)}
+              disabled={!credentialBlob || !encryptedSecret || activateCredential.isLoading}
+            >
+              Activate Credential
+            </Button>
+          </Gated>
           {activatedSecret !== undefined && (
             <div className="space-y-1">
               <p className="text-sm font-medium">Recovered secret</p>
@@ -200,10 +231,12 @@ export default function TPMCredentialPage() {
               onChange={(e) => setNumBytes(e.target.value)}
             />
           </div>
-          <Button onClick={onRandom} disabled={getRandom.isLoading}>
-            {getRandom.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Get Random
-          </Button>
+          <Gated op="POST /api/v1/tpm/random">
+            <Button onClick={onRandom} disabled={getRandom.isLoading}>
+              {getRandom.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Get Random
+            </Button>
+          </Gated>
           {randomBytes !== undefined && (
             <code data-testid="random-bytes" className="block text-xs break-all">
               {base64ToHex(randomBytes)}
