@@ -1777,6 +1777,10 @@ func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientIn
 			if fl == nil || fl.Cookie == flow.mod.Cookie {
 				continue
 			}
+			// A cookie-0 flow with the same actions is this flow installed before policy cookies.
+			if zeroFlowCookie(fl.Cookie) && fl.Actions == flow.mod.Actions {
+				continue
+			}
 			theirs := policyFlow{bridge: flow.bridge, mod: &ovs.FlowMod{Table: fl.Table, Priority: fl.Priority, Match: fl.Match}}
 			if flowKey(theirs) == want {
 				return flow, fl, nil
@@ -1784,6 +1788,16 @@ func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientIn
 		}
 	}
 	return policyFlow{}, nil, nil
+}
+
+// zeroFlowCookie reports whether an installed flow's cookie is empty or zero.
+func zeroFlowCookie(cookie string) bool {
+	v := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(cookie)), "0x")
+	if v == "" {
+		return true
+	}
+	n, err := strconv.ParseUint(v, 16, 64)
+	return err == nil && n == 0
 }
 
 // storePolicy writes the policy record under the write lock and returns
