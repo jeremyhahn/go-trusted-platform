@@ -84,6 +84,12 @@ export function AttestationQuoteCard() {
   const [verifying, setVerifying] = React.useState(false);
   const [verdict, setVerdict] = React.useState<Verdict | null>(null);
   const [verifyError, setVerifyError] = React.useState<string | null>(null);
+  // Bumped whenever a verify input changes: a verify answer for older inputs is dropped.
+  const verifySeq = React.useRef(0);
+  const staleVerdict = () => {
+    verifySeq.current += 1;
+    setVerdict(null);
+  };
 
   const failed = (title: string, description: string) =>
     toast({ title, description, variant: "destructive" });
@@ -114,7 +120,7 @@ export function AttestationQuoteCard() {
         return;
       }
       setResult({ quote: res.data.quote, channelBinding: res.data.channelBinding });
-      setVerdict(null);
+      staleVerdict();
       setChannelBinding(res.data.channelBinding ?? "");
       if (res.data.quote) {
         setQuoteJson(JSON.stringify(res.data.quote, null, 2));
@@ -152,6 +158,9 @@ export function AttestationQuoteCard() {
       setVerifyError(`Invalid quote JSON: ${errorText(err)}`);
       return;
     }
+    const seq = ++verifySeq.current;
+    // An input changed while the verify was in flight: its answer is for other inputs.
+    const stale = () => seq !== verifySeq.current;
     setVerifying(true);
     try {
       const request: VerifyRequest = {
@@ -163,12 +172,14 @@ export function AttestationQuoteCard() {
       const binding = typed !== "" ? typed : envelopeBinding.trim();
       if (binding !== "") request.channelBinding = binding;
       const res = await attestation.verifyQuote(request);
+      if (stale()) return;
       if (!res.success || !res.data) {
         failed("Quote verification failed", res.error?.message ?? "no verdict in the answer");
         return;
       }
       setVerdict({ verified: res.data.verified === true, message: res.data.message });
     } catch (err) {
+      if (stale()) return;
       failed("Quote verification failed", errorText(err));
     } finally {
       setVerifying(false);
@@ -258,7 +269,7 @@ export function AttestationQuoteCard() {
               value={quoteJson}
               onChange={(e) => {
                 setQuoteJson(e.target.value);
-                setVerdict(null);
+                staleVerdict();
               }}
             />
           </div>
@@ -272,7 +283,7 @@ export function AttestationQuoteCard() {
               value={akPem}
               onChange={(e) => {
                 setAkPem(e.target.value);
-                setVerdict(null);
+                staleVerdict();
               }}
             />
           </div>
@@ -284,7 +295,7 @@ export function AttestationQuoteCard() {
               value={expectedNonce}
               onChange={(e) => {
                 setExpectedNonce(e.target.value);
-                setVerdict(null);
+                staleVerdict();
               }}
             />
           </div>
@@ -296,7 +307,7 @@ export function AttestationQuoteCard() {
               value={channelBinding}
               onChange={(e) => {
                 setChannelBinding(e.target.value);
-                setVerdict(null);
+                staleVerdict();
               }}
             />
             <p className="text-xs text-muted-foreground">
