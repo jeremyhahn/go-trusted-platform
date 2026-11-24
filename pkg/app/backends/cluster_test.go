@@ -314,6 +314,33 @@ func TestClusterBackend_JoinNotWired(t *testing.T) {
 	}
 }
 
+func TestClusterBackend_LeaveIsUnavailable(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		id   uint64
+	}{
+		{"leader of shard 1", 1},
+		{"follower", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeClusterSurface{status: twoShardStatus()}
+			b := NewClusterBackend(fake, tc.id, "")
+
+			err := b.Leave(context.Background())
+			var unavailable grpcapi.ErrClusterServiceUnavailable
+			if !errors.As(err, &unavailable) {
+				t.Fatalf("Leave = %v, want ErrClusterServiceUnavailable", err)
+			}
+			if got := status.Code(grpcapi.ClusterErrorStatus(err)); got != codes.Unavailable {
+				t.Errorf("Leave status code = %v, want %v", got, codes.Unavailable)
+			}
+			if fake.statusCalls != 0 || len(fake.removeReqs) != 0 {
+				t.Errorf("Leave made SDK calls: status %d, remove %d", fake.statusCalls, len(fake.removeReqs))
+			}
+		})
+	}
+}
+
 func TestClusterBackend_LeaveRemovesThisNodeFromEachShard(t *testing.T) {
 	fake := &fakeClusterSurface{status: twoShardStatus()}
 	b := NewClusterBackend(fake, 2, "")
