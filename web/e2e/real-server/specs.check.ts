@@ -191,5 +191,29 @@ const deleteSpec = fs.readFileSync(path.join(import.meta.dirname, 'invitation-de
 for (const goto of ["goto('/tenant/invitations')", 'goto(`/tenant/invitations/${']) {
   assert.ok(deleteSpec.includes(goto), `invitation-delete.spec.ts calls ${goto}`);
 }
+// The seeded registry spec (#2063) runs against the real platformd: it seeds
+// its images with the /v2 push fixture and the real-server fixtures, never a
+// page.route mock or api-mock, and every context it opens names baseURL.
+const registry = fs.readFileSync(path.join(import.meta.dirname, 'registry-seeded.spec.ts'), 'utf8');
+assert.match(
+  registry,
+  /import\s*\{[^}]*\bpushTestImage\b[^}]*\}\s*from\s*'\.\/fixtures\/registry-seed'/,
+  'registry-seeded.spec.ts imports pushTestImage from ./fixtures/registry-seed',
+);
+assert.match(
+  registry,
+  /import\s*\{[^}]*\brequestFetch\b[^}]*\}\s*from\s*'\.\/fixtures'/,
+  'registry-seeded.spec.ts imports requestFetch from ./fixtures',
+);
+assert.match(
+  registry,
+  /import\s*\{[^}]*\btest\b[^}]*\}\s*from\s*'\.\/fixtures'/,
+  'registry-seeded.spec.ts imports test from ./fixtures',
+);
+assert.doesNotMatch(registry, /page\.route\(/, 'registry-seeded.spec.ts mocks no route with page.route(');
+assert.doesNotMatch(registry, /api-mock/, 'registry-seeded.spec.ts does not use api-mock');
+for (const call of registry.matchAll(/browser\.newContext\(([^)]*)\)/g)) {
+  assert.match(call[1], /\bbaseURL\b/, `registry-seeded.spec.ts newContext call names baseURL: ${call[0]}`);
+}
 
 console.log('specs.check: ok');

@@ -63,10 +63,10 @@ export interface TunnelInfo {
   vni: number;
   /** Tunnel state */
   state: string;
-  /** Bytes transmitted */
-  bytesTx: number;
-  /** Bytes received */
-  bytesRx: number;
+  /** Bytes transmitted (uint64: protojson sends it as a decimal string) */
+  bytesTx: number | string;
+  /** Bytes received (uint64: protojson sends it as a decimal string) */
+  bytesRx: number | string;
 }
 
 /**
@@ -101,6 +101,10 @@ export interface OverlayStatus {
   remoteMacCount: number;
   /** Whether healthy */
   healthy: boolean;
+  /** VXLAN UDP port */
+  vxlanPort?: number;
+  /** Underlay MTU */
+  underlayMtu?: number;
 }
 
 // =============================================================================
