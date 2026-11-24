@@ -614,7 +614,7 @@ export default function IPAMPage() {
                 id="pool-cidr"
                 value={form.cidr}
                 onChange={(e) => setForm((f) => ({ ...f, cidr: e.target.value }))}
-                placeholder="10.0.0.0/24"
+                placeholder="198.51.100.0/24"
                 disabled={!!editTarget}
                 className={editTarget ? 'opacity-60 cursor-not-allowed' : ''}
               />

@@ -469,8 +469,8 @@ export function createMockFlow(overrides: Partial<Flow> & { bridgeId?: string; p
       table: 'TABLE_0',
       priority: overrides.priority || 100,
       match: {
-        ipSrc: '10.0.0.0/8',
-        ipDst: '192.168.1.0/24',
+        ipSrc: '198.51.100.0/24',
+        ipDst: '192.0.2.0/24',
         ipProto: 6, // TCP
       },
       actions: [{ type: 'OUTPUT', port: 'port-1' }],
@@ -507,7 +507,7 @@ export function createMockGatewayStatus(overrides: Partial<GatewayStatus> = {}):
 export function createMockBGPStatus(overrides: Partial<BGPStatus> = {}): BGPStatus {
   return {
     localAsn: 65001,
-    routerId: '10.0.0.1',
+    routerId: '198.51.100.1',
     peerCount: 2,
     establishedPeers: 2,
     prefixesAnnounced: 10,
@@ -519,8 +519,8 @@ export function createMockBGPStatus(overrides: Partial<BGPStatus> = {}): BGPStat
 export function createMockIPAMPool(overrides: Partial<IPAMPool> = {}): IPAMPool {
   return {
     id: 'pool-1',
-    cidr: '192.168.1.0/24',
-    gateway: '192.168.1.1',
+    cidr: '192.0.2.0/24',
+    gateway: '192.0.2.1',
     total: 254,
     allocated: 50,
     available: 204,
@@ -560,7 +560,7 @@ export function createMockZone(overrides: Partial<Zone> & { name?: string } = {}
 export function createMockDNSRecord(recordType: RecordType = 'A', overrides: Partial<ARecord> = {}): DNSRecord {
   const baseRecord: ARecord = {
     name: overrides.name || `host${Math.floor(Math.random() * 100)}`,
-    value: overrides.value || '192.168.1.100',
+    value: overrides.value || '192.0.2.100',
     ttl: overrides.ttl || 3600,
   };
 
@@ -593,7 +593,7 @@ export function createMockVNI(overrides: Partial<VNI> & { vni?: number; name?: s
 export function createMockOverlayStatus(overrides: Partial<OverlayStatus> = {}): OverlayStatus {
   return {
     nodeId: 'node-1',
-    vtepIp: '10.0.0.1',
+    vtepIp: '198.51.100.1',
     vtepCount: 3,
     vniCount: 5,
     tunnelCount: 10,
@@ -608,7 +608,7 @@ export function createMockVTEP(overrides: Partial<VTEPInfo> = {}): VTEPInfo {
 
   return {
     nodeId: 'node-1',
-    ip: '10.0.0.1',
+    ip: '198.51.100.1',
     healthy: true,
     lastSeen: now.toISOString(),
     ...overrides,
@@ -617,8 +617,8 @@ export function createMockVTEP(overrides: Partial<VTEPInfo> = {}): VTEPInfo {
 
 export function createMockTunnel(overrides: Partial<TunnelInfo> = {}): TunnelInfo {
   return {
-    localVtep: '10.0.0.1',
-    remoteVtep: '10.0.0.2',
+    localVtep: '198.51.100.1',
+    remoteVtep: '198.51.100.2',
     vni: 10001,
     state: 'active',
     bytesTx: 1073741824,
@@ -650,7 +650,7 @@ export function createMockPXEServiceStatus(overrides: Partial<PXEServiceStatus> 
     running: true,
     deviceCount: 5,
     startTime: now.toISOString(),
-    ipxeServerAddr: '192.168.1.1:8080',
+    ipxeServerAddr: '192.0.2.1:8080',
     quarantineVlan: 999,
     provisioningVlan: 100,
     ...overrides,
@@ -1799,7 +1799,7 @@ test.describe('Networking Management', () => {
       const ipamPools = [
         createMockIPAMPool({
           id: 'pool-1',
-          cidr: '192.168.1.0/24',
+          cidr: '192.0.2.0/24',
           total: 254,
           allocated: 50,
           available: 204,
@@ -1818,7 +1818,7 @@ test.describe('Networking Management', () => {
       }
 
       // Verify IPAM info is displayed - use first() in case multiple matches
-      await expect(page.getByText('192.168.1.0/24').first()).toBeVisible();
+      await expect(page.getByText('192.0.2.0/24').first()).toBeVisible();
     });
 
     test('should show fleet-only view when this node does not run gatewayd', async ({ page }) => {
@@ -2223,7 +2223,7 @@ test.describe('Networking Management', () => {
           health: { status: 'healthy' },
           pxe: {
             status: 'running',
-            listen_address: '10.4.200.1:69',
+            listen_address: '203.0.113.1:69',
             boots_served: 12,
           },
         },
@@ -2234,7 +2234,7 @@ test.describe('Networking Management', () => {
 
       await expect(page.getByText(/pxe is not available on this node/i)).toBeVisible();
       await expect(page.getByText('node-01-gateway')).toBeVisible();
-      await expect(page.getByText('10.4.200.1:69')).toBeVisible();
+      await expect(page.getByText('203.0.113.1:69')).toBeVisible();
       // No destructive error alert for the informational state.
       await expect(page.getByRole('heading', { name: /error loading pxe boot/i })).not.toBeVisible();
     });

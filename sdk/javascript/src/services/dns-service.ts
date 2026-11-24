@@ -59,7 +59,7 @@ function toProtoRecord(record: DNSRecord) {
  *   zoneName: 'example.com',
  *   record: {
  *     type: 'A',
- *     a: { name: 'www', value: '192.168.1.1', ttl: 300 }
+ *     a: { name: 'www', value: '192.0.2.1', ttl: 300 }
  *   }
  * });
  *

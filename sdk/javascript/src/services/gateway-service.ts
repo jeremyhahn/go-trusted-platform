@@ -43,8 +43,8 @@ import type {
  *
  * // Announce a prefix via BGP
  * await client.gateway.announcePrefix({
- *   prefix: '10.0.0.0/24',
- *   nextHop: '192.168.1.1',
+ *   prefix: '198.51.100.0/24',
+ *   nextHop: '192.0.2.1',
  * });
  *
  * // Allocate IP from pool

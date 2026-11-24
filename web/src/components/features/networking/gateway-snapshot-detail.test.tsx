@@ -26,7 +26,7 @@ function snapshot(overrides: Partial<GatewaySnapshot> = {}): GatewaySnapshot {
       received_prefixes: 118,
       peers: [
         {
-          address: '10.255.0.2',
+          address: '203.0.113.2',
           asn: 64512,
           state: 'Established',
           prefixes_received: 120,
@@ -35,7 +35,7 @@ function snapshot(overrides: Partial<GatewaySnapshot> = {}): GatewaySnapshot {
           bfd: { state: 'up', remote_state: 'up', failure_transitions: 2 },
         },
         {
-          address: '10.255.0.6',
+          address: '203.0.113.6',
           asn: 64512,
           state: 'Active',
           prefixes_received: 0,
@@ -90,7 +90,7 @@ describe('GatewaySnapshotDetail', () => {
 
     // BGP sessions with prefix counters and the BFD state.
     expect(screen.getByText(/AS 64512, router-id 203.0.113.4/)).toBeDefined();
-    expect(screen.getByText('10.255.0.2')).toBeDefined();
+    expect(screen.getByText('203.0.113.2')).toBeDefined();
     expect(screen.getByText('Established')).toBeDefined();
     expect(screen.getByText('118')).toBeDefined();
     expect(screen.getByText('up · 2 failures')).toBeDefined();

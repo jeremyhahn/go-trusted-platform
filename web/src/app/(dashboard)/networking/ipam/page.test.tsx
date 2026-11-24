@@ -63,18 +63,18 @@ import IPAMPage from "./page";
 const poolA = {
   id: "pool-a",
   name: "prod",
-  cidr: "10.0.0.0/24",
-  gateway: "10.0.0.1",
+  cidr: "198.51.100.0/24",
+  gateway: "198.51.100.1",
   zone: "control-plane",
   description: "prod pool",
   total: "254",
   allocated: "127",
   available: "127",
-  reserved: ["10.0.0.1/32", "10.0.0.8/30"],
-  range_start: "10.0.0.50",
-  range_end: "10.0.0.200",
+  reserved: ["198.51.100.1/32", "198.51.100.8/30"],
+  range_start: "198.51.100.50",
+  range_end: "198.51.100.200",
 };
-const poolB = { id: "pool-b", name: "lab", cidr: "10.1.0.0/30", zone: "lab", total: "0", allocated: "0", available: "0" };
+const poolB = { id: "pool-b", name: "lab", cidr: "203.0.113.0/30", zone: "lab", total: "0", allocated: "0", available: "0" };
 
 type Call = { method: string; url: string; body: unknown };
 let calls: Call[];
@@ -129,7 +129,7 @@ describe("IPAMPage", () => {
 
     await screen.findByTestId("row-pool-a");
     expect(calls[0]).toEqual({ method: "GET", url: "/api/v1/sdn/gateway/ipam/pools", body: undefined });
-    expect(cell("pool-a", "window")).toContain("10.0.0.50 – 10.0.0.200");
+    expect(cell("pool-a", "window")).toContain("198.51.100.50 – 198.51.100.200");
     expect(cell("pool-b", "window")).toContain("whole CIDR");
     expect(cell("pool-a", "counts")).toBe("127 / 254");
     expect(cell("pool-a", "available")).toBe("127");
@@ -188,8 +188,8 @@ describe("IPAMPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Pool" }));
     expect(await screen.findByText("Create IPAM Pool")).toBeTruthy();
     fireEvent.change(input("pool-name"), { target: { value: "edge" } });
-    fireEvent.change(input("pool-cidr"), { target: { value: "10.9.0.0/24" } });
-    fireEvent.change(input("pool-reserved"), { target: { value: " 10.9.0.1/32 , ,10.9.0.8/30 " } });
+    fireEvent.change(input("pool-cidr"), { target: { value: "192.0.2.0/24" } });
+    fireEvent.change(input("pool-reserved"), { target: { value: " 192.0.2.1/32 , ,192.0.2.8/30 " } });
     const dialog = screen.getByRole("dialog");
     fireEvent.click(within(dialog).getByRole("button", { name: "Create Pool" }));
 
@@ -197,7 +197,7 @@ describe("IPAMPage", () => {
     expect(calls.find((c) => c.method === "POST")).toEqual({
       method: "POST",
       url: "/api/v1/sdn/gateway/ipam/pools",
-      body: { name: "edge", cidr: "10.9.0.0/24", reserved: ["10.9.0.1/32", "10.9.0.8/30"] },
+      body: { name: "edge", cidr: "192.0.2.0/24", reserved: ["192.0.2.1/32", "192.0.2.8/30"] },
     });
     await waitFor(() => expect(toast).toHaveBeenCalledWith({ title: "Pool created", variant: "success" }));
     await waitFor(() => expect(calls.filter((c) => c.method === "GET")).toHaveLength(2));
@@ -225,7 +225,7 @@ describe("IPAMPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Pool" }));
     await screen.findByText("Create IPAM Pool");
     fireEvent.change(input("pool-name"), { target: { value: "dup" } });
-    fireEvent.change(input("pool-cidr"), { target: { value: "10.0.0.0/25" } });
+    fireEvent.change(input("pool-cidr"), { target: { value: "198.51.100.0/25" } });
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Create Pool" }));
 
     await waitFor(() =>
@@ -241,8 +241,8 @@ describe("IPAMPage", () => {
 
     fireEvent.click(within(row).getByText("Edit"));
     expect(await screen.findByText("Edit Pool: prod")).toBeTruthy();
-    expect(input("pool-reserved").value).toBe("10.0.0.1/32, 10.0.0.8/30");
-    expect(input("pool-range-start").value).toBe("10.0.0.50");
+    expect(input("pool-reserved").value).toBe("198.51.100.1/32, 198.51.100.8/30");
+    expect(input("pool-range-start").value).toBe("198.51.100.50");
     fireEvent.change(input("pool-range-end"), { target: { value: "  " } });
     fireEvent.change(input("pool-range-start"), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
@@ -253,10 +253,10 @@ describe("IPAMPage", () => {
       url: "/api/v1/sdn/gateway/ipam/pools/pool-a",
       body: {
         name: "prod",
-        gateway: "10.0.0.1",
+        gateway: "198.51.100.1",
         zone: "control-plane",
         description: "prod pool",
-        reserved: ["10.0.0.1/32", "10.0.0.8/30"],
+        reserved: ["198.51.100.1/32", "198.51.100.8/30"],
         range_start: "",
         range_end: "",
       },
@@ -317,7 +317,7 @@ describe("IPAMPage", () => {
           ? json(200, {
               payload: {
                 allocations: [
-                  { ip: "10.0.0.51", pool_id: "pool-a", device_id: "dev-1", hostname: "node-1", allocated_at: "2026-11-01T00:00:00Z", expires_at: "" },
+                  { ip: "198.51.100.51", pool_id: "pool-a", device_id: "dev-1", hostname: "node-1", allocated_at: "2026-11-01T00:00:00Z", expires_at: "" },
                 ],
               },
             })
@@ -328,8 +328,8 @@ describe("IPAMPage", () => {
     const row = await screen.findByTestId("row-pool-a");
 
     fireEvent.click(within(row).getByText("View Allocations"));
-    expect(await screen.findByText("10.0.0.51")).toBeTruthy();
-    expect(screen.getByText(/Allocations: prod \(10\.0\.0\.0\/24\)/)).toBeTruthy();
+    expect(await screen.findByText("198.51.100.51")).toBeTruthy();
+    expect(screen.getByText(/Allocations: prod \(198\.51\.100\.0\/24\)/)).toBeTruthy();
     expect(calls.some((c) => c.url === "/api/v1/sdn/gateway/ipam/allocations?pool_id=pool-a")).toBe(true);
   });
 

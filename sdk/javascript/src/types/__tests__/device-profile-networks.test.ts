@@ -32,7 +32,7 @@ const WIRE_PROFILE = `{
   "role": "WORKER",
   "networks": {
     "provisioning": { "vlan": 998, "dhcp": true },
-    "lab-dmz": { "vlan": 42, "static_ip": "10.42.0.7", "gateway": "10.42.0.1" },
+    "lab-dmz": { "vlan": 42, "static_ip": "203.0.113.7", "gateway": "203.0.113.1" },
     "quarantine": { "vlan": 666, "dhcp": true }
   },
   "post_enrollment_network": "lab-dmz",

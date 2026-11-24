@@ -7,8 +7,8 @@ import { mockOverlayApi, mockTenantApi, OverlayApiCall } from './fixtures/api-mo
  */
 
 const vteps = [
-  { nodeId: 'node-a', ip: '10.0.0.1', healthy: true, lastSeen: '2026-11-12T00:00:00Z' },
-  { nodeId: 'node-b', ip: '10.0.0.2', healthy: false, lastSeen: '2026-11-11T23:00:00Z' },
+  { nodeId: 'node-a', ip: '198.51.100.1', healthy: true, lastSeen: '2026-11-12T00:00:00Z' },
+  { nodeId: 'node-b', ip: '198.51.100.2', healthy: false, lastSeen: '2026-11-11T23:00:00Z' },
 ];
 const vnis = [
   { id: 'vni-5001', config: { vni: 5001, name: 'tenant-blue' }, createdAt: '2026-11-01T00:00:00Z', macCount: 3 },
@@ -38,7 +38,7 @@ test.describe('Overlay VTEPs and tunnels', () => {
     const calls = await openPage(page);
     const table = page.getByTestId('vteps-table');
     await expect(table.getByRole('cell', { name: 'node-a', exact: true })).toBeVisible();
-    await expect(table.getByRole('cell', { name: '10.0.0.2' })).toBeVisible();
+    await expect(table.getByRole('cell', { name: '198.51.100.2' })).toBeVisible();
     expect(calls.some((c) => c.method === 'GET' && c.path === '/vteps')).toBe(true);
   });
 

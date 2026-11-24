@@ -47,7 +47,7 @@ const gateway = {
       id: "lease-1",
       tenantId: "acme",
       deviceId: "laptop-1",
-      address: "10.8.0.2",
+      address: "192.0.2.2",
       dataPlane: "masque",
       zones: ["management"],
       issuedAtUnix: "1760300000",
@@ -123,7 +123,7 @@ describe("VPNPage", () => {
 
     renderPage();
 
-    expect(await screen.findByText("10.8.0.2")).toBeTruthy();
+    expect(await screen.findByText("192.0.2.2")).toBeTruthy();
     expect(screen.getByText("gateway-a refused acme/laptop-9")).toBeTruthy();
     expect(screen.getByText("posture violation")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Revoke laptop-1" })).toBeTruthy();
