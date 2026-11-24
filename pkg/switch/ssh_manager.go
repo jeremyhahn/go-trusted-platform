@@ -15,6 +15,7 @@ package switchmgmt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -24,6 +25,9 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/switchwire"
 )
+
+// errSSHConnectionClosed is returned by an operation whose connection Close took.
+var errSSHConnectionClosed = errors.New("switch: ssh connection closed")
 
 // sshManager implements Manager using SSH CLI commands compatible with
 // Cisco IOS, IOS-XE, NX-OS, Arista EOS, and similar platforms.
@@ -39,8 +43,12 @@ type sshManager struct {
 	// concurrently. A call queues on it with its context, and a call whose
 	// context ended before it ran sends nothing. semOnce makes the slot on
 	// first use, so the zero value serves.
-	semOnce  sync.Once
-	sem      chan struct{}
+	semOnce sync.Once
+	sem     chan struct{}
+
+	// connMu guards executor so Close can take and close the live
+	// connection while an operation holds sem.
+	connMu   sync.Mutex
 	executor SSHExecutor
 }
 
@@ -318,13 +326,18 @@ func (m *sshManager) runConfig(ctx context.Context, logMsg string, commands []st
 }
 
 func (m *sshManager) Close() error {
-	m.slot() <- struct{}{}
-	defer m.release()
-	if m.executor == nil {
-		return nil
-	}
-	err := m.executor.Close()
+	m.connMu.Lock()
+	executor := m.executor
 	m.executor = nil
+	m.connMu.Unlock()
+
+	// Closing before taking the slot makes a stalled operation return.
+	var err error
+	if executor != nil {
+		err = executor.Close()
+	}
+	m.slot() <- struct{}{}
+	m.release()
 	return err
 }
 
@@ -339,12 +352,25 @@ func (m *sshManager) execute(ctx context.Context, cmd string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	output, err := m.executor.Execute(ctx, cmd)
+	m.connMu.Lock()
+	executor := m.executor
+	m.connMu.Unlock()
+	if executor == nil {
+		return "", errSSHConnectionClosed
+	}
+	output, err := executor.Execute(ctx, cmd)
 	if err != nil {
-		if closeErr := m.executor.Close(); closeErr != nil {
-			m.logger.Debug("ssh close after failed command", "error", closeErr)
+		m.connMu.Lock()
+		owned := m.executor == executor
+		if owned {
+			m.executor = nil
 		}
-		m.executor = nil
+		m.connMu.Unlock()
+		if owned {
+			if closeErr := executor.Close(); closeErr != nil {
+				m.logger.Debug("ssh close after failed command", "error", closeErr)
+			}
+		}
 		return "", err
 	}
 	return output, nil
@@ -356,7 +382,10 @@ func (m *sshManager) execute(ctx context.Context, cmd string) (string, error) {
 // connection whose command failed is dropped (see execute), and the next
 // call dials again; a failed mutation is never replayed.
 func (m *sshManager) ensureConnected(ctx context.Context) error {
-	if m.executor != nil {
+	m.connMu.Lock()
+	connected := m.executor != nil
+	m.connMu.Unlock()
+	if connected {
 		return nil
 	}
 	dial := m.dial
@@ -367,7 +396,9 @@ func (m *sshManager) ensureConnected(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	m.connMu.Lock()
 	m.executor = executor
+	m.connMu.Unlock()
 	return nil
 }
 
