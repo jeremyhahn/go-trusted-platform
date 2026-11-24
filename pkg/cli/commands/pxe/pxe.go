@@ -91,7 +91,11 @@ Examples:
   # Register a device by MAC ahead of its first PXE boot, look it up, remove it
   platformctl pxe register --mac 02:00:00:00:00:01 --port <port-id>
   platformctl pxe get-by-mac 02:00:00:00:00:01
-  platformctl pxe remove <device-id>`,
+  platformctl pxe remove <device-id>
+
+  # Move a device to a state by hand, and record its enrolment certificate
+  platformctl pxe set-state <device-id> --state booting --reason "re-image"
+  platformctl pxe set-enrolled <device-id> --certificate-serial <serial>`,
 	}
 
 	r := &runner{getFlags: getFlags, open: open}
@@ -104,6 +108,8 @@ Examples:
 	cmd.AddCommand(r.registerCommand())
 	cmd.AddCommand(r.removeCommand())
 	cmd.AddCommand(r.getByMACCommand())
+	cmd.AddCommand(r.setStateCommand())
+	cmd.AddCommand(r.setEnrolledCommand())
 	return cmd
 }
 
@@ -419,6 +425,71 @@ func (r *runner) getByMACCommand() *cobra.Command {
 			})
 		},
 	}
+}
+
+func (r *runner) setStateCommand() *cobra.Command {
+	var state, reason string
+	cmd := &cobra.Command{
+		Use:          "set-state <device-id> --state <state> --reason <reason>",
+		Short:        "Move a device to a provisioning state, recording why",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := deviceArg("set-state", args)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(state) == "" {
+				return &ErrInvalidState{Verb: "set-state", Valid: stateLabels()}
+			}
+			value, err := parseState(state)
+			if err != nil {
+				return &ErrInvalidState{Verb: "set-state", Value: state, Valid: stateLabels()}
+			}
+			if strings.TrimSpace(reason) == "" {
+				return &ErrReasonRequired{Verb: "set-state"}
+			}
+			return r.call(cmd, "UpdateState", func(ctx context.Context, c platformv1.PXEServiceClient) (any, *cli.TableData, error) {
+				resp, err := c.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{DeviceId: id, State: value, Reason: reason})
+				if err != nil {
+					return nil, nil, err
+				}
+				return resp, deviceTable(resp.GetDevice()), nil
+			})
+		},
+	}
+	cmd.Flags().StringVar(&state, "state", "", "provisioning state to move the device to (required)")
+	cmd.Flags().StringVar(&reason, "reason", "", "why the state changes (required)")
+	return cmd
+}
+
+func (r *runner) setEnrolledCommand() *cobra.Command {
+	var serial string
+	cmd := &cobra.Command{
+		Use:          "set-enrolled <device-id> --certificate-serial <serial>",
+		Short:        "Record a device's enrolment certificate",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := deviceArg("set-enrolled", args)
+			if err != nil {
+				return err
+			}
+			serial = strings.TrimSpace(serial)
+			if serial == "" {
+				return &ErrCertificateSerialRequired{}
+			}
+			return r.call(cmd, "SetDeviceEnrolled", func(ctx context.Context, c platformv1.PXEServiceClient) (any, *cli.TableData, error) {
+				resp, err := c.SetDeviceEnrolled(ctx, &platformv1.SetPXEDeviceEnrolledRequest{DeviceId: id, CertificateSerial: serial})
+				if err != nil {
+					return nil, nil, err
+				}
+				return resp, deviceTable(resp.GetDevice()), nil
+			})
+		},
+	}
+	cmd.Flags().StringVar(&serial, "certificate-serial", "", "serial of the device's enrolment certificate (required)")
+	return cmd
 }
 
 // devicesTable renders one row per device.
