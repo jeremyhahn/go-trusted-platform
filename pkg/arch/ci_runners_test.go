@@ -123,7 +123,7 @@ func runnerProblems(body []byte) []string {
 		}
 		// A self-hosted runner is persistent: fork pull requests must
 		// never reach it, so the job's if: carries the same-repository guard.
-		if j.runsOn != nil && (j.runsOn.Kind != yaml.ScalarNode || (j.runsOn.Value != hostedRunner && !isSelectionRunsOn(j.runsOn.Value) && !(j.name == "preflight" && j.runsOn.Value == selectionPreflight))) &&
+		if j.runsOn != nil && (j.runsOn.Kind != yaml.ScalarNode || (j.runsOn.Value != hostedRunner && !isSelectionRunsOn(j.runsOn.Value) && (j.name != "preflight" || j.runsOn.Value != selectionPreflight))) &&
 			!strings.Contains(j.cond, sameRepoExpr) {
 			problems = append(problems, where+": self-hosted runner without the fork guard")
 		}
