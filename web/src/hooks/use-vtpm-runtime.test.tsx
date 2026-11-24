@@ -49,6 +49,23 @@ describe('useVTPMRuntime checkState', () => {
     expect(result.current.runState).toBe('stopped');
   });
 
+  it('checkState reads a daemon-listener state reply, whose identifier is id', async () => {
+    stubControlPlane({
+      [STATE]: ok({
+        id: 'vm-1',
+        running: true,
+        socket_path: '/run/vtpm/vm-1.sock',
+        timestamp: '2026-11-12T00:00:00Z',
+      }),
+    });
+    const { result } = renderRuntime();
+
+    await act(() => result.current.checkState.mutateAsync(undefined));
+
+    expect(result.current.runState).toBe('running');
+    expect(result.current.checkState.data?.bundle_id).toBe('vm-1');
+  });
+
   it('a refused state read leaves the run state unknown', async () => {
     const sent = stubControlPlane({ [STATE]: refused(404, 'bundle not found') });
     const { result } = renderRuntime();
