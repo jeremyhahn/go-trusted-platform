@@ -4,6 +4,7 @@ import https from 'https';
 import os from 'os';
 import path from 'path';
 import { generateAttestationCA, loadAttestation, type AttestationMaterial } from './fixtures/soft-authenticator';
+import { seedManifests } from './fixtures/seed-manifests';
 import { pickPorts, renderConfig } from './ports';
 
 /**
@@ -100,6 +101,10 @@ async function globalSetup(): Promise<void> {
   // The WebAuthn attestation CA platformd.test.yaml names as
   // quicbaas.webauthn-attestation-roots-file (relative to dir).
   generateAttestationCA(attestationDir(dir));
+  // BuildManifest needs a daemon-managed TPM session this daemon has not
+  // (pkg/attestation/service/service.go:73-74), so the harness stores the
+  // manifests the verify and delete specs act on in the attestation FileStore.
+  seedManifests(dir);
   const template = fs.readFileSync(path.join(__dirname, 'platformd.test.yaml'), 'utf8');
   // The public port from E2E_PORT and an internal port of its own, so the
   // two TLS listeners never bind one address.

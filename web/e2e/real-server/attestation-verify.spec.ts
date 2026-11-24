@@ -1,18 +1,20 @@
 import type { Request } from '@playwright/test';
 import type { HostManifest, PlatformClient } from 'trusted-platform-sdk';
 import { expect, test } from './fixtures';
+import { SEEDED_MANIFESTS } from './fixtures/seed-manifests';
 
 /*
  * Verify manifest on the manifest detail page against the real server
- * (#2038, UI epic #1665). The spec seeds a manifest through the SDK, opens
- * /attestation/<manifest id>, and verifies it through the header's Verify
- * manifest control and its dialog: the verify answer is 2xx and the dialog
- * shows the verifier's status. When the server does not offer
+ * (#2038, UI epic #1665). The manifest is seeded on disk by global-setup
+ * (fixtures/seed-manifests.ts writes it into the attestation FileStore before
+ * platformd starts, because BuildManifest needs a daemon-managed TPM session
+ * the real-server daemon has not). The spec reads it back through the SDK,
+ * opens /attestation/<manifest id>, and verifies it through the header's
+ * Verify manifest control and its dialog: the verify answer is 2xx and the
+ * dialog shows the verifier's status. When the server does not offer
  * POST /api/v1/attestation/manifests/verify, the control is disabled with the
  * server's reason as its title and nothing is sent. No page.route mocks.
- * The test is skipped, not passed, when BuildManifest is refused, because
- * production BuildManifest needs a daemon-managed TPM session the real-server
- * daemon config does not set up (ErrTPMSessionNotConfigured).
+ * A missing seeded manifest fails the test; it never skips.
  */
 
 const OP = 'POST /api/v1/attestation/manifests/verify';
@@ -35,16 +37,13 @@ async function verifyCapability(sdk: PlatformClient): Promise<VerifyCapability> 
   return { enabled: entry.enabled, reason: entry.reason ?? '' };
 }
 
-/** Seeds one manifest for hostId; the built manifest, or the server's refusal. */
-async function seedManifest(
-  sdk: PlatformClient,
-  hostId: string,
-): Promise<{ manifest?: HostManifest; refusal?: string }> {
-  const res = await sdk.attestation.buildManifest({ config: { hostId } });
+/** The manifest global-setup seeded with id; throws with the server's error when it is missing. */
+async function seededManifest(sdk: PlatformClient, id: string): Promise<HostManifest> {
+  const res = await sdk.attestation.getManifest(id);
   if (!res.success || !res.data?.manifest) {
-    return { refusal: JSON.stringify(res.error ?? res.data) };
+    throw new Error(`seeded manifest ${id} is missing: ${JSON.stringify(res.error ?? res.data)}`);
   }
-  return { manifest: res.data.manifest };
+  return res.data.manifest;
 }
 
 function isManifestVerify(r: Request): boolean {
@@ -65,25 +64,15 @@ test.describe('Manifest verify (real server)', () => {
 
   test('verifies a seeded manifest through the dialog, or withholds the control', async ({ adminPage, sdk }) => {
     const cap = await verifyCapability(sdk);
-    const hostId = `e2e-verify-${Date.now()}`;
-    const seeded = await seedManifest(sdk, hostId);
+    const seeded = await seededManifest(sdk, SEEDED_MANIFESTS.verify.id);
+    expect(seeded.id).toBe(SEEDED_MANIFESTS.verify.id);
 
     const sent: string[] = [];
     adminPage.on('request', (req) => {
       if (isManifestVerify(req)) sent.push(req.url());
     });
 
-    if (!seeded.manifest) {
-      // No manifest, nothing to verify: skip, never pass, so the report does
-      // not count a verify that did not happen.
-      test.skip(
-        true,
-        `BuildManifest refused, so no manifest can be seeded: the real-server daemon has no daemon-managed TPM session (ErrTPMSessionNotConfigured, pkg/attestation/service/service.go:73-74): ${seeded.refusal ?? ''}`,
-      );
-      throw new Error('unreachable: test.skip(true) ends the test');
-    }
-
-    await adminPage.goto(`/attestation/${encodeURIComponent(seeded.manifest.id)}`);
+    await adminPage.goto(`/attestation/${encodeURIComponent(SEEDED_MANIFESTS.verify.id)}`);
     const button = adminPage.getByRole('button', { name: 'Verify manifest' });
     await expect(button).toBeVisible();
 

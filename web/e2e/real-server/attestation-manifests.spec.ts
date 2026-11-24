@@ -1,17 +1,19 @@
 import type { Page, Request } from '@playwright/test';
 import type { HostManifest, PlatformClient } from 'trusted-platform-sdk';
 import { expect, test } from './fixtures';
+import { SEEDED_MANIFESTS } from './fixtures/seed-manifests';
 
 /*
  * Delete manifest on /attestation/manifests against the real server (#2038,
- * UI epic #1665). The spec seeds a manifest through the SDK, then deletes it
- * through the row's Delete manifest control and its confirm dialog, and reads
- * the list again: the row is gone. When the server does not offer
- * DELETE /api/v1/attestation/manifests/{id}, the control is disabled with the
- * server's reason as its title and no DELETE is sent. No page.route mocks.
- * The test is skipped, not passed, when BuildManifest is refused, because
- * production BuildManifest needs a daemon-managed TPM session the real-server
- * daemon config does not set up (ErrTPMSessionNotConfigured).
+ * UI epic #1665). The manifest is seeded on disk by global-setup
+ * (fixtures/seed-manifests.ts writes it into the attestation FileStore before
+ * platformd starts, because BuildManifest needs a daemon-managed TPM session
+ * the real-server daemon has not). The spec reads it back through the SDK,
+ * deletes it through the row's Delete manifest control and its confirm
+ * dialog, and reads the list again: the row is gone. When the server does not
+ * offer DELETE /api/v1/attestation/manifests/{id}, the control is disabled
+ * with the server's reason as its title and no DELETE is sent. No page.route
+ * mocks. A missing seeded manifest fails the test; it never skips.
  */
 
 const OP = 'DELETE /api/v1/attestation/manifests/{id}';
@@ -34,16 +36,13 @@ async function deleteCapability(sdk: PlatformClient): Promise<DeleteCapability> 
   return { enabled: entry.enabled, reason: entry.reason ?? '' };
 }
 
-/** Seeds one manifest for hostId; the built manifest, or the server's refusal. */
-async function seedManifest(
-  sdk: PlatformClient,
-  hostId: string,
-): Promise<{ manifest?: HostManifest; refusal?: string }> {
-  const res = await sdk.attestation.buildManifest({ config: { hostId } });
+/** The manifest global-setup seeded with id; throws with the server's error when it is missing. */
+async function seededManifest(sdk: PlatformClient, id: string): Promise<HostManifest> {
+  const res = await sdk.attestation.getManifest(id);
   if (!res.success || !res.data?.manifest) {
-    return { refusal: JSON.stringify(res.error ?? res.data) };
+    throw new Error(`seeded manifest ${id} is missing: ${JSON.stringify(res.error ?? res.data)}`);
   }
-  return { manifest: res.data.manifest };
+  return res.data.manifest;
 }
 
 function isManifestDelete(r: Request): boolean {
@@ -64,24 +63,14 @@ test.describe('Manifests delete (real server)', () => {
 
   test('deletes a seeded manifest through the dialog, or withholds the control', async ({ adminPage, sdk }) => {
     const cap = await deleteCapability(sdk);
-    const hostId = `e2e-delete-${Date.now()}`;
-    const rowName = `Manifest ${hostId}`;
-    const seeded = await seedManifest(sdk, hostId);
+    const rowName = `Manifest ${SEEDED_MANIFESTS.delete.hostId}`;
+    const seeded = await seededManifest(sdk, SEEDED_MANIFESTS.delete.id);
+    expect(seeded.id).toBe(SEEDED_MANIFESTS.delete.id);
 
     const sent: string[] = [];
     adminPage.on('request', (req) => {
       if (isManifestDelete(req)) sent.push(req.url());
     });
-
-    if (!seeded.manifest) {
-      // No manifest, nothing to delete: skip, never pass, so the report does
-      // not count a delete that did not happen.
-      test.skip(
-        true,
-        `BuildManifest refused, so no manifest can be seeded: the real-server daemon has no daemon-managed TPM session (ErrTPMSessionNotConfigured, pkg/attestation/service/service.go:73-74): ${seeded.refusal ?? ''}`,
-      );
-      throw new Error('unreachable: test.skip(true) ends the test');
-    }
 
     await openFiltered(adminPage, rowName);
     const row = adminPage.getByRole('row').filter({ hasText: rowName });
@@ -108,7 +97,7 @@ test.describe('Manifests delete (real server)', () => {
     const r = await deleted;
     expect(r.status()).toBeGreaterThanOrEqual(200);
     expect(r.status()).toBeLessThan(300);
-    expect(new URL(r.url()).pathname).toBe(`${MANIFESTS_PATH}/${encodeURIComponent(seeded.manifest.id)}`);
+    expect(new URL(r.url()).pathname).toBe(`${MANIFESTS_PATH}/${encodeURIComponent(SEEDED_MANIFESTS.delete.id)}`);
 
     await adminPage.reload();
     await adminPage.getByPlaceholder('Search manifests...').fill(rowName);
