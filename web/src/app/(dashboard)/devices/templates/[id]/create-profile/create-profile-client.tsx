@@ -262,7 +262,7 @@ export default function CreateProfileClient() {
                 id="staticIp"
                 value={staticIp}
                 onChange={(e) => setStaticIp(e.target.value)}
-                placeholder="e.g., 192.168.1.100"
+                placeholder="e.g., 192.0.2.100"
                 className="font-mono"
               />
               <p className="text-xs text-muted-foreground">

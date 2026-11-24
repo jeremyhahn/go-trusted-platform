@@ -282,7 +282,7 @@ export function DNSRecordForm({
                     <Input
                       placeholder={
                         selectedType === 'A'
-                          ? '192.168.1.1'
+                          ? '192.0.2.1'
                           : selectedType === 'AAAA'
                             ? '2001:db8::1'
                             : selectedType === 'CNAME'
