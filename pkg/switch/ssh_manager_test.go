@@ -18,6 +18,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/switchwire"
@@ -349,23 +350,14 @@ func TestSSHManager_SetPortVLAN(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(mock.commands) != 5 {
-		t.Fatalf("expected 5 commands, got %d: %v", len(mock.commands), mock.commands)
+	// One SSH exec channel per Execute: the whole configuration runs as one
+	// batched NX-OS line so configure-terminal and interface context survive.
+	if len(mock.commands) != 1 {
+		t.Fatalf("expected 1 batched command, got %d: %v", len(mock.commands), mock.commands)
 	}
-	if mock.commands[0] != "configure terminal" {
-		t.Fatalf("expected 'configure terminal', got %q", mock.commands[0])
-	}
-	if mock.commands[1] != "interface Eth1/3" {
-		t.Fatalf("expected 'interface Eth1/3', got %q", mock.commands[1])
-	}
-	if mock.commands[2] != "switchport mode access" {
-		t.Fatalf("expected 'switchport mode access', got %q", mock.commands[2])
-	}
-	if mock.commands[3] != "switchport access vlan 100" {
-		t.Fatalf("expected 'switchport access vlan 100', got %q", mock.commands[3])
-	}
-	if mock.commands[4] != "end" {
-		t.Fatalf("expected 'end', got %q", mock.commands[4])
+	want := "configure terminal ; interface Eth1/3 ; switchport mode access ; switchport access vlan 100 ; end"
+	if mock.commands[0] != want {
+		t.Fatalf("expected %q, got %q", want, mock.commands[0])
 	}
 }
 
@@ -387,7 +379,7 @@ func TestSSHManager_SetPortVLAN_ExecuteError(t *testing.T) {
 
 func TestSSHManager_SetPortVLAN_OutputError(t *testing.T) {
 	mock := newMockSSHExecutor()
-	mock.outputs["switchport access vlan 100"] = "% Invalid command"
+	mock.outputs["configure terminal ; interface Eth1/3 ; switchport mode access ; switchport access vlan 100 ; end"] = "% Invalid command"
 	mgr := newSSHManagerWithExecutor(testSSHConfig(), testSSHLogger(), mock)
 	ctx := context.Background()
 
@@ -558,24 +550,18 @@ func TestSSHManager_EnablePort(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(mock.commands) != 4 {
-		t.Fatalf("expected 4 commands, got %d: %v", len(mock.commands), mock.commands)
+	if len(mock.commands) != 1 {
+		t.Fatalf("expected 1 batched command, got %d: %v", len(mock.commands), mock.commands)
 	}
-
-	found := false
-	for _, cmd := range mock.commands {
-		if cmd == "no shutdown" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("expected 'no shutdown' command")
+	want := "configure terminal ; interface Eth1/5 ; no shutdown ; end"
+	if mock.commands[0] != want {
+		t.Fatalf("expected %q, got %q", want, mock.commands[0])
 	}
 }
 
 func TestSSHManager_EnablePort_Error(t *testing.T) {
 	mock := newMockSSHExecutor()
-	mock.outputs["no shutdown"] = "% Error: cannot enable"
+	mock.outputs["configure terminal ; interface Eth1/5 ; no shutdown ; end"] = "% Error: cannot enable"
 	mgr := newSSHManagerWithExecutor(testSSHConfig(), testSSHLogger(), mock)
 	ctx := context.Background()
 
@@ -597,19 +583,17 @@ func TestSSHManager_DisablePort(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	found := false
-	for _, cmd := range mock.commands {
-		if cmd == "shutdown" {
-			found = true
-		}
+	if len(mock.commands) != 1 {
+		t.Fatalf("expected 1 batched command, got %d: %v", len(mock.commands), mock.commands)
 	}
-	if !found {
-		t.Fatal("expected 'shutdown' command")
+	want := "configure terminal ; interface Eth1/5 ; shutdown ; end"
+	if mock.commands[0] != want {
+		t.Fatalf("expected %q, got %q", want, mock.commands[0])
 	}
 
 	// Ensure "no shutdown" is NOT present.
 	for _, cmd := range mock.commands {
-		if cmd == "no shutdown" {
+		if strings.Contains(cmd, "no shutdown") {
 			t.Fatal("disable should not contain 'no shutdown'")
 		}
 	}
@@ -617,7 +601,7 @@ func TestSSHManager_DisablePort(t *testing.T) {
 
 func TestSSHManager_DisablePort_OutputError(t *testing.T) {
 	mock := newMockSSHExecutor()
-	mock.outputs["shutdown"] = "% Error: port cannot be disabled"
+	mock.outputs["configure terminal ; interface Eth1/5 ; shutdown ; end"] = "% Error: port cannot be disabled"
 	mgr := newSSHManagerWithExecutor(testSSHConfig(), testSSHLogger(), mock)
 	ctx := context.Background()
 
