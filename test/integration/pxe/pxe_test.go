@@ -140,13 +140,10 @@ func testPXEProtocol(t *testing.T, ctx context.Context, cmd PXECommands) {
 // CLI Declared Gap: the PXE device lifecycle is API-only
 // =============================================================================
 
-// testPXECLI is the CLI leg of TestPXEMultiProtocol. platformctl pxe has six
-// verbs (docs/provisioning/cli.md §5): get, list, authorize, quarantine,
-// retry and events, and every assertion on them goes through the real
-// binary. Registration and raw state writes stay API-only, so devices are
-// seeded through the gRPC adapter. The verbs with no CLI counterpart assert
-// their typed refusal (CA m588 (1)): green on declared behaviour, red when
-// the gap closes, never skipped.
+// testPXECLI is the CLI leg of TestPXEMultiProtocol. Every PXEService verb
+// an operator uses has a platformctl pxe counterpart (docs/provisioning/cli.md
+// §5), and every assertion on them goes through the real binary. The gRPC
+// adapter only seeds devices into the states a subtest starts from.
 func testPXECLI(t *testing.T, ctx context.Context, cli *CLIAdapter, prefix string) {
 	t.Helper()
 	testCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
@@ -276,26 +273,48 @@ func testPXECLI(t *testing.T, ctx context.Context, cli *CLIAdapter, prefix strin
 		assert.True(t, toBooting, "an event records the move to booting")
 	})
 
-	t.Run("APIOnlyVerbsRefuse", func(t *testing.T) {
-		calls := map[string]func() error{
-			"RegisterDevice": func() error {
-				_, err := cli.RegisterDevice(testCtx, DefaultRegisterOptions(prefix+"-refused"))
-				return err
-			},
-			"GetDeviceByMAC": func() error { _, err := cli.GetDeviceByMAC(testCtx, "00:00:00:00:00:01"); return err },
-			"RemoveDevice":   func() error { _, err := cli.RemoveDevice(testCtx, "any"); return err },
-			"UpdateDeviceState": func() error {
-				_, err := cli.UpdateDeviceState(testCtx, UpdateStateOptions{DeviceID: "any", State: StateBooting})
-				return err
-			},
-			"SetDeviceEnrolled": func() error { _, err := cli.SetDeviceEnrolled(testCtx, "any", "serial"); return err },
-			"GetStatus":         func() error { _, err := cli.GetStatus(testCtx); return err },
+	t.Run("RegisterLifecycle", func(t *testing.T) {
+		// Every step goes through the binary; the gRPC seed adapter only
+		// walks the install states the CLI has no reason to drive one by one.
+		opts := RegisterOptionsOnBridge(t, prefix+"-cli-register")
+		dev, err := cli.RegisterDevice(testCtx, opts)
+		require.NoError(t, err, "platformctl pxe register")
+		t.Cleanup(func() { _ = CleanupDevice(testCtx, seed, dev.ID) })
+		require.NotEmpty(t, dev.ID)
+		assert.Equal(t, opts.MACAddress, dev.MACAddress)
+		assert.Equal(t, StateDiscovered, dev.State)
+
+		byMAC, err := cli.GetDeviceByMAC(testCtx, opts.MACAddress)
+		require.NoError(t, err, "platformctl pxe get-by-mac")
+		assert.Equal(t, dev.ID, byMAC.ID)
+
+		moved, err := cli.UpdateDeviceState(testCtx, UpdateStateOptions{
+			DeviceID: dev.ID, State: StateBooting, Reason: "re-image",
+		})
+		require.NoError(t, err, "platformctl pxe set-state")
+		assert.Equal(t, StateBooting, moved.ToState)
+		assert.Equal(t, StateBooting, seededState(t, dev.ID))
+
+		for _, s := range []string{StateInstalling, StateInstallComplete, StateEnrolling} {
+			_, err := seed.UpdateDeviceState(testCtx, UpdateStateOptions{
+				DeviceID: dev.ID, State: s, Reason: "Setup progression",
+			})
+			require.NoError(t, err, "Setup: UpdateDeviceState to %s", s)
 		}
-		for method, call := range calls {
-			var notImpl ErrCLIPXENotImplemented
-			require.ErrorAs(t, call(), &notImpl, "%s: want the declared API-only refusal", method)
-			assert.Equal(t, method, notImpl.Method)
-		}
+		enrolled, err := cli.SetDeviceEnrolled(testCtx, dev.ID, "0a1b")
+		require.NoError(t, err, "platformctl pxe set-enrolled")
+		assert.Equal(t, StateEnrolled, enrolled.State)
+		assert.Equal(t, "0a1b", enrolled.CertificateSerial)
+
+		status, err := cli.GetStatus(testCtx)
+		require.NoError(t, err, "platformctl pxe status")
+		assert.GreaterOrEqual(t, status.DeviceCount, 1, "the registered device is tracked")
+
+		removed, err := cli.RemoveDevice(testCtx, dev.ID)
+		require.NoError(t, err, "platformctl pxe remove")
+		assert.True(t, removed.Removed)
+		_, err = seed.GetDevice(testCtx, dev.ID)
+		assert.Error(t, err, "a removed device is gone")
 	})
 }
 

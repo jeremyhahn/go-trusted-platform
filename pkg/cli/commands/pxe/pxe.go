@@ -348,17 +348,18 @@ func (r *runner) eventsCommand() *cobra.Command {
 	}
 }
 
-// macArg checks a MAC address before any call, returning it normalised.
+// macArg checks a MAC address before any call. It returns the value as
+// given (trimmed): the service matches MACs as stored, so the CLI does not
+// rewrite their case or separators.
 func macArg(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return "", &ErrInvalidMAC{}
 	}
-	hw, err := net.ParseMAC(value)
-	if err != nil {
+	if _, err := net.ParseMAC(value); err != nil {
 		return "", &ErrInvalidMAC{Value: value}
 	}
-	return hw.String(), nil
+	return value, nil
 }
 
 func (r *runner) registerCommand() *cobra.Command {
