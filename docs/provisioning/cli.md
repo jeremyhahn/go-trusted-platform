@@ -152,6 +152,13 @@ machine and use the root's `--server`, `--transport` and credentials.
 | `quarantine <device-id>` | **Quarantine a device** |
 | `retry <device-id>` | Send a failed or quarantined device back through provisioning |
 | `events <device-id>` | Show the provisioning events of a device |
+| `register --mac <mac>` | Register a device by MAC address ahead of its first PXE boot |
+| `get-by-mac <mac>` | Show the device registered with a MAC address |
+| `remove <device-id>` | Remove a device from the provisioning workflow |
+| `set-state <device-id>` | Move a device to a provisioning state, recording why |
+| `set-enrolled <device-id>` | Record a device's enrolment certificate |
+| `status` | Show the PXE service status (running, devices, iPXE server, VLANs, start time) |
+| `start` / `stop` | Start or stop the PXE service |
 
 ### `pxe list`
 
@@ -183,13 +190,36 @@ platformctl pxe events dev-7c21 -o json
 platformctl pxe            PXE provisioning workflow
 ```
 
+### `pxe register`, `pxe set-state` and `pxe set-enrolled`
+
+| Verb | Flag | Type | Required | Meaning |
+|---|---|---|---|---|
+| `register` | `--mac` | string | **yes** | MAC address of the device |
+| `register` | `--port` | string | no | OVS port ID the device is attached to |
+| `set-state` | `--state` | string | **yes** | State to move the device to (as in `list --state`) |
+| `set-state` | `--reason` | string | **yes** | Why the state changes |
+| `set-enrolled` | `--certificate-serial` | string | **yes** | Serial of the device's enrolment certificate |
+
+`register` and `get-by-mac` refuse a missing or malformed MAC before any call
+is made; `set-state` refuses a missing or unknown state and a missing reason,
+and `set-enrolled` a missing serial, the same way. The service still enforces
+the state machine: a transition it does not allow fails.
+
+```bash
+platformctl pxe register --mac 02:00:00:00:00:01 --port port-1
+platformctl pxe get-by-mac 02:00:00:00:00:01
+platformctl pxe set-state dev-7c21 --state booting --reason "re-image"
+platformctl pxe set-enrolled dev-7c21 --certificate-serial 0a1b
+platformctl pxe status
+platformctl pxe stop
+platformctl pxe start
+platformctl pxe remove dev-7c21
+```
+
 ### What the CLI does not cover
 
 | Capability | Reach it with |
 |---|---|
-| Register / remove a PXE device | REST `/api/v1/pxe/devices`, gRPC `PXEService`, QUIC, MCP |
-| Set a PXE device enrolled | REST, gRPC, QUIC, MCP |
-| Start / stop the PXE service | REST, gRPC, QUIC, MCP |
 | Remote Secure Boot digest signing | REST `POST /api/v1/provisioning/sign`, gRPC `SignDigest` (TCP and Unix socket), QUIC, MCP |
 
 ---

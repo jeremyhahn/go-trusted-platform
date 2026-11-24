@@ -146,7 +146,8 @@ not in.
 - **It does not establish trust.** It gets a machine to the point where
   attestation can.
 - **It does not put a Secure Boot signing key on the machine.**
-- **It does not register or remove PXE devices from the CLI.** The
-  `platformctl pxe` group ([cli.md](cli.md) §5) lists, inspects, authorizes,
-  quarantines and retries devices and reads their events; registration,
-  removal and service start/stop stay API-only, a gap rather than a decision.
+- **It does not keep PXE device administration API-only.** The
+  `platformctl pxe` group ([cli.md](cli.md) §5) registers, removes, looks up
+  by MAC, lists and inspects devices, sets their state and enrolment,
+  authorizes, quarantines and retries them, reads their events, and shows,
+  starts and stops the PXE service.
