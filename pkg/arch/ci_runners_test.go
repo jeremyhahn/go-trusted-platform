@@ -358,6 +358,76 @@ func TestCIJobsReadThePreflightRunnerSelection(t *testing.T) {
 	}
 }
 
+// Codex P1 on #2382: a self-hosted web-e2e runner installs chromium without
+// --with-deps (no sudo), so its image must carry chromium's system
+// libraries. The job proves it with a launch check before the specs run.
+const (
+	webE2EJob            = "web-e2e"
+	selfHostedIf         = "runner.environment != 'github-hosted'"
+	selfHostedInstall    = "Install the Playwright chromium"
+	chromiumLaunchCheck  = "Check the Playwright chromium launches on this runner"
+	realServerSpecs      = "Real-server Playwright specs"
+	chromiumLaunchErrMsg = "::error::chromium does not launch on this self-hosted runner"
+)
+
+// webE2EChromiumProblems reports what keeps the web-e2e job from checking,
+// on a self-hosted runner, that chromium launches before the specs run.
+func webE2EChromiumProblems(body []byte) []string {
+	var doc struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Name string `yaml:"name"`
+				If   string `yaml:"if"`
+				Run  string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(body, &doc); err != nil {
+		return []string{"ci.yml does not parse: " + err.Error()}
+	}
+	job, ok := doc.Jobs[webE2EJob]
+	if !ok {
+		return []string{"ci.yml has no " + webE2EJob + " job"}
+	}
+	install, check, specs := -1, -1, -1
+	for i, s := range job.Steps {
+		switch s.Name {
+		case selfHostedInstall:
+			install = i
+		case chromiumLaunchCheck:
+			check = i
+		case realServerSpecs:
+			specs = i
+		}
+	}
+	var out []string
+	if install < 0 || specs < 0 {
+		return append(out, fmt.Sprintf("%s: steps %q and %q must both exist", webE2EJob, selfHostedInstall, realServerSpecs))
+	}
+	if check < 0 {
+		return append(out, fmt.Sprintf("%s: no step %q checks chromium launches on a self-hosted runner", webE2EJob, chromiumLaunchCheck))
+	}
+	if !(install < check && check < specs) {
+		out = append(out, fmt.Sprintf("%s: step %q must run after %q and before %q", webE2EJob, chromiumLaunchCheck, selfHostedInstall, realServerSpecs))
+	}
+	s := job.Steps[check]
+	if strings.TrimSpace(s.If) != selfHostedIf {
+		out = append(out, fmt.Sprintf("%s: step %q needs if: %s, has %q", webE2EJob, chromiumLaunchCheck, selfHostedIf, s.If))
+	}
+	for _, want := range []string{"chromium", "launch(", "executablePath()", "ldd", "not found", chromiumLaunchErrMsg, "exit 1"} {
+		if !strings.Contains(s.Run, want) {
+			out = append(out, fmt.Sprintf("%s: step %q run does not contain %q", webE2EJob, chromiumLaunchCheck, want))
+		}
+	}
+	return out
+}
+
+func TestWebE2EChecksChromiumLaunchesSelfHosted(t *testing.T) {
+	for _, p := range webE2EChromiumProblems(readCI(t)) {
+		t.Error(p)
+	}
+}
+
 func TestSelectionProblems_Mutations(t *testing.T) {
 	body := string(readCI(t))
 	if p := selectionProblems([]byte(body)); len(p) != 0 {
