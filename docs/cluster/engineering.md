@@ -239,9 +239,9 @@ default `BUILD_TAGS` (`make -s print-build-tags` prints the derived set — the
 tags are assembled in two stages, so any hand-copied list is wrong). The tag
 does not change what the daemon serves: nothing constructs this ClusterService in
 any build. Since #2140, serve injects a servicer over the embedded go-quicbaas
-service instead (status, nodes and leader answer; Leave goes through the SDK
-RemoveNode and refuses a shard leader; Join answers Unavailable because the
-pinned go-quicbaas has no join seam).
+service instead (status, nodes and leader answer; Leave and Join answer
+Unavailable because the pinned go-quicbaas has no leader-routed removal and no
+join seam).
 Without the tag, `daemon.NewClusterService` is the stub in
 `cluster_service_stub.go` and returns
 `"cluster service is not wired in any build (#336)"`.

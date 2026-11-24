@@ -255,9 +255,9 @@ Where they disagree, the code is right and the legacy file is the defect.
 error.
 
 What is not registered is this CLI command tree: serve does wire a cluster
-servicer into the daemon ([architecture.md](architecture.md) §3), so status,
-nodes and leave answer through the daemon's cluster service while `join`
-answers `Unavailable` (an upstream go-quicbaas gap), but none of these verbs is
+servicer into the daemon ([architecture.md](architecture.md) §3), so status and
+nodes answer through the daemon's cluster service while `join` and `leave`
+answer `Unavailable` (upstream go-quicbaas gaps), but none of these verbs is
 reachable from the shipped CLI until the command tree is registered.
 
 `--output json` is the form to parse; the `table` renderer is for humans and its

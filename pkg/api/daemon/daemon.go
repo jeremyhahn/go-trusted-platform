@@ -976,8 +976,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// through Daemon.SetClusterService. serve and every embedded host set
 	// that servicer through appbackends.WireSDKBackends, over the Raft
 	// cluster the embedded go-quicbaas service runs: status, nodes and
-	// leader answer, Leave goes through the SDK RemoveNode, Join answers
-	// Unavailable (no join seam in the pinned go-quicbaas), and node health
+	// leader answer, Leave and Join answer Unavailable (no leave or join
+	// seam in the pinned go-quicbaas), and node health
 	// reads unknown (the SDK reports membership, not liveness). Until a
 	// servicer is set every RPC returns Unavailable.
 	clusterGRPCService, clusterBackend := registerClusterGRPCService(logger, grpcServer, grpcUDSServer)
@@ -3401,9 +3401,8 @@ func (d *Daemon) MCPServiceProvider() *MCPServiceProvider {
 //
 // serve (and every embedded host) sets it through appbackends.WireSDKBackends
 // with a servicer over the embedded go-quicbaas service, which reads the Raft
-// cluster that service already runs (status, nodes, leader). Leave goes
-// through the SDK RemoveNode; Join answers Unavailable because the pinned
-// go-quicbaas has no join seam. The
+// cluster that service already runs (status, nodes, leader). Leave and Join
+// answer Unavailable because the pinned go-quicbaas has no leave or join seam. The
 // build-tagged *ClusterService is not what is injected here. See #334.
 func (d *Daemon) SetClusterService(svc ClusterServicer) {
 	d.mu.Lock()

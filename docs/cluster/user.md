@@ -23,11 +23,8 @@ Verified against the code on 2026-11-23:
   "uninitialized" with no members.
 - Bootstrap answers "already initialized" (REST **409**) when a leader is
   known and "not initialized" (REST **409**) otherwise.
-- Leave removes this node from each shard it replicates through the
-  go-quicbaas SDK `RemoveNode` (REST **200**). A shard leader is refused
-  (`FailedPrecondition`, REST **409**) because the pinned go-quicbaas has no
-  leadership transfer, and a node that is not a member gets `NotFound`
-  (REST **404**).
+- Leave answers `Unavailable` (REST **503**): a follower cannot remove itself
+  through the local replica, and no leader-routed removal exists yet.
 - Join answers **`Unavailable`** (REST **503**): the pinned go-quicbaas has no
   join seam, an upstream gap.
 - A daemon built without an embedded QuicBaaS service has no servicer, and
@@ -73,9 +70,9 @@ membership and the leader, with node health "unknown".
    standard build has it. Run `make -s print-build-tags` for the derived set
    rather than copying a list — the tags are assembled in two stages.
    The tag alone does not enable clustering. Since #2140, serve answers
-   cluster status and node reads from the embedded go-quicbaas service, and
-   Leave goes through its SDK `RemoveNode`; Join answers Unavailable (no join
-   seam in the pinned go-quicbaas).
+   cluster status and node reads from the embedded go-quicbaas service; Leave
+   and Join answer Unavailable (no leader-routed removal and no join seam in
+   the pinned go-quicbaas).
 2. **A `quicbaas:` section configured for a multi-node deployment** — see below.
 3. **An odd number of nodes.** Three or five. Quorum is
    `(total / 2) + 1`, so three nodes tolerate one failure and five tolerate two.
@@ -291,9 +288,9 @@ embedded hosts with the embedded service answer status and nodes.
 Expected. The pinned go-quicbaas has no join seam, so adding a node through
 the platform is an upstream gap.
 
-**Leave returns 409 / `FailedPrecondition`.**
-This node leads at least one shard it replicates. The pinned go-quicbaas has no
-leadership transfer, so a leader cannot leave; nothing was removed.
+**Leave returns 503 / `Unavailable`.**
+Expected. No leader-routed removal exists yet, so removing a node through the
+platform is an upstream gap.
 
 **Bootstrap returns 409.**
 Expected: "already initialized" when the cluster has a leader, "not

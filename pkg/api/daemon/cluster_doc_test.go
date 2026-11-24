@@ -51,7 +51,6 @@ func TestClusterDocs_NoStaleUnwiredClaims(t *testing.T) {
 		{"user.md", "is not usable yet"},
 		{"user.md", "Every cluster REST route returns **503**"},
 		{"user.md", "No coordinator is wired into the daemon"},
-		// Leave goes through the go-quicbaas SDK RemoveNode (#336).
 		{"api.md", "`Join` and `Leave` still answer"},
 		{"api.md", "`Join` and `Leave` return 503"},
 		{"api.md", "`Join` and `Leave` answer `Unavailable`"},
@@ -86,11 +85,10 @@ func TestClusterDocs_NameTheProductionWiring(t *testing.T) {
 		"docs/cluster/api.md does not name registry.Cluster")
 }
 
-// TestClusterDocs_LeaveGoesThroughRemoveNode pins that the API and user docs
-// say Leave is served by the go-quicbaas SDK RemoveNode (#336).
-func TestClusterDocs_LeaveGoesThroughRemoveNode(t *testing.T) {
+// TestClusterDocs_LeaveAnswersUnavailable pins that the API and user docs say Leave answers Unavailable.
+func TestClusterDocs_LeaveAnswersUnavailable(t *testing.T) {
 	for _, doc := range []string{"api.md", "user.md"} {
-		assert.Contains(t, readClusterDoc(t, doc), "RemoveNode",
-			"docs/cluster/%s does not say Leave goes through RemoveNode", doc)
+		assert.Contains(t, readClusterDoc(t, doc), "Leave answers `Unavailable`",
+			"docs/cluster/%s does not say Leave answers Unavailable", doc)
 	}
 }
