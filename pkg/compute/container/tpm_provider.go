@@ -168,6 +168,16 @@ func (p *HostTPMProvider) Quote(pcrs []uint, nonce []byte) (orchestration.TPMQuo
 	return quote, nil
 }
 
+// IAKCertificate returns the certificate of the IAK that signs Quote.
+func (p *HostTPMProvider) IAKCertificate() (*x509.Certificate, error) {
+	return p.tpm.IAKCertificate()
+}
+
+// IAKAttributes returns the attributes of the IAK that signs Quote.
+func (p *HostTPMProvider) IAKAttributes() (*xkmssdk.KeyAttributes, error) {
+	return p.tpm.IAKAttributes()
+}
+
 // IAK returns the Initial Attestation Key public key.
 func (p *HostTPMProvider) IAK() (crypto.PublicKey, error) {
 	iak, err := p.tpm.IAK()
