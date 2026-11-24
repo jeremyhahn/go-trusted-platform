@@ -80,6 +80,7 @@ export function AttestationQuoteCard() {
   const [quoteJson, setQuoteJson] = React.useState("");
   const [akPem, setAkPem] = React.useState("");
   const [expectedNonce, setExpectedNonce] = React.useState("");
+  const [channelBinding, setChannelBinding] = React.useState("");
   const [verifying, setVerifying] = React.useState(false);
   const [verdict, setVerdict] = React.useState<Verdict | null>(null);
   const [verifyError, setVerifyError] = React.useState<string | null>(null);
@@ -114,6 +115,7 @@ export function AttestationQuoteCard() {
       }
       setResult({ quote: res.data.quote, channelBinding: res.data.channelBinding });
       setVerdict(null);
+      setChannelBinding(res.data.channelBinding ?? "");
       if (res.data.quote) {
         setQuoteJson(JSON.stringify(res.data.quote, null, 2));
         // The quote's own nonce is SHA-256(nonce || channelBinding) when bound;
@@ -132,10 +134,19 @@ export function AttestationQuoteCard() {
     setVerifyError(null);
     setVerdict(null);
     let quote: Quote;
+    let envelopeBinding = "";
     try {
-      quote = JSON.parse(quoteJson) as Quote;
-      if (quote === null || typeof quote !== "object" || Array.isArray(quote)) {
+      const parsed: unknown = JSON.parse(quoteJson);
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
         throw new Error("the quote must be a JSON object");
+      }
+      const obj = parsed as Record<string, unknown>;
+      // A pasted GetAttestationQuote answer: { quote, channelBinding }.
+      if (obj.quote !== null && typeof obj.quote === "object" && !Array.isArray(obj.quote) && !("quoteData" in obj)) {
+        quote = obj.quote as Quote;
+        if (typeof obj.channelBinding === "string") envelopeBinding = obj.channelBinding;
+      } else {
+        quote = parsed as Quote;
       }
     } catch (err) {
       setVerifyError(`Invalid quote JSON: ${errorText(err)}`);
@@ -148,9 +159,9 @@ export function AttestationQuoteCard() {
         akPublicKeyPem: pemToBase64(akPem.trim()),
         expectedNonce: expectedNonce.trim(),
       };
-      if (result?.channelBinding && result.quote && JSON.stringify(result.quote) === JSON.stringify(quote)) {
-        request.channelBinding = result.channelBinding;
-      }
+      const typed = channelBinding.trim();
+      const binding = typed !== "" ? typed : envelopeBinding.trim();
+      if (binding !== "") request.channelBinding = binding;
       const res = await attestation.verifyQuote(request);
       if (!res.success || !res.data) {
         failed("Quote verification failed", res.error?.message ?? "no verdict in the answer");
@@ -276,6 +287,21 @@ export function AttestationQuoteCard() {
                 setVerdict(null);
               }}
             />
+          </div>
+          <div className="grid gap-1">
+            <Label htmlFor="attestation-verify-channel-binding">Channel binding (base64, optional)</Label>
+            <Input
+              id="attestation-verify-channel-binding"
+              data-testid="attestation-verify-channel-binding"
+              value={channelBinding}
+              onChange={(e) => {
+                setChannelBinding(e.target.value);
+                setVerdict(null);
+              }}
+            />
+            <p className="text-xs text-muted-foreground">
+              The TLS exporter binding the quote was taken over; a bound quote&apos;s nonce is SHA-256(nonce || binding).
+            </p>
           </div>
           {verifyError && (
             <p className="text-sm text-destructive" data-testid="attestation-verify-error">
