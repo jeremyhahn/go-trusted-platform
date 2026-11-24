@@ -125,5 +125,46 @@ describe('DeviceVerdictsPage', () => {
 
     const card = await screen.findByTestId('verdicts-error');
     expect(card.textContent).toContain('no verdict poller');
+    expect(screen.queryByRole('button', { name: 'Resynchronize' })).toBeNull();
   });
+
+  it('offers Resynchronize when the server has dropped the cursor, and restarts from a new head cursor', async () => {
+    // ErrMissedVerdicts is ResourceExhausted, HTTP 429; the SDK retries 429 with backoff first.
+    const routes: Record<string, Answer> = {
+      'GET /api/v1/capabilities': caps(),
+      [OP]: ok({ cursor: 'c1', verdicts: [verdict('e1', 'SN-1', true, false, '')] }),
+    };
+    stubControlPlane(routes);
+    render(withControlPlane(<DeviceVerdictsPage />));
+
+    expect(await screen.findByText('SN-1')).toBeTruthy();
+    routes[OP] = refused(429, 'attestation: the device verdict follower fell behind and missed verdicts');
+    fireEvent.click(screen.getByRole('button', { name: 'Check for new verdicts' }));
+
+    const missed = await screen.findByTestId('verdicts-missed', {}, { timeout: 15000 });
+    expect(missed.textContent).toContain('missed');
+    const resync = await screen.findByRole('button', { name: 'Resynchronize' });
+    const link = screen.getByRole('link', { name: 'Device reports' });
+    expect(link.getAttribute('href')).toBe('/devices');
+    expect(screen.getByText('SN-1')).toBeTruthy();
+    expect(screen.queryByTestId('verdicts-error')).toBeNull();
+
+    routes[OP] = ok({ cursor: 'h1', verdicts: [] });
+    await waitFor(() => expect((resync as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(resync);
+    const gap = await screen.findByTestId('verdicts-gap', {}, { timeout: 15000 });
+    expect(gap.textContent).toContain('verdicts recorded before this point may be missing from this list');
+    let urls = pollUrls();
+    expect(urls[urls.length - 1].searchParams.get('cursor')).toBeNull();
+    expect(screen.queryByTestId('verdicts-missed')).toBeNull();
+    expect(screen.getByText('SN-1')).toBeTruthy();
+
+    routes[OP] = ok({ cursor: 'h2', verdicts: [verdict('e9', 'SN-9', true, false, '')] });
+    const check = screen.getByRole('button', { name: 'Check for new verdicts' });
+    await waitFor(() => expect((check as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(check);
+    expect(await screen.findByText('SN-9')).toBeTruthy();
+    urls = pollUrls();
+    expect(urls[urls.length - 1].searchParams.get('cursor')).toBe('h1');
+  }, 20000);
 });
