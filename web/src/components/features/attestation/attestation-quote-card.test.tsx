@@ -252,6 +252,40 @@ describe('AttestationQuoteCard', () => {
     act(() => toasts.toasts.forEach((t) => toasts.dismiss(t.id)));
   });
 
+  it('drops a verify answer whose inputs changed while it was in flight', async () => {
+    const sent = stubControlPlane(routes());
+    const routed = globalThis.fetch;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url.endsWith('/api/v1/attestation/quote/verify')) await gate;
+        return routed(input, init);
+      }),
+    );
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    const button = await ready('Verify quote');
+    await waitFor(() => expect(button.getAttribute('data-capability-enabled')).toBe('true'));
+    fireEvent.change(screen.getByTestId('attestation-verify-quote'), { target: { value: JSON.stringify(QUOTE) } });
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: PEM } });
+    fireEvent.change(screen.getByTestId('attestation-verify-nonce'), { target: { value: 'bm9uY2U=' } });
+    fireEvent.click(button);
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(true));
+
+    // The key changes while the verify waits: its answer is for the old key.
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: `${PEM}\n` } });
+    release();
+    await waitFor(() => expect(posts(sent, '/api/v1/attestation/quote/verify')).toHaveLength(1));
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    await act(async () => {
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+    });
+    expect(screen.queryByTestId('attestation-quote-verdict')).toBeNull();
+  });
+
   it('withholds the controls the server does not offer', async () => {
     const sent = stubControlPlane(routes({}, true));
     render(withControlPlane(<AttestationQuoteCard />));
