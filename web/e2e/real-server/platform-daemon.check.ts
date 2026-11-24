@@ -55,6 +55,11 @@ const ops = [
 for (const op of ops) {
   assert.ok(spec.includes(op), `platform-daemon.spec.ts names ${op}`);
 }
+assert.ok(!spec.includes('Entity types unavailable'), 'platform-daemon.spec.ts does not accept a failed entity-types listing');
+assert.ok(
+  spec.includes("expect(r.ok(), 'GET /api/v1/platform/entity-types answers 200').toBe(true)"),
+  'platform-daemon.spec.ts requires the entity-types listing',
+);
 
 // Never confirm an action on the shared daemon.
 const confirms = [
