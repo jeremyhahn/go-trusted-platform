@@ -3353,6 +3353,7 @@ func (p *MCPServiceProvider) TPMEventLog(ctx context.Context) (interface{}, erro
 	events, err := p.tpm2Service.ParsedEventLog()
 	if err == nil {
 		result["event_count"] = len(events)
+		result["entries"] = eventLogEntryMaps(eventLogEntries(events))
 	}
 
 	return result, nil
