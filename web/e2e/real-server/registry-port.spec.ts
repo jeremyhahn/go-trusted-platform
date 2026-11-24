@@ -10,6 +10,7 @@
  */
 import type { Page, Response } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { unwrapPayload } from './fixtures/wire';
 
 interface RegistryStatus {
   Health: number;
@@ -44,8 +45,7 @@ test.describe('Container registry', () => {
       await expect(card).toContainText(/failed to load status/i);
       return;
     }
-    const body = (await response.json()) as RegistryStatus | { data?: RegistryStatus };
-    const status = ('Health' in body ? body : body.data) as RegistryStatus;
+    const status = unwrapPayload<RegistryStatus>(await response.json());
     await expect(card).toContainText(HEALTH_LABEL[status.Health] ?? HEALTH_LABEL[0]);
     if (status.Version) {
       await expect(card).toContainText(status.Version);
