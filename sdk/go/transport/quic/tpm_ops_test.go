@@ -100,6 +100,35 @@ func TestInvoke_TPMGetRandom_SendsTheCountAndMapsTheBytes(t *testing.T) {
 	}
 }
 
+// TestInvoke_TPMGetAK_RoutesToGetIAKAndMapsTheName reads the platform AK
+// through the GetIAK sub-op and carries its TPM name (#2069).
+func TestInvoke_TPMGetAK_RoutesToGetIAKAndMapsTheName(t *testing.T) {
+	sender := &recordingSender{respPayload: replyPayload(t, &quicwire.TPM2KeyResponse{
+		Handle:    0x81010002,
+		PublicKey: []byte("ak-pub"),
+		Algorithm: "ECDSA",
+		Name:      []byte("ak-name"),
+	})}
+	conn := newConnWithSender(t, sender)
+
+	reply := &platformv1.GetAKResponse{}
+	if err := conn.Invoke(context.Background(), platformv1.TPMService_GetAK_FullMethodName,
+		&platformv1.GetAKRequest{}, reply); err != nil {
+		t.Fatalf("Invoke() unexpected error: %v", err)
+	}
+
+	assertTPM2SubOpcode(t, sender, quicwire.SubOpTPM2GetIAK)
+	if reply.GetHandle() != 0x81010002 {
+		t.Errorf("handle = %#x, want 0x81010002", reply.GetHandle())
+	}
+	if !bytes.Equal(reply.GetPublicKey(), []byte("ak-pub")) {
+		t.Errorf("public key = %q, want ak-pub", reply.GetPublicKey())
+	}
+	if !bytes.Equal(reply.GetName(), []byte("ak-name")) {
+		t.Errorf("name = %q, want ak-name", reply.GetName())
+	}
+}
+
 func TestInvoke_TPMMakeCredential_SendsTheInputsAndMapsTheBlob(t *testing.T) {
 	sender := &recordingSender{respPayload: replyPayload(t, &quicwire.TPM2MakeCredentialResponse{
 		CredentialBlob: []byte("blob"), EncryptedSecret: []byte("enc-secret"), Secret: []byte("secret"),
