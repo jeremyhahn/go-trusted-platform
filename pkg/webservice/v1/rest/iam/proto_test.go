@@ -83,7 +83,7 @@ func TestGroupToProto_Nil(t *testing.T) {
 
 func TestGroupToProto_Populated(t *testing.T) {
 	t.Parallel()
-	got := GroupToProto(&iamsdk.Group{
+	got := GroupToProto(&SDKGroup{
 		ID: "docs", TenantID: "tenant-a", Name: "Docs", Description: "doc writers",
 		CreatedAt: protoCreated, UpdatedAt: protoUpdated,
 	})

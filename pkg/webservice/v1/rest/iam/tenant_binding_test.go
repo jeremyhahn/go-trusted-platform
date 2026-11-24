@@ -43,9 +43,9 @@ func tenantBoundIAMServer(t *testing.T, servedTenant *string) *httptest.Server {
 			*servedTenant = tenantID
 			return &iamsdk.Role{ID: roleID, TenantID: tenantID}, nil
 		},
-		getGroupFn: func(_ context.Context, tenantID, groupID string) (*iamsdk.Group, error) {
+		getGroupFn: func(_ context.Context, tenantID, groupID string) (*SDKGroup, error) {
 			*servedTenant = tenantID
-			return &iamsdk.Group{ID: groupID, TenantID: tenantID}, nil
+			return &SDKGroup{ID: groupID, TenantID: tenantID}, nil
 		},
 		createUserFn: func(_ context.Context, tenantID string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
 			*servedTenant = tenantID
@@ -71,17 +71,17 @@ func tenantBoundIAMServer(t *testing.T, servedTenant *string) *httptest.Server {
 			*servedTenant = tenantID
 			return &iamsdk.Role{ID: roleID, TenantID: tenantID, Description: req.Description}, nil
 		},
-		createGroupFn: func(_ context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error) {
+		createGroupFn: func(_ context.Context, tenantID string, req *SDKCreateGroupRequest) (*SDKGroup, error) {
 			*servedTenant = tenantID
-			return &iamsdk.Group{ID: "g-new", TenantID: tenantID, Name: req.Name}, nil
+			return &SDKGroup{ID: "g-new", TenantID: tenantID, Name: req.Name}, nil
 		},
-		listGroupsFn: func(_ context.Context, tenantID string, _ *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
+		listGroupsFn: func(_ context.Context, tenantID string, _ *SDKListGroupsRequest) (*SDKListGroupsResponse, error) {
 			*servedTenant = tenantID
-			return &iamsdk.ListGroupsResponse{}, nil
+			return &SDKListGroupsResponse{}, nil
 		},
-		updateGroupFn: func(_ context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error) {
+		updateGroupFn: func(_ context.Context, tenantID, groupID string, req *SDKUpdateGroupRequest) (*SDKGroup, error) {
 			*servedTenant = tenantID
-			return &iamsdk.Group{ID: groupID, TenantID: tenantID, Description: req.Description}, nil
+			return &SDKGroup{ID: groupID, TenantID: tenantID, Description: req.Description}, nil
 		},
 	}
 

@@ -74,7 +74,7 @@ func RoleToProto(r *iamsdk.Role) *platformv1.IAMRole {
 // GroupToProto converts a QuicBaaS SDK group to a platform group.
 //
 // Returns nil if the input is nil, enabling safe chaining.
-func GroupToProto(g *iamsdk.Group) *platformv1.IAMGroup {
+func GroupToProto(g *SDKGroup) *platformv1.IAMGroup {
 	if g == nil {
 		return nil
 	}

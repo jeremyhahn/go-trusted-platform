@@ -73,13 +73,13 @@ func listReplyCases() []listReplyCase {
 			name: "ListGroups", sessionTenant: "tenant-a",
 			wantCall: listCall{tenant: "tenant-a", pageSize: 50},
 			mock: func(c *mockIAMClient, got *listCall, err error) {
-				c.listGroupsFn = func(_ context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
+				c.listGroupsFn = func(_ context.Context, tenantID string, req *SDKListGroupsRequest) (*SDKListGroupsResponse, error) {
 					*got = listCall{tenant: tenantID, pageSize: req.PageSize}
 					if err != nil {
 						return nil, err
 					}
-					return &iamsdk.ListGroupsResponse{
-						Groups:     []iamsdk.Group{{ID: "item-1"}, {ID: "item-2"}},
+					return &SDKListGroupsResponse{
+						Groups:     []SDKGroup{{ID: "item-1"}, {ID: "item-2"}},
 						Pagination: iamsdk.PaginationInfo{TotalCount: 3},
 					}, nil
 				}

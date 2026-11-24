@@ -246,32 +246,39 @@ func (a *QuicBaaSIAMAdapter) RevokeRole(ctx context.Context, tenantID, userID, r
 // Group operations.
 // -----------------------------------------------------------------------------
 
-func (a *QuicBaaSIAMAdapter) CreateGroup(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error) {
-	return a.client.Group().Create(ctx, tenantID, req)
+// CreateGroup returns ErrGroupsNotSupported: the QuicBaaS IAM client has no group API.
+func (a *QuicBaaSIAMAdapter) CreateGroup(context.Context, string, *SDKCreateGroupRequest) (*SDKGroup, error) {
+	return nil, ErrGroupsNotSupported{Op: "CreateGroup"}
 }
 
-func (a *QuicBaaSIAMAdapter) GetGroup(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error) {
-	return a.client.Group().Get(ctx, tenantID, groupID)
+// GetGroup returns ErrGroupsNotSupported: the QuicBaaS IAM client has no group API.
+func (a *QuicBaaSIAMAdapter) GetGroup(context.Context, string, string) (*SDKGroup, error) {
+	return nil, ErrGroupsNotSupported{Op: "GetGroup"}
 }
 
-func (a *QuicBaaSIAMAdapter) ListGroups(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
-	return a.client.Group().List(ctx, tenantID, req)
+// ListGroups returns ErrGroupsNotSupported: the QuicBaaS IAM client has no group API.
+func (a *QuicBaaSIAMAdapter) ListGroups(context.Context, string, *SDKListGroupsRequest) (*SDKListGroupsResponse, error) {
+	return nil, ErrGroupsNotSupported{Op: "ListGroups"}
 }
 
-func (a *QuicBaaSIAMAdapter) UpdateGroup(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error) {
-	return a.client.Group().Update(ctx, tenantID, groupID, req)
+// UpdateGroup returns ErrGroupsNotSupported: the QuicBaaS IAM client has no group API.
+func (a *QuicBaaSIAMAdapter) UpdateGroup(context.Context, string, string, *SDKUpdateGroupRequest) (*SDKGroup, error) {
+	return nil, ErrGroupsNotSupported{Op: "UpdateGroup"}
 }
 
-func (a *QuicBaaSIAMAdapter) DeleteGroup(ctx context.Context, tenantID, groupID string) error {
-	return a.client.Group().Delete(ctx, tenantID, groupID)
+// DeleteGroup returns ErrGroupsNotSupported: the QuicBaaS IAM client has no group API.
+func (a *QuicBaaSIAMAdapter) DeleteGroup(context.Context, string, string) error {
+	return ErrGroupsNotSupported{Op: "DeleteGroup"}
 }
 
-func (a *QuicBaaSIAMAdapter) AddGroupMember(ctx context.Context, tenantID, groupID, userID string) error {
-	return a.client.Group().AddMember(ctx, tenantID, groupID, userID)
+// AddGroupMember returns ErrGroupsNotSupported: the QuicBaaS IAM client has no group API.
+func (a *QuicBaaSIAMAdapter) AddGroupMember(context.Context, string, string, string) error {
+	return ErrGroupsNotSupported{Op: "AddGroupMember"}
 }
 
-func (a *QuicBaaSIAMAdapter) RemoveGroupMember(ctx context.Context, tenantID, groupID, userID string) error {
-	return a.client.Group().RemoveMember(ctx, tenantID, groupID, userID)
+// RemoveGroupMember returns ErrGroupsNotSupported: the QuicBaaS IAM client has no group API.
+func (a *QuicBaaSIAMAdapter) RemoveGroupMember(context.Context, string, string, string) error {
+	return ErrGroupsNotSupported{Op: "RemoveGroupMember"}
 }
 
 // -----------------------------------------------------------------------------

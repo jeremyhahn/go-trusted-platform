@@ -62,10 +62,10 @@ type IAMClient interface {
 	RevokeRole(ctx context.Context, tenantID, userID, roleID string) error
 
 	// Group operations
-	CreateGroup(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error)
-	GetGroup(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error)
-	ListGroups(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error)
-	UpdateGroup(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error)
+	CreateGroup(ctx context.Context, tenantID string, req *SDKCreateGroupRequest) (*SDKGroup, error)
+	GetGroup(ctx context.Context, tenantID, groupID string) (*SDKGroup, error)
+	ListGroups(ctx context.Context, tenantID string, req *SDKListGroupsRequest) (*SDKListGroupsResponse, error)
+	UpdateGroup(ctx context.Context, tenantID, groupID string, req *SDKUpdateGroupRequest) (*SDKGroup, error)
 	DeleteGroup(ctx context.Context, tenantID, groupID string) error
 	AddGroupMember(ctx context.Context, tenantID, groupID, userID string) error
 	RemoveGroupMember(ctx context.Context, tenantID, groupID, userID string) error
@@ -303,7 +303,13 @@ func (h *IAMHandlers) consistentTenant(next http.HandlerFunc) http.HandlerFunc {
 
 func (h *IAMHandlers) handleError(w http.ResponseWriter, r *http.Request, err error) {
 	errStr := err.Error()
+	var unsupported ErrGroupsNotSupported
 	switch {
+	case errors.As(err, &unsupported):
+		h.respWriter.Write(w, r, http.StatusNotImplemented, restwire.WebServiceResponse{
+			Code:  http.StatusNotImplemented,
+			Error: errStr,
+		})
 	case strings.Contains(errStr, "not found"):
 		h.respWriter.Error404(w, r, err)
 	case strings.Contains(errStr, "invalid"),
@@ -659,7 +665,7 @@ func (h *IAMHandlers) CreateGroup(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := h.createContext()
 	defer cancel()
 
-	sdkReq := &iamsdk.CreateGroupRequest{
+	sdkReq := &SDKCreateGroupRequest{
 		ID:          req.ID,
 		Name:        req.Name,
 		Description: req.Description,
@@ -690,7 +696,7 @@ func (h *IAMHandlers) ListGroups(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := h.createContext()
 	defer cancel()
 
-	sdkReq := &iamsdk.ListGroupsRequest{
+	sdkReq := &SDKListGroupsRequest{
 		PageSize: int(limit),
 	}
 
@@ -762,7 +768,7 @@ func (h *IAMHandlers) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := h.createContext()
 	defer cancel()
 
-	sdkReq := &iamsdk.UpdateGroupRequest{
+	sdkReq := &SDKUpdateGroupRequest{
 		Name:        req.Name,
 		Description: req.Description,
 	}
@@ -873,7 +879,7 @@ func (h *IAMHandlers) RemoveGroupMember(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-func groupToResponse(g *iamsdk.Group) GroupResponse {
+func groupToResponse(g *SDKGroup) GroupResponse {
 	resp := GroupResponse{
 		ID:          g.ID,
 		TenantID:    g.TenantID,

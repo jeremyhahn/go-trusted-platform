@@ -57,10 +57,10 @@ type mockIAMClient struct {
 	revokeRoleFn   func(ctx context.Context, tenantID, userID, roleID string) error
 
 	// Group methods
-	createGroupFn       func(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error)
-	listGroupsFn        func(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error)
-	getGroupFn          func(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error)
-	updateGroupFn       func(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error)
+	createGroupFn       func(ctx context.Context, tenantID string, req *SDKCreateGroupRequest) (*SDKGroup, error)
+	listGroupsFn        func(ctx context.Context, tenantID string, req *SDKListGroupsRequest) (*SDKListGroupsResponse, error)
+	getGroupFn          func(ctx context.Context, tenantID, groupID string) (*SDKGroup, error)
+	updateGroupFn       func(ctx context.Context, tenantID, groupID string, req *SDKUpdateGroupRequest) (*SDKGroup, error)
 	deleteGroupFn       func(ctx context.Context, tenantID, groupID string) error
 	addGroupMemberFn    func(ctx context.Context, tenantID, groupID, userID string) error
 	removeGroupMemberFn func(ctx context.Context, tenantID, groupID, userID string) error
@@ -162,28 +162,28 @@ func (m *mockIAMClient) RevokeRole(ctx context.Context, tenantID, userID, roleID
 	return status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) CreateGroup(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error) {
+func (m *mockIAMClient) CreateGroup(ctx context.Context, tenantID string, req *SDKCreateGroupRequest) (*SDKGroup, error) {
 	if m.createGroupFn != nil {
 		return m.createGroupFn(ctx, tenantID, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) ListGroups(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
+func (m *mockIAMClient) ListGroups(ctx context.Context, tenantID string, req *SDKListGroupsRequest) (*SDKListGroupsResponse, error) {
 	if m.listGroupsFn != nil {
 		return m.listGroupsFn(ctx, tenantID, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) GetGroup(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error) {
+func (m *mockIAMClient) GetGroup(ctx context.Context, tenantID, groupID string) (*SDKGroup, error) {
 	if m.getGroupFn != nil {
 		return m.getGroupFn(ctx, tenantID, groupID)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func (m *mockIAMClient) UpdateGroup(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error) {
+func (m *mockIAMClient) UpdateGroup(ctx context.Context, tenantID, groupID string, req *SDKUpdateGroupRequest) (*SDKGroup, error) {
 	if m.updateGroupFn != nil {
 		return m.updateGroupFn(ctx, tenantID, groupID, req)
 	}
@@ -1072,8 +1072,8 @@ func TestRevokeUserRole_Error(t *testing.T) {
 func TestCreateGroup_Success(t *testing.T) {
 	t.Parallel()
 	iamClient := &mockIAMClient{
-		createGroupFn: func(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error) {
-			return &iamsdk.Group{
+		createGroupFn: func(ctx context.Context, tenantID string, req *SDKCreateGroupRequest) (*SDKGroup, error) {
+			return &SDKGroup{
 				ID:          req.ID,
 				TenantID:    tenantID,
 				Name:        req.Name,
@@ -1099,9 +1099,9 @@ func TestCreateGroup_Success(t *testing.T) {
 func TestListGroups_Success(t *testing.T) {
 	t.Parallel()
 	iamClient := &mockIAMClient{
-		listGroupsFn: func(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
-			return &iamsdk.ListGroupsResponse{
-				Groups: []iamsdk.Group{
+		listGroupsFn: func(ctx context.Context, tenantID string, req *SDKListGroupsRequest) (*SDKListGroupsResponse, error) {
+			return &SDKListGroupsResponse{
+				Groups: []SDKGroup{
 					{ID: "group-1", Name: "Group 1"},
 					{ID: "group-2", Name: "Group 2"},
 				},
@@ -1125,8 +1125,8 @@ func TestListGroups_Success(t *testing.T) {
 func TestGetGroup_Success(t *testing.T) {
 	t.Parallel()
 	iamClient := &mockIAMClient{
-		getGroupFn: func(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error) {
-			return &iamsdk.Group{
+		getGroupFn: func(ctx context.Context, tenantID, groupID string) (*SDKGroup, error) {
+			return &SDKGroup{
 				ID:   groupID,
 				Name: "Engineering",
 			}, nil
@@ -1146,8 +1146,8 @@ func TestGetGroup_Success(t *testing.T) {
 func TestUpdateGroup_Success(t *testing.T) {
 	t.Parallel()
 	iamClient := &mockIAMClient{
-		updateGroupFn: func(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error) {
-			return &iamsdk.Group{
+		updateGroupFn: func(ctx context.Context, tenantID, groupID string, req *SDKUpdateGroupRequest) (*SDKGroup, error) {
+			return &SDKGroup{
 				ID:          groupID,
 				Name:        req.Name,
 				Description: req.Description,
@@ -2285,7 +2285,7 @@ func TestCreateGroup_InvalidRequestBody(t *testing.T) {
 func TestCreateGroup_GRPCError(t *testing.T) {
 	t.Parallel()
 	iamClient := &mockIAMClient{
-		createGroupFn: func(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error) {
+		createGroupFn: func(ctx context.Context, tenantID string, req *SDKCreateGroupRequest) (*SDKGroup, error) {
 			return nil, status.Error(codes.AlreadyExists, "group already exists")
 		},
 	}
@@ -2316,7 +2316,7 @@ func TestListGroups_MissingTenantID(t *testing.T) {
 func TestListGroups_GRPCError(t *testing.T) {
 	t.Parallel()
 	iamClient := &mockIAMClient{
-		listGroupsFn: func(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
+		listGroupsFn: func(ctx context.Context, tenantID string, req *SDKListGroupsRequest) (*SDKListGroupsResponse, error) {
 			return nil, status.Error(codes.Internal, "internal error")
 		},
 	}
@@ -2358,7 +2358,7 @@ func TestGetGroup_MissingGroupID(t *testing.T) {
 func TestGetGroup_GRPCError(t *testing.T) {
 	t.Parallel()
 	iamClient := &mockIAMClient{
-		getGroupFn: func(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error) {
+		getGroupFn: func(ctx context.Context, tenantID, groupID string) (*SDKGroup, error) {
 			return nil, status.Error(codes.NotFound, "group not found")
 		},
 	}
@@ -2416,7 +2416,7 @@ func TestUpdateGroup_InvalidRequestBody(t *testing.T) {
 func TestUpdateGroup_GRPCError(t *testing.T) {
 	t.Parallel()
 	iamClient := &mockIAMClient{
-		updateGroupFn: func(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error) {
+		updateGroupFn: func(ctx context.Context, tenantID, groupID string, req *SDKUpdateGroupRequest) (*SDKGroup, error) {
 			return nil, status.Error(codes.NotFound, "group not found")
 		},
 	}
