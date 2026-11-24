@@ -20,7 +20,9 @@ import (
 
 	"github.com/gorilla/mux"
 
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/router"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -38,6 +40,9 @@ type TenantRouter struct {
 	// configured. Both nil mounts every route live.
 	dark   func(name string) http.Handler
 	record func(name string, routes ...*mux.Route)
+	// scopeAuthorizer, when set, makes every route take its TenantService
+	// RPC's catalog scope; nil leaves the role gate alone (legacy JWT).
+	scopeAuthorizer middleware.ScopeAuthorizer
 	router.WebServiceRouter
 }
 
@@ -82,26 +87,57 @@ func (r *TenantRouter) configured(name string) bool {
 	return true
 }
 
-// featureRoute is a route whose handler needs a backend beyond IAM.
-type featureRoute struct {
-	path    string
+// tenantServicePrefix is the gRPC full-method prefix the REST routes look
+// their scope up under.
+const tenantServicePrefix = "/platform.v1.TenantService/"
+
+// scopedTenantRoute is one REST route: its TenantService RPC (whose catalog scope
+// it takes), the tenant guard, the handler, and the backend feature it needs
+// beyond IAM ("" for none).
+type scopedTenantRoute struct {
 	method  string
+	path    string
+	rpc     string
+	guard   func(http.HandlerFunc) http.Handler
 	handler http.HandlerFunc
+	feature string
+}
+
+// SetScopeAuthorizer makes every route take its RPC's catalog scope before
+// dispatch, as gRPC does. Without one the admin role gate alone applies.
+func (r *TenantRouter) SetScopeAuthorizer(authorizer middleware.ScopeAuthorizer) {
+	r.scopeAuthorizer = authorizer
+}
+
+// requireScope wraps h in the scope check for rpc. An rpc with no catalog
+// scope fails closed.
+func (r *TenantRouter) requireScope(rpc string, h http.Handler) http.Handler {
+	if r.scopeAuthorizer == nil {
+		return h
+	}
+	scope := grpcapi.ScopeForMethod(tenantServicePrefix + rpc)
+	if scope == "" {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		})
+	}
+	return r.scopeAuthorizer.RequireScope(scope)(h)
 }
 
 // mountFeature mounts routes live when the named backend is configured,
 // otherwise behind the dark handler, recording them as not configured.
-func (r *TenantRouter) mountFeature(sr *mux.Router, name string, routes []featureRoute) {
+func (r *TenantRouter) mountFeature(sr *mux.Router, name string, routes []scopedTenantRoute) {
 	if r.configured(name) {
 		for _, fr := range routes {
-			sr.Handle(fr.path, r.tenantScoped(fr.handler)).Methods(fr.method)
+			sr.Handle(fr.path, r.requireScope(fr.rpc, fr.guard(fr.handler))).Methods(fr.method)
 		}
 		return
 	}
 	dark := r.dark(name)
 	mounted := make([]*mux.Route, 0, len(routes))
 	for _, fr := range routes {
-		mounted = append(mounted, sr.Handle(fr.path, r.tenantScoped(dark.ServeHTTP)).Methods(fr.method))
+		mounted = append(mounted,
+			sr.Handle(fr.path, r.requireScope(fr.rpc, fr.guard(dark.ServeHTTP))).Methods(fr.method))
 	}
 	if r.record != nil {
 		r.record(name, mounted...)
@@ -222,37 +258,56 @@ func (r *TenantRouter) ownNameOrSystem(h http.HandlerFunc) http.Handler {
 //	GET    /api/v1/tenants/{id}/barrier             - GetTenantBarrierStatus
 func (r *TenantRouter) RegisterRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix(basePath).Subrouter()
-	// Cross-tenant control-plane operations.
-	sr.Handle("", r.systemOnly(r.handlers.ListTenants)).Methods("GET")
-	sr.Handle("", r.systemOnly(r.handlers.CreateTenant)).Methods("POST")
-	sr.Handle("/sync", r.systemOnly(r.handlers.Sync)).Methods("POST")
-	// by-name cannot take the {id} guard: tenant ids are UUIDs
-	// (pkg/tenant/manager.go generates uuid.New()), so the NAME in the path
-	// never equals the session's tenant id. Its guard resolves the name and
-	// applies tenant.AuthorizeNameLookup to the session's tenant claim: a
-	// tenant resolves its own name, the system tenant any, and a foreign
-	// name is refused exactly like an unknown one.
-	sr.Handle("/by-name/{name}", r.ownNameOrSystem(r.handlers.GetTenantByName)).Methods("GET")
-	sr.Handle("/{id}", r.tenantScoped(r.handlers.GetTenant)).Methods("GET")
-	sr.Handle("/{id}", r.tenantScoped(r.handlers.UpdateTenant)).Methods("PUT")
-	sr.Handle("/{id}", r.tenantScoped(r.handlers.DeleteTenant)).Methods("DELETE")
-	sr.Handle("/{id}/suspend", r.tenantScoped(r.handlers.SuspendTenant)).Methods("POST")
-	sr.Handle("/{id}/resume", r.tenantScoped(r.handlers.ResumeTenant)).Methods("POST")
-	sr.Handle("/{id}/quotas", r.tenantScoped(r.handlers.GetQuotas)).Methods("GET")
-	sr.Handle("/{id}/quotas", r.tenantScoped(r.handlers.UpdateQuotas)).Methods("PUT")
-	sr.Handle("/{id}/usage", r.tenantScoped(r.handlers.GetUsage)).Methods("GET")
-	sr.Handle("/{id}/quota-check", r.tenantScoped(r.handlers.CheckQuota)).Methods("POST")
-	// The DEK and barrier operations need backends the IAM-only tenant
-	// manager may not have; without one they answer not configured, and
-	// the capability listing says so, rather than failing every call.
-	r.mountFeature(sr, FeatureTenantDEK, []featureRoute{
-		{"/{id}/dek/rotate", "POST", r.handlers.RotateTenantDEK},
-		{"/{id}/dek", "GET", r.handlers.GetTenantDEKStatus},
-	})
-	r.mountFeature(sr, FeatureTenantBarrier, []featureRoute{
-		{"/{id}/barrier/init", "POST", r.handlers.InitBarrier},
-		{"/{id}/barrier/unseal", "POST", r.handlers.UnsealBarrier},
-		{"/{id}/barrier/seal", "POST", r.handlers.SealBarrier},
-		{"/{id}/barrier", "GET", r.handlers.GetBarrierStatus},
-	})
+	features := map[string][]scopedTenantRoute{}
+	var order []string
+	for _, route := range r.routeTable() {
+		if route.feature == "" {
+			sr.Handle(route.path, r.requireScope(route.rpc, route.guard(route.handler))).Methods(route.method)
+			continue
+		}
+		if _, seen := features[route.feature]; !seen {
+			order = append(order, route.feature)
+		}
+		features[route.feature] = append(features[route.feature], route)
+	}
+	for _, name := range order {
+		r.mountFeature(sr, name, features[name])
+	}
+}
+
+// routeTable is every tenant route in mount order, each with the
+// TenantService RPC whose scope it takes.
+func (r *TenantRouter) routeTable() []scopedTenantRoute {
+	h := r.handlers
+	return []scopedTenantRoute{
+		// Cross-tenant control-plane operations.
+		{"GET", "", "ListTenants", r.systemOnly, h.ListTenants, ""},
+		{"POST", "", "CreateTenant", r.systemOnly, h.CreateTenant, ""},
+		{"POST", "/sync", "Sync", r.systemOnly, h.Sync, ""},
+		// by-name cannot take the {id} guard: tenant ids are UUIDs
+		// (pkg/tenant/manager.go generates uuid.New()), so the NAME in the path
+		// never equals the session's tenant id. Its guard resolves the name and
+		// applies tenant.AuthorizeNameLookup to the session's tenant claim: a
+		// tenant resolves its own name, the system tenant any, and a foreign
+		// name is refused exactly like an unknown one.
+		{"GET", "/by-name/{name}", "GetTenantByName", r.ownNameOrSystem, h.GetTenantByName, ""},
+		{"GET", "/{id}", "GetTenant", r.tenantScoped, h.GetTenant, ""},
+		{"PUT", "/{id}", "UpdateTenant", r.tenantScoped, h.UpdateTenant, ""},
+		{"DELETE", "/{id}", "DeleteTenant", r.tenantScoped, h.DeleteTenant, ""},
+		{"POST", "/{id}/suspend", "SuspendTenant", r.tenantScoped, h.SuspendTenant, ""},
+		{"POST", "/{id}/resume", "ResumeTenant", r.tenantScoped, h.ResumeTenant, ""},
+		{"GET", "/{id}/quotas", "GetQuotas", r.tenantScoped, h.GetQuotas, ""},
+		{"PUT", "/{id}/quotas", "UpdateQuotas", r.tenantScoped, h.UpdateQuotas, ""},
+		{"GET", "/{id}/usage", "GetUsage", r.tenantScoped, h.GetUsage, ""},
+		{"POST", "/{id}/quota-check", "CheckQuota", r.tenantScoped, h.CheckQuota, ""},
+		// The DEK and barrier operations need backends the IAM-only tenant
+		// manager may not have; without one they answer not configured, and
+		// the capability listing says so, rather than failing every call.
+		{"POST", "/{id}/dek/rotate", "RotateTenantDEK", r.tenantScoped, h.RotateTenantDEK, FeatureTenantDEK},
+		{"GET", "/{id}/dek", "GetTenantDEKStatus", r.tenantScoped, h.GetTenantDEKStatus, FeatureTenantDEK},
+		{"POST", "/{id}/barrier/init", "InitTenantBarrier", r.tenantScoped, h.InitBarrier, FeatureTenantBarrier},
+		{"POST", "/{id}/barrier/unseal", "UnsealTenantBarrier", r.tenantScoped, h.UnsealBarrier, FeatureTenantBarrier},
+		{"POST", "/{id}/barrier/seal", "SealTenantBarrier", r.tenantScoped, h.SealBarrier, FeatureTenantBarrier},
+		{"GET", "/{id}/barrier", "GetTenantBarrierStatus", r.tenantScoped, h.GetBarrierStatus, FeatureTenantBarrier},
+	}
 }

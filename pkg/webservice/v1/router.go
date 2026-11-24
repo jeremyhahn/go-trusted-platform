@@ -1038,6 +1038,11 @@ func (v1Router *Router) tenantRoutes() {
 				name, name+" backend not configured by daemon")
 		},
 		v1Router.serviceRegistry.recordUnavailable)
+	// Each route then takes its TenantService RPC's catalog scope, as on
+	// gRPC; under the legacy JWT handler the role gate alone applies.
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		r.SetScopeAuthorizer(scoped)
+	}
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
