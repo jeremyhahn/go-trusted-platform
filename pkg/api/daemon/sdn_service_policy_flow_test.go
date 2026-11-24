@@ -783,7 +783,7 @@ func TestSDNService_ApplyPolicy_FailedObsoleteDeleteIsStrandedAndRetried(t *test
 	second := denyPolicy("p", denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}))
 	second.PolicyId = "pol-1"
 	_, err = svc.ApplyPolicy(context.Background(), second)
-	require.NoError(t, err, "a failed removal of an obsolete entry does not fail the replacement")
+	require.Equal(t, codes.Internal, status.Code(err), "a failed removal of an obsolete entry fails the replacement (Codex round 6, PR #2021)")
 	require.True(t, failed)
 
 	_, ok := sw.entry("tcp")
