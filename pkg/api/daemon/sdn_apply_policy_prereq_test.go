@@ -68,6 +68,33 @@ func TestSDNService_PolicyRuleFlowMod_CarriesPrerequisites(t *testing.T) {
 	}
 }
 
+// IP protocol 0 is the unset value of FlowMatch.IpProto, so the codec would
+// emit no nw_proto (and, with no address, no dl_type): a rule naming it is
+// refused rather than installed as a wildcard flow.
+func TestSDNService_PolicyRuleFlowMod_ProtocolZeroIsNotAWildcard(t *testing.T) {
+	svc, _ := newEnforcePolicyFixture(t)
+
+	for _, match := range []*platformv1.PolicyRuleMatch{
+		{Protocol: "0"},
+		{Protocol: "00"},
+		{Protocol: "0", DestinationIp: "198.51.100.5"},
+	} {
+		t.Run(match.GetProtocol()+"/"+match.GetDestinationIp(), func(t *testing.T) {
+			rule := &platformv1.PolicyRule{
+				RuleId: "r0",
+				Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_ALLOW,
+				Match:  match,
+			}
+			mod, err := svc.policyRuleToFlowMod(rule, 100)
+			assert.Nil(t, mod)
+			require.Error(t, err)
+			var uerr ErrUnencodableFlow
+			require.ErrorAs(t, err, &uerr)
+			assert.Equal(t, "match.protocol", uerr.Field)
+		})
+	}
+}
+
 // TestSDNService_ApplyPolicy_RefusesRuleWithoutPrerequisites checks that a
 // rule whose match cannot carry its OpenFlow prerequisites is refused with
 // InvalidArgument before any flow is installed or the policy is stored.
@@ -83,6 +110,9 @@ func TestSDNService_ApplyPolicy_RefusesRuleWithoutPrerequisites(t *testing.T) {
 		{"icmpv6 with ipv4 address", &platformv1.PolicyRuleMatch{Protocol: "icmpv6", SourceIp: "192.0.2.10"}},
 		{"mixed address families", &platformv1.PolicyRuleMatch{SourceIp: "192.0.2.10", DestinationIp: "2001:db8::5"}},
 		{"unknown protocol", &platformv1.PolicyRuleMatch{Protocol: "bogus"}},
+		{"protocol zero", &platformv1.PolicyRuleMatch{Protocol: "0"}},
+		{"protocol zero, two digits", &platformv1.PolicyRuleMatch{Protocol: "00"}},
+		{"protocol zero with an address", &platformv1.PolicyRuleMatch{Protocol: "0", SourceIp: "192.0.2.10"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
