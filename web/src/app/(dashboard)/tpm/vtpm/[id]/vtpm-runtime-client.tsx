@@ -202,11 +202,8 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
   const extendResult = rt.extendPCR.data;
   const readData = rt.readPCR.data;
   const noBundle = bundleId.trim() === "";
-  // The socket of a running bundle, from the state check or the start reply.
-  const socketPath =
-    rt.runState === "running"
-      ? (rt.checkState.data?.running ? rt.checkState.data.socket_path : undefined) ?? rt.start.data?.socket_path
-      : rt.start.data?.socket_path;
+  // The socket of a running bundle, from the latest start or state read.
+  const socketPath = rt.runState === "running" ? rt.socketPath : undefined;
 
   return (
     <div className="space-y-6">
