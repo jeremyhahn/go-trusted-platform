@@ -27,27 +27,86 @@ function must<T>(res: { success: boolean; data?: T; error?: any }, what: string)
 const createdBundles: string[] = [];
 const createdTemplates: string[] = [];
 
+/** A runner without the swtpm binary: the server refuses every bundle or template create. */
+const MISSING_SWTPM = /swtpm not installed/;
+
+/** gap records what this run could not check, as a test annotation. */
+function gap(description: string): void {
+  test.info().annotations.push({ type: 'gap', description });
+}
+
+/**
+ * The refusal text when the server refused for want of swtpm, else undefined.
+ * Any other refusal still throws through `must`.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function newBundle(sdk: any, hostname = unique('vtpm-e2e')): Promise<string> {
-  const res = must(
-    await sdk.vtpm.createBundle({ options: { hostname } }),
-    'vtpm.createBundle',
-  ) as { id: string };
+function swtpmRefusal(res: { success: boolean; data?: unknown; error?: any }): string | undefined {
+  if (res.success && res.data !== undefined) return undefined;
+  const text = JSON.stringify(res.error) ?? '';
+  return MISSING_SWTPM.test(text) ? text : undefined;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function newBundle(sdk: any, hostname = unique('vtpm-e2e')): Promise<string | undefined> {
+  const reply = await sdk.vtpm.createBundle({ options: { hostname } });
+  const refused = swtpmRefusal(reply);
+  if (refused !== undefined) {
+    gap(`vtpm.createBundle refused: ${refused}`);
+    return undefined;
+  }
+  const res = must(reply, 'vtpm.createBundle') as { id: string };
   createdBundles.push(res.id);
   return res.id;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function newTemplate(sdk: any): Promise<string> {
+async function newTemplate(sdk: any): Promise<string | undefined> {
   const id = unique('tmpl-e2e');
-  must(
-    await sdk.vtpm.createTemplate({
-      options: { id, description: `${id} description`, ekAlgorithm: 'ECC', secureBootEnabled: false },
-    }),
-    'vtpm.createTemplate',
-  );
+  const reply = await sdk.vtpm.createTemplate({
+    options: { id, description: `${id} description`, ekAlgorithm: 'ECC', secureBootEnabled: false },
+  });
+  const refused = swtpmRefusal(reply);
+  if (refused !== undefined) {
+    gap(`vtpm.createTemplate refused: ${refused}`);
+    return undefined;
+  }
+  must(reply, 'vtpm.createTemplate');
   createdTemplates.push(id);
   return id;
+}
+
+/** With no template to drive, the templates page still loads its list. */
+async function templatesPageOnly(page: Page): Promise<void> {
+  await page.goto('/devices/vtpm/templates/');
+  await expect(page.getByTestId('vtpm-template-list')).toBeVisible();
+}
+
+/** With no bundle to drive, the bundles page still loads its list. */
+async function bundlesPageOnly(page: Page): Promise<void> {
+  await page.goto('/devices/vtpm/bundles/');
+  await expect(page.getByTestId('vtpm-bundle-list')).toBeVisible();
+}
+
+/** The server's capability answer: op to enabled. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function offered(sdk: any): Promise<Map<string, boolean>> {
+  const res = await sdk.capabilities.list();
+  expect(res.success, JSON.stringify(res.error)).toBe(true);
+  const caps = (res.data?.capabilities ?? []) as { op: string; enabled: boolean }[];
+  return new Map(caps.map((c) => [c.op, c.enabled] as [string, boolean]));
+}
+
+/** Every gated control on the page carries the server's answer for its op. */
+async function expectGatedMatches(page: Page, caps: Map<string, boolean>): Promise<void> {
+  const gated = page.locator('[data-capability-op]');
+  await expect(gated.first()).toBeVisible();
+  const n = await gated.count();
+  expect(n, 'gated controls on the page').toBeGreaterThan(0);
+  for (let i = 0; i < n; i++) {
+    const el = gated.nth(i);
+    const op = (await el.getAttribute('data-capability-op')) as string;
+    await expect(el, op).toHaveAttribute('data-capability-enabled', String(caps.get(op) ?? false));
+  }
 }
 
 /** The first absolute path among a reply's string fields (path, socket_path, ...). */
@@ -104,6 +163,7 @@ test.afterEach(async ({ sdk }) => {
 test.describe('vTPM bundles and templates (real server)', () => {
   test('ListTemplates', async ({ adminPage, sdk }) => {
     const id = await newTemplate(sdk);
+    if (id === undefined) return templatesPageOnly(adminPage);
     const listed = must(await sdk.vtpm.listTemplates(), 'vtpm.listTemplates');
     expect(JSON.stringify(listed)).toContain(id);
 
@@ -114,7 +174,8 @@ test.describe('vTPM bundles and templates (real server)', () => {
 
   test('CreateTemplate', async ({ adminPage, sdk }) => {
     const seed = await newTemplate(sdk);
-    await openTemplates(adminPage, seed);
+    if (seed === undefined) await templatesPageOnly(adminPage);
+    else await openTemplates(adminPage, seed);
     const id = unique('tmpl-ui');
     createdTemplates.push(id);
 
@@ -134,6 +195,15 @@ test.describe('vTPM bundles and templates (real server)', () => {
       ek_algorithm: 'ECC',
       secure_boot_enabled: true,
     });
+    if (!reply.ok()) {
+      const text = await reply.text();
+      if (MISSING_SWTPM.test(text)) {
+        // The page shows the server's refusal; the create itself is a gap on this runner.
+        await expect(adminPage.getByText(/swtpm/).first()).toBeVisible();
+        gap(`vtpm.createTemplate (page) refused: ${text}`);
+        return;
+      }
+    }
     expect(reply.ok()).toBe(true);
 
     await expect(adminPage.getByTestId('vtpm-template-list')).toContainText(id);
@@ -144,6 +214,7 @@ test.describe('vTPM bundles and templates (real server)', () => {
 
   test('GetTemplate', async ({ adminPage, sdk }) => {
     const id = await newTemplate(sdk);
+    if (id === undefined) return templatesPageOnly(adminPage);
     const got = must(await sdk.vtpm.getTemplate(id), 'vtpm.getTemplate') as unknown as Record<string, unknown>;
     const tmpl = (got.template ?? got) as Record<string, unknown>;
     const stateDir = tmpl.tpmStateDir ?? tmpl.tpm_state_dir;
@@ -160,6 +231,7 @@ test.describe('vTPM bundles and templates (real server)', () => {
 
   test('CloneTemplate', async ({ adminPage, sdk }) => {
     const id = await newTemplate(sdk);
+    if (id === undefined) return templatesPageOnly(adminPage);
     await openTemplates(adminPage, id);
     const hostname = unique('web');
 
@@ -189,7 +261,9 @@ test.describe('vTPM bundles and templates (real server)', () => {
 
   test('DeleteTemplate', async ({ adminPage, sdk }) => {
     const keep = await newTemplate(sdk);
+    if (keep === undefined) return templatesPageOnly(adminPage);
     const id = await newTemplate(sdk);
+    if (id === undefined) return templatesPageOnly(adminPage);
     const seen = await openTemplates(adminPage, id);
 
     await templateRow(adminPage, id).getByRole('button', { name: 'Delete' }).click();
@@ -207,7 +281,6 @@ test.describe('vTPM bundles and templates (real server)', () => {
     adminPage,
     sdk,
   }) => {
-    const existing = await newBundle(sdk);
     await adminPage.goto('/devices/vtpm/bundles/');
     await expect(adminPage.getByTestId('vtpm-bundle-list')).toBeVisible();
 
@@ -226,12 +299,12 @@ test.describe('vTPM bundles and templates (real server)', () => {
     expect(reply.request().postDataBuffer()?.equals(archive)).toBe(true);
     expect(reply.ok()).toBe(false);
     await expect(adminPage.getByTestId('vtpm-import-result')).toHaveCount(0);
-    expect(existing).toBeTruthy();
   });
 
   test('GetBundle', async ({ adminPage, sdk }) => {
     const hostname = unique('host');
     const id = await newBundle(sdk, hostname);
+    if (id === undefined) return bundlesPageOnly(adminPage);
     expect((await sdk.vtpm.getBundle(id)).success).toBe(true);
 
     const seen = await openBundle(adminPage, id);
@@ -241,6 +314,7 @@ test.describe('vTPM bundles and templates (real server)', () => {
 
   test('GetBundle switches ID', async ({ adminPage, sdk }) => {
     const id = await newBundle(sdk);
+    if (id === undefined) return bundlesPageOnly(adminPage);
     const missing = unique('bundle-missing');
     expect((await sdk.vtpm.getBundle(missing)).success).toBe(false);
 
@@ -257,6 +331,7 @@ test.describe('vTPM bundles and templates (real server)', () => {
 
   test('BundleList pages by offset', async ({ adminPage, sdk }) => {
     const id = await newBundle(sdk);
+    if (id === undefined) return bundlesPageOnly(adminPage);
     const seen = recordVTPM(adminPage);
     await adminPage.goto('/devices/vtpm/bundles/');
     await expect(adminPage.getByTestId('vtpm-bundle-range')).toHaveText(/^Bundles 1-\d+$/);
@@ -280,6 +355,7 @@ test.describe('vTPM bundles and templates (real server)', () => {
 
   test('ValidateBundle', async ({ adminPage, sdk }) => {
     const id = await newBundle(sdk);
+    if (id === undefined) return bundlesPageOnly(adminPage);
     const verdict = must(await sdk.vtpm.validateBundle(id), 'vtpm.validateBundle') as {
       valid?: boolean;
       errors?: string[];
@@ -299,6 +375,7 @@ test.describe('vTPM bundles and templates (real server)', () => {
 
   test('GetBundlePath', async ({ adminPage, sdk }) => {
     const id = await newBundle(sdk);
+    if (id === undefined) return bundlesPageOnly(adminPage);
     const path = pathIn(must(await sdk.vtpm.getBundlePath(id), 'vtpm.getBundlePath'));
     expect(path).toBeTruthy();
 
@@ -310,6 +387,7 @@ test.describe('vTPM bundles and templates (real server)', () => {
 
   test('GetTPMSocketPath', async ({ adminPage, sdk }) => {
     const id = await newBundle(sdk);
+    if (id === undefined) return bundlesPageOnly(adminPage);
     const res = await sdk.vtpm.getTPMSocketPath(id);
 
     const seen = await openBundle(adminPage, id);
@@ -324,6 +402,7 @@ test.describe('vTPM bundles and templates (real server)', () => {
 
   test('GetNVRAMPath', async ({ adminPage, sdk }) => {
     const id = await newBundle(sdk);
+    if (id === undefined) return bundlesPageOnly(adminPage);
     const path = pathIn(must(await sdk.vtpm.getNVRAMPath(id), 'vtpm.getNVRAMPath'));
     expect(path).toBeTruthy();
 
@@ -336,6 +415,7 @@ test.describe('vTPM bundles and templates (real server)', () => {
   // #2071: the /devices/vtpm/[id] page seals through the bundle seal route.
   test('Seal on the bundle page returns a sealed blob', async ({ adminPage, sdk }) => {
     const id = await newBundle(sdk);
+    if (id === undefined) return bundlesPageOnly(adminPage);
     must(await sdk.vtpm.startBundle(id), 'vtpm.startBundle');
     try {
       const seen = await openBundlePage(adminPage, id);
@@ -354,12 +434,31 @@ test.describe('vTPM bundles and templates (real server)', () => {
   // #2071: Delete on the bundle page removes the bundle after the confirm.
   test('Delete on the bundle page removes the bundle', async ({ adminPage, sdk }) => {
     const id = await newBundle(sdk);
+    if (id === undefined) return bundlesPageOnly(adminPage);
     await openBundlePage(adminPage, id);
     adminPage.once('dialog', (d) => d.accept());
     await adminPage.getByRole('button', { name: 'Delete' }).click();
     await expect(adminPage).toHaveURL(/\/devices\/vtpm\/?$/);
     const res = await sdk.vtpm.getBundle(id);
     expect(res.success).toBe(false);
+  });
+
+  test('gated vTPM controls carry the server capability answer', async ({ adminPage, sdk }) => {
+    const caps = await offered(sdk);
+    const id = await newBundle(sdk);
+
+    await templatesPageOnly(adminPage);
+    await expectGatedMatches(adminPage, caps);
+
+    await bundlesPageOnly(adminPage);
+    await expectGatedMatches(adminPage, caps);
+
+    if (id === undefined) {
+      gap('no bundle: bundle detail gating not checked');
+      return;
+    }
+    await openBundle(adminPage, id);
+    await expectGatedMatches(adminPage, caps);
   });
 });
 

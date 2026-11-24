@@ -525,6 +525,22 @@ proxy:
         mode: public
 
 # =============================================================================
+# VTPM (bundles in the run directory)
+# =============================================================================
+# Without this block the vTPM service defaults its base dir to
+# /var/lib/trusted-platform/vtpm, which the unprivileged harness cannot
+# create: `platformd serve` (pkg/daemon/commands/serve.go
+# initVTPMServiceOnConfig) then leaves the service nil and every
+# /api/v1/vtpm route is dark. Creating a bundle or a template also needs the
+# swtpm binary on PATH (pkg/swtpm/swtpm.go); vtpm.spec.ts records a runner
+# without it as a `gap` annotation.
+
+vtpm:
+  base-dir: trusted-data/vtpm
+  pcr-banks:
+    - sha256
+
+# =============================================================================
 # Default-config sections NOT enabled here (no simulator path)
 # =============================================================================
 # - acme.client: the default daemon enrols its own account against the
