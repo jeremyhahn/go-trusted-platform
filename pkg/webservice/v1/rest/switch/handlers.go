@@ -230,6 +230,12 @@ func (h *Handlers) extractSwitchAndPort(w http.ResponseWriter, r *http.Request) 
 		h.responseWriter.Error400(w, r, ErrMissingPortName{})
 		return "", "", false
 	}
+	// The port name reaches switch CLI text, so it must be one interface
+	// identifier before any manager is called.
+	if err := switchmgmt.ValidatePortName(portName); err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return "", "", false
+	}
 
 	return switchName, portName, true
 }
