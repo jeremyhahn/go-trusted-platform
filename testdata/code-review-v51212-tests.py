@@ -53,6 +53,11 @@ import tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
 WORKFLOW = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else HERE.parent / "code-review.yml"
+_ENV = WORKFLOW.read_text()
+NON_CODE = re.search(r"\n  NON_CODE_PATHS: '([^']*)'\n", _ENV).group(1)
+ROW_BRANCH = re.search(r"\n  ROW_BRANCH: '([^']*)'\n", _ENV).group(1)
+TRUSTED_AUTHORS = re.search(r"\n  TRUSTED_AUTHORS: '([^']*)'\n", _ENV).group(1)
+TRUSTED_PR = re.search(r"\n  TRUSTED_PR: '([^']*)'\n", _ENV).group(1)
 FAILS = []
 HEAD = "a" * 40
 OLD = "c" * 40
@@ -230,7 +235,7 @@ def gate_routes(reviews, twin_status=None, twin_where="in_progress"):
         ["GET /actions/runs/*/jobs?*", 200, json.dumps({"jobs": [
             {"name": "scope", "status": "completed"},
             {"name": "Codex review", "status": twin_status or "completed"}]})],
-        ["GET /pulls/7", 200, json.dumps({"head": {"sha": HEAD}, "base": {"ref": "main"},
+        ["GET /pulls/7", 200, json.dumps({"user": {"login": "o-agent[bot]"}, "head": {"sha": HEAD, "repo": {"full_name": "o/r"}}, "base": {"repo": {"full_name": "o/r"}, "ref": "main"},
                                           "labels": [{"name": "code-review"}, {"name": "effort:high"}]})],
         ["GET /pulls/7/reviews?*page=1", 200, json.dumps([
             {"id": n, "state": st, "commit_id": HEAD, "user": {"login": REVIEWER},
@@ -255,7 +260,7 @@ def run_gate(script, rts, no_review, docs, review_result="skipped"):
                "FORGE": "github", "REVIEWER": REVIEWER, "REPO_API": API, "PR_NUM": "7",
                "EVENT_SHA": HEAD, "BASE_SHA": BASE, "BASE_REF": "main", "GITHUB_RUN_ID": "77",
                "GH_API_TOKEN": "<REDACTED>",
-               "NO_REVIEW_PATHS": no_review, "DOCS_PATHS": docs,
+               "NON_CODE_PATHS": NON_CODE, "ROW_BRANCH": ROW_BRANCH, "HEAD_REF": "row/1-x", "TRUSTED_AUTHORS": TRUSTED_AUTHORS, "TRUSTED_PR": TRUSTED_PR,
                "SCOPE_SKIP": "false", "SCOPE_RESULT": "success", "REVIEW_RESULT": review_result}
         out = subprocess.run(["bash", "-c", script], cwd=tmp, env=env,
                              capture_output=True, text=True, check=False, timeout=60)
@@ -399,8 +404,8 @@ def main():
     # W: the gate with a twin's re-review in flight.
     gate = job(src, "gate")
     gscript = run_script(step(gate, "Require a Codex approval of the head, or a no-review change"))
-    no_review = once(r"\n      NO_REVIEW_PATHS: '([^']*)'\n", gate, "NO_REVIEW_PATHS")
-    docs = once(r"\n      DOCS_PATHS: '([^']*)'\n", gate, "DOCS_PATHS")
+    no_review = NON_CODE
+    docs = NON_CODE
     for where in ("queued", "in_progress"):
         rc, out = run_gate(gscript, gate_routes(["APPROVED"], twin_status=where, twin_where=where), no_review, docs)
         check(rc == 3 and "runs in run 91" in out and "ruling 1084" in out,

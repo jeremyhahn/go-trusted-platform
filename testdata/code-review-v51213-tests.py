@@ -232,7 +232,7 @@ def context(action, draft, labels, label=None, server=GH, agent=""):
     if label is not None:
         event["label"] = {"name": label}
     return {"github": {"server_url": server, "repository": REPO, "event": event},
-            "needs": {"scope": {"outputs": {"skip": "false"}}, "review": {"outputs": {"agent": agent}}}}
+            "needs": {"scope": {"outputs": {"skip": "false", "code": "true", "row": "true"}}, "review": {"outputs": {"agent": agent}}}}
 
 
 def jobs_of(src):

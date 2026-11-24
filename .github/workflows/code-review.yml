@@ -917,6 +917,14 @@ env:
   # v5.9.1: no default on GitHub; the guard refuses an empty REVIEWER.
   REVIEWER: ${{ github.server_url != 'https://github.com' && 'codex' || vars.CODEX_REVIEWER }}
   TOKEN_FILE: /run/reviewer/token
+  # Documentation and configuration (an extended regex over a whole path); a PR changing only these is not code reviewed.
+  NON_CODE_PATHS: '^(docs/.+|\.changelog/.+|(.+/)?changelog\.d/.+|(.+/)?[^/]+\.(md|yml|yaml|toml|json)|(.+/)?[^/]*\.env\.example|(.+/)?(CHANGELOG|LICENSE|ROADMAP)[^/]*|\.github/(CODEOWNERS|ISSUE_TEMPLATE/.+|PULL_REQUEST_TEMPLATE[^/]*)|(.+/)?\.(gitignore|gitattributes|editorconfig|dockerignore|trivyignore|gitleaksignore|markdownlintignore|prettierignore|mailmap))$'
+  # A SPEC row branch, as the Row check reads it; code is reviewed only there or under main-fix.
+  ROW_BRANCH: '^row/[0-9]+-'
+  # Authors whose non-code PR is approved without a review: the owner and the factory Apps.
+  TRUSTED_AUTHORS: '^(jeremyhahn|[A-Za-z0-9-]+-agent\[bot\])$'
+  # A live PR (jq) whose no-code change needs no review: its head in this repository, its author trusted.
+  TRUSTED_PR: '(env.TRUSTED_AUTHORS | length > 0) and .head.repo.full_name != null and .head.repo.full_name == .base.repo.full_name and ((.user.login // "") | test(env.TRUSTED_AUTHORS))'
   # Root's (0711: uid 1000 may pass through to its codex-home/, never list):
   # the token header, the prompt, the findings, the log of errors, all 0600.
   # Outside the checkout, so nothing here can be mistaken for the change.
@@ -1066,7 +1074,57 @@ jobs:
       pull-requests: read
     outputs:
       skip: ${{ steps.scope.outputs.skip }}
+      code: ${{ steps.code.outputs.code }}
+      row: ${{ steps.code.outputs.row }}
+      trusted: ${{ steps.code.outputs.trusted }}
     steps:
+      - name: Does the change touch code, and is it a SPEC row PR?
+        id: code
+        env:
+          GH_API_TOKEN: ${{ github.token }}
+          REPO_API: ${{ github.server_url == 'https://github.com' && format('https://api.github.com/repos/{0}', github.repository) || format('{0}/api/v1/repos/{1}', github.server_url, github.repository) }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          shopt -s inherit_errexit
+          [ -n "$NON_CODE_PATHS" ] || { echo "::error::NON_CODE_PATHS is empty" >&2; exit 1; }
+          hdr=(-H "Authorization: token $GH_API_TOKEN")
+          [ "$FORGE" != github ] ||
+            hdr+=(-H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28')
+          get() { # path -> body; fails unless 2xx
+            local code
+            code=$(curl -sS --proto '=http,https' --max-time 60 --retry 3 --retry-all-errors \
+                     -o code-api.json -w '%{http_code}' "${hdr[@]}" "$REPO_API$1")
+            case "$code" in 2??) cat code-api.json ;; *) echo "::error::GET $1 answered HTTP $code" >&2; return 1 ;; esac
+          }
+          size=limit=50
+          [ "$FORGE" != github ] || size=per_page=100
+          code=false page=1 seen=0
+          while [ "$code" = false ]; do
+            got=$(get "/pulls/$PR_NUM/files?$size&page=$page")
+            n=$(jq 'if type == "array" then length else error("not a list") end' <<<"$got")
+            [ "$n" -gt 0 ] || break
+            seen=$((seen + n))
+            names=$(jq -r '.[] | .filename, (.previous_filename // empty)' <<<"$got")
+            rc=0
+            grep -Evq "$NON_CODE_PATHS" <<<"$names" || rc=$?
+            case "$rc" in 0) code=true ;; 1) ;; *) echo "::error::NON_CODE_PATHS does not match" >&2; exit 1 ;; esac
+            page=$((page + 1))
+            # The forge lists at most 3000 files: a longer change is code.
+            [ "$page" -le 30 ] || code=true
+          done
+          [ "$seen" -gt 0 ] || code=true
+          pr=$(get "/pulls/$PR_NUM")
+          labels=$(jq -c '[.labels[]?.name]' <<<"$pr")
+          trusted=false
+          if jq -e "($TRUSTED_PR) == true" <<<"$pr" >/dev/null; then trusted=true; fi
+          row=false
+          if [[ $HEAD_REF =~ $ROW_BRANCH ]] || jq -e 'index("main-fix") != null' <<<"$labels" >/dev/null; then
+            row=true
+          fi
+          { echo "code=$code"; echo "row=$row"; echo "trusted=$trusted"; } >> "$GITHUB_OUTPUT"
+          echo "code=$code row=$row trusted=$trusted ($seen files, branch $HEAD_REF)"
       # Owner ruling 443 (2026-11-10): a pull request that changes only workflow
       # files gets no review, and only when InfoSec's guard passes (Y-1 to Y-8,
       # Y-10). FIRST, before the guard and any checkout: the step reads the event
@@ -1508,9 +1566,6 @@ jobs:
       || startsWith(github.event.label.name, 'model:')
       || startsWith(github.event.label.name, 'effort:'))
       && github.event.pull_request.state == 'open'
-      && contains(github.event.pull_request.labels.*.name, 'code-review')
-      && contains(github.event.pull_request.labels.*.name, 'task:ready')
-      && !contains(github.event.pull_request.labels.*.name, 'task:in-progress')
       && github.event.pull_request.head.repo.full_name == github.repository
       && (github.event.action != 'labeled'
       || github.event.label.name == 'code-review'
@@ -1518,7 +1573,12 @@ jobs:
       || startsWith(github.event.label.name, 'agent:')
       || startsWith(github.event.label.name, 'model:')
       || startsWith(github.event.label.name, 'effort:'))
+      && ((needs.scope.outputs.code == 'false' && needs.scope.outputs.trusted == 'true')
+      || (contains(github.event.pull_request.labels.*.name, 'code-review')
+      && contains(github.event.pull_request.labels.*.name, 'task:ready')
+      && !contains(github.event.pull_request.labels.*.name, 'task:in-progress')
       && needs.scope.outputs.skip != 'true'
+      && (needs.scope.outputs.row == 'true' || needs.scope.outputs.code == 'false')))
     # v5.9.7: on GitHub the group is the PR, its head sha and the run id, so
     # it never holds a pending run that a newer one could replace: a replaced
     # run is cancelled with no `Code Review (codex)` check-run, and a ruleset
@@ -1562,6 +1622,7 @@ jobs:
           EVENT_LABEL: ${{ github.event.label.name }}
           # v5.9.7: the job's own token, `actions: read`, for the twin wait.
           ACTIONS_TOKEN: ${{ github.token }}
+          CODE: ${{ needs.scope.outputs.code }}
         run: |
           set -euo pipefail
           # v5.9.1: the reviewer is named by the repo, never defaulted.
@@ -1844,6 +1905,11 @@ jobs:
             touch "$WORK/verdict"
             echo "::error::PR $PR_NUM was retargeted to ${base_live:-unknown} since this run was created for $BASE_REF. Push a new head, or take code-review off and add it again, to review against the new base."
             exit 1
+          fi
+          # No code changed on a trusted live PR: the post step approves the head; Codex does not run.
+          if [ "$CODE" = false ] && jq -e "($TRUSTED_PR) == true" <<<"$pr" >/dev/null; then
+            { echo "requested=true"; echo "nocode=true"; } >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           labels=$(jq -c '[.labels[]?.name]' <<<"$pr")
           if ! jq -e 'index("code-review") != null' <<<"$labels" >/dev/null; then
@@ -2459,7 +2525,7 @@ jobs:
       # ROOT (a node action). Untrusted code from here on: no credential in
       # .git/config, and the next step hands the tree to uid 1000.
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        if: steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == ''
+        if: steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == '' && steps.guard.outputs.nocode != 'true'
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -2476,7 +2542,7 @@ jobs:
       # sum.golang.org's (v5.10.3). No module comes from a forge archive.
       - name: Fetch the first-party modules the change requires
         id: deps
-        if: steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == ''
+        if: steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == '' && steps.guard.outputs.nocode != 'true'
         timeout-minutes: 6
         env:
           SRC: ${{ github.workspace }}/src
@@ -2838,7 +2904,7 @@ jobs:
       # ROOT orchestrates; the git reads and codex run as uid 1000.
       - name: Review the head with codex as uid 1000
         id: codex
-        if: steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == ''
+        if: steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == '' && steps.guard.outputs.nocode != 'true'
         env:
           SRC: ${{ github.workspace }}/src
           MODEL: ${{ steps.guard.outputs.codex_model }}
@@ -3049,74 +3115,85 @@ jobs:
           # v5.10.10: the timeline id of the owner-resume addition this round
           # starts on, recorded in the marker as resume=.
           OWNER_RESUME_ID: ${{ steps.guard.outputs.owner_resume_id }}
+          NOCODE: ${{ steps.guard.outputs.nocode }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           # shellcheck source=/dev/null
           . "$WORK/lib.sh"
           [ "$FORGE" != github ] || load_token
 
-          # The effort codex ran at: a large head raised it (v5.6).
-          ran=$(head -c 16 "$WORK/effort" 2>/dev/null) || ran=""
-          case "$ran" in low|medium|high) EFFORT=$ran ;; esac
-
-          # codex exiting 0 is not a review. The shape is checked in full, as
-          # findings.schema.json states it, before anything is trusted.
-          jq -e '
-              type == "object" and (keys == ["findings", "summary"])
-              and (.summary | type == "string" and test("\\S"))
-              and (.findings | type == "array")
-              and all(.findings[];
-                    type == "object" and (keys == ["body", "file", "line", "priority", "title"])
-                    and (.priority | IN("P0", "P1", "P2", "P3"))
-                    and ([.title, .body, .file] | all(type == "string"))
-                    and (.line | type == "number" and . >= 0 and . == floor))' \
-            "$WORK/findings.json" >/dev/null 2>&1 ||
-            die "codex's final message is not findings in the shape of findings.schema.json"
-
-          if jq -e 'any(.findings[]; .priority == "P0" or .priority == "P1")' "$WORK/findings.json" >/dev/null; then
-            event=REQUEST_CHANGES
+          if [ "$NOCODE" = true ]; then
+            event=APPROVED stop=""
+            echo "No code changed; code review not required." > "$WORK/body.md"
+            mine=$(my_verdicts)
+            if jq -e 'any(.[]; .state == "APPROVED")' <<<"$mine" >/dev/null; then
+              echo "$REVIEWER already approved $EVENT_SHA."
+              exit 0
+            fi
           else
-            event=APPROVED
+            # The effort codex ran at: a large head raised it (v5.6).
+            ran=$(head -c 16 "$WORK/effort" 2>/dev/null) || ran=""
+            case "$ran" in low|medium|high) EFFORT=$ran ;; esac
+
+            # codex exiting 0 is not a review. The shape is checked in full, as
+            # findings.schema.json states it, before anything is trusted.
+            jq -e '
+                type == "object" and (keys == ["findings", "summary"])
+                and (.summary | type == "string" and test("\\S"))
+                and (.findings | type == "array")
+                and all(.findings[];
+                      type == "object" and (keys == ["body", "file", "line", "priority", "title"])
+                      and (.priority | IN("P0", "P1", "P2", "P3"))
+                      and ([.title, .body, .file] | all(type == "string"))
+                      and (.line | type == "number" and . >= 0 and . == floor))' \
+              "$WORK/findings.json" >/dev/null 2>&1 ||
+              die "codex's final message is not findings in the shape of findings.schema.json"
+
+            if jq -e 'any(.findings[]; .priority == "P0" or .priority == "P1")' "$WORK/findings.json" >/dev/null; then
+              event=REQUEST_CHANGES
+            else
+              event=APPROVED
+            fi
+            # The marker (v5.9.8) carries the review key and the round, which
+            # the guard reads on the next head: head=<sha> patch=<patch-id>
+            # ctx=<sha1> round=<n> (ctx= since v5.10.2), then resume=<id> on a
+            # round the owner-resume label started (v5.10.10).
+            [[ $PATCH_ID =~ ^[0-9a-f]{40}$ ]] || PATCH_ID=""
+            [[ $HUNK_CTX =~ ^[0-9a-f]{40}$ ]] && [ -n "$PATCH_ID" ] || HUNK_CTX=""
+            [[ $ROUND =~ ^[0-9]+$ ]] || die "the guard gave no round number"
+            [[ $LIMIT =~ ^[0-9]+$ ]] || die "the guard gave no round limit"
+            # v5.10.10 (Tenant Agent m2369, ruling 422): a round started on
+            # the owner-resume label records which addition it consumed, so the
+            # guard never takes that addition as fresh evidence again, even if
+            # the label does not come off below.
+            resume=""
+            if [ "$OWNER_RESUME" = label ]; then
+              [[ $OWNER_RESUME_ID =~ ^[0-9]+$ ]] || die "the guard resumed on owner-resume but gave no timeline id for it"
+              resume=$OWNER_RESUME_ID
+            fi
+            # v5.9.8: a rejection at the round limit hands the PR on (THE
+            # TWO-ROUND STOP in the guard); the hand-on step sets the label.
+            stop=""
+            if [ "$event" = REQUEST_CHANGES ] && [ "$ROUND" -ge "$LIMIT" ]; then
+              # v5.11.2 (ruling 673): the last round stays with the coordinator.
+              stop=needs-coordinator
+            fi
+            jq -r --arg e "$event" --arg s "$EVENT_SHA" --arg m "$MODEL" --arg f "$EFFORT" --arg u "$RUN_URL" \
+                  --arg p "$PATCH_ID" --arg x "$HUNK_CTX" --arg r "$ROUND" --arg t "$stop" --arg o "$resume" '
+                def where: if .file == "" then "" elif .line > 0 then " (`\(.file):\(.line)`)" else " (`\(.file)`)" end;
+                def item: "- **\(.priority)** \(.title)\(where)\n\n  \(.body | gsub("\n"; "\n  "))\n";
+                (if $e == "APPROVED" then "Approve" else "Request changes" end) as $v
+                | "<!-- codex-review:verdict head=\($s)\(if $p == "" then "" else " patch=\($p)" end)\(if $x == "" or $p == "" then "" else " ctx=\($x)" end) round=\($r)\(if $o == "" then "" else " resume=\($o)" end) -->\n## Codex review: \($v)\n\n"
+                  + "Head `\($s)`, model `\($m)`, effort `\($f)`, round \($r), [run](\($u)).\n\n\(.summary)\n\n"
+                  + (if (.findings | length) == 0 then "No findings.\n"
+                     else "### Findings\n\n" + (.findings | sort_by(.priority) | map(item) | join("\n")) end)
+                  + "\nP0 and P1 request changes; P2 and P3 are advisory.\n"
+                  + (if $t == "" then "" else "\nRound \($r) is the round limit: this pull request goes to `\($t)` (sdlc.md §2b).\n" end)' \
+              "$WORK/findings.json" > "$WORK/body.md"
+            # LEAK CHECK: a review is public, and codex could read its login.
+            ! leaks "$WORK/body.md" ||
+              die "the review codex wrote carries the Codex login (access token, id token or account id); not posting it"
           fi
-          # The marker (v5.9.8) carries the review key and the round, which
-          # the guard reads on the next head: head=<sha> patch=<patch-id>
-          # ctx=<sha1> round=<n> (ctx= since v5.10.2), then resume=<id> on a
-          # round the owner-resume label started (v5.10.10).
-          [[ $PATCH_ID =~ ^[0-9a-f]{40}$ ]] || PATCH_ID=""
-          [[ $HUNK_CTX =~ ^[0-9a-f]{40}$ ]] && [ -n "$PATCH_ID" ] || HUNK_CTX=""
-          [[ $ROUND =~ ^[0-9]+$ ]] || die "the guard gave no round number"
-          [[ $LIMIT =~ ^[0-9]+$ ]] || die "the guard gave no round limit"
-          # v5.10.10 (Tenant Agent m2369, ruling 422): a round started on
-          # the owner-resume label records which addition it consumed, so the
-          # guard never takes that addition as fresh evidence again, even if
-          # the label does not come off below.
-          resume=""
-          if [ "$OWNER_RESUME" = label ]; then
-            [[ $OWNER_RESUME_ID =~ ^[0-9]+$ ]] || die "the guard resumed on owner-resume but gave no timeline id for it"
-            resume=$OWNER_RESUME_ID
-          fi
-          # v5.9.8: a rejection at the round limit hands the PR on (THE
-          # TWO-ROUND STOP in the guard); the hand-on step sets the label.
-          stop=""
-          if [ "$event" = REQUEST_CHANGES ] && [ "$ROUND" -ge "$LIMIT" ]; then
-            # v5.11.2 (ruling 673): the last round stays with the coordinator.
-            stop=needs-coordinator
-          fi
-          jq -r --arg e "$event" --arg s "$EVENT_SHA" --arg m "$MODEL" --arg f "$EFFORT" --arg u "$RUN_URL" \
-                --arg p "$PATCH_ID" --arg x "$HUNK_CTX" --arg r "$ROUND" --arg t "$stop" --arg o "$resume" '
-              def where: if .file == "" then "" elif .line > 0 then " (`\(.file):\(.line)`)" else " (`\(.file)`)" end;
-              def item: "- **\(.priority)** \(.title)\(where)\n\n  \(.body | gsub("\n"; "\n  "))\n";
-              (if $e == "APPROVED" then "Approve" else "Request changes" end) as $v
-              | "<!-- codex-review:verdict head=\($s)\(if $p == "" then "" else " patch=\($p)" end)\(if $x == "" or $p == "" then "" else " ctx=\($x)" end) round=\($r)\(if $o == "" then "" else " resume=\($o)" end) -->\n## Codex review: \($v)\n\n"
-                + "Head `\($s)`, model `\($m)`, effort `\($f)`, round \($r), [run](\($u)).\n\n\(.summary)\n\n"
-                + (if (.findings | length) == 0 then "No findings.\n"
-                   else "### Findings\n\n" + (.findings | sort_by(.priority) | map(item) | join("\n")) end)
-                + "\nP0 and P1 request changes; P2 and P3 are advisory.\n"
-                + (if $t == "" then "" else "\nRound \($r) is the round limit: this pull request goes to `\($t)` (sdlc.md §2b).\n" end)' \
-            "$WORK/findings.json" > "$WORK/body.md"
-          # LEAK CHECK: a review is public, and codex could read its login.
-          ! leaks "$WORK/body.md" ||
-            die "the review codex wrote carries the Codex login (access token, id token or account id); not posting it"
 
           # The LIVE PR again: codex took minutes. A moved head or a closed PR
           # gets no verdict; the run for the new head reviews it.
@@ -3872,8 +3949,7 @@ jobs:
   # job is now `Codex review`; this job carries the required name, always
   # runs (no `if:` can skip it; v5.12.9: but the shared condition, and then
   # it carries another name), and passes only when
-  #   (a) every file the PR changes, base commit to head, is on the owner's
-  #       no-review list (NO_REVIEW_PATHS: docs and CI config), or
+  #   (a) no file the PR changes, base commit to head, is code (NON_CODE_PATHS), or
   #   (b) $REVIEWER's latest standing verdict ON THIS HEAD is APPROVED.
   # Anything else fails, the label missing included: no approval, a
   # REQUEST_CHANGES, an approval of another head, a fork head, an unreadable
@@ -3926,14 +4002,7 @@ jobs:
       EVENT_SHA: ${{ github.event.pull_request.head.sha }}
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       BASE_REF: ${{ github.event.pull_request.base.ref }}
-      # CUSTOMIZE only to narrow it (ruling 589: docs/, *.md, .github/ or
-      # .gitea/, changelog.d/ and nothing else). An extended regex over the whole path;
-      # a rename must match on both its old and its new path.
-      NO_REVIEW_PATHS: '^(docs/.+|(.+/)?[^/]+\.md|\.github/.+|\.gitea/.+|(.+/)?changelog\.d/.+)$'
-      # v5.12.1: the docs half of NO_REVIEW_PATHS, exempt on its own; the CI
-      # config half (.github/, .gitea/) is exempt only when SCOPE_SKIP is true.
-      DOCS_PATHS: '^(docs/.+|(.+/)?[^/]+\.md|(.+/)?changelog\.d/.+)$'
-      SCOPE_SKIP: ${{ needs.scope.outputs.skip }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
       SCOPE_RESULT: ${{ needs.scope.result }}
       REVIEW_RESULT: ${{ needs.review.result }}
     steps:
@@ -4003,13 +4072,8 @@ jobs:
           pr=$(get "/pulls/$PR_NUM")
           same_base "$pr"
 
-          # (a) The no-review list. The change is pinned to the event: on
-          # GitHub the compare of $BASE_SHA...$EVENT_SHA (merge base to head);
-          # Gitea has no range diff in its API, so there the PR's files, read
-          # only while the live PR is still at $EVENT_SHA on $BASE_REF.
-          # GitHub's compare lists at most 300 files: a list that long is
-          # never exempt.
-          exempt=0
+          # (a) No code changed on a trusted PR: no review is required.
+          exempt=0 nocode=0
           if [ "$FORGE" = github ]; then
             [[ $BASE_SHA =~ ^[0-9a-f]{40}$ ]] || fail "the event names no base commit"
             files=$(get "/compare/$BASE_SHA...$EVENT_SHA" |
@@ -4027,23 +4091,27 @@ jobs:
           n=$(jq 'length' <<<"$files")
           if [ "$n" -gt 0 ] && [ "$n" -lt 300 ]; then
             names=$(jq -r '.[] | .filename, (.previous_filename // empty)' <<<"$files")
-            off_docs=$(grep -Evc "$DOCS_PATHS" <<<"$names" || true)
-            off_list=$(grep -Evc "$NO_REVIEW_PATHS" <<<"$names" || true)
-            # v5.12.1 (ruling 443): CI config is exempt only inside InfoSec's
-            # guard, which the scope job ran on this event.
-            if [ "$off_docs" = 0 ]; then
-              exempt=1
-            elif [ "$off_list" = 0 ] && [ "$SCOPE_SKIP" = true ]; then
-              exempt=1
-            elif [ "$off_list" = 0 ]; then
-              echo "The change is docs and CI config, but InfoSec's guard did not clear it (scope skip=${SCOPE_SKIP:-none}), so it needs a Codex approval (ruling 443, v5.12.1)."
+            [ -n "$NON_CODE_PATHS" ] || fail "NON_CODE_PATHS is empty"
+            rc=0
+            grep -Evq "$NON_CODE_PATHS" <<<"$names" || rc=$?
+            [ "$rc" -le 1 ] || fail "NON_CODE_PATHS does not match"
+            if [ "$rc" = 1 ]; then
+              nocode=1
+              if get "/pulls/$PR_NUM" | jq -e "($TRUSTED_PR) == true" >/dev/null; then exempt=1; fi
             fi
           fi
           if [ "$exempt" = 1 ]; then
-            echo "All $n changed files are on the no-review list (docs, or CI config inside InfoSec's guard); no review is required."
+            echo "All $n changed files are documentation or configuration: no code changed, so no code review is required."
             exit 0
           fi
-          echo "$n changed files; at least one is code, so $REVIEWER must approve $EVENT_SHA."
+          live_labels=$(get "/pulls/$PR_NUM" | jq -r '.labels[]?.name') || fail "cannot read the labels of PR $PR_NUM"
+          [ "$nocode" = 1 ] || [[ $HEAD_REF =~ $ROW_BRANCH ]] || grep -qx main-fix <<<"$live_labels" ||
+            fail "PR $PR_NUM changes code but is not a SPEC row PR (branch row/<n>-*, or the main-fix label): code is reviewed only on a row PR, so it is not reviewed"
+          if [ "$nocode" = 1 ]; then
+            echo "No code changed, but the PR is from a fork or an untrusted author, so $REVIEWER must approve $EVENT_SHA."
+          else
+            echo "$n changed files; at least one is code, so $REVIEWER must approve $EVENT_SHA."
+          fi
 
           # v5.12.6 (ruling 1046): NO TWIN WAIT. A twin run (same head, same
           # run-name) whose `Codex review` job is queued or in progress posts

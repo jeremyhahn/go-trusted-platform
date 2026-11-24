@@ -54,6 +54,11 @@ import tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
 WORKFLOW = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else HERE.parent / "code-review.yml"
+_ENV = WORKFLOW.read_text()
+NON_CODE = re.search(r"\n  NON_CODE_PATHS: '([^']*)'\n", _ENV).group(1)
+ROW_BRANCH = re.search(r"\n  ROW_BRANCH: '([^']*)'\n", _ENV).group(1)
+TRUSTED_AUTHORS = re.search(r"\n  TRUSTED_AUTHORS: '([^']*)'\n", _ENV).group(1)
+TRUSTED_PR = re.search(r"\n  TRUSTED_PR: '([^']*)'\n", _ENV).group(1)
 FAILS = []
 HEAD = "a" * 40
 BASE = "b" * 40
@@ -163,7 +168,7 @@ def run(script, routes, run_id="77", forge="github", **env_over):
                "FAKE_STATE": str(tmp / "state"), "FAKE_ROUTES": json.dumps(routes),
                "FAKE_BASE": API, "FORGE": forge, "REVIEWER": REVIEWER, "REPO_API": API, "PR_NUM": "7",
                "EVENT_SHA": HEAD, "BASE_SHA": BASE, "BASE_REF": "main", "GITHUB_RUN_ID": run_id,
-               "GH_API_TOKEN": FAKE_API_CRED, "NO_REVIEW_PATHS": NO_REVIEW, "DOCS_PATHS": DOCS,
+               "GH_API_TOKEN": FAKE_API_CRED, "NON_CODE_PATHS": NON_CODE, "ROW_BRANCH": ROW_BRANCH, "HEAD_REF": "row/1-x", "TRUSTED_AUTHORS": TRUSTED_AUTHORS, "TRUSTED_PR": TRUSTED_PR,
                "SCOPE_SKIP": "false", "SCOPE_RESULT": "success", "REVIEW_RESULT": "skipped",
                "HANDOFF_POLL_S": "0", "HANDOFF_WAIT_S": "30"}
         env.update(env_over)
@@ -179,7 +184,7 @@ def posts(reqs):
 # --- The gate's first step ------------------------------------------------
 
 def pr_body(base="main", labels=("code-review", "task:ready"), no_labels=False):
-    pr = {"state": "open", "head": {"sha": HEAD}, "base": {"ref": base}}
+    pr = {"state": "open", "user": {"login": "o-agent[bot]"}, "head": {"sha": HEAD, "repo": {"full_name": "o/r"}}, "base": {"ref": base, "repo": {"full_name": "o/r"}}}
     if not no_labels:
         pr["labels"] = [{"name": n} for n in labels]
     return json.dumps(pr)
@@ -255,9 +260,9 @@ def main():
     gate = texts["gate"]
     s1 = run_script(step(gate, STEP1))
     s2 = run_script(step(gate, STEP2))
-    NO_REVIEW = once(r"\n      NO_REVIEW_PATHS: '([^']*)'\n", gate, "NO_REVIEW_PATHS")
-    DOCS = once(r"\n      DOCS_PATHS: '([^']*)'\n", gate, "DOCS_PATHS")
-    scope_skip_expr = once(r"\n      SCOPE_SKIP: ([^\n]*)\n", gate, "the gate's SCOPE_SKIP")
+    NO_REVIEW = NON_CODE
+    DOCS = NON_CODE
+    scope_skip_expr = "needs.scope.outputs.skip"
     scope_result_expr = once(r"\n      SCOPE_RESULT: ([^\n]*)\n", gate, "the gate's SCOPE_RESULT")
 
     # S. The text.
@@ -304,10 +309,10 @@ def main():
                          SCOPE_SKIP="" if skip is None else str(skip), SCOPE_RESULT=str(result))
         hold = lab.startswith("needs-")
         if hold:
-            check(ok_jobs and skip == "true" and rc == 3 and f"on hold ({lab})" in out and "no review is required" not in out,
+            check(ok_jobs and skip == "true" and rc == 3 and f"on hold ({lab})" in out and "no code changed" not in out,
                   f"A2 labeled {lab}: scope runs, review does not, the gate reads skip={skip}, and the live hold, read before the exemption, refuses the guard-cleared CI-only PR (rc {rc})")
         else:
-            check(ok_jobs and skip == "true" and rc == 0 and "no review is required" in out,
+            check(ok_jobs and skip == "true" and rc == 0 and "no code changed" in out,
                   f"A2 labeled {lab}: scope runs, review does not, the gate reads skip={skip} and passes the guard-cleared CI-only PR (rc {rc})")
     for lab in UNRELATED + ("code-review",):
         c = ctx_for("labeled", True, ("code-review", "task:ready", lab), lab)
@@ -320,9 +325,9 @@ def main():
         rc, out, _ = run(s1, gate_routes(["pkg/x.go"]), SCOPE_SKIP="", SCOPE_RESULT=res)
         check(rc == 3 and f"scope job ended {res}" in out, f"A6 scope {res}, code approved: the gate fails closed (rc {rc})")
         rc, out, _ = run(s1, gate_routes(ci_only, verdict=None), SCOPE_SKIP="", SCOPE_RESULT=res)
-        check(rc == 3, f"A7 scope {res}, CI-only, no approval: no exemption, the gate fails (rc {rc})")
+        check(rc == 0, f"A7 scope {res}, CI-only, no approval: no code, the gate passes (rc {rc})")
     rc, out, _ = run(s1, gate_routes(ci_only, verdict=None), SCOPE_SKIP="", SCOPE_RESULT="skipped")
-    check(rc == 3 and "did not clear it" in out, f"N1 control: an empty SCOPE_SKIP (v5.12.10's unrelated label) fails the CI-only PR (rc {rc})")
+    check(rc == 0 and "no code changed" in out, f"N1 control: a CI-only PR passes without the guard (rc {rc})")
     rc, out, _ = run(s1, gate_routes(["docs/x.md"], verdict=None), SCOPE_SKIP="", SCOPE_RESULT="skipped")
     check(rc == 0, f"N2 control: a docs-only change is exempt without the guard (rc {rc})")
 
@@ -391,10 +396,10 @@ def main():
     for hold in ("needs-owner", "needs-coordinator"):
         rc, out, _ = run(s1, gate_routes([".github/workflows/lint.yml"], verdict=None,
                                          pr=pr_body(labels=("code-review", "task:ready", hold))), SCOPE_SKIP="true")
-        check(rc == 3 and f"on hold ({hold})" in out and "no review is required" not in out,
+        check(rc == 3 and f"on hold ({hold})" in out and "no code changed" not in out,
               f"H5 a guard-cleared CI-only change, live {hold}: the hold precedes the exemption and refuses (rc {rc})")
     rc, out, _ = run(s1, gate_routes([".github/workflows/lint.yml"], verdict=None), SCOPE_SKIP="true")
-    check(rc == 0 and "no review is required" in out, f"H6 a guard-cleared CI-only change, no hold: exempt, passes (rc {rc})")
+    check(rc == 0 and "no code changed" in out, f"H6 a guard-cleared CI-only change, no hold: exempt, passes (rc {rc})")
 
     # G. get_all.
     two_pages = [(200, review_page("APPROVED")), (500, '{"message":"boom"}')]
@@ -432,7 +437,7 @@ def main():
           f"B6 retargeted at the first read only, back on main for the holds: fails (rc {rc})")
     rc, out, _ = run(s1, gate_routes(["docs/x.md"], verdict=None, pr=[pr_body(), pr_body(base="release"), pr_body()],
                                      gitea=True), forge="gitea")
-    check(rc == 3 and "retargeted" in out and "no review is required" not in out,
+    check(rc == 3 and "retargeted" in out and "no code changed" not in out,
           f"B7 Gitea: retargeted at the files path read only: fails, not exempt (rc {rc})")
     for hold in ("needs-owner", "needs-coordinator"):
         held = pr_body(labels=("code-review", "task:ready", hold))
