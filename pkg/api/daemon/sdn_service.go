@@ -41,6 +41,10 @@ type SDNService struct {
 	netlinkManager *netlink.Manager
 	zoneSvc        gateway.ZoneService
 	mu             sync.RWMutex
+	// policyOpMu serializes ApplyPolicy and DeletePolicy end to end: the
+	// name check, cookie allocation, switch writes and record publication.
+	// It is always taken before mu, never while holding it.
+	policyOpMu sync.Mutex
 
 	// Track created resources for cleanup
 	bridges  map[string]*bridgeResource
@@ -1165,6 +1169,9 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		policyID = "policy-" + uuid.NewString()
 	}
 
+	s.policyOpMu.Lock()
+	defer s.policyOpMu.Unlock()
+
 	// Check for duplicate policy name under read lock
 	s.mu.RLock()
 	for id, p := range s.policies {
@@ -1328,6 +1335,9 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 	if req.GetPolicyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "policy_id is required")
 	}
+
+	s.policyOpMu.Lock()
+	defer s.policyOpMu.Unlock()
 
 	// Find policy by ID or name and snapshot its data under read lock
 	s.mu.RLock()
