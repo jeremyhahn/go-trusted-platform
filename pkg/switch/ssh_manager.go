@@ -33,11 +33,42 @@ type sshManager struct {
 	// dial opens the SSH connection; nil falls back to NewSSHExecutor.
 	dial func(context.Context, *Config) (SSHExecutor, error)
 
-	// mu serializes connection set-up, every operation and Close: two first
-	// calls must not dial two connections, and one go-xkms Session must not
-	// run commands concurrently.
-	mu       sync.Mutex
+	// sem is a context-aware one-slot semaphore that serializes connection
+	// set-up, every operation and Close: two first calls must not dial two
+	// connections, and one go-xkms Session must not run commands
+	// concurrently. A call queues on it with its context, and a call whose
+	// context ended before it ran sends nothing. semOnce makes the slot on
+	// first use, so the zero value serves.
+	semOnce  sync.Once
+	sem      chan struct{}
 	executor SSHExecutor
+}
+
+// slot returns the semaphore, making it on first use.
+func (m *sshManager) slot() chan struct{} {
+	m.semOnce.Do(func() { m.sem = make(chan struct{}, 1) })
+	return m.sem
+}
+
+// acquire takes the semaphore unless ctx ends first. A context that ended
+// while the slot was being taken gives the slot back and returns its error.
+func (m *sshManager) acquire(ctx context.Context) error {
+	sem := m.slot()
+	select {
+	case sem <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		<-sem
+		return err
+	}
+	return nil
+}
+
+// release gives the semaphore back.
+func (m *sshManager) release() {
+	<-m.slot()
 }
 
 // newSSHManager creates an SSH-based Manager for the given config.
@@ -76,8 +107,10 @@ func (m *sshManager) SetPortVLAN(ctx context.Context, port string, vlanID uint16
 	if err := ValidatePortName(port); err != nil {
 		return err
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	if err := m.acquire(ctx); err != nil {
+		return err
+	}
+	defer m.release()
 	if err := m.ensureConnected(ctx); err != nil {
 		return err
 	}
@@ -114,8 +147,10 @@ func (m *sshManager) GetPortVLAN(ctx context.Context, port string) (uint16, erro
 	if err := ValidatePortName(port); err != nil {
 		return 0, err
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	if err := m.acquire(ctx); err != nil {
+		return 0, err
+	}
+	defer m.release()
 	if err := m.ensureConnected(ctx); err != nil {
 		return 0, err
 	}
@@ -143,8 +178,10 @@ func (m *sshManager) GetPortStatus(ctx context.Context, port string) (*switchwir
 	if err := ValidatePortName(port); err != nil {
 		return nil, err
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	if err := m.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer m.release()
 	if err := m.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
@@ -204,8 +241,10 @@ func (m *sshManager) GetPortStatus(ctx context.Context, port string) (*switchwir
 }
 
 func (m *sshManager) ListPorts(ctx context.Context) ([]*switchwire.PortStatus, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	if err := m.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer m.release()
 	if err := m.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
@@ -233,8 +272,10 @@ func (m *sshManager) EnablePort(ctx context.Context, port string) error {
 	if err := ValidatePortName(port); err != nil {
 		return err
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	if err := m.acquire(ctx); err != nil {
+		return err
+	}
+	defer m.release()
 	if err := m.ensureConnected(ctx); err != nil {
 		return err
 	}
@@ -248,8 +289,10 @@ func (m *sshManager) DisablePort(ctx context.Context, port string) error {
 	if err := ValidatePortName(port); err != nil {
 		return err
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	if err := m.acquire(ctx); err != nil {
+		return err
+	}
+	defer m.release()
 	if err := m.ensureConnected(ctx); err != nil {
 		return err
 	}
@@ -275,8 +318,8 @@ func (m *sshManager) runConfig(ctx context.Context, logMsg string, commands []st
 }
 
 func (m *sshManager) Close() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.slot() <- struct{}{}
+	defer m.release()
 	if m.executor == nil {
 		return nil
 	}
@@ -287,8 +330,15 @@ func (m *sshManager) Close() error {
 
 // execute runs one command on the connection. A command that fails closes
 // and drops the connection, so the next call dials again; the command is
-// not retried, so a failed mutation is never replayed. The caller holds m.mu.
+// not retried, so a failed mutation is never replayed. A call whose context
+// ended before the command ran sends nothing and keeps the connection. The
+// caller holds the semaphore.
 func (m *sshManager) execute(ctx context.Context, cmd string) (string, error) {
+	// A call whose context ended sends nothing and keeps the connection:
+	// a canceled call is not a broken connection.
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	output, err := m.executor.Execute(ctx, cmd)
 	if err != nil {
 		if closeErr := m.executor.Close(); closeErr != nil {
@@ -301,7 +351,8 @@ func (m *sshManager) execute(ctx context.Context, cmd string) (string, error) {
 }
 
 // ensureConnected dials the SSH connection on first use. The caller holds
-// m.mu, so concurrent first calls dial once and share the connection. A
+// the context-aware one-slot semaphore, so concurrent first calls queue,
+// dial once and share the connection. A
 // connection whose command failed is dropped (see execute), and the next
 // call dials again; a failed mutation is never replayed.
 func (m *sshManager) ensureConnected(ctx context.Context) error {
