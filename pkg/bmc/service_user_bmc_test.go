@@ -111,6 +111,19 @@ func TestService_UserMethods_Simulator(t *testing.T) {
 		}
 	})
 
+	t.Run("CreateUserEnabledWithoutPasswordIsRefused", func(t *testing.T) {
+		t.Parallel()
+		svc := newSimUserService(t)
+		err := svc.CreateUser(ctx, 1, bmc.User{Slot: 5, Username: "nopass", Enabled: true, Privilege: bmc.PrivilegeUser}, "")
+		var cfgErr bmc.ErrInvalidConfig
+		if !errors.As(err, &cfgErr) || cfgErr.Field != "password" {
+			t.Fatalf("CreateUser enabled without password = %v, want ErrInvalidConfig on password", err)
+		}
+		if got, ok := userInSlot(t, svc, 5); ok {
+			t.Errorf("slot 5 after refused create = %+v, want no user", got)
+		}
+	})
+
 	t.Run("ConcurrentCreatesSameSlotOneWins", func(t *testing.T) {
 		t.Parallel()
 		svc := newSimUserService(t)
@@ -176,4 +189,27 @@ func TestService_UserMethods_Simulator(t *testing.T) {
 			t.Errorf("slot 4 after delete = %+v, want no user", got)
 		}
 	})
+}
+
+// TestService_CreateUserEnabledWithoutPasswordOpensNoSession pins that the
+// refusal comes before the profile lookup and the BMC session: the service
+// has no profile at all, so any later check would answer ErrProfileNotFound.
+func TestService_CreateUserEnabledWithoutPasswordOpensNoSession(t *testing.T) {
+	t.Parallel()
+	svc, err := bmc.NewService(bmc.ServiceParams{
+		Factory:  bmc.NewIPMIClientFactory(slog.Default()),
+		Profiles: simProfiles{},
+		Logger:   slog.Default(),
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	err = svc.CreateUser(context.Background(), 7, bmc.User{Slot: 5, Username: "nopass", Enabled: true, Privilege: bmc.PrivilegeUser}, "")
+	var cfgErr bmc.ErrInvalidConfig
+	if !errors.As(err, &cfgErr) {
+		t.Fatalf("CreateUser = %v, want ErrInvalidConfig", err)
+	}
+	if cfgErr.Field != "password" {
+		t.Errorf("Field = %q, want password", cfgErr.Field)
+	}
 }
