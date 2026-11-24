@@ -199,7 +199,8 @@ The output keys are `device_id`, `challenge_id`, `nonce` (base64) and
 `expires_at` (RFC 3339, UTC). A challenge is single-use: the first attest that
 names it consumes it, whatever the result. It expires at `expires_at`, and an
 attest after that is refused. A non-numeric or zero id fails before
-connecting; an unknown device fails with the `NOT_FOUND` error of §2; any other
+connecting. The server looks the device up before it issues a challenge, so
+an unknown device gets no nonce and fails with the `NOT_FOUND` error of §2; any other
 server failure fails with `device attest-challenge: failed to issue a challenge
 for device <id>: <reason>`.
 

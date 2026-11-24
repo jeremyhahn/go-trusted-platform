@@ -146,7 +146,7 @@ gRPC, Unix, QUIC and embedded.
 | Device heartbeat (mTLS, identity from client cert) | `POST /api/v1/device/heartbeat` | machine-facing REST only — see note | machine-facing REST only | machine-facing REST only | in-process Go only: `(*device.Service).RecordHeartbeat` |
 | Get device lifecycle state | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceGetState` (`0x3D`) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Attest device (verify submitted quote evidence) | `POST /api/v1/devices/{id}/attest` | `AttestDevice` | `OpDeviceAttest` (`0x3A`) | `device_attest` | ✅ |
-| Issue attestation challenge (single use, for the next attest) | `POST /api/v1/devices/{id}/attest/challenge` | `IssueAttestationChallenge` | not offered (owner ruling 1234); `0x3A` carries `challenge_id` | `device_attest_challenge` | ✅ |
+| Issue attestation challenge (single use, for the next attest; the device is looked up first: unknown device `NOT_FOUND` / 404, malformed id `INVALID_ARGUMENT` / 400) | `POST /api/v1/devices/{id}/attest/challenge` | `IssueAttestationChallenge` | not offered (owner ruling 1234); `0x3A` carries `challenge_id` | `device_attest_challenge` | ✅ |
 | Disable device (block its port, record `suspended`) | `POST /api/v1/devices/{id}/disable` | `DisableDevice` | `OpProvisioningCategory` (`0xCF`) sub `DeviceSubDisable` (`0x25`) | `device_disable` | ✅ |
 | Enable device (re-admit to quarantine, request re-attestation) | `POST /api/v1/devices/{id}/enable` | `EnableDevice` | `OpProvisioningCategory` (`0xCF`) sub `DeviceSubEnable` (`0x26`) | `device_enable` | ✅ |
 | Provision device with a profile | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `device_provision` | `MISSING — docs/13 G7` |
