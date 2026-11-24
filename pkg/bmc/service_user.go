@@ -46,9 +46,13 @@ func (s *Service) ListUsers(ctx context.Context, profileID uint64) ([]User, erro
 
 // CreateUser creates a new BMC user in the slot specified by user.Slot.
 // The plaintext password is wrapped in a *memguard.MemoryEnclave for the
-// duration of the call; callers should pass an empty string for
-// name-only entries. Most BMCs reject empty-password users.
+// duration of the call. An Enabled user needs a password; a name-only entry
+// (empty password) must have Enabled false. An Enabled user with an empty
+// password is refused before any session is opened or lock taken.
 func (s *Service) CreateUser(ctx context.Context, profileID uint64, user User, password string) error {
+	if user.Enabled && password == "" {
+		return ErrInvalidConfig{Field: "password", Reason: "an enabled user needs a password"}
+	}
 	mgr, err := s.userManagerFor(ctx, profileID)
 	if err != nil {
 		return err
