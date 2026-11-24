@@ -1270,10 +1270,16 @@ func testSecretsVersions(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 			NewData: []byte(fmt.Sprintf("version-%d-data", i)),
 		}
 		_, err := cmd.SecretsRotate(testCtx, rotateOpts)
-		if !helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) &&
-			!(cmd.Name() != "CLI" && helpers.KnownGap(t, cmd.Name(), helpers.MethodSecretsRotate, err)) {
-			require.NoError(t, err, "Setup: SecretsRotate should succeed")
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			continue
 		}
+		if cmd.Name() != "CLI" && helpers.KnownGap(t, cmd.Name(), helpers.MethodSecretsRotate, err) {
+			// The version checks below need the rotated versions this
+			// known gap could not create (and the embedded dispatch has no
+			// ListVersions/GetVersion either): stop the scenario here.
+			return
+		}
+		require.NoError(t, err, "Setup: SecretsRotate should succeed")
 	}
 
 	t.Run("ListSecretVersions", func(t *testing.T) {
