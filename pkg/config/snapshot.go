@@ -185,9 +185,11 @@ func sortedTopLevelSections() []string {
 //
 // When persist is true the active config file is rewritten with its own
 // contents plus the section values; startup flags, environment values
-// and defaults are not written to it. The live state then re-reads the
-// file before the re-decode, making the change durable across restarts.
-// When persist is false the change lives in memory until the next
+// and defaults are not written to it. The file is written first: a
+// failed write returns ErrApplySectionFailed with the live state
+// untouched. Only then are the values merged into the live state, which
+// is not re-read from the file, so every earlier pending (persist=false)
+// edit survives a persisted apply, successful or not. When persist is false the change lives in memory until the next
 // ReloadFromDisk.
 //
 // section must be non-empty; each entry in values is applied under the
@@ -221,19 +223,16 @@ func ApplySection(target interface{}, section string, values map[string]string, 
 		}
 	}
 
-	if err := viper.MergeConfigMap(nestSectionValues(section, values)); err != nil {
-		return nil, ErrApplySectionFailed{Cause: err}
-	}
-
+	// Persist before the live merge, so a failed write leaves the live
+	// state, and every pending in-memory edit in it, untouched.
 	if persist {
 		if err := persistSectionToFile(section, values); err != nil {
-			// Drop the merged values: the file is the source of truth.
-			_ = viper.ReadInConfig()
 			return nil, ErrApplySectionFailed{Cause: err}
 		}
-		if err := viper.ReadInConfig(); err != nil {
-			return nil, ErrApplySectionFailed{Cause: err}
-		}
+	}
+
+	if err := viper.MergeConfigMap(nestSectionValues(section, values)); err != nil {
+		return nil, ErrApplySectionFailed{Cause: err}
 	}
 
 	if target != nil {
