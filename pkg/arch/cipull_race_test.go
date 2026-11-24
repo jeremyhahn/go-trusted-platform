@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -38,6 +39,13 @@ resolve() {
   else
     for f in "$s"/tags/*; do [ -f "$f" ] && [ "$(cat "$f")" = "$1" ] && { echo "$1"; return 0; }; done
     echo "Error response from daemon: No such image: $1" >&2; return 1; fi
+}
+# A container's id is its name here; FAKE_LOCK_CREATED is the creation time
+# every container reports, empty as in run 45379249259.
+inspect_container() {
+  [ "$2" = '{{.Id}} {{.Created}}' ] || { echo "fake docker: inspect -f $2" >&2; exit 2; }
+  [ -e "$s/containers/$1" ] || { echo "Error: No such container: $1" >&2; exit 1; }
+  echo "$1 ${FAKE_LOCK_CREATED-}"
 }
 # The CLI's context: DOCKER_CONTEXT, else default under DOCKER_HOST, else the
 # currentContext of the config in DOCKER_CONFIG, whose contexts/ must know it.
@@ -73,8 +81,11 @@ case "$1" in
     echo "${FAKE_PULLED_ID:-$FAKE_IMAGE_ID}" > "$s/tags/$(enc "$2")" ;;
   tag) echo "$ctx" >> "$s/tag-context"; id=$(resolve "$2") || exit 1; echo "$id" > "$s/tags/$(enc "$3")" ;;
   rmi) rm "$s/tags/$(enc "$2")" 2>/dev/null || exit 1 ;;
+  import) [ "$2" = - ] || { echo "fake docker: $*" >&2; exit 2; }; cat >/dev/null; echo sha256:0000 > "$s/tags/$(enc "$3")" ;;
+  inspect) inspect_container "$4" "$3" ;;
   image)
-    [ "$2" = inspect ] && [ "$3" = -f ] || { echo "fake docker: $*" >&2; exit 2; }
+    [ "$2" = inspect ] || { echo "fake docker: $*" >&2; exit 2; }
+    [ "$3" = -f ] || { resolve "$3" >/dev/null || exit 1; echo '[]'; exit 0; }
     id=$(resolve "$5") || exit 1
     case "$4" in
       '{{.Id}}') echo "$id" ;;
@@ -87,8 +98,12 @@ case "$1" in
     [ "$2 $3 $4" = "--pull never --name" ] || { echo "fake docker: $*" >&2; exit 2; }
     [ ! -e "$s/containers/$5" ] || { echo "Conflict: the container name $5 is already in use" >&2; exit 1; }
     id=$(resolve "$6") || exit 1
-    echo "$id" > "$s/containers/$5" ;;
-  container) rm -f "$s/containers/$3" ;;
+    echo "$id" > "$s/containers/$5"; echo "$5" ;;
+  container)
+    case "$2" in
+      inspect) [ "$3" = -f ] || { echo "fake docker: $*" >&2; exit 2; }; inspect_container "$5" "$4" ;;
+      *) rm -f "$s/containers/$3" ;;
+    esac ;;
   rm) rm -f "$s/containers/$2" ;;
   *) echo "fake docker: $*" >&2; exit 2 ;;
 esac
@@ -425,6 +440,100 @@ func TestCIRegistryPullFallsBackToALeasedBuild(t *testing.T) {
 			require.Len(t, leases, 1, "the leg holds one lease")
 			require.Equal(t, "lease-leg", leases[0].Name())
 			require.Equal(t, "sha256:2222", r.read(filepath.Join("containers", "lease-leg")), "the lease is on the rebuilt image")
+		})
+	}
+}
+
+// ciImageLockFn returns the workflow's image_lock function, dedented, after
+// checking that every copy of it in ci.yml is the same text.
+func ciImageLockFn(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), ciWorkflowFile))
+	require.NoError(t, err)
+	var copies []string
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) != "image_lock() {" {
+			continue
+		}
+		indent := line[:len(line)-len(strings.TrimLeft(line, " "))]
+		var fn strings.Builder
+		for _, l := range lines[i:] {
+			fn.WriteString(strings.TrimPrefix(l, indent) + "\n")
+			if l == indent+"}" {
+				break
+			}
+		}
+		copies = append(copies, fn.String())
+	}
+	require.Len(t, copies, 4, "ci.yml defines image_lock in four steps")
+	for i, c := range copies[1:] {
+		require.Equal(t, copies[0], c, "image_lock copy %d differs from the first", i+2)
+	}
+	return copies[0]
+}
+
+// runImageLock runs the workflow's image_lock against the fake docker while
+// another leg holds holder, whose container reports created as its creation
+// time. The holder releases it at the waiter's third sleep.
+func runImageLock(t *testing.T, created, holder string, args ...string) (log, state string) {
+	t.Helper()
+	dir := t.TempDir()
+	bin, state := filepath.Join(dir, "bin"), filepath.Join(dir, "state")
+	for _, d := range []string{bin, filepath.Join(state, "tags"), filepath.Join(state, "containers")} {
+		require.NoError(t, os.MkdirAll(d, 0o755))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "docker"), []byte(fakeRegistryDocker), 0o755))
+	if holder != "" {
+		require.NoError(t, os.WriteFile(filepath.Join(state, "containers", holder), []byte("sha256:0000\n"), 0o644))
+	}
+	script := ciImageLockFn(t) + `sleeps=0
+sleep() {
+  sleeps=$((sleeps + 1))
+  if [ "$sleeps" -ge 3 ] && [ -n "$HOLDER" ]; then docker rm "$HOLDER" >/dev/null; fi
+}
+image_lock "$@"
+echo "sleeps=$sleeps lock=$IMAGE_LOCK_ID"
+`
+	f := filepath.Join(dir, "lock.sh")
+	require.NoError(t, os.WriteFile(f, []byte(script), 0o644))
+	cmd := exec.Command("bash", append([]string{"-e", f}, args...)...)
+	cmd.Env = append(os.Environ(),
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"FAKE_DOCKER_STATE="+state,
+		"HOME="+dir, "DOCKER_CONFIG=", "DOCKER_CONTEXT=", "DOCKER_HOST=",
+		"FAKE_LOCK_CREATED="+created,
+		"HOLDER="+holder,
+	)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "image_lock:\n%s", out)
+	return string(out), state
+}
+
+// Run 45379249259: docker inspect gave the live lock an empty creation time,
+// and date -d "" is today 00:00, so every waiter removed the held lock as
+// stale. Only a known creation time 600 s old makes a lock stale.
+func TestCIImageLockRemovesOnlyAKnownStaleLock(t *testing.T) {
+	const lock = "go-trusted-platform-ci-image-lock"
+	for name, tc := range map[string]struct {
+		created string
+		stale   bool
+	}{
+		"empty creation time":      {created: ""},
+		"unparsable creation time": {created: "not-a-time"},
+		"fresh lock":               {created: time.Now().UTC().Format(time.RFC3339Nano)},
+		"stale lock":               {created: time.Now().Add(-20 * time.Minute).UTC().Format(time.RFC3339Nano), stale: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			log, _ := runImageLock(t, tc.created, lock)
+			require.Contains(t, log, "lock="+lock, log)
+			if tc.stale {
+				require.Contains(t, log, "removing the stale image lock "+lock, log)
+				require.Contains(t, log, "sleeps=0 ", log)
+				return
+			}
+			require.NotContains(t, log, "removing the stale image lock", "the waiter removed a live lock:\n%s", log)
+			require.Contains(t, log, "sleeps=3 ", "the waiter took the lock before its holder released it:\n%s", log)
 		})
 	}
 }
