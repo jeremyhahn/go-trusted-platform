@@ -64,12 +64,46 @@ describe('OverlayService', () => {
     );
   });
 
+  it('getTunnelStats returns the uint64 byte counters as the server sent them', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({
+      success: true,
+      data: {
+        tunnel: {
+          localVtep: 'node-a',
+          remoteVtep: 'node-b',
+          vni: 7,
+          state: 'up',
+          bytesTx: '18446744073709551615',
+          bytesRx: 42,
+        },
+      },
+    });
+    const res = await service.getTunnelStats({ remoteVtep: 'node-b', vni: 7 });
+    const tx: string | number | undefined = res.data?.tunnel.bytesTx;
+    expect(tx).toBe('18446744073709551615');
+    expect(res.data?.tunnel.bytesRx).toBe(42);
+  });
+
   it('forgetMAC DELETEs /macs with mac and vni', async () => {
     vi.mocked(mockClient.delete).mockResolvedValue({ success: true, data: {} });
     await service.forgetMAC({ mac: 'aa:bb:cc:dd:ee:ff', vni: 7 });
     expect(mockClient.delete).toHaveBeenCalledWith(
       '/v1/overlay/macs?mac=aa%3Abb%3Acc%3Add%3Aee%3Aff&vni=7'
     );
+  });
+
+  it('getStatus GETs /status', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: { status: {} } });
+    await service.getStatus();
+    expect(mockClient.get).toHaveBeenCalledWith('/v1/overlay/status');
+  });
+
+  it('listRemoteMACs GETs /macs, filtered by VNI when given', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: { macs: [] } });
+    await service.listRemoteMACs();
+    expect(mockClient.get).toHaveBeenCalledWith('/v1/overlay/macs');
+    await service.listRemoteMACs({ vni: 7 });
+    expect(mockClient.get).toHaveBeenCalledWith('/v1/overlay/macs?vni=7');
   });
 
   it('propagates a transport error unchanged', async () => {

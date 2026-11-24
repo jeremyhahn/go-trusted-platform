@@ -3,9 +3,10 @@
 # Owner ruling 2026-08-20 (fail-fast pipeline for iteration speed): jobs that
 # are known-red with tracked issues, or that verify a slow-moving property, do
 # NOT run per push — a known-red job burning runner-minutes per push produces
-# information we already have. They run here on demand via workflow_dispatch
-# (the nightly schedule was removed by #852), and are NOT in any merge gate. When their tracked issues
-# land, a job may move back to ci.yml — that move is deliberate, not automatic.
+# information we already have. They run here every night on the schedule below
+# (and on demand via workflow_dispatch), and are NOT in any merge gate. When
+# their tracked issues land, a job may move back to ci.yml — that move is
+# deliberate, not automatic.
 #
 # Repo-specific notes for go-trusted-platform:
 #
@@ -151,14 +152,18 @@
 
 name: Nightly
 
-# workflow_dispatch only (#852). The `0 3 * * *` schedule was removed: the
-# shared runner is the portfolio's scarcest resource, and a scheduled run of
-# these jobs spent it every night whether or not anyone read the result.
-# Dispatch it by hand — on main for the tree's state, or on a branch before
-# merging work these jobs judge. The workflow keeps its name, so its statuses
-# keep their `Nightly / ...` contexts.
+# Scheduled nightly by owner order 2026-11-22 (#2356): "the nightlys shouldnt
+# require any manual executiion, it should be getting run automatically!" That
+# order supersedes the 2026-10-11 no-schedule rule (and the dispatch-only
+# setup of #852) for this Nightly workflow only. The slot is `5 6 * * *`
+# (06:05 UTC). workflow_dispatch stays, so it can still be run by hand on main
+# or on a branch. Every job runs on ubuntu-latest (github.com hosted), so no
+# self-hosted runner is used at night. The workflow keeps its name, so its
+# statuses keep their `Nightly / ...` contexts.
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '5 6 * * *'
 
 permissions:
   contents: read
