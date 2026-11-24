@@ -78,6 +78,21 @@ func TestNewSwitchService_RefusesAnUnsupportedVendor(t *testing.T) {
 	assert.True(t, errors.As(err, &unsupported), "the cause stays reachable through the wrap, got %v", err)
 }
 
+func TestNewSwitchService_RefusesDuplicateSwitchIdentities(t *testing.T) {
+	a := &app.App{
+		SwitchConfigs: []switchmgmt.Config{
+			{Name: "core-1", Vendor: switchmgmt.VendorNoop},
+			{Name: "core-1", Vendor: switchmgmt.VendorNoop},
+		},
+	}
+
+	svc, err := newSwitchService(logging.DefaultLogger(), a)
+	require.Error(t, err)
+	assert.Nil(t, svc)
+	var invalid switchmgmt.ErrInvalidConfig
+	assert.True(t, errors.As(err, &invalid), "the cause stays reachable through the wrap, got %v", err)
+}
+
 func TestSwitchServiceProvider_NilServiceIsANilInterface(t *testing.T) {
 	// assert.Nil also passes for a typed nil inside an interface; the REST
 	// router tests the interface against nil, so compare it directly.
