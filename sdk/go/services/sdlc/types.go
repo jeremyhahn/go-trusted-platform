@@ -14,6 +14,7 @@
 package sdlc
 
 import (
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/agents"
 	upstream "github.com/jeremyhahn/go-quicbaas/sdk/go/client/sdlc"
 )
 
@@ -27,8 +28,8 @@ type (
 	ProjectBinding = upstream.ProjectBinding
 	// ForgeConfig names the repository a project delivers to.
 	ForgeConfig = upstream.ForgeConfig
-	// WorkerConfig names the agent that writes the project's code.
-	WorkerConfig = upstream.WorkerConfig
+	// WorkerConfig names the agent or pool that writes the project's code.
+	WorkerConfig = agents.AgentRef
 	// ReviewerConfig configures the project's reviewer. A bind replaces the
 	// whole binding, so a bind that omits it erases the reviewer.
 	ReviewerConfig = upstream.ReviewerConfig

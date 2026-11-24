@@ -17,6 +17,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/agents"
 	upstream "github.com/jeremyhahn/go-quicbaas/sdk/go/client/sdlc"
 )
 
@@ -32,7 +33,7 @@ func TestTypes_AreUpstreamAliases(t *testing.T) {
 		{"Client", reflect.TypeFor[Client](), reflect.TypeFor[upstream.Client]()},
 		{"ProjectBinding", reflect.TypeFor[ProjectBinding](), reflect.TypeFor[upstream.ProjectBinding]()},
 		{"ForgeConfig", reflect.TypeFor[ForgeConfig](), reflect.TypeFor[upstream.ForgeConfig]()},
-		{"WorkerConfig", reflect.TypeFor[WorkerConfig](), reflect.TypeFor[upstream.WorkerConfig]()},
+		{"WorkerConfig", reflect.TypeFor[WorkerConfig](), reflect.TypeFor[agents.AgentRef]()},
 		{"ReviewerConfig", reflect.TypeFor[ReviewerConfig](), reflect.TypeFor[upstream.ReviewerConfig]()},
 		{"ReviewPolicy", reflect.TypeFor[ReviewPolicy](), reflect.TypeFor[upstream.ReviewPolicy]()},
 		{"RankingPolicy", reflect.TypeFor[RankingPolicy](), reflect.TypeFor[upstream.RankingPolicy]()},
