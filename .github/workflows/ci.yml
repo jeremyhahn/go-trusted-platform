@@ -1475,6 +1475,29 @@ jobs:
         if: runner.environment != 'github-hosted'
         run: cd web && npx playwright install chromium
 
+      # Codex P1 on #2382: the self-hosted install above has no --with-deps
+      # (it needs sudo), so the runner's image must carry chromium's system
+      # libraries. Launch chromium once before the specs; on failure list
+      # the libraries ldd cannot find and stop with one clear error.
+      - name: Check the Playwright chromium launches on this runner
+        if: runner.environment != 'github-hosted'
+        run: |
+          cd web
+          if ! node -e "
+            const { chromium } = require('@playwright/test');
+            (async () => {
+              console.log('chromium: ' + chromium.executablePath());
+              const browser = await chromium.launch({ headless: true });
+              await browser.close();
+            })().catch((err) => { console.error(err); process.exit(1); });
+          "; then
+            exe=$(node -e "console.log(require('@playwright/test').chromium.executablePath())")
+            echo "Libraries ldd cannot find for $exe:"
+            ldd "$exe" | grep 'not found' || true
+            echo "::error::chromium does not launch on this self-hosted runner; its image lacks the system libraries listed above (playwright install --with-deps needs sudo)"
+            exit 1
+          fi
+
       - name: Real-server Playwright specs
         # InfoSec O-3: make web-e2e runs web-deps and _web-embed-prepare
         # (npm ci, npm install) again; the setting reaches them through the
