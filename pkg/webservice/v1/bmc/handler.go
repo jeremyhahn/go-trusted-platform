@@ -761,6 +761,13 @@ func (h *handler) writeBMCError(w http.ResponseWriter, r *http.Request, profileI
 		})
 		return
 	}
+	// A config refusal (oversized password, bad slot, an Enabled user with
+	// no password) is the caller's input, not a server fault.
+	var invalidConfig bmcpkg.ErrInvalidConfig
+	if errors.As(err, &invalidConfig) {
+		h.responseWriter.Error400(w, r, invalidConfig)
+		return
+	}
 
 	h.logger.Errorf("bmc: %s failed for profile_id=%d: %v", operation, profileID, err)
 	h.responseWriter.Error500(w, r, ErrServiceError{Operation: operation, Cause: err})
