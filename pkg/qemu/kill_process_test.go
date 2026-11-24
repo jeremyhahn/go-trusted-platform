@@ -46,8 +46,6 @@ func TestProcessKiller_KillsOnlyTheCapturedProcess(t *testing.T) {
 	vm := newSleepingIncomingVM(t)
 	_, err := vm.StartIncoming(context.Background(), "")
 	require.NoError(t, err)
-	// StartIncoming does not clear reaped, so Kill refuses after the restart
-	// below; the cleanup ends whatever process the VM runs at its end.
 	t.Cleanup(func() { _ = vm.ProcessKiller()(); _ = vm.Wait() })
 
 	kill := vm.ProcessKiller()
@@ -64,4 +62,22 @@ func TestProcessKiller_KillsOnlyTheCapturedProcess(t *testing.T) {
 	require.True(t, vm.IsRunning(), "the captured killer stopped the VM's new process")
 	require.Equal(t, pid, vm.GetPID())
 	require.NoError(t, syscall.Kill(pid, 0), "the new process was killed by the old killer")
+}
+
+func TestKill_SecondIncomingProcessIsKilled(t *testing.T) {
+	vm := newSleepingIncomingVM(t)
+	_, err := vm.StartIncoming(context.Background(), "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = vm.Kill(); _ = vm.Wait() })
+
+	require.NoError(t, vm.Kill())
+	_ = vm.Wait()
+
+	_, err = vm.StartIncoming(context.Background(), "")
+	require.NoError(t, err)
+	pid := vm.GetPID()
+
+	require.NoError(t, vm.Kill(), "Kill refused the second incoming process")
+	_ = vm.Wait()
+	require.Error(t, syscall.Kill(pid, 0), "the second incoming process is still alive")
 }
