@@ -246,7 +246,19 @@ func TestInvoke_TPMGetEventLog_CarriesTheLog(t *testing.T) {
 		"platform_tpm_eventlog": map[string]interface{}{
 			"event_log":   tpmReadB64("log"),
 			"format":      "tcg2",
-			"event_count": 3,
+			"event_count": 2,
+			"entries": []map[string]interface{}{
+				{
+					"event_num": 0, "pcr_index": 0, "event_type": "EV_S_CRTM_VERSION", "digest_count": 1,
+					"digests":    []map[string]interface{}{{"algorithm_id": "sha256", "digest": "ab01"}},
+					"event_size": 16, "event_string": "crtm",
+				},
+				{
+					"event_num": 1, "pcr_index": 7, "event_type": "EV_EFI_VARIABLE_DRIVER_CONFIG", "digest_count": 1,
+					"digests":    []map[string]interface{}{{"algorithm_id": "sha256", "digest": "cd02"}},
+					"event_size": 32, "event_string": "SecureBoot",
+				},
+			},
 		},
 	}, &calls)
 
@@ -258,11 +270,30 @@ func TestInvoke_TPMGetEventLog_CarriesTheLog(t *testing.T) {
 	if len(calls) != 1 || calls[0].Name != "platform_tpm_eventlog" || len(calls[0].Arguments) != 0 {
 		t.Fatalf("calls = %v, want one platform_tpm_eventlog call with no arguments", calls)
 	}
-	if string(reply.GetEventLog()) != "log" || reply.GetFormat() != "tcg2" || reply.GetEventCount() != 3 {
-		t.Errorf("reply = %v, want the log, format tcg2 and 3 events", reply)
+	if string(reply.GetEventLog()) != "log" || reply.GetFormat() != "tcg2" || reply.GetEventCount() != 2 {
+		t.Errorf("reply = %v, want the log, format tcg2 and 2 events", reply)
 	}
-	if len(reply.GetEntries()) != 0 {
-		t.Errorf("entries = %v, want none (the tool does not send them)", reply.GetEntries())
+	want := []*platformv1.EventLogEntry{
+		{EventNum: 0, PcrIndex: 0, EventType: "EV_S_CRTM_VERSION", DigestCount: 1,
+			Digests: []*platformv1.EventDigest{{AlgorithmId: "sha256", Digest: "ab01"}}, EventSize: 16, EventString: "crtm"},
+		{EventNum: 1, PcrIndex: 7, EventType: "EV_EFI_VARIABLE_DRIVER_CONFIG", DigestCount: 1,
+			Digests: []*platformv1.EventDigest{{AlgorithmId: "sha256", Digest: "cd02"}}, EventSize: 32, EventString: "SecureBoot"},
+	}
+	got := reply.GetEntries()
+	if len(got) != len(want) {
+		t.Fatalf("entries = %v, want %d entries (#2069)", got, len(want))
+	}
+	for i, w := range want {
+		g := got[i]
+		if g.GetEventNum() != w.GetEventNum() || g.GetPcrIndex() != w.GetPcrIndex() ||
+			g.GetEventType() != w.GetEventType() || g.GetDigestCount() != w.GetDigestCount() ||
+			g.GetEventSize() != w.GetEventSize() || g.GetEventString() != w.GetEventString() {
+			t.Errorf("entry %d = %v, want %v", i, g, w)
+		}
+		if len(g.GetDigests()) != 1 || g.GetDigests()[0].GetAlgorithmId() != w.GetDigests()[0].GetAlgorithmId() ||
+			g.GetDigests()[0].GetDigest() != w.GetDigests()[0].GetDigest() {
+			t.Errorf("entry %d digests = %v, want %v", i, g.GetDigests(), w.GetDigests())
+		}
 	}
 }
 

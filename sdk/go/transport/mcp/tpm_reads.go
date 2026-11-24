@@ -289,12 +289,28 @@ func tpmReadPCRBank(algorithm interface{}) platformv1.PCRBank {
 	return platformv1.PCRBank_PCR_BANK_UNSPECIFIED
 }
 
-// tpmReadEventLogResult is the platform_tpm_eventlog result. The tool does
-// not send parsed entries, so the reply's Entries stay empty.
+// tpmReadEventLogResult is the platform_tpm_eventlog result. The tool sends
+// the parsed entries with the fields of the pb EventLogEntry (absent, like
+// event_count, when the daemon cannot parse the log).
 type tpmReadEventLogResult struct {
-	EventLog   []byte `json:"event_log"`
-	Format     string `json:"format"`
-	EventCount uint64 `json:"event_count"`
+	EventLog   []byte                 `json:"event_log"`
+	Format     string                 `json:"format"`
+	EventCount uint64                 `json:"event_count"`
+	Entries    []tpmReadEventLogEntry `json:"entries"`
+}
+
+// tpmReadEventLogEntry is one parsed event of the platform_tpm_eventlog result.
+type tpmReadEventLogEntry struct {
+	EventNum    uint32 `json:"event_num"`
+	PCRIndex    uint32 `json:"pcr_index"`
+	EventType   string `json:"event_type"`
+	DigestCount uint32 `json:"digest_count"`
+	Digests     []struct {
+		AlgorithmID string `json:"algorithm_id"`
+		Digest      string `json:"digest"`
+	} `json:"digests"`
+	EventSize   uint32 `json:"event_size"`
+	EventString string `json:"event_string"`
 }
 
 // decodeTPMReadEventLogResult carries the raw log, its format and its event
@@ -311,5 +327,21 @@ func decodeTPMReadEventLogResult(result interface{}, reply interface{}) error {
 	out.EventLog = log.EventLog
 	out.Format = log.Format
 	out.EventCount = log.EventCount
+	out.Entries = nil
+	for _, e := range log.Entries {
+		digests := make([]*platformv1.EventDigest, 0, len(e.Digests))
+		for _, d := range e.Digests {
+			digests = append(digests, &platformv1.EventDigest{AlgorithmId: d.AlgorithmID, Digest: d.Digest})
+		}
+		out.Entries = append(out.Entries, &platformv1.EventLogEntry{
+			EventNum:    e.EventNum,
+			PcrIndex:    e.PCRIndex,
+			EventType:   e.EventType,
+			DigestCount: e.DigestCount,
+			Digests:     digests,
+			EventSize:   e.EventSize,
+			EventString: e.EventString,
+		})
+	}
 	return nil
 }
