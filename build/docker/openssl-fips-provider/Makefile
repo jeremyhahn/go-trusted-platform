@@ -1,6 +1,4 @@
-# OpenSSL FIPS Provider Builder
-#
-# Builds OpenSSL FIPS provider module in Docker container
+# OpenSSL FIPS provider builder.
 
 OPENSSL_VERSION ?= 3.4.1
 OUTPUT_DIR ?= $(PWD)/output

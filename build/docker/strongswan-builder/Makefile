@@ -1,55 +1,22 @@
-# strongSwan builder for the Trusted Platform overlay (docs/sdn/engineering.md,
-# "IPsec transport").
-#
-# Builds trusted-platform-strongswan (charon + swanctl) for Alpine 3.22 on
-# amd64 and arm64 from a pinned upstream release whose tarball must carry a
-# good signature by the pinned strongSwan release key AND match the pinned
-# SHA-256, then packages it as signed apks with an OpenRC service. The same
-# run packages trusted-platform-p11-host, the glibc root filesystem whose
-# p11-kit server hosts the go-xkms PKCS#11 module charon reaches (charon is
-# musl and cannot load the Go module), with its OpenRC service.
-#
-#   make build XKMS_VERSION=v0.48.0-alpha MODULE_HOST_DIR=<dir with modulehost-<arch>.tar>
-#   make build ... APK_SIGNING_KEY=$(HOME)/.trusted-platform/apk/<name>.rsa
-#   make verify XKMS_VERSION=...                   # SHA256SUMS + apk signatures + plugin set
-#
-# `make strongswan-build` at the repository root builds the module host
-# archives first and passes both variables.
-#
-# APK_SIGNING_KEY is an abuild RSA private key with <name>.rsa.pub beside it;
-# the nodes trust it by carrying the .pub in /etc/apk/keys. It is mounted
-# read-only and never enters an image. Without it a per-build EPHEMERAL key is
-# generated under $(OUTPUT_DIR)/.ephemeral-key (dev builds only: nothing
-# outside this build trusts it).
+# strongSwan builder for the Trusted Platform overlay (docs/sdn/engineering.md, "IPsec transport").
 
 STRONGSWAN_VERSION ?= 6.0.7
 STRONGSWAN_SHA256  ?= e518e34e159514f4c6ba80d1f926cb151e0dd4e3a1d94213171234b8b9ae6f55
-# Andreas Steffen <andreas.steffen@strongswan.org>, the strongSwan release
-# signing key (strongswan-release-key.asc, from
-# https://download.strongswan.org/STRONGSWAN-RELEASE-PGP-KEY).
+# The strongSwan release signing key's fingerprint (strongswan-release-key.asc).
 STRONGSWAN_SIGNER  ?= 948F158A4E76A27BF3D07532DF42C170B34DBA77
-# The complete plugin set; the APKBUILD enables exactly these and fails the
-# package if any other plugin is installed.
-# counters is not optional: configure enables it whenever vici is (VICI's
-# get-counters command), so it is pinned here rather than discovered.
+# The complete plugin set; the APKBUILD fails on any other installed plugin.
 STRONGSWAN_PLUGINS ?= openssl pkcs11 vici counters nonce kernel-netlink socket-default pem revocation constraints updown
 ARCHES             ?= amd64 arm64
-# The PKCS#11 module host (trusted-platform-p11-host): the go-xkms release its
-# module is built from, and the directory holding its root filesystem per
-# architecture, modulehost-<arch>.tar. `make strongswan-build` at the
-# repository root builds both and passes them; there is no default for either,
-# so a build never packages a module host of unknown origin.
+# The PKCS#11 module host: the go-xkms release its module is built from, and the root filesystem directory per architecture.
 XKMS_VERSION       ?=
 MODULE_HOST_DIR    ?=
 # An apk version has no leading v and writes -alpha as _alpha.
 P11_HOST_VERSION    = $(subst -,_,$(patsubst v%,%,$(XKMS_VERSION)))
-# The apks every node installs for the overlay's IPsec transport; the install
-# media (pkg/iso, PlatformAPKDir) refuses output that lacks one.
+# The apks every node installs for the overlay's IPsec transport.
 PLATFORM_APKS       = trusted-platform-strongswan trusted-platform-strongswan-openrc trusted-platform-p11-host trusted-platform-p11-host-openrc
 
 OUTPUT_DIR   ?= $(CURDIR)/output
-# The source tarball cache is a named docker volume, not a host path: the
-# daemon owns it, so it works when the build runs in a CI job container.
+# The tarball cache is a named docker volume, so it works from a CI job container.
 CACHE_VOLUME ?= trusted-platform-strongswan-src
 DOCKER       ?= docker
 RUN_BUILDER  ?= ../run-builder.sh
@@ -69,8 +36,7 @@ endif
 
 .PHONY: all build image key module-host-inputs verify clean FORCE
 
-# image-<arch> and build-<arch> are pattern rules, which GNU make never
-# applies to .PHONY targets; FORCE makes them always run instead.
+# FORCE makes the image-<arch> and build-<arch> pattern rules always run.
 FORCE:
 
 all: build
@@ -117,10 +83,7 @@ build-%: image-% key module-host-inputs FORCE
 		-e APK_KEY_NAME=$(KEY_NAME) \
 		$(DOCKER_IMAGE)-$*
 
-# verify re-checks everything a consumer relies on, from the output alone:
-# the SHA256SUMS of each arch, every apk's and APKINDEX's signature against
-# the published key, the manifest's version and plugin set against the pins,
-# and the cached source tarball's signature and hash.
+# verify re-checks every output: checksums, apk and APKINDEX signatures, the manifest against the pins and the cached tarball.
 verify: image-amd64
 	@test -n "$(XKMS_VERSION)" || { echo "ERROR: XKMS_VERSION is required (the go-xkms release of the module host)"; exit 1; }
 	@for a in $(ARCHES); do \

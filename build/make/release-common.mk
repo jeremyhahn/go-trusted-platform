@@ -1,54 +1,4 @@
-# release-common-template: v1.1.0 (2026-10-08). The one implementation behind
-# the three release recipes of release-versioning.md §1a, all of which tag main.
-# v1.1.0 adds release-candidate.mk and renames release-public.mk to release.mk
-# (target `make release`), per the owner's rulings of 2026-10-07 (§1a). v1.0.0
-# (2026-09-27 — automatethethings#173) had two recipes.
-#
-#   release-alpha.mk      make release-alpha     VERSION=vX.Y.Z-alpha   internal, Gitea only
-#   release-candidate.mk  make release-candidate VERSION=vX.Y.Z-rc.N    a pre-release of the public vX.Y.Z
-#   release.mk            make release           VERSION=vX.Y.Z         the Gitea tag a public release is published from
-#
-# Each recipe file includes this one from its own directory, so an adopter
-# copies release-common.mk beside whichever recipes it uses and includes only
-# the recipes. Including several recipes includes this file several times,
-# which is harmless: it defines no rules, and every definition is idempotent.
-#
-# Neither recipe pushes to GitHub. Publication is
-# software/scripts/github-publish.sh, gated on the owner's per-push approval
-# (version-control.md §5a). These recipes push to RELEASE_REMOTE (Gitea) only.
-#
-# The security and correctness history of every guard below is recorded in
-# release-alpha.mk's header (v2.3–v2.3.9); it was written against the alpha
-# recipe and applies unchanged here, because this IS that recipe's body,
-# factored out. Read it before changing a guard.
-#
-# INPUTS (all settable; each crosses into the recipe once, below):
-#   VERSION           the release tag, v-prefixed; its form is checked per recipe
-#   RELEASE_REMOTE    the Gitea remote (origin in every fleet repo, 2026-08-27)
-#   REPO_NAME         the literal repo name: the signing identity agent-<repo>
-#   AGENT_GIT         agent-git.sh, resolved from PATH (never a baked absolute path)
-#   LOCKSTEP_MODULES  nested modules tagged in lockstep with the root
-#                     (release-versioning.md §6), e.g. `sdk/go xkey`. Each entry
-#                     is a repo-relative directory with a TRACKED go.mod; the
-#                     recipe tags <dir>/VERSION on the release commit beside
-#                     VERSION and pushes all of them in one atomic push. Empty
-#                     (the default) tags the root only. Listed explicitly, never
-#                     discovered: fleet repos carry nested go.mod files that are
-#                     not released (web/desktop, test/performance/*).
-#
-# SECURITY — the v2.3.3/v2.3.7/v2.3.8 rules, extended to the new names:
-#  - every settable input reaches the recipe as $(value ...) through an
-#    `override export` target-specific variable, and the body reads only $$REL_*;
-#  - every settable input AND every internal REL_* alias is `unexport`ed;
-#  - the canned sequences are `override define`d and unexported too. A canned
-#    sequence is a Make variable, and a command-line `RELEASE_CUT=...` would
-#    otherwise replace the recipe body wholesale.
-#
-# ADOPTER CHECK: over each recipe BODY, `grep -P '(?<!\$)\$\((?!\()'` may match
-# ONLY the canned sequences defined here (RELEASE_GUARDS, RELEASE_PIN_GATE,
-# RELEASE_CUT, RELEASE_LOCKSTEP_COMPLETE, RELEASE_MONOTONIC, RELEASE_MAJOR_GATE,
-# and inside them RELEASE_MODFILES and RELEASE_REQUIRES) — and every settable
-# input must be on the `unexport` lines.
+# release-common-template: v1.1.0. The shared exports and guards of release-alpha.mk and release-public.mk.
 
 unexport VERSION RELEASE_REMOTE REPO_NAME AGENT_GIT LOCKSTEP_MODULES
 unexport REL_VERSION REL_REMOTE REL_REPO REL_AGENT_GIT REL_MODULES REL_VERSION_ORIGIN
@@ -59,16 +9,10 @@ release-alpha release-candidate release: override export REL_REMOTE    := $(valu
 release-alpha release-candidate release: override export REL_REPO      := $(value REPO_NAME)
 release-alpha release-candidate release: override export REL_AGENT_GIT := $(value AGENT_GIT)
 release-alpha release-candidate release: override export REL_MODULES   := $(value LOCKSTEP_MODULES)
-# Where VERSION came from. `unexport` stops a command-line value from being
-# re-exported, but it does not stop an EXPORTED environment variable (or
-# `make -e`) from supplying the Make variable in the first place, so a bare
-# `make release` could inherit a stale VERSION. The candidate and release recipes
-# require it to come from the command line. $(origin) yields a fixed word.
+# Where VERSION came from.
 release-candidate release: override export REL_VERSION_ORIGIN := $(origin VERSION)
 
-# RELEASE_GUARDS — everything that must hold before VERSION is written. Runs
-# after the recipe has checked the form of $$REL_VERSION for its release kind.
-# The module list is validated FIRST, so every later line may word-split it.
+# RELEASE_GUARDS: everything that must hold before VERSION is written.
 override define RELEASE_GUARDS
 @test "$$(git rev-parse --abbrev-ref HEAD)" = main || { echo "ERROR: releases are cut from main; you are on $$(git rev-parse --abbrev-ref HEAD). 'push $$REL_REMOTE HEAD' would publish this branch."; exit 1; }
 @test -n "$$REL_REPO" || { echo 'ERROR: REPO_NAME is empty — set it to the literal repo name in the Makefile, never $$(notdir $$(CURDIR))'; exit 1; }
@@ -109,13 +53,7 @@ done
   END { exit f ? 0 : 1 }' CHANGELOG.md || { echo "ERROR: CHANGELOG.md has no \"$$ver\" section heading. Matched LITERALLY and anchored at the line start, exactly as .github/workflows/release.yml matches it — an unanchored prose mention does not count, neither does a near-miss heading, and neither does a heading quoted inside a fenced code block"; exit 1; }
 endef
 
-# RELEASE_LOCKSTEP_COMPLETE — used by release-candidate and release, whose tag is the one a
-# public release is built from. Every nested module that has
-# EVER been tagged on the remote (a <dir>/v* tag) and still has a tracked
-# <dir>/go.mod must be in LOCKSTEP_MODULES; otherwise its pins would not move
-# and its tag would not be cut, and the omission would only surface at
-# github-publish.sh, after the root tag is already immutable. Not applied to
-# release-alpha, whose adopters may still tag modules by their own targets.
+# RELEASE_LOCKSTEP_COMPLETE: used by release-candidate and release.
 override define RELEASE_LOCKSTEP_COMPLETE
 @refs="$$(git ls-remote --tags --refs "$$REL_REMOTE")" || { echo "ERROR: could not list tags on $$REL_REMOTE to check the lockstep module set"; exit 1; }; \
 for d in $$(printf '%s\n' "$$refs" | sed -n 's|^[0-9a-f]*[[:space:]]*refs/tags/\(.*\)/v[0-9][^/]*$$|\1|p' | sort -u); do \
@@ -124,20 +62,7 @@ for d in $$(printf '%s\n' "$$refs" | sed -n 's|^[0-9a-f]*[[:space:]]*refs/tags/\
 done
 endef
 
-# RELEASE_MONOTONIC — used by release-candidate and release. The new version
-# must order strictly ABOVE every release tag already on the remote, by SemVer
-# 2.0.0 §11 precedence (release-versioning.md §3: a published version never
-# goes backwards, and neither may a pin re-pinned to it). Alphas and releases
-# are compared across the whole tag set, so v1.2.0 is refused once v1.2.1-alpha
-# exists. Only v-prefixed MAJOR.MINOR.PATCH tags with an optional pre-release
-# take part: the root's, and each lockstep
-# module's <dir>/v... (a module versioned ahead of the root must not be tagged
-# backwards either). It must also not order below the VERSION file (§3: never
-# lower a VERSION file); equal is allowed. This is the "real SemVer §11 comparator" release-alpha.mk's
-# v2.3.4 note asks for before numbered pre-releases are walked: numeric
-# identifiers compare numerically (by digit count, then digits, so no size
-# limit or float rounding), alphanumeric ones in ASCII order, numeric
-# below alphanumeric, and a longer identifier list ranks higher when equal so far.
+# RELEASE_MONOTONIC: used by release-candidate and release.
 override define RELEASE_MONOTONIC
 @refs="$$(git ls-remote --tags --refs "$$REL_REMOTE")" || { echo "ERROR: could not list tags on $$REL_REMOTE to check version ordering"; exit 1; }; \
 semver_awk=' \
@@ -171,11 +96,7 @@ lower="$$(printf 'x refs/tags/%s\n' "$$cur" | LC_ALL=C awk -v new="$$REL_VERSION
 test -z "$$lower" || { echo "ERROR: VERSION is $$(cat VERSION), above $$REL_VERSION; this release would lower it (release-versioning.md §3: never lower a VERSION file)"; exit 1; }
 endef
 
-# RELEASE_MAJOR_GATE — used by release-candidate and release. Go accepts a
-# vN tag (N >= 2) only for a module whose path ends in /vN, and a v0/v1 tag
-# only for one whose path does not (semantic import versioning;
-# release-versioning.md §1, post-1.0 MAJOR). Every published go.mod must agree
-# with the release's major, or the immutable tags would be unusable.
+# RELEASE_MAJOR_GATE: used by release-candidate and release.
 override define RELEASE_MAJOR_GATE
 @$(RELEASE_MODFILES) \
 major="$${REL_VERSION#v}"; major="$${major%%.*}"; \
@@ -189,25 +110,17 @@ for f in $$files; do \
 done
 endef
 
-# RELEASE_MODFILES — shell fragment: sets $$files to the go.mod files the
-# release publishes (the root's and each lockstep module's, where present) and
-# $$own to their module paths, space-delimited. A repo with no go.mod has none.
+# RELEASE_MODFILES: sets $$files to the go.mod files the release publishes and $$own to their module paths.
 override define RELEASE_MODFILES
 own=' '; files=''; for f in go.mod $$(for m in $$REL_MODULES; do printf '%s/go.mod ' "$$m"; done); do   [ -f "$$f" ] || continue; files="$$files $$f";   own="$$own$$(awk '$$1 == "module" { print $$2; exit }' "$$f") "; done;
 endef
 
-# RELEASE_REQUIRES — awk program printing "path version" for every require in
-# the go.mod named after it, single-line and block form, comments stripped.
+# RELEASE_REQUIRES: awk program printing "path version" for every require in the named go.mod.
 override define RELEASE_REQUIRES
 awk '   { sub(/\/\/.*/, "") }   blk && $$1 == ")" { blk = 0; next }   blk && NF >= 2 { print $$1, $$2; next }   $$1 == "require" && $$2 == "(" { blk = 1; next }   $$1 == "require" && NF >= 3 { print $$2, $$3 }'
 endef
 
-# RELEASE_PIN_GATE — the upstream gate. Every first-party requirement
-# (github.com/jeremyhahn/...) in the published go.mod files must name a version
-# matching the shell variable $$pin_re, which the recipe sets on the same line.
-# v0.0.0 is refused whatever pin_re says: it is the legacy placeholder
-# (dependency-resolution.md), never a real release. The repo's OWN modules
-# are exempt here because RELEASE_CUT rewrites them.
+# RELEASE_PIN_GATE: the upstream gate.
 override define RELEASE_PIN_GATE
 $(RELEASE_MODFILES) \
 bad=''; for f in $$files; do \
@@ -221,20 +134,7 @@ done; \
 test -z "$$bad" || { echo "ERROR: first-party dependencies are not at an allowed release for this kind of release (release-versioning.md §1a):$$bad"; exit 1; }
 endef
 
-# RELEASE_CUT — write VERSION, and move every requirement one published
-# module has on ANOTHER of the repo's own modules to the release version, in
-# the same commit (dependency-resolution.md §5: "fixing both go.mod files in
-# one commit and cutting both tags on that commit"; check-reciprocal-pins.sh:
-# the version bump and the pins must move together). Without it, sdk/go tagged
-# at the new version still requires the root at the previous one, and every
-# outside consumer gets a stale sibling. Then commit, tag the root and every
-# lockstep module on that commit (annotated, signed through agent-git.sh), and
-# push the commit and exactly those tags in one atomic push. --no-follow-tags:
-# see v2.3.9(a). When VERSION and the pins already read the release version
-# there is nothing to commit, and HEAD itself is tagged. The pins are rewritten with `go mod edit`, so a repo whose
-# modules pin each other needs the go toolchain to release; one whose modules
-# do not never invokes it. Every edit is first tried on a copy, so a toolchain
-# that cannot edit a module fails before VERSION or any go.mod is touched.
+# RELEASE_CUT: write VERSION and move every cross-module requirement to the release version in the same commit.
 override define RELEASE_CUT
 @$(RELEASE_MODFILES) \
 tmp="$$(mktemp -d)" || exit 1; trap 'rm -rf "$$tmp"' EXIT; \

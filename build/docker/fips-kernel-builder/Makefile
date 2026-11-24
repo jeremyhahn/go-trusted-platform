@@ -1,36 +1,17 @@
-# FIPS Kernel Builder
-#
-# Builds FIPS-capable Linux kernel in Docker container.
-#
-# Production builds MUST provide the stable platform module-signing key so the
-# kernel embeds its certificate in .builtin_trusted_keys (CONFIG_MODULE_SIG_KEY)
-# and out-of-tree modules signed by pkg/modulesign with the same key load under
-# CONFIG_MODULE_SIG_FORCE:
-#
-#   make module-key                       # one-time: generate the stable key
-#   make build MODULE_SIGNING_KEY=$(HOME)/.trusted-platform/secure-boot/module-signing-key.pem
-#
-# The key lives OUTSIDE the repository and is copied into the build container
-# at run time (docker cp, never a bind mount) — it is never baked into the
-# image or the build context, and goes away with the container. When
-# MODULE_SIGNING_KEY is unset the kernel auto-generates a per-build ephemeral
-# key (dev builds only; see build-fips-kernel.sh).
+# FIPS kernel builder.
 
-# Use 6.12.8 to match Alpine 3.22 LTS kernel (NOT 6.13!)
+# Matches the Alpine 3.22 LTS kernel.
 KERNEL_VERSION ?= 6.12.8
 OUTPUT_DIR ?= $(PWD)/output
 DOCKER_IMAGE ?= fips-kernel-builder
-# The options every platform kernel carries (build/docker/kernel-config),
-# baked into the image through the kernelconfig named build context.
+# The options every platform kernel carries, baked into the image through the kernelconfig build context.
 KERNEL_CONFIG_DIR := ../kernel-config
 
-# Stable platform module-signing key (PEM bundle: private key + certificate).
-# Generate with `make module-key` (wraps `platformctl iso module-signing-key`).
+# Stable platform module-signing key (PEM bundle: private key and certificate).
 MODULE_SIGNING_KEY ?=
 DEFAULT_MODULE_SIGNING_KEY := $(HOME)/.trusted-platform/secure-boot/module-signing-key.pem
 
-# When a key is provided, copy the key file into the container at /keys and
-# point the build at the container-side path.
+# A provided key is copied into the container at /keys.
 RUN_BUILDER ?= ../run-builder.sh
 ifneq ($(MODULE_SIGNING_KEY),)
 KEY_COPY_ARGS := -i $(abspath $(MODULE_SIGNING_KEY)):/keys/$(notdir $(MODULE_SIGNING_KEY))
@@ -47,9 +28,7 @@ all: build
 image:
 	docker build --build-context kernelconfig=$(KERNEL_CONFIG_DIR) -t $(DOCKER_IMAGE) .
 
-# config-check runs the configuration phase only (defconfig, the settings in
-# build-fips-kernel.sh, the platform-required fragment, olddefconfig,
-# require-config.sh) and builds nothing.
+# config-check runs the configuration phase only and builds nothing.
 config-check: image
 	docker run --rm -e KERNEL_VERSION=$(KERNEL_VERSION) -e KERNEL_CONFIG_ONLY=1 $(DOCKER_IMAGE)
 
@@ -69,8 +48,7 @@ endif
 	@echo "Build complete. Artifacts in: $(OUTPUT_DIR)"
 	@ls -lh $(OUTPUT_DIR)
 
-# Generate the stable platform module-signing key at the default operator
-# location (outside the repository). Refuses to overwrite an existing key.
+# Generate the stable platform module-signing key at the default operator location, outside the repository.
 module-key:
 	cd ../../.. && go run ./cmd/platformctl iso module-signing-key
 

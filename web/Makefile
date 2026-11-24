@@ -18,8 +18,7 @@ NO_COLOR=\033[0m
 
 WEB_PUBLIC_HTML         ?= ../public_html
 
-# Web development container configuration
-# Uses dedicated container to avoid conflicts with integration test devcontainer
+# Web development container, separate from the integration devcontainer.
 CONTAINER_NAME          ?= trusted-platform-webdev
 BACKEND_LOG_FILE        ?= /tmp/platformd.log
 COMPOSE_FILE            ?= docker-compose.yml
@@ -37,8 +36,7 @@ sdk-build:
 install: sdk-build
 	npm install
 
-# Development with devcontainer backend (recommended)
-# Backend runs in devcontainer, frontend runs on host for best hot-reload experience
+# Backend in the devcontainer, frontend on the host for hot reload.
 dev: start-backend
 	@echo "$(GREEN)Starting frontend on port 3000...$(NO_COLOR)"
 	@echo "$(CYAN)Backend: https://localhost:8443 (devcontainer)$(NO_COLOR)"
@@ -154,16 +152,7 @@ test-e2e-headed:
 test-e2e-debug:
 	npx playwright test --debug
 
-# Integration Tests (uses ../test/integration/web directory via playwright.integration.config.ts)
-#
-# These tests run against the REAL backend server.
-#
-# Modes:
-#   test-integration        - Headless (default), results logged to playwright.log
-#   test-integration-headed - With visible browser window (HEADED=1)
-#   test-integration-ui     - Interactive UI mode for local development
-#   test-integration-debug  - Debug mode with step-through
-#
+# Integration tests (../test/integration/web via playwright.integration.config.ts).
 test-integration: start-backend
 	@echo "Running integration tests against real backend..."
 	@echo "Results will be in playwright.log"
@@ -204,12 +193,7 @@ test-compute:
 test-api:
 	npx playwright test --config playwright.integration.config.ts api-integration.spec.ts
 
-# WebAuthn E2E tests — requires a running platform server
-# Defaults to QEMU server at server.example.com:8443
-# Override FRONTEND_URL for different environments
-# Usage:
-#   make test-webauthn                   # QEMU server (default)
-#   make test-webauthn HEADED=1          # visible browser
+# WebAuthn E2E tests against a running platform server (the QEMU server by default); HEADED=1 shows the browser.
 FRONTEND_URL ?= https://server.example.com:8443
 test-webauthn:
 	FRONTEND_URL=$(FRONTEND_URL) BACKEND_URL=$(FRONTEND_URL) \
