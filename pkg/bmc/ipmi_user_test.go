@@ -467,6 +467,50 @@ func TestCreateUser_LongPasswordWritesNothing(t *testing.T) {
 	}
 }
 
+// TestCreateUser_EnabledWithoutPasswordWritesNothing pins that an Enabled
+// user with no password is refused before any IPMI write: the slot keeps its
+// old password state, so enabling it could activate an old or blank one.
+func TestCreateUser_EnabledWithoutPasswordWritesNothing(t *testing.T) {
+	cases := []struct {
+		name string
+		pwd  *memguard.MemoryEnclave
+	}{
+		{name: "nil", pwd: nil},
+		{name: "empty", pwd: memguard.NewMemoryEnclave([]byte{})},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMock()
+			err := newUM(m).CreateUser(context.Background(), User{
+				Slot: 5, Username: "bob", Enabled: true, Privilege: PrivilegeOperator,
+			}, tc.pwd)
+			var cfgErr ErrInvalidConfig
+			if !errors.As(err, &cfgErr) {
+				t.Fatalf("err = %v, want ErrInvalidConfig", err)
+			}
+			if cfgErr.Field != "password" {
+				t.Errorf("Field = %q, want password", cfgErr.Field)
+			}
+			if len(m.calls) != 0 {
+				t.Fatalf("want no BMC write, got %d calls (first cmd 0x%02x)", len(m.calls), m.calls[0].cmd)
+			}
+		})
+	}
+	t.Run("disabled_name_only_succeeds", func(t *testing.T) {
+		m := newMock()
+		if err := newUM(m).CreateUser(context.Background(), User{
+			Slot: 5, Username: "bob", Enabled: false, Privilege: PrivilegeOperator,
+		}, nil); err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+		for _, c := range m.calls {
+			if c.cmd == cmdSetUserPassword {
+				t.Fatalf("disabled name-only user sent SetUserPassword (data %x)", c.data)
+			}
+		}
+	})
+}
+
 func TestCreateUser_PartialFailureClearsName(t *testing.T) {
 	m := newMock()
 	pwdErr := errors.New("pwd-fail")
