@@ -109,16 +109,14 @@ export class TenantService extends BaseService {
    * @returns List of tenants
    */
   async listTenants(request?: ListTenantsRequest): Promise<ApiResponse<ListTenantsResponse>> {
-    const filters: Record<string, string | undefined> = {};
+    // The server pages by limit and offset (GET /api/v1/tenants), not page.
+    const filters: Record<string, string | number | undefined> = { offset: request?.offset };
     if (request?.selector?.matchLabels !== undefined) {
       Object.entries(request.selector.matchLabels).forEach(([k, v]) => {
         filters[`label_${k}`] = v;
       });
     }
     return this.client.get<ListTenantsResponse>(this.buildUrl('', {
-      page: request?.offset !== undefined && request?.limit !== undefined
-        ? Math.floor(request.offset / request.limit) + 1
-        : undefined,
       limit: request?.limit,
       filters,
     }));
