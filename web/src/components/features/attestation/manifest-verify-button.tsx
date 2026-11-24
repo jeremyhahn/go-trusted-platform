@@ -5,7 +5,11 @@
  * (POST /api/v1/attestation/manifests/verify) through the SDK
  * AttestationService with the manifest it was given, or the one it fetches
  * by id, and shows the verifier's checks and errors. It is offered only when
- * the server offers the route (#2038).
+ * the server offers the route (#2038). The signature is shown as not checked
+ * and no public key is offered, because the production VerifyManifest checks
+ * no signature and refuses a public key with
+ * ErrAttestationManifestSignatureUnchecked
+ * (pkg/attestation/service/service.go:103-105, 143-148).
  */
 
 import * as React from "react";
@@ -24,9 +28,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Gated } from "@/components/features/capabilities/gated";
-import { pemToBase64 } from "@/components/features/attestation/attestation-quote-card";
 import { useAttestation, useToast } from "@/hooks";
 
 export const VERIFY_MANIFEST_OP = "POST /api/v1/attestation/manifests/verify";
@@ -37,7 +39,6 @@ export interface ManifestVerifyButtonProps {
 }
 
 type CheckName =
-  | "signatureValid"
   | "merkleRootValid"
   | "nonceValid"
   | "timestampValid"
@@ -46,7 +47,6 @@ type CheckName =
   | "containerAttestationsValid";
 
 const CHECKS: { name: CheckName; label: string }[] = [
-  { name: "signatureValid", label: "Signature" },
   { name: "merkleRootValid", label: "Merkle root" },
   { name: "nonceValid", label: "Nonce" },
   { name: "timestampValid", label: "Timestamp" },
@@ -97,6 +97,12 @@ function VerifyResult({ result }: { result: ManifestVerificationResult }) {
         {result.verifiedAt && <span className="text-muted-foreground">{result.verifiedAt}</span>}
       </div>
       <ul className="space-y-1">
+        <li data-testid="manifest-verify-check-signatureValid" className="flex justify-between">
+          <span>Signature</span>
+          <span className="text-muted-foreground" title="The control plane does not verify manifest signatures yet">
+            not checked
+          </span>
+        </li>
         {CHECKS.map((check) => (
           <li
             key={check.name}
@@ -132,7 +138,6 @@ export function ManifestVerifyButton({ manifestId, manifest }: ManifestVerifyBut
   const [open, setOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [expectedNonce, setExpectedNonce] = React.useState("");
-  const [publicKeyPem, setPublicKeyPem] = React.useState("");
   const [result, setResult] = React.useState<ManifestVerificationResult | null>(null);
 
   const fail = (message: string) =>
@@ -157,11 +162,9 @@ export function ManifestVerifyButton({ manifestId, manifest }: ManifestVerifyBut
         target = got.data.manifest;
       }
       const nonce = expectedNonce.trim();
-      const pem = publicKeyPem.trim();
       const res = await attestation.verifyManifest({
         manifest: target,
         ...(nonce !== "" && { expectedNonce: nonce }),
-        ...(pem !== "" && { publicKeyPem: pemToBase64(pem) }),
       });
       if (res.success === false) {
         fail(errorMessage(res.error));
@@ -180,7 +183,6 @@ export function ManifestVerifyButton({ manifestId, manifest }: ManifestVerifyBut
   };
 
   const nonceId = `manifest-verify-nonce-${manifestId}`;
-  const pemId = `manifest-verify-pem-${manifestId}`;
 
   return (
     <>
@@ -201,8 +203,8 @@ export function ManifestVerifyButton({ manifestId, manifest }: ManifestVerifyBut
           <DialogHeader>
             <DialogTitle>Verify manifest</DialogTitle>
             <DialogDescription>
-              The control plane checks the signature, Merkle root, nonce, timestamp and attestations of manifest{" "}
-              {manifestId}.
+              The control plane checks the Merkle root, nonce, timestamp and attestations of manifest {manifestId}. It
+              does not check the manifest signature.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -213,16 +215,6 @@ export function ManifestVerifyButton({ manifestId, manifest }: ManifestVerifyBut
                 value={expectedNonce}
                 placeholder="base64, optional"
                 onChange={(e) => setExpectedNonce(e.target.value)}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor={pemId}>Public key (PEM)</Label>
-              <Textarea
-                id={pemId}
-                value={publicKeyPem}
-                placeholder="optional"
-                rows={3}
-                onChange={(e) => setPublicKeyPem(e.target.value)}
               />
             </div>
           </div>
