@@ -1356,17 +1356,22 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 	}
 
 	// The entries the previous version installed and this one dropped come
-	// off the switch now that the new version is recorded, unless another
-	// policy owns the same entry. A failed delete does not fail the apply:
-	// the entry is kept in strandedFlows and the next apply removes it. A
-	// policy entry a dropped flow had replaced is put back.
+	// off the switch now that the new version is recorded. An entry another
+	// policy owns is not deleted: the latest-applied other owner's flow is
+	// installed over it, so the dropped action does not stay in force. A
+	// policy entry a removed flow had replaced is put back too. A failed
+	// delete keeps the entry in strandedFlows and a failed restore keeps it
+	// in unrestoredFlows for the next apply; either fails the replacement,
+	// and the recorded new version is marked "error".
 	if len(dropped) > 0 {
 		owned := s.policyOwnedFlowKeys()
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), policyRollbackTimeout)
-		removed := make(map[flowEntryKey]bool, len(dropped))
+		restore := make(map[flowEntryKey]bool, len(dropped))
+		var cleanupErrs []error
 		for _, f := range dropped {
 			key := newFlowEntryKey(f.bridge, f.flow)
 			if owned[key] {
+				restore[key] = true
 				continue
 			}
 			if err := client.DeleteFlowStrict(cctx, f.bridge, f.flow); err != nil {
@@ -1374,14 +1379,25 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 					s.strandedFlows = make(map[flowEntryKey]attemptedFlow)
 				}
 				s.strandedFlows[key] = f
+				cleanupErrs = append(cleanupErrs, fmt.Errorf("remove obsolete flow %q on bridge %q: %w", f.flow.Match, f.bridge, err))
 				continue
 			}
-			removed[key] = true
+			restore[key] = true
 		}
-		if len(removed) > 0 {
-			_, _ = s.restoreOverwrittenFlows(cctx, client, policyID, removed)
+		if len(restore) > 0 {
+			if _, err := s.restoreOverwrittenFlows(cctx, client, policyID, restore); err != nil {
+				cleanupErrs = append(cleanupErrs, err)
+			}
 		}
 		cancel()
+		if len(cleanupErrs) > 0 {
+			s.mu.Lock()
+			if p := s.policies[policyID]; p != nil {
+				p.status = "error"
+			}
+			s.mu.Unlock()
+			return nil, status.Errorf(codes.Internal, "policy %q applied, but obsolete flows were not cleaned up: %v", policyID, errors.Join(cleanupErrs...))
+		}
 	}
 
 	return &platformv1.ApplyPolicyResponse{
