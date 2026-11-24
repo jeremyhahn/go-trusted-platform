@@ -107,3 +107,26 @@ describe("vTPM runtime capability gate", () => {
     expect((screen.getByRole("button", { name: "Check state" }) as HTMLButtonElement).disabled).toBe(false);
   });
 });
+
+describe("vTPM runtime socket", () => {
+  const initial = { ...runtime };
+
+  afterEach(() => {
+    cleanup();
+    Object.assign(runtime, initial);
+  });
+
+  it("after Start, Check state, Stop, Start shows the socket of the last start", async () => {
+    // The hook state Start, Check state, Stop, Start leaves: the old state
+    // reply is still in checkState.data, the hook's socket is the new start's.
+    Object.assign(runtime, {
+      runState: "running",
+      socketPath: "/run/vtpm/start.sock",
+      start: { ...mutation(), data: { bundle_id: "b1", running: true, socket_path: "/run/vtpm/start.sock" } },
+      checkState: { ...mutation(), data: { bundle_id: "b1", running: true, socket_path: "/run/vtpm/state.sock" } },
+      stop: { ...mutation(), data: { bundle_id: "b1", stopped: true } },
+    });
+    await renderPage();
+    expect(screen.getByTestId("vtpm-socket").textContent).toBe("/run/vtpm/start.sock");
+  });
+});
