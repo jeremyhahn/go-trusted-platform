@@ -171,8 +171,77 @@ describe('ManifestVerifyButton', () => {
     // The signature row reads the same whatever signatureValid says.
     expect(screen.getByTestId('manifest-verify-check-signatureValid').textContent).toContain('not checked');
     const merkle = screen.getByTestId('manifest-verify-check-merkleRootValid').textContent ?? '';
-    expect(merkle).toContain('valid');
-    expect(merkle).not.toContain('invalid');
+    expect(merkle).toContain('not checked');
+    expect(merkle).not.toContain('valid');
+  });
+
+  it('shows the checks the server does not make as not checked', async () => {
+    // RESULT says every check passed, and a failed variant says they failed:
+    // the rows for the server's placeholder checks read the same either way.
+    for (const value of [true, false]) {
+      const answer = {
+        ...RESULT,
+        merkleRootValid: value,
+        hostAttestationValid: value,
+        vmAttestationsValid: value,
+        containerAttestationsValid: value,
+      };
+      stubControlPlane(
+        routes({
+          'POST /api/v1/attestation/manifests/verify': ok({ status: { success: true, message: 'ok' }, result: answer }),
+        }),
+      );
+      render(withControlPlane(<ManifestVerifyButton manifestId="m-1" manifest={MANIFEST} />));
+
+      fireEvent.click(await enabledButton());
+      fireEvent.click(await screen.findByRole('button', { name: 'Verify' }));
+      await screen.findByTestId('manifest-verify-result');
+      for (const [name, label] of [
+        ['merkleRootValid', 'Merkle root'],
+        ['hostAttestationValid', 'Host attestation'],
+        ['vmAttestationsValid', 'VM attestations'],
+        ['containerAttestationsValid', 'Container attestations'],
+      ]) {
+        const row = screen.getByTestId(`manifest-verify-check-${name}`).textContent ?? '';
+        expect(row).toContain(label);
+        expect(row).toContain('not checked');
+        expect(row).not.toContain('valid');
+      }
+      for (const name of ['nonceValid', 'timestampValid']) {
+        const row = screen.getByTestId(`manifest-verify-check-${name}`).textContent ?? '';
+        expect(row).toContain('valid');
+        expect(row).not.toContain('invalid');
+        expect(row).not.toContain('not checked');
+      }
+      cleanup();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('styles the wire VERIFIED status as success', async () => {
+    for (const [status, verified] of [
+      ['MANIFEST_VERIFICATION_STATUS_VERIFIED', 'true'],
+      ['MANIFEST_VERIFICATION_STATUS_FAILED', 'false'],
+    ]) {
+      stubControlPlane(
+        routes({
+          'POST /api/v1/attestation/manifests/verify': ok({
+            status: { success: true, message: 'ok' },
+            result: { ...RESULT, status },
+          }),
+        }),
+      );
+      render(withControlPlane(<ManifestVerifyButton manifestId="m-1" manifest={MANIFEST} />));
+
+      fireEvent.click(await enabledButton());
+      fireEvent.click(await screen.findByRole('button', { name: 'Verify' }));
+      await screen.findByTestId('manifest-verify-result');
+      const badge = screen.getByTestId('manifest-verify-status');
+      expect(badge.textContent).toBe(status);
+      expect(badge.getAttribute('data-verified')).toBe(verified);
+      cleanup();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('withholds the control the server does not offer', async () => {
