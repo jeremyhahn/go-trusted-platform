@@ -191,6 +191,11 @@ type incomingReceiverParams struct {
 	spec         MigrationSpec
 	credsDir     string
 	listen       netip.AddrPort
+	// lifetime is the context the receiving QEMU runs on. The receiver must
+	// outlive the PrepareMigration request that started it (it waits for the
+	// source and then for FinalizeMigration), so it is never that request's
+	// context.
+	lifetime context.Context
 }
 
 // newIncomingReceiver launches a receiving QEMU. It is a package-level seam so
@@ -287,6 +292,7 @@ func (o *QEMUOrchestrator) ReceiveIncoming(ctx context.Context, spec MigrationSp
 		spec:         spec,
 		credsDir:     credsDir,
 		listen:       listen,
+		lifetime:     context.WithoutCancel(ctx),
 	})
 	if err != nil {
 		cleanup()
@@ -414,7 +420,11 @@ func defaultNewIncomingReceiver(ctx context.Context, p *incomingReceiverParams) 
 		return nil, &WrappedError{Msg: "allocate receiver port", Err: err}
 	}
 
-	credsID, err := vm.StartIncoming(ctx, p.credsDir)
+	lifetime := p.lifetime
+	if lifetime == nil {
+		lifetime = context.WithoutCancel(ctx)
+	}
+	credsID, err := vm.StartIncoming(lifetime, p.credsDir)
 	if err != nil {
 		return nil, &WrappedError{Msg: "start receiver QEMU", Err: err}
 	}

@@ -122,6 +122,38 @@ func TestReceiveIncoming_HappyPath(t *testing.T) {
 	assert.Equal(t, netip.MustParseAddrPort(DefaultMigrationListenAddress), gotParams.listen)
 }
 
+// TestReceiveIncoming_ReceiverOutlivesTheRequestContext pins that the
+// receiving QEMU is launched on a context the PrepareMigration request does
+// not cancel: the receiver must stay up until FinalizeMigration.
+func TestReceiveIncoming_ReceiverOutlivesTheRequestContext(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	tlsProv := &fakeServerTLS{dir: t.TempDir()}
+	orch.config.MigrationTLS = tlsProv
+
+	recv := &fakeIncomingReceiver{port: 49200}
+	var gotParams *incomingReceiverParams
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		gotParams = p
+		return recv, nil
+	})
+
+	spec := MigrationSpec{
+		Arch:       orch.config.Arch,
+		InstanceID: "vm1",
+		VMName:     "guest",
+		Mode:       MigrateModeCold,
+		Config:     &InstanceConfig{Memory: 2048, CPUs: 2, DiskSize: "20G"},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	_, err := orch.ReceiveIncoming(ctx, spec)
+	cancel()
+	require.NoError(t, err)
+
+	require.NotNil(t, gotParams)
+	require.NotNil(t, gotParams.lifetime)
+	assert.NoError(t, gotParams.lifetime.Err(), "the receiver QEMU must not die with the PrepareMigration request")
+}
+
 func TestReceiveIncoming_ListensOnTheConfiguredAddress(t *testing.T) {
 	orch := newOpsOrchestrator(t)
 	orch.config.MigrationTLS = &fakeServerTLS{dir: t.TempDir()}
