@@ -1501,7 +1501,8 @@ func (s *SDNService) policyRuleToFlowMod(rule *platformv1.PolicyRule, policyPrio
 // policyRuleFlowMatch maps a policy rule's match to the flow API's match, so
 // the policy path shares the flow codec's encoding. Ports are only matched
 // under tcp or udp; icmp is pinned to IPv4 and icmpv6 to IPv6, so the codec
-// refuses an address of the other family.
+// refuses an address of the other family. Protocol 0 is refused: ip_proto 0
+// means unset in FlowMatch, so it would encode no nw_proto term.
 func policyRuleFlowMatch(match *platformv1.PolicyRuleMatch) (*platformv1.FlowMatch, error) {
 	if match == nil {
 		return nil, nil
@@ -1516,6 +1517,9 @@ func policyRuleFlowMatch(match *platformv1.PolicyRuleMatch) (*platformv1.FlowMat
 		proto, err := strconv.ParseUint(number, 10, 8)
 		if err != nil {
 			return nil, ErrUnencodableFlow{Field: "match.protocol", Reason: fmt.Sprintf("%q is not a known protocol or a protocol number", protocol)}
+		}
+		if proto == 0 {
+			return nil, ErrUnencodableFlow{Field: "match.protocol", Reason: fmt.Sprintf("%q is IP protocol 0, which the flow match cannot tell from no protocol; leave protocol empty to match any protocol", protocol)}
 		}
 		flowMatch.IpProto = uint32(proto)
 		switch proto {
@@ -1557,7 +1561,9 @@ const (
 // policyProtocolNumber returns the IP protocol number nw_proto encodes for
 // a policy rule's protocol: the OpenFlow match takes a number, so a name
 // (tcp, udp, icmp, icmpv6, sctp) is translated; anything else is returned as
-// given, and a value that is not a number fails flow validation.
+// given, and a value that is not a number fails flow validation. A value
+// that parses to 0 is refused by policyRuleFlowMatch, because ip_proto 0
+// means unset in FlowMatch and would encode no nw_proto term.
 func policyProtocolNumber(protocol string) string {
 	switch strings.ToLower(protocol) {
 	case "icmp":
