@@ -1,16 +1,5 @@
 #!/bin/bash
-# Daemon Multi-Protocol Integration Tests
-#
-# This script runs the daemon multi-protocol integration tests.
-# Tests all protocols: REST, gRPC, QUIC, MCP, Unix Socket
-#
-# Usage:
-#   ./run-tests.sh           # Run all tests (default)
-#   ./run-tests.sh rest      # Run REST tests only
-#   ./run-tests.sh grpc      # Run gRPC tests only
-#   ./run-tests.sh quic      # Run QUIC tests only
-#   ./run-tests.sh mcp       # Run MCP tests only
-#   ./run-tests.sh unix      # Run Unix socket tests only
+# Daemon multi-protocol integration tests.
 
 set -e
 

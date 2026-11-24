@@ -1,24 +1,5 @@
 #!/bin/bash
-# Build the aarch64 kernel for the QEMU virt stand-in of the Raspberry Pi
-# factory image. Runs inside the virt-kernel-builder container; see the
-# Makefile beside it for the host-side invocation.
-#
-# Inputs (environment):
-#   KERNEL_VERSION    upstream stable release (Alpine's linux-lts version)
-#   KERNEL_SHA256     sha256 of linux-$KERNEL_VERSION.tar.xz (fail-closed)
-#   KERNEL_CACHE_KEY  the key the caller derived from every build input
-#   KERNEL_LOCALVERSION  appended to the version (Alpine flavour naming)
-#   KERNEL_CONFIG_ONLY  1 stops after the configuration is checked (no
-#                     compile, no output): `make config-check`
-# Baked into the image (the kernelconfig build context):
-#   /build/kernel-config  platform-required.config + require-config.sh, shared
-#                         with the fips kernel builder
-# Baked into the image: /configs/virt.config, the Kconfig fragment.
-# Directories (build/docker/run-builder.sh copies them with docker cp; a bind
-# mount would be resolved on the Docker daemon's filesystem, which is not the
-# checkout when the build runs in a CI job container):
-#   /output    artifacts + manifest.json, copied out when the build succeeds
-#   /build/src tarball cache, a named docker volume
+# Build the aarch64 kernel for the QEMU virt stand-in of the Raspberry Pi factory image.
 set -euo pipefail
 
 : "${KERNEL_VERSION:?KERNEL_VERSION is required}"

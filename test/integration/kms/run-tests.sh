@@ -1,12 +1,5 @@
 #!/bin/bash
-# KMS Integration Tests
-#
-# This script runs the KMS integration tests for QuicBaaS.
-# Tests cover key generation, rotation, encrypt/decrypt,
-# DEK management, and secrets store/retrieve.
-#
-# Usage:
-#   ./run-tests.sh           # Run tests (default)
+# KMS integration tests.
 
 set -e
 

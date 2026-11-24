@@ -1,17 +1,5 @@
 #!/bin/bash
-# SDN/OVS Integration Tests
-#
-# This script sets up Open vSwitch and runs comprehensive SDN integration tests
-# covering network provisioning flows, policy engine integration, and OpenFlow rules.
-#
-# Usage:
-#   ./run-tests.sh           # Run all tests (default)
-#   ./run-tests.sh setup     # Just setup OVS
-#   ./run-tests.sh teardown  # Just teardown OVS
-#   ./run-tests.sh provision # Run network provisioning tests
-#   ./run-tests.sh policy    # Run policy engine tests
-#   ./run-tests.sh bridge    # Run bridge/port management tests
-#   ./run-tests.sh flows     # Run OpenFlow rules tests
+# SDN and OVS integration tests.
 
 set -e
 

@@ -1,40 +1,5 @@
 #!/bin/bash
-# Integration test runner for go-trusted-platform devcontainer.
-#
-# This script sets up the complete test environment (OVS, swtpm, platformd)
-# and runs integration test packages.
-#
-# Usage:
-#   run-integration-tests.sh [TARGET] [BUILD_TAGS]
-#
-# Arguments:
-#   TARGET     - Optional target keyword selecting which package(s) to run.
-#                Known targets: the keys of TARGET_PACKAGES below. `all`
-#                runs the suites in ALL_TARGETS on one shared platformd; every
-#                other key runs one suite. `leg-<n>` runs leg n of
-#                INTEGRATION_LEGS the way `all` runs everything, and `legs`
-#                prints the legs and exits.
-#                If the first argument is not a known target, it is treated
-#                as BUILD_TAGS (backward-compatible with the prior 1-arg form).
-#                Default: all
-#   BUILD_TAGS - Space-separated list of build tags. make passes its derived
-#                list; when absent the script derives it the same way
-#                (`make -s print-build-tags` plus integration)
-#
-# Environment:
-#   HOST_UID / HOST_GID - the invoking user on the host. Anything the run
-#                creates in the bind-mounted source tree is handed back to them
-#                on exit; see restore_workspace_ownership. Optional: the mount
-#                point's own ownership is used when they are unset.
-#
-# Examples:
-#   run-integration-tests.sh
-#   run-integration-tests.sh all
-#   run-integration-tests.sh leg-2
-#   run-integration-tests.sh legs
-#   run-integration-tests.sh ceremony
-#   run-integration-tests.sh luks "integration $(make -s print-build-tags)"
-#   run-integration-tests.sh "integration $(make -s print-build-tags)"  # legacy form
+# Integration test runner for the go-trusted-platform devcontainer.
 
 set -uo pipefail
 

@@ -1,26 +1,5 @@
 #!/usr/bin/env bash
 # Runs a builder container without a single host bind mount.
-#
-# A bind mount is resolved by the Docker daemon on ITS filesystem. When the
-# build runs inside a CI job container (the daemon is the host's, the checkout
-# is in the job's own filesystem) the source path does not exist on the daemon:
-# inputs arrive empty and outputs never reach the checkout. This script moves
-# data with `docker cp` instead, which streams through the client and so works
-# the same on a developer host, in a job container and against a remote daemon.
-#
-#   run-builder.sh [-i HOST:CTR]... [-o CTR:HOST]... -- <docker create args>
-#
-#   -i HOST:CTR   copy the directory HOST into the container at CTR before it
-#                 starts, or the file HOST to the path CTR (created if absent)
-#   -o CTR:HOST   copy the directory CTR out to HOST after the container
-#                 exited successfully; HOST is created if needed
-#
-# Everything after `--` is passed to `docker create` unchanged: environment
-# (-e), named volumes for caches (-v NAME:/path, never a host path), --user,
-# --platform, the image and the command. DOCKER overrides the runtime.
-#
-# The container is always removed, with its anonymous volumes. A failing build
-# copies nothing out.
 set -euo pipefail
 
 docker="${DOCKER:-docker}"

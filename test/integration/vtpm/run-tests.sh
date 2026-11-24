@@ -1,12 +1,5 @@
 #!/bin/bash
-# vTPM E2E Integration Test
-#
-# Tests full platform provisioning with vTPM:
-# 1. Build platformd binary
-# 2. Build custom ISO with platform config
-# 3. Install system in QEMU with vTPM
-# 4. Boot and verify platformd starts successfully
-#
+# vTPM end-to-end integration test.
 set -e
 
 WORKSPACE="${WORKSPACE:-/workspace}"

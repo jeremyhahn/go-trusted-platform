@@ -1,10 +1,5 @@
 #!/bin/bash
-# CA QuicBaaS Adapters Integration Tests
-#
-# This script runs the CA QuicBaaS adapter integration tests.
-#
-# Usage:
-#   ./run-tests.sh           # Run tests (default)
+# CA QuicBaaS adapters integration tests.
 
 set -e
 

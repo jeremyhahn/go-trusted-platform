@@ -1,23 +1,5 @@
 # shellcheck shell=sh disable=SC2034 # read by make and sourced; no use here
-# Tool pins for the devcontainer image (handbook devcontainer.md §2). The
-# Makefile `include`s this file and `make docker-build` passes each value to
-# build/docker/devcontainer/Dockerfile as a build argument, so the toolchain
-# image and the CI that runs in it use the same versions.
-#
-# Format: plain KEY=value lines, no spaces, no quotes, so that both make and sh
-# read them identically. Sourced, never executed.
-#
-# golangci-lint, actionlint, gosec and swag are NOT pinned here: each is built
-# from its own tools module under build/tools-src/, whose go.mod is the one
-# place its version lives (the Makefile reads it with tools-module-version). The
-# toolchain image downloads those modules, so `make lint` and `make gosec`
-# build them offline from the same pins. swag is the OpenAPI generator `make
-# build-public-html` runs in the integration image; its module raises swag's
-# stale dependencies to patched versions, which `go install swag@version`
-# cannot (#933).
-#
-# Every download carries its SHA-256. The `go install` tools need none: the Go
-# checksum database verifies the module they are built from.
+# Tool pins for the devcontainer image.
 
 # The Go toolchain: the version go.mod names, on Debian bookworm (glibc). The
 # integration suite needs Debian's swtpm, Open vSwitch, qemu and tpm2-tss

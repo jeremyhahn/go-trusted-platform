@@ -1,28 +1,5 @@
 #!/bin/bash
-# require-config.sh - fail when a kernel .config does not carry a fragment.
-#
-#   require-config.sh [--enabled] CONFIG FRAGMENT...
-#
-# Every requirement line of every FRAGMENT is checked against CONFIG (a
-# kernel .config):
-#
-#   CONFIG_X=<value>          CONFIG must contain exactly that line. After
-#                             merge_config.sh + olddefconfig, a missing or
-#                             changed line means Kconfig dropped or demoted
-#                             the option, almost always an unmet dependency.
-#   # CONFIG_X is not set     CONFIG must not enable CONFIG_X.
-#
-# Any other line starting with '#', and blank lines, are comments.
-#
-# --enabled relaxes CONFIG_X=y and CONFIG_X=m to "enabled, built in or as a
-# module". It is for kernels the platform ships but does not build (Alpine's
-# linux-lts and linux-rpi), where module-versus-built-in is the distribution's
-# choice and only presence matters. Other values stay exact.
-#
-# Every miss is reported, one line each, before the script exits 3; a usage
-# error or an unreadable file exits 2; a CONFIG meeting every requirement
-# exits 0. The builders call it after `make olddefconfig`
-# (build/docker/{fips,virt}-kernel-builder), so the exit code is the build's.
+# require-config.sh: fail when a kernel .config does not carry a fragment.
 set -euo pipefail
 
 usage() {

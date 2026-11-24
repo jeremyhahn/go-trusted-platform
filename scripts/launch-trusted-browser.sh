@@ -2,53 +2,7 @@
 # Copyright (c) 2025 Jeremy Hahn
 # Copyright (c) 2025 Automate The Things, LLC
 #
-# launch-trusted-browser.sh — fetch the trusted-platform control-plane
-# CA bundle, install it into xkey + the OS trust store + the chosen
-# browser's trust store, then launch that browser at the platformd
-# WebUI with a fully-trusted TLS connection.
-#
-# Supported browsers: chrome (Chromium-family, NSS DB) and firefox
-# (per-profile cert9.db). Defaults to chrome.
-#
-# This script is the single user-facing entry point for "I want a
-# browser pointed at the trusted-platform UI that won't show a TLS
-# warning". It MUST work end-to-end on a fresh workstation with no
-# prior trust state.
-#
-# Usage:
-#   scripts/launch-trusted-browser.sh --cp-host cp.example.com
-#   scripts/launch-trusted-browser.sh --cp-host 192.0.2.10 --browser firefox
-#   scripts/launch-trusted-browser.sh --cp-host cp.example.com --url https://cp.example.com:8443/auth/webauthn
-#   scripts/launch-trusted-browser.sh --cp-host cp.example.com --no-launch      # only set up trust
-#   scripts/launch-trusted-browser.sh --cp-host cp.example.com --skip-os-trust  # skip sudo step
-#
-# --cp-host (or TRUSTED_PLATFORM_CP) is required: the control plane is the
-# deployment's, so the script has no default host to fall back to.
-#
-# Trust is installed in three layers:
-#
-#   1. xkey trust store — the platform's own trust registry. Records
-#      the bundle with purpose "bootstrap-ca" and source path so xkey
-#      knows where the anchor came from.
-#
-#   2. OS system trust store — /usr/local/share/ca-certificates/ +
-#      update-ca-certificates. Makes curl, wget, Java, Firefox-on-
-#      OS-trust-mode, and any other tool that consumes the system
-#      bundle accept the CA.
-#
-#   3. Browser-specific trust store — Chrome's NSS DB at
-#      ~/.pki/nssdb (via certutil) OR each Firefox profile's
-#      cert9.db. Chromium-family browsers (Chrome, Brave, Edge on
-#      Linux, etc.) all share the NSS DB. Firefox does NOT consult
-#      the OS trust store on Linux; it only trusts what's in its
-#      per-profile NSS DB, so the script writes to every profile it
-#      finds under ~/.mozilla/firefox/.
-#
-# The browser-launch step uses a dedicated user-data-dir for Chrome
-# (so an already-running Chrome's NSS lock doesn't block the cert
-# import) and waits to confirm the trust write succeeded. Firefox
-# profiles must NOT be running while certutil writes; the script
-# offers to terminate the running browser process first.
+# launch-trusted-browser.sh: install the platform control-plane CA bundle into xkey, the OS and a browser, then open the platformd WebUI.
 
 set -euo pipefail
 

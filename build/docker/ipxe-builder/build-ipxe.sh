@@ -1,19 +1,5 @@
 #!/bin/bash
-# Build the Trusted Platform iPXE binaries. Runs inside the ipxe-builder
-# container; see the Makefile beside it for the host-side invocation.
-#
-# Inputs (environment):
-#   IPXE_VERSION    upstream release tag without the v, e.g. 2.0.0
-#   IPXE_SHA256     sha256 of the release tarball (fail-closed)
-#   IPXE_TARGETS    space-separated build targets, e.g. bin-arm64-efi/snponly.efi
-#   IPXE_CACHE_KEY  the key the caller derived from every build input,
-#                   recorded in the manifest
-# Directories (build/docker/run-builder.sh copies them with docker cp; a bind
-# mount would be resolved on the Docker daemon's filesystem, which is not the
-# checkout when the build runs in a CI job container):
-#   /configs    iPXE config/local/*.h overrides, copied in
-#   /output     artifacts + manifest.json, copied out when the build succeeds
-#   /build/src  tarball cache, a named docker volume
+# Build the Trusted Platform iPXE binaries.
 set -euo pipefail
 : "${IPXE_VERSION:?IPXE_VERSION is required}"
 : "${IPXE_SHA256:?IPXE_SHA256 is required}"

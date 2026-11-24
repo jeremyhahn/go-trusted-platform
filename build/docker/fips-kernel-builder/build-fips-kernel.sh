@@ -1,41 +1,5 @@
 #!/bin/bash
-# build-fips-kernel.sh - Build FIPS-capable Linux kernel
-#
-# Module-signing key (CONFIG_MODULE_SIG_KEY):
-#   Production builds MUST set MODULE_SIGNING_KEY to the stable platform
-#   module-signing key — a single PEM bundle (PKCS#8 private key followed by a
-#   self-signed certificate) generated ONCE per platform with:
-#
-#       platformctl iso module-signing-key
-#       # default output: ~/.trusted-platform/secure-boot/module-signing-key.pem
-#
-#   (or `make module-key` in this directory). The Makefile mounts the key
-#   read-only into the container and points MODULE_SIGNING_KEY at it:
-#
-#       make build MODULE_SIGNING_KEY=~/.trusted-platform/secure-boot/module-signing-key.pem
-#
-#   The certificate is embedded in the kernel's .builtin_trusted_keys, so the
-#   SAME key signs every in-tree module (CONFIG_MODULE_SIG_ALL) at build time
-#   and every out-of-tree module signed later with pkg/modulesign. The key
-#   material never enters the repository, the build context, or an image layer.
-#   Back the key up: regenerating it orphans every module signed with the old
-#   key on already-built kernels. See docs/firmware/secure-boot.md.
-#
-#   When MODULE_SIGNING_KEY is unset the kernel auto-generates a per-build
-#   ephemeral key — DEV BUILDS ONLY (out-of-tree signing is impossible because
-#   the ephemeral private key is discarded with the build tree).
-#
-# Required options:
-#   The options every platform kernel carries (the overlay datapath, IPsec,
-#   conntrack/NAT, VRFs, vsock, MODULE_SIG_FORCE, the lockdown LSM, IMA
-#   appraisal, core scheduling, CRYPTO_FIPS and the DRBG) are one shared
-#   fragment, /build/kernel-config/platform-required.config, baked into the
-#   image from build/docker/kernel-config (the kernelconfig build context). It
-#   is merged on top of the settings below and require-config.sh fails the
-#   build if olddefconfig dropped or changed any of its lines.
-#
-#   KERNEL_CONFIG_ONLY=1 stops after that check (no compile, no output):
-#   `make config-check`.
+# build-fips-kernel.sh: build a FIPS-capable Linux kernel.
 set -euo pipefail
 
 # Configuration from environment or defaults

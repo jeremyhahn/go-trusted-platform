@@ -1,7 +1,4 @@
-# Defaults for the BOOTSTRAP_* env vars and the optional pxeboot flags,
-# sourced by entrypoint.sh (variables documented there). It only sets
-# variables, so a unit test can source it and read BOOTSTRAP_PXEBOOT_ARGS.
-# An invalid setting exits 2.
+# Defaults for the BOOTSTRAP_* env vars and the optional pxeboot flags, sourced by entrypoint.sh.
 
 : "${BOOTSTRAP_INTERFACE:=eth0}"
 : "${BOOTSTRAP_HTTP_PORT:=8080}"

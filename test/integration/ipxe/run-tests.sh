@@ -1,19 +1,5 @@
 #!/bin/bash
-# iPXE/PXE Integration Tests
-#
-# This script runs the iPXE/PXE integration tests covering DHCP, TFTP,
-# HTTP boot scripts, and multi-protocol server functionality.
-#
-# Usage:
-#   ./run-tests.sh           # Run all tests (default)
-#   ./run-tests.sh dhcp      # Run DHCP protocol tests
-#   ./run-tests.sh tftp      # Run TFTP protocol tests
-#   ./run-tests.sh http      # Run HTTP boot script tests
-#   ./run-tests.sh multi     # Run the TestIPXE* boot-flow tests
-#
-# all, dhcp and multi set IPXE_DHCP_ENABLED=1, as the shared runner's
-# TARGET_ENV does for ipxe and ipxe-dhcp: TestMain then starts the DHCP
-# server the DHCP tests and TestIPXEDHCPToHTTPChain need.
+# iPXE and PXE integration tests.
 
 set -e
 

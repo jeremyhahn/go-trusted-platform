@@ -1,17 +1,5 @@
 #!/bin/bash
-# Tenant Multi-Protocol Integration Tests
-#
-# This script runs the tenant multi-protocol integration tests.
-# Tests all protocols: CLI, REST, gRPC, QUIC, MCP, Unix Socket
-#
-# Usage:
-#   ./run-tests.sh           # Run all tests (default)
-#   ./run-tests.sh cli       # Run CLI tests only
-#   ./run-tests.sh rest      # Run REST tests only
-#   ./run-tests.sh grpc      # Run gRPC tests only
-#   ./run-tests.sh quic      # Run QUIC tests only
-#   ./run-tests.sh mcp       # Run MCP tests only
-#   ./run-tests.sh unix      # Run Unix socket tests only
+# Tenant multi-protocol integration tests.
 
 set -e
 
