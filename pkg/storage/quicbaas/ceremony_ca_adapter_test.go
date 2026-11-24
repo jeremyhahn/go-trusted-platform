@@ -214,32 +214,37 @@ func TestCeremonyCAAdapter_SignCSRRejectsMalformedCSR(t *testing.T) {
 // in the test environment.
 func newSoftwareCeremonyCA(t *testing.T) xkmssdk.TrustedCA {
 	t.Helper()
+	pkcs8, err := xkmssdk.NewPKCS8Backend(&xkmssdk.PKCS8BackendConfig{
+		KeyStorage:         xkmssdk.NewStorageMemory(),
+		AllowPlaintextKeys: true,
+	})
+	require.NoError(t, err)
+	backend, err := xkmssdk.NewServiceBackend(&xkmssdk.ServiceBackendConfig{
+		Backend:     pkcs8,
+		CertStorage: xkmssdk.NewStorageMemory(),
+	})
+	require.NoError(t, err)
 	root, _, err := xkmsca.NewCA(context.Background(), &xkmsca.Params{
 		Identity: []xkmsca.CAIdentity{{
 			Subject: xkmsca.CASubject{CommonName: "ceremony-test-root", Organization: "Test Org", Country: "US"},
 			Valid:   1,
 			Keys: []*xkmssdk.KeyConfig{{
+				StoreType:          xkmssdk.StoreSoftware,
 				KeyAlgorithm:       "RSA",
 				Hash:               "SHA-256",
 				SignatureAlgorithm: "SHA256-RSAPSS",
 				RSAConfig:          &xkmssdk.KeyRSAConfig{KeySize: 2048},
 			}},
-			KeystoreType: xkmssdk.StoreSoftware,
-			IsRoot:       true,
+			IsRoot: true,
 		}},
 		KeyStoreFactory: func(string) (xkmsbackend.Backend, error) {
-			pkcs8, err := xkmssdk.NewPKCS8Backend(&xkmssdk.PKCS8BackendConfig{
-				KeyStorage:         xkmssdk.NewStorageMemory(),
-				AllowPlaintextKeys: true,
-			})
-			if err != nil {
-				return nil, err
-			}
-			return xkmssdk.NewServiceBackend(&xkmssdk.ServiceBackendConfig{
-				Backend:     pkcs8,
-				CertStorage: xkmssdk.NewStorageMemory(),
-			})
+			return backend, nil
 		},
+		// CA signing keys of every store type use the same software backend.
+		BackendForStore: func(string, xkmssdk.StoreType) (xkmsbackend.Backend, error) {
+			return backend, nil
+		},
+		RevocationStore: xkmssdk.NewStorageMemory(),
 		CertStoreFactory: func(string) (xkmscertstore.CertStore, error) {
 			return xkmssdk.NewCertStore(&xkmssdk.CertStoreConfig{
 				CertStorage: xkmssdk.NewStorageCertAdapter(xkmssdk.NewStorageMemory()),

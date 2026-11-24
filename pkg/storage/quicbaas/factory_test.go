@@ -683,6 +683,8 @@ func TestFactory_SDKClient_Creation(t *testing.T) {
 // platform SDK client exposes is served by the embedded factory.
 func TestFactory_SDKClient_AllServiceAccessors(t *testing.T) {
 	client := newFactorySDKClient(t, MemoryTestConfig(t))
+	sealStore, err := client.Seal()
+	require.NoError(t, err)
 
 	accessors := map[string]any{
 		"KV":                 client.KV(),
@@ -694,7 +696,7 @@ func TestFactory_SDKClient_AllServiceAccessors(t *testing.T) {
 		"Operations":         client.Operations(),
 		"Cache":              client.Cache(),
 		"Auth":               client.Auth(),
-		"Seal":               client.Seal(),
+		"Seal":               sealStore,
 		"KMS":                client.KMS(),
 		"Secrets":            client.Secrets(),
 		"Crypto":             client.Crypto(),
