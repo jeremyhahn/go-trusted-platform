@@ -134,10 +134,11 @@ type ceremonyProbe struct {
 var ceremonyProbes = []ceremonyProbe{
 	{
 		name: "init", scope: scopeInitialize, verb: http.MethodPost, path: "/api/v1/ceremony/init",
-		body: `{"soPin":"1234","userPin":"5678","threshold":"3-of-5","hostname":"ca.example","sans":["ca.example"],"credentialSealStrategy":"tpm"}`,
+		body: `{"soPin":"1234","userPin":"5678","threshold":"3-of-5","hostname":"ca.example","sans":["ca.example"],"credentialSealStrategy":"tpm","officers":[{"username":"alice","csrPem":"CSR-A"},{"username":"bob","csrPem":"CSR-B"}]}`,
 		want: &platformv1.CeremonyInitRequest{
 			SoPin: "1234", UserPin: "5678", Threshold: "3-of-5", Hostname: "ca.example",
 			Sans: []string{"ca.example"}, CredentialSealStrategy: "tpm",
+			Officers: []*platformv1.CeremonyInitOfficer{{Username: "alice", CsrPem: "CSR-A"}, {Username: "bob", CsrPem: "CSR-B"}},
 		},
 		wantKey: "adminKeyPem",
 	},
