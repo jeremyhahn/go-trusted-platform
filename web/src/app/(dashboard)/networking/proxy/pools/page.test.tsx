@@ -93,6 +93,16 @@ function type(label: string, value: string) {
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
 }
 
+// The pool dialog's fields render after it opens (an edit also waits on
+// GET /api/v1/proxy/pools/{id}); a slow runner takes longer than the default
+// 1000 ms, so wait for the dialog and the field before typing or reading.
+const SLOW = { timeout: 5000 };
+
+async function dialogField(label: string) {
+  const dialog = await screen.findByRole('dialog', {}, SLOW);
+  return within(dialog).findByLabelText(label, {}, SLOW);
+}
+
 function count(sent: { method: string; path: string }[], method: string, path: string) {
   return sent.filter((r) => r.method === method && r.path === path).length;
 }
@@ -125,6 +135,7 @@ describe('ProxyPoolsPage', () => {
     await renderPage();
 
     await click('New pool');
+    await dialogField('Backends');
     type('Pool ID', 'p2');
     type('Backends', 'https://192.0.2.20:8443 3\n\nhttps://192.0.2.21:8443');
     await click('Save');
@@ -138,7 +149,7 @@ describe('ProxyPoolsPage', () => {
       },
     });
     await waitFor(() => expect(count(sent, 'GET', '/api/v1/proxy/pools')).toBe(2));
-  });
+  }, 15000);
 
   it('edits a pool and keeps its tls', async () => {
     const sent = stubControlPlane({
@@ -156,9 +167,10 @@ describe('ProxyPoolsPage', () => {
     await renderPage();
 
     await click('Edit p1');
-    await waitFor(() =>
-      expect((screen.getByLabelText('Backends') as HTMLTextAreaElement).value).toBe('https://192.0.2.10:8443 2'),
-      { timeout: 5000 }
+    await dialogField('Backends');
+    await waitFor(
+      () => expect((screen.getByLabelText('Backends') as HTMLTextAreaElement).value).toBe('https://192.0.2.10:8443 2'),
+      SLOW
     );
     type('Balancer', 'round-robin');
     await click('Save');
@@ -173,7 +185,7 @@ describe('ProxyPoolsPage', () => {
         tls: { trustClass: 'internal' },
       },
     });
-  });
+  }, 15000);
 
   it('deletes a pool only after the confirm', async () => {
     const sent = stubControlPlane({
@@ -206,6 +218,7 @@ describe('ProxyPoolsPage', () => {
     await renderPage();
 
     await click('New pool');
+    await dialogField('Backends');
     type('Pool ID', 'p2');
     type('Backends', 'https://192.0.2.20:8443');
     await click('Save');
@@ -215,7 +228,7 @@ describe('ProxyPoolsPage', () => {
       expect(toast?.getAttribute('data-variant')).toBe('destructive');
     });
     expect(screen.getByText('New pool', { selector: 'h2' })).toBeTruthy();
-  });
+  }, 15000);
 
   it('shows a refused list', async () => {
     stubControlPlane({
@@ -240,12 +253,14 @@ describe('ProxyPoolsPage', () => {
     });
     await renderPage();
 
-    for (const name of ['New pool', 'Edit p1', 'Delete p1']) {
-      const button = screen.getByRole('button', { name }) as HTMLButtonElement;
-      expect(button.disabled).toBe(true);
-      expect(button.getAttribute('data-capability-enabled')).toBe('false');
-      expect(button.getAttribute('title')).toBe('not-configured: proxy');
-    }
+    await waitFor(() => {
+      for (const name of ['New pool', 'Edit p1', 'Delete p1']) {
+        const button = screen.getByRole('button', { name }) as HTMLButtonElement;
+        expect(button.disabled).toBe(true);
+        expect(button.getAttribute('data-capability-enabled')).toBe('false');
+        expect(button.getAttribute('title')).toBe('not-configured: proxy');
+      }
+    });
   });
 
   it('makes no proxy read when the server does not offer them', async () => {
