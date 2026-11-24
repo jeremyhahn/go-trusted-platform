@@ -53,7 +53,12 @@ func (h *Handlers) ListTenants(w http.ResponseWriter, r *http.Request) {
 	if !h.ensure(w, r) {
 		return
 	}
-	resp, err := h.server.ListTenants(r.Context(), &platformv1.ListTenantsRequest{})
+	req, err := listRequest(r.URL.Query())
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	resp, err := h.server.ListTenants(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return
