@@ -27,7 +27,7 @@ const specs: Record<string, string[]> = {
 for (const [name, extra] of Object.entries(specs)) {
   const body = fs.readFileSync(path.join(import.meta.dirname, name), 'utf8');
   assert.ok(body.includes("from './fixtures/wire'"), `${name} imports from './fixtures/wire'`);
-  assert.ok(body.includes('unwrapPayload('), `${name} reads raw answers through unwrapPayload`);
+  assert.ok(/unwrapPayload(<[^>]*>)?\(/.test(body), `${name} reads raw answers through unwrapPayload`);
   for (const raw of RAW_READS) {
     assert.ok(!body.includes(raw), `${name} reads no resource from the raw envelope (${raw})`);
   }
