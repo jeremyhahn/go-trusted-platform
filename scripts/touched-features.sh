@@ -12,7 +12,8 @@
 #   - nothing when only docs changed (*.md anywhere, anything under docs/);
 #   - ALL for a shared change, a test directory in no feature, a failure to
 #     read the table or the packages (fail closed), or when every feature is
-#     touched: run `make integration-test`. ALL is followed by the table's
+#     touched, or a change to the runner's freeport command, which every
+#     suite runs to pick its ports: run `make integration-test`. ALL is followed by the table's
 #     features outside the runner's ALL_TARGETS, sorted: run
 #     `make integration-test-<feature>` for each of those too;
 #   - otherwise the touched features, sorted, one per line: the features
@@ -110,12 +111,13 @@ mark() {
 
 # The diff is read into a variable first: a failed git diff (an unknown
 # <base>) is a failure to read the changes, which fails closed.
-diff=$(git diff --name-only "$base" "$tip") || all
+diff=$(git diff --no-renames --name-only "$base" "$tip") || all
 declare -A dirs=()
 while IFS= read -r path; do
 	[ -n "$path" ] || continue
 	case $path in
 	*.md | docs/*) continue ;;
+	test/integration/helpers/freeport/*) all ;;
 	test/integration/*) ;;
 	*) all ;;
 	esac

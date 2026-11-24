@@ -11,7 +11,8 @@
 # directory above it (testdata, fixtures); one with no owning package (the
 # Makefile, scripts, workflows, web/) prints `./...`. A go.mod or go.sum
 # change, or a failure to read the diff or list the packages (fail closed),
-# prints `./...`. A docs-only range (*.md, docs/) prints nothing.
+# prints `./...`. A docs-only range (*.md, docs/) prints nothing. A rename
+# counts as a deletion of its source plus an addition of its destination.
 #
 # Run it from a checkout of <tip>.
 #
@@ -41,7 +42,7 @@ own_module() {
 
 # The diff is read into a variable first: a failed git diff (an unknown
 # <base>) is a failure to list the changes, which fails closed.
-diff=$(git diff --name-only "$base" "$tip") || everything
+diff=$(git diff --no-renames --name-only "$base" "$tip") || everything
 
 # changed: directories with a changed .go file. others: every other changed
 # input of a package (an embedded file, testdata, a fixture), mapped to its
