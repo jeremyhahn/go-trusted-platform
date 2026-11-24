@@ -232,32 +232,16 @@ type TPM2DeleteSRKRequest struct {
 // TPM2MakeCredentialRequest represents a TPM2_MakeCredential request. When
 // EKCert and IAKPub are both present the verifier path is used; otherwise
 // the local EK is used together with AKName.
-type TPM2MakeCredentialRequest struct {
-	AKName []byte `codec:"ak_name"`
-	Secret []byte `codec:"secret"`
-	EKCert []byte `codec:"ek_cert"`
-	IAKPub []byte `codec:"iak_pub"`
-}
+type TPM2MakeCredentialRequest = quicwire.TPM2MakeCredentialRequest
 
 // TPM2MakeCredentialResponse represents a TPM2_MakeCredential response.
-type TPM2MakeCredentialResponse struct {
-	CredentialBlob  []byte `codec:"credential_blob"`
-	EncryptedSecret []byte `codec:"encrypted_secret"`
-	Secret          []byte `codec:"secret"`
-	Timestamp       int64  `codec:"timestamp"`
-}
+type TPM2MakeCredentialResponse = quicwire.TPM2MakeCredentialResponse
 
 // TPM2ActivateCredentialRequest represents a TPM2_ActivateCredential request.
-type TPM2ActivateCredentialRequest struct {
-	CredentialBlob  []byte `codec:"credential_blob"`
-	EncryptedSecret []byte `codec:"encrypted_secret"`
-}
+type TPM2ActivateCredentialRequest = quicwire.TPM2ActivateCredentialRequest
 
 // TPM2ActivateCredentialResponse represents a TPM2_ActivateCredential response.
-type TPM2ActivateCredentialResponse struct {
-	Secret    []byte `codec:"secret"`
-	Timestamp int64  `codec:"timestamp"`
-}
+type TPM2ActivateCredentialResponse = quicwire.TPM2ActivateCredentialResponse
 
 // TPM2ImportEKCertRequest represents an EK certificate import request.
 type TPM2ImportEKCertRequest struct {
@@ -290,15 +274,10 @@ type TPM2ExtendPCRRequest = quicwire.TPM2ExtendPCRRequest
 type TPM2EventLogResponse = quicwire.TPM2EventLogResponse
 
 // TPM2RandomRequest represents a random bytes request.
-type TPM2RandomRequest struct {
-	NumBytes uint32 `codec:"num_bytes"`
-}
+type TPM2RandomRequest = quicwire.TPM2RandomRequest
 
 // TPM2RandomResponse represents a random bytes response.
-type TPM2RandomResponse struct {
-	RandomBytes []byte `codec:"random_bytes"`
-	Timestamp   int64  `codec:"timestamp"`
-}
+type TPM2RandomResponse = quicwire.TPM2RandomResponse
 
 // TPM2SealRequest represents a TPM seal request.
 type TPM2SealRequest struct {
