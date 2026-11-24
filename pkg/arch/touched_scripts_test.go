@@ -22,12 +22,14 @@ declare -A TARGET_PACKAGES=(
     [all]=""
     [alpha]="./test/integration/alpha/..."
     [beta]="./test/integration/beta/..."
+    [helpers]="./test/integration/helpers/..."
     [root]="./test/integration"
 )
 
 # beta runs through its own make target only.
 ALL_TARGETS=(
     alpha # the first suite
+    helpers
     root
 )
 
@@ -42,33 +44,38 @@ declare -A LATER=(
 var touchedBase = map[string]string{
 	"go.mod": "module example.com/m\n\ngo 1.21\n",
 	"build/docker/devcontainer/run-integration-tests.sh": touchedRunner,
-	"Makefile":                             "print-build-tags:\n\t@echo\n",
-	"README.md":                            "# m\n",
-	"docs/guide.txt":                       "guide\n",
-	".github/workflows/ci.yml":             "name: ci\n",
-	"test/integration/root_test.go":        "package integration\n\nimport \"testing\"\n\nfunc TestRoot(t *testing.T) {}\n",
-	"test/integration/alpha/alpha.go":      "package alpha\n\nfunc A() int { return 1 }\n",
-	"test/integration/alpha/alpha_test.go": "package alpha\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) { _ = A() }\n",
-	"test/integration/beta/beta.go":        "package beta\n\nfunc B() int { return 1 }\n",
-	"test/integration/beta/beta_test.go":   "package beta\n\nimport \"testing\"\n\nfunc TestB(t *testing.T) { _ = B() }\n",
-	"pkg/a/a.go":                           "package a\n\nfunc A() int { return 1 }\n",
-	"pkg/b/b.go":                           "package b\n\nimport \"example.com/m/pkg/a\"\n\nfunc B() int { return a.A() }\n",
-	"pkg/a/testdata/in.txt":                "in\n",
-	"pkg/c/c.go":                           "package c\n\nimport _ \"embed\"\n\n//go:embed policies/p.rego\nvar P string\n",
-	"pkg/c/policies/p.rego":                "package p\n",
-	"web/src/app.ts":                       "export {}\n",
+	"Makefile":                                  "print-build-tags:\n\t@echo\n",
+	"README.md":                                 "# m\n",
+	"docs/guide.txt":                            "guide\n",
+	".github/workflows/ci.yml":                  "name: ci\n",
+	"test/integration/root_test.go":             "package integration\n\nimport \"testing\"\n\nfunc TestRoot(t *testing.T) {}\n",
+	"test/integration/alpha/alpha.go":           "package alpha\n\nfunc A() int { return 1 }\n",
+	"test/integration/alpha/alpha_test.go":      "package alpha\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) { _ = A() }\n",
+	"test/integration/beta/beta.go":             "package beta\n\nfunc B() int { return 1 }\n",
+	"test/integration/beta/beta_test.go":        "package beta\n\nimport \"testing\"\n\nfunc TestB(t *testing.T) { _ = B() }\n",
+	"test/integration/beta/beta_extra.go":       "package beta\n\nfunc C() int { return 1 }\n",
+	"test/integration/helpers/h.go":             "package helpers\n\nfunc H() int { return 1 }\n",
+	"test/integration/helpers/freeport/main.go": "package main\n\nfunc main() {}\n",
+	"pkg/a/a.go":                                "package a\n\nfunc A() int { return 1 }\n",
+	"pkg/a/extra.go":                            "package a\n\nfunc X() int { return 1 }\n",
+	"pkg/b/b.go":                                "package b\n\nimport \"example.com/m/pkg/a\"\n\nfunc B() int { return a.A() }\n",
+	"pkg/a/testdata/in.txt":                     "in\n",
+	"pkg/c/c.go":                                "package c\n\nimport _ \"embed\"\n\n//go:embed policies/p.rego\nvar P string\n",
+	"pkg/c/policies/p.rego":                     "package p\n",
+	"web/src/app.ts":                            "export {}\n",
 }
 
 type touchedCase struct {
-	name  string
-	files map[string]string
-	base  string // the <base> argument; empty means HEAD^
-	want  []string
+	name   string
+	files  map[string]string
+	remove []string // paths deleted in the same commit
+	base   string   // the <base> argument; empty means HEAD^
+	want   []string
 }
 
 // touchedRepo builds the base repository in a temporary directory and
 // returns it with a function that commits one case's files on top of HEAD.
-func touchedRepo(t *testing.T) (string, func(map[string]string)) {
+func touchedRepo(t *testing.T) (string, func(map[string]string, []string)) {
 	t.Helper()
 	for _, tool := range []string{"git", "go", "make"} {
 		if _, err := exec.LookPath(tool); err != nil {
@@ -86,8 +93,13 @@ func touchedRepo(t *testing.T) (string, func(map[string]string)) {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
-	commit := func(files map[string]string) {
+	commit := func(files map[string]string, remove []string) {
 		t.Helper()
+		for _, name := range remove {
+			if err := os.Remove(filepath.Join(dir, filepath.FromSlash(name))); err != nil {
+				t.Fatal(err)
+			}
+		}
 		for name, body := range files {
 			path := filepath.Join(dir, filepath.FromSlash(name))
 			if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
@@ -101,7 +113,7 @@ func touchedRepo(t *testing.T) (string, func(map[string]string)) {
 		git("commit", "-q", "-m", "case")
 	}
 	git("init", "-q")
-	commit(touchedBase)
+	commit(touchedBase, nil)
 	return dir, commit
 }
 
@@ -133,7 +145,7 @@ func runTouched(t *testing.T, dir, name, base string) []string {
 func runTouchedCases(t *testing.T, script string, cases []touchedCase) {
 	dir, commit := touchedRepo(t)
 	for _, c := range cases {
-		commit(c.files)
+		commit(c.files, c.remove)
 		base := c.base
 		if base == "" {
 			base = "HEAD^"
@@ -163,7 +175,11 @@ func TestTouchedFeatures(t *testing.T) {
 		{name: "every feature touched", files: map[string]string{
 			"test/integration/alpha/alpha.go": "package alpha\n\nfunc A() int { return 4 }\n",
 			"test/integration/beta/beta.go":   "package beta\n\nfunc B() int { return 3 }\n",
+			"test/integration/helpers/h.go":   "package helpers\n\nfunc H() int { return 2 }\n",
 		}, want: []string{"ALL", "beta"}},
+		{name: "a helpers change", files: map[string]string{"test/integration/helpers/h.go": "package helpers\n\nfunc H() int { return 3 }\n"}, want: []string{"helpers"}},
+		{name: "the runner's freeport command", files: map[string]string{"test/integration/helpers/freeport/main.go": "package main\n\nfunc main() { _ = 1 }\n"}, want: []string{"ALL", "beta"}},
+		{name: "a suite file moved to docs", files: map[string]string{"docs/beta_extra.go": "package beta\n\nfunc C() int { return 1 }\n"}, remove: []string{"test/integration/beta/beta_extra.go"}, want: []string{"beta"}},
 		{name: "a docs change against an unknown base", files: map[string]string{"README.md": "# m3\n"}, base: "no-such-rev", want: []string{"ALL", "beta"}},
 	})
 }
@@ -181,5 +197,6 @@ func TestTouchedPackages(t *testing.T) {
 		{name: "a file in no package", files: map[string]string{"web/src/app.ts": "export const x = 1\n"}, want: []string{"./..."}},
 		{name: "a docs change against an unknown base", files: map[string]string{"README.md": "# m3\n"}, base: "no-such-rev", want: []string{"./..."}},
 		{name: "a go.mod change", files: map[string]string{"go.mod": "module example.com/m\n\ngo 1.21\n\n// changed\n"}, want: []string{"./..."}},
+		{name: "a file moved across packages", files: map[string]string{"pkg/d/extra.go": "package d\n\nfunc X() int { return 1 }\n"}, remove: []string{"pkg/a/extra.go"}, want: []string{"./pkg/a", "./pkg/b", "./pkg/d"}},
 	})
 }
