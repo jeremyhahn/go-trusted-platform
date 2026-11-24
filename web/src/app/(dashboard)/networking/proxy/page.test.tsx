@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { CAPABILITIES_LOADING_REASON } from '@/hooks/use-capabilities';
 import { ok, refused, stubControlPlane, withControlPlane, type Answer, type SentRequest } from '@/test/control-plane-fetch';
 import ProxyRoutesPage from './page';
 import { parseProxyHosts, proxyRouteFromForm } from './proxy-route-dialog';
@@ -60,6 +61,18 @@ async function renderPage() {
 async function renderLoaded() {
   await renderPage();
   await within(await screen.findByTestId('proxy-routes')).findByText('r1');
+  await capabilitiesAnswered();
+}
+
+// The rows can render before the capabilities listing answers; until it does
+// every gated control is disabled with the loading reason, so a click on it
+// opens nothing. Wait until no gated control is still loading.
+async function capabilitiesAnswered() {
+  await waitFor(() => {
+    const gated = Array.from(document.querySelectorAll('[data-capability-op]'));
+    expect(gated.length).toBeGreaterThan(0);
+    expect(gated.filter((el) => el.getAttribute('title') === CAPABILITIES_LOADING_REASON)).toEqual([]);
+  });
 }
 
 async function click(name: string) {
