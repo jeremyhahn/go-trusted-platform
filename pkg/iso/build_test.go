@@ -218,8 +218,12 @@ func TestBuildISO_WithSecureBootKeys(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "DB.key"), []byte("key"), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "DB.crt"), []byte("cert"), 0644))
 
+	copiedKeyDir := filepath.Join(isoDir, "keys")
 	mockRunner := &mockXorrisoRunner{
 		runFunc: func(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+			// The keys are on the tree when xorriso packs it.
+			assert.FileExists(t, filepath.Join(copiedKeyDir, "DB.key"))
+			assert.FileExists(t, filepath.Join(copiedKeyDir, "DB.crt"))
 			for i, arg := range args {
 				if arg == "-o" && i+1 < len(args) {
 					return os.WriteFile(args[i+1], []byte("dummy iso content"), 0644)
@@ -243,11 +247,11 @@ func TestBuildISO_WithSecureBootKeys(t *testing.T) {
 
 	assert.NoError(t, err)
 
-	// Verify keys were copied
-	copiedKeyDir := filepath.Join(isoDir, "keys")
+	// The private-key copy does not outlive the build; the "cert" placeholder
+	// is not public enrollment material either, so it is wiped too.
 	assert.DirExists(t, copiedKeyDir)
-	assert.FileExists(t, filepath.Join(copiedKeyDir, "DB.key"))
-	assert.FileExists(t, filepath.Join(copiedKeyDir, "DB.crt"))
+	assert.NoFileExists(t, filepath.Join(copiedKeyDir, "DB.key"))
+	assert.NoFileExists(t, filepath.Join(copiedKeyDir, "DB.crt"))
 }
 
 func TestBuildISO_WithFIPSKernel(t *testing.T) {

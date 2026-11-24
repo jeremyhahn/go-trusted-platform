@@ -203,8 +203,13 @@ tracked here as
   enrollment artifact owner-only (0600) and wipes its read buffer after
   the write, as `writeConfiguredNTSMaterial` does. An existing destination
   file or symlink is removed and the file re-created with the staging
-  mode, so a stale world-readable copy is never written through. The key file on the
-  media is still plaintext, because sbsign and the installer need a key
+  mode, so a stale world-readable copy is never written through. Once
+  xorriso has run, successfully or not, `Builder.BuildISO` zeroes, syncs
+  and removes every staged non-public file under the ISO tree's
+  `secure-boot-keys/` and KeysDir copies, so the private key does not
+  outlive the build on the work tree; a KeysDir that is itself that tree
+  directory is the key source and is left alone. The key file inside the
+  ISO image is still plaintext, because sbsign and the installer need a key
   file; only a KMS handle (go-quicbaas#136) removes it.
 - **Loading.** The Secure Boot DB-key loader (`authenticode.LoadPrivateKeyPEM`,
   used by the installer, UKI rebuild and ISO build) and the module-signing

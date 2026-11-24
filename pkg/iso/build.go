@@ -15,6 +15,7 @@ package iso
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -43,10 +44,23 @@ func NewBuilder(logger *logging.Logger) *Builder {
 }
 
 // BuildISO creates a bootable ISO image using xorriso
-func (b *Builder) BuildISO(ctx context.Context, config *ISOConfig) error {
+func (b *Builder) BuildISO(ctx context.Context, config *ISOConfig) (retErr error) {
 	if err := b.validateConfig(config); err != nil {
 		return &WrappedError{Msg: "invalid configuration", Err: err}
 	}
+
+	// The image carries the staged Secure Boot private keys; the copies on
+	// the ISO tree must not outlive the build, whether xorriso ran or not.
+	defer func() {
+		if err := b.wipeStagedSecureBootKeys(config); err != nil {
+			werr := &WrappedError{Msg: "failed to wipe staged Secure Boot private keys", Err: err}
+			if retErr == nil {
+				retErr = werr
+			} else {
+				retErr = errors.Join(retErr, werr)
+			}
+		}
+	}()
 
 	b.logger.Info("Creating bootable ISO image",
 		"output", config.OutputISO,
@@ -123,6 +137,101 @@ func (b *Builder) copySecureBootKeys(config *ISOConfig) error {
 	}
 
 	return nil
+}
+
+// wipeStagedSecureBootKeys zeroes and removes every Secure Boot private-key
+// copy staged on the ISO tree: the builder's KeysDir copy and customize's
+// <iso-root>/secure-boot-keys staging. Public enrollment material stays. A
+// staged directory that is the key source itself (KeysDir) is never touched.
+func (b *Builder) wipeStagedSecureBootKeys(config *ISOConfig) error {
+	dirs := []string{filepath.Join(config.ISODir, SecureBootKeysISODirName)}
+	if config.KeysDir != "" {
+		dirs = append(dirs, filepath.Join(config.ISODir, filepath.Base(config.KeysDir)))
+	}
+	var errs []error
+	seen := make(map[string]bool, len(dirs))
+	for _, dir := range dirs {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if seen[abs] || sameDir(abs, config.KeysDir) {
+			continue
+		}
+		seen[abs] = true
+		errs = append(errs, wipeSecureBootPrivateFiles(abs))
+	}
+	return errors.Join(errs...)
+}
+
+// sameDir reports whether a and b name the same existing directory.
+func sameDir(a, b string) bool {
+	if b == "" {
+		return false
+	}
+	ai, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	bi, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(ai, bi)
+}
+
+// wipeSecureBootPrivateFiles overwrites with zeros, syncs and removes each
+// regular file under dir that is not public Secure Boot enrollment material.
+// A missing dir is not an error.
+func wipeSecureBootPrivateFiles(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var errs []error
+	for _, entry := range entries {
+		path := filepath.Join(dir, entry.Name())
+		if entry.IsDir() {
+			errs = append(errs, wipeSecureBootPrivateFiles(path))
+			continue
+		}
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		public := IsSecureBootPublicArtifact(entry.Name(), data)
+		size := len(data)
+		clear(data)
+		if public {
+			continue
+		}
+		errs = append(errs, zeroAndRemove(path, size))
+	}
+	return errors.Join(errs...)
+}
+
+// zeroAndRemove overwrites the first size bytes of path with zeros, syncs
+// them to disk and removes the file.
+func zeroAndRemove(path string, size int) error {
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	_, werr := f.Write(make([]byte, size))
+	serr := f.Sync()
+	cerr := f.Close()
+	if err := errors.Join(werr, serr, cerr); err != nil {
+		return err
+	}
+	return os.Remove(path)
 }
 
 // prepareISOContents prepares additional contents for the ISO
