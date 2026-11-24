@@ -119,7 +119,7 @@ describe('ceremony write controls are capability-gated', () => {
 
     const btn = button('Initialize');
     expect(btn.getAttribute('data-capability-op')).toBe(INIT_OP);
-    await waitFor(() => expect(btn).toHaveAttribute('data-capability-enabled', 'true'));
+    await waitFor(() => expect(btn.getAttribute('data-capability-enabled')).toBe('true'));
     expect(btn.disabled).toBe(false);
     expect(btn.getAttribute('title')).toBeNull();
   });
