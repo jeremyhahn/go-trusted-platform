@@ -16,9 +16,12 @@ package iam
 import (
 	"context"
 	"errors"
+	"strings"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/transport/embedded"
 	"gopkg.in/yaml.v3"
 )
 
@@ -132,9 +135,70 @@ func (a *QuicBaaSIAMAdapter) GetUser(ctx context.Context, tenantID, userID strin
 	return a.client.User().Get(ctx, tenantID, userID)
 }
 
-// GetUserByEmail delegates to iamsdk.UserClient.GetByEmail.
+// emailLookupPageSize is the page size GetUserByEmail lists users with when
+// it falls back to reading the tenant's users.
+const emailLookupPageSize = 100
+
+// GetUserByEmail delegates to iamsdk.UserClient.GetByEmail. The embedded
+// transport of go-quicbaas v0.12.0-alpha routes no IAM.User/GetByEmail, so
+// login's workspace-role lookup (WorkspaceRoleResolver) would fail there;
+// only on that unknown-method error does GetUserByEmail read the tenant's
+// users instead, page by page, and return the first user whose canonical email
+// (canonicalEmail: trimmed and lower-cased) equals the canonical form of email,
+// as the upstream lookup matches. It answers an SDK not-found error only when the listing is
+// provably complete: the last page holds fewer than emailLookupPageSize users.
+// A full page with no next-page token may hide later users (the v0.12.0-alpha
+// embedded user list ignores PageToken), so that miss fails closed with an SDK
+// unavailable error naming the truncated listing. Every other GetByEmail
+// error, and any List error, is returned.
 func (a *QuicBaaSIAMAdapter) GetUserByEmail(ctx context.Context, tenantID, email string) (*iamsdk.User, error) {
-	return a.client.User().GetByEmail(ctx, tenantID, email)
+	users := a.client.User()
+	user, err := users.GetByEmail(ctx, tenantID, email)
+	if err == nil || !isUnknownMethod(err) {
+		return user, err
+	}
+	want := canonicalEmail(email)
+	tok := ""
+	for {
+		resp, err := users.List(ctx, tenantID, &iamsdk.ListUsersRequest{PageSize: emailLookupPageSize, PageToken: tok})
+		if err != nil {
+			return nil, err
+		}
+		if resp == nil {
+			break
+		}
+		for i := range resp.Users {
+			if canonicalEmail(resp.Users[i].Email) == want {
+				found := resp.Users[i]
+				return &found, nil
+			}
+		}
+		tok = resp.Pagination.NextPageToken
+		if tok == "" {
+			if len(resp.Users) >= emailLookupPageSize {
+				return nil, sdkerrors.NewUnavailable("iam.GetUserByEmail",
+					"the user listing of tenant "+tenantID+" was truncated at a full page with no next-page token; cannot tell whether a user has the email "+email)
+			}
+			break
+		}
+	}
+	return nil, sdkerrors.NewNotFound("iam.GetUserByEmail", "no user in tenant "+tenantID+" has the email "+email)
+}
+
+// canonicalEmail returns the form in which go-quicbaas compares emails: the
+// pinned IdentityStore.GetUserByEmail trims and lower-cases the lookup key, and
+// QRDBUserStorage stores and looks up NormalizeEmail's output, the same
+// transformation. The GetUserByEmail list fallback compares both sides in this
+// form so it finds the same account the upstream lookup would.
+func canonicalEmail(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// isUnknownMethod reports whether err says the transport does not route the
+// method called.
+func isUnknownMethod(err error) bool {
+	var unknown *embedded.UnknownMethodError
+	return errors.As(err, &unknown) || sdkerrors.IsUnimplemented(err)
 }
 
 // ListUsers delegates to iamsdk.UserClient.List.
