@@ -43,6 +43,7 @@ func init() {
 		platformv1.TPMService_GetPCRs_FullMethodName:          "platform_tpm_pcrs",
 		platformv1.TPMService_GetEventLog_FullMethodName:      "platform_tpm_eventlog",
 		platformv1.TPMService_GetRandom_FullMethodName:        "platform_tpm_random",
+		platformv1.TPMService_GetAK_FullMethodName:            "platform_tpm_iak",
 	} {
 		grpcMethodToMCPToolMap[method] = tool
 	}
@@ -53,6 +54,7 @@ func init() {
 		platformv1.TPMService_GetSRK_FullMethodName:           buildTPMReadSRKArgs,
 		platformv1.TPMService_GetPCRs_FullMethodName:          buildTPMReadPCRsArgs,
 		platformv1.TPMService_GetEventLog_FullMethodName:      buildTPMReadEventLogArgs,
+		platformv1.TPMService_GetAK_FullMethodName:            buildTPMReadAKArgs,
 	} {
 		mcpArgBuilders[method] = build
 	}
@@ -61,6 +63,7 @@ func init() {
 		platformv1.TPMService_GetEK_FullMethodName:       decodeTPMReadEKResult,
 		platformv1.TPMService_GetSRK_FullMethodName:      decodeTPMReadSRKResult,
 		platformv1.TPMService_GetEventLog_FullMethodName: decodeTPMReadEventLogResult,
+		platformv1.TPMService_GetAK_FullMethodName:       decodeTPMReadAKResult,
 	} {
 		mcpReplyDecoders[method] = decode
 	}
@@ -129,6 +132,17 @@ func buildTPMReadSRKArgs(args interface{}) (map[string]interface{}, error) {
 	return map[string]interface{}{"handle": in.GetHandle()}, nil
 }
 
+// buildTPMReadAKArgs maps GetAK onto platform_tpm_iak, which reads the
+// platform AK (the IAK) and takes no arguments: a handle or algorithm
+// the tool cannot select is refused.
+func buildTPMReadAKArgs(args interface{}) (map[string]interface{}, error) {
+	in, ok := args.(*platformv1.GetAKRequest)
+	if !ok {
+		return nil, ErrUnexpectedArgsType{Method: platformv1.TPMService_GetAK_FullMethodName}
+	}
+	return tpmReadPlatformKeyArgs(platformv1.TPMService_GetAK_FullMethodName, in.GetHandle(), in.GetAlgorithm())
+}
+
 // buildTPMReadPCRsArgs sends the PCR indices (empty reads all 24). The bank
 // filter is applied to the reply, as the tool answers every bank.
 func buildTPMReadPCRsArgs(args interface{}) (map[string]interface{}, error) {
@@ -188,6 +202,30 @@ func decodeTPMReadSRKResult(result interface{}, reply interface{}) error {
 	}
 	out.Handle = key.Handle
 	out.PublicKey = key.PublicKey
+	return nil
+}
+
+// tpmReadAKResult is the platform_tpm_iak reply: the key, its handle and
+// its TPM name, base64 in JSON. The algorithm string names the family
+// only, so the reply's KeyAlgorithm stays unset.
+type tpmReadAKResult struct {
+	Handle    uint32 `json:"handle"`
+	PublicKey []byte `json:"public_key"`
+	Name      []byte `json:"name"`
+}
+
+func decodeTPMReadAKResult(result interface{}, reply interface{}) error {
+	out, ok := reply.(*platformv1.GetAKResponse)
+	if !ok {
+		return ErrUnexpectedReplyType{Method: platformv1.TPMService_GetAK_FullMethodName}
+	}
+	var key tpmReadAKResult
+	if err := mapToStruct(result, &key); err != nil {
+		return err
+	}
+	out.Handle = key.Handle
+	out.PublicKey = key.PublicKey
+	out.Name = key.Name
 	return nil
 }
 
