@@ -183,6 +183,18 @@ type incomingReceiver interface {
 
 	// Abort tears the receiver down after a failed or cancelled transfer.
 	Abort(ctx context.Context) error
+
+	// VM returns the receiving QEMU the orchestrator adopts after Commit.
+	VM() *qemu.VM
+
+	// WorkDir returns the receiver's work directory.
+	WorkDir() string
+
+	// DiskPath returns the disk image the receiving QEMU runs on.
+	DiskPath() string
+
+	// Wait blocks until the receiving QEMU exits.
+	Wait() error
 }
 
 // incomingReceiverParams carries everything the launcher needs to stand up a
@@ -230,6 +242,7 @@ type trackedReceiver struct {
 	cleanup func()
 	cancel  context.CancelFunc
 	timer   *time.Timer
+	spec    MigrationSpec
 }
 
 // abort tears down a receiver nobody will finalize.
@@ -346,7 +359,7 @@ func (o *QEMUOrchestrator) ReceiveIncoming(ctx context.Context, spec MigrationSp
 	}
 
 	receiverID := generateInstanceID()
-	tr := &trackedReceiver{recv: recv, cleanup: cleanup, cancel: cancel}
+	tr := &trackedReceiver{recv: recv, cleanup: cleanup, cancel: cancel, spec: spec}
 	tr.timer = time.AfterFunc(receiverMaxLifetime, func() {
 		if expired, ok := reg.take(receiverID); ok {
 			expired.abort(o, receiverID)
@@ -378,9 +391,14 @@ func (o *QEMUOrchestrator) FinalizeIncoming(ctx context.Context, receiverID stri
 
 	if commit {
 		if err := tr.recv.Commit(ctx); err != nil {
+			tr.cancel()
 			return &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "commit received VM", Err: err}}
 		}
-		o.logger.Infof("Committed migration receiver %s", receiverID)
+		instanceID, err := o.adoptReceived(tr)
+		if err != nil {
+			return &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "register received VM", Err: err}}
+		}
+		o.logger.Infof("Committed migration receiver %s as instance %s", receiverID, instanceID)
 		return nil
 	}
 
@@ -392,6 +410,56 @@ func (o *QEMUOrchestrator) FinalizeIncoming(ctx context.Context, receiverID stri
 	return nil
 }
 
+// adoptReceived registers a committed receiver's guest as a running instance and returns its ID.
+func (o *QEMUOrchestrator) adoptReceived(tr *trackedReceiver) (string, error) {
+	cfg := &InstanceConfig{}
+	if tr.spec.Config != nil {
+		copied := *tr.spec.Config
+		cfg = &copied
+	}
+	cfg.WorkDir = tr.recv.WorkDir()
+	cfg.DiskPath = tr.recv.DiskPath()
+
+	now := time.Now()
+	inst := &Instance{
+		Name:      tr.spec.VMName,
+		Type:      ComputeTypeVM,
+		State:     StateRunning,
+		Config:    cfg,
+		CreatedAt: now,
+		UpdatedAt: now,
+		StartedAt: now,
+		Metadata:  make(map[string]string),
+	}
+	run := &qemuRun{cancel: tr.cancel, done: make(chan struct{})}
+	qemuInst := &qemuInstance{vm: tr.recv.VM(), instance: inst, run: run}
+
+	o.mu.Lock()
+	id := tr.spec.InstanceID
+	if _, taken := o.instances[id]; id == "" || taken {
+		id = generateInstanceID()
+	}
+	inst.ID = id
+	for _, state := range []InstanceState{StateCreating, StateStopped, StateStarting, StateRunning} {
+		if err := o.lifecycle.SetState(id, state); err != nil {
+			o.mu.Unlock()
+			tr.cancel()
+			return "", err
+		}
+	}
+	o.instances[id] = qemuInst
+	o.mu.Unlock()
+
+	go func() {
+		defer close(run.done)
+		if err := tr.recv.Wait(); err != nil {
+			o.logger.Errorf("VM %s exited with error: %v", id, err)
+		}
+		o.recordExit(id, qemuInst)
+	}()
+	return id, nil
+}
+
 // =============================================================================
 // Default (production) receiver launcher
 // =============================================================================
@@ -399,10 +467,20 @@ func (o *QEMUOrchestrator) FinalizeIncoming(ctx context.Context, receiverID stri
 // qemuIncomingReceiver is the production incomingReceiver backed by a receiving
 // QEMU process and its QMP migration manager.
 type qemuIncomingReceiver struct {
-	vm      *qemu.VM
-	monitor *qemu.Monitor
-	port    int
+	vm       *qemu.VM
+	monitor  *qemu.Monitor
+	port     int
+	workDir  string
+	diskPath string
 }
+
+func (r *qemuIncomingReceiver) VM() *qemu.VM { return r.vm }
+
+func (r *qemuIncomingReceiver) WorkDir() string { return r.workDir }
+
+func (r *qemuIncomingReceiver) DiskPath() string { return r.diskPath }
+
+func (r *qemuIncomingReceiver) Wait() error { return r.vm.Wait() }
 
 func (r *qemuIncomingReceiver) Port() int { return r.port }
 
@@ -502,7 +580,7 @@ func defaultNewIncomingReceiver(ctx context.Context, p *incomingReceiverParams) 
 		return nil, &WrappedError{Msg: "arm receiver migrate-incoming", Err: err}
 	}
 
-	return &qemuIncomingReceiver{vm: vm, monitor: mon, port: port}, nil
+	return &qemuIncomingReceiver{vm: vm, monitor: mon, port: port, workDir: workDir, diskPath: qcfg.DiskPath}, nil
 }
 
 // receiverPort is the TCP port the receiver listens on: the configured port,
