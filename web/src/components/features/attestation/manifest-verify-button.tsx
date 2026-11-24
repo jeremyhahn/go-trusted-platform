@@ -9,7 +9,12 @@
  * and no public key is offered, because the production VerifyManifest checks
  * no signature and refuses a public key with
  * ErrAttestationManifestSignatureUnchecked
- * (pkg/attestation/service/service.go:103-105, 143-148).
+ * (pkg/attestation/service/service.go:103-105, 143-148). The Merkle root and
+ * the host, VM and container attestations are shown as not checked too: the
+ * server answers them with placeholders (a nonempty root, a host valid without
+ * expected PCRs, VM and container always valid; service.go:122-151). Only the
+ * nonce and timestamp are real checks. The status badge reads the protojson
+ * wire value MANIFEST_VERIFICATION_STATUS_VERIFIED as success.
  */
 
 import * as React from "react";
@@ -38,22 +43,37 @@ export interface ManifestVerifyButtonProps {
   manifest?: HostManifest;
 }
 
-type CheckName =
-  | "merkleRootValid"
-  | "nonceValid"
-  | "timestampValid"
-  | "hostAttestationValid"
-  | "vmAttestationsValid"
-  | "containerAttestationsValid";
+type CheckName = "nonceValid" | "timestampValid";
 
+// The checks VerifyManifest really makes.
 const CHECKS: { name: CheckName; label: string }[] = [
-  { name: "merkleRootValid", label: "Merkle root" },
   { name: "nonceValid", label: "Nonce" },
   { name: "timestampValid", label: "Timestamp" },
-  { name: "hostAttestationValid", label: "Host attestation" },
-  { name: "vmAttestationsValid", label: "VM attestations" },
-  { name: "containerAttestationsValid", label: "Container attestations" },
 ];
+
+// Properties VerifyManifest answers with a placeholder, not a check: the host
+// is valid when no expected PCRs are given (this dialog gives none), the
+// Merkle root is valid when it is not empty, and VM and container attestations
+// are always valid (pkg/attestation/service/service.go:122-151).
+const UNCHECKED: { name: string; label: string; why: string }[] = [
+  { name: "merkleRootValid", label: "Merkle root", why: "The control plane only checks that the Merkle root is not empty" },
+  {
+    name: "hostAttestationValid",
+    label: "Host attestation",
+    why: "The control plane checks host PCRs only against expected PCRs, and this dialog sends none",
+  },
+  { name: "vmAttestationsValid", label: "VM attestations", why: "The control plane does not verify VM attestations yet" },
+  {
+    name: "containerAttestationsValid",
+    label: "Container attestations",
+    why: "The control plane does not verify container attestations yet",
+  },
+];
+
+/** isVerified reads the status as the SDK type names it or as protojson sends it. */
+function isVerified(status: string | undefined): boolean {
+  return status === "VERIFIED" || status === "MANIFEST_VERIFICATION_STATUS_VERIFIED";
+}
 
 function errorMessage(err: unknown): string {
   if (err instanceof Error) {
@@ -93,7 +113,13 @@ function VerifyResult({ result }: { result: ManifestVerificationResult }) {
     <div data-testid="manifest-verify-result" className="space-y-3 text-sm">
       <div className="flex items-center gap-2">
         <span className="font-medium">Status</span>
-        <Badge variant={result.status === "VERIFIED" ? "default" : "destructive"}>{result.status}</Badge>
+        <Badge
+          data-testid="manifest-verify-status"
+          data-verified={isVerified(result.status) ? "true" : "false"}
+          variant={isVerified(result.status) ? "default" : "destructive"}
+        >
+          {result.status}
+        </Badge>
         {result.verifiedAt && <span className="text-muted-foreground">{result.verifiedAt}</span>}
       </div>
       <ul className="space-y-1">
@@ -112,6 +138,18 @@ function VerifyResult({ result }: { result: ManifestVerificationResult }) {
             <span>{check.label}</span>
             <span className={result[check.name] ? "text-green-600" : "text-destructive"}>
               {result[check.name] ? "valid" : "invalid"}
+            </span>
+          </li>
+        ))}
+        {UNCHECKED.map((check) => (
+          <li
+            key={check.name}
+            data-testid={`manifest-verify-check-${check.name}`}
+            className="flex justify-between"
+          >
+            <span>{check.label}</span>
+            <span className="text-muted-foreground" title={check.why}>
+              not checked
             </span>
           </li>
         ))}
@@ -203,8 +241,8 @@ export function ManifestVerifyButton({ manifestId, manifest }: ManifestVerifyBut
           <DialogHeader>
             <DialogTitle>Verify manifest</DialogTitle>
             <DialogDescription>
-              The control plane checks the Merkle root, nonce, timestamp and attestations of manifest {manifestId}. It
-              does not check the manifest signature.
+              The control plane checks the nonce and timestamp of manifest {manifestId} only. It does not check the
+              manifest signature, the Merkle root or the host, VM and container attestations.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
