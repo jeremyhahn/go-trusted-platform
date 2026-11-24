@@ -14,7 +14,10 @@
  * server answers them with placeholders (a nonempty root, a host valid without
  * expected PCRs, VM and container always valid; service.go:122-151). Only the
  * nonce and timestamp are real checks. The status badge reads the protojson
- * wire value MANIFEST_VERIFICATION_STATUS_VERIFIED as success.
+ * wire value MANIFEST_VERIFICATION_STATUS_VERIFIED as success. A verify here
+ * is an inspection, not a verdict: service.go's VerifyManifest dispatches
+ * only failures to the attestation observers, so a pass restores no
+ * quarantined device (#2038).
  */
 
 import * as React from "react";
@@ -242,7 +245,9 @@ export function ManifestVerifyButton({ manifestId, manifest }: ManifestVerifyBut
             <DialogTitle>Verify manifest</DialogTitle>
             <DialogDescription>
               The control plane checks the nonce and timestamp of manifest {manifestId} only. It does not check the
-              manifest signature, the Merkle root or the host, VM and container attestations.
+              manifest signature, the Merkle root or the host, VM and container attestations. Verifying here is an
+              inspection: it does not restore a quarantined device or change its network placement; only a verified
+              quote does.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
