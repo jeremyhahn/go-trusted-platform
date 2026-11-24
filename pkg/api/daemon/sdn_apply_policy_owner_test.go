@@ -232,3 +232,60 @@ func TestSDNService_ApplyPolicy_FlowStatsFailureIsUnavailable(t *testing.T) {
 	_, err = svc.GetPolicy(context.Background(), &platformv1.GetPolicyRequest{PolicyId: "p1"})
 	assert.Error(t, err, "a refused policy is not stored")
 }
+
+// seedLegacyPolicyFlow installs on bridge the flow twoRulePolicyConfig's
+// deny-a rule installs, with the given cookie and actions.
+func seedLegacyPolicyFlow(t *testing.T, fake *replacingOVS, svc *SDNService, bridge, cookie, actions string) *ovs.FlowMod {
+	t.Helper()
+	mod, err := svc.policyRuleToFlowMod(twoRulePolicyConfig().GetRules()[0], twoRulePolicyConfig().GetPriority())
+	require.NoError(t, err)
+	if actions == "" {
+		actions = mod.Actions
+	}
+	seed := &ovs.FlowMod{Table: mod.Table, Priority: mod.Priority, Match: mod.Match, Actions: actions, Cookie: cookie}
+	require.NoError(t, fake.AddFlow(context.Background(), bridge, seed))
+	return seed
+}
+
+func TestSDNService_ApplyPolicy_AdoptsALegacyCookieZeroPolicyFlow(t *testing.T) {
+	for _, cookie := range []string{"", "0x0"} {
+		t.Run("cookie="+cookie, func(t *testing.T) {
+			svc, fake := newReplacingOVSFixture(t)
+			seed := seedLegacyPolicyFlow(t, fake, svc, "br0", cookie, "")
+
+			_, err := svc.ApplyPolicy(context.Background(), &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
+			require.NoError(t, err)
+
+			flows, err := fake.ListFlows(context.Background(), "br0")
+			require.NoError(t, err)
+			want := fmt.Sprintf("0x%x", policyFlowCookie("p1"))
+			adopted := false
+			for _, fl := range flows {
+				assert.Equal(t, want, fl.Cookie, "flow %s", fl.Match)
+				if fl.Match == seed.Match && fl.Priority == seed.Priority {
+					adopted = true
+				}
+			}
+			assert.True(t, adopted, "the legacy flow's entry carries the policy flow")
+
+			_, err = svc.DeletePolicy(context.Background(), &platformv1.DeletePolicyRequest{PolicyId: "p1"})
+			require.NoError(t, err)
+			assert.Empty(t, fake.matches(t, "br0"))
+		})
+	}
+}
+
+func TestSDNService_ApplyPolicy_LegacyZeroCookieFlowWithOtherActionsIsStillRefused(t *testing.T) {
+	svc, fake := newReplacingOVSFixture(t)
+	seed := seedLegacyPolicyFlow(t, fake, svc, "br0", "0x0", "output:2")
+
+	_, err := svc.ApplyPolicy(context.Background(), &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err), "err = %v", err)
+
+	flows, err := fake.ListFlows(context.Background(), "br0")
+	require.NoError(t, err)
+	require.Len(t, flows, 1)
+	assert.Equal(t, seed.Match, flows[0].Match)
+	assert.Equal(t, "0x0", flows[0].Cookie)
+	assert.Equal(t, "output:2", flows[0].Actions)
+}
