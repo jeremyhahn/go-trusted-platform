@@ -1971,6 +1971,35 @@ func TestPXEOperatorRoutes_ScopeAloneDoesNotPassTheRoleGate(t *testing.T) {
 	}
 }
 
+// tenantScopedAdmin is a system-tenant admin whose session carries exactly
+// the given scopes, as pxeScopedAdmin is for PXE.
+func tenantScopedAdmin(t *testing.T, scopes ...string) *mux.Router {
+	return newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &scopedSessionAuth{
+			sessionAuth: sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"},
+			scopes:      scopes,
+		},
+	})
+}
+
+// TestTenantRoutes_ReadOnlyAdminCannotMutateTheBarrier is the Codex P1 on PR
+// #2372: an admin token limited to tenant:read is refused every barrier, DEK
+// and tenant mutation over REST, exactly as on gRPC, and still reads.
+func TestTenantRoutes_ReadOnlyAdminCannotMutateTheBarrier(t *testing.T) {
+	router := tenantScopedAdmin(t, "tenant:read")
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/tenants/system/barrier/seal"},
+		{http.MethodPost, "/api/v1/tenants/system/barrier/init"},
+		{http.MethodPost, "/api/v1/tenants/system/barrier/unseal"},
+		{http.MethodPost, "/api/v1/tenants/system/dek/rotate"},
+		{http.MethodPut, "/api/v1/tenants/system"},
+		{http.MethodDelete, "/api/v1/tenants/system"},
+	} {
+		assert.Equal(t, http.StatusForbidden, probe(router, tc.method, tc.path), "%s %s", tc.method, tc.path)
+	}
+	assert.NotEqual(t, http.StatusForbidden, probe(router, http.MethodGet, "/api/v1/tenants/system/barrier"))
+}
+
 // =============================================================================
 // IAM (#400)
 // =============================================================================
