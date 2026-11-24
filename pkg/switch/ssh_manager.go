@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/switchwire"
 )
@@ -27,8 +28,15 @@ import (
 // sshManager implements Manager using SSH CLI commands compatible with
 // Cisco IOS, IOS-XE, NX-OS, Arista EOS, and similar platforms.
 type sshManager struct {
-	config   *Config
-	logger   *slog.Logger
+	config *Config
+	logger *slog.Logger
+	// dial opens the SSH connection; nil falls back to NewSSHExecutor.
+	dial func(context.Context, *Config) (SSHExecutor, error)
+
+	// mu serializes connection set-up, every operation and Close: two first
+	// calls must not dial two connections, and one go-xkms Session must not
+	// run commands concurrently.
+	mu       sync.Mutex
 	executor SSHExecutor
 }
 
@@ -40,16 +48,27 @@ func newSSHManager(config *Config, logger *slog.Logger) (Manager, error) {
 	return &sshManager{
 		config: config,
 		logger: logger,
+		dial:   NewSSHExecutor,
 	}, nil
 }
 
-// newSSHManagerWithExecutor creates an sshManager with an injected SSHExecutor
-// for testing.
+// newSSHManagerWithExecutor creates an SSH Manager with an injected executor (for testing).
 func newSSHManagerWithExecutor(config *Config, logger *slog.Logger, executor SSHExecutor) *sshManager {
 	return &sshManager{
 		config:   config,
 		logger:   logger,
+		dial:     NewSSHExecutor,
 		executor: executor,
+	}
+}
+
+// newSSHManagerWithDialer creates an SSH Manager with no connection that
+// dials through dial on first use (for testing).
+func newSSHManagerWithDialer(config *Config, logger *slog.Logger, dial func(context.Context, *Config) (SSHExecutor, error)) *sshManager {
+	return &sshManager{
+		config: config,
+		logger: logger,
+		dial:   dial,
 	}
 }
 
@@ -57,6 +76,8 @@ func (m *sshManager) SetPortVLAN(ctx context.Context, port string, vlanID uint16
 	if err := ValidatePortName(port); err != nil {
 		return err
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if err := m.ensureConnected(ctx); err != nil {
 		return err
 	}
@@ -93,6 +114,8 @@ func (m *sshManager) GetPortVLAN(ctx context.Context, port string) (uint16, erro
 	if err := ValidatePortName(port); err != nil {
 		return 0, err
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if err := m.ensureConnected(ctx); err != nil {
 		return 0, err
 	}
@@ -120,6 +143,8 @@ func (m *sshManager) GetPortStatus(ctx context.Context, port string) (*switchwir
 	if err := ValidatePortName(port); err != nil {
 		return nil, err
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if err := m.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
@@ -144,6 +169,8 @@ func (m *sshManager) GetPortStatus(ctx context.Context, port string) (*switchwir
 }
 
 func (m *sshManager) ListPorts(ctx context.Context) ([]*switchwire.PortStatus, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if err := m.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
@@ -171,6 +198,8 @@ func (m *sshManager) EnablePort(ctx context.Context, port string) error {
 	if err := ValidatePortName(port); err != nil {
 		return err
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if err := m.ensureConnected(ctx); err != nil {
 		return err
 	}
@@ -184,6 +213,8 @@ func (m *sshManager) DisablePort(ctx context.Context, port string) error {
 	if err := ValidatePortName(port); err != nil {
 		return err
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if err := m.ensureConnected(ctx); err != nil {
 		return err
 	}
@@ -209,17 +240,27 @@ func (m *sshManager) runConfig(ctx context.Context, logMsg string, commands []st
 }
 
 func (m *sshManager) Close() error {
-	if m.executor != nil {
-		return m.executor.Close()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.executor == nil {
+		return nil
 	}
-	return nil
+	err := m.executor.Close()
+	m.executor = nil
+	return err
 }
 
+// ensureConnected dials the SSH connection on first use. The caller holds
+// m.mu, so concurrent first calls dial once and share the connection.
 func (m *sshManager) ensureConnected(ctx context.Context) error {
 	if m.executor != nil {
 		return nil
 	}
-	executor, err := NewSSHExecutor(ctx, m.config)
+	dial := m.dial
+	if dial == nil {
+		dial = NewSSHExecutor
+	}
+	executor, err := dial(ctx, m.config)
 	if err != nil {
 		return err
 	}
