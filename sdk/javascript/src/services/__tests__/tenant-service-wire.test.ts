@@ -50,4 +50,22 @@ describe('TenantService wire paths', () => {
     expect(path.endsWith('/tenants/t1/dek')).toBe(true);
     expect(path.endsWith('/dek/status')).toBe(false);
   });
+
+  it('listTenants sends limit and offset, never page', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: { tenants: [], total: 0 } } as never);
+    const searchOf = (call: number): URLSearchParams =>
+      new URL(String(vi.mocked(mockClient.get).mock.calls[call]?.[0]), 'https://api.example.com').searchParams;
+
+    await service.listTenants({ limit: 10, offset: 20 });
+    const paged = searchOf(0);
+    expect(paged.get('limit')).toBe('10');
+    expect(paged.get('offset')).toBe('20');
+    expect(paged.has('page')).toBe(false);
+
+    await service.listTenants();
+    const plain = searchOf(1);
+    expect(plain.has('limit')).toBe(false);
+    expect(plain.has('offset')).toBe(false);
+    expect(plain.has('page')).toBe(false);
+  });
 });
