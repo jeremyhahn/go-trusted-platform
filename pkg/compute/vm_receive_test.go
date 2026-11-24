@@ -593,6 +593,91 @@ func TestFinalizeIncoming_CommitKeepsAnExistingInstance(t *testing.T) {
 	assert.Equal(t, StateRunning, adopted.State)
 }
 
+func TestReceiverDisk_ColdCreatesAFreshImage(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	workDir := t.TempDir()
+
+	path, create, err := receiverDisk(orch, MigrationSpec{Mode: MigrateModeCold, Config: &InstanceConfig{DiskPath: "/elsewhere/disk.qcow2"}}, workDir)
+	require.NoError(t, err)
+	assert.Equal(t, workDir+"/disk.qcow2", path)
+	assert.True(t, create)
+}
+
+// sharedImage writes a disk image with known bytes under a shared mount and enables shared storage on orch.
+func sharedImage(t *testing.T, orch *QEMUOrchestrator) (mount, image string, content []byte) {
+	t.Helper()
+	mount = t.TempDir()
+	require.NoError(t, os.MkdirAll(mount+"/vm1", 0o755))
+	image = mount + "/vm1/disk.qcow2"
+	content = []byte("guest disk contents")
+	require.NoError(t, os.WriteFile(image, content, 0o600))
+	orch.config.SharedStorage = &SharedStorageConfig{Enabled: true, Backend: "nfs", MountPath: mount}
+	return mount, image, content
+}
+
+func TestReceiverDisk_LiveOpensTheSharedImage(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	_, image, content := sharedImage(t, orch)
+
+	path, create, err := receiverDisk(orch, MigrationSpec{Mode: MigrateModeLive, Config: &InstanceConfig{DiskPath: image}}, t.TempDir())
+	require.NoError(t, err)
+	assert.Equal(t, image, path)
+	assert.False(t, create, "live migration never recreates the shared image")
+
+	got, err := os.ReadFile(image)
+	require.NoError(t, err)
+	assert.Equal(t, content, got)
+}
+
+func TestReceiverDisk_LiveRefusesAMissingImage(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	mount, _, _ := sharedImage(t, orch)
+
+	_, _, err := receiverDisk(orch, MigrationSpec{Mode: MigrateModeLive, Config: &InstanceConfig{DiskPath: mount + "/vm1/missing.qcow2"}}, t.TempDir())
+	require.Error(t, err)
+
+	_, _, err = receiverDisk(orch, MigrationSpec{Mode: MigrateModeLive, Config: &InstanceConfig{}}, t.TempDir())
+	require.Error(t, err)
+}
+
+func TestReceiverDisk_LiveRefusesAnImageOutsideTheMount(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	sharedImage(t, orch)
+	outside := t.TempDir() + "/disk.qcow2"
+	require.NoError(t, os.WriteFile(outside, []byte("x"), 0o600))
+
+	_, _, err := receiverDisk(orch, MigrationSpec{Mode: MigrateModeLive, Config: &InstanceConfig{DiskPath: outside}}, t.TempDir())
+	require.Error(t, err)
+
+	orch.config.SharedStorage.MountPath = ""
+	path, create, err := receiverDisk(orch, MigrationSpec{Mode: MigrateModeLive, Config: &InstanceConfig{DiskPath: outside}}, t.TempDir())
+	require.NoError(t, err, "without a mount path any existing image is accepted")
+	assert.Equal(t, outside, path)
+	assert.False(t, create)
+}
+
+func TestReceiveIncoming_LiveRefusedWithoutSharedStorage(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	tlsProv := &fakeServerTLS{dir: t.TempDir()}
+	orch.config.MigrationTLS = tlsProv
+
+	launched := false
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		launched = true
+		return &fakeIncomingReceiver{port: 5002}, nil
+	})
+
+	_, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Mode:   MigrateModeLive,
+		Config: &InstanceConfig{Memory: 1024, DiskPath: "/shared/vm1/disk.qcow2"},
+	})
+	require.ErrorIs(t, err, ErrLiveMigrationRequiresSharedStorage)
+	assert.False(t, launched, "no receiver is launched")
+	assert.False(t, tlsProv.materialized, "no creds are materialized")
+}
+
 func TestFinalizeIncoming_Abort(t *testing.T) {
 	orch := newOpsOrchestrator(t)
 	orch.config.MigrationTLS = &fakeServerTLS{dir: t.TempDir()}

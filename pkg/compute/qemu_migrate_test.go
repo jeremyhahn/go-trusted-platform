@@ -16,6 +16,7 @@ package compute
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"testing/synctest"
 
@@ -259,6 +260,22 @@ func TestMigrateVM_LiveHappyPath(t *testing.T) {
 	assert.NotContains(t, fake.caps, "block", "live migration must not enable block migration")
 	assert.True(t, coord.finalized)
 	assert.NoError(t, coord.finalizeErr)
+}
+
+func TestMigrateVM_LiveKeepsTheSharedDisk(t *testing.T) {
+	orch, _, _, _ := migrateTestOrchestrator(t, true)
+	cfg := orch.instances["vm1"].instance.Config
+	disk := cfg.WorkDir + "/disk.qcow2"
+	content := []byte("shared guest disk")
+	require.NoError(t, os.WriteFile(disk, content, 0o600))
+	cfg.DiskPath = disk
+
+	_, err := migrateOnFakeClock(t, orch, MigrateOptions{Live: true})
+	require.NoError(t, err)
+
+	got, err := os.ReadFile(disk)
+	require.NoError(t, err, "the destination runs on the shared disk, so the source keeps it")
+	assert.Equal(t, content, got)
 }
 
 func TestMigrateVM_LiveWithoutSharedStorage(t *testing.T) {
