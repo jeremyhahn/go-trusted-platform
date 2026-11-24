@@ -598,7 +598,8 @@ func registryPathFindings(t *testing.T, wf ciWorkflow) []error {
 		locked, prev := false, ""
 		for _, line := range strings.Split(step.Run, "\n") {
 			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, ciImageLock) {
+			// image_lock "<name>" takes a named lock, such as the pull lock.
+			if strings.HasPrefix(line, ciImageLock) || strings.HasPrefix(line, `image_lock "`) {
 				locked = true
 			}
 			if locked && line == "exit 0" && prev != ciImageUnlock {
