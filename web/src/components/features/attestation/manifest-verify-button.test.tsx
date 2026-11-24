@@ -267,4 +267,14 @@ describe('ManifestVerifyButton', () => {
     expect(toast.textContent).toContain('Verification failed');
     expect(toast.getAttribute('data-variant')).toBe('destructive');
   });
+
+  it('says that inspecting a manifest restores no quarantined device', async () => {
+    stubControlPlane(routes());
+    render(withControlPlane(<ManifestVerifyButton manifestId="m-1" manifest={MANIFEST} />));
+
+    fireEvent.click(await enabledButton());
+    await screen.findByRole('button', { name: 'Verify' });
+    // service.go dispatches only failures from VerifyManifest: an inspection is not a verdict (#2038).
+    expect(screen.getByText(/does not restore a quarantined device/)).toBeTruthy();
+  });
 });
