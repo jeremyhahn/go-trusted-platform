@@ -661,8 +661,10 @@ export interface ReadBundlePCRResponse {
 }
 
 /**
- * IsVTPMRunning: the reply of GET /bundles/{id}/state (the server's
- * StateResponse, pkg/webservice/v1/rest/vtpm/types.go).
+ * IsVTPMRunning: the reply of GET /bundles/{id}/state: the webservice's
+ * StateResponse (pkg/webservice/v1/rest/vtpm/types.go), or the daemon REST
+ * listener's BundleStateResponse (pkg/api/rest/vtpm_handlers.go), whose id
+ * VTPMService.getBundleState gives as bundle_id.
  */
 export interface GetBundleStateResponse {
   bundle_id: string;
