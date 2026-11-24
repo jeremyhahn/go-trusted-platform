@@ -46,7 +46,7 @@ type MockClient struct {
 	operationsClient     quicbaas.OperationsClient
 	cacheClient          quicbaas.CacheClient
 	authClient           quicbaas.AuthClient
-	sealClient           quicbaas.SealClient
+	sealClient           quicbaas.QRDBSealStoreClient
 	kmsClient            quicbaas.KMSClient
 	secretsClient        quicbaas.SecretsClient
 	cryptoClient         quicbaas.CryptoClient
@@ -111,7 +111,6 @@ type mockSecurityService struct {
 // compare equal (both nil) without requiring a full AuthService implementation.
 func (s *mockSecurityService) Auth() quicbaas.AuthService { return nil }
 
-func (s *mockSecurityService) Seal() quicbaas.SealClient       { return s.m.Seal() }
 func (s *mockSecurityService) KMS() quicbaas.KMSClient         { return s.m.KMS() }
 func (s *mockSecurityService) Secrets() quicbaas.SecretsClient { return s.m.Secrets() }
 func (s *mockSecurityService) Crypto() quicbaas.CryptoClient   { return s.m.Crypto() }
@@ -326,15 +325,8 @@ func (m *MockClient) SetAuth(c quicbaas.AuthClient) {
 	m.authClient = c
 }
 
-// Seal returns the Seal client.
-func (m *MockClient) Seal() quicbaas.SealClient {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.sealClient
-}
-
-// SetSeal sets the Seal client.
-func (m *MockClient) SetSeal(c quicbaas.SealClient) {
+// SetSeal sets the seal store client.
+func (m *MockClient) SetSeal(c quicbaas.QRDBSealStoreClient) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sealClient = c
@@ -429,12 +421,6 @@ func (m *MockClient) DEK() quicbaas.DEKClient {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.dekClient
-}
-
-// Discovery returns the service-discovery registry. The mock returns nil;
-// platform consumers of MockClient do not exercise discovery.
-func (m *MockClient) Discovery() (*quicbaas.DiscoveryRegistry, error) {
-	return nil, nil
 }
 
 // SetDEK sets the DEK client.
@@ -671,8 +657,12 @@ func (m *MockClient) Reset() {
 // QRDB-Backed Accessors
 // =============================================================================
 
-// SealStore returns nil (stub for testing).
-func (m *MockClient) SealStore() (quicbaas.QRDBSealStoreClient, error) { return nil, nil }
+// SealStore returns the seal store client.
+func (m *MockClient) SealStore() (quicbaas.QRDBSealStoreClient, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.sealClient, nil
+}
 
 // TenantMgmt returns nil (stub for testing).
 func (m *MockClient) TenantMgmt() (quicbaas.QRDBTenantClient, error) { return nil, nil }

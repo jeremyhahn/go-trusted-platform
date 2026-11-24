@@ -346,7 +346,7 @@ func TestAdapter_NotStarted(t *testing.T) {
 	if adapter.Auth() != nil {
 		t.Error("expected Auth() to return nil when not started")
 	}
-	if adapter.Seal() != nil {
+	if seal, err := adapter.Seal(); seal != nil || err != nil {
 		t.Error("expected Seal() to return nil when not started")
 	}
 	if adapter.KMS() != nil {
@@ -971,7 +971,9 @@ func TestAdapter_AllServiceAccessors(t *testing.T) {
 	})
 
 	t.Run("Seal", func(t *testing.T) {
-		if adapter.Seal() != mockClient.Seal() {
+		got, err := adapter.Seal()
+		want, _ := mockClient.SealStore()
+		if err != nil || got != want {
 			t.Error("Seal() did not return expected client")
 		}
 	})
