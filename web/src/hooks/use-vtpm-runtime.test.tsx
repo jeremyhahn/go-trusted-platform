@@ -11,6 +11,7 @@ import { useVTPMRuntime } from './use-vtpm-runtime';
 
 const STATE = 'GET /api/v1/vtpm/bundles/vm-1/state';
 const START = 'POST /api/v1/vtpm/bundles/vm-1/start';
+const STOP = 'POST /api/v1/vtpm/bundles/vm-1/stop';
 
 function stateAnswer(running: boolean) {
   return ok({ bundle_id: 'vm-1', running, socket_path: '/run/vtpm/vm-1.sock' });
@@ -102,5 +103,28 @@ describe('useVTPMRuntime checkState', () => {
 
     await act(() => result.current.checkState.mutateAsync(undefined));
     expect(result.current.runState).toBe('stopped');
+  });
+
+  it('a restart after a state read shows the new start socket', async () => {
+    stubControlPlane({
+      [START]: ok({
+        status: { success: true },
+        bundle_id: 'vm-1',
+        running: true,
+        socket_path: '/run/vtpm/start.sock',
+      }),
+      [STATE]: ok({ bundle_id: 'vm-1', running: true, socket_path: '/run/vtpm/state.sock' }),
+      [STOP]: ok({ status: { success: true }, bundle_id: 'vm-1', stopped: true }),
+    });
+    const { result } = renderRuntime();
+
+    await act(() => result.current.start.mutateAsync(undefined));
+    await act(() => result.current.checkState.mutateAsync(undefined));
+    expect(result.current.socketPath).toBe('/run/vtpm/state.sock');
+    await act(() => result.current.stop.mutateAsync(undefined));
+    expect(result.current.socketPath).toBeUndefined();
+    await act(() => result.current.start.mutateAsync(undefined));
+
+    expect(result.current.socketPath).toBe('/run/vtpm/start.sock');
   });
 });
