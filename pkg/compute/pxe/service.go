@@ -30,6 +30,12 @@ import (
 )
 
 // Service defines the interface for the PXE provisioning service.
+// rollbackTimeout bounds the flow rollback after a failed state write. The
+// rollback runs on a context detached from the request, because the request
+// may already be cancelled when the write fails (#2081 Codex): reusing it
+// would leave the widened flows in place.
+const rollbackTimeout = 30 * time.Second
+
 type Service interface {
 	// Lifecycle methods
 	Initialize(ctx context.Context, config *ServiceConfig) error
@@ -1007,20 +1013,21 @@ func (s *service) undoFlows(ctx context.Context, before *DeviceInfo) {
 	if s.vlanManager == nil || before == nil {
 		return
 	}
+	// The request may already be cancelled (#2081 Codex): roll back on a
+	// bounded context of our own.
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+	defer cancel()
 	var err error
 	switch before.State {
 	case StateAuthorized:
-		err = s.vlanManager.ApplyAuthorizedFlows(ctx, before.PortID, before.MACAddress, before.CurrentVLAN)
+		err = s.vlanManager.ApplyAuthorizedFlows(cctx, before.PortID, before.MACAddress, before.CurrentVLAN)
 	case StateQuarantined:
-		err = s.vlanManager.ApplyQuarantineFlows(ctx, before.PortID, before.MACAddress)
+		err = s.vlanManager.ApplyQuarantineFlows(cctx, before.PortID, before.MACAddress)
 	default:
-		err = s.vlanManager.ApplyProvisioningFlows(ctx, before.PortID, before.MACAddress)
+		err = s.vlanManager.ApplyProvisioningFlows(cctx, before.PortID, before.MACAddress)
 	}
 	if err != nil {
-		s.logger.Warn("Failed to undo flows after a failed state write",
-			"device_id", before.ID,
-			"error", err.Error(),
-		)
+		s.failClosed(cctx, before, "undo", err)
 	}
 }
 
@@ -1032,24 +1039,55 @@ func (s *service) restoreEnforcedFlows(ctx context.Context, before *DeviceInfo) 
 	if s.vlanManager == nil || before == nil {
 		return
 	}
+	// The request may already be cancelled (#2081 Codex): restore on a
+	// bounded context of our own.
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+	defer cancel()
 	var err error
+	quarantine := false
 	switch {
 	case before.State == StateQuarantined || before.State == StateFailed ||
 		before.CurrentVLAN == s.config.QuarantineVLAN:
-		err = s.vlanManager.ApplyQuarantineFlows(ctx, before.PortID, before.MACAddress)
+		quarantine = true
+		err = s.vlanManager.ApplyQuarantineFlows(cctx, before.PortID, before.MACAddress)
 	case before.State == StateAuthorized && before.CurrentVLAN != 0:
-		err = s.vlanManager.ApplyAuthorizedFlows(ctx, before.PortID, before.MACAddress, before.CurrentVLAN)
+		err = s.vlanManager.ApplyAuthorizedFlows(cctx, before.PortID, before.MACAddress, before.CurrentVLAN)
 	case before.CurrentVLAN == s.config.ProvisioningVLAN:
-		err = s.vlanManager.ApplyProvisioningFlows(ctx, before.PortID, before.MACAddress)
+		err = s.vlanManager.ApplyProvisioningFlows(cctx, before.PortID, before.MACAddress)
 	default:
-		err = s.vlanManager.ApplyQuarantineFlows(ctx, before.PortID, before.MACAddress)
+		quarantine = true
+		err = s.vlanManager.ApplyQuarantineFlows(cctx, before.PortID, before.MACAddress)
 	}
-	if err != nil {
-		s.logger.Warn("Failed to restore flows after a failed state write",
+	if err == nil {
+		return
+	}
+	if quarantine {
+		s.logger.Error(&WrappedError{Msg: "failed to restore quarantine flows after a failed state write; the device may keep wider access", Err: err},
 			"device_id", before.ID,
-			"error", err.Error(),
 		)
+		return
 	}
+	s.failClosed(cctx, before, "restore", err)
+}
+
+// failClosed applies the quarantine flows when a rollback could not put the
+// prior flows back, so a failed state write never leaves wider access than
+// the stored record allows.
+func (s *service) failClosed(ctx context.Context, device *DeviceInfo, step string, rollbackErr error) {
+	qErr := s.vlanManager.ApplyQuarantineFlows(ctx, device.PortID, device.MACAddress)
+	if qErr != nil {
+		s.logger.Error(&WrappedError{Msg: "failed to quarantine device after a failed flow rollback; the device may keep wider access", Err: qErr},
+			"device_id", device.ID,
+			"step", step,
+			"rollback_error", rollbackErr.Error(),
+		)
+		return
+	}
+	s.logger.Warn("Flow rollback after a failed state write failed; device quarantined",
+		"device_id", device.ID,
+		"step", step,
+		"rollback_error", rollbackErr.Error(),
+	)
 }
 
 // RetryDevice resets a device to discovered state for retry. A retry is a new
