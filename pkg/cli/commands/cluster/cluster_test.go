@@ -305,7 +305,7 @@ func (m *mockClusterService) Join(ctx context.Context, req *platformv1.JoinClust
 			Name:          "test-cluster",
 			State:         platformv1.ClusterState_CLUSTER_STATE_HEALTHY,
 			LeaderId:      "leader-1",
-			LeaderAddress: "10.0.0.1",
+			LeaderAddress: "198.51.100.1",
 			TotalNodes:    2,
 			HealthyNodes:  2,
 			Term:          1,
@@ -345,7 +345,7 @@ func (m *mockClusterService) GetStatus(ctx context.Context, req *platformv1.GetC
 			Name:          "test-cluster",
 			State:         platformv1.ClusterState_CLUSTER_STATE_HEALTHY,
 			LeaderId:      "node-1",
-			LeaderAddress: "10.0.0.1",
+			LeaderAddress: "198.51.100.1",
 			TotalNodes:    3,
 			HealthyNodes:  3,
 			Term:          42,
@@ -353,7 +353,7 @@ func (m *mockClusterService) GetStatus(ctx context.Context, req *platformv1.GetC
 		LocalNode: &platformv1.ClusterNode{
 			Id:            "node-1",
 			Name:          "node-1",
-			Address:       "10.0.0.1",
+			Address:       "198.51.100.1",
 			Port:          7946,
 			Role:          platformv1.NodeRole_NODE_ROLE_LEADER,
 			State:         platformv1.NodeState_NODE_STATE_ACTIVE,
@@ -372,7 +372,7 @@ func (m *mockClusterService) ListNodes(ctx context.Context, req *platformv1.List
 			{
 				Id:            "node-1",
 				Name:          "node-1",
-				Address:       "10.0.0.1",
+				Address:       "198.51.100.1",
 				Port:          7946,
 				Role:          platformv1.NodeRole_NODE_ROLE_LEADER,
 				State:         platformv1.NodeState_NODE_STATE_ACTIVE,
@@ -383,7 +383,7 @@ func (m *mockClusterService) ListNodes(ctx context.Context, req *platformv1.List
 			{
 				Id:            "node-2",
 				Name:          "node-2",
-				Address:       "10.0.0.2",
+				Address:       "198.51.100.2",
 				Port:          7946,
 				Role:          platformv1.NodeRole_NODE_ROLE_FOLLOWER,
 				State:         platformv1.NodeState_NODE_STATE_ACTIVE,
@@ -394,7 +394,7 @@ func (m *mockClusterService) ListNodes(ctx context.Context, req *platformv1.List
 			{
 				Id:            "node-3",
 				Name:          "node-3",
-				Address:       "10.0.0.3",
+				Address:       "198.51.100.3",
 				Port:          7946,
 				Role:          platformv1.NodeRole_NODE_ROLE_FOLLOWER,
 				State:         platformv1.NodeState_NODE_STATE_ACTIVE,
@@ -476,7 +476,7 @@ func TestRunBootstrap_TableOutput(t *testing.T) {
 
 	flags := createTestFlags(socketPath, cli.OutputFormatTable)
 
-	err := runBootstrap(flags, "node-1", "10.0.0.1:7946", "", "/var/lib/raft")
+	err := runBootstrap(flags, "node-1", "198.51.100.1:7946", "", "/var/lib/raft")
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}
@@ -488,7 +488,7 @@ func TestRunBootstrap_JSONOutput(t *testing.T) {
 
 	flags := createTestFlags(socketPath, cli.OutputFormatJSON)
 
-	err := runBootstrap(flags, "node-1", "10.0.0.1:7946", "", "")
+	err := runBootstrap(flags, "node-1", "198.51.100.1:7946", "", "")
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}
@@ -500,7 +500,7 @@ func TestRunBootstrap_YAMLOutput(t *testing.T) {
 
 	flags := createTestFlags(socketPath, cli.OutputFormatYAML)
 
-	err := runBootstrap(flags, "node-1", "10.0.0.1:7946", "10.0.0.1:7946", "")
+	err := runBootstrap(flags, "node-1", "198.51.100.1:7946", "198.51.100.1:7946", "")
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}
@@ -512,7 +512,7 @@ func TestRunBootstrap_InvalidOutputFormat(t *testing.T) {
 
 	flags := createTestFlags(socketPath, cli.OutputFormat("invalid"))
 
-	err := runBootstrap(flags, "node-1", "10.0.0.1:7946", "", "")
+	err := runBootstrap(flags, "node-1", "198.51.100.1:7946", "", "")
 	if err == nil {
 		t.Error("expected error for invalid output format")
 	}
@@ -527,7 +527,7 @@ func TestRunBootstrap_MissingNodeID(t *testing.T) {
 
 	flags := createTestFlags(socketPath, cli.OutputFormatTable)
 
-	err := runBootstrap(flags, "", "10.0.0.1:7946", "", "")
+	err := runBootstrap(flags, "", "198.51.100.1:7946", "", "")
 	if err == nil {
 		t.Error("expected error for missing node ID")
 	}
@@ -572,7 +572,7 @@ func TestRunBootstrap_InvalidAdvertiseAddr(t *testing.T) {
 
 	flags := createTestFlags(socketPath, cli.OutputFormatTable)
 
-	err := runBootstrap(flags, "node-1", "10.0.0.1:7946", "invalid", "")
+	err := runBootstrap(flags, "node-1", "198.51.100.1:7946", "invalid", "")
 	if err == nil {
 		t.Error("expected error for invalid advertise address")
 	}
@@ -593,7 +593,7 @@ func TestRunBootstrap_ContextError(t *testing.T) {
 		},
 	}
 
-	err := runBootstrap(flags, "node-1", "10.0.0.1:7946", "", "")
+	err := runBootstrap(flags, "node-1", "198.51.100.1:7946", "", "")
 	if err == nil {
 		t.Error("expected error for context failure")
 	}
@@ -606,7 +606,7 @@ func TestRunJoin_TableOutput(t *testing.T) {
 
 	flags := createTestFlags(socketPath, cli.OutputFormatTable)
 
-	err := runJoin(flags, "node-2", "10.0.0.2:7946", "", "10.0.0.1:7946")
+	err := runJoin(flags, "node-2", "198.51.100.2:7946", "", "198.51.100.1:7946")
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}
@@ -618,7 +618,7 @@ func TestRunJoin_JSONOutput(t *testing.T) {
 
 	flags := createTestFlags(socketPath, cli.OutputFormatJSON)
 
-	err := runJoin(flags, "node-2", "10.0.0.2:7946", "", "10.0.0.1:7946,10.0.0.3:7946")
+	err := runJoin(flags, "node-2", "198.51.100.2:7946", "", "198.51.100.1:7946,198.51.100.3:7946")
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}
@@ -630,7 +630,7 @@ func TestRunJoin_YAMLOutput(t *testing.T) {
 
 	flags := createTestFlags(socketPath, cli.OutputFormatYAML)
 
-	err := runJoin(flags, "node-2", "10.0.0.2:7946", "10.0.0.2:7946", "10.0.0.1:7946")
+	err := runJoin(flags, "node-2", "198.51.100.2:7946", "198.51.100.2:7946", "198.51.100.1:7946")
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}
@@ -642,7 +642,7 @@ func TestRunJoin_InvalidOutputFormat(t *testing.T) {
 
 	flags := createTestFlags(socketPath, cli.OutputFormat("invalid"))
 
-	err := runJoin(flags, "node-2", "10.0.0.2:7946", "", "10.0.0.1:7946")
+	err := runJoin(flags, "node-2", "198.51.100.2:7946", "", "198.51.100.1:7946")
 	if err == nil {
 		t.Error("expected error for invalid output format")
 	}
@@ -657,7 +657,7 @@ func TestRunJoin_MissingNodeID(t *testing.T) {
 
 	flags := createTestFlags(socketPath, cli.OutputFormatTable)
 
-	err := runJoin(flags, "", "10.0.0.2:7946", "", "10.0.0.1:7946")
+	err := runJoin(flags, "", "198.51.100.2:7946", "", "198.51.100.1:7946")
 	if err == nil {
 		t.Error("expected error for missing node ID")
 	}
@@ -672,7 +672,7 @@ func TestRunJoin_MissingListenAddr(t *testing.T) {
 
 	flags := createTestFlags(socketPath, cli.OutputFormatTable)
 
-	err := runJoin(flags, "node-2", "", "", "10.0.0.1:7946")
+	err := runJoin(flags, "node-2", "", "", "198.51.100.1:7946")
 	if err == nil {
 		t.Error("expected error for missing listen address")
 	}
@@ -687,7 +687,7 @@ func TestRunJoin_MissingJoinAddrs(t *testing.T) {
 
 	flags := createTestFlags(socketPath, cli.OutputFormatTable)
 
-	err := runJoin(flags, "node-2", "10.0.0.2:7946", "", "")
+	err := runJoin(flags, "node-2", "198.51.100.2:7946", "", "")
 	if err == nil {
 		t.Error("expected error for missing join addresses")
 	}
@@ -702,7 +702,7 @@ func TestRunJoin_InvalidListenAddr(t *testing.T) {
 
 	flags := createTestFlags(socketPath, cli.OutputFormatTable)
 
-	err := runJoin(flags, "node-2", "invalid", "", "10.0.0.1:7946")
+	err := runJoin(flags, "node-2", "invalid", "", "198.51.100.1:7946")
 	if err == nil {
 		t.Error("expected error for invalid listen address")
 	}
@@ -717,7 +717,7 @@ func TestRunJoin_InvalidAdvertiseAddr(t *testing.T) {
 
 	flags := createTestFlags(socketPath, cli.OutputFormatTable)
 
-	err := runJoin(flags, "node-2", "10.0.0.2:7946", "invalid", "10.0.0.1:7946")
+	err := runJoin(flags, "node-2", "198.51.100.2:7946", "invalid", "198.51.100.1:7946")
 	if err == nil {
 		t.Error("expected error for invalid advertise address")
 	}
@@ -732,7 +732,7 @@ func TestRunJoin_InvalidJoinAddr(t *testing.T) {
 
 	flags := createTestFlags(socketPath, cli.OutputFormatTable)
 
-	err := runJoin(flags, "node-2", "10.0.0.2:7946", "", "invalid")
+	err := runJoin(flags, "node-2", "198.51.100.2:7946", "", "invalid")
 	if err == nil {
 		t.Error("expected error for invalid join address")
 	}
@@ -747,7 +747,7 @@ func TestRunJoin_EmptyJoinAddrsList(t *testing.T) {
 
 	flags := createTestFlags(socketPath, cli.OutputFormatTable)
 
-	err := runJoin(flags, "node-2", "10.0.0.2:7946", "", ",,,")
+	err := runJoin(flags, "node-2", "198.51.100.2:7946", "", ",,,")
 	if err == nil {
 		t.Error("expected error for empty join addresses list")
 	}
@@ -768,7 +768,7 @@ func TestRunJoin_ContextError(t *testing.T) {
 		},
 	}
 
-	err := runJoin(flags, "node-2", "10.0.0.2:7946", "", "10.0.0.1:7946")
+	err := runJoin(flags, "node-2", "198.51.100.2:7946", "", "198.51.100.1:7946")
 	if err == nil {
 		t.Error("expected error for context failure")
 	}
@@ -1002,7 +1002,7 @@ func TestPrintBootstrapResult_Success(t *testing.T) {
 	result := &BootstrapResult{
 		ClusterID:  "cluster-123",
 		NodeID:     "node-1",
-		ListenAddr: "10.0.0.1:7946",
+		ListenAddr: "198.51.100.1:7946",
 		DataDir:    "/var/lib/raft",
 		Success:    true,
 		Message:    "Cluster bootstrap initiated successfully",
@@ -1019,7 +1019,7 @@ func TestPrintBootstrapResult_Failure(t *testing.T) {
 	result := &BootstrapResult{
 		ClusterID:  "",
 		NodeID:     "node-1",
-		ListenAddr: "10.0.0.1:7946",
+		ListenAddr: "198.51.100.1:7946",
 		DataDir:    "",
 		Success:    false,
 		Message:    "Bootstrap failed: already bootstrapped",
@@ -1036,7 +1036,7 @@ func TestPrintBootstrapResult_WithoutDataDir(t *testing.T) {
 	result := &BootstrapResult{
 		ClusterID:  "cluster-123",
 		NodeID:     "node-1",
-		ListenAddr: "10.0.0.1:7946",
+		ListenAddr: "198.51.100.1:7946",
 		DataDir:    "",
 		Success:    true,
 		Message:    "Cluster bootstrap initiated successfully",
@@ -1054,8 +1054,8 @@ func TestPrintJoinResult_Success(t *testing.T) {
 		NodeID:     "node-2",
 		ClusterID:  "cluster-123",
 		LeaderID:   "node-1",
-		LeaderAddr: "10.0.0.1:7946",
-		JoinedFrom: []string{"10.0.0.1:7946", "10.0.0.3:7946"},
+		LeaderAddr: "198.51.100.1:7946",
+		JoinedFrom: []string{"198.51.100.1:7946", "198.51.100.3:7946"},
 		Success:    true,
 		Message:    "Successfully joined cluster",
 	}
@@ -1090,7 +1090,7 @@ func TestPrintJoinResult_NoSeedNodes(t *testing.T) {
 		NodeID:     "node-2",
 		ClusterID:  "cluster-123",
 		LeaderID:   "node-1",
-		LeaderAddr: "10.0.0.1:7946",
+		LeaderAddr: "198.51.100.1:7946",
 		JoinedFrom: nil,
 		Success:    true,
 		Message:    "Successfully joined cluster",
@@ -1154,7 +1154,7 @@ func TestPrintClusterStatus_Healthy(t *testing.T) {
 		NodeID:       "node-1",
 		RaftState:    string(RaftStateLeader),
 		LeaderID:     "node-1",
-		LeaderAddr:   "10.0.0.1:7946",
+		LeaderAddr:   "198.51.100.1:7946",
 		Term:         42,
 		CommitIndex:  1234,
 		AppliedIndex: 1234,
@@ -1201,7 +1201,7 @@ func TestPrintNodesTable_WithNodes(t *testing.T) {
 		Nodes: []*NodeInfo{
 			{
 				NodeID:    "node-1",
-				Address:   "10.0.0.1:7946",
+				Address:   "198.51.100.1:7946",
 				State:     string(NodeStateAlive),
 				RaftState: string(RaftStateLeader),
 				IsVoter:   true,
@@ -1210,7 +1210,7 @@ func TestPrintNodesTable_WithNodes(t *testing.T) {
 			},
 			{
 				NodeID:    "node-2",
-				Address:   "10.0.0.2:7946",
+				Address:   "198.51.100.2:7946",
 				State:     string(NodeStateAlive),
 				RaftState: string(RaftStateFollower),
 				IsVoter:   true,
@@ -1287,7 +1287,7 @@ func TestBootstrapCommand_RunE_Valid(t *testing.T) {
 
 	cmd := NewBootstrapCommand(getFlags)
 	cmd.Flags().Set("node-id", "node-1")
-	cmd.Flags().Set("listen-addr", "10.0.0.1:7946")
+	cmd.Flags().Set("listen-addr", "198.51.100.1:7946")
 
 	err := cmd.RunE(cmd, []string{})
 	if err != nil {
@@ -1323,8 +1323,8 @@ func TestJoinCommand_RunE_Valid(t *testing.T) {
 
 	cmd := NewJoinCommand(getFlags)
 	cmd.Flags().Set("node-id", "node-2")
-	cmd.Flags().Set("listen-addr", "10.0.0.2:7946")
-	cmd.Flags().Set("join", "10.0.0.1:7946")
+	cmd.Flags().Set("listen-addr", "198.51.100.2:7946")
+	cmd.Flags().Set("join", "198.51.100.1:7946")
 
 	err := cmd.RunE(cmd, []string{})
 	if err != nil {
