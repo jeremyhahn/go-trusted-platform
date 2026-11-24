@@ -1,16 +1,4 @@
-# Cross-builds the aarch64 Linux kernel the QEMU virt stand-in of the
-# Raspberry Pi factory image boots (docs/factory-image/).
-#
-# Why a platform-built kernel: Alpine's aarch64 kernels ship no memory-mapped
-# TIS driver (CONFIG_TCG_TIS is unset in linux-lts and linux-rpi; linux-virt
-# has no TPM support at all), and the only TPM QEMU can attach to the virt
-# machine is the memory-mapped tpm-tis-device. The Raspberry Pi itself uses
-# the SPI transport those kernels do have. This kernel is Alpine's version
-# with the TIS driver, signed modules and the same lockdown LSM, so the
-# emulated first boot exercises the platform exactly as the Pi does.
-#
-# alpine-first per the company devops convention; the aarch64 bare-metal
-# toolchain builds the kernel the same way it builds U-Boot.
+# Cross-builds the aarch64 kernel the QEMU virt stand-in of the Raspberry Pi factory image boots.
 FROM alpine:3.22
 
 RUN apk add --no-cache \
@@ -40,17 +28,10 @@ WORKDIR /build
 COPY build-virt-kernel.sh /build/
 RUN chmod +x /build/build-virt-kernel.sh
 
-# The Kconfig fragment is baked in, not bind-mounted: a bind mount is resolved
-# by the Docker daemon on ITS filesystem, so when the build runs inside a CI
-# job container the checkout's configs/ directory does not exist there and the
-# mount arrives empty ("missing builder input /configs/virt.config"). The
-# fragment is a cache-key input already, so the image is rebuilt when it changes.
+# Baked in, not bind-mounted: the daemon cannot see a CI job container's checkout.
 COPY configs/virt.config /configs/virt.config
 
-# The options every platform kernel carries and the check that enforces them,
-# shared with the fips kernel builder. "kernelconfig" is a named build context
-# (docker build --build-context kernelconfig=../kernel-config), so the one
-# copy in build/docker/kernel-config is what both images bake in.
+# The options every platform kernel carries and the check that enforces them.
 COPY --from=kernelconfig platform-required.config require-config.sh /build/kernel-config/
 
 ENV ARCH=arm64

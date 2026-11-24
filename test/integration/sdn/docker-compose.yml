@@ -1,11 +1,7 @@
 version: '3.8'
 
 services:
-  # OVS runs in its own container; the entrypoint (AUTO_START_OVS=true)
-  # starts ovsdb-server and ovs-vswitchd, and the shared ovs-db volume
-  # hands their sockets to sdn-test. The healthcheck asks ovsdb through
-  # ovs-vsctl and ovs-vswitchd through its control socket, so sdn-test
-  # starts on a working switch rather than after a fixed sleep (#964).
+  # OVS in its own container; the ovs-db volume hands its sockets to sdn-test.
   ovs:
     # Built by `make build-devcontainer`, never here.
     image: trusted-platform-dev:latest

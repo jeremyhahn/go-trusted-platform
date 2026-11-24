@@ -1,13 +1,4 @@
-# Docker Compose configuration for web development
-# Backend runs in container, frontend runs on host for best hot-reload experience
-#
-# Usage: make dev (from web/ directory)
-#
-# This is separate from the main devcontainer to avoid port conflicts
-# and allow parallel development/testing workflows.
-#
-# All containers use "trusted-platform-" prefix to avoid conflicts with
-# other projects (go-xkms, go-quicbaas, etc.) running on the same system.
+# Web development: backend in a container, frontend on the host.
 
 services:
   # Web development backend service
@@ -81,7 +72,7 @@ services:
         soft: 65536
         hard: 65536
 
-    # Port mappings - NO port 3000 (frontend runs on host)
+    # Port mappings; the frontend runs on the host.
     ports:
       - "8443:8443"       # REST/HTTPS
       - "10443:10443"     # gRPC TCP

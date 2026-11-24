@@ -1,30 +1,4 @@
-# Trusted Platform Cluster Reference Architecture
-#
-# Deploys a full HA cluster:
-#   - 2 Gateway nodes (stateless, anycast VIP)
-#   - 3 Server nodes (Raft consensus)
-#   - 3 Client nodes (application servers)
-#
-# Prerequisites:
-#   make build-devcontainer DEVCONTAINER_IMAGE=go-trusted-platform-dev:latest
-#
-# Usage:
-#   docker compose up -d                    # Start entire cluster
-#   docker compose up -d server1 server2 server3  # Start server cluster only
-#   docker compose logs -f server1          # Follow server1 logs
-#   docker compose down                     # Stop all services
-#   docker compose down -v                  # Stop and remove volumes
-#
-# Network Layout:
-#   Gateways:  10.0.0.10, 10.0.0.11 (VIP: 10.0.0.1)
-#   Servers:   10.0.1.1, 10.0.1.2, 10.0.1.3
-#   Clients:   10.0.2.1, 10.0.2.2, 10.0.2.3
-#
-# Deployment Order:
-#   1. server1 (Raft bootstrap)
-#   2. server2, server3 (join Raft cluster)
-#   3. gateway1, gateway2 (stateless, any order)
-#   4. client1, client2, client3 (any order)
+# Trusted Platform cluster reference architecture.
 
 networks:
   # Gateway network (public-facing)
@@ -87,9 +61,7 @@ x-healthcheck: &healthcheck
   start_period: 60s
 
 services:
-  # ==========================================================================
-  # SERVER CLUSTER (Raft Consensus)
-  # ==========================================================================
+  # Server cluster (Raft)
 
   server1:
     image: go-trusted-platform-dev:latest
@@ -207,9 +179,7 @@ services:
       test: ["CMD", "curl", "-sfk", "https://localhost:8443/api/v1/status"]
     restart: unless-stopped
 
-  # ==========================================================================
-  # GATEWAY CLUSTER (Stateless Load Balancers)
-  # ==========================================================================
+  # Gateway cluster (stateless load balancers)
 
   gateway1:
     image: go-trusted-platform-dev:latest
@@ -287,9 +257,7 @@ services:
       test: ["CMD", "curl", "-sf", "http://localhost:80/health"]
     restart: unless-stopped
 
-  # ==========================================================================
-  # CLIENT CLUSTER (Application Servers)
-  # ==========================================================================
+  # Client cluster (application servers)
 
   client1:
     image: go-trusted-platform-dev:latest

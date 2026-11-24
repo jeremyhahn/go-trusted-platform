@@ -1,6 +1,4 @@
-# /lib/systemd/system/trusted-platform.service
-# Trusted Platform :: Trusted / Confidential Computing Platform
-# Platform daemon with web services (config-driven)
+# Trusted Platform daemon with web services.
 
 [Unit]
 Description=Trusted Platform Daemon
@@ -19,9 +17,7 @@ WorkingDirectory=/var/lib/trusted-platform
 # Environment file for runtime configuration (set during install)
 EnvironmentFile=-/etc/trusted-platform/platformd.env
 
-# ExecStart uses environment variable for optional debug flag
-# PLATFORMD_DEBUG will be set to "--debug" or empty based on install options
-# Platform directories are explicitly set to match installer configuration
+# PLATFORMD_DEBUG is "--debug" or empty, set by the installer.
 ExecStart=/usr/local/bin/platformd serve --platform-dir=/var/lib/trusted-platform --config-dir=/etc/trusted-platform --log-dir=/var/log/trusted-platform --enable-mtls ${PLATFORMD_DEBUG}
 
 # Process management

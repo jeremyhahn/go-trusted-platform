@@ -72,9 +72,7 @@ RUN echo "<VirtualHost *:80>" > /etc/apache2/sites-available/000-default.conf &&
     echo "    </Directory>" >> /etc/apache2/sites-available/000-default.conf && \
     echo "</VirtualHost>" >> /etc/apache2/sites-available/000-default.conf
 
-# The ISC DHCP scope is the deployment's, so it is not baked into this image:
-# entrypoint.sh writes /etc/dhcp/dhcpd.conf at container start from the
-# DHCP_* environment and refuses to start without it.
+# The DHCP scope is the deployment's: entrypoint.sh writes /etc/dhcp/dhcpd.conf from the DHCP_* environment.
 
 # Copy supervisord config to container
 # COPY ./supervisord.conf /etc/supervisord.conf

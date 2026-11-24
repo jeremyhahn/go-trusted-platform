@@ -1,17 +1,12 @@
 # syntax=docker/dockerfile:1
 #
-# vBMC -- Virtual BMC responder for integration tests.
-# Multi-stage build: compile statically, run on scratch with TLS
-# roots baked in from the build stage.
+# vBMC: virtual BMC responder for integration tests.
 
 FROM golang:1.27.4-bookworm AS build
 
 WORKDIR /src
 
-# Copy the full module tree because the vbmc binary transitively
-# imports pkg/* for a few helper types (via go-trusted-platform). A
-# minimal copy is possible but fragile; copying the repo keeps the
-# build reproducible.
+# The full module tree: vbmc imports a few pkg/* helper types.
 COPY . .
 
 ARG TARGETOS=linux
@@ -34,7 +29,6 @@ ENV VBMC_HTTPS_ADDR=:8443 \
     VBMC_VENDOR=Supermicro \
     VBMC_LOG_LEVEL=info
 
-# Liveness: the image has no curl/wget. Integration harness uses
-# an external probe; this HEALTHCHECK is intentionally omitted.
+# Liveness: the image has no curl or wget.
 
 ENTRYPOINT ["/usr/local/bin/vbmc"]

@@ -1,7 +1,4 @@
-# /lib/systemd/system/platformd.service
-# Trusted Platform :: Platformd Daemon
-# gRPC service for platform management and orchestration
-# Runs as root for privileged operations: TPM, OVS, network configuration
+# Trusted Platform platformd: gRPC platform management; root for TPM, OVS and network operations.
 
 [Unit]
 Description=Trusted Platform Daemon (platformd)
@@ -21,8 +18,7 @@ WorkingDirectory=/var/lib/trusted-platform
 # Load environment configuration
 EnvironmentFile=-/etc/trusted-platform/platformd.env
 
-# Service execution
-# Listens on Unix socket at /var/run/platformd.sock for gRPC IPC
+# Listens on the Unix socket /var/run/platformd.sock.
 ExecStart=/usr/local/bin/platformd serve --config=/etc/trusted-platform/config.yaml --socket-path=/var/run/platformd.sock --log-dir=/var/log/trusted-platform --enable-mtls ${PLATFORMD_DEBUG}
 
 # Process management
@@ -64,12 +60,7 @@ DeviceAllow=/dev/kmem r
 DeviceAllow=/dev/port r
 DeviceAllow=/dev/fuse rw
 
-# Security: Capability restrictions
-# CAP_SYS_ADMIN  - for TPM operations, device management, namespaces
-# CAP_NET_ADMIN  - for OVS and network configuration
-# CAP_SYS_PTRACE - for process introspection if needed
-# CAP_SYS_RESOURCE - for resource limits
-# CAP_DAC_OVERRIDE - for file access across users
+# Capabilities for TPM and device management, OVS and networking, process introspection, resource limits and file access.
 AmbientCapabilities=CAP_SYS_ADMIN CAP_NET_ADMIN CAP_SYS_PTRACE CAP_SYS_RESOURCE CAP_DAC_OVERRIDE
 CapabilityBoundingSet=CAP_SYS_ADMIN CAP_NET_ADMIN CAP_SYS_PTRACE CAP_SYS_RESOURCE CAP_DAC_OVERRIDE CAP_NET_RAW
 

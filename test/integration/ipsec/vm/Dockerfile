@@ -1,18 +1,7 @@
 # check=skip=FromPlatformFlagConstDisallowed
-# (The root stage is aarch64 whatever the build host is: that constant
-# platform is the point of this file.)
-# The ipsec suite's aarch64 VM: a kernel and an initramfs that run the suite's
-# tests on a real aarch64 kernel under qemu-system-aarch64 (TCG).
-#
-# Why a VM and not qemu-user: qemu's linux-user mode refuses NETLINK_XFRM
-# sockets (EPROTONOSUPPORT, measured with qemu 7.2 and 10.2.3), and charon
-# aborts at start-up without its kernel IPsec interface.
-#
-# Built by `make ipsec-arm64-vm` with `--output type=local`: the result is
-# Image (the raw arm64 kernel) and initrd.gz.
+# The ipsec suite's aarch64 VM: a kernel and an initramfs that run the suite under qemu-system-aarch64 (TCG).
 
-# Alpine's linux-virt kernel (XFRM, ESP, veth, netns, 9p all available as
-# modules) with iproute2 for `ip netns`, and the init that runs the suite.
+# linux-virt with iproute2 and the suite's init.
 FROM --platform=linux/arm64 alpine:3.22 AS root
 RUN apk add --no-cache linux-virt iproute2
 COPY init /init
@@ -22,10 +11,7 @@ RUN chmod 755 /init
 FROM --platform=$BUILDPLATFORM alpine:3.22 AS pack
 RUN apk add --no-cache cpio
 COPY --from=root / /vmroot
-# vmlinuz-virt is an EFI zboot image, which qemu's -kernel (7.2 in the
-# devcontainer) cannot load: the raw Image is the gzip payload whose offset
-# and size the zboot header holds at bytes 8 and 12, after the "zimg" magic
-# at byte 4 and the codec name at byte 24.
+# qemu's -kernel cannot load the EFI zboot vmlinuz-virt, so extract the raw Image from its gzip payload.
 RUN set -eu; \
     z=/vmroot/boot/vmlinuz-virt; \
     [ "$(dd if=$z bs=1 skip=4 count=4 2>/dev/null)" = zimg ] || { echo "$z is not a zboot image" >&2; exit 1; }; \
