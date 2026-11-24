@@ -1236,6 +1236,8 @@ func (o *QEMUOrchestrator) GetState(ctx context.Context, instanceID string) (Ins
 
 // Close closes the orchestrator and releases resources
 func (o *QEMUOrchestrator) Close() error {
+	reapReceivers(o)
+
 	o.mu.Lock()
 	defer o.mu.Unlock()
 

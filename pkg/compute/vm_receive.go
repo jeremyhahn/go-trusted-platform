@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 )
@@ -214,22 +215,64 @@ var receiverStore sync.Map // *QEMUOrchestrator -> *receiverRegistry
 type receiverRegistry struct {
 	mu        sync.Mutex
 	receivers map[string]*trackedReceiver
+	// base is the orchestrator-owned context every receiver's lifetime derives from.
+	base   context.Context
+	cancel context.CancelFunc
 }
+
+// receiverMaxLifetime bounds how long a prepared receiver waits to be finalized.
+var receiverMaxLifetime = 3 * time.Hour
 
 // trackedReceiver pairs a launched receiver with the cleanup that releases its
 // TLS credential material.
 type trackedReceiver struct {
 	recv    incomingReceiver
 	cleanup func()
+	cancel  context.CancelFunc
+	timer   *time.Timer
+}
+
+// abort tears down a receiver nobody will finalize.
+func (tr *trackedReceiver) abort(o *QEMUOrchestrator, id string) {
+	if tr.timer != nil {
+		tr.timer.Stop()
+	}
+	if err := tr.recv.Abort(context.Background()); err != nil {
+		o.logger.Warnf("Failed to abort migration receiver %s: %v", id, err)
+	}
+	tr.cleanup()
+	tr.cancel()
 }
 
 func receiversFor(o *QEMUOrchestrator) *receiverRegistry {
 	if v, ok := receiverStore.Load(o); ok {
 		return v.(*receiverRegistry)
 	}
-	reg := &receiverRegistry{receivers: make(map[string]*trackedReceiver)}
-	actual, _ := receiverStore.LoadOrStore(o, reg)
+	base, cancel := context.WithCancel(context.Background())
+	reg := &receiverRegistry{receivers: make(map[string]*trackedReceiver), base: base, cancel: cancel}
+	actual, loaded := receiverStore.LoadOrStore(o, reg)
+	if loaded {
+		cancel()
+	}
 	return actual.(*receiverRegistry)
+}
+
+// reapReceivers aborts every receiver still registered for o and releases its registry.
+func reapReceivers(o *QEMUOrchestrator) {
+	v, ok := receiverStore.LoadAndDelete(o)
+	if !ok {
+		return
+	}
+	reg := v.(*receiverRegistry)
+	reg.mu.Lock()
+	pending := reg.receivers
+	reg.receivers = make(map[string]*trackedReceiver)
+	reg.mu.Unlock()
+	for id, tr := range pending {
+		tr.abort(o, id)
+		o.logger.Infof("Aborted migration receiver %s during shutdown", id)
+	}
+	reg.cancel()
 }
 
 func (r *receiverRegistry) put(id string, tr *trackedReceiver) {
@@ -287,20 +330,30 @@ func (o *QEMUOrchestrator) ReceiveIncoming(ctx context.Context, spec MigrationSp
 		return nil, &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "materialize server migration TLS creds", Err: err}}
 	}
 
+	reg := receiversFor(o)
+	lifetime, cancel := context.WithCancel(reg.base)
 	recv, err := newIncomingReceiver(ctx, &incomingReceiverParams{
 		orchestrator: o,
 		spec:         spec,
 		credsDir:     credsDir,
 		listen:       listen,
-		lifetime:     context.WithoutCancel(ctx),
+		lifetime:     lifetime,
 	})
 	if err != nil {
+		cancel()
 		cleanup()
 		return nil, &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "launch migration receiver", Err: err}}
 	}
 
 	receiverID := generateInstanceID()
-	receiversFor(o).put(receiverID, &trackedReceiver{recv: recv, cleanup: cleanup})
+	tr := &trackedReceiver{recv: recv, cleanup: cleanup, cancel: cancel}
+	tr.timer = time.AfterFunc(receiverMaxLifetime, func() {
+		if expired, ok := reg.take(receiverID); ok {
+			expired.abort(o, receiverID)
+			o.logger.Warnf("Migration receiver %s expired before it was finalized", receiverID)
+		}
+	})
+	reg.put(receiverID, tr)
 
 	o.logger.Infof("Prepared migration receiver %s for VM %s on port %d", receiverID, spec.VMName, recv.Port())
 	return &ReceiverHandle{
@@ -320,6 +373,7 @@ func (o *QEMUOrchestrator) FinalizeIncoming(ctx context.Context, receiverID stri
 	if !ok {
 		return ErrReceiverNotFound
 	}
+	tr.timer.Stop()
 	defer tr.cleanup()
 
 	if commit {
@@ -330,6 +384,7 @@ func (o *QEMUOrchestrator) FinalizeIncoming(ctx context.Context, receiverID stri
 		return nil
 	}
 
+	defer tr.cancel()
 	if err := tr.recv.Abort(ctx); err != nil {
 		return &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "abort received VM", Err: err}}
 	}
