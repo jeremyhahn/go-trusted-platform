@@ -452,6 +452,111 @@ type TPM2StatusResponse struct {
 }
 ```
 
+### EventLog (0x13)
+
+**Permission:** `tpm:read`
+
+**Request Payload:** empty (the sub-opcode byte only).
+
+**Response Payload:**
+```go
+type TPM2EventLogResponse struct {
+    EventLog   []byte              `codec:"event_log"`   // raw TCG2 log
+    Format     string              `codec:"format"`      // "tcg2"
+    EventCount uint64              `codec:"event_count"` // number of entries
+    Timestamp  int64               `codec:"timestamp"`
+    Entries    []TPM2EventLogEntry `codec:"entries"`
+}
+
+type TPM2EventLogEntry struct {
+    EventNum    uint32            `codec:"event_num"`
+    PCRIndex    uint32            `codec:"pcr_index"`
+    EventType   string            `codec:"event_type"`   // e.g. EV_S_CRTM_VERSION
+    DigestCount uint32            `codec:"digest_count"`
+    Digests     []TPM2EventDigest `codec:"digests"`
+    EventSize   uint32            `codec:"event_size"`
+    EventString string            `codec:"event_string"`
+}
+
+type TPM2EventDigest struct {
+    AlgorithmID string `codec:"algorithm_id"` // e.g. sha256
+    Digest      string `codec:"digest"`       // hex encoded
+}
+```
+
+The entries carry the same fields as gRPC `GetEventLogResponse.entries`.
+When the raw log does not parse, `event_log` is still answered, `entries`
+is empty and `event_count` is 0.
+
+### Random (0x14)
+
+**Permission:** `tpm:read`
+
+**Request Payload:**
+```go
+type TPM2RandomRequest struct {
+    NumBytes uint32 `codec:"num_bytes"` // default 32, max 1024
+}
+```
+
+**Response Payload:**
+```go
+type TPM2RandomResponse struct {
+    RandomBytes []byte `codec:"random_bytes"`
+    Timestamp   int64  `codec:"timestamp"`
+}
+```
+
+A `num_bytes` above 1024 answers InvalidArgument.
+
+### MakeCredential (0x20)
+
+**Permission:** `tpm:read`
+
+**Request Payload:**
+```go
+type TPM2MakeCredentialRequest struct {
+    AKName []byte `codec:"ak_name"` // AK TPM name (local EK path)
+    Secret []byte `codec:"secret"`  // credential secret
+    EKCert []byte `codec:"ek_cert"` // external EK certificate (verifier path)
+    IAKPub []byte `codec:"iak_pub"` // external IAK public (verifier path)
+}
+```
+
+**Response Payload:**
+```go
+type TPM2MakeCredentialResponse struct {
+    CredentialBlob  []byte `codec:"credential_blob"`
+    EncryptedSecret []byte `codec:"encrypted_secret"`
+    Secret          []byte `codec:"secret"`
+    Timestamp       int64  `codec:"timestamp"`
+}
+```
+
+With both `ek_cert` and `iak_pub` set, the credential is made for the
+external EK (verifier path); otherwise it is made for the local EK and
+`ak_name`.
+
+### ActivateCredential (0x21)
+
+**Permission:** `tpm:write`
+
+**Request Payload:**
+```go
+type TPM2ActivateCredentialRequest struct {
+    CredentialBlob  []byte `codec:"credential_blob"`  // required
+    EncryptedSecret []byte `codec:"encrypted_secret"` // required
+}
+```
+
+**Response Payload:**
+```go
+type TPM2ActivateCredentialResponse struct {
+    Secret    []byte `codec:"secret"`
+    Timestamp int64  `codec:"timestamp"`
+}
+```
+
 ### Seal (0x15)
 
 **Request Payload:**
