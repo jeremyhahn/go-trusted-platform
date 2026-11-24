@@ -136,13 +136,18 @@ answers from the daemon's `ClusterServicer`. The REST handlers, the QUIC `0x90`
 sub-opcodes and the MCP `platform_cluster_*` tools all call that registered
 service. `Daemon.SetClusterService` sets the servicer for all of them; since
 #2140 serve calls it through `appbackends.WireSDKBackends` with a servicer that
-reads the embedded go-quicbaas cluster (status, nodes, leader), while Join and
-Leave still answer Unavailable.
+reads the embedded go-quicbaas cluster (status, nodes, leader) and serves
+Leave through the go-quicbaas SDK RemoveNode, while Join answers Unavailable
+(the pinned go-quicbaas has no join seam).
 
 **So today: serve and every embedded host set the servicer through
 `appbackends.WireSDKBackends`, over the Raft cluster the embedded go-quicbaas
-service runs.** Status, nodes and leader answer on every transport; Join and
-Leave answer Unavailable. Node health reads unknown: the pinned go-quicbaas
+service runs.** Status, nodes and leader answer on every transport. Leave
+removes this node from each shard it replicates through the SDK RemoveNode; a
+shard leader is refused (FailedPrecondition) because the pinned go-quicbaas has
+no leadership transfer, and a non-member is NotFound. Join and runtime
+Bootstrap of a standalone node still answer Unavailable / not initialized: the
+pinned go-quicbaas has no join seam, an upstream gap. Node health reads unknown: the pinned go-quicbaas
 `ClusterStatus` reports Raft membership and marks every member healthy, a
 stopped follower included, so every node State is "unknown", the healthy count
 is 0 and the cluster State is "unknown" with a leader ("degraded" without one,

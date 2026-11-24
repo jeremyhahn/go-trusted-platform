@@ -22,8 +22,10 @@ embedded host set it through `appbackends.WireSDKBackends`
 (`pkg/app/backends/cluster.go`), over the embedded go-quicbaas service, and the
 embedded host sets `registry.Cluster` to the daemon's cluster gRPC service. So
 `GetStatus` and `ListNodes` answer on every transport, `Bootstrap` answers
-already initialized or not initialized, and `Join` and `Leave` still answer
-`Unavailable` (REST 503). A daemon built without an embedded QuicBaaS service
+already initialized or not initialized, `Leave` removes this node from each
+shard it replicates through the go-quicbaas SDK `RemoveNode` (REST 200), and
+`Join` answers `Unavailable` (REST 503) because the pinned go-quicbaas has no
+join seam (an upstream gap). A daemon built without an embedded QuicBaaS service
 sets no servicer and still answers `Unavailable` (REST 503) on every call.
 
 The tables below therefore document **two different things**, kept separate on
@@ -101,8 +103,16 @@ For cluster:
   is 0 until the SDK exposes liveness, and the cluster State is "unknown" with
   a leader, "degraded" without one and "uninitialized" with no members.
   `Bootstrap` answers `AlreadyExists` (REST 409) when a leader is known and
-  `FailedPrecondition` (REST 409) otherwise. `Join` and `Leave` answer
-  `Unavailable` (REST 503).
+  `FailedPrecondition` (REST 409) otherwise. `Leave` removes this node from
+  every shard it replicates through the go-quicbaas SDK `RemoveNode`, in
+  ascending shard order (REST 200). It refuses a node with no ID
+  (`ErrClusterNotInitialized`, `FailedPrecondition`, REST 409), a node that
+  replicates no shard (`ErrNodeNotInCluster`, `NotFound`, REST 404) and a node
+  that leads any of its shards (`ErrCannotLeaveAsLeader`, `FailedPrecondition`,
+  REST 409: the pinned go-quicbaas has no leadership transfer) before removing
+  anything; a failed `RemoveNode` is `ErrClusterOperationFailed` naming the
+  shard (`Internal`, REST 500). `Join` answers `Unavailable` (REST 503): the
+  pinned go-quicbaas has no join seam, an upstream gap.
 
 What each RPC does with the servicer:
 
@@ -293,7 +303,8 @@ validates (§6).
 | anything else | 500 |
 
 On serve and embedded hosts (since #2140) status and nodes return 200,
-`Bootstrap` returns 409 and `Join` and `Leave` return 503 (§3). With no
+`Bootstrap` returns 409, `Leave` returns 200 through `RemoveNode` (409 for a
+shard leader, 404 for a non-member) and `Join` returns 503 (§3). With no
 servicer set every cluster REST call returns 503, because the registered
 service returns `Unavailable`. With a servicer set, REST returns
 200 with the gRPC response as JSON, or the status above for its error. The
