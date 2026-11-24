@@ -86,9 +86,21 @@ var tpmOpsResponseDecoders = map[string]categoryResponseDecoder{
 			out.Secret = w.Secret
 			return nil
 		}),
+	// GetAK reads the platform AK (the IAK) through SubOpTPM2GetIAK; the
+	// wire algorithm is a family string, so the reply's KeyAlgorithm
+	// stays unset.
+	platformv1.TPMService_GetAK_FullMethodName: responseDecoder(platformv1.TPMService_GetAK_FullMethodName,
+		func(w *quicwire.TPM2KeyResponse, out *platformv1.GetAKResponse) error {
+			out.Handle = w.Handle
+			out.PublicKey = w.PublicKey
+			out.Name = w.Name
+			return nil
+		}),
 }
 
 func init() {
 	categoryEmptyBodyMethods[platformv1.TPMService_GetEventLog_FullMethodName] = struct{}{}
+	// handleGetIAK ignores the payload: GetAK sends an empty body.
+	categoryEmptyBodyMethods[platformv1.TPMService_GetAK_FullMethodName] = struct{}{}
 	registerCategoryCodecs(tpmOpsRequestEncoders, tpmOpsResponseDecoders)
 }

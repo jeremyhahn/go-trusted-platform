@@ -192,15 +192,9 @@ type TPM2ClearRequest struct {
 	OwnerPassword string `codec:"owner_password" secret:"true"`
 }
 
-// TPM2KeyResponse represents a TPM key response.
-type TPM2KeyResponse struct {
-	Handle    uint32 `codec:"handle"`
-	PublicKey []byte `codec:"public_key"`
-	Algorithm string `codec:"algorithm"`
-	Timestamp int64  `codec:"timestamp"`
-	// Name is the key's TPM name (TPM2B_NAME bytes); set by GetIAK (#2069).
-	Name []byte `codec:"name,omitempty"`
-}
+// TPM2KeyResponse represents a TPM key response. It lives in quicwire so
+// the SDK QUIC transport decodes the same type the server encodes (#2069).
+type TPM2KeyResponse = quicwire.TPM2KeyResponse
 
 // TPM2CertificateResponse represents a TPM certificate response.
 type TPM2CertificateResponse struct {

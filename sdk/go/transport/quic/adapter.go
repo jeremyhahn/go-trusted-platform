@@ -516,6 +516,7 @@ var categorySubOpcodeMap = map[string]byte{
 	"/platform.v1.TPMService/GetRandom":             quicwire.SubOpTPM2Random,
 	"/platform.v1.TPMService/MakeCredential":        quicwire.SubOpTPM2MakeCred,
 	"/platform.v1.TPMService/ActivateCredential":    quicwire.SubOpTPM2ActivateCred,
+	"/platform.v1.TPMService/GetAK":                 quicwire.SubOpTPM2GetIAK,
 
 	// PIV Service — OpPIVCategory (0x9B)
 	// Server dispatcher: pkg/api/daemon/phase35_quic.go::pivQUICDispatch
@@ -834,6 +835,7 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.TPMService/GetRandom":             quicwire.OpTPM2Category,
 	"/platform.v1.TPMService/MakeCredential":        quicwire.OpTPM2Category,
 	"/platform.v1.TPMService/ActivateCredential":    quicwire.OpTPM2Category,
+	"/platform.v1.TPMService/GetAK":                 quicwire.OpTPM2Category,
 
 	// Device Service — proto: pkg/api/grpc/proto/device.proto
 	"/platform.v1.DeviceService/CreateDevice":       quicwire.OpDeviceRegister,
