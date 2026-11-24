@@ -26,9 +26,19 @@ import (
 	"google.golang.org/grpc/status"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmstypes "github.com/jeremyhahn/go-xkms/pkg/types"
 )
 
 const testSSRKHandle = tpm2.TPMHandle(0x81000001)
+
+// mustSecret wraps a literal test secret in a SecretValue.
+func mustSecret(s string) *xkmstypes.SecretValue {
+	sv, err := xkmstypes.NewLiteralSecretValue([]byte(s))
+	if err != nil {
+		panic(err)
+	}
+	return sv
+}
 
 // createTPM answers only Config, ReadHandle, EKAttributes and CreateSRK.
 // The embedded nil interface means any other call panics, so a change that
@@ -80,7 +90,7 @@ func emptySSRKHandle(cfg *xkmssdk.TPMConfig) *createTPM {
 // tpm.ssrk rather than reading it back.
 func TestCreate_EmptyHandleCreatesFromConfig(t *testing.T) {
 	tpm := emptySSRKHandle(&xkmssdk.TPMConfig{
-		SSRK: &xkmssdk.SRKConfig{Handle: uint32(testSSRKHandle), HierarchyAuth: "so-pin"},
+		SSRK: &xkmssdk.SRKConfig{Handle: uint32(testSSRKHandle), HierarchyAuth: mustSecret("so-pin")},
 	})
 
 	got, err := Create(tpm)
@@ -94,17 +104,16 @@ func TestCreate_EmptyHandleCreatesFromConfig(t *testing.T) {
 	assert.Nil(t, got.Parent, "no bus encryption, no salting parent")
 }
 
-func TestCreate_EncryptSessionParentsOnTheEK(t *testing.T) {
+func TestPersist_EncryptSessionParentsOnTheEK(t *testing.T) {
 	ek := &xkmssdk.KeyAttributes{CN: "ek"}
-	tpm := emptySSRKHandle(&xkmssdk.TPMConfig{
-		EncryptSession: true,
-		SSRK:           &xkmssdk.SRKConfig{Handle: uint32(testSSRKHandle)},
-	})
+	cfg := &xkmssdk.SRKConfig{Handle: uint32(testSSRKHandle)}
+	tpm := emptySSRKHandle(&xkmssdk.TPMConfig{SSRK: cfg})
 	tpm.ekAttrs = ek
 
-	got, err := Create(tpm)
+	got, err := Persist(tpm, cfg, true)
 
 	require.NoError(t, err)
+	require.Same(t, got, tpm.created)
 	assert.Same(t, ek, got.Parent)
 }
 
@@ -140,18 +149,24 @@ func TestCreate_NotConfigured(t *testing.T) {
 func TestCreate_PropagatesBackendErrors(t *testing.T) {
 	ekErr := errors.New("EK config is nil")
 	createErr := errors.New("TPM_RC_BAD_AUTH")
-	encrypting := &xkmssdk.TPMConfig{EncryptSession: true, SSRK: &xkmssdk.SRKConfig{Handle: uint32(testSSRKHandle)}}
-	plain := &xkmssdk.TPMConfig{SSRK: &xkmssdk.SRKConfig{Handle: uint32(testSSRKHandle)}}
+	srk := &xkmssdk.SRKConfig{Handle: uint32(testSSRKHandle)}
+	plain := &xkmssdk.TPMConfig{SSRK: srk}
 	cases := map[string]struct {
-		tpm  *createTPM
-		want error
+		tpm     *createTPM
+		encrypt bool
+		want    error
 	}{
-		"EKAttributes": {tpm: &createTPM{cfg: encrypting, readErr: errAbsent, ekErr: ekErr}, want: ekErr},
+		"EKAttributes": {tpm: &createTPM{cfg: plain, readErr: errAbsent, ekErr: ekErr}, encrypt: true, want: ekErr},
 		"CreateSRK":    {tpm: &createTPM{cfg: plain, readErr: errAbsent, createErr: createErr}, want: createErr},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := Create(tc.tpm)
+			var err error
+			if tc.encrypt {
+				_, err = Persist(tc.tpm, srk, true)
+			} else {
+				_, err = Create(tc.tpm)
+			}
 			require.ErrorIs(t, err, tc.want)
 		})
 	}
@@ -166,7 +181,7 @@ func TestCreate_NilTPM(t *testing.T) {
 // persistedSSRK is a TPM holding the Shared SRK at the configured handle.
 func persistedSSRK() *createTPM {
 	return &createTPM{cfg: &xkmssdk.TPMConfig{
-		SSRK: &xkmssdk.SRKConfig{Handle: uint32(testSSRKHandle), HierarchyAuth: "so-pin"},
+		SSRK: &xkmssdk.SRKConfig{Handle: uint32(testSSRKHandle), HierarchyAuth: mustSecret("so-pin")},
 	}}
 }
 
@@ -271,7 +286,7 @@ func TestAttributesFromConfig(t *testing.T) {
 	rsa, err := AttributesFromConfig(&xkmssdk.SRKConfig{
 		Handle:        uint32(testSSRKHandle),
 		RSAConfig:     &xkmssdk.RSAConfig{KeySize: 2048},
-		HierarchyAuth: "so-pin",
+		HierarchyAuth: mustSecret("so-pin"),
 	})
 	require.NoError(t, err)
 	require.Equal(t, x509.RSA, rsa.KeyAlgorithm)
@@ -288,7 +303,7 @@ func TestAttributesFromConfig(t *testing.T) {
 		CN:        "ssrk",
 		Handle:    uint32(testSSRKHandle),
 		ECCConfig: &xkmssdk.ECCConfig{Curve: "P-256"},
-		Password:  "srk-pin",
+		Password:  mustSecret("srk-pin"),
 	})
 	require.NoError(t, err)
 	require.Equal(t, x509.ECDSA, ecc.KeyAlgorithm)

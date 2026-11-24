@@ -27,7 +27,17 @@ import (
 	"google.golang.org/grpc/status"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmstypes "github.com/jeremyhahn/go-xkms/pkg/types"
 )
+
+// mustSecret wraps a literal test secret in a SecretValue.
+func mustSecret(s string) *xkmstypes.SecretValue {
+	sv, err := xkmstypes.NewLiteralSecretValue([]byte(s))
+	if err != nil {
+		panic(err)
+	}
+	return sv
+}
 
 const testEKHandle = tpm2.TPMHandle(0x81010001)
 
@@ -73,7 +83,7 @@ func configuredEK() *xkmssdk.TPMConfig {
 	return &xkmssdk.TPMConfig{EK: &xkmssdk.EKConfig{
 		Handle:        uint32(testEKHandle),
 		CertHandle:    0x01C00002,
-		HierarchyAuth: "endorsement-pin",
+		HierarchyAuth: mustSecret("endorsement-pin"),
 		RSAConfig:     &xkmssdk.RSAConfig{KeySize: 2048},
 	}}
 }
@@ -257,13 +267,13 @@ func TestAttributesFromConfig(t *testing.T) {
 	require.Equal(t, tpm2.TPMHTPersistent, rsa.TPMAttributes.HandleType)
 	require.Equal(t, 2048, rsa.RSAAttributes.KeySize)
 	require.Nil(t, rsa.Password, "an empty password stays nil")
-	require.False(t, rsa.PlatformPolicy)
+	require.Empty(t, rsa.TPMPolicy)
 
 	ecc, err := AttributesFromConfig(&xkmssdk.EKConfig{
 		CN:             "ek-device",
 		Handle:         uint32(testEKHandle),
 		ECCConfig:      &xkmssdk.ECCConfig{Curve: "P-256"},
-		Password:       "ek-pin",
+		Password:       mustSecret("ek-pin"),
 		PlatformPolicy: true,
 	})
 	require.NoError(t, err)
@@ -272,7 +282,7 @@ func TestAttributesFromConfig(t *testing.T) {
 	require.Equal(t, tpm2.TPMAlgECC, ecc.TPMAttributes.Template.Type)
 	require.Equal(t, elliptic.P256(), ecc.ECCAttributes.Curve)
 	require.Equal(t, "ek-pin", string(ecc.Password.Bytes()))
-	require.True(t, ecc.PlatformPolicy, "CreateEK applies the policy digest when asked")
+	require.Equal(t, xkmstypes.TPMPolicyPlatform, ecc.TPMPolicy, "CreateEK applies the policy digest when asked")
 	require.Nil(t, ecc.TPMAttributes.HierarchyAuth, "an empty hierarchy auth stays nil")
 }
 
