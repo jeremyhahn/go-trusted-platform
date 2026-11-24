@@ -16,6 +16,7 @@ package compute
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"os"
@@ -320,6 +321,9 @@ func (o *QEMUOrchestrator) ReceiveIncoming(ctx context.Context, spec MigrationSp
 	if source, destination := spec.Arch.OrDefault(), o.config.Arch.OrDefault(); source != destination {
 		return nil, &MigrationArchMismatchError{Source: source, Destination: destination}
 	}
+	if spec.Mode == MigrateModeLive && !o.config.SharedStorageEnabled() {
+		return nil, ErrLiveMigrationRequiresSharedStorage
+	}
 
 	serverTLS, ok := o.config.MigrationTLS.(MigrationServerTLSProvider)
 	if !ok || o.config.MigrationTLS == nil {
@@ -500,6 +504,30 @@ func (r *qemuIncomingReceiver) Abort(_ context.Context) error {
 // model matching the source spec, comes up with "-incoming defer" plus the
 // server tls-creds object, then over QMP installs the tls-creds migration
 // parameter and issues migrate-incoming on the configured listen address.
+// receiverDisk picks the image the receiving QEMU runs on and whether it must be created.
+func receiverDisk(o *QEMUOrchestrator, spec MigrationSpec, workDir string) (string, bool, error) {
+	if spec.Mode != MigrateModeLive {
+		return filepath.Join(workDir, "disk.qcow2"), true, nil
+	}
+	if !o.config.SharedStorageEnabled() {
+		return "", false, ErrLiveMigrationRequiresSharedStorage
+	}
+	if spec.Config == nil || spec.Config.DiskPath == "" {
+		return "", false, &WrappedError{Msg: "live migration spec names no shared disk image", Err: ErrMigrationSpecRequired}
+	}
+	disk := filepath.Clean(spec.Config.DiskPath)
+	if mount := o.config.SharedStorage.MountPath; mount != "" {
+		rel, err := filepath.Rel(filepath.Clean(mount), disk)
+		if err != nil || !filepath.IsLocal(rel) {
+			return "", false, fmt.Errorf("shared disk image %s is outside the shared storage mount %s", disk, mount)
+		}
+	}
+	if _, err := os.Stat(disk); err != nil {
+		return "", false, &WrappedError{Msg: "open shared disk image", Err: err}
+	}
+	return disk, false, nil
+}
+
 func defaultNewIncomingReceiver(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
 	o := p.orchestrator
 
@@ -526,7 +554,11 @@ func defaultNewIncomingReceiver(ctx context.Context, p *incomingReceiverParams) 
 	}
 
 	qcfg := o.config.qemuBase()
-	qcfg.DiskPath = filepath.Join(workDir, "disk.qcow2")
+	diskPath, createDisk, err := receiverDisk(o, p.spec, workDir)
+	if err != nil {
+		return nil, err
+	}
+	qcfg.DiskPath = diskPath
 	qcfg.DiskSize = diskSize
 	qcfg.Memory = memory
 	qcfg.CPUs = cpus
@@ -541,11 +573,11 @@ func defaultNewIncomingReceiver(ctx context.Context, p *incomingReceiverParams) 
 		return nil, &WrappedError{Msg: "create receiver VM", Err: err}
 	}
 
-	// A cold migration streams block devices into a fresh image; a live
-	// migration reuses the shared backing store. Either way the destination
-	// needs the disk file present before QEMU opens it.
-	if err := vm.CreateDisk(); err != nil {
-		return nil, &WrappedError{Msg: "create receiver disk", Err: err}
+	// A cold migration streams block devices into a fresh image; a live migration opens the shared one.
+	if createDisk {
+		if err := vm.CreateDisk(); err != nil {
+			return nil, &WrappedError{Msg: "create receiver disk", Err: err}
+		}
 	}
 
 	port, err := receiverPort(p.listen)
