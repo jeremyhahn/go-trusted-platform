@@ -40,8 +40,33 @@ type fakePXEClient struct {
 	retryReq      *platformv1.RetryPXEDeviceRequest
 	eventsReq     *platformv1.GetPXEEventsRequest
 	eventsResp    *platformv1.GetPXEEventsResponse
+	registerReq   *platformv1.RegisterPXEDeviceRequest
+	removeReq     *platformv1.RemovePXEDeviceRequest
+	getByMACReq   *platformv1.GetPXEDeviceByMACRequest
 	err           error
 	calls         int
+}
+
+func (f *fakePXEClient) RegisterDevice(_ context.Context, in *platformv1.RegisterPXEDeviceRequest, _ ...grpc.CallOption) (*platformv1.RegisterPXEDeviceResponse, error) {
+	f.calls++
+	f.registerReq = in
+	return &platformv1.RegisterPXEDeviceResponse{Device: &platformv1.PXEDeviceInfo{
+		Id: "dev-1", MacAddress: in.GetMacAddress(), PortId: in.GetPortId(),
+	}}, f.err
+}
+
+func (f *fakePXEClient) RemoveDevice(_ context.Context, in *platformv1.RemovePXEDeviceRequest, _ ...grpc.CallOption) (*platformv1.RemovePXEDeviceResponse, error) {
+	f.calls++
+	f.removeReq = in
+	return &platformv1.RemovePXEDeviceResponse{}, f.err
+}
+
+func (f *fakePXEClient) GetDeviceByMAC(_ context.Context, in *platformv1.GetPXEDeviceByMACRequest, _ ...grpc.CallOption) (*platformv1.GetPXEDeviceByMACResponse, error) {
+	f.calls++
+	f.getByMACReq = in
+	return &platformv1.GetPXEDeviceByMACResponse{Device: &platformv1.PXEDeviceInfo{
+		Id: "dev-1", MacAddress: in.GetMacAddress(),
+	}}, f.err
 }
 
 func (f *fakePXEClient) ListDevices(_ context.Context, in *platformv1.ListPXEDevicesRequest, _ ...grpc.CallOption) (*platformv1.ListPXEDevicesResponse, error) {
