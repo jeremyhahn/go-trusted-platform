@@ -24,17 +24,28 @@ export type VTPMRunState = "unknown" | "running" | "stopped";
 export function useVTPMRuntime(bundleId: string) {
   const vtpm = useVTPM();
   const [runState, setRunState] = React.useState<VTPMRunState>("unknown");
+  // Socket of the running vTPM as the latest start or state read reported it.
+  const [socketPath, setSocketPath] = React.useState<string | undefined>();
 
   const start = useMutation(() => vtpm.startBundle(bundleId), {
-    onSuccess: (r) => setRunState(r.running ? "running" : "stopped"),
+    onSuccess: (r) => {
+      setRunState(r.running ? "running" : "stopped");
+      setSocketPath(r.running ? r.socket_path : undefined);
+    },
   });
   const stop = useMutation(() => vtpm.stopBundle(bundleId), {
     onSuccess: (r) => {
-      if (r.stopped) setRunState("stopped");
+      if (r.stopped) {
+        setRunState("stopped");
+        setSocketPath(undefined);
+      }
     },
   });
   const checkState = useMutation(() => vtpm.getBundleState(bundleId), {
-    onSuccess: (r) => setRunState(r.running ? "running" : "stopped"),
+    onSuccess: (r) => {
+      setRunState(r.running ? "running" : "stopped");
+      setSocketPath(r.running ? r.socket_path : undefined);
+    },
   });
   const quote = useMutation((req: QuoteBundleRequest) => vtpm.quoteBundle(bundleId, req));
   const seal = useMutation((req: SealBundleRequest) => vtpm.sealBundle(bundleId, req));
@@ -48,7 +59,7 @@ export function useVTPMRuntime(bundleId: string) {
   // is pending, none may be sent, so a late reply cannot overwrite a newer one.
   const lifecycleBusy = start.isLoading || stop.isLoading || checkState.isLoading;
 
-  return { runState, lifecycleBusy, start, stop, checkState, quote, seal, unseal, extendPCR, readPCR };
+  return { runState, socketPath, lifecycleBusy, start, stop, checkState, quote, seal, unseal, extendPCR, readPCR };
 }
 
 /** Text to base64 (UTF-8). */
