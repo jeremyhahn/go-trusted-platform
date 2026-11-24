@@ -153,10 +153,7 @@ test.describe('Platform health (real server)', () => {
     ]);
     const card = adminPage.getByTestId('platform-entity-types');
 
-    if (!r.ok()) {
-      await expect(card.getByRole('alert')).toContainText('Entity types unavailable');
-      return;
-    }
+    expect(r.ok(), 'GET /api/v1/platform/entity-types answers 200').toBe(true);
     const body = unwrapPayload<EntityTypes>(await r.json());
     const types = body.entityTypes ?? [];
     for (const t of types) {
