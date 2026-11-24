@@ -587,7 +587,6 @@ func (ops *TPMOperations) Seal(ctx context.Context, data []byte, pcrs []int, aut
 	}
 
 	// Build TPM policy for PCR binding
-	var tpmPolicy *xkmssdk.TPMSealPolicy
 	var pcrSelect []byte
 	if len(pcrs) > 0 {
 		pcrSelect = pcrBitmask(pcrs)
@@ -612,15 +611,11 @@ func (ops *TPMOperations) Seal(ctx context.Context, data []byte, pcrs []int, aut
 				FixedParent: true,
 			},
 		}
-		tpmPolicy = &xkmssdk.TPMSealPolicy{
-			PCRSelection: pcrSelection,
-			HashAlg:      tpm2.TPMAlgSHA256,
-		}
+		keyAttrs.TPMAttributes.PCRSelection = pcrSelection
 	}
 
 	sealOpts := &xkmssdk.SealOptions{
 		KeyAttributes: keyAttrs,
-		TPMPolicy:     tpmPolicy,
 	}
 
 	sealed, err := ops.tpm.Seal(ctx, data, sealOpts)
