@@ -10,6 +10,9 @@ import { expect, test } from './fixtures';
  * shows the verifier's status. When the server does not offer
  * POST /api/v1/attestation/manifests/verify, the control is disabled with the
  * server's reason as its title and nothing is sent. No page.route mocks.
+ * The test is skipped, not passed, when BuildManifest is refused, because
+ * production BuildManifest needs a daemon-managed TPM session the real-server
+ * daemon config does not set up (ErrTPMSessionNotConfigured).
  */
 
 const OP = 'POST /api/v1/attestation/manifests/verify';
@@ -71,10 +74,13 @@ test.describe('Manifest verify (real server)', () => {
     });
 
     if (!seeded.manifest) {
-      // The server refused the build: record its answer and stop.
-      test.info().annotations.push({ type: 'build refused', description: seeded.refusal ?? '' });
-      expect(sent).toEqual([]);
-      return;
+      // No manifest, nothing to verify: skip, never pass, so the report does
+      // not count a verify that did not happen.
+      test.skip(
+        true,
+        `BuildManifest refused, so no manifest can be seeded: the real-server daemon has no daemon-managed TPM session (ErrTPMSessionNotConfigured, pkg/attestation/service/service.go:73-74): ${seeded.refusal ?? ''}`,
+      );
+      throw new Error('unreachable: test.skip(true) ends the test');
     }
 
     await adminPage.goto(`/attestation/${encodeURIComponent(seeded.manifest.id)}`);
