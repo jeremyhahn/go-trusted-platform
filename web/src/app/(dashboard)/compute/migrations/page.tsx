@@ -71,12 +71,14 @@ export default function MigrationsPage() {
 
   const memory = positiveInt(memoryMb);
   const vcpus = positiveInt(cpus);
-  const canPrepare = !!vmId.trim() && !!vmName.trim() && memory !== null && vcpus !== null && !pending;
+  const canPrepare = !!vmId.trim() && !!vmName.trim() && memory !== null && vcpus !== null && !pending && receiver === null;
 
   const handlePrepare = async () => {
     const id = vmId.trim();
     const name = vmName.trim();
-    if (!id || !name || memory === null || vcpus === null || pending) {
+    // A held receiver must be committed or aborted first: a second prepare
+    // would overwrite its id and orphan it on the destination host.
+    if (!id || !name || memory === null || vcpus === null || pending || receiver !== null) {
       return;
     }
     const spec: MigrationGuestSpec = { memoryMb: memory, cpus: vcpus, arch, enableKvm, tpmEnabled, secureBoot };
