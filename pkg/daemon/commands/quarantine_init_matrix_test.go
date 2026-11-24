@@ -15,6 +15,7 @@ package commands
 
 import (
 	"context"
+	"net"
 	"slices"
 	"strings"
 	"testing"
@@ -62,6 +63,10 @@ func TestSharedZoneFlowManagerCarriesTheZoneMatrix(t *testing.T) {
 		if shared {
 			zfm, err = newSharedZoneFlowManager(cfg)
 		} else {
+			cfg.GeneratorSet = zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{
+				BridgeName: cfg.BridgeName,
+				Quarantine: zoneflows.QuarantineConfig{DNSServerIP: net.IP(netplan.HostServices4.AsSlice())},
+			})
 			zfm, err = policy.NewZoneFlowManager(cfg)
 		}
 		require.NoError(t, err)
