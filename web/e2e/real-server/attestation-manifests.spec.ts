@@ -9,6 +9,9 @@ import { expect, test } from './fixtures';
  * the list again: the row is gone. When the server does not offer
  * DELETE /api/v1/attestation/manifests/{id}, the control is disabled with the
  * server's reason as its title and no DELETE is sent. No page.route mocks.
+ * The test is skipped, not passed, when BuildManifest is refused, because
+ * production BuildManifest needs a daemon-managed TPM session the real-server
+ * daemon config does not set up (ErrTPMSessionNotConfigured).
  */
 
 const OP = 'DELETE /api/v1/attestation/manifests/{id}';
@@ -71,17 +74,13 @@ test.describe('Manifests delete (real server)', () => {
     });
 
     if (!seeded.manifest) {
-      // The server refused the build: record its answer, and the control on
-      // the list (if any rows exist) still follows the capability.
-      test.info().annotations.push({ type: 'build refused', description: seeded.refusal ?? '' });
-      await adminPage.goto('/attestation/manifests');
-      const buttons = adminPage.getByRole('button', { name: 'Delete manifest' });
-      if ((await buttons.count()) > 0 && !cap.enabled) {
-        await expect(buttons.first()).toBeDisabled();
-        if (cap.reason) await expect(buttons.first()).toHaveAttribute('title', cap.reason);
-      }
-      expect(sent).toEqual([]);
-      return;
+      // No manifest, nothing to delete: skip, never pass, so the report does
+      // not count a delete that did not happen.
+      test.skip(
+        true,
+        `BuildManifest refused, so no manifest can be seeded: the real-server daemon has no daemon-managed TPM session (ErrTPMSessionNotConfigured, pkg/attestation/service/service.go:73-74): ${seeded.refusal ?? ''}`,
+      );
+      throw new Error('unreachable: test.skip(true) ends the test');
     }
 
     await openFiltered(adminPage, rowName);
