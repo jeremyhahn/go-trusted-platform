@@ -108,17 +108,6 @@ func (sm *StateManager) Load(ctx context.Context) error {
 	return nil
 }
 
-// persist writes the device's current record to the store, or deletes it
-// when the device is no longer registered. A nil store is a no-op.
-func (sm *StateManager) persist(deviceID string) error {
-	if sm.store == nil {
-		return nil
-	}
-	sm.storeMu.Lock()
-	defer sm.storeMu.Unlock()
-	return sm.persistLocked(deviceID)
-}
-
 // persistLocked writes the device's current entry, or deletes its record
 // when the device is gone. The caller holds storeMu.
 func (sm *StateManager) persistLocked(deviceID string) error {
