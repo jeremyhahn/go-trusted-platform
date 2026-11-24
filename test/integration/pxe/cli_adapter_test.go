@@ -133,3 +133,106 @@ func TestCLIAdapter_UndecodableReplyIsTyped(t *testing.T) {
 	var decodeErr ErrCLIDecode
 	require.ErrorAs(t, err, &decodeErr)
 }
+
+func TestCLIAdapter_RegisterPassesMACAndPort(t *testing.T) {
+	cliAdapter, argsPath := fakeBinary(t, &platformv1.RegisterPXEDeviceResponse{Device: &platformv1.PXEDeviceInfo{
+		Id:          "dev-1",
+		MacAddress:  "02:00:00:00:00:01",
+		PortId:      "port-1",
+		State:       platformv1.ProvisioningState_PROVISIONING_STATE_DISCOVERED,
+		CurrentVlan: 999,
+	}})
+
+	got, err := cliAdapter.RegisterDevice(context.Background(), RegisterDeviceOptions{
+		MACAddress: "02:00:00:00:00:01", PortID: "port-1",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "dev-1", got.ID)
+	assert.Equal(t, "02:00:00:00:00:01", got.MACAddress)
+	assert.Equal(t, "port-1", got.PortID)
+	assert.Equal(t, StateDiscovered, got.State)
+	assert.Equal(t, uint16(999), got.CurrentVLAN)
+	assert.Equal(t, "--output\njson\npxe\nregister\n--mac\n02:00:00:00:00:01\n--port\nport-1\n", recordedArgs(t, argsPath))
+}
+
+func TestCLIAdapter_GetByMACDecodes(t *testing.T) {
+	cliAdapter, argsPath := fakeBinary(t, &platformv1.GetPXEDeviceByMACResponse{Device: &platformv1.PXEDeviceInfo{
+		Id:         "dev-1",
+		MacAddress: "02:00:00:00:00:01",
+		State:      platformv1.ProvisioningState_PROVISIONING_STATE_BOOTING,
+	}})
+
+	got, err := cliAdapter.GetDeviceByMAC(context.Background(), "02:00:00:00:00:01")
+	require.NoError(t, err)
+	assert.Equal(t, "dev-1", got.ID)
+	assert.Equal(t, StateBooting, got.State)
+	assert.Equal(t, "--output\njson\npxe\nget-by-mac\n02:00:00:00:00:01\n", recordedArgs(t, argsPath))
+}
+
+func TestCLIAdapter_RemoveReportsRemoved(t *testing.T) {
+	cliAdapter, argsPath := fakeBinary(t, &platformv1.RemovePXEDeviceResponse{Status: &platformv1.Status{Success: true}})
+
+	got, err := cliAdapter.RemoveDevice(context.Background(), "dev-1")
+	require.NoError(t, err)
+	assert.Equal(t, "dev-1", got.ID)
+	assert.True(t, got.Removed)
+	assert.Equal(t, "--output\njson\npxe\nremove\ndev-1\n", recordedArgs(t, argsPath))
+}
+
+func TestCLIAdapter_UpdateStatePassesStateAndReason(t *testing.T) {
+	at := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	cliAdapter, argsPath := fakeBinary(t, &platformv1.UpdatePXEStateResponse{Device: &platformv1.PXEDeviceInfo{
+		Id:          "dev-1",
+		State:       platformv1.ProvisioningState_PROVISIONING_STATE_BOOTING,
+		StateReason: "re-image",
+		UpdatedAt:   timestamppb.New(at),
+	}})
+
+	got, err := cliAdapter.UpdateDeviceState(context.Background(), UpdateStateOptions{
+		DeviceID: "dev-1", State: StateBooting, Reason: "re-image",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "dev-1", got.ID)
+	assert.Equal(t, StateBooting, got.ToState)
+	assert.Equal(t, "re-image", got.Reason)
+	assert.Empty(t, got.FromState, "the reply carries no previous state")
+	assert.True(t, at.Equal(got.UpdatedAt), "updated at = %v", got.UpdatedAt)
+	assert.Equal(t, "--output\njson\npxe\nset-state\ndev-1\n--state\nbooting\n--reason\nre-image\n", recordedArgs(t, argsPath))
+}
+
+func TestCLIAdapter_SetEnrolledPassesSerial(t *testing.T) {
+	cliAdapter, argsPath := fakeBinary(t, &platformv1.SetPXEDeviceEnrolledResponse{Device: &platformv1.PXEDeviceInfo{
+		Id:                "dev-1",
+		State:             platformv1.ProvisioningState_PROVISIONING_STATE_ENROLLED,
+		CertificateSerial: "0a1b",
+	}})
+
+	got, err := cliAdapter.SetDeviceEnrolled(context.Background(), "dev-1", "0a1b")
+	require.NoError(t, err)
+	assert.Equal(t, "dev-1", got.ID)
+	assert.Equal(t, StateEnrolled, got.State)
+	assert.Equal(t, "0a1b", got.CertificateSerial)
+	assert.Equal(t, "--output\njson\npxe\nset-enrolled\ndev-1\n--certificate-serial\n0a1b\n", recordedArgs(t, argsPath))
+}
+
+func TestCLIAdapter_StatusDecodes(t *testing.T) {
+	at := time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC)
+	cliAdapter, argsPath := fakeBinary(t, &platformv1.GetPXEStatusResponse{Status: &platformv1.PXEServiceStatus{
+		Running:          true,
+		DeviceCount:      3,
+		StartTime:        timestamppb.New(at),
+		IpxeServerAddr:   "192.0.2.10:8080",
+		QuarantineVlan:   999,
+		ProvisioningVlan: 100,
+	}})
+
+	got, err := cliAdapter.GetStatus(context.Background())
+	require.NoError(t, err)
+	assert.True(t, got.Running)
+	assert.Equal(t, 3, got.DeviceCount)
+	assert.True(t, at.Equal(got.StartTime), "start time = %v", got.StartTime)
+	assert.Equal(t, "192.0.2.10:8080", got.IPXEServerAddr)
+	assert.Equal(t, uint16(999), got.QuarantineVLAN)
+	assert.Equal(t, uint16(100), got.ProvisioningVLAN)
+	assert.Equal(t, "--output\njson\npxe\nstatus\n", recordedArgs(t, argsPath))
+}
