@@ -305,6 +305,9 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 		!filepath.IsLocal(id) || filepath.Base(id) != id {
 		return nil, ErrInvalidManifest{Reason: fmt.Sprintf("bundle ID %q is not a single path component", id)}
 	}
+	if strings.HasPrefix(id, importStagingPrefix) {
+		return nil, ErrInvalidManifest{Reason: fmt.Sprintf("bundle ID %q uses the reserved prefix %q", id, importStagingPrefix)}
+	}
 
 	// Check if bundle exists
 	bundlePath := a.config.BundlePath(id)

@@ -117,6 +117,9 @@ func (s *Service) CreateBundle(ctx context.Context, opts *CreateBundleOptions) (
 	if opts.Mode == BundleModePreAssigned && opts.Hostname == "" {
 		return nil, ErrInvalidConfig{Field: "Hostname", Reason: "required for pre-assigned mode"}
 	}
+	if err := checkBundleHostname(opts.Hostname); err != nil {
+		return nil, err
+	}
 	if !opts.EKAlgorithm.IsValid() {
 		return nil, ErrInvalidEKAlgorithm{Algorithm: string(opts.EKAlgorithm)}
 	}
@@ -153,6 +156,14 @@ func (s *Service) CreateBundle(ctx context.Context, opts *CreateBundleOptions) (
 }
 
 // generateBundleID generates a unique bundle ID.
+// checkBundleHostname refuses a hostname that would give the bundle ID the import staging prefix.
+func checkBundleHostname(hostname string) error {
+	if strings.HasPrefix(hostname, importStagingPrefix) {
+		return ErrInvalidConfig{Field: "Hostname", Reason: fmt.Sprintf("must not start with %q", importStagingPrefix)}
+	}
+	return nil
+}
+
 func (s *Service) generateBundleID(hostname string) string {
 	timestamp := time.Now().UnixNano()
 	if hostname != "" {
@@ -813,6 +824,9 @@ func (s *Service) CloneTemplate(ctx context.Context, opts *CloneOptions) (*Bundl
 	// Validate hostname is provided
 	if opts.Hostname == "" {
 		return nil, ErrMissingHostname{}
+	}
+	if err := checkBundleHostname(opts.Hostname); err != nil {
+		return nil, err
 	}
 
 	s.mu.Lock()
