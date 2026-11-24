@@ -54,6 +54,9 @@ func newSSHManagerWithExecutor(config *Config, logger *slog.Logger, executor SSH
 }
 
 func (m *sshManager) SetPortVLAN(ctx context.Context, port string, vlanID uint16) error {
+	if err := ValidatePortName(port); err != nil {
+		return err
+	}
 	if err := m.ensureConnected(ctx); err != nil {
 		return err
 	}
@@ -89,6 +92,9 @@ func (m *sshManager) SetPortVLAN(ctx context.Context, port string, vlanID uint16
 }
 
 func (m *sshManager) GetPortVLAN(ctx context.Context, port string) (uint16, error) {
+	if err := ValidatePortName(port); err != nil {
+		return 0, err
+	}
 	if err := m.ensureConnected(ctx); err != nil {
 		return 0, err
 	}
@@ -113,6 +119,9 @@ func (m *sshManager) GetPortVLAN(ctx context.Context, port string) (uint16, erro
 }
 
 func (m *sshManager) GetPortStatus(ctx context.Context, port string) (*switchwire.PortStatus, error) {
+	if err := ValidatePortName(port); err != nil {
+		return nil, err
+	}
 	if err := m.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
@@ -161,6 +170,9 @@ func (m *sshManager) ListPorts(ctx context.Context) ([]*switchwire.PortStatus, e
 }
 
 func (m *sshManager) EnablePort(ctx context.Context, port string) error {
+	if err := ValidatePortName(port); err != nil {
+		return err
+	}
 	if err := m.ensureConnected(ctx); err != nil {
 		return err
 	}
@@ -184,6 +196,9 @@ func (m *sshManager) EnablePort(ctx context.Context, port string) error {
 }
 
 func (m *sshManager) DisablePort(ctx context.Context, port string) error {
+	if err := ValidatePortName(port); err != nil {
+		return err
+	}
 	if err := m.ensureConnected(ctx); err != nil {
 		return err
 	}
