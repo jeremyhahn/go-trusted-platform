@@ -134,7 +134,16 @@ export default function VPNPage() {
     isLoading: statusLoading,
     error: statusError,
     refetch: refetchStatus,
-  } = useApi(() => latest(statusGen, () => vpn.getStatus(filters.gateway || undefined)), [filters.gateway], notConfiguredQuiet('Error loading VPN status'));
+  } = useApi(
+    () =>
+      latest(statusGen, async (): Promise<ApiResponse<{ gateways?: VPNGatewayStatus[]; gateway?: string }>> => {
+        const gateway = filters.gateway;
+        const response = await vpn.getStatus(gateway || undefined);
+        return response.data !== undefined ? { ...response, data: { ...response.data, gateway } } : response;
+      }),
+    [filters.gateway],
+    notConfiguredQuiet('Error loading VPN status')
+  );
 
   const {
     data: peersData,
@@ -154,7 +163,8 @@ export default function VPNPage() {
     notConfiguredQuiet('Error loading posture policies')
   );
 
-  const gateways = statusData?.gateways ?? [];
+  // Telemetry is shown only for the filter that answered (#2070).
+  const gateways = !statusError && statusData?.gateway === filters.gateway ? (statusData?.gateways ?? []) : [];
   const peers = peersData?.peers ?? [];
   const policies = policiesData?.policies ?? [];
   const isLoading = statusLoading || peersLoading || policiesLoading;
