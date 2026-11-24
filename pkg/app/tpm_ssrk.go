@@ -74,7 +74,7 @@ func (app *App) ensureSSRK() error {
 	if !errors.Is(err, libtpm2.TPMRCHandle) && !errors.Is(err, libtpm2.TPMRCValue) {
 		return &SSRKProbeError{Handle: cfg.Handle, Cause: err}
 	}
-	if _, err := tpmsrk.Persist(app.TPM, cfg, app.TPMConfig.EncryptSession); err != nil {
+	if _, err := tpmsrk.Persist(app.TPM, cfg, false); err != nil {
 		return &SSRKCreateError{Handle: cfg.Handle, Cause: err}
 	}
 	app.Logger.Info("Shared SRK created", "handle", fmt.Sprintf("0x%08X", cfg.Handle))

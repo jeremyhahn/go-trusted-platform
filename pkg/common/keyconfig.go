@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmstypes "github.com/jeremyhahn/go-xkms/pkg/types"
 )
 
 // KeyConfig is a YAML/JSON-serializable configuration for cryptographic keys.
@@ -74,10 +75,10 @@ type PasswordCacheConfig struct {
 // ToKeyAttributes converts KeyConfig to xkmssdk.KeyAttributes for use with backends.
 func (kc *KeyConfig) ToKeyAttributes() (*xkmssdk.KeyAttributes, error) {
 	attrs := &xkmssdk.KeyAttributes{
-		CN:             kc.CN,
-		Debug:          kc.Debug,
-		PlatformPolicy: kc.PlatformPolicy,
-		Exportable:     kc.Exportable,
+		CN:         kc.CN,
+		Debug:      kc.Debug,
+		TPMPolicy:  tpmPolicy(kc.PlatformPolicy),
+		Exportable: kc.Exportable,
 	}
 
 	// Parse hash algorithm
@@ -168,7 +169,7 @@ func NewKeyConfigFromAttributes(attrs *xkmssdk.KeyAttributes) *KeyConfig {
 		Debug:          attrs.Debug,
 		Hash:           attrs.Hash.String(),
 		KeyAlgorithm:   attrs.KeyAlgorithm.String(),
-		PlatformPolicy: attrs.PlatformPolicy,
+		PlatformPolicy: attrs.TPMPolicy == xkmstypes.TPMPolicyPlatform,
 		StoreType:      attrs.StoreType.String(),
 		Exportable:     attrs.Exportable,
 	}
@@ -228,4 +229,12 @@ func keySizeToSymmetricAlgorithm(keySize int) xkmssdk.SymmetricAlgorithm {
 	default:
 		return xkmssdk.SymmetricAES256GCM
 	}
+}
+
+// tpmPolicy names the platform TPM policy when platform is set, else none.
+func tpmPolicy(platform bool) string {
+	if platform {
+		return xkmstypes.TPMPolicyPlatform
+	}
+	return ""
 }

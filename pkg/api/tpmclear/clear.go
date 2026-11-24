@@ -57,9 +57,9 @@ func resetHierarchyAuth(cfg *xkmssdk.TPMConfig) {
 		return
 	}
 	if cfg.SSRK != nil {
-		cfg.SSRK.HierarchyAuth = ""
+		cfg.SSRK.HierarchyAuth = nil
 	}
 	if cfg.EK != nil {
-		cfg.EK.HierarchyAuth = ""
+		cfg.EK.HierarchyAuth = nil
 	}
 }

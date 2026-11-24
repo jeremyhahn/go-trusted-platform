@@ -142,15 +142,11 @@ func AttributesFromConfig(cfg *xkmssdk.SRKConfig) (*xkmssdk.KeyAttributes, error
 
 	var password, hierarchyAuth xkmssdk.Password
 	var err error
-	if cfg.Password != "" {
-		if password, err = xkmssdk.NewPassword([]byte(cfg.Password)); err != nil {
-			return nil, err
-		}
+	if password, err = secretPassword(cfg.Password); err != nil {
+		return nil, err
 	}
-	if cfg.HierarchyAuth != "" {
-		if hierarchyAuth, err = xkmssdk.NewPassword([]byte(cfg.HierarchyAuth)); err != nil {
-			return nil, err
-		}
+	if hierarchyAuth, err = secretPassword(cfg.HierarchyAuth); err != nil {
+		return nil, err
 	}
 
 	cn := cfg.CN
@@ -217,7 +213,7 @@ func Create(tpm xkmssdk.TrustedPlatformModule) (*xkmssdk.KeyAttributes, error) {
 	if _, _, err := tpm.ReadHandle(xkmssdk.TPMHandle(handle)); err == nil {
 		return nil, ErrExists{Handle: handle}
 	}
-	return Persist(tpm, cfg.SSRK, cfg.EncryptSession)
+	return Persist(tpm, cfg.SSRK, false)
 }
 
 // Delete is the single DeleteSRK entry point shared by every daemon

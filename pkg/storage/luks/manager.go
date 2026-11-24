@@ -27,6 +27,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/drive"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmstypes "github.com/jeremyhahn/go-xkms/pkg/types"
 )
 
 // Manager provides high-level LUKS operations with TPM integration
@@ -188,10 +189,10 @@ func (m *Manager) AddTPMSealedKey(ctx context.Context, part *drive.PartitionConf
 	}
 
 	attrs := &xkmssdk.KeyAttributes{
-		CN:             keyName,
-		KeyType:        xkmssdk.KeyTypeHMAC,
-		PlatformPolicy: tpmConfig.PCRPolicy,
-		TPMAttributes:  &xkmssdk.TPMAttributes{},
+		CN:            keyName,
+		KeyType:       xkmssdk.KeyTypeHMAC,
+		TPMPolicy:     tpmPolicy(tpmConfig.PCRPolicy),
+		TPMAttributes: &xkmssdk.TPMAttributes{},
 	}
 
 	// Set parent to SRK
@@ -315,9 +316,9 @@ func (m *Manager) UnlockWithTPM(ctx context.Context, part *drive.PartitionConfig
 	}
 
 	attrs := &xkmssdk.KeyAttributes{
-		CN:             keyName,
-		KeyType:        xkmssdk.KeyTypeHMAC,
-		PlatformPolicy: tpmConfig.PCRPolicy,
+		CN:        keyName,
+		KeyType:   xkmssdk.KeyTypeHMAC,
+		TPMPolicy: tpmPolicy(tpmConfig.PCRPolicy),
 	}
 
 	// Set parent to SRK
@@ -598,4 +599,12 @@ func clearBytes(b []byte) {
 	for i := range b {
 		b[i] = 0
 	}
+}
+
+// tpmPolicy names the platform TPM policy when platform is set, else none.
+func tpmPolicy(platform bool) string {
+	if platform {
+		return xkmstypes.TPMPolicyPlatform
+	}
+	return ""
 }

@@ -164,15 +164,11 @@ func AttributesFromConfig(cfg *xkmssdk.EKConfig) (*xkmssdk.KeyAttributes, error)
 
 	var password, hierarchyAuth xkmssdk.Password
 	var err error
-	if cfg.Password != "" {
-		if password, err = xkmssdk.NewPassword([]byte(cfg.Password)); err != nil {
-			return nil, err
-		}
+	if password, err = secretPassword(cfg.Password); err != nil {
+		return nil, err
 	}
-	if cfg.HierarchyAuth != "" {
-		if hierarchyAuth, err = xkmssdk.NewPassword([]byte(cfg.HierarchyAuth)); err != nil {
-			return nil, err
-		}
+	if hierarchyAuth, err = secretPassword(cfg.HierarchyAuth); err != nil {
+		return nil, err
 	}
 
 	cn := cfg.CN
@@ -180,12 +176,12 @@ func AttributesFromConfig(cfg *xkmssdk.EKConfig) (*xkmssdk.KeyAttributes, error)
 		cn = "ek"
 	}
 	attrs := &xkmssdk.KeyAttributes{
-		CN:             cn,
-		Debug:          cfg.Debug,
-		KeyAlgorithm:   algorithm,
-		Password:       password,
-		PlatformPolicy: cfg.PlatformPolicy,
-		StoreType:      xkmssdk.StoreTPM2,
+		CN:           cn,
+		Debug:        cfg.Debug,
+		KeyAlgorithm: algorithm,
+		Password:     password,
+		TPMPolicy:    tpmPolicy(cfg.PlatformPolicy),
+		StoreType:    xkmssdk.StoreTPM2,
 		TPMAttributes: &xkmssdk.TPMAttributes{
 			CertHandle:    xkmssdk.TPMHandle(cfg.CertHandle),
 			Handle:        xkmssdk.TPMHandle(cfg.Handle),

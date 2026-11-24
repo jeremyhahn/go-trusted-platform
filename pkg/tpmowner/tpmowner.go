@@ -21,6 +21,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmstypes "github.com/jeremyhahn/go-xkms/pkg/types"
 )
 
 // TPMA_PERMANENT bits, TPM 2.0 Part 2 Structures §8.6. The TPM
@@ -181,17 +182,21 @@ func TakeOwnership(tpm Module, soPIN xkmssdk.Password) error {
 	if err := tpm.SetHierarchyAuth(nil, soPIN, &owner); err != nil {
 		return &TPMOwnershipError{Cause: err}
 	}
-	presentOwnerAuth(tpm.Config(), soPIN)
-	return nil
+	return presentOwnerAuth(tpm.Config(), soPIN)
 }
 
 // presentOwnerAuth points the SDK TPM's owner (SSRK) hierarchy auth at the
 // SO PIN. The SDK TPM reads it through its shared config.
-func presentOwnerAuth(cfg *xkmssdk.TPMConfig, soPIN xkmssdk.Password) {
+func presentOwnerAuth(cfg *xkmssdk.TPMConfig, soPIN xkmssdk.Password) error {
 	if cfg.SSRK == nil {
 		cfg.SSRK = &xkmssdk.SRKConfig{}
 	}
-	cfg.SSRK.HierarchyAuth = string(soPIN.Bytes())
+	auth, err := xkmstypes.NewLiteralSecretValue(soPIN.Bytes())
+	if err != nil {
+		return err
+	}
+	cfg.SSRK.HierarchyAuth = auth
+	return nil
 }
 
 // Prepare readies the owner hierarchy for a caller that creates the
@@ -219,7 +224,7 @@ func Prepare(tpm Module, soPIN xkmssdk.Password) error {
 		return &OwnerAuthReleaseError{Cause: err}
 	}
 	if cfg := tpm.Config(); cfg.SSRK != nil {
-		cfg.SSRK.HierarchyAuth = ""
+		cfg.SSRK.HierarchyAuth = nil
 	}
 	return nil
 }
