@@ -88,8 +88,11 @@ func (s *Service) BuildManifest(ctx context.Context, config *manifest.BuilderCon
 // Verify action. Both success and rejection paths emit events for
 // the audit trail.
 //
-// On completion, registered AttestationObservers are notified so the
-// quarantine loop can react to failures and re-attestation successes.
+// A failed verification notifies the registered AttestationObservers so
+// the quarantine loop can react to it. A pass notifies no observer: this
+// is an inspection, not a verdict (no signature, no fresh quote), so the
+// observers hear only failures from here; a restore comes only from a
+// passed device verdict (RecordDeviceVerdict).
 func (s *Service) VerifyManifest(
 	ctx context.Context,
 	m *manifest.HostManifest,
@@ -173,9 +176,10 @@ func (s *Service) VerifyManifest(
 		Reason:     reason,
 	})
 
-	// Notify quarantine-loop observers of the verification outcome.
-	passed := result.Status == manifest.VerificationStatusVerified
-	s.notifyObservers(ctx, m.HostID, passed, attestationDetail(result.Errors))
+	// An inspection is not a verdict: VerifyManifest checks no signature and no fresh quote, so a pass restores nothing; only a verified quote (RecordDeviceVerdict, verdict.go:86-91) restores a quarantined device (#2038).
+	if passed := result.Status == manifest.VerificationStatusVerified; !passed {
+		s.notifyObservers(ctx, m.HostID, false, attestationDetail(result.Errors))
+	}
 
 	return result, nil
 }
