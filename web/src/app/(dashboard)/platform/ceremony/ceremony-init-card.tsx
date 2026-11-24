@@ -27,6 +27,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
   useCeremony,
+  type CeremonyInitOfficer,
   type CeremonyInitRequest,
   type CeremonyInitResponse,
 } from "@/hooks/use-ceremony";
@@ -43,12 +44,31 @@ export function parseSANs(text: string): string[] {
 // threshold the backend accepts. Upstream runs single-admin for a threshold
 // below 2, so a quorum of one is refused: single-admin is the explicit
 // checkbox, which sends no threshold at all.
+const THRESHOLD_RE = /^(\d+)-of-(\d+)$/;
+
 export function thresholdValid(spec: string): boolean {
-  const match = /^(\d+)-of-(\d+)$/.exec(spec);
+  const match = THRESHOLD_RE.exec(spec);
   if (!match) return false;
   const m = Number(match[1]);
   const n = Number(match[2]);
   return m >= 2 && m <= n;
+}
+
+// officerCount is N of a valid "M-of-N" threshold, one officer per share, and
+// 0 for anything thresholdValid refuses.
+export function officerCount(spec: string): number {
+  if (!thresholdValid(spec)) return 0;
+  return Number(THRESHOLD_RE.exec(spec)![2]);
+}
+
+// sizeOfficers resizes the officer list to n, keeping the entries already typed.
+function sizeOfficers(officers: CeremonyInitOfficer[], n: number): CeremonyInitOfficer[] {
+  if (officers.length === n) return officers;
+  if (officers.length > n) return officers.slice(0, n);
+  return [
+    ...officers,
+    ...Array.from({ length: n - officers.length }, () => ({ username: "", csrPem: "" })),
+  ];
 }
 
 export function CeremonyInitCard({ onInitialized }: { onInitialized?: () => void }) {
@@ -59,13 +79,26 @@ export function CeremonyInitCard({ onInitialized }: { onInitialized?: () => void
   const [singleAdmin, setSingleAdmin] = React.useState(false);
   const [hostname, setHostname] = React.useState("");
   const [sans, setSans] = React.useState("");
+  const [typedOfficers, setTypedOfficers] = React.useState<CeremonyInitOfficer[]>([]);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [running, setRunning] = React.useState(false);
   const [refusal, setRefusal] = React.useState<string | null>(null);
   const [result, setResult] = React.useState<CeremonyInitResponse | null>(null);
 
   const thresholdOk = thresholdValid(threshold);
-  const disabled = soPin === "" || (!singleAdmin && !thresholdOk) || running;
+  // One officer per share of an M-of-N threshold; none for single-admin.
+  const officers = sizeOfficers(typedOfficers, singleAdmin ? 0 : officerCount(threshold));
+  const officersOk = officers.every((o) => o.username.trim() !== "" && o.csrPem.trim() !== "");
+  const disabled =
+    soPin === "" || (!singleAdmin && (!thresholdOk || !officersOk)) || running;
+
+  const setOfficer = (index: number, patch: Partial<CeremonyInitOfficer>) => {
+    setTypedOfficers((prev) => {
+      const next = [...sizeOfficers(prev, Math.max(prev.length, officers.length))];
+      next[index] = { ...next[index], ...patch };
+      return next;
+    });
+  };
 
   const handleInit = async () => {
     setConfirmOpen(false);
@@ -76,7 +109,10 @@ export function CeremonyInitCard({ onInitialized }: { onInitialized?: () => void
       userPin: userPin || undefined,
       hostname: hostname || undefined,
     };
-    if (!singleAdmin) request.threshold = threshold;
+    if (!singleAdmin) {
+      request.threshold = threshold;
+      request.officers = officers.map((o) => ({ username: o.username.trim(), csrPem: o.csrPem.trim() }));
+    }
     const sanList = parseSANs(sans);
     if (sanList.length > 0) request.sans = sanList;
     try {
@@ -146,6 +182,32 @@ export function CeremonyInitCard({ onInitialized }: { onInitialized?: () => void
             </p>
           )}
         </div>
+        {officers.length > 0 && (
+          <fieldset className="space-y-4">
+            <legend className="text-sm font-medium">Officers (one per share)</legend>
+            {officers.map((officer, index) => {
+              const i = index + 1;
+              return (
+                <div key={i} className="space-y-2">
+                  <Label htmlFor={`ceremony-init-officer-${i}-username`}>{`Officer ${i} username`}</Label>
+                  <Input
+                    id={`ceremony-init-officer-${i}-username`}
+                    autoComplete="off"
+                    value={officer.username}
+                    onChange={(e) => setOfficer(index, { username: e.target.value })}
+                  />
+                  <Label htmlFor={`ceremony-init-officer-${i}-csr`}>{`Officer ${i} CSR`}</Label>
+                  <Textarea
+                    id={`ceremony-init-officer-${i}-csr`}
+                    placeholder="PEM certificate request"
+                    value={officer.csrPem}
+                    onChange={(e) => setOfficer(index, { csrPem: e.target.value })}
+                  />
+                </div>
+              );
+            })}
+          </fieldset>
+        )}
         <div className="space-y-2">
           <Label htmlFor="ceremony-init-hostname">Hostname</Label>
           <Input

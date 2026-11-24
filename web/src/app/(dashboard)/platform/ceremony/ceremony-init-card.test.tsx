@@ -165,6 +165,7 @@ describe('CeremonyInitCard', () => {
       expect(screen.getByText(hint)).toBeDefined();
     }
     fill('Threshold', '3-of-5');
+    fillOfficers(5);
     expect(button.disabled).toBe(false);
     expect(screen.queryByText(hint)).toBeNull();
   });

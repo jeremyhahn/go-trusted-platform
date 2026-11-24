@@ -17,6 +17,7 @@ import {
   type CeremonyClaimCertCompleteRequest,
   type CeremonyClaimShareBeginRequest,
   type CeremonyClaimShareCompleteRequest,
+  type CeremonyInitOfficer,
   type CeremonyInitRequest,
   type CeremonySignCSRRequest,
 } from "trusted-platform-sdk";
@@ -25,6 +26,7 @@ export type {
   CeremonyState,
   CeremonyAuthenticatorType,
   CeremonyOfficerRole,
+  CeremonyInitOfficer,
   CeremonyInitRequest,
   CeremonyInitResponse,
   CeremonyStatusResponse,
