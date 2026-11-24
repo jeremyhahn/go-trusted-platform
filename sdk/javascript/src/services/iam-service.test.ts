@@ -604,4 +604,41 @@ describe('IAMService', () => {
       expect(result.data?.userId).toBe('svc-b');
     });
   });
+
+  describe('rotateAppSecret REST envelope', () => {
+    it('maps client_id and client_secret to clientId and clientSecret', async () => {
+      vi.mocked(client.post).mockResolvedValue({
+        success: true,
+        data: { client_id: 'app-1', name: 'n', client_secret: 's3cret' },
+      });
+
+      const result = await service.rotateAppSecret('t-1', 'app-1');
+
+      expect(result.data?.clientId).toBe('app-1');
+      expect(result.data?.clientSecret).toBe('s3cret');
+      expect(result.data?.name).toBe('n');
+    });
+
+    it('keeps a clientId already present in the reply', async () => {
+      vi.mocked(client.post).mockResolvedValue({
+        success: true,
+        data: { clientId: 'camel-app', client_id: 'wire-app', name: 'n', client_secret: 's3cret' },
+      });
+
+      const result = await service.rotateAppSecret('t-1', 'app-1');
+
+      expect(result.data?.clientId).toBe('camel-app');
+      expect(result.data?.clientSecret).toBe('s3cret');
+    });
+
+    it('returns the same response object', async () => {
+      const response = { success: true, data: { client_id: 'app-1', name: 'n', client_secret: 's3cret' } };
+      vi.mocked(client.post).mockResolvedValue(response);
+
+      const result = await service.rotateAppSecret('t-1', 'app-1');
+
+      expect(result).toBe(response);
+      expect(result.data?.clientSecret).toBe('s3cret');
+    });
+  });
 });
