@@ -1316,6 +1316,26 @@ func TestBMCGRPCCreateUser_SlotOccupiedIsAlreadyExists(t *testing.T) {
 	}
 }
 
+// TestBMCGRPCCreateUser_EnabledWithoutPasswordIsInvalidArgument pins that an
+// Enabled user with no password is refused before the service is called.
+func TestBMCGRPCCreateUser_EnabledWithoutPasswordIsInvalidArgument(t *testing.T) {
+	fake := &fakeBMCService{}
+	svc := newTestService(fake, nil)
+	_, err := svc.CreateUser(context.Background(), &platformv1.BMCCreateUserRequest{
+		ProfileId: 1,
+		User: &platformv1.BMCUser{
+			Slot: 5, Username: "nopass", Enabled: true,
+			Privilege: platformv1.BMCUserPrivilege_BMC_USER_PRIVILEGE_USER,
+		},
+	})
+	if got := statusCode(err); got != codes.InvalidArgument {
+		t.Fatalf("code = %v, want InvalidArgument", got)
+	}
+	if fake.lastCreatedUser != (bmc.User{}) {
+		t.Errorf("service called with %+v, want no call", fake.lastCreatedUser)
+	}
+}
+
 func TestBMCCreateUser_NilService(t *testing.T) {
 	svc := NewBMCGRPCService(nil, nil, slog.Default())
 	_, err := svc.CreateUser(context.Background(), &platformv1.BMCCreateUserRequest{
