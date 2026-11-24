@@ -425,6 +425,11 @@ func (h *IAMHandlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	total := int64(resp.Pagination.TotalCount)
+	// The total is the count IAM reports; only an IAM that sends no count (the embedded one, go-quicbaas sdk v0.12.0-alpha)
+	// is answered with the users this page carries, and the offset never enters it because IAM is not sent the offset (#2150).
+	if total == 0 {
+		total = int64(len(resp.Users))
+	}
 	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.ListIAMUsersResponse{
 		Users:      users,
 		Pagination: ListPagination(limit, offset, total),
