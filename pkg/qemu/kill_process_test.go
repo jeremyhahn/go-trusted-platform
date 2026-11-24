@@ -46,7 +46,9 @@ func TestProcessKiller_KillsOnlyTheCapturedProcess(t *testing.T) {
 	vm := newSleepingIncomingVM(t)
 	_, err := vm.StartIncoming(context.Background(), "")
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = vm.Kill(); _ = vm.Wait() })
+	// StartIncoming does not clear reaped, so Kill refuses after the restart
+	// below; the cleanup ends whatever process the VM runs at its end.
+	t.Cleanup(func() { _ = vm.ProcessKiller()(); _ = vm.Wait() })
 
 	kill := vm.ProcessKiller()
 	require.NoError(t, kill())
