@@ -61,31 +61,29 @@ func (m *sshManager) SetPortVLAN(ctx context.Context, port string, vlanID uint16
 		return err
 	}
 
-	commands := buildConfigCommands(
+	cmd := batchCommands(buildConfigCommands(
 		fmt.Sprintf("interface %s", port),
 		"switchport mode access",
 		fmt.Sprintf("switchport access vlan %d", vlanID),
-	)
+	))
 
-	for _, cmd := range commands {
-		m.logger.Debug("ssh set port vlan", "command", cmd)
-		output, err := m.executor.Execute(ctx, cmd)
-		if err != nil {
-			return ErrPortVLANSetFailed{
-				Port:   port,
-				VLANID: vlanID,
-				Cause:  err,
-			}
+	m.logger.Debug("ssh set port vlan", "command", cmd)
+	output, err := m.executor.Execute(ctx, cmd)
+	if err != nil {
+		return ErrPortVLANSetFailed{
+			Port:   port,
+			VLANID: vlanID,
+			Cause:  err,
 		}
-		if containsError(output) {
-			return ErrPortVLANSetFailed{
-				Port:   port,
-				VLANID: vlanID,
-				Cause: ErrSSHCommandFailed{
-					Command: cmd,
-					Output:  output,
-				},
-			}
+	}
+	if containsError(output) {
+		return ErrPortVLANSetFailed{
+			Port:   port,
+			VLANID: vlanID,
+			Cause: ErrSSHCommandFailed{
+				Command: cmd,
+				Output:  output,
+			},
 		}
 	}
 	return nil
@@ -176,23 +174,10 @@ func (m *sshManager) EnablePort(ctx context.Context, port string) error {
 	if err := m.ensureConnected(ctx); err != nil {
 		return err
 	}
-
-	commands := buildConfigCommands(
+	return m.runConfig(ctx, "ssh enable port", buildConfigCommands(
 		fmt.Sprintf("interface %s", port),
 		"no shutdown",
-	)
-
-	for _, cmd := range commands {
-		m.logger.Debug("ssh enable port", "command", cmd)
-		output, err := m.executor.Execute(ctx, cmd)
-		if err != nil {
-			return ErrSSHCommandFailed{Command: cmd, Cause: err}
-		}
-		if containsError(output) {
-			return ErrSSHCommandFailed{Command: cmd, Output: output}
-		}
-	}
-	return nil
+	))
 }
 
 func (m *sshManager) DisablePort(ctx context.Context, port string) error {
@@ -202,21 +187,23 @@ func (m *sshManager) DisablePort(ctx context.Context, port string) error {
 	if err := m.ensureConnected(ctx); err != nil {
 		return err
 	}
-
-	commands := buildConfigCommands(
+	return m.runConfig(ctx, "ssh disable port", buildConfigCommands(
 		fmt.Sprintf("interface %s", port),
 		"shutdown",
-	)
+	))
+}
 
-	for _, cmd := range commands {
-		m.logger.Debug("ssh disable port", "command", cmd)
-		output, err := m.executor.Execute(ctx, cmd)
-		if err != nil {
-			return ErrSSHCommandFailed{Command: cmd, Cause: err}
-		}
-		if containsError(output) {
-			return ErrSSHCommandFailed{Command: cmd, Output: output}
-		}
+// runConfig sends one configuration operation as one batched command line
+// and checks its one output for a CLI error.
+func (m *sshManager) runConfig(ctx context.Context, logMsg string, commands []string) error {
+	cmd := batchCommands(commands)
+	m.logger.Debug(logMsg, "command", cmd)
+	output, err := m.executor.Execute(ctx, cmd)
+	if err != nil {
+		return ErrSSHCommandFailed{Command: cmd, Cause: err}
+	}
+	if containsError(output) {
+		return ErrSSHCommandFailed{Command: cmd, Output: output}
 	}
 	return nil
 }
@@ -247,6 +234,15 @@ func buildConfigCommands(interfaceCommands ...string) []string {
 	commands = append(commands, interfaceCommands...)
 	commands = append(commands, "end")
 	return commands
+}
+
+// batchCommands joins the commands of one configuration operation into one
+// NX-OS command line. The SSH executor opens a fresh exec channel for every
+// Execute, so configure-terminal mode and the selected interface do not
+// survive from one Execute to the next; NX-OS accepts ";" as a command
+// separator on one exec line, so the whole operation runs in one channel.
+func batchCommands(commands []string) string {
+	return strings.Join(commands, " ; ")
 }
 
 // validateSSHManagerConfig validates config fields required for SSH Manager.
