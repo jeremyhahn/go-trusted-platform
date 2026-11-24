@@ -19,8 +19,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -904,8 +906,10 @@ func (o *QEMUOrchestrator) List(ctx context.Context, filter *InstanceFilter) ([]
 	result := make([]*Instance, 0, len(o.instances))
 
 	for _, qemuInst := range o.instances {
+		// Copy under the instance lock: disk and network operations change
+		// the record once the lock is released.
 		qemuInst.mu.Lock()
-		instance := qemuInst.instance
+		instance := cloneInstance(qemuInst.instance)
 		qemuInst.mu.Unlock()
 
 		// Apply filter if provided
@@ -913,9 +917,7 @@ func (o *QEMUOrchestrator) List(ctx context.Context, filter *InstanceFilter) ([]
 			continue
 		}
 
-		// Create a copy to avoid external modifications
-		instanceCopy := *instance
-		result = append(result, &instanceCopy)
+		result = append(result, instance)
 	}
 
 	return result, nil
@@ -938,9 +940,33 @@ func (o *QEMUOrchestrator) Get(ctx context.Context, instanceID string) (*Instanc
 	qemuInst.mu.Lock()
 	defer qemuInst.mu.Unlock()
 
-	// Return a copy
-	instanceCopy := *qemuInst.instance
-	return &instanceCopy, nil
+	return cloneInstance(qemuInst.instance), nil
+}
+
+// cloneInstance returns a deep copy of in that shares no slice, map or
+// pointer with it, so a caller can read it after the instance lock is
+// released while disk and network operations change the live record.
+func cloneInstance(in *Instance) *Instance {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Disks = slices.Clone(in.Disks)
+	out.NetworkAttachments = slices.Clone(in.NetworkAttachments)
+	out.Metadata = maps.Clone(in.Metadata)
+	if in.Profile != nil {
+		profile := *in.Profile
+		out.Profile = &profile
+	}
+	if in.Config != nil {
+		cfg := *in.Config
+		cfg.AdditionalDisks = slices.Clone(in.Config.AdditionalDisks)
+		cfg.Environment = maps.Clone(in.Config.Environment)
+		cfg.Labels = maps.Clone(in.Config.Labels)
+		cfg.Metadata = maps.Clone(in.Config.Metadata)
+		out.Config = &cfg
+	}
+	return &out
 }
 
 // AttachNetwork attaches a VM instance to an OVS network port
