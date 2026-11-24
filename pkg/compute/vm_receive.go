@@ -415,8 +415,12 @@ func (o *QEMUOrchestrator) adoptReceived(tr *trackedReceiver) (string, error) {
 	// recordExit rather than leaving a running instance with no process.
 	// The receiver's QEMU runs under a context that is never cancelled, so
 	// the run's cancel kills the process: a stop that only signalled a
-	// guest ignoring SIGTERM would otherwise wait on run.done forever.
-	run := &qemuRun{cancel: func() { _ = vm.Kill() }, done: make(chan struct{})}
+	// guest ignoring SIGTERM would otherwise wait on run.done forever. The
+	// cancel is bound to the adopted process, not to the VM's current one:
+	// a stop releases the instance lock, and once recordExit marks the
+	// instance stopped a Start may put a new guest on this same VM.
+	kill := vm.ProcessKiller()
+	run := &qemuRun{cancel: func() { _ = kill() }, done: make(chan struct{})}
 	qemuInst.run = run
 	go func() {
 		defer close(run.done)

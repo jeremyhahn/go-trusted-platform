@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, usePathname, useRouter } from 'next/navigation';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import {
@@ -44,7 +44,9 @@ import {
   vmVerifyGate,
   type MutationError,
 } from '@/hooks';
+import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import type { VerifyVMAttestationResponse } from 'trusted-platform-sdk';
+import { ServiceUnavailableState } from '@/components/features/platform';
 import type { VMDetail } from '@/types/infrastructure';
 import { toVMDetail, VM_PCRS_NOT_APPRAISED, vmVerifyHeadline } from '@/lib/vm-detail';
 import { VMOperations } from './vm-operations';
@@ -65,6 +67,13 @@ export default function VMDetailPage() {
   const vmId = resolveDynamicId(params, pathname, 'vms');
   const [vm, setVM] = useState<VMDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  // A refused first load: the not-configured 503 (no compute on this node)
+  // or any other refusal; a refresh refusal after a good load keeps the
+  // detail (#2045).
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+  // Read by fetchVM, which the 5 s interval calls through its first closure.
+  const loaded = useRef(false);
   const [actionLoading, setActionLoading] = useState(false);
   const compute = useCompute();
   const { toast } = useToast();
@@ -105,9 +114,32 @@ export default function VMDetailPage() {
     try {
       const response = await compute.getVM(vmId);
       if (response.success && response.data) {
+        loaded.current = true;
         setVM(toVMDetail(response.data.vm));
+        setUnavailable(false);
+        setLoadError(null);
+      } else if (!response.success && isServiceNotConfigured(response.error)) {
+        setUnavailable(true);
+        setLoadError(null);
+      } else if (!response.success) {
+        const message = response.error?.message || 'Unknown error';
+        setUnavailable(false);
+        if (!loaded.current) setLoadError(message);
+        toast({
+          title: 'Error',
+          description: `Failed to fetch VM details: ${message}`,
+          variant: 'destructive',
+        });
       }
     } catch (error) {
+      if (isServiceNotConfigured(error)) {
+        setUnavailable(true);
+        setLoadError(null);
+        return;
+      }
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      setUnavailable(false);
+      if (!loaded.current) setLoadError(message);
       toast({
         title: 'Error',
         description: `Failed to fetch VM details: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -316,10 +348,40 @@ export default function VMDetailPage() {
     cloneVMMutation.mutate({ vmId: vmId, name });
   };
 
-  if (loading || !vm) {
+  if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
         <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (unavailable) {
+    return (
+      <div className="space-y-4">
+        <Button variant="ghost" onClick={() => router.push('/compute/vms')}>
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          Back to VMs
+        </Button>
+        <h1 className="text-3xl font-bold">Virtual Machine</h1>
+        <ServiceUnavailableState
+          service="Compute"
+          description="The compute service is not configured on this node; VMs run on compute nodes."
+        />
+      </div>
+    );
+  }
+
+  if (!vm) {
+    return (
+      <div className="space-y-4">
+        <Button variant="ghost" onClick={() => router.push('/compute/vms')}>
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          Back to VMs
+        </Button>
+        <p className="text-destructive" role="alert">
+          Failed to load VM: {loadError ?? 'not found'}
+        </p>
       </div>
     );
   }
