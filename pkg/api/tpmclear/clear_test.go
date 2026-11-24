@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmstypes "github.com/jeremyhahn/go-xkms/pkg/types"
 )
 
 // fakeTPM answers only Clear and Config. The embedded nil interface
@@ -46,10 +47,18 @@ func (f *fakeTPM) Clear(lockoutAuth []byte) error {
 
 func ownedConfig() *xkmssdk.TPMConfig {
 	return &xkmssdk.TPMConfig{
-		SSRK:        &xkmssdk.SRKConfig{HierarchyAuth: "so-pin"},
-		EK:          &xkmssdk.EKConfig{HierarchyAuth: "so-pin"},
-		PlatformSRK: &xkmssdk.PlatformSRKConfig{SRKAuth: "platform-srk-auth"},
+		SSRK:        &xkmssdk.SRKConfig{HierarchyAuth: mustSecret("so-pin")},
+		EK:          &xkmssdk.EKConfig{HierarchyAuth: mustSecret("so-pin")},
+		PlatformSRK: &xkmssdk.PlatformSRKConfig{CN: "platform-srk", SRKHandle: 0x81000002},
 	}
+}
+
+func mustSecret(s string) *xkmstypes.SecretValue {
+	sv, err := xkmstypes.NewLiteralSecretValue([]byte(s))
+	if err != nil {
+		panic(err)
+	}
+	return sv
 }
 
 func TestClear_SuccessEmptiesOwnerAndEndorsementAuth(t *testing.T) {
@@ -61,7 +70,7 @@ func TestClear_SuccessEmptiesOwnerAndEndorsementAuth(t *testing.T) {
 	assert.Equal(t, []byte("lockout"), tpm.gotLockoutAuth)
 	assert.Empty(t, tpm.cfg.SSRK.HierarchyAuth, "owner hierarchy auth must match the cleared TPM")
 	assert.Empty(t, tpm.cfg.EK.HierarchyAuth, "endorsement hierarchy auth must match the cleared TPM")
-	assert.Equal(t, "platform-srk-auth", tpm.cfg.PlatformSRK.SRKAuth,
+	assert.Equal(t, &xkmssdk.PlatformSRKConfig{CN: "platform-srk", SRKHandle: 0x81000002}, tpm.cfg.PlatformSRK,
 		"TPM2_Clear leaves the platform hierarchy alone")
 }
 
@@ -72,8 +81,10 @@ func TestClear_RefusedClearKeepsAuth(t *testing.T) {
 	err := Clear(tpm, []byte("wrong"))
 
 	require.ErrorIs(t, err, refused)
-	assert.Equal(t, "so-pin", tpm.cfg.SSRK.HierarchyAuth)
-	assert.Equal(t, "so-pin", tpm.cfg.EK.HierarchyAuth)
+	require.NotNil(t, tpm.cfg.SSRK.HierarchyAuth)
+	require.NotNil(t, tpm.cfg.EK.HierarchyAuth)
+	assert.Equal(t, "so-pin", string(tpm.cfg.SSRK.HierarchyAuth.Bytes()))
+	assert.Equal(t, "so-pin", string(tpm.cfg.EK.HierarchyAuth.Bytes()))
 }
 
 func TestClear_NilTPM(t *testing.T) {
@@ -86,8 +97,8 @@ func TestClear_NilTPM(t *testing.T) {
 func TestClear_ToleratesMissingConfigSections(t *testing.T) {
 	cases := map[string]*xkmssdk.TPMConfig{
 		"no config":  nil,
-		"no ssrk":    {EK: &xkmssdk.EKConfig{HierarchyAuth: "so-pin"}},
-		"no ek":      {SSRK: &xkmssdk.SRKConfig{HierarchyAuth: "so-pin"}},
+		"no ssrk":    {EK: &xkmssdk.EKConfig{HierarchyAuth: mustSecret("so-pin")}},
+		"no ek":      {SSRK: &xkmssdk.SRKConfig{HierarchyAuth: mustSecret("so-pin")}},
 		"no section": {},
 	}
 	for name, cfg := range cases {
