@@ -466,7 +466,7 @@ func TestRunnerSelectionScript(t *testing.T) {
 			}
 			const eventNotice = "::notice::runner selection: event "
 			wantEvent := c.env.server == "https://github.com" && !wantFork &&
-				!(c.env.event == "push" && c.env.ref == main) && c.env.event != "pull_request"
+				(c.env.event != "push" || c.env.ref != main) && c.env.event != "pull_request"
 			if has := strings.Contains(res.stdout, eventNotice); has != wantEvent {
 				t.Errorf("the event ::notice printed: %v, want %v\n%s", has, wantEvent, res.stdout)
 			}
