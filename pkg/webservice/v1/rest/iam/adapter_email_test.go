@@ -117,21 +117,48 @@ func TestGetUserByEmailOtherErrorsAreReturned(t *testing.T) {
 	assert.Empty(t, users.listTokens, "List must not be called")
 }
 
-func TestGetUserByEmailFallbackMatchesExactly(t *testing.T) {
+func TestGetUserByEmailFallbackMatchesTheCanonicalEmail(t *testing.T) {
 	t.Parallel()
-	users := &emailLookupUserClient{
-		getErr: unknownGetByEmail(),
-		pages: twoUserPages(
-			iamsdk.User{ID: "u2", Email: "Owner@Example.com"},
-			iamsdk.User{ID: "u3", Email: "owner@example.com.evil"},
-		),
+	cases := []struct {
+		name   string
+		stored string
+		lookup string
+	}{
+		{name: "mixed-case lookup", stored: "owner@example.com", lookup: "Owner@Example.com"},
+		{name: "padded lookup", stored: "owner@example.com", lookup: " owner@example.com "},
+		{name: "upper-case lookup", stored: "owner@example.com", lookup: "OWNER@EXAMPLE.COM"},
+		{name: "mixed-case stored email", stored: "Owner@Example.com", lookup: "owner@example.com"},
 	}
-	adapter := NewQuicBaaSIAMAdapter(&emailLookupSDKClient{users: users})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			users := &emailLookupUserClient{
+				getErr: unknownGetByEmail(),
+				pages:  twoUserPages(iamsdk.User{ID: "u2", Email: tc.stored}),
+			}
+			adapter := NewQuicBaaSIAMAdapter(&emailLookupSDKClient{users: users})
 
-	user, err := adapter.GetUserByEmail(context.Background(), "tenant-a", "owner@example.com")
+			user, err := adapter.GetUserByEmail(context.Background(), "tenant-a", tc.lookup)
 
-	assert.Nil(t, user)
-	assert.True(t, sdkerrors.IsNotFound(err), "got %v", err)
+			require.NoError(t, err)
+			require.NotNil(t, user)
+			assert.Equal(t, "u2", user.ID)
+		})
+	}
+
+	t.Run("suffix is not a match", func(t *testing.T) {
+		t.Parallel()
+		users := &emailLookupUserClient{
+			getErr: unknownGetByEmail(),
+			pages:  twoUserPages(iamsdk.User{ID: "u3", Email: "owner@example.com.evil"}),
+		}
+		adapter := NewQuicBaaSIAMAdapter(&emailLookupSDKClient{users: users})
+
+		user, err := adapter.GetUserByEmail(context.Background(), "tenant-a", "owner@example.com")
+
+		assert.Nil(t, user)
+		assert.True(t, sdkerrors.IsNotFound(err), "got %v", err)
+	})
 }
 
 // TestGetUserByEmail_FallbackFullPageWithoutTokenIsNotNotFound covers a
