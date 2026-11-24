@@ -288,6 +288,15 @@ included, answers `FailedPrecondition` with `ErrCANotInitialized`
 Authorization runs first, so a non-root caller is still refused sign-csr with
 `PermissionDenied`.
 
+`InitCA` hands the CA it brings up to the embedded QuicBaaS, as start-up does.
+When the embedded QuicBaaS refuses that CA, `InitCA` fails with `Internal`
+(`embedded QuicBaaS refused the CA: ...`) and nothing stays published.
+`App.ActivateCA` restores `App.CA` and the embedded ceremony CA to what they
+held before the call, and the daemon's CA holder is not set. Every CA reader
+then agrees that there is no new CA: heartbeat, NTS, the ceremony, gRPC, REST,
+QUIC, attestation and boot delivery. A retried `InitCA` loads the stored CA
+and hands it to the embedded QuicBaaS again.
+
 ### REST is split, and the privileged half is gated on `admin` (#165)
 
 `POST/GET /api/v1/ca/certificates` and `GET/DELETE
