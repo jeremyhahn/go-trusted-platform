@@ -536,6 +536,17 @@ Retrieve the TPM event log (TCG PC Client format).
 }
 ```
 
+**Result:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `event_log` | string | The raw TCG2 event log, base64 |
+| `format` | string | Always `"tcg2"` |
+| `event_count` | integer | Number of parsed events |
+| `entries` | array | The parsed events, as gRPC `EventLogEntry`: `event_num`, `pcr_index`, `event_type`, `digest_count`, `digests` (each `{algorithm_id, digest}`), `event_size`, `event_string` |
+
+`entries` and `event_count` are absent when the log cannot be parsed; the raw `event_log` is still returned.
+
 ### platform_tpm_capabilities
 
 List the algorithm, command and ECC-curve names TPM2_GetCapability reports
