@@ -45,15 +45,15 @@ const (
 
 // HarnessTenantID is the tenant of the harness admin credential
 // (PLATFORM_CLIENT_CERT): platformd issues it with the root admin request
-// (pkg/app/backends.AdminCertificateRequest), whose subject O is the system
+// (pkg/app/backends.AdminCertificateRequest), whose subject OU is the system
 // tenant (app.SystemTenantID), and the mTLS transports bind the caller to
-// the tenant its subject O names. A request that names any other tenant on a
+// the tenant its subject OU names. A request that names any other tenant on a
 // tenant-bound service is refused, so tests name this one.
 const HarnessTenantID = "system"
 
 // ForeignTenantID is the tenant of the second harness credential
 // (PLATFORM_TENANT_CLIENT_CERT). platformd issues it with the same admin
-// request, its subject O replaced by this tenant, so a test can prove what
+// request, its subject OU replaced by this tenant, so a test can prove what
 // a caller outside the system tenant is refused.
 const ForeignTenantID = "harness-tenant"
 
