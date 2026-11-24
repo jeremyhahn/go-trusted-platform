@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """code-review-v51214-tests.py -- the regression tests for code-review.yml
 v5.12.14: only code changes are code reviewed, and only on a SPEC row PR.
 

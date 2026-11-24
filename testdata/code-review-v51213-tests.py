@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """code-review-v51213-tests.py -- the regression tests for code-review.yml
 v5.12.13: a pull request is reviewed once, when it is ready for merge, never
 as a draft.
