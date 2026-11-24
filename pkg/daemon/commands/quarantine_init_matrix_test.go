@@ -15,6 +15,8 @@ package commands
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -79,4 +81,40 @@ func TestSharedZoneFlowManagerCarriesTheZoneMatrix(t *testing.T) {
 	require.NotEqual(t, noneRec.rules, wantRec.rules,
 		"the compiled matrix must open rules the zero matrix does not")
 	require.ElementsMatch(t, wantRec.rules, gotRec.rules)
+}
+
+// TestSharedZoneFlowManagerQuarantineAllowsDNS checks the production manager
+// opens quarantine DNS to the host-services resolver and to nothing else.
+func TestSharedZoneFlowManagerQuarantineAllowsDNS(t *testing.T) {
+	zones := zone.Defaults()
+	plan, err := netplan.New(netplan.Environment{ID: 4}, zones)
+	require.NoError(t, err)
+
+	rec := &recordingOVSPort{}
+	zfm, err := newSharedZoneFlowManager(policy.ZoneFlowManagerConfig{
+		BridgeName:     "br-fabric",
+		FlowController: rec,
+		PortController: rec,
+		Plan:           plan,
+		Zones:          zones,
+	})
+	require.NoError(t, err)
+	require.NoError(t, zfm.ApplyZoneFlows(context.Background(), "tap0", zone.ZoneQuarantine))
+
+	// Rules below the quarantine default drop (1100) never forward.
+	const dnsPriority, quarantineDropPriority = 1800, 1100
+	hostDNS := "nw_dst=" + netplan.HostServices4.String()
+	var allowed []zoneflows.FlowRule
+	for _, r := range rec.rules {
+		fields := strings.Split(r.Match, ",")
+		if r.Actions == "drop" || r.Priority <= quarantineDropPriority || !slices.Contains(fields, "tp_dst=53") {
+			continue
+		}
+		require.True(t, slices.Contains(fields, hostDNS),
+			"quarantine DNS rule open to a destination other than host services: %s", r.Match)
+		allowed = append(allowed, r)
+	}
+	require.Len(t, allowed, 1, "quarantine must open exactly one DNS rule")
+	require.Equal(t, dnsPriority, allowed[0].Priority)
+	require.Contains(t, strings.Split(allowed[0].Match, ","), "nw_proto=17")
 }
