@@ -1,6 +1,5 @@
 import { test, expect } from './fixtures';
 import type { Page, Request } from '@playwright/test';
-import { daemonApi } from './fixtures/daemon-api';
 
 /**
  * TPM key lifecycle page (#1735, slice 31 of #1665) against the real server.
@@ -91,8 +90,8 @@ test.describe('TPM Keys operations (real server)', () => {
     expect(seen.filter((r) => r.method() === 'POST')).toHaveLength(0);
   });
 
-  test('GetCapabilities shows /tpm/capabilities', async ({ adminPage }) => {
-    const res = await daemonApi(adminPage).getTPMCapabilities();
+  test('GetCapabilities shows /tpm/capabilities', async ({ adminPage, sdk }) => {
+    const res = await sdk.tpm.getCapabilities();
     expect(res.success).toBe(true);
 
     await openKeysPage(adminPage);
@@ -104,10 +103,10 @@ test.describe('TPM Keys operations (real server)', () => {
     await expect(adminPage.getByTestId('tpm-result-capabilities')).not.toBeEmpty();
   });
 
-  test('GetPlatformAttributes shows /tpm/platform', async ({ adminPage }) => {
-    const res = await daemonApi(adminPage).getTPMPlatformAttributes();
+  test('GetPlatformAttributes shows /tpm/platform', async ({ adminPage, sdk }) => {
+    const res = await sdk.tpm.getPlatformAttributes();
     expect(res.success).toBe(true);
-    const manufacturer = (res.data as { manufacturer?: unknown } | undefined)?.manufacturer;
+    const manufacturer = res.data?.manufacturer;
 
     await openKeysPage(adminPage);
     await adminPage.getByTestId('tpm-op-platform').click();

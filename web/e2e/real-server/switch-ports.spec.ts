@@ -15,7 +15,6 @@
  */
 
 import { test, expect } from './fixtures';
-import { daemonApi } from './fixtures/daemon-api';
 
 const UNMANAGED = `e2e-unmanaged-${Date.now().toString(36)}`;
 
@@ -33,8 +32,9 @@ test.describe('Switch ports (real server)', () => {
 
   test('ListPorts: an unmanaged switch shows the server error and no ports', async ({
     adminPage,
+    sdk,
   }) => {
-    const res = await daemonApi(adminPage).listSwitchPorts(UNMANAGED);
+    const res = await sdk.switches.listPorts(UNMANAGED);
     expect(res.success).toBe(false);
 
     await adminPage.goto(`/networking/switches/${UNMANAGED}`);
@@ -49,21 +49,18 @@ test.describe('Switch ports (real server)', () => {
     await expect(adminPage.getByText('Error Loading Switch Ports')).toBeVisible();
   });
 
-  test('GetPortStatus: the server refuses a port of an unmanaged switch', async ({ adminPage }) => {
-    const api = daemonApi(adminPage);
-    const res = await api.getSwitchPortStatus(UNMANAGED, 'Eth1/1');
+  test('GetPortStatus: the server refuses a port of an unmanaged switch', async ({ sdk }) => {
+    const res = await sdk.switches.getPortStatus(UNMANAGED, 'Eth1/1');
     expect(res.success).toBe(false);
   });
 
-  test('EnablePort and DisablePort: the server refuses an unmanaged switch', async ({ adminPage }) => {
-    const api = daemonApi(adminPage);
-    expect((await api.enableSwitchPort(UNMANAGED, 'Eth1/1')).success).toBe(false);
-    expect((await api.disableSwitchPort(UNMANAGED, 'Eth1/1')).success).toBe(false);
+  test('EnablePort and DisablePort: the server refuses an unmanaged switch', async ({ sdk }) => {
+    expect((await sdk.switches.enablePort(UNMANAGED, 'Eth1/1')).success).toBe(false);
+    expect((await sdk.switches.disablePort(UNMANAGED, 'Eth1/1')).success).toBe(false);
   });
 
-  test('SetPortVLAN: the server refuses an unmanaged switch', async ({ adminPage }) => {
-    const api = daemonApi(adminPage);
-    const res = await api.setSwitchPortVLAN(UNMANAGED, 'Eth1/1', 200);
+  test('SetPortVLAN: the server refuses an unmanaged switch', async ({ sdk }) => {
+    const res = await sdk.switches.setPortVLAN(UNMANAGED, 'Eth1/1', 200);
     expect(res.success).toBe(false);
   });
 });

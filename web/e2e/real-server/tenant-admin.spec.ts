@@ -1,7 +1,6 @@
 import { test, expect } from './fixtures';
 import type { Page } from '@playwright/test';
 import type { PlatformClient } from 'trusted-platform-sdk';
-import { daemonApi } from './fixtures/daemon-api';
 
 /**
  * Admin tenant lifecycle, quota and DEK pages (#1673) against the real
@@ -308,9 +307,9 @@ test.describe('Admin tenant lifecycle, quota and DEK (real server)', () => {
       }
     });
 
-    test('SealTenantBarrier seals after confirm', async ({ adminPage }) => {
+    test('SealTenantBarrier seals after confirm', async ({ adminPage, sdk }) => {
       const s = seeded!;
-      await daemonApi(adminPage).initTenantBarrier(s.id);
+      await sdk.tenant.initBarrier({ tenantId: s.id });
       await adminPage.goto(detail(s));
       await adminPage.getByRole('button', { name: 'Seal barrier' }).click();
       const post = adminPage.waitForResponse(
