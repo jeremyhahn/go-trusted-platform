@@ -11,7 +11,24 @@
  * non-zero on the first failure.
  */
 import assert from 'node:assert/strict';
+import { registerHooks } from 'node:module';
 import path from 'node:path';
+
+// vtpm-wire.ts imports './wire' without an extension, as the Playwright
+// bundler and tsc resolve it; Node does not, so retry a relative specifier
+// Node cannot find with `.ts`.
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    try {
+      return nextResolve(specifier, context);
+    } catch (e) {
+      if (specifier.startsWith('.') && !specifier.endsWith('.ts')) {
+        return nextResolve(`${specifier}.ts`, context);
+      }
+      throw e;
+    }
+  },
+});
 
 // A computed specifier: tsc (the web typecheck) does not resolve it, so the
 // `.ts` extension Node needs is not a TS5097 error there.

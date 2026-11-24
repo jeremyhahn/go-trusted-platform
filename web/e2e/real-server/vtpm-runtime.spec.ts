@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { expect, test } from './fixtures';
+import { enabledOpsFrom, runStateFrom } from './fixtures/vtpm-wire';
 
 /**
  * vTPM runtime page against the real daemon (#2072, epic #1665).
@@ -44,12 +45,7 @@ const controls: Array<[string, string]> = [
 async function enabledOps(page: Page): Promise<Set<string>> {
   const res = await page.request.get('/api/v1/capabilities');
   expect(res.ok(), `GET /api/v1/capabilities: ${res.status()}`).toBe(true);
-  const body = (await res.json()) as {
-    capabilities?: Array<{ op: string; enabled: boolean }>;
-    data?: { capabilities?: Array<{ op: string; enabled: boolean }> };
-  };
-  const list = body.capabilities ?? body.data?.capabilities ?? [];
-  return new Set(list.filter((c) => c.enabled).map((c) => c.op));
+  return enabledOpsFrom(await res.json());
 }
 
 function gap(description: string): void {
@@ -119,8 +115,8 @@ test.describe('vTPM runtime page against the real server', () => {
       const body = (await reply.json()) as Record<string, unknown>;
 
       if (reply.ok()) {
-        const state = ((body.data as Record<string, unknown> | undefined) ?? body) as { running?: boolean };
-        await expect(adminPage.getByTestId('vtpm-run-state')).toHaveText(state.running ? 'Running' : 'Stopped');
+        const running = runStateFrom(body);
+        await expect(adminPage.getByTestId('vtpm-run-state')).toHaveText(running ? 'Running' : 'Stopped');
       } else {
         // The page shows the server's refusal, not a state of its own.
         const err = body.error as { message?: string } | string | undefined;
