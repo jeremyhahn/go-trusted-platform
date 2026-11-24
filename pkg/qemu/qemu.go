@@ -777,6 +777,31 @@ func (vm *VM) Kill() error {
 	return nil
 }
 
+// ProcessKiller returns a func that SIGKILLs the process the VM runs now and
+// never a later one: a caller that stops a run outside the VM lock (and may
+// race a new Start of the same VM) binds its kill to the run it started
+// from. Go's os.Process refuses a signal once its Wait has reaped it, so a
+// reused PID is never signalled; that answer is nil. Without a started
+// process the func answers ErrVMNotRunning.
+func (vm *VM) ProcessKiller() func() error {
+	vm.mu.Lock()
+	var proc *os.Process
+	if vm.cmd != nil {
+		proc = vm.cmd.Process
+	}
+	vm.mu.Unlock()
+
+	if proc == nil {
+		return func() error { return ErrVMNotRunning }
+	}
+	return func() error {
+		if err := proc.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return &WrappedError{Msg: "failed to kill VM process", Err: err}
+		}
+		return nil
+	}
+}
+
 // ConnectMonitor establishes a connection to the QMP socket.
 // This should be called after the VM has started and the QMP socket is available.
 // The connection enables runtime control via QMP commands.
