@@ -287,12 +287,7 @@ type TPM2ReadPCRsResponse struct {
 type TPM2ExtendPCRRequest = quicwire.TPM2ExtendPCRRequest
 
 // TPM2EventLogResponse represents an event log response.
-type TPM2EventLogResponse struct {
-	EventLog   []byte `codec:"event_log"`
-	Format     string `codec:"format"`
-	EventCount uint64 `codec:"event_count"`
-	Timestamp  int64  `codec:"timestamp"`
-}
+type TPM2EventLogResponse = quicwire.TPM2EventLogResponse
 
 // TPM2RandomRequest represents a random bytes request.
 type TPM2RandomRequest struct {
@@ -988,8 +983,28 @@ func (h *TPM2Handler) handleEventLog(ctx context.Context, payload []byte) *quicw
 
 	events, parseErr := h.tpm.ParsedEventLog()
 	var eventCount uint64
+	var entries []quicwire.TPM2EventLogEntry
 	if parseErr == nil {
 		eventCount = uint64(len(events))
+		entries = make([]quicwire.TPM2EventLogEntry, 0, len(events))
+		for _, ev := range events {
+			digests := make([]quicwire.TPM2EventDigest, 0, len(ev.Digests))
+			for _, d := range ev.Digests {
+				digests = append(digests, quicwire.TPM2EventDigest{
+					AlgorithmID: d.AlgorithmId,
+					Digest:      d.Digest,
+				})
+			}
+			entries = append(entries, quicwire.TPM2EventLogEntry{
+				EventNum:    uint32(ev.EventNum),
+				PCRIndex:    uint32(ev.PCRIndex),
+				EventType:   ev.EventType,
+				DigestCount: uint32(ev.DigestCount),
+				Digests:     digests,
+				EventSize:   uint32(ev.EventSize),
+				EventString: ev.EventString,
+			})
+		}
 	}
 
 	return h.encodeResponse(&TPM2EventLogResponse{
@@ -997,6 +1012,7 @@ func (h *TPM2Handler) handleEventLog(ctx context.Context, payload []byte) *quicw
 		Format:     "tcg2",
 		EventCount: eventCount,
 		Timestamp:  time.Now().Unix(),
+		Entries:    entries,
 	})
 }
 
