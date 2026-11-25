@@ -77,8 +77,11 @@ const daemonAlreadyRunningPrefix = "service already running: "
 // process), which its gRPC service reports as FailedPrecondition, so the
 // generic POST-409-is-AlreadyExists rule would break parity (docs/SPEC.md).
 // A 409 from AttestDevice is the challenge refusing (FailedPrecondition, #2136).
+// A 409 from the PXE service's start or stop is its state refusing (FailedPrecondition over gRPC).
 var restConflictCodes = map[string]func(message string) codes.Code{
 	platformv1.DeviceService_AttestDevice_FullMethodName: alwaysFailedPrecondition,
+	platformv1.PXEService_StartService_FullMethodName:    alwaysFailedPrecondition,
+	platformv1.PXEService_StopService_FullMethodName:     alwaysFailedPrecondition,
 	platformv1.PlatformDaemon_StartService_FullMethodName: func(message string) codes.Code {
 		if strings.HasPrefix(message, daemonAlreadyRunningPrefix) {
 			return codes.AlreadyExists
