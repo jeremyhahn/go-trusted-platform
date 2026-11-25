@@ -90,7 +90,7 @@ func TestFlowTable_Plan(t *testing.T) {
 
 		mods = planned(t, sw, table, []*openflow.FlowMod{allowB}, nil)
 		assert.Empty(t, mods, "the flow stays while one holder is left")
-		assert.Len(t, sw.matching("tun_src=192.0.2.2"), 1)
+		assert.Len(t, sw.matching("tun_src=10.0.0.2"), 1)
 
 		mods = planned(t, sw, table, []*openflow.FlowMod{allowB}, nil)
 		assert.Equal(t, []uint8{openflow.OFPFCDeleteStrict}, commandsOf(mods))
@@ -99,15 +99,15 @@ func TestFlowTable_Plan(t *testing.T) {
 
 	t.Run("changed instructions replace the flow in place", func(t *testing.T) {
 		sw, table := newFakeSwitch(), newFlowTable()
-		toB := b.remoteRoute(netip.MustParsePrefix("203.0.113.0/24"), 124, ovlVTEPB, ovlRouterMACB)
-		toC := b.remoteRoute(netip.MustParsePrefix("203.0.113.0/24"), 124, ovlVTEPC, ovlRouterMACB)
+		toB := b.remoteRoute(netip.MustParsePrefix("10.2.0.0/24"), 124, ovlVTEPB, ovlRouterMACB)
+		toC := b.remoteRoute(netip.MustParsePrefix("10.2.0.0/24"), 124, ovlVTEPC, ovlRouterMACB)
 		planned(t, sw, table, nil, []*openflow.FlowMod{toB})
 
 		mods := planned(t, sw, table, []*openflow.FlowMod{toB}, []*openflow.FlowMod{toC})
 
 		assert.Equal(t, []uint8{openflow.OFPFCAdd}, commandsOf(mods), "an add replaces, no delete")
 		require.Len(t, sw.table(), 1)
-		assert.Contains(t, sw.table()[0], "set:tun_dst=192.0.2.3")
+		assert.Contains(t, sw.table()[0], "set:tun_dst=10.0.0.3")
 	})
 
 	t.Run("adds come before deletes", func(t *testing.T) {
@@ -118,7 +118,7 @@ func TestFlowTable_Plan(t *testing.T) {
 		mods := planned(t, sw, table, []*openflow.FlowMod{allowB}, []*openflow.FlowMod{allowC})
 
 		assert.Equal(t, []uint8{openflow.OFPFCAdd, openflow.OFPFCDeleteStrict}, commandsOf(mods))
-		assert.Equal(t, []string{"t=10 p=300 in_port=7,tun_id=50000,tun_src=192.0.2.3 -> goto:20"}, sw.table())
+		assert.Equal(t, []string{"t=10 p=300 in_port=7,tun_id=50000,tun_src=10.0.0.3 -> goto:20"}, sw.table())
 	})
 
 	t.Run("a plan left uncommitted changes nothing", func(t *testing.T) {
@@ -152,8 +152,8 @@ func TestFlowTable_Plan(t *testing.T) {
 		assert.ErrorIs(t, err, ErrFlowNotTracked)
 	})
 
-	toB := b.remoteRoute(netip.MustParsePrefix("203.0.113.0/24"), 124, ovlVTEPB, ovlRouterMACB)
-	toC := b.remoteRoute(netip.MustParsePrefix("203.0.113.0/24"), 124, ovlVTEPC, ovlRouterMACB)
+	toB := b.remoteRoute(netip.MustParsePrefix("10.2.0.0/24"), 124, ovlVTEPB, ovlRouterMACB)
+	toC := b.remoteRoute(netip.MustParsePrefix("10.2.0.0/24"), 124, ovlVTEPC, ovlRouterMACB)
 
 	t.Run("the surviving holder's flow is put back when the installed one's holder lets go", func(t *testing.T) {
 		sw, table := newFakeSwitch(), newFlowTable()
@@ -161,12 +161,12 @@ func TestFlowTable_Plan(t *testing.T) {
 
 		mods := planned(t, sw, table, nil, []*openflow.FlowMod{toC})
 		assert.Equal(t, []uint8{openflow.OFPFCAdd}, commandsOf(mods), "the newest holder's flow is installed")
-		assert.Len(t, sw.matching("set:tun_dst=192.0.2.3"), 1)
+		assert.Len(t, sw.matching("set:tun_dst=10.0.0.3"), 1)
 
 		mods = planned(t, sw, table, []*openflow.FlowMod{toC}, nil)
 		assert.Equal(t, []uint8{openflow.OFPFCAdd}, commandsOf(mods), "the other holder's flow goes back")
 		require.Len(t, sw.table(), 1)
-		assert.Contains(t, sw.table()[0], "set:tun_dst=192.0.2.2")
+		assert.Contains(t, sw.table()[0], "set:tun_dst=10.0.0.2")
 
 		mods = planned(t, sw, table, []*openflow.FlowMod{toB}, nil)
 		assert.Equal(t, []uint8{openflow.OFPFCDeleteStrict}, commandsOf(mods))
@@ -182,7 +182,7 @@ func TestFlowTable_Plan(t *testing.T) {
 
 		assert.Empty(t, mods)
 		require.Len(t, sw.table(), 1)
-		assert.Contains(t, sw.table()[0], "set:tun_dst=192.0.2.3")
+		assert.Contains(t, sw.table()[0], "set:tun_dst=10.0.0.3")
 	})
 
 	t.Run("releasing instructions no holder asked for fails", func(t *testing.T) {
@@ -212,8 +212,8 @@ func TestFlowTable_Plan(t *testing.T) {
 		assert.Equal(t, committed, sw.table())
 
 		planned(t, sw, table, []*openflow.FlowMod{allowB, toB}, []*openflow.FlowMod{allowC, toC})
-		assert.Len(t, sw.matching("tun_src=192.0.2.3"), 1)
-		assert.Len(t, sw.matching("set:tun_dst=192.0.2.3"), 1)
+		assert.Len(t, sw.matching("tun_src=10.0.0.3"), 1)
+		assert.Len(t, sw.matching("set:tun_dst=10.0.0.3"), 1)
 		assert.Len(t, sw.table(), 2)
 	})
 }
@@ -300,10 +300,10 @@ func TestFlowBuilder_Segment(t *testing.T) {
 
 		assert.True(t, sw.has("t=10 p=100 in_port=3,vlan=100 -> pop_vlan,set:tun_id=10100 goto:20"))
 		assert.True(t, sw.has("t=60 p=100 tun_id=10100 -> push_vlan,set:vlan=100,output:3,pop_vlan,"+
-			"set:tun_dst=192.0.2.2,output:7,set:tun_dst=192.0.2.3,output:7"))
-		assert.True(t, sw.has("t=10 p=300 in_port=7,tun_id=10100,tun_src=192.0.2.2 -> goto:20"))
-		assert.True(t, sw.has("t=10 p=300 in_port=7,tun_id=10100,tun_src=192.0.2.3 -> goto:20"))
-		assert.Len(t, sw.matching("t=40 ", "arp_tpa=198.51.100.1"), 1, "the gateway answers ARP")
+			"set:tun_dst=10.0.0.2,output:7,set:tun_dst=10.0.0.3,output:7"))
+		assert.True(t, sw.has("t=10 p=300 in_port=7,tun_id=10100,tun_src=10.0.0.2 -> goto:20"))
+		assert.True(t, sw.has("t=10 p=300 in_port=7,tun_id=10100,tun_src=10.0.0.3 -> goto:20"))
+		assert.Len(t, sw.matching("t=40 ", "arp_tpa=10.1.0.1"), 1, "the gateway answers ARP")
 		assert.True(t, sw.has("t=30 p=300 in_port=3,tun_id=10100,eth_dst=02:aa:aa:aa:aa:aa -> goto:50"),
 			"the routed VNI's frames for the gateway MAC enter routing")
 	})
@@ -318,15 +318,15 @@ func TestFlowBuilder_Segment(t *testing.T) {
 
 	t.Run("each VNI answers ARP for its own gateway only", func(t *testing.T) {
 		cfg := overlayConfig(newFakeSpeaker())
-		cfg.AnycastGateways[ovlL2VNI+1] = netip.MustParseAddr("203.0.113.1")
+		cfg.AnycastGateways[ovlL2VNI+1] = netip.MustParseAddr("10.2.0.1")
 		perVNI, err := newFlowBuilder(cfg, overlayPorts{vxlan: 7, access: 3}, testOverlayCookie)
 		require.NoError(t, err)
 		sw := newFakeSwitch()
 		require.NoError(t, sw.SendFlowMods(context.Background(), perVNI.segment(ovlL2VNI+1, &overlaySegment{vlan: ovlVLAN + 1})))
 		require.NoError(t, sw.SendFlowMods(context.Background(), perVNI.segment(ovlL2VNI+2, &overlaySegment{vlan: ovlVLAN + 2})))
 
-		assert.Len(t, sw.matching("t=40 ", "arp_tpa=203.0.113.1"), 1, "the second VNI's gateway answers")
-		assert.Empty(t, sw.matching("t=40 ", "arp_tpa=198.51.100.1"), "another VNI's gateway is not answered")
+		assert.Len(t, sw.matching("t=40 ", "arp_tpa=10.2.0.1"), 1, "the second VNI's gateway answers")
+		assert.Empty(t, sw.matching("t=40 ", "arp_tpa=10.1.0.1"), "another VNI's gateway is not answered")
 		assert.Empty(t, sw.matching("t=40 ", "vlan=102"), "a VNI without a gateway answers no ARP")
 	})
 }
@@ -339,10 +339,10 @@ func TestFlowBuilder_ARPReply(t *testing.T) {
 		[]*openflow.FlowMod{b.arpReply(ovlL2VNI, ovlVLAN, ovlRemoteIP, ovlRemoteMAC)}))
 
 	assert.Equal(t, []string{
-		"t=40 p=200 in_port=3,tun_id=10100,eth_type=0x806,arp_op=1,arp_tpa=198.51.100.20 -> " +
+		"t=40 p=200 in_port=3,tun_id=10100,eth_type=0x806,arp_op=1,arp_tpa=10.1.0.20 -> " +
 			"move:eth_src->eth_dst,set:eth_src=02:00:00:00:02:20,set:arp_op=2," +
 			"move:arp_sha->arp_tha,set:arp_sha=02:00:00:00:02:20," +
-			"move:arp_spa->arp_tpa,set:arp_spa=198.51.100.20," +
+			"move:arp_spa->arp_tpa,set:arp_spa=10.1.0.20," +
 			"push_vlan,set:vlan=100,output:IN_PORT",
 	}, sw.table())
 	require.NoError(t, sw.SendFlowMods(context.Background(), b.base()))
@@ -359,9 +359,9 @@ func TestFlowBuilder_Host(t *testing.T) {
 		require.NoError(t, sw.SendFlowMods(context.Background(), b.host(ovlL2VNI, ovlVLAN, host)))
 
 		assert.True(t, sw.has("t=30 p=200 tun_id=10100,eth_dst=02:00:00:00:01:10 -> push_vlan,set:vlan=100 goto:70"))
-		assert.True(t, sw.has("t=50 p=200 eth_type=0x800,ipv4_dst=198.51.100.10 -> dec_ttl,set:eth_src=02:aa:aa:aa:aa:aa,"+
+		assert.True(t, sw.has("t=50 p=200 eth_type=0x800,ipv4_dst=10.1.0.10 -> dec_ttl,set:eth_src=02:aa:aa:aa:aa:aa,"+
 			"set:eth_dst=02:00:00:00:01:10,push_vlan,set:vlan=100 goto:70"))
-		assert.Len(t, sw.matching("t=40 ", "arp_tpa=198.51.100.10"), 1)
+		assert.Len(t, sw.matching("t=40 ", "arp_tpa=10.1.0.10"), 1)
 		assert.Empty(t, sw.matching("t=10 "), "a local host authorises no decap")
 	})
 
@@ -372,10 +372,10 @@ func TestFlowBuilder_Host(t *testing.T) {
 		}}
 		require.NoError(t, sw.SendFlowMods(context.Background(), b.host(ovlL2VNI, ovlVLAN, host)))
 
-		assert.True(t, sw.has("t=30 p=200 tun_id=10100,eth_dst=02:00:00:00:02:20 -> set:tun_dst=192.0.2.2,output:7"))
-		assert.True(t, sw.has("t=50 p=200 eth_type=0x800,ipv4_dst=198.51.100.20 -> dec_ttl,set:eth_src=02:00:00:00:00:0a,"+
-			"set:eth_dst=02:00:00:00:00:0b,set:tun_id=50000,set:tun_dst=192.0.2.2,output:7"))
-		assert.True(t, sw.has("t=10 p=300 in_port=7,tun_id=50000,tun_src=192.0.2.2 -> goto:20"))
+		assert.True(t, sw.has("t=30 p=200 tun_id=10100,eth_dst=02:00:00:00:02:20 -> set:tun_dst=10.0.0.2,output:7"))
+		assert.True(t, sw.has("t=50 p=200 eth_type=0x800,ipv4_dst=10.1.0.20 -> dec_ttl,set:eth_src=02:00:00:00:00:0a,"+
+			"set:eth_dst=02:00:00:00:00:0b,set:tun_id=50000,set:tun_dst=10.0.0.2,output:7"))
+		assert.True(t, sw.has("t=10 p=300 in_port=7,tun_id=50000,tun_src=10.0.0.2 -> goto:20"))
 	})
 
 	t.Run("a remote host in another IP-VRF is bridged, not routed", func(t *testing.T) {
@@ -408,7 +408,7 @@ func TestFlowBuilder_Host(t *testing.T) {
 func TestFlowBuilder_RoutingIsPerVNI(t *testing.T) {
 	const bridged, bridgedVLAN = ovlL2VNI + 1, ovlVLAN + 1
 	b := testBuilder(t)
-	localIP, remoteIP := netip.MustParseAddr("192.0.2.138"), netip.MustParseAddr("192.0.2.148")
+	localIP, remoteIP := netip.MustParseAddr("10.9.0.10"), netip.MustParseAddr("10.9.0.20")
 	sw := newFakeSwitch()
 	install := func(flows []*openflow.FlowMod) { require.NoError(t, sw.SendFlowMods(context.Background(), flows)) }
 	install(b.base())
@@ -422,15 +422,15 @@ func TestFlowBuilder_RoutingIsPerVNI(t *testing.T) {
 
 	t.Run("the routed VNI routes", func(t *testing.T) {
 		assert.Equal(t, "goto:50", sw.lookup(t, TableMACLearning, "in_port=3", "tun_id=10100", "eth_dst=02:aa:aa:aa:aa:aa"))
-		assert.Len(t, sw.matching("t=50 ", "ipv4_dst=198.51.100.10"), 1, "a host route to the routed VNI's host")
+		assert.Len(t, sw.matching("t=50 ", "ipv4_dst=10.1.0.10"), 1, "a host route to the routed VNI's host")
 	})
 
 	t.Run("the bridge-only VNI does not", func(t *testing.T) {
 		assert.Equal(t, "goto:40", sw.lookup(t, TableMACLearning, "in_port=3", "tun_id=10101", "eth_dst=02:aa:aa:aa:aa:aa"),
 			"a frame for the gateway MAC on a bridge-only VNI is bridged, not routed")
 		assert.Empty(t, sw.matching("t=30 ", "tun_id=10101", "eth_dst=02:aa:aa:aa:aa:aa"), "no gateway-MAC ingress")
-		assert.Empty(t, sw.matching("t=50 ", "ipv4_dst=192.0.2.138"), "no host route to a local host")
-		assert.Empty(t, sw.matching("t=50 ", "ipv4_dst=192.0.2.148"), "no host route to a remote host")
+		assert.Empty(t, sw.matching("t=50 ", "ipv4_dst=10.9.0.10"), "no host route to a local host")
+		assert.Empty(t, sw.matching("t=50 ", "ipv4_dst=10.9.0.20"), "no host route to a remote host")
 		assert.Empty(t, sw.matching("t=10 ", "tun_id=50000"), "no L3VNI decap for a bridged host")
 		assert.Len(t, sw.matching("t=30 ", "tun_id=10101"), 2, "both hosts are still bridged to")
 	})
@@ -440,13 +440,13 @@ func TestFlowBuilder_Prefix(t *testing.T) {
 	b := testBuilder(t)
 	sw := newFakeSwitch()
 
-	require.NoError(t, sw.SendFlowMods(context.Background(), b.prefix(netip.MustParsePrefix("203.0.113.0/24"),
+	require.NoError(t, sw.SendFlowMods(context.Background(), b.prefix(netip.MustParsePrefix("10.2.0.0/24"),
 		&overlayPrefixRoute{vtep: ovlVTEPC, routerMAC: ovlRouterMACB})))
 
-	assert.True(t, sw.has("t=50 p=124 eth_type=0x800,ipv4_dst=203.0.113.0/24 -> dec_ttl,set:eth_src=02:00:00:00:00:0a,"+
-		"set:eth_dst=02:00:00:00:00:0b,set:tun_id=50000,set:tun_dst=192.0.2.3,output:7"))
-	assert.True(t, sw.has("t=10 p=300 in_port=7,tun_id=50000,tun_src=192.0.2.3 -> goto:20"))
-	assert.Contains(t, sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=203.0.113.77"), "tun_dst=192.0.2.3")
+	assert.True(t, sw.has("t=50 p=124 eth_type=0x800,ipv4_dst=10.2.0.0/24 -> dec_ttl,set:eth_src=02:00:00:00:00:0a,"+
+		"set:eth_dst=02:00:00:00:00:0b,set:tun_id=50000,set:tun_dst=10.0.0.3,output:7"))
+	assert.True(t, sw.has("t=10 p=300 in_port=7,tun_id=50000,tun_src=10.0.0.3 -> goto:20"))
+	assert.Contains(t, sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.2.0.77"), "tun_dst=10.0.0.3")
 }
 
 func TestNewFlowBuilder(t *testing.T) {

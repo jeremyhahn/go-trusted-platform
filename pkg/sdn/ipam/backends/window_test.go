@@ -107,12 +107,12 @@ func TestWindow_GatewayNeverAllocated(t *testing.T) {
 			require.NoError(t, b.CreatePool(ctx, &ipam.Pool{
 				ID:      "gw",
 				Name:    "gw",
-				CIDR:    netip.MustParsePrefix("198.18.1.0/29"),
-				Gateway: netip.MustParseAddr("198.18.1.1"),
+				CIDR:    netip.MustParsePrefix("10.4.1.0/29"),
+				Gateway: netip.MustParseAddr("10.4.1.1"),
 			}))
 			a, err := b.Allocate(ctx, req("gw", "dev"))
 			require.NoError(t, err)
-			assert.Equal(t, "198.18.1.2", a.IP.String())
+			assert.Equal(t, "10.4.1.2", a.IP.String())
 		})
 	}
 }
@@ -126,12 +126,12 @@ func TestWindow_HASyncReservedSlash31(t *testing.T) {
 			require.NoError(t, b.CreatePool(ctx, &ipam.Pool{
 				ID:       "tunnel-p2p",
 				Name:     "tunnel-p2p",
-				CIDR:     netip.MustParsePrefix("198.18.128.0/22"),
-				Reserved: []netip.Prefix{netip.MustParsePrefix("198.18.128.0/31")},
+				CIDR:     netip.MustParsePrefix("10.4.128.0/22"),
+				Reserved: []netip.Prefix{netip.MustParsePrefix("10.4.128.0/31")},
 			}))
 			a, err := b.Allocate(ctx, req("tunnel-p2p", "gw"))
 			require.NoError(t, err)
-			assert.Equal(t, "198.18.128.2", a.IP.String())
+			assert.Equal(t, "10.4.128.2", a.IP.String())
 		})
 	}
 }
@@ -186,7 +186,7 @@ func TestWindow_CreateAndUpdateRefuseBadWindow(t *testing.T) {
 	for name, b := range windowBackends(t) {
 		t.Run(name, func(t *testing.T) {
 			bad := referenceZonePool()
-			bad.Reserved = []netip.Prefix{netip.MustParsePrefix("198.18.6.0/30")}
+			bad.Reserved = []netip.Prefix{netip.MustParsePrefix("10.4.6.0/30")}
 			var window *ipam.ErrInvalidWindow
 			require.True(t, errors.As(b.CreatePool(ctx, bad), &window))
 

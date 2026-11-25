@@ -26,10 +26,10 @@ func TestBackendValidate(t *testing.T) {
 		backend Backend
 		wantErr error
 	}{
-		{"valid", Backend{Address: netip.MustParseAddr("198.18.0.1"), Port: 80}, nil},
+		{"valid", Backend{Address: netip.MustParseAddr("10.0.0.1"), Port: 80}, nil},
 		{"zero address", Backend{Port: 80}, ErrInvalidBackend},
 		{"ipv6 address", Backend{Address: netip.MustParseAddr("2001:db8::1"), Port: 80}, ErrInvalidBackend},
-		{"zero port", Backend{Address: netip.MustParseAddr("198.18.0.1")}, ErrInvalidBackend},
+		{"zero port", Backend{Address: netip.MustParseAddr("10.0.0.1")}, ErrInvalidBackend},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -87,7 +87,7 @@ func TestVIPValidate(t *testing.T) {
 
 func TestVIPKeyString(t *testing.T) {
 	key := testVIP().key()
-	if got, want := key.String(), "tcp/198.19.100.10:443"; got != want {
+	if got, want := key.String(), "tcp/10.100.0.10:443"; got != want {
 		t.Errorf("key = %q, want %q", got, want)
 	}
 }
@@ -124,7 +124,7 @@ func TestConfigValidate(t *testing.T) {
 		{"the same vip twice", func(c *Config) { c.VIPs = []VIP{testVIP(), testVIP()} }, ErrVIPExists},
 		{"backend shared by two vips", func(c *Config) {
 			other := testVIP()
-			other.Address = netip.MustParseAddr("198.19.100.11")
+			other.Address = netip.MustParseAddr("10.100.0.11")
 			c.VIPs = []VIP{testVIP(), other}
 		}, ErrBackendInUse},
 	}
@@ -188,7 +188,7 @@ func TestConfigValidateAcceptsHairpinAndDistinctBackends(t *testing.T) {
 		Bridge:              "br0",
 		HealthCheckInterval: 10 * time.Second,
 		HealthCheckTimeout:  2 * time.Second,
-		HairpinPrefixes:     []netip.Prefix{netip.MustParsePrefix("198.18.1.0/24")},
+		HairpinPrefixes:     []netip.Prefix{netip.MustParsePrefix("10.0.1.0/24")},
 		// The same endpoints under UDP are a different reply tuple.
 		VIPs: []VIP{testVIP(), udp},
 	}
@@ -217,7 +217,7 @@ func TestValidateVIPSet(t *testing.T) {
 	}
 	other := testVIP()
 	other.Port = 8443
-	other.Backends = []Backend{{Address: netip.MustParseAddr("198.18.9.9"), Port: 1}}
+	other.Backends = []Backend{{Address: netip.MustParseAddr("10.0.9.9"), Port: 1}}
 	if err := ValidateVIPSet([]VIP{testVIP(), other}, 4); err != nil {
 		t.Errorf("distinct VIPs with distinct backends: %v", err)
 	}

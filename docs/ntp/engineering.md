@@ -184,7 +184,7 @@ ntp:
     orphan-fallback: true
   serve:
     listen-networks:               # explicit CIDRs; NEVER 0.0.0.0/0 or ::/0
-      - 198.19.0.0/16
+      - 10.20.0.0/16
     local-stratum: 10              # 1..15; omitted ⇒ DefaultLocalStratum
     nts:
       enabled: true

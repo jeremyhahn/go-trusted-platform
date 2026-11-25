@@ -311,8 +311,8 @@ func TestPoolAdd(t *testing.T) {
 
 	err := execute(t, "pool", "add",
 		"--id", "web-pool",
-		"--backend", "https://198.51.100.10:8443=2",
-		"--backend", "https://198.51.100.11:8443",
+		"--backend", "https://10.0.0.10:8443=2",
+		"--backend", "https://10.0.0.11:8443",
 		"--balancer", "round-robin",
 		"--trust-class", "internal",
 		"--mtls-client-cert",
@@ -328,7 +328,7 @@ func TestPoolAdd(t *testing.T) {
 	if pool.GetId() != "web-pool" || len(pool.GetBackends()) != 2 {
 		t.Fatalf("pool = %+v", pool)
 	}
-	if pool.GetBackends()[0].GetWeight() != 2 || pool.GetBackends()[0].GetUrl() != "https://198.51.100.10:8443" {
+	if pool.GetBackends()[0].GetWeight() != 2 || pool.GetBackends()[0].GetUrl() != "https://10.0.0.10:8443" {
 		t.Errorf("weighted backend = %+v", pool.GetBackends()[0])
 	}
 	if pool.GetBackends()[1].GetWeight() != 0 {

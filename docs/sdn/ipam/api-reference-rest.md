@@ -42,14 +42,14 @@ Content-Type: application/json
 {
   "id": "lab",
   "name": "lab",
-  "cidr": "198.18.9.0/24",
-  "gateway": "198.18.9.1",
+  "cidr": "10.4.9.0/24",
+  "gateway": "10.4.9.1",
   "zone": "lab",
   "description": "lab zone pool",
   "default_lease_duration_nanos": 86400000000000,
-  "reserved": ["198.18.9.1/32"],
-  "range_start": "198.18.9.50",
-  "range_end": "198.18.9.254"
+  "reserved": ["10.4.9.1/32"],
+  "range_start": "10.4.9.50",
+  "range_end": "10.4.9.254"
 }
 ```
 

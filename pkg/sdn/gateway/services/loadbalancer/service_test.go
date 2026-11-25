@@ -279,12 +279,12 @@ func (f *fakeGroups) bucketCount(groupID uint32) int {
 // testVIP builds a two-backend TCP VIP.
 func testVIP() VIP {
 	return VIP{
-		Address:  netip.MustParseAddr("198.19.100.10"),
+		Address:  netip.MustParseAddr("10.100.0.10"),
 		Port:     443,
 		Protocol: ProtocolTCP,
 		Backends: []Backend{
-			{Address: netip.MustParseAddr("198.18.1.5"), Port: 8443, Weight: 2},
-			{Address: netip.MustParseAddr("198.18.1.6"), Port: 8443},
+			{Address: netip.MustParseAddr("10.0.1.5"), Port: 8443, Weight: 2},
+			{Address: netip.MustParseAddr("10.0.1.6"), Port: 8443},
 		},
 	}
 }
@@ -396,7 +396,7 @@ func TestStartInstallsPipeline(t *testing.T) {
 	var haveDivert, haveDispatch, haveMissT26 bool
 	for _, r := range rules {
 		if r.Table == 20 && r.Priority == prioLBDivert &&
-			strings.Contains(r.Match, "nw_dst=198.19.100.10") && strings.Contains(r.Match, "tp_dst=443") {
+			strings.Contains(r.Match, "nw_dst=10.100.0.10") && strings.Contains(r.Match, "tp_dst=443") {
 			haveDivert = true
 			if !strings.Contains(r.Actions, "ct(table=26,zone=") || !strings.HasSuffix(r.Actions, ",nat)") {
 				t.Errorf("divert actions = %q", r.Actions)
@@ -428,7 +428,7 @@ func TestStartInstallsPipeline(t *testing.T) {
 	assertReplyPath(t, svc, rules, testVIP())
 
 	// One select group with one bucket per backend.
-	status, err := svc.GetVIP(ProtocolTCP, netip.MustParseAddrPort("198.19.100.10:443"))
+	status, err := svc.GetVIP(ProtocolTCP, netip.MustParseAddrPort("10.100.0.10:443"))
 	if err != nil {
 		t.Fatalf("GetVIP: %v", err)
 	}
@@ -571,7 +571,7 @@ func TestStartSweepsAPreviousProcessFlows(t *testing.T) {
 		if cookieOf(flow.Cookie) != current {
 			t.Errorf("flow %+v kept a previous generation", flow)
 		}
-		if strings.Contains(flow.Match, "198.19.100.11") || strings.Contains(flow.Actions, "198.19.100.11") {
+		if strings.Contains(flow.Match, "10.100.0.11") || strings.Contains(flow.Actions, "10.100.0.11") {
 			t.Errorf("the removed VIP's flow %+v survived the restart", flow)
 		}
 	}
@@ -633,7 +633,7 @@ func TestStopTearsDownPipeline(t *testing.T) {
 	deps, _, ovsClient, groups := testDeps(testVIP())
 	svc := startService(t, deps)
 
-	status, err := svc.GetVIP(ProtocolTCP, netip.MustParseAddrPort("198.19.100.10:443"))
+	status, err := svc.GetVIP(ProtocolTCP, netip.MustParseAddrPort("10.100.0.10:443"))
 	if err != nil {
 		t.Fatalf("GetVIP: %v", err)
 	}
@@ -703,7 +703,7 @@ func TestAddAndRemoveVIP(t *testing.T) {
 		t.Errorf("effective algorithm = %q", vips[0].VIP.Algorithm)
 	}
 
-	addr := netip.MustParseAddrPort("198.19.100.10:443")
+	addr := netip.MustParseAddrPort("10.100.0.10:443")
 	if err := svc.RemoveVIP(context.Background(), ProtocolTCP, addr); err != nil {
 		t.Fatalf("RemoveVIP: %v", err)
 	}
@@ -765,7 +765,7 @@ func TestVIPOperationsRequireStart(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	ctx := context.Background()
-	addr := netip.MustParseAddrPort("198.19.100.10:443")
+	addr := netip.MustParseAddrPort("10.100.0.10:443")
 
 	if err := svc.AddVIP(ctx, testVIP()); !errors.Is(err, ErrNotStarted) {
 		t.Errorf("AddVIP = %v", err)
@@ -776,7 +776,7 @@ func TestVIPOperationsRequireStart(t *testing.T) {
 	if err := svc.SetBackends(ctx, ProtocolTCP, addr, testVIP().Backends); !errors.Is(err, ErrNotStarted) {
 		t.Errorf("SetBackends = %v", err)
 	}
-	if err := svc.SetBackendHealth(ctx, ProtocolTCP, addr, netip.MustParseAddrPort("198.18.1.5:8443"), false); !errors.Is(err, ErrNotStarted) {
+	if err := svc.SetBackendHealth(ctx, ProtocolTCP, addr, netip.MustParseAddrPort("10.0.1.5:8443"), false); !errors.Is(err, ErrNotStarted) {
 		t.Errorf("SetBackendHealth = %v", err)
 	}
 	if err := svc.Reconcile(ctx); !errors.Is(err, ErrNotStarted) {
@@ -788,7 +788,7 @@ func TestSetBackendHealthRebuildsGroup(t *testing.T) {
 	deps, _, _, groups := testDeps(testVIP())
 	svc := startService(t, deps)
 
-	addr := netip.MustParseAddrPort("198.19.100.10:443")
+	addr := netip.MustParseAddrPort("10.100.0.10:443")
 	status, err := svc.GetVIP(ProtocolTCP, addr)
 	if err != nil {
 		t.Fatalf("GetVIP: %v", err)
@@ -796,7 +796,7 @@ func TestSetBackendHealthRebuildsGroup(t *testing.T) {
 	ctx := context.Background()
 
 	// Demote one backend: one bucket remains.
-	b1 := netip.MustParseAddrPort("198.18.1.5:8443")
+	b1 := netip.MustParseAddrPort("10.0.1.5:8443")
 	if err := svc.SetBackendHealth(ctx, ProtocolTCP, addr, b1, false); err != nil {
 		t.Fatalf("SetBackendHealth: %v", err)
 	}
@@ -805,7 +805,7 @@ func TestSetBackendHealthRebuildsGroup(t *testing.T) {
 	}
 
 	// Demote the second: zero buckets — fail closed for new connections.
-	b2 := netip.MustParseAddrPort("198.18.1.6:8443")
+	b2 := netip.MustParseAddrPort("10.0.1.6:8443")
 	if err := svc.SetBackendHealth(ctx, ProtocolTCP, addr, b2, false); err != nil {
 		t.Fatalf("SetBackendHealth: %v", err)
 	}
@@ -853,18 +853,18 @@ func TestSetBackendHealthErrors(t *testing.T) {
 	svc := startService(t, deps)
 
 	ctx := context.Background()
-	addr := netip.MustParseAddrPort("198.19.100.10:443")
+	addr := netip.MustParseAddrPort("10.100.0.10:443")
 
-	if err := svc.SetBackendHealth(ctx, ProtocolTCP, netip.MustParseAddrPort("198.19.9.9:1"), netip.MustParseAddrPort("198.18.1.5:8443"), false); !errors.Is(err, ErrVIPNotFound) {
+	if err := svc.SetBackendHealth(ctx, ProtocolTCP, netip.MustParseAddrPort("10.9.9.9:1"), netip.MustParseAddrPort("10.0.1.5:8443"), false); !errors.Is(err, ErrVIPNotFound) {
 		t.Errorf("unknown VIP = %v, want ErrVIPNotFound", err)
 	}
-	if err := svc.SetBackendHealth(ctx, ProtocolTCP, addr, netip.MustParseAddrPort("198.19.9.9:1"), false); !errors.Is(err, ErrBackendNotFound) {
+	if err := svc.SetBackendHealth(ctx, ProtocolTCP, addr, netip.MustParseAddrPort("10.9.9.9:1"), false); !errors.Is(err, ErrBackendNotFound) {
 		t.Errorf("unknown backend = %v, want ErrBackendNotFound", err)
 	}
 
 	// Group modify failure rolls the health flip back.
 	groups.modErr = errors.New("of down")
-	b1 := netip.MustParseAddrPort("198.18.1.5:8443")
+	b1 := netip.MustParseAddrPort("10.0.1.5:8443")
 	var opErr *OpError
 	if err := svc.SetBackendHealth(ctx, ProtocolTCP, addr, b1, false); !errors.As(err, &opErr) || opErr.Op != "group-modify" {
 		t.Fatalf("SetBackendHealth = %v, want group-modify OpError", err)
@@ -886,18 +886,18 @@ func TestSetBackends(t *testing.T) {
 	svc := startService(t, deps)
 
 	ctx := context.Background()
-	addr := netip.MustParseAddrPort("198.19.100.10:443")
+	addr := netip.MustParseAddrPort("10.100.0.10:443")
 
 	// Mark an existing backend unhealthy so we can verify health survives
 	// the backend-set replacement.
-	b1 := netip.MustParseAddrPort("198.18.1.5:8443")
+	b1 := netip.MustParseAddrPort("10.0.1.5:8443")
 	if err := svc.SetBackendHealth(ctx, ProtocolTCP, addr, b1, false); err != nil {
 		t.Fatalf("SetBackendHealth: %v", err)
 	}
 
 	replacement := []Backend{
-		{Address: netip.MustParseAddr("198.18.1.5"), Port: 8443},
-		{Address: netip.MustParseAddr("198.18.1.7"), Port: 9000, Weight: 3},
+		{Address: netip.MustParseAddr("10.0.1.5"), Port: 8443},
+		{Address: netip.MustParseAddr("10.0.1.7"), Port: 9000, Weight: 3},
 	}
 	if err := svc.SetBackends(ctx, ProtocolTCP, addr, replacement); err != nil {
 		t.Fatalf("SetBackends: %v", err)
@@ -931,7 +931,7 @@ func TestSetBackends(t *testing.T) {
 	if err := svc.SetBackends(ctx, ProtocolTCP, addr, nil); !errors.Is(err, ErrNoBackends) {
 		t.Errorf("SetBackends(nil) = %v, want ErrNoBackends", err)
 	}
-	if err := svc.SetBackends(ctx, ProtocolTCP, netip.MustParseAddrPort("198.19.9.9:1"), replacement); !errors.Is(err, ErrVIPNotFound) {
+	if err := svc.SetBackends(ctx, ProtocolTCP, netip.MustParseAddrPort("10.9.9.9:1"), replacement); !errors.Is(err, ErrVIPNotFound) {
 		t.Errorf("SetBackends unknown VIP = %v, want ErrVIPNotFound", err)
 	}
 
@@ -993,8 +993,8 @@ func TestHealthSnapshot(t *testing.T) {
 		t.Errorf("Health = %+v", h)
 	}
 
-	addr := netip.MustParseAddrPort("198.19.100.10:443")
-	if err := svc.SetBackendHealth(context.Background(), ProtocolTCP, addr, netip.MustParseAddrPort("198.18.1.5:8443"), false); err != nil {
+	addr := netip.MustParseAddrPort("10.100.0.10:443")
+	if err := svc.SetBackendHealth(context.Background(), ProtocolTCP, addr, netip.MustParseAddrPort("10.0.1.5:8443"), false); err != nil {
 		t.Fatalf("SetBackendHealth: %v", err)
 	}
 	h = svc.Health()
@@ -1028,7 +1028,7 @@ func TestGroupIDDeterminismAndCollisionProbing(t *testing.T) {
 
 	// Occupy the deterministic slot with another VIP: probing yields the
 	// next free ID.
-	svc.vips[vipKey{proto: "tcp", addr: netip.MustParseAddr("198.18.0.99"), port: 1}] = &vipState{groupID: id1}
+	svc.vips[vipKey{proto: "tcp", addr: netip.MustParseAddr("10.0.0.99"), port: 1}] = &vipState{groupID: id1}
 	id3, err := svc.groupIDFor(key)
 	if err != nil {
 		t.Fatalf("groupIDFor: %v", err)
@@ -1042,11 +1042,11 @@ func TestGroupIDDeterminismAndCollisionProbing(t *testing.T) {
 }
 
 // TestBucketActionEncoding is the golden proof of the bucket action bytes.
-// The encoded ct(commit,zone=42,nat(dst=198.18.1.5:8080),table=30) action was
+// The encoded ct(commit,zone=42,nat(dst=10.0.1.5:8080),table=30) action was
 // verified against Open vSwitch 3.3.4:
 //
 //	$ echo <hex> | ovs-ofctl parse-actions OpenFlow13
-//	actions=ct(commit,table=30,zone=42,nat(dst=198.18.1.5:8080))
+//	actions=ct(commit,table=30,zone=42,nat(dst=10.0.1.5:8080))
 //
 // Layout (struct nx_action_conntrack, 48 bytes total):
 //
@@ -1061,7 +1061,7 @@ func TestGroupIDDeterminismAndCollisionProbing(t *testing.T) {
 //	0000                      pad
 //	0002                      flags = NX_NAT_F_DST
 //	0011                      range_present = IPv4_MIN | PROTO_MIN
-//	c6120105                  198.18.1.5
+//	0a000105                  10.0.1.5
 //	1f90                      port 8080
 //	0000                      pad to 8
 func TestBucketActionEncoding(t *testing.T) {
@@ -1072,14 +1072,14 @@ func TestBucketActionEncoding(t *testing.T) {
 
 	state := &vipState{
 		vip: VIP{
-			Address:  netip.MustParseAddr("198.19.100.10"),
+			Address:  netip.MustParseAddr("10.100.0.10"),
 			Port:     443,
 			Protocol: ProtocolTCP,
-			Backends: []Backend{{Address: netip.MustParseAddr("198.18.1.5"), Port: 8080}},
+			Backends: []Backend{{Address: netip.MustParseAddr("10.0.1.5"), Port: 8080}},
 		},
 		zone:    42,
 		groupID: GroupIDBase,
-		healthy: map[netip.AddrPort]bool{netip.MustParseAddrPort("198.18.1.5:8080"): true},
+		healthy: map[netip.AddrPort]bool{netip.MustParseAddrPort("10.0.1.5:8080"): true},
 	}
 
 	mod := svc.groupMod(state)
@@ -1100,10 +1100,10 @@ func TestBucketActionEncoding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalBinary: %v", err)
 	}
-	// ct(commit,zone=42,nat(dst=198.18.1.5:8080),table=28): the bucket
+	// ct(commit,zone=42,nat(dst=10.0.1.5:8080),table=28): the bucket
 	// recirculates into the hairpin stage, not straight to table 30.
 	const golden = "ffff0030000023200023000100000000002a1c0000000000" +
-		"ffff0018000023200024000000020011c61201051f900000"
+		"ffff00180000232000240000000200110a0001051f900000"
 	if got := hex.EncodeToString(data); got != golden {
 		t.Errorf("bucket action bytes:\n got  %s\n want %s", got, golden)
 	}
@@ -1188,11 +1188,11 @@ func assertReplyPath(t *testing.T, svc *Service, rules []zoneflows.FlowRule, vip
 func TestHairpinPrefixesSourceNATToTheVIP(t *testing.T) {
 	deps, controller, _, _ := testDeps(testVIP())
 	deps.Config.HairpinPrefixes = []netip.Prefix{
-		netip.MustParsePrefix("198.18.1.0/24"),
-		netip.MustParsePrefix("203.0.113.9/24"), // installed masked
+		netip.MustParsePrefix("10.0.1.0/24"),
+		netip.MustParsePrefix("192.168.7.9/16"), // installed masked
 	}
 	svc := startService(t, deps)
-	status, err := svc.GetVIP(ProtocolTCP, netip.MustParseAddrPort("198.19.100.10:443"))
+	status, err := svc.GetVIP(ProtocolTCP, netip.MustParseAddrPort("10.100.0.10:443"))
 	if err != nil {
 		t.Fatalf("GetVIP: %v", err)
 	}
@@ -1201,13 +1201,13 @@ func TestHairpinPrefixesSourceNATToTheVIP(t *testing.T) {
 	if len(hairpin) != 4 {
 		t.Fatalf("hairpin flows = %d, want a commit and an established flow per prefix", len(hairpin))
 	}
-	for i, src := range []string{"198.18.1.0/24", "203.0.113.0/24"} {
+	for i, src := range []string{"10.0.1.0/24", "192.168.0.0/16"} {
 		source := fmt.Sprintf("ct_zone=%d,dl_type=0x0800,nw_src=%s", status.CTZone, src)
 		commit, est := hairpin[2*i], hairpin[2*i+1]
 		if commit.Match != "ct_state=+new+trk,"+source {
 			t.Errorf("hairpin commit match = %q", commit.Match)
 		}
-		if want := fmt.Sprintf("ct(commit,zone=%d,nat(src=198.19.100.10),table=30)", svc.hairpinZone); commit.Actions != want {
+		if want := fmt.Sprintf("ct(commit,zone=%d,nat(src=10.100.0.10),table=30)", svc.hairpinZone); commit.Actions != want {
 			t.Errorf("hairpin commit actions = %q, want %q", commit.Actions, want)
 		}
 		if est.Match != "ct_state=+est+trk,"+source {
@@ -1277,7 +1277,7 @@ func TestBackendServesOneVIPPerProtocol(t *testing.T) {
 	ctx := context.Background()
 
 	shared := testVIP()
-	shared.Address = netip.MustParseAddr("198.19.100.11")
+	shared.Address = netip.MustParseAddr("10.100.0.11")
 	if err := svc.AddVIP(ctx, shared); !errors.Is(err, ErrBackendInUse) {
 		t.Errorf("AddVIP sharing a backend = %v, want ErrBackendInUse", err)
 	}
@@ -1289,8 +1289,8 @@ func TestBackendServesOneVIPPerProtocol(t *testing.T) {
 	}
 
 	other := VIP{
-		Address: netip.MustParseAddr("198.19.100.12"), Port: 80, Protocol: ProtocolTCP,
-		Backends: []Backend{{Address: netip.MustParseAddr("198.18.2.1"), Port: 80}},
+		Address: netip.MustParseAddr("10.100.0.12"), Port: 80, Protocol: ProtocolTCP,
+		Backends: []Backend{{Address: netip.MustParseAddr("10.0.2.1"), Port: 80}},
 	}
 	if err := svc.AddVIP(ctx, other); err != nil {
 		t.Fatalf("AddVIP: %v", err)
@@ -1299,7 +1299,7 @@ func TestBackendServesOneVIPPerProtocol(t *testing.T) {
 		t.Errorf("SetBackends onto another VIP's backend = %v, want ErrBackendInUse", err)
 	}
 	// A VIP may of course keep its own backends.
-	if err := svc.SetBackends(ctx, ProtocolTCP, netip.MustParseAddrPort("198.19.100.10:443"), testVIP().Backends); err != nil {
+	if err := svc.SetBackends(ctx, ProtocolTCP, netip.MustParseAddrPort("10.100.0.10:443"), testVIP().Backends); err != nil {
 		t.Errorf("SetBackends to its own set: %v", err)
 	}
 }
@@ -1311,32 +1311,32 @@ func TestSetBackendsMovesTheReplyDiverts(t *testing.T) {
 	deps, controller, ovsClient, groups := testDeps(testVIP())
 	svc := startService(t, deps)
 	ctx := context.Background()
-	addr := netip.MustParseAddrPort("198.19.100.10:443")
+	addr := netip.MustParseAddrPort("10.100.0.10:443")
 
 	replacement := []Backend{
-		{Address: netip.MustParseAddr("198.18.1.5"), Port: 8443},
-		{Address: netip.MustParseAddr("198.18.1.7"), Port: 9000},
+		{Address: netip.MustParseAddr("10.0.1.5"), Port: 8443},
+		{Address: netip.MustParseAddr("10.0.1.7"), Port: 9000},
 	}
 	if err := svc.SetBackends(ctx, ProtocolTCP, addr, replacement); err != nil {
 		t.Fatalf("SetBackends: %v", err)
 	}
 	last := controller.batches[len(controller.batches)-1]
 	if got := rulesIn(last, int(modes.TableCTGate), prioLBReplyDivert); len(got) != 2 ||
-		!strings.Contains(got[1].Match, "nw_src=198.18.1.7,tp_src=9000") {
+		!strings.Contains(got[1].Match, "nw_src=10.0.1.7,tp_src=9000") {
 		t.Errorf("installed reply diverts = %+v", got)
 	}
 	if len(ovsClient.strictDeletes) != 2 {
 		t.Fatalf("strict deletes = %+v, want the removed backend's two reply flows", ovsClient.strictDeletes)
 	}
 	for _, d := range ovsClient.strictDeletes {
-		if !strings.Contains(d.Match, "nw_src=198.18.1.6,tp_src=8443") {
+		if !strings.Contains(d.Match, "nw_src=10.0.1.6,tp_src=8443") {
 			t.Errorf("deleted %+v, which is not the removed backend's", d)
 		}
 	}
 
 	groups.modErr = errors.New("of down")
 	before := len(ovsClient.strictDeletes)
-	if err := svc.SetBackends(ctx, ProtocolTCP, addr, append(replacement, Backend{Address: netip.MustParseAddr("198.18.1.8"), Port: 1})); err == nil {
+	if err := svc.SetBackends(ctx, ProtocolTCP, addr, append(replacement, Backend{Address: netip.MustParseAddr("10.0.1.8"), Port: 1})); err == nil {
 		t.Fatal("SetBackends must fail when the group cannot be modified")
 	}
 	added := ovsClient.strictDeletes[before:]
@@ -1344,7 +1344,7 @@ func TestSetBackendsMovesTheReplyDiverts(t *testing.T) {
 		t.Fatalf("rollback deletes = %+v, want the never-selectable backend's two reply flows", added)
 	}
 	for _, d := range added {
-		if !strings.Contains(d.Match, "nw_src=198.18.1.8,tp_src=1") {
+		if !strings.Contains(d.Match, "nw_src=10.0.1.8,tp_src=1") {
 			t.Errorf("rollback deleted %+v", d)
 		}
 	}
@@ -1363,7 +1363,7 @@ func TestSetBackendsInstallFailure(t *testing.T) {
 	svc := startService(t, deps)
 	controller.installErr = errors.New("controller down")
 	var opErr *OpError
-	err := svc.SetBackends(context.Background(), ProtocolTCP, netip.MustParseAddrPort("198.19.100.10:443"), testVIP().Backends)
+	err := svc.SetBackends(context.Background(), ProtocolTCP, netip.MustParseAddrPort("10.100.0.10:443"), testVIP().Backends)
 	if !errors.As(err, &opErr) || opErr.Op != "install" {
 		t.Errorf("SetBackends = %v, want an install OpError", err)
 	}
@@ -1389,8 +1389,8 @@ func TestStaleFlows(t *testing.T) {
 // testVIP.
 func secondVIP() VIP {
 	v := testVIP()
-	v.Address = netip.MustParseAddr("198.19.100.11")
-	v.Backends = []Backend{{Address: netip.MustParseAddr("198.18.2.5"), Port: 8443}}
+	v.Address = netip.MustParseAddr("10.100.0.11")
+	v.Backends = []Backend{{Address: netip.MustParseAddr("10.0.2.5"), Port: 8443}}
 	return v
 }
 
@@ -1575,7 +1575,7 @@ func TestAddVIPLeavesNothingWhenItFails(t *testing.T) {
 	if deleted == 0 {
 		t.Error("the refused batch's flows must be strict-deleted in case some went in")
 	}
-	if _, err := svc.GetVIP(ProtocolTCP, netip.MustParseAddrPort("198.19.100.10:443")); !errors.Is(err, ErrVIPNotFound) {
+	if _, err := svc.GetVIP(ProtocolTCP, netip.MustParseAddrPort("10.100.0.10:443")); !errors.Is(err, ErrVIPNotFound) {
 		t.Errorf("GetVIP = %v, want ErrVIPNotFound", err)
 	}
 	if err := svc.AddVIP(context.Background(), testVIP()); err != nil {

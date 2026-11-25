@@ -122,7 +122,7 @@ const (
 )
 
 // AllocatorOwnerLB is the ct.ZoneAllocator owner name for per-VIP conntrack
-// zones. Keys are vipKey strings ("tcp/198.18.0.1:80").
+// zones. Keys are vipKey strings ("tcp/10.0.0.1:80").
 const AllocatorOwnerLB = "lb"
 
 // hairpinZoneKey is the AllocatorOwnerLB key of the one conntrack zone the

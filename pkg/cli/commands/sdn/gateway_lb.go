@@ -52,13 +52,13 @@ Examples:
   platformctl sdn gateway lb status
 
   # Add a VIP with two weighted backends
-  platformctl sdn gateway lb vip add --protocol tcp --address 203.0.113.10 --port 443 \
-    --backend 198.51.100.5:8443:2 --backend 198.51.100.6:8443
+  platformctl sdn gateway lb vip add --protocol tcp --address 10.100.0.10 --port 443 \
+    --backend 10.0.1.5:8443:2 --backend 10.0.1.6:8443
 
   # List, inspect, and remove VIPs
   platformctl sdn gateway lb vip list
-  platformctl sdn gateway lb vip get --protocol tcp --address 203.0.113.10 --port 443
-  platformctl sdn gateway lb vip remove --protocol tcp --address 203.0.113.10 --port 443`,
+  platformctl sdn gateway lb vip get --protocol tcp --address 10.100.0.10 --port 443
+  platformctl sdn gateway lb vip remove --protocol tcp --address 10.100.0.10 --port 443`,
 	}
 
 	cmd.AddCommand(newGatewayLBStatusCommand(getFlags))
@@ -134,8 +134,8 @@ select-group dp_hash balancing); "least-conn" is not supported by the OVS
 datapath.
 
 Examples:
-  platformctl sdn gateway lb vip add --protocol tcp --address 203.0.113.10 --port 443 \
-    --backend 198.51.100.5:8443:2 --backend 198.51.100.6:8443`,
+  platformctl sdn gateway lb vip add --protocol tcp --address 10.100.0.10 --port 443 \
+    --backend 10.0.1.5:8443:2 --backend 10.0.1.6:8443`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runLBVIPAdd(getFlags(), addTarget, algorithm, addBackends)
 		},
@@ -153,7 +153,7 @@ Examples:
 		Long: `Tear down a load-balanced virtual IP.
 
 Examples:
-  platformctl sdn gateway lb vip remove --protocol tcp --address 203.0.113.10 --port 443`,
+  platformctl sdn gateway lb vip remove --protocol tcp --address 10.100.0.10 --port 443`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runLBVIPRemove(getFlags(), removeTarget)
 		},
@@ -168,7 +168,7 @@ Examples:
 		Long: `Display one VIP's status including per-backend health.
 
 Examples:
-  platformctl sdn gateway lb vip get --protocol tcp --address 203.0.113.10 --port 443`,
+  platformctl sdn gateway lb vip get --protocol tcp --address 10.100.0.10 --port 443`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runLBVIPGet(getFlags(), getTarget)
 		},
@@ -198,8 +198,8 @@ Examples:
 		Long: `Replace the backend set of a load-balanced virtual IP.
 
 Examples:
-  platformctl sdn gateway lb vip set-backends --protocol tcp --address 203.0.113.10 --port 443 \
-    --backend 198.51.100.7:8443 --backend 198.51.100.8:8443:3`,
+  platformctl sdn gateway lb vip set-backends --protocol tcp --address 10.100.0.10 --port 443 \
+    --backend 10.0.1.7:8443 --backend 10.0.1.8:8443:3`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runLBVIPSetBackends(getFlags(), setTarget, setBackends)
 		},

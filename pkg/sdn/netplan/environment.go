@@ -25,11 +25,11 @@ import (
 // YAML form:
 //
 //	environment:
-//	  id: 18
-//	  base: 198.0.0.0/8
+//	  id: 4
+//	  base: 10.0.0.0/8
 //	  ula: fd12:3456:789a::/48
 //	  overrides:
-//	    - {zone: fabric, subnet: 198.18.100.0/22}
+//	    - {zone: fabric, subnet: 10.4.100.0/22}
 type Environment struct {
 	// ID is the environment number E (2-40): its VLAN block is E·100-E·100+99,
 	// its IPv4 /16 is <base>.E.0.0/16 and its VNIs are E·100000+n.

@@ -26,7 +26,7 @@ platformctl sdn ipam allocations
 platformctl sdn ipam allocations --pool-id <pool-id>
 
 # Release an allocation
-platformctl sdn ipam release --ip 198.18.0.50
+platformctl sdn ipam release --ip 10.0.0.50
 ```
 
 ## Common Workflows

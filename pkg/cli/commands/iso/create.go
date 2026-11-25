@@ -139,7 +139,7 @@ Examples:
 	cmd.Flags().StringVar(&flags.platformAPKDir, "platform-apk-dir", "", "strongSwan builder output (make strongswan-build) whose apks the ISO carries and installs for the overlay's IPsec transport")
 	cmd.Flags().StringVar(&flags.platformctlPath, "platformctl-binary", "", "platformctl binary the media installs with (default: this platformctl)")
 	cmd.Flags().StringVar(&flags.platformctlStaticPath, "platformctl-static-binary", "", "Static platformctl for Alpine/musl (default: not installed; --platformctl-binary must then be static)")
-	cmd.Flags().StringVar(&flags.apkMirror, "apk-mirror", "", "Install-time APK mirror base URL (e.g. http://198.18.6.11:8080); empty falls back to the public Alpine mirror")
+	cmd.Flags().StringVar(&flags.apkMirror, "apk-mirror", "", "Install-time APK mirror base URL (e.g. http://10.4.6.11:8080); empty falls back to the public Alpine mirror")
 	cmd.Flags().StringVar(&flags.arch, "arch", "x86_64", "Architecture (x86_64 or aarch64)")
 
 	// Platform flags
@@ -403,26 +403,10 @@ func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	// Resolve platform config file.
 	//
 	// Precedence:
-	//   1. platform-config-file in the --config build file
-	//   2. --platform-config flag (explicit operator choice)
-	//   3. single-node default template (reference architecture baseline)
-	//      under the PLATFORM_CONFIG_DIR root: $PLATFORM_CONFIG_DIR/templates/
-	//      single-node/default.yaml, or the in-tree public templates under
-	//      configs/platform when the variable is unset
-	//   4. legacy standalone qemu templates (tests / pre-template-system
-	//      deployments that still live under configs/platform/standalone/),
-	//      only when PLATFORM_CONFIG_DIR is unset
-	//
-	// The default (3, 4) is resolved after the --config merge, and only when
-	// the merged build names no template and no config server: a
-	// dynamic-only build (config server, no template) keeps an empty
-	// template, and a build that names its own template never needs the
-	// default (see resolveDefaultTemplate).
-	//
-	// When the build needs the default, PLATFORM_CONFIG_DIR is set and its
-	// template is missing, the build fails closed
-	// (ErrPlatformTemplateMissing) instead of baking the public example
-	// values.
+	//   1. --platform-config flag (explicit operator choice)
+	//   2. single-node default template (reference architecture baseline)
+	//   3. legacy standalone qemu templates (tests / pre-template-system
+	//      deployments that still live under configs/platform/standalone/)
 	//
 	// The single-node default deploys CP + GW on one box per
 	// configs/platform/templates/single-node/README.md. It is the
@@ -430,9 +414,29 @@ func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	// working, bootable ISO with no flags required.
 	//
 	// See docs/installer/iso-building.md §Config Delivery Modes
-	// (1. Default baked, 3. Dynamic fetch).
+	// (1. Default baked).
 	if flags.platformConfig != "" {
 		config.PlatformConfigFile = flags.platformConfig
+	} else {
+		var defaultConfigPaths []string
+		if flags.platformType == "server" {
+			defaultConfigPaths = []string{
+				"configs/platform/templates/single-node/default.yaml",
+				"configs/platform/standalone/qemu.server.example.com.yaml",
+			}
+		} else {
+			defaultConfigPaths = []string{
+				"configs/platform/templates/single-node/default.yaml",
+				"configs/platform/standalone/qemu.node0.example.com.yaml",
+				"configs/platform/standalone/qemu.client.example.com.yaml",
+			}
+		}
+		for _, p := range defaultConfigPaths {
+			if _, err := os.Stat(p); err == nil {
+				config.PlatformConfigFile = p
+				break
+			}
+		}
 	}
 
 	if flags.workDir != "" {
@@ -499,11 +503,6 @@ func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	if config.PlatformConfigFile == "" && config.ConfigServerURL == "" {
-		if err := resolveDefaultTemplate(config, flags.platformType); err != nil {
-			return nil, err
-		}
-	}
 
 	// Read platform version from VERSION file if not specified
 	platformVersion := flags.platformVersion
@@ -528,41 +527,6 @@ func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	}
 
 	return config, nil
-}
-
-// resolveDefaultTemplate sets config.PlatformConfigFile to the single-node
-// default template under the PLATFORM_CONFIG_DIR root, or, when the variable
-// is unset, to the first in-tree template or legacy standalone qemu template
-// that exists. buildISOBuildConfig calls it after the --config merge, only
-// when the merged build names no template and no config server. With
-// PLATFORM_CONFIG_DIR set and its template missing it returns
-// ErrPlatformTemplateMissing rather than bake the public example values.
-func resolveDefaultTemplate(config *pkgiso.ISOBuildConfig, platformType string) error {
-	defaultTemplate := cli.PlatformTemplatePath("single-node", "default.yaml")
-	defaultConfigPaths := []string{defaultTemplate}
-	_, dirSet := cli.PlatformConfigDir()
-	if !dirSet {
-		if platformType == "server" {
-			defaultConfigPaths = append(defaultConfigPaths,
-				"configs/platform/standalone/qemu.server.example.com.yaml",
-			)
-		} else {
-			defaultConfigPaths = append(defaultConfigPaths,
-				"configs/platform/standalone/qemu.node0.example.com.yaml",
-				"configs/platform/standalone/qemu.client.example.com.yaml",
-			)
-		}
-	}
-	for _, p := range defaultConfigPaths {
-		if _, err := os.Stat(p); err == nil {
-			config.PlatformConfigFile = p
-			return nil
-		}
-	}
-	if dirSet {
-		return &cli.ErrPlatformTemplateMissing{Path: defaultTemplate}
-	}
-	return nil
 }
 
 // downloadAlpineISO downloads the Alpine Linux ISO
@@ -713,12 +677,6 @@ func mergeConfigs(base, override *pkgiso.ISOBuildConfig) *pkgiso.ISOBuildConfig 
 	}
 	if override.WorkDir != "" && override.WorkDir != "work" {
 		result.WorkDir = override.WorkDir
-	}
-	// PlatformConfigFile keeps the config file's value; when the file names
-	// none, the explicit --platform-config applies. The PLATFORM_CONFIG_DIR
-	// default is resolved after the merge (resolveDefaultTemplate).
-	if result.PlatformConfigFile == "" {
-		result.PlatformConfigFile = override.PlatformConfigFile
 	}
 	// PlatformdBinary keeps the config file's value; mergeConfigFile falls
 	// back to the platformd beside platformctl when the file names none.

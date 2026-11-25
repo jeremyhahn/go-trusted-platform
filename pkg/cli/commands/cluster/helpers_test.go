@@ -297,23 +297,23 @@ func TestParseAddressList(t *testing.T) {
 		},
 		{
 			name:     "single address",
-			input:    "198.51.100.1:7946",
-			expected: []string{"198.51.100.1:7946"},
+			input:    "10.0.0.1:7946",
+			expected: []string{"10.0.0.1:7946"},
 		},
 		{
 			name:     "multiple addresses",
-			input:    "198.51.100.1:7946,198.51.100.2:7946,198.51.100.3:7946",
-			expected: []string{"198.51.100.1:7946", "198.51.100.2:7946", "198.51.100.3:7946"},
+			input:    "10.0.0.1:7946,10.0.0.2:7946,10.0.0.3:7946",
+			expected: []string{"10.0.0.1:7946", "10.0.0.2:7946", "10.0.0.3:7946"},
 		},
 		{
 			name:     "with spaces",
-			input:    "198.51.100.1:7946, 198.51.100.2:7946 , 198.51.100.3:7946",
-			expected: []string{"198.51.100.1:7946", "198.51.100.2:7946", "198.51.100.3:7946"},
+			input:    "10.0.0.1:7946, 10.0.0.2:7946 , 10.0.0.3:7946",
+			expected: []string{"10.0.0.1:7946", "10.0.0.2:7946", "10.0.0.3:7946"},
 		},
 		{
 			name:     "with empty entries",
-			input:    "198.51.100.1:7946,,198.51.100.2:7946,",
-			expected: []string{"198.51.100.1:7946", "198.51.100.2:7946"},
+			input:    "10.0.0.1:7946,,10.0.0.2:7946,",
+			expected: []string{"10.0.0.1:7946", "10.0.0.2:7946"},
 		},
 	}
 
@@ -341,7 +341,7 @@ func TestValidateAddress(t *testing.T) {
 	}{
 		{
 			name:    "valid IPv4 with port",
-			input:   "198.51.100.1:7946",
+			input:   "10.0.0.1:7946",
 			wantErr: false,
 		},
 		{
@@ -361,7 +361,7 @@ func TestValidateAddress(t *testing.T) {
 		},
 		{
 			name:    "missing port",
-			input:   "198.51.100.1",
+			input:   "10.0.0.1",
 			wantErr: true,
 		},
 		{
@@ -376,7 +376,7 @@ func TestValidateAddress(t *testing.T) {
 		},
 		{
 			name:    "host only with colon",
-			input:   "198.51.100.1:",
+			input:   "10.0.0.1:",
 			wantErr: true,
 		},
 	}
@@ -402,12 +402,12 @@ func TestValidateAddressList(t *testing.T) {
 	}{
 		{
 			name:    "all valid",
-			input:   []string{"198.51.100.1:7946", "198.51.100.2:7946"},
+			input:   []string{"10.0.0.1:7946", "10.0.0.2:7946"},
 			wantErr: false,
 		},
 		{
 			name:    "one invalid",
-			input:   []string{"198.51.100.1:7946", "invalid"},
+			input:   []string{"10.0.0.1:7946", "invalid"},
 			wantErr: true,
 		},
 		{

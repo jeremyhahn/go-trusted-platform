@@ -93,7 +93,7 @@ Examples:
 
   # Direct standalone
   platformctl bmc user list \
-    --bmc-host 192.0.2.100 --bmc-user admin --bmc-pass-file /etc/bmc-pass`,
+    --bmc-host 192.168.1.100 --bmc-user admin --bmc-pass-file /etc/bmc-pass`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if standalone.isSet() {
@@ -128,7 +128,7 @@ Examples:
 
   # Direct standalone with specific slot
   platformctl bmc user create \
-    --bmc-host 192.0.2.100 --bmc-user admin --bmc-pass-file /etc/bmc-pass \
+    --bmc-host 192.168.1.100 --bmc-user admin --bmc-pass-file /etc/bmc-pass \
     --username operator1 --role operator --slot 5`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -166,7 +166,7 @@ Examples:
 
   # Direct standalone
   platformctl bmc user delete \
-    --bmc-host 192.0.2.100 --bmc-user admin --bmc-pass-file /etc/bmc-pass \
+    --bmc-host 192.168.1.100 --bmc-user admin --bmc-pass-file /etc/bmc-pass \
     --username operator1`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -201,7 +201,7 @@ Examples:
 
   # Direct standalone
   platformctl bmc user update-password \
-    --bmc-host 192.0.2.100 --bmc-user admin --bmc-pass-file /etc/bmc-pass \
+    --bmc-host 192.168.1.100 --bmc-user admin --bmc-pass-file /etc/bmc-pass \
     --username operator1`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -238,7 +238,7 @@ Examples:
 
   # Direct standalone
   platformctl bmc user update-access \
-    --bmc-host 192.0.2.100 --bmc-user admin --bmc-pass-file /etc/bmc-pass \
+    --bmc-host 192.168.1.100 --bmc-user admin --bmc-pass-file /etc/bmc-pass \
     --username operator1 --role administrator`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

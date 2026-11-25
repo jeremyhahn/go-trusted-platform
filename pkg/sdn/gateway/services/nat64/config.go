@@ -37,8 +37,8 @@ const DefaultPrefix = "64:ff9b::/96"
 
 // MaxPool4Addresses bounds the addresses pool4 may name across all its
 // ranges: a /16. The driver converges pool4 one address at a time, and a
-// typo such as 192.0.2.0-203.0.113.255 would otherwise have it hold and
-// compare over a hundred million entries.
+// typo such as 10.0.0.0-10.255.255.255 would otherwise have it hold and
+// compare tens of millions of entries.
 const MaxPool4Addresses = 1 << 16
 
 // DefaultInstance is the Jool instance name the service programs when the

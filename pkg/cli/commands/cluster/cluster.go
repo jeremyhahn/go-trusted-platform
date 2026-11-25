@@ -43,16 +43,16 @@ The cluster uses Raft consensus to ensure:
 
 Examples:
   # Bootstrap a new single-node cluster
-  platformctl cluster bootstrap --node-id node1 --listen-addr 198.51.100.1:7946
+  platformctl cluster bootstrap --node-id node1 --listen-addr 10.0.0.1:7946
 
   # Bootstrap with custom data directory
-  platformctl cluster bootstrap --node-id node1 --listen-addr 198.51.100.1:7946 --data-dir /var/lib/platform/raft
+  platformctl cluster bootstrap --node-id node1 --listen-addr 10.0.0.1:7946 --data-dir /var/lib/platform/raft
 
   # Join an existing cluster
-  platformctl cluster join --node-id node2 --listen-addr 198.51.100.2:7946 --join 198.51.100.1:7946
+  platformctl cluster join --node-id node2 --listen-addr 10.0.0.2:7946 --join 10.0.0.1:7946
 
   # Join with multiple seed nodes
-  platformctl cluster join --node-id node3 --listen-addr 198.51.100.3:7946 --join 198.51.100.1:7946,198.51.100.2:7946
+  platformctl cluster join --node-id node3 --listen-addr 10.0.0.3:7946 --join 10.0.0.1:7946,10.0.0.2:7946
 
   # Leave the cluster gracefully
   platformctl cluster leave

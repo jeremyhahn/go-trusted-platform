@@ -30,7 +30,7 @@ func testNATConfig() NATConfig {
 		ExternalIP:     "203.0.113.10",
 		PortRangeStart: 1024,
 		PortRangeEnd:   65535,
-		InternalCIDR:   "198.18.100.0/24",
+		InternalCIDR:   "10.0.100.0/24",
 		UplinkPort:     "eth0",
 		Bridge:         "br-test",
 	}
@@ -56,7 +56,7 @@ func TestNATConfig_Validate(t *testing.T) {
 		if external.String() != "203.0.113.10" {
 			t.Errorf("external = %s", external)
 		}
-		if internal.String() != "198.18.100.0/24" {
+		if internal.String() != "10.0.100.0/24" {
 			t.Errorf("internal = %s", internal)
 		}
 	})
@@ -383,7 +383,7 @@ func TestNAT_StartSweepsAPreviousProcessFlows(t *testing.T) {
 	if err := previous.Start(ctx); err != nil {
 		t.Fatalf("previous start: %v", err)
 	}
-	if err := previous.AddDNAT(ctx, "tcp", mustAddrPort(t, "203.0.113.10:443"), mustAddrPort(t, "198.18.100.5:8443")); err != nil {
+	if err := previous.AddDNAT(ctx, "tcp", mustAddrPort(t, "203.0.113.10:443"), mustAddrPort(t, "10.0.100.5:8443")); err != nil {
 		t.Fatalf("add dnat: %v", err)
 	}
 	previousFlows := len(ovsClient.flowsUnder(CookieNAT))
@@ -478,7 +478,7 @@ func TestNAT_SNATLifecycle(t *testing.T) {
 		t.Fatal("SNAT must be off without InternalCIDR")
 	}
 
-	prefix := netip.MustParsePrefix("198.19.10.0/24")
+	prefix := netip.MustParsePrefix("192.168.10.0/24")
 	if err := nat.EnableSNAT(ctx, prefix); err != nil {
 		t.Fatalf("enable snat: %v", err)
 	}
@@ -520,7 +520,7 @@ func TestNAT_SNATErrors(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	prefix := netip.MustParsePrefix("198.19.10.0/24")
+	prefix := netip.MustParsePrefix("192.168.10.0/24")
 	if err := nat.EnableSNAT(ctx, prefix); !errors.Is(err, ErrNotStarted) {
 		t.Errorf("expected ErrNotStarted, got %v", err)
 	}
@@ -552,7 +552,7 @@ func TestNAT_DNATLifecycle(t *testing.T) {
 	}
 
 	external := mustAddrPort(t, "203.0.113.10:443")
-	internal := mustAddrPort(t, "198.18.100.5:8443")
+	internal := mustAddrPort(t, "10.0.100.5:8443")
 
 	if err := nat.AddDNAT(ctx, "tcp", external, internal); err != nil {
 		t.Fatalf("add dnat: %v", err)
@@ -569,7 +569,7 @@ func TestNAT_DNATLifecycle(t *testing.T) {
 	if commit.Match != wantMatch {
 		t.Errorf("dnat commit match = %q, want %q", commit.Match, wantMatch)
 	}
-	wantActions := fmt.Sprintf("ct(commit,zone=%d,nat(dst=198.18.100.5:8443)),goto_table:30", nat.Health().CTZone)
+	wantActions := fmt.Sprintf("ct(commit,zone=%d,nat(dst=10.0.100.5:8443)),goto_table:30", nat.Health().CTZone)
 	if commit.Actions != wantActions {
 		t.Errorf("dnat commit actions = %q, want %q", commit.Actions, wantActions)
 	}
@@ -591,7 +591,7 @@ func TestNAT_DNATLifecycle(t *testing.T) {
 
 func TestNAT_DNATErrors(t *testing.T) {
 	external := netip.MustParseAddrPort("203.0.113.10:443")
-	internal := netip.MustParseAddrPort("198.18.100.5:8443")
+	internal := netip.MustParseAddrPort("10.0.100.5:8443")
 	ctx := context.Background()
 
 	t.Run("not started", func(t *testing.T) {
@@ -734,8 +734,8 @@ func TestNAT_ReconcileAccessors(t *testing.T) {
 	defer nat.Stop(ctx)
 
 	prefix, enabled := nat.SNATPrefix()
-	if !enabled || prefix.String() != "198.18.100.0/24" {
-		t.Fatalf("SNATPrefix = %v/%v after Start, want 198.18.100.0/24 enabled", prefix, enabled)
+	if !enabled || prefix.String() != "10.0.100.0/24" {
+		t.Fatalf("SNATPrefix = %v/%v after Start, want 10.0.100.0/24 enabled", prefix, enabled)
 	}
 	if err := nat.DisableSNAT(ctx); err != nil {
 		t.Fatalf("DisableSNAT: %v", err)
@@ -745,7 +745,7 @@ func TestNAT_ReconcileAccessors(t *testing.T) {
 	}
 
 	external := mustAddrPort(t, "203.0.113.10:443")
-	internal := mustAddrPort(t, "198.18.100.5:8443")
+	internal := mustAddrPort(t, "10.0.100.5:8443")
 	if err := nat.AddDNAT(ctx, "tcp", external, internal); err != nil {
 		t.Fatalf("AddDNAT: %v", err)
 	}

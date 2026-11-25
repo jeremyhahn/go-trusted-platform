@@ -49,7 +49,7 @@ func goodRestoreResult() *bmcsvc.RestoreResult {
 	now := time.Now()
 	return &bmcsvc.RestoreResult{
 		DeviceID: 42,
-		Endpoint: "198.51.100.1:443",
+		Endpoint: "10.0.0.1:443",
 		Hostname: "bmc-host",
 		NewCertMeta: bmcsvc.FactoryCertMeta{
 			Subject:      "CN=bmc",

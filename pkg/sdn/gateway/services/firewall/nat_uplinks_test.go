@@ -37,7 +37,7 @@ func dualUplinkConfig() NATConfig {
 	return NATConfig{
 		PortRangeStart: 1024,
 		PortRangeEnd:   65535,
-		InternalCIDR:   "198.19.200.0/24",
+		InternalCIDR:   "10.4.200.0/24",
 		Bridge:         "br-test",
 		Uplinks: []NATUplink{
 			{Name: "isp-a", Port: "eth6", Addresses: []string{"198.51.100.4"}, Default: true},
@@ -45,8 +45,8 @@ func dualUplinkConfig() NATConfig {
 				Destinations: []string{"198.51.100.128/25", "192.0.2.128/25"}},
 		},
 		Static: []StaticNAT{
-			{Internal: "198.19.200.10", External: "203.0.113.4"},
-			{Internal: "198.19.200.11", External: "192.0.2.6", Uplink: "isp-b"},
+			{Internal: "10.4.200.10", External: "203.0.113.4"},
+			{Internal: "10.4.200.11", External: "192.0.2.6", Uplink: "isp-b"},
 		},
 	}
 }
@@ -140,10 +140,10 @@ func TestNATConfig_PlanDefaults(t *testing.T) {
 	if got := plan.byName("nope").name; got != "isp-a" {
 		t.Errorf("unknown name -> %q, want the default", got)
 	}
-	if got := poolSize(natPool{first: mustAddr(t, "198.18.0.1"), last: mustAddr(t, "198.18.0.4")}); got != 4 {
+	if got := poolSize(natPool{first: mustAddr(t, "10.0.0.1"), last: mustAddr(t, "10.0.0.4")}); got != 4 {
 		t.Errorf("poolSize = %d, want 4", got)
 	}
-	if _, err := parsePool("198.18.0.1-", 1, 2); err == nil {
+	if _, err := parsePool("10.0.0.1-", 1, 2); err == nil {
 		t.Error("a dangling range must fail")
 	}
 }
@@ -243,7 +243,7 @@ func TestNATGolden_StaticAndHairpin(t *testing.T) {
 			continue
 		}
 		hairpins++
-		if !strings.Contains(r.Actions, "nat(dst=198.19.200.1") || !strings.Contains(r.Actions, ",nat(src=") {
+		if !strings.Contains(r.Actions, "nat(dst=10.4.200.1") || !strings.Contains(r.Actions, ",nat(src=") {
 			t.Errorf("hairpin commit must DNAT and SNAT: %+v", r)
 		}
 	}
@@ -341,10 +341,10 @@ func TestNAT_DNATBindsToTheOwningUplink(t *testing.T) {
 
 	// External in ISP B's pool -> ISP B's port (7); external nobody
 	// owns -> the default uplink's port (6).
-	if err := nat.AddDNAT(ctx, "tcp", mustAddrPort(t, "192.0.2.5:443"), mustAddrPort(t, "198.19.200.20:8443")); err != nil {
+	if err := nat.AddDNAT(ctx, "tcp", mustAddrPort(t, "192.0.2.5:443"), mustAddrPort(t, "10.4.200.20:8443")); err != nil {
 		t.Fatalf("add dnat ispB: %v", err)
 	}
-	if err := nat.AddDNAT(ctx, "udp", mustAddrPort(t, "203.0.113.99:53"), mustAddrPort(t, "198.19.200.53:53")); err != nil {
+	if err := nat.AddDNAT(ctx, "udp", mustAddrPort(t, "203.0.113.99:53"), mustAddrPort(t, "10.4.200.53:53")); err != nil {
 		t.Fatalf("add dnat default: %v", err)
 	}
 	rules := controller.allRules()[before:]
@@ -370,7 +370,7 @@ func TestNAT_SingleUplinkStillRequiresAPort(t *testing.T) {
 	if err := nat.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	err := nat.AddDNAT(ctx, "tcp", mustAddrPort(t, "203.0.113.10:443"), mustAddrPort(t, "198.18.100.5:443"))
+	err := nat.AddDNAT(ctx, "tcp", mustAddrPort(t, "203.0.113.10:443"), mustAddrPort(t, "10.0.100.5:443"))
 	if !errors.Is(err, ErrEmptyUplink) {
 		t.Fatalf("got %v, want ErrEmptyUplink", err)
 	}

@@ -72,7 +72,7 @@ const flowWeb = {
   config: {
     metadata: { name: "web", cookie: "0x1" },
     priority: 200,
-    match: { inPort: "1", ethType: "0x0800", ipDst: "198.51.100.5", tcpDst: 443 },
+    match: { inPort: "1", ethType: "0x0800", ipDst: "10.0.0.5", tcpDst: 443 },
     actions: [
       { type: "FLOW_ACTION_OUTPUT", port: 2 },
       { type: "FLOW_ACTION_SET_FIELD", vlanId: 100 },
@@ -123,7 +123,7 @@ describe("OpenFlowsPage", () => {
     expect(cell("f1", "switch")).toBe("br-int");
     expect(cell("f1", "table")).toBe("T0");
     expect(cell("f1", "priority")).toBe("200");
-    expect(cell("f1", "match")).toBe("in_port=1, eth_type=0x0800, ip_dst=198.51.100.5, tcp_dst=443");
+    expect(cell("f1", "match")).toBe("in_port=1, eth_type=0x0800, ip_dst=10.0.0.5, tcp_dst=443");
     expect(cell("f1", "actions")).toBe("output(2), set_field(vlan:100), goto_table(table:3), set_field(ip_dscp=46), drop");
     expect(cell("f1", "status")).toBe("active");
     expect(cell("f1", "packets")).toBe((1500000).toLocaleString());

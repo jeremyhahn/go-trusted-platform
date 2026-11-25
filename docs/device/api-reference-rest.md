@@ -332,24 +332,24 @@ Content-Type: application/json
     "vlan": 998,
     "auth_method": "none",
     "dhcp_pool": {
-      "network": "198.18.98.0/24",
-      "range_start": "198.18.98.100",
-      "range_end": "198.18.98.200",
+      "network": "10.99.98.0/24",
+      "range_start": "10.99.98.100",
+      "range_end": "10.99.98.200",
       "lease_time": 3600
     },
-    "gateway": "198.18.98.1",
-    "dns": ["198.18.98.1"]
+    "gateway": "10.99.98.1",
+    "dns": ["10.99.98.1"]
   },
   "production_network": {
     "vlan": 100,
     "auth_method": "802.1x",
-    "gateway": "198.18.100.1",
-    "dns": ["198.18.100.1", "8.8.8.8"]
+    "gateway": "10.100.0.1",
+    "dns": ["10.100.0.1", "8.8.8.8"]
   },
   "quarantine_network": {
     "vlan": 666,
     "auth_method": "none",
-    "gateway": "198.18.66.1"
+    "gateway": "10.66.6.1"
   }
 }
 ```

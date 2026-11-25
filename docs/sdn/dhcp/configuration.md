@@ -43,8 +43,8 @@ dhcp:
   enabled: true
   interface: "eth0"
   zone: "provisioning"          # resolve pool by zone
-  # pool-start: "198.18.0.100"  # explicit range (overrides zone)
-  # pool-end:   "198.18.0.200"
+  # pool-start: "10.0.0.100"    # explicit range (overrides zone)
+  # pool-end:   "10.0.0.200"
   lease-duration: 24h
 ```
 

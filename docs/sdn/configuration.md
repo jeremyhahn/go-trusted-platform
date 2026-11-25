@@ -265,7 +265,7 @@ fm.Match.AddVLANVid(100)
 
 // Layer 3 and 4 matches
 fm.Match.AddIPProto(6)              // TCP
-fm.Match.AddIPv4DstMasked(net.ParseIP("198.18.0.0"), net.CIDRMask(15, 32))
+fm.Match.AddIPv4DstMasked(net.ParseIP("10.0.0.0"), net.CIDRMask(8, 32))
 fm.Match.AddTCPDst(443)
 
 fm.Instructions = []openflow.Instruction{

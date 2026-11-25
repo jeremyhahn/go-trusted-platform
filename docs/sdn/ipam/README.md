@@ -58,7 +58,7 @@ An IP pool defines an allocatable address space:
 |-------|-------------|
 | `ID` | Unique identifier for the pool |
 | `Name` | Human-readable pool name |
-| `CIDR` | Network prefix (e.g., `198.18.0.0/24`) |
+| `CIDR` | Network prefix (e.g., `10.0.0.0/24`) |
 | `Gateway` | Optional gateway address; always reserved |
 | `Zone` | Underlay zone of a zone pool (e.g. `control-plane`); empty otherwise |
 | `Reserved` | Prefixes that are never allocatable |
@@ -109,8 +109,8 @@ backend := backends.NewMemoryBackend()
 pool := &ipam.Pool{
     ID:      "prod-v4",
     Name:    "Production IPv4",
-    CIDR:    netip.MustParsePrefix("198.18.0.0/24"),
-    Gateway: netip.MustParseAddr("198.18.0.1"),
+    CIDR:    netip.MustParsePrefix("10.0.0.0/24"),
+    Gateway: netip.MustParseAddr("10.0.0.1"),
 }
 
 ctx := context.Background()
@@ -130,7 +130,7 @@ if err != nil {
     return err
 }
 
-fmt.Printf("Allocated: %s\n", alloc.IP)  // e.g., 198.18.0.2
+fmt.Printf("Allocated: %s\n", alloc.IP)  // e.g., 10.0.0.2
 ```
 
 ### Specific IP Allocation
@@ -140,7 +140,7 @@ fmt.Printf("Allocated: %s\n", alloc.IP)  // e.g., 198.18.0.2
 req := &ipam.AllocationRequest{
     PoolID:      "prod-v4",
     DeviceID:    "db-001",
-    RequestedIP: netip.MustParseAddr("198.18.0.100"),
+    RequestedIP: netip.MustParseAddr("10.0.0.100"),
     Hostname:    "database",
 }
 
@@ -190,7 +190,7 @@ if !ok {
 
 // Reserve an IP (prevents automatic allocation)
 err := reservator.Reserve(ctx, "prod-v4",
-    netip.MustParseAddr("198.18.0.200"),
+    netip.MustParseAddr("10.0.0.200"),
     "Reserved for future load balancer")
 if err != nil {
     return err
@@ -292,7 +292,7 @@ The IPAM package handles both address families:
 ipv4Pool := &ipam.Pool{
     ID:   "v4-pool",
     Name: "IPv4 Network",
-    CIDR: netip.MustParsePrefix("198.18.0.0/24"),  // 254 usable IPs
+    CIDR: netip.MustParsePrefix("10.0.0.0/24"),  // 254 usable IPs
 }
 
 // IPv6 pool
@@ -359,13 +359,13 @@ platformctl sdn ipam pool list
 
 # Create pool (--id is generated when omitted; optional --zone, --description,
 # --reserved, --range-start, --range-end)
-platformctl sdn ipam pool create --id prod-v4 --name prod-v4 --cidr 198.18.0.0/24 --gateway 198.18.0.1
+platformctl sdn ipam pool create --id prod-v4 --name prod-v4 --cidr 10.0.0.0/24 --gateway 10.0.0.1
 
 # Allocate IP
 platformctl sdn ipam allocate --pool-id prod-v4 --device-id vm-001 --hostname webserver
 
 # Release IP
-platformctl sdn ipam release --ip 198.18.0.50
+platformctl sdn ipam release --ip 10.0.0.50
 
 # List allocations
 platformctl sdn ipam allocations --pool-id prod-v4

@@ -548,14 +548,14 @@ func TestClaimOptionsResolve_FallsBackToLoopback(t *testing.T) {
 // server name reaches the TLS handshake — a context that verifies against a
 // different name than it dials is exactly why the override exists.
 func TestNewClaimClient_HonoursTheServerNameOverride(t *testing.T) {
-	client, err := newClaimClient("https://198.51.100.5:8443", "", "cp.internal")
+	client, err := newClaimClient("https://10.0.0.5:8443", "", "cp.internal")
 	require.NoError(t, err)
 
 	transport, ok := client.http.Transport.(*http.Transport)
 	require.True(t, ok)
 	assert.Equal(t, "cp.internal", transport.TLSClientConfig.ServerName)
 
-	client, err = newClaimClient("https://198.51.100.5:8443", "", "")
+	client, err = newClaimClient("https://10.0.0.5:8443", "", "")
 	require.NoError(t, err)
 	transport, ok = client.http.Transport.(*http.Transport)
 	require.True(t, ok)

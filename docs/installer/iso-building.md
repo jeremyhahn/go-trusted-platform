@@ -90,7 +90,7 @@ Selected flags; [cli.md](cli.md) §3.1 lists them all.
 | `--mirror` | http://mirror.cs.odu.edu/alpine | Alpine Linux mirror URL |
 | `--arch` | x86_64 | Target architecture, `x86_64` or `aarch64` (GOARCH aliases accepted). Selects the Alpine ISO and apk repository, the minirootfs, and the ELF machine every bundled binary must have — an `x86_64` `platformd` next to an `aarch64` build fails with `BinaryArchMismatchError`. FIPS builds are x86_64 only (the FIPS kernel and OpenSSL provider are container-built for that architecture). |
 | `--platform-type` | server | Platform type: 'server' or 'client' |
-| `--platform-config` | single-node/default | Path to platformd.yaml template (baked into ISO). Default: `$PLATFORM_CONFIG_DIR/templates/single-node/default.yaml`; with `PLATFORM_CONFIG_DIR` unset, the in-tree public template `configs/platform/templates/single-node/default.yaml` |
+| `--platform-config` | single-node/default | Path to platformd.yaml template (baked into ISO). Default: `configs/platform/templates/single-node/default.yaml` |
 | `--overrides` | (none) | Path to override YAML (deep-merged onto `--platform-config` template before baking) |
 | `--config-server` | (none) | Base URL for dynamic config fetch at install time. Bakes `platform_config=<URL>` into kernel cmdline. See §Config Delivery Modes below |
 | `--secure-boot` | true | Enable Secure Boot support. SINGLE SOURCE OF TRUTH for the baked config: the customize step forces `secure-boot.enabled` in the baked platform config to match this flag (adding a media-staged DB signing reference when the config carries none — an existing `db` ref and `resign-mode`, e.g. remote/KMS signing, are preserved untouched), so the ISO can never generate-and-enroll keys while shipping an unsigned UKI, or the reverse. A baked `secure-boot.enforce: true` additionally makes the build fail-closed on enrollment material: the staged media must carry the PK/KEK enrollment certificates the installer will enroll (validated as X.509, named by the baked `pk`/`kek` media cert-uris or the `PK.crt`/`KEK.crt` convention) — the installer warns past their absence at install time, so the build is the only gate against an enforce-requested node without enforcement. The override pass also mirrors `SecureBootConfig.Validate` for enforcing configs — `pk`/`kek` `key-uri` present with a `kms://` or `file://` scheme — so a config the target would deterministically reject fails the build instead; staged enrollment certificates may be PEM or DER (the installer parses both). Staging always REPLACES the ISO's `secure-boot-keys` directory (a stale private key from a previous build can never survive a switch to remote signing; a `--keys-dir` overlapping the staging directory is rejected before anything is removed), a media-signing build validates the staged DB pair as usable signing material — parseable key + certificate with matching public keys (`authenticode.LoadSigningPair`, the same loader the installer uses), not merely present files — and a remote/KMS-signing build never runs local key generation — neither in staging nor in the `iso create` Step-3 orchestration, which classifies the platform config's db reference first (`SecureBootRemoteSigning`): no local private signing key is needed or produced. A media-signing build also **signs the ISO's own EFI bootloader** with the staged DB key, so firmware already enforcing Secure Boot will load the installer instead of refusing it with `Access Denied` — see *Secure Boot on the installer media* below |
@@ -271,22 +271,11 @@ on your deployment topology. What the orchestrator publishes per MAC is
 platformctl iso create
 ```
 
-Template: `$PLATFORM_CONFIG_DIR/templates/single-node/default.yaml`
-(CP + GW collocated, reference-architecture defaults). With
-`PLATFORM_CONFIG_DIR` unset it is the in-tree
-`configs/platform/templates/single-node/default.yaml`, which carries
-public example values only. With it set, a missing template fails the
-build (the error names the variable and the path) instead of falling
-back to the in-tree or legacy standalone templates.
+Template: `configs/platform/templates/single-node/default.yaml`
+(CP + GW collocated, reference-architecture defaults).
 Merged config is written to `/media/cdrom/configs/installer.yaml`
 inside the ISO. Installer reads it at PRIO 2 of the autoinstall
 priority chain. Good for single-node deploys.
-
-Inputs:
-
-| Variable | Purpose | Default | Required | Source |
-|---|---|---|---|---|
-| `PLATFORM_CONFIG_DIR` | Platform config root whose `templates/` tree supplies the default and role templates (`iso create`, `diskimage create`) | `configs/platform` (public example values) | No; a set value must hold the template | The private platform-configs repo checkout |
 
 ### 2. Custom baked
 

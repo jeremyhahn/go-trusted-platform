@@ -51,7 +51,7 @@ gateway:
     external-ip: 203.0.113.10
     port-range-start: 1024
     port-range-end: 65535
-    internal-cidr: 198.18.100.0/24 # enables SNAT at start
+    internal-cidr: 10.0.100.0/24   # enables SNAT at start
     max-sessions: 65536
 ```
 

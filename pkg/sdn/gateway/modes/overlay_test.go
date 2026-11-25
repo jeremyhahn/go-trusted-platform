@@ -60,13 +60,13 @@ func TestOverlayModeConfig_Validate(t *testing.T) {
 		}, want: ErrAnycastGatewayRequired},
 		{name: "routed subnets without an L3VNI", edit: func(c *OverlayModeConfig) { c.L3VNI = 0 }},
 		{name: "subnet on a VNI without an anycast gateway", edit: func(c *OverlayModeConfig) {
-			c.Subnets[ovlL2VNI+1] = netip.MustParsePrefix("203.0.113.0/24")
+			c.Subnets[ovlL2VNI+1] = netip.MustParsePrefix("10.2.0.0/24")
 		}, want: ErrRoutedSubnetInvalid},
 		{name: "subnet not holding its anycast gateway", edit: func(c *OverlayModeConfig) {
-			c.Subnets[ovlL2VNI] = netip.MustParsePrefix("203.0.113.0/24")
+			c.Subnets[ovlL2VNI] = netip.MustParsePrefix("10.2.0.0/24")
 		}, want: ErrRoutedSubnetInvalid},
 		{name: "subnet with host bits", edit: func(c *OverlayModeConfig) {
-			c.Subnets[ovlL2VNI] = netip.MustParsePrefix("198.51.100.1/24")
+			c.Subnets[ovlL2VNI] = netip.MustParsePrefix("10.1.0.1/24")
 		}, want: ErrRoutedSubnetInvalid},
 		{name: "IPv6 subnet", edit: func(c *OverlayModeConfig) {
 			c.Subnets[ovlL2VNI] = netip.MustParsePrefix("fd00::/64")
@@ -153,7 +153,7 @@ func TestOverlayModeHandler_Start(t *testing.T) {
 
 		require.NoError(t, f.handler.Start(context.Background()))
 		t.Cleanup(func() { require.NoError(t, f.handler.Stop(context.Background())) })
-		assert.Len(t, f.sw.matching("192.0.2.3"), 1, "held while EVPN re-learns")
+		assert.Len(t, f.sw.matching("10.0.0.3"), 1, "held while EVPN re-learns")
 
 		f.handler.sweepPredecessor(context.Background(), f.handler.staleSweepAt)
 		assert.Equal(t, ovlBaseTable, f.sw.table())
@@ -446,7 +446,7 @@ func TestOverlayModeHandler_RemoveVNI(t *testing.T) {
 		ctx := context.Background()
 		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
 		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
-		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "203.0.113.0/24")))
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.2.0.0/24")))
 		require.NoError(t, f.handler.LearnMAC(ctx, ovlL2VNI, ovlHostMAC, ovlHostIP))
 
 		require.NoError(t, f.handler.RemoveVNI(ctx, ovlL2VNI))
@@ -464,12 +464,12 @@ func TestOverlayModeHandler_RemoveVNI(t *testing.T) {
 		f := newOverlayFixture(t, nil).withVNI(t)
 		ctx := context.Background()
 		require.NoError(t, f.handler.AddVNI(ctx, ovlL2VNI+1, ovlVLAN+1))
-		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "203.0.113.0/24")))
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.2.0.0/24")))
 
 		require.NoError(t, f.handler.RemoveVNI(ctx, ovlL2VNI))
 
 		assert.Equal(t, 1, f.handler.GetStatus().PrefixCount)
-		assert.Len(t, f.sw.matching("ipv4_dst=203.0.113.0/24"), 1)
+		assert.Len(t, f.sw.matching("ipv4_dst=10.2.0.0/24"), 1)
 	})
 
 	t.Run("refuses an unknown VNI or a stopped handler", func(t *testing.T) {
@@ -515,8 +515,8 @@ func TestOverlayModeHandler_LearnMAC(t *testing.T) {
 			f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:01:10"))
 		assert.Equal(t, "output:IN_PORT", f.sw.lookup(t, TableLocalDelivery, "in_port=3"), "hairpin to a local host")
 		assert.Equal(t, "output:3", f.sw.lookup(t, TableLocalDelivery, "in_port=7"))
-		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=198.51.100.10"), "set:eth_dst=02:00:00:00:01:10")
-		assert.Len(t, f.sw.matching("t=40 ", "arp_tpa=198.51.100.10"), 1)
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.1.0.10"), "set:eth_dst=02:00:00:00:01:10")
+		assert.Len(t, f.sw.matching("t=40 ", "arp_tpa=10.1.0.10"), 1)
 
 		advertised := f.speaker.addedMACIPs()
 		require.Len(t, advertised, 1)
@@ -528,7 +528,7 @@ func TestOverlayModeHandler_LearnMAC(t *testing.T) {
 	t.Run("a second IP adds to the host", func(t *testing.T) {
 		f := newOverlayFixture(t, nil).withVNI(t)
 		ctx := context.Background()
-		second := netip.MustParseAddr("198.51.100.11")
+		second := netip.MustParseAddr("10.1.0.11")
 		require.NoError(t, f.handler.LearnMAC(ctx, ovlL2VNI, ovlHostMAC, ovlHostIP))
 
 		require.NoError(t, f.handler.LearnMAC(ctx, ovlL2VNI, ovlHostMAC, second))
@@ -549,7 +549,7 @@ func TestOverlayModeHandler_LearnMAC(t *testing.T) {
 
 		assert.Equal(t, "push_vlan,set:vlan=100 goto:70",
 			f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:02:20"))
-		assert.Empty(t, f.sw.matching("tun_src=192.0.2.2"), "nothing is tunnelled from B any more")
+		assert.Empty(t, f.sw.matching("tun_src=10.0.0.2"), "nothing is tunnelled from B any more")
 		entry, err := f.handler.LookupMAC(ovlL2VNI, ovlRemoteMAC)
 		require.NoError(t, err)
 		assert.Empty(t, entry.IPs, "the remote bindings went with the remote host")
@@ -612,7 +612,7 @@ func TestOverlayModeHandler_ForgetMAC(t *testing.T) {
 		require.NoError(t, f.handler.ForgetMAC(ctx, ovlL2VNI, ovlHostMAC))
 
 		assert.Empty(t, f.sw.matching("02:00:00:00:01:10"))
-		assert.Empty(t, f.sw.matching("198.51.100.10"))
+		assert.Empty(t, f.sw.matching("10.1.0.10"))
 		assert.Len(t, f.speaker.deletedTypes(), 2, "both Type-2 routes withdrawn")
 		_, err := f.handler.LookupMAC(ovlL2VNI, ovlHostMAC)
 		assert.ErrorIs(t, err, ErrMACNotFound)
@@ -733,7 +733,7 @@ func TestOverlayModeHandler_GetStatus(t *testing.T) {
 		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
 		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPC)))
 		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
-		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "203.0.113.0/24")))
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.2.0.0/24")))
 		require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ovlHostIP))
 
 		status := f.handler.GetStatus()

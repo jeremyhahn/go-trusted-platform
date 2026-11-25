@@ -42,13 +42,13 @@ configuration and begin replicating state to it.
 
 Examples:
   # Join using a single seed node
-  platformctl cluster join --node-id node2 --listen-addr 198.51.100.2:7946 --join 198.51.100.1:7946
+  platformctl cluster join --node-id node2 --listen-addr 10.0.0.2:7946 --join 10.0.0.1:7946
 
   # Join with multiple seed nodes for redundancy
-  platformctl cluster join --node-id node3 --listen-addr 198.51.100.3:7946 --join 198.51.100.1:7946,198.51.100.2:7946
+  platformctl cluster join --node-id node3 --listen-addr 10.0.0.3:7946 --join 10.0.0.1:7946,10.0.0.2:7946
 
   # Join with advertise address (for NAT/container environments)
-  platformctl cluster join --node-id node2 --listen-addr 0.0.0.0:7946 --advertise-addr 198.51.100.2:7946 --join 198.51.100.1:7946`,
+  platformctl cluster join --node-id node2 --listen-addr 0.0.0.0:7946 --advertise-addr 10.0.0.2:7946 --join 10.0.0.1:7946`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
 			return runJoin(flags, nodeID, listenAddr, advertiseAddr, joinAddrs)

@@ -453,7 +453,7 @@ platformctl sdn gateway snapshot --gateway-id edge-01-gateway
 
 # Overlay VTEPs admitted for decapsulation
 platformctl sdn gateway overlay vteps --gateway-id edge-01-gateway
-platformctl sdn gateway overlay vteps get 198.19.255.10 --gateway-id edge-01-gateway
+platformctl sdn gateway overlay vteps get 10.255.0.10 --gateway-id edge-01-gateway
 ```
 
 Sections are printed only for services the gateway runs. If the Tunnels
@@ -498,12 +498,12 @@ contract — branch on the discriminator.
 ## Addresses: pools before allocations
 
 ```bash
-platformctl sdn ipam pool create --name tenant-a --cidr 198.18.20.0/24 \
-    --gateway 198.18.20.1 --zone trusted --description "Tenant A workloads"
+platformctl sdn ipam pool create --name tenant-a --cidr 10.20.0.0/24 \
+    --gateway 10.20.0.1 --zone trusted --description "Tenant A workloads"
 
 platformctl sdn ipam allocate --pool-id tenant-a --device-id dev-0f21 --hostname web-01
 platformctl sdn ipam allocations --pool-id tenant-a
-platformctl sdn ipam release --ip 198.18.20.17
+platformctl sdn ipam release --ip 10.20.0.17
 ```
 
 **`--cidr` cannot be changed later.** `update` has no `--cidr` flag: changing a
@@ -676,7 +676,7 @@ A VIP is identified by protocol, address and port, so every VIP verb except
 ```bash
 platformctl sdn gateway lb vip add --protocol tcp --address 203.0.113.10 --port 443 \
     --algorithm round-robin \
-    --backend 198.18.20.11:8443:2 --backend 198.18.20.12:8443:1
+    --backend 10.20.0.11:8443:2 --backend 10.20.0.12:8443:1
 
 platformctl sdn gateway lb vip list
 platformctl sdn gateway lb vip get --address 203.0.113.10 --port 443
@@ -692,7 +692,7 @@ is no `least-conn`, because the OVS datapath cannot implement it.
 
 ```bash
 platformctl sdn gateway lb vip set-backends --address 203.0.113.10 --port 443 \
-    --backend 198.18.20.11:8443 --backend 198.18.20.13:8443
+    --backend 10.20.0.11:8443 --backend 10.20.0.13:8443
 ```
 
 The same verbs are on every transport, REST included
@@ -722,8 +722,8 @@ load-balancer:
       port: 443
       protocol: tcp
       backends:
-        - { address: 198.18.20.11, port: 8443, weight: 2 }
-        - { address: 198.18.20.12, port: 8443 }
+        - { address: 10.20.0.11, port: 8443, weight: 2 }
+        - { address: 10.20.0.12, port: 8443 }
 ```
 
 **Clients on the backends' own network need `hairpin-prefixes`.** A backend
@@ -737,7 +737,7 @@ the VIP as well, so the backend answers the gateway:
 ```yaml
 load-balancer:
   enabled: true
-  hairpin-prefixes: [198.18.20.0/24] # the LAN the backends live on
+  hairpin-prefixes: [10.20.0.0/24]   # the LAN the backends live on
 ```
 
 Hairpin clients' connections reach the backend from the VIP address, not from

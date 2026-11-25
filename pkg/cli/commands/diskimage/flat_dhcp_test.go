@@ -67,7 +67,7 @@ func findInterface(t *testing.T, network *installer.NetworkConfig, name string) 
 }
 
 // TestRPi4FlatDHCPOverridesRenderAnAccessPort builds a Pi 4 compute node for a
-// flat DHCP network (an office access VLAN) from the rack template and overrides
+// flat DHCP network (the office VLAN 101) from the rack template and overrides
 // alone: platformd accepts the merged network section, eth0 takes its address
 // by DHCP, and nothing of the rack's trunk, zone VLANs, platform VRF or 10.4.x
 // DNS upstreams is rendered.

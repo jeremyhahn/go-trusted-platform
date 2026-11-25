@@ -243,8 +243,8 @@ func newZoneProvider() *zoneProvider {
 			{Name: zone.ZoneBackup, IsolateFrom: []zone.Zone{zone.ZoneControlPlane}},
 		},
 		networks: map[zone.Zone]zoneflows.NetworkSummary{
-			zone.ZoneControlPlane: {VLAN: 100, Subnet: "198.18.100.0/24"},
-			zone.ZoneBackup:       {VLAN: 200, Subnet: "198.18.200.0/24"},
+			zone.ZoneControlPlane: {VLAN: 100, Subnet: "10.0.100.0/24"},
+			zone.ZoneBackup:       {VLAN: 200, Subnet: "10.0.200.0/24"},
 		},
 	}
 }
@@ -435,7 +435,7 @@ func TestService_StartSweepsAPreviousProcessFlows(t *testing.T) {
 	// The previous process ran with a third zone the next one drops.
 	provider.addZone(
 		zone.ZoneConfig{Name: zone.ZoneStorage, AllowTo: []zone.ZonePath{{Zone: zone.ZoneControlPlane}}},
-		zoneflows.NetworkSummary{VLAN: 300, Subnet: "198.18.30.0/24"},
+		zoneflows.NetworkSummary{VLAN: 300, Subnet: "10.0.30.0/24"},
 	)
 	previous, err := New(deps)
 	if err != nil {
@@ -772,7 +772,7 @@ func TestService_Reconcile(t *testing.T) {
 	// Add a zone: new gate/verdict flows appear.
 	provider.addZone(
 		zone.ZoneConfig{Name: zone.ZoneStorage, AllowTo: []zone.ZonePath{{Zone: zone.ZoneControlPlane}}},
-		zoneflows.NetworkSummary{VLAN: 300, Subnet: "198.18.30.0/24"},
+		zoneflows.NetworkSummary{VLAN: 300, Subnet: "10.0.30.0/24"},
 	)
 	if err := svc.Reconcile(ctx); err != nil {
 		t.Fatalf("reconcile after add: %v", err)
@@ -826,7 +826,7 @@ func TestService_ReconcileErrors(t *testing.T) {
 
 		provider.addZone(
 			zone.ZoneConfig{Name: zone.ZoneStorage},
-			zoneflows.NetworkSummary{VLAN: 300, Subnet: "198.18.30.0/24"},
+			zoneflows.NetworkSummary{VLAN: 300, Subnet: "10.0.30.0/24"},
 		)
 		controller.mu.Lock()
 		controller.installErr = errors.New("switch down")

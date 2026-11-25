@@ -285,7 +285,7 @@ func TestCheckPoolOverlap_ReportsItsOwnInvalidConfigurationFirst(t *testing.T) {
 
 func TestConfig_RefusesAPool4LargerThanTheBound(t *testing.T) {
 	cfg := validConfig()
-	cfg.Pool4 = []Pool4Range{{Addresses: "198.18.0.0-198.19.0.0", PortStart: 61001, PortEnd: 65535}}
+	cfg.Pool4 = []Pool4Range{{Addresses: "10.0.0.0-10.1.0.0", PortStart: 61001, PortEnd: 65535}}
 	err := cfg.Validate()
 	var typed *ErrPool4TooLarge
 	if !errors.As(err, &typed) {
@@ -295,7 +295,7 @@ func TestConfig_RefusesAPool4LargerThanTheBound(t *testing.T) {
 		t.Fatalf("error = %v, want it to count 65537 addresses", typed)
 	}
 
-	cfg.Pool4 = []Pool4Range{{Addresses: "198.18.0.0-198.18.255.255", PortStart: 61001, PortEnd: 65535}}
+	cfg.Pool4 = []Pool4Range{{Addresses: "10.0.0.0-10.0.255.255", PortStart: 61001, PortEnd: 65535}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("a /16 is within the bound: %v", err)
 	}

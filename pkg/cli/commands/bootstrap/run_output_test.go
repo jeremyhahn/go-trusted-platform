@@ -154,10 +154,10 @@ func TestPrintDryRunResult(t *testing.T) {
 			GatewayCount:      1,
 			WorkerCount:       2,
 			Nodes: []bootstrap.DryRunNodeResult{
-				{Hostname: "cp-01", Role: "control-plane", BMCManaged: true, BMCReachable: true, BMCAddress: "198.51.100.10",
+				{Hostname: "cp-01", Role: "control-plane", BMCManaged: true, BMCReachable: true, BMCAddress: "10.0.0.10",
 					BMCProtocol: "redfish", MACs: []string{"52:54:00:00:00:01"}, DiscoveredMACs: []string{"b8:ca:3a:00:00:01"},
 					Status: "ok", ResolvedConfig: "hostname: cp-01\ndomain: example.com\n"},
-				{Hostname: "edge-01", Role: "gateway", BMCManaged: true, BMCAddress: "198.51.100.11", BMCProtocol: "ipmi", Status: "unreachable"},
+				{Hostname: "edge-01", Role: "gateway", BMCManaged: true, BMCAddress: "10.0.0.11", BMCProtocol: "ipmi", Status: "unreachable"},
 			},
 			Warnings: []string{"switch credentials from environment"},
 			Errors:   []string{"edge-01: BMC unreachable"},
@@ -169,9 +169,9 @@ func TestPrintDryRunResult(t *testing.T) {
 	assert.Contains(t, out, "Phase 0: Discover MACs from 2 BMC-managed nodes")
 	assert.Contains(t, out, "Phase 1: Configure switch (dell-os10)")
 	assert.Contains(t, out, "Phase 5: PXE boot 3 remaining nodes (1 gateway, 2 worker)")
-	assert.Regexp(t, `cp-01\s+control-plane\s+198.51.100.10\s+redfish\s+yes\s+b8:ca:3a:00:00:01\s+ok`, out,
+	assert.Regexp(t, `cp-01\s+control-plane\s+10.0.0.10\s+redfish\s+yes\s+b8:ca:3a:00:00:01\s+ok`, out,
 		"a discovered MAC replaces the declared one")
-	assert.Regexp(t, `edge-01\s+gateway\s+198.51.100.11\s+ipmi\s+no\s+unreachable`, out)
+	assert.Regexp(t, `edge-01\s+gateway\s+10.0.0.11\s+ipmi\s+no\s+unreachable`, out)
 	assert.Contains(t, out, "--- cp-01 (control-plane) ---")
 	assert.Contains(t, out, "  domain: example.com")
 	assert.Contains(t, out, "    - switch credentials from environment")

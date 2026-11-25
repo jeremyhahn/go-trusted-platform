@@ -60,7 +60,7 @@ func TestPool_InDynamicRange(t *testing.T) {
 
 	whole := &Pool{CIDR: p.CIDR}
 	assert.True(t, whole.InDynamicRange(netip.MustParseAddr("192.0.2.10")), "no range means the whole CIDR")
-	assert.False(t, whole.InDynamicRange(netip.MustParseAddr("198.18.6.10")))
+	assert.False(t, whole.InDynamicRange(netip.MustParseAddr("10.4.6.10")))
 }
 
 func TestPool_CheckSpecific(t *testing.T) {
@@ -76,7 +76,7 @@ func TestPool_CheckSpecific(t *testing.T) {
 	assert.True(t, IsAllocationError(err))
 
 	assert.ErrorIs(t, p.CheckSpecific(netip.Addr{}), ErrInvalidIP)
-	assert.ErrorIs(t, p.CheckSpecific(netip.MustParseAddr("198.18.6.5")), ErrIPNotInPool)
+	assert.ErrorIs(t, p.CheckSpecific(netip.MustParseAddr("10.4.6.5")), ErrIPNotInPool)
 	assert.ErrorIs(t, p.CheckSpecific(netip.MustParseAddr("192.0.2.0")), ErrNetworkAddress)
 	assert.ErrorIs(t, p.CheckSpecific(netip.MustParseAddr("192.0.2.255")), ErrBroadcastAddress)
 }
@@ -105,7 +105,7 @@ func TestPool_DynamicOffsets(t *testing.T) {
 	assert.Equal(t, uint64(254), last)
 
 	// A /31 has both addresses usable.
-	first, last, ok = (&Pool{CIDR: netip.MustParsePrefix("198.18.128.0/31")}).DynamicOffsets()
+	first, last, ok = (&Pool{CIDR: netip.MustParsePrefix("10.4.128.0/31")}).DynamicOffsets()
 	require.True(t, ok)
 	assert.Equal(t, uint64(0), first)
 	assert.Equal(t, uint64(1), last)
@@ -117,8 +117,8 @@ func TestPool_DynamicOffsets_Empty(t *testing.T) {
 
 	outside := &Pool{
 		CIDR:       netip.MustParsePrefix("192.0.2.0/24"),
-		RangeStart: netip.MustParseAddr("198.18.6.1"),
-		RangeEnd:   netip.MustParseAddr("198.18.6.9"),
+		RangeStart: netip.MustParseAddr("10.4.6.1"),
+		RangeEnd:   netip.MustParseAddr("10.4.6.9"),
 	}
 	_, _, ok = outside.DynamicOffsets()
 	assert.False(t, ok, "a range outside the CIDR is no window")
@@ -167,13 +167,13 @@ func TestPool_NextDynamic_HASyncSlash31(t *testing.T) {
 	// The tunnel range reserves its first /31 for the gateway HA sync link.
 	p := &Pool{
 		ID:       "tunnel-p2p",
-		CIDR:     netip.MustParsePrefix("198.18.128.0/22"),
-		Reserved: []netip.Prefix{netip.MustParsePrefix("198.18.128.0/31")},
+		CIDR:     netip.MustParsePrefix("10.4.128.0/22"),
+		Reserved: []netip.Prefix{netip.MustParsePrefix("10.4.128.0/31")},
 	}
 	ip, _, err := p.NextDynamic(freeFrom(nil, 1023))
 	require.NoError(t, err)
-	assert.Equal(t, "198.18.128.2", ip.String())
-	assert.True(t, p.IsReserved(netip.MustParseAddr("198.18.128.1")))
+	assert.Equal(t, "10.4.128.2", ip.String())
+	assert.True(t, p.IsReserved(netip.MustParseAddr("10.4.128.1")))
 }
 
 func TestPool_NextDynamic_IPv6(t *testing.T) {
@@ -223,7 +223,7 @@ func TestPool_AllocatableIPs(t *testing.T) {
 	whole := &Pool{CIDR: netip.MustParsePrefix("192.0.2.0/24"), Reserved: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}}
 	assert.Equal(t, uint64(0), whole.AllocatableIPs())
 
-	tun := &Pool{CIDR: netip.MustParsePrefix("198.18.128.0/22"), Reserved: []netip.Prefix{netip.MustParsePrefix("198.18.128.0/31")}}
+	tun := &Pool{CIDR: netip.MustParsePrefix("10.4.128.0/22"), Reserved: []netip.Prefix{netip.MustParsePrefix("10.4.128.0/31")}}
 	assert.Equal(t, uint64(1022-1), tun.AllocatableIPs(), "the /31 covers the network address and one usable")
 
 	huge := &Pool{CIDR: netip.MustParsePrefix("fd00::/48"), Gateway: netip.MustParseAddr("fd00::1")}
@@ -239,13 +239,13 @@ func TestPoolManager_ValidatePool_Window(t *testing.T) {
 		mutate func(*Pool)
 		reason string
 	}{
-		{"reserved outside", func(p *Pool) { p.Reserved = []netip.Prefix{netip.MustParsePrefix("198.18.6.0/30")} }, "not inside"},
-		{"reserved wider than cidr", func(p *Pool) { p.Reserved = []netip.Prefix{netip.MustParsePrefix("198.18.0.0/16")} }, "not inside"},
+		{"reserved outside", func(p *Pool) { p.Reserved = []netip.Prefix{netip.MustParsePrefix("10.4.6.0/30")} }, "not inside"},
+		{"reserved wider than cidr", func(p *Pool) { p.Reserved = []netip.Prefix{netip.MustParsePrefix("10.4.0.0/16")} }, "not inside"},
 		{"reserved other family", func(p *Pool) { p.Reserved = []netip.Prefix{netip.MustParsePrefix("fd00::/64")} }, "not inside"},
 		{"reserved invalid", func(p *Pool) { p.Reserved = []netip.Prefix{{}} }, "not inside"},
 		{"start only", func(p *Pool) { p.RangeEnd = netip.Addr{} }, "together"},
 		{"end only", func(p *Pool) { p.RangeStart = netip.Addr{} }, "together"},
-		{"range outside", func(p *Pool) { p.RangeEnd = netip.MustParseAddr("198.18.6.1") }, "not inside"},
+		{"range outside", func(p *Pool) { p.RangeEnd = netip.MustParseAddr("10.4.6.1") }, "not inside"},
 		{"start after end", func(p *Pool) {
 			p.RangeStart = netip.MustParseAddr("192.0.2.200")
 			p.RangeEnd = netip.MustParseAddr("192.0.2.100")
@@ -282,7 +282,7 @@ func TestPool_CloneCopiesWindow(t *testing.T) {
 func TestLastAddrOf(t *testing.T) {
 	assert.Equal(t, "192.0.2.15", lastAddrOf(netip.MustParsePrefix("192.0.2.0/28")).String())
 	assert.Equal(t, "192.0.2.1", lastAddrOf(netip.MustParsePrefix("192.0.2.1/32")).String())
-	assert.Equal(t, "198.18.131.255", lastAddrOf(netip.MustParsePrefix("198.18.128.0/22")).String())
+	assert.Equal(t, "10.4.131.255", lastAddrOf(netip.MustParsePrefix("10.4.128.0/22")).String())
 	assert.Equal(t, "fd00::ffff:ffff:ffff:ffff", lastAddrOf(netip.MustParsePrefix("fd00::/64")).String())
 }
 

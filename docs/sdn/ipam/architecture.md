@@ -194,17 +194,17 @@ func CalculatePoolSize(cidr netip.Prefix) uint64 {
 IP addresses are converted to/from pool offsets for efficient bitmap tracking:
 
 ```
-CIDR: 198.18.0.0/24
+CIDR: 10.0.0.0/24
 
 IP Address    Offset    Bitmap Index (usable)
 -----------   ------    --------------------
-198.18.0.0    0         N/A (network)
-198.18.0.1    1         0 (first usable)
-198.18.0.2    2         1
-198.18.0.3    3         2
+10.0.0.0      0         N/A (network)
+10.0.0.1      1         0 (first usable)
+10.0.0.2      2         1
+10.0.0.3      3         2
 ...           ...       ...
-198.18.0.254  254       253 (last usable)
-198.18.0.255  255       N/A (broadcast)
+10.0.0.254    254       253 (last usable)
+10.0.0.255    255       N/A (broadcast)
 ```
 
 ```go

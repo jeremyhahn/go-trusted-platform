@@ -24,14 +24,14 @@ import (
 )
 
 func testNetworkConfig() *testenv.NetworkConfig {
-	_, subnet, _ := net.ParseCIDR("198.51.100.0/24")
+	_, subnet, _ := net.ParseCIDR("10.0.0.0/24")
 	return &testenv.NetworkConfig{
 		BridgeName:    "tp-br",
 		ServerTapName: "tp-server",
 		ClientTapName: "tp-client",
-		GatewayIP:     net.ParseIP("198.51.100.1"),
-		ServerIP:      net.ParseIP("198.51.100.2"),
-		ClientIP:      net.ParseIP("198.51.100.3"),
+		GatewayIP:     net.ParseIP("10.0.0.1"),
+		ServerIP:      net.ParseIP("10.0.0.2"),
+		ClientIP:      net.ParseIP("10.0.0.3"),
 		Subnet:        subnet,
 		Domain:        "example.local",
 	}
@@ -50,7 +50,7 @@ func TestApplyNetworkConfig_Server(t *testing.T) {
 	require.NotEmpty(t, result)
 
 	assert.Contains(t, string(result), "debug: true")
-	assert.Contains(t, string(result), "198.51.100.2")
+	assert.Contains(t, string(result), "10.0.0.2")
 }
 
 func TestApplyNetworkConfig_Client(t *testing.T) {
@@ -61,7 +61,7 @@ func TestApplyNetworkConfig_Client(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, result)
 
-	assert.Contains(t, string(result), "198.51.100.3")
+	assert.Contains(t, string(result), "10.0.0.3")
 	assert.Contains(t, string(result), "example.local")
 }
 
@@ -148,8 +148,8 @@ func TestBuildServerNetwork(t *testing.T) {
 	require.Len(t, interfaces, 1)
 	assert.Equal(t, "eth0", interfaces[0]["name"])
 	assert.Equal(t, "static", interfaces[0]["type"])
-	assert.Equal(t, "198.51.100.2", interfaces[0]["ipv4-address"])
-	assert.Equal(t, "198.51.100.1", interfaces[0]["ipv4-gateway"])
+	assert.Equal(t, "10.0.0.2", interfaces[0]["ipv4-address"])
+	assert.Equal(t, "10.0.0.1", interfaces[0]["ipv4-gateway"])
 }
 
 // =============================================================================
@@ -161,14 +161,14 @@ func TestBuildClientNetwork(t *testing.T) {
 	result := buildClientNetwork(netCfg)
 
 	dns := result["dns"].(map[string]interface{})
-	assert.Contains(t, dns["upstream-dns"], "198.51.100.2#9053")
+	assert.Contains(t, dns["upstream-dns"], "10.0.0.2#9053")
 
 	searchDomains := dns["search-domains"].([]string)
 	assert.Contains(t, searchDomains, "example.local")
 
 	interfaces := result["interfaces"].([]map[string]interface{})
 	require.Len(t, interfaces, 1)
-	assert.Equal(t, "198.51.100.3", interfaces[0]["ipv4-address"])
+	assert.Equal(t, "10.0.0.3", interfaces[0]["ipv4-address"])
 }
 
 // =============================================================================

@@ -63,14 +63,14 @@ the WebUI replace the fields present in the request and keep the rest.
 ```bash
 platformctl sdn ipam pool list [--zone storage]
 platformctl sdn ipam pool get --id lab
-platformctl sdn ipam pool create --id lab --name lab --cidr 198.18.9.0/24 --gateway 198.18.9.1 \
-    --reserved 198.18.9.1/32 --range-start 198.18.9.50 --range-end 198.18.9.254
+platformctl sdn ipam pool create --id lab --name lab --cidr 10.4.9.0/24 --gateway 10.4.9.1 \
+    --reserved 10.4.9.1/32 --range-start 10.4.9.50 --range-end 10.4.9.254
 platformctl sdn ipam pool update --id lab --description "lab VMs"
-platformctl sdn ipam pool update --id lab --range-start 198.18.9.100 --range-end 198.18.9.254
+platformctl sdn ipam pool update --id lab --range-start 10.4.9.100 --range-end 10.4.9.254
 platformctl sdn ipam pool delete --id lab
 
 platformctl sdn ipam allocate --pool-id lab --device-id vm-123 --hostname webserver
-platformctl sdn ipam release --ip 198.18.9.50
+platformctl sdn ipam release --ip 10.4.9.50
 platformctl sdn ipam allocations [--pool-id lab]
 ```
 

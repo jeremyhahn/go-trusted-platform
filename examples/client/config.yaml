@@ -19,7 +19,7 @@ acme:
     enrollment-challenge: device-8081
     request-server-bundle: false
     account:
-      email: maintainer@example.com
+      email: mail@jeremyhahn.com
       #kid: "tpm2:0x01C90000"
       key:
         # PKCS #8 RSA w/ PSS

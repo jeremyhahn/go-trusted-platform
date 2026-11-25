@@ -32,12 +32,12 @@ func TestMemoryBackend_UpdatePool_RefusedRenameKeepsIndex(t *testing.T) {
 	backend := NewMemoryBackend()
 	defer backend.Close()
 
-	pool := &ipam.Pool{ID: "p1", Name: "fabric", CIDR: netip.MustParsePrefix("198.18.1.0/24")}
+	pool := &ipam.Pool{ID: "p1", Name: "fabric", CIDR: netip.MustParsePrefix("10.4.1.0/24")}
 	require.NoError(t, backend.CreatePool(ctx, pool))
 
 	bad := &ipam.Pool{
-		ID: "p1", Name: "renamed", CIDR: netip.MustParsePrefix("198.18.1.0/24"),
-		RangeStart: netip.MustParseAddr("198.18.1.200"), RangeEnd: netip.MustParseAddr("198.18.1.50"),
+		ID: "p1", Name: "renamed", CIDR: netip.MustParsePrefix("10.4.1.0/24"),
+		RangeStart: netip.MustParseAddr("10.4.1.200"), RangeEnd: netip.MustParseAddr("10.4.1.50"),
 	}
 	require.Error(t, backend.UpdatePool(ctx, bad))
 
@@ -56,14 +56,14 @@ func TestQuicBaaSBackend_UpdatePool_KeepsCountersAndCreation(t *testing.T) {
 	backend, err := NewQuicBaaSBackend(NewMockQuicBaaSClient(), nil)
 	require.NoError(t, err)
 
-	pool := &ipam.Pool{ID: "p1", Name: "fabric", CIDR: netip.MustParsePrefix("198.18.1.0/24")}
+	pool := &ipam.Pool{ID: "p1", Name: "fabric", CIDR: netip.MustParsePrefix("10.4.1.0/24")}
 	require.NoError(t, backend.CreatePool(ctx, pool))
 	_, err = backend.Allocate(ctx, &ipam.AllocationRequest{PoolID: "p1", DeviceID: "dev-1"})
 	require.NoError(t, err)
 	before, err := backend.GetPool(ctx, "p1")
 	require.NoError(t, err)
 
-	update := &ipam.Pool{ID: "p1", Name: "fabric", CIDR: netip.MustParsePrefix("198.18.1.0/24"), Description: "x"}
+	update := &ipam.Pool{ID: "p1", Name: "fabric", CIDR: netip.MustParsePrefix("10.4.1.0/24"), Description: "x"}
 	require.NoError(t, backend.UpdatePool(ctx, update))
 
 	after, err := backend.GetPool(ctx, "p1")

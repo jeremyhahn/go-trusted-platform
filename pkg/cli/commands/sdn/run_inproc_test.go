@@ -32,7 +32,7 @@ func TestRunCommands_ServerFailure(t *testing.T) {
 	rec, flags := startSDNServer(t, cli.OutputFormatJSON)
 	rec.failWith(errBackendDown)
 	cmd := &cobra.Command{}
-	vip := &vipTargetFlags{protocol: "tcp", address: "198.51.100.1", port: 80}
+	vip := &vipTargetFlags{protocol: "tcp", address: "10.0.0.1", port: 80}
 	zone := uint32(7)
 	keep := func(p *platformv1.IPAMPool) *platformv1.UpdateIPAMPoolRequest {
 		return &platformv1.UpdateIPAMPoolRequest{Id: p.GetId()}
@@ -80,15 +80,15 @@ func TestRunCommands_ServerFailure(t *testing.T) {
 		"failed to set gateway mode":            func() error { return runGatewayModeSet(flags, []string{"edge"}) },
 		"failed to get BGP status":              func() error { return runBGPStatus(flags) },
 		"failed to list BGP peers":              func() error { return runBGPPeers(flags) },
-		"failed to announce prefix":             func() error { return runBGPAnnounce(flags, "198.51.100.0/24", "") },
-		"failed to withdraw prefix":             func() error { return runBGPWithdraw(flags, "198.51.100.0/24") },
+		"failed to announce prefix":             func() error { return runBGPAnnounce(flags, "10.0.0.0/24", "") },
+		"failed to withdraw prefix":             func() error { return runBGPWithdraw(flags, "10.0.0.0/24") },
 		"failed to list announced prefixes":     func() error { return runBGPRoutes(flags) },
 		"failed to get load balancer status":    func() error { return runLBStatus(flags) },
-		"failed to add VIP":                     func() error { return runLBVIPAdd(flags, vip, "round_robin", []string{"203.0.113.1:8080"}) },
+		"failed to add VIP":                     func() error { return runLBVIPAdd(flags, vip, "round_robin", []string{"10.0.1.1:8080"}) },
 		"failed to remove VIP":                  func() error { return runLBVIPRemove(flags, vip) },
 		"failed to get VIP":                     func() error { return runLBVIPGet(flags, vip) },
 		"failed to list VIPs":                   func() error { return runLBVIPList(flags) },
-		"failed to set VIP backends":            func() error { return runLBVIPSetBackends(flags, vip, []string{"203.0.113.1:8080"}) },
+		"failed to set VIP backends":            func() error { return runLBVIPSetBackends(flags, vip, []string{"10.0.1.1:8080"}) },
 		"failed to get NAT64 status":            func() error { return runNAT64Status(flags) },
 		"failed to measure flow programming":    func() error { return runPerfFlows(flags, 10, false, "br0") },
 		"failed to read datapath counters":      func() error { return runPerfDatapath(flags, "br0") },
@@ -96,16 +96,16 @@ func TestRunCommands_ServerFailure(t *testing.T) {
 		"failed to list gateway snapshots":      func() error { return runGatewaySnapshot(cmd, flags, "", true) },
 		"failed to get the gateway snapshot":    func() error { return runGatewaySnapshot(cmd, flags, "gw-1", false) },
 		"failed to list gateway admitted VTEPs": func() error { return runGatewayAdmittedVTEPs(cmd, flags, "") },
-		"failed to get gateway admitted VTEP":   func() error { return runGatewayAdmittedVTEPGet(cmd, flags, "", "198.51.100.2") },
+		"failed to get gateway admitted VTEP":   func() error { return runGatewayAdmittedVTEPGet(cmd, flags, "", "10.0.0.2") },
 		"failed to list IPAM pools":             func() error { return runIPAMPoolList(flags, "") },
 		"failed to get IPAM pool":               func() error { return runIPAMPoolGet(flags, "pool-1") },
 		"failed to create IPAM pool": func() error {
-			return runIPAMPoolCreate(flags, &platformv1.CreateIPAMPoolRequest{Name: "lab", Cidr: "198.18.0.0/24"})
+			return runIPAMPoolCreate(flags, &platformv1.CreateIPAMPoolRequest{Name: "lab", Cidr: "10.9.0.0/24"})
 		},
 		"failed to read IPAM pool before update": func() error { return runIPAMPoolUpdate(flags, "pool-1", keep) },
 		"failed to delete IPAM pool":             func() error { return runIPAMPoolDelete(flags, "pool-1") },
 		"failed to allocate IP":                  func() error { return runIPAMAllocate(flags, "pool-1", "dev-1", "") },
-		"failed to release IP":                   func() error { return runIPAMRelease(flags, "198.18.0.5") },
+		"failed to release IP":                   func() error { return runIPAMRelease(flags, "10.9.0.5") },
 		"failed to list allocations":             func() error { return runIPAMAllocations(flags, "pool-1") },
 		"failed to get overlay status":           func() error { return runOverlayStatus(flags) },
 		"failed to list VTEPs":                   func() error { return runVTEPList(flags) },

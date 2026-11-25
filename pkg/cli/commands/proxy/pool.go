@@ -118,7 +118,7 @@ referenced by routes cannot be deleted.
 Examples:
   # Add a pool with two weighted backends
   platformctl proxy pool add --id web-pool \
-    --backend https://198.51.100.10:8443=2 --backend https://198.51.100.11:8443=1
+    --backend https://10.0.0.10:8443=2 --backend https://10.0.0.11:8443=1
 
   # Add a pool with platform trust-class TLS
   platformctl proxy pool add --id api-pool --backend https://api-1:8443 \
@@ -126,7 +126,7 @@ Examples:
 
   # Inspect, update, delete
   platformctl proxy pool get web-pool
-  platformctl proxy pool update --id web-pool --backend https://198.51.100.12:8443
+  platformctl proxy pool update --id web-pool --backend https://10.0.0.12:8443
   platformctl proxy pool delete web-pool
   platformctl proxy pool list`,
 	}

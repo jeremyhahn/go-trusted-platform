@@ -190,7 +190,7 @@ func TestExecuteCanonicalInit_RenderFailureReturnsTypedStepError(t *testing.T) {
 }
 
 func TestRunCanonicalInit_RemoteGateEndpointRefused(t *testing.T) {
-	cmd, f := newInitCmdForTest(t, map[string]string{"gate-endpoint": "198.51.100.5:9446"})
+	cmd, f := newInitCmdForTest(t, map[string]string{"gate-endpoint": "10.0.0.5:9446"})
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 

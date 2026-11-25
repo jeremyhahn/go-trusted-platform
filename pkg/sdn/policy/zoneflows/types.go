@@ -172,11 +172,11 @@ type NetworkSummary struct {
 	VLAN uint16
 
 	// Subnet is the CIDR-notation IPv4 prefix for the zone's primary subnet
-	// (e.g. "198.18.6.0/24"). Used as nw_dst in OpenFlow match strings.
+	// (e.g. "10.4.6.0/24"). Used as nw_dst in OpenFlow match strings.
 	Subnet string
 
 	// Subnet6 is the CIDR-notation IPv6 prefix for the same network when it
-	// is dual-stack (e.g. "fd12:3456:789a:1806::/64"), used as ipv6_dst. Empty for
+	// is dual-stack (e.g. "fd12:3456:789a:406::/64"), used as ipv6_dst. Empty for
 	// an IPv4-only network; the address-family-neutral rules still apply
 	// to its IPv6 traffic (#554).
 	Subnet6 string

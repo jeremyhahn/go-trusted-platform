@@ -535,8 +535,8 @@ func TestZoneNetworkSet(t *testing.T) {
 			EnrollmentNetwork:     "onboarding",
 			PostEnrollmentNetwork: "production",
 			Networks: map[string]*entities.NetworkPhaseConfig{
-				"onboarding": {VLAN: 110, Zone: "onboarding"},
-				"production": {VLAN: 210, Zone: "production"},
+				"onboarding": {VLAN: 101, Zone: "onboarding"},
+				"production": {VLAN: 201, Zone: "production"},
 			},
 		}
 
@@ -545,11 +545,11 @@ func TestZoneNetworkSet(t *testing.T) {
 
 		assert.Equal(t, "onboarding", set.Provisioning.Name)
 		assert.Equal(t, "onboarding", set.Provisioning.Zone)
-		assert.Equal(t, uint16(110), set.Provisioning.VLAN)
+		assert.Equal(t, uint16(101), set.Provisioning.VLAN)
 
 		assert.Equal(t, "production", set.Admitted.Name)
 		assert.Equal(t, "production", set.Admitted.Zone)
-		assert.Equal(t, uint16(210), set.Admitted.VLAN)
+		assert.Equal(t, uint16(201), set.Admitted.VLAN)
 	})
 
 	t.Run("Nil profile returns empty ZoneNetworkSet", func(t *testing.T) {

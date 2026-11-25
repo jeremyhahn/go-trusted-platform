@@ -300,7 +300,7 @@ type DeployerConfig struct {
 	// container's SMB share for virtual-media boot. Defaults to Host when
 	// unset. Override when the orchestrator and the BMC reach the deployer
 	// on different interfaces -- e.g. orchestrator SSHes via mgmt
-	// (198.18.6.91) but the BMC's L3 path lands on the bootstrap-net
+	// (10.4.6.91) but the BMC's L3 path lands on the bootstrap-net
 	// interface (198.51.100.91). The SMB URL becomes
 	// smb://<smb_host>/boot/<iso>.
 	SMBHost string `yaml:"smb_host,omitempty"`
@@ -400,7 +400,7 @@ type DeployerConfig struct {
 	BootstrapDNS string `yaml:"bootstrap_dns,omitempty"`
 
 	// BootstrapAPKMirror is the install-time APK repository base URL
-	// advertised to PXE clients (e.g. http://198.18.6.11:8080). It is
+	// advertised to PXE clients (e.g. http://10.4.6.11:8080). It is
 	// threaded to the bootstrap container as BOOTSTRAP_APK_MIRROR, which the
 	// PXE boot cmdline turns into alpine_repo=<url>/vX.Y/main (diskless live
 	// root) and platform_apk_mirror=<url> (post-switch-root install repo).

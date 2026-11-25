@@ -45,7 +45,7 @@ func (f *fakeCLIClient) Status(context.Context) (*platformv1.NTPStatus, error) {
 		Stratum:          3,
 		LeapStatus:       "Normal",
 		Mode:             "both",
-		ReferenceName:    "203.0.113.1",
+		ReferenceName:    "10.4.200.1",
 		LastSyncUnix:     1755000000,
 		SourcesReachable: 1,
 		SourcesTotal:     2,
@@ -59,7 +59,7 @@ func (f *fakeCLIClient) Sources(context.Context) ([]*platformv1.NTPSource, error
 		return nil, f.err
 	}
 	return []*platformv1.NTPSource{
-		{Address: "203.0.113.1", Mode: "server", State: "selected", Stratum: 2,
+		{Address: "10.4.200.1", Mode: "server", State: "selected", Stratum: 2,
 			PollSeconds: 64, Reach: 377, LastRxSeconds: 23, Reachable: true},
 	}, nil
 }
@@ -301,7 +301,7 @@ func TestStatusTableNamesAnUnreachableServeName(t *testing.T) {
 			Kind:           string(ntp.ServeNameUnreachable),
 			Name:           "cp.example.internal",
 			Address:        "192.0.2.140",
-			ListenNetworks: []string{"203.0.113.0/24", "198.51.100.0/24"},
+			ListenNetworks: []string{"10.4.200.0/24", "198.51.100.0/24"},
 		}},
 	})
 
@@ -314,7 +314,7 @@ func TestStatusTableNamesAnUnreachableServeName(t *testing.T) {
 	if line == "" {
 		t.Fatal("the advertised-name mismatch is missing from the status table")
 	}
-	for _, want := range []string{"cp.example.internal", "192.0.2.140", "203.0.113.0/24"} {
+	for _, want := range []string{"cp.example.internal", "192.0.2.140", "10.4.200.0/24"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("row %q does not name %q", line, want)
 		}
@@ -333,7 +333,7 @@ func TestStatusTableOmitsTheRowWhenThereIsNoMismatch(t *testing.T) {
 	if got := serveNameFindingLine(nil); got != "" {
 		t.Errorf("serveNameFindingLine(nil) = %q, want empty", got)
 	}
-	if got := serveNameFindingLine(&platformv1.NTSServeNameFinding{Name: "cp", Address: "192.0.2.1"}); !strings.Contains(got, "none") {
+	if got := serveNameFindingLine(&platformv1.NTSServeNameFinding{Name: "cp", Address: "10.0.0.1"}); !strings.Contains(got, "none") {
 		t.Errorf("an empty allow list must render readably, got %q", got)
 	}
 }

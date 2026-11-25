@@ -40,18 +40,18 @@ import (
 // The test overlay: this VTEP is A, B and C are remote. The VXLAN port is
 // OpenFlow port 7 and the access trunk port 3.
 var (
-	ovlVTEPA      = netip.MustParseAddr("192.0.2.1")
-	ovlVTEPB      = netip.MustParseAddr("192.0.2.2")
-	ovlVTEPC      = netip.MustParseAddr("192.0.2.3")
+	ovlVTEPA      = netip.MustParseAddr("10.0.0.1")
+	ovlVTEPB      = netip.MustParseAddr("10.0.0.2")
+	ovlVTEPC      = netip.MustParseAddr("10.0.0.3")
 	ovlRouterMAC  = net.HardwareAddr{0x02, 0, 0, 0, 0, 0x0a}
 	ovlRouterMACB = net.HardwareAddr{0x02, 0, 0, 0, 0, 0x0b}
-	ovlAnycastIP  = netip.MustParseAddr("198.51.100.1")
-	ovlSubnet     = netip.MustParsePrefix("198.51.100.0/24")
+	ovlAnycastIP  = netip.MustParseAddr("10.1.0.1")
+	ovlSubnet     = netip.MustParsePrefix("10.1.0.0/24")
 	ovlAnycastMAC = net.HardwareAddr{0x02, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa}
 	ovlHostMAC    = net.HardwareAddr{0x02, 0, 0, 0, 0x01, 0x10}
-	ovlHostIP     = netip.MustParseAddr("198.51.100.10")
+	ovlHostIP     = netip.MustParseAddr("10.1.0.10")
 	ovlRemoteMAC  = net.HardwareAddr{0x02, 0, 0, 0, 0x02, 0x20}
-	ovlRemoteIP   = netip.MustParseAddr("198.51.100.20")
+	ovlRemoteIP   = netip.MustParseAddr("10.1.0.20")
 )
 
 const (

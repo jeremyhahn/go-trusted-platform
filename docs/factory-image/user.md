@@ -346,7 +346,7 @@ From any host on the boot segment, speak the bootloader's side of it, with the
 key and hash **the Pi will hold**:
 
 ```sh
-platformctl bootstrap probe rpi-http --http-host 192.0.2.1:8080 \
+platformctl bootstrap probe rpi-http --http-host 10.99.99.1:8080 \
   --pubkey bin/netboot-media/http-boot/pubkey.bin --otp-key-hash 3f9a…c1
 ```
 
@@ -363,7 +363,7 @@ configuration is edited with `rpi-eeprom-config`), in the EEPROM's config:
 
 ```ini
 BOOT_ORDER=0xf17          # nibbles read right to left: 7 = HTTP, 1 = SD card, f = start over
-HTTP_HOST=192.0.2.1       # the container address
+HTTP_HOST=10.99.99.1      # the container address
 HTTP_PORT=8080            # bootstrap_http_port from bootstrap.yaml
 HTTP_PATH=data/http-boot
 SIGNED_BOOT=1

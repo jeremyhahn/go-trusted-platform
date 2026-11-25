@@ -51,13 +51,13 @@ multiple nodes will create separate clusters that cannot be merged.
 
 Examples:
   # Bootstrap with required flags
-  platformctl cluster bootstrap --node-id node1 --listen-addr 198.51.100.1:7946
+  platformctl cluster bootstrap --node-id node1 --listen-addr 10.0.0.1:7946
 
   # Bootstrap with advertise address (for NAT/container environments)
-  platformctl cluster bootstrap --node-id node1 --listen-addr 0.0.0.0:7946 --advertise-addr 198.51.100.1:7946
+  platformctl cluster bootstrap --node-id node1 --listen-addr 0.0.0.0:7946 --advertise-addr 10.0.0.1:7946
 
   # Bootstrap with custom data directory
-  platformctl cluster bootstrap --node-id node1 --listen-addr 198.51.100.1:7946 --data-dir /var/lib/platform/raft`,
+  platformctl cluster bootstrap --node-id node1 --listen-addr 10.0.0.1:7946 --data-dir /var/lib/platform/raft`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
 			return runBootstrap(flags, nodeID, listenAddr, advertiseAddr, dataDir)

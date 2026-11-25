@@ -119,9 +119,9 @@ sequenceDiagram
         TT-->>TT: Server detected as ready
 
         TT->>TT: fetchCSCABundle()
-        TT->>TT: Resolve DNS server from config<br/>dns.resolver.servers[0] = 192.0.2.2:8053
+        TT->>TT: Resolve DNS server from config<br/>dns.resolver.servers[0] = 10.99.99.2:8053
 
-        Note over TT: [FIX] Server hostname resolved from server config<br/>(domain = server.example.com), NOT the IP address.<br/>Prevents bogus TLSA lookup on _8443._tcp.192.0.2.2.
+        Note over TT: [FIX] Server hostname resolved from server config<br/>(domain = server.example.com), NOT the IP address.<br/>Prevents bogus TLSA lookup on _8443._tcp.10.99.99.2.
         TT->>TT: Resolve server hostname from server config<br/>domain = server.example.com
 
         TT->>TS: Create bootstrap.Client (strategy = DANE)
@@ -129,18 +129,18 @@ sequenceDiagram
 
         TT->>TS: bootstrap.Client.FetchCABundle()
 
-        TS->>TS: Create truststrap DANEBootstrapper:<br/>  ServerURL  = https://192.0.2.2:8443<br/>  Hostname   = server.example.com<br/>  DNSServer  = 192.0.2.2:8053
+        TS->>TS: Create truststrap DANEBootstrapper:<br/>  ServerURL  = https://10.99.99.2:8443<br/>  Hostname   = server.example.com<br/>  DNSServer  = 10.99.99.2:8053
 
         Note over TS: [FIX] dane.Resolver is auto-created from the DNSServer field.<br/>Was previously nil, causing a nil-pointer panic at TLSA lookup.
-        TS->>TS: Create dane.Resolver from DNSServer (192.0.2.2:8053)
+        TS->>TS: Create dane.Resolver from DNSServer (10.99.99.2:8053)
 
-        TS->>DNS: TLSA query: _8443._tcp.server.example.com. TLSA<br/>@ 192.0.2.2:8053
+        TS->>DNS: TLSA query: _8443._tcp.server.example.com. TLSA<br/>@ 10.99.99.2:8053
         DNS-->>TS: TLSA records returned (DANE-TA Usage=2,<br/>CA cert SPKI SHA-256 hash)
 
         TS->>TS: Verify DNSSEC AD flag (authenticated data)<br/>on TLSA response
 
         Note over TS,API: TLS verification uses DANE (TLSA records),<br/>NOT the system CA trust store
-        TS->>API: GET https://192.0.2.2:8443/api/v1/ca/bootstrap<br/>(TLS verified via DANE / TLSA)
+        TS->>API: GET https://10.99.99.2:8443/api/v1/ca/bootstrap<br/>(TLS verified via DANE / TLSA)
         API-->>TS: PEM certificate bundle (root + intermediate)
 
         TS->>TS: Verify CA bundle SPKI hash<br/>against retrieved TLSA records

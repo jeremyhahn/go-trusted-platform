@@ -154,7 +154,7 @@ Device                             Platform Server
    │       "admittedNetwork": {          │
    │         "vlan": 100,                │
    │         "useDHCP": true,            │
-   │         "gateway": "198.18.1.1"     │
+   │         "gateway": "10.0.1.1"       │
    │       },                            │
    │       "acls": [...]                 │
    │     }                               │
@@ -228,8 +228,8 @@ Retrieves device profile using mTLS with IDevID.
   "admittedNetwork": {
     "vlan": 100,
     "useDHCP": true,
-    "gateway": "198.18.1.1",
-    "dns": ["198.18.1.53"]
+    "gateway": "10.0.1.1",
+    "dns": ["10.0.1.53"]
   },
   "provisioningNetwork": {
     "vlan": 405,

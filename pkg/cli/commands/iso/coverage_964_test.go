@@ -151,7 +151,7 @@ func TestCoverage964_BuildISOBuildConfig(t *testing.T) {
 			fips:              true,
 			configServer:      "https://config.example",
 			bootstrapStrategy: "spki",
-			bootstrapDNS:      "198.51.100.53:53",
+			bootstrapDNS:      "10.0.0.53:53",
 			bootstrapNoiseKey: "noise",
 			bootstrapSPKIPin:  "pin",
 			caBundle:          "/ca.pem",
@@ -176,7 +176,7 @@ func TestCoverage964_BuildISOBuildConfig(t *testing.T) {
 		assert.True(t, cfg.FIPS)
 		assert.Equal(t, "https://config.example", cfg.ConfigServerURL)
 		assert.Equal(t, "spki", cfg.BootstrapStrategy)
-		assert.Equal(t, "198.51.100.53:53", cfg.BootstrapDNS)
+		assert.Equal(t, "10.0.0.53:53", cfg.BootstrapDNS)
 		assert.Equal(t, "noise", cfg.BootstrapNoiseKey)
 		assert.Equal(t, "pin", cfg.BootstrapSPKIPin)
 		assert.Equal(t, "/ca.pem", cfg.CABundlePath)
@@ -319,7 +319,7 @@ func TestCoverage964_BuildCustomISORejectsBadInput(t *testing.T) {
 func TestCoverage964_ResolveBootstrapDNSServer(t *testing.T) {
 	dir := t.TempDir()
 	withDANE := filepath.Join(dir, "client.yaml")
-	require.NoError(t, os.WriteFile(withDANE, []byte("trust:\n  bootstrap:\n    dane:\n      dns-server: \"198.51.100.53:53\"\n"), 0o600))
+	require.NoError(t, os.WriteFile(withDANE, []byte("trust:\n  bootstrap:\n    dane:\n      dns-server: \"10.0.0.53:53\"\n"), 0o600))
 	withoutDNS := filepath.Join(dir, "bare.yaml")
 	require.NoError(t, os.WriteFile(withoutDNS, []byte("domain: example.com\n"), 0o600))
 	fallback := "192.0.2.1:" + strconv.Itoa(dns.DefaultPublicPort)
@@ -329,7 +329,7 @@ func TestCoverage964_ResolveBootstrapDNSServer(t *testing.T) {
 		path string
 		want string
 	}{
-		{"configured DANE server", withDANE, "198.51.100.53:53"},
+		{"configured DANE server", withDANE, "10.0.0.53:53"},
 		{"config without DNS falls back", withoutDNS, fallback},
 		{"unreadable config falls back", filepath.Join(dir, "absent.yaml"), fallback},
 	}

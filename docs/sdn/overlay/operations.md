@@ -24,7 +24,7 @@ overlay data plane:
 ```bash
 # Remote VTEPs a gateway admitted (omit --gateway-id for this node)
 platformctl sdn gateway overlay vteps
-platformctl sdn gateway overlay vteps get 192.0.2.2
+platformctl sdn gateway overlay vteps get 10.0.0.2
 
 # The overlay counters: VNIs, remote VTEPs, local and remote MACs, ND
 platformctl sdn gateway snapshot -o json
@@ -50,7 +50,7 @@ When adding a new compute host to the overlay network:
 
 ```bash
 # Check underlay connectivity from new host
-ping -c 3 192.0.2.1  # Existing VTEP
+ping -c 3 10.0.0.1  # Existing VTEP
 
 # Verify MTU carries an encapsulated 9000-byte frame (must be >= 9050)
 ip link show eth0 | grep mtu
@@ -161,10 +161,10 @@ watch platformctl sdn gateway overlay vteps
 
 ```bash
 # Check if remote VTEP is reachable
-ping 192.0.2.2
+ping 10.0.0.2
 
 # Check VXLAN UDP port connectivity
-nc -zuv 192.0.2.2 4789
+nc -zuv 10.0.0.2 4789
 
 # Verify no firewall blocking
 iptables -L -n | grep 4789
@@ -174,17 +174,17 @@ ip6tables -L -n | grep 4789
 ovs-vsctl list interface | grep -A 5 vxlan
 
 # Verify a gateway admitted the remote VTEP
-platformctl sdn gateway overlay vteps get 192.0.2.2
+platformctl sdn gateway overlay vteps get 10.0.0.2
 ```
 
 **Suspected Underlay Problems:**
 
 ```bash
 # Check underlay for packet loss
-ping -c 100 192.0.2.2 | tail -3
+ping -c 100 10.0.0.2 | tail -3
 
 # Trace underlay path
-traceroute 192.0.2.2
+traceroute 10.0.0.2
 
 # Interface counters and drops
 ip -s link show

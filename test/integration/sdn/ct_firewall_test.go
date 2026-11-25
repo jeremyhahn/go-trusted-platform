@@ -41,9 +41,9 @@ const (
 	// All endpoints share zone alpha's VLAN wire so every packet enters
 	// alpha's conntrack gate; the destination subnet selects the matrix
 	// verdict (alpha→beta allowed, alpha→gamma denied).
-	ctFWVLANAlpha = 110
-	ctFWVLANBeta  = 111
-	ctFWVLANGamma = 112
+	ctFWVLANAlpha = 100
+	ctFWVLANBeta  = 101
+	ctFWVLANGamma = 102
 
 	ctFWSubnetAlpha = "10.230.1.0/24"
 	ctFWSubnetBeta  = "10.230.2.0/24"

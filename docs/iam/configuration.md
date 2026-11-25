@@ -190,7 +190,7 @@ checkResp, err := iamClient.CheckPermission(ctx, &platformv1.CheckIAMPermissionR
     Resource:   "devices/device-456",
     Roles:      []string{"operator"},
     Groups:     []string{"ops-team"},
-    Context:    map[string]string{"source_ip": "192.0.2.5"},
+    Context:    map[string]string{"source_ip": "10.0.0.5"},
     Attributes: map[string]string{"department": "engineering"},
 })
 ```

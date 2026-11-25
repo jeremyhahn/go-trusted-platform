@@ -62,11 +62,11 @@ device's provisioning record, not from the server being probed. 'platformctl
 diskimage netboot --fleet-key' prints the hash and writes pubkey.bin.
 
 Examples:
-  platformctl bootstrap probe rpi-http --http-host 192.0.2.1:8080 \
+  platformctl bootstrap probe rpi-http --http-host 10.99.99.1:8080 \
       --pubkey bin/netboot-media/http-boot/pubkey.bin --otp-key-hash 3f9a...c1
 
   # As JSON
-  platformctl bootstrap probe rpi-http --http-host 192.0.2.1:8080 --pubkey pubkey.bin --otp-key-hash 3f9a...c1 -o json`,
+  platformctl bootstrap probe rpi-http --http-host 10.99.99.1:8080 --pubkey pubkey.bin --otp-key-hash 3f9a...c1 -o json`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runProbeRPiHTTP(cmd.Context(), flags, getFlags())

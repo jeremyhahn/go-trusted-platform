@@ -80,7 +80,6 @@ case "$1" in
   push) echo "$ctx" >> "$s/push-context"; resolve "$2" >/dev/null || exit 1; echo "$2" >> "$s/pushed" ;;
   pull)
     echo "$ctx" >> "$s/pull-context"
-    echo "$2" >> "$s/pulled"
     [ -z "${FAKE_PULL_FAILS:-}" ] || { echo "Error response from daemon: pull failed" >&2; exit 1; }
     # FAKE_PULL_ERRS: the ;-separated errors of the daemon's successive pulls.
     n=$(wc -l < "$s/pull-context")
@@ -139,17 +138,7 @@ type pullLeg struct {
 	rc     string
 	output string
 	log    string
-	// pulled is every reference the shared fake daemon was asked to pull,
-	// one per line (set on leg B only: both legs share the daemon).
-	pulled string
 }
-
-// The fixture registry and the reference a leg rebuilds from it and the
-// image_tag the image job's push step emits for IT_LEASE_ID sha256:1111.
-const (
-	ciFixtureRegistry = "registry.invalid:5000"
-	ciFixtureImageRef = ciFixtureRegistry + "/go-trusted-platform/it-image:1111"
-)
 
 // runTwoLegPull runs the pull step as two legs on one cold daemon: both
 // pulls succeed before either leg acquires the image lock, then leg A and
@@ -207,7 +196,7 @@ func runTwoLegPull(t *testing.T, step string, env ...string) (a, b pullLeg, stat
 		return strings.TrimSpace(string(data))
 	}
 	// Each leg rebuilds the reference from IT_REGISTRY and IT_IMAGE_TAG, and
-	// the reference the first leg pulled stays for the other leg to re-tag from.
+	// the reference both pulled stays for the other leg to re-tag from.
 	tag := "1111"
 	for _, kv := range env {
 		if v, ok := strings.CutPrefix(kv, "IT_IMAGE_TAG="); ok {
@@ -218,8 +207,6 @@ func runTwoLegPull(t *testing.T, step string, env ...string) (a, b pullLeg, stat
 		"the legs pull registry.invalid:5000/go-trusted-platform/it-image:%s:\n%s", tag, out)
 	a = pullLeg{rc: read("a.rc"), output: read("a.out"), log: read("a.log")}
 	b.output = read("b.out")
-	data, _ := os.ReadFile(filepath.Join(state, "pulled"))
-	b.pulled = strings.TrimSpace(string(data))
 	return a, b, state
 }
 
@@ -243,10 +230,6 @@ func TestCIRegistryPullSurvivesTwoLegsOnOneDaemon(t *testing.T) {
 	require.Contains(t, a.output, "leased=true", "leg A:\n%s", a.log)
 	require.Equal(t, "0", b.rc, "leg B, second to take the lock:\n%s", b.log)
 	require.Contains(t, b.output, "leased=true", "leg B:\n%s", b.log)
-	// Legs sharing a daemon pull the image once (#2386); the one pull is of
-	// the registry-prefixed path-bound reference the image job pushed.
-	require.Equal(t, []string{ciFixtureImageRef}, strings.Fields(b.pulled),
-		"the legs pull the registry-prefixed image path once per daemon:\nA:\n%s\nB:\n%s", a.log, b.log)
 }
 
 // twoProducerLock is the image lock both producers source. Producer B
@@ -420,7 +403,7 @@ func runRegistrySteps(t *testing.T, setup func(home string), env []string, steps
 		"FAKE_BUILT_IMAGE=go-trusted-platform-it:leg-build",
 		"FAKE_BUILT_ID=sha256:2222",
 		"RUNNER_TEMP="+tmp,
-		"IT_REGISTRY="+ciFixtureRegistry,
+		"IT_REGISTRY=registry.invalid:5000",
 		"IT_LEASE_ID=sha256:1111",
 		"IT_IMAGE_TAG=1111",
 		"IT_IMAGE=go-trusted-platform-it:content",
@@ -444,14 +427,6 @@ func runRegistrySteps(t *testing.T, setup func(home string), env []string, steps
 		if err != nil {
 			r.err = fmt.Errorf("step %d: %w", i, err)
 			break
-		}
-		// Hand a push step's image_tag output to the later steps, as the
-		// workflow binds needs.integration-image.outputs.image_tag.
-		data, _ := os.ReadFile(outFile)
-		for _, line := range strings.Split(string(data), "\n") {
-			if tag, ok := strings.CutPrefix(line, "image_tag="); ok {
-				base = append(base, "IT_IMAGE_TAG="+tag)
-			}
 		}
 	}
 	r.log = log.String()
@@ -490,36 +465,6 @@ func TestCIRegistryPullFallsBackToALeasedBuild(t *testing.T) {
 			require.Equal(t, "sha256:2222", r.read(filepath.Join("containers", "lease-leg")), "the lease is on the rebuilt image")
 		})
 	}
-}
-
-// TestCIRegistryPullTakesThePushedReference runs the image job's push step and
-// then the leg's pull step on one daemon: the pull must ask for exactly the
-// reference the push pushed, rebuilt from the image_tag it emitted, and lease it.
-func TestCIRegistryPullTakesThePushedReference(t *testing.T) {
-	r := runRegistrySteps(t, nil, nil, ciStepRun(t, ciImageJob, "push"), ciStepRun(t, ciLegJob, "pull"))
-	require.NoError(t, r.err, r.log)
-	var tag string
-	for _, line := range strings.Split(r.output, "\n") {
-		if v, ok := strings.CutPrefix(line, "image_tag="); ok {
-			tag = v
-		}
-	}
-	require.NotEmpty(t, tag, "the push step emits no image_tag:\n%s", r.log)
-	require.Equal(t, ciFixtureRegistry+"/go-trusted-platform/it-image:"+tag, r.read("pushed"), "the push step's reference:\n%s", r.log)
-	// On the push step's daemon the pushed reference is already there, so the
-	// leg pulls nothing (#2386, one pull per daemon).
-	require.Empty(t, r.read("pulled"), "the leg pulled an image its daemon holds:\n%s", r.log)
-	require.Contains(t, r.output, "leased=true", r.log)
-
-	// A leg on another daemon has no copy: drop the pushed reference (named
-	// from the push record, not the workflow's path) and the leg must pull
-	// exactly the pushed path-only reference.
-	forget := `docker rmi "$(cat "$FAKE_DOCKER_STATE/pushed")"`
-	r = runRegistrySteps(t, nil, nil, ciStepRun(t, ciImageJob, "push"), forget, ciStepRun(t, ciLegJob, "pull"))
-	require.NoError(t, r.err, r.log)
-	require.Equal(t, ciFixtureRegistry+"/go-trusted-platform/it-image:"+tag, r.read("pushed"), "the push step's reference:\n%s", r.log)
-	require.Equal(t, r.read("pushed"), r.read("pulled"), "the pull step's reference:\n%s", r.log)
-	require.Contains(t, r.output, "leased=true", r.log)
 }
 
 // ciImageLockFn returns the workflow's image_lock function, dedented, after

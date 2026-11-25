@@ -590,9 +590,9 @@ func TestHostSeams_WaitForCSServerReady(t *testing.T) {
 			}
 			return nil
 		}
-		require.NoError(t, waitForCSServerReady(ctx, logger, "198.51.100.2", time.Minute))
+		require.NoError(t, waitForCSServerReady(ctx, logger, "10.0.0.2", time.Minute))
 		assert.Equal(t, 5, pings)
-		assert.Contains(t, cmds.argv, []string{"nc", "-z", "-w", "2", "198.51.100.2", "8443"})
+		assert.Contains(t, cmds.argv, []string{"nc", "-z", "-w", "2", "10.0.0.2", "8443"})
 	})
 
 	tests := []struct {
@@ -619,7 +619,7 @@ func TestHostSeams_WaitForCSServerReady(t *testing.T) {
 			withCSFake(t)
 			cmds := withCommandFake(t)
 			cmds.decide = tt.decide
-			err := waitForCSServerReady(ctx, logger, "198.51.100.2", 5*time.Millisecond)
+			err := waitForCSServerReady(ctx, logger, "10.0.0.2", 5*time.Millisecond)
 			var msg *MessageError
 			require.ErrorAs(t, err, &msg)
 			assert.Contains(t, msg.Msg, tt.want)
@@ -631,7 +631,7 @@ func TestHostSeams_WaitForCSServerReady(t *testing.T) {
 		withCommandFake(t)
 		cancelled, cancel := context.WithCancel(ctx)
 		cancel()
-		assert.ErrorIs(t, waitForCSServerReady(cancelled, logger, "198.51.100.2", time.Minute), context.Canceled)
+		assert.ErrorIs(t, waitForCSServerReady(cancelled, logger, "10.0.0.2", time.Minute), context.Canceled)
 	})
 }
 
@@ -995,7 +995,7 @@ func pxeWorkDirWithNVRAM(t *testing.T) string {
 }
 
 func TestHostSeams_RunTestPXE(t *testing.T) {
-	const kernelURL, initrdURL = "http://192.0.2.1/vmlinuz", "http://192.0.2.1/initramfs"
+	const kernelURL, initrdURL = "http://10.99.99.1/vmlinuz", "http://10.99.99.1/initramfs"
 
 	t.Run("boots from the network", func(t *testing.T) {
 		pxe := withPXEFake(t)
@@ -1114,7 +1114,7 @@ func withPXEWatch(t *testing.T, expect, serialLog string) {
 }
 
 func TestHostSeams_RunTestPXEExpect(t *testing.T) {
-	const kernelURL, initrdURL = "http://192.0.2.1/vmlinuz", "http://192.0.2.1/initramfs"
+	const kernelURL, initrdURL = "http://10.99.99.1/vmlinuz", "http://10.99.99.1/initramfs"
 
 	t.Run("milestone in the serial log ends the run", func(t *testing.T) {
 		withPXEFake(t)

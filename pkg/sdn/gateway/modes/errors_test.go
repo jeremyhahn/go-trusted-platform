@@ -133,10 +133,10 @@ func TestContextualErrors_OverlayMode(t *testing.T) {
 	})
 
 	t.Run("ErrVTEPOperationFailed", func(t *testing.T) {
-		vtepIP := netip.MustParseAddr("192.0.2.2")
+		vtepIP := netip.MustParseAddr("10.0.0.2")
 		cause := errors.New("tunnel error")
 		err := &ErrVTEPOperationFailed{VTEPIP: vtepIP, Operation: "add-tunnel", Cause: cause}
-		if got := err.Error(); got != "VTEP 192.0.2.2 add-tunnel failed: tunnel error" {
+		if got := err.Error(); got != "VTEP 10.0.0.2 add-tunnel failed: tunnel error" {
 			t.Errorf("Error() = %q", got)
 		}
 		if err.Unwrap() != cause {
@@ -170,10 +170,10 @@ func TestContextualErrors_OverlayMode(t *testing.T) {
 		err := &ErrBindingConflict{
 			VNI:   10100,
 			MAC:   net.HardwareAddr{0x02, 0, 0, 0, 0x02, 0x20},
-			IP:    netip.MustParseAddr("198.51.100.1"),
+			IP:    netip.MustParseAddr("10.1.0.1"),
 			Owner: "anycast gateway IP",
 		}
-		want := "remote binding 02:00:00:00:02:20 198.51.100.1 on VNI 10100 conflicts with the anycast gateway IP"
+		want := "remote binding 02:00:00:00:02:20 10.1.0.1 on VNI 10100 conflicts with the anycast gateway IP"
 		if got := err.Error(); got != want {
 			t.Errorf("Error() = %q", got)
 		}

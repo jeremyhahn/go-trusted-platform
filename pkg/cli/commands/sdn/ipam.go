@@ -41,13 +41,13 @@ Examples:
   platformctl sdn ipam pool list
 
   # Create a pool
-  platformctl sdn ipam pool create --name lab-net --cidr 198.18.9.0/24
+  platformctl sdn ipam pool create --name lab-net --cidr 10.4.9.0/24
 
   # Allocate an IP
   platformctl sdn ipam allocate --pool-id pool1 --device-id vm-123
 
   # Release an IP
-  platformctl sdn ipam release --ip 198.18.9.50`,
+  platformctl sdn ipam release --ip 10.0.0.5`,
 	}
 
 	cmd.AddCommand(newIPAMPoolCommand(getFlags))
@@ -144,9 +144,9 @@ func newIPAMPoolCreateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 The CIDR is immutable after creation. All other fields can be updated later.
 
 Examples:
-  platformctl sdn ipam pool create --name lab-net --cidr 198.18.9.0/24
-  platformctl sdn ipam pool create --name lab-net --cidr 198.18.9.0/24 --gateway 198.18.9.1 \
-      --reserved 198.18.9.1/32 --range-start 198.18.9.50 --range-end 198.18.9.254
+  platformctl sdn ipam pool create --name lab-net --cidr 10.4.9.0/24
+  platformctl sdn ipam pool create --name lab-net --cidr 10.4.9.0/24 --gateway 10.4.9.1 \
+      --reserved 10.4.9.1/32 --range-start 10.4.9.50 --range-end 10.4.9.254
   platformctl sdn ipam pool create --name public --cidr 203.0.113.0/24 --lease-seconds 86400`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req := &platformv1.CreateIPAMPoolRequest{
@@ -167,7 +167,7 @@ Examples:
 
 	cmd.Flags().StringVar(&id, "id", "", "Optional pool ID (generated if omitted)")
 	cmd.Flags().StringVar(&name, "name", "", "Display name for the pool (required)")
-	cmd.Flags().StringVar(&cidr, "cidr", "", "CIDR range for the pool, e.g. 198.18.9.0/24 (required, immutable)")
+	cmd.Flags().StringVar(&cidr, "cidr", "", "CIDR range for the pool, e.g. 10.0.0.0/24 (required, immutable)")
 	cmd.Flags().StringVar(&gatewayAddr, "gateway", "", "Gateway IP address within the CIDR")
 	cmd.Flags().StringVar(&zone, "zone", "", "Underlay zone the pool serves, e.g. 'control-plane'")
 	cmd.Flags().StringVar(&description, "description", "", "Description of the pool's purpose")
@@ -192,9 +192,9 @@ passed keep their current values.
 
 Examples:
   platformctl sdn ipam pool update --id pool-1 --name new-name
-  platformctl sdn ipam pool update --id pool-1 --zone control-plane --gateway 198.18.6.1
+  platformctl sdn ipam pool update --id pool-1 --zone control-plane --gateway 10.4.6.1
   platformctl sdn ipam pool update --id pool-1 --lease-seconds 3600
-  platformctl sdn ipam pool update --id pool-1 --reserved 198.18.6.1/32 --range-start 198.18.6.50 --range-end 198.18.6.254
+  platformctl sdn ipam pool update --id pool-1 --reserved 10.4.6.1/32 --range-start 10.4.6.50 --range-end 10.4.6.254
 
 Passing any of --reserved, --range-start or --range-end replaces the pool's
 allocation window with exactly the values given (omitted ones are cleared).`,
@@ -323,7 +323,7 @@ func newIPAMReleaseCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Long: `Release an allocated IP address back to its pool.
 
 Examples:
-  platformctl sdn ipam release --ip 198.18.9.50
+  platformctl sdn ipam release --ip 10.0.0.5
   platformctl sdn ipam release --ip 2001:DB8::1`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runIPAMRelease(getFlags(), ip)

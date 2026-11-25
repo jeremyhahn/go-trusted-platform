@@ -54,7 +54,7 @@ function allOk() {
       ],
     },
   });
-  gateway.listIPAMPools.mockResolvedValue({ data: { pools: [{ id: "pool-a", cidr: "192.0.2.0/25", available: 200 }, { id: "pool-b", cidr: "192.0.2.128/25" }] } });
+  gateway.listIPAMPools.mockResolvedValue({ data: { pools: [{ id: "pool-a", cidr: "10.0.0.0/24", available: 200 }, { id: "pool-b", cidr: "10.1.0.0/24" }] } });
 }
 
 function allEmpty() {
@@ -101,15 +101,15 @@ describe("APIGatewayPage", () => {
   it("shows only the first five prefixes and pools", async () => {
     allOk();
     gateway.listAnnouncedPrefixes.mockResolvedValue({
-      data: { prefixes: Array.from({ length: 7 }, (_, i) => ({ prefix: `203.0.113.${i * 16}/28`, nextHop: "192.0.2.9" })) },
+      data: { prefixes: Array.from({ length: 7 }, (_, i) => ({ prefix: `10.${i}.0.0/16`, nextHop: "192.0.2.9" })) },
     });
     gateway.listIPAMPools.mockResolvedValue({
-      data: { pools: Array.from({ length: 6 }, (_, i) => ({ id: `p-${i}`, cidr: `198.51.100.${i * 16}/28`, available: 1 })) },
+      data: { pools: Array.from({ length: 6 }, (_, i) => ({ id: `p-${i}`, cidr: `10.${i}.0.0/24`, available: 1 })) },
     });
     render(<APIGatewayPage />);
 
-    expect(await screen.findByText("203.0.113.64/28")).toBeTruthy();
-    expect(screen.queryByText("203.0.113.80/28")).toBeNull();
+    expect(await screen.findByText("10.4.0.0/16")).toBeTruthy();
+    expect(screen.queryByText("10.5.0.0/16")).toBeNull();
     expect(screen.getByText("p-4")).toBeTruthy();
     expect(screen.queryByText("p-5")).toBeNull();
     expect(statValue("IPAM Pools")).toBe("6");

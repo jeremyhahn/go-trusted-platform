@@ -747,7 +747,7 @@ speaker.AnnounceRoute(ctx, announcement)
 # Residential gateways use WireGuard tunnels
 # /etc/wireguard/wg0.conf
 [Interface]
-Address = 198.18.1.2/24
+Address = 10.0.1.2/24
 PrivateKey = {gateway_private_key}
 ListenPort = 51820
 

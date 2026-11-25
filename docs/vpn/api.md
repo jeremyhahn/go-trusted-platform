@@ -66,7 +66,7 @@ reports telemetry.
 { "gateway_id": "edge-01", "reported_at_unix": 1760300000, "reporting": true, "running": true,
   "admissions": 12, "refusals": 1, "last_refusal": "posture violation", "enrolled_peers": 3,
   "leases_by_data_plane": {"masque": 2}, "leases": [{"id": "…", "tenant_id": "acme",
-  "device_id": "laptop-1", "address": "198.18.8.2", "data_plane": "masque", "zones": ["management"],
+  "device_id": "laptop-1", "address": "10.8.0.2", "data_plane": "masque", "zones": ["management"],
   "issued_at_unix": 1760300000, "expires_at_unix": 1760328800, "renewals": 0}],
   "posture_policy_errors": [], "rejected_peers": [{"tenant_id": "acme", "device_id": "laptop-9",
   "reason": "vpn: zone \"storage\" is not reachable through this service"}],
@@ -180,10 +180,10 @@ re-attestation:
 
 ```json
 {
-  "id": "…", "device_id": "…", "tenant_id": "…", "address": "198.18.8.2/32", "zones": ["management"],
+  "id": "…", "device_id": "…", "tenant_id": "…", "address": "10.8.0.2/32", "zones": ["management"],
   "data_plane": "masque", "issued_at_unix": 0, "expires_at_unix": 0, "renew_at_unix": 0, "renewals": 0,
   "verdict": "…",
-  "endpoint": { "masque": { "template": "https://gw.example:443/.well-known/masque/ip/", "routes": ["198.19.0.0/16"] } }
+  "endpoint": { "masque": { "template": "https://gw.example:443/.well-known/masque/ip/", "routes": ["10.20.0.0/16"] } }
 }
 ```
 
@@ -241,7 +241,7 @@ are REST only — their one caller is gatewayd's `controlplane.Reporter`.
 
 ```json
 // DesiredVPNLease
-{ "id": "…", "tenant_id": "acme", "device_id": "laptop-1", "address": "198.18.8.2/32",
+{ "id": "…", "tenant_id": "acme", "device_id": "laptop-1", "address": "10.8.0.2/32",
   "zones": ["management"], "data_plane": "masque", "wireguard_public_key": "<base64>",
   "client_certificate_sha256": "<base64>", "issued_at": "<RFC 3339>",
   "expires_at": "<RFC 3339>", "renewals": 0,

@@ -32,7 +32,7 @@ vi.mock('@/lib/device-profile-networks', () => ({
   networkPhaseRows: (p: { id: string }) =>
     p.id === 'p-1'
       ? [
-          { name: 'mgmt', config: { vlan: 110 }, roles: ['enroll', 'runtime'] },
+          { name: 'mgmt', config: { vlan: 101 }, roles: ['enroll', 'runtime'] },
           { name: 'data', config: {}, roles: [] },
         ]
       : [],
@@ -228,7 +228,7 @@ describe('DeviceProfilesPage: table and stats', () => {
   it('renders network phase rows with VLAN and roles, or No networks', async () => {
     await renderLoaded();
     const edge = within(row('Edge Box'));
-    expect(edge.getByText('mgmt (VLAN 110)')).toBeTruthy();
+    expect(edge.getByText('mgmt (VLAN 101)')).toBeTruthy();
     expect(edge.getByText('enroll, runtime')).toBeTruthy();
     expect(edge.getByText('data')).toBeTruthy();
     expect(screen.getAllByText('No networks')).toHaveLength(4);

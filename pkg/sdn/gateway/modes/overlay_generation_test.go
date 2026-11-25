@@ -98,7 +98,7 @@ func relaunchOver(t *testing.T, legacy bool) *relaunch {
 		require.NoError(t, sw.SendFlowMods(ctx, batch))
 	}
 	r := &relaunch{old: old.handler, oldFlows: sw.table(), mark: sw.batchCount()}
-	decap := sw.matching("t=10 ", "192.0.2.2")
+	decap := sw.matching("t=10 ", "10.0.0.2")
 	require.Len(t, decap, 1, "precondition: the predecessor authorised VTEP B's decap")
 	r.decapB = decap[0]
 
@@ -159,7 +159,7 @@ func TestOverlayRelaunchKeepsForwarding(t *testing.T) {
 
 	t.Run("a remote VTEP's flows hold until EVPN re-learns it", func(t *testing.T) {
 		assert.True(t, r.next.sw.has(r.decapB), "VTEP B's decap authorisation is kept")
-		assert.NotEmpty(t, r.next.sw.matching("192.0.2.2"))
+		assert.NotEmpty(t, r.next.sw.matching("10.0.0.2"))
 	})
 
 	t.Run("the flows the relaunch wants carry its generation", func(t *testing.T) {
@@ -195,8 +195,8 @@ func TestOverlaySweepsStaleGenerations(t *testing.T) {
 		assert.Equal(t, before[r.next.handler.cookie], after[r.next.handler.cookie], "the relaunch's flows are untouched")
 		assert.Equal(t, 1, after[foreignFirewallCookie], "another owner's flows are untouched")
 		assert.Equal(t, 1, after[foreignPipelineCookie], "the pipeline's flows are untouched")
-		assert.Empty(t, r.next.sw.matching("192.0.2.2"), "VTEP B, which no peer re-advertised, is gone")
-		assert.NotEmpty(t, r.next.sw.matching("192.0.2.3"), "VTEP C, learned by the relaunch, stays")
+		assert.Empty(t, r.next.sw.matching("10.0.0.2"), "VTEP B, which no peer re-advertised, is gone")
+		assert.NotEmpty(t, r.next.sw.matching("10.0.0.3"), "VTEP C, learned by the relaunch, stays")
 		assert.True(t, r.sweepDue().IsZero())
 	})
 
@@ -207,7 +207,7 @@ func TestOverlaySweepsStaleGenerations(t *testing.T) {
 		r.next.handler.ndTick(ctx, r.sweepDue())
 
 		assert.Zero(t, r.next.sw.cookies()[r.old.cookie])
-		assert.NotEmpty(t, r.next.sw.matching("192.0.2.2"), "VTEP B's re-added flows carry the new generation")
+		assert.NotEmpty(t, r.next.sw.matching("10.0.0.2"), "VTEP B's re-added flows carry the new generation")
 	})
 
 	t.Run("Stop removes every generation and no other owner's flows", func(t *testing.T) {
@@ -285,7 +285,7 @@ func TestOverlayRevokeSweepsPredecessor(t *testing.T) {
 
 		require.NoError(t, r.next.handler.RevokeVTEP(ctx, ovlVTEPB))
 
-		assert.Empty(t, r.next.sw.matching("192.0.2.2"), "the predecessor's decap authorisation does not outlive the revocation")
+		assert.Empty(t, r.next.sw.matching("10.0.0.2"), "the predecessor's decap authorisation does not outlive the revocation")
 		assert.Zero(t, r.next.sw.cookies()[r.old.cookie])
 		assert.True(t, r.sweepDue().IsZero())
 	})
@@ -305,7 +305,7 @@ func TestOverlayRevokeSweepsPredecessor(t *testing.T) {
 
 		r.next.sw.statsErr = nil
 		r.next.handler.sweepPredecessor(ctx, due)
-		assert.Empty(t, r.next.sw.matching("192.0.2.2"))
+		assert.Empty(t, r.next.sw.matching("10.0.0.2"))
 	})
 
 	t.Run("with no predecessor pending it reads no flows", func(t *testing.T) {
@@ -317,7 +317,7 @@ func TestOverlayRevokeSweepsPredecessor(t *testing.T) {
 		f.sw.statsErr = errSwitchDown
 
 		require.NoError(t, f.handler.RevokeVTEP(ctx, ovlVTEPB))
-		assert.Empty(t, f.sw.matching("192.0.2.2"))
+		assert.Empty(t, f.sw.matching("10.0.0.2"))
 	})
 }
 
@@ -347,8 +347,8 @@ func TestOverlayUpgradeSweepsLegacyCookie(t *testing.T) {
 		assert.Equal(t, 1, after[foreignFirewallCookie], "another owner's flows are untouched")
 		assert.Equal(t, 1, after[foreignPipelineCookie], "the pipeline's flows, which share the legacy cookie's owner bits, are untouched")
 		assert.False(t, r.next.sw.has(r.decapB), "VTEP B's decap authorisation is gone")
-		assert.Empty(t, r.next.sw.matching("192.0.2.2"), "VTEP B, which no peer re-advertised, is gone")
-		assert.NotEmpty(t, r.next.sw.matching("192.0.2.3"), "VTEP C, learned by the upgrade, stays")
+		assert.Empty(t, r.next.sw.matching("10.0.0.2"), "VTEP B, which no peer re-advertised, is gone")
+		assert.NotEmpty(t, r.next.sw.matching("10.0.0.3"), "VTEP C, learned by the upgrade, stays")
 		assert.True(t, r.sweepDue().IsZero())
 	})
 

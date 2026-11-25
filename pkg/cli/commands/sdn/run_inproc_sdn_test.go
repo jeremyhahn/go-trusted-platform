@@ -94,7 +94,7 @@ func TestRunFlow_InProcess(t *testing.T) {
 	t.Run("add builds match and actions", func(t *testing.T) {
 		out, err := captureStdout(t, func() error {
 			return runFlowAdd(flags, "br0", "flow-9", 1, 200, 3, "aa:aa:aa:aa:aa:aa", "bb:bb:bb:bb:bb:bb",
-				0x0800, "198.51.100.1", "198.51.100.2", []string{"output"}, 4)
+				0x0800, "10.0.0.1", "10.0.0.2", []string{"output"}, 4)
 		})
 		require.NoError(t, err)
 		assert.Contains(t, out, "flow-9")
@@ -108,8 +108,8 @@ func TestRunFlow_InProcess(t *testing.T) {
 		assert.Equal(t, "aa:aa:aa:aa:aa:aa", m.GetEthSrc())
 		assert.Equal(t, "bb:bb:bb:bb:bb:bb", m.GetEthDst())
 		assert.Equal(t, uint32(0x0800), m.GetEthType())
-		assert.Equal(t, "198.51.100.1", m.GetIpSrc())
-		assert.Equal(t, "198.51.100.2", m.GetIpDst())
+		assert.Equal(t, "10.0.0.1", m.GetIpSrc())
+		assert.Equal(t, "10.0.0.2", m.GetIpDst())
 		require.Len(t, cfg.GetActions(), 1)
 		assert.Equal(t, platformv1.FlowActionType_FLOW_ACTION_OUTPUT, cfg.GetActions()[0].GetType())
 		assert.Equal(t, "4", cfg.GetActions()[0].GetPort())

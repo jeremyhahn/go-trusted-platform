@@ -77,7 +77,7 @@ func TestCommands_NoDaemon(t *testing.T) {
 		{"issue", []string{"issue", "example.com", "pkcs8", "ECDSA-P256",
 			"--key-size", "2048",
 			"--sans-dns", "www.example.com,api.example.com",
-			"--sans-ips", "192.0.2.1,198.51.100.1",
+			"--sans-ips", "192.168.1.1,10.0.0.1",
 			"--sans-email", "admin@example.com"}},
 		{"certificate", []string{"certificate", "1234567890ABCDEF", "--pem"}},
 		{"list", []string{"list", "--status", "valid", "--issuer", "My CA",

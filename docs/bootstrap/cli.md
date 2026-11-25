@@ -374,9 +374,9 @@ client.
 | `--timeout` | duration | `0` | Overall deadline; none otherwise |
 
 ```bash
-platformctl bootstrap probe rpi-http --http-host 192.0.2.1:8080 \
+platformctl bootstrap probe rpi-http --http-host 10.99.99.1:8080 \
     --pubkey bin/netboot-media/http-boot/pubkey.bin --otp-key-hash 3f9a…c1
-platformctl bootstrap probe rpi-http --http-host 192.0.2.1:8080 --pubkey pubkey.bin --otp-key-hash 3f9a…c1 -o json
+platformctl bootstrap probe rpi-http --http-host 10.99.99.1:8080 --pubkey pubkey.bin --otp-key-hash 3f9a…c1 -o json
 ```
 
 Give `--pubkey` and `--otp-key-hash` from the device's provisioning record,

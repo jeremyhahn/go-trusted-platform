@@ -64,7 +64,7 @@ func TestOverlayModeHandler_IMETRoute(t *testing.T) {
 		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)), "a repeat changes nothing")
 
 		assert.Equal(t, "push_vlan,set:vlan=100,output:3,pop_vlan,"+
-			"set:tun_dst=192.0.2.2,output:7,set:tun_dst=192.0.2.3,output:7",
+			"set:tun_dst=10.0.0.2,output:7,set:tun_dst=10.0.0.3,output:7",
 			f.sw.lookup(t, TableEgress, "tun_id=10100"))
 		assert.Equal(t, 2, f.handler.GetStatus().RemoteVTEPCount)
 	})
@@ -78,7 +78,7 @@ func TestOverlayModeHandler_IMETRoute(t *testing.T) {
 		require.NoError(t, f.route(t, withdraw(imet(ovlL2VNI, ovlVTEPB))), "a repeat changes nothing")
 
 		assert.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL2VNI, ovlVTEPB)...))
-		assert.Equal(t, "push_vlan,set:vlan=100,output:3,pop_vlan,set:tun_dst=192.0.2.3,output:7",
+		assert.Equal(t, "push_vlan,set:vlan=100,output:3,pop_vlan,set:tun_dst=10.0.0.3,output:7",
 			f.sw.lookup(t, TableEgress, "tun_id=10100"))
 	})
 
@@ -98,7 +98,7 @@ func TestOverlayModeHandler_IMETRoute(t *testing.T) {
 
 		assertVTEPFailed(t, err, "admit")
 		assert.ErrorIs(t, err, errAdmissionRefused)
-		assert.Equal(t, []string{"10100@192.0.2.2"}, admitter.asked)
+		assert.Equal(t, []string{"10100@10.0.0.2"}, admitter.asked)
 		assert.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL2VNI, ovlVTEPB)...))
 	})
 
@@ -130,22 +130,22 @@ func TestOverlayModeHandler_MACIPRoute(t *testing.T) {
 
 		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
 
-		assert.Equal(t, "set:tun_dst=192.0.2.2,output:7",
+		assert.Equal(t, "set:tun_dst=10.0.0.2,output:7",
 			f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:02:20"))
 		assert.Contains(t, f.sw.lookup(t, TableARP, "in_port=3", "tun_id=10100", "eth_type=0x806", "arp_op=1",
-			"arp_tpa=198.51.100.20"), "set:arp_sha=02:00:00:00:02:20")
+			"arp_tpa=10.1.0.20"), "set:arp_sha=02:00:00:00:02:20")
 		assert.Equal(t, "dec_ttl,set:eth_src=02:00:00:00:00:0a,set:eth_dst=02:00:00:00:00:0b,"+
-			"set:tun_id=50000,set:tun_dst=192.0.2.2,output:7",
-			f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=198.51.100.20"))
+			"set:tun_id=50000,set:tun_dst=10.0.0.2,output:7",
+			f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.1.0.20"))
 		assert.Equal(t, "goto:20", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPB)...),
 			"routed replies from the VTEP are accepted on the L3VNI")
 		assert.Equal(t, "goto:50", f.sw.lookup(t, TableMACLearning, "tun_id=50000", "eth_dst=02:00:00:00:00:0a"))
-		assert.Equal(t, []string{"10100@192.0.2.2", "50000@192.0.2.2"}, admitter.asked)
+		assert.Equal(t, []string{"10100@10.0.0.2", "50000@10.0.0.2"}, admitter.asked)
 	})
 
 	t.Run("a second route of the same VTEP adds a binding", func(t *testing.T) {
 		f := newOverlayFixture(t, nil).withVNI(t)
-		second := netip.MustParseAddr("198.51.100.21")
+		second := netip.MustParseAddr("10.1.0.21")
 		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
 
 		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, second)))
@@ -153,33 +153,33 @@ func TestOverlayModeHandler_MACIPRoute(t *testing.T) {
 		entry, err := f.handler.LookupMAC(ovlL2VNI, ovlRemoteMAC)
 		require.NoError(t, err)
 		assert.Equal(t, []netip.Addr{ovlRemoteIP, second}, entry.IPs)
-		assert.Len(t, f.sw.matching("t=50 ", "tun_dst=192.0.2.2"), 2)
-		assert.Len(t, f.sw.matching("t=10 ", "tun_src=192.0.2.2"), 1, "one decap flow serves both")
+		assert.Len(t, f.sw.matching("t=50 ", "tun_dst=10.0.0.2"), 2)
+		assert.Len(t, f.sw.matching("t=10 ", "tun_src=10.0.0.2"), 1, "one decap flow serves both")
 	})
 
 	t.Run("a MAC moving to another VTEP takes everything with it", func(t *testing.T) {
 		f := newOverlayFixture(t, nil).withVNI(t)
 		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
-		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, netip.MustParseAddr("198.51.100.21"))))
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, netip.MustParseAddr("10.1.0.21"))))
 
 		require.NoError(t, f.route(t, macip(ovlVTEPC, ovlRemoteMAC, ovlRemoteIP)))
 
-		assert.Equal(t, "set:tun_dst=192.0.2.3,output:7",
+		assert.Equal(t, "set:tun_dst=10.0.0.3,output:7",
 			f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:02:20"))
-		assert.Empty(t, f.sw.matching("192.0.2.2"), "nothing is left of B")
-		assert.Empty(t, f.sw.matching("198.51.100.21"), "B's other binding left with the MAC")
+		assert.Empty(t, f.sw.matching("10.0.0.2"), "nothing is left of B")
+		assert.Empty(t, f.sw.matching("10.1.0.21"), "B's other binding left with the MAC")
 	})
 
 	t.Run("withdrawals remove a binding, and the MAC with its last", func(t *testing.T) {
 		f := newOverlayFixture(t, nil).withVNI(t)
-		second := netip.MustParseAddr("198.51.100.21")
+		second := netip.MustParseAddr("10.1.0.21")
 		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
 		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, second)))
 
 		require.NoError(t, f.route(t, withdraw(macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP))))
 
-		assert.Empty(t, f.sw.matching("198.51.100.20"))
-		assert.Equal(t, "set:tun_dst=192.0.2.2,output:7",
+		assert.Empty(t, f.sw.matching("10.1.0.20"))
+		assert.Equal(t, "set:tun_dst=10.0.0.2,output:7",
 			f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:02:20"))
 		assert.Equal(t, "goto:20", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPB)...))
 
@@ -195,7 +195,7 @@ func TestOverlayModeHandler_MACIPRoute(t *testing.T) {
 		before := f.sw.table()
 
 		require.NoError(t, f.route(t, withdraw(macip(ovlVTEPC, ovlRemoteMAC, ovlRemoteIP))), "the MAC left C")
-		require.NoError(t, f.route(t, withdraw(macip(ovlVTEPB, ovlRemoteMAC, netip.MustParseAddr("198.51.100.99")))))
+		require.NoError(t, f.route(t, withdraw(macip(ovlVTEPB, ovlRemoteMAC, netip.MustParseAddr("10.1.0.99")))))
 		require.NoError(t, f.route(t, withdraw(macip(ovlVTEPB, ovlHostMAC, ovlRemoteIP))))
 
 		assert.Equal(t, before, f.sw.table())
@@ -210,8 +210,8 @@ func TestOverlayModeHandler_MACIPRoute(t *testing.T) {
 		require.NoError(t, f.route(t, route))
 
 		assert.Len(t, f.sw.matching("eth_dst=02:00:00:00:02:20"), 1)
-		assert.Empty(t, f.sw.matching("t=50 ", "198.51.100.20"))
-		assert.Equal(t, []string{"10100@192.0.2.2"}, admitter.asked, "the L3VNI is not asked for")
+		assert.Empty(t, f.sw.matching("t=50 ", "10.1.0.20"))
+		assert.Equal(t, []string{"10100@10.0.0.2"}, admitter.asked, "the L3VNI is not asked for")
 	})
 
 	t.Run("without ARP suppression only the gateway is answered", func(t *testing.T) {
@@ -219,7 +219,7 @@ func TestOverlayModeHandler_MACIPRoute(t *testing.T) {
 
 		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
 
-		assert.Equal(t, []string{"198.51.100.1"}, arpTargets(f.sw.matching("t=40 ", "arp_tpa=")))
+		assert.Equal(t, []string{"10.1.0.1"}, arpTargets(f.sw.matching("t=40 ", "arp_tpa=")))
 	})
 
 	t.Run("a VTEP refused on the L3VNI installs nothing", func(t *testing.T) {
@@ -271,7 +271,7 @@ func TestOverlayModeHandler_MACIPRoute(t *testing.T) {
 		assert.ErrorAs(t, err, &partial)
 		assert.Equal(t, before, f.sw.table(), "no flow the table does not hold is left")
 		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)), "the route applies on a retry")
-		assert.Equal(t, "set:tun_dst=192.0.2.2,output:7",
+		assert.Equal(t, "set:tun_dst=10.0.0.2,output:7",
 			f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:02:20"))
 	})
 
@@ -294,14 +294,14 @@ func TestOverlayModeHandler_MACIPRoute(t *testing.T) {
 		var resyncErr *ErrFlowResyncFailed
 		require.ErrorAs(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)), &resyncErr)
 		f.sw.fail(nil)
-		require.NotEmpty(t, f.sw.matching("tun_src=192.0.2.2"), "the refused batch left a decap flow behind")
+		require.NotEmpty(t, f.sw.matching("tun_src=10.0.0.2"), "the refused batch left a decap flow behind")
 
 		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPC)))
 
 		want := newOverlayFixture(t, nil).withVNI(t)
 		require.NoError(t, want.route(t, imet(ovlL2VNI, ovlVTEPC)))
 		assert.Equal(t, want.sw.table(), f.sw.table(), "the switch holds exactly the committed flows")
-		assert.Empty(t, f.sw.matching("tun_src=192.0.2.2"), "no stale decap authorisation survives")
+		assert.Empty(t, f.sw.matching("tun_src=10.0.0.2"), "no stale decap authorisation survives")
 	})
 
 	t.Run("a refused rebuild is tried again on the next change", func(t *testing.T) {
@@ -401,12 +401,12 @@ func TestOverlayModeHandler_BindingConflict(t *testing.T) {
 
 		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlHostIP)))
 
-		assert.Equal(t, "set:tun_dst=192.0.2.2,output:7",
+		assert.Equal(t, "set:tun_dst=10.0.0.2,output:7",
 			f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:02:20"),
 			"the MAC is bridged to its VTEP while its IP is held back")
 		assert.Contains(t, f.sw.lookup(t, TableARP, "in_port=3", "tun_id=10100", "eth_type=0x806", "arp_op=1",
-			"arp_tpa=198.51.100.10"), "set:arp_sha=02:00:00:00:01:10", "the local host still answers for its IP")
-		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=198.51.100.10"),
+			"arp_tpa=10.1.0.10"), "set:arp_sha=02:00:00:00:01:10", "the local host still answers for its IP")
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.1.0.10"),
 			"set:eth_dst=02:00:00:00:01:10", "the local host still holds the host route")
 		assert.Equal(t, uint64(1), f.handler.GetStatus().RefusedBindings)
 		entry, err := f.handler.LookupMAC(ovlL2VNI, ovlRemoteMAC)
@@ -423,8 +423,8 @@ func TestOverlayModeHandler_BindingConflict(t *testing.T) {
 		require.NoError(t, f.handler.ForgetMAC(context.Background(), ovlL2VNI, ovlHostMAC))
 
 		assert.Contains(t, f.sw.lookup(t, TableARP, "in_port=3", "tun_id=10100", "eth_type=0x806", "arp_op=1",
-			"arp_tpa=198.51.100.10"), "set:arp_sha=02:00:00:00:02:20")
-		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=198.51.100.10"), "tun_dst=192.0.2.2")
+			"arp_tpa=10.1.0.10"), "set:arp_sha=02:00:00:00:02:20")
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.1.0.10"), "tun_dst=10.0.0.2")
 		entry, err := f.handler.LookupMAC(ovlL2VNI, ovlRemoteMAC)
 		require.NoError(t, err)
 		assert.Equal(t, []netip.Addr{ovlHostIP}, entry.IPs)
@@ -438,7 +438,7 @@ func TestOverlayModeHandler_BindingConflict(t *testing.T) {
 
 		require.NoError(t, f.handler.RemoveVNI(context.Background(), ovlL2VNI+1))
 
-		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=198.51.100.10"), "tun_dst=192.0.2.2")
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.1.0.10"), "tun_dst=10.0.0.2")
 	})
 
 	t.Run("a held binding withdrawn before the local host goes is never applied", func(t *testing.T) {
@@ -450,7 +450,7 @@ func TestOverlayModeHandler_BindingConflict(t *testing.T) {
 		require.NoError(t, f.route(t, withdraw(macip(ovlVTEPB, ovlRemoteMAC, ovlHostIP))))
 		require.NoError(t, f.handler.ForgetMAC(context.Background(), ovlL2VNI, ovlHostMAC))
 
-		assert.Empty(t, f.sw.matching("arp_tpa=198.51.100.10"))
+		assert.Empty(t, f.sw.matching("arp_tpa=10.1.0.10"))
 		entry, err := f.handler.LookupMAC(ovlL2VNI, ovlRemoteMAC)
 		require.NoError(t, err)
 		assert.Equal(t, []netip.Addr{ovlRemoteIP}, entry.IPs, "the MAC's other binding stays")
@@ -519,49 +519,49 @@ func TestOverlayModeHandler_PrefixRoute(t *testing.T) {
 	t.Run("routes a prefix through its VTEP, the longest prefix first", func(t *testing.T) {
 		f := newOverlayFixture(t, nil).withVNI(t)
 
-		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "203.0.113.0/24")))
-		require.NoError(t, f.route(t, prefixRoute(ovlVTEPB, "203.0.113.57/28")))
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.2.0.0/16")))
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPB, "10.2.3.9/24")))
 
-		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=203.0.113.55"), "tun_dst=192.0.2.2")
-		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=203.0.113.100"), "tun_dst=192.0.2.3")
-		assert.Equal(t, "drop", f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=192.0.2.200"))
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.2.3.7"), "tun_dst=10.0.0.2")
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.2.4.7"), "tun_dst=10.0.0.3")
+		assert.Equal(t, "drop", f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.3.0.1"))
 		assert.Equal(t, "goto:20", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPC)...))
 		assert.Equal(t, 2, f.handler.GetStatus().PrefixCount)
 	})
 
 	t.Run("the lowest VTEP carries a prefix, the next takes over", func(t *testing.T) {
 		f := newOverlayFixture(t, nil).withVNI(t)
-		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "203.0.113.0/24")))
-		require.NoError(t, f.route(t, prefixRoute(ovlVTEPB, "203.0.113.0/24")))
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.2.0.0/24")))
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPB, "10.2.0.0/24")))
 
-		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=203.0.113.7"), "tun_dst=192.0.2.2")
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.2.0.7"), "tun_dst=10.0.0.2")
 		assert.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPC)...),
 			"only the carrying VTEP is authorised")
 
-		require.NoError(t, f.route(t, withdraw(prefixRoute(ovlVTEPB, "203.0.113.0/24"))))
+		require.NoError(t, f.route(t, withdraw(prefixRoute(ovlVTEPB, "10.2.0.0/24"))))
 
-		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=203.0.113.7"), "tun_dst=192.0.2.3")
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.2.0.7"), "tun_dst=10.0.0.3")
 		assert.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPB)...))
 
-		require.NoError(t, f.route(t, withdraw(prefixRoute(ovlVTEPC, "203.0.113.0/24"))))
+		require.NoError(t, f.route(t, withdraw(prefixRoute(ovlVTEPC, "10.2.0.0/24"))))
 
-		assert.Equal(t, "drop", f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=203.0.113.7"))
+		assert.Equal(t, "drop", f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.2.0.7"))
 		assert.Empty(t, f.sw.matching("tun_src="))
 		assert.Zero(t, f.handler.GetStatus().PrefixCount)
 	})
 
 	t.Run("a host route outranks the prefix", func(t *testing.T) {
 		f := newOverlayFixture(t, nil).withVNI(t)
-		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "198.51.100.0/24")))
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.1.0.0/24")))
 
 		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
 
-		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=198.51.100.20"), "tun_dst=192.0.2.2")
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.1.0.20"), "tun_dst=10.0.0.2")
 	})
 
 	t.Run("a route without the router MAC is refused", func(t *testing.T) {
 		f := newOverlayFixture(t, nil).withVNI(t)
-		route := prefixRoute(ovlVTEPC, "203.0.113.0/24")
+		route := prefixRoute(ovlVTEPC, "10.2.0.0/24")
 		route.RouterMAC = nil
 
 		err := f.route(t, route)
@@ -574,19 +574,19 @@ func TestOverlayModeHandler_PrefixRoute(t *testing.T) {
 		admitter := &recordingAdmitter{refused: map[netip.Addr]bool{ovlVTEPC: true}}
 		f := newOverlayFixture(t, func(c *OverlayModeConfig) { c.Admitter = admitter }).withVNI(t)
 
-		err := f.route(t, prefixRoute(ovlVTEPC, "203.0.113.0/24"))
+		err := f.route(t, prefixRoute(ovlVTEPC, "10.2.0.0/24"))
 
 		assert.ErrorIs(t, err, errAdmissionRefused)
-		assert.Equal(t, []string{"50000@192.0.2.3"}, admitter.asked)
-		assert.Empty(t, f.sw.matching("203.0.113.0"))
+		assert.Equal(t, []string{"50000@10.0.0.3"}, admitter.asked)
+		assert.Empty(t, f.sw.matching("10.2.0.0"))
 	})
 
 	t.Run("other IP-VRFs, IPv6 and a VTEP without segments change nothing", func(t *testing.T) {
 		f := newOverlayFixture(t, nil)
-		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "203.0.113.0/24")), "no segment yet")
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.2.0.0/24")), "no segment yet")
 		f.withVNI(t)
 		before := f.sw.table()
-		other := prefixRoute(ovlVTEPC, "203.0.113.0/24")
+		other := prefixRoute(ovlVTEPC, "10.2.0.0/24")
 		other.PrefixData.VNI = ovlL3VNI + 1
 
 		require.NoError(t, f.route(t, other))
@@ -599,22 +599,22 @@ func TestOverlayModeHandler_PrefixRoute(t *testing.T) {
 		f := newOverlayFixture(t, func(c *OverlayModeConfig) { c.L3VNI = 0 }).withVNI(t)
 		before := f.sw.table()
 
-		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "203.0.113.0/24")))
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.2.0.0/24")))
 
 		assert.Equal(t, before, f.sw.table())
 	})
 
 	t.Run("a switch refusing the route keeps the routing as it was", func(t *testing.T) {
 		f := newOverlayFixture(t, nil).withVNI(t)
-		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "203.0.113.0/24")))
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.2.0.0/24")))
 		f.sw.fail(errSwitchDown)
 
-		err := f.route(t, prefixRoute(ovlVTEPB, "203.0.113.0/24"))
+		err := f.route(t, prefixRoute(ovlVTEPB, "10.2.0.0/24"))
 
 		assertVTEPFailed(t, err, "prefix route")
 		f.sw.fail(nil)
-		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=203.0.113.7"), "tun_dst=192.0.2.3")
-		require.NoError(t, f.route(t, withdraw(prefixRoute(ovlVTEPC, "203.0.113.0/24"))),
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.2.0.7"), "tun_dst=10.0.0.3")
+		require.NoError(t, f.route(t, withdraw(prefixRoute(ovlVTEPC, "10.2.0.0/24"))),
 			"the table still knows only C's route")
 		assert.Zero(t, f.handler.GetStatus().PrefixCount)
 	})
@@ -626,14 +626,14 @@ func TestOverlayModeHandler_RevokeVTEP(t *testing.T) {
 		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
 		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPC)))
 		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
-		require.NoError(t, f.route(t, prefixRoute(ovlVTEPB, "203.0.113.0/24")))
-		require.NotEmpty(t, f.sw.matching("192.0.2.2"), "precondition: B has installed reachability")
-		require.NotEmpty(t, f.sw.matching("192.0.2.3"), "precondition: C remains as another remote VTEP")
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPB, "10.44.0.0/24")))
+		require.NotEmpty(t, f.sw.matching("10.0.0.2"), "precondition: B has installed reachability")
+		require.NotEmpty(t, f.sw.matching("10.0.0.3"), "precondition: C remains as another remote VTEP")
 
 		require.NoError(t, f.handler.RevokeVTEP(context.Background(), ovlVTEPB))
 
-		assert.Empty(t, f.sw.matching("192.0.2.2"), "the revoked VTEP keeps no decap or reachability flows")
-		assert.NotEmpty(t, f.sw.matching("192.0.2.3"), "unrelated VTEPs stay installed")
+		assert.Empty(t, f.sw.matching("10.0.0.2"), "the revoked VTEP keeps no decap or reachability flows")
+		assert.NotEmpty(t, f.sw.matching("10.0.0.3"), "unrelated VTEPs stay installed")
 		_, err := f.handler.LookupMAC(ovlL2VNI, ovlRemoteMAC)
 		assert.ErrorIs(t, err, ErrMACNotFound)
 	})
@@ -670,7 +670,7 @@ func TestOverlayModeHandler_RevokeDuringAdmission(t *testing.T) {
 	routes := map[string]*bgp.EVPNRouteData{
 		"Type-3": imet(ovlL2VNI, ovlVTEPB),
 		"Type-2": macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP),
-		"Type-5": prefixRoute(ovlVTEPB, "203.0.113.0/24"),
+		"Type-5": prefixRoute(ovlVTEPB, "10.44.0.0/24"),
 	}
 	for name, route := range routes {
 		t.Run(name, func(t *testing.T) {
@@ -686,7 +686,7 @@ func TestOverlayModeHandler_RevokeDuringAdmission(t *testing.T) {
 			err := <-routed
 			vtepErr := assertVTEPFailed(t, err, "admit")
 			assert.ErrorIs(t, vtepErr, ErrVTEPRevoked)
-			assert.Empty(t, f.sw.matching("192.0.2.2"), "a route admitted before its VTEP was revoked installs nothing")
+			assert.Empty(t, f.sw.matching("10.0.0.2"), "a route admitted before its VTEP was revoked installs nothing")
 		})
 	}
 
@@ -698,7 +698,7 @@ func TestOverlayModeHandler_RevokeDuringAdmission(t *testing.T) {
 
 		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
 
-		assert.NotEmpty(t, f.sw.matching("192.0.2.2"))
+		assert.NotEmpty(t, f.sw.matching("10.0.0.2"))
 	})
 }
 
@@ -712,7 +712,7 @@ func TestOverlayModeHandler_InstalledVTEPs(t *testing.T) {
 
 	require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
 	require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
-	require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "203.0.113.0/24")))
+	require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.44.0.0/24")))
 
 	assert.Equal(t, []InstalledVTEP{
 		{VTEP: ovlVTEPB, VNIs: []uint32{ovlL2VNI, ovlL3VNI}},
@@ -746,7 +746,7 @@ func TestOverlayModeHandler_ReplayVTEP(t *testing.T) {
 			f.speaker.events <- &bgp.Event{Path: &bgp.Path{EVPN: route}}
 		}
 		probes++
-		probe := netip.PrefixFrom(netip.AddrFrom4([4]byte{192, 0, 2, 128 + 8*probes}), 29)
+		probe := netip.PrefixFrom(netip.AddrFrom4([4]byte{10, 200, probes, 0}), 24)
 		f.speaker.events <- &bgp.Event{Path: &bgp.Path{EVPN: importable(t, prefixRoute(ovlVTEPC, probe.String()), ovlL3VNI)}}
 		f.sw.awaitSend(t)
 	}
@@ -761,7 +761,7 @@ func TestOverlayModeHandler_ReplayVTEP(t *testing.T) {
 		receive(t, f,
 			importable(t, imet(ovlL2VNI, ovlVTEPB), ovlL2VNI),
 			importable(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP), ovlL2VNI, ovlL3VNI),
-			importable(t, prefixRoute(ovlVTEPB, "203.0.113.0/24"), ovlL3VNI))
+			importable(t, prefixRoute(ovlVTEPB, "10.44.0.0/24"), ovlL3VNI))
 		require.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL2VNI, ovlVTEPB)...))
 		require.Equal(t, []netip.Addr{ovlVTEPB}, f.handler.RefusedVTEPs())
 
@@ -770,9 +770,9 @@ func TestOverlayModeHandler_ReplayVTEP(t *testing.T) {
 
 		assert.Equal(t, "goto:20", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL2VNI, ovlVTEPB)...))
 		assert.Equal(t, "goto:20", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPB)...))
-		assert.Equal(t, "set:tun_dst=192.0.2.2,output:7",
+		assert.Equal(t, "set:tun_dst=10.0.0.2,output:7",
 			f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:02:20"))
-		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=203.0.113.7"), "tun_dst=192.0.2.2")
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.44.0.7"), "tun_dst=10.0.0.2")
 		assert.Empty(t, f.handler.RefusedVTEPs())
 		assert.Zero(t, f.handler.GetStatus().RefusedReplays, "a replay that completes is not counted")
 	})
@@ -858,13 +858,13 @@ func TestOverlayModeHandler_EVPNEvents(t *testing.T) {
 	receive(importable(t, imet(ovlL2VNI, ovlVTEPB), ovlL2VNI))
 
 	assert.Equal(t, "goto:20", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL2VNI, ovlVTEPB)...))
-	assert.Contains(t, f.sw.lookup(t, TableEgress, "tun_id=10100"), "set:tun_dst=192.0.2.2,output:7")
+	assert.Contains(t, f.sw.lookup(t, TableEgress, "tun_id=10100"), "set:tun_dst=10.0.0.2,output:7")
 
 	receive(importable(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP), ovlL2VNI, ovlL3VNI))
 
-	assert.Equal(t, "set:tun_dst=192.0.2.2,output:7",
+	assert.Equal(t, "set:tun_dst=10.0.0.2,output:7",
 		f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:02:20"))
-	assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=198.51.100.20"), "set:tun_id=50000")
+	assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.1.0.20"), "set:tun_id=50000")
 
 	receive(withdraw(importable(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP), ovlL2VNI, ovlL3VNI)))
 
@@ -878,20 +878,20 @@ func TestOverlayModeHandler_EVPNEvents(t *testing.T) {
 // with a new next hop leaves its old VTEP neither routed nor authorised.
 func TestOverlayModeHandler_EVPNNextHopChange(t *testing.T) {
 	f := newOverlayFixture(t, nil).withVNI(t)
-	route := importable(t, prefixRoute(ovlVTEPB, "203.0.113.0/24"), ovlL3VNI)
+	route := importable(t, prefixRoute(ovlVTEPB, "10.2.0.0/24"), ovlL3VNI)
 	f.sw.drainSends()
 	f.speaker.events <- &bgp.Event{Path: &bgp.Path{EVPN: route}}
 	f.sw.awaitSend(t)
 	require.Equal(t, "goto:20", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPB)...))
 
-	moved := importable(t, prefixRoute(ovlVTEPC, "203.0.113.0/24"), ovlL3VNI)
+	moved := importable(t, prefixRoute(ovlVTEPC, "10.2.0.0/24"), ovlL3VNI)
 	moved.RD = route.RD
 	f.sw.drainSends()
 	f.speaker.events <- &bgp.Event{Path: &bgp.Path{EVPN: moved}}
 	f.sw.awaitSend(t) // the route at B withdrawn
 	f.sw.awaitSend(t) // the route at C installed
 
-	assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=203.0.113.7"), "tun_dst=192.0.2.3")
+	assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.2.0.7"), "tun_dst=10.0.0.3")
 	assert.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPB)...),
 		"the old next hop is no longer authorised")
 	assert.Equal(t, "goto:20", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPC)...))
@@ -907,9 +907,9 @@ func TestOverlayModeHandler_EVPNIRBRouteTarget(t *testing.T) {
 	f.speaker.events <- &bgp.Event{Path: &bgp.Path{EVPN: importable(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP), ovlL2VNI)}}
 	f.sw.awaitSend(t)
 
-	assert.Equal(t, "set:tun_dst=192.0.2.2,output:7",
+	assert.Equal(t, "set:tun_dst=10.0.0.2,output:7",
 		f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:02:20"), "the MAC is bridged")
-	assert.Empty(t, f.sw.matching("t=50 ", "198.51.100.20"), "the host is not routed")
+	assert.Empty(t, f.sw.matching("t=50 ", "10.1.0.20"), "the host is not routed")
 	assert.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPB)...),
 		"the VTEP is not authorised on the L3VNI")
 }

@@ -48,11 +48,11 @@ pools, err := client.ListIPAMPools(ctx, &platformv1.ListIPAMPoolsRequest{})
 pool, err := client.CreateIPAMPool(ctx, &platformv1.CreateIPAMPoolRequest{
     Id:         "lab",
     Name:       "lab",
-    Cidr:       "198.18.9.0/24",
-    Gateway:    "198.18.9.1",
-    Reserved:   []string{"198.18.9.1/32"},
-    RangeStart: "198.18.9.50",
-    RangeEnd:   "198.18.9.254",
+    Cidr:       "10.4.9.0/24",
+    Gateway:    "10.4.9.1",
+    Reserved:   []string{"10.4.9.1/32"},
+    RangeStart: "10.4.9.50",
+    RangeEnd:   "10.4.9.254",
 })
 
 alloc, err := client.AllocateIP(ctx, &platformv1.AllocateIPRequest{

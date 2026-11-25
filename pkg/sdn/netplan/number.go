@@ -127,8 +127,8 @@ func Subnet4(base netip.Prefix, e uint16, off zone.Offset) (netip.Prefix, error)
 }
 
 // Subnet6 returns the IPv6 /64 of a VLAN inside the deployment ULA /48: the
-// subnet ID is the VLAN's decimal digits read as hex, so VLAN 1806 in
-// fd12:3456:789a::/48 is fd12:3456:789a:1806::/64.
+// subnet ID is the VLAN's decimal digits read as hex, so VLAN 406 in
+// fd12:3456:789a::/48 is fd12:3456:789a:406::/64.
 func Subnet6(ula netip.Prefix, vlan uint16) (netip.Prefix, error) {
 	if err := validateULA(ula); err != nil {
 		return netip.Prefix{}, err

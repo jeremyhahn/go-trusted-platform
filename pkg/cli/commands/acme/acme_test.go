@@ -574,8 +574,8 @@ func TestRenewCommand_MultipleSANs(t *testing.T) {
 		"--sans-dns", "www.example.com",
 		"--sans-dns", "api.example.com",
 		"--sans-dns", "mail.example.com",
-		"--sans-ip", "192.0.2.1",
-		"--sans-ip", "198.51.100.1",
+		"--sans-ip", "192.168.1.1",
+		"--sans-ip", "10.0.0.1",
 		"--sans-email", "admin@example.com",
 	})
 

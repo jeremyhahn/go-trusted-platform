@@ -119,7 +119,7 @@ platformctl sdn gateway snapshot
 platformctl sdn gateway snapshot --gateway-id edge-01-gateway
 platformctl sdn gateway snapshot --all --output json
 platformctl sdn gateway overlay vteps --gateway-id edge-01-gateway
-platformctl sdn gateway overlay vteps get 198.19.255.10 --gateway-id edge-01-gateway
+platformctl sdn gateway overlay vteps get 10.255.0.10 --gateway-id edge-01-gateway
 platformctl sdn gateway bgp peers
 platformctl sdn gateway bgp announce --prefix 203.0.113.0/24 --next-hop 198.51.100.1
 platformctl sdn gateway bgp withdraw --prefix 203.0.113.0/24
@@ -175,11 +175,11 @@ and `{"ip": "<ip>", "released": true}`. `--output json` therefore always yields
 JSON a script can parse.
 
 ```bash
-platformctl sdn ipam pool create --name tenant-a --cidr 198.18.20.0/24 \
-    --gateway 198.18.20.1 --zone trusted --description "Tenant A workloads"
+platformctl sdn ipam pool create --name tenant-a --cidr 10.20.0.0/24 \
+    --gateway 10.20.0.1 --zone trusted --description "Tenant A workloads"
 platformctl sdn ipam allocate --pool-id tenant-a --device-id dev-0f21 --hostname web-01
 platformctl sdn ipam allocations --pool-id tenant-a
-platformctl sdn ipam release --ip 198.18.20.17
+platformctl sdn ipam release --ip 10.20.0.17
 ```
 
 ---
@@ -218,9 +218,9 @@ backend.
 ```bash
 platformctl sdn gateway lb vip add --protocol tcp --address 203.0.113.10 --port 443 \
     --algorithm round-robin \
-    --backend 198.18.20.11:8443:2 --backend 198.18.20.12:8443:1
+    --backend 10.20.0.11:8443:2 --backend 10.20.0.12:8443:1
 platformctl sdn gateway lb vip set-backends --protocol tcp --address 203.0.113.10 --port 443 \
-    --backend 198.18.20.11:8443 --backend 198.18.20.13:8443
+    --backend 10.20.0.11:8443 --backend 10.20.0.13:8443
 platformctl sdn gateway lb vip get --address 203.0.113.10 --port 443
 platformctl sdn gateway lb status
 ```

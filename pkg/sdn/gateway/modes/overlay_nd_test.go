@@ -719,7 +719,7 @@ func populatedOverlay(t *testing.T, vxlanPort, accessPort int32) *overlayFixture
 	require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ndTargetIP))
 	require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
 	require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
-	require.NoError(t, f.route(t, prefixRoute(ovlVTEPB, "203.0.113.0/24")))
+	require.NoError(t, f.route(t, prefixRoute(ovlVTEPB, "10.9.0.0/16")))
 	return f
 }
 

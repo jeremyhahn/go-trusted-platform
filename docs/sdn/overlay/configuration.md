@@ -28,7 +28,7 @@ sdn:
     enabled: true
     vxlan-port: 4789
     underlay-interface: "eth0"
-    vtep-address: "198.18.20.11" # optional; defaults to the node's public IPv4
+    vtep-address: "10.20.0.11"   # optional; defaults to the node's public IPv4
 ```
 
 ### Overlay Parameters
@@ -56,8 +56,8 @@ sdn:
     ipsec:
       enabled: true
       fabric-interface: bond0
-      local-address: 198.18.20.11
-      static-peers: [198.18.20.1, 198.18.20.2] # route reflectors, gateways
+      local-address: 10.20.0.11
+      static-peers: [10.20.0.1, 10.20.0.2]   # route reflectors, gateways
       certificate-file: /etc/platform/ipsec/tunnel.pem   # leaf, then its CA chain
       crl-files:                                         # one per issuer of the chain
         - /etc/platform/ipsec/root.crl
@@ -202,7 +202,7 @@ import "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/overlay"
 // Create overlay configuration
 config := &overlay.Config{
     NodeID:            "node-001",
-    VTEPIP:            netip.MustParseAddr("192.0.2.1"),
+    VTEPIP:            netip.MustParseAddr("10.0.0.1"),
     UnderlayInterface: "eth0",
     UnderlayMTU:       9216,       // at least vxlan.MinimumUnderlayMTU (9050)
     VXLANPort:         4789,
@@ -307,7 +307,7 @@ switch ports run 9216.
 ip link show eth0 | grep mtu
 
 # Test the underlay carries an encapsulated 9000-byte frame
-ping -M do -s 9022 192.0.2.2  # 9022 + 28 = 9050
+ping -M do -s 9022 10.0.0.2  # 9022 + 28 = 9050
 
 # Test the VXLAN path at the overlay MTU
 ping -M do -s 8972 <vm-on-remote-host>  # 8972 + 28 = 9000

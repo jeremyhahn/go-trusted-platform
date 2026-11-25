@@ -16,9 +16,9 @@ socket file permissions gate access.
 ```bash
 # Force the unix transport explicitly (or PLATFORMCTL_TRANSPORT=unix)
 platformctl --transport unix sdn ipam pool list
-platformctl --transport unix sdn ipam pool create --id prod-v4 --name prod-v4 --cidr 198.18.0.0/24
+platformctl --transport unix sdn ipam pool create --id prod-v4 --name prod-v4 --cidr 10.0.0.0/24
 platformctl --transport unix sdn ipam allocate --pool-id prod-v4 --device-id vm-001
-platformctl --transport unix sdn ipam release --ip 198.18.0.50
+platformctl --transport unix sdn ipam release --ip 10.0.0.50
 platformctl --transport unix sdn ipam allocations
 ```
 

@@ -177,7 +177,7 @@ gateway:
     port-range-start: 1024
     port-range-end: 65535
     max-sessions: 65536
-    internal-cidr: 198.18.100.0/24
+    internal-cidr: 10.0.100.0/24
 ```
 
 Inter-zone policy is not configured on the firewall — it is derived from
@@ -214,7 +214,7 @@ gateway:
 
   overlay:
     enabled: true
-    local-vtep: 192.0.2.1
+    local-vtep: 10.0.0.1
 
   firewall:
     enabled: true

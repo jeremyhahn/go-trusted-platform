@@ -232,8 +232,7 @@ the EK and recovery").
 
 The rpi4 compute template is a rack node: `eth0` is a trunk carrying the
 zone VLANs, with a platform VRF and a local dnsmasq forwarding to the
-control plane's DNS endpoint set in the template's
-`network.dnsmasq.upstream-servers`. On a flat network — an access port with a
+control plane at `10.4.6.10`. On a flat network — an access port with a
 DHCP server, such as an office VLAN — the same template builds a DHCP node
 with this override:
 
@@ -459,7 +458,7 @@ ntp:
   mode: both                 # serve | consume | both
   consume:
     upstream:
-      - address: 198.18.6.1
+      - address: 10.4.6.1
         prefer: true
         iburst: true
         nts: false
@@ -474,7 +473,7 @@ ntp:
     orphan-fallback: true
   serve:
     listen-networks:
-      - 198.18.6.0/24
+      - 10.4.6.0/24
       - 192.0.2.0/24
     local-stratum: 10
     nts:
@@ -603,7 +602,7 @@ real values in your private override file:
 
 ```yaml
 bmc:
-  address: 198.51.100.100
+  address: 10.0.1.100
   username: admin
   password: "your-bmc-password"
 ```
@@ -735,8 +734,8 @@ nodes:
     interfaces:
       - name: eno1
         type: static
-        ipv4-address: 198.18.1.10/24
-        ipv4-gateway: 198.18.1.1
+        ipv4-address: 10.0.1.10/24
+        ipv4-gateway: 10.0.1.1
         auto-start: true
     overrides:
       tpm:

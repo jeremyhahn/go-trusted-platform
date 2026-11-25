@@ -71,17 +71,16 @@ type createFlags struct {
 
 // defaultPlatformConfigPaths mirror `iso create`: the single-node template
 // first. The Raspberry Pi template under templates/single-node/raspberrypi
-// is preferred for the rpi target when it exists. Both sit under the
-// PLATFORM_CONFIG_DIR root (cli.PlatformTemplatePath).
+// is preferred for the rpi target when it exists.
 func defaultPlatformConfigPaths(target, model string) []string {
 	paths := []string{}
 	if target == rpi.Name {
 		if model == "" {
 			model = rpi.DefaultModel
 		}
-		paths = append(paths, cli.PlatformTemplatePath("single-node", "raspberrypi", model, "default.yaml"))
+		paths = append(paths, filepath.Join("configs", "platform", "templates", "single-node", "raspberrypi", model, "default.yaml"))
 	}
-	return append(paths, cli.PlatformTemplatePath("single-node", "default.yaml"))
+	return append(paths, "configs/platform/templates/single-node/default.yaml")
 }
 
 func newCreateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
@@ -96,11 +95,6 @@ pre-fetched for the target architecture, platform binaries, platform
 configuration, Secure Boot keys, CA bundle) and runs the installer inside
 an arm64 container against a loop-mounted image. U-Boot is built (or
 located with --uboot-dir) with the Secure Boot keys preseeded.
-
-Without --platform-config the default and --role templates come from the
-templates/ tree under PLATFORM_CONFIG_DIR (a platform-configs checkout);
-unset, they are the in-tree public templates under configs/platform. A set
-PLATFORM_CONFIG_DIR without the template fails instead of falling back.
 
 Examples:
   # Raspberry Pi 4 image with the defaults
@@ -225,17 +219,11 @@ func (m *mediaFlags) isoConfig(target, model string) (*pkgiso.ISOBuildConfig, er
 
 	platformConfig := m.platformConfig
 	if platformConfig == "" {
-		defaults := defaultPlatformConfigPaths(target, model)
-		for _, p := range defaults {
+		for _, p := range defaultPlatformConfigPaths(target, model) {
 			if _, err := os.Stat(p); err == nil {
 				platformConfig = p
 				break
 			}
-		}
-		// A set PLATFORM_CONFIG_DIR must hold the template: never fall
-		// back to the in-tree public templates.
-		if _, set := cli.PlatformConfigDir(); set && platformConfig == "" {
-			return nil, &cli.ErrPlatformTemplateMissing{Path: defaults[len(defaults)-1]}
 		}
 	}
 	if m.overrides != "" {
@@ -364,9 +352,9 @@ func roleTemplate(target, model, role, platformConfig string) (string, error) {
 	if _, ok := templateRoles[installer.HostRole(role)]; !ok {
 		return refuse("not a host role: want gateway, control-plane or compute")
 	}
-	path := cli.PlatformTemplatePath("dedicated", "raspberrypi", model, role+".yaml")
+	path := filepath.Join("configs", "platform", "templates", "dedicated", "raspberrypi", model, role+".yaml")
 	if _, err := os.Stat(path); err != nil {
-		return refuse("no template at " + path + " (the templates/ tree under PLATFORM_CONFIG_DIR, or configs/platform when unset): " + err.Error())
+		return refuse("no template: " + err.Error())
 	}
 	return path, nil
 }

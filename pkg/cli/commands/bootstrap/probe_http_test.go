@@ -115,7 +115,7 @@ func TestProbeHTTPOptions(t *testing.T) {
 
 func TestPrintHTTPBootReport_ReturnsPrintError(t *testing.T) {
 	report := &rpinetboot.HTTPBootReport{
-		URL:       "http://192.0.2.1:8080/data/http-boot",
+		URL:       "http://10.99.99.1:8080/data/http-boot",
 		Image:     rpinetboot.FileReport{Name: rpinetboot.HTTPBootImage, Bytes: 123, SHA256: strings.Repeat("a", 64)},
 		Signature: &rpibootsig.Signature{Timestamp: time.Unix(1790856000, 0).UTC()},
 		Ramdisk:   []string{"config.txt"},

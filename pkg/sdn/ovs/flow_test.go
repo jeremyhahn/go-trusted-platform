@@ -1292,8 +1292,8 @@ func TestFormatMatchString(t *testing.T) {
 	t.Run("unknown fields omitted", func(t *testing.T) {
 		match := openflow.NewMatch()
 		match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBMplsLabel, []byte{0x00, 0x00, 0x00, 0x01}, nil)
-		match.AddVLANVid(110)
-		want := "dl_vlan=110"
+		match.AddVLANVid(101)
+		want := "dl_vlan=101"
 		if got := formatMatchString(match); got != want {
 			t.Errorf("formatMatchString = %q, want %q", got, want)
 		}
