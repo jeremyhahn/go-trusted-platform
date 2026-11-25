@@ -155,7 +155,7 @@ func TestResolver_ConfigIsASnapshot(t *testing.T) {
 
 	cfg.DefaultClass = ClassReplicated
 	for i := range cfg.Classes {
-		cfg.Classes[i].Provider = ProviderCephRBD
+		cfg.Classes[i].Provider = ProviderDRBD
 		cfg.Classes[i].VolumeGroup = "vg9"
 	}
 	cfg.Classes = nil

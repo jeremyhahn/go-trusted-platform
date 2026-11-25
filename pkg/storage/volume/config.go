@@ -35,10 +35,6 @@ const (
 	// ProviderDRBD is DRBD-replicated block storage.
 	ProviderDRBD = "drbd"
 
-	// ProviderCephRBD is Ceph RBD block storage. It is named here and not
-	// yet available from any provider.
-	ProviderCephRBD = "cephrbd"
-
 	// ProviderObjStore is not a block provider: a class naming it routes
 	// to the object store in pkg/store/object.
 	ProviderObjStore = "objstore"
@@ -167,7 +163,7 @@ func (c StorageClass) validate() error {
 	switch c.Provider {
 	case "":
 		return ErrProviderRequired
-	case ProviderLocal, ProviderDRBD, ProviderCephRBD, ProviderObjStore:
+	case ProviderLocal, ProviderDRBD, ProviderObjStore:
 	default:
 		return fmt.Errorf("%w %q", ErrUnknownProvider, c.Provider)
 	}
