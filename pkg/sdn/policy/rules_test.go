@@ -239,6 +239,96 @@ func TestRuleGenerator_BuildMatch(t *testing.T) {
 	}
 }
 
+// TestRuleGenerator_BuildMatchPrerequisites asserts that buildMatch emits the
+// OpenFlow match prerequisites: an L3 or L4 field needs its dl_type, and a
+// transport port needs its nw_proto, or the switch refuses the flow with
+// OFPBMC_BAD_PREREQ.
+func TestRuleGenerator_BuildMatchPrerequisites(t *testing.T) {
+	gen := NewRuleGenerator()
+
+	tests := []struct {
+		name      string
+		match     FlowMatch
+		expected  []string
+		forbidden []string
+		dlTypes   int
+	}{
+		{
+			name:     "IPv4 TCP proto and port carry dl_type",
+			match:    FlowMatch{IPProto: 6, TCPDst: 443},
+			expected: []string{"dl_type=0x0800", "nw_proto=6", "tp_dst=443"},
+			dlTypes:  1,
+		},
+		{
+			name:     "TCP port alone carries dl_type and nw_proto",
+			match:    FlowMatch{TCPDst: 443},
+			expected: []string{"dl_type=0x0800", "nw_proto=6", "tp_dst=443"},
+			dlTypes:  1,
+		},
+		{
+			name:     "UDP port alone carries dl_type and nw_proto",
+			match:    FlowMatch{UDPDst: 53},
+			expected: []string{"dl_type=0x0800", "nw_proto=17", "tp_dst=53"},
+			dlTypes:  1,
+		},
+		{
+			name:      "IPv4 address carries dl_type",
+			match:     FlowMatch{IPv4Src: "10.0.0.0/8"},
+			expected:  []string{"dl_type=0x0800", "nw_src=10.0.0.0/8"},
+			forbidden: []string{"nw_proto="},
+			dlTypes:   1,
+		},
+		{
+			name:      "IPv6 address carries the IPv6 dl_type",
+			match:     FlowMatch{IPv6Dst: "fd00::/8", IPProto: 6},
+			expected:  []string{"dl_type=0x86dd", "nw_proto=6", "ipv6_dst=fd00::/8"},
+			forbidden: []string{"dl_type=0x0800"},
+			dlTypes:   1,
+		},
+		{
+			name:      "explicit ARP EthType is kept once with no nw_proto",
+			match:     FlowMatch{EthType: 0x0806},
+			expected:  []string{"dl_type=0x0806"},
+			forbidden: []string{"nw_proto="},
+			dlTypes:   1,
+		},
+		{
+			name:     "explicit IPv4 EthType is never duplicated",
+			match:    FlowMatch{EthType: 0x0800, IPProto: 17, UDPDst: 53},
+			expected: []string{"dl_type=0x0800", "nw_proto=17", "tp_dst=53"},
+			dlTypes:  1,
+		},
+		{
+			name:      "explicit IPProto is not overridden by a port",
+			match:     FlowMatch{IPProto: 17, TCPDst: 53},
+			expected:  []string{"dl_type=0x0800", "nw_proto=17"},
+			forbidden: []string{"nw_proto=6"},
+			dlTypes:   1,
+		},
+		{
+			name:      "L2-only match gets no dl_type",
+			match:     FlowMatch{InPort: "port1"},
+			expected:  []string{"in_port=port1"},
+			forbidden: []string{"dl_type=", "nw_proto="},
+			dlTypes:   0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := gen.buildMatch(tt.match)
+			for _, exp := range tt.expected {
+				assert.Contains(t, result, exp)
+			}
+			for _, bad := range tt.forbidden {
+				assert.NotContains(t, result, bad)
+			}
+			assert.Equal(t, tt.dlTypes, strings.Count(result, "dl_type="), result)
+			assert.LessOrEqual(t, strings.Count(result, "nw_proto="), 1, result)
+		})
+	}
+}
+
 func TestRuleGenerator_BuildActions(t *testing.T) {
 	gen := NewRuleGenerator()
 
