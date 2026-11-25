@@ -117,6 +117,7 @@ func (m *mockQuoteTPM) IAKAttributes() (*xkmssdk.KeyAttributes, error) {
 		KeyAlgorithm:       x509.RSA,
 		SignatureAlgorithm: m.scheme,
 		Hash:               crypto.SHA256,
+		TPMAttributes:      mockIAKTPMAttributes(),
 	}, nil
 }
 

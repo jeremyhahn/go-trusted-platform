@@ -407,7 +407,13 @@ func (m *mockHostTPM) IAKAttributes() (*xkmssdk.KeyAttributes, error) {
 		KeyAlgorithm:       x509.RSA,
 		SignatureAlgorithm: x509.SHA256WithRSAPSS,
 		Hash:               crypto.SHA256,
+		TPMAttributes:      mockIAKTPMAttributes(),
 	}, nil
+}
+
+// mockIAKTPMAttributes names the SHA-256 bank as the one the stand-in IAK quotes.
+func mockIAKTPMAttributes() *xkmssdk.TPMAttributes {
+	return &xkmssdk.TPMAttributes{HashAlg: tpm2.TPMAlgSHA256}
 }
 
 func (m *mockHostTPM) VerifyQuote(_ context.Context, quoted, signature []byte) error {
