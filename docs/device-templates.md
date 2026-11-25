@@ -232,7 +232,8 @@ the EK and recovery").
 
 The rpi4 compute template is a rack node: `eth0` is a trunk carrying the
 zone VLANs, with a platform VRF and a local dnsmasq forwarding to the
-control plane at `198.18.6.10`. On a flat network — an access port with a
+control plane's DNS endpoint set in the template's
+`network.dnsmasq.upstream-servers`. On a flat network — an access port with a
 DHCP server, such as an office VLAN — the same template builds a DHCP node
 with this override:
 
