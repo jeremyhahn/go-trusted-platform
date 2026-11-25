@@ -208,6 +208,9 @@ type ServerConfig struct {
 	// HTTPS connections when proxying resources for iPXE clients. If nil,
 	// the system certificate pool is used.
 	ProxyCACertPool *x509.CertPool
+
+	// ProxyAllowPrivateDestinations lets /proxy/ reach loopback, private, link-local and shared-address destinations; tests only.
+	ProxyAllowPrivateDestinations bool
 }
 
 // Config is an alias for ServerConfig for backward compatibility.

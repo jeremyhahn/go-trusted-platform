@@ -213,12 +213,13 @@ func startTestServer() error {
 
 	// Create server config
 	cfg := &ipxe.ServerConfig{
-		HTTPPort:         testHTTPPort,
-		TFTPPort:         testTFTPPort,
-		ExternalURL:      fmt.Sprintf("http://%s:%d", testServerIP, testHTTPPort),
-		FirmwareDir:      testFirmwareDir,
-		FirmwareUpstream: testFirmwareUpstream.URL,
-		ProxyCACertPool:  proxyCAs,
+		HTTPPort:                      testHTTPPort,
+		TFTPPort:                      testTFTPPort,
+		ExternalURL:                   fmt.Sprintf("http://%s:%d", testServerIP, testHTTPPort),
+		FirmwareDir:                   testFirmwareDir,
+		FirmwareUpstream:              testFirmwareUpstream.URL,
+		ProxyCACertPool:               proxyCAs,
+		ProxyAllowPrivateDestinations: true,
 		BootEntries: []ipxe.BootEntry{
 			{
 				Name:        "alpine-test",
