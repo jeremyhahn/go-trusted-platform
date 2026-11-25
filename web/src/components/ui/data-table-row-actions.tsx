@@ -19,6 +19,10 @@ interface DataTableRowActionsProps<TData> {
     onClick: (row: TData) => void
     variant?: "default" | "destructive"
     separator?: boolean
+    /** Disables the item, e.g. when the server does not offer its op. */
+    disabled?: boolean
+    /** The item's tooltip, e.g. the reason it is disabled. */
+    title?: string
   }[]
 }
 
@@ -79,6 +83,8 @@ export function DataTableRowActions<TData>({
               {action.separator && <DropdownMenuSeparator />}
               <DropdownMenuItem
                 onClick={() => action.onClick(row)}
+                disabled={action.disabled}
+                title={action.title}
                 className={
                   action.variant === "destructive"
                     ? "text-destructive focus:text-destructive"

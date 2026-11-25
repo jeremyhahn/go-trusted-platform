@@ -59,6 +59,9 @@ import {
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast, useProvisioningSessions, useDeviceTemplates } from '@/hooks';
 import type { ProvisioningSession } from 'trusted-platform-sdk';
+import { Gated } from '@/components/features/capabilities/gated';
+import { useCapabilities } from '@/hooks/use-capabilities';
+import { assignTemplateHref } from '@/lib/provisioning-assign';
 
 // ============================================================================
 // Types
@@ -149,9 +152,7 @@ function AssignTemplateDialog({ session, onClose, onAssign, isLoading }: AssignT
       });
       return;
     }
-    router.push(
-      `/devices/templates/${selectedTemplateId}/create-profile?ekSerial=${session.ek_serial ?? ''}&macAddress=${session.mac_address ?? ''}&sessionId=${session.id}`
-    );
+    router.push(assignTemplateHref(selectedTemplateId, session));
   };
 
   return (
@@ -233,15 +234,24 @@ export default function ProvisioningSessionsPage() {
   const [filters, setFilters] = useState<SessionFilters>({ status: 'all' });
   const [assignSession, setAssignSession] = useState<ProvisioningSession | null>(null);
 
-  const { sessions, isLoading, error, refetch, fulfill } = useProvisioningSessions();
+  const { loading: capsLoading, capability } = useCapabilities();
+  const listCap = capability('GET /api/v1/provisioning/sessions');
+  const fulfillCap = capability('POST /api/v1/provisioning/sessions/{sessionID}/fulfill');
+  // Ask for (and poll) the list only once the server has said it offers it.
+  const listOn = !capsLoading && listCap.enabled;
 
-  // Auto-refresh every 10 seconds
+  const { sessions, isLoading, error, refetch, fulfill } = useProvisioningSessions({
+    enabled: listOn,
+  });
+
+  // Auto-refresh every 10 seconds while the list is offered
   useEffect(() => {
+    if (!listOn) return;
     const interval = setInterval(() => {
       refetch();
     }, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [refetch]);
+  }, [refetch, listOn]);
 
   // Filtered sessions
   const filteredSessions = useMemo(() => {
@@ -294,6 +304,36 @@ export default function ProvisioningSessionsPage() {
     }
   };
 
+  const header = (
+    <div className="flex items-center justify-between">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Provisioning Sessions</h1>
+        <p className="text-muted-foreground">
+          Live dashboard of device provisioning sessions — auto-refreshes every 10 seconds
+        </p>
+      </div>
+      <Gated op="GET /api/v1/provisioning/sessions">
+        <Button variant="outline" onClick={() => refetch()} disabled={isLoading}>
+          <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+          Refresh
+        </Button>
+      </Gated>
+    </div>
+  );
+
+  if (!capsLoading && !listCap.enabled) {
+    return (
+      <div className="flex flex-col gap-6">
+        {header}
+        <Card data-testid="sessions-not-enabled">
+          <CardContent className="pt-6 text-sm text-muted-foreground">
+            Session lists are not enabled on this server: {listCap.reason ?? 'not offered'}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   if (error) {
     return (
       <div className="container mx-auto py-6">
@@ -302,14 +342,16 @@ export default function ProvisioningSessionsPage() {
           <AlertTitle>Error Loading Sessions</AlertTitle>
           <AlertDescription>
             {error.message}
-            <Button
-              variant="outline"
-              size="sm"
-              className="ml-4"
-              onClick={() => refetch()}
-            >
-              Retry
-            </Button>
+            <Gated op="GET /api/v1/provisioning/sessions">
+              <Button
+                variant="outline"
+                size="sm"
+                className="ml-4"
+                onClick={() => refetch()}
+              >
+                Retry
+              </Button>
+            </Gated>
           </AlertDescription>
         </Alert>
       </div>
@@ -319,18 +361,7 @@ export default function ProvisioningSessionsPage() {
   return (
     <div className="flex flex-col gap-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Provisioning Sessions</h1>
-          <p className="text-muted-foreground">
-            Live dashboard of device provisioning sessions — auto-refreshes every 10 seconds
-          </p>
-        </div>
-        <Button variant="outline" onClick={() => refetch()} disabled={isLoading}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
-      </div>
+      {header}
 
       {/* Statistics Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -461,7 +492,10 @@ export default function ProvisioningSessionsPage() {
                 filteredSessions.map((session) => {
                   const status = getSessionStatus(session);
                   return (
-                    <TableRow key={session.id}>
+                    <TableRow
+                      key={session.id}
+                      data-testid={`provisioning-session-${session.id}`}
+                    >
                       <TableCell>
                         <span
                           className="font-mono text-sm cursor-pointer hover:underline"
@@ -509,7 +543,12 @@ export default function ProvisioningSessionsPage() {
                             </DropdownMenuItem>
                             {status === 'pending' && (
                               <DropdownMenuItem
-                                onClick={() => setAssignSession(session)}
+                                disabled={!fulfillCap.enabled}
+                                title={fulfillCap.enabled ? undefined : fulfillCap.reason}
+                                onClick={() => {
+                                  if (!fulfillCap.enabled) return;
+                                  setAssignSession(session);
+                                }}
                               >
                                 <CheckCircle2 className="mr-2 h-4 w-4" />
                                 Assign Template

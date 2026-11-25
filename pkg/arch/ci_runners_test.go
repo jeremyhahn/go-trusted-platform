@@ -123,7 +123,7 @@ func runnerProblems(body []byte) []string {
 		}
 		// A self-hosted runner is persistent: fork pull requests must
 		// never reach it, so the job's if: carries the same-repository guard.
-		if j.runsOn != nil && (j.runsOn.Kind != yaml.ScalarNode || (j.runsOn.Value != hostedRunner && !isSelectionRunsOn(j.runsOn.Value) && !(j.name == "preflight" && j.runsOn.Value == selectionPreflight))) &&
+		if j.runsOn != nil && (j.runsOn.Kind != yaml.ScalarNode || (j.runsOn.Value != hostedRunner && !isSelectionRunsOn(j.runsOn.Value) && (j.name != "preflight" || j.runsOn.Value != selectionPreflight))) &&
 			!strings.Contains(j.cond, sameRepoExpr) {
 			problems = append(problems, where+": self-hosted runner without the fork guard")
 		}
@@ -166,6 +166,28 @@ func readCI(t *testing.T) []byte {
 func TestCIRunsHostedFirst(t *testing.T) {
 	for _, p := range runnerProblems(readCI(t)) {
 		t.Error(p)
+	}
+}
+
+// TestWebE2EPlaywrightHostOverride pins the web-e2e job's Playwright host
+// override (DS-10151): ubuntu-latest is the 26.04 image, for which the pinned
+// Playwright has no chromium build, so the job installs and runs the 24.04 one.
+func TestWebE2EPlaywrightHostOverride(t *testing.T) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(readCI(t), &doc); err != nil || len(doc.Content) == 0 {
+		t.Fatalf("ci.yml does not parse: %s", errString(err))
+	}
+	job := mapValue(mapValue(doc.Content[0], "jobs"), "web-e2e")
+	if job == nil {
+		t.Fatal("ci.yml has no web-e2e job")
+	}
+	const key, want = "PLAYWRIGHT_HOST_PLATFORM_OVERRIDE", "ubuntu24.04-x64"
+	v := mapValue(mapValue(job, "env"), key)
+	if v == nil {
+		t.Fatalf("web-e2e env has no %s; want %q", key, want)
+	}
+	if v.Value != want {
+		t.Fatalf("web-e2e env %s = %q, want %q", key, v.Value, want)
 	}
 }
 
