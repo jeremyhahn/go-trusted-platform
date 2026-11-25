@@ -2,7 +2,7 @@ ARG BASE_IMAGE="golang:bookworm"
 
 FROM $BASE_IMAGE
 
-LABEL maintainer="Jeremy Hahn <mail@jeremyhahn.com>"
+LABEL maintainer="Jeremy Hahn <maintainer@example.com>"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ARG SRC_DIR=.
