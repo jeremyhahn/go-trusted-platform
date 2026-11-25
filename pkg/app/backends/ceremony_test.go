@@ -286,17 +286,18 @@ func TestMapCeremonyState(t *testing.T) {
 
 func TestThresholdQuorum(t *testing.T) {
 	cases := []struct {
-		in   string
-		want int
+		in    string
+		want  int
+		total int
 	}{
-		{"3-of-5", 3},
-		{"2-of-3", 2},
-		{"2-of-2", 2},
-		{"10-of-25", 10},
+		{"3-of-5", 3, 5},
+		{"2-of-3", 2, 3},
+		{"2-of-2", 2, 2},
+		{"10-of-25", 10, 25},
 	}
 	for _, tc := range cases {
-		if got, err := thresholdQuorum(tc.in); got != tc.want || err != nil {
-			t.Errorf("thresholdQuorum(%q) = %d, %v; want %d, nil", tc.in, got, err, tc.want)
+		if got, total, err := thresholdQuorum(tc.in); got != tc.want || total != tc.total || err != nil {
+			t.Errorf("thresholdQuorum(%q) = %d, %d, %v; want %d, %d, nil", tc.in, got, total, err, tc.want, tc.total)
 		}
 	}
 }
@@ -304,11 +305,11 @@ func TestThresholdQuorum(t *testing.T) {
 // TestThresholdQuorum_Malformed falls back to zero, the ceremony's
 // single-admin mode, for any spec that is not "M-of-N".
 func TestThresholdQuorum_Malformed(t *testing.T) {
-	if got, err := thresholdQuorum(""); got != 0 || err != nil {
-		t.Errorf("thresholdQuorum(\"\") = %d, %v; want 0, nil (single-admin)", got, err)
+	if got, total, err := thresholdQuorum(""); got != 0 || total != 0 || err != nil {
+		t.Errorf("thresholdQuorum(\"\") = %d, %d, %v; want 0, 0, nil (single-admin)", got, total, err)
 	}
 	for _, in := range []string{"garbage", "x-of-5", "-1-of-3", "3of5", "0-of-3", "4-of-3", "+3-of-5", "3-of-x", "1-of-5", "1-of-1", "2-of-1"} {
-		got, err := thresholdQuorum(in)
+		got, _, err := thresholdQuorum(in)
 		var bad *ErrInvalidCeremonyThreshold
 		if !errors.As(err, &bad) {
 			t.Errorf("thresholdQuorum(%q) = %d, %v; want *ErrInvalidCeremonyThreshold", in, got, err)
@@ -440,10 +441,11 @@ func TestCeremonyBackend_Initialize_RefusesOfficerCountOtherThanN(t *testing.T) 
 		name      string
 		threshold string
 		officers  int
+		want      int
 	}{
-		{"2-of-5 with two officers", "2-of-5", 2},
-		{"2-of-3 with four officers", "2-of-3", 4},
-		{"single-admin with one officer", "", 1},
+		{"2-of-5 with two officers", "2-of-5", 2, 5},
+		{"2-of-3 with four officers", "2-of-3", 4, 3},
+		{"single-admin with one officer", "", 1, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -461,8 +463,12 @@ func TestCeremonyBackend_Initialize_RefusesOfficerCountOtherThanN(t *testing.T) 
 				Threshold: tc.threshold,
 				Officers:  officers(tc.officers),
 			})
-			if err == nil {
-				t.Fatalf("Initialize(%q, %d officers) succeeded, want a refusal", tc.threshold, tc.officers)
+			var mismatch *ErrCeremonyOfficerCount
+			if !errors.As(err, &mismatch) {
+				t.Fatalf("Initialize(%q, %d officers) error = %v, want *ErrCeremonyOfficerCount", tc.threshold, tc.officers, err)
+			}
+			if mismatch.Want != tc.want || mismatch.Got != tc.officers {
+				t.Errorf("ErrCeremonyOfficerCount = %+v, want Want=%d Got=%d", *mismatch, tc.want, tc.officers)
 			}
 			if len(calls) != 0 {
 				t.Errorf("calls = %v, want none: an officer count other than N must be refused before any minting or ceremony call", calls)
