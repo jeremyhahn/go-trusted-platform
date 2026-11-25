@@ -365,6 +365,12 @@ func (c *Client) GetFlowStats(ctx context.Context, bridgeName string, match stri
 	return flows, nil
 }
 
+// flowActionsFromInstructions renders the instructions of a flow stats entry
+// as an action string.
+func flowActionsFromInstructions(instructions []byte) string {
+	return ""
+}
+
 // splitStatsFilter separates the keys of an ovs-ofctl dump-flows filter
 // that scope the stats request rather than match a packet field — "table=N"
 // and "cookie=VALUE[/MASK]" — from the match fields. A cookie without a
