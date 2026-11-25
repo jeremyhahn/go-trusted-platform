@@ -253,7 +253,7 @@ func buildChallengeMap(challenges []string, ca tcgEnrollmentCA) map[string]quicb
 		switch challengeType {
 		case "http-01":
 			challengeMap["http-01"] = func(resolver *net.Resolver, caInterface quicbaassdk.ACMECertificateAuthority, authzValue, challengePort, challengeToken, expectedKeyAuth string) error {
-				return quicbaassdk.ACMEVerifyHTTP01(resolver, authzValue, challengePort, challengeToken, expectedKeyAuth)
+				return quicbaassdk.ACMEVerifyHTTP01(quicbaassdk.NewACMEChallengeClient(quicbaassdk.ACMEChallengeClientConfig{Resolver: resolver}), authzValue, challengePort, challengeToken, expectedKeyAuth)
 			}
 		case "dns-01":
 			challengeMap["dns-01"] = func(resolver *net.Resolver, caInterface quicbaassdk.ACMECertificateAuthority, authzValue, challengePort, challengeToken, expectedKeyAuth string) error {
@@ -261,7 +261,7 @@ func buildChallengeMap(challenges []string, ca tcgEnrollmentCA) map[string]quicb
 			}
 		case "enroll-01":
 			challengeMap["enroll-01"] = func(resolver *net.Resolver, caInterface quicbaassdk.ACMECertificateAuthority, authzValue, challengePort, challengeToken, expectedKeyAuth string) error {
-				return quicbaassdk.ACMEVerifyEnroll01(resolver, ca, authzValue, challengePort, challengeToken, expectedKeyAuth)
+				return quicbaassdk.ACMEVerifyEnroll01(quicbaassdk.NewACMEChallengeClient(quicbaassdk.ACMEChallengeClientConfig{Resolver: resolver}), ca, authzValue, challengePort, challengeToken, expectedKeyAuth)
 			}
 		case "endorse-01":
 			// endorse-01 is used to provision EK certificates for TPMs without manufacturer certs.
