@@ -1,6 +1,6 @@
 # go-trusted-platform roadmap
 
-> **Status: REFERENCE** · Owner: Software Department · Last verified: 2026-10-16
+> **Status: REFERENCE** · Owner: Software Department · Last verified: 2026-11-22
 > The one roadmap of this repository. [docs/SPEC.md](docs/SPEC.md) specifies the features; this file orders them and names each by its SPEC table name. The issue tracker is the backlog. Older plans are in `docs/archive/`.
 
 ## Mission
@@ -42,7 +42,7 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **factory-image** — the Raspberry Pi factory image — [#667](../../issues/667) — open
 - **firmware** — AVR support on trusted-firmware — [#771](../../issues/771) — open
 - **device-enrollment** — AVR enrollment, device registry and gateway relay — [#696](../../issues/696) — open
-- **sdk** — the full composed go-quicbaas surface re-exported — [#704](../../issues/704) — open
+- **sdk** — the go-quicbaas services in the re-export manifest re-exported, the manifest enforced by an architecture test (ruling 1158) — [#1690](../../issues/1690) — open
 - **vpn** — the attested remote-access VPN: multi-protocol surface, CLI and client agent — [#584](../../issues/584) — open
 - **installer** — a booting node authenticates to the control-plane API with its IDevID over mTLS, the install-completion webhook included — [#238](../../issues/238) — open
 - **provisioning** — a bare machine becomes a trusted node with no login, E2E provisioning asserting what it reports — [#1694](../../issues/1694) — open
@@ -71,6 +71,7 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **remote-deploy** — remote agent deploy over QUIC, replacing SSH — [#54](../../issues/54) — open
 - **pi-node-roles** — control-plane, compute and gateway templates for raspberrypi — [Raspberry Pi templates](configs/platform/templates/dedicated/raspberrypi/README.md) — open
 - **ha-raft-template** — the three-node control plane — [configs/platform/templates/README.md](configs/platform/templates/README.md) — open
+- **platform-agents** — the infrastructure operations profile: the platform's own agents for trusted computing, provisioning, fleet monitoring and upgrades, on the go-quicbaas profile seam (ruling 1158); not started — [SPEC Features](docs/SPEC.md#features) — open
 - **sev-snp** — SEV-SNP guest attestation reports appraised as RFC 9334 Evidence, the report and AMD chain verified by go-xkms through the go-quicbaas SDK; not started — [SPEC Features](docs/SPEC.md#features) — blocked: waits for the HPE DL380 Gen10 Plus v2 to arrive
 - **sev-snp** — SEV-SNP guests on the compute QEMU/KVM provider, with the guest's vTPM bound to its SNP report; not started — [SPEC Features](docs/SPEC.md#features) — blocked: waits for the HPE DL380 Gen10 Plus v2 to arrive
 - **sev-snp** — the DL380 as the CI runner for the SEV-SNP suites; not started — [SPEC Features](docs/SPEC.md#features) — blocked: waits for the HPE DL380 Gen10 Plus v2 to arrive
