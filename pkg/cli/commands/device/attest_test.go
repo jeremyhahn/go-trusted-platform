@@ -42,7 +42,7 @@ func TestRunAttest(t *testing.T) {
 	path := writeEvidenceFile(t, testEvidence)
 
 	for _, format := range []cli.OutputFormat{cli.OutputFormatTable, cli.OutputFormatJSON} {
-		require.NoError(t, runAttest(flags(format), "42", path), "a negative verdict is not an error")
+		require.NoError(t, runAttest(flags(format), "42", path, ""), "a negative verdict is not an error")
 	}
 
 	srv.mu.Lock()
@@ -58,17 +58,17 @@ func TestRunAttest_Errors(t *testing.T) {
 
 	t.Run("InvalidID", func(t *testing.T) {
 		for _, id := range []string{"0", "abc", "-1"} {
-			assert.Equal(t, ErrInvalidDeviceID{ID: id}, runAttest(&cli.CommonFlags{}, id, path))
+			assert.Equal(t, ErrInvalidDeviceID{ID: id}, runAttest(&cli.CommonFlags{}, id, path, ""))
 		}
 	})
 
 	t.Run("EvidenceRequired", func(t *testing.T) {
-		assert.Equal(t, ErrAttestEvidenceRequired{}, runAttest(&cli.CommonFlags{}, "42", ""))
+		assert.Equal(t, ErrAttestEvidenceRequired{}, runAttest(&cli.CommonFlags{}, "42", "", ""))
 	})
 
 	t.Run("EvidenceUnreadable", func(t *testing.T) {
 		missing := filepath.Join(t.TempDir(), "absent.json")
-		err := runAttest(&cli.CommonFlags{}, "42", missing)
+		err := runAttest(&cli.CommonFlags{}, "42", missing, "")
 		var readErr ErrAttestEvidenceReadFailed
 		require.True(t, errors.As(err, &readErr), "err = %v", err)
 		assert.Equal(t, missing, readErr.Path)
@@ -77,11 +77,11 @@ func TestRunAttest_Errors(t *testing.T) {
 
 	t.Run("EvidenceEmpty", func(t *testing.T) {
 		empty := writeEvidenceFile(t, "")
-		assert.Equal(t, ErrAttestEvidenceEmpty{Path: empty}, runAttest(&cli.CommonFlags{}, "42", empty))
+		assert.Equal(t, ErrAttestEvidenceEmpty{Path: empty}, runAttest(&cli.CommonFlags{}, "42", empty, ""))
 	})
 
 	t.Run("UnknownDevice", func(t *testing.T) {
-		err := runAttest(f, "4242", path)
+		err := runAttest(f, "4242", path, "")
 		assert.Equal(t, ErrDeviceNotFound{ID: 4242}, err)
 	})
 
@@ -89,7 +89,7 @@ func TestRunAttest_Errors(t *testing.T) {
 		srv.mu.Lock()
 		srv.fail = status.Error(codes.Unavailable, "verifier not configured")
 		srv.mu.Unlock()
-		err := runAttest(f, "42", path)
+		err := runAttest(f, "42", path, "")
 		var attestErr ErrAttestFailed
 		require.True(t, errors.As(err, &attestErr), "err = %v", err)
 		assert.Equal(t, uint64(42), attestErr.ID)

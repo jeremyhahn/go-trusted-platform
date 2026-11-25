@@ -904,7 +904,18 @@ func (p *MCPServiceProvider) DeviceUpdate(ctx context.Context, deviceID string, 
 // so the MCP transport can neither overwrite a device's enrolled attestation
 // material from caller-supplied evidence nor report a verdict the other
 // transports would not reach.
-func (p *MCPServiceProvider) DeviceAttest(ctx context.Context, deviceID string, evidence []byte) (interface{}, error) {
+//
+// challengeID names a challenge from DeviceAttestChallenge. When deviceID
+// and evidence are set, the challenge is checked and consumed first, by the
+// same checkAttestChallenge as AttestDevice, so a challenge is used up on
+// the first attempt whatever the verdict. An empty deviceID or evidence
+// keeps the verifier's own refusal.
+func (p *MCPServiceProvider) DeviceAttest(ctx context.Context, deviceID string, evidence []byte, challengeID string) (interface{}, error) {
+	if deviceID != "" && len(evidence) > 0 {
+		if err := p.checkAttestChallenge(ctx, deviceID, evidence, challengeID); err != nil {
+			return nil, err
+		}
+	}
 	verifier := NewDeviceQuoteVerifier(p.deviceService, p.deviceProfileService, p.akTrust(), p.deviceVerdicts, p.logger)
 	result, err := verifier.Verify(ctx, deviceID, evidence)
 	if err != nil {
@@ -931,6 +942,31 @@ func (p *MCPServiceProvider) DeviceRecordAttestCert(ctx context.Context, deviceI
 // satisfies it.
 type AttestChallengeIssuer interface {
 	IssueAttestationChallenge(ctx context.Context, req *platformv1.IssueAttestationChallengeRequest) (*platformv1.IssueAttestationChallengeResponse, error)
+}
+
+// attestChallengeChecker checks and consumes the challenge an attest request
+// names. *DeviceGRPCService satisfies it, so the MCP check is the one gRPC,
+// Unix, QUIC and REST run.
+type attestChallengeChecker interface {
+	checkAttestChallenge(ctx context.Context, req *platformv1.AttestDeviceRequest) error
+}
+
+// checkAttestChallenge runs the challenge service's check over the MCP
+// attest arguments. With no challenge service able to check, a named
+// challenge answers codes.Unavailable and no challenge passes.
+func (p *MCPServiceProvider) checkAttestChallenge(ctx context.Context, deviceID string, evidence []byte, challengeID string) error {
+	checker, ok := p.attestChallengeIssuer.(attestChallengeChecker)
+	if !ok {
+		if challengeID != "" {
+			return status.Error(codes.Unavailable, "attestation challenges are not configured on this daemon")
+		}
+		return nil
+	}
+	return checker.checkAttestChallenge(ctx, &platformv1.AttestDeviceRequest{
+		DeviceId:    deviceID,
+		Evidence:    evidence,
+		ChallengeId: challengeID,
+	})
 }
 
 // attestChallengeIssuerOf returns svc as an AttestChallengeIssuer, or a nil

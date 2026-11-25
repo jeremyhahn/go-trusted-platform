@@ -224,6 +224,20 @@ func WithDeviceAttestChallengeRequired() DeviceGRPCOption {
 	return func(s *DeviceGRPCService) { s.challengeRequired = true }
 }
 
+// withDeviceAttestChallengesOf makes the service share src's challenge store
+// and challenge requirement. QUIC's delegate uses it to share the daemon's
+// store, so a challenge is single use across every transport (#2136). A nil
+// src keeps the service's own store.
+func withDeviceAttestChallengesOf(src *DeviceGRPCService) DeviceGRPCOption {
+	return func(s *DeviceGRPCService) {
+		if src == nil {
+			return
+		}
+		s.challenges = src.challenges
+		s.challengeRequired = src.challengeRequired
+	}
+}
+
 // WithDeviceAttestChallengeStorage keeps issued attestation challenges in
 // an object store, so they survive a restart (#2136). A backend is honoured
 // once per process: the pinned object store has no atomic take or
@@ -246,6 +260,19 @@ func (s *DeviceGRPCService) IssueAttestationChallenge(
 ) (*platformv1.IssueAttestationChallengeResponse, error) {
 	if req.GetDeviceId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "device_id is required")
+	}
+	// The device is looked up before a nonce is minted, so every transport
+	// refuses an unknown device the way GetDevice does (NotFound) instead of
+	// issuing a challenge nothing can ever answer.
+	if s.deviceService == nil {
+		return nil, status.Error(codes.Unavailable, ErrServiceNotAvailable{Service: "device"}.Error())
+	}
+	deviceID, err := parseDeviceID(req.GetDeviceId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if _, err := s.deviceService.Get(ctx, deviceID); err != nil {
+		return nil, s.toGRPCError(err)
 	}
 	tenant, bound := callerTenant(ctx)
 	id, entry, err := s.challenges.issue(ctx, req.GetDeviceId(), tenant, bound)
