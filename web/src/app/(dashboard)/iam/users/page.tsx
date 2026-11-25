@@ -11,6 +11,8 @@ import React, { useState, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCapabilities } from '@/hooks/use-capabilities';
+import { Gated } from '@/components/features/capabilities/gated';
 import type {
   LegacyUser,
   LegacyRole,
@@ -32,17 +34,22 @@ export default function UsersPage() {
   const { tenantId, isLoading: authLoading } = useAuth();
   const [isFormOpen, setIsFormOpen] = useState(false);
   const iam = useIAM();
+  const { loading: capsLoading, capability } = useCapabilities();
+  const listCap = capability('GET /api/v1/iam/tenants/{tenant}/users');
+  const updateCap = capability('PUT /api/v1/iam/tenants/{tenant}/users/{id}');
+  const deleteCap = capability('DELETE /api/v1/iam/tenants/{tenant}/users/{id}');
 
-  // Fetch users using SDK
+  // Fetch users using SDK, once the server says it offers the list
   const {
     data: usersData,
     isLoading: usersLoading,
     error: usersError,
     refetch: refetchUsers,
   } = useApi(
-    () => tenantId ? iam.listUsers({ tenantId }) : Promise.resolve({ success: true, data: null }),
-    [tenantId],
+    () => tenantId && listCap.enabled ? iam.listUsers({ tenantId }) : Promise.resolve({ success: true, data: null }),
+    [tenantId, listCap.enabled],
     {
+      enabled: !capsLoading && listCap.enabled,
       onError: (err) => {
         toast({
           title: 'Error loading users',
@@ -303,6 +310,27 @@ export default function UsersPage() {
     );
   }
 
+  if (!capsLoading && !listCap.enabled) {
+    return (
+      <div className="container mx-auto py-6 space-y-6">
+        <div className="space-y-1">
+          <h1 className="text-3xl font-bold tracking-tight">Users</h1>
+          <p className="text-muted-foreground">
+            Manage user accounts and their role assignments
+          </p>
+        </div>
+        <Card data-testid="users-not-enabled">
+          <CardHeader>
+            <CardTitle>Users are not enabled on this server</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">{listCap.reason}</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="container mx-auto py-6 space-y-6">
       {/* Page Header */}
@@ -313,10 +341,12 @@ export default function UsersPage() {
             Manage user accounts and their role assignments
           </p>
         </div>
-        <Button onClick={() => setIsFormOpen(true)}>
-          <Plus className="mr-2 h-4 w-4" />
-          Add User
-        </Button>
+        <Gated op="POST /api/v1/iam/tenants/{tenant}/users">
+          <Button onClick={() => setIsFormOpen(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            Add User
+          </Button>
+        </Gated>
       </div>
 
       {/* Stats Cards */}
@@ -365,6 +395,7 @@ export default function UsersPage() {
             onDisable={handleDisable}
             onDelete={handleDelete}
             onBulkDelete={handleBulkDelete}
+            gates={{ edit: updateCap, disable: updateCap, remove: deleteCap }}
           />
         </CardContent>
       </Card>

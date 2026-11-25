@@ -68,4 +68,7 @@ export type { UseDeviceTemplateResult } from './use-device-template.js';
 
 // Provisioning Session hooks
 export { useProvisioningSessions } from './use-provisioning-session.js';
-export type { UseProvisioningSessionResult } from './use-provisioning-session.js';
+export type {
+  UseProvisioningSessionResult,
+  UseProvisioningSessionsOptions,
+} from './use-provisioning-session.js';

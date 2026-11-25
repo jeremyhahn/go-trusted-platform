@@ -72,6 +72,7 @@ func main() {
 	// diskless-nbd node; these flags are ignored otherwise.
 	nbdListen := flag.String("nbd-listen", "", "NBD-over-TLS listen address (default: dhcp-server-ip:10809)")
 	nbdVolumeDir := flag.String("nbd-volume-dir", "", "directory holding one NBD root volume per diskless-nbd node (default: data-dir/nbd)")
+	nbdStorageClass := flag.String("nbd-storage-class", "", "storage class whose provider holds the NBD root volumes (default: the volume config's default class, general: local files under nbd-volume-dir)")
 	nbdVolumeSize := flag.Int64("nbd-volume-size", 0, "size in bytes of a new NBD root volume, a multiple of 512 (required for diskless-nbd nodes)")
 	nbdCAFile := flag.String("nbd-ca-file", "", "platform CA bundle that verifies NBD client IDevIDs (required for diskless-nbd nodes)")
 	nbdCert := flag.String("nbd-cert", "", "NBD server TLS certificate (required for diskless-nbd nodes)")
@@ -126,12 +127,13 @@ func main() {
 			DNS:        dnsServers,
 		},
 		NBD: container.NBDConfig{
-			ListenAddr: *nbdListen,
-			VolumeDir:  *nbdVolumeDir,
-			VolumeSize: *nbdVolumeSize,
-			CAFile:     *nbdCAFile,
-			CertFile:   *nbdCert,
-			KeyFile:    *nbdKey,
+			ListenAddr:   *nbdListen,
+			VolumeDir:    *nbdVolumeDir,
+			StorageClass: *nbdStorageClass,
+			VolumeSize:   *nbdVolumeSize,
+			CAFile:       *nbdCAFile,
+			CertFile:     *nbdCert,
+			KeyFile:      *nbdKey,
 		},
 	}
 
