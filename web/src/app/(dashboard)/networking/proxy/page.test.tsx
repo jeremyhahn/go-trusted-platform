@@ -60,6 +60,12 @@ async function renderPage() {
 async function renderLoaded() {
   await renderPage();
   await within(await screen.findByTestId('proxy-routes')).findByText('r1');
+  await waitFor(() => expect(document.querySelector('[title="checking server capabilities"]')).toBeNull());
+  // The list can load before the capabilities read: the controls stay
+  // disabled until it settles, and a click before then opens nothing.
+  await waitFor(() => expect(screen.queryAllByTitle('checking server capabilities')).toHaveLength(0), {
+    timeout: 5000,
+  });
 }
 
 async function click(name: string) {
@@ -134,7 +140,7 @@ describe('ProxyRoutesPage', () => {
     await renderLoaded();
 
     await click('Edit r1');
-    const id = (await screen.findByLabelText('Route ID')) as HTMLInputElement;
+    const id = (await screen.findByLabelText('Route ID', {}, { timeout: 5000 })) as HTMLInputElement;
     expect(id.disabled).toBe(true);
     expect(id.value).toBe('r1');
     type('Path prefix', '/v3');
@@ -155,12 +161,12 @@ describe('ProxyRoutesPage', () => {
     await renderLoaded();
 
     await click('Delete r1');
-    await screen.findByText('Delete route r1? Traffic it matches will no longer be proxied.');
+    await screen.findByText('Delete route r1? Traffic it matches will no longer be proxied.', {}, { timeout: 5000 });
     await click('Cancel');
     expect(count(sent, 'DELETE', '/api/v1/proxy/routes/r1')).toBe(0);
 
     await click('Delete r1');
-    const dialog = within(await screen.findByRole('dialog'));
+    const dialog = within(await screen.findByRole('dialog', {}, { timeout: 5000 }));
     await act(async () => {
       fireEvent.click(dialog.getByRole('button', { name: 'Delete' }));
     });

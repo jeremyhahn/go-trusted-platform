@@ -174,9 +174,9 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `ConfigDeliveryService.FetchConfig` | - | - | - | - | not-UI: device-side pre-enrollment protocol |
 | `ConfigDeliveryService.SignDigest` | - | - | - | - | not-UI: device-side pre-enrollment protocol |
 | `ConfigDeliveryService.PollSession` | - | - | - | - | not-UI: device-side pre-enrollment protocol |
-| `ConfigDeliveryService.FulfillSession` | - | `(dashboard)/provisioning/sessions/[sessionId]/page.tsx` | - | - | partial |
-| `ConfigDeliveryService.ListSessions` | - | `(dashboard)/provisioning/sessions/page.tsx` | - | `provisioning.spec.ts` | covered |
-| `ConfigDeliveryService.GetSession` | - | `(dashboard)/provisioning/sessions/[sessionId]/page.tsx` | - | - | partial |
+| `ConfigDeliveryService.FulfillSession` | `POST /provisioning/sessions/{sessionID}/fulfill` | `(dashboard)/provisioning/sessions/[sessionId]/page.tsx` | - | `real-server/provisioning-sessions.spec.ts` | covered |
+| `ConfigDeliveryService.ListSessions` | `GET /provisioning/sessions` | `(dashboard)/provisioning/sessions/page.tsx` | - | `real-server/provisioning-sessions.spec.ts` | covered |
+| `ConfigDeliveryService.GetSession` | `GET /provisioning/sessions/{sessionID}` | `(dashboard)/provisioning/sessions/[sessionId]/page.tsx` | - | `real-server/provisioning-sessions.spec.ts` | covered |
 
 ## PlatformDaemon (`daemon.proto`)
 
@@ -463,16 +463,16 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `OverlayService.ListVTEPs` | `GET /vteps` | - | - | - | missing |
-| `OverlayService.GetVTEP` | `GET /vteps/{nodeId}` | - | - | - | missing |
-| `OverlayService.CreateVNI` | `POST /vnis` | `(dashboard)/networking/overlays/page.tsx` | - | `networking.spec.ts` | covered |
-| `OverlayService.DeleteVNI` | `DELETE /vnis/{vni:[0-9]+}` | `(dashboard)/networking/overlays/page.tsx` (read-only) | - | - | partial |
-| `OverlayService.ListVNIs` | `GET /vnis` | `(dashboard)/networking/overlays/page.tsx` | - | `networking.spec.ts` | covered |
-| `OverlayService.ListTunnels` | `GET /tunnels` | - | - | - | missing |
-| `OverlayService.GetTunnelStats` | `GET /tunnels/stats` | - | - | - | missing |
-| `OverlayService.ListRemoteMACs` | - | - | - | - | missing |
-| `OverlayService.ForgetMAC` | `DELETE /macs` | - | - | - | missing |
-| `OverlayService.GetOverlayStatus` | - | - | - | - | missing |
+| `OverlayService.ListVTEPs` | `GET /vteps` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
+| `OverlayService.GetVTEP` | `GET /vteps/{nodeId}` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
+| `OverlayService.CreateVNI` | `POST /vnis` | `(dashboard)/networking/overlays/page.tsx` | - | `real-server/overlay-vnis.spec.ts` | covered |
+| `OverlayService.DeleteVNI` | `DELETE /vnis/{vni:[0-9]+}` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
+| `OverlayService.ListVNIs` | `GET /vnis` | `(dashboard)/networking/overlays/page.tsx` | - | `real-server/overlay-vnis.spec.ts` | covered |
+| `OverlayService.ListTunnels` | `GET /tunnels` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
+| `OverlayService.GetTunnelStats` | `GET /tunnels/stats` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
+| `OverlayService.ListRemoteMACs` | `GET /macs` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
+| `OverlayService.ForgetMAC` | `DELETE /macs` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
+| `OverlayService.GetOverlayStatus` | `GET /status` | `(dashboard)/networking/overlays/vteps/page.tsx` | - | `real-server/overlay-vteps.spec.ts` | covered |
 
 ## PIVService (`piv.proto`)
 
@@ -737,7 +737,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | CeremonyService | 7 | 0 | 0 | 7 | 0 | 0 |
 | ClusterService | 5 | 0 | 0 | 5 | 0 | 0 |
 | ComputeService | 37 | 14 | 2 | 16 | 5 | 0 |
-| ConfigDeliveryService | 7 | 1 | 2 | 0 | 4 | 0 |
+| ConfigDeliveryService | 7 | 3 | 0 | 0 | 4 | 0 |
 | PlatformDaemon | 19 | 1 | 6 | 8 | 4 | 0 |
 | DeviceService | 32 | 10 | 7 | 15 | 0 | 0 |
 | EABService | 11 | 0 | 0 | 11 | 0 | 0 |
@@ -751,7 +751,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | MessagingService | 8 | 0 | 0 | 0 | 0 | 8 |
 | NTPService | 3 | 0 | 0 | 3 | 0 | 0 |
 | ObjectStorageService | 8 | 0 | 0 | 0 | 0 | 8 |
-| OverlayService | 10 | 2 | 1 | 7 | 0 | 0 |
+| OverlayService | 10 | 10 | 0 | 0 | 0 | 0 |
 | PIVService | 8 | 0 | 0 | 0 | 8 | 0 |
 | DNSService | 13 | 3 | 5 | 5 | 0 | 0 |
 | ProvisioningGateway | 4 | 0 | 0 | 0 | 4 | 0 |
@@ -765,7 +765,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **122** | **61** | **265** | **50** | **31** |
+| **Total** | **529** | **146** | **58** | **244** | **50** | **31** |
 
 ## Proposed slices
 

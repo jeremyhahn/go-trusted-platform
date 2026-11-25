@@ -473,14 +473,40 @@ func (a *GRPCAdapter) FindMatchingProfile(ctx context.Context, opts FindMatching
 // a quote ever being verified (#403).
 func (a *GRPCAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error) {
 	resp, err := a.client.AttestDevice(ctx, &pb.AttestDeviceRequest{
-		DeviceId: opts.DeviceID,
-		Evidence: opts.Evidence,
+		DeviceId:    opts.DeviceID,
+		Evidence:    opts.Evidence,
+		ChallengeId: opts.ChallengeID,
 	})
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "AttestDevice", Err: err}
 	}
 
 	return attestResultFromProto(opts.DeviceID, resp), nil
+}
+
+// IssueAttestationChallenge asks DeviceService for a single-use attestation
+// challenge for the device (#2136).
+func (a *GRPCAdapter) IssueAttestationChallenge(ctx context.Context, opts IssueAttestationChallengeOptions) (*IssueAttestationChallengeResult, error) {
+	resp, err := a.client.IssueAttestationChallenge(ctx, &pb.IssueAttestationChallengeRequest{
+		DeviceId: opts.DeviceID,
+	})
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "IssueAttestationChallenge", Err: err}
+	}
+	return challengeResultFromProto(resp), nil
+}
+
+// challengeResultFromProto maps the platform.v1 challenge answer, shared by
+// the gRPC, Unix and MCP adapters, onto the suite's result.
+func challengeResultFromProto(resp *pb.IssueAttestationChallengeResponse) *IssueAttestationChallengeResult {
+	result := &IssueAttestationChallengeResult{
+		ChallengeID: resp.GetChallengeId(),
+		Nonce:       resp.GetNonce(),
+	}
+	if expires := resp.GetExpiresAt(); expires != nil {
+		result.ExpiresAt = expires.AsTime()
+	}
+	return result
 }
 
 // attestResultFromProto maps the gRPC verdict onto the suite's result shape.
