@@ -10,6 +10,7 @@ import type { ApiClient } from '../client/api-client.js';
 import type { Transport } from '../transport/transport.js';
 import type { ApiResponse } from '../types/api.js';
 import { BaseService } from './base-service.js';
+import { bmcProfileSegment, bmcSlotSegment } from './bmc-cert-service.js';
 
 /** IPMI privilege name a request carries. */
 export type BMCPrivilegeName = 'no-access' | 'callback' | 'user' | 'operator' | 'administrator';
@@ -66,7 +67,7 @@ export class BMCService extends BaseService {
    * `GET /bmc/{profileID}/users` (handler.go ListUsers)
    */
   async listUsers(profileId: string | number): Promise<ApiResponse<BMCUser[]>> {
-    return this.client.get<BMCUser[]>(this.buildUrl(`/${profileId}/users`));
+    return this.client.get<BMCUser[]>(this.buildUrl(`/${bmcProfileSegment(profileId)}/users`));
   }
 
   /**
@@ -85,7 +86,7 @@ export class BMCService extends BaseService {
       enabled: req.enabled ?? true,
       channel: req.channel ?? 1,
     };
-    return this.client.post<BMCUser>(this.buildUrl(`/${profileId}/users`), body);
+    return this.client.post<BMCUser>(this.buildUrl(`/${bmcProfileSegment(profileId)}/users`), body);
   }
 
   /**
@@ -93,7 +94,7 @@ export class BMCService extends BaseService {
    * `DELETE /bmc/{profileID}/users/{slot}` (handler.go DeleteUser)
    */
   async deleteUser(profileId: string | number, slot: number): Promise<ApiResponse<BMCStatusOK>> {
-    return this.client.delete<BMCStatusOK>(this.buildUrl(`/${profileId}/users/${slot}`));
+    return this.client.delete<BMCStatusOK>(this.buildUrl(`/${bmcProfileSegment(profileId)}/users/${bmcSlotSegment(slot)}`));
   }
 
   /**
@@ -105,7 +106,7 @@ export class BMCService extends BaseService {
     slot: number,
     password: string
   ): Promise<ApiResponse<BMCStatusOK>> {
-    return this.client.put<BMCStatusOK>(this.buildUrl(`/${profileId}/users/${slot}/password`), {
+    return this.client.put<BMCStatusOK>(this.buildUrl(`/${bmcProfileSegment(profileId)}/users/${bmcSlotSegment(slot)}/password`), {
       password,
     });
   }
@@ -120,7 +121,7 @@ export class BMCService extends BaseService {
     privilege: BMCPrivilegeName,
     channel = 1
   ): Promise<ApiResponse<BMCStatusOK>> {
-    return this.client.put<BMCStatusOK>(this.buildUrl(`/${profileId}/users/${slot}/privilege`), {
+    return this.client.put<BMCStatusOK>(this.buildUrl(`/${bmcProfileSegment(profileId)}/users/${bmcSlotSegment(slot)}/privilege`), {
       privilege,
       channel,
     });

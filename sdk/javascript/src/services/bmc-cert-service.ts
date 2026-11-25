@@ -85,6 +85,44 @@ export interface BMCReplaceWebCertRequest {
  * const restored = await bmcCert.restoreFactoryCert(7);
  * ```
  */
+const UINT64_MAX_DECIMAL = '18446744073709551615';
+
+/**
+ * Validate a BMC profile ID as a decimal uint64 and return it encoded as a
+ * URL path segment. The server routes only numeric profile IDs; refusing any
+ * other text here keeps a value such as `42/../43` from being normalized by
+ * the browser into a request on another BMC.
+ *
+ * @param profileId - The BMC profile ID
+ * @returns The encoded path segment
+ * @throws TypeError when the ID is not a decimal uint64
+ */
+export function bmcProfileSegment(profileId: string | number): string {
+  const text = String(profileId);
+  if (
+    !/^(0|[1-9][0-9]{0,19})$/.test(text) ||
+    (text.length === UINT64_MAX_DECIMAL.length && text > UINT64_MAX_DECIMAL)
+  ) {
+    throw new TypeError(`invalid BMC profile ID: ${JSON.stringify(text)}`);
+  }
+  return encodeURIComponent(text);
+}
+
+/**
+ * Validate a BMC user slot as an integer 0..255 and return it as a URL path
+ * segment.
+ *
+ * @param slot - The user slot
+ * @returns The encoded path segment
+ * @throws TypeError when the slot is not an integer 0..255
+ */
+export function bmcSlotSegment(slot: number): string {
+  if (!Number.isInteger(slot) || slot < 0 || slot > 255) {
+    throw new TypeError(`invalid BMC user slot: ${String(slot)}`);
+  }
+  return encodeURIComponent(String(slot));
+}
+
 export class BMCCertService extends BaseService {
   /**
    * Creates a new BMC certificate service instance
@@ -125,7 +163,7 @@ export class BMCCertService extends BaseService {
     if (options?.danePublish !== undefined) {
       body.dane_publish = options.danePublish;
     }
-    return this.client.post<BMCEnrollResult>(this.buildUrl(`/${profileId}/enroll`), body);
+    return this.client.post<BMCEnrollResult>(this.buildUrl(`/${bmcProfileSegment(profileId)}/enroll`), body);
   }
 
   /**
@@ -141,7 +179,7 @@ export class BMCCertService extends BaseService {
    * @returns The restore result
    */
   async restoreFactoryCert(profileId: string | number): Promise<ApiResponse<BMCRestoreResult>> {
-    return this.client.post<BMCRestoreResult>(this.buildUrl(`/${profileId}/cert/restore`));
+    return this.client.post<BMCRestoreResult>(this.buildUrl(`/${bmcProfileSegment(profileId)}/cert/restore`));
   }
 
   /**
@@ -160,7 +198,7 @@ export class BMCCertService extends BaseService {
     profileId: string | number,
     req: BMCReplaceWebCertRequest
   ): Promise<ApiResponse<{ status: string }>> {
-    return this.client.put<{ status: string }>(this.buildUrl(`/${profileId}/cert`), {
+    return this.client.put<{ status: string }>(this.buildUrl(`/${bmcProfileSegment(profileId)}/cert`), {
       cert_pem: req.certPem,
       key_pem: req.keyPem,
     });
