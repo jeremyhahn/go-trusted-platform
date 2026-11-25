@@ -1,7 +1,14 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  FACTOR_ADD_OP,
+  FACTOR_RELABEL_OP,
+  FACTOR_REMOVE_OP,
+  FACTOR_ROTATE_OP,
+} from "@/components/security/factor-list";
 import { AuthProvider } from "@/contexts/AuthContext";
+import { withControlPlane } from "@/test/control-plane-fetch";
 import type { AuthFactor } from "@/types/auth-factors";
 import AccountSecurityPage from "./page";
 
@@ -42,20 +49,49 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
+// The page's gated controls need a PlatformProvider (#2033 item 5).
 function renderPage() {
   return render(
-    <AuthProvider>
-      <AccountSecurityPage />
-    </AuthProvider>
+    withControlPlane(
+      <AuthProvider>
+        <AccountSecurityPage />
+      </AuthProvider>
+    )
   );
 }
 
+const ALL_FACTOR_OPS = [FACTOR_ADD_OP, FACTOR_RELABEL_OP, FACTOR_ROTATE_OP, FACTOR_REMOVE_OP];
+
+// The server's capabilities listing: only the ops in enabled are offered.
+function capabilitiesResponse(enabled: string[]): Response {
+  const capabilities = enabled.map((op) => ({ op, kind: "route", enabled: true }));
+  return jsonResponse(200, {
+    code: 200,
+    success: true,
+    payload: { capabilities, total: capabilities.length, enabled: capabilities.length },
+  });
+}
+
 describe("AccountSecurityPage factor loading", () => {
+  // fetchMock sees only the factor requests; the capabilities listing is
+  // answered by URL from offered, so every fetchMock assertion is about the
+  // factors path.
   const fetchMock = vi.fn<typeof fetch>();
+  let offered: string[] = ALL_FACTOR_OPS;
 
   beforeEach(() => {
     fetchMock.mockReset();
-    vi.stubGlobal("fetch", fetchMock);
+    offered = ALL_FACTOR_OPS;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url.includes("/api/v1/capabilities")) {
+          return capabilitiesResponse(offered);
+        }
+        return fetchMock(input, init);
+      })
+    );
   });
 
   afterEach(() => {
@@ -97,5 +133,18 @@ describe("AccountSecurityPage factor loading", () => {
     expect(await screen.findByText("Desk YubiKey")).toBeTruthy();
     expect(screen.queryByText("Failed to load factors")).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("disables Add factor when the server does not offer it", async () => {
+    document.cookie = `jwt=${userToken}; path=/`;
+    offered = [FACTOR_RELABEL_OP, FACTOR_ROTATE_OP, FACTOR_REMOVE_OP];
+    fetchMock.mockResolvedValue(jsonResponse(200, { factors: [factor], total: 1 }));
+
+    renderPage();
+
+    expect(await screen.findByText("Desk YubiKey")).toBeTruthy();
+    const add = screen.getByRole("button", { name: "Add authentication factor" }) as HTMLButtonElement;
+    await waitFor(() => expect(add.getAttribute("data-capability-enabled")).toBe("false"));
+    expect(add.disabled).toBe(true);
   });
 });

@@ -48,6 +48,10 @@ type fakeDHCPServer struct {
 	// reply to another transaction.
 	noise bool
 	seen  chan dhcpv4.MessageType
+	// hold, when set, keeps the server from reading its socket until it is
+	// closed: a server goroutine that a loaded runner has not scheduled yet.
+	// Requests wait in the socket buffer.
+	hold chan struct{}
 }
 
 // newFakeDHCPServer starts a server after applying configure, so the serving
@@ -67,8 +71,30 @@ func newFakeDHCPServer(t *testing.T, configure ...func(*fakeDHCPServer)) *fakeDH
 
 func (s *fakeDHCPServer) addr() net.Addr { return s.conn.LocalAddr() }
 
+// waitSeen receives n message types from seen. Every request a test counts
+// was sent before it calls waitSeen, so the receives only fail to complete
+// when fewer were sent: within bounds how long that failure takes to report.
+func (s *fakeDHCPServer) waitSeen(t *testing.T, n int, within time.Duration) []dhcpv4.MessageType {
+	t.Helper()
+	timer := time.NewTimer(within)
+	defer timer.Stop()
+	got := make([]dhcpv4.MessageType, 0, n)
+	for len(got) < n {
+		select {
+		case mt := <-s.seen:
+			got = append(got, mt)
+		case <-timer.C:
+			t.Fatalf("the fake DHCP server saw %d of %d messages within %s", len(got), n, within)
+		}
+	}
+	return got
+}
+
 func (s *fakeDHCPServer) serve() {
 	buf := make([]byte, 1500)
+	if s.hold != nil {
+		<-s.hold
+	}
 	for {
 		n, from, err := s.conn.ReadFrom(buf)
 		if err != nil {
@@ -325,7 +351,24 @@ func TestProbe_IgnoresOffersWithoutTheMatchString(t *testing.T) {
 	var timeout *TimeoutError
 	assert.ErrorAs(t, err, &timeout, "the bootloader keeps DISCOVERing until DHCP_TIMEOUT")
 	assert.NotNil(t, report, "the report so far comes back with the error")
-	assert.GreaterOrEqual(t, len(server.seen), 2, "DISCOVER was retried every DHCP_REQ_TIMEOUT")
+	// seen is filled by the server goroutine, so the test receives from it rather than reading its len.
+	seen := server.waitSeen(t, 2, 5*time.Second)
+	assert.Equal(t, []dhcpv4.MessageType{dhcpv4.MessageTypeDiscover, dhcpv4.MessageTypeDiscover}, seen, "DISCOVER was retried every DHCP_REQ_TIMEOUT")
+}
+
+func TestProbe_DiscoverRetriesAreCountedWhenTheServerLags(t *testing.T) {
+	hold := make(chan struct{})
+	server := newFakeDHCPServer(t, func(s *fakeDHCPServer) { s.hold = hold })
+	opts := loopbackOptions(t, server, 0)
+	opts.DHCPRequestTimeout = 100 * time.Millisecond
+	opts.DHCPTimeout = 350 * time.Millisecond
+
+	_, err := Probe(context.Background(), opts)
+	var timeout *TimeoutError
+	require.ErrorAs(t, err, &timeout, "a server that never answers in time ends the probe at DHCP_TIMEOUT")
+	close(hold)
+	seen := server.waitSeen(t, 2, 5*time.Second)
+	assert.Equal(t, []dhcpv4.MessageType{dhcpv4.MessageTypeDiscover, dhcpv4.MessageTypeDiscover}, seen, "DISCOVER was retried every DHCP_REQ_TIMEOUT")
 }
 
 func TestProbe_SilentNetworkTimesOut(t *testing.T) {

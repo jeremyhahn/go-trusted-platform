@@ -125,6 +125,7 @@ func (h *QUICServiceHandler) rebuildDeviceGRPC() {
 		WithDeviceLifecycle(h.lifecycle),
 		WithDeviceBootCA(h.bootCA),
 		WithDeviceTemplateService(h.templateService),
+		withDeviceAttestChallengesOf(h.attestChallengesOf),
 	)
 }
 

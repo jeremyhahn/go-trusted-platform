@@ -7,7 +7,7 @@
 # `if: always()` teardown runs only while the job process lives. When the host
 # or its Docker daemon dies mid-job, the job is gone and so is its teardown: the
 # compose stack stays behind, exited, with its networks and volumes (11 stacks
-# on ci-node-1 and ci-node-2 after the 2026-10-11/12 restarts). Nothing else
+# on two runner hosts after the 2026-10-11/12 restarts). Nothing else
 # removes them, so the first step of every integration job runs this.
 #
 # What it removes, on the Docker host the job talks to:

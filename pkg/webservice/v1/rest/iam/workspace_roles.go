@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	qberrors "github.com/jeremyhahn/go-quicbaas/pkg/errors"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 
@@ -56,12 +57,15 @@ func NewWorkspaceRoleResolver(client IAMClient) (*WorkspaceRoleResolver, error) 
 // principal the tenant holds but not as an active account is refused with
 // ErrInactiveAccount, as Principal refuses it at refresh (#646). Any other
 // failure is returned, so the caller refuses rather than guesses.
+//
+// Each stored role ID is named with GetRole (see roleNames); a transport
+// that does not route GetRole is named from the tenant's role list instead.
 func (r *WorkspaceRoleResolver) Roles(ctx context.Context, tenantID, subject string) ([]string, error) {
 	user, active, err := r.activeUser(ctx, tenantID, subject)
 	if err != nil {
 		return nil, err
 	}
-	if user == nil {
+	if user == nil || len(user.Roles) == 0 {
 		return nil, nil
 	}
 	if !active {
@@ -75,7 +79,9 @@ func (r *WorkspaceRoleResolver) Roles(ctx context.Context, tenantID, subject str
 // with GetRole, since the role listing answers only its first page, keeps a
 // reference that is already a role name, and returns an error for an ID the
 // tenant does not hold, never a guessed name. A user with no roles costs no
-// lookup.
+// lookup. A transport that does not route GetRole answers with an
+// unknown-method error; the references are then named from the tenant's
+// role list, with the same refusal of an ID the list does not hold.
 func (r *WorkspaceRoleResolver) roleNames(ctx context.Context, tenantID string, refs []string) ([]string, error) {
 	out := make([]string, 0, len(refs))
 	for _, ref := range refs {
@@ -85,10 +91,12 @@ func (r *WorkspaceRoleResolver) roleNames(ctx context.Context, tenantID string, 
 			continue
 		}
 		role, err := r.client.GetRole(ctx, tenantID, ref)
-		if sdkerrors.IsNotFound(err) || (err == nil && role == nil) {
+		switch {
+		case isRoleNotFound(err) || (err == nil && role == nil):
 			return nil, fmt.Errorf("iam: tenant %q holds no role %q", tenantID, ref)
-		}
-		if err != nil {
+		case err != nil && isUnknownMethod(err):
+			return r.namesFromRoleList(ctx, tenantID, refs)
+		case err != nil:
 			return nil, err
 		}
 		out = append(out, role.Name)
@@ -161,4 +169,59 @@ func (r *WorkspaceRoleResolver) userByEmail(ctx context.Context, tenantID, email
 			return r.client.ListUsers(ctx, tenantID, req)
 		},
 		iamuser.ByEmail(email))
+}
+
+// isRoleNotFound reports whether a GetRole error means the role does not
+// exist. The SDK transports answer a missing role with the SDK not-found
+// error; the embedded transport passes the server's iam.ErrRoleNotFound (a
+// go-quicbaas pkg/errors QBError with code ErrNotFound) through unchanged.
+func isRoleNotFound(err error) bool {
+	return sdkerrors.IsNotFound(err) || qberrors.IsNotFound(err)
+}
+
+// namesFromRoleList names refs from the tenant's role list for a transport
+// without GetRole. A reference that is not a UUID is already a role name; a
+// role ID the list does not hold is refused, as roleNames refuses it.
+func (r *WorkspaceRoleResolver) namesFromRoleList(ctx context.Context, tenantID string, refs []string) ([]string, error) {
+	namesByID, err := r.roleNamesByID(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if uuid.Validate(ref) != nil {
+			out = append(out, ref)
+			continue
+		}
+		name, ok := namesByID[ref]
+		if !ok {
+			return nil, fmt.Errorf("iam: tenant %q holds no role %q", tenantID, ref)
+		}
+		out = append(out, name)
+	}
+	return out, nil
+}
+
+// roleNamesByID reads every role tenantID holds, system roles included, and
+// maps each role's ID to its name. It pages the way tenantRoleIDs does.
+func (r *WorkspaceRoleResolver) roleNamesByID(ctx context.Context, tenantID string) (map[string]string, error) {
+	namesByID := make(map[string]string)
+	req := &iamsdk.ListRolesRequest{PageSize: rolesPageSize, IncludeSystem: true}
+	for {
+		resp, err := r.client.ListRoles(ctx, tenantID, req)
+		if err != nil {
+			return nil, err
+		}
+		if resp == nil {
+			return namesByID, nil
+		}
+		for _, role := range resp.Roles {
+			namesByID[role.ID] = role.Name
+		}
+		next := resp.Pagination.NextPageToken
+		if !resp.Pagination.HasMore || next == "" || next == req.PageToken {
+			return namesByID, nil
+		}
+		req.PageToken = next
+	}
 }

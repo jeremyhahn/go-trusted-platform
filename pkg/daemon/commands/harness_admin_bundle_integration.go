@@ -45,7 +45,7 @@ const (
 	harnessTenantBundleName = "tenant-client-bundle.pem"
 
 	// harnessTenantID is the fixed non-system tenant the tenant bundle's
-	// subject O names.
+	// subject OU (and O) names.
 	harnessTenantID = "harness-tenant"
 )
 

@@ -59,14 +59,18 @@ func (e ErrServerStartFailed) Unwrap() error {
 }
 
 // ErrInvalidServerConfig is returned when the server configuration is invalid.
+// Err, when set, is the cause, which errors.Is and errors.As reach.
 type ErrInvalidServerConfig struct {
 	Field  string
 	Reason string
+	Err    error
 }
 
 func (e ErrInvalidServerConfig) Error() string {
 	return fmt.Sprintf("container: invalid config: field %s: %s", e.Field, e.Reason)
 }
+
+func (e ErrInvalidServerConfig) Unwrap() error { return e.Err }
 
 // ErrManifestWrite is returned when writing the manifest to disk fails.
 type ErrManifestWrite struct {

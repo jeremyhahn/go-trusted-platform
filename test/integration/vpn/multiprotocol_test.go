@@ -143,8 +143,14 @@ func runConfiguredScenario(t *testing.T, ctx context.Context, cmd VPNCommands, t
 		if err != nil {
 			t.Fatalf("%s ListPeers: %v", cmd.Name(), err)
 		}
-		if !listsPeer(peers, deviceID) {
-			t.Fatalf("%s: tenant %s lists %v, want %s among them", cmd.Name(), tenantID, peers, deviceID)
+		listed := 0
+		for _, p := range peers {
+			if p.GetDeviceId() == deviceID {
+				listed++
+			}
+		}
+		if listed != 1 {
+			t.Fatalf("%s: tenant %s lists %v, want %s exactly once", cmd.Name(), tenantID, peers, deviceID)
 		}
 	})
 
@@ -171,15 +177,14 @@ func runConfiguredScenario(t *testing.T, ctx context.Context, cmd VPNCommands, t
 		if err != nil {
 			t.Fatalf("%s ListPosturePolicies: %v", cmd.Name(), err)
 		}
-		listed := false
+		listedPolicies := 0
 		for _, p := range policies {
 			if p.GetName() == policyName {
-				listed = true
-				break
+				listedPolicies++
 			}
 		}
-		if !listed {
-			t.Fatalf("%s: tenant %s lists policies %v, want %s among them", cmd.Name(), tenantID, policies, policyName)
+		if listedPolicies != 1 {
+			t.Fatalf("%s: tenant %s lists policies %v, want %s exactly once", cmd.Name(), tenantID, policies, policyName)
 		}
 
 		if err := cmd.DeletePosturePolicy(cctx, tenantID, policyName); err != nil {
