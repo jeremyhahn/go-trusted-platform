@@ -980,6 +980,7 @@ jobs:
       # from an image for the hours they take.
       - name: Lease the integration image
         run: |
+          # shellcheck disable=SC2119,SC2120 # image_lock takes an optional lock name: the pull step passes a per-digest one to the sourced copy
           lease="go-trusted-platform-ci-lease-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
           image_lock() {
             local lock=${1:-go-trusted-platform-ci-image-lock} base=go-trusted-platform-ci-image-lock:base held at t i
@@ -1702,6 +1703,7 @@ jobs:
       - name: Lease the integration image
         id: build
         run: |
+          # shellcheck disable=SC2119,SC2120 # image_lock takes an optional lock name: the pull step passes a per-digest one to the sourced copy
           lease="go-trusted-platform-ci-lease-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
           image_lock() {
             local lock=${1:-go-trusted-platform-ci-image-lock} base=go-trusted-platform-ci-image-lock:base held at t i
@@ -1960,6 +1962,7 @@ jobs:
       - name: Lease the integration image on this runner's daemon
         id: lease
         run: |
+          # shellcheck disable=SC2119,SC2120 # image_lock takes an optional lock name: the pull step passes a per-digest one to the sourced copy
           lease="go-trusted-platform-ci-lease-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
           image_lock() {
             local lock=${1:-go-trusted-platform-ci-image-lock} base=go-trusted-platform-ci-image-lock:base held at t i
@@ -2326,6 +2329,7 @@ jobs:
       # reused when the daemon holds its content tag and built once otherwise.
       - name: Lease the integration image
         run: |
+          # shellcheck disable=SC2119,SC2120 # image_lock takes an optional lock name: the pull step passes a per-digest one to the sourced copy
           lease="go-trusted-platform-ci-lease-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
           image_lock() {
             local lock=${1:-go-trusted-platform-ci-image-lock} base=go-trusted-platform-ci-image-lock:base held at t i
