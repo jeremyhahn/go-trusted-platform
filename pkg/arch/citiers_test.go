@@ -47,10 +47,12 @@ import (
 const (
 	ciWorkflowFile = ".github/workflows/ci.yml"
 	ciGateJobID    = "ci-gate"
-	// ciGateIf runs the gate after every job, failed or skipped, except on a
-	// schedule run the schedule guard found busy (v1.29.3): that run posts
-	// `skipped`, never a green nightly.
-	ciGateIf = "${{ always() && (github.event_name != 'schedule' || needs.preflight.outputs.verdict != 'busy') }}"
+	// ciGateIf runs the gate after every job, failed or skipped (v1.53): on a
+	// pull request always(), so a cancelled PR run still posts a red gate;
+	// off pull_request !cancelled(), so a main run a newer main push cancels
+	// posts no gate at all. Never on a schedule run the schedule guard found
+	// busy (v1.29.3): that run posts `skipped`, never a green nightly.
+	ciGateIf = "${{ (startsWith(github.event_name, 'pull_request') && always() || !cancelled()) && (github.event_name != 'schedule' || needs.preflight.outputs.verdict != 'busy') }}"
 
 	// scheduleGuardJobID is the job that, on a schedule run, reads whether a
 	// main push run is in flight and sets `verdict` (v1.29.3, ruling
@@ -188,14 +190,14 @@ const (
 	draftEnvValue = "${{ github.event.pull_request.draft == true }}"
 
 	// supersededGroup keys a run by workflow AND ref, so a push to a PR cancels
-	// only that PR's older run (#510). On main it keys by event and commit
-	// instead (ci-template v1.26.2, ruling 145), so each main run is its own
-	// group: the next push to main never cancels the run in progress
-	// (DS-3465), and a dispatch never shares a group with a push. A schedule
+	// only that PR's older run (#510). On main it keys by event alone
+	// (ci-template v1.53, `main-{event}`, ruling 1087): a newer main push
+	// cancels the older main run in progress, and a dispatch never shares a
+	// group with a push. A schedule
 	// run keys by repository alone, tested first (v1.29.3, ruling
 	// 255(10)/(11)(c)), so a repository has one schedule run at a time. Gitea
 	// 1.27.1 evaluates expressions in `group`, not in `cancel-in-progress`.
-	supersededGroup = "${{ github.workflow }}-${{ github.event_name == 'schedule' && format('schedule-{0}', github.repository) || github.ref == 'refs/heads/main' && format('main-{0}-{1}', github.event_name, github.sha) || github.ref }}"
+	supersededGroup = "${{ github.workflow }}-${{ github.event_name == 'schedule' && format('schedule-{0}', github.repository) || github.ref == 'refs/heads/main' && format('main-{0}', github.event_name) || github.ref }}"
 )
 
 // prTriggerTypes are ci.yml's pull_request activity types. `ci:full` takes
@@ -610,7 +612,7 @@ func ciTierFindings(wf ciWorkflow) []error {
 		guarded := scheduleGuardedIf[j.If]
 		// preflight (changes and the guard) cannot carry the guard; on bigdiskRoute,
 		// and only on it, a schedule run never reaches the pool.
-		routed := (j.ID == changesJobID || j.ID == scheduleGuardJobID) && j.RunsOn == bigdiskRoute
+		routed := (j.ID == changesJobID || j.ID == scheduleGuardJobID) && (j.RunsOn == bigdiskRoute || j.RunsOn == selectionPreflight)
 		if strings.Contains(j.RunsOn, bigdiskLabel) && !guarded && !routed {
 			fail(j.Line, "a bigdisk job's if: carries the schedule guard `("+scheduleGuardExpr+")`: without it a schedule run fills the runner while main is busy")
 		}
@@ -1158,6 +1160,7 @@ func TestCITierFindingsRejectEachInconsistency(t *testing.T) {
 		{"a full-tier job without the draft guard", "    if: " + fullTierIf + "\n    needs: lint", "    if: ${{ " + fullTierExpr + " }}\n    needs: lint", "race: if: "},
 		{"a gate that does not always run", "if: " + ciGateIf, `if: success()`, `if: is "success()"`},
 		{"a gate that runs on a busy schedule", "if: " + ciGateIf, `if: always()`, `if: is "always()"`},
+		{"a pull request gate that skips on cancel", "if: " + ciGateIf, "if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.preflight.outputs.verdict != 'busy') }}", `if: is "${{ !cancelled() && (github.event_name != 'schedule' || needs.preflight.outputs.verdict != 'busy') }}"`},
 		{"a bigdisk job without the schedule guard", "    if: " + prTierGuardedIf + "\n    needs: [preflight]", "    if: " + prTierIf + "\n    needs: [preflight]", "image: a bigdisk job's if: carries the schedule guard"},
 		{"a bigdisk job whose guard drifted", "needs.preflight.outputs.verdict == 'run') }}\n    needs: [preflight]", "needs.preflight.outputs.verdict != 'busy') }}\n    needs: [preflight]", "image: if: "},
 		{"a bigdisk job that does not need the schedule guard", "    needs: [preflight]\n    runs-on: ${{ github.server_url", "    needs: [lint]\n    runs-on: ${{ github.server_url", "image: its if: reads the schedule guard, so it needs preflight"},
@@ -1235,12 +1238,13 @@ func TestConcurrencyFindingsRejectAnUncancellableGroup(t *testing.T) {
 		{"a ref-only group lets a main push cancel main", supersededGroup, `${{ github.workflow }}-${{ github.ref }}`, "group must be"},
 		{"a sha-only group never supersedes a PR run", supersededGroup, `${{ github.workflow }}-${{ github.sha }}`, "group must be"},
 		{"a run_id group on main", supersededGroup, `${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}`, "group must be"},
-		{"a main group without the event", "format('main-{0}-{1}', github.event_name, github.sha)", "github.sha", "group must be"},
+		{"a main group without the event", "format('main-{0}', github.event_name)", "'main'", "group must be"},
+		{"a per-commit main group that never cancels an older main run", "format('main-{0}', github.event_name)", "format('main-{0}-{1}', github.event_name, github.sha)", "group must be"},
 		{"a per-commit group on a branch other than main", `'refs/heads/main'`, `'refs/heads/dev'`, "group must be"},
 		{"a per-ref group on main with a per-commit group elsewhere", supersededGroup, `${{ github.workflow }}-${{ github.ref != 'refs/heads/main' && github.sha || github.ref }}`, "group must be"},
-		{"a schedule run that takes a main or ref group", supersededGroup, `${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && format('main-{0}-{1}', github.event_name, github.sha) || github.ref }}`, "group must be"},
+		{"a schedule run that takes a main or ref group", supersededGroup, `${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && format('main-{0}', github.event_name) || github.ref }}`, "group must be"},
 		{"a schedule group keyed by commit", "format('schedule-{0}', github.repository)", "format('schedule-{0}-{1}', github.repository, github.sha)", "group must be"},
-		{"a schedule group tested after the main group", supersededGroup, `${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && format('main-{0}-{1}', github.event_name, github.sha) || github.event_name == 'schedule' && format('schedule-{0}', github.repository) || github.ref }}`, "group must be"},
+		{"a schedule group tested after the main group", supersededGroup, `${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && format('main-{0}', github.event_name) || github.event_name == 'schedule' && format('schedule-{0}', github.repository) || github.ref }}`, "group must be"},
 		{"no concurrency block", "concurrency:\n  group: " + supersededGroup + "\n  cancel-in-progress: true\n", "", "has no concurrency block"},
 		{"a labeled trigger", `ready_for_review]`, `ready_for_review, labeled]`, "types include labeled"},
 		{"an unlabeled trigger", `ready_for_review]`, `ready_for_review, unlabeled]`, "types include unlabeled"},

@@ -377,7 +377,7 @@ func (r *ToolRegistry) executeDeviceAttest(ctx context.Context, args map[string]
 		return nil, ErrInvalidArgument{Msg: "invalid evidence encoding", Cause: err}
 	}
 
-	result, err := r.service.DeviceAttest(ctx, deviceID, evidence)
+	result, err := r.service.DeviceAttest(ctx, deviceID, evidence, getString(args, "challenge_id"))
 	if err != nil {
 		return nil, err
 	}

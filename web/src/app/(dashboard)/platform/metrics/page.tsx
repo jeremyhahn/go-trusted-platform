@@ -37,6 +37,8 @@ import {
 } from "@/components/ui/select";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useApi, usePlatform, useToast } from "@/hooks";
+import { useCapabilities } from "@/hooks/use-capabilities";
+import { Gated } from "@/components/features/capabilities/gated";
 
 /**
  * Service metrics interface
@@ -192,6 +194,11 @@ export default function MetricsPage() {
   const [autoRefresh, setAutoRefresh] = React.useState(false);
   const [timeRange, setTimeRange] = React.useState<string>("1h");
   const [lastUpdate, setLastUpdate] = React.useState<Date>(new Date());
+  // #2033 item 5: each read runs only when the server offers its op.
+  const { loading: capsLoading, capability } = useCapabilities();
+  const metricsCap = capability("GET /api/v1/platform/metrics");
+  const systemCap = capability("GET /api/v1/platform/system");
+  const healthCap = capability("GET /api/v1/platform/health");
 
   // Fetch platform metrics
   const {
@@ -203,6 +210,7 @@ export default function MetricsPage() {
     () => platform.getMetrics({ includeHistory: false }),
     [],
     {
+      enabled: !capsLoading && metricsCap.enabled,
       onError: (err) => {
         toast({
           title: "Error loading metrics",
@@ -221,7 +229,8 @@ export default function MetricsPage() {
     data: systemData,
   } = useApi(
     () => platform.getSystemInfo(),
-    []
+    [],
+    { enabled: !capsLoading && systemCap.enabled }
   );
 
   // Fetch health for service metrics
@@ -229,7 +238,8 @@ export default function MetricsPage() {
     data: healthData,
   } = useApi(
     () => platform.getHealth({ includeServices: true }),
-    []
+    [],
+    { enabled: !capsLoading && healthCap.enabled }
   );
 
   const isLoading = metricsLoading;
@@ -275,21 +285,23 @@ export default function MetricsPage() {
           <AlertTitle>Error Loading Metrics</AlertTitle>
           <AlertDescription>
             {error.message}
-            <Button
-              variant="outline"
-              size="sm"
-              className="ml-4"
-              onClick={handleRefresh}
-            >
-              Retry
-            </Button>
+            <Gated op="GET /api/v1/platform/metrics">
+              <Button
+                variant="outline"
+                size="sm"
+                className="ml-4"
+                onClick={handleRefresh}
+              >
+                Retry
+              </Button>
+            </Gated>
           </AlertDescription>
         </Alert>
       </div>
     );
   }
 
-  if (isLoading && !metricsData) {
+  if ((capsLoading || isLoading) && !metricsData) {
     return (
       <div className="space-y-6">
         <PageHeader
@@ -331,22 +343,33 @@ export default function MetricsPage() {
               id="auto-refresh"
               checked={autoRefresh}
               onCheckedChange={setAutoRefresh}
+              disabled={!metricsCap.enabled}
+              title={metricsCap.enabled ? undefined : metricsCap.reason}
             />
             <Label htmlFor="auto-refresh" className="cursor-pointer">
               Auto-refresh
             </Label>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleRefresh}
-            disabled={isLoading}
-          >
-            <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
+          <Gated op="GET /api/v1/platform/metrics">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRefresh}
+              disabled={isLoading}
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          </Gated>
         </div>
       </PageHeader>
+
+      {!metricsCap.enabled && (
+        <div data-testid="platform-metrics-not-enabled" className="rounded-lg border border-border bg-card p-6">
+          <div className="font-medium">Platform metrics are not enabled on this server</div>
+          <p className="text-sm text-muted-foreground mt-1">{metricsCap.reason}</p>
+        </div>
+      )}
 
       {metrics && (
         <>

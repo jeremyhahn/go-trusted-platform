@@ -27,10 +27,12 @@ import (
 	"testing"
 	"time"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	certclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/certificate"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance/issuancetest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 )
@@ -164,10 +166,16 @@ func TestAdminBundleIssuer_MintsAdminClientCert(t *testing.T) {
 	if cert.Subject.CommonName != "admin" {
 		t.Errorf("CommonName = %q, want admin", cert.Subject.CommonName)
 	}
-	// The mTLS transports bind a certificate to the tenant its subject O
-	// names; the root admin must land in the system tenant.
 	if len(cert.Subject.Organization) != 1 || cert.Subject.Organization[0] != app.SystemTenantID {
 		t.Errorf("Organization = %v, want [%s]", cert.Subject.Organization, app.SystemTenantID)
+	}
+	// The mTLS transports bind a certificate to the tenant its subject OU
+	// names; the root admin must land in the system tenant.
+	if len(cert.Subject.OrganizationalUnit) != 1 || cert.Subject.OrganizationalUnit[0] != app.SystemTenantID {
+		t.Errorf("OrganizationalUnit = %v, want [%s]", cert.Subject.OrganizationalUnit, app.SystemTenantID)
+	}
+	if tenant, err := (&auth.MTLSAdapter{}).ExtractTenant(cert); err != nil || tenant != app.SystemTenantID {
+		t.Errorf("ExtractTenant = %q, %v; want %q", tenant, err, app.SystemTenantID)
 	}
 	if len(cert.ExtKeyUsage) != 1 || cert.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth {
 		t.Errorf("ExtKeyUsage = %v, want client auth only", cert.ExtKeyUsage)
@@ -263,8 +271,23 @@ func TestAdminBundleIssuer_SDKIssuerGetsTheAdminRequest(t *testing.T) {
 	if issuer.req.Organization != app.SystemTenantID {
 		t.Errorf("request Organization = %q, want the system tenant %q", issuer.req.Organization, app.SystemTenantID)
 	}
+	if issuer.req.OrganizationalUnit != app.SystemTenantID {
+		t.Errorf("request OrganizationalUnit = %q, want the system tenant %q", issuer.req.OrganizationalUnit, app.SystemTenantID)
+	}
 	if bundle.CertPEM != "cert" || bundle.KeyPEM != "key" {
 		t.Errorf("bundle = %+v, want the issuer's answer", bundle)
+	}
+}
+
+// The mTLS authenticator takes the tenant from the subject OU only
+// (#2020): the admin request must name the system tenant there.
+func TestAdminCertificateRequest_CarriesTheSystemTenantOU(t *testing.T) {
+	req := AdminCertificateRequest()
+	if req.OrganizationalUnit != app.SystemTenantID {
+		t.Errorf("OrganizationalUnit = %q, want %q", req.OrganizationalUnit, app.SystemTenantID)
+	}
+	if req.Organization != app.SystemTenantID {
+		t.Errorf("Organization = %q, want %q", req.Organization, app.SystemTenantID)
 	}
 }
 
@@ -306,5 +329,66 @@ func TestCertIssuerErrors_Messages(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("%T message %q does not contain %q", err, err.Error(), want)
 		}
+	}
+}
+
+// certCountingClient is an SDK client whose Certificate service counts the
+// IssueCertificate calls it receives.
+type certCountingClient struct {
+	quicbaassdk.Client
+	cert *countingCertService
+}
+
+func (c *certCountingClient) Security() quicbaassdk.SecurityService {
+	return &certOnlySecurity{cert: c.cert}
+}
+
+type certOnlySecurity struct {
+	quicbaassdk.SecurityService
+	cert *countingCertService
+}
+
+func (s *certOnlySecurity) Certificate() quicbaassdk.CertificateClient { return s.cert }
+
+type countingCertService struct {
+	certclient.Client
+	calls int
+}
+
+func (s *countingCertService) IssueCertificate(_ context.Context, _ *certclient.IssueCertificateRequest) (*certclient.IssueCertificateResponse, error) {
+	s.calls++
+	return &certclient.IssueCertificateResponse{CertificatePEM: "cert", PrivateKeyPEM: "key"}, nil
+}
+
+// The pinned SDK Certificate service drops the subject OU, so the SDK
+// issuer must refuse an OU request instead of minting a certificate the
+// mTLS authenticator (#2020) can never accept.
+func TestSDKCertIssuer_RefusesAnOURequest(t *testing.T) {
+	cert := &countingCertService{}
+	issuer := PlatformCertIssuer(nil, &certCountingClient{cert: cert})
+	_, err := issuer.IssueCertificate(context.Background(), AdminCertificateRequest())
+	var ouErr *ErrCertOUUnsupported
+	if !errors.As(err, &ouErr) {
+		t.Fatalf("err = %v, want *ErrCertOUUnsupported", err)
+	}
+	if !strings.Contains(err.Error(), "local CA") {
+		t.Errorf("err = %q, want it to name the local CA requirement", err)
+	}
+	if cert.calls != 0 {
+		t.Errorf("SDK IssueCertificate calls = %d, want 0", cert.calls)
+	}
+}
+
+func TestSDKCertIssuer_IssuesARequestWithoutOU(t *testing.T) {
+	cert := &countingCertService{}
+	issuer := PlatformCertIssuer(nil, &certCountingClient{cert: cert})
+	req := AdminCertificateRequest()
+	req.OrganizationalUnit = ""
+	resp, err := issuer.IssueCertificate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("IssueCertificate: %v", err)
+	}
+	if cert.calls != 1 || resp.CertificatePEM != "cert" {
+		t.Errorf("calls = %d, resp = %+v, want one SDK call and its answer", cert.calls, resp)
 	}
 }

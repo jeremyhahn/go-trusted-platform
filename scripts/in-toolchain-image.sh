@@ -20,8 +20,8 @@
 #
 # The pids bound counts threads (cgroup v2). 4096 was too low on the 80-thread
 # CI hosts: gosec's package loading forks `go` processes whose threads passed
-# it, and the fork failed with "resource temporarily unavailable" (runs on
-# ci-node-2-c and ci-node-1-b, 2026-10-24). 16384 keeps it bounded.
+# it, and the fork failed with "resource temporarily unavailable" (2026-10-24).
+# 16384 keeps it bounded.
 #
 # IN_IMAGE_NETWORK=bridge gives the container a network, for the stages that
 # must reach one: `make deps-check` asks the module proxy for the newest
@@ -35,7 +35,7 @@
 # --memory-swap is set to the same size, so the container gets no swap: a
 # stage that outgrows it is OOM-killed and fails, instead of swapping the
 # shared runner host. Unbounded, `make test test-sdk-go` reached 24.2 GB and
-# `make security` 17.0 GB on ci-node-2, which then swapped (#1178). The
+# `make security` 17.0 GB on a runner host, which then swapped (#1178). The
 # /tmp tmpfs is charged to the same limit. Each ci.yml step sets its own
 # size. IN_IMAGE_GOMAXPROCS (default 16) caps Go's parallelism in the
 # container: GOMAXPROCS is the default of `go build -p` and `go test -p`, so

@@ -24,6 +24,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useSDN, useApi } from '@/hooks';
 import type { Flow, FlowMatch, FlowAction } from 'trusted-platform-sdk';
 import { flowActionKind, flowTableNumber, readUint64 } from '@/lib/sdn-wire';
+import { Gated } from '@/components/features/capabilities/gated';
 
 // Types for OpenFlow flow management
 interface OpenFlowRule {
@@ -100,6 +101,7 @@ function formatActions(actions: FlowAction[] | undefined | null): string {
   }).join(', ');
 }
 
+/** OpenFlow rules of the first bridge, through useSDN. Add Flow Rule and the dialog's Add are gated on the server's POST /api/v1/sdn/bridges/{name}/flows capability (#2033). */
 export default function OpenFlowsPage() {
   const { toast } = useToast();
   const sdn = useSDN();
@@ -462,10 +464,12 @@ export default function OpenFlowsPage() {
           <Button variant="outline" size="icon" onClick={fetchFlows} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button onClick={() => setCreateOpen(true)} disabled={!selectedBridgeId}>
-            <Plus className="mr-2 h-4 w-4" />
-            Add Flow Rule
-          </Button>
+          <Gated op="POST /api/v1/sdn/bridges/{name}/flows">
+            <Button onClick={() => setCreateOpen(true)} disabled={!selectedBridgeId}>
+              <Plus className="mr-2 h-4 w-4" />
+              Add Flow Rule
+            </Button>
+          </Gated>
         </div>
       </div>
 
@@ -500,6 +504,7 @@ export default function OpenFlowsPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+            <Gated op="POST /api/v1/sdn/bridges/{name}/flows">
             <Button
               disabled={createSubmitting || !selectedBridgeId}
               onClick={async () => {
@@ -534,6 +539,7 @@ export default function OpenFlowsPage() {
               {createSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Add
             </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
