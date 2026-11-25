@@ -157,6 +157,10 @@ type stubVPNServer struct {
 	platformv1.UnimplementedVPNServiceServer
 }
 
+type stubProxyServer struct {
+	platformv1.UnimplementedProxyServiceServer
+}
+
 type stubOverlayServer struct {
 	platformv1.UnimplementedOverlayServiceServer
 }
@@ -318,6 +322,7 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.eabService = &stubEABServer{}
 	registry.ntpService = &stubNTPServer{}
 	registry.vpnService = &stubVPNServer{}
+	registry.proxyService = &stubProxyServer{}
 	if registry.appServices == (restapi.AppServiceServers{}) {
 		registry.appServices = restapi.AppServiceServers{
 			Cache:     &countingCacheServer{},

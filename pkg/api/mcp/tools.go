@@ -599,10 +599,23 @@ func (r *ToolRegistry) registerDeviceTools() {
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"device_id": map[string]interface{}{"type": "string", "description": "Device ID"},
-				"evidence":  map[string]interface{}{"type": "string", "description": "Base64-encoded attestation evidence"},
+				"device_id":    map[string]interface{}{"type": "string", "description": "Device ID"},
+				"evidence":     map[string]interface{}{"type": "string", "description": "Base64-encoded attestation evidence"},
+				"challenge_id": map[string]interface{}{"type": "string", "description": "Challenge ID from device_attest_challenge; the evidence nonce must be that challenge's nonce"},
 			},
 			"required": []string{"device_id", "evidence"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "device_attest_challenge",
+		Description: "Issue an attestation challenge for a device: the server-chosen, single-use nonce (with its challenge_id and expires_at) that a later attest call binds its TPM quote to.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"device_id": map[string]interface{}{"type": "string", "description": "Device ID"},
+			},
+			"required": []string{"device_id"},
 		},
 	})
 
@@ -1430,6 +1443,8 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeDeviceUpdate(ctx, args)
 	case "device_attest":
 		return r.executeDeviceAttest(ctx, args)
+	case "device_attest_challenge":
+		return r.executeDeviceAttestChallenge(ctx, args)
 	case "device_record_attest_cert":
 		return r.executeDeviceRecordAttestCert(ctx, args)
 	case "device_disable":

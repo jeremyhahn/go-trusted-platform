@@ -143,12 +143,25 @@ surface.
     "type": "object",
     "properties": {
       "device_id": {"type": "string", "description": "Device ID"},
-      "evidence": {"type": "string", "description": "Base64-encoded attestation evidence"}
+      "evidence": {"type": "string", "description": "Base64-encoded attestation evidence"},
+      "challenge_id": {"type": "string", "description": "Challenge ID from device_attest_challenge; the evidence nonce must be that challenge's nonce"}
     },
     "required": ["device_id", "evidence"]
   }
 }
 ```
+
+`challenge_id` is optional. It names a challenge from
+[`device_attest_challenge`](#device_attest_challenge), and the evidence
+`nonce` must be that challenge's nonce. The challenge is consumed on the
+first attempt, whatever the result. The call is refused when the challenge
+is unknown, already used or expired (`FailedPrecondition`), was issued for
+another device (`FailedPrecondition`) or another tenant
+(`PermissionDenied`), or when the evidence nonce differs
+(`FailedPrecondition`): the same check and codes as the gRPC, Unix, QUIC and
+REST attest calls. When the daemon requires challenges, an attest without
+one is `InvalidArgument`; a `challenge_id` on a daemon with no challenge
+service is `Unavailable`.
 
 `evidence` decodes to:
 
@@ -165,6 +178,34 @@ The reply is the verdict, not a bare flag: `verified`, `signature_valid`,
 `nonce_valid`, `pcrs_valid`, `ak_certificate_verified`,
 `attestation_status`, `message`, and the PCR-baseline trio. A quote that
 fails verification is a successful call with `verified: false`.
+
+### device_attest_challenge
+
+Issue an attestation challenge for a device: the server-chosen, single-use
+nonce that a later attest call binds its TPM quote to, as the REST route
+`POST /api/v1/devices/{id}/attest/challenge` does. Permission `device:write`:
+issuing a challenge stores server state for the device. The challenge is
+bound to the caller's tenant and the device, expires after 5 minutes and is
+consumed on first use.
+
+```json
+{
+  "name": "device_attest_challenge",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "device_id": {"type": "string", "description": "Device ID"}
+    },
+    "required": ["device_id"]
+  }
+}
+```
+
+The reply is the `IssueAttestationChallengeResponse` with proto field names:
+`challenge_id` (passed back on the attest call), `nonce` (base64, the
+32-byte value the quote must embed), `expires_at`, and `status`. A daemon
+with no device service answers `Unavailable`. Every transport's attest call
+takes the `challenge_id`, MCP `device_attest` included.
 
 ### device_record_attest_cert
 

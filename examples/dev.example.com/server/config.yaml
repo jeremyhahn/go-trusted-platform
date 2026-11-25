@@ -391,7 +391,7 @@ dns:
       description: Public zone for dev.example.com
       internal: false
 domain: dev.example.com
-hostname: omega
+hostname: host-a
 hostmaster: hostmaster@dev.example.com
 log-dir: trusted-data/log
 platform-dir: trusted-data

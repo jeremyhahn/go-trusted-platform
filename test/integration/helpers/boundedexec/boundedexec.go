@@ -155,6 +155,8 @@ func (c *Cmd) argv() []string {
 // set, the returned bytes are stdout and stderr together; otherwise stdout.
 // stderr is always captured on its own for the error.
 func (c *Cmd) run(combined bool) ([]byte, error) {
+	// Elapsed is measured from before the deadline starts, so a fired deadline never reports less.
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(c.ctx, c.deadline)
 	defer cancel()
 
@@ -169,7 +171,6 @@ func (c *Cmd) run(combined bool) ([]byte, error) {
 		cmd.Stderr = io.MultiWriter(out, &stderr)
 	}
 
-	start := time.Now()
 	err := cmd.Run()
 	elapsed := time.Since(start)
 	if err == nil {
