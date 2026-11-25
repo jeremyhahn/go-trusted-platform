@@ -444,9 +444,46 @@ type extendingPlane struct {
 	*fakePlane
 	extendErr error
 	extended  []time.Time
+	// steps scripts the calls in order; a call past the script falls back
+	// to extendErr (fail without applying) or applies.
+	steps    []extendStep
+	calls    int
+	attempts []time.Time
+	ctxErrs  []error
 }
 
-func (e *extendingPlane) ExtendPeer(_ context.Context, l *Lease) error {
+// extendStep is one scripted ExtendPeer call: apply records the deadline as
+// held by the host (even when err is set: a lost response), and cancel runs
+// during the call.
+type extendStep struct {
+	apply  bool
+	err    error
+	cancel func()
+}
+
+// hostDeadline is the deadline the host enforces last.
+func (e *extendingPlane) hostDeadline(initial time.Time) time.Time {
+	if len(e.extended) == 0 {
+		return initial
+	}
+	return e.extended[len(e.extended)-1]
+}
+
+func (e *extendingPlane) ExtendPeer(ctx context.Context, l *Lease) error {
+	e.attempts = append(e.attempts, l.ExpiresAt)
+	e.ctxErrs = append(e.ctxErrs, ctx.Err())
+	i := e.calls
+	e.calls++
+	if i < len(e.steps) {
+		st := e.steps[i]
+		if st.cancel != nil {
+			st.cancel()
+		}
+		if st.apply {
+			e.extended = append(e.extended, l.ExpiresAt)
+		}
+		return st.err
+	}
 	if e.extendErr != nil {
 		return e.extendErr
 	}
@@ -477,6 +514,76 @@ func TestRenew_FailedExtensionStaysRetryable(t *testing.T) {
 	require.NoError(t, err, "the retry after connectivity recovers renews")
 	assert.Equal(t, 1, renewed.Renewals)
 	assert.Equal(t, []time.Time{renewed.ExpiresAt}, plane.extended, "the host learns the new deadline")
+}
+
+// renewHarness admits a lease on an extending plane and moves into its renew
+// window.
+func renewHarness(t *testing.T) (*harness, *extendingPlane, *Lease) {
+	t.Helper()
+	plane := &extendingPlane{fakePlane: newFakePlane(DataPlaneMASQUE)}
+	h := newHarnessWith(t, testConfig(), func(d *Deps) {
+		d.DataPlanes = map[DataPlaneKind]DataPlane{DataPlaneMASQUE: plane}
+	})
+	lease, err := h.svc.Admit(context.Background(), h.request(t))
+	require.NoError(t, err)
+	h.intoRenewWindow()
+	return h, plane, lease
+}
+
+func TestRenew_ExtensionLostResponseRestoresHostDeadline(t *testing.T) {
+	h, plane, lease := renewHarness(t)
+	plane.steps = []extendStep{
+		{apply: true, err: errors.New("response lost")},
+		{apply: true},
+	}
+	_, err := h.svc.Renew(context.Background(), lease.ID, h.evidence(t))
+	var unavailable *ErrDataPlaneUnavailable
+	require.True(t, errors.As(err, &unavailable), "got %v", err)
+
+	stored, err := h.svc.Lease(context.Background(), lease.ID)
+	require.NoError(t, err)
+	require.Equal(t, 2, plane.calls, "the applied extension is withdrawn on the host")
+	assert.Equal(t, lease.ExpiresAt, plane.hostDeadline(lease.ExpiresAt), "the host holds the old deadline again")
+	assert.Equal(t, lease.ExpiresAt, stored.ExpiresAt, "the store rolls back after the host restore")
+	assert.Equal(t, 0, stored.Renewals)
+}
+
+func TestRenew_HostRestoreFailsKeepsNewStoredDeadline(t *testing.T) {
+	h, plane, lease := renewHarness(t)
+	plane.steps = []extendStep{
+		{err: errors.New("datapath unreachable")},
+		{err: errors.New("datapath still unreachable")},
+	}
+	_, err := h.svc.Renew(context.Background(), lease.ID, h.evidence(t))
+	var unavailable *ErrDataPlaneUnavailable
+	require.True(t, errors.As(err, &unavailable), "got %v", err)
+
+	stored, err := h.svc.Lease(context.Background(), lease.ID)
+	require.NoError(t, err)
+	require.Equal(t, 2, plane.calls, "the host restore is attempted")
+	newDeadline := plane.attempts[0]
+	assert.Equal(t, lease.ExpiresAt, plane.attempts[1], "the restore sends the previous deadline")
+	assert.Equal(t, newDeadline, stored.ExpiresAt, "an unconfirmed host keeps the new stored deadline")
+	assert.False(t, stored.ExpiresAt.Before(plane.hostDeadline(lease.ExpiresAt)), "the store is never below the host")
+}
+
+func TestRenew_RestoreRunsOnCancelledContext(t *testing.T) {
+	h, plane, lease := renewHarness(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	plane.steps = []extendStep{
+		{apply: true, err: context.Canceled, cancel: cancel},
+		{apply: true},
+	}
+	_, err := h.svc.Renew(ctx, lease.ID, h.evidence(t))
+	require.Error(t, err)
+
+	require.Equal(t, 2, plane.calls, "the restore is issued after the caller cancelled")
+	assert.NoError(t, plane.ctxErrs[1], "the restore runs on a context independent of the caller's")
+	assert.Equal(t, lease.ExpiresAt, plane.hostDeadline(lease.ExpiresAt))
+	stored, err := h.svc.Lease(context.Background(), lease.ID)
+	require.NoError(t, err)
+	assert.Equal(t, lease.ExpiresAt, stored.ExpiresAt)
 }
 
 func TestRevoke_OrderAndIdempotence(t *testing.T) {
