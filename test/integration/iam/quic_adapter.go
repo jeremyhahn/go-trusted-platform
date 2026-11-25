@@ -495,44 +495,6 @@ func (a *QUICAdapter) ListGroups(ctx context.Context, opts ListGroupsOptions) (*
 }
 
 // =============================================================================
-// Group Membership Operations
-// =============================================================================
-
-// AddMember adds a user to a group.
-func (a *QUICAdapter) AddMember(ctx context.Context, opts AddMemberOptions) (*AddMemberResult, error) {
-	payload, err := a.doRequest(ctx, quicwire.OpIAMGroupAddMember, &platformv1.AddGroupMemberRequest{
-		TenantId: opts.TenantID,
-		GroupId:  opts.GroupID,
-		UserId:   opts.UserID,
-	})
-	if err != nil {
-		return nil, err
-	}
-	var resp platformv1.AddGroupMemberResponse
-	if err := quicwire.DecodePayload(payload, &resp); err != nil {
-		return nil, &QUICAdapterError{Operation: "AddMember", Message: "failed to decode response: " + err.Error()}
-	}
-	return &AddMemberResult{Success: resp.GetStatus().GetSuccess()}, nil
-}
-
-// RemoveMember removes a user from a group.
-func (a *QUICAdapter) RemoveMember(ctx context.Context, opts RemoveMemberOptions) (*RemoveMemberResult, error) {
-	payload, err := a.doRequest(ctx, quicwire.OpIAMGroupRemoveMember, &platformv1.RemoveGroupMemberRequest{
-		TenantId: opts.TenantID,
-		GroupId:  opts.GroupID,
-		UserId:   opts.UserID,
-	})
-	if err != nil {
-		return nil, err
-	}
-	var resp platformv1.RemoveGroupMemberResponse
-	if err := quicwire.DecodePayload(payload, &resp); err != nil {
-		return nil, &QUICAdapterError{Operation: "RemoveMember", Message: "failed to decode response: " + err.Error()}
-	}
-	return &RemoveMemberResult{Success: resp.GetStatus().GetSuccess()}, nil
-}
-
-// =============================================================================
 // Permission Operations
 // =============================================================================
 

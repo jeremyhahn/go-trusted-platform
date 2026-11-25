@@ -498,38 +498,6 @@ func decodeReply(operation string, raw json.RawMessage, reply interface{}) error
 	return nil
 }
 
-// AddMember adds a user to a group
-func (a *MCPAdapter) AddMember(ctx context.Context, opts AddMemberOptions) (*AddMemberResult, error) {
-	args := map[string]interface{}{
-		"tenant_id": opts.TenantID,
-		"group_id":  opts.GroupID,
-		"user_id":   opts.UserID,
-	}
-
-	_, err := a.callTool(ctx, "iam_add_group_member", args)
-	if err != nil {
-		return nil, err
-	}
-
-	return &AddMemberResult{Success: true}, nil
-}
-
-// RemoveMember removes a user from a group
-func (a *MCPAdapter) RemoveMember(ctx context.Context, opts RemoveMemberOptions) (*RemoveMemberResult, error) {
-	args := map[string]interface{}{
-		"tenant_id": opts.TenantID,
-		"group_id":  opts.GroupID,
-		"user_id":   opts.UserID,
-	}
-
-	_, err := a.callTool(ctx, "iam_remove_group_member", args)
-	if err != nil {
-		return nil, err
-	}
-
-	return &RemoveMemberResult{Success: true}, nil
-}
-
 // ============================================================================
 // Role Operations
 // ============================================================================

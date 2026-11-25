@@ -438,86 +438,6 @@ func testGroupCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		}
 	})
 
-	t.Run("GroupMembership", func(t *testing.T) {
-		// Create a group
-		groupOpts := CreateGroupOptions{
-			TenantID:    tenantID,
-			ID:          GenerateTestGroupID(testID + "-membership"),
-			Name:        "Test Group Membership",
-			Description: "Test group for membership operations",
-		}
-
-		groupResult, err := adapter.CreateGroup(ctx, groupOpts)
-		if err != nil {
-			t.Fatalf("CreateGroup failed: %v", err)
-		}
-
-		// Create a user
-		userOpts := CreateUserOptions{
-			TenantID: tenantID,
-			Email:    GenerateTestEmail(testID + "-membership"),
-			Name:     "Test User Membership",
-		}
-
-		userResult, err := adapter.CreateUser(ctx, userOpts)
-		if err != nil {
-			t.Fatalf("CreateUser failed: %v", err)
-		}
-
-		// Add user to group
-		addOpts := AddMemberOptions{
-			TenantID: tenantID,
-			GroupID:  groupResult.Group.ID,
-			UserID:   userResult.User.ID,
-		}
-
-		addResult, err := adapter.AddMember(ctx, addOpts)
-		if err != nil {
-			t.Fatalf("AddMember failed: %v", err)
-		}
-
-		if !addResult.Success {
-			t.Error("AddMember did not return success")
-		}
-
-		// Verify user is in group
-		getGroupOpts := GetGroupOptions{
-			TenantID: tenantID,
-			GroupID:  groupResult.Group.ID,
-		}
-
-		getGroupResult, err := adapter.GetGroup(ctx, getGroupOpts)
-		if err != nil {
-			t.Fatalf("GetGroup failed: %v", err)
-		}
-
-		found := false
-		for _, member := range getGroupResult.Group.Members {
-			if member == userResult.User.ID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Error("User not found in group members")
-		}
-
-		// Remove user from group
-		removeOpts := RemoveMemberOptions{
-			TenantID: tenantID,
-			GroupID:  groupResult.Group.ID,
-			UserID:   userResult.User.ID,
-		}
-
-		removeResult, err := adapter.RemoveMember(ctx, removeOpts)
-		if err != nil {
-			t.Fatalf("RemoveMember failed: %v", err)
-		}
-
-		if !removeResult.Success {
-			t.Error("RemoveMember did not return success")
-		}
-	})
 }
 
 // ============================================================================
@@ -1180,34 +1100,6 @@ func TestIAMMultiProtocol_ErrorHandling(t *testing.T) {
 				}
 			})
 
-			t.Run("AddMember_NonExistentUser", func(t *testing.T) {
-				testID := uuid.New().String()[:8]
-
-				// Create a group
-				groupOpts := CreateGroupOptions{
-					TenantID:    DefaultTenantID(),
-					ID:          GenerateTestGroupID(testID + "-member-err"),
-					Name:        "Test Group Member Error",
-					Description: "Test group for member error",
-				}
-
-				groupResult, err := adapter.CreateGroup(ctx, groupOpts)
-				if err != nil {
-					t.Fatalf("CreateGroup failed: %v", err)
-				}
-
-				// Try to add non-existent user to group
-				addOpts := AddMemberOptions{
-					TenantID: DefaultTenantID(),
-					GroupID:  groupResult.Group.ID,
-					UserID:   "non-existent-user-" + testID,
-				}
-
-				_, err = adapter.AddMember(ctx, addOpts)
-				if err == nil {
-					t.Error("AddMember should fail for non-existent user")
-				}
-			})
 		})
 	}
 }

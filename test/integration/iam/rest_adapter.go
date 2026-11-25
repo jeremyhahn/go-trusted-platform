@@ -633,52 +633,6 @@ func (a *RESTAdapter) ListGroups(ctx context.Context, opts ListGroupsOptions) (*
 }
 
 // ============================================================================
-// Group Membership Operations
-// ============================================================================
-
-// AddMember adds a user to a group
-func (a *RESTAdapter) AddMember(ctx context.Context, opts AddMemberOptions) (*AddMemberResult, error) {
-	path := fmt.Sprintf("/api/v1/iam/tenants/%s/groups/%s/members/%s", opts.TenantID, opts.GroupID, opts.UserID)
-
-	body, err := a.doRequest(ctx, http.MethodPost, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp successResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "AddMember",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
-	}
-
-	return &AddMemberResult{Success: resp.Success}, nil
-}
-
-// RemoveMember removes a user from a group
-func (a *RESTAdapter) RemoveMember(ctx context.Context, opts RemoveMemberOptions) (*RemoveMemberResult, error) {
-	path := fmt.Sprintf("/api/v1/iam/tenants/%s/groups/%s/members/%s", opts.TenantID, opts.GroupID, opts.UserID)
-
-	body, err := a.doRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp successResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "RemoveMember",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
-	}
-
-	return &RemoveMemberResult{Success: resp.Success}, nil
-}
-
-// ============================================================================
 // Role CRUD Operations
 // ============================================================================
 
