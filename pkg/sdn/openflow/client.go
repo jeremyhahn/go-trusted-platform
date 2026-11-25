@@ -116,6 +116,11 @@ func (s *session) stop() {
 type pendingRequest struct {
 	ch         chan *response
 	generation uint64
+	// multipart accumulates an OFPT_MULTIPART_REPLY spread over several
+	// messages with the request's xid: the first part's 16-byte prefix
+	// followed by every part's body. It is delivered when a part without
+	// OFPMPF_REPLY_MORE arrives.
+	multipart []byte
 }
 
 // flowBatch collects switch-reported errors for a batch of flow mods
@@ -583,8 +588,27 @@ func (c *Client) handleMessage(s *session, header *Header, body []byte) {
 	// Dispatch to waiting caller
 	c.pendingMu.Lock()
 	if request, ok := c.pending[header.Xid]; ok {
+		data := fullData
+		if header.Type == OFPTMultipartReply && len(fullData) >= 16 {
+			// A multipart reply may span several messages with the same
+			// xid; every part but the last carries OFPMPF_REPLY_MORE.
+			// Keep the request registered and collect the parts so the
+			// caller sees the whole reply, not just its first part.
+			if request.multipart == nil {
+				request.multipart = append([]byte(nil), fullData[:16]...)
+			}
+			request.multipart = append(request.multipart, fullData[16:]...)
+			if ByteOrder.Uint16(fullData[10:12])&OFPMPFReplyMore != 0 {
+				c.pending[header.Xid] = request
+				c.pendingMu.Unlock()
+				return
+			}
+			data = request.multipart
+			flags := ByteOrder.Uint16(data[10:12])
+			ByteOrder.PutUint16(data[10:12], flags&^OFPMPFReplyMore)
+		}
 		select {
-		case request.ch <- &response{header: *header, data: fullData}:
+		case request.ch <- &response{header: *header, data: data}:
 		default:
 		}
 		delete(c.pending, header.Xid)

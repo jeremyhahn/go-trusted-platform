@@ -352,6 +352,7 @@ func (c *Client) GetFlowStats(ctx context.Context, bridgeName string, match stri
 			Table:       int(stat.TableID),
 			Priority:    int(stat.Priority),
 			Match:       formatMatchString(stat.Match),
+			Actions:     flowActionsFromInstructions(stat.Instructions),
 			Duration:    int(stat.DurationSec),
 			IdleAge:     int(stat.IdleTimeout),
 			HardAge:     int(stat.HardTimeout),
@@ -366,9 +367,40 @@ func (c *Client) GetFlowStats(ctx context.Context, bridgeName string, match stri
 }
 
 // flowActionsFromInstructions renders the instructions of a flow stats entry
-// as an action string.
+// in the ovs-ofctl action grammar the flow was installed with, so installed
+// actions can be compared with a flow mod's: OFPP_NORMAL is "normal",
+// OFPP_CONTROLLER "controller", a numeric port "output:N", and a flow
+// without actions "drop". Undecodable instructions render as "", which
+// equals no flow mod's actions.
 func flowActionsFromInstructions(instructions []byte) string {
-	return ""
+	actions, err := openflow.ApplyActionsFromInstructions(instructions)
+	if err != nil {
+		return ""
+	}
+	if len(actions) == 0 {
+		return "drop"
+	}
+	parts := make([]string, 0, len(actions))
+	for _, action := range actions {
+		switch a := action.(type) {
+		case *openflow.ActionOutput:
+			switch a.Port {
+			case openflow.OFPPNormal:
+				parts = append(parts, "normal")
+			case openflow.OFPPController:
+				parts = append(parts, "controller")
+			default:
+				parts = append(parts, fmt.Sprintf("output:%d", a.Port))
+			}
+		case *openflow.ActionGroup:
+			parts = append(parts, fmt.Sprintf("group:%d", a.GroupID))
+		case *openflow.ActionRaw:
+			parts = append(parts, fmt.Sprintf("action_type:0x%x", a.ActionType))
+		default:
+			parts = append(parts, fmt.Sprintf("%T", action))
+		}
+	}
+	return strings.Join(parts, ",")
 }
 
 // splitStatsFilter separates the keys of an ovs-ofctl dump-flows filter
