@@ -36,7 +36,8 @@ describe('TenantService.createInitialAdminInvitation', () => {
     await service.createInitialAdminInvitation('t 1', 'owner@example.com');
 
     expect(mockClient.post).toHaveBeenCalledTimes(1);
-    const [url, body] = vi.mocked(mockClient.post).mock.calls[0]!;
+    const url: unknown = vi.mocked(mockClient.post).mock.calls[0]?.[0];
+    const body: unknown = vi.mocked(mockClient.post).mock.calls[0]?.[1];
     expect(String(url).endsWith('/v1/tenants/t%201/initial-admin-invitation')).toBe(true);
     expect(body).toEqual({ email: 'owner@example.com' });
   });
@@ -46,7 +47,7 @@ describe('TenantService.createInitialAdminInvitation', () => {
 
     await service.createInitialAdminInvitation('t1', 'owner@example.com', 3600);
 
-    const [, body] = vi.mocked(mockClient.post).mock.calls[0]!;
+    const body: unknown = vi.mocked(mockClient.post).mock.calls[0]?.[1];
     expect(body).toEqual({ email: 'owner@example.com', expiresInSeconds: 3600 });
   });
 
