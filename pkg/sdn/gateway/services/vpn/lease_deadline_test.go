@@ -169,6 +169,7 @@ func hostedHarness(t *testing.T) (*harness, *PlaneHost, *managedFakePlane, *host
 	h := newHarnessWith(t, testConfig(), func(d *Deps) {
 		d.DataPlanes[DataPlaneMASQUE] = dp
 	})
+	host.now = h.clock.Now
 	return h, host, managed, peers
 }
 

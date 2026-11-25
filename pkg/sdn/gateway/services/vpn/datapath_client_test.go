@@ -54,6 +54,13 @@ func (p *hostPeers) ReconcileVPNPeers(ctx context.Context, req *ipcv1.ReconcileV
 	return p.host.ReconcileVPNPeers(ctx, req), nil
 }
 
+func (p *hostPeers) RenewVPNPeer(ctx context.Context, req *ipcv1.RenewVPNPeerRequest) (*ipcv1.RenewVPNPeerResponse, error) {
+	if p.err != nil {
+		return nil, p.err
+	}
+	return p.host.RenewVPNPeer(ctx, req), nil
+}
+
 // refusingPeers answers every RPC with refusal.
 type refusingPeers struct{ refusal *ipcv1.VPNPeerRefusal }
 
@@ -67,6 +74,10 @@ func (p *refusingPeers) RemoveVPNPeer(context.Context, *ipcv1.RemoveVPNPeerReque
 
 func (p *refusingPeers) ReconcileVPNPeers(context.Context, *ipcv1.ReconcileVPNPeersRequest) (*ipcv1.ReconcileVPNPeersResponse, error) {
 	return &ipcv1.ReconcileVPNPeersResponse{Refusal: p.refusal}, nil
+}
+
+func (p *refusingPeers) RenewVPNPeer(context.Context, *ipcv1.RenewVPNPeerRequest) (*ipcv1.RenewVPNPeerResponse, error) {
+	return &ipcv1.RenewVPNPeerResponse{Refusal: p.refusal}, nil
 }
 
 func clientLease(id LeaseID) *Lease {

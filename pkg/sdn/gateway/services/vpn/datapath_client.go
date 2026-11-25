@@ -24,6 +24,7 @@ import (
 type DatapathPeers interface {
 	InstallVPNPeer(ctx context.Context, req *ipcv1.InstallVPNPeerRequest) (*ipcv1.InstallVPNPeerResponse, error)
 	RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerRequest) (*ipcv1.RemoveVPNPeerResponse, error)
+	RenewVPNPeer(ctx context.Context, req *ipcv1.RenewVPNPeerRequest) (*ipcv1.RenewVPNPeerResponse, error)
 	ReconcileVPNPeers(ctx context.Context, req *ipcv1.ReconcileVPNPeersRequest) (*ipcv1.ReconcileVPNPeersResponse, error)
 }
 
@@ -64,11 +65,22 @@ func (p *DatapathPlane) InstallPeer(ctx context.Context, lease *Lease) error {
 }
 
 // ExtendPeer moves an installed peer's lease deadline in the datapath. It
-// sends the same InstallVPNPeer request as InstallPeer: the PlaneHost treats
-// a peer identical to the one it holds as a deadline move and does not
-// reinstall it, so a live session survives the renewal.
+// sends RenewVPNPeer, which only extends a peer the PlaneHost still holds
+// before its deadline: a renewal that arrives after expiry is
+// ErrLeaseNotFound and installs nothing.
 func (p *DatapathPlane) ExtendPeer(ctx context.Context, lease *Lease) error {
-	return p.InstallPeer(ctx, lease)
+	if lease == nil {
+		return &ErrInvalidRequest{Field: "lease", Reason: "required"}
+	}
+	key := lease.Keys.WireGuardPublicKey
+	if len(key) == 0 {
+		key = lease.Keys.ClientCertificateSHA256
+	}
+	resp, err := p.peers.RenewVPNPeer(ctx, &ipcv1.RenewVPNPeerRequest{PublicKey: key, ExpiresAtUnixNano: lease.ExpiresAt.UnixNano()})
+	if err != nil {
+		return &ErrDataPlaneUnavailable{Kind: p.kind, Cause: err}
+	}
+	return errorOfRefusal(p.kind, lease.ID, resp.GetRefusal())
 }
 
 // RemovePeer implements DataPlane through the datapath child.

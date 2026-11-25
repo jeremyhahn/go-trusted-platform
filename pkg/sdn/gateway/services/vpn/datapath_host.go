@@ -14,6 +14,7 @@
 package vpn
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -52,6 +53,7 @@ type PlaneHost struct {
 	// store is unavailable (docs/vpn/architecture.md, lease expiry).
 	mu     sync.Mutex
 	held   map[LeaseID]hostedPeer
+	now    func() time.Time
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -65,6 +67,7 @@ func NewPlaneHost(planes ...ManagedDataPlane) (*PlaneHost, error) {
 	h := &PlaneHost{
 		planes: make(map[DataPlaneKind]ManagedDataPlane, len(planes)),
 		held:   make(map[LeaseID]hostedPeer),
+		now:    time.Now,
 	}
 	for _, plane := range planes {
 		if plane == nil {
@@ -173,6 +176,52 @@ func (h *PlaneHost) InstallVPNPeer(ctx context.Context, req *ipcv1.InstallVPNPee
 // RemoveVPNPeer removes the request's lease from the plane it names.
 func (h *PlaneHost) RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerRequest) *ipcv1.RemoveVPNPeerResponse {
 	return &ipcv1.RemoveVPNPeerResponse{Refusal: refusalOf(h.remove(ctx, req))}
+}
+
+// RenewVPNPeer moves the deadline of the held peer whose key is the
+// request's public key (its WireGuard key, or its client certificate
+// SHA-256 for a plane without one). It never installs: a peer the host no
+// longer holds, or whose deadline has passed, is LEASE_NOT_FOUND, so a
+// renewal that arrives after expiry cannot bring the peer back.
+func (h *PlaneHost) RenewVPNPeer(_ context.Context, req *ipcv1.RenewVPNPeerRequest) *ipcv1.RenewVPNPeerResponse {
+	return &ipcv1.RenewVPNPeerResponse{Refusal: refusalOf(h.renew(req))}
+}
+
+func (h *PlaneHost) renew(req *ipcv1.RenewVPNPeerRequest) error {
+	if len(req.GetPublicKey()) == 0 {
+		return &ErrInvalidRequest{Field: "public_key", Reason: "required"}
+	}
+	if req.GetExpiresAtUnixNano() <= 0 {
+		return &ErrInvalidRequest{Field: "expires_at_unix_nano", Reason: "required"}
+	}
+	deadline := time.Unix(0, req.GetExpiresAtUnixNano())
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := h.now()
+	var (
+		match LeaseID
+		found int
+	)
+	for id, held := range h.held {
+		if bytes.Equal(held.peer.GetWireguardPublicKey(), req.GetPublicKey()) ||
+			(len(held.peer.GetWireguardPublicKey()) == 0 && bytes.Equal(held.peer.GetClientCertificateSha256(), req.GetPublicKey())) {
+			match = id
+			found++
+		}
+	}
+	if found != 1 {
+		// None held, or a key that names more than one peer: the old
+		// deadline stands (fail closed).
+		return &ErrLeaseNotFound{LeaseID: match}
+	}
+	held := h.held[match]
+	if !now.Before(held.deadline) {
+		return &ErrLeaseNotFound{LeaseID: match}
+	}
+	held.deadline = deadline
+	h.held[match] = held
+	return nil
 }
 
 // ReconcileVPNPeers removes from the plane the request names every peer

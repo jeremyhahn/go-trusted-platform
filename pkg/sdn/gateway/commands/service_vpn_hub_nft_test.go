@@ -436,6 +436,14 @@ func (w wirePeers) ReconcileVPNPeers(ctx context.Context, req *ipcv1.ReconcileVP
 	return w.host.ReconcileVPNPeers(ctx, got), nil
 }
 
+func (w wirePeers) RenewVPNPeer(ctx context.Context, req *ipcv1.RenewVPNPeerRequest) (*ipcv1.RenewVPNPeerResponse, error) {
+	got, err := overTheWire(req, &ipcv1.RenewVPNPeerRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return w.host.RenewVPNPeer(ctx, got), nil
+}
+
 // A peer installed over the datapath IPC gets the same forwarding accepts
 // in tp_vpn_hub as a peer installed in-process: its lease zones survive the
 // VPNPeer message.
