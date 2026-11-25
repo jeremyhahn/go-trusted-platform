@@ -356,8 +356,19 @@ export default function PoliciesPage() {
         </CardContent>
       </Card>
 
-      {/* No policy test card: PlatformIAMService.TestPolicy waits on the IAM
-          service evaluating a request (the server answers 501 until then). */}
+      {/* PlatformIAMService.TestPolicy waits on the IAM service evaluating a
+          request (the server answers 501 until then): the page shows the
+          operation as unavailable and calls no TestPolicy. */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Policy simulation unavailable</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            The IAM service cannot evaluate a policy test request yet.
+          </p>
+        </CardContent>
+      </Card>
     </div>
   );
 }
