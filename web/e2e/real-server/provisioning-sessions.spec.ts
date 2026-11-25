@@ -125,6 +125,6 @@ test.describe('provisioning sessions against the real server', () => {
     await adminPage.goto(`/provisioning/sessions/${UNKNOWN_ID}`);
     const res = await getRes;
     expect(res.ok(), `${res.url()} answered ${res.status()}`).toBeFalsy();
-    await expect(adminPage.getByText('Session Not Found')).toBeVisible();
+    await expect(adminPage.getByRole('heading', { name: 'Session Not Found' })).toBeVisible();
   });
 });
