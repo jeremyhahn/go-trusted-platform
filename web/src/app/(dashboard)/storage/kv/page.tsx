@@ -38,6 +38,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useQuicBaaSKV, useApi, useMutation, useToast } from "@/hooks";
+import { Gated } from "@/components/features/capabilities/gated";
+import { useCapabilities } from "@/hooks/use-capabilities";
 import type { KeyValue } from "trusted-platform-sdk";
 import {
   Plus,
@@ -89,6 +91,11 @@ interface KVFormData {
 export default function KVStorePage() {
   const { toast } = useToast();
   const kv = useQuicBaaSKV();
+  // #2033 item 5: the list and every control follow the server's capabilities.
+  const { loading: capsLoading, capability } = useCapabilities();
+  const listCap = capability("GET /api/v1/quicbaas/kv");
+  const putCap = capability("POST /api/v1/quicbaas/kv");
+  const deleteCap = capability("DELETE /api/v1/quicbaas/kv/{key}");
   const [prefixFilter, setPrefixFilter] = React.useState<string>("");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = React.useState(false);
   const [editingEntry, setEditingEntry] = React.useState<KVEntryUI | null>(null);
@@ -112,6 +119,7 @@ export default function KVStorePage() {
     }),
     [prefixFilter],
     {
+      enabled: !capsLoading && listCap.enabled,
       onError: (err) => {
         toast({
           title: "Error loading entries",
@@ -429,13 +437,19 @@ export default function KVStorePage() {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={() => handleEdit(row.original)}>
+            <DropdownMenuItem
+              onClick={() => handleEdit(row.original)}
+              disabled={!putCap.enabled}
+              title={putCap.enabled ? undefined : putCap.reason}
+            >
               <Edit className="mr-2 h-4 w-4" />
               Edit
             </DropdownMenuItem>
             <DropdownMenuItem
               className="text-destructive"
               onClick={() => handleDelete(row.original)}
+              disabled={!deleteCap.enabled}
+              title={deleteCap.enabled ? undefined : deleteCap.reason}
             >
               <Trash2 className="mr-2 h-4 w-4" />
               Delete
@@ -462,19 +476,23 @@ export default function KVStorePage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => loadData()} disabled={loading}>
-            <RefreshCw
-              className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`}
-            />
-            Refresh
-          </Button>
+          <Gated op="GET /api/v1/quicbaas/kv">
+            <Button variant="outline" onClick={() => loadData()} disabled={loading}>
+              <RefreshCw
+                className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`}
+              />
+              Refresh
+            </Button>
+          </Gated>
           <Dialog open={isCreateDialogOpen} onOpenChange={handleDialogClose}>
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="mr-2 h-4 w-4" />
-                Add Entry
-              </Button>
-            </DialogTrigger>
+            <Gated op="POST /api/v1/quicbaas/kv">
+              <DialogTrigger asChild>
+                <Button>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add Entry
+                </Button>
+              </DialogTrigger>
+            </Gated>
             <DialogContent className="max-w-lg">
               <DialogHeader>
                 <DialogTitle>
@@ -557,13 +575,15 @@ export default function KVStorePage() {
                     Leave empty for no expiration
                   </p>
                 </div>
-                <Button
-                  onClick={handleSaveEntry}
-                  disabled={putMutation.isLoading}
-                  className="w-full"
-                >
-                  {putMutation.isLoading ? "Saving..." : "Save Entry"}
-                </Button>
+                <Gated op="POST /api/v1/quicbaas/kv">
+                  <Button
+                    onClick={handleSaveEntry}
+                    disabled={putMutation.isLoading}
+                    className="w-full"
+                  >
+                    {putMutation.isLoading ? "Saving..." : "Save Entry"}
+                  </Button>
+                </Gated>
               </div>
             </DialogContent>
           </Dialog>
@@ -582,6 +602,13 @@ export default function KVStorePage() {
       )}
 
       {/* Statistics Cards */}
+      {!capsLoading && !listCap.enabled ? (
+        <div data-testid="kv-not-enabled" className="rounded-lg border border-border bg-card p-6">
+          <div className="font-medium">The KV store is not enabled on this server</div>
+          <p className="text-sm text-muted-foreground mt-1">{listCap.reason}</p>
+        </div>
+      ) : (
+        <>
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -689,14 +716,16 @@ export default function KVStorePage() {
               <div className="flex flex-col items-center gap-2 py-8">
                 <Key className="h-12 w-12 text-muted-foreground" />
                 <p className="text-muted-foreground">No entries found</p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setIsCreateDialogOpen(true)}
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Add your first entry
-                </Button>
+                <Gated op="POST /api/v1/quicbaas/kv">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsCreateDialogOpen(true)}
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    Add your first entry
+                  </Button>
+                </Gated>
               </div>
             }
             bulkActions={[
@@ -714,11 +743,15 @@ export default function KVStorePage() {
                   }
                 },
                 variant: "destructive",
+                disabled: !deleteCap.enabled,
+                title: deleteCap.enabled ? undefined : deleteCap.reason,
               },
             ]}
           />
         </CardContent>
       </Card>
+        </>
+      )}
     </div>
   );
 }

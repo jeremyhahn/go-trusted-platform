@@ -36,6 +36,7 @@ import {
 } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import { useVTPM, useMutation } from '@/hooks';
+import { useCapabilities } from '@/hooks/use-capabilities';
 import type { VTPM } from '@/types/device';
 
 interface VTPMTableProps {
@@ -48,6 +49,11 @@ export function VTPMTable({ vtpms, onVTPMChange }: VTPMTableProps) {
   const { toast } = useToast();
   const vtpmService = useVTPM();
   const [loadingId, setLoadingId] = useState<string | null>(null);
+  // #2033 item 5: Delete and Seal Data follow the server's capabilities.
+  // Suspend, Resume and Migrate have no server route yet.
+  const { capability } = useCapabilities();
+  const deleteCap = capability('DELETE /api/v1/vtpm/bundles/{id}');
+  const sealCap = capability('POST /api/v1/vtpm/bundles/{id}/seal');
 
   const deleteMutation = useMutation(
     async (id: string) => {
@@ -196,6 +202,8 @@ export function VTPMTable({ vtpms, onVTPMChange }: VTPMTableProps) {
                         <>
                           <DropdownMenuItem
                             onClick={() => router.push(`/devices/vtpm/${vtpm.id}?action=seal`)}
+                            disabled={!sealCap.enabled}
+                            title={sealCap.enabled ? undefined : sealCap.reason}
                           >
                             <Lock className="mr-2 h-4 w-4" />
                             Seal Data
@@ -223,6 +231,8 @@ export function VTPMTable({ vtpms, onVTPMChange }: VTPMTableProps) {
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
                         onClick={() => handleDelete(vtpm)}
+                        disabled={!deleteCap.enabled}
+                        title={deleteCap.enabled ? undefined : deleteCap.reason}
                         className="text-destructive"
                       >
                         <Trash2 className="mr-2 h-4 w-4" />

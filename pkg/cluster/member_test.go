@@ -1017,3 +1017,31 @@ func TestMembershipManager_Concurrent(t *testing.T) {
 		wg.Wait()
 	})
 }
+
+// TestMembershipManager_LeaderStatusUpdateWithGetNodes checks that the
+// leader-check loop's update of the local node's leader flag does not race
+// with GetNodes cloning the same node out of the node cache.
+func TestMembershipManager_LeaderStatusUpdateWithGetNodes(t *testing.T) {
+	mm, raftOp := createTestMembershipManager(t)
+	defer func() { _ = mm.Close() }()
+	ctx := context.Background()
+
+	if err := mm.Bootstrap(ctx); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	raftOp.setIsLeader(true)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			mm.updateLocalNodeLeaderStatus()
+		}()
+		go func() {
+			defer wg.Done()
+			_, _ = mm.GetNodes(ctx)
+		}()
+	}
+	wg.Wait()
+}

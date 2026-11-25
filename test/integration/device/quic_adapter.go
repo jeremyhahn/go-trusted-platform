@@ -507,14 +507,26 @@ func (a *QUICAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCer
 // this transport rather than logging an absent surface.
 func (a *QUICAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error) {
 	req := &pb.AttestDeviceRequest{
-		DeviceId: opts.DeviceID,
-		Evidence: opts.Evidence,
+		DeviceId:    opts.DeviceID,
+		Evidence:    opts.Evidence,
+		ChallengeId: opts.ChallengeID,
 	}
 	var resp pb.AttestDeviceResponse
 	if err := a.call(ctx, "AttestDevice", quicwire.OpDeviceAttest, req, &resp); err != nil {
 		return nil, err
 	}
 	return attestResultFromProto(opts.DeviceID, &resp), nil
+}
+
+// IssueAttestationChallenge reports the declared QUIC gap: attestation
+// challenges are not issued over QUIC (owner ruling 1234). Issue one over MCP,
+// gRPC, REST or the Unix socket; the QUIC attest opcode 0x3A carries its
+// challenge_id.
+func (a *QUICAdapter) IssueAttestationChallenge(ctx context.Context, opts IssueAttestationChallengeOptions) (*IssueAttestationChallengeResult, error) {
+	return nil, ErrAttestationTransportUnavailable{
+		Transport: "QUIC",
+		Reason:    "attestation challenges are not issued over QUIC (owner ruling 1234): issue one over MCP, gRPC, REST or the Unix socket; the QUIC attest opcode 0x3A carries its challenge_id",
+	}
 }
 
 // =============================================================================

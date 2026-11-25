@@ -11,6 +11,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { FileStack, Download, Copy, Loader2 } from "lucide-react";
 import { useCA, useApi, useToast } from "@/hooks";
+import { useCapabilities } from "@/hooks/use-capabilities";
+import { Gated } from "@/components/features/capabilities/gated";
 
 /**
  * CA Bundle Page
@@ -41,12 +43,15 @@ type BundleResponseWire = Exclude<BundleNodeWire, string> & {
 export default function CABundlePage() {
   const ca = useCA();
   const { toast } = useToast();
+  // #2033 item 5: read the bundle only when the server offers it.
+  const { loading: capsLoading, capability } = useCapabilities();
+  const bundleCap = capability("GET /api/v1/ca/bundle");
   const {
     data: bundleResponse,
     isLoading,
     error,
     refetch,
-  } = useApi(() => ca.getBundle(), []);
+  } = useApi(() => ca.getBundle(), [], { enabled: !capsLoading && bundleCap.enabled });
 
   // The platform REST envelope wraps every payload as
   //   {code, error, success, payload: {...}}
@@ -119,18 +124,22 @@ export default function CABundlePage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => refetch()} disabled={isLoading}>
-            {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Refresh
-          </Button>
+          <Gated op="GET /api/v1/ca/bundle">
+            <Button variant="outline" onClick={() => refetch()} disabled={isLoading}>
+              {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Refresh
+            </Button>
+          </Gated>
           <Button variant="outline" onClick={handleCopy} disabled={!pem}>
             <Copy className="mr-2 h-4 w-4" />
             Copy PEM
           </Button>
-          <Button onClick={handleDownload} disabled={!pem}>
-            <Download className="mr-2 h-4 w-4" />
-            Download
-          </Button>
+          <Gated op="GET /api/v1/ca/bundle">
+            <Button onClick={handleDownload} disabled={!pem}>
+              <Download className="mr-2 h-4 w-4" />
+              Download
+            </Button>
+          </Gated>
         </div>
       </div>
 
@@ -151,11 +160,16 @@ export default function CABundlePage() {
           </div>
         </CardHeader>
         <CardContent>
-          {error ? (
+          {!capsLoading && !bundleCap.enabled ? (
+            <div data-testid="ca-bundle-not-enabled" className="rounded-md border border-dashed p-8 text-center text-sm">
+              <div className="font-medium">The CA bundle is not enabled on this server</div>
+              <p className="mt-1 text-muted-foreground">{bundleCap.reason}</p>
+            </div>
+          ) : error ? (
             <div className="rounded-md border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
               Failed to load CA bundle: {String(error.message ?? error)}
             </div>
-          ) : isLoading ? (
+          ) : capsLoading || isLoading ? (
             <div className="flex items-center justify-center py-12 text-muted-foreground">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               Loading CA bundle...

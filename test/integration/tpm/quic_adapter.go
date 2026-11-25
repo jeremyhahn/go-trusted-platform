@@ -651,7 +651,9 @@ func (q *QUICAdapter) SRKDelete(ctx context.Context, handle uint32, password str
 // Seal seals data to the TPM via QUIC.
 func (q *QUICAdapter) Seal(ctx context.Context, opts SealOptions) (*SealResult, error) {
 	req := &quicapi.TPM2SealRequest{
-		Data: opts.Data,
+		Data:     opts.Data,
+		CN:       opts.CN,
+		Password: opts.Password,
 	}
 
 	resp, err := q.sendCategoryRequest(ctx, quicwire.SubOpTPM2Seal, req)
@@ -673,7 +675,8 @@ func (q *QUICAdapter) Seal(ctx context.Context, opts SealOptions) (*SealResult, 
 // Unseal unseals data from the TPM via QUIC.
 func (q *QUICAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealResult, error) {
 	req := &quicapi.TPM2UnsealRequest{
-		CN: opts.CN,
+		CN:       opts.CN,
+		Password: opts.Password,
 	}
 
 	resp, err := q.sendCategoryRequest(ctx, quicwire.SubOpTPM2Unseal, req)
