@@ -37,6 +37,8 @@ import {
   Activity,
 } from "lucide-react";
 import { useApi, useTPM, useToast } from "@/hooks";
+import { Gated } from "@/components/features/capabilities/gated";
+import { useCapabilities } from "@/hooks/use-capabilities";
 import type { TPMCapability } from "trusted-platform-sdk";
 
 
@@ -54,6 +56,9 @@ const formatSeconds = (seconds: number): string => {
 export default function TPMLockoutPage() {
   const { toast } = useToast();
   const tpm = useTPM();
+  // #2033 item 5: the read and Refresh follow the server's capabilities.
+  const { loading: capsLoading, capability } = useCapabilities();
+  const infoCap = capability("GET /api/v1/tpm/info");
 
   const {
     data: tpmInfo,
@@ -64,6 +69,7 @@ export default function TPMLockoutPage() {
     () => tpm.getInfo(),
     [],
     {
+      enabled: !capsLoading && infoCap.enabled,
       onError: (err) => {
         toast({
           title: "Error loading TPM info",
@@ -103,11 +109,20 @@ export default function TPMLockoutPage() {
             interval, and failure threshold for the LOCKOUT hierarchy
           </p>
         </div>
-        <Button variant="outline" onClick={() => refetch()} disabled={loading}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          Refresh
-        </Button>
+        <Gated op="GET /api/v1/tpm/info">
+          <Button variant="outline" onClick={() => refetch()} disabled={loading}>
+            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+        </Gated>
       </div>
+
+      {!capsLoading && !infoCap.enabled && (
+        <div data-testid="tpm-lockout-not-enabled" className="rounded-lg border border-border bg-card p-6">
+          <div className="font-medium">TPM info is not enabled on this server</div>
+          <p className="text-sm text-muted-foreground mt-1">{infoCap.reason}</p>
+        </div>
+      )}
 
       {error && (
         <div className="flex items-center gap-2 p-4 bg-destructive/10 border border-destructive rounded-lg">
