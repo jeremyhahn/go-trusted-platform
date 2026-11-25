@@ -143,12 +143,25 @@ surface.
     "type": "object",
     "properties": {
       "device_id": {"type": "string", "description": "Device ID"},
-      "evidence": {"type": "string", "description": "Base64-encoded attestation evidence"}
+      "evidence": {"type": "string", "description": "Base64-encoded attestation evidence"},
+      "challenge_id": {"type": "string", "description": "Challenge ID from device_attest_challenge; the evidence nonce must be that challenge's nonce"}
     },
     "required": ["device_id", "evidence"]
   }
 }
 ```
+
+`challenge_id` is optional. It names a challenge from
+[`device_attest_challenge`](#device_attest_challenge), and the evidence
+`nonce` must be that challenge's nonce. The challenge is consumed on the
+first attempt, whatever the result. The call is refused when the challenge
+is unknown, already used or expired (`FailedPrecondition`), was issued for
+another device (`FailedPrecondition`) or another tenant
+(`PermissionDenied`), or when the evidence nonce differs
+(`FailedPrecondition`): the same check and codes as the gRPC, Unix, QUIC and
+REST attest calls. When the daemon requires challenges, an attest without
+one is `InvalidArgument`; a `challenge_id` on a daemon with no challenge
+service is `Unavailable`.
 
 `evidence` decodes to:
 
@@ -191,8 +204,8 @@ consumed on first use.
 The reply is the `IssueAttestationChallengeResponse` with proto field names:
 `challenge_id` (passed back on the attest call), `nonce` (base64, the
 32-byte value the quote must embed), `expires_at`, and `status`. A daemon
-with no device service answers `Unavailable`. MCP `device_attest` does not
-take a `challenge_id` yet; the gRPC, Unix and REST attest calls do.
+with no device service answers `Unavailable`. Every transport's attest call
+takes the `challenge_id`, MCP `device_attest` included.
 
 ### device_record_attest_cert
 

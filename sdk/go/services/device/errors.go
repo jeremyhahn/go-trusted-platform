@@ -264,6 +264,21 @@ func (e *ErrAttestDeviceFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrIssueAttestationChallengeFailed is returned when the server cannot
+// issue an attestation challenge for a device.
+type ErrIssueAttestationChallengeFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e *ErrIssueAttestationChallengeFailed) Error() string {
+	return fmt.Sprintf("failed to issue an attestation challenge for device %d: %v", e.ID, e.Cause)
+}
+
+func (e *ErrIssueAttestationChallengeFailed) Unwrap() error {
+	return e.Cause
+}
+
 // ErrCountProfilesFailed is returned when counting profiles fails.
 type ErrCountProfilesFailed struct {
 	Cause error

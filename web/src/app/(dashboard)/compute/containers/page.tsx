@@ -22,6 +22,8 @@ import { ContainerForm } from '@/components/features/compute/container-form';
 import { ServiceUnavailableState } from '@/components/features/platform';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { useCompute, useApi, useToast } from '@/hooks';
+import { Gated } from '@/components/features/capabilities/gated';
+import { useCapabilities } from '@/hooks/use-capabilities';
 import type { Container } from '@/types/infrastructure';
 import { containerStatus } from '@/lib/compute-state';
 
@@ -30,6 +32,9 @@ export default function ContainersPage() {
   const compute = useCompute();
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [formOpen, setFormOpen] = useState(false);
+  // #2033 item 5: the list and every control follow the server's capabilities.
+  const { loading: capsLoading, capability } = useCapabilities();
+  const listCap = capability('GET /api/v1/compute/containers');
 
   // Fetch containers using SDK
   const {
@@ -41,6 +46,7 @@ export default function ContainersPage() {
     () => compute.listContainers(),
     [],
     {
+      enabled: !capsLoading && listCap.enabled,
       onError: (err) => {
         // A structured 503 means compute is not wired on this node
         // (e.g. a control plane) — rendered as an informational state
@@ -91,6 +97,23 @@ export default function ContainersPage() {
     error: containers.filter((c) => c.status === 'error').length,
   };
 
+  if (!capsLoading && !listCap.enabled) {
+    return (
+      <div className="space-y-6" data-testid="containers-not-enabled">
+        <div>
+          <h1 className="text-3xl font-bold">Containers</h1>
+          <p className="text-muted-foreground mt-1">
+            Manage your container instances
+          </p>
+        </div>
+        <ServiceUnavailableState
+          service="Compute"
+          description={listCap.reason ?? 'The server does not offer the container list.'}
+        />
+      </div>
+    );
+  }
+
   if (computeUnavailable) {
     return (
       <div className="space-y-6">
@@ -118,18 +141,23 @@ export default function ContainersPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="icon"
+          <Gated op="GET /api/v1/compute/containers">
+            <Button
+              variant="outline"
+              size="icon"
+              aria-label="Refresh"
             onClick={() => fetchContainers()}
             disabled={loading}
           >
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button onClick={() => setFormOpen(true)}>
+          </Gated>
+          <Gated op="POST /api/v1/compute/containers">
+            <Button onClick={() => setFormOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
             Create Container
           </Button>
+          </Gated>
         </div>
       </div>
 
@@ -170,7 +198,7 @@ export default function ContainersPage() {
         </div>
       </div>
 
-      {loading ? (
+      {capsLoading || loading ? (
         <div className="flex items-center justify-center h-64">
           <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>

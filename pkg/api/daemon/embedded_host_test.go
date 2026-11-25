@@ -151,6 +151,58 @@ func TestNewEmbeddedHost_ServesTheVPNService(t *testing.T) {
 	}
 }
 
+// TestNewEmbeddedHost_ServesTheClusterService: the embedded registry carries
+// the daemon's ClusterService, so an embedded SDK client reaches the servicer
+// SetClusterService installs: Unavailable before one is set, then status and
+// nodes (#2140).
+func TestNewEmbeddedHost_ServesTheClusterService(t *testing.T) {
+	host, err := NewEmbeddedHost(testConfig(filepath.Join(t.TempDir(), "platformd.sock")))
+	if err != nil {
+		t.Fatalf("NewEmbeddedHost: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := host.Stop(context.Background()); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	})
+
+	if host.Services().Cluster == nil {
+		t.Fatal("Services().Cluster is nil")
+	}
+	adapter, err := embedded.New(host.Services())
+	if err != nil {
+		t.Fatalf("embedded.New: %v", err)
+	}
+	client := platformv1.NewClusterServiceClient(adapter.Connection())
+
+	_, err = client.GetStatus(context.Background(), &platformv1.GetClusterStatusRequest{})
+	if code := status.Code(err); code != codes.Unavailable {
+		t.Fatalf("GetStatus before a servicer is set: err = %v, want Unavailable", err)
+	}
+
+	host.daemon.SetClusterService(&fakeClusterServicer{
+		statusInfo: stockStatus(),
+		nodes:      stockNodes(),
+		nodeID:     1,
+		leader:     true,
+	})
+
+	statusResp, err := client.GetStatus(context.Background(), &platformv1.GetClusterStatusRequest{})
+	if err != nil {
+		t.Fatalf("GetStatus over the embedded transport: %v", err)
+	}
+	if got := statusResp.GetCluster().GetTotalNodes(); got != 3 {
+		t.Errorf("TotalNodes = %d, want 3", got)
+	}
+	nodesResp, err := client.ListNodes(context.Background(), &platformv1.ListClusterNodesRequest{})
+	if err != nil {
+		t.Fatalf("ListNodes over the embedded transport: %v", err)
+	}
+	if got, want := len(nodesResp.GetNodes()), len(stockNodes().Nodes); got != want {
+		t.Errorf("ListNodes = %d nodes, want %d", got, want)
+	}
+}
+
 // The embedder's wiring is handed the hosted daemon; without a hook there is
 // nothing to wire.
 func TestEmbeddedHost_WireBackendsReceivesTheDaemon(t *testing.T) {

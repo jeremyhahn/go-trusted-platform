@@ -1145,4 +1145,5 @@ export type {
   UseEABListOptions,
   UseDeviceTemplateResult,
   UseProvisioningSessionResult,
+  UseProvisioningSessionsOptions,
 } from './react/index.js';
