@@ -14,6 +14,7 @@
 package arch
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -470,12 +471,19 @@ func TestCIRegistryPullFallsBackToALeasedBuild(t *testing.T) {
 // checking that every copy of it in ci.yml is the same text.
 func ciImageLockFn(t *testing.T) string {
 	t.Helper()
+	return ciShellFn(t, "image_lock")
+}
+
+// ciShellFn returns the shell function name as ci.yml defines it, checking
+// that its four copies agree.
+func ciShellFn(t *testing.T, name string) string {
+	t.Helper()
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), ciWorkflowFile))
 	require.NoError(t, err)
 	var copies []string
 	lines := strings.Split(string(data), "\n")
 	for i, line := range lines {
-		if strings.TrimSpace(line) != "image_lock() {" {
+		if strings.TrimSpace(line) != name+"() {" {
 			continue
 		}
 		indent := line[:len(line)-len(strings.TrimLeft(line, " "))]
@@ -488,9 +496,9 @@ func ciImageLockFn(t *testing.T) string {
 		}
 		copies = append(copies, fn.String())
 	}
-	require.Len(t, copies, 4, "ci.yml defines image_lock in four steps")
+	require.Len(t, copies, 4, "ci.yml defines %s in four steps", name)
 	for i, c := range copies[1:] {
-		require.Equal(t, copies[0], c, "image_lock copy %d differs from the first", i+2)
+		require.Equal(t, copies[0], c, "%s copy %d differs from the first", name, i+2)
 	}
 	return copies[0]
 }
@@ -645,6 +653,126 @@ func TestCIRegistryPullPullsADigestOncePerDaemon(t *testing.T) {
 			require.Contains(t, strings.Split(string(names), "\n"), "go-trusted-platform-ci-pull-"+lock, "lock names taken:\n%s", names)
 		})
 	}
+}
+
+// overlapDocker wraps fakeRegistryDocker ($FAKE_DOCKER_REAL): container names
+// are reserved atomically (mkdir), as the daemon does, and the first pull
+// waits until the other leg either contends for a pull lock held during that
+// pull or starts a pull of its own.
+const overlapDocker = `#!/usr/bin/env bash
+s=$FAKE_DOCKER_STATE real=$FAKE_DOCKER_REAL
+case "$1" in
+  create)
+    n=$5
+    if ! mkdir "$s/names/$n" 2>/dev/null; then
+      case $n in go-trusted-platform-ci-pull-*)
+        [ ! -e "$s/first-pull" ] || : > "$s/pull-lock-contended" ;;
+      esac
+      echo "Conflict: the container name $n is already in use" >&2; exit 1
+    fi
+    "$real" "$@"; rc=$?
+    [ "$rc" -eq 0 ] || rmdir "$s/names/$n"
+    exit "$rc" ;;
+  rm) "$real" "$@"; rc=$?; rmdir "$s/names/$2" 2>/dev/null; exit "$rc" ;;
+  container)
+    "$real" "$@"; rc=$?
+    [ "$2" != rm ] || rmdir "$s/names/$3" 2>/dev/null
+    exit "$rc" ;;
+  pull)
+    if mkdir "$s/first-pull" 2>/dev/null; then
+      for ((i = 0; ; i++)); do
+        [ -e "$s/pull-lock-contended" ] || [ -e "$s/second-pull" ] && break
+        [ "$i" -lt 1200 ] || { echo "fake docker: the other leg never reached the pull lock" >&2; exit 1; }
+        command sleep 0.05
+      done
+    else
+      : > "$s/second-pull"
+    fi
+    exec "$real" "$@" ;;
+  *) exec "$real" "$@" ;;
+esac
+`
+
+// TestCIRegistryPullHoldsItsPullLockAcrossThePull runs two legs of the pull
+// step at once on one fake daemon, with the workflow's own image_lock and
+// image_unlock. The first pull is held until the other leg has tried the
+// same pull lock (or has started a pull of its own): a step that holds the
+// pull lock across docker pull makes the other leg wait and then reuse the
+// image, so one pull starts and both legs lease it.
+func TestCIRegistryPullHoldsItsPullLockAcrossThePull(t *testing.T) {
+	step := ciStepRun(t, ciLegJob, "pull")
+	dir := t.TempDir()
+	bin, tmp, state := filepath.Join(dir, "bin"), filepath.Join(dir, "runner-temp"), filepath.Join(dir, "state")
+	for _, d := range []string{bin, filepath.Join(state, "tags"), filepath.Join(state, "containers"), filepath.Join(state, "names"), tmp} {
+		require.NoError(t, os.MkdirAll(d, 0o755))
+	}
+	realDocker := filepath.Join(dir, "fake-docker")
+	require.NoError(t, os.WriteFile(realDocker, []byte(fakeRegistryDocker), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "docker"), []byte(overlapDocker), 0o755))
+	// The lock's 1 s retry runs as a 50 ms poll here.
+	lockLib := ciShellFn(t, "image_lock") + ciShellFn(t, "image_unlock") + "sleep() { command sleep 0.05; }\n"
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "image-lock.sh"), []byte(lockLib), 0o644))
+	stepFile := filepath.Join(dir, "pull.sh")
+	require.NoError(t, os.WriteFile(stepFile, []byte(step), 0o644))
+
+	const layers = `["sha256:aaaa","sha256:bbbb"]`
+	sum := sha256.Sum256([]byte(layers + "\n"))
+	file := func(name string) string { return filepath.Join(dir, name) }
+	read := func(name string) string {
+		data, _ := os.ReadFile(file(name))
+		return strings.TrimSpace(string(data))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	type leg struct {
+		name string
+		cmd  *exec.Cmd
+		out  strings.Builder
+	}
+	legs := []*leg{{name: "a"}, {name: "b"}}
+	for _, l := range legs {
+		for _, f := range []string{l.name + ".env", l.name + ".out"} {
+			require.NoError(t, os.WriteFile(file(f), nil, 0o644))
+		}
+		l.cmd = exec.CommandContext(ctx, "bash", "-e", stepFile)
+		l.cmd.Env = append(os.Environ(),
+			"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"FAKE_DOCKER_STATE="+state,
+			"FAKE_DOCKER_REAL="+realDocker,
+			"HOME="+dir, "DOCKER_CONFIG=", "DOCKER_CONTEXT=", "DOCKER_HOST=",
+			"FAKE_IMAGE_ID=sha256:1111",
+			"FAKE_LAYERS="+layers,
+			"RUNNER_TEMP="+tmp,
+			"IT_REGISTRY=registry.invalid:5000",
+			"IT_IMAGE_TAG=1111",
+			"IT_IMAGE=go-trusted-platform-it:content",
+			"IT_IMAGE_IDENTITY="+hex.EncodeToString(sum[:]),
+			"REGISTRY_USER=", "REGISTRY_PASSWORD=",
+			"IT_LEASE=lease-"+l.name,
+			"GITHUB_ENV="+file(l.name+".env"),
+			"GITHUB_OUTPUT="+file(l.name+".out"),
+		)
+		l.cmd.Stdout, l.cmd.Stderr = &l.out, &l.out
+	}
+	// With Stdout and Stderr the same writer, exec writes it from one
+	// goroutine at a time.
+	for _, l := range legs {
+		require.NoError(t, l.cmd.Start())
+	}
+	errs := make([]error, len(legs))
+	for i, l := range legs {
+		errs[i] = l.cmd.Wait()
+	}
+	require.NoError(t, ctx.Err(), "the legs did not end within 60 s:\nA:\n%s\nB:\n%s", legs[0].out.String(), legs[1].out.String())
+	for i, l := range legs {
+		require.NoError(t, errs[i], "leg %s:\n%s", l.name, l.out.String())
+		require.Contains(t, read(l.name+".out"), "leased=true", "leg %s:\n%s", l.name, l.out.String())
+	}
+	pulls, _ := os.ReadFile(filepath.Join(state, "pull-context"))
+	require.Equal(t, 1, strings.Count(string(pulls), "\n"),
+		"two overlapping legs on one daemon pulled more than once:\nA:\n%s\nB:\n%s", legs[0].out.String(), legs[1].out.String())
+	require.FileExists(t, filepath.Join(state, "pull-lock-contended"),
+		"the other leg never contended for the pull lock held across the pull:\nA:\n%s\nB:\n%s", legs[0].out.String(), legs[1].out.String())
 }
 
 // Containerd fails a pull that races another on its ref lock with errors a
