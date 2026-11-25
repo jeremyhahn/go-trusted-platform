@@ -25,7 +25,7 @@ func TestUserToProto_Populated(t *testing.T) {
 	lastLogin := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 	got := UserToProto(&iamsdk.User{
 		ID: "user-1", TenantID: "tenant-a", Email: "a@example.com", DisplayName: "Alice",
-		Roles: []string{"writer"}, Groups: []string{"docs"},
+		Roles:       []string{"writer"},
 		Metadata:    map[string]string{"team": "core"},
 		AuthMethods: []string{"webauthn"},
 		LastLoginAt: &lastLogin, CreatedAt: protoCreated, UpdatedAt: protoUpdated,
@@ -37,7 +37,7 @@ func TestUserToProto_Populated(t *testing.T) {
 	assert.Equal(t, "a@example.com", got.GetEmail())
 	assert.Equal(t, "Alice", got.GetName())
 	assert.Equal(t, []string{"writer"}, got.GetRoles())
-	assert.Equal(t, []string{"docs"}, got.GetGroups())
+	assert.Empty(t, got.GetGroups())
 	assert.Equal(t, map[string]string{"team": "core"}, got.GetAttributes())
 	assert.True(t, got.GetMfaVerified())
 	assert.Equal(t, lastLogin, got.GetLastAuth().AsTime())

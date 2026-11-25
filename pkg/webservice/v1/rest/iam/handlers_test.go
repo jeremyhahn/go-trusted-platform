@@ -551,7 +551,6 @@ func TestCreateUser_Success(t *testing.T) {
 				Email:       req.Email,
 				DisplayName: req.DisplayName,
 				Roles:       req.Roles,
-				Groups:      req.Groups,
 			}, nil
 		},
 	}
@@ -559,10 +558,9 @@ func TestCreateUser_Success(t *testing.T) {
 	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
 
 	body := CreateUserRequest{
-		Email:  "test@example.com",
-		Name:   "Test User",
-		Roles:  []string{"admin"},
-		Groups: []string{"engineering"},
+		Email: "test@example.com",
+		Name:  "Test User",
+		Roles: []string{"admin"},
 	}
 
 	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants/tenant-1/users", body, map[string]string{"tenant": "tenant-1"})
