@@ -168,7 +168,9 @@ func (b *clusterGRPCBackend) Leave(
 }
 
 // GetStatus reports the cluster state and this node; with IncludeNodes it
-// also lists every member.
+// also lists every member. Membership is read for every request, so both
+// forms report the same local node: this node's member record, or, when it
+// is not a member, its ID with an unspecified state.
 func (b *clusterGRPCBackend) GetStatus(
 	ctx context.Context,
 	req *grpcapi.ClusterGetStatusRequest,
@@ -181,8 +183,12 @@ func (b *clusterGRPCBackend) GetStatus(
 	if err != nil {
 		return nil, err
 	}
+	nodes, err := svc.Nodes(ctx)
+	if err != nil {
+		return nil, err
+	}
 	resp := &grpcapi.ClusterGetStatusResponse{
-		LocalNode: localClusterNode(svc, ""),
+		LocalNode: memberLocalNode(svc.NodeID(), nodes),
 		Timestamp: b.now().Unix(),
 	}
 	if !req.IncludeNodes {
@@ -190,20 +196,12 @@ func (b *clusterGRPCBackend) GetStatus(
 		return resp, nil
 	}
 
-	nodes, err := svc.Nodes(ctx)
-	if err != nil {
-		return nil, err
-	}
 	var leader *ClusterNodeInfo
 	if nodes != nil {
 		leader = nodes.Leader
 		resp.Nodes = make([]*grpcapi.ClusterNodeInfo, 0, len(nodes.Nodes))
 		for _, n := range nodes.Nodes {
-			node := clusterNodeToGRPC(n)
-			if n.ID == svc.NodeID() {
-				resp.LocalNode = node
-			}
-			resp.Nodes = append(resp.Nodes, node)
+			resp.Nodes = append(resp.Nodes, clusterNodeToGRPC(n))
 		}
 	}
 	resp.Cluster = clusterInfoToGRPC("", st, leader)
@@ -384,8 +382,9 @@ func clusterNodeToGRPC(n ClusterNodeInfo) *grpcapi.ClusterNodeInfo {
 	}
 }
 
-// localClusterNode describes the serving node after a successful
-// membership change.
+// localClusterNode describes the serving node only after a successful
+// membership change (the Bootstrap and Join responses), which is why its
+// state is ACTIVE. GetStatus reads the node from membership instead.
 func localClusterNode(svc ClusterServicer, name string) *grpcapi.ClusterNodeInfo {
 	role := grpcapi.NodeRoleFollower
 	if svc.IsLeader() {
@@ -396,6 +395,25 @@ func localClusterNode(svc ClusterServicer, name string) *grpcapi.ClusterNodeInfo
 		Name:  name,
 		Role:  role,
 		State: grpcapi.NodeStateActive,
+	}
+}
+
+// memberLocalNode returns the member record of node id from membership,
+// keeping the state membership reports (an "unknown" state reads
+// unspecified). A node absent from membership, or nil membership, is
+// reported by ID as a follower in the unspecified state, never as ACTIVE.
+func memberLocalNode(id uint64, nodes *ClusterNodesInfo) *grpcapi.ClusterNodeInfo {
+	if nodes != nil {
+		for _, n := range nodes.Nodes {
+			if n.ID == id {
+				return clusterNodeToGRPC(n)
+			}
+		}
+	}
+	return &grpcapi.ClusterNodeInfo{
+		ID:    formatClusterNodeID(id),
+		Role:  grpcapi.NodeRoleFollower,
+		State: grpcapi.NodeStateUnspecified,
 	}
 }
 
