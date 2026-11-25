@@ -36,6 +36,7 @@ func (ErrCeremonyBackendRequiresSDK) Error() string {
 // SDKBackendTarget is the daemon surface the SDK backend wiring writes to.
 type SDKBackendTarget interface {
 	SetCeremonyBackend(b daemon.CeremonyBackend)
+	SetClusterService(svc daemon.ClusterServicer)
 }
 
 // SDKBackendSources is what the ceremony backend is built from.
@@ -44,6 +45,10 @@ type SDKBackendSources struct {
 	SDK quicbaassdk.Client
 	// Admin mints the admin bundle CeremonyService.Init returns.
 	Admin AdminBundleIssuer
+	// Cluster is the cluster servicer over the embedded go-quicbaas service
+	// (PlatformClusterBackend). Nil leaves the daemon's cluster service
+	// unset, so every cluster transport answers "not configured".
+	Cluster daemon.ClusterServicer
 }
 
 // PlatformSDKBackendSources returns the sources for a running platform: its
@@ -72,12 +77,18 @@ func PlatformAdminIdentity(a *app.App) AdminIdentity {
 // WireSDKBackends gives a daemon's ceremony service its production backend on
 // every transport. Runtime FIDO2 is intentionally left unwired until the SDK
 // exposes the daemon backend shape; callers receive daemon.ErrFIDO2NotConfigured
-// instead of a local CTAP2/KV implementation.
+// instead of a local CTAP2/KV implementation. When the sources carry a cluster
+// servicer (the embedded go-quicbaas cluster), it becomes the daemon's
+// cluster service on every transport; without one the cluster service stays
+// unset.
 func WireSDKBackends(target SDKBackendTarget, src SDKBackendSources, logger *logging.Logger) error {
 	if src.SDK == nil {
 		return ErrCeremonyBackendRequiresSDK{}
 	}
 	target.SetCeremonyBackend(NewCeremonyBackend(logger, src.SDK, src.Admin))
+	if src.Cluster != nil {
+		target.SetClusterService(src.Cluster)
+	}
 	return nil
 }
 
@@ -86,5 +97,7 @@ func WireSDKBackends(target SDKBackendTarget, src SDKBackendSources, logger *log
 // from the platform the host initialized. Without an SDK client it fails,
 // and the host does not start, as platformd does not.
 func WireEmbeddedHost(d *daemon.Daemon, a *app.App) error {
-	return WireSDKBackends(d, PlatformSDKBackendSources(a.QuicBaaSSDKClient(), a.CA, PlatformAdminIdentity(a)), a.Logger)
+	src := PlatformSDKBackendSources(a.QuicBaaSSDKClient(), a.CA, PlatformAdminIdentity(a))
+	src.Cluster = PlatformClusterBackend(a)
+	return WireSDKBackends(d, src, a.Logger)
 }
