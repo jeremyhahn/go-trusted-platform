@@ -123,3 +123,54 @@ func TestSharedZoneFlowManagerQuarantineAllowsDNS(t *testing.T) {
 	require.Equal(t, dnsPriority, allowed[0].Priority)
 	require.Contains(t, strings.Split(allowed[0].Match, ","), "nw_proto=17")
 }
+
+// TestSharedZoneFlowManagerServiceScopedPairDeniesOtherTraffic: through
+// the shared wiring, a dns-only hypervisor → storage path opens DNS to
+// storage above the matrix deny (200) and drops every other flow to the
+// storage subnet at 200, below which the hypervisor template's catch-all
+// normal rule sits (#1896).
+func TestSharedZoneFlowManagerServiceScopedPairDeniesOtherTraffic(t *testing.T) {
+	zones := zone.Defaults()
+	for i := range zones {
+		if zones[i].Name == zone.ZoneHypervisor {
+			zones[i].AllowTo = append(zones[i].AllowTo,
+				zone.ZonePath{Zone: zone.ZoneStorage, Services: []string{"dns"}})
+		}
+	}
+	plan, err := netplan.New(netplan.Environment{ID: 4}, zones)
+	require.NoError(t, err)
+	storage, ok := plan.Zone(zone.ZoneStorage)
+	require.True(t, ok)
+
+	rec := &recordingOVSPort{}
+	zfm, err := newSharedZoneFlowManager(policy.ZoneFlowManagerConfig{
+		BridgeName:     "br-fabric",
+		FlowController: rec,
+		PortController: rec,
+		Plan:           plan,
+		Zones:          zones,
+	})
+	require.NoError(t, err)
+	require.NoError(t, zfm.ApplyZoneFlows(context.Background(), "tap0", zone.ZoneHypervisor))
+
+	const deny = 200
+	dst := "nw_dst=" + storage.Subnet4.String()
+	var dnsPermits, drops int
+	for _, r := range rec.rules {
+		fields := strings.Split(r.Match, ",")
+		if !slices.Contains(fields, dst) {
+			continue
+		}
+		switch {
+		case r.Actions == "drop" && r.Priority == deny && !strings.Contains(r.Match, "tp_dst="):
+			drops++
+		case slices.Contains(fields, "tp_dst=53") && r.Actions == "normal":
+			require.Greater(t, r.Priority, deny, "DNS permit below the destination drop: %s", r.Match)
+			dnsPermits++
+		case r.Actions != "drop":
+			require.Greater(t, r.Priority, deny, "rule forwards unlisted traffic to storage: %+v", r)
+		}
+	}
+	require.Positive(t, dnsPermits, "DNS to storage must be permitted")
+	require.Positive(t, drops, "other traffic to storage must be dropped at %d", deny)
+}
