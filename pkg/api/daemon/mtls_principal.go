@@ -94,23 +94,6 @@ func concretePermissionCatalog() []string {
 	return slices.Compact(catalog)
 }
 
-// wildcardCovers reports whether the concrete permission matches the
-// resource:action pattern. Only a whole-segment "*" is a wildcard, as in
-// go-qrdb's RBAC; a partial glob such as "pi*" never matches.
-func wildcardCovers(resource, action, permission string) bool {
-	permResource, permAction, ok := strings.Cut(permission, ":")
-	if !ok {
-		return false
-	}
-	return (resource == "*" || resource == permResource) && (action == "*" || action == permAction)
-}
-
-// wholeSegmentOrConcrete reports whether a permission segment is exactly
-// the wildcard "*" or holds no "*" at all.
-func wholeSegmentOrConcrete(segment string) bool {
-	return segment == "*" || !strings.Contains(segment, "*")
-}
-
 // newIAMCertificatePrincipals returns a resolver backed by IAM. Both clients
 // are required: without them there is no principal to resolve.
 func newIAMCertificatePrincipals(users sdkiam.UserClient, roles sdkiam.RoleClient, pep sdkiam.PEPClient) (*iamCertificatePrincipals, error) {
