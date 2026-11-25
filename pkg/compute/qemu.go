@@ -1234,6 +1234,16 @@ func (o *QEMUOrchestrator) GetState(ctx context.Context, instanceID string) (Ins
 	return o.lifecycle.GetState(instanceID)
 }
 
+// closeStopGuest stops a running guest's QEMU gracefully (ACPI power
+// button, then SIGTERM) while Close shuts the orchestrator down, and reports
+// whether the guest was running. Tests swap it to observe the stop.
+var closeStopGuest = func(vm *qemu.VM) (bool, error) {
+	if vm == nil || !vm.IsRunning() {
+		return false, nil
+	}
+	return true, vm.Stop()
+}
+
 // Close closes the orchestrator and releases resources
 func (o *QEMUOrchestrator) Close() error {
 	reapReceivers(o)
@@ -1244,11 +1254,10 @@ func (o *QEMUOrchestrator) Close() error {
 	// Stop all running instances
 	for instanceID, qemuInst := range o.instances {
 		o.closeConsole(instanceID)
-		if qemuInst.vm.IsRunning() {
-			o.logger.Infof("Stopping instance %s during shutdown", instanceID)
-			if err := qemuInst.vm.Stop(); err != nil {
-				o.logger.Errorf("Failed to stop instance %s: %v", instanceID, err)
-			}
+		if stopped, err := closeStopGuest(qemuInst.vm); err != nil {
+			o.logger.Errorf("Failed to stop instance %s: %v", instanceID, err)
+		} else if stopped {
+			o.logger.Infof("Stopped instance %s during shutdown", instanceID)
 		}
 		// Stop swtpm if running
 		if qemuInst.swtpm != nil && qemuInst.swtpm.IsRunning() {
