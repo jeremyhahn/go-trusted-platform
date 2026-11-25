@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { AlertCircle, FileCode, Loader2, Plus, RefreshCw, Shield, Trash2, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -26,9 +26,10 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { ServiceUnavailableState } from '@/components/features/platform';
+import { Gated } from '@/components/features/capabilities/gated';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { useApi, useToast, useVPN } from '@/hooks';
-import type { ApiResponse, VPNPeer, VPNPosturePolicy } from 'trusted-platform-sdk';
+import type { ApiResponse, VPNGatewayStatus, VPNPeer, VPNPosturePolicy } from 'trusted-platform-sdk';
 
 /** A posture policy in the editor; `isNew` unlocks the tenant and name. */
 interface PolicyDraft {
@@ -62,11 +63,40 @@ function formatUnix(seconds: string): string {
   return new Date(value * 1000).toLocaleString();
 }
 
+/** Renders a protojson count map as `key: value` pairs; an empty map reads none. */
+function formatCounts(counts: Record<string, string | number> | null | undefined): string {
+  const entries = Object.entries(counts ?? {});
+  if (entries.length === 0) {
+    return 'none';
+  }
+  return entries.map(([key, value]) => `${key}: ${value}`).join(', ');
+}
+
+/** Renders a re-attestation histogram as its count and mean time. */
+function formatReattest(reattest: VPNGatewayStatus['reattest']): string {
+  const count = Number(reattest?.count ?? 0);
+  if (!reattest || !Number.isFinite(count) || count <= 0) {
+    return 'no re-attestations';
+  }
+  return `${count} re-attestations, mean ${Math.round((reattest.sumSeconds / count) * 1000)} ms`;
+}
+
 /** The SDK reports a failed call in the response; mutations need it thrown. */
 function throwOnError<T>(response: ApiResponse<T>): void {
   if (response.error !== undefined) {
     throw new Error(response.error.message);
   }
+}
+
+/**
+ * latest numbers each read on gen and answers with neither data nor error
+ * when a newer read on the same counter started meanwhile: useApi then keeps
+ * the newer answer, raises no error state and shows no toast.
+ */
+async function latest<T>(gen: { current: number }, read: () => Promise<ApiResponse<T>>): Promise<ApiResponse<T>> {
+  const mine = ++gen.current;
+  const response = await read();
+  return mine === gen.current ? response : ({} as ApiResponse<T>);
 }
 
 export default function VPNPage() {
@@ -80,6 +110,13 @@ export default function VPNPage() {
   const [enrolSubmitting, setEnrolSubmitting] = useState(false);
   const [deleting, setDeleting] = useState<VPNPosturePolicy | null>(null);
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
+  const [tenantInput, setTenantInput] = useState('');
+  const [gatewayInput, setGatewayInput] = useState('');
+  // Filter answers that arrive after a newer filter was applied are dropped (#2070).
+  const [filters, setFilters] = useState({ tenant: '', gateway: '' });
+  const statusGen = useRef(0);
+  const tenantGen = useRef(0);
+  const policiesGen = useRef(0);
 
   const notConfiguredQuiet = (title: string) => ({
     onError: (err: Error) => {
@@ -97,14 +134,32 @@ export default function VPNPage() {
     isLoading: statusLoading,
     error: statusError,
     refetch: refetchStatus,
-  } = useApi(() => vpn.getStatus(), [], notConfiguredQuiet('Error loading VPN status'));
+  } = useApi(
+    () =>
+      latest(statusGen, async (): Promise<ApiResponse<{ gateways?: VPNGatewayStatus[]; gateway?: string }>> => {
+        const gateway = filters.gateway;
+        const response = await vpn.getStatus(gateway || undefined);
+        return response.data !== undefined ? { ...response, data: { ...response.data, gateway } } : response;
+      }),
+    [filters.gateway],
+    notConfiguredQuiet('Error loading VPN status')
+  );
 
   const {
     data: peersData,
     isLoading: peersLoading,
     error: peersError,
     refetch: refetchPeers,
-  } = useApi(() => vpn.listPeers(), [], notConfiguredQuiet('Error loading VPN peers'));
+  } = useApi(
+    () =>
+      latest(tenantGen, async (): Promise<ApiResponse<{ peers?: VPNPeer[]; tenant?: string }>> => {
+        const tenant = filters.tenant;
+        const response = await vpn.listPeers(tenant || undefined);
+        return response.data !== undefined ? { ...response, data: { ...response.data, tenant } } : response;
+      }),
+    [filters.tenant],
+    notConfiguredQuiet('Error loading VPN peers')
+  );
 
   const {
     data: policiesData,
@@ -112,14 +167,22 @@ export default function VPNPage() {
     error: policiesError,
     refetch: refetchPolicies,
   } = useApi(
-    () => vpn.listPosturePolicies(),
-    [],
+    () =>
+      latest(policiesGen, async (): Promise<ApiResponse<{ policies?: VPNPosturePolicy[]; tenant?: string }>> => {
+        const tenant = filters.tenant;
+        const response = await vpn.listPosturePolicies(tenant || undefined);
+        return response.data !== undefined ? { ...response, data: { ...response.data, tenant } } : response;
+      }),
+    [filters.tenant],
     notConfiguredQuiet('Error loading posture policies')
   );
 
-  const gateways = statusData?.gateways ?? [];
-  const peers = peersData?.peers ?? [];
-  const policies = policiesData?.policies ?? [];
+  // Telemetry is shown only for the filter that answered (#2070). Peers and
+  // posture policies, too, are shown only for the tenant filter that answered,
+  // so a pending tenant read never leaves the previous tenant's rows actionable.
+  const gateways = !statusError && statusData?.gateway === filters.gateway ? (statusData?.gateways ?? []) : [];
+  const peers = peersData?.tenant === filters.tenant ? (peersData?.peers ?? []) : [];
+  const policies = policiesData?.tenant === filters.tenant ? (policiesData?.policies ?? []) : [];
   const isLoading = statusLoading || peersLoading || policiesLoading;
   const vpnUnavailable =
     isServiceNotConfigured(statusError) ||
@@ -133,6 +196,12 @@ export default function VPNPage() {
     refetchStatus();
     refetchPeers();
     refetchPolicies();
+  };
+
+  const clearFilters = () => {
+    setTenantInput('');
+    setGatewayInput('');
+    setFilters({ tenant: '', gateway: '' });
   };
 
   const revokePeer = async (peer: VPNPeer) => {
@@ -169,6 +238,7 @@ export default function VPNPage() {
       toast({ title: `Enrolled ${peer.deviceId.trim()}`, variant: 'success' });
       setEnrolling(null);
       refetchPeers();
+      refetchStatus();
     } catch (err) {
       toast({
         title: 'Failed to enrol peer',
@@ -250,7 +320,7 @@ export default function VPNPage() {
 
   if (vpnUnavailable) {
     return (
-      <div className="container mx-auto py-6 space-y-6">
+      <div className="container mx-auto py-6 space-y-6" data-testid="vpn-unavailable">
         {header}
         <ServiceUnavailableState
           service="VPN"
@@ -260,9 +330,52 @@ export default function VPNPage() {
     );
   }
 
+  // The filter form stays on the error state too: a filtered read the server
+  // refuses (a tenant the caller may not read) is fixed by changing or
+  // clearing the filter, not by retrying the same read.
+  const filterForm = (
+    <form
+      role="search"
+      aria-label="VPN filters"
+      data-testid="vpn-filters"
+      className="flex flex-wrap items-end gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        setFilters({ tenant: tenantInput.trim(), gateway: gatewayInput.trim() });
+      }}
+    >
+      <div className="space-y-1">
+        <Label htmlFor="vpn-filter-tenant">Tenant</Label>
+        <Input
+          id="vpn-filter-tenant"
+          placeholder="every tenant"
+          value={tenantInput}
+          onChange={(e) => setTenantInput(e.target.value)}
+        />
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor="vpn-filter-gateway">Gateway</Label>
+        <Input
+          id="vpn-filter-gateway"
+          placeholder="every gateway"
+          value={gatewayInput}
+          onChange={(e) => setGatewayInput(e.target.value)}
+        />
+      </div>
+      <Button type="submit" size="sm" variant="outline">
+        Apply filters
+      </Button>
+      <Button type="button" size="sm" variant="ghost" onClick={clearFilters}>
+        Clear filters
+      </Button>
+    </form>
+  );
+
   if (error) {
     return (
-      <div className="container mx-auto py-6">
+      <div className="container mx-auto py-6 space-y-6">
+        {header}
+        {filterForm}
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
           <AlertTitle>Error Loading VPN</AlertTitle>
@@ -271,6 +384,11 @@ export default function VPNPage() {
             <Button variant="outline" size="sm" className="ml-4" onClick={fetchData}>
               Retry
             </Button>
+            {(filters.tenant || filters.gateway) && (
+              <Button variant="outline" size="sm" className="ml-2" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            )}
           </AlertDescription>
         </Alert>
       </div>
@@ -303,7 +421,9 @@ export default function VPNPage() {
         </Button>
       </div>
 
-      <Card>
+      {filterForm}
+
+      <Card data-testid="vpn-gateways-card">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Shield className="h-5 w-5" />
@@ -312,17 +432,18 @@ export default function VPNPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           {statusError ? (
-            <p className="text-sm text-muted-foreground">
+            <p className="text-sm text-muted-foreground" data-testid="vpn-status-error">
               Session status is unavailable: {statusError.message}
             </p>
           ) : gateways.length === 0 ? (
             <p className="text-sm text-muted-foreground">No gateway has reported yet.</p>
           ) : (
-            <Table>
+            <Table data-testid="vpn-gateways-table">
               <TableHeader>
                 <TableRow>
                   <TableHead>Gateway</TableHead>
                   <TableHead>VPN</TableHead>
+                  <TableHead>Peers</TableHead>
                   <TableHead>Admissions</TableHead>
                   <TableHead>Refusals</TableHead>
                   <TableHead>Last Refusal</TableHead>
@@ -338,6 +459,7 @@ export default function VPNPage() {
                         {!gateway.reporting ? 'not configured' : gateway.running ? 'running' : 'stopped'}
                       </Badge>
                     </TableCell>
+                    <TableCell>{gateway.enrolledPeers}</TableCell>
                     <TableCell>{gateway.admissions}</TableCell>
                     <TableCell>{gateway.refusals}</TableCell>
                     <TableCell className="text-sm">{gateway.lastRefusal || '—'}</TableCell>
@@ -347,6 +469,33 @@ export default function VPNPage() {
               </TableBody>
             </Table>
           )}
+          {gateways
+            .filter((gateway) => gateway.reporting)
+            .map((gateway) => (
+              <div
+                key={gateway.gatewayId}
+                data-testid={`vpn-gateway-detail-${gateway.gatewayId}`}
+                className="mt-4 space-y-1 rounded-md border p-3 text-sm"
+              >
+                <p className="font-mono font-medium">{gateway.gatewayId}</p>
+                <p>
+                  <span className="text-muted-foreground">Leases by data plane: </span>
+                  <span>{formatCounts(gateway.leasesByDataPlane)}</span>
+                </p>
+                <p>
+                  <span className="text-muted-foreground">Revocations: </span>
+                  <span>{formatCounts(gateway.revocations)}</span>
+                </p>
+                <p>
+                  <span className="text-muted-foreground">Posture violations: </span>
+                  <span>{formatCounts(gateway.postureViolations)}</span>
+                </p>
+                <p>
+                  <span className="text-muted-foreground">Re-attestation: </span>
+                  <span>{formatReattest(gateway.reattest)}</span>
+                </p>
+              </div>
+            ))}
           {gateways.flatMap((gateway) =>
             gateway.rejectedPeers.map((rejected) => (
               <Alert key={`${gateway.gatewayId}/${rejected.tenantId}/${rejected.deviceId}`} variant="destructive">
@@ -370,7 +519,7 @@ export default function VPNPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card data-testid="vpn-sessions-card">
         <CardHeader>
           <CardTitle>Sessions</CardTitle>
         </CardHeader>
@@ -387,7 +536,9 @@ export default function VPNPage() {
                   <TableHead>Address</TableHead>
                   <TableHead>Data Plane</TableHead>
                   <TableHead>Zones</TableHead>
+                  <TableHead>Issued</TableHead>
                   <TableHead>Expires</TableHead>
+                  <TableHead>Renewals</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -399,7 +550,9 @@ export default function VPNPage() {
                     <TableCell className="font-mono text-sm">{lease.address}</TableCell>
                     <TableCell>{lease.dataPlane}</TableCell>
                     <TableCell>{lease.zones.length > 0 ? lease.zones.join(', ') : 'all allowed'}</TableCell>
+                    <TableCell className="text-xs">{formatUnix(lease.issuedAtUnix)}</TableCell>
                     <TableCell className="text-xs">{formatUnix(lease.expiresAtUnix)}</TableCell>
+                    <TableCell>{lease.renewals}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -408,17 +561,19 @@ export default function VPNPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card data-testid="vpn-peers-card">
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2">
               <Users className="h-5 w-5" />
               Enrolled Peers
             </CardTitle>
-            <Button size="sm" onClick={() => setEnrolling({ tenantId: '', deviceId: '', zones: '' })}>
-              <Plus className="mr-2 h-4 w-4" />
-              Enrol Peer
-            </Button>
+            <Gated op="POST /api/v1/vpn/peers">
+              <Button size="sm" onClick={() => setEnrolling({ tenantId: '', deviceId: '', zones: '' })}>
+                <Plus className="mr-2 h-4 w-4" />
+                Enrol Peer
+              </Button>
+            </Gated>
           </div>
         </CardHeader>
         <CardContent>
@@ -443,14 +598,16 @@ export default function VPNPage() {
                     <TableCell>{peer.zones.length > 0 ? peer.zones.join(', ') : 'all allowed'}</TableCell>
                     <TableCell className="text-xs">{formatUnix(peer.enrolledAtUnix)}</TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={() => setRevoking(peer)}
-                        aria-label={`Revoke ${peer.deviceId}`}
-                      >
-                        Revoke
-                      </Button>
+                      <Gated op="DELETE /api/v1/vpn/peers/{device_id}">
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => setRevoking(peer)}
+                          aria-label={`Revoke ${peer.deviceId}`}
+                        >
+                          Revoke
+                        </Button>
+                      </Gated>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -460,20 +617,22 @@ export default function VPNPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card data-testid="vpn-policies-card">
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2">
               <FileCode className="h-5 w-5" />
               Posture Policies
             </CardTitle>
-            <Button
-              size="sm"
-              onClick={() => setDraft({ tenantId: '', name: '', module: 'package vpn.posture\n', isNew: true })}
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              New Policy
-            </Button>
+            <Gated op="PUT /api/v1/vpn/posture-policies/{name}">
+              <Button
+                size="sm"
+                onClick={() => setDraft({ tenantId: '', name: '', module: 'package vpn.posture\n', isNew: true })}
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                New Policy
+              </Button>
+            </Gated>
           </div>
         </CardHeader>
         <CardContent>
@@ -496,23 +655,27 @@ export default function VPNPage() {
                     <TableCell className="font-mono text-sm">{policy.name}</TableCell>
                     <TableCell className="text-xs">{formatUnix(policy.updatedAtUnix)}</TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => openPolicy(policy)}
-                        aria-label={`Edit ${policy.name}`}
-                      >
-                        View / Edit
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        className="ml-2"
-                        onClick={() => setDeleting(policy)}
-                        aria-label={`Delete ${policy.name}`}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      <Gated op="GET /api/v1/vpn/posture-policies/{name}">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openPolicy(policy)}
+                          aria-label={`Edit ${policy.name}`}
+                        >
+                          View / Edit
+                        </Button>
+                      </Gated>
+                      <Gated op="DELETE /api/v1/vpn/posture-policies/{name}">
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="ml-2"
+                          onClick={() => setDeleting(policy)}
+                          aria-label={`Delete ${policy.name}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </Gated>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -536,14 +699,16 @@ export default function VPNPage() {
             <Button variant="outline" onClick={() => setRevoking(null)}>
               Cancel
             </Button>
-            <Button
-              variant="destructive"
-              disabled={revokeSubmitting}
-              onClick={() => revoking && revokePeer(revoking)}
-            >
-              {revokeSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Confirm Revoke
-            </Button>
+            <Gated op="DELETE /api/v1/vpn/peers/{device_id}">
+              <Button
+                variant="destructive"
+                disabled={revokeSubmitting}
+                onClick={() => revoking && revokePeer(revoking)}
+              >
+                {revokeSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Confirm Revoke
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -592,15 +757,17 @@ export default function VPNPage() {
             <Button variant="outline" onClick={() => setEnrolling(null)}>
               Cancel
             </Button>
-            <Button
-              disabled={
-                !enrolling || !enrolling.tenantId.trim() || !enrolling.deviceId.trim() || enrolSubmitting
-              }
-              onClick={() => enrolling && enrolPeer(enrolling)}
-            >
-              {enrolSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Enrol
-            </Button>
+            <Gated op="POST /api/v1/vpn/peers">
+              <Button
+                disabled={
+                  !enrolling || !enrolling.tenantId.trim() || !enrolling.deviceId.trim() || enrolSubmitting
+                }
+                onClick={() => enrolling && enrolPeer(enrolling)}
+              >
+                {enrolSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Enrol
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -619,14 +786,16 @@ export default function VPNPage() {
             <Button variant="outline" onClick={() => setDeleting(null)}>
               Cancel
             </Button>
-            <Button
-              variant="destructive"
-              disabled={deleteSubmitting}
-              onClick={() => deleting && deletePolicy(deleting)}
-            >
-              {deleteSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Confirm Delete
-            </Button>
+            <Gated op="DELETE /api/v1/vpn/posture-policies/{name}">
+              <Button
+                variant="destructive"
+                disabled={deleteSubmitting}
+                onClick={() => deleting && deletePolicy(deleting)}
+              >
+                {deleteSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Confirm Delete
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -676,13 +845,15 @@ export default function VPNPage() {
             <Button variant="outline" onClick={() => setDraft(null)}>
               Cancel
             </Button>
-            <Button
-              disabled={!draft || !draft.tenantId || !draft.name || !draft.module || draftSubmitting}
-              onClick={() => draft && savePolicy(draft)}
-            >
-              {draftSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Save
-            </Button>
+            <Gated op="PUT /api/v1/vpn/posture-policies/{name}">
+              <Button
+                disabled={!draft || !draft.tenantId || !draft.name || !draft.module || draftSubmitting}
+                onClick={() => draft && savePolicy(draft)}
+              >
+                {draftSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Save
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
