@@ -74,7 +74,7 @@ func appRESTRequests() map[string]proto.Message {
 		},
 		platformv1.MessagingService_GetChannelStats_FullMethodName: &platformv1.GetMessagingChannelStatsRequest{Channel: "events"},
 		platformv1.MessagingService_GetStats_FullMethodName:        &platformv1.GetMessagingStatsRequest{},
-		platformv1.MessagingService_GetDedupStats_FullMethodName:   &platformv1.GetMessagingDedupStatsRequest{},
+		platformv1.MessagingService_GetDedupStats_FullMethodName:   &platformv1.GetMessagingDedupStatsRequest{Channel: "events"},
 
 		platformv1.ObjectStorageService_PutObject_FullMethodName: &platformv1.PutObjectRequest{
 			Key: "docs:reports/a.txt", Value: []byte("a"), Tags: map[string]string{"env": "prod"}, TargetBackend: "local",

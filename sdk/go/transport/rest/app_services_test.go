@@ -162,8 +162,8 @@ func TestAppServiceRoutesMatchTheDaemonHandlers(t *testing.T) {
 		},
 		{
 			method: platformv1.MessagingService_GetDedupStats_FullMethodName,
-			args:   &platformv1.GetMessagingDedupStatsRequest{},
-			verb:   http.MethodGet, path: "/api/v1/messaging/dedup-stats",
+			args:   &platformv1.GetMessagingDedupStatsRequest{Channel: "events"},
+			verb:   http.MethodGet, path: "/api/v1/messaging/dedup-stats?channel=events",
 		},
 		{
 			method: platformv1.ObjectStorageService_PutObject_FullMethodName,

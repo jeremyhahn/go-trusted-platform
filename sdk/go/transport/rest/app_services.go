@@ -61,7 +61,7 @@ var appServiceRoutes = map[string]templatedRoute{
 	platformv1.MessagingService_Publish_FullMethodName:         appItemRoute(messagingBasePath+"/channels/{channel}/messages", http.MethodPost, "channel"),
 	platformv1.MessagingService_GetChannelStats_FullMethodName: appItemRoute(messagingBasePath+"/channels/{channel}/stats", http.MethodGet, "channel"),
 	platformv1.MessagingService_GetStats_FullMethodName:        appQueryRoute(messagingBasePath+"/stats", http.MethodGet),
-	platformv1.MessagingService_GetDedupStats_FullMethodName:   appQueryRoute(messagingBasePath+"/dedup-stats", http.MethodGet),
+	platformv1.MessagingService_GetDedupStats_FullMethodName:   appQueryRoute(messagingBasePath+"/dedup-stats", http.MethodGet, "channel"),
 
 	platformv1.ObjectStorageService_PutObject_FullMethodName: appQueryRoute(objectStorageBasePath+"/objects", http.MethodPost),
 	platformv1.ObjectStorageService_ListObjects_FullMethodName: appQueryRoute(objectStorageBasePath+"/objects", http.MethodGet,

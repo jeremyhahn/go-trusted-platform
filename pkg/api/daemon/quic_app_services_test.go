@@ -60,7 +60,7 @@ func appQUICOperations() []appQUICOperation {
 		{"messaging.ListChannels", quicwire.OpMessagingCategory, quicwire.MessagingSubListChannels, &platformv1.ListMessagingChannelsRequest{}},
 		{"messaging.Publish", quicwire.OpMessagingCategory, quicwire.MessagingSubPublish, &platformv1.PublishMessageRequest{Channel: "events", Payload: []byte("x")}},
 		{"messaging.GetStats", quicwire.OpMessagingCategory, quicwire.MessagingSubGetStats, &platformv1.GetMessagingStatsRequest{}},
-		{"messaging.GetDedupStats", quicwire.OpMessagingCategory, quicwire.MessagingSubGetDedupStats, &platformv1.GetMessagingDedupStatsRequest{}},
+		{"messaging.GetDedupStats", quicwire.OpMessagingCategory, quicwire.MessagingSubGetDedupStats, &platformv1.GetMessagingDedupStatsRequest{Channel: "events"}},
 		{"messaging.GetChannelStats", quicwire.OpMessagingCategory, quicwire.MessagingSubGetChannelStats, &platformv1.GetMessagingChannelStatsRequest{Channel: "events"}},
 		{"objectstorage.PutObject", quicwire.OpObjectStorageCategory, quicwire.ObjectStorageSubPutObject, &platformv1.PutObjectRequest{Key: "docs:a.txt", Value: []byte("a"), TargetBackend: "local"}},
 		{"objectstorage.GetObject", quicwire.OpObjectStorageCategory, quicwire.ObjectStorageSubGetObject, &platformv1.GetObjectRequest{Key: "docs:a.txt"}},
