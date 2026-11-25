@@ -31,9 +31,9 @@ export const CAPABILITY_NOT_OFFERED_REASON = "not offered by this server";
 type CapabilityMap = Map<string, Capability>;
 
 const cache = new WeakMap<PlatformClient, Promise<CapabilityMap>>();
-// The answers of a read that has resolved: a control mounted after it (a table
-// row, a dialog button) answers on its first render instead of "loading" until
-// its own effect settles, so it is never disabled for a render it need not be.
+// The answers already read, so a control that mounts after the read settled
+// (a table row's Gated button) starts enabled instead of passing through
+// "checking server capabilities" for a tick.
 const settled = new WeakMap<PlatformClient, CapabilityMap>();
 
 function loadCapabilities(client: PlatformClient): Promise<CapabilityMap> {
@@ -88,9 +88,7 @@ export function useCapabilities(): UseCapabilitiesResult {
 
   const known = settled.get(client);
   const current = useMemo<Loaded | undefined>(() => {
-    if (loaded?.client === client) {
-      return loaded;
-    }
+    if (loaded?.client === client) return loaded;
     return known ? { client, error: undefined, caps: known } : undefined;
   }, [loaded, client, known]);
 
