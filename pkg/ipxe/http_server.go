@@ -28,6 +28,7 @@ import (
 	"regexp"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -615,10 +616,33 @@ func (s *HTTPServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if s.config.ProxyCACertPool != nil {
 		tlsCfg.RootCAs = s.config.ProxyCACertPool
 	}
+	allowPrivate := s.config.ProxyAllowPrivateDestinations
+	dialer := &net.Dialer{
+		Timeout: 30 * time.Second,
+		// Control runs for every resolved address, so names that resolve inside are refused too.
+		Control: func(network, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return fmt.Errorf("proxy destination %q: %w", address, err)
+			}
+			ip := net.ParseIP(host)
+			if ip == nil {
+				return fmt.Errorf("proxy destination %q is not an IP address", address)
+			}
+			if !allowPrivate && proxyDestinationBlocked(ip) {
+				return fmt.Errorf("proxy destination %s is not allowed", ip)
+			}
+			return nil
+		},
+	}
 	client := &http.Client{
 		Timeout: 5 * time.Minute, // Large files like kernels/initrds
 		Transport: &http.Transport{
 			TLSClientConfig: tlsCfg,
+			DialContext:     dialer.DialContext,
+		},
+		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+			return fmt.Errorf("proxy refuses redirect to %s", req.URL.Redacted())
 		},
 	}
 
@@ -643,6 +667,21 @@ func (s *HTTPServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		s.logger.Errorf("error streaming proxy response: %v", err)
 	}
+}
+
+// sharedAddressSpace is the 100.64.0.0/10 carrier-grade NAT range.
+var sharedAddressSpace = &net.IPNet{IP: net.IPv4(100, 64, 0, 0).To4(), Mask: net.CIDRMask(10, 32)}
+
+// proxyDestinationBlocked reports whether the proxy must not dial ip.
+func proxyDestinationBlocked(ip net.IP) bool {
+	return ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() ||
+		ip.IsMulticast() ||
+		ip.IsUnspecified() ||
+		sharedAddressSpace.Contains(ip)
 }
 
 // generateNetbootScript generates a boot script for network boot scenarios.
