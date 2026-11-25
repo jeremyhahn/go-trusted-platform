@@ -153,32 +153,20 @@ func iamRolesScript(ctx context.Context, t *testing.T, c *platformiam.Client) []
 }
 
 func iamGroupsScript(ctx context.Context, t *testing.T, c *platformiam.Client) []proto.Message {
-	ops, err := c.CreateGroup(ctx, &platformv1.CreateIAMGroupRequest{TenantId: "acme", Id: "ops", Name: "Ops", Description: "on call"})
-	require.NoError(t, err)
-	renamed, err := c.UpdateGroup(ctx, &platformv1.UpdateIAMGroupRequest{TenantId: "acme", GroupId: "ops", Description: "on call, nights"})
-	require.NoError(t, err)
-	require.Equal(t, "on call, nights", renamed.GetDescription(), "the update reached the IAM client")
-	alice, err := c.CreateUser(ctx, &platformv1.CreateIAMUserRequest{TenantId: "acme", Email: "alice@acme.test"})
-	require.NoError(t, err)
-	require.NoError(t, c.AddGroupMember(ctx, "acme", "ops", alice.GetId()))
-	member, err := c.GetUser(ctx, "acme", alice.GetId())
-	require.NoError(t, err)
-	require.Equal(t, []string{"ops"}, member.GetGroups(), "the membership reached the IAM client")
-	withMember, err := c.GetGroup(ctx, "acme", "ops")
-	require.NoError(t, err)
-	require.NoError(t, c.RemoveGroupMember(ctx, "acme", "ops", alice.GetId()))
-	removed, err := c.GetUser(ctx, "acme", alice.GetId())
-	require.NoError(t, err)
-	listReq := &platformv1.ListIAMGroupsRequest{TenantId: "acme"}
-	listed, total, err := c.ListGroups(ctx, listReq)
-	require.NoError(t, err)
-	require.NoError(t, c.DeleteGroup(ctx, "acme", "ops"))
-	_, remainingTotal, err := c.ListGroups(ctx, listReq)
-	require.NoError(t, err)
+	// User groups were removed: every group call is refused on every transport.
+	_, createErr := c.CreateGroup(ctx, &platformv1.CreateIAMGroupRequest{TenantId: "acme", Id: "ops", Name: "Ops"})
+	_, updateErr := c.UpdateGroup(ctx, &platformv1.UpdateIAMGroupRequest{TenantId: "acme", GroupId: "ops", Description: "nights"})
+	addErr := c.AddGroupMember(ctx, "acme", "ops", "alice")
+	_, getErr := c.GetGroup(ctx, "acme", "ops")
+	removeErr := c.RemoveGroupMember(ctx, "acme", "ops", "alice")
+	_, _, listErr := c.ListGroups(ctx, &platformv1.ListIAMGroupsRequest{TenantId: "acme"})
+	deleteErr := c.DeleteGroup(ctx, "acme", "ops")
 
-	answers := []proto.Message{ops, renamed, member, withMember, removed, wrapperspb.Int64(total), wrapperspb.Int64(remainingTotal)}
-	for _, group := range listed {
-		answers = append(answers, group)
+	answers := []proto.Message{}
+	for _, err := range []error{createErr, updateErr, addErr, getErr, removeErr, listErr, deleteErr} {
+		require.Error(t, err)
+		require.Equal(t, codes.Unimplemented, status.Code(err), "group call: %v", err)
+		answers = append(answers, wrapperspb.String(status.Code(err).String()))
 	}
 	return answers
 }
@@ -323,7 +311,7 @@ func iamErrorCases() map[string]iamErrorCase {
 				return err
 			},
 			tool: "iam_update_group", args: map[string]interface{}{"tenant_id": "acme", "group_id": "nobody", "name": "N"},
-			want: codes.NotFound,
+			want: codes.Unimplemented,
 		},
 		"users/no tenant": {
 			grpc: func(ctx context.Context, svc *IAMGRPCService) error {
@@ -363,7 +351,7 @@ func iamErrorCases() map[string]iamErrorCase {
 				return err
 			},
 			tool: "iam_get_group", args: map[string]interface{}{"tenant_id": "acme", "group_id": "nobody"},
-			want: codes.NotFound,
+			want: codes.Unimplemented,
 		},
 		"groups/add to a missing group": {
 			grpc: func(ctx context.Context, svc *IAMGRPCService) error {
@@ -371,7 +359,7 @@ func iamErrorCases() map[string]iamErrorCase {
 				return err
 			},
 			tool: "iam_add_group_member", args: map[string]interface{}{"tenant_id": "acme", "group_id": "nobody", "user_id": "alice"},
-			want: codes.NotFound,
+			want: codes.Unimplemented,
 		},
 		"groups/no user id": {
 			grpc: func(ctx context.Context, svc *IAMGRPCService) error {
@@ -379,7 +367,7 @@ func iamErrorCases() map[string]iamErrorCase {
 				return err
 			},
 			tool: "iam_remove_group_member", args: map[string]interface{}{"tenant_id": "acme", "group_id": "ops"},
-			want: codes.InvalidArgument,
+			want: codes.Unimplemented,
 		},
 		"tenants/not found": {
 			grpc: func(ctx context.Context, svc *IAMGRPCService) error {
@@ -451,6 +439,17 @@ func TestIAMMCPUnavailableParity(t *testing.T) {
 	for name, tc := range iamErrorCases() {
 		t.Run(name, func(t *testing.T) {
 			var unavailable ErrIAMServiceNotAvailable
+			if tc.want == codes.Unimplemented {
+				// Group calls are refused before the IAM client is consulted.
+				var refused ErrIAMGroupsNotSupported
+				grpcErr := tc.grpc(ctx, svc)
+				assert.True(t, errors.As(grpcErr, &refused), "gRPC: %v", grpcErr)
+				assert.Equal(t, codes.Unimplemented, status.Code(grpcErr))
+				_, mcpErr := registry.ExecuteTool(ctx, tc.tool, tc.args)
+				assert.True(t, errors.As(mcpErr, &refused), "MCP: %v", mcpErr)
+				assert.Equal(t, codes.Unimplemented, status.Code(mcpErr))
+				return
+			}
 
 			grpcErr := tc.grpc(ctx, svc)
 			assert.True(t, errors.As(grpcErr, &unavailable), "gRPC: %v", grpcErr)

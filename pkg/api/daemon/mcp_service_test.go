@@ -478,14 +478,6 @@ func TestMCPServiceProvider_IAMOperations_NilService(t *testing.T) {
 				TenantID: "t1", SubjectID: "u1", Action: "read", Resource: "kv/a",
 			})
 		},
-		"CreateGroup": func() (interface{}, error) {
-			return provider.IAMCreateGroup(ctx, &mcp.IAMCreateGroupRequest{TenantID: "t1", ID: "g1"})
-		},
-		"DeleteGroup":       func() (interface{}, error) { return provider.IAMDeleteGroup(ctx, "t1", "g1") },
-		"GetGroup":          func() (interface{}, error) { return provider.IAMGetGroup(ctx, "t1", "g1") },
-		"ListGroups":        func() (interface{}, error) { return provider.IAMListGroups(ctx, "t1", page) },
-		"AddGroupMember":    func() (interface{}, error) { return provider.IAMAddGroupMember(ctx, "t1", "g1", "u1") },
-		"RemoveGroupMember": func() (interface{}, error) { return provider.IAMRemoveGroupMember(ctx, "t1", "g1", "u1") },
 		"CreateTenant": func() (interface{}, error) {
 			return provider.IAMCreateTenant(ctx, &mcp.IAMCreateTenantRequest{ID: "t2"})
 		},
@@ -499,6 +491,27 @@ func TestMCPServiceProvider_IAMOperations_NilService(t *testing.T) {
 			var unavailable ErrIAMServiceNotAvailable
 			if !errors.As(err, &unavailable) {
 				t.Fatalf("err = %v (%T), want ErrIAMServiceNotAvailable", err, err)
+			}
+		})
+	}
+
+	// Group tools answer the groups refusal whether or not IAM is wired.
+	groupCalls := map[string]func() (interface{}, error){
+		"CreateGroup": func() (interface{}, error) {
+			return provider.IAMCreateGroup(ctx, &mcp.IAMCreateGroupRequest{TenantID: "t1", ID: "g1"})
+		},
+		"DeleteGroup":       func() (interface{}, error) { return provider.IAMDeleteGroup(ctx, "t1", "g1") },
+		"GetGroup":          func() (interface{}, error) { return provider.IAMGetGroup(ctx, "t1", "g1") },
+		"ListGroups":        func() (interface{}, error) { return provider.IAMListGroups(ctx, "t1", page) },
+		"AddGroupMember":    func() (interface{}, error) { return provider.IAMAddGroupMember(ctx, "t1", "g1", "u1") },
+		"RemoveGroupMember": func() (interface{}, error) { return provider.IAMRemoveGroupMember(ctx, "t1", "g1", "u1") },
+	}
+	for name, call := range groupCalls {
+		t.Run(name, func(t *testing.T) {
+			_, err := call()
+			var refused ErrIAMGroupsNotSupported
+			if !errors.As(err, &refused) {
+				t.Fatalf("err = %v (%T), want ErrIAMGroupsNotSupported", err, err)
 			}
 		})
 	}
