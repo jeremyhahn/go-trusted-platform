@@ -436,7 +436,7 @@ func webE2EChromiumProblems(body []byte) []string {
 	if check < 0 {
 		return append(out, fmt.Sprintf("%s: no step %q checks chromium launches on a self-hosted runner", webE2EJob, chromiumLaunchCheck))
 	}
-	if !(install < check && check < specs) {
+	if install >= check || check >= specs {
 		out = append(out, fmt.Sprintf("%s: step %q must run after %q and before %q", webE2EJob, chromiumLaunchCheck, selfHostedInstall, realServerSpecs))
 	}
 	s := job.Steps[check]
