@@ -40,6 +40,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { usePlatformClient, useApi, useMutation, useToast } from "@/hooks";
+import { Gated } from "@/components/features/capabilities/gated";
+import { useCapabilities } from "@/hooks/use-capabilities";
 import type {
   BackupMetadata,
   BackupType,
@@ -126,6 +128,13 @@ function mapBackupState(state: BackupState): "pending" | "running" | "completed"
 export default function BackupPage() {
   const { toast } = useToast();
   const client = usePlatformClient();
+  // #2033 item 5: every control is gated on the server's op for it.
+  const { loading: capsLoading, capability } = useCapabilities();
+  const listCap = capability("GET /api/v1/quicbaas/backups");
+  const createCap = capability("POST /api/v1/quicbaas/backups");
+  // Restore and delete have no server route yet, so they fail closed with "not offered by this server" until one is added.
+  const restoreCap = capability("POST /api/v1/quicbaas/backups/{backup_id}/restore");
+  const deleteCap = capability("DELETE /api/v1/quicbaas/backups/{backup_id}");
   const [isCreateBackupOpen, setIsCreateBackupOpen] = React.useState(false);
   const [isRestoreDialogOpen, setIsRestoreDialogOpen] = React.useState(false);
   const [selectedBackup, setSelectedBackup] = React.useState<BackupUI | null>(null);
@@ -150,6 +159,7 @@ export default function BackupPage() {
     () => client.quicBaaSBackup.list({}),
     [],
     {
+      enabled: !capsLoading && listCap.enabled,
       onError: (err) => {
         toast({
           title: "Error loading backups",
@@ -288,6 +298,9 @@ export default function BackupPage() {
   };
 
   const handleDelete = async (backup: BackupUI) => {
+    if (!deleteCap.enabled) {
+      return;
+    }
     if (!confirm(`Delete backup "${backup.name}"? This action cannot be undone.`)) {
       return;
     }
@@ -422,7 +435,8 @@ export default function BackupPage() {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem
-              disabled={row.original.displayStatus !== "completed"}
+              disabled={row.original.displayStatus !== "completed" || !restoreCap.enabled}
+              title={restoreCap.enabled ? undefined : restoreCap.reason}
               onClick={() => {
                 setSelectedBackup(row.original);
                 setIsRestoreDialogOpen(true);
@@ -434,6 +448,8 @@ export default function BackupPage() {
             <DropdownMenuSeparator />
             <DropdownMenuItem
               className="text-destructive"
+              disabled={!deleteCap.enabled}
+              title={deleteCap.enabled ? undefined : deleteCap.reason}
               onClick={() => handleDelete(row.original)}
             >
               <Trash2 className="mr-2 h-4 w-4" />
@@ -462,19 +478,23 @@ export default function BackupPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => refetch()} disabled={isLoading}>
-            <RefreshCw
-              className={`mr-2 h-4 w-4 ${isLoading ? "animate-spin" : ""}`}
-            />
-            Refresh
-          </Button>
+          <Gated op="GET /api/v1/quicbaas/backups">
+            <Button variant="outline" onClick={() => refetch()} disabled={isLoading}>
+              <RefreshCw
+                className={`mr-2 h-4 w-4 ${isLoading ? "animate-spin" : ""}`}
+              />
+              Refresh
+            </Button>
+          </Gated>
           <Dialog open={isCreateBackupOpen} onOpenChange={setIsCreateBackupOpen}>
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="mr-2 h-4 w-4" />
-                Create Backup
-              </Button>
-            </DialogTrigger>
+            <Gated op="POST /api/v1/quicbaas/backups">
+              <DialogTrigger asChild>
+                <Button>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Create Backup
+                </Button>
+              </DialogTrigger>
+            </Gated>
             <DialogContent className="max-w-lg">
               <DialogHeader>
                 <DialogTitle>Create New Backup</DialogTitle>
@@ -552,13 +572,15 @@ export default function BackupPage() {
                     <Label htmlFor="backupCompression">Enable compression</Label>
                   </div>
                 </div>
-                <Button
-                  onClick={handleCreateBackup}
-                  disabled={createBackupMutation.isLoading}
-                  className="w-full"
-                >
-                  {createBackupMutation.isLoading ? "Starting..." : "Start Backup"}
-                </Button>
+                <Gated op="POST /api/v1/quicbaas/backups">
+                  <Button
+                    onClick={handleCreateBackup}
+                    disabled={createBackupMutation.isLoading}
+                    className="w-full"
+                  >
+                    {createBackupMutation.isLoading ? "Starting..." : "Start Backup"}
+                  </Button>
+                </Gated>
               </div>
             </DialogContent>
           </Dialog>
@@ -597,13 +619,15 @@ export default function BackupPage() {
                 Warning: This operation may overwrite existing data at the destination.
               </p>
             </div>
-            <Button
-              onClick={handleRestore}
-              disabled={restoreBackupMutation.isLoading}
-              className="w-full"
-            >
-              {restoreBackupMutation.isLoading ? "Restoring..." : "Start Restore"}
-            </Button>
+            <Gated op="POST /api/v1/quicbaas/backups/{backup_id}/restore">
+              <Button
+                onClick={handleRestore}
+                disabled={restoreBackupMutation.isLoading}
+                className="w-full"
+              >
+                {restoreBackupMutation.isLoading ? "Restoring..." : "Start Restore"}
+              </Button>
+            </Gated>
           </div>
         </DialogContent>
       </Dialog>
@@ -681,6 +705,12 @@ export default function BackupPage() {
       </div>
 
       {/* Tabs for Backups and Schedules */}
+      {!capsLoading && !listCap.enabled ? (
+        <div data-testid="backup-not-enabled" className="rounded-lg border border-border bg-card p-6">
+          <div className="font-medium">Backups are not enabled on this server</div>
+          <p className="text-sm text-muted-foreground mt-1">{listCap.reason}</p>
+        </div>
+      ) : (
       <Tabs defaultValue="backups" className="space-y-4">
         <TabsList>
           <TabsTrigger value="backups">Backups</TabsTrigger>
@@ -707,14 +737,16 @@ export default function BackupPage() {
                   <div className="flex flex-col items-center gap-2 py-8">
                     <Upload className="h-12 w-12 text-muted-foreground" />
                     <p className="text-muted-foreground">No backups found</p>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setIsCreateBackupOpen(true)}
-                    >
-                      <Plus className="mr-2 h-4 w-4" />
-                      Create your first backup
-                    </Button>
+                    <Gated op="POST /api/v1/quicbaas/backups">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setIsCreateBackupOpen(true)}
+                      >
+                        <Plus className="mr-2 h-4 w-4" />
+                        Create your first backup
+                      </Button>
+                    </Gated>
                   </div>
                 }
                 bulkActions={[
@@ -732,6 +764,8 @@ export default function BackupPage() {
                       }
                     },
                     variant: "destructive",
+                    disabled: !deleteCap.enabled,
+                    title: deleteCap.enabled ? undefined : deleteCap.reason,
                   },
                 ]}
               />
@@ -770,6 +804,7 @@ export default function BackupPage() {
           </Card>
         </TabsContent>
       </Tabs>
+      )}
     </div>
   );
 }

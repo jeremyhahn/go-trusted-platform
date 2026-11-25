@@ -168,7 +168,8 @@ func runTwoLegPull(t *testing.T, step string, env ...string) (a, b pullLeg, stat
 		"FAKE_IMAGE_ID=sha256:1111",
 		"FAKE_LAYERS="+layers,
 		"RUNNER_TEMP="+tmp,
-		"IT_IMAGE_REF=registry.example/go-trusted-platform-it:sha256-1111",
+		"IT_REGISTRY=registry.invalid:5000",
+		"IT_IMAGE_TAG=1111",
 		"IT_IMAGE=go-trusted-platform-it:content",
 		"IT_IMAGE_IDENTITY="+hex.EncodeToString(sum[:]),
 		"REGISTRY_USER=", "REGISTRY_PASSWORD=",
@@ -191,6 +192,10 @@ func runTwoLegPull(t *testing.T, step string, env ...string) (a, b pullLeg, stat
 		data, _ := os.ReadFile(file(name))
 		return strings.TrimSpace(string(data))
 	}
+	// Each leg rebuilds the reference from IT_REGISTRY and IT_IMAGE_TAG, and
+	// the reference both pulled stays for the other leg to re-tag from.
+	require.FileExists(t, filepath.Join(state, "tags", "registry.invalid_5000_go-trusted-platform_it-image_1111"),
+		"the legs pull registry.invalid:5000/go-trusted-platform/it-image:1111:\n%s", out)
 	a = pullLeg{rc: read("a.rc"), output: read("a.out"), log: read("a.log")}
 	b.output = read("b.out")
 	return a, b, state
@@ -285,12 +290,12 @@ func TestCIRegistryPushSurvivesTwoProducersOnOneDaemon(t *testing.T) {
 	}
 	require.Equal(t, "0", read("a.rc"), "producer A:\n%s", read("a.log"))
 	require.NoError(t, err, "producer B, which pushes after producer A exits:\n%s", out)
-	ref := "image_ref=registry.invalid:5000/go-trusted-platform/it-image:1111"
-	require.Equal(t, ref, read("a.out"))
-	require.Equal(t, ref, read("b.out"))
+	tag := "image_tag=1111"
+	require.Equal(t, tag, read("a.out"))
+	require.Equal(t, tag, read("b.out"))
 	pushed, err := os.ReadFile(filepath.Join(state, "pushed"))
 	require.NoError(t, err)
-	pushedRef := strings.TrimPrefix(ref, "image_ref=")
+	pushedRef := "registry.invalid:5000/go-trusted-platform/it-image:1111"
 	require.Equal(t, []string{pushedRef, pushedRef}, strings.Fields(string(pushed)), "both producers push")
 	// The per-job Docker configs are gone with their jobs.
 	left, err := filepath.Glob(filepath.Join(tmp, "docker-config.*"))
@@ -391,7 +396,7 @@ func runRegistrySteps(t *testing.T, setup func(home string), env []string, steps
 		"RUNNER_TEMP="+tmp,
 		"IT_REGISTRY=registry.invalid:5000",
 		"IT_LEASE_ID=sha256:1111",
-		"IT_IMAGE_REF=registry.invalid:5000/go-trusted-platform/it-image:1111",
+		"IT_IMAGE_TAG=1111",
 		"IT_IMAGE=go-trusted-platform-it:content",
 		"IT_IMAGE_IDENTITY="+hex.EncodeToString(sum[:]),
 		"REGISTRY_USER=ci", "REGISTRY_PASSWORD=secret",
