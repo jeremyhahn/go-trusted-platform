@@ -38,6 +38,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useQuicBaaSVector, useApi, useMutation, useToast } from "@/hooks";
+import { Gated } from "@/components/features/capabilities/gated";
+import { useCapabilities } from "@/hooks/use-capabilities";
 import type {
   VectorNamespace,
   VectorSearchResult,
@@ -100,6 +102,13 @@ interface VectorSearchInput {
 export default function VectorDatabasePage() {
   const { toast } = useToast();
   const vector = useQuicBaaSVector();
+  // #2033: every control follows its server op. Search and namespace delete
+  // have no server route yet, so they fail closed with "not offered by this
+  // server" until one is added.
+  const { loading: capsLoading, capability } = useCapabilities();
+  const listCap = capability("GET /api/v1/quicbaas/vector/namespaces");
+  const searchCap = capability("POST /api/v1/quicbaas/vector/search");
+  const deleteCap = capability("DELETE /api/v1/quicbaas/vector/namespaces/{name}");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = React.useState(false);
   const [isSearchDialogOpen, setIsSearchDialogOpen] = React.useState(false);
   const [searchResults, setSearchResults] = React.useState<VectorSearchResult[]>([]);
@@ -127,6 +136,7 @@ export default function VectorDatabasePage() {
     () => vector.listNamespaces({ limit: 100 }),
     [],
     {
+      enabled: !capsLoading && listCap.enabled,
       onError: (err) => {
         toast({
           title: "Error loading collections",
@@ -423,6 +433,8 @@ export default function VectorDatabasePage() {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem
+              disabled={!searchCap.enabled}
+              title={searchCap.reason}
               onClick={() => {
                 setSearchData((prev) => ({ ...prev, namespace: row.original.name }));
                 setIsSearchDialogOpen(true);
@@ -433,6 +445,8 @@ export default function VectorDatabasePage() {
             </DropdownMenuItem>
             <DropdownMenuItem
               className="text-destructive"
+              disabled={!deleteCap.enabled}
+              title={deleteCap.reason}
               onClick={() => handleDelete(row.original)}
             >
               <Trash2 className="mr-2 h-4 w-4" />
@@ -462,19 +476,23 @@ export default function VectorDatabasePage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => loadData()} disabled={loading}>
-            <RefreshCw
-              className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`}
-            />
-            Refresh
-          </Button>
+          <Gated op="GET /api/v1/quicbaas/vector/namespaces">
+            <Button variant="outline" onClick={() => loadData()} disabled={loading}>
+              <RefreshCw
+                className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`}
+              />
+              Refresh
+            </Button>
+          </Gated>
           <Dialog open={isSearchDialogOpen} onOpenChange={handleSearchDialogClose}>
-            <DialogTrigger asChild>
-              <Button variant="outline">
-                <Search className="mr-2 h-4 w-4" />
-                Search Vectors
-              </Button>
-            </DialogTrigger>
+            <Gated op="POST /api/v1/quicbaas/vector/search">
+              <DialogTrigger asChild>
+                <Button variant="outline">
+                  <Search className="mr-2 h-4 w-4" />
+                  Search Vectors
+                </Button>
+              </DialogTrigger>
+            </Gated>
             <DialogContent className="max-w-lg">
               <DialogHeader>
                 <DialogTitle>Similarity Search</DialogTitle>
@@ -529,13 +547,15 @@ export default function VectorDatabasePage() {
                     }
                   />
                 </div>
-                <Button
-                  onClick={handleSearch}
-                  disabled={searchMutation.isLoading}
-                  className="w-full"
-                >
-                  {searchMutation.isLoading ? "Searching..." : "Search"}
-                </Button>
+                <Gated op="POST /api/v1/quicbaas/vector/search">
+                  <Button
+                    onClick={handleSearch}
+                    disabled={searchMutation.isLoading}
+                    className="w-full"
+                  >
+                    {searchMutation.isLoading ? "Searching..." : "Search"}
+                  </Button>
+                </Gated>
                 {searchResults.length > 0 && (
                   <div className="mt-4 space-y-2">
                     <h4 className="font-medium">Results ({searchResults.length})</h4>
@@ -561,12 +581,14 @@ export default function VectorDatabasePage() {
             </DialogContent>
           </Dialog>
           <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="mr-2 h-4 w-4" />
-                Create Collection
-              </Button>
-            </DialogTrigger>
+            <Gated op="POST /api/v1/quicbaas/vector/namespaces">
+              <DialogTrigger asChild>
+                <Button>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Create Collection
+                </Button>
+              </DialogTrigger>
+            </Gated>
             <DialogContent className="max-w-lg">
               <DialogHeader>
                 <DialogTitle>Create Vector Collection</DialogTitle>
@@ -667,13 +689,15 @@ export default function VectorDatabasePage() {
                     </SelectContent>
                   </Select>
                 </div>
-                <Button
-                  onClick={handleCreateCollection}
-                  disabled={createMutation.isLoading}
-                  className="w-full"
-                >
-                  {createMutation.isLoading ? "Creating..." : "Create Collection"}
-                </Button>
+                <Gated op="POST /api/v1/quicbaas/vector/namespaces">
+                  <Button
+                    onClick={handleCreateCollection}
+                    disabled={createMutation.isLoading}
+                    className="w-full"
+                  >
+                    {createMutation.isLoading ? "Creating..." : "Create Collection"}
+                  </Button>
+                </Gated>
               </div>
             </DialogContent>
           </Dialog>
@@ -691,6 +715,13 @@ export default function VectorDatabasePage() {
         </div>
       )}
 
+      {!capsLoading && !listCap.enabled ? (
+        <div data-testid="vector-not-enabled" className="rounded-lg border border-border bg-card p-6">
+          <div className="font-medium">The vector database is not enabled on this server</div>
+          <div className="text-sm text-muted-foreground">{listCap.reason}</div>
+        </div>
+      ) : (
+      <>
       {/* Statistics Cards */}
       <div className="grid gap-4 md:grid-cols-4">
         <Card>
@@ -771,14 +802,16 @@ export default function VectorDatabasePage() {
               <div className="flex flex-col items-center gap-2 py-8">
                 <Target className="h-12 w-12 text-muted-foreground" />
                 <p className="text-muted-foreground">No collections found</p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setIsCreateDialogOpen(true)}
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Create your first collection
-                </Button>
+                <Gated op="POST /api/v1/quicbaas/vector/namespaces">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsCreateDialogOpen(true)}
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    Create your first collection
+                  </Button>
+                </Gated>
               </div>
             }
             bulkActions={[
@@ -796,11 +829,15 @@ export default function VectorDatabasePage() {
                   }
                 },
                 variant: "destructive",
+                disabled: !deleteCap.enabled,
+                title: deleteCap.reason,
               },
             ]}
           />
         </CardContent>
       </Card>
+      </>
+      )}
     </div>
   );
 }
