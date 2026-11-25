@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -213,6 +214,16 @@ func (s *PXEGRPCService) UpdateState(ctx context.Context, req *platformv1.Update
 		return nil, status.Error(codes.InvalidArgument, "device ID is required")
 	}
 
+	// No transition leads to UNKNOWN, and UNSPECIFIED is what a short enum
+	// name the REST decoder discarded becomes: both are bad requests, not
+	// state-machine refusals.
+	switch req.GetState() {
+	case platformv1.ProvisioningState_PROVISIONING_STATE_UNSPECIFIED:
+		return nil, status.Error(codes.InvalidArgument, "state is required (send the PROVISIONING_STATE_* name)")
+	case platformv1.ProvisioningState_PROVISIONING_STATE_UNKNOWN:
+		return nil, status.Error(codes.InvalidArgument, "state UNKNOWN cannot be set")
+	}
+
 	state := s.stateFromProto(req.GetState())
 	reason := req.GetReason()
 
@@ -248,7 +259,7 @@ func (s *PXEGRPCService) SetDeviceEnrolled(ctx context.Context, req *platformv1.
 		return nil, status.Error(codes.InvalidArgument, "device ID is required")
 	}
 
-	certSerial := req.GetCertificateSerial()
+	certSerial := strings.TrimSpace(req.GetCertificateSerial())
 	if certSerial == "" {
 		return nil, status.Error(codes.InvalidArgument, "certificate serial is required")
 	}
@@ -285,10 +296,15 @@ func (s *PXEGRPCService) Authorize(ctx context.Context, req *platformv1.Authoriz
 		return nil, status.Error(codes.InvalidArgument, "device ID is required")
 	}
 
-	targetVLAN := uint16(req.GetTargetVlan())
-	if targetVLAN == 0 {
+	vlan := req.GetTargetVlan()
+	if vlan == 0 {
 		return nil, status.Error(codes.InvalidArgument, "target VLAN is required")
 	}
+	// Check the range before the uint16 conversion: 65556 would wrap to VLAN 20.
+	if vlan > 4094 {
+		return nil, status.Errorf(codes.InvalidArgument, "target VLAN %d is outside 1-4094", vlan)
+	}
+	targetVLAN := uint16(vlan)
 
 	if err := s.pxeService.AuthorizeDevice(ctx, deviceID, targetVLAN); err != nil {
 		s.logger.Error(err, "Failed to authorize device", "device_id", deviceID, "target_vlan", targetVLAN)
@@ -322,7 +338,7 @@ func (s *PXEGRPCService) Quarantine(ctx context.Context, req *platformv1.Quarant
 		return nil, status.Error(codes.InvalidArgument, "device ID is required")
 	}
 
-	reason := req.GetReason()
+	reason := strings.TrimSpace(req.GetReason())
 	if reason == "" {
 		return nil, status.Error(codes.InvalidArgument, "reason is required")
 	}

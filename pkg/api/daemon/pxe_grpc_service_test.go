@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -630,6 +631,31 @@ func TestPXEGRPCService_UpdateState(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
 	})
+
+	t.Run("refuses an unspecified or UNKNOWN target state", func(t *testing.T) {
+		// UNSPECIFIED is what a short enum name the REST decoder discarded becomes.
+		for _, target := range []platformv1.ProvisioningState{
+			platformv1.ProvisioningState_PROVISIONING_STATE_UNSPECIFIED,
+			platformv1.ProvisioningState_PROVISIONING_STATE_UNKNOWN,
+		} {
+			t.Run(target.String(), func(t *testing.T) {
+				before := mockService.devices[deviceID].State
+
+				resp, err := svc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
+					DeviceId: deviceID,
+					State:    target,
+					Reason:   "test",
+				})
+
+				require.Error(t, err)
+				assert.Nil(t, resp)
+				st, ok := status.FromError(err)
+				require.True(t, ok)
+				assert.Equal(t, codes.InvalidArgument, st.Code())
+				assert.Equal(t, before, mockService.devices[deviceID].State)
+			})
+		}
+	})
 }
 
 // TestPXEGRPCService_SetDeviceEnrolled tests setting device enrolled.
@@ -689,6 +715,30 @@ func TestPXEGRPCService_SetDeviceEnrolled(t *testing.T) {
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
+	})
+
+	t.Run("refuses a blank certificate serial", func(t *testing.T) {
+		blank, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{
+			MacAddress: "02:00:00:00:00:03",
+			PortId:     "port-1",
+		})
+		require.NoError(t, err)
+		blankID := blank.GetDevice().GetId()
+		beforeState := mockService.devices[blankID].State
+		beforeSerial := mockService.devices[blankID].CertificateSerial
+
+		resp, err := svc.SetDeviceEnrolled(ctx, &platformv1.SetPXEDeviceEnrolledRequest{
+			DeviceId:          blankID,
+			CertificateSerial: "   ",
+		})
+
+		require.Error(t, err)
+		assert.Nil(t, resp)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.InvalidArgument, st.Code())
+		assert.Equal(t, beforeState, mockService.devices[blankID].State)
+		assert.Equal(t, beforeSerial, mockService.devices[blankID].CertificateSerial)
 	})
 }
 
@@ -750,6 +800,33 @@ func TestPXEGRPCService_Authorize(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
 	})
+
+	outOfRange, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{
+		MacAddress: "02:00:00:00:00:01",
+		PortId:     "port-1",
+	})
+	require.NoError(t, err)
+	outOfRangeID := outOfRange.GetDevice().GetId()
+
+	t.Run("refuses a target VLAN outside 1-4094", func(t *testing.T) {
+		// 65556 would wrap to VLAN 20 through a uint16 conversion.
+		for _, vlan := range []uint32{4095, 65535, 65556} {
+			t.Run(fmt.Sprintf("vlan %d", vlan), func(t *testing.T) {
+				resp, err := svc.Authorize(ctx, &platformv1.AuthorizePXEDeviceRequest{
+					DeviceId:   outOfRangeID,
+					TargetVlan: vlan,
+				})
+
+				require.Error(t, err)
+				assert.Nil(t, resp)
+				st, ok := status.FromError(err)
+				require.True(t, ok)
+				assert.Equal(t, codes.InvalidArgument, st.Code())
+				assert.NotEqual(t, pxe.StateAuthorized, mockService.devices[outOfRangeID].State)
+				assert.Equal(t, uint16(0), mockService.devices[outOfRangeID].TargetVLAN)
+			})
+		}
+	})
 }
 
 // TestPXEGRPCService_Quarantine tests quarantining a device.
@@ -809,6 +886,30 @@ func TestPXEGRPCService_Quarantine(t *testing.T) {
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
+	})
+
+	t.Run("refuses a blank reason", func(t *testing.T) {
+		blank, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{
+			MacAddress: "02:00:00:00:00:02",
+			PortId:     "port-1",
+		})
+		require.NoError(t, err)
+		blankID := blank.GetDevice().GetId()
+		beforeState := mockService.devices[blankID].State
+		beforeSerial := mockService.devices[blankID].CertificateSerial
+
+		resp, err := svc.Quarantine(ctx, &platformv1.QuarantinePXEDeviceRequest{
+			DeviceId: blankID,
+			Reason:   "   ",
+		})
+
+		require.Error(t, err)
+		assert.Nil(t, resp)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.InvalidArgument, st.Code())
+		assert.Equal(t, beforeState, mockService.devices[blankID].State)
+		assert.Equal(t, beforeSerial, mockService.devices[blankID].CertificateSerial)
 	})
 }
 

@@ -28,6 +28,30 @@ export type ProvisioningState =
   | 'FAILED'
   | 'QUARANTINED';
 
+/** Protobuf enum name of a provisioning state, as the REST server reads and writes it. */
+export type ProvisioningStateProtoName = `PROVISIONING_STATE_${ProvisioningState}`;
+
+/**
+ * Protobuf enum name of every provisioning state. The REST decoder is
+ * protojson, which accepts only the full enum name: a short name such as
+ * 'FAILED' is discarded, the state arrives unspecified and the transition is
+ * refused.
+ */
+export const PROVISIONING_STATE_PROTO_NAMES: Readonly<Record<ProvisioningState, ProvisioningStateProtoName>> = {
+  UNSPECIFIED: 'PROVISIONING_STATE_UNSPECIFIED',
+  UNKNOWN: 'PROVISIONING_STATE_UNKNOWN',
+  DISCOVERED: 'PROVISIONING_STATE_DISCOVERED',
+  BOOTING: 'PROVISIONING_STATE_BOOTING',
+  INSTALLING: 'PROVISIONING_STATE_INSTALLING',
+  INSTALL_COMPLETE: 'PROVISIONING_STATE_INSTALL_COMPLETE',
+  ENROLLING: 'PROVISIONING_STATE_ENROLLING',
+  ENROLLED: 'PROVISIONING_STATE_ENROLLED',
+  AUTHORIZING: 'PROVISIONING_STATE_AUTHORIZING',
+  AUTHORIZED: 'PROVISIONING_STATE_AUTHORIZED',
+  FAILED: 'PROVISIONING_STATE_FAILED',
+  QUARANTINED: 'PROVISIONING_STATE_QUARANTINED',
+};
+
 /**
  * Provisioning event type
  */

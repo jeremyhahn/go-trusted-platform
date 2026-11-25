@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PXEService } from '../pxe-service.js';
 import type { ApiClient } from '../../client/api-client.js';
 import type { UpdatePXEStateRequest } from '../../types/pxe.js';
+import { InvalidEnumValueError } from '../../errors/index.js';
 
 function createMockApiClient(): ApiClient {
   return {
@@ -73,7 +74,7 @@ describe('PXEService device routes', () => {
       expect(result.success).toBe(true);
       expect(mockClient.put).toHaveBeenCalledTimes(1);
       expect(mockClient.put).toHaveBeenCalledWith('/v1/pxe/devices/node-3/state', {
-        state: 'INSTALLING',
+        state: 'PROVISIONING_STATE_INSTALLING',
         reason: 'operator retry',
       });
       expect(mockClient.post).not.toHaveBeenCalled();
@@ -85,6 +86,77 @@ describe('PXEService device routes', () => {
 
       await expect(service.updateState(request)).rejects.toBe(failure);
       expect(mockClient.post).not.toHaveBeenCalled();
+    });
+
+    it('passes a protobuf enum name through unchanged', async () => {
+      vi.mocked(mockClient.put).mockResolvedValue({ success: true, data: { device: { id: 'node-3' } } });
+
+      await service.updateState({
+        deviceId: 'node-3',
+        state: 'PROVISIONING_STATE_FAILED' as UpdatePXEStateRequest['state'],
+        reason: 'disk',
+      });
+
+      expect(mockClient.put).toHaveBeenCalledWith('/v1/pxe/devices/node-3/state', {
+        state: 'PROVISIONING_STATE_FAILED',
+        reason: 'disk',
+      });
+    });
+
+    it('refuses a state that is not a provisioning state', async () => {
+      await expect(
+        service.updateState({
+          deviceId: 'node-3',
+          state: 'BOGUS' as UpdatePXEStateRequest['state'],
+          reason: 'disk',
+        }),
+      ).rejects.toBeInstanceOf(InvalidEnumValueError);
+      expect(mockClient.put).not.toHaveBeenCalled();
+    });
+  });
+
+  // pkg/webservice/v1/rest/pxe/filter.go:27-33 reads state, mac_address,
+  // vlan, limit and offset; macAddress and page are ignored, so a filtered
+  // or second-page list would silently come back unfiltered from the start.
+  describe('listDevices', () => {
+    function sentUrl(): { path: string; params: URLSearchParams } {
+      const url = String(vi.mocked(mockClient.get).mock.calls[0]?.[0]);
+      return { path: url.split('?')[0] ?? '', params: new URLSearchParams(url.split('?')[1] ?? '') };
+    }
+
+    beforeEach(() => {
+      vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: { devices: [] } });
+    });
+
+    it('sends the filter under the names the server reads', async () => {
+      await service.listDevices({
+        filter: { state: 'QUARANTINED', macAddress: '02:00:00', vlan: 20, limit: 10, offset: 20 },
+      });
+
+      expect(mockClient.get).toHaveBeenCalledTimes(1);
+      const { path, params } = sentUrl();
+      expect(path).toBe('/v1/pxe/devices');
+      expect(params.get('state')).toBe('QUARANTINED');
+      expect(params.get('mac_address')).toBe('02:00:00');
+      expect(params.get('vlan')).toBe('20');
+      expect(params.get('limit')).toBe('10');
+      expect(params.get('offset')).toBe('20');
+      expect(params.has('macAddress')).toBe(false);
+      expect(params.has('page')).toBe(false);
+    });
+
+    it('sends an offset without a limit', async () => {
+      await service.listDevices({ filter: { offset: 5 } });
+
+      const { params } = sentUrl();
+      expect(params.get('offset')).toBe('5');
+      expect(params.has('page')).toBe(false);
+    });
+
+    it('sends no query without a filter', async () => {
+      await service.listDevices();
+
+      expect(mockClient.get).toHaveBeenCalledWith('/v1/pxe/devices');
     });
   });
 });

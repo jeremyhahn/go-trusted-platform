@@ -29,6 +29,12 @@ import { ServiceUnavailableState } from '@/components/features/platform';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { usePXE, useApi, useToast, useReportedGateways } from '@/hooks';
 import type { PXEDeviceInfo } from 'trusted-platform-sdk';
+import { PXEDeviceActions } from '@/components/features/pxe/pxe-device-actions';
+import { PXEServiceControls } from '@/components/features/pxe/pxe-service-controls';
+import Link from 'next/link';
+import { PXEMacLookup } from '@/components/features/pxe/pxe-mac-lookup';
+import { Gated } from '@/components/features/capabilities/gated';
+import { provisioningStateName } from '@/components/features/pxe/provisioning-state';
 
 export default function PXEBootPage() {
   const { toast } = useToast();
@@ -109,7 +115,7 @@ export default function PXEBootPage() {
   // Calculate stats from devices
   const stats = useMemo(() => {
     const stateGroups = devices.reduce((acc: Record<string, number>, device: PXEDeviceInfo) => {
-      const state = device.state || 'UNKNOWN';
+      const state = provisioningStateName(device.state);
       acc[state] = (acc[state] || 0) + 1;
       return acc;
     }, {});
@@ -267,10 +273,12 @@ export default function PXEBootPage() {
           <Button variant="outline" size="icon" onClick={fetchData} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            Register Device
-          </Button>
+          <Gated op="POST /api/v1/pxe/devices">
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Register Device
+            </Button>
+          </Gated>
         </div>
       </div>
 
@@ -295,30 +303,40 @@ export default function PXEBootPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
-            <Button
-              disabled={!createMac || createSubmitting}
-              onClick={async () => {
-                setCreateSubmitting(true);
-                try {
-                  await pxe.registerDevice({ macAddress: createMac });
-                  toast({ title: 'Device registered', variant: 'success' });
-                  setCreateOpen(false);
-                  setCreateMac('');
-                  refetchDevices();
-                } catch (err) {
-                  toast({
-                    title: 'Failed to register device',
-                    description: err instanceof Error ? err.message : 'Unknown error',
-                    variant: 'destructive',
-                  });
-                } finally {
-                  setCreateSubmitting(false);
-                }
-              }}
-            >
-              {createSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Register
-            </Button>
+            <Gated op="POST /api/v1/pxe/devices">
+              <Button
+                disabled={!createMac || createSubmitting}
+                onClick={async () => {
+                  setCreateSubmitting(true);
+                  try {
+                    const res = await pxe.registerDevice({ macAddress: createMac });
+                    if (res.success === false) {
+                      toast({
+                        title: 'Failed to register device',
+                        description: res.error?.message ?? 'Unknown error',
+                        variant: 'destructive',
+                      });
+                      return;
+                    }
+                    toast({ title: 'Device registered', variant: 'success' });
+                    setCreateOpen(false);
+                    setCreateMac('');
+                    refetchDevices();
+                  } catch (err) {
+                    toast({
+                      title: 'Failed to register device',
+                      description: err instanceof Error ? err.message : 'Unknown error',
+                      variant: 'destructive',
+                    });
+                  } finally {
+                    setCreateSubmitting(false);
+                  }
+                }}
+              >
+                {createSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Register
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -362,6 +380,7 @@ export default function PXEBootPage() {
                 <Settings className="h-5 w-5" />
                 PXE Service Status
               </CardTitle>
+              <PXEServiceControls running={Boolean(status?.running)} onChanged={() => void refetchStatus()} />
             </div>
           </CardHeader>
           <CardContent>
@@ -447,9 +466,9 @@ export default function PXEBootPage() {
                       <TableCell>
                         <Badge
                           variant="outline"
-                          className={getStateColor(device.state)}
+                          className={getStateColor(provisioningStateName(device.state))}
                         >
-                          {device.state}
+                          {provisioningStateName(device.state)}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-sm">
@@ -467,8 +486,9 @@ export default function PXEBootPage() {
       </div>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>All Devices</CardTitle>
+          <PXEMacLookup />
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -486,13 +506,14 @@ export default function PXEBootPage() {
                   <TableHead>Certificate</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead>Updated</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {devices.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={7}
+                      colSpan={8}
                       className="text-center text-muted-foreground"
                     >
                       No devices found
@@ -502,14 +523,20 @@ export default function PXEBootPage() {
                   devices.map((device: PXEDeviceInfo) => (
                     <TableRow key={device.id}>
                       <TableCell className="font-mono text-sm">
-                        {device.macAddress}
+                        <Link
+                          href={`/networking/pxe/${encodeURIComponent(device.id)}`}
+                          className="hover:underline"
+                          data-testid={`pxe-device-link-${device.id}`}
+                        >
+                          {device.macAddress}
+                        </Link>
                       </TableCell>
                       <TableCell>
                         <Badge
                           variant="outline"
-                          className={getStateColor(device.state)}
+                          className={getStateColor(provisioningStateName(device.state))}
                         >
-                          {device.state}
+                          {provisioningStateName(device.state)}
                         </Badge>
                       </TableCell>
                       <TableCell>
@@ -538,6 +565,9 @@ export default function PXEBootPage() {
                         {device.updatedAt ? formatDistanceToNow(new Date(device.updatedAt), {
                           addSuffix: true,
                         }) : '-'}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <PXEDeviceActions device={device} onChanged={() => void refetchDevices()} />
                       </TableCell>
                     </TableRow>
                   ))

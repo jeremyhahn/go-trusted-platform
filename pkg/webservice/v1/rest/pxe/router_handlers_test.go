@@ -374,6 +374,31 @@ func TestOperatorHandlers_AcceptAnEmptyBody(t *testing.T) {
 	assert.Empty(t, cmpProto(&platformv1.AuthorizePXEDeviceRequest{DeviceId: knownDevice}, server.req))
 }
 
+// TestUpdateState_OnlyTheProtobufEnumNameSetsTheState pins the REST decoder
+// the SDK must match: protorest decodes enums by their protobuf name, and with
+// DiscardUnknown a short name such as "FAILED" is dropped, leaving UNSPECIFIED.
+func TestUpdateState_OnlyTheProtobufEnumNameSetsTheState(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want platformv1.ProvisioningState
+	}{
+		{"protobuf enum name", `{"state":"PROVISIONING_STATE_FAILED","reason":"disk"}`, platformv1.ProvisioningState_PROVISIONING_STATE_FAILED},
+		{"short name", `{"state":"FAILED","reason":"disk"}`, platformv1.ProvisioningState_PROVISIONING_STATE_UNSPECIFIED},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := &operatorPXE{resp: &platformv1.UpdatePXEStateResponse{Status: handlerOK, Device: handlerDevice}}
+			rec := serveHandler(handlerRoot(server), http.MethodPut, "/api/v1/pxe/devices/"+knownDevice+"/state", tc.body)
+
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			assert.Empty(t, cmpProto(&platformv1.UpdatePXEStateRequest{
+				DeviceId: knownDevice, State: tc.want, Reason: "disk",
+			}, server.req))
+		})
+	}
+}
+
 // TestWebhookComplete_NilServerAnswersUnavailable checks the machine-facing
 // webhook, like the operator routes, answers 503 when no PXE service runs.
 func TestWebhookComplete_NilServerAnswersUnavailable(t *testing.T) {
