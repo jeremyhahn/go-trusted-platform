@@ -1,7 +1,7 @@
 /**
  * SDN (Software-Defined Networking) Service
  *
- * Provides operations for bridges, ports, flows, and VLANs.
+ * Provides operations for bridges, ports, flows, VLANs and network zones.
  */
 
 import type { ApiClient } from '../client/api-client.js';
@@ -39,6 +39,11 @@ import type {
   GetPortStatsResponse,
   GetFlowStatsResponse,
   SDNLabelSelector,
+  NetworkZone,
+  NetworkZoneSpec,
+  ListNetworkZonesRequest,
+  ListNetworkZonesResponse,
+  DeleteNetworkZoneResponse,
 } from '../types/sdn.js';
 
 /**
@@ -367,6 +372,51 @@ export class SDNService extends BaseService {
   async deleteVLAN(bridgeId: string, vlanId: number): Promise<ApiResponse<DeleteVLANResponse>> {
     return this.client.delete<DeleteVLANResponse>(
       this.buildUrl(`/bridges/${this.encodePathSegment(bridgeId)}/vlans/${vlanId}`)
+    );
+  }
+
+  // ===========================================================================
+  // Network Zone Operations
+  // ===========================================================================
+  //
+  // The zones are served on the REST zone shape (snake_case, the Go json
+  // tags of pkg/webservice/v1/rest/sdn/zones.go), not protojson.
+
+  /**
+   * List the network zones, optionally only those of one lifecycle role.
+   */
+  async listNetworkZones(
+    request?: ListNetworkZonesRequest
+  ): Promise<ApiResponse<ListNetworkZonesResponse>> {
+    return this.client.get<ListNetworkZonesResponse>(
+      this.buildUrl('/zones', { filters: { lifecycle_role: request?.lifecycleRole } })
+    );
+  }
+
+  /**
+   * Create an owner-defined network zone; the body is the spec itself.
+   */
+  async createNetworkZone(spec: NetworkZoneSpec): Promise<ApiResponse<NetworkZone>> {
+    return this.client.post<NetworkZone>(this.buildUrl('/zones'), spec);
+  }
+
+  /**
+   * Update the zone `name`. The spec is sent unchanged: its `name` must be
+   * omitted or equal `name`, and the server answers HTTP 400 when they differ.
+   */
+  async updateNetworkZone(name: string, spec: NetworkZoneSpec): Promise<ApiResponse<NetworkZone>> {
+    return this.client.put<NetworkZone>(
+      this.buildUrl(`/zones/${this.encodePathSegment(name)}`),
+      spec
+    );
+  }
+
+  /**
+   * Delete the owner-defined zone `name`.
+   */
+  async deleteNetworkZone(name: string): Promise<ApiResponse<DeleteNetworkZoneResponse>> {
+    return this.client.delete<DeleteNetworkZoneResponse>(
+      this.buildUrl(`/zones/${this.encodePathSegment(name)}`)
     );
   }
 }

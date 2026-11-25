@@ -28,6 +28,24 @@ for (const call of calls) {
   assert.match(call[1], /\bbaseURL\b/, `newContext call names baseURL: ${call[0]}`);
 }
 
+// The Network Zones page has an h1 and a card title with the same text, so a
+// heading locator must name its level; and the create form already selects
+// the hypervisor port class, so clicking it would leave none (Create Zone off).
+const zones = fs.readFileSync(path.join(import.meta.dirname, 'networking-zones.spec.ts'), 'utf8');
+const headings = [...zones.matchAll(/getByRole\('heading',\s*\{[^}]*name:\s*'Network Zones'[^}]*\}/g)];
+assert.ok(headings.length > 0, 'networking-zones.spec.ts locates the Network Zones heading');
+for (const h of headings) {
+  assert.match(h[0], /\blevel:\s*1\b/, `Network Zones heading locator names level 1: ${h[0]}`);
+}
+assert.ok(
+  !zones.includes("#port-class-hypervisor').click()"),
+  'networking-zones.spec.ts does not click the default hypervisor port class',
+);
+assert.match(
+  zones,
+  /#port-class-hypervisor'\)\)\.toHaveAttribute\('data-state', 'checked'\)/,
+  'networking-zones.spec.ts asserts the hypervisor port class is checked',
+);
 // The seeded registry spec (#2063) runs against the real platformd: it seeds
 // its images with the /v2 push fixture and the real-server fixtures, never a
 // page.route mock or api-mock, and every context it opens names baseURL.
