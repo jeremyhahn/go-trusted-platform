@@ -112,6 +112,8 @@ func runnerProblems(body []byte) []string {
 		case isSelectionRunsOn(j.runsOn.Value):
 			// v1.48: the preflight selection, hosted unless the hosted
 			// pool is full; its step keeps fork pull requests hosted.
+		case j.name == "preflight" && j.runsOn.Value == selectionPreflight:
+			// Its expression keeps fork pull requests and other events hosted.
 		case strings.Contains(j.runsOn.Value, "${{"):
 			problems = append(problems, where+" runs on an expression, which can pick a self-hosted label: "+strconv.Quote(j.runsOn.Value))
 		case j.runsOn.Value != hostedRunner:
@@ -121,7 +123,7 @@ func runnerProblems(body []byte) []string {
 		}
 		// A self-hosted runner is persistent: fork pull requests must
 		// never reach it, so the job's if: carries the same-repository guard.
-		if j.runsOn != nil && (j.runsOn.Kind != yaml.ScalarNode || (j.runsOn.Value != hostedRunner && !isSelectionRunsOn(j.runsOn.Value))) &&
+		if j.runsOn != nil && (j.runsOn.Kind != yaml.ScalarNode || (j.runsOn.Value != hostedRunner && !isSelectionRunsOn(j.runsOn.Value) && (j.name != "preflight" || j.runsOn.Value != selectionPreflight))) &&
 			!strings.Contains(j.cond, sameRepoExpr) {
 			problems = append(problems, where+": self-hosted runner without the fork guard")
 		}
@@ -199,16 +201,22 @@ const (
 	selectionRunner      = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}"
 	selectionDocker      = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}"
 	selectionGate        = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner || '\"ubuntu-latest\"') || 'ubuntu-latest' }}"
-	selectionForkGuard   = `if [ -n "$HEAD_REPO" ] && [ "$HEAD_REPO" != "$REPO" ]; then`
+	selectionForkEvents  = "case \"$EVENT\" in\n  pull_request|pull_request_target)\n"
+	selectionForkGuard   = `if [ "$HEAD_REPO" != "$REPO" ]; then`
 	selectionOverflowMsg = "the self-hosted overflow runners (bigdisk, bigdisk-docker)"
+	// selectionPreflight is preflight's runs-on: the bigdisk pool, or
+	// CI_PREFLIGHT_RUNS_ON, on a push to main or a same-repository pull
+	// request, the only events the self-hosted runners accept; hosted on
+	// every other event and off github.com.
+	selectionPreflight = `${{ github.server_url == 'https://github.com' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON(vars.CI_PREFLIGHT_RUNS_ON || '["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}`
 )
 
 // selectionRunsOn is the runs-on every job of ci.yml carries under v1.48:
 // a job whose steps run Docker reads runner_docker, CI Gate reads runner with
-// the hosted fallback, the others read runner. preflight decides, so it stays
-// hosted; image keeps its ruling 999 oversize waiver.
+// the hosted fallback, the others read runner. preflight takes
+// selectionPreflight; image keeps its ruling 999 oversize waiver.
 var selectionRunsOn = map[string]string{
-	"preflight":  hostedRunner,
+	"preflight":  selectionPreflight,
 	"lint":       selectionDocker,
 	"image":      "bigdisk-docker",
 	"lint-gates": selectionRunner,
@@ -313,7 +321,7 @@ func selectionProblems(body []byte) []string {
 	if r := mapValue(first, "run"); r != nil {
 		run = r.Value
 	}
-	for _, want := range []string{selectionForkGuard, selectionOverflowMsg, `emit "$(overflow bigdisk)" "$(overflow bigdisk-docker)"`} {
+	for _, want := range []string{selectionForkEvents + "    " + selectionForkGuard, selectionOverflowMsg, `emit "$(overflow bigdisk)" "$(overflow bigdisk-docker)"`} {
 		if !strings.Contains(run, want) {
 			problems = append(problems, "the selection step's run lacks "+strconv.Quote(want))
 		}
@@ -386,6 +394,7 @@ func TestRunnerProblems_Mutations(t *testing.T) {
 		{"the event expression put back", func(b string) string {
 			return replaceJobRunner(t, b, "race", split+"  "+selfHostedWaiver+"oversize: measured 24.2 GB")
 		}, "job race runs on an expression"},
+		{"preflight's expression on another job", lint(selectionPreflight), "job lint runs on an expression"},
 		{"the Gitea release arm put back", func(b string) string {
 			return replaceJobRunner(t, b, "web", `${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'release' }}`)
 		}, "job web runs on an expression"},

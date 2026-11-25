@@ -29,8 +29,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Gated } from "@/components/features/capabilities/gated";
 import { VendorBadge } from "./vendor-badge";
 import type { AuthFactor, AuthFactorType } from "@/types/auth-factors";
+
+// The server ops behind each factor write (the paths auth-factors-api calls),
+// so each control follows the capabilities listing (#2033 item 5).
+export const FACTOR_ADD_OP = "POST /api/v1/users/{id}/factors";
+export const FACTOR_RELABEL_OP = "PATCH /api/v1/users/{id}/factors/{factor_id}/label";
+export const FACTOR_ROTATE_OP = "PUT /api/v1/users/{id}/factors/{factor_id}/rotate";
+export const FACTOR_REMOVE_OP = "DELETE /api/v1/users/{id}/factors/{factor_id}";
 
 const TYPE_LABELS: Record<AuthFactorType, string> = {
   mtls: "mTLS Certificate",
@@ -139,15 +147,17 @@ function FactorRow({
         ) : (
           <div className="flex items-center gap-1">
             <span className="text-sm font-medium truncate">{factor.label}</span>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 opacity-50 hover:opacity-100"
-              onClick={() => setEditing(true)}
-              aria-label="Edit label"
-            >
-              <Pencil className="h-3 w-3" />
-            </Button>
+            <Gated op={FACTOR_RELABEL_OP}>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 opacity-50 hover:opacity-100"
+                onClick={() => setEditing(true)}
+                aria-label="Edit label"
+              >
+                <Pencil className="h-3 w-3" />
+              </Button>
+            </Gated>
           </div>
         )}
         <div className="flex items-center gap-2 mt-0.5 text-xs text-muted-foreground">
@@ -160,27 +170,32 @@ function FactorRow({
       <VendorBadge factor={factor} className="hidden sm:inline-flex" />
 
       <div className="flex items-center gap-1 shrink-0">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => onRotate(factor)}
-          aria-label={`Rotate ${factor.label}`}
-        >
-          <RotateCcw className="h-3 w-3 mr-1" />
-          Rotate
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => onRemove(factor)}
-          disabled={isLastFactor}
-          title={isLastFactor ? "Cannot remove the last factor" : undefined}
-          aria-label={`Remove ${factor.label}`}
-          className="text-destructive hover:text-destructive"
-        >
-          <Trash2 className="h-3 w-3 mr-1" />
-          Remove
-        </Button>
+        <Gated op={FACTOR_ROTATE_OP}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onRotate(factor)}
+            aria-label={`Rotate ${factor.label}`}
+          >
+            <RotateCcw className="h-3 w-3 mr-1" />
+            Rotate
+          </Button>
+        </Gated>
+        {/* Gated only overrides disabled/title when the op is off. */}
+        <Gated op={FACTOR_REMOVE_OP}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onRemove(factor)}
+            disabled={isLastFactor}
+            title={isLastFactor ? "Cannot remove the last factor" : undefined}
+            aria-label={`Remove ${factor.label}`}
+            className="text-destructive hover:text-destructive"
+          >
+            <Trash2 className="h-3 w-3 mr-1" />
+            Remove
+          </Button>
+        </Gated>
       </div>
     </div>
   );

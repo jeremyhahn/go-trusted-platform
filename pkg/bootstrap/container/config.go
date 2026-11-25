@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/nbd"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/volume"
 )
 
 const (
@@ -147,6 +148,11 @@ type ServerConfig struct {
 	// NBD configures the NBD-over-TLS export server, which runs only when
 	// the manifest holds a diskless-nbd node (#689).
 	NBD NBDConfig
+
+	// Volume holds the storage classes the NBD store is chosen from by
+	// NBDConfig.StorageClass. Nil means volume.DefaultConfig(): replicated
+	// (drbd), general (local, the default) and object.
+	Volume *volume.Config `yaml:"volume,omitempty" json:"volume,omitempty"`
 }
 
 // NBDConfig configures the export server for diskless-nbd nodes. Its
@@ -160,6 +166,11 @@ type NBDConfig struct {
 	// VolumeDir holds one volume file per device. Empty derives
 	// <DataDir>/nbd, so volumes persist on the container's bind mount.
 	VolumeDir string `yaml:"volume_dir" json:"volume_dir"`
+
+	// StorageClass is the storage class whose provider holds the volumes.
+	// Empty means the volume config's default class, general: local files
+	// under VolumeDir.
+	StorageClass string `yaml:"storage_class" json:"storage_class"`
 
 	// VolumeSize is the size in bytes a device's volume is created at on
 	// its first attach: positive and a multiple of 512. Required.
@@ -268,6 +279,11 @@ func (c *ServerConfig) Validate() error {
 			Reason: "must differ from http_port; the device-script server is a second listener",
 		}
 	}
+	if c.Volume != nil {
+		if err := c.Volume.Validate(); err != nil {
+			return ErrInvalidServerConfig{Field: "volume", Reason: err.Error(), Err: err}
+		}
+	}
 	return nil
 }
 
@@ -305,6 +321,9 @@ func (c *ServerConfig) ApplyDefaults() {
 	}
 	if c.NBD.VolumeDir == "" {
 		c.NBD.VolumeDir = filepath.Join(c.DataDir, nbdVolumeSubdir)
+	}
+	if c.Volume == nil {
+		c.Volume = volume.DefaultConfig()
 	}
 }
 

@@ -16,6 +16,7 @@ package iam
 import (
 	"context"
 	"errors"
+	"strings"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -142,8 +143,9 @@ const emailLookupPageSize = 100
 // transport of go-quicbaas v0.12.0-alpha routes no IAM.User/GetByEmail, so
 // login's workspace-role lookup (WorkspaceRoleResolver) would fail there;
 // only on that unknown-method error does GetUserByEmail read the tenant's
-// users instead, page by page, and return the first user whose email equals
-// email exactly. It answers an SDK not-found error only when the listing is
+// users instead, page by page, and return the first user whose canonical email
+// (canonicalEmail: trimmed and lower-cased) equals the canonical form of email,
+// as the upstream lookup matches. It answers an SDK not-found error only when the listing is
 // provably complete: the last page holds fewer than emailLookupPageSize users.
 // A full page with no next-page token may hide later users (the v0.12.0-alpha
 // embedded user list ignores PageToken), so that miss fails closed with an SDK
@@ -155,6 +157,7 @@ func (a *QuicBaaSIAMAdapter) GetUserByEmail(ctx context.Context, tenantID, email
 	if err == nil || !isUnknownMethod(err) {
 		return user, err
 	}
+	want := canonicalEmail(email)
 	tok := ""
 	for {
 		resp, err := users.List(ctx, tenantID, &iamsdk.ListUsersRequest{PageSize: emailLookupPageSize, PageToken: tok})
@@ -165,7 +168,7 @@ func (a *QuicBaaSIAMAdapter) GetUserByEmail(ctx context.Context, tenantID, email
 			break
 		}
 		for i := range resp.Users {
-			if resp.Users[i].Email == email {
+			if canonicalEmail(resp.Users[i].Email) == want {
 				found := resp.Users[i]
 				return &found, nil
 			}
@@ -180,6 +183,15 @@ func (a *QuicBaaSIAMAdapter) GetUserByEmail(ctx context.Context, tenantID, email
 		}
 	}
 	return nil, sdkerrors.NewNotFound("iam.GetUserByEmail", "no user in tenant "+tenantID+" has the email "+email)
+}
+
+// canonicalEmail returns the form in which go-quicbaas compares emails: the
+// pinned IdentityStore.GetUserByEmail trims and lower-cases the lookup key, and
+// QRDBUserStorage stores and looks up NormalizeEmail's output, the same
+// transformation. The GetUserByEmail list fallback compares both sides in this
+// form so it finds the same account the upstream lookup would.
+func canonicalEmail(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
 // isUnknownMethod reports whether err says the transport does not route the
