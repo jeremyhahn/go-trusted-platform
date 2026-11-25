@@ -145,3 +145,41 @@ func TestPrivateAddressFindingsFlagEachBlock(t *testing.T) {
 	require.Empty(t, privateAddressFindings("x.md", "a 192.0.2.10 b"))
 	require.Empty(t, privateAddressFindings("x.md", "a 198.19.4.1 b"))
 }
+
+// TestDeviceTemplatesRpi4ParagraphMatchesTheTemplate keeps the device
+// templates guide's rpi4 example honest: an address its prose names must be
+// one the shipped rpi4 compute template's dnsmasq upstream-servers holds.
+func TestDeviceTemplatesRpi4ParagraphMatchesTheTemplate(t *testing.T) {
+	root := repoRoot(t)
+	doc, err := os.ReadFile(filepath.Join(root, "docs", "device-templates.md"))
+	require.NoError(t, err)
+	const start = "The rpi4 compute template is a rack node"
+	at := strings.Index(string(doc), start)
+	require.GreaterOrEqual(t, at, 0, "docs/device-templates.md has no paragraph starting %q", start)
+	paragraph, _, _ := strings.Cut(string(doc)[at:], "\n\n")
+
+	tmpl, err := os.ReadFile(filepath.Join(root, "configs", "platform", "templates", "dedicated",
+		"raspberrypi", "rpi4", "compute.yaml"))
+	require.NoError(t, err)
+	var upstreams []string
+	inUpstreams := false
+	for _, line := range strings.Split(string(tmpl), "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case trimmed == "upstream-servers:":
+			inUpstreams = true
+		case inUpstreams && strings.HasPrefix(trimmed, "- "):
+			upstreams = append(upstreams, trimmed)
+		default:
+			inUpstreams = false
+		}
+	}
+	require.NotEmpty(t, upstreams, "the rpi4 compute template has no dnsmasq upstream-servers")
+	held := strings.Join(upstreams, "\n")
+	heldAddrs := ipv4Literal.FindAllString(held, -1)
+
+	for _, addr := range ipv4Literal.FindAllString(paragraph, -1) {
+		require.Contains(t, heldAddrs, addr,
+			"the rpi4 paragraph names %s, which the template's upstream-servers do not hold:\n%s", addr, held)
+	}
+}
