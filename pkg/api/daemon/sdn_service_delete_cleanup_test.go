@@ -110,6 +110,64 @@ func ovsCookieString(c uint64) string {
 	return fmt.Sprintf("0x%x", c)
 }
 
+// TestSDNService_DeleteFlow_RefusesAPolicyOwnedFlow pins the #1955 Codex
+// round-6 P1: every rule of a policy shares one cookie on a bridge, so
+// ListFlows shows one ID for all of them. DeleteFlow on that ID must not
+// delete the policy's rules behind its back; the policy is the unit, and
+// only DeletePolicy removes them.
+func TestSDNService_DeleteFlow_RefusesAPolicyOwnedFlow(t *testing.T) {
+	mock := NewConfigurableMockOVSClient()
+	var mu sync.Mutex
+	var added []*ovs.FlowMod
+	mock.OnAddFlow(func(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error {
+		mu.Lock()
+		defer mu.Unlock()
+		added = append(added, flow)
+		return nil
+	})
+	svc := newDeleteCleanupSDNService(t, mock)
+	ctx := context.Background()
+
+	cfg := vlanPolicyConfig("pa", 10)
+	cfg.Rules = append(cfg.Rules, &platformv1.PolicyRule{
+		RuleId:   "r2",
+		Priority: 90,
+		Action:   platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY,
+		Match: &platformv1.PolicyRuleMatch{
+			SourceIp: "198.51.100.0/24",
+			VlanId:   10,
+		},
+	})
+	_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "a", Config: cfg})
+	require.NoError(t, err)
+
+	require.Len(t, added, 2)
+	require.NotEmpty(t, added[0].Cookie)
+	require.Equal(t, added[0].Cookie, added[1].Cookie)
+	flowID := ovs.FlowIDPrefix + added[0].Cookie
+
+	_, err = svc.DeleteFlow(ctx, &platformv1.DeleteFlowRequest{BridgeId: "br0", FlowId: flowID})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	assert.Empty(t, mock.GetCalls("DeleteFlowsByCookie"))
+
+	got, err := svc.GetPolicy(ctx, &platformv1.GetPolicyRequest{PolicyId: "a"})
+	require.NoError(t, err)
+	require.NotNil(t, got)
+
+	svc.mu.RLock()
+	wantCookie := svc.policies["a"].flowCookies["br0"]
+	svc.mu.RUnlock()
+
+	_, err = svc.DeletePolicy(ctx, &platformv1.DeletePolicyRequest{PolicyId: "a"})
+	require.NoError(t, err)
+	calls := mock.GetCalls("DeleteFlowsByCookie")
+	require.Len(t, calls, 1)
+	assert.Equal(t, "br0", calls[0].Args[0])
+	assert.Equal(t, wantCookie, calls[0].Args[1])
+	assert.Equal(t, added[0].Cookie, ovsCookieString(wantCookie))
+}
+
 func TestSDNService_DeletePolicy_CleanupErrorKeepsPolicy(t *testing.T) {
 	mock := NewConfigurableMockOVSClient()
 	svc := newDeleteCleanupSDNService(t, mock)
