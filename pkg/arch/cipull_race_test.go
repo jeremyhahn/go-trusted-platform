@@ -207,7 +207,7 @@ func runTwoLegPull(t *testing.T, step string, env ...string) (a, b pullLeg, stat
 		return strings.TrimSpace(string(data))
 	}
 	// Each leg rebuilds the reference from IT_REGISTRY and IT_IMAGE_TAG, and
-	// the reference both pulled stays for the other leg to re-tag from.
+	// the reference the first leg pulled stays for the other leg to re-tag from.
 	tag := "1111"
 	for _, kv := range env {
 		if v, ok := strings.CutPrefix(kv, "IT_IMAGE_TAG="); ok {
@@ -243,8 +243,10 @@ func TestCIRegistryPullSurvivesTwoLegsOnOneDaemon(t *testing.T) {
 	require.Contains(t, a.output, "leased=true", "leg A:\n%s", a.log)
 	require.Equal(t, "0", b.rc, "leg B, second to take the lock:\n%s", b.log)
 	require.Contains(t, b.output, "leased=true", "leg B:\n%s", b.log)
-	require.Equal(t, []string{ciFixtureImageRef, ciFixtureImageRef}, strings.Fields(b.pulled),
-		"each leg pulls the registry-prefixed image path:\nA:\n%s\nB:\n%s", a.log, b.log)
+	// Legs sharing a daemon pull the image once (#2386); the one pull is of
+	// the registry-prefixed path-bound reference the image job pushed.
+	require.Equal(t, []string{ciFixtureImageRef}, strings.Fields(b.pulled),
+		"the legs pull the registry-prefixed image path once per daemon:\nA:\n%s\nB:\n%s", a.log, b.log)
 }
 
 // twoProducerLock is the image lock both producers source. Producer B
@@ -503,6 +505,18 @@ func TestCIRegistryPullTakesThePushedReference(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, tag, "the push step emits no image_tag:\n%s", r.log)
+	require.Equal(t, ciFixtureRegistry+"/go-trusted-platform/it-image:"+tag, r.read("pushed"), "the push step's reference:\n%s", r.log)
+	// On the push step's daemon the pushed reference is already there, so the
+	// leg pulls nothing (#2386, one pull per daemon).
+	require.Empty(t, r.read("pulled"), "the leg pulled an image its daemon holds:\n%s", r.log)
+	require.Contains(t, r.output, "leased=true", r.log)
+
+	// A leg on another daemon has no copy: drop the pushed reference (named
+	// from the push record, not the workflow's path) and the leg must pull
+	// exactly the pushed path-only reference.
+	forget := `docker rmi "$(cat "$FAKE_DOCKER_STATE/pushed")"`
+	r = runRegistrySteps(t, nil, nil, ciStepRun(t, ciImageJob, "push"), forget, ciStepRun(t, ciLegJob, "pull"))
+	require.NoError(t, r.err, r.log)
 	require.Equal(t, ciFixtureRegistry+"/go-trusted-platform/it-image:"+tag, r.read("pushed"), "the push step's reference:\n%s", r.log)
 	require.Equal(t, r.read("pushed"), r.read("pulled"), "the pull step's reference:\n%s", r.log)
 	require.Contains(t, r.output, "leased=true", r.log)
