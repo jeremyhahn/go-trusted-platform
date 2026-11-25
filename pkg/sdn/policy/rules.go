@@ -166,16 +166,39 @@ func (g *RuleGenerator) buildMatch(match FlowMatch) string {
 		parts = append(parts, fmt.Sprintf("dl_dst=%s", match.EthDst))
 	}
 
-	if match.EthType > 0 {
-		parts = append(parts, fmt.Sprintf("dl_type=0x%04x", match.EthType))
+	// OpenFlow refuses an L3 or L4 field without its prerequisites
+	// (OFPBMC_BAD_PREREQ): nw_* and ipv6_* need dl_type, tp_* needs nw_proto.
+	ethType := match.EthType
+	if ethType == 0 {
+		switch {
+		case match.IPv6Src != "" || match.IPv6Dst != "":
+			ethType = 0x86dd
+		case match.IPProto > 0 || match.IPv4Src != "" || match.IPv4Dst != "" ||
+			match.TCPSrc > 0 || match.TCPDst > 0 || match.UDPSrc > 0 || match.UDPDst > 0:
+			ethType = 0x0800
+		}
+	}
+
+	ipProto := match.IPProto
+	if ipProto == 0 {
+		switch {
+		case match.TCPSrc > 0 || match.TCPDst > 0:
+			ipProto = 6
+		case match.UDPSrc > 0 || match.UDPDst > 0:
+			ipProto = 17
+		}
+	}
+
+	if ethType > 0 {
+		parts = append(parts, fmt.Sprintf("dl_type=0x%04x", ethType))
 	}
 
 	if match.VLANVid > 0 {
 		parts = append(parts, fmt.Sprintf("dl_vlan=%d", match.VLANVid))
 	}
 
-	if match.IPProto > 0 {
-		parts = append(parts, fmt.Sprintf("nw_proto=%d", match.IPProto))
+	if ipProto > 0 {
+		parts = append(parts, fmt.Sprintf("nw_proto=%d", ipProto))
 	}
 
 	if match.IPv4Src != "" {
