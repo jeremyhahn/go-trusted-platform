@@ -40,7 +40,7 @@ Examples:
 
   # Service-wide counters
   platformctl messaging stats
-  platformctl messaging dedup-stats`,
+  platformctl messaging dedup-stats events`,
 	}
 
 	channel := &cobra.Command{
@@ -90,10 +90,10 @@ Examples:
 					platformv1.MessagingServiceClient.GetStats, &platformv1.GetMessagingStatsRequest{},
 					fieldsTable[*platformv1.GetMessagingStatsResponse])
 			}),
-		newCommand(getFlags, "dedup-stats", "Show the deduplication counters", cobra.NoArgs,
-			func(flags *cli.CommonFlags, _ []string) error {
+		newCommand(getFlags, "dedup-stats <channel>", "Show the deduplication counters of a channel", cobra.ExactArgs(1),
+			func(flags *cli.CommonFlags, args []string) error {
 				return call(flags, newMessagingClient, "failed to get the deduplication statistics",
-					platformv1.MessagingServiceClient.GetDedupStats, &platformv1.GetMessagingDedupStatsRequest{},
+					platformv1.MessagingServiceClient.GetDedupStats, &platformv1.GetMessagingDedupStatsRequest{Channel: args[0]},
 					fieldsTable[*platformv1.GetMessagingDedupStatsResponse])
 			}),
 	)

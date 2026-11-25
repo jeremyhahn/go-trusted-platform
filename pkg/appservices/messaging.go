@@ -117,13 +117,16 @@ func (s *MessagingService) Stats(ctx context.Context) (*messaging.Stats, error) 
 	return stats, callFailed(ServiceMessaging, "stats", err)
 }
 
-// DedupStats returns the deduplication counters.
-func (s *MessagingService) DedupStats(ctx context.Context) (*messaging.DedupStats, error) {
+// DedupStats returns the deduplication counters of one channel.
+func (s *MessagingService) DedupStats(ctx context.Context, channel string) (*messaging.DedupStats, error) {
+	if err := requireName(ServiceMessaging, "channel", channel); err != nil {
+		return nil, err
+	}
 	client, err := resolve(ServiceMessaging, s.resolver)
 	if err != nil {
 		return nil, err
 	}
-	stats, err := client.GetDedupStats(ctx, "")
+	stats, err := client.GetDedupStats(ctx, channel)
 	return stats, callFailed(ServiceMessaging, "dedup stats", err)
 }
 

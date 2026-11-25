@@ -185,8 +185,8 @@ func commandCases() []commandCase {
 			}},
 		{[]string{"messaging", "stats"},
 			platformv1.MessagingService_GetStats_FullMethodName, &platformv1.GetMessagingStatsRequest{}},
-		{[]string{"messaging", "dedup-stats"},
-			platformv1.MessagingService_GetDedupStats_FullMethodName, &platformv1.GetMessagingDedupStatsRequest{}},
+		{[]string{"messaging", "dedup-stats", "events"},
+			platformv1.MessagingService_GetDedupStats_FullMethodName, &platformv1.GetMessagingDedupStatsRequest{Channel: "events"}},
 
 		{[]string{"objectstorage", "put", "docs:a.txt", "hello", "--backend", "default", "--content-type", "text/plain",
 			"--tenant", "acme", "--shard", "4", "--tag", "env=prod", "--min-replicas", "3", "--replication-mode", "quorum",

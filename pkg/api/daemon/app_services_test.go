@@ -237,7 +237,8 @@ func (f *fakeAppMessaging) GetStats(context.Context) (*messaging.Stats, error) {
 	return &messaging.Stats{TotalChannels: 2, BufferUtilization: 0.25}, nil
 }
 
-func (f *fakeAppMessaging) GetDedupStats(context.Context) (*messaging.DedupStats, error) {
+func (f *fakeAppMessaging) GetDedupStats(_ context.Context, channel string) (*messaging.DedupStats, error) {
+	f.name = channel
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -446,7 +447,7 @@ func appServiceCalls(servers appServiceServers) map[string]appServiceCall {
 			return err
 		}),
 		"messaging.GetDedupStats": messagingCall(func(ctx context.Context) error {
-			_, err := m.GetDedupStats(ctx, &platformv1.GetMessagingDedupStatsRequest{})
+			_, err := m.GetDedupStats(ctx, &platformv1.GetMessagingDedupStatsRequest{Channel: "events"})
 			return err
 		}),
 		"messaging.GetChannelStats": messagingCall(func(ctx context.Context) error {
@@ -811,9 +812,10 @@ func TestMessagingGRPCService_ConvertsResponses(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0.25, stats.GetBufferUtilization())
 
-	dedup, err := svc.GetDedupStats(ctx, &platformv1.GetMessagingDedupStatsRequest{})
+	dedup, err := svc.GetDedupStats(ctx, &platformv1.GetMessagingDedupStatsRequest{Channel: "events"})
 	require.NoError(t, err)
 	assert.Equal(t, int64(60_000), dedup.GetWindowMs())
+	assert.Equal(t, "events", fake.name, "the dedup stats channel reaches the SDK")
 
 	channelStats, err := svc.GetChannelStats(ctx, &platformv1.GetMessagingChannelStatsRequest{Channel: "events"})
 	require.NoError(t, err)

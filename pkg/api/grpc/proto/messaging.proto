@@ -121,7 +121,10 @@ message GetMessagingStatsResponse {
   double buffer_utilization = 7;
 }
 
-message GetMessagingDedupStatsRequest {}
+message GetMessagingDedupStatsRequest {
+  // Channel whose deduplication counters are returned; required.
+  string channel = 1;
+}
 
 message GetMessagingDedupStatsResponse {
   int64 total_checks = 1;
