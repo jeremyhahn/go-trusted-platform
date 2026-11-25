@@ -15,14 +15,10 @@ package daemon
 
 import (
 	"context"
-	"net/http"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
-	"google.golang.org/grpc"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 )
 
 // The callers below are the identities the daemon's transports hand a
@@ -38,31 +34,4 @@ import (
 func quicTenantCaller(tenantID string, scopes ...string) context.Context {
 	granted := append([]string{"iam:read", "iam:write"}, scopes...)
 	return quic.ContextWithAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{TenantID: tenantID, Scopes: granted})
-}
-
-// mcpTenantCaller is the context the MCP server gives a tool call that
-// carries a validated platform token bound to tenantID.
-func mcpTenantCaller(tenantID string) context.Context {
-	return mcp.ContextWithAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{TenantID: tenantID})
-}
-
-// asUnixOperator attaches the Unix-socket operator's peer credentials to ctx,
-// as the Unix-socket server's interceptor does.
-func asUnixOperator(ctx context.Context) context.Context {
-	return peercred.ContextWithUnixCredentials(ctx, peercred.UnixCredentials{PID: 1, UID: 0, GID: 0})
-}
-
-// unixOperatorGRPCOption makes a test gRPC server serve every unary call as
-// the Unix-socket operator.
-func unixOperatorGRPCOption() grpc.ServerOption {
-	return grpc.UnaryInterceptor(func(ctx context.Context, req interface{}, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		return handler(asUnixOperator(ctx), req)
-	})
-}
-
-// unixOperatorHTTP serves every request of next as the Unix-socket operator.
-func unixOperatorHTTP(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r.WithContext(asUnixOperator(r.Context())))
-	})
 }
