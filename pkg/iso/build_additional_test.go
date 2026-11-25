@@ -496,6 +496,43 @@ func TestBuildISO_KeepsKeysDirThatIsTheISOTreeItself(t *testing.T) {
 	assert.Equal(t, keyPEM, got)
 }
 
+func TestBuildISO_KeepsKeysDirNestedInStagingTree(t *testing.T) {
+	tempDir := t.TempDir()
+	isoDir := filepath.Join(tempDir, "iso")
+	keysDir := filepath.Join(isoDir, SecureBootKeysISODirName, "source")
+	keyPEM := writeTestDBPair(t, keysDir)
+
+	output := filepath.Join(tempDir, "out.iso")
+	builder := fakeXorrisoBuilder(output, nil, nil)
+	require.NoError(t, builder.BuildISO(context.Background(),
+		&ISOConfig{ISODir: isoDir, KeysDir: keysDir, OutputISO: output}))
+
+	got, err := os.ReadFile(filepath.Join(keysDir, "DB.key"))
+	require.NoError(t, err, "a key source nested in the staging tree must never be wiped")
+	assert.Equal(t, keyPEM, got)
+	assert.FileExists(t, filepath.Join(keysDir, "DB.crt"))
+	assert.NoFileExists(t, filepath.Join(isoDir, "source", "DB.key"),
+		"the builder's staged DB.key copy must be removed")
+}
+
+func TestBuildISO_DoesNotWipeThroughSymlinkedStagingRoot(t *testing.T) {
+	tempDir := t.TempDir()
+	isoDir := filepath.Join(tempDir, "iso")
+	outside := filepath.Join(tempDir, "outside")
+	require.NoError(t, os.MkdirAll(isoDir, 0755))
+	keyPEM := writeTestDBPair(t, outside)
+	require.NoError(t, os.Symlink(outside, filepath.Join(isoDir, SecureBootKeysISODirName)))
+
+	output := filepath.Join(tempDir, "out.iso")
+	builder := fakeXorrisoBuilder(output, nil, nil)
+	err := builder.BuildISO(context.Background(), &ISOConfig{ISODir: isoDir, OutputISO: output})
+	require.Error(t, err, "a symlinked staging root must be refused")
+
+	got, err := os.ReadFile(filepath.Join(outside, "DB.key"))
+	require.NoError(t, err, "a key outside the ISO tree must never be wiped")
+	assert.Equal(t, keyPEM, got)
+}
+
 func TestRunXorriso_ContextCancellation(t *testing.T) {
 	tempDir := t.TempDir()
 	isoDir := filepath.Join(tempDir, "iso")
