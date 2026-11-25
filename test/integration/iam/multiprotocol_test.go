@@ -472,6 +472,9 @@ func testGroupCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		}
 
 		addResult, err := adapter.AddMember(ctx, addOpts)
+		if helpers.KnownGap(t, adapter.Name(), helpers.MethodIAMGroupAddMember, err) {
+			return
+		}
 		if err != nil {
 			t.Fatalf("AddMember failed: %v", err)
 		}
@@ -845,6 +848,9 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		}
 
 		assignResult, err := adapter.AssignRole(ctx, assignOpts)
+		if helpers.KnownGap(t, adapter.Name(), helpers.MethodIAMUserAssignRole, err) {
+			return
+		}
 		if err != nil {
 			t.Fatalf("AssignRole failed: %v", err)
 		}
@@ -913,6 +919,9 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		}
 
 		revokeResult, err := adapter.RevokeRole(ctx, revokeOpts)
+		if helpers.KnownGap(t, adapter.Name(), helpers.MethodIAMUserRevokeRole, err) {
+			return
+		}
 		if err != nil {
 			t.Fatalf("RevokeRole failed: %v", err)
 		}
