@@ -23,6 +23,7 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { useSDN, useApi } from '@/hooks';
 import type { VLAN } from 'trusted-platform-sdk';
+import { Gated } from '@/components/features/capabilities/gated';
 
 // Types for VLAN management
 interface VLANDisplay {
@@ -42,6 +43,7 @@ interface VLANDisplay {
   updatedAt: string;
 }
 
+/** VLANs of the first bridge, through useSDN. Create VLAN and the dialog's Create are gated on the server's POST /api/v1/sdn/bridges/{bridge_id}/vlans capability (#2033). */
 export default function VLANsPage() {
   const { toast } = useToast();
   const sdn = useSDN();
@@ -454,10 +456,12 @@ export default function VLANsPage() {
           <Button variant="outline" size="icon" onClick={fetchVlans} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button onClick={() => setCreateOpen(true)} disabled={!selectedBridgeId}>
-            <Plus className="mr-2 h-4 w-4" />
-            Create VLAN
-          </Button>
+          <Gated op="POST /api/v1/sdn/bridges/{bridge_id}/vlans">
+            <Button onClick={() => setCreateOpen(true)} disabled={!selectedBridgeId}>
+              <Plus className="mr-2 h-4 w-4" />
+              Create VLAN
+            </Button>
+          </Gated>
         </div>
       </div>
 
@@ -494,6 +498,7 @@ export default function VLANsPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+            <Gated op="POST /api/v1/sdn/bridges/{bridge_id}/vlans">
             <Button
               disabled={!createVlanId || createSubmitting || !selectedBridgeId}
               onClick={async () => {
@@ -526,6 +531,7 @@ export default function VLANsPage() {
               {createSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Create
             </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>

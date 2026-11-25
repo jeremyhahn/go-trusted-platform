@@ -231,5 +231,12 @@ func (d *Daemon) embeddedServices() *embedded.ServiceRegistry {
 	if svc := d.SwitchService(); svc != nil {
 		registry.Switch = svc
 	}
+	// The same platform.v1.ClusterService gRPC and the Unix socket serve,
+	// over the backend SetClusterService drives, so an embedded host's
+	// cluster calls reach the servicer WireEmbeddedHost sets (Unavailable
+	// until one is set).
+	if d.clusterGRPCService != nil {
+		registry.Cluster = d.clusterGRPCService
+	}
 	return registry
 }

@@ -126,7 +126,7 @@ Verified by grep on 2026-08-18:
 | `cluster.NewMembershipManager` | **none** |
 | `cluster.RaftOperator` implementations | **none in this repo** |
 | `daemon.NewClusterService` | **none** |
-| `daemon.Daemon.SetClusterService` | **none** |
+| `daemon.Daemon.SetClusterService` | `appbackends.WireSDKBackends` (serve and embedded hosts, over the embedded go-quicbaas service; #2140) |
 
 The gRPC service the daemon registers, on the TCP listener and the Unix
 socket, is the full `ClusterGRPCService` in `pkg/api/grpc/cluster_service.go`.
@@ -134,15 +134,25 @@ Its `grpc.ClusterService` dependency is the daemon adapter
 `clusterGRPCBackend` (`pkg/api/daemon/cluster_grpc_backend.go`), which
 answers from the daemon's `ClusterServicer`. The REST handlers, the QUIC `0x90`
 sub-opcodes and the MCP `platform_cluster_*` tools all call that registered
-service. `Daemon.SetClusterService` sets the servicer for all of them — and
-nothing calls it.
+service. `Daemon.SetClusterService` sets the servicer for all of them; since
+#2140 serve calls it through `appbackends.WireSDKBackends` with a servicer that
+reads the embedded go-quicbaas cluster (status, nodes, leader), while Leave and
+Join answer Unavailable (the pinned go-quicbaas has no leader-routed removal
+and no join seam).
 
-**So today: the interfaces, the coordinator implementation, the state machine,
-the node registry, the transports and the CLI package all exist, and no shipped
-code path connects them to a consensus engine.** Every cluster call on every
-transport returns "unavailable" or "not configured". That is the honest state
-of this feature, it is recorded here rather than in a footnote, and
-[api.md](api.md) shows it per capability.
+**So today: serve and every embedded host set the servicer through
+`appbackends.WireSDKBackends`, over the Raft cluster the embedded go-quicbaas
+service runs.** Status, nodes and leader answer on every transport. Leave and
+Join answer Unavailable, and runtime Bootstrap of a standalone node answers not
+initialized: the pinned go-quicbaas has no leader-routed removal and no join
+seam, upstream gaps. Node health reads unknown: the pinned go-quicbaas
+`ClusterStatus` reports Raft membership and marks every member healthy, a
+stopped follower included, so every node State is "unknown", the healthy count
+is 0 and the cluster State is "unknown" with a leader ("degraded" without one,
+"uninitialized" with no members) until the SDK exposes liveness. The
+coordinator, state machine and node registry in this repo are still not
+connected to a consensus engine. [api.md](api.md) shows the state per
+capability.
 
 The daemon once registered a second, stubbed `ClusterGRPCService` of its own
 whose every RPC returned `Unimplemented`, while the complete one went

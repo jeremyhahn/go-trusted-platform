@@ -2,7 +2,7 @@ package arch
 
 // Guards that every container CI starts has a memory limit (#1178).
 //
-// Unbounded, two toolchain containers on ci-node-2 held 36.5 GB and 32.4 GB
+// Unbounded, two toolchain containers on one runner held 36.5 GB and 32.4 GB
 // and the shared runner host swapped. CI starts containers in three places,
 // and each must carry a limit with swap set to the same size (so no swap):
 //
