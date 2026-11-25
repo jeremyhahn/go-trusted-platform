@@ -172,6 +172,25 @@ func (e *NoWorkspaceError) Unwrap() error {
 	return e.Cause
 }
 
+// InactiveAccountError reports that the principal authenticated but its
+// account in the workspace its session lands in is suspended, locked,
+// disabled or being deleted, so no session is issued there (#2150).
+type InactiveAccountError struct {
+	// TenantID is the workspace the session was to land in.
+	TenantID string
+
+	// Subject is the principal the backbone authenticated.
+	Subject string
+
+	// Lifecycle is the account lifecycle IAM reported.
+	Lifecycle string
+}
+
+// Error implements error.
+func (e *InactiveAccountError) Error() string {
+	return "login: the account of " + e.Subject + " in workspace " + e.TenantID + " is " + e.Lifecycle
+}
+
 // WorkspaceRolesError reports that the roles of an authenticated principal
 // in the workspace its session lands in could not be resolved. The session
 // is refused rather than issued with the operating tenant's roles (#662).

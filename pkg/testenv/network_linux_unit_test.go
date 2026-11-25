@@ -276,3 +276,38 @@ func TestNetworkExists_PartialNetwork(t *testing.T) {
 	exists := NetworkExists(cfg)
 	assert.False(t, exists, "Network with non-existent resources should return false")
 }
+
+// TestIptablesCommand_PrefersLegacyOnlyWhenItWorks checks that the test
+// network picks iptables-legacy only when it is on PATH and its tables load,
+// and otherwise falls back to iptables (#2150).
+func TestIptablesCommand_PrefersLegacyOnlyWhenItWorks(t *testing.T) {
+	tests := []struct {
+		name         string
+		legacyOnPath bool
+		usable       bool
+		want         string
+		wantProbed   bool
+	}{
+		{name: "legacy on PATH and usable", legacyOnPath: true, usable: true, want: "iptables-legacy", wantProbed: true},
+		{name: "legacy on PATH but tables do not load", legacyOnPath: true, usable: false, want: "iptables", wantProbed: true},
+		{name: "legacy not on PATH", legacyOnPath: false, usable: true, want: "iptables", wantProbed: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lookPath := func(file string) (string, error) {
+				if file == "iptables-legacy" && tt.legacyOnPath {
+					return "/usr/sbin/iptables-legacy", nil
+				}
+				return "", os.ErrNotExist
+			}
+			probed := false
+			usable := func(cmd string) bool {
+				probed = true
+				assert.Equal(t, "iptables-legacy", cmd)
+				return tt.usable
+			}
+			assert.Equal(t, tt.want, selectIptables(lookPath, usable))
+			assert.Equal(t, tt.wantProbed, probed)
+		})
+	}
+}

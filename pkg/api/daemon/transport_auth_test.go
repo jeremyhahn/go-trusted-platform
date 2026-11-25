@@ -40,6 +40,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
@@ -511,6 +512,7 @@ func TestMTLSPeerAuthenticator_TrustedCertificate_IsTheOperator(t *testing.T) {
 	assert.Equal(t, "Test Platform Client", authCtx.TenantID)
 	assert.True(t, authCtx.HasScope("piv:sign"), "an operator certificate holds every scope, as on gRPC and REST")
 	assert.True(t, authCtx.HasScope("ceremony:init"))
+	assert.Contains(t, authCtx.Roles, common.ROLE_ADMIN, "the operator certificate is the platform admin")
 }
 
 func TestMTLSPeerAuthenticator_UntrustedCertificate_ReturnsError(t *testing.T) {

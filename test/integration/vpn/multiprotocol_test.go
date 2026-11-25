@@ -33,7 +33,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
-// testPolicyName is the posture policy every scenario stores and deletes.
+// testPolicyName prefixes the posture policy each scenario stores and deletes.
 const testPolicyName = "integration-baseline"
 
 // TestVPNMultiProtocol runs the shared scenario against every protocol.
@@ -64,22 +64,26 @@ func TestVPNMultiProtocol(t *testing.T) {
 	}
 }
 
-// runVPNScenario exercises the full VPN surface over one transport. Each
-// transport works in its own tenant so the runs cannot see each other.
+// runVPNScenario exercises the full VPN surface over one transport. The
+// tenant-bound mTLS transports refuse a request that names a tenant other
+// than the caller's, so every transport works in the harness tenant; the
+// device and policy names are per run and per transport so the runs, which
+// share that tenant with each other and with other tests, cannot collide.
 func runVPNScenario(t *testing.T, ctx context.Context, cmd VPNCommands) {
 	t.Helper()
 
-	tenantID := helpers.GenerateUniqueID("vpn-tenant-" + cmd.Name())
+	tenantID := helpers.HarnessTenantID
 	deviceID := helpers.GenerateUniqueID("vpn-device")
+	policyName := helpers.GenerateUniqueID(testPolicyName + "-" + cmd.Name())
 
 	cctx, cancel := ShortContext(ctx)
 	_, probeErr := cmd.ListPeers(cctx, tenantID)
 	cancel()
 	switch {
 	case probeErr == nil:
-		runConfiguredScenario(t, ctx, cmd, tenantID, deviceID)
+		runConfiguredScenario(t, ctx, cmd, tenantID, deviceID, policyName)
 	case IsNotConfigured(probeErr):
-		assertFailsClosed(t, ctx, cmd, tenantID, deviceID)
+		assertFailsClosed(t, ctx, cmd, tenantID, deviceID, policyName)
 	default:
 		t.Fatalf("%s ListPeers: %v", cmd.Name(), probeErr)
 	}
@@ -87,8 +91,16 @@ func runVPNScenario(t *testing.T, ctx context.Context, cmd VPNCommands) {
 
 // runConfiguredScenario walks the peer and posture-policy lifecycles on a
 // node whose vpn control plane is configured.
-func runConfiguredScenario(t *testing.T, ctx context.Context, cmd VPNCommands, tenantID, deviceID string) {
+func runConfiguredScenario(t *testing.T, ctx context.Context, cmd VPNCommands, tenantID, deviceID, policyName string) {
 	t.Helper()
+
+	// The tenant is shared, so leave nothing behind if a step fails early.
+	t.Cleanup(func() {
+		cctx, cancel := ShortContext(ctx)
+		defer cancel()
+		_ = cmd.RevokePeer(cctx, tenantID, deviceID)
+		_ = cmd.DeletePosturePolicy(cctx, tenantID, policyName)
+	})
 
 	t.Run("EnrolPeer", func(t *testing.T) {
 		cctx, cancel := ShortContext(ctx)
@@ -131,8 +143,8 @@ func runConfiguredScenario(t *testing.T, ctx context.Context, cmd VPNCommands, t
 		if err != nil {
 			t.Fatalf("%s ListPeers: %v", cmd.Name(), err)
 		}
-		if len(peers) != 1 || peers[0].GetDeviceId() != deviceID {
-			t.Fatalf("%s: tenant %s lists %v, want only %s", cmd.Name(), tenantID, peers, deviceID)
+		if !listsPeer(peers, deviceID) {
+			t.Fatalf("%s: tenant %s lists %v, want %s among them", cmd.Name(), tenantID, peers, deviceID)
 		}
 	})
 
@@ -140,17 +152,17 @@ func runConfiguredScenario(t *testing.T, ctx context.Context, cmd VPNCommands, t
 		cctx, cancel := ShortContext(ctx)
 		defer cancel()
 
-		stored, err := cmd.SetPosturePolicy(cctx, tenantID, testPolicyName, testPostureModule)
+		stored, err := cmd.SetPosturePolicy(cctx, tenantID, policyName, testPostureModule)
 		if err != nil {
 			t.Fatalf("%s SetPosturePolicy: %v", cmd.Name(), err)
 		}
-		assertPolicy(t, cmd.Name(), stored, tenantID)
+		assertPolicy(t, cmd.Name(), stored, tenantID, policyName)
 
-		fetched, err := cmd.GetPosturePolicy(cctx, tenantID, testPolicyName)
+		fetched, err := cmd.GetPosturePolicy(cctx, tenantID, policyName)
 		if err != nil {
 			t.Fatalf("%s GetPosturePolicy: %v", cmd.Name(), err)
 		}
-		assertPolicy(t, cmd.Name(), fetched, tenantID)
+		assertPolicy(t, cmd.Name(), fetched, tenantID, policyName)
 		if fetched.GetModule() != testPostureModule {
 			t.Fatalf("%s: fetched module differs from the stored one", cmd.Name())
 		}
@@ -159,17 +171,24 @@ func runConfiguredScenario(t *testing.T, ctx context.Context, cmd VPNCommands, t
 		if err != nil {
 			t.Fatalf("%s ListPosturePolicies: %v", cmd.Name(), err)
 		}
-		if len(policies) != 1 || policies[0].GetName() != testPolicyName {
-			t.Fatalf("%s: tenant %s lists policies %v, want only %s", cmd.Name(), tenantID, policies, testPolicyName)
+		listed := false
+		for _, p := range policies {
+			if p.GetName() == policyName {
+				listed = true
+				break
+			}
+		}
+		if !listed {
+			t.Fatalf("%s: tenant %s lists policies %v, want %s among them", cmd.Name(), tenantID, policies, policyName)
 		}
 
-		if err := cmd.DeletePosturePolicy(cctx, tenantID, testPolicyName); err != nil {
+		if err := cmd.DeletePosturePolicy(cctx, tenantID, policyName); err != nil {
 			t.Fatalf("%s DeletePosturePolicy: %v", cmd.Name(), err)
 		}
-		if _, err := cmd.GetPosturePolicy(cctx, tenantID, testPolicyName); !IsNotFound(err) {
+		if _, err := cmd.GetPosturePolicy(cctx, tenantID, policyName); !IsNotFound(err) {
 			t.Fatalf("%s: GetPosturePolicy after delete returned %v, want not found", cmd.Name(), err)
 		}
-		if err := cmd.DeletePosturePolicy(cctx, tenantID, testPolicyName); !IsNotFound(err) {
+		if err := cmd.DeletePosturePolicy(cctx, tenantID, policyName); !IsNotFound(err) {
 			t.Fatalf("%s: second DeletePosturePolicy returned %v, want not found", cmd.Name(), err)
 		}
 	})
@@ -178,11 +197,11 @@ func runConfiguredScenario(t *testing.T, ctx context.Context, cmd VPNCommands, t
 		cctx, cancel := ShortContext(ctx)
 		defer cancel()
 
-		_, err := cmd.SetPosturePolicy(cctx, tenantID, testPolicyName, brokenPostureModule)
+		_, err := cmd.SetPosturePolicy(cctx, tenantID, policyName, brokenPostureModule)
 		if !IsInvalid(err) {
 			t.Fatalf("%s: SetPosturePolicy with a broken module returned %v, want invalid", cmd.Name(), err)
 		}
-		if _, err := cmd.GetPosturePolicy(cctx, tenantID, testPolicyName); !IsNotFound(err) {
+		if _, err := cmd.GetPosturePolicy(cctx, tenantID, policyName); !IsNotFound(err) {
 			t.Fatalf("%s: a refused module was stored (%v)", cmd.Name(), err)
 		}
 	})
@@ -198,8 +217,8 @@ func runConfiguredScenario(t *testing.T, ctx context.Context, cmd VPNCommands, t
 		if err != nil {
 			t.Fatalf("%s ListPeers after revoke: %v", cmd.Name(), err)
 		}
-		if len(peers) != 0 {
-			t.Fatalf("%s: tenant %s still lists %v after revoke", cmd.Name(), tenantID, peers)
+		if listsPeer(peers, deviceID) {
+			t.Fatalf("%s: tenant %s still lists %s after revoke", cmd.Name(), tenantID, deviceID)
 		}
 		if err := cmd.RevokePeer(cctx, tenantID, deviceID); !IsNotFound(err) {
 			t.Fatalf("%s: second RevokePeer returned %v, want not found", cmd.Name(), err)
@@ -232,7 +251,7 @@ func runConfiguredScenario(t *testing.T, ctx context.Context, cmd VPNCommands, t
 
 // assertFailsClosed checks that a node without a vpn control plane refuses
 // every operation the same way, rather than answering some of them.
-func assertFailsClosed(t *testing.T, ctx context.Context, cmd VPNCommands, tenantID, deviceID string) {
+func assertFailsClosed(t *testing.T, ctx context.Context, cmd VPNCommands, tenantID, deviceID, policyName string) {
 	t.Helper()
 
 	cctx, cancel := ShortContext(ctx)
@@ -249,14 +268,14 @@ func assertFailsClosed(t *testing.T, ctx context.Context, cmd VPNCommands, tenan
 			return err
 		},
 		"GetPosturePolicy": func() error {
-			_, err := cmd.GetPosturePolicy(cctx, tenantID, testPolicyName)
+			_, err := cmd.GetPosturePolicy(cctx, tenantID, policyName)
 			return err
 		},
 		"SetPosturePolicy": func() error {
-			_, err := cmd.SetPosturePolicy(cctx, tenantID, testPolicyName, testPostureModule)
+			_, err := cmd.SetPosturePolicy(cctx, tenantID, policyName, testPostureModule)
 			return err
 		},
-		"DeletePosturePolicy": func() error { return cmd.DeletePosturePolicy(cctx, tenantID, testPolicyName) },
+		"DeletePosturePolicy": func() error { return cmd.DeletePosturePolicy(cctx, tenantID, policyName) },
 		"ListPosturePolicies": func() error {
 			_, err := cmd.ListPosturePolicies(cctx, tenantID)
 			return err
@@ -271,14 +290,25 @@ func assertFailsClosed(t *testing.T, ctx context.Context, cmd VPNCommands, tenan
 }
 
 // assertPolicy checks the invariants of a stored posture policy.
-func assertPolicy(t *testing.T, transport string, policy *platformv1.VPNPosturePolicy, tenantID string) {
+func assertPolicy(t *testing.T, transport string, policy *platformv1.VPNPosturePolicy, tenantID, policyName string) {
 	t.Helper()
 
-	if policy.GetTenantId() != tenantID || policy.GetName() != testPolicyName {
+	if policy.GetTenantId() != tenantID || policy.GetName() != policyName {
 		t.Fatalf("%s: policy %s/%s, want %s/%s", transport,
-			policy.GetTenantId(), policy.GetName(), tenantID, testPolicyName)
+			policy.GetTenantId(), policy.GetName(), tenantID, policyName)
 	}
 	if policy.GetUpdatedAtUnix() <= 0 {
 		t.Fatalf("%s: policy carries no update time", transport)
 	}
+}
+
+// listsPeer reports whether peers holds the device. The harness tenant is
+// shared, so a listing may carry peers other runs enrolled.
+func listsPeer(peers []*platformv1.VPNPeer, deviceID string) bool {
+	for _, p := range peers {
+		if p.GetDeviceId() == deviceID {
+			return true
+		}
+	}
+	return false
 }

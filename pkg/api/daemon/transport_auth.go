@@ -28,6 +28,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -251,7 +252,11 @@ func selectQUICAuth(config *Config, shared *platformTokenValidator, pep quicbaas
 // client certificate. The daemon's client CA pool admits only operator
 // certificates (the admin bundle /init issues), and gRPC and REST authorize
 // such a caller for every operation without a scope check, so QUIC grants the
-// same authority rather than refusing the operator its own platform.
+// same authority rather than refusing the operator its own platform. The
+// operator certificate also holds the admin role (common.ROLE_ADMIN), so
+// admin-gated routes (the registry image routes SetRegistryHandlers mounts)
+// admit it as they admit the /init admin on the web listener; bearer tokens
+// still need the role themselves.
 const mtlsOperatorScope = "*:*"
 
 // mtlsPeerAuthenticator turns the verified client certificate of a QUIC
@@ -275,6 +280,7 @@ func (a mtlsPeerAuthenticator) AuthenticatePeer(ctx context.Context, chain []*x5
 		Username: identity.Name,
 		TenantID: identity.TenantID,
 		Scopes:   []string{mtlsOperatorScope},
+		Roles:    []string{common.ROLE_ADMIN},
 	}, nil
 }
 
