@@ -43,6 +43,8 @@ import {
   Copy,
 } from "lucide-react";
 import { useApi, useTPM, useToast } from "@/hooks";
+import { Gated } from "@/components/features/capabilities/gated";
+import { useCapabilities } from "@/hooks/use-capabilities";
 import type { NVIndex, TPMCapability } from "trusted-platform-sdk";
 import { errorMessage } from "@/utils/errors";
 
@@ -116,6 +118,13 @@ const asciiOf = (b64: string): string => {
 export default function TPMNVRAMPage() {
   const { toast } = useToast();
   const tpm = useTPM();
+  // #2033 item 5: the read and every NV control follow the server's capabilities.
+  const { loading: capsLoading, capability } = useCapabilities();
+  const infoCap = capability("GET /api/v1/tpm/info");
+  const defineCap = capability("POST /api/v1/tpm/nvram");
+  const readCap = capability("GET /api/v1/tpm/nvram/{index}");
+  const writeCap = capability("PUT /api/v1/tpm/nvram/{index}");
+  const undefineCap = capability("DELETE /api/v1/tpm/nvram/{index}");
 
   const {
     data: tpmInfo,
@@ -126,6 +135,7 @@ export default function TPMNVRAMPage() {
     () => tpm.getInfo(),
     [],
     {
+      enabled: !capsLoading && infoCap.enabled,
       onError: (err) => {
         toast({
           title: "Error loading TPM info",
@@ -311,15 +321,26 @@ export default function TPMNVRAMPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button onClick={() => setDefineState((s) => ({ ...s, open: true, err: null }))}>
-            <Plus className="mr-2 h-4 w-4" /> Define Index
-          </Button>
-          <Button variant="outline" onClick={() => refetch()} disabled={loading}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
+          <Gated op="POST /api/v1/tpm/nvram">
+            <Button onClick={() => setDefineState((s) => ({ ...s, open: true, err: null }))}>
+              <Plus className="mr-2 h-4 w-4" /> Define Index
+            </Button>
+          </Gated>
+          <Gated op="GET /api/v1/tpm/info">
+            <Button variant="outline" onClick={() => refetch()} disabled={loading}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          </Gated>
         </div>
       </div>
+
+      {!capsLoading && !infoCap.enabled && (
+        <div data-testid="tpm-nvram-not-enabled" className="rounded-lg border border-border bg-card p-6">
+          <div className="font-medium">TPM info is not enabled on this server</div>
+          <p className="text-sm text-muted-foreground mt-1">{infoCap.reason}</p>
+        </div>
+      )}
 
       {error && (
         <div className="flex items-center gap-2 p-4 bg-destructive/10 border border-destructive rounded-lg">
@@ -331,7 +352,7 @@ export default function TPMNVRAMPage() {
         </div>
       )}
 
-      {loading && !tpmInfo && (
+      {(capsLoading || loading) && !tpmInfo && (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           <span className="ml-2 text-muted-foreground">Loading NVRAM info…</span>
@@ -426,6 +447,7 @@ export default function TPMNVRAMPage() {
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">
+                            <Gated op="GET /api/v1/tpm/nvram/{index}">
                             <Button
                               variant="ghost"
                               size="icon"
@@ -434,6 +456,8 @@ export default function TPMNVRAMPage() {
                             >
                               <Eye className="h-4 w-4" />
                             </Button>
+                            </Gated>
+                            <Gated op="PUT /api/v1/tpm/nvram/{index}">
                             <Button
                               variant="ghost"
                               size="icon"
@@ -442,6 +466,8 @@ export default function TPMNVRAMPage() {
                             >
                               <PenLine className="h-4 w-4" />
                             </Button>
+                            </Gated>
+                            <Gated op="DELETE /api/v1/tpm/nvram/{index}">
                             <Button
                               variant="ghost"
                               size="icon"
@@ -455,6 +481,7 @@ export default function TPMNVRAMPage() {
                                 <Trash2 className="h-4 w-4 text-destructive" />
                               )}
                             </Button>
+                            </Gated>
                           </div>
                         </TableCell>
                       </TableRow>
@@ -521,10 +548,12 @@ export default function TPMNVRAMPage() {
             <Button variant="outline" onClick={() => setReadState((s) => ({ ...s, open: false }))}>
               Close
             </Button>
-            <Button onClick={doRead} disabled={readState.loading}>
-              {readState.loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Eye className="h-4 w-4 mr-2" />}
+            <Gated op="GET /api/v1/tpm/nvram/{index}">
+              <Button onClick={doRead} disabled={readState.loading}>
+                {readState.loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Eye className="h-4 w-4 mr-2" />}
               Read
             </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -618,10 +647,12 @@ export default function TPMNVRAMPage() {
             <Button variant="outline" onClick={() => setDefineState((s) => ({ ...s, open: false }))}>
               Cancel
             </Button>
-            <Button onClick={doDefine} disabled={defineState.loading}>
-              {defineState.loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Plus className="h-4 w-4 mr-2" />}
+            <Gated op="POST /api/v1/tpm/nvram">
+              <Button onClick={doDefine} disabled={defineState.loading}>
+                {defineState.loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Plus className="h-4 w-4 mr-2" />}
               Define
             </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -671,10 +702,12 @@ export default function TPMNVRAMPage() {
             <Button variant="outline" onClick={() => setWriteState((s) => ({ ...s, open: false }))}>
               Cancel
             </Button>
-            <Button onClick={doWrite} disabled={writeState.loading || !writeState.text}>
-              {writeState.loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <PenLine className="h-4 w-4 mr-2" />}
+            <Gated op="PUT /api/v1/tpm/nvram/{index}">
+              <Button onClick={doWrite} disabled={writeState.loading || !writeState.text}>
+                {writeState.loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <PenLine className="h-4 w-4 mr-2" />}
               Write
             </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>

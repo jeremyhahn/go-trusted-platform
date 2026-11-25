@@ -3,6 +3,7 @@
 /**
  * Register OAuth Application page — minimal form that calls
  * iam.registerApp, then routes back to /iam/apps.
+ * Register Application is gated on the server's POST /api/v1/iam/tenants/{tenant}/apps capability (#2033).
  */
 
 import React, { useState } from 'react';
@@ -14,6 +15,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Loader2 } from 'lucide-react';
+import { Gated } from '@/components/features/capabilities/gated';
 
 export default function NewAppPage() {
   const router = useRouter();
@@ -106,15 +108,17 @@ export default function NewAppPage() {
             <Button variant="outline" onClick={() => router.push('/iam/apps')}>
               Cancel
             </Button>
-            <Button
-              onClick={() => createMutation.mutate(undefined)}
-              disabled={!name || createMutation.isLoading}
-            >
-              {createMutation.isLoading && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
-              Register Application
-            </Button>
+            <Gated op="POST /api/v1/iam/tenants/{tenant}/apps">
+              <Button
+                onClick={() => createMutation.mutate(undefined)}
+                disabled={!name || createMutation.isLoading}
+              >
+                {createMutation.isLoading && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                Register Application
+              </Button>
+            </Gated>
           </div>
         </CardContent>
       </Card>

@@ -209,27 +209,39 @@ test.describe('Dashboard Overview', () => {
   });
 
   test('system health shows the metrics the server returns', async ({ adminPage }) => {
-    const metricsRes = apiResponse(adminPage, /\/api\/v1\/platform\/metrics$/);
-    await adminPage.goto('/dashboard');
-    const { metrics } = await json<{
+    type Metrics = {
       metrics?: { cpuUsagePercent?: WirePercent; memoryUsagePercent?: WirePercent; diskUsagePercent?: WirePercent };
-    }>(await metricsRes);
+    };
+    const metricsPath = /\/api\/v1\/platform\/metrics$/;
+    // The page polls metrics, so record every response in arrival order.
+    const bodies: Array<Promise<Metrics>> = [];
+    adminPage.on('response', (r) => {
+      if (r.request().method() !== 'GET' || !metricsPath.test(new URL(r.url()).pathname)) return;
+      const body = json<Metrics>(r);
+      body.catch(() => undefined);
+      bodies.push(body);
+    });
+    const firstRes = apiResponse(adminPage, metricsPath);
+    await adminPage.goto('/dashboard');
+    await firstRes;
     await expect(adminPage.getByText('System Health')).toBeVisible();
-    // The page reads each percentage with `?? 0` (protojson omits a zero
-    // double), shows it as toFixed(1) followed by %, and draws its bar at
-    // min(value, 100)% wide.
-    const gauges: Array<[string, WirePercent | undefined]> = [
-      ['CPU Usage', metrics?.cpuUsagePercent],
-      ['Memory', metrics?.memoryUsagePercent],
-      ['Storage', metrics?.diskUsagePercent],
+    // Each gauge shows its percentage (missing means 0) as toFixed(1) with %, bar at min(value, 100)% wide.
+    // Live CPU changes between polls, so check against the latest response at each retry.
+    const gauges: Array<[string, (m: Metrics['metrics']) => WirePercent | undefined]> = [
+      ['CPU Usage', (m) => m?.cpuUsagePercent],
+      ['Memory', (m) => m?.memoryUsagePercent],
+      ['Storage', (m) => m?.diskUsagePercent],
     ];
-    for (const [label, wire] of gauges) {
-      const value = wirePercent(wire);
+    for (const [label, pick] of gauges) {
       const gauge = adminPage.getByText(label, { exact: true }).locator('xpath=../..');
-      await expect(gauge.locator('span.text-xs')).toHaveText(`${value.toFixed(1)}%`);
-      const width = await gauge.locator('div.h-2 > div').evaluate((el) => (el as HTMLElement).style.width);
-      expect(width.endsWith('%'), `${label} bar width ${width}`).toBeTruthy();
-      expect(parseFloat(width), `${label} bar width`).toBeCloseTo(Math.min(value, 100), 3);
+      await expect(async () => {
+        const { metrics } = await bodies[bodies.length - 1];
+        const value = wirePercent(pick(metrics));
+        expect((await gauge.locator('span.text-xs').textContent())?.trim(), `${label} text`).toBe(`${value.toFixed(1)}%`);
+        const width = await gauge.locator('div.h-2 > div').evaluate((el) => (el as HTMLElement).style.width);
+        expect(width.endsWith('%'), `${label} bar width ${width}`).toBeTruthy();
+        expect(parseFloat(width), `${label} bar width`).toBeCloseTo(Math.min(value, 100), 3);
+      }).toPass();
     }
   });
 

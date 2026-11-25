@@ -47,6 +47,7 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **installer** — a booting node authenticates to the control-plane API with its IDevID over mTLS, the install-completion webhook included — [#238](../../issues/238) — open
 - **provisioning** — a bare machine becomes a trusted node with no login, E2E provisioning asserting what it reports — [#1694](../../issues/1694) — open
 - **release-readiness** — the Dev complete release criteria held: every test package in a CI stage, one path per behaviour — [#705](../../issues/705) — open
+- **maintenance** — standing row for dependency updates and CI configuration (owner ruling 1234) — [#2376](../../issues/2376) — open
 
 ## Next
 - **bootstrap** — every NBD package behind one build tag, omitted from a client binary that does not use NBD — [#883](../../issues/883) — open
