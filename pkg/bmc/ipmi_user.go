@@ -15,6 +15,7 @@ package bmc
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 
@@ -209,6 +210,10 @@ func (m *ipmiUserManager) ListUsers(_ context.Context) ([]User, error) {
 //
 // An Enabled user needs a password; a name-only entry (nil or empty
 // password) must be created with Enabled false.
+//
+// When a step after the name fails, CreateUser rolls the slot back: it
+// disables the user, revokes its channel access and clears the name, and
+// returns the failure joined with any rollback error.
 func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memguard.MemoryEnclave) error {
 	if err := validateSlot(u.Slot); err != nil {
 		return err
@@ -234,11 +239,13 @@ func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memgua
 		return err
 	}
 	if err := m.finishCreate(u, password); err != nil {
-		// The name is already written: clear it again so the slot reads as
-		// free and a retry is not refused as occupied. A clear failure is
-		// dropped; the first error is the one the caller needs.
-		_ = m.setUserName(u.Slot, "")
-		return err
+		// Roll the slot back. A failed step may still have been applied on
+		// the BMC (an enable whose UDP response is lost), so clearing the
+		// name is not enough: disable the user and revoke its channel
+		// access too, then clear the name so a retry is not refused as
+		// occupied. Every step runs, and every cleanup error is returned
+		// joined to the first, so a caller sees a rollback that failed.
+		return errors.Join(err, m.rollbackCreate(u))
 	}
 	return nil
 }
@@ -265,6 +272,21 @@ func (m *ipmiUserManager) finishCreate(u User, password *memguard.MemoryEnclave)
 	// password data. A new IPMI account stays disabled for login without it.
 	_, err := m.sender.Send(netFnApp, cmdSetUserPassword, []byte{u.Slot & ipmiMaxUserSlot, pwdOpEnable})
 	return err
+}
+
+// rollbackCreate revokes whatever a failed CreateUser may have applied:
+// it disables the user (Set User Password op 00b), sets NoAccess with the
+// enable bits clear on the channel finishCreate used, and clears the name.
+// All three run; their errors are joined (nil when all succeed).
+func (m *ipmiUserManager) rollbackCreate(u User) error {
+	channel := u.Channel
+	if channel == 0 {
+		channel = m.channel
+	}
+	_, disableErr := m.sender.Send(netFnApp, cmdSetUserPassword, []byte{u.Slot & ipmiMaxUserSlot, pwdOpDisable})
+	accessErr := m.setUserAccess(u.Slot, channel, PrivilegeNoAccess, false)
+	nameErr := m.setUserName(u.Slot, "")
+	return errors.Join(disableErr, accessErr, nameErr)
 }
 
 // SetUserPassword changes the password of an existing slot.
