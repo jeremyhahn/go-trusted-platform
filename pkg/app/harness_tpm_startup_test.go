@@ -14,6 +14,7 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmstypes "github.com/jeremyhahn/go-xkms/pkg/types"
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -149,6 +150,22 @@ func hierarchyAuthState(t *testing.T, tpm transport.TPM) tpmowner.HierarchyAuthS
 	return state
 }
 
+// literalHierarchyAuth wraps a test hierarchy auth in a SecretValue.
+func literalHierarchyAuth(t *testing.T, auth string) *xkmstypes.SecretValue {
+	t.Helper()
+	sv, err := xkmstypes.NewLiteralSecretValue([]byte(auth))
+	require.NoError(t, err)
+	return sv
+}
+
+// requireHierarchyAuth asserts that a hierarchy auth secret holds want.
+func requireHierarchyAuth(t *testing.T, want string, got *xkmstypes.SecretValue, msgAndArgs ...any) {
+	t.Helper()
+	b, err := hierarchyAuthBytes(got)
+	require.NoError(t, err)
+	require.Equal(t, want, string(b), msgAndArgs...)
+}
+
 // TestTPMOwnership_FirstStartTakesOwnership: on a fresh EK-only TPM (empty
 // owner auth, as shipped) the first start creates the Platform KeyStore SRK
 // under the empty owner auth, then sets the owner auth to the SO PIN once.
@@ -169,7 +186,7 @@ func TestTPMOwnership_FirstStartTakesOwnership(t *testing.T) {
 	require.NoError(t, ownerAuthorizes(t, sim, harnessSOPIN))
 	var rejected *tpmowner.OwnerAuthRejectedError
 	require.ErrorAs(t, ownerAuthorizes(t, sim, ""), &rejected)
-	require.Equal(t, harnessSOPIN, a.TPMConfig.SSRK.HierarchyAuth)
+	requireHierarchyAuth(t, harnessSOPIN, a.TPMConfig.SSRK.HierarchyAuth)
 	require.Empty(t, a.TPMConfig.EK.HierarchyAuth)
 }
 
@@ -186,7 +203,7 @@ func TestTPMOwnership_SecondStartUsesSOPIN(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, a.PlatformKS)
 	require.Zero(t, counting.counts[tpm2.TPMCCHierarchyChanegAuth])
-	require.Equal(t, harnessSOPIN, a.TPMConfig.SSRK.HierarchyAuth)
+	requireHierarchyAuth(t, harnessSOPIN, a.TPMConfig.SSRK.HierarchyAuth)
 	require.NoError(t, ownerAuthorizes(t, sim, harnessSOPIN))
 }
 
@@ -223,8 +240,8 @@ func TestTPMOwnership_AlreadyOwnedTPM(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, a.PlatformKS)
 	require.Zero(t, counting.counts[tpm2.TPMCCHierarchyChanegAuth])
-	require.Equal(t, harnessSOPIN, a.TPMConfig.SSRK.HierarchyAuth)
-	require.Equal(t, harnessSOPIN, a.TPMConfig.EK.HierarchyAuth)
+	requireHierarchyAuth(t, harnessSOPIN, a.TPMConfig.SSRK.HierarchyAuth)
+	requireHierarchyAuth(t, harnessSOPIN, a.TPMConfig.EK.HierarchyAuth)
 }
 
 // TestTPMOwnership_ChangeAuthFault: a failed TPM2_HierarchyChangeAuth fails

@@ -70,7 +70,7 @@ func TestInitWebServiceKeyAttributes_IDevIDReuseCarriesIDevIDSubject(t *testing.
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	storage, err := xkmssdk.NewFileStorageBackend(t.TempDir())
 	require.NoError(t, err)
-	config := simulatedIDevIDConfig()
+	config := simulatedIDevIDConfig(t)
 	params := &xkmssdk.TPMParams{
 		Backend:   xkmssdk.NewFileBackend(logger, storage),
 		Config:    config,

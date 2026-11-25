@@ -151,7 +151,7 @@ func TestCoverage964_ImportEndorsementKeyCertificate(t *testing.T) {
 		require.ErrorIs(t, err, xkmssdk.ErrTPMEndorsementCertNotFound)
 		// The NV write authorizes with the configured hierarchy auth: the
 		// harness took ownership with the SO PIN.
-		a.TPMConfig.EK.HierarchyAuth = harnessSOPIN
+		a.TPMConfig.EK.HierarchyAuth = literalHierarchyAuth(t, harnessSOPIN)
 		got, err := a.ImportEndorsementKeyCertificate(context.Background())
 		require.NoError(t, err)
 		stored, err := a.TPM.EKCertificate()
@@ -182,7 +182,7 @@ func TestCoverage964_ProvisionPlatformIdentity(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, a.provisionTPMHierarchies(so))
-	require.Equal(t, harnessSOPIN, a.TPMConfig.EK.HierarchyAuth, "the endorsement hierarchy auth is mirrored")
+	requireHierarchyAuth(t, harnessSOPIN, a.TPMConfig.EK.HierarchyAuth, "the endorsement hierarchy auth is mirrored")
 	provisionHarnessEKCert(t, a)
 	require.False(t, platformIdentityComplete(a.TPM))
 

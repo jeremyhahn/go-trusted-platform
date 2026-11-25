@@ -2,6 +2,7 @@ package app
 
 import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmstypes "github.com/jeremyhahn/go-xkms/pkg/types"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpmowner"
 )
@@ -18,11 +19,39 @@ import (
 
 // hierarchyAuthFor returns the auth a hierarchy currently holds: the SO PIN
 // once its authSet bit is set, empty before.
-func hierarchyAuthFor(authSet bool, soPIN xkmssdk.Password) string {
+func hierarchyAuthFor(authSet bool, soPIN xkmssdk.Password) (*xkmstypes.SecretValue, error) {
 	if !authSet {
-		return ""
+		return nil, nil
 	}
-	return string(soPIN.Bytes())
+	return xkmstypes.NewLiteralSecretValue(soPIN.Bytes())
+}
+
+// hierarchyAuthBytes returns a copy of a hierarchy auth secret, nil when it is unset or empty.
+func hierarchyAuthBytes(auth *xkmstypes.SecretValue) ([]byte, error) {
+	if auth == nil {
+		return nil, nil
+	}
+	var out []byte
+	err := auth.WithBytes(func(b []byte) error {
+		if len(b) > 0 {
+			out = append([]byte(nil), b...)
+		}
+		return nil
+	})
+	return out, err
+}
+
+// hierarchyAuthSet reports whether a hierarchy auth secret holds a non-empty value.
+func hierarchyAuthSet(auth *xkmstypes.SecretValue) (bool, error) {
+	if auth == nil {
+		return false, nil
+	}
+	set := false
+	err := auth.WithBytes(func(b []byte) error {
+		set = len(b) > 0
+		return nil
+	})
+	return set, err
 }
 
 // applyTPMHierarchyAuth points TPMConfig's owner (SSRK) and endorsement (EK)
@@ -40,8 +69,16 @@ func (app *App) applyTPMHierarchyAuth(soPIN xkmssdk.Password) (tpmowner.Hierarch
 	if app.TPMConfig.EK == nil {
 		app.TPMConfig.EK = &xkmssdk.EKConfig{}
 	}
-	app.TPMConfig.SSRK.HierarchyAuth = hierarchyAuthFor(state.OwnerAuthSet, soPIN)
-	app.TPMConfig.EK.HierarchyAuth = hierarchyAuthFor(state.EndorsementAuthSet, soPIN)
+	ownerAuth, err := hierarchyAuthFor(state.OwnerAuthSet, soPIN)
+	if err != nil {
+		return state, err
+	}
+	endorsementAuth, err := hierarchyAuthFor(state.EndorsementAuthSet, soPIN)
+	if err != nil {
+		return state, err
+	}
+	app.TPMConfig.SSRK.HierarchyAuth = ownerAuth
+	app.TPMConfig.EK.HierarchyAuth = endorsementAuth
 	return state, nil
 }
 
@@ -68,7 +105,11 @@ func (app *App) takeTPMOwnership(soPIN xkmssdk.Password) error {
 	if err := tpmowner.TakeOwnership(app.TPM, soPIN); err != nil {
 		return err
 	}
-	app.TPMConfig.SSRK.HierarchyAuth = string(soPIN.Bytes())
+	ownerAuth, err := hierarchyAuthFor(true, soPIN)
+	if err != nil {
+		return err
+	}
+	app.TPMConfig.SSRK.HierarchyAuth = ownerAuth
 	app.Logger.Info("TPM ownership taken: owner hierarchy auth set to the SO PIN")
 	return nil
 }

@@ -273,6 +273,7 @@ func (app *App) ProcessSecrets(ctx context.Context, cfg *SecretsConfig) (*quicba
 // tpmDecrypter implements crypto.Decrypter using the TPM's RSADecrypt method.
 type tpmDecrypter struct {
 	tpm   xkmssdk.TrustedPlatformModule
+	keys  xkmssdk.TPMKeyBackend
 	attrs *xkmssdk.KeyAttributes
 }
 
@@ -293,8 +294,8 @@ func (d *tpmDecrypter) Decrypt(_ io.Reader, ciphertext []byte, _ crypto.Decrypte
 		return nil, ErrIDevIDNotConfigured{}
 	}
 	return d.tpm.RSADecrypt(
-		d.attrs.TPMAttributes.Handle,
-		d.attrs.TPMAttributes.Name,
+		d.attrs,
+		d.keys,
 		ciphertext,
 	)
 }
@@ -320,6 +321,7 @@ func (app *App) getIDevIDDecrypter(_ context.Context) (crypto.Decrypter, error) 
 	// Create TPM-backed decrypter.
 	decrypter := &tpmDecrypter{
 		tpm:   app.TPM,
+		keys:  app.tpmKeyBackend(),
 		attrs: idevidAttrs,
 	}
 

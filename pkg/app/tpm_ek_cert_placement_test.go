@@ -83,7 +83,7 @@ func newEKPlacementFixture(t *testing.T, certHandle uint32) *ekPlacementFixture 
 	require.NoError(t, err)
 	certStore := localcertstore.NewTPM2CertStoreAdapterWithStorage(logger, cs, csStorage)
 
-	app := &App{Logger: logger, TPMConfig: *simulatedIDevIDConfig(), TPMCertStore: certStore}
+	app := &App{Logger: logger, TPMConfig: *simulatedIDevIDConfig(t), TPMCertStore: certStore}
 	app.TPMConfig.EK.CertHandle = certHandle
 
 	slogger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -326,9 +326,11 @@ func (tpm ekCertReadErrorTPM) EKCertificate() (*x509.Certificate, error) {
 // importer presents, as the platform's TPM.Provision(soPIN) does.
 func (f *ekPlacementFixture) withIssuingCA(t *testing.T, cert *x509.Certificate) *ekIssuingCA {
 	t.Helper()
-	_, err := tpm2.HierarchyChangeAuth{
+	ekAuth, err := hierarchyAuthBytes(f.app.TPMConfig.EK.HierarchyAuth)
+	require.NoError(t, err)
+	_, err = tpm2.HierarchyChangeAuth{
 		AuthHandle: tpm2.AuthHandle{Handle: tpm2.TPMRHOwner, Auth: tpm2.PasswordAuth(nil)},
-		NewAuth:    tpm2.TPM2BAuth{Buffer: []byte(f.app.TPMConfig.EK.HierarchyAuth)},
+		NewAuth:    tpm2.TPM2BAuth{Buffer: ekAuth},
 	}.Execute(f.transport)
 	require.NoError(t, err)
 

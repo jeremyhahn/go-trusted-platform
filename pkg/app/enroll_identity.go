@@ -106,7 +106,7 @@ func (app *App) EnrollIdentity(ctx context.Context) (*x509.Certificate, error) {
 	enrollConfig := &trustedca.ACMEEnrollmentConfig{
 		Challenge:  app.ACMEConfig.Client.Enrollment.Challenge,
 		IPAddress:  enrollmentIP,
-		TPMModule:  trustedca.NewACMEXKMSTPMAdapter(app.TPM),
+		TPMModule:  trustedca.NewACMEXKMSTPMAdapter(app.TPM, app.tpmKeyBackend()),
 		CommonName: app.enrollmentName(),
 	}
 	enrolled, err := enroll(enrollCtx, enrollConfig)

@@ -65,7 +65,7 @@ func newSimulatedIDevID(t *testing.T) *simulatedIDevID {
 	require.NoError(t, err)
 	backend := xkmssdk.NewFileBackend(logger, storage)
 
-	config := simulatedIDevIDConfig()
+	config := simulatedIDevIDConfig(t)
 	tpm, err := xkmssdk.NewTPM2(&xkmssdk.TPMParams{
 		Backend:   backend,
 		Config:    config,
@@ -93,14 +93,15 @@ func newSimulatedIDevID(t *testing.T) *simulatedIDevID {
 
 // simulatedIDevIDConfig mirrors the TPM section of the shipped device
 // templates, with the handles go-xkms's own simulator suites use.
-func simulatedIDevIDConfig() *xkmssdk.TPMConfig {
+func simulatedIDevIDConfig(t *testing.T) *xkmssdk.TPMConfig {
+	t.Helper()
 	rsa2048 := func() *xkmssdk.RSAConfig { return &xkmssdk.RSAConfig{KeySize: 2048} }
 	return &xkmssdk.TPMConfig{
 		Hash: "SHA-256",
 		EK: &xkmssdk.EKConfig{
 			CertHandle:    0x01C00002,
 			Handle:        0x81010001,
-			HierarchyAuth: xkmssdk.DEFAULT_PASSWORD,
+			HierarchyAuth: literalHierarchyAuth(t, xkmssdk.DEFAULT_PASSWORD),
 			RSAConfig:     rsa2048(),
 		},
 		IdentityProvisioningStrategy: "IAK_IDEVID_SINGLE_PASS",
@@ -127,7 +128,7 @@ func simulatedIDevIDConfig() *xkmssdk.TPMConfig {
 		GoldenPCRs:      []uint{0, 7},
 		SSRK: &xkmssdk.SRKConfig{
 			Handle:        0x81000001,
-			HierarchyAuth: xkmssdk.DEFAULT_PASSWORD,
+			HierarchyAuth: literalHierarchyAuth(t, xkmssdk.DEFAULT_PASSWORD),
 			KeyAlgorithm:  x509.RSA.String(),
 			RSAConfig:     rsa2048(),
 		},

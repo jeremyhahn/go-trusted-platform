@@ -41,7 +41,7 @@ type mockTPM struct {
 	xkmssdk.TrustedPlatformModule
 	idevidFn      func() (crypto.PublicKey, error)
 	idevidAttrsFn func() (*xkmssdk.KeyAttributes, error)
-	rsaDecryptFn  func(handle gotpm2.TPMHandle, name gotpm2.TPM2BName, blob []byte) ([]byte, error)
+	rsaDecryptFn  func(keyAttrs *xkmssdk.KeyAttributes, keys xkmssdk.TPMKeyBackend, blob []byte) ([]byte, error)
 }
 
 func (m *mockTPM) IDevID() (crypto.PublicKey, error) {
@@ -58,9 +58,9 @@ func (m *mockTPM) IDevIDAttributes() (*xkmssdk.KeyAttributes, error) {
 	return nil, errors.New("mock: IDevIDAttributes not configured")
 }
 
-func (m *mockTPM) RSADecrypt(handle gotpm2.TPMHandle, name gotpm2.TPM2BName, blob []byte) ([]byte, error) {
+func (m *mockTPM) RSADecrypt(keyAttrs *xkmssdk.KeyAttributes, keys xkmssdk.TPMKeyBackend, blob []byte) ([]byte, error) {
 	if m.rsaDecryptFn != nil {
-		return m.rsaDecryptFn(handle, name, blob)
+		return m.rsaDecryptFn(keyAttrs, keys, blob)
 	}
 	return nil, errors.New("mock: RSADecrypt not configured")
 }
@@ -767,7 +767,7 @@ func TestTPMDecrypter_Public_Error(t *testing.T) {
 func TestTPMDecrypter_Decrypt_RSADecryptError(t *testing.T) {
 	cause := errors.New("tpm: authorization failed")
 	mock := &mockTPM{
-		rsaDecryptFn: func(handle gotpm2.TPMHandle, name gotpm2.TPM2BName, blob []byte) ([]byte, error) {
+		rsaDecryptFn: func(keyAttrs *xkmssdk.KeyAttributes, keys xkmssdk.TPMKeyBackend, blob []byte) ([]byte, error) {
 			return nil, cause
 		},
 	}
@@ -789,9 +789,11 @@ func TestTPMDecrypter_Decrypt_RSADecryptError(t *testing.T) {
 func TestTPMDecrypter_Decrypt_RSADecryptSuccess(t *testing.T) {
 	expected := []byte("decrypted-plaintext")
 	mock := &mockTPM{
-		rsaDecryptFn: func(handle gotpm2.TPMHandle, name gotpm2.TPM2BName, blob []byte) ([]byte, error) {
-			assert.Equal(t, gotpm2.TPMHandle(0x81000001), handle)
-			assert.Equal(t, []byte("test-name"), name.Buffer)
+		rsaDecryptFn: func(keyAttrs *xkmssdk.KeyAttributes, keys xkmssdk.TPMKeyBackend, blob []byte) ([]byte, error) {
+			require.NotNil(t, keyAttrs.TPMAttributes)
+			assert.Equal(t, gotpm2.TPMHandle(0x81000001), keyAttrs.TPMAttributes.Handle)
+			assert.Equal(t, []byte("test-name"), keyAttrs.TPMAttributes.Name.Buffer)
+			assert.Nil(t, keys)
 			assert.Equal(t, []byte("ciphertext"), blob)
 			return expected, nil
 		},

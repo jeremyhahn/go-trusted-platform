@@ -146,6 +146,14 @@ func newKeyBackend(logger *logging.Logger, path string) (xkmssdk.TPMKeyBackend, 
 	return xkmssdk.NewFileBackend(logger.Slog(), storageBackend), nil
 }
 
+// tpmKeyBackend returns the platform keystore's TPM key backend, nil before InitPlatformKeyStore.
+func (app *App) tpmKeyBackend() xkmssdk.TPMKeyBackend {
+	if app.PlatformKS == nil {
+		return nil
+	}
+	return app.PlatformKS.Backend()
+}
+
 // initXKMSService initializes the global XKMS service with the appropriate backends
 // and returns the keystore for direct use with go-trusted-ca.
 //
@@ -2439,7 +2447,15 @@ func (app *App) InitPlatformKeyStore(soPIN, userPIN xkmssdk.Password) error {
 				// (firstboot leaves it so, docs/installer/factory-reset.md),
 				// the SRK is created under it, and ownership is taken
 				// below.
-				useDefaults := app.TPMConfig.SSRK == nil || app.TPMConfig.SSRK.HierarchyAuth == ""
+				ownerAuthSet := false
+				if app.TPMConfig.SSRK != nil {
+					set, authErr := hierarchyAuthSet(app.TPMConfig.SSRK.HierarchyAuth)
+					if authErr != nil {
+						return &WrappedError{Msg: "failed to read the owner hierarchy auth", Err: authErr}
+					}
+					ownerAuthSet = set
+				}
+				useDefaults := !ownerAuthSet
 				if useDefaults {
 					app.Logger.Info("Platform KeyStore: TPM owner hierarchy is unauthenticated (SSRK.HierarchyAuth empty), initializing with defaults")
 					if err := ks.InitializeWithDefaults(); err != nil {
@@ -2687,7 +2703,11 @@ func (app *App) provisionTPMHierarchies(soPIN xkmssdk.Password) error {
 	if app.TPMConfig.SSRK == nil {
 		app.TPMConfig.SSRK = &xkmssdk.SRKConfig{}
 	}
-	app.TPMConfig.SSRK.HierarchyAuth = string(soPIN.Bytes())
+	ownerAuth, err := hierarchyAuthFor(true, soPIN)
+	if err != nil {
+		return err
+	}
+	app.TPMConfig.SSRK.HierarchyAuth = ownerAuth
 	// Mirror for EK — Provision() also sets the ENDORSEMENT hierarchy
 	// auth to soPIN. Any downstream CreatePrimary under EH (e.g. the
 	// IDevID key minted during ACME enroll-01 challenge setup) must
@@ -2698,7 +2718,11 @@ func (app *App) provisionTPMHierarchies(soPIN xkmssdk.Password) error {
 	if app.TPMConfig.EK == nil {
 		app.TPMConfig.EK = &xkmssdk.EKConfig{}
 	}
-	app.TPMConfig.EK.HierarchyAuth = string(soPIN.Bytes())
+	endorsementAuth, err := hierarchyAuthFor(true, soPIN)
+	if err != nil {
+		return err
+	}
+	app.TPMConfig.EK.HierarchyAuth = endorsementAuth
 	return nil
 }
 
@@ -3119,7 +3143,7 @@ func (app *App) ImportEndorsementKeyCertificate(ctx context.Context) (*x509.Cert
 				ekConfig := &trustedca.ACMEEnrollmentConfig{
 					Challenge:  "endorse-01",
 					IPAddress:  enrollmentIP,
-					TPMModule:  trustedca.NewACMEXKMSTPMAdapter(app.TPM),
+					TPMModule:  trustedca.NewACMEXKMSTPMAdapter(app.TPM, app.tpmKeyBackend()),
 					CommonName: app.enrollmentName(),
 				}
 				ekCert, err = app.ACMEClient.RequestEndorsementKeyCertificate(ctx, ekConfig)
@@ -3139,10 +3163,11 @@ func (app *App) ImportEndorsementKeyCertificate(ctx context.Context) (*x509.Cert
 
 			// Persist the EK cert: NV when it fits, the certificate store otherwise.
 			// Get hierarchy auth from config since ekAttrs from KeyAttributes() doesn't include it
-			var hierarchyAuth []byte
-			if app.TPMConfig.EK.HierarchyAuth != "" {
-				hierarchyAuth = []byte(app.TPMConfig.EK.HierarchyAuth)
-			} else if ekAttrs.TPMAttributes != nil && ekAttrs.TPMAttributes.HierarchyAuth != nil {
+			hierarchyAuth, authErr := hierarchyAuthBytes(app.TPMConfig.EK.HierarchyAuth)
+			if authErr != nil {
+				return nil, authErr
+			}
+			if hierarchyAuth == nil && ekAttrs.TPMAttributes != nil && ekAttrs.TPMAttributes.HierarchyAuth != nil {
 				hierarchyAuth = ekAttrs.TPMAttributes.HierarchyAuth.Bytes()
 			}
 
@@ -3625,7 +3650,7 @@ func (app *App) initWebServiceKeyAttributes(ctx context.Context, wsConfig *v1.Co
 	// Set up PlatformPassword before any certificate operations if PlatformPolicy is enabled.
 	// This is needed both for loading existing certs and creating new ones.
 	var platformPassword xkmssdk.Password
-	if keyAttrs.PlatformPolicy && app.TPM != nil && app.PlatformKS != nil {
+	if keyAttrs.TPMPolicy == xkmssdk.TPMPolicyPlatform && app.TPM != nil && app.PlatformKS != nil {
 		// Ensure parent SRK attributes are set
 		if keyAttrs.Parent == nil {
 			keyAttrs.Parent = app.PlatformKS.SRKAttributes()
