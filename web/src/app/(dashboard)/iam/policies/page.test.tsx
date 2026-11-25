@@ -60,4 +60,15 @@ describe("PoliciesPage", () => {
     expect(screen.queryByRole("button", { name: "Run test" })).toBeNull();
     expect(iam.testPolicy).not.toHaveBeenCalled();
   });
+
+  it("shows policy simulation as unavailable and calls no TestPolicy", () => {
+    render(<PoliciesPage />);
+
+    expect(screen.getByRole("heading", { name: "Policy simulation unavailable" })).toBeTruthy();
+    expect(
+      screen.getByText("The IAM service cannot evaluate a policy test request yet."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /test/i })).toBeNull();
+    expect(iam.testPolicy).not.toHaveBeenCalled();
+  });
 });
