@@ -38,6 +38,9 @@ type PXERouter struct {
 	// scopeAuthorizer is the per-route scope check the operator and gateway
 	// routes take on top of the admin gate; nil leaves them on the gate.
 	scopeAuthorizer middleware.ScopeAuthorizer
+	// systemTenant is the session guard that admits only the system tenant:
+	// the PXE device store is platform-wide, with no tenant filter.
+	systemTenant func(http.Handler) http.Handler
 	// webhookEnabled is pxe.ServiceConfig.WebhookEnabled: whether the
 	// install-completion webhook is mounted at all.
 	webhookEnabled bool
@@ -146,6 +149,13 @@ func (r *PXERouter) mount(sr *mux.Router, routes []scopedRoute) {
 // carry roles, not scopes.
 func (r *PXERouter) SetScopeAuthorizer(authorizer middleware.ScopeAuthorizer) {
 	r.scopeAuthorizer = authorizer
+}
+
+// SetSystemTenantGuard supplies the session guard every operator and
+// gateway route takes, admitting only the system tenant (#1896 Codex r10).
+// A router without one refuses every operator and gateway route.
+func (r *PXERouter) SetSystemTenantGuard(guard func(http.Handler) http.Handler) {
+	r.systemTenant = guard
 }
 
 // requireScope wraps handler in the scope check when one is configured.

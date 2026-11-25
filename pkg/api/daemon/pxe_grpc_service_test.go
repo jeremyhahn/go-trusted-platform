@@ -2374,6 +2374,12 @@ func TestPXEGRPCService_RefusesNonSystemTenant(t *testing.T) {
 			_, err := svc.StopService(ctx, &platformv1.StopPXEServiceRequest{})
 			return err
 		},
+		// WebhookComplete is the operator path: it carries no IDevID, so a
+		// non-system tenant could fail another tenant's device (#1896 Codex r10).
+		"WebhookComplete": func(ctx context.Context) error {
+			_, err := svc.WebhookComplete(ctx, &platformv1.PXEWebhookCompleteRequest{MacAddress: "00:11:22:33:44:55"})
+			return err
+		},
 	}
 
 	for name, call := range rpcs {
