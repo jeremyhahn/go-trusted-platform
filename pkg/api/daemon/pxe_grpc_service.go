@@ -35,8 +35,14 @@ import (
 type PXEGRPCService struct {
 	platformv1.UnimplementedPXEServiceServer
 
-	logger     *logging.Logger
-	pxeService pxe.Service
+	logger         *logging.Logger
+	pxeService     pxe.Service
+	systemTenantID string
+}
+
+// SetSystemTenant sets the only tenant whose bound callers may use the PXE RPCs.
+func (s *PXEGRPCService) SetSystemTenant(id string) {
+	s.systemTenantID = id
 }
 
 // NewPXEGRPCService creates a new PXE gRPC service instance.

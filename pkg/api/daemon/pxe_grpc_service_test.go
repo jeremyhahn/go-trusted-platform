@@ -2297,3 +2297,98 @@ func TestPXEGRPCService_StatusToProto(t *testing.T) {
 		assert.Equal(t, uint32(200), result.GetProvisioningVlan())
 	})
 }
+
+// pxeTrapBackend panics on every pxe.Service call, so a recovered panic proves the handler reached the backend.
+type pxeTrapBackend struct {
+	pxe.Service
+}
+
+// pxeCallReachesBackend runs call and reports whether it reached the backend, with the error it returned otherwise.
+func pxeCallReachesBackend(call func() error) (reached bool, err error) {
+	defer func() {
+		if recover() != nil {
+			reached = true
+		}
+	}()
+	return false, call()
+}
+
+func TestPXEGRPCService_RefusesNonSystemTenant(t *testing.T) {
+	svc := NewPXEGRPCService(logging.DefaultLogger(), &pxeTrapBackend{})
+	svc.SetSystemTenant("sys")
+
+	rpcs := map[string]func(ctx context.Context) error{
+		"RegisterDevice": func(ctx context.Context) error {
+			_, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{MacAddress: "00:11:22:33:44:55", PortId: "port-1"})
+			return err
+		},
+		"GetDevice": func(ctx context.Context) error {
+			_, err := svc.GetDevice(ctx, &platformv1.GetPXEDeviceRequest{DeviceId: "dev-1"})
+			return err
+		},
+		"GetDeviceByMAC": func(ctx context.Context) error {
+			_, err := svc.GetDeviceByMAC(ctx, &platformv1.GetPXEDeviceByMACRequest{MacAddress: "00:11:22:33:44:55"})
+			return err
+		},
+		"ListDevices": func(ctx context.Context) error {
+			_, err := svc.ListDevices(ctx, &platformv1.ListPXEDevicesRequest{})
+			return err
+		},
+		"RemoveDevice": func(ctx context.Context) error {
+			_, err := svc.RemoveDevice(ctx, &platformv1.RemovePXEDeviceRequest{DeviceId: "dev-1"})
+			return err
+		},
+		"UpdateState": func(ctx context.Context) error {
+			_, err := svc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{DeviceId: "dev-1", Reason: "test"})
+			return err
+		},
+		"SetDeviceEnrolled": func(ctx context.Context) error {
+			_, err := svc.SetDeviceEnrolled(ctx, &platformv1.SetPXEDeviceEnrolledRequest{DeviceId: "dev-1", CertificateSerial: "01"})
+			return err
+		},
+		"Authorize": func(ctx context.Context) error {
+			_, err := svc.Authorize(ctx, &platformv1.AuthorizePXEDeviceRequest{DeviceId: "dev-1", TargetVlan: 300})
+			return err
+		},
+		"Quarantine": func(ctx context.Context) error {
+			_, err := svc.Quarantine(ctx, &platformv1.QuarantinePXEDeviceRequest{DeviceId: "dev-1", Reason: "test"})
+			return err
+		},
+		"Retry": func(ctx context.Context) error {
+			_, err := svc.Retry(ctx, &platformv1.RetryPXEDeviceRequest{DeviceId: "dev-1"})
+			return err
+		},
+		"GetEvents": func(ctx context.Context) error {
+			_, err := svc.GetEvents(ctx, &platformv1.GetPXEEventsRequest{DeviceId: "dev-1"})
+			return err
+		},
+		"GetStatus": func(ctx context.Context) error {
+			_, err := svc.GetStatus(ctx, &platformv1.GetPXEStatusRequest{})
+			return err
+		},
+		"StartService": func(ctx context.Context) error {
+			_, err := svc.StartService(ctx, &platformv1.StartPXEServiceRequest{})
+			return err
+		},
+		"StopService": func(ctx context.Context) error {
+			_, err := svc.StopService(ctx, &platformv1.StopPXEServiceRequest{})
+			return err
+		},
+	}
+
+	for name, call := range rpcs {
+		t.Run(name+" other tenant refused", func(t *testing.T) {
+			reached, err := pxeCallReachesBackend(func() error { return call(tokenCallerContext("other")) })
+			assert.False(t, reached, "backend must not be called")
+			assert.Equal(t, codes.PermissionDenied, status.Code(err))
+		})
+		t.Run(name+" system tenant admitted", func(t *testing.T) {
+			reached, err := pxeCallReachesBackend(func() error { return call(tokenCallerContext("sys")) })
+			assert.True(t, reached, "backend must be called, got %v", err)
+		})
+		t.Run(name+" unbound caller admitted", func(t *testing.T) {
+			reached, err := pxeCallReachesBackend(func() error { return call(context.Background()) })
+			assert.True(t, reached, "backend must be called, got %v", err)
+		})
+	}
+}
