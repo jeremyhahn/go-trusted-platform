@@ -15,23 +15,14 @@ package daemon
 
 import (
 	"context"
-	"net"
 	"net/http"
-	"testing"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
-	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
-	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
-	platformiam "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
-	sdkgrpc "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/grpc"
 )
 
 // The callers below are the identities the daemon's transports hand a
@@ -74,20 +65,4 @@ func unixOperatorHTTP(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r.WithContext(asUnixOperator(r.Context())))
 	})
-}
-
-// iamOperatorGRPCClient is an SDK IAM client over a TLS gRPC server that
-// serves svc as the Unix-socket operator.
-func iamOperatorGRPCClient(t *testing.T, svc *IAMGRPCService) *platformiam.Client {
-	tlsBundle := testutil.GenerateTestTLSBundle(t)
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	serveGRPCServices(t, lis, func(srv grpc.ServiceRegistrar) {
-		platformv1.RegisterPlatformIAMServiceServer(srv, svc)
-	}, grpc.Creds(credentials.NewTLS(tlsBundle.ServerTLSConfig())), unixOperatorGRPCOption())
-	adapter, err := sdkgrpc.Connect(context.Background(), platform.NewOptions(
-		platform.WithGRPCAddr(lis.Addr().String()),
-		platform.WithTLSConfig(tlsBundle.ClientTLSConfig()),
-	))
-	return iamClient(connection(t, adapter, err))
 }
