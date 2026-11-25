@@ -1003,7 +1003,7 @@ func TestRegistryCredentialFindingsRejectTheRunnersDockerConfig(t *testing.T) {
 // ciPullOtherDaemon runs between the push and the pull on the one fake
 // daemon: the pull step runs on a leg whose daemon lacks the image, so the
 // registry tag the push left is not there, and the step pulls it.
-const ciPullOtherDaemon = `docker rmi "$IT_IMAGE_REF"` + "\n"
+const ciPullOtherDaemon = `docker rmi "$IT_REGISTRY/go-trusted-platform/it-image:$IT_IMAGE_TAG"` + "\n"
 
 func TestCIRegistryStepsKeepTheRunnersDockerContext(t *testing.T) {
 	push := ciStepRun(t, ciImageJob, "push")

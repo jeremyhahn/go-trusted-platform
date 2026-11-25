@@ -194,8 +194,14 @@ func runTwoLegPull(t *testing.T, step string, env ...string) (a, b pullLeg, stat
 	}
 	// Each leg rebuilds the reference from IT_REGISTRY and IT_IMAGE_TAG, and
 	// the reference both pulled stays for the other leg to re-tag from.
-	require.FileExists(t, filepath.Join(state, "tags", "registry.invalid_5000_go-trusted-platform_it-image_1111"),
-		"the legs pull registry.invalid:5000/go-trusted-platform/it-image:1111:\n%s", out)
+	tag := "1111"
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "IT_IMAGE_TAG="); ok {
+			tag = v
+		}
+	}
+	require.FileExists(t, filepath.Join(state, "tags", "registry.invalid_5000_go-trusted-platform_it-image_"+tag),
+		"the legs pull registry.invalid:5000/go-trusted-platform/it-image:%s:\n%s", tag, out)
 	a = pullLeg{rc: read("a.rc"), output: read("a.out"), log: read("a.log")}
 	b.output = read("b.out")
 	return a, b, state
@@ -570,23 +576,26 @@ func TestCIImageLockTakesANamedLock(t *testing.T) {
 // and skips the pull when a leg before it left the image on the daemon.
 func TestCIRegistryPullPullsADigestOncePerDaemon(t *testing.T) {
 	step := ciStepRun(t, ciLegJob, "pull")
+	// Each leg rebuilds the reference from IT_REGISTRY and the image job's
+	// image_tag (the image ID's hex), so the lock is named after the
+	// reference's hash: one lock, and one pull, per image per daemon.
 	const hex64 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	tagRef := "registry.example/go-trusted-platform-it:sha256-1111"
-	tagSum := sha256.Sum256([]byte(tagRef))
-	for name, tc := range map[string]struct{ ref, lock string }{
-		"digest ref": {ref: "registry.example/go-trusted-platform-it@sha256:" + hex64, lock: hex64[:12]},
-		"tag ref":    {ref: tagRef, lock: hex.EncodeToString(tagSum[:])[:12]},
+	for name, tag := range map[string]string{
+		"image id tag": hex64,
+		"other tag":    "v1.2-test",
 	} {
 		t.Run(name, func(t *testing.T) {
-			a, b, state := runTwoLegPull(t, step, "IT_IMAGE_REF="+tc.ref)
+			sum := sha256.Sum256([]byte("registry.invalid:5000/go-trusted-platform/it-image:" + tag))
+			lock := hex.EncodeToString(sum[:])[:12]
+			a, b, state := runTwoLegPull(t, step, "IT_IMAGE_TAG="+tag)
 			require.Equal(t, "0", a.rc, "leg A:\n%s", a.log)
 			require.Contains(t, a.output, "leased=true", "leg A:\n%s", a.log)
 			require.Equal(t, "0", b.rc, "leg B:\n%s", b.log)
 			require.Contains(t, b.output, "leased=true", "leg B:\n%s", b.log)
 			pulls, _ := os.ReadFile(filepath.Join(state, "pull-context"))
-			require.Equal(t, 1, strings.Count(string(pulls), "\n"), "two legs on one daemon pulled %s:\nA:\n%s\nB:\n%s", tc.ref, a.log, b.log)
+			require.Equal(t, 1, strings.Count(string(pulls), "\n"), "two legs on one daemon pulled tag %s:\nA:\n%s\nB:\n%s", tag, a.log, b.log)
 			names, _ := os.ReadFile(filepath.Join(state, "lock-names"))
-			require.Contains(t, strings.Split(string(names), "\n"), "go-trusted-platform-ci-pull-"+tc.lock, "lock names taken:\n%s", names)
+			require.Contains(t, strings.Split(string(names), "\n"), "go-trusted-platform-ci-pull-"+lock, "lock names taken:\n%s", names)
 		})
 	}
 }
