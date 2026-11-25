@@ -16,6 +16,7 @@ package backends
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
@@ -419,6 +420,54 @@ func TestCeremonyBackend_Initialize_SingleAdminSendsNoOfficers(t *testing.T) {
 	}
 	if ceremony.req.Threshold != 0 || ceremony.req.Officers != nil {
 		t.Errorf("single-admin request carried threshold %d and officers %v", ceremony.req.Threshold, ceremony.req.Officers)
+	}
+}
+
+// TestCeremonyBackend_Initialize_RefusesOfficerCountOtherThanN pins that an
+// init whose officer list does not hold exactly N officers is refused before
+// any call: go-qrdb splits into len(Officers) shares, so "2-of-5" with two
+// officers would silently create a 2-of-2 ceremony, and a single-admin init
+// carries no officers at all.
+func TestCeremonyBackend_Initialize_RefusesOfficerCountOtherThanN(t *testing.T) {
+	officers := func(n int) []daemon.CeremonyOfficer {
+		out := make([]daemon.CeremonyOfficer, n)
+		for i := range out {
+			out[i] = daemon.CeremonyOfficer{Username: fmt.Sprintf("officer%d", i), CSRPEM: fmt.Sprintf("csr-%d", i)}
+		}
+		return out
+	}
+	cases := []struct {
+		name      string
+		threshold string
+		officers  int
+	}{
+		{"2-of-5 with two officers", "2-of-5", 2},
+		{"2-of-3 with four officers", "2-of-3", 4},
+		{"single-admin with one officer", "", 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls []string
+			ceremony := &fakeQRDBCeremony{
+				calls: &calls,
+				resp:  &quicbaassdk.QRDBCeremonyInitializeResponse{SPKIPin: "pin", State: "enrolling"},
+			}
+			issuer := &fakeAdminIssuer{calls: &calls, bundle: &AdminBundle{CertPEM: "CERT", KeyPEM: "KEY"}}
+			b := NewCeremonyBackend(logging.DefaultLogger(), &fakeQuicbaasClient{ceremony: ceremony}, issuer)
+
+			_, err := b.Initialize(context.Background(), &daemon.CeremonyInitRequest{
+				SOPIN:     "so",
+				UserPIN:   "user",
+				Threshold: tc.threshold,
+				Officers:  officers(tc.officers),
+			})
+			if err == nil {
+				t.Fatalf("Initialize(%q, %d officers) succeeded, want a refusal", tc.threshold, tc.officers)
+			}
+			if len(calls) != 0 {
+				t.Errorf("calls = %v, want none: an officer count other than N must be refused before any minting or ceremony call", calls)
+			}
+		})
 	}
 }
 
