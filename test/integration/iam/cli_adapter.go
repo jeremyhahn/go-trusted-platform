@@ -479,54 +479,6 @@ func (a *CLIAdapter) ListGroups(ctx context.Context, opts ListGroupsOptions) (*L
 	return &result, nil
 }
 
-// AddMember adds a user to a group
-func (a *CLIAdapter) AddMember(ctx context.Context, opts AddMemberOptions) (*AddMemberResult, error) {
-	args := []string{"iam", "group", "add-member",
-		opts.TenantID,
-		opts.GroupID,
-		opts.UserID,
-		"--output", "json",
-	}
-
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp struct {
-		Success bool `json:"success"`
-	}
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return &AddMemberResult{Success: true}, nil
-	}
-
-	return &AddMemberResult{Success: resp.Success}, nil
-}
-
-// RemoveMember removes a user from a group
-func (a *CLIAdapter) RemoveMember(ctx context.Context, opts RemoveMemberOptions) (*RemoveMemberResult, error) {
-	args := []string{"iam", "group", "remove-member",
-		opts.TenantID,
-		opts.GroupID,
-		opts.UserID,
-		"--output", "json",
-	}
-
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp struct {
-		Success bool `json:"success"`
-	}
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return &RemoveMemberResult{Success: true}, nil
-	}
-
-	return &RemoveMemberResult{Success: resp.Success}, nil
-}
-
 // ============================================================================
 // Role CRUD Operations
 // ============================================================================

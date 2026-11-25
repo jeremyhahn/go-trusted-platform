@@ -376,46 +376,6 @@ func (a *GRPCAdapter) ListGroups(ctx context.Context, opts ListGroupsOptions) (*
 }
 
 // =============================================================================
-// Group Membership Operations
-// =============================================================================
-
-// AddMember adds a user to a group
-func (a *GRPCAdapter) AddMember(ctx context.Context, opts AddMemberOptions) (*AddMemberResult, error) {
-	req := &pb.AddGroupMemberRequest{
-		TenantId: opts.TenantID,
-		GroupId:  opts.GroupID,
-		UserId:   opts.UserID,
-	}
-
-	resp, err := a.client.AddGroupMember(ctx, req)
-	if err != nil {
-		return nil, ErrGRPCCallFailed{Method: "AddGroupMember", Err: err}
-	}
-
-	return &AddMemberResult{
-		Success: resp.GetStatus().GetSuccess(),
-	}, nil
-}
-
-// RemoveMember removes a user from a group
-func (a *GRPCAdapter) RemoveMember(ctx context.Context, opts RemoveMemberOptions) (*RemoveMemberResult, error) {
-	req := &pb.RemoveGroupMemberRequest{
-		TenantId: opts.TenantID,
-		GroupId:  opts.GroupID,
-		UserId:   opts.UserID,
-	}
-
-	resp, err := a.client.RemoveGroupMember(ctx, req)
-	if err != nil {
-		return nil, ErrGRPCCallFailed{Method: "RemoveGroupMember", Err: err}
-	}
-
-	return &RemoveMemberResult{
-		Success: resp.GetStatus().GetSuccess(),
-	}, nil
-}
-
-// =============================================================================
 // Role CRUD Operations
 // =============================================================================
 

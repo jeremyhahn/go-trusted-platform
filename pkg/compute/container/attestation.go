@@ -14,6 +14,7 @@
 package container
 
 import (
+	"bytes"
 	"context"
 	"strconv"
 	"strings"
@@ -151,7 +152,19 @@ type ContainerAttestor struct {
 	log      *ThreadSafeMeasurementLog
 	pcrIndex int
 	bank     string
-	closed   atomic.Bool
+	// referenceValues names the stored reference values the host quote is appraised against.
+	referenceValues string
+	closed          atomic.Bool
+}
+
+// DefaultReferenceValues is the reference-value name used when none is configured.
+const DefaultReferenceValues = "container-host"
+
+// WithReferenceValues names the stored reference values the host appraiser judges the quote against.
+func WithReferenceValues(name string) ContainerAttestorOption {
+	return func(a *ContainerAttestor) {
+		a.referenceValues = name
+	}
 }
 
 // ContainerAttestorOption configures a ContainerAttestor.
@@ -205,10 +218,11 @@ func NewContainerAttestor(tpm orchestration.HostTPM, opts ...ContainerAttestorOp
 	}
 
 	a := &ContainerAttestor{
-		tpm:      tpm,
-		log:      NewThreadSafeMeasurementLog(),
-		pcrIndex: DefaultPCRIndex,
-		bank:     orchestration.DefaultMeasurementBank,
+		tpm:             tpm,
+		log:             NewThreadSafeMeasurementLog(),
+		pcrIndex:        DefaultPCRIndex,
+		bank:            orchestration.DefaultMeasurementBank,
+		referenceValues: DefaultReferenceValues,
 	}
 
 	for _, opt := range opts {
@@ -256,9 +270,11 @@ func (a *ContainerAttestor) ComputeContainerEntryHash(
 //	               the workload PCR, and recover the image identity the
 //	               container was created from. The SDK has no event-log model,
 //	               so neither can come from it.
-//	Tier 1 (SDK)   take a fresh, nonce-bound quote and compare the quoted PCR
-//	               set against that golden value. The comparison and its typed
-//	               PCRMismatchError belong to the SDK attesting runtime.
+//	Tier 1 (SDK)   take a fresh, nonce-bound quote and appraise it against the
+//	               named reference values through the host appraiser; a failed
+//	               appraisal is the SDK's HostAppraisalError.
+//	Tier 3 (here)  hold the quoted workload PCR to the replayed golden value;
+//	               a difference is a HostAppraisalError with its PCRDivergence.
 func (a *ContainerAttestor) Attest(
 	ctx context.Context,
 	containerID string,
@@ -282,12 +298,47 @@ func (a *ContainerAttestor) Attest(
 		return nil, err
 	}
 
-	spec, err := a.attestationSpec(identity, log.ComputeExpectedPCR())
+	expected := log.ComputeExpectedPCR()
+	spec, err := a.attestationSpec(identity)
 	if err != nil {
 		return nil, err
 	}
 
-	return a.runtime.Attest(ctx, spec, containerID)
+	att, err := a.runtime.Attest(ctx, spec, containerID)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.checkWorkloadPCR(spec, att, expected); err != nil {
+		return nil, err
+	}
+	return att, nil
+}
+
+// checkWorkloadPCR holds the quoted workload PCR to the value replayed from the event log.
+func (a *ContainerAttestor) checkWorkloadPCR(spec *orchestration.ContainerSpec, att *orchestration.ContainerAttestation, expected []byte) error {
+	index := uint32(a.pcrIndex)
+	var quoted []byte
+	if att != nil {
+		quoted = att.PCRs[index]
+	}
+	if quoted != nil && bytes.Equal(quoted, expected) {
+		return nil
+	}
+	outcome, reason := "forged", "the quoted workload PCR differs from the replayed event log"
+	if quoted == nil {
+		outcome, reason = "absent", "the quote does not cover the workload PCR"
+	}
+	return &orchestration.HostAppraisalError{
+		Image:                spec.Image,
+		ReferenceValues:      spec.ReferenceValues,
+		CryptographicFailure: quoted != nil,
+		Failures: []orchestration.HostAppraisalFailure{{
+			Check:   "event-log",
+			Outcome: outcome,
+			Reason:  reason,
+			PCRs:    []orchestration.PCRDivergence{{Index: index, Expected: [][]byte{expected}, Quoted: quoted}},
+		}},
+	}
 }
 
 // attestationSpec builds the SDK container spec the golden-PCR comparison is
@@ -295,7 +346,6 @@ func (a *ContainerAttestor) Attest(
 // replayed workload PCR as the single expected value.
 func (a *ContainerAttestor) attestationSpec(
 	identity *MeasurementEntry,
-	expectedPCR []byte,
 ) (*orchestration.ContainerSpec, error) {
 	image := identity.Image
 	if image == "" {
@@ -311,9 +361,7 @@ func (a *ContainerAttestor) attestationSpec(
 		ImageDigest:     identity.ImageDigest,
 		TrustLevel:      orchestration.TrustLevelAttested,
 		MeasurementBank: a.bank,
-		ExpectedPCRs: map[uint32][]byte{
-			uint32(a.pcrIndex): expectedPCR,
-		},
+		ReferenceValues: a.referenceValues,
 	}
 	if err := spec.Validate(); err != nil {
 		return nil, err

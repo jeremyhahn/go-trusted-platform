@@ -126,8 +126,8 @@ func (s *MessagingGRPCService) GetStats(ctx context.Context, _ *platformv1.GetMe
 }
 
 // GetDedupStats returns the deduplication counters.
-func (s *MessagingGRPCService) GetDedupStats(ctx context.Context, _ *platformv1.GetMessagingDedupStatsRequest) (*platformv1.GetMessagingDedupStatsResponse, error) {
-	stats, err := s.service.DedupStats(ctx)
+func (s *MessagingGRPCService) GetDedupStats(ctx context.Context, req *platformv1.GetMessagingDedupStatsRequest) (*platformv1.GetMessagingDedupStatsResponse, error) {
+	stats, err := s.service.DedupStats(ctx, req.GetChannel())
 	if err != nil {
 		return nil, appServiceError(s.logger, "messaging dedup stats", err)
 	}

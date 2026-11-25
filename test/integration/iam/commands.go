@@ -73,14 +73,6 @@ type IAMCommands interface {
 	// ListGroups lists all groups with optional filtering
 	ListGroups(ctx context.Context, opts ListGroupsOptions) (*ListGroupsResult, error)
 
-	// Group Membership Operations
-
-	// AddMember adds a user to a group
-	AddMember(ctx context.Context, opts AddMemberOptions) (*AddMemberResult, error)
-
-	// RemoveMember removes a user from a group
-	RemoveMember(ctx context.Context, opts RemoveMemberOptions) (*RemoveMemberResult, error)
-
 	// Role CRUD Operations
 
 	// CreateRole creates a new role
@@ -294,30 +286,6 @@ type ListGroupsResult struct {
 	Total  int64    `json:"total"`
 	Limit  int32    `json:"limit"`
 	Offset int32    `json:"offset"`
-}
-
-// AddMemberOptions contains options for adding a member to a group
-type AddMemberOptions struct {
-	TenantID string `json:"tenant_id"`
-	GroupID  string `json:"group_id"`
-	UserID   string `json:"user_id"`
-}
-
-// AddMemberResult contains the result of adding a member
-type AddMemberResult struct {
-	Success bool `json:"success"`
-}
-
-// RemoveMemberOptions contains options for removing a member from a group
-type RemoveMemberOptions struct {
-	TenantID string `json:"tenant_id"`
-	GroupID  string `json:"group_id"`
-	UserID   string `json:"user_id"`
-}
-
-// RemoveMemberResult contains the result of removing a member
-type RemoveMemberResult struct {
-	Success bool `json:"success"`
 }
 
 // ============================================================================

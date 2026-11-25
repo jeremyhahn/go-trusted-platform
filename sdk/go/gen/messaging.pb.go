@@ -762,7 +762,9 @@ func (x *GetMessagingStatsResponse) GetBufferUtilization() float64 {
 }
 
 type GetMessagingDedupStatsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Channel whose deduplication counters are returned; required.
+	Channel       string `protobuf:"bytes,1,opt,name=channel,proto3" json:"channel,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -795,6 +797,13 @@ func (x *GetMessagingDedupStatsRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use GetMessagingDedupStatsRequest.ProtoReflect.Descriptor instead.
 func (*GetMessagingDedupStatsRequest) Descriptor() ([]byte, []int) {
 	return file_messaging_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *GetMessagingDedupStatsRequest) GetChannel() string {
+	if x != nil {
+		return x.Channel
+	}
+	return ""
 }
 
 type GetMessagingDedupStatsResponse struct {
@@ -1048,8 +1057,9 @@ const file_messaging_proto_rawDesc = "" +
 	"\n" +
 	"dedup_hits\x18\x05 \x01(\x03R\tdedupHits\x12)\n" +
 	"\x10dropped_messages\x18\x06 \x01(\x03R\x0fdroppedMessages\x12-\n" +
-	"\x12buffer_utilization\x18\a \x01(\x01R\x11bufferUtilization\"\x1f\n" +
-	"\x1dGetMessagingDedupStatsRequest\"\xd9\x01\n" +
+	"\x12buffer_utilization\x18\a \x01(\x01R\x11bufferUtilization\"9\n" +
+	"\x1dGetMessagingDedupStatsRequest\x12\x18\n" +
+	"\achannel\x18\x01 \x01(\tR\achannel\"\xd9\x01\n" +
 	"\x1eGetMessagingDedupStatsResponse\x12!\n" +
 	"\ftotal_checks\x18\x01 \x01(\x03R\vtotalChecks\x12/\n" +
 	"\x13duplicates_detected\x18\x02 \x01(\x03R\x12duplicatesDetected\x12'\n" +

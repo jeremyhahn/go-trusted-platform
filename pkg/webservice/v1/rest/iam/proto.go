@@ -41,7 +41,6 @@ func UserToProto(u *iamsdk.User) *platformv1.IAMUser {
 		Email:       u.Email,
 		Name:        u.DisplayName,
 		Roles:       u.Roles,
-		Groups:      u.Groups,
 		Attributes:  u.Metadata,
 		MfaVerified: len(u.AuthMethods) > 0,
 		CreatedAt:   timestamppb.New(u.CreatedAt),

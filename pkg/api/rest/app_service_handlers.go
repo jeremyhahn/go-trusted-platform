@@ -319,6 +319,7 @@ var appRESTRoutes = map[string]appRESTRoute{
 	},
 	platformv1.MessagingService_GetDedupStats_FullMethodName: {
 		verb: http.MethodGet, path: messagingBasePath + "/dedup-stats", scope: scopeMessagingRead,
+		query:  []string{"channel"},
 		invoke: appRESTMethod(appservices.ServiceMessaging, messagingServer, platformv1.MessagingServiceServer.GetDedupStats),
 	},
 	platformv1.ObjectStorageService_PutObject_FullMethodName: {

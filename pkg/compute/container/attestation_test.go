@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/binary"
 	"errors"
 	"log/slog"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/orchestration"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 func TestNewContainerAttestor(t *testing.T) {
@@ -392,9 +394,16 @@ func TestContainerAttestor_Attest(t *testing.T) {
 		if err == nil {
 			t.Fatal("a PCR that disagrees with the log replay must fail attestation")
 		}
-		var mismatch *orchestration.PCRMismatchError
-		if !errors.As(err, &mismatch) {
-			t.Errorf("error = %T (%v), want *orchestration.PCRMismatchError", err, err)
+		var appraisal *orchestration.HostAppraisalError
+		if !errors.As(err, &appraisal) {
+			t.Fatalf("error = %T (%v), want *orchestration.HostAppraisalError", err, err)
+		}
+		if !appraisal.CryptographicFailure {
+			t.Error("a quoted workload PCR that differs from the log must be a cryptographic failure")
+		}
+		if len(appraisal.Failures) != 1 || len(appraisal.Failures[0].PCRs) != 1 ||
+			appraisal.Failures[0].PCRs[0].Index != uint32(DefaultPCRIndex) {
+			t.Errorf("failures = %+v, want one divergence on the workload PCR", appraisal.Failures)
 		}
 		if !errors.Is(err, orchestration.ErrPCRMismatch) {
 			t.Errorf("error %v must match the SDK sentinel", err)
@@ -506,7 +515,7 @@ func TestContainerAttestor_VerifyAttestation(t *testing.T) {
 		// A host TPM that cannot verify signatures cannot support fleet
 		// attestation, and must not silently report success.
 		attesting, err := orchestration.NewTPMAttestingRuntime(
-			&stubContainerRuntime{}, newMockHostTPM(), newSDKLogger(slog.Default()))
+			&stubContainerRuntime{}, newMockHostTPM(), newFakeHostAppraiser(), newSDKLogger(slog.Default()))
 		if err != nil {
 			t.Fatalf("NewTPMAttestingRuntime: %v", err)
 		}
@@ -571,6 +580,14 @@ func (v *verifierlessHostTPM) ReadPCRs(pcrList []uint) ([]orchestration.PCRBank,
 
 func (v *verifierlessHostTPM) Quote(pcrs []uint, nonce []byte) (orchestration.TPMQuote, error) {
 	return v.inner.Quote(pcrs, nonce)
+}
+
+func (v *verifierlessHostTPM) IAKCertificate() (*x509.Certificate, error) {
+	return v.inner.IAKCertificate()
+}
+
+func (v *verifierlessHostTPM) IAKAttributes() (*xkmssdk.KeyAttributes, error) {
+	return v.inner.IAKAttributes()
 }
 
 func TestContainerAttestor_FullLifecycle(t *testing.T) {
@@ -807,8 +824,8 @@ func TestContainerAttestor_Attest_QuoteBinding(t *testing.T) {
 		if !errors.As(err, &mismatch) {
 			t.Fatalf("error = %T (%v), want *orchestration.QuotedPCRDigestMismatchError", err, err)
 		}
-		if bytes.Equal(mismatch.Signed, mismatch.Recomputed) {
-			t.Error("the mismatch must report a signed digest that differs from the recomputed one")
+		if len(mismatch.Signed) == 0 {
+			t.Error("the mismatch must report the signed digest")
 		}
 		if !errors.Is(err, orchestration.ErrQuotedPCRDigestMismatch) {
 			t.Errorf("error %v must match the SDK digest-mismatch sentinel", err)

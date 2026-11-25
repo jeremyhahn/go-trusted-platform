@@ -63,6 +63,14 @@ func newContainerOrchestratorForConfig(_ context.Context, cfg *compute.Orchestra
 				opts = append(opts, WithComputeTPMProvider(tpmProvider))
 			}
 		}
+		if deps.QRDBClient != nil {
+			appraiser, err := NewQRDBHostAppraiser(deps.QRDBClient)
+			if err != nil {
+				logger.Warn("container attestation unavailable: failed to create host appraiser", "error", err)
+			} else {
+				opts = append(opts, WithComputeHostAppraiser(appraiser))
+			}
+		}
 	}
 
 	return NewComputeOrchestrator(&local, logger, opts...)

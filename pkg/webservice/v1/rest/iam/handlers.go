@@ -383,7 +383,6 @@ func (h *IAMHandlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 		Email:       req.Email,
 		DisplayName: req.Name,
 		Roles:       req.Roles,
-		Groups:      req.Groups,
 		Metadata:    req.Attributes,
 	}
 
@@ -416,7 +415,6 @@ func (h *IAMHandlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 		PageSize: int(limit),
 		Filter:   r.URL.Query().Get("email"),
 		RoleID:   r.URL.Query().Get("role"),
-		GroupID:  r.URL.Query().Get("group"),
 	}
 
 	resp, err := h.iamClient.ListUsers(ctx, tenantID, sdkReq)
@@ -619,7 +617,6 @@ func userToResponse(u *iamsdk.User) UserResponse {
 		Email:      u.Email,
 		Name:       u.DisplayName,
 		Roles:      u.Roles,
-		Groups:     u.Groups,
 		Attributes: u.Metadata,
 		// quicbaas v0.8.0 removed iam.User.MFAEnabled and models the account's
 		// authentication policy as AuthMethods instead — the methods the account

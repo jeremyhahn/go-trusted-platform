@@ -117,7 +117,17 @@ func (m *mockQuoteTPM) IAKAttributes() (*xkmssdk.KeyAttributes, error) {
 		KeyAlgorithm:       x509.RSA,
 		SignatureAlgorithm: m.scheme,
 		Hash:               crypto.SHA256,
+		TPMAttributes:      mockIAKTPMAttributes(),
 	}, nil
+}
+
+// IAKCertificate returns the shared self-signed stand-in IAK certificate.
+func (m *mockQuoteTPM) IAKCertificate() (*x509.Certificate, error) {
+	if m.iakErr != nil {
+		return nil, m.iakErr
+	}
+	mockIAKCertOnce.Do(func() { mockIAKCert, mockIAKCertErr = newMockIAKCertificate() })
+	return mockIAKCert, mockIAKCertErr
 }
 
 func (m *mockQuoteTPM) IAK() (crypto.PublicKey, error) {

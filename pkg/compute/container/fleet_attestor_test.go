@@ -14,10 +14,8 @@
 package container
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"slices"
 	"testing"
 	"time"
 
@@ -45,41 +43,31 @@ func (e upstreamError) Error() string { return "upstream: " + e.cause.Error() }
 func (e upstreamError) Unwrap() error { return e.cause }
 
 type fakeInnerAttestor struct {
-	resp *service.AttestContainerResponse
-	err  error
-	// quoted, when set, is what the host TPM reads: the fake then checks
-	// the expected PCRs the way the SDK does and reports only the
-	// lowest-numbered mismatch.
-	quoted   map[uint32][]byte
-	calls    int
-	got      *service.AttestContainerRequest
-	expected []map[uint32][]byte
+	resp  *service.AttestContainerResponse
+	err   error
+	calls int
+	got   *service.AttestContainerRequest
 }
 
 func (f *fakeInnerAttestor) AttestContainer(_ context.Context, req *service.AttestContainerRequest) (*service.AttestContainerResponse, error) {
 	f.calls++
 	f.got = req
-	f.expected = append(f.expected, req.ExpectedPCRs)
-	if f.quoted != nil {
-		if err := lowestPCRMismatch(req.ExpectedPCRs, f.quoted); err != nil {
-			return nil, err
-		}
-	}
 	return f.resp, f.err
 }
 
-func lowestPCRMismatch(expected, quoted map[uint32][]byte) error {
-	indices := make([]uint32, 0, len(expected))
-	for index := range expected {
-		indices = append(indices, index)
+// appraisalDivergence is the Verifier's refusal naming every divergent PCR, as upstream reports it.
+func appraisalDivergence(divergences ...orchestration.PCRDivergence) *orchestration.HostAppraisalError {
+	return &orchestration.HostAppraisalError{
+		Image:                "img",
+		ReferenceValues:      "agent-host",
+		CryptographicFailure: true,
+		Failures: []orchestration.HostAppraisalFailure{{
+			Check:   "baseline",
+			Outcome: "forged",
+			Reason:  "quoted PCR value not admitted",
+			PCRs:    divergences,
+		}},
 	}
-	slices.Sort(indices)
-	for _, index := range indices {
-		if !bytes.Equal(expected[index], quoted[index]) {
-			return &orchestration.PCRMismatchError{Index: index, Expected: expected[index], Actual: quoted[index]}
-		}
-	}
-	return nil
 }
 
 type fakeFleetRegistry struct {
@@ -158,7 +146,10 @@ type fleetFixture struct {
 
 func newFleetFixture() *fleetFixture {
 	return &fleetFixture{
-		inner: &fakeInnerAttestor{resp: &service.AttestContainerResponse{Attested: true, Image: "registry.example/app@sha256:aa"}},
+		inner: &fakeInnerAttestor{resp: &service.AttestContainerResponse{
+			Attested: true, Image: "registry.example/app@sha256:aa",
+			PCRs: map[uint32][]byte{0: goldenPCR0, 7: goldenPCR7},
+		}},
 		registry: &fakeFleetRegistry{dev: &entities.Device{
 			ID: fleetLocalID, TenantID: "tenant-a", Serial: "SN-42", Hostname: "cp-01", State: entities.DeviceStateAttested,
 		}},
@@ -218,40 +209,56 @@ func TestNewFleetContainerAttestor_RequiresEveryDependency(t *testing.T) {
 
 func TestFleetContainerAttestor_PassAppliesTheBaselineAndRecordsNothing(t *testing.T) {
 	f := newFleetFixture()
-	extra := []byte{0x0b}
 	resp, err := f.attestor(t).AttestContainer(context.Background(), &service.AttestContainerRequest{
-		Image:        "registry.example/app@sha256:aa",
-		ExpectedPCRs: map[uint32][]byte{7: goldenPCR7, 11: extra},
+		Image:           "registry.example/app@sha256:aa",
+		ReferenceValues: "agent-host",
 	})
 	require.NoError(t, err)
 	assert.True(t, resp.Attested)
 	assert.Equal(t, "42", resp.DeviceID, "an empty device id means this host")
 
-	require.Equal(t, 2, f.inner.calls)
+	require.Equal(t, 1, f.inner.calls, "the named reference values judge every register in one quote")
 	assert.Equal(t, "42", f.inner.got.DeviceID)
-	assert.Equal(t, []map[uint32][]byte{
-		{0: goldenPCR0, 7: goldenPCR7},
-		{0: goldenPCR0, 7: goldenPCR7, 11: extra},
-	}, f.inner.expected, "the baseline is quoted on its own, then with the registers the request added")
+	assert.Equal(t, "agent-host", f.inner.got.ReferenceValues)
 	assert.Empty(t, f.verdicts.verdicts, "a host's quote of itself must not readmit it from quarantine")
 	assert.Empty(t, f.reattest.ids)
 	assert.Empty(t, f.registry.saved)
 }
 
-func TestFleetContainerAttestor_BaselineOnlyRequestQuotesOnce(t *testing.T) {
+func TestFleetContainerAttestor_UncoveredBaselineIsARefusal(t *testing.T) {
 	f := newFleetFixture()
-	_, err := f.attestor(t).AttestContainer(context.Background(), &service.AttestContainerRequest{
-		Image: "img", ExpectedPCRs: map[uint32][]byte{7: goldenPCR7},
-	})
-	require.NoError(t, err)
-	assert.Equal(t, []map[uint32][]byte{{0: goldenPCR0, 7: goldenPCR7}}, f.inner.expected,
-		"a request that adds nothing to the baseline needs no second quote")
+	f.inner.resp.PCRs = map[uint32][]byte{0: goldenPCR0}
+	_, err := f.attestor(t).AttestContainer(context.Background(), &service.AttestContainerRequest{Image: "img"})
+	var failed ErrFleetAttestationFailed
+	require.ErrorAs(t, err, &failed)
+	assert.Contains(t, failed.Reason, "baseline PCR 7")
+	assert.Equal(t, 1, f.inner.calls)
+	assert.Empty(t, f.verdicts.verdicts, "a register the quote does not cover is missing evidence, not drift")
+	assert.Empty(t, f.registry.saved)
+}
+
+func TestFleetContainerAttestor_QuotedBaselineDivergenceQuarantines(t *testing.T) {
+	f := newFleetFixture()
+	f.inner.resp.PCRs = map[uint32][]byte{0: goldenPCR0, 7: {0xde, 0xad}}
+	resp, err := f.attestor(t).AttestContainer(context.Background(), &service.AttestContainerRequest{Image: "img"})
+	assert.Nil(t, resp)
+	var drift ErrFleetHostDrift
+	require.ErrorAs(t, err, &drift, "reference values never relax the golden baseline")
+	assert.Equal(t, uint32(7), drift.Index)
+	var divergence ErrFleetBaselineDivergence
+	require.ErrorAs(t, err, &divergence)
+	assert.Equal(t, []byte{0xde, 0xad}, divergence.Divergence.Quoted)
+	require.Len(t, f.verdicts.verdicts, 1)
+	assert.True(t, f.verdicts.verdicts[0].Cryptographic)
+	require.Len(t, f.registry.saved, 1)
+	assert.Equal(t, entities.DeviceStateQuarantined, f.registry.saved[0].State)
+	assert.Equal(t, []string{"42"}, f.reattest.ids)
 }
 
 func TestFleetContainerAttestor_DriftQuarantinesAndRequestsReattestation(t *testing.T) {
 	f := newFleetFixture()
-	mismatch := &orchestration.PCRMismatchError{Index: 7, Expected: goldenPCR7, Actual: []byte{0xde, 0xad}}
-	f.inner.resp, f.inner.err = nil, upstreamError{cause: mismatch}
+	appraisal := appraisalDivergence(orchestration.PCRDivergence{Index: 7, Expected: [][]byte{goldenPCR7}, Quoted: []byte{0xde, 0xad}})
+	f.inner.resp, f.inner.err = nil, upstreamError{cause: appraisal}
 
 	resp, err := f.attestor(t).AttestContainer(context.Background(), &service.AttestContainerRequest{Image: "img", DeviceID: "42"})
 	assert.Nil(t, resp)
@@ -260,8 +267,8 @@ func TestFleetContainerAttestor_DriftQuarantinesAndRequestsReattestation(t *test
 	assert.Equal(t, uint32(7), drift.Index)
 	assert.NoError(t, drift.QuarantineErr)
 	assert.NoError(t, drift.ReattestErr)
-	var pcr *orchestration.PCRMismatchError
-	assert.ErrorAs(t, err, &pcr, "the upstream mismatch stays reachable")
+	var got *orchestration.HostAppraisalError
+	assert.ErrorAs(t, err, &got, "the upstream appraisal stays reachable")
 
 	require.Len(t, f.verdicts.verdicts, 1)
 	v := f.verdicts.verdicts[0]
@@ -282,18 +289,20 @@ func TestFleetContainerAttestor_DriftQuarantinesAndRequestsReattestation(t *test
 
 func TestFleetContainerAttestor_RequestPCRCannotMaskBaselineDrift(t *testing.T) {
 	f := newFleetFixture()
-	// PCR 4 is the request's own and fails too; upstream reports only the
-	// lowest-numbered mismatch, which on a merged quote would be PCR 4.
-	f.inner.quoted = map[uint32][]byte{0: goldenPCR0, 4: {0x01}, 7: {0xde, 0xad}}
+	// PCR 4 is outside the baseline and fails too, and is the lowest-numbered divergence.
+	f.inner.resp, f.inner.err = nil, appraisalDivergence(
+		orchestration.PCRDivergence{Index: 4, Expected: [][]byte{{0x04}}, Quoted: []byte{0x01}},
+		orchestration.PCRDivergence{Index: 7, Expected: [][]byte{goldenPCR7}, Quoted: []byte{0xde, 0xad}},
+	)
 
 	_, err := f.attestor(t).AttestContainer(context.Background(), &service.AttestContainerRequest{
-		Image: "img", ExpectedPCRs: map[uint32][]byte{4: {0x04}},
+		Image: "img", ReferenceValues: "agent-host",
 	})
 	var drift ErrFleetHostDrift
-	require.ErrorAs(t, err, &drift, "drift in the baseline wins over the request's own policy")
+	require.ErrorAs(t, err, &drift, "drift in the baseline wins over the reference values' other registers")
 	assert.Equal(t, uint32(7), drift.Index)
 	assert.False(t, errors.As(err, &ErrFleetPCRPolicyMismatch{}))
-	assert.Equal(t, 1, f.inner.calls, "the request's PCRs are not quoted once the baseline fails")
+	assert.Equal(t, 1, f.inner.calls)
 	assert.Len(t, f.verdicts.verdicts, 1)
 	require.Len(t, f.registry.saved, 1)
 	assert.Equal(t, entities.DeviceStateQuarantined, f.registry.saved[0].State)
@@ -306,7 +315,7 @@ func TestFleetContainerAttestor_DriftLeavesAContainedDeviceAlone(t *testing.T) {
 	} {
 		t.Run(string(state), func(t *testing.T) {
 			f := newFleetFixture()
-			f.inner.resp, f.inner.err = nil, &orchestration.PCRMismatchError{Index: 7}
+			f.inner.resp, f.inner.err = nil, appraisalDivergence(orchestration.PCRDivergence{Index: 7})
 			// The SDN observer acted on the verdict first.
 			f.verdicts.observe = func() { f.registry.dev.State = state }
 
@@ -333,7 +342,7 @@ func TestFleetContainerAttestor_DriftReportsAQuarantineThatDidNotHappen(t *testi
 	for name, arrange := range cases {
 		t.Run(name, func(t *testing.T) {
 			f := newFleetFixture()
-			f.inner.resp, f.inner.err = nil, &orchestration.PCRMismatchError{Index: 7}
+			f.inner.resp, f.inner.err = nil, appraisalDivergence(orchestration.PCRDivergence{Index: 7})
 			arrange(f)
 
 			_, err := f.attestor(t).AttestContainer(context.Background(), &service.AttestContainerRequest{Image: "img"})
@@ -351,7 +360,7 @@ func TestFleetContainerAttestor_DriftReportsAQuarantineThatDidNotHappen(t *testi
 
 func TestFleetContainerAttestor_DriftReportsQuarantineAndReattestFailures(t *testing.T) {
 	f := newFleetFixture()
-	f.inner.resp, f.inner.err = nil, &orchestration.PCRMismatchError{Index: 0}
+	f.inner.resp, f.inner.err = nil, appraisalDivergence(orchestration.PCRDivergence{Index: 0})
 	storage := errors.New("verdict store offline")
 	registry := errors.New("registry read-only")
 	collector := errors.New("collector stopped")
@@ -370,7 +379,7 @@ func TestFleetContainerAttestor_DriftReportsQuarantineAndReattestFailures(t *tes
 
 func TestFleetContainerAttestor_DriftWithoutReattesterStillQuarantines(t *testing.T) {
 	f := newFleetFixture()
-	f.inner.resp, f.inner.err = nil, &orchestration.PCRMismatchError{Index: 0}
+	f.inner.resp, f.inner.err = nil, appraisalDivergence(orchestration.PCRDivergence{Index: 0})
 	a, err := NewFleetContainerAttestor(FleetAttestorConfig{
 		Attestor: f.inner, Devices: f.registry, Baselines: f.baselines, Verdicts: f.verdicts, LocalDeviceID: fleetLocalID,
 	})
@@ -383,17 +392,36 @@ func TestFleetContainerAttestor_DriftWithoutReattesterStillQuarantines(t *testin
 
 func TestFleetContainerAttestor_RequestPCRMismatchIsNotDrift(t *testing.T) {
 	f := newFleetFixture()
-	f.inner.quoted = map[uint32][]byte{0: goldenPCR0, 7: goldenPCR7, 11: {0xff}}
+	f.inner.resp, f.inner.err = nil, appraisalDivergence(
+		orchestration.PCRDivergence{Index: 11, Expected: [][]byte{{0x0b}}, Quoted: []byte{0xff}},
+	)
 
 	_, err := f.attestor(t).AttestContainer(context.Background(), &service.AttestContainerRequest{
-		Image: "img", ExpectedPCRs: map[uint32][]byte{11: {0x0b}},
+		Image: "img", ReferenceValues: "agent-host",
 	})
 	var policy ErrFleetPCRPolicyMismatch
 	require.ErrorAs(t, err, &policy)
 	assert.Equal(t, uint32(11), policy.Index)
-	assert.Equal(t, 2, f.inner.calls, "the baseline held on its own before the request's PCR was quoted")
+	assert.Equal(t, 1, f.inner.calls)
 	assert.Empty(t, f.verdicts.verdicts, "the caller's policy failed, not the host")
 	assert.Empty(t, f.reattest.ids)
+	assert.Empty(t, f.registry.saved)
+}
+
+func TestFleetContainerAttestor_ReferenceValuesCannotRelaxTheBaseline(t *testing.T) {
+	f := newFleetFixture()
+	f.inner.resp, f.inner.err = nil, appraisalDivergence(
+		orchestration.PCRDivergence{Index: 7, Expected: [][]byte{{0xff}}, Quoted: goldenPCR7},
+	)
+
+	_, err := f.attestor(t).AttestContainer(context.Background(), &service.AttestContainerRequest{
+		Image: "img", ReferenceValues: "agent-host",
+	})
+	var conflict ErrFleetBaselineConflict
+	require.ErrorAs(t, err, &conflict)
+	assert.Equal(t, uint32(7), conflict.Index)
+	assert.Equal(t, fleetLocalID, conflict.DeviceID)
+	assert.Empty(t, f.verdicts.verdicts, "the reference values disagree with the baseline, not the host")
 	assert.Empty(t, f.registry.saved)
 }
 
@@ -491,12 +519,6 @@ func TestFleetContainerAttestor_RefusesBeforeQuoting(t *testing.T) {
 			},
 			target: &ErrFleetBaselineUnavailable{},
 		},
-		"request relaxes the baseline": {
-			mutate: func(_ *fleetFixture, req *service.AttestContainerRequest) {
-				req.ExpectedPCRs = map[uint32][]byte{7: {0xff}}
-			},
-			target: &ErrFleetBaselineConflict{},
-		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -545,7 +567,8 @@ func TestFleetErrors_MessagesAndCauses(t *testing.T) {
 		{ErrFleetDeviceCannotAttest{DeviceID: 7, State: entities.DeviceStateQuarantined}, "container fleet attestor: device 7 is quarantined and may not attest containers"},
 		{ErrFleetBaselineUnavailable{DeviceID: 7, Reason: "none"}, "container fleet attestor: no golden PCR baseline for device 7: none"},
 		{ErrFleetBaselineUnavailable{DeviceID: 7, Reason: "none", Cause: cause}, "container fleet attestor: no golden PCR baseline for device 7: none: underlying"},
-		{ErrFleetBaselineConflict{DeviceID: 7, Index: 4}, "container fleet attestor: the request expects a value for PCR 4 that differs from device 7's golden baseline"},
+		{ErrFleetBaselineConflict{DeviceID: 7, Index: 4}, "container fleet attestor: the reference values admit a value for PCR 4 that differs from device 7's golden baseline"},
+		{ErrFleetBaselineDivergence{Divergence: orchestration.PCRDivergence{Index: 4}}, "container fleet attestor: quoted PCR 4 differs from the golden baseline"},
 		{ErrFleetHostDrift{DeviceID: 7, Index: 4}, "container fleet attestor: device 7 drifted from its golden baseline at PCR 4"},
 		{ErrFleetQuarantineFailed{DeviceID: 7, Cause: cause}, "container fleet attestor: device 7 could not be moved to quarantine: underlying"},
 		{ErrFleetPCRPolicyMismatch{DeviceID: 7, Index: 4, Cause: cause}, "container fleet attestor: device 7 PCR 4 does not match the value the request expects: underlying"},

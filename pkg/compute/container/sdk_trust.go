@@ -16,6 +16,7 @@ package container
 import (
 	"log/slog"
 
+	qrdbsdk "github.com/jeremyhahn/go-qrdb/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/orchestration"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 )
@@ -40,9 +41,12 @@ type TrustStack struct {
 // It fails when no container runtime binary is present or when the TPM is
 // nil: an attesting stack that silently degrades to no attestation while
 // advertising more is the failure mode deny-by-default exists to prevent.
-func NewTrustStack(tpm orchestration.HostTPM, logger *slog.Logger) (*TrustStack, error) {
+func NewTrustStack(tpm orchestration.HostTPM, appraiser orchestration.HostAppraiser, logger *slog.Logger) (*TrustStack, error) {
 	if tpm == nil {
 		return nil, ErrHostTPMRequired{}
+	}
+	if appraiser == nil {
+		return nil, ErrHostAppraiserRequired{}
 	}
 
 	runtime, err := orchestration.NewExecContainerRuntime(newSDKLogger(logger))
@@ -50,7 +54,7 @@ func NewTrustStack(tpm orchestration.HostTPM, logger *slog.Logger) (*TrustStack,
 		return nil, err
 	}
 
-	attesting, err := NewAttestingRuntime(runtime, tpm, logger)
+	attesting, err := NewAttestingRuntime(runtime, tpm, appraiser, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -65,12 +69,32 @@ func NewTrustStack(tpm orchestration.HostTPM, logger *slog.Logger) (*TrustStack,
 func NewAttestingRuntime(
 	base orchestration.ContainerRuntime,
 	tpm orchestration.HostTPM,
+	appraiser orchestration.HostAppraiser,
 	logger *slog.Logger,
 ) (*orchestration.TPMAttestingRuntime, error) {
 	if tpm == nil {
 		return nil, ErrHostTPMRequired{}
 	}
-	return orchestration.NewTPMAttestingRuntime(base, tpm, newSDKLogger(logger))
+	if appraiser == nil {
+		return nil, ErrHostAppraiserRequired{}
+	}
+	return orchestration.NewTPMAttestingRuntime(base, tpm, appraiser, newSDKLogger(logger))
+}
+
+// NewQRDBHostAppraiser returns the go-quicbaas Verifier over the qrdb attestation store.
+func NewQRDBHostAppraiser(client func() (*qrdbsdk.Client, error)) (orchestration.HostAppraiser, error) {
+	if client == nil {
+		return nil, ErrHostAppraiserRequired{}
+	}
+	return service.NewHostAppraiser(service.NewQRDBAttestationStore(client))
+}
+
+// ErrHostAppraiserRequired reports an attesting runtime built without a host appraiser.
+type ErrHostAppraiserRequired struct{}
+
+// Error implements the error interface.
+func (ErrHostAppraiserRequired) Error() string {
+	return "container attestation: a host appraiser (attestation store) is required"
 }
 
 // NewSDKContainerAttestor fills the go-quicbaas orchestration seam
@@ -81,8 +105,8 @@ func NewAttestingRuntime(
 // owns a real host TPM, so it can supply one: this returns the SDK's own
 // runtime-backed attestor bound to that TPM, rather than a second
 // implementation of the same interface.
-func NewSDKContainerAttestor(tpm orchestration.HostTPM, logger *slog.Logger) (service.ContainerAttestor, error) {
-	stack, err := NewTrustStack(tpm, logger)
+func NewSDKContainerAttestor(tpm orchestration.HostTPM, appraiser orchestration.HostAppraiser, logger *slog.Logger) (service.ContainerAttestor, error) {
+	stack, err := NewTrustStack(tpm, appraiser, logger)
 	if err != nil {
 		return nil, err
 	}

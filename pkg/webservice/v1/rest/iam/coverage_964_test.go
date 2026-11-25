@@ -84,72 +84,6 @@ func (c *cov964Users) Delete(_ context.Context, _, userID string) error {
 	return nil
 }
 
-// cov964Groups is an in-memory GroupClient keyed by group ID; members maps a
-// group ID to its member user IDs.
-type cov964Groups struct {
-	iamsdk.GroupClient
-	groups  map[string]*SDKGroup
-	members map[string][]string
-}
-
-func (c *cov964Groups) Create(_ context.Context, tenantID string, _ *SDKCreateGroupRequest) (*SDKGroup, error) {
-	g := &SDKGroup{ID: "group-new", TenantID: tenantID}
-	c.groups[g.ID] = g
-	return g, nil
-}
-
-func (c *cov964Groups) Get(_ context.Context, _, groupID string) (*SDKGroup, error) {
-	if g, ok := c.groups[groupID]; ok {
-		return g, nil
-	}
-	return nil, cov964NotFound{Kind: "group", ID: groupID}
-}
-
-func (c *cov964Groups) List(_ context.Context, _ string, _ *SDKListGroupsRequest) (*SDKListGroupsResponse, error) {
-	resp := &SDKListGroupsResponse{}
-	for _, g := range c.groups {
-		resp.Groups = append(resp.Groups, *g)
-	}
-	return resp, nil
-}
-
-func (c *cov964Groups) Update(ctx context.Context, tenantID, groupID string, _ *SDKUpdateGroupRequest) (*SDKGroup, error) {
-	return c.Get(ctx, tenantID, groupID)
-}
-
-func (c *cov964Groups) Delete(_ context.Context, _, groupID string) error {
-	if _, ok := c.groups[groupID]; !ok {
-		return cov964NotFound{Kind: "group", ID: groupID}
-	}
-	delete(c.groups, groupID)
-	return nil
-}
-
-func (c *cov964Groups) AddMember(_ context.Context, _, groupID, userID string) error {
-	if _, ok := c.groups[groupID]; !ok {
-		return cov964NotFound{Kind: "group", ID: groupID}
-	}
-	c.members[groupID] = append(c.members[groupID], userID)
-	return nil
-}
-
-func (c *cov964Groups) RemoveMember(_ context.Context, _, groupID, userID string) error {
-	kept := make([]string, 0, len(c.members[groupID]))
-	found := false
-	for _, m := range c.members[groupID] {
-		if m == userID {
-			found = true
-			continue
-		}
-		kept = append(kept, m)
-	}
-	if !found {
-		return cov964NotFound{Kind: "member", ID: userID}
-	}
-	c.members[groupID] = kept
-	return nil
-}
-
 // cov964Roles is an in-memory RoleClient keyed by role ID.
 type cov964Roles struct {
 	iamsdk.RoleClient
@@ -425,7 +359,6 @@ func (p *cov964PEP) Check(_ context.Context, req *iamsdk.CheckRequest) (*iamsdk.
 type cov964Client struct {
 	iamsdk.Client
 	users    *cov964Users
-	groups   *cov964Groups
 	roles    *cov964Roles
 	tenants  *cov964Tenants
 	policies *cov964Policies
@@ -433,7 +366,6 @@ type cov964Client struct {
 }
 
 func (c *cov964Client) User() iamsdk.UserClient     { return c.users }
-func (c *cov964Client) Group() iamsdk.GroupClient   { return c.groups }
 func (c *cov964Client) Role() iamsdk.RoleClient     { return c.roles }
 func (c *cov964Client) Tenant() iamsdk.TenantClient { return c.tenants }
 func (c *cov964Client) Policy() iamsdk.PolicyClient { return c.policies }
@@ -445,10 +377,6 @@ func cov964NewClient() *cov964Client {
 		users: &cov964Users{users: map[string]*iamsdk.User{
 			"user-1": {ID: "user-1", TenantID: "tenant-a", Email: "ada@example.com"},
 		}},
-		groups: &cov964Groups{
-			groups:  map[string]*SDKGroup{"group-1": {ID: "group-1", TenantID: "tenant-a", Name: "ops"}},
-			members: map[string][]string{},
-		},
 		roles: &cov964Roles{roles: map[string]*iamsdk.Role{
 			"role-1": {ID: "role-1", TenantID: "tenant-a", Name: "viewer"},
 		}},
@@ -521,30 +449,6 @@ func TestCov964Adapter_DelegatesUserGroupRoleApp(t *testing.T) {
 			kind: "user",
 			absent: func(a *QuicBaaSIAMAdapter) error {
 				_, err := a.UpdateUser(ctx, "tenant-a", "missing", &iamsdk.UpdateUserRequest{})
-				return err
-			},
-		},
-		{
-			name: "GetGroup",
-			call: func(a *QuicBaaSIAMAdapter, _ *cov964Client) (any, error) {
-				return a.GetGroup(ctx, "tenant-a", "group-1")
-			},
-			want: func(c *cov964Client) any { return c.groups.groups["group-1"] },
-			kind: "group",
-			absent: func(a *QuicBaaSIAMAdapter) error {
-				_, err := a.GetGroup(ctx, "tenant-a", "missing")
-				return err
-			},
-		},
-		{
-			name: "UpdateGroup",
-			call: func(a *QuicBaaSIAMAdapter, _ *cov964Client) (any, error) {
-				return a.UpdateGroup(ctx, "tenant-a", "group-1", &SDKUpdateGroupRequest{})
-			},
-			want: func(c *cov964Client) any { return c.groups.groups["group-1"] },
-			kind: "group",
-			absent: func(a *QuicBaaSIAMAdapter) error {
-				_, err := a.UpdateGroup(ctx, "tenant-a", "missing", &SDKUpdateGroupRequest{})
 				return err
 			},
 		},
@@ -625,20 +529,15 @@ func TestCov964Adapter_CreatesListsAndDeletes(t *testing.T) {
 	require.NoError(t, adapter.DeleteUser(ctx, "tenant-a", "user-1"))
 	cov964RequireNotFound(t, adapter.DeleteUser(ctx, "tenant-a", "user-1"), "user", "user-1")
 
-	group, err := adapter.CreateGroup(ctx, "tenant-a", &SDKCreateGroupRequest{})
-	require.NoError(t, err)
-	assert.Equal(t, "tenant-a", group.TenantID)
-	groups, err := adapter.ListGroups(ctx, "tenant-a", &SDKListGroupsRequest{})
-	require.NoError(t, err)
-	assert.Len(t, groups.Groups, 2)
-	require.NoError(t, adapter.AddGroupMember(ctx, "tenant-a", "group-1", "user-9"))
-	assert.Equal(t, []string{"user-9"}, client.groups.members["group-1"])
-	cov964RequireNotFound(t, adapter.AddGroupMember(ctx, "tenant-a", "missing", "user-9"), "group", "missing")
-	require.NoError(t, adapter.RemoveGroupMember(ctx, "tenant-a", "group-1", "user-9"))
-	assert.Empty(t, client.groups.members["group-1"])
-	cov964RequireNotFound(t, adapter.RemoveGroupMember(ctx, "tenant-a", "group-1", "user-9"), "member", "user-9")
-	require.NoError(t, adapter.DeleteGroup(ctx, "tenant-a", "group-1"))
-	cov964RequireNotFound(t, adapter.DeleteGroup(ctx, "tenant-a", "group-1"), "group", "group-1")
+	// QuicBaaS has no user groups: every group operation is refused.
+	var unsupported ErrGroupsNotSupported
+	_, err = adapter.CreateGroup(ctx, "tenant-a", &SDKCreateGroupRequest{})
+	require.ErrorAs(t, err, &unsupported)
+	_, err = adapter.ListGroups(ctx, "tenant-a", &SDKListGroupsRequest{})
+	require.ErrorAs(t, err, &unsupported)
+	require.ErrorAs(t, adapter.AddGroupMember(ctx, "tenant-a", "group-1", "user-9"), &unsupported)
+	require.ErrorAs(t, adapter.RemoveGroupMember(ctx, "tenant-a", "group-1", "user-9"), &unsupported)
+	require.ErrorAs(t, adapter.DeleteGroup(ctx, "tenant-a", "group-1"), &unsupported)
 
 	role, err := adapter.CreateRole(ctx, "tenant-a", &iamsdk.CreateRoleRequest{})
 	require.NoError(t, err)

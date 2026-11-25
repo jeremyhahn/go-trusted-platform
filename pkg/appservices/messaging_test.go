@@ -78,7 +78,8 @@ func (f *fakeMessagingClient) GetStats(context.Context) (*messaging.Stats, error
 	return &messaging.Stats{TotalChannels: 1}, nil
 }
 
-func (f *fakeMessagingClient) GetDedupStats(context.Context) (*messaging.DedupStats, error) {
+func (f *fakeMessagingClient) GetDedupStats(_ context.Context, channel string) (*messaging.DedupStats, error) {
+	f.name = channel
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -108,7 +109,7 @@ func messagingCalls(svc *MessagingService) map[string]error {
 	_, errs["list channels"] = svc.ListChannels(ctx)
 	errs["publish"] = svc.Publish(ctx, &messaging.PublishRequest{Channel: "events", Payload: []byte("hi")})
 	_, errs["stats"] = svc.Stats(ctx)
-	_, errs["dedup stats"] = svc.DedupStats(ctx)
+	_, errs["dedup stats"] = svc.DedupStats(ctx, "events")
 	_, errs["channel stats"] = svc.ChannelStats(ctx, "events")
 	return errs
 }
@@ -190,6 +191,21 @@ func TestMessagingService_NamedCallsRefuseEmptyName(t *testing.T) {
 	_, err = svc.ChannelStats(ctx, "")
 	assertInvalid(t, err, "channel")
 	assert.Empty(t, client.name, "an empty name must not reach the SDK")
+}
+
+func TestMessagingService_DedupStatsNeedsAndForwardsChannel(t *testing.T) {
+	client := &fakeMessagingClient{}
+	svc := messagingServiceWith(client)
+	ctx := context.Background()
+
+	_, err := svc.DedupStats(ctx, "")
+	assertInvalid(t, err, "channel")
+	assert.Empty(t, client.name, "an empty channel must not reach the SDK")
+
+	stats, err := svc.DedupStats(ctx, "ch1")
+	require.NoError(t, err)
+	assert.NotNil(t, stats)
+	assert.Equal(t, "ch1", client.name)
 }
 
 func TestMessagingService_PublishRefusesInvalidRequest(t *testing.T) {

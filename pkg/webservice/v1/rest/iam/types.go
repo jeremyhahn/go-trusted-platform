@@ -59,7 +59,6 @@ type CreateUserRequest struct {
 	Email      string            `json:"email"`
 	Name       string            `json:"name,omitempty"`
 	Roles      []string          `json:"roles,omitempty"`
-	Groups     []string          `json:"groups,omitempty"`
 	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
@@ -70,7 +69,6 @@ type UpdateUserRequest struct {
 	Email      string            `json:"email,omitempty"`
 	Name       string            `json:"name,omitempty"`
 	Roles      []string          `json:"roles,omitempty"`
-	Groups     []string          `json:"groups,omitempty"`
 	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
@@ -81,7 +79,6 @@ type UserResponse struct {
 	Email       string            `json:"email"`
 	Name        string            `json:"name,omitempty"`
 	Roles       []string          `json:"roles,omitempty"`
-	Groups      []string          `json:"groups,omitempty"`
 	Attributes  map[string]string `json:"attributes,omitempty"`
 	MFAVerified bool              `json:"mfa_verified"`
 	CreatedAt   *time.Time        `json:"created_at,omitempty"`

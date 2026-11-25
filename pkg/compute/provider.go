@@ -18,6 +18,7 @@ import (
 	"sort"
 	"sync"
 
+	qrdbsdk "github.com/jeremyhahn/go-qrdb/sdk/go"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
@@ -97,6 +98,11 @@ type Deps struct {
 	// container attestation is disabled. Cloud providers ignore it (guest
 	// attestation uses the instance's own NitroTPM/vTPM).
 	HostTPM xkmssdk.TrustedPlatformModule
+
+	// QRDBClient resolves the platform qrdb client whose attestation store
+	// holds the named reference values container attestation is appraised
+	// against. Optional; when nil, a host with a TPM refuses launches.
+	QRDBClient func() (*qrdbsdk.Client, error)
 
 	// VTPMGenerator is the profile-aware vTPM facade used by the local QEMU
 	// orchestrator to source a VM's swtpm from a profile-bound, CA-issued-EK
