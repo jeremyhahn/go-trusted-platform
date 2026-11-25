@@ -243,6 +243,26 @@ func (n *LinuxIsolatedNetwork) tuneNetworkForNAT() error {
 	return nil
 }
 
+// selectIptables picks the iptables front end: iptables-legacy only when the
+// binary is found and its tables load (kernels without legacy ip_tables
+// support fail every legacy rule), else iptables.
+func selectIptables(lookPath func(string) (string, error), usable func(string) bool) string {
+	if _, err := lookPath("iptables-legacy"); err == nil && usable("iptables-legacy") {
+		return "iptables-legacy"
+	}
+	return "iptables"
+}
+
+// iptablesUsable reports whether cmd can list the filter FORWARD chain.
+func iptablesUsable(cmd string) bool {
+	return exec.Command(cmd, "-w", "-L", "FORWARD", "-n").Run() == nil
+}
+
+// iptablesCommand returns the iptables front end setupNAT and Cleanup share.
+func iptablesCommand() string {
+	return selectIptables(exec.LookPath, iptablesUsable)
+}
+
 // setupNAT configures iptables rules for NAT and forwarding
 // Uses iptables-legacy directly to avoid conflicts with iptables-nft
 func (n *LinuxIsolatedNetwork) setupNAT() error {
@@ -250,10 +270,7 @@ func (n *LinuxIsolatedNetwork) setupNAT() error {
 	bridge := n.config.BridgeName
 
 	// Detect which iptables to use - prefer legacy if available since Docker uses it
-	iptablesCmd := "iptables-legacy"
-	if _, err := exec.LookPath("iptables-legacy"); err != nil {
-		iptablesCmd = "iptables"
-	}
+	iptablesCmd := iptablesCommand()
 
 	fmt.Printf("[Network] Setting up NAT rules for subnet %s, bridge %s (using %s)\n", subnet, bridge, iptablesCmd)
 
@@ -403,10 +420,7 @@ func (n *LinuxIsolatedNetwork) Cleanup() error {
 	var lastErr error
 
 	// Detect which iptables to use - must match setupNAT
-	iptablesCmd := "iptables-legacy"
-	if _, err := exec.LookPath("iptables-legacy"); err != nil {
-		iptablesCmd = "iptables"
-	}
+	iptablesCmd := iptablesCommand()
 
 	// Remove NAT rules using exec.Command for consistency with setupNAT
 	subnet := n.config.Subnet.String()
@@ -553,10 +567,7 @@ func CleanupStaleResources(cfg *NetworkConfig) {
 	}
 
 	// Detect which iptables to use - prefer legacy if available since Docker uses it
-	iptablesCmd := "iptables-legacy"
-	if _, err := exec.LookPath("iptables-legacy"); err != nil {
-		iptablesCmd = "iptables"
-	}
+	iptablesCmd := iptablesCommand()
 
 	// Clean up iptables rules using direct commands for consistency
 	// This ensures we clean up rules in the same tables we add them to

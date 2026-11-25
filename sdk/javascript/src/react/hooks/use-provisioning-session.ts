@@ -39,11 +39,24 @@ export interface UseProvisioningSessionResult {
 }
 
 /**
+ * Options for the useProvisioningSessions hook
+ */
+export interface UseProvisioningSessionsOptions {
+  /**
+   * When false, no session list request is sent.
+   * @default true
+   */
+  enabled?: boolean;
+}
+
+/**
  * Hook for provisioning session management
  *
  * Provides access to all provisioning sessions with automatic data fetching
  * and a mutation for fulfilling pending sessions by assigning a profile.
  *
+ * @param options - Hook options; `enabled: false` sends no session list
+ *   request (and makes `refetch` a no-op) until it turns true
  * @returns Object with session list, query state, and mutation helpers
  *
  * @example
@@ -75,13 +88,16 @@ export interface UseProvisioningSessionResult {
  * }
  * ```
  */
-export function useProvisioningSessions(): UseProvisioningSessionResult {
+export function useProvisioningSessions(
+  options: UseProvisioningSessionsOptions = {}
+): UseProvisioningSessionResult {
   const client = usePlatformClient();
   const service = client.device;
 
   const listResult: UseApiResult<ProvisioningSession[]> = useApi<ProvisioningSession[]>(
     () => service.listProvisioningSessions(),
-    []
+    [],
+    { enabled: options.enabled ?? true }
   );
 
   const fulfill = useMutation(
