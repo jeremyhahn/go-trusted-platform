@@ -2055,25 +2055,35 @@ jobs:
             *@sha256:*) digest=${IT_IMAGE_REF##*@sha256:} ;;
             *) digest=$(printf '%s' "$IT_IMAGE_REF" | sha256sum | cut -d' ' -f1) ;;
           esac
-          image_lock "go-trusted-platform-ci-pull-${digest:0:12}" 3600 || exit 1
-          if docker image inspect "$IT_IMAGE_REF" >/dev/null 2>&1; then
-            echo "$IT_IMAGE_REF is already on this runner's daemon; not pulling it again"
-          else
-            for delay in 5 15 ''; do
-              if (set -o pipefail; DOCKER_CONFIG=$registry_config timeout 900 docker pull "$IT_IMAGE_REF" 2>&1 | tee "$pull_log"); then
-                break
-              fi
-              if [ -z "$delay" ] || ! grep -Eq 'lease does not exist|failed to extract layer|failed to commit snapshot|failed to cleanup extract' "$pull_log"; then
-                echo "::warning::pulling $IT_IMAGE_REF from the LAN registry failed; building this leg's image"
-                image_unlock
-                exit 0
-              fi
-              echo "pulling $IT_IMAGE_REF hit a transient containerd error; retrying in $delay s"
-              sleep "$delay"
-            done
-          fi
-          image_unlock
+          # The reaper removes old, unleased registry references under the
+          # global image lock (#2386), so a cached reference is checked and
+          # re-tagged under that lock too; one the reaper took goes back to the
+          # pull path, at most twice.
           image_lock go-trusted-platform-ci-image-lock 600 || exit 1
+          tries=0
+          while ! docker image inspect "$IT_IMAGE_REF" >/dev/null 2>&1 && [ "$tries" -lt 2 ]; do
+            image_unlock
+            tries=$((tries + 1))
+            image_lock "go-trusted-platform-ci-pull-${digest:0:12}" 3600 || exit 1
+            if docker image inspect "$IT_IMAGE_REF" >/dev/null 2>&1; then
+              echo "$IT_IMAGE_REF is already on this runner's daemon; not pulling it again"
+            else
+              for delay in 5 15 ''; do
+                if (set -o pipefail; DOCKER_CONFIG=$registry_config timeout 900 docker pull "$IT_IMAGE_REF" 2>&1 | tee "$pull_log"); then
+                  break
+                fi
+                if [ -z "$delay" ] || ! grep -Eq 'lease does not exist|failed to extract layer|failed to commit snapshot|failed to cleanup extract' "$pull_log"; then
+                  echo "::warning::pulling $IT_IMAGE_REF from the LAN registry failed; building this leg's image"
+                  image_unlock
+                  exit 0
+                fi
+                echo "pulling $IT_IMAGE_REF hit a transient containerd error; retrying in $delay s"
+                sleep "$delay"
+              done
+            fi
+            image_unlock
+            image_lock go-trusted-platform-ci-image-lock 600 || exit 1
+          done
           if ! docker tag "$IT_IMAGE_REF" "$IT_IMAGE"; then
             echo "::warning::re-tagging $IT_IMAGE_REF as $IT_IMAGE failed; building this leg's image"
             image_unlock

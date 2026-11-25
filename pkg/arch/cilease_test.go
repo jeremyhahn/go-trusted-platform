@@ -902,7 +902,10 @@ func registryCredentialFindings(jobs map[string]ciShellJob) []error {
 			if strings.Contains(step.Run, "docker login") {
 				errs = append(errs, fmt.Errorf("%s / %q runs docker login, which can store the registry password in the runner's native credential helper; write the auths entry into the step's own config.json", id, step.Name))
 			}
-			if !strings.Contains(step.Run, "docker login") && !strings.Contains(step.Run, registryConfigUse) {
+			// A bounded command (`timeout 900 docker pull`, #2386) is still a
+			// registry step: normalize it before picking the steps to check.
+			normalized := regexp.MustCompile(`\btimeout \d+ docker `).ReplaceAllString(step.Run, "docker ")
+			if !strings.Contains(step.Run, "docker login") && !strings.Contains(normalized, registryConfigUse) {
 				continue
 			}
 			if !strings.Contains(step.Run, `"auths`) || !strings.Contains(step.Run, "umask 077") || !strings.Contains(step.Run, "base64") {
