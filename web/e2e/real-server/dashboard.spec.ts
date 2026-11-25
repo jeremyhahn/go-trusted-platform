@@ -21,16 +21,22 @@ import { unwrapPayload, wireCount } from './fixtures/wire';
  *     values (45.2 %, ...): replaced by the values the server returns.
  */
 
-/** Waits for the page's own GET whose path matches, and returns its JSON. */
-function apiResponse(page: Page, path: RegExp): Promise<Response> {
-  return page.waitForResponse(
-    (r) => r.request().method() === 'GET' && path.test(new URL(r.url()).pathname),
-  );
-}
-
 async function json<T>(r: Response): Promise<T> {
   expect(r.ok(), `${r.url()} answered ${r.status()}`).toBeTruthy();
   return unwrapPayload<T>(await r.json());
+}
+
+/** Waits for the page's own GET whose path matches and returns its JSON, read as the response arrives. */
+async function apiBody<T>(page: Page, path: RegExp): Promise<T> {
+  let body: Promise<T> | undefined;
+  await page.waitForResponse((r) => {
+    if (r.request().method() !== 'GET' || !path.test(new URL(r.url()).pathname)) return false;
+    body = json<T>(r);
+    body.catch(() => undefined);
+    return true;
+  });
+  if (body === undefined) throw new Error(`no GET response matched ${path}`);
+  return body;
 }
 
 /** A protojson double: a JSON number, or a string for NaN and the infinities. */
@@ -148,16 +154,17 @@ test.describe('Dashboard Overview', () => {
     });
     expect(issued.success, JSON.stringify(issued.error)).toBeTruthy();
 
-    const usersRes = apiResponse(adminPage, /\/api\/v1\/iam\/tenants\/[^/]+\/users$/);
-    const certsRes = apiResponse(adminPage, /\/api\/v1\/ca\/certificates$/);
-    await adminPage.goto('/dashboard');
-
     // protojson: int64/uint64 counts arrive as decimal strings.
     type WireCount = number | string;
-    const users = await json<{ total?: WireCount; pagination?: { totalItems?: WireCount } }>(
-      await usersRes,
+    const usersBody = apiBody<{ total?: WireCount; pagination?: { totalItems?: WireCount } }>(
+      adminPage,
+      /\/api\/v1\/iam\/tenants\/[^/]+\/users$/,
     );
-    const certs = await json<{ pagination?: { totalItems?: WireCount } }>(await certsRes);
+    const certsBody = apiBody<{ pagination?: { totalItems?: WireCount } }>(adminPage, /\/api\/v1\/ca\/certificates$/);
+    await adminPage.goto('/dashboard');
+
+    const users = await usersBody;
+    const certs = await certsBody;
     const userTotal = wireCount(users.pagination?.totalItems ?? users.total);
     const certTotal = wireCount(certs.pagination?.totalItems);
     // The seeded admin and the certificate issued above.
@@ -175,17 +182,17 @@ test.describe('Dashboard Overview', () => {
   });
 
   test('platform health shows what /platform/health returns', async ({ adminPage }) => {
-    const healthRes = apiResponse(adminPage, /\/api\/v1\/platform\/health$/);
+    const healthBody = apiBody<{ health: { healthy: boolean } }>(adminPage, /\/api\/v1\/platform\/health$/);
     await adminPage.goto('/dashboard');
-    const { health } = await json<{ health: { healthy: boolean } }>(await healthRes);
+    const { health } = await healthBody;
     await expect(adminPage.getByText('Platform Health')).toBeVisible();
     await expect(adminPage.getByText(health.healthy ? 'Healthy' : 'Degraded').first()).toBeVisible();
   });
 
   test('tenant card shows the tenant the server returns', async ({ adminPage }) => {
-    const tenantRes = apiResponse(adminPage, /\/api\/v1\/tenants\/[^/]+$/);
+    const tenantBody = apiBody<{ tenant: { name: string; state: string } }>(adminPage, /\/api\/v1\/tenants\/[^/]+$/);
     await adminPage.goto('/dashboard');
-    const body = await json<{ tenant: { name: string; state: string } }>(await tenantRes);
+    const body = await tenantBody;
     await expect(adminPage.getByText('Tenant Information')).toBeVisible();
     await expect(adminPage.getByText(body.tenant.name).first()).toBeVisible();
     await expect(adminPage.getByText(body.tenant.state, { exact: true })).toBeVisible();
@@ -221,9 +228,9 @@ test.describe('Dashboard Overview', () => {
       body.catch(() => undefined);
       bodies.push(body);
     });
-    const firstRes = apiResponse(adminPage, metricsPath);
+    const firstBody = apiBody<Metrics>(adminPage, metricsPath);
     await adminPage.goto('/dashboard');
-    await firstRes;
+    await firstBody;
     await expect(adminPage.getByText('System Health')).toBeVisible();
     // Each gauge shows its percentage (missing means 0) as toFixed(1) with %, bar at min(value, 100)% wide.
     // Live CPU changes between polls, so check against the latest response at each retry.
@@ -248,9 +255,9 @@ test.describe('Dashboard Overview', () => {
   test('refresh asks the server again', async ({ adminPage }) => {
     await adminPage.goto('/dashboard');
     await expect(adminPage.getByText('Platform Health')).toBeVisible();
-    const again = apiResponse(adminPage, /\/api\/v1\/platform\/health$/);
+    const again = apiBody<{ health: { healthy: boolean } }>(adminPage, /\/api\/v1\/platform\/health$/);
     await adminPage.getByRole('button', { name: /refresh/i }).click();
-    expect((await again).ok()).toBeTruthy();
+    expect((await again).health).toBeDefined();
   });
 });
 
