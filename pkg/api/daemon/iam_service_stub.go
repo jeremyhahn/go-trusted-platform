@@ -68,11 +68,6 @@ func (s *IAMService) User() quicbaassdk.IAMUserClient {
 	return nil
 }
 
-// Group returns nil when IAM support is not enabled.
-func (s *IAMService) Group() quicbaassdk.IAMGroupClient {
-	return nil
-}
-
 // Role returns nil when IAM support is not enabled.
 func (s *IAMService) Role() quicbaassdk.IAMRoleClient {
 	return nil

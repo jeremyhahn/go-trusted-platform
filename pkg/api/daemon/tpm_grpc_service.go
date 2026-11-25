@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -678,6 +679,10 @@ func (s *TPMGRPCService) Seal(
 		slog.String("pcr_bank", req.GetPcrBank().String()))
 
 	opts, err := buildSealOptions(tpm, req.GetCn(), req.GetPassword(), req.GetPcrIndices(), req.GetPcrBank())
+	var pcrErr ErrTPMPCRSealNotSupported
+	if errors.As(err, &pcrErr) {
+		return nil, pcrErr
+	}
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "build seal options: "+err.Error())
 	}
@@ -746,29 +751,7 @@ func buildSealOptions(tpm quicbaassdk.TrustedPlatformModule, cn, password string
 	}
 
 	if len(pcrIndices) > 0 {
-		hashAlg := pcrBankToTPMAlg(bank)
-		pcrUints := make([]uint, len(pcrIndices))
-		for i, p := range pcrIndices {
-			pcrUints[i] = uint(p)
-		}
-		opts.TPMPolicy = &quicbaassdk.TPMSealPolicy{
-			PCRSelection: tpmgo.TPMLPCRSelection{
-				PCRSelections: []tpmgo.TPMSPCRSelection{
-					{
-						Hash:      hashAlg,
-						PCRSelect: tpmgo.PCClientCompatible.PCRs(pcrUints...),
-					},
-				},
-			},
-			HashAlg: hashAlg,
-		}
-		if password != "" {
-			held, err := quicbaassdk.NewPassword([]byte(password))
-			if err != nil {
-				return nil, &WrappedError{Msg: "hold the sealing policy password", Err: err}
-			}
-			opts.Password = held
-		}
+		return nil, ErrTPMPCRSealNotSupported{Bank: bank.String()}
 	}
 
 	return opts, nil

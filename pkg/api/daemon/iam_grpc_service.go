@@ -216,7 +216,6 @@ func (s *IAMGRPCService) CreateUser(ctx context.Context, req *platformv1.CreateI
 		Email:       req.GetEmail(),
 		DisplayName: req.GetName(),
 		Roles:       roleIDs,
-		Groups:      req.GetGroups(),
 		Metadata:    req.GetAttributes(),
 	}
 
@@ -296,7 +295,6 @@ func (s *IAMGRPCService) ListUsers(ctx context.Context, req *platformv1.ListIAMU
 	sdkReq := &sdkiam.ListUsersRequest{
 		PageSize: int(limit),
 		RoleID:   req.GetRoleFilter(),
-		GroupID:  req.GetGroupFilter(),
 		Filter:   req.GetEmailFilter(),
 	}
 
@@ -721,291 +719,39 @@ func (s *IAMGRPCService) RevokeRole(ctx context.Context, req *platformv1.RevokeI
 // Group Operations
 // =============================================================================
 
-// CreateGroup creates a new group in the IAM system.
-//
-// Groups provide logical organization of users and can be used in policy
-// conditions for group-based access control.
-//
-// Required fields: tenant_id, id or name
-// Optional fields: description
-func (s *IAMGRPCService) CreateGroup(ctx context.Context, req *platformv1.CreateIAMGroupRequest) (*platformv1.IAMGroupResponse, error) {
-	if s.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
-
-	if req.GetTenantId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
-	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
-		return nil, err
-	}
-	if req.GetId() == "" && req.GetName() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "id or name"}.Error())
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
-	defer cancel()
-
-	sdkReq := &sdkiam.CreateGroupRequest{
-		ID:          req.GetId(),
-		Name:        req.GetName(),
-		Description: req.GetDescription(),
-	}
-
-	resp, err := s.iamClient.Group().Create(ctx, req.GetTenantId(), sdkReq)
-	if err != nil {
-		s.logger.Error("failed to create group", "error", err, "tenant_id", req.GetTenantId())
-		return nil, s.wrapError(err)
-	}
-
-	return &platformv1.IAMGroupResponse{
-		Group:     restiam.GroupToProto(resp),
-		Timestamp: timestamppb.Now(),
-	}, nil
+// CreateGroup is refused: the IAM backend has no user groups.
+func (s *IAMGRPCService) CreateGroup(_ context.Context, _ *platformv1.CreateIAMGroupRequest) (*platformv1.IAMGroupResponse, error) {
+	return nil, ErrIAMGroupsNotSupported{Operation: "CreateGroup"}
 }
 
-// GetGroup retrieves a group by ID.
-//
-// Returns the group details including name, description, and member list.
-// Returns NotFound if the group does not exist in the specified tenant.
-//
-// Required fields: tenant_id, group_id
-func (s *IAMGRPCService) GetGroup(ctx context.Context, req *platformv1.GetIAMGroupRequest) (*platformv1.IAMGroupResponse, error) {
-	if s.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
-
-	if req.GetTenantId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
-	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
-		return nil, err
-	}
-	if req.GetGroupId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "group_id"}.Error())
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
-	defer cancel()
-
-	resp, err := s.iamClient.Group().Get(ctx, req.GetTenantId(), req.GetGroupId())
-	if err != nil {
-		s.logger.Error("failed to get group", "error", err, "tenant_id", req.GetTenantId(), "group_id", req.GetGroupId())
-		return nil, s.wrapError(err)
-	}
-
-	return &platformv1.IAMGroupResponse{
-		Group:     restiam.GroupToProto(resp),
-		Timestamp: timestamppb.Now(),
-	}, nil
+// GetGroup is refused: the IAM backend has no user groups.
+func (s *IAMGRPCService) GetGroup(_ context.Context, _ *platformv1.GetIAMGroupRequest) (*platformv1.IAMGroupResponse, error) {
+	return nil, ErrIAMGroupsNotSupported{Operation: "GetGroup"}
 }
 
-// ListGroups returns a paginated list of groups.
-//
-// Required fields: tenant_id
-// Optional fields: pagination
-func (s *IAMGRPCService) ListGroups(ctx context.Context, req *platformv1.ListIAMGroupsRequest) (*platformv1.ListIAMGroupsResponse, error) {
-	if s.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
-
-	if req.GetTenantId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
-	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
-		return nil, err
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
-	defer cancel()
-
-	limit, offset := s.getPagination(req.GetPagination())
-
-	sdkReq := &sdkiam.ListGroupsRequest{
-		PageSize: int(limit),
-	}
-
-	resp, err := s.iamClient.Group().List(ctx, req.GetTenantId(), sdkReq)
-	if err != nil {
-		s.logger.Error("failed to list groups", "error", err, "tenant_id", req.GetTenantId())
-		return nil, s.wrapError(err)
-	}
-
-	groups := make([]*platformv1.IAMGroup, 0, len(resp.Groups))
-	for i := range resp.Groups {
-		groups = append(groups, restiam.GroupToProto(&resp.Groups[i]))
-	}
-
-	totalCount := int64(resp.Pagination.TotalCount)
-
-	return &platformv1.ListIAMGroupsResponse{
-		Groups:     groups,
-		Pagination: restiam.ListPagination(limit, offset, totalCount),
-		Total:      totalCount,
-		Timestamp:  timestamppb.Now(),
-	}, nil
+// ListGroups is refused: the IAM backend has no user groups.
+func (s *IAMGRPCService) ListGroups(_ context.Context, _ *platformv1.ListIAMGroupsRequest) (*platformv1.ListIAMGroupsResponse, error) {
+	return nil, ErrIAMGroupsNotSupported{Operation: "ListGroups"}
 }
 
-// UpdateGroup updates an existing group.
-//
-// Required fields: tenant_id, group_id
-// Optional fields: name, description
-func (s *IAMGRPCService) UpdateGroup(ctx context.Context, req *platformv1.UpdateIAMGroupRequest) (*platformv1.IAMGroupResponse, error) {
-	if s.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
-
-	if req.GetTenantId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
-	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
-		return nil, err
-	}
-	if req.GetGroupId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "group_id"}.Error())
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
-	defer cancel()
-
-	sdkReq := &sdkiam.UpdateGroupRequest{
-		Name:        req.GetName(),
-		Description: req.GetDescription(),
-	}
-
-	resp, err := s.iamClient.Group().Update(ctx, req.GetTenantId(), req.GetGroupId(), sdkReq)
-	if err != nil {
-		s.logger.Error("failed to update group", "error", err, "tenant_id", req.GetTenantId(), "group_id", req.GetGroupId())
-		return nil, s.wrapError(err)
-	}
-
-	return &platformv1.IAMGroupResponse{
-		Group:     restiam.GroupToProto(resp),
-		Timestamp: timestamppb.Now(),
-	}, nil
+// UpdateGroup is refused: the IAM backend has no user groups.
+func (s *IAMGRPCService) UpdateGroup(_ context.Context, _ *platformv1.UpdateIAMGroupRequest) (*platformv1.IAMGroupResponse, error) {
+	return nil, ErrIAMGroupsNotSupported{Operation: "UpdateGroup"}
 }
 
-// DeleteGroup deletes a group.
-//
-// This operation is irreversible. All users will be removed from the group
-// as part of the deletion.
-//
-// Required fields: tenant_id, group_id
-func (s *IAMGRPCService) DeleteGroup(ctx context.Context, req *platformv1.DeleteIAMGroupRequest) (*platformv1.DeleteIAMGroupResponse, error) {
-	if s.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
-
-	if req.GetTenantId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
-	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
-		return nil, err
-	}
-	if req.GetGroupId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "group_id"}.Error())
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
-	defer cancel()
-
-	err := s.iamClient.Group().Delete(ctx, req.GetTenantId(), req.GetGroupId())
-	if err != nil {
-		s.logger.Error("failed to delete group", "error", err, "tenant_id", req.GetTenantId(), "group_id", req.GetGroupId())
-		return nil, s.wrapError(err)
-	}
-
-	return &platformv1.DeleteIAMGroupResponse{
-		Status: &platformv1.Status{
-			Success: true,
-			Message: "group deleted successfully",
-		},
-		Timestamp: timestamppb.Now(),
-	}, nil
+// DeleteGroup is refused: the IAM backend has no user groups.
+func (s *IAMGRPCService) DeleteGroup(_ context.Context, _ *platformv1.DeleteIAMGroupRequest) (*platformv1.DeleteIAMGroupResponse, error) {
+	return nil, ErrIAMGroupsNotSupported{Operation: "DeleteGroup"}
 }
 
-// AddGroupMember adds a member to a group.
-//
-// The user immediately becomes a member of the group and policies referencing
-// this group will apply to them.
-//
-// Required fields: tenant_id, group_id, user_id
-func (s *IAMGRPCService) AddGroupMember(ctx context.Context, req *platformv1.AddGroupMemberRequest) (*platformv1.AddGroupMemberResponse, error) {
-	if s.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
-
-	if req.GetTenantId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
-	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
-		return nil, err
-	}
-	if req.GetGroupId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "group_id"}.Error())
-	}
-	if req.GetUserId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "user_id"}.Error())
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
-	defer cancel()
-
-	err := s.iamClient.Group().AddMember(ctx, req.GetTenantId(), req.GetGroupId(), req.GetUserId())
-	if err != nil {
-		s.logger.Error("failed to add group member", "error", err, "tenant_id", req.GetTenantId(), "group_id", req.GetGroupId(), "user_id", req.GetUserId())
-		return nil, s.wrapError(err)
-	}
-
-	return &platformv1.AddGroupMemberResponse{
-		Status: &platformv1.Status{
-			Success: true,
-			Message: "member added successfully",
-		},
-		Timestamp: timestamppb.Now(),
-	}, nil
+// AddGroupMember is refused: the IAM backend has no user groups.
+func (s *IAMGRPCService) AddGroupMember(_ context.Context, _ *platformv1.AddGroupMemberRequest) (*platformv1.AddGroupMemberResponse, error) {
+	return nil, ErrIAMGroupsNotSupported{Operation: "AddGroupMember"}
 }
 
-// RemoveGroupMember removes a member from a group.
-//
-// The user immediately loses group membership and policies referencing this
-// group will no longer apply to them.
-//
-// Required fields: tenant_id, group_id, user_id
-func (s *IAMGRPCService) RemoveGroupMember(ctx context.Context, req *platformv1.RemoveGroupMemberRequest) (*platformv1.RemoveGroupMemberResponse, error) {
-	if s.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
-
-	if req.GetTenantId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
-	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
-		return nil, err
-	}
-	if req.GetGroupId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "group_id"}.Error())
-	}
-	if req.GetUserId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "user_id"}.Error())
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
-	defer cancel()
-
-	err := s.iamClient.Group().RemoveMember(ctx, req.GetTenantId(), req.GetGroupId(), req.GetUserId())
-	if err != nil {
-		s.logger.Error("failed to remove group member", "error", err, "tenant_id", req.GetTenantId(), "group_id", req.GetGroupId(), "user_id", req.GetUserId())
-		return nil, s.wrapError(err)
-	}
-
-	return &platformv1.RemoveGroupMemberResponse{
-		Status: &platformv1.Status{
-			Success: true,
-			Message: "member removed successfully",
-		},
-		Timestamp: timestamppb.Now(),
-	}, nil
+// RemoveGroupMember is refused: the IAM backend has no user groups.
+func (s *IAMGRPCService) RemoveGroupMember(_ context.Context, _ *platformv1.RemoveGroupMemberRequest) (*platformv1.RemoveGroupMemberResponse, error) {
+	return nil, ErrIAMGroupsNotSupported{Operation: "RemoveGroupMember"}
 }
 
 // =============================================================================

@@ -1165,6 +1165,34 @@ func (e ErrIAMAuthenticationViaOIDC) GRPCStatus() *status.Status {
 	return status.New(codes.Unimplemented, e.Error())
 }
 
+// ErrIAMGroupsNotSupported refuses user-group operations: the IAM backend has no user groups.
+type ErrIAMGroupsNotSupported struct {
+	Operation string
+}
+
+func (e ErrIAMGroupsNotSupported) Error() string {
+	return fmt.Sprintf("IAM %s is not supported: user groups were removed, tenants are the isolation boundary", e.Operation)
+}
+
+// GRPCStatus classifies the refusal as Unimplemented.
+func (e ErrIAMGroupsNotSupported) GRPCStatus() *status.Status {
+	return status.New(codes.Unimplemented, e.Error())
+}
+
+// ErrTPMPCRSealNotSupported refuses an ad-hoc PCR-bound seal: the bumped xkms binds PCRs only through named TPM policies.
+type ErrTPMPCRSealNotSupported struct {
+	Bank string
+}
+
+func (e ErrTPMPCRSealNotSupported) Error() string {
+	return fmt.Sprintf("TPM seal to an ad-hoc PCR selection (bank %s) is not supported: bind the object to a named TPM policy", e.Bank)
+}
+
+// GRPCStatus classifies the refusal as Unimplemented.
+func (e ErrTPMPCRSealNotSupported) GRPCStatus() *status.Status {
+	return status.New(codes.Unimplemented, e.Error())
+}
+
 // ErrIAMPermissionDenied is returned when a permission check fails
 type ErrIAMPermissionDenied struct {
 	Subject  string
