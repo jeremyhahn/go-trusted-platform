@@ -15,6 +15,22 @@ import { DataTableRowActions } from '@/components/ui/data-table-row-actions';
 import { Avatar } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { formatDistanceToNow } from 'date-fns';
+import type { CapabilityAnswer } from '@/hooks/use-capabilities';
+
+/** The server's answers for the table's write ops; an absent gate offers the control. */
+export interface UserTableGates {
+  edit?: CapabilityAnswer;
+  disable?: CapabilityAnswer;
+  remove?: CapabilityAnswer;
+}
+
+/** The disabled/title pair of a control that follows `gate`. */
+function gateProps(gate?: CapabilityAnswer) {
+  return {
+    disabled: gate ? !gate.enabled : undefined,
+    title: gate && !gate.enabled ? gate.reason : undefined,
+  };
+}
 
 interface UserTableProps {
   users: LegacyUser[];
@@ -24,6 +40,7 @@ interface UserTableProps {
   onDisable?: (user: LegacyUser) => void;
   onDelete?: (user: LegacyUser) => void;
   onBulkDelete?: (users: LegacyUser[]) => void;
+  gates?: UserTableGates;
 }
 
 // Status badge mapping
@@ -40,7 +57,8 @@ export function createUserColumns(
   onView?: (user: LegacyUser) => void,
   onEdit?: (user: LegacyUser) => void,
   onDisable?: (user: LegacyUser) => void,
-  onDelete?: (user: LegacyUser) => void
+  onDelete?: (user: LegacyUser) => void,
+  gates: UserTableGates = {}
 ): ColumnDef<LegacyUser>[] {
   return [
     createSelectColumn<LegacyUser>(),
@@ -156,6 +174,7 @@ export function createUserColumns(
           actions.push({
             label: 'Edit',
             onClick: () => onEdit(user),
+            ...gateProps(gates.edit),
           });
         }
 
@@ -164,6 +183,7 @@ export function createUserColumns(
             label: 'Disable',
             onClick: () => onDisable(user),
             separator: true,
+            ...gateProps(gates.disable),
           });
         }
 
@@ -172,6 +192,7 @@ export function createUserColumns(
             label: 'Enable',
             onClick: () => onDisable(user),
             separator: true,
+            ...gateProps(gates.disable),
           });
         }
 
@@ -181,6 +202,7 @@ export function createUserColumns(
             onClick: () => onDelete(user),
             variant: 'destructive' as const,
             separator: actions.length > 0,
+            ...gateProps(gates.remove),
           });
         }
 
@@ -201,10 +223,11 @@ export function UserTable({
   onDisable,
   onDelete,
   onBulkDelete,
+  gates,
 }: UserTableProps) {
   const columns = React.useMemo(
-    () => createUserColumns(onView, onEdit, onDisable, onDelete),
-    [onView, onEdit, onDisable, onDelete]
+    () => createUserColumns(onView, onEdit, onDisable, onDelete, gates),
+    [onView, onEdit, onDisable, onDelete, gates]
   );
 
   const bulkActions = React.useMemo(() => {
@@ -214,10 +237,11 @@ export function UserTable({
         label: 'Delete selected',
         onClick: onBulkDelete,
         variant: 'destructive' as const,
+        ...gateProps(gates?.remove),
       });
     }
     return actions;
-  }, [onBulkDelete]);
+  }, [onBulkDelete, gates]);
 
   return (
     <DataTable

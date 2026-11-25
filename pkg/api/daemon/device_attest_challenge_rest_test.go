@@ -103,6 +103,17 @@ func TestRESTDeviceAttest_Challenge_RoundTrip(t *testing.T) {
 		assert.Equal(t, http.StatusForbidden, code, body)
 	})
 
+	t.Run("an unknown device is 404 and gets no challenge", func(t *testing.T) {
+		unknown := itoa(f.device.ID + 1000)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+unknown+"/attest/challenge", nil)
+		req = req.WithContext(tenantA)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusNotFound, w.Code, w.Body.String())
+		assert.NotContains(t, w.Body.String(), "challenge_id")
+		assert.NotContains(t, w.Body.String(), "nonce")
+	})
+
 	t.Run("missing challenge while required is 400", func(t *testing.T) {
 		code, body := attest(t, tenantA, restapi.DeviceAttestRequest{
 			Evidence: f.evidence(t, []byte("caller-chosen-nonce"), goldenPCRs()),
