@@ -55,10 +55,10 @@ type (
 	DeleteProjectResponse   = upstream.DeleteProjectResponse
 	ListProjectsRequest     = upstream.ListProjectsRequest
 	ListProjectsResponse    = upstream.ListProjectsResponse
-	GrantAgentRoleRequest   = upstream.GrantAgentRoleRequest
-	GrantAgentRoleResponse  = upstream.GrantAgentRoleResponse
-	RevokeAgentRoleRequest  = upstream.RevokeAgentRoleRequest
-	RevokeAgentRoleResponse = upstream.RevokeAgentRoleResponse
+	GrantAgentRoleRequest   = upstream.GrantFleetNodeRoleRequest
+	GrantAgentRoleResponse  = upstream.GrantFleetNodeRoleResponse
+	RevokeAgentRoleRequest  = upstream.RevokeFleetNodeRoleRequest
+	RevokeAgentRoleResponse = upstream.RevokeFleetNodeRoleResponse
 )
 
 // Project roles. ProjectRoleDenied explicitly prohibits access.

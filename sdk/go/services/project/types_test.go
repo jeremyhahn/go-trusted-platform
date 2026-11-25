@@ -48,10 +48,10 @@ func TestTypes_AreUpstreamAliases(t *testing.T) {
 		{"DeleteProjectResponse", reflect.TypeFor[DeleteProjectResponse](), reflect.TypeFor[upstream.DeleteProjectResponse]()},
 		{"ListProjectsRequest", reflect.TypeFor[ListProjectsRequest](), reflect.TypeFor[upstream.ListProjectsRequest]()},
 		{"ListProjectsResponse", reflect.TypeFor[ListProjectsResponse](), reflect.TypeFor[upstream.ListProjectsResponse]()},
-		{"GrantAgentRoleRequest", reflect.TypeFor[GrantAgentRoleRequest](), reflect.TypeFor[upstream.GrantAgentRoleRequest]()},
-		{"GrantAgentRoleResponse", reflect.TypeFor[GrantAgentRoleResponse](), reflect.TypeFor[upstream.GrantAgentRoleResponse]()},
-		{"RevokeAgentRoleRequest", reflect.TypeFor[RevokeAgentRoleRequest](), reflect.TypeFor[upstream.RevokeAgentRoleRequest]()},
-		{"RevokeAgentRoleResponse", reflect.TypeFor[RevokeAgentRoleResponse](), reflect.TypeFor[upstream.RevokeAgentRoleResponse]()},
+		{"GrantAgentRoleRequest", reflect.TypeFor[GrantAgentRoleRequest](), reflect.TypeFor[upstream.GrantFleetNodeRoleRequest]()},
+		{"GrantAgentRoleResponse", reflect.TypeFor[GrantAgentRoleResponse](), reflect.TypeFor[upstream.GrantFleetNodeRoleResponse]()},
+		{"RevokeAgentRoleRequest", reflect.TypeFor[RevokeAgentRoleRequest](), reflect.TypeFor[upstream.RevokeFleetNodeRoleRequest]()},
+		{"RevokeAgentRoleResponse", reflect.TypeFor[RevokeAgentRoleResponse](), reflect.TypeFor[upstream.RevokeFleetNodeRoleResponse]()},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.upstream {

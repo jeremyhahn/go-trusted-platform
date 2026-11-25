@@ -135,20 +135,20 @@ type (
 
 // The agent fleet.
 type (
-	AgentRegistration      = upstream.AgentRegistration
-	RegisterAgentRequest   = upstream.RegisterAgentRequest
-	RegisterAgentResponse  = upstream.RegisterAgentResponse
-	GetAgentRequest        = upstream.GetAgentRequest
-	ListAgentsRequest      = upstream.ListAgentsRequest
-	ListAgentsResponse     = upstream.ListAgentsResponse
-	RemoveAgentRequest     = upstream.RemoveAgentRequest
-	RemoveAgentResponse    = upstream.RemoveAgentResponse
-	AgentHeartbeatRequest  = upstream.AgentHeartbeatRequest
-	AgentHeartbeatResponse = upstream.AgentHeartbeatResponse
-	DisableAgentRequest    = upstream.DisableAgentRequest
-	DisableAgentResponse   = upstream.DisableAgentResponse
-	EnableAgentRequest     = upstream.EnableAgentRequest
-	EnableAgentResponse    = upstream.EnableAgentResponse
+	AgentRegistration      = upstream.FleetNode
+	RegisterAgentRequest   = upstream.RegisterFleetNodeRequest
+	RegisterAgentResponse  = upstream.RegisterFleetNodeResponse
+	GetAgentRequest        = upstream.GetFleetNodeRequest
+	ListAgentsRequest      = upstream.ListFleetNodesRequest
+	ListAgentsResponse     = upstream.ListFleetNodesResponse
+	RemoveAgentRequest     = upstream.RemoveFleetNodeRequest
+	RemoveAgentResponse    = upstream.RemoveFleetNodeResponse
+	AgentHeartbeatRequest  = upstream.FleetNodeHeartbeatRequest
+	AgentHeartbeatResponse = upstream.FleetNodeHeartbeatResponse
+	DisableAgentRequest    = upstream.DisableFleetNodeRequest
+	DisableAgentResponse   = upstream.DisableFleetNodeResponse
+	EnableAgentRequest     = upstream.EnableFleetNodeRequest
+	EnableAgentResponse    = upstream.EnableFleetNodeResponse
 )
 
 // Backends, stateless inference and health.
