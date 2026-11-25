@@ -450,6 +450,37 @@ func TestBuildISO_WipesStagedSecureBootPrivateKeyAfterPacking(t *testing.T) {
 	assert.Equal(t, keyPEM, src, "the source DB.key is untouched")
 }
 
+// TestBuildISO_KeysDirCopyDoesNotOwnStaleHardLinkedEntry checks that copying
+// KeysDir into an ISO keys dir that already holds a stale hard link to an
+// external signing key (an entry absent from KeysDir) does not make the wipe
+// treat that link as the build's own: the external key keeps its bytes and
+// only the stale link is detached (#2363).
+func TestBuildISO_KeysDirCopyDoesNotOwnStaleHardLinkedEntry(t *testing.T) {
+	tempDir := t.TempDir()
+	isoDir := filepath.Join(tempDir, "iso")
+	keysDir := filepath.Join(tempDir, "keys")
+	writeTestDBPair(t, keysDir)
+
+	external := filepath.Join(tempDir, "external.key")
+	externalBytes := []byte("external signing key material\n")
+	require.NoError(t, os.WriteFile(external, externalBytes, 0600))
+	stagedDir := filepath.Join(isoDir, "keys")
+	require.NoError(t, os.MkdirAll(stagedDir, 0755))
+	stale := filepath.Join(stagedDir, "retired.key")
+	require.NoError(t, os.Link(external, stale))
+
+	output := filepath.Join(tempDir, "out.iso")
+	builder := fakeXorrisoBuilder(output, nil, nil)
+	require.NoError(t, builder.BuildISO(context.Background(),
+		&ISOConfig{ISODir: isoDir, KeysDir: keysDir, OutputISO: output}))
+
+	got, err := os.ReadFile(external)
+	require.NoError(t, err)
+	assert.Equal(t, externalBytes, got, "the external key behind a stale staged link must keep its bytes")
+	assert.NoFileExists(t, stale, "the stale hard link is detached from the staged keys dir")
+	assert.NoFileExists(t, filepath.Join(stagedDir, "DB.key"), "the staged DB.key copy is removed after packing")
+}
+
 func TestBuildISO_WipesStagedSecureBootPrivateKeyWhenXorrisoFails(t *testing.T) {
 	tempDir := t.TempDir()
 	isoDir := filepath.Join(tempDir, "iso")
