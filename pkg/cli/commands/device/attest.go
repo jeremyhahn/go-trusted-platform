@@ -26,7 +26,7 @@ import (
 
 // newAttestCommand creates the device attest command.
 func newAttestCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
-	var evidenceFile string
+	var evidenceFile, challengeID string
 	cmd := &cobra.Command{
 		Use:   "attest <id>",
 		Short: "Verify TPM quote evidence for a device",
@@ -42,16 +42,24 @@ A failed verification is not an error: the command succeeds and reports
 verified false with the result of each check. It fails only when the evidence
 could not be evaluated.
 
+--challenge-id sends a server-issued challenge: run
+"platformctl device attest-challenge <id>" first, have the device quote with
+that challenge's nonce, then pass its challenge_id. A challenge is single-use
+and expires.
+
 Examples:
+  platformctl device attest-challenge 123 -o json
+  platformctl device attest 123 --evidence-file quote.json --challenge-id <challenge_id>
   platformctl device attest 123 --evidence-file quote.json
   platformctl device attest 123 --evidence-file quote.json -o json`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAttest(getFlags(), args[0], evidenceFile)
+			return runAttest(getFlags(), args[0], evidenceFile, challengeID)
 		},
 	}
 	cmd.Flags().StringVar(&evidenceFile, "evidence-file", "", "path to the JSON DeviceQuoteEvidence document (required)")
+	cmd.Flags().StringVar(&challengeID, "challenge-id", "", "the challenge_id from `device attest-challenge`; the evidence nonce must be that challenge's nonce")
 	return cmd
 }
 
@@ -73,7 +81,7 @@ type attestOutput struct {
 }
 
 // runAttest submits the evidence file for a device and renders the verdict.
-func runAttest(flags *cli.CommonFlags, idStr, evidenceFile string) error {
+func runAttest(flags *cli.CommonFlags, idStr, evidenceFile, challengeID string) error {
 	id, err := strconv.ParseUint(idStr, 10, 64)
 	if err != nil || id == 0 {
 		return ErrInvalidDeviceID{ID: idStr}
@@ -96,7 +104,7 @@ func runAttest(flags *cli.CommonFlags, idStr, evidenceFile string) error {
 	defer base.Close()
 
 	deviceClient := device.NewClientFromGRPC(base.Client().Device())
-	resp, err := deviceClient.AttestDevice(base.Context(), id, evidence)
+	resp, err := deviceClient.AttestDeviceWithChallenge(base.Context(), id, challengeID, evidence)
 	if err != nil {
 		if isNotFound(err) {
 			return ErrDeviceNotFound{ID: id}

@@ -94,6 +94,7 @@ Status is exactly one of `shipped`, `in progress`, `planned`, `future`. A featur
 | jetson-orin-node | future | Provision and attest the NVIDIA Jetson Orin as a robotics compute node through the UEFI Secure Boot and firmware TPM path, with the same node lifecycle as the Raspberry Pi. Nothing is done before a borrowed unit arrives. Not started. | none |
 | android-ota | future | Support Android, GrapheneOS first, with secure OTA updates. Design only. See [android](firmware/android.md). | [docs/firmware/](firmware/) |
 | hosted-control-plane | future | Offer a managed control plane (hosted CA, IAM, KMS and DNS) with a flexible data-plane deployment. Not started. | none |
+| maintenance | in progress | Carry dependency updates (Dependabot and manual bumps) and CI configuration (ci.yml template adoptions, workflow fixes) on one standing row, #2376, so no such change sits on a branch outside a SPEC row (owner ruling 1234). The row stays open and carries no Dev complete milestone, so it never gates a release. | none |
 
 ## Interfaces
 
