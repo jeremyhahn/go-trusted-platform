@@ -4,13 +4,14 @@ package iam_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
@@ -103,12 +104,16 @@ func TestWorkspaceRoleResolverRefusesAnIncompleteEmbeddedListing(t *testing.T) {
 		// A complete lookup (the upstream listing fix) is also correct.
 		return
 	}
-	var incomplete iam.ErrWorkspaceUserListingIncomplete
-	if !errors.As(err, &incomplete) {
-		t.Fatalf("expected ErrWorkspaceUserListingIncomplete for a user beyond the first page, got roles %v err %v", roles, err)
+	// The adapter's listing fallback fails closed on a truncated listing
+	// with an Unavailable error naming the tenant, never a NotFound.
+	if !sdkerrors.IsUnavailable(err) {
+		t.Fatalf("expected an Unavailable error for a user beyond the first page, got roles %v err %v", roles, err)
 	}
-	if incomplete.TenantID != tenantID {
-		t.Fatalf("expected tenant %q in the error, got %q", tenantID, incomplete.TenantID)
+	if sdkerrors.IsNotFound(err) {
+		t.Fatalf("a truncated listing must not answer NotFound, got %v", err)
+	}
+	if !strings.Contains(err.Error(), tenantID) {
+		t.Fatalf("expected tenant %q in the error, got %v", tenantID, err)
 	}
 	if roles != nil {
 		t.Fatalf("an incomplete listing must grant no roles, got %v", roles)

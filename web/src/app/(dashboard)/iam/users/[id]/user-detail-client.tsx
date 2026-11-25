@@ -11,6 +11,8 @@ import { useParams, usePathname, useRouter } from 'next/navigation';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
+import { useCapabilities } from '@/hooks/use-capabilities';
+import { Gated } from '@/components/features/capabilities/gated';
 import { LegacyUser, UpdateUserInput, LegacyRole, ActivityLogEntry } from '@/types/iam';
 
 // User record as the REST API sends it: camelCase or snake_case keys (#445).
@@ -59,6 +61,8 @@ export default function UserDetailPage() {
   const { tenantId } = useAuth();
   const iam = useIAM();
   const userId = resolveDynamicId(params, pathname, 'users');
+  const { loading: capsLoading, capability } = useCapabilities();
+  const getCap = capability('GET /api/v1/iam/tenants/{tenant}/users/{id}');
 
   const [isEditFormOpen, setIsEditFormOpen] = useState(false);
 
@@ -68,7 +72,8 @@ export default function UserDetailPage() {
       if (!tenantId) return Promise.reject(new Error('No tenant ID'));
       return iam.getUser(tenantId, userId);
     },
-    [tenantId, userId]
+    [tenantId, userId],
+    { enabled: !capsLoading && getCap.enabled }
   );
 
   // Fetch activities (placeholder - needs actual implementation in SDK if not available)
@@ -200,6 +205,27 @@ export default function UserDetailPage() {
     }
   };
 
+  if (!capsLoading && !getCap.enabled) {
+    return (
+      <div className="container mx-auto py-6 space-y-6">
+        <div className="space-y-1">
+          <h1 className="text-3xl font-bold tracking-tight">User Details</h1>
+          <p className="text-muted-foreground">
+            View and manage user information
+          </p>
+        </div>
+        <Card data-testid="user-not-enabled">
+          <CardHeader>
+            <CardTitle>Users are not enabled on this server</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">{getCap.reason}</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   if (userError) {
     return (
       <div className="container mx-auto py-6">
@@ -245,10 +271,12 @@ export default function UserDetailPage() {
             </p>
           </div>
         </div>
-        <Button onClick={() => setIsEditFormOpen(true)}>
-          <Edit className="mr-2 h-4 w-4" />
-          Edit User
-        </Button>
+        <Gated op="PUT /api/v1/iam/tenants/{tenant}/users/{id}">
+          <Button onClick={() => setIsEditFormOpen(true)}>
+            <Edit className="mr-2 h-4 w-4" />
+            Edit User
+          </Button>
+        </Gated>
       </div>
 
       {/* User Info Card */}
@@ -363,13 +391,16 @@ export default function UserDetailPage() {
                           {role.permissions.length !== 1 ? 's' : ''}
                         </p>
                       </div>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleRemoveRole(role.id)}
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
+                      <Gated op="DELETE /api/v1/iam/tenants/{tenant}/users/{id}/roles/{role}">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Remove role ${role.name}`}
+                          onClick={() => handleRemoveRole(role.id)}
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </Gated>
                     </div>
                   ))}
                 </div>

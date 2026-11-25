@@ -12,6 +12,8 @@ import { useRouter } from 'next/navigation';
 import { ColumnDef } from '@tanstack/react-table';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCapabilities } from '@/hooks/use-capabilities';
+import { Gated } from '@/components/features/capabilities/gated';
 import type { LegacyRole } from '@/types/iam';
 import { DataTable, createSelectColumn } from '@/components/ui/data-table';
 import { DataTableColumnHeader } from '@/components/ui/data-table-column-header';
@@ -29,17 +31,22 @@ export default function RolesPage() {
   const { toast } = useToast();
   const { tenantId, isLoading: authLoading } = useAuth();
   const iam = useIAM();
+  const { loading: capsLoading, capability } = useCapabilities();
+  const listCap = capability('GET /api/v1/iam/tenants/{tenant}/roles');
+  const updateCap = capability('PUT /api/v1/iam/tenants/{tenant}/roles/{id}');
+  const deleteCap = capability('DELETE /api/v1/iam/tenants/{tenant}/roles/{id}');
 
-  // Fetch roles using SDK
+  // Fetch roles using SDK, once the server says it offers the list
   const {
     data: rolesData,
     isLoading: rolesLoading,
     error: rolesError,
     refetch: refetchRoles,
   } = useApi(
-    () => tenantId ? iam.listRoles({ tenantId }) : Promise.resolve({ success: true, data: null }),
-    [tenantId],
+    () => tenantId && listCap.enabled ? iam.listRoles({ tenantId }) : Promise.resolve({ success: true, data: null }),
+    [tenantId, listCap.enabled],
     {
+      enabled: !capsLoading && listCap.enabled,
       onError: (err) => {
         toast({
           title: 'Error loading roles',
@@ -202,19 +209,23 @@ export default function RolesPage() {
               {
                 label: 'Edit',
                 onClick: () => handleEdit(role),
+                disabled: !updateCap.enabled,
+                title: updateCap.enabled ? undefined : updateCap.reason,
               },
               {
                 label: 'Delete',
                 onClick: () => handleDelete(role),
                 variant: 'destructive',
                 separator: true,
+                disabled: !deleteCap.enabled,
+                title: deleteCap.enabled ? undefined : deleteCap.reason,
               },
             ]}
           />
         );
       },
     },
-  ], [handleView, handleEdit, handleDelete]);
+  ], [handleView, handleEdit, handleDelete, updateCap, deleteCap]);
 
   // Show auth loading state
   if (authLoading) {
@@ -267,6 +278,27 @@ export default function RolesPage() {
     );
   }
 
+  if (!capsLoading && !listCap.enabled) {
+    return (
+      <div className="container mx-auto py-6 space-y-6">
+        <div className="space-y-1">
+          <h1 className="text-3xl font-bold tracking-tight">Roles</h1>
+          <p className="text-muted-foreground">
+            Manage roles and their permissions
+          </p>
+        </div>
+        <Card data-testid="roles-not-enabled">
+          <CardHeader>
+            <CardTitle>Roles are not enabled on this server</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">{listCap.reason}</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="container mx-auto py-6 space-y-6">
       {/* Page Header */}
@@ -277,10 +309,12 @@ export default function RolesPage() {
             Manage roles and their permissions
           </p>
         </div>
-        <Button onClick={() => router.push('/iam/roles/new')}>
-          <Plus className="mr-2 h-4 w-4" />
-          Add Role
-        </Button>
+        <Gated op="POST /api/v1/iam/tenants/{tenant}/roles">
+          <Button onClick={() => router.push('/iam/roles/new')}>
+            <Plus className="mr-2 h-4 w-4" />
+            Add Role
+          </Button>
+        </Gated>
       </div>
 
       {/* Stats Cards */}
@@ -338,6 +372,8 @@ export default function RolesPage() {
                 label: 'Delete selected',
                 onClick: handleBulkDelete,
                 variant: 'destructive',
+                disabled: !deleteCap.enabled,
+                title: deleteCap.enabled ? undefined : deleteCap.reason,
               },
             ]}
           />

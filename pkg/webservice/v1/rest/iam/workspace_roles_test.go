@@ -16,39 +16,25 @@ package iam
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
+	quicbaasiam "github.com/jeremyhahn/go-quicbaas/pkg/iam"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
-	"github.com/jeremyhahn/go-quicbaas/sdk/go/transport/embedded"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 )
-
-// getByEmailUndispatched answers GetUserByEmail as the embedded transport
-// does: it does not dispatch the method.
-func getByEmailUndispatched(context.Context, string, string) (*iamsdk.User, error) {
-	return nil, &embedded.UnknownMethodError{Service: "quicbaas.IAM.User", Method: "GetByEmail"}
-}
-
-// listNoRoles answers a tenant with no roles, so stored values stay as
-// they are.
-func listNoRoles(context.Context, string, *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
-	return &iamsdk.ListRolesResponse{}, nil
-}
 
 func TestWorkspaceRoleResolverReadsTheRolesOfTheWorkspaceUser(t *testing.T) {
 	t.Parallel()
 	var gotTenant, gotEmail string
 	client := &mockIAMClient{
-		getByEmailFn: getByEmailUndispatched,
-		listRolesFn:  listNoRoles,
-		listUsersFn: func(_ context.Context, tenantID string, _ *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
-			gotTenant, gotEmail = tenantID, "operator@platform"
-			return &iamsdk.ListUsersResponse{
-				Users: []iamsdk.User{{Email: "operator@platform", Roles: []string{"member"}}},
-			}, nil
+		getByEmailFn: func(_ context.Context, tenantID, email string) (*iamsdk.User, error) {
+			gotTenant, gotEmail = tenantID, email
+			return &iamsdk.User{Email: email, Roles: []string{"member"}}, nil
 		},
+		getRoleFn:   unroutedGetRole,
+		listRolesFn: pagedRoles(nil, nil, nil),
 	}
 	resolver, err := NewWorkspaceRoleResolver(client)
 	if err != nil {
@@ -70,12 +56,8 @@ func TestWorkspaceRoleResolverReadsTheRolesOfTheWorkspaceUser(t *testing.T) {
 func TestWorkspaceRoleResolverAnswersNoRolesForAPrincipalTheWorkspaceDoesNotHold(t *testing.T) {
 	t.Parallel()
 	client := &mockIAMClient{
-		getByEmailFn: getByEmailUndispatched,
-		listRolesFn:  listNoRoles,
-		listUsersFn: func(context.Context, string, *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
-			return &iamsdk.ListUsersResponse{
-				Users: []iamsdk.User{{Email: "operator@platform", Roles: []string{"admin"}}},
-			}, nil
+		getByEmailFn: func(context.Context, string, string) (*iamsdk.User, error) {
+			return nil, sdkerrors.NewNotFound("iam.user.get_by_email", "user not found")
 		},
 	}
 	resolver, err := NewWorkspaceRoleResolver(client)
@@ -96,9 +78,7 @@ func TestWorkspaceRoleResolverReturnsALookupFailure(t *testing.T) {
 	t.Parallel()
 	cause := errors.New("iam unavailable")
 	client := &mockIAMClient{
-		getByEmailFn: getByEmailUndispatched,
-		listRolesFn:  listNoRoles,
-		listUsersFn: func(context.Context, string, *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
+		getByEmailFn: func(context.Context, string, string) (*iamsdk.User, error) {
 			return nil, cause
 		},
 	}
@@ -127,110 +107,36 @@ func TestNewWorkspaceRoleResolverRefusesANilClient(t *testing.T) {
 	}
 }
 
-// TestWorkspaceRoleResolverFindsTheWorkspaceUserByListing pins that Roles
-// finds the principal by paging ListUsers, which every IAM transport
-// dispatches, and never by GetUserByEmail, which the embedded transport the
-// real-server e2e config runs does not (#2150).
-func TestWorkspaceRoleResolverFindsTheWorkspaceUserByListing(t *testing.T) {
-	t.Parallel()
-	var tenants []string
-	client := &mockIAMClient{
-		getByEmailFn: getByEmailUndispatched,
-		listRolesFn:  listNoRoles,
-		listUsersFn: func(_ context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
-			tenants = append(tenants, tenantID)
-			if req.PageToken == "" {
-				return &iamsdk.ListUsersResponse{
-					Users:      []iamsdk.User{{Email: "other@example.com", Roles: []string{"member"}}},
-					Pagination: iamsdk.PaginationInfo{HasMore: true, NextPageToken: "p2"},
-				}, nil
-			}
-			return &iamsdk.ListUsersResponse{
-				Users: []iamsdk.User{{Email: "Owner@Example.com", Roles: []string{"admin"}}},
-			}, nil
-		},
-	}
-	resolver, err := NewWorkspaceRoleResolver(client)
-	if err != nil {
-		t.Fatalf("NewWorkspaceRoleResolver: %v", err)
-	}
-
-	roles, err := resolver.Roles(context.Background(), "workspace-a", "owner@example.com")
-	if err != nil {
-		t.Fatalf("Roles: %v", err)
-	}
-	if !slices.Equal(roles, []string{"admin"}) {
-		t.Fatalf("expected the workspace user's roles, got %v", roles)
-	}
-	if len(tenants) == 0 || tenants[0] != "workspace-a" {
-		t.Fatalf("expected the workspace tenant to be listed, got %v", tenants)
+// pagedRoles serves first on the first ListRoles page and second on the page
+// the first one's "p2" token names, the way IAM pages a tenant's roles; a
+// non-nil err fails every call.
+func pagedRoles(first, second []iamsdk.Role, err error) func(context.Context, string, *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+	return func(_ context.Context, _ string, req *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+		if err != nil {
+			return nil, err
+		}
+		if req.PageToken == "p2" {
+			return &iamsdk.ListRolesResponse{Roles: second}, nil
+		}
+		return &iamsdk.ListRolesResponse{
+			Roles:      first,
+			Pagination: iamsdk.PaginationInfo{HasMore: true, NextPageToken: "p2"},
+		}, nil
 	}
 }
 
-func TestWorkspaceRoleResolverReadsTheUserByEmailWhereDispatched(t *testing.T) {
-	t.Parallel()
-	var gotTenant, gotEmail string
-	client := &mockIAMClient{
-		getByEmailFn: func(_ context.Context, tenantID, email string) (*iamsdk.User, error) {
-			gotTenant, gotEmail = tenantID, email
-			return &iamsdk.User{Email: email, Roles: []string{"admin"}}, nil
-		},
-		listUsersFn: func(context.Context, string, *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
-			t.Fatal("Roles must not list users when GetUserByEmail answers")
-			return nil, nil
-		},
-		listRolesFn: listNoRoles,
-	}
-	resolver, err := NewWorkspaceRoleResolver(client)
-	if err != nil {
-		t.Fatalf("NewWorkspaceRoleResolver: %v", err)
-	}
-
-	roles, err := resolver.Roles(context.Background(), "workspace-a", "owner@example.com")
-	if err != nil {
-		t.Fatalf("Roles: %v", err)
-	}
-	if gotTenant != "workspace-a" || gotEmail != "owner@example.com" {
-		t.Fatalf("expected the workspace user to be read by email, got tenant %q email %q", gotTenant, gotEmail)
-	}
-	if !slices.Equal(roles, []string{"admin"}) {
-		t.Fatalf("expected [admin], got %v", roles)
-	}
-}
-
-func TestWorkspaceRoleResolverAnswersNoRolesWhenGetUserByEmailFindsNoUser(t *testing.T) {
+func TestWorkspaceRoleResolverNamesTheRolesIAMStoresByID(t *testing.T) {
 	t.Parallel()
 	client := &mockIAMClient{
-		getByEmailFn: func(context.Context, string, string) (*iamsdk.User, error) {
-			return nil, status.Error(codes.NotFound, "user not found")
+		getByEmailFn: func(_ context.Context, _, email string) (*iamsdk.User, error) {
+			return &iamsdk.User{Email: email, Roles: []string{"rid-admin"}}, nil
 		},
-		listUsersFn: func(context.Context, string, *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
-			t.Fatal("Roles must not list users when GetUserByEmail answers NotFound")
-			return nil, nil
-		},
-	}
-	resolver, err := NewWorkspaceRoleResolver(client)
-	if err != nil {
-		t.Fatalf("NewWorkspaceRoleResolver: %v", err)
-	}
-
-	roles, err := resolver.Roles(context.Background(), "workspace-a", "invited@platform")
-	if err != nil || roles != nil {
-		t.Fatalf("expected nil, nil for a user the workspace does not hold, got %v, %v", roles, err)
-	}
-}
-
-func TestWorkspaceRoleResolverReturnsAGetUserByEmailFailure(t *testing.T) {
-	t.Parallel()
-	cause := status.Error(codes.Unavailable, "iam unavailable")
-	client := &mockIAMClient{
-		getByEmailFn: func(context.Context, string, string) (*iamsdk.User, error) {
-			return nil, cause
-		},
-		listUsersFn: func(context.Context, string, *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
-			t.Fatal("Roles must not fall back to listing on a GetUserByEmail failure")
-			return nil, nil
-		},
+		getRoleFn: unroutedGetRole,
+		listRolesFn: pagedRoles(
+			[]iamsdk.Role{{ID: "rid-member", Name: "member"}},
+			[]iamsdk.Role{{ID: "rid-admin", Name: "admin"}},
+			nil,
+		),
 	}
 	resolver, err := NewWorkspaceRoleResolver(client)
 	if err != nil {
@@ -238,43 +144,38 @@ func TestWorkspaceRoleResolverReturnsAGetUserByEmailFailure(t *testing.T) {
 	}
 
 	roles, err := resolver.Roles(context.Background(), "workspace-a", "operator@platform")
-	if !errors.Is(err, cause) {
-		t.Fatalf("expected the GetUserByEmail failure to be returned, got %v", err)
+	if err != nil {
+		t.Fatalf("Roles: %v", err)
 	}
-	if roles != nil {
-		t.Fatalf("a failed lookup must grant no roles, got %v", roles)
+	if !slices.Equal(roles, []string{"admin"}) {
+		t.Fatalf("expected the stored role ID to be named admin, got %v", roles)
 	}
 }
 
-func TestWorkspaceRoleResolverMapsRoleIDsToNames(t *testing.T) {
+func TestWorkspaceRoleResolverKeepsAReferenceNoRoleIDMatches(t *testing.T) {
 	t.Parallel()
-	var gotReq *iamsdk.ListRolesRequest
 	client := &mockIAMClient{
 		getByEmailFn: func(_ context.Context, _, email string) (*iamsdk.User, error) {
-			return &iamsdk.User{Email: email, Roles: []string{"role-id-admin", "legacy-name"}}, nil
+			return &iamsdk.User{Email: email, Roles: []string{"admin"}}, nil
 		},
-		listRolesFn: func(_ context.Context, _ string, req *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
-			gotReq = req
-			return &iamsdk.ListRolesResponse{Roles: []iamsdk.Role{
-				{ID: "role-id-admin", Name: "admin"},
-				{ID: "role-id-member", Name: "member"},
-			}}, nil
-		},
+		getRoleFn: unroutedGetRole,
+		listRolesFn: pagedRoles(
+			[]iamsdk.Role{{ID: "rid-member", Name: "member"}},
+			[]iamsdk.Role{{ID: "rid-admin", Name: "admin"}},
+			nil,
+		),
 	}
 	resolver, err := NewWorkspaceRoleResolver(client)
 	if err != nil {
 		t.Fatalf("NewWorkspaceRoleResolver: %v", err)
 	}
 
-	roles, err := resolver.Roles(context.Background(), "workspace-a", "owner@example.com")
+	roles, err := resolver.Roles(context.Background(), "workspace-a", "operator@platform")
 	if err != nil {
 		t.Fatalf("Roles: %v", err)
 	}
-	if !slices.Equal(roles, []string{"admin", "legacy-name"}) {
-		t.Fatalf("expected the role ID mapped to its name and the unknown value kept, got %v", roles)
-	}
-	if gotReq == nil || !gotReq.IncludeSystem {
-		t.Fatalf("expected the system roles to be listed, got %+v", gotReq)
+	if !slices.Equal(roles, []string{"admin"}) {
+		t.Fatalf("expected a reference no role ID matches to be kept, got %v", roles)
 	}
 }
 
@@ -283,76 +184,177 @@ func TestWorkspaceRoleResolverReturnsARoleListFailure(t *testing.T) {
 	cause := errors.New("roles unavailable")
 	client := &mockIAMClient{
 		getByEmailFn: func(_ context.Context, _, email string) (*iamsdk.User, error) {
-			return &iamsdk.User{Email: email, Roles: []string{"role-id-admin"}}, nil
+			return &iamsdk.User{Email: email, Roles: []string{"rid-admin"}}, nil
 		},
-		listRolesFn: func(context.Context, string, *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+		getRoleFn:   unroutedGetRole,
+		listRolesFn: pagedRoles(nil, nil, cause),
+	}
+	resolver, err := NewWorkspaceRoleResolver(client)
+	if err != nil {
+		t.Fatalf("NewWorkspaceRoleResolver: %v", err)
+	}
+
+	roles, err := resolver.Roles(context.Background(), "workspace-a", "operator@platform")
+	if err == nil {
+		t.Fatalf("expected the role list failure to be returned, got roles %v", roles)
+	}
+	if len(roles) != 0 {
+		t.Fatalf("a failed role list must grant no roles, got %v", roles)
+	}
+}
+
+// unroutedGetRole answers GetRole the way a transport that does not route it
+// does (the embedded one), so the resolver names roles from the role list.
+func unroutedGetRole(context.Context, string, string) (*iamsdk.Role, error) {
+	return nil, sdkerrors.NewUnimplemented("iam.role.get", "method not routed")
+}
+
+// failListRoles fails the test if the resolver reads the role list.
+func failListRoles(t *testing.T) func(context.Context, string, *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+	t.Helper()
+	return func(context.Context, string, *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+		t.Errorf("the resolver must name roles with GetRole, not ListRoles")
+		return nil, errors.New("ListRoles called")
+	}
+}
+
+func TestWorkspaceRoleResolverNamesEachRoleWithGetRole(t *testing.T) {
+	t.Parallel()
+	names := map[string]string{"rid-admin": "admin", "rid-ops": "ops"}
+	client := &mockIAMClient{
+		getByEmailFn: func(_ context.Context, _, email string) (*iamsdk.User, error) {
+			return &iamsdk.User{Email: email, Roles: []string{"rid-admin", "rid-ops"}}, nil
+		},
+		getRoleFn: func(_ context.Context, _, id string) (*iamsdk.Role, error) {
+			return &iamsdk.Role{ID: id, Name: names[id]}, nil
+		},
+		listRolesFn: failListRoles(t),
+	}
+	resolver, err := NewWorkspaceRoleResolver(client)
+	if err != nil {
+		t.Fatalf("NewWorkspaceRoleResolver: %v", err)
+	}
+
+	roles, err := resolver.Roles(context.Background(), "workspace-a", "operator@platform")
+	if err != nil {
+		t.Fatalf("Roles: %v", err)
+	}
+	if !slices.Equal(roles, []string{"admin", "ops"}) {
+		t.Fatalf("expected each role ID to be named with GetRole, got %v", roles)
+	}
+}
+
+func TestWorkspaceRoleResolverKeepsAReferenceGetRoleDoesNotFind(t *testing.T) {
+	t.Parallel()
+	client := &mockIAMClient{
+		getByEmailFn: func(_ context.Context, _, email string) (*iamsdk.User, error) {
+			return &iamsdk.User{Email: email, Roles: []string{"admin"}}, nil
+		},
+		getRoleFn: func(context.Context, string, string) (*iamsdk.Role, error) {
+			return nil, sdkerrors.NewNotFound("iam.role.get", "role not found")
+		},
+		listRolesFn: failListRoles(t),
+	}
+	resolver, err := NewWorkspaceRoleResolver(client)
+	if err != nil {
+		t.Fatalf("NewWorkspaceRoleResolver: %v", err)
+	}
+
+	roles, err := resolver.Roles(context.Background(), "workspace-a", "operator@platform")
+	if err != nil {
+		t.Fatalf("Roles: %v", err)
+	}
+	if !slices.Equal(roles, []string{"admin"}) {
+		t.Fatalf("expected a reference GetRole does not find to be kept, got %v", roles)
+	}
+}
+
+func TestWorkspaceRoleResolverKeepsAReferenceTheEmbeddedStoreDoesNotFind(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{name: "store error", err: quicbaasiam.ErrRoleNotFound},
+		{name: "wrapped store error", err: fmt.Errorf("embedded: %w", quicbaasiam.ErrRoleNotFound)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			client := &mockIAMClient{
+				getByEmailFn: func(_ context.Context, _, email string) (*iamsdk.User, error) {
+					return &iamsdk.User{Email: email, Roles: []string{"admin"}}, nil
+				},
+				getRoleFn: func(context.Context, string, string) (*iamsdk.Role, error) {
+					return nil, tc.err
+				},
+				listRolesFn: failListRoles(t),
+			}
+			resolver, err := NewWorkspaceRoleResolver(client)
+			if err != nil {
+				t.Fatalf("NewWorkspaceRoleResolver: %v", err)
+			}
+
+			roles, err := resolver.Roles(context.Background(), "workspace-a", "operator@platform")
+			if err != nil {
+				t.Fatalf("Roles: %v", err)
+			}
+			if !slices.Equal(roles, []string{"admin"}) {
+				t.Fatalf("expected a reference the embedded store does not find to be kept, got %v", roles)
+			}
+		})
+	}
+}
+
+func TestWorkspaceRoleResolverReturnsAGetRoleFailure(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("role lookup unavailable")
+	client := &mockIAMClient{
+		getByEmailFn: func(_ context.Context, _, email string) (*iamsdk.User, error) {
+			return &iamsdk.User{Email: email, Roles: []string{"rid-admin"}}, nil
+		},
+		getRoleFn: func(context.Context, string, string) (*iamsdk.Role, error) {
 			return nil, cause
 		},
+		listRolesFn: failListRoles(t),
 	}
 	resolver, err := NewWorkspaceRoleResolver(client)
 	if err != nil {
 		t.Fatalf("NewWorkspaceRoleResolver: %v", err)
 	}
 
-	roles, err := resolver.Roles(context.Background(), "workspace-a", "owner@example.com")
-	var listFailed ErrRoleListFailed
-	if !errors.As(err, &listFailed) || !errors.Is(err, cause) {
-		t.Fatalf("expected ErrRoleListFailed wrapping the cause, got %v", err)
+	roles, err := resolver.Roles(context.Background(), "workspace-a", "operator@platform")
+	if err == nil {
+		t.Fatalf("expected the GetRole failure to be returned, got roles %v", roles)
 	}
-	if roles != nil {
-		t.Fatalf("a failed role listing must grant no roles, got %v", roles)
+	if len(roles) != 0 {
+		t.Fatalf("a failed role lookup must grant no roles, got %v", roles)
 	}
 }
 
-func TestWorkspaceRoleResolverRefusesAFullPageWithoutANextPage(t *testing.T) {
+func TestWorkspaceRoleResolverListsTheRolesWhenGetRoleIsNotRouted(t *testing.T) {
 	t.Parallel()
-	page := make([]iamsdk.User, mirroredEmailsPageSize)
-	for i := range page {
-		page[i] = iamsdk.User{Email: "someone-else@example.com", Roles: []string{"member"}}
-	}
 	client := &mockIAMClient{
-		getByEmailFn: getByEmailUndispatched,
-		listUsersFn: func(context.Context, string, *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
-			return &iamsdk.ListUsersResponse{Users: page}, nil
+		getByEmailFn: func(_ context.Context, _, email string) (*iamsdk.User, error) {
+			return &iamsdk.User{Email: email, Roles: []string{"rid-admin", "rid-member"}}, nil
 		},
-		listRolesFn: listNoRoles,
+		getRoleFn: unroutedGetRole,
+		listRolesFn: pagedRoles(
+			[]iamsdk.Role{{ID: "rid-member", Name: "member"}},
+			[]iamsdk.Role{{ID: "rid-admin", Name: "admin"}},
+			nil,
+		),
 	}
 	resolver, err := NewWorkspaceRoleResolver(client)
 	if err != nil {
 		t.Fatalf("NewWorkspaceRoleResolver: %v", err)
 	}
 
-	roles, err := resolver.Roles(context.Background(), "workspace-a", "owner@example.com")
-	var incomplete ErrWorkspaceUserListingIncomplete
-	if !errors.As(err, &incomplete) {
-		t.Fatalf("expected ErrWorkspaceUserListingIncomplete, got roles %v err %v", roles, err)
-	}
-	if incomplete.TenantID != "workspace-a" || incomplete.Listed != int(mirroredEmailsPageSize) {
-		t.Fatalf("unexpected error fields %+v", incomplete)
-	}
-	if roles != nil {
-		t.Fatalf("an incomplete listing must grant no roles, got %v", roles)
-	}
-}
-
-func TestWorkspaceRoleResolverRefusesAListingShortOfItsTotal(t *testing.T) {
-	t.Parallel()
-	client := &mockIAMClient{
-		getByEmailFn: getByEmailUndispatched,
-		listUsersFn: func(context.Context, string, *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
-			return &iamsdk.ListUsersResponse{
-				Users:      []iamsdk.User{{Email: "someone-else@example.com"}},
-				Pagination: iamsdk.PaginationInfo{TotalCount: 2},
-			}, nil
-		},
-	}
-	resolver, err := NewWorkspaceRoleResolver(client)
+	roles, err := resolver.Roles(context.Background(), "workspace-a", "operator@platform")
 	if err != nil {
-		t.Fatalf("NewWorkspaceRoleResolver: %v", err)
+		t.Fatalf("Roles: %v", err)
 	}
-
-	_, err = resolver.Roles(context.Background(), "workspace-a", "owner@example.com")
-	if !errors.As(err, new(ErrWorkspaceUserListingIncomplete)) {
-		t.Fatalf("expected ErrWorkspaceUserListingIncomplete, got %v", err)
+	if !slices.Equal(roles, []string{"admin", "member"}) {
+		t.Fatalf("expected the role list to name the IDs when GetRole is not routed, got %v", roles)
 	}
 }

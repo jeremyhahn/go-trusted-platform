@@ -14,9 +14,14 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
+	"time"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -115,6 +120,7 @@ func TestDeviceMCP_ArgBuilders_RejectWrongRequestType(t *testing.T) {
 	builders := map[string]mcpArgBuilder{
 		platformv1.DeviceService_GetDevice_FullMethodName:    buildDeviceGetArgs,
 		platformv1.DeviceService_DeleteDevice_FullMethodName: buildDeviceDeleteArgs,
+		platformv1.DeviceService_AttestDevice_FullMethodName: buildDeviceAttestArgs,
 	}
 	for method, build := range builders {
 		_, err := build(&platformv1.ListDevicesRequest{})
@@ -122,5 +128,167 @@ func TestDeviceMCP_ArgBuilders_RejectWrongRequestType(t *testing.T) {
 		if !errors.As(err, &wrongType) || wrongType.Method != method {
 			t.Errorf("%s: err = %v, want ErrUnexpectedArgsType for the method", method, err)
 		}
+	}
+}
+
+func TestDeviceMCP_ReplyDecoders_RejectWrongReplyType(t *testing.T) {
+	method := platformv1.DeviceService_AttestDevice_FullMethodName
+	err := decodeDeviceAttestResult(map[string]interface{}{}, &platformv1.ListDevicesResponse{})
+	var wrongType ErrUnexpectedReplyType
+	if !errors.As(err, &wrongType) || wrongType.Method != method {
+		t.Errorf("%s: err = %v, want ErrUnexpectedReplyType for the method", method, err)
+	}
+}
+
+func TestDeviceMCP_AttestDevice_SendsChallengeAndDecodesVerdict(t *testing.T) {
+	attestedAt := time.Date(2026, 11, 22, 10, 30, 0, 0, time.UTC)
+	recordedAt := time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC)
+	var calls []toolCall
+	a := provisioningTestServer(t, map[string]interface{}{
+		"device_attest": map[string]interface{}{
+			"device_id":                "42",
+			"serial":                   "SN-42",
+			"model":                    "edge-1",
+			"verified":                 true,
+			"ak_certificate_verified":  true,
+			"signature_valid":          true,
+			"nonce_valid":              true,
+			"pcrs_valid":               true,
+			"pcr_baseline_source":      "signed",
+			"pcr_baseline_recorded_at": recordedAt.Format(time.RFC3339),
+			"pcr_baseline_captured":    false,
+			"cryptographic_failure":    false,
+			"status":                   "verified",
+			"message":                  "all checks passed",
+			"attested_at":              attestedAt.Format(time.RFC3339),
+		},
+	}, &calls)
+
+	reply := &platformv1.AttestDeviceResponse{}
+	err := a.Connection().Invoke(context.Background(),
+		platformv1.DeviceService_AttestDevice_FullMethodName,
+		&platformv1.AttestDeviceRequest{DeviceId: "42", Evidence: []byte("quote"), ChallengeId: "ch-1"},
+		reply)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	if len(calls) != 1 || calls[0].Name != "device_attest" {
+		t.Fatalf("calls = %+v, want one device_attest call", calls)
+	}
+	args := calls[0].Arguments
+	if args["device_id"] != "42" || args["evidence"] != "cXVvdGU=" || args["challenge_id"] != "ch-1" {
+		t.Fatalf("arguments = %+v, want device_id 42, evidence cXVvdGU=, challenge_id ch-1", args)
+	}
+
+	if reply.GetDeviceId() != 42 || reply.GetSerial() != "SN-42" || reply.GetModel() != "edge-1" {
+		t.Errorf("identity = %d %q %q, want 42 SN-42 edge-1", reply.GetDeviceId(), reply.GetSerial(), reply.GetModel())
+	}
+	if !reply.GetVerified() || !reply.GetAkCertificateVerified() || !reply.GetSignatureValid() ||
+		!reply.GetNonceValid() || !reply.GetPcrsValid() || reply.GetPcrBaselineCaptured() {
+		t.Errorf("verdict bools = %+v, want all checks true and no capture", reply)
+	}
+	if reply.GetAttestationStatus() != "verified" || reply.GetMessage() != "all checks passed" ||
+		reply.GetPcrBaselineSource() != "signed" {
+		t.Errorf("strings = %q %q %q, want verified, all checks passed, signed",
+			reply.GetAttestationStatus(), reply.GetMessage(), reply.GetPcrBaselineSource())
+	}
+	if !reply.GetStatus().GetSuccess() || reply.GetStatus().GetMessage() != "device attestation evaluated" {
+		t.Errorf("status = %+v, want success with device attestation evaluated", reply.GetStatus())
+	}
+	if reply.GetAttestedAt() == nil || !reply.GetAttestedAt().AsTime().Equal(attestedAt) {
+		t.Errorf("attested_at = %v, want %v", reply.GetAttestedAt(), attestedAt)
+	}
+	if reply.GetPcrBaselineRecordedAt() == nil || !reply.GetPcrBaselineRecordedAt().AsTime().Equal(recordedAt) {
+		t.Errorf("pcr_baseline_recorded_at = %v, want %v", reply.GetPcrBaselineRecordedAt(), recordedAt)
+	}
+}
+
+func TestDeviceMCP_AttestDevice_NoChallengeAndZeroBaseline(t *testing.T) {
+	var calls []toolCall
+	a := provisioningTestServer(t, map[string]interface{}{
+		"device_attest": map[string]interface{}{
+			"device_id":                "7",
+			"verified":                 false,
+			"pcr_baseline_recorded_at": "0001-01-01T00:00:00Z",
+			"status":                   "failed",
+			"attested_at":              "2026-11-22T10:30:00Z",
+		},
+	}, &calls)
+
+	reply := &platformv1.AttestDeviceResponse{}
+	err := a.Connection().Invoke(context.Background(),
+		platformv1.DeviceService_AttestDevice_FullMethodName,
+		&platformv1.AttestDeviceRequest{DeviceId: "7", Evidence: []byte("quote")},
+		reply)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	if len(calls) != 1 || calls[0].Name != "device_attest" {
+		t.Fatalf("calls = %+v, want one device_attest call", calls)
+	}
+	if _, sent := calls[0].Arguments["challenge_id"]; sent {
+		t.Errorf("arguments = %+v, want no challenge_id key", calls[0].Arguments)
+	}
+	if reply.GetDeviceId() != 7 || reply.GetAttestationStatus() != "failed" {
+		t.Errorf("reply = %+v, want device 7 failed", reply)
+	}
+	if reply.GetPcrBaselineRecordedAt() != nil {
+		t.Errorf("pcr_baseline_recorded_at = %v, want nil for a zero time", reply.GetPcrBaselineRecordedAt())
+	}
+}
+
+// TestDeviceMCP_IssueAttestationChallenge_CallsTheToolAndDecodesTheChallenge
+// pins the MCP challenge issue (owner ruling 1234: challenges are issued over
+// MCP, not QUIC): the SDK calls device_attest_challenge with the device id and
+// decodes the daemon's reply, which pkg/api/mcp marshalResult builds by
+// json.Marshal of the IssueAttestationChallengeResponse then json.Unmarshal
+// into interface{}.
+func TestDeviceMCP_IssueAttestationChallenge_CallsTheToolAndDecodesTheChallenge(t *testing.T) {
+	expiresAt := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	sent := &platformv1.IssueAttestationChallengeResponse{
+		ChallengeId: "ch-1",
+		Nonce:       []byte{1, 2, 3, 4},
+		ExpiresAt:   timestamppb.New(expiresAt),
+	}
+	data, err := json.Marshal(sent)
+	if err != nil {
+		t.Fatalf("marshal reply: %v", err)
+	}
+	var daemonReply interface{}
+	if err := json.Unmarshal(data, &daemonReply); err != nil {
+		t.Fatalf("unmarshal reply: %v", err)
+	}
+
+	var calls []toolCall
+	a := provisioningTestServer(t, map[string]interface{}{
+		"device_attest_challenge": daemonReply,
+	}, &calls)
+
+	reply := &platformv1.IssueAttestationChallengeResponse{}
+	err = a.Connection().Invoke(context.Background(),
+		platformv1.DeviceService_IssueAttestationChallenge_FullMethodName,
+		&platformv1.IssueAttestationChallengeRequest{DeviceId: "42"},
+		reply)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	if len(calls) != 1 || calls[0].Name != "device_attest_challenge" {
+		t.Fatalf("calls = %+v, want one device_attest_challenge call", calls)
+	}
+	if got := calls[0].Arguments["device_id"]; got != "42" {
+		t.Fatalf("device_id argument = %#v, want \"42\"", got)
+	}
+
+	if reply.GetChallengeId() != "ch-1" {
+		t.Errorf("challenge_id = %q, want ch-1", reply.GetChallengeId())
+	}
+	if !bytes.Equal(reply.GetNonce(), []byte{1, 2, 3, 4}) {
+		t.Errorf("nonce = %v, want [1 2 3 4]", reply.GetNonce())
+	}
+	if reply.GetExpiresAt() == nil || !reply.GetExpiresAt().AsTime().Equal(expiresAt) {
+		t.Errorf("expires_at = %v, want %v", reply.GetExpiresAt(), expiresAt)
 	}
 }

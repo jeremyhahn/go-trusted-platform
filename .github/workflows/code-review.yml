@@ -1826,6 +1826,8 @@ jobs:
             echo "skip=closed" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Drafts are not reviewed: the live PR, not the event payload, says so.
+          [ "$(jq -r '.draft // false' <<<"$pr")" != true ] || { echo "PR $PR_NUM is a draft; not reviewed."; echo "skip=draft" >> "$GITHUB_OUTPUT"; exit 0; }
           if [ "$head" != "$EVENT_SHA" ]; then
             echo "The head moved to $head since this run was created for $EVENT_SHA;"
             echo "the run for the new head reviews it. Stopping."
@@ -3124,6 +3126,8 @@ jobs:
             echo "PR $PR_NUM closed or moved off $EVENT_SHA during the review; not posting."
             exit 0
           fi
+          # Drafts are not reviewed: the live PR, not the event payload, says so.
+          [ "$(jq -r '.draft // false' <<<"$pr")" != true ] || { echo "PR $PR_NUM became a draft during the review; not posting."; exit 0; }
           if [ "$(jq -r '.base.ref // empty' <<<"$pr")" != "$BASE_REF" ]; then
             echo "PR $PR_NUM was retargeted off $BASE_REF during the review; not posting (the confirm step ends red)."
             exit 0
@@ -3578,6 +3582,8 @@ jobs:
           if [ "$(jq -r '.state // empty' <<<"$pr")" != open ] || [ "$(jq -r '.merged // false' <<<"$pr")" = true ]; then
             echo "PR $PR_NUM is not open. Nothing to do."; echo "skip=closed" >> "$GITHUB_OUTPUT"; exit 0
           fi
+          # Drafts are not reviewed: the live PR, not the event payload, says so.
+          [ "$(jq -r '.draft // false' <<<"$pr")" != true ] || { echo "PR $PR_NUM is a draft; not reviewed."; echo "skip=draft" >> "$GITHUB_OUTPUT"; exit 0; }
           if [ "$head" != "$EVENT_SHA" ]; then
             echo "The head moved to $head; the run for it reviews it."; echo "skip=stale" >> "$GITHUB_OUTPUT"; exit 0
           fi
@@ -3809,6 +3815,8 @@ jobs:
           if [ "$(jq -r '.state // empty' <<<"$pr")" != open ] || [ "$(jq -r '.head.sha // empty' <<<"$pr")" != "$EVENT_SHA" ]; then
             echo "PR $PR_NUM closed or moved off $EVENT_SHA; posting nothing."; touch "$WORK/verdict"; exit 0
           fi
+          # Drafts are not reviewed: the live PR, not the event payload, says so.
+          [ "$(jq -r '.draft // false' <<<"$pr")" != true ] || { echo "PR $PR_NUM became a draft; posting nothing."; touch "$WORK/verdict"; exit 0; }
           jq -n --rawfile b "$WORK/body.md" --arg s "$EVENT_SHA" '{event: "COMMENT", commit_id: $s,
               body: ("Advisory opencode review (code-review.yml v5.2.2). Codex is the reviewer of record.\n\n" + $b)}' \
             > "$WORK/review.json"

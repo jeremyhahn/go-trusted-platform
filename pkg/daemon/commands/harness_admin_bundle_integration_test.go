@@ -61,9 +61,13 @@ func (f *fakeIssuer) IssueCertificate(_ context.Context, req *certclient.IssueCe
 		return nil, err
 	}
 	now := time.Now()
+	subject := pkix.Name{CommonName: req.CommonName, Organization: []string{req.Organization}}
+	if req.OrganizationalUnit != "" {
+		subject.OrganizationalUnit = []string{req.OrganizationalUnit}
+	}
 	cert, err := f.root.sign(&x509.Certificate{
 		SerialNumber: big.NewInt(int64(f.calls + 1000)),
-		Subject:      pkix.Name{CommonName: req.CommonName, Organization: []string{req.Organization}, OrganizationalUnit: []string{req.OrganizationalUnit}},
+		Subject:      subject,
 		NotBefore:    now.Add(-time.Minute),
 		NotAfter:     now.Add(365 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -135,6 +139,7 @@ func TestWriteHarnessAdminBundle_WritesVerifiableAdminCredential(t *testing.T) {
 			if org := cert.Leaf.Subject.Organization; len(org) != 1 || org[0] != wantTenant {
 				t.Errorf("bundle O = %v, want [%s]", org, wantTenant)
 			}
+			// mTLS reads the tenant from the subject OU only (SPEC row 122).
 			if ou := cert.Leaf.Subject.OrganizationalUnit; len(ou) != 1 || ou[0] != wantTenant {
 				t.Errorf("bundle OU = %v, want [%s]", ou, wantTenant)
 			}

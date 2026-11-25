@@ -32,6 +32,7 @@ import (
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance/issuancetest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 )
@@ -165,14 +166,16 @@ func TestAdminBundleIssuer_MintsAdminClientCert(t *testing.T) {
 	if cert.Subject.CommonName != "admin" {
 		t.Errorf("CommonName = %q, want admin", cert.Subject.CommonName)
 	}
-	// The mTLS transports bind a certificate to the tenant its subject O
-	// names; the root admin must land in the system tenant.
 	if len(cert.Subject.Organization) != 1 || cert.Subject.Organization[0] != app.SystemTenantID {
 		t.Errorf("Organization = %v, want [%s]", cert.Subject.Organization, app.SystemTenantID)
 	}
-	// Since #2020 mTLS reads the tenant from the subject OU only.
+	// The mTLS transports bind a certificate to the tenant its subject OU
+	// names; the root admin must land in the system tenant.
 	if len(cert.Subject.OrganizationalUnit) != 1 || cert.Subject.OrganizationalUnit[0] != app.SystemTenantID {
 		t.Errorf("OrganizationalUnit = %v, want [%s]", cert.Subject.OrganizationalUnit, app.SystemTenantID)
+	}
+	if tenant, err := (&auth.MTLSAdapter{}).ExtractTenant(cert); err != nil || tenant != app.SystemTenantID {
+		t.Errorf("ExtractTenant = %q, %v; want %q", tenant, err, app.SystemTenantID)
 	}
 	if len(cert.ExtKeyUsage) != 1 || cert.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth {
 		t.Errorf("ExtKeyUsage = %v, want client auth only", cert.ExtKeyUsage)
