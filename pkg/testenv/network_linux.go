@@ -243,26 +243,24 @@ func (n *LinuxIsolatedNetwork) tuneNetworkForNAT() error {
 	return nil
 }
 
-// iptablesCommand picks the iptables binary for the test network. It prefers
-// iptables-legacy (Docker hosts use the legacy tables) only when it is on PATH
-// and usable reports that its tables load; otherwise it falls back to iptables
-// (the nft backend), e.g. on kernels without the legacy ip_tables module.
-func iptablesCommand(lookPath func(string) (string, error), usable func(cmd string) bool) string {
-	const legacy = "iptables-legacy"
-	if _, err := lookPath(legacy); err == nil && usable(legacy) {
-		return legacy
+// selectIptables picks the iptables front end: iptables-legacy only when the
+// binary is found and its tables load (kernels without legacy ip_tables
+// support fail every legacy rule), else iptables.
+func selectIptables(lookPath func(string) (string, error), usable func(string) bool) string {
+	if _, err := lookPath("iptables-legacy"); err == nil && usable("iptables-legacy") {
+		return "iptables-legacy"
 	}
 	return "iptables"
 }
 
-// legacyIptablesUsable reports whether cmd can load its filter table.
-func legacyIptablesUsable(cmd string) bool {
-	return exec.Command(cmd, "-L", "FORWARD", "-n").Run() == nil
+// iptablesUsable reports whether cmd can list the filter FORWARD chain.
+func iptablesUsable(cmd string) bool {
+	return exec.Command(cmd, "-w", "-L", "FORWARD", "-n").Run() == nil
 }
 
-// detectIptables returns the iptables binary this host can use.
-func detectIptables() string {
-	return iptablesCommand(exec.LookPath, legacyIptablesUsable)
+// iptablesCommand returns the iptables front end setupNAT and Cleanup share.
+func iptablesCommand() string {
+	return selectIptables(exec.LookPath, iptablesUsable)
 }
 
 // setupNAT configures iptables rules for NAT and forwarding
@@ -271,8 +269,8 @@ func (n *LinuxIsolatedNetwork) setupNAT() error {
 	subnet := n.config.Subnet.String()
 	bridge := n.config.BridgeName
 
-	// Detect which iptables to use - prefer legacy if available since Docker uses it; legacy is preferred only when its tables load
-	iptablesCmd := detectIptables()
+	// Detect which iptables to use - prefer legacy if available since Docker uses it
+	iptablesCmd := iptablesCommand()
 
 	fmt.Printf("[Network] Setting up NAT rules for subnet %s, bridge %s (using %s)\n", subnet, bridge, iptablesCmd)
 
@@ -421,8 +419,8 @@ func (n *LinuxIsolatedNetwork) setupNFTablesNAT(subnet, bridge string) {
 func (n *LinuxIsolatedNetwork) Cleanup() error {
 	var lastErr error
 
-	// Detect which iptables to use - must match setupNAT; legacy is preferred only when its tables load
-	iptablesCmd := detectIptables()
+	// Detect which iptables to use - must match setupNAT
+	iptablesCmd := iptablesCommand()
 
 	// Remove NAT rules using exec.Command for consistency with setupNAT
 	subnet := n.config.Subnet.String()
@@ -568,8 +566,8 @@ func CleanupStaleResources(cfg *NetworkConfig) {
 		cfg = DefaultNetworkConfig()
 	}
 
-	// Detect which iptables to use - prefer legacy if available since Docker uses it; legacy is preferred only when its tables load
-	iptablesCmd := detectIptables()
+	// Detect which iptables to use - prefer legacy if available since Docker uses it
+	iptablesCmd := iptablesCommand()
 
 	// Clean up iptables rules using direct commands for consistency
 	// This ensures we clean up rules in the same tables we add them to

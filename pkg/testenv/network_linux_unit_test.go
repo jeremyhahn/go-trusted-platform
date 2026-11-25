@@ -306,7 +306,7 @@ func TestIptablesCommand_PrefersLegacyOnlyWhenItWorks(t *testing.T) {
 				assert.Equal(t, "iptables-legacy", cmd)
 				return tt.usable
 			}
-			assert.Equal(t, tt.want, iptablesCommand(lookPath, usable))
+			assert.Equal(t, tt.want, selectIptables(lookPath, usable))
 			assert.Equal(t, tt.wantProbed, probed)
 		})
 	}
