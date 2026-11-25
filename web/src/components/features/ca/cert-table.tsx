@@ -17,7 +17,16 @@ interface CertTableProps {
   onDownload?: (cert: Certificate) => void;
   onRevoke?: (cert: Certificate) => void;
   onRenew?: (cert: Certificate) => void;
+  /** #2033 item 5: the server's capability for renew; disables the row item when off. */
+  renewGate?: CapabilityGate;
+  /** #2033 item 5: the server's capability for revoke; disables the row item when off. */
+  revokeGate?: CapabilityGate;
   loading?: boolean;
+}
+
+interface CapabilityGate {
+  enabled: boolean;
+  reason?: string;
 }
 
 /**
@@ -36,11 +45,16 @@ export function CertTable({
   onDownload,
   onRevoke,
   onRenew,
+  renewGate,
+  revokeGate,
   loading = false,
 }: CertTableProps) {
   const capabilities = useCapabilities();
   const renewCap = capabilities.capability("POST /api/v1/ca/certificates/{serial}/renew");
   const revokeCap = capabilities.capability("DELETE /api/v1/ca/certificates/{serial}");
+  // A gate the caller passes wins; otherwise the server's capability answer gates the action.
+  const renew = renewGate ?? renewCap;
+  const revoke = revokeGate ?? revokeCap;
   const columns: ColumnDef<Certificate>[] = React.useMemo(
     () => [
       createSelectColumn<Certificate>(),
@@ -162,8 +176,8 @@ export function CertTable({
               onClick: onRenew,
               icon: RefreshCw,
               separator: actions.length > 0,
-              disabled: !renewCap.enabled,
-              title: renewCap.enabled ? undefined : renewCap.reason,
+              disabled: !renew.enabled,
+              title: renew.enabled ? undefined : renew.reason,
             });
           }
 
@@ -174,8 +188,8 @@ export function CertTable({
               variant: "destructive",
               icon: XCircle,
               separator: true,
-              disabled: !revokeCap.enabled,
-              title: revokeCap.enabled ? undefined : revokeCap.reason,
+              disabled: !revoke.enabled,
+              title: revoke.enabled ? undefined : revoke.reason,
             });
           }
 
@@ -183,16 +197,7 @@ export function CertTable({
         },
       },
     ],
-    [
-      onView,
-      onDownload,
-      onRevoke,
-      onRenew,
-      renewCap.enabled,
-      renewCap.reason,
-      revokeCap.enabled,
-      revokeCap.reason,
-    ]
+    [onView, onDownload, onRevoke, onRenew, renew.enabled, renew.reason, revoke.enabled, revoke.reason]
   );
 
   const filterableColumns: TypedFilterColumn<Certificate>[] = [

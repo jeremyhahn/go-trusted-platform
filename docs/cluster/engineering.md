@@ -1,6 +1,6 @@
 # Cluster — Engineering Contract
 
-> **Status: NORMATIVE** · Scope: `pkg/cluster/` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `pkg/cluster/` · Last verified: 2026-11-23
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 
@@ -237,8 +237,11 @@ pebble for storage."*
 Clustering additionally requires the **`cluster` build tag**, which is in the
 default `BUILD_TAGS` (`make -s print-build-tags` prints the derived set — the
 tags are assembled in two stages, so any hand-copied list is wrong). The tag
-does not change what the daemon serves: nothing constructs a ClusterService in
-any build, so every cluster transport answers Unavailable until #336 lands.
+does not change what the daemon serves: nothing constructs this ClusterService in
+any build. Since #2140, serve injects a servicer over the embedded go-quicbaas
+service instead (status, nodes and leader answer; Leave and Join answer
+Unavailable because the pinned go-quicbaas has no leader-routed removal and no
+join seam).
 Without the tag, `daemon.NewClusterService` is the stub in
 `cluster_service_stub.go` and returns
 `"cluster service is not wired in any build (#336)"`.
@@ -521,9 +524,16 @@ through the unexported `clusterCore` interface, which exists so the adapter is
 unit-testable without a real coordinator.
 
 `Daemon.SetClusterService(svc ClusterServicer)` stores it in the gRPC
-backend. **Nothing calls it**, so every transport — the MCP
+backend. Since #2140 serve and every embedded host call it through
+`appbackends.WireSDKBackends` (`pkg/app/backends/cluster.go`) with a servicer
+over the embedded go-quicbaas service, and the embedded host sets
+`registry.Cluster` to the same gRPC service. Every transport — the MCP
 `platform_cluster_*` tools and the QUIC `0x90` sub-opcodes included, since both
-call the registered gRPC service — returns `Unavailable`.
+call the registered gRPC service — answers `GetStatus` and `ListNodes` (node
+State "unknown", healthy count 0 until the SDK exposes liveness), `Bootstrap`
+with `AlreadyExists` or `FailedPrecondition`, and `Join` and `Leave` with
+`Unavailable`. A daemon without an embedded QuicBaaS service sets no servicer,
+and every call returns `Unavailable`.
 
 ## 9. Persistence
 

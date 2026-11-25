@@ -601,7 +601,11 @@ func (a *RESTAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCer
 func (a *RESTAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error) {
 	path := fmt.Sprintf("/api/v1/devices/%s/attest", opts.DeviceID)
 
-	body, err := a.doRequest(ctx, http.MethodPost, path, map[string][]byte{"evidence": opts.Evidence})
+	request := struct {
+		Evidence    []byte `json:"evidence"`
+		ChallengeID string `json:"challenge_id,omitempty"`
+	}{Evidence: opts.Evidence, ChallengeID: opts.ChallengeID}
+	body, err := a.doRequest(ctx, http.MethodPost, path, request)
 	if err != nil {
 		return nil, err
 	}
@@ -615,6 +619,27 @@ func (a *RESTAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions
 	}
 
 	return &result, nil
+}
+
+// IssueAttestationChallenge POSTs /api/v1/devices/{id}/attest/challenge,
+// which answers {challenge_id, nonce, expires_at} (#2136).
+func (a *RESTAdapter) IssueAttestationChallenge(ctx context.Context, opts IssueAttestationChallengeOptions) (*IssueAttestationChallengeResult, error) {
+	path := fmt.Sprintf("/api/v1/devices/%s/attest/challenge", opts.DeviceID)
+
+	body, err := a.doRequest(ctx, http.MethodPost, path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var challenge wsdevice.AttestChallengeResponse
+	if err := decodePayload("IssueAttestationChallenge", body, &challenge); err != nil {
+		return nil, err
+	}
+	return &IssueAttestationChallengeResult{
+		ChallengeID: challenge.ChallengeID,
+		Nonce:       challenge.Nonce,
+		ExpiresAt:   challenge.ExpiresAt,
+	}, nil
 }
 
 // ============================================================================

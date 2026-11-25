@@ -8,6 +8,8 @@ import { Label } from '@/components/ui/label';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
+import { useCapabilities } from '@/hooks/use-capabilities';
+import { Gated } from '@/components/features/capabilities/gated';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -21,8 +23,9 @@ import { EmbeddedIamGate } from '../../embedded-iam-gate';
 import { Gated } from '@/components/features/capabilities/gated';
 import { useCapabilities } from '@/hooks/use-capabilities';
 
-const UPDATE_GROUP_OP = 'PUT /api/v1/iam/groups/{id}';
-const DELETE_GROUP_OP = 'DELETE /api/v1/iam/groups/{id}';
+const GET_GROUP_OP = 'GET /api/v1/iam/tenants/{tenant}/groups/{id}';
+const UPDATE_GROUP_OP = 'PUT /api/v1/iam/tenants/{tenant}/groups/{id}';
+const DELETE_GROUP_OP = 'DELETE /api/v1/iam/tenants/{tenant}/groups/{id}';
 
 // The SDK rejects with an error object carrying the server's message; it is
 // not always an Error instance.
@@ -55,16 +58,19 @@ export default function GroupDetailClient() {
   const { toast } = useToast();
 
   const groupId = resolveDynamicId(params, pathname, 'groups');
-  const { capability } = useCapabilities();
+  const { loading: capsLoading, capability } = useCapabilities();
+  const getCap = capability(GET_GROUP_OP);
   const updateCap = capability(UPDATE_GROUP_OP);
   const deleteCap = capability(DELETE_GROUP_OP);
 
+  // Read the group once the server says it offers the read
   const { data: group, isLoading, error, refetch } = useApi(
     () => {
       if (!tenantId) return Promise.reject(new Error('No tenant ID'));
       return iam.getGroup(tenantId, groupId);
     },
     [tenantId, groupId],
+    { enabled: !capsLoading && getCap.enabled },
   );
 
   // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
@@ -120,11 +126,29 @@ export default function GroupDetailClient() {
     },
   );
 
-  if (isLoading) {
+  if (capsLoading || isLoading) {
     return (
       <div className="container mx-auto py-6 flex items-center gap-2">
         <Loader2 className="h-5 w-5 animate-spin" />
         <span>Loading group…</span>
+      </div>
+    );
+  }
+
+  if (!getCap.enabled) {
+    return (
+      <div className="container mx-auto py-6 space-y-4">
+        <Button variant="ghost" size="sm" onClick={() => router.push('/iam/groups')}>
+          <ArrowLeft className="h-4 w-4 mr-2" /> Back to Groups
+        </Button>
+        <Card data-testid="iam-group-not-enabled">
+          <CardHeader>
+            <CardTitle>Groups are not enabled on this server</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">{getCap.reason}</p>
+          </CardContent>
+        </Card>
       </div>
     );
   }

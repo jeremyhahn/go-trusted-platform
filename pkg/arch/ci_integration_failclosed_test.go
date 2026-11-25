@@ -83,7 +83,7 @@ func TestCIIntegrationFailsClosedOffTheRegistry(t *testing.T) {
 	for _, c := range []struct{ name, old, new string }{
 		{"the step removed", step, ""},
 		{"a term dropped", " && runner.environment != 'github-hosted' && github.server_url == 'https://github.com'\n        run: |\n          echo \"::error::", " && github.server_url == 'https://github.com'\n        run: |\n          echo \"::error::"},
-		{"a failed or mismatched pull falls back again (ruling 675)", "steps.pull.outputs.leased != 'true' && runner.environment != 'github-hosted'", "needs.integration-image.outputs.image_ref == '' && runner.environment != 'github-hosted'"},
+		{"a failed or mismatched pull falls back again (ruling 675)", "steps.pull.outputs.leased != 'true' && runner.environment != 'github-hosted'", "needs.integration-image.outputs.image_tag == '' && runner.environment != 'github-hosted'"},
 		{"the job no longer stops", "          exit 1\n\n", "          true\n\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {

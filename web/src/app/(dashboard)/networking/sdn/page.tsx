@@ -5,6 +5,8 @@
  *
  * Displays virtual networks, topology, and flow rules.
  * Uses the trusted-platform-sdk for API interactions.
+ * Create Network and the dialog's Create are gated on the server's
+ * POST /api/v1/sdn/bridges capability (#2033).
  */
 
 import { useMemo, useState } from 'react';
@@ -42,6 +44,7 @@ import Link from 'next/link';
 import { useSDN, useApi, useToast } from '@/hooks';
 import type { FlowRule } from '@/types/infrastructure';
 import type { BridgeType } from 'trusted-platform-sdk';
+import { Gated } from '@/components/features/capabilities/gated';
 import {
   bridgeKindLabels,
   flowActionKind,
@@ -177,10 +180,12 @@ export default function SDNPage() {
           <Button variant="outline" size="icon" onClick={fetchData} disabled={loading}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            Create Network
-          </Button>
+          <Gated op="POST /api/v1/sdn/bridges">
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Create Network
+            </Button>
+          </Gated>
         </div>
       </div>
 
@@ -215,32 +220,34 @@ export default function SDNPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
-            <Button
-              disabled={!createName || createSubmitting}
-              onClick={async () => {
-                setCreateSubmitting(true);
-                try {
-                  await sdn.createBridge({
-                    config: { name: createName, type: createType },
-                  });
-                  toast({ title: 'Network created', variant: 'success' });
-                  setCreateOpen(false);
-                  setCreateName('');
-                  refetchBridges();
-                } catch (err) {
-                  toast({
-                    title: 'Failed to create network',
-                    description: err instanceof Error ? err.message : 'Unknown error',
-                    variant: 'destructive',
-                  });
-                } finally {
-                  setCreateSubmitting(false);
-                }
-              }}
-            >
-              {createSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Create
-            </Button>
+            <Gated op="POST /api/v1/sdn/bridges">
+              <Button
+                disabled={!createName || createSubmitting}
+                onClick={async () => {
+                  setCreateSubmitting(true);
+                  try {
+                    await sdn.createBridge({
+                      config: { name: createName, type: createType },
+                    });
+                    toast({ title: 'Network created', variant: 'success' });
+                    setCreateOpen(false);
+                    setCreateName('');
+                    refetchBridges();
+                  } catch (err) {
+                    toast({
+                      title: 'Failed to create network',
+                      description: err instanceof Error ? err.message : 'Unknown error',
+                      variant: 'destructive',
+                    });
+                  } finally {
+                    setCreateSubmitting(false);
+                  }
+                }}
+              >
+                {createSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Create
+              </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>

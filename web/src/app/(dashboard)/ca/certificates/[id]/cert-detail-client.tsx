@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { CertDetail } from "@/components/features/ca/cert-detail";
 import { CertChain } from "@/components/features/ca/cert-chain";
 import { useCA, useApi, useMutation, useToast } from "@/hooks";
+import { useCapabilities } from "@/hooks/use-capabilities";
 import type { RevocationReason } from "trusted-platform-sdk";
 import { REVOCATION_REASONS, isRevocationReason } from "@/components/features/ca/revocation-reasons";
 import type { CertificateDetail } from "@/types/security";
@@ -66,11 +67,16 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
   const router = useRouter();
   const ca = useCA();
   const { toast } = useToast();
+  // #2033 item 5: the read and Revoke follow the server's capabilities.
+  const { loading: capsLoading, capability } = useCapabilities();
+  const getCap = capability("GET /api/v1/ca/certificates/{serial}");
+  const revokeCap = capability("DELETE /api/v1/ca/certificates/{serial}");
 
   // SDK getCertificate takes serial number as a string parameter
   const { data: response, isLoading: loading, error, refetch } = useApi(
     () => ca.getCertificate(id),
-    [id]
+    [id],
+    { enabled: !capsLoading && getCap.enabled }
   );
 
   // Transform SDK Certificate to UI CertificateDetail type. The platform
@@ -258,10 +264,25 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
     revokeMutation.mutate(reason);
   };
 
-  if (loading) {
+  if (capsLoading || loading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!getCap.enabled) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
+        <div data-testid="ca-certificate-not-enabled" className="rounded-lg border border-border bg-card p-6">
+          <div className="font-medium">Certificate details are not enabled on this server</div>
+          <p className="text-sm text-muted-foreground mt-1">{getCap.reason}</p>
+        </div>
+        <Button variant="outline" onClick={() => router.push("/ca/certificates")}>
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          Back to Certificates
+        </Button>
       </div>
     );
   }
@@ -319,6 +340,7 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
         onDownloadPEM={handleDownloadPEM}
         onDownloadDER={handleDownloadDER}
         onRevoke={handleRevoke}
+        revokeGate={revokeCap}
       />
 
       {/* Certificate Chain */}

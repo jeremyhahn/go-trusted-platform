@@ -14,6 +14,8 @@ import {
 import { CertTable } from "@/components/features/ca/cert-table";
 import { IssueCertForm } from "@/components/features/ca/issue-cert-form";
 import { useCA, useApi, useMutation } from "@/hooks";
+import { Gated } from "@/components/features/capabilities/gated";
+import { useCapabilities } from "@/hooks/use-capabilities";
 import type { Certificate, IssueCertInput } from "@/types/security";
 import { Gated } from "@/components/features/capabilities/gated";
 import { REVOCATION_REASONS, isRevocationReason } from "@/components/features/ca/revocation-reasons";
@@ -73,6 +75,12 @@ export default function CertificatesPage() {
   const router = useRouter();
   const ca = useCA();
   const [isIssueDialogOpen, setIsIssueDialogOpen] = React.useState(false);
+  // #2033 item 5: the list and every control follow the server's capabilities.
+  const { loading: capsLoading, capability } = useCapabilities();
+  const listCap = capability("GET /api/v1/ca/certificates");
+  const renewCap = capability("POST /api/v1/ca/certificates/{serial}/renew");
+  const revokeCap = capability("DELETE /api/v1/ca/certificates/{serial}");
+  const listOff = !capsLoading && !listCap.enabled;
 
   // Fetch certificates using SDK's useApi hook
   const {
@@ -82,7 +90,8 @@ export default function CertificatesPage() {
     refetch: loadCertificates,
   } = useApi(
     () => ca.listCertificates(),
-    []
+    [],
+    { enabled: !capsLoading && listCap.enabled }
   );
 
   // Transform server CertificateSummary to local Certificate type. The
@@ -305,10 +314,12 @@ export default function CertificatesPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={loadCertificates} disabled={loading}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
+          <Gated op="GET /api/v1/ca/certificates">
+            <Button variant="outline" onClick={() => loadCertificates()} disabled={loading}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          </Gated>
           <Dialog open={isIssueDialogOpen} onOpenChange={setIsIssueDialogOpen}>
             <Gated op="POST /api/v1/ca/certificates">
               <DialogTrigger asChild>
@@ -343,14 +354,23 @@ export default function CertificatesPage() {
       )}
 
       {/* Certificates Table */}
-      <CertTable
-        certificates={certificates}
-        onView={handleView}
-        onDownload={handleDownload}
-        onRevoke={handleRevoke}
-        onRenew={handleRenew}
-        loading={loading}
-      />
+      {listOff ? (
+        <div data-testid="ca-certificates-not-enabled" className="rounded-lg border border-border bg-card p-6">
+          <div className="font-medium">Certificate listing is not enabled on this server</div>
+          <p className="text-sm text-muted-foreground mt-1">{listCap.reason}</p>
+        </div>
+      ) : (
+        <CertTable
+          certificates={certificates}
+          onView={handleView}
+          onDownload={handleDownload}
+          onRevoke={handleRevoke}
+          onRenew={handleRenew}
+          renewGate={renewCap}
+          revokeGate={revokeCap}
+          loading={capsLoading || loading}
+        />
+      )}
     </div>
   );
 }

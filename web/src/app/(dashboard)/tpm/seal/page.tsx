@@ -20,6 +20,8 @@ import {
   Loader2,
 } from "lucide-react";
 import { useTPM, useMutation, useToast } from "@/hooks";
+import { Gated } from "@/components/features/capabilities/gated";
+import { useCapabilities } from "@/hooks/use-capabilities";
 
 
 /**
@@ -46,6 +48,10 @@ const availablePCRs = [
 export default function TPMSealPage() {
   const { toast } = useToast();
   const tpm = useTPM();
+  // #2033 item 5: Seal and Unseal follow the server's capabilities.
+  const { loading: capsLoading, capability } = useCapabilities();
+  const sealCap = capability("POST /api/v1/tpm/seal");
+  const unsealCap = capability("POST /api/v1/tpm/unseal");
 
   const [activeTab, setActiveTab] = React.useState<"seal" | "unseal">("seal");
   const [selectedPCRs, setSelectedPCRs] = React.useState<number[]>([7]);
@@ -193,6 +199,12 @@ export default function TPMSealPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {!capsLoading && !sealCap.enabled && !unsealCap.enabled && (
+            <div data-testid="tpm-seal-not-enabled" className="mb-4 rounded-lg border border-border bg-card p-6">
+              <div className="font-medium">Seal and unseal are not enabled on this server</div>
+              <p className="text-sm text-muted-foreground mt-1">{sealCap.reason ?? unsealCap.reason}</p>
+            </div>
+          )}
           <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "seal" | "unseal")}>
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="seal">
@@ -255,6 +267,7 @@ export default function TPMSealPage() {
                     onChange={(e) => setSealData(e.target.value)}
                   />
                 </div>
+                <Gated op="POST /api/v1/tpm/seal">
                 <Button
                   onClick={handleSeal}
                   disabled={selectedPCRs.length === 0 || !sealData || !sealCn || sealMutation.isLoading}
@@ -271,6 +284,7 @@ export default function TPMSealPage() {
                     </>
                   )}
                 </Button>
+                </Gated>
                 {sealedResult && (
                   <div className="space-y-2">
                     <Label>Sealed Data (Base64)</Label>
@@ -297,6 +311,7 @@ export default function TPMSealPage() {
                     onChange={(e) => setUnsealCn(e.target.value)}
                   />
                 </div>
+                <Gated op="POST /api/v1/tpm/unseal">
                 <Button
                   onClick={handleUnseal}
                   disabled={!unsealCn || unsealMutation.isLoading}
@@ -313,6 +328,7 @@ export default function TPMSealPage() {
                     </>
                   )}
                 </Button>
+                </Gated>
                 {unsealedResult && (
                   <div className="space-y-2">
                     <Label>Unsealed Data</Label>

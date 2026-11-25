@@ -16,6 +16,7 @@ import { ColumnDef } from '@tanstack/react-table';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIAM, useApi } from '@/hooks';
 import { PermissionCheckCard } from '@/components/features/iam/permission-check-card';
+import { useCapabilities } from '@/hooks/use-capabilities';
 import type { Group, Policy, Permission } from '@/types/iam';
 import { DataTable } from '@/components/ui/data-table';
 import { DataTableColumnHeader } from '@/components/ui/data-table-column-header';
@@ -31,33 +32,39 @@ import { Shield, Key, FileText, AlertCircle, Loader2, Users } from 'lucide-react
 export default function PermissionsPage() {
   const { user: authUser, tenantId, isLoading: authLoading } = useAuth();
   const iam = useIAM();
+  const { loading: capsLoading, capability } = useCapabilities();
+  const groupsCap = capability('GET /api/v1/iam/tenants/{tenant}/groups');
+  const policiesCap = capability('GET /api/v1/iam/tenants/{tenant}/policies');
+  const rolesCap = capability('GET /api/v1/iam/tenants/{tenant}/roles');
 
-
-  // Fetch groups using SDK
+  // Fetch groups using SDK, once the server says it offers the list
   const { data: groupsData, isLoading: groupsLoading, error: groupsError } = useApi(
     () => {
       if (!tenantId) return Promise.reject(new Error('No tenant ID'));
       return iam.listGroups({ tenantId });
     },
-    [tenantId]
+    [tenantId],
+    { enabled: !capsLoading && groupsCap.enabled }
   );
 
-  // Fetch policies using SDK
+  // Fetch policies using SDK, once the server says it offers the list
   const { data: policiesData, isLoading: policiesLoading, error: policiesError } = useApi(
     () => {
       if (!tenantId) return Promise.reject(new Error('No tenant ID'));
       return iam.listPolicies({ tenantId });
     },
-    [tenantId]
+    [tenantId],
+    { enabled: !capsLoading && policiesCap.enabled }
   );
 
-  // Fetch roles using SDK
+  // Fetch roles using SDK, once the server says it offers the list
   const { data: rolesData, isLoading: rolesLoading, error: rolesError } = useApi(
     () => {
       if (!tenantId) return Promise.reject(new Error('No tenant ID'));
       return iam.listRoles({ tenantId });
     },
-    [tenantId]
+    [tenantId],
+    { enabled: !capsLoading && rolesCap.enabled }
   );
 
   // Convert SDK types to legacy types. The list replies are the proto
@@ -81,7 +88,7 @@ export default function PermissionsPage() {
   }));
 
   const roles = rolesData?.roles || [];
-  const loading = groupsLoading || policiesLoading || rolesLoading;
+  const loading = capsLoading || groupsLoading || policiesLoading || rolesLoading;
   const error = groupsError || policiesError || rolesError;
 
   // Extract unique permissions from roles — derived, not stored: a setState
@@ -284,6 +291,23 @@ export default function PermissionsPage() {
             No tenant ID available. Please log in again to access IAM management.
           </AlertDescription>
         </Alert>
+      </div>
+    );
+  }
+
+  if (!capsLoading && !groupsCap.enabled && !policiesCap.enabled && !rolesCap.enabled) {
+    return (
+      <div className="container mx-auto py-6">
+        <Card data-testid="iam-permissions-not-enabled">
+          <CardHeader>
+            <CardTitle>Permissions are not enabled on this server</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              {groupsCap.reason || policiesCap.reason || rolesCap.reason}
+            </p>
+          </CardContent>
+        </Card>
       </div>
     );
   }

@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { useCompute, useMutation, useToast, MutationError } from '@/hooks';
+import { useCapabilities } from '@/hooks/use-capabilities';
 import type { Container } from '@/types/infrastructure';
 
 interface ContainerTableProps {
@@ -48,6 +49,11 @@ export function ContainerTable({
   const [loading, setLoading] = useState<string | null>(null);
   const compute = useCompute();
   const { toast } = useToast();
+  // #2033 item 5: the row actions follow the server's capabilities.
+  const { capability } = useCapabilities();
+  const startCap = capability('POST /api/v1/compute/containers/{id}/start');
+  const stopCap = capability('POST /api/v1/compute/containers/{id}/stop');
+  const deleteCap = capability('DELETE /api/v1/compute/containers/{id}');
 
   const startContainerMutation = useMutation(
     (containerId: string) => compute.startContainer(containerId),
@@ -197,6 +203,8 @@ export function ContainerTable({
                       {container.status !== 'running' && (
                         <DropdownMenuItem
                           onClick={() => handleStart(container.id)}
+                          disabled={!startCap.enabled}
+                          title={startCap.enabled ? undefined : startCap.reason}
                         >
                           <Play className="mr-2 h-4 w-4" />
                           Start
@@ -206,6 +214,8 @@ export function ContainerTable({
                         <>
                           <DropdownMenuItem
                             onClick={() => handleStop(container.id)}
+                            disabled={!stopCap.enabled}
+                            title={stopCap.enabled ? undefined : stopCap.reason}
                           >
                             <Square className="mr-2 h-4 w-4" />
                             Stop
@@ -227,6 +237,8 @@ export function ContainerTable({
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
                         onClick={() => handleDelete(container.id)}
+                        disabled={!deleteCap.enabled}
+                        title={deleteCap.enabled ? undefined : deleteCap.reason}
                         className="text-destructive"
                       >
                         <Trash2 className="mr-2 h-4 w-4" />

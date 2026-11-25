@@ -22,6 +22,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import { useVTPM, useMutation } from '@/hooks';
+import { Gated } from '@/components/features/capabilities/gated';
 
 const vtpmFormSchema = z.object({
   name: z.string().min(1, 'Name is required').max(100),
@@ -182,9 +183,11 @@ export function VTPMForm({ onSuccess, onCancel }: VTPMFormProps) {
               Cancel
             </Button>
           )}
-          <Button type="submit" disabled={createMutation.isLoading}>
-            {createMutation.isLoading ? 'Creating...' : 'Create vTPM'}
-          </Button>
+          <Gated op="POST /api/v1/vtpm/bundles">
+            <Button type="submit" disabled={createMutation.isLoading}>
+              {createMutation.isLoading ? 'Creating...' : 'Create vTPM'}
+            </Button>
+          </Gated>
         </div>
       </form>
     </Form>

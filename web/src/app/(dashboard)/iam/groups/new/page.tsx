@@ -4,6 +4,7 @@
  * Create Group page — minimal form that calls iam.createGroup, then
  * routes back to /iam/groups. The list page links here from its
  * "Add Group" button.
+ * Create Group is gated on the server's tenant group create capability (#2033).
  */
 
 import React, { useState } from 'react';
@@ -12,13 +13,14 @@ import { useIAM, useToast, useMutation } from '@/hooks';
 import { Gated } from '@/components/features/capabilities/gated';
 import { useCapabilities } from '@/hooks/use-capabilities';
 
-const CREATE_GROUP_OP = 'POST /api/v1/iam/groups';
+const CREATE_GROUP_OP = 'POST /api/v1/iam/tenants/{tenant}/groups';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Loader2 } from 'lucide-react';
+import { Gated } from '@/components/features/capabilities/gated';
 
 // The SDK rejects with an error object carrying the server's message; it is
 // not always an Error instance.
