@@ -1,21 +1,167 @@
-import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ReactNode } from "react";
+import { act, cleanup, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PlatformClient, PlatformProvider } from "trusted-platform-sdk";
 
-import { ok, stubControlPlane, withControlPlane } from '@/test/control-plane-fetch';
-import { CAPABILITIES_LOADING_REASON, useCapabilities } from './use-capabilities';
+import { ok as controlPlaneOk, stubControlPlane, withControlPlane } from "@/test/control-plane-fetch";
+import { CAPABILITIES_LOADING_REASON, useCapabilities } from "./use-capabilities";
 
-afterEach(() => {
-  cleanup();
-  vi.unstubAllGlobals();
+// #2058 / #2033 item 4: the capability gate reads GET /api/v1/capabilities
+// once per client and fails closed.
+
+// The SDK's PlatformProvider types its children with the SDK's own React types.
+type ProviderChildren = Parameters<typeof PlatformProvider>[0]["children"];
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function ok(payload: unknown): Response {
+  return jsonResponse(200, { code: 200, error: "", success: true, payload });
+}
+
+function failure(status: number, error: string): Response {
+  return jsonResponse(status, { code: status, error, success: false });
+}
+
+const capabilities = {
+  capabilities: [
+    { op: "POST /api/v1/ntp/step", kind: "route", enabled: true },
+    { op: "GET /api/v1/ntp/sources", kind: "route", enabled: false, reason: "blocked: integration" },
+  ],
+  total: 2,
+  enabled: 1,
+};
+
+describe("useCapabilities", () => {
+  const fetchMock = vi.fn<typeof fetch>();
+  let client: PlatformClient;
+
+  function wrapper({ children }: { children: ReactNode }) {
+    return <PlatformProvider client={client}>{children as ProviderChildren}</PlatformProvider>;
+  }
+
+  function capabilityCalls() {
+    return fetchMock.mock.calls.filter(([input, init]) => {
+      return (
+        (init?.method ?? "GET") === "GET" &&
+        new URL(String(input)).pathname === "/api/v1/capabilities"
+      );
+    });
+  }
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    client = new PlatformClient({
+      baseUrl: "https://platform.test/api",
+      fetch: fetchMock,
+      retry: { maxRetries: 0 },
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("while loading every op is disabled", () => {
+    fetchMock.mockImplementation(() => new Promise<Response>(() => undefined));
+
+    const { result } = renderHook(() => useCapabilities(), { wrapper });
+
+    expect(result.current.loading).toBe(true);
+    expect(result.current.capability("POST /api/v1/ntp/step")).toEqual({
+      enabled: false,
+      reason: "checking server capabilities",
+    });
+  });
+
+  it("a listed enabled op is enabled", async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(ok(capabilities)));
+
+    const { result } = renderHook(() => useCapabilities(), { wrapper });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.capability("POST /api/v1/ntp/step").enabled).toBe(true);
+  });
+
+  it("a listed disabled op carries the server reason", async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(ok(capabilities)));
+
+    const { result } = renderHook(() => useCapabilities(), { wrapper });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.capability("GET /api/v1/ntp/sources")).toEqual({
+      enabled: false,
+      reason: "blocked: integration",
+    });
+  });
+
+  it("an unlisted op is disabled as not offered by this server", async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(ok(capabilities)));
+
+    const { result } = renderHook(() => useCapabilities(), { wrapper });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.capability("GET /api/v1/ntp/status")).toEqual({
+      enabled: false,
+      reason: "not offered by this server",
+    });
+  });
+
+  it("a fetch error disables every op", async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(failure(500, "boom")));
+
+    const { result } = renderHook(() => useCapabilities(), { wrapper });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toBeTruthy();
+    expect(result.current.capability("POST /api/v1/ntp/step")).toEqual({
+      enabled: false,
+      reason: "server capabilities unavailable",
+    });
+  });
+
+  it("two hooks on one client fetch capabilities once", async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(ok(capabilities)));
+
+    const first = renderHook(() => useCapabilities(), { wrapper });
+    const second = renderHook(() => useCapabilities(), { wrapper });
+
+    await waitFor(() => expect(first.result.current.loading).toBe(false));
+    await waitFor(() => expect(second.result.current.loading).toBe(false));
+    expect(second.result.current.capability("POST /api/v1/ntp/step").enabled).toBe(true);
+    expect(capabilityCalls()).toHaveLength(1);
+  });
+
+  it("reload after a failed read asks again and every hook on the client sees the recovery", async () => {
+    fetchMock.mockImplementationOnce(() => Promise.resolve(failure(500, "boom")));
+    fetchMock.mockImplementation(() => Promise.resolve(ok(capabilities)));
+
+    const first = renderHook(() => useCapabilities(), { wrapper });
+    const second = renderHook(() => useCapabilities(), { wrapper });
+
+    await waitFor(() => expect(first.result.current.error).toBeTruthy());
+    await waitFor(() => expect(second.result.current.error).toBeTruthy());
+
+    act(() => first.result.current.reload());
+
+    await waitFor(() => expect(first.result.current.error).toBeUndefined());
+    await waitFor(() => expect(second.result.current.error).toBeUndefined());
+    expect(first.result.current.capability("POST /api/v1/ntp/step").enabled).toBe(true);
+    expect(second.result.current.capability("POST /api/v1/ntp/step").enabled).toBe(true);
+  });
 });
 
-const OP = 'DELETE /api/v1/proxy/pools/{id}';
+const OP = "DELETE /api/v1/proxy/pools/{id}";
 
 function Probe({ seen }: { seen: string[] }) {
   const { capability } = useCapabilities();
   const answer = capability(OP);
-  seen.push(answer.enabled ? 'enabled' : (answer.reason ?? 'disabled'));
-  return <span data-testid="probe">{answer.enabled ? 'enabled' : answer.reason}</span>;
+  seen.push(answer.enabled ? "enabled" : (answer.reason ?? "disabled"));
+  return <span data-testid="probe">{answer.enabled ? "enabled" : answer.reason}</span>;
 }
 
 // A table row's Gated control mounts only after the page's own read settled.
@@ -24,10 +170,15 @@ function Host({ seen }: { seen: string[] }) {
   return loading ? null : <Probe seen={seen} />;
 }
 
-describe('useCapabilities', () => {
+describe("useCapabilities on a late-mounting control", () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
   it('answers a control that mounts after the read settled from its first render', async () => {
     stubControlPlane({
-      'GET /api/v1/capabilities': ok({ capabilities: [{ op: OP, kind: 'route', enabled: true }], total: 1, enabled: 1 }),
+      'GET /api/v1/capabilities': controlPlaneOk({ capabilities: [{ op: OP, kind: 'route', enabled: true }], total: 1, enabled: 1 }),
     });
     const seen: string[] = [];
     render(withControlPlane(<Host seen={seen} />));
