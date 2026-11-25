@@ -169,6 +169,17 @@ func TestNewOverlayService(t *testing.T) {
 	})
 }
 
+func TestOverlayService_Configured(t *testing.T) {
+	svc := NewOverlayService()
+	assert.False(t, svc.Configured(), "a service without a controller reports configured")
+
+	svc.SetController(newMockOverlayController())
+	assert.True(t, svc.Configured(), "a service with a controller reports not configured")
+
+	svc.SetController(nil)
+	assert.False(t, svc.Configured(), "a service whose controller was cleared reports configured")
+}
+
 func TestOverlayService_SetController(t *testing.T) {
 	svc := NewOverlayService()
 	assert.Nil(t, svc.Controller())

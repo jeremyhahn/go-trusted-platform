@@ -28,7 +28,10 @@ import (
 type recordingSDKTarget struct {
 	ceremony daemon.CeremonyBackend
 	fido2    daemon.FIDO2Backend
+	cluster  daemon.ClusterServicer
 }
+
+func (r *recordingSDKTarget) SetClusterService(s daemon.ClusterServicer) { r.cluster = s }
 
 func (r *recordingSDKTarget) SetCeremonyBackend(b daemon.CeremonyBackend) { r.ceremony = b }
 func (r *recordingSDKTarget) SetFIDO2Backend(b daemon.FIDO2Backend)       { r.fido2 = b }
@@ -45,6 +48,35 @@ func TestWireSDKBackends_WiresCeremonyOnly(t *testing.T) {
 	}
 	if target.fido2 != nil {
 		t.Fatalf("FIDO2 backend = %T, want nil until the SDK exposes the daemon backend shape", target.fido2)
+	}
+}
+
+// TestWireSDKBackends_SetsTheClusterServicer verifies the cluster servicer in
+// the sources reaches the daemon.
+func TestWireSDKBackends_SetsTheClusterServicer(t *testing.T) {
+	target := &recordingSDKTarget{}
+	cluster := NewClusterBackend(&fakeClusterSurface{}, 1, "")
+	src := SDKBackendSources{SDK: &fakeQuicbaasClient{}, Cluster: cluster}
+
+	if err := WireSDKBackends(target, src, logging.DefaultLogger()); err != nil {
+		t.Fatalf("WireSDKBackends: %v", err)
+	}
+	if target.cluster != cluster {
+		t.Errorf("cluster servicer = %#v, want the sources' servicer", target.cluster)
+	}
+}
+
+// TestWireSDKBackends_NoClusterLeavesItUnset verifies sources without a
+// cluster servicer never call SetClusterService.
+func TestWireSDKBackends_NoClusterLeavesItUnset(t *testing.T) {
+	target := &recordingSDKTarget{}
+	src := SDKBackendSources{SDK: &fakeQuicbaasClient{}}
+
+	if err := WireSDKBackends(target, src, logging.DefaultLogger()); err != nil {
+		t.Fatalf("WireSDKBackends: %v", err)
+	}
+	if target.cluster != nil {
+		t.Errorf("cluster servicer = %#v, want nil", target.cluster)
 	}
 }
 
