@@ -500,7 +500,8 @@ func TestRenew_FailedExtensionStaysRetryable(t *testing.T) {
 	require.NoError(t, err)
 	h.intoRenewWindow()
 
-	plane.extendErr = errors.New("datapath unreachable")
+	// The extension fails without applying; the host restore succeeds.
+	plane.steps = []extendStep{{err: errors.New("datapath unreachable")}, {apply: true}}
 	_, err = h.svc.Renew(context.Background(), lease.ID, h.evidence(t))
 	var unavailable *ErrDataPlaneUnavailable
 	require.True(t, errors.As(err, &unavailable), "got %v", err)
@@ -509,11 +510,11 @@ func TestRenew_FailedExtensionStaysRetryable(t *testing.T) {
 	assert.Equal(t, lease.ExpiresAt, stored.ExpiresAt, "the store keeps the deadline the host holds")
 	assert.Equal(t, 0, stored.Renewals)
 
-	plane.extendErr = nil
 	renewed, err := h.svc.Renew(context.Background(), lease.ID, h.evidence(t))
 	require.NoError(t, err, "the retry after connectivity recovers renews")
 	assert.Equal(t, 1, renewed.Renewals)
-	assert.Equal(t, []time.Time{renewed.ExpiresAt}, plane.extended, "the host learns the new deadline")
+	assert.Equal(t, []time.Time{lease.ExpiresAt, renewed.ExpiresAt}, plane.extended,
+		"the host is restored to the old deadline, then learns the new one")
 }
 
 // renewHarness admits a lease on an extending plane and moves into its renew

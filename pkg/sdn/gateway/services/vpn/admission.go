@@ -245,12 +245,31 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 	if err := s.deps.Leases.Put(ctx, lease); err != nil {
 		return nil, s.refuse(ctx, lease.DeviceID, &ErrLeaseStoreUnavailable{Cause: err})
 	}
-	// A failed extension restores the stored deadline so the renewal can be retried.
+	// A failed extension restores the stored deadline so the renewal can be
+	// retried. An RPC error does not prove the host kept the old deadline (the
+	// response may be lost), so the host is first sent the previous deadline
+	// again, and the store rolls back only once the host confirms it: the
+	// host deadline is never later than the stored one. The cleanup runs on a
+	// context detached from the caller's, which may be what failed.
 	if ext, ok := s.deps.DataPlanes[lease.DataPlane].(PeerDeadlineExtender); ok {
 		if err := ext.ExtendPeer(ctx, lease); err != nil {
-			lease.ExpiresAt, lease.Renewals, lease.Verdict = prevExpiresAt, prevRenewals, prevVerdict
-			if pErr := s.deps.Leases.Put(ctx, lease); pErr != nil {
-				err = errors.Join(err, pErr)
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), installCleanupTimeout)
+			defer cancel()
+			restore := *lease
+			restore.ExpiresAt = prevExpiresAt
+			if hErr := ext.ExtendPeer(cleanupCtx, &restore); hErr != nil {
+				// The host may hold the new deadline: keep it stored so the
+				// store never falls below the host.
+				s.logger.Warn("vpn.renew: restoring the host deadline failed; keeping the new stored deadline",
+					slog.String("lease", string(lease.ID)), slog.Time("expires_at", lease.ExpiresAt), slog.Any("error", hErr))
+				err = errors.Join(err, hErr)
+			} else {
+				lease.ExpiresAt, lease.Renewals, lease.Verdict = prevExpiresAt, prevRenewals, prevVerdict
+				if pErr := s.deps.Leases.Put(cleanupCtx, lease); pErr != nil {
+					s.logger.Warn("vpn.renew: rolling the stored deadline back failed",
+						slog.String("lease", string(lease.ID)), slog.Any("error", pErr))
+					err = errors.Join(err, pErr)
+				}
 			}
 			return nil, s.refuse(ctx, lease.DeviceID, &ErrDataPlaneUnavailable{Kind: lease.DataPlane, Cause: err})
 		}
