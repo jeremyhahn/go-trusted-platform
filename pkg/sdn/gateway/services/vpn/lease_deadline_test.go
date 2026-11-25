@@ -225,3 +225,58 @@ func TestLeaseDeadline_RenewalRefusedWhenTheHostIsUnreachable(t *testing.T) {
 	var unavailable *ErrDataPlaneUnavailable
 	require.ErrorAs(t, err, &unavailable)
 }
+
+func TestLeaseDeadline_RenewalAfterExpiryIsRefusedAndInstallsNothing(t *testing.T) {
+	t0 := leaseDeadlineT0
+	ctx := context.Background()
+
+	t.Run("expired and removed", func(t *testing.T) {
+		managed := newManagedFakePlane(DataPlaneMASQUE, new([]string))
+		host := hostOf(t, managed)
+		dp, err := NewDatapathPlane(DataPlaneMASQUE, &hostPeers{host: host})
+		require.NoError(t, err)
+		require.Nil(t, installHosted(t, host, deadlinePeer("l1", t0.Add(time.Hour))))
+		require.NoError(t, host.ExpirePeers(ctx, t0.Add(time.Hour)))
+		require.Equal(t, 0, managed.count())
+
+		lease, err := leaseFromPeer(deadlinePeer("l1", t0.Add(2*time.Hour)))
+		require.NoError(t, err)
+		var notFound *ErrLeaseNotFound
+		require.ErrorAs(t, dp.ExtendPeer(ctx, lease), &notFound)
+		assert.Equal(t, 0, managed.count(), "a renewal after expiry installs nothing")
+	})
+
+	t.Run("deadline passed before expiry ran", func(t *testing.T) {
+		managed := newManagedFakePlane(DataPlaneMASQUE, new([]string))
+		host := hostOf(t, managed)
+		host.now = func() time.Time { return t0.Add(time.Hour) }
+		require.Nil(t, installHosted(t, host, deadlinePeer("l1", t0.Add(time.Hour))))
+
+		resp := host.RenewVPNPeer(ctx, &ipcv1.RenewVPNPeerRequest{
+			PublicKey:         bytesOf(0xab, 32),
+			ExpiresAtUnixNano: t0.Add(2 * time.Hour).UnixNano(),
+		})
+		require.NotNil(t, resp.GetRefusal())
+		assert.Equal(t, ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_LEASE_NOT_FOUND, resp.GetRefusal().GetClass())
+
+		require.NoError(t, host.ExpirePeers(ctx, t0.Add(time.Hour)))
+		assert.Equal(t, 0, managed.count(), "the old deadline stands")
+	})
+
+	t.Run("held and unexpired moves only the deadline", func(t *testing.T) {
+		managed := newManagedFakePlane(DataPlaneMASQUE, new([]string))
+		host := hostOf(t, managed)
+		host.now = func() time.Time { return t0.Add(30 * time.Minute) }
+		require.Nil(t, installHosted(t, host, deadlinePeer("l1", t0.Add(time.Hour))))
+		managed.installErr = errors.New("renewal reached the plane")
+
+		require.Nil(t, host.RenewVPNPeer(ctx, &ipcv1.RenewVPNPeerRequest{
+			PublicKey:         bytesOf(0xab, 32),
+			ExpiresAtUnixNano: t0.Add(2 * time.Hour).UnixNano(),
+		}).GetRefusal())
+		require.NoError(t, host.ExpirePeers(ctx, t0.Add(time.Hour)))
+		assert.Equal(t, 1, managed.count())
+		require.NoError(t, host.ExpirePeers(ctx, t0.Add(2*time.Hour)))
+		assert.Equal(t, 0, managed.count())
+	})
+}
