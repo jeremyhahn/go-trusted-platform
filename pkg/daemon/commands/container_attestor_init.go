@@ -37,11 +37,14 @@ import (
 // and this node's own device record exist.
 
 // runtimeAttestorFunc builds the attestor that quotes the host TPM.
-type runtimeAttestorFunc func(tpm orchestration.HostTPM, logger *slog.Logger) (service.ContainerAttestor, error)
+type runtimeAttestorFunc func(tpm orchestration.HostTPM, appraiser orchestration.HostAppraiser, logger *slog.Logger) (service.ContainerAttestor, error)
 
 // containerAttestorDeps is what the fleet attestor is composed from.
 type containerAttestorDeps struct {
-	TPM       orchestration.HostTPM
+	TPM orchestration.HostTPM
+	// Appraiser judges host quotes against the named reference values in
+	// the embedded server's qrdb attestation store.
+	Appraiser orchestration.HostAppraiser
 	Devices   container.FleetDeviceRegistry
 	Baselines container.FleetBaselineResolver
 	Verdicts  container.FleetVerdictRecorder
@@ -68,6 +71,14 @@ func wireContainerAttestor(logger *slog.Logger, a *app.App, cfg *daemon.Config, 
 		return
 	}
 	deps := containerAttestorDepsFrom(a, cfg, svcs, self)
+	if server := factory.EmbeddedServer(); server != nil {
+		appraiser, err := container.NewQRDBHostAppraiser(server.QRDBNodeClient)
+		if err != nil {
+			logger.Warn("container attestation: the host appraiser could not be built", "error", err)
+		} else {
+			deps.Appraiser = appraiser
+		}
+	}
 	if err := installContainerAttestor(logger, factory.ContainerAttestor(), deps); err != nil {
 		var prerequisite ErrContainerAttestorPrerequisite
 		if errors.As(err, &prerequisite) {
@@ -130,6 +141,9 @@ func newFleetContainerAttestor(logger *slog.Logger, deps containerAttestorDeps) 
 	if deps.TPM == nil {
 		return nil, ErrContainerAttestorPrerequisite{Missing: "a host TPM"}
 	}
+	if deps.Appraiser == nil {
+		return nil, ErrContainerAttestorPrerequisite{Missing: "a host appraiser over the qrdb attestation store"}
+	}
 	if deps.NewRuntimeAttestor == nil {
 		return nil, ErrContainerAttestorPrerequisite{Missing: "a runtime attestor"}
 	}
@@ -137,7 +151,7 @@ func newFleetContainerAttestor(logger *slog.Logger, deps containerAttestorDeps) 
 	if err != nil {
 		return nil, ErrCollectorDeviceID{DeviceID: deps.Self.DeviceID}
 	}
-	runtime, err := deps.NewRuntimeAttestor(deps.TPM, logger)
+	runtime, err := deps.NewRuntimeAttestor(deps.TPM, deps.Appraiser, logger)
 	if err != nil {
 		return nil, ErrContainerAttestorRuntime{Cause: err}
 	}

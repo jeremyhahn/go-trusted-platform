@@ -16,12 +16,18 @@ package container
 import (
 	"context"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"errors"
 	"io"
 	"log/slog"
+	"math/big"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -442,11 +448,86 @@ func (m *mockHostTPM) resetExtendCalls() {
 // newTestAttestingRuntime builds the real SDK attesting runtime over tpm.
 func newTestAttestingRuntime(t testing.TB, tpm orchestration.HostTPM) *orchestration.TPMAttestingRuntime {
 	t.Helper()
-	rt, err := orchestration.NewTPMAttestingRuntime(&stubContainerRuntime{}, tpm, newSDKLogger(slog.Default()))
+	rt, err := orchestration.NewTPMAttestingRuntime(&stubContainerRuntime{}, tpm, newFakeHostAppraiser(), newSDKLogger(slog.Default()))
 	if err != nil {
 		t.Fatalf("NewTPMAttestingRuntime: %v", err)
 	}
 	return rt
+}
+
+// fakeHostAppraiser stands in for the go-quicbaas Verifier: it names the
+// workload PCR as the reference values' coverage and verifies every evidence
+// unless appraisal says otherwise.
+type fakeHostAppraiser struct {
+	mu        sync.Mutex
+	pcrs      []uint32
+	pcrsErr   error
+	appraisal *orchestration.HostAppraisal
+	err       error
+	names     []string
+	evidence  []*orchestration.HostEvidence
+}
+
+var _ orchestration.HostAppraiser = (*fakeHostAppraiser)(nil)
+
+func newFakeHostAppraiser() *fakeHostAppraiser {
+	return &fakeHostAppraiser{pcrs: []uint32{DefaultPCRIndex}}
+}
+
+func (f *fakeHostAppraiser) ReferencePCRs(_ context.Context, name string, _ crypto.Hash) ([]uint32, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.names = append(f.names, name)
+	if f.pcrsErr != nil {
+		return nil, f.pcrsErr
+	}
+	return slices.Clone(f.pcrs), nil
+}
+
+func (f *fakeHostAppraiser) AppraiseHost(_ context.Context, evidence *orchestration.HostEvidence) (*orchestration.HostAppraisal, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.evidence = append(f.evidence, evidence)
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.appraisal != nil {
+		return f.appraisal, nil
+	}
+	return &orchestration.HostAppraisal{Verified: true}, nil
+}
+
+var (
+	mockIAKCertOnce sync.Once
+	mockIAKCert     *x509.Certificate
+	mockIAKCertErr  error
+)
+
+// IAKCertificate returns a self-signed P-256 certificate standing in for the IAK certificate.
+func (m *mockHostTPM) IAKCertificate() (*x509.Certificate, error) {
+	if m.iakErr != nil {
+		return nil, m.iakErr
+	}
+	mockIAKCertOnce.Do(func() { mockIAKCert, mockIAKCertErr = newMockIAKCertificate() })
+	return mockIAKCert, mockIAKCertErr
+}
+
+func newMockIAKCertificate() (*x509.Certificate, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "mock-iak"},
+		NotBefore:    time.Unix(0, 0),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		return nil, err
+	}
+	return x509.ParseCertificate(der)
 }
 
 // stubContainerRuntime is a Tier 0 runtime that does nothing. It exists so
@@ -524,7 +605,7 @@ func newTestAttestor(t *testing.T, opts ...ContainerAttestorOption) (*ContainerA
 
 	tpm := newMockHostTPM()
 	attesting, err := orchestration.NewTPMAttestingRuntime(
-		&stubContainerRuntime{}, tpm, newSDKLogger(slog.Default()))
+		&stubContainerRuntime{}, tpm, newFakeHostAppraiser(), newSDKLogger(slog.Default()))
 	if err != nil {
 		t.Fatalf("NewTPMAttestingRuntime: %v", err)
 	}

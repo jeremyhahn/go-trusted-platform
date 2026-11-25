@@ -15,10 +15,12 @@ package container
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"time"
 
@@ -158,30 +160,38 @@ func (a *FleetContainerAttestor) AttestContainer(ctx context.Context, req *servi
 	if err != nil {
 		return nil, err
 	}
-	expected, err := mergeExpectedPCRs(dev.ID, baseline, req.ExpectedPCRs)
-	if err != nil {
-		return nil, err
-	}
-
-	// The upstream check reports only the lowest-numbered mismatch, so a
-	// failing request PCR would hide drift in a higher baseline PCR. The
-	// baseline is therefore quoted on its own first; the request's own
-	// PCRs are quoted only once the baseline holds.
+	// The named reference values judge every register they cover; the
+	// profile baseline is then checked against the quoted values.
 	scoped := *req
 	scoped.DeviceID = strconv.FormatUint(dev.ID, 10)
-	scoped.ExpectedPCRs = baseline
 	resp, err := a.quote(ctx, dev, profile, baseline, &scoped)
 	if err != nil {
 		return nil, err
 	}
-	if len(expected) > len(baseline) {
-		scoped.ExpectedPCRs = expected
-		if resp, err = a.quote(ctx, dev, profile, baseline, &scoped); err != nil {
-			return nil, err
-		}
+	if err := a.checkBaseline(ctx, dev, profile, baseline, resp); err != nil {
+		return nil, err
 	}
 	resp.DeviceID = scoped.DeviceID
 	return resp, nil
+}
+
+// checkBaseline holds the quoted registers to the profile's golden baseline.
+func (a *FleetContainerAttestor) checkBaseline(ctx context.Context, dev *entities.Device, profile *entities.DeviceProfile, baseline map[uint32][]byte, resp *service.AttestContainerResponse) error {
+	for _, index := range sortedIndices(baseline) {
+		quoted, ok := resp.PCRs[index]
+		if !ok {
+			return ErrFleetAttestationFailed{
+				DeviceID: dev.ID,
+				Reason:   fmt.Sprintf("the named reference values do not cover baseline PCR %d", index),
+			}
+		}
+		if !bytes.Equal(quoted, baseline[index]) {
+			return a.quarantine(ctx, dev, profile, index, ErrFleetBaselineDivergence{
+				Divergence: orchestration.PCRDivergence{Index: index, Expected: [][]byte{baseline[index]}, Quoted: quoted},
+			})
+		}
+	}
+	return nil
 }
 
 // quote runs one upstream attestation and classifies its failure.
@@ -261,23 +271,39 @@ func (a *FleetContainerAttestor) baseline(ctx context.Context, dev *entities.Dev
 	return profile, golden, nil
 }
 
-// mergeExpectedPCRs adds the request's PCRs to the baseline. A request may
-// pin further registers but never relax a baseline value.
-func mergeExpectedPCRs(deviceID uint64, baseline, requested map[uint32][]byte) (map[uint32][]byte, error) {
-	merged := make(map[uint32][]byte, len(baseline)+len(requested))
-	for index, value := range baseline {
-		merged[index] = value
+// sortedIndices returns the PCR indices of values, ascending.
+func sortedIndices(values map[uint32][]byte) []uint32 {
+	indices := make([]uint32, 0, len(values))
+	for index := range values {
+		indices = append(indices, index)
 	}
-	for index, value := range requested {
-		if golden, ok := baseline[index]; ok {
-			if !bytes.Equal(golden, value) {
-				return nil, ErrFleetBaselineConflict{DeviceID: deviceID, Index: index}
-			}
+	slices.Sort(indices)
+	return indices
+}
+
+// referenceConflict reports a baseline register whose named reference values
+// do not admit the golden value: reference values never relax the baseline.
+func referenceConflict(deviceID uint64, baseline map[uint32][]byte, divergences []orchestration.PCRDivergence) error {
+	for _, d := range divergences {
+		golden, ok := baseline[d.Index]
+		if !ok || len(d.Expected) == 0 {
 			continue
 		}
-		merged[index] = value
+		if !slices.ContainsFunc(d.Expected, func(v []byte) bool { return bytes.Equal(v, golden) }) {
+			return ErrFleetBaselineConflict{DeviceID: deviceID, Index: d.Index}
+		}
 	}
-	return merged, nil
+	return nil
+}
+
+// pcrDivergences lists every PCR divergence in an appraisal, lowest index first.
+func pcrDivergences(appraisal *orchestration.HostAppraisalError) []orchestration.PCRDivergence {
+	var out []orchestration.PCRDivergence
+	for _, failure := range appraisal.Failures {
+		out = append(out, failure.PCRs...)
+	}
+	slices.SortStableFunc(out, func(x, y orchestration.PCRDivergence) int { return cmp.Compare(x.Index, y.Index) })
+	return out
 }
 
 // classify turns an attestor failure into the fleet's answer. Only a
@@ -285,14 +311,23 @@ func mergeExpectedPCRs(deviceID uint64, baseline, requested map[uint32][]byte) (
 // failure is a refusal that leaves the device's standing alone, because
 // absence of evidence is not failed attestation.
 func (a *FleetContainerAttestor) classify(ctx context.Context, dev *entities.Device, profile *entities.DeviceProfile, baseline map[uint32][]byte, err error) error {
-	var mismatch *orchestration.PCRMismatchError
-	if !errors.As(err, &mismatch) {
+	var appraisal *orchestration.HostAppraisalError
+	if !errors.As(err, &appraisal) {
 		return ErrFleetAttestationFailed{DeviceID: dev.ID, Reason: "the host could not be attested", Cause: err}
 	}
-	if _, golden := baseline[mismatch.Index]; !golden {
-		return ErrFleetPCRPolicyMismatch{DeviceID: dev.ID, Index: mismatch.Index, Cause: err}
+	divergences := pcrDivergences(appraisal)
+	if len(divergences) == 0 {
+		return ErrFleetAttestationFailed{DeviceID: dev.ID, Reason: "the host could not be attested", Cause: err}
 	}
-	return a.quarantine(ctx, dev, profile, mismatch.Index, err)
+	if conflict := referenceConflict(dev.ID, baseline, divergences); conflict != nil {
+		return conflict
+	}
+	for _, d := range divergences {
+		if _, golden := baseline[d.Index]; golden {
+			return a.quarantine(ctx, dev, profile, d.Index, err)
+		}
+	}
+	return ErrFleetPCRPolicyMismatch{DeviceID: dev.ID, Index: divergences[0].Index, Cause: err}
 }
 
 // quarantine records the drift as a cryptographic failure verdict, moves
@@ -483,7 +518,17 @@ type ErrFleetBaselineConflict struct {
 
 // Error implements the error interface.
 func (e ErrFleetBaselineConflict) Error() string {
-	return fmt.Sprintf("container fleet attestor: the request expects a value for PCR %d that differs from device %d's golden baseline", e.Index, e.DeviceID)
+	return fmt.Sprintf("container fleet attestor: the reference values admit a value for PCR %d that differs from device %d's golden baseline", e.Index, e.DeviceID)
+}
+
+// ErrFleetBaselineDivergence is a quoted baseline register that differs from the golden value.
+type ErrFleetBaselineDivergence struct {
+	Divergence orchestration.PCRDivergence
+}
+
+// Error implements the error interface.
+func (e ErrFleetBaselineDivergence) Error() string {
+	return fmt.Sprintf("container fleet attestor: quoted PCR %d differs from the golden baseline", e.Divergence.Index)
 }
 
 // ErrFleetHostDrift is returned when the host quotes a baseline PCR with a

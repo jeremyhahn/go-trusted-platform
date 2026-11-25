@@ -69,6 +69,7 @@ type ComputeOrchestrator struct {
 	logger         *logging.Logger
 	engine         *Orchestrator
 	tpmProvider    orchestration.HostTPM
+	hostAppraiser  orchestration.HostAppraiser
 	ovsClient      *ovs.Client
 	instances      sync.Map // map[string]*managedInstance
 	instanceToPort sync.Map // map[string]string
@@ -109,6 +110,13 @@ func WithComputeOVSClient(client *ovs.Client) ComputeOrchestratorOption {
 func WithComputeTPMProvider(provider orchestration.HostTPM) ComputeOrchestratorOption {
 	return func(o *ComputeOrchestrator) {
 		o.tpmProvider = provider
+	}
+}
+
+// WithComputeHostAppraiser sets the Verifier that appraises host quotes against named reference values.
+func WithComputeHostAppraiser(appraiser orchestration.HostAppraiser) ComputeOrchestratorOption {
+	return func(o *ComputeOrchestrator) {
+		o.hostAppraiser = appraiser
 	}
 }
 
@@ -226,9 +234,14 @@ func (o *ComputeOrchestrator) buildEngine() error {
 		// so the compute API stays served, but it refuses every launch: a
 		// host with a TPM never starts a workload unmeasured. Any other
 		// trust-stack failure stays fatal.
-		stack, err := NewTrustStack(o.tpmProvider, o.logger.Slog())
+		stack, err := NewTrustStack(o.tpmProvider, o.hostAppraiser, o.logger.Slog())
 		var noRuntime *orchestration.ContainerRuntimeNotAvailableError
+		var noAppraiser ErrHostAppraiserRequired
 		switch {
+		case errors.As(err, &noAppraiser):
+			refusal := &MeasuredRuntimeUnavailableError{Runtimes: MeasuredRuntimes, Cause: err}
+			o.logger.Warnf("Container launches refused: %v", refusal)
+			engineOpts = append(engineOpts, WithLaunchRefusal(refusal))
 		case errors.As(err, &noRuntime):
 			refusal := &MeasuredRuntimeUnavailableError{Runtimes: MeasuredRuntimes, Cause: err}
 			o.logger.Warnf("Container launches refused: %v", refusal)

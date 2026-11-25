@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	qrdbsdk "github.com/jeremyhahn/go-qrdb/sdk/go"
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
@@ -343,6 +344,32 @@ func (s *EmbeddedServer) ContainerAttestor() *ContainerAttestorAdapter {
 		return nil
 	}
 	return s.containerAttestor
+}
+
+// QRDBNodeClient returns the embedded server's qrdb node client, which backs its attestation store.
+func (s *EmbeddedServer) QRDBNodeClient() (*qrdbsdk.Client, error) {
+	if s == nil {
+		return nil, ErrQRDBClientUnavailable{}
+	}
+	s.mu.RLock()
+	server := s.server
+	s.mu.RUnlock()
+	if server == nil {
+		return nil, ErrQRDBClientUnavailable{}
+	}
+	client := server.GetQRDBNodeClient()
+	if client == nil {
+		return nil, ErrQRDBClientUnavailable{}
+	}
+	return client, nil
+}
+
+// ErrQRDBClientUnavailable reports an embedded server with no qrdb node client yet.
+type ErrQRDBClientUnavailable struct{}
+
+// Error implements the error interface.
+func (ErrQRDBClientUnavailable) Error() string {
+	return "embedded quicbaas server: the qrdb node client is not available"
 }
 
 // SetCA replaces the Certificate Authority used by the running embedded

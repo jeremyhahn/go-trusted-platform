@@ -345,6 +345,9 @@ func newComputeOrchestrator(logger *logging.Logger, a *app.App, ovsSocketPath st
 	deps := &compute.Deps{Logger: logger}
 	if a != nil {
 		deps.HostTPM = a.TPM
+		if factory, ok := a.DAOFactory().(*platformquicbaas.Factory); ok && factory.EmbeddedServer() != nil {
+			deps.QRDBClient = factory.EmbeddedServer().QRDBNodeClient
+		}
 	}
 	if vtpmSvc != nil {
 		gen, genErr := vtpm.NewGenerator(nil, vtpmSvc, logger)
