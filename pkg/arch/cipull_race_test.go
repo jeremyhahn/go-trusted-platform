@@ -20,6 +20,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -569,6 +571,51 @@ func TestCIImageLockTakesANamedLock(t *testing.T) {
 	require.NoFileExists(t, filepath.Join(state, "containers", "go-trusted-platform-ci-image-lock"), "a named lock took the default lock too")
 	require.FileExists(t, filepath.Join(state, "tags", "go-trusted-platform-ci-image-lock_base"))
 	require.NoFileExists(t, filepath.Join(state, "tags", lock+"_base"))
+}
+
+// TestCIRegistryPullKeepsItsLockPastTheImageLockAge is Codex round 2 P1 on
+// #2386: the pull step holds its per-digest lock across every docker pull
+// and retry, so a waiting leg must not call that lock stale while a slow
+// pull still runs. The waiter takes the lock with the step's own arguments
+// against a live holder created 700 s ago (past the image lock's 600 s), and
+// must wait for the holder instead of removing its lock; each docker pull is
+// bounded so the holder ends well before the pull lock's stale age.
+func TestCIRegistryPullKeepsItsLockPastTheImageLockAge(t *testing.T) {
+	step := ciStepRun(t, ciLegJob, "pull")
+	const lock = "go-trusted-platform-ci-pull-0123456789ab"
+	var args []string
+	var pulls []string
+	for _, line := range strings.Split(step, "\n") {
+		line = strings.TrimSpace(line)
+		if rest, ok := strings.CutPrefix(line, `image_lock "go-trusted-platform-ci-pull-${digest:0:12}"`); ok {
+			args = strings.Fields(strings.TrimSuffix(strings.TrimSpace(rest), "|| exit 1"))
+		}
+		if strings.Contains(line, "docker pull ") {
+			pulls = append(pulls, line)
+		}
+	}
+	require.NotEmpty(t, pulls, "the pull step runs docker pull:\n%s", step)
+	stale := 600
+	if len(args) > 0 {
+		n, err := strconv.Atoi(args[0])
+		require.NoError(t, err, "the pull lock's stale age: %q", args)
+		stale = n
+	}
+	for _, p := range pulls {
+		m := regexp.MustCompile(`\btimeout (\d+) docker pull `).FindStringSubmatch(p)
+		require.NotNil(t, m, "a docker pull under the pull lock runs unbounded: %s", p)
+		limit, _ := strconv.Atoi(m[1])
+		// Three tries and 5 + 15 s of retry sleeps must end before a waiter
+		// may call the lock stale.
+		require.Less(t, 3*limit+20, stale, "the bounded pulls outlive the pull lock's stale age %d s: %s", stale, p)
+	}
+
+	created := time.Now().Add(-700 * time.Second).UTC().Format(time.RFC3339Nano)
+	log, state := runImageLock(t, created, lock, append([]string{lock}, args...)...)
+	require.NotContains(t, log, "removing the stale image lock", "a waiter removed the lock of a pull still running at 700 s:\n%s", log)
+	require.Contains(t, log, "sleeps=3 ", "the waiter took the pull lock before its holder released it:\n%s", log)
+	require.Contains(t, log, "lock="+lock, log)
+	require.FileExists(t, filepath.Join(state, "containers", lock))
 }
 
 // Run 45379249259: five legs on one daemon pulled one digest at once, and
