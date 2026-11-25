@@ -318,7 +318,8 @@ export interface GetMetricsResponse {
 export interface EntityTypeInfo {
   name: string;
   entityCount: number;
-  status: 'empty' | 'active' | 'error' | string;
+  /** Entity type status; known values are 'empty', 'active' and 'error'. */
+  status: string;
 }
 
 /**
