@@ -75,6 +75,8 @@ func (f *fakeAppCache) UpdateCacheConfig(_ context.Context, req *cache.UpdateCac
 }
 
 type fakeAppScheduler struct {
+	// Client is nil: node and placement methods are not exercised by these tests.
+	scheduler.Client
 	err     error
 	jobID   uint64
 	created *scheduler.CreateJobRequest

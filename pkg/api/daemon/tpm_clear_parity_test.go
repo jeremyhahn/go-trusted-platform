@@ -37,8 +37,8 @@ type clearTPM struct {
 func newClearTPM(clearErr error) *clearTPM {
 	return &clearTPM{
 		cfg: &xkmssdk.TPMConfig{
-			SSRK: &xkmssdk.SRKConfig{HierarchyAuth: "so-pin"},
-			EK:   &xkmssdk.EKConfig{HierarchyAuth: "so-pin"},
+			SSRK: &xkmssdk.SRKConfig{HierarchyAuth: mustSecret("so-pin")},
+			EK:   &xkmssdk.EKConfig{HierarchyAuth: mustSecret("so-pin")},
 		},
 		clearErr: clearErr,
 	}
@@ -76,7 +76,7 @@ func TestTPMClearParity_RefusedClearKeepsHierarchyAuth(t *testing.T) {
 	require.Error(t, err)
 
 	for name, tpm := range map[string]*clearTPM{"gRPC": grpcTPM, "MCP": mcpTPM} {
-		assert.Equal(t, "so-pin", tpm.cfg.SSRK.HierarchyAuth, "%s: a refused Clear left the TPM owned", name)
-		assert.Equal(t, "so-pin", tpm.cfg.EK.HierarchyAuth, "%s: a refused Clear left the TPM owned", name)
+		assert.Equal(t, "so-pin", string(tpm.cfg.SSRK.HierarchyAuth.Bytes()), "%s: a refused Clear left the TPM owned", name)
+		assert.Equal(t, "so-pin", string(tpm.cfg.EK.HierarchyAuth.Bytes()), "%s: a refused Clear left the TPM owned", name)
 	}
 }
