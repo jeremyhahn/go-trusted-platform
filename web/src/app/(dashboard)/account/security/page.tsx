@@ -22,7 +22,8 @@ import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useApi, useToast } from "@/hooks";
 import { useAuth } from "@/contexts/AuthContext";
-import { FactorList } from "@/components/security/factor-list";
+import { Gated } from "@/components/features/capabilities/gated";
+import { FACTOR_ADD_OP, FactorList } from "@/components/security/factor-list";
 import { AddFactorWizard } from "@/components/security/add-factor-wizard";
 import { authFactorsApi, toApiResponse } from "@/utils/auth-factors-api";
 import type { AuthFactor } from "@/types/auth-factors";
@@ -150,17 +151,19 @@ export default function AccountSecurityPage() {
             Manage the authentication factors used to sign in to your account.
           </p>
         </div>
-        <Button
-          onClick={() => {
-            setRotateTarget(null);
-            setWizardOpen(true);
-          }}
-          disabled={loading}
-          aria-label="Add authentication factor"
-        >
-          <Plus className="h-4 w-4 mr-2" />
-          Add factor
-        </Button>
+        <Gated op={FACTOR_ADD_OP}>
+          <Button
+            onClick={() => {
+              setRotateTarget(null);
+              setWizardOpen(true);
+            }}
+            disabled={loading}
+            aria-label="Add authentication factor"
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Add factor
+          </Button>
+        </Gated>
       </div>
 
       {loadError && (

@@ -397,10 +397,18 @@ and a size that is not a positive multiple of 512 is `ErrVolume` (`size`).
 Creation is serialised so that two first attaches cannot race. An identity is
 accepted only as a DNS hostname (letters, digits, `-` and `.`), so it can
 never name a path outside `dir`. `Attach` on a missing volume is `ErrVolume`
-(`attach`) wrapping `fs.ErrNotExist`. The container builds the one
-`LocalVolumes` over `NBDConfig.VolumeDir` in `nbdVolumes`
-(`pkg/bootstrap/container/nbd.go`), for the export server and the
-installed-UKI route alike.
+(`attach`) wrapping `fs.ErrNotExist`. The container chooses the store by
+storage class in `nbdVolumes` (`pkg/bootstrap/container/nbd.go`), for the
+export server and the installed-UKI route alike: it resolves
+`NBDConfig.StorageClass` through a `pkg/storage/volume` resolver over
+`ServerConfig.Volume` (`volume.DefaultConfig()` when unset; an empty class is
+its default class). The default `general` class (provider `local`) is
+`LocalVolumes` over `NBDConfig.VolumeDir`. The `replicated` class (provider
+`drbd`) and any other non-local provider refuse start-up with an error wrapping
+`volume.ErrNoProviderFactory` until the go-quicbaas SDK supplies a volumes
+factory; the `object` class is `volume.ErrObjectClassNotBlock` and an unknown
+class `volume.ErrUnknownClass`. A set `ServerConfig.Volume` is checked by
+`Validate` (field `volume`).
 
 **Container wiring.** `container.NewServer` builds the export server only when
 the manifest has a `diskless-nbd` entry; the identities are those entries'
@@ -412,6 +420,7 @@ from `BOOTSTRAP_NBD_*`:
 |---|---|---|---|---|
 | `ListenAddr` | `--nbd-listen` | `BOOTSTRAP_NBD_LISTEN` | `<dhcp-server-ip>:10809` | — |
 | `VolumeDir` | `--nbd-volume-dir` | `BOOTSTRAP_NBD_VOLUME_DIR` | `<data-dir>/nbd` | — |
+| `StorageClass` | `--nbd-storage-class` | `BOOTSTRAP_NBD_STORAGE_CLASS` | the default class, `general` | — |
 | `VolumeSize` | `--nbd-volume-size` | `BOOTSTRAP_NBD_VOLUME_SIZE` | none | yes, bytes, a multiple of 512 |
 | `CAFile` | `--nbd-ca-file` | `BOOTSTRAP_NBD_CA_FILE` | none | yes, the platform CA bundle |
 | `CertFile` | `--nbd-cert` | `BOOTSTRAP_NBD_CERT` | none | yes |
@@ -420,7 +429,8 @@ from `BOOTSTRAP_NBD_*`:
 A manifest with no `diskless-nbd` entry needs none of them, and no NBD port
 opens. With one, a missing or malformed field fails `NewServer` with
 `ErrInvalidServerConfig` (`nbd.listen_addr`, `nbd.volume_size`, `nbd.ca_file`,
-`nbd.cert_file`, `nbd.key_file`), an unreadable or mismatched certificate and
+`nbd.cert_file`, `nbd.key_file`, `nbd.storage_class` for a class with no
+block provider the platform can build), an unreadable or mismatched certificate and
 key with `ErrNBDCredentials`, and a value the export server refuses with
 `nbd.ErrInvalidConfig`. `Start` binds the NBD listener after the iPXE
 listeners and before the device-script port, so the port the deploy gate

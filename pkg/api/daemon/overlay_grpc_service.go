@@ -92,6 +92,13 @@ func (s *OverlayService) SetController(ctrl OverlayControllerInterface) {
 	s.controller = ctrl
 }
 
+// Configured reports whether an overlay controller is attached.
+func (s *OverlayService) Configured() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.controller != nil
+}
+
 // ListVTEPs returns all known VTEP endpoints.
 func (s *OverlayService) ListVTEPs(ctx context.Context, req *platformv1.ListVTEPsRequest) (*platformv1.ListVTEPsResponse, error) {
 	s.mu.RLock()
