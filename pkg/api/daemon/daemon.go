@@ -1469,6 +1469,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			return nil, err
 		}
 		if svc := reg.InvitationService(); svc != nil {
+			wireInvitationRoleLister(logger, svc, iamService.Client())
 			daemon.invitationService = svc
 			if daemon.invitationGRPCService != nil {
 				daemon.invitationGRPCService.SetService(svc)

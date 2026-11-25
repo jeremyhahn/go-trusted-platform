@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PlatformClient, PlatformProvider } from "trusted-platform-sdk";
 
-import { useCapabilities } from "./use-capabilities";
+import { ok as controlPlaneOk, stubControlPlane, withControlPlane } from "@/test/control-plane-fetch";
+import { CAPABILITIES_LOADING_REASON, useCapabilities } from "./use-capabilities";
 
 // #2058 / #2033 item 4: the capability gate reads GET /api/v1/capabilities
 // once per client and fails closed.
@@ -151,5 +152,39 @@ describe("useCapabilities", () => {
     await waitFor(() => expect(second.result.current.error).toBeUndefined());
     expect(first.result.current.capability("POST /api/v1/ntp/step").enabled).toBe(true);
     expect(second.result.current.capability("POST /api/v1/ntp/step").enabled).toBe(true);
+  });
+});
+
+const OP = "DELETE /api/v1/proxy/pools/{id}";
+
+function Probe({ seen }: { seen: string[] }) {
+  const { capability } = useCapabilities();
+  const answer = capability(OP);
+  seen.push(answer.enabled ? "enabled" : (answer.reason ?? "disabled"));
+  return <span data-testid="probe">{answer.enabled ? "enabled" : answer.reason}</span>;
+}
+
+// A table row's Gated control mounts only after the page's own read settled.
+function Host({ seen }: { seen: string[] }) {
+  const { loading } = useCapabilities();
+  return loading ? null : <Probe seen={seen} />;
+}
+
+describe("useCapabilities on a late-mounting control", () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('answers a control that mounts after the read settled from its first render', async () => {
+    stubControlPlane({
+      'GET /api/v1/capabilities': controlPlaneOk({ capabilities: [{ op: OP, kind: 'route', enabled: true }], total: 1, enabled: 1 }),
+    });
+    const seen: string[] = [];
+    render(withControlPlane(<Host seen={seen} />));
+
+    expect((await screen.findByTestId('probe')).textContent).toBe('enabled');
+    expect(seen).not.toContain(CAPABILITIES_LOADING_REASON);
+    expect(seen[0]).toBe('enabled');
   });
 });
