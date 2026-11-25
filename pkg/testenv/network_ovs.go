@@ -347,10 +347,7 @@ func (n *OVSIsolatedNetwork) setupNAT() error {
 	bridge := n.config.BridgeName
 
 	// Detect which iptables to use - prefer legacy if available since Docker uses it
-	iptablesCmd := "iptables-legacy"
-	if _, err := exec.LookPath("iptables-legacy"); err != nil {
-		iptablesCmd = "iptables"
-	}
+	iptablesCmd := iptablesCommand()
 
 	fmt.Printf("[OVS] Setting up NAT rules for subnet %s, bridge %s (using %s)\n", subnet, bridge, iptablesCmd)
 
@@ -504,10 +501,7 @@ func (n *OVSIsolatedNetwork) Cleanup() error {
 	var lastErr error
 
 	// Detect which iptables to use - must match setupNAT
-	iptablesCmd := "iptables-legacy"
-	if _, err := exec.LookPath("iptables-legacy"); err != nil {
-		iptablesCmd = "iptables"
-	}
+	iptablesCmd := iptablesCommand()
 
 	// Remove NAT rules using exec.Command for consistency with setupNAT
 	subnet := n.config.Subnet.String()

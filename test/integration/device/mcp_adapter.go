@@ -488,10 +488,14 @@ func (a *MCPAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCert
 // this adapter previously handed it the whole options struct, so neither of
 // the arguments it declares was populated (#403).
 func (a *MCPAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error) {
-	result, err := a.callTool(ctx, "device_attest", map[string]string{
+	args := map[string]string{
 		"device_id": opts.DeviceID,
 		"evidence":  base64.StdEncoding.EncodeToString(opts.Evidence),
-	})
+	}
+	if opts.ChallengeID != "" {
+		args["challenge_id"] = opts.ChallengeID
+	}
+	result, err := a.callTool(ctx, "device_attest", args)
 	if err != nil {
 		return nil, err
 	}
@@ -508,6 +512,27 @@ func (a *MCPAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions)
 	}
 
 	return &attestResult, nil
+}
+
+// IssueAttestationChallenge calls the device_attest_challenge tool, whose
+// answer is the platform.v1 IssueAttestationChallengeResponse marshalled as
+// JSON (#2136).
+func (a *MCPAdapter) IssueAttestationChallenge(ctx context.Context, opts IssueAttestationChallengeOptions) (*IssueAttestationChallengeResult, error) {
+	result, err := a.callTool(ctx, "device_attest_challenge", map[string]string{
+		"device_id": opts.DeviceID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var resp pb.IssueAttestationChallengeResponse
+	if err := json.Unmarshal(result, &resp); err != nil {
+		return nil, &MCPAdapterError{
+			Operation: "IssueAttestationChallenge",
+			Message:   "failed to parse response: " + err.Error(),
+		}
+	}
+	return challengeResultFromProto(&resp), nil
 }
 
 // ============================================================================
