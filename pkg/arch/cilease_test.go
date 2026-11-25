@@ -994,6 +994,9 @@ func TestRegistryCredentialFindingsRejectTheRunnersDockerConfig(t *testing.T) {
 		"trap replaced":  registryConfigMake + "\ntrap '" + registryConfigRm + "' EXIT\ntrap image_unlock EXIT\n" + writer + "DOCKER_CONFIG=$registry_config docker push \"$ref\"\n",
 		"push outside":   good + "docker push \"$ref\"\n",
 		"producer rmi":   good + "trap 'docker rmi \"$ref\"' EXIT\n",
+		// Codex round 3 on #2386: a bounded pull is still a registry step.
+		"bounded pull no trap":  registryConfigMake + "\n" + writer + "(set -o pipefail; DOCKER_CONFIG=$registry_config timeout 900 docker pull \"$ref\" 2>&1 | tee \"$log\")\n",
+		"bounded pull no auths": registryConfigMake + "\ntrap '" + registryConfigRm + "' EXIT\nDOCKER_CONFIG=$registry_config timeout 900 docker pull \"$ref\"\n",
 	} {
 		require.NotEmpty(t, registryCredentialFindings(job(run)), name)
 	}

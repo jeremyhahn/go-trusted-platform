@@ -684,3 +684,39 @@ func TestCIRegistryPullRetriesTransientContainerdErrors(t *testing.T) {
 		})
 	}
 }
+
+// reapedCacheLock is image-lock.sh for a leg whose daemon also runs
+// scripts/reap-stale-ci-stacks.sh: the reaper holds the global image lock
+// just before the leg's first turn on it, and removes the cached registry
+// reference, old and unleased, as it does under that lock.
+const reapedCacheLock = `image_lock() {
+  echo "${1:-}" >> "$FAKE_DOCKER_STATE/lock-names"
+  if [ "${1:-}" = go-trusted-platform-ci-image-lock ] && [ ! -e "$FAKE_DOCKER_STATE/reaped" ]; then
+    : > "$FAKE_DOCKER_STATE/reaped"
+    docker rmi "$IT_REGISTRY/go-trusted-platform/it-image:$IT_IMAGE_TAG" >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+image_unlock() { :; }
+`
+
+// Codex round 3 on #2386: a cache hit checked only under the pull lock can
+// be reaped before the leg re-tags it under the global image lock, leaving
+// no lease. The leg checks and leases a cache hit under the global image
+// lock, and pulls again when the reference is gone.
+func TestCIRegistryPullLeasesAReapedCacheHit(t *testing.T) {
+	step := ciStepRun(t, ciLegJob, "pull")
+	r := runRegistrySteps(t, func(home string) {
+		dir := filepath.Dir(home)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "runner-temp", "image-lock.sh"), []byte(reapedCacheLock), 0o644))
+		cached := filepath.Join(dir, "state", "tags", "registry.invalid_5000_go-trusted-platform_it-image_1111")
+		require.NoError(t, os.WriteFile(cached, []byte("sha256:1111\n"), 0o644))
+	}, nil, step)
+	require.NoError(t, r.err, r.log)
+	require.FileExists(t, filepath.Join(r.state, "reaped"), "the reaper never ran:\n%s", r.log)
+	require.Contains(t, r.output, "leased=true", "a reaped cache hit left the leg with no lease:\n%s", r.log)
+	require.Contains(t, r.env, "IT_LEASE_ID=sha256:1111\n", r.log)
+	require.Equal(t, "sha256:1111", r.read(filepath.Join("containers", "lease-leg")), "the lease is on the pulled image:\n%s", r.log)
+	pulls, _ := os.ReadFile(filepath.Join(r.state, "pull-context"))
+	require.Equal(t, 1, strings.Count(string(pulls), "\n"), "the leg pulls the reaped reference once:\n%s", r.log)
+}
