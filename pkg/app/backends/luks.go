@@ -696,13 +696,11 @@ func defaultLUKSFIDO2Handler(logger *logging.Logger) (LUKSFIDO2EnrollingHandler,
 	return NewLUKSFIDO2Handler(logger, xkmsHandler, defaultCfg.RelyingPartyID)
 }
 
-// defaultLUKSTPMHandler builds a production TPM handler bound to
-// /dev/tpmrm0. Callers inspect the returned error to decide whether to wire
-// the handler or leave it unset.
+// defaultLUKSTPMHandler reports that no host-default TPM handler exists: the
+// go-xkms sealer needs a provisioned TPM2 instance, wired via WithLUKSTPMHandler.
 func defaultLUKSTPMHandler(logger *logging.Logger) (LUKSTPMHandler, error) {
-	h, err := NewLUKSTPMHandler(logger, DefaultTPMOpener())
-	if err != nil {
+	if _, err := NewLUKSTPMHandler(logger, nil, TPMSealerConfig{}); err != nil {
 		return nil, errors.Join(ErrLUKSHardwareUnavailable, err)
 	}
-	return h, nil
+	return nil, ErrLUKSHardwareUnavailable
 }

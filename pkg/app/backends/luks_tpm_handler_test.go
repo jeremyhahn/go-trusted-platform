@@ -19,66 +19,86 @@ import (
 	"testing"
 
 	"github.com/google/go-tpm/tpm2/transport"
+	"github.com/jeremyhahn/go-xkms/pkg/types"
 )
 
 // These tests cover the thin platform wiring around the canonical go-xkms
 // TPM LUKS sealer (reached through the QuicBaaS SDK). The sealer's own
-// behaviour — handle resolution, token encoding, PCR selection, and the
-// simulator-backed seal/unseal round-trips — is tested upstream in
-// go-xkms/pkg/luks.
+// behaviour — token encoding, PCR selection, and the simulator-backed
+// seal/unseal round-trips — is tested upstream in go-xkms/pkg/luks.
 
-func TestNewLUKSTPMHandler_NilOpener(t *testing.T) {
-	_, err := NewLUKSTPMHandler(nil, nil)
+func newStubLUKSTPMHandler(t *testing.T) *LUKSTPMSealer {
+	t.Helper()
+	h, err := NewLUKSTPMHandler(nil, erroringTPM{err: errStubTPM}, TPMSealerConfig{})
+	if err != nil {
+		t.Fatalf("construct handler: %v", err)
+	}
+	return h
+}
+
+func TestNewLUKSTPMHandler_NilTPM(t *testing.T) {
+	_, err := NewLUKSTPMHandler(nil, nil, TPMSealerConfig{})
 	if !errors.Is(err, ErrLUKSTPMNoTransport) {
 		t.Fatalf("expected ErrLUKSTPMNoTransport, got %v", err)
 	}
 }
 
 func TestNewLUKSTPMHandler_SatisfiesLUKSTPMHandler(t *testing.T) {
-	h, err := NewLUKSTPMHandler(nil, erroringOpener{err: ErrLUKSTPMNoTransport})
-	if err != nil {
-		t.Fatalf("construct handler: %v", err)
-	}
-	var _ LUKSTPMHandler = h
+	var _ LUKSTPMHandler = newStubLUKSTPMHandler(t)
 }
 
-func TestLUKSTPMHandler_OpenFailure_Surfaces(t *testing.T) {
-	h, err := NewLUKSTPMHandler(nil, erroringOpener{err: ErrLUKSTPMNoTransport})
-	if err != nil {
-		t.Fatalf("construct handler: %v", err)
+func TestLUKSTPMHandler_SealFailure_Surfaces(t *testing.T) {
+	h := newStubLUKSTPMHandler(t)
+	if _, _, err := h.Seal(context.Background(), "", nil); err == nil {
+		t.Fatal("expected the TPM seal failure to surface, got nil")
 	}
-	if _, _, err = h.Seal(context.Background(), "", []int32{7}); !errors.Is(err, ErrLUKSTPMNoTransport) {
-		t.Fatalf("expected ErrLUKSTPMNoTransport, got %v", err)
+}
+
+func TestLUKSTPMHandler_Seal_PCRSelectionUnderPSRK(t *testing.T) {
+	h := newStubLUKSTPMHandler(t)
+	if _, _, err := h.Seal(context.Background(), "", []int32{7}); !errors.Is(err, ErrLUKSTPMPCRSelectionNotSupported) {
+		t.Fatalf("expected ErrLUKSTPMPCRSelectionNotSupported, got %v", err)
 	}
 }
 
 func TestLUKSTPMHandler_Seal_InvalidHandle(t *testing.T) {
-	h, err := NewLUKSTPMHandler(nil, erroringOpener{err: ErrLUKSTPMNoTransport})
-	if err != nil {
-		t.Fatalf("construct handler: %v", err)
-	}
-	if _, _, err = h.Seal(context.Background(), "not-a-number", nil); !errors.Is(err, ErrLUKSTPMInvalidHandle) {
+	h := newStubLUKSTPMHandler(t)
+	if _, _, err := h.Seal(context.Background(), "not-a-number", nil); !errors.Is(err, ErrLUKSTPMInvalidHandle) {
 		t.Fatalf("expected ErrLUKSTPMInvalidHandle, got %v", err)
 	}
 }
 
-func TestLUKSTPMHandler_Unseal_InvalidTokenJSON(t *testing.T) {
-	h, err := NewLUKSTPMHandler(nil, erroringOpener{err: ErrLUKSTPMNoTransport})
-	if err != nil {
-		t.Fatalf("construct handler: %v", err)
+func TestLUKSTPMHandler_Seal_HandleNotSupported(t *testing.T) {
+	h := newStubLUKSTPMHandler(t)
+	if _, _, err := h.Seal(context.Background(), "0x81000001", nil); !errors.Is(err, ErrLUKSTPMHandleNotSupported) {
+		t.Fatalf("expected ErrLUKSTPMHandleNotSupported, got %v", err)
 	}
-	if _, err = h.UnsealPassphrase(context.Background(), []byte("not-json")); !errors.Is(err, ErrLUKSTPMInvalidToken) {
+}
+
+func TestLUKSTPMHandler_Unseal_InvalidTokenJSON(t *testing.T) {
+	h := newStubLUKSTPMHandler(t)
+	if _, err := h.UnsealPassphrase(context.Background(), []byte("not-json")); !errors.Is(err, ErrLUKSTPMInvalidToken) {
 		t.Fatalf("expected ErrLUKSTPMInvalidToken, got %v", err)
 	}
 }
 
-// erroringOpener is a TPMOpener stub that short-circuits with the configured
-// error. It lets us exercise the wiring's error surface without a TPM.
-type erroringOpener struct {
+var errStubTPM = errors.New("stub tpm failure")
+
+// erroringTPM is a TPMSealUnsealer stub that fails every call with err.
+type erroringTPM struct {
 	err error
 }
 
-// Open satisfies the TPMOpener contract.
-func (e erroringOpener) Open(context.Context) (transport.TPMCloser, error) {
+func (e erroringTPM) Seal(context.Context, []byte, *types.SealOptions) (*types.SealedData, error) {
 	return nil, e.err
 }
+
+func (e erroringTPM) Unseal(context.Context, *types.SealedData, *types.UnsealOptions) ([]byte, error) {
+	return nil, e.err
+}
+
+func (e erroringTPM) PlatformSRKAttributes() (*types.KeyAttributes, error) { return nil, e.err }
+
+func (e erroringTPM) SSRKAttributes() (*types.KeyAttributes, error) { return nil, e.err }
+
+func (e erroringTPM) Transport() transport.TPM { return nil }

@@ -620,14 +620,17 @@ func TestLUKSBackendOptions(t *testing.T) {
 		}
 	})
 	t.Run("defaults fill unset handlers", func(t *testing.T) {
-		// Both default handlers open their hardware lazily, so building
-		// them touches no device.
+		// The FIDO2 default opens its hardware lazily, so building it touches no device.
 		b := NewLUKSBackend(nil, WithDefaultLUKSHandlers())
 		if _, ok := b.fido2.(LUKSFIDO2EnrollingHandler); !ok {
 			t.Fatalf("fido2 handler = %T, want the default enrolling handler", b.fido2)
 		}
-		if b.tpm == nil {
-			t.Fatal("tpm handler = nil, want the default TPM sealer")
+		// The go-xkms TPM sealer needs a provisioned TPM2 instance, so no host default exists.
+		if b.tpm != nil {
+			t.Fatalf("tpm handler = %T, want nil (no host-default TPM sealer)", b.tpm)
+		}
+		if _, err := defaultLUKSTPMHandler(nil); !errors.Is(err, ErrLUKSHardwareUnavailable) || !errors.Is(err, ErrLUKSTPMNoTransport) {
+			t.Fatalf("defaultLUKSTPMHandler err = %v, want ErrLUKSHardwareUnavailable and ErrLUKSTPMNoTransport", err)
 		}
 	})
 }
