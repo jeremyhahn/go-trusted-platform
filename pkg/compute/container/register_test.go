@@ -207,7 +207,8 @@ func TestComputeOrchestrator_HostTPMWithRuntimeMeasures(t *testing.T) {
 		MaxInstances:    5,
 	}
 
-	orch, err := NewComputeOrchestrator(cfg, nil, WithComputeTPMProvider(provider))
+	orch, err := NewComputeOrchestrator(cfg, nil,
+		WithComputeTPMProvider(provider), WithComputeHostAppraiser(newFakeHostAppraiser()))
 	if err != nil {
 		t.Fatalf("NewComputeOrchestrator: %v", err)
 	}
