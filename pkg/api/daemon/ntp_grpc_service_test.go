@@ -186,6 +186,22 @@ func TestNTPGRPCServiceReturnsUnavailableWithoutABackend(t *testing.T) {
 	}
 }
 
+// TestNTPGRPCService_Configured pins the wiring check the REST registry
+// uses: a service with no backend (a node with no ntp: section) reports
+// itself unconfigured, so the daemon offers no NTP REST ops for it.
+func TestNTPGRPCService_Configured(t *testing.T) {
+	if NewNTPGRPCService(nil, nil).Configured() {
+		t.Fatal("Configured() = true for a service with no backend, want false")
+	}
+	if !NewNTPGRPCService(nil, &fakeNTPBackend{status: syncedNTPStatus()}).Configured() {
+		t.Fatal("Configured() = false for a service with a backend, want true")
+	}
+	var nilService *NTPGRPCService
+	if nilService.Configured() {
+		t.Fatal("Configured() = true for a nil service, want false")
+	}
+}
+
 func TestNTPGRPCServiceMapsDomainErrorsToStatusCodes(t *testing.T) {
 	cases := map[string]struct {
 		err  error
