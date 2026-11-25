@@ -86,7 +86,7 @@ func simulatedHostTPMConfig() *xkmssdk.TPMConfig {
 		EK: &xkmssdk.EKConfig{
 			CertHandle:    0x01C00002,
 			Handle:        0x81010001,
-			HierarchyAuth: xkmssdk.DEFAULT_PASSWORD,
+			HierarchyAuth: mustSecret(xkmssdk.DEFAULT_PASSWORD),
 			RSAConfig:     rsa2048(),
 		},
 		IdentityProvisioningStrategy: "IAK_IDEVID_SINGLE_PASS",
@@ -113,7 +113,7 @@ func simulatedHostTPMConfig() *xkmssdk.TPMConfig {
 		GoldenPCRs:      []uint{0, 7},
 		SSRK: &xkmssdk.SRKConfig{
 			Handle:        0x81000001,
-			HierarchyAuth: xkmssdk.DEFAULT_PASSWORD,
+			HierarchyAuth: mustSecret(xkmssdk.DEFAULT_PASSWORD),
 			KeyAlgorithm:  x509.RSA.String(),
 			RSAConfig:     rsa2048(),
 		},
