@@ -577,6 +577,57 @@ func TestCreateUser_Success(t *testing.T) {
 	assert.Equal(t, "test@example.com", payload.Email)
 }
 
+// TestUsers_CarryNoGroupMembership pins strict tenant isolation: REST users carry no group membership.
+func TestUsers_CarryNoGroupMembership(t *testing.T) {
+	t.Parallel()
+	var listed *iamsdk.ListUsersRequest
+	iamClient := &mockIAMClient{
+		createUserFn: func(ctx context.Context, tenantID string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
+			return &iamsdk.User{ID: "user-123", TenantID: tenantID, Email: req.Email, Roles: req.Roles}, nil
+		},
+		getUserFn: func(ctx context.Context, tenantID, userID string) (*iamsdk.User, error) {
+			return &iamsdk.User{ID: userID, TenantID: tenantID, Email: "test@example.com"}, nil
+		},
+		listUsersFn: func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
+			listed = req
+			return &iamsdk.ListUsersResponse{Users: []iamsdk.User{{ID: "user-1", TenantID: tenantID}}}, nil
+		},
+	}
+	handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+	vars := map[string]string{"tenant": "tenant-1", "id": "user-123"}
+
+	payloadKeys := func(t *testing.T) map[string]any {
+		t.Helper()
+		payload, ok := writer.lastPayload.(UserResponse)
+		require.True(t, ok, "the handler wrote %T", writer.lastPayload)
+		raw, err := json.Marshal(payload)
+		require.NoError(t, err)
+		keys := map[string]any{}
+		require.NoError(t, json.Unmarshal(raw, &keys))
+		return keys
+	}
+
+	body := json.RawMessage(`{"email":"test@example.com","roles":["admin"],"groups":["engineering"]}`)
+	handlers.CreateUser(httptest.NewRecorder(), createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants/tenant-1/users", body, vars))
+	require.Equal(t, http.StatusOK, writer.lastStatus)
+	assert.NotContains(t, payloadKeys(t), "groups")
+
+	handlers.GetUser(httptest.NewRecorder(), createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants/tenant-1/users/user-123", nil, vars))
+	require.Equal(t, http.StatusOK, writer.lastStatus)
+	assert.NotContains(t, payloadKeys(t), "groups")
+
+	handlers.ListUsers(httptest.NewRecorder(), createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants/tenant-1/users?group=ops-group", nil, vars))
+	require.Equal(t, http.StatusOK, writer.lastStatus)
+	require.NotNil(t, listed)
+	sent, err := json.Marshal(listed)
+	require.NoError(t, err)
+	assert.NotContains(t, string(sent), "ops-group")
+	reply := &platformv1.ListIAMUsersResponse{}
+	decodeProtoReply(t, writer, reply)
+	require.Len(t, reply.GetUsers(), 1)
+	assert.Empty(t, reply.GetUsers()[0].GetGroups())
+}
+
 func TestCreateUser_MissingTenantID(t *testing.T) {
 	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
