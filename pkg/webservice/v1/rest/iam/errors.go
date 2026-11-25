@@ -256,6 +256,20 @@ func (e ErrWorkspaceUserListingIncomplete) Error() string {
 	return fmt.Sprintf("rest/iam: the user listing of tenant %s may be incomplete after %d users; the workspace user was not found in it", e.TenantID, e.Listed)
 }
 
+// ErrWorkspaceAccountInactive is returned by the workspace role resolver for
+// an account whose IAM lifecycle (suspended, locked, disabled or deleting)
+// refuses it: such an account holds no roles in the workspace.
+type ErrWorkspaceAccountInactive struct {
+	TenantID  string
+	Subject   string
+	Lifecycle string
+}
+
+// Error implements error.
+func (e ErrWorkspaceAccountInactive) Error() string {
+	return "rest/iam: the account " + e.Subject + " in tenant " + e.TenantID + " is " + e.Lifecycle + " and holds no roles"
+}
+
 // ErrIAMClientMissing is returned when a user's roles are set without an IAM
 // client to read and change them through.
 type ErrIAMClientMissing struct{}
