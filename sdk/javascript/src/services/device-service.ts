@@ -10,6 +10,7 @@ import type { ApiResponse } from '../types/api.js';
 import { BaseService } from './base-service.js';
 import type { ListOptions } from './base-service.js';
 import type {
+  Device,
   CreateDeviceRequest,
   UpdateDeviceRequest,
   ListDevicesRequest,
@@ -19,6 +20,7 @@ import type {
   FindMatchingProfileRequest,
   ActivateDeviceRequest,
   DeviceAttestRequest,
+  DeviceAttestChallengeResponse,
   DeviceAttestResponse,
   DisableDeviceRequest,
   DeviceLifecycleResponse,
@@ -26,19 +28,14 @@ import type {
   RecordAttestCertResponse,
   CreateDeviceResponse,
   GetDeviceResponse,
-  UpdateDeviceResponse,
   DeleteDeviceResponse,
   ListDevicesResponse,
-  FindDeviceBySerialResponse,
   CountDevicesResponse,
   CreateProfileResponse,
   GetProfileResponse,
   UpdateProfileResponse,
   DeleteProfileResponse,
   ListProfilesResponse,
-  FindProfileByMACAddressResponse,
-  FindProfileBySerialResponse,
-  FindMatchingProfileResponse,
   CountProfilesResponse,
   ActivateDeviceResponse,
   DeviceTemplate,
@@ -172,10 +169,10 @@ export class DeviceService extends BaseService {
    * Update a device
    *
    * @param request - Device update request
-   * @returns Updated device
+   * @returns The updated device as the server sends it (flat, not wrapped)
    */
-  async updateDevice(request: UpdateDeviceRequest): Promise<ApiResponse<UpdateDeviceResponse>> {
-    return this.client.put<UpdateDeviceResponse>(
+  async updateDevice(request: UpdateDeviceRequest): Promise<ApiResponse<Device>> {
+    return this.client.put<Device>(
       this.buildUrl(`/${request.device.id}`),
       request
     );
@@ -187,6 +184,8 @@ export class DeviceService extends BaseService {
    * `POST /api/v1/devices/{id}/attest` (docs/device/api.md §4.4). The
    * response reports each check separately; a negative verdict is a 200 with
    * `verified: false`, so callers read the result rather than catching.
+   * The evidence is single-use, so the call never retries: a replay after a
+   * lost response would be refused for a consumed challenge.
    *
    * @param id - Device ID
    * @param request - Base64 quote evidence
@@ -196,7 +195,24 @@ export class DeviceService extends BaseService {
     id: number | string,
     request: DeviceAttestRequest
   ): Promise<ApiResponse<DeviceAttestResponse>> {
-    return this.client.post<DeviceAttestResponse>(this.buildUrl(`/${id}/attest`), request);
+    return this.client.post<DeviceAttestResponse>(this.buildUrl(`/${id}/attest`), request, {
+      retry: { enabled: false },
+    });
+  }
+
+  /**
+   * Issue a single-use attestation challenge for a device
+   * (`POST /api/v1/devices/{id}/attest/challenge`). The quote evidence must be
+   * made over the returned nonce, and the next attestDevice that names its
+   * challenge_id consumes it.
+   */
+  async issueAttestationChallenge(
+    id: number | string
+  ): Promise<ApiResponse<DeviceAttestChallengeResponse>> {
+    return this.client.post<DeviceAttestChallengeResponse>(
+      this.buildUrl(`/${this.encodePathSegment(String(id))}/attest/challenge`),
+      {}
+    );
   }
 
   /**
@@ -277,10 +293,10 @@ export class DeviceService extends BaseService {
    * Find device by serial number
    *
    * @param serial - Serial number
-   * @returns Found device
+   * @returns The device as the server sends it (flat, not wrapped)
    */
-  async findDeviceBySerial(serial: string): Promise<ApiResponse<FindDeviceBySerialResponse>> {
-    return this.client.get<FindDeviceBySerialResponse>(
+  async findDeviceBySerial(serial: string): Promise<ApiResponse<Device>> {
+    return this.client.get<Device>(
       this.buildUrl(`/serial/${this.encodePathSegment(serial)}`)
     );
   }
@@ -306,7 +322,29 @@ export class DeviceService extends BaseService {
    * @returns Activation result
    */
   async activateDevice(request: ActivateDeviceRequest): Promise<ApiResponse<ActivateDeviceResponse>> {
-    return this.client.post<ActivateDeviceResponse>(this.singularUrl('/activate-json'), request);
+    // The server decodes serial and mac_address (omitempty); a camelCase
+    // macAddress key is silently ignored. It answers a flat
+    // { status, vlan, transitioned_at }, mapped here to the camel-case type.
+    const body = {
+      serial: request.serial,
+      ...(request.macAddress && { mac_address: request.macAddress }),
+    };
+    const res = await this.client.post<{ status: string; vlan?: number; transitioned_at?: string }>(
+      this.singularUrl('/activate-json'),
+      body
+    );
+    if (!res.data) {
+      return res as unknown as ApiResponse<ActivateDeviceResponse>;
+    }
+    const { status, vlan, transitioned_at: transitionedAt } = res.data;
+    return {
+      ...res,
+      data: {
+        status,
+        ...(vlan !== undefined && { vlan }),
+        ...(transitionedAt !== undefined && { transitionedAt }),
+      },
+    };
   }
 
   // =========================================================================
@@ -373,10 +411,10 @@ export class DeviceService extends BaseService {
    * Find profile by MAC address
    *
    * @param macAddress - MAC address
-   * @returns Found profile
+   * @returns The profile as the server sends it (flat, not wrapped)
    */
-  async findProfileByMACAddress(macAddress: string): Promise<ApiResponse<FindProfileByMACAddressResponse>> {
-    return this.client.get<FindProfileByMACAddressResponse>(
+  async findProfileByMACAddress(macAddress: string): Promise<ApiResponse<DeviceProfile>> {
+    return this.client.get<DeviceProfile>(
       this.singularUrl(`/profiles/mac/${this.encodePathSegment(macAddress)}`)
     );
   }
@@ -385,10 +423,10 @@ export class DeviceService extends BaseService {
    * Find profile by serial number
    *
    * @param serial - Serial number
-   * @returns Found profile
+   * @returns The profile as the server sends it (flat, not wrapped)
    */
-  async findProfileBySerial(serial: string): Promise<ApiResponse<FindProfileBySerialResponse>> {
-    return this.client.get<FindProfileBySerialResponse>(
+  async findProfileBySerial(serial: string): Promise<ApiResponse<DeviceProfile>> {
+    return this.client.get<DeviceProfile>(
       this.singularUrl(`/profiles/serial/${this.encodePathSegment(serial)}`)
     );
   }
@@ -397,12 +435,19 @@ export class DeviceService extends BaseService {
    * Find matching profile for a device
    *
    * @param request - Match request
-   * @returns Matched profile
+   * @returns The profile as the server sends it (flat, not wrapped)
    */
-  async findMatchingProfile(request: FindMatchingProfileRequest): Promise<ApiResponse<FindMatchingProfileResponse>> {
-    return this.client.post<FindMatchingProfileResponse>(
+  async findMatchingProfile(request: FindMatchingProfileRequest): Promise<ApiResponse<DeviceProfile>> {
+    // The server decodes mac_address, serial and model; a camelCase
+    // macAddress key is silently ignored.
+    const body = {
+      ...(request.macAddress && { mac_address: request.macAddress }),
+      ...(request.serial && { serial: request.serial }),
+      ...(request.model && { model: request.model }),
+    };
+    return this.client.post<DeviceProfile>(
       this.singularUrl('/profiles/match'),
-      request
+      body
     );
   }
 

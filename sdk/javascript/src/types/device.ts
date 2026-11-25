@@ -514,6 +514,24 @@ export interface FindMatchingProfileRequest {
 export interface DeviceAttestRequest {
   /** Base64 of `{quote, signature, nonce, pcrs}` */
   evidence: string;
+  /**
+   * The challenge from issueAttestationChallenge; the evidence nonce must be
+   * its nonce (#2136).
+   */
+  challenge_id?: string;
+}
+
+/**
+ * A single-use attestation challenge, as `POST /api/v1/devices/{id}/attest/challenge`
+ * answers it (pkg/webservice/v1/device/attest_handler.go AttestChallengeResponse).
+ */
+export interface DeviceAttestChallengeResponse {
+  /** The id attestDevice names in DeviceAttestRequest.challenge_id */
+  challenge_id: string;
+  /** Base64 of the nonce bytes the quote must be made over */
+  nonce: string;
+  /** When the challenge expires (RFC 3339) */
+  expires_at: string;
 }
 
 /**
@@ -548,8 +566,8 @@ export interface DeviceLifecycleResponse {
 export interface ActivateDeviceRequest {
   /** Serial number */
   serial: string;
-  /** MAC address */
-  macAddress: string;
+  /** MAC address (the server's mac_address is omitempty) */
+  macAddress?: string;
 }
 
 // =============================================================================
@@ -819,13 +837,11 @@ export interface RecordAttestCertResponse {
  * Activate device response
  */
 export interface ActivateDeviceResponse {
-  /** Operation status */
-  status: DeviceStatus;
-  /** Activation status */
-  activationStatus?: string;
+  /** Activation status the server reports (e.g. "activated") */
+  status: string;
   /** VLAN assigned */
   vlan?: number;
-  /** Transition timestamp */
+  /** Transition timestamp (RFC 3339) */
   transitionedAt?: string;
 }
 

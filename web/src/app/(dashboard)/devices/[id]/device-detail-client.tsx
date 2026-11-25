@@ -26,6 +26,10 @@ import { DeviceCard } from '@/components/features/devices/device-card';
 import { TPMInfo } from '@/components/features/devices/tpm-info';
 import { DeviceReportCard } from '@/components/features/attestation/device-report-card';
 import { AttestCertCard } from '@/components/features/attestation/attest-cert-card';
+import { DeviceAttestCard } from '@/components/features/attestation/device-attest-card';
+import { DeviceModelCard } from '@/components/features/devices/device-model-card';
+import { DeviceSerialCard } from '@/components/features/devices/device-serial-card';
+import { DeviceActivateCard } from '@/components/features/devices/device-activate-card';
 import { useToast } from '@/hooks/use-toast';
 import { useDevice, useMutation } from '@/hooks';
 import { useDeviceToggle } from '@/hooks/use-device-toggle';
@@ -250,7 +254,9 @@ export default function DeviceDetailPage() {
     return <Badge variant={variant}>{label}</Badge>;
   };
 
-  if (isLoading) {
+  // Only the first load shows the spinner: a re-read after a card action keeps
+  // every card mounted, so the Activate result and the edit cards' state stay.
+  if (isLoading && !device) {
     return (
       <div className="flex items-center justify-center py-12">
         <div className="text-center">
@@ -320,6 +326,11 @@ export default function DeviceDetailPage() {
 
       <DeviceReportCard deviceId={device.id} />
 
+      <DeviceModelCard deviceId={device.id} model={device.model} onSaved={fetchDevice} />
+
+      <DeviceSerialCard deviceId={device.id} serial={device.serial} onSaved={fetchDevice} />
+      <DeviceActivateCard serial={device.serial} onChecked={fetchDevice} />
+
       {device.endorsementKey && (
         <Card>
           <CardHeader>
@@ -359,6 +370,8 @@ export default function DeviceDetailPage() {
       {(device.tpm || device.attestCert) && (
         <AttestCertCard deviceId={device.id} attestCert={device.attestCert} onRecorded={fetchDevice} />
       )}
+
+      {device.tpm && <DeviceAttestCard deviceId={device.id} />}
 
       <Tabs defaultValue="attestations" className="space-y-4">
         <TabsList>

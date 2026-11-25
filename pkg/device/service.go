@@ -197,12 +197,26 @@ func (s *Service) Update(ctx context.Context, device *entities.Device) error {
 		return ErrInvalidDeviceID
 	}
 
+	// The serial check and the write hold createLock, taken before the
+	// device lock as Create takes them, so an update cannot race a create
+	// or another update onto one serial.
+	if device.Serial != "" {
+		s.createLock.Lock()
+		defer s.createLock.Unlock()
+	}
 	lock := s.writeLock(device.ID)
 	lock.Lock()
 	defer lock.Unlock()
 	existing, err := s.deviceDAO.Get(ctx, device.ID)
 	if err != nil {
 		return &WrappedError{Msg: "failed to get device for update", Err: err}
+	}
+	// A new serial must not be one another device holds; the device's own
+	// serial is not "taken".
+	if device.Serial != "" && device.Serial != existing.Serial {
+		if err := s.refuseTakenSerial(ctx, device.Serial); err != nil {
+			return err
+		}
 	}
 	// Server-owned fields survive a caller update: API update requests
 	// do not carry lifecycle or liveness state, so saving the incoming

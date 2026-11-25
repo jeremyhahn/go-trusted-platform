@@ -18,7 +18,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DeviceService } from '../device-service.js';
 import type { ApiClient } from '../../client/api-client.js';
 import type { ApiResponse } from '../../types/api.js';
-import type { DeviceTemplate, CreateDeviceTemplateRequest, DeviceProfile } from '../../types/device.js';
+import type {
+  Device,
+  DeviceTemplate,
+  CreateDeviceTemplateRequest,
+  DeviceProfile,
+} from '../../types/device.js';
 
 function createMockApiClient(): ApiClient {
   return {
@@ -282,6 +287,18 @@ describe('DeviceService updateDevice', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
+  });
+
+  it("returns the server's flat device as data", async () => {
+    vi.mocked(mockClient.put).mockResolvedValue({
+      success: true,
+      data: { id: 1, serial: 'SN002', model: 'X11' },
+    });
+
+    const result = await service.updateDevice(request);
+    const device: Device | undefined = result.data;
+
+    expect(device?.serial).toBe('SN002');
   });
 });
 

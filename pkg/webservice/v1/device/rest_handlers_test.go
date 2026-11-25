@@ -936,6 +936,62 @@ func TestCRUDHandler_ActivateDevice(t *testing.T) {
 	assert.Equal(t, uint16(100), resp.VLAN)
 }
 
+// TestCRUDHandler_ActivateDevice_RefusesRevokedAndSuspended: the activation
+// check refuses the two states the boot route refuses, instead of reporting a
+// VLAN the device would never be admitted to.
+func TestCRUDHandler_ActivateDevice_RefusesRevokedAndSuspended(t *testing.T) {
+	tests := []struct {
+		name     string
+		state    entities.DeviceState
+		wantCode int
+	}{
+		{name: "revoked", state: entities.DeviceStateRevoked, wantCode: http.StatusConflict},
+		{name: "suspended", state: entities.DeviceStateSuspended, wantCode: http.StatusConflict},
+		{name: "registered", state: entities.DeviceStateRegistered, wantCode: http.StatusOK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler, deviceSvc, profileSvc := newTestHandler()
+			deviceSvc.devices[1] = &entities.Device{
+				ID:     1,
+				Model:  "TestModel",
+				Serial: "SN001",
+				State:  tt.state,
+			}
+			profileSvc.profiles[1] = &entities.DeviceProfile{
+				ID:   1,
+				Name: "TestProfile",
+				MatchRules: &entities.ProfileMatchRules{
+					Model: "TestModel",
+				},
+				Networks: map[string]*entities.NetworkPhaseConfig{
+					entities.DefaultPostEnrollmentNetwork: {
+						VLAN: 100,
+					},
+				},
+			}
+
+			body := `{"serial": "SN001"}`
+			req := httptest.NewRequest(http.MethodPost, "/device/activate-json", bytes.NewBufferString(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			handler.ActivateDevice(w, req)
+
+			require.Equal(t, tt.wantCode, w.Code, w.Body.String())
+			if tt.wantCode == http.StatusOK {
+				var resp ActivationResponse
+				require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+				assert.Equal(t, uint16(100), resp.VLAN)
+				return
+			}
+			got := w.Body.String()
+			assert.Contains(t, got, "state="+string(tt.state))
+			assert.NotContains(t, got, `"vlan":100`)
+		})
+	}
+}
+
 func TestCRUDHandler_ActivateDevice_MissingSerial(t *testing.T) {
 	handler, _, _ := newTestHandler()
 

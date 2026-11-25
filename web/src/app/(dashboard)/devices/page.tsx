@@ -30,6 +30,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { DeviceTable } from '@/components/features/devices/device-table';
 import { DeviceForm } from '@/components/features/devices/device-form';
+import { DeviceSerialLookup } from '@/components/features/devices/device-serial-lookup';
 import { useToast } from '@/hooks/use-toast';
 import { useAttestation, useDevice, useApi } from '@/hooks';
 import type { DeviceReport } from 'trusted-platform-sdk';
@@ -186,6 +187,7 @@ export default function DevicesPage() {
             Manage physical and virtual devices with TPM support
           </p>
         </div>
+        <DeviceSerialLookup />
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
             <Button>

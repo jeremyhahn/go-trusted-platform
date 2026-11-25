@@ -534,7 +534,7 @@ func (h *CRUDHandler) CountProfiles(w http.ResponseWriter, r *http.Request) {
 	h.responseWriter.Success200(w, r, CountResponse{Count: count})
 }
 
-// ActivateDevice handles POST /api/v1/device/activate
+// ActivateDevice handles POST /api/v1/device/activate-json: a profile and VLAN check that changes no state.
 func (h *CRUDHandler) ActivateDevice(w http.ResponseWriter, r *http.Request) {
 	if h.deviceService == nil {
 		h.responseWriter.Error500(w, r, ErrDeviceServiceNotInitialized{})
@@ -562,6 +562,16 @@ func (h *CRUDHandler) ActivateDevice(w http.ResponseWriter, r *http.Request) {
 		h.handleServiceError(w, r, err)
 		return
 	}
+	// Revoked and suspended devices are refused, as the boot route refuses
+	// them: never report a VLAN the device would not be admitted to.
+	if deviceEntity.State == entities.DeviceStateRevoked || deviceEntity.State == entities.DeviceStateSuspended {
+		h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{
+			Code:    http.StatusConflict,
+			Error:   ErrDeviceNotAdmissible{Serial: deviceEntity.Serial, State: string(deviceEntity.State)}.Error(),
+			Success: false,
+		})
+		return
+	}
 
 	// Find matching profile
 	profileEntity, err := h.profileService.FindMatchingProfile(
@@ -581,7 +591,7 @@ func (h *CRUDHandler) ActivateDevice(w http.ResponseWriter, r *http.Request) {
 		vlan = prodNet.VLAN
 	}
 
-	h.logger.Infof("device activated: serial=%s vlan=%d", req.Serial, vlan)
+	h.logger.Infof("device activation check: serial=%s vlan=%d", req.Serial, vlan)
 
 	resp := ActivationResponse{
 		Status:         "activated",

@@ -18,6 +18,19 @@ vi.mock("@/hooks", () => ({
   useToast: () => ({ toast: toastMock }),
 }));
 
+// The capability gate: every op is enabled unless a case turns one off.
+const RECORD_OP = "POST /api/v1/devices/{id:[0-9]+}/attest-cert/record";
+const disabledOps = vi.hoisted(() => new Map<string, string>());
+
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: null,
+    capability: (op: string) =>
+      disabledOps.has(op) ? { enabled: false, reason: disabledOps.get(op) } : { enabled: true },
+  }),
+}));
+
 const REFUSAL =
   "device: attestation certificate refused for device 7; nothing recorded: " +
   "ca[node-03]: lacks tcg-cap-verifiedTPMRestricted";
@@ -58,6 +71,7 @@ describe("AttestCertCard", () => {
   beforeEach(() => {
     fetchMock.mockReset();
     toastMock.mockReset();
+    disabledOps.clear();
   });
 
   afterEach(() => {
@@ -112,5 +126,16 @@ describe("AttestCertCard", () => {
     expect(screen.getByRole("dialog")).toBeTruthy();
     expect(onRecorded).not.toHaveBeenCalled();
     expect(toastMock).not.toHaveBeenCalled();
+  });
+
+  it("withholds Record certificate when the server does not offer it", () => {
+    disabledOps.set(RECORD_OP, "not-configured: ca");
+    render(<AttestCertCard deviceId="7" onRecorded={vi.fn()} />);
+
+    const record = screen.getByRole("button", { name: /record certificate/i });
+    expect(record.hasAttribute("disabled")).toBe(true);
+    expect(record.getAttribute("title")).toBe("not-configured: ca");
+    expect(record.getAttribute("data-capability-op")).toBe(RECORD_OP);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
