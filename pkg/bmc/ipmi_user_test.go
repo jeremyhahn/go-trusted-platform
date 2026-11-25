@@ -561,6 +561,109 @@ func TestCreateUser_PartialFailureClearsName(t *testing.T) {
 	}
 }
 
+// lostEnableSender records every call and fails only the Set User Password
+// enable operation, as when the BMC applies the enable but its UDP response
+// is lost. nameErr, when set, also fails a Set User Name of all zeros.
+type lostEnableSender struct {
+	calls     []mockCall
+	enableErr error
+	nameErr   error
+}
+
+func (s *lostEnableSender) Send(netFn, cmd byte, data []byte) ([]byte, error) {
+	cp := append([]byte(nil), data...)
+	s.calls = append(s.calls, mockCall{netFn: netFn, cmd: cmd, data: cp})
+	if cmd == cmdSetUserPassword && len(data) >= 2 && data[1]&0x03 == pwdOpEnable {
+		return nil, s.enableErr
+	}
+	if cmd == cmdSetUserName && s.nameErr != nil && len(data) >= 2 {
+		allZero := true
+		for _, b := range data[1:] {
+			if b != 0 {
+				allZero = false
+			}
+		}
+		if allZero {
+			return nil, s.nameErr
+		}
+	}
+	return nil, nil
+}
+
+func TestCreateUser_LostEnableResponseRevokesAccess(t *testing.T) {
+	s := &lostEnableSender{enableErr: errors.New("enable response lost")}
+	um := newUM(s)
+	pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
+	defer pwd.Destroy()
+	u := User{Slot: 4, Username: "eve", Privilege: PrivilegeAdministrator, Enabled: true}
+	err := um.CreateUser(context.Background(), u, pwd)
+	if !errors.Is(err, s.enableErr) {
+		t.Fatalf("err = %v, want the enable error", err)
+	}
+	enableIdx := -1
+	for i, c := range s.calls {
+		if c.cmd == cmdSetUserPassword && len(c.data) >= 2 && c.data[1]&0x03 == pwdOpEnable {
+			enableIdx = i
+		}
+	}
+	if enableIdx < 0 {
+		t.Fatal("no enable call")
+	}
+	disabled, revoked, cleared := false, false, false
+	for _, c := range s.calls[enableIdx+1:] {
+		switch c.cmd {
+		case cmdSetUserPassword:
+			if len(c.data) >= 2 && c.data[0]&ipmiMaxUserSlot == 4 && c.data[1]&0x03 == pwdOpDisable {
+				disabled = true
+			}
+		case cmdSetUserAccess:
+			if len(c.data) >= 3 && c.data[1]&ipmiMaxUserSlot == 4 &&
+				c.data[0]&(suaIPMIMsgEnable|suaLinkAuthEnable) == 0 &&
+				c.data[0]&0x0F == defaultIPMIChannel &&
+				Privilege(c.data[2]&guaPrivilegeMask) == PrivilegeNoAccess {
+				revoked = true
+			}
+		case cmdSetUserName:
+			if len(c.data) >= 2 && c.data[0] == 4 {
+				allZero := true
+				for _, b := range c.data[1:] {
+					if b != 0 {
+						allZero = false
+					}
+				}
+				cleared = cleared || allZero
+			}
+		}
+	}
+	if !disabled {
+		t.Error("rollback did not disable the user (Set User Password op disable)")
+	}
+	if !revoked {
+		t.Error("rollback did not revoke channel access (NoAccess, enable bits clear)")
+	}
+	if !cleared {
+		t.Error("rollback did not clear the slot name")
+	}
+}
+
+func TestCreateUser_RollbackErrorsAreReturned(t *testing.T) {
+	s := &lostEnableSender{
+		enableErr: errors.New("enable response lost"),
+		nameErr:   errors.New("name clear failed"),
+	}
+	um := newUM(s)
+	pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
+	defer pwd.Destroy()
+	u := User{Slot: 6, Username: "mal", Privilege: PrivilegeOperator, Enabled: true}
+	err := um.CreateUser(context.Background(), u, pwd)
+	if !errors.Is(err, s.enableErr) {
+		t.Errorf("err = %v, want the enable error", err)
+	}
+	if !errors.Is(err, s.nameErr) {
+		t.Errorf("err = %v, want the name-clear error", err)
+	}
+}
+
 // --- SetUserPassword ---
 
 func TestSetUserPassword(t *testing.T) {
