@@ -27,7 +27,7 @@ func TestPlatformSDKBackendSources_WithoutStorage(t *testing.T) {
 	for name, a := range map[string]*app.App{"nil app": nil, "no storage": {}} {
 		t.Run(name, func(t *testing.T) {
 			src := platformSDKBackendSources(a)
-			if src.SDK != nil || src.Admin != nil {
+			if src.SDK != nil || src.Admin != nil || src.Cluster != nil {
 				t.Errorf("sources = %+v, want none", src)
 			}
 		})

@@ -1374,7 +1374,7 @@ func TestMCPServiceProvider_DeviceAttest_NilService(t *testing.T) {
 	ctx := context.Background()
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
 
-	_, err := provider.DeviceAttest(ctx, "1", []byte(`{"quote":"x"}`))
+	_, err := provider.DeviceAttest(ctx, "1", []byte(`{"quote":"x"}`), "")
 	if _, ok := err.(ErrServiceNotAvailable); !ok {
 		t.Errorf("expected ErrServiceNotAvailable, got %T", err)
 	}
@@ -1394,7 +1394,7 @@ func TestMCPServiceProvider_DeviceAttest_DelegatesToTheSharedVerifier(t *testing
 	})
 	enrolledCert := f.device.AttestCert
 
-	raw, err := provider.DeviceAttest(ctx, itoa(f.device.ID), f.evidence(t, []byte("nonce-mcp"), goldenPCRs()))
+	raw, err := provider.DeviceAttest(ctx, itoa(f.device.ID), f.evidence(t, []byte("nonce-mcp"), goldenPCRs()), "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1434,7 +1434,7 @@ func TestMCPServiceProvider_DeviceAttest_RejectsUnusableRequests(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := provider.DeviceAttest(ctx, tc.deviceID, tc.evidence)
+			_, err := provider.DeviceAttest(ctx, tc.deviceID, tc.evidence, "")
 			if err == nil {
 				t.Fatal("expected error")
 			}

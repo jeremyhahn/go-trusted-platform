@@ -25,6 +25,7 @@
 # NBD export server, read only when the manifest has a diskless-nbd node:
 #   BOOTSTRAP_NBD_LISTEN       listen address (default BOOTSTRAP_SERVER_IP:10809)
 #   BOOTSTRAP_NBD_VOLUME_DIR   per-node root volumes (default <data dir>/nbd)
+#   BOOTSTRAP_NBD_STORAGE_CLASS storage class of the root volumes (default general)
 #   BOOTSTRAP_NBD_VOLUME_SIZE  bytes of a new root volume, a multiple of 512
 #   BOOTSTRAP_NBD_CA_FILE      platform CA bundle that verifies client IDevIDs
 #   BOOTSTRAP_NBD_CERT         server TLS certificate

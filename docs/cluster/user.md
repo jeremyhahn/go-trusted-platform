@@ -1,6 +1,6 @@
 # Cluster — Using It
 
-> **Status: NORMATIVE** · Scope: `pkg/cluster/` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `pkg/cluster/` · Last verified: 2026-11-23
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 
@@ -8,24 +8,38 @@
 
 ## Start here: what you can and cannot do today
 
-**The platform's cluster management API is not usable yet.** Verified against
-the code on 2026-10-15:
+**The platform's cluster API reads the cluster; it cannot change it yet.**
+Verified against the code on 2026-11-23:
 
 - `platformctl cluster …` **is not a command.** The command tree exists in the
   source and is registered on no root command, so the binary does not have it.
-- Every cluster REST route returns **503**.
-- Every cluster gRPC, QUIC and MCP call returns **`Unavailable`** with
-  "cluster service not configured".
+- Since #2140, serve and every embedded host (GUI, CLI) set the cluster
+  servicer through `appbackends.WireSDKBackends`, over the Raft cluster the
+  embedded go-quicbaas service runs.
+- Cluster status and the node list answer on every transport (REST, gRPC,
+  Unix, QUIC, MCP, embedded). Node health is not known yet: every node State
+  is "unknown" and the healthy count is 0 until the SDK exposes liveness. The
+  cluster State is "unknown" with a leader, "degraded" without one and
+  "uninitialized" with no members.
+- Bootstrap answers "already initialized" (REST **409**) when a leader is
+  known and "not initialized" (REST **409**) otherwise.
+- Leave answers `Unavailable` (REST **503**): a follower cannot remove itself
+  through the local replica, and no leader-routed removal exists yet.
+- Join answers **`Unavailable`** (REST **503**): the pinned go-quicbaas has no
+  join seam, an upstream gap.
+- A daemon built without an embedded QuicBaaS service has no servicer, and
+  every cluster call answers **`Unavailable`** with "cluster service not
+  configured" (REST **503**).
 
 None of that is a bug in your deployment. The lifecycle verbs, the status
-projection and the transports are all written; the piece that connects them to
-a consensus engine is not wired.
+projection and the transports are all written; changing membership through
+the platform is not wired yet.
 
-**What still works:** clustering itself. Forming a cluster is not this
+**What works:** clustering itself. Forming a cluster is not this
 repository's job — it belongs to the database and consensus layers underneath.
 You configure it there, under `quicbaas:`, and the platform runs on top of it.
-What you do not get is the platform's own view of that cluster: no
-`cluster status`, no node list, no quorum verdict from platformd.
+platformd shows you that cluster — `GetStatus` and `ListNodes`, with the
+leader and membership — but not node health, and it cannot join or leave it.
 
 If you are looking for the commands, [cli.md](cli.md) documents them as written
 so you know what will exist when they are connected. If you are looking for a
@@ -45,8 +59,8 @@ Time spent understanding this saves a lot of confusion later.
 | **go-trusted-platform** (here) | A control-plane *view*: lifecycle verbs, status, node list, quorum verdict — and the API for all of it |
 
 So: "my cluster will not form" is a question for the layers below. "platformd
-will not tell me about my cluster" is this feature, and the answer today is that
-it cannot.
+will not tell me about my cluster" is this feature: since #2140 it reports
+membership and the leader, with node health "unknown".
 
 ---
 
@@ -55,8 +69,10 @@ it cannot.
 1. **A build with the `cluster` tag.** It is in the default `BUILD_TAGS`, so a
    standard build has it. Run `make -s print-build-tags` for the derived set
    rather than copying a list — the tags are assembled in two stages.
-   The tag alone does not enable clustering: the cluster service is a stub on
-   every build until #336 lands.
+   The tag alone does not enable clustering. Since #2140, serve answers
+   cluster status and node reads from the embedded go-quicbaas service; Leave
+   and Join answer Unavailable (no leader-routed removal and no join seam in
+   the pinned go-quicbaas).
 2. **A `quicbaas:` section configured for a multi-node deployment** — see below.
 3. **An odd number of nodes.** Three or five. Quorum is
    `(total / 2) + 1`, so three nodes tolerate one failure and five tolerate two.
@@ -262,13 +278,26 @@ tools require the same scopes ([api.md](api.md) §7).
 Expected. The command tree is not registered on the binary. See the top of this
 file.
 
-**Every cluster REST call returns 503 with "cluster service not configured".**
-Expected. No coordinator is wired into the daemon.
+**Cluster REST calls return 503 with "cluster service not configured", or
+gRPC, QUIC or MCP calls return `Unavailable` with the same message.**
+The daemon has no cluster servicer: it was built or started without an
+embedded QuicBaaS service, so `appbackends.WireSDKBackends` set none. Serve and
+embedded hosts with the embedded service answer status and nodes.
 
-**Cluster gRPC, QUIC or MCP calls return `Unavailable` with "cluster service
-not configured".**
-Expected, same cause: the registered service has no cluster servicer behind it,
-and QUIC and MCP call that same service.
+**Join returns 503 / `Unavailable`.**
+Expected. The pinned go-quicbaas has no join seam, so adding a node through
+the platform is an upstream gap.
+
+**Leave returns 503 / `Unavailable`.**
+Expected. No leader-routed removal exists yet, so removing a node through the
+platform is an upstream gap.
+
+**Bootstrap returns 409.**
+Expected: "already initialized" when the cluster has a leader, "not
+initialized" otherwise. Form the cluster in the `quicbaas:` configuration.
+
+**Every node reads State "unknown" and the healthy count is 0.**
+Expected. The SDK does not expose node liveness yet.
 
 **Startup fails with "invalid storage backend".**
 You set `storage-backend: raft`. Use `pebble` — see the configuration section.

@@ -29,6 +29,8 @@ import { Input } from '@/components/ui/input';
 import { VTPMTable } from '@/components/features/devices/vtpm-table';
 import { VTPMForm } from '@/components/features/devices/vtpm-form';
 import { useVTPM, useApi, useToast } from '@/hooks';
+import { Gated } from '@/components/features/capabilities/gated';
+import { useCapabilities } from '@/hooks/use-capabilities';
 import type { VTPM, VTPMFilters } from '@/types/device';
 
 export default function VTPMPage() {
@@ -36,6 +38,9 @@ export default function VTPMPage() {
   const vtpm = useVTPM();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [filters, setFilters] = useState<VTPMFilters>({});
+  // #2033 item 5: the list and every control follow the server's capabilities.
+  const { loading: capsLoading, capability } = useCapabilities();
+  const listCap = capability('GET /api/v1/vtpm/bundles');
 
   // Fetch vTPM bundles using SDK
   const {
@@ -50,6 +55,7 @@ export default function VTPMPage() {
     }),
     [filters.state, filters.vmId, filters.search],
     {
+      enabled: !capsLoading && listCap.enabled,
       onError: (err) => {
         toast({
           title: 'Error',
@@ -117,12 +123,14 @@ export default function VTPMPage() {
           </p>
         </div>
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="mr-2 h-4 w-4" />
-              Create vTPM
-            </Button>
-          </DialogTrigger>
+          <Gated op="POST /api/v1/vtpm/bundles">
+            <DialogTrigger asChild>
+              <Button>
+                <Plus className="mr-2 h-4 w-4" />
+                Create vTPM
+              </Button>
+            </DialogTrigger>
+          </Gated>
           <DialogContent className="max-w-2xl">
             <DialogHeader>
               <DialogTitle>Create New vTPM Instance</DialogTitle>
@@ -179,12 +187,17 @@ export default function VTPMPage() {
         </div>
       </div>
 
-      {isLoading ? (
+      {capsLoading || isLoading ? (
         <div className="flex items-center justify-center py-12">
           <div className="text-center">
             <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-current border-r-transparent motion-reduce:animate-[spin_1.5s_linear_infinite]" />
             <p className="mt-2 text-sm text-muted-foreground">Loading vTPM instances...</p>
           </div>
+        </div>
+      ) : !listCap.enabled ? (
+        <div data-testid="vtpm-not-enabled" className="rounded-lg border border-border bg-card p-6">
+          <div className="font-medium">vTPM bundles are not enabled on this server</div>
+          <p className="text-sm text-muted-foreground mt-1">{listCap.reason}</p>
         </div>
       ) : (
         <VTPMTable vtpms={vtpms} onVTPMChange={() => fetchVTPMs()} />

@@ -9,7 +9,7 @@
  * create a profile or create a fully custom profile directly.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter, useParams, usePathname } from 'next/navigation';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import {
@@ -40,6 +40,8 @@ import { Separator } from '@/components/ui/separator';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast, useApi, useDevice, useMutation, useDeviceTemplates } from '@/hooks';
+import { Gated } from '@/components/features/capabilities/gated';
+import { useCapabilities } from '@/hooks/use-capabilities';
 import type {
   DeviceRole,
   CreateProfileFromTemplateRequest,
@@ -96,6 +98,30 @@ function formatDate(dateString: string) {
   });
 }
 
+/**
+ * fulfilSession links the created profile to the waiting session. The SDK
+ * reports a refusal in the response, not by throwing, so the mutation would
+ * otherwise report a device provisioned that the server never bound.
+ */
+async function fulfilSession(
+  deviceService: ReturnType<typeof useDevice>,
+  sessionId: string,
+  profileId: string | undefined
+): Promise<void> {
+  if (!profileId) {
+    throw new Error('The server returned no profile id, so the session was not fulfilled.');
+  }
+  const response = await deviceService.fulfillProvisioningSession({
+    session_id: sessionId,
+    profile_id: profileId,
+  });
+  if (response.error !== undefined) {
+    throw new Error(
+      `Profile ${profileId} was created, but the session was not fulfilled: ${response.error.message}`
+    );
+  }
+}
+
 // ============================================================================
 // Main Component
 // ============================================================================
@@ -126,6 +152,10 @@ export default function SessionDetailClient() {
 
   const { templates, isLoading: templatesLoading } = useDeviceTemplates();
 
+  // #2046: the page reads the session only when the server offers GetSession.
+  const { loading: capsLoading, capability } = useCapabilities();
+  const readCap = capability('GET /api/v1/provisioning/sessions/{sessionID}');
+
   const {
     data: session,
     isLoading: sessionLoading,
@@ -135,6 +165,7 @@ export default function SessionDetailClient() {
     () => deviceService.getProvisioningSession(sessionId),
     [sessionId],
     {
+      enabled: !capsLoading && readCap.enabled,
       onSuccess: (data) => {
         if (data) {
           setTemplateEkSerial(data.ek_serial ?? '');
@@ -156,17 +187,13 @@ export default function SessionDetailClient() {
     }
   );
 
-  // Mutation: create profile from template AND fulfill the session atomically
+  // Mutation: create the profile from the template, then fulfil the session
+  // with it; a refused fulfilment fails the mutation.
   const createFromTemplateMutation = useMutation(
     async (request: CreateProfileFromTemplateRequest) => {
       const profileResponse = await deviceService.createProfileFromTemplate(request);
-      const profile = profileResponse.data;
-      if (profile?.id) {
-        await deviceService.fulfillProvisioningSession({
-          session_id: sessionId,
-          profile_id: profile.id,
-        });
-      }
+      if (profileResponse.error !== undefined) return profileResponse;
+      await fulfilSession(deviceService, sessionId, profileResponse.data?.id);
       return profileResponse;
     },
     {
@@ -190,17 +217,13 @@ export default function SessionDetailClient() {
     }
   );
 
-  // Mutation: create custom profile AND fulfill the session atomically
+  // Mutation: create the custom profile, then fulfil the session with it; a
+  // refused fulfilment fails the mutation.
   const createCustomProfileMutation = useMutation(
     async (request: CreateProfileRequest) => {
       const profileResponse = await deviceService.createProfile(request);
-      const profile = profileResponse.data?.profile;
-      if (profile?.id) {
-        await deviceService.fulfillProvisioningSession({
-          session_id: sessionId,
-          profile_id: profile.id,
-        });
-      }
+      if (profileResponse.error !== undefined) return profileResponse;
+      await fulfilSession(deviceService, sessionId, profileResponse.data?.profile?.id);
       return profileResponse;
     },
     {
@@ -223,6 +246,16 @@ export default function SessionDetailClient() {
       },
     }
   );
+
+  // Success state after provisioning: re-read the session once so the page
+  // shows what the server recorded. A refetch in render looped forever.
+  const sessionFulfilled = session?.fulfilled;
+  useEffect(() => {
+    if (isFulfilled && sessionFulfilled === false) {
+      refetch();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFulfilled, sessionFulfilled]);
 
   const handleCreateFromTemplate = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -257,7 +290,27 @@ export default function SessionDetailClient() {
     });
   };
 
-  if (sessionLoading) {
+  if (!capsLoading && !readCap.enabled) {
+    return (
+      <div className="flex flex-col gap-6">
+        <Button
+          variant="ghost"
+          className="w-fit"
+          onClick={() => router.push('/provisioning/sessions')}
+        >
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          Back to Sessions
+        </Button>
+        <Card data-testid="session-not-enabled">
+          <CardContent className="pt-6 text-sm text-muted-foreground">
+            Session reads are not enabled on this server: {readCap.reason ?? 'not offered'}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (capsLoading || sessionLoading) {
     return (
       <div className="flex items-center justify-center py-24">
         <div className="text-center">
@@ -291,11 +344,6 @@ export default function SessionDetailClient() {
   }
 
   const status = getSessionStatus(session.fulfilled, session.expires_at);
-
-  // Success state after provisioning
-  if (isFulfilled && !session.fulfilled) {
-    refetch();
-  }
 
   if (isFulfilled) {
     return (
@@ -511,6 +559,7 @@ export default function SessionDetailClient() {
                       />
                     </div>
 
+                    <Gated op="POST /api/v1/provisioning/sessions/{sessionID}/fulfill">
                     <Button
                       type="submit"
                       className="w-full"
@@ -525,6 +574,7 @@ export default function SessionDetailClient() {
                       )}
                       Create Profile and Provision Device
                     </Button>
+                    </Gated>
                   </form>
                 </CardContent>
               </Card>
@@ -590,6 +640,7 @@ export default function SessionDetailClient() {
                       />
                     </div>
 
+                    <Gated op="POST /api/v1/provisioning/sessions/{sessionID}/fulfill">
                     <Button
                       type="submit"
                       className="w-full"
@@ -600,6 +651,7 @@ export default function SessionDetailClient() {
                       )}
                       Create Profile and Provision Device
                     </Button>
+                    </Gated>
                   </form>
                 </CardContent>
               </Card>
