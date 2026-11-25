@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 
@@ -69,30 +70,60 @@ func newInvitationRoleLister(roles roleListClient) *invitationRoleLister {
 
 // RoleNames returns the name of every role in the tenant's IAM role list,
 // system roles included, reading every page. It stops on an empty response,
-// an empty next-page token or a token it has already requested.
+// or on an empty or repeated next-page token after a page shorter than the
+// page size asked for. A full page with no usable token may hide more roles,
+// so the listing restarts with the page size doubled, up to
+// invitationRoleMaxPageSize; a full page at that size is an error, never a
+// partial list.
 func (l *invitationRoleLister) RoleNames(ctx context.Context, tenantID string) ([]string, error) {
-	var names []string
+	pageSize := invitationRolePageSize
+	for {
+		names, complete, err := l.listRoles(ctx, tenantID, pageSize)
+		if err != nil {
+			return nil, err
+		}
+		if complete {
+			return names, nil
+		}
+		if pageSize >= invitationRoleMaxPageSize {
+			return nil, fmt.Errorf("IAM role list for tenant %s may be truncated at %d roles", tenantID, len(names))
+		}
+		pageSize = min(pageSize*2, invitationRoleMaxPageSize)
+	}
+}
+
+// listRoles reads the tenant's role list from the first page with the given
+// page size, following next-page tokens. complete is false when the listing
+// ended on a full page with an empty or repeated token and no TotalCount that
+// matches: IAM may hold more roles than it returned (the embedded IAM path
+// ignores page tokens and never sets one).
+func (l *invitationRoleLister) listRoles(ctx context.Context, tenantID string, pageSize int) (names []string, complete bool, err error) {
 	seen := map[string]bool{}
 	token := ""
 	for {
 		seen[token] = true
 		resp, err := l.roles.List(ctx, tenantID, &iam.ListRolesRequest{
-			PageSize:      invitationRolePageSize,
+			PageSize:      pageSize,
 			PageToken:     token,
 			IncludeSystem: true,
 		})
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if resp == nil {
-			return names, nil
+			return names, true, nil
 		}
 		for _, role := range resp.Roles {
 			names = append(names, role.Name)
 		}
 		token = resp.Pagination.NextPageToken
-		if token == "" || seen[token] {
-			return names, nil
+		if token != "" && !seen[token] {
+			continue
 		}
+		total := resp.Pagination.TotalCount
+		if len(resp.Roles) < pageSize || (total > 0 && total == len(names)) {
+			return names, true, nil
+		}
+		return names, false, nil
 	}
 }
