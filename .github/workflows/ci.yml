@@ -980,24 +980,23 @@ jobs:
       # from an image for the hours they take.
       - name: Lease the integration image
         run: |
-          # shellcheck disable=SC2119,SC2120 # image_lock takes an optional lock name: the pull step passes a per-digest one to the sourced copy
           lease="go-trusted-platform-ci-lease-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
           image_lock() {
-            local lock=${1:-go-trusted-platform-ci-image-lock} base=go-trusted-platform-ci-image-lock:base held at t i
-            for ((i = 0; i < 660; i++)); do
+            local lock=${1:-go-trusted-platform-ci-image-lock} stale=${2:-600} base=go-trusted-platform-ci-image-lock:base held at t i
+            for ((i = 0; i < stale + 60; i++)); do
               docker image inspect "$base" >/dev/null 2>&1 ||
                 head -c 1024 /dev/zero | docker import - "$base" >/dev/null 2>&1 || true
               IMAGE_LOCK_ID=$(docker create --pull never --name "$lock" "$base" true 2>/dev/null) && return 0
               IMAGE_LOCK_ID=
               if read -r held at < <(docker container inspect -f '{{.Id}} {{.Created}}' "$lock" 2>/dev/null) &&
-                [ -n "$at" ] && t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge 600 ]; then
+                [ -n "$at" ] && t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge "$stale" ]; then
                 echo "removing the stale image lock $lock (created $at)"
                 docker rm "$held" >/dev/null 2>&1 || true
                 continue
               fi
               sleep 1
             done
-            echo "::error::the image lock $lock was not free within 660 s"
+            echo "::error::the image lock $lock was not free within $((stale + 60)) s (stale age $stale s)"
             return 1
           }
           image_unlock() {
@@ -1013,7 +1012,7 @@ jobs:
           }
           declare -f image_lock image_unlock take_lease > "$RUNNER_TEMP/image-lock.sh"
           trap image_unlock EXIT
-          image_lock || exit 1
+          image_lock go-trusted-platform-ci-image-lock 600 || exit 1
           if ! take_lease; then
             image_unlock
             echo "integration image $IT_IMAGE is missing or went before its lease; building it once"
@@ -1025,7 +1024,7 @@ jobs:
               bp="GO_BUILD_PROXY=$DEVCACHE_GOPROXY|https://proxy.golang.org"
             fi
             make docker-build-integration ${bp:+"$bp"} MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE"
-            image_lock || exit 1
+            image_lock go-trusted-platform-ci-image-lock 600 || exit 1
             if ! take_lease; then
               echo "::error::the integration image $IT_IMAGE is missing after one rebuild, so this job holds no lease on it"
               exit 1
@@ -1703,24 +1702,23 @@ jobs:
       - name: Lease the integration image
         id: build
         run: |
-          # shellcheck disable=SC2119,SC2120 # image_lock takes an optional lock name: the pull step passes a per-digest one to the sourced copy
           lease="go-trusted-platform-ci-lease-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
           image_lock() {
-            local lock=${1:-go-trusted-platform-ci-image-lock} base=go-trusted-platform-ci-image-lock:base held at t i
-            for ((i = 0; i < 660; i++)); do
+            local lock=${1:-go-trusted-platform-ci-image-lock} stale=${2:-600} base=go-trusted-platform-ci-image-lock:base held at t i
+            for ((i = 0; i < stale + 60; i++)); do
               docker image inspect "$base" >/dev/null 2>&1 ||
                 head -c 1024 /dev/zero | docker import - "$base" >/dev/null 2>&1 || true
               IMAGE_LOCK_ID=$(docker create --pull never --name "$lock" "$base" true 2>/dev/null) && return 0
               IMAGE_LOCK_ID=
               if read -r held at < <(docker container inspect -f '{{.Id}} {{.Created}}' "$lock" 2>/dev/null) &&
-                [ -n "$at" ] && t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge 600 ]; then
+                [ -n "$at" ] && t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge "$stale" ]; then
                 echo "removing the stale image lock $lock (created $at)"
                 docker rm "$held" >/dev/null 2>&1 || true
                 continue
               fi
               sleep 1
             done
-            echo "::error::the image lock $lock was not free within 660 s"
+            echo "::error::the image lock $lock was not free within $((stale + 60)) s (stale age $stale s)"
             return 1
           }
           image_unlock() {
@@ -1736,7 +1734,7 @@ jobs:
           }
           declare -f image_lock image_unlock take_lease > "$RUNNER_TEMP/image-lock.sh"
           trap image_unlock EXIT
-          image_lock || exit 1
+          image_lock go-trusted-platform-ci-image-lock 600 || exit 1
           if ! take_lease; then
             image_unlock
             echo "integration image $IT_IMAGE is missing or went before its lease; building it once"
@@ -1748,7 +1746,7 @@ jobs:
               bp="GO_BUILD_PROXY=$DEVCACHE_GOPROXY|https://proxy.golang.org"
             fi
             make docker-build-it ${bp:+"$bp"} MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE" BUILDX_CLIENT_LOAD=1
-            image_lock || exit 1
+            image_lock go-trusted-platform-ci-image-lock 600 || exit 1
             if ! take_lease; then
               echo "::error::the build finished but $IT_IMAGE is not on the daemon this job uses (context $(docker context show), DOCKER_HOST=${DOCKER_HOST:-unset}); builder $BUILDX_BUILDER:"
               docker buildx inspect "$BUILDX_BUILDER" || true
@@ -1803,7 +1801,7 @@ jobs:
           if [ -n "$json" ]; then
             (umask 077 && printf '{%s}\n' "$json" > "$registry_config/config.json") || exit 1
           fi
-          image_lock || exit 1
+          image_lock go-trusted-platform-ci-image-lock 600 || exit 1
           docker tag "$IT_LEASE_ID" "$ref"
           image_unlock
           DOCKER_CONFIG=$registry_config docker push "$ref"
@@ -1821,7 +1819,7 @@ jobs:
           fi
           source "$RUNNER_TEMP/image-lock.sh"
           trap image_unlock EXIT
-          image_lock || exit 1
+          image_lock go-trusted-platform-ci-image-lock 600 || exit 1
           docker tag "$IT_LEASE_ID" "$IT_IMAGE"
           image_unlock
           docker save -o "$RUNNER_TEMP/it-image.tar" "$IT_IMAGE"
@@ -1962,24 +1960,23 @@ jobs:
       - name: Lease the integration image on this runner's daemon
         id: lease
         run: |
-          # shellcheck disable=SC2119,SC2120 # image_lock takes an optional lock name: the pull step passes a per-digest one to the sourced copy
           lease="go-trusted-platform-ci-lease-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
           image_lock() {
-            local lock=${1:-go-trusted-platform-ci-image-lock} base=go-trusted-platform-ci-image-lock:base held at t i
-            for ((i = 0; i < 660; i++)); do
+            local lock=${1:-go-trusted-platform-ci-image-lock} stale=${2:-600} base=go-trusted-platform-ci-image-lock:base held at t i
+            for ((i = 0; i < stale + 60; i++)); do
               docker image inspect "$base" >/dev/null 2>&1 ||
                 head -c 1024 /dev/zero | docker import - "$base" >/dev/null 2>&1 || true
               IMAGE_LOCK_ID=$(docker create --pull never --name "$lock" "$base" true 2>/dev/null) && return 0
               IMAGE_LOCK_ID=
               if read -r held at < <(docker container inspect -f '{{.Id}} {{.Created}}' "$lock" 2>/dev/null) &&
-                [ -n "$at" ] && t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge 600 ]; then
+                [ -n "$at" ] && t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge "$stale" ]; then
                 echo "removing the stale image lock $lock (created $at)"
                 docker rm "$held" >/dev/null 2>&1 || true
                 continue
               fi
               sleep 1
             done
-            echo "::error::the image lock $lock was not free within 660 s"
+            echo "::error::the image lock $lock was not free within $((stale + 60)) s (stale age $stale s)"
             return 1
           }
           image_unlock() {
@@ -1996,7 +1993,7 @@ jobs:
           declare -f image_lock image_unlock take_lease > "$RUNNER_TEMP/image-lock.sh"
           trap image_unlock EXIT
           echo "IT_LEASE=$lease" >> "$GITHUB_ENV"
-          image_lock || exit 1
+          image_lock go-trusted-platform-ci-image-lock 600 || exit 1
           if docker create --pull never --name "$lease" "$IT_IMAGE_ID" true >/dev/null; then
             docker tag "$IT_IMAGE_ID" "$IT_IMAGE"
             echo "IT_LEASE_ID=$IT_IMAGE_ID" >> "$GITHUB_ENV"
@@ -2058,12 +2055,12 @@ jobs:
             *@sha256:*) digest=${IT_IMAGE_REF##*@sha256:} ;;
             *) digest=$(printf '%s' "$IT_IMAGE_REF" | sha256sum | cut -d' ' -f1) ;;
           esac
-          image_lock "go-trusted-platform-ci-pull-${digest:0:12}" || exit 1
+          image_lock "go-trusted-platform-ci-pull-${digest:0:12}" 3600 || exit 1
           if docker image inspect "$IT_IMAGE_REF" >/dev/null 2>&1; then
             echo "$IT_IMAGE_REF is already on this runner's daemon; not pulling it again"
           else
             for delay in 5 15 ''; do
-              if (set -o pipefail; DOCKER_CONFIG=$registry_config docker pull "$IT_IMAGE_REF" 2>&1 | tee "$pull_log"); then
+              if (set -o pipefail; DOCKER_CONFIG=$registry_config timeout 900 docker pull "$IT_IMAGE_REF" 2>&1 | tee "$pull_log"); then
                 break
               fi
               if [ -z "$delay" ] || ! grep -Eq 'lease does not exist|failed to extract layer|failed to commit snapshot|failed to cleanup extract' "$pull_log"; then
@@ -2076,7 +2073,7 @@ jobs:
             done
           fi
           image_unlock
-          image_lock || exit 1
+          image_lock go-trusted-platform-ci-image-lock 600 || exit 1
           if ! docker tag "$IT_IMAGE_REF" "$IT_IMAGE"; then
             echo "::warning::re-tagging $IT_IMAGE_REF as $IT_IMAGE failed; building this leg's image"
             image_unlock
@@ -2158,7 +2155,7 @@ jobs:
           lease=$IT_LEASE
           leased=false
           if [ -z "$IT_IMAGE_TAG" ] && docker load -i "$RUNNER_TEMP/it-image/it-image.tar"; then
-            image_lock || exit 1
+            image_lock go-trusted-platform-ci-image-lock 600 || exit 1
             if loaded_id=$(docker image inspect -f '{{.Id}}' "$IT_IMAGE") &&
               docker create --pull never --name "$IT_LEASE" "$loaded_id" true >/dev/null; then
               loaded_identity=$(docker image inspect -f '{{json .RootFS.Layers}}' "$loaded_id" | sha256sum | cut -d' ' -f1)
@@ -2175,7 +2172,7 @@ jobs:
           if [ "$leased" != true ]; then
             IT_IMAGE=$(make -s it-image IT_WARM_CACHE=0)
             echo "::warning::the LAN registry pull or the run's artifact left no image with the image job's layers on this runner's daemon; running this leg in $IT_IMAGE"
-            image_lock || exit 1
+            image_lock go-trusted-platform-ci-image-lock 600 || exit 1
             if ! take_lease; then
               image_unlock
               # v1.29.4 and v1.29.5: Athens first when the runner sets DEVCACHE_GOPROXY
@@ -2186,7 +2183,7 @@ jobs:
                 bp="GO_BUILD_PROXY=$DEVCACHE_GOPROXY|https://proxy.golang.org"
               fi
               make docker-build-it ${bp:+"$bp"} MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE" BUILDX_CLIENT_LOAD=1 IT_WARM_CACHE=0
-              image_lock || exit 1
+              image_lock go-trusted-platform-ci-image-lock 600 || exit 1
               if ! take_lease; then
                 echo "::error::the fallback build finished but $IT_IMAGE is not on the daemon this leg uses (context $(docker context show), DOCKER_HOST=${DOCKER_HOST:-unset}); builder $BUILDX_BUILDER:"
                 docker buildx inspect "$BUILDX_BUILDER" || true
@@ -2329,24 +2326,23 @@ jobs:
       # reused when the daemon holds its content tag and built once otherwise.
       - name: Lease the integration image
         run: |
-          # shellcheck disable=SC2119,SC2120 # image_lock takes an optional lock name: the pull step passes a per-digest one to the sourced copy
           lease="go-trusted-platform-ci-lease-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
           image_lock() {
-            local lock=${1:-go-trusted-platform-ci-image-lock} base=go-trusted-platform-ci-image-lock:base held at t i
-            for ((i = 0; i < 660; i++)); do
+            local lock=${1:-go-trusted-platform-ci-image-lock} stale=${2:-600} base=go-trusted-platform-ci-image-lock:base held at t i
+            for ((i = 0; i < stale + 60; i++)); do
               docker image inspect "$base" >/dev/null 2>&1 ||
                 head -c 1024 /dev/zero | docker import - "$base" >/dev/null 2>&1 || true
               IMAGE_LOCK_ID=$(docker create --pull never --name "$lock" "$base" true 2>/dev/null) && return 0
               IMAGE_LOCK_ID=
               if read -r held at < <(docker container inspect -f '{{.Id}} {{.Created}}' "$lock" 2>/dev/null) &&
-                [ -n "$at" ] && t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge 600 ]; then
+                [ -n "$at" ] && t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge "$stale" ]; then
                 echo "removing the stale image lock $lock (created $at)"
                 docker rm "$held" >/dev/null 2>&1 || true
                 continue
               fi
               sleep 1
             done
-            echo "::error::the image lock $lock was not free within 660 s"
+            echo "::error::the image lock $lock was not free within $((stale + 60)) s (stale age $stale s)"
             return 1
           }
           image_unlock() {
@@ -2362,7 +2358,7 @@ jobs:
           }
           declare -f image_lock image_unlock take_lease > "$RUNNER_TEMP/image-lock.sh"
           trap image_unlock EXIT
-          image_lock || exit 1
+          image_lock go-trusted-platform-ci-image-lock 600 || exit 1
           if ! take_lease; then
             image_unlock
             echo "integration image $IT_IMAGE is missing or went before its lease; building it once"
@@ -2374,7 +2370,7 @@ jobs:
               bp="GO_BUILD_PROXY=$DEVCACHE_GOPROXY|https://proxy.golang.org"
             fi
             make docker-build-it ${bp:+"$bp"} MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE" BUILDX_CLIENT_LOAD=1
-            image_lock || exit 1
+            image_lock go-trusted-platform-ci-image-lock 600 || exit 1
             if ! take_lease; then
               echo "::error::the integration image $IT_IMAGE is missing after one rebuild, so this job holds no lease on it"
               exit 1
