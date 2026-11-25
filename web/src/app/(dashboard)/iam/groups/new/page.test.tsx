@@ -35,7 +35,7 @@ vi.mock("@/hooks/use-capabilities", () => ({
   useCapabilities: () => ({ loading: false, error: undefined, capability: caps.capability }),
 }));
 
-const CREATE_GROUP = "POST /api/v1/iam/groups";
+const CREATE_GROUP = "POST /api/v1/iam/tenants/{tenant}/groups";
 
 import NewGroupPage from "./page";
 
@@ -154,7 +154,7 @@ describe("NewGroupPage", () => {
     );
   });
 
-  it("withholds Create Group when the server does not offer POST /api/v1/iam/groups", async () => {
+  it("withholds Create Group when the server does not offer POST /api/v1/iam/tenants/{tenant}/groups", async () => {
     caps.capability.mockImplementation((op: string) =>
       op === CREATE_GROUP
         ? { enabled: false, reason: "not-configured: iam" }

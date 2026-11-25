@@ -20,7 +20,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Loader2 } from 'lucide-react';
-import { Gated } from '@/components/features/capabilities/gated';
 
 // The SDK rejects with an error object carrying the server's message; it is
 // not always an Error instance.

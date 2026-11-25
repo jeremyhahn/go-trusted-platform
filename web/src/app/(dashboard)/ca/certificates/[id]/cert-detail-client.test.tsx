@@ -1,6 +1,12 @@
 // #2041: GetCertificate is protojson, so status is the CertificateStatus enum name (pkg/webservice/v1/rest/ca/handlers.go certToProto).
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Main gates this page on the server's capabilities (#2033); these cases run
+// with every op offered (the gating has its own tests).
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
 import { Suspense } from "react";
 import CertificateDetailPage from "./cert-detail-client";
 

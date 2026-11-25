@@ -45,6 +45,11 @@ vi.mock('@/hooks', () => ({
   },
 }));
 
+// The permission check card has its own tests; this file covers the list gates.
+vi.mock('@/components/features/iam/permission-check-card', () => ({
+  PermissionCheckCard: () => null,
+}));
+
 vi.mock('@/components/ui/data-table', () => ({
   createSelectColumn: () => ({ id: 'select' }),
   DataTable: ({ loading }: { loading?: boolean }) => (

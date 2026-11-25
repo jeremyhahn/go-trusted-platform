@@ -17,7 +17,6 @@ import { useCA, useApi, useMutation } from "@/hooks";
 import { Gated } from "@/components/features/capabilities/gated";
 import { useCapabilities } from "@/hooks/use-capabilities";
 import type { Certificate, IssueCertInput } from "@/types/security";
-import { Gated } from "@/components/features/capabilities/gated";
 import { REVOCATION_REASONS, isRevocationReason } from "@/components/features/ca/revocation-reasons";
 import type { RevocationReason } from "trusted-platform-sdk";
 

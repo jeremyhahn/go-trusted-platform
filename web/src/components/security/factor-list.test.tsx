@@ -1,8 +1,8 @@
-<<<<<<< HEAD
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 
+import { ok, stubControlPlane, withControlPlane, type Answer } from "@/test/control-plane-fetch";
 import type { AuthFactor } from "@/types/auth-factors";
 import { FactorList } from "./factor-list";
 
@@ -21,6 +21,20 @@ function factor(overrides: Partial<AuthFactor>): AuthFactor {
   };
 }
 
+// The "FactorList" cases below test the list itself with every factor write
+// offered; the capability-gating cases further down use the real hook.
+const capsMode = vi.hoisted(() => ({ allOffered: false }));
+vi.mock("@/hooks/use-capabilities", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/hooks/use-capabilities")>();
+  return {
+    ...actual,
+    useCapabilities: () =>
+      capsMode.allOffered
+        ? { loading: false, error: undefined, capability: () => ({ enabled: true }) }
+        : actual.useCapabilities(),
+  };
+});
+
 function setup(factors: AuthFactor[] | null, loading = false) {
   const handlers = { onRotate: vi.fn(), onRemove: vi.fn(), onRelabel: vi.fn() };
   render(
@@ -34,8 +48,13 @@ function setup(factors: AuthFactor[] | null, loading = false) {
 }
 
 describe("FactorList", () => {
+  beforeEach(() => {
+    capsMode.allOffered = true;
+  });
+
   afterEach(() => {
     cleanup();
+    capsMode.allOffered = false;
   });
 
   it("shows skeletons while loading", () => {
@@ -167,13 +186,8 @@ describe("FactorList", () => {
     fireEvent.click(screen.getByLabelText("Cancel"));
     expect(screen.queryByLabelText("Factor label")).toBeNull();
     expect(h.onRelabel).not.toHaveBeenCalled();
-=======
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-
-import { ok, stubControlPlane, withControlPlane, type Answer } from '@/test/control-plane-fetch';
-import type { AuthFactor } from '@/types/auth-factors';
-import { FactorList } from './factor-list';
+  });
+});
 
 // #2033 item 5: the factor list's Edit label, Rotate and Remove controls
 // follow the server's capabilities listing, so a factor write the server
@@ -277,6 +291,5 @@ describe('FactorList capability gating', () => {
     const remove = button('Remove Desk YubiKey');
     expect(remove.disabled).toBe(true);
     expect(remove.getAttribute('title')).toBe('Cannot remove the last factor');
->>>>>>> origin/main
   });
 });

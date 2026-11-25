@@ -22,8 +22,6 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Plus, Users2, AlertCircle, Loader2 } from 'lucide-react';
-import { Gated } from '@/components/features/capabilities/gated';
-import { useCapabilities } from '@/hooks/use-capabilities';
 
 /**
  * UI representation of a group for display purposes

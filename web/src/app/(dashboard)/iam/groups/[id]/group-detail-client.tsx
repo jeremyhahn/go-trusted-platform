@@ -20,8 +20,6 @@ import {
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { EmbeddedIamGate } from '../../embedded-iam-gate';
-import { Gated } from '@/components/features/capabilities/gated';
-import { useCapabilities } from '@/hooks/use-capabilities';
 
 const GET_GROUP_OP = 'GET /api/v1/iam/tenants/{tenant}/groups/{id}';
 const UPDATE_GROUP_OP = 'PUT /api/v1/iam/tenants/{tenant}/groups/{id}';

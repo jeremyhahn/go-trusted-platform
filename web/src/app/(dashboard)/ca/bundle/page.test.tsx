@@ -1,6 +1,12 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Main gates this page on the server's capabilities (#2033); these cases run
+// with every op offered (the gating has its own tests).
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
+
 import CABundlePage from "./page";
 
 // The page reads the CA bundle through useApi(() => ca.getBundle()). These

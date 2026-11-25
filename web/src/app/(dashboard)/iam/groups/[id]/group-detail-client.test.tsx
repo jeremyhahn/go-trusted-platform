@@ -48,8 +48,8 @@ vi.mock("@/hooks/use-capabilities", () => ({
   useCapabilities: () => ({ loading: false, error: undefined, capability: caps.capability }),
 }));
 
-const PUT_GROUP = "PUT /api/v1/iam/groups/{id}";
-const DELETE_GROUP = "DELETE /api/v1/iam/groups/{id}";
+const PUT_GROUP = "PUT /api/v1/iam/tenants/{tenant}/groups/{id}";
+const DELETE_GROUP = "DELETE /api/v1/iam/tenants/{tenant}/groups/{id}";
 const REASON = "not-configured: iam";
 
 function offExcept(off: string) {
@@ -120,7 +120,7 @@ describe("GroupDetailClient capability gating", () => {
     vi.restoreAllMocks();
   });
 
-  it("gates Save group on PUT /api/v1/iam/groups/{id}", () => {
+  it("gates Save group on PUT /api/v1/iam/tenants/{tenant}/groups/{id}", () => {
     offExcept(PUT_GROUP);
     render(<GroupDetailClient />);
     const save = screen.getByRole("button", { name: "Save group" }) as HTMLButtonElement;
@@ -132,7 +132,7 @@ describe("GroupDetailClient capability gating", () => {
     expect(iam.updateGroup).not.toHaveBeenCalled();
   });
 
-  it("gates Delete on DELETE /api/v1/iam/groups/{id}", () => {
+  it("gates Delete on DELETE /api/v1/iam/tenants/{tenant}/groups/{id}", () => {
     offExcept(DELETE_GROUP);
     vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<GroupDetailClient />);

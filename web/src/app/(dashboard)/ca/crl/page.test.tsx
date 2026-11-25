@@ -1,6 +1,12 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Main gates this page on the server's capabilities (#2033); these cases run
+// with every op offered (the gating has its own tests).
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
+
 import CRLPage from "./page";
 
 // The page reads the CRL through useApi(() => ca.getCRL()). The hooks are

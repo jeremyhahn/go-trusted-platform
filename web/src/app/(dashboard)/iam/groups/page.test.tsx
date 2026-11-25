@@ -283,23 +283,23 @@ describe("GroupsPage", () => {
 });
 
 describe("GroupsPage capability gate", () => {
-  it("withholds Add Group with the server's reason when POST /api/v1/iam/groups is not offered", () => {
+  it("withholds Add Group with the server's reason when POST /api/v1/iam/tenants/{tenant}/groups is not offered", () => {
     caps.capability.mockImplementation((op: string) =>
-      op === "POST /api/v1/iam/groups" ? { enabled: false, reason: "not-configured: iam" } : { enabled: true },
+      op === "POST /api/v1/iam/tenants/{tenant}/groups" ? { enabled: false, reason: "not-configured: iam" } : { enabled: true },
     );
     render(<GroupsPage />);
     const add = screen.getByRole("button", { name: /Add Group/ });
     expect((add as HTMLButtonElement).disabled).toBe(true);
     expect(add.getAttribute("title")).toBe("not-configured: iam");
-    expect(add.getAttribute("data-capability-op")).toBe("POST /api/v1/iam/groups");
+    expect(add.getAttribute("data-capability-op")).toBe("POST /api/v1/iam/tenants/{tenant}/groups");
     expect(add.getAttribute("data-capability-enabled")).toBe("false");
     fireEvent.click(add);
     expect(push).not.toHaveBeenCalled();
   });
 
-  it("withholds the row Delete with the server's reason when DELETE /api/v1/iam/groups/{id} is not offered", () => {
+  it("withholds the row Delete with the server's reason when DELETE /api/v1/iam/tenants/{tenant}/groups/{id} is not offered", () => {
     caps.capability.mockImplementation((op: string) =>
-      op === "DELETE /api/v1/iam/groups/{id}" ? { enabled: false, reason: "unimplemented" } : { enabled: true },
+      op === "DELETE /api/v1/iam/tenants/{tenant}/groups/{id}" ? { enabled: false, reason: "unimplemented" } : { enabled: true },
     );
     render(<GroupsPage />);
     const r = within(rows()[0]);
@@ -315,7 +315,7 @@ describe("GroupsPage capability gate", () => {
 
   it("asks the gate for the group create and delete ops and leaves Add Group and Delete enabled when the server offers them", () => {
     render(<GroupsPage />);
-    for (const op of ["POST /api/v1/iam/groups", "DELETE /api/v1/iam/groups/{id}"]) {
+    for (const op of ["POST /api/v1/iam/tenants/{tenant}/groups", "DELETE /api/v1/iam/tenants/{tenant}/groups/{id}"]) {
       expect(caps.capability).toHaveBeenCalledWith(op);
     }
     const add = screen.getByRole("button", { name: /Add Group/ });
@@ -326,9 +326,9 @@ describe("GroupsPage capability gate", () => {
     expect(del.hasAttribute("title")).toBe(false);
   });
 
-  it("withholds Delete selected with the server's reason when DELETE /api/v1/iam/groups/{id} is not offered", () => {
+  it("withholds Delete selected with the server's reason when DELETE /api/v1/iam/tenants/{tenant}/groups/{id} is not offered", () => {
     caps.capability.mockImplementation((op: string) =>
-      op === "DELETE /api/v1/iam/groups/{id}" ? { enabled: false, reason: "unimplemented" } : { enabled: true },
+      op === "DELETE /api/v1/iam/tenants/{tenant}/groups/{id}" ? { enabled: false, reason: "unimplemented" } : { enabled: true },
     );
     render(<GroupsPage />);
     const bulk = screen.getByRole("button", { name: "Delete selected" }) as HTMLButtonElement;
@@ -350,13 +350,13 @@ describe("GroupsPage capability gate", () => {
 describe("GroupsPage list gate", () => {
   const withholdList = () =>
     caps.capability.mockImplementation((op: string) =>
-      op === "GET /api/v1/iam/groups" ? { enabled: false, reason: "not-configured: iam" } : { enabled: true },
+      op === "GET /api/v1/iam/tenants/{tenant}/groups" ? { enabled: false, reason: "not-configured: iam" } : { enabled: true },
     );
 
-  it("shows the not-enabled card with the server's reason and no table when GET /api/v1/iam/groups is not offered", () => {
+  it("shows the not-enabled card with the server's reason and no table when GET /api/v1/iam/tenants/{tenant}/groups is not offered", () => {
     withholdList();
     render(<GroupsPage />);
-    const card = screen.getByTestId("groups-not-enabled");
+    const card = screen.getByTestId("iam-groups-not-enabled");
     expect(card.textContent).toContain("Groups are not enabled on this server");
     expect(card.textContent).toContain("not-configured: iam");
     expect(screen.queryByTestId("table")).toBeNull();
@@ -370,10 +370,10 @@ describe("GroupsPage list gate", () => {
     expect(listGroups).not.toHaveBeenCalled();
   });
 
-  it("asks the gate for GET /api/v1/iam/groups and lists when the server offers it", () => {
+  it("asks the gate for GET /api/v1/iam/tenants/{tenant}/groups and lists when the server offers it", () => {
     render(<GroupsPage />);
-    expect(caps.capability).toHaveBeenCalledWith("GET /api/v1/iam/groups");
+    expect(caps.capability).toHaveBeenCalledWith("GET /api/v1/iam/tenants/{tenant}/groups");
     expect(captured.opts?.enabled).toBe(true);
-    expect(screen.queryByTestId("groups-not-enabled")).toBeNull();
+    expect(screen.queryByTestId("iam-groups-not-enabled")).toBeNull();
   });
 });
