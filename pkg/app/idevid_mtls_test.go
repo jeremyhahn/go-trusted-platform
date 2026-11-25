@@ -133,7 +133,6 @@ func simulatedIDevIDConfig(t *testing.T) *xkmssdk.TPMConfig {
 			RSAConfig:     rsa2048(),
 		},
 		PlatformSRK: &xkmssdk.PlatformSRKConfig{
-			SRKAuth:        "testme",
 			SRKHandle:      0x81000002,
 			PlatformPolicy: true,
 		},
