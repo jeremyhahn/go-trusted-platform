@@ -154,8 +154,7 @@ const (
 // not name the TPM2 backend, as the SDK's TPM2 Unseal does.
 type sealStoreTPM struct {
 	xkmssdk.TrustedPlatformModule
-	blobs      map[string][]byte
-	lastPolicy *xkmssdk.TPMSealPolicy
+	blobs map[string][]byte
 }
 
 func newSealStoreTPM() *sealStoreTPM {
@@ -169,7 +168,6 @@ func (t *sealStoreTPM) SSRKAttributes() (*xkmssdk.KeyAttributes, error) {
 func (t *sealStoreTPM) Seal(_ context.Context, data []byte, opts *xkmssdk.SealOptions) (*xkmssdk.SealedData, error) {
 	cn := opts.KeyAttributes.CN
 	t.blobs[cn] = append([]byte(nil), data...)
-	t.lastPolicy = opts.TPMPolicy
 	return &xkmssdk.SealedData{
 		Backend:    xkmssdk.BackendTypeTPM2,
 		KeyID:      cn,
@@ -198,20 +196,35 @@ func TestTPMParity_Seal(t *testing.T) {
 	grpcSvc := newTPMGRPCServiceWith(tpm)
 	mcp := newMCPProviderWithTPM(tpm)
 
-	resp, err := grpcSvc.Seal(ctx, &platformv1.SealRequest{Data: []byte("secret"), PcrIndices: []uint32{0, 7}, Cn: "app-key"})
+	resp, err := grpcSvc.Seal(ctx, &platformv1.SealRequest{Data: []byte("secret"), Cn: "app-key"})
 	require.NoError(t, err)
 
-	tpm.lastPolicy = nil
-	got, err := mcp.TPMSeal(ctx, []byte("secret"), []uint32{0, 7}, "app-key", "")
+	got, err := mcp.TPMSeal(ctx, []byte("secret"), nil, "app-key", "")
 	require.NoError(t, err)
 	assert.NotEmpty(t, got)
 	assert.Equal(t, resp.GetSealedData(), got)
-	assert.NotNil(t, tpm.lastPolicy, "MCP seal dropped the PCR policy")
 
 	_, grpcErr := grpcSvc.Seal(ctx, &platformv1.SealRequest{})
 	_, mcpErr := mcp.TPMSeal(ctx, nil, nil, "", "")
 	assert.Equal(t, codes.InvalidArgument, status.Code(grpcErr))
 	assert.Equal(t, codes.InvalidArgument, status.Code(mcpErr))
+}
+
+// TestTPMParity_SealRefusesPCRPolicy: a PCR-bound seal is refused on both transports.
+func TestTPMParity_SealRefusesPCRPolicy(t *testing.T) {
+	ctx := context.Background()
+	tpm := newSealStoreTPM()
+	grpcSvc := newTPMGRPCServiceWith(tpm)
+	mcp := newMCPProviderWithTPM(tpm)
+
+	_, grpcErr := grpcSvc.Seal(ctx, &platformv1.SealRequest{Data: []byte("secret"), PcrIndices: []uint32{0, 7}, Cn: "app-key"})
+	_, mcpErr := mcp.TPMSeal(ctx, []byte("secret"), []uint32{0, 7}, "app-key", "")
+
+	var refusal ErrTPMPCRSealNotSupported
+	require.ErrorAs(t, grpcErr, &refusal)
+	require.ErrorAs(t, mcpErr, &refusal)
+	assert.Equal(t, codes.Unimplemented, status.Code(grpcErr))
+	assert.Empty(t, tpm.blobs, "a refused seal stored a blob")
 }
 
 // TestTPMParity_Unseal: MCP unseal returns what was sealed, as gRPC Unseal

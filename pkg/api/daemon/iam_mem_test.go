@@ -36,7 +36,7 @@ func wiredIAMGRPCService(iam *memIAM) *IAMGRPCService {
 // runs of the same calls produce the same answers.
 var memIAMCreated = time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
 
-// memIAM is an in-memory QuicBaaS IAM client: users, roles, groups and
+// memIAM is an in-memory QuicBaaS IAM client: users, roles and
 // tenants in maps, and a PEP that allows an action when one of the subject's
 // roles grants it. A missing record is the SDK's NotFound error, as QuicBaaS
 // answers it.
@@ -46,7 +46,6 @@ type memIAM struct {
 	mu      sync.Mutex
 	users   map[string]*sdkiam.User
 	roles   map[string]*sdkiam.Role
-	groups  map[string]*sdkiam.Group
 	tenants map[string]*sdkiam.Tenant
 }
 
@@ -54,14 +53,12 @@ func newMemIAM() *memIAM {
 	return &memIAM{
 		users:   map[string]*sdkiam.User{},
 		roles:   map[string]*sdkiam.Role{},
-		groups:  map[string]*sdkiam.Group{},
 		tenants: map[string]*sdkiam.Tenant{},
 	}
 }
 
 func (m *memIAM) User() sdkiam.UserClient     { return memUsers{m: m} }
 func (m *memIAM) Role() sdkiam.RoleClient     { return memRoles{m: m} }
-func (m *memIAM) Group() sdkiam.GroupClient   { return memGroups{m: m} }
 func (m *memIAM) Tenant() sdkiam.TenantClient { return memTenants{m: m} }
 func (m *memIAM) PEP() sdkiam.PEPClient       { return memPEP{m: m} }
 
@@ -108,7 +105,7 @@ func (u memUsers) Create(_ context.Context, tenantID string, req *sdkiam.CreateU
 	defer u.m.mu.Unlock()
 	user := &sdkiam.User{
 		ID: req.Email, TenantID: tenantID, Username: req.Username, Email: req.Email, DisplayName: req.DisplayName,
-		Roles: req.Roles, Groups: req.Groups, Metadata: req.Metadata,
+		Roles: req.Roles, Metadata: req.Metadata,
 		CreatedAt: memIAMCreated, UpdatedAt: memIAMCreated,
 	}
 	u.m.users[memKey(tenantID, user.ID)] = user
@@ -259,101 +256,6 @@ func (r memRoles) List(_ context.Context, tenantID string, _ *sdkiam.ListRolesRe
 	defer r.m.mu.Unlock()
 	roles := memList(r.m.roles, tenantID)
 	return &sdkiam.ListRolesResponse{Roles: roles, Pagination: sdkiam.PaginationInfo{TotalCount: len(roles)}}, nil
-}
-
-type memGroups struct {
-	sdkiam.GroupClient
-	m *memIAM
-}
-
-func (g memGroups) Create(_ context.Context, tenantID string, req *sdkiam.CreateGroupRequest) (*sdkiam.Group, error) {
-	g.m.mu.Lock()
-	defer g.m.mu.Unlock()
-	group := &sdkiam.Group{
-		ID: req.ID, TenantID: tenantID, Name: req.Name, Description: req.Description,
-		CreatedAt: memIAMCreated, UpdatedAt: memIAMCreated,
-	}
-	g.m.groups[memKey(tenantID, group.ID)] = group
-	copied := *group
-	return &copied, nil
-}
-
-func (g memGroups) Get(_ context.Context, tenantID, groupID string) (*sdkiam.Group, error) {
-	g.m.mu.Lock()
-	defer g.m.mu.Unlock()
-	group, err := memFind(g.m.groups, "iam.group.get", tenantID, groupID)
-	if err != nil {
-		return nil, err
-	}
-	copied := *group
-	return &copied, nil
-}
-
-// Update applies the non-empty fields, as the SDK's partial update does.
-func (g memGroups) Update(_ context.Context, tenantID, groupID string, req *sdkiam.UpdateGroupRequest) (*sdkiam.Group, error) {
-	g.m.mu.Lock()
-	defer g.m.mu.Unlock()
-	group, err := memFind(g.m.groups, "iam.group.update", tenantID, groupID)
-	if err != nil {
-		return nil, err
-	}
-	if req.Name != "" {
-		group.Name = req.Name
-	}
-	if req.Description != "" {
-		group.Description = req.Description
-	}
-	copied := *group
-	return &copied, nil
-}
-
-func (g memGroups) Delete(_ context.Context, tenantID, groupID string) error {
-	g.m.mu.Lock()
-	defer g.m.mu.Unlock()
-	if _, err := memFind(g.m.groups, "iam.group.delete", tenantID, groupID); err != nil {
-		return err
-	}
-	delete(g.m.groups, memKey(tenantID, groupID))
-	return nil
-}
-
-func (g memGroups) List(_ context.Context, tenantID string, _ *sdkiam.ListGroupsRequest) (*sdkiam.ListGroupsResponse, error) {
-	g.m.mu.Lock()
-	defer g.m.mu.Unlock()
-	groups := memList(g.m.groups, tenantID)
-	return &sdkiam.ListGroupsResponse{Groups: groups, Pagination: sdkiam.PaginationInfo{TotalCount: len(groups)}}, nil
-}
-
-func (g memGroups) AddMember(_ context.Context, tenantID, groupID, userID string) error {
-	g.m.mu.Lock()
-	defer g.m.mu.Unlock()
-	group, err := memFind(g.m.groups, "iam.group.add_member", tenantID, groupID)
-	if err != nil {
-		return err
-	}
-	user, err := memFind(g.m.users, "iam.group.add_member", tenantID, userID)
-	if err != nil {
-		return err
-	}
-	user.Groups = append(user.Groups, groupID)
-	group.MemberCount++
-	return nil
-}
-
-func (g memGroups) RemoveMember(_ context.Context, tenantID, groupID, userID string) error {
-	g.m.mu.Lock()
-	defer g.m.mu.Unlock()
-	group, err := memFind(g.m.groups, "iam.group.remove_member", tenantID, groupID)
-	if err != nil {
-		return err
-	}
-	user, err := memFind(g.m.users, "iam.group.remove_member", tenantID, userID)
-	if err != nil {
-		return err
-	}
-	user.Groups = slices.DeleteFunc(user.Groups, func(id string) bool { return id == groupID })
-	group.MemberCount--
-	return nil
 }
 
 // memTenants keys tenants under an empty tenant prefix, so a tenant ID is

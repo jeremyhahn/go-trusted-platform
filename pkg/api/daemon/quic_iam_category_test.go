@@ -252,66 +252,6 @@ func TestQUICIAMCategoryCreateRequiresID(t *testing.T) {
 	}
 }
 
-// newIAMGroupCategoryHandler is a QUIC handler on an in-memory IAM client
-// holding group "ops" in tenant "acme".
-func newIAMGroupCategoryHandler(t *testing.T) *QUICServiceHandler {
-	t.Helper()
-	iam := newMemIAM()
-	if _, err := iam.Group().Create(context.Background(), "acme",
-		&sdkiam.CreateGroupRequest{ID: "ops", Name: "Ops", Description: "on call"}); err != nil {
-		t.Fatalf("seed group: %v", err)
-	}
-	handler := newTestQUICServiceHandler(logging.DefaultLogger())
-	handler.SetIAMGRPCService(wiredIAMGRPCService(iam))
-	return handler
-}
-
-func TestQUICIAMCategoryUpdatesGroup(t *testing.T) {
-	handler := newIAMGroupCategoryHandler(t)
-	resp := handler.HandleRequest(context.Background(), iamCategoryRequest(t, quicwire.IAMSubGroupUpdate,
-		&platformv1.UpdateIAMGroupRequest{TenantId: "acme", GroupId: "ops", Description: "on call, nights"}))
-	if resp.Status != quicwire.StatusOK {
-		t.Fatalf("status = 0x%02x, want OK (payload %q)", resp.Status, resp.Payload)
-	}
-	var updated platformv1.IAMGroupResponse
-	if err := quicwire.DecodePayload(resp.Payload, &updated); err != nil {
-		t.Fatalf("decode update: %v", err)
-	}
-	if got := updated.GetGroup(); got.GetId() != "ops" || got.GetName() != "Ops" || got.GetDescription() != "on call, nights" {
-		t.Fatalf("group = %+v, want ops/Ops with the new description", got)
-	}
-}
-
-func TestQUICIAMCategoryGroupUpdateRejectsBadRequests(t *testing.T) {
-	cases := []struct {
-		name    string
-		payload []byte
-		want    byte
-	}{
-		{"undecodable body", []byte{quicwire.IAMSubGroupUpdate, 0xC1}, quicwire.StatusInvalidRequest},
-	}
-	handler := newIAMGroupCategoryHandler(t)
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			resp := handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpIAMCategory, Payload: tc.payload})
-			if resp.Status != tc.want {
-				t.Fatalf("status = 0x%02x, want 0x%02x (payload %q)", resp.Status, tc.want, resp.Payload)
-			}
-		})
-	}
-
-	t.Run("unknown group", func(t *testing.T) {
-		resp := handler.HandleRequest(context.Background(), iamCategoryRequest(t, quicwire.IAMSubGroupUpdate,
-			&platformv1.UpdateIAMGroupRequest{TenantId: "acme", GroupId: "nobody", Name: "x"}))
-		if resp.Status != quicwire.StatusNotFound {
-			t.Fatalf("status = 0x%02x, want NotFound (payload %q)", resp.Status, resp.Payload)
-		}
-		if !strings.Contains(string(resp.Payload), "IAMGroupUpdate") {
-			t.Fatalf("payload %q does not name the IAM group operation", resp.Payload)
-		}
-	})
-}
-
 // newIAMRoleCategoryHandler is a QUIC handler on an in-memory IAM client
 // holding role "reader" in tenant "acme".
 func newIAMRoleCategoryHandler(t *testing.T) *QUICServiceHandler {
@@ -377,7 +317,7 @@ func iamDirectRequest(t *testing.T, opcode byte, msg proto.Message) *quicwire.Re
 	return &quicwire.Request{Opcode: opcode, Payload: payload}
 }
 
-// TestQUICIAMListsCarryPaginationAndTimestamp: the user, role and group
+// TestQUICIAMListsCarryPaginationAndTimestamp: the user and role
 // lists answer OK over the QUIC handler with the pagination block and the
 // response timestamp the SDK QUIC adapter reads.
 func TestQUICIAMListsCarryPaginationAndTimestamp(t *testing.T) {
@@ -395,9 +335,8 @@ func TestQUICIAMListsCarryPaginationAndTimestamp(t *testing.T) {
 		req    proto.Message
 		resp   listResponse
 	}{
-		"users":  {quicwire.OpIAMUserList, &platformv1.ListIAMUsersRequest{TenantId: "acme", Pagination: page}, &platformv1.ListIAMUsersResponse{}},
-		"roles":  {quicwire.OpIAMRoleList, &platformv1.ListIAMRolesRequest{TenantId: "acme", Pagination: page}, &platformv1.ListIAMRolesResponse{}},
-		"groups": {quicwire.OpIAMGroupList, &platformv1.ListIAMGroupsRequest{TenantId: "acme", Pagination: page}, &platformv1.ListIAMGroupsResponse{}},
+		"users": {quicwire.OpIAMUserList, &platformv1.ListIAMUsersRequest{TenantId: "acme", Pagination: page}, &platformv1.ListIAMUsersResponse{}},
+		"roles": {quicwire.OpIAMRoleList, &platformv1.ListIAMRolesRequest{TenantId: "acme", Pagination: page}, &platformv1.ListIAMRolesResponse{}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -17,7 +17,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// tenantRecordingIAMClient answers User/Role/Group Get from the tenant it is
+// tenantRecordingIAMClient answers User/Role Get from the tenant it is
 // asked for and records that tenant, so a test can prove which tenant a
 // request was served from. Every other IAM method is left to the embedded nil
 // interface: a call to one panics, which the tests below never make.
@@ -32,10 +32,6 @@ func (c *tenantRecordingIAMClient) User() sdkiam.UserClient {
 
 func (c *tenantRecordingIAMClient) Role() sdkiam.RoleClient {
 	return tenantRecordingRoles{client: c}
-}
-
-func (c *tenantRecordingIAMClient) Group() sdkiam.GroupClient {
-	return tenantRecordingGroups{client: c}
 }
 
 type tenantRecordingUsers struct {
@@ -56,16 +52,6 @@ type tenantRecordingRoles struct {
 func (r tenantRecordingRoles) Get(_ context.Context, tenantID, roleID string) (*sdkiam.Role, error) {
 	r.client.servedTenant = tenantID
 	return &sdkiam.Role{ID: roleID, TenantID: tenantID}, nil
-}
-
-type tenantRecordingGroups struct {
-	sdkiam.GroupClient
-	client *tenantRecordingIAMClient
-}
-
-func (g tenantRecordingGroups) Get(_ context.Context, tenantID, groupID string) (*sdkiam.Group, error) {
-	g.client.servedTenant = tenantID
-	return &sdkiam.Group{ID: groupID, TenantID: tenantID}, nil
 }
 
 func tokenCallerContext(tenantID string) context.Context {
@@ -165,10 +151,6 @@ func TestIAMGRPCService_TenantBinding(t *testing.T) {
 		},
 		"GetRole": func(s *IAMGRPCService, ctx context.Context, tenantID string) error {
 			_, err := s.GetRole(ctx, &platformv1.GetIAMRoleRequest{TenantId: tenantID, RoleId: "r-1"})
-			return err
-		},
-		"GetGroup": func(s *IAMGRPCService, ctx context.Context, tenantID string) error {
-			_, err := s.GetGroup(ctx, &platformv1.GetIAMGroupRequest{TenantId: tenantID, GroupId: "g-1"})
 			return err
 		},
 	}
