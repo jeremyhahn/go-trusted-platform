@@ -166,3 +166,44 @@ describe('BMCCertService', () => {
     });
   });
 });
+
+describe('BMCCertService profile ID validation', () => {
+  let service: BMCCertService;
+  let mockClient: ApiClient;
+
+  beforeEach(() => {
+    mockClient = createMockApiClient();
+    service = new BMCCertService(mockClient);
+  });
+
+  const malformed = ['42/../43', '1e3', '-1', '18446744073709551616', 'abc'];
+
+  for (const id of malformed) {
+    it(`refuses profile ID ${JSON.stringify(id)} with no request`, async () => {
+      await expect(service.enrollBMC(id)).rejects.toThrow(TypeError);
+      await expect(service.restoreFactoryCert(id)).rejects.toThrow(TypeError);
+      await expect(
+        service.replaceWebCertificate(id, { certPem: 'c', keyPem: 'k' })
+      ).rejects.toThrow(TypeError);
+      expect(mockClient.post).not.toHaveBeenCalled();
+      expect(mockClient.put).not.toHaveBeenCalled();
+    });
+  }
+
+  it('accepts a decimal ID and the uint64 maximum', async () => {
+    vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: {} });
+    vi.mocked(mockClient.put).mockResolvedValue({ success: true, data: { status: 'ok' } });
+
+    await service.enrollBMC('42');
+    await service.restoreFactoryCert(42);
+    await service.replaceWebCertificate('42', { certPem: 'c', keyPem: 'k' });
+    await service.restoreFactoryCert('18446744073709551615');
+
+    expect(vi.mocked(mockClient.post).mock.calls[0]?.[0]).toBe('/v1/bmc/42/enroll');
+    expect(vi.mocked(mockClient.post).mock.calls[1]?.[0]).toBe('/v1/bmc/42/cert/restore');
+    expect(vi.mocked(mockClient.put).mock.calls[0]?.[0]).toBe('/v1/bmc/42/cert');
+    expect(vi.mocked(mockClient.post).mock.calls[2]?.[0]).toBe(
+      '/v1/bmc/18446744073709551615/cert/restore'
+    );
+  });
+});

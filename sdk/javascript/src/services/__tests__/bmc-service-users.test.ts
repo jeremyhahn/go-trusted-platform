@@ -141,3 +141,51 @@ describe('BMCService users', () => {
     expect(client.bmc).toBeInstanceOf(BMCService);
   });
 });
+
+describe('BMCService profile ID and slot validation', () => {
+  let service: BMCService;
+  let mockClient: ApiClient;
+
+  beforeEach(() => {
+    mockClient = createMockApiClient();
+    service = new BMCService(mockClient);
+  });
+
+  const malformed = ['42/../43', '1e3', '-1', '18446744073709551616', 'abc'];
+  const req = { slot: 3, username: 'ops', password: 'pw', privilege: 'user' as const };
+
+  for (const id of malformed) {
+    it(`refuses profile ID ${JSON.stringify(id)} with no request`, async () => {
+      await expect(service.listUsers(id)).rejects.toThrow(TypeError);
+      await expect(service.createUser(id, req)).rejects.toThrow(TypeError);
+      await expect(service.deleteUser(id, 3)).rejects.toThrow(TypeError);
+      await expect(service.setUserPassword(id, 3, 'pw')).rejects.toThrow(TypeError);
+      await expect(service.setUserPrivilege(id, 3, 'user')).rejects.toThrow(TypeError);
+      expect(mockClient.get).not.toHaveBeenCalled();
+      expect(mockClient.post).not.toHaveBeenCalled();
+      expect(mockClient.put).not.toHaveBeenCalled();
+      expect(mockClient.delete).not.toHaveBeenCalled();
+    });
+  }
+
+  for (const slot of [-1, 256, 1.5, Number.NaN]) {
+    it(`refuses slot ${String(slot)} with no request`, async () => {
+      await expect(service.deleteUser(42, slot)).rejects.toThrow(TypeError);
+      await expect(service.setUserPassword(42, slot, 'pw')).rejects.toThrow(TypeError);
+      await expect(service.setUserPrivilege(42, slot, 'user')).rejects.toThrow(TypeError);
+      expect(mockClient.put).not.toHaveBeenCalled();
+      expect(mockClient.delete).not.toHaveBeenCalled();
+    });
+  }
+
+  it('a decimal ID and slot still build /v1/bmc/42/...', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: [] });
+    vi.mocked(mockClient.delete).mockResolvedValue({ success: true, data: { status: 'ok' } });
+
+    await service.listUsers('42');
+    await service.deleteUser(42, 255);
+
+    expect(vi.mocked(mockClient.get).mock.calls[0]?.[0]).toBe('/v1/bmc/42/users');
+    expect(vi.mocked(mockClient.delete).mock.calls[0]?.[0]).toBe('/v1/bmc/42/users/255');
+  });
+});
