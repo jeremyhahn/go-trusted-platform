@@ -115,6 +115,8 @@ func TestStorageClass_Validate(t *testing.T) {
 		{"empty name", func(sc *StorageClass) { sc.Name = "" }, ErrClassNameRequired},
 		{"empty provider", func(sc *StorageClass) { sc.Provider = "" }, ErrProviderRequired},
 		{"unknown provider", func(sc *StorageClass) { sc.Provider = "nfs" }, ErrUnknownProvider},
+		// Only the specified NBD stores (local, drbd) and objstore are providers.
+		{"cephrbd is not a provider", func(sc *StorageClass) { sc.Provider = "cephrbd" }, ErrUnknownProvider},
 		{"negative replicas", func(sc *StorageClass) { sc.Defaults.Replicas = -1 }, ErrInvalidReplicas},
 		{"setting conflict", func(sc *StorageClass) {
 			sc.Settings = map[string]string{"volume_group": "vg1"}
