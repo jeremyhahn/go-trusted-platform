@@ -45,6 +45,11 @@ func wireInvitationRoleLister(logger *logging.Logger, svc platformservice.Invita
 // invitationRolePageSize is the page size the role lister asks IAM for.
 const invitationRolePageSize = 100
 
+// invitationRoleMaxPageSize is the largest page size the role lister grows to
+// when IAM returns a full page with no next-page token; a full page at this
+// size may be truncated, so the lister fails closed.
+const invitationRoleMaxPageSize = 10000
+
 // roleListClient is the part of the QuicBaaS IAM role client the invitation
 // role lister needs (iam.RoleClient satisfies it).
 type roleListClient interface {

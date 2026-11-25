@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"testing"
@@ -52,6 +53,61 @@ func rolePage(next string, names ...string) *iam.ListRolesResponse {
 		resp.Roles = append(resp.Roles, iam.Role{Name: n})
 	}
 	return resp
+}
+
+// truncatingRoleListClient behaves as the pinned embedded IAM role list does
+// (go-quicbaas transport/embedded handleIAMRoleList): it ignores PageToken,
+// returns the first min(PageSize, N) of its sorted roles (PageSize <= 0 means
+// 100) and never sets NextPageToken, HasMore or TotalCount.
+type truncatingRoleListClient struct {
+	roles     []string
+	pageSizes []int
+}
+
+func (f *truncatingRoleListClient) List(_ context.Context, _ string, req *iam.ListRolesRequest) (*iam.ListRolesResponse, error) {
+	f.pageSizes = append(f.pageSizes, req.PageSize)
+	size := req.PageSize
+	if size <= 0 {
+		size = 100
+	}
+	n := min(size, len(f.roles))
+	resp := &iam.ListRolesResponse{}
+	for _, name := range f.roles[:n] {
+		resp.Roles = append(resp.Roles, iam.Role{Name: name})
+	}
+	return resp, nil
+}
+
+func sortedRoleNames(n int) []string {
+	names := make([]string, n)
+	for i := range names {
+		names[i] = fmt.Sprintf("role-%03d", i)
+	}
+	return names
+}
+
+// A tenant with more roles than one page holds is listed in full even when IAM
+// returns no next-page token (Codex P1 on #1998).
+func TestInvitationRoleLister_ListsPastFirstPageWithoutToken(t *testing.T) {
+	want := sortedRoleNames(250)
+	client := &truncatingRoleListClient{roles: want}
+
+	names, err := newInvitationRoleLister(client).RoleNames(context.Background(), "tenant-a")
+
+	require.NoError(t, err)
+	assert.Equal(t, want, names)
+	assert.Contains(t, names, "role-249")
+}
+
+// A full token-less page at the largest page size may be truncated: the lister
+// fails closed instead of returning a partial list.
+func TestInvitationRoleLister_FullPageAtCapFailsClosed(t *testing.T) {
+	client := &truncatingRoleListClient{roles: sortedRoleNames(invitationRoleMaxPageSize + 1)}
+
+	names, err := newInvitationRoleLister(client).RoleNames(context.Background(), "tenant-a")
+
+	require.Error(t, err)
+	assert.Nil(t, names)
 }
 
 // TestInvitationRoleLister_ReadsEveryPage verifies the adapter returns the
