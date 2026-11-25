@@ -573,7 +573,7 @@ func TestHTTPServer_handleProxy(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := DefaultServerConfig()
 			cfg.ProxyCACertPool = proxyTrust
-			cfg.ProxyAllowPrivateDestinations = true
+			cfg.proxyAllowPrivateDestinations = true
 			server := newTestHTTPServer(t, cfg)
 
 			req := httptest.NewRequest("GET", tt.path, nil)
@@ -1009,7 +1009,7 @@ func TestHTTPServer_handleProxy_RefusesRedirect(t *testing.T) {
 	pool.AddCert(upstream.Certificate())
 	cfg := DefaultServerConfig()
 	cfg.ProxyCACertPool = pool
-	cfg.ProxyAllowPrivateDestinations = true
+	cfg.proxyAllowPrivateDestinations = true
 	server := newTestHTTPServer(t, cfg)
 
 	path := fmt.Sprintf("/proxy/https/%s/x", strings.TrimPrefix(upstream.URL, "https://"))

@@ -616,7 +616,7 @@ func (s *HTTPServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if s.config.ProxyCACertPool != nil {
 		tlsCfg.RootCAs = s.config.ProxyCACertPool
 	}
-	allowPrivate := s.config.ProxyAllowPrivateDestinations
+	allowPrivate := s.config.proxyAllowPrivateDestinations
 	dialer := &net.Dialer{
 		Timeout: 30 * time.Second,
 		// Control runs for every resolved address, so names that resolve inside are refused too.

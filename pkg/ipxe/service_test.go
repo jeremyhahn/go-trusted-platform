@@ -122,7 +122,7 @@ func startService(t *testing.T) runningService {
 		FirmwareDir:                   t.TempDir(),
 		FirmwareUpstream:              firmwareUpstream.URL,
 		ProxyCACertPool:               proxyCAs,
-		ProxyAllowPrivateDestinations: true,
+		proxyAllowPrivateDestinations: true,
 		BootEntries: []BootEntry{
 			{
 				Name:        "alpine-test",

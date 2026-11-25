@@ -209,8 +209,10 @@ type ServerConfig struct {
 	// the system certificate pool is used.
 	ProxyCACertPool *x509.CertPool
 
-	// ProxyAllowPrivateDestinations lets /proxy/ reach loopback, private, link-local and shared-address destinations; tests only.
-	ProxyAllowPrivateDestinations bool
+	// proxyAllowPrivateDestinations lets /proxy/ reach loopback, private,
+	// link-local and shared-address destinations. Unexported: an internal
+	// test seam, never a configuration surface (#1896).
+	proxyAllowPrivateDestinations bool
 }
 
 // Config is an alias for ServerConfig for backward compatibility.
