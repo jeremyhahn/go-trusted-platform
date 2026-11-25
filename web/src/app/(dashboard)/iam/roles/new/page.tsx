@@ -3,6 +3,7 @@
 /**
  * Create Role page — minimal form that calls iam.createRole, then
  * routes back to /iam/roles.
+ * Create Role is gated on the server's tenant role create capability (#2033).
  */
 
 import React, { useState } from 'react';
@@ -14,6 +15,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Loader2 } from 'lucide-react';
+import { Gated } from '@/components/features/capabilities/gated';
 
 export default function NewRolePage() {
   const router = useRouter();
@@ -104,15 +106,17 @@ export default function NewRolePage() {
             <Button variant="outline" onClick={() => router.push('/iam/roles')}>
               Cancel
             </Button>
-            <Button
-              onClick={() => createMutation.mutate(undefined)}
-              disabled={!name || createMutation.isLoading}
-            >
-              {createMutation.isLoading && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
-              Create Role
-            </Button>
+            <Gated op="POST /api/v1/iam/tenants/{tenant}/roles">
+              <Button
+                onClick={() => createMutation.mutate(undefined)}
+                disabled={!name || createMutation.isLoading}
+              >
+                {createMutation.isLoading && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                Create Role
+              </Button>
+            </Gated>
           </div>
         </CardContent>
       </Card>

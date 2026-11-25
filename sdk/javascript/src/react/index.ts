@@ -141,6 +141,7 @@ export type {
   UseEABListOptions,
   UseDeviceTemplateResult,
   UseProvisioningSessionResult,
+  UseProvisioningSessionsOptions,
 } from './hooks/index.js';
 
 // =============================================================================

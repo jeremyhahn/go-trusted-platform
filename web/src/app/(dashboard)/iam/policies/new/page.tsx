@@ -4,6 +4,7 @@
  * Create Policy page — minimal form that builds a canonical IAM Policy
  * YAML from the entered rules and POSTs it to the platform IAM REST
  * endpoint, then routes back to /iam/policies.
+ * Create Policy is gated on the server's tenant policy create capability (#2033).
  */
 
 import React, { useState } from 'react';

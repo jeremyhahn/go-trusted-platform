@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -47,6 +48,21 @@ func requireChallengeCode(t *testing.T, err error, want codes.Code) {
 	t.Helper()
 	require.Error(t, err)
 	assert.Equal(t, want, status.Code(err), "error: %v", err)
+}
+
+// createOtherDevice creates a second device in the fixture's device service
+// and returns its id. The service refuses to issue a challenge for an unknown
+// device, so "another device's challenge" needs a device that exists.
+func createOtherDevice(t *testing.T, f *quoteFixture) string {
+	t.Helper()
+	other := &deviceentities.Device{
+		TenantID: "tenant-a",
+		Model:    "test-model",
+		Serial:   "SN-2",
+		Hostname: "node-2.example.test",
+	}
+	require.NoError(t, f.devices.Create(context.Background(), other))
+	return itoa(other.ID)
 }
 
 func TestDeviceAttestChallenge_IssueAndVerify(t *testing.T) {
@@ -179,7 +195,7 @@ func TestDeviceAttestChallenge_RefusesAnotherDevicesChallenge(t *testing.T) {
 	svc := challengeService(t, f, &clock, WithDeviceAttestChallengeRequired())
 	ctx := tokenCallerContext("tenant-a")
 
-	ch := issueChallenge(t, ctx, svc, "some-other-device")
+	ch := issueChallenge(t, ctx, svc, createOtherDevice(t, f))
 
 	_, err := svc.AttestDevice(ctx, &platformv1.AttestDeviceRequest{
 		DeviceId:    itoa(f.device.ID),

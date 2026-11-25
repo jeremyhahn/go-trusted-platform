@@ -203,7 +203,7 @@ type selResult struct {
 
 // selEnv is the step env of a case; the keys match the step's env: block.
 type selEnv struct {
-	server, event, headRepo string
+	server, event, headRepo, ref string
 }
 
 // runSel runs script with the fixture replies and env and returns its result.
@@ -263,6 +263,7 @@ func runSel(t *testing.T, script string, replies map[string]selReply, e selEnv) 
 		"REPO=" + selRepo,
 		"HEAD_REPO=" + e.headRepo,
 		"EVENT=" + e.event,
+		"REF=" + e.ref,
 	}
 	out, err := cmd.CombinedOutput()
 	res := selResult{stdout: string(out)}
@@ -314,7 +315,7 @@ func selEnvValue(t *testing.T, key string) string {
 func TestRunnerSelectionStepEnv(t *testing.T) {
 	got := readSelStep(t, readCI(t)).env
 	sort.Strings(got)
-	want := []string{"API", "EVENT", "GRACE", "HEAD_REPO", "JOB_TOKEN", "LIMIT", "REPO", "RUN_ID", "SERVER"}
+	want := []string{"API", "EVENT", "GRACE", "HEAD_REPO", "JOB_TOKEN", "LIMIT", "REF", "REPO", "RUN_ID", "SERVER"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("the selection step's env keys are %v; this test sets %v", got, want)
 	}
@@ -332,15 +333,16 @@ func TestRunnerSelectionScript(t *testing.T) {
 		overflow = "overflow"
 	)
 	self := selJobs(1, selRunID, "in_progress", selUbuntu, 5*time.Second) // this preflight job
-	gh := selEnv{server: "https://github.com", event: "push"}
-	sameRepoPR := selEnv{server: "https://github.com", event: "pull_request", headRepo: selRepo}
-	forkPR := selEnv{server: "https://github.com", event: "pull_request", headRepo: "someone/repo"}
+	const main, prRef = "refs/heads/main", "refs/pull/1/merge"
+	gh := selEnv{server: "https://github.com", event: "push", ref: main}
+	sameRepoPR := selEnv{server: "https://github.com", event: "pull_request", headRepo: selRepo, ref: prRef}
+	forkPR := selEnv{server: "https://github.com", event: "pull_request", headRepo: "someone/repo", ref: prRef}
 	// v1.52: a deleted fork leaves the head repository empty; it is still
 	// not this repository.
-	deletedForkPR := selEnv{server: "https://github.com", event: "pull_request"}
-	forkPRT := selEnv{server: "https://github.com", event: "pull_request_target", headRepo: "someone/repo"}
+	deletedForkPR := selEnv{server: "https://github.com", event: "pull_request", ref: prRef}
+	forkPRT := selEnv{server: "https://github.com", event: "pull_request_target", headRepo: "someone/repo", ref: main}
 	// A push has no pull request head: the fork check does not apply.
-	pushForeignHead := selEnv{server: "https://github.com", event: "push", headRepo: "someone/repo"}
+	pushForeignHead := selEnv{server: "https://github.com", event: "push", headRepo: "someone/repo", ref: main}
 	saturated := slices.Concat(self, selJobs(30, 7, "in_progress", selUbuntu, time.Minute), selJobs(5, 8, "queued", selUbuntu, 10*time.Minute))
 	// 150 jobs of one run: the first page all done, the 12 in progress on
 	// the second page, so only a complete read overflows.
@@ -385,7 +387,12 @@ func TestRunnerSelectionScript(t *testing.T) {
 		{name: "a deleted-fork pull request at saturation", env: deletedForkPR, jobs: saturated, want: hosted, noCalls: true},
 		{name: "a fork pull_request_target at saturation", env: forkPRT, jobs: saturated, want: hosted, noCalls: true},
 		{name: "a push at saturation takes no fork check", env: pushForeignHead, jobs: saturated, want: overflow},
-		{name: "off github.com at saturation", env: selEnv{server: "https://gitea.example", event: "push"}, jobs: saturated, want: hosted, noCalls: true},
+		{name: "off github.com at saturation", env: selEnv{server: "https://gitea.example", event: "push", ref: main}, jobs: saturated, want: hosted, noCalls: true},
+		// The self-hosted runners refuse every other event: hosted, no API call.
+		{name: "a schedule run at saturation", env: selEnv{server: "https://github.com", event: "schedule", ref: main}, jobs: saturated, want: hosted, noCalls: true},
+		{name: "a workflow_dispatch run at saturation", env: selEnv{server: "https://github.com", event: "workflow_dispatch", ref: main}, jobs: saturated, want: hosted, noCalls: true},
+		{name: "a push to another branch at saturation", env: selEnv{server: "https://github.com", event: "push", ref: "refs/heads/topic"}, jobs: saturated, want: hosted, noCalls: true},
+		{name: "a same-repository pull_request_target at saturation", env: selEnv{server: "https://github.com", event: "pull_request_target", headRepo: selRepo, ref: main}, jobs: saturated, want: hosted, noCalls: true},
 		{name: "a second jobs page read in full", env: gh, jobs: slices.Concat(self, paged), want: overflow},
 		{name: "a failed second jobs page at saturation", env: gh, jobs: slices.Concat(saturated, paged),
 			break_: func(r map[string]selReply) { r[jobsURL(9, 2)] = selReply{code: 502, body: `{"message":"Bad Gateway"}`} },
@@ -457,7 +464,17 @@ func TestRunnerSelectionScript(t *testing.T) {
 			if has := strings.Contains(res.stdout, forkNotice); has != wantFork {
 				t.Errorf("the fork ::notice printed: %v, want %v\n%s", has, wantFork, res.stdout)
 			}
-			if has := strings.Contains(strings.ReplaceAll(res.stdout, forkNotice, ""), "::notice::"); has != (c.want == overflow) {
+			const eventNotice = "::notice::runner selection: event "
+			wantEvent := c.env.server == "https://github.com" && !wantFork &&
+				(c.env.event != "push" || c.env.ref != main) && c.env.event != "pull_request"
+			if has := strings.Contains(res.stdout, eventNotice); has != wantEvent {
+				t.Errorf("the event ::notice printed: %v, want %v\n%s", has, wantEvent, res.stdout)
+			}
+			rest := strings.ReplaceAll(res.stdout, forkNotice, "")
+			if i := strings.Index(rest, eventNotice); i >= 0 {
+				rest = rest[:i]
+			}
+			if has := strings.Contains(rest, "::notice::"); has != (c.want == overflow) {
 				t.Errorf("the overflow ::notice printed: %v, want %v\n%s", has, c.want == overflow, res.stdout)
 			}
 			if c.noCalls && len(res.calls) != 0 {

@@ -26,6 +26,15 @@ vi.mock("@/contexts/AuthContext", () => ({
   useAuth: () => auth,
 }));
 
+// Register Application sits behind main's capability gate (#2033); offer it here.
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: () => ({ enabled: true }),
+  }),
+}));
+
 function register() {
   fireEvent.change(screen.getByLabelText("Application Name *"), { target: { value: "App" } });
   fireEvent.click(screen.getByRole("button", { name: "Register Application" }));
