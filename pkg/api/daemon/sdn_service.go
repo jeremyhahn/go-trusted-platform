@@ -581,7 +581,8 @@ func (s *SDNService) AddFlow(ctx context.Context, req *platformv1.AddFlowRequest
 	}, nil
 }
 
-// DeleteFlow deletes an OpenFlow rule (requires root)
+// DeleteFlow deletes an OpenFlow rule (requires root) by its ID, the flow's
+// cookie. A flow a policy installed is refused with FailedPrecondition: remove it with DeletePolicy.
 func (s *SDNService) DeleteFlow(ctx context.Context, req *platformv1.DeleteFlowRequest) (*platformv1.DeleteFlowResponse, error) {
 	if req.GetBridgeId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "bridge_id is required")
@@ -604,6 +605,15 @@ func (s *SDNService) DeleteFlow(ctx context.Context, req *platformv1.DeleteFlowR
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
+	// Every rule a policy installs on a bridge carries the policy's one
+	// cookie there, so this ID names all of them: deleting it would strip
+	// the policy's rules while the policy stays recorded active (#1955).
+	// The policy is the unit; only DeletePolicy removes its flows.
+	if policyID, owned := s.policyOwningCookie(bridgeName, cookie); owned {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"flow %s belongs to policy %s: remove it with DeletePolicy", req.GetFlowId(), policyID)
+	}
+
 	client := s.getOVSClient()
 
 	// Delete flow via OVS without holding the lock
@@ -617,6 +627,19 @@ func (s *SDNService) DeleteFlow(ctx context.Context, req *platformv1.DeleteFlowR
 			Message: "flow deleted successfully",
 		},
 	}, nil
+}
+
+// policyOwningCookie reports the policy whose flows on bridgeName carry
+// cookie, if any.
+func (s *SDNService) policyOwningCookie(bridgeName string, cookie uint64) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for id, p := range s.policies {
+		if c, ok := p.flowCookies[bridgeName]; ok && c == cookie {
+			return id, true
+		}
+	}
+	return "", false
 }
 
 // ListFlows lists flows on a bridge
