@@ -17,6 +17,9 @@ import (
 	"context"
 	"errors"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"gopkg.in/yaml.v3"
@@ -460,8 +463,35 @@ func testPolicyResponseFromSDK(resp *iamsdk.TestPolicyResponse) *TestPolicyRespo
 // Application operations.
 // -----------------------------------------------------------------------------
 
+// RegisterApp registers the app upstream and refuses the result when the
+// backend lost the one-time client secret or the requested resource prefix
+// (the pinned embedded converter drops both). Such an app is unusable, so it
+// is deleted and the call answers codes.Unimplemented (HTTP 501): refused,
+// never emulated.
 func (a *QuicBaaSIAMAdapter) RegisterApp(ctx context.Context, tenantID string, req *iamsdk.RegisterAppRequest) (*iamsdk.Application, error) {
-	return a.client.App().Register(ctx, tenantID, req)
+	app, err := a.client.App().Register(ctx, tenantID, req)
+	if err != nil || app == nil {
+		return app, err
+	}
+	var lost string
+	switch {
+	case app.ClientSecret == "":
+		lost = "the client secret"
+	case req != nil && req.ResourcePrefix != "" && app.ResourcePrefix != req.ResourcePrefix:
+		lost = "the requested resource prefix"
+	default:
+		return app, nil
+	}
+	if app.ClientID != "" {
+		if delErr := a.client.App().Delete(ctx, tenantID, app.ClientID); delErr != nil {
+			return nil, status.Errorf(codes.Unimplemented,
+				"app registration is not implemented by the pinned IAM service: it lost %s; deleting app %q failed: %v",
+				lost, app.ClientID, delErr)
+		}
+	}
+	return nil, status.Errorf(codes.Unimplemented,
+		"app registration is not implemented by the pinned IAM service: it lost %s; app %q was deleted",
+		lost, app.ClientID)
 }
 
 func (a *QuicBaaSIAMAdapter) GetApp(ctx context.Context, tenantID, clientID string) (*iamsdk.Application, error) {

@@ -129,7 +129,7 @@ func (o *orderedApps) List(_ context.Context, _ string) (*iamsdk.ListAppsRespons
 func (o *orderedApps) Register(_ context.Context, tenantID string, req *iamsdk.RegisterAppRequest) (*iamsdk.Application, error) {
 	o.registered = req
 	return &iamsdk.Application{
-		ClientID: "c-new", TenantID: tenantID, Name: req.Name,
+		ClientID: "c-new", TenantID: tenantID, Name: req.Name, ClientSecret: "s3cret-new",
 		ResourcePrefix: req.ResourcePrefix, ResponseTypes: req.ResponseTypes,
 	}, nil
 }

@@ -363,7 +363,7 @@ type cov964Apps struct {
 }
 
 func (c *cov964Apps) Register(_ context.Context, tenantID string, req *iamsdk.RegisterAppRequest) (*iamsdk.Application, error) {
-	app := &iamsdk.Application{ClientID: "client-new", TenantID: tenantID}
+	app := &iamsdk.Application{ClientID: "client-new", TenantID: tenantID, ClientSecret: "s3cret-new", ResourcePrefix: req.ResourcePrefix}
 	c.apps[app.ClientID] = app
 	return app, nil
 }
