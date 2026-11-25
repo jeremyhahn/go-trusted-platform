@@ -54,7 +54,6 @@ require (
 	github.com/jeremyhahn/go-quicbaas v0.16.1-alpha.0.20261124222629-e93a050e90d0 // go-quicbaas main until its next alpha tag (#2396)
 	github.com/jeremyhahn/go-quicbaas/sdk/go v0.16.0-alpha.0.20261124222629-e93a050e90d0 // go-quicbaas main until its next alpha tag (#2396)
 	github.com/jeremyhahn/go-trusted-platform/sdk/go v0.1.0-alpha
-	github.com/jeremyhahn/go-xkms v0.49.1-alpha
 	github.com/jeremyhahn/trusted-firmware/sdk/go v0.3.0-alpha // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/klauspost/compress v1.20.4 // held: v1.20.3 is not in the module cache and cannot be fetched offline (m1985a: module lookup disabled by GOPROXY=off)
 	github.com/libp2p/go-libp2p v0.50.0 // held: v0.50.0 requires exactly quic-go v0.62.0 and webtransport-go v0.13.0; later versions are not in the module cache and cannot be fetched offline in #1140
@@ -252,6 +251,7 @@ require (
 	github.com/jeremyhahn/go-qrdb/sdk/go v0.30.1-alpha // indirect
 	github.com/jeremyhahn/go-quicraft v0.15.0-alpha // indirect
 	github.com/jeremyhahn/go-truststrap v0.4.0-alpha // indirect
+	github.com/jeremyhahn/go-xkms v0.49.1-alpha // indirect
 	github.com/jeremyhahn/go-xkms/sdk/go v0.49.1-alpha // indirect
 	github.com/jeroenrinzema/psql-wire v0.18.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
