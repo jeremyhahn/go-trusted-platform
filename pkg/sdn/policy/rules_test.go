@@ -73,12 +73,14 @@ func TestRuleGenerator_GenerateAuthorizationRules(t *testing.T) {
 
 		rules, err := gen.GenerateAuthorizationRules("port1", policy)
 		assert.NoError(t, err)
-		assert.Len(t, rules, 2) // VLAN rule + ACL rule
+		assert.Len(t, rules, 3) // VLAN rule + IPv4 and IPv6 ACL rules
 
-		// Check ACL rule
-		assert.Contains(t, rules[1].Match, "in_port=port1")
-		assert.Contains(t, rules[1].Match, "nw_proto=6")
-		assert.Contains(t, rules[1].Match, "tp_dst=443")
+		// Check ACL rules
+		for _, r := range rules[1:] {
+			assert.Contains(t, r.Match, "in_port=port1")
+			assert.Contains(t, r.Match, "nw_proto=6")
+			assert.Contains(t, r.Match, "tp_dst=443")
+		}
 	})
 
 	t.Run("Policy without VLAN", func(t *testing.T) {
@@ -609,7 +611,7 @@ func TestRuleGenerator_ComplexScenarios(t *testing.T) {
 
 		rules, err := gen.GenerateAuthorizationRules("port1", policy)
 		require.NoError(t, err)
-		assert.Len(t, rules, 4) // VLAN + 3 ACLs
+		assert.Len(t, rules, 6) // VLAN + HTTPS and DNS for IPv4 and IPv6 + deny all
 
 		// Verify priorities are correct
 		priorities := make([]int, len(rules))
