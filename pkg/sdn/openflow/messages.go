@@ -612,6 +612,34 @@ func (i *InstructionApplyActions) MarshalBinary() ([]byte, error) {
 	return data, nil
 }
 
+// ApplyActionsFromInstructions walks an encoded instruction list (as a flow
+// stats entry carries it) and returns the actions of its OFPIT_APPLY_ACTIONS
+// instructions, in order. Other instruction types are skipped. An empty
+// list returns no actions.
+func ApplyActionsFromInstructions(data []byte) ([]Action, error) {
+	var actions []Action
+	offset := 0
+	for offset < len(data) {
+		if len(data)-offset < 4 {
+			return nil, &MessageError{Msg: "instruction too short"}
+		}
+		instType := ByteOrder.Uint16(data[offset : offset+2])
+		length := int(ByteOrder.Uint16(data[offset+2 : offset+4]))
+		if length < 8 || length > len(data)-offset {
+			return nil, &MessageError{Msg: "invalid instruction length"}
+		}
+		if instType == OFPITApplyActions {
+			parsed, err := parseActions(data[offset+8 : offset+length])
+			if err != nil {
+				return nil, err
+			}
+			actions = append(actions, parsed...)
+		}
+		offset += length
+	}
+	return actions, nil
+}
+
 // InstructionGotoTable jumps to another table
 type InstructionGotoTable struct {
 	TableID uint8
@@ -722,6 +750,10 @@ func (f *FlowMod) MarshalBinary() ([]byte, error) {
 
 	return data, nil
 }
+
+// OFPMPFReplyMore is the OFPMPF_REPLY_MORE multipart reply flag: more
+// replies with the same xid follow this one.
+const OFPMPFReplyMore = 0x1
 
 // MultipartRequest represents a Multipart Request message
 type MultipartRequest struct {
