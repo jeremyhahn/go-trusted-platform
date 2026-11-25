@@ -22,14 +22,19 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"gopkg.in/yaml.v2"
 )
 
 // Builder implements ISOBuilder interface
 type Builder struct {
 	logger *logging.Logger
 	runner XorrisoRunner
+	// stagedKeysDir is the absolute ISO-tree directory this build copied
+	// the Secure Boot keys into, empty when it staged none.
+	stagedKeysDir string
 }
 
 // NewBuilder creates a new ISO builder
@@ -51,6 +56,7 @@ func (b *Builder) BuildISO(ctx context.Context, config *ISOConfig) (retErr error
 
 	// The image carries the staged Secure Boot private keys; the copies on
 	// the ISO tree must not outlive the build, whether xorriso ran or not.
+	b.stagedKeysDir = ""
 	defer func() {
 		if err := b.wipeStagedSecureBootKeys(config); err != nil {
 			werr := &WrappedError{Msg: "failed to wipe staged Secure Boot private keys", Err: err}
@@ -76,6 +82,13 @@ func (b *Builder) BuildISO(ctx context.Context, config *ISOConfig) (retErr error
 	// Prepare additional ISO contents
 	if err := b.prepareISOContents(config); err != nil {
 		return &WrappedError{Msg: "failed to prepare ISO contents", Err: err}
+	}
+
+	// Fail closed when the baked config references staged signing material
+	// that is not in the tree (a retry after a failed pack whose cleanup
+	// wiped it, with no KeysDir to restage from).
+	if err := checkStagedSecureBootMedia(config.ISODir); err != nil {
+		return &WrappedError{Msg: "missing Secure Boot signing material", Err: err}
 	}
 
 	// Build the ISO
@@ -135,6 +148,9 @@ func (b *Builder) copySecureBootKeys(config *ISOConfig) error {
 	if err := copyDir(config.KeysDir, destDir); err != nil {
 		return &WrappedError{Msg: "failed to copy keys", Err: err}
 	}
+	if abs, err := filepath.Abs(destDir); err == nil {
+		b.stagedKeysDir = abs
+	}
 
 	return nil
 }
@@ -179,7 +195,11 @@ func (b *Builder) wipeStagedSecureBootKeys(config *ISOConfig) error {
 			errs = append(errs, &MessageError{Msg: fmt.Sprintf("staged Secure Boot key path is not a directory, not wiped: %s", abs)})
 			continue
 		}
-		errs = append(errs, wipeSecureBootPrivateFiles(abs, config.KeysDir))
+		// A directory this build copied from KeysDir holds inodes it wrote
+		// itself: zero them even if another link was made since. Any other
+		// staged tree may share inodes with keys outside it.
+		owned := b.stagedKeysDir != "" && sameDir(abs, b.stagedKeysDir)
+		errs = append(errs, wipeSecureBootPrivateFiles(abs, config.KeysDir, owned))
 	}
 	return errors.Join(errs...)
 }
@@ -205,7 +225,7 @@ func sameDir(a, b string) bool {
 // A missing dir is not an error. A child directory that is the same file as
 // keep (the key source, KeysDir) is skipped at any depth, and symlinks below
 // dir are never followed.
-func wipeSecureBootPrivateFiles(dir, keep string) error {
+func wipeSecureBootPrivateFiles(dir, keep string, owned bool) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -220,7 +240,7 @@ func wipeSecureBootPrivateFiles(dir, keep string) error {
 			if sameDir(path, keep) {
 				continue
 			}
-			errs = append(errs, wipeSecureBootPrivateFiles(path, keep))
+			errs = append(errs, wipeSecureBootPrivateFiles(path, keep, owned))
 			continue
 		}
 		if !entry.Type().IsRegular() {
@@ -235,6 +255,18 @@ func wipeSecureBootPrivateFiles(dir, keep string) error {
 		size := len(data)
 		clear(data)
 		if public {
+			continue
+		}
+		shared, err := hasOtherLinks(path)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if shared && !owned {
+			// The inode is shared with a link outside this copy (a tree
+			// staged with `cp -al`): zeroing it would destroy the source
+			// signing key too. Detach the tree's link without overwriting.
+			errs = append(errs, os.Remove(path))
 			continue
 		}
 		errs = append(errs, zeroAndRemove(path, size))
@@ -256,6 +288,77 @@ func zeroAndRemove(path string, size int) error {
 		return err
 	}
 	return os.Remove(path)
+}
+
+// hasOtherLinks reports whether the regular file at path shares its inode
+// with another hard link, so overwriting it in place would change that link.
+func hasOtherLinks(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return false, err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false, nil
+	}
+	return uint64(st.Nlink) > 1, nil
+}
+
+// bakedInstallerConfigs are the ISO-tree paths of the installer configuration
+// the customization step bakes, whose Secure Boot references the installer
+// resolves from the install media.
+var bakedInstallerConfigs = []string{filepath.Join("configs", "installer.yaml")}
+
+// checkStagedSecureBootMedia fails closed when a baked installer config with
+// Secure Boot enabled references media signing files that are absent from the
+// ISO tree's staging directory: an earlier build's cleanup wipes the staged
+// private key, and packing without it would make the installer generate a
+// different DB key instead of using the configured signing identity.
+func checkStagedSecureBootMedia(isoDir string) error {
+	for _, rel := range bakedInstallerConfigs {
+		configPath := filepath.Join(isoDir, rel)
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return &WrappedError{Msg: "failed to read baked installer config " + configPath, Err: err}
+		}
+		var config map[string]interface{}
+		if err := yaml.Unmarshal(data, &config); err != nil {
+			return &WrappedError{Msg: "failed to parse baked installer config " + configPath, Err: err}
+		}
+		sb, _ := config["secure-boot"].(map[interface{}]interface{})
+		if enabled, _ := sb["enabled"].(bool); !enabled {
+			continue
+		}
+		db, _ := sb["db"].(map[interface{}]interface{})
+		keyURI, _ := db["key-uri"].(string)
+		certURI, _ := db["cert-uri"].(string)
+		keyFile, certFile, err := classifySecureBootDBRef(keyURI, certURI)
+		if err != nil {
+			return &WrappedError{Msg: "baked installer config " + configPath + " has an unusable secure-boot.db reference", Err: err}
+		}
+		if keyFile == "" {
+			continue // remote (kms://) signer: nothing staged on the media
+		}
+		var missing []string
+		for _, name := range []string{keyFile, certFile} {
+			p := filepath.Join(isoDir, SecureBootKeysISODirName, name)
+			if _, err := os.Stat(p); err != nil {
+				if !os.IsNotExist(err) {
+					return err
+				}
+				missing = append(missing, name)
+			}
+		}
+		if len(missing) > 0 {
+			return &MessageError{Msg: fmt.Sprintf(
+				"baked installer config %s references Secure Boot signing files missing from %s: %s (restage the keys before packing)",
+				configPath, filepath.Join(isoDir, SecureBootKeysISODirName), strings.Join(missing, ", "))}
+		}
+	}
+	return nil
 }
 
 // prepareISOContents prepares additional contents for the ISO
