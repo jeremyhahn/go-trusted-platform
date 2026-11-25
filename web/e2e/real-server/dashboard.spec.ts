@@ -1,4 +1,4 @@
-import type { Page, Response } from '@playwright/test';
+import type { Page, Request, Response } from '@playwright/test';
 import { expect, test } from './fixtures';
 import { unwrapPayload, wireCount } from './fixtures/wire';
 
@@ -24,19 +24,6 @@ import { unwrapPayload, wireCount } from './fixtures/wire';
 async function json<T>(r: Response): Promise<T> {
   expect(r.ok(), `${r.url()} answered ${r.status()}`).toBeTruthy();
   return unwrapPayload<T>(await r.json());
-}
-
-/** Waits for the page's own GET whose path matches and returns its JSON, read as the response arrives. */
-async function apiBody<T>(page: Page, path: RegExp): Promise<T> {
-  let body: Promise<T> | undefined;
-  await page.waitForResponse((r) => {
-    if (r.request().method() !== 'GET' || !path.test(new URL(r.url()).pathname)) return false;
-    body = json<T>(r);
-    body.catch(() => undefined);
-    return true;
-  });
-  if (body === undefined) throw new Error(`no GET response matched ${path}`);
-  return body;
 }
 
 /**
@@ -280,9 +267,25 @@ test.describe('Dashboard Overview', () => {
   test('refresh asks the server again', async ({ adminPage }) => {
     await adminPage.goto('/dashboard');
     await expect(adminPage.getByText('Platform Health')).toBeVisible();
-    const again = apiBody<{ health: { healthy: boolean } }>(adminPage, /\/api\/v1\/platform\/health$/);
+    const healthPath = /\/api\/v1\/platform\/health$/;
+    // Only a health request sent after the click counts; an answer to an earlier request does not.
+    const afterClick = new Set<Request>();
+    const record = (req: Request) => {
+      if (req.method() === 'GET' && healthPath.test(new URL(req.url()).pathname)) afterClick.add(req);
+    };
+    adminPage.on('request', record);
+    let body: Promise<{ health: { healthy: boolean } }> | undefined;
+    const answered = adminPage.waitForResponse((r) => {
+      if (!afterClick.has(r.request())) return false;
+      body = json<{ health: { healthy: boolean } }>(r);
+      body.catch(() => undefined);
+      return true;
+    });
     await adminPage.getByRole('button', { name: /refresh/i }).click();
-    expect((await again).health).toBeDefined();
+    await answered;
+    adminPage.off('request', record);
+    if (body === undefined) throw new Error('no health response to a request sent after the click');
+    expect((await body).health).toBeDefined();
   });
 });
 
