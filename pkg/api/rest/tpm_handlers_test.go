@@ -636,7 +636,7 @@ func TestTPMRequireScope(t *testing.T) {
 	})
 
 	t.Run("the verified operator client certificate reaches every route", func(t *testing.T) {
-		guard := NewScopeGuard(nil, grantingPeers{scopes: []string{"*:*"}}, nil)
+		guard := NewScopeGuard(nil, grantingPeers{}, nil, WithPeerAuthorizationChecker(stubPeerChecker{allow: true}))
 		for _, route := range NewTPMHandlers(nil).routes() {
 			tpm := &fakeTPMService{}
 			target := strings.NewReplacer("{handle}", ekHandleDec, "{index}", nvramDec).Replace(route.path)

@@ -78,6 +78,104 @@ func (v *grpcTokenValidator) TokenPrincipal(ctx context.Context, token string) (
 type iamTokenAuthorizer struct {
 	principals principalResolver
 	pep        quicbaassdk.IAMPEPClient
+	// iam resolves a certificate principal's stored role grants; the
+	// token path never uses it (its roles come from the token).
+	iam quicbaassdk.IAMClient
+}
+
+// CheckPeerPermission implements quic.PeerAuthorizationChecker: a QUIC
+// caller authenticated by its client certificate is decided by the IAM PEP
+// for the certificate's stored IAM user in its tenant, never by a wildcard
+// scope (#2016). The mTLS adapter sets the subject to the certificate's
+// email SAN, else its CN, which the store does not take as a user ID, so the
+// subject is first resolved to its stored user (PR #2082 review) with the
+// IAM List lookup: the pinned SDK serves neither GetByEmail nor
+// FindByUsername on its gRPC or REST/HTTP3 transports, and List is the user
+// lookup it carries end to end. That user's canonical ID and roles go to the
+// PEP, whose RBAC chain decides from the roles it is given and resolves no
+// permission from none. A missing subject or tenant, a missing IAM client,
+// an unknown or ambiguous subject, a user of another tenant or a lookup
+// error is a denial; an error is never allow. A tenant whose users exceed
+// one List page denies callers beyond it (fail closed) until the SDK
+// lookups are fixed upstream.
+func (a *iamTokenAuthorizer) CheckPeerPermission(ctx context.Context, authCtx *platformtoken.AuthorizedContext, resource, action string) (bool, error) {
+	if authCtx == nil || authCtx.Subject == "" || authCtx.TenantID == "" {
+		return false, nil
+	}
+	user, ok := a.certificateUser(ctx, authCtx.TenantID, authCtx.Subject)
+	if !ok {
+		return false, nil
+	}
+	return checkPrincipalPermission(ctx, a.pep, &tokenPrincipal{
+		Subject:  user.ID,
+		TenantID: authCtx.TenantID,
+		Roles:    user.Roles,
+	}, resource, action)
+}
+
+// certificateUserListPageSize is the page size certificateUser asks List
+// for: the pinned server's limit cap.
+const certificateUserListPageSize = 1000
+
+// certificateUser resolves a certificate subject to the IAM user stored in
+// tenantID: an email SAN subject by its email, any other subject (the CN) by
+// its username. An email subject is matched after normalizeCertificateEmail,
+// the IAM store's own email normalization; the username is matched as is.
+// The pinned go-quicbaas SDK serves neither GetByEmail nor
+// FindByUsername on its gRPC or REST/HTTP3 transports (gRPC answers
+// Unimplemented; REST maps both to the users list and leaves the user
+// empty), so the subject is matched in the tenant's List page, the one user
+// lookup the SDK carries end to end. The SDK sends no offset, so only the
+// first page is seen: a caller beyond it is denied (fail closed) until the
+// SDK lookups are fixed upstream. ok is false when there is no IAM client,
+// the lookup fails, no user or more than one user matches, the matched user
+// has no ID or belongs to another tenant: the caller denies, and the cause
+// is not passed on.
+func (a *iamTokenAuthorizer) certificateUser(ctx context.Context, tenantID, subject string) (*sdkiam.User, bool) {
+	if a.iam == nil {
+		return nil, false
+	}
+	users := a.iam.User()
+	if users == nil {
+		return nil, false
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
+	defer cancel()
+	resp, err := users.List(lookupCtx, tenantID, &sdkiam.ListUsersRequest{PageSize: certificateUserListPageSize})
+	if err != nil || resp == nil {
+		return nil, false
+	}
+	byEmail := strings.Contains(subject, "@")
+	var normalized string
+	if byEmail {
+		normalized = normalizeCertificateEmail(subject)
+	}
+	var match *sdkiam.User
+	for i := range resp.Users {
+		candidate := &resp.Users[i]
+		if byEmail {
+			if normalizeCertificateEmail(candidate.Email) != normalized {
+				continue
+			}
+		} else if candidate.Username != subject {
+			continue
+		}
+		if match != nil {
+			return nil, false
+		}
+		match = candidate
+	}
+	if match == nil || match.ID == "" || match.TenantID != tenantID {
+		return nil, false
+	}
+	return match, true
+}
+
+// normalizeCertificateEmail mirrors the IAM store's NormalizeEmail
+// (lowercase and trim), which canonicalizes every stored email key, so a
+// certificate's email SAN is compared with stored emails in the same form.
+func normalizeCertificateEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
 }
 
 // newIAMTokenAuthorizer returns an authorizer backed by pep. Both arguments
@@ -105,7 +203,9 @@ func (a *iamTokenAuthorizer) CheckPermission(ctx context.Context, token, resourc
 // principal may perform action on resource. An empty resource or action is
 // refused before the PEP is asked: no permission names nothing (#926). A
 // principal without a subject or tenant is denied, and a PEP that cannot
-// answer fails the check closed.
+// answer fails the check closed. The principal's tenant goes to the PEP both
+// as the subject's tenant and as the request's TenantID, the tenant context
+// docs/SPEC.md requires (PR #2082 Codex round 3).
 func checkPrincipalPermission(ctx context.Context, pep quicbaassdk.IAMPEPClient, principal *tokenPrincipal, resource, action string) (bool, error) {
 	if strings.TrimSpace(resource) == "" || strings.TrimSpace(action) == "" {
 		return false, ErrEmptyPermission{Resource: resource, Action: action}
@@ -126,6 +226,7 @@ func checkPrincipalPermission(ctx context.Context, pep quicbaassdk.IAMPEPClient,
 			TenantID: principal.TenantID,
 			Roles:    principal.Roles,
 		},
+		TenantID: principal.TenantID,
 		Action:   action,
 		Resource: resource,
 	})

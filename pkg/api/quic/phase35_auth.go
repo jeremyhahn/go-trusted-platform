@@ -63,6 +63,15 @@ func AuthorizeSubOpcode(ctx context.Context, perms map[byte]OpcodePermission, su
 			Payload: []byte(ErrPermissionDenied(perm).Error()),
 		}
 	}
+	if checker, isPeer := peerPrincipalFromContext(ctx); isPeer {
+		if !checkPeerPrincipal(ctx, checker, perm.Resource, perm.Action) {
+			return &quicwire.Response{
+				Status:  quicwire.StatusPermissionDenied,
+				Payload: []byte(ErrPermissionDenied(perm).Error()),
+			}
+		}
+		return nil
+	}
 	if err := authCtx.RequireScope(scopeForOperation(perm.Resource, perm.Action)); err != nil {
 		return &quicwire.Response{
 			Status:  quicwire.StatusPermissionDenied,

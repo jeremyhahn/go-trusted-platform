@@ -32,6 +32,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/jeremyhahn/go-codec"
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
@@ -344,8 +345,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Info("IAM service initialized (using QuicBaaS SDK clients)")
 	}
 	var iamPEP iamsdk.PEPClient
+	// iamClient resolves a QUIC certificate principal's stored roles (#2016).
+	var iamClient quicbaassdk.IAMClient
 	if iamService != nil {
 		iamPEP = iamService.PEP()
+		iamClient = iamService.Client()
 	}
 
 	// Build the shared broker platform-token validator once when configured. It
@@ -1152,7 +1156,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if poolErr != nil {
 			return nil, poolErr
 		}
-		quicAuthMiddleware, quicLocalValidator, quicAuthErr := selectQUICAuth(config, platformTokenValidatorShared, iamPEP, quicClientCAPool, logger)
+		quicAuthMiddleware, quicLocalValidator, quicAuthErr := selectQUICAuth(config, platformTokenValidatorShared, iamPEP, iamClient, quicClientCAPool, logger)
 		if quicAuthErr != nil {
 			return nil, quicAuthErr
 		}
@@ -1501,7 +1505,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	var restGuard *restapi.ScopeGuard
 	if daemon.concreteRestServer != nil {
 		var guardErr error
-		restGuard, guardErr = newRESTScopeGuard(config, platformTokenValidatorShared, logger)
+		restGuard, guardErr = newRESTScopeGuard(config, platformTokenValidatorShared, iamPEP, iamClient, logger)
 		if guardErr != nil {
 			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: guardErr}
 			logger.Error(constructErr, "component", "rest_server")
@@ -2243,6 +2247,25 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 			return nil, err
 		}
 		mcpConfig.PeerAuthenticator = peers
+		// A certificate caller's tool permission is decided by the IAM
+		// PEP for its stored roles (#2016); without both, certificate
+		// callers are refused (bearer tokens are still served).
+		if peers != nil {
+			var pep quicbaassdk.IAMPEPClient
+			var iamClient quicbaassdk.IAMClient
+			if d.iamService != nil {
+				pep = d.iamService.PEP()
+				iamClient = d.iamService.Client()
+			}
+			switch {
+			case pep == nil:
+				d.logger.Warn("MCP server: no IAM policy enforcement point; mTLS callers are refused")
+			case iamClient == nil:
+				d.logger.Warn("MCP server: no IAM client to resolve certificate principals' roles; mTLS callers are refused")
+			default:
+				mcpConfig.PeerAuthorizationChecker = &iamTokenAuthorizer{pep: pep, iam: iamClient}
+			}
+		}
 	}
 
 	// Try to set up MCP auth. Prefer the shared broker platform-token

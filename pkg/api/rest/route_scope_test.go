@@ -107,7 +107,7 @@ func TestScopeGuardAuthenticate(t *testing.T) {
 		wantBody string
 	}{
 		{"a valid token passes the caller", NewScopeGuard(&scopedAuthorizer{scopes: map[string][]string{operatorToken: {"ntp:read"}}}, nil, nil), operatorRequest(http.MethodPost, "/x", nil), http.StatusNoContent, ""},
-		{"a verified certificate passes the caller", NewScopeGuard(nil, grantingPeers{scopes: []string{"*:*"}}, nil), certificateRequest(http.MethodGet, "/x", operatorToken), http.StatusNoContent, ""},
+		{"a verified certificate passes the caller", NewScopeGuard(nil, grantingPeers{}, nil), certificateRequest(http.MethodGet, "/x", operatorToken), http.StatusNoContent, ""},
 		{"no credential is 401", operatorGuard(), httptest.NewRequest(http.MethodGet, "/x", nil), http.StatusUnauthorized, "authentication required"},
 		{"a forged token is 401", operatorGuard(), func() *http.Request {
 			req := httptest.NewRequest(http.MethodGet, "/x", nil)
@@ -342,7 +342,7 @@ func TestScopeGuard_RefusesTokensItCannotVerify(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, unknown.Code)
 	assert.Contains(t, unknown.Body.String(), "token invalid")
 
-	noValidator := serveWithToken(guardedRouter(NewScopeGuard(nil, grantingPeers{scopes: []string{"*:*"}}, nil)), route, operatorToken)
+	noValidator := serveWithToken(guardedRouter(NewScopeGuard(nil, grantingPeers{}, nil, WithPeerAuthorizationChecker(stubPeerChecker{allow: true}))), route, operatorToken)
 	assert.Equal(t, http.StatusUnauthorized, noValidator.Code)
 	assert.Contains(t, noValidator.Body.String(), "bearer tokens are not accepted")
 }
@@ -356,7 +356,7 @@ func certificateRequest(method, target, cn string) *http.Request {
 }
 
 func TestScopeGuard_VerifiedClientCertificateIsTheCredential(t *testing.T) {
-	router := guardedRouter(NewScopeGuard(nil, grantingPeers{scopes: []string{"*:*"}}, nil))
+	router := guardedRouter(NewScopeGuard(nil, grantingPeers{}, nil, WithPeerAuthorizationChecker(stubPeerChecker{allow: true})))
 	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes, computeRouteScopes) {
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, certificateRequest(route.method, route.path, "operator"))
@@ -384,13 +384,105 @@ func TestScopeGuard_RefusesCertificatesItCannotVerify(t *testing.T) {
 }
 
 func TestScopeGuard_CertificateWithoutTheScopeIsForbidden(t *testing.T) {
-	router := guardedRouter(NewScopeGuard(nil, grantingPeers{scopes: []string{"vpn:read"}}, nil))
+	router := guardedRouter(NewScopeGuard(nil, grantingPeers{}, nil, WithPeerAuthorizationChecker(stubPeerChecker{allow: false})))
 
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, certificateRequest(http.MethodPost, "/api/v1/ntp/step", "reader"))
 
 	assert.Equal(t, http.StatusForbidden, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), "ntp:write")
+}
+
+// stubPeerChecker answers every certificate permission question with allow
+// or err, recording each question in asked.
+type stubPeerChecker struct {
+	allow bool
+	err   error
+	asked *[]string
+}
+
+func (c stubPeerChecker) CheckPeerPermission(_ context.Context, authCtx *platformtoken.AuthorizedContext, resource, action string) (bool, error) {
+	if c.asked != nil {
+		*c.asked = append(*c.asked, authCtx.Subject+" "+resource+":"+action)
+	}
+	return c.allow, c.err
+}
+
+// TestScopeGuard_CertificatePrincipalDecidedByPeerChecker: a certificate
+// caller is admitted only when the peer checker grants the route's
+// permission; the certificate's own scopes never decide.
+func TestScopeGuard_CertificatePrincipalDecidedByPeerChecker(t *testing.T) {
+	peers := grantingPeers{scopes: []string{"*:*"}}
+	step := func(guard *ScopeGuard) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		guardedRouter(guard).ServeHTTP(recorder, certificateRequest(http.MethodPost, "/api/v1/ntp/step", "operator"))
+		return recorder
+	}
+
+	t.Run("no checker is 403", func(t *testing.T) {
+		recorder := step(NewScopeGuard(nil, peers, nil))
+		assert.Equal(t, http.StatusForbidden, recorder.Code)
+		assert.Contains(t, recorder.Body.String(), "ntp:write")
+	})
+
+	t.Run("a denying checker is 403", func(t *testing.T) {
+		recorder := step(NewScopeGuard(nil, peers, nil, WithPeerAuthorizationChecker(stubPeerChecker{allow: false})))
+		assert.Equal(t, http.StatusForbidden, recorder.Code)
+		assert.Contains(t, recorder.Body.String(), "ntp:write")
+	})
+
+	t.Run("a checker error is 403", func(t *testing.T) {
+		recorder := step(NewScopeGuard(nil, peers, nil, WithPeerAuthorizationChecker(stubPeerChecker{err: errors.New("pep unavailable")})))
+		assert.Equal(t, http.StatusForbidden, recorder.Code)
+		assert.Contains(t, recorder.Body.String(), "ntp:write")
+	})
+
+	t.Run("an allowing checker reaches the route", func(t *testing.T) {
+		var asked []string
+		recorder := step(NewScopeGuard(nil, peers, nil, WithPeerAuthorizationChecker(stubPeerChecker{allow: true, asked: &asked})))
+		assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+		assert.Equal(t, []string{"operator ntp:write"}, asked)
+	})
+
+	t.Run("Authenticate then AuthorizeCaller asks the checker", func(t *testing.T) {
+		for _, allow := range []bool{false, true} {
+			var asked []string
+			var decision error
+			reached := false
+			guard := NewScopeGuard(nil, peers, nil, WithPeerAuthorizationChecker(stubPeerChecker{allow: allow, asked: &asked}))
+			recorder := httptest.NewRecorder()
+			guard.Authenticate(func(w http.ResponseWriter, r *http.Request, caller *platformtoken.AuthorizedContext) {
+				reached = true
+				decision = guard.AuthorizeCaller(r, caller, "ntp:write")
+				w.WriteHeader(http.StatusNoContent)
+			})(recorder, certificateRequest(http.MethodPost, "/x", "operator"))
+			require.True(t, reached)
+			assert.Equal(t, []string{"operator ntp:write"}, asked)
+			if allow {
+				assert.NoError(t, decision)
+				continue
+			}
+			var forbidden ErrRouteForbidden
+			require.ErrorAs(t, decision, &forbidden)
+			assert.Equal(t, "ntp:write", forbidden.Scope)
+		}
+	})
+
+	t.Run("a bearer-token caller never asks the checker", func(t *testing.T) {
+		var asked []string
+		guard := NewScopeGuard(&scopedAuthorizer{scopes: map[string][]string{operatorToken: {"ntp:write"}}}, peers, nil,
+			WithPeerAuthorizationChecker(stubPeerChecker{allow: false, asked: &asked}))
+		recorder := serveWithToken(guardedRouter(guard), guardedRoute{http.MethodPost, "/api/v1/ntp/step", "ntp:write"}, operatorToken)
+		assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+
+		var decision error
+		guard.Authenticate(func(w http.ResponseWriter, r *http.Request, caller *platformtoken.AuthorizedContext) {
+			decision = guard.AuthorizeCaller(r, caller, "ntp:write")
+			w.WriteHeader(http.StatusNoContent)
+		})(httptest.NewRecorder(), operatorRequest(http.MethodPost, "/x", nil))
+		assert.NoError(t, decision)
+		assert.Empty(t, asked)
+	})
 }
 
 func TestScopeGuardErrors(t *testing.T) {

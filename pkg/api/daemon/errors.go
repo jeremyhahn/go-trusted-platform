@@ -68,11 +68,20 @@ func (e ErrTransportAuthRequired) Error() string {
 // with ServiceNotConfigured. The listener would start and then answer every
 // scoped call Unavailable. Platform tokens carry their own scope claims and
 // mTLS authorizes by certificate, so either one keeps the PEP off the path.
+// MTLS marks the QUIC mTLS listener, whose certificate principals are
+// themselves decided by the PEP (#2016): only a remote quicbaas IAM service
+// can serve it.
 type ErrEmbeddedPEPUnavailable struct {
 	Transport string
+	MTLS      bool
 }
 
 func (e ErrEmbeddedPEPUnavailable) Error() string {
+	if e.MTLS {
+		return e.Transport + ": mTLS client certificates are authorized by the IAM policy enforcement point, " +
+			"which the embedded quicbaas SDK does not implement (IAM.PEP Check is not configured); " +
+			"configure a remote quicbaas IAM service (a non-embedded quicbaas transport)"
+	}
 	return e.Transport + ": tokens without scope claims are authorized by the IAM policy enforcement point, " +
 		"which the embedded quicbaas SDK does not implement (IAM.PEP Check is not configured); " +
 		"enable platform tokens (webservice jwt.platform-token.enabled) or enable mTLS (--enable-mtls)"

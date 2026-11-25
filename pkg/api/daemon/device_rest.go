@@ -42,8 +42,8 @@ func (a restScopeAuthorizer) RequireScope(scope string) func(next http.Handler) 
 				a.guard.Require(scope, next.ServeHTTP).ServeHTTP(w, r)
 				return
 			}
-			if err := caller.RequireScope(scope); err != nil {
-				a.respWriter.Error403(w, r, restapi.ErrRouteForbidden{Scope: scope, Reason: err.Error()}, nil)
+			if err := a.guard.AuthorizeCaller(r, caller, scope); err != nil {
+				a.respWriter.Error403(w, r, err, nil)
 				return
 			}
 			next.ServeHTTP(w, r)

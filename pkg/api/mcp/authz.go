@@ -33,6 +33,10 @@ type AuthorizationChecker struct {
 	// tokenless request into its principal; nil disables that path.
 	peerAuthenticator PeerAuthenticator
 
+	// peerChecker decides the tool permission of a certificate caller;
+	// nil refuses every certificate caller a permissioned tool.
+	peerChecker PeerAuthorizationChecker
+
 	// toolPermissions maps tool names to required permissions
 	toolPermissions map[string]string
 
@@ -302,12 +306,21 @@ func (c *AuthorizationChecker) authenticate(ctx context.Context, token, scope st
 				Message: "Invalid client certificate",
 			}
 		}
+		// The certificate principal carries no scopes: the peer checker
+		// (the IAM PEP) decides the permission, and no checker, a denial
+		// or a checker failure refuses it (#2016).
 		if scope != "" {
-			if err := authCtx.RequireScope(scope); err != nil {
-				return ctx, authUnverified, &AuthorizationError{
-					Type:    AuthErrorPermissionDenied,
-					Message: "Permission denied: insufficient privileges",
-				}
+			resource, action, _ := strings.Cut(scope, ":")
+			denied := &AuthorizationError{
+				Type:    AuthErrorPermissionDenied,
+				Message: "Permission denied: insufficient privileges",
+			}
+			if c.peerChecker == nil || resource == "" || action == "" {
+				return ctx, authUnverified, denied
+			}
+			allowed, err := c.peerChecker.CheckPeerPermission(ctx, authCtx, resource, action)
+			if err != nil || !allowed {
+				return ctx, authUnverified, denied
 			}
 		}
 		return ContextWithAuthorizedContext(ctx, authCtx), authScoped, nil

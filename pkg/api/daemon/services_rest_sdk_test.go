@@ -385,7 +385,8 @@ func (p *countingPeers) AuthenticatePeer(context.Context, []*x509.Certificate) (
 func TestDaemonServicesREST_ABadBearerIsNotRescuedByAClientCertificate(t *testing.T) {
 	s := newTestRESTServerForPhase35(t)
 	peers := &countingPeers{}
-	require.NoError(t, s.SetServiceControlHandlers(restapi.NewScopeGuard(servicesTokens, peers, nil)))
+	guard := restapi.NewScopeGuard(servicesTokens, peers, nil, restapi.WithPeerAuthorizationChecker(allowingPeerChecker{}))
+	require.NoError(t, s.SetServiceControlHandlers(guard))
 
 	certRequest := func() *http.Request {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/services", nil)
@@ -404,4 +405,12 @@ func TestDaemonServicesREST_ABadBearerIsNotRescuedByAClientCertificate(t *testin
 	s.router.ServeHTTP(rec, certRequest())
 	require.Equal(t, http.StatusOK, rec.Code, "the verified certificate alone still admits")
 	require.Equal(t, int32(1), peers.calls.Load())
+}
+
+// allowingPeerChecker grants every certificate caller every permission, so a
+// fixture that is about authentication is not refused by authorization.
+type allowingPeerChecker struct{}
+
+func (allowingPeerChecker) CheckPeerPermission(context.Context, *platformtoken.AuthorizedContext, string, string) (bool, error) {
+	return true, nil
 }
