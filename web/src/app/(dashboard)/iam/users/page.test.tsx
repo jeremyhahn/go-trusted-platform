@@ -67,10 +67,10 @@ vi.mock("@/hooks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks")>()),
   useToast: () => toastResult,
   useIAM: () => iam,
-  // The users query depends on the tenant only; the roles query also on
-  // whether the form is open.
-  useApi: (fetcher: () => Promise<unknown>, deps: unknown[], options?: ApiOptions) => {
-    if (deps.length === 1) {
+  // The users query passes options (its capability gate and error toast);
+  // the roles query, which depends on whether the form is open, passes none.
+  useApi: (fetcher: () => Promise<unknown>, _deps: unknown[], options?: ApiOptions) => {
+    if (options !== undefined) {
       captured.usersFetcher = fetcher;
       captured.usersOptions = options;
       return usersResult;
