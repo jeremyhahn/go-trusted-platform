@@ -211,7 +211,7 @@ test.describe('Dashboard Overview', () => {
   test('tenant card shows the tenant the server returns', async ({ adminPage }) => {
     const tenantBodies = apiBodies<{ tenant: { name: string; state: string } }>(adminPage, /\/api\/v1\/tenants\/[^/]+$/);
     await adminPage.goto('/dashboard');
-    await expect(adminPage.getByText('Tenant Information')).toBeVisible();
+    await expect(adminPage.getByRole('heading', { name: 'Tenant Information' })).toBeVisible();
     // The page refetches the tenant when its tenant id settles, so check against the latest answer at each retry.
     await expect(async () => {
       const body = await tenantBodies.latest();
