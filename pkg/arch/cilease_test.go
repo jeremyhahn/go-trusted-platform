@@ -50,7 +50,7 @@ const (
 	// ciTakeLease, ciImageLock and ciImageUnlock are the calls of the
 	// template's lease functions, which each step defines or sources.
 	ciTakeLease   = "take_lease"
-	ciImageLock   = "image_lock ||"
+	ciImageLock   = "image_lock go-trusted-platform-ci-image-lock 600 ||"
 	ciImageUnlock = "image_unlock"
 	ciDeclareFns  = "declare -f"
 )
@@ -239,11 +239,11 @@ jobs:
           take_lease() {
             docker create --pull never --name "$lease" "$id" true || return 1
           }
-          image_lock || exit 1
+          image_lock go-trusted-platform-ci-image-lock 600 || exit 1
           if ! take_lease; then
             image_unlock
             make docker-build-it IT_IMAGE="$IT_IMAGE" BUILDX_CLIENT_LOAD=1
-            image_lock || exit 1
+            image_lock go-trusted-platform-ci-image-lock 600 || exit 1
             take_lease || exit 1
           fi
           docker tag "$IT_LEASE_ID" "$IT_IMAGE"
@@ -259,7 +259,7 @@ jobs:
       - name: Build
         run: |
           make docker-build IT_IMAGE="$IT_IMAGE"
-          image_lock || exit 1
+          image_lock go-trusted-platform-ci-image-lock 600 || exit 1
           take_lease
       - name: Tear down
         if: always()
@@ -273,7 +273,7 @@ jobs:
         run: |
           make docker-build-integration IT_IMAGE="$IT_IMAGE"
           make docker-build-toolchain
-          image_lock || exit 1
+          image_lock go-trusted-platform-ci-image-lock 600 || exit 1
           take_lease
       - name: Tear down
         if: always()
@@ -286,7 +286,7 @@ jobs:
       - name: Build
         run: |
           make docker-build-integration IT_IMAGE="$IT_IMAGE"
-          image_lock || exit 1
+          image_lock go-trusted-platform-ci-image-lock 600 || exit 1
           take_lease
           image_unlock
       - name: Build the toolchain image
@@ -304,7 +304,7 @@ jobs:
       - name: Build
         run: |
           make docker-build-integration IT_IMAGE="$IT_IMAGE"
-          image_lock || exit 1
+          image_lock go-trusted-platform-ci-image-lock 600 || exit 1
           take_lease
           image_unlock
       - name: Release the lease
@@ -481,7 +481,7 @@ const (
 	ciUploadArtifact  = "actions/upload-artifact"
 	ciDownloadArtfct  = "actions/download-artifact"
 
-	reasonRegistryUnguarded  = "sets IT_REGISTRY to something other than CI_IMAGE_REGISTRY on a self-hosted runner only"
+	reasonRegistryUnguarded  = "sets IT_REGISTRY to something other than the CI_IMAGE_REGISTRY secret on a self-hosted runner only"
 	reasonUploadWithRegistry = "uploads the image artifact even when the LAN registry carries the image"
 	reasonDownloadWithRef    = "downloads the image artifact even when the image job pushed it to the LAN registry"
 	reasonNoRegistryPush     = "has no push step to the LAN registry guarded by IT_REGISTRY, or no image_tag output from it"
@@ -491,6 +491,16 @@ const (
 	reasonPullRemovesRef     = "removes the registry reference another leg on the same daemon may still re-tag from"
 	reasonPullRetagExits     = "re-tags the registry reference without a fallback, so a failed tag fails the leg"
 	reasonPullExitHoldsLock  = "exits after image_lock without image_unlock, so the other legs on the daemon wait on a held lock"
+	reasonTagCarriesRegistry = "puts the registry host in the image_tag job output, which GitHub Actions drops as masked"
+	reasonLegNoRegistry      = "pulls without prefixing the image path with the guarded CI_IMAGE_REGISTRY secret"
+	reasonLegNoImageTag      = "pulls without IT_IMAGE_TAG bound to the image job's image_tag output"
+
+	// The push outputs the bare tag, and the leg rebuilds the reference from
+	// the guarded secret.
+	ciImageTagOutput   = "echo \"image_tag=${IT_LEASE_ID#sha256:}\""
+	ciLegRegistryRef   = "IT_IMAGE_REF=\"$IT_REGISTRY/go-trusted-platform/it-image:$IT_IMAGE_TAG\""
+	ciLegRegistryValue = "${{ runner.environment != 'github-hosted' && secrets.CI_IMAGE_REGISTRY || '' }}"
+	ciLegImageTagValue = "${{ needs.integration-image.outputs.image_tag }}"
 
 	// ciPullRemoveRef is the removal of the shared registry reference; a
 	// leg that already pulled it and waits on the image lock re-tags from it.
@@ -644,6 +654,9 @@ func registryPathFindings(t *testing.T, wf ciWorkflow) []error {
 		if strings.Contains(step.Run, "docker push") && strings.Contains(step.If, ciImageRegistry) && step.ID != "" &&
 			ciScalar(imageJob, "outputs", "image_tag") == "${{ steps."+step.ID+".outputs.image_tag }}" {
 			pushed = true
+			if !strings.Contains(step.Run, ciImageTagOutput) {
+				finding(ciImageJob, step.Line, reasonTagCarriesRegistry)
+			}
 		}
 	}
 	if !pushed {
@@ -669,6 +682,12 @@ func registryPathFindings(t *testing.T, wf ciWorkflow) []error {
 		if !strings.Contains(step.Run, ciLayerIdentity) || !strings.Contains(step.Run, ciIdentityCompare) {
 			finding(ciLegJob, step.Line, reasonPullNoLayerCompare)
 		}
+		if step.Env[ciRegistryEnv] != ciLegRegistryValue || !strings.Contains(step.Run, ciLegRegistryRef) {
+			finding(ciLegJob, step.Line, reasonLegNoRegistry)
+		}
+		if step.Env["IT_IMAGE_TAG"] != ciLegImageTagValue {
+			finding(ciLegJob, step.Line, reasonLegNoImageTag)
+		}
 		if strings.Contains(step.Run, ciPullRemoveRef) {
 			finding(ciLegJob, step.Line, reasonPullRemovesRef)
 		}
@@ -679,7 +698,8 @@ func registryPathFindings(t *testing.T, wf ciWorkflow) []error {
 		locked, prev := false, ""
 		for _, line := range strings.Split(step.Run, "\n") {
 			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, ciImageLock) {
+			// image_lock "<name>" takes a named lock, such as the pull lock.
+			if strings.HasPrefix(line, ciImageLock) || strings.HasPrefix(line, `image_lock "`) {
 				locked = true
 			}
 			if locked && line == "exit 0" && prev != ciImageUnlock {
@@ -723,6 +743,24 @@ func TestRegistryPathFindingsRejectArtifactsBesideTheRegistry(t *testing.T) {
 			old:    ciRegistryEnv + ": " + ciRegistryValue + "\n        run: echo \"" + ciRegistryEnv + "=$" + ciRegistryEnv,
 			new:    ciRegistryEnv + ": ${{ secrets.CI_IMAGE_REGISTRY }}\n        run: echo \"" + ciRegistryEnv + "=$" + ciRegistryEnv,
 			reason: reasonRegistryUnguarded,
+		},
+		{
+			name:   "image_tag carries the registry",
+			old:    ciImageTagOutput,
+			new:    `echo "image_tag=$ref"`,
+			reason: reasonTagCarriesRegistry,
+		},
+		{
+			name:   "leg pulls the bare path",
+			old:    ciLegRegistryRef,
+			new:    `IT_IMAGE_REF="go-trusted-platform/it-image:$IT_IMAGE_TAG"`,
+			reason: reasonLegNoRegistry,
+		},
+		{
+			name:   "leg pull without the image tag binding",
+			old:    "IT_REGISTRY: " + ciLegRegistryValue + "\n          IT_IMAGE_TAG: " + ciLegImageTagValue,
+			new:    "IT_REGISTRY: " + ciLegRegistryValue,
+			reason: reasonLegNoImageTag,
 		},
 		{
 			name:   "GitHub download beside the registry",
@@ -901,7 +939,10 @@ func registryCredentialFindings(jobs map[string]ciShellJob) []error {
 			if strings.Contains(step.Run, "docker login") {
 				errs = append(errs, fmt.Errorf("%s / %q runs docker login, which can store the registry password in the runner's native credential helper; write the auths entry into the step's own config.json", id, step.Name))
 			}
-			if !strings.Contains(step.Run, "docker login") && !strings.Contains(step.Run, registryConfigUse) {
+			// A bounded command (`timeout 900 docker pull`, #2386) is still a
+			// registry step: normalize it before picking the steps to check.
+			normalized := regexp.MustCompile(`\btimeout \d+ docker `).ReplaceAllString(step.Run, "docker ")
+			if !strings.Contains(step.Run, "docker login") && !strings.Contains(normalized, registryConfigUse) {
 				continue
 			}
 			if !strings.Contains(step.Run, `"auths`) || !strings.Contains(step.Run, "umask 077") || !strings.Contains(step.Run, "base64") {
@@ -922,7 +963,10 @@ func registryCredentialFindings(jobs map[string]ciShellJob) []error {
 					}
 				}
 				for _, cmd := range []string{"docker login", "docker push", "docker pull"} {
-					if strings.Contains(line, cmd) && !strings.Contains(line, registryConfigUse+strings.TrimPrefix(cmd, "docker ")) {
+					// A bounded command (`DOCKER_CONFIG=... timeout 900 docker pull`, #2386)
+					// still runs under the per-job Docker config.
+					bounded := regexp.MustCompile(`\btimeout \d+ docker `).ReplaceAllString(line, "docker ")
+					if strings.Contains(line, cmd) && !strings.Contains(bounded, registryConfigUse+strings.TrimPrefix(cmd, "docker ")) {
 						errs = append(errs, fmt.Errorf("%s / %q runs %s outside the per-job Docker config: %s", id, step.Name, cmd, line))
 					}
 					if strings.Contains(line, cmd) && (made < 0 || trapped < 0) {
@@ -960,7 +1004,7 @@ func TestCIRegistryLoginsUseAPerJobDockerConfigAndLeaveRegistryRefsToTheReaper(t
 	for _, job := range jobs {
 		for _, step := range job.Steps {
 			require.NotContains(t, step.Run, "docker login", "%q: registry credentials go into the step's own config.json, never through docker login", step.Name)
-			if strings.Contains(step.Run, registryConfigUse) {
+			if strings.Contains(regexp.MustCompile(`\btimeout \d+ docker `).ReplaceAllString(step.Run, "docker "), registryConfigUse) {
 				steps++
 			}
 		}
@@ -990,6 +1034,9 @@ func TestRegistryCredentialFindingsRejectTheRunnersDockerConfig(t *testing.T) {
 		"trap replaced":  registryConfigMake + "\ntrap '" + registryConfigRm + "' EXIT\ntrap image_unlock EXIT\n" + writer + "DOCKER_CONFIG=$registry_config docker push \"$ref\"\n",
 		"push outside":   good + "docker push \"$ref\"\n",
 		"producer rmi":   good + "trap 'docker rmi \"$ref\"' EXIT\n",
+		// Codex round 3 on #2386: a bounded pull is still a registry step.
+		"bounded pull no trap":  registryConfigMake + "\n" + writer + "(set -o pipefail; DOCKER_CONFIG=$registry_config timeout 900 docker pull \"$ref\" 2>&1 | tee \"$log\")\n",
+		"bounded pull no auths": registryConfigMake + "\ntrap '" + registryConfigRm + "' EXIT\nDOCKER_CONFIG=$registry_config timeout 900 docker pull \"$ref\"\n",
 	} {
 		require.NotEmpty(t, registryCredentialFindings(job(run)), name)
 	}
@@ -999,6 +1046,11 @@ func TestRegistryCredentialFindingsRejectTheRunnersDockerConfig(t *testing.T) {
 // DOCKER_CONFIG also selects the Docker context, so the per-step config that
 // isolates the registry credential must keep the runner's context. Push,
 // pull and the tags around them all reach the same daemon.
+// ciPullOtherDaemon runs between the push and the pull on the one fake
+// daemon: the pull step runs on a leg whose daemon lacks the image, so the
+// registry tag the push left is not there, and the step pulls it.
+const ciPullOtherDaemon = `docker rmi "$IT_REGISTRY/go-trusted-platform/it-image:$IT_IMAGE_TAG"` + "\n"
+
 func TestCIRegistryStepsKeepTheRunnersDockerContext(t *testing.T) {
 	push := ciStepRun(t, ciImageJob, "push")
 	pull := ciStepRun(t, ciLegJob, "pull")
@@ -1016,7 +1068,7 @@ func TestCIRegistryStepsKeepTheRunnersDockerContext(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(contexts, "ci-ctx"), nil, 0o644))
 				require.NoError(t, os.WriteFile(filepath.Join(home, ".docker", "config.json"), []byte(`{"currentContext": "ci-ctx"}`), 0o644))
 			}
-			r := runRegistrySteps(t, setup, tc.env, push, pull)
+			r := runRegistrySteps(t, setup, tc.env, push, ciPullOtherDaemon, pull)
 			require.NoError(t, r.err, r.log)
 			require.Contains(t, r.output, "leased=true", r.log)
 			for _, log := range []string{"push-context", "pull-context", "tag-context"} {
@@ -1056,7 +1108,7 @@ func TestCIRegistryStepsWriteTheirOwnAuths(t *testing.T) {
 		}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			r := runRegistrySteps(t, tc.setup, nil, push, pull)
+			r := runRegistrySteps(t, tc.setup, nil, push, ciPullOtherDaemon, pull)
 			require.NoError(t, r.err, r.log)
 			require.Contains(t, r.output, "leased=true", r.log)
 			require.Empty(t, r.read("login"), "no registry step runs docker login:\n%s", r.log)

@@ -442,9 +442,9 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `NTPService.GetStatus` | `GET /status` | - | - | - | missing |
-| `NTPService.ListSources` | `GET /sources` | - | - | - | missing |
-| `NTPService.Step` | `POST /step` | - | - | - | missing |
+| `NTPService.GetStatus` | `GET /status` | `(dashboard)/networking/ntp/page.tsx` | - | `web/e2e/real-server/ntp.spec.ts` | covered |
+| `NTPService.ListSources` | `GET /sources` | `(dashboard)/networking/ntp/page.tsx` | - | `web/e2e/real-server/ntp.spec.ts` | covered |
+| `NTPService.Step` | `POST /step` | `(dashboard)/networking/ntp/page.tsx` | - | `web/e2e/real-server/ntp.spec.ts` | covered |
 
 ## ObjectStorageService (`objectstorage.proto`)
 
@@ -688,14 +688,14 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `VPNService.EnrolPeer` | `POST /peers` | `(dashboard)/networking/vpn/page.tsx` | - | - | partial |
-| `VPNService.ListPeers` | `GET /peers` | `(dashboard)/networking/vpn/page.tsx` | - | - | partial |
-| `VPNService.RevokePeer` | `DELETE /peers/{device_id}` | `(dashboard)/networking/vpn/page.tsx` | - | - | partial |
-| `VPNService.GetStatus` | `GET /status` | `(dashboard)/networking/vpn/page.tsx` | - | - | partial |
-| `VPNService.GetPosturePolicy` | `GET /posture-policies/{name}` | `(dashboard)/networking/vpn/page.tsx` | - | - | partial |
-| `VPNService.SetPosturePolicy` | `PUT /posture-policies/{name}` | `(dashboard)/networking/vpn/page.tsx` | - | - | partial |
-| `VPNService.DeletePosturePolicy` | `DELETE /posture-policies/{name}` | `(dashboard)/networking/vpn/page.tsx` | - | - | partial |
-| `VPNService.ListPosturePolicies` | `GET /posture-policies` | `(dashboard)/networking/vpn/page.tsx` | - | - | partial |
+| `VPNService.EnrolPeer` | `POST /peers` | `(dashboard)/networking/vpn/page.tsx` | - | `web/e2e/real-server/vpn.spec.ts` | covered |
+| `VPNService.ListPeers` | `GET /peers` | `(dashboard)/networking/vpn/page.tsx` | - | `web/e2e/real-server/vpn.spec.ts` | covered |
+| `VPNService.RevokePeer` | `DELETE /peers/{device_id}` | `(dashboard)/networking/vpn/page.tsx` | - | `web/e2e/real-server/vpn.spec.ts` | covered |
+| `VPNService.GetStatus` | `GET /status` | `(dashboard)/networking/vpn/page.tsx` | - | `web/e2e/real-server/vpn.spec.ts` | covered |
+| `VPNService.GetPosturePolicy` | `GET /posture-policies/{name}` | `(dashboard)/networking/vpn/page.tsx` | - | `web/e2e/real-server/vpn.spec.ts` | covered |
+| `VPNService.SetPosturePolicy` | `PUT /posture-policies/{name}` | `(dashboard)/networking/vpn/page.tsx` | - | `web/e2e/real-server/vpn.spec.ts` | covered |
+| `VPNService.DeletePosturePolicy` | `DELETE /posture-policies/{name}` | `(dashboard)/networking/vpn/page.tsx` | - | `web/e2e/real-server/vpn.spec.ts` | covered |
+| `VPNService.ListPosturePolicies` | `GET /posture-policies` | `(dashboard)/networking/vpn/page.tsx` | - | `web/e2e/real-server/vpn.spec.ts` | covered |
 
 ## VTPMService (`vtpm.proto`)
 
@@ -749,7 +749,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | KeyManagementService | 23 | 10 | 1 | 12 | 0 | 0 |
 | LUKSService | 10 | 0 | 0 | 0 | 10 | 0 |
 | MessagingService | 8 | 0 | 0 | 0 | 0 | 8 |
-| NTPService | 3 | 0 | 0 | 3 | 0 | 0 |
+| NTPService | 3 | 3 | 0 | 0 | 0 | 0 |
 | ObjectStorageService | 8 | 0 | 0 | 0 | 0 | 8 |
 | OverlayService | 10 | 10 | 0 | 0 | 0 | 0 |
 | PIVService | 8 | 0 | 0 | 0 | 8 | 0 |
@@ -763,9 +763,9 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | SwitchService | 5 | 0 | 0 | 5 | 0 | 0 |
 | TenantService | 19 | 4 | 4 | 11 | 0 | 0 |
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
-| VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
+| VPNService | 8 | 8 | 0 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **132** | **58** | **258** | **50** | **31** |
+| **Total** | **529** | **143** | **50** | **255** | **50** | **31** |
 
 ## Proposed slices
 
