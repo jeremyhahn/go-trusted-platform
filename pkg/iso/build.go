@@ -142,7 +142,11 @@ func (b *Builder) copySecureBootKeys(config *ISOConfig) error {
 // wipeStagedSecureBootKeys zeroes and removes every Secure Boot private-key
 // copy staged on the ISO tree: the builder's KeysDir copy and customize's
 // <iso-root>/secure-boot-keys staging. Public enrollment material stays. A
-// staged directory that is the key source itself (KeysDir) is never touched.
+// staged directory that is the key source itself (KeysDir) is never touched,
+// at the root or nested at any depth below it. Each root is Lstat'ed first: a
+// missing root is skipped, and a root that is a symlink or not a directory is
+// not traversed and is reported as an error, so the wipe never follows a link
+// out of the ISO tree.
 func (b *Builder) wipeStagedSecureBootKeys(config *ISOConfig) error {
 	dirs := []string{filepath.Join(config.ISODir, SecureBootKeysISODirName)}
 	if config.KeysDir != "" {
@@ -160,7 +164,22 @@ func (b *Builder) wipeStagedSecureBootKeys(config *ISOConfig) error {
 			continue
 		}
 		seen[abs] = true
-		errs = append(errs, wipeSecureBootPrivateFiles(abs))
+		info, err := os.Lstat(abs)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			errs = append(errs, &MessageError{Msg: fmt.Sprintf("staged Secure Boot key directory is a symlink, not wiped: %s", abs)})
+			continue
+		}
+		if !info.IsDir() {
+			errs = append(errs, &MessageError{Msg: fmt.Sprintf("staged Secure Boot key path is not a directory, not wiped: %s", abs)})
+			continue
+		}
+		errs = append(errs, wipeSecureBootPrivateFiles(abs, config.KeysDir))
 	}
 	return errors.Join(errs...)
 }
@@ -183,8 +202,10 @@ func sameDir(a, b string) bool {
 
 // wipeSecureBootPrivateFiles overwrites with zeros, syncs and removes each
 // regular file under dir that is not public Secure Boot enrollment material.
-// A missing dir is not an error.
-func wipeSecureBootPrivateFiles(dir string) error {
+// A missing dir is not an error. A child directory that is the same file as
+// keep (the key source, KeysDir) is skipped at any depth, and symlinks below
+// dir are never followed.
+func wipeSecureBootPrivateFiles(dir, keep string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -196,7 +217,10 @@ func wipeSecureBootPrivateFiles(dir string) error {
 	for _, entry := range entries {
 		path := filepath.Join(dir, entry.Name())
 		if entry.IsDir() {
-			errs = append(errs, wipeSecureBootPrivateFiles(path))
+			if sameDir(path, keep) {
+				continue
+			}
+			errs = append(errs, wipeSecureBootPrivateFiles(path, keep))
 			continue
 		}
 		if !entry.Type().IsRegular() {
