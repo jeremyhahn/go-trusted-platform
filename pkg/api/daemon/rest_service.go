@@ -1336,7 +1336,23 @@ func (s *RESTServer) SetSwitchHandlers(svc device.SwitchServiceProvider, guard *
 		return nil
 	}
 	log := logging.NewFromSlog(s.logger)
-	switchapi.NewSwitchRouter(log, svc, response.NewResponseWriter(log, nil)).RegisterRoutes(s.catalogGuardedAPI(guard))
+	// The web listener mounts the switch routes through gated(ROLE_ADMIN),
+	// and docs/switch/api.md requires the admin role on every switch REST
+	// route: the catalog guard checks switch:read/switch:write only, so the
+	// caller it authorized must also carry the admin role. No caller fails
+	// closed.
+	api := s.catalogGuardedAPI(guard)
+	api.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			caller, ok := restCaller(r)
+			if !ok || !slices.Contains(caller.Roles, common.ROLE_ADMIN) {
+				http.Error(w, "the switch routes require the admin role", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+	switchapi.NewSwitchRouter(log, svc, response.NewResponseWriter(log, nil)).RegisterRoutes(api)
 	s.logger.Info("Switch REST routes registered")
 	return nil
 }
