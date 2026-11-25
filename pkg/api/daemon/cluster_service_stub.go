@@ -23,8 +23,9 @@ import (
 	"google.golang.org/grpc"
 )
 
-// ClusterService is the !cluster build's placeholder. The cluster surface is a
-// stub on every build, with or without -tags cluster, until #336 lands.
+// ClusterService is the !cluster build's placeholder. This build-tagged chain is
+// not what serve wires on any build: serve sets its servicer from
+// pkg/app/backends/cluster.go through appbackends.WireSDKBackends.
 type ClusterService struct{}
 
 // NewClusterService returns an error when cluster support is not enabled.
