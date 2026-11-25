@@ -88,6 +88,7 @@ func daemonRouteTable(t *testing.T, guard *restapi.ScopeGuard) (*RESTServer, []s
 	s.SetTenantHandlers(routeTableTenants{}, guard, "")
 	s.SetKMSHandlers(routeTableKMS{})
 	s.SetComputeHandlers(platformv1.UnimplementedComputeServiceServer{}, guard)
+	s.SetRegistryHandlers(statusOnlyRegistry{}, guard)
 	require.NoError(t, s.SetOverlayHandlers(routeTableOverlay{}, guard))
 	s.SetCAHandlers(routeTableCA{}, guard)
 	s.SetTPMHandlers(platformv1.UnimplementedTPMServiceServer{}, guard)
@@ -162,7 +163,7 @@ var daemonDivergentClaims = map[string]string{
 	"/platform.v1.TenantService/GetTenantByName":              "#452 (claim from #304): the daemon looks up at GET /api/v1/tenants/name/{name}; the claim is the webservice's system-only /by-name/{name} (sdk_rest_roundtrip_test.go)",
 	"/platform.v1.TenantService/GetTenantDEKStatus":           "#452 (claim from #304): the daemon serves GET /api/v1/tenants/{id}/dek/status with its own JSON; the claim is the webservice's /dek (sdk_rest_roundtrip_test.go)",
 
-	"/platform.v1.RegistryService/Delete": "#452: DELETE /api/v1/compute/images/{repository} is the webservice's (rest/registry/router.go); the daemon mounts none",
+	"/platform.v1.RegistryService/Delete": "#452: the daemon serves DELETE /api/v1/compute/images/{repository:.+} (rest/registry/router.go's route), one path var holding repository[:tag]; the claim's {repository}:{reference} segment has no route of its shape",
 
 	"/platform.v1.VTPMService/ReadVTPMPCR":   "#452: the daemon reads one PCR at GET /api/v1/vtpm/bundles/{id}/pcr/{index}; the claim is the webservice's /pcrs",
 	"/platform.v1.VTPMService/ExtendVTPMPCR": "#452: the daemon's vTPM routes have no PCR extend",

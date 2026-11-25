@@ -25,5 +25,7 @@ func platformSDKBackendSources(a *app.App) appbackends.SDKBackendSources {
 	if a == nil {
 		return appbackends.SDKBackendSources{}
 	}
-	return appbackends.PlatformSDKBackendSources(a.QuicBaaSSDKClient(), a.CA, appbackends.PlatformAdminIdentity(a))
+	src := appbackends.PlatformSDKBackendSources(a.QuicBaaSSDKClient(), a.CA, appbackends.PlatformAdminIdentity(a))
+	src.Cluster = appbackends.PlatformClusterBackend(a)
+	return src
 }
