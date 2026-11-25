@@ -39,6 +39,30 @@ async function apiBody<T>(page: Page, path: RegExp): Promise<T> {
   return body;
 }
 
+/**
+ * Records the JSON of every page GET whose path matches, each read as its response arrives.
+ * `latest()` waits for the first response and returns the newest body; call it at each
+ * `toPass` retry, since the page may fetch the same endpoint again and show the later answer.
+ */
+function apiBodies<T>(page: Page, path: RegExp): { latest: () => Promise<T> } {
+  const matches = (r: Response) => r.request().method() === 'GET' && path.test(new URL(r.url()).pathname);
+  const bodies: Array<Promise<T>> = [];
+  page.on('response', (r) => {
+    if (!matches(r)) return;
+    const body = json<T>(r);
+    body.catch(() => undefined);
+    bodies.push(body);
+  });
+  const first = page.waitForResponse(matches);
+  first.catch(() => undefined);
+  return {
+    latest: async () => {
+      await first;
+      return bodies[bodies.length - 1];
+    },
+  };
+}
+
 /** A protojson double: a JSON number, or a string for NaN and the infinities. */
 type WirePercent = number | string;
 
@@ -156,46 +180,57 @@ test.describe('Dashboard Overview', () => {
 
     // protojson: int64/uint64 counts arrive as decimal strings.
     type WireCount = number | string;
-    const usersBody = apiBody<{ total?: WireCount; pagination?: { totalItems?: WireCount } }>(
+    const usersBodies = apiBodies<{ total?: WireCount; pagination?: { totalItems?: WireCount } }>(
       adminPage,
       /\/api\/v1\/iam\/tenants\/[^/]+\/users$/,
     );
-    const certsBody = apiBody<{ pagination?: { totalItems?: WireCount } }>(adminPage, /\/api\/v1\/ca\/certificates$/);
+    const certsBodies = apiBodies<{ pagination?: { totalItems?: WireCount } }>(adminPage, /\/api\/v1\/ca\/certificates$/);
     await adminPage.goto('/dashboard');
 
-    const users = await usersBody;
-    const certs = await certsBody;
-    const userTotal = wireCount(users.pagination?.totalItems ?? users.total);
-    const certTotal = wireCount(certs.pagination?.totalItems);
-    // The seeded admin and the certificate issued above.
-    expect(userTotal).toBeGreaterThanOrEqual(1);
-    expect(certTotal).toBeGreaterThanOrEqual(1);
-
     const usersCard = adminPage.locator('a').filter({ hasText: 'Total Users' }).first();
-    await expect(usersCard).toContainText(String(userTotal));
     const certsCard = adminPage
       .locator('a')
       .filter({ has: adminPage.locator('text="Certificates"') })
       .first();
-    await expect(certsCard).toContainText(String(certTotal));
+    // The page may list users and certificates more than once, so check against the latest answer at each retry.
+    await expect(async () => {
+      const users = await usersBodies.latest();
+      const userTotal = wireCount(users.pagination?.totalItems ?? users.total);
+      // The seeded admin.
+      expect(userTotal).toBeGreaterThanOrEqual(1);
+      await expect(usersCard).toContainText(String(userTotal), { timeout: 1000 });
+    }).toPass();
+    await expect(async () => {
+      const certs = await certsBodies.latest();
+      const certTotal = wireCount(certs.pagination?.totalItems);
+      // The certificate issued above.
+      expect(certTotal).toBeGreaterThanOrEqual(1);
+      await expect(certsCard).toContainText(String(certTotal), { timeout: 1000 });
+    }).toPass();
     await expect(adminPage.getByText('Active Devices')).toBeVisible();
   });
 
   test('platform health shows what /platform/health returns', async ({ adminPage }) => {
-    const healthBody = apiBody<{ health: { healthy: boolean } }>(adminPage, /\/api\/v1\/platform\/health$/);
+    const healthBodies = apiBodies<{ health: { healthy: boolean } }>(adminPage, /\/api\/v1\/platform\/health$/);
     await adminPage.goto('/dashboard');
-    const { health } = await healthBody;
     await expect(adminPage.getByText('Platform Health')).toBeVisible();
-    await expect(adminPage.getByText(health.healthy ? 'Healthy' : 'Degraded').first()).toBeVisible();
+    // The page may ask for health more than once, so check against the latest answer at each retry.
+    await expect(async () => {
+      const { health } = await healthBodies.latest();
+      await expect(adminPage.getByText(health.healthy ? 'Healthy' : 'Degraded').first()).toBeVisible({ timeout: 1000 });
+    }).toPass();
   });
 
   test('tenant card shows the tenant the server returns', async ({ adminPage }) => {
-    const tenantBody = apiBody<{ tenant: { name: string; state: string } }>(adminPage, /\/api\/v1\/tenants\/[^/]+$/);
+    const tenantBodies = apiBodies<{ tenant: { name: string; state: string } }>(adminPage, /\/api\/v1\/tenants\/[^/]+$/);
     await adminPage.goto('/dashboard');
-    const body = await tenantBody;
     await expect(adminPage.getByText('Tenant Information')).toBeVisible();
-    await expect(adminPage.getByText(body.tenant.name).first()).toBeVisible();
-    await expect(adminPage.getByText(body.tenant.state, { exact: true })).toBeVisible();
+    // The page refetches the tenant when its tenant id settles, so check against the latest answer at each retry.
+    await expect(async () => {
+      const body = await tenantBodies.latest();
+      await expect(adminPage.getByText(body.tenant.name).first()).toBeVisible({ timeout: 1000 });
+      await expect(adminPage.getByText(body.tenant.state, { exact: true })).toBeVisible({ timeout: 1000 });
+    }).toPass();
   });
 
   test('the seeded tenant is readable through the SDK', async ({ sdk, tenant }) => {
@@ -219,21 +254,11 @@ test.describe('Dashboard Overview', () => {
     type Metrics = {
       metrics?: { cpuUsagePercent?: WirePercent; memoryUsagePercent?: WirePercent; diskUsagePercent?: WirePercent };
     };
-    const metricsPath = /\/api\/v1\/platform\/metrics$/;
-    // The page polls metrics, so record every response in arrival order.
-    const bodies: Array<Promise<Metrics>> = [];
-    adminPage.on('response', (r) => {
-      if (r.request().method() !== 'GET' || !metricsPath.test(new URL(r.url()).pathname)) return;
-      const body = json<Metrics>(r);
-      body.catch(() => undefined);
-      bodies.push(body);
-    });
-    const firstBody = apiBody<Metrics>(adminPage, metricsPath);
+    const metricsBodies = apiBodies<Metrics>(adminPage, /\/api\/v1\/platform\/metrics$/);
     await adminPage.goto('/dashboard');
-    await firstBody;
     await expect(adminPage.getByText('System Health')).toBeVisible();
     // Each gauge shows its percentage (missing means 0) as toFixed(1) with %, bar at min(value, 100)% wide.
-    // Live CPU changes between polls, so check against the latest response at each retry.
+    // Live CPU changes between fetches, so check against the latest response at each retry.
     const gauges: Array<[string, (m: Metrics['metrics']) => WirePercent | undefined]> = [
       ['CPU Usage', (m) => m?.cpuUsagePercent],
       ['Memory', (m) => m?.memoryUsagePercent],
@@ -242,7 +267,7 @@ test.describe('Dashboard Overview', () => {
     for (const [label, pick] of gauges) {
       const gauge = adminPage.getByText(label, { exact: true }).locator('xpath=../..');
       await expect(async () => {
-        const { metrics } = await bodies[bodies.length - 1];
+        const { metrics } = await metricsBodies.latest();
         const value = wirePercent(pick(metrics));
         expect((await gauge.locator('span.text-xs').textContent())?.trim(), `${label} text`).toBe(`${value.toFixed(1)}%`);
         const width = await gauge.locator('div.h-2 > div').evaluate((el) => (el as HTMLElement).style.width);
