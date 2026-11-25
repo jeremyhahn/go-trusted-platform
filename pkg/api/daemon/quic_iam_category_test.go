@@ -150,7 +150,8 @@ func iamCategoryRequest(t *testing.T, sub byte, msg any) *quicwire.Request {
 
 func TestQUICIAMCategoryManagesIAMTenantRecords(t *testing.T) {
 	handler := newIAMCategoryHandler()
-	ctx := context.Background()
+	// Tenant records are system operations: the Unix-socket operator runs them.
+	ctx := unixOperatorContext()
 
 	resp := handler.HandleRequest(ctx, iamCategoryRequest(t, quicwire.IAMSubTenantCreate,
 		&platformv1.CreateIAMTenantRequest{Id: "acme", Name: "Acme"}))

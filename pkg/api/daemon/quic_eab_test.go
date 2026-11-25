@@ -30,6 +30,10 @@ import (
 
 // newEABQUICHandler builds a QUIC handler backed by an EABGRPCService
 // over the shared fakes. A nil servicer exercises the unavailable guard.
+// eabQUICScopes are the EAB scopes a tenant-bound QUIC caller's token grants
+// for the round trips below (the per-operation guard, #767).
+var eabQUICScopes = []string{"eab:read", "eab:write", "eab:delete"}
+
 func newEABQUICHandler(t *testing.T, configured bool) (*QUICServiceHandler, *fakeEABService, *fakeEABDelivery) {
 	t.Helper()
 	handler := newTestQUICServiceHandler(nil)
@@ -152,7 +156,7 @@ func TestEABQUIC_MalformedPayloadInvalidRequest(t *testing.T) {
 
 func TestEABQUIC_CreateGetRoundTrip(t *testing.T) {
 	handler, _, _ := newEABQUICHandler(t, true)
-	ctx := context.Background()
+	ctx := quicTenantCaller("tenant-1", eabQUICScopes...)
 
 	var createResp platformv1.CreateEABCredentialResponse
 	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quicwire.EABSubCreateCredential,
@@ -191,7 +195,7 @@ func TestEABQUIC_CreateGetRoundTrip(t *testing.T) {
 
 func TestEABQUIC_ListRoundTrip(t *testing.T) {
 	handler, svc, _ := newEABQUICHandler(t, true)
-	ctx := context.Background()
+	ctx := quicTenantCaller("t1", eabQUICScopes...)
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 2, TenantID: "t2"})
@@ -284,7 +288,7 @@ func TestEABQUIC_LifecycleRoundTrip(t *testing.T) {
 
 func TestEABQUIC_DeliveryRoundTrip(t *testing.T) {
 	handler, svc, del := newEABQUICHandler(t, true)
-	ctx := context.Background()
+	ctx := quicTenantCaller("t", eabQUICScopes...)
 	cred, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 
 	var qrResp platformv1.GetEABCredentialQRCodeResponse
@@ -313,7 +317,8 @@ func TestEABQUIC_CleanupRoundTrip(t *testing.T) {
 	svc.cleanupCount = 3
 
 	var cleanupResp platformv1.CleanupExpiredEABCredentialsResponse
-	decodeEABOK(t, handler.HandleRequest(context.Background(),
+	// Cleanup spans every tenant: the Unix-socket operator runs it.
+	decodeEABOK(t, handler.HandleRequest(unixOperatorContext(),
 		eabQUICRequest(t, quicwire.EABSubCleanupExpiredCredentials,
 			&platformv1.CleanupExpiredEABCredentialsRequest{})), &cleanupResp)
 	if cleanupResp.GetDeletedCount() != 3 {
@@ -325,7 +330,7 @@ func TestEABQUIC_CleanupRoundTrip(t *testing.T) {
 // the msgpack field-name codec both ways.
 func TestEABQUIC_TimestampRoundTrip(t *testing.T) {
 	handler, svc, _ := newEABQUICHandler(t, true)
-	ctx := context.Background()
+	ctx := quicTenantCaller("t", eabQUICScopes...)
 	cred, _ := svc.Generate(ctx, eab.GenerateParams{
 		ProfileID: 1,
 		TenantID:  "t",

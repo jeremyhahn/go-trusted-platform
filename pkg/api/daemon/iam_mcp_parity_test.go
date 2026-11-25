@@ -52,10 +52,10 @@ func wiredIAMToolRegistry(iam *memIAM) *mcp.ToolRegistry {
 func iamParityTransports() map[string]func(t *testing.T, iam *memIAM) *platformiam.Client {
 	return map[string]func(t *testing.T, iam *memIAM) *platformiam.Client{
 		"gRPC": func(t *testing.T, iam *memIAM) *platformiam.Client {
-			return iamTokenGRPCClient(t, wiredIAMGRPCService(iam), nil)
+			return iamOperatorGRPCClient(t, wiredIAMGRPCService(iam))
 		},
 		"MCP": func(t *testing.T, iam *memIAM) *platformiam.Client {
-			srv := httptest.NewServer(mcpToolBridge(t, wiredIAMToolRegistry(iam)))
+			srv := httptest.NewServer(unixOperatorHTTP(mcpToolBridge(t, wiredIAMToolRegistry(iam))))
 			t.Cleanup(srv.Close)
 			adapter, err := sdkmcp.Connect(context.Background(), platform.NewOptions(platform.WithMCPAddr(srv.URL)))
 			return iamClient(connection(t, adapter, err))
@@ -102,7 +102,7 @@ func iamUsersScript(ctx context.Context, t *testing.T, c *platformiam.Client) []
 func TestIAMGRPCService_CreateUserDerivesUsernameFromEmail(t *testing.T) {
 	iam := newMemIAM()
 	svc := wiredIAMGRPCService(iam)
-	ctx := context.Background()
+	ctx := tokenCallerContext("acme")
 
 	_, err := svc.CreateUser(ctx, &platformv1.CreateIAMUserRequest{TenantId: "acme", Email: "alice@acme.test"})
 	require.NoError(t, err)
@@ -424,7 +424,7 @@ func iamErrorCases() map[string]iamErrorCase {
 // input. The SDK's MCP wire client retries every error one second apart, so
 // the MCP side is asserted at the tool registry the MCP server runs.
 func TestIAMMCPErrorParity(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	svc := wiredIAMGRPCService(newMemIAM())
 	registry := wiredIAMToolRegistry(newMemIAM())
 
@@ -552,11 +552,12 @@ func TestCreateMCPServer_HandsTheIAMClientsToTheProvider(t *testing.T) {
 	require.NoError(t, err)
 	registry := mcp.NewToolRegistry(d.mcpProvider, logging.DefaultLogger())
 
-	user, err := registry.ExecuteTool(ctx, "iam_get_user", map[string]interface{}{"tenant_id": "acme", "user_id": "alice@acme.test"})
+	caller := mcpTenantCaller("acme")
+	user, err := registry.ExecuteTool(caller, "iam_get_user", map[string]interface{}{"tenant_id": "acme", "user_id": "alice@acme.test"})
 	require.NoError(t, err, "the user tools answer from the IAM client")
 	assert.Equal(t, "alice@acme.test", user.(map[string]interface{})["user"].(map[string]interface{})["email"])
 
-	decision, err := registry.ExecuteTool(ctx, "iam_check_permission", map[string]interface{}{
+	decision, err := registry.ExecuteTool(caller, "iam_check_permission", map[string]interface{}{
 		"tenant_id": "acme", "subject_id": "alice", "roles": []interface{}{"reader"},
 		"action": "device:read", "resource": "device://rack-1",
 	})

@@ -71,7 +71,7 @@ func TestQUICVPNErrorResponse_KeyCollisionIsAConflict(t *testing.T) {
 // requireVPNQUICOK asserts a successful reply and decodes its payload.
 func TestQUICVPNCategoryMapsServiceRefusals(t *testing.T) {
 	handler, _ := newVPNQUICHandler(t)
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	cases := []struct {
 		name string
@@ -118,7 +118,7 @@ func TestQUICVPNCategoryStoreFailureIsUnavailable(t *testing.T) {
 	handler := newTestQUICServiceHandler(logging.DefaultLogger())
 	handler.SetVPNService(server)
 
-	resp := handler.HandleRequest(context.Background(), vpnCategoryRequest(t, quicwire.VPNSubListPeers, &platformv1.ListVPNPeersRequest{}))
+	resp := handler.HandleRequest(unixOperatorContext(), vpnCategoryRequest(t, quicwire.VPNSubListPeers, &platformv1.ListVPNPeersRequest{}))
 	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 

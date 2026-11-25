@@ -20,7 +20,6 @@
 package daemon
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,7 +33,7 @@ import (
 
 func TestVPNGRPCService_PosturePolicyLifecycle(t *testing.T) {
 	server, _ := newVPNTestServer(t)
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	set, err := server.SetPosturePolicy(ctx, &platformv1.SetVPNPosturePolicyRequest{
 		Policy: &platformv1.VPNPosturePolicy{TenantId: "acme", Name: "corp", Module: vpnTestPolicy},
@@ -59,7 +58,7 @@ func TestVPNGRPCService_PosturePolicyLifecycle(t *testing.T) {
 
 func TestVPNGRPCService_RefusesInvalidRequests(t *testing.T) {
 	server, _ := newVPNTestServer(t)
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	_, err := server.EnrolPeer(ctx, &platformv1.EnrolVPNPeerRequest{})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "a missing peer")
@@ -85,7 +84,7 @@ func TestMCPProvidersRunTheVPNOperationsOnTheSharedServer(t *testing.T) {
 
 	for name, provider := range vpnProviders(server) {
 		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := unixOperatorContext()
 
 			enrolled, err := provider.VPNEnrolPeer(ctx, "acme", "laptop-1", []string{"management"})
 			require.NoError(t, err)
@@ -126,10 +125,10 @@ func TestMCPProvidersReturnTheServiceRefusals(t *testing.T) {
 
 	for name, provider := range vpnProviders(server) {
 		t.Run(name, func(t *testing.T) {
-			_, err := provider.VPNRevokePeer(context.Background(), "acme", "never-enrolled")
+			_, err := provider.VPNRevokePeer(unixOperatorContext(), "acme", "never-enrolled")
 			assert.Equal(t, codes.NotFound, status.Code(err))
 
-			_, err = provider.VPNPosturePolicySet(context.Background(), "acme", "corp", "package other\n")
+			_, err = provider.VPNPosturePolicySet(unixOperatorContext(), "acme", "corp", "package other\n")
 			assert.Equal(t, codes.InvalidArgument, status.Code(err))
 		})
 	}
@@ -137,7 +136,7 @@ func TestMCPProvidersReturnTheServiceRefusals(t *testing.T) {
 
 func TestQUICVPNCategoryServesEverySubOperation(t *testing.T) {
 	handler, _ := newVPNQUICHandler(t)
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	var enrolled platformv1.EnrolVPNPeerResponse
 	requireVPNQUICOK(t, handler.HandleRequest(ctx, vpnCategoryRequest(t, quicwire.VPNSubEnrolPeer,

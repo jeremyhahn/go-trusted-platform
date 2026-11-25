@@ -41,9 +41,12 @@ import (
 // the services refuse (TestUnboundCallerIsRefusedOnEveryTransport).
 
 // quicTenantCaller is the context the QUIC server gives a request that
-// carries a validated platform token bound to tenantID.
-func quicTenantCaller(tenantID string) context.Context {
-	return quic.ContextWithAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{TenantID: tenantID})
+// carries a validated platform token bound to tenantID. The token grants
+// iam:read and iam:write, the scopes the QUIC per-operation guard (#767)
+// asks of the IAM operations, and any further scopes the test names.
+func quicTenantCaller(tenantID string, scopes ...string) context.Context {
+	granted := append([]string{"iam:read", "iam:write"}, scopes...)
+	return quic.ContextWithAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{TenantID: tenantID, Scopes: granted})
 }
 
 // mcpTenantCaller is the context the MCP server gives a tool call that
