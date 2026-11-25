@@ -36,6 +36,8 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useApi, usePlatform, useToast } from "@/hooks";
+import { useCapabilities } from "@/hooks/use-capabilities";
+import { Gated } from "@/components/features/capabilities/gated";
 
 /**
  * Event severity type
@@ -172,6 +174,10 @@ export default function EventsPage() {
   // explicit "all" sentinel for the catch-all option.
   const [selectedSeverity, setSelectedSeverity] = React.useState<string>("all");
   const [selectedCategory, setSelectedCategory] = React.useState<string>("all");
+  // #2033 item 5: the events come from the health read, which runs only when
+  // the server offers it.
+  const { loading: capsLoading, capability } = useCapabilities();
+  const healthCap = capability("GET /api/v1/platform/health");
 
   // Fetch platform health data to generate events
   const {
@@ -183,6 +189,7 @@ export default function EventsPage() {
     () => platform.getHealth({ includeServices: true }),
     [],
     {
+      enabled: !capsLoading && healthCap.enabled,
       onError: (err) => {
         toast({
           title: "Error loading platform events",
@@ -273,14 +280,14 @@ export default function EventsPage() {
 
   // Auto-refresh when streaming is enabled
   React.useEffect(() => {
-    if (!isStreaming) return;
+    if (!isStreaming || !healthCap.enabled) return;
 
     const interval = setInterval(() => {
       refetch();
     }, 5000); // Refresh every 5 seconds
 
     return () => clearInterval(interval);
-  }, [isStreaming, refetch]);
+  }, [isStreaming, healthCap.enabled, refetch]);
 
   // Show error state
   if (error) {
@@ -295,14 +302,16 @@ export default function EventsPage() {
           <AlertTitle>Error Loading Events</AlertTitle>
           <AlertDescription>
             {error.message}
-            <Button
-              variant="outline"
-              size="sm"
-              className="ml-4"
-              onClick={handleRefresh}
-            >
-              Retry
-            </Button>
+            <Gated op="GET /api/v1/platform/health">
+              <Button
+                variant="outline"
+                size="sm"
+                className="ml-4"
+                onClick={handleRefresh}
+              >
+                Retry
+              </Button>
+            </Gated>
           </AlertDescription>
         </Alert>
       </div>
@@ -316,32 +325,36 @@ export default function EventsPage() {
         description="Monitor real-time platform events and notifications"
       >
         <div className="flex gap-2">
-          <Button
-            variant={isStreaming ? "destructive" : "default"}
-            size="sm"
-            onClick={toggleStreaming}
-          >
-            {isStreaming ? (
-              <>
-                <Square className="h-4 w-4 mr-2" />
-                Stop Stream
-              </>
-            ) : (
-              <>
-                <Play className="h-4 w-4 mr-2" />
-                Start Stream
-              </>
-            )}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleRefresh}
-            disabled={isLoading || isStreaming}
-          >
-            <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
+          <Gated op="GET /api/v1/platform/health">
+            <Button
+              variant={isStreaming ? "destructive" : "default"}
+              size="sm"
+              onClick={toggleStreaming}
+            >
+              {isStreaming ? (
+                <>
+                  <Square className="h-4 w-4 mr-2" />
+                  Stop Stream
+                </>
+              ) : (
+                <>
+                  <Play className="h-4 w-4 mr-2" />
+                  Start Stream
+                </>
+              )}
+            </Button>
+          </Gated>
+          <Gated op="GET /api/v1/platform/health">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRefresh}
+              disabled={isLoading || isStreaming}
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          </Gated>
           <Button
             variant="outline"
             size="sm"
@@ -471,7 +484,12 @@ export default function EventsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
-          {isLoading ? (
+          {!capsLoading && !healthCap.enabled ? (
+            <div data-testid="platform-events-not-enabled" className="rounded-lg border border-border bg-card p-6">
+              <div className="font-medium">Platform events are not enabled on this server</div>
+              <p className="text-sm text-muted-foreground mt-1">{healthCap.reason}</p>
+            </div>
+          ) : capsLoading || isLoading ? (
             <div className="flex items-center justify-center h-64">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
               <span className="ml-2">Loading events...</span>

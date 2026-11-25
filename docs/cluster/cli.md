@@ -254,10 +254,11 @@ Where they disagree, the code is right and the legacy file is the defect.
 `ErrClusterStatusFailed`, `ErrClusterNodesFailed`, each carrying the underlying
 error.
 
-Because no cluster servicer is wired into the daemon
-([architecture.md](architecture.md) §3), its cluster service answers
-`Unavailable`, so every one of these verbs would fail against a shipped daemon
-even if the command tree were registered.
+What is not registered is this CLI command tree: serve does wire a cluster
+servicer into the daemon ([architecture.md](architecture.md) §3), so status and
+nodes answer through the daemon's cluster service while `join` and `leave`
+answer `Unavailable` (upstream go-quicbaas gaps), but none of these verbs is
+reachable from the shipped CLI until the command tree is registered.
 
 `--output json` is the form to parse; the `table` renderer is for humans and its
 columns are not a stable interface.
