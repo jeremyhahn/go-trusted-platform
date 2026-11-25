@@ -373,6 +373,18 @@ func (c *Client) GetFlowStats(ctx context.Context, bridgeName string, match stri
 // without actions "drop". Undecodable instructions render as "", which
 // equals no flow mod's actions.
 func flowActionsFromInstructions(instructions []byte) string {
+	// Only APPLY_ACTIONS renders. Any other instruction (GOTO_TABLE, METER,
+	// WRITE_ACTIONS, ...) changes forwarding in a way the rendered string
+	// cannot express, so the flow renders "" and never equals the actions
+	// of a flow the daemon would install.
+	for offset := 0; offset+4 <= len(instructions); {
+		instType := openflow.ByteOrder.Uint16(instructions[offset : offset+2])
+		length := int(openflow.ByteOrder.Uint16(instructions[offset+2 : offset+4]))
+		if instType != openflow.OFPITApplyActions || length < 8 {
+			return ""
+		}
+		offset += length
+	}
 	actions, err := openflow.ApplyActionsFromInstructions(instructions)
 	if err != nil {
 		return ""

@@ -1289,7 +1289,7 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		// refuse an entry a flow with another cookie (SDNService.AddFlow,
 		// another owner) holds, before any write, so the policy never
 		// replaces, and its strict deletes never meet, a flow it does not own.
-		occupied, occupant, err := s.occupiedPolicyFlow(ctx, client, flows)
+		adopted, occupied, occupant, err := s.occupiedPolicyFlow(ctx, client, flows)
 		if err != nil {
 			return nil, status.Errorf(codes.Unavailable, "%v", err)
 		}
@@ -1315,6 +1315,12 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 			rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), policyRollbackTimeout)
 			defer cancel()
 			failed, rollbackErr := s.removePolicyFlows(rbCtx, client, flows[:attempted])
+			// An attempted flow replaced any cookie-0 legacy flow it
+			// adopted, and no prior record holds that flow: re-add it so
+			// the rule it enforced before the apply still holds.
+			if reErr := s.restorePolicyFlows(rbCtx, client, adoptedWithin(adopted, flows[:attempted])); reErr != nil {
+				rollbackErr = errors.Join(rollbackErr, reErr)
+			}
 			if prior != nil && prior.enabled {
 				// The prior rules were accepted when stored, so every one
 				// encodes; one that did not would add no flow here.
@@ -1762,7 +1768,8 @@ func (s *SDNService) conflictingPolicyFlow(flows []policyFlow, others []policyRe
 // canonical match) a flow with a different cookie holds, with that
 // occupant; nil when none does. The stats filter is not strict, so the
 // flows it returns are keyed here.
-func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientInterface, flows []policyFlow) (policyFlow, *ovs.Flow, error) {
+func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientInterface, flows []policyFlow) ([]policyFlow, policyFlow, *ovs.Flow, error) {
+	var adopted []policyFlow
 	for _, flow := range flows {
 		filter := fmt.Sprintf("table=%d", flow.mod.Table)
 		if flow.mod.Match != "" {
@@ -1770,24 +1777,51 @@ func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientIn
 		}
 		installed, err := client.GetFlowStats(ctx, flow.bridge, filter)
 		if err != nil {
-			return policyFlow{}, nil, fmt.Errorf("read installed flows on bridge %s: %v", flow.bridge, err)
+			return nil, policyFlow{}, nil, fmt.Errorf("read installed flows on bridge %s: %v", flow.bridge, err)
 		}
 		want := flowKey(flow)
 		for _, fl := range installed {
 			if fl == nil || fl.Cookie == flow.mod.Cookie {
 				continue
 			}
-			// A cookie-0 flow with the same actions is this flow installed before policy cookies.
-			if zeroFlowCookie(fl.Cookie) && fl.Actions == flow.mod.Actions {
+			theirs := policyFlow{bridge: flow.bridge, mod: &ovs.FlowMod{Table: fl.Table, Priority: fl.Priority, Match: fl.Match}}
+			if flowKey(theirs) != want {
 				continue
 			}
-			theirs := policyFlow{bridge: flow.bridge, mod: &ovs.FlowMod{Table: fl.Table, Priority: fl.Priority, Match: fl.Match}}
-			if flowKey(theirs) == want {
-				return flow, fl, nil
+			// A cookie-0 flow with the same actions is this flow installed
+			// before policy cookies: adopt it, and keep a copy so a failed
+			// apply can put it back. Actions render "" for any instruction
+			// but APPLY_ACTIONS, so such a flow is never adopted.
+			if zeroFlowCookie(fl.Cookie) && fl.Actions != "" && fl.Actions == flow.mod.Actions {
+				mod := *flow.mod
+				mod.Cookie = fl.Cookie
+				mod.Actions = fl.Actions
+				adopted = append(adopted, policyFlow{bridge: flow.bridge, ruleID: flow.ruleID, mod: &mod})
+				continue
 			}
+			return nil, flow, fl, nil
 		}
 	}
-	return policyFlow{}, nil, nil
+	return adopted, policyFlow{}, nil, nil
+}
+
+// adoptedWithin returns the adopted legacy flows whose entry one of
+// attempted was written to.
+func adoptedWithin(adopted, attempted []policyFlow) []policyFlow {
+	if len(adopted) == 0 {
+		return nil
+	}
+	keys := make(map[policyFlowKey]struct{}, len(attempted))
+	for _, flow := range attempted {
+		keys[flowKey(flow)] = struct{}{}
+	}
+	var out []policyFlow
+	for _, flow := range adopted {
+		if _, ok := keys[flowKey(flow)]; ok {
+			out = append(out, flow)
+		}
+	}
+	return out
 }
 
 // zeroFlowCookie reports whether an installed flow's cookie is empty or zero.
