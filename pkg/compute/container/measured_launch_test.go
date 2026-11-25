@@ -211,11 +211,21 @@ func (r staticDigestResolver) ResolveImageDigest(context.Context, string) (strin
 // TestTrustStackAndSDKAttestor covers the seam the platform fills in the SDK.
 func TestTrustStackAndSDKAttestor(t *testing.T) {
 	t.Run("rejects a nil host TPM", func(t *testing.T) {
-		if _, err := NewTrustStack(nil, slog.Default()); err == nil {
+		if _, err := NewTrustStack(nil, newFakeHostAppraiser(), slog.Default()); err == nil {
 			t.Fatal("a trust stack with no TPM must be refused")
 		}
-		if _, err := NewSDKContainerAttestor(nil, slog.Default()); err == nil {
+		if _, err := NewSDKContainerAttestor(nil, newFakeHostAppraiser(), slog.Default()); err == nil {
 			t.Fatal("an attestor with no TPM must be refused")
+		}
+	})
+
+	t.Run("rejects a nil host appraiser", func(t *testing.T) {
+		var want ErrHostAppraiserRequired
+		if _, err := NewTrustStack(newMockHostTPM(), nil, slog.Default()); !errors.As(err, &want) {
+			t.Fatalf("error = %v, want ErrHostAppraiserRequired", err)
+		}
+		if _, err := NewSDKContainerAttestor(newMockHostTPM(), nil, slog.Default()); !errors.As(err, &want) {
+			t.Fatalf("error = %v, want ErrHostAppraiserRequired", err)
 		}
 	})
 
@@ -228,8 +238,9 @@ func TestTrustStackAndSDKAttestor(t *testing.T) {
 			t.Fatalf("NewHostTPMProvider: %v", err)
 		}
 
+		appraiser := newFakeHostAppraiser()
 		attesting, err := orchestration.NewTPMAttestingRuntime(
-			&stubContainerRuntime{}, provider, newSDKLogger(slog.Default()))
+			&stubContainerRuntime{}, provider, appraiser, newSDKLogger(slog.Default()))
 		if err != nil {
 			t.Fatalf("NewTPMAttestingRuntime: %v", err)
 		}
@@ -240,13 +251,11 @@ func TestTrustStackAndSDKAttestor(t *testing.T) {
 		}
 
 		resp, err := seam.AttestContainer(context.Background(), &service.AttestContainerRequest{
-			ContainerID: "c1",
-			Image:       testImageRef,
-			ImageDigest: testImageDigest,
-			TrustLevel:  orchestration.TrustLevelAttested.String(),
-			ExpectedPCRs: map[uint32][]byte{
-				DefaultPCRIndex: mockQuotePCRValue(),
-			},
+			ContainerID:     "c1",
+			Image:           testImageRef,
+			ImageDigest:     testImageDigest,
+			TrustLevel:      orchestration.TrustLevelAttested.String(),
+			ReferenceValues: DefaultReferenceValues,
 			MeasurementBank: orchestration.DefaultMeasurementBank,
 		})
 		if err != nil {
@@ -261,15 +270,35 @@ func TestTrustStackAndSDKAttestor(t *testing.T) {
 		if len(resp.Quoted) == 0 || len(resp.Signature) == 0 {
 			t.Error("expected a signed quote in the response")
 		}
+		if !bytes.Equal(resp.PCRs[DefaultPCRIndex], mockQuotePCRValue()) {
+			t.Error("the response must carry the quoted workload PCR")
+		}
+		if len(appraiser.names) == 0 || appraiser.names[0] != DefaultReferenceValues {
+			t.Errorf("reference values asked = %v, want %q", appraiser.names, DefaultReferenceValues)
+		}
 	})
 
-	t.Run("golden PCR mismatch is refused through the seam", func(t *testing.T) {
+	t.Run("a reference-value divergence is refused through the seam", func(t *testing.T) {
 		provider, err := NewHostTPMProvider(newMockQuoteTPM(t))
 		if err != nil {
 			t.Fatalf("NewHostTPMProvider: %v", err)
 		}
+		appraiser := newFakeHostAppraiser()
+		appraiser.appraisal = &orchestration.HostAppraisal{
+			CryptographicFailure: true,
+			Failures: []orchestration.HostAppraisalFailure{{
+				Check:   "baseline",
+				Outcome: "forged",
+				Reason:  "quoted PCR value not admitted",
+				PCRs: []orchestration.PCRDivergence{{
+					Index:    DefaultPCRIndex,
+					Expected: [][]byte{[]byte("wrong")},
+					Quoted:   mockQuotePCRValue(),
+				}},
+			}},
+		}
 		attesting, err := orchestration.NewTPMAttestingRuntime(
-			&stubContainerRuntime{}, provider, newSDKLogger(slog.Default()))
+			&stubContainerRuntime{}, provider, appraiser, newSDKLogger(slog.Default()))
 		if err != nil {
 			t.Fatalf("NewTPMAttestingRuntime: %v", err)
 		}
@@ -280,14 +309,19 @@ func TestTrustStackAndSDKAttestor(t *testing.T) {
 			Image:           testImageRef,
 			ImageDigest:     testImageDigest,
 			TrustLevel:      orchestration.TrustLevelAttested.String(),
-			ExpectedPCRs:    map[uint32][]byte{DefaultPCRIndex: []byte("wrong")},
+			ReferenceValues: DefaultReferenceValues,
 			MeasurementBank: orchestration.DefaultMeasurementBank,
 		})
 		if err == nil {
-			t.Fatal("a host whose PCRs do not match the golden set must be refused")
+			t.Fatal("a host whose PCRs the reference values do not admit must be refused")
 		}
-		if !errors.Is(err, orchestration.ErrPCRMismatch) {
-			t.Errorf("error = %v, want the SDK PCR mismatch sentinel", err)
+		var appraisal *orchestration.HostAppraisalError
+		if !errors.As(err, &appraisal) {
+			t.Fatalf("error = %T (%v), want *orchestration.HostAppraisalError", err, err)
+		}
+		if len(appraisal.Failures) != 1 || len(appraisal.Failures[0].PCRs) != 1 ||
+			appraisal.Failures[0].PCRs[0].Index != DefaultPCRIndex {
+			t.Errorf("failures = %+v, want one divergence on the workload PCR", appraisal.Failures)
 		}
 	})
 }
@@ -296,7 +330,7 @@ func TestTrustStackAndSDKAttestor(t *testing.T) {
 // caller's own Tier 0 runtime.
 func TestNewAttestingRuntime(t *testing.T) {
 	t.Run("attests over the supplied Tier 0 runtime", func(t *testing.T) {
-		attesting, err := NewAttestingRuntime(&stubContainerRuntime{}, newMockHostTPM(), slog.Default())
+		attesting, err := NewAttestingRuntime(&stubContainerRuntime{}, newMockHostTPM(), newFakeHostAppraiser(), slog.Default())
 		if err != nil {
 			t.Fatalf("NewAttestingRuntime: %v", err)
 		}
@@ -306,15 +340,23 @@ func TestNewAttestingRuntime(t *testing.T) {
 	})
 
 	t.Run("rejects a nil host TPM", func(t *testing.T) {
-		_, err := NewAttestingRuntime(&stubContainerRuntime{}, nil, slog.Default())
+		_, err := NewAttestingRuntime(&stubContainerRuntime{}, nil, newFakeHostAppraiser(), slog.Default())
 		var want ErrHostTPMRequired
 		if !errors.As(err, &want) {
 			t.Fatalf("error = %v, want ErrHostTPMRequired", err)
 		}
 	})
 
+	t.Run("rejects a nil host appraiser", func(t *testing.T) {
+		_, err := NewAttestingRuntime(&stubContainerRuntime{}, newMockHostTPM(), nil, slog.Default())
+		var want ErrHostAppraiserRequired
+		if !errors.As(err, &want) {
+			t.Fatalf("error = %v, want ErrHostAppraiserRequired", err)
+		}
+	})
+
 	t.Run("rejects a nil Tier 0 runtime", func(t *testing.T) {
-		if _, err := NewAttestingRuntime(nil, newMockHostTPM(), slog.Default()); err == nil {
+		if _, err := NewAttestingRuntime(nil, newMockHostTPM(), newFakeHostAppraiser(), slog.Default()); err == nil {
 			t.Fatal("an attesting runtime with no Tier 0 runtime must be refused")
 		}
 	})
@@ -324,14 +366,13 @@ func TestNewAttestingRuntime(t *testing.T) {
 // measurement-log entry, which is what the golden-PCR comparison runs against.
 func TestAttestationSpec(t *testing.T) {
 	attestor, _ := newTestAttestor(t)
-	expectedPCR := make([]byte, SHA256Size)
 
 	t.Run("uses the recorded image reference", func(t *testing.T) {
 		spec, err := attestor.attestationSpec(&MeasurementEntry{
 			ContainerName: "web",
 			Image:         testImageRef,
 			ImageDigest:   testImageDigest,
-		}, expectedPCR)
+		})
 		if err != nil {
 			t.Fatalf("attestationSpec: %v", err)
 		}
@@ -344,6 +385,20 @@ func TestAttestationSpec(t *testing.T) {
 		if spec.TrustLevel != orchestration.TrustLevelAttested {
 			t.Errorf("TrustLevel = %v, want attested", spec.TrustLevel)
 		}
+		if spec.ReferenceValues != DefaultReferenceValues {
+			t.Errorf("ReferenceValues = %q, want %q", spec.ReferenceValues, DefaultReferenceValues)
+		}
+	})
+
+	t.Run("names the configured reference values", func(t *testing.T) {
+		named, _ := newTestAttestor(t, WithReferenceValues("edge-host"))
+		spec, err := named.attestationSpec(&MeasurementEntry{Image: testImageRef, ImageDigest: testImageDigest})
+		if err != nil {
+			t.Fatalf("attestationSpec: %v", err)
+		}
+		if spec.ReferenceValues != "edge-host" {
+			t.Errorf("ReferenceValues = %q, want edge-host", spec.ReferenceValues)
+		}
 	})
 
 	// Logs written before the image reference was recorded still carry the
@@ -351,7 +406,7 @@ func TestAttestationSpec(t *testing.T) {
 	t.Run("falls back to the digest when no reference was recorded", func(t *testing.T) {
 		spec, err := attestor.attestationSpec(&MeasurementEntry{
 			ImageDigest: testImageDigest,
-		}, expectedPCR)
+		})
 		if err != nil {
 			t.Fatalf("attestationSpec: %v", err)
 		}
@@ -361,7 +416,7 @@ func TestAttestationSpec(t *testing.T) {
 	})
 
 	t.Run("rejects an entry with no image identity", func(t *testing.T) {
-		if _, err := attestor.attestationSpec(&MeasurementEntry{}, expectedPCR); err == nil {
+		if _, err := attestor.attestationSpec(&MeasurementEntry{}); err == nil {
 			t.Fatal("a spec with no image must be rejected by SDK validation")
 		}
 	})
