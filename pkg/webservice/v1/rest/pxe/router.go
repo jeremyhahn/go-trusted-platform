@@ -158,12 +158,19 @@ func (r *PXERouter) SetSystemTenantGuard(guard func(http.Handler) http.Handler) 
 	r.systemTenant = guard
 }
 
-// requireScope wraps handler in the scope check when one is configured.
+// requireScope wraps handler in the system-tenant guard and, when one is
+// configured, the scope check. Without a guard it refuses (fail closed): the
+// PXE device store is platform-wide, so only the system tenant may reach it.
 func (r *PXERouter) requireScope(scope string, handler http.HandlerFunc) http.Handler {
-	if r.scopeAuthorizer == nil {
-		return handler
+	if r.systemTenant == nil {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		})
 	}
-	return r.scopeAuthorizer.RequireScope(scope)(handler)
+	if r.scopeAuthorizer == nil {
+		return r.systemTenant(handler)
+	}
+	return r.systemTenant(r.scopeAuthorizer.RequireScope(scope)(handler))
 }
 
 // RegisterMachineFacingRoutes registers the install-completion webhook, and

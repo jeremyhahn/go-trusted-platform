@@ -125,6 +125,7 @@ func newRouter() (*PXERouter, *mux.Router) {
 	w := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
 	r := NewPXERouter(logging.NewLogger(slog.LevelError, io.Discard), nil, w, true)
 	parent := mux.NewRouter()
+	guardForSystem(r, parent)
 	sub := parent.PathPrefix("/api/v1").Subrouter()
 	r.RegisterMachineFacingRoutes(sub)
 	r.RegisterRoutes(sub)
@@ -268,6 +269,7 @@ func operatorRoot(authorizer middleware.ScopeAuthorizer) *mux.Router {
 	r := NewPXERouter(logging.NewLogger(slog.LevelError, io.Discard), nil, w, false)
 	r.SetScopeAuthorizer(authorizer)
 	root := mux.NewRouter()
+	guardForSystem(r, root)
 	r.RegisterRoutes(root.PathPrefix("/api/v1").Subrouter())
 	return root
 }

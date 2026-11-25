@@ -644,6 +644,11 @@ func (s *PXEGRPCService) StopService(ctx context.Context, req *platformv1.StopPX
 
 // WebhookComplete handles the callback when OS installation completes.
 func (s *PXEGRPCService) WebhookComplete(ctx context.Context, req *platformv1.PXEWebhookCompleteRequest) (*platformv1.PXEWebhookCompleteResponse, error) {
+	// The operator path carries no IDevID, so a non-system tenant could fail
+	// another tenant's device and quarantine its port (#1896 Codex r10).
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "WebhookComplete"); err != nil {
+		return nil, err
+	}
 	return s.webhookComplete(ctx, req, "")
 }
 

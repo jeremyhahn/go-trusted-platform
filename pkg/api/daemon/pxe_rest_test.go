@@ -19,9 +19,28 @@ import (
 func pxeRESTServer(t *testing.T) *RESTServer {
 	t.Helper()
 	s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
-	require.NoError(t, s.SetPXERouterHandlers(logging.DefaultLogger(), NewPXEGRPCService(logging.DefaultLogger(), nil),
+	// The PXE store is the system tenant's (#1896 Codex r10): the fixture
+	// callers of tenant A are its system tenant.
+	svc := NewPXEGRPCService(logging.DefaultLogger(), nil)
+	svc.SetSystemTenant(iamRESTTenantA)
+	require.NoError(t, s.SetPXERouterHandlers(logging.DefaultLogger(), svc,
 		restapi.NewScopeGuard(dnsRESTCallers, nil, nil)))
 	return s
+}
+
+// TestPXERouterREST_RefusesNonSystemTenant: on the daemon REST listener a
+// bearer of another tenant holding pxe:read is refused by PXEService's
+// system-tenant check, before the (absent) PXE backend is consulted.
+func TestPXERouterREST_RefusesNonSystemTenant(t *testing.T) {
+	s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
+	svc := NewPXEGRPCService(logging.DefaultLogger(), nil)
+	svc.SetSystemTenant(iamRESTTenantB)
+	require.NoError(t, s.SetPXERouterHandlers(logging.DefaultLogger(), svc,
+		restapi.NewScopeGuard(dnsRESTCallers, nil, nil)))
+
+	recorder := serveIAM(s, http.MethodGet, "/api/v1/pxe/status", "pxe-reader")
+	assert.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), "only the system tenant")
 }
 
 func TestSetPXERouterHandlers_RefusesAMissingDependency(t *testing.T) {
