@@ -35,6 +35,14 @@ func TestFlowActionsFromStatsInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal empty apply-actions: %v", err)
 	}
+	gotoTable, err := openflow.NewInstructionGotoTable(1).MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal goto-table: %v", err)
+	}
+	meter, err := openflow.NewInstructionMeter(1).MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal meter: %v", err)
+	}
 
 	tests := []struct {
 		name         string
@@ -46,6 +54,10 @@ func TestFlowActionsFromStatsInstructions(t *testing.T) {
 		{"numeric port", applyOutput(3), "output:3"},
 		{"no instructions", nil, "drop"},
 		{"empty apply-actions", emptyApply, "drop"},
+		// An instruction the renderer cannot express changes forwarding:
+		// such a flow renders "" so it never equals a policy flow's actions.
+		{"goto-table only", gotoTable, ""},
+		{"meter + apply normal", append(append([]byte{}, meter...), applyOutput(openflow.OFPPNormal)...), ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

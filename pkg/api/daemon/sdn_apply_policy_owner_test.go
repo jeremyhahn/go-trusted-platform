@@ -275,6 +275,23 @@ func TestSDNService_ApplyPolicy_AdoptsALegacyCookieZeroPolicyFlow(t *testing.T) 
 	}
 }
 
+// A failed apply that adopted a cookie-zero legacy flow restores it: the
+// legacy rule was enforcing before the apply, and no prior record holds it.
+func TestSDNService_ApplyPolicy_RollbackRestoresAdoptedLegacyFlow(t *testing.T) {
+	svc, fake := newOwnerOVSFixture(t)
+	seed := seedLegacyPolicyFlow(t, fake.replacingOVS, svc, "br0", "0x0", "")
+	fake.failOn = map[int]bool{2: true}
+
+	_, err := svc.ApplyPolicy(context.Background(), &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
+	require.Equal(t, codes.Internal, status.Code(err), "err: %v", err)
+
+	requireOnlyFlow(t, fake, "br0", seed.Cookie, seed.Actions)
+	flows, err := fake.ListFlows(context.Background(), "br0")
+	require.NoError(t, err)
+	assert.Equal(t, seed.Match, flows[0].Match)
+	assert.Equal(t, seed.Priority, flows[0].Priority)
+}
+
 func TestSDNService_ApplyPolicy_LegacyZeroCookieFlowWithOtherActionsIsStillRefused(t *testing.T) {
 	svc, fake := newReplacingOVSFixture(t)
 	seed := seedLegacyPolicyFlow(t, fake, svc, "br0", "0x0", "output:2")
