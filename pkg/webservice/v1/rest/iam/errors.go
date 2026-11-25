@@ -270,6 +270,10 @@ func (e ErrWorkspaceAccountInactive) Error() string {
 	return "rest/iam: the account " + e.Subject + " in tenant " + e.TenantID + " is " + e.Lifecycle + " and holds no roles"
 }
 
+// InactiveLifecycle names the refused lifecycle, so a caller can recognise
+// the refusal without importing this package.
+func (e ErrWorkspaceAccountInactive) InactiveLifecycle() string { return e.Lifecycle }
+
 // ErrIAMClientMissing is returned when a user's roles are set without an IAM
 // client to read and change them through.
 type ErrIAMClientMissing struct{}
