@@ -44,9 +44,80 @@ func TestAppServices_EmbeddedSDK(t *testing.T) {
 			continue // served: TestObjectStorage_EmbeddedSDKRoundTrip
 		}
 		st := status.Convert(c.call(context.Background()))
-		require.Equal(t, codes.Unavailable, st.Code(), "%s: %s", name, st.Message())
-		assert.Equal(t, c.service, notConfiguredServiceName(t, st), name)
+		// The bumped embedded quicbaas serves every app service: none answers not-configured.
+		assert.NotEqual(t, codes.Unavailable, st.Code(), "%s: %s", name, st.Message())
 	}
+}
+
+// TestScheduler_EmbeddedSDK drives the scheduler the bumped embedded SDK serves.
+func TestScheduler_EmbeddedSDK(t *testing.T) {
+	server := embeddedAppServiceServers(t).scheduler
+	ctx := context.Background()
+
+	list, err := server.ListJobs(ctx, &platformv1.ListSchedulerJobsRequest{})
+	require.NoError(t, err)
+	assert.Empty(t, list.GetJobs(), "a fresh scheduler has no jobs")
+
+	st, err := server.GetStatus(ctx, &platformv1.GetSchedulerStatusRequest{})
+	require.NoError(t, err)
+	assert.NotNil(t, st)
+
+	_, err = server.CreateJob(ctx, &platformv1.CreateSchedulerJobRequest{
+		Name: "j", JobType: platformv1.SchedulerJobType_SCHEDULER_JOB_TYPE_ONE_SHOT,
+	})
+	// The embedded SDK refuses a job without a handler; its error code does not survive, so assert the message.
+	require.Error(t, err, "a job without a handler is refused")
+	assert.Contains(t, err.Error(), "handler is required")
+
+	_, err = server.GetJob(ctx, &platformv1.GetSchedulerJobRequest{JobId: "5"})
+	require.Error(t, err, "an unknown job is not found")
+	assert.Contains(t, err.Error(), "job not found")
+}
+
+// TestCache_EmbeddedSDK drives the cache the bumped embedded SDK serves.
+func TestCache_EmbeddedSDK(t *testing.T) {
+	server := embeddedAppServiceServers(t).cache
+	ctx := context.Background()
+
+	cfg, err := server.GetConfig(ctx, &platformv1.GetCacheConfigRequest{})
+	require.NoError(t, err)
+	require.NotNil(t, cfg.GetConfig())
+
+	_, err = server.GetStats(ctx, &platformv1.GetCacheStatsRequest{EntityType: "users"})
+	require.NoError(t, err)
+	_, err = server.Clear(ctx, &platformv1.ClearCacheRequest{All: true})
+	require.NoError(t, err)
+}
+
+// TestMessaging_EmbeddedSDKRoundTrip drives a channel through the bumped embedded SDK.
+func TestMessaging_EmbeddedSDKRoundTrip(t *testing.T) {
+	server := embeddedAppServiceServers(t).messaging
+	ctx := context.Background()
+
+	_, err := server.GetChannel(ctx, &platformv1.GetMessagingChannelRequest{Name: "events"})
+	require.Equal(t, codes.NotFound, status.Code(err), "no channel before it is created: %v", err)
+
+	_, err = server.CreateChannel(ctx, &platformv1.CreateMessagingChannelRequest{Name: "events"})
+	require.NoError(t, err)
+	got, err := server.GetChannel(ctx, &platformv1.GetMessagingChannelRequest{Name: "events"})
+	require.NoError(t, err)
+	assert.Equal(t, "events", got.GetChannel().GetName())
+
+	list, err := server.ListChannels(ctx, &platformv1.ListMessagingChannelsRequest{})
+	require.NoError(t, err)
+	names := make([]string, 0, len(list.GetChannels()))
+	for _, ch := range list.GetChannels() {
+		names = append(names, ch.GetName())
+	}
+	assert.Contains(t, names, "events")
+
+	_, err = server.Publish(ctx, &platformv1.PublishMessageRequest{Channel: "events", Payload: []byte("x")})
+	require.NoError(t, err)
+
+	_, err = server.DeleteChannel(ctx, &platformv1.DeleteMessagingChannelRequest{Name: "events"})
+	require.NoError(t, err)
+	_, err = server.GetChannel(ctx, &platformv1.GetMessagingChannelRequest{Name: "events"})
+	assert.Equal(t, codes.NotFound, status.Code(err), "a deleted channel is gone: %v", err)
 }
 
 // TestObjectStorage_EmbeddedSDKRoundTrip stores, reads, copies, lists and
