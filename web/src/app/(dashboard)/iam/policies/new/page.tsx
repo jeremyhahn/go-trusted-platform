@@ -4,6 +4,7 @@
  * Create Policy page — minimal form that builds a canonical IAM Policy
  * YAML from the entered rules and POSTs it to the platform IAM REST
  * endpoint, then routes back to /iam/policies.
+ * Create Policy is gated on the server's tenant policy create capability (#2033).
  */
 
 import React, { useState } from 'react';
@@ -23,6 +24,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Loader2 } from 'lucide-react';
+import { Gated } from '@/components/features/capabilities/gated';
 
 import type { CreateIAMPolicyRequest } from 'trusted-platform-sdk';
 
@@ -159,15 +161,17 @@ export default function NewPolicyPage() {
             <Button variant="outline" onClick={() => router.push('/iam/policies')}>
               Cancel
             </Button>
-            <Button
-              onClick={() => createMutation.mutate(undefined)}
-              disabled={!name || createMutation.isLoading}
-            >
-              {createMutation.isLoading && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
-              Create Policy
-            </Button>
+            <Gated op="POST /api/v1/iam/tenants/{tenant}/policies">
+              <Button
+                onClick={() => createMutation.mutate(undefined)}
+                disabled={!name || createMutation.isLoading}
+              >
+                {createMutation.isLoading && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                Create Policy
+              </Button>
+            </Gated>
           </div>
         </CardContent>
       </Card>

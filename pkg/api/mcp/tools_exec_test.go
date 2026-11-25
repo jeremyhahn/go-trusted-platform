@@ -572,7 +572,7 @@ func TestDeviceToolExecution(t *testing.T) {
 
 	t.Run("executeDeviceAttest error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.deviceAttestFunc = func(ctx context.Context, deviceID string, evidence []byte) (interface{}, error) {
+		svc.deviceAttestFunc = func(ctx context.Context, deviceID string, evidence []byte, challengeID string) (interface{}, error) {
 			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)

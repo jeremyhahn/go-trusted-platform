@@ -11,6 +11,8 @@ import React, { useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { ColumnDef } from '@tanstack/react-table';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
+import { useCapabilities } from '@/hooks/use-capabilities';
+import { Gated } from '@/components/features/capabilities/gated';
 import { useAuth } from '@/contexts/AuthContext';
 import { DataTable, createSelectColumn } from '@/components/ui/data-table';
 import { DataTableColumnHeader } from '@/components/ui/data-table-column-header';
@@ -40,17 +42,22 @@ export default function GroupsPage() {
   const { toast } = useToast();
   const { tenantId, isLoading: authLoading } = useAuth();
   const iam = useIAM();
+  const { loading: capsLoading, capability } = useCapabilities();
+  const listCap = capability('GET /api/v1/iam/tenants/{tenant}/groups');
+  const updateCap = capability('PUT /api/v1/iam/tenants/{tenant}/groups/{id}');
+  const deleteCap = capability('DELETE /api/v1/iam/tenants/{tenant}/groups/{id}');
 
-  // Fetch groups using SDK
+  // Fetch groups using SDK, once the server says it offers the list
   const {
     data: groupsData,
     isLoading: groupsLoading,
     error: groupsError,
     refetch: refetchGroups,
   } = useApi(
-    () => tenantId ? iam.listGroups({ tenantId }) : Promise.resolve({ success: true, data: null }),
-    [tenantId],
+    () => tenantId && listCap.enabled ? iam.listGroups({ tenantId }) : Promise.resolve({ success: true, data: null }),
+    [tenantId, listCap.enabled],
     {
+      enabled: !capsLoading && listCap.enabled,
       onError: (err) => {
         toast({
           title: 'Error loading groups',
@@ -197,19 +204,23 @@ export default function GroupsPage() {
               {
                 label: 'Edit',
                 onClick: () => handleEdit(group),
+                disabled: !updateCap.enabled,
+                title: updateCap.enabled ? undefined : updateCap.reason,
               },
               {
                 label: 'Delete',
                 onClick: () => handleDelete(group),
                 variant: 'destructive',
                 separator: true,
+                disabled: !deleteCap.enabled,
+                title: deleteCap.enabled ? undefined : deleteCap.reason,
               },
             ]}
           />
         );
       },
     },
-  ], [handleView, handleEdit, handleDelete]);
+  ], [handleView, handleEdit, handleDelete, updateCap, deleteCap]);
 
   // Show auth loading state
   if (authLoading) {
@@ -240,6 +251,27 @@ export default function GroupsPage() {
     );
   }
 
+  if (!capsLoading && !listCap.enabled) {
+    return (
+      <div className="container mx-auto py-6 space-y-6">
+        <div className="space-y-1">
+          <h1 className="text-3xl font-bold tracking-tight">Groups</h1>
+          <p className="text-muted-foreground">
+            Manage user groups and their memberships
+          </p>
+        </div>
+        <Card data-testid="iam-groups-not-enabled">
+          <CardHeader>
+            <CardTitle>Groups are not enabled on this server</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">{listCap.reason}</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   if (groupsError) {
     return (
       <div className="container mx-auto py-6">
@@ -248,14 +280,16 @@ export default function GroupsPage() {
           <AlertTitle>Error Loading Groups</AlertTitle>
           <AlertDescription>
             {groupsError.message}
-            <Button
-              variant="outline"
-              size="sm"
-              className="ml-4"
-              onClick={() => refetchGroups()}
-            >
-              Retry
-            </Button>
+            <Gated op="GET /api/v1/iam/tenants/{tenant}/groups">
+              <Button
+                variant="outline"
+                size="sm"
+                className="ml-4"
+                onClick={() => refetchGroups()}
+              >
+                Retry
+              </Button>
+            </Gated>
           </AlertDescription>
         </Alert>
       </div>
@@ -272,10 +306,12 @@ export default function GroupsPage() {
             Manage user groups and their memberships
           </p>
         </div>
-        <Button onClick={() => router.push('/iam/groups/new')}>
-          <Plus className="mr-2 h-4 w-4" />
-          Add Group
-        </Button>
+        <Gated op="POST /api/v1/iam/tenants/{tenant}/groups">
+          <Button onClick={() => router.push('/iam/groups/new')}>
+            <Plus className="mr-2 h-4 w-4" />
+            Add Group
+          </Button>
+        </Gated>
       </div>
 
       {/* Stats Cards */}
@@ -319,7 +355,7 @@ export default function GroupsPage() {
             data={groups || []}
             searchKey="name"
             searchPlaceholder="Search groups..."
-            loading={groupsLoading}
+            loading={capsLoading || groupsLoading}
             pagination
             pageSize={25}
             onRowClick={handleView}
@@ -328,6 +364,8 @@ export default function GroupsPage() {
                 label: 'Delete selected',
                 onClick: handleBulkDelete,
                 variant: 'destructive',
+                disabled: !deleteCap.enabled,
+                title: deleteCap.enabled ? undefined : deleteCap.reason,
               },
             ]}
           />

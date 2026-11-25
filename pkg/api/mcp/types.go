@@ -675,7 +675,9 @@ type ServiceProvider interface {
 	DeviceList(ctx context.Context, filter map[string]string) ([]interface{}, error)
 	DeviceDelete(ctx context.Context, deviceID string) error
 	DeviceUpdate(ctx context.Context, deviceID string, updates map[string]interface{}) error
-	DeviceAttest(ctx context.Context, deviceID string, evidence []byte) (interface{}, error)
+	// DeviceAttest verifies a device's quote evidence. challengeID names a
+	// challenge from DeviceAttestChallenge; empty means none.
+	DeviceAttest(ctx context.Context, deviceID string, evidence []byte, challengeID string) (interface{}, error)
 	// DeviceRecordAttestCert records the device's attestation certificate on
 	// its platform record without re-enrolling it (fail-closed; see
 	// device.AttestCertRecorder). reissue lets the CA issue a fresh

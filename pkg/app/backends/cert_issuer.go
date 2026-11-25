@@ -84,17 +84,19 @@ func PlatformCertIssuer(ca quicbaasca.CACertificateAuthority, client quicbaassdk
 // client certificate. The /init admin bundle and the integration harness
 // bundle share it so both paths mint the same identity.
 //
-// The Organization is the system tenant: every mTLS transport binds a
-// verified client certificate to the tenant its subject O names
-// (pkg/auth/mtls.go), and the root admin acts as the system tenant, the
-// only tenant that may act across tenants.
+// The OrganizationalUnit is the system tenant: every mTLS transport binds
+// a verified client certificate to the tenant its subject OU names
+// (pkg/auth/mtls.go, SPEC row 122), and the root admin acts as the system
+// tenant, the only tenant that may act across tenants. The Organization
+// names the system tenant as well.
 func AdminCertificateRequest() *certclient.IssueCertificateRequest {
 	return &certclient.IssueCertificateRequest{
-		CommonName:   common.AdminUsername,
-		Organization: app.SystemTenantID,
-		Usage:        "client",
-		KeyAlgorithm: "ecdsa",
-		ValidityDays: 365,
+		CommonName:         common.AdminUsername,
+		Organization:       app.SystemTenantID,
+		OrganizationalUnit: app.SystemTenantID,
+		Usage:              "client",
+		KeyAlgorithm:       "ecdsa",
+		ValidityDays:       365,
 	}
 }
 
@@ -230,6 +232,9 @@ func (i *localCACertIssuer) issue(ctx context.Context, req *certclient.IssueCert
 		},
 		DNSNames:    req.DNSNames,
 		IPAddresses: ips,
+	}
+	if req.OrganizationalUnit != "" {
+		csrTpl.Subject.OrganizationalUnit = []string{req.OrganizationalUnit}
 	}
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTpl, priv)
 	if err != nil {
