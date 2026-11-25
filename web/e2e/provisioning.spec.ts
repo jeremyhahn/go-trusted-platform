@@ -44,6 +44,29 @@ function wireSession(overrides: Partial<WireSession> = {}): WireSession {
 }
 
 async function mockSessionApi(page: Page, sessions: WireSession[]): Promise<void> {
+  // The sessions page (provisioning/sessions/page.tsx) fetches the list only
+  // once the capabilities response says the list route is enabled, and
+  // useCapabilities fails closed when the call cannot be read, so the mocked
+  // suite must answer it with the list and fulfil routes enabled.
+  await page.route('**/api/v1/capabilities*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        capabilities: [
+          { op: 'GET /api/v1/provisioning/sessions', kind: 'route', service: 'provisioning', enabled: true },
+          {
+            op: 'POST /api/v1/provisioning/sessions/{sessionID}/fulfill',
+            kind: 'route',
+            service: 'provisioning',
+            enabled: true,
+          },
+        ],
+        total: 2,
+        enabled: 2,
+      }),
+    });
+  });
   await page.route('**/api/v1/provisioning/sessions', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sessions) });
   });

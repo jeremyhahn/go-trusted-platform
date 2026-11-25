@@ -45,14 +45,18 @@ import {
   useTenant,
 } from "@/hooks";
 import { useAuth } from "@/contexts/AuthContext";
+import { useCapabilities } from "@/hooks/use-capabilities";
 
 interface DashboardStats {
   title: string;
+  testId: string;
   value: string | number;
   icon: React.ComponentType<{ className?: string }>;
   description: string;
   href: string;
   loading?: boolean;
+  /** The server's reason when it does not offer this card's read (#2033). */
+  unavailable?: string;
 }
 
 interface QuickAction {
@@ -110,6 +114,25 @@ export default function DashboardPage() {
   const platform = usePlatform();
   const tenant = useTenant();
 
+  // #2033 item 5: each read runs only when the server offers its route.
+  const { loading: capsLoading, capability } = useCapabilities();
+  const usersCap = capability("GET /api/v1/iam/tenants/{tenant}/users");
+  const devicesCap = capability("GET /api/v1/devices");
+  const certsCap = capability("GET /api/v1/ca/certificates");
+  const healthCap = capability("GET /api/v1/platform/health");
+  const metricsCap = capability("GET /api/v1/platform/metrics");
+  const tenantCap = capability("GET /api/v1/tenants/{id}");
+  const usersOn = !capsLoading && usersCap.enabled;
+  const devicesOn = !capsLoading && devicesCap.enabled;
+  const certsOn = !capsLoading && certsCap.enabled;
+  const healthOn = !capsLoading && healthCap.enabled;
+  const metricsOn = !capsLoading && metricsCap.enabled;
+  const tenantOn = !capsLoading && tenantCap.enabled;
+  const usersOff = usersCap.enabled ? undefined : usersCap.reason;
+  const devicesOff = devicesCap.enabled ? undefined : devicesCap.reason;
+  const certsOff = certsCap.enabled ? undefined : certsCap.reason;
+  const healthOff = healthCap.enabled ? undefined : healthCap.reason;
+
   // Fetch users count
   const {
     data: usersData,
@@ -118,7 +141,8 @@ export default function DashboardPage() {
     refetch: refetchUsers,
   } = useApi(
     () => tenantId ? iam.listUsers({ tenantId, pageSize: 1 }) : Promise.resolve({ success: true, data: null }),
-    [tenantId]
+    [tenantId],
+    { enabled: usersOn }
   );
 
   // Fetch devices count
@@ -129,7 +153,8 @@ export default function DashboardPage() {
     refetch: refetchDevices,
   } = useApi(
     () => device.listDevices({ pageSize: 1 }),
-    []
+    [],
+    { enabled: devicesOn }
   );
 
   // Fetch certificates count
@@ -140,7 +165,8 @@ export default function DashboardPage() {
     refetch: refetchCerts,
   } = useApi(
     () => ca.listCertificates({ limit: 1 }),
-    []
+    [],
+    { enabled: certsOn }
   );
 
   // Fetch platform health
@@ -151,7 +177,8 @@ export default function DashboardPage() {
     refetch: refetchHealth,
   } = useApi(
     () => platform.getHealth(),
-    []
+    [],
+    { enabled: healthOn }
   );
 
   // Fetch platform metrics
@@ -162,7 +189,8 @@ export default function DashboardPage() {
     refetch: refetchMetrics,
   } = useApi(
     () => platform.getMetrics(),
-    []
+    [],
+    { enabled: metricsOn }
   );
 
   // Fetch tenant info
@@ -171,69 +199,91 @@ export default function DashboardPage() {
     isLoading: tenantLoading,
   } = useApi(
     () => tenantId ? tenant.getTenant(tenantId) : Promise.resolve({ success: true, data: null }),
-    [tenantId]
+    [tenantId],
+    { enabled: tenantOn }
   );
 
-  // Refresh all data
+  const offeredReads: Array<() => unknown> = [];
+  if (usersOn) offeredReads.push(refetchUsers);
+  if (devicesOn) offeredReads.push(refetchDevices);
+  if (certsOn) offeredReads.push(refetchCerts);
+  if (healthOn) offeredReads.push(refetchHealth);
+  if (metricsOn) offeredReads.push(refetchMetrics);
+  const anyReadOffered = offeredReads.length > 0;
+  const firstReason = [usersCap, devicesCap, certsCap, healthCap, metricsCap].find((c) => !c.enabled)?.reason;
+
+  // Refresh the offered reads only
   const handleRefresh = () => {
-    refetchUsers();
-    refetchDevices();
-    refetchCerts();
-    refetchHealth();
-    refetchMetrics();
+    for (const refetch of offeredReads) refetch();
   };
 
   // Build stats from real data
   const stats: DashboardStats[] = useMemo(() => [
     {
       title: "Total Users",
+      testId: "dashboard-stat-total-users",
       value: usersLoading ? "..." : (usersData?.total ?? 0),
       icon: Users,
       description: "Active users in the system",
       href: "/iam/users",
-      loading: usersLoading,
+      loading: capsLoading || usersLoading,
+      unavailable: usersOff,
     },
     {
       title: "Active Devices",
+      testId: "dashboard-stat-active-devices",
       value: devicesLoading ? "..." : (devicesData?.pagination?.totalItems ?? devicesData?.devices?.length ?? 0),
       icon: Cpu,
       description: "Registered devices",
       href: "/devices",
-      loading: devicesLoading,
+      loading: capsLoading || devicesLoading,
+      unavailable: devicesOff,
     },
     {
       title: "Certificates",
+      testId: "dashboard-stat-certificates",
       value: certsLoading ? "..." : (certsData?.pagination?.totalItems ?? certsData?.certificates?.length ?? 0),
       icon: FileKey,
       description: "Certificates issued",
       href: "/ca/certificates",
-      loading: certsLoading,
+      loading: capsLoading || certsLoading,
+      unavailable: certsOff,
     },
     {
       title: "Platform Health",
+      testId: "dashboard-stat-platform-health",
       value: healthLoading ? "..." : (healthData?.health?.healthy ? "Healthy" : "Degraded"),
       icon: Shield,
       description: healthData?.health?.message ?? "Platform status",
       href: "/platform/health",
-      loading: healthLoading,
+      loading: capsLoading || healthLoading,
+      unavailable: healthOff,
     },
     {
       title: "Services",
+      testId: "dashboard-stat-services",
       value: healthLoading ? "..." : (healthData?.health?.services?.length ?? 0),
       icon: Server,
       description: "Running services",
       href: "/platform/services",
-      loading: healthLoading,
+      loading: capsLoading || healthLoading,
+      unavailable: healthOff,
     },
     {
       title: "Network",
+      testId: "dashboard-stat-network",
       value: healthLoading ? "..." : (healthData?.health?.healthy ? "Healthy" : "Degraded"),
       icon: Network,
       description: "Network connectivity",
       href: "/networking/sdn",
-      loading: healthLoading,
+      loading: capsLoading || healthLoading,
+      unavailable: healthOff,
     },
-  ], [usersData, devicesData, certsData, healthData, usersLoading, devicesLoading, certsLoading, healthLoading]);
+  ], [
+    usersData, devicesData, certsData, healthData,
+    usersLoading, devicesLoading, certsLoading, healthLoading,
+    capsLoading, usersOff, devicesOff, certsOff, healthOff,
+  ]);
 
   // Get system metrics for health section
   const cpuUsage = metricsData?.metrics?.cpuUsagePercent ?? 0;
@@ -246,7 +296,8 @@ export default function DashboardPage() {
   // at mount.
   const currentTime = useSyncExternalStore(subscribeEveryMinute, readLocalTime, readServerTime);
 
-  const hasErrors = usersError || devicesError || certsError || healthError;
+  // An unoffered read never runs, so only an offered read's error counts.
+  const hasErrors = (usersOn && usersError) || (devicesOn && devicesError) || (certsOn && certsError) || (healthOn && healthError);
 
   return (
     <div className="space-y-6">
@@ -254,7 +305,13 @@ export default function DashboardPage() {
         title="Dashboard"
         description={`Welcome back! Here's what's happening today${currentTime ? ` at ${currentTime}` : ""}`}
         actions={
-          <Button variant="outline" size="sm" onClick={handleRefresh}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRefresh}
+            disabled={!anyReadOffered}
+            title={anyReadOffered ? undefined : firstReason}
+          >
             <RefreshCw className="h-4 w-4 mr-2" />
             Refresh
           </Button>
@@ -279,7 +336,7 @@ export default function DashboardPage() {
 
           return (
             <Link key={stat.title} href={stat.href}>
-              <Card className="hover:bg-accent/50 transition-colors cursor-pointer">
+              <Card data-testid={stat.testId} className="hover:bg-accent/50 transition-colors cursor-pointer">
                 <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
                   <CardTitle className="text-sm font-medium">
                     {stat.title}
@@ -294,6 +351,8 @@ export default function DashboardPage() {
                   <div className="text-2xl font-bold">
                     {stat.loading ? (
                       <span className="text-muted-foreground">Loading...</span>
+                    ) : stat.unavailable !== undefined ? (
+                      <span className="text-sm font-normal text-muted-foreground">{stat.unavailable || "Not enabled"}</span>
                     ) : (
                       stat.value
                     )}
@@ -319,9 +378,13 @@ export default function DashboardPage() {
             <CardDescription>Current tenant details</CardDescription>
           </CardHeader>
           <CardContent>
-            {tenantLoading ? (
+            {capsLoading || tenantLoading ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : !tenantCap.enabled ? (
+              <div data-testid="dashboard-tenant-not-enabled" className="text-center py-8 text-muted-foreground">
+                Not enabled on this server{tenantCap.reason ? `: ${tenantCap.reason}` : ""}
               </div>
             ) : tenantData?.tenant ? (
               <div className="space-y-4">
@@ -412,10 +475,14 @@ export default function DashboardPage() {
           <CardDescription>Overall platform status and metrics</CardDescription>
         </CardHeader>
         <CardContent>
-          {metricsLoading ? (
+          {capsLoading || metricsLoading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               <span className="ml-2 text-muted-foreground">Loading metrics...</span>
+            </div>
+          ) : !metricsCap.enabled ? (
+            <div data-testid="dashboard-metrics-not-enabled" className="text-center py-8 text-muted-foreground">
+              Not enabled on this server{metricsCap.reason ? `: ${metricsCap.reason}` : ""}
             </div>
           ) : metricsError ? (
             <div className="text-center py-8 text-muted-foreground">

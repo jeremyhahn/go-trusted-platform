@@ -479,14 +479,27 @@ func (a *UnixAdapter) FindMatchingProfile(ctx context.Context, opts FindMatching
 // a quote ever being verified (#403).
 func (a *UnixAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error) {
 	resp, err := a.client.AttestDevice(ctx, &pb.AttestDeviceRequest{
-		DeviceId: opts.DeviceID,
-		Evidence: opts.Evidence,
+		DeviceId:    opts.DeviceID,
+		Evidence:    opts.Evidence,
+		ChallengeId: opts.ChallengeID,
 	})
 	if err != nil {
 		return nil, ErrUnixRPCFailed{Method: "AttestDevice", Err: err}
 	}
 
 	return attestResultFromProto(opts.DeviceID, resp), nil
+}
+
+// IssueAttestationChallenge asks DeviceService over the Unix socket for a
+// single-use attestation challenge for the device (#2136).
+func (a *UnixAdapter) IssueAttestationChallenge(ctx context.Context, opts IssueAttestationChallengeOptions) (*IssueAttestationChallengeResult, error) {
+	resp, err := a.client.IssueAttestationChallenge(ctx, &pb.IssueAttestationChallengeRequest{
+		DeviceId: opts.DeviceID,
+	})
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "IssueAttestationChallenge", Err: err}
+	}
+	return challengeResultFromProto(resp), nil
 }
 
 // RecordAttestCert records the device's attestation certificate via

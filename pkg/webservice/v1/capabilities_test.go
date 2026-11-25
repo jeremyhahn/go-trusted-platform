@@ -61,7 +61,7 @@ func capabilitiesFixture(t *testing.T) *mux.Router {
 		api.HandleFunc("/quicbaas/kv", ok).Methods(http.MethodGet)
 	})
 
-	registerCapabilitiesEndpoint(api, services, stubs, writer, nil)
+	registerCapabilitiesEndpoint(api, services, stubs, writer, nil, nil)
 	return root
 }
 
@@ -182,7 +182,7 @@ func ownershipFixture(t *testing.T) *mux.Router {
 	v1Router.serviceRegistry.requireService(api, "platform", "/platform", nil, func() {
 		t.Fatal("a nil platform backend must not register its routes")
 	})
-	registerCapabilitiesEndpoint(api, v1Router.serviceRegistry, nil, writer, nil)
+	registerCapabilitiesEndpoint(api, v1Router.serviceRegistry, nil, writer, nil, nil)
 	return root
 }
 

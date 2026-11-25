@@ -464,12 +464,10 @@ func TestLegLoadFindingsRejectStoreDependentLoads(t *testing.T) {
 }
 
 // Ruling 675: on a self-hosted runner the integration image goes through the
-// LAN registry the repository secret CI_IMAGE_REGISTRY names, not a 3.4 GB
+// LAN registry the Actions secret CI_IMAGE_REGISTRY names, not a 3.4 GB
 // GitHub artifact each leg downloads over the uplink. The artifact path stays
-// for GitHub-hosted runners and for a runner with the secret unset. The value
-// is a secret, never a variable (public hygiene: a variable is printed in the
-// run log), so the selection masks it, and the image_ref job output carries
-// only the repository path and tag: the runner drops a secret-derived output.
+// for GitHub-hosted runners, which receive no secret value (the read is
+// guarded), and for a runner with the secret unset.
 const (
 	ciImageJob        = "integration-image"
 	ciLegJob          = "integration"
@@ -477,8 +475,8 @@ const (
 	ciRegistryValue   = "${{ runner.environment != 'github-hosted' && secrets.CI_IMAGE_REGISTRY || '' }}"
 	ciImageNoRegistry = "env.IT_REGISTRY == ''"
 	ciImageRegistry   = "env.IT_REGISTRY != ''"
-	ciLegNoRegistry   = "needs.integration-image.outputs.image_ref == ''"
-	ciLegRegistry     = "needs.integration-image.outputs.image_ref != ''"
+	ciLegNoRegistry   = "needs.integration-image.outputs.image_tag == ''"
+	ciLegRegistry     = "needs.integration-image.outputs.image_tag != ''"
 	ciLegNotLeased    = "steps.lease.outputs.leased != 'true'"
 	ciUploadArtifact  = "actions/upload-artifact"
 	ciDownloadArtfct  = "actions/download-artifact"
@@ -486,26 +484,23 @@ const (
 	reasonRegistryUnguarded  = "sets IT_REGISTRY to something other than the CI_IMAGE_REGISTRY secret on a self-hosted runner only"
 	reasonUploadWithRegistry = "uploads the image artifact even when the LAN registry carries the image"
 	reasonDownloadWithRef    = "downloads the image artifact even when the image job pushed it to the LAN registry"
-	reasonNoRegistryPush     = "has no push step to the LAN registry guarded by IT_REGISTRY, or no image_ref output from it"
-	reasonPullNotGuarded     = "pulls from the LAN registry without the lease step first and an image_ref to pull"
+	reasonNoRegistryPush     = "has no push step to the LAN registry guarded by IT_REGISTRY, or no image_tag output from it"
+	reasonPullNotGuarded     = "pulls from the LAN registry without the lease step first and an image_tag to pull"
 	reasonPullNoLayerCompare = "does not compare the pulled image's layer identity with IT_IMAGE_IDENTITY"
-	reasonNoRegistryPull     = "has no step that pulls the image job's image_ref from the LAN registry"
+	reasonNoRegistryPull     = "has no step that pulls the image job's image_tag from the LAN registry"
 	reasonPullRemovesRef     = "removes the registry reference another leg on the same daemon may still re-tag from"
 	reasonPullRetagExits     = "re-tags the registry reference without a fallback, so a failed tag fails the leg"
 	reasonPullExitHoldsLock  = "exits after image_lock without image_unlock, so the other legs on the daemon wait on a held lock"
-	reasonRegistryUnmasked   = "writes IT_REGISTRY to GITHUB_ENV without masking a non-empty value first"
-	reasonRefCarriesRegistry = "puts the registry host in the image_ref job output, which the runner drops as secret-derived"
-	reasonLegNoRegistry      = "pulls without prefixing the image path with the CI_IMAGE_REGISTRY secret"
-	reasonLegNoImagePath     = "pulls without IT_IMAGE_PATH bound to the image job's image_ref output"
+	reasonTagCarriesRegistry = "puts the registry host in the image_tag job output, which GitHub Actions drops as masked"
+	reasonLegNoRegistry      = "pulls without prefixing the image path with the guarded CI_IMAGE_REGISTRY secret"
+	reasonLegNoImageTag      = "pulls without IT_IMAGE_TAG bound to the image job's image_tag output"
 
-	// The selection masks a non-empty registry before GITHUB_ENV carries it,
-	// the push outputs the host-free path, and the leg prefixes the secret.
-	ciRegistryMaskGuard = "if [ -n \"$IT_REGISTRY\" ]; then"
-	ciRegistryMask      = "echo \"::add-mask::$IT_REGISTRY\""
-	ciImageRefOutput    = "echo \"image_ref=$path\""
-	ciLegRegistryRef    = "IT_IMAGE_REF=\"$IT_REGISTRY/$IT_IMAGE_PATH\""
-	ciLegRegistryValue  = "${{ secrets.CI_IMAGE_REGISTRY }}"
-	ciLegImagePathValue = "${{ needs.integration-image.outputs.image_ref }}"
+	// The push outputs the bare tag, and the leg rebuilds the reference from
+	// the guarded secret.
+	ciImageTagOutput   = "echo \"image_tag=${IT_LEASE_ID#sha256:}\""
+	ciLegRegistryRef   = "IT_IMAGE_REF=\"$IT_REGISTRY/go-trusted-platform/it-image:$IT_IMAGE_TAG\""
+	ciLegRegistryValue = "${{ runner.environment != 'github-hosted' && secrets.CI_IMAGE_REGISTRY || '' }}"
+	ciLegImageTagValue = "${{ needs.integration-image.outputs.image_tag }}"
 
 	// ciPullRemoveRef is the removal of the shared registry reference; a
 	// leg that already pulled it and waits on the image lock re-tags from it.
@@ -553,6 +548,86 @@ func ciScalar(node *yaml.Node, keys ...string) string {
 	return node.Value
 }
 
+// TestCIImageJobOutputsHoldNoRegistry holds Codex P1 on #2311: GitHub Actions
+// drops a job output that holds a masked value, and the LAN registry address
+// is masked, so the image job exports only the image tag and each leg
+// rebuilds the registry reference from the guarded Actions secret
+// CI_IMAGE_REGISTRY after its own mask step.
+func TestCIImageJobOutputsHoldNoRegistry(t *testing.T) {
+	wf := loadCIWorkflow(t, repoRoot(t), ciWorkflowFile)
+
+	imageJob, imageSteps := ciRawJob(t, wf, ciImageJob)
+	require.Nil(t, mappingValue(mappingValue(imageJob, "outputs"), "image_ref"),
+		"job %s exports image_ref, a value holding the masked registry that GitHub Actions drops", ciImageJob)
+	pushed := false
+	for _, step := range imageSteps {
+		if step.ID != "push" {
+			continue
+		}
+		pushed = true
+		for _, line := range strings.Split(step.Run, "\n") {
+			if !strings.Contains(line, "GITHUB_OUTPUT") {
+				continue
+			}
+			require.NotContains(t, line, "image_ref=", "the push step writes image_ref to GITHUB_OUTPUT")
+			require.NotContains(t, line, "$IT_REGISTRY", "the push step writes the registry to GITHUB_OUTPUT")
+			require.NotContains(t, line, "${IT_REGISTRY", "the push step writes the registry to GITHUB_OUTPUT")
+			require.NotContains(t, line, "$ref", "the push step writes the registry reference to GITHUB_OUTPUT")
+			require.NotContains(t, line, "${ref", "the push step writes the registry reference to GITHUB_OUTPUT")
+		}
+	}
+	require.True(t, pushed, "job %s has no step with id push", ciImageJob)
+
+	_, legSteps := ciRawJob(t, wf, ciLegJob)
+	mask, pull := -1, -1
+	for i, step := range legSteps {
+		switch step.Name {
+		case "Mask the LAN addresses":
+			mask = i
+			require.Equal(t, "scripts/ci-mask-lan.sh", strings.TrimSpace(step.Run),
+				"the mask step of job %s does not run scripts/ci-mask-lan.sh", ciLegJob)
+			require.Equal(t, ciRegistryValue, step.Env["CI_IMAGE_REGISTRY"],
+				"the mask step of job %s does not read the guarded secret CI_IMAGE_REGISTRY", ciLegJob)
+			require.Empty(t, step.Env["VARS_CI_IMAGE_REGISTRY"],
+				"the mask step of job %s still reads the registry from vars", ciLegJob)
+		case "Pull the integration image from the LAN registry":
+			pull = i
+			require.Equal(t, ciRegistryValue, step.Env["IT_REGISTRY"],
+				"the pull step does not take IT_REGISTRY from the guarded secret CI_IMAGE_REGISTRY")
+			require.Equal(t, "${{ needs.integration-image.outputs.image_tag }}", step.Env["IT_IMAGE_TAG"],
+				"the pull step does not take IT_IMAGE_TAG from the image job's image_tag")
+		}
+	}
+	require.NotEqual(t, -1, mask, "job %s has no step \"Mask the LAN addresses\"", ciLegJob)
+	require.NotEqual(t, -1, pull, "job %s has no step \"Pull the integration image from the LAN registry\"", ciLegJob)
+	require.Less(t, mask, pull, "job %s masks the LAN registry after its pull step", ciLegJob)
+}
+
+// #2311 Codex P1 (ci-template v1.53): Actions prints a step's env in its log
+// header before the run body, so a registry a step reads from `vars` is in
+// the log in plaintext before any add-mask runs. ci.yml reads the LAN
+// registry only from the guarded Actions secret CI_IMAGE_REGISTRY, which the
+// runner masks itself, and no step masks a `vars` value in a VARS_* loop.
+func TestCIWorkflowReadsNoRegistryVariable(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), ciWorkflowFile))
+	require.NoError(t, err)
+	varsRegistry := regexp.MustCompile(`vars\.[A-Za-z0-9_]*REGISTRY\b`)
+	for i, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		require.False(t, varsRegistry.MatchString(line),
+			"%s:%d reads a registry from vars, which Actions prints in the step's log header: %s",
+			ciWorkflowFile, i+1, strings.TrimSpace(line))
+		// The forge credential masks loop over GIT_CONFIG_* with
+		// "::add-mask::$val" too and stay; the loop this rejects is the one
+		// over VARS_* copies of repository variables.
+		require.NotContains(t, line, "VARS_",
+			"%s:%d masks a vars value in a loop; read the registry from the guarded secret instead",
+			ciWorkflowFile, i+1)
+	}
+}
+
 func registryPathFindings(t *testing.T, wf ciWorkflow) []error {
 	var findings []error
 	finding := func(job string, line int, reason string) {
@@ -572,30 +647,16 @@ func registryPathFindings(t *testing.T, wf ciWorkflow) []error {
 	if !selected {
 		finding(ciImageJob, imageJob.Line, reasonRegistryUnguarded)
 	}
-	// The selection masks a non-empty value before GITHUB_ENV carries it to
-	// the later steps.
-	for _, step := range imageSteps {
-		envAt := strings.Index(step.Run, "$GITHUB_ENV")
-		if envAt < 0 || !strings.Contains(step.Run, ciRegistryEnv+"=$"+ciRegistryEnv) {
-			continue
-		}
-		maskAt := strings.Index(step.Run, ciRegistryMask)
-		if !strings.Contains(step.Run, ciRegistryMaskGuard) || maskAt < 0 || maskAt > envAt {
-			finding(ciImageJob, step.Line, reasonRegistryUnmasked)
-		}
-	}
 	for _, step := range imageSteps {
 		if strings.Contains(step.Uses, ciUploadArtifact) && !strings.Contains(step.If, ciImageNoRegistry) {
 			finding(ciImageJob, step.Line, reasonUploadWithRegistry)
 		}
-		if !strings.Contains(step.Run, "docker push") || !strings.Contains(step.If, ciImageRegistry) {
-			continue
-		}
-		if step.ID != "" && ciScalar(imageJob, "outputs", "image_ref") == "${{ steps."+step.ID+".outputs.image_ref }}" {
+		if strings.Contains(step.Run, "docker push") && strings.Contains(step.If, ciImageRegistry) && step.ID != "" &&
+			ciScalar(imageJob, "outputs", "image_tag") == "${{ steps."+step.ID+".outputs.image_tag }}" {
 			pushed = true
-		}
-		if !strings.Contains(step.Run, ciImageRefOutput) {
-			finding(ciImageJob, step.Line, reasonRefCarriesRegistry)
+			if !strings.Contains(step.Run, ciImageTagOutput) {
+				finding(ciImageJob, step.Line, reasonTagCarriesRegistry)
+			}
 		}
 	}
 	if !pushed {
@@ -624,8 +685,8 @@ func registryPathFindings(t *testing.T, wf ciWorkflow) []error {
 		if step.Env[ciRegistryEnv] != ciLegRegistryValue || !strings.Contains(step.Run, ciLegRegistryRef) {
 			finding(ciLegJob, step.Line, reasonLegNoRegistry)
 		}
-		if step.Env["IT_IMAGE_PATH"] != ciLegImagePathValue {
-			finding(ciLegJob, step.Line, reasonLegNoImagePath)
+		if step.Env["IT_IMAGE_TAG"] != ciLegImageTagValue {
+			finding(ciLegJob, step.Line, reasonLegNoImageTag)
 		}
 		if strings.Contains(step.Run, ciPullRemoveRef) {
 			finding(ciLegJob, step.Line, reasonPullRemovesRef)
@@ -675,34 +736,30 @@ func TestRegistryPathFindingsRejectArtifactsBesideTheRegistry(t *testing.T) {
 			reason: reasonUploadWithRegistry,
 		},
 		{
-			name:   "registry on GitHub-hosted runners too",
-			old:    ciRegistryEnv + ": " + ciRegistryValue,
-			new:    ciRegistryEnv + ": ${{ secrets.CI_IMAGE_REGISTRY }}",
+			name: "registry on GitHub-hosted runners too",
+			// The image job's select step; the pull step reads the same
+			// guarded value and is not this mutation's target.
+			old:    ciRegistryEnv + ": " + ciRegistryValue + "\n        run: echo \"" + ciRegistryEnv + "=$" + ciRegistryEnv,
+			new:    ciRegistryEnv + ": ${{ secrets.CI_IMAGE_REGISTRY }}\n        run: echo \"" + ciRegistryEnv + "=$" + ciRegistryEnv,
 			reason: reasonRegistryUnguarded,
 		},
 		{
-			name:   "selection without the mask",
-			old:    ciRegistryMask + "\n",
-			new:    "",
-			reason: reasonRegistryUnmasked,
-		},
-		{
-			name:   "image_ref carries the registry",
-			old:    ciImageRefOutput,
-			new:    `echo "image_ref=$ref"`,
-			reason: reasonRefCarriesRegistry,
+			name:   "image_tag carries the registry",
+			old:    ciImageTagOutput,
+			new:    `echo "image_tag=$ref"`,
+			reason: reasonTagCarriesRegistry,
 		},
 		{
 			name:   "leg pulls the bare path",
 			old:    ciLegRegistryRef,
-			new:    `IT_IMAGE_REF="$IT_IMAGE_PATH"`,
+			new:    `IT_IMAGE_REF="go-trusted-platform/it-image:$IT_IMAGE_TAG"`,
 			reason: reasonLegNoRegistry,
 		},
 		{
-			name:   "leg pull without the image path binding",
-			old:    "IT_IMAGE_PATH: " + ciLegImagePathValue + "\n          IT_REGISTRY: " + ciLegRegistryValue,
+			name:   "leg pull without the image tag binding",
+			old:    "IT_REGISTRY: " + ciLegRegistryValue + "\n          IT_IMAGE_TAG: " + ciLegImageTagValue,
 			new:    "IT_REGISTRY: " + ciLegRegistryValue,
-			reason: reasonLegNoImagePath,
+			reason: reasonLegNoImageTag,
 		},
 		{
 			name:   "GitHub download beside the registry",

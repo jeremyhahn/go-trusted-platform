@@ -371,6 +371,21 @@ func (e ErrAttestFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrAttestChallengeFailed is returned when the server cannot issue an
+// attestation challenge for a device.
+type ErrAttestChallengeFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e ErrAttestChallengeFailed) Error() string {
+	return fmt.Sprintf("device attest-challenge: failed to issue a challenge for device %d: %v", e.ID, e.Cause)
+}
+
+func (e ErrAttestChallengeFailed) Unwrap() error {
+	return e.Cause
+}
+
 // ErrProfileConfigIdentityRequired is returned when find-config is given no
 // device identity to look up.
 type ErrProfileConfigIdentityRequired struct{}
