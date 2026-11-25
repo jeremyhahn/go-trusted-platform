@@ -1246,7 +1246,10 @@ var closeStopGuest = func(vm *qemu.VM) (bool, error) {
 
 // Close closes the orchestrator and releases resources
 func (o *QEMUOrchestrator) Close() error {
-	reapReceivers(o)
+	// Adopted (migrated-in) guests run under the receiver registry's
+	// lifetime context: stop every guest gracefully first, then reap the
+	// pending receivers and cancel that context.
+	defer reapReceivers(o)
 
 	o.mu.Lock()
 	defer o.mu.Unlock()

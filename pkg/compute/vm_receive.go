@@ -196,6 +196,9 @@ type incomingReceiver interface {
 
 	// Wait blocks until the receiving QEMU exits.
 	Wait() error
+
+	// PID returns the receiving QEMU's process ID, 0 when it has none.
+	PID() int
 }
 
 // incomingReceiverParams carries everything the launcher needs to stand up a
@@ -429,6 +432,7 @@ func (o *QEMUOrchestrator) adoptReceived(tr *trackedReceiver) (string, error) {
 		Name:      tr.spec.VMName,
 		Type:      ComputeTypeVM,
 		State:     StateRunning,
+		PID:       tr.recv.PID(),
 		Config:    cfg,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -479,6 +483,8 @@ type qemuIncomingReceiver struct {
 }
 
 func (r *qemuIncomingReceiver) VM() *qemu.VM { return r.vm }
+
+func (r *qemuIncomingReceiver) PID() int { return r.vm.GetPID() }
 
 func (r *qemuIncomingReceiver) WorkDir() string { return r.workDir }
 
