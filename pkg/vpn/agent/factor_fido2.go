@@ -32,11 +32,13 @@ type FIDO2SignerOptions struct {
 	// CredentialID is the credential to assert with, unpadded base64url.
 	// Empty lets the authenticator pick a discoverable credential for RPID.
 	CredentialID string
+	// Origin is the WebAuthn origin the clientDataJSON names; empty selects "https://" + RPID.
+	Origin string
 }
 
 // fido2Assertor is the SDK's FIDO2 handler as the signer uses it.
 type fido2Assertor interface {
-	AssertWithOptions(ctx context.Context, optionsJSON []byte) ([]byte, error)
+	AssertWithOptionsAndOrigin(ctx context.Context, optionsJSON []byte, origin string) ([]byte, error)
 	Close() error
 }
 
@@ -46,6 +48,7 @@ type fido2Assertor interface {
 // presence (a touch), not user verification, so no PIN is sent.
 type FIDO2Signer struct {
 	rpID         string
+	origin       string
 	credentialID []byte
 	open         func() (fido2Assertor, error)
 }
@@ -77,7 +80,11 @@ func newFIDO2Signer(opts FIDO2SignerOptions, devices fido2.HIDDeviceEnumerator) 
 		}
 		return handler, nil
 	}
-	return &FIDO2Signer{rpID: opts.RPID, credentialID: credentialID, open: open}, nil
+	origin := opts.Origin
+	if origin == "" {
+		origin = "https://" + opts.RPID
+	}
+	return &FIDO2Signer{rpID: opts.RPID, origin: origin, credentialID: credentialID, open: open}, nil
 }
 
 // fido2RequestOptions are the WebAuthn PublicKeyCredentialRequestOptions the
@@ -123,7 +130,7 @@ func (s *FIDO2Signer) Sign(ctx context.Context, kind gwvpn.PersonFactorKind, non
 			err = errors.Join(err, &ErrAuthenticator{Factor: kind, Cause: closeErr})
 		}
 	}()
-	assertion, err := authenticator.AssertWithOptions(ctx, optionsJSON)
+	assertion, err := authenticator.AssertWithOptionsAndOrigin(ctx, optionsJSON, s.origin)
 	if err != nil {
 		return nil, &ErrAuthenticator{Factor: kind, Cause: err}
 	}

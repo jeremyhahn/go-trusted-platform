@@ -37,9 +37,11 @@ type fakeAuthenticator struct {
 	assertErr error
 	closeErr  error
 	closed    bool
+	origin    string
 }
 
-func (a *fakeAuthenticator) AssertWithOptions(_ context.Context, optionsJSON []byte) ([]byte, error) {
+func (a *fakeAuthenticator) AssertWithOptionsAndOrigin(_ context.Context, optionsJSON []byte, origin string) ([]byte, error) {
+	a.origin = origin
 	if err := json.Unmarshal(optionsJSON, &a.options); err != nil {
 		return nil, err
 	}
