@@ -5,6 +5,7 @@ package device
 import (
 	"context"
 	"strconv"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -75,6 +76,10 @@ type DeviceCommands interface {
 
 	// AttestDevice performs device attestation
 	AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error)
+
+	// IssueAttestationChallenge asks the control plane for a single-use
+	// attestation challenge for the device (#2136).
+	IssueAttestationChallenge(ctx context.Context, opts IssueAttestationChallengeOptions) (*IssueAttestationChallengeResult, error)
 
 	// RecordAttestCert records the device's attestation certificate on its
 	// platform record without re-enrolling it (fail-closed on the server).
@@ -369,6 +374,22 @@ type AttestDeviceOptions struct {
 	TenantID string `json:"tenant_id"`
 	DeviceID string `json:"device_id"`
 	Evidence []byte `json:"evidence"`
+	// ChallengeID names a server-issued challenge whose nonce the evidence
+	// carries (#2136); empty sends the evidence without a challenge.
+	ChallengeID string `json:"challenge_id,omitempty"`
+}
+
+// IssueAttestationChallengeOptions identifies the device a challenge is for.
+type IssueAttestationChallengeOptions struct {
+	TenantID string `json:"tenant_id"`
+	DeviceID string `json:"device_id"`
+}
+
+// IssueAttestationChallengeResult is a single-use attestation challenge.
+type IssueAttestationChallengeResult struct {
+	ChallengeID string    `json:"challenge_id"`
+	Nonce       []byte    `json:"nonce"`
+	ExpiresAt   time.Time `json:"expires_at"`
 }
 
 // RecordAttestCertOptions names the device whose attestation certificate is

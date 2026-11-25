@@ -64,12 +64,13 @@ func TestVPNMultiProtocol(t *testing.T) {
 	}
 }
 
-// runVPNScenario exercises the full VPN surface over one transport. Each
-// transport works in its own tenant so the runs cannot see each other.
+// runVPNScenario exercises the full VPN surface over one transport. Every
+// transport works in the harness tenant (tenant-bound transports refuse any
+// other) and the runs stay apart by their unique device IDs.
 func runVPNScenario(t *testing.T, ctx context.Context, cmd VPNCommands) {
 	t.Helper()
 
-	tenantID := helpers.GenerateUniqueID("vpn-tenant-" + cmd.Name())
+	tenantID := helpers.HarnessTenantID
 	deviceID := helpers.GenerateUniqueID("vpn-device")
 
 	cctx, cancel := ShortContext(ctx)
@@ -131,8 +132,14 @@ func runConfiguredScenario(t *testing.T, ctx context.Context, cmd VPNCommands, t
 		if err != nil {
 			t.Fatalf("%s ListPeers: %v", cmd.Name(), err)
 		}
-		if len(peers) != 1 || peers[0].GetDeviceId() != deviceID {
-			t.Fatalf("%s: tenant %s lists %v, want only %s", cmd.Name(), tenantID, peers, deviceID)
+		listed := 0
+		for _, p := range peers {
+			if p.GetDeviceId() == deviceID {
+				listed++
+			}
+		}
+		if listed != 1 {
+			t.Fatalf("%s: tenant %s lists %v, want %s exactly once", cmd.Name(), tenantID, peers, deviceID)
 		}
 	})
 
@@ -159,8 +166,14 @@ func runConfiguredScenario(t *testing.T, ctx context.Context, cmd VPNCommands, t
 		if err != nil {
 			t.Fatalf("%s ListPosturePolicies: %v", cmd.Name(), err)
 		}
-		if len(policies) != 1 || policies[0].GetName() != testPolicyName {
-			t.Fatalf("%s: tenant %s lists policies %v, want only %s", cmd.Name(), tenantID, policies, testPolicyName)
+		listedPolicies := 0
+		for _, p := range policies {
+			if p.GetName() == testPolicyName {
+				listedPolicies++
+			}
+		}
+		if listedPolicies != 1 {
+			t.Fatalf("%s: tenant %s lists policies %v, want %s exactly once", cmd.Name(), tenantID, policies, testPolicyName)
 		}
 
 		if err := cmd.DeletePosturePolicy(cctx, tenantID, testPolicyName); err != nil {
@@ -198,8 +211,10 @@ func runConfiguredScenario(t *testing.T, ctx context.Context, cmd VPNCommands, t
 		if err != nil {
 			t.Fatalf("%s ListPeers after revoke: %v", cmd.Name(), err)
 		}
-		if len(peers) != 0 {
-			t.Fatalf("%s: tenant %s still lists %v after revoke", cmd.Name(), tenantID, peers)
+		for _, p := range peers {
+			if p.GetDeviceId() == deviceID {
+				t.Fatalf("%s: tenant %s still lists %s after revoke: %v", cmd.Name(), tenantID, deviceID, peers)
+			}
 		}
 		if err := cmd.RevokePeer(cctx, tenantID, deviceID); !IsNotFound(err) {
 			t.Fatalf("%s: second RevokePeer returned %v, want not found", cmd.Name(), err)

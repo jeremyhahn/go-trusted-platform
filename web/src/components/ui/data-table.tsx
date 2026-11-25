@@ -49,6 +49,10 @@ export interface DataTableProps<TData, TValue> {
     label: string
     onClick: (rows: TData[]) => void
     variant?: "default" | "destructive"
+    /** Disables the action, e.g. when the server does not offer its op. */
+    disabled?: boolean
+    /** The action's tooltip, e.g. the reason it is disabled. */
+    title?: string
   }[]
   loading?: boolean
   emptyState?: React.ReactNode
@@ -219,6 +223,8 @@ export function DataTable<TData, TValue>({
                   key={index}
                   variant={action.variant || "default"}
                   size="sm"
+                  disabled={action.disabled}
+                  title={action.title}
                   onClick={() => action.onClick(selectedRows)}
                 >
                   {action.label} ({selectedRows.length})

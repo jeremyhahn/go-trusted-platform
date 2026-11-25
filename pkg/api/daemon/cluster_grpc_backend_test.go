@@ -336,7 +336,7 @@ func TestClusterGRPCBackend_GetStatus(t *testing.T) {
 		fake := &fakeClusterServicer{statusInfo: stockStatus(), nodes: stockNodes(), nodeID: 2}
 		resp, err := newTestClusterBackend(fake).GetStatus(ctx, &grpcapi.ClusterGetStatusRequest{})
 		require.NoError(t, err)
-		assert.Zero(t, fake.nodeCalls)
+		assert.Equal(t, 1, fake.calls().nodeCalls)
 		assert.Nil(t, resp.Nodes)
 		assert.Equal(t, "2", resp.LocalNode.ID)
 		assert.Equal(t, int64(1700000000), resp.Timestamp)
@@ -374,10 +374,81 @@ func TestClusterGRPCBackend_GetStatus(t *testing.T) {
 		assert.ErrorIs(t, err, nodesErr)
 	})
 
+	t.Run("default request reports the local node from membership", func(t *testing.T) {
+		fake := &fakeClusterServicer{statusInfo: stockStatus(), nodes: unknownNodes(), nodeID: 2}
+		resp, err := newTestClusterBackend(fake).GetStatus(ctx, &grpcapi.ClusterGetStatusRequest{})
+		require.NoError(t, err)
+		assert.Nil(t, resp.Nodes)
+		require.NotNil(t, resp.LocalNode)
+		wantHost, _ := splitClusterAddress(stockNodes().Nodes[1].Address)
+		assert.Equal(t, "2", resp.LocalNode.ID)
+		assert.Equal(t, grpcapi.NodeStateUnspecified, resp.LocalNode.State)
+		assert.Equal(t, wantHost, resp.LocalNode.Address)
+	})
+
+	t.Run("both request forms report the same local node", func(t *testing.T) {
+		fake := &fakeClusterServicer{statusInfo: stockStatus(), nodes: unknownNodes(), nodeID: 2}
+		backend := newTestClusterBackend(fake)
+		plain, err := backend.GetStatus(ctx, &grpcapi.ClusterGetStatusRequest{})
+		require.NoError(t, err)
+		full, err := backend.GetStatus(ctx, &grpcapi.ClusterGetStatusRequest{IncludeNodes: true})
+		require.NoError(t, err)
+		require.NotNil(t, plain.LocalNode)
+		require.NotNil(t, full.LocalNode)
+		assert.Equal(t, full.LocalNode.ID, plain.LocalNode.ID)
+		assert.Equal(t, full.LocalNode.Address, plain.LocalNode.Address)
+		assert.Equal(t, full.LocalNode.Role, plain.LocalNode.Role)
+		assert.Equal(t, full.LocalNode.State, plain.LocalNode.State)
+	})
+
+	t.Run("standalone topology", func(t *testing.T) {
+		status := stockStatus()
+		status.State = "uninitialized"
+		fake := &fakeClusterServicer{statusInfo: status, nodes: &ClusterNodesInfo{}, nodeID: 1}
+		for _, req := range []*grpcapi.ClusterGetStatusRequest{{}, {IncludeNodes: true}} {
+			resp, err := newTestClusterBackend(fake).GetStatus(ctx, req)
+			require.NoError(t, err)
+			require.NotNil(t, resp.LocalNode)
+			assert.Equal(t, "1", resp.LocalNode.ID, "include_nodes=%v", req.IncludeNodes)
+			assert.Equal(t, grpcapi.NodeStateUnspecified, resp.LocalNode.State, "include_nodes=%v", req.IncludeNodes)
+			assert.Equal(t, grpcapi.NodeRoleFollower, resp.LocalNode.Role, "include_nodes=%v", req.IncludeNodes)
+		}
+	})
+
+	t.Run("nil membership", func(t *testing.T) {
+		fake := &fakeClusterServicer{statusInfo: stockStatus(), nodeID: 2}
+		resp, err := newTestClusterBackend(fake).GetStatus(ctx, &grpcapi.ClusterGetStatusRequest{})
+		require.NoError(t, err)
+		require.NotNil(t, resp.LocalNode)
+		assert.Equal(t, grpcapi.NodeStateUnspecified, resp.LocalNode.State)
+	})
+
+	t.Run("nodes error on the default request", func(t *testing.T) {
+		nodesErr := errors.New("membership unreadable")
+		fake := &fakeClusterServicer{statusInfo: stockStatus(), nodesErr: nodesErr}
+		_, err := newTestClusterBackend(fake).GetStatus(ctx, &grpcapi.ClusterGetStatusRequest{})
+		assert.ErrorIs(t, err, nodesErr)
+	})
+
 	t.Run("no servicer", func(t *testing.T) {
 		_, err := newTestClusterBackend(nil).GetStatus(ctx, &grpcapi.ClusterGetStatusRequest{})
 		assert.ErrorAs(t, err, new(grpcapi.ErrClusterServiceUnavailable))
 	})
+}
+
+// unknownNodes is stockNodes as the embedded backend reports it: every
+// member's state "unknown", since the SDK surface carries no per-node state.
+func unknownNodes() *ClusterNodesInfo {
+	nodes := stockNodes()
+	for i := range nodes.Nodes {
+		nodes.Nodes[i].State = "unknown"
+	}
+	if nodes.Leader != nil {
+		leader := *nodes.Leader
+		leader.State = "unknown"
+		nodes.Leader = &leader
+	}
+	return nodes
 }
 
 // threeNodes is a leader and two followers, one of them suspect.

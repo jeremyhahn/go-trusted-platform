@@ -3,10 +3,12 @@
 import * as React from 'react';
 import { useApi, useOverlay } from 'trusted-platform-sdk';
 import type {
+  GetOverlayStatusResponse,
   ListRemoteMACsResponse,
   ListTunnelsResponse,
   ListVNIsResponse,
   ListVTEPsResponse,
+  OverlayStatus,
   TunnelInfo,
   VTEPInfo,
 } from 'trusted-platform-sdk';
@@ -17,7 +19,8 @@ function failure(message: string | undefined): Error {
 }
 
 /**
- * Overlay data for the VTEPs page (#1722): VTEPs, VNIs and tunnels, plus
+ * Overlay data for the VTEPs page (#1722, #2059): the overlay status, VTEPs,
+ * VNIs, tunnels and remote MACs, plus
  * the per-item reads and the destructive actions the page offers.
  */
 export function useOverlayVteps() {
@@ -27,6 +30,7 @@ export function useOverlayVteps() {
   const vnis = useApi<ListVNIsResponse>(() => overlay.listVNIs(), []);
   const tunnels = useApi<ListTunnelsResponse>(() => overlay.listTunnels(), []);
   const macs = useApi<ListRemoteMACsResponse>(() => overlay.listRemoteMACs(), []);
+  const status = useApi<GetOverlayStatusResponse>(() => overlay.getStatus(), []);
 
   const getVTEP = React.useCallback(
     async (nodeId: string): Promise<VTEPInfo | undefined> => {
@@ -50,16 +54,19 @@ export function useOverlayVteps() {
   const refetchVnis = vnis.refetch;
   const refetchTunnels = tunnels.refetch;
   const refetchMacs = macs.refetch;
+  const refetchStatus = status.refetch;
 
   const deleteVNI = React.useCallback(
     async (vni: number) => {
       const res = await overlay.deleteVNI(vni);
       if (!res.success) throw failure(res.error?.message);
-      // The server removes every remote MAC of a deleted VNI as well.
+      // The server removes every tunnel and remote MAC of a deleted VNI as well.
       await refetchVnis();
+      await refetchTunnels();
       await refetchMacs();
+      await refetchStatus();
     },
-    [overlay, refetchVnis, refetchMacs]
+    [overlay, refetchVnis, refetchTunnels, refetchMacs, refetchStatus]
   );
 
   const forgetMAC = React.useCallback(
@@ -67,22 +74,28 @@ export function useOverlayVteps() {
       const res = await overlay.forgetMAC({ mac, vni });
       if (!res.success) throw failure(res.error?.message);
       await refetchMacs();
+      await refetchStatus();
     },
-    [overlay, refetchMacs]
+    [overlay, refetchMacs, refetchStatus]
   );
 
   const refetchAll = React.useCallback(() => {
+    void refetchStatus();
     void refetchVteps();
     void refetchVnis();
     void refetchTunnels();
     void refetchMacs();
-  }, [refetchVteps, refetchVnis, refetchTunnels, refetchMacs]);
+  }, [refetchStatus, refetchVteps, refetchVnis, refetchTunnels, refetchMacs]);
 
   return {
+    status: status.data?.status as OverlayStatus | undefined,
+    statusError: status.error,
     vteps: vteps.data?.vteps ?? [],
     vnis: vnis.data?.vnis ?? [],
     tunnels: tunnels.data?.tunnels ?? [],
     macs: macs.data?.macs ?? [],
+    // The status is left out on purpose: a node without an overlay
+    // controller still shows the tables.
     isLoading: vteps.isLoading || vnis.isLoading || tunnels.isLoading || macs.isLoading,
     vtepsError: vteps.error,
     vnisError: vnis.error,

@@ -20,6 +20,8 @@ import {
 } from "@/components/ui/table";
 import { Download, RefreshCw, ShieldX, Loader2 } from "lucide-react";
 import { useApi, useCA, useToast } from "@/hooks";
+import { useCapabilities } from "@/hooks/use-capabilities";
+import { Gated } from "@/components/features/capabilities/gated";
 import { errorMessage } from "@/utils/errors";
 
 /**
@@ -63,13 +65,16 @@ interface CRLResponseWire {
 export default function CRLPage() {
   const ca = useCA();
   const { toast } = useToast();
+  // #2033 item 5: read the CRL only when the server offers it.
+  const { loading: capsLoading, capability } = useCapabilities();
+  const crlCap = capability("GET /api/v1/ca/crl");
 
   const {
     data: crlResponse,
     isLoading,
     error,
     refetch,
-  } = useApi(() => ca.getCRL(), []);
+  } = useApi(() => ca.getCRL(), [], { enabled: !capsLoading && crlCap.enabled });
 
   // Tolerate both shapes:
   //   - useApi unwrapping payload: { crl: {...}, timestamp }
@@ -149,22 +154,28 @@ export default function CRLPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => refetch()} disabled={isLoading}>
-            {isLoading ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="mr-2 h-4 w-4" />
-            )}
-            Refresh
-          </Button>
-          <Button variant="outline" onClick={() => handleDownload("pem")} disabled={!crl?.data}>
-            <Download className="mr-2 h-4 w-4" />
-            Download PEM
-          </Button>
-          <Button onClick={() => handleDownload("der")} disabled={!crl?.data}>
-            <Download className="mr-2 h-4 w-4" />
-            Download DER
-          </Button>
+          <Gated op="GET /api/v1/ca/crl">
+            <Button variant="outline" onClick={() => refetch()} disabled={isLoading}>
+              {isLoading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-2 h-4 w-4" />
+              )}
+              Refresh
+            </Button>
+          </Gated>
+          <Gated op="GET /api/v1/ca/crl">
+            <Button variant="outline" onClick={() => handleDownload("pem")} disabled={!crl?.data}>
+              <Download className="mr-2 h-4 w-4" />
+              Download PEM
+            </Button>
+          </Gated>
+          <Gated op="GET /api/v1/ca/crl">
+            <Button onClick={() => handleDownload("der")} disabled={!crl?.data}>
+              <Download className="mr-2 h-4 w-4" />
+              Download DER
+            </Button>
+          </Gated>
         </div>
       </div>
 
@@ -183,11 +194,16 @@ export default function CRLPage() {
           </div>
         </CardHeader>
         <CardContent>
-          {error ? (
+          {!capsLoading && !crlCap.enabled ? (
+            <div data-testid="ca-crl-not-enabled" className="rounded-md border border-dashed p-8 text-center text-sm">
+              <div className="font-medium">The CRL is not enabled on this server</div>
+              <p className="mt-1 text-muted-foreground">{crlCap.reason}</p>
+            </div>
+          ) : error ? (
             <div className="rounded-md border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
               Failed to load CRL: {error.message}
             </div>
-          ) : isLoading && !crl ? (
+          ) : (capsLoading || isLoading) && !crl ? (
             <div className="flex items-center justify-center py-12 text-muted-foreground">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               Loading CRL...

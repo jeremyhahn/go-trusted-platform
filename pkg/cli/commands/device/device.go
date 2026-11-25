@@ -84,6 +84,7 @@ Examples:
 	cmd.AddCommand(newProfileCommand(getFlags))
 	cmd.AddCommand(newTemplateCommand(getFlags))
 	cmd.AddCommand(newAttestCommand(getFlags))
+	cmd.AddCommand(newAttestChallengeCommand(getFlags))
 	cmd.AddCommand(newAttestCertCommand(getFlags))
 	cmd.AddCommand(newDisableCommand(getFlags))
 	cmd.AddCommand(newEnableCommand(getFlags))
