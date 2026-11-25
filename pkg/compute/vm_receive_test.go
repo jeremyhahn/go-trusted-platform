@@ -39,8 +39,11 @@ type fakeIncomingReceiver struct {
 	abortErr  error
 	workDir   string
 	diskPath  string
+	pid       int
 	exited    chan struct{}
 }
+
+func (f *fakeIncomingReceiver) PID() int { return f.pid }
 
 // newFakeIncomingReceiver returns a fake whose Wait returns when the test ends.
 func newFakeIncomingReceiver(t *testing.T, port int) *fakeIncomingReceiver {
@@ -207,6 +210,46 @@ func TestQEMUOrchestrator_CloseAbortsPreparedReceivers(t *testing.T) {
 	require.NotNil(t, gotParams)
 	assert.Error(t, gotParams.lifetime.Err(), "Close cancels the receiver's lifetime")
 	require.ErrorIs(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true), ErrReceiverNotFound)
+}
+
+func TestQEMUOrchestrator_CloseStopsAdoptedGuestsBeforeCancellingTheirLifetime(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	orch.config.MigrationTLS = &fakeServerTLS{dir: t.TempDir()}
+	recv := newFakeIncomingReceiver(t, 5002)
+	recv.workDir = t.TempDir()
+	recv.diskPath = recv.workDir + "/disk.qcow2"
+	var gotParams *incomingReceiverParams
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		gotParams = p
+		return recv, nil
+	})
+	handle, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		Arch:       orch.config.Arch,
+		InstanceID: "vm1",
+		VMName:     "guest",
+		Mode:       MigrateModeCold,
+		Config:     &InstanceConfig{Memory: 1024, CPUs: 1},
+	})
+	require.NoError(t, err)
+	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true))
+	require.NotNil(t, gotParams)
+
+	var order []string
+	saved := closeStopGuest
+	t.Cleanup(func() { closeStopGuest = saved })
+	closeStopGuest = func(vm *qemu.VM) (bool, error) {
+		if gotParams.lifetime.Err() != nil {
+			order = append(order, "lifetime-cancelled")
+		}
+		order = append(order, "stop")
+		return true, nil
+	}
+
+	orch.Close()
+
+	assert.Equal(t, []string{"stop"}, order,
+		"Close stops the adopted guest gracefully while its process lifetime is still live")
+	assert.Error(t, gotParams.lifetime.Err(), "Close cancels the lifetime after the guest stopped")
 }
 
 func TestReceiveIncoming_AbandonedReceiverExpires(t *testing.T) {
@@ -519,6 +562,7 @@ func commitReceivedGuest(t *testing.T, orch *QEMUOrchestrator, spec MigrationSpe
 	recv := newFakeIncomingReceiver(t, 5001)
 	recv.workDir = t.TempDir()
 	recv.diskPath = recv.workDir + "/disk.qcow2"
+	recv.pid = os.Getpid()
 	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
 		return recv, nil
 	})
@@ -548,6 +592,12 @@ func TestFinalizeIncoming_CommitRegistersTheReceivedGuest(t *testing.T) {
 	require.NotNil(t, inst.Config)
 	assert.Equal(t, recv.workDir, inst.Config.WorkDir)
 	assert.Equal(t, recv.diskPath, inst.Config.DiskPath)
+	assert.Equal(t, recv.pid, inst.PID, "the adopted guest carries the receiving QEMU's PID")
+
+	_, err = orch.GetVMMetrics(ctx, "vm1")
+	if err != nil {
+		assert.NotContains(t, err.Error(), "VM has no process ID")
+	}
 
 	state, err := orch.GetState(ctx, "vm1")
 	require.NoError(t, err)

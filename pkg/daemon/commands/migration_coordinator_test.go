@@ -235,3 +235,16 @@ func TestToProtoMigrationSpec(t *testing.T) {
 	assert.Equal(t, "52:54:00:aa:bb:cc", got.GetMacAddress())
 	assert.Equal(t, "aarch64", got.GetArch())
 }
+
+func TestToProtoMigrationSpec_LiveCarriesTheSharedDiskPath(t *testing.T) {
+	const shared = "/var/lib/shared/vms/guest.qcow2"
+	got := toProtoMigrationSpec(compute.MigrationSpec{
+		Arch: qemu.ArchX86_64,
+		Mode: compute.MigrateModeLive,
+		Config: &compute.InstanceConfig{
+			Memory: 2048, CPUs: 2, DiskPath: shared,
+		},
+	})
+	require.NotNil(t, got)
+	assert.Equal(t, shared, got.GetDiskPath(), "a live spec names its shared image on the wire")
+}
