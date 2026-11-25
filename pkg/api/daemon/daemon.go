@@ -1214,6 +1214,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			if config.CAService != nil {
 				quicHandler.SetDeviceBootCA(config.CAService)
 			}
+			if deviceService != nil {
+				quicHandler.SetDeviceAttestChallenges(deviceService)
+			}
 		}
 
 		// Set Container orchestrator if available

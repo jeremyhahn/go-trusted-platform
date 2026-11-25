@@ -45,6 +45,8 @@ type inProcProfileServer struct {
 	lastConfig *platformv1.FindConfigForDeviceRequest
 	lastAttest *platformv1.AttestDeviceRequest
 	fail       error
+
+	lastChallenge *platformv1.IssueAttestationChallengeRequest
 }
 
 // AttestDevice answers a negative verdict for device 42, the one registered
