@@ -334,3 +334,63 @@ func TestAppMethodsOverSDKREST_UnimplementedVerbs(t *testing.T) {
 		assert.Equal(t, "tenant-a/apps/", registered.GetApp().GetResourcePrefix())
 	})
 }
+
+// lossyApps mimics the pinned embedded converter (sdkAppFromInternal): the
+// app is created upstream, but the result loses the client secret and/or
+// the resource prefix. Delete is recorded by the embedded orderedApps.
+type lossyApps struct {
+	*orderedApps
+	dropSecret bool
+	dropPrefix bool
+}
+
+func (l *lossyApps) Register(_ context.Context, tenantID string, req *iamsdk.RegisterAppRequest) (*iamsdk.Application, error) {
+	l.registered = req
+	app := &iamsdk.Application{
+		ClientID: "c-new", TenantID: tenantID, Name: req.Name,
+		ClientSecret: "s3cret", ResourcePrefix: req.ResourcePrefix, ResponseTypes: req.ResponseTypes,
+	}
+	if l.dropSecret {
+		app.ClientSecret = ""
+	}
+	if l.dropPrefix {
+		app.ResourcePrefix = ""
+	}
+	return app, nil
+}
+
+type lossyAppsClient struct {
+	*cov964Client
+	apps *lossyApps
+}
+
+func (c *lossyAppsClient) App() iamsdk.AppClient { return c.apps }
+
+func TestRegisterAppOverSDKREST_RefusesLostSecretOrPrefix(t *testing.T) {
+	t.Parallel()
+	const tenant = "tenant-a"
+	cases := []struct {
+		name       string
+		dropSecret bool
+		dropPrefix bool
+	}{
+		{name: "secret dropped", dropSecret: true},
+		{name: "prefix dropped", dropPrefix: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			apps := &lossyApps{orderedApps: &orderedApps{}, dropSecret: tc.dropSecret, dropPrefix: tc.dropPrefix}
+			adapter := NewQuicBaaSIAMAdapter(&lossyAppsClient{cov964Client: cov964NewClient(), apps: apps})
+			server := adminSessionIAMServer(t, adapter, &mockPEPClient{})
+			client := platformv1.NewPlatformIAMServiceClient(sdkRESTConnection(t, server))
+
+			registered, err := client.RegisterApp(context.Background(), &platformv1.RegisterIAMAppRequest{
+				TenantId: tenant, Name: "docs", ResourcePrefix: "tenant-a/apps/", ResponseTypes: []string{"code"},
+			})
+			require.Error(t, err, "lossy registration must not succeed: %v", registered)
+			assert.Equal(t, codes.Unimplemented, status.Code(err), "register: %v", err)
+			assert.Equal(t, []string{"c-new"}, apps.deleted, "the half-created app must be deleted")
+		})
+	}
+}
