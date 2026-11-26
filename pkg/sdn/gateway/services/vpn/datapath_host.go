@@ -182,11 +182,15 @@ func (h *PlaneHost) RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerR
 // request's public key (its WireGuard key, or its client certificate
 // SHA-256 for a plane without one). It never installs: a peer the host no
 // longer holds, or whose deadline has passed, is LEASE_NOT_FOUND, so a
-// renewal that arrives after expiry cannot bring the peer back.
+// renewal that arrives after expiry cannot bring the peer back. The deadline
+// only moves forward: a deadline earlier than the held one is accepted and
+// ignored, so a delayed or reordered request cannot shorten it.
 func (h *PlaneHost) RenewVPNPeer(_ context.Context, req *ipcv1.RenewVPNPeerRequest) *ipcv1.RenewVPNPeerResponse {
 	return &ipcv1.RenewVPNPeerResponse{Refusal: refusalOf(h.renew(req))}
 }
 
+// renew moves the held deadline forward to the request's, and accepts a
+// lower deadline as a no-op (see RenewVPNPeer).
 func (h *PlaneHost) renew(req *ipcv1.RenewVPNPeerRequest) error {
 	if len(req.GetPublicKey()) == 0 {
 		return &ErrInvalidRequest{Field: "public_key", Reason: "required"}
@@ -219,8 +223,10 @@ func (h *PlaneHost) renew(req *ipcv1.RenewVPNPeerRequest) error {
 	if !now.Before(held.deadline) {
 		return &ErrLeaseNotFound{LeaseID: match}
 	}
-	held.deadline = deadline
-	h.held[match] = held
+	if deadline.After(held.deadline) {
+		held.deadline = deadline
+		h.held[match] = held
+	}
 	return nil
 }
 

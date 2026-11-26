@@ -82,7 +82,8 @@ type PeerReconciler interface {
 // PeerDeadlineExtender is a data plane whose host enforces lease deadlines
 // itself: it removes a peer once its lease's ExpiresAt passes, without the
 // admission service. Renew moves the deadline through it, without
-// reinstalling the peer.
+// reinstalling the peer. The host's deadline never moves backward, and a
+// failed extension is owed to Sweep (and to the client's next renewal).
 type PeerDeadlineExtender interface {
 	ExtendPeer(ctx context.Context, lease *Lease) error
 }

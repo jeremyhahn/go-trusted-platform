@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"net/netip"
 	"sync"
@@ -72,6 +73,10 @@ type Service struct {
 	// retryPeerReconcile). A key with a nil slice is a failed
 	// reconciliation alone. Guarded by mu.
 	peerRetry map[DataPlaneKind][]*Lease
+	// extendOwed holds the leases whose stored deadline the host has not
+	// confirmed (a failed ExtendPeer): Sweep re-sends it and Renew skips
+	// the renew window for them. Allocated on first use. Guarded by mu.
+	extendOwed map[LeaseID]struct{}
 	// tearingDown counts, per address, the revocations whose teardown has
 	// not settled: the lease may already be deleted while the peer removal
 	// runs and neither releaseAddress nor owePeerRetry has run yet. Orphan
@@ -287,6 +292,7 @@ func (s *Service) Sweep(ctx context.Context) {
 	s.mu.Unlock()
 
 	s.retryPeerReconcile(ctx)
+	s.retryOwedExtensions(ctx)
 	if pending, ok := s.deps.Leases.(PendingDeleteStore); ok {
 		if err := pending.RetryPendingDeletes(ctx); err != nil {
 			s.logger.Warn("vpn lease sweep: a pending lease deletion failed again", slog.Any("error", err))
@@ -318,6 +324,100 @@ func (s *Service) Sweep(ctx context.Context) {
 		unlock()
 		s.enrolGate.RUnlock()
 	}
+}
+
+// oweExtension records that the host has not confirmed the stored deadline
+// of lease id.
+func (s *Service) oweExtension(id LeaseID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.extendOwed == nil {
+		s.extendOwed = map[LeaseID]struct{}{}
+	}
+	s.extendOwed[id] = struct{}{}
+}
+
+// extensionOwed reports whether lease id waits on a deadline extension.
+func (s *Service) extensionOwed(id LeaseID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.extendOwed[id]
+	return ok
+}
+
+// clearExtension drops the owed extension of lease id, if any.
+func (s *Service) clearExtension(id LeaseID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.extendOwed, id)
+}
+
+// retryOwedExtensions re-sends each owed deadline extension with the stored
+// deadline. The host deadline only moves forward, so a retry that races a
+// renewal cannot shorten it. A lease the host already expired is revoked.
+func (s *Service) retryOwedExtensions(ctx context.Context) {
+	s.mu.Lock()
+	ids := make([]LeaseID, 0, len(s.extendOwed))
+	for id := range s.extendOwed {
+		ids = append(ids, id)
+	}
+	s.mu.Unlock()
+	for _, id := range ids {
+		probe, err := s.deps.Leases.Get(ctx, id)
+		if err != nil {
+			var nf *ErrLeaseNotFound
+			if errors.As(err, &nf) {
+				s.clearExtension(id)
+			}
+			continue
+		}
+		s.retryOwedExtension(ctx, probe)
+	}
+}
+
+func (s *Service) retryOwedExtension(ctx context.Context, probe *Lease) {
+	// revoke needs enrolGate held; it is taken before the device lock.
+	s.enrolGate.RLock()
+	defer s.enrolGate.RUnlock()
+	unlock := s.devices.lock(deviceKey(probe.TenantID, probe.DeviceID))
+	defer unlock()
+	if !s.extensionOwed(probe.ID) {
+		return
+	}
+	lease, err := s.deps.Leases.Get(ctx, probe.ID)
+	if err != nil {
+		var nf *ErrLeaseNotFound
+		if errors.As(err, &nf) {
+			s.clearExtension(probe.ID)
+		}
+		return
+	}
+	if lease.Expired(s.deps.Clock.Now()) {
+		// The expiry sweep revokes it.
+		s.clearExtension(lease.ID)
+		return
+	}
+	ext, ok := s.deps.DataPlanes[lease.DataPlane].(PeerDeadlineExtender)
+	if !ok {
+		s.clearExtension(lease.ID)
+		return
+	}
+	if err := ext.ExtendPeer(ctx, lease); err != nil {
+		var nf *ErrLeaseNotFound
+		if errors.As(err, &nf) {
+			// The host already expired the peer: the lease is dead.
+			s.clearExtension(lease.ID)
+			if rErr := s.revoke(ctx, lease, RevokeExpired); rErr != nil {
+				s.logger.Warn("vpn lease sweep: revoking a lease the host expired failed",
+					slog.String("lease", string(lease.ID)), slog.Any("error", rErr))
+			}
+			return
+		}
+		s.logger.Warn("vpn lease sweep: an owed deadline extension failed again",
+			slog.String("lease", string(lease.ID)), slog.Time("expires_at", lease.ExpiresAt), slog.Any("error", err))
+		return
+	}
+	s.clearExtension(lease.ID)
 }
 
 func (s *Service) recordRefusal(reason string) {

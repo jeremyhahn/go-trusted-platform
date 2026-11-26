@@ -207,8 +207,11 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 	// Renewal opens RenewWindow before expiry and not earlier: a client
 	// that re-attests every minute would otherwise keep a lease alive with
 	// evidence that was never allowed to age, and the window is what the
-	// operator configured (Config.Validate binds it below LeaseTTL).
-	if opensAt := lease.ExpiresAt.Add(-s.cfg.RenewWindow); now.Before(opensAt) {
+	// operator configured (Config.Validate binds it below LeaseTTL). A lease
+	// whose last extension failed is owed: the host may still enforce the
+	// previous deadline, so its retry is not held to the window of the new
+	// stored one.
+	if opensAt := lease.ExpiresAt.Add(-s.cfg.RenewWindow); now.Before(opensAt) && !s.extensionOwed(id) {
 		return nil, s.refuse(ctx, lease.DeviceID, &ErrRenewalNotOpen{LeaseID: id, OpensAt: opensAt})
 	}
 	if err := s.enrolled(lease.TenantID, lease.DeviceID, lease.Zones); err != nil {
@@ -238,42 +241,25 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 	if err := s.deps.IPAM.Renew(ctx, lease.Address.Addr()); err != nil {
 		return nil, s.refuse(ctx, lease.DeviceID, &ErrPoolExhausted{Pool: s.cfg.Pool, Cause: err})
 	}
-	prevExpiresAt, prevRenewals, prevVerdict := lease.ExpiresAt, lease.Renewals, lease.Verdict
 	lease.ExpiresAt = now.Add(s.cfg.LeaseTTL)
 	lease.Renewals++
 	lease.Verdict = *summary
 	if err := s.deps.Leases.Put(ctx, lease); err != nil {
 		return nil, s.refuse(ctx, lease.DeviceID, &ErrLeaseStoreUnavailable{Cause: err})
 	}
-	// A failed extension restores the stored deadline so the renewal can be
-	// retried. An RPC error does not prove the host kept the old deadline (the
-	// response may be lost), so the host is first sent the previous deadline
-	// again, and the store rolls back only once the host confirms it: the
-	// host deadline is never later than the stored one. The cleanup runs on a
-	// context detached from the caller's, which may be what failed.
+	// The new deadline is stored before the host is told, and the host
+	// deadline only moves forward, so the host never outlives the store. A
+	// failed extension keeps the new stored deadline and is owed: Sweep
+	// re-sends it, and the client's retry bypasses the renew window.
 	if ext, ok := s.deps.DataPlanes[lease.DataPlane].(PeerDeadlineExtender); ok {
 		if err := ext.ExtendPeer(ctx, lease); err != nil {
-			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), installCleanupTimeout)
-			defer cancel()
-			restore := *lease
-			restore.ExpiresAt = prevExpiresAt
-			if hErr := ext.ExtendPeer(cleanupCtx, &restore); hErr != nil {
-				// The host may hold the new deadline: keep it stored so the
-				// store never falls below the host.
-				s.logger.Warn("vpn.renew: restoring the host deadline failed; keeping the new stored deadline",
-					slog.String("lease", string(lease.ID)), slog.Time("expires_at", lease.ExpiresAt), slog.Any("error", hErr))
-				err = errors.Join(err, hErr)
-			} else {
-				lease.ExpiresAt, lease.Renewals, lease.Verdict = prevExpiresAt, prevRenewals, prevVerdict
-				if pErr := s.deps.Leases.Put(cleanupCtx, lease); pErr != nil {
-					s.logger.Warn("vpn.renew: rolling the stored deadline back failed",
-						slog.String("lease", string(lease.ID)), slog.Any("error", pErr))
-					err = errors.Join(err, pErr)
-				}
-			}
+			s.oweExtension(lease.ID)
+			s.logger.Warn("vpn.renew: extending the host deadline failed; owed to the sweep and the next renewal",
+				slog.String("lease", string(lease.ID)), slog.Time("expires_at", lease.ExpiresAt), slog.Any("error", err))
 			return nil, s.refuse(ctx, lease.DeviceID, &ErrDataPlaneUnavailable{Kind: lease.DataPlane, Cause: err})
 		}
 	}
+	s.clearExtension(lease.ID)
 	s.logger.Info("vpn.renew", slog.String("lease", string(lease.ID)), slog.Int("renewals", lease.Renewals), slog.Time("expires_at", lease.ExpiresAt))
 	cp := *lease
 	return &cp, nil
@@ -361,6 +347,7 @@ func (s *Service) revoke(ctx context.Context, lease *Lease, reason RevokeReason)
 	// The address stays visible to orphan reclaim from before the lease
 	// deletion until the teardown settles (released, or owed through
 	// peerRetry), on every return path.
+	s.clearExtension(lease.ID)
 	defer s.markTearingDown(lease.Address)()
 	var storeErr error
 	if err := s.deps.Leases.Delete(ctx, lease.ID); err != nil {
