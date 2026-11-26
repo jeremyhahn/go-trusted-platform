@@ -186,6 +186,20 @@ func TestNTPGRPCServiceReturnsUnavailableWithoutABackend(t *testing.T) {
 	}
 }
 
+// TestNTPGRPCServiceConfiguredFollowsTheBackend pins the probe the REST
+// router reads to list the NTP routes as not configured on a node without
+// an `ntp:` section.
+func TestNTPGRPCServiceConfiguredFollowsTheBackend(t *testing.T) {
+	service := newNTPTestService(nil)
+	if service.Configured() {
+		t.Fatal("Configured() = true without a backend")
+	}
+	service.SetBackend(&fakeNTPBackend{status: syncedNTPStatus()})
+	if !service.Configured() {
+		t.Fatal("Configured() = false with a backend")
+	}
+}
+
 func TestNTPGRPCServiceMapsDomainErrorsToStatusCodes(t *testing.T) {
 	cases := map[string]struct {
 		err  error
