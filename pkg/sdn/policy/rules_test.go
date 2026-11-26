@@ -73,12 +73,14 @@ func TestRuleGenerator_GenerateAuthorizationRules(t *testing.T) {
 
 		rules, err := gen.GenerateAuthorizationRules("port1", policy)
 		assert.NoError(t, err)
-		assert.Len(t, rules, 2) // VLAN rule + ACL rule
+		assert.Len(t, rules, 3) // VLAN rule + IPv4 and IPv6 ACL rules
 
-		// Check ACL rule
-		assert.Contains(t, rules[1].Match, "in_port=port1")
-		assert.Contains(t, rules[1].Match, "nw_proto=6")
-		assert.Contains(t, rules[1].Match, "tp_dst=443")
+		// Check ACL rules
+		for _, r := range rules[1:] {
+			assert.Contains(t, r.Match, "in_port=port1")
+			assert.Contains(t, r.Match, "nw_proto=6")
+			assert.Contains(t, r.Match, "tp_dst=443")
+		}
 	})
 
 	t.Run("Policy without VLAN", func(t *testing.T) {
@@ -234,6 +236,188 @@ func TestRuleGenerator_BuildMatch(t *testing.T) {
 			result := gen.buildMatch(tt.match)
 			for _, exp := range tt.expected {
 				assert.Contains(t, result, exp)
+			}
+		})
+	}
+}
+
+// TestRuleGenerator_BuildMatchPrerequisites asserts that buildMatch emits the
+// OpenFlow match prerequisites: an L3 or L4 field needs its dl_type, and a
+// transport port needs its nw_proto, or the switch refuses the flow with
+// OFPBMC_BAD_PREREQ.
+func TestRuleGenerator_BuildMatchPrerequisites(t *testing.T) {
+	gen := NewRuleGenerator()
+
+	tests := []struct {
+		name      string
+		match     FlowMatch
+		expected  []string
+		forbidden []string
+		dlTypes   int
+	}{
+		{
+			name:     "IPv4 TCP proto and port carry dl_type",
+			match:    FlowMatch{IPProto: 6, TCPDst: 443},
+			expected: []string{"dl_type=0x0800", "nw_proto=6", "tp_dst=443"},
+			dlTypes:  1,
+		},
+		{
+			name:     "TCP port alone carries dl_type and nw_proto",
+			match:    FlowMatch{TCPDst: 443},
+			expected: []string{"dl_type=0x0800", "nw_proto=6", "tp_dst=443"},
+			dlTypes:  1,
+		},
+		{
+			name:     "UDP port alone carries dl_type and nw_proto",
+			match:    FlowMatch{UDPDst: 53},
+			expected: []string{"dl_type=0x0800", "nw_proto=17", "tp_dst=53"},
+			dlTypes:  1,
+		},
+		{
+			name:      "IPv4 address carries dl_type",
+			match:     FlowMatch{IPv4Src: "10.0.0.0/8"},
+			expected:  []string{"dl_type=0x0800", "nw_src=10.0.0.0/8"},
+			forbidden: []string{"nw_proto="},
+			dlTypes:   1,
+		},
+		{
+			name:      "IPv6 address carries the IPv6 dl_type",
+			match:     FlowMatch{IPv6Dst: "fd00::/8", IPProto: 6},
+			expected:  []string{"dl_type=0x86dd", "nw_proto=6", "ipv6_dst=fd00::/8"},
+			forbidden: []string{"dl_type=0x0800"},
+			dlTypes:   1,
+		},
+		{
+			name:      "explicit ARP EthType is kept once with no nw_proto",
+			match:     FlowMatch{EthType: 0x0806},
+			expected:  []string{"dl_type=0x0806"},
+			forbidden: []string{"nw_proto="},
+			dlTypes:   1,
+		},
+		{
+			name:     "explicit IPv4 EthType is never duplicated",
+			match:    FlowMatch{EthType: 0x0800, IPProto: 17, UDPDst: 53},
+			expected: []string{"dl_type=0x0800", "nw_proto=17", "tp_dst=53"},
+			dlTypes:  1,
+		},
+		{
+			name:      "explicit IPProto is not overridden by a port",
+			match:     FlowMatch{IPProto: 17, TCPDst: 53},
+			expected:  []string{"dl_type=0x0800", "nw_proto=17"},
+			forbidden: []string{"nw_proto=6"},
+			dlTypes:   1,
+		},
+		{
+			name:      "L2-only match gets no dl_type",
+			match:     FlowMatch{InPort: "port1"},
+			expected:  []string{"in_port=port1"},
+			forbidden: []string{"dl_type=", "nw_proto="},
+			dlTypes:   0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := gen.buildMatch(tt.match)
+			for _, exp := range tt.expected {
+				assert.Contains(t, result, exp)
+			}
+			for _, bad := range tt.forbidden {
+				assert.NotContains(t, result, bad)
+			}
+			assert.Equal(t, tt.dlTypes, strings.Count(result, "dl_type="), result)
+			assert.LessOrEqual(t, strings.Count(result, "nw_proto="), 1, result)
+		})
+	}
+}
+
+// TestRuleGenerator_ACLDualStack checks that a policy ACL that names no
+// address family installs for both IPv4 and IPv6, so a port DENY cannot be
+// bypassed over IPv6, while family-specific matches stay a single flow.
+func TestRuleGenerator_ACLDualStack(t *testing.T) {
+	gen := NewRuleGenerator()
+
+	tests := []struct {
+		name     string
+		match    FlowMatch
+		dlTypes  []string
+		expected []string
+	}{
+		{
+			name:     "TCP port alone gives an IPv4 and an IPv6 flow",
+			match:    FlowMatch{TCPDst: 22},
+			dlTypes:  []string{"dl_type=0x0800", "dl_type=0x86dd"},
+			expected: []string{"nw_proto=6", "tp_dst=22"},
+		},
+		{
+			name:     "UDP port alone gives an IPv4 and an IPv6 flow",
+			match:    FlowMatch{UDPDst: 53},
+			dlTypes:  []string{"dl_type=0x0800", "dl_type=0x86dd"},
+			expected: []string{"nw_proto=17", "tp_dst=53"},
+		},
+		{
+			name:     "TCP proto and port give an IPv4 and an IPv6 flow",
+			match:    FlowMatch{IPProto: 6, TCPDst: 443},
+			dlTypes:  []string{"dl_type=0x0800", "dl_type=0x86dd"},
+			expected: []string{"nw_proto=6", "tp_dst=443"},
+		},
+		{
+			name:     "ICMP is IPv4 only",
+			match:    FlowMatch{IPProto: 1},
+			dlTypes:  []string{"dl_type=0x0800"},
+			expected: []string{"nw_proto=1"},
+		},
+		{
+			name:     "ICMPv6 is IPv6 only",
+			match:    FlowMatch{IPProto: 58},
+			dlTypes:  []string{"dl_type=0x86dd"},
+			expected: []string{"nw_proto=58"},
+		},
+		{
+			name:     "IPv4 address keeps one flow",
+			match:    FlowMatch{IPv4Dst: "10.0.0.0/8", TCPDst: 22},
+			dlTypes:  []string{"dl_type=0x0800"},
+			expected: []string{"nw_dst=10.0.0.0/8", "tp_dst=22"},
+		},
+		{
+			name:     "IPv6 address keeps one flow",
+			match:    FlowMatch{IPv6Src: "fd00::/8", TCPDst: 22},
+			dlTypes:  []string{"dl_type=0x86dd"},
+			expected: []string{"ipv6_src=fd00::/8", "tp_dst=22"},
+		},
+		{
+			name:     "explicit EthType keeps one flow",
+			match:    FlowMatch{EthType: 0x0800, TCPDst: 22},
+			dlTypes:  []string{"dl_type=0x0800"},
+			expected: []string{"nw_proto=6", "tp_dst=22"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			policy := &PortPolicy{
+				TenantID: "tenant-1",
+				ACLs: []ACLRule{{
+					Priority: 100,
+					Match:    tt.match,
+					Action:   FlowAction{Type: FlowActionDeny},
+				}},
+			}
+
+			rules, err := gen.GenerateAuthorizationRules("port1", policy)
+			require.NoError(t, err)
+			require.Len(t, rules, len(tt.dlTypes))
+
+			for i, dl := range tt.dlTypes {
+				rule := rules[i]
+				assert.Contains(t, rule.Match, dl)
+				assert.Equal(t, 1, strings.Count(rule.Match, "dl_type="), rule.Match)
+				assert.Equal(t, rules[0].Priority, rule.Priority)
+				assert.Equal(t, rules[0].Actions, rule.Actions)
+				assert.Equal(t, gen.BasePriority+100, rule.Priority)
+				for _, exp := range tt.expected {
+					assert.Contains(t, rule.Match, exp)
+				}
 			}
 		})
 	}
@@ -427,7 +611,7 @@ func TestRuleGenerator_ComplexScenarios(t *testing.T) {
 
 		rules, err := gen.GenerateAuthorizationRules("port1", policy)
 		require.NoError(t, err)
-		assert.Len(t, rules, 4) // VLAN + 3 ACLs
+		assert.Len(t, rules, 6) // VLAN + HTTPS and DNS for IPv4 and IPv6 + deny all
 
 		// Verify priorities are correct
 		priorities := make([]int, len(rules))

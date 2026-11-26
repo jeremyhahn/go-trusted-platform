@@ -544,6 +544,21 @@ switches:
         native_vlan: 1
 
 # =============================================================================
+# VTPM (bundles in the run directory)
+# =============================================================================
+# Without this block the service defaults to /var/lib/trusted-platform/vtpm,
+# which the unprivileged harness cannot create, so `platformd serve`
+# (pkg/daemon/commands/serve.go initVTPMServiceOnConfig) leaves the service
+# nil and every /api/v1/vtpm route is dark. Creating, starting, quoting,
+# sealing and the PCR ops also need the swtpm binary on PATH
+# (pkg/swtpm/swtpm.go); a runner without it gets createBundle's refusal.
+
+vtpm:
+  base-dir: trusted-data/vtpm
+  pcr-banks:
+    - sha256
+
+# =============================================================================
 # Default-config sections NOT enabled here (no simulator path)
 # =============================================================================
 # - acme.client: the default daemon enrols its own account against the
