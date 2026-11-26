@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -12,6 +13,7 @@ import (
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
+	webiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -149,5 +151,37 @@ func TestCreateInitialAdminInvitation_NoNumericCallerIDIsRefused(t *testing.T) {
 		if fake.calls != 0 {
 			t.Fatalf("subject %q reached the inviter %d times", subject, fake.calls)
 		}
+	}
+}
+
+// TestCreateInitialAdminInvitation_RESTIdentityRecordsInviter pins that the
+// webservice REST identity (a verified platform token or an IAM session)
+// reaches callerUserID, so a system-tenant admin calling over REST is
+// recorded as the inviter rather than refused with FailedPrecondition.
+func TestCreateInitialAdminInvitation_RESTIdentityRecordsInviter(t *testing.T) {
+	cases := map[string]context.Context{
+		"platform token": webiam.SetAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{
+			TenantID: initialAdminSystemTenant,
+			Subject:  "42",
+		}),
+		"iam session": webiam.SetSessionInContext(context.Background(),
+			webiam.NewIAMSession(&iamsdk.User{ID: "42", TenantID: initialAdminSystemTenant})),
+	}
+	for name, ctx := range cases {
+		t.Run(name, func(t *testing.T) {
+			fake := &fakeInitialAdminInviter{}
+			s := newInitialAdminServer(fake)
+			_, err := s.CreateInitialAdminInvitation(ctx,
+				&platformv1.CreateInitialAdminInvitationRequest{TenantId: "tenant-a", Email: "owner@example.com"})
+			if status.Code(err) == codes.FailedPrecondition {
+				t.Fatalf("REST caller refused as having no user id: %v", err)
+			}
+			if err != nil {
+				t.Fatalf("REST caller: %v", err)
+			}
+			if fake.got.InvitedByID != 42 {
+				t.Fatalf("invited_by = %d, want 42", fake.got.InvitedByID)
+			}
+		})
 	}
 }

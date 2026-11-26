@@ -121,6 +121,7 @@ func TestLookupOperationPermission_CategorySubOpcodes(t *testing.T) {
 		{"cluster list nodes", quicwire.OpClusterCategory, quicwire.ClusterSubListNodes, OpcodePermission{Resource: "cluster", Action: "read"}},
 		{"tenant barrier unseal", quicwire.OpTenantBarrierCategory, quicwire.TenantBarrierSubUnseal, OpcodePermission{Resource: "tenant", Action: "write"}},
 		{"tenant barrier status", quicwire.OpTenantBarrierCategory, quicwire.TenantBarrierSubStatus, OpcodePermission{Resource: "tenant", Action: "read"}},
+		{"tenant initial admin invitation", quicwire.OpTenantBarrierCategory, quicwire.TenantBarrierSubInitialAdminInvitation, OpcodePermission{Resource: "tenant", Action: "write"}},
 		{"tpm2 clear", quicwire.OpTPM2Category, quicwire.SubOpTPM2Clear, OpcodePermission{Resource: "tpm", Action: "delete"}},
 		{"tpm2 certify", quicwire.OpTPM2Category, quicwire.SubOpTPM2Certify, OpcodePermission{Resource: "tpm", Action: "read"}},
 		{"secrets delete", quicwire.OpSecretsCategory, quicwire.SecretsSubDelete, OpcodePermission{Resource: "secrets", Action: "delete"}},
