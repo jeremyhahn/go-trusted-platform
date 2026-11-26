@@ -14,13 +14,9 @@
 package sdn
 
 import (
-	"net/http"
-
 	"github.com/gorilla/mux"
 
-	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/router"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -33,31 +29,7 @@ const (
 // SDNRouter provides REST routing for SDN operations
 type SDNRouter struct {
 	handlers *SDNHandlers
-	// scopeAuthorizer is the per-route scope check the delete routes take
-	// on top of the admin gate; nil leaves them on the gate.
-	scopeAuthorizer middleware.ScopeAuthorizer
 	router.WebServiceRouter
-}
-
-// SetScopeAuthorizer supplies the scope check the policy and VLAN delete
-// routes take on top of the admin gate. Nil leaves them on the role gate.
-func (r *SDNRouter) SetScopeAuthorizer(authorizer middleware.ScopeAuthorizer) {
-	r.scopeAuthorizer = authorizer
-}
-
-// requireScope wraps handler in the scope check of the gRPC method when an
-// authorizer is set. A method with no scope fails closed.
-func (r *SDNRouter) requireScope(rpc string, handler http.HandlerFunc) http.Handler {
-	if r.scopeAuthorizer == nil {
-		return handler
-	}
-	scope := grpcapi.ScopeForMethod(rpc)
-	if scope == "" {
-		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusForbidden)
-		})
-	}
-	return r.scopeAuthorizer.RequireScope(scope)(handler)
 }
 
 // NewSDNRouter creates a new SDNRouter instance
@@ -148,7 +120,7 @@ func (r *SDNRouter) registerPolicyRoutes(router *mux.Router) {
 	router.HandleFunc("/policies", r.handlers.ApplyPolicy).Methods("POST")
 	router.HandleFunc("/policies", r.handlers.ListPolicies).Methods("GET")
 	router.HandleFunc("/policies/{id}", r.handlers.GetPolicy).Methods("GET")
-	router.Handle("/policies/{id}", r.requireScope("/platform.v1.SDNService/DeletePolicy", r.handlers.DeletePolicy)).Methods("DELETE")
+	router.HandleFunc("/policies/{id}", r.handlers.DeletePolicy).Methods("DELETE")
 }
 
 // registerVLANRoutes registers VLAN management endpoints.
@@ -166,7 +138,7 @@ func (r *SDNRouter) registerPolicyRoutes(router *mux.Router) {
 func (r *SDNRouter) registerVLANRoutes(router *mux.Router) {
 	router.HandleFunc("/vlans", r.handlers.CreateVLAN).Methods("POST")
 	router.HandleFunc("/vlans", r.handlers.ListVLANs).Methods("GET")
-	router.Handle("/vlans/{vlan_id}", r.requireScope("/platform.v1.SDNService/DeleteVLAN", r.handlers.DeleteVLAN)).Methods("DELETE")
+	router.HandleFunc("/vlans/{vlan_id}", r.handlers.DeleteVLAN).Methods("DELETE")
 	router.HandleFunc("/bridges/{bridge_id}/vlans", r.handlers.CreateVLAN).Methods("POST")
 	router.HandleFunc("/bridges/{bridge_id}/vlans", r.handlers.ListVLANs).Methods("GET")
 }

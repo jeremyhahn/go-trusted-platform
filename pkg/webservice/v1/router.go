@@ -1202,11 +1202,6 @@ func (v1Router *Router) sdnRoutes() {
 			// Bridge, port, flow and VLAN mutation. Flow rules ARE the
 			// network policy this platform enforces; an anonymous caller
 			// that can add one can route around every other control.
-			// The policy and VLAN deletes then take sdn:delete, as on
-			// gRPC (#1951).
-			if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
-				sdnRouter.SetScopeAuthorizer(scoped)
-			}
 			sdnRouter.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 		},
 	)
