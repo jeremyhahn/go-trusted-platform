@@ -862,19 +862,30 @@ func (v1Router *Router) overlayRoutes() {
 
 func (v1Router *Router) ntpRoutes() {
 	server := v1Router.restHandlerRegistry.NTPServiceServer()
+	// The daemon always builds the NTP service; without an `ntp:` section it
+	// has no backend and answers every RPC with Unavailable. Its routes go
+	// dark (503, not-configured) so the capabilities listing does not offer
+	// ops the node cannot serve.
+	var svc any = server
 	if server == nil {
-		v1Router.logger.Debug("NTP service server is nil - NTP routes not registered")
-		return
+		svc = nil
+	} else if c, ok := server.(interface{ Configured() bool }); ok && !c.Configured() {
+		svc = nil
 	}
-	r := restntp.NewNTPRouter(
-		v1Router.logger,
-		server,
-		v1Router.responseWriter)
-	// POST /ntp/step forces a clock correction. A node whose clock is
-	// wrong fails attestation, ACME issuance and token validation without
-	// any of those failures naming the clock (docs/ntp/user.md), which
-	// makes an anonymous stepper a denial-of-service primitive.
-	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+	v1Router.serviceRegistry.requireService(
+		v1Router.router, "ntp", "/ntp", svc,
+		func() {
+			r := restntp.NewNTPRouter(
+				v1Router.logger,
+				server,
+				v1Router.responseWriter)
+			// POST /ntp/step forces a clock correction. A node whose clock is
+			// wrong fails attestation, ACME issuance and token validation without
+			// any of those failures naming the clock (docs/ntp/user.md), which
+			// makes an anonymous stepper a denial-of-service primitive.
+			r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+		},
+	)
 }
 
 func (v1Router *Router) vpnRoutes() {

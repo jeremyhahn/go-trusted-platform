@@ -179,10 +179,21 @@ func TestNTPGRPCServiceReturnsUnavailableWithoutABackend(t *testing.T) {
 	if service.Backend() != nil {
 		t.Fatal("Backend() should be nil before wiring")
 	}
+	// The REST router takes the NTP routes dark on Configured() == false.
+	if service.Configured() {
+		t.Fatal("Configured() = true without a backend")
+	}
 
 	service.SetBackend(&fakeNTPBackend{status: syncedNTPStatus()})
 	if service.Backend() == nil {
 		t.Fatal("SetBackend() did not wire the backend")
+	}
+	if !service.Configured() {
+		t.Fatal("Configured() = false with a backend")
+	}
+	var nilService *NTPGRPCService
+	if nilService.Configured() {
+		t.Fatal("a nil service reports Configured")
 	}
 }
 
