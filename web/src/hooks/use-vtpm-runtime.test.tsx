@@ -1,0 +1,130 @@
+import { act, cleanup, renderHook } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ReactNode } from 'react';
+
+import { ok, refused, stubControlPlane, withControlPlane } from '@/test/control-plane-fetch';
+import { useVTPMRuntime } from './use-vtpm-runtime';
+
+// #2072: useVTPMRuntime reads IsVTPMRunning through the SDK's
+// VTPMService.getBundleState, GET /api/v1/vtpm/bundles/{id}/state, so the
+// run state comes from the server and not only from the last start or stop.
+
+const STATE = 'GET /api/v1/vtpm/bundles/vm-1/state';
+const START = 'POST /api/v1/vtpm/bundles/vm-1/start';
+const STOP = 'POST /api/v1/vtpm/bundles/vm-1/stop';
+
+function stateAnswer(running: boolean) {
+  return ok({ bundle_id: 'vm-1', running, socket_path: '/run/vtpm/vm-1.sock' });
+}
+
+function renderRuntime() {
+  return renderHook(() => useVTPMRuntime('vm-1'), {
+    wrapper: ({ children }: { children: ReactNode }) => withControlPlane(children),
+  });
+}
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+describe('useVTPMRuntime checkState', () => {
+  it('checkState reads GET /vtpm/bundles/{id}/state and shows running', async () => {
+    const sent = stubControlPlane({ [STATE]: stateAnswer(true) });
+    const { result } = renderRuntime();
+    expect(result.current.runState).toBe('unknown');
+
+    await act(() => result.current.checkState.mutateAsync(undefined));
+
+    expect(sent).toContainEqual({ method: 'GET', path: '/api/v1/vtpm/bundles/vm-1/state', body: undefined });
+    expect(result.current.runState).toBe('running');
+    expect(result.current.checkState.data?.socket_path).toBe('/run/vtpm/vm-1.sock');
+  });
+
+  it('checkState shows stopped for running false', async () => {
+    stubControlPlane({ [STATE]: stateAnswer(false) });
+    const { result } = renderRuntime();
+
+    await act(() => result.current.checkState.mutateAsync(undefined));
+
+    expect(result.current.runState).toBe('stopped');
+  });
+
+  it('checkState reads a daemon-listener state reply, whose identifier is id', async () => {
+    stubControlPlane({
+      [STATE]: ok({
+        id: 'vm-1',
+        running: true,
+        socket_path: '/run/vtpm/vm-1.sock',
+        timestamp: '2026-11-12T00:00:00Z',
+      }),
+    });
+    const { result } = renderRuntime();
+
+    await act(() => result.current.checkState.mutateAsync(undefined));
+
+    expect(result.current.runState).toBe('running');
+    expect(result.current.checkState.data?.bundle_id).toBe('vm-1');
+  });
+
+  it('a refused state read leaves the run state unknown', async () => {
+    const sent = stubControlPlane({ [STATE]: refused(404, 'bundle not found') });
+    const { result } = renderRuntime();
+
+    let thrown: unknown;
+    await act(async () => {
+      try {
+        await result.current.checkState.mutateAsync(undefined);
+      } catch (err) {
+        thrown = err;
+      }
+    });
+
+    // The SDK rejects with its error object carrying the server's message.
+    expect((thrown as { message?: string } | undefined)?.message).toContain('bundle not found');
+    expect(sent).toContainEqual({ method: 'GET', path: '/api/v1/vtpm/bundles/vm-1/state', body: undefined });
+    expect(result.current.runState).toBe('unknown');
+  });
+
+  it('start then checkState keeps the server state', async () => {
+    stubControlPlane({
+      [START]: ok({
+        status: { success: true },
+        bundle_id: 'vm-1',
+        running: true,
+        socket_path: '/run/vtpm/vm-1.sock',
+      }),
+      [STATE]: stateAnswer(false),
+    });
+    const { result } = renderRuntime();
+
+    await act(() => result.current.start.mutateAsync(undefined));
+    expect(result.current.runState).toBe('running');
+
+    await act(() => result.current.checkState.mutateAsync(undefined));
+    expect(result.current.runState).toBe('stopped');
+  });
+
+  it('a restart after a state read shows the new start socket', async () => {
+    stubControlPlane({
+      [START]: ok({
+        status: { success: true },
+        bundle_id: 'vm-1',
+        running: true,
+        socket_path: '/run/vtpm/start.sock',
+      }),
+      [STATE]: ok({ bundle_id: 'vm-1', running: true, socket_path: '/run/vtpm/state.sock' }),
+      [STOP]: ok({ status: { success: true }, bundle_id: 'vm-1', stopped: true }),
+    });
+    const { result } = renderRuntime();
+
+    await act(() => result.current.start.mutateAsync(undefined));
+    await act(() => result.current.checkState.mutateAsync(undefined));
+    expect(result.current.socketPath).toBe('/run/vtpm/state.sock');
+    await act(() => result.current.stop.mutateAsync(undefined));
+    expect(result.current.socketPath).toBeUndefined();
+    await act(() => result.current.start.mutateAsync(undefined));
+
+    expect(result.current.socketPath).toBe('/run/vtpm/start.sock');
+  });
+});

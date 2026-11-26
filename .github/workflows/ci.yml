@@ -22,6 +22,13 @@
 # or a hosted job of another run has queued HOSTED_QUEUE_GRACE_SECONDS; a
 # fork pull request always stays hosted. Nothing else of v1.43 to v1.48 is
 # taken.
+# CUSTOMIZE (DS-10475, not in the template): the selection overflows only a
+# push to refs/heads/main or a pull request from this repository. Every other
+# event (schedule, workflow_dispatch, pull_request_target, a push to another
+# branch, a fork's pull request, any event added later) takes the hosted
+# default with a ::notice and no API call, since the self-hosted image hook
+# refuses schedule and dispatch runs and nothing runs self-hosted on
+# pull_request_target. web-e2e reads runner_docker with the other jobs.
 #
 # v1.50 short-list fix only (handbook PR 84, rulings 999/1024, DS-9751,
 # #2128): the overflow never fired under load. The Actions API's listing
@@ -419,11 +426,19 @@ jobs:
       # CUSTOMIZE (#2128, not in the template): a pull request from a fork
       # always takes the hosted default. The self-hosted runners are
       # persistent, and ruling 999 keeps fork code off them.
+      # CUSTOMIZE (DS-10475, not in the template): an allow-list of the
+      # events that may overflow. Only a push to refs/heads/main (REF) or a
+      # pull request whose head repository is this one reaches the API
+      # count; every other event outputs the hosted default with a ::notice
+      # naming why. The self-hosted image hook refuses schedule and
+      # workflow_dispatch runs, and nothing runs self-hosted on
+      # pull_request_target.
       - name: Hosted or overflow runner (ruling 1024)
         id: runner
         env:
           SERVER: ${{ github.server_url }}
           EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
           API: ${{ github.api_url }}/repos/${{ github.repository }}/actions
           RUN_ID: ${{ github.run_id }}
           JOB_TOKEN: ${{ github.token }}
@@ -431,7 +446,6 @@ jobs:
           GRACE: ${{ env.HOSTED_QUEUE_GRACE_SECONDS }}
           REPO: ${{ github.repository }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          REF: ${{ github.ref }}
         run: |
           set -uo pipefail
           HOSTED='"ubuntu-latest"'
@@ -446,6 +460,13 @@ jobs:
             emit "$HOSTED" "$HOSTED"
             exit 0
           }
+          # hosted_only <why>: an event no self-hosted runner takes, so the
+          # default with no count and the reason shown (DS-10475).
+          hosted_only() {
+            echo "::notice::runner selection: $1; only a push to refs/heads/main or a pull request from this repository may reach a self-hosted runner, so every job of this run takes the GitHub-hosted default, ubuntu-latest (DS-10475)"
+            emit "$HOSTED" "$HOSTED"
+            exit 0
+          }
           if [ "$SERVER" != https://github.com ]; then
             echo "not github.com: each job keeps its forge label; no selection"
             emit "$HOSTED" "$HOSTED"
@@ -453,13 +474,23 @@ jobs:
           fi
           # v1.52: a fork's pull request (a deleted fork too, whose head
           # repository reads empty) runs every job on GitHub-hosted runners.
+          # CUSTOMIZE (DS-10475, not in the template): the case is an
+          # allow-list. A push counts only on refs/heads/main, a pull request
+          # only from this repository, and every other event (schedule,
+          # workflow_dispatch, pull_request_target and any other) is hosted.
           case "$EVENT" in
-            pull_request|pull_request_target)
+            push)
+              if [ "$REF" != refs/heads/main ]; then
+                hosted_only "this push is to '$REF', not refs/heads/main"
+              fi ;;
+            pull_request)
               if [ "$HEAD_REPO" != "$REPO" ]; then
                 echo "::notice::runner selection: this pull request's head repository is not this repository (a fork); every job of this run takes the GitHub-hosted default, ubuntu-latest, and none reaches a self-hosted runner (ci-template v1.52)"
                 emit "$HOSTED" "$HOSTED"
                 exit 0
               fi ;;
+            *)
+              hosted_only "the '$EVENT' event is neither a push to refs/heads/main nor a pull request from this repository" ;;
           esac
           # The self-hosted runners refuse every event but a push to main and a pull request.
           case "$EVENT:$REF" in
@@ -982,21 +1013,21 @@ jobs:
         run: |
           lease="go-trusted-platform-ci-lease-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
           image_lock() {
-            local lock="go-trusted-platform-ci-image-lock" held at t i
-            for ((i = 0; i < 660; i++)); do
-              docker image inspect "$lock:base" >/dev/null 2>&1 ||
-                head -c 1024 /dev/zero | docker import - "$lock:base" >/dev/null 2>&1 || true
-              IMAGE_LOCK_ID=$(docker create --pull never --name "$lock" "$lock:base" true 2>/dev/null) && return 0
+            local lock=${1:-go-trusted-platform-ci-image-lock} stale=${2:-600} base=go-trusted-platform-ci-image-lock:base held at t i
+            for ((i = 0; i < stale + 60; i++)); do
+              docker image inspect "$base" >/dev/null 2>&1 ||
+                head -c 1024 /dev/zero | docker import - "$base" >/dev/null 2>&1 || true
+              IMAGE_LOCK_ID=$(docker create --pull never --name "$lock" "$base" true 2>/dev/null) && return 0
               IMAGE_LOCK_ID=
-              if read -r held at < <(docker inspect -f '{{.Id}} {{.Created}}' "$lock" 2>/dev/null) &&
-                t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge 600 ]; then
+              if read -r held at < <(docker container inspect -f '{{.Id}} {{.Created}}' "$lock" 2>/dev/null) &&
+                [ -n "$at" ] && t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge "$stale" ]; then
                 echo "removing the stale image lock $lock (created $at)"
                 docker rm "$held" >/dev/null 2>&1 || true
                 continue
               fi
               sleep 1
             done
-            echo "::error::the image lock $lock was not free within 660 s"
+            echo "::error::the image lock $lock was not free within $((stale + 60)) s (stale age $stale s)"
             return 1
           }
           image_unlock() {
@@ -1012,7 +1043,7 @@ jobs:
           }
           declare -f image_lock image_unlock take_lease > "$RUNNER_TEMP/image-lock.sh"
           trap image_unlock EXIT
-          image_lock || exit 1
+          image_lock go-trusted-platform-ci-image-lock 600 || exit 1
           if ! take_lease; then
             image_unlock
             echo "integration image $IT_IMAGE is missing or went before its lease; building it once"
@@ -1024,7 +1055,7 @@ jobs:
               bp="GO_BUILD_PROXY=$DEVCACHE_GOPROXY|https://proxy.golang.org"
             fi
             make docker-build-integration ${bp:+"$bp"} MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE"
-            image_lock || exit 1
+            image_lock go-trusted-platform-ci-image-lock 600 || exit 1
             if ! take_lease; then
               echo "::error::the integration image $IT_IMAGE is missing after one rebuild, so this job holds no lease on it"
               exit 1
@@ -1505,11 +1536,14 @@ jobs:
 
   # Real-server Playwright specs (#2034, epic #1665, ruling 1031): builds the
   # tpm_simulator platformd with the console embedded and runs
-  # web/playwright.real-server.config.ts against it. Hosted (ruling 999): the
-  # job installs chromium itself, which the pool image does not carry.
+  # web/playwright.real-server.config.ts against it. CUSTOMIZE (DS-10475):
+  # it reads the preflight runner_docker selection, hosted unless the hosted
+  # pool is full on a push to main or a same-repository pull request. The job
+  # installs chromium itself; the system packages (apt, and playwright's
+  # --with-deps, both sudo) are installed on a GitHub-hosted runner only.
   web-e2e:
     name: Web Console E2E
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}   # v1.48
     if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     needs: preflight
     timeout-minutes: 30
@@ -1553,14 +1587,54 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cpio libssl-dev
 
       - name: Install from lockfiles and build the SDK the console consumes
+        # InfoSec O-3: as in the sdkjs job. No dependency lifecycle script
+        # runs on a persistent self-hosted runner (DS-10475).
+        env:
+          npm_config_ignore_scripts: ${{ runner.environment == 'self-hosted' }}
         run: |
           scripts/ci-go-integrity.sh
           make web-deps
 
-      - name: Install the Playwright chromium
+      # --with-deps installs chromium's system packages through sudo, which
+      # only a GitHub-hosted runner grants. A self-hosted runner installs the
+      # browser alone, so its image must carry those packages.
+      - name: Install the Playwright chromium and its system packages
+        if: runner.environment == 'github-hosted'
         run: cd web && npx playwright install --with-deps chromium
 
+      - name: Install the Playwright chromium
+        if: runner.environment != 'github-hosted'
+        run: cd web && npx playwright install chromium
+
+      # Codex P1 on #2382: the self-hosted install above has no --with-deps
+      # (it needs sudo), so the runner's image must carry chromium's system
+      # libraries. Launch chromium once before the specs; on failure list
+      # the libraries ldd cannot find and stop with one clear error.
+      - name: Check the Playwright chromium launches on this runner
+        if: runner.environment != 'github-hosted'
+        run: |
+          cd web
+          if ! node -e "
+            const { chromium } = require('@playwright/test');
+            (async () => {
+              console.log('chromium: ' + chromium.executablePath());
+              const browser = await chromium.launch({ headless: true });
+              await browser.close();
+            })().catch((err) => { console.error(err); process.exit(1); });
+          "; then
+            exe=$(node -e "console.log(require('@playwright/test').chromium.executablePath())")
+            echo "Libraries ldd cannot find for $exe:"
+            ldd "$exe" | grep 'not found' || true
+            echo "::error::chromium does not launch on this self-hosted runner; its image lacks the system libraries listed above (playwright install --with-deps needs sudo)"
+            exit 1
+          fi
+
       - name: Real-server Playwright specs
+        # InfoSec O-3: make web-e2e runs web-deps and _web-embed-prepare
+        # (npm ci, npm install) again; the setting reaches them through the
+        # environment of the recursive make calls (DS-10475).
+        env:
+          npm_config_ignore_scripts: ${{ runner.environment == 'self-hosted' }}
         run: |
           scripts/ci-go-integrity.sh
           make web-e2e WEB_E2E_BUILD=1
@@ -1704,21 +1778,21 @@ jobs:
         run: |
           lease="go-trusted-platform-ci-lease-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
           image_lock() {
-            local lock="go-trusted-platform-ci-image-lock" held at t i
-            for ((i = 0; i < 660; i++)); do
-              docker image inspect "$lock:base" >/dev/null 2>&1 ||
-                head -c 1024 /dev/zero | docker import - "$lock:base" >/dev/null 2>&1 || true
-              IMAGE_LOCK_ID=$(docker create --pull never --name "$lock" "$lock:base" true 2>/dev/null) && return 0
+            local lock=${1:-go-trusted-platform-ci-image-lock} stale=${2:-600} base=go-trusted-platform-ci-image-lock:base held at t i
+            for ((i = 0; i < stale + 60; i++)); do
+              docker image inspect "$base" >/dev/null 2>&1 ||
+                head -c 1024 /dev/zero | docker import - "$base" >/dev/null 2>&1 || true
+              IMAGE_LOCK_ID=$(docker create --pull never --name "$lock" "$base" true 2>/dev/null) && return 0
               IMAGE_LOCK_ID=
-              if read -r held at < <(docker inspect -f '{{.Id}} {{.Created}}' "$lock" 2>/dev/null) &&
-                t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge 600 ]; then
+              if read -r held at < <(docker container inspect -f '{{.Id}} {{.Created}}' "$lock" 2>/dev/null) &&
+                [ -n "$at" ] && t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge "$stale" ]; then
                 echo "removing the stale image lock $lock (created $at)"
                 docker rm "$held" >/dev/null 2>&1 || true
                 continue
               fi
               sleep 1
             done
-            echo "::error::the image lock $lock was not free within 660 s"
+            echo "::error::the image lock $lock was not free within $((stale + 60)) s (stale age $stale s)"
             return 1
           }
           image_unlock() {
@@ -1734,7 +1808,7 @@ jobs:
           }
           declare -f image_lock image_unlock take_lease > "$RUNNER_TEMP/image-lock.sh"
           trap image_unlock EXIT
-          image_lock || exit 1
+          image_lock go-trusted-platform-ci-image-lock 600 || exit 1
           if ! take_lease; then
             image_unlock
             echo "integration image $IT_IMAGE is missing or went before its lease; building it once"
@@ -1746,7 +1820,7 @@ jobs:
               bp="GO_BUILD_PROXY=$DEVCACHE_GOPROXY|https://proxy.golang.org"
             fi
             make docker-build-it ${bp:+"$bp"} MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE" BUILDX_CLIENT_LOAD=1
-            image_lock || exit 1
+            image_lock go-trusted-platform-ci-image-lock 600 || exit 1
             if ! take_lease; then
               echo "::error::the build finished but $IT_IMAGE is not on the daemon this job uses (context $(docker context show), DOCKER_HOST=${DOCKER_HOST:-unset}); builder $BUILDX_BUILDER:"
               docker buildx inspect "$BUILDX_BUILDER" || true
@@ -1801,7 +1875,7 @@ jobs:
           if [ -n "$json" ]; then
             (umask 077 && printf '{%s}\n' "$json" > "$registry_config/config.json") || exit 1
           fi
-          image_lock || exit 1
+          image_lock go-trusted-platform-ci-image-lock 600 || exit 1
           docker tag "$IT_LEASE_ID" "$ref"
           image_unlock
           DOCKER_CONFIG=$registry_config docker push "$ref"
@@ -1819,7 +1893,7 @@ jobs:
           fi
           source "$RUNNER_TEMP/image-lock.sh"
           trap image_unlock EXIT
-          image_lock || exit 1
+          image_lock go-trusted-platform-ci-image-lock 600 || exit 1
           docker tag "$IT_LEASE_ID" "$IT_IMAGE"
           image_unlock
           docker save -o "$RUNNER_TEMP/it-image.tar" "$IT_IMAGE"
@@ -1962,21 +2036,21 @@ jobs:
         run: |
           lease="go-trusted-platform-ci-lease-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
           image_lock() {
-            local lock="go-trusted-platform-ci-image-lock" held at t i
-            for ((i = 0; i < 660; i++)); do
-              docker image inspect "$lock:base" >/dev/null 2>&1 ||
-                head -c 1024 /dev/zero | docker import - "$lock:base" >/dev/null 2>&1 || true
-              IMAGE_LOCK_ID=$(docker create --pull never --name "$lock" "$lock:base" true 2>/dev/null) && return 0
+            local lock=${1:-go-trusted-platform-ci-image-lock} stale=${2:-600} base=go-trusted-platform-ci-image-lock:base held at t i
+            for ((i = 0; i < stale + 60; i++)); do
+              docker image inspect "$base" >/dev/null 2>&1 ||
+                head -c 1024 /dev/zero | docker import - "$base" >/dev/null 2>&1 || true
+              IMAGE_LOCK_ID=$(docker create --pull never --name "$lock" "$base" true 2>/dev/null) && return 0
               IMAGE_LOCK_ID=
-              if read -r held at < <(docker inspect -f '{{.Id}} {{.Created}}' "$lock" 2>/dev/null) &&
-                t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge 600 ]; then
+              if read -r held at < <(docker container inspect -f '{{.Id}} {{.Created}}' "$lock" 2>/dev/null) &&
+                [ -n "$at" ] && t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge "$stale" ]; then
                 echo "removing the stale image lock $lock (created $at)"
                 docker rm "$held" >/dev/null 2>&1 || true
                 continue
               fi
               sleep 1
             done
-            echo "::error::the image lock $lock was not free within 660 s"
+            echo "::error::the image lock $lock was not free within $((stale + 60)) s (stale age $stale s)"
             return 1
           }
           image_unlock() {
@@ -1993,7 +2067,7 @@ jobs:
           declare -f image_lock image_unlock take_lease > "$RUNNER_TEMP/image-lock.sh"
           trap image_unlock EXIT
           echo "IT_LEASE=$lease" >> "$GITHUB_ENV"
-          image_lock || exit 1
+          image_lock go-trusted-platform-ci-image-lock 600 || exit 1
           if docker create --pull never --name "$lease" "$IT_IMAGE_ID" true >/dev/null; then
             docker tag "$IT_IMAGE_ID" "$IT_IMAGE"
             echo "IT_LEASE_ID=$IT_IMAGE_ID" >> "$GITHUB_ENV"
@@ -2026,7 +2100,8 @@ jobs:
           IT_IMAGE_REF="$IT_REGISTRY/go-trusted-platform/it-image:$IT_IMAGE_TAG"
           source "$RUNNER_TEMP/image-lock.sh"
           registry_config=$(mktemp -d "$RUNNER_TEMP/docker-config.XXXXXX") || exit 1
-          trap 'image_unlock; rm -rf "$registry_config"' EXIT
+          trap 'image_unlock; rm -rf "$registry_config" "${pull_log:-}"' EXIT
+          pull_log=$(mktemp "$RUNNER_TEMP/pull-log.XXXXXX") || exit 1
           if ! docker_ctx=$(docker context show); then
             echo "::warning::the runner's Docker context could not be read; building this leg's image"
             exit 0
@@ -2046,11 +2121,43 @@ jobs:
           if [ -n "$json" ]; then
             (umask 077 && printf '{%s}\n' "$json" > "$registry_config/config.json") || true
           fi
-          if ! DOCKER_CONFIG=$registry_config docker pull "$IT_IMAGE_REF"; then
-            echo "::warning::pulling $IT_IMAGE_REF from the LAN registry failed; building this leg's image"
-            exit 0
-          fi
-          image_lock || exit 1
+          # One pull per digest per daemon: the legs sharing a daemon take the
+          # digest's pull lock in turn, and a leg after the first finds the
+          # image there. Containerd fails a pull that races another on its ref
+          # lock with errors a later attempt clears: 3 attempts for those.
+          case $IT_IMAGE_REF in
+            *@sha256:*) digest=${IT_IMAGE_REF##*@sha256:} ;;
+            *) digest=$(printf '%s' "$IT_IMAGE_REF" | sha256sum | cut -d' ' -f1) ;;
+          esac
+          # The reaper removes old, unleased registry references under the
+          # global image lock (#2386), so a cached reference is checked and
+          # re-tagged under that lock too; one the reaper took goes back to the
+          # pull path, at most twice.
+          image_lock go-trusted-platform-ci-image-lock 600 || exit 1
+          tries=0
+          while ! docker image inspect "$IT_IMAGE_REF" >/dev/null 2>&1 && [ "$tries" -lt 2 ]; do
+            image_unlock
+            tries=$((tries + 1))
+            image_lock "go-trusted-platform-ci-pull-${digest:0:12}" 3600 || exit 1
+            if docker image inspect "$IT_IMAGE_REF" >/dev/null 2>&1; then
+              echo "$IT_IMAGE_REF is already on this runner's daemon; not pulling it again"
+            else
+              for delay in 5 15 ''; do
+                if (set -o pipefail; DOCKER_CONFIG=$registry_config timeout 900 docker pull "$IT_IMAGE_REF" 2>&1 | tee "$pull_log"); then
+                  break
+                fi
+                if [ -z "$delay" ] || ! grep -Eq 'lease does not exist|failed to extract layer|failed to commit snapshot|failed to cleanup extract' "$pull_log"; then
+                  echo "::warning::pulling $IT_IMAGE_REF from the LAN registry failed; building this leg's image"
+                  image_unlock
+                  exit 0
+                fi
+                echo "pulling $IT_IMAGE_REF hit a transient containerd error; retrying in $delay s"
+                sleep "$delay"
+              done
+            fi
+            image_unlock
+            image_lock go-trusted-platform-ci-image-lock 600 || exit 1
+          done
           if ! docker tag "$IT_IMAGE_REF" "$IT_IMAGE"; then
             echo "::warning::re-tagging $IT_IMAGE_REF as $IT_IMAGE failed; building this leg's image"
             image_unlock
@@ -2132,7 +2239,7 @@ jobs:
           lease=$IT_LEASE
           leased=false
           if [ -z "$IT_IMAGE_TAG" ] && docker load -i "$RUNNER_TEMP/it-image/it-image.tar"; then
-            image_lock || exit 1
+            image_lock go-trusted-platform-ci-image-lock 600 || exit 1
             if loaded_id=$(docker image inspect -f '{{.Id}}' "$IT_IMAGE") &&
               docker create --pull never --name "$IT_LEASE" "$loaded_id" true >/dev/null; then
               loaded_identity=$(docker image inspect -f '{{json .RootFS.Layers}}' "$loaded_id" | sha256sum | cut -d' ' -f1)
@@ -2149,7 +2256,7 @@ jobs:
           if [ "$leased" != true ]; then
             IT_IMAGE=$(make -s it-image IT_WARM_CACHE=0)
             echo "::warning::the LAN registry pull or the run's artifact left no image with the image job's layers on this runner's daemon; running this leg in $IT_IMAGE"
-            image_lock || exit 1
+            image_lock go-trusted-platform-ci-image-lock 600 || exit 1
             if ! take_lease; then
               image_unlock
               # v1.29.4 and v1.29.5: Athens first when the runner sets DEVCACHE_GOPROXY
@@ -2160,7 +2267,7 @@ jobs:
                 bp="GO_BUILD_PROXY=$DEVCACHE_GOPROXY|https://proxy.golang.org"
               fi
               make docker-build-it ${bp:+"$bp"} MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE" BUILDX_CLIENT_LOAD=1 IT_WARM_CACHE=0
-              image_lock || exit 1
+              image_lock go-trusted-platform-ci-image-lock 600 || exit 1
               if ! take_lease; then
                 echo "::error::the fallback build finished but $IT_IMAGE is not on the daemon this leg uses (context $(docker context show), DOCKER_HOST=${DOCKER_HOST:-unset}); builder $BUILDX_BUILDER:"
                 docker buildx inspect "$BUILDX_BUILDER" || true
@@ -2305,21 +2412,21 @@ jobs:
         run: |
           lease="go-trusted-platform-ci-lease-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
           image_lock() {
-            local lock="go-trusted-platform-ci-image-lock" held at t i
-            for ((i = 0; i < 660; i++)); do
-              docker image inspect "$lock:base" >/dev/null 2>&1 ||
-                head -c 1024 /dev/zero | docker import - "$lock:base" >/dev/null 2>&1 || true
-              IMAGE_LOCK_ID=$(docker create --pull never --name "$lock" "$lock:base" true 2>/dev/null) && return 0
+            local lock=${1:-go-trusted-platform-ci-image-lock} stale=${2:-600} base=go-trusted-platform-ci-image-lock:base held at t i
+            for ((i = 0; i < stale + 60; i++)); do
+              docker image inspect "$base" >/dev/null 2>&1 ||
+                head -c 1024 /dev/zero | docker import - "$base" >/dev/null 2>&1 || true
+              IMAGE_LOCK_ID=$(docker create --pull never --name "$lock" "$base" true 2>/dev/null) && return 0
               IMAGE_LOCK_ID=
-              if read -r held at < <(docker inspect -f '{{.Id}} {{.Created}}' "$lock" 2>/dev/null) &&
-                t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge 600 ]; then
+              if read -r held at < <(docker container inspect -f '{{.Id}} {{.Created}}' "$lock" 2>/dev/null) &&
+                [ -n "$at" ] && t=$(date -d "$at" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -ge "$stale" ]; then
                 echo "removing the stale image lock $lock (created $at)"
                 docker rm "$held" >/dev/null 2>&1 || true
                 continue
               fi
               sleep 1
             done
-            echo "::error::the image lock $lock was not free within 660 s"
+            echo "::error::the image lock $lock was not free within $((stale + 60)) s (stale age $stale s)"
             return 1
           }
           image_unlock() {
@@ -2335,7 +2442,7 @@ jobs:
           }
           declare -f image_lock image_unlock take_lease > "$RUNNER_TEMP/image-lock.sh"
           trap image_unlock EXIT
-          image_lock || exit 1
+          image_lock go-trusted-platform-ci-image-lock 600 || exit 1
           if ! take_lease; then
             image_unlock
             echo "integration image $IT_IMAGE is missing or went before its lease; building it once"
@@ -2347,7 +2454,7 @@ jobs:
               bp="GO_BUILD_PROXY=$DEVCACHE_GOPROXY|https://proxy.golang.org"
             fi
             make docker-build-it ${bp:+"$bp"} MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE" BUILDX_CLIENT_LOAD=1
-            image_lock || exit 1
+            image_lock go-trusted-platform-ci-image-lock 600 || exit 1
             if ! take_lease; then
               echo "::error::the integration image $IT_IMAGE is missing after one rebuild, so this job holds no lease on it"
               exit 1

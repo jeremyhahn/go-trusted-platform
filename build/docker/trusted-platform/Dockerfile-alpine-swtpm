@@ -10,7 +10,7 @@ ARG USER="tpadm"
 ARG GROUP="tpadm"
 ARG SOFTHSM_TAG=2.6.1
 
-LABEL maintainer="Jeremy Hahn <mail@jeremyhahn.com>"
+LABEL maintainer="Jeremy Hahn <maintainer@example.com>"
 
 RUN apk update && \
     apk upgrade && \

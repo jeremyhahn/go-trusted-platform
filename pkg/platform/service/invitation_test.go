@@ -217,6 +217,7 @@ func TestInvitationService_Create_Success(t *testing.T) {
 	mockInvDAO.On("Save", ctx, mock.AnythingOfType("*entities.Invitation")).Return(nil)
 
 	service := NewInvitationService(logger, mockInvDAO, mockUserDAO)
+	service.SetRoleLister(listedRoles("admin", "member", "viewer"))
 	invitation, err := service.Create(ctx, &CreateInvitationRequest{
 		TenantID:    tenantID,
 		Email:       email,
@@ -235,6 +236,103 @@ func TestInvitationService_Create_Success(t *testing.T) {
 	assert.False(t, invitation.ExpiresAt.IsZero())
 	mockInvDAO.AssertExpectations(t)
 	mockUserDAO.AssertExpectations(t)
+}
+
+// fakeInvitationRoleLister stands in for the tenant's IAM role list (#1992).
+type fakeInvitationRoleLister struct {
+	names   []string
+	err     error
+	tenants []string
+}
+
+func listedRoles(names ...string) *fakeInvitationRoleLister {
+	return &fakeInvitationRoleLister{names: names}
+}
+
+func (f *fakeInvitationRoleLister) RoleNames(_ context.Context, tenantID string) ([]string, error) {
+	f.tenants = append(f.tenants, tenantID)
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.names, nil
+}
+
+// TestInvitationService_Create_RoleFromIAMRoleList verifies Create accepts
+// only a role the tenant's IAM role list holds (#1992): the REST, gRPC and
+// MCP invitation paths all reach Create, so this is where the role is checked.
+func TestInvitationService_Create_RoleFromIAMRoleList(t *testing.T) {
+	ctx := context.Background()
+	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
+
+	t.Run("UnlistedRoleRefused", func(t *testing.T) {
+		mockInvDAO := new(MockInvitationDAO)
+		mockUserDAO := new(MockUserDAO)
+		lister := listedRoles("auditor")
+		service := NewInvitationService(logger, mockInvDAO, mockUserDAO)
+		service.SetRoleLister(lister)
+
+		invitation, err := service.Create(ctx, &CreateInvitationRequest{
+			TenantID: "tenant-123", Email: "a@example.com", Role: "member", InvitedByID: 1,
+		})
+
+		require.Error(t, err)
+		assert.Nil(t, invitation)
+		var invalid ErrInvalidInvitation
+		require.ErrorAs(t, err, &invalid)
+		assert.Contains(t, invalid.Reason, "member")
+		assert.Equal(t, []string{"tenant-123"}, lister.tenants)
+		mockInvDAO.AssertNotCalled(t, "Save", mock.Anything, mock.Anything)
+	})
+
+	t.Run("ListedRoleAccepted", func(t *testing.T) {
+		mockInvDAO := new(MockInvitationDAO)
+		mockUserDAO := new(MockUserDAO)
+		mockUserDAO.On("ForEachPage", ctx, mock.Anything, mock.Anything).Return(nil)
+		mockInvDAO.On("Save", ctx, mock.AnythingOfType("*entities.Invitation")).Return(nil)
+		service := NewInvitationService(logger, mockInvDAO, mockUserDAO)
+		service.SetRoleLister(listedRoles("viewer", "auditor"))
+
+		invitation, err := service.Create(ctx, &CreateInvitationRequest{
+			TenantID: "tenant-123", Email: "a@example.com", Role: "auditor", InvitedByID: 1,
+		})
+
+		require.NoError(t, err)
+		require.NotNil(t, invitation)
+		assert.Equal(t, "auditor", invitation.Role)
+	})
+
+	t.Run("RoleListUnavailableRefused", func(t *testing.T) {
+		mockInvDAO := new(MockInvitationDAO)
+		lister := listedRoles()
+		lister.err = errors.New("iam unavailable")
+		service := NewInvitationService(logger, mockInvDAO, new(MockUserDAO))
+		service.SetRoleLister(lister)
+
+		invitation, err := service.Create(ctx, &CreateInvitationRequest{
+			TenantID: "tenant-123", Email: "a@example.com", Role: "member", InvitedByID: 1,
+		})
+
+		require.Error(t, err)
+		assert.Nil(t, invitation)
+		var unavailable ErrInvitationRolesUnavailable
+		require.ErrorAs(t, err, &unavailable)
+		mockInvDAO.AssertNotCalled(t, "Save", mock.Anything, mock.Anything)
+	})
+
+	t.Run("NoRoleListerRefused", func(t *testing.T) {
+		mockInvDAO := new(MockInvitationDAO)
+		service := NewInvitationService(logger, mockInvDAO, new(MockUserDAO))
+
+		invitation, err := service.Create(ctx, &CreateInvitationRequest{
+			TenantID: "tenant-123", Email: "a@example.com", Role: "member", InvitedByID: 1,
+		})
+
+		require.Error(t, err)
+		assert.Nil(t, invitation)
+		var unavailable ErrInvitationRolesUnavailable
+		require.ErrorAs(t, err, &unavailable)
+		mockInvDAO.AssertNotCalled(t, "Save", mock.Anything, mock.Anything)
+	})
 }
 
 // TestInvitationService_Create_DAOError verifies error handling when DAO save fails.
@@ -266,6 +364,7 @@ func TestInvitationService_Create_DAOError(t *testing.T) {
 	mockInvDAO.On("Save", ctx, mock.AnythingOfType("*entities.Invitation")).Return(expectedErr)
 
 	service := NewInvitationService(logger, mockInvDAO, mockUserDAO)
+	service.SetRoleLister(listedRoles("admin", "member", "viewer"))
 	invitation, err := service.Create(ctx, &CreateInvitationRequest{
 		TenantID:    tenantID,
 		Email:       email,
@@ -310,6 +409,7 @@ func TestInvitationService_Create_EmailAlreadyRegistered(t *testing.T) {
 		}).Return(datastore.ErrStopIteration)
 
 	service := NewInvitationService(logger, mockInvDAO, mockUserDAO)
+	service.SetRoleLister(listedRoles("admin", "member", "viewer"))
 	invitation, err := service.Create(ctx, &CreateInvitationRequest{
 		TenantID:    tenantID,
 		Email:       email,
@@ -1391,6 +1491,7 @@ func TestInvitationService_Create_UserCheckError(t *testing.T) {
 	mockUserDAO.On("ForEachPage", ctx, mock.Anything, mock.Anything).Return(expectedErr)
 
 	service := NewInvitationService(logger, mockInvDAO, mockUserDAO)
+	service.SetRoleLister(listedRoles("admin", "member", "viewer"))
 	invitation, err := service.Create(ctx, &CreateInvitationRequest{
 		TenantID:    tenantID,
 		Email:       email,

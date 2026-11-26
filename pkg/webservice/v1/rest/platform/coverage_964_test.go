@@ -161,7 +161,7 @@ func payloadOf(t *testing.T, rec *httptest.ResponseRecorder, into any) {
 	}
 }
 
-func TestSnapshotRoutes_NoStoreIsServerError(t *testing.T) {
+func TestSnapshotRoutes_NoStoreIsUnavailable(t *testing.T) {
 	cases := []struct {
 		name, method, path string
 		reloader           ConfigReloader
@@ -183,8 +183,8 @@ func TestSnapshotRoutes_NoStoreIsServerError(t *testing.T) {
 				pr.SetConfigReloader(tc.reloader)
 			}
 			rec := serve(root, tc.method, tc.path, "", nil)
-			if rec.Code != http.StatusInternalServerError {
-				t.Fatalf("status = %d, want 500 (body %s)", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
 			}
 		})
 	}
