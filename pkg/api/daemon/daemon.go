@@ -213,6 +213,7 @@ type Daemon struct {
 	mcpServer                    MCPServerInterface
 	mcpProvider                  *MCPServiceProvider
 	bmcGRPCService               *BMCGRPCService
+	bmcRestHandler               bmcwebsvc.RestHandler
 	switchGRPCService            *SwitchGRPCService
 	eabService                   EABServicer
 	eabGRPCService               *EABGRPCService
@@ -973,9 +974,13 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Register the Cluster gRPC service on the TCP listener and the Unix
 	// socket. It is the pkg/api/grpc implementation over the daemon's
 	// ClusterServicer — the same servicer the MCP cluster tools use, set
-	// through Daemon.SetClusterService. Until one is set every RPC returns
-	// Unavailable. That is true on every build, with or without -tags
-	// cluster, until #336 lands.
+	// through Daemon.SetClusterService. serve and every embedded host set
+	// that servicer through appbackends.WireSDKBackends, over the Raft
+	// cluster the embedded go-quicbaas service runs: status, nodes and
+	// leader answer, Leave and Join answer Unavailable (no leave or join
+	// seam in the pinned go-quicbaas), and node health
+	// reads unknown (the SDK reports membership, not liveness). Until a
+	// servicer is set every RPC returns Unavailable.
 	clusterGRPCService, clusterBackend := registerClusterGRPCService(logger, grpcServer, grpcUDSServer)
 	logger.Info("Cluster gRPC service registered")
 
@@ -1209,6 +1214,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			quicHandler.SetDeviceLifecycle(config.DeviceLifecycle)
 			if config.CAService != nil {
 				quicHandler.SetDeviceBootCA(config.CAService)
+			}
+			if deviceService != nil {
+				quicHandler.SetDeviceAttestChallenges(deviceService)
 			}
 		}
 
@@ -1462,6 +1470,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			return nil, err
 		}
 		if svc := reg.InvitationService(); svc != nil {
+			wireInvitationRoleLister(logger, svc, iamService.Client())
 			daemon.invitationService = svc
 			if daemon.invitationGRPCService != nil {
 				daemon.invitationGRPCService.SetService(svc)
@@ -1512,6 +1521,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 		if computeService != nil {
 			daemon.concreteRestServer.SetComputeHandlers(computeService, restGuard)
+		}
+		if config.RegistryService != nil {
+			daemon.concreteRestServer.SetRegistryHandlers(config.RegistryService, restGuard)
 		}
 	}
 
@@ -1855,9 +1867,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Warn("BMC service creation failed", "error", bmcErr)
 	} else {
 		// Register BMC gRPC service with both TCP and UDS endpoints.
-		// The baremetal service is left nil here; Provision and
-		// ProvisionStatus return Unavailable (not configured) until a baremetal
-		// orchestrator is wired via SetBaremetalService.
+		// The bare metal orchestrator is not wired: its workflow waits for
+		// an install-completion event, and nothing in production calls
+		// baremetal.Service.CompleteInstall yet. Provision and
+		// ProvisionStatus answer Unavailable (gRPC) and 503 (REST) until an
+		// authenticated install-completion event calls CompleteInstall.
 		bmcGRPCService := NewBMCGRPCService(bmcSvc, nil, logger.Slog())
 
 		// Wire the BMCEnroller into the gRPC service so EnrollBMC RPCs
@@ -1878,14 +1892,18 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 		logger.Info("BMC gRPC service initialized and registered successfully")
 
-		// Wire BMC handler into REST server for bare metal management.
-		if daemon.concreteRestServer != nil {
+		// Build the BMC REST handler whenever the BMC service exists: the
+		// web console serves /api/v1/bmc through it (BMCRestHandler) even
+		// when the daemon REST listener is off, and the listener, when on,
+		// mounts the same handler.
+		{
 			respWriter := response.NewResponseWriter(logger, nil)
-			bmcHandler, bmcHandlerErr := bmcwebsvc.NewHandler(bmcwebsvc.HandlerParams{
+			bmcParams := bmcwebsvc.HandlerParams{
 				BMCService:     bmcSvc,
 				ResponseWriter: respWriter,
 				Logger:         logger,
-			})
+			}
+			bmcHandler, bmcHandlerErr := bmcwebsvc.NewHandler(bmcParams)
 			if bmcHandlerErr == nil {
 				// Wire the BMCEnrollerServicer adapter so the REST enroll
 				// endpoint delegates to the real App enrollment ceremony.
@@ -1902,8 +1920,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 					)
 					logger.Info("BMC REST restorer wired")
 				}
-				daemon.concreteRestServer.SetBMCHandler(bmcHandler)
-				logger.Info("BMC management handler wired into REST server")
+				daemon.bmcRestHandler = bmcHandler
+				if daemon.concreteRestServer != nil {
+					daemon.concreteRestServer.SetBMCHandler(bmcHandler)
+					logger.Info("BMC management handler wired into REST server")
+				}
 			} else {
 				logger.Warn("BMC handler creation failed", "error", bmcHandlerErr)
 			}
@@ -3318,6 +3339,12 @@ func (d *Daemon) VPNGRPCServiceServer() *VPNGRPCService {
 	return d.vpnGRPCService
 }
 
+// BMCRestHandler returns the BMC REST handler backing /api/v1/bmc, or nil
+// when the daemon has no BMC service.
+func (d *Daemon) BMCRestHandler() bmcwebsvc.RestHandler {
+	return d.bmcRestHandler
+}
+
 // ProxyGRPCServiceServer returns the proxy gRPC service backing /api/v1/proxy.
 func (d *Daemon) ProxyGRPCServiceServer() *grpccreds.ProxyGRPCService {
 	return d.proxyGRPCService
@@ -3390,15 +3417,16 @@ func (d *Daemon) MCPServiceProvider() *MCPServiceProvider {
 
 // SetClusterService injects the platform cluster servicer behind every
 // cluster transport: the registered gRPC ClusterService (TCP and Unix
-// socket), which the REST /cluster routes, the QUIC cluster category and the
-// MCP cluster tools all call.
+// socket), which the REST /cluster routes, the QUIC cluster category, the
+// MCP cluster tools and an embedded host's ServiceRegistry (the embedded
+// SDK transport) all call.
 // A nil svc clears it.
 //
-// NOTHING CALLS THIS IN PRODUCTION, in any build. There is no tagged
-// wiring that constructs a *ClusterService and injects it here, so every
-// cluster operation reports the service as not configured — with -tags
-// cluster exactly as without it. Do not read the build tag as the
-// difference. See #334; wiring is #336.
+// serve (and every embedded host) sets it through appbackends.WireSDKBackends
+// with a servicer over the embedded go-quicbaas service, which reads the Raft
+// cluster that service already runs (status, nodes, leader). Leave and Join
+// answer Unavailable because the pinned go-quicbaas has no leave or join seam. The
+// build-tagged *ClusterService is not what is injected here. See #334.
 func (d *Daemon) SetClusterService(svc ClusterServicer) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

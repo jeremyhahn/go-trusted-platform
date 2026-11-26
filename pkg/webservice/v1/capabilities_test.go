@@ -13,6 +13,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -61,7 +62,7 @@ func capabilitiesFixture(t *testing.T) *mux.Router {
 		api.HandleFunc("/quicbaas/kv", ok).Methods(http.MethodGet)
 	})
 
-	registerCapabilitiesEndpoint(api, services, stubs, writer, nil)
+	registerCapabilitiesEndpoint(api, services, stubs, writer, nil, nil)
 	return root
 }
 
@@ -182,7 +183,7 @@ func ownershipFixture(t *testing.T) *mux.Router {
 	v1Router.serviceRegistry.requireService(api, "platform", "/platform", nil, func() {
 		t.Fatal("a nil platform backend must not register its routes")
 	})
-	registerCapabilitiesEndpoint(api, v1Router.serviceRegistry, nil, writer, nil)
+	registerCapabilitiesEndpoint(api, v1Router.serviceRegistry, nil, writer, nil, nil)
 	return root
 }
 
@@ -224,4 +225,49 @@ func TestCapabilities_UnavailableHandlerRoutesStayDisabled(t *testing.T) {
 		}
 		require.NotZerof(t, dark, "the %s 503 catch-alls are not listed not-configured", name)
 	}
+}
+
+// TestCapabilities_PlatformWritesDisabledWithoutBackends pins that the
+// platform writes which answer 503 while their backend is nil are listed
+// not-configured, so the console does not render controls that always fail.
+func TestCapabilities_PlatformWritesDisabledWithoutBackends(t *testing.T) {
+	caps := getCapabilities(t, newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &sessionAuth{}}))
+
+	for op, name := range map[string]string{
+		"PUT /api/v1/platform/config/sections/{section}": "platform-config-update",
+		"POST /api/v1/platform/shutdown":                 "platform-shutdown",
+	} {
+		c, found := caps[op]
+		require.Truef(t, found, "platform route %q is missing from the listing", op)
+		require.Falsef(t, c.Enabled, "unwired platform route %q is listed enabled", op)
+		require.Equal(t, CapabilityReasonNotConfigured+name, c.Reason)
+	}
+}
+
+// unwiredProvisioningBMCHandler is a BMC REST handler built without a
+// BaremetalService: every BMC route is served, but provisioning is not.
+type unwiredProvisioningBMCHandler struct {
+	countingBMCHandler
+}
+
+func (h *unwiredProvisioningBMCHandler) ProvisioningConfigured() bool { return false }
+
+func TestCapabilities_BMCProvisionUnwiredIsNotConfigured(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"},
+		bmcHandler:   &unwiredProvisioningBMCHandler{},
+	})
+	caps := getCapabilities(t, router)
+
+	const provision = "/api/v1/bmc/{profileID:[0-9]+}/provision"
+	for _, op := range []string{"POST " + provision, "GET " + provision} {
+		c, found := caps[op]
+		require.Truef(t, found, "%s is missing from the capabilities", op)
+		require.Falsef(t, c.Enabled, "%s is listed enabled without a bare metal backend", op)
+		require.Equal(t, CapabilityReasonNotConfigured+"baremetal", c.Reason)
+	}
+
+	media, found := caps["POST /api/v1/bmc/{profileID:[0-9]+}/virtual-media"]
+	require.True(t, found, "the virtual media route is missing from the capabilities")
+	require.True(t, media.Enabled, "virtual media must stay enabled when only provisioning is unwired")
 }
