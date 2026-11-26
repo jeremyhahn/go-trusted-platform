@@ -55,7 +55,11 @@ async function capabilities(page: Page): Promise<Map<string, boolean>> {
   return new Map(body.capabilities.map((c) => [c.op, c.enabled === true]));
 }
 
-/** Records every request the page sends, as `METHOD /path`. */
+/**
+ * Records every request the page sends, as `METHOD /path`. The no-write
+ * test reads only the write methods (POST, PUT, PATCH, DELETE) from it:
+ * the console also sends HEAD requests to page routes, which are not writes.
+ */
 function recordRequests(page: Page): string[] {
   const sent: string[] = [];
   page.on('request', (r) => {
@@ -121,6 +125,6 @@ test.describe('platform config (real server)', () => {
     ]);
     await expect(adminPage.getByText('Sources', { exact: true })).toBeVisible();
 
-    expect(sent.filter((s) => !s.startsWith('GET '))).toEqual([]);
+    expect(sent.filter((s) => /^(POST|PUT|PATCH|DELETE) /.test(s))).toEqual([]);
   });
 });
