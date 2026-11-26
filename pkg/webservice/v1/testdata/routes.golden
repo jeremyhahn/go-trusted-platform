@@ -14,6 +14,7 @@ DELETE /api/v1/dns/zones/{zone}/records/{type}/{name}
 DELETE /api/v1/eab/credentials/{id:[0-9]+}
 DELETE /api/v1/gateway/bgp/prefixes
 DELETE /api/v1/gateway/ipam/allocations
+DELETE /api/v1/gateway/lb/vips/{protocol}/{address}/{port}
 DELETE /api/v1/gateway/state/{id}
 DELETE /api/v1/gateway/vpn-leases/{id}/{tenant}/{lease}
 DELETE /api/v1/iam/apps/{id}
@@ -160,6 +161,12 @@ GET /api/v1/gateway/bgp/status
 GET /api/v1/gateway/desired-config/{id}
 GET /api/v1/gateway/ipam/allocations
 GET /api/v1/gateway/ipam/pools
+GET /api/v1/gateway/lb/status
+GET /api/v1/gateway/lb/vips
+GET /api/v1/gateway/lb/vips/{protocol}/{address}/{port}
+GET /api/v1/gateway/nat64/status
+GET /api/v1/gateway/perf/conntrack
+GET /api/v1/gateway/perf/datapath
 GET /api/v1/gateway/state
 GET /api/v1/gateway/state/{id}
 GET /api/v1/gateway/status
@@ -432,7 +439,9 @@ POST /api/v1/eab/credentials/{id:[0-9]+}/revoke
 POST /api/v1/eab/credentials/{id:[0-9]+}/used
 POST /api/v1/gateway/bgp/prefixes
 POST /api/v1/gateway/ipam/allocations
+POST /api/v1/gateway/lb/vips
 POST /api/v1/gateway/mode
+POST /api/v1/gateway/perf/flows
 POST /api/v1/gateway/telemetry
 POST /api/v1/iam/apps
 POST /api/v1/iam/apps/{id}/rotate
@@ -587,6 +596,7 @@ PUT /api/v1/device/templates/{id:[0-9]+}
 PUT /api/v1/devices/{id:[0-9]+}
 PUT /api/v1/dns/zones/{zone}
 PUT /api/v1/dns/zones/{zone}/records
+PUT /api/v1/gateway/lb/vips/{protocol}/{address}/{port}/backends
 PUT /api/v1/gateway/vpn-leases/{id}
 PUT /api/v1/iam/apps/{id}
 PUT /api/v1/iam/groups/{id}

@@ -1,7 +1,8 @@
 /**
  * Gateway Service
  *
- * Provides operations for multi-mode gateway management including BGP and IPAM.
+ * Provides operations for multi-mode gateway management including BGP, IPAM
+ * and load balancing.
  */
 
 import type { ApiClient } from '../client/api-client.js';
@@ -29,6 +30,20 @@ import type {
   GatewaySnapshot,
   ListGatewayStateResponse,
   GetNAT64StatusResponse,
+  GetVIPResponse,
+  ListVIPsResponse,
+  GetLBStatusResponse,
+  AddVIPRequest,
+  AddVIPResponse,
+  RemoveVIPResponse,
+  SetVIPBackendsResponse,
+  VIPBackend,
+  VIPConfig,
+  GetGatewayNAT64StatusResponse,
+  GetPerfFlowsRequest,
+  GetPerfFlowsResponse,
+  GetPerfDatapathResponse,
+  GetPerfConntrackResponse,
 } from '../types/gateway.js';
 
 /**
@@ -273,5 +288,117 @@ export class GatewayService extends BaseService {
       );
     }
     return this.client.get<ListAllocationsResponse>(this.buildUrl('/ipam/allocations'));
+  }
+
+  // ===========================================================================
+  // Load balancer operations
+  // ===========================================================================
+
+  /**
+   * List every VIP with its backends and health.
+   * Route: GET /api/v1/gateway/lb/vips
+   */
+  async listVIPs(): Promise<ApiResponse<ListVIPsResponse>> {
+    return this.client.get<ListVIPsResponse>(this.buildUrl('/lb/vips'));
+  }
+
+  /**
+   * Get one VIP by its protocol, address and port.
+   * Route: GET /api/v1/gateway/lb/vips/{protocol}/{address}/{port}
+   */
+  async getVIP(protocol: string, address: string, port: number): Promise<ApiResponse<GetVIPResponse>> {
+    return this.client.get<GetVIPResponse>(
+      this.buildUrl(`/lb/vips/${encodeURIComponent(protocol)}/${encodeURIComponent(address)}/${port}`)
+    );
+  }
+
+  /**
+   * Add a VIP with its backends. Admin only.
+   * Route: POST /api/v1/gateway/lb/vips
+   *
+   * Never retried: a lost response would replay a switch reprogram (#2179 Codex).
+   */
+  async addVIP(vip: VIPConfig): Promise<ApiResponse<AddVIPResponse>> {
+    const request: AddVIPRequest = { vip };
+    return this.client.post<AddVIPResponse>(this.buildUrl('/lb/vips'), request, {
+      retry: { enabled: false },
+    });
+  }
+
+  /**
+   * Remove a VIP by its protocol, address and port. Admin only.
+   * Route: DELETE /api/v1/gateway/lb/vips/{protocol}/{address}/{port}
+   *
+   * Never retried: a lost response would replay a switch reprogram.
+   */
+  async removeVIP(protocol: string, address: string, port: number): Promise<ApiResponse<RemoveVIPResponse>> {
+    return this.client.delete<RemoveVIPResponse>(
+      this.buildUrl(`/lb/vips/${encodeURIComponent(protocol)}/${encodeURIComponent(address)}/${port}`),
+      { retry: { enabled: false } }
+    );
+  }
+
+  /**
+   * Replace a VIP's backend set. Admin only.
+   * Route: PUT /api/v1/gateway/lb/vips/{protocol}/{address}/{port}/backends
+   *
+   * Never retried: a lost response would replay a switch reprogram.
+   */
+  async setVIPBackends(
+    protocol: string,
+    address: string,
+    port: number,
+    backends: VIPBackend[]
+  ): Promise<ApiResponse<SetVIPBackendsResponse>> {
+    return this.client.put<SetVIPBackendsResponse>(
+      this.buildUrl(`/lb/vips/${encodeURIComponent(protocol)}/${encodeURIComponent(address)}/${port}/backends`),
+      { backends },
+      { retry: { enabled: false } }
+    );
+  }
+
+  /**
+   * Get the load balancer summary.
+   * Route: GET /api/v1/gateway/lb/status
+   */
+  async getLBStatus(): Promise<ApiResponse<GetLBStatusResponse>> {
+    return this.client.get<GetLBStatusResponse>(this.buildUrl('/lb/status'));
+  }
+
+  /**
+   * Get the NAT64 translator status from the webservice.
+   * Route: GET /api/v1/gateway/nat64/status (protojson camelCase).
+   * getNAT64Status stays the daemon-transport read of
+   * /v1/sdn/gateway/nat64/status.
+   */
+  async getGatewayNAT64Status(): Promise<ApiResponse<GetGatewayNAT64StatusResponse>> {
+    return this.client.get<GetGatewayNAT64StatusResponse>(this.buildUrl('/nat64/status'));
+  }
+
+  /**
+   * Run one flow-programming benchmark: the server installs temporary drop
+   * flows in OpenFlow table 250 and deletes them when the run ends.
+   * Admin only. Route: POST /api/v1/gateway/perf/flows
+   *
+   * The run is never retried: a lost response would install and time the
+   * flows twice for one confirmation (#2179 Codex).
+   */
+  async getPerfFlows(request: GetPerfFlowsRequest = {}): Promise<ApiResponse<GetPerfFlowsResponse>> {
+    return this.client.post<GetPerfFlowsResponse>(this.buildUrl('/perf/flows'), request, {
+      retry: { enabled: false },
+    });
+  }
+
+
+  /** Read the datapath counters; an empty bridge selects the default bridge. Admin only. Route: GET /api/v1/gateway/perf/datapath */
+  async getPerfDatapath(bridge?: string): Promise<ApiResponse<GetPerfDatapathResponse>> {
+    const q = bridge ? `?bridge=${encodeURIComponent(bridge)}` : '';
+    return this.client.get<GetPerfDatapathResponse>(this.buildUrl(`/perf/datapath${q}`));
+  }
+
+  /** Summarize the conntrack table; no zone summarizes every zone. Admin only. Route: GET /api/v1/gateway/perf/conntrack */
+  async getPerfConntrack(zone?: number): Promise<ApiResponse<GetPerfConntrackResponse>> {
+    const q = zone !== undefined ? `?zone=${zone}` : '';
+    return this.client.get<GetPerfConntrackResponse>(this.buildUrl(`/perf/conntrack${q}`));
   }
 }

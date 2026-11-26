@@ -12,7 +12,8 @@ import { pickPorts, renderConfig } from './ports';
  * Starts the platform daemon `make build WITH_WEB=1` produced (bin/platformd,
  * the console embedded) in a fresh temporary directory, on the in-process TPM
  * simulator and the embedded in-memory quicbaas that platformd.test.yaml
- * configures, and waits until /health/ready answers 200. global-teardown.ts
+ * configures, with the in-memory gateway datapath (bin/e2e-datapath) on the
+ * run's sdn.gateway.datapath-socket, and waits until /health/ready answers 200. global-teardown.ts
  * stops it and removes the directory.
  *
  * If the daemon exits or never becomes ready, setup throws with the tail of
@@ -41,7 +42,13 @@ export interface ServerState {
   pid: number;
   dir: string;
   log: string;
+  /** The in-memory gateway datapath's pid; absent in an older state file. */
+  datapathPid?: number;
 }
+
+/** The placeholder platformd.test.yaml carries for the datapath socket. */
+export const DATAPATH_SOCKET_PLACEHOLDER = '__E2E_DATAPATH_SOCKET__';
+const DATAPATH_READY_TIMEOUT_MS = 10_000;
 
 /** Where setup generates the WebAuthn attestation CA in a run directory. */
 export function attestationDir(runDir: string): string {
@@ -100,10 +107,20 @@ async function globalSetup(): Promise<void> {
   // The WebAuthn attestation CA platformd.test.yaml names as
   // quicbaas.webauthn-attestation-roots-file (relative to dir).
   generateAttestationCA(attestationDir(dir));
+  // The in-memory gateway datapath (test/e2e/datapath) on the run
+  // directory's socket: platformd reaches its load balancer, NAT64 and perf
+  // verbs through sdn.gateway.datapath-socket, so AddVIP has a backend.
+  const datapathSocket = path.join(dir, 'dp.sock');
+  const datapathPid = await startDatapath(dir, datapathSocket);
   const template = fs.readFileSync(path.join(__dirname, 'platformd.test.yaml'), 'utf8');
+  if (!template.includes(DATAPATH_SOCKET_PLACEHOLDER)) {
+    stopPid(datapathPid);
+    throw new Error(`[real-server] platformd.test.yaml has no ${DATAPATH_SOCKET_PLACEHOLDER}`);
+  }
   // The public port from E2E_PORT and an internal port of its own, so the
   // two TLS listeners never bind one address.
-  fs.writeFileSync(path.join(dir, 'config.yaml'), renderConfig(template, pickPorts(port)));
+  const rendered = renderConfig(template, pickPorts(port)).split(DATAPATH_SOCKET_PLACEHOLDER).join(datapathSocket);
+  fs.writeFileSync(path.join(dir, 'config.yaml'), rendered);
 
   const log = path.join(dir, 'platformd.log');
   const out = fs.openSync(log, 'a');
@@ -122,6 +139,7 @@ async function globalSetup(): Promise<void> {
   fs.closeSync(out);
   child.unref();
   if (!child.pid) {
+    stopPid(datapathPid);
     throw new Error(`[real-server] could not spawn ${binary}`);
   }
   // An object, not a let: the exit handler writes it from a callback.
@@ -130,7 +148,7 @@ async function globalSetup(): Promise<void> {
     status.exited = code ?? (sig ? 128 : -1);
   });
 
-  const state: ServerState = { pid: child.pid, dir, log };
+  const state: ServerState = { pid: child.pid, dir, log, datapathPid };
   fs.writeFileSync(stateFile(port), JSON.stringify(state));
   console.log(`[real-server] platformd pid ${child.pid} in ${dir}, waiting for /health/ready on ${port}`);
 
@@ -157,6 +175,47 @@ async function globalSetup(): Promise<void> {
   throw new Error(`[real-server] ${failure}; log ${log}, tail:\n${logTail}`);
 }
 
+/**
+ * Starts the in-memory gateway datapath (E2E_DATAPATH_BIN, else
+ * bin/e2e-datapath, which `make web-e2e-platformd` builds) on socket and waits
+ * until the socket exists. Throws with its log tail if it is missing, exits or
+ * never listens.
+ */
+async function startDatapath(dir: string, socket: string): Promise<number> {
+  const binary = process.env.E2E_DATAPATH_BIN || path.join(REPO_ROOT, 'bin', 'e2e-datapath');
+  if (!fs.existsSync(binary)) {
+    throw new Error(`[real-server] ${binary} is missing: run \`make web-e2e\` (web-e2e-platformd builds it)`);
+  }
+  const log = path.join(dir, 'datapath.log');
+  const out = fs.openSync(log, 'a');
+  const child = spawn(binary, ['-socket', socket], {
+    cwd: dir,
+    detached: true,
+    stdio: ['ignore', out, out],
+  });
+  fs.closeSync(out);
+  child.unref();
+  if (!child.pid) {
+    throw new Error(`[real-server] could not spawn ${binary}`);
+  }
+  const pid = child.pid;
+  const status: { exited: number | null } = { exited: null };
+  child.on('exit', (code, sig) => {
+    status.exited = code ?? (sig ? 128 : -1);
+  });
+  const deadline = Date.now() + DATAPATH_READY_TIMEOUT_MS;
+  while (!fs.existsSync(socket)) {
+    if (status.exited !== null || Date.now() >= deadline) {
+      stopPid(pid);
+      const why = status.exited !== null ? `exited with ${status.exited}` : `no ${socket} after ${DATAPATH_READY_TIMEOUT_MS} ms`;
+      throw new Error(`[real-server] e2e datapath ${why}; log ${log}, tail:\n${tail(log)}`);
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  console.log(`[real-server] e2e datapath pid ${pid} on ${socket}`);
+  return pid;
+}
+
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -166,9 +225,39 @@ function alive(pid: number): boolean {
   }
 }
 
+/** Sends sig to pid's process group, else to pid alone. */
+function signalPid(pid: number, sig: NodeJS.Signals): void {
+  try {
+    process.kill(-pid, sig);
+  } catch {
+    try {
+      process.kill(pid, sig);
+    } catch {
+      // already gone
+    }
+  }
+}
+
+/** SIGTERM to pid without waiting, for a setup that fails before the state file. */
+function stopPid(pid: number): void {
+  signalPid(pid, 'SIGTERM');
+}
+
+/** SIGTERM to pid's process group, then SIGKILL after 15 s. */
+async function stopProcess(pid: number): Promise<void> {
+  signalPid(pid, 'SIGTERM');
+  const deadline = Date.now() + 15_000;
+  while (alive(pid) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  if (alive(pid)) {
+    signalPid(pid, 'SIGKILL');
+  }
+}
+
 /**
- * Stops the daemon setup started on port: SIGTERM to its process group, then
- * SIGKILL after 15 s, and removes its directory unless keepDir (a failed start
+ * Stops the daemon setup started on port, then its in-memory datapath: SIGTERM
+ * to each process group, then SIGKILL after 15 s, and removes its directory unless keepDir (a failed start
  * keeps it so the log can be read).
  */
 export async function stopServer(port: number, opts: { keepDir?: boolean } = {}): Promise<void> {
@@ -177,24 +266,9 @@ export async function stopServer(port: number, opts: { keepDir?: boolean } = {})
     return;
   }
   const state = JSON.parse(fs.readFileSync(file, 'utf8')) as ServerState;
-  const signal = (sig: NodeJS.Signals) => {
-    try {
-      process.kill(-state.pid, sig);
-    } catch {
-      try {
-        process.kill(state.pid, sig);
-      } catch {
-        // already gone
-      }
-    }
-  };
-  signal('SIGTERM');
-  const deadline = Date.now() + 15_000;
-  while (alive(state.pid) && Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  if (alive(state.pid)) {
-    signal('SIGKILL');
+  await stopProcess(state.pid);
+  if (state.datapathPid) {
+    await stopProcess(state.datapathPid);
   }
   fs.rmSync(file, { force: true });
   if (!opts.keepDir && !process.env.E2E_KEEP_DATA) {

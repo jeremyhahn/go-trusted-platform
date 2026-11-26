@@ -1262,10 +1262,13 @@ endif
 # WITH_WEB=1), linked with cgo and the tpm_simulator tag so tpm.simulator: true
 # in platformd.test.yaml has an in-process simulator. The default `make build`
 # stays CGO_ENABLED=0 without the simulator; this binary is for the e2e suite.
+# bin/e2e-datapath is the in-memory gateway datapath global-setup serves on the
+# run's sdn.gateway.datapath-socket, so the VIP row's writes reach a backend.
 .PHONY: web-e2e-platformd
 web-e2e-platformd: _web-embed-prepare
 	@mkdir -p bin
 	CGO_ENABLED=1 $(GOBIN)/go build -tags "tpm_simulator $(BUILD_TAGS)" -o $(PLATFORMD) --ldflags '-w -s ${LDFLAGS}' ./cmd/platformd
+	$(GOBIN)/go build -o bin/e2e-datapath ./test/e2e/datapath
 
 # vitest over web/src/**/*.test.ts(x): hooks, stores, contexts in jsdom, no
 # server. Playwright (web-test) owns the browser flows.

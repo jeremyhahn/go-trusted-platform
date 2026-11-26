@@ -16,6 +16,7 @@ package gateway
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gorilla/mux"
 
@@ -58,6 +59,16 @@ func NewGatewayRouter(
 //	GET    /api/v1/gateway/ipam/allocations         - ListAllocations (?poolId=)
 //	POST   /api/v1/gateway/ipam/allocations         - AllocateIP
 //	DELETE /api/v1/gateway/ipam/allocations         - ReleaseIP (?ip=)
+//	GET    /api/v1/gateway/lb/vips                  - ListVIPs
+//	GET    /api/v1/gateway/lb/vips/{protocol}/{address}/{port} - GetVIP
+//	POST   /api/v1/gateway/lb/vips                  - AddVIP (201)
+//	DELETE /api/v1/gateway/lb/vips/{protocol}/{address}/{port} - RemoveVIP
+//	PUT    /api/v1/gateway/lb/vips/{protocol}/{address}/{port}/backends - SetVIPBackends
+//	GET    /api/v1/gateway/lb/status                - GetLBStatus
+//	POST   /api/v1/gateway/perf/flows               - GetPerfFlows (installs temporary flows; admin)
+//	GET    /api/v1/gateway/nat64/status             - GetNAT64Status
+//	GET    /api/v1/gateway/perf/datapath            - GetPerfDatapath (?bridge=)
+//	GET    /api/v1/gateway/perf/conntrack           - GetPerfConntrack (?zone=)
 func (r *GatewayRouter) RegisterRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix(basePath).Subrouter()
 	sr.HandleFunc("/status", r.getStatus).Methods("GET")
@@ -71,6 +82,22 @@ func (r *GatewayRouter) RegisterRoutes(parent *mux.Router) {
 	sr.HandleFunc("/ipam/allocations", r.listAllocations).Methods("GET")
 	sr.HandleFunc("/ipam/allocations", r.allocateIP).Methods("POST")
 	sr.HandleFunc("/ipam/allocations", r.releaseIP).Methods("DELETE")
+	// Load balancer (#2052).
+	sr.HandleFunc("/lb/vips", r.listVIPs).Methods("GET")
+	sr.HandleFunc("/lb/vips/{protocol}/{address}/{port}", r.getVIP).Methods("GET")
+	sr.HandleFunc("/lb/vips", r.addVIP).Methods("POST")
+	sr.HandleFunc("/lb/vips/{protocol}/{address}/{port}", r.removeVIP).Methods("DELETE")
+	sr.HandleFunc("/lb/vips/{protocol}/{address}/{port}/backends", r.setVIPBackends).Methods("PUT")
+	sr.HandleFunc("/lb/status", r.getLBStatus).Methods("GET")
+	// NAT64 translator status. The daemon keeps /api/v1/sdn/gateway/nat64;
+	// the webservice serves the read here in protojson (#2052).
+	sr.HandleFunc("/nat64/status", r.getNAT64Status).Methods("GET")
+	// GetPerfFlows installs and removes temporary flows in OpenFlow table
+	// 250, so it is a POST (a write), never a GET.
+	sr.HandleFunc("/perf/flows", r.getPerfFlows).Methods("POST")
+	// The datapath and conntrack counters are only read, so both are GETs.
+	sr.HandleFunc("/perf/datapath", r.getPerfDatapath).Methods("GET")
+	sr.HandleFunc("/perf/conntrack", r.getPerfConntrack).Methods("GET")
 }
 
 func (r *GatewayRouter) ensure(w http.ResponseWriter, req *http.Request) bool {
@@ -115,6 +142,200 @@ func (r *GatewayRouter) getBGPStatus(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	resp, err := r.server.GetBGPStatus(req.Context(), &platformv1.GetBGPStatusRequest{})
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+func (r *GatewayRouter) listVIPs(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	resp, err := r.server.ListVIPs(req.Context(), &platformv1.ListVIPsRequest{})
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+func (r *GatewayRouter) getVIP(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	protocol, address, port, err := vipKey(req)
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	resp, err := r.server.GetVIP(req.Context(), &platformv1.GetVIPRequest{
+		Protocol: protocol,
+		Address:  address,
+		Port:     port,
+	})
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+// vipKey reads a VIP's protocol, address and port from the route variables.
+func vipKey(req *http.Request) (protocol, address string, port uint32, err error) {
+	vars := mux.Vars(req)
+	p, err := strconv.ParseUint(vars["port"], 10, 16)
+	if err != nil {
+		return "", "", 0, err
+	}
+	return vars["protocol"], vars["address"], uint32(p), nil
+}
+
+func (r *GatewayRouter) addVIP(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	pbReq := &platformv1.AddVIPRequest{}
+	if err := protorest.DecodeRequest(req, pbReq); err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	resp, err := r.server.AddVIP(req.Context(), pbReq)
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccessStatus(w, req, r.respWriter, http.StatusCreated, resp)
+}
+
+func (r *GatewayRouter) removeVIP(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	protocol, address, port, err := vipKey(req)
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	resp, err := r.server.RemoveVIP(req.Context(), &platformv1.RemoveVIPRequest{
+		Protocol: protocol,
+		Address:  address,
+		Port:     port,
+	})
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+// setVIPBackends replaces a VIP's backend set; the URL keys win over any
+// protocol, address or port in the body.
+func (r *GatewayRouter) setVIPBackends(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	protocol, address, port, err := vipKey(req)
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	pbReq := &platformv1.SetVIPBackendsRequest{}
+	if err := protorest.DecodeRequest(req, pbReq); err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	pbReq.Protocol = protocol
+	pbReq.Address = address
+	pbReq.Port = port
+	resp, err := r.server.SetVIPBackends(req.Context(), pbReq)
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+func (r *GatewayRouter) getLBStatus(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	resp, err := r.server.GetLBStatus(req.Context(), &platformv1.GetLBStatusRequest{})
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+// getNAT64Status reads the NAT64 translator status. The service answers
+// Unavailable (503) when no translator is wired and FailedPrecondition (409)
+// when the kernel module is missing.
+func (r *GatewayRouter) getNAT64Status(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	resp, err := r.server.GetNAT64Status(req.Context(), &platformv1.GetNAT64StatusRequest{})
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+// getPerfFlows runs one flow-programming benchmark. The service validates
+// the count (InvalidArgument maps to 400) and removes the flows it installs.
+func (r *GatewayRouter) getPerfFlows(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	pbReq := &platformv1.GetPerfFlowsRequest{}
+	if err := protorest.DecodeRequest(req, pbReq); err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	resp, err := r.server.GetPerfFlows(req.Context(), pbReq)
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+// getPerfDatapath reads the datapath counters of ?bridge= (empty: the
+// default bridge).
+func (r *GatewayRouter) getPerfDatapath(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	resp, err := r.server.GetPerfDatapath(req.Context(), &platformv1.GetPerfDatapathRequest{
+		Bridge: req.URL.Query().Get("bridge"),
+	})
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+// getPerfConntrack summarizes the conntrack table for ?zone= (absent:
+// every zone). A zone that is not a uint32 answers 400.
+func (r *GatewayRouter) getPerfConntrack(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	pbReq := &platformv1.GetPerfConntrackRequest{}
+	if z := req.URL.Query().Get("zone"); z != "" {
+		v, err := strconv.ParseUint(z, 10, 32)
+		if err != nil {
+			r.respWriter.Error400(w, req, err)
+			return
+		}
+		zone := uint32(v)
+		pbReq.Zone = &zone
+	}
+	resp, err := r.server.GetPerfConntrack(req.Context(), pbReq)
 	if err != nil {
 		protorest.WriteError(w, req, r.respWriter, err)
 		return

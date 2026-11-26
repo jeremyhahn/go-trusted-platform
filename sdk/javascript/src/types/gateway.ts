@@ -332,6 +332,158 @@ export interface ListAllocationsResponse {
 }
 
 // =============================================================================
+// Load balancer (#2052)
+//
+// protojson camelCase from gateway.proto (VIPBackend .. GetLBStatusResponse).
+// The webservice marshals with EmitUnpopulated, so every field is present and
+// an unset message is null.
+// =============================================================================
+
+/** One load-balanced endpoint of a VIP. */
+export interface VIPBackend {
+  /** Backend IPv4 address */
+  address: string;
+  /** Backend L4 port (1-65535) */
+  port: number;
+  /** Relative selection weight; zero means 1 */
+  weight: number;
+}
+
+/** A virtual IP and its backends. */
+export interface VIPConfig {
+  /** Virtual IPv4 address */
+  address: string;
+  /** Virtual L4 port (1-65535) */
+  port: number;
+  /** "tcp" or "udp" */
+  protocol: string;
+  /** "hash" or "round-robin"; empty inherits the service default */
+  algorithm: string;
+  /** Load-balanced endpoints */
+  backends: VIPBackend[];
+}
+
+/** One backend's health. */
+export interface VIPBackendStatus {
+  backend: VIPBackend | null;
+  healthy: boolean;
+}
+
+/** A VIP as the datapath programs it. */
+export interface VIPStatus {
+  vip: VIPConfig | null;
+  /** Conntrack zone carrying the VIP's connection state */
+  ctZone: number;
+  /** OpenFlow select group distributing the VIP */
+  groupId: number;
+  /** Per-backend health */
+  backends: VIPBackendStatus[];
+}
+
+/** Load balancer summary. */
+export interface LBStatus {
+  active: boolean;
+  vipCount: number;
+  healthyBackends: number;
+  totalBackends: number;
+  /** RFC 3339 timestamp of the last reconcile, null when never */
+  lastReconcile: string | null;
+}
+
+export interface GetVIPResponse {
+  vip: VIPStatus | null;
+}
+
+export interface ListVIPsResponse {
+  vips: VIPStatus[];
+}
+
+export interface GetLBStatusResponse {
+  status: LBStatus | null;
+}
+
+/** AddVIP request (POST /api/v1/gateway/lb/vips) */
+export interface AddVIPRequest {
+  vip: VIPConfig;
+}
+
+/** AddVIP response: the operation status and the VIP as programmed */
+export interface AddVIPResponse {
+  status: GatewayOperationStatus | null;
+  vip: VIPStatus | null;
+}
+
+/** RemoveVIP response (DELETE /api/v1/gateway/lb/vips/{protocol}/{address}/{port}) */
+export interface RemoveVIPResponse {
+  status: GatewayOperationStatus | null;
+}
+
+/** SetVIPBackends response (PUT .../backends): the VIP with its new backend set */
+export interface SetVIPBackendsResponse {
+  status: GatewayOperationStatus | null;
+  vip: VIPStatus | null;
+}
+
+/**
+ * NAT64 translator status as the webservice returns it at
+ * GET /api/v1/gateway/nat64/status (protojson camelCase of gateway.proto
+ * NAT64Status). The webservice marshals with EmitUnpopulated, so every field
+ * is present and an unset scalar carries its zero value; 64-bit counters
+ * arrive as strings. lastReconcile is null while the translator has never
+ * reconciled.
+ */
+export interface GatewayNAT64Status {
+  active: boolean;
+  instancePresent: boolean;
+  prefix: string;
+  instance: string;
+  sessions: string;
+  pool4Used: string;
+  moduleVersion: string;
+  flowCount: number;
+  lastReconcile: string | null;
+  lastError: string;
+}
+
+export interface GetGatewayNAT64StatusResponse {
+  status: GatewayNAT64Status | null;
+}
+
+/** GetPerfFlows run parameters; zero values take the server defaults (1000 flows, unbatched, default bridge). */
+export interface GetPerfFlowsRequest {
+  count?: number;
+  batch?: boolean;
+  bridge?: string;
+}
+
+/** One measured flow-programming run (POST /api/v1/gateway/perf/flows). */
+export interface GetPerfFlowsResponse {
+  installed: number;
+  /** int64 nanoseconds, a string in protojson. */
+  durationNs: string;
+  flowsPerSecond: number;
+  batched: boolean;
+  bridge: string;
+}
+
+/** Live datapath counters (GET /api/v1/gateway/perf/datapath). uint64 counters are strings in protojson; protojson leaves out zero values. */
+export interface GetPerfDatapathResponse {
+  hits?: string;
+  misses?: string;
+  lost?: string;
+  offloadedFlowCount?: string;
+  hwOffloadEnabled?: boolean;
+  datapathType?: string;
+  bridge?: string;
+}
+
+/** Conntrack table summary (GET /api/v1/gateway/perf/conntrack). Keys of perZone are zone numbers as strings. */
+export interface GetPerfConntrackResponse {
+  totalEntries?: string;
+  perZone?: Record<string, string>;
+}
+
+// =============================================================================
 // Telemetry snapshots (#594)
 // =============================================================================
 

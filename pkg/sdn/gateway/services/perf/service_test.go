@@ -521,3 +521,48 @@ func TestTypedErrorMessages(t *testing.T) {
 		t.Errorf("teardown error = %q", teardownErr.Error())
 	}
 }
+
+// TestPerfFlowsCarryAHardTimeout pins that every benchmark flow carries an
+// OVS hard timeout, so the switch removes it even when nobody deletes it
+// (#2179 Codex).
+func TestPerfFlowsCarryAHardTimeout(t *testing.T) {
+	fc := &fakeFlowClient{bridges: testBridges()}
+	svc, _ := New(Deps{OVS: fc})
+
+	if _, err := svc.Flows(context.Background(), "br-zeta", 50, true); err != nil {
+		t.Fatalf("Flows: %v", err)
+	}
+	if len(fc.added) != 50 {
+		t.Fatalf("added %d flows, want 50", len(fc.added))
+	}
+	for i, flow := range fc.added {
+		if flow.HardTimeout != 60 {
+			t.Fatalf("flow %d HardTimeout = %d, want 60", i, flow.HardTimeout)
+		}
+		if flow.IdleTimeout != 0 {
+			t.Fatalf("flow %d IdleTimeout = %d, want 0", i, flow.IdleTimeout)
+		}
+	}
+}
+
+// TestTeardownFailureLeavesFlowsThatExpire pins that a failed cookie-scoped
+// delete is reported and leaves only flows OVS expires by their hard timeout
+// (#2179 Codex).
+func TestTeardownFailureLeavesFlowsThatExpire(t *testing.T) {
+	fc := &fakeFlowClient{bridges: testBridges(), deleteErr: errBoom}
+	svc, _ := New(Deps{OVS: fc})
+
+	_, err := svc.Flows(context.Background(), "br-zeta", 5, true)
+	var teardownErr *ErrFlowTeardownFailed
+	if !errors.As(err, &teardownErr) {
+		t.Fatalf("expected ErrFlowTeardownFailed, got %v", err)
+	}
+	if len(fc.added) != 5 {
+		t.Fatalf("added %d flows, want 5", len(fc.added))
+	}
+	for i, flow := range fc.added {
+		if flow.HardTimeout != 60 {
+			t.Fatalf("flow %d left behind with HardTimeout = %d, want 60", i, flow.HardTimeout)
+		}
+	}
+}

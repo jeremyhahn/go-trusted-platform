@@ -288,16 +288,16 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `GatewayService.AllocateIP` | `POST /ipam/allocations` | - | - | - | missing |
 | `GatewayService.ReleaseIP` | `DELETE /ipam/allocations` | - | - | - | missing |
 | `GatewayService.ListAllocations` | `GET /allocations` | - | - | - | missing |
-| `GatewayService.AddVIP` | - | - | - | - | missing |
-| `GatewayService.RemoveVIP` | - | - | - | - | missing |
-| `GatewayService.GetVIP` | - | - | - | - | missing |
-| `GatewayService.ListVIPs` | - | - | - | - | missing |
-| `GatewayService.SetVIPBackends` | - | - | - | - | missing |
-| `GatewayService.GetLBStatus` | - | - | - | - | missing |
-| `GatewayService.GetNAT64Status` | - | - | - | - | missing |
-| `GatewayService.GetPerfFlows` | - | - | - | - | missing |
-| `GatewayService.GetPerfDatapath` | - | - | - | - | missing |
-| `GatewayService.GetPerfConntrack` | - | - | - | - | missing |
+| `GatewayService.AddVIP` | `POST /lb/vips` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-vips.spec.ts` | covered |
+| `GatewayService.RemoveVIP` | `DELETE /lb/vips/{protocol}/{address}/{port}` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-vips.spec.ts` | covered |
+| `GatewayService.GetVIP` | `GET /lb/vips/{protocol}/{address}/{port}` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-vips.spec.ts` | covered |
+| `GatewayService.ListVIPs` | `GET /lb/vips` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-vips.spec.ts` | covered |
+| `GatewayService.SetVIPBackends` | `PUT /lb/vips/{protocol}/{address}/{port}/backends` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-vips.spec.ts` | covered |
+| `GatewayService.GetLBStatus` | `GET /lb/status` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-vips.spec.ts` | covered |
+| `GatewayService.GetNAT64Status` | `GET /nat64/status` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-vips.spec.ts` | covered |
+| `GatewayService.GetPerfFlows` | `POST /perf/flows` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-perf-flows.spec.ts` | covered |
+| `GatewayService.GetPerfDatapath` | `GET /perf/datapath` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-vips.spec.ts` | covered |
+| `GatewayService.GetPerfConntrack` | `GET /perf/conntrack` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-vips.spec.ts` | covered |
 
 ## PlatformIAMService (`iam.proto`)
 

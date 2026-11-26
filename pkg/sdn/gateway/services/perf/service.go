@@ -38,6 +38,12 @@ const (
 	// FlowPriority is the priority of ephemeral perf flows.
 	FlowPriority = 1
 
+	// FlowHardTimeout is the OVS hard timeout, in seconds, of every
+	// ephemeral perf flow: the switch removes each benchmark flow this many
+	// seconds after install even when the cookie-scoped delete fails
+	// (#2179 Codex).
+	FlowHardTimeout = 60
+
 	// FlowCookie stamps every ephemeral perf flow so teardown is a
 	// single cookie-scoped delete. The 0xF1BE prefix matches the
 	// gateway service cookie family (firewall 0xF1BE0001/0002, load
@@ -161,8 +167,10 @@ type ConntrackResult struct {
 // Flows installs count ephemeral drop flows into the dedicated perf
 // table on the target bridge, measures the install time with a monotonic
 // clock, and tears the flows down again with a cookie-scoped delete. The
-// teardown runs even when the install fails part-way (deferred), so a
-// failed run never leaks flows.
+// teardown runs even when the install fails part-way (deferred). A failed
+// teardown is reported as ErrFlowTeardownFailed, and the flows it left
+// still expire by their FlowHardTimeout, so a run never leaks flows for
+// good.
 func (s *Service) Flows(ctx context.Context, bridge string, count int, batch bool) (result FlowsResult, err error) {
 	if count <= 0 || count > MaxFlowCount {
 		return FlowsResult{}, &ErrInvalidFlowCount{Count: count, Max: MaxFlowCount}
@@ -319,9 +327,10 @@ func buildPerfFlows(count int) []*ovs.FlowMod {
 	flows := make([]*ovs.FlowMod, 0, count)
 	for i := 0; i < count; i++ {
 		flows = append(flows, &ovs.FlowMod{
-			Table:    FlowTable,
-			Priority: FlowPriority,
-			Cookie:   cookie,
+			Table:       FlowTable,
+			Priority:    FlowPriority,
+			Cookie:      cookie,
+			HardTimeout: FlowHardTimeout,
 			Match: fmt.Sprintf("dl_dst=0e:bf:%02x:%02x:%02x:%02x",
 				(i>>24)&0xff, (i>>16)&0xff, (i>>8)&0xff, i&0xff),
 			Actions: "drop",
