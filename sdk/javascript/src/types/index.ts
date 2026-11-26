@@ -99,6 +99,7 @@ export * from './overlay.js';
 
 // Platform types
 export * from './platform.js';
+export * from './platform-services.js';
 
 // Invitation types
 export * from './invitation.js';

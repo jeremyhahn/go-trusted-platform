@@ -42,6 +42,7 @@ func vlanPolicyConfig(name string, vlan uint32) *platformv1.PolicyConfig {
 	return &platformv1.PolicyConfig{
 		Name:     name,
 		Priority: 100,
+		Enabled:  true,
 		Rules: []*platformv1.PolicyRule{{
 			RuleId:   "r1",
 			Priority: 100,
@@ -81,21 +82,18 @@ func TestSDNService_DeletePolicy_RemovesOnlyItsOwnFlows(t *testing.T) {
 	require.NotEmpty(t, cookieB)
 	require.NotEqual(t, cookieA, cookieB)
 
-	svc.mu.RLock()
-	wantCookie := svc.policies["a"].flowCookies["br0"]
-	svc.mu.RUnlock()
-	require.NotZero(t, wantCookie)
-
 	_, err = svc.DeletePolicy(ctx, &platformv1.DeletePolicyRequest{PolicyId: "a"})
 	require.NoError(t, err)
 
 	assert.Empty(t, mock.GetCalls("DeleteFlow"))
-	calls := mock.GetCalls("DeleteFlowsByCookie")
+	assert.Empty(t, mock.GetCalls("DeleteFlowsByCookie"))
+	calls := mock.GetCalls("DeleteFlowStrict")
 	require.Len(t, calls, 1)
 	assert.Equal(t, "br0", calls[0].Args[0])
-	assert.Equal(t, wantCookie, calls[0].Args[1])
-	assert.Equal(t, ^uint64(0), calls[0].Args[2])
-	assert.Equal(t, cookieA, ovsCookieString(wantCookie))
+	removed, ok := calls[0].Args[1].(*ovs.FlowMod)
+	require.True(t, ok)
+	assert.Equal(t, cookieA, removed.Cookie)
+	assert.Equal(t, added[0].Match, removed.Match)
 
 	list, err := svc.ListPolicies(ctx, &platformv1.ListPoliciesRequest{})
 	require.NoError(t, err)
@@ -155,17 +153,17 @@ func TestSDNService_DeleteFlow_RefusesAPolicyOwnedFlow(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 
-	svc.mu.RLock()
-	wantCookie := svc.policies["a"].flowCookies["br0"]
-	svc.mu.RUnlock()
-
 	_, err = svc.DeletePolicy(ctx, &platformv1.DeletePolicyRequest{PolicyId: "a"})
 	require.NoError(t, err)
-	calls := mock.GetCalls("DeleteFlowsByCookie")
-	require.Len(t, calls, 1)
-	assert.Equal(t, "br0", calls[0].Args[0])
-	assert.Equal(t, wantCookie, calls[0].Args[1])
-	assert.Equal(t, added[0].Cookie, ovsCookieString(wantCookie))
+	assert.Empty(t, mock.GetCalls("DeleteFlowsByCookie"))
+	calls := mock.GetCalls("DeleteFlowStrict")
+	require.Len(t, calls, 2)
+	for i, call := range calls {
+		assert.Equal(t, "br0", call.Args[0])
+		removed, ok := call.Args[1].(*ovs.FlowMod)
+		require.True(t, ok)
+		assert.Equal(t, added[i].Cookie, removed.Cookie)
+	}
 }
 
 func TestSDNService_DeletePolicy_CleanupErrorKeepsPolicy(t *testing.T) {
@@ -176,7 +174,7 @@ func TestSDNService_DeletePolicy_CleanupErrorKeepsPolicy(t *testing.T) {
 	_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "a", Config: vlanPolicyConfig("pa", 10)})
 	require.NoError(t, err)
 
-	mock.OnDeleteFlowsByCookie(func(ctx context.Context, bridgeName string, cookie, cookieMask uint64) error {
+	mock.OnDeleteFlowStrict(func(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error {
 		return errors.New("switch unreachable")
 	})
 	_, err = svc.DeletePolicy(ctx, &platformv1.DeletePolicyRequest{PolicyId: "a"})
@@ -187,7 +185,7 @@ func TestSDNService_DeletePolicy_CleanupErrorKeepsPolicy(t *testing.T) {
 	svc.mu.RUnlock()
 	assert.True(t, kept, "policy record must survive a failed cleanup")
 
-	mock.OnDeleteFlowsByCookie(nil)
+	mock.OnDeleteFlowStrict(nil)
 	_, err = svc.DeletePolicy(ctx, &platformv1.DeletePolicyRequest{PolicyId: "a"})
 	require.NoError(t, err)
 	svc.mu.RLock()
@@ -268,19 +266,23 @@ func TestSDNService_DeletePolicy_RemovesFlowsOfEveryApply(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, added, 2)
-	firstCookie := added[0].Cookie
-	require.NotEmpty(t, firstCookie)
-	assert.Equal(t, firstCookie, added[1].Cookie, "a reapply must keep the policy's flow cookie")
 
 	_, err = svc.DeletePolicy(ctx, &platformv1.DeletePolicyRequest{PolicyId: "a"})
 	require.NoError(t, err)
 
-	calls := mock.GetCalls("DeleteFlowsByCookie")
-	require.Len(t, calls, 1)
-	assert.Equal(t, "br0", calls[0].Args[0])
-	cookie, ok := calls[0].Args[1].(uint64)
-	require.True(t, ok)
-	assert.Equal(t, firstCookie, ovsCookieString(cookie))
+	// The reapply withdraws the first apply's flow, DeletePolicy the
+	// second's: between them each installed flow gets its strict delete.
+	deleted := make(map[string]bool)
+	for _, call := range mock.GetCalls("DeleteFlowStrict") {
+		assert.Equal(t, "br0", call.Args[0])
+		flow, ok := call.Args[1].(*ovs.FlowMod)
+		require.True(t, ok)
+		deleted[flow.Match+"|"+flow.Cookie] = true
+	}
+	for _, flow := range added {
+		assert.True(t, deleted[flow.Match+"|"+flow.Cookie], "flow %q cookie %s was never removed", flow.Match, flow.Cookie)
+	}
+	assert.Empty(t, mock.GetCalls("DeleteFlowsByCookie"))
 }
 
 // A bridge that no longer exists took its flows with it: DeletePolicy
@@ -302,16 +304,16 @@ func TestSDNService_DeletePolicy_DeletedBridgeCountsAsCleared(t *testing.T) {
 			_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "a", Config: vlanPolicyConfig("pa", 10)})
 			require.NoError(t, err)
 
-			mock.OnDeleteFlowsByCookie(func(ctx context.Context, bridgeName string, cookie, cookieMask uint64) error {
+			mock.OnDeleteFlowStrict(func(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error {
 				return errors.New("failed to connect OpenFlow client")
 			})
 			if tc.bridgeGone {
-				mock.OnGetBridge(func(ctx context.Context, name string) (*ovs.Bridge, error) {
-					return nil, ovs.ErrBridgeNotFound
+				mock.OnListBridges(func(ctx context.Context) ([]*ovs.Bridge, error) {
+					return nil, nil
 				})
 			} else {
-				mock.OnGetBridge(func(ctx context.Context, name string) (*ovs.Bridge, error) {
-					return &ovs.Bridge{UUID: "uuid-br0", Name: name}, nil
+				mock.OnListBridges(func(ctx context.Context) ([]*ovs.Bridge, error) {
+					return []*ovs.Bridge{{UUID: "uuid-br0", Name: "br0"}}, nil
 				})
 			}
 

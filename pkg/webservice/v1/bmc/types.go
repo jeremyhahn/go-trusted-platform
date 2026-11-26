@@ -67,6 +67,11 @@ type RestHandler interface {
 	// GET /api/v1/bmc/{profileID}/provision
 	ProvisionStatus(w http.ResponseWriter, r *http.Request)
 
+	// ProvisioningConfigured reports whether a bare metal provisioning
+	// backend is wired. Without one the provision routes answer 503, and
+	// the capabilities listing must report them as not configured.
+	ProvisioningConfigured() bool
+
 	// GetWebCertificate returns the metadata of the BMC's current web
 	// server TLS certificate.
 	// GET /api/v1/bmc/{profileID}/cert

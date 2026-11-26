@@ -49,7 +49,44 @@ func newFakeSwitch(mock *ConfigurableMockOVSClient) *fakeSwitch {
 		fs.deleteByCookie(bridgeName, cookie)
 		return nil
 	})
+	mock.OnDeleteFlowStrict(func(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error {
+		fs.deleteStrict(bridgeName, flow)
+		return nil
+	})
 	return fs
+}
+
+// deleteStrict removes the entry at the flow's match and priority when it
+// carries the flow's cookie, as a cookie-restricted strict delete does.
+func (fs *fakeSwitch) deleteStrict(bridgeName string, flow *ovs.FlowMod) {
+	cookie, err := strconv.ParseUint(strings.TrimPrefix(flow.Cookie, "0x"), 16, 64)
+	if err != nil {
+		return
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	key := bridgeName + "|" + flow.Match + "|" + strconv.Itoa(flow.Priority)
+	if c, ok := fs.rules[key]; ok && c == cookie {
+		delete(fs.rules, key)
+	}
+}
+
+// recordedCookies returns the cookies of every flow the policy's record
+// may have on the switch; ok is false when the policy is not recorded.
+func recordedCookies(svc *SDNService, policyID string) (map[uint64]bool, bool) {
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
+	p, ok := svc.policies[policyID]
+	if !ok {
+		return nil, false
+	}
+	out := make(map[uint64]bool)
+	for _, flow := range svc.recordFlows(*p) {
+		if c, err := strconv.ParseUint(strings.TrimPrefix(flow.mod.Cookie, "0x"), 16, 64); err == nil {
+			out[c] = true
+		}
+	}
+	return out, true
 }
 
 func (fs *fakeSwitch) add(t *testing.T, bridgeName string, flow *ovs.FlowMod) {
@@ -125,11 +162,10 @@ func TestSDNService_ApplyPolicy_ConcurrentFirstAppliesKeepOneCookie(t *testing.T
 
 	rules := fs.snapshot()
 	require.Len(t, rules, 1)
-	svc.mu.RLock()
-	recorded := svc.policies["a"].flowCookies["br0"]
-	svc.mu.RUnlock()
+	recorded, listed := recordedCookies(svc, "a")
+	require.True(t, listed)
 	for key, cookie := range rules {
-		assert.Equal(t, ovsCookieString(cookie), ovsCookieString(recorded), "recorded cookie must match the surviving rule %s", key)
+		assert.True(t, recorded[cookie], "recorded cookies must hold the surviving rule %s cookie %s", key, ovsCookieString(cookie))
 	}
 
 	_, err := svc.DeletePolicy(ctx, &platformv1.DeletePolicyRequest{PolicyId: "a"})
@@ -169,11 +205,11 @@ func raceReapplyWithDelete(t *testing.T, deleteKey string) {
 		fs.add(t, bridgeName, flow)
 		return nil
 	})
-	mock.OnDeleteFlowsByCookie(func(ctx context.Context, bridgeName string, cookie, cookieMask uint64) error {
+	mock.OnDeleteFlowStrict(func(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error {
 		startOnce.Do(func() { close(deleteStarted) })
 		// Let the reapply publish before this delete drops the record.
 		waitBounded(reapplyReturned)
-		fs.deleteByCookie(bridgeName, cookie)
+		fs.deleteStrict(bridgeName, flow)
 		return nil
 	})
 
@@ -197,15 +233,7 @@ func raceReapplyWithDelete(t *testing.T, deleteKey string) {
 	require.NoError(t, deleteErr)
 
 	rules := fs.snapshot()
-	svc.mu.RLock()
-	p, listed := svc.policies["a"]
-	recorded := make(map[uint64]bool)
-	if listed {
-		for _, c := range p.flowCookies {
-			recorded[c] = true
-		}
-	}
-	svc.mu.RUnlock()
+	recorded, listed := recordedCookies(svc, "a")
 	if !listed {
 		assert.Empty(t, rules, "the policy is gone, so no flow of it may stay installed")
 		return
