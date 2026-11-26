@@ -49,12 +49,11 @@ func (s *NTPGRPCService) SetBackend(backend NTPBackend) { s.backend = backend }
 // Backend returns the configured backend.
 func (s *NTPGRPCService) Backend() NTPBackend { return s.backend }
 
-// Configured reports whether the service has a backend, that is whether the
-// node carries an `ntp:` section. The REST router reads it to take the NTP
-// routes dark instead of listing ops that would only answer Unavailable.
-func (s *NTPGRPCService) Configured() bool {
-	return s != nil && s.backend != nil
-}
+// Configured reports whether the service has an NTP backend. A node with
+// no ntp: section builds the service with a nil backend; the REST registry
+// is handed the service only when this is true, so such a node offers no
+// NTP REST ops instead of listing them enabled and answering 503.
+func (s *NTPGRPCService) Configured() bool { return s != nil && s.backend != nil }
 
 // requireBackend returns a typed Unavailable error when time synchronization
 // is not configured on this node.
