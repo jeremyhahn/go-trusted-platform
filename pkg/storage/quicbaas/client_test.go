@@ -278,6 +278,39 @@ func TestClient_List(t *testing.T) {
 	assert.Empty(t, nextToken) // Should have no more pages
 }
 
+func TestClient_ListEntityTypes(t *testing.T) {
+	setup := newTestClient(t)
+	defer setup.cleanup()
+
+	ctx := context.Background()
+	typeA := "EntityTypesProbeA"
+	typeB := "EntityTypesProbeB"
+
+	for _, typ := range []string{typeA, typeB} {
+		require.NoError(t, setup.client.Put(ctx, typ, 1, []byte(`{"id":1}`), 0))
+	}
+
+	contains := func(list []string, name string) bool {
+		for _, s := range list {
+			if s == name {
+				return true
+			}
+		}
+		return false
+	}
+
+	require.Eventually(t, func() bool {
+		types, _, _, err := setup.client.ListEntityTypes(ctx, 100, "")
+		return err == nil && contains(types, typeA) && contains(types, typeB)
+	}, 5*time.Second, 50*time.Millisecond, "expected both entity types to be listed")
+
+	types, _, total, err := setup.client.ListEntityTypes(ctx, 100, "")
+	require.NoError(t, err)
+	assert.Contains(t, types, typeA)
+	assert.Contains(t, types, typeB)
+	assert.GreaterOrEqual(t, total, 2)
+}
+
 func TestClient_Operations_ServerNotStarted(t *testing.T) {
 	cfg := TestConfig(t)
 	logger := logging.DefaultLogger()

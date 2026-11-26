@@ -200,3 +200,37 @@ func TestValidateConfig_Bad(t *testing.T) {
 		t.Errorf("expected valid=false, got %s", rec.Body.String())
 	}
 }
+
+// TestConfigSurfaces_UnwiredAre503 pins the dark-surface contract the
+// router documents: with no config reloader or no snapshot store wired,
+// the config reload and snapshot routes answer 503 with the "not
+// configured on this daemon" error, not a 500 server fault (#2047).
+func TestConfigSurfaces_UnwiredAre503(t *testing.T) {
+	cases := []struct {
+		name, method, path string
+		reloader           ConfigReloader
+	}{
+		{"reload without reloader", http.MethodPost, "/api/v1/platform/config/reload", nil},
+		{"list without reloader", http.MethodGet, "/api/v1/platform/config/snapshots", nil},
+		{"create without reloader", http.MethodPost, "/api/v1/platform/config/snapshots", nil},
+		{"get without reloader", http.MethodGet, "/api/v1/platform/config/snapshots/a", nil},
+		{"delete without reloader", http.MethodDelete, "/api/v1/platform/config/snapshots/a", nil},
+		{"rollback without reloader", http.MethodPost, "/api/v1/platform/config/snapshots/a/rollback", nil},
+		{"list with nil store", http.MethodGet, "/api/v1/platform/config/snapshots", &storeReloader{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pr, root := newMountedRouter(t)
+			if tc.reloader != nil {
+				pr.SetConfigReloader(tc.reloader)
+			}
+			rec := serve(root, tc.method, tc.path, "", nil)
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "is not configured on this daemon") {
+				t.Fatalf("body %q lacks the not-configured error", rec.Body.String())
+			}
+		})
+	}
+}
