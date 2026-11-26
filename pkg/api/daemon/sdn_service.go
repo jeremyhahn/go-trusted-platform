@@ -46,7 +46,8 @@ type SDNService struct {
 	mu             sync.RWMutex
 	// policyMu is held for the whole of ApplyPolicy and DeletePolicy, from
 	// the snapshot of the prior record to the record write, so a policy's
-	// flows and its record change together. It is taken before mu, never
+	// flows and its record change together; DeleteFlow holds it across its
+	// policy-ownership check and its delete. It is taken before mu, never
 	// while holding it.
 	policyMu sync.Mutex
 
@@ -614,10 +615,13 @@ func (s *SDNService) DeleteFlow(ctx context.Context, req *platformv1.DeleteFlowR
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	// Every rule a policy installs on a bridge carries the policy's one
-	// cookie there, so this ID names all of them: deleting it would strip
-	// the policy's rules while the policy stays recorded active (#1955).
-	// The policy is the unit; only DeletePolicy removes its flows.
+	// A policy's flows are its own: deleting one would strip a rule while
+	// the policy stays recorded active (#1955). The policy is the unit;
+	// only DeletePolicy removes its flows. policyMu is held across the
+	// ownership check and the delete, so a DeleteFlow cannot slip between
+	// an ApplyPolicy's installs and the publication of its record.
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
 	if policyID, owned := s.policyOwningCookie(bridgeName, cookie); owned {
 		return nil, status.Errorf(codes.FailedPrecondition,
 			"flow %s belongs to policy %s: remove it with DeletePolicy", req.GetFlowId(), policyID)
@@ -1671,20 +1675,41 @@ type policyFlow struct {
 // gateway's 0xF1BE family, so no other owner's flow carries a policy cookie.
 const policyFlowCookieOwner uint64 = 0xA9F2 << 48
 
-// policyFlowCookie is the cookie every flow of the policy carries: the
-// owner prefix in the high 16 bits and the low 48 bits of an FNV-1a hash of
-// the policy ID below. A strict delete with it removes only the policy's
-// own entry, never a flow another owner installed at the same table,
-// priority and match.
-func policyFlowCookie(policyID string) uint64 {
+// policyFlowCookie is the cookie of the flows a policy's rule installs:
+// the owner prefix in the high 16 bits, the low 32 bits of an FNV-1a hash
+// of the policy ID in the next 32, and the rule's index in the low 16. A
+// flow's ID is its cookie, so each rule gets its own ID and its own stats
+// (#1955); a strict delete with it removes only the policy's own entry,
+// never a flow another owner installed at the same table, priority and
+// match.
+func policyFlowCookie(policyID string, ruleIndex int) uint64 {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(policyID))
-	return policyFlowCookieOwner | h.Sum64()&(1<<48-1)
+	return policyFlowCookieOwner | (h.Sum64()&(1<<32-1))<<16 | uint64(ruleIndex)&(1<<16-1)
+}
+
+// maxPolicyRules is how many rules a policy may carry: the rule index
+// takes the low 16 bits of the flow cookie.
+const maxPolicyRules = 1 << 16
+
+// samePolicyCookie reports whether two flow cookies are policy cookies of
+// the same policy, whatever rule they name.
+func samePolicyCookie(a, b string) bool {
+	ca, errA := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(a)), "0x"), 16, 64)
+	cb, errB := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(b)), "0x"), 16, 64)
+	if errA != nil || errB != nil {
+		return false
+	}
+	const ownerMask = uint64(0xFFFF) << 48
+	return ca&ownerMask == policyFlowCookieOwner && ca>>16 == cb>>16
 }
 
 // policyFlows lists the flows the rules install on each bridge, bridge by
-// bridge in rule order. Each flow carries the policy's cookie.
+// bridge in rule order. Each flow carries its rule's policy cookie.
 func (s *SDNService) policyFlows(policyID string, bridgeNames []string, rules []*platformv1.PolicyRule, priority int32) ([]policyFlow, error) {
+	if len(rules) > maxPolicyRules {
+		return nil, fmt.Errorf("a policy carries at most %d rules, got %d", maxPolicyRules, len(rules))
+	}
 	mods := make([]*ovs.FlowMod, len(rules))
 	var errs []error
 	for i, rule := range rules {
@@ -1693,7 +1718,7 @@ func (s *SDNService) policyFlows(policyID string, bridgeNames []string, rules []
 			errs = append(errs, fmt.Errorf("rule %q: %w", rule.GetRuleId(), err))
 			continue
 		}
-		mod.Cookie = fmt.Sprintf("0x%x", policyFlowCookie(policyID))
+		mod.Cookie = fmt.Sprintf("0x%x", policyFlowCookie(policyID, i))
 		mods[i] = mod
 	}
 	flows := make([]policyFlow, 0, len(bridgeNames)*len(rules))
@@ -1826,7 +1851,9 @@ func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientIn
 		}
 		want := flowKey(flow)
 		for _, fl := range installed {
-			if fl == nil || fl.Cookie == flow.mod.Cookie {
+			// The policy's own flow, of this or an earlier apply (whose
+			// rule order may differ): OFPFC_ADD replacing it is the apply.
+			if fl == nil || fl.Cookie == flow.mod.Cookie || samePolicyCookie(fl.Cookie, flow.mod.Cookie) {
 				continue
 			}
 			theirs := policyFlow{bridge: flow.bridge, mod: &ovs.FlowMod{Table: fl.Table, Priority: fl.Priority, Match: fl.Match}}

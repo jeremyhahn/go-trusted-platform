@@ -141,7 +141,7 @@ func TestSDNService_DeleteFlow_RefusesAPolicyOwnedFlow(t *testing.T) {
 
 	require.Len(t, added, 2)
 	require.NotEmpty(t, added[0].Cookie)
-	require.Equal(t, added[0].Cookie, added[1].Cookie)
+	require.NotEqual(t, added[0].Cookie, added[1].Cookie, "each rule carries its own cookie")
 	flowID := ovs.FlowIDPrefix + added[0].Cookie
 
 	_, err = svc.DeleteFlow(ctx, &platformv1.DeleteFlowRequest{BridgeId: "br0", FlowId: flowID})
