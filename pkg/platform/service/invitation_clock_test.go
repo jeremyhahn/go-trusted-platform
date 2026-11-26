@@ -47,6 +47,7 @@ func newClockedInvitationService(invDAO *MockInvitationDAO, userDAO *MockUserDAO
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	service := NewInvitationService(logger, invDAO, userDAO)
 	service.clk = fixedInvitationClock{now: at}
+	service.SetRoleLister(listedRoles("admin", "member", "viewer"))
 	return service
 }
 

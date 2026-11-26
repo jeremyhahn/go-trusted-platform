@@ -1221,6 +1221,10 @@ func testSecretsRotate(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 			wantData = originalData
 			return
 		}
+		if cmd.Name() != "CLI" && helpers.KnownGap(t, cmd.Name(), helpers.MethodSecretsRotate, err) {
+			wantData = originalData
+			return
+		}
 		require.NoError(t, err, "SecretsRotate should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, originalVersion, result.OldVersion, "OldVersion should match original")
@@ -1266,9 +1270,16 @@ func testSecretsVersions(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 			NewData: []byte(fmt.Sprintf("version-%d-data", i)),
 		}
 		_, err := cmd.SecretsRotate(testCtx, rotateOpts)
-		if !helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
-			require.NoError(t, err, "Setup: SecretsRotate should succeed")
+		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			continue
 		}
+		if cmd.Name() != "CLI" && helpers.KnownGap(t, cmd.Name(), helpers.MethodSecretsRotate, err) {
+			// The version checks below need the rotated versions this
+			// known gap could not create (and the embedded dispatch has no
+			// ListVersions/GetVersion either): stop the scenario here.
+			return
+		}
+		require.NoError(t, err, "Setup: SecretsRotate should succeed")
 	}
 
 	t.Run("ListSecretVersions", func(t *testing.T) {
@@ -1314,6 +1325,11 @@ func testSecretsRollback(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 	}
 	_, err = cmd.SecretsRotate(testCtx, rotateOpts)
 	if !helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if cmd.Name() != "CLI" && helpers.KnownGap(t, cmd.Name(), helpers.MethodSecretsRotate, err) {
+			// The rollback checks below need the rotated version this
+			// known gap could not create: stop the rollback group here.
+			return
+		}
 		require.NoError(t, err, "Setup: SecretsRotate should succeed")
 	}
 

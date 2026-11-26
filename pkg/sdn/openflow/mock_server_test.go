@@ -74,6 +74,7 @@ type mockOFServer struct {
 	errorCode               uint16
 	stallResponses          bool
 	flowStats               []FlowStats
+	flowStatsSplitAt        int
 	groupDescs              []GroupDesc
 	failFlowModIndexes      map[int]struct{}
 	sendErrorOnGroupMod     bool
@@ -857,7 +858,7 @@ func (s *mockOFServer) sendGroupDescReply(header *Header) {
 // sendFlowStatsReply sends a multipart flow stats reply
 func (s *mockOFServer) sendFlowStatsReply(header *Header) {
 	// Build flow stats reply body
-	statsData := make([]byte, 0)
+	entries := make([][]byte, 0, len(s.flowStats))
 	for _, stat := range s.flowStats {
 		// Simplified: just create minimal flow stat entry
 		entry := make([]byte, 48)
@@ -869,6 +870,25 @@ func (s *mockOFServer) sendFlowStatsReply(header *Header) {
 		binary.BigEndian.PutUint64(entry[24:32], stat.Cookie)
 		binary.BigEndian.PutUint64(entry[32:40], stat.PacketCount)
 		binary.BigEndian.PutUint64(entry[40:48], stat.ByteCount)
+		entries = append(entries, entry)
+	}
+
+	// flowStatsSplitAt models a switch that spreads the entries over two
+	// OFPT_MULTIPART_REPLY messages with the same xid: the first carries
+	// OFPMPF_REPLY_MORE, the second ends the reply.
+	if s.flowStatsSplitAt > 0 && s.flowStatsSplitAt < len(entries) {
+		s.writeFlowStatsPart(header.Xid, entries[:s.flowStatsSplitAt], 0x1)
+		s.writeFlowStatsPart(header.Xid, entries[s.flowStatsSplitAt:], 0)
+		return
+	}
+	s.writeFlowStatsPart(header.Xid, entries, 0)
+}
+
+// writeFlowStatsPart writes one OFPT_MULTIPART_REPLY of type OFPMP_FLOW
+// carrying entries, with the given multipart flags.
+func (s *mockOFServer) writeFlowStatsPart(xid uint32, entries [][]byte, flags uint16) {
+	statsData := make([]byte, 0)
+	for _, entry := range entries {
 		statsData = append(statsData, entry...)
 	}
 
@@ -880,11 +900,11 @@ func (s *mockOFServer) sendFlowStatsReply(header *Header) {
 	data[0] = DefaultVersion
 	data[1] = OFPTMultipartReply
 	binary.BigEndian.PutUint16(data[2:4], replyLen)
-	binary.BigEndian.PutUint32(data[4:8], header.Xid)
+	binary.BigEndian.PutUint32(data[4:8], xid)
 
 	// Multipart header
 	binary.BigEndian.PutUint16(data[8:10], OFPMPFlow) // Type
-	binary.BigEndian.PutUint16(data[10:12], 0)        // Flags (no more)
+	binary.BigEndian.PutUint16(data[10:12], flags)    // Flags
 	// 4 bytes padding
 
 	// Stats data
@@ -1072,6 +1092,14 @@ func (s *mockOFServer) setFlowStats(stats []FlowStats) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.flowStats = stats
+}
+
+// splitFlowStatsAt makes the flow stats reply two multipart messages, the
+// first holding the first n entries with OFPMPF_REPLY_MORE set.
+func (s *mockOFServer) splitFlowStatsAt(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.flowStatsSplitAt = n
 }
 
 // setGroupDescs sets the group descriptions to return in multipart replies
