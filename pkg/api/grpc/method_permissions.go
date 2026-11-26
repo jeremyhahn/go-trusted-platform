@@ -94,7 +94,7 @@ var preAuthMethods = map[string]struct{}{
 
 // ScopeForMethod returns the colon "resource:action" scope a gRPC method
 // requires, or the empty string when the method is not in the catalog. The
-// interceptor refuses an empty result unless IsPreAuthMethod reports the
+// interceptor refuses an empty result unless isPreAuthMethod reports the
 // method as pre-auth. The lookup is constant time.
 func ScopeForMethod(fullMethod string) string {
 	return grpcMethodPermissions[fullMethod]
@@ -104,14 +104,6 @@ func ScopeForMethod(fullMethod string) string {
 func isPreAuthMethod(fullMethod string) bool {
 	_, ok := preAuthMethods[fullMethod]
 	return ok
-}
-
-// IsPreAuthMethod reports whether a gRPC method is served without a token
-// (health and readiness probes, invitation redemption, config delivery).
-// The mTLS interceptor uses it so that these methods bypass the per-method
-// check on that path too, after the client certificate is authenticated.
-func IsPreAuthMethod(fullMethod string) bool {
-	return isPreAuthMethod(fullMethod)
 }
 
 // buildGRPCMethodPermissions constructs the FullMethod -> scope catalog. The
