@@ -382,13 +382,32 @@ func (c *Client) Query(ctx context.Context, entityType, indexField string, value
 
 // ListEntityTypes returns all unique entity types stored in the database.
 func (c *Client) ListEntityTypes(ctx context.Context, pageSize int, pageToken string) ([]string, string, int, error) {
-	// The SDK KV client may not have a direct ListEntityTypes method
-	// For now, this operation is not supported via SDK
-	// DEFERRED: Add SDK support for ListEntityTypes when available. Blocked by: QuicBaaS SDK API.
-	return nil, "", 0, ErrOperationFailed{
-		Operation: "listEntityTypes",
-		Cause:     ErrServerNotStarted{},
+	sdk := c.SDK()
+	if sdk == nil {
+		return nil, "", 0, ErrServerNotStarted{}
 	}
+
+	ctx = c.ensureDeadline(ctx)
+
+	// The SDK's KV client has no ListEntityTypes method; every transport
+	// answers the quicbaas.KV ListEntityTypes request.
+	raw, err := sdk.Transport().Request(ctx, "quicbaas.KV", "ListEntityTypes", &service.ListEntityTypesRequest{
+		PageSize:  pageSize,
+		PageToken: pageToken,
+	})
+	if err != nil {
+		return nil, "", 0, ErrOperationFailed{Operation: "listEntityTypes", Cause: err}
+	}
+
+	resp, ok := raw.(*service.ListEntityTypesResponse)
+	if !ok || resp == nil {
+		return nil, "", 0, ErrOperationFailed{
+			Operation: "listEntityTypes",
+			Cause:     ErrUnexpectedResponse{Method: "ListEntityTypes", Got: raw},
+		}
+	}
+
+	return resp.EntityTypes, resp.NextPageToken, resp.TotalCount, nil
 }
 
 // ensureDeadline returns a context with a deadline if the provided context doesn't have one.

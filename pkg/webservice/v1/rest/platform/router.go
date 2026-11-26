@@ -31,6 +31,11 @@ const (
 // PlatformRouter provides REST routing for platform daemon operations
 type PlatformRouter struct {
 	handlers *PlatformHandlers
+
+	// configUpdateRoute and shutdownRoute are the writes that answer 503
+	// while their backend is nil; UnavailableRoutes reports them.
+	configUpdateRoute *mux.Route
+	shutdownRoute     *mux.Route
 }
 
 // NewPlatformRouter creates a new PlatformRouter instance
@@ -68,6 +73,13 @@ func (r *PlatformRouter) SetVersionInfo(info *VersionInfo) {
 	r.handlers.SetVersionInfo(info)
 }
 
+// SetConfigUpdater wires the daemon's UpdateConfig surface into the
+// /platform/config/sections/{section} handler. Routes are always
+// registered; if the updater is unset, the handler returns 503.
+func (r *PlatformRouter) SetConfigUpdater(u ConfigUpdater) {
+	r.handlers.SetConfigUpdater(u)
+}
+
 // SetConfigReloader wires the daemon's config-reload surface into the
 // /platform/config/reload handler. Routes are always registered; if
 // the reloader is unset, the handler returns 503 with a structured
@@ -79,6 +91,16 @@ func (r *PlatformRouter) SetConfigReloader(rl ConfigReloader) {
 // SetLogQuerier wires the daemon's log surface into /platform/logs.
 func (r *PlatformRouter) SetLogQuerier(q LogQuerier) {
 	r.handlers.SetLogQuerier(q)
+}
+
+// SetEntityTypeLister wires the lister behind GET /platform/entity-types.
+func (r *PlatformRouter) SetEntityTypeLister(l EntityTypeLister) {
+	r.handlers.SetEntityTypeLister(l)
+}
+
+// SetShutdowner wires the daemon that POST /platform/shutdown stops.
+func (r *PlatformRouter) SetShutdowner(s Shutdowner) {
+	r.handlers.SetShutdowner(s)
 }
 
 // Handlers returns the underlying handlers for direct access if needed
@@ -101,6 +123,7 @@ func (r *PlatformRouter) RegisterRoutes(router *mux.Router) {
 	r.registerMetricsRoutes(platformRouter)
 	r.registerConfigRoutes(platformRouter)
 	r.registerLogRoutes(platformRouter)
+	r.registerEntityTypeRoutes(platformRouter)
 }
 
 // registerConfigRoutes registers platform configuration endpoints.
@@ -112,6 +135,7 @@ func (r *PlatformRouter) RegisterRoutes(router *mux.Router) {
 // GET    /api/v1/platform/config/snapshots/{id}               - Get a snapshot (full tree)
 // DELETE /api/v1/platform/config/snapshots/{id}               - Delete a snapshot
 // POST   /api/v1/platform/config/snapshots/{id}/rollback      - Roll back to a snapshot
+// PUT    /api/v1/platform/config/sections/{section}           - Apply (and optionally persist) one config section
 func (r *PlatformRouter) registerConfigRoutes(router *mux.Router) {
 	router.HandleFunc("/config", r.handlers.GetConfig).Methods("GET")
 	router.HandleFunc("/config/reload", r.handlers.ReloadConfig).Methods("POST")
@@ -121,6 +145,7 @@ func (r *PlatformRouter) registerConfigRoutes(router *mux.Router) {
 	router.HandleFunc("/config/snapshots/{id}", r.handlers.GetSnapshot).Methods("GET")
 	router.HandleFunc("/config/snapshots/{id}", r.handlers.DeleteSnapshot).Methods("DELETE")
 	router.HandleFunc("/config/snapshots/{id}/rollback", r.handlers.Rollback).Methods("POST")
+	r.configUpdateRoute = router.HandleFunc("/config/sections/{section}", r.handlers.UpdateConfigSection).Methods("PUT")
 }
 
 // registerLogRoutes registers structured log query / stream endpoints.
@@ -135,8 +160,12 @@ func (r *PlatformRouter) registerLogRoutes(router *mux.Router) {
 
 // registerHealthRoutes registers health check endpoints
 // GET    /api/v1/platform/health                - Get platform health status
+// GET    /api/v1/platform/liveness              - Liveness verdict in the envelope (HTTP 200)
+// GET    /api/v1/platform/readiness             - Readiness verdict in the envelope (HTTP 200)
 func (r *PlatformRouter) registerHealthRoutes(router *mux.Router) {
 	router.HandleFunc("/health", r.handlers.GetHealth).Methods("GET")
+	router.HandleFunc("/liveness", r.handlers.Liveness).Methods("GET")
+	router.HandleFunc("/readiness", r.handlers.Readiness).Methods("GET")
 }
 
 // registerStatusRoutes registers status and version endpoints
@@ -167,6 +196,9 @@ func (r *PlatformRouter) registerServiceRoutes(router *mux.Router) {
 	router.HandleFunc("/services/{service}/start", r.handlers.StartService).Methods("POST")
 	router.HandleFunc("/services/{service}/stop", r.handlers.StopService).Methods("POST")
 	router.HandleFunc("/services/{service}/restart", r.handlers.RestartService).Methods("POST")
+
+	// POST /api/v1/platform/shutdown - Shut the daemon down (202, runs after the reply)
+	r.shutdownRoute = router.HandleFunc("/shutdown", r.handlers.Shutdown).Methods("POST")
 }
 
 // registerProtocolRoutes registers protocol status endpoints
@@ -181,4 +213,24 @@ func (r *PlatformRouter) registerProtocolRoutes(router *mux.Router) {
 // GET    /api/v1/platform/metrics              - Get platform metrics
 func (r *PlatformRouter) registerMetricsRoutes(router *mux.Router) {
 	router.HandleFunc("/metrics", r.handlers.GetMetrics).Methods("GET")
+}
+
+// registerEntityTypeRoutes registers the storage entity type listing.
+func (r *PlatformRouter) registerEntityTypeRoutes(router *mux.Router) {
+	// GET    /api/v1/platform/entity-types         - List storage entity types and counts
+	router.HandleFunc("/entity-types", r.handlers.ListEntityTypes).Methods("GET")
+}
+
+// UnavailableRoutes returns the registered write routes whose backend is
+// not wired, keyed to the name /capabilities reports them under. Both
+// answer 503 until SetConfigUpdater or SetShutdowner wires them.
+func (r *PlatformRouter) UnavailableRoutes() map[*mux.Route]string {
+	routes := map[*mux.Route]string{}
+	if r.configUpdateRoute != nil && r.handlers.configUpdater == nil {
+		routes[r.configUpdateRoute] = "platform-config-update"
+	}
+	if r.shutdownRoute != nil && r.handlers.shutdowner == nil {
+		routes[r.shutdownRoute] = "platform-shutdown"
+	}
+	return routes
 }
