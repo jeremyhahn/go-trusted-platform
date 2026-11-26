@@ -716,14 +716,14 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `VTPMService.GetBundlePath` | `GET /bundles/{id}/path` | - | - | - | missing |
 | `VTPMService.GetTPMSocketPath` | `GET /bundles/{id}/tpm-socket` | - | - | - | missing |
 | `VTPMService.GetNVRAMPath` | `GET /bundles/{id}/nvram` | - | - | - | missing |
-| `VTPMService.StartVTPM` | `POST /bundles/{id}/start` | - | - | - | missing |
-| `VTPMService.StopVTPM` | `POST /bundles/{id}/stop` | - | - | - | missing |
-| `VTPMService.IsVTPMRunning` | - | - | - | - | missing |
-| `VTPMService.QuoteVTPM` | `POST /bundles/{id}/quote` | - | - | - | missing |
-| `VTPMService.SealVTPM` | `POST /bundles/{id}/seal` | - | - | - | missing |
-| `VTPMService.UnsealVTPM` | `POST /bundles/{id}/unseal` | - | - | - | missing |
-| `VTPMService.ExtendVTPMPCR` | `POST /bundles/{id}/pcrs/extend` | - | - | - | missing |
-| `VTPMService.ReadVTPMPCR` | `GET /bundles/{id}/pcrs` | - | - | - | missing |
+| `VTPMService.StartVTPM` | `POST /bundles/{id}/start` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` (capability gate; runtime flow when the runner has swtpm)<br>`vtpm-runtime.spec.ts` (api-mock) | partial: the Web Console E2E runner has no swtpm, so the flow test records createBundle's refusal there |
+| `VTPMService.StopVTPM` | `POST /bundles/{id}/stop` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` (capability gate; runtime flow when the runner has swtpm)<br>`vtpm-runtime.spec.ts` (api-mock) | partial: the Web Console E2E runner has no swtpm, so the flow test records createBundle's refusal there |
+| `VTPMService.IsVTPMRunning` | `GET /bundles/{id}/state` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` (capability gate; runtime flow when the runner has swtpm)<br>`vtpm-runtime.spec.ts` (api-mock) | partial: the Web Console E2E runner has no swtpm, so the flow test records createBundle's refusal there |
+| `VTPMService.QuoteVTPM` | `POST /bundles/{id}/quote` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` (capability gate; runtime flow when the runner has swtpm)<br>`vtpm-runtime.spec.ts` (api-mock) | partial: the Web Console E2E runner has no swtpm, so the flow test records createBundle's refusal there |
+| `VTPMService.SealVTPM` | `POST /bundles/{id}/seal` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` (capability gate; runtime flow when the runner has swtpm)<br>`vtpm-runtime.spec.ts` (api-mock) | partial: the Web Console E2E runner has no swtpm, so the flow test records createBundle's refusal there |
+| `VTPMService.UnsealVTPM` | `POST /bundles/{id}/unseal` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` (capability gate; runtime flow when the runner has swtpm)<br>`vtpm-runtime.spec.ts` (api-mock) | partial: the Web Console E2E runner has no swtpm, so the flow test records createBundle's refusal there |
+| `VTPMService.ExtendVTPMPCR` | `POST /bundles/{id}/pcrs/extend` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` (capability gate; runtime flow when the runner has swtpm)<br>`vtpm-runtime.spec.ts` (api-mock) | partial: the Web Console E2E runner has no swtpm, so the flow test records createBundle's refusal there |
+| `VTPMService.ReadVTPMPCR` | `GET /bundles/{id}/pcrs` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` (capability gate; runtime flow when the runner has swtpm)<br>`vtpm-runtime.spec.ts` (api-mock) | partial: the Web Console E2E runner has no swtpm, so the flow test records createBundle's refusal there |
 
 ## Status summary by area
 
@@ -764,8 +764,8 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | TenantService | 19 | 4 | 4 | 11 | 0 | 0 |
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 8 | 0 | 0 | 0 | 0 |
-| VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **143** | **50** | **255** | **50** | **31** |
+| VTPMService | 23 | 3 | 10 | 9 | 1 | 0 |
+| **Total** | **529** | **143** | **58** | **247** | **50** | **31** |
 
 ## Proposed slices
 
