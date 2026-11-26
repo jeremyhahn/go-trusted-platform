@@ -16,6 +16,7 @@ package iso
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -544,6 +545,81 @@ func TestBuildISO_KeepsKeysDirNestedInStagingTree(t *testing.T) {
 	assert.FileExists(t, filepath.Join(keysDir, "DB.crt"))
 	assert.NoFileExists(t, filepath.Join(isoDir, "source", "DB.key"),
 		"the builder's staged DB.key copy must be removed")
+}
+
+// TestBuildISO_KeysDirDotKeepsISOContents covers Codex round 7 P1 on
+// #2363: KeysDir "." must stage into the dedicated secure-boot-keys leaf,
+// so the post-build wipe never takes the ISO root as a wipe root and the
+// unrelated ISO contents survive a successful and a failed pack.
+func TestBuildISO_KeysDirDotKeepsISOContents(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		runErr error
+	}{
+		{name: "pack succeeds"},
+		{name: "pack fails", runErr: errors.New("xorriso failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+			isoDir := filepath.Join(tempDir, "iso")
+			srcDir := filepath.Join(tempDir, "src")
+			writeTestDBPair(t, srcDir)
+
+			unrelated := map[string]struct {
+				data []byte
+				mode os.FileMode
+			}{
+				filepath.Join("boot", "vmlinuz"):           {[]byte("kernel image bytes"), 0644},
+				filepath.Join("bin", "tool"):               {[]byte("#!/bin/sh\necho tool\n"), 0755},
+				filepath.Join("configs", "installer.yaml"): {[]byte("installer: true\n"), 0644},
+			}
+			for rel, f := range unrelated {
+				p := filepath.Join(isoDir, rel)
+				require.NoError(t, os.MkdirAll(filepath.Dir(p), 0755))
+				require.NoError(t, os.WriteFile(p, f.data, f.mode))
+			}
+
+			t.Chdir(srcDir)
+			output := filepath.Join(tempDir, "out.iso")
+			builder := fakeXorrisoBuilder(output, tc.runErr, nil)
+			err := builder.BuildISO(context.Background(),
+				&ISOConfig{ISODir: isoDir, KeysDir: ".", OutputISO: output})
+			if tc.runErr == nil {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+
+			for rel, f := range unrelated {
+				got, err := os.ReadFile(filepath.Join(isoDir, rel))
+				require.NoError(t, err, "unrelated ISO file %s must survive the wipe", rel)
+				assert.Equal(t, f.data, got, "unrelated ISO file %s must keep its bytes", rel)
+			}
+			staged := filepath.Join(isoDir, SecureBootKeysISODirName)
+			assert.NoFileExists(t, filepath.Join(staged, "DB.key"),
+				"the staged DB.key copy must be removed")
+			assert.FileExists(t, filepath.Join(staged, "DB.crt"),
+				"KeysDir \".\" must stage into the dedicated secure-boot-keys leaf")
+			assert.NoFileExists(t, filepath.Join(isoDir, "DB.crt"),
+				"KeysDir \".\" must never stage into the ISO root")
+		})
+	}
+}
+
+func TestStagedKeysDirName(t *testing.T) {
+	for _, tc := range []struct {
+		keysDir string
+		want    string
+	}{
+		{"", SecureBootKeysISODirName},
+		{".", SecureBootKeysISODirName},
+		{"..", SecureBootKeysISODirName},
+		{string(filepath.Separator), SecureBootKeysISODirName},
+		{"keys", "keys"},
+		{filepath.Join(string(filepath.Separator), "a", "b", "source"), "source"},
+	} {
+		assert.Equal(t, tc.want, stagedKeysDirName(tc.keysDir), "keysDir %q", tc.keysDir)
+	}
 }
 
 func TestBuildISO_DoesNotWipeThroughSymlinkedStagingRoot(t *testing.T) {
