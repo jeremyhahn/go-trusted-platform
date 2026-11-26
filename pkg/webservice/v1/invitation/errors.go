@@ -224,6 +224,13 @@ func (e ErrMissingInvitationService) Error() string {
 	return "invitation: invitation service is required"
 }
 
+// ErrMissingRoleLister indicates the IAM role lister is required but not provided.
+type ErrMissingRoleLister struct{}
+
+func (e ErrMissingRoleLister) Error() string {
+	return "invitation: IAM role lister is required"
+}
+
 // ErrMissingResponseWriter indicates the response writer is required but not provided.
 type ErrMissingResponseWriter struct{}
 

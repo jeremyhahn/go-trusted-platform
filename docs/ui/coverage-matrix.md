@@ -442,9 +442,9 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `NTPService.GetStatus` | `GET /status` | - | - | - | missing |
-| `NTPService.ListSources` | `GET /sources` | - | - | - | missing |
-| `NTPService.Step` | `POST /step` | - | - | - | missing |
+| `NTPService.GetStatus` | `GET /status` | `(dashboard)/networking/ntp/page.tsx` | - | `web/e2e/real-server/ntp.spec.ts` | covered |
+| `NTPService.ListSources` | `GET /sources` | `(dashboard)/networking/ntp/page.tsx` | - | `web/e2e/real-server/ntp.spec.ts` | covered |
+| `NTPService.Step` | `POST /step` | `(dashboard)/networking/ntp/page.tsx` | - | `web/e2e/real-server/ntp.spec.ts` | covered |
 
 ## ObjectStorageService (`objectstorage.proto`)
 
@@ -749,7 +749,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | KeyManagementService | 23 | 10 | 1 | 12 | 0 | 0 |
 | LUKSService | 10 | 0 | 0 | 0 | 10 | 0 |
 | MessagingService | 8 | 0 | 0 | 0 | 0 | 8 |
-| NTPService | 3 | 0 | 0 | 3 | 0 | 0 |
+| NTPService | 3 | 3 | 0 | 0 | 0 | 0 |
 | ObjectStorageService | 8 | 0 | 0 | 0 | 0 | 8 |
 | OverlayService | 10 | 10 | 0 | 0 | 0 | 0 |
 | PIVService | 8 | 0 | 0 | 0 | 8 | 0 |
@@ -765,7 +765,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 8 | 0 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 10 | 9 | 1 | 0 |
-| **Total** | **529** | **140** | **58** | **250** | **50** | **31** |
+| **Total** | **529** | **143** | **58** | **247** | **50** | **31** |
 
 ## Proposed slices
 
