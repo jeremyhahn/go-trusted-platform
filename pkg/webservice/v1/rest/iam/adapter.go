@@ -16,10 +16,8 @@ package iam
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
-
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -533,29 +531,10 @@ func testPolicyResponseFromSDK(resp *iamsdk.TestPolicyResponse) *TestPolicyRespo
 // is deleted and the call answers codes.Unimplemented (HTTP 501): refused,
 // never emulated.
 func (a *QuicBaaSIAMAdapter) RegisterApp(ctx context.Context, tenantID string, req *iamsdk.RegisterAppRequest) (*iamsdk.Application, error) {
-	app, err := a.client.App().Register(ctx, tenantID, req)
-	if err != nil || app == nil {
-		return app, err
-	}
-	var lost string
-	switch {
-	case app.ClientSecret == "":
-		lost = "the client secret"
-	case req != nil && req.ResourcePrefix != "" && app.ResourcePrefix != req.ResourcePrefix:
-		lost = "the requested resource prefix"
-	default:
-		return app, nil
-	}
-	if app.ClientID != "" {
-		if delErr := a.client.App().Delete(ctx, tenantID, app.ClientID); delErr != nil {
-			return nil, status.Errorf(codes.Unimplemented,
-				"app registration is not implemented by the pinned IAM service: it lost %s; deleting app %q failed: %v",
-				lost, app.ClientID, delErr)
-		}
-	}
-	return nil, status.Errorf(codes.Unimplemented,
-		"app registration is not implemented by the pinned IAM service: it lost %s; app %q was deleted",
-		lost, app.ClientID)
+	// The pinned embedded converter drops ClientSecret and ResourcePrefix.
+	// The created app is returned as the upstream gave it and never deleted;
+	// UPSTREAM go-quicbaas (sdkAppFromInternal) must copy both fields.
+	return a.client.App().Register(ctx, tenantID, req)
 }
 
 func (a *QuicBaaSIAMAdapter) GetApp(ctx context.Context, tenantID, clientID string) (*iamsdk.Application, error) {
@@ -581,12 +560,18 @@ func (a *QuicBaaSIAMAdapter) ListApps(ctx context.Context, tenantID string, limi
 	if n := len(resp.Applications); n > total {
 		total = n
 	}
-	start := min(max(int(offset), 0), len(resp.Applications))
-	end := len(resp.Applications)
+	// The upstream order is not stable (a map range in the pinned storage):
+	// sort a copy by the unique ClientID so pages never repeat or skip apps.
+	apps := slices.Clone(resp.Applications)
+	slices.SortStableFunc(apps, func(x, y iamsdk.Application) int {
+		return strings.Compare(x.ClientID, y.ClientID)
+	})
+	start := min(max(int(offset), 0), len(apps))
+	end := len(apps)
 	if limit > 0 && start+int(limit) < end {
 		end = start + int(limit)
 	}
-	page := resp.Applications[start:end]
+	page := apps[start:end]
 	out := &ListAppsResponse{
 		PaginatedResponse: PaginatedResponse{Total: int64(total)},
 		Apps:              make([]AppResponse, 0, len(page)),
@@ -603,7 +588,7 @@ func (a *QuicBaaSIAMAdapter) UpdateApp(ctx context.Context, tenantID, clientID s
 	}
 	app, err := a.client.App().Update(ctx, tenantID, clientID, req)
 	if err != nil {
-		return nil, upstreamUnimplemented("app update", err)
+		return nil, appOperationUnsupported("app update", err)
 	}
 	return app, nil
 }
@@ -624,7 +609,7 @@ func (a *QuicBaaSIAMAdapter) RotateAppSecret(ctx context.Context, tenantID, clie
 	}
 	resp, err := a.client.App().RotateSecret(ctx, tenantID, clientID)
 	if err != nil {
-		return nil, upstreamUnimplemented("app secret rotation", err)
+		return nil, appOperationUnsupported("app secret rotation", err)
 	}
 	return &RotateSecretResponse{
 		ClientID:     resp.ClientID,

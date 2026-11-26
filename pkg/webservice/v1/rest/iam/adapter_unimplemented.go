@@ -42,3 +42,17 @@ func upstreamUnimplemented(op string, err error) error {
 	}
 	return err
 }
+
+// appOperationUnsupported types an upstream error that upstreamUnimplemented
+// flags as a missing verb: it returns ErrAppOperationUnsupported, so callers
+// can tell "this backend lacks the verb" from every other failure. Any other
+// error is returned unchanged.
+func appOperationUnsupported(op string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if status.Code(upstreamUnimplemented(op, err)) == codes.Unimplemented {
+		return ErrAppOperationUnsupported{Op: op, Err: err}
+	}
+	return err
+}
