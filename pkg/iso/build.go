@@ -142,8 +142,21 @@ func (b *Builder) validateConfig(config *ISOConfig) error {
 }
 
 // copySecureBootKeys copies secure boot keys into the ISO
+// stagedKeysDirName returns the leaf under the ISO tree that KeysDir is
+// staged into and wiped from. A KeysDir whose base is "", ".", "..", or a
+// path separator would make that leaf the ISO root (or its parent), so it
+// falls back to the dedicated SecureBootKeysISODirName leaf instead.
+func stagedKeysDirName(keysDir string) string {
+	base := filepath.Base(keysDir)
+	switch base {
+	case "", ".", "..", string(filepath.Separator):
+		return SecureBootKeysISODirName
+	}
+	return base
+}
+
 func (b *Builder) copySecureBootKeys(config *ISOConfig) error {
-	destDir := filepath.Join(config.ISODir, filepath.Base(config.KeysDir))
+	destDir := filepath.Join(config.ISODir, stagedKeysDirName(config.KeysDir))
 	b.logger.Debug("Copying secure boot keys",
 		"source", config.KeysDir,
 		"destination", destDir)
@@ -165,7 +178,8 @@ func (b *Builder) copySecureBootKeys(config *ISOConfig) error {
 }
 
 // wipeStagedSecureBootKeys zeroes and removes every Secure Boot private-key
-// copy staged on the ISO tree: the builder's KeysDir copy and customize's
+// copy staged on the ISO tree: the builder's KeysDir copy (in the leaf
+// stagedKeysDirName picks, which is never the ISO root) and customize's
 // <iso-root>/secure-boot-keys staging. Public enrollment material stays. A
 // staged directory that is the key source itself (KeysDir) is never touched,
 // at the root or nested at any depth below it. Each root is Lstat'ed first: a
@@ -175,7 +189,7 @@ func (b *Builder) copySecureBootKeys(config *ISOConfig) error {
 func (b *Builder) wipeStagedSecureBootKeys(config *ISOConfig) error {
 	dirs := []string{filepath.Join(config.ISODir, SecureBootKeysISODirName)}
 	if config.KeysDir != "" {
-		dirs = append(dirs, filepath.Join(config.ISODir, filepath.Base(config.KeysDir)))
+		dirs = append(dirs, filepath.Join(config.ISODir, stagedKeysDirName(config.KeysDir)))
 	}
 	var errs []error
 	seen := make(map[string]bool, len(dirs))
