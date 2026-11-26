@@ -2051,6 +2051,11 @@ integration-test-container: build-devcontainer
 integration-test-iso: build-devcontainer
 	$(call run-integration-suite,iso)
 
+## integration-test-iso-vm: Run the ISO suite's VM tests (TestISOVMTests) in devcontainer
+.PHONY: integration-test-iso-vm
+integration-test-iso-vm: build-devcontainer
+	$(call run-integration-suite,iso-vm)
+
 ## integration-test-pxe: Run the PXE suite (test/integration/pxe) in devcontainer
 .PHONY: integration-test-pxe
 integration-test-pxe: build-devcontainer
