@@ -34,6 +34,9 @@ function bmc(sent: SentRequest[]): SentRequest[] {
 const CERT_PEM = 'test-cert-pem';
 const KEY_PEM = 'test-key-pem';
 
+// A replace never updates the stored pin, so the success toast says to enrol again.
+const REPLACED_TOAST = 'Web certificate replaced: BMC profile 42; enroll again to refresh the stored pin';
+
 /** renderCard mounts the card and waits until the capabilities have loaded (no control still "checking"). */
 async function renderCard() {
   const view = render(withControlPlane(<BMCCertCard profileID="42" />));
@@ -200,12 +203,55 @@ describe('BMCCertCard', () => {
     fireEvent.change(screen.getByLabelText('Private key PEM'), { target: { value: KEY_PEM } });
     await click('Replace web certificate');
 
-    await screen.findByText('Web certificate replaced: BMC profile 42');
+    await screen.findByText(REPLACED_TOAST);
     expect(bmc(sent)).toEqual([
       { method: 'PUT', path: '/api/v1/bmc/42/cert', body: { cert_pem: CERT_PEM, key_pem: KEY_PEM } },
     ]);
     expect((screen.getByLabelText('Certificate PEM') as HTMLTextAreaElement).value).toBe('');
     expect((screen.getByLabelText('Private key PEM') as HTMLTextAreaElement).value).toBe('');
+  });
+
+  it('fails an enrolment whose answer carries no SPKI pin', async () => {
+    stub({
+      'POST /api/v1/bmc/42/enroll': ok({
+        device_id: '7',
+        endpoint: 'bmc-a.example',
+        hostname: 'bmc-a.example',
+        pin_spki_sha256: '',
+        steps: [{ name: 'capture', ok: true }],
+      }),
+    });
+    await renderCard();
+    await click('Enroll');
+
+    const toast = await screen.findByText(/^Enroll failed/);
+    expect(toast.getAttribute('data-variant')).toBe('destructive');
+    expect(screen.queryByText(/^Enrolled/)).toBeNull();
+    expect(screen.queryByTestId('bmc-cert-pin')).toBeNull();
+  });
+
+  it('drops the shown pin after a web certificate replace', async () => {
+    stub({
+      'POST /api/v1/bmc/42/enroll': ok({
+        device_id: '7',
+        endpoint: 'bmc-a.example',
+        hostname: 'bmc-a.example',
+        pin_spki_sha256: 'ab12',
+        steps: [{ name: 'capture', ok: true }],
+      }),
+      'PUT /api/v1/bmc/42/cert': ok({ status: 'ok' }),
+    });
+    await renderCard();
+    await click('Enroll');
+    await screen.findByText('Enrolled: BMC profile 42');
+    expect(screen.getByTestId('bmc-cert-pin').textContent).toContain('ab12');
+
+    fireEvent.change(screen.getByLabelText('Certificate PEM'), { target: { value: CERT_PEM } });
+    fireEvent.change(screen.getByLabelText('Private key PEM'), { target: { value: KEY_PEM } });
+    await click('Replace web certificate');
+
+    await screen.findByText(REPLACED_TOAST);
+    expect(screen.queryByTestId('bmc-cert-pin')).toBeNull();
   });
 
   it('shows the server refusal verbatim', async () => {

@@ -206,4 +206,36 @@ describe('BMCCertService profile ID validation', () => {
       '/v1/bmc/18446744073709551615/cert/restore'
     );
   });
+
+  // A numeric ID past 2^53 has already lost precision before String() runs:
+  // 9007199254740993 arrives as 9007199254740992 and would reach another BMC.
+  const unsafeNumbers: Array<[string, number]> = [
+    ['9007199254740993', 9007199254740993],
+    ['MAX_SAFE_INTEGER + 1', Number.MAX_SAFE_INTEGER + 1],
+    ['1.5', 1.5],
+    ['-1', -1],
+    ['NaN', Number.NaN],
+  ];
+
+  for (const [label, id] of unsafeNumbers) {
+    it(`refuses numeric profile ID ${label} with no request`, async () => {
+      await expect(service.enrollBMC(id)).rejects.toThrow(TypeError);
+      await expect(service.restoreFactoryCert(id)).rejects.toThrow(TypeError);
+      await expect(
+        service.replaceWebCertificate(id, { certPem: 'c', keyPem: 'k' })
+      ).rejects.toThrow(TypeError);
+      expect(mockClient.post).not.toHaveBeenCalled();
+      expect(mockClient.put).not.toHaveBeenCalled();
+    });
+  }
+
+  it('accepts numeric MAX_SAFE_INTEGER and a larger ID as a decimal string', async () => {
+    vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: {} });
+
+    await service.enrollBMC(Number.MAX_SAFE_INTEGER);
+    await service.enrollBMC('9007199254740993');
+
+    expect(vi.mocked(mockClient.post).mock.calls[0]?.[0]).toBe('/v1/bmc/9007199254740991/enroll');
+    expect(vi.mocked(mockClient.post).mock.calls[1]?.[0]).toBe('/v1/bmc/9007199254740993/enroll');
+  });
 });
