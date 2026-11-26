@@ -481,7 +481,7 @@ const (
 	ciUploadArtifact  = "actions/upload-artifact"
 	ciDownloadArtfct  = "actions/download-artifact"
 
-	reasonRegistryUnguarded  = "sets IT_REGISTRY to something other than CI_IMAGE_REGISTRY on a self-hosted runner only"
+	reasonRegistryUnguarded  = "sets IT_REGISTRY to something other than the CI_IMAGE_REGISTRY secret on a self-hosted runner only"
 	reasonUploadWithRegistry = "uploads the image artifact even when the LAN registry carries the image"
 	reasonDownloadWithRef    = "downloads the image artifact even when the image job pushed it to the LAN registry"
 	reasonNoRegistryPush     = "has no push step to the LAN registry guarded by IT_REGISTRY, or no image_tag output from it"
@@ -491,6 +491,16 @@ const (
 	reasonPullRemovesRef     = "removes the registry reference another leg on the same daemon may still re-tag from"
 	reasonPullRetagExits     = "re-tags the registry reference without a fallback, so a failed tag fails the leg"
 	reasonPullExitHoldsLock  = "exits after image_lock without image_unlock, so the other legs on the daemon wait on a held lock"
+	reasonTagCarriesRegistry = "puts the registry host in the image_tag job output, which GitHub Actions drops as masked"
+	reasonLegNoRegistry      = "pulls without prefixing the image path with the guarded CI_IMAGE_REGISTRY secret"
+	reasonLegNoImageTag      = "pulls without IT_IMAGE_TAG bound to the image job's image_tag output"
+
+	// The push outputs the bare tag, and the leg rebuilds the reference from
+	// the guarded secret.
+	ciImageTagOutput   = "echo \"image_tag=${IT_LEASE_ID#sha256:}\""
+	ciLegRegistryRef   = "IT_IMAGE_REF=\"$IT_REGISTRY/go-trusted-platform/it-image:$IT_IMAGE_TAG\""
+	ciLegRegistryValue = "${{ runner.environment != 'github-hosted' && secrets.CI_IMAGE_REGISTRY || '' }}"
+	ciLegImageTagValue = "${{ needs.integration-image.outputs.image_tag }}"
 
 	// ciPullRemoveRef is the removal of the shared registry reference; a
 	// leg that already pulled it and waits on the image lock re-tags from it.
@@ -644,6 +654,9 @@ func registryPathFindings(t *testing.T, wf ciWorkflow) []error {
 		if strings.Contains(step.Run, "docker push") && strings.Contains(step.If, ciImageRegistry) && step.ID != "" &&
 			ciScalar(imageJob, "outputs", "image_tag") == "${{ steps."+step.ID+".outputs.image_tag }}" {
 			pushed = true
+			if !strings.Contains(step.Run, ciImageTagOutput) {
+				finding(ciImageJob, step.Line, reasonTagCarriesRegistry)
+			}
 		}
 	}
 	if !pushed {
@@ -668,6 +681,12 @@ func registryPathFindings(t *testing.T, wf ciWorkflow) []error {
 		}
 		if !strings.Contains(step.Run, ciLayerIdentity) || !strings.Contains(step.Run, ciIdentityCompare) {
 			finding(ciLegJob, step.Line, reasonPullNoLayerCompare)
+		}
+		if step.Env[ciRegistryEnv] != ciLegRegistryValue || !strings.Contains(step.Run, ciLegRegistryRef) {
+			finding(ciLegJob, step.Line, reasonLegNoRegistry)
+		}
+		if step.Env["IT_IMAGE_TAG"] != ciLegImageTagValue {
+			finding(ciLegJob, step.Line, reasonLegNoImageTag)
 		}
 		if strings.Contains(step.Run, ciPullRemoveRef) {
 			finding(ciLegJob, step.Line, reasonPullRemovesRef)
@@ -724,6 +743,24 @@ func TestRegistryPathFindingsRejectArtifactsBesideTheRegistry(t *testing.T) {
 			old:    ciRegistryEnv + ": " + ciRegistryValue + "\n        run: echo \"" + ciRegistryEnv + "=$" + ciRegistryEnv,
 			new:    ciRegistryEnv + ": ${{ secrets.CI_IMAGE_REGISTRY }}\n        run: echo \"" + ciRegistryEnv + "=$" + ciRegistryEnv,
 			reason: reasonRegistryUnguarded,
+		},
+		{
+			name:   "image_tag carries the registry",
+			old:    ciImageTagOutput,
+			new:    `echo "image_tag=$ref"`,
+			reason: reasonTagCarriesRegistry,
+		},
+		{
+			name:   "leg pulls the bare path",
+			old:    ciLegRegistryRef,
+			new:    `IT_IMAGE_REF="go-trusted-platform/it-image:$IT_IMAGE_TAG"`,
+			reason: reasonLegNoRegistry,
+		},
+		{
+			name:   "leg pull without the image tag binding",
+			old:    "IT_REGISTRY: " + ciLegRegistryValue + "\n          IT_IMAGE_TAG: " + ciLegImageTagValue,
+			new:    "IT_REGISTRY: " + ciLegRegistryValue,
+			reason: reasonLegNoImageTag,
 		},
 		{
 			name:   "GitHub download beside the registry",

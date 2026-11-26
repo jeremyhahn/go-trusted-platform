@@ -372,13 +372,14 @@ func TestClient_GroupOperations_Errors(t *testing.T) {
 		group := NewGroupMod(OFPGCAdd, OFPGTSelect, 10)
 		group.AddBucket(1, NewActionOutput(1, 0))
 
-		// The error is reported on the group mod xid; the barrier still
-		// succeeds, so the add itself reports success at the transport level
-		// while the OFError surfaces through GetGroupDesc absence. To assert
-		// the error surface directly, verify the group mod arrived and the
-		// barrier completed.
-		if err := client.AddGroup(ctx, group); err != nil {
-			t.Fatalf("unexpected transport error: %v", err)
+		// The switch reports the error on the group mod's xid and still
+		// answers the barrier: AddGroup must return that error.
+		var ofErr *OFError
+		if err := client.AddGroup(ctx, group); !errors.As(err, &ofErr) {
+			t.Fatalf("expected *OFError for rejected group mod, got %v", err)
+		}
+		if ofErr.Type != OFPETGroupModFailed {
+			t.Errorf("expected error type %d, got %d", OFPETGroupModFailed, ofErr.Type)
 		}
 		if mods := server.getReceivedGroupMods(); len(mods) != 1 {
 			t.Errorf("expected 1 group mod, got %d", len(mods))
