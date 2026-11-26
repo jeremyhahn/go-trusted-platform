@@ -1325,6 +1325,11 @@ func testSecretsRollback(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 	}
 	_, err = cmd.SecretsRotate(testCtx, rotateOpts)
 	if !helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if cmd.Name() != "CLI" && helpers.KnownGap(t, cmd.Name(), helpers.MethodSecretsRotate, err) {
+			// The rollback checks below need the rotated version this
+			// known gap could not create: stop the rollback group here.
+			return
+		}
 		require.NoError(t, err, "Setup: SecretsRotate should succeed")
 	}
 
