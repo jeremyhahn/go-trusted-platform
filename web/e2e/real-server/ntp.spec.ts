@@ -7,8 +7,10 @@
  * the NTP routes from the running server. The test daemon may run with NTP
  * enabled or without it, so the spec accepts the status card or the
  * not-enabled card, and the sources table read from GET /api/v1/ntp/sources
- * or the Sources card's not-offered reason. The clock is never stepped: the confirm dialog is opened
- * and cancelled.
+ * or the Sources card's not-offered reason. With NTP enabled but no chronyd
+ * reachable (the test daemon has none), the status and sources routes answer
+ * 503 with a reason and the Sources table shows its error row. The clock is
+ * never stepped: the confirm dialog is opened and cancelled.
  */
 
 import type { Response } from '@playwright/test';
@@ -24,6 +26,19 @@ interface Capability {
 
 function isGet(path: string) {
   return (r: Response) => new URL(r.url()).pathname === path && r.request().method() === 'GET';
+}
+
+// The error reason of a refused NTP read: the body's `error` string, or its
+// `error.message`, or its `message`.
+async function errorText(r: Response): Promise<string> {
+  const body = (await r.json()) as { error?: unknown; message?: unknown };
+  const err = body.error;
+  if (typeof err === 'string') return err;
+  if (typeof err === 'object' && err !== null) {
+    const m = (err as { message?: unknown }).message;
+    if (typeof m === 'string') return m;
+  }
+  return typeof body.message === 'string' ? body.message : '';
 }
 
 test.describe('NTP page', () => {
@@ -63,7 +78,14 @@ test.describe('NTP page', () => {
     if (statusEnabled) {
       const status = await statusResponse;
       expect(status, 'GET /api/v1/ntp/status was not read').not.toBeNull();
-      expect(status!.status()).toBe(200);
+      // The route is served; a daemon whose chronyd control socket is not
+      // reachable (the test daemon has no chronyd) answers 503 with a reason.
+      expect([200, 503], 'GET /api/v1/ntp/status: 200, or 503 without chronyd').toContain(
+        status!.status()
+      );
+      if (status!.status() === 503) {
+        expect(await errorText(status!), 'the 503 carries its reason').not.toBe('');
+      }
       await expect(statusCard).toBeVisible();
       await expect(notEnabled).toHaveCount(0);
     } else {
@@ -76,19 +98,32 @@ test.describe('NTP page', () => {
     if (sourcesEnabled) {
       const sources = await sourcesResponse;
       expect(sources, 'GET /api/v1/ntp/sources was not read').not.toBeNull();
-      expect(sources!.status()).toBe(200);
-      const rows =
-        unwrapPayload<{ sources?: { address: string }[] }>(await sources!.json()).sources ?? [];
-      const tableRows = page.locator('[data-testid="ntp-sources-table"] tbody tr');
-      if (rows.length === 0) {
-        await expect(tableRows).toHaveCount(1);
-        await expect(tableRows).toContainText('No sources configured');
+      expect([200, 503], 'GET /api/v1/ntp/sources: 200, or 503 without chronyd').toContain(
+        sources!.status()
+      );
+      if (sources!.status() === 503) {
+        const reason = await errorText(sources!);
+        expect(reason, 'the 503 carries its reason').not.toBe('');
+        await expect(page.locator('[data-testid="ntp-sources-error"]')).toBeVisible();
+        await expect(page.locator('[data-testid="ntp-sources-error"]')).toContainText(
+          'Failed to load NTP sources'
+        );
       } else {
-        await expect(tableRows).toHaveCount(rows.length);
-        for (const row of rows) {
-          await expect(
-            page.locator('[data-testid="ntp-sources-table"]').getByText(row.address, { exact: true })
-          ).toBeVisible();
+        const rows =
+          unwrapPayload<{ sources?: { address: string }[] }>(await sources!.json()).sources ?? [];
+        const tableRows = page.locator('[data-testid="ntp-sources-table"] tbody tr');
+        if (rows.length === 0) {
+          await expect(tableRows).toHaveCount(1);
+          await expect(tableRows).toContainText('No sources configured');
+        } else {
+          await expect(tableRows).toHaveCount(rows.length);
+          for (const row of rows) {
+            await expect(
+              page
+                .locator('[data-testid="ntp-sources-table"]')
+                .getByText(row.address, { exact: true })
+            ).toBeVisible();
+          }
         }
       }
       await expect(sourcesNotEnabled).toHaveCount(0);
