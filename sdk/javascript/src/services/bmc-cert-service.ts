@@ -93,11 +93,21 @@ const UINT64_MAX_DECIMAL = '18446744073709551615';
  * other text here keeps a value such as `42/../43` from being normalized by
  * the browser into a request on another BMC.
  *
+ * A numeric ID must be a safe integer: past 2^53 a number has already lost
+ * precision (9007199254740993 arrives as 9007199254740992), so it would name
+ * another BMC. Pass a larger ID as a decimal string.
+ *
  * @param profileId - The BMC profile ID
  * @returns The encoded path segment
- * @throws TypeError when the ID is not a decimal uint64
+ * @throws TypeError when the ID is not a decimal uint64, or is a number that
+ *   is not a safe integer
  */
 export function bmcProfileSegment(profileId: string | number): string {
+  if (typeof profileId === 'number' && !Number.isSafeInteger(profileId)) {
+    throw new TypeError(
+      `invalid BMC profile ID: ${String(profileId)} is not a safe integer; pass a larger ID as a decimal string`
+    );
+  }
   const text = String(profileId);
   if (
     !/^(0|[1-9][0-9]{0,19})$/.test(text) ||

@@ -94,7 +94,13 @@ export function BMCCertCard({ profileID }: BMCCertCardProps) {
     setBusy(true);
     try {
       const res = await enroll(body);
-      if (res.success && res.data) {
+      if (res.success && res.data && !res.data.pin_spki_sha256) {
+        // The server can answer success without capturing the certificate
+        // (no fetcher for a profile with no Certificate); with no pin there is
+        // nothing to trust, so this is not an enrolment.
+        setView(null);
+        toast({ title: 'Enroll failed', description: 'the server answered no SPKI pin', variant: 'destructive' });
+      } else if (res.success && res.data) {
         setView({
           pin: res.data.pin_spki_sha256,
           subject: res.data.factory_cert_meta?.subject,
@@ -136,7 +142,13 @@ export function BMCCertCard({ profileID }: BMCCertCardProps) {
     try {
       const res = await replaceWebCertificate(req);
       if (res.success) {
-        toast({ title: 'Web certificate replaced', description: `BMC profile ${profileID}` });
+        // A replace does not update the stored pin, so a pin shown from an
+        // earlier enrolment is stale: drop it and ask for a new enrolment.
+        setView(null);
+        toast({
+          title: 'Web certificate replaced',
+          description: `BMC profile ${profileID}; enroll again to refresh the stored pin`,
+        });
         setCertPEM('');
       } else {
         toast({
