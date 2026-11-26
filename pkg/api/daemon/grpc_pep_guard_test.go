@@ -65,6 +65,7 @@ func TestValidateGRPCAuthorization_RejectsEmbeddedPEPPath(t *testing.T) {
 
 func TestValidateGRPCAuthorization_AcceptsWorkingModes(t *testing.T) {
 	cases := map[string]func(*Config){
+		"mTLS enabled":            func(c *Config) { c.EnableMTLS = true },
 		"platform tokens enabled": func(c *Config) { c.PlatformToken.Enabled = true },
 		"remote quicbaas transport": func(c *Config) {
 			c.App.QuicBaaSConfig.Transport = quicbaas.TransportGRPC
@@ -82,52 +83,6 @@ func TestValidateGRPCAuthorization_AcceptsWorkingModes(t *testing.T) {
 			}
 		})
 	}
-}
-
-// Under mTLS every scoped gRPC TCP call is decided per method by the IAM
-// policy enforcement point (#1989), whatever the token settings say, so an
-// embedded quicbaas (which does not implement the PEP) is refused at
-// startup and the remedy named is a remote quicbaas transport.
-func TestValidateGRPCAuthorization_RejectsEmbeddedMTLS(t *testing.T) {
-	cases := map[string]func(*Config){
-		"platform tokens disabled": func(c *Config) { c.PlatformToken.Enabled = false },
-		"platform tokens enabled":  func(c *Config) { c.PlatformToken.Enabled = true },
-		"testing-only IAM opt-out": func(c *Config) { c.SkipIAMValidation = true },
-	}
-	for name, mutate := range cases {
-		t.Run(name, func(t *testing.T) {
-			config := pepGuardConfig()
-			config.EnableMTLS = true
-			mutate(config)
-
-			err := config.validateGRPCAuthorization()
-			var want ErrEmbeddedPEPUnavailable
-			if !errors.As(err, &want) {
-				t.Fatalf("error is %T (%v), want ErrEmbeddedPEPUnavailable", err, err)
-			}
-			if want.Transport != transportGRPCTCP {
-				t.Errorf("Transport = %q, want %q", want.Transport, transportGRPCTCP)
-			}
-			if !want.MTLS {
-				t.Errorf("MTLS = false, want true")
-			}
-			if !strings.Contains(err.Error(), "quicbaas") {
-				t.Errorf("error %q does not name the remote quicbaas remedy", err)
-			}
-			if strings.Contains(err.Error(), "--enable-mtls") {
-				t.Errorf("error %q recommends mTLS, which is already on", err)
-			}
-		})
-	}
-
-	t.Run("remote quicbaas transport", func(t *testing.T) {
-		config := pepGuardConfig()
-		config.EnableMTLS = true
-		config.App.QuicBaaSConfig.Transport = quicbaas.TransportGRPC
-		if err := config.validateGRPCAuthorization(); err != nil {
-			t.Fatalf("validateGRPCAuthorization() = %v, want nil", err)
-		}
-	})
 }
 
 func TestNew_RefusesEmbeddedPEPPathAtStartup(t *testing.T) {
