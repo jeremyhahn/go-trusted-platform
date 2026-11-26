@@ -1,4 +1,6 @@
 DELETE /api/v1/attestation/manifests/{id}
+DELETE /api/v1/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}
+DELETE /api/v1/bmc/{profileID:[0-9]+}/virtual-media
 DELETE /api/v1/ca/certificates/{serial}
 DELETE /api/v1/cache/entries
 DELETE /api/v1/compute/containers/{id}
@@ -98,6 +100,14 @@ GET /api/v1/attestation/manifests/{id}
 GET /api/v1/attestation/reports
 GET /api/v1/attestation/reports/{device_id}
 GET /api/v1/attestation/verdicts
+GET /api/v1/bmc/{profileID:[0-9]+}/boot-device
+GET /api/v1/bmc/{profileID:[0-9]+}/cert
+GET /api/v1/bmc/{profileID:[0-9]+}/power
+GET /api/v1/bmc/{profileID:[0-9]+}/provision
+GET /api/v1/bmc/{profileID:[0-9]+}/sensors
+GET /api/v1/bmc/{profileID:[0-9]+}/system-info
+GET /api/v1/bmc/{profileID:[0-9]+}/users
+GET /api/v1/bmc/{profileID:[0-9]+}/virtual-media
 GET /api/v1/ca
 GET /api/v1/ca/bootstrap
 GET /api/v1/ca/bundle
@@ -243,12 +253,15 @@ GET /api/v1/platform
 GET /api/v1/platform/config
 GET /api/v1/platform/config/snapshots
 GET /api/v1/platform/config/snapshots/{id}
+GET /api/v1/platform/entity-types
 GET /api/v1/platform/health
+GET /api/v1/platform/liveness
 GET /api/v1/platform/logs
 GET /api/v1/platform/logs/services
 GET /api/v1/platform/logs/stream
 GET /api/v1/platform/metrics
 GET /api/v1/platform/protocols
+GET /api/v1/platform/readiness
 GET /api/v1/platform/service-registry
 GET /api/v1/platform/services
 GET /api/v1/platform/services/{service}
@@ -379,6 +392,13 @@ POST /api/v1/attestation/quote
 POST /api/v1/attestation/quote/verify
 POST /api/v1/attestation/reports/{device_id}/refresh
 POST /api/v1/attestation/vm/{id}
+POST /api/v1/bmc/{profileID:[0-9]+}/boot-device
+POST /api/v1/bmc/{profileID:[0-9]+}/cert/restore
+POST /api/v1/bmc/{profileID:[0-9]+}/enroll
+POST /api/v1/bmc/{profileID:[0-9]+}/power
+POST /api/v1/bmc/{profileID:[0-9]+}/provision
+POST /api/v1/bmc/{profileID:[0-9]+}/users
+POST /api/v1/bmc/{profileID:[0-9]+}/virtual-media
 POST /api/v1/ca/certificates
 POST /api/v1/ca/certificates/verify
 POST /api/v1/ca/certificates/{serial}/renew
@@ -509,6 +529,7 @@ POST /api/v1/platform/config/validate
 POST /api/v1/platform/services/{service}/restart
 POST /api/v1/platform/services/{service}/start
 POST /api/v1/platform/services/{service}/stop
+POST /api/v1/platform/shutdown
 POST /api/v1/provisioning/config
 POST /api/v1/provisioning/devices/{mac}/install-complete
 POST /api/v1/provisioning/devices/{mac}/register
@@ -590,6 +611,9 @@ POST /api/v1/vtpm/bundles/{id}/unseal
 POST /api/v1/vtpm/bundles/{id}/validate
 POST /api/v1/vtpm/templates
 POST /api/v1/vtpm/templates/{id}/clone
+PUT /api/v1/bmc/{profileID:[0-9]+}/cert
+PUT /api/v1/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/password
+PUT /api/v1/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/privilege
 PUT /api/v1/device/profiles/{id:[0-9]+}
 PUT /api/v1/device/templates/{id:[0-9]+}
 PUT /api/v1/devices/{id:[0-9]+}
@@ -612,6 +636,7 @@ PUT /api/v1/kms/keys/{name}/policy
 PUT /api/v1/kms/keys/{name}/status
 PUT /api/v1/kms/secrets/{name}/policy
 PUT /api/v1/kms/secrets/{name}/status
+PUT /api/v1/platform/config/sections/{section}
 PUT /api/v1/proxy/pools/{id}
 PUT /api/v1/proxy/routes/{id}
 PUT /api/v1/pxe/devices/{id}/state

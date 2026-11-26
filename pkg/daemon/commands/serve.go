@@ -1325,12 +1325,13 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			if svc := platformDaemon.PXEGRPCServiceServer(); svc != nil {
 				params.PXEServiceServer = svc
 			}
-			if svc := platformDaemon.NTPGRPCServiceServer(); svc != nil {
+			if svc := platformDaemon.NTPGRPCServiceServer(); svc != nil && svc.Configured() {
 				params.NTPServiceServer = svc
 			}
 			if svc := platformDaemon.VPNGRPCServiceServer(); svc != nil {
 				params.VPNServiceServer = svc
 			}
+			params.BMCRestHandler = platformDaemon.BMCRestHandler()
 			if svc := platformDaemon.ProxyGRPCServiceServer(); svc != nil {
 				params.ProxyServiceServer = svc
 			}
@@ -1399,9 +1400,14 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		// installed earlier.
 		if platformDaemon != nil {
 			if svc := platformDaemon.Service(); svc != nil {
+				params.ConfigUpdater = svc
 				params.ConfigReloader = svc
+				params.EntityTypeLister = svc
 			}
 		}
+		// The serve loop owns the coordinated stop (HTTP, Noise, daemon):
+		// a shutdown request signals it, as a SIGTERM would.
+		params.Shutdowner = platformShutdowner(sigChan)
 		if jsonlQuerier != nil {
 			params.LogQuerier = jsonlQuerier
 		}

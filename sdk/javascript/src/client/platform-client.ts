@@ -20,6 +20,7 @@ import { DeviceService } from '../services/device-service.js';
 import { DNSService } from '../services/dns-service.js';
 import { NTPService } from '../services/ntp-service.js';
 import { CeremonyService } from '../services/ceremony-service.js';
+import { BMCService } from '../services/bmc-service.js';
 import { CapabilitiesService } from '../services/capabilities-service.js';
 import { GatewayService } from '../services/gateway-service.js';
 import { IAMService } from '../services/iam-service.js';
@@ -192,6 +193,8 @@ export class PlatformClient {
 
   /** Bootstrap ceremony: init, status, officer claims and CSR signing */
   public readonly ceremony: CeremonyService;
+  /** BMC power and boot-device service */
+  public readonly bmc: BMCService;
 
   /** What the server offers, enabled and dark */
   public readonly capabilities: CapabilitiesService;
@@ -366,6 +369,7 @@ export class PlatformClient {
     this.dns = new DNSService(t);
     this.ntp = new NTPService(t);
     this.ceremony = new CeremonyService(t);
+    this.bmc = new BMCService(t);
     this.capabilities = new CapabilitiesService(t);
     this.gateway = new GatewayService(t);
     this.iam = new IAMService(t);

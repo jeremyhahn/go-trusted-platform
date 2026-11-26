@@ -15,6 +15,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -73,6 +74,10 @@ type InvitationService struct {
 	invitationDAO datastore.InvitationDAO
 	userDAO       datastore.UserDAO
 	defaultExpiry time.Duration
+
+	// roleLister is the tenant IAM role list Create checks a role against
+	// (#1992); nil refuses every Create. CreateInitialAdmin is not checked.
+	roleLister InvitationRoleLister
 
 	// clk is the service's view of time. entities.Invitation takes time as a
 	// parameter (#311), so this is where the clock is read: once per
@@ -155,7 +160,54 @@ func (s *InvitationService) Create(
 	ctx context.Context,
 	req *CreateInvitationRequest,
 ) (*entities.Invitation, error) {
-	return s.create(ctx, req, entities.NewInvitation)
+	return s.create(ctx, req, entities.NewInvitation, s.checkRoleListed)
+}
+
+// SetRoleLister wires the tenant IAM role list Create checks a role
+// against (#1992). Without one, Create refuses every invitation.
+func (s *InvitationService) SetRoleLister(lister InvitationRoleLister) {
+	s.roleLister = lister
+}
+
+// checkRoleListed refuses a role the tenant's IAM role list does not hold.
+func (s *InvitationService) checkRoleListed(ctx context.Context, tenantID, role string) error {
+	if s.roleLister == nil {
+		return ErrInvitationRolesUnavailable{TenantID: tenantID}
+	}
+	names, err := s.roleLister.RoleNames(ctx, tenantID)
+	if err != nil {
+		s.logger.Error(err, "failed to list IAM roles for invitation", "tenant_id", tenantID)
+		return ErrInvitationRolesUnavailable{TenantID: tenantID, Cause: err}
+	}
+	for _, name := range names {
+		if name == role {
+			return nil
+		}
+	}
+	return ErrInvalidInvitation{Reason: fmt.Sprintf("role %q is not an IAM role of the tenant", role)}
+}
+
+// InvitationRoleLister names the roles in a tenant's IAM role list (#1992).
+type InvitationRoleLister interface {
+	RoleNames(ctx context.Context, tenantID string) ([]string, error)
+}
+
+// ErrInvitationRolesUnavailable is returned when the tenant's IAM role list
+// cannot be read, so an invitation's role cannot be checked.
+type ErrInvitationRolesUnavailable struct {
+	TenantID string
+	Cause    error
+}
+
+func (e ErrInvitationRolesUnavailable) Error() string {
+	if e.Cause == nil {
+		return fmt.Sprintf("invitation: IAM role list unavailable for tenant %s", e.TenantID)
+	}
+	return fmt.Sprintf("invitation: IAM role list unavailable for tenant %s: %v", e.TenantID, e.Cause)
+}
+
+func (e ErrInvitationRolesUnavailable) Unwrap() error {
+	return e.Cause
 }
 
 // create is the shared body of Create and CreateInitialAdmin.
@@ -163,6 +215,7 @@ func (s *InvitationService) create(
 	ctx context.Context,
 	req *CreateInvitationRequest,
 	newInvitation invitationFactory,
+	checkRole func(ctx context.Context, tenantID, role string) error,
 ) (*entities.Invitation, error) {
 	if req == nil {
 		return nil, ErrInvalidInvitation{Reason: "request cannot be nil"}
@@ -182,6 +235,12 @@ func (s *InvitationService) create(
 
 	if req.InvitedByID == 0 {
 		return nil, ErrInvalidInvitation{Reason: "inviter ID is required"}
+	}
+
+	if checkRole != nil {
+		if err := checkRole(ctx, req.TenantID, req.Role); err != nil {
+			return nil, err
+		}
 	}
 
 	s.logger.Debug("creating invitation",
@@ -253,7 +312,7 @@ func (s *InvitationService) CreateInitialAdmin(
 	req *CreateInvitationRequest,
 ) (*entities.Invitation, error) {
 
-	invitation, err := s.create(ctx, req, entities.NewInitialAdminInvitation)
+	invitation, err := s.create(ctx, req, entities.NewInitialAdminInvitation, nil)
 	if err != nil {
 		return nil, err
 	}

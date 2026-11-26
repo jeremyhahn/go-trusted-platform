@@ -49,6 +49,23 @@ export type {
   CeremonySignCSRRequest,
   CeremonySignCSRResponse,
 } from './ceremony-service.js';
+export { BMCService } from './bmc-service.js';
+export type {
+  BMCPowerAction,
+  BMCPowerActionResponse,
+  BMCPowerStatusResponse,
+  BMCSetBootDeviceRequest,
+  BMCSetBootDeviceResponse,
+  BMCBootDeviceResponse,
+  BMCVirtualMediaStatus,
+  BMCMountISOResponse,
+  BMCStatusResponse,
+  BMCSensorReading,
+  BMCSystemInfo,
+  BMCWebCertificate,
+  BMCProvisionRequest,
+  BMCProvisionResult,
+} from './bmc-service.js';
 export { GatewayService } from './gateway-service.js';
 export { IAMService } from './iam-service.js';
 export { IDevIDService } from './idevid-service.js';

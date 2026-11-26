@@ -328,6 +328,9 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.ntpService = &stubNTPServer{}
 	registry.vpnService = &stubVPNServer{}
 	registry.proxyService = &stubProxyServer{}
+	if registry.bmcHandler == nil && !registry.withoutBMC {
+		registry.bmcHandler = &countingBMCHandler{}
+	}
 	if registry.appServices == (restapi.AppServiceServers{}) {
 		registry.appServices = restapi.AppServiceServers{
 			Cache:     &countingCacheServer{},

@@ -351,3 +351,14 @@ func (e ErrContextCancelled) Error() string {
 func (e ErrContextCancelled) Unwrap() error {
 	return e.Cause
 }
+
+// ErrUnexpectedResponse is returned when an SDK transport request answers
+// with a value of a type other than the one the method expects.
+type ErrUnexpectedResponse struct {
+	Method string
+	Got    interface{}
+}
+
+func (e ErrUnexpectedResponse) Error() string {
+	return fmt.Sprintf("unexpected response type %T for %s", e.Got, e.Method)
+}

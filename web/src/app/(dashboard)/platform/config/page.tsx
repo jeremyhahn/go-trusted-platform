@@ -23,6 +23,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
+import { usePlatform } from "@/hooks";
+import { Gated } from "@/components/features/capabilities/gated";
+import { ConfigSectionEditor } from "@/components/features/platform/config-section-editor";
 
 interface ConfigSource {
   path: string;
@@ -64,6 +67,7 @@ interface SnapshotSummary {
  */
 export default function ConfigPage() {
   const { toast } = useToast();
+  const platform = usePlatform();
   const [config, setConfig] = React.useState<ConfigTree | null>(null);
   const [isLoading, setIsLoading] = React.useState(true);
   const [isReloading, setIsReloading] = React.useState(false);
@@ -86,23 +90,18 @@ export default function ConfigPage() {
     setIsLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/v1/platform/config", fetchOpts);
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      const res = await platform.getConfig();
+      if (!res.success || !res.data) {
+        throw new Error(res.error?.message ?? "configuration unavailable");
       }
-      const body = await res.json();
-      const tree: ConfigTree =
-        body.payload && typeof body.payload === "object"
-          ? (body.payload as ConfigTree)
-          : (body as ConfigTree);
-      setConfig(tree);
+      setConfig(res.data);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
     } finally {
       setIsLoading(false);
     }
-  }, [fetchOpts]);
+  }, [platform]);
 
   const fetchSnapshots = React.useCallback(async () => {
     try {
@@ -123,10 +122,11 @@ export default function ConfigPage() {
   }, [fetchConfig, fetchSnapshots]);
 
   const handleCaptureSnapshot = async () => {
+    // Cancel (null) captures nothing; an empty answer is a deliberate choice.
+    const reason = window.prompt("Snapshot reason (optional)", "manual");
+    if (reason === null) return;
     setIsCapturing(true);
     try {
-      const reason =
-        window.prompt("Snapshot reason (optional)", "manual") ?? "manual";
       const res = await fetch("/api/v1/platform/config/snapshots", {
         ...fetchOpts,
         method: "POST",
@@ -207,17 +207,12 @@ export default function ConfigPage() {
   const handleReload = async () => {
     setIsReloading(true);
     try {
-      const res = await fetch("/api/v1/platform/config/reload", {
-        ...fetchOpts,
-        method: "POST",
-      });
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      const res = await platform.reloadConfig();
+      if (!res.success || !res.data) {
+        throw new Error(res.error?.message ?? "reload refused");
       }
-      const body = await res.json();
-      const sections =
-        body.payload?.sections ?? body.sections ?? [];
-      const snapID = body.payload?.pre_reload_snapshot ?? "";
+      const sections = res.data.sections ?? [];
+      const snapID = res.data.pre_reload_snapshot ?? "";
       toast({
         title: "Configuration reloaded",
         description: snapID
@@ -287,19 +282,21 @@ export default function ConfigPage() {
             )}
             Snapshot
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleReload}
-            disabled={isReloading}
-          >
-            {isReloading ? (
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-            ) : (
-              <RefreshCw className="h-4 w-4 mr-2" />
-            )}
-            Reload
-          </Button>
+          <Gated op="POST /api/v1/platform/config/reload">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleReload}
+              disabled={isReloading}
+            >
+              {isReloading ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4 mr-2" />
+              )}
+              Reload
+            </Button>
+          </Gated>
           <Button
             variant="outline"
             size="sm"
@@ -458,6 +455,8 @@ export default function ConfigPage() {
               </ScrollArea>
             </CardContent>
           </Card>
+
+          <ConfigSectionEditor onApplied={() => void fetchConfig()} />
         </>
       )}
     </div>
