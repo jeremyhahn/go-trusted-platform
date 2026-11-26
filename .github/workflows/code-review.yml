@@ -1055,12 +1055,10 @@ jobs:
     # v5.12.3: no concurrency group. Cancelling an older run's scope job
     # skipped that run's requested review (v5.12.2), so each event's guard
     # runs to the end; it is a short API-only job.
-    # v5.12.12 (Tenant Agent on trusted-firmware #821): on github.com a
-    # same-repository head takes the Dells' bigdisk pool, as ci.yml v1.52's
-    # internal pull requests do; the pilot's review waited an hour behind
-    # the hosted queue. A fork's head keeps ubuntu-latest. Needs ci.yml v1.53,
-    # whose `Runner labels (ruling 633)` step accepts this line.
-    runs-on: ${{ github.server_url == 'https://github.com' && (github.event.pull_request.head.repo.full_name == github.repository && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest') || 'bigdisk' }}
+    # Back on the v5.12.11 hosted line: the self-hosted pool's job-started
+    # hook admits only push to main and same-repository pull_request events,
+    # so a pull_request_target guard on it failed before its first step.
+    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
     # The guard's python runs at most 240 s (its timeout -k 10 240).
     timeout-minutes: 10
     permissions:
@@ -1828,6 +1826,8 @@ jobs:
             echo "skip=closed" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Drafts are not reviewed: the live PR, not the event payload, says so.
+          [ "$(jq -r '.draft // false' <<<"$pr")" != true ] || { echo "PR $PR_NUM is a draft; not reviewed."; echo "skip=draft" >> "$GITHUB_OUTPUT"; exit 0; }
           if [ "$head" != "$EVENT_SHA" ]; then
             echo "The head moved to $head since this run was created for $EVENT_SHA;"
             echo "the run for the new head reviews it. Stopping."
@@ -3126,6 +3126,8 @@ jobs:
             echo "PR $PR_NUM closed or moved off $EVENT_SHA during the review; not posting."
             exit 0
           fi
+          # Drafts are not reviewed: the live PR, not the event payload, says so.
+          [ "$(jq -r '.draft // false' <<<"$pr")" != true ] || { echo "PR $PR_NUM became a draft during the review; not posting."; exit 0; }
           if [ "$(jq -r '.base.ref // empty' <<<"$pr")" != "$BASE_REF" ]; then
             echo "PR $PR_NUM was retargeted off $BASE_REF during the review; not posting (the confirm step ends red)."
             exit 0
@@ -3580,6 +3582,8 @@ jobs:
           if [ "$(jq -r '.state // empty' <<<"$pr")" != open ] || [ "$(jq -r '.merged // false' <<<"$pr")" = true ]; then
             echo "PR $PR_NUM is not open. Nothing to do."; echo "skip=closed" >> "$GITHUB_OUTPUT"; exit 0
           fi
+          # Drafts are not reviewed: the live PR, not the event payload, says so.
+          [ "$(jq -r '.draft // false' <<<"$pr")" != true ] || { echo "PR $PR_NUM is a draft; not reviewed."; echo "skip=draft" >> "$GITHUB_OUTPUT"; exit 0; }
           if [ "$head" != "$EVENT_SHA" ]; then
             echo "The head moved to $head; the run for it reviews it."; echo "skip=stale" >> "$GITHUB_OUTPUT"; exit 0
           fi
@@ -3811,6 +3815,8 @@ jobs:
           if [ "$(jq -r '.state // empty' <<<"$pr")" != open ] || [ "$(jq -r '.head.sha // empty' <<<"$pr")" != "$EVENT_SHA" ]; then
             echo "PR $PR_NUM closed or moved off $EVENT_SHA; posting nothing."; touch "$WORK/verdict"; exit 0
           fi
+          # Drafts are not reviewed: the live PR, not the event payload, says so.
+          [ "$(jq -r '.draft // false' <<<"$pr")" != true ] || { echo "PR $PR_NUM became a draft; posting nothing."; touch "$WORK/verdict"; exit 0; }
           jq -n --rawfile b "$WORK/body.md" --arg s "$EVENT_SHA" '{event: "COMMENT", commit_id: $s,
               body: ("Advisory opencode review (code-review.yml v5.2.2). Codex is the reviewer of record.\n\n" + $b)}' \
             > "$WORK/review.json"

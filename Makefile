@@ -2051,6 +2051,11 @@ integration-test-container: build-devcontainer
 integration-test-iso: build-devcontainer
 	$(call run-integration-suite,iso)
 
+## integration-test-iso-vm: Run the ISO suite's VM tests (TestISOVMTests) in devcontainer
+.PHONY: integration-test-iso-vm
+integration-test-iso-vm: build-devcontainer
+	$(call run-integration-suite,iso-vm)
+
 ## integration-test-pxe: Run the PXE suite (test/integration/pxe) in devcontainer
 .PHONY: integration-test-pxe
 integration-test-pxe: build-devcontainer
@@ -2317,7 +2322,7 @@ IT_PREBUILT ?=
 # The integration container's memory limit, swap included (so no swap): the
 # compose integration service (CI's integration legs and soak) and every
 # run-integration-suite container. The legs peaked at 4.5 to 12.9 GB with no
-# limit on ci-node-2 (#1178); 16g is that plus headroom.
+# limit on a runner host (#1178); 16g is that plus headroom.
 IT_MEMORY ?= 16g
 
 # The cgroup parent of every container CI starts: the run-integration-suite

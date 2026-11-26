@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -30,18 +31,22 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
+	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -94,6 +99,8 @@ type RESTServer struct {
 	gatewayService        *gatewayRESTService
 	idevidService         *IDevIDGRPCService
 	authFactorHandlers    *restapi.AuthFactorHandlers
+	// registryMaxPushBytes overrides the image push body cap when non-zero.
+	registryMaxPushBytes int64
 }
 
 // NewRESTServer creates a new REST server for the daemon
@@ -322,27 +329,9 @@ func (s *RESTServer) SetBMCHandler(handler bmcwebsvc.RestHandler) {
 	}
 	s.bmcHandler = handler
 
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/power", handler.PowerAction).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/power", handler.PowerStatus).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/boot-device", handler.SetBootDevice).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/boot-device", handler.GetBootDevice).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/virtual-media", handler.MountISO).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/virtual-media", handler.UnmountISO).Methods(http.MethodDelete)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/virtual-media", handler.VirtualMediaStatus).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/sensors", handler.GetSensors).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/system-info", handler.GetSystemInfo).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/provision", handler.Provision).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/provision", handler.ProvisionStatus).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/enroll", handler.EnrollBMC).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/cert/restore", handler.RestoreBMC).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/cert", handler.GetWebCertificate).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/cert", handler.ReplaceWebCertificate).Methods(http.MethodPut)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/users", handler.ListUsers).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/users", handler.CreateUser).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}", handler.DeleteUser).Methods(http.MethodDelete)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/password", handler.SetUserPassword).Methods(http.MethodPut)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/privilege", handler.SetUserPrivilege).Methods(http.MethodPut)
+	// The same route table the web console mounts; this listener
+	// authenticates by mTLS only, so no scope is checked here.
+	_ = bmcwebsvc.RegisterRoutes(s.router.PathPrefix(restBasePath).Subrouter(), handler, bmcwebsvc.PassThroughGuard{})
 
 	s.logger.Info("BMC management routes registered")
 }
@@ -489,6 +478,43 @@ func (s *RESTServer) SetComputeHandlers(compute platformv1.ComputeServiceServer,
 		return
 	}
 	restapi.NewComputeHandlers(compute, guard, s.logger).RegisterRoutes(s.router)
+}
+
+// SetRegistryHandlers mounts the image registry REST routes
+// (/api/v1/compute/images) on the daemon listener, each behind the
+// scope its gRPC RegistryService method needs: the reads need
+// registry:read, a push registry:write and a delete registry:delete.
+// A nil service mounts nothing.
+func (s *RESTServer) SetRegistryHandlers(svc grpcapi.RegistryService, guard *restapi.ScopeGuard) {
+	if svc == nil {
+		return
+	}
+	logger := logging.NewFromSlog(s.logger)
+	h := restregistry.NewHandlers(logger, svc, response.NewResponseWriter(logger, nil))
+	if s.registryMaxPushBytes > 0 {
+		h.SetMaxPushBytes(s.registryMaxPushBytes)
+	}
+	// The web listener mounts these routes through gated(ROLE_ADMIN), and
+	// docs/registry/api.md requires the admin role on
+	// /api/v1/compute/images/**: a registry scope alone does not let a
+	// caller read or mutate the platform registry here either.
+	admin := func(scope string, next http.HandlerFunc) http.HandlerFunc {
+		return guard.RequireCaller(scope, func(w http.ResponseWriter, r *http.Request, caller *platformtoken.AuthorizedContext) {
+			if caller == nil || !slices.Contains(caller.Roles, common.ROLE_ADMIN) {
+				http.Error(w, "the registry image routes require the admin role", http.StatusForbidden)
+				return
+			}
+			next(w, r)
+		})
+	}
+	sr := s.router.PathPrefix("/api/v1/compute/images").Subrouter()
+	sr.HandleFunc("", admin("registry:read", h.ListImages)).Methods(http.MethodGet)
+	sr.HandleFunc("/", admin("registry:read", h.ListImages)).Methods(http.MethodGet)
+	sr.HandleFunc("", admin("registry:write", h.PushImage)).Methods(http.MethodPost)
+	sr.HandleFunc("/", admin("registry:write", h.PushImage)).Methods(http.MethodPost)
+	sr.HandleFunc("/status", admin("registry:read", h.Status)).Methods(http.MethodGet)
+	sr.HandleFunc("/{repository:.+}", admin("registry:read", h.GetImage)).Methods(http.MethodGet)
+	sr.HandleFunc("/{repository:.+}", admin("registry:delete", h.DeleteImage)).Methods(http.MethodDelete)
 }
 
 // SetOverlayHandlers wires the overlay REST handlers onto the daemon's REST

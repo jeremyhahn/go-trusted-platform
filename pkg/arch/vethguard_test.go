@@ -19,7 +19,7 @@ import (
 
 // Every veth a test creates has one tx and one rx queue on both ends (#1178).
 // The kernel default is one queue per possible CPU, and each queue raises its
-// own uevents on add and remove: on ci-node-1 (80 cores, 112 queues) that was
+// own uevents on add and remove: on an 80-core host (112 queues) that was
 // about 450 uevents per pair, and test churn drove the host to load 660 in a
 // udev storm. pkg/testenv's NewVeth (netlink) and VethArgs / VethNetnsArgs
 // (ip(8)) pin the counts; this guard fails on any test-path veth creation

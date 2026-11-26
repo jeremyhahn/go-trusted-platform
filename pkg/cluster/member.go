@@ -728,7 +728,10 @@ func (m *membershipManager) leaderCheckLoop() {
 
 // updateLocalNodeLeaderStatus updates the local node's leader status based on Raft state.
 func (m *membershipManager) updateLocalNodeLeaderStatus() {
-	m.localNode.IsLeader = m.raftOp.IsLeader()
+	isLeader := m.raftOp.IsLeader()
+	m.nodeCacheMu.Lock()
+	m.localNode.IsLeader = isLeader
+	m.nodeCacheMu.Unlock()
 }
 
 // LocalNode returns information about the local node.

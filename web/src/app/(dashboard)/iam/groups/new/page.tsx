@@ -4,6 +4,7 @@
  * Create Group page — minimal form that calls iam.createGroup, then
  * routes back to /iam/groups. The list page links here from its
  * "Add Group" button.
+ * Create Group is gated on the server's tenant group create capability (#2033).
  */
 
 import React, { useState } from 'react';
@@ -15,6 +16,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Loader2 } from 'lucide-react';
+import { Gated } from '@/components/features/capabilities/gated';
 
 export default function NewGroupPage() {
   const router = useRouter();
@@ -85,15 +87,17 @@ export default function NewGroupPage() {
             <Button variant="outline" onClick={() => router.push('/iam/groups')}>
               Cancel
             </Button>
-            <Button
-              onClick={() => createMutation.mutate(undefined)}
-              disabled={!name || createMutation.isLoading}
-            >
-              {createMutation.isLoading && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
-              Create Group
-            </Button>
+            <Gated op="POST /api/v1/iam/tenants/{tenant}/groups">
+              <Button
+                onClick={() => createMutation.mutate(undefined)}
+                disabled={!name || createMutation.isLoading}
+              >
+                {createMutation.isLoading && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                Create Group
+              </Button>
+            </Gated>
           </div>
         </CardContent>
       </Card>

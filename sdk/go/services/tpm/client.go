@@ -366,11 +366,13 @@ func (c *Client) ReadNVRAM(ctx context.Context, index uint32, password string, o
 	return resp.Data, nil
 }
 
-// UndefineNVRAM removes an NVRAM space.
+// UndefineNVRAM removes an NVRAM space through the owner hierarchy;
+// password is the owner authorization (UndefineNVRAMRequest.ParentPassword),
+// empty when the owner hierarchy has none.
 func (c *Client) UndefineNVRAM(ctx context.Context, index uint32, password string) error {
 	_, err := c.grpc.UndefineNVRAM(ctx, &platformv1.UndefineNVRAMRequest{
-		Index:    index,
-		Password: password,
+		Index:          index,
+		ParentPassword: password,
 	})
 	if err != nil {
 		return &ErrUndefineNVRAMFailed{Index: index, Cause: err}

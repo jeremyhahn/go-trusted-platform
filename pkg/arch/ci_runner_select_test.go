@@ -203,7 +203,17 @@ type selResult struct {
 
 // selEnv is the step env of a case; the keys match the step's env: block.
 type selEnv struct {
-	server, event, headRepo string
+	server, event, headRepo, ref string
+}
+
+// selMain is the ref of a push to main.
+const selMain = "refs/heads/main"
+
+// selMayOverflow reports whether e is an event the step lets reach the API
+// count (DS-10475): a push to main, or a pull request (the fork check then
+// decides).
+func selMayOverflow(e selEnv) bool {
+	return (e.event == "push" && e.ref == selMain) || e.event == "pull_request"
 }
 
 // runSel runs script with the fixture replies and env and returns its result.
@@ -263,6 +273,7 @@ func runSel(t *testing.T, script string, replies map[string]selReply, e selEnv) 
 		"REPO=" + selRepo,
 		"HEAD_REPO=" + e.headRepo,
 		"EVENT=" + e.event,
+		"REF=" + e.ref,
 	}
 	out, err := cmd.CombinedOutput()
 	res := selResult{stdout: string(out)}
@@ -314,7 +325,7 @@ func selEnvValue(t *testing.T, key string) string {
 func TestRunnerSelectionStepEnv(t *testing.T) {
 	got := readSelStep(t, readCI(t)).env
 	sort.Strings(got)
-	want := []string{"API", "EVENT", "GRACE", "HEAD_REPO", "JOB_TOKEN", "LIMIT", "REPO", "RUN_ID", "SERVER"}
+	want := []string{"API", "EVENT", "GRACE", "HEAD_REPO", "JOB_TOKEN", "LIMIT", "REF", "REPO", "RUN_ID", "SERVER"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("the selection step's env keys are %v; this test sets %v", got, want)
 	}
@@ -332,15 +343,24 @@ func TestRunnerSelectionScript(t *testing.T) {
 		overflow = "overflow"
 	)
 	self := selJobs(1, selRunID, "in_progress", selUbuntu, 5*time.Second) // this preflight job
-	gh := selEnv{server: "https://github.com", event: "push"}
-	sameRepoPR := selEnv{server: "https://github.com", event: "pull_request", headRepo: selRepo}
-	forkPR := selEnv{server: "https://github.com", event: "pull_request", headRepo: "someone/repo"}
+	gh := selEnv{server: "https://github.com", event: "push", ref: selMain}
+	sameRepoPR := selEnv{server: "https://github.com", event: "pull_request", ref: "refs/pull/7/merge", headRepo: selRepo}
+	forkPR := selEnv{server: "https://github.com", event: "pull_request", ref: "refs/pull/7/merge", headRepo: "someone/repo"}
 	// v1.52: a deleted fork leaves the head repository empty; it is still
 	// not this repository.
-	deletedForkPR := selEnv{server: "https://github.com", event: "pull_request"}
-	forkPRT := selEnv{server: "https://github.com", event: "pull_request_target", headRepo: "someone/repo"}
+	deletedForkPR := selEnv{server: "https://github.com", event: "pull_request", ref: "refs/pull/7/merge"}
+	// DS-10475: pull_request_target is hosted from any head repository.
+	forkPRT := selEnv{server: "https://github.com", event: "pull_request_target", ref: selMain, headRepo: "someone/repo"}
+	sameRepoPRT := selEnv{server: "https://github.com", event: "pull_request_target", ref: selMain, headRepo: selRepo}
 	// A push has no pull request head: the fork check does not apply.
-	pushForeignHead := selEnv{server: "https://github.com", event: "push", headRepo: "someone/repo"}
+	pushForeignHead := selEnv{server: "https://github.com", event: "push", ref: selMain, headRepo: "someone/repo"}
+	// DS-10475: only a push to main may overflow; the self-hosted image
+	// hook refuses schedule and workflow_dispatch runs.
+	pushOtherBranch := selEnv{server: "https://github.com", event: "push", ref: "refs/heads/feature"}
+	pushTag := selEnv{server: "https://github.com", event: "push", ref: "refs/tags/v1.0.0"}
+	schedule := selEnv{server: "https://github.com", event: "schedule", ref: selMain}
+	dispatch := selEnv{server: "https://github.com", event: "workflow_dispatch", ref: selMain}
+	otherEvent := selEnv{server: "https://github.com", event: "merge_group", ref: "refs/heads/gh-readonly-queue/main/pr-7", headRepo: selRepo}
 	saturated := slices.Concat(self, selJobs(30, 7, "in_progress", selUbuntu, time.Minute), selJobs(5, 8, "queued", selUbuntu, 10*time.Minute))
 	// 150 jobs of one run: the first page all done, the 12 in progress on
 	// the second page, so only a complete read overflows.
@@ -384,8 +404,15 @@ func TestRunnerSelectionScript(t *testing.T) {
 		{name: "a fork pull request at saturation", env: forkPR, jobs: saturated, want: hosted, noCalls: true},
 		{name: "a deleted-fork pull request at saturation", env: deletedForkPR, jobs: saturated, want: hosted, noCalls: true},
 		{name: "a fork pull_request_target at saturation", env: forkPRT, jobs: saturated, want: hosted, noCalls: true},
+		{name: "a same-repository pull_request_target at saturation", env: sameRepoPRT, jobs: saturated, want: hosted, noCalls: true},
 		{name: "a push at saturation takes no fork check", env: pushForeignHead, jobs: saturated, want: overflow},
-		{name: "off github.com at saturation", env: selEnv{server: "https://gitea.example", event: "push"}, jobs: saturated, want: hosted, noCalls: true},
+		{name: "a push to another branch at saturation", env: pushOtherBranch, jobs: saturated, want: hosted, noCalls: true},
+		{name: "a tag push at saturation", env: pushTag, jobs: saturated, want: hosted, noCalls: true},
+		{name: "a schedule run at saturation", env: schedule, jobs: saturated, want: hosted, noCalls: true},
+		{name: "a workflow_dispatch run at saturation", env: dispatch, jobs: saturated, want: hosted, noCalls: true},
+		{name: "any other event at saturation", env: otherEvent, jobs: saturated, want: hosted, noCalls: true},
+		{name: "off github.com at saturation", env: selEnv{server: "https://gitea.example", event: "push", ref: selMain}, jobs: saturated, want: hosted, noCalls: true},
+		{name: "a schedule run off github.com", env: selEnv{server: "https://gitea.example", event: "schedule", ref: selMain}, jobs: saturated, want: hosted, noCalls: true},
 		{name: "a second jobs page read in full", env: gh, jobs: slices.Concat(self, paged), want: overflow},
 		{name: "a failed second jobs page at saturation", env: gh, jobs: slices.Concat(saturated, paged),
 			break_: func(r map[string]selReply) { r[jobsURL(9, 2)] = selReply{code: 502, body: `{"message":"Bad Gateway"}`} },
@@ -451,14 +478,35 @@ func TestRunnerSelectionScript(t *testing.T) {
 				t.Errorf("a ::warning printed: %v, want %v\n%s", has, c.warning, res.stdout)
 			}
 			// v1.52 prints a ::notice for a fork pull request (an empty head
-			// repository is one too); any other ::notice is the overflow's.
-			const forkNotice = "::notice::runner selection: this pull request's head repository is not this repository (a fork)"
-			wantFork := (c.env.event == "pull_request" || c.env.event == "pull_request_target") && c.env.headRepo != selRepo
-			if has := strings.Contains(res.stdout, forkNotice); has != wantFork {
-				t.Errorf("the fork ::notice printed: %v, want %v\n%s", has, wantFork, res.stdout)
+			// repository is one too); DS-10475 one for an event that may not
+			// overflow; any other ::notice is the overflow's.
+			const (
+				forkNotice  = "::notice::runner selection: this pull request's head repository is not this repository (a fork)"
+				eventNotice = "only a push to refs/heads/main or a pull request from this repository may reach a self-hosted runner"
+			)
+			onGitHub := c.env.server == "https://github.com"
+			wantFork := onGitHub && c.env.event == "pull_request" && c.env.headRepo != selRepo
+			wantEvent := onGitHub && !selMayOverflow(c.env)
+			var hasFork, hasEvent, hasOther bool
+			for _, l := range strings.Split(res.stdout, "\n") {
+				switch {
+				case !strings.Contains(l, "::notice::"):
+				case strings.Contains(l, forkNotice):
+					hasFork = true
+				case strings.Contains(l, eventNotice):
+					hasEvent = true
+				default:
+					hasOther = true
+				}
 			}
-			if has := strings.Contains(strings.ReplaceAll(res.stdout, forkNotice, ""), "::notice::"); has != (c.want == overflow) {
-				t.Errorf("the overflow ::notice printed: %v, want %v\n%s", has, c.want == overflow, res.stdout)
+			if hasFork != wantFork {
+				t.Errorf("the fork ::notice printed: %v, want %v\n%s", hasFork, wantFork, res.stdout)
+			}
+			if hasEvent != wantEvent {
+				t.Errorf("the event ::notice printed: %v, want %v\n%s", hasEvent, wantEvent, res.stdout)
+			}
+			if hasOther != (c.want == overflow) {
+				t.Errorf("the overflow ::notice printed: %v, want %v\n%s", hasOther, c.want == overflow, res.stdout)
 			}
 			if c.noCalls && len(res.calls) != 0 {
 				t.Errorf("the step called the API: %v", res.calls)

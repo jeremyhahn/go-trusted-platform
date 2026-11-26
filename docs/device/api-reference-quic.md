@@ -49,6 +49,15 @@ unreachable daemon. Reference the constant rather than repeating the string.
 | `0x3B` | Activate device | `ActivateDeviceRequest` | `ActivateDeviceResponse` |
 | `0x3D` | Get device state | `{Id}` | daemon-native `DeviceStateResponse` (domain-only state field, no pb counterpart) |
 
+Attestation challenges are not issued over QUIC (owner ruling 1234): there is
+no challenge-issue opcode or sub-opcode. Issue the single-use challenge over
+MCP (`device_attest_challenge`), gRPC (`IssueAttestationChallenge`), REST
+(`POST /api/v1/devices/{id}/attest/challenge`) or the Unix socket; the attest
+opcode `0x3A` carries its `challenge_id` in `AttestDeviceRequest`. The
+challenge is checked against the daemon's one challenge store, so a challenge
+issued over any of those transports is single use across all of them, QUIC
+included.
+
 `0x3C` and `0x3E` (formerly Deactivate and GetMetrics, never implemented) are
 retired: the guard refuses them as unclassified with `StatusPermissionDenied`
 ([api.md §2](api.md#2-devices)).

@@ -11,6 +11,8 @@ import { useParams, usePathname, useRouter } from 'next/navigation';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
+import { useCapabilities } from '@/hooks/use-capabilities';
+import { Gated } from '@/components/features/capabilities/gated';
 import { LegacyRole, UpdateRoleInput, LegacyUser, Permission } from '@/types/iam';
 
 // Role record as the REST API sends it: camelCase or snake_case keys (#445).
@@ -51,6 +53,8 @@ export default function RoleDetailPage() {
   const { tenantId } = useAuth();
   const iam = useIAM();
   const roleId = resolveDynamicId(params, pathname, 'roles');
+  const { loading: capsLoading, capability } = useCapabilities();
+  const getCap = capability('GET /api/v1/iam/tenants/{tenant}/roles/{id}');
 
   const [isEditing, setIsEditing] = useState(false);
   // Edit state is an overlay: null means "unchanged, show the fetched value".
@@ -66,7 +70,8 @@ export default function RoleDetailPage() {
       if (!tenantId) return Promise.reject(new Error('No tenant ID'));
       return iam.getRole(tenantId, roleId);
     },
-    [tenantId, roleId]
+    [tenantId, roleId],
+    { enabled: !capsLoading && getCap.enabled }
   );
 
   // Fetch users (placeholder - needs actual implementation in SDK if not available)
@@ -157,6 +162,27 @@ export default function RoleDetailPage() {
     setIsEditing(false);
   };
 
+  if (!capsLoading && !getCap.enabled) {
+    return (
+      <div className="container mx-auto py-6 space-y-6">
+        <div className="space-y-1">
+          <h1 className="text-3xl font-bold tracking-tight">Role Details</h1>
+          <p className="text-muted-foreground">
+            View and manage role permissions
+          </p>
+        </div>
+        <Card data-testid="role-not-enabled">
+          <CardHeader>
+            <CardTitle>Roles are not enabled on this server</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">{getCap.reason}</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   if (roleError) {
     return (
       <div className="container mx-auto py-6">
@@ -208,19 +234,23 @@ export default function RoleDetailPage() {
               <X className="mr-2 h-4 w-4" />
               Cancel
             </Button>
-            <Button
-              onClick={handleSave}
-              disabled={updateRoleMutation.isLoading}
-            >
-              <Save className="mr-2 h-4 w-4" />
-              Save Changes
-            </Button>
+            <Gated op="PUT /api/v1/iam/tenants/{tenant}/roles/{id}">
+              <Button
+                onClick={handleSave}
+                disabled={updateRoleMutation.isLoading}
+              >
+                <Save className="mr-2 h-4 w-4" />
+                Save Changes
+              </Button>
+            </Gated>
           </div>
         ) : (
-          <Button onClick={() => setIsEditing(true)}>
-            <Edit className="mr-2 h-4 w-4" />
-            Edit Role
-          </Button>
+          <Gated op="PUT /api/v1/iam/tenants/{tenant}/roles/{id}">
+            <Button onClick={() => setIsEditing(true)}>
+              <Edit className="mr-2 h-4 w-4" />
+              Edit Role
+            </Button>
+          </Gated>
         )}
       </div>
 

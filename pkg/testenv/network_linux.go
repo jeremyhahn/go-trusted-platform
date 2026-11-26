@@ -24,6 +24,8 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strings"
+	"time"
 
 	"github.com/vishvananda/netlink"
 )
@@ -34,6 +36,10 @@ type LinuxIsolatedNetwork struct {
 	bridge    netlink.Link
 	serverTap netlink.Link
 	clientTap netlink.Link
+
+	// iptablesCmd is the iptables front end setupNAT installed its rules
+	// with; Cleanup removes them with the same one.
+	iptablesCmd string
 }
 
 // NewIsolatedNetwork creates a new isolated network for testing
@@ -243,17 +249,82 @@ func (n *LinuxIsolatedNetwork) tuneNetworkForNAT() error {
 	return nil
 }
 
+// selectIptables picks the iptables front end: iptables-legacy only when the
+// binary is found and its tables load (kernels without legacy ip_tables
+// support fail every legacy rule), else iptables.
+func selectIptables(lookPath func(string) (string, error), usable func(string) bool) string {
+	if _, err := lookPath("iptables-legacy"); err == nil && usable("iptables-legacy") {
+		return "iptables-legacy"
+	}
+	return "iptables"
+}
+
+// iptablesUsable reports whether cmd can list the filter FORWARD chain.
+func iptablesUsable(cmd string) bool {
+	run := func() ([]byte, error) {
+		return exec.Command(cmd, "-w", "-L", "FORWARD", "-n").CombinedOutput()
+	}
+	return iptablesUsableWith(run, 3, 200*time.Millisecond)
+}
+
+// iptablesUsableWith runs the probe up to attempts times. A failure whose
+// output names a table the kernel cannot load means the backend is
+// unsupported; any other failure (xtables lock contention, a busy resource)
+// is transient: it is retried, and when every attempt fails that way the
+// backend is kept, since only an unsupported table proves it unusable.
+func iptablesUsableWith(run func() ([]byte, error), attempts int, pause time.Duration) bool {
+	for i := 0; i < attempts; i++ {
+		out, err := run()
+		if err == nil {
+			return true
+		}
+		if iptablesTableUnsupported(string(out)) {
+			return false
+		}
+		if i < attempts-1 {
+			time.Sleep(pause)
+		}
+	}
+	return true
+}
+
+// iptablesTableUnsupported reports whether probe output says a table cannot
+// be initialised (the legacy ip_tables module is missing or unsupported).
+func iptablesTableUnsupported(out string) bool {
+	lower := strings.ToLower(out)
+	return strings.Contains(lower, "can't initialize") ||
+		strings.Contains(lower, "table does not exist") ||
+		strings.Contains(lower, "address family not supported")
+}
+
+// iptablesCommand returns the iptables front end setupNAT and Cleanup share.
+func iptablesCommand() string {
+	return selectIptables(exec.LookPath, iptablesUsable)
+}
+
+// iptablesProbe selects the iptables front end; a variable so tests can
+// make the probe answer differently between setup and cleanup.
+var iptablesProbe = iptablesCommand
+
+// cleanupIptablesCmd returns the backend setupNAT installed its rules with,
+// probing only when setup never recorded one.
+func (n *LinuxIsolatedNetwork) cleanupIptablesCmd() string {
+	if n.iptablesCmd != "" {
+		return n.iptablesCmd
+	}
+	return iptablesProbe()
+}
+
 // setupNAT configures iptables rules for NAT and forwarding
 // Uses iptables-legacy directly to avoid conflicts with iptables-nft
 func (n *LinuxIsolatedNetwork) setupNAT() error {
 	subnet := n.config.Subnet.String()
 	bridge := n.config.BridgeName
 
-	// Detect which iptables to use - prefer legacy if available since Docker uses it
-	iptablesCmd := "iptables-legacy"
-	if _, err := exec.LookPath("iptables-legacy"); err != nil {
-		iptablesCmd = "iptables"
-	}
+	// Detect which iptables to use - prefer legacy if available since Docker
+	// uses it; Cleanup reuses the recorded choice instead of probing again.
+	iptablesCmd := iptablesProbe()
+	n.iptablesCmd = iptablesCmd
 
 	fmt.Printf("[Network] Setting up NAT rules for subnet %s, bridge %s (using %s)\n", subnet, bridge, iptablesCmd)
 
@@ -402,11 +473,8 @@ func (n *LinuxIsolatedNetwork) setupNFTablesNAT(subnet, bridge string) {
 func (n *LinuxIsolatedNetwork) Cleanup() error {
 	var lastErr error
 
-	// Detect which iptables to use - must match setupNAT
-	iptablesCmd := "iptables-legacy"
-	if _, err := exec.LookPath("iptables-legacy"); err != nil {
-		iptablesCmd = "iptables"
-	}
+	// Use the iptables backend setupNAT installed the rules with
+	iptablesCmd := n.cleanupIptablesCmd()
 
 	// Remove NAT rules using exec.Command for consistency with setupNAT
 	subnet := n.config.Subnet.String()
@@ -553,10 +621,7 @@ func CleanupStaleResources(cfg *NetworkConfig) {
 	}
 
 	// Detect which iptables to use - prefer legacy if available since Docker uses it
-	iptablesCmd := "iptables-legacy"
-	if _, err := exec.LookPath("iptables-legacy"); err != nil {
-		iptablesCmd = "iptables"
-	}
+	iptablesCmd := iptablesCommand()
 
 	// Clean up iptables rules using direct commands for consistency
 	// This ensures we clean up rules in the same tables we add them to
