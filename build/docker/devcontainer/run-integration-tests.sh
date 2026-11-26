@@ -100,6 +100,9 @@ declare -A TARGET_PACKAGES=(
     [registry]="./test/integration/registry/..."
     [secrets]="./test/integration/secrets/..."
     [vtpm]="./test/integration/vtpm/..."
+    # These two run through their own make targets and are not in ALL_TARGETS.
+    [diskimage-userspace]="./test/integration/diskimage/userspace"
+    [sdn-topology]="./test/integration/sdn/topology"
 )
 
 # Per-target -run filter, for a target that is one test of a larger
