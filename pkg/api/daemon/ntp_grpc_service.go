@@ -49,11 +49,6 @@ func (s *NTPGRPCService) SetBackend(backend NTPBackend) { s.backend = backend }
 // Backend returns the configured backend.
 func (s *NTPGRPCService) Backend() NTPBackend { return s.backend }
 
-// Configured reports whether the node has a time-synchronization backend.
-// The REST router reads it so a node without an `ntp:` section lists its
-// NTP routes as not configured instead of live routes that answer 503.
-func (s *NTPGRPCService) Configured() bool { return s.backend != nil }
-
 // requireBackend returns a typed Unavailable error when time synchronization
 // is not configured on this node.
 func (s *NTPGRPCService) requireBackend() error {
