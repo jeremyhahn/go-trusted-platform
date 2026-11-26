@@ -32,7 +32,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
@@ -96,7 +98,7 @@ func TestSelectGRPCTCPAuth_NoBackend_ReturnsTypedError(t *testing.T) {
 	}
 	for name, config := range cases {
 		t.Run(name, func(t *testing.T) {
-			sel, err := selectGRPCTCPAuth(config, nil, nil, logging.DefaultLogger(), nil)
+			sel, err := selectGRPCTCPAuth(config, nil, nil, nil, logging.DefaultLogger(), nil)
 			require.Error(t, err)
 			var want ErrTransportAuthRequired
 			require.True(t, errors.As(err, &want), "error is %T, want ErrTransportAuthRequired", err)
@@ -115,7 +117,7 @@ func TestSelectGRPCTCPAuth_MTLSWithoutCAService_ReturnsTypedError(t *testing.T) 
 	config.App = &app.App{}
 	config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
 
-	_, err := selectGRPCTCPAuth(config, nil, nil, logging.DefaultLogger(), nil)
+	_, err := selectGRPCTCPAuth(config, nil, nil, nil, logging.DefaultLogger(), nil)
 	require.Error(t, err)
 	var want ErrTransportAuthRequired
 	require.True(t, errors.As(err, &want), "error is %T", err)
@@ -129,7 +131,7 @@ func TestSelectGRPCTCPAuth_JWTVerifier_BuildsRequiredAuth(t *testing.T) {
 	config.App = &app.App{}
 	config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
 
-	sel, err := selectGRPCTCPAuth(config, nil, &mockSDKPEPClient{}, logging.DefaultLogger(), nil)
+	sel, err := selectGRPCTCPAuth(config, nil, &mockSDKPEPClient{}, nil, logging.DefaultLogger(), nil)
 	require.NoError(t, err)
 	require.Len(t, sel.options(), 2, "unary and stream interceptors")
 	require.NotNil(t, sel.validator, "the local validator is retained for SetPlatformJWTVerifier")
@@ -146,7 +148,7 @@ func TestSelectGRPCTCPAuth_LocalValidatorWithoutPEP_ReturnsTypedError(t *testing
 	config.App = &app.App{}
 	config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
 
-	sel, err := selectGRPCTCPAuth(config, nil, nil, logging.DefaultLogger(), nil)
+	sel, err := selectGRPCTCPAuth(config, nil, nil, nil, logging.DefaultLogger(), nil)
 	var want ErrTransportAuthRequired
 	require.True(t, errors.As(err, &want), "error is %T, want ErrTransportAuthRequired", err)
 	assert.Equal(t, transportGRPCTCP, want.Transport)
@@ -166,7 +168,7 @@ func TestSelectGRPCTCPAuth_LocalValidator_AuthorizesEachMethodThroughIAM(t *test
 	var last *sdkiam.CheckRequest
 	pep := pepAllowing("42", "platform", "read", &last)
 
-	sel, err := selectGRPCTCPAuth(config, nil, pep, logging.DefaultLogger(), nil)
+	sel, err := selectGRPCTCPAuth(config, nil, pep, nil, logging.DefaultLogger(), nil)
 	require.NoError(t, err)
 	require.NotNil(t, sel.unary)
 
@@ -205,7 +207,7 @@ func TestSelectGRPCTCPAuth_OnlyHealthCheckIsAnonymous(t *testing.T) {
 	config.App = &app.App{}
 	config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
 
-	sel, err := selectGRPCTCPAuth(config, nil, &mockSDKPEPClient{}, logging.DefaultLogger(), grpcTCPSkipMethods)
+	sel, err := selectGRPCTCPAuth(config, nil, &mockSDKPEPClient{}, nil, logging.DefaultLogger(), grpcTCPSkipMethods)
 	require.NoError(t, err)
 	require.NotNil(t, sel.unary)
 	require.NotNil(t, sel.stream)
@@ -252,7 +254,7 @@ func TestSelectGRPCTCPAuth_SharedValidator_BuildsRequiredAuth(t *testing.T) {
 	config := failClosedConfig()
 	shared := &platformTokenValidator{}
 
-	sel, err := selectGRPCTCPAuth(config, shared, nil, logging.DefaultLogger(), nil)
+	sel, err := selectGRPCTCPAuth(config, shared, nil, nil, logging.DefaultLogger(), nil)
 	require.NoError(t, err)
 	require.Len(t, sel.options(), 2)
 	assert.Nil(t, sel.validator, "the shared validator is not a local one")
@@ -264,7 +266,7 @@ func TestSelectGRPCTCPAuth_SkipIAMValidation_IsTheOnlyOptOut(t *testing.T) {
 	config := DefaultConfig()
 	config.SkipIAMValidation = true
 
-	sel, err := selectGRPCTCPAuth(config, nil, nil, logging.DefaultLogger(), nil)
+	sel, err := selectGRPCTCPAuth(config, nil, nil, nil, logging.DefaultLogger(), nil)
 	require.NoError(t, err)
 	assert.Empty(t, sel.options(), "the testing opt-out installs no token interceptor at all")
 	assert.False(t, sel.required)
@@ -652,7 +654,7 @@ func TestNew_GRPCTCPWithJWTVerifier_RejectsAnonymousCalls(t *testing.T) {
 	config := failClosedConfig()
 	config.App = &app.App{}
 	config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
-	sel, err := selectGRPCTCPAuth(config, nil, &mockSDKPEPClient{}, logging.DefaultLogger(), nil)
+	sel, err := selectGRPCTCPAuth(config, nil, &mockSDKPEPClient{}, nil, logging.DefaultLogger(), nil)
 	require.NoError(t, err)
 
 	unary := sel.unary
@@ -815,4 +817,34 @@ func TestNew_RefusesEmbeddedQUICPEPPathBeforeSubsystems(t *testing.T) {
 	require.True(t, errors.As(err, &want), "New() error is %T (%v), want ErrEmbeddedPEPUnavailable", err, err)
 	assert.Equal(t, transportQUIC, want.Transport)
 	assert.Nil(t, d, "New() returned a daemon alongside the refusal")
+}
+
+// The interceptor selectGRPCTCPAuth builds under mTLS resolves the
+// certificate's IAM user through the lookup it is given (#1989): a verified
+// certificate that names no IAM user is PermissionDenied, not the
+// Unavailable a missing lookup would give, and the PEP is never asked.
+func TestSelectGRPCTCPAuth_MTLSPassesUserLookup(t *testing.T) {
+	t.Parallel()
+	config := failClosedConfig()
+	config.EnableMTLS = true
+	config.CAService = newMockCAForMCPCoverage()
+	bundle := testutil.GenerateTestTLSBundle(t)
+	config.MTLSClientCAPool = bundle.CAPool
+
+	calls := 0
+	users := &mtlsFakeUsers{}
+	sel, err := selectGRPCTCPAuth(config, nil, mtlsDenyingPEP(&calls), users, logging.DefaultLogger(), nil)
+	require.NoError(t, err)
+	require.NotNil(t, sel.unary)
+
+	ctx := peer.NewContext(context.Background(), &peer.Peer{
+		AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{
+			VerifiedChains: [][]*x509.Certificate{{leafOf(t, bundle.ClientCert), bundle.CACert}},
+		}},
+	})
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) { return "ok", nil }
+	_, err = sel.unary(ctx, "req", &grpc.UnaryServerInfo{FullMethod: mtlsPEPTestMethod}, handler)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err), "err = %v", err)
+	assert.Positive(t, users.calls, "the given user lookup was not consulted")
+	assert.Zero(t, calls, "the PEP was asked for a certificate that names no IAM user")
 }
