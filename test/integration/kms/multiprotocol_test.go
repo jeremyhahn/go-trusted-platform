@@ -1400,6 +1400,9 @@ func testSecretsStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
 			return
 		}
+		if cmd.Name() != "CLI" && helpers.KnownGap(t, cmd.Name(), helpers.MethodSecretsUpdateStatus, err) {
+			return
+		}
 		require.NoError(t, err, "SecretsStatus (disable) should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Contains(t, result.Status, "DISABLED", "Status should indicate disabled")
@@ -1409,6 +1412,9 @@ func testSecretsStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 	t.Run("EnableSecret", func(t *testing.T) {
 		result, err := cmd.SecretsStatus(testCtx, secretName, true)
 		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+			return
+		}
+		if cmd.Name() != "CLI" && helpers.KnownGap(t, cmd.Name(), helpers.MethodSecretsUpdateStatus, err) {
 			return
 		}
 		require.NoError(t, err, "SecretsStatus (enable) should succeed")

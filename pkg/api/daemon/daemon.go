@@ -347,6 +347,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if iamService != nil {
 		iamPEP = iamService.PEP()
 	}
+	// The gRPC TCP mTLS check resolves the certificate's IAM user and its
+	// role assignments through the SDK UserClient (#1989).
+	var iamUsers mtlsUserLookup
+	if iamService != nil {
+		if c := iamService.Client(); c != nil {
+			iamUsers = c.User()
+		}
+	}
 
 	// Build the shared broker platform-token validator once when configured. It
 	// is reused across the gRPC, QUIC, and MCP inbound transports so all of them
@@ -407,7 +415,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 		// Configure authentication interceptors. Fails closed (#550): with
 		// SkipIAMValidation off, no authentication backend means no server.
-		authSel, authErr := selectGRPCTCPAuth(config, platformTokenValidatorShared, iamPEP, logger, grpcTCPSkipMethods)
+		authSel, authErr := selectGRPCTCPAuth(config, platformTokenValidatorShared, iamPEP, iamUsers, logger, grpcTCPSkipMethods)
 		if authErr != nil {
 			return nil, authErr
 		}

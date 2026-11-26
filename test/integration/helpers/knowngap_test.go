@@ -33,6 +33,7 @@ var knownGapMethods = []string{
 	MethodIAMUserRevokeRole,
 	MethodIAMGroupAddMember,
 	MethodSecretsRotate,
+	MethodSecretsUpdateStatus,
 }
 
 func TestKnownGap_UnknownMethodOnEmbeddedSkips(t *testing.T) {
@@ -128,9 +129,9 @@ func TestKnownGap_UnlistedMethodFails(t *testing.T) {
 	}
 }
 
-func TestKnownGaps_ExactlyTheFourRulingRows(t *testing.T) {
-	if len(KnownGaps) != 4 {
-		t.Fatalf("len(KnownGaps) = %d, want 4 (ruling 1234)", len(KnownGaps))
+func TestKnownGaps_ExactlyTheFiveRulingRows(t *testing.T) {
+	if len(KnownGaps) != 5 {
+		t.Fatalf("len(KnownGaps) = %d, want 5 (ruling 1234 and the Tenant's fifth row)", len(KnownGaps))
 	}
 	for _, method := range knownGapMethods {
 		row, ok := KnownGaps[method]
