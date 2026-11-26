@@ -1328,6 +1328,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			if svc := platformDaemon.VPNGRPCServiceServer(); svc != nil {
 				params.VPNServiceServer = svc
 			}
+			params.BMCRestHandler = platformDaemon.BMCRestHandler()
 			if svc := platformDaemon.ProxyGRPCServiceServer(); svc != nil {
 				params.ProxyServiceServer = svc
 			}

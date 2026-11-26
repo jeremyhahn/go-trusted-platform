@@ -13,7 +13,8 @@
 
 //go:build integration
 
-// Owner ruling 1234: this table is approved for these four operations only;
+// Owner ruling 1234 approves this table for four operations; the Tenant
+// approved a fifth, quicbaas.Secrets/UpdateStatus, on 2026-11-26. No others;
 // a row that starts passing fails the gate; delete this file and its call
 // sites with the go-quicbaas tag that routes them.
 
@@ -24,13 +25,14 @@ import (
 	"testing"
 )
 
-// The four go-quicbaas methods the embedded transport does not route at the
-// pinned tag (owner ruling 1234).
+// The five go-quicbaas methods the embedded transport does not route at the
+// pinned tag (owner ruling 1234 and the Tenant's 2026-11-26 fifth row).
 const (
-	MethodIAMUserAssignRole = "quicbaas.IAM.User/AssignRole"
-	MethodIAMUserRevokeRole = "quicbaas.IAM.User/RevokeRole"
-	MethodIAMGroupAddMember = "quicbaas.IAM.Group/AddMember"
-	MethodSecretsRotate     = "quicbaas.Secrets/Rotate"
+	MethodIAMUserAssignRole   = "quicbaas.IAM.User/AssignRole"
+	MethodIAMUserRevokeRole   = "quicbaas.IAM.User/RevokeRole"
+	MethodIAMGroupAddMember   = "quicbaas.IAM.Group/AddMember"
+	MethodSecretsRotate       = "quicbaas.Secrets/Rotate"
+	MethodSecretsUpdateStatus = "quicbaas.Secrets/UpdateStatus"
 )
 
 // KnownGapsRemovedBy names the change that deletes the table.
@@ -42,7 +44,7 @@ type KnownGapRow struct {
 	RemovedBy string
 }
 
-// KnownGaps is the ruling-1234 table: exactly these four rows, no others.
+// KnownGaps is the ruling-1234 table: exactly these five rows, no others.
 var KnownGaps = map[string]KnownGapRow{
 	MethodIAMUserAssignRole: {
 		Reason:    "the embedded transport has no quicbaas.IAM.User route at the pinned go-quicbaas tag",
@@ -60,7 +62,15 @@ var KnownGaps = map[string]KnownGapRow{
 		Reason:    "the embedded transport does not route secret rotation at the pinned go-quicbaas tag (" + SecretsSDKGapIssue + ")",
 		RemovedBy: KnownGapsRemovedBy,
 	},
+	MethodSecretsUpdateStatus: {
+		Reason:    "the embedded transport does not route secret status updates at the pinned go-quicbaas tag (" + SecretsUpdateStatusGapIssue + ")",
+		RemovedBy: KnownGapsRemovedBy,
+	},
 }
+
+// SecretsUpdateStatusGapIssue is the go-quicbaas issue for the missing
+// embedded quicbaas.Secrets/UpdateStatus route.
+const SecretsUpdateStatusGapIssue = "go-quicbaas #1544"
 
 // knownGapAdapters are the adapters that reach the embedded transport.
 var knownGapAdapters = map[string]bool{"Unix": true, "CLI": true, "gRPC-UDS": true}
@@ -73,7 +83,7 @@ var knownGapAdapters = map[string]bool{"Unix": true, "CLI": true, "gRPC-UDS": tr
 func KnownGap(t testing.TB, adapter, method string, err error) bool {
 	t.Helper()
 	if _, ok := KnownGaps[method]; !ok {
-		t.Errorf("%s is not in helpers.KnownGaps: ruling 1234 approves only four rows", method)
+		t.Errorf("%s is not in helpers.KnownGaps: ruling 1234 and the Tenant approve only five rows", method)
 		return false
 	}
 	if !knownGapAdapters[adapter] {
