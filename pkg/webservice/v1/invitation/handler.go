@@ -14,6 +14,7 @@
 package invitation
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -27,11 +28,30 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 // HandlerParams contains the dependencies for creating an invitation handler.
+// RoleLister lists a tenant's IAM roles. The IAM SDK client
+// (sdk/go/services/iam) satisfies it.
+type RoleLister interface {
+	ListRoles(ctx context.Context, req *platformv1.ListIAMRolesRequest) ([]*platformv1.IAMRole, int64, error)
+}
+
+// roleListed reports whether an IAM role with the given name is listed.
+func roleListed(roles []*platformv1.IAMRole, name string) bool {
+	for _, role := range roles {
+		if role.GetName() == name {
+			return true
+		}
+	}
+	return false
+}
+
 type HandlerParams struct {
+	// RoleLister supplies the tenant's assignable roles (the IAM SDK client).
+	RoleLister        RoleLister
 	Logger            *logging.Logger
 	InvitationService InvitationServicer
 	ResponseWriter    response.HttpWriter
@@ -40,6 +60,7 @@ type HandlerParams struct {
 
 // handler implements the RestHandler interface.
 type handler struct {
+	roleLister        RoleLister
 	logger            *logging.Logger
 	invitationService InvitationServicer
 	responseWriter    response.HttpWriter
@@ -57,8 +78,12 @@ func NewHandler(params HandlerParams) (RestHandler, error) {
 	if params.ResponseWriter == nil {
 		return nil, ErrServiceError{Operation: "NewHandler", Cause: ErrMissingResponseWriter{}}
 	}
+	if params.RoleLister == nil {
+		return nil, ErrServiceError{Operation: "NewHandler", Cause: ErrMissingRoleLister{}}
+	}
 
 	return &handler{
+		roleLister:        params.RoleLister,
 		logger:            params.Logger,
 		invitationService: params.InvitationService,
 		responseWriter:    params.ResponseWriter,
@@ -119,7 +144,13 @@ func (h *handler) Create(w http.ResponseWriter, r *http.Request) {
 		h.responseWriter.Error400(w, r, ErrMissingRole{})
 		return
 	}
-	if !IsValidRole(req.Role) {
+	roles, _, err := h.roleLister.ListRoles(ctx, &platformv1.ListIAMRolesRequest{TenantId: tenantID})
+	if err != nil {
+		h.logger.Errorf("invitation: failed to list IAM roles for tenant=%s: %v", tenantID, err)
+		h.responseWriter.Error500(w, r, ErrServiceError{Operation: "listRoles", Cause: err})
+		return
+	}
+	if !roleListed(roles, req.Role) {
 		h.responseWriter.Error400(w, r, ErrInvalidRole{Role: req.Role})
 		return
 	}

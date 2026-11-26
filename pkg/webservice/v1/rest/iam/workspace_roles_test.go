@@ -689,3 +689,85 @@ func TestWorkspaceRoleResolverListsTheRolesWhenGetRoleIsNotRouted(t *testing.T) 
 		t.Fatalf("expected the role list to name the IDs when GetRole is not routed, got %v", roles)
 	}
 }
+
+// A workspace account whose IAM lifecycle is suspended, locked, disabled or
+// deleting holds no roles there, whatever roles IAM still lists for it: the
+// resolver refuses it before any role is named.
+func TestWorkspaceRoleResolverRefusesAnInactiveWorkspaceAccount(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		lifecycle string
+		roles     []string
+	}{
+		{name: "suspended", lifecycle: "suspended", roles: []string{"admin"}},
+		{name: "locked", lifecycle: "locked", roles: []string{"admin"}},
+		{name: "disabled", lifecycle: "disabled", roles: []string{"admin"}},
+		{name: "deleting", lifecycle: "deleting", roles: []string{"admin"}},
+		{name: "disabled without roles", lifecycle: "disabled", roles: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			client := &mockIAMClient{
+				getByEmailFn: func(_ context.Context, _, email string) (*iamsdk.User, error) {
+					return &iamsdk.User{Email: email, Roles: tc.roles, Lifecycle: tc.lifecycle}, nil
+				},
+				getRoleFn: func(_ context.Context, _, roleID string) (*iamsdk.Role, error) {
+					t.Errorf("GetRole(%q) reached for a %s account", roleID, tc.lifecycle)
+					return nil, nil
+				},
+				listRolesFn: func(_ context.Context, _ string, _ *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+					t.Errorf("ListRoles reached for a %s account", tc.lifecycle)
+					return &iamsdk.ListRolesResponse{}, nil
+				},
+			}
+			resolver, err := NewWorkspaceRoleResolver(client)
+			if err != nil {
+				t.Fatalf("NewWorkspaceRoleResolver: %v", err)
+			}
+
+			roles, err := resolver.Roles(context.Background(), "workspace-a", "operator@platform")
+			if roles != nil {
+				t.Fatalf("a %s account must hold no roles, got %v", tc.lifecycle, roles)
+			}
+			var inactive ErrWorkspaceAccountInactive
+			if !errors.As(err, &inactive) {
+				t.Fatalf("expected ErrWorkspaceAccountInactive for a %s account, got %v", tc.lifecycle, err)
+			}
+			if inactive.Lifecycle != tc.lifecycle || inactive.TenantID != "workspace-a" || inactive.Subject != "operator@platform" {
+				t.Fatalf("the refusal names %+v, want lifecycle %q in workspace-a for operator@platform", inactive, tc.lifecycle)
+			}
+		})
+	}
+}
+
+// An active account, a pending (invited) one and one whose transport sends
+// no lifecycle keep their roles.
+func TestWorkspaceRoleResolverAdmitsAnActiveOrPendingAccount(t *testing.T) {
+	t.Parallel()
+	for _, lifecycle := range []string{"active", "pending", ""} {
+		t.Run("lifecycle="+lifecycle, func(t *testing.T) {
+			t.Parallel()
+			client := &mockIAMClient{
+				getByEmailFn: func(_ context.Context, _, email string) (*iamsdk.User, error) {
+					return &iamsdk.User{Email: email, Roles: []string{"admin"}, Lifecycle: lifecycle}, nil
+				},
+				getRoleFn:   unroutedGetRole,
+				listRolesFn: pagedRoles(nil, nil, nil),
+			}
+			resolver, err := NewWorkspaceRoleResolver(client)
+			if err != nil {
+				t.Fatalf("NewWorkspaceRoleResolver: %v", err)
+			}
+
+			roles, err := resolver.Roles(context.Background(), "workspace-a", "operator@platform")
+			if err != nil {
+				t.Fatalf("Roles for a %q account: %v", lifecycle, err)
+			}
+			if !slices.Equal(roles, []string{"admin"}) {
+				t.Fatalf("a %q account must keep its roles, got %v", lifecycle, roles)
+			}
+		})
+	}
+}

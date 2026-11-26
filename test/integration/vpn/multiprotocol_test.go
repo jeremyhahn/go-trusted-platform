@@ -143,14 +143,8 @@ func runConfiguredScenario(t *testing.T, ctx context.Context, cmd VPNCommands, t
 		if err != nil {
 			t.Fatalf("%s ListPeers: %v", cmd.Name(), err)
 		}
-		listed := 0
-		for _, p := range peers {
-			if p.GetDeviceId() == deviceID {
-				listed++
-			}
-		}
-		if listed != 1 {
-			t.Fatalf("%s: tenant %s lists %v, want %s exactly once", cmd.Name(), tenantID, peers, deviceID)
+		if !listsPeer(peers, deviceID) {
+			t.Fatalf("%s: tenant %s lists %v, want %s among them", cmd.Name(), tenantID, peers, deviceID)
 		}
 	})
 

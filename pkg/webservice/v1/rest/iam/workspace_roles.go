@@ -60,12 +60,22 @@ func NewWorkspaceRoleResolver(client IAMClient) (*WorkspaceRoleResolver, error) 
 //
 // Each stored role ID is named with GetRole (see roleNames); a transport
 // that does not route GetRole is named from the tenant's role list instead.
+//
+// An account whose lifecycle is suspended, locked, disabled or deleting is
+// refused with ErrWorkspaceAccountInactive before any role is named; an
+// active, pending (invited) or unreported ("") lifecycle is admitted.
 func (r *WorkspaceRoleResolver) Roles(ctx context.Context, tenantID, subject string) ([]string, error) {
 	user, active, err := r.activeUser(ctx, tenantID, subject)
 	if err != nil {
 		return nil, err
 	}
-	if user == nil || len(user.Roles) == 0 {
+	if user == nil {
+		return nil, nil
+	}
+	if isInactiveLifecycle(user.Lifecycle) {
+		return nil, ErrWorkspaceAccountInactive{TenantID: tenantID, Subject: subject, Lifecycle: user.Lifecycle}
+	}
+	if len(user.Roles) == 0 {
 		return nil, nil
 	}
 	if !active {
@@ -177,6 +187,16 @@ func (r *WorkspaceRoleResolver) userByEmail(ctx context.Context, tenantID, email
 // go-quicbaas pkg/errors QBError with code ErrNotFound) through unchanged.
 func isRoleNotFound(err error) bool {
 	return sdkerrors.IsNotFound(err) || qberrors.IsNotFound(err)
+}
+
+// isInactiveLifecycle reports whether an IAM user lifecycle refuses the
+// account its workspace roles.
+func isInactiveLifecycle(lifecycle string) bool {
+	switch lifecycle {
+	case "suspended", "locked", "disabled", "deleting":
+		return true
+	}
+	return false
 }
 
 // namesFromRoleList names refs from the tenant's role list for a transport

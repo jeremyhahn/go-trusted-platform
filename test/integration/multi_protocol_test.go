@@ -1464,12 +1464,7 @@ func testIAMAssignRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	result, err := cmd.AssignRole(ctx, iam.AssignRoleOptions{
 		TenantID: helpers.HarnessTenantID, UserID: userResult.User.ID, RoleID: roleResult.Role.ID,
 	})
-	// Checked before surfaceMissing: over gRPC the gap is status
-	// Unimplemented, which surfaceMissing would report as a missing surface.
-	if err != nil && strings.Contains(err.Error(), "unknown method: quicbaas.IAM.User/AssignRole") {
-		if gerr := helpers.GapEmbeddedIAMUserAssignRole.CheckDefect("AssignRole", true, "unknown method", err.Error()); gerr != nil {
-			t.Fatal(gerr)
-		}
+	if helpers.KnownGap(t, protocolName(adapter), helpers.MethodIAMUserAssignRole, err) {
 		return
 	}
 	if missing := surfaceMissing(adapter, "IAM", "AssignRole", err); missing != nil {

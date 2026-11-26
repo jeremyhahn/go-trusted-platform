@@ -86,7 +86,7 @@ func (h *PlatformHandlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 // so the operator can roll back if the new config misbehaves.
 func (h *PlatformHandlers) ReloadConfig(w http.ResponseWriter, r *http.Request) {
 	if h.configReloader == nil {
-		h.respWriter.Error500(w, r, ErrConfigReloaderUnavailable{})
+		h.respWriter.Error503(w, r, ErrConfigReloaderUnavailable{})
 		return
 	}
 	actor := callerActor(r)
@@ -108,7 +108,7 @@ func (h *PlatformHandlers) ReloadConfig(w http.ResponseWriter, r *http.Request) 
 func (h *PlatformHandlers) ListSnapshots(w http.ResponseWriter, r *http.Request) {
 	store := h.snapshotStore()
 	if store == nil {
-		h.respWriter.Error500(w, r, ErrSnapshotStoreUnavailable{})
+		h.respWriter.Error503(w, r, ErrSnapshotStoreUnavailable{})
 		return
 	}
 	limit := 0
@@ -136,7 +136,7 @@ func (h *PlatformHandlers) ListSnapshots(w http.ResponseWriter, r *http.Request)
 func (h *PlatformHandlers) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 	store := h.snapshotStore()
 	if store == nil {
-		h.respWriter.Error500(w, r, ErrSnapshotStoreUnavailable{})
+		h.respWriter.Error503(w, r, ErrSnapshotStoreUnavailable{})
 		return
 	}
 	id := mux.Vars(r)["id"]
@@ -164,7 +164,7 @@ func (h *PlatformHandlers) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 func (h *PlatformHandlers) CreateSnapshot(w http.ResponseWriter, r *http.Request) {
 	store := h.snapshotStore()
 	if store == nil {
-		h.respWriter.Error500(w, r, ErrSnapshotStoreUnavailable{})
+		h.respWriter.Error503(w, r, ErrSnapshotStoreUnavailable{})
 		return
 	}
 	var body struct {
@@ -192,7 +192,7 @@ func (h *PlatformHandlers) CreateSnapshot(w http.ResponseWriter, r *http.Request
 func (h *PlatformHandlers) DeleteSnapshot(w http.ResponseWriter, r *http.Request) {
 	store := h.snapshotStore()
 	if store == nil {
-		h.respWriter.Error500(w, r, ErrSnapshotStoreUnavailable{})
+		h.respWriter.Error503(w, r, ErrSnapshotStoreUnavailable{})
 		return
 	}
 	id := mux.Vars(r)["id"]
@@ -218,7 +218,7 @@ func (h *PlatformHandlers) DeleteSnapshot(w http.ResponseWriter, r *http.Request
 // path, and re-reads.
 func (h *PlatformHandlers) Rollback(w http.ResponseWriter, r *http.Request) {
 	if h.configReloader == nil {
-		h.respWriter.Error500(w, r, ErrConfigReloaderUnavailable{})
+		h.respWriter.Error503(w, r, ErrConfigReloaderUnavailable{})
 		return
 	}
 	id := mux.Vars(r)["id"]

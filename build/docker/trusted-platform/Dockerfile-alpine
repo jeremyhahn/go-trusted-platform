@@ -3,7 +3,7 @@ ARG PLATFORMD="platformd"
 
 FROM $BASE_IMAGE
 
-LABEL maintainer="Jeremy Hahn <mail@jeremyhahn.com>"
+LABEL maintainer="Jeremy Hahn <maintainer@example.com>"
 
 RUN apk update && \
     apk upgrade && \

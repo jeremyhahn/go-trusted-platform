@@ -15,6 +15,7 @@ package login
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
@@ -263,6 +264,10 @@ func (d *Driver) workspaceRoles(ctx context.Context, tenantID, subject string) (
 	}
 	roles, err := d.roles.Roles(ctx, tenantID, subject)
 	if err != nil {
+		var inactive interface{ InactiveLifecycle() string }
+		if errors.As(err, &inactive) {
+			return nil, &InactiveAccountError{TenantID: tenantID, Subject: subject, Lifecycle: inactive.InactiveLifecycle()}
+		}
 		return nil, &WorkspaceRolesError{TenantID: tenantID, Subject: subject, Cause: err}
 	}
 	return roles, nil
@@ -282,7 +287,8 @@ func (d *Driver) binder(factorType quicbaas.FactorType) (Binder, error) {
 // The mapping is deliberate: a client that sent a bad proof gets 400, a
 // client whose proof did not authenticate gets 401, a deployment with no
 // login backbone gets 403 (the surface exists but is closed), as does a
-// principal with no workspace to land in, and a
+// principal with no workspace to land in or whose workspace account is
+// inactive, and a
 // platform wiring defect gets 500 — never a status that reads as a
 // client error when the platform is at fault.
 func (d *Driver) fail(w http.ResponseWriter, r *http.Request, err error) {
@@ -305,6 +311,11 @@ func (d *Driver) fail(w http.ResponseWriter, r *http.Request, err error) {
 		// The principal authenticated but has nowhere of its own to land.
 		// 403, not 401: the proof was good, the session is what is denied.
 		d.logger.Error(err, "authenticated principal has no workspace")
+		d.writer.Error403(w, r, err, nil)
+	case *InactiveAccountError:
+		// The proof was good but the workspace account is suspended,
+		// locked, disabled or deleting: the session is denied, 403.
+		d.logger.Error(err, "authenticated principal's workspace account is inactive")
 		d.writer.Error403(w, r, err, nil)
 	case *UnavailableError:
 		d.logger.Error(err, "unified login client not configured")
