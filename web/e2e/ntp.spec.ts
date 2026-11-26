@@ -117,10 +117,33 @@ async function mockNTPApi(page: Page, config: NTPMockConfig = {}) {
   return calls;
 }
 
+/**
+ * The NTP page gates both reads and Step Clock on GET /api/v1/capabilities
+ * (#2058): serve the three NTP ops as enabled so the reads start.
+ */
+async function mockCapabilities(page: Page) {
+  await page.route('**/api/v1/capabilities', (route: Route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        capabilities: [
+          { op: 'GET /api/v1/ntp/status', kind: 'route', enabled: true },
+          { op: 'GET /api/v1/ntp/sources', kind: 'route', enabled: true },
+          { op: 'POST /api/v1/ntp/step', kind: 'route', enabled: true },
+        ],
+        total: 3,
+        enabled: 3,
+      }),
+    }),
+  );
+}
+
 test.describe('NTP', () => {
   test.beforeEach(async ({ page }) => {
     await createTenantOwnerSession(page.context());
     await mockTenantApi(page);
+    await mockCapabilities(page);
   });
 
   test('shows the NTP status (GetStatus)', async ({ page }) => {

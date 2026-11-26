@@ -40,12 +40,18 @@ func TestSDNService_ApplyPolicy_GeneratedIDsAreUnique(t *testing.T) {
 	svc := newTestSDNServiceWithMock(t, mockOVS)
 	ctx := context.Background()
 
-	config := func(name string) *platformv1.PolicyConfig {
+	// Each policy matches its own source: two enabled policies may not
+	// install the same flow (#2234).
+	config := func(name, sourceIP string) *platformv1.PolicyConfig {
 		return &platformv1.PolicyConfig{
 			Name:     name,
 			Priority: 100,
+			Enabled:  true,
 			Rules: []*platformv1.PolicyRule{
-				{RuleId: "r1", Priority: 100, Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_ALLOW},
+				{
+					RuleId: "r1", Priority: 100, Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_ALLOW,
+					Match: &platformv1.PolicyRuleMatch{SourceIp: sourceIP},
+				},
 			},
 			Targets: []*platformv1.PolicyTarget{
 				{Type: platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE, Id: "br0"},
@@ -54,9 +60,9 @@ func TestSDNService_ApplyPolicy_GeneratedIDsAreUnique(t *testing.T) {
 		}
 	}
 
-	first, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{Config: config("web")})
+	first, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{Config: config("web", "192.0.2.10")})
 	require.NoError(t, err)
-	second, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{Config: config("db")})
+	second, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{Config: config("db", "192.0.2.20")})
 	require.NoError(t, err)
 
 	firstID := first.GetPolicy().GetId()

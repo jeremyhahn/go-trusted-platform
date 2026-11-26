@@ -53,6 +53,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/adminclaim"
+	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login"
@@ -1024,6 +1025,9 @@ type RestHandlerRegistry interface {
 	PXEWebhookSecret() string
 	NTPServiceServer() platformv1.NTPServiceServer
 	VPNServiceServer() platformv1.VPNServiceServer
+	// BMCRestHandler is the daemon's BMC REST handler behind /api/v1/bmc,
+	// or nil when the daemon has no BMC service.
+	BMCRestHandler() bmcwebsvc.RestHandler
 	ProxyServiceServer() platformv1.ProxyServiceServer
 	AppServiceServers() restapi.AppServiceServers
 	RegistryService() grpcapi.RegistryService
@@ -1258,6 +1262,9 @@ type RegistryParams struct {
 	PXEWebhookSecret string
 	NTPServiceServer platformv1.NTPServiceServer
 	VPNServiceServer platformv1.VPNServiceServer
+	// BMCRestHandler is the daemon's BMC REST handler, the one the daemon
+	// REST listener mounts; the console serves /api/v1/bmc through it.
+	BMCRestHandler bmcwebsvc.RestHandler
 	// AppServiceServers are the daemon's Cache, Scheduler, Messaging and
 	// ObjectStorage servers, the instances behind every other transport.
 	AppServiceServers restapi.AppServiceServers
@@ -1293,6 +1300,9 @@ type RegistryParams struct {
 	VersionInfo *platform.VersionInfo
 	// HealthRegistry powers the platform health and metrics endpoints.
 	HealthRegistry health.Registry
+	// ConfigUpdater wires PUT /api/v1/platform/config/sections/{section}.
+	// When nil the endpoint returns 503.
+	ConfigUpdater platform.ConfigUpdater
 	// ConfigReloader wires /api/v1/platform/config/reload. When nil
 	// the endpoint returns 503 with a structured "not configured"
 	// envelope so callers can tell it apart from an actual reload
@@ -1301,6 +1311,12 @@ type RegistryParams struct {
 	// LogQuerier wires /api/v1/platform/logs. When nil the endpoint
 	// returns 503 with the same structured-honesty pattern.
 	LogQuerier platform.LogQuerier
+	// EntityTypeLister wires GET /api/v1/platform/entity-types. When
+	// nil the endpoint answers 503.
+	EntityTypeLister platform.EntityTypeLister
+	// Shutdowner wires POST /api/v1/platform/shutdown. When nil the
+	// endpoint returns 503.
+	Shutdowner platform.Shutdowner
 	// RegistryService wires /api/v1/compute/images. When nil the
 	// /compute/images surface returns 503 via the service registry.
 	RegistryService grpcapi.RegistryService
@@ -2165,11 +2181,20 @@ func (registry *HandlerRegistry) PlatformRestRouter() *platform.PlatformRouter {
 	if registry.params.HealthRegistry != nil {
 		router.SetHealthRegistry(registry.params.HealthRegistry)
 	}
+	if registry.params.ConfigUpdater != nil {
+		router.SetConfigUpdater(registry.params.ConfigUpdater)
+	}
 	if registry.params.ConfigReloader != nil {
 		router.SetConfigReloader(registry.params.ConfigReloader)
 	}
 	if registry.params.LogQuerier != nil {
 		router.SetLogQuerier(registry.params.LogQuerier)
+	}
+	if registry.params.EntityTypeLister != nil {
+		router.SetEntityTypeLister(registry.params.EntityTypeLister)
+	}
+	if registry.params.Shutdowner != nil {
+		router.SetShutdowner(registry.params.Shutdowner)
 	}
 	return router
 }
@@ -2360,6 +2385,11 @@ func (registry *HandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer 
 // VPNServiceServer returns the in-process VPNService gRPC implementation, or nil.
 func (registry *HandlerRegistry) VPNServiceServer() platformv1.VPNServiceServer {
 	return registry.params.VPNServiceServer
+}
+
+// BMCRestHandler returns the daemon's BMC REST handler, or nil.
+func (registry *HandlerRegistry) BMCRestHandler() bmcwebsvc.RestHandler {
+	return registry.params.BMCRestHandler
 }
 
 // ProxyServiceServer returns the in-process ProxyService gRPC implementation, or nil.
