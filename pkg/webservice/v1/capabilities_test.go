@@ -227,6 +227,23 @@ func TestCapabilities_UnavailableHandlerRoutesStayDisabled(t *testing.T) {
 	}
 }
 
+// TestCapabilities_PlatformWritesDisabledWithoutBackends pins that the
+// platform writes which answer 503 while their backend is nil are listed
+// not-configured, so the console does not render controls that always fail.
+func TestCapabilities_PlatformWritesDisabledWithoutBackends(t *testing.T) {
+	caps := getCapabilities(t, newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &sessionAuth{}}))
+
+	for op, name := range map[string]string{
+		"PUT /api/v1/platform/config/sections/{section}": "platform-config-update",
+		"POST /api/v1/platform/shutdown":                 "platform-shutdown",
+	} {
+		c, found := caps[op]
+		require.Truef(t, found, "platform route %q is missing from the listing", op)
+		require.Falsef(t, c.Enabled, "unwired platform route %q is listed enabled", op)
+		require.Equal(t, CapabilityReasonNotConfigured+name, c.Reason)
+	}
+}
+
 // unwiredProvisioningBMCHandler is a BMC REST handler built without a
 // BaremetalService: every BMC route is served, but provisioning is not.
 type unwiredProvisioningBMCHandler struct {

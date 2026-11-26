@@ -1084,6 +1084,9 @@ type RegistryParams struct {
 	VersionInfo *platform.VersionInfo
 	// HealthRegistry powers the platform health and metrics endpoints.
 	HealthRegistry health.Registry
+	// ConfigUpdater wires PUT /api/v1/platform/config/sections/{section}.
+	// When nil the endpoint returns 503.
+	ConfigUpdater platform.ConfigUpdater
 	// ConfigReloader wires /api/v1/platform/config/reload. When nil
 	// the endpoint returns 503 with a structured "not configured"
 	// envelope so callers can tell it apart from an actual reload
@@ -1092,6 +1095,12 @@ type RegistryParams struct {
 	// LogQuerier wires /api/v1/platform/logs. When nil the endpoint
 	// returns 503 with the same structured-honesty pattern.
 	LogQuerier platform.LogQuerier
+	// EntityTypeLister wires GET /api/v1/platform/entity-types. When
+	// nil the endpoint answers 503.
+	EntityTypeLister platform.EntityTypeLister
+	// Shutdowner wires POST /api/v1/platform/shutdown. When nil the
+	// endpoint returns 503.
+	Shutdowner platform.Shutdowner
 	// RegistryService wires /api/v1/compute/images. When nil the
 	// /compute/images surface returns 503 via the service registry.
 	RegistryService grpcapi.RegistryService
@@ -1941,11 +1950,20 @@ func (registry *HandlerRegistry) PlatformRestRouter() *platform.PlatformRouter {
 	if registry.params.HealthRegistry != nil {
 		router.SetHealthRegistry(registry.params.HealthRegistry)
 	}
+	if registry.params.ConfigUpdater != nil {
+		router.SetConfigUpdater(registry.params.ConfigUpdater)
+	}
 	if registry.params.ConfigReloader != nil {
 		router.SetConfigReloader(registry.params.ConfigReloader)
 	}
 	if registry.params.LogQuerier != nil {
 		router.SetLogQuerier(registry.params.LogQuerier)
+	}
+	if registry.params.EntityTypeLister != nil {
+		router.SetEntityTypeLister(registry.params.EntityTypeLister)
+	}
+	if registry.params.Shutdowner != nil {
+		router.SetShutdowner(registry.params.Shutdowner)
 	}
 	return router
 }

@@ -1263,5 +1263,10 @@ func (v1Router *Router) platformRoutes() {
 	platformRouter.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 	if v1Router.serviceRegistry != nil {
 		v1Router.serviceRegistry.markConfigured("platform", "/platform")
+		// The writes that answer 503 without a backend are listed
+		// not-configured, so the console does not offer them.
+		for route, name := range platformRouter.UnavailableRoutes() {
+			v1Router.serviceRegistry.recordUnavailable(name, route)
+		}
 	}
 }
