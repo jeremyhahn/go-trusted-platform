@@ -213,6 +213,7 @@ type Daemon struct {
 	mcpServer                    MCPServerInterface
 	mcpProvider                  *MCPServiceProvider
 	bmcGRPCService               *BMCGRPCService
+	bmcRestHandler               bmcwebsvc.RestHandler
 	switchGRPCService            *SwitchGRPCService
 	eabService                   EABServicer
 	eabGRPCService               *EABGRPCService
@@ -1874,9 +1875,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Warn("BMC service creation failed", "error", bmcErr)
 	} else {
 		// Register BMC gRPC service with both TCP and UDS endpoints.
-		// The baremetal service is left nil here; Provision and
-		// ProvisionStatus return Unavailable (not configured) until a baremetal
-		// orchestrator is wired via SetBaremetalService.
+		// The bare metal orchestrator is not wired: its workflow waits for
+		// an install-completion event, and nothing in production calls
+		// baremetal.Service.CompleteInstall yet. Provision and
+		// ProvisionStatus answer Unavailable (gRPC) and 503 (REST) until an
+		// authenticated install-completion event calls CompleteInstall.
 		bmcGRPCService := NewBMCGRPCService(bmcSvc, nil, logger.Slog())
 
 		// Wire the BMCEnroller into the gRPC service so EnrollBMC RPCs
@@ -1897,14 +1900,18 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 		logger.Info("BMC gRPC service initialized and registered successfully")
 
-		// Wire BMC handler into REST server for bare metal management.
-		if daemon.concreteRestServer != nil {
+		// Build the BMC REST handler whenever the BMC service exists: the
+		// web console serves /api/v1/bmc through it (BMCRestHandler) even
+		// when the daemon REST listener is off, and the listener, when on,
+		// mounts the same handler.
+		{
 			respWriter := response.NewResponseWriter(logger, nil)
-			bmcHandler, bmcHandlerErr := bmcwebsvc.NewHandler(bmcwebsvc.HandlerParams{
+			bmcParams := bmcwebsvc.HandlerParams{
 				BMCService:     bmcSvc,
 				ResponseWriter: respWriter,
 				Logger:         logger,
-			})
+			}
+			bmcHandler, bmcHandlerErr := bmcwebsvc.NewHandler(bmcParams)
 			if bmcHandlerErr == nil {
 				// Wire the BMCEnrollerServicer adapter so the REST enroll
 				// endpoint delegates to the real App enrollment ceremony.
@@ -1921,8 +1928,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 					)
 					logger.Info("BMC REST restorer wired")
 				}
-				daemon.concreteRestServer.SetBMCHandler(bmcHandler)
-				logger.Info("BMC management handler wired into REST server")
+				daemon.bmcRestHandler = bmcHandler
+				if daemon.concreteRestServer != nil {
+					daemon.concreteRestServer.SetBMCHandler(bmcHandler)
+					logger.Info("BMC management handler wired into REST server")
+				}
 			} else {
 				logger.Warn("BMC handler creation failed", "error", bmcHandlerErr)
 			}
@@ -3335,6 +3345,12 @@ func (d *Daemon) NTPGRPCServiceServer() *NTPGRPCService {
 // VPNGRPCServiceServer returns the VPN gRPC service backing /api/v1/vpn.
 func (d *Daemon) VPNGRPCServiceServer() *VPNGRPCService {
 	return d.vpnGRPCService
+}
+
+// BMCRestHandler returns the BMC REST handler backing /api/v1/bmc, or nil
+// when the daemon has no BMC service.
+func (d *Daemon) BMCRestHandler() bmcwebsvc.RestHandler {
+	return d.bmcRestHandler
 }
 
 // ProxyGRPCServiceServer returns the proxy gRPC service backing /api/v1/proxy.
