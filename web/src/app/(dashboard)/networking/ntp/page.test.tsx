@@ -1,0 +1,278 @@
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PlatformClient, PlatformProvider } from "trusted-platform-sdk";
+
+import NTPPage from "./page";
+
+// #2058: the NTP page reads and steps the clock through the SDK's NTPService
+// and gates Step Clock on the server's capabilities. These tests stub fetch,
+// the boundary the browser crosses, with the envelopes the webservice writes.
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function ok(payload: unknown): Response {
+  return jsonResponse(200, { code: 200, error: "", success: true, payload });
+}
+
+function failure(status: number, error: string): Response {
+  return jsonResponse(status, { code: status, error, success: false });
+}
+
+const status = {
+  synced: true,
+  stratum: 2,
+  leapStatus: "normal",
+  offsetSeconds: 0.0001,
+  rootDispersion: 0.001,
+  rootDelay: 0.002,
+  lastSyncUnix: "1760300000",
+  mode: "client",
+  referenceId: "C0A80001",
+  referenceName: "ntp.reference.test",
+  sourcesReachable: 1,
+  sourcesTotal: 1,
+  anomaly: false,
+  anomalyReason: "",
+};
+
+const source = {
+  address: "10.0.0.1",
+  mode: "server",
+  state: "selected",
+  stratum: 1,
+  pollSeconds: 64,
+  reach: 255,
+  lastRxSeconds: "12",
+  offsetSeconds: 0.0001,
+  reachable: true,
+};
+
+type Capability = { op: string; kind: string; enabled: boolean; reason?: string };
+
+const statusCap: Capability = { op: "GET /api/v1/ntp/status", kind: "route", enabled: true };
+const sourcesCap: Capability = { op: "GET /api/v1/ntp/sources", kind: "route", enabled: true };
+const stepCap: Capability = { op: "POST /api/v1/ntp/step", kind: "route", enabled: true };
+
+/** Answers the capabilities read with `caps` and the two NTP reads with one status and one source. */
+/** Answers that override the default sources read and add a step answer. */
+type RouteAnswers = { sources?: () => Response; step?: () => Response };
+
+function routes(caps: Capability[], answers: RouteAnswers = {}) {
+  return (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const method = init?.method ?? "GET";
+    if (method === "GET" && url.pathname === "/api/v1/capabilities") {
+      return Promise.resolve(
+        ok({ capabilities: caps, total: caps.length, enabled: caps.filter((c) => c.enabled).length })
+      );
+    }
+    if (method === "GET" && url.pathname === "/api/v1/ntp/status") {
+      return Promise.resolve(ok({ status }));
+    }
+    if (method === "GET" && url.pathname === "/api/v1/ntp/sources") {
+      return Promise.resolve(answers.sources ? answers.sources() : ok({ sources: [source] }));
+    }
+    if (method === "POST" && url.pathname === "/api/v1/ntp/step" && answers.step) {
+      return Promise.resolve(answers.step());
+    }
+    return Promise.resolve(failure(404, `no route ${method} ${url.pathname}`));
+  };
+}
+
+describe("NTPPage", () => {
+  const fetchMock = vi.fn<typeof fetch>();
+
+  function renderPage() {
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test/api",
+      fetch: fetchMock,
+      retry: { maxRetries: 0 },
+    });
+    return render(
+      <PlatformProvider client={client}>
+        <NTPPage />
+      </PlatformProvider>
+    );
+  }
+
+  /** The calls fetch saw under one path prefix. */
+  function callsUnder(prefix: string) {
+    return fetchMock.mock.calls.filter(([input]) => new URL(String(input)).pathname.startsWith(prefix));
+  }
+
+  function stepButton() {
+    return screen.getByRole("button", { name: "Step Clock" }) as HTMLButtonElement;
+  }
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("with step enabled the Step Clock button is enabled and the status card shows the reference", async () => {
+    fetchMock.mockImplementation(routes([statusCap, sourcesCap, stepCap]));
+
+    renderPage();
+
+    expect(await screen.findByText("ntp.reference.test")).toBeTruthy();
+    await waitFor(() => expect(stepButton().getAttribute("data-capability-enabled")).toBe("true"));
+    expect(stepButton().disabled).toBe(false);
+    expect(stepButton().getAttribute("data-capability-op")).toBe("POST /api/v1/ntp/step");
+  });
+
+  it("with step disabled the button is disabled with the reason as its title", async () => {
+    fetchMock.mockImplementation(
+      routes([statusCap, sourcesCap, { ...stepCap, enabled: false, reason: "unimplemented" }])
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("ntp.reference.test")).toBeTruthy();
+    await waitFor(() => expect(stepButton().title).toBe("unimplemented"));
+    expect(stepButton().disabled).toBe(true);
+  });
+
+  it("with ntp status not offered the page shows ntp-not-enabled and makes no /v1/ntp call", async () => {
+    fetchMock.mockImplementation(routes([stepCap]));
+
+    renderPage();
+
+    const card = await screen.findByTestId("ntp-not-enabled");
+    expect(card.textContent).toContain("NTP is not enabled on this server");
+    expect(card.textContent).toContain("not offered by this server");
+    expect(callsUnder("/api/v1/ntp")).toHaveLength(0);
+  });
+
+  it("a failed capabilities read shows a retry, not ntp-not-enabled, and Retry recovers the NTP reads", async () => {
+    const recovered = routes([statusCap, sourcesCap, stepCap]);
+    let capsFailed = false;
+    fetchMock.mockImplementation((input, init) => {
+      const url = new URL(String(input));
+      if (!capsFailed && (init?.method ?? "GET") === "GET" && url.pathname === "/api/v1/capabilities") {
+        capsFailed = true;
+        return Promise.resolve(failure(500, "boom"));
+      }
+      return recovered(input, init);
+    });
+
+    renderPage();
+
+    const card = await screen.findByTestId("ntp-capabilities-error");
+    expect(screen.queryByTestId("ntp-not-enabled")).toBeNull();
+    const retry = within(card).getByRole("button", { name: "Retry" });
+    expect(callsUnder("/api/v1/ntp")).toHaveLength(0);
+
+    fireEvent.click(retry);
+
+    expect(await screen.findByText("ntp.reference.test")).toBeTruthy();
+    expect(callsUnder("/api/v1/ntp/status").length).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.queryByTestId("ntp-capabilities-error")).toBeNull());
+    await waitFor(() => expect(stepButton().getAttribute("data-capability-enabled")).toBe("true"));
+  });
+
+  it("with sources not offered the page makes no /v1/ntp/sources call and shows the reason in the Sources card", async () => {
+    fetchMock.mockImplementation(
+      routes([statusCap, stepCap, { ...sourcesCap, enabled: false, reason: "unimplemented" }])
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("ntp.reference.test")).toBeTruthy();
+    const reason = await screen.findByTestId("ntp-sources-not-enabled");
+    expect(reason.textContent).toContain("unimplemented");
+    expect(callsUnder("/api/v1/ntp/sources")).toHaveLength(0);
+  });
+
+  /** The POST calls fetch saw to the step route. */
+  function stepPosts() {
+    return callsUnder("/api/v1/ntp/step").filter(([, init]) => init?.method === "POST");
+  }
+
+  it("lists each source's address, state and octal reach", async () => {
+    const sources = [
+      { ...source, address: "192.0.2.10", state: "selected", reach: 255 },
+      { ...source, address: "192.0.2.11", state: "candidate", reach: 7, reachable: false },
+    ];
+    fetchMock.mockImplementation(
+      routes([statusCap, sourcesCap, stepCap], { sources: () => ok({ sources }) })
+    );
+
+    renderPage();
+
+    const table = await screen.findByTestId("ntp-sources-table");
+    const first = (await within(table).findByText("192.0.2.10")).closest("tr") as HTMLElement;
+    const second = within(table).getByText("192.0.2.11").closest("tr") as HTMLElement;
+    expect(within(first).getByText("selected")).toBeTruthy();
+    expect(within(first).getByText("377")).toBeTruthy();
+    expect(within(second).getByText("candidate")).toBeTruthy();
+    expect(within(second).getByText("7")).toBeTruthy();
+    expect(within(table).queryByText("No sources configured")).toBeNull();
+  });
+
+  it("a failed sources read shows the ntp-sources-error row, not No sources configured", async () => {
+    fetchMock.mockImplementation(
+      routes([statusCap, sourcesCap, stepCap], { sources: () => failure(503, "chrony down") })
+    );
+
+    renderPage();
+
+    const row = await screen.findByTestId("ntp-sources-error");
+    expect(row.textContent).toContain("chrony down");
+    expect(screen.queryByText("No sources configured")).toBeNull();
+  });
+
+  it("Step Clock opens the confirm and a confirmed step posts once and shows the stepped status", async () => {
+    fetchMock.mockImplementation(
+      routes([statusCap, sourcesCap, stepCap], {
+        step: () => ok({ status: { ...status, referenceName: "stepped.reference.test" } }),
+      })
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("ntp.reference.test")).toBeTruthy();
+    await waitFor(() => expect(stepButton().disabled).toBe(false));
+    fireEvent.click(stepButton());
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Step the clock?")).toBeTruthy();
+    expect(stepPosts()).toHaveLength(0);
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Confirm Step" }));
+
+    expect(await screen.findByText("stepped.reference.test")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(stepPosts()).toHaveLength(1);
+  });
+
+  it("a refused step keeps the status, keeps the dialog open and posts once", async () => {
+    fetchMock.mockImplementation(
+      routes([statusCap, sourcesCap, stepCap], { step: () => failure(409, "step refused") })
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("ntp.reference.test")).toBeTruthy();
+    await waitFor(() => expect(stepButton().disabled).toBe(false));
+    fireEvent.click(stepButton());
+
+    const dialog = await screen.findByRole("dialog");
+    const confirm = within(dialog).getByRole("button", { name: "Confirm Step" }) as HTMLButtonElement;
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(stepPosts()).toHaveLength(1));
+    await waitFor(() => expect(confirm.disabled).toBe(false));
+    expect(screen.getByText("ntp.reference.test")).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(within(screen.getByRole("dialog")).getByText("Step the clock?")).toBeTruthy();
+    expect(stepPosts()).toHaveLength(1);
+  });
+});

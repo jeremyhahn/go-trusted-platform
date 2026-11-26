@@ -141,7 +141,8 @@ export interface UpdateTenantInput {
 
 export interface SendInvitationInput {
   email: string;
-  role: TenantRole;
+  /** One of the tenant's IAM role names (#1992). */
+  role: string;
 }
 
 export interface UpdateMemberRoleInput {
