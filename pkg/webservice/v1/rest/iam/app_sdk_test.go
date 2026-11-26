@@ -2,6 +2,7 @@ package iam
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -337,7 +338,9 @@ func TestAppMethodsOverSDKREST_UnimplementedVerbs(t *testing.T) {
 
 // lossyApps mimics the pinned embedded converter (sdkAppFromInternal): the
 // app is created upstream, but the result loses the client secret and/or
-// the resource prefix. Delete is recorded by the embedded orderedApps.
+// the resource prefix. The adapter keeps the created app (Delete, recorded
+// by the embedded orderedApps, is never called); the loss is UPSTREAM in
+// go-quicbaas sdkAppFromInternal.
 type lossyApps struct {
 	*orderedApps
 	dropSecret bool
@@ -366,7 +369,7 @@ type lossyAppsClient struct {
 
 func (c *lossyAppsClient) App() iamsdk.AppClient { return c.apps }
 
-func TestRegisterAppOverSDKREST_RefusesLostSecretOrPrefix(t *testing.T) {
+func TestRegisterAppOverSDKREST_KeepsTheCreatedApp(t *testing.T) {
 	t.Parallel()
 	const tenant = "tenant-a"
 	cases := []struct {
@@ -388,9 +391,69 @@ func TestRegisterAppOverSDKREST_RefusesLostSecretOrPrefix(t *testing.T) {
 			registered, err := client.RegisterApp(context.Background(), &platformv1.RegisterIAMAppRequest{
 				TenantId: tenant, Name: "docs", ResourcePrefix: "tenant-a/apps/", ResponseTypes: []string{"code"},
 			})
-			require.Error(t, err, "lossy registration must not succeed: %v", registered)
-			assert.Equal(t, codes.Unimplemented, status.Code(err), "register: %v", err)
-			assert.Equal(t, []string{"c-new"}, apps.deleted, "the half-created app must be deleted")
+			require.NoError(t, err)
+			assert.Equal(t, "c-new", registered.GetApp().GetClientId())
+			assert.Empty(t, apps.deleted, "a created app must never be rolled back")
 		})
 	}
+}
+
+// TestListAppsOverSDKREST_StablePagesWhateverTheUpstreamOrder proves offset
+// pages are cut from a ClientID-sorted copy: the pinned upstream returns apps
+// in map order, so unsorted pages could repeat or skip apps (#1963).
+func TestListAppsOverSDKREST_StablePagesWhateverTheUpstreamOrder(t *testing.T) {
+	t.Parallel()
+	const tenant = "tenant-a"
+	app := func(id string) iamsdk.Application {
+		return iamsdk.Application{ClientID: id, TenantID: tenant, Name: id, ResourcePrefix: id + "/", ResponseTypes: []string{"code"}}
+	}
+	shuffled := []iamsdk.Application{app("c3"), app("c1"), app("c5"), app("c2"), app("c4")}
+	reversed := []iamsdk.Application{app("c5"), app("c4"), app("c3"), app("c2"), app("c1")}
+	apps := &orderedApps{}
+	adapter := NewQuicBaaSIAMAdapter(&orderedAppsClient{cov964Client: cov964NewClient(), apps: apps})
+	client := platformv1.NewPlatformIAMServiceClient(sdkRESTConnection(t, adminSessionIAMServer(t, adapter, &mockPEPClient{})))
+	ctx := context.Background()
+
+	want := [][]string{{"c1", "c2"}, {"c3", "c4"}, {"c5"}}
+	for name, upstream := range map[string][]iamsdk.Application{"shuffled": shuffled, "reversed": reversed} {
+		apps.apps = upstream
+		for i, page := range want {
+			listed, err := client.ListApps(ctx, &platformv1.ListIAMAppsRequest{
+				TenantId:   tenant,
+				Pagination: &platformv1.PaginationRequest{Page: uint32(i + 1), PageSize: 2},
+			})
+			require.NoError(t, err, "%s page %d", name, i+1)
+			got := make([]string, 0, len(listed.GetApps()))
+			for _, a := range listed.GetApps() {
+				got = append(got, a.GetClientId())
+			}
+			assert.Equal(t, page, got, "%s page %d", name, i+1)
+			assert.Equal(t, int64(5), listed.GetTotal(), "%s page %d", name, i+1)
+		}
+	}
+}
+
+// TestErrAppOperationUnsupported_UpdateAndRotate proves the verbs the pinned
+// embedded transport does not dispatch answer a typed error, never a success.
+func TestErrAppOperationUnsupported_UpdateAndRotate(t *testing.T) {
+	t.Parallel()
+	apps := &unimplementedApps{orderedApps: &orderedApps{apps: []iamsdk.Application{
+		{ClientID: "c1", TenantID: "tenant-a", Name: "one", ResourcePrefix: "one/", ResponseTypes: []string{"code"}},
+	}}}
+	adapter := NewQuicBaaSIAMAdapter(&unimplementedAppsClient{cov964Client: cov964NewClient(), apps: apps})
+	ctx := context.Background()
+
+	_, err := adapter.UpdateApp(ctx, "tenant-a", "c1", &iamsdk.UpdateAppRequest{Name: "x"})
+	var unsupported ErrAppOperationUnsupported
+	require.True(t, errors.As(err, &unsupported), "update: %v", err)
+	assert.Equal(t, "app update", unsupported.Op)
+	assert.Equal(t, codes.Unimplemented, status.Code(err), "update: %v", err)
+
+	_, err = adapter.RotateAppSecret(ctx, "tenant-a", "c1")
+	unsupported = ErrAppOperationUnsupported{}
+	require.True(t, errors.As(err, &unsupported), "rotate: %v", err)
+	assert.Equal(t, "app secret rotation", unsupported.Op)
+	assert.Equal(t, codes.Unimplemented, status.Code(err), "rotate: %v", err)
+
+	assert.Zero(t, apps.updates)
 }
