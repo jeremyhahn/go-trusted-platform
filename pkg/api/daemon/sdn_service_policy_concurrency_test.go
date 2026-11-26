@@ -300,3 +300,132 @@ func TestSDNService_ApplyPolicy_ConcurrentSameNameOneWins(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, resp.GetPolicies(), 1)
 }
+
+// A DeleteFlow racing a first ApplyPolicy, between its flow installs and
+// the publication of its record, must not strip the policy's flows: it
+// waits for the apply, then refuses the policy's flow (#1955).
+func TestSDNService_DeleteFlow_WaitsForPolicyApply(t *testing.T) {
+	mock := NewConfigurableMockOVSClient()
+	fs := newFakeSwitch(mock)
+	installed := make(chan string, 1)
+	release := make(chan struct{})
+	mock.OnAddFlow(func(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error {
+		fs.add(t, bridgeName, flow)
+		select {
+		case installed <- flow.Cookie:
+		default:
+		}
+		// Hold the apply after its install, before it publishes.
+		waitBounded(release)
+		return nil
+	})
+	svc := newDeleteCleanupSDNService(t, mock)
+	ctx := context.Background()
+
+	applyDone := make(chan struct{})
+	var applyErr error
+	go func() {
+		defer close(applyDone)
+		_, applyErr = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "a", Config: vlanPolicyConfig("pa", 10)})
+	}()
+
+	var cookie string
+	select {
+	case cookie = <-installed:
+	case <-time.After(raceBound):
+		close(release)
+		t.Fatal("the apply installed no flow")
+	}
+	// The ID ListFlows hands out for the installed flow.
+	flowID := ovs.FlowIDPrefix + cookie
+
+	deleteDone := make(chan struct{})
+	var deleteErr error
+	go func() {
+		defer close(deleteDone)
+		_, deleteErr = svc.DeleteFlow(ctx, &platformv1.DeleteFlowRequest{BridgeId: "br0", FlowId: flowID})
+	}()
+	// Give an unserialized DeleteFlow the time to finish first.
+	select {
+	case <-deleteDone:
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	waitBounded(applyDone)
+	waitBounded(deleteDone)
+
+	require.NoError(t, applyErr)
+	require.Error(t, deleteErr)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(deleteErr))
+	assert.Len(t, fs.snapshot(), 1, "the policy's flow must stay installed")
+}
+
+// Each rule of a policy gets its own flow ID, and GetFlowStats on it
+// returns that rule's counters, not another rule's (#1955).
+func TestSDNService_GetFlowStats_TwoRuleFlowsKeepTheirOwnCounters(t *testing.T) {
+	mock := NewConfigurableMockOVSClient()
+	var mu sync.Mutex
+	var installed []*ovs.Flow
+	packets := func(priority int) int64 {
+		if priority == 100 {
+			return 11
+		}
+		return 22
+	}
+	mock.OnAddFlow(func(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error {
+		mu.Lock()
+		defer mu.Unlock()
+		f := &ovs.Flow{Cookie: flow.Cookie, Table: flow.Table, Priority: flow.Priority, Match: flow.Match, Actions: flow.Actions}
+		f.PacketCount = packets(flow.Priority)
+		installed = append(installed, f)
+		return nil
+	})
+	mock.OnListFlows(func(ctx context.Context, bridgeName string) ([]*ovs.Flow, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]*ovs.Flow(nil), installed...), nil
+	})
+	mock.OnGetFlowStats(func(ctx context.Context, bridgeName string, match string) ([]*ovs.Flow, error) {
+		rest, ok := strings.CutPrefix(match, "cookie=")
+		if !ok {
+			// The apply's occupancy read: nothing else holds the entries.
+			return nil, nil
+		}
+		want, _, _ := strings.Cut(rest, "/")
+		mu.Lock()
+		defer mu.Unlock()
+		var out []*ovs.Flow
+		for _, f := range installed {
+			if f.Cookie == want {
+				out = append(out, f)
+			}
+		}
+		return out, nil
+	})
+	svc := newDeleteCleanupSDNService(t, mock)
+	ctx := context.Background()
+
+	cfg := vlanPolicyConfig("pa", 10)
+	cfg.Rules = append(cfg.Rules, &platformv1.PolicyRule{
+		RuleId:   "r2",
+		Priority: 90,
+		Action:   platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY,
+		Match: &platformv1.PolicyRuleMatch{
+			SourceIp: "198.51.100.0/24",
+			VlanId:   10,
+		},
+	})
+	_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "a", Config: cfg})
+	require.NoError(t, err)
+
+	list, err := svc.ListFlows(ctx, &platformv1.ListFlowsRequest{BridgeId: "br0"})
+	require.NoError(t, err)
+	require.Len(t, list.GetFlows(), 2)
+	assert.NotEqual(t, list.GetFlows()[0].GetId(), list.GetFlows()[1].GetId(), "each rule needs its own flow ID")
+	for _, flow := range list.GetFlows() {
+		stats, err := svc.GetFlowStats(ctx, &platformv1.GetFlowStatsRequest{BridgeId: "br0", FlowId: flow.GetId()})
+		require.NoError(t, err)
+		priority := int(flow.GetConfig().GetPriority())
+		assert.Equal(t, uint64(packets(priority)), stats.GetStats().GetPacketCount(), "flow %s (priority %d) returned another rule's counters", flow.GetId(), priority)
+	}
+}
