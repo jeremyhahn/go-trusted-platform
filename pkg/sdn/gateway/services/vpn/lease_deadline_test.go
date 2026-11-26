@@ -281,3 +281,29 @@ func TestLeaseDeadline_RenewalAfterExpiryIsRefusedAndInstallsNothing(t *testing.
 		assert.Equal(t, 0, managed.count())
 	})
 }
+
+// A renewal request that arrives after a later one (reordered or delayed
+// delivery) must not shorten the deadline the host holds: the host deadline
+// only moves forward.
+func TestLeaseDeadline_DelayedLowerRenewalCannotRollBackTheHostDeadline(t *testing.T) {
+	t0 := leaseDeadlineT0
+	ctx := context.Background()
+	managed := newManagedFakePlane(DataPlaneMASQUE, new([]string))
+	host := hostOf(t, managed)
+	host.now = func() time.Time { return t0.Add(30 * time.Minute) }
+	require.Nil(t, installHosted(t, host, deadlinePeer("l1", t0.Add(time.Hour))))
+
+	require.Nil(t, host.RenewVPNPeer(ctx, &ipcv1.RenewVPNPeerRequest{
+		PublicKey:         bytesOf(0xab, 32),
+		ExpiresAtUnixNano: t0.Add(3 * time.Hour).UnixNano(),
+	}).GetRefusal())
+	require.Nil(t, host.RenewVPNPeer(ctx, &ipcv1.RenewVPNPeerRequest{
+		PublicKey:         bytesOf(0xab, 32),
+		ExpiresAtUnixNano: t0.Add(2 * time.Hour).UnixNano(),
+	}).GetRefusal(), "a lower deadline is accepted as a no-op")
+
+	require.NoError(t, host.ExpirePeers(ctx, t0.Add(2*time.Hour)))
+	assert.Equal(t, 1, managed.count(), "the delayed lower deadline did not roll the host back")
+	require.NoError(t, host.ExpirePeers(ctx, t0.Add(3*time.Hour)))
+	assert.Equal(t, 0, managed.count())
+}
