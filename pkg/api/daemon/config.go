@@ -516,9 +516,6 @@ func (c *Config) Validate() error {
 // answers every Check ServiceNotConfigured. daemon.New runs it at startup;
 // NewService does not, because it serves no listener.
 func (c *Config) validateGRPCAuthorization() error {
-	if c.EnableGRPCTCP && c.EnableMTLS && c.quicbaasEmbedded() {
-		return ErrEmbeddedPEPUnavailable{Transport: transportGRPCTCP, MTLS: true}
-	}
 	if c.grpcAuthorizesThroughPEP() && c.quicbaasEmbedded() {
 		return ErrEmbeddedPEPUnavailable{Transport: transportGRPCTCP}
 	}
@@ -546,13 +543,11 @@ func (c *Config) quicAuthorizesThroughPEP() bool {
 }
 
 // grpcAuthorizesThroughPEP reports whether the gRPC TCP listener will hand
-// every scoped call to the IAM policy enforcement point. Under mTLS it
-// always does: selectGRPCTCPAuth checks mTLS first and decides every
-// non-pre-auth call per method by the PEP (#1989), so neither platform
-// tokens nor the testing-only SkipIAMValidation opt-out applies. Without
-// mTLS it does when neither of those is in force.
+// every scoped call to the IAM policy enforcement point. That is the
+// selectGRPCTCPAuth path left when neither mTLS, platform tokens nor the
+// testing-only SkipIAMValidation opt-out is in force.
 func (c *Config) grpcAuthorizesThroughPEP() bool {
-	return c.EnableGRPCTCP && (c.EnableMTLS || (!c.SkipIAMValidation && !c.PlatformToken.Enabled))
+	return c.EnableGRPCTCP && !c.EnableMTLS && !c.SkipIAMValidation && !c.PlatformToken.Enabled
 }
 
 // quicbaasEmbedded reports whether the IAM service, and so its policy
