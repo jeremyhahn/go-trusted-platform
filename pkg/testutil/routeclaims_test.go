@@ -51,7 +51,7 @@ func TestDaemonOnlyPrefixOf(t *testing.T) {
 		ok               bool
 	}{
 		{"bare prefix", "/api/v1/version", "version", true},
-		{"under a prefix", "/api/v1/bmc/{profileID}/power", "bmc", true},
+		{"under a prefix", "/api/v1/ceremony/sessions", "ceremony", true},
 		{"multi-segment prefix", "/api/v1/sdn/gateway/nat64/status", "sdn/gateway/nat64", true},
 		{"sibling of a multi-segment prefix", "/api/v1/sdn/gateway/ipam/pools", "", false},
 		{"prefix is only a word prefix", "/api/v1/versions", "", false},

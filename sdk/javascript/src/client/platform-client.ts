@@ -191,7 +191,7 @@ export class PlatformClient {
   /** NTP status, sources and clock step */
   public readonly ntp: NTPService;
 
-  /** BMC user accounts: list, create, delete, password and privilege */
+  /** BMC power, boot device, virtual media, provisioning and user accounts */
   public readonly bmc: BMCService;
 
   /** BMC certificate ceremonies: enroll, restore factory, replace web certificate */

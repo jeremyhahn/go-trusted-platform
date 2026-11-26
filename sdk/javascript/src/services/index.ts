@@ -35,6 +35,20 @@ export type {
   BMCUser,
   CreateBMCUserRequest,
   BMCStatusOK,
+  BMCPowerAction,
+  BMCPowerActionResponse,
+  BMCPowerStatusResponse,
+  BMCSetBootDeviceRequest,
+  BMCSetBootDeviceResponse,
+  BMCBootDeviceResponse,
+  BMCVirtualMediaStatus,
+  BMCMountISOResponse,
+  BMCStatusResponse,
+  BMCSensorReading,
+  BMCSystemInfo,
+  BMCWebCertificate,
+  BMCProvisionRequest,
+  BMCProvisionResult,
 } from './bmc-service.js';
 export { BMCCertService } from './bmc-cert-service.js';
 export type {

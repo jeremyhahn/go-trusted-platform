@@ -10,6 +10,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
+import { PlatformServiceControlCard } from "@/components/features/platform/platform-service-control-card";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -235,6 +236,8 @@ export default function ServicesPage() {
           Refresh
         </Button>
       </PageHeader>
+
+      <PlatformServiceControlCard />
 
       {/* Statistics Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
