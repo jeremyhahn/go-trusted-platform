@@ -170,3 +170,41 @@ func TestCeremonyQUICInitReturnsAdminBundle(t *testing.T) {
 		t.Errorf("admin bundle not returned: %+v", out)
 	}
 }
+
+func TestCeremonyQUICInitForwardsOfficers(t *testing.T) {
+	var got *CeremonyInitRequest
+	backend := &fakeCeremonyBackend{initFn: func(_ context.Context, req *CeremonyInitRequest) (*CeremonyInitResult, error) {
+		got = req
+		return &CeremonyInitResult{CeremonyID: "cid", State: CeremonyStateInProgress}, nil
+	}}
+	h := &ceremonyQUICHandlers{service: NewCeremonyService(logging.DefaultLogger(), backend)}
+	body, err := quicwire.EncodePayload(&quicwire.CeremonyInitReq{
+		SOPIN: "so", Threshold: "2-of-2",
+		Officers: []quicwire.CeremonyInitOfficerReq{
+			{Username: "alice", CSRPEM: "CSR-A"},
+			{Username: "bob", CSRPEM: "CSR-B"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("EncodePayload: %v", err)
+	}
+	resp := h.Handle(scopedQUICContext("ceremony:write"), &quicwire.Request{
+		Opcode:  quicwire.OpCeremonyCategory,
+		Payload: append([]byte{quicwire.CeremonySubInit}, body...),
+	})
+	if resp.Status != quicwire.StatusOK {
+		t.Fatalf("status = %d, want OK", resp.Status)
+	}
+	if got == nil {
+		t.Fatal("the init request did not reach the backend")
+	}
+	want := []CeremonyOfficer{{Username: "alice", CSRPEM: "CSR-A"}, {Username: "bob", CSRPEM: "CSR-B"}}
+	if len(got.Officers) != len(want) {
+		t.Fatalf("backend officers = %+v, want %+v", got.Officers, want)
+	}
+	for i := range want {
+		if got.Officers[i] != want[i] {
+			t.Errorf("officer %d = %+v, want %+v", i, got.Officers[i], want[i])
+		}
+	}
+}

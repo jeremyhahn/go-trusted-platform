@@ -116,6 +116,11 @@ describe('ceremony write controls are capability-gated', () => {
 
     fill('SO PIN', 'so-pin-test');
     fill('Threshold', '3-of-5');
+    // An M-of-N init keeps Initialize off until every officer is named.
+    for (let i = 1; i <= 5; i++) {
+      fill(`Officer ${i} username`, `officer-${i}`);
+      fill(`Officer ${i} CSR`, CSR);
+    }
 
     const btn = button('Initialize');
     expect(btn.getAttribute('data-capability-op')).toBe(INIT_OP);
