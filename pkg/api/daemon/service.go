@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
@@ -966,20 +967,14 @@ func (s *Service) ListEntityTypes(ctx context.Context, req *platformv1.ListEntit
 		count := uint64(0)
 		typeStatus := "empty"
 
-		// Count entities of this type using pagination
-		pageToken := ""
-		for {
-			entities, nextToken, listErr := client.List(ctx, entityType, 100, pageToken, 0)
-			if listErr != nil {
-				// Log the error but continue with other entity types
-				typeStatus = "error"
-				break
-			}
-			count += uint64(len(entities))
-			if nextToken == "" {
-				break
-			}
-			pageToken = nextToken
+		// Count entities of this type; on a list error carry on with the
+		// other entity types.
+		walkErr := walkEntities(ctx, client, entityType, func(*service.Entity) error {
+			count++
+			return nil
+		})
+		if walkErr != nil {
+			typeStatus = "error"
 		}
 
 		if count > 0 {
@@ -1028,34 +1023,71 @@ func (s *Service) DumpEntityType(req *platformv1.DumpEntityTypeRequest, stream p
 	}
 
 	for _, entityType := range entityTypes {
-		// List all entities of this type
-		pageToken := ""
-		for {
-			entities, nextToken, listErr := client.List(ctx, entityType, 100, pageToken, 0)
-			if listErr != nil {
-				// Skip entity type on error but continue with others
-				break
+		// List all entities of this type. A list error skips the type and
+		// carries on with the others; a send error ends the dump.
+		var sendErr error
+		_ = walkEntities(ctx, client, entityType, func(entity *service.Entity) error {
+			resp := &platformv1.DumpEntityTypeResponse{
+				EntityType: entityType,
+				EntityId:   entity.ID,
+				Data:       entity.Data,
 			}
-
-			for _, entity := range entities {
-				resp := &platformv1.DumpEntityTypeResponse{
-					EntityType: entityType,
-					EntityId:   entity.ID,
-					Data:       entity.Data,
-				}
-				if err := stream.Send(resp); err != nil {
-					return err
-				}
+			if err := stream.Send(resp); err != nil {
+				sendErr = err
+				return err
 			}
-
-			if nextToken == "" {
-				break
-			}
-			pageToken = nextToken
+			return nil
+		})
+		if sendErr != nil {
+			return sendErr
 		}
 	}
 
 	return nil
+}
+
+// entityWalkPageSize is the page size walkEntities asks List for.
+const entityWalkPageSize = 100
+
+// walkEntities calls fn once for each entity of entityType. The pinned
+// go-quicbaas v0.12.0-alpha embedded transport ignores the page token: it
+// returns every record in one response but keeps the first batch's next
+// token. So, as PXEDeviceStore.List does, the walk stops on an empty next
+// token, a page larger than the page size or a next token already sent, and
+// skips an entity ID already seen. It returns the first List or fn error.
+func walkEntities(ctx context.Context, client quicbaas.ClientInterface, entityType string, fn func(*service.Entity) error) error {
+	seenIDs := make(map[uint64]struct{})
+	sentTokens := make(map[string]struct{})
+	pageToken := ""
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		sentTokens[pageToken] = struct{}{}
+		entities, nextToken, err := client.List(ctx, entityType, entityWalkPageSize, pageToken, 0)
+		if err != nil {
+			return err
+		}
+		for _, entity := range entities {
+			if entity == nil {
+				continue
+			}
+			if _, dup := seenIDs[entity.ID]; dup {
+				continue
+			}
+			seenIDs[entity.ID] = struct{}{}
+			if err := fn(entity); err != nil {
+				return err
+			}
+		}
+		if nextToken == "" || len(entities) > entityWalkPageSize {
+			return nil
+		}
+		if _, sent := sentTokens[nextToken]; sent {
+			return nil
+		}
+		pageToken = nextToken
+	}
 }
 
 // getQuicBaaSClient returns the QuicBaaS client from the app.
