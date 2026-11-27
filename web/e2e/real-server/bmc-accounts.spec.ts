@@ -27,14 +27,26 @@ const BMC_WRITE_OPS = [
 
 type Capability = { enabled: boolean; reason?: string };
 
-/** Opens the page with no profile typed; resolves to the server's op -> capability map. */
-async function openPage(page: Page): Promise<Map<string, Capability>> {
+const HEADING = 'BMC certificate and users';
+
+/** Opens the page and checks its heading; types no profile and waits for no request. */
+async function gotoPage(page: Page): Promise<void> {
+  await page.goto('/devices/bmc/accounts');
+  await expect(page.getByRole('heading', { name: HEADING, exact: true })).toBeVisible();
+}
+
+/**
+ * Opens the page and types `id`; resolves to the server's op -> capability map.
+ * The cards (and the Gated controls that read GET /api/v1/capabilities) mount
+ * only once a profile ID is typed, so the response is awaited after the fill.
+ */
+async function openPage(page: Page, id = UNKNOWN_PROFILE): Promise<Map<string, Capability>> {
   const capabilities = page.waitForResponse(
     (res) => res.request().method() === 'GET' && new URL(res.url()).pathname === '/api/v1/capabilities',
   );
-  await page.goto('/devices/bmc/accounts');
+  await gotoPage(page);
+  await enterProfile(page, id);
   const res = await capabilities;
-  await expect(page.getByRole('heading', { name: 'BMC certificate and users', exact: true })).toBeVisible();
 
   const payload = unwrapPayload<{ capabilities?: { op: string; enabled?: boolean; reason?: string }[] }>(
     await res.json(),
@@ -54,7 +66,6 @@ async function enterProfile(page: Page, id: string): Promise<void> {
 test.describe('BMC certificate and users page', () => {
   test('each write control is gated as the server answers its op', async ({ adminPage }) => {
     const caps = await openPage(adminPage);
-    await enterProfile(adminPage, UNKNOWN_PROFILE);
     const controls = adminPage.locator('[data-capability-op]');
     await expect(controls.first()).toBeVisible();
 
@@ -70,12 +81,11 @@ test.describe('BMC certificate and users page', () => {
 
   test('the users card shows the server refusal for an unknown profile', async ({ adminPage }) => {
     await openPage(adminPage);
-    await enterProfile(adminPage, UNKNOWN_PROFILE);
     await expect(adminPage.getByText('BMC users unavailable').first()).toBeVisible();
   });
 
   test('shows no BMC card or control before a profile ID is typed', async ({ adminPage }) => {
-    await openPage(adminPage);
+    await gotoPage(adminPage);
     await expect(adminPage.getByText('BMC certificate', { exact: true })).toHaveCount(0);
     await expect(adminPage.getByText('BMC users', { exact: true })).toHaveCount(0);
     await expect(adminPage.locator('[data-capability-op]')).toHaveCount(0);
@@ -87,7 +97,6 @@ test.describe('BMC certificate and users page', () => {
 
   test('a BMC control the server does not list is disabled with the not-offered reason', async ({ adminPage }) => {
     const caps = await openPage(adminPage);
-    await enterProfile(adminPage, UNKNOWN_PROFILE);
     const controls = adminPage.locator('[data-capability-op]');
     await expect(controls.first()).toBeVisible();
 
@@ -112,7 +121,6 @@ test.describe('BMC certificate and users page', () => {
 
   test('changing the profile ID remounts both cards', async ({ adminPage }) => {
     await openPage(adminPage);
-    await enterProfile(adminPage, UNKNOWN_PROFILE);
     await expect(adminPage.getByText('BMC users unavailable').first()).toBeVisible();
 
     // The remounted users card lists the new profile's users afresh.
