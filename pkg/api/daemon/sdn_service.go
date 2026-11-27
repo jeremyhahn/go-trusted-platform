@@ -1351,7 +1351,7 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		// refuse an entry a flow with another cookie (SDNService.AddFlow,
 		// another owner) holds, before any write, so the policy never
 		// replaces, and its strict deletes never meet, a flow it does not own.
-		adopted, occupied, occupant, err := s.occupiedPolicyFlow(ctx, client, policyID, flows)
+		adopted, occupied, occupant, err := s.occupiedPolicyFlow(ctx, client, policyID, prior != nil, flows)
 		if err != nil {
 			return nil, status.Errorf(codes.Unavailable, "%v", err)
 		}
@@ -1912,7 +1912,12 @@ func (s *SDNService) conflictingPolicyFlow(flows []policyFlow, others []policyRe
 // flows under policyID's legacy cookie are not occupants: they are
 // returned as adopted, for the rollback to restore. The stats filter is not
 // strict, so the flows it returns are keyed here.
-func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientInterface, policyID string, flows []policyFlow) ([]policyFlow, policyFlow, *ovs.Flow, error) {
+//
+// A flow under the policy's own cookie hash is the policy's own only when
+// known (the service holds a record of the policy) or its actions equal
+// the new flow's: the truncated hash cannot tell two policies apart, and
+// after a restart the policy map the collision check reads is empty.
+func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientInterface, policyID string, known bool, flows []policyFlow) ([]policyFlow, policyFlow, *ovs.Flow, error) {
 	var adopted []policyFlow
 	for _, flow := range flows {
 		filter := fmt.Sprintf("table=%d", flow.mod.Table)
@@ -1927,7 +1932,14 @@ func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientIn
 		for _, fl := range installed {
 			// The policy's own flow, of this or an earlier apply (whose
 			// rule order may differ): OFPFC_ADD replacing it is the apply.
-			if fl == nil || fl.Cookie == flow.mod.Cookie || samePolicyCookie(fl.Cookie, flow.mod.Cookie) {
+			// Without a record of the policy the hash is no proof of
+			// ownership, so only a flow the replace leaves unchanged is
+			// taken as its own; any other is a foreign occupant.
+			if fl == nil {
+				continue
+			}
+			ownCookie := fl.Cookie == flow.mod.Cookie || samePolicyCookie(fl.Cookie, flow.mod.Cookie)
+			if ownCookie && (known || fl.Actions != "" && fl.Actions == flow.mod.Actions) {
 				continue
 			}
 			theirs := policyFlow{bridge: flow.bridge, mod: &ovs.FlowMod{Table: fl.Table, Priority: fl.Priority, Match: fl.Match}}
