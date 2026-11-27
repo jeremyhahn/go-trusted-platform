@@ -1085,7 +1085,7 @@ func TestErrLeaseNotRestored_Message(t *testing.T) {
 // restartWith replaces svc with a new Service over the same deps, as a
 // restarted VPN child would see them, starts it and runs Restore. What
 // the old service held only in memory is gone.
-func restartWith(t *testing.T, h *harness, deps Deps) {
+func restartWith(t *testing.T, h *harness, deps Deps) error {
 	t.Helper()
 	ctx := context.Background()
 	require.NoError(t, h.svc.Stop(ctx))
@@ -1095,7 +1095,7 @@ func restartWith(t *testing.T, h *harness, deps Deps) {
 	require.NoError(t, svc.Start(ctx))
 	t.Cleanup(func() { _ = svc.Stop(context.Background()) })
 	h.svc = svc
-	require.NoError(t, svc.Restore(ctx))
+	return svc.Restore(ctx)
 }
 
 // A lease the host already expired is dead: when the store cannot record
@@ -1130,7 +1130,8 @@ func TestRestore_ALostLeaseWithAnUnrecordedRevocationStaysOwed(t *testing.T) {
 	_, err = store.Get(ctx, lease.ID)
 	require.NoError(t, err, "the store kept the record it could not delete")
 
-	restartWith(t, h, deps)
+	var notRestored *ErrLeaseNotRestored
+	require.ErrorAs(t, restartWith(t, h, deps), &notRestored, "the dead lease is dropped, not restored")
 	assert.False(t, plane.hosts(lease.ID), "a restart must not reinstall a lease the host expired")
 
 	store.deleteErr = nil
@@ -1159,7 +1160,7 @@ func TestRestore_KeepsTheRenewBypassAfterAFailedExtension(t *testing.T) {
 	var unavailable *ErrDataPlaneUnavailable
 	require.ErrorAs(t, err, &unavailable)
 
-	restartWith(t, h, deps)
+	require.NoError(t, restartWith(t, h, deps))
 	require.True(t, plane.hosts(lease.ID), "the live lease is restored")
 
 	renewed, err := h.svc.Renew(ctx, lease.ID, h.evidence(t))
@@ -1167,7 +1168,7 @@ func TestRestore_KeepsTheRenewBypassAfterAFailedExtension(t *testing.T) {
 	assert.Equal(t, 2, renewed.Renewals)
 
 	// Once the client holds the new deadline, the window applies again.
-	restartWith(t, h, deps)
+	require.NoError(t, restartWith(t, h, deps))
 	_, err = h.svc.Renew(ctx, lease.ID, h.evidence(t))
 	var notOpen *ErrRenewalNotOpen
 	require.ErrorAs(t, err, &notOpen)

@@ -81,8 +81,10 @@ type Service struct {
 	// after the new deadline was stored (a failed ExtendPeer): the client
 	// still holds its old expiry, so its retry is not held to the window
 	// of the stored one. A Sweep that pays the host extension leaves it;
-	// only a successful Renew or a committed revocation clears it.
-	// Allocated on first use. Guarded by mu.
+	// only a successful Renew or a committed revocation clears it. The
+	// deadline the client holds is also stored on the lease
+	// (Lease.ClientExpiresAt), from which Restore rebuilds this set after
+	// a restart. Allocated on first use. Guarded by mu.
 	renewBypass map[LeaseID]struct{}
 	// tearingDown counts, per address, the revocations whose teardown has
 	// not settled: the lease may already be deleted while the peer removal
@@ -334,18 +336,53 @@ func (s *Service) Sweep(ctx context.Context) {
 }
 
 // oweExtension records that the host has not confirmed the stored deadline
-// of lease id.
-func (s *Service) oweExtension(id LeaseID) {
+// of lease and that its client, refused the renewal, still holds held.
+// Sweep re-sends the extension and the client's retry bypasses the renew
+// window. The held deadline is stored on the lease (unless an earlier
+// refusal already stored it) so Restore rebuilds the bypass after a
+// restart; a failed write leaves the bypass in memory alone.
+func (s *Service) oweExtension(ctx context.Context, lease *Lease, held time.Time) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.extendOwed == nil {
 		s.extendOwed = map[LeaseID]struct{}{}
 	}
-	s.extendOwed[id] = struct{}{}
+	s.extendOwed[lease.ID] = struct{}{}
+	s.mu.Unlock()
+	s.bypassRenewal(lease.ID)
+	if !lease.ClientExpiresAt.IsZero() {
+		return
+	}
+	lease.ClientExpiresAt = held
+	if err := s.deps.Leases.Put(ctx, lease); err != nil {
+		s.logger.Warn("vpn.renew: storing the deadline the client holds failed; a restart loses its renew bypass",
+			slog.String("lease", string(lease.ID)), slog.Any("error", err))
+	}
+}
+
+// bypassRenewal lets the client of lease id renew outside the renew window
+// (see renewBypass).
+func (s *Service) bypassRenewal(id LeaseID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.renewBypass == nil {
 		s.renewBypass = map[LeaseID]struct{}{}
 	}
 	s.renewBypass[id] = struct{}{}
+}
+
+// confirmClientDeadline drops the stored refused-renewal mark once the
+// client holds the lease's stored deadline. A failed write is logged: a
+// restart then lets the client renew outside the window once more.
+func (s *Service) confirmClientDeadline(ctx context.Context, lease *Lease) {
+	s.clearRenewBypass(lease.ID)
+	if lease.ClientExpiresAt.IsZero() {
+		return
+	}
+	lease.ClientExpiresAt = time.Time{}
+	if err := s.deps.Leases.Put(ctx, lease); err != nil {
+		s.logger.Warn("vpn.renew: clearing the client's refused deadline failed",
+			slog.String("lease", string(lease.ID)), slog.Any("error", err))
+	}
 }
 
 // extensionOwed reports whether lease id waits on a deadline extension.
@@ -435,9 +472,15 @@ func (s *Service) retryOwedExtension(ctx context.Context, probe *Lease) {
 	if err := ext.ExtendPeer(ctx, lease); err != nil {
 		var nf *ErrLeaseNotFound
 		if errors.As(err, &nf) {
-			// The host already expired the peer: the lease is dead.
-			s.clearExtension(lease.ID)
-			if rErr := s.revoke(ctx, lease, RevokeExpired); rErr != nil {
+			// The host already expired the peer: the lease is dead. The
+			// obligation is paid only once the store records the
+			// revocation (revoke clears it then).
+			rErr := s.revoke(ctx, lease, RevokeExpired)
+			var unrecorded *ErrRevocationNotRecorded
+			if errors.As(rErr, &unrecorded) {
+				s.oweDeletion(ctx, lease)
+			}
+			if rErr != nil {
 				s.logger.Warn("vpn lease sweep: revoking a lease the host expired failed",
 					slog.String("lease", string(lease.ID)), slog.Any("error", rErr))
 			}
@@ -448,6 +491,30 @@ func (s *Service) retryOwedExtension(ctx context.Context, probe *Lease) {
 		return
 	}
 	s.clearExtension(lease.ID)
+}
+
+// oweDeletion keeps a lease the host already expired owed when the store
+// could not record its revocation. The kept record is re-stored with an
+// elapsed deadline, so the expiry sweep retries the deletion and a
+// restart's Restore drops the lease instead of reinstalling its peer. If
+// that write fails too, the extension stays owed in memory: the next Sweep
+// re-sends it, the host refuses it again, and the revocation is retried.
+func (s *Service) oweDeletion(ctx context.Context, lease *Lease) {
+	now := s.deps.Clock.Now()
+	dead := *lease
+	if now.Before(dead.ExpiresAt) {
+		dead.ExpiresAt = now
+	}
+	if err := s.deps.Leases.Put(ctx, &dead); err != nil {
+		s.logger.Warn("vpn lease sweep: marking a lease the host expired as expired failed; the sweep retries",
+			slog.String("lease", string(lease.ID)), slog.Any("error", err))
+		s.mu.Lock()
+		if s.extendOwed == nil {
+			s.extendOwed = map[LeaseID]struct{}{}
+		}
+		s.extendOwed[lease.ID] = struct{}{}
+		s.mu.Unlock()
+	}
 }
 
 func (s *Service) recordRefusal(reason string) {

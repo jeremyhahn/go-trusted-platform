@@ -30,7 +30,11 @@ import (
 // a client admitted before the restart keeps its session. A lease that has
 // expired, or whose data plane, zones or address this gateway can no longer
 // give it, is dropped from the store instead and reported as an
-// ErrLeaseNotRestored; the errors of every dropped lease are joined.
+// ErrLeaseNotRestored; the errors of every dropped lease are joined. A
+// lease the host expired whose revocation the store could not record was
+// re-stored with an elapsed deadline (see oweDeletion), so it is dropped,
+// not reinstalled. A restored lease whose client was refused its stored
+// deadline (Lease.ClientExpiresAt) gets its renew bypass back.
 //
 // Call Restore after Start and before applying the enrolment set: that
 // set's sweep then revokes the restored leases of peers the control plane
@@ -384,6 +388,11 @@ func (s *Service) restore(ctx context.Context, l *Lease) error {
 	}
 	if err := plane.InstallPeer(ctx, l); err != nil {
 		return s.dropLease(ctx, l, plane, "data plane refused the peer", &ErrDataPlaneUnavailable{Kind: l.DataPlane, Cause: err})
+	}
+	// A client refused a renewal before the restart still holds the
+	// deadline stored with the lease: its retry keeps the renew bypass.
+	if !l.ClientExpiresAt.IsZero() && l.ClientExpiresAt.Before(l.ExpiresAt) {
+		s.bypassRenewal(l.ID)
 	}
 	s.logger.Info("vpn.restore",
 		slog.String("lease", string(l.ID)),

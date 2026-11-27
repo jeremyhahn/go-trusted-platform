@@ -242,6 +242,8 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 	if err := s.deps.IPAM.Renew(ctx, lease.Address.Addr()); err != nil {
 		return nil, s.refuse(ctx, lease.DeviceID, &ErrPoolExhausted{Pool: s.cfg.Pool, Cause: err})
 	}
+	// held is the deadline the client holds until this renewal reaches it.
+	held := lease.ExpiresAt
 	lease.ExpiresAt = now.Add(s.cfg.LeaseTTL)
 	lease.Renewals++
 	lease.Verdict = *summary
@@ -254,14 +256,14 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 	// re-sends it, and the client's retry bypasses the renew window.
 	if ext, ok := s.deps.DataPlanes[lease.DataPlane].(PeerDeadlineExtender); ok {
 		if err := ext.ExtendPeer(ctx, lease); err != nil {
-			s.oweExtension(lease.ID)
+			s.oweExtension(ctx, lease, held)
 			s.logger.Warn("vpn.renew: extending the host deadline failed; owed to the sweep and the next renewal",
 				slog.String("lease", string(lease.ID)), slog.Time("expires_at", lease.ExpiresAt), slog.Any("error", err))
 			return nil, s.refuse(ctx, lease.DeviceID, &ErrDataPlaneUnavailable{Kind: lease.DataPlane, Cause: err})
 		}
 	}
 	s.clearExtension(lease.ID)
-	s.clearRenewBypass(lease.ID)
+	s.confirmClientDeadline(ctx, lease)
 	s.logger.Info("vpn.renew", slog.String("lease", string(lease.ID)), slog.Int("renewals", lease.Renewals), slog.Time("expires_at", lease.ExpiresAt))
 	cp := *lease
 	return &cp, nil
