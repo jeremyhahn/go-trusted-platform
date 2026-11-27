@@ -15,14 +15,17 @@ package platform
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/gorilla/mux"
 
+	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
@@ -34,6 +37,79 @@ func newTestRouter() (root *mux.Router, apiRouter *mux.Router) {
 	root = mux.NewRouter()
 	apiRouter = root.PathPrefix("/api/v1").Subrouter()
 	return root, apiRouter
+}
+
+// newTenantGuardedRouter mounts a platform router with a shutdowner and a
+// config updater wired, publishes an admin session of tenantID on every
+// request and, when withGuard is set, wires the real RequireTenant("system")
+// session guard.
+func newTenantGuardedRouter(t *testing.T, tenantID string, withGuard bool) (*mux.Router, *fakeShutdowner) {
+	t.Helper()
+	l := logging.NewLogger(slog.LevelDebug, nil)
+	rw := response.NewResponseWriter(l, nil)
+	pr := NewPlatformRouter(l, rw)
+	f := newFakeShutdowner()
+	pr.SetShutdowner(f)
+	pr.SetConfigUpdater(wiredConfigUpdater{})
+	if withGuard {
+		guard, err := iammw.NewSessionGuard(l, rw)
+		if err != nil {
+			t.Fatalf("NewSessionGuard: %v", err)
+		}
+		pr.SetSystemTenantGuard(guard.RequireTenant("system"))
+	}
+	session := iammw.NewIAMSession(&iamsdk.User{
+		ID: "u-" + tenantID, TenantID: tenantID, Roles: []string{"admin"}})
+	root := mux.NewRouter()
+	root.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(iammw.SetSessionInContext(r.Context(), session)))
+		})
+	})
+	pr.RegisterRoutes(root.PathPrefix("/api/v1").Subrouter())
+	return root, f
+}
+
+func TestPlatformRouter_DaemonWideWritesNeedSystemTenant(t *testing.T) {
+	const configPath = "/api/v1/platform/config/sections/logging"
+	const configBody = `{"values":{"level":"debug"}}`
+	jsonHdr := map[string]string{"Content-Type": "application/json"}
+
+	cases := []struct {
+		name         string
+		tenant       string
+		withGuard    bool
+		wantShutdown int
+		wantConfig   int
+	}{
+		{"workspace admin", "acme", true, http.StatusForbidden, http.StatusForbidden},
+		{"system admin", "system", true, http.StatusAccepted, http.StatusOK},
+		{"no guard fails closed", "system", false, http.StatusForbidden, http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root, f := newTenantGuardedRouter(t, tc.tenant, tc.withGuard)
+
+			rec := serve(root, http.MethodPost, shutdownPath, "", nil)
+			if rec.Code != tc.wantShutdown {
+				t.Fatalf("POST shutdown = %d, want %d (body %s)", rec.Code, tc.wantShutdown, rec.Body.String())
+			}
+			if tc.wantShutdown == http.StatusAccepted {
+				waitShutdown(t, f)
+			} else {
+				select {
+				case req := <-f.got:
+					t.Fatalf("Shutdown called for a refused caller: %v", req)
+				default:
+				}
+			}
+
+			rec = serve(root, http.MethodPut, configPath, configBody, jsonHdr)
+			if rec.Code != tc.wantConfig {
+				t.Fatalf("PUT config section = %d, want %d (body %s)", rec.Code, tc.wantConfig, rec.Body.String())
+			}
+		})
+	}
 }
 
 func TestNewPlatformRouter(t *testing.T) {
