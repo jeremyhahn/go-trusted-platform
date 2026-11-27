@@ -75,6 +75,7 @@ func (c *GRPCClient) Init(ctx context.Context, req *InitRequest) (*InitResponse,
 		Hostname:               req.Hostname,
 		Sans:                   req.SANs,
 		CredentialSealStrategy: req.CredentialSealStrategy,
+		Officers:               initOfficersToProto(req.Officers),
 	})
 	if err != nil {
 		return nil, &ErrInitFailed{Cause: err}
@@ -213,6 +214,19 @@ func (c *GRPCClient) SignCSR(ctx context.Context, req *SignCSRRequest) (*SignCSR
 		Certificate: resp.GetCertificatePem(),
 		Chain:       resp.GetChainPem(),
 	}, nil
+}
+
+// initOfficersToProto maps the init officers onto the proto request. It
+// returns nil for none, so a single-admin init carries no list.
+func initOfficersToProto(officers []InitOfficer) []*platformv1.CeremonyInitOfficer {
+	if len(officers) == 0 {
+		return nil
+	}
+	out := make([]*platformv1.CeremonyInitOfficer, 0, len(officers))
+	for _, o := range officers {
+		out = append(out, &platformv1.CeremonyInitOfficer{Username: o.Username, CsrPem: o.CSRPEM})
+	}
+	return out
 }
 
 // Compile-time interface check.
