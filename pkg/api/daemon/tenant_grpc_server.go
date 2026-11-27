@@ -46,6 +46,20 @@ type TenantGRPCServer struct {
 	// initialAdmin mints a tenant's owner invitation; nil until the
 	// daemon wires the invitation service (SetInitialAdminInviter).
 	initialAdmin initialAdminInviter
+	inviters     inviterResolver
+}
+
+// inviterResolver maps a verified caller's login name or certificate email
+// to the stored IAM user, so the owner invitation records the canonical
+// inviter id. The platform user service satisfies it.
+type inviterResolver interface {
+	GetByEmail(ctx context.Context, email string) (*entities.User, error)
+}
+
+// SetInviterResolver wires the user lookup that turns a non-numeric caller
+// subject into the IAM user id recorded as the inviter.
+func (s *TenantGRPCServer) SetInviterResolver(r inviterResolver) {
+	s.inviters = r
 }
 
 // initialAdminInviter is the one owner-minting capability the tenant
@@ -285,9 +299,9 @@ func (s *TenantGRPCServer) CreateInitialAdminInvitation(
 	if req.GetEmail() == "" {
 		return nil, status.Error(codes.InvalidArgument, "email is required")
 	}
-	inviterID, ok := callerUserID(ctx)
-	if !ok {
-		return nil, status.Error(codes.FailedPrecondition, "the caller has no user id to record as the inviter")
+	inviterID, err := s.resolveInviterID(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	createReq := &platformservice.CreateInvitationRequest{
@@ -311,6 +325,35 @@ func (s *TenantGRPCServer) CreateInitialAdminInvitation(
 	return &platformv1.CreateInitialAdminInvitationResponse{
 		Invitation: invitationToProto(inv),
 	}, nil
+}
+
+// resolveInviterID returns the canonical IAM user id of the verified
+// caller. A decimal subject is already that id; a login name or
+// certificate email is looked up through the wired resolver. The caller
+// is refused FailedPrecondition when no resolver is wired or no stored
+// user matches.
+func (s *TenantGRPCServer) resolveInviterID(ctx context.Context) (uint64, error) {
+	if id, ok := callerUserID(ctx); ok {
+		return id, nil
+	}
+	if s.inviters == nil {
+		return 0, status.Error(codes.FailedPrecondition, "the caller has no user id to record as the inviter")
+	}
+	for _, email := range callerEmails(ctx) {
+		user, err := s.inviters.GetByEmail(ctx, email)
+		if err != nil {
+			var notFound platformservice.ErrUserNotFound
+			if errors.As(err, &notFound) {
+				continue
+			}
+			s.logger.Error("failed to resolve the inviter", "error", err)
+			return 0, status.Error(codes.Internal, "failed to resolve the inviter")
+		}
+		if user != nil && user.ID != 0 {
+			return user.ID, nil
+		}
+	}
+	return 0, status.Error(codes.FailedPrecondition, "the caller is not a stored IAM user to record as the inviter")
 }
 
 // UpdateTenant updates tenant metadata.

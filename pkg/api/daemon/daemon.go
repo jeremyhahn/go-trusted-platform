@@ -1480,6 +1480,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			if inv, ok := svc.(initialAdminInviter); ok &&
 				daemon.tenantService != nil && daemon.tenantService.grpcServer != nil {
 				daemon.tenantService.grpcServer.SetInitialAdminInviter(inv)
+				// A session or certificate subject is a login email; the
+				// user service resolves it to the inviter's IAM user id.
+				if users := reg.UserService(); users != nil {
+					daemon.tenantService.grpcServer.SetInviterResolver(users)
+				}
 			}
 		}
 	}

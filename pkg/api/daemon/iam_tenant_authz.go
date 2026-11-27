@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"slices"
 	"strconv"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
@@ -43,27 +44,54 @@ func callerTenant(ctx context.Context) (string, bool) {
 // identity resolved to. It reports false when the caller has none, or when
 // the id is not a positive decimal integer.
 func callerUserID(ctx context.Context) (uint64, bool) {
-	var subject string
-	if authCtx, ok := grpcapi.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
-		subject = authCtx.Subject
-	} else if authCtx, ok := quic.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
-		subject = authCtx.Subject
-	} else if authCtx, ok := mcp.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
-		subject = authCtx.Subject
-	} else if identity := IdentityFromContext(ctx); identity != nil {
-		subject = identity.UserID
-	} else if authCtx, ok := webiam.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
-		// The webservice REST path stores the verified platform token here.
-		subject = authCtx.Subject
-	} else if session, ok := webiam.GetSessionFromContext(ctx); ok && session != nil {
-		// The webservice REST path stores a verified IAM session here.
-		subject = session.UserID()
-	}
-	id, err := strconv.ParseUint(subject, 10, 64)
+	id, err := strconv.ParseUint(callerSubject(ctx), 10, 64)
 	if err != nil || id == 0 {
 		return 0, false
 	}
 	return id, true
+}
+
+// callerSubject returns the verified caller's raw subject: a decimal IAM
+// user id, or a login name or email that has to be resolved to one.
+func callerSubject(ctx context.Context) string {
+	subject, _ := callerPrincipal(ctx)
+	return subject
+}
+
+// callerPrincipal returns the verified caller's raw subject and, from the
+// same credential, the other names it carries (the mTLS certificate email
+// and common name, or the IAM session email).
+func callerPrincipal(ctx context.Context) (string, []string) {
+	if authCtx, ok := grpcapi.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
+		return authCtx.Subject, nil
+	} else if authCtx, ok := quic.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
+		return authCtx.Subject, nil
+	} else if authCtx, ok := mcp.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
+		return authCtx.Subject, nil
+	} else if identity := IdentityFromContext(ctx); identity != nil {
+		return identity.UserID, []string{identity.Email, identity.Name}
+	} else if authCtx, ok := webiam.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
+		// The webservice REST path stores the verified platform token here.
+		return authCtx.Subject, nil
+	} else if session, ok := webiam.GetSessionFromContext(ctx); ok && session != nil {
+		// The webservice REST path stores a verified IAM session here.
+		return session.UserID(), []string{session.Email()}
+	}
+	return "", nil
+}
+
+// callerEmails returns the verified caller's login names or emails, in
+// order and without blanks or repeats, for resolution to a stored IAM user.
+func callerEmails(ctx context.Context) []string {
+	subject, aliases := callerPrincipal(ctx)
+	var out []string
+	for _, v := range append([]string{subject}, aliases...) {
+		if v == "" || slices.Contains(out, v) {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 // authorizeIAMTenant refuses an IAM request that names a tenant other than
