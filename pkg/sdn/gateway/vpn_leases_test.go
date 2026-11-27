@@ -87,6 +87,21 @@ func recordedLease() gwstate.DesiredVPNLease {
 	}
 }
 
+// TestProjectedLease_RoundTripsTheClientDeadline pins the renew-bypass
+// marker through the control-plane record: a fresh projection rebuilt from
+// the record must still know the deadline the client last received.
+func TestProjectedLease_RoundTripsTheClientDeadline(t *testing.T) {
+	record := recordedLease()
+	lease, err := projectedLease(0, &record)
+	require.NoError(t, err)
+	lease.ClientExpiresAt = lease.ExpiresAt.Add(-30 * time.Minute)
+
+	back, err := projectedLease(0, desiredLease(lease))
+	require.NoError(t, err)
+	assert.True(t, back.ClientExpiresAt.Equal(lease.ClientExpiresAt),
+		"the client deadline survives the projection: got %v, want %v", back.ClientExpiresAt, lease.ClientExpiresAt)
+}
+
 // newProjectedRig is the vpn rig with a control plane that recorded lease-1
 // and enrols its device, over an IPAM holding the service's pool.
 func newProjectedRig(t *testing.T) (*vpnRig, *fakeLeaseControl) {

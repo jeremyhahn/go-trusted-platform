@@ -347,6 +347,24 @@ func TestRecordGatewayLease_RoundTripsThroughDesiredVPN(t *testing.T) {
 	assert.Equal(t, []gwstate.DesiredVPNLease{record}, section.Leases)
 }
 
+func TestRecordGatewayLease_KeepsTheClientDeadline(t *testing.T) {
+	svc, _ := newTestService(t)
+	svc.leases.now = func() time.Time { return testNow }
+	ctx := context.Background()
+	want := testLease("t", "lease-1")
+	record := desiredLease(&want)
+	record.ClientExpiresAt = record.ExpiresAt.Add(-30 * time.Minute)
+
+	require.NoError(t, svc.RecordGatewayLease(ctx, "gw-1", &record))
+
+	section, err := svc.DesiredVPN(ctx, "gw-1")
+	require.NoError(t, err)
+	require.Len(t, section.Leases, 1)
+	assert.True(t, section.Leases[0].ClientExpiresAt.Equal(record.ClientExpiresAt),
+		"the client deadline survives the control-plane record: got %v, want %v",
+		section.Leases[0].ClientExpiresAt, record.ClientExpiresAt)
+}
+
 func TestRecordGatewayLease_Refusals(t *testing.T) {
 	ctx := context.Background()
 	lease := testLease("t", "lease-1")
