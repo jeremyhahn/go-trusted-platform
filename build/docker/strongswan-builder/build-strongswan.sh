@@ -1,28 +1,5 @@
 #!/bin/bash
-# Build the Trusted Platform strongSwan apks for this container's
-# architecture. Runs inside the strongswan-builder container; see the
-# Makefile beside it for the host-side invocation.
-#
-# Inputs (environment):
-#   STRONGSWAN_VERSION  upstream release, e.g. 6.0.7
-#   STRONGSWAN_SHA256   sha256 of strongswan-$STRONGSWAN_VERSION.tar.bz2
-#   STRONGSWAN_SIGNER   fingerprint of the primary key that must have signed
-#                       the tarball (the strongSwan release signing key)
-#   STRONGSWAN_PLUGINS  the exact plugin set charon is built with
-#   P11_HOST_VERSION    apk version of trusted-platform-p11-host: the go-xkms
-#                       release its module is built from, as an apk version
-#   APK_KEY_NAME        file name of the apk signing key in /keys
-#                       (<name>.rsa, with <name>.rsa.pub beside it)
-# Directories and files (build/docker/run-builder.sh copies them with docker
-# cp; a bind mount would be resolved on the Docker daemon's filesystem, which
-# is not the checkout when the build runs in a CI job container):
-#   /keys        the apk signing key pair, copied in
-#   /build/modulehost.tar
-#                the module host's root filesystem (modulehost/Dockerfile,
-#                exported by `make ipsec-module-host`), copied in
-#   /output      <arch>/ apks, APKINDEX, SHA256SUMS, manifest.json; keys/,
-#                copied out when the build succeeds
-#   /build/src   tarball cache, a named docker volume
+# Build the Trusted Platform strongSwan apks for this container's architecture.
 set -euo pipefail
 
 : "${STRONGSWAN_VERSION:?STRONGSWAN_VERSION is required}"

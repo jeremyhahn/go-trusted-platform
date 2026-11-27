@@ -1,12 +1,5 @@
 #!/bin/bash
-# Entrypoint script for go-trusted-platform development container
-#
-# This entrypoint provides:
-# - Development environment setup
-# - OVS (Open vSwitch) service initialization
-# - Device permissions setup for KVM, TUN/TAP
-# - Kernel module loading
-# - Tool verification
+# Entrypoint for the go-trusted-platform development container.
 
 set -e
 

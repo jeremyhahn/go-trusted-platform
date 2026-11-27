@@ -1,18 +1,6 @@
 # shellcheck shell=bash
 #
-# Provisions a swtpm state directory the way a TPM leaves its manufacturer:
-# with an endorsement key (EK) and an EK certificate. swtpm_setup persists
-# the RSA 2048 EK at 0x81010001 and writes its certificate to NV index
-# 0x01C00002 (TCG EK Credential Profile). Real hardware never reaches the
-# platform without an EK, so the integration harness must not either:
-# platformd treats a TPM with no EK as uninitialized and goes down its
-# recovery path (CA m390).
-#
-# The EK certificate is signed by a swtpm_localca CA that is created on
-# first use in <state-dir>/localca, so the run needs no writable system
-# directory and leaves nothing behind outside the TPM state.
-#
-# Sourced by entrypoint.sh and run-integration-tests.sh.
+# provision_swtpm_state <state-dir>: give a swtpm state an EK at 0x81010001 and its certificate at NV index 0x01C00002.
 
 # provision_swtpm_state <state-dir>
 #

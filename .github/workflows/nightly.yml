@@ -1,165 +1,8 @@
-# nightly-template: v1.0 — the known-red and long-horizon jobs, off the push path.
-#
-# Owner ruling 2026-08-20 (fail-fast pipeline for iteration speed): jobs that
-# are known-red with tracked issues, or that verify a slow-moving property, do
-# NOT run per push — a known-red job burning runner-minutes per push produces
-# information we already have. They run here every night on the schedule below
-# (and on demand via workflow_dispatch), and are NOT in any merge gate. When
-# their tracked issues land, a job may move back to ci.yml — that move is
-# deliberate, not automatic.
-#
-# Repo-specific notes for go-trusted-platform:
-#
-#   fips  — ALSO in ci.yml since #853, on push to main and workflow_dispatch,
-#           outside CI Gate; both jobs run `make test-fips`.
-#
-#           STILL RED, on causes this repo cannot close. Retriaged 2026-09-03
-#           (#209), which fixed three of the four causes below plus the
-#           registry envelope. Read the corrections: the previous note here was
-#           wrong about which repository owns the Noise guard, and it
-#           undercounted, because a panicking test aborts the whole test binary
-#           and hides every test after it.
-#
-#           REMAINING, all owned elsewhere: pkg/api/noise (upstream, xkms #269),
-#           pkg/store/certstore (upstream, xkms #270), pkg/dns (#249, owner
-#           decision). Nothing in this repo will turn them green.
-#
-#           READ THIS BEFORE SIZING WORK FROM THIS JOB'S LOG: a failure count
-#           taken from it is a LOWER BOUND whenever a panic is involved. Go
-#           aborts the whole test binary on an unrecovered panic, so every test
-#           after it in that package never runs and never reports. Under
-#           fips140=only the enforcement is by PANIC, not by error — short HMAC
-#           keys, SHA-1, MD5 all panic — so this job hides failures far more
-#           than an ordinary suite does. pkg/bmc reported one failing test and
-#           had three (#209). Fix the first panic, re-run, and expect more.
-#
-#           WHAT IT TOLERATES (ruling 125): only the rows of
-#           .github/foreign-failures-fips.tsv, today the two go-tpm HMAC
-#           panics of go-quicbaas#1389 (crypto/hmac short key, raised in
-#           go-tpm tpm2.(*policySession).Authorize), fixed by adopting
-#           go-quicbaas v0.16.0-alpha:
-#             pkg/vpn/agent  TestXKMSTPM_IDevIDSignerSignsWithTheTPMKey
-#             pkg/app        TestDeviceActivation_IDevIDOverMTLS
-#           `make test-fips` hands a failed run to scripts/foreignfailures
-#           -job fips. A panic is excused only when its test, message and
-#           frame are a row's and nothing else fails. Because the panic hid the
-#           rest of its package, every other top-level test of that package is
-#           then rerun by explicit name (go test -list, then -run '^(...)$')
-#           under the same fips140=only environment and derived tags, and must
-#           pass. The lower-bound warning above is therefore answered for
-#           listed panics only: the rerun is what surfaces the hidden tests.
-#           docs/test/integration.md "The FIPS baseline".
-#
-#             pkg/dns          1 test, A FIFTH CAUSE, found 2026-09-03 and not
-#                              present in the run #209 was filed from.
-#                              `crypto/sha1: use of SHA-1 is not allowed`, via
-#                              miekg/dns.HashName from generateNSEC3Chain.
-#                              RFC 5155 defines exactly one NSEC3 hash and it is
-#                              SHA-1, so there is no approved option to select:
-#                              a FIPS deployment either falls back to NSEC or
-#                              refuses to sign. Ruling 7 territory, owner call.
-#                              Tracked as #249.
-#
-#           FIXED in #209, kept here as the record of what these were:
-#
-#             pkg/api/noise    11 tests. `noise: X25519 is unavailable in FIPS
-#                              build`. NOT this repo's guard — pkg/api/noise
-#                              contains no build-tagged file at all. The
-#                              refusal is go-truststrap's
-#                              pkg/noiseproto/dh_fips.go, reached through
-#                              quicbaas sdk/go/xkms/trust/bootstrap. It is what
-#                              docs/04 ruling 4 intends, and the approved-curve
-#                              variant ruling 4 anticipated now EXISTS upstream
-#                              (truststrap p256proto,
-#                              TSBOOT1_P256_AESGCM_SHA256, v0.3.0-alpha) but has
-#                              not propagated: xkms still pins truststrap
-#                              v0.2.0-alpha, so no released quicbaas carries it.
-#                              Tracked upstream; nothing to fix in this repo.
-#             pkg/crypto/aesgcm
-#                              3 tests. Seal/Open moved to
-#                              NewGCMWithRandomNonce. The "drops the TPM/HSM
-#                              entropy seam — owner call" note that stood here
-#                              was moot: Seal and Open had NO production caller
-#                              (pkg/app calls only GenerateKey, which never
-#                              built a GCM), so there was no seam in use to
-#                              drop. The reader now feeds GenerateKey, which
-#                              had silently ignored it.
-#             pkg/registry     Both AES-GCM sites moved. LocalKMSClient was a
-#                              PRODUCTION fix the nightly never showed: it had
-#                              no test at all, so a path registry init wires up
-#                              (registry_init.go) was broken under FIPS and
-#                              invisible. Its wire format — nonce || ciphertext
-#                              || tag — is byte-identical before and after,
-#                              pinned by a checked-in vector. The layer envelope
-#                              moved to v2 (nonce inside the ciphertext) with NO
-#                              migration and no v1 decoder: the owner confirmed
-#                              on 2026-09-03 that no registry had been deployed,
-#                              so no v1 envelope has ever existed outside a
-#                              test. The absence of a migration is the correct
-#                              outcome, not an oversight.
-#             pkg/bmc          1 test reported, THREE actually broken. The
-#                              panic in TestDeriveKeys_HMACSHA256 aborted the
-#                              binary before TestComputeAuthHMAC_SHA256 and
-#                              TestHMACSHA256_KnownVector could run. RMCP+ now
-#                              refuses a credential below the 112-bit HMAC floor
-#                              at session open with a typed error instead of
-#                              panicking mid-handshake — the check is a RUNTIME
-#                              one, because ruling 1 makes FIPS activation a
-#                              deployment decision, so an untagged binary run
-#                              under fips140=only would otherwise still crash.
-#                              RFC 4231's vectors moved behind !fips: their keys
-#                              are 4 bytes and cannot be lengthened.
-#             pkg/store/certstore
-#                              1 test. go-xkms certstore.ToString calls sha1.Sum
-#                              for a thumbprint. Upstream, tracked; this repo
-#                              only adapts the type.
-#
-#           Do NOT weaken this to fips140=on to make it green — see the
-#           template's reasoning: `on` permits non-approved algorithms, so the
-#           gate would report success while a regulated path used prohibited
-#           cryptography.
-#
-#           The earlier note here blamed go-quicbaas reaching uuid.NewSHA1
-#           through go-qrdb's deterministicUUID in package init (issue #15).
-#           That no longer reproduces. What DID reproduce for weeks was a
-#           harness defect: this job overrode BUILD_TAGS on the make command
-#           line, and a command-line variable beats every `BUILD_TAGS +=` in
-#           the Makefile, so the FIPS suite silently ran without codec_json,
-#           codec_msgpack, codec_cbor, raft, pkcs8, frost or objstore. Nineteen
-#           tests failed with `no codec available for encoding` and were read
-#           as FIPS findings. The job now sets WITH_FIPS=1, which appends.
-#
-#   trivy — runs in BOTH places since #187, and neither is redundant.
-#
-#           NOT MOVED from ci.yml: devops.md §8 is normative — `trivy fs` is
-#           BLOCKING on CRITICAL/HIGH and the gate job must include the security
-#           jobs in its needs. ci-template v1.9's reason for moving it,
-#           known-red from an undiagnosed install failure, does not hold here:
-#           trivy is green in this repo and caught two live HIGH CVEs on
-#           2026-08-19. The ci.yml job stays exactly as it was, still gating.
-#
-#           ADDED here as well, advisory, because the push gate can only judge
-#           a tree at the moment someone touches it, against the database of
-#           that day. A CVE published afterwards is invisible until the next
-#           push. Measured: main carried two HIGH browserslist CVEs for over a
-#           day behind a green badge, and the first symptom was four unrelated
-#           PRs going red at once — which reads as four authors' problem rather
-#           than one stale scan (#187).
-#
-#           Unlike fips, this job is expected GREEN. A red "Nightly / Trivy"
-#           means a vulnerability was published against a tree nobody changed,
-#           which is exactly the signal #187 exists to surface.
+# nightly-template: v1.0. Known-red and long-horizon jobs, off the push path.
 
 name: Nightly
 
-# Scheduled nightly by owner order 2026-11-22 (#2356): "the nightlys shouldnt
-# require any manual executiion, it should be getting run automatically!" That
-# order supersedes the 2026-10-11 no-schedule rule (and the dispatch-only
-# setup of #852) for this Nightly workflow only. The slot is `5 6 * * *`
-# (06:05 UTC). workflow_dispatch stays, so it can still be run by hand on main
-# or on a branch. Every job runs on ubuntu-latest (github.com hosted), so no
-# self-hosted runner is used at night. The workflow keeps its name, so its
-# statuses keep their `Nightly / ...` contexts.
+# Nightly schedule.
 on:
   workflow_dispatch:
   schedule:
@@ -171,22 +14,15 @@ permissions:
 
 env:
   GO_VERSION: "1.27.4"
-  # Builds never resolve through a workspace: first-party modules come from
-  # Gitea tags (conventions/dependency-resolution.md §2).
+  # Builds never resolve through a workspace.
   GOWORK: "off"
   GOFLAGS: "-buildvcs=false"
 
 jobs:
-  # The same job runs in ci.yml on push to main. Its definition — tags,
-  # GOFIPS140, GODEBUG=fips140=only, build then test — is `make test-fips`;
-  # the steps here and there are only checkout, toolchain and cpio, so keep
-  # the two jobs' steps identical and change the FIPS suite in the Makefile.
+  # The same job runs in ci.yml on push to main.
   fips:
     name: FIPS (shard ${{ matrix.shard }}/4)
-    # Hosted runners (CA m2061): four shards of `make test-fips`, each a
-    # round-robin quarter of the package list (Makefile SHARD/SHARDS), to fit
-    # a hosted job's 4 cores and 6 hours. The job carries no module
-    # credential and no proxy setting.
+    # Hosted runners: four shards of `make test-fips` (Makefile SHARD/SHARDS).
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -201,49 +37,19 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      # pkg/diskimage/netboot builds each media set's installer initramfs,
-      # which extracts and repacks it with cpio (pkg/iso). The runner image
-      # has no cpio; ci.yml installs it for the same reason, and without it
-      # TestBuild_Set, TestBuild_SignsTheKernelWithTheKMSKey and
-      # TestBuild_X86Set fail here with nothing to do with FIPS.
+      # pkg/diskimage/netboot repacks its installer initramfs with cpio.
       - name: Install cpio for the netboot media tests
         run: sudo apt-get update && sudo apt-get install -y cpio
 
-      # libssl-dev: pkg/app's IDevID mTLS tests run go-tpm-tools' simulator,
-      # which compiles the reference TPM with cgo against OpenSSL (#149).
+      # libssl-dev: go-tpm-tools' simulator compiles the reference TPM against OpenSSL.
       - name: Install OpenSSL headers for the TPM simulator
         run: sudo apt-get install -y libssl-dev
 
-      # `make test-fips` mirrors the Test job's `make test` — same tags, same
-      # package scope, same exclusions — with ONLY the FIPS build tag and
-      # environment added (template v1.4.1). The Makefile carries the why.
+      # `make test-fips` is `make test` with the FIPS build tag and environment.
       - name: FIPS build and unit tests
         run: make test-fips SHARD=${{ matrix.shard }} SHARDS=4
 
-  # rpi-image — the Raspberry Pi factory image (docs/factory-image/). It is
-  # nightly because it needs what a push job cannot afford: binfmt for the
-  # arm64 assemble and U-Boot containers, a privileged container for the
-  # loop device and device-mapper, and an aarch64 guest under TCG emulation
-  # for the boot test. Three stages, cheapest first, each a real artifact:
-  #   1. `make virt-kernel-build` the stand-in's kernel (cached by the
-  #                               inputs' digests, so usually seconds)
-  #   2. `make image-rpi-qemu`    the emulated stand-in image, then the
-  #      + `make image-rpi`       SD-card image (layout checked by the suite).
-  #                               `platformctl diskimage create` generates the
-  #                               Secure Boot key set on a fresh runner and
-  #                               builds U-Boot for it (rpi_arm64 and
-  #                               qemu_arm64, cached like the kernel); the
-  #                               standalone `make uboot-build` needs the keys
-  #                               to exist already, so it is not run here.
-  #   3. `make integration-test-diskimage-userspace`
-  #                               the aarch64 platformd on musl against a
-  #                               swtpm in an arm64 container (minutes)
-  # The full emulated first boot through firstboot sealing and platformd
-  # (`make integration-test-diskimage`) runs on every run. While this workflow
-  # had a schedule it was dispatch-only: it takes 30-60 minutes on the
-  # development host, the runner's TCG timing is unmeasured, and a job that
-  # times out reports nothing. Since #852 every run is a dispatch, so the step
-  # needs no condition of its own.
+  # rpi-image: the Raspberry Pi factory image (docs/factory-image/).
   rpi-image:
     name: Raspberry Pi image
     runs-on: ubuntu-latest
@@ -255,18 +61,13 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      # binfmt for the arm64 containers, registered with the F flag so a
-      # chroot inside the assemble container can exec (the same registration
-      # docs/factory-image/user.md asks for on a build host).
+      # binfmt for the arm64 containers, with the F flag so a chroot inside the assemble container can exec.
       - name: Register binfmt handlers
         uses: docker/setup-qemu-action@v3
         with:
           platforms: linux/arm64
 
-      # The job container shares the runner host's kernel, where loop and
-      # dm_crypt are normally loaded already (visible under /sys/module).
-      # The container image has no kmod, so load a module only when it is
-      # absent, installing kmod first.
+      # The job container shares the runner host's kernel, where loop and dm_crypt are normally loaded.
       - name: Load kernel modules the assemble container relies on
         run: |
           for m in loop dm_crypt; do
@@ -277,14 +78,11 @@ jobs:
             test -d "/sys/module/$m"
           done
 
-      # The userspace suite's software TPM runs on the runner, natively:
-      # swtpm cannot create its sockets inside a qemu-user emulated container.
+      # swtpm runs on the runner: it cannot create its sockets in a qemu-user container.
       - name: Install swtpm for the userspace suite
         run: sudo apt-get update && sudo apt-get install -y swtpm
 
-      # Alpine's aarch64 kernels have no memory-mapped TIS TPM driver, so the
-      # QEMU stand-in boots a platform-built kernel; cached by its inputs'
-      # digests like U-Boot, a cold build is a 20-40 minute cross-compile.
+      # Alpine's aarch64 kernels lack the memory-mapped TIS TPM driver, so the QEMU stand-in boots a platform-built kernel, cached by its inputs' digests.
       - name: Build the virt kernel
         run: make virt-kernel-build
 
@@ -320,49 +118,7 @@ jobs:
             build/docker/virt-kernel-builder/output/*/config-*
             build/docker/virt-kernel-builder/output/*/SHA256SUMS
 
-  # A workflow_dispatch run publishes no commit status of its own (nor did the
-  # `schedule` run this workflow had until #852), so without this job a red
-  # run turns nothing red anywhere and nobody finds out. This puts the result
-  # on the commit the run judged: GITHUB_SHA is the head of the ref it was
-  # dispatched on, so a dispatch on a branch marks that branch's head, not
-  # main's.
-  #
-  # It is deliberately NOT named `CI / ...`. The nightly jobs are not in any
-  # merge gate (owner ruling 2026-08-20) and `main`'s branch protection
-  # requires exactly one context, `CI / CI Gate (pull_request)`. This adds a
-  # context nothing requires: visibility, not gating.
-  #
-  # Why a separate job rather than a step inside `fips`: measured on this
-  # Gitea (1.27.1, probe matrix on run 9586), the statuses API is gated on the
-  # token holding repository WRITE, and `permissions:` understands `contents`
-  # but not `statuses` — `contents: read` + `statuses: write` returns 403
-  # ("user should have a permission to write to a repo"), a bare `contents:
-  # write` returns 201, and omitting the block entirely also returns 403
-  # because the default is read-only. So publishing a status costs
-  # `contents: write`. Confining that to a job that checks out nothing and
-  # runs one curl keeps the write token away from the job that compiles and
-  # runs the suite.
-  # Trivy runs here IN ADDITION to ci.yml, not instead of it. The two answer
-  # different questions and both are needed:
-  #
-  #   ci.yml (push + PR, BLOCKING)  "does this change introduce a
-  #                                  vulnerability?" — judges a diff.
-  #   here   (dispatched, advisory) "has a vulnerability been published since
-  #                                  anyone last touched main?" — judges the
-  #                                  tree against today's database.
-  #
-  # Since #852 there is no schedule, so the second question is answered only
-  # when someone dispatches this workflow; until then, the newest answer is
-  # ci.yml's trivy on the last push to main.
-  #
-  # Without the second, main's green Trivy badge means "no CVEs as of the last
-  # push" while everyone reads it as "no CVEs". Measured: main carried two HIGH
-  # browserslist CVEs for over a day behind a green badge, and the first symptom
-  # was four unrelated PRs going red at once — which reads as four authors'
-  # problem, not one stale scan (#187).
-  #
-  # This job is NOT a merge gate, like everything else in this file. ci.yml's
-  # blocking trivy job is untouched and remains the gate devops.md §8 requires.
+  # A workflow_dispatch run publishes no commit status, so this job publishes one.
   trivy:
     name: Trivy
     runs-on: ubuntu-latest
@@ -371,11 +127,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # Scan flags are kept identical to ci.yml's gate ON PURPOSE: a nightly
-      # that scanned a different tree, or at a different severity, would report
-      # a state no push gate ever judges, and the two would disagree for
-      # reasons nobody could reconstruct. If ci.yml's flags change, change
-      # these in the same commit.
+      # Scan flags match ci.yml's gate.
       - name: Trivy scan (SARIF for code scanning)
         if: github.server_url == 'https://github.com'
         uses: aquasecurity/trivy-action@master
@@ -409,8 +161,7 @@ jobs:
           skip-dirs: test,examples,vbmc,web/node_modules
           trivyignores: .trivyignore
 
-      # Gitea leg: trivy-action's setup step cannot authenticate to github.com
-      # from a Gitea runner, so install the CLI and run the identical scan.
+      # Off github.com, install the trivy CLI and run the same scan.
       - name: Install Trivy CLI
         if: github.server_url != 'https://github.com'
         run: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
@@ -426,18 +177,11 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     permissions:
-      # BOTH are needed, one per host. Gitea gates the statuses API on
-      # repository write and does not understand a `statuses` scope; GitHub
-      # does understand it and, once `permissions:` is declared explicitly,
-      # withholds status creation without it.
+      # Both are needed, one per host.
       contents: write
       statuses: write
     steps:
-      # GITHUB_API_URL is the API root on both hosts — Gitea's `<root>/api/v1`,
-      # GitHub's `https://api.github.com` — and POST
-      # /repos/{owner}/{repo}/statuses/{sha} takes the same body on each, so no
-      # `github.server_url` guard is needed (devops.md §1). GITHUB_RUN_ID, never
-      # GITHUB_RUN_NUMBER: a run's id and its number are different identifiers.
+      # POST /repos/{owner}/{repo}/statuses/{sha} works the same on every forge.
       - name: Publish commit status
         env:
           CI_TOKEN: ${{ github.token }}
@@ -448,12 +192,7 @@ jobs:
           set -uo pipefail
           target="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
-          # Each status is posted independently and the exit codes are collected
-          # at the end, rather than letting `set -e` abort on the first failure.
-          # Under `set -e` a transient failure publishing FIPS would return
-          # before Trivy was ever posted — silently suppressing the one signal
-          # #187 exists to make visible. A publish failure must still fail the
-          # step, so neither is swallowed either.
+          # Each status is posted independently; the exit codes are collected at the end.
           publish() {
             local state="$1" context="$2" description="$3"
             echo "publishing ${context}: ${state}"
@@ -468,16 +207,11 @@ jobs:
           echo "fips=${{ needs.fips.result }} state=${STATE}"
           publish "${STATE}" "Nightly / FIPS" "FIPS suite (not a merge gate)" || rc=1
 
-          # A SEPARATE context, never folded into the FIPS one. FIPS is
-          # expected-red today (see the header) while trivy is expected-green,
-          # so a combined status would be permanently red and the trivy signal
-          # — the whole point of #187 — would be invisible inside it.
+          # A separate context, never folded into the FIPS one.
           echo "trivy=${{ needs.trivy.result }} state=${TRIVY_STATE}"
           publish "${TRIVY_STATE}" "Nightly / Trivy" "CVEs published since the last push (not a merge gate)" || rc=1
 
-          # Its own context for the same reason: the image build, the U-Boot
-          # build and the arm64 userspace suite are one signal that must stay
-          # readable beside the two above.
+          # Its own context: the image build, the U-Boot build and the arm64 userspace suite.
           echo "rpi-image=${{ needs.rpi-image.result }} state=${RPI_STATE}"
           publish "${RPI_STATE}" "Nightly / Raspberry Pi image" "factory image build, U-Boot and the aarch64 userspace suite (not a merge gate)" || rc=1
 

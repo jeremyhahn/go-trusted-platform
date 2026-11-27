@@ -1,13 +1,4 @@
-# Makefile for Trusted Platform Standalone Reference Architecture
-# Wraps docker-compose for easy deployment management
-#
-# Prerequisites:
-#   make build-devcontainer   - Build the devcontainer image (first time only)
-#
-# Quick Start:
-#   make up        - Start all services
-#   make down      - Stop services
-#   make help      - Show all available targets
+# Trusted Platform standalone reference architecture: wraps docker compose.
 
 COMPOSE := docker compose
 COMPOSE_FILE := docker-compose.yaml
@@ -68,9 +59,7 @@ pull:
 	@echo "$(GREEN)Pulling latest images...$(NC)"
 	$(COMPOSE) pull
 
-# =============================================================================
-# LIFECYCLE
-# =============================================================================
+# Lifecycle
 
 .PHONY: up
 up: build-devcontainer
@@ -97,9 +86,7 @@ clean:
 	$(COMPOSE) down -v --remove-orphans
 	@echo "$(GREEN)✓ Clean complete$(NC)"
 
-# =============================================================================
-# INDIVIDUAL SERVICES
-# =============================================================================
+# Individual services
 
 .PHONY: up-server
 up-server:
@@ -119,9 +106,7 @@ up-client:
 	$(COMPOSE) up -d client
 	@echo "$(GREEN)✓ Client started$(NC)"
 
-# =============================================================================
-# MONITORING
-# =============================================================================
+# Monitoring
 
 .PHONY: status
 status:
@@ -156,9 +141,7 @@ logs-gateway:
 logs-client:
 	$(COMPOSE) logs -f client
 
-# =============================================================================
-# DEBUGGING
-# =============================================================================
+# Debugging
 
 .PHONY: shell-server
 shell-server:
@@ -172,9 +155,7 @@ shell-gateway:
 shell-client:
 	$(COMPOSE) exec client /bin/sh
 
-# =============================================================================
-# TESTING
-# =============================================================================
+# Testing
 
 .PHONY: test-routing
 test-routing:

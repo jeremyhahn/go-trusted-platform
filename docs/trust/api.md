@@ -37,7 +37,7 @@ remote verb that returned a node's trust decision, or that set its anchor, would
 let a caller influence what the node trusts. This is a design decision
 ([architecture.md §7](architecture.md)), not a gap, so there is no
 `docs/13 G<n>` reference. If a remote trust capability is ever required it needs
-an owner ruling and an `MISSING — docs/13 G<n>` entry on every transport at the
+a decision and an `MISSING — docs/13 G<n>` entry on every transport at the
 same time.
 
 ## 3. Go surface

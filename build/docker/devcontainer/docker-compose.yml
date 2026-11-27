@@ -1,8 +1,4 @@
-# Docker Compose configuration for go-trusted-platform integration testing
-# Provides full SDN/OVS/QEMU capabilities for comprehensive testing
-#
-# All containers use "trusted-platform-" prefix to avoid conflicts with
-# other projects (go-xkms, go-quicbaas, etc.) running on the same system.
+# Docker Compose for go-trusted-platform integration testing, with SDN, OVS and QEMU.
 
 services:
   # Main development and testing service
@@ -11,8 +7,7 @@ services:
     container_name: trusted-platform-devcontainer
     hostname: trusted-platform-devcontainer
 
-    # Built by `make build-devcontainer` (the Dockerfile's integration stage,
-    # repository-root context, GO_IMAGE from scripts/tool-pins.sh), never here.
+    # Built by `make build-devcontainer`, never here.
     pull_policy: never
 
     # Privileged mode required for OVS and QEMU
@@ -39,7 +34,6 @@ services:
       # Project workspace
       - ../../../:/workspace:cached
 
-      # Mount sibling projects for local go.mod replace directives
       # Sibling module checkouts, mounted under /sources for a local go.work.
       - ../../../../go-trusted-ca:/sources/go-trusted-ca:cached
       - ../../../../go-quicbaas:/sources/go-quicbaas:cached
@@ -230,11 +224,7 @@ services:
     tty: true
     command: bash
 
-  # Virtual BMC responders used by BMC cert-management integration
-  # tests. Built from test/integration/bmc/vbmc -- see that directory's
-  # README.md for endpoints and env vars. Two flavors run in parallel
-  # so tests can cover both the Supermicro vendor branch (primary
-  # ATEN CGI path) and a generic non-Supermicro branch.
+  # Virtual BMC responders for the BMC certificate-management tests.
   vbmc-supermicro:
     image: trusted-platform-vbmc:latest
     build:
@@ -247,9 +237,7 @@ services:
       VBMC_VENDOR: "Supermicro"
       VBMC_CN: "vbmc-supermicro.example.internal"
       VBMC_LOG_LEVEL: "info"
-      # IPMI 2.0 RMCP+ simulator -- real BMCs use UDP/623 but
-      # containers can't always bind privileged ports, so we use
-      # 6230. Integration tests address this via harness.Endpoint().
+      # IPMI 2.0 RMCP+ simulator on UDP 6230, since containers cannot always bind 623.
       VBMC_IPMI_ADDR: ":6230"
       VBMC_IPMI_USER: "ADMIN"
       VBMC_IPMI_PASSWORD: "ADMIN"

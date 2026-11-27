@@ -50,7 +50,7 @@ Trusted DHT design is a global, reputation-governed, TPM-attested,
 currency-bearing overlay with its own consensus, CA pool and content
 distribution. The SDN code is intra-fabric plumbing. **Do not treat either as a
 partial implementation of the other, and do not extend the SDN packages toward
-the design without an explicit owner decision.**
+the design without an explicit decision.**
 
 ## 3. The problem the design addresses
 
@@ -288,8 +288,7 @@ disagree, this folder wins.
 
 ## 11. What has to happen before this design is built
 
-1. An owner decision to build it. New features are the owner's authority alone;
-   an agent that finds this folder and starts implementing is out of bounds.
+1. A decision to build it; this folder alone does not authorize implementation.
 2. The `160-bit` / `32-byte NodeID` contradiction (§9) resolved.
 3. The relationship to `pkg/sdn/gateway/p2p` settled: shared libp2p host, or two
    independent stacks. Building either way without deciding produces a

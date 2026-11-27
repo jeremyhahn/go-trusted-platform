@@ -1,18 +1,5 @@
 #!/bin/sh
-# Prints the cache key of the devcontainer's apt layer (APT_REFRESH in
-# build/docker/devcontainer/Dockerfile): a sha256 over the SHA256: lines of the
-# amd64 and arm64 main/binary-<arch>/Packages* indexes listed in the InRelease
-# files of the suites the image's apt sources name. The key changes when Debian
-# publishes a package to any of those suites, so a fix published mid-day
-# rebuilds the layer and reaches `trivy image` on the next build; it does not
-# change when Debian only re-signs InRelease with a new Date: (Tenant Agent
-# ruling 676, item 2), so the registry layer cache (ruling 675) keeps hitting.
-# Same idea as APK_INDEX_SUM (scripts/apk-index-sum.sh).
-#
-# APT_SUITES, whitespace separated, replaces the suite URLs (tests).
-#
-# If a suite cannot be fetched or parsed, the key falls back to the UTC date
-# and hour and a warning goes to stderr; the build goes on.
+# Prints the cache key of the devcontainer's apt layer: a sha256 over the amd64 and arm64 package index digests of the image's apt suites.
 set -eu
 set -f
 

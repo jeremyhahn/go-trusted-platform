@@ -718,4 +718,4 @@ Distinguish that from a 400 for a malformed request body.
 
 REST under `/api/v1`; gRPC package `platform.v1`. Nothing deprecated. The two
 parallel tenant trees in §2 and the two meanings of "tenant" in §6 are
-duplications awaiting an owner ruling.
+duplications awaiting a decision.

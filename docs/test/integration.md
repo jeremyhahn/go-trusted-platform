@@ -427,7 +427,7 @@ and the closing summary lists every key with its `PASS` or `FAIL`.
 #### Legs
 
 CI runs the suite as parallel legs, one matrix job each, so that no leg runs
-longer than 20 minutes (#1119, ruling 211 (4)); run serially, the suite took
+longer than 20 minutes; run serially, the suite took
 48. The runner's `INTEGRATION_LEGS` splits `ALL_TARGETS`, with `compute`, into
 legs, and `leg-<n>` runs leg n exactly as `all` runs the whole: in its own
 container, with the same OVS, swtpm and `platformd` bootstrap, its daemon-free
@@ -446,7 +446,7 @@ identity (a SHA-256 of the image's `RootFS.Layers` diff ids), and hands the
 image to legs on other daemons. On a self-hosted runner with the repository
 variable `CI_IMAGE_REGISTRY` (host:port) set, it pushes the image to that LAN
 registry as `go-trusted-platform/it-image:<image id hex>` and outputs the
-reference as `image_ref` (ruling 675: the 3.4 GB artifact, downloaded again by
+reference as `image_ref` (the 3.4 GB artifact, downloaded again by
 each leg, saturated the uplink); a registry that wants a login takes the
 optional secrets `CI_IMAGE_REGISTRY_USER` and `CI_IMAGE_REGISTRY_PASSWORD`.
 The push step and each leg's pull step never run `docker login`: they write
@@ -807,12 +807,12 @@ devcontainer image so a developer and CI run the same thing:
 | Job | Tier | What it runs |
 |-----|------|--------------|
 | `changes` | PR | Lists the PR's changed files and sets `docs_only` (below) (`ci.yml:162`) |
-| `image` | PR | `make -s it-image IT_WARM_CACHE=0` names the integration image, reused when the daemon holds that tag and otherwise built with `make docker-build-integration`; the lease spans only that build and the `docker save` that `trivy image` scans, and is released before `make docker-build-toolchain` (`ci.yml:280-286`), then, in the toolchain image through `scripts/in-toolchain-image.sh`: `make fmt-check`, `make vet` and `make lint` (`:292-308`); the releasability test on a docs-only PR (`:312-316`); off a docs-only PR, `make build build-no-web rpi-binaries`, `go build ./...`, the `sdk/go` build and consumer check, `make test test-sdk-go` and `make test-race` (`:323-369`); on every event, a docs-only PR included, `make deps-check` (ci-template v1.28, `:391-396`); in the full tier, `make security-novuln` (`make security` without govulncheck, which runs in `vuln`) and `trivy image` on the integration image (`:406-416`). Each step's container is memory-limited (see "Memory limits") |
+| `image` | PR | `make -s it-image IT_WARM_CACHE=0` names the integration image, reused when the daemon holds that tag and otherwise built with `make docker-build-integration`; the lease spans only that build and the `docker save` that `trivy image` scans, and is released before `make docker-build-toolchain` (`ci.yml:280-286`), then, in the toolchain image through `scripts/in-toolchain-image.sh`: `make fmt-check`, `make vet` and `make lint` (`:292-308`); the releasability test on a docs-only PR (`:312-316`); off a docs-only PR, `make build build-no-web rpi-binaries`, `go build ./...`, the `sdk/go` build and consumer check, `make test test-sdk-go` and `make test-race` (`:323-369`); on every event, a docs-only PR included, `make deps-check`; in the full tier, `make security-novuln` (`make security` without govulncheck, which runs in `vuln`) and `trivy image` on the integration image (`:406-416`). Each step's container is memory-limited (see "Memory limits") |
 | `lint-gates` | PR | `make lint-gates`, the repo's grep gates (today `check-insecure-tls`), on the runner (`ci.yml:459`) |
 | `arch-gates` | PR | No direct go-objstore import outside a storage seam (this repo has none) (`ci.yml:466`) |
 | `sdkjs` | docs | The JS SDK's unit tests and lint, on the runner (`ci.yml:495`) |
 | `web` | full | The web console's tests, typecheck and build (`ci.yml:535-566`) |
-| `integration-image` | full | `make docker-build-it` once per run, or the daemon's image of the same content tag; outputs the image id a leg on its daemon leases and the layer identity a leg that loads the image compares, and, on a self-hosted runner with `CI_IMAGE_REGISTRY` set, pushes the image to that LAN registry for a leg on another daemon to pull (ruling 675), else uploads it as the artifact such a leg loads (see "Legs"); needs `image` (`ci.yml:568-678`) |
+| `integration-image` | full | `make docker-build-it` once per run, or the daemon's image of the same content tag; outputs the image id a leg on its daemon leases and the layer identity a leg that loads the image compares, and, on a self-hosted runner with `CI_IMAGE_REGISTRY` set, pushes the image to that LAN registry for a leg on another daemon to pull, else uploads it as the artifact such a leg loads (see "Legs"); needs `image` (`ci.yml:568-678`) |
 | `integration` | full | A matrix job per leg: `make integration-test-leg LEG=<n> IT_PREBUILT=1` in the run's leased integration image, under a per-leg `IT_PROJECT` and the run's content tag `IT_IMAGE` and the `IT_MEMORY` limit, torn down on every exit (see "Legs" and "Memory limits"); needs `integration-image` (`ci.yml:680-853`) |
 | `soak` | nightly | `make integration-test` looped for `SOAK_MINUTES` (below), under the same `IT_MEMORY` limit (`ci.yml:867-974`) |
 | `fips` | full | `make test-fips`; outside the gate (`ci.yml:976-992`) |
@@ -859,7 +859,7 @@ every full-tier job passed or was not selected, and `soak` passed or skipped
 off the schedule and dispatch (`ci.yml:743-744`). `fips` is in none of its
 `needs`, env or check lines.
 
-The `soak` job (ci-template v1.23, `ci.yml:592-681`) builds its own per-run
+The `soak` job builds its own per-run
 integration image (`-soak` tag) and loops `make integration-test`
 (`SOAK_TARGET`) until `SOAK_MINUTES` (30) have passed, under a 90-minute job
 timeout. Each iteration is its own compose project
@@ -904,8 +904,7 @@ which every `make docker-build*` target (the CI image job's included) sets with
 the image's Debian mirrors, so the layer is rebuilt whenever Debian publishes a
 package to any of them. Debian re-signs `InRelease` with a new `Date:` several
 times a day without changing a package; that keeps the key, so the registry
-layer cache keeps hitting (Tenant Agent ruling 676; the key used to be the
-newest `Date:` and missed the cache on every re-sign). `APT_SUITES` replaces the
+layer cache keeps hitting. `APT_SUITES` replaces the
 suite URLs (the test in `pkg/arch/apt_index_key_test.go` serves fake ones). If
 a fetch fails, the key falls back to the UTC date and hour and the script
 prints a warning; the build goes on. The Dockerfile's dated default applies
@@ -950,7 +949,7 @@ build on the project's own `docker-container` BuildKit builder,
 `go-trusted-platform-ci` (`BUILDX_BUILDER`, which `make docker-build` honours;
 empty uses the daemon's builder), so the build cache is this project's alone:
 each job prunes it to `BUILDKIT_KEEP_STORAGE` (40 GB) before its build and at
-teardown, never with a global `docker builder prune` (ruling 108). A cancelled
+teardown, never with a global `docker builder prune`. A cancelled
 run whose teardown did not run leaves its lease; its cache is trimmed by the
 next job.
 
@@ -1102,8 +1101,7 @@ To run a stage locally as CI does: `make docker-build`, then
 
 ### Foreign-Failure Baseline
 
-Company Agent ruling 125: a failure in a class that ruling 104 counts as
-foreign (fixed only by an upstream release this repository pins, and named
+A failure counted as foreign (fixed only by an upstream release this repository pins, and named
 on an open upstream issue) does not block a merge. Such failures are listed in
 `.github/foreign-failures.tsv`, beside CI. arm-merge stays the one gate, and
 nothing is admin-merged.

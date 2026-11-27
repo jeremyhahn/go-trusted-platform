@@ -1,6 +1,6 @@
 # UI route audit: every call the web UI makes, checked against the server
 
-Issue #2032, epic #1665 (ruling 972 wave 1). `docs/ui/coverage-matrix.md` maps backend operations to pages; this file goes the other way: every REST path or SDK method that `web/src` calls, and whether the daemon serves it.
+Issue #2032, epic #1665. `docs/ui/coverage-matrix.md` maps backend operations to pages; this file goes the other way: every REST path or SDK method that `web/src` calls, and whether the daemon serves it.
 
 Every area below is registered only when its backend server is non-nil (for example `gatewayRoutes`, `pkg/webservice/v1/router.go:723`). Each such area was checked against `configs/platform/templates/single-node/default.yaml`; rows whose backend is off under that config are marked `not-configured`.
 

@@ -6,9 +6,7 @@
 
 ## The decision
 
-Ruling 240 item 4, verbatim:
-
-> Gateway services architecture (owner decision, go-trusted-platform): the network services (bgp, dhcp, dns and the rest) ship as one build artifact, a multi-call binary, and run as one OS process per service, each in its own cgroup with minimal capabilities; platformd is the single supervisor with a restart policy with backoff, sd_notify-style readiness and health; one process owns the kernel routing state (the zebra role) so a BGP crash does not withdraw routes, and BGP implements graceful restart per RFC 4724; this is a move with history and tests, not a rewrite: services keep their code and gain a process boundary and an IPC seam over the platform local transport. go-trusted-platform gets a SPEC row and a design PR for the supervisor model, routed by Software as the next docs item after #1190 lands; reported to the owner at open and at merge.
+> Gateway services architecture: the network services (bgp, dhcp, dns and the rest) ship as one build artifact, a multi-call binary, and run as one OS process per service, each in its own cgroup with minimal capabilities; platformd is the single supervisor with a restart policy with backoff, sd_notify-style readiness and health; one process owns the kernel routing state (the zebra role) so a BGP crash does not withdraw routes, and BGP implements graceful restart per RFC 4724; this is a move with history and tests, not a rewrite: services keep their code and gain a process boundary and an IPC seam over the platform local transport.
 
 #557 proposed systemd template units as the supervisor. This decision settles
 that: platformd is the supervisor, and one process owns the routing state.

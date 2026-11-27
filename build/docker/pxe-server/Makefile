@@ -2,11 +2,7 @@ ISODIR         ?= volume/iso
 IMAGE_NAME     ?= pxe-server
 CONTAINER_NAME ?= pxe-server
 NETWORK_NAME   ?= pxe-net
-# The PXE network is the deployment's: SUBNET, NETMASK, IP_RANGE, GATEWAY,
-# STATIC_IP, DHCP_RANGE_START and DHCP_RANGE_END have no defaults, and the
-# pxe-server target refuses to run without them. The image itself is generic:
-# build and push need none of them, and the container writes its DHCP scope
-# from the DHCP_* environment at start.
+# The PXE network is the deployment's: the network variables have no defaults and pxe-server refuses to run without them.
 NETWORK_VARS   := SUBNET NETMASK IP_RANGE GATEWAY STATIC_IP DHCP_RANGE_START DHCP_RANGE_END
 QEMU_DISK      ?= debian12.qcow2
 QEMU_DISK_SIZE ?= 5G

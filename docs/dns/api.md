@@ -252,4 +252,4 @@ server, this route lets a caller claim any unclaimed zone name.
 
 REST under `/api/v1`; gRPC package `platform.v1`. Nothing is formally
 deprecated, but the older MCP DNS tool family in §3 is the de-facto legacy half
-of a duplicated surface awaiting an owner ruling.
+of a duplicated surface awaiting a decision.

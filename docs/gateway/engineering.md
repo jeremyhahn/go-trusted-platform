@@ -876,8 +876,7 @@ Stateless NAT failover is tracked in #596; conntrack/NAT state sync is #710.
 ### The process model — `pkg/sdn/gateway/process` (#557)
 
 > This section describes the code today, where `gatewayd serve` is the
-> supervisor. The target is [supervisor.md](supervisor.md) (#1191, ruling 240
-> item 4): one process per service under `platformd` as the single supervisor.
+> supervisor. The target is [supervisor.md](supervisor.md) (#1191): one process per service under `platformd` as the single supervisor.
 > It supersedes #557's open questions about the supervisor (systemd template
 > units).
 
@@ -1902,7 +1901,7 @@ them.
 #### The wireguard process (#1698)
 
 The management VPN's WireGuard data plane runs in its own supervised
-`wireguard` process (ruling 942), a kernel-class row whose one service is
+`wireguard` process, a kernel-class row whose one service is
 `vpn-wireguard`. `GatewayConfig.EnabledServices` enables it with the
 management VPN when the VPN's `data-planes` offer `wireguard`; the default
 plane is MASQUE alone, and a FIPS build refuses the kind at validation, so

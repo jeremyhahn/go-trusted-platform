@@ -1,25 +1,9 @@
 TARGET_OS               := linux
 TARGET_ARCH             := $(shell uname -m)
 
-# =============================================================================
-# Build Configuration Variables
-# =============================================================================
-#
-# This section defines all WITH_* variables for fine-grained build customization.
-# Variables are organized by project/feature area and use ?= for override support.
-#
-# Usage:
-#   make build WITH_AWS=1 WITH_RAFT=1
-#   make integration-test WITH_RAFT=1
-#   WITH_AWS=1 WITH_GCP=1 make build
-#
-# =============================================================================
+# Build configuration variables
 
-# -----------------------------------------------------------------------------
-# Cloud Provider Group Variables (umbrellas, owner ruling 683 (1))
-# Unset by default: the individual service toggles decide. 1 turns every
-# service of the provider on; 0 forces every one off, over the toggles.
-# -----------------------------------------------------------------------------
+# Cloud provider umbrellas, unset by default: 1 turns every service of the provider on, 0 forces every one off.
 WITH_AWS                ?=
 # WITH_AWS: unset = toggles decide; 1 = all AWS services (KMS, S3, compute) on; 0 = all off
 WITH_GCP                ?=
@@ -27,10 +11,7 @@ WITH_GCP                ?=
 WITH_AZURE              ?=
 # WITH_AZURE: unset = toggles decide; 1 = all Azure services (Key Vault, Blob, compute) on; 0 = all off
 
-# -----------------------------------------------------------------------------
-# go-quicbaas Build Variables
-# See: go-quicbaas/Makefile for full documentation
-# -----------------------------------------------------------------------------
+# go-quicbaas build variables
 
 # Distributed Features
 WITH_RAFT               ?= 1    # Raft cluster mode (required for embedded QuicBaaS)
@@ -54,10 +35,7 @@ WITH_STOMP              ?= 0    # STOMP 1.2 over WebSocket
 # External Dependencies
 WITH_L2_REDIS           ?= 0    # L2 Redis cache (requires external Redis)
 
-# -----------------------------------------------------------------------------
-# go-xkms Build Variables
-# See: go-xkms/Makefile for full documentation
-# -----------------------------------------------------------------------------
+# go-xkms build variables
 
 # Cryptography Backends
 WITH_PKCS8              ?= 1    # PKCS#8 software key storage (default backend)
@@ -72,35 +50,25 @@ WITH_GCP_KMS            ?= 0    # Google Cloud KMS
 WITH_AZURE_KV           ?= 0    # Azure Key Vault
 WITH_VAULT              ?= 0    # HashiCorp Vault
 
-# Cloud Compute Providers (individual control). Local compute (QEMU VMs +
-# containers) is always compiled; only the cloud providers are tag-gated.
+# Cloud compute providers.
 WITH_AWS_COMPUTE        ?= 0    # AWS EC2 NitroTPM compute orchestrator
 WITH_GCP_COMPUTE        ?= 0    # Google Compute Engine (Shielded/Confidential VM) orchestrator
 WITH_AZURE_COMPUTE      ?= 0    # Azure Trusted Launch VM orchestrator
 
-# -----------------------------------------------------------------------------
-# go-objstore Build Variables
-# Object storage backend selection
-# -----------------------------------------------------------------------------
+# go-objstore backends
 WITH_OBJSTORE_LOCAL     ?= 1    # Local filesystem storage (always enabled)
 WITH_OBJSTORE_S3        ?= 0    # AWS S3 storage
 WITH_OBJSTORE_MINIO     ?= 0    # MinIO storage
 WITH_OBJSTORE_GCS       ?= 0    # Google Cloud Storage
 WITH_OBJSTORE_AZURE     ?= 0    # Azure Blob Storage
 
-# -----------------------------------------------------------------------------
-# go-trusted-platform Build Variables
-# Platform-specific features
-# -----------------------------------------------------------------------------
+# go-trusted-platform features
 WITH_WEB                ?= 0    # Embed web frontend into binary (off by default for dev speed; fallback copies public_html.tar.gz into ISO)
 WITH_DESKTOP            ?= 0    # Build desktop GUI (requires Wails v2)
 WITH_P2P                ?= 0    # P2P/libp2p networking support
 WITH_FIPS               ?= 0    # FIPS 140-3 build tag (selects the FIPS crypto implementations at compile time; pair with GODEBUG=fips140=only)
 
-# -----------------------------------------------------------------------------
-# Codec Build Variables
-# Serialization format support
-# -----------------------------------------------------------------------------
+# Codecs
 WITH_CODEC_JSON         ?= 1    # JSON codec
 WITH_CODEC_MSGPACK      ?= 1    # MessagePack codec
 WITH_CODEC_CBOR         ?= 1    # CBOR codec
@@ -109,12 +77,7 @@ WITH_CODEC_TOML         ?= 0    # TOML codec
 WITH_CODEC_BSON         ?= 0    # BSON codec
 WITH_CODEC_PROTOBUF     ?= 0    # Protocol Buffers codec
 
-# =============================================================================
-# Cloud Provider Group Variable Expansion
-# Owner ruling 683 (1): an umbrella of 1 turns every service of the provider
-# on, 0 forces every one off. `override` wins over a toggle given on the
-# command line too; left unset, the individual toggles decide.
-# =============================================================================
+# Cloud provider umbrella expansion.
 ifeq ($(strip $(WITH_AWS)),1)
     override WITH_AWS_KMS        := 1
     override WITH_OBJSTORE_S3    := 1
@@ -143,46 +106,17 @@ else ifeq ($(strip $(WITH_AZURE)),0)
     override WITH_AZURE_COMPUTE  := 0
 endif
 
-# =============================================================================
-# Feature Dependency Validation
-# =============================================================================
+# Feature dependency validation
 ifeq ($(strip $(WITH_RAG)),1)
     ifneq ($(strip $(WITH_VECTOR)),1)
         $(error WITH_RAG=1 requires WITH_VECTOR=1)
     endif
 endif
 
-# =============================================================================
-# BUILD_TAGS Construction
-# Dynamically assembled based on WITH_* variables
-# Note: Using $(strip) to handle trailing whitespace from inline comments
-#
-# Core feature tags that the platform binary REQUIRES at runtime are
-# included unconditionally. Setting them to opt-in caused platformd to
-# ship without IAM, which then hard-failed at startup with "IAM service
-# not enabled". If a deployment wants to drop one of these, override by
-# building with -tags directly; the WITH_* env vars remain for legacy
-# control over truly optional features.
-# =============================================================================
-# gms_pure_go: the go-mysql-server dependency (indirect, via quicbaas,
-# bumped 2026-08-12) gates its regex package on `cgo || gms_pure_go`.
-# All platform binaries build with CGO_ENABLED=0 (Alpine/musl policy),
-# so the pure-Go implementation must be selected explicitly or the
-# build fails with "build constraints exclude all Go files" in
-# go-mysql-server/internal/regex.
-#
-# opa: the OPA policy engines (pkg/policy/opa, pkg/compute/container).
-# Without it they compile to stubs returning ErrOPANotBuilt (#1691).
+# BUILD_TAGS, assembled from the WITH_* variables.
 BUILD_TAGS := iam rest quic mcp cluster gms_pure_go opa
 
 # go-quicbaas tags.
-#
-# Cross-layer tag coordination: quicbaas features that ride on a qrdb
-# engine must enable the corresponding qrdb tag (qrdb's own tag names,
-# per the qrdb build-tag matrix). quicbaas's handlers are untagged and
-# compile against qrdb's stub seams, so omitting the qrdb tag does NOT
-# fail the build — the feature silently returns feature-disabled at
-# runtime. The pairings below keep that from ever happening.
 ifeq ($(strip $(WITH_RAFT)),1)
     BUILD_TAGS += raft
 endif
@@ -196,11 +130,7 @@ ifeq ($(strip $(WITH_RAG)),1)
     BUILD_TAGS += rag qrdb_vector
 endif
 
-# qrdb optional features (default OFF for the platform — lean build).
-# WITH_QRDB_SQL enables qrdb's SQL query engine (pkg/sql over
-# go-mysql-server; the gms_pure_go tag above keeps it CGO-free).
-# The MySQL/PostgreSQL wire frontends are engines over that SQL layer,
-# so enabling either implies qrdb_sql.
+# qrdb optional features, off by default.
 WITH_QRDB_SQL   ?= 0
 WITH_QRDB_MYSQL ?= 0
 WITH_QRDB_PGSQL ?= 0
@@ -304,13 +234,7 @@ ifeq ($(strip $(WITH_P2P)),1)
     BUILD_TAGS += platform_p2p
 endif
 
-# FIPS. Additive on purpose: the FIPS suite must compile and test the SAME
-# configuration the normal suite does, with only the crypto implementation
-# swapped. Overriding BUILD_TAGS on the command line instead would discard
-# every `BUILD_TAGS +=` above it — command-line variables win over makefile
-# assignments — and silently test a build with no codecs, no raft and no
-# frost. That is exactly how the nightly FIPS job spent weeks reporting
-# `no codec available for encoding` as if it were a FIPS finding.
+# FIPS.
 ifeq ($(strip $(WITH_FIPS)),1)
     BUILD_TAGS += fips
 endif
@@ -338,18 +262,7 @@ ifeq ($(strip $(WITH_CODEC_PROTOBUF)),1)
     BUILD_TAGS += codec_protobuf
 endif
 
-# GO_BUILD_TAGS (#960). ci-template v1.21 passes the repository's tag set to
-# lint, build, coverage, security and integration-test as a space-separated
-# make variable (handbook devcontainer.md §6). It is appended here, after
-# every `+=` above and before any variable is derived from BUILD_TAGS, so each
-# consumer — print-build-tags, every `go build`/`go test`, TEST_BUILD_TAGS and
-# the integration runner — reads it from this one place. Like WITH_FIPS it is
-# additive: it never replaces the derived set. Empty or unset changes nothing.
-#
-# The analysers that do not read BUILD_TAGS (golangci-lint, gosec,
-# govulncheck) take GO_BUILD_TAGS alone, comma separated, through
-# GO_BUILD_TAGS_CSV. `make check-go-build-tags` (run by `make test`) fails if
-# any of those targets drops it.
+# GO_BUILD_TAGS: the tag set CI passes to lint, build, coverage, security and integration-test.
 comma                   := ,
 empty                   :=
 space                   := $(empty) $(empty)
@@ -358,31 +271,13 @@ ifneq ($(GO_BUILD_TAGS_CSV),)
     BUILD_TAGS += $(GO_BUILD_TAGS)
 endif
 
-# =============================================================================
-# Build Tag Flags
-# =============================================================================
-# TAG-INDEPENDENT TARGETS (#390). Some `go test` invocations below deliberately
-# omit -tags, and that is verified per package rather than assumed:
-# `go test -list '.*' <pkg>` returns an IDENTICAL test set with and without
-# $(BUILD_TAGS) for pkg/crypto/{aesgcm,argon2}, pkg/store/datastore and its
-# kvstore, pkg/compute, pkg/bmc, pkg/cli/commands/bmc, pkg/api/rest, pkg/ntp,
-# and pkg/sdn/{vxlan,bgp,gateway,ipam,dhcp,openflow}. Measured 2026-09-04.
-# Those sites are marked `# tag-independent` so the omission reads as a
-# decision someone checked, not an oversight nobody noticed.
-#
-# pkg/storage/quicbaas is NOT in that set: 573 tests visible untagged against
-# 672 tagged, and a full untagged run passes green over 99 fewer tests than the
-# tagged one. Its targets pass $(BUILD_TAGS) explicitly for that reason.
+# Build tag flags
 
 BUILD_TAGS_ARG          := $(if $(strip $(BUILD_TAGS)),-tags '$(strip $(BUILD_TAGS))',)
 
-# Integration tests always need codec tags for QUIC protocol support.
-# The go-codec library uses build tags to compile real codecs vs stubs.
+# Integration tests need the codec tags for QUIC.
 INTEGRATION_CODEC_TAGS  := codec_msgpack codec_json codec_cbor
-# Integration builds carry the vector service (the WITH_VECTOR=1 tags), and
-# pkg/storage/quicbaas.TestConfig enables it in exactly such a build. The
-# factory's Vector assertion runs as a unit test; add these tags through
-# GO_BUILD_TAGS to run it against a real vector store.
+# Integration builds carry the vector service.
 INTEGRATION_VECTOR_TAGS := vector qrdb_vector
 TEST_BUILD_TAGS         := integration $(INTEGRATION_CODEC_TAGS) $(INTEGRATION_VECTOR_TAGS) $(strip $(BUILD_TAGS))
 TEST_BUILD_TAGS_ARG     := -tags '$(strip $(TEST_BUILD_TAGS))'
@@ -394,10 +289,7 @@ WEB_EMBED_DIR           := pkg/webserver/embed/dist
 DESKTOP_FRONTEND_SRC    := cmd/platformctl/frontend
 DESKTOP_FRONTEND_DIST   := cmd/platformctl/frontend/dist
 
-# The go command on PATH, or empty. A host without Go (CI's integration legs
-# build the integration image on a runner that has none, #1119) takes the
-# host's GOOS and GOARCH from uname and GOBIN from GO_IMAGE's install path, so
-# a target that only drives docker parses without go.
+# The go command on PATH, or empty.
 GO_CMD                  := $(shell command -v go 2>/dev/null)
 ARCH                    := $(if $(GO_CMD),$(shell go env GOARCH),$(patsubst x86_64,amd64,$(patsubst aarch64,arm64,$(shell uname -m))))
 OS                      := $(if $(GO_CMD),$(shell go env GOOS),$(shell uname -s | tr A-Z a-z))
@@ -419,8 +311,7 @@ GATEWAYD                ?= bin/gatewayd
 DEPLOYER_PIN            ?= bin/deployer-pin
 DEPLOY_AGENT            ?= bin/deploy-agent
 
-# Cross-compiled arm64 binaries land under their own directory so a native
-# x86-64 build never overwrites them (and vice versa).
+# Cross-compiled arm64 binaries go to their own directory.
 ARM64_BIN_DIR           ?= bin/aarch64
 PLATFORMD_ARM64         ?= $(ARM64_BIN_DIR)/platformd
 PLATFORMCTL_ARM64       ?= $(ARM64_BIN_DIR)/platformctl
@@ -454,9 +345,7 @@ LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.GitTag=${GIT_TAG}
 LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.BuildUser=${USER}
 LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.BuildDate=${BUILD_DATE}
 LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.Version=${APP_VERSION}
-# gatewayd carries its own version vars (pkg/sdn/gateway/commands) so it
-# never links the platformd composition root pkg/app (see
-# pkg/arch/gatewayguard_test.go).
+# gatewayd carries its own version vars, so it never links pkg/app (pkg/arch/gatewayguard_test.go).
 GATEWAYD_VERSION_PKG=github.com/jeremyhahn/$(PACKAGE)/pkg/sdn/gateway/commands
 LDFLAGS+= -X $(GATEWAYD_VERSION_PKG).Name=${APPNAME}
 LDFLAGS+= -X $(GATEWAYD_VERSION_PKG).Repository=${GIT_REPO}
@@ -477,9 +366,7 @@ CONFIG_YAML                 ?= standalone/web-test.example.yaml
 
 ROOT_CA                     ?= root-ca
 INTERMEDIATE_CA             ?= intermediate-ca
-# DOMAIN has no default: it is a deployment value. webservice-verify-tls
-# requires it, and SWAGGER_HOST follows it (unset leaves the OpenAPI host
-# empty, so the docs resolve against whichever host serves them).
+# DOMAIN has no default; webservice-verify-tls requires it and SWAGGER_HOST follows it.
 DOMAIN                      ?=
 
 SOFTHSM_DIR                 ?= /usr/local/bin
@@ -503,10 +390,7 @@ DOCKER_PLATFORM_BUILDER_TAG ?= latest
 DOCKER_BUILDER_IMAGE        ?= $(DOCKER_REPO)/$(DOCKER_USER)/$(DOCKER_PLATFORM_BUILDER):$(DOCKER_PLATFORM_BUILDER_TAG)
 DOCKER_ANSIBLE_BUILDER      ?= ansible-ee
 
-# ISO_NAME is the artifact name produced by `platformctl iso create`. The
-# legacy Docker-based iso-hwtpm / iso-swtpm targets and their
-# trusted-platform-iso-builder image were removed in favor of the
-# in-CLI builder; see `bin/platformctl iso create --help`.
+# ISO_NAME is the artifact name `platformctl iso create` produces.
 ISO_NAME                    ?= trusted-platform.iso
 
 UID                         := $(shell id -u)
@@ -515,140 +399,35 @@ GID                         := $(shell id -g)
 # Build and coverage directories
 BUILD_DIR                   := build
 COVERAGE_DIR                := $(BUILD_DIR)/coverage
-# Pinned Go tools are built from their own tools modules under build/tools-src/
-# (one go.mod + go.sum per tool, outside the main module's graph and outside
-# `./...`), and each pin lives in that go.mod and only there. The Makefile reads
-# the version back out of it, so there is no second list to keep in step — a
-# class of defect this repo has hit repeatedly. ci.yml installs the linters by
-# calling `make install-golangci-lint` / `make lint`, so CI and a developer
-# machine cannot drift either.
-#
-# They are built with `go build -C <tools module> -mod=readonly`, NEVER with
-# `go install <pkg>@<version>` (#584): the @version form makes the go command
-# look up the module's deprecation notice, a module query that a lane's
-# GOPROXY=off refuses even when every module is already in the cache. A build
-# from a module with a committed go.sum makes no query at all, and node-prep
-# fills the cache from every tracked go.mod, so the tools' graphs reach every
-# node. pkg/arch/maketools_test.go fails on a pinned `go install` here.
-#
-# To move a pin, with network: in the tool's module run
-#   go get -tool <tool package>@<version> && go mod tidy
-# and commit go.mod + go.sum (trivy fs scans them, so keep their dependencies
-# patched as the main module's are).
-#
-# $(call tools-module-version,<tools module dir>,<module path>) is the version
-# <tools module dir>/go.mod requires of <module path>. It is read with make's
-# own $(file), so parsing the Makefile starts no process and needs no network.
+# Pinned Go tools build from their own modules under build/tools-src/ with `go build -C`, never `go install @version`; the pin is the tool module's go.mod.
 tools-module-version = $(patsubst $(2)@%,%,$(filter $(2)@%,$(subst $(2) v,$(2)@v,$(file < $(1)/go.mod))))
 
 # golangci-lint
-#
-# PINNED (devops.md §9, documented). History, because the reason changed:
-#
-#   v2.12.2 was the pin while v2.13.0 (2026-08-19) shipped honnef.co/go/tools
-#   v0.8.0-rc.1, whose nilness pass panicked ("unhandled builtin recover",
-#   crashed on sentry-go) — a red gate with zero findings. The stated unpin
-#   condition was "a non-rc staticcheck that passes on main".
-#
-#   MOVED to v2.13.2 on 2026-09-22, when this module adopted Go 1.27.0 with
-#   go-quicbaas v0.11.0-alpha. v2.12.2 bundles honnef.co/go/tools v0.7.0, which
-#   cannot parse the Go 1.27 standard library: it PANICS in its IR builder
-#   ("buildir: unexpected expr: *ast.KeyValueExpr", package internal/poll)
-#   rather than reporting findings, so `make lint` died with a stack trace and
-#   no result. Staying on v2.12.2 stopped being an option the moment the
-#   language version moved.
-#
-#   v2.13.2 ships a non-rc staticcheck, which satisfies the original unpin
-#   condition, and is the version go-quicbaas pins for the same Go 1.27
-#   adoption — one version across the two repos that share this toolchain.
-#
-#   MOVED to v2.14.0 on 2026-10-07 (#744): the CI runner image carries the
-#   upstream latest of every analysis tool and the jobs assert the baked tool
-#   matches this pin. Never pin below the latest release.
-#
-#   The tools module requires exactly golangci-lint's own released go.mod, so
-#   the binary links the same dependency versions `go install ...@v2.14.0` did.
 GOLANGCI_LINT_SRC           := build/tools-src/golangci-lint
 GOLANGCI_LINT_VERSION       := $(call tools-module-version,$(GOLANGCI_LINT_SRC),github.com/golangci/golangci-lint/v2)
 
-# actionlint checks .github/workflows/ and is pinned and built the same way as
-# golangci-lint. `make lint` runs it so a broken workflow fails here, not in CI.
-# Its tools module is actionlint's released go.mod with golang.org/x/net raised
-# to the main module's v0.60.0 (CVE-2026-78669; the same move #775 made for gosec)
-# and golang.org/x/sys to the v0.48.0 that x/net version requires.
+# actionlint, pinned and built like golangci-lint.
 ACTIONLINT_SRC              := build/tools-src/actionlint
 ACTIONLINT_VERSION          := $(call tools-module-version,$(ACTIONLINT_SRC),github.com/rhysd/actionlint)
 
-# gosec is pinned and built with THIS module's toolchain, for the same reason as
-# golangci-lint: a gosec built with an older Go cannot type-check a module that
-# declares a newer `go` line, so every package reports "type errors" and the
-# scan exits non-zero with an empty report. v2.29.0 is the newest gosec v2
-# release (and the only one) in the module cache.
-#
-# gosec is built from its own tools module, $(GOSEC_SRC), NOT with
-# `go install ...@$(GOSEC_VERSION)`: that resolves against gosec's own go.mod,
-# whose golang.org/x/tools is too old to read Go 1.27 export data, so every
-# package still reports type errors. The tools module requires gosec (a `tool`
-# directive) and a current x/tools (v0.51.0), and commits its go.sum. The
-# version is that module's gosec requirement; the main module's go.mod is
-# untouched.
+# gosec, pinned and built with this module's toolchain so it can type-check the module.
 GOSEC_SRC                   := build/tools-src/gosec
 GOSEC_VERSION               := $(call tools-module-version,$(GOSEC_SRC),github.com/securego/gosec/v2)
 
-# An empty version would build into an unstamped directory and print a blank
-# pin; stop at parse time instead, naming the variable.
+# Stop at parse time on an empty tool version.
 $(foreach v,GOLANGCI_LINT_VERSION ACTIONLINT_VERSION GOSEC_VERSION,$(if $($(v)),,$(error $(v) is empty: its tools module's go.mod under build/tools-src does not require the tool)))
 GOSEC_DIR                   := $(BUILD_DIR)/tools/gosec-$(GOSEC_VERSION)
 GOSEC                       := $(GOSEC_DIR)/gosec
 
-# golangci-lint v2 has NO default timeout ("Disabled by default"); this is the
-# only wall-clock bound on the run, and 15m was calibrated on an idle box. It is
-# process wall-clock from the moment the binary starts — queueing for a runner
-# does not count, but waiting on golangci-lint's own instance lock does (`lint`
-# passes --allow-serial-runners, so a concurrent invocation waits for the lock
-# instead of exiting with "parallel golangci-lint is running", #309). Measured
-# 2026-09-05 on the shared capacity-3 fleet (#426), linter phase only, from
-# "Running linters" to "issues.":
-#     406s  #405 rerun (job 49321)   green
-#     506s  #410      (job 49204)   green
-#    1137s  #409      (job 49195)   "0 issues." then "Timeout exceeded", at 15m
-#    1150s  #405      (job 49110)   same
-# The two failures had finished analysing — 0 issues printed — and tripped the
-# deadline on the way out; the code was never the problem. 2.8x spread between
-# the quietest and the most contended run; 45m is ~2.3x the worst observed, so a
-# further doubling of contention still lands. The CI lint job carries a
-# timeout-minutes backstop above this so a genuinely hung linter still fails
-# with a job timeout rather than running unbounded. Not --allow-parallel-runners
-# (runs would share one cache and contend for CPU), and not a rerun policy.
+# golangci-lint has no default timeout; this bounds the run.
 GOLANGCI_LINT_TIMEOUT       ?= 45m
 
-# Built from source with `go build`, NOT downloaded prebuilt. That is the whole point:
-# building from source uses this module's own toolchain, so the linter can never
-# be older than the Go version go.mod targets. A prebuilt release binary is built
-# with whatever Go its release used, which is how `make lint` came to fail with
-# "the Go language version (go1.25) used to build golangci-lint is lower than the
-# targeted Go version" (#297).
-#
-# The directory is stamped with the version, so changing the pin above installs
-# the new one and leaves the old binary unused rather than silently running it.
-# That also makes the "is it already installed?" check exact instead of a guess.
+# Built from source with `go build`.
 GOLANGCI_LINT_DIR           := $(BUILD_DIR)/tools/golangci-lint-$(GOLANGCI_LINT_VERSION)
 GOLANGCI_LINT               := $(GOLANGCI_LINT_DIR)/golangci-lint
 ACTIONLINT_DIR              := $(BUILD_DIR)/tools/actionlint-$(ACTIONLINT_VERSION)
 ACTIONLINT                  := $(ACTIONLINT_DIR)/actionlint
-# Per-checkout analysis cache. golangci-lint's default is one shared
-# ~/.cache/golangci-lint for every checkout on the machine, and cached issues
-# carry the ABSOLUTE path of the tree that produced them. Two checkouts with
-# byte-identical package content therefore share cache entries, and a finding
-# can be reported against a path in a different worktree — including one that
-# has since been deleted, whose files can no longer be read to apply the
-# //nolint directives that suppressed it (#365). Absolute, because the
-# value is consumed by a tool that stores absolute paths.
-#
-# Exported rather than set on the one recipe that needs it, for the same reason
-# as `export GOWORK=off` below: a second golangci-lint invocation added later
-# must not have to remember. Prefixing the invocation would leave the next one
-# silently back on the shared cache.
+# Per-checkout analysis cache.
 export GOLANGCI_LINT_CACHE  := $(abspath $(BUILD_DIR)/tools/golangci-lint-cache)
 
 COVERAGE_FILE               := $(COVERAGE_DIR)/coverage.out
@@ -660,23 +439,10 @@ GOTEST                      := $(GO) test
 GOVET                       := $(GO) vet
 GOFMT                       := gofmt
 TEST_FLAGS                  := -v -race
-# COVERAGE_THRESHOLD is enforced as a HARD gate by `make coverage-report`
-# (exit 1 on miss). Kept at 90 to match the documented repo-wide floor; if a
-# CI run reports below this, ratchet down to the measured floor and raise over time.
+# COVERAGE_THRESHOLD is a hard gate in `make coverage-report`.
 COVERAGE_THRESHOLD          := 90
 
-# Security scanning configuration
-# Gosec exclusions with rationale:
-#   G103: unsafe package - required for TPM and low-level crypto operations
-#   G104: unhandled errors - false positives on deferred Close() calls
-#   G115: integer overflow - false positives on type conversions with bounds checks
-#   G304: file path from variable - required for config-driven file operations
-#   G401: MD5/SHA1 - required for certificate thumbprints, PKCS standards
-#   G407: hardcoded nonce - false positive, nonces are random not hardcoded
-#   G505: crypto/sha1 import - required for PKCS standards, WebAuthn
-# How many packages gosec analyzes at once. Each worker type-checks its
-# package, so memory grows with it; CI's make security step passes 2 to keep
-# the stage under its 16g container limit (#1178).
+# gosec settings; GOSEC_CONCURRENCY bounds memory, and CI passes 2.
 GOSEC_CONCURRENCY           ?= 4
 GOSEC_EXCLUDE               := G102,G103,G104,G107,G109,G110,G115,G118,G122,G204,G301,G302,G304,G305,G306,G401,G402,G407,G505,G702,G703,G704
 
@@ -693,10 +459,7 @@ NO_COLOR=\033[0m
 
 default: build
 
-# Emit the assembled tag list so a caller that must invoke `go` directly
-# (the nightly FIPS build, which compiles ./... rather than the binaries)
-# builds the same configuration the make targets do. Deliberately placed
-# AFTER `default:` — the first non-special target is what bare `make` runs.
+# Emit the assembled tag list for callers that invoke `go` directly.
 .PHONY: print-build-tags
 ## help: List the documented make targets (every `## target: description` line)
 .PHONY: help
@@ -704,11 +467,6 @@ help:
 	@grep -h '^## [A-Za-z0-9_.-]*:' $(MAKEFILE_LIST) | sed 's/^## //' | sort
 
 ## print-build-tags: Print the derived build-tag set (use this, never a copied list)
-#
-# The authoritative tag set for any run not fully delegated to make. Prefer
-# `make test-pkg PKG=...` where it fits; reach for this only when you need the
-# tags for something make does not wrap, e.g.
-#   go vet -tags "$(shell make -s print-build-tags)" ./pkg/...
 print-build-tags:
 	@echo '$(strip $(BUILD_TAGS))'
 
@@ -737,14 +495,7 @@ init:
 	sudo chmod u+s /usr/lib/qemu/qemu-bridge-helper
 	$(MAKE) binfmt
 
-# binfmt registers qemu-user for arm64 (and arm) with the F flag, which every
-# --platform linux/arm64 container on this host runs through: the strongSwan
-# and Raspberry Pi builds, the assemble container, the arm64 userspace suite.
-# The image is pinned by digest. multiarch/qemu-user-static, used before,
-# ships qemu 7.2 (2023), under which Alpine 3.22's gcc 14 segfaults at random
-# (measured 2026-10-01: cc1 and collect2 SIGSEGV in two strongSwan arm64
-# builds); tonistiigi/binfmt at this digest is qemu 10.2.3. The old handlers
-# are removed first, because an existing registration is never replaced.
+# binfmt registers qemu-user for arm64 and arm with the F flag.
 BINFMT_IMAGE ?= tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
 
 .PHONY: binfmt
@@ -789,20 +540,9 @@ ifeq ($(strip $(WITH_WEB)),1)
 	@cd sdk/javascript && npm install --silent && npm run build
 	@cd $(WEB_SRC) && npm install --silent && npm run build
 	@mkdir -p $(WEB_EMBED_DIR)
-# `$(WEB_EMBED_DIR)/*` DELIBERATELY does not match dotfiles, and that is
-# now load-bearing rather than incidental. Since #256 the directory's only
-# tracked entry is .gitkeep, and `//go:embed all:dist` needs a file present
-# or a clean checkout will not compile under `platform_web`. The default
-# glob leaves .gitkeep alone; `find -delete`, an added `.[!.]*`, or running
-# this under `shopt -s dotglob` would delete a TRACKED file, so every
-# working tree shows a deletion after a build and a fresh clone fails to
-# build. Verified: `sh -c 'rm -rf d/*'` keeps .gitkeep; the same command
-# under `bash -O dotglob` removes it. Do not "tidy" this.
+# The glob does not match dotfiles, which the embed directory relies on.
 	@rm -rf $(WEB_EMBED_DIR)/*
-# Same dotfile semantics, facing the other way: a dotfile emitted by the
-# web build would silently not be copied, and so not be embedded. Nothing
-# in web/out is a dotfile today; if that changes, this glob is why the
-# asset went missing.
+# A dotfile from the web build is not copied, so not embedded.
 	@cp -r $(WEB_SRC)/out/* $(WEB_EMBED_DIR)/
 	@echo "$(GREEN)✓ Web frontend prepared for embedding$(RESET)"
 endif
@@ -836,31 +576,9 @@ build-no-web:
 	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o $(GATEWAYD) -ldflags="-w -s ${LDFLAGS}" ./cmd/gatewayd
 	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o $(DEPLOYER_PIN) -ldflags="-w -s ${LDFLAGS}" ./cmd/deployer-pin
 
-# Compile every package in BOTH modules, in BOTH tag configurations, emitting no
-# binaries. `build-no-web` only compiles what the three binaries import, so on
-# its own it covers neither.
-#
-# Both configurations, because neither is a superset of the other. The tagged
-# build is the shipped one, and it alone reaches the tagged-only code. But this
-# tree also carries files selected by the ABSENCE of a tag — pkg/api/daemon's
-# iam_service_stub.go and cluster_service_stub.go are `//go:build !iam` and
-# `!cluster`, and !awscompute, !azurecompute, !fips, !gcpcompute, !key_safety,
+# Compile every package in both modules, with and without the build tags, emitting no binaries.
 # !platform_p2p and !platform_web exist too. Every one of those files is
-# invisible to the tagged build and compiled only by the untagged one. Dropping
-# either pass leaves a live surface unchecked.
-#
-# The tag set comes from BUILD_TAGS rather than a hand-copied list because it is
-# assembled in two stages — a literal `:=` line plus the conditional `+=`
-# appends below it — and copying only the `:=` line silently drops every codec.
-#
-# sdk/go is a separate module and gets the same tag set: it carries no build
-# constraints in non-test files at all, so tagged and untagged select an
-# identical file set there and passing the tags costs nothing. Should that stop
-# being true, this target is where the two modules' tag sets would diverge.
-#
-# NOT covered here, deliberately: platform-initrd. It is a separate compilation
-# unit with its own INITRD_BUILD_TAGS and CGO_ENABLED=0, so it is `make
-# platform-initrd`, built as the binary it ships as — not a package compile.
+# The untagged pass covers the files selected by a tag's absence; platform-initrd is built by its own target.
 .PHONY: build-check
 ## build-check: Compile all packages in both modules, tagged and untagged
 build-check:
@@ -874,17 +592,9 @@ build-check:
 	@cd sdk/go && $(GOBIN)/go build -tags "$(BUILD_TAGS)" ./...
 	@echo "$(GREEN)✓ both modules compile, tagged and untagged$(RESET)"
 
-# Native local build (builds both platformd and platformctl)
-# Produces static binaries with embedded web frontend. platformctl-static is
-# the name a netboot set or disk image takes the media's static installer
-# from (pkg/iso ISOBuildConfig.UseBinariesDir); with CGO disabled it is
-# byte-identical to platformctl, so it is a copy, as in build-arm64.
-# Set WITH_WEB=0 to skip web frontend embedding (default is enabled)
-# Set WITH_P2P=1 to include P2P/libp2p support in gatewayd
+# Native build of platformd and platformctl, static with the web frontend; platformctl-static is a copy for netboot and disk images.
 .PHONY: build
-# Alpine/musl targets require CGO=0 (glibc-linked static still imports
-# __vfprintf_chk and other symbols that fail on musl). osusergo+netgo
-# replace the CGO-based user/net lookups with pure-Go fallbacks.
+# CGO=0 with osusergo and netgo for Alpine and musl.
 build: _web-embed-prepare
 	@mkdir -p bin
 	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(PLATFORMD) --ldflags '-w -s ${LDFLAGS}' ./cmd/platformd
@@ -907,14 +617,7 @@ build-static: build
 build-debug-static: build-debug
 	@echo "build-debug-static target is deprecated. Use 'make build-debug' instead (now produces static binaries by default)."
 
-# Cross-compile ARM 64-bit: a pure-Go build (CGO_ENABLED=0, same tag set as the
-# native `build` target), so no cross toolchain is required and the result is a
-# statically linked ELF. Output goes to $(ARM64_BIN_DIR), never bin/, so it
-# cannot clobber a native build. platformctl-static is the name
-# `platformctl diskimage create` looks for beside itself as the host installer;
-# with CGO disabled it is byte-identical to platformctl, so it is a copy. The
-# media's static installer is this platformctl-static, or platformctl when the
-# directory holds none (pkg/iso ISOBuildConfig.UseBinariesDir).
+# Cross-compile arm64: pure Go, the native tag set, statically linked.
 .PHONY: build-arm64
 ## build-arm64: Cross-compile platformd, platformctl and platformctl-static for linux/arm64 into bin/aarch64
 build-arm64: _web-embed-prepare
@@ -939,19 +642,9 @@ build-arm64-debug-static: build-arm64-debug
 	@echo "build-arm64-debug-static target is deprecated. Use 'make build-arm64-debug' instead (a CGO_ENABLED=0 cross build is already static)."
 
 
-# ==============================================================================
-# Platform-initrd Build Targets (minimal initramfs binary)
-# ==============================================================================
-# platform-initrd contains ONLY boot and recovery commands for initramfs.
-# Firstboot functionality has been moved to platformctl (runs after switch_root).
-# Target binary size: ~22MB (heavy deps excluded via package separation)
-# Uses CGO_ENABLED=0 for static linking without C dependencies
-# Build tags: initrd,osusergo,netgo for pure Go implementations
+# platform-initrd: the minimal initramfs binary
 
-# Initrd build tags - minimal dependencies for initramfs binary
-# osusergo,netgo: Pure Go implementations without cgo
-# local: Required for go-objstore local storage backend registration
-# Note: Heavy dependencies (firstboot, app, installer) excluded via package separation
+# Initrd build tags: osusergo and netgo without cgo, local for the go-objstore local backend.
 INITRD_BUILD_TAGS       := osusergo,netgo,local
 
 .PHONY: platform-initrd
@@ -976,8 +669,7 @@ platform-initrd-debug:
 platform-initrd-static: platform-initrd
 	@echo "platform-initrd-static target is deprecated. Use 'make platform-initrd' instead (already produces static binaries)."
 
-# Cross-compile ARM 64-bit for initrd: same pure-Go build as `platform-initrd`,
-# written to $(ARM64_BIN_DIR) so it never overwrites the native binary.
+# Cross-compile arm64 for initrd into $(ARM64_BIN_DIR).
 .PHONY: platform-initrd-arm64
 ## platform-initrd-arm64: Cross-compile platform-initrd for linux/arm64 into bin/aarch64
 platform-initrd-arm64:
@@ -993,16 +685,7 @@ platform-initrd-arm64-static: platform-initrd-arm64
 	@echo "platform-initrd-arm64-static target is deprecated. Use 'make platform-initrd-arm64' instead (a CGO_ENABLED=0 cross build is already static)."
 
 
-# ==============================================================================
-# Gateway Daemon Build Targets (standalone SDN gateway binary)
-# ==============================================================================
-# gatewayd is a standalone gateway daemon supporting three operational modes:
-#   - Overlay: VXLAN tunneling for east-west VM/container traffic (EVPN Type-2/3/5)
-#   - Edge: IoT device onboarding, DHT bootstrap, NAT traversal
-#   - Transit: Announce platform IPv4/IPv6 blocks to ISPs/fabric
-#
-# Build without P2P: make build-gatewayd
-# Build with P2P:    make build-gatewayd WITH_P2P=1
+# gatewayd: the standalone SDN gateway binary
 
 # Gateway daemon build tags - core SDN functionality
 GATEWAYD_BUILD_TAGS     := $(BUILD_TAGS)
@@ -1030,9 +713,7 @@ build-gatewayd-debug:
 build-gatewayd-static: build-gatewayd
 	@echo "build-gatewayd-static target is deprecated. Use 'make build-gatewayd' instead (now produces static binaries by default)."
 
-# Cross-compile ARM 64-bit for gatewayd: a pure-Go build (CGO_ENABLED=0 with
-# osusergo/netgo, exactly as the native `build` target links gatewayd), written
-# to $(ARM64_BIN_DIR) so it never overwrites the native binary.
+# Cross-compile arm64 for gatewayd into $(ARM64_BIN_DIR).
 .PHONY: build-gatewayd-arm64
 ## build-gatewayd-arm64: Cross-compile gatewayd for linux/arm64 into bin/aarch64
 build-gatewayd-arm64:
@@ -1049,19 +730,7 @@ build-gatewayd-arm64-static: build-gatewayd-arm64
 	@echo "build-gatewayd-arm64-static target is deprecated. Use 'make build-gatewayd-arm64' instead (a CGO_ENABLED=0 cross build is already static)."
 # ==============================================================================
 
-# ==============================================================================
-# Deployer Pin Build Target (SSH host-key pin provisioning tool)
-# ==============================================================================
-# deployer-pin is the only supported way to populate the per-pin envelope store
-# that the bootstrap deployer, physical switch management and the EVPN fabric
-# driver read. Those SSH stacks are fail-closed — an empty known_hosts_path is
-# rejected and there is no trust-on-first-use fallback — so a fleet bring-up
-# cannot get past the deploy phase without this binary.
-#
-# It links neither pkg/app nor pkg/sdn/gateway/commands, so the -X version
-# stamps in LDFLAGS resolve to no symbol and the linker drops them; LDFLAGS is
-# still passed so the flags stay uniform with the sibling binary targets.
-# Also built by `make build` and `make build-no-web`.
+# Deployer pin: the SSH host-key pin provisioning tool
 
 .PHONY: build-deployer-pin
 build-deployer-pin:
@@ -1073,12 +742,7 @@ build-deployer-pin:
 	@echo "Binary size: $$(du -h $(DEPLOYER_PIN) | cut -f1)"
 # ==============================================================================
 
-# ==============================================================================
-# QUIC deploy agent (#1700)
-# ==============================================================================
-# deploy-agent runs on a deploy target in place of an SSH server; the
-# bootstrap deployer reaches it with deployer.transport: quic. Installed by
-# configs/os/deploy-agent.service. See docs/bootstrap/remote-deploy.md.
+# QUIC deploy agent
 
 .PHONY: build-deploy-agent
 build-deploy-agent:
@@ -1090,8 +754,7 @@ build-deploy-agent:
 	@echo "Binary size: $$(du -h $(DEPLOY_AGENT) | cut -f1)"
 # ==============================================================================
 
-# Build the public_html directory using devcontainer
-# This target uses docker to ensure consistent builds regardless of host environment
+# Build public_html in the devcontainer.
 .PHONY: build-public-html
 build-public-html:
 	@echo "Building WebUI using devcontainer (monorepo web/ directory)..."
@@ -1203,21 +866,14 @@ swagger-ui:
 	sed -i 's|@version .*|@version $(APP_VERSION)|g' pkg/webservice/webserver_v1.go
 
 
-# =============================================================================
-# Frontend (Next.js) - monorepo web/ directory
-# =============================================================================
+# Frontend (Next.js) in web/
 
 .PHONY: web-install
 web-install:
 	@echo "[Web] Installing npm dependencies..."
 	cd $(WEB_SRC) && npm install
 
-# web depends on trusted-platform-sdk via `file:../sdk/javascript`, whose
-# package.json entry points all resolve into sdk/javascript/dist. That directory
-# is build output and gitignored, so on a fresh checkout it does not exist and
-# the Next.js build fails to resolve the module. Build the SDK first, exactly as
-# _web-embed-prepare does — otherwise the target only works on a machine whose
-# stale dist happens to be lying around.
+# web resolves trusted-platform-sdk from sdk/javascript/dist.
 .PHONY: web-sdk-build
 web-sdk-build:
 	@echo "[Web] Building trusted-platform-sdk..."
@@ -1237,17 +893,7 @@ web-test:
 	@echo "[Web] Running Playwright E2E tests..."
 	cd $(WEB_SRC) && npm run test:e2e
 
-# Playwright against a real platformd (#2034, epic #1665): builds platformd
-# with the console embedded (web-e2e-platformd: cgo, tpm_simulator), then
-# web/playwright.real-server.config.ts starts
-# it on the TPM simulator in a temporary directory (global-setup.ts), runs
-# web/e2e/real-server/ in Chromium with real WebAuthn ceremonies and stops it.
-# No mocks. web-deps runs first (npm ci from the lockfiles, so
-# @playwright/test is installed). Run `cd web && npx playwright install
-# chromium` once on a fresh checkout; the target downloads no browser.
-#   make web-e2e                 # build, then the suite
-#   make web-e2e E2E_PORT=19443  # another TLS port
-#   make web-e2e WEB_E2E_BUILD=0 # reuse bin/platformd
+# Playwright against a real platformd with the console embedded, on the TPM simulator, with real WebAuthn ceremonies.
 WEB_E2E_BUILD ?= 1
 .PHONY: web-e2e
 web-e2e: web-deps
@@ -1258,17 +904,13 @@ endif
 	cd $(WEB_SRC) && E2E_PORT=$(E2E_PORT) PLATFORMD_BIN=$(abspath $(PLATFORMD)) \
 		npx playwright test --config playwright.real-server.config.ts
 
-# The web-e2e daemon: bin/platformd with the console embedded (run with
-# WITH_WEB=1), linked with cgo and the tpm_simulator tag so tpm.simulator: true
-# in platformd.test.yaml has an in-process simulator. The default `make build`
-# stays CGO_ENABLED=0 without the simulator; this binary is for the e2e suite.
+# The web-e2e daemon: bin/platformd with the console, cgo and the tpm_simulator tag.
 .PHONY: web-e2e-platformd
 web-e2e-platformd: _web-embed-prepare
 	@mkdir -p bin
 	CGO_ENABLED=1 $(GOBIN)/go build -tags "tpm_simulator $(BUILD_TAGS)" -o $(PLATFORMD) --ldflags '-w -s ${LDFLAGS}' ./cmd/platformd
 
-# vitest over web/src/**/*.test.ts(x): hooks, stores, contexts in jsdom, no
-# server. Playwright (web-test) owns the browser flows.
+# vitest over web/src/**/*.test.ts(x), no server.
 .PHONY: web-test-unit
 web-test-unit:
 	@echo "[Web] Running unit tests (vitest)..."
@@ -1279,33 +921,19 @@ web-test-ui:
 	@echo "[Web] Running Playwright E2E tests with UI..."
 	cd $(WEB_SRC) && npm run test:e2e:ui
 
-# WebAuthn E2E tests — pass FRONTEND_URL and HEADED via env vars
-# Examples:
-#   make web-test-webauthn
-#   make web-test-webauthn FRONTEND_URL=https://server.example.com:8443
-#   make web-test-webauthn FRONTEND_URL=https://server.example.com:8443 HEADED=1
+# WebAuthn E2E tests; pass FRONTEND_URL and HEADED via env vars, e.g. make web-test-webauthn FRONTEND_URL=https://server.example.com:8443 HEADED=1
 .PHONY: web-test-webauthn
 web-test-webauthn:
 	cd $(WEB_SRC) && $(MAKE) test-webauthn
 
-# CI-shaped web targets (#396). web-install/web-sdk-build above use
-# `npm install` for a developer's incremental loop; these use `npm ci` so the
-# run is reproducible from the lockfile — the same reasoning as test-sdk-js.
-#
-# web-deps is the prerequisite the checks share, and the order matters: web/
-# typechecks against sdk/javascript's BUILT dist/ (every package.json entry
-# point of trusted-platform-sdk resolves into it), and dist/ is gitignored. On
-# a fresh checkout `tsc` without the SDK build reports hundreds of
-# missing-module errors that say nothing about the console — a clean runner
-# measured 335 that way against a controlled 8.
+# CI-shaped web targets use `npm ci` for a reproducible run.
 .PHONY: web-deps
 web-deps:
 	@echo "[Web] Installing from lockfiles and building trusted-platform-sdk..."
 	cd sdk/javascript && npm ci && npm run build
 	cd $(WEB_SRC) && npm ci
 
-# eslint only. Typecheck was folded into this target before #396; it is now
-# web-typecheck so CI can gate the two independently.
+# eslint only.
 .PHONY: web-lint
 web-lint:
 	@echo "[Web] Running ESLint..."
@@ -1316,8 +944,7 @@ web-typecheck:
 	@echo "[Web] Running TypeScript checks..."
 	cd $(WEB_SRC) && npm run typecheck
 
-# `next build` only — web-build above also copies the output into the tracked
-# public_html/ and tars it, which is a release step, not a check.
+# `next build` only.
 .PHONY: web-build-check
 web-build-check:
 	@echo "[Web] Building Next.js frontend (check only)..."
@@ -1420,34 +1047,10 @@ softhsm-init:
 		--pin 5678 ; \
 	$(SOFTHSM_DIR)/softhsm2-util --show-slots
 
-# Tests
-# Note: pkg/tpm2, pkg/ca, and pkg/store/keystore have been migrated to external libraries:
-# - TPM2: github.com/jeremyhahn/go-xkms/pkg/tpm2
-# - CA: github.com/jeremyhahn/go-trusted-ca/pkg/ca
-# - Keystore: github.com/jeremyhahn/go-xkms/pkg/backend/*
-# TEST_SKIP quarantines individual tests, with a reason and a date. It is not a
-# place to park a failure nobody has diagnosed — every entry names the conflict
-# and what would retire it.
-#
-# 2026-08-14 — the five assertions below all pin the Supermicro UEFI virtual-CD
-# alias to "UefiCd" and all fail, because pkg/quirks/registry.go sets
-# UEFICDAlias = "UefiUsbCd". The two carry opposite claims about the same
-# hardware: the tests come from 5030627 (2026-05-21, "fix(bmc,ipxe,iso): ...
-# UefiCd>UefiUsbCd"), while registry.go's comment says the opposite was
-# "Verified on X10SDV-TP8F: ... targeting UefiCd points the boot override at
-# the empty class and the node skips to PXE/disk". The registry value is the
-# later of the two but landed in a4a45f0 (2026-08-13), a "checkpoint working
-# tree" commit that did not touch the tests, so its provenance is weaker than
-# its comment suggests. Only a boot on an X10 settles it. Skipped rather than
-# deleted or "fixed" so the contradiction stays visible; retire this once the
-# hardware answer is recorded in the registry.
+# Tests. TEST_SKIP quarantines individual tests, each with a reason.
 TEST_SKIP := TestPickBootSourceOverrideTarget_X10WithCDDVDAlias|TestPickBootSourceOverrideTarget_X10PrefersVendorUEFIOverUSBCD|TestX10SDVBootMediaType|TestSupermicroManufacturerWideBootMediaType|TestResolveVeloCloudEDGE840
 
-# SHARDS and SHARD split the unit suites' package list for the hosted CI
-# runners (4 cores, 6 hours a job): `make test-race SHARD=1 SHARDS=4` runs the
-# second of four round-robin slices of the list. The default, one shard, is the
-# whole list. test-fips hands them to `make test`, and print-race-pkgs prints
-# the shard's list, so batch.yml's sharded jobs read the same slices.
+# SHARDS and SHARD split the unit packages round-robin: `make test-race SHARD=1 SHARDS=4` runs the second of four.
 SHARDS ?= 1
 SHARD ?= 0
 SHARD_PICK = awk -v n=$(SHARDS) -v s=$(SHARD) '(NR - 1) % n == s'
@@ -1460,28 +1063,6 @@ test: check-insecure-tls check-go-build-tags
 
 .PHONY: test-fips
 ## test-fips: FIPS 140-3 suite: build ./... and run `make test`, both with the fips tag under GODEBUG=fips140=only
-#
-# The ONE definition of the FIPS job: ci.yml (push to main, workflow_dispatch)
-# and nightly.yml (workflow_dispatch) both run this target, so the two cannot
-# drift apart. BOTH halves matter and they do different jobs:
-#   WITH_FIPS=1 (the `fips` tag) selects the FIPS implementations at COMPILE
-#       time, so MD5/SHA-1 are not linked in at all;
-#   GODEBUG=fips140=only enforces at RUNTIME, and is what proves the
-#       compile-time gate was complete.
-# STRICT mode, not `fips140=on` (ratified 2026-08-17): `on` loads the Go
-# Cryptographic Module but still PERMITS non-approved algorithms, so the suite
-# would report green while a regulated path used prohibited cryptography.
-# WITH_FIPS=1, never BUILD_TAGS="...": a command-line BUILD_TAGS replaces the
-# Makefile's tag list instead of appending to it.
-# CUSTOMIZE (ruling 125): the unit tests' output also goes to $(FIPS_LOG) and,
-# when they fail, scripts/foreignfailures -job fips is the target's verdict. It
-# passes only when every failure is a listed panic of $(FIPS_FOREIGN_BASELINE)
-# (exact test, message and stack frame, nothing else failing) AND every other
-# top-level test of each panicked package, rerun by explicit name with the same
-# environment and tags, passes. A rerun round that fails only by another
-# listed panic excludes that test too and runs the rest again, at most one
-# round per row of the package. It fails closed on anything else
-# (docs/test/integration.md "The FIPS baseline").
 test-fips: SHELL := /bin/bash
 test-fips:
 	GOFIPS140=latest GODEBUG=fips140=only go build -tags "$$($(MAKE) -s --no-print-directory print-build-tags WITH_FIPS=1)" ./...
@@ -1497,17 +1078,9 @@ test-fips:
 	exit $$status
 
 .PHONY: test-noopa
-## test-noopa: Unit tests of the !opa build: the OPA engine packages and their consumers with opa dropped from BUILD_TAGS (#1691)
-#
-# BUILD_TAGS carries opa, so `make test` and `make test-race` never compile
-# the ErrOPANotBuilt stubs (engine_noopa.go, opa_engine_noopa.go) or their
+## test-noopa: Unit tests of the !opa build: the OPA engine packages and their consumers with opa dropped from BUILD_TAGS
 # !opa tests. This target runs every package that splits on the tag, and
-# every package that imports pkg/policy/opa, with the otherwise required
-# tags minus opa: the stubs' refusals and the consumers' behaviour without
-# an engine are tested, and a consumer test that needs the real engine
-# fails here until it carries the opa tag. `make test` runs it after the
-# tagged suite, once (shard 0 only, so test-fips's four shards run it once),
-# which puts it in ci.yml's test step and test-fips without a workflow edit.
+# Every package that imports pkg/policy/opa, with the required tags minus opa.
 NOOPA_TAGS := $(filter-out opa,$(BUILD_TAGS))
 NOOPA_PKGS := ./pkg/policy/opa/ ./pkg/compute/container/ \
 	./pkg/sdn/gateway/proxysvc/ ./pkg/sdn/gateway/services/vpn/ ./pkg/sdn/gateway/ \
@@ -1516,23 +1089,7 @@ test-noopa:
 	go test -count=1 -tags "$(NOOPA_TAGS)" -skip "$(TEST_SKIP)" $(NOOPA_PKGS)
 
 .PHONY: test-pkg
-## test-pkg: Run unit tests for ONE package with the derived tag set, e.g. make test-pkg PKG=./pkg/api/daemon/
-#
-# Use this instead of typing `go test -tags "..."` by hand. BUILD_TAGS is
-# assembled in two stages — the `:=` literal plus the conditional `+=` appends
-# below it — so a hand-copied tag list silently drops every codec, and the run
-# then fails with "no codec available for encoding" in a package that is
-# actually fine. That failure reads as a regression in whatever you just
-# changed, which is how the nightly FIPS job spent weeks reporting it as a FIPS
-# finding. Deriving the tags here means nobody has to know that.
-#
-# TESTFLAGS passes anything else through, split on whitespace only:
-#   make test-pkg PKG=./pkg/api/daemon/ TESTFLAGS='-run TestFoo -v'
-#   make test-pkg PKG=./pkg/api/daemon/ TESTFLAGS='-run TestFoo|TestBar -race'
-# The recipe single-quotes TESTFLAGS into a shell variable and expands it
-# unquoted with globbing off, so `|`, `*`, `;` and `'` reach go test verbatim
-# instead of being read as shell syntax. Do not quote inside TESTFLAGS: a
-# pattern cannot contain spaces (go test -run patterns never need them).
+## test-pkg: Run unit tests for one package with the derived tag set, e.g. make test-pkg PKG=./pkg/api/daemon/
 test-pkg:
 	@if [ -z "$(strip $(PKG))" ]; then \
 		echo "$(RED)$(BOLD)PKG is required$(RESET)"; \
@@ -1543,10 +1100,7 @@ test-pkg:
 	set -f; testflags='$(subst ','\'',$(TESTFLAGS))'; \
 	go test -tags "$(BUILD_TAGS)" -skip "$(TEST_SKIP)" $$testflags $(PKG)
 
-# Tagged for the reason test-pkg above documents. Untagged, the codec registry
-# is empty and every encode fails with "no codec available for encoding";
-# sdk/go/transport/quic was this module's instance -- 13 tests, one error, none
-# of them about the code under test (#344).
+# Tagged as test-pkg is.
 .PHONY: test-sdk-go
 ## test-sdk-go: Run Go SDK unit tests (sdk/go module)
 test-sdk-go:
@@ -1554,7 +1108,7 @@ test-sdk-go:
 	cd sdk/go && go test -tags "$(BUILD_TAGS)" ./...
 
 .PHONY: sdk-consumer-check
-## sdk-consumer-check: Build sdk/go from a throwaway consumer module, without the root module (#840)
+## sdk-consumer-check: Build sdk/go from a throwaway consumer module, without the root module
 sdk-consumer-check:
 	@scripts/sdk-consumer-check.sh
 
@@ -1573,8 +1127,7 @@ lint-sdk-js:
 .PHONY: test-legacy
 test-legacy: test-crypto test-webservice
 
-# test-ca: Migrated to go-trusted-ca - run tests there instead
-# test-tpm: Migrated to go-xkms - run tests there instead
+# test-ca and test-tpm live in go-trusted-ca and go-xkms.
 
 .PHONY: test-crypto
 test-crypto:
@@ -1586,8 +1139,7 @@ test-crypto:
 .PHONY: test-store
 test-store: test-store-datastore
 
-# test-store-pkcs11: Migrated to go-xkms/pkg/backend/pkcs11
-# test-store-tpm2: Migrated to go-xkms/pkg/tpm2/store
+# test-store-pkcs11 and test-store-tpm2 live in go-xkms.
 
 .PHONY: test-store-datastore
 test-store-datastore:
@@ -1598,16 +1150,13 @@ test-store-datastore:
 		# tag-independent
 		go test -v
 
-# QuicBaaS Unit Tests (fast, uses mock storage - no real Raft needed)
-# Runs: *_unit_test.go tests + config, error, mock_storage tests
-# These tests run in ~0.1s and cover adapter.go, DAOs, and utilities
+# QuicBaaS unit tests on mock storage, no Raft.
 .PHONY: test-quicbaas
 test-quicbaas:
 	@echo "Running QuicBaaS unit tests (fast, no Raft)..."
 	go test -v -count=1 -tags "$(BUILD_TAGS)" -run "Test.*_Mock|^TestMockStorage|^TestErr|^TestDefault|^TestConfig|^TestConsistency|^TestParse|^TestGetFree|^TestAllErrors" ./pkg/storage/quicbaas/...
 
-# QuicBaaS Unit Tests with Coverage (fast tests only - no real Raft)
-# Target: ~62% coverage (client.go and factory.go require Raft for testing)
+# QuicBaaS unit tests with coverage, no Raft.
 .PHONY: test-quicbaas-coverage
 test-quicbaas-coverage:
 	@echo "Running QuicBaaS unit tests with coverage (fast, no Raft)..."
@@ -1615,8 +1164,7 @@ test-quicbaas-coverage:
 	go test -count=1 -tags "$(BUILD_TAGS)" -run "Test.*_Mock|^TestMockStorage|^TestErr|^TestDefault|^TestConfig|^TestConsistency|^TestParse|^TestGetFree|^TestAllErrors" -coverprofile=/tmp/quicbaas.cover ./pkg/storage/quicbaas/...
 	go tool cover -func=/tmp/quicbaas.cover | tail -1
 
-# QuicBaaS Full Coverage (includes Raft tests - runs serially, takes 3+ minutes)
-# This includes client.go and factory.go tests that need real Raft consensus
+# QuicBaaS full coverage including the Raft tests, run serially.
 .PHONY: test-quicbaas-coverage-full
 test-quicbaas-coverage-full:
 	@echo "Running all QuicBaaS tests with coverage (includes Raft, serial, ~3 min)..."
@@ -1702,11 +1250,7 @@ coverage-bmc:
 		./pkg/cli/commands/bmc/...
 	go tool cover -func=coverage-bmc.out | tail -5
 
-# AVR firmware attestation tests
-#
-# No hardware and no device. The tests drive a fake link through the real
-# trusted-firmware codec, so they run as fast as any other unit test and
-# modify nothing on the host.
+# AVR firmware attestation tests: a fake link through the real trusted-firmware codec, no device.
 ## test-avr-attestation: Run AVR firmware attestation provider unit tests
 .PHONY: test-avr-attestation
 test-avr-attestation:
@@ -1762,46 +1306,28 @@ integration-test-fido2: build-devcontainer
 integration-test-proxy: build-devcontainer
 	$(call run-integration-suite,proxy)
 
-## test-cloud-compute-aws: Run AWS EC2 NitroTPM live cloud tests (opt-in, real AWS)
-## Requires AWS credentials in the environment (COMPUTE_AWS_REGION, COMPUTE_AWS_AMI,
-## COMPUTE_AWS_INSTANCE_TYPE and standard AWS_* credentials). Mirrors go-objstore's
-## cloud_integration,awss3 precedent. This test launches real EC2 instances and
-## incurs cost; it is never run by the default suite.
+## test-cloud-compute-aws: Run AWS EC2 NitroTPM live cloud tests (opt-in; needs AWS credentials and COMPUTE_AWS_*)
 .PHONY: test-cloud-compute-aws
 test-cloud-compute-aws:
 	@echo "$(CYAN)→ Running AWS NitroTPM compute cloud tests (real AWS, may incur cost)$(RESET)"
 	COMPUTE_AWS_LIVE=1 $(GOBIN)/go test -v -tags 'cloud_integration awscompute' \
 		-count=1 -timeout 20m ./pkg/compute/aws -run TestAWSCompute_RealCloud
 
-## test-cloud-compute-gcp: Run GCP Shielded VM live cloud tests (opt-in, real GCP)
-## Requires GCP application default credentials and COMPUTE_GCP_PROJECT,
-## COMPUTE_GCP_ZONE, COMPUTE_GCP_MACHINE_TYPE, COMPUTE_GCP_IMAGE (optionally
-## COMPUTE_GCP_NETWORK, COMPUTE_GCP_SUBNETWORK, COMPUTE_GCP_CREDENTIALS). This
-## test launches real Compute Engine instances and incurs cost; it is never run
-## by the default suite.
+## test-cloud-compute-gcp: Run GCP Shielded VM live cloud tests (opt-in; needs GCP credentials and COMPUTE_GCP_*)
 .PHONY: test-cloud-compute-gcp
 test-cloud-compute-gcp:
 	@echo "$(CYAN)→ Running GCP Shielded VM compute cloud tests (real GCP, may incur cost)$(RESET)"
 	COMPUTE_GCP_LIVE=1 $(GOBIN)/go test -v -tags 'cloud_integration gcpcompute' \
 		-count=1 -timeout 20m ./pkg/compute/gcp -run TestGCPCompute_RealCloud
 
-## test-cloud-compute-azure: Run Azure Trusted Launch live cloud tests (opt-in, real Azure)
-## Requires Azure default credentials and COMPUTE_AZURE_SUBSCRIPTION,
-## COMPUTE_AZURE_RESOURCE_GROUP, COMPUTE_AZURE_LOCATION, COMPUTE_AZURE_VM_SIZE,
-## COMPUTE_AZURE_IMAGE (optionally COMPUTE_AZURE_TENANT). This test launches real
-## Virtual Machines and incurs cost; it is never run by the default suite.
+## test-cloud-compute-azure: Run Azure Trusted Launch live cloud tests (opt-in; needs Azure credentials and COMPUTE_AZURE_*)
 .PHONY: test-cloud-compute-azure
 test-cloud-compute-azure:
 	@echo "$(CYAN)→ Running Azure Trusted Launch compute cloud tests (real Azure, may incur cost)$(RESET)"
 	COMPUTE_AZURE_LIVE=1 $(GOBIN)/go test -v -tags 'cloud_integration azurecompute' \
 		-count=1 -timeout 25m ./pkg/compute/azure -run TestAzureCompute_RealCloud
 
-## integration-test-compute-aws: Run AWS EC2 lifecycle integration test against the Floci emulator (no cloud creds)
-## Brings up Floci (floci/floci:latest, endpoint-URL drop-in AWS emulator) on :4566 via docker
-## compose, runs the AWS orchestrator EC2 instance lifecycle test (create/start/stop/get/list/
-## terminate) through the real aws-sdk-go-v2 client, then tears the emulator down. Floci emulates
-## the EC2 instance lifecycle ONLY — no EBS snapshots, no NitroTPM, no GCP/Azure. Full-surface and
-## attestation coverage lives in the faked-client unit tests and the -real targets below.
+## integration-test-compute-aws: Run the AWS EC2 lifecycle test against the Floci emulator (no cloud credentials)
 .PHONY: integration-test-compute-aws
 integration-test-compute-aws:
 	@echo "$(CYAN)$(BOLD)→ Running AWS EC2 lifecycle integration test against Floci emulator...$(RESET)"
@@ -1815,13 +1341,7 @@ integration-test-compute-aws:
 		exit $$EXIT_CODE
 	@echo "$(GREEN)✓ AWS EC2 Floci lifecycle test complete$(RESET)"
 
-## integration-test-compute-aws-real: Run the AWS EC2 NitroTPM live-cloud test against REAL AWS (creds-gated)
-## Exercises the FULL orchestrator including real NitroTPM 2.0 endorsement-key attestation and EBS
-## snapshots — the only true attestation validation. Provisions REAL, BILLABLE EC2 resources and
-## cleans them up (Delete + DeleteSnapshot via t.Cleanup). Never runs in the default suite; never
-## t.Skips — fails loudly if required env is missing.
-## Required env: COMPUTE_AWS_REGION, COMPUTE_AWS_AMI (TpmSupport=v2.0), COMPUTE_AWS_INSTANCE_TYPE
-##   (a Nitro type), optionally COMPUTE_AWS_SUBNET, plus AWS credentials (AWS_* or an IAM role).
+## integration-test-compute-aws-real: Run the AWS EC2 NitroTPM live-cloud test against real AWS, including EK attestation (credentials required)
 .PHONY: integration-test-compute-aws-real
 integration-test-compute-aws-real:
 	@echo "$(CYAN)$(BOLD)→ Running AWS EC2 NitroTPM live-cloud test (REAL AWS, provisions BILLABLE resources)...$(RESET)"
@@ -1830,13 +1350,7 @@ integration-test-compute-aws-real:
 		-count=1 -timeout 20m ./pkg/compute/aws -run TestAWSCompute_RealCloud
 	@echo "$(GREEN)✓ AWS EC2 NitroTPM live-cloud test complete$(RESET)"
 
-## integration-test-compute-gcp-real: Run the GCP Shielded VM live-cloud test against REAL GCP (creds-gated)
-## Exercises the FULL orchestrator including real Shielded-VM vTPM attestation and disk snapshots.
-## Provisions REAL, BILLABLE Compute Engine resources and cleans them up (Delete + DeleteSnapshot via
-## t.Cleanup). Never t.Skips — fails loudly if required env is missing.
-## Required env: COMPUTE_GCP_PROJECT, COMPUTE_GCP_ZONE, COMPUTE_GCP_MACHINE_TYPE (Shielded-capable),
-##   COMPUTE_GCP_IMAGE (UEFI/Shielded), optionally COMPUTE_GCP_NETWORK, COMPUTE_GCP_SUBNETWORK,
-##   COMPUTE_GCP_CREDENTIALS, plus Google application default credentials.
+## integration-test-compute-gcp-real: Run the GCP Shielded VM live-cloud test against real GCP, including vTPM attestation (credentials required)
 .PHONY: integration-test-compute-gcp-real
 integration-test-compute-gcp-real:
 	@echo "$(CYAN)$(BOLD)→ Running GCP Shielded VM live-cloud test (REAL GCP, provisions BILLABLE resources)...$(RESET)"
@@ -1845,13 +1359,7 @@ integration-test-compute-gcp-real:
 		-count=1 -timeout 20m ./pkg/compute/gcp -run TestGCPCompute_RealCloud
 	@echo "$(GREEN)✓ GCP Shielded VM live-cloud test complete$(RESET)"
 
-## integration-test-compute-azure-real: Run the Azure Trusted Launch live-cloud test against REAL Azure (creds-gated)
-## Exercises the FULL orchestrator including real Trusted-Launch vTPM attestation and disk snapshots.
-## Provisions REAL, BILLABLE Virtual Machine resources and cleans them up (Delete + DeleteSnapshot via
-## t.Cleanup). Never t.Skips — fails loudly if required env is missing.
-## Required env: COMPUTE_AZURE_SUBSCRIPTION, COMPUTE_AZURE_RESOURCE_GROUP, COMPUTE_AZURE_LOCATION,
-##   COMPUTE_AZURE_VM_SIZE (Trusted-Launch-capable), COMPUTE_AZURE_IMAGE, optionally
-##   COMPUTE_AZURE_TENANT, plus Azure credentials (default credential chain).
+## integration-test-compute-azure-real: Run the Azure Trusted Launch live-cloud test against real Azure, including vTPM attestation (credentials required)
 .PHONY: integration-test-compute-azure-real
 integration-test-compute-azure-real:
 	@echo "$(CYAN)$(BOLD)→ Running Azure Trusted Launch live-cloud test (REAL Azure, provisions BILLABLE resources)...$(RESET)"
@@ -1860,10 +1368,7 @@ integration-test-compute-azure-real:
 		-count=1 -timeout 25m ./pkg/compute/azure -run TestAzureCompute_RealCloud
 	@echo "$(GREEN)✓ Azure Trusted Launch live-cloud test complete$(RESET)"
 
-## integration-test-compute-cloud-real: Run ALL three real-cloud compute tests (AWS + GCP + Azure)
-## Convenience aggregate. Requires every provider's env + credentials (see the per-provider targets)
-## and provisions REAL, BILLABLE resources on all three clouds. This is the definitive validation
-## that the real cloud APIs + hardware roots of trust work end to end.
+## integration-test-compute-cloud-real: Run all three real-cloud compute tests
 .PHONY: integration-test-compute-cloud-real
 integration-test-compute-cloud-real: integration-test-compute-aws-real integration-test-compute-gcp-real integration-test-compute-azure-real
 	@echo "$(GREEN)✓ All real-cloud compute tests complete (AWS + GCP + Azure)$(RESET)"
@@ -1889,7 +1394,7 @@ integration-test-secureboot: build-devcontainer
 	@echo "NOTE: the FIPS-kernel insmod test requires FIPS_KERNEL_IMAGE, FIPS_MODULES_TAR and FIPS_MODULE_SIGNING_KEY (see docs/firmware/secure-boot.md)"
 	$(call run-integration-suite,secureboot)
 
-## integration-test-secureboot-hw: Run the REAL-HARDWARE Secure Boot tier ON the target node (host TPM attestation quote + read-only efivarfs checks). Never run in the devcontainer.
+## integration-test-secureboot-hw: Run the real-hardware Secure Boot tier on the target node (host TPM quote and read-only efivarfs checks)
 .PHONY: integration-test-secureboot-hw
 integration-test-secureboot-hw:
 	@echo "Running Secure Boot HARDWARE integration tier..."
@@ -1918,12 +1423,7 @@ integration-test-tpm: build-devcontainer
 integration-test-bootstrap: build-devcontainer
 	$(call run-integration-suite,bootstrap)
 
-# NTP (time synchronization) Tests
-#
-# NTP_TAGS pins the tag set the time-synchronization surface actually needs:
-# the multi-protocol transports plus the QUIC wire codecs. It deliberately
-# omits the optional crypto-backend tags (pkcs8/frost/pkcs11/...) so a
-# time-sync test run never depends on hardware-backend build variants.
+# NTP tests
 NTP_TAGS := iam rest quic mcp cluster codec_json codec_msgpack codec_cbor
 
 ## test-ntp: Run time-synchronization unit tests across every transport
@@ -1963,10 +1463,7 @@ integration-test-ntp: build-devcontainer
 integration-test-objectstorage: build-devcontainer
 	$(call run-integration-suite,objectstorage)
 
-# VPN (management-VPN control plane) Tests
-#
-# These use the fully assembled $(BUILD_TAGS), never a literal list, so every
-# QUIC codec the transports need is present.
+# VPN (management-VPN control plane) tests
 
 ## test-vpn: Run management-VPN unit tests across every transport
 .PHONY: test-vpn
@@ -2090,50 +1587,18 @@ test-webservice-jwt:
 		go test -tags "pkcs11 objstore" -v -run ^TestSigningMethodES_Ed25519$
 
 
-# Integration Tests
-# These tests run in docker containers with real services and perform complete end-to-end testing
-# Note: Local module directories referenced by go.mod replace directives must be mounted
+# Integration tests: docker containers with real services, end to end.
 
-# In-container root the source repositories are mounted under, the same
-# root the compose files mount sibling module checkouts at.
+# In-container root the source repositories are mounted under.
 SOURCES_BASE := /sources
 
-# Local module volume mounts for docker - only mount packages with local replace directives in go.mod
-# Sibling-module bind mounts, deliberately empty since the tagged-module
-# cutover (dependency-resolution.md §2). It used to mount fourteen sibling
-# checkouts; none of them exist any more, and go.mod's only local replace is
-# `sdk/go => ./sdk/go`. Docker CREATES an empty directory for a missing bind
-# source rather than failing, so those mounts were inert and would have
-# masked a real mount failure. Kept as an empty variable because 38 recipes
-# reference it: emptying the definition fixes every one of them and cannot
-# miss a call site the way deleting references could.
+# Sibling-module bind mounts, empty: modules resolve from tags.
 DOCKER_MODULE_MOUNTS :=
 
-# The host module cache, mounted into the devcontainer so a suite does not
-# re-download ~12G per run. Read-write on purpose: Go writes lock files into
-# the cache even when every module is already present, so a read-only mount
-# fails. Derived rather than hardcoded so this works off this workstation;
-# without go, go's own default (GOMODCACHE, else the first GOPATH entry's
-# pkg/mod, else ~/go/pkg/mod).
+# The host module cache, mounted into the devcontainer.
 GO_MODULE_CACHE := $(if $(GO_CMD),$(shell go env GOMODCACHE),$(or $(GOMODCACHE),$(if $(GOPATH),$(firstword $(subst :, ,$(GOPATH)))/pkg/mod),$(HOME)/go/pkg/mod))
 
 # One devcontainer invocation for every per-package integration suite.
-#
-# CLAUDE.md is explicit that integration tests run in the devcontainer and
-# never on the host. Fifteen per-package targets used to call the runner
-# script directly, so `make integration-test-bmc` and friends started Open
-# vSwitch, swtpm and platformd on whatever workstation invoked make (#492).
-# One canned recipe rather than fifteen copies of the docker run, so the
-# next target added cannot quietly omit the container.
-#
-# $(1) is the runner's target keyword, and also names the container so
-# concurrent suites do not collide on --name. $(2) is optional extra docker
-# arguments (environment for a suite's inputs, more mounts); most suites
-# pass nothing.
-#
-# The source tree is mounted at BOTH paths on purpose: -w is the
-# $(SOURCES_BASE) path, while the runner script is invoked by its
-# /workspace path. Collapsing them breaks one or the other.
 define run-integration-suite
 	@echo "Running $(1) integration tests in the development container..."
 	@echo "Build tags: $(TEST_BUILD_TAGS)"
@@ -2160,25 +1625,6 @@ endef
 
 .PHONY: integration-test
 ## integration-test: Run all integration suites in the integration image
-## The CI standard's integration stage (handbook ci-standard.md §1). Builds the
-## integration-legs stage of build/docker/devcontainer/Dockerfile (the
-## integration image with a warm build cache) as $(IT_IMAGE) and
-## runs compose.yaml's integration service under the project $(IT_PROJECT):
-## its entrypoint is the suite runner, which starts OVS, swtpm and platformd,
-## and `all` selects the runner's ALL_TARGETS. The stack is torn down
-## (`down --volumes --remove-orphans`) by an EXIT trap, so an error, Ctrl-C or
-## SIGTERM tears it down too, and the target exits with the suites' status. CI passes a per-run
-## IT_PROJECT and IT_IMAGE so two runs on one daemon never collide.
-## Set WITH_CODEC_* or other WITH_* flags for additional build tags.
-## CUSTOMIZE (ruling 125): IT_FOREIGN_BASELINE=1 (CI sets it) also writes the
-## suites' output to $(IT_LOG) and, when they fail, makes scripts/foreignfailures
-## the target's verdict: it passes only when every failure is a row of
-## $(FOREIGN_BASELINE), and fails closed on anything it cannot attribute to a
-## listed test. Unset, the target exits with the suites' own status, so a
-## developer sees every failure (docs/test/integration.md).
-## IT_PREBUILT=1 runs the suites in an $(IT_IMAGE) already on the daemon and
-## builds nothing: CI's integration legs use the one image the integration-image
-## job built for the run (#1119).
 integration-test: SHELL := /bin/bash
 integration-test: $(if $(IT_PREBUILT),,docker-build-it)
 	@echo "Build tags: $(TEST_BUILD_TAGS)"
@@ -2201,11 +1647,7 @@ integration-test: $(if $(IT_PREBUILT),,docker-build-it)
 	exit $$status
 
 .PHONY: integration-test-leg
-## integration-test-leg: Run one leg of the integration suite (LEG=<n>)
-## CI runs the integration job as one parallel job per leg (#1119). A leg is
-## `make integration-test` on that leg's share of the runner's ALL_TARGETS:
-## same image, bootstrap and foreign-failure verdict. The legs and what each
-## holds: `bash build/docker/devcontainer/run-integration-tests.sh legs`.
+## integration-test-leg: Run one leg of the integration suite (LEG=<n>), as CI does
 integration-test-leg: IT_SELECT = leg-$(LEG)
 integration-test-leg: integration-test
 ifneq ($(filter integration-test-leg,$(MAKECMDGOALS)),)
@@ -2226,14 +1668,12 @@ integration-test-webservice: docker-builder-load
 
 # SDN Integration Tests (using devcontainer)
 .PHONY: integration-test-sdn
-## integration-test-sdn: Run SDN integration tests in development container
-## Starts OVS, swtpm, and platformd via the shared devcontainer runner.
+## integration-test-sdn: Run SDN integration tests in the development container
 integration-test-sdn: build-devcontainer
 	$(call run-integration-suite,sdn)
 
 .PHONY: integration-test-sdn-stress
-## integration-test-sdn-stress: Run the SDN stress generators (test/integration/sdn/stress) in development container
-## Kept out of integration-test-sdn: they keep every CPU busy for minutes and starved the sdn package's OVS calls.
+## integration-test-sdn-stress: Run the SDN stress generators in the development container, apart from integration-test-sdn
 integration-test-sdn-stress: build-devcontainer
 	$(call run-integration-suite,sdn-stress)
 
@@ -2282,14 +1722,7 @@ integration-test-secrets-local:
 	fi
 	go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/secrets/...
 
-# =============================================================================
-# Development Container
-# =============================================================================
-# build/docker/devcontainer/Dockerfile builds from the repository root in the
-# template's stages (handbook devcontainer.md §1): `toolchain`, the image every
-# CI stage runs in, and `integration`, the image the integration suites run in.
-# scripts/tool-pins.sh holds the base image and tool pins; both make and the
-# Dockerfile read it, so the image and the Makefile agree on every version.
+# Development container
 include scripts/tool-pins.sh
 
 DEVCONTAINER_DOCKERFILE := build/docker/devcontainer/Dockerfile
@@ -2297,15 +1730,10 @@ DEVCONTAINER_COMPOSE := build/docker/devcontainer/compose.yaml
 DEVCONTAINER_IMAGE := trusted-platform-dev:latest
 DEVCONTAINER_NAME := trusted-platform-devcontainer
 
-# DEVCONTAINER_WAIT_FOR loads the harness's bounded readiness polls (wait_for,
-# no_process_matching) into a `docker exec ... bash -c` script, from the
-# checkout the devcontainer mounts at /workspace (#964).
+# DEVCONTAINER_WAIT_FOR loads the harness's bounded readiness polls into a `docker exec` script.
 DEVCONTAINER_WAIT_FOR := source /workspace/build/docker/devcontainer/wait-for.sh
 
-# The toolchain image is tagged with a hash of everything baked into it, so a
-# change to the Dockerfile, a pin or a module list builds a new tag and an
-# unchanged tree reuses the old one. Recursive (=) so the hash runs only when a
-# target needs it.
+# The toolchain image tag hashes everything baked into it.
 TOOLCHAIN_INPUTS := $(DEVCONTAINER_DOCKERFILE) scripts/tool-pins.sh \
 	go.mod go.sum sdk/go/go.mod sdk/go/go.sum \
 	$(wildcard build/tools-src/*/go.mod build/tools-src/*/go.sum)
@@ -2313,81 +1741,46 @@ TOOLCHAIN_TAG = $(shell cat $(TOOLCHAIN_INPUTS) | sha256sum | cut -c1-16)
 TOOLCHAIN_IMAGE = go-trusted-platform-toolchain:$(TOOLCHAIN_TAG)
 
 # The integration image and the compose project `make integration-test` uses.
-# CI passes per-run values.
 IT_IMAGE ?= go-trusted-platform-it:local
 IT_PROJECT ?= go-trusted-platform-it
 # Set to use an $(IT_IMAGE) that is already built (integration-test).
 IT_PREBUILT ?=
 
-# The integration container's memory limit, swap included (so no swap): the
-# compose integration service (CI's integration legs and soak) and every
-# run-integration-suite container. The legs peaked at 4.5 to 12.9 GB with no
-# limit on a runner host (#1178); 16g is that plus headroom.
+# The integration container's memory limit, swap included.
 IT_MEMORY ?= 16g
 
-# The cgroup parent of every container CI starts: the run-integration-suite
-# container, the compose integration service (exported to it by
-# integration-test) and scripts/in-toolchain-image.sh's toolchain container,
-# which reads the same variable from its environment. Under ci.slice the runner
-# host bounds them together; without a parent they ran in system.slice, outside
-# it (#1178). Empty passes no parent: `make ... CI_CGROUP_PARENT=` on a host
-# with no ci.slice.
+# The cgroup parent of every container CI starts.
 CI_CGROUP_PARENT ?= ci.slice
 
-# The foreign-failure baseline (ruling 125). IT_FOREIGN_BASELINE is empty by
-# default: only `make integration-test IT_FOREIGN_BASELINE=1` consults it.
+# The foreign-failure baseline.
 IT_FOREIGN_BASELINE ?=
 IT_LOG ?= $(or $(TMPDIR),/tmp)/go-trusted-platform-integration.log
 FOREIGN_BASELINE ?= .github/foreign-failures.tsv
-# What `make integration-test` hands the suite runner: `all`, or `leg-<n>` when
-# integration-test-leg runs it (#1119).
+# `all`, or `leg-<n>` when integration-test-leg runs it.
 IT_SELECT := all
 # The FIPS job's sibling baseline, always consulted by `make test-fips`.
 FIPS_LOG ?= $(or $(TMPDIR),/tmp)/go-trusted-platform-fips.log
 FIPS_FOREIGN_BASELINE ?= .github/foreign-failures-fips.tsv
 
-# A KEY=value file with the forge credentials the module download needs
-# (the GIT_CONFIG_* triple, dependency-resolution.md §6). It
-# reaches the build only as the gomodauth BuildKit secret, never as a layer or
-# a build argument; .dockerignore keeps the default path out of the context.
+# A KEY=value file with the forge credentials the module download needs.
 MODULE_ENV_FILE ?= .devcontainer/.env
 
-# The docker build arguments every devcontainer stage shares. $(comma) because a
-# literal comma inside $(if ...) would end its condition.
-# The key of the image's apt layer: a sha256 over the amd64 and arm64 Packages
-# index sums in the InRelease files of the image's Debian suites
-# (scripts/apt-refresh-key.sh, ruling 676), so a Debian fix rebuilds the layer
-# on the next build although BuildKit caches it, and a re-signed InRelease with
-# only a new Date: keeps the cached layer. The script
-# falls back to the UTC date and hour, with a warning, if Debian is unreachable.
-# Computed once, and only by a recipe that expands it. Pass APT_REFRESH=<key>
-# to rebuild against a fixed key.
+# The docker build arguments every devcontainer stage shares.
 APT_REFRESH ?= $(eval APT_REFRESH := $$(shell scripts/apt-refresh-key.sh))$(APT_REFRESH)
 
-# The checksum of the Alpine package indexes the build resolves against
-# (scripts/apk-index-sum.sh, ci-standard.md §9). The devcontainer is Debian, so
-# CI's value is `none` and APT_REFRESH carries the package refresh; the build
-# argument is passed so the integration stages take it as the template does.
+# The Alpine package index checksum (scripts/apk-index-sum.sh).
 APK_INDEX_SUM ?=
 
-# GO_BUILD_PROXY is passed only when the caller sets it, and quoted, because
-# CI's value uses the | separator (handbook devcontainer.md section 4,
-# ci-template v1.29.5).
+# GO_BUILD_PROXY is passed only when set, and quoted, because CI's value uses the | separator.
 DEVCONTAINER_BUILD_ARGS = --build-arg GO_IMAGE=$(GO_IMAGE) \
 	--build-arg APT_REFRESH=$(APT_REFRESH) \
 	$(if $(GO_BUILD_PROXY),--build-arg "GO_BUILD_PROXY=$(GO_BUILD_PROXY)") \
 	$(if $(wildcard $(MODULE_ENV_FILE)),--secret id=gomodauth$(comma)src=$(MODULE_ENV_FILE)) \
 	-f $(DEVCONTAINER_DOCKERFILE)
 
-# The BuildKit builder the devcontainer images build on. Empty builds on the
-# daemon's own builder. CI names this project's docker-container builder, so
-# its build cache is this project's alone and can be pruned without touching
-# another project's; --load copies the image into the daemon.
+# The BuildKit builder the devcontainer images build on.
 BUILDX_BUILDER ?=
-# BUILDX_CLIENT_LOAD=1 makes docker-build-it stream the image to this shell's
-# `docker load` in place of --load, so it lands in the daemon `docker` here
-# talks to, whichever daemon the builder's node runs on. CI's integration legs
-# set it for the build a leg makes on a runner without the run's image (#1119).
+# BUILDX_CLIENT_LOAD=1 streams the image to this shell's `docker load` instead of --load.
 BUILDX_CLIENT_LOAD ?=
 DEVCONTAINER_CLIENT_LOAD = $(and $(BUILDX_BUILDER),$(BUILDX_CLIENT_LOAD))
 DEVCONTAINER_BUILD = $(if $(BUILDX_BUILDER),docker buildx build --builder $(BUILDX_BUILDER) $(if $(DEVCONTAINER_CLIENT_LOAD),--output type=docker$(comma)dest=-,--load),DOCKER_BUILDKIT=1 docker build)
@@ -2396,12 +1789,7 @@ DEVCONTAINER_BUILD = $(if $(BUILDX_BUILDER),docker buildx build --builder $(BUIL
 ## docker-build: Build the integration image and the toolchain image
 docker-build: docker-build-integration docker-build-toolchain
 
-## docker-build-integration: Build the integration image as $(IT_IMAGE)
-## CI's image job gates $(IT_IMAGE) with `trivy image`: the integration stage,
-## without the warm build cache docker-build-it adds.
-## Its own target so CI's image job leases $(IT_IMAGE) before the toolchain
-## build starts: the image job holds its lease only across this build and the
-## scan (ci-standard.md §9).
+## docker-build-integration: Build the integration image as $(IT_IMAGE), without the warm build cache
 docker-build-integration:
 	$(DEVCONTAINER_BUILD) $(DEVCONTAINER_BUILD_ARGS) --build-arg APK_INDEX_SUM=$(APK_INDEX_SUM) \
 		--target integration -t $(IT_IMAGE) .
@@ -2410,32 +1798,18 @@ docker-build-integration:
 docker-build-toolchain:
 	$(DEVCONTAINER_BUILD) $(DEVCONTAINER_BUILD_ARGS) --target toolchain -t $(TOOLCHAIN_IMAGE) .
 
-# IT_WARM_CACHE=0 makes docker-build-it skip the warm build cache: it builds
-# the integration stage, so a suite run compiles from an empty /gocache.
+# IT_WARM_CACHE=0 skips the warm build cache.
 IT_WARM_CACHE ?= 1
 IT_BUILD_TARGET = $(if $(filter 0,$(IT_WARM_CACHE)),integration,integration-legs)
 
 .PHONY: docker-build-it
-## docker-build-it: Build the image the integration suites run in as $(IT_IMAGE)
-## The integration-legs stage: the integration image with everything a suite
-## run compiles already in its build cache, built with the tags
-## integration-test passes the runner, so the cache matches (#1119).
-## IT_WARM_CACHE=0 builds the integration stage instead, without the warm build
-## cache: CI's leg fallback build, which the warm took past its timeout (#1146).
-# bash for this recipe alone: BUILDX_CLIENT_LOAD pipes the build into
-# `docker load` under pipefail, which dash (Debian's /bin/sh) does not have.
+## docker-build-it: Build the image the integration suites run in as $(IT_IMAGE), with a warm build cache
 docker-build-it: SHELL := /bin/bash
 docker-build-it:
 	$(if $(DEVCONTAINER_CLIENT_LOAD),set -o pipefail; )$(DEVCONTAINER_BUILD) $(DEVCONTAINER_BUILD_ARGS) --build-arg APK_INDEX_SUM=$(APK_INDEX_SUM) \
 		--target $(IT_BUILD_TARGET) 		--build-arg IT_BUILD_TAGS="$(strip $(TEST_BUILD_TAGS))" -t $(IT_IMAGE) . $(if $(DEVCONTAINER_CLIENT_LOAD),| docker load)
 
-# The integration image's content tag (ci-standard.md §9): a hash of the build
-# arguments that change the image (the stage, the warm cache's build tags, the
-# base and its package refresh) and of the whole build context, which is the
-# commit's tree, the diff of a dirty checkout and every untracked file
-# .gitignore keeps. An unchanged tree names the image it already built, so a
-# CI job reuses it; any change names a new one. IT_WARM_CACHE=0 names the
-# integration stage, as docker-build-integration builds it.
+# The integration image's content tag: a hash of the build arguments and the build context.
 IT_IMAGE_REPO := go-trusted-platform-ci-it
 
 .PHONY: it-image
@@ -2487,17 +1861,7 @@ devcontainer-verify: build-devcontainer
 	@docker run --rm $(DEVCONTAINER_IMAGE) verify
 
 
-# =============================================================================
-# SDN Benchmark Tests
-# =============================================================================
-# Run benchmarks for SDN packages to measure performance of critical paths:
-# - VNI/VLAN mapping lookups
-# - BGP route insertion/withdrawal and dampening calculations
-# - EVPN MAC/IP route encoding/decoding
-# - Gateway mode activation and health checks
-# - IPAM IP allocation/release throughput
-# - DHCP lease management operations
-# - OpenFlow message encoding/decoding
+# SDN benchmark tests
 
 .PHONY: bench-sdn
 ## bench-sdn: Run all SDN package benchmarks
@@ -2575,9 +1939,7 @@ bench-sdn-openflow:
 	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/openflow/...
 
-# =============================================================================
-# Enhanced SDN/OVS/QEMU Integration Tests
-# =============================================================================
+# SDN, OVS and QEMU integration tests
 
 .PHONY: integration-test-sdn-full
 ## integration-test-sdn-full: Run full SDN tests with OVS in privileged devcontainer
@@ -2598,25 +1960,16 @@ integration-test-sdn-full: build-devcontainer
 
 .PHONY: integration-test-sdn-topology
 ## integration-test-sdn-topology: Run the multi-node SDN topology suite on a host with docker-compose
-## The suite starts its nodes with docker-compose, which the devcontainer has neither the binary nor
-## a Docker daemon for, so it carries the topology build tag and stays out of every runner target.
 integration-test-sdn-topology:
 	go test -v -tags '$(strip $(TEST_BUILD_TAGS)) topology' -count=1 -timeout 30m ./test/integration/sdn/topology/
 
 .PHONY: integration-test-lb
 ## integration-test-lb: Run the gateway load balancer datapath test in the devcontainer
-## Real OVS, kernel conntrack and network namespaces: TCP handshakes through a
-## VIP whose replies the load balancer reverse-translates, and through a
-## hairpin VIP whose client shares a segment with its backend (#718).
 integration-test-lb: build-devcontainer
 	$(call run-integration-suite,lb)
 
 .PHONY: integration-test-e2e
-## integration-test-e2e: Run end-to-end tests with QEMU VMs and OVS networking
-## Without INTEGRATION_TEST_SERVER_ISO/CLIENT_ISO the suite validates its
-## infrastructure (OVS bridges, policy engine) and stops before provisioning.
-## Set both to paths under the repository (the container sees it at
-## /workspace) for the full provisioning run.
+## integration-test-e2e: Run end-to-end tests with QEMU VMs and OVS networking; without the ISO variables it validates the infrastructure only
 integration-test-e2e: build-devcontainer
 	$(call run-integration-suite,e2e,-e INTEGRATION_TEST_SERVER_ISO -e INTEGRATION_TEST_CLIENT_ISO)
 
@@ -2674,9 +2027,7 @@ stress-sdn-local:
 	@echo "Running SDN stress tests locally..."
 	cd test/integration/sdn && go test -v $(TEST_BUILD_TAGS_ARG) -timeout=30m ./stress/...
 
-# =============================================================================
-# Docker Compose Based Integration Tests
-# =============================================================================
+# Docker Compose based integration tests
 
 .PHONY: devcontainer-compose-up
 ## devcontainer-compose-up: Start all integration test services via docker-compose
@@ -2750,9 +2101,7 @@ integration-test-web-shell: devcontainer-compose-up
 	@echo ""
 	@docker exec -it $(DEVCONTAINER_NAME) bash
 
-# =============================================================================
-# Development Container with Full Capabilities
-# =============================================================================
+# Development container with full capabilities
 
 .PHONY: devcontainer-shell-full
 ## devcontainer-shell-full: Start devcontainer with all devices and capabilities
@@ -2781,12 +2130,9 @@ devcontainer-help: build-devcontainer
 	@docker run --rm $(DEVCONTAINER_IMAGE) help
 
 
-# =============================================================================
-# vTPM Integration Tests (using devcontainer)
-# =============================================================================
+# vTPM integration tests
 .PHONY: integration-test-vtpm
-## integration-test-vtpm: Run full E2E vTPM integration tests (ISO creation + QEMU boot)
-## A swtpm that does not start fails this target.
+## integration-test-vtpm: Run full E2E vTPM integration tests (ISO creation and QEMU boot)
 integration-test-vtpm: build-devcontainer
 	$(call run-integration-suite,vtpm)
 
@@ -2821,9 +2167,7 @@ devcontainer-clean:
 	@docker rmi -f go-trusted-platform-sdn-test:latest 2>/dev/null || true
 	@docker rmi -f go-trusted-platform-datastore-integration-test:latest 2>/dev/null || true
 
-# =============================================================================
-# Daemon Multi-Protocol Integration Tests
-# =============================================================================
+# Daemon multi-protocol integration tests
 .PHONY: integration-test-daemon
 ## integration-test-daemon: Run daemon multi-protocol integration tests in development container
 integration-test-daemon: build-devcontainer
@@ -2835,9 +2179,7 @@ integration-test-daemon-local:
 	@echo "Running daemon integration tests locally..."
 	go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/daemon/...
 
-# =============================================================================
-# IAM Multi-Protocol Integration Tests
-# =============================================================================
+# IAM multi-protocol integration tests
 .PHONY: integration-test-iam
 ## integration-test-iam: Run IAM multi-protocol integration tests in devcontainer
 integration-test-iam: build-devcontainer
@@ -2850,9 +2192,7 @@ integration-test-iam-local:
 	go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/iam/...
 
 
-# =============================================================================
-# iPXE/PXE Integration Tests
-# =============================================================================
+# iPXE and PXE integration tests
 .PHONY: integration-test-ipxe
 ## integration-test-ipxe: Run iPXE/PXE integration tests in development container
 integration-test-ipxe: build-devcontainer
@@ -2865,9 +2205,7 @@ integration-test-ipxe-local:
 	IPXE_DHCP_ENABLED=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/ipxe/...
 
 .PHONY: integration-test-ipxe-dhcp
-## integration-test-ipxe-dhcp: Run only DHCP protocol tests
-## The runner sets IPXE_DHCP_ENABLED=1 for this target and for ipxe
-## (TARGET_ENV); without it the DHCP tests fail, they do not skip.
+## integration-test-ipxe-dhcp: Run only the DHCP protocol tests
 integration-test-ipxe-dhcp: build-devcontainer
 	$(call run-integration-suite,ipxe-dhcp)
 
@@ -2882,196 +2220,19 @@ coverage-vtpm:
 	@$(GO) tool cover -func=$(COVERAGE_DIR)/vtpm.out | tail -1
 	@echo "$(GREEN)✓ Coverage report: $(COVERAGE_DIR)/vtpm.html$(RESET)"
 
-# ==============================================================================
-# Code Coverage Targets
-# ==============================================================================
+# Code coverage targets
 
-# Packages excluded from unit tests and coverage.
-#
-# NONE of these packages' own _test.go files run in any CI stage (#359, #34).
-# Earlier versions of this block said "(tested via integration tests)" beside
-# most entries; measured 2026-09-05, that was false twice over: the integration
-# runner executes 24 ./test/integration/* directories and ZERO ./pkg/... paths,
-# and no workflow invokes `make integration-test` at all. test/integration/
-# exercises the subsystems end-to-end; it never compiles these files. Each
-# reason below is the prerequisite that keeps the package out, nothing more.
-# pkg/arch/testreach_test.go measures this from the workflow files and fails
-# when an excluded, test-bearing package is neither run by a stage nor named
-# in its deliberatelyUnreached list.
-#
-# - test/integration: Integration suites; `make integration-test` runs them, no workflow invokes it (#359)
-# - sdk/go/gen: Generated protobuf code
-# - pkg/api/grpc$$: gRPC server harness — 15 test files / 596 tests that run nowhere (#34); the old
-#   "no testable code" reason was false
-# - cmd/platformctl$$, cmd/platformd$$: Entry points with main() only
-# - examples/: Example code
-# - pkg/webservice/v1/test$$: Webservice integration tests
-# - pkg/device/dao$$: Only interface definitions, no testable code (tests in subdirs)
-# - pkg/platform$$: STALE as of 2026-09-04 (#358) — both halves of the old reason
-#   ("TPM/HSM-dependent XKMS code") are false for
-#   this package's OWN tests: they use mockTPM throughout, and no CI job invokes
-#   `make integration-test`. Re-added to the unit suite through TEST_UNIT_PKGS
-#   below; the regex entry stays because that mechanism is deliberately additive.
-# - pkg/compute$$: Requires swtpm and OVS
-# - pkg/qemu$$: Requires swtpm
-# - pkg/swtpm$$, pkg/vtpm$$: STALE as of 2026-10-25 (#964) — their own tests
-#   replace swtpm with a stand-in on PATH or serve the in-memory simulator on a
-#   unix socket. Re-added to the unit suite through TEST_UNIT_PKGS below.
-# - pkg/sdn/netlink$$: Requires root privileges and netlink
-# - pkg/ipxe$$: Requires network services
-# - pkg/testenv$$: Test helper utilities (not production code)
-# - pkg/api/grpc/proto: Generated protobuf code (DO NOT EDIT)
-# - pkg/dns/dao$$: DAO types; its one test file (types_test.go) runs nowhere (#34)
-# - pkg/initrd$$: Requires TPM, LUKS, block devices, mount
-# - pkg/installer$$, pkg/installer/alpine$$: Requires disk partitioning, chroot, apk
-# - pkg/firstboot$$: Requires TPM detection, EFI vars, system commands
-# - pkg/uefi/firmware$$: Requires efivarfs
-# - pkg/uki$$: Requires PE binary tools like objcopy
-# - cmd/gatewayd$$, cmd/platform-initrd$$: Entry points with main() only
-# - pkg/store/datastore$$: Interfaces and serializer; serializer_test.go runs nowhere (#34)
-# - pkg/cli/commands/*: CLI commands require running platformd daemon
-#   Includes: iso, kms, iam, vtpm, registry, container, bootstrap, ca, tenant, tpm, sdn,
-#   barrier, db, device, fido2, cluster, install, firstboot, profile, acme, authenticode
-# - pkg/boot/commands$$, pkg/daemon/commands$$, pkg/sdn/gateway/commands$$: Require running daemon
-# - pkg/iso$$: Requires cpio, zstd, grub-mkstandalone, apk tools
-# - pkg/storage/luks$$: Requires LUKS/cryptsetup
-# - pkg/compute/podman$$: Requires OCI runtime
-# - pkg/cli$$: Config loading depends on system state
-# - pkg/app$$: Platform initialization requires TPM, KMS, DNS, stores
-# - pkg/webservice$$: Webserver startup requires TLS, CA
-# - pkg/dns$$: DNSSEC requires XKMS/QuicBaaS key stores
-# - pkg/webservice/v1$$: STALE as of 2026-09-02 (#153) — "handler registry setup
-#   needs running server" does not hold for this package's own tests, which build
-#   a mux and drive it with httptest. Re-added to the unit suite through
-#   TEST_UNIT_PKGS below; the regex entry stays because that mechanism is
-#   deliberately additive.
-# - pkg/webservice/v1/webauthn$$: WebAuthn ceremonies need real authenticator
-# - pkg/webservice/v1/rest/platform$$: REST handlers need running gRPC services
-# - pkg/platform/system$$: System info gathering depends on host
+# Packages excluded from unit tests and coverage; their own tests run in no CI stage.
 TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cmd/platformctl$$|cmd/platformd$$|cmd/gatewayd$$|cmd/platform-initrd$$|examples/|pkg/webservice/v1/test$$|pkg/device/dao$$|pkg/dns/dao$$|pkg/platform$$|pkg/compute$$|pkg/qemu$$|pkg/swtpm$$|pkg/vtpm$$|pkg/sdn/netlink$$|pkg/ipxe$$|pkg/testenv$$|pkg/initrd$$|pkg/installer$$|pkg/installer/alpine$$|pkg/firstboot$$|pkg/uefi/firmware$$|pkg/uki$$|pkg/store/datastore$$|pkg/cli/commands$$|pkg/boot/commands$$|pkg/daemon/commands$$|pkg/sdn/gateway/commands$$|pkg/iso$$|pkg/storage/luks$$|pkg/compute/podman$$|pkg/cli$$|pkg/app$$|pkg/webservice$$|pkg/dns$$|pkg/webservice/v1$$|pkg/webservice/v1/webauthn$$|pkg/webservice/v1/rest/platform$$|pkg/platform/system$$
 
-# TEST_UNIT_PKGS: packages that TEST_EXCLUDE drops from discovery but whose
-# _test.go files are self-contained — no platformd, no TPM, no network. They are
-# named EXPLICITLY rather than removed from TEST_EXCLUDE so that a future edit to
-# that regex cannot silently take them out of the suite again: an excluded
-# package's tests run in no CI stage at all and can rot, or stop compiling,
-# without turning anything red (#34).
-#
-# Measured 2026-08-23 at daa039a: pkg/app 37 test files / 2.5s, and
-# pkg/daemon/commands 0.03s, both green standalone with the full tag set. The
-# TEST_EXCLUDE comment's claim that these "need a running platformd" is stale for
-# these two packages; it still holds for the rest of the list.
-#
-# pkg/cli/commands/bootstrap added 2026-09-02 (#134): 0.48s, green standalone
-# with the full tag set, no platformd/TPM/network. It holds the shutdown-watchdog
-# tests, which assert that `bootstrap run` returns after cancellation instead of
-# requiring SIGKILL (#135). Those tests were written, passed locally, and ran in
-# NO CI STAGE — `pkg/cli/commands` is in TEST_EXCLUDE and only ./pkg/app/ and
-# ./pkg/daemon/commands/ were re-added. That is exactly the rot this variable's
-# comment above warns about, reproduced by the change that added the tests.
-#
-# pkg/webservice/v1 added 2026-09-02 (#153): measured 22-27s green standalone
-# with the full tag set — the router tests build a mux and drive it with
-# httptest, so no platformd, no TPM, no network. The TEST_EXCLUDE comment's
-# claim that this package "needs a running server" is stale for its own tests,
-# exactly as it went stale for pkg/app and pkg/daemon/commands above; that entry
-# is now annotated. The package holds the ServiceRegistry tests that pin the 503
-# loud-failure contract — the SERVICE_NOT_CONFIGURED discriminator the WebUI
-# branches on. Those tests were written against an EXCLUDED package and ran in
-# no CI stage, which is #134's lesson repeating: the rot arrives with the change
-# that adds the tests, not later.
-#
-# pkg/dns added 2026-09-02 (#182): 20.8s, green standalone with the full tag
-# set, no platformd/TPM/network — the TEST_EXCLUDE comment's claim that it
-# needs XKMS/QuicBaaS key stores is stale for the unit tests, which use
-# NewMockKeyStore. It holds the resolver's qname-matching tests, which assert
-# that a record named "www" does not answer www.anything.example.com. Left
-# excluded, those would have run in no CI stage at all.
-# pkg/cli/commands/admin added 2026-09-02 (#159): 0.2s green standalone with the
-# full tag set, no platformd/TPM/network. The same rot a fourth time, found
-# independently the same day as #153's — the admin-claim CLI tests were landing
-# in a package no CI stage runs, because `pkg/cli/commands` is in TEST_EXCLUDE.
-# Two lanes hitting this on one afternoon is why the pattern is tracked rather
-# than the instances. That tracker is #34. (This comment previously named #211,
-# which is the sdk/javascript vitest instance and is CLOSED — following it
-# produced "closed, so handled" and stopped the reader. Corrected in #358.)
-#
-# pkg/platform added 2026-09-04 (#358): 1.6s green standalone with the full tag
-# set. Its TEST_EXCLUDE reason claimed TPM/HSM dependence; the tests use mockTPM
-# throughout — no OpenTPM, no /dev/ open, no TestMain, no network. Unlike the
-# five above, this one was verified under the ACTUAL CI condition rather than
-# inferred from a dev-host pass: built and run under bwrap with a fresh /dev
-# (no /dev/tpm*) and an unshared network namespace, PASS at -count=3, with
-# `cat /dev/tpm0` refused inside the same sandbox as the negative control. A
-# dev-host pass cannot distinguish "does not need the TPM" from "quietly used
-# the one that was there."
-#
-# test/integration/helpers/surface added 2026-10-12 (#487): the matcher every
-# integration suite uses to decide a subtest is "not implemented". It carries no
-# build tag and imports only errors and grpc/status, so it runs in-process in
-# milliseconds; left to the integration tag it would run in no unit stage.
-#
-# test/integration/helpers added 2026-10-12 (#502): without the integration tag
-# the package is endpoints.go and endpoints_test.go alone, which check that the
-# shared endpoint helpers read the variables run-integration-tests.sh exports,
-# built from the ports it gives platformd. Every other file keeps the tag.
-#
-# test/integration/iso added 2026-10-25 (#964 step b): without the integration
-# tag the package is runner.go and grub_detector.go with their tests, which
-# drive the process-group command runner and the GRUB menu detector over local
-# processes, with no platformd. Every other file keeps the tag.
-#
-# scripts/depscheck added 2026-10-15 (#927): `make deps-check`'s parse and
-# decision logic, tested over testdata fixtures with no network. Discovery
-# lists only ./pkg/... and ./cmd/..., so without this entry it would run in no
-# unit stage.
-#
-# scripts/foreignfailures added 2026-10-22 (ruling 125): the foreign-failure
-# baseline checker the Integration job runs on a failed suite, and the test
-# that holds .github/foreign-failures.tsv to the ruling. Same reason as
-# depscheck: discovery would not reach it.
-#
-# test/integration/tenant added 2026-10-25 (#964 step b): without the
-# integration tag the package is cli_exec.go, commands.go and cli_exec_test.go,
-# the CLI adapter's argument rendering and output parsing, tested with no
-# daemon. Every other file keeps the tag.
-# pkg/swtpm and pkg/vtpm added 2026-10-25 (#964 step b): green on a host with
-# no swtpm and no QEMU. The swtpm tests put a stand-in swtpm on PATH; the vtpm
-# tests run the EK certificate injector against the in-memory TPM simulator
-# served on a unix socket. The real-swtpm checks stay in test/integration/vtpm.
-# test/integration/bmc/vbmc and test/integration/bmc/rmcpsim added 2026-10-25
-# (#964 step b): the self-tests of the bmc suite's two simulators, the Redfish
-# vBMC and the IPMI RMCP+ responder. Neither package carries a build tag; the
-# vbmc tests drive its routes through httptest and the rmcpsim tests talk to
-# the responder over 127.0.0.1 UDP, so they need no daemon, container or root.
-# TEST_EXCLUDE's test/integration entry kept them out of every unit stage.
-# internal/quicbaas added 2026-10-29 (#1204, Codex 8287 P1): the mcp-go v1.4.0
-# compatibility tests for the pinned SDK MCP transport. It lies outside the
-# ./pkg/... ./cmd/... discovery and TEST_EXCLUDE does not drop it; it runs in
-# about 1 s under -race.
-# pkg/firstboot added 2026-10-31 (#964 step e): the tests swap every host seam
-# (commands, mounts, LUKS, TPM detection, host sync) and root file access under
-# t.TempDir(), so they need no root, TPM, device or mount.
+# TEST_UNIT_PKGS: excluded packages whose tests are self-contained, named explicitly so they stay in the suite.
 TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./pkg/swtpm/ ./pkg/vtpm/ ./pkg/firstboot/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./test/integration/bmc/vbmc/ ./test/integration/bmc/rmcpsim/ ./test/integration/iso/ ./test/integration/tenant/ ./scripts/depscheck/ ./scripts/foreignfailures/ ./internal/quicbaas/
 
-# RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
-# gate must be green to be a gate, so a package lands here only with an issue
-# number, and the entry is deleted when that issue lands — this list only ever
-# shrinks. It is empty now: #41 (mockOVSController written from the goroutines
-# TestOVSFlowControllerAdapter_ConcurrentAccess starts) was fixed by guarding
-# the double with a mutex. The pattern must stay non-empty because grep -E with
-# an empty pattern matches every package and test-race would then run none; the
-# never-matching ^$$ keeps the filter a no-op.
+# RACE_EXCLUDE: packages with known, tracked data races; ^$$ keeps the filter a no-op.
 RACE_EXCLUDE := ^$$
 
 .PHONY: test-race
-## test-race: Run unit tests under the race detector (CI gate job)
-# Discovery is FAIL-CLOSED: `go list` runs in its own checked assignment — its
-# exit status is the assignment's, so `set -e` aborts the recipe — and an empty
-# post-filter list is an error. Inside a `$(...)` piped straight into `go test`
-# a discovery failure would vanish (no pipefail, stderr suppressed) and the
-# gate would pass having raced only TEST_UNIT_PKGS. `-tags` matches the test
-# invocation so tag-specific package-loading failures surface here, not there.
+## test-race: Run unit tests under the race detector; an empty package list is an error
 RACE_PKGS_DISCOVER = \
 	pkgs=$$(go list -tags "$(BUILD_TAGS)" ./pkg/... ./cmd/...); \
 	pkgs=$$(printf '%s\n' "$$pkgs" | grep -v -E "$(TEST_EXCLUDE)" | grep -v -E "$(RACE_EXCLUDE)"); \
@@ -3085,10 +2246,7 @@ test-race:
 	$(RACE_PKGS_DISCOVER); \
 	go test -race -tags "$(BUILD_TAGS)" -skip "$(TEST_SKIP)" -timeout 20m $$pkgs
 
-## print-race-pkgs: Print test-race's package set on one line (batch.yml race-full and bench read it)
-#
-# The same fail-closed discovery as test-race, so batch.yml's race-full job
-# races exactly the packages the CI Race job does, at a different -count.
+## print-race-pkgs: Print test-race's package set on one line
 .PHONY: print-race-pkgs
 print-race-pkgs:
 	@set -e; \
@@ -3143,11 +2301,7 @@ coverage-report: coverage
 coverage-full:
 	@echo "$(CYAN)$(BOLD)→ Running comprehensive coverage tests...$(RESET)"
 	@mkdir -p $(COVERAGE_DIR)
-# Both steps keep going on failure ON PURPOSE — the merge below needs both
-# profiles, and a partial coverage number is still worth producing. What is NOT
-# on purpose is doing it silently: the `|| true` here used to hide a failing
-# suite completely, so a red run produced a coverage report that read as clean.
-# Failures are now recorded and reported at the end (#243).
+# Both steps continue on failure; the merge needs both profiles.
 	@echo "$(CYAN)→ Step 1: Running unit tests with coverage...$(RESET)"
 	@{ $(GOTEST) -tags "$(BUILD_TAGS) pkcs11 objstore integration" -coverprofile=$(COVERAGE_DIR)/unit.out -covermode=atomic \
 		$$(go list ./pkg/... ./cmd/... | grep -v -E "$(TEST_EXCLUDE)"); \
@@ -3301,9 +2455,7 @@ coverage-tenant-cli:
 integration-test-tenant: build-devcontainer
 	$(call run-integration-suite,tenant)
 
-# ==============================================================================
-# Code Quality Targets
-# ==============================================================================
+# Code quality targets
 
 .PHONY: fmt
 ## fmt: Format all Go source files
@@ -3324,14 +2476,7 @@ fmt-check:
 	@echo "$(GREEN)✓ All files are properly formatted$(RESET)"
 
 .PHONY: check-go-build-tags
-## check-go-build-tags: Fail if a target ci-template calls drops GO_BUILD_TAGS (#960)
-#
-# Dry-runs (`make -n`) each target with a probe tag and fails unless the
-# probe reaches a command line other than an `echo`: a go build/test/vet,
-# golangci-lint, gosec, govulncheck or the integration runner. Nothing
-# builds and nothing runs. `test` is itself probed and depends on this
-# target, so the probe run sets GO_BUILD_TAGS_PROBING to stop the recursion
-# (`make -n` still executes recipe lines that name $(MAKE)).
+## check-go-build-tags: Fail if a target CI calls drops GO_BUILD_TAGS
 GO_BUILD_TAGS_PROBE     := probe_tag_960
 GO_BUILD_TAGS_TARGETS   := lint build coverage security integration-test test
 check-go-build-tags:
@@ -3432,9 +2577,7 @@ lint: $(GOLANGCI_LINT) $(ACTIONLINT)
 		exit 1; \
 	fi
 
-# ==============================================================================
-# Security Scanning Targets
-# ==============================================================================
+# Security scanning targets
 
 .PHONY: gosec
 ## gosec: Run security analysis with gosec
@@ -3479,65 +2622,13 @@ gosec-sarif: $(GOSEC)
 	fi
 	@echo "$(GREEN)✓ SARIF report: $(BUILD_DIR)/gosec-results.sarif$(RESET)"
 
-# Modules scanned by `make vuln`, kept in step with the module split: the root
-# module and the separately-versioned SDK. Both are blocking.
+# Modules `make vuln` scans: the root module and sdk/go.
 GOVULN_MODULES := . sdk/go
 
-# govulncheck is blocking (devops.md §8) and is also the §9 forcing function for
-# toolchain currency. One finding has NO fixed version published upstream and is
-# allowlisted here by ID; every other finding — including a new one in these
-# same modules — fails the target. Re-check on each dependency bump and delete
-# an entry the day its fix ships.
-#   GO-2026-4736 (allowlisted 2026-08-14; re-verified 2026-08-20 and again
-#       2026-09-08 on gobgp/v4 v4.9.0 — issue #25)
-#       github.com/osrg/gobgp/v4: a remotely-triggerable panic on a malformed
-#       NEXT_HOP path attribute crashes the BGP speaker. Reached from
-#       pkg/sdn/bgp/speaker.go (gobgpServerWrapper.Start -> BgpServer.Serve).
-#
-#       The 2026-09-08 migration to gobgp/v4 v4.9.0 (#556) did NOT close it:
-#       govulncheck v1.8.0 still reports "Fixed in: N/A" for v4.9.0. A claim
-#       circulating that v4.3.0 fixed it is false against the database; the
-#       database is the authority here. The speaker's exposure is unchanged:
-#       it peers only with neighbours named in configuration (the iBGP relays),
-#       under RFC 8212 default-deny policy and a per-family prefix limit.
-#       Phase 2.0 of #553 (privilege-separated processes) bounds a speaker
-#       crash to the bgp process.
-#
-#       Exposure: the speaker only peers with neighbours named in configuration,
-#       inside the fabric, and the BGP edge is not in production use.
-#
-#       CLOSING CONDITION (issue #25): the day upstream publishes a fixed
-#       release, bump gobgp, DELETE this entry and the ID from GOVULN_ALLOW
-#       below, and mark the tracking issue done. Watch
-#       https://pkg.go.dev/vuln/GO-2026-4736.
-#   GO-2026-6911 (allowlisted 2026-11-06; mcp-go v1.5.0 — #1422)
-#       github.com/mark3labs/mcp-go: the client HTTP transport, every version,
-#       no fixed version published. No non-test package in this repo imports
-#       mcp-go; it arrives through the go-quicbaas SDK MCP transport. The
-#       client package is imported directly only by a test, internal/quicbaas/mcpgo_compat_test.go
-#       (TestMCPGoCompat_ModuleServerAlias -> client.NewStreamableHttpClient),
-#       against an in-process httptest server. Any runtime client use sits
-#       inside the go-quicbaas SDK MCP transport, which tracks the finding as
-#       quicbaas #2211.
-#
-#       Exposure: no platform runtime path builds an mcp-go client; the test
-#       client talks only to a loopback server it started itself.
-#
-#       CLOSING CONDITION (quicbaas #2211): the day upstream publishes a fixed
-#       mcp-go release, bump it, DELETE this entry and the ID from GOVULN_ALLOW
-#       below. Watch https://pkg.go.dev/vuln/GO-2026-6911.
+# govulncheck allowlist, IDs with no fixed release (any other finding fails): GO-2026-4736 gobgp/v4 NEXT_HOP panic, speaker peers only with configured neighbours (#25); GO-2026-6911 mcp-go client transport, test-only use (#1422). Delete an ID when its fix ships.
 GOVULN_ALLOW := GO-2026-4736 GO-2026-6911
 
-# Each module is scanned in two steps (#940). The symbol scan builds SSA and a
-# call graph for the whole import closure; on module . it outgrew the CI job's
-# 12 GiB memory limit and was OOM-killed, and neither GOMEMLIMIT nor scanning
-# the packages in groups bounds it (cmd/platformctl alone keeps a >5 GB live
-# heap). So every package is first scanned for vulnerable IMPORTS
-# (-scan package, no SSA, well under 1 GiB). A called vulnerability is always
-# an imported one, so when every imported ID is allowlisted the symbol scan's
-# verdict is already known and it is not run. Only an imported ID outside the
-# allowlist runs the symbol scan, which decides as before whether the code calls
-# it; if that scan cannot complete, the target fails.
+# Each module is scanned for vulnerable imports first; the symbol scan runs only for an import outside the allowlist.
 .PHONY: vuln
 ## vuln: Run vulnerability scan with govulncheck (allowlist: GOVULN_ALLOW)
 vuln:
@@ -3577,11 +2668,7 @@ vuln:
 	if [ $$FAILED -ne 0 ]; then exit 1; fi; \
 	echo "$(GREEN)✓ Vulnerability scan complete (only allowlisted no-fix findings remain)$(RESET)"
 
-# Directories excluded from the filesystem scan. CI runs this same target
-# through `make security` in the toolchain image (devops.md §4). test/ and vbmc/ are harnesses and examples/ is a sample tree —
-# none ship in a release. web/node_modules is a build artifact; web/ itself is
-# NOT skipped, because the Next.js frontend is shipped and its lockfiles are in
-# scope. Suppressions belong in .trivyignore with a reason and a date, not here.
+# Directories excluded from the filesystem scan.
 TRIVY_SKIP_DIRS := --skip-dirs test --skip-dirs examples --skip-dirs vbmc --skip-dirs web/node_modules
 
 .PHONY: trivy
@@ -3636,16 +2723,12 @@ mod-verify:
 	@echo "$(GREEN)✓ Module integrity verified$(RESET)"
 
 .PHONY: security
-## security: Run the full security-analysis suite (devops.md §8)
-# The contract CI calls: gosec, govulncheck, go mod verify and trivy fs, in the
-# same form a developer runs locally. Container images are covered separately by
-# `make trivy-image`, which needs a built image. trivy fails closed when the CLI
-# is not on PATH: a suite that silently skips a scanner is not a passing suite.
+## security: Run gosec, govulncheck, go mod verify and trivy fs
 security: gosec vuln mod-verify trivy
 	@echo "$(GREEN)$(BOLD)✓ Security suite passed!$(RESET)"
 
 .PHONY: security-novuln
-## security-novuln: make security without govulncheck; CI runs vuln as its own job at 20g (#1425)
+## security-novuln: make security without govulncheck; CI runs vuln as its own job
 security-novuln: gosec mod-verify trivy
 	@echo "$(GREEN)$(BOLD)✓ Security suite (without govulncheck) passed!$(RESET)"
 
@@ -3654,9 +2737,7 @@ security-novuln: gosec mod-verify trivy
 check: fmt-check vet lint gosec vuln
 	@echo "$(GREEN)$(BOLD)✓ All quality checks passed!$(RESET)"
 
-# ==============================================================================
-# Tool Installation Targets
-# ==============================================================================
+# Tool installation targets
 
 .PHONY: install-tools
 ## install-tools: Install all development and security tools
@@ -3668,9 +2749,7 @@ install-tools: install-gosec install-govulncheck install-trivy install-grype ins
 install-gosec: $(GOSEC)
 	@echo "$(GREEN)  ✓ gosec $(GOSEC_VERSION) at $(GOSEC)$(RESET)"
 
-# Built from the gosec tools module ($(GOSEC_SRC)) with this module's toolchain
-# into a version-stamped directory; make skips it when the binary is present.
-# Never resolved from PATH.
+# Built from $(GOSEC_SRC) with this module's toolchain into a version-stamped directory.
 $(GOSEC):
 	@echo "$(CYAN)$(BOLD)→ Building gosec $(GOSEC_VERSION) from $(GOSEC_SRC) (module toolchain, x/tools v0.51.0)...$(RESET)"
 	@mkdir -p $(GOSEC_DIR)
@@ -3718,14 +2797,6 @@ install-golangci-lint: $(GOLANGCI_LINT)
 	@echo "$(GREEN)  ✓ golangci-lint $(GOLANGCI_LINT_VERSION) at $(GOLANGCI_LINT)$(RESET)"
 
 # Builds the pinned linter into a version-stamped directory under $(BUILD_DIR).
-# Make skips this entirely when the binary is already there, so `make lint` does
-# not pay an install on every invocation.
-#
-# The previous version of install-golangci-lint could not fix the problem it was
-# offered for: it downloaded a PREBUILT v2.11.2 — a third version, by exactly the
-# mechanism that causes the toolchain mismatch — and short-circuited on
-# `command -v golangci-lint`, so with a broken binary already on PATH it printed
-# "already installed" and did nothing.
 $(GOLANGCI_LINT):
 	@echo "$(CYAN)$(BOLD)→ Installing golangci-lint $(GOLANGCI_LINT_VERSION) (built with this module's toolchain)...$(RESET)"
 	@mkdir -p $(GOLANGCI_LINT_DIR)
@@ -3748,15 +2819,10 @@ install-gocovmerge:
 		echo "$(GREEN)  ✓ gocovmerge already installed$(RESET)"; \
 	fi
 
-# ==============================================================================
-# CI Pipeline Targets
-# ==============================================================================
+# CI pipeline targets
 
 .PHONY: ci-local
-## ci-local: Run CI pipeline locally (requires all tools installed)
-# `security` is the full §8 suite (gosec, govulncheck, go mod verify, trivy fs)
-# and replaces the loose `gosec vuln trivy` chain: devops.md §4 requires
-# `make ci` to include it.
+## ci-local: Run the CI pipeline locally (requires all tools installed)
 ci-local: fmt-check vet lint security build-no-web test
 	@echo "$(GREEN)$(BOLD)✓ CI pipeline complete!$(RESET)"
 
@@ -3773,13 +2839,7 @@ ci: docker-builder-load-ci
 	@echo "$(GREEN)$(BOLD)✓ CI pipeline complete!$(RESET)"
 
 .PHONY: race
-## race: Run tests with race detector
-# The exit status is the RESULT, so it has to survive both the pipe and the
-# recipe. `$$?` after a pipeline is tee's status, not go test's, and /bin/sh
-# here is dash, which has no `pipefail` — so the status is stashed inside the
-# braces and read back. Before this the recipe ended `|| true` with an
-# unconditional `✓`, and a detected race, a compile error or a timeout kill all
-# reported success (#243).
+## race: Run tests with the race detector
 race:
 	@echo "$(CYAN)$(BOLD)→ Running tests with race detector...$(RESET)"
 	@mkdir -p $(BUILD_DIR)
@@ -3793,9 +2853,7 @@ race:
 	fi; \
 	echo "$(GREEN)✓ Race detection complete — no races detected$(RESET)"
 
-# ==============================================================================
 # Releases
-# ==============================================================================
 
 .PHONY: release
 release: clean \
@@ -3915,10 +2973,7 @@ release-github-delete:
 	git push origin --delete v$$VERSION
 
 
-# Docker
-# Both bake groups (docker-bake.hcl) run on the default buildx builder; the
-# arm64 group is built through binfmt/qemu-user-static (registered by `init`),
-# not on a remote arm64 docker context.
+# Docker; both bake groups run on the default buildx builder, arm64 through binfmt.
 .PHONY: docker-bake-load
 docker-bake-load:
 	docker buildx bake amd64 arm64 --load
@@ -3936,13 +2991,7 @@ docker-pxe-server-load:
 docker-pxe-server-push:
 	cd build/docker/pxe-server && make -j$(shell nproc) push
 
-# Docker :: PXE Boot Container (bootstrap)
-# Builds the PXE boot container: the static pxeboot binary, Samba and
-# supervisord. It carries no installer media — every media set it serves
-# comes from a netboot media build (make netboot-media) the deployer stages
-# under /data/media.
-#
-# Usage: make pxeboot-container
+# PXE boot container: the static pxeboot binary, Samba and supervisord.
 PXEBOOT_IMAGE               ?= platform-pxeboot
 PXEBOOT_CONTEXT             := build/docker/bootstrap
 PXEBOOT_BINARY              := $(PXEBOOT_CONTEXT)/pxeboot
@@ -4038,11 +3087,7 @@ docker-builder-load-amd64:
 		-t $(APPNAME)-builder-$(DOCKER_BUILDER_BASE):amd64 \
 		-f build/docker/$(APPNAME)-builder/$(DOCKER_BUILDER_DOCKERFILE) .
 
-# U-Boot for the Raspberry Pi factory image (build/docker/uboot-builder):
-# rpi_arm64 (SPI TPM, loaded by the Pi firmware as kernel8.img) and qemu_arm64
-# (the emulated stand-in), both with EFI TCG2 measured boot and EFI Secure
-# Boot whose PK/KEK/db are preseeded from UBOOT_KEYS_DIR. One build per key
-# set; the output carries the cache key of its inputs.
+# U-Boot for the Raspberry Pi factory image, rpi_arm64 and qemu_arm64, with measured boot and Secure Boot keys from UBOOT_KEYS_DIR.
 UBOOT_KEYS_DIR   ?= $(HOME)/.trusted-platform/secure-boot
 UBOOT_OUTPUT_DIR ?= build/docker/uboot-builder/output
 
@@ -4051,10 +3096,7 @@ UBOOT_OUTPUT_DIR ?= build/docker/uboot-builder/output
 uboot-build:
 	$(MAKE) -C build/docker/uboot-builder build KEYS_DIR=$(abspath $(UBOOT_KEYS_DIR)) OUTPUT_DIR=$(abspath $(UBOOT_OUTPUT_DIR))
 
-# iPXE: the arm64 EFI iPXE the PXE server hands to a Raspberry Pi or the
-# QEMU virt stand-in after U-Boot. Upstream's binary halts under U-Boot's
-# polled EFI (build/docker/ipxe-builder/README.md says why); this one is
-# built with NAP_NULL and cached by its inputs' digests.
+# iPXE: the arm64 EFI iPXE the PXE server hands to a Raspberry Pi or the QEMU virt stand-in.
 IPXE_OUTPUT_DIR ?= build/docker/ipxe-builder/output
 IPXE_ARM64_EFI  := $(IPXE_OUTPUT_DIR)/bin-arm64-efi/snponly.efi
 
@@ -4068,9 +3110,7 @@ ipxe-build:
 ipxe-verify:
 	$(MAKE) -C build/docker/ipxe-builder verify OUTPUT_DIR=$(abspath $(IPXE_OUTPUT_DIR))
 
-# The virt kernel: the QEMU virt stand-in's kernel, cross-built from Alpine's
-# linux-lts version with the memory-mapped TIS TPM driver Alpine's aarch64
-# kernels lack (build/docker/virt-kernel-builder/Dockerfile says why).
+# The virt kernel for the QEMU virt stand-in, with the memory-mapped TIS TPM driver.
 VIRT_KERNEL_OUTPUT_DIR ?= build/docker/virt-kernel-builder/output
 
 .PHONY: virt-kernel-build
@@ -4088,13 +3128,7 @@ virt-kernel-verify:
 virt-kernel-clean:
 	$(MAKE) -C build/docker/virt-kernel-builder clean OUTPUT_DIR=$(abspath $(VIRT_KERNEL_OUTPUT_DIR))
 
-# The platform-required kernel options (build/docker/kernel-config) checked
-# against the Alpine kernels the platform ships but does not build: linux-lts
-# on x86_64 and aarch64, linux-rpi on aarch64. Built in or module both count;
-# the arm64 run needs binfmt (as the assemble container does). Fails, after
-# checking every package, if any of them misses an option. The amd64 run is
-# last so the local alpine:<release> tag, which a --platform run re-points,
-# is left on amd64 for the builders that use it untagged.
+# The platform-required kernel options checked against the Alpine kernels the platform ships.
 KERNEL_CONFIG_ALPINE_RELEASE ?= 3.22
 
 .PHONY: kernel-config-check-alpine
@@ -4117,17 +3151,7 @@ uboot-verify:
 uboot-clean:
 	$(MAKE) -C build/docker/uboot-builder clean OUTPUT_DIR=$(abspath $(UBOOT_OUTPUT_DIR))
 
-# strongSwan for the overlay's IPsec transport (build/docker/strongswan-builder,
-# docs/sdn/engineering.md "IPsec transport"): charon + swanctl from a pinned
-# release whose tarball must carry the pinned release key's signature and the
-# pinned SHA-256, built for Alpine 3.22 (musl) on amd64 and arm64 (arm64 under
-# binfmt/qemu-user) and packaged as signed apks with an OpenRC service. The same
-# build packages the PKCS#11 module host (trusted-platform-p11-host: the glibc
-# p11-kit server that hosts the go-xkms module for musl charon, ipsec-module-host
-# below) with its OpenRC service. The output is what the install media carry
-# (--platform-apk-dir). Sign with APK_SIGNING_KEY=<path>/<name>.rsa
-# (<name>.rsa.pub beside it); without it the build uses a per-build ephemeral
-# key (dev only).
+# strongSwan for the overlay's IPsec transport (build/docker/strongswan-builder), signature- and hash-checked, for amd64 and arm64.
 STRONGSWAN_OUTPUT_DIR ?= build/docker/strongswan-builder/output
 STRONGSWAN_ARCHES     ?= amd64 arm64
 
@@ -4147,38 +3171,13 @@ strongswan-verify:
 strongswan-clean:
 	$(MAKE) -C build/docker/strongswan-builder clean OUTPUT_DIR=$(abspath $(STRONGSWAN_OUTPUT_DIR))
 
-# The ipsec integration suite (test/integration/ipsec) runs two musl charon
-# peers, each in its own network namespace, authenticating IKEv2 through the
-# go-xkms PKCS#11 module, and asserts the ESP SAs with `ip xfrm`. It runs on
-# both architectures: natively in the devcontainer on amd64, and inside an
-# aarch64 VM (qemu-system-aarch64, TCG) on arm64, because qemu-user refuses
-# NETLINK_XFRM and charon will not start without it. Its inputs are built
-# here, on the host, per architecture:
-#   - rootfs-<arch>.tar: Alpine with the strongSwan and module-host apks
-#     installed through apk (signatures checked), as a node has them;
-#   - modulehost-<arch>.tar: a glibc root filesystem (Ubuntu 26.04, p11-kit
-#     0.26.2 like Alpine's client) whose p11-kit server hosts the module,
-#     built c-shared against glibc: a Go c-shared library cannot be loaded by
-#     a musl process (golang/go#13492), so charon loads p11-kit-client.so
-#     (docs/sdn/engineering.md §9.2). strongswan-build packages it as the
-#     trusted-platform-p11-host apk, so it reaches the peers through the rootfs;
-#   - for arm64, the VM's kernel and initramfs and the suite's own test
-#     binary cross-compiled for arm64.
-# IPSEC_XKMS_VERSION pins the go-xkms the module is built from: the first
-# whose module survives C_Finalize + C_Initialize (which p11-kit's server
-# performs on every connection) and signs raw CKM_ECDSA (which strongSwan
-# uses), both from go-xkms#1387, released in v0.48.0-alpha. The go-xkms the
-# platform's go.mod resolves (v0.17.0-alpha) predates both fixes.
+# The ipsec integration suite: two charon peers in network namespaces, IKEv2 through the go-xkms PKCS#11 module.
 IPSEC_WORK_DIR     := work/ipsec
 IPSEC_ARCHES       := amd64 arm64
 IPSEC_PEER_IMAGE   := trusted-platform-ipsec-peer
 IPSEC_HOST_IMAGE   := trusted-platform-ipsec-modulehost
 IPSEC_XKMS_VERSION ?= v0.48.0-alpha
-# --init: the peers' OpenRC services run supervise-daemon, whose `--stop`
-# waits for the supervisor's PID to disappear. The supervisor is reparented
-# to the container's PID 1 when it exits, and `go test` as PID 1 never reaps
-# it, so without an init the zombie keeps `rc-service charon stop` waiting
-# forever (measured: [supervise-daemo] <defunct> under PID 1).
+# --init: the peers' OpenRC services run supervise-daemon.
 IPSEC_SUITE_ENV := --init \
 	-e IPSEC_ROOTFS_AMD64=/workspace/$(IPSEC_WORK_DIR)/rootfs-amd64.tar \
 	-e IPSEC_ROOTFS_ARM64=/workspace/$(IPSEC_WORK_DIR)/rootfs-arm64.tar \
@@ -4332,8 +3331,7 @@ docker-platform-push:
 		-f build/docker/$(APPNAME)/Dockerfile-alpine .
 
 
-# Docker run targets. docker-run itself runs a command in the toolchain image
-# (Development Container section); this is the interactive builder shell.
+# Docker run targets; this is the interactive builder shell.
 .PHONY: docker-run-debug
 docker-run-debug: build-debug
 	docker run -it --privileged \
@@ -4365,19 +3363,7 @@ docker-run-yubico-piv-tool:
 		/usr/local/bin/yubico-piv-tool -astatus
 
 
-# ISO
-# Build ISOs via the in-CLI builder. The previous Docker-based
-# iso-hwtpm / iso-swtpm targets and the trusted-platform-iso-builder
-# image were removed; `bin/platformctl iso create` is the supported
-# and intended workflow now (downloads Alpine, customizes, generates
-# Secure Boot keys, and emits the bootable ISO).
-# Factory disk images (pkg/diskimage, `platformctl diskimage`): the installer
-# runs inside the arm64 assemble container against a loop-mounted image.
-# Requires the arm64 binaries (rpi-binaries); `platformctl diskimage create`
-# itself generates the Secure Boot keys in UBOOT_KEYS_DIR when they do not
-# exist, builds (or reuses) U-Boot in UBOOT_OUTPUT_DIR for that key set, and
-# builds the assemble container image. uboot-build and
-# docker-diskimage-builder-load remain for doing those steps on their own.
+# ISO: build ISOs with the in-CLI builder.
 DISKIMAGE_TARGET      ?= rpi
 DISKIMAGE_MODEL       ?= rpi4
 DISKIMAGE_SIZE_MB     ?= 4096
@@ -4459,17 +3445,12 @@ bench-diskimage:
 test-qemu:
 	$(MAKE) test-pkg PKG="./pkg/qemu/ ./pkg/qemu/harness/"
 
-# The qemu-virt image and the U-Boot it boots with, as the integration suite
-# sees them. Both are produced on the host (binfmt + privileged assemble
-# container) and handed to the devcontainer read-only.
+# The qemu-virt image and its U-Boot, as the integration suite sees them.
 DISKIMAGE_QEMU_IMG   := bin/trusted-platform-qemu-virt.img
 DISKIMAGE_UBOOT_QEMU := $(UBOOT_OUTPUT_DIR)/qemu_arm64/u-boot.bin
 DISKIMAGE_UBOOT_RPI  := $(UBOOT_OUTPUT_DIR)/rpi_arm64/u-boot.bin
 
-# The suite's inputs as the devcontainer sees them. The work directory is
-# under the mounted source tree (work/ is ignored by git), not the
-# container's tmpfs /tmp: the boot copies the image there and the guest
-# writes to it.
+# The suite's inputs as the devcontainer sees them.
 DISKIMAGE_SUITE_ENV := -e DISKIMAGE_IMAGE=/workspace/$(DISKIMAGE_QEMU_IMG) \
 	-e DISKIMAGE_RPI_IMAGE=/workspace/$(DISKIMAGE_OUTPUT) \
 	-e DISKIMAGE_UBOOT=/workspace/$(DISKIMAGE_UBOOT_QEMU) \
@@ -4485,10 +3466,7 @@ integration-test-diskimage: build-devcontainer image-rpi image-rpi-qemu
 integration-test-diskimage-only: build-devcontainer
 	$(call run-integration-suite,diskimage,$(DISKIMAGE_SUITE_ENV))
 
-# The aarch64 network-boot suite: QEMU virt booted from the qemu_arm64
-# U-Boot on the PXE test bridge — the Raspberry Pi stand-in from U-Boot
-# onward. Boots Alpine's own aarch64 netboot kernel and initramfs, pinned
-# to the release branch pkg/iso builds from, fetched once into bin/.
+# The aarch64 network-boot suite: QEMU virt from the qemu_arm64 U-Boot on the PXE test bridge.
 NETBOOT_ALPINE_BRANCH ?= v3.22
 NETBOOT_ALPINE_MIRROR ?= https://dl-cdn.alpinelinux.org/alpine
 NETBOOT_INPUT_DIR     ?= bin/netboot/aarch64
@@ -4526,11 +3504,7 @@ integration-test-netboot: build-devcontainer uboot-build ipxe-build netboot-inpu
 integration-test-netboot-only: build-devcontainer
 	$(call run-integration-suite,netboot,$(NETBOOT_SUITE_ENV))
 
-# The NAT64 suite (#601) runs in a VM that carries its own kernel. Jool is
-# a kernel module and a container shares the host's kernel, so the suite
-# boots Alpine linux-lts with the jool-modules-lts built for exactly that
-# kernel (the fleet's pairing) under QEMU/KVM inside the devcontainer. The
-# guest suite is test/integration/sdn built with the nat64vm tag.
+# The NAT64 suite runs in a VM with its own kernel.
 NAT64_VM_DIR   ?= bin/nat64-vm
 NAT64_VM_IMAGE := go-trusted-platform-nat64-vm
 NAT64_VM_RUN   ?= TestJoolDriver|TestNAT64Datapath
@@ -4576,18 +3550,11 @@ integration-test-diskimage-shell: build-devcontainer
 		$(DEVCONTAINER_IMAGE) \
 		bash
 
-# The arm64 userspace suite runs the aarch64 platformd on musl against a
-# swtpm inside an arm64 Alpine container (binfmt on the host, like the
-# assemble container), without booting anything: minutes, not an hour.
+# The arm64 userspace suite: aarch64 platformd on musl against a swtpm in an arm64 Alpine container.
 DISKIMAGE_USERSPACE_IMG := trusted-platform-alpine-swtpm:arm64
 DISKIMAGE_USERSPACE_BIN := bin/aarch64/diskimage-userspace.test
 
-# The software TPM the userspace suite talks to runs on the HOST, natively,
-# with its state directory bind-mounted into the arm64 container: under
-# qemu-user emulation swtpm never creates its Unix sockets (bind() fails or
-# the socket silently does not appear, measured 2026-09-20 with swtpm's own
-# privilege drop, with docker exec --user tss and with a shell wrapper),
-# while a connect() from the emulated platformd to a host-made socket works.
+# swtpm runs on the host with its state bind-mounted, since it cannot create its sockets under qemu-user.
 DISKIMAGE_USERSPACE_SWTPM_DIR := $(PWD)/work/userspace-swtpm
 
 .PHONY: integration-test-diskimage-userspace
@@ -4649,12 +3616,7 @@ isos:
 	printf "Build execution time: %02d:%02d:%02d\n" $$hours $$minutes $$seconds
 
 
-# Browser targets — launch with trusted CA from QEMU server
-# Usage:
-#   make chrome       # Chrome trusting server CA
-#   make firefox      # Firefox trusting server CA
-#   make browser      # Auto-detect (prefers Chrome for WebAuthn)
-#
+# Browser targets trusting the QEMU server's CA: make chrome, make firefox, or make browser to auto-detect.
 BROWSER_SERVER_URL    ?= https://server.example.com:8443
 BROWSER_CA_BUNDLE_URL ?= $(BROWSER_SERVER_URL)/api/v1/ca/bootstrap
 BROWSER_PROFILE_DIR   ?= /tmp/trusted-platform-browser
@@ -4739,9 +3701,6 @@ config:
 # Testenv Enrollment Integration Tests
 .PHONY: integration-test-testenv-enrollment
 ## integration-test-testenv-enrollment: Run TestEnrollmentIntegration in the devcontainer
-## Without ISOs it boots its framework VM on an isolated bridge. Set
-## INTEGRATION_TEST_SERVER_ISO and INTEGRATION_TEST_CLIENT_ISO to paths under
-## the repository (the container sees it at /workspace) for the full ISO run.
 integration-test-testenv-enrollment: build-devcontainer
 	$(call run-integration-suite,testenv-enrollment,-e INTEGRATION_TEST_SERVER_ISO -e INTEGRATION_TEST_CLIENT_ISO)
 
@@ -4772,11 +3731,7 @@ build-all-debug: build-debug platform-initrd-debug
 build-all-static: build-all
 	@echo "build-all-static target is deprecated. Use 'make build-all' instead (now produces static binaries by default)."
 
-# Build all binaries for ISO/deployment (three-binary architecture)
-# All binaries are static by default
-# - platformd: Daemon only (serves as the system service)
-# - platformctl: Full CLI with all user commands
-# - platform-initrd: Minimal binary for initramfs boot operations
+# Every binary for ISO and deployment, static: platformd, platformctl and platform-initrd.
 .PHONY: binaries
 binaries: build platform-initrd
 	@echo "Built all static binaries:"
@@ -4788,8 +3743,7 @@ binaries: build platform-initrd
 binaries-static: binaries
 	@echo "binaries-static target is deprecated. Use 'make binaries' instead (now produces static binaries by default)."
 
-# Every binary a linux/arm64 node (an RPi, for one) needs, cross-
-# compiled as pure Go into $(ARM64_BIN_DIR).
+# Every binary a linux/arm64 node needs, pure Go, into $(ARM64_BIN_DIR).
 .PHONY: rpi-binaries
 ## rpi-binaries: Cross-compile every linux/arm64 binary (platformd, platformctl, platformctl-static, platform-initrd, gatewayd) into bin/aarch64
 rpi-binaries: build-arm64 platform-initrd-arm64 build-gatewayd-arm64
@@ -4814,15 +3768,10 @@ test-api:
 	cd pkg/api/rest && go test -v
 
 
-
-# Builds never resolve through a workspace: modules come from Gitea tags
-# (dependency-resolution.md §2). Immunizes against stray go.work files.
+# Builds never resolve through a workspace.
 export GOWORK=off
 
-# ---- dependency-resolution.md targets (2026-08-13 cutover) ----
-# deps-latest runs before compiling in a consumer repo. It picks the highest
-# tag INCLUDING -alpha prereleases — bare 'go get @latest' ignores
-# prereleases and would downgrade to legacy v0.0.0.
+# deps-latest runs before compiling in a consumer repository.
 
 .PHONY: deps-latest
 
@@ -4835,36 +3784,20 @@ deps-latest:
 	  if [ -n "$$V" ] && [ "$$V" != "$$m" ]; then go get "$$m@$$V" || exit 1; fi; \
 	done; go mod tidy'
 
-# deps-check is the CI standard's latest-version stage (handbook ci-standard.md
-# §1, devops.md §4). scripts/depscheck fails when a direct require or a version
-# replace in go.mod or sdk/go/go.mod is behind its latest version and its line
-# carries no comment naming the reason (devops.md §9). First-party modules are
-# compared with their highest tag including -alpha, the version deps-latest
-# moves to (dependency-resolution.md §3). It needs the module proxy and the dev
-# Gitea: under GOPROXY=off it fails with that reason instead of passing.
+# deps-check fails when a direct require is behind its latest version without a comment naming the reason.
 .PHONY: deps-check
 ## deps-check: Fail when a dependency is behind its latest version without a go.mod reason comment
 deps-check:
 	@$(GO) run ./scripts/depscheck -go $(GO) . sdk/go
 
-# ---- release-alpha: handbook template release-alpha v2.4.0 ----
-# make release-alpha VERSION=vX.Y.Z-alpha cuts an internal alpha from main
-# (release-versioning.md §1a). It writes VERSION, re-pins the root's sdk/go
-# requirement, commits, tags vX.Y.Z-alpha and sdk/go/vX.Y.Z-alpha (annotated,
-# signed through agent-git.sh), and pushes the commit and exactly those two
-# tags in one atomic push. CHANGELOG.md must already hold a
-# "## [X.Y.Z-alpha]" section. build/make/ holds verbatim copies of the
-# handbook templates: refresh them by copying, never edit them here.
-# Set these before the include; the template reads them as it is parsed.
+# release-alpha template v2.4.0: `make release-alpha VERSION=vX.Y.Z-alpha` cuts an alpha from main.
 REPO_NAME        ?= go-trusted-platform
 AGENT_GIT        ?= agent-git.sh
 RELEASE_REMOTE   ?= origin
 LOCKSTEP_MODULES := sdk/go
 include build/make/release-alpha.mk
 
-# The template's version guard is an ordinary recipe line, which `make -n`
-# prints instead of running. This prerequisite runs the same guard under
-# -n as well ('+'), so a dry run without VERSION fails like the real one.
+# The template's version guard is a recipe line, which `make -n` prints instead of running.
 .PHONY: release-alpha-version
 release-alpha: release-alpha-version
 release-alpha-version:

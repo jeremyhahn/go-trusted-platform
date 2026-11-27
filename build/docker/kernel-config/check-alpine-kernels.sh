@@ -1,16 +1,5 @@
 #!/bin/sh
-# check-alpine-kernels.sh - check Alpine kernel packages against the
-# platform-required options.
-#
-#   check-alpine-kernels.sh PACKAGE...      (e.g. linux-lts linux-rpi)
-#
-# Runs inside an alpine container of the release and architecture to check,
-# with this directory mounted at /kc (make kernel-config-check-alpine). Each
-# package is fetched from the release's repositories, its boot/config-* is
-# extracted and require-config.sh --enabled checks it: the platform does not
-# build these kernels, so built in or module are both acceptable and only a
-# missing option is reported. Every package is checked; the exit status is
-# 3 if any of them misses an option, 2 on a fetch or usage error, else 0.
+# check-alpine-kernels.sh: check Alpine kernel packages against the platform-required options.
 set -eu
 
 [ $# -ge 1 ] || { echo "usage: check-alpine-kernels.sh PACKAGE..." >&2; exit 2; }

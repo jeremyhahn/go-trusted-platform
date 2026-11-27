@@ -55,7 +55,7 @@ Two distinct kinds of absence in that table, and the difference matters:
   re-export gap. `docs/00` L5 obliges this repository to re-export the composed
   surface through its SDK, CLI, web and API; nine policy operations exist and
   none is reachable. Whether policy management *should* be remotely reachable is
-  an owner decision — an endpoint that loads arbitrary Rego is an admission-rule
+  an open decision — an endpoint that loads arbitrary Rego is an admission-rule
   write primitive ([architecture.md](architecture.md) §6.1) — so this is
   recorded, not proposed.
 - **`MISSING` — no consumer** on the `pkg/security` rows is not a transport gap.

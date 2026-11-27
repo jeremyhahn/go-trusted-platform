@@ -538,4 +538,4 @@ must page it rather than pushing it in one frame.
 
 REST is under `/api/v1`; gRPC is package `platform.v1`. The older REST router in
 §3 is not version-tagged and is not a `/api/v0` — both routers serve under `v1`,
-which is precisely why the duplication needs an owner ruling.
+which is precisely why the duplication needs a decision.

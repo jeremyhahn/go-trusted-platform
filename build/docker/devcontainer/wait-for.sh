@@ -1,9 +1,5 @@
 #!/bin/bash
-# wait-for.sh: bounded readiness polling for the integration harness (#964).
-#
-# Sourced by entrypoint.sh, run-integration-tests.sh and the per-suite
-# run-tests.sh scripts. A harness wait polls the condition it is waiting for
-# under a deadline; it never sleeps a fixed time hoping the condition holds.
+# wait-for.sh: bounded readiness polling for the integration harness.
 
 # WAIT_FOR_INTERVAL is the poll interval in seconds.
 WAIT_FOR_INTERVAL="${WAIT_FOR_INTERVAL:-0.2}"

@@ -1,22 +1,5 @@
 #!/bin/bash
-# Build the Trusted Platform U-Boot binaries. Runs inside the uboot-builder
-# container; see the Makefile beside it for the host-side invocation.
-#
-# Inputs (environment):
-#   UBOOT_VERSION     upstream release, e.g. 2026.07
-#   UBOOT_SHA256      sha256 of u-boot-$UBOOT_VERSION.tar.bz2 (fail-closed)
-#   UBOOT_CACHE_KEY   the key the caller derived from every build input; it is
-#                     recorded in the manifest so a later run can prove the
-#                     output matches its inputs without rebuilding
-#   UBOOT_OWNER_GUID  SignatureOwner GUID written into the PK/KEK/db lists
-# Directories (build/docker/run-builder.sh copies them with docker cp; a bind
-# mount would be resolved on the Docker daemon's filesystem, which is not the
-# checkout when the build runs in a CI job container):
-#   /keys     PK.crt KEK.crt DB.crt (PEM or DER), copied in
-#   /configs  Kconfig fragments + tpm-soft-spi.dts, copied in
-#   /patches  U-Boot patches, copied in
-#   /output   per-board artifacts + manifest.json, copied out when the build succeeds
-#   /build/src  tarball cache, a named docker volume
+# Build the Trusted Platform U-Boot binaries.
 set -euo pipefail
 
 : "${UBOOT_VERSION:?UBOOT_VERSION is required}"

@@ -1,20 +1,5 @@
 #!/bin/bash
-# CLI Multi-Protocol Integration Tests
-#
-# This script runs the root-level CLI multi-protocol integration tests.
-# Tests commands: version, status, health, config, context, service, completion
-# Tests all protocols: CLI, REST, gRPC, QUIC, MCP, Unix Socket
-#
-# Usage:
-#   ./run-tests.sh           # Run all tests (default)
-#   ./run-tests.sh version   # Run version command tests only
-#   ./run-tests.sh status    # Run status command tests only
-#   ./run-tests.sh health    # Run health command tests only
-#   ./run-tests.sh config    # Run config command tests only
-#   ./run-tests.sh context   # Run context command tests only
-#   ./run-tests.sh service   # Run service command tests only
-#   ./run-tests.sh completion # Run completion command tests only
-#   ./run-tests.sh edge      # Run edge case tests only
+# CLI multi-protocol integration tests.
 
 set -e
 

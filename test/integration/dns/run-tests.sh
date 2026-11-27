@@ -1,10 +1,5 @@
 #!/bin/bash
-# DNS Integration Tests
-#
-# This script runs the DNS integration tests.
-#
-# Usage:
-#   ./run-tests.sh           # Run tests (default)
+# DNS integration tests.
 
 set -e
 

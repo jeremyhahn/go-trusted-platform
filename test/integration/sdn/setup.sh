@@ -1,25 +1,7 @@
 #!/bin/bash
 set -e
 
-# =============================================================================
-# SDN Integration Test Environment Setup Script
-# =============================================================================
-#
-# This script handles setup for SDN integration tests, including:
-# - OVS (Open vSwitch) initialization
-# - Topology management for multi-node tests
-# - Environment verification
-#
-# Usage:
-#   ./setup.sh                    - Initialize OVS and run default command
-#   ./setup.sh topology start     - Start a test topology
-#   ./setup.sh topology stop      - Stop a running topology
-#   ./setup.sh topology list      - List available topologies
-#   ./setup.sh topology status    - Show topology status
-#   ./setup.sh topology destroy   - Destroy a topology
-#   ./setup.sh verify             - Verify environment is ready
-#
-# =============================================================================
+# SDN integration test environment setup.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

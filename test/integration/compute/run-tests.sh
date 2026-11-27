@@ -1,16 +1,5 @@
 #!/bin/bash
-# Compute/QEMU Integration Tests
-#
-# This script sets up the environment and runs comprehensive compute integration tests
-# covering QEMU VM lifecycle, OVS network attachment, and swtpm TPM emulation.
-#
-# Usage:
-#   ./run-tests.sh           # Run all tests (default)
-#   ./run-tests.sh setup     # Just setup environment
-#   ./run-tests.sh teardown  # Just teardown environment
-#   ./run-tests.sh lifecycle # Run VM lifecycle tests
-#   ./run-tests.sh network   # Run network attachment tests
-#   ./run-tests.sh e2e       # Run end-to-end tests
+# Compute and QEMU integration tests.
 
 set -e
 

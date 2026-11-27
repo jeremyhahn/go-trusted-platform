@@ -1,27 +1,5 @@
 #!/usr/bin/env bash
-# scripts/ci-go-integrity.sh: the module-integrity gate of Go on a
-# self-hosted pool (Tenant Agent ruling 869, pending InfoSec's review of
-# M-8). The pools fetch modules through the LAN proxy first, then
-# proxy.golang.org; integrity then rests on the checksum database, which
-# verifies every module whichever proxy serves it. Every pool step that runs
-# Go calls this first, so the step fails before any Go runs unless:
-#
-#   - GOSUMDB is sum.golang.org;
-#   - nothing exempts a module from it or from the proxy: GONOSUMDB,
-#     GOPRIVATE, GONOPROXY and GOINSECURE are empty, GONOSUMCHECK is unset,
-#     GOFLAGS carries no -insecure;
-#   - GOFLAGS sets -mod=readonly and no other -mod (nor --mod), so go.mod and
-#     go.sum are never rewritten, and holds no quoting, which go would read
-#     differently from this check;
-#   - GOPROXY never falls back to direct, whatever whitespace surrounds the
-#     entry (go trims it).
-#
-# It reads `go env`, so a value from the pool, the job or a `go env -w`
-# file is checked alike. On a GitHub-hosted runner (RUNNER_ENVIRONMENT is
-# github-hosted, exactly) it does not apply and exits 0; any other value,
-# unset included, is checked.
-#
-#   usage: scripts/ci-go-integrity.sh
+# ci-go-integrity.sh: the module-integrity gate of Go on a self-hosted pool.
 set -euo pipefail
 
 if [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ]; then

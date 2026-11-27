@@ -1,22 +1,4 @@
-# Trusted Platform Standalone Reference Architecture
-#
-# Deploys a single gateway, server, and client node for development/testing.
-# Uses the devcontainer image and builds binaries at runtime.
-#
-# Prerequisites:
-#   make build-devcontainer DEVCONTAINER_IMAGE=go-trusted-platform-dev:latest
-#
-# Usage:
-#   docker compose up -d                    # Start all services
-#   docker compose up -d server             # Start server only
-#   docker compose logs -f server           # Follow server logs
-#   docker compose down                     # Stop all services
-#   docker compose down -v                  # Stop and remove volumes
-#
-# Network:
-#   gateway: 10.99.99.1
-#   server:  10.99.99.2
-#   client:  10.99.99.3
+# Trusted Platform standalone reference architecture.
 
 networks:
   platform-net:
@@ -49,10 +31,7 @@ x-healthcheck: &healthcheck
   start_period: 60s
 
 services:
-  # ==========================================================================
-  # SERVER (Controller)
-  # Must start first - provides CA, DNS, ACME services
-  # ==========================================================================
+  # Server (controller): starts first and provides CA, DNS and ACME.
   server:
     image: go-trusted-platform-dev:latest
     container_name: tp-server
@@ -87,10 +66,7 @@ services:
       test: ["CMD", "sh", "-c", "nc -z localhost 10443 || exit 1"]
     restart: unless-stopped
 
-  # ==========================================================================
-  # GATEWAY (Load Balancer / Reverse Proxy)
-  # Routes traffic to server and client backends
-  # ==========================================================================
+  # Gateway (load balancer and reverse proxy) to the server and client backends.
   gateway:
     image: go-trusted-platform-dev:latest
     container_name: tp-gateway
@@ -126,10 +102,7 @@ services:
       test: ["CMD", "curl", "-sf", "http://localhost:80/health"]
     restart: unless-stopped
 
-  # ==========================================================================
-  # CLIENT (Application Server)
-  # Runs custom.example.com service
-  # ==========================================================================
+  # Client (application server) running custom.example.com.
   client:
     image: go-trusted-platform-dev:latest
     container_name: tp-client
