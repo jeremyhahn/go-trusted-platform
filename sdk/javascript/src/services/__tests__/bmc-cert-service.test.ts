@@ -210,7 +210,7 @@ describe('BMCCertService profile ID validation', () => {
   // A numeric ID past 2^53 has already lost precision before String() runs:
   // 9007199254740993 arrives as 9007199254740992 and would reach another BMC.
   const unsafeNumbers: Array<[string, number]> = [
-    ['9007199254740993', 9007199254740993],
+    ['9007199254740993', Number('9007199254740993')],
     ['MAX_SAFE_INTEGER + 1', Number.MAX_SAFE_INTEGER + 1],
     ['1.5', 1.5],
     ['-1', -1],
