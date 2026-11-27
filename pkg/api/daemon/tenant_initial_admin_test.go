@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	webiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
@@ -183,5 +184,95 @@ func TestCreateInitialAdminInvitation_RESTIdentityRecordsInviter(t *testing.T) {
 				t.Fatalf("invited_by = %d, want 42", fake.got.InvitedByID)
 			}
 		})
+	}
+}
+
+// fakeInviterResolver maps a login email to a stored IAM user, as the
+// platform user service does.
+type fakeInviterResolver struct {
+	users map[string]*entities.User
+	calls int
+}
+
+func (f *fakeInviterResolver) GetByEmail(_ context.Context, email string) (*entities.User, error) {
+	f.calls++
+	if u, ok := f.users[email]; ok {
+		return u, nil
+	}
+	return nil, platformservice.ErrUserNotFound{Email: email}
+}
+
+const initialAdminInviterEmail = "admin@example.com"
+
+func newResolvingInitialAdminServer(inviter initialAdminInviter) (*TenantGRPCServer, *fakeInviterResolver) {
+	s := newInitialAdminServer(inviter)
+	r := &fakeInviterResolver{users: map[string]*entities.User{
+		initialAdminInviterEmail: {ID: 7, Email: initialAdminInviterEmail},
+	}}
+	s.SetInviterResolver(r)
+	return s, r
+}
+
+// A real session keeps the login name (email) as the subject and an mTLS
+// identity carries the certificate email, so neither is a decimal user id.
+// Each resolves to the stored IAM user before the inviter is recorded.
+func TestCreateInitialAdminInvitation_EmailSubjectResolvesInviter(t *testing.T) {
+	cases := map[string]context.Context{
+		"platform token": systemAdminCallerContext(initialAdminInviterEmail),
+		"webiam platform token": webiam.SetAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{
+			TenantID: initialAdminSystemTenant,
+			Subject:  initialAdminInviterEmail,
+		}),
+		"webiam session": webiam.SetSessionInContext(context.Background(),
+			webiam.NewIAMSession(&iamsdk.User{ID: initialAdminInviterEmail, Email: initialAdminInviterEmail, TenantID: initialAdminSystemTenant})),
+		"mtls identity": context.WithValue(context.Background(), ContextKeyIdentity, &auth.Identity{
+			ID:       initialAdminInviterEmail,
+			TenantID: initialAdminSystemTenant,
+			Email:    initialAdminInviterEmail,
+			Name:     "Admin",
+		}),
+	}
+	for name, ctx := range cases {
+		t.Run(name, func(t *testing.T) {
+			fake := &fakeInitialAdminInviter{}
+			s, _ := newResolvingInitialAdminServer(fake)
+			_, err := s.CreateInitialAdminInvitation(ctx,
+				&platformv1.CreateInitialAdminInvitationRequest{TenantId: "tenant-a", Email: "owner@example.com"})
+			if err != nil {
+				t.Fatalf("email caller: %v", err)
+			}
+			if fake.got == nil || fake.got.InvitedByID != 7 {
+				t.Fatalf("invited_by = %+v, want 7", fake.got)
+			}
+		})
+	}
+}
+
+func TestCreateInitialAdminInvitation_UnknownEmailIsRefused(t *testing.T) {
+	fake := &fakeInitialAdminInviter{}
+	s, r := newResolvingInitialAdminServer(fake)
+	_, err := s.CreateInitialAdminInvitation(systemAdminCallerContext("stranger@example.com"),
+		&platformv1.CreateInitialAdminInvitationRequest{TenantId: "tenant-a", Email: "owner@example.com"})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("got %v, want FailedPrecondition", err)
+	}
+	if fake.calls != 0 {
+		t.Fatalf("unknown caller reached the inviter %d times", fake.calls)
+	}
+	if r.calls == 0 {
+		t.Fatalf("the resolver was not consulted")
+	}
+}
+
+// A numeric subject is already the user id and needs no lookup.
+func TestCreateInitialAdminInvitation_NumericSubjectSkipsResolver(t *testing.T) {
+	fake := &fakeInitialAdminInviter{}
+	s, r := newResolvingInitialAdminServer(fake)
+	if _, err := s.CreateInitialAdminInvitation(systemAdminCallerContext("42"),
+		&platformv1.CreateInitialAdminInvitationRequest{TenantId: "tenant-a", Email: "owner@example.com"}); err != nil {
+		t.Fatalf("numeric caller: %v", err)
+	}
+	if fake.got.InvitedByID != 42 || r.calls != 0 {
+		t.Fatalf("invited_by = %d, resolver calls = %d; want 42, 0", fake.got.InvitedByID, r.calls)
 	}
 }
