@@ -68,9 +68,13 @@ done <<<"$diff"
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 tags=$(make -s print-build-tags) || everything
+# -e reports a package error (a syntax error, a missing import) in the
+# listing and exits 0; such a package's imports are incomplete, so a line
+# marked ! is a failure to list the packages, which fails closed (#2445).
 listing=$(go list -e -tags "$tags" \
-	-f '{{.Dir}}|{{.ImportPath}}|{{join .EmbedFiles " "}} {{join .TestEmbedFiles " "}} {{join .XTestEmbedFiles " "}}|{{join .Imports " "}} {{join .TestImports " "}} {{join .XTestImports " "}}' \
+	-f '{{if .Error}}!{{end}}{{.Dir}}|{{.ImportPath}}|{{join .EmbedFiles " "}} {{join .TestEmbedFiles " "}} {{join .XTestEmbedFiles " "}}|{{join .Imports " "}} {{join .TestImports " "}} {{join .XTestImports " "}}' \
 	./...) || everything
+case $'\n'$listing in *$'\n!'*) everything ;; esac
 
 reldir() {
 	if [ "$1" = "$root" ]; then echo .; else echo "${1#"$root"/}"; fi
