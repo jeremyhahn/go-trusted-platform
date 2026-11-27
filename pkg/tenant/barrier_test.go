@@ -30,6 +30,11 @@ type testBarrierClient struct {
 	mu       sync.Mutex
 	barriers map[string]bool // tenantID -> unsealed (true = unsealed)
 
+	// initCalls counts TenantBarrierInit calls; initPassphrases records the
+	// passphrase each call carried.
+	initCalls       int
+	initPassphrases [][]byte
+
 	initErr   error
 	unsealErr error
 	sealErr   error
@@ -43,6 +48,15 @@ func newTestBarrierClient() *testBarrierClient {
 }
 
 func (c *testBarrierClient) TenantBarrierInit(ctx context.Context, req *quicbaassdk.QRDBTenantBarrierInitRequest) error {
+	c.mu.Lock()
+	c.initCalls++
+	c.initPassphrases = append(c.initPassphrases, append([]byte(nil), req.Passphrase...))
+	c.mu.Unlock()
+	// Mirrors go-qrdb v0.19.0-alpha: an init with no passphrase is refused
+	// with ErrEmptyPassphrase.
+	if len(req.Passphrase) == 0 {
+		return errors.New("qrdb: tenant barrier passphrase is empty")
+	}
 	if c.initErr != nil {
 		return c.initErr
 	}
@@ -215,8 +229,11 @@ func TestCreateTenant_InitializesBarrier(t *testing.T) {
 		t.Fatalf("CreateTenant failed: %v", err)
 	}
 
-	if !bc.isInitialized(entity.ID) {
-		t.Error("expected per-tenant barrier to be initialized")
+	// The barrier passphrase comes from the operator in Initialize and is
+	// never defaulted, so CreateTenant's non-fatal auto-init is refused and
+	// the barrier stays uninitialized until the operator initializes it.
+	if bc.isInitialized(entity.ID) {
+		t.Error("CreateTenant must not initialize the barrier without an operator passphrase")
 	}
 }
 
@@ -263,8 +280,11 @@ func TestDeleteTenant_ProceedsWithBarrierClient(t *testing.T) {
 		t.Fatalf("CreateTenant failed: %v", err)
 	}
 
+	if err := m.InitTenantBarrier(ctx, entity.ID, []byte("operator-pass")); err != nil {
+		t.Fatalf("InitTenantBarrier: %v", err)
+	}
 	if !bc.isInitialized(entity.ID) {
-		t.Error("barrier should be initialized after create")
+		t.Error("barrier should be initialized after init")
 	}
 
 	err = m.DeleteTenant(ctx, entity.ID)
@@ -295,7 +315,7 @@ func TestInitTenantBarrier_Success(t *testing.T) {
 	delete(bc.barriers, entity.ID)
 	bc.mu.Unlock()
 
-	err = m.InitTenantBarrier(ctx, entity.ID)
+	err = m.InitTenantBarrier(ctx, entity.ID, []byte("operator-pass"))
 	if err != nil {
 		t.Fatalf("InitTenantBarrier failed: %v", err)
 	}
@@ -310,7 +330,7 @@ func TestInitTenantBarrier_EmptyTenantID(t *testing.T) {
 	m, _, _ := newTestManagerWithBarrier(t)
 	ctx := context.Background()
 
-	err := m.InitTenantBarrier(ctx, "")
+	err := m.InitTenantBarrier(ctx, "", []byte("operator-pass"))
 	if err == nil {
 		t.Fatal("expected error for empty tenant ID")
 	}
@@ -321,13 +341,72 @@ func TestInitTenantBarrier_EmptyTenantID(t *testing.T) {
 	}
 }
 
+// TestManager_InitTenantBarrierRefusesAnEmptyPassphrase verifies that an init
+// with no operator passphrase is refused before the barrier client is called
+// (go-qrdb v0.19.0-alpha refuses it with ErrEmptyPassphrase anyway).
+func TestManager_InitTenantBarrierRefusesAnEmptyPassphrase(t *testing.T) {
+	m, _, bc := newTestManagerWithBarrier(t)
+	ctx := context.Background()
+
+	entity, err := m.CreateTenant(ctx, &CreateTenantRequest{Name: "empty-pass-tenant"})
+	if err != nil {
+		t.Fatalf("CreateTenant failed: %v", err)
+	}
+	bc.mu.Lock()
+	before := bc.initCalls
+	bc.mu.Unlock()
+
+	for _, pass := range [][]byte{nil, {}} {
+		err = m.InitTenantBarrier(ctx, entity.ID, pass)
+		var invalidReq ErrInvalidRequest
+		if !errors.As(err, &invalidReq) {
+			t.Fatalf("InitTenantBarrier(%q) = %v (%T), want ErrInvalidRequest", pass, err, err)
+		}
+	}
+
+	bc.mu.Lock()
+	after := bc.initCalls
+	bc.mu.Unlock()
+	if after != before {
+		t.Errorf("barrier client called %d times for an empty passphrase, want 0", after-before)
+	}
+	if bc.isInitialized(entity.ID) {
+		t.Error("barrier must stay uninitialized after an empty-passphrase init")
+	}
+}
+
+// TestManager_InitTenantBarrierForwardsTheOperatorPassphrase verifies that the
+// operator's passphrase reaches the qrdb init request unchanged.
+func TestManager_InitTenantBarrierForwardsTheOperatorPassphrase(t *testing.T) {
+	m, _, bc := newTestManagerWithBarrier(t)
+	ctx := context.Background()
+
+	entity, err := m.CreateTenant(ctx, &CreateTenantRequest{Name: "forward-pass-tenant"})
+	if err != nil {
+		t.Fatalf("CreateTenant failed: %v", err)
+	}
+
+	if err := m.InitTenantBarrier(ctx, entity.ID, []byte("operator-pass")); err != nil {
+		t.Fatalf("InitTenantBarrier: %v", err)
+	}
+
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
+	if n := len(bc.initPassphrases); n == 0 || string(bc.initPassphrases[n-1]) != "operator-pass" {
+		t.Fatalf("init passphrases = %q, want the last to be %q", bc.initPassphrases, "operator-pass")
+	}
+	if unsealed, ok := bc.barriers[entity.ID]; !ok || unsealed {
+		t.Errorf("barrier state = (%v, %v), want initialized and sealed", unsealed, ok)
+	}
+}
+
 // TestInitTenantBarrier_NilBarrierClient verifies proper error when no
 // barrier client is configured.
 func TestInitTenantBarrier_NilBarrierClient(t *testing.T) {
 	m, _ := newTestManager(t) // no barrier client
 	ctx := context.Background()
 
-	err := m.InitTenantBarrier(ctx, "some-tenant-id")
+	err := m.InitTenantBarrier(ctx, "some-tenant-id", []byte("operator-pass"))
 	if err == nil {
 		t.Fatal("expected error for nil barrier client")
 	}
@@ -344,7 +423,7 @@ func TestInitTenantBarrier_TenantNotFound(t *testing.T) {
 	m, _, _ := newTestManagerWithBarrier(t)
 	ctx := context.Background()
 
-	err := m.InitTenantBarrier(ctx, "nonexistent-tenant")
+	err := m.InitTenantBarrier(ctx, "nonexistent-tenant", []byte("operator-pass"))
 	if err == nil {
 		t.Fatal("expected error for nonexistent tenant")
 	}
@@ -370,7 +449,7 @@ func TestInitTenantBarrier_SDKError(t *testing.T) {
 	// Inject error after creation
 	bc.initErr = errors.New("sdk connection lost")
 
-	err = m.InitTenantBarrier(ctx, entity.ID)
+	err = m.InitTenantBarrier(ctx, entity.ID, []byte("operator-pass"))
 	if err == nil {
 		t.Fatal("expected error from SDK")
 	}
@@ -505,7 +584,7 @@ func TestSealTenantBarrier_Success(t *testing.T) {
 	m, _, barrierClient := newTestManagerWithBarrier(t)
 	ctx := context.Background()
 
-	if err := barrierClient.TenantBarrierInit(ctx, &quicbaassdk.QRDBTenantBarrierInitRequest{TenantID: "tenant-x"}); err != nil {
+	if err := barrierClient.TenantBarrierInit(ctx, &quicbaassdk.QRDBTenantBarrierInitRequest{TenantID: "tenant-x", Passphrase: []byte("operator-pass")}); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	if err := barrierClient.TenantBarrierUnseal(ctx, &quicbaassdk.QRDBTenantBarrierUnsealRequest{TenantID: "tenant-x"}); err != nil {
@@ -608,7 +687,7 @@ func TestTenantBarrierStatus_AfterUnseal(t *testing.T) {
 	m, _, barrierClient := newTestManagerWithBarrier(t)
 	ctx := context.Background()
 
-	if err := barrierClient.TenantBarrierInit(ctx, &quicbaassdk.QRDBTenantBarrierInitRequest{TenantID: "tenant-y"}); err != nil {
+	if err := barrierClient.TenantBarrierInit(ctx, &quicbaassdk.QRDBTenantBarrierInitRequest{TenantID: "tenant-y", Passphrase: []byte("operator-pass")}); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	if err := barrierClient.TenantBarrierUnseal(ctx, &quicbaassdk.QRDBTenantBarrierUnsealRequest{TenantID: "tenant-y"}); err != nil {

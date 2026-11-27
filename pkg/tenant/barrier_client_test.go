@@ -40,6 +40,11 @@ func (f *fakeQRDBTenants) TenantBarrierInit(ctx context.Context, req *quicbaassd
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.inits = append(f.inits, req)
+	// Mirrors go-qrdb v0.19.0-alpha: an init with no passphrase is refused
+	// with ErrEmptyPassphrase.
+	if len(req.Passphrase) == 0 {
+		return nil, errors.New("qrdb: tenant barrier passphrase is empty")
+	}
 	if f.initErr != nil {
 		return nil, f.initErr
 	}
@@ -107,7 +112,7 @@ func TestSDKTenantBarrierClient_ForwardsEachVerb(t *testing.T) {
 	ctx := context.Background()
 	const id = "tenant-a"
 
-	if err := bc.TenantBarrierInit(ctx, &quicbaassdk.QRDBTenantBarrierInitRequest{TenantID: id}); err != nil {
+	if err := bc.TenantBarrierInit(ctx, &quicbaassdk.QRDBTenantBarrierInitRequest{TenantID: id, Passphrase: []byte("operator-pass")}); err != nil {
 		t.Fatalf("TenantBarrierInit: %v", err)
 	}
 	if err := bc.TenantBarrierUnseal(ctx, &quicbaassdk.QRDBTenantBarrierUnsealRequest{TenantID: id, Key: []byte("k")}); err != nil {
@@ -124,8 +129,8 @@ func TestSDKTenantBarrierClient_ForwardsEachVerb(t *testing.T) {
 		t.Fatalf("TenantBarrierSeal: %v", err)
 	}
 
-	if len(fake.inits) != 1 || fake.inits[0].TenantID != id {
-		t.Fatalf("inits = %+v, want one for %q", fake.inits, id)
+	if len(fake.inits) != 1 || fake.inits[0].TenantID != id || string(fake.inits[0].Passphrase) != "operator-pass" {
+		t.Fatalf("inits = %+v, want one for %q with the operator passphrase", fake.inits, id)
 	}
 	if len(fake.unseals) != 1 || fake.unseals[0].TenantID != id || string(fake.unseals[0].Key) != "k" {
 		t.Fatalf("unseals = %+v, want one for %q with key k", fake.unseals, id)
@@ -143,7 +148,7 @@ func TestSDKTenantBarrierClient_InitErrorPropagates(t *testing.T) {
 	fake.initErr = errors.New("barrier backend down")
 	bc := NewTenantBarrierClient(fake)
 
-	err := bc.TenantBarrierInit(context.Background(), &quicbaassdk.QRDBTenantBarrierInitRequest{TenantID: "t"})
+	err := bc.TenantBarrierInit(context.Background(), &quicbaassdk.QRDBTenantBarrierInitRequest{TenantID: "t", Passphrase: []byte("operator-pass")})
 	if !errors.Is(err, fake.initErr) {
 		t.Fatalf("TenantBarrierInit error = %v, want %v", err, fake.initErr)
 	}
@@ -175,7 +180,7 @@ func TestManager_BarrierLifecycleThroughSDKAdapter(t *testing.T) {
 	}
 	id := entity.ID
 
-	if err := m.InitTenantBarrier(ctx, id); err != nil {
+	if err := m.InitTenantBarrier(ctx, id, []byte("operator-pass")); err != nil {
 		t.Fatalf("InitTenantBarrier: %v", err)
 	}
 	st, err := m.TenantBarrierStatus(ctx, id)
