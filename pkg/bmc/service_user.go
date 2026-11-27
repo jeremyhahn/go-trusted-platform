@@ -24,6 +24,16 @@ import (
 // opening a fresh IPMI 2.0 RMCP+ session against the BMC. Callers MUST
 // Close the returned manager when finished to release the session.
 func (s *Service) userManagerFor(ctx context.Context, profileID uint64) (ManagedUserManager, error) {
+	cfg, err := s.profileConfig(ctx, profileID)
+	if err != nil {
+		return nil, err
+	}
+	return NewUserManager(ctx, cfg, s.logger)
+}
+
+// profileConfig loads the stored BMC config of the given profile; a missing
+// store or profile is ErrProfileNotFound.
+func (s *Service) profileConfig(ctx context.Context, profileID uint64) (*Config, error) {
 	if s.profiles == nil {
 		return nil, ErrProfileNotFound{ProfileID: profileID}
 	}
@@ -31,7 +41,7 @@ func (s *Service) userManagerFor(ctx context.Context, profileID uint64) (Managed
 	if err != nil {
 		return nil, ErrProfileNotFound{ProfileID: profileID}
 	}
-	return NewUserManager(ctx, cfg, s.logger)
+	return cfg, nil
 }
 
 // ListUsers returns the populated BMC user slots for the given profile.
@@ -94,12 +104,29 @@ func (s *Service) DeleteUser(ctx context.Context, profileID uint64, slot uint8) 
 }
 
 // SetUserPassword updates the password for the BMC user at the given slot.
+// It refuses the account the profile logs in as, because the stored profile
+// password would no longer open a session (no rotation path updates it yet);
+// it writes nothing then.
 func (s *Service) SetUserPassword(ctx context.Context, profileID uint64, slot uint8, password string) error {
-	mgr, err := s.userManagerFor(ctx, profileID)
+	cfg, err := s.profileConfig(ctx, profileID)
+	if err != nil {
+		return err
+	}
+	mgr, err := NewUserManager(ctx, cfg, s.logger)
 	if err != nil {
 		return err
 	}
 	defer mgr.Close()
+
+	users, err := mgr.ListUsers(ctx)
+	if err != nil {
+		return err
+	}
+	for _, u := range users {
+		if u.Slot == slot && u.Username == cfg.Username {
+			return ErrInvalidConfig{Field: "slot", Reason: "the slot holds the account this profile logs in as; its password cannot be changed until the stored credential is rotated with it"}
+		}
+	}
 
 	pwSecret := memguard.NewMemoryEnclaveFromString(password)
 	defer pwSecret.Destroy()

@@ -245,7 +245,7 @@ func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memgua
 	// Probe the slot before the first write: a slot that already holds an
 	// account is refused here, so the rollback below only ever clears a slot
 	// this call found empty. Callers that skip Service.CreateUser (the CLI)
-	// get the same check.
+	// get the same check. A short answer is an error, not an empty slot.
 	name, err := m.getUserName(u.Slot)
 	if err != nil {
 		return err
@@ -399,13 +399,19 @@ func (m *ipmiUserManager) setUserAccess(slot, channel uint8, priv Privilege, ena
 	return err
 }
 
-// getUserName issues IPMI Get User Name for the given slot.
+// getUserName issues IPMI Get User Name for the given slot. The answer must
+// carry the full 16-byte name field; a shorter answer (a BMC may complete
+// successfully with no data) is ErrIPMIShortResponse, so callers never read
+// it as an empty slot.
 func (m *ipmiUserManager) getUserName(slot uint8) (string, error) {
 	resp, err := m.sender.Send(netFnApp, cmdGetUserName, []byte{slot & ipmiMaxUserSlot})
 	if err != nil {
 		return "", err
 	}
-	return trimNullPadded(resp), nil
+	if len(resp) < ipmiMaxUsernameLen {
+		return "", ErrIPMIShortResponse{Command: "Get User Name", Got: len(resp), Want: ipmiMaxUsernameLen}
+	}
+	return trimNullPadded(resp[:ipmiMaxUsernameLen]), nil
 }
 
 // setUserName issues IPMI Set User Name for the given slot. The name is
