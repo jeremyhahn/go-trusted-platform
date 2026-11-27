@@ -17,6 +17,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gorilla/mux"
@@ -25,6 +26,7 @@ import (
 
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
+	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -227,4 +229,78 @@ func TestProxyRoutes_RefusedWithoutAScopeAuthorizer(t *testing.T) {
 	for _, target := range targets {
 		assert.NotEqual(t, http.StatusForbidden, appServiceServing(t, scoped, target), target)
 	}
+}
+
+// countingBMCHandler answers the power reads and writes and counts them;
+// every other BMC handler method panics through the nil embedded interface.
+type countingBMCHandler struct {
+	bmcwebsvc.RestHandler
+	statusCalls int
+	actionCalls int
+}
+
+// ProvisioningConfigured reports the provisioning routes as wired, so the
+// router fixtures list them as ordinary routes.
+func (h *countingBMCHandler) ProvisioningConfigured() bool { return true }
+
+func (h *countingBMCHandler) PowerStatus(w http.ResponseWriter, _ *http.Request) {
+	h.statusCalls++
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *countingBMCHandler) PowerAction(w http.ResponseWriter, _ *http.Request) {
+	h.actionCalls++
+	w.WriteHeader(http.StatusOK)
+}
+
+// TestBMCRoutes_ServedOnTheConsole pins that the console serves
+// /api/v1/bmc through the daemon's BMC handler behind the admin gate and the
+// bmc scopes, and mounts nothing when the daemon has no BMC handler.
+func TestBMCRoutes_ServedOnTheConsole(t *testing.T) {
+	const target = "/api/v1/bmc/7/power"
+
+	handler := &countingBMCHandler{}
+	scoped := &testHandlerRegistry{
+		tokenHandler: &allScopesSessionAuth{sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"}},
+		bmcHandler:   handler,
+	}
+	assert.Equal(t, http.StatusOK, appServiceServing(t, scoped, target))
+	assert.Equal(t, 1, handler.statusCalls)
+
+	roleOnly := &testHandlerRegistry{
+		tokenHandler: &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"},
+		bmcHandler:   &countingBMCHandler{},
+	}
+	assert.Equal(t, http.StatusForbidden, appServiceServing(t, roleOnly, target))
+
+	none := &testHandlerRegistry{
+		tokenHandler: &allScopesSessionAuth{sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"}},
+		withoutBMC:   true,
+	}
+	assert.Equal(t, http.StatusNotFound, appServiceServing(t, none, target))
+}
+
+// TestBMCRoutes_RefuseAnotherTenant pins that BMC profiles are system
+// resources: an admin session of another tenant holding every scope is
+// refused on the reads and the writes, and no handler is reached.
+func TestBMCRoutes_RefuseAnotherTenant(t *testing.T) {
+	const target = "/api/v1/bmc/7/power"
+
+	handler := &countingBMCHandler{}
+	registry := &testHandlerRegistry{
+		tokenHandler: &allScopesSessionAuth{sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "tenant-a"}},
+		bmcHandler:   handler,
+	}
+	router := newGatedTestRouter(t, registry)
+
+	get := httptest.NewRecorder()
+	router.ServeHTTP(get, httptest.NewRequest(http.MethodGet, target, nil))
+	assert.Equal(t, http.StatusForbidden, get.Code)
+
+	post := httptest.NewRecorder()
+	router.ServeHTTP(post, httptest.NewRequest(http.MethodPost, target, strings.NewReader(`{"action":"off"}`)))
+	assert.Equal(t, http.StatusForbidden, post.Code)
+
+	assert.Equal(t, 0, handler.statusCalls)
+	assert.Equal(t, 0, handler.actionCalls)
 }

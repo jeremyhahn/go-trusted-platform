@@ -22,6 +22,7 @@ type ManagerFactory func(config *Config, logger *slog.Logger) (Manager, error)
 var managerRegistry = map[SwitchVendor]ManagerFactory{
 	VendorCiscoNexus: newSSHManager,
 	VendorNoop:       newNoopManagerFactory,
+	VendorMemory:     newMemoryManagerFactory,
 }
 
 // NewManager creates a Manager for the switch identified by the given config.

@@ -64,6 +64,19 @@ const gateway = {
 
 type Route = (method: string, url: URL, body: unknown) => Response | undefined;
 
+// The page's controls sit in the capability gate, which fails closed; the
+// stub lists every VPN op as enabled.
+const VPN_OPS = [
+  "GET /api/v1/vpn/status",
+  "GET /api/v1/vpn/peers",
+  "POST /api/v1/vpn/peers",
+  "DELETE /api/v1/vpn/peers/{device_id}",
+  "GET /api/v1/vpn/posture-policies",
+  "GET /api/v1/vpn/posture-policies/{name}",
+  "PUT /api/v1/vpn/posture-policies/{name}",
+  "DELETE /api/v1/vpn/posture-policies/{name}",
+];
+
 /** Answers the three list reads with one peer, one policy and one gateway, then defers to `extra`. */
 function routes(extra: Route = () => undefined) {
   return (input: RequestInfo | URL, init?: RequestInit) => {
@@ -73,6 +86,10 @@ function routes(extra: Route = () => undefined) {
     const answer = extra(method, url, body);
     if (answer) {
       return Promise.resolve(answer);
+    }
+    if (method === "GET" && url.pathname === "/api/v1/capabilities") {
+      const capabilities = VPN_OPS.map((op) => ({ op, kind: "route", enabled: true }));
+      return Promise.resolve(ok({ capabilities, total: capabilities.length, enabled: capabilities.length }));
     }
     if (method === "GET" && url.pathname === "/api/v1/vpn/status") {
       return Promise.resolve(ok({ gateways: [gateway] }));
@@ -89,6 +106,13 @@ function routes(extra: Route = () => undefined) {
 
 describe("VPNPage", () => {
   const fetchMock = vi.fn<typeof fetch>();
+
+  /** A page control once the capability gate has opened it, so a click never lands while capabilities load. */
+  async function enabledButton(name: string) {
+    const b = await screen.findByRole("button", { name });
+    await waitFor(() => expect(b.getAttribute("data-capability-enabled")).toBe("true"));
+    return b;
+  }
 
   function renderPage() {
     const client = new PlatformClient({
@@ -172,7 +196,7 @@ describe("VPNPage", () => {
     );
 
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "Revoke laptop-1" }));
+    fireEvent.click(await enabledButton("Revoke laptop-1"));
     fireEvent.click(await screen.findByRole("button", { name: "Confirm Revoke" }));
 
     await waitFor(() => expect(screen.queryByRole("button", { name: "Confirm Revoke" })).toBeNull());
@@ -186,7 +210,7 @@ describe("VPNPage", () => {
     );
 
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "Revoke laptop-1" }));
+    fireEvent.click(await enabledButton("Revoke laptop-1"));
     fireEvent.click(await screen.findByRole("button", { name: "Confirm Revoke" }));
 
     await waitFor(() => expect(callsTo("DELETE", "/api/v1/vpn/peers/laptop-1")).toHaveLength(1));
@@ -215,7 +239,7 @@ describe("VPNPage", () => {
     );
 
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "Edit corp" }));
+    fireEvent.click(await enabledButton("Edit corp"));
     const moduleField = (await screen.findByLabelText("Module *")) as HTMLTextAreaElement;
     expect(moduleField.value).toBe(policy.module);
     fireEvent.change(moduleField, { target: { value: edited } });
@@ -243,7 +267,7 @@ describe("VPNPage", () => {
     );
 
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "Edit corp" }));
+    fireEvent.click(await enabledButton("Edit corp"));
     const moduleField = await screen.findByLabelText("Module *");
     fireEvent.change(moduleField, { target: { value: "package wrong" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -265,7 +289,7 @@ describe("VPNPage", () => {
     );
 
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "New Policy" }));
+    fireEvent.click(await enabledButton("New Policy"));
     fireEvent.change(await screen.findByLabelText("Tenant *"), { target: { value: "acme" } });
     fireEvent.change(screen.getByLabelText("Name *"), { target: { value: "strict" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -289,7 +313,7 @@ describe("VPNPage", () => {
     );
 
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "Enrol Peer" }));
+    fireEvent.click(await enabledButton("Enrol Peer"));
     fireEvent.change(await screen.findByLabelText("Tenant *"), { target: { value: " acme " } });
     fireEvent.change(screen.getByLabelText("Device ID *"), { target: { value: "laptop-2" } });
     fireEvent.change(screen.getByLabelText("Zones"), { target: { value: "management, , storage " } });
@@ -308,7 +332,7 @@ describe("VPNPage", () => {
     fetchMock.mockImplementation(routes());
 
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "Enrol Peer" }));
+    fireEvent.click(await enabledButton("Enrol Peer"));
     fireEvent.change(await screen.findByLabelText("Tenant *"), { target: { value: "acme" } });
     fireEvent.change(screen.getByLabelText("Device ID *"), { target: { value: "   " } });
 
@@ -322,7 +346,7 @@ describe("VPNPage", () => {
     );
 
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "Enrol Peer" }));
+    fireEvent.click(await enabledButton("Enrol Peer"));
     fireEvent.change(await screen.findByLabelText("Tenant *"), { target: { value: "acme" } });
     fireEvent.change(screen.getByLabelText("Device ID *"), { target: { value: "laptop-2" } });
     fireEvent.click(screen.getByRole("button", { name: "Enrol" }));
@@ -342,7 +366,7 @@ describe("VPNPage", () => {
     );
 
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "Delete corp" }));
+    fireEvent.click(await enabledButton("Delete corp"));
     fireEvent.click(await screen.findByRole("button", { name: "Confirm Delete" }));
 
     await waitFor(() => expect(screen.queryByRole("button", { name: "Confirm Delete" })).toBeNull());
@@ -358,7 +382,7 @@ describe("VPNPage", () => {
     );
 
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "Delete corp" }));
+    fireEvent.click(await enabledButton("Delete corp"));
     fireEvent.click(await screen.findByRole("button", { name: "Confirm Delete" }));
 
     await waitFor(() =>

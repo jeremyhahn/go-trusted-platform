@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	wsdevice "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
@@ -617,8 +618,11 @@ func (a *CLIAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions)
 		return nil, errors.Join(writeErr, closeErr)
 	}
 
+	args := []string{"device", "attest", opts.DeviceID, "--evidence-file", path}
+	args = appendFlag(args, "--challenge-id", opts.ChallengeID)
+
 	var record cliAttestRecord
-	if err := a.runJSON(ctx, "AttestDevice", &record, "device", "attest", opts.DeviceID, "--evidence-file", path); err != nil {
+	if err := a.runJSON(ctx, "AttestDevice", &record, args...); err != nil {
 		return nil, err
 	}
 	return &AttestDeviceResult{
@@ -645,6 +649,27 @@ type cliAttestRecord struct {
 	AKCertificateVerified bool   `json:"ak_certificate_verified"`
 	AttestationStatus     string `json:"attestation_status"`
 	Message               string `json:"message"`
+}
+
+// IssueAttestationChallenge runs `platformctl device attest-challenge <id>`
+// (#2136).
+func (a *CLIAdapter) IssueAttestationChallenge(ctx context.Context, opts IssueAttestationChallengeOptions) (*IssueAttestationChallengeResult, error) {
+	var record cliAttestChallengeRecord
+	if err := a.runJSON(ctx, "IssueAttestationChallenge", &record, "device", "attest-challenge", opts.DeviceID); err != nil {
+		return nil, err
+	}
+	return &IssueAttestationChallengeResult{
+		ChallengeID: record.ChallengeID,
+		Nonce:       record.Nonce,
+		ExpiresAt:   record.ExpiresAt,
+	}, nil
+}
+
+// cliAttestChallengeRecord is the JSON `device attest-challenge` prints.
+type cliAttestChallengeRecord struct {
+	ChallengeID string    `json:"challenge_id"`
+	Nonce       []byte    `json:"nonce"`
+	ExpiresAt   time.Time `json:"expires_at"`
 }
 
 // ============================================================================

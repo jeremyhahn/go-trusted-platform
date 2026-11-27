@@ -57,6 +57,20 @@ func (e *ErrCertIssue) Unwrap() error {
 	return e.Cause
 }
 
+// ErrCertOUUnsupported is returned by the SDK certificate issuer for a
+// request that carries a subject OU: the SDK Certificate service does not
+// carry the OU to the CA, so only the local platform CA can issue it.
+type ErrCertOUUnsupported struct {
+	// OrganizationalUnit is the subject OU the request asked for.
+	OrganizationalUnit string
+}
+
+// Error returns a human-readable description.
+func (e *ErrCertOUUnsupported) Error() string {
+	return "certificate issuer: the SDK certificate service cannot carry the subject OU \"" +
+		e.OrganizationalUnit + "\"; a local CA is required"
+}
+
 // CertIssuer is the certificate surface the daemon mints the admin client
 // certificate through, with the CA bundle that trusts it. The daemon's TLS
 // server certificate is not issued here: its key is generated in, and never
@@ -84,17 +98,19 @@ func PlatformCertIssuer(ca quicbaasca.CACertificateAuthority, client quicbaassdk
 // client certificate. The /init admin bundle and the integration harness
 // bundle share it so both paths mint the same identity.
 //
-// The Organization is the system tenant: every mTLS transport binds a
-// verified client certificate to the tenant its subject O names
-// (pkg/auth/mtls.go), and the root admin acts as the system tenant, the
-// only tenant that may act across tenants.
+// The OrganizationalUnit is the system tenant: every mTLS transport binds
+// a verified client certificate to the tenant its subject OU names
+// (pkg/auth/mtls.go, SPEC row 122), and the root admin acts as the system
+// tenant, the only tenant that may act across tenants. The Organization
+// names the system tenant as well.
 func AdminCertificateRequest() *certclient.IssueCertificateRequest {
 	return &certclient.IssueCertificateRequest{
-		CommonName:   common.AdminUsername,
-		Organization: app.SystemTenantID,
-		Usage:        "client",
-		KeyAlgorithm: "ecdsa",
-		ValidityDays: 365,
+		CommonName:         common.AdminUsername,
+		Organization:       app.SystemTenantID,
+		OrganizationalUnit: app.SystemTenantID,
+		Usage:              "client",
+		KeyAlgorithm:       "ecdsa",
+		ValidityDays:       365,
 	}
 }
 
@@ -176,7 +192,13 @@ type sdkCertIssuer struct {
 }
 
 // IssueCertificate delegates to Security().Certificate().IssueCertificate.
+// It refuses a request that carries a subject OU: the SDK Certificate
+// service drops it, and a client certificate without its tenant OU can
+// never pass mTLS authentication (#2020).
 func (i *sdkCertIssuer) IssueCertificate(ctx context.Context, req *certclient.IssueCertificateRequest) (*certclient.IssueCertificateResponse, error) {
+	if req != nil && req.OrganizationalUnit != "" {
+		return nil, &ErrCertOUUnsupported{OrganizationalUnit: req.OrganizationalUnit}
+	}
 	return i.client.Security().Certificate().IssueCertificate(ctx, req)
 }
 
@@ -230,6 +252,9 @@ func (i *localCACertIssuer) issue(ctx context.Context, req *certclient.IssueCert
 		},
 		DNSNames:    req.DNSNames,
 		IPAddresses: ips,
+	}
+	if req.OrganizationalUnit != "" {
+		csrTpl.Subject.OrganizationalUnit = []string{req.OrganizationalUnit}
 	}
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTpl, priv)
 	if err != nil {

@@ -13,7 +13,10 @@
 
 package switchmgmt
 
-import "log/slog"
+import (
+	"fmt"
+	"log/slog"
+)
 
 // Service is a thin service layer wrapping Manager instances for API exposure.
 // Each Manager is keyed by the switch name from its Config.
@@ -23,7 +26,32 @@ type Service struct {
 }
 
 // NewService creates a Service that manages one Manager per configured switch.
+// Each switch is keyed by its effective identity: Name, else Host. Before it
+// builds any manager, NewService refuses an entry with neither name nor host
+// and two entries with the same effective identity (ErrInvalidConfig on the
+// name field), so one switch's operations never reach another switch.
 func NewService(configs []Config, logger *slog.Logger) (*Service, error) {
+	seen := make(map[string]int, len(configs))
+	for i := range configs {
+		name := configs[i].Name
+		if name == "" {
+			name = configs[i].Host
+		}
+		if name == "" {
+			return nil, ErrInvalidConfig{
+				Field:  "name",
+				Reason: fmt.Sprintf("switch entry %d has neither name nor host", i),
+			}
+		}
+		if first, dup := seen[name]; dup {
+			return nil, ErrInvalidConfig{
+				Field:  "name",
+				Reason: fmt.Sprintf("switch %q is configured more than once (entries %d and %d)", name, first, i),
+			}
+		}
+		seen[name] = i
+	}
+
 	managers := make(map[string]Manager, len(configs))
 
 	for i := range configs {
