@@ -15,9 +15,10 @@
  * expected PCRs, VM and container always valid; service.go:122-151). Only the
  * nonce and timestamp are real checks. The status badge reads the protojson
  * wire value MANIFEST_VERIFICATION_STATUS_VERIFIED as success. A verify here
- * is an inspection, not a verdict: service.go's VerifyManifest dispatches
- * only failures to the attestation observers, so a pass restores no
- * quarantined device (#2038).
+ * is an inspection, not a verdict: service.go's VerifyManifest reaches no
+ * attestation observer, so neither a pass nor a failure quarantines or
+ * restores a device (#2038). The nonce row reads not checked when no
+ * expected nonce was sent, and an answer for an older input is dropped.
  */
 
 import * as React from "react";
@@ -110,7 +111,7 @@ function NamedErrors({ title, errors, testId }: { title: string; errors?: Record
   );
 }
 
-function VerifyResult({ result }: { result: ManifestVerificationResult }) {
+function VerifyResult({ result, nonceSent }: { result: ManifestVerificationResult; nonceSent: boolean }) {
   const errors = result.errors ?? [];
   return (
     <div data-testid="manifest-verify-result" className="space-y-3 text-sm">
@@ -139,9 +140,18 @@ function VerifyResult({ result }: { result: ManifestVerificationResult }) {
             className="flex justify-between"
           >
             <span>{check.label}</span>
-            <span className={result[check.name] ? "text-green-600" : "text-destructive"}>
-              {result[check.name] ? "valid" : "invalid"}
-            </span>
+            {check.name === "nonceValid" && !nonceSent ? (
+              <span
+                className="text-muted-foreground"
+                title="No expected nonce was sent, so the control plane compared none"
+              >
+                not checked
+              </span>
+            ) : (
+              <span className={result[check.name] ? "text-green-600" : "text-destructive"}>
+                {result[check.name] ? "valid" : "invalid"}
+              </span>
+            )}
           </li>
         ))}
         {UNCHECKED.map((check) => (
@@ -179,23 +189,41 @@ export function ManifestVerifyButton({ manifestId, manifest }: ManifestVerifyBut
   const [open, setOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [expectedNonce, setExpectedNonce] = React.useState("");
-  const [result, setResult] = React.useState<ManifestVerificationResult | null>(null);
+  const [result, setResult] = React.useState<{ result: ManifestVerificationResult; nonceSent: boolean } | null>(
+    null,
+  );
+  // verifySeq numbers each input revision: an answer for an older one is
+  // dropped, as AttestationQuoteCard does.
+  const verifySeq = React.useRef(0);
 
   const fail = (message: string) =>
     toast({ title: "Verification failed", description: message, variant: "destructive" });
 
   const openDialog = () => {
+    verifySeq.current += 1;
+    setBusy(false);
     setResult(null);
     setOpen(true);
   };
 
+  const changeNonce = (value: string) => {
+    verifySeq.current += 1;
+    setBusy(false);
+    setResult(null);
+    setExpectedNonce(value);
+  };
+
   const verify = async () => {
+    const seq = ++verifySeq.current;
     setBusy(true);
     setResult(null);
     try {
       let target = manifest;
       if (!target) {
         const got = await attestation.getManifest(manifestId);
+        if (seq !== verifySeq.current) {
+          return;
+        }
         if (got.success === false || !got.data?.manifest) {
           fail(errorMessage(got.error ?? "the manifest could not be read"));
           return;
@@ -207,6 +235,9 @@ export function ManifestVerifyButton({ manifestId, manifest }: ManifestVerifyBut
         manifest: target,
         ...(nonce !== "" && { expectedNonce: nonce }),
       });
+      if (seq !== verifySeq.current) {
+        return;
+      }
       if (res.success === false) {
         fail(errorMessage(res.error));
         return;
@@ -215,11 +246,15 @@ export function ManifestVerifyButton({ manifestId, manifest }: ManifestVerifyBut
         fail(res.data?.status?.message || "the server sent no verification result");
         return;
       }
-      setResult(res.data.result);
+      setResult({ result: res.data.result, nonceSent: nonce !== "" });
     } catch (err) {
-      fail(errorMessage(err));
+      if (seq === verifySeq.current) {
+        fail(errorMessage(err));
+      }
     } finally {
-      setBusy(false);
+      if (seq === verifySeq.current) {
+        setBusy(false);
+      }
     }
   };
 
@@ -257,11 +292,11 @@ export function ManifestVerifyButton({ manifestId, manifest }: ManifestVerifyBut
                 id={nonceId}
                 value={expectedNonce}
                 placeholder="base64, optional"
-                onChange={(e) => setExpectedNonce(e.target.value)}
+                onChange={(e) => changeNonce(e.target.value)}
               />
             </div>
           </div>
-          {result && <VerifyResult result={result} />}
+          {result && <VerifyResult result={result.result} nonceSent={result.nonceSent} />}
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)} disabled={busy}>
               Close
