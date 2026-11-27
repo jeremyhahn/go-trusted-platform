@@ -132,6 +132,7 @@ func TestCoverage964b_RestoreBMC(t *testing.T) {
 	t.Run("unreachable BMC fails the restore-cert step", func(t *testing.T) {
 		a := newDANEHarness(t)
 		a.trustResolver = &fakeResolver{tlsErr: errHarnessTLS}
+		seedRestoreDevice(t, a, 9)
 		cfg := harnessBMCConfig()
 		result, err := a.RestoreBMC(ctx, 9, cfg)
 		var certErr ErrBMCRestoreCert

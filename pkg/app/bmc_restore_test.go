@@ -340,6 +340,15 @@ func TestRunRestoreCore_UnknownDeviceChangesNothing(t *testing.T) {
 	}
 }
 
+// seedRestoreDevice stores a bare device with the given ID, so RestoreBMC
+// passes its first step (the device load) in an App harness.
+func seedRestoreDevice(t *testing.T, a *App, id uint64) {
+	t.Helper()
+	if err := a.saveDeviceForEnroll(context.Background(), &entities.Device{ID: id}); err != nil {
+		t.Fatalf("seed device %d: %v", id, err)
+	}
+}
+
 // TestRunRestoreCore_DeviceSave_Fails verifies ErrBMCEnrollDeviceSave is
 // returned when the device cannot be saved after the enrollment is cleared.
 func TestRunRestoreCore_DeviceSave_Fails(t *testing.T) {

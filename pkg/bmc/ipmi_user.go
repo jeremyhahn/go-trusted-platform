@@ -211,9 +211,10 @@ func (m *ipmiUserManager) ListUsers(_ context.Context) ([]User, error) {
 // An Enabled user needs a password; a name-only entry (nil or empty
 // password) must be created with Enabled false.
 //
-// When a step after the name fails, CreateUser rolls the slot back: it
-// disables the user, revokes its channel access and clears the name, and
-// returns the failure joined with any rollback error.
+// When any write fails, CreateUser rolls the slot back: it disables the
+// user, revokes its channel access and clears the name, and returns the
+// failure joined with any rollback error. The name write is rolled back
+// too, because a BMC may apply it and lose only the response.
 func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memguard.MemoryEnclave) error {
 	if err := validateSlot(u.Slot); err != nil {
 		return err
@@ -236,7 +237,9 @@ func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memgua
 		return ErrInvalidConfig{Field: "password", Reason: "an enabled user needs a password"}
 	}
 	if err := m.setUserName(u.Slot, u.Username); err != nil {
-		return err
+		// The BMC may have applied the name and lost only the response;
+		// a populated slot would refuse every retry as occupied.
+		return errors.Join(err, m.rollbackCreate(u))
 	}
 	if err := m.finishCreate(u, password); err != nil {
 		// Roll the slot back. A failed step may still have been applied on

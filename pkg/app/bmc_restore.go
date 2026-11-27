@@ -88,7 +88,8 @@ type restoreCore struct {
 //  4. Updates Device.BMCEnrollment to reflect the unenrolled/restored state.
 //
 // Each step is recorded independently so partial progress is visible to the
-// caller even when a later step fails.
+// caller even when a later step fails. The device is loaded first, so an
+// ID that names no device fails before any BMC, pin or DNS change.
 //
 // "Restore --factory" does NOT re-upload the backed-up factory certificate
 // (we never held its private key). It instructs the BMC firmware to
@@ -179,6 +180,25 @@ func runRestoreCore(
 		Hostname: host,
 	}
 
+	// Load and validate the device before the first change, so an ID
+	// that names no device fails without touching the BMC, the pin or
+	// DNS. The enrollment ceremony publishes TLSA records under the
+	// registered DNS name (Device.BMCEnrollment.DNSName), not the raw BMC
+	// address, so the dane-unpublish step is keyed by the same name.
+	dev, loadErr := core.deviceLoader(ctx, deviceID)
+	if loadErr != nil {
+		result.Steps = append(result.Steps, BMCEnrollStep{
+			Name:   "device-state",
+			OK:     false,
+			Detail: loadErr.Error(),
+		})
+		return result, ErrBMCEnrollDeviceLoad{DeviceID: deviceID, Cause: loadErr}
+	}
+	enrolledDNSName := ""
+	if dev.BMCEnrollment != nil {
+		enrolledDNSName = dev.BMCEnrollment.DNSName
+	}
+
 	// ----------------------------------------------------------------
 	// Step 1: restore-cert — instruct BMC to regenerate default SSL cert.
 	// ----------------------------------------------------------------
@@ -245,24 +265,6 @@ func runRestoreCore(
 				Detail: fmt.Sprintf("TOFU SPKI pin deleted for %s:443", host),
 			})
 		}
-	}
-
-	// Load the device before the dane-unpublish step: the enrollment
-	// ceremony publishes TLSA records under the registered DNS name
-	// (Device.BMCEnrollment.DNSName), not the raw BMC address, so the
-	// removal must be keyed by the same name.
-	dev, loadErr := core.deviceLoader(ctx, deviceID)
-	if loadErr != nil {
-		result.Steps = append(result.Steps, BMCEnrollStep{
-			Name:   "device-state",
-			OK:     false,
-			Detail: loadErr.Error(),
-		})
-		return result, ErrBMCEnrollDeviceLoad{DeviceID: deviceID, Cause: loadErr}
-	}
-	enrolledDNSName := ""
-	if dev.BMCEnrollment != nil {
-		enrolledDNSName = dev.BMCEnrollment.DNSName
 	}
 
 	// ----------------------------------------------------------------
