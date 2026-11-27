@@ -61,7 +61,7 @@ describe('TenantBarrierCard', () => {
     expect(status.textContent).toContain('shamir');
   });
 
-  it('initializes with an empty body, no threshold or shares, and re-reads the status', async () => {
+  it('initializes with the operator passphrase, no threshold or shares, clears it and re-reads the status', async () => {
     const sent = stubControlPlane({
       'GET /api/v1/capabilities': caps(),
       'GET /api/v1/tenants/t1/barrier': barrier({ sealed: true, initialized: false }),
@@ -72,16 +72,39 @@ describe('TenantBarrierCard', () => {
     await waitFor(() => expect(statusReads(sent)).toBe(1));
     expect(screen.queryByLabelText('Threshold')).toBeNull();
     expect(screen.queryByLabelText('Shares')).toBeNull();
+    const pass = screen.getByTestId('tenant-barrier-init-passphrase') as HTMLInputElement;
+    expect(pass.type).toBe('password');
+    fireEvent.change(pass, { target: { value: 'operator-pass' } });
     fireEvent.click(await enabledButton('Initialize'));
 
     await waitFor(() =>
       expect(sent).toContainEqual({
         method: 'POST',
         path: '/api/v1/tenants/t1/barrier/init',
-        body: {},
+        body: { passphrase: 'operator-pass' },
       })
     );
     await waitFor(() => expect(statusReads(sent)).toBe(2));
+    expect(pass.value).toBe('');
+  });
+
+  it('keeps Initialize off until a passphrase is typed, since the server refuses an empty one', async () => {
+    const sent = stubControlPlane({
+      'GET /api/v1/capabilities': caps(),
+      'GET /api/v1/tenants/t1/barrier': barrier({ sealed: true, initialized: false }),
+      'POST /api/v1/tenants/t1/barrier/init': ok({ status: { code: 0 } }),
+    });
+    renderCard();
+
+    await waitFor(() => expect(statusReads(sent)).toBe(1));
+    await enabledButton('Seal');
+    const init = screen.getByRole('button', { name: 'Initialize' }) as HTMLButtonElement;
+    expect(init.disabled).toBe(true);
+    fireEvent.click(init);
+    expect(sent.some((r) => r.path === '/api/v1/tenants/t1/barrier/init')).toBe(false);
+
+    fireEvent.change(screen.getByTestId('tenant-barrier-init-passphrase'), { target: { value: 'operator-pass' } });
+    await enabledButton('Initialize');
   });
 
   it('unseals with the key the operator gives', async () => {

@@ -32,15 +32,15 @@ describe('useTenantBarrier', () => {
     expect(res.data?.barrierStatus).toEqual(barrierStatus);
   });
 
-  it('initializes with an empty body', async () => {
+  it('initializes with the operator passphrase', async () => {
     const sent = stubControlPlane({
       'POST /api/v1/tenants/t1/barrier/init': ok({ status: { code: 0 } }),
     });
 
-    const res = await renderBarrier().init('t1');
+    const res = await renderBarrier().init('t1', 'pw');
 
     expect(res.success).toBe(true);
-    expect(sent).toContainEqual({ method: 'POST', path: '/api/v1/tenants/t1/barrier/init', body: {} });
+    expect(sent).toContainEqual({ method: 'POST', path: '/api/v1/tenants/t1/barrier/init', body: { passphrase: 'pw' } });
   });
 
   it('unseals with the key given', async () => {
