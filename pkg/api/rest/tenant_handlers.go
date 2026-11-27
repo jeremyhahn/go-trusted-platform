@@ -27,6 +27,10 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // =============================================================================
@@ -395,6 +399,21 @@ type TenantHandlers struct {
 	logger         *slog.Logger
 	guard          *ScopeGuard
 	systemTenantID string
+	initialAdmin   InitialAdminInvitationServer
+}
+
+// InitialAdminInvitationServer invites a tenant's first owner on behalf of
+// the verified REST caller (TenantService.CreateInitialAdminInvitation).
+type InitialAdminInvitationServer interface {
+	CreateInitialAdminInvitation(ctx context.Context, caller *platformtoken.AuthorizedContext, req *platformv1.CreateInitialAdminInvitationRequest) (*platformv1.CreateInitialAdminInvitationResponse, error)
+}
+
+// WithTenantInitialAdmin serves POST /api/v1/tenants/{id}/initial-admin-invitation
+// through server; without it the route answers 503.
+func WithTenantInitialAdmin(server InitialAdminInvitationServer) TenantHandlersOption {
+	return func(h *TenantHandlers) {
+		h.initialAdmin = server
+	}
 }
 
 // TenantHandlersOption is a functional option for configuring TenantHandlers.
@@ -480,6 +499,10 @@ func (h *TenantHandlers) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/tenants/{id}/barrier/unseal", h.ownOrSystem(scopeTenantWrite, h.handleUnsealTenantBarrier)).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/tenants/{id}/barrier/seal", h.ownOrSystem(scopeTenantWrite, h.handleSealTenantBarrier)).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/tenants/{id}/barrier/status", h.ownOrSystem(scopeTenantRead, h.handleTenantBarrierStatus)).Methods(http.MethodGet)
+
+	// Owner invitation (system tenant only)
+	router.HandleFunc("/api/v1/tenants/{id}/initial-admin-invitation",
+		h.guard.RequireCaller(scopeTenantWrite, h.handleCreateInitialAdminInvitation)).Methods(http.MethodPost)
 
 	h.logger.Info("Tenant REST routes registered")
 }
@@ -1358,6 +1381,78 @@ func (h *TenantHandlers) handleSync(w http.ResponseWriter, r *http.Request) {
 
 	h.logger.Info("Tenant manager synchronized")
 	h.writeJSON(w, http.StatusOK, resp)
+}
+
+// handleCreateInitialAdminInvitation invites the first owner of the tenant
+// named by the path. The system tenant only; the path tenant wins over any
+// tenant in the body, and the verified caller is the inviter.
+func (h *TenantHandlers) handleCreateInitialAdminInvitation(w http.ResponseWriter, r *http.Request, caller *platformtoken.AuthorizedContext) {
+	if err := tenant.AuthorizeCrossTenant(h.isSystemTenant(caller), "CreateInitialAdminInvitation"); err != nil {
+		h.writeError(w, http.StatusForbidden, err)
+		return
+	}
+	if h.initialAdmin == nil {
+		h.writeError(w, http.StatusServiceUnavailable, ErrTenantOperationFailed{
+			Operation: "create initial admin invitation",
+			Cause:     errors.New("initial-admin invitations not available"),
+		})
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var req platformv1.CreateInitialAdminInvitationRequest
+	if len(body) > 0 {
+		if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(body, &req); err != nil {
+			h.writeError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	req.TenantId = mux.Vars(r)["id"]
+
+	resp, err := h.initialAdmin.CreateInitialAdminInvitation(r.Context(), caller, &req)
+	if err != nil {
+		h.writeError(w, grpcStatusToHTTP(err), err)
+		return
+	}
+	out, err := protojson.Marshal(resp)
+	if err != nil {
+		h.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	if _, err := w.Write(out); err != nil {
+		h.logger.Error("Failed to write initial admin invitation response", "error", err)
+	}
+}
+
+// grpcStatusToHTTP maps a gRPC status error from a delegated TenantService
+// call to its HTTP status.
+func grpcStatusToHTTP(err error) int {
+	switch status.Code(err) {
+	case codes.InvalidArgument:
+		return http.StatusBadRequest
+	case codes.Unauthenticated:
+		return http.StatusUnauthorized
+	case codes.PermissionDenied:
+		return http.StatusForbidden
+	case codes.NotFound:
+		return http.StatusNotFound
+	case codes.AlreadyExists:
+		return http.StatusConflict
+	case codes.FailedPrecondition:
+		return http.StatusPreconditionFailed
+	case codes.Unavailable:
+		return http.StatusServiceUnavailable
+	case codes.Unimplemented:
+		return http.StatusNotImplemented
+	default:
+		return http.StatusInternalServerError
+	}
 }
 
 // =============================================================================
