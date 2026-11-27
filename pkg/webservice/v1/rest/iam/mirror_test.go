@@ -254,3 +254,45 @@ func TestMirrorInvitedUser_UsernameIgnoresTheDisplayName(t *testing.T) {
 		assert.Equal(t, tc.displayName, got.DisplayName, tc.email)
 	}
 }
+
+// TestMirrorInvitedUser_PartialAssignRollbackOutlivesACanceledRequest: a
+// request canceled mid-assignment must still revoke the roles this call
+// already granted (#2362).
+func TestMirrorInvitedUser_PartialAssignRollbackOutlivesACanceledRequest(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var revoked []string
+	var revokeCtxErrs []error
+	m := NewQuicBaaSUserMirror(&mockIAMClient{
+		createUserFn: func(context.Context, string, *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
+			return nil, errors.New("iam.user: already exists")
+		},
+		getByEmailFn: func(context.Context, string, string) (*iamsdk.User, error) {
+			return &iamsdk.User{ID: "u-ann", Email: "ann@example.com"}, nil
+		},
+		listRolesFn: func(context.Context, string, *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+			return &iamsdk.ListRolesResponse{}, nil
+		},
+		assignRoleFn: func(_ context.Context, _, _, roleID string) error {
+			if roleID == "admin" {
+				cancel()
+				return context.Canceled
+			}
+			return nil
+		},
+		revokeRoleFn: func(rctx context.Context, _, _, roleID string) error {
+			revoked = append(revoked, roleID)
+			revokeCtxErrs = append(revokeCtxErrs, rctx.Err())
+			return nil
+		},
+	})
+
+	undo, err := m.MirrorInvitedUser(ctx, "t1", "ann@example.com", "", []string{"viewer", "admin"})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, undo)
+	assert.Equal(t, []string{"viewer"}, revoked)
+	assert.Equal(t, []error{nil}, revokeCtxErrs,
+		"the partial assignment is revoked on a context the request's cancel does not reach")
+}

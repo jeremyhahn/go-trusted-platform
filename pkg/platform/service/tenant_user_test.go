@@ -1060,7 +1060,7 @@ func TestTenantUserService_RegisterInvitedUser_AcceptFails(t *testing.T) {
 	// Accept invitation fails: the registration fails and the saved user is deleted
 	acceptErr := errors.New("database error during accept")
 	mockInvitationService.On("Accept", ctx, invitationToken, mock.AnythingOfType("uint64")).Return(acceptErr)
-	mockUserService.On("Delete", ctx, user.ID).Return(nil)
+	mockUserService.On("Delete", mock.Anything, user.ID).Return(nil)
 
 	// Execute
 	result, err := service.RegisterInvitedUser(ctx, user, invitationToken)
@@ -1068,7 +1068,7 @@ func TestTenantUserService_RegisterInvitedUser_AcceptFails(t *testing.T) {
 	// Verify - an acceptance failure fails the registration and deletes the saved user
 	require.ErrorIs(t, err, acceptErr)
 	assert.Nil(t, result)
-	mockUserService.AssertCalled(t, "Delete", ctx, user.ID)
+	mockUserService.AssertCalled(t, "Delete", mock.Anything, user.ID)
 
 	mockUserService.AssertExpectations(t)
 	mockInvitationService.AssertExpectations(t)
