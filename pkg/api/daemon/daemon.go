@@ -1643,7 +1643,13 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	if config.PlatformTenantManager != nil {
 		if daemon.concreteRestServer != nil {
-			daemon.concreteRestServer.SetTenantHandlers(config.PlatformTenantManager, restGuard, config.PlatformTenantID)
+			var tenantOpts []restapi.TenantHandlersOption
+			// The owner-invitation route runs the tenant gRPC server's RPC, so
+			// REST shares its system-tenant check and inviter identity.
+			if daemon.tenantService != nil && daemon.tenantService.grpcServer != nil {
+				tenantOpts = append(tenantOpts, restapi.WithTenantInitialAdmin(newTenantRESTInitialAdmin(daemon.tenantService.grpcServer)))
+			}
+			daemon.concreteRestServer.SetTenantHandlers(config.PlatformTenantManager, restGuard, config.PlatformTenantID, tenantOpts...)
 		}
 		if daemon.tenantService != nil && daemon.tenantService.grpcServer != nil {
 			daemon.tenantService.grpcServer.SetManager(config.PlatformTenantManager)
