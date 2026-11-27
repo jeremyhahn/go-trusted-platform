@@ -36,7 +36,11 @@ import (
 // not reinstalled. A restored lease whose client was refused its stored
 // deadline (Lease.ClientExpiresAt) gets its renew bypass back; the host is
 // asked first whether it still holds such a lease, since the renewal never
-// reached it and its expiry marker may be lost, and one it expired is dropped.
+// reached it and its expiry marker may be lost. A host check that fails
+// before the client's deadline replays the peer at that deadline (an empty
+// replacement host has no peers); after it, a not-found answer drops the
+// lease and any other failure defers it to the Sweep without reinstalling
+// the peer.
 //
 // Call Restore after Start and before applying the enrolment set: that
 // set's sweep then revokes the restored leases of peers the control plane
@@ -390,26 +394,57 @@ func (s *Service) restore(ctx context.Context, l *Lease) error {
 	// record kept the later one, and an expiry marker that could not be
 	// written is lost with the restart. Restore asks the host first and
 	// fails closed on a lease it expired.
+	peer := l // the lease the plane is given
 	if !l.ClientExpiresAt.IsZero() {
 		if ext, ok := plane.(PeerDeadlineExtender); ok {
 			if err := ext.ExtendPeer(ctx, l); err != nil {
+				now := s.deps.Clock.Now()
 				var nf *ErrLeaseNotFound
-				if errors.As(err, &nf) {
+				switch {
+				case now.Before(l.ClientExpiresAt):
+					// The host deadline is never below the client's, so the
+					// host cannot have expired the peer yet; an empty
+					// replacement host answers not-found too. The replay at
+					// the client's deadline is a no-op on a host that still
+					// holds the peer (PlaneHost.install keeps the later
+					// deadline), and the extension stays owed.
+					replay := *l
+					replay.ExpiresAt = l.ClientExpiresAt
+					peer = &replay
+					s.oweExtension(l)
+					s.logger.Warn("vpn.restore: host check failed before the client's deadline; peer replayed at it",
+						slog.String("lease", string(l.ID)),
+						slog.Time("client_expires_at", l.ClientExpiresAt),
+						slog.String("error", err.Error()))
+				case errors.As(err, &nf):
 					dErr := s.dropLease(ctx, l, plane, "host expired an unresolved renewal", err)
 					var unrecorded *ErrRevocationNotRecorded
 					if errors.As(dErr, &unrecorded) {
 						s.oweDeletion(ctx, l)
 					}
 					return dErr
+				default:
+					// The host may have expired the peer at the client's
+					// deadline: installing now would recreate it with the
+					// later stored deadline. The address is held and the
+					// owed extension lets Sweep ask the host again (a
+					// not-found answer revokes the lease).
+					if err := s.holdAddress(ctx, l); err != nil {
+						return s.dropLease(ctx, l, plane, "address unavailable", err)
+					}
+					s.oweExtension(l)
+					s.logger.Warn("vpn.restore: host check inconclusive after the client's deadline; restoration deferred to the sweep",
+						slog.String("lease", string(l.ID)),
+						slog.String("error", err.Error()))
+					return nil
 				}
-				s.oweExtension(l)
 			}
 		}
 	}
 	if err := s.holdAddress(ctx, l); err != nil {
 		return s.dropLease(ctx, l, plane, "address unavailable", err)
 	}
-	if err := plane.InstallPeer(ctx, l); err != nil {
+	if err := plane.InstallPeer(ctx, peer); err != nil {
 		return s.dropLease(ctx, l, plane, "data plane refused the peer", &ErrDataPlaneUnavailable{Kind: l.DataPlane, Cause: err})
 	}
 	// A client refused a renewal before the restart still holds the

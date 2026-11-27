@@ -1289,6 +1289,7 @@ func TestRestore_AnUnresolvedRenewalTheHostExpiredIsNotReinstalledWhenDeleteAndP
 
 	store.deleteErr = &ErrRevocationNotRecorded{LeaseID: lease.ID, Cause: errors.New("disk full")}
 	puts.failPuts(errors.New("disk full"))
+	h.clock.Advance(DefaultRenewWindow)
 	h.svc.Sweep(ctx)
 	assert.False(t, plane.hosts(lease.ID), "the host's peer is gone")
 
