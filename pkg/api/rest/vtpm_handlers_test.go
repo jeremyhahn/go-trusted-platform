@@ -1065,6 +1065,27 @@ func TestHandleGetBundleState(t *testing.T) {
 
 		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 	})
+
+	t.Run("returns 404 for unknown bundle", func(t *testing.T) {
+		// Issue #2428: IsRunning is false for unknown IDs, so the handler
+		// must look the bundle up first instead of answering 200 running:false.
+		svc := newMockVTPMService()
+		_, router := setupVTPMTestHandler(svc)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/bundles/no-such-bundle/state", nil)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+		assert.NotContains(t, string(body), `"running"`)
+	})
 }
 
 // =============================================================================
