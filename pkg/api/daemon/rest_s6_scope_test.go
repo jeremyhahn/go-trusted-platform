@@ -156,6 +156,7 @@ func newRESTServerWithS6(t *testing.T) *RESTServer {
 	require.NoError(t, s.SetOverlayHandlers(newOverlayControllerRESTAdapter(&stubOverlayController{}), guard))
 	require.NoError(t, s.SetGatewayIPAMService(nil, nil, guard))
 	require.NoError(t, s.SetServiceControlHandlers(guard))
+	require.NoError(t, s.SetSwitchHandlers(switchRESTProvider{}, guard))
 	s.SetKMSRouter(nil, nil, nil, nil, guard)
 	return s
 }
@@ -218,7 +219,7 @@ func TestCatalogRouteRPCs_CoverEveryMountedRoute(t *testing.T) {
 	sort.Strings(mapped)
 	assert.Equal(t, mapped, mounted)
 	assert.Len(t, mounted, len(s6RouteScopes)+len(s9RouteScopes)+len(serviceControlRoutes)+
-		len(kmsRESTRouteCalls)) // KMS router routes
+		len(switchRouteScopes)+len(kmsRESTRouteCalls)) // switch and KMS router routes
 }
 
 func TestCatalogRouteScope(t *testing.T) {

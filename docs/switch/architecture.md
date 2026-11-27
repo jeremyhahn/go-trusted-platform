@@ -224,9 +224,11 @@ no local state. The switch is the source of truth for every read.
    port operation with `ssh_key … must be set`. See
    [engineering.md](engineering.md) §4.
 4. **Command construction is string interpolation.** `SetPortVLAN` builds
-   `interface %s` from the caller's port name with no escaping or allow-list.
-   The VLAN id is bounded (1–4094) at three separate entry points; **the port
-   name is not validated anywhere**. The blast radius is limited by the SSH
+   `interface %s` from the caller's port name with no escaping. The VLAN id is
+   bounded (1–4094) at three separate entry points, and the port name is
+   validated by `ValidatePortName` (an interface-name allow-list, see
+   [engineering.md](engineering.md) §5 invariant 9) before it reaches a
+   command. The blast radius is limited by the SSH
    session running a single command per `Execute` and by the switch CLI not
    being a shell, but a port name is untrusted input reaching a device CLI.
    Treat `port_name` as privileged input and constrain it at your edge.
@@ -290,36 +292,35 @@ surprises.
 - **It does not retry.** Every method performs one operation and returns. There
   are no retry loops and no backoff.
 
-## 8. Deployment reality: the surface is dark by default
+## 8. Deployment reality: wired when configured, dark otherwise
 
-Three wiring seams exist — `switchmgmt.NewService`,
-`HandlerRegistryParams.SwitchService`, and
-`(*SwitchGRPCService).SetSwitchService` — and **none of them has a caller
-anywhere in the repository**.
-The gRPC service is registered with an explicit nil backend under the comment
-*"Create the Switch gRPC service. It has no switch backend yet, so every
-method answers Unavailable (not configured); the QUIC opcodes, the MCP tools
-and the embedded transport call this same servicer."* (`pkg/api/daemon/daemon.go:1049`). The consequence is concrete and worth
-stating plainly:
+The daemon builds the switch service from the `switches:` configuration block
+(`app.App.SwitchConfigs`, `pkg/app/app.go`) at start-up
+(`newSwitchService`, `pkg/daemon/commands/switch_service_init.go`):
 
-- REST `/api/v1/switches/...` returns **503** carrying the machine-readable
-  `"reason": "SERVICE_NOT_CONFIGURED"` discriminator alongside the prose
-  *"switch service not configured by daemon — REST surface is dark"*, the
-  daemon logs a warning at startup, and
-  `GET /api/v1/platform/service-registry` reports the surface as
-  `Configured: false`.
-- gRPC returns `codes.Unavailable` with reason `SERVICE_NOT_CONFIGURED` —
-  `"switch service is not configured on this node"`.
-- QUIC, MCP and embedded call that servicer, so they return the same
-  `Unavailable` (`StatusUnavailable` on QUIC).
+- **A node whose config has a `switches:` block** calls
+  `switchmgmt.NewService` with it, hands the service to the SwitchService gRPC
+  servicer (`SetSwitchService`) — which the QUIC opcodes, the MCP tools and the
+  embedded transport call — and serves it on REST
+  (`HandlerRegistryParams.SwitchService`, or `MountSwitchREST` on the
+  daemon-only listener). If `NewService` refuses the block (an entry with
+  neither name nor host, a duplicate name, an unsupported vendor), the daemon
+  fails to start. The service is closed at shutdown.
+- **A node with no `switches:` block** builds nothing and stays dark, exactly
+  as before:
+  - REST `/api/v1/switches/...` returns **503** carrying the machine-readable
+    `"reason": "SERVICE_NOT_CONFIGURED"` discriminator alongside the prose
+    *"switch service not configured by daemon — REST surface is dark"*, the
+    daemon logs a warning at startup, and
+    `GET /api/v1/platform/service-registry` reports the surface as
+    `Configured: false`.
+  - gRPC returns `codes.Unavailable` with reason `SERVICE_NOT_CONFIGURED` —
+    `"switch service is not configured on this node"`.
+  - QUIC, MCP and embedded call that servicer, so they return the same
+    `Unavailable` (`StatusUnavailable` on QUIC).
 
-The `switches:` configuration block is parsed into `app.App.SwitchConfigs`
-(`pkg/app/app.go:371`) and, today, nothing constructs a `Service` from it. The
-bootstrap `Configurator` path (§4.1) is separate and does run — it builds its
-config from `bootstrap.SwitchConfig`, not from `App.SwitchConfigs`.
-
-This is recorded as fact, not as a plan. Wiring it is a code change with an
-owner; documenting it as working would be worse than documenting it as dark.
+The bootstrap `Configurator` path (§4.1) is separate — it builds its config
+from `bootstrap.SwitchConfig`, not from `App.SwitchConfigs`.
 
 ## 9. Related
 
