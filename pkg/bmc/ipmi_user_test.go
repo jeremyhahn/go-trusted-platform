@@ -310,9 +310,9 @@ func TestCreateUser_DisabledFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	// probe, name, access (no password)
-	if len(m.calls) != 3 {
-		t.Fatalf("want 3 calls, got %d", len(m.calls))
+	// probe, name, access, disable (no password)
+	if len(m.calls) != 4 {
+		t.Fatalf("want 4 calls, got %d", len(m.calls))
 	}
 	flags := m.calls[2].data[0]
 	if flags&suaIPMIMsgEnable != 0 || flags&suaLinkAuthEnable != 0 {
@@ -320,6 +320,9 @@ func TestCreateUser_DisabledFlags(t *testing.T) {
 	}
 	if flags&suaChangeBits == 0 {
 		t.Error("change-bits flag must be set")
+	}
+	if c := m.calls[3]; c.cmd != cmdSetUserPassword || len(c.data) != 2 || c.data[0] != 3 || c.data[1] != pwdOpDisable {
+		t.Errorf("call 3 = cmd 0x%02x data %x, want Set User Password disable {03 00}", c.cmd, c.data)
 	}
 }
 
@@ -457,6 +460,81 @@ func TestCreateUser_DisabledUserNotEnabled(t *testing.T) {
 	}
 }
 
+// statefulUserSender models a BMC's per-slot user name and global enable
+// flag. Set User Name and Set User Access do not touch the global enable
+// flag, as on a real BMC: only Set User Password ops 01b/00b change it.
+type statefulUserSender struct {
+	names   map[uint8]string
+	enabled map[uint8]bool
+	calls   []mockCall
+}
+
+func newStatefulUserSender() *statefulUserSender {
+	return &statefulUserSender{names: map[uint8]string{}, enabled: map[uint8]bool{}}
+}
+
+func (s *statefulUserSender) Send(netFn, cmd byte, data []byte) ([]byte, error) {
+	cp := append([]byte(nil), data...)
+	s.calls = append(s.calls, mockCall{netFn: netFn, cmd: cmd, data: cp})
+	switch cmd {
+	case cmdGetUserName:
+		resp := make([]byte, ipmiMaxUsernameLen)
+		copy(resp, s.names[data[0]&ipmiMaxUserSlot])
+		return resp, nil
+	case cmdSetUserName:
+		s.names[data[0]&ipmiMaxUserSlot] = trimNullPadded(data[1:])
+	case cmdSetUserPassword:
+		if len(data) >= 2 {
+			slot := data[0] & ipmiMaxUserSlot
+			switch data[1] & 0x03 {
+			case pwdOpEnable:
+				s.enabled[slot] = true
+			case pwdOpDisable:
+				s.enabled[slot] = false
+			}
+		}
+	}
+	return nil, nil
+}
+
+func TestCreateUser_RecreatedDisabledSlotIsDisabled(t *testing.T) {
+	s := newStatefulUserSender()
+	um := newUM(s)
+	ctx := context.Background()
+	pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
+	defer pwd.Destroy()
+	if err := um.CreateUser(ctx, User{
+		Slot: 4, Username: "alice", Enabled: true, Privilege: PrivilegeAdministrator,
+	}, pwd); err != nil {
+		t.Fatalf("CreateUser enabled: %v", err)
+	}
+	if !s.enabled[4] {
+		t.Fatal("an enabled create left the slot disabled")
+	}
+	if err := um.DeleteUser(ctx, 4); err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	if s.names[4] != "" {
+		t.Fatalf("DeleteUser left name %q", s.names[4])
+	}
+	// IPMI behaviour: DeleteUser clears the name and channel access but
+	// leaves the slot's global enable flag set.
+	if !s.enabled[4] {
+		t.Fatal("model: DeleteUser should leave the global enable flag set")
+	}
+	if err := um.CreateUser(ctx, User{
+		Slot: 4, Username: "bob", Enabled: false, Privilege: PrivilegeUser,
+	}, nil); err != nil {
+		t.Fatalf("CreateUser disabled: %v", err)
+	}
+	if s.names[4] != "bob" {
+		t.Fatalf("name = %q, want bob", s.names[4])
+	}
+	if s.enabled[4] {
+		t.Error("a disabled create left the reused slot globally enabled")
+	}
+}
+
 func TestCreateUser_LongPasswordWritesNothing(t *testing.T) {
 	m := newMock()
 	um := newUM(m)
@@ -510,10 +588,19 @@ func TestCreateUser_EnabledWithoutPasswordWritesNothing(t *testing.T) {
 		}, nil); err != nil {
 			t.Fatalf("CreateUser: %v", err)
 		}
+		disables := 0
 		for _, c := range m.calls {
-			if c.cmd == cmdSetUserPassword {
-				t.Fatalf("disabled name-only user sent SetUserPassword (data %x)", c.data)
+			if c.cmd != cmdSetUserPassword {
+				continue
 			}
+			if len(c.data) == 2 && c.data[0] == 5 && c.data[1] == pwdOpDisable {
+				disables++
+				continue
+			}
+			t.Fatalf("disabled name-only user sent a password write (data %x)", c.data)
+		}
+		if disables != 1 {
+			t.Fatalf("disabled name-only user sent %d disables, want 1", disables)
 		}
 	})
 }
