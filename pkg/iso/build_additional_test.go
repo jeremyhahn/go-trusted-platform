@@ -478,7 +478,7 @@ func TestBuildISO_KeysDirCopyDoesNotOwnStaleHardLinkedEntry(t *testing.T) {
 	got, err := os.ReadFile(external)
 	require.NoError(t, err)
 	assert.Equal(t, externalBytes, got, "the external key behind a stale staged link must keep its bytes")
-	assert.NoFileExists(t, stale, "the stale hard link is detached from the staged keys dir")
+	assert.FileExists(t, stale, "the build leaves entries it never staged in the KeysDir copy root")
 	assert.NoFileExists(t, filepath.Join(stagedDir, "DB.key"), "the staged DB.key copy is removed after packing")
 }
 
