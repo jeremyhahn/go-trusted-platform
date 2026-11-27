@@ -1173,3 +1173,45 @@ func TestRestore_KeepsTheRenewBypassAfterAFailedExtension(t *testing.T) {
 	var notOpen *ErrRenewalNotOpen
 	require.ErrorAs(t, err, &notOpen)
 }
+
+// ctxStore is a write-through store bound to the caller's context: a write
+// under a done context fails, as the control-plane projection does.
+type ctxStore struct {
+	LeaseStore
+}
+
+func (s *ctxStore) Put(ctx context.Context, lease *Lease) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.LeaseStore.Put(ctx, lease)
+}
+
+func TestRestore_KeepsTheRenewBypassWhenTheCallerCancelsTheExtension(t *testing.T) {
+	plane := &extendingPlane{fakePlane: newFakePlane(DataPlaneMASQUE)}
+	var deps Deps
+	h := newHarnessWith(t, testConfig(), func(d *Deps) {
+		d.DataPlanes = map[DataPlaneKind]DataPlane{DataPlaneMASQUE: plane}
+		d.Leases = &ctxStore{LeaseStore: d.Leases}
+		deps = *d
+	})
+	lease, err := h.svc.Admit(context.Background(), h.request(t))
+	require.NoError(t, err)
+	h.intoRenewWindow()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	plane.steps = []extendStep{{err: context.Canceled, cancel: cancel}}
+	_, err = h.svc.Renew(ctx, lease.ID, h.evidence(t))
+	var unavailable *ErrDataPlaneUnavailable
+	require.ErrorAs(t, err, &unavailable)
+
+	stored, err := deps.Leases.Get(context.Background(), lease.ID)
+	require.NoError(t, err)
+	assert.False(t, stored.ClientExpiresAt.IsZero(), "the deadline the client holds is stored with the new deadline")
+
+	require.NoError(t, restartWith(t, h, deps))
+	renewed, err := h.svc.Renew(context.Background(), lease.ID, h.evidence(t))
+	require.NoError(t, err, "the client's retry is not held to the window of the deadline it was refused")
+	assert.Equal(t, 2, renewed.Renewals)
+}
