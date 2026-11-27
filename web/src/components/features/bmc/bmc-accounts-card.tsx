@@ -88,13 +88,23 @@ export function BMCAccountsCard({ profileID }: BMCAccountsCardProps) {
     [toast]
   );
 
+  // A rejected read (the SDK refuses an invalid profile ID before any request)
+  // is the card's error state, never an unhandled rejection.
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   const reload = useCallback(async () => {
-    const res = await accounts.listUsers();
-    if (res.success) {
-      setUsers(res.data ?? []);
-      setLoaded(true);
-    } else {
-      failed('BMC users unavailable', res.error?.message);
+    try {
+      const res = await accounts.listUsers();
+      if (res.success) {
+        setUsers(res.data ?? []);
+        setLoaded(true);
+        setLoadError(null);
+      } else {
+        failed('BMC users unavailable', res.error?.message);
+      }
+    } catch (err) {
+      setLoaded(false);
+      setLoadError(err instanceof Error ? err.message : String(err));
     }
   }, [accounts, failed]);
 
@@ -192,6 +202,11 @@ export function BMCAccountsCard({ profileID }: BMCAccountsCardProps) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
+        {loadError !== null && (
+          <p role="alert" data-testid="bmc-accounts-error" className="text-sm text-destructive">
+            BMC users unavailable: {loadError}
+          </p>
+        )}
         {users.length === 0 ? (
           <p className="text-sm text-muted-foreground">No BMC users</p>
         ) : (

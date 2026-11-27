@@ -1,10 +1,11 @@
 "use client";
 
 /**
- * BMC certificate hook: EnrollBMC, RestoreFactoryCert and
- * ReplaceWebCertificate on `/api/v1/bmc/{profileID}/enroll`,
- * `/cert/restore` and `PUT /cert` (pkg/webservice/v1/bmc enroll.go,
- * cert_restore.go, handler.go).
+ * BMC certificate hook: EnrollBMC and RestoreFactoryCert on
+ * `/api/v1/bmc/{profileID}/enroll` and `/cert/restore`
+ * (pkg/webservice/v1/bmc enroll.go, cert_restore.go). The server's
+ * `PUT /cert` replace is not offered: it rotates no SPKI pin and no TLSA
+ * record (#2199).
  *
  * It calls the SDK BMCCertService (`client.bmcCert`), mapping the hook's
  * snake_case options to the SDK's camelCase ones; the SDK drops options left
@@ -65,21 +66,9 @@ export interface BMCRestoreResult {
   steps: BMCCeremonyStep[];
 }
 
-export interface BMCReplaceCertRequest {
-  cert_pem: string;
-  key_pem: string;
-}
-
 /** The names of the steps that did not succeed, in order; [] for undefined. */
 export function failedCeremonySteps(steps?: BMCCeremonyStep[]): string[] {
   return (steps ?? []).filter((s) => !s.ok).map((s) => s.name);
-}
-
-/** The server's 400 reasons, checked before a request (blank after trim), else null. */
-export function replaceCertProblem(req: BMCReplaceCertRequest): string | null {
-  if (!req.cert_pem?.trim()) return "A certificate PEM is required";
-  if (!req.key_pem?.trim()) return "A private key PEM is required";
-  return null;
 }
 
 export function bmcPath(profileID: string, op: string): string {
@@ -98,11 +87,6 @@ export function useBMCCertOps(profileID: string) {
           danePublish: opts?.dane_publish,
         }),
       restoreFactoryCert: () => client.bmcCert.restoreFactoryCert(profileID),
-      replaceWebCertificate: (req: BMCReplaceCertRequest) =>
-        client.bmcCert.replaceWebCertificate(profileID, {
-          certPem: req.cert_pem,
-          keyPem: req.key_pem,
-        }),
     }),
     [client, profileID],
   );

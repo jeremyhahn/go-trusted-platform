@@ -63,12 +63,6 @@ describe('BMCCertService', () => {
       await service.restoreFactoryCert(7);
       expect(vi.mocked(mockClient.post).mock.calls[0]?.at(-1)).toEqual({ retry: { enabled: false } });
     });
-
-    it('sends replaceWebCertificate with retries off', async () => {
-      vi.mocked(mockClient.put).mockResolvedValue({ success: true, data: { status: 'ok' } });
-      await service.replaceWebCertificate(7, { certPem: 'C', keyPem: 'K' });
-      expect(vi.mocked(mockClient.put).mock.calls[0]?.at(-1)).toEqual({ retry: { enabled: false } });
-    });
   });
 
   describe('enrollBMC', () => {
@@ -170,15 +164,11 @@ describe('BMCCertService', () => {
     });
   });
 
-  describe('replaceWebCertificate', () => {
-    it('puts the PEM pair as snake_case to the cert route', async () => {
-      const answer = { success: true, data: { status: 'ok' } };
-      vi.mocked(mockClient.put).mockResolvedValue(answer);
-
-      const result = await service.replaceWebCertificate(7, { certPem: 'C', keyPem: 'K' });
-
-      expect(mockClient.put).toHaveBeenCalledWith('/v1/bmc/7/cert', { cert_pem: 'C', key_pem: 'K' }, NO_RETRY);
-      expect(result).toEqual(answer);
+  // The web-certificate replace rotates no SPKI pin and no TLSA record, so
+  // the SDK refuses it by not offering it (#2199).
+  describe('web certificate replace', () => {
+    it('is not offered until it rotates the pin and the TLSA record', () => {
+      expect('replaceWebCertificate' in service).toBe(false);
     });
 
     it('is wired on the platform client as bmcCert', async () => {
@@ -205,9 +195,6 @@ describe('BMCCertService profile ID validation', () => {
     it(`refuses profile ID ${JSON.stringify(id)} with no request`, async () => {
       await expect(service.enrollBMC(id)).rejects.toThrow(TypeError);
       await expect(service.restoreFactoryCert(id)).rejects.toThrow(TypeError);
-      await expect(
-        service.replaceWebCertificate(id, { certPem: 'c', keyPem: 'k' })
-      ).rejects.toThrow(TypeError);
       expect(mockClient.post).not.toHaveBeenCalled();
       expect(mockClient.put).not.toHaveBeenCalled();
     });
@@ -219,12 +206,10 @@ describe('BMCCertService profile ID validation', () => {
 
     await service.enrollBMC('42');
     await service.restoreFactoryCert(42);
-    await service.replaceWebCertificate('42', { certPem: 'c', keyPem: 'k' });
     await service.restoreFactoryCert('18446744073709551615');
 
     expect(vi.mocked(mockClient.post).mock.calls[0]?.[0]).toBe('/v1/bmc/42/enroll');
     expect(vi.mocked(mockClient.post).mock.calls[1]?.[0]).toBe('/v1/bmc/42/cert/restore');
-    expect(vi.mocked(mockClient.put).mock.calls[0]?.[0]).toBe('/v1/bmc/42/cert');
     expect(vi.mocked(mockClient.post).mock.calls[2]?.[0]).toBe(
       '/v1/bmc/18446744073709551615/cert/restore'
     );
@@ -244,9 +229,6 @@ describe('BMCCertService profile ID validation', () => {
     it(`refuses numeric profile ID ${label} with no request`, async () => {
       await expect(service.enrollBMC(id)).rejects.toThrow(TypeError);
       await expect(service.restoreFactoryCert(id)).rejects.toThrow(TypeError);
-      await expect(
-        service.replaceWebCertificate(id, { certPem: 'c', keyPem: 'k' })
-      ).rejects.toThrow(TypeError);
       expect(mockClient.post).not.toHaveBeenCalled();
       expect(mockClient.put).not.toHaveBeenCalled();
     });

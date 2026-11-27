@@ -8,16 +8,26 @@ import { BMCAccountsCard } from '@/components/features/bmc/bmc-accounts-card';
 
 // The BMC certificate and users of one BMC profile (#2040). The cards remount
 // when the profile ID changes, so no state of one profile shows on another.
+const UINT64_MAX_DECIMAL = '18446744073709551615';
+
+// validBMCProfileID is the server's {profileID} rule: a decimal uint64 with no
+// leading zero. The SDK refuses any other ID, so no card mounts for one.
+function validBMCProfileID(id: string): boolean {
+  if (!/^(0|[1-9][0-9]{0,19})$/.test(id)) return false;
+  return id.length < UINT64_MAX_DECIMAL.length || id <= UINT64_MAX_DECIMAL;
+}
+
 export default function BMCAccountsPage() {
   const [profileID, setProfileID] = useState('');
   const id = profileID.trim();
+  const valid = id !== '' && validBMCProfileID(id);
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">BMC certificate and users</h1>
         <p className="text-muted-foreground">
-          Enrol, restore and replace the BMC certificate, and manage the BMC user accounts of one BMC profile
+          Restore the BMC factory certificate, and manage the BMC user accounts of one BMC profile
         </p>
       </div>
 
@@ -32,7 +42,13 @@ export default function BMCAccountsPage() {
         />
       </div>
 
-      {id !== '' && (
+      {id !== '' && !valid && (
+        <p role="alert" className="text-sm text-destructive">
+          The BMC profile ID must be a decimal number (0 to {UINT64_MAX_DECIMAL}) with no leading zero
+        </p>
+      )}
+
+      {valid && (
         <div key={id} className="grid gap-6 lg:grid-cols-2">
           <BMCCertCard profileID={id} />
           <BMCAccountsCard profileID={id} />

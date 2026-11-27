@@ -184,7 +184,6 @@ export type {
   BMCCeremonyStep,
   BMCEnrollResult,
   BMCRestoreResult,
-  BMCReplaceWebCertRequest,
 } from './services/bmc-cert-service.js';
 export type {
   SwitchPortMode,

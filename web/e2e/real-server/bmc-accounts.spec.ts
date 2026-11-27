@@ -18,11 +18,18 @@ const OTHER_UNKNOWN_PROFILE = '999998';
 // (specs do not import from src).
 const NOT_OFFERED_REASON = 'not offered by this server';
 
+// The write controls the page renders for a profile with no users: the
+// certificate card offers Restore only and the users card offers Create.
 const BMC_WRITE_OPS = [
-  'POST /api/v1/bmc/{profileID:[0-9]+}/enroll',
   'POST /api/v1/bmc/{profileID:[0-9]+}/cert/restore',
-  'PUT /api/v1/bmc/{profileID:[0-9]+}/cert',
   'POST /api/v1/bmc/{profileID:[0-9]+}/users',
+];
+
+// Ops this page renders no control for (#2199): enrolment is not on this page,
+// and the web-certificate replace rotates no SPKI pin and no TLSA record.
+const BMC_UNRENDERED_OPS = [
+  'POST /api/v1/bmc/{profileID:[0-9]+}/enroll',
+  'PUT /api/v1/bmc/{profileID:[0-9]+}/cert',
 ];
 
 type Capability = { enabled: boolean; reason?: string };
@@ -77,6 +84,10 @@ test.describe('BMC certificate and users page', () => {
       await expect(control).toHaveAttribute('data-capability-enabled', String(caps.get(op as string)?.enabled === true));
     }
     for (const op of BMC_WRITE_OPS) expect(ops).toContain(op);
+    for (const op of BMC_UNRENDERED_OPS) {
+      expect(ops).not.toContain(op);
+      await expect(adminPage.locator(`[data-capability-op="${op}"]`)).toHaveCount(0);
+    }
   });
 
   test('the users card shows the server refusal for an unknown profile', async ({ adminPage }) => {
