@@ -136,9 +136,12 @@ func (r *Router) ensure(w http.ResponseWriter, req *http.Request) bool {
 }
 
 // decode reads the request body into msg, writing a 400 when it is not
-// valid JSON for msg.
+// valid JSON for msg or when the body cannot be read in full.
 func (r *Router) decode(w http.ResponseWriter, req *http.Request, msg proto.Message) bool {
-	acceptWireEnums(req)
+	if err := acceptWireEnums(req); err != nil {
+		r.respWriter.Error400(w, req, &protorest.ErrReadBodyFailed{Cause: err})
+		return false
+	}
 	if err := protorest.DecodeRequest(req, msg); err != nil {
 		r.respWriter.Error400(w, req, err)
 		return false
@@ -158,20 +161,23 @@ var wireEnumPrefixes = map[string]string{
 // ("admin", "piv") to their protojson names (CEREMONY_OFFICER_ROLE_ADMIN,
 // CEREMONY_AUTHENTICATOR_TYPE_PIV) so protojson decodes them. Values already
 // in protojson form, numeric values and bodies that are not a JSON object
-// pass through unchanged, so the web console is unaffected.
-func acceptWireEnums(req *http.Request) {
+// pass through unchanged, so the web console is unaffected. A body that
+// cannot be read in full is reported to the caller, never replaced by the
+// partial bytes, so the request is refused rather than decoded from a
+// truncated body.
+func acceptWireEnums(req *http.Request) error {
 	if req.Body == nil {
-		return
+		return nil
 	}
 	raw, err := io.ReadAll(req.Body)
 	_ = req.Body.Close()
-	req.Body = io.NopCloser(bytes.NewReader(raw))
 	if err != nil {
-		return
+		return err
 	}
+	req.Body = io.NopCloser(bytes.NewReader(raw))
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(raw, &fields) != nil || fields == nil {
-		return
+		return nil
 	}
 	changed := false
 	for key, prefix := range wireEnumPrefixes {
@@ -191,14 +197,15 @@ func acceptWireEnums(req *http.Request) {
 		changed = true
 	}
 	if !changed {
-		return
+		return nil
 	}
 	out, err := json.Marshal(fields)
 	if err != nil {
-		return
+		return nil
 	}
 	req.Body = io.NopCloser(bytes.NewReader(out))
 	req.ContentLength = int64(len(out))
+	return nil
 }
 
 // write answers 200 with resp, or the HTTP status matching err.
