@@ -106,8 +106,45 @@ func TestInvoke_TPMGetAK_DecodesTheKeyAndName(t *testing.T) {
 	if string(reply.GetName()) != "ak-name" {
 		t.Errorf("name = %q, want the AK name", reply.GetName())
 	}
-	if reply.GetAlgorithm() != platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED {
-		t.Errorf("algorithm = %v, want unset (the tool reports the family only)", reply.GetAlgorithm())
+	if reply.GetAlgorithm() != platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256 {
+		t.Errorf("algorithm = %v, want KEY_ALGORITHM_ECDSA_P256 for the ECDSA family", reply.GetAlgorithm())
+	}
+}
+
+// TestInvoke_TPMGetAK_MapsTheAlgorithmFamilyLikeGRPC pins the family to
+// KeyAlgorithm mapping the gRPC service applies to the same AK.
+func TestInvoke_TPMGetAK_MapsTheAlgorithmFamilyLikeGRPC(t *testing.T) {
+	cases := []struct {
+		wire string
+		want platformv1.KeyAlgorithm
+	}{
+		{"RSA", platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048},
+		{"ECDSA", platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256},
+		{"Ed25519", platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519},
+		{"", platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED},
+		{"DSA", platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED},
+	}
+	for _, tc := range cases {
+		t.Run("family="+tc.wire, func(t *testing.T) {
+			var calls []toolCall
+			adapter := provisioningTestServer(t, map[string]interface{}{
+				"platform_tpm_iak": map[string]interface{}{
+					"handle":     0x81010002,
+					"public_key": tpmReadB64("ak-pub"),
+					"algorithm":  tc.wire,
+					"name":       tpmReadB64("ak-name"),
+				},
+			}, &calls)
+
+			reply := &platformv1.GetAKResponse{}
+			if err := adapter.Connection().Invoke(context.Background(), platformv1.TPMService_GetAK_FullMethodName,
+				&platformv1.GetAKRequest{}, reply); err != nil {
+				t.Fatalf("Invoke: %v", err)
+			}
+			if reply.GetAlgorithm() != tc.want {
+				t.Errorf("algorithm = %v, want %v", reply.GetAlgorithm(), tc.want)
+			}
+		})
 	}
 }
 
