@@ -76,7 +76,12 @@ func (p *DatapathPlane) ExtendPeer(ctx context.Context, lease *Lease) error {
 	if len(key) == 0 {
 		key = lease.Keys.ClientCertificateSHA256
 	}
-	resp, err := p.peers.RenewVPNPeer(ctx, &ipcv1.RenewVPNPeerRequest{PublicKey: key, ExpiresAtUnixNano: lease.ExpiresAt.UnixNano()})
+	resp, err := p.peers.RenewVPNPeer(ctx, &ipcv1.RenewVPNPeerRequest{
+		DataPlane:         string(p.kind),
+		LeaseId:           string(lease.ID),
+		PublicKey:         key,
+		ExpiresAtUnixNano: lease.ExpiresAt.UnixNano(),
+	})
 	if err != nil {
 		return &ErrDataPlaneUnavailable{Kind: p.kind, Cause: err}
 	}

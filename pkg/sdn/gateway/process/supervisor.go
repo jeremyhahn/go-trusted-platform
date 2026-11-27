@@ -101,7 +101,9 @@ type Config struct {
 	// and before its restart backoff. An error is logged at Error, recorded
 	// in the process's health, and the hook is called again on each
 	// backoff tick until it succeeds or a relaunched child is up. It is
-	// not called on an operator stop.
+	// also called once after an operator stop has reaped the child,
+	// gracefully or by SIGKILL, and a failure is returned by StopService;
+	// that call is not retried.
 	OnChildExit func(ctx context.Context, def Definition) error
 	// Clock is the time source; nil means the system clock.
 	Clock Clock
@@ -1914,6 +1916,7 @@ func (s *Supervisor) stopProcess(ctx context.Context, proc *supervised) error {
 	s.mu.Lock()
 	proc.stopping = true
 	child, cancel, done := proc.child, proc.cancel, proc.done
+	gen := proc.launchGen
 	proc.cancel = nil
 	s.mu.Unlock()
 
@@ -1945,9 +1948,19 @@ func (s *Supervisor) stopProcess(ctx context.Context, proc *supervised) error {
 	}
 
 	s.clearProcessState(proc)
+	// The child is reaped, gracefully or by SIGKILL: run the exit hook once,
+	// fenced to the stopped generation, so a hub the child left behind (a
+	// kill, a failed plane stop) never outlives it (Codex #2336 round 17).
+	s.runExitHook(context.WithoutCancel(ctx), proc, gen)
+	var hookErr error
+	s.mu.Lock()
+	if proc.launchGen == gen {
+		hookErr = proc.exitHookErr
+	}
+	s.mu.Unlock()
 	s.removeCgroup(ctx, proc)
 	s.cfg.Logger.Info("gatewayd supervisor: process stopped", slog.String("process", proc.def.Name))
-	return nil
+	return hookErr
 }
 
 // terminate asks a child to stop and kills it if it does not, waiting on the
