@@ -307,3 +307,65 @@ func TestLeaseDeadline_DelayedLowerRenewalCannotRollBackTheHostDeadline(t *testi
 	require.NoError(t, host.ExpirePeers(ctx, t0.Add(3*time.Hour)))
 	assert.Equal(t, 0, managed.count())
 }
+
+// A renewal whose host extension failed told the client 503, so the client
+// still holds its old expiry. A Sweep that later pays the host extension
+// must not close the renewal window the client's retry relies on: the retry
+// is accepted though the new stored deadline's window has not opened.
+func TestLeaseDeadline_ClientRetryAfterASweepRecoveredTheHostIsStillAccepted(t *testing.T) {
+	ctx := context.Background()
+	h, plane, lease := renewHarness(t)
+	plane.steps = []extendStep{{err: errors.New("datapath unreachable")}}
+	_, err := h.svc.Renew(ctx, lease.ID, h.evidence(t))
+	var unavailable *ErrDataPlaneUnavailable
+	require.ErrorAs(t, err, &unavailable, "the client is told the renewal failed")
+	stored, err := h.svc.Lease(ctx, lease.ID)
+	require.NoError(t, err)
+
+	h.svc.Sweep(ctx)
+	require.Equal(t, 2, plane.calls, "Sweep pays the host extension")
+	assert.Equal(t, stored.ExpiresAt, plane.hostDeadline(lease.ExpiresAt))
+
+	h.clock.Advance(time.Minute)
+	require.True(t, h.clock.Now().Before(stored.ExpiresAt.Add(-DefaultRenewWindow)),
+		"the ordinary window of the new stored deadline would refuse")
+	renewed, err := h.svc.Renew(ctx, lease.ID, h.evidence(t))
+	require.NoError(t, err, "the client never learned its new deadline: its retry is still owed")
+	assert.Equal(t, 2, renewed.Renewals)
+
+	_, err = h.svc.Renew(ctx, lease.ID, h.evidence(t))
+	var notOpen *ErrRenewalNotOpen
+	require.ErrorAs(t, err, &notOpen, "a successful renewal clears the client's bypass")
+}
+
+// A non-expired revocation whose deletion was not recorded leaves the lease
+// served: the owed extension it still needs stays owed, so a following
+// Sweep re-sends it.
+func TestLeaseDeadline_AnUnrecordedRevocationKeepsTheOwedExtension(t *testing.T) {
+	ctx := context.Background()
+	plane := &extendingPlane{fakePlane: newFakePlane(DataPlaneMASQUE)}
+	var store *seededStore
+	h := newHarnessWith(t, testConfig(), func(d *Deps) {
+		store = &seededStore{MemoryLeaseStore: d.Leases.(*MemoryLeaseStore)}
+		d.Leases = store
+		d.DataPlanes = map[DataPlaneKind]DataPlane{DataPlaneMASQUE: plane}
+	})
+	lease, err := h.svc.Admit(ctx, h.request(t))
+	require.NoError(t, err)
+	h.intoRenewWindow()
+	plane.steps = []extendStep{{err: errors.New("datapath unreachable")}}
+	_, err = h.svc.Renew(ctx, lease.ID, h.evidence(t))
+	var unavailable *ErrDataPlaneUnavailable
+	require.ErrorAs(t, err, &unavailable)
+	require.Equal(t, 1, plane.calls)
+
+	store.deleteErr = &ErrRevocationNotRecorded{LeaseID: lease.ID, Cause: errors.New("disk full")}
+	err = h.svc.Revoke(ctx, lease.ID, RevokeOperator)
+	var unrecorded *ErrRevocationNotRecorded
+	require.ErrorAs(t, err, &unrecorded)
+	_, err = h.svc.Lease(ctx, lease.ID)
+	require.NoError(t, err, "the lease is still served")
+
+	h.svc.Sweep(ctx)
+	assert.Equal(t, 2, plane.calls, "Sweep still re-sends the owed extension")
+}
