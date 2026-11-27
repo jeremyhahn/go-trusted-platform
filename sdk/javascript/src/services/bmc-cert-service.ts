@@ -133,6 +133,14 @@ export function bmcSlotSegment(slot: number): string {
   return encodeURIComponent(String(slot));
 }
 
+/**
+ * Request options for the certificate writes: never retried. A lost answer
+ * to an enrolment, factory restore or certificate replace must not send the
+ * write again, since a repeat would regenerate or replace the certificate a
+ * second time.
+ */
+const NO_RETRY = { retry: { enabled: false } } as const;
+
 export class BMCCertService extends BaseService {
   /**
    * Creates a new BMC certificate service instance
@@ -173,7 +181,7 @@ export class BMCCertService extends BaseService {
     if (options?.danePublish !== undefined) {
       body.dane_publish = options.danePublish;
     }
-    return this.client.post<BMCEnrollResult>(this.buildUrl(`/${bmcProfileSegment(profileId)}/enroll`), body);
+    return this.client.post<BMCEnrollResult>(this.buildUrl(`/${bmcProfileSegment(profileId)}/enroll`), body, NO_RETRY);
   }
 
   /**
@@ -189,7 +197,7 @@ export class BMCCertService extends BaseService {
    * @returns The restore result
    */
   async restoreFactoryCert(profileId: string | number): Promise<ApiResponse<BMCRestoreResult>> {
-    return this.client.post<BMCRestoreResult>(this.buildUrl(`/${bmcProfileSegment(profileId)}/cert/restore`));
+    return this.client.post<BMCRestoreResult>(this.buildUrl(`/${bmcProfileSegment(profileId)}/cert/restore`), undefined, NO_RETRY);
   }
 
   /**
@@ -211,6 +219,6 @@ export class BMCCertService extends BaseService {
     return this.client.put<{ status: string }>(this.buildUrl(`/${bmcProfileSegment(profileId)}/cert`), {
       cert_pem: req.certPem,
       key_pem: req.keyPem,
-    });
+    }, NO_RETRY);
   }
 }

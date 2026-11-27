@@ -191,7 +191,7 @@ export class BMCService extends BaseService {
       enabled: req.enabled ?? true,
       channel: req.channel ?? 1,
     };
-    return this.client.post<BMCUser>(this.buildUrl(`/${bmcProfileSegment(profileId)}/users`), body);
+    return this.client.post<BMCUser>(this.buildUrl(`/${bmcProfileSegment(profileId)}/users`), body, NO_RETRY);
   }
 
   /**
@@ -199,7 +199,7 @@ export class BMCService extends BaseService {
    * `DELETE /bmc/{profileID}/users/{slot}` (handler.go DeleteUser)
    */
   async deleteUser(profileId: string | number, slot: number): Promise<ApiResponse<BMCStatusOK>> {
-    return this.client.delete<BMCStatusOK>(this.buildUrl(`/${bmcProfileSegment(profileId)}/users/${bmcSlotSegment(slot)}`));
+    return this.client.delete<BMCStatusOK>(this.buildUrl(`/${bmcProfileSegment(profileId)}/users/${bmcSlotSegment(slot)}`), NO_RETRY);
   }
 
   /**
@@ -213,7 +213,7 @@ export class BMCService extends BaseService {
   ): Promise<ApiResponse<BMCStatusOK>> {
     return this.client.put<BMCStatusOK>(this.buildUrl(`/${bmcProfileSegment(profileId)}/users/${bmcSlotSegment(slot)}/password`), {
       password,
-    });
+    }, NO_RETRY);
   }
 
   /**
@@ -229,7 +229,7 @@ export class BMCService extends BaseService {
     return this.client.put<BMCStatusOK>(this.buildUrl(`/${bmcProfileSegment(profileId)}/users/${bmcSlotSegment(slot)}/privilege`), {
       privilege,
       channel,
-    });
+    }, NO_RETRY);
   }
 
   private profilePath(profileID: string | number, suffix: string): string {
