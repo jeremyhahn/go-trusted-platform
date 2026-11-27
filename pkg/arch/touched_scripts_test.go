@@ -186,7 +186,7 @@ func TestTouchedFeatures(t *testing.T) {
 		// 0, so the importers it lists are incomplete; that is a failure to
 		// list the packages, which fails closed. Last: the broken file stays.
 		{name: "an integration package go list reports an error for", files: map[string]string{
-			"test/integration/alpha/alpha.go": "package alpha\n\nfunc A( int { return 1 }\n",
+			"test/integration/alpha/alpha.go": "package alpha\n\nimport (\n\t\"fmt\"\n\nfunc A() int { return 1 }\n",
 		}, want: []string{"ALL", "beta"}},
 	})
 }
@@ -256,6 +256,6 @@ func TestTouchedPackages(t *testing.T) {
 		// 0, so the packages and importers it lists are incomplete; that is a
 		// failure to list the packages, which fails closed to ./... .
 		// Last: the broken file stays in the repository.
-		{name: "a package go list reports an error for", files: map[string]string{"pkg/e/e.go": "package e\n\nfunc E( int { return 1 }\n"}, want: []string{"./..."}},
+		{name: "a package go list reports an error for", files: map[string]string{"pkg/e/e.go": "package e\n\nimport (\n\t\"fmt\"\n\nfunc E() int { return 1 }\n"}, want: []string{"./..."}},
 	})
 }
