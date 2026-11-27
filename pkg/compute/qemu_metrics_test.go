@@ -218,6 +218,17 @@ func TestDefaultReadNetIfaceStats_Missing(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestDefaultVMBlockStatsFor_NilVMIsUnavailable covers an adopted migration
+// guest: it has a PID but no orchestrator-built QEMU handle, so block stats
+// must report unavailable instead of dereferencing the nil handle.
+func TestDefaultVMBlockStatsFor_NilVMIsUnavailable(t *testing.T) {
+	var err error
+	require.NotPanics(t, func() {
+		_, err = defaultVMBlockStatsFor(context.Background(), &QEMUOrchestrator{}, &qemuInstance{})
+	})
+	require.ErrorIs(t, err, ErrVMMetricsUnavailable)
+}
+
 // swapMetricsSeams installs metric collection seams and returns a restorer.
 func swapMetricsSeams(
 	t *testing.T,
