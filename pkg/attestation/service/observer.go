@@ -25,8 +25,8 @@ import (
 // ViolationEvent; a successful re-attestation triggers restore.
 //
 // Observers are registered on the Service via RegisterObserver and called
-// synchronously: VerifyManifest dispatches only failures (an inspection is
-// not a verdict), and RecordDeviceVerdict dispatches device verdicts.
+// synchronously from RecordDeviceVerdict, which dispatches device verdicts.
+// VerifyManifest dispatches nothing: an inspection is not a verdict.
 // Observers must not block; move slow work to a goroutine.
 type AttestationObserver interface {
 	// OnAttestationFailed is called when manifest verification fails.
@@ -59,8 +59,8 @@ type DeviceResolver interface {
 	DeviceForHost(hostID string) (deviceID uint64, ok bool)
 }
 
-// RegisterObserver adds observer to the set notified of every failed
-// VerifyManifest call and every dispatched device verdict. Observers are
+// RegisterObserver adds observer to the set notified of every dispatched
+// device verdict (RecordDeviceVerdict; VerifyManifest dispatches nothing). Observers are
 // called in registration order. This method is safe to
 // call before or after the service handles its first verification.
 func (s *Service) RegisterObserver(obs AttestationObserver) {
@@ -79,8 +79,8 @@ func (s *Service) SetDeviceResolver(r DeviceResolver) {
 }
 
 // notifyObservers dispatches the attestation outcome to all registered
-// observers. VerifyManifest calls it for a failure only, after the result
-// is final.
+// observers. RecordDeviceVerdict calls it for each device verdict;
+// VerifyManifest never does.
 func (s *Service) notifyObservers(ctx context.Context, hostID string, passed bool, detail string) {
 	s.mu.RLock()
 	hasObservers := len(s.observers) > 0
