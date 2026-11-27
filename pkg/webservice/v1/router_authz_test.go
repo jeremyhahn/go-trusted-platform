@@ -149,6 +149,10 @@ type stubEABServer struct {
 	platformv1.UnimplementedEABServiceServer
 }
 
+type stubCeremonyServer struct {
+	platformv1.UnimplementedCeremonyServiceServer
+}
+
 type stubNTPServer struct {
 	platformv1.UnimplementedNTPServiceServer
 }
@@ -317,6 +321,7 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.kmsSecrets = &stubSecretsClient{}
 	registry.platformRouter = restplatform.NewPlatformRouter(logger, respWriter)
 	registry.computeService = &stubComputeServer{}
+	registry.ceremonyService = &stubCeremonyServer{}
 	registry.registryService = &stubRegistryService{}
 	registry.dnsService = &stubDNSService{}
 	registry.eabService = &stubEABServer{}

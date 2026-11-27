@@ -184,6 +184,7 @@ const navigation = [
       { title: "Events", href: "/platform/events" },
       { title: "Metrics", href: "/platform/metrics" },
       { title: "Logs", href: "/platform/logs" },
+      { title: "Bootstrap Ceremony", href: "/platform/ceremony" },
     ],
   },
 ];

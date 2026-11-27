@@ -798,6 +798,7 @@ type RestHandlerRegistry interface {
 	DNSService() dns.DNSService
 	DNSServiceServer() platformv1.DNSServiceServer
 	EABServiceServer() platformv1.EABServiceServer
+	CeremonyServiceServer() platformv1.CeremonyServiceServer
 	EmbeddedAdapter() sdktransport.Adapter
 	GatewayServiceServer() platformv1.GatewayServiceServer
 	IAMClients() (restiam.IAMClient, restiam.PEPClient)
@@ -1027,6 +1028,7 @@ type RegistryParams struct {
 	PEPClient                restiam.PEPClient
 	AttestationServiceServer platformv1.AttestationServiceServer
 	CAServiceServer          platformv1.CAServiceServer
+	CeremonyServiceServer    platformv1.CeremonyServiceServer
 	ComputeServiceServer     platformv1.ComputeServiceServer
 	DNSServiceServer         platformv1.DNSServiceServer
 	DeviceServiceServer      platformv1.DeviceServiceServer
@@ -2110,6 +2112,12 @@ func (registry *HandlerRegistry) IDevIDServiceServer() platformv1.IDevIDServiceS
 // CAServiceServer returns the in-process CAService gRPC implementation, or nil.
 func (registry *HandlerRegistry) CAServiceServer() platformv1.CAServiceServer {
 	return registry.params.CAServiceServer
+}
+
+// CeremonyServiceServer returns the in-process ceremony service, or nil when
+// the daemon has none.
+func (registry *HandlerRegistry) CeremonyServiceServer() platformv1.CeremonyServiceServer {
+	return registry.params.CeremonyServiceServer
 }
 
 // InvitationServiceServer returns the in-process InvitationService gRPC implementation, or nil.

@@ -83,6 +83,7 @@ func (p *MCPServiceProvider) CeremonyInit(ctx context.Context, args map[string]i
 		Hostname:               mapGetString(args, "hostname"),
 		SANs:                   mapGetStringSlice(args, "sans"),
 		CredentialSealStrategy: mapGetString(args, "credential_seal_strategy"),
+		Officers:               mapGetCeremonyOfficers(args, "officers"),
 	}
 	out, err := svc.Init(ctx, req)
 	if err != nil {
@@ -651,6 +652,32 @@ func mapGetStringSlice(args map[string]interface{}, key string) []string {
 		if s, ok := v.(string); ok {
 			out = append(out, s)
 		}
+	}
+	return out
+}
+
+// mapGetCeremonyOfficers reads an MCP officers list (objects carrying
+// username and csr_pem) into the service-layer officers. Entries that are not
+// objects are skipped; the backend's officer-count check then rejects a
+// threshold init whose list falls short.
+func mapGetCeremonyOfficers(args map[string]interface{}, key string) []CeremonyOfficer {
+	if args == nil {
+		return nil
+	}
+	raw, ok := args[key].([]interface{})
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make([]CeremonyOfficer, 0, len(raw))
+	for _, v := range raw {
+		m, ok := v.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		out = append(out, CeremonyOfficer{
+			Username: mapGetString(m, "username"),
+			CSRPEM:   mapGetString(m, "csr_pem"),
+		})
 	}
 	return out
 }

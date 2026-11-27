@@ -78,6 +78,18 @@ type InitRequest struct {
 	SANs []string `json:"sans,omitempty" yaml:"sans,omitempty"`
 	// CredentialSealStrategy selects the seal strategy used for credential wrapping.
 	CredentialSealStrategy string `json:"credential_seal_strategy,omitempty" yaml:"credential_seal_strategy,omitempty"`
+	// Officers are the Security Officers an "M-of-N" init enrols: exactly N
+	// of them, one per Shamir share. A single-admin init carries none.
+	Officers []InitOfficer `json:"officers,omitempty" yaml:"officers,omitempty"`
+}
+
+// InitOfficer is one Security Officer enrolled by an M-of-N init: the
+// ceremony signs CSRPEM into the officer's custodian certificate.
+type InitOfficer struct {
+	// Username is the officer's login.
+	Username string `json:"username" yaml:"username"`
+	// CSRPEM is the PEM-encoded certificate signing request for the officer.
+	CSRPEM string `json:"csr_pem" yaml:"csr_pem"`
 }
 
 // InitResponse is returned by Init.

@@ -33,6 +33,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restattestation "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/attestation"
 	restca "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ca"
+	restceremony "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ceremony"
 	restcompute "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/compute"
 	restdevice "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/device"
 	restdns "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/dns"
@@ -209,6 +210,7 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.acmeRoutes()
 	v1Router.attestationRoutes()
 	v1Router.caRoutes()
+	v1Router.ceremonyRoutes()
 	// computeImagesRoutes MUST register before computeRoutes: mux matches
 	// in registration order, and when compute is unconfigured its
 	// catch-all 503 stub on /compute would otherwise shadow the
@@ -858,6 +860,25 @@ func (v1Router *Router) overlayRoutes() {
 			r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 		},
 	)
+}
+
+func (v1Router *Router) ceremonyRoutes() {
+	server := v1Router.restHandlerRegistry.CeremonyServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("Ceremony service server is nil - ceremony routes not registered")
+		return
+	}
+	r := restceremony.NewRouter(
+		v1Router.logger,
+		server,
+		v1Router.responseWriter)
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		r.SetScopeAuthorizer(scoped)
+	}
+	// The ceremony initialises the platform CA, hands out officer
+	// certificates and Shamir shares and signs CSRs: operator work behind
+	// the admin gate, then the ceremony scope of each route, as on gRPC.
+	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
 func (v1Router *Router) ntpRoutes() {

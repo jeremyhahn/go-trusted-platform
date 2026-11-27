@@ -84,6 +84,7 @@ export {
   DeviceService,
   DNSService,
   NTPService,
+  CeremonyService,
   BMCService,
   CapabilitiesService,
   CAPABILITY_REASON_NOT_CONFIGURED,
@@ -154,6 +155,25 @@ export type {
   ListNTPSourcesResponse,
   StepNTPClockResponse,
 } from './services/ntp-service.js';
+export type {
+  CeremonyState,
+  CeremonyAuthenticatorType,
+  CeremonyOfficerRole,
+  CeremonyInitOfficer,
+  CeremonyInitRequest,
+  CeremonyInitResponse,
+  CeremonyStatusResponse,
+  CeremonyClaimCertBeginRequest,
+  CeremonyClaimCertBeginResponse,
+  CeremonyClaimCertCompleteRequest,
+  CeremonyClaimCertCompleteResponse,
+  CeremonyClaimShareBeginRequest,
+  CeremonyClaimShareBeginResponse,
+  CeremonyClaimShareCompleteRequest,
+  CeremonyClaimShareCompleteResponse,
+  CeremonySignCSRRequest,
+  CeremonySignCSRResponse,
+} from './services/ceremony-service.js';
 export type {
   BMCPowerAction,
   BMCPowerActionResponse,

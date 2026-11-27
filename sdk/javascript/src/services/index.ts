@@ -29,6 +29,26 @@ export type {
   ListNTPSourcesResponse,
   StepNTPClockResponse,
 } from './ntp-service.js';
+export { CeremonyService } from './ceremony-service.js';
+export type {
+  CeremonyState,
+  CeremonyAuthenticatorType,
+  CeremonyOfficerRole,
+  CeremonyInitOfficer,
+  CeremonyInitRequest,
+  CeremonyInitResponse,
+  CeremonyStatusResponse,
+  CeremonyClaimCertBeginRequest,
+  CeremonyClaimCertBeginResponse,
+  CeremonyClaimCertCompleteRequest,
+  CeremonyClaimCertCompleteResponse,
+  CeremonyClaimShareBeginRequest,
+  CeremonyClaimShareBeginResponse,
+  CeremonyClaimShareCompleteRequest,
+  CeremonyClaimShareCompleteResponse,
+  CeremonySignCSRRequest,
+  CeremonySignCSRResponse,
+} from './ceremony-service.js';
 export { BMCService } from './bmc-service.js';
 export type {
   BMCPowerAction,

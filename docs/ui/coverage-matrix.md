@@ -106,13 +106,13 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `CeremonyService.Init` | - | - | - | - | missing |
-| `CeremonyService.Status` | - | - | - | - | missing |
-| `CeremonyService.ClaimCertBegin` | - | - | - | - | missing |
-| `CeremonyService.ClaimCertComplete` | - | - | - | - | missing |
-| `CeremonyService.ClaimShareBegin` | - | - | - | - | missing |
-| `CeremonyService.ClaimShareComplete` | - | - | - | - | missing |
-| `CeremonyService.SignCSR` | - | - | - | - | missing |
+| `CeremonyService.Init` | `POST /init` | `(dashboard)/platform/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
+| `CeremonyService.Status` | `GET /status` | `(dashboard)/platform/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
+| `CeremonyService.ClaimCertBegin` | `POST /claim-cert/begin` | `(dashboard)/platform/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
+| `CeremonyService.ClaimCertComplete` | `POST /claim-cert/complete` | `(dashboard)/platform/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
+| `CeremonyService.ClaimShareBegin` | `POST /claim-share/begin` | `(dashboard)/platform/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
+| `CeremonyService.ClaimShareComplete` | `POST /claim-share/complete` | `(dashboard)/platform/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
+| `CeremonyService.SignCSR` | `POST /sign-csr` | `(dashboard)/platform/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
 
 ## ClusterService (`cluster.proto`)
 
@@ -734,7 +734,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | BMCService | 23 | 0 | 0 | 23 | 0 | 0 |
 | CAService | 13 | 7 | 0 | 6 | 0 | 0 |
 | CacheService | 4 | 0 | 0 | 0 | 0 | 4 |
-| CeremonyService | 7 | 0 | 0 | 7 | 0 | 0 |
+| CeremonyService | 7 | 7 | 0 | 0 | 0 | 0 |
 | ClusterService | 5 | 0 | 0 | 5 | 0 | 0 |
 | ComputeService | 37 | 14 | 2 | 16 | 5 | 0 |
 | ConfigDeliveryService | 7 | 3 | 0 | 0 | 4 | 0 |
@@ -765,7 +765,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | TPMService | 31 | 17 | 7 | 7 | 0 | 0 |
 | VPNService | 8 | 8 | 0 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 10 | 9 | 1 | 0 |
-| **Total** | **529** | **168** | **51** | **229** | **50** | **31** |
+| **Total** | **529** | **175** | **51** | **222** | **50** | **31** |
 
 ## Proposed slices
 
@@ -775,7 +775,7 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 2. **BMCService (1/2): On, Off, Reset, Cycle, Status, BootDevice…**: 15 operations (15 missing, 0 partial): PowerOn, PowerOff, PowerReset, PowerCycle, PowerStatus, ProvisionStatus, SetBootDevice, GetBootDevice, MountISO, UnmountISO, VirtualMediaStatus, GetSensors, GetSystemInfo, Provision, GetWebCertificate.
 3. **BMCService (2/2): ReplaceWebCertificate, BMC, FactoryCert, User, UserPassword, UserPrivilege**: 8 operations (8 missing, 0 partial): ReplaceWebCertificate, EnrollBMC, RestoreFactoryCert, ListUsers, CreateUser, DeleteUser, SetUserPassword, SetUserPrivilege.
 4. **CAService: CAInfo, CA, CACertificate, CSR, Certificate**: 6 operations (6 missing, 0 partial): GetCAInfo, InitCA, InstallCACertificates, UninstallCACertificates, SignCSR, VerifyCertificate.
-5. **CeremonyService: Init, Status, Cert, Share, CSR**: 7 operations (7 missing, 0 partial): Init, Status, ClaimCertBegin, ClaimCertComplete, ClaimShareBegin, ClaimShareComplete, SignCSR.
+5. **CeremonyService: Init, Status, Cert, Share, CSR**: 7 operations (6 missing, 1 partial): Init, Status, ClaimCertBegin, ClaimCertComplete, ClaimShareBegin, ClaimShareComplete, SignCSR.
 6. **ClusterService: Bootstrap, Join, Leave, Status, Node**: 5 operations (5 missing, 0 partial): Bootstrap, Join, Leave, GetStatus, ListNodes.
 7. **ComputeService (1/2): VM, VMMetric, Disk, Snapshot, Migration**: 13 operations (11 missing, 2 partial): SuspendVM, ResumeVM, GetVM, MigrateVM, AttestVM, GetVMMetrics, AttachDisk, DetachDisk, ResizeDisk, CreateSnapshot, GetSnapshot, PrepareMigration, FinalizeMigration.
 8. **ComputeService (2/2): Container, ContainerMetric, VMAttestation**: 5 operations (5 missing, 0 partial): GetContainer, ExecContainer, AttestContainer, GetContainerMetrics, VerifyVMAttestation.

@@ -57,6 +57,34 @@ func invokeCapturing(t *testing.T, method string, req, reply proto.Message, resp
 	return got, err
 }
 
+// TestPhase35CeremonyRouterReplies decodes the REST ceremony router's
+// protojson replies (camelCase fields, CEREMONY_STATE_* values) through the
+// adapter, so Init's one-shot admin key reaches the caller.
+func TestPhase35CeremonyRouterReplies(t *testing.T) {
+	t.Run("ceremony init from the router", func(t *testing.T) {
+		reply := &platformv1.CeremonyInitResponse{}
+		_, err := invokeCapturing(t, "/platform.v1.CeremonyService/Init", &platformv1.CeremonyInitRequest{}, reply,
+			`{"code":200,"success":true,"payload":{"ceremonyId":"c-1","state":"CEREMONY_STATE_IN_PROGRESS","adminCertPem":"CERT","adminKeyPem":"KEY","spkiPin":"PIN"}}`)
+		if err != nil {
+			t.Fatalf("Invoke: %v", err)
+		}
+		if reply.GetAdminKeyPem() != "KEY" || reply.GetState() != platformv1.CeremonyState_CEREMONY_STATE_IN_PROGRESS {
+			t.Errorf("reply = %+v", reply)
+		}
+	})
+	t.Run("ceremony status from the router", func(t *testing.T) {
+		reply := &platformv1.CeremonyStatusResponse{}
+		_, err := invokeCapturing(t, "/platform.v1.CeremonyService/Status", &platformv1.CeremonyStatusRequest{}, reply,
+			`{"code":200,"success":true,"payload":{"ceremonyId":"c-1","state":"CEREMONY_STATE_COMPLETE","officersRequired":3}}`)
+		if err != nil {
+			t.Fatalf("Invoke: %v", err)
+		}
+		if reply.GetOfficersRequired() != 3 || reply.GetState() != platformv1.CeremonyState_CEREMONY_STATE_COMPLETE {
+			t.Errorf("reply = %+v", reply)
+		}
+	})
+}
+
 // phase35Routes is every ceremony, PIV and FIDO2 method with the verb and URL
 // the daemon serves it on (pkg/api/daemon/{ceremony,piv,fido2}_rest.go).
 var phase35Routes = []struct {

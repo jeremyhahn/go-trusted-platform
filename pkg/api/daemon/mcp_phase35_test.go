@@ -409,6 +409,37 @@ func TestPhase35Provider_CeremonyDelegation(t *testing.T) {
 	}
 }
 
+// TestPhase35Provider_CeremonyInitOfficers checks that the MCP officers list
+// reaches the backend request: an M-of-N init needs exactly N officers.
+func TestPhase35Provider_CeremonyInitOfficers(t *testing.T) {
+	cb := &recordingCeremonyBackend{inner: &fakeCeremonyBackend{}}
+	p := NewMCPServiceProvider(&MCPServiceProviderConfig{})
+	p.SetPhase35Services(Phase35Services{Ceremony: NewCeremonyService(nil, cb)})
+
+	if _, err := p.CeremonyInit(context.Background(), map[string]interface{}{
+		"so_pin":    "1234",
+		"threshold": "2-of-2",
+		"officers": []interface{}{
+			map[string]interface{}{"username": "alice", "csr_pem": "CSR-A"},
+			map[string]interface{}{"username": "bob", "csr_pem": "CSR-B"},
+		},
+	}); err != nil {
+		t.Fatalf("CeremonyInit: %v", err)
+	}
+	if cb.lastInit == nil {
+		t.Fatal("CeremonyInit: backend not called")
+	}
+	want := []CeremonyOfficer{{Username: "alice", CSRPEM: "CSR-A"}, {Username: "bob", CSRPEM: "CSR-B"}}
+	if len(cb.lastInit.Officers) != len(want) {
+		t.Fatalf("CeremonyInit: officers = %+v, want %+v", cb.lastInit.Officers, want)
+	}
+	for i := range want {
+		if cb.lastInit.Officers[i] != want[i] {
+			t.Errorf("officer %d = %+v, want %+v", i, cb.lastInit.Officers[i], want[i])
+		}
+	}
+}
+
 func TestPhase35Provider_PIVDelegation(t *testing.T) {
 	pb := &recordingPIVBackend{inner: &fakePIVBackend{
 		devices: []PIVDevice{{ID: "yk5"}},

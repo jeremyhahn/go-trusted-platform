@@ -33,9 +33,11 @@ type stubCeremonyClient struct {
 	shareResp      *platformv1.CeremonyClaimShareCompleteResponse
 	signResp       *platformv1.CeremonySignCSRResponse
 	err            error
+	lastInit       *platformv1.CeremonyInitRequest
 }
 
-func (s *stubCeremonyClient) Init(_ context.Context, _ *platformv1.CeremonyInitRequest, _ ...grpc.CallOption) (*platformv1.CeremonyInitResponse, error) {
+func (s *stubCeremonyClient) Init(_ context.Context, req *platformv1.CeremonyInitRequest, _ ...grpc.CallOption) (*platformv1.CeremonyInitResponse, error) {
+	s.lastInit = req
 	return s.initResp, s.err
 }
 
@@ -133,5 +135,32 @@ func TestGRPCClient_Error(t *testing.T) {
 	}
 	if !errors.Is(err, wantErr) {
 		t.Errorf("error chain does not include %v", wantErr)
+	}
+}
+
+// TestGRPCClient_InitOfficers checks that an M-of-N init carries every
+// officer into the proto request: the backend refuses a threshold init whose
+// officer count is not N.
+func TestGRPCClient_InitOfficers(t *testing.T) {
+	stub := &stubCeremonyClient{initResp: &platformv1.CeremonyInitResponse{CeremonyId: "cid"}}
+	client := NewGRPCClientFromClient(stub)
+
+	_, err := client.Init(context.Background(), &InitRequest{
+		Threshold: "2-of-3",
+		Officers: []InitOfficer{
+			{Username: "alice", CSRPEM: "CSR-A"},
+			{Username: "bob", CSRPEM: "CSR-B"},
+			{Username: "carol", CSRPEM: "CSR-C"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	got := stub.lastInit.GetOfficers()
+	if len(got) != 3 {
+		t.Fatalf("officers: want 3, got %d", len(got))
+	}
+	if got[0].GetUsername() != "alice" || got[0].GetCsrPem() != "CSR-A" || got[2].GetUsername() != "carol" || got[2].GetCsrPem() != "CSR-C" {
+		t.Errorf("officers not mapped: %+v", got)
 	}
 }

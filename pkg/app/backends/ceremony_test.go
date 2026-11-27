@@ -16,6 +16,7 @@ package backends
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
@@ -285,17 +286,18 @@ func TestMapCeremonyState(t *testing.T) {
 
 func TestThresholdQuorum(t *testing.T) {
 	cases := []struct {
-		in   string
-		want int
+		in    string
+		want  int
+		total int
 	}{
-		{"3-of-5", 3},
-		{"2-of-3", 2},
-		{"1-of-1", 1},
-		{"10-of-25", 10},
+		{"3-of-5", 3, 5},
+		{"2-of-3", 2, 3},
+		{"2-of-2", 2, 2},
+		{"10-of-25", 10, 25},
 	}
 	for _, tc := range cases {
-		if got := thresholdQuorum(tc.in); got != tc.want {
-			t.Errorf("thresholdQuorum(%q) = %d, want %d", tc.in, got, tc.want)
+		if got, total, err := thresholdQuorum(tc.in); got != tc.want || total != tc.total || err != nil {
+			t.Errorf("thresholdQuorum(%q) = %d, %d, %v; want %d, %d, nil", tc.in, got, total, err, tc.want, tc.total)
 		}
 	}
 }
@@ -303,10 +305,69 @@ func TestThresholdQuorum(t *testing.T) {
 // TestThresholdQuorum_Malformed falls back to zero, the ceremony's
 // single-admin mode, for any spec that is not "M-of-N".
 func TestThresholdQuorum_Malformed(t *testing.T) {
-	for _, in := range []string{"", "garbage", "x-of-5", "-1-of-3", "3of5"} {
-		if got := thresholdQuorum(in); got != 0 {
-			t.Errorf("thresholdQuorum(%q) = %d, want 0", in, got)
+	if got, total, err := thresholdQuorum(""); got != 0 || total != 0 || err != nil {
+		t.Errorf("thresholdQuorum(\"\") = %d, %d, %v; want 0, 0, nil (single-admin)", got, total, err)
+	}
+	for _, in := range []string{"garbage", "x-of-5", "-1-of-3", "3of5", "0-of-3", "4-of-3", "+3-of-5", "3-of-x", "1-of-5", "1-of-1", "2-of-1"} {
+		got, _, err := thresholdQuorum(in)
+		var bad *ErrInvalidCeremonyThreshold
+		if !errors.As(err, &bad) {
+			t.Errorf("thresholdQuorum(%q) = %d, %v; want *ErrInvalidCeremonyThreshold", in, got, err)
+			continue
 		}
+		if bad.Spec != in {
+			t.Errorf("thresholdQuorum(%q) error Spec = %q", in, bad.Spec)
+		}
+	}
+}
+
+func TestCeremonyBackend_Initialize_RefusesMalformedThreshold(t *testing.T) {
+	var calls []string
+	ceremony := &fakeQRDBCeremony{
+		calls: &calls,
+		resp:  &quicbaassdk.QRDBCeremonyInitializeResponse{SPKIPin: "pin", State: "enrolling"},
+	}
+	issuer := &fakeAdminIssuer{calls: &calls, bundle: &AdminBundle{CertPEM: "CERT", KeyPEM: "KEY"}}
+	b := NewCeremonyBackend(logging.DefaultLogger(), &fakeQuicbaasClient{ceremony: ceremony}, issuer)
+
+	_, err := b.Initialize(context.Background(), &daemon.CeremonyInitRequest{
+		SOPIN:     "so",
+		UserPIN:   "user",
+		Threshold: "garbage",
+	})
+	var bad *ErrInvalidCeremonyThreshold
+	if !errors.As(err, &bad) {
+		t.Fatalf("Initialize error = %v, want *ErrInvalidCeremonyThreshold", err)
+	}
+	if len(calls) != 0 {
+		t.Errorf("calls = %v, want none: a malformed threshold must be refused before any minting or ceremony call", calls)
+	}
+}
+
+// TestCeremonyBackend_Initialize_RefusesQuorumOfOne pins that a 1-of-N
+// threshold is refused before any call: upstream go-qrdb selects M-of-N only
+// when Threshold >= 2 and silently runs single-admin otherwise, so a quorum of
+// one would create a ceremony without officer shares.
+func TestCeremonyBackend_Initialize_RefusesQuorumOfOne(t *testing.T) {
+	var calls []string
+	ceremony := &fakeQRDBCeremony{
+		calls: &calls,
+		resp:  &quicbaassdk.QRDBCeremonyInitializeResponse{SPKIPin: "pin", State: "enrolling"},
+	}
+	issuer := &fakeAdminIssuer{calls: &calls, bundle: &AdminBundle{CertPEM: "CERT", KeyPEM: "KEY"}}
+	b := NewCeremonyBackend(logging.DefaultLogger(), &fakeQuicbaasClient{ceremony: ceremony}, issuer)
+
+	_, err := b.Initialize(context.Background(), &daemon.CeremonyInitRequest{
+		SOPIN:     "so",
+		UserPIN:   "user",
+		Threshold: "1-of-5",
+	})
+	var bad *ErrInvalidCeremonyThreshold
+	if !errors.As(err, &bad) {
+		t.Fatalf("Initialize error = %v, want *ErrInvalidCeremonyThreshold", err)
+	}
+	if len(calls) != 0 {
+		t.Errorf("calls = %v, want none: a quorum of one must be refused before any minting or ceremony call", calls)
 	}
 }
 
@@ -360,6 +421,59 @@ func TestCeremonyBackend_Initialize_SingleAdminSendsNoOfficers(t *testing.T) {
 	}
 	if ceremony.req.Threshold != 0 || ceremony.req.Officers != nil {
 		t.Errorf("single-admin request carried threshold %d and officers %v", ceremony.req.Threshold, ceremony.req.Officers)
+	}
+}
+
+// TestCeremonyBackend_Initialize_RefusesOfficerCountOtherThanN pins that an
+// init whose officer list does not hold exactly N officers is refused before
+// any call: go-qrdb splits into len(Officers) shares, so "2-of-5" with two
+// officers would silently create a 2-of-2 ceremony, and a single-admin init
+// carries no officers at all.
+func TestCeremonyBackend_Initialize_RefusesOfficerCountOtherThanN(t *testing.T) {
+	officers := func(n int) []daemon.CeremonyOfficer {
+		out := make([]daemon.CeremonyOfficer, n)
+		for i := range out {
+			out[i] = daemon.CeremonyOfficer{Username: fmt.Sprintf("officer%d", i), CSRPEM: fmt.Sprintf("csr-%d", i)}
+		}
+		return out
+	}
+	cases := []struct {
+		name      string
+		threshold string
+		officers  int
+		want      int
+	}{
+		{"2-of-5 with two officers", "2-of-5", 2, 5},
+		{"2-of-3 with four officers", "2-of-3", 4, 3},
+		{"single-admin with one officer", "", 1, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls []string
+			ceremony := &fakeQRDBCeremony{
+				calls: &calls,
+				resp:  &quicbaassdk.QRDBCeremonyInitializeResponse{SPKIPin: "pin", State: "enrolling"},
+			}
+			issuer := &fakeAdminIssuer{calls: &calls, bundle: &AdminBundle{CertPEM: "CERT", KeyPEM: "KEY"}}
+			b := NewCeremonyBackend(logging.DefaultLogger(), &fakeQuicbaasClient{ceremony: ceremony}, issuer)
+
+			_, err := b.Initialize(context.Background(), &daemon.CeremonyInitRequest{
+				SOPIN:     "so",
+				UserPIN:   "user",
+				Threshold: tc.threshold,
+				Officers:  officers(tc.officers),
+			})
+			var mismatch *ErrCeremonyOfficerCount
+			if !errors.As(err, &mismatch) {
+				t.Fatalf("Initialize(%q, %d officers) error = %v, want *ErrCeremonyOfficerCount", tc.threshold, tc.officers, err)
+			}
+			if mismatch.Want != tc.want || mismatch.Got != tc.officers {
+				t.Errorf("ErrCeremonyOfficerCount = %+v, want Want=%d Got=%d", *mismatch, tc.want, tc.officers)
+			}
+			if len(calls) != 0 {
+				t.Errorf("calls = %v, want none: an officer count other than N must be refused before any minting or ceremony call", calls)
+			}
+		})
 	}
 }
 

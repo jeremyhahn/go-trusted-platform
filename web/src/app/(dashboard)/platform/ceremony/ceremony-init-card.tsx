@@ -1,0 +1,277 @@
+"use client";
+
+/**
+ * CeremonyInitCard initializes the bootstrap ceremony: CeremonyService.Init
+ * through `useCeremony().init`, `POST /api/v1/ceremony/init`, behind a
+ * confirm dialog. The reply carries the admin private key: the card shows it
+ * once, read-only, and keeps it only in component state (no storage, no log,
+ * no toast), so it is gone when the page is left.
+ */
+import * as React from "react";
+
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Gated } from "@/components/features/capabilities/gated";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  useCeremony,
+  type CeremonyInitOfficer,
+  type CeremonyInitRequest,
+  type CeremonyInitResponse,
+} from "@/hooks/use-ceremony";
+
+/** parseSANs splits SANs on commas and newlines, trimmed, empties dropped. */
+export function parseSANs(text: string): string[] {
+  return text
+    .split(/[,\n]/)
+    .map((s) => s.trim())
+    .filter((s) => s !== "");
+}
+
+// thresholdValid reports whether spec is "M-of-N" with 2 <= M <= N, the only
+// threshold the backend accepts. Upstream runs single-admin for a threshold
+// below 2, so a quorum of one is refused: single-admin is the explicit
+// checkbox, which sends no threshold at all.
+const THRESHOLD_RE = /^(\d+)-of-(\d+)$/;
+
+export function thresholdValid(spec: string): boolean {
+  const match = THRESHOLD_RE.exec(spec);
+  if (!match) return false;
+  const m = Number(match[1]);
+  const n = Number(match[2]);
+  return m >= 2 && m <= n;
+}
+
+// officerCount is N of a valid "M-of-N" threshold, one officer per share, and
+// 0 for anything thresholdValid refuses.
+export function officerCount(spec: string): number {
+  if (!thresholdValid(spec)) return 0;
+  return Number(THRESHOLD_RE.exec(spec)![2]);
+}
+
+// sizeOfficers resizes the officer list to n, keeping the entries already typed.
+function sizeOfficers(officers: CeremonyInitOfficer[], n: number): CeremonyInitOfficer[] {
+  if (officers.length === n) return officers;
+  if (officers.length > n) return officers.slice(0, n);
+  return [
+    ...officers,
+    ...Array.from({ length: n - officers.length }, () => ({ username: "", csrPem: "" })),
+  ];
+}
+
+export function CeremonyInitCard({ onInitialized }: { onInitialized?: () => void }) {
+  const ceremony = useCeremony();
+  const [soPin, setSoPin] = React.useState("");
+  const [userPin, setUserPin] = React.useState("");
+  const [threshold, setThreshold] = React.useState("");
+  const [singleAdmin, setSingleAdmin] = React.useState(false);
+  const [hostname, setHostname] = React.useState("");
+  const [sans, setSans] = React.useState("");
+  const [typedOfficers, setTypedOfficers] = React.useState<CeremonyInitOfficer[]>([]);
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const [running, setRunning] = React.useState(false);
+  const [refusal, setRefusal] = React.useState<string | null>(null);
+  const [result, setResult] = React.useState<CeremonyInitResponse | null>(null);
+
+  const thresholdOk = thresholdValid(threshold);
+  // One officer per share of an M-of-N threshold; none for single-admin.
+  const officers = sizeOfficers(typedOfficers, singleAdmin ? 0 : officerCount(threshold));
+  const officersOk = officers.every((o) => o.username.trim() !== "" && o.csrPem.trim() !== "");
+  const disabled =
+    soPin === "" || (!singleAdmin && (!thresholdOk || !officersOk)) || running;
+
+  const setOfficer = (index: number, patch: Partial<CeremonyInitOfficer>) => {
+    setTypedOfficers((prev) => {
+      const next = [...sizeOfficers(prev, Math.max(prev.length, officers.length))];
+      next[index] = { ...next[index], ...patch };
+      return next;
+    });
+  };
+
+  const handleInit = async () => {
+    setConfirmOpen(false);
+    setRunning(true);
+    setRefusal(null);
+    const request: CeremonyInitRequest = {
+      soPin,
+      userPin: userPin || undefined,
+      hostname: hostname || undefined,
+    };
+    if (!singleAdmin) {
+      request.threshold = threshold;
+      request.officers = officers.map((o) => ({ username: o.username.trim(), csrPem: o.csrPem.trim() }));
+    }
+    const sanList = parseSANs(sans);
+    if (sanList.length > 0) request.sans = sanList;
+    try {
+      const res = await ceremony.init(request);
+      if (res.success && res.data) {
+        setSoPin("");
+        setUserPin("");
+        setResult(res.data);
+        onInitialized?.();
+      } else {
+        setRefusal(res.error?.message ?? "");
+      }
+    } catch (err) {
+      setRefusal(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Initialize ceremony</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <Label htmlFor="ceremony-init-so-pin">SO PIN</Label>
+          <Input
+            id="ceremony-init-so-pin"
+            type="password"
+            autoComplete="off"
+            value={soPin}
+            onChange={(e) => setSoPin(e.target.value)}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="ceremony-init-user-pin">User PIN</Label>
+          <Input
+            id="ceremony-init-user-pin"
+            type="password"
+            autoComplete="off"
+            value={userPin}
+            onChange={(e) => setUserPin(e.target.value)}
+          />
+        </div>
+        <div className="flex items-center space-x-2">
+          <Checkbox
+            id="ceremony-init-single-admin"
+            checked={singleAdmin}
+            onCheckedChange={(checked) => setSingleAdmin(checked === true)}
+          />
+          <Label htmlFor="ceremony-init-single-admin">Single admin (no officer shares)</Label>
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="ceremony-init-threshold">Threshold</Label>
+          <Input
+            id="ceremony-init-threshold"
+            placeholder="3-of-5"
+            value={threshold}
+            disabled={singleAdmin}
+            onChange={(e) => setThreshold(e.target.value)}
+            aria-invalid={!singleAdmin && threshold !== "" && !thresholdOk}
+          />
+          {!singleAdmin && threshold !== "" && !thresholdOk && (
+            <p className="text-sm text-destructive">
+              Threshold must be M-of-N with M at least 2, for example 3-of-5
+            </p>
+          )}
+        </div>
+        {officers.length > 0 && (
+          <fieldset className="space-y-4">
+            <legend className="text-sm font-medium">Officers (one per share)</legend>
+            {officers.map((officer, index) => {
+              const i = index + 1;
+              return (
+                <div key={i} className="space-y-2">
+                  <Label htmlFor={`ceremony-init-officer-${i}-username`}>{`Officer ${i} username`}</Label>
+                  <Input
+                    id={`ceremony-init-officer-${i}-username`}
+                    autoComplete="off"
+                    value={officer.username}
+                    onChange={(e) => setOfficer(index, { username: e.target.value })}
+                  />
+                  <Label htmlFor={`ceremony-init-officer-${i}-csr`}>{`Officer ${i} CSR`}</Label>
+                  <Textarea
+                    id={`ceremony-init-officer-${i}-csr`}
+                    placeholder="PEM certificate request"
+                    value={officer.csrPem}
+                    onChange={(e) => setOfficer(index, { csrPem: e.target.value })}
+                  />
+                </div>
+              );
+            })}
+          </fieldset>
+        )}
+        <div className="space-y-2">
+          <Label htmlFor="ceremony-init-hostname">Hostname</Label>
+          <Input
+            id="ceremony-init-hostname"
+            value={hostname}
+            onChange={(e) => setHostname(e.target.value)}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="ceremony-init-sans">SANs</Label>
+          <Textarea
+            id="ceremony-init-sans"
+            placeholder="One per line or comma separated"
+            value={sans}
+            onChange={(e) => setSans(e.target.value)}
+          />
+        </div>
+        <Gated op="POST /api/v1/ceremony/init">
+          <Button disabled={disabled} onClick={() => setConfirmOpen(true)}>
+            Initialize
+          </Button>
+        </Gated>
+
+        {refusal !== null && <p role="alert">Init refused: {refusal}</p>}
+
+        {result && (
+          <div className="space-y-4">
+            <Alert variant="warning">
+              <AlertDescription>Save the admin key now: the platform keeps no copy.</AlertDescription>
+            </Alert>
+            <div className="space-y-2">
+              <Label htmlFor="ceremony-init-admin-cert">Admin certificate</Label>
+              <Textarea id="ceremony-init-admin-cert" readOnly value={result.adminCertPem} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="ceremony-init-admin-key">Admin private key</Label>
+              <Textarea id="ceremony-init-admin-key" readOnly value={result.adminKeyPem} />
+            </div>
+            <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2">
+              <dt className="text-muted-foreground">SPKI pin</dt>
+              <dd className="break-all">{result.spkiPin}</dd>
+              <dt className="text-muted-foreground">Ceremony ID</dt>
+              <dd>{result.ceremonyId}</dd>
+            </dl>
+          </div>
+        )}
+      </CardContent>
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Initialize the ceremony?</DialogTitle>
+            <DialogDescription>
+              This creates the ceremony CA and the admin credential. It runs once.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleInit}>Initialize</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Card>
+  );
+}

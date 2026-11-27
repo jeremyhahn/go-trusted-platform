@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -129,5 +130,65 @@ func TestCeremonyGRPC_Success(t *testing.T) {
 	}
 	if signResp.GetCertificatePem() != "SIGNED" {
 		t.Errorf("sign resp = %+v", signResp)
+	}
+}
+
+// An M-of-N init names one officer per share; the gRPC Init carries each
+// officer's username and CSR on to the backend, which forwards them upstream.
+func TestCeremonyGRPC_InitForwardsOfficers(t *testing.T) {
+	var got *CeremonyInitRequest
+	backend := &fakeCeremonyBackend{}
+	backend.initFn = func(_ context.Context, req *CeremonyInitRequest) (*CeremonyInitResult, error) {
+		got = req
+		return &CeremonyInitResult{CeremonyID: "cid", State: CeremonyStateInProgress}, nil
+	}
+	svc := newCeremonyGRPC(backend)
+
+	_, err := svc.Init(context.Background(), &platformv1.CeremonyInitRequest{
+		SoPin:     "x",
+		Threshold: "2-of-2",
+		Officers: []*platformv1.CeremonyInitOfficer{
+			{Username: "alice", CsrPem: "CSR-A"},
+			{Username: "bob", CsrPem: "CSR-B"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if got == nil {
+		t.Fatal("backend Init was not called")
+	}
+	want := []CeremonyOfficer{{Username: "alice", CSRPEM: "CSR-A"}, {Username: "bob", CSRPEM: "CSR-B"}}
+	if !reflect.DeepEqual(got.Officers, want) {
+		t.Errorf("Officers = %+v, want %+v", got.Officers, want)
+	}
+}
+
+// An officer without a username or without a CSR cannot be given a custodian
+// certificate: Init refuses it before the backend is reached.
+func TestCeremonyGRPC_InitRefusesAnIncompleteOfficer(t *testing.T) {
+	cases := map[string]*platformv1.CeremonyInitOfficer{
+		"empty username": {Username: "", CsrPem: "CSR-A"},
+		"empty csr":      {Username: "alice", CsrPem: ""},
+	}
+	for name, officer := range cases {
+		t.Run(name, func(t *testing.T) {
+			backend := &fakeCeremonyBackend{}
+			svc := newCeremonyGRPC(backend)
+			_, err := svc.Init(context.Background(), &platformv1.CeremonyInitRequest{
+				SoPin:     "x",
+				Threshold: "2-of-2",
+				Officers: []*platformv1.CeremonyInitOfficer{
+					officer,
+					{Username: "bob", CsrPem: "CSR-B"},
+				},
+			})
+			if st, _ := status.FromError(err); st.Code() != codes.InvalidArgument {
+				t.Errorf("status = %v (%v), want InvalidArgument", st.Code(), err)
+			}
+			if backend.initCalled != 0 {
+				t.Errorf("backend Init called %d times, want 0", backend.initCalled)
+			}
+		})
 	}
 }

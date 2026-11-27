@@ -89,6 +89,12 @@ func (s *CeremonyGRPCService) Init(ctx context.Context, req *platformv1.Ceremony
 		SANs:                   req.GetSans(),
 		CredentialSealStrategy: req.GetCredentialSealStrategy(),
 	}
+	if officers := req.GetOfficers(); len(officers) > 0 {
+		in.Officers = make([]CeremonyOfficer, 0, len(officers))
+		for _, o := range officers {
+			in.Officers = append(in.Officers, CeremonyOfficer{Username: o.GetUsername(), CSRPEM: o.GetCsrPem()})
+		}
+	}
 	out, err := s.service.Init(ctx, in)
 	if err != nil {
 		return nil, ceremonyErrorToGRPC(err)

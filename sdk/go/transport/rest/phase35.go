@@ -34,6 +34,7 @@ package rest
 import (
 	"net/http"
 
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -92,6 +93,30 @@ func wireDecoder[R any, P interface {
 		proto.Reset(out)
 		proto.Merge(out, decoded)
 		return nil
+	}
+}
+
+// ceremonyDecoder decodes a ceremony reply in either of the two forms the
+// platform serves: the REST ceremony router's protojson (camelCase fields,
+// CEREMONY_STATE_* values) first, then the daemon's legacy snake_case wire
+// form with lowercase states through legacy. A reply that neither accepts
+// returns the legacy decoder's error.
+func ceremonyDecoder[R any, P interface {
+	*R
+	proto.Message
+}](method string, legacy func([]byte) (P, error)) restResponseDecoder {
+	fallback := wireDecoder(method, legacy)
+	return func(raw []byte, reply interface{}) error {
+		out, ok := reply.(P)
+		if !ok || out == nil {
+			return ErrUnexpectedReplyType{Method: method}
+		}
+		// Strict on purpose: DiscardUnknown would also drop an unknown enum
+		// name such as the daemon's "complete" and report success.
+		if err := protojson.Unmarshal(raw, out); err == nil {
+			return nil
+		}
+		return fallback(raw, reply)
 	}
 }
 
@@ -182,13 +207,13 @@ func init() {
 		})
 
 	restResponseDecoders[platformv1.CeremonyService_Init_FullMethodName] =
-		wireDecoder(platformv1.CeremonyService_Init_FullMethodName, ceremonysdk.DecodeInitJSON)
+		ceremonyDecoder(platformv1.CeremonyService_Init_FullMethodName, ceremonysdk.DecodeInitJSON)
 	restResponseDecoders[platformv1.CeremonyService_Status_FullMethodName] =
-		wireDecoder(platformv1.CeremonyService_Status_FullMethodName, ceremonysdk.DecodeStatusJSON)
+		ceremonyDecoder(platformv1.CeremonyService_Status_FullMethodName, ceremonysdk.DecodeStatusJSON)
 	restResponseDecoders[platformv1.CeremonyService_ClaimCertBegin_FullMethodName] =
-		wireDecoder(platformv1.CeremonyService_ClaimCertBegin_FullMethodName, ceremonysdk.DecodeClaimCertBeginJSON)
+		ceremonyDecoder(platformv1.CeremonyService_ClaimCertBegin_FullMethodName, ceremonysdk.DecodeClaimCertBeginJSON)
 	restResponseDecoders[platformv1.CeremonyService_ClaimShareBegin_FullMethodName] =
-		wireDecoder(platformv1.CeremonyService_ClaimShareBegin_FullMethodName, ceremonysdk.DecodeClaimShareBeginJSON)
+		ceremonyDecoder(platformv1.CeremonyService_ClaimShareBegin_FullMethodName, ceremonysdk.DecodeClaimShareBeginJSON)
 
 	restResponseDecoders[platformv1.PIVService_ListDevices_FullMethodName] =
 		wireDecoder(platformv1.PIVService_ListDevices_FullMethodName, pivsdk.DecodeListDevicesJSON)

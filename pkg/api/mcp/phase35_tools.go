@@ -94,6 +94,18 @@ func (r *ToolRegistry) registerPhase35Tools() {
 				"hostname":                 map[string]interface{}{"type": "string"},
 				"sans":                     map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
 				"credential_seal_strategy": map[string]interface{}{"type": "string"},
+				"officers": map[string]interface{}{
+					"type":        "array",
+					"description": "Security Officers for an M-of-N threshold: exactly N, one per share",
+					"items": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"username": map[string]interface{}{"type": "string"},
+							"csr_pem":  map[string]interface{}{"type": "string"},
+						},
+						"required": []string{"username", "csr_pem"},
+					},
+				},
 			},
 		},
 	})

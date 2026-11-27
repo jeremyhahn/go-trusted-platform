@@ -102,8 +102,16 @@ func phase35Cases() []phase35Case {
 	return []phase35Case{
 		{
 			method: platformv1.CeremonyService_Init_FullMethodName, opcode: quicwire.OpCeremonyCategory, subOp: quicwire.CeremonySubInit,
-			request:  &platformv1.CeremonyInitRequest{SoPin: "so", UserPin: "u", Threshold: "2-of-3", Hostname: "h", Sans: []string{"a"}, CredentialSealStrategy: "tpm"},
-			wantWire: &quicwire.CeremonyInitReq{SOPIN: "so", UserPIN: "u", Threshold: "2-of-3", Hostname: "h", SANs: []string{"a"}, CredentialSealStrategy: "tpm"},
+			// M-of-N init: the officers must reach the daemon, or the
+			// backend refuses the request for a wrong officer count.
+			request: &platformv1.CeremonyInitRequest{SoPin: "so", UserPin: "u", Threshold: "2-of-3", Hostname: "h", Sans: []string{"a"}, CredentialSealStrategy: "tpm",
+				Officers: []*platformv1.CeremonyInitOfficer{
+					{Username: "alice", CsrPem: "CSR-A"}, {Username: "bob", CsrPem: "CSR-B"}, {Username: "carol", CsrPem: "CSR-C"},
+				}},
+			wantWire: &quicwire.CeremonyInitReq{SOPIN: "so", UserPIN: "u", Threshold: "2-of-3", Hostname: "h", SANs: []string{"a"}, CredentialSealStrategy: "tpm",
+				Officers: []quicwire.CeremonyInitOfficerReq{
+					{Username: "alice", CSRPEM: "CSR-A"}, {Username: "bob", CSRPEM: "CSR-B"}, {Username: "carol", CSRPEM: "CSR-C"},
+				}},
 			wireResp: &quicwire.CeremonyInitResp{
 				CeremonyID: "c1", State: "in_progress", InitializedAt: wireTime,
 				AdminCertPEM: "ADMIN-CERT", AdminKeyPEM: "ADMIN-KEY", SPKIPin: "PIN",
