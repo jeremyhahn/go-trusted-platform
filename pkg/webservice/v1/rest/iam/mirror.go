@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
@@ -133,7 +134,9 @@ func (m *QuicBaaSUserMirror) MirrorInvitedUser(
 			if isAlreadyExists(aErr) {
 				continue
 			}
-			_ = revoke(ctx)
+			rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), mirrorRollbackTimeout)
+			_ = revoke(rbCtx)
+			cancel()
 			return nil, aErr
 		}
 		assigned = append(assigned, role)
@@ -174,6 +177,11 @@ func (m *QuicBaaSUserMirror) heldRoleRefs(ctx context.Context, tenantID string, 
 // mirroredEmailsPageSize is the IAM ListUsers page size MirroredEmails reads
 // with.
 const mirroredEmailsPageSize = 100
+
+// mirrorRollbackTimeout bounds the revoke of a partial role assignment, which
+// runs detached from the request's cancellation so a canceled request still
+// removes the roles it granted (#2362).
+const mirrorRollbackTimeout = 30 * time.Second
 
 // MirroredEmails returns the lower-cased email of every user the IAM tenant
 // holds. The startup reconcile compares it with the platform user store to

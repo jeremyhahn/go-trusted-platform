@@ -164,8 +164,10 @@ func (s *TenantUserService) SetIAMMirror(m IAMUserMirror) {
 // derives from the email, so a claim held from the first lookup to the
 // return keeps two redemptions of one email from interleaving saves,
 // mirrors, Accepts and rollbacks; the second is refused, so a rollback can
-// only remove what its own redemption wrote (#2362). The claim is
-// in-process: one TenantUserService serves a platformd.
+// only remove what its own redemption wrote (#2362). Both RegisterNewUser
+// and RegisterInvitedUser take it, so a self-registration and a redemption
+// of one email exclude each other too. The claim is in-process: one
+// TenantUserService serves a platformd.
 func (s *TenantUserService) claimRedemption(email string) (release func(), ok bool) {
 	key := strings.ToLower(strings.TrimSpace(email))
 	s.redeemMu.Lock()
@@ -186,6 +188,7 @@ func (s *TenantUserService) claimRedemption(email string) (release func(), ok bo
 
 // RegisterNewUser creates a new tenant and registers the user as the owner.
 // Steps:
+// 0. Claim the email; a concurrent registration or redemption of it is refused
 // 1. Generate a tenant UUID
 // 2. Create the tenant via TenantManager
 // 3. Set user.TenantID and user.IsTenantOwner = true
@@ -199,6 +202,14 @@ func (s *TenantUserService) RegisterNewUser(
 	if user == nil {
 		return nil, ErrInvalidUserInput{Reason: "user is required"}
 	}
+	// A self-registration takes the same per-email claim as a redemption, so
+	// the two flows never interleave on one email-derived user ID and
+	// neither's rollback removes the other's user (#2362).
+	release, ok := s.claimRedemption(user.Email)
+	if !ok {
+		return nil, ErrInvitationRedemptionInProgress{Email: user.Email}
+	}
+	defer release()
 
 	s.logger.Info("registering new user with tenant creation",
 		"email", user.Email,
@@ -299,6 +310,18 @@ func (s *TenantUserService) rollbackTenant(ctx context.Context, tenantID string)
 			"tenant_id", tenantID,
 		)
 	}
+}
+
+// rollbackTimeout bounds the compensation of a failed registration.
+const rollbackTimeout = 30 * time.Second
+
+// rollbackContext returns the context the compensation of a failed
+// registration runs on: it keeps the request's values but not its
+// cancellation, and is bounded by rollbackTimeout, so a request canceled after
+// the IAM write still removes what it wrote, and a hung store or IAM call
+// cannot hold the request forever (#2362).
+func rollbackContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
 }
 
 // iamMirrorRoles is the IAM role set a platform user is mirrored with: the
@@ -471,7 +494,10 @@ func (s *TenantUserService) RegisterInvitedUser(
 				"email", user.Email,
 				"tenant_id", invitation.TenantID,
 			)
-			if delErr := s.userService.Delete(ctx, user.ID); delErr != nil {
+			rbCtx, cancel := rollbackContext(ctx)
+			delErr := s.userService.Delete(rbCtx, user.ID)
+			cancel()
+			if delErr != nil {
 				s.logger.Error(delErr, "failed to delete invited user after IAM mirror failure",
 					"user_id", user.ID,
 				)
@@ -488,16 +514,20 @@ func (s *TenantUserService) RegisterInvitedUser(
 		)
 		// Accept rechecks the invitation after the IAM write: a refusal
 		// (revoked, expired, already accepted, save error) undoes the IAM
-		// write and the saved user, and fails the registration.
+		// write and the saved user, and fails the registration. The
+		// compensation runs on rollbackContext, so a request canceled after
+		// the IAM write still undoes it (#2362).
+		rbCtx, cancel := rollbackContext(ctx)
+		defer cancel()
 		if undo != nil {
-			if undoErr := undo(ctx); undoErr != nil {
+			if undoErr := undo(rbCtx); undoErr != nil {
 				s.logger.Error(undoErr, "failed to undo IAM mirror after invitation acceptance failure",
 					"email", user.Email,
 					"tenant_id", invitation.TenantID,
 				)
 			}
 		}
-		if delErr := s.userService.Delete(ctx, user.ID); delErr != nil {
+		if delErr := s.userService.Delete(rbCtx, user.ID); delErr != nil {
 			s.logger.Error(delErr, "failed to delete invited user after invitation acceptance failure",
 				"user_id", user.ID,
 			)
@@ -747,14 +777,15 @@ func (e ErrInvitationRequired) Error() string {
 	return "invitation token is required"
 }
 
-// ErrInvitationRedemptionInProgress is returned when another redemption of
-// the same email is still running; the caller may retry once it finishes.
+// ErrInvitationRedemptionInProgress is returned when another registration or
+// invitation redemption of the same email is still running; the caller may
+// retry once it finishes.
 type ErrInvitationRedemptionInProgress struct {
 	Email string
 }
 
 func (e ErrInvitationRedemptionInProgress) Error() string {
-	return fmt.Sprintf("an invitation redemption for %s is already in progress; retry", e.Email)
+	return fmt.Sprintf("a registration for %s is already in progress; retry", e.Email)
 }
 
 // ErrInvalidUserInput is returned when user input is invalid.
