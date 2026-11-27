@@ -23,6 +23,8 @@ import (
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // The server answers TPMService GetEventLog, GetRandom, MakeCredential and
@@ -118,6 +120,9 @@ func TestInvoke_TPMGetAK_RoutesToGetIAKAndMapsTheName(t *testing.T) {
 	}
 
 	assertTPM2SubOpcode(t, sender, quicwire.SubOpTPM2GetIAK)
+	if len(sender.rawPayload) != 1 {
+		t.Errorf("payload = %x, want only the sub-opcode byte", sender.rawPayload)
+	}
 	if reply.GetHandle() != 0x81010002 {
 		t.Errorf("handle = %#x, want 0x81010002", reply.GetHandle())
 	}
@@ -126,6 +131,37 @@ func TestInvoke_TPMGetAK_RoutesToGetIAKAndMapsTheName(t *testing.T) {
 	}
 	if !bytes.Equal(reply.GetName(), []byte("ak-name")) {
 		t.Errorf("name = %q, want ak-name", reply.GetName())
+	}
+}
+
+// GetIAK takes no selector, so a request that names a handle or an
+// algorithm is refused before any send rather than answered with the IAK.
+func TestInvoke_TPMGetAK_RefusesUnsupportedSelectors(t *testing.T) {
+	cases := []struct {
+		name  string
+		req   *platformv1.GetAKRequest
+		field string
+	}{
+		{"Handle: 0x81010003", &platformv1.GetAKRequest{Handle: 0x81010003}, "handle"},
+		{"Algorithm: KEY_ALGORITHM_RSA_4096", &platformv1.GetAKRequest{Algorithm: platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096}, "algorithm"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sender := &recordingSender{}
+			conn := newConnWithSender(t, sender)
+
+			err := conn.Invoke(context.Background(), platformv1.TPMService_GetAK_FullMethodName,
+				tc.req, &platformv1.GetAKResponse{})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("Invoke() error = %v, want InvalidArgument", err)
+			}
+			if !strings.Contains(err.Error(), tc.field) {
+				t.Errorf("error %q does not name %s", err.Error(), tc.field)
+			}
+			if sender.rawCalls != 0 || sender.boundCalls != 0 {
+				t.Errorf("sends = raw %d bound %d, want none", sender.rawCalls, sender.boundCalls)
+			}
+		})
 	}
 }
 
