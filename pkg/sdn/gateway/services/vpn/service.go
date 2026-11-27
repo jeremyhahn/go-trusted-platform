@@ -336,12 +336,12 @@ func (s *Service) Sweep(ctx context.Context) {
 }
 
 // oweExtension records that the host has not confirmed the stored deadline
-// of lease and that its client, refused the renewal, still holds held.
-// Sweep re-sends the extension and the client's retry bypasses the renew
-// window. The held deadline is stored on the lease (unless an earlier
-// refusal already stored it) so Restore rebuilds the bypass after a
-// restart; a failed write leaves the bypass in memory alone.
-func (s *Service) oweExtension(ctx context.Context, lease *Lease, held time.Time) {
+// of lease and that its client, refused the renewal, still holds its older
+// deadline: Sweep re-sends the extension and the client's retry bypasses the
+// renew window. The deadline the client holds (Lease.ClientExpiresAt) is
+// already stored by Renew in the same write as the new deadline, so Restore
+// rebuilds the bypass after a restart without a further write here.
+func (s *Service) oweExtension(lease *Lease) {
 	s.mu.Lock()
 	if s.extendOwed == nil {
 		s.extendOwed = map[LeaseID]struct{}{}
@@ -349,14 +349,6 @@ func (s *Service) oweExtension(ctx context.Context, lease *Lease, held time.Time
 	s.extendOwed[lease.ID] = struct{}{}
 	s.mu.Unlock()
 	s.bypassRenewal(lease.ID)
-	if !lease.ClientExpiresAt.IsZero() {
-		return
-	}
-	lease.ClientExpiresAt = held
-	if err := s.deps.Leases.Put(ctx, lease); err != nil {
-		s.logger.Warn("vpn.renew: storing the deadline the client holds failed; a restart loses its renew bypass",
-			slog.String("lease", string(lease.ID)), slog.Any("error", err))
-	}
 }
 
 // bypassRenewal lets the client of lease id renew outside the renew window

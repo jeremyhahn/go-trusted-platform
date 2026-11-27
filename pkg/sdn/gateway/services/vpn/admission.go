@@ -247,6 +247,14 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 	lease.ExpiresAt = now.Add(s.cfg.LeaseTTL)
 	lease.Renewals++
 	lease.Verdict = *summary
+	// The deadline the client still holds is stored in the same write as
+	// the new deadline, so a failed or cancelled extension, or a crash
+	// before the next write, still leaves Restore its recovery marker. An
+	// earlier refusal's marker stays: it is the older deadline the client
+	// holds. confirmClientDeadline clears it once the host is extended.
+	if lease.ClientExpiresAt.IsZero() {
+		lease.ClientExpiresAt = held
+	}
 	if err := s.deps.Leases.Put(ctx, lease); err != nil {
 		return nil, s.refuse(ctx, lease.DeviceID, &ErrLeaseStoreUnavailable{Cause: err})
 	}
@@ -256,7 +264,7 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 	// re-sends it, and the client's retry bypasses the renew window.
 	if ext, ok := s.deps.DataPlanes[lease.DataPlane].(PeerDeadlineExtender); ok {
 		if err := ext.ExtendPeer(ctx, lease); err != nil {
-			s.oweExtension(ctx, lease, held)
+			s.oweExtension(lease)
 			s.logger.Warn("vpn.renew: extending the host deadline failed; owed to the sweep and the next renewal",
 				slog.String("lease", string(lease.ID)), slog.Time("expires_at", lease.ExpiresAt), slog.Any("error", err))
 			return nil, s.refuse(ctx, lease.DeviceID, &ErrDataPlaneUnavailable{Kind: lease.DataPlane, Cause: err})
