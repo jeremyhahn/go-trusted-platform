@@ -182,6 +182,9 @@ func TestTouchedFeatures(t *testing.T) {
 		{name: "the runner's freeport command", files: map[string]string{"test/integration/helpers/freeport/main.go": "package main\n\nfunc main() { _ = 1 }\n"}, want: []string{"ALL", "beta"}},
 		{name: "a suite file moved to docs", files: map[string]string{"docs/beta_extra.go": "package beta\n\nfunc C() int { return 1 }\n"}, remove: []string{"test/integration/beta/beta_extra.go"}, want: []string{"beta"}},
 		{name: "a docs change against an unknown base", files: map[string]string{"README.md": "# m3\n"}, base: "no-such-rev", want: []string{"ALL", "beta"}},
+		// #2445: go list -e reports a missing import in DepsErrors with
+		// Error unset; that package fails closed too.
+		{name: "an integration package with a missing dependency", files: map[string]string{"test/integration/beta/beta_dep.go": "package beta\n\nimport \"example.com/m/test/integration/nosuch\"\n\nfunc D() int { return nosuch.N() }\n"}, want: []string{"ALL", "beta"}},
 		// #2445: go list -e reports a package error in its output and exits
 		// 0, so the importers it lists are incomplete; that is a failure to
 		// list the packages, which fails closed. Last: the broken file stays.
@@ -252,6 +255,9 @@ func TestTouchedPackages(t *testing.T) {
 		{name: "a docs change against an unknown base", files: map[string]string{"README.md": "# m3\n"}, base: "no-such-rev", want: []string{"./..."}},
 		{name: "a go.mod change", files: map[string]string{"go.mod": "module example.com/m\n\ngo 1.21\n\n// changed\n"}, want: []string{"./..."}},
 		{name: "a file moved across packages", files: map[string]string{"pkg/d/extra.go": "package d\n\nfunc X() int { return 1 }\n"}, remove: []string{"pkg/a/extra.go"}, want: []string{"./pkg/a", "./pkg/b", "./pkg/d"}},
+		// #2445: go list -e reports a missing import in DepsErrors with
+		// Error unset; that package fails closed to ./... too.
+		{name: "a package with a missing dependency", files: map[string]string{"pkg/f/f.go": "package f\n\nimport \"example.com/m/pkg/nosuch\"\n\nfunc F() int { return nosuch.N() }\n"}, want: []string{"./..."}},
 		// #2445: go list -e reports a package error in its output and exits
 		// 0, so the packages and importers it lists are incomplete; that is a
 		// failure to list the packages, which fails closed to ./... .
