@@ -453,7 +453,7 @@ func TestRestore_AReplacementHostGetsAPendingRenewalsPeerReplayed(t *testing.T) 
 	managed2 := newManagedFakePlane(DataPlaneMASQUE, new([]string))
 	host2 := hostOf(t, managed2)
 	host2.now = h.clock.Now
-	peers.hostPeers.host = host2
+	peers.host = host2
 	peers.renewErr = nil
 	require.True(t, h.clock.Now().Before(lease.ExpiresAt))
 
