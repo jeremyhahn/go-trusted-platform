@@ -6,8 +6,9 @@
  * paths the server serves: GET /v1/tenants/{id}/barrier and
  * POST /v1/tenants/{id}/barrier/init|unseal|seal (#2067). Each call answers the
  * SDK's ApiResponse `{ success, data?, error? }`. A per-tenant barrier
- * initializes with its own credential and takes no Shamir split: the server
- * refuses a threshold or share count, so init sends an empty body.
+ * initializes with the operator's passphrase and takes no Shamir split: the
+ * server refuses a threshold or share count and an empty passphrase, so init
+ * sends only `{ passphrase }`. The passphrase is never stored.
  */
 
 import { useMemo } from 'react';
@@ -28,7 +29,7 @@ export function useTenantBarrier() {
     const base = (id: string) => `/v1/tenants/${encodeURIComponent(id)}/barrier`;
     return {
       getStatus: (id: string) => api.get<{ barrierStatus?: TenantBarrierStatus }>(base(id)),
-      init: (id: string) => api.post(`${base(id)}/init`, {}),
+      init: (id: string, passphrase: string) => api.post(`${base(id)}/init`, { passphrase }),
       unseal: (id: string, key: string) => api.post(`${base(id)}/unseal`, { key }),
       seal: (id: string) => api.post(`${base(id)}/seal`, {}),
     };

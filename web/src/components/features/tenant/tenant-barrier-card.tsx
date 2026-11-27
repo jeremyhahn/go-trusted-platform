@@ -25,6 +25,7 @@ export function TenantBarrierCard({ tenantId }: { tenantId: string }) {
   const barrier = useTenantBarrier();
   const statusCap = useCapabilities().capability('GET /api/v1/tenants/{id}/barrier');
   const [status, setStatus] = useState<TenantBarrierStatus | null>(null);
+  const [initPassphrase, setInitPassphrase] = useState('');
   const [unsealKey, setUnsealKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -90,8 +91,23 @@ export function TenantBarrierCard({ tenantId }: { tenantId: string }) {
         )}
 
         <div className="flex flex-wrap items-end gap-4">
+          <div className="space-y-1">
+            <Label htmlFor="tenant-barrier-init-passphrase">Barrier passphrase</Label>
+            <Input
+              id="tenant-barrier-init-passphrase"
+              data-testid="tenant-barrier-init-passphrase"
+              type="password"
+              autoComplete="off"
+              value={initPassphrase}
+              onChange={(e) => setInitPassphrase(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">Sent once to initialize the barrier; never stored. The server refuses an empty passphrase.</p>
+          </div>
           <Gated op="POST /api/v1/tenants/{id}/barrier/init">
-            <Button disabled={busy} onClick={() => run(() => barrier.init(tenantId))}>
+            <Button
+              disabled={busy || initPassphrase === ''}
+              onClick={() => run(() => barrier.init(tenantId, initPassphrase), () => setInitPassphrase(''))}
+            >
               Initialize
             </Button>
           </Gated>
