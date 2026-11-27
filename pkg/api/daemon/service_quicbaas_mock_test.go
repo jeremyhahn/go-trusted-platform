@@ -658,6 +658,88 @@ func newAggregatingListFactory(t *testing.T, ctx context.Context) *aggregatingLi
 	}
 }
 
+// zeroIDListClient behaves like the pinned go-quicbaas SDK REST List,
+// which builds every entity without its ID: each record reads ID 0.
+type zeroIDListClient struct {
+	*quicbaas.MockClient
+}
+
+func (c *zeroIDListClient) List(ctx context.Context, entityType string, pageSize uint64, pageToken string, shardID uint64) ([]*service.Entity, string, error) {
+	return []*service.Entity{
+		{ID: 0, Data: []byte(`{"n":1}`)},
+		{ID: 0, Data: []byte(`{"n":2}`)},
+	}, "", nil
+}
+
+// zeroIDListFactory hands out a zeroIDListClient.
+type zeroIDListFactory struct {
+	*quicbaas.MockFactory
+	client *zeroIDListClient
+}
+
+func (f *zeroIDListFactory) QuicBaaSClient() quicbaas.ClientInterface {
+	return f.client
+}
+
+func newZeroIDListFactory(t *testing.T, ctx context.Context) *zeroIDListFactory {
+	t.Helper()
+	mockFactory := quicbaas.NewMockFactory()
+	if err := mockFactory.Start(ctx); err != nil {
+		t.Fatalf("failed to start mock factory: %v", err)
+	}
+	t.Cleanup(func() { _ = mockFactory.Stop(ctx) })
+	mockClient := mockFactory.MockClient()
+	mockClient.SetEntityTypes([]string{"users"})
+	return &zeroIDListFactory{
+		MockFactory: mockFactory,
+		client:      &zeroIDListClient{MockClient: mockClient},
+	}
+}
+
+func TestDumpEntityType_RecordsWithoutIDsAreAllSent(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewService(DefaultConfig(), WithQuicBaaSFactory(newZeroIDListFactory(t, ctx)))
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+
+	stream := &mockDumpStream{ctx: ctx}
+	if err := svc.DumpEntityType(&platformv1.DumpEntityTypeRequest{EntityType: "users"}, stream); err != nil {
+		t.Fatalf("DumpEntityType failed: %v", err)
+	}
+	if len(stream.responses) != 2 {
+		t.Fatalf("expected 2 responses, got %d", len(stream.responses))
+	}
+	got := map[string]bool{}
+	for _, resp := range stream.responses {
+		got[string(resp.Data)] = true
+	}
+	for _, want := range []string{`{"n":1}`, `{"n":2}`} {
+		if !got[want] {
+			t.Errorf("record %s not sent", want)
+		}
+	}
+}
+
+func TestListEntityTypes_RecordsWithoutIDsAreAllCounted(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewService(DefaultConfig(), WithQuicBaaSFactory(newZeroIDListFactory(t, ctx)))
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+
+	resp, err := svc.ListEntityTypes(ctx, &platformv1.ListEntityTypesRequest{})
+	if err != nil {
+		t.Fatalf("ListEntityTypes failed: %v", err)
+	}
+	if len(resp.EntityTypes) != 1 {
+		t.Fatalf("expected 1 entity type, got %d", len(resp.EntityTypes))
+	}
+	if resp.EntityTypes[0].EntityCount != 2 {
+		t.Errorf("expected users count 2, got %d", resp.EntityTypes[0].EntityCount)
+	}
+}
+
 func TestListEntityTypes_AggregatedListResponseCountsOnce(t *testing.T) {
 	ctx := context.Background()
 	factory := newAggregatingListFactory(t, ctx)

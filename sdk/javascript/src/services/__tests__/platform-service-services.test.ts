@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PlatformService } from '../platform-service.js';
-import type { ApiClient } from '../../client/api-client.js';
+import { ApiClient } from '../../client/api-client.js';
 
 function createMockApiClient(): ApiClient {
   return {
@@ -90,8 +90,19 @@ describe('PlatformService daemon services', () => {
 
     const res = await call(service);
 
-    expect(mockClient.post).toHaveBeenCalledWith(`/v1/platform/services/dns/${verb}`, {});
+    expect(mockClient.post).toHaveBeenCalledWith(`/v1/platform/services/dns/${verb}`, {}, { retry: { enabled: false } });
     expect(res.data?.action).toBe(verb);
+  });
+
+  it('restartService sends one POST when the reply is lost', async () => {
+    const fetchImpl = vi.fn(() => Promise.reject(new TypeError('network')));
+    const client = new ApiClient({
+      baseUrl: 'http://api.test',
+      fetch: fetchImpl as unknown as typeof fetch,
+      retry: { maxRetries: 3, initialDelayMs: 1, maxDelayMs: 2 },
+    });
+    await new PlatformService(client).restartService('dns').catch(() => undefined);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('passes a refused start through unchanged', async () => {

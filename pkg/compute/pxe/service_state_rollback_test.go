@@ -64,3 +64,50 @@ func TestService_UpdateDeviceState_FailedRestrictiveWriteKeepsQuarantineFlows(t 
 		})
 	}
 }
+
+// A quarantine whose state write fails stays enforced: a later widening
+// report in the same outage must not lift it, and after the outage the
+// widening move is still refused until the quarantine is stored (#2081
+// Codex round 3 P1).
+func TestService_QuarantineDevice_FailedWriteThenInstallCompleteStaysQuarantined(t *testing.T) {
+	ctx := context.Background()
+	svc, vlan, store, id := newStoreBackedService(t, StateQuarantined)
+	setStoredDevice(t, svc, store, id, StateInstalling, svc.config.ProvisioningVLAN,
+		func(*DeviceInfo) bool { return true })
+	vlan.set("provisioning")
+
+	require.Error(t, svc.QuarantineDevice(ctx, id, "posture failed"))
+	assert.Equal(t, "quarantine", vlan.flows())
+
+	require.Error(t, svc.UpdateDeviceState(ctx, id, StateInstallComplete, "install complete"))
+	assert.Equal(t, "quarantine", vlan.flows(), "two failed writes in one outage must not lift the quarantine")
+
+	store.mu.Lock()
+	store.failPut = nil
+	store.mu.Unlock()
+
+	require.Error(t, svc.UpdateDeviceState(ctx, id, StateInstallComplete, "install complete"))
+	assert.Equal(t, "quarantine", vlan.flows(), "widening is refused until the quarantine is stored")
+
+	require.NoError(t, svc.QuarantineDevice(ctx, id, "posture failed"))
+	assert.Equal(t, "quarantine", vlan.flows())
+	got, err := reloadFrom(t, store).Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateQuarantined, got.State)
+	assert.Equal(t, svc.config.QuarantineVLAN, got.CurrentVLAN)
+}
+
+// An unstored quarantine also blocks authorization to production.
+func TestService_QuarantineDevice_FailedWriteBlocksAuthorize(t *testing.T) {
+	ctx := context.Background()
+	svc, vlan, store, id := newStoreBackedService(t, StateQuarantined)
+	setStoredDevice(t, svc, store, id, StateAuthorizing, svc.config.ProvisioningVLAN,
+		func(d *DeviceInfo) bool { return d.State == StateQuarantined })
+	vlan.set("provisioning")
+
+	require.Error(t, svc.QuarantineDevice(ctx, id, "posture failed"))
+	assert.Equal(t, "quarantine", vlan.flows())
+
+	require.Error(t, svc.AuthorizeDevice(ctx, id, 200))
+	assert.Equal(t, "quarantine", vlan.flows(), "an unstored quarantine must block production access")
+}
