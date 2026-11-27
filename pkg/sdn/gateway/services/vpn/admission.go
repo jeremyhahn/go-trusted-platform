@@ -244,7 +244,12 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 	}
 	// held is the deadline the client holds until this renewal reaches it.
 	held := lease.ExpiresAt
-	lease.ExpiresAt = now.Add(s.cfg.LeaseTTL)
+	// The stored deadline may come from a longer lease-ttl before a
+	// restart, and the host keeps it (its deadline only moves forward):
+	// a renewal never stores less than it.
+	if next := now.Add(s.cfg.LeaseTTL); next.After(lease.ExpiresAt) {
+		lease.ExpiresAt = next
+	}
 	lease.Renewals++
 	lease.Verdict = *summary
 	// The deadline the client still holds is stored in the same write as

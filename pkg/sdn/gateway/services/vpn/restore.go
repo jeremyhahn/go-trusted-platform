@@ -34,7 +34,9 @@ import (
 // lease the host expired whose revocation the store could not record was
 // re-stored with an elapsed deadline (see oweDeletion), so it is dropped,
 // not reinstalled. A restored lease whose client was refused its stored
-// deadline (Lease.ClientExpiresAt) gets its renew bypass back.
+// deadline (Lease.ClientExpiresAt) gets its renew bypass back; the host is
+// asked first whether it still holds such a lease, since the renewal never
+// reached it and its expiry marker may be lost, and one it expired is dropped.
 //
 // Call Restore after Start and before applying the enrolment set: that
 // set's sweep then revokes the restored leases of peers the control plane
@@ -382,6 +384,27 @@ func (s *Service) restore(ctx context.Context, l *Lease) error {
 	}
 	if !s.ZonesAllowed(l.Zones) {
 		return s.dropLease(ctx, l, plane, "zones not allowed", nil)
+	}
+	// The renewal stored before the restart never reached the host: the
+	// host may have expired the peer at the client's deadline while the
+	// record kept the later one, and an expiry marker that could not be
+	// written is lost with the restart. Restore asks the host first and
+	// fails closed on a lease it expired.
+	if !l.ClientExpiresAt.IsZero() {
+		if ext, ok := plane.(PeerDeadlineExtender); ok {
+			if err := ext.ExtendPeer(ctx, l); err != nil {
+				var nf *ErrLeaseNotFound
+				if errors.As(err, &nf) {
+					dErr := s.dropLease(ctx, l, plane, "host expired an unresolved renewal", err)
+					var unrecorded *ErrRevocationNotRecorded
+					if errors.As(dErr, &unrecorded) {
+						s.oweDeletion(ctx, l)
+					}
+					return dErr
+				}
+				s.oweExtension(l)
+			}
+		}
 	}
 	if err := s.holdAddress(ctx, l); err != nil {
 		return s.dropLease(ctx, l, plane, "address unavailable", err)
