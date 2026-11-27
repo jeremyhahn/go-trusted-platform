@@ -91,7 +91,7 @@ func TestWireQuarantineObserver_APassingInspectionLeavesAQuarantinedDeviceQuaran
 	require.Equal(t, entities.DeviceStateQuarantined, devices.devices[7].State, "precondition: the device is quarantined")
 
 	passed, err := svcs.Service.VerifyManifest(ctx,
-		&manifest.HostManifest{ID: "m-07b", HostID: "node-07"}, nil, nil, nil, nil)
+		&manifest.HostManifest{ID: "m-07b", HostID: "node-07", Timestamp: time.Now().UTC()}, nil, nil, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, manifest.VerificationStatusVerified, passed.Status)
 

@@ -89,23 +89,29 @@ async function toastWith(text: string) {
 
 // holdVerify wraps the stubbed control plane so the verify route answers only
 // once the returned release is called; every other route answers at once.
-function holdVerify(): () => void {
+// arrived resolves when the verify request has reached the interceptor.
+function holdVerify(): { release: () => void; arrived: Promise<void> } {
   const inner = globalThis.fetch;
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
+  });
+  let arrived!: () => void;
+  const arrival = new Promise<void>((resolve) => {
+    arrived = resolve;
   });
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       if (url.pathname === '/api/v1/attestation/manifests/verify') {
+        arrived();
         await gate;
       }
       return inner(input, init);
     }),
   );
-  return release;
+  return { release, arrived: arrival };
 }
 
 describe('ManifestVerifyButton', () => {
@@ -274,15 +280,17 @@ describe('ManifestVerifyButton', () => {
   });
 
   it('drops an answer for an older nonce', async () => {
-    const sent = stubControlPlane(routes());
-    const release = holdVerify();
+    stubControlPlane(routes());
+    const { release, arrived } = holdVerify();
     render(withControlPlane(<ManifestVerifyButton manifestId="m-1" manifest={MANIFEST} />));
 
     fireEvent.click(await enabledButton());
     const input = await screen.findByLabelText('Expected nonce');
     fireEvent.change(input, { target: { value: 'bm9uY2U=' } });
     fireEvent.click(screen.getByRole('button', { name: 'Verify' }));
-    await waitFor(() => expect(manifestCalls(sent)).toHaveLength(1));
+    await act(async () => {
+      await arrived;
+    });
 
     fireEvent.change(input, { target: { value: 'b3RoZXI=' } });
     await act(async () => {
