@@ -1087,9 +1087,16 @@ func TestErrLeaseNotRestored_Message(t *testing.T) {
 // the old service held only in memory is gone.
 func restartWith(t *testing.T, h *harness, deps Deps) error {
 	t.Helper()
+	return restartWithConfig(t, h, deps, testConfig())
+}
+
+// restartWithConfig is restartWith under another admission config, such as a
+// lease-ttl changed across the restart.
+func restartWithConfig(t *testing.T, h *harness, deps Deps, cfg Config) error {
+	t.Helper()
 	ctx := context.Background()
 	require.NoError(t, h.svc.Stop(ctx))
-	svc, err := New(deps, testConfig())
+	svc, err := New(deps, cfg)
 	require.NoError(t, err)
 	require.NoError(t, svc.SetEnrolments(ctx, []Enrolment{{TenantID: "tenant-a", DeviceID: "mini-99"}}))
 	require.NoError(t, svc.Start(ctx))
@@ -1214,4 +1221,86 @@ func TestRestore_KeepsTheRenewBypassWhenTheCallerCancelsTheExtension(t *testing.
 	renewed, err := h.svc.Renew(context.Background(), lease.ID, h.evidence(t))
 	require.NoError(t, err, "the client's retry is not held to the window of the deadline it was refused")
 	assert.Equal(t, 2, renewed.Renewals)
+}
+
+// A recovery renewal after the lease-ttl was reduced across a restart keeps
+// the stored deadline: the host keeps the later one, so a shorter stored
+// deadline would let the host outlive the store.
+func TestRestore_ARecoveryRenewalAfterATTLReductionKeepsTheStoredDeadline(t *testing.T) {
+	ctx := context.Background()
+	plane := &extendingPlane{fakePlane: newFakePlane(DataPlaneMASQUE)}
+	var deps Deps
+	h := newHarnessWith(t, testConfig(), func(d *Deps) {
+		d.DataPlanes = map[DataPlaneKind]DataPlane{DataPlaneMASQUE: plane}
+		deps = *d
+	})
+	lease, err := h.svc.Admit(ctx, h.request(t))
+	require.NoError(t, err)
+	h.intoRenewWindow()
+	plane.steps = []extendStep{{err: errors.New("datapath unreachable")}}
+	_, err = h.svc.Renew(ctx, lease.ID, h.evidence(t))
+	var unavailable *ErrDataPlaneUnavailable
+	require.ErrorAs(t, err, &unavailable)
+	stored, err := deps.Leases.Get(ctx, lease.ID)
+	require.NoError(t, err)
+
+	cfg := testConfig()
+	cfg.LeaseTTL = time.Hour
+	cfg.RenewWindow = 10 * time.Minute
+	require.NoError(t, restartWithConfig(t, h, deps, cfg))
+
+	renewed, err := h.svc.Renew(ctx, lease.ID, h.evidence(t))
+	require.NoError(t, err, "the client's retry keeps the renew bypass")
+	assert.Equal(t, stored.ExpiresAt, renewed.ExpiresAt, "a renewal never lowers the stored deadline")
+	after, err := deps.Leases.Get(ctx, lease.ID)
+	require.NoError(t, err)
+	assert.Equal(t, stored.ExpiresAt, after.ExpiresAt)
+	assert.False(t, plane.hostDeadline(time.Time{}).After(renewed.ExpiresAt), "the host never outlives the store")
+}
+
+// A renewal that never reached the host, whose expiry the store could record
+// neither by a deletion nor by an expiry marker, is not reinstalled by a
+// restart: Restore asks the host first and drops the lease it expired.
+func TestRestore_AnUnresolvedRenewalTheHostExpiredIsNotReinstalledWhenDeleteAndPutFail(t *testing.T) {
+	ctx := context.Background()
+	plane := &extendingPlane{fakePlane: newFakePlane(DataPlaneMASQUE)}
+	var store *seededStore
+	var puts *putFailStore
+	var deps Deps
+	h := newHarnessWith(t, testConfig(), func(d *Deps) {
+		store = &seededStore{MemoryLeaseStore: d.Leases.(*MemoryLeaseStore)}
+		puts = &putFailStore{LeaseStore: store}
+		d.Leases = puts
+		d.DataPlanes = map[DataPlaneKind]DataPlane{DataPlaneMASQUE: plane}
+		deps = *d
+	})
+	lease, err := h.svc.Admit(ctx, h.request(t))
+	require.NoError(t, err)
+	h.intoRenewWindow()
+	plane.steps = []extendStep{
+		{err: errors.New("datapath unreachable")},
+		{err: &ErrLeaseNotFound{LeaseID: lease.ID}},
+		{err: &ErrLeaseNotFound{LeaseID: lease.ID}},
+		{err: &ErrLeaseNotFound{LeaseID: lease.ID}},
+	}
+	_, err = h.svc.Renew(ctx, lease.ID, h.evidence(t))
+	var unavailable *ErrDataPlaneUnavailable
+	require.ErrorAs(t, err, &unavailable)
+
+	store.deleteErr = &ErrRevocationNotRecorded{LeaseID: lease.ID, Cause: errors.New("disk full")}
+	puts.failPuts(errors.New("disk full"))
+	h.svc.Sweep(ctx)
+	assert.False(t, plane.hosts(lease.ID), "the host's peer is gone")
+
+	var notRestored *ErrLeaseNotRestored
+	require.ErrorAs(t, restartWith(t, h, deps), &notRestored, "the lease the host expired is dropped, not restored")
+	assert.False(t, plane.hosts(lease.ID), "a restart must not reinstall a lease the host expired")
+
+	store.deleteErr = nil
+	puts.failPuts(nil)
+	h.svc.Sweep(ctx)
+	_, err = store.Get(ctx, lease.ID)
+	var nf *ErrLeaseNotFound
+	require.ErrorAs(t, err, &nf, "the owed deletion is recorded once the store heals")
+	assert.False(t, plane.hosts(lease.ID))
 }
