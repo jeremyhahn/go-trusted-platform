@@ -176,6 +176,21 @@ func TestService_UserMethods_Simulator(t *testing.T) {
 		}
 	})
 
+	t.Run("SetUserPasswordRefusesTheProfileLoginAccount", func(t *testing.T) {
+		t.Parallel()
+		svc := newSimUserService(t)
+		err := svc.SetUserPassword(ctx, 1, 1, "n3w-secret-pass")
+		var cfgErr bmc.ErrInvalidConfig
+		if !errors.As(err, &cfgErr) || cfgErr.Field != "slot" {
+			t.Fatalf("SetUserPassword on the login account = %v, want ErrInvalidConfig on slot", err)
+		}
+		// A fresh session with the stored password must still open.
+		got, ok := userInSlot(t, svc, 1)
+		if !ok || got.Username != "admin" {
+			t.Errorf("slot 1 after the refusal = %+v (found %v), want admin", got, ok)
+		}
+	})
+
 	t.Run("DeleteUser", func(t *testing.T) {
 		t.Parallel()
 		svc := newSimUserService(t)

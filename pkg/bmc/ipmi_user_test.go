@@ -24,7 +24,8 @@ import (
 
 // mockSender records IPMI commands and returns canned responses keyed by
 // (netFn, cmd). Optionally returns a fixed error to simulate transport
-// failure.
+// failure. Get User Name answers an empty 16-byte name unless a test sets
+// another response.
 type mockSender struct {
 	calls     []mockCall
 	responses map[uint16][]byte
@@ -59,7 +60,7 @@ func (m *mockSender) Send(netFn, cmd byte, data []byte) ([]byte, error) {
 }
 
 func newMock() *mockSender {
-	return &mockSender{responses: map[uint16][]byte{}}
+	return &mockSender{responses: map[uint16][]byte{key(netFnApp, cmdGetUserName): make([]byte, ipmiMaxUsernameLen)}}
 }
 
 func (m *mockSender) lastCall(t *testing.T) mockCall {
@@ -242,6 +243,19 @@ func TestListUsers_LaterSlotAccessError(t *testing.T) {
 	}
 }
 
+func TestListUsers_ShortNameResponse(t *testing.T) {
+	stages := []stage{
+		{netFnApp, cmdGetUserAccess, 1, []byte{0x01, 0x40, 0x00, 0x04}},
+		{netFnApp, cmdGetUserName, 1, []byte{}},
+	}
+	s := &stagedSender{stages: stages, t: t}
+	_, err := newUM(s).ListUsers(context.Background())
+	var short ErrIPMIShortResponse
+	if !errors.As(err, &short) {
+		t.Fatalf("ListUsers = %v, want ErrIPMIShortResponse (an empty answer is not an empty slot)", err)
+	}
+}
+
 // --- CreateUser ---
 
 func TestCreateUser_HappyPath(t *testing.T) {
@@ -392,7 +406,7 @@ func TestCreateUser_NameSendError(t *testing.T) {
 
 func TestCreateUser_PasswordSendError(t *testing.T) {
 	stages := []stage{
-		{netFnApp, cmdGetUserName, 2, nil},
+		{netFnApp, cmdGetUserName, 2, make([]byte, ipmiMaxUsernameLen)},
 		{netFnApp, cmdSetUserName, 0, nil},
 	}
 	s := &stagedSender{stages: stages, t: t, errAfter: 2, errVal: errors.New("pwd-fail")}
@@ -664,6 +678,9 @@ type lostEnableSender struct {
 func (s *lostEnableSender) Send(netFn, cmd byte, data []byte) ([]byte, error) {
 	cp := append([]byte(nil), data...)
 	s.calls = append(s.calls, mockCall{netFn: netFn, cmd: cmd, data: cp})
+	if cmd == cmdGetUserName {
+		return make([]byte, ipmiMaxUsernameLen), nil
+	}
 	if cmd == cmdSetUserPassword && len(data) >= 2 && data[1]&0x03 == pwdOpEnable {
 		return nil, s.enableErr
 	}
@@ -765,6 +782,9 @@ type lostNameSender struct {
 func (s *lostNameSender) Send(netFn, cmd byte, data []byte) ([]byte, error) {
 	cp := append([]byte(nil), data...)
 	s.calls = append(s.calls, mockCall{netFn: netFn, cmd: cmd, data: cp})
+	if cmd == cmdGetUserName {
+		return make([]byte, ipmiMaxUsernameLen), nil
+	}
 	if cmd == cmdSetUserName && len(data) >= 2 {
 		for _, b := range data[1:] {
 			if b != 0 {
@@ -854,6 +874,40 @@ func TestCreateUser_NameProbeErrorWritesNothing(t *testing.T) {
 	}
 	if len(m.calls) != 1 {
 		t.Fatalf("want only the probe, got %d calls", len(m.calls))
+	}
+}
+
+// A Get User Name answer shorter than the 16-byte name field is refused, so a
+// truncated or empty answer is never read as an empty slot and nothing is
+// written or rolled back.
+func TestCreateUser_ShortNameProbeWritesNothing(t *testing.T) {
+	cases := []struct {
+		name string
+		resp []byte
+	}{
+		{"no_data", nil},
+		{"empty", []byte{}},
+		{"fifteen_zero_bytes", make([]byte, 15)},
+		{"truncated_name", []byte("adm")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMock()
+			m.responses[key(netFnApp, cmdGetUserName)] = tc.resp
+			err := newUM(m).CreateUser(context.Background(), User{
+				Slot: 2, Username: "bob", Privilege: PrivilegeUser, Enabled: false,
+			}, nil)
+			var short ErrIPMIShortResponse
+			if !errors.As(err, &short) {
+				t.Fatalf("err = %v, want ErrIPMIShortResponse", err)
+			}
+			if short.Command != "Get User Name" || short.Got != len(tc.resp) || short.Want != ipmiMaxUsernameLen {
+				t.Errorf("short = %+v, want Get User Name got %d want %d", short, len(tc.resp), ipmiMaxUsernameLen)
+			}
+			if len(m.calls) != 1 {
+				t.Fatalf("want only the probe, got %d calls", len(m.calls))
+			}
+		})
 	}
 }
 
