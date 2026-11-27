@@ -14,7 +14,10 @@
 package iso
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -281,6 +284,360 @@ func TestCopySecureBootKeys_SourceNotFound(t *testing.T) {
 
 	err := builder.copySecureBootKeys(config)
 	assert.Error(t, err)
+}
+
+// TestBuilderCopySecureBootKeys_PrivateKeyStagedOwnerOnly holds the legacy
+// builder path to the same staging rule as the customize path (#62): a
+// private key lands owner-only on the ISO tree, a public certificate stays
+// world-readable.
+func TestBuilderCopySecureBootKeys_PrivateKeyStagedOwnerOnly(t *testing.T) {
+	tempDir := t.TempDir()
+	isoDir := filepath.Join(tempDir, "iso")
+	keysDir := filepath.Join(tempDir, "keys")
+	require.NoError(t, os.MkdirAll(isoDir, 0755))
+	require.NoError(t, os.MkdirAll(keysDir, 0755))
+
+	keyPEM, certPEM := genTestSigningPairPEM(t)
+	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "DB.key"), keyPEM, 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "DB.crt"), certPEM, 0644))
+
+	builder := NewBuilder(nil)
+	require.NoError(t, builder.copySecureBootKeys(&ISOConfig{ISODir: isoDir, KeysDir: keysDir}))
+
+	stagedKey := filepath.Join(isoDir, "keys", "DB.key")
+	info, err := os.Stat(stagedKey)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm(), "staged DB.key must be owner-only")
+	got, err := os.ReadFile(stagedKey)
+	require.NoError(t, err)
+	assert.Equal(t, keyPEM, got)
+
+	info, err = os.Stat(filepath.Join(isoDir, "keys", "DB.crt"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0644), info.Mode().Perm(), "staged DB.crt stays world-readable")
+}
+
+// TestBuilderCopySecureBootKeys_OverwritesStaleWorldReadableKey: the legacy
+// builder merges into an existing ISO tree, so a DB.key left 0644 by an
+// earlier build must come out owner-only, and a DB.crt left 0600 must come
+// out 0644 (#62).
+func TestBuilderCopySecureBootKeys_OverwritesStaleWorldReadableKey(t *testing.T) {
+	tempDir := t.TempDir()
+	isoDir := filepath.Join(tempDir, "iso")
+	keysDir := filepath.Join(tempDir, "keys")
+	stagedDir := filepath.Join(isoDir, "keys")
+	require.NoError(t, os.MkdirAll(stagedDir, 0755))
+	require.NoError(t, os.MkdirAll(keysDir, 0755))
+
+	keyPEM, certPEM := genTestSigningPairPEM(t)
+	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "DB.key"), keyPEM, 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "DB.crt"), certPEM, 0644))
+
+	stagedKey := filepath.Join(stagedDir, "DB.key")
+	stagedCrt := filepath.Join(stagedDir, "DB.crt")
+	require.NoError(t, os.WriteFile(stagedKey, []byte("stale"), 0644))
+	require.NoError(t, os.Chmod(stagedKey, 0644))
+	require.NoError(t, os.WriteFile(stagedCrt, []byte("stale"), 0600))
+
+	require.NoError(t, NewBuilder(nil).copySecureBootKeys(&ISOConfig{ISODir: isoDir, KeysDir: keysDir}))
+
+	info, err := os.Stat(stagedKey)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm(), "stale 0644 DB.key must be re-staged owner-only")
+	got, err := os.ReadFile(stagedKey)
+	require.NoError(t, err)
+	assert.Equal(t, keyPEM, got)
+
+	info, err = os.Stat(stagedCrt)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0644), info.Mode().Perm(), "stale 0600 DB.crt must be re-staged 0644")
+	got, err = os.ReadFile(stagedCrt)
+	require.NoError(t, err)
+	assert.Equal(t, certPEM, got)
+}
+
+// TestBuilderCopySecureBootKeys_DoesNotWriteThroughSymlink: a symlink at the
+// staged DB.key path is replaced by a regular owner-only file; the link target
+// is left untouched (#62).
+func TestBuilderCopySecureBootKeys_DoesNotWriteThroughSymlink(t *testing.T) {
+	tempDir := t.TempDir()
+	isoDir := filepath.Join(tempDir, "iso")
+	keysDir := filepath.Join(tempDir, "keys")
+	stagedDir := filepath.Join(isoDir, "keys")
+	require.NoError(t, os.MkdirAll(stagedDir, 0755))
+	require.NoError(t, os.MkdirAll(keysDir, 0755))
+
+	keyPEM, certPEM := genTestSigningPairPEM(t)
+	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "DB.key"), keyPEM, 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "DB.crt"), certPEM, 0644))
+
+	outside := filepath.Join(tempDir, "outside.txt")
+	require.NoError(t, os.WriteFile(outside, []byte("outside"), 0644))
+	stagedKey := filepath.Join(stagedDir, "DB.key")
+	require.NoError(t, os.Symlink(outside, stagedKey))
+
+	require.NoError(t, NewBuilder(nil).copySecureBootKeys(&ISOConfig{ISODir: isoDir, KeysDir: keysDir}))
+
+	got, err := os.ReadFile(outside)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("outside"), got, "symlink target must not be written through")
+
+	info, err := os.Lstat(stagedKey)
+	require.NoError(t, err)
+	assert.True(t, info.Mode().IsRegular(), "staged DB.key must be a regular file, not a symlink")
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm(), "staged DB.key must be owner-only")
+	got, err = os.ReadFile(stagedKey)
+	require.NoError(t, err)
+	assert.Equal(t, keyPEM, got)
+}
+
+// writeTestDBPair writes a DB signing pair into dir and returns the key PEM.
+func writeTestDBPair(t *testing.T, dir string) []byte {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(dir, 0755))
+	keyPEM, certPEM := genTestSigningPairPEM(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "DB.key"), keyPEM, 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "DB.crt"), certPEM, 0644))
+	return keyPEM
+}
+
+// fakeXorrisoBuilder returns a Builder whose xorriso writes output (or
+// fails with runErr) after calling onRun with the tree it was asked to pack.
+func fakeXorrisoBuilder(output string, runErr error, onRun func()) *Builder {
+	builder := NewBuilder(nil)
+	builder.runner = &mockXorrisoRunner{
+		runFunc: func(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+			if onRun != nil {
+				onRun()
+			}
+			if runErr != nil {
+				return runErr
+			}
+			return os.WriteFile(output, []byte("iso"), 0644)
+		},
+	}
+	return builder
+}
+
+func TestBuildISO_WipesStagedSecureBootPrivateKeyAfterPacking(t *testing.T) {
+	tempDir := t.TempDir()
+	isoDir := filepath.Join(tempDir, "iso")
+	keysDir := filepath.Join(tempDir, "secure-boot-keys")
+	require.NoError(t, os.MkdirAll(isoDir, 0755))
+	keyPEM := writeTestDBPair(t, keysDir)
+
+	stagedKey := filepath.Join(isoDir, "secure-boot-keys", "DB.key")
+	held := filepath.Join(tempDir, "held.key")
+	packed := false
+	output := filepath.Join(tempDir, "out.iso")
+	builder := fakeXorrisoBuilder(output, nil, func() {
+		got, err := os.ReadFile(stagedKey)
+		packed = err == nil && bytes.Equal(got, keyPEM)
+		// A second link to the staged inode shows what the wipe left in it.
+		require.NoError(t, os.Link(stagedKey, held))
+	})
+
+	require.NoError(t, builder.BuildISO(context.Background(),
+		&ISOConfig{ISODir: isoDir, KeysDir: keysDir, OutputISO: output}))
+
+	assert.True(t, packed, "xorriso must pack the staged DB.key")
+	assert.NoFileExists(t, stagedKey, "the staged DB.key copy must be removed after packing")
+	assert.FileExists(t, filepath.Join(isoDir, "secure-boot-keys", "DB.crt"), "public DB.crt stays staged")
+	left, err := os.ReadFile(held)
+	require.NoError(t, err)
+	assert.Equal(t, make([]byte, len(keyPEM)), left, "the staged DB.key bytes must be zeroed before removal")
+	src, err := os.ReadFile(filepath.Join(keysDir, "DB.key"))
+	require.NoError(t, err)
+	assert.Equal(t, keyPEM, src, "the source DB.key is untouched")
+}
+
+// TestBuildISO_KeysDirCopyDoesNotOwnStaleHardLinkedEntry checks that copying
+// KeysDir into an ISO keys dir that already holds a stale hard link to an
+// external signing key (an entry absent from KeysDir) does not make the wipe
+// treat that link as the build's own: the external key keeps its bytes and
+// only the stale link is detached (#2363).
+func TestBuildISO_KeysDirCopyDoesNotOwnStaleHardLinkedEntry(t *testing.T) {
+	tempDir := t.TempDir()
+	isoDir := filepath.Join(tempDir, "iso")
+	keysDir := filepath.Join(tempDir, "keys")
+	writeTestDBPair(t, keysDir)
+
+	external := filepath.Join(tempDir, "external.key")
+	externalBytes := []byte("external signing key material\n")
+	require.NoError(t, os.WriteFile(external, externalBytes, 0600))
+	stagedDir := filepath.Join(isoDir, "keys")
+	require.NoError(t, os.MkdirAll(stagedDir, 0755))
+	stale := filepath.Join(stagedDir, "retired.key")
+	require.NoError(t, os.Link(external, stale))
+
+	output := filepath.Join(tempDir, "out.iso")
+	builder := fakeXorrisoBuilder(output, nil, nil)
+	require.NoError(t, builder.BuildISO(context.Background(),
+		&ISOConfig{ISODir: isoDir, KeysDir: keysDir, OutputISO: output}))
+
+	got, err := os.ReadFile(external)
+	require.NoError(t, err)
+	assert.Equal(t, externalBytes, got, "the external key behind a stale staged link must keep its bytes")
+	assert.NoFileExists(t, stale, "the stale hard link is detached from the staged keys dir")
+	assert.NoFileExists(t, filepath.Join(stagedDir, "DB.key"), "the staged DB.key copy is removed after packing")
+}
+
+func TestBuildISO_WipesStagedSecureBootPrivateKeyWhenXorrisoFails(t *testing.T) {
+	tempDir := t.TempDir()
+	isoDir := filepath.Join(tempDir, "iso")
+	keysDir := filepath.Join(tempDir, "keys")
+	require.NoError(t, os.MkdirAll(isoDir, 0755))
+	writeTestDBPair(t, keysDir)
+
+	builder := fakeXorrisoBuilder(filepath.Join(tempDir, "out.iso"), assert.AnError, nil)
+	err := builder.BuildISO(context.Background(),
+		&ISOConfig{ISODir: isoDir, KeysDir: keysDir, OutputISO: filepath.Join(tempDir, "out.iso")})
+
+	require.Error(t, err)
+	assert.NoFileExists(t, filepath.Join(isoDir, "keys", "DB.key"), "a failed build must not leave the staged DB.key")
+	assert.FileExists(t, filepath.Join(isoDir, "keys", "DB.crt"))
+}
+
+func TestBuildISO_WipesCustomizeStagedSecureBootPrivateKey(t *testing.T) {
+	tempDir := t.TempDir()
+	isoDir := filepath.Join(tempDir, "iso")
+	require.NoError(t, os.MkdirAll(isoDir, 0755))
+	// Customize stages the keypair at the ISO root without a builder KeysDir.
+	writeTestDBPair(t, filepath.Join(isoDir, SecureBootKeysISODirName))
+
+	output := filepath.Join(tempDir, "out.iso")
+	builder := fakeXorrisoBuilder(output, nil, nil)
+	require.NoError(t, builder.BuildISO(context.Background(), &ISOConfig{ISODir: isoDir, OutputISO: output}))
+
+	assert.NoFileExists(t, filepath.Join(isoDir, SecureBootKeysISODirName, "DB.key"))
+	assert.FileExists(t, filepath.Join(isoDir, SecureBootKeysISODirName, "DB.crt"))
+}
+
+func TestBuildISO_KeepsKeysDirThatIsTheISOTreeItself(t *testing.T) {
+	isoDir := t.TempDir()
+	keysDir := filepath.Join(isoDir, SecureBootKeysISODirName)
+	keyPEM := writeTestDBPair(t, keysDir)
+
+	output := filepath.Join(t.TempDir(), "out.iso")
+	builder := fakeXorrisoBuilder(output, nil, nil)
+	require.NoError(t, builder.BuildISO(context.Background(),
+		&ISOConfig{ISODir: isoDir, KeysDir: keysDir, OutputISO: output}))
+
+	got, err := os.ReadFile(filepath.Join(keysDir, "DB.key"))
+	require.NoError(t, err, "the key source must never be wiped")
+	assert.Equal(t, keyPEM, got)
+}
+
+func TestBuildISO_KeepsKeysDirNestedInStagingTree(t *testing.T) {
+	tempDir := t.TempDir()
+	isoDir := filepath.Join(tempDir, "iso")
+	keysDir := filepath.Join(isoDir, SecureBootKeysISODirName, "source")
+	keyPEM := writeTestDBPair(t, keysDir)
+
+	output := filepath.Join(tempDir, "out.iso")
+	builder := fakeXorrisoBuilder(output, nil, nil)
+	require.NoError(t, builder.BuildISO(context.Background(),
+		&ISOConfig{ISODir: isoDir, KeysDir: keysDir, OutputISO: output}))
+
+	got, err := os.ReadFile(filepath.Join(keysDir, "DB.key"))
+	require.NoError(t, err, "a key source nested in the staging tree must never be wiped")
+	assert.Equal(t, keyPEM, got)
+	assert.FileExists(t, filepath.Join(keysDir, "DB.crt"))
+	assert.NoFileExists(t, filepath.Join(isoDir, "source", "DB.key"),
+		"the builder's staged DB.key copy must be removed")
+}
+
+// TestBuildISO_KeysDirDotKeepsISOContents covers Codex round 7 P1 on
+// #2363: KeysDir "." must stage into the dedicated secure-boot-keys leaf,
+// so the post-build wipe never takes the ISO root as a wipe root and the
+// unrelated ISO contents survive a successful and a failed pack.
+func TestBuildISO_KeysDirDotKeepsISOContents(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		runErr error
+	}{
+		{name: "pack succeeds"},
+		{name: "pack fails", runErr: errors.New("xorriso failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+			isoDir := filepath.Join(tempDir, "iso")
+			srcDir := filepath.Join(tempDir, "src")
+			writeTestDBPair(t, srcDir)
+
+			unrelated := map[string]struct {
+				data []byte
+				mode os.FileMode
+			}{
+				filepath.Join("boot", "vmlinuz"):           {[]byte("kernel image bytes"), 0644},
+				filepath.Join("bin", "tool"):               {[]byte("#!/bin/sh\necho tool\n"), 0755},
+				filepath.Join("configs", "installer.yaml"): {[]byte("installer: true\n"), 0644},
+			}
+			for rel, f := range unrelated {
+				p := filepath.Join(isoDir, rel)
+				require.NoError(t, os.MkdirAll(filepath.Dir(p), 0755))
+				require.NoError(t, os.WriteFile(p, f.data, f.mode))
+			}
+
+			t.Chdir(srcDir)
+			output := filepath.Join(tempDir, "out.iso")
+			builder := fakeXorrisoBuilder(output, tc.runErr, nil)
+			err := builder.BuildISO(context.Background(),
+				&ISOConfig{ISODir: isoDir, KeysDir: ".", OutputISO: output})
+			if tc.runErr == nil {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+
+			for rel, f := range unrelated {
+				got, err := os.ReadFile(filepath.Join(isoDir, rel))
+				require.NoError(t, err, "unrelated ISO file %s must survive the wipe", rel)
+				assert.Equal(t, f.data, got, "unrelated ISO file %s must keep its bytes", rel)
+			}
+			staged := filepath.Join(isoDir, SecureBootKeysISODirName)
+			assert.NoFileExists(t, filepath.Join(staged, "DB.key"),
+				"the staged DB.key copy must be removed")
+			assert.FileExists(t, filepath.Join(staged, "DB.crt"),
+				"KeysDir \".\" must stage into the dedicated secure-boot-keys leaf")
+			assert.NoFileExists(t, filepath.Join(isoDir, "DB.crt"),
+				"KeysDir \".\" must never stage into the ISO root")
+		})
+	}
+}
+
+func TestStagedKeysDirName(t *testing.T) {
+	for _, tc := range []struct {
+		keysDir string
+		want    string
+	}{
+		{"", SecureBootKeysISODirName},
+		{".", SecureBootKeysISODirName},
+		{"..", SecureBootKeysISODirName},
+		{string(filepath.Separator), SecureBootKeysISODirName},
+		{"keys", "keys"},
+		{filepath.Join(string(filepath.Separator), "a", "b", "source"), "source"},
+	} {
+		assert.Equal(t, tc.want, stagedKeysDirName(tc.keysDir), "keysDir %q", tc.keysDir)
+	}
+}
+
+func TestBuildISO_DoesNotWipeThroughSymlinkedStagingRoot(t *testing.T) {
+	tempDir := t.TempDir()
+	isoDir := filepath.Join(tempDir, "iso")
+	outside := filepath.Join(tempDir, "outside")
+	require.NoError(t, os.MkdirAll(isoDir, 0755))
+	keyPEM := writeTestDBPair(t, outside)
+	require.NoError(t, os.Symlink(outside, filepath.Join(isoDir, SecureBootKeysISODirName)))
+
+	output := filepath.Join(tempDir, "out.iso")
+	builder := fakeXorrisoBuilder(output, nil, nil)
+	err := builder.BuildISO(context.Background(), &ISOConfig{ISODir: isoDir, OutputISO: output})
+	require.Error(t, err, "a symlinked staging root must be refused")
+
+	got, err := os.ReadFile(filepath.Join(outside, "DB.key"))
+	require.NoError(t, err, "a key outside the ISO tree must never be wiped")
+	assert.Equal(t, keyPEM, got)
 }
 
 func TestRunXorriso_ContextCancellation(t *testing.T) {
