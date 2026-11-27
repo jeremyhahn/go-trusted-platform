@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type Answer, ok, refused, type SentRequest, stubControlPlane, withControlPlane } from '@/test/control-plane-fetch';
 import { BMCCertCard } from './bmc-cert-card';
 
-// The webservice's route ops for the certificate card's write controls.
+// The webservice's BMC certificate route ops. The capabilities stub offers all
+// three, so the tests show the card holds Enroll and Replace back on its own.
 const ENROLL_OP = 'POST /api/v1/bmc/{profileID:[0-9]+}/enroll';
 const RESTORE_OP = 'POST /api/v1/bmc/{profileID:[0-9]+}/cert/restore';
 const REPLACE_OP = 'PUT /api/v1/bmc/{profileID:[0-9]+}/cert';
@@ -30,18 +31,13 @@ function bmc(sent: SentRequest[]): SentRequest[] {
   return sent.filter((r) => r.path !== '/api/v1/capabilities');
 }
 
-// Placeholder PEM bodies: the card passes them through unchanged.
-const CERT_PEM = 'test-cert-pem';
-const KEY_PEM = 'test-key-pem';
-
-// A replace never updates the stored pin, so the success toast says to enrol again.
-const REPLACED_TOAST = 'Web certificate replaced: BMC profile 42; enroll again to refresh the stored pin';
-
 /** renderCard mounts the card and waits until the capabilities have loaded (no control still "checking"). */
 async function renderCard() {
   const view = render(withControlPlane(<BMCCertCard profileID="42" />));
   await waitFor(() =>
-    expect(screen.getByRole('button', { name: 'Enroll' }).getAttribute('data-capability-enabled')).not.toBe('false')
+    expect(
+      screen.getByRole('button', { name: 'Restore factory certificate' }).getAttribute('data-capability-enabled')
+    ).toBe('true')
   );
   return view;
 }
@@ -52,107 +48,47 @@ async function click(name: string) {
   });
 }
 
+/** restoreAnswer is a restore ceremony answer with the given steps. */
+function restoreAnswer(steps: { name: string; ok: boolean; detail?: string }[]): Answer {
+  return ok({
+    device_id: '7',
+    endpoint: 'bmc-a.example',
+    hostname: 'bmc-a.example',
+    new_cert_meta: { subject: 'CN=restored' },
+    steps,
+  });
+}
+
+async function restore() {
+  await click('Restore factory certificate');
+  await screen.findByRole('dialog');
+  await click('Confirm');
+}
+
 describe('BMCCertCard', () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
   });
 
-  it('enrols with the checked options and shows the pin and steps', async () => {
-    const sent = stub({
-      'POST /api/v1/bmc/42/enroll': ok({
-        device_id: '7',
-        endpoint: 'bmc-a.example',
-        hostname: 'bmc-a.example',
-        pin_spki_sha256: 'ab12',
-        factory_cert_meta: { subject: 'CN=factory' },
-        steps: [
-          { name: 'capture', ok: true },
-          { name: 'replace', ok: true },
-        ],
-      }),
-    });
-    await renderCard();
-    await click('Enroll');
-
-    const toast = await screen.findByText('Enrolled: BMC profile 42');
-    expect(toast.getAttribute('data-variant')).toBe('default');
-    expect(bmc(sent)).toEqual([
-      {
-        method: 'POST',
-        path: '/api/v1/bmc/42/enroll',
-        body: { replace_certificate: false, rotate_password: false, dns_register: true, dane_publish: false },
-      },
-    ]);
-    expect(screen.getByTestId('bmc-cert-pin').textContent).toContain('ab12');
-    expect(screen.getByText(/CN=factory/)).toBeTruthy();
-    const steps = screen.getByTestId('bmc-cert-steps').textContent ?? '';
-    expect(steps).toContain('capture: ok');
-    expect(steps).toContain('replace: ok');
-  });
-
-  it('shows the server enroll defaults checked and offers no option the server does not perform', async () => {
-    stub({});
+  it('offers no Enroll and no Replace control while Restore still works', async () => {
+    // The server offers all three routes; the card still holds back enrolment
+    // and web certificate replacement until the server updates the trust pin.
+    const sent = stub({ 'POST /api/v1/bmc/42/cert/restore': restoreAnswer([{ name: 'restore', ok: true }]) });
     await renderCard();
 
-    expect(screen.getByRole('checkbox', { name: 'Register DNS' }).getAttribute('aria-checked')).toBe('true');
-    // DANE is published only when the certificate is replaced, which the
-    // server does not do yet, so the card offers no DANE option.
-    expect(screen.queryByRole('checkbox', { name: 'Publish DANE' })).toBeNull();
-    expect(screen.queryByRole('checkbox', { name: 'Rotate password' })).toBeNull();
-    expect(screen.queryByRole('checkbox', { name: 'Replace certificate' })).toBeNull();
-  });
+    expect(screen.queryByRole('button', { name: 'Enroll' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Replace web certificate' })).toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.queryByLabelText('Certificate PEM')).toBeNull();
+    expect(screen.queryByLabelText('Private key PEM')).toBeNull();
+    expect(screen.getByTestId('bmc-cert-held-back').textContent).toBe(
+      'Enrolment and web certificate replacement are unavailable until the server updates the BMC trust pin.'
+    );
 
-  it('sends an explicit false for an unchecked default', async () => {
-    const sent = stub({
-      'POST /api/v1/bmc/42/enroll': ok({
-        device_id: '7',
-        endpoint: 'bmc-a.example',
-        hostname: 'bmc-a.example',
-        pin_spki_sha256: 'ab12',
-        steps: [{ name: 'capture', ok: true }],
-      }),
-    });
-    await renderCard();
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Register DNS' }));
-    await click('Enroll');
-
-    await screen.findByText('Enrolled: BMC profile 42');
-    expect(bmc(sent)[0].body).toEqual({
-      replace_certificate: false,
-      rotate_password: false,
-      dns_register: false,
-      dane_publish: false,
-    });
-  });
-
-  it('reports the failed ceremony steps', async () => {
-    const sent = stub({
-      'POST /api/v1/bmc/42/enroll': ok({
-        device_id: '7',
-        endpoint: 'bmc-a.example',
-        hostname: 'bmc-a.example',
-        pin_spki_sha256: 'ab12',
-        factory_cert_meta: { subject: 'CN=factory' },
-        steps: [
-          { name: 'capture', ok: true },
-          { name: 'dns', ok: false, detail: 'zone refused' },
-        ],
-      }),
-    });
-    await renderCard();
-    await click('Enroll');
-
-    const toast = await screen.findByText('Enrolment incomplete: failed steps: dns');
-    expect(toast.getAttribute('data-variant')).toBe('destructive');
-    // Untouched, every option goes explicitly, with the server defaults.
-    expect(bmc(sent)[0].body).toEqual({
-      replace_certificate: false,
-      rotate_password: false,
-      dns_register: true,
-      dane_publish: false,
-    });
-    expect(screen.getByTestId('bmc-cert-steps').textContent).toContain('dns: failed (zone refused)');
+    await restore();
+    await screen.findByText('Factory certificate restored: BMC profile 42');
+    expect(bmc(sent).map((r) => `${r.method} ${r.path}`)).toEqual(['POST /api/v1/bmc/42/cert/restore']);
   });
 
   it('asks before restoring and sends nothing on Cancel', async () => {
@@ -168,116 +104,48 @@ describe('BMCCertCard', () => {
   });
 
   it('restores after the confirm', async () => {
-    const sent = stub({
-      'POST /api/v1/bmc/42/cert/restore': ok({
-        device_id: '7',
-        endpoint: 'bmc-a.example',
-        hostname: 'bmc-a.example',
-        new_cert_meta: { subject: 'CN=restored' },
-        steps: [{ name: 'restore', ok: true }],
-      }),
-    });
+    const sent = stub({ 'POST /api/v1/bmc/42/cert/restore': restoreAnswer([{ name: 'restore', ok: true }]) });
     await renderCard();
-    await click('Restore factory certificate');
-    await screen.findByRole('dialog');
-    await click('Confirm');
+    await restore();
 
     const toast = await screen.findByText('Factory certificate restored: BMC profile 42');
     expect(toast.getAttribute('data-variant')).toBe('default');
     expect(sent.filter((r) => r.method === 'POST' && r.path === '/api/v1/bmc/42/cert/restore')).toHaveLength(1);
     expect(screen.getByText(/CN=restored/)).toBeTruthy();
+    expect(screen.getByTestId('bmc-cert-steps').textContent).toContain('restore: ok');
   });
 
-  it('replaces the web certificate and refuses blanks without a request', async () => {
-    const sent = stub({
-      'PUT /api/v1/bmc/42/cert': ok({ status: 'ok' }),
-    });
-    await renderCard();
-    await click('Replace web certificate');
-
-    const blank = await screen.findByText('Replace web certificate failed: A certificate PEM is required');
-    expect(blank.getAttribute('data-variant')).toBe('destructive');
-    expect(bmc(sent)).toEqual([]);
-
-    fireEvent.change(screen.getByLabelText('Certificate PEM'), { target: { value: CERT_PEM } });
-    fireEvent.change(screen.getByLabelText('Private key PEM'), { target: { value: KEY_PEM } });
-    await click('Replace web certificate');
-
-    await screen.findByText(REPLACED_TOAST);
-    expect(bmc(sent)).toEqual([
-      { method: 'PUT', path: '/api/v1/bmc/42/cert', body: { cert_pem: CERT_PEM, key_pem: KEY_PEM } },
-    ]);
-    expect((screen.getByLabelText('Certificate PEM') as HTMLTextAreaElement).value).toBe('');
-    expect((screen.getByLabelText('Private key PEM') as HTMLTextAreaElement).value).toBe('');
-  });
-
-  it('fails an enrolment whose answer carries no SPKI pin', async () => {
+  it('reports the failed ceremony steps', async () => {
     stub({
-      'POST /api/v1/bmc/42/enroll': ok({
-        device_id: '7',
-        endpoint: 'bmc-a.example',
-        hostname: 'bmc-a.example',
-        pin_spki_sha256: '',
-        steps: [{ name: 'capture', ok: true }],
-      }),
+      'POST /api/v1/bmc/42/cert/restore': restoreAnswer([
+        { name: 'restore', ok: true },
+        { name: 'dns', ok: false, detail: 'zone refused' },
+      ]),
     });
     await renderCard();
-    await click('Enroll');
+    await restore();
 
-    const toast = await screen.findByText(/^Enroll failed/);
+    const toast = await screen.findByText('Restore incomplete: failed steps: dns');
     expect(toast.getAttribute('data-variant')).toBe('destructive');
-    expect(screen.queryByText(/^Enrolled/)).toBeNull();
-    expect(screen.queryByTestId('bmc-cert-pin')).toBeNull();
-  });
-
-  it('drops the shown pin after a web certificate replace', async () => {
-    stub({
-      'POST /api/v1/bmc/42/enroll': ok({
-        device_id: '7',
-        endpoint: 'bmc-a.example',
-        hostname: 'bmc-a.example',
-        pin_spki_sha256: 'ab12',
-        steps: [{ name: 'capture', ok: true }],
-      }),
-      'PUT /api/v1/bmc/42/cert': ok({ status: 'ok' }),
-    });
-    await renderCard();
-    await click('Enroll');
-    await screen.findByText('Enrolled: BMC profile 42');
-    expect(screen.getByTestId('bmc-cert-pin').textContent).toContain('ab12');
-
-    fireEvent.change(screen.getByLabelText('Certificate PEM'), { target: { value: CERT_PEM } });
-    fireEvent.change(screen.getByLabelText('Private key PEM'), { target: { value: KEY_PEM } });
-    await click('Replace web certificate');
-
-    await screen.findByText(REPLACED_TOAST);
-    expect(screen.queryByTestId('bmc-cert-pin')).toBeNull();
+    expect(screen.getByTestId('bmc-cert-steps').textContent).toContain('dns: failed (zone refused)');
   });
 
   it('shows the server refusal verbatim', async () => {
-    stub({
-      'POST /api/v1/bmc/42/enroll': refused(404, 'bmc: profile 42 not found'),
-    });
+    stub({ 'POST /api/v1/bmc/42/cert/restore': refused(404, 'bmc: profile 42 not found') });
     await renderCard();
-    await click('Enroll');
+    await restore();
 
-    const toast = await screen.findByText('Enroll failed: bmc: profile 42 not found');
+    const toast = await screen.findByText('Restore failed: bmc: profile 42 not found');
     expect(toast.getAttribute('data-variant')).toBe('destructive');
   });
 
-  it('gates every certificate control on its route', async () => {
+  it('gates the restore controls on the restore route', async () => {
     stub({});
     await renderCard();
 
-    const enroll = screen.getByRole('button', { name: 'Enroll' });
-    const restore = screen.getByRole('button', { name: 'Restore factory certificate' });
-    const replace = screen.getByRole('button', { name: 'Replace web certificate' });
-    expect(enroll.getAttribute('data-capability-op')).toBe(ENROLL_OP);
-    expect(restore.getAttribute('data-capability-op')).toBe(RESTORE_OP);
-    expect(replace.getAttribute('data-capability-op')).toBe(REPLACE_OP);
-    for (const control of [enroll, restore, replace]) {
-      expect(control.getAttribute('data-capability-enabled')).toBe('true');
-    }
+    const control = screen.getByRole('button', { name: 'Restore factory certificate' });
+    expect(control.getAttribute('data-capability-op')).toBe(RESTORE_OP);
+    expect(control.getAttribute('data-capability-enabled')).toBe('true');
 
     await click('Restore factory certificate');
     await screen.findByRole('dialog');
@@ -286,24 +154,17 @@ describe('BMCCertCard', () => {
     expect(confirm.getAttribute('data-capability-enabled')).toBe('true');
   });
 
-  it('disables the controls whose route the server does not offer, with the reason', async () => {
+  it('disables the restore control when the server does not offer its route, with the reason', async () => {
     const reason = 'not-configured: bmc ceremony';
-    const sent = stub({}, { [RESTORE_OP]: reason, [REPLACE_OP]: reason });
+    const sent = stub({}, { [RESTORE_OP]: reason });
     render(withControlPlane(<BMCCertCard profileID="42" />));
 
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Restore factory certificate' }).getAttribute('title')).toBe(reason)
     );
-    const restore = screen.getByRole('button', { name: 'Restore factory certificate' }) as HTMLButtonElement;
-    const replace = screen.getByRole('button', { name: 'Replace web certificate' }) as HTMLButtonElement;
-    for (const control of [restore, replace]) {
-      expect(control.disabled).toBe(true);
-      expect(control.getAttribute('data-capability-enabled')).toBe('false');
-      expect(control.getAttribute('title')).toBe(reason);
-    }
-    const enroll = screen.getByRole('button', { name: 'Enroll' }) as HTMLButtonElement;
-    expect(enroll.getAttribute('data-capability-enabled')).toBe('true');
-    expect(enroll.disabled).toBe(false);
+    const control = screen.getByRole('button', { name: 'Restore factory certificate' }) as HTMLButtonElement;
+    expect(control.disabled).toBe(true);
+    expect(control.getAttribute('data-capability-enabled')).toBe('false');
 
     await click('Restore factory certificate');
     expect(screen.queryByRole('dialog')).toBeNull();
