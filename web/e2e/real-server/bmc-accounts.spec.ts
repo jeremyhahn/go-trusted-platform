@@ -19,15 +19,16 @@ const OTHER_UNKNOWN_PROFILE = '999998';
 const NOT_OFFERED_REASON = 'not offered by this server';
 
 // The write controls the page renders for a profile with no users: the
-// certificate card offers Restore only and the users card offers Create.
+// certificate card offers no control and the users card offers Create.
 const BMC_WRITE_OPS = [
-  'POST /api/v1/bmc/{profileID:[0-9]+}/cert/restore',
   'POST /api/v1/bmc/{profileID:[0-9]+}/users',
 ];
 
 // Ops this page renders no control for (#2199): enrolment is not on this page,
-// and the web-certificate replace rotates no SPKI pin and no TLSA record.
+// the web-certificate replace rotates no SPKI pin and no TLSA record, and
+// factory restore cannot re-pin the regenerated certificate.
 const BMC_UNRENDERED_OPS = [
+  'POST /api/v1/bmc/{profileID:[0-9]+}/cert/restore',
   'POST /api/v1/bmc/{profileID:[0-9]+}/enroll',
   'PUT /api/v1/bmc/{profileID:[0-9]+}/cert',
 ];

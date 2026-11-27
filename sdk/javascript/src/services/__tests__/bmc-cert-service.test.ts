@@ -11,6 +11,8 @@ import type { ApiClient } from '../../client/api-client.js';
 
 /** The request options every BMC certificate write must carry: no retry. */
 const NO_RETRY = { retry: { enabled: false } };
+/** Restore waits past the backend's 5-minute BMC restart limit (pkg/bmc/redfish_cert.go resetMaxWait). */
+const RESTORE_OPTIONS = { retry: { enabled: false }, timeout: 360000 };
 
 function createMockApiClient(): ApiClient {
   return {
@@ -61,7 +63,7 @@ describe('BMCCertService', () => {
     it('sends restoreFactoryCert with retries off', async () => {
       vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: {} });
       await service.restoreFactoryCert(7);
-      expect(vi.mocked(mockClient.post).mock.calls[0]?.at(-1)).toEqual({ retry: { enabled: false } });
+      expect(vi.mocked(mockClient.post).mock.calls[0]?.at(-1)).toEqual(RESTORE_OPTIONS);
     });
   });
 
@@ -147,8 +149,15 @@ describe('BMCCertService', () => {
       const result = await service.restoreFactoryCert(7);
 
       expect(mockClient.post).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(mockClient.post).mock.calls[0]).toEqual(['/v1/bmc/7/cert/restore', undefined, NO_RETRY]);
+      expect(vi.mocked(mockClient.post).mock.calls[0]).toEqual(['/v1/bmc/7/cert/restore', undefined, RESTORE_OPTIONS]);
       expect(result).toEqual(answer);
+    });
+
+    it('gives the restore a timeout past the 5-minute BMC restart limit', async () => {
+      vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: {} });
+      await service.restoreFactoryCert(7);
+      const options = vi.mocked(mockClient.post).mock.calls[0]?.at(-1) as { timeout?: number };
+      expect(options.timeout).toBeGreaterThan(5 * 60 * 1000);
     });
 
     it('passes a 404 answer through unchanged', async () => {

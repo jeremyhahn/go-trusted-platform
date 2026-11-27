@@ -259,18 +259,21 @@ func TestCreateUser_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	// name, password set, access, then enable for an Enabled user.
-	if len(m.calls) != 4 {
-		t.Fatalf("want 4 calls, got %d", len(m.calls))
+	// probe, name, password set, access, then enable for an Enabled user.
+	if len(m.calls) != 5 {
+		t.Fatalf("want 5 calls, got %d", len(m.calls))
 	}
-	if m.calls[0].cmd != cmdSetUserName {
-		t.Errorf("call[0] = 0x%02x, want SetUserName", m.calls[0].cmd)
+	if m.calls[0].cmd != cmdGetUserName {
+		t.Errorf("call[0] = 0x%02x, want GetUserName", m.calls[0].cmd)
 	}
-	if m.calls[1].cmd != cmdSetUserPassword {
-		t.Errorf("call[1] = 0x%02x, want SetUserPassword", m.calls[1].cmd)
+	if m.calls[1].cmd != cmdSetUserName {
+		t.Errorf("call[1] = 0x%02x, want SetUserName", m.calls[1].cmd)
 	}
-	if m.calls[2].cmd != cmdSetUserAccess {
-		t.Errorf("call[2] = 0x%02x, want SetUserAccess", m.calls[2].cmd)
+	if m.calls[2].cmd != cmdSetUserPassword {
+		t.Errorf("call[2] = 0x%02x, want SetUserPassword", m.calls[2].cmd)
+	}
+	if m.calls[3].cmd != cmdSetUserAccess {
+		t.Errorf("call[3] = 0x%02x, want SetUserAccess", m.calls[3].cmd)
 	}
 	// User management commands live in the App network function.
 	for i, c := range m.calls {
@@ -279,19 +282,19 @@ func TestCreateUser_HappyPath(t *testing.T) {
 		}
 	}
 	// SetUserName payload: byte 0 = slot, bytes 1.. = name
-	if m.calls[0].data[0] != 2 {
-		t.Errorf("name slot = %d, want 2", m.calls[0].data[0])
+	if m.calls[1].data[0] != 2 {
+		t.Errorf("name slot = %d, want 2", m.calls[1].data[0])
 	}
-	if string(m.calls[0].data[1:6]) != "alice" {
-		t.Errorf("name = %q, want alice", m.calls[0].data[1:6])
+	if string(m.calls[1].data[1:6]) != "alice" {
+		t.Errorf("name = %q, want alice", m.calls[1].data[1:6])
 	}
 	// SetUserAccess: flags should include change | ipmi-msg | link-auth, channel=1
 	wantFlags := suaChangeBits | suaIPMIMsgEnable | suaLinkAuthEnable | 0x01
-	if m.calls[2].data[0] != wantFlags {
-		t.Errorf("SUA flags = 0x%02x, want 0x%02x", m.calls[2].data[0], wantFlags)
+	if m.calls[3].data[0] != wantFlags {
+		t.Errorf("SUA flags = 0x%02x, want 0x%02x", m.calls[3].data[0], wantFlags)
 	}
-	if m.calls[2].data[2] != byte(PrivilegeAdministrator) {
-		t.Errorf("priv byte = 0x%02x, want 0x%02x", m.calls[2].data[2], byte(PrivilegeAdministrator))
+	if m.calls[3].data[2] != byte(PrivilegeAdministrator) {
+		t.Errorf("priv byte = 0x%02x, want 0x%02x", m.calls[3].data[2], byte(PrivilegeAdministrator))
 	}
 }
 
@@ -307,11 +310,11 @@ func TestCreateUser_DisabledFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	// 2 calls (no password)
-	if len(m.calls) != 2 {
-		t.Fatalf("want 2 calls, got %d", len(m.calls))
+	// probe, name, access (no password)
+	if len(m.calls) != 3 {
+		t.Fatalf("want 3 calls, got %d", len(m.calls))
 	}
-	flags := m.calls[1].data[0]
+	flags := m.calls[2].data[0]
 	if flags&suaIPMIMsgEnable != 0 || flags&suaLinkAuthEnable != 0 {
 		t.Errorf("disabled user should have IPMI/link-auth bits clear, got 0x%02x", flags)
 	}
@@ -330,8 +333,8 @@ func TestCreateUser_HonorsExplicitChannel(t *testing.T) {
 	}, pwd); err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	// Calls: name, password, access, enable.
-	flags := m.calls[2].data[0]
+	// Calls: probe, name, password, access, enable.
+	flags := m.calls[3].data[0]
 	if flags&0x0F != 0x0E {
 		t.Errorf("channel nibble = 0x%x, want 0x0E", flags&0x0F)
 	}
@@ -386,9 +389,10 @@ func TestCreateUser_NameSendError(t *testing.T) {
 
 func TestCreateUser_PasswordSendError(t *testing.T) {
 	stages := []stage{
+		{netFnApp, cmdGetUserName, 2, nil},
 		{netFnApp, cmdSetUserName, 0, nil},
 	}
-	s := &stagedSender{stages: stages, t: t, errAfter: 1, errVal: errors.New("pwd-fail")}
+	s := &stagedSender{stages: stages, t: t, errAfter: 2, errVal: errors.New("pwd-fail")}
 	um := newUM(s)
 	pwd := memguard.NewMemoryEnclave([]byte("p"))
 	defer pwd.Destroy()
@@ -692,11 +696,11 @@ func TestCreateUser_LostNameResponseRollsBack(t *testing.T) {
 	if !errors.Is(err, s.nameErr) {
 		t.Fatalf("err = %v, want the name error", err)
 	}
-	if len(s.calls) == 0 || s.calls[0].cmd != cmdSetUserName {
-		t.Fatal("first call is not the name write")
+	if len(s.calls) < 2 || s.calls[0].cmd != cmdGetUserName || s.calls[1].cmd != cmdSetUserName {
+		t.Fatal("calls do not start with the probe and the name write")
 	}
 	revoked, cleared := false, false
-	for _, c := range s.calls[1:] {
+	for _, c := range s.calls[2:] {
 		switch c.cmd {
 		case cmdSetUserAccess:
 			if len(c.data) >= 3 && c.data[1]&ipmiMaxUserSlot == 4 &&
@@ -722,6 +726,47 @@ func TestCreateUser_LostNameResponseRollsBack(t *testing.T) {
 	}
 	if !cleared {
 		t.Error("rollback did not clear the slot name")
+	}
+}
+
+// A create aimed at a slot that already holds an account must not touch it,
+// even when the manager is called without Service.CreateUser (the CLI): a
+// rejected name write would otherwise roll the existing account back.
+func TestCreateUser_OccupiedSlotSurvivesRejectedName(t *testing.T) {
+	m := newMock()
+	m.responses[key(netFnApp, cmdGetUserName)] = append([]byte("admin"), make([]byte, 11)...)
+	m.cmdErr = map[byte]error{cmdSetUserName: errors.New("duplicate name")}
+	err := newUM(m).CreateUser(context.Background(), User{
+		Slot: 2, Username: "admin", Privilege: PrivilegeAdministrator, Enabled: false,
+	}, nil)
+	var occ ErrSlotOccupied
+	if !errors.As(err, &occ) || occ.Slot != 2 {
+		t.Fatalf("err = %v, want ErrSlotOccupied{Slot: 2}", err)
+	}
+	for i, c := range m.calls {
+		switch c.cmd {
+		case cmdSetUserName, cmdSetUserAccess, cmdSetUserPassword:
+			t.Errorf("call[%d] = 0x%02x: the occupied account was written", i, c.cmd)
+		}
+	}
+	if len(m.calls) == 0 || m.calls[0].cmd != cmdGetUserName || len(m.calls[0].data) == 0 || m.calls[0].data[0] != 2 {
+		t.Fatal("first call is not the Get User Name probe of slot 2")
+	}
+}
+
+// A failed probe returns its error and writes nothing.
+func TestCreateUser_NameProbeErrorWritesNothing(t *testing.T) {
+	m := newMock()
+	probeErr := errors.New("probe lost")
+	m.cmdErr = map[byte]error{cmdGetUserName: probeErr}
+	err := newUM(m).CreateUser(context.Background(), User{
+		Slot: 3, Username: "admin", Privilege: PrivilegeAdministrator, Enabled: false,
+	}, nil)
+	if !errors.Is(err, probeErr) {
+		t.Fatalf("err = %v, want the probe error", err)
+	}
+	if len(m.calls) != 1 {
+		t.Fatalf("want only the probe, got %d calls", len(m.calls))
 	}
 }
 
