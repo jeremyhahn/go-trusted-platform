@@ -1,4 +1,10 @@
-# ci-template: v1.35.1 + v1.42 hermetic gate + v1.48 runner selection + v1.50 short-list fix + v1.51 reviewed + v1.52 fork check + preflight self-hosted runs-on (#2387) + v1.53 main group, gate and vars mask + v1.53 LAN mask script (customized)
+# ci-template: v1.35.1 + v1.42 hermetic gate + v1.48 runner selection + v1.50 short-list fix + v1.51 reviewed + v1.52 fork check + preflight self-hosted runs-on (#2387) + v1.53 main group, gate and vars mask + v1.53 LAN mask script + v1.60 runner-selection events (customized)
+#
+# v1.60 runner-selection events: preflight and the runner selection go
+# self-hosted only on a push to refs/heads/main or a pull request from this
+# repository; every other event (schedule, workflow_dispatch, a push to any
+# other ref, a fork pull request) takes the GitHub-hosted default. The v1.60
+# tie rule is not taken here.
 #
 # v1.42 hermetic gate only (owner ruling 742 (1), Tenant Agent rulings 754 and
 # 794): the CI Gate's outcome depends only on the tree under test. `make
@@ -387,7 +393,7 @@ jobs:
   # OBJSTORE_SEAMS is empty and any import fails.
   preflight:
     name: Preflight [changed files, schedule guard, architecture gates]
-    runs-on: ${{ github.server_url == 'https://github.com' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON(vars.CI_PREFLIGHT_RUNS_ON || '["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.server_url == 'https://github.com' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON(vars.CI_PREFLIGHT_RUNS_ON || '["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}   # v1.60
     # v1.26: a draft PR runs no CI; every job that needs this one skips with it.
     if: ${{ !github.event.pull_request.draft }}
     timeout-minutes: 10       # v1.34: the three jobs had 5 each
@@ -491,14 +497,6 @@ jobs:
               fi ;;
             *)
               hosted_only "the '$EVENT' event is neither a push to refs/heads/main nor a pull request from this repository" ;;
-          esac
-          # The self-hosted runners refuse every event but a push to main and a pull request.
-          case "$EVENT:$REF" in
-            push:refs/heads/main | pull_request:*) ;;
-            *)
-              echo "::notice::runner selection: event $EVENT on $REF is not a push to main or a pull request, which the self-hosted runners refuse; every job of this run takes the GitHub-hosted default, ubuntu-latest"
-              emit "$HOSTED" "$HOSTED"
-              exit 0 ;;
           esac
           case "$LIMIT:$GRACE" in
             *[!0-9:]*|:*|*:) hosted "HOSTED_JOBS_PER_REPO='$LIMIT' or HOSTED_QUEUE_GRACE_SECONDS='$GRACE' is not a whole number" ;;
