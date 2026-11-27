@@ -6,6 +6,7 @@ package vpn
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -470,4 +471,73 @@ func TestRestore_AReplacementHostGetsAPendingRenewalsPeerReplayed(t *testing.T) 
 	assert.Equal(t, 1, managed2.count(), "the retry moved the replayed peer's deadline")
 	require.NoError(t, host2.ExpirePeers(ctx, renewed.ExpiresAt))
 	assert.Equal(t, 0, managed2.count())
+}
+
+// markerClearFailStore fails only the write that clears a renewal's
+// recovery marker (a lease with a zero ClientExpiresAt); the renewal's
+// first write, which stores the marker, succeeds.
+type markerClearFailStore struct {
+	LeaseStore
+	fail atomic.Bool
+}
+
+func (s *markerClearFailStore) Put(ctx context.Context, lease *Lease) error {
+	if s.fail.Load() && lease.ClientExpiresAt.IsZero() {
+		return errors.New("disk full")
+	}
+	return s.LeaseStore.Put(ctx, lease)
+}
+
+// A renewal whose marker clear could not be stored is refused, so the
+// client keeps its older deadline and retries; after the retry clears the
+// marker, a restart of both the datapath (an empty replacement host) and
+// the vpn service past the original deadline replays the lease instead of
+// deleting it.
+func TestRenew_AFailedMarkerClearRefusesTheRenewalAndKeepsTheLeaseAcrossARestart(t *testing.T) {
+	ctx := context.Background()
+	managed := newManagedFakePlane(DataPlaneMASQUE, new([]string))
+	host := hostOf(t, managed)
+	peers := &renewFailingPeers{hostPeers: &hostPeers{host: host}}
+	dp, err := NewDatapathPlane(DataPlaneMASQUE, peers)
+	require.NoError(t, err)
+	var deps Deps
+	var store *markerClearFailStore
+	h := newHarnessWith(t, testConfig(), func(d *Deps) {
+		d.DataPlanes[DataPlaneMASQUE] = dp
+		store = &markerClearFailStore{LeaseStore: d.Leases}
+		d.Leases = store
+		deps = *d
+	})
+	host.now = h.clock.Now
+
+	lease, err := h.svc.Admit(ctx, h.request(t))
+	require.NoError(t, err)
+	h.intoRenewWindow()
+	store.fail.Store(true)
+	_, err = h.svc.Renew(ctx, lease.ID, renewalEvidence(t, h))
+	var unavailable *ErrLeaseStoreUnavailable
+	require.ErrorAs(t, err, &unavailable, "a renewal whose recovery marker could not be cleared is not reported as done")
+	stored, err := store.Get(ctx, lease.ID)
+	require.NoError(t, err)
+	require.True(t, stored.ClientExpiresAt.Equal(lease.ExpiresAt), "the marker still names the deadline the client holds")
+
+	store.fail.Store(false)
+	renewed, err := h.svc.Renew(ctx, lease.ID, renewalEvidence(t, h))
+	require.NoError(t, err, "the client's retry keeps the renew bypass")
+	stored, err = store.Get(ctx, lease.ID)
+	require.NoError(t, err)
+	require.True(t, stored.ClientExpiresAt.IsZero())
+
+	managed2 := newManagedFakePlane(DataPlaneMASQUE, new([]string))
+	host2 := hostOf(t, managed2)
+	host2.now = h.clock.Now
+	peers.host = host2
+	h.clock.Advance(DefaultRenewWindow)
+	require.True(t, h.clock.Now().After(lease.ExpiresAt))
+	require.True(t, h.clock.Now().Before(renewed.ExpiresAt))
+
+	require.NoError(t, restartWith(t, h, deps), "a confirmed renewal is restored past the original deadline")
+	assert.Equal(t, 1, managed2.count(), "the replacement host gets the peer replayed")
+	_, err = h.svc.Lease(ctx, lease.ID)
+	require.NoError(t, err)
 }
