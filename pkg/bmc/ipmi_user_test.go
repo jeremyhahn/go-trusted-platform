@@ -664,6 +664,67 @@ func TestCreateUser_RollbackErrorsAreReturned(t *testing.T) {
 	}
 }
 
+// lostNameSender applies every write but loses the response to the first
+// (non-zero) Set User Name, as a BMC whose UDP reply is dropped does.
+type lostNameSender struct {
+	calls   []mockCall
+	nameErr error
+}
+
+func (s *lostNameSender) Send(netFn, cmd byte, data []byte) ([]byte, error) {
+	cp := append([]byte(nil), data...)
+	s.calls = append(s.calls, mockCall{netFn: netFn, cmd: cmd, data: cp})
+	if cmd == cmdSetUserName && len(data) >= 2 {
+		for _, b := range data[1:] {
+			if b != 0 {
+				return nil, s.nameErr
+			}
+		}
+	}
+	return nil, nil
+}
+
+func TestCreateUser_LostNameResponseRollsBack(t *testing.T) {
+	s := &lostNameSender{nameErr: errors.New("name response lost")}
+	um := newUM(s)
+	u := User{Slot: 4, Username: "eve", Privilege: PrivilegeAdministrator, Enabled: false}
+	err := um.CreateUser(context.Background(), u, nil)
+	if !errors.Is(err, s.nameErr) {
+		t.Fatalf("err = %v, want the name error", err)
+	}
+	if len(s.calls) == 0 || s.calls[0].cmd != cmdSetUserName {
+		t.Fatal("first call is not the name write")
+	}
+	revoked, cleared := false, false
+	for _, c := range s.calls[1:] {
+		switch c.cmd {
+		case cmdSetUserAccess:
+			if len(c.data) >= 3 && c.data[1]&ipmiMaxUserSlot == 4 &&
+				c.data[0]&(suaIPMIMsgEnable|suaLinkAuthEnable) == 0 &&
+				c.data[0]&0x0F == defaultIPMIChannel &&
+				Privilege(c.data[2]&guaPrivilegeMask) == PrivilegeNoAccess {
+				revoked = true
+			}
+		case cmdSetUserName:
+			if len(c.data) >= 2 && c.data[0] == 4 {
+				allZero := true
+				for _, b := range c.data[1:] {
+					if b != 0 {
+						allZero = false
+					}
+				}
+				cleared = cleared || allZero
+			}
+		}
+	}
+	if !revoked {
+		t.Error("rollback did not revoke channel access (NoAccess, enable bits clear)")
+	}
+	if !cleared {
+		t.Error("rollback did not clear the slot name")
+	}
+}
+
 // --- SetUserPassword ---
 
 func TestSetUserPassword(t *testing.T) {
