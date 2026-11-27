@@ -15,6 +15,7 @@ package switchmgmt
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -89,9 +90,9 @@ collect:
 	}
 }
 
-// TestSSHManager_CloseThenUseRedials pins that Close drops the connection
-// and a later call dials a new one.
-func TestSSHManager_CloseThenUseRedials(t *testing.T) {
+// TestSSHManager_CloseThenUseIsRejected pins that Close drops the connection
+// and is final: a later call returns errSSHConnectionClosed without dialing.
+func TestSSHManager_CloseThenUseIsRejected(t *testing.T) {
 	var dials atomic.Int32
 	var first *mockSSHExecutor
 	dial := func(context.Context, *Config) (SSHExecutor, error) {
@@ -114,10 +115,10 @@ func TestSSHManager_CloseThenUseRedials(t *testing.T) {
 	if first == nil || !first.closed {
 		t.Fatal("Close did not close the first connection")
 	}
-	if _, err := mgr.GetPortVLAN(ctx, "Eth1/3"); err != nil {
-		t.Fatalf("GetPortVLAN after Close: %v", err)
+	if _, err := mgr.GetPortVLAN(ctx, "Eth1/3"); !errors.Is(err, errSSHConnectionClosed) {
+		t.Fatalf("GetPortVLAN after Close = %v, want errSSHConnectionClosed", err)
 	}
-	if got := dials.Load(); got != 2 {
-		t.Fatalf("dials = %d, want 2 (Close then use redials)", got)
+	if got := dials.Load(); got != 1 {
+		t.Fatalf("dials = %d, want 1 (a closed manager never redials)", got)
 	}
 }
