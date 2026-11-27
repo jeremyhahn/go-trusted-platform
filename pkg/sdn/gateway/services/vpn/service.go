@@ -363,18 +363,25 @@ func (s *Service) bypassRenewal(id LeaseID) {
 }
 
 // confirmClientDeadline drops the stored refused-renewal mark once the
-// client holds the lease's stored deadline. A failed write is logged: a
-// restart then lets the client renew outside the window once more.
-func (s *Service) confirmClientDeadline(ctx context.Context, lease *Lease) {
-	s.clearRenewBypass(lease.ID)
+// client holds the lease's stored deadline. A failed write is returned,
+// keeps the mark and grants the renew bypass, so the client's retry is not
+// held to the window of the newer stored deadline: Restore reads a stored mark as an
+// unresolved renewal and may drop the lease after the client's older
+// deadline, so the renewal must not be reported as done.
+func (s *Service) confirmClientDeadline(ctx context.Context, lease *Lease) error {
 	if lease.ClientExpiresAt.IsZero() {
-		return
+		s.clearRenewBypass(lease.ID)
+		return nil
 	}
+	held := lease.ClientExpiresAt
 	lease.ClientExpiresAt = time.Time{}
 	if err := s.deps.Leases.Put(ctx, lease); err != nil {
-		s.logger.Warn("vpn.renew: clearing the client's refused deadline failed",
-			slog.String("lease", string(lease.ID)), slog.Any("error", err))
+		lease.ClientExpiresAt = held
+		s.bypassRenewal(lease.ID)
+		return err
 	}
+	s.clearRenewBypass(lease.ID)
+	return nil
 }
 
 // extensionOwed reports whether lease id waits on a deadline extension.

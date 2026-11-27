@@ -175,7 +175,9 @@ func (s *Service) Admit(ctx context.Context, req *AdmissionRequest) (*Lease, err
 // Renew extends a lease inside its renew window on fresh evidence:
 // attestation and posture always, the person factor when the policy asks
 // for it on renewal. A failed renewal revokes the lease; a renewal after
-// expiry is ErrLeaseExpired.
+// expiry is ErrLeaseExpired. A renewal whose recovery marker cannot be
+// cleared is ErrLeaseStoreUnavailable and may be retried outside the renew
+// window.
 func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, error) {
 	if !s.Active() {
 		return nil, &ErrNotStarted{}
@@ -256,7 +258,9 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 	// the new deadline, so a failed or cancelled extension, or a crash
 	// before the next write, still leaves Restore its recovery marker. An
 	// earlier refusal's marker stays: it is the older deadline the client
-	// holds. confirmClientDeadline clears it once the host is extended.
+	// holds. confirmClientDeadline clears it once the host is extended, and
+	// a renewal whose clear cannot be stored is refused, so the client keeps
+	// the deadline the marker names.
 	if lease.ClientExpiresAt.IsZero() {
 		lease.ClientExpiresAt = held
 	}
@@ -276,7 +280,11 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 		}
 	}
 	s.clearExtension(lease.ID)
-	s.confirmClientDeadline(ctx, lease)
+	if err := s.confirmClientDeadline(ctx, lease); err != nil {
+		s.logger.Warn("vpn.renew: clearing the client's refused deadline failed; renewal refused",
+			slog.String("lease", string(lease.ID)), slog.Any("error", err))
+		return nil, s.refuse(ctx, lease.DeviceID, &ErrLeaseStoreUnavailable{Cause: err})
+	}
 	s.logger.Info("vpn.renew", slog.String("lease", string(lease.ID)), slog.Int("renewals", lease.Renewals), slog.Time("expires_at", lease.ExpiresAt))
 	cp := *lease
 	return &cp, nil
