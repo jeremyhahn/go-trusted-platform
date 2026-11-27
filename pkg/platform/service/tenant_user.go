@@ -16,6 +16,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -274,6 +275,18 @@ func iamMirrorRoles(user *entities.User) []string {
 	return nil
 }
 
+// invitedMirrorRoles is the IAM role set of an invited user: the ownership
+// role iamMirrorRoles derives, plus the role the validated invitation grants,
+// so an ordinary invitation for a listed IAM role does not create a roleless
+// IAM user (#2362).
+func invitedMirrorRoles(user *entities.User, invitationRole string) []string {
+	roles := iamMirrorRoles(user)
+	if invitationRole != "" && !slices.Contains(roles, invitationRole) {
+		roles = append(roles, invitationRole)
+	}
+	return roles
+}
+
 // DefaultTenantOwnerRole is the role granted automatically to the
 // first user in a freshly-created tenant. "admin" matches the role
 // name the IAM authorization middleware checks for full-tenant
@@ -395,12 +408,14 @@ func (s *TenantUserService) RegisterInvitedUser(
 	}
 
 	// Mirror the invited user into the QuicBaaS IAM tenant, as
-	// RegisterNewUser does for a self-registered owner: an invited owner
-	// the IAM surface cannot see is not registered (#2362). A mirror
-	// failure deletes the saved user and leaves the invitation pending so
-	// the link can be redeemed again.
+	// RegisterNewUser does for a self-registered owner: an invited user
+	// the IAM surface cannot see is not registered (#2362). The IAM roles
+	// are the invitation's role, plus the owner role for an owner
+	// invitation, so an ordinary invitee keeps the access it was invited
+	// with. A mirror failure deletes the saved user and leaves the
+	// invitation pending so the link can be redeemed again.
 	if s.iamMirror != nil {
-		if err := s.iamMirror.MirrorUser(ctx, invitation.TenantID, user.Email, user.DisplayName, iamMirrorRoles(user)); err != nil {
+		if err := s.iamMirror.MirrorUser(ctx, invitation.TenantID, user.Email, user.DisplayName, invitedMirrorRoles(user, invitation.Role)); err != nil {
 			s.logger.Error(err, "failed to mirror invited user into IAM tenant, rolling back registration",
 				"user_id", user.ID,
 				"email", user.Email,

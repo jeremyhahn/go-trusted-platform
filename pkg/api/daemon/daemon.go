@@ -1480,10 +1480,13 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			if inv, ok := svc.(initialAdminInviter); ok &&
 				daemon.tenantService != nil && daemon.tenantService.grpcServer != nil {
 				daemon.tenantService.grpcServer.SetInitialAdminInviter(inv)
-				// A session or certificate subject is a login email; the
-				// user service resolves it to the inviter's IAM user id.
-				if users := reg.UserService(); users != nil {
-					daemon.tenantService.grpcServer.SetInviterResolver(users)
+				// A session or certificate subject is a login email that
+				// IAM resolves to the inviter's user id: the platform-local
+				// user store has no record of the unclaimed /init admin or
+				// of an IAM-only system administrator (#2362).
+				if iamService != nil {
+					daemon.tenantService.grpcServer.SetInviterResolver(
+						newIAMInviterResolver(restiam.NewQuicBaaSIAMAdapter(iamService.Client()), config.PlatformTenantID))
 				}
 			}
 		}

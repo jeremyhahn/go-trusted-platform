@@ -337,9 +337,9 @@ func (s *TenantGRPCServer) CreateInitialAdminInvitation(
 
 // resolveInviterID returns the canonical IAM user id of the verified
 // caller. A decimal subject is already that id; a login name or
-// certificate email is looked up through the wired resolver. The caller
-// is refused FailedPrecondition when no resolver is wired or no stored
-// user matches.
+// certificate email is looked up through the wired IAM-backed resolver.
+// The caller is refused FailedPrecondition when no resolver is wired, no
+// IAM user matches, or the IAM user's id is not a positive decimal.
 func (s *TenantGRPCServer) resolveInviterID(ctx context.Context) (uint64, error) {
 	if id, ok := callerUserID(ctx); ok {
 		return id, nil
@@ -353,6 +353,10 @@ func (s *TenantGRPCServer) resolveInviterID(ctx context.Context) (uint64, error)
 			var notFound platformservice.ErrUserNotFound
 			if errors.As(err, &notFound) {
 				continue
+			}
+			var unusable ErrInviterIDNotUsable
+			if errors.As(err, &unusable) {
+				return 0, status.Error(codes.FailedPrecondition, unusable.Error())
 			}
 			s.logger.Error("failed to resolve the inviter", "error", err)
 			return 0, status.Error(codes.Internal, "failed to resolve the inviter")
