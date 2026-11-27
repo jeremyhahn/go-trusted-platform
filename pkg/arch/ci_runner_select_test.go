@@ -212,16 +212,6 @@ type selEnv struct {
 	private bool
 }
 
-// selMain is the ref of a push to main.
-const selMain = "refs/heads/main"
-
-// selMayOverflow reports whether e is an event the step lets reach the API
-// count (DS-10475): a push to main, or a pull request (the fork check then
-// decides).
-func selMayOverflow(e selEnv) bool {
-	return (e.event == "push" && e.ref == selMain) || e.event == "pull_request"
-}
-
 // runSel runs script with the fixture replies and env and returns its result.
 func runSel(t *testing.T, script string, replies map[string]selReply, e selEnv) selResult {
 	t.Helper()
