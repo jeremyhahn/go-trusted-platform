@@ -1321,6 +1321,19 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 			// is refused before the conflict check and before any install.
 			return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 		}
+		// Two rules on one entry install one switch flow while the record
+		// keeps both cookies, so a delete could miss it: refuse them.
+		if first, dup, ok := duplicatePolicyFlow(flows); ok {
+			return nil, status.Errorf(codes.InvalidArgument,
+				"rules %q and %q share bridge %s table %d priority %d and match %q",
+				first.ruleID, dup.ruleID, dup.bridge, dup.mod.Table, dup.mod.Priority, dup.mod.Match)
+		}
+		// The cookie carries a truncated hash of the policy ID: two IDs
+		// with one hash would share flow IDs and stats, so refuse it.
+		if owner, ok := policyCookieCollision(policyID, others); ok {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"policy %q flow cookies collide with those of policy %q; apply it under another ID", policyID, owner)
+		}
 		if owner, flow, ok := s.conflictingPolicyFlow(flows, others); ok {
 			return nil, status.Errorf(codes.FailedPrecondition,
 				"policy %q already installs a flow on bridge %s with priority %d and match %q",
@@ -1702,6 +1715,34 @@ func samePolicyCookie(a, b string) bool {
 	}
 	const ownerMask = uint64(0xFFFF) << 48
 	return ca&ownerMask == policyFlowCookieOwner && ca>>16 == cb>>16
+}
+
+// policyCookieCollision returns the ID of the first of others whose flow
+// cookies carry the same truncated policy hash as policyID: their flows
+// would be indistinguishable on the switch (one flow ID, one stats entry).
+func policyCookieCollision(policyID string, others []policyResource) (string, bool) {
+	mine := policyFlowCookie(policyID, 0) >> 16
+	for _, other := range others {
+		if other.id != policyID && policyFlowCookie(other.id, 0)>>16 == mine {
+			return other.id, true
+		}
+	}
+	return "", false
+}
+
+// duplicatePolicyFlow returns two flows of one policy that occupy the same
+// OpenFlow entry: the switch keeps only the later, so a strict delete with
+// the earlier rule's cookie would miss it.
+func duplicatePolicyFlow(flows []policyFlow) (policyFlow, policyFlow, bool) {
+	seen := make(map[policyFlowKey]policyFlow, len(flows))
+	for _, flow := range flows {
+		key := flowKey(flow)
+		if first, ok := seen[key]; ok {
+			return first, flow, true
+		}
+		seen[key] = flow
+	}
+	return policyFlow{}, policyFlow{}, false
 }
 
 // policyFlows lists the flows the rules install on each bridge, bridge by
