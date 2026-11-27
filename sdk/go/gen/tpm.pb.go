@@ -2195,10 +2195,12 @@ func (x *GetAKRequest) GetHandle() uint32 {
 }
 
 type GetAKResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PublicKey     []byte                 `protobuf:"bytes,1,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
-	Handle        uint32                 `protobuf:"varint,2,opt,name=handle,proto3" json:"handle,omitempty"`
-	Algorithm     KeyAlgorithm           `protobuf:"varint,3,opt,name=algorithm,proto3,enum=platform.v1.KeyAlgorithm" json:"algorithm,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	PublicKey []byte                 `protobuf:"bytes,1,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
+	Handle    uint32                 `protobuf:"varint,2,opt,name=handle,proto3" json:"handle,omitempty"`
+	Algorithm KeyAlgorithm           `protobuf:"varint,3,opt,name=algorithm,proto3,enum=platform.v1.KeyAlgorithm" json:"algorithm,omitempty"`
+	// The AK's TPM name (nameAlg digest of its public area), as TPM2B_NAME bytes (#2069).
+	Name          []byte `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2252,6 +2254,13 @@ func (x *GetAKResponse) GetAlgorithm() KeyAlgorithm {
 		return x.Algorithm
 	}
 	return KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED
+}
+
+func (x *GetAKResponse) GetName() []byte {
+	if x != nil {
+		return x.Name
+	}
+	return nil
 }
 
 type DeleteAKRequest struct {
@@ -4614,12 +4623,13 @@ const file_tpm_proto_rawDesc = "" +
 	"\x0fcredential_blob\x18\x04 \x01(\fR\x0ecredentialBlob\"_\n" +
 	"\fGetAKRequest\x127\n" +
 	"\talgorithm\x18\x01 \x01(\x0e2\x19.platform.v1.KeyAlgorithmR\talgorithm\x12\x16\n" +
-	"\x06handle\x18\x02 \x01(\rR\x06handle\"\x7f\n" +
+	"\x06handle\x18\x02 \x01(\rR\x06handle\"\x93\x01\n" +
 	"\rGetAKResponse\x12\x1d\n" +
 	"\n" +
 	"public_key\x18\x01 \x01(\fR\tpublicKey\x12\x16\n" +
 	"\x06handle\x18\x02 \x01(\rR\x06handle\x127\n" +
-	"\talgorithm\x18\x03 \x01(\x0e2\x19.platform.v1.KeyAlgorithmR\talgorithm\"~\n" +
+	"\talgorithm\x18\x03 \x01(\x0e2\x19.platform.v1.KeyAlgorithmR\talgorithm\x12\x12\n" +
+	"\x04name\x18\x04 \x01(\fR\x04name\"~\n" +
 	"\x0fDeleteAKRequest\x12\x16\n" +
 	"\x06handle\x18\x01 \x01(\rR\x06handle\x127\n" +
 	"\talgorithm\x18\x02 \x01(\x0e2\x19.platform.v1.KeyAlgorithmR\talgorithm\x12\x1a\n" +
