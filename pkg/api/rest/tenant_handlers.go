@@ -152,6 +152,9 @@ type RotateDEKRequest struct {
 type InitTenantBarrierRequest struct {
 	Threshold int `json:"threshold,omitempty"`
 	Shares    int `json:"shares,omitempty"`
+	// Passphrase is the operator-supplied barrier passphrase. Required;
+	// passed straight to the barrier, never stored or defaulted.
+	Passphrase string `json:"passphrase,omitempty"`
 }
 
 // UnsealTenantBarrierRequest represents a request to unseal a per-tenant
@@ -362,7 +365,7 @@ type TenantManagerInterface interface {
 	// GetTenantDEKStatus returns the status of a tenant's DEK.
 	GetTenantDEKStatus(ctx context.Context, tenantID string) (*tenant.DEKStatus, error)
 	// InitTenantBarrier explicitly initializes a per-tenant barrier.
-	InitTenantBarrier(ctx context.Context, tenantID string) error
+	InitTenantBarrier(ctx context.Context, tenantID string, passphrase []byte) error
 	// UnsealTenantBarrier unseals a per-tenant barrier with the supplied key.
 	UnsealTenantBarrier(ctx context.Context, tenantID string, key []byte) error
 	// SealTenantBarrier seals a per-tenant barrier.
@@ -1186,21 +1189,23 @@ func (h *TenantHandlers) handleInitTenantBarrier(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Body is optional — accept and ignore decode errors when the body is empty.
+	// The body carries the operator's barrier passphrase, which is required,
+	// passed straight to the barrier and never stored or defaulted.
+	// Threshold/shares are accepted for forward compatibility with the SDK's
+	// TenantBarrierInitRequest.
+	var req InitTenantBarrierRequest
 	if r.Body != nil && r.ContentLength != 0 {
-		var req InitTenantBarrierRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
 			return
 		}
-		// Threshold/shares are accepted for forward compatibility with the
-		// SDK's TenantBarrierInitRequest; the platform Manager currently
-		// performs deterministic init regardless of the values supplied. The
-		// gRPC server exhibits the same behaviour.
-		_ = req
+	}
+	if req.Passphrase == "" {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: "passphrase is required"})
+		return
 	}
 
-	if err := h.manager.InitTenantBarrier(ctx, tenantID); err != nil {
+	if err := h.manager.InitTenantBarrier(ctx, tenantID, []byte(req.Passphrase)); err != nil {
 		h.logger.Error("Failed to init tenant barrier", "error", err, "tenant_id", tenantID)
 		h.writeTenantError(w, "init_tenant_barrier", err)
 		return

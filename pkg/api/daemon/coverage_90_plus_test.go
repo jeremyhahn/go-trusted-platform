@@ -627,7 +627,7 @@ func (m *mockTenantManager90) GetDEKStatus(ctx context.Context, id string) (*ten
 	return &tenant.DEKStatus{}, nil
 }
 
-func (m *mockTenantManager90) InitTenantBarrier(ctx context.Context, id string) error {
+func (m *mockTenantManager90) InitTenantBarrier(ctx context.Context, id string, _ []byte) error {
 	return m.err
 }
 

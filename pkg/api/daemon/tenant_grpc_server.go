@@ -751,8 +751,12 @@ func (s *TenantGRPCServer) InitTenantBarrier(
 		shamir := ErrTenantBarrierShamirUnsupported{Threshold: req.GetThreshold(), Shares: req.GetShares()}
 		return nil, status.Error(codes.InvalidArgument, shamir.Error())
 	}
+	// The passphrase is operator supplied, never stored or defaulted.
+	if req.GetPassphrase() == "" {
+		return nil, status.Error(codes.InvalidArgument, "passphrase is required")
+	}
 
-	if err := s.manager.InitTenantBarrier(ctx, req.GetTenantId()); err != nil {
+	if err := s.manager.InitTenantBarrier(ctx, req.GetTenantId(), []byte(req.GetPassphrase())); err != nil {
 		s.logger.Error("failed to init tenant barrier", "tenant_id", req.GetTenantId(), "error", err)
 		return nil, s.toGRPCError(err)
 	}

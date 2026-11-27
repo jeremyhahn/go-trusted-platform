@@ -365,9 +365,13 @@ func (m *Manager) CreateTenant(ctx context.Context, req *CreateTenantRequest) (*
 		})
 	}
 
-	// Step 4: Initialize per-tenant barrier (non-fatal on failure)
+	// Step 4: Initialize per-tenant barrier (non-fatal on failure). No
+	// passphrase exists at creation (it comes from the operator in
+	// Initialize and is never defaulted), so the barrier refuses this
+	// attempt and the tenant stays uninitialized until the operator
+	// initializes it.
 	if m.tenantBarrierClient != nil {
-		if barrierErr := m.initTenantBarrierInternal(ctx, tenantID); barrierErr != nil {
+		if barrierErr := m.initTenantBarrierInternal(ctx, tenantID, nil); barrierErr != nil {
 			m.logger.Warn("failed to initialize per-tenant barrier during creation; barrier can be initialized later",
 				slog.String("tenant_id", tenantID),
 				slog.Any("error", barrierErr),
@@ -1006,9 +1010,17 @@ func (m *Manager) GetTenantDEKStatus(ctx context.Context, tenantID string) (*DEK
 // InitTenantBarrier explicitly initializes the per-tenant barrier for the
 // given tenant. This is useful when the automatic initialization during
 // CreateTenant was skipped or failed.
-func (m *Manager) InitTenantBarrier(ctx context.Context, tenantID string) error {
+//
+// The passphrase is supplied by the operator in the Initialize request. It is
+// passed straight to the barrier and never stored, logged or defaulted; an
+// empty one is refused with ErrInvalidRequest before the barrier is called
+// (go-qrdb refuses it with ErrEmptyPassphrase too).
+func (m *Manager) InitTenantBarrier(ctx context.Context, tenantID string, passphrase []byte) error {
 	if tenantID == "" {
 		return ErrInvalidRequest{Reason: "tenant ID is required"}
+	}
+	if len(passphrase) == 0 {
+		return ErrInvalidRequest{Reason: "barrier passphrase is required"}
 	}
 
 	if m.tenantBarrierClient == nil {
@@ -1020,7 +1032,7 @@ func (m *Manager) InitTenantBarrier(ctx context.Context, tenantID string) error 
 		return err
 	}
 
-	return m.initTenantBarrierInternal(ctx, tenantID)
+	return m.initTenantBarrierInternal(ctx, tenantID, passphrase)
 }
 
 // UnsealTenantBarrier explicitly unseals a per-tenant barrier using the
@@ -1370,10 +1382,12 @@ func (m *Manager) deleteTenantDEK(ctx context.Context, tenantID string) error {
 // Per-tenant barrier internal methods
 // ---------------------------------------------------------------------------
 
-// initTenantBarrierInternal calls the SDK to initialize the per-tenant barrier.
-func (m *Manager) initTenantBarrierInternal(ctx context.Context, tenantID string) error {
+// initTenantBarrierInternal calls the SDK to initialize the per-tenant barrier
+// with the operator's passphrase. The passphrase is never stored or logged.
+func (m *Manager) initTenantBarrierInternal(ctx context.Context, tenantID string, passphrase []byte) error {
 	req := &quicbaassdk.QRDBTenantBarrierInitRequest{
-		TenantID: tenantID,
+		TenantID:   tenantID,
+		Passphrase: passphrase,
 	}
 
 	if err := m.tenantBarrierClient.TenantBarrierInit(ctx, req); err != nil {

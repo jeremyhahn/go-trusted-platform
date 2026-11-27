@@ -48,7 +48,7 @@ func TestTenantBarrierAPIRest_Lifecycle(t *testing.T) {
 	assert.True(t, st.Sealed, "an uninitialized barrier reports sealed")
 	assert.False(t, st.Initialized)
 
-	resp := barrierAction(t, router, "tenant-123", "init", InitTenantBarrierRequest{Threshold: 2, Shares: 3})
+	resp := barrierAction(t, router, "tenant-123", "init", InitTenantBarrierRequest{Threshold: 2, Shares: 3, Passphrase: "operator-pass"})
 	assert.Equal(t, TenantBarrierActionResponse{
 		TenantID: "tenant-123", Success: true, Message: "tenant barrier initialized", Timestamp: resp.Timestamp,
 	}, resp)
@@ -75,9 +75,13 @@ func TestTenantBarrierAPIRest_InitWithoutBody(t *testing.T) {
 	mgr.addTenant(createTestTenantEntity("tenant-123", "test-tenant"))
 	router := newBarrierTestRouter(mgr)
 
-	resp := barrierAction(t, router, "tenant-123", "init", nil)
-	assert.True(t, resp.Success)
-	assert.True(t, mgr.barrierStates["tenant-123"].Initialized)
+	// The barrier passphrase is operator supplied and never defaulted, so an
+	// init with no body (no passphrase) is refused before the manager.
+	for _, body := range []interface{}{nil, InitTenantBarrierRequest{}} {
+		rr := executeTenantRequest(router, http.MethodPost, "/api/v1/tenants/tenant-123/barrier/init", body)
+		require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+	}
+	assert.False(t, mgr.barrierStates["tenant-123"] != nil && mgr.barrierStates["tenant-123"].Initialized)
 }
 
 func TestTenantBarrierAPIRest_ManagerErrors(t *testing.T) {
@@ -111,7 +115,11 @@ func TestTenantBarrierAPIRest_ManagerErrors(t *testing.T) {
 				op.setErr(mgr, ec.err)
 				router := newBarrierTestRouter(mgr)
 
-				rr := executeTenantRequest(router, op.method, "/api/v1/tenants/tenant-123/barrier/"+op.name, nil)
+				var body interface{}
+				if op.name == "init" {
+					body = InitTenantBarrierRequest{Passphrase: "operator-pass"}
+				}
+				rr := executeTenantRequest(router, op.method, "/api/v1/tenants/tenant-123/barrier/"+op.name, body)
 
 				require.Equal(t, ec.wantStatus, rr.Code, rr.Body.String())
 				var errResp ErrorResponse

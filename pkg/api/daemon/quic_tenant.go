@@ -126,7 +126,7 @@ type TenantManagerInterface interface {
 	GetDEKStatus(ctx context.Context, tenantID string) (*tenant.DEKStatus, error)
 
 	// Per-tenant barrier operations
-	InitTenantBarrier(ctx context.Context, tenantID string) error
+	InitTenantBarrier(ctx context.Context, tenantID string, passphrase []byte) error
 	UnsealTenantBarrier(ctx context.Context, tenantID string, key []byte) error
 	SealTenantBarrier(ctx context.Context, tenantID string) error
 	TenantBarrierStatus(ctx context.Context, tenantID string) (*tenant.TenantBarrierState, error)
