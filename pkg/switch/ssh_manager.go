@@ -46,10 +46,13 @@ type sshManager struct {
 	semOnce sync.Once
 	sem     chan struct{}
 
-	// connMu guards executor, closeGen and dialCancel so Close can take and
-	// close the live connection, and stop a dial in flight, while an
-	// operation holds sem.
-	connMu   sync.Mutex
+	// connMu guards closed, executor, closeGen and dialCancel so Close can
+	// turn off admission, take and close the live connection, and stop a
+	// dial in flight, while an operation holds sem.
+	connMu sync.Mutex
+	// closed is set by Close and never cleared: once it is set every
+	// operation returns errSSHConnectionClosed without dialing.
+	closed   bool
 	executor SSHExecutor
 	// closeGen counts Close calls. A dial publishes its connection only
 	// when closeGen is unchanged since it started; otherwise it closes the
@@ -332,8 +335,15 @@ func (m *sshManager) runConfig(ctx context.Context, logMsg string, commands []st
 	return nil
 }
 
+// Close is final: it turns off operation admission, closes the live
+// connection and stops a dial in flight. Operations queued on the slot and
+// every later call return errSSHConnectionClosed without dialing. A second
+// Close returns nil.
 func (m *sshManager) Close() error {
 	m.connMu.Lock()
+	// Turning off admission first makes operations queued on the slot, and
+	// every later call, fail without dialing.
+	m.closed = true
 	// Bumping the generation makes a dial in flight close the connection
 	// it would publish; canceling its context makes a stalled dial return.
 	m.closeGen++
@@ -391,13 +401,18 @@ func (m *sshManager) execute(ctx context.Context, cmd string) (string, error) {
 
 // ensureConnected dials the SSH connection on first use. The caller holds
 // the context-aware one-slot semaphore, so concurrent first calls queue,
-// dial once and share the connection. A
-// connection whose command failed is dropped (see execute), and the next
-// call dials again; a failed mutation is never replayed.
+// dial once and share the connection. A connection whose command failed is
+// dropped (see execute), and the next call dials again; a failed mutation is
+// never replayed. After Close it returns errSSHConnectionClosed and never
+// redials.
 func (m *sshManager) ensureConnected(ctx context.Context) error {
 	dialCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	m.connMu.Lock()
+	if m.closed {
+		m.connMu.Unlock()
+		return errSSHConnectionClosed
+	}
 	if m.executor != nil {
 		m.connMu.Unlock()
 		return nil
