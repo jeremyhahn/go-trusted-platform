@@ -90,6 +90,59 @@ func TestLoadPrivateKeyPEM_Errors(t *testing.T) {
 	})
 }
 
+// TestParsePrivateKeyPEM_WipesTheBuffer pins that parsing a PEM private key
+// zeroes the read buffer it was handed, on success and on error.
+func TestParsePrivateKeyPEM_WipesTheBuffer(t *testing.T) {
+	requireZeroed := func(t *testing.T, data []byte) {
+		t.Helper()
+		require.Equal(t, make([]byte, len(data)), data, "the read buffer must be zeroed after parsing")
+	}
+
+	t.Run("PKCS#8 key", func(t *testing.T) {
+		keyPath, _ := authenticodetest.WriteKeyPair(t, t.TempDir())
+		data, err := os.ReadFile(keyPath)
+		require.NoError(t, err)
+
+		key, err := parsePrivateKeyPEM(keyPath, data)
+		require.NoError(t, err)
+		_, ok := key.(crypto.Signer)
+		assert.True(t, ok, "parsed key is a crypto.Signer")
+		requireZeroed(t, data)
+	})
+
+	t.Run("PKCS#1 key", func(t *testing.T) {
+		dir := t.TempDir()
+		pkcs8Path, _ := authenticodetest.WriteKeyPair(t, dir)
+		loaded, err := LoadPrivateKeyPEM(pkcs8Path)
+		require.NoError(t, err)
+		data := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(loaded.(*rsa.PrivateKey))})
+
+		key, err := parsePrivateKeyPEM(filepath.Join(dir, "rsa.key"), data)
+		require.NoError(t, err)
+		_, ok := key.(crypto.Signer)
+		assert.True(t, ok, "parsed key is a crypto.Signer")
+		requireZeroed(t, data)
+	})
+
+	t.Run("not PEM", func(t *testing.T) {
+		data := []byte("not a key")
+		_, err := parsePrivateKeyPEM("garbage.key", data)
+		var kerr *KeyFileError
+		require.ErrorAs(t, err, &kerr)
+		assert.Equal(t, KeyFileDecode, kerr.Stage)
+		requireZeroed(t, data)
+	})
+
+	t.Run("PEM that is not a key", func(t *testing.T) {
+		data := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte{1, 2, 3}})
+		_, err := parsePrivateKeyPEM("cert-as-key.key", data)
+		var kerr *KeyFileError
+		require.ErrorAs(t, err, &kerr)
+		assert.Equal(t, KeyFileParse, kerr.Stage)
+		requireZeroed(t, data)
+	})
+}
+
 func TestLoadCertificate(t *testing.T) {
 	dir := t.TempDir()
 	_, certPath := authenticodetest.WriteKeyPair(t, dir)
