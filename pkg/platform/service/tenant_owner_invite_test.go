@@ -234,6 +234,7 @@ func TestInvitationService_Create_DoesNotSetTheMarker(t *testing.T) {
 		}).Return(nil)
 
 	service := NewInvitationService(logger, mockInvDAO, mockUserDAO)
+	service.SetRoleLister(listedRoles("admin", "member", "viewer"))
 	invitation, err := service.Create(ctx, &CreateInvitationRequest{
 		TenantID:    "tenant-123",
 		Email:       "member@example.com",

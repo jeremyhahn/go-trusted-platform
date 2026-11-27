@@ -5,6 +5,8 @@ import { ArrowLeft, Loader2, Trash2 } from 'lucide-react';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
+import { useCapabilities } from '@/hooks/use-capabilities';
+import { Gated } from '@/components/features/capabilities/gated';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -36,13 +38,17 @@ export default function GroupDetailClient() {
   const { toast } = useToast();
 
   const groupId = resolveDynamicId(params, pathname, 'groups');
+  const { loading: capsLoading, capability } = useCapabilities();
+  const getCap = capability('GET /api/v1/iam/tenants/{tenant}/groups/{id}');
 
+  // Read the group once the server says it offers the read
   const { data: group, isLoading, error } = useApi(
     () => {
       if (!tenantId) return Promise.reject(new Error('No tenant ID'));
       return iam.getGroup(tenantId, groupId);
     },
     [tenantId, groupId],
+    { enabled: !capsLoading && getCap.enabled },
   );
 
   const deleteMutation = useMutation(
@@ -65,11 +71,29 @@ export default function GroupDetailClient() {
     },
   );
 
-  if (isLoading) {
+  if (capsLoading || isLoading) {
     return (
       <div className="container mx-auto py-6 flex items-center gap-2">
         <Loader2 className="h-5 w-5 animate-spin" />
         <span>Loading group…</span>
+      </div>
+    );
+  }
+
+  if (!getCap.enabled) {
+    return (
+      <div className="container mx-auto py-6 space-y-4">
+        <Button variant="ghost" size="sm" onClick={() => router.push('/iam/groups')}>
+          <ArrowLeft className="h-4 w-4 mr-2" /> Back to Groups
+        </Button>
+        <Card data-testid="iam-group-not-enabled">
+          <CardHeader>
+            <CardTitle>Groups are not enabled on this server</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">{getCap.reason}</p>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -103,17 +127,19 @@ export default function GroupDetailClient() {
         <Button variant="ghost" size="sm" onClick={() => router.push('/iam/groups')}>
           <ArrowLeft className="h-4 w-4 mr-2" /> Back to Groups
         </Button>
-        <Button
-          variant="destructive"
-          disabled={deleteMutation.isLoading}
-          onClick={() => {
-            if (window.confirm(`Delete group "${g?.name || groupId}"?`)) {
-              deleteMutation.mutate(undefined);
-            }
-          }}
-        >
-          <Trash2 className="h-4 w-4 mr-2" /> Delete
-        </Button>
+        <Gated op="DELETE /api/v1/iam/tenants/{tenant}/groups/{id}">
+          <Button
+            variant="destructive"
+            disabled={deleteMutation.isLoading}
+            onClick={() => {
+              if (window.confirm(`Delete group "${g?.name || groupId}"?`)) {
+                deleteMutation.mutate(undefined);
+              }
+            }}
+          >
+            <Trash2 className="h-4 w-4 mr-2" /> Delete
+          </Button>
+        </Gated>
       </div>
 
       <Card>

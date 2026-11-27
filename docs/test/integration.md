@@ -684,8 +684,8 @@ when a suite runs outside the runner.
 | `PLATFORM_MCP_ENDPOINT` | `https://localhost:9445` | MCP protocol endpoint (TLS 1.3 only, #844) |
 | `PLATFORM_SOCKET_PATH` | `/run/platformd.sock` | Unix socket path for local IPC |
 | `PLATFORMCTL_PATH` | `platformctl` (on `PATH`) | CLI binary path |
-| `PLATFORM_CLIENT_CERT`, `PLATFORM_CLIENT_KEY` | `client-bundle.pem` | Harness admin credential, subject `O=system` (`helpers.HarnessTenantID`) |
-| `PLATFORM_TENANT_CLIENT_CERT`, `PLATFORM_TENANT_CLIENT_KEY` | `tenant-client-bundle.pem` | Harness credential bound to the non-system tenant `harness-tenant` (`helpers.ForeignTenantID`) |
+| `PLATFORM_CLIENT_CERT`, `PLATFORM_CLIENT_KEY` | `client-bundle.pem` | Harness admin credential, subject `O=system, OU=system` (`helpers.HarnessTenantID`) |
+| `PLATFORM_TENANT_CLIENT_CERT`, `PLATFORM_TENANT_CLIENT_KEY` | `tenant-client-bundle.pem` | Harness credential bound to the non-system tenant `harness-tenant`, subject `O=harness-tenant, OU=harness-tenant` (`helpers.ForeignTenantID`) |
 | `PLATFORM_CA_CERT` | `ca-bundle.crt` | CA both client credentials chain to |
 
 The two client bundles live in `/tmp/platformd-integration/tls/`. platformd
@@ -1034,8 +1034,8 @@ unpacked) is not written to `$HOME/.cache/trivy`. With both in `/tmp`,
 
 Every container CI starts has a memory limit, with swap set to the same size,
 so a container that outgrows it is OOM-killed and its step fails instead of
-swapping the shared runner host (#1178). Unbounded, on the 80-thread
-ci-node-2, `make test test-sdk-go` passed 24.2 GB, `make security` reached
+swapping the shared runner host (#1178). Unbounded, on an 80-thread
+runner host, `make test test-sdk-go` passed 24.2 GB, `make security` reached
 17.0 GB and the integration legs 4.5 to 12.9 GB, and the host swapped.
 
 `scripts/in-toolchain-image.sh` takes the limit from `IN_IMAGE_MEMORY`
@@ -1239,7 +1239,7 @@ go-trusted-platform#937, removed by the go-quicbaas v0.16.0-alpha adoption):
 
 Every veth pair a test creates gives both ends one tx and one rx queue (#1178).
 The kernel's default is one queue per possible CPU, and each queue raises its
-own uevents when the link is added or removed. On ci-node-1 (80 cores, 112
+own uevents when the link is added or removed. On an 80-core host (112
 queues) that was about 450 uevents per pair, and the SDN, IPsec and netboot
 suites' veth churn drove the host to load 660 in a udev storm.
 
