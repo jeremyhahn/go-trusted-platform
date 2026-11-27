@@ -76,7 +76,7 @@ func initTenantBarrier(t *testing.T, h *tenantParityHarness, label string) {
 	t.Helper()
 	require.NoError(t, invokeTenantServer(h, h.id(paritySystemTenant),
 		platformv1.TenantService_InitTenantBarrier_FullMethodName,
-		&platformv1.InitTenantBarrierRequest{TenantId: h.id(label), Threshold: 0, Shares: 0}))
+		&platformv1.InitTenantBarrierRequest{TenantId: h.id(label), Threshold: 0, Shares: 0, Passphrase: "operator-pass"}))
 }
 
 // TestSDKMCP_TenantMethods drives every TenantService method through the
@@ -317,7 +317,7 @@ func TestSDKMCP_TenantMethods(t *testing.T) {
 			caller: parityTenantA,
 			method: platformv1.TenantService_InitTenantBarrier_FullMethodName,
 			req: func(h *tenantParityHarness) proto.Message {
-				return &platformv1.InitTenantBarrierRequest{TenantId: h.id(parityTenantA), Threshold: 0, Shares: 0}
+				return &platformv1.InitTenantBarrierRequest{TenantId: h.id(parityTenantA), Threshold: 0, Shares: 0, Passphrase: "operator-pass"}
 			},
 			resp: &platformv1.InitTenantBarrierResponse{},
 			check: func(t *testing.T, h *tenantParityHarness, resp proto.Message) {
@@ -562,7 +562,7 @@ func TestSDKMCP_TenantMethodsRefuse(t *testing.T) {
 			caller: parityTenantA,
 			method: platformv1.TenantService_InitTenantBarrier_FullMethodName,
 			req: func(h *tenantParityHarness) proto.Message {
-				return &platformv1.InitTenantBarrierRequest{TenantId: h.id(parityTenantB), Threshold: 0, Shares: 0}
+				return &platformv1.InitTenantBarrierRequest{TenantId: h.id(parityTenantB), Threshold: 0, Shares: 0, Passphrase: "operator-pass"}
 			},
 			resp: &platformv1.InitTenantBarrierResponse{},
 			want: codes.PermissionDenied,

@@ -70,8 +70,10 @@ var restTenantRoutes = map[string]restTenantRoute{
 	"tenant_rotate_dek": {method: http.MethodPost, path: "/api/v1/tenants/{subject}/dek/rotate", body: func(string) interface{} {
 		return restapi.RotateDEKRequest{Background: true}
 	}},
-	"tenant_get_dek_status":          {method: http.MethodGet, path: "/api/v1/tenants/{subject}/dek/status"},
-	"platform_tenant_barrier_init":   {method: http.MethodPost, path: "/api/v1/tenants/{subject}/barrier/init"},
+	"tenant_get_dek_status": {method: http.MethodGet, path: "/api/v1/tenants/{subject}/dek/status"},
+	"platform_tenant_barrier_init": {method: http.MethodPost, path: "/api/v1/tenants/{subject}/barrier/init", body: func(string) interface{} {
+		return restapi.InitTenantBarrierRequest{Passphrase: "operator-pass"}
+	}},
 	"platform_tenant_barrier_seal":   {method: http.MethodPost, path: "/api/v1/tenants/{subject}/barrier/seal"},
 	"platform_tenant_barrier_status": {method: http.MethodGet, path: "/api/v1/tenants/{subject}/barrier/status"},
 	"platform_tenant_barrier_unseal": {method: http.MethodPost, path: "/api/v1/tenants/{subject}/barrier/unseal", body: func(string) interface{} {

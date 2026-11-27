@@ -700,9 +700,9 @@ func tenantParityOps() []tenantParityOp {
 		},
 		{
 			tool: "platform_tenant_barrier_init", caller: parityTenantA, subject: parityTenantA, missing: codes.NotFound,
-			args: tenantIDArgs, keys: statusKeys,
+			args: withTenantID(map[string]interface{}{"passphrase": "operator-pass"}), keys: statusKeys,
 			grpc: func(ctx context.Context, s *TenantGRPCServer, subject string) (map[string]string, error) {
-				resp, err := s.InitTenantBarrier(ctx, &platformv1.InitTenantBarrierRequest{TenantId: subject})
+				resp, err := s.InitTenantBarrier(ctx, &platformv1.InitTenantBarrierRequest{TenantId: subject, Passphrase: "operator-pass"})
 				if err != nil {
 					return nil, err
 				}
@@ -996,9 +996,9 @@ func TestTenantBarrierInitRefusesShamir(t *testing.T) {
 	calls := h.barriers.callsFor(a)
 
 	_, grpcErr := h.server.InitTenantBarrier(tokenCallerContext(a),
-		&platformv1.InitTenantBarrierRequest{TenantId: a, Threshold: 2, Shares: 3})
+		&platformv1.InitTenantBarrierRequest{TenantId: a, Threshold: 2, Shares: 3, Passphrase: "operator-pass"})
 	_, mcpErr := h.tools.ExecuteTool(mcpTokenCtx(a, "tenant:write"), "platform_tenant_barrier_init",
-		map[string]interface{}{"tenant_id": a, "threshold": 2, "shares": 3})
+		map[string]interface{}{"tenant_id": a, "threshold": 2, "shares": 3, "passphrase": "operator-pass"})
 
 	assert.Equal(t, codes.InvalidArgument, status.Code(grpcErr), "gRPC: %v", grpcErr)
 	assert.Equal(t, codes.InvalidArgument, status.Code(mcpErr), "MCP: %v", mcpErr)

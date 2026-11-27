@@ -87,29 +87,36 @@ Examples:
 
 func newBarrierInitCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	var threshold, shares int32
+	var passphrase string
 
 	cmd := &cobra.Command{
 		Use:   "init <tenant-name>",
 		Short: "Initialize a per-tenant barrier",
 		Long: `Initialize a per-tenant cryptographic barrier.
 
-The barrier initializes with a deterministic credential derived from the
-tenant ID, and the init returns no shares. Shamir sharing is not supported:
+The barrier initializes with the operator passphrase given in --passphrase
+(required; the daemon refuses an empty one and never stores it), and the init
+returns no shares. Shamir sharing is not supported:
 --threshold and --shares must stay 0 (the default), and the daemon refuses any
 other value with InvalidArgument.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runBarrierInit(getFlags(), args[0], threshold, shares)
+			return runBarrierInit(getFlags(), args[0], passphrase, threshold, shares)
 		},
 	}
 
+	cmd.Flags().StringVar(&passphrase, "passphrase", "", "operator barrier passphrase (required)")
 	cmd.Flags().Int32Var(&threshold, "threshold", 0, "Shamir threshold; must be 0, any other value is refused")
 	cmd.Flags().Int32Var(&shares, "shares", 0, "Shamir total shares; must be 0, any other value is refused")
 
 	return cmd
 }
 
-func runBarrierInit(flags *cli.CommonFlags, tenantName string, threshold, shares int32) error {
+func runBarrierInit(flags *cli.CommonFlags, tenantName, passphrase string, threshold, shares int32) error {
+	if passphrase == "" {
+		return ErrInvalidArguments{Reason: "--passphrase is required"}
+	}
+
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
 		return err
@@ -124,7 +131,7 @@ func runBarrierInit(flags *cli.CommonFlags, tenantName string, threshold, shares
 		return ErrTenantNotFound{Name: tenantName}
 	}
 
-	if err := tenantClient.InitTenantBarrier(ctx, t.ID, threshold, shares); err != nil {
+	if err := tenantClient.InitTenantBarrier(ctx, t.ID, passphrase, threshold, shares); err != nil {
 		return ErrOperationFailed{Operation: "barrier init", TenantID: t.ID, Err: err}
 	}
 

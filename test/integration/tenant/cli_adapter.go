@@ -339,6 +339,9 @@ func (a *CLIAdapter) InitTenantBarrier(ctx context.Context, opts InitTenantBarri
 	}
 
 	args := []string{"tenant", "barrier", "init", name}
+	if opts.Passphrase != "" {
+		args = append(args, "--passphrase", opts.Passphrase)
+	}
 	if opts.Threshold > 0 {
 		args = append(args, "--threshold", fmt.Sprintf("%d", opts.Threshold))
 	}

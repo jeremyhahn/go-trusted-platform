@@ -215,11 +215,12 @@ func (c *Client) GetDEKStatus(ctx context.Context, tenantID string) (*platformv1
 // InitTenantBarrier explicitly initializes a per-tenant barrier with optional
 // Shamir threshold/shares configuration. Both zero means deterministic
 // non-Shamir init.
-func (c *Client) InitTenantBarrier(ctx context.Context, tenantID string, threshold, shares int32) error {
+func (c *Client) InitTenantBarrier(ctx context.Context, tenantID, passphrase string, threshold, shares int32) error {
 	if _, err := c.grpc.InitTenantBarrier(ctx, &platformv1.InitTenantBarrierRequest{
-		TenantId:  tenantID,
-		Threshold: threshold,
-		Shares:    shares,
+		TenantId:   tenantID,
+		Threshold:  threshold,
+		Shares:     shares,
+		Passphrase: passphrase,
 	}); err != nil {
 		return &ErrInitTenantBarrierFailed{ID: tenantID, Cause: err}
 	}
