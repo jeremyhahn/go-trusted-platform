@@ -17,8 +17,11 @@
 package ceremony
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-qrdb/pkg/auth"
@@ -135,11 +138,67 @@ func (r *Router) ensure(w http.ResponseWriter, req *http.Request) bool {
 // decode reads the request body into msg, writing a 400 when it is not
 // valid JSON for msg.
 func (r *Router) decode(w http.ResponseWriter, req *http.Request, msg proto.Message) bool {
+	acceptWireEnums(req)
 	if err := protorest.DecodeRequest(req, msg); err != nil {
 		r.respWriter.Error400(w, req, err)
 		return false
 	}
 	return true
+}
+
+// wireEnumPrefixes maps each request field that carries a ceremony enum to
+// the prefix of its protojson value names.
+var wireEnumPrefixes = map[string]string{
+	"role":               "CEREMONY_OFFICER_ROLE_",
+	"authenticator_type": "CEREMONY_AUTHENTICATOR_TYPE_",
+	"authenticatorType":  "CEREMONY_AUTHENTICATOR_TYPE_",
+}
+
+// acceptWireEnums rewrites the Go SDK REST adapter's lowercase enum strings
+// ("admin", "piv") to their protojson names (CEREMONY_OFFICER_ROLE_ADMIN,
+// CEREMONY_AUTHENTICATOR_TYPE_PIV) so protojson decodes them. Values already
+// in protojson form, numeric values and bodies that are not a JSON object
+// pass through unchanged, so the web console is unaffected.
+func acceptWireEnums(req *http.Request) {
+	if req.Body == nil {
+		return
+	}
+	raw, err := io.ReadAll(req.Body)
+	_ = req.Body.Close()
+	req.Body = io.NopCloser(bytes.NewReader(raw))
+	if err != nil {
+		return
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || fields == nil {
+		return
+	}
+	changed := false
+	for key, prefix := range wireEnumPrefixes {
+		value, ok := fields[key]
+		if !ok {
+			continue
+		}
+		var name string
+		if json.Unmarshal(value, &name) != nil || name == "" || strings.HasPrefix(name, prefix) {
+			continue
+		}
+		rewritten, err := json.Marshal(prefix + strings.ToUpper(name))
+		if err != nil {
+			continue
+		}
+		fields[key] = rewritten
+		changed = true
+	}
+	if !changed {
+		return
+	}
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return
+	}
+	req.Body = io.NopCloser(bytes.NewReader(out))
+	req.ContentLength = int64(len(out))
 }
 
 // write answers 200 with resp, or the HTTP status matching err.
