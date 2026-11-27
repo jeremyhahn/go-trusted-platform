@@ -15,21 +15,68 @@ package switchmgmt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/switchwire"
 )
 
+// errSSHConnectionClosed is returned by an operation whose connection Close took.
+var errSSHConnectionClosed = errors.New("switch: ssh connection closed")
+
 // sshManager implements Manager using SSH CLI commands compatible with
 // Cisco IOS, IOS-XE, NX-OS, Arista EOS, and similar platforms.
 type sshManager struct {
-	config   *Config
-	logger   *slog.Logger
+	config *Config
+	logger *slog.Logger
+	// dial opens the SSH connection; nil falls back to NewSSHExecutor.
+	dial func(context.Context, *Config) (SSHExecutor, error)
+
+	// sem is a context-aware one-slot semaphore that serializes connection
+	// set-up, every operation and Close: two first calls must not dial two
+	// connections, and one go-xkms Session must not run commands
+	// concurrently. A call queues on it with its context, and a call whose
+	// context ended before it ran sends nothing. semOnce makes the slot on
+	// first use, so the zero value serves.
+	semOnce sync.Once
+	sem     chan struct{}
+
+	// connMu guards executor so Close can take and close the live
+	// connection while an operation holds sem.
+	connMu   sync.Mutex
 	executor SSHExecutor
+}
+
+// slot returns the semaphore, making it on first use.
+func (m *sshManager) slot() chan struct{} {
+	m.semOnce.Do(func() { m.sem = make(chan struct{}, 1) })
+	return m.sem
+}
+
+// acquire takes the semaphore unless ctx ends first. A context that ended
+// while the slot was being taken gives the slot back and returns its error.
+func (m *sshManager) acquire(ctx context.Context) error {
+	sem := m.slot()
+	select {
+	case sem <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		<-sem
+		return err
+	}
+	return nil
+}
+
+// release gives the semaphore back.
+func (m *sshManager) release() {
+	<-m.slot()
 }
 
 // newSSHManager creates an SSH-based Manager for the given config.
@@ -40,55 +87,78 @@ func newSSHManager(config *Config, logger *slog.Logger) (Manager, error) {
 	return &sshManager{
 		config: config,
 		logger: logger,
+		dial:   NewSSHExecutor,
 	}, nil
 }
 
-// newSSHManagerWithExecutor creates an sshManager with an injected SSHExecutor
-// for testing.
+// newSSHManagerWithExecutor creates an SSH Manager with an injected executor (for testing).
 func newSSHManagerWithExecutor(config *Config, logger *slog.Logger, executor SSHExecutor) *sshManager {
 	return &sshManager{
 		config:   config,
 		logger:   logger,
+		dial:     NewSSHExecutor,
 		executor: executor,
 	}
 }
 
+// newSSHManagerWithDialer creates an SSH Manager with no connection that
+// dials through dial on first use (for testing).
+func newSSHManagerWithDialer(config *Config, logger *slog.Logger, dial func(context.Context, *Config) (SSHExecutor, error)) *sshManager {
+	return &sshManager{
+		config: config,
+		logger: logger,
+		dial:   dial,
+	}
+}
+
 func (m *sshManager) SetPortVLAN(ctx context.Context, port string, vlanID uint16) error {
+	if err := ValidatePortName(port); err != nil {
+		return err
+	}
+	if err := m.acquire(ctx); err != nil {
+		return err
+	}
+	defer m.release()
 	if err := m.ensureConnected(ctx); err != nil {
 		return err
 	}
 
-	commands := buildConfigCommands(
+	cmd := batchCommands(buildConfigCommands(
 		fmt.Sprintf("interface %s", port),
 		"switchport mode access",
 		fmt.Sprintf("switchport access vlan %d", vlanID),
-	)
+	))
 
-	for _, cmd := range commands {
-		m.logger.Debug("ssh set port vlan", "command", cmd)
-		output, err := m.executor.Execute(ctx, cmd)
-		if err != nil {
-			return ErrPortVLANSetFailed{
-				Port:   port,
-				VLANID: vlanID,
-				Cause:  err,
-			}
+	m.logger.Debug("ssh set port vlan", "command", cmd)
+	output, err := m.execute(ctx, cmd)
+	if err != nil {
+		return ErrPortVLANSetFailed{
+			Port:   port,
+			VLANID: vlanID,
+			Cause:  err,
 		}
-		if containsError(output) {
-			return ErrPortVLANSetFailed{
-				Port:   port,
-				VLANID: vlanID,
-				Cause: ErrSSHCommandFailed{
-					Command: cmd,
-					Output:  output,
-				},
-			}
+	}
+	if containsError(output) {
+		return ErrPortVLANSetFailed{
+			Port:   port,
+			VLANID: vlanID,
+			Cause: ErrSSHCommandFailed{
+				Command: cmd,
+				Output:  output,
+			},
 		}
 	}
 	return nil
 }
 
 func (m *sshManager) GetPortVLAN(ctx context.Context, port string) (uint16, error) {
+	if err := ValidatePortName(port); err != nil {
+		return 0, err
+	}
+	if err := m.acquire(ctx); err != nil {
+		return 0, err
+	}
+	defer m.release()
 	if err := m.ensureConnected(ctx); err != nil {
 		return 0, err
 	}
@@ -96,7 +166,7 @@ func (m *sshManager) GetPortVLAN(ctx context.Context, port string) (uint16, erro
 	cmd := fmt.Sprintf("show interfaces %s switchport", port)
 	m.logger.Debug("ssh get port vlan", "command", cmd)
 
-	output, err := m.executor.Execute(ctx, cmd)
+	output, err := m.execute(ctx, cmd)
 	if err != nil {
 		return 0, ErrSSHCommandFailed{Command: cmd, Cause: err}
 	}
@@ -113,6 +183,13 @@ func (m *sshManager) GetPortVLAN(ctx context.Context, port string) (uint16, erro
 }
 
 func (m *sshManager) GetPortStatus(ctx context.Context, port string) (*switchwire.PortStatus, error) {
+	if err := ValidatePortName(port); err != nil {
+		return nil, err
+	}
+	if err := m.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer m.release()
 	if err := m.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
@@ -120,7 +197,7 @@ func (m *sshManager) GetPortStatus(ctx context.Context, port string) (*switchwir
 	cmd := fmt.Sprintf("show interfaces %s switchport", port)
 	m.logger.Debug("ssh get port status", "command", cmd)
 
-	output, err := m.executor.Execute(ctx, cmd)
+	output, err := m.execute(ctx, cmd)
 	if err != nil {
 		return nil, ErrSSHCommandFailed{Command: cmd, Cause: err}
 	}
@@ -133,10 +210,49 @@ func (m *sshManager) GetPortStatus(ctx context.Context, port string) (*switchwir
 			Reason:  parseErr.Error(),
 		}
 	}
+
+	// Admin and link state come from the operational interface status:
+	// "Switchport: Enabled" is Layer 2 switching, not administrative state.
+	// The row is matched across interface aliases (Ethernet1/3 = Eth1/3,
+	// port-channel10 = Po10), since the table may spell the port differently.
+	statusCmd := fmt.Sprintf("show interfaces %s status", port)
+	m.logger.Debug("ssh get port interface status", "command", statusCmd)
+	statusOutput, err := m.execute(ctx, statusCmd)
+	if err != nil {
+		return nil, ErrSSHCommandFailed{Command: statusCmd, Cause: err}
+	}
+	rows, parseErr := parseInterfaceStatusTable(statusOutput)
+	if parseErr != nil {
+		return nil, ErrSSHParseOutputFailed{
+			Command: statusCmd,
+			Output:  statusOutput,
+			Reason:  parseErr.Error(),
+		}
+	}
+	var row *switchwire.PortStatus
+	for _, r := range rows {
+		if samePort(r.Port, port) {
+			row = r
+			break
+		}
+	}
+	if row == nil {
+		return nil, ErrSSHParseOutputFailed{
+			Command: statusCmd,
+			Output:  statusOutput,
+			Reason:  fmt.Sprintf("port %s not in interface status", port),
+		}
+	}
+	status.Enabled = row.Enabled
+	status.LinkUp = row.LinkUp
 	return status, nil
 }
 
 func (m *sshManager) ListPorts(ctx context.Context) ([]*switchwire.PortStatus, error) {
+	if err := m.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer m.release()
 	if err := m.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
@@ -144,7 +260,7 @@ func (m *sshManager) ListPorts(ctx context.Context) ([]*switchwire.PortStatus, e
 	cmd := "show interfaces status"
 	m.logger.Debug("ssh list ports", "command", cmd)
 
-	output, err := m.executor.Execute(ctx, cmd)
+	output, err := m.execute(ctx, cmd)
 	if err != nil {
 		return nil, ErrSSHCommandFailed{Command: cmd, Cause: err}
 	}
@@ -161,67 +277,128 @@ func (m *sshManager) ListPorts(ctx context.Context) ([]*switchwire.PortStatus, e
 }
 
 func (m *sshManager) EnablePort(ctx context.Context, port string) error {
+	if err := ValidatePortName(port); err != nil {
+		return err
+	}
+	if err := m.acquire(ctx); err != nil {
+		return err
+	}
+	defer m.release()
 	if err := m.ensureConnected(ctx); err != nil {
 		return err
 	}
-
-	commands := buildConfigCommands(
+	return m.runConfig(ctx, "ssh enable port", buildConfigCommands(
 		fmt.Sprintf("interface %s", port),
 		"no shutdown",
-	)
-
-	for _, cmd := range commands {
-		m.logger.Debug("ssh enable port", "command", cmd)
-		output, err := m.executor.Execute(ctx, cmd)
-		if err != nil {
-			return ErrSSHCommandFailed{Command: cmd, Cause: err}
-		}
-		if containsError(output) {
-			return ErrSSHCommandFailed{Command: cmd, Output: output}
-		}
-	}
-	return nil
+	))
 }
 
 func (m *sshManager) DisablePort(ctx context.Context, port string) error {
+	if err := ValidatePortName(port); err != nil {
+		return err
+	}
+	if err := m.acquire(ctx); err != nil {
+		return err
+	}
+	defer m.release()
 	if err := m.ensureConnected(ctx); err != nil {
 		return err
 	}
-
-	commands := buildConfigCommands(
+	return m.runConfig(ctx, "ssh disable port", buildConfigCommands(
 		fmt.Sprintf("interface %s", port),
 		"shutdown",
-	)
+	))
+}
 
-	for _, cmd := range commands {
-		m.logger.Debug("ssh disable port", "command", cmd)
-		output, err := m.executor.Execute(ctx, cmd)
-		if err != nil {
-			return ErrSSHCommandFailed{Command: cmd, Cause: err}
-		}
-		if containsError(output) {
-			return ErrSSHCommandFailed{Command: cmd, Output: output}
-		}
+// runConfig sends one configuration operation as one batched command line
+// and checks its one output for a CLI error.
+func (m *sshManager) runConfig(ctx context.Context, logMsg string, commands []string) error {
+	cmd := batchCommands(commands)
+	m.logger.Debug(logMsg, "command", cmd)
+	output, err := m.execute(ctx, cmd)
+	if err != nil {
+		return ErrSSHCommandFailed{Command: cmd, Cause: err}
+	}
+	if containsError(output) {
+		return ErrSSHCommandFailed{Command: cmd, Output: output}
 	}
 	return nil
 }
 
 func (m *sshManager) Close() error {
-	if m.executor != nil {
-		return m.executor.Close()
+	m.connMu.Lock()
+	executor := m.executor
+	m.executor = nil
+	m.connMu.Unlock()
+
+	// Closing before taking the slot makes a stalled operation return.
+	var err error
+	if executor != nil {
+		err = executor.Close()
 	}
-	return nil
+	m.slot() <- struct{}{}
+	m.release()
+	return err
 }
 
+// execute runs one command on the connection. A command that fails closes
+// and drops the connection, so the next call dials again; the command is
+// not retried, so a failed mutation is never replayed. A call whose context
+// ended before the command ran sends nothing and keeps the connection. The
+// caller holds the semaphore.
+func (m *sshManager) execute(ctx context.Context, cmd string) (string, error) {
+	// A call whose context ended sends nothing and keeps the connection:
+	// a canceled call is not a broken connection.
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	m.connMu.Lock()
+	executor := m.executor
+	m.connMu.Unlock()
+	if executor == nil {
+		return "", errSSHConnectionClosed
+	}
+	output, err := executor.Execute(ctx, cmd)
+	if err != nil {
+		m.connMu.Lock()
+		owned := m.executor == executor
+		if owned {
+			m.executor = nil
+		}
+		m.connMu.Unlock()
+		if owned {
+			if closeErr := executor.Close(); closeErr != nil {
+				m.logger.Debug("ssh close after failed command", "error", closeErr)
+			}
+		}
+		return "", err
+	}
+	return output, nil
+}
+
+// ensureConnected dials the SSH connection on first use. The caller holds
+// the context-aware one-slot semaphore, so concurrent first calls queue,
+// dial once and share the connection. A
+// connection whose command failed is dropped (see execute), and the next
+// call dials again; a failed mutation is never replayed.
 func (m *sshManager) ensureConnected(ctx context.Context) error {
-	if m.executor != nil {
+	m.connMu.Lock()
+	connected := m.executor != nil
+	m.connMu.Unlock()
+	if connected {
 		return nil
 	}
-	executor, err := NewSSHExecutor(ctx, m.config)
+	dial := m.dial
+	if dial == nil {
+		dial = NewSSHExecutor
+	}
+	executor, err := dial(ctx, m.config)
 	if err != nil {
 		return err
 	}
+	m.connMu.Lock()
 	m.executor = executor
+	m.connMu.Unlock()
 	return nil
 }
 
@@ -232,6 +409,15 @@ func buildConfigCommands(interfaceCommands ...string) []string {
 	commands = append(commands, interfaceCommands...)
 	commands = append(commands, "end")
 	return commands
+}
+
+// batchCommands joins the commands of one configuration operation into one
+// NX-OS command line. The SSH executor opens a fresh exec channel for every
+// Execute, so configure-terminal mode and the selected interface do not
+// survive from one Execute to the next; NX-OS accepts ";" as a command
+// separator on one exec line, so the whole operation runs in one channel.
+func batchCommands(commands []string) string {
+	return strings.Join(commands, " ; ")
 }
 
 // validateSSHManagerConfig validates config fields required for SSH Manager.
@@ -292,7 +478,9 @@ func parseAccessVLANFromSwitchport(output string) (uint16, error) {
 }
 
 // parseSwitchportOutput parses "show interfaces {port} switchport" text output
-// into a PortStatus.
+// into a PortStatus: mode and VLANs only. Enabled and LinkUp are left false
+// here; GetPortStatus takes them from the interface status ("Switchport:
+// Enabled" is Layer 2 switching, not administrative state).
 func parseSwitchportOutput(port string, output string) (*switchwire.PortStatus, error) {
 	status := &switchwire.PortStatus{Port: port}
 
@@ -330,12 +518,6 @@ func parseSwitchportOutput(port string, output string) (*switchwire.PortStatus, 
 		if vlan, err := strconv.ParseUint(matches[1], 10, 16); err == nil {
 			status.NativeVLAN = uint16(vlan)
 		}
-	}
-
-	// Parse enabled state from Switchport: Enabled/Disabled line.
-	lowerOutput := strings.ToLower(output)
-	if strings.Contains(lowerOutput, "switchport: enabled") {
-		status.Enabled = true
 	}
 
 	return status, nil
