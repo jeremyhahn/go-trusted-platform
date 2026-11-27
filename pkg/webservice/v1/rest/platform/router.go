@@ -14,6 +14,8 @@
 package platform
 
 import (
+	"net/http"
+
 	"github.com/gorilla/mux"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
@@ -36,6 +38,31 @@ type PlatformRouter struct {
 	// while their backend is nil; UnavailableRoutes reports them.
 	configUpdateRoute *mux.Route
 	shutdownRoute     *mux.Route
+
+	// systemTenant admits only callers in the system tenant; it guards the
+	// daemon-wide writes (shutdown, config sections).
+	systemTenant func(http.Handler) http.Handler
+}
+
+// SetSystemTenantGuard sets the guard that admits only callers in the
+// system tenant. Without one POST /platform/shutdown and
+// PUT /platform/config/sections/{section} answer 403.
+func (r *PlatformRouter) SetSystemTenantGuard(guard func(http.Handler) http.Handler) {
+	r.systemTenant = guard
+}
+
+// systemTenantOnly runs handler behind the system-tenant guard. The guard is
+// read per request, so it may be set after RegisterRoutes; without one the
+// route fails closed with 403. Shutdown and config-section writes act on the
+// shared daemon, so a workspace admin must not reach them (#2081 Codex).
+func (r *PlatformRouter) systemTenantOnly(handler http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if r.systemTenant == nil {
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+			return
+		}
+		r.systemTenant(handler).ServeHTTP(w, req)
+	})
 }
 
 // NewPlatformRouter creates a new PlatformRouter instance
@@ -145,7 +172,7 @@ func (r *PlatformRouter) registerConfigRoutes(router *mux.Router) {
 	router.HandleFunc("/config/snapshots/{id}", r.handlers.GetSnapshot).Methods("GET")
 	router.HandleFunc("/config/snapshots/{id}", r.handlers.DeleteSnapshot).Methods("DELETE")
 	router.HandleFunc("/config/snapshots/{id}/rollback", r.handlers.Rollback).Methods("POST")
-	r.configUpdateRoute = router.HandleFunc("/config/sections/{section}", r.handlers.UpdateConfigSection).Methods("PUT")
+	r.configUpdateRoute = router.Handle("/config/sections/{section}", r.systemTenantOnly(r.handlers.UpdateConfigSection)).Methods("PUT")
 }
 
 // registerLogRoutes registers structured log query / stream endpoints.
@@ -198,7 +225,7 @@ func (r *PlatformRouter) registerServiceRoutes(router *mux.Router) {
 	router.HandleFunc("/services/{service}/restart", r.handlers.RestartService).Methods("POST")
 
 	// POST /api/v1/platform/shutdown - Shut the daemon down (202, runs after the reply)
-	r.shutdownRoute = router.HandleFunc("/shutdown", r.handlers.Shutdown).Methods("POST")
+	r.shutdownRoute = router.Handle("/shutdown", r.systemTenantOnly(r.handlers.Shutdown)).Methods("POST")
 }
 
 // registerProtocolRoutes registers protocol status endpoints

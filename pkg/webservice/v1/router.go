@@ -1273,6 +1273,14 @@ func (v1Router *Router) platformRoutes() {
 	// separately on the ungated router (RegisterRoutes, below) under its
 	// own pre-existing decision, so the console can show dark surfaces
 	// before login.
+	// Shutdown and config-section writes act on the shared daemon, so only
+	// the system tenant reaches them, on top of the admin gate (#2081 Codex).
+	if _, guard, err := v1Router.authorization(); err != nil {
+		v1Router.logger.Error(err,
+			"Platform shutdown and config-section writes fail closed: the RBAC guard could not be built")
+	} else {
+		platformRouter.SetSystemTenantGuard(guard.RequireTenant(v1Router.restHandlerRegistry.TenantID()))
+	}
 	platformRouter.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 	if v1Router.serviceRegistry != nil {
 		v1Router.serviceRegistry.markConfigured("platform", "/platform")

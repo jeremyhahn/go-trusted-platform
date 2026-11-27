@@ -132,6 +132,8 @@ func newMountedRouter(t *testing.T) (*PlatformRouter, *mux.Router) {
 	t.Helper()
 	l := logging.NewLogger(slog.LevelDebug, nil)
 	pr := NewPlatformRouter(l, response.NewResponseWriter(l, nil))
+	// Pass-through system-tenant guard: these tests cover the handlers.
+	pr.SetSystemTenantGuard(func(h http.Handler) http.Handler { return h })
 	root := mux.NewRouter()
 	pr.RegisterRoutes(root.PathPrefix("/api/v1").Subrouter())
 	return pr, root
