@@ -14,6 +14,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	webiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -63,17 +64,60 @@ func systemAdminCallerContext(subject string) context.Context {
 func newInitialAdminServer(inviter initialAdminInviter) *TenantGRPCServer {
 	s := NewTenantGRPCServer()
 	s.SetSystemTenant(initialAdminSystemTenant)
+	cfg := tenant.DefaultConfig()
+	cfg.EnableDEKIsolation = false
+	mgr, err := tenant.NewManager(&tenant.ManagerConfig{
+		IAMTenantClient: newMockIAMClientForServer(),
+		IAMRoleClient:   newMockIAMClientForServer(),
+		Config:          cfg,
+	})
+	if err != nil {
+		panic(err)
+	}
+	if _, err := mgr.CreateTenant(context.Background(), &tenant.CreateTenantRequest{Name: initialAdminTenantName}); err != nil {
+		panic(err)
+	}
+	s.SetManager(mgr)
 	if inviter != nil {
 		s.SetInitialAdminInviter(inviter)
 	}
 	return s
 }
 
+// initialAdminTenantName names the one tenant newInitialAdminServer creates.
+const initialAdminTenantName = "tenant-a"
+
+// initialAdminTenantID is the stored id of the tenant newInitialAdminServer
+// creates: an owner invitation names an existing tenant (#2362).
+func initialAdminTenantID(s *TenantGRPCServer) string {
+	entity, err := s.manager.GetTenantByName(context.Background(), initialAdminTenantName)
+	if err != nil {
+		panic(err)
+	}
+	return entity.ID
+}
+
+// TestCreateInitialAdminInvitation_UnknownTenantIsNotFound: an owner
+// invitation for a tenant that does not exist answers NotFound and stores
+// nothing (#2362).
+func TestCreateInitialAdminInvitation_UnknownTenantIsNotFound(t *testing.T) {
+	fake := &fakeInitialAdminInviter{}
+	s := newInitialAdminServer(fake)
+	_, err := s.CreateInitialAdminInvitation(systemAdminCallerContext("42"),
+		&platformv1.CreateInitialAdminInvitationRequest{TenantId: "no-such-tenant", Email: "owner@example.com"})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("unknown tenant: code = %v (%v), want NotFound", status.Code(err), err)
+	}
+	if fake.calls != 0 {
+		t.Fatalf("inviter calls = %d, want 0", fake.calls)
+	}
+}
+
 func TestTenantGRPCServer_CreateInitialAdminInvitation_SystemTenantOnly(t *testing.T) {
 	fake := &fakeInitialAdminInviter{}
 	s := newInitialAdminServer(fake)
 	req := &platformv1.CreateInitialAdminInvitationRequest{
-		TenantId: "tenant-a",
+		TenantId: initialAdminTenantID(s),
 		Email:    "owner@example.com",
 	}
 
@@ -89,10 +133,10 @@ func TestTenantGRPCServer_CreateInitialAdminInvitation_SystemTenantOnly(t *testi
 	if err != nil {
 		t.Fatalf("system tenant: %v", err)
 	}
-	if resp.GetInvitation().GetTenantId() != "tenant-a" {
+	if resp.GetInvitation().GetTenantId() != initialAdminTenantID(s) {
 		t.Fatalf("invitation tenant = %q, want tenant-a", resp.GetInvitation().GetTenantId())
 	}
-	if fake.calls != 1 || fake.got.TenantID != "tenant-a" || fake.got.Email != "owner@example.com" {
+	if fake.calls != 1 || fake.got.TenantID != initialAdminTenantID(s) || fake.got.Email != "owner@example.com" {
 		t.Fatalf("inviter saw calls=%d req=%+v", fake.calls, fake.got)
 	}
 }
@@ -101,7 +145,7 @@ func TestTenantGRPCServer_CreateInitialAdminInvitation_RequiresEmail(t *testing.
 	fake := &fakeInitialAdminInviter{}
 	s := newInitialAdminServer(fake)
 	_, err := s.CreateInitialAdminInvitation(tokenCallerContext(initialAdminSystemTenant),
-		&platformv1.CreateInitialAdminInvitationRequest{TenantId: "tenant-a"})
+		&platformv1.CreateInitialAdminInvitationRequest{TenantId: initialAdminTenantID(s)})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("got %v, want InvalidArgument", err)
 	}
@@ -113,7 +157,7 @@ func TestTenantGRPCServer_CreateInitialAdminInvitation_RequiresEmail(t *testing.
 func TestTenantGRPCServer_CreateInitialAdminInvitation_NoInviter(t *testing.T) {
 	s := newInitialAdminServer(nil)
 	_, err := s.CreateInitialAdminInvitation(tokenCallerContext(initialAdminSystemTenant),
-		&platformv1.CreateInitialAdminInvitationRequest{TenantId: "tenant-a", Email: "owner@example.com"})
+		&platformv1.CreateInitialAdminInvitationRequest{TenantId: initialAdminTenantID(s), Email: "owner@example.com"})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("got %v, want FailedPrecondition", err)
 	}
@@ -125,7 +169,7 @@ func TestCreateInitialAdminInvitation_SendsOwnerRoleAndInviter(t *testing.T) {
 	fake := &fakeInitialAdminInviter{}
 	s := newInitialAdminServer(fake)
 	_, err := s.CreateInitialAdminInvitation(systemAdminCallerContext("42"),
-		&platformv1.CreateInitialAdminInvitationRequest{TenantId: "tenant-a", Email: "owner@example.com"})
+		&platformv1.CreateInitialAdminInvitationRequest{TenantId: initialAdminTenantID(s), Email: "owner@example.com"})
 	if err != nil {
 		t.Fatalf("system tenant: %v", err)
 	}
@@ -145,7 +189,7 @@ func TestCreateInitialAdminInvitation_NoNumericCallerIDIsRefused(t *testing.T) {
 		fake := &fakeInitialAdminInviter{}
 		s := newInitialAdminServer(fake)
 		_, err := s.CreateInitialAdminInvitation(systemAdminCallerContext(subject),
-			&platformv1.CreateInitialAdminInvitationRequest{TenantId: "tenant-a", Email: "owner@example.com"})
+			&platformv1.CreateInitialAdminInvitationRequest{TenantId: initialAdminTenantID(s), Email: "owner@example.com"})
 		if status.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("subject %q: got %v, want FailedPrecondition", subject, err)
 		}
@@ -173,7 +217,7 @@ func TestCreateInitialAdminInvitation_RESTIdentityRecordsInviter(t *testing.T) {
 			fake := &fakeInitialAdminInviter{}
 			s := newInitialAdminServer(fake)
 			_, err := s.CreateInitialAdminInvitation(ctx,
-				&platformv1.CreateInitialAdminInvitationRequest{TenantId: "tenant-a", Email: "owner@example.com"})
+				&platformv1.CreateInitialAdminInvitationRequest{TenantId: initialAdminTenantID(s), Email: "owner@example.com"})
 			if status.Code(err) == codes.FailedPrecondition {
 				t.Fatalf("REST caller refused as having no user id: %v", err)
 			}
@@ -237,7 +281,7 @@ func TestCreateInitialAdminInvitation_EmailSubjectResolvesInviter(t *testing.T) 
 			fake := &fakeInitialAdminInviter{}
 			s, _ := newResolvingInitialAdminServer(fake)
 			_, err := s.CreateInitialAdminInvitation(ctx,
-				&platformv1.CreateInitialAdminInvitationRequest{TenantId: "tenant-a", Email: "owner@example.com"})
+				&platformv1.CreateInitialAdminInvitationRequest{TenantId: initialAdminTenantID(s), Email: "owner@example.com"})
 			if err != nil {
 				t.Fatalf("email caller: %v", err)
 			}
@@ -252,7 +296,7 @@ func TestCreateInitialAdminInvitation_UnknownEmailIsRefused(t *testing.T) {
 	fake := &fakeInitialAdminInviter{}
 	s, r := newResolvingInitialAdminServer(fake)
 	_, err := s.CreateInitialAdminInvitation(systemAdminCallerContext("stranger@example.com"),
-		&platformv1.CreateInitialAdminInvitationRequest{TenantId: "tenant-a", Email: "owner@example.com"})
+		&platformv1.CreateInitialAdminInvitationRequest{TenantId: initialAdminTenantID(s), Email: "owner@example.com"})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("got %v, want FailedPrecondition", err)
 	}
@@ -269,7 +313,7 @@ func TestCreateInitialAdminInvitation_NumericSubjectSkipsResolver(t *testing.T) 
 	fake := &fakeInitialAdminInviter{}
 	s, r := newResolvingInitialAdminServer(fake)
 	if _, err := s.CreateInitialAdminInvitation(systemAdminCallerContext("42"),
-		&platformv1.CreateInitialAdminInvitationRequest{TenantId: "tenant-a", Email: "owner@example.com"}); err != nil {
+		&platformv1.CreateInitialAdminInvitationRequest{TenantId: initialAdminTenantID(s), Email: "owner@example.com"}); err != nil {
 		t.Fatalf("numeric caller: %v", err)
 	}
 	if fake.got.InvitedByID != 42 || r.calls != 0 {

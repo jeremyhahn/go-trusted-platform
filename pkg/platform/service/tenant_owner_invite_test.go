@@ -86,6 +86,80 @@ func TestRegisterInvitedUser_OwnershipComesFromTheInvitation(t *testing.T) {
 	assert.Equal(t, "tenant-a", user.TenantID)
 }
 
+// newMirroredInvitedRegistration wires a TenantUserService whose IAM mirror
+// is the given recorder, with the mocks an owner-invitation redemption needs
+// up to and including the user save (#2362).
+func newMirroredInvitedRegistration(
+	t *testing.T, mirror IAMUserMirror, invitation *entities.Invitation,
+) (TenantUserServicer, *MockUserServicer, *MockInvitationServicer) {
+	t.Helper()
+	mockUserService := new(MockUserServicer)
+	mockInvitationService := new(MockInvitationServicer)
+	mockTenantManager := new(MockTenantManager)
+	ctx := context.Background()
+
+	svc := NewTenantUserService(&TenantUserServiceConfig{
+		Logger:            logging.DefaultLogger(),
+		UserService:       mockUserService,
+		InvitationService: mockInvitationService,
+		TenantManager:     mockTenantManager,
+		TokenIssuer:       new(MockTokenIssuer),
+		IAMMirror:         mirror,
+	})
+	mockUserService.On("GetByEmail", ctx, invitation.Email).
+		Return(nil, ErrUserNotFound{Email: invitation.Email})
+	mockInvitationService.On("GetByToken", ctx, invitation.Token).Return(invitation, nil)
+	mockTenantManager.On("GetTenant", ctx, invitation.TenantID).Return(&tenant.TenantEntity{
+		ID:   invitation.TenantID,
+		Name: invitation.TenantID,
+	}, nil)
+	mockUserService.On("Save", ctx, mock.AnythingOfType("*entities.User")).Return(nil)
+	return svc, mockUserService, mockInvitationService
+}
+
+// TestRegisterInvitedUser_MirrorsInvitedOwnerIntoIAM: an owner who redeems
+// the initial-admin invitation is mirrored into the tenant's IAM store with
+// the owner role, as a self-registered owner is (#2362).
+func TestRegisterInvitedUser_MirrorsInvitedOwnerIntoIAM(t *testing.T) {
+	invitation, err := entities.NewInitialAdminInvitation(
+		"tenant-a", "owner@example.test", DefaultTenantOwnerRole, 999, 7*24*time.Hour, time.Now())
+	require.NoError(t, err)
+	mirror := &fakeIAMMirror{}
+	svc, userService, invitationService := newMirroredInvitedRegistration(t, mirror, invitation)
+	invitationService.On("Accept", context.Background(), invitation.Token, mock.AnythingOfType("uint64")).
+		Return(nil)
+
+	_, err = svc.RegisterInvitedUser(context.Background(), newTestUser(invitation.Email), invitation.Token)
+	require.NoError(t, err)
+
+	require.Len(t, mirror.calls, 1)
+	assert.Equal(t, mirroredUser{
+		TenantID: "tenant-a", Email: invitation.Email, Roles: []string{DefaultTenantOwnerRole},
+	}, mirror.calls[0])
+	userService.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
+	invitationService.AssertCalled(t, "Accept", context.Background(), invitation.Token, mock.AnythingOfType("uint64"))
+}
+
+// TestRegisterInvitedUser_MirrorFailureLeavesInvitationPending: when the IAM
+// mirror refuses the invited owner, the saved user is deleted, the
+// invitation is not accepted, and the typed mirror error is returned (#2362).
+func TestRegisterInvitedUser_MirrorFailureLeavesInvitationPending(t *testing.T) {
+	invitation, err := entities.NewInitialAdminInvitation(
+		"tenant-a", "owner@example.test", DefaultTenantOwnerRole, 999, 7*24*time.Hour, time.Now())
+	require.NoError(t, err)
+	mirror := &fakeIAMMirror{failFor: map[string]error{invitation.Email: assert.AnError}}
+	svc, userService, invitationService := newMirroredInvitedRegistration(t, mirror, invitation)
+	userService.On("Delete", context.Background(), mock.AnythingOfType("uint64")).Return(nil)
+
+	_, err = svc.RegisterInvitedUser(context.Background(), newTestUser(invitation.Email), invitation.Token)
+	var mirrorErr ErrIAMMirrorFailed
+	require.ErrorAs(t, err, &mirrorErr)
+	assert.Equal(t, "tenant-a", mirrorErr.TenantID)
+
+	userService.AssertCalled(t, "Delete", context.Background(), mock.AnythingOfType("uint64"))
+	invitationService.AssertNotCalled(t, "Accept", mock.Anything, mock.Anything, mock.Anything)
+}
+
 // TestRegisterInvitedUser_OrdinaryInvitationsDoNotConferOwnership is the
 // control, and the one that must never regress: the common path stays
 // non-owner. Without it the test above would pass against a change that
