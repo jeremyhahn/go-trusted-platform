@@ -3,6 +3,7 @@ package diskimage
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -67,6 +68,10 @@ type createFlags struct {
 	sizeMB      int
 	output      string
 	binariesDir string
+	// manifestKey and manifestCert are BuildConfig.ManifestKey and
+	// ManifestCert: the KMS key that signs <image>.corim.
+	manifestKey  string
+	manifestCert string
 }
 
 // defaultPlatformConfigPaths mirror `iso create`: the single-node template
@@ -120,6 +125,8 @@ Examples:
 	f.IntVar(&flags.sizeMB, "size", pkgdiskimage.DefaultSizeMB, "Image size in MB")
 	f.StringVar(&flags.output, "output", "", "Output image path (default <work-dir>/trusted-platform-<target>.img)")
 	f.StringVar(&flags.binariesDir, "binaries-dir", "", "Directory holding the target-architecture platformd, platformctl, platform-initrd and gatewayd (default: aarch64/ next to this binary)")
+	f.StringVar(&flags.manifestKey, "manifest-key", pkgdiskimage.DefaultManifestKey, "kms:// reference of the key that signs the image's measurement manifest, <image>.corim beside the image (default: the tenant release key)")
+	f.StringVar(&flags.manifestCert, "manifest-cert", "", "The manifest key's certificate on the platform CA, optionally pinned with #sha256:<hex> (default: the key's ID)")
 	addMediaFlags(f, &flags.mediaFlags)
 	return cmd
 }
@@ -253,6 +260,7 @@ func (m *mediaFlags) imageBuild(iso *pkgiso.ISOBuildConfig, platformClient *cli.
 		UBootDir:              m.ubootDir,
 		UBootCacheVolume:      m.ubootCacheVolume,
 		KMSClients:            kmsClients(platformClient),
+		ReferenceValues:       referenceValues(platformClient),
 		Logger:                logger,
 		SkipPreflight:         m.skipPreflight,
 	}
@@ -380,6 +388,8 @@ func runCreate(common *cli.CommonFlags, flags *createFlags) (err error) {
 	build.SizeMB = flags.sizeMB
 	build.Output = flags.output
 	build.BinariesDir = filepath.Dir(cfg.PlatformdBinary)
+	build.ManifestKey = flags.manifestKey
+	build.ManifestCert = flags.manifestCert
 	if build.HostInstallerBinary, err = hostInstallerBinary(); err != nil {
 		return err
 	}
@@ -388,7 +398,21 @@ func runCreate(common *cli.CommonFlags, flags *createFlags) (err error) {
 		return ErrBuildFailed{Reason: err.Error()}
 	}
 	fmt.Printf("\nImage: %s\n  SHA256: %s\n  Size: %d MB\n  U-Boot: %s\n  Media: %s\n", result.Image, result.SHA256, result.SizeBytes/(1024*1024), result.UBoot.Binary, result.MediaDir)
+	printManifestLine(os.Stdout, result)
 	return nil
+}
+
+// printManifestLine reports the build's measurement manifest, claiming
+// registration only when the build registered it (result.Registered).
+func printManifestLine(w io.Writer, result *pkgdiskimage.Result) {
+	switch {
+	case result.Manifest != "" && result.Registered:
+		fmt.Fprintf(w, "  Measurement manifest: %s (registered in the reference-values store)\n", result.Manifest)
+	case result.Manifest != "":
+		fmt.Fprintf(w, "  Measurement manifest: %s (NOT registered in the reference-values store)\n", result.Manifest)
+	case result.Unmeasured != "":
+		fmt.Fprintf(w, "  Measurement manifest: none (%s)\n", result.Unmeasured)
+	}
 }
 
 // kmsClients reaches kms:// Secure Boot references through the operator's
@@ -401,4 +425,17 @@ func kmsClients(client *cli.LazyClient) pkgiso.KMSClientsFunc {
 		}
 		return &pkgiso.KMSClients{KMS: cl.KMS(), CA: cl.CA()}, nil
 	}
+}
+
+// referenceValues resolves the reference-values registrar a measured build
+// registers its signed manifest through: the go-quicbaas reference-values
+// store the verifier reads, reached through the platform client. The pinned
+// go-quicbaas SDK (v0.12.0-alpha) carries no reference-values verb
+// (PutReferenceValues ships in v0.14.0-alpha, a bump held to #1348), so it
+// yields no registrar: since docs/SPEC.md:57 requires every manifest
+// registered, a measured (Secure Boot) build is refused before assembly,
+// the output left untouched, until the SDK bump (#1348). A variable so the
+// command's tests can supply a registrar.
+var referenceValues = func(_ *cli.LazyClient) pkgdiskimage.ReferenceValueRegistrar {
+	return nil
 }

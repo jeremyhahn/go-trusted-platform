@@ -33,7 +33,7 @@ var ErrUnknownContainer = errors.New("diskimagetest: no such container")
 // root hash for `diskimage diskless-root --output <dir>`.
 type Runner struct {
 	Calls [][]string
-	// Fail names a runtime subcommand (build, create, cp, start) that fails.
+	// Fail names a runtime subcommand (build, create, cp, start, rm) that fails.
 	Fail string
 
 	containers map[string]*container

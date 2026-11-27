@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/measure"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/runner"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/uboot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/virtkernel"
@@ -37,6 +38,19 @@ type Result struct {
 	// Kernel is the platform-built kernel the image carries, nil for a
 	// target on a packaged kernel.
 	Kernel *virtkernel.Artifacts
+	// Measurements are the predicted values of measure.ManifestPCRs, one
+	// bank per BuildConfig.MeasurementBanks; nil when the image is not
+	// measured.
+	Measurements []measure.Bank
+	// Unmeasured says why Measurements is nil: UnmeasuredSecureBootOff.
+	Unmeasured string
+	// Manifest is the signed measurement manifest, ManifestPath(Image);
+	// "" only when the image is unmeasured, and then no manifest from an
+	// earlier build is left at that path.
+	Manifest string
+	// Registered says the manifest was registered in the reference-values
+	// store through BuildConfig.ReferenceValues.
+	Registered bool
 }
 
 // StagedMedia is a target's install media staged on disk: the layout the
@@ -128,11 +142,25 @@ func Create(ctx context.Context, cfg *BuildConfig) (*Result, error) {
 	if err := validateBuilderImage(resolved.BuilderImage); err != nil {
 		return nil, &StageError{Step: "configuration", Err: err}
 	}
+	// The target resolves before the manifest key is checked: a usage error
+	// (an unknown --target) is reported ahead of a missing dependency such
+	// as the reference-values registrar.
+	target, err := NewTarget(resolved.Target, resolved.Model)
+	if err != nil {
+		return nil, err
+	}
+	if err := resolved.validateManifestKey(); err != nil {
+		return nil, &StageError{Step: "configuration", Err: err}
+	}
+	// A Secure Boot build is the measured one, and docs/SPEC.md:57 needs its
+	// manifest registered: with no reference-values registrar it is refused
+	// here, before preflight, staging, removeManifest or assembly touch the
+	// output, so the earlier image and its manifest are left as they were.
+	// publishManifest's nil check stays as the backstop.
+	if resolved.ISO.SecureBoot && resolved.ReferenceValues == nil {
+		return nil, &StageError{Step: "configuration", Err: errNoRegistrar}
+	}
 	if !resolved.SkipPreflight {
-		target, err := NewTarget(resolved.Target, resolved.Model)
-		if err != nil {
-			return nil, err
-		}
 		if err := Preflight(ctx, resolved.Runner, resolved.ContainerRuntime, string(target.Architecture())); err != nil {
 			return nil, err
 		}
@@ -147,6 +175,12 @@ func Create(ctx context.Context, cfg *BuildConfig) (*Result, error) {
 	if output == "" {
 		output = filepath.Join(workDir, "trusted-platform-"+target.Name()+".img")
 	}
+	// The previous build's signed manifest goes before the container can
+	// touch the output: a failed or partial copy must not leave new image
+	// bytes beside a manifest that vouches for the old ones.
+	if err := removeManifest(output); err != nil {
+		return nil, err
+	}
 	if err := c.assembleInContainer(ctx, mediaDir, output, target); err != nil {
 		return nil, err
 	}
@@ -155,7 +189,19 @@ func Create(ctx context.Context, cfg *BuildConfig) (*Result, error) {
 	if err != nil {
 		return nil, &AssembleError{Step: "reading the finished image", Err: err}
 	}
-	return &Result{Image: output, SHA256: sum, SizeBytes: size, MediaDir: mediaDir, UBoot: art, Kernel: kernel}, nil
+	banks, unmeasured, err := c.measureImage(ctx, output, staged)
+	if err != nil {
+		return nil, err
+	}
+	var manifest string
+	var registered bool
+	if banks != nil {
+		if manifest, registered, err = c.publishManifest(ctx, output, sum, target, banks); err != nil {
+			return nil, err
+		}
+	}
+	return &Result{Image: output, SHA256: sum, SizeBytes: size, MediaDir: mediaDir, UBoot: art, Kernel: kernel,
+		Measurements: banks, Unmeasured: unmeasured, Manifest: manifest, Registered: registered}, nil
 }
 
 // kernelArtifacts builds or locates the platform-built kernel for a target

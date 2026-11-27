@@ -71,6 +71,27 @@ func TestNewKMSSigner_RoundTripsDigest(t *testing.T) {
 	}
 }
 
+// The platform KMS Sign API carries no RSA-PSS padding or salt, so a KMS RSA
+// key would sign PKCS#1 v1.5 where the caller asked for PSS. The signer
+// refuses PSS before it calls the KMS (Codex P1, #1907).
+func TestNewKMSSigner_RefusesRSAPSS(t *testing.T) {
+	key, dbCert := secureboottest.KeyPair(t, "db")
+	kms, ca := &secureboottest.KMS{Key: key}, &secureboottest.CA{Certs: map[string]*x509.Certificate{"platform/secureboot/db": dbCert}}
+
+	signer, _, err := NewKMSSigner(context.Background(), kms, ca, "kms://platform/secureboot/db", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte("manifest"))
+	_, err = signer.Sign(rand.Reader, digest[:], &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: crypto.SHA256})
+	if !errors.Is(err, ErrKMSPSSUnsupported) {
+		t.Fatalf("Sign with PSSOptions = %v, want ErrKMSPSSUnsupported", err)
+	}
+	if kms.LastReq != nil {
+		t.Errorf("the KMS got a Sign call %v, want none", kms.LastReq)
+	}
+}
+
 func TestNewKMSSigner_Errors(t *testing.T) {
 	key, dbCert := secureboottest.KeyPair(t, "db")
 	good := func() *secureboottest.CA {
