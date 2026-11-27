@@ -1329,10 +1329,23 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 				first.ruleID, dup.ruleID, dup.bridge, dup.mod.Table, dup.mod.Priority, dup.mod.Match)
 		}
 		// The cookie carries a truncated hash of the policy ID: two IDs
-		// with one hash would share flow IDs and stats, so refuse it.
+		// with one hash would share flow IDs and stats, so refuse it. The
+		// check reads only the in-memory records, so without a record (as
+		// after a restart) the switch's surviving flows are read too.
 		if owner, ok := policyCookieCollision(policyID, others); ok {
 			return nil, status.Errorf(codes.FailedPrecondition,
 				"policy %q flow cookies collide with those of policy %q; apply it under another ID", policyID, owner)
+		}
+		if prior == nil {
+			bridge, fl, err := s.survivingCookieCollision(ctx, client, policyID, flows)
+			if err != nil {
+				return nil, status.Errorf(codes.Unavailable, "%v", err)
+			}
+			if fl != nil {
+				return nil, status.Errorf(codes.FailedPrecondition,
+					"a surviving flow with cookie %s on bridge %s priority %d match %q carries the flow cookie hash of policy %q; apply it under another ID",
+					fl.Cookie, bridge, fl.Priority, fl.Match, policyID)
+			}
 		}
 		if owner, flow, ok := s.conflictingPolicyFlow(flows, others); ok {
 			return nil, status.Errorf(codes.FailedPrecondition,
@@ -1968,6 +1981,42 @@ func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientIn
 		}
 	}
 	return adopted, policyFlow{}, nil, nil
+}
+
+// survivingCookieCollision returns the first flow installed on a target
+// bridge that carries policyID's flow cookie hash at an entry none of
+// flows writes. The cookie carries only a 32-bit hash of the policy ID and
+// a restart empties the policy map, so without a record such a surviving
+// flow may be another policy's; sharing the hash would give both one flow
+// ID and one stats entry.
+func (s *SDNService) survivingCookieCollision(ctx context.Context, client ovs.ClientInterface, policyID string, flows []policyFlow) (string, *ovs.Flow, error) {
+	want := make(map[policyFlowKey]struct{}, len(flows))
+	for _, flow := range flows {
+		want[flowKey(flow)] = struct{}{}
+	}
+	own := fmt.Sprintf("0x%x", policyFlowCookie(policyID, 0))
+	seen := make(map[string]struct{})
+	for _, flow := range flows {
+		bridge := flow.bridge
+		if _, ok := seen[bridge]; ok {
+			continue
+		}
+		seen[bridge] = struct{}{}
+		installed, err := client.ListFlows(ctx, bridge)
+		if err != nil {
+			return "", nil, fmt.Errorf("read installed flows on bridge %s: %v", bridge, err)
+		}
+		for _, fl := range installed {
+			if fl == nil || !samePolicyCookie(fl.Cookie, own) {
+				continue
+			}
+			theirs := policyFlow{bridge: bridge, mod: &ovs.FlowMod{Table: fl.Table, Priority: fl.Priority, Match: fl.Match}}
+			if _, ok := want[flowKey(theirs)]; !ok {
+				return bridge, fl, nil
+			}
+		}
+	}
+	return "", nil, nil
 }
 
 // adoptedWithin returns the adopted legacy flows whose entry one of
