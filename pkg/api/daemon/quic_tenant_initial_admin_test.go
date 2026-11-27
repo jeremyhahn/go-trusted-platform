@@ -15,10 +15,11 @@ import (
 func TestQUICTenantBarrierCategory_InitialAdminInvitation(t *testing.T) {
 	fake := &fakeInitialAdminInviter{}
 	h := newTestQUICServiceHandler(logging.DefaultLogger())
-	h.tenantGRPC = newInitialAdminServer(fake)
+	s := newInitialAdminServer(fake)
+	h.tenantGRPC = s
 
 	body, err := quicwire.EncodePayload(&platformv1.CreateInitialAdminInvitationRequest{
-		TenantId: "tenant-a",
+		TenantId: initialAdminTenantID(s),
 		Email:    "owner@example.com",
 	})
 	if err != nil {

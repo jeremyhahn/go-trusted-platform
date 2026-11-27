@@ -394,6 +394,27 @@ func (s *TenantUserService) RegisterInvitedUser(
 		return nil, ErrUserSaveFailed{Cause: err}
 	}
 
+	// Mirror the invited user into the QuicBaaS IAM tenant, as
+	// RegisterNewUser does for a self-registered owner: an invited owner
+	// the IAM surface cannot see is not registered (#2362). A mirror
+	// failure deletes the saved user and leaves the invitation pending so
+	// the link can be redeemed again.
+	if s.iamMirror != nil {
+		if err := s.iamMirror.MirrorUser(ctx, invitation.TenantID, user.Email, user.DisplayName, iamMirrorRoles(user)); err != nil {
+			s.logger.Error(err, "failed to mirror invited user into IAM tenant, rolling back registration",
+				"user_id", user.ID,
+				"email", user.Email,
+				"tenant_id", invitation.TenantID,
+			)
+			if delErr := s.userService.Delete(ctx, user.ID); delErr != nil {
+				s.logger.Error(delErr, "failed to delete invited user after IAM mirror failure",
+					"user_id", user.ID,
+				)
+			}
+			return nil, ErrIAMMirrorFailed{Email: user.Email, TenantID: invitation.TenantID, Cause: err}
+		}
+	}
+
 	// Accept the invitation (pass user ID for audit tracking)
 	if err := s.invitationService.Accept(ctx, invitationToken, user.ID); err != nil {
 		s.logger.Error(err, "failed to accept invitation after user save",

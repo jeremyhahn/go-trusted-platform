@@ -134,7 +134,7 @@ func TestTenantGRPCServer_CreateInitialAdminInvitation_SystemTenantOnly(t *testi
 		t.Fatalf("system tenant: %v", err)
 	}
 	if resp.GetInvitation().GetTenantId() != initialAdminTenantID(s) {
-		t.Fatalf("invitation tenant = %q, want tenant-a", resp.GetInvitation().GetTenantId())
+		t.Fatalf("invitation tenant = %q, want %q", resp.GetInvitation().GetTenantId(), initialAdminTenantID(s))
 	}
 	if fake.calls != 1 || fake.got.TenantID != initialAdminTenantID(s) || fake.got.Email != "owner@example.com" {
 		t.Fatalf("inviter saw calls=%d req=%+v", fake.calls, fake.got)

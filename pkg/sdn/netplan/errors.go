@@ -200,16 +200,3 @@ type ErrTenantSubnet struct {
 func (e ErrTenantSubnet) Error() string {
 	return fmt.Sprintf("netplan: tenant subnet %s %s", e.Subnet, e.Reason)
 }
-
-// ErrTenantVRF reports a tenant VRF the plan cannot derive.
-type ErrTenantVRF struct {
-	// Tenant is the tenant whose VRF is refused.
-	Tenant string
-	// Reason says why it is refused.
-	Reason string
-}
-
-// Error implements the error interface.
-func (e ErrTenantVRF) Error() string {
-	return fmt.Sprintf("netplan: tenant %q VRF %s", e.Tenant, e.Reason)
-}

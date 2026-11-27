@@ -299,6 +299,14 @@ func (s *TenantGRPCServer) CreateInitialAdminInvitation(
 	if req.GetEmail() == "" {
 		return nil, status.Error(codes.InvalidArgument, "email is required")
 	}
+	// An owner invitation names an existing tenant: a link for a tenant
+	// that does not exist could never be redeemed (#2362).
+	if s.manager == nil {
+		return nil, status.Error(codes.FailedPrecondition, "tenant manager not available")
+	}
+	if _, err := s.manager.GetTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, s.toGRPCError(err)
+	}
 	inviterID, err := s.resolveInviterID(ctx)
 	if err != nil {
 		return nil, err
