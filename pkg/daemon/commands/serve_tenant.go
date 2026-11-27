@@ -36,7 +36,10 @@ import (
 //
 // The per-tenant barrier backend is wired from the SDK's QRDB tenant client,
 // so the barrier status, init, unseal and seal routes reach a real backend;
-// without that client they stay dark and list not-configured. DEK isolation
+// without that client they stay dark and list not-configured. In embedded
+// deployments the QRDB composition now installs the node's tenant servicer
+// behind that client (pkg/storage/quicbaas/sdk_embedded_qrdb.go), so the
+// barrier calls reach it rather than a nil servicer. DEK isolation
 // and the VLAN, quota and bridge subsystems stay off until they are
 // constructed at startup too (#721).
 func platformTenantManager(logger *logging.Logger, a *app.App) *tenant.Manager {

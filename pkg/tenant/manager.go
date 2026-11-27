@@ -1276,25 +1276,42 @@ func (m *Manager) getFromIAMByName(ctx context.Context, name string) (*iam.Tenan
 	return nil, ErrTenantNotFound{Name: name}
 }
 
+// listFromIAM walks every IAM tenant page by NextPageToken and returns the
+// limit/offset window of the full list. The total is the number of tenants
+// collected rather than Pagination.TotalCount, because the embedded IAM list
+// handler reports TotalCount 0; and the offset is applied after the walk,
+// because IAM pages by token, not by offset.
 func (m *Manager) listFromIAM(ctx context.Context, limit, offset int) ([]iam.Tenant, int, error) {
-	req := &iam.ListTenantsRequest{
-		PageSize: limit,
+	var all []iam.Tenant
+	seen := make(map[string]struct{})
+	token := ""
+	for {
+		resp, err := m.iamTenantClient.List(ctx, &iam.ListTenantsRequest{
+			PageSize:  limit,
+			PageToken: token,
+		})
+		if err != nil {
+			return nil, 0, err
+		}
+		all = append(all, resp.Tenants...)
+
+		next := resp.Pagination.NextPageToken
+		if next == "" || len(resp.Tenants) == 0 {
+			break
+		}
+		// Guard against a backend that hands back a token it already gave.
+		if _, dup := seen[next]; dup || next == token {
+			break
+		}
+		seen[next] = struct{}{}
+		token = next
 	}
 
-	resp, err := m.iamTenantClient.List(ctx, req)
-	if err != nil {
-		return nil, 0, err
+	total := len(all)
+	if offset >= total {
+		return nil, total, nil
 	}
-
-	// Apply offset client-side since SDK uses token-based pagination
-	tenants := resp.Tenants
-	if offset > 0 && offset < len(tenants) {
-		tenants = tenants[offset:]
-	} else if offset >= len(tenants) {
-		tenants = nil
-	}
-
-	return tenants, resp.Pagination.TotalCount, nil
+	return all[offset:min(offset+limit, total)], total, nil
 }
 
 func (m *Manager) updateInIAM(ctx context.Context, entity *TenantEntity) error {
