@@ -123,8 +123,9 @@ field 8, REST and the Go SDK through the JSON struct, MCP `switch_port_status`).
 `Warnings`) is declared and **never constructed or returned** by any method —
 it is vocabulary for a future batching API.
 
-Vendors: `VendorCiscoNexus = "cisco-nexus"`, `VendorNoop = "noop"`. That is the
-complete set.
+Vendors: `VendorCiscoNexus = "cisco-nexus"`, `VendorNoop = "noop"`,
+`VendorMemory = "memory"` (port state in memory, seeded from the config's
+ports; its configurator is the noop one). That is the complete set.
 
 ## 3. SSH: what `NewSSHExecutor` actually requires
 
@@ -184,11 +185,14 @@ activation.
 
 ## 5. Invariants
 
-1. **Connections are lazy and reused.** `ensureConnected` returns immediately
-   if `m.executor != nil`; otherwise it dials and caches. **It is not
-   concurrency-safe** — `sshManager` holds no lock, so two goroutines calling
-   `SetPortVLAN` on the same manager can both dial and one executor leaks.
-   Serialise per switch at your call site.
+1. **Connections are lazy, reused and serialised per switch.** `ensureConnected`
+   returns immediately if a connection is cached; otherwise it dials and caches.
+   `sshManager` serialises connection set-up, every operation and `Close`
+   through a one-slot context-aware semaphore: two first calls dial once, and a
+   queued call whose context ends before it runs sends nothing. `Close` takes
+   and closes the live connection **before** it waits for the slot, so an
+   operation stalled on the switch returns an error instead of holding the slot
+   forever; the next call dials again. Callers do not serialise per switch.
 2. **`Manager` methods are single-operation.** No retries, no backoff, no
    polling loops.
 3. **Runtime commands do not persist.** `buildConfigCommands` wraps interface
@@ -214,11 +218,18 @@ activation.
    (`codes.InvalidArgument`), which QUIC, MCP and embedded call. Zero
    is rejected everywhere as "missing". `Manager.SetPortVLAN` itself does
    **not** range-check; the bound is a transport-layer contract.
-9. **Port names are never validated.** No length limit, no character
-   allow-list, no format check, at any layer. See
-   [architecture.md](architecture.md) §5.4.
-10. **`Service` keys on `Name`, falling back to `Host`.** Two switches with the
-    same name silently collapse to one map entry.
+9. **Port names are validated before they reach a command.** Every
+   `sshManager` call that takes a port (`SetPortVLAN`, `GetPortVLAN`,
+   `GetPortStatus`, `EnablePort`, `DisablePort`) runs `ValidatePortName`
+   (`pkg/switch/port_name.go`) first: at most 64 bytes, a letter, up to 31
+   more letters or `-`, digits, up to three `/digits` groups and one optional
+   `.subinterface` (e.g. `Eth1/3`, `GigabitEthernet1/0/1.100`). Anything else
+   (spaces, newlines, ranges, `;`) fails with `ErrInvalidConfig` on field
+   `port` and sends nothing. See [architecture.md](architecture.md) §5.4.
+10. **`Service` keys on `Name`, falling back to `Host`, and refuses
+    collisions.** `NewService` fails with `ErrInvalidConfig` on field `name`
+    for an entry with neither name nor host and for two entries with the same
+    identity. Nothing collapses silently.
 
 ## 6. Error semantics
 

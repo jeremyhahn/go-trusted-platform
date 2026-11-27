@@ -103,6 +103,7 @@ export {
   type RegistryTagList,
   type RegistryComponentHealth,
   SDNService,
+  SwitchService,
   TenantService,
   TPMService,
   VTPMService,
@@ -185,6 +186,12 @@ export type {
   BMCRestoreResult,
   BMCReplaceWebCertRequest,
 } from './services/bmc-cert-service.js';
+export type {
+  SwitchPortMode,
+  SwitchPortStatus,
+  SwitchPortActionResponse,
+  SetSwitchPortVLANResponse,
+} from './services/switch-service.js';
 
 export type { Capability, CapabilitiesResponse } from './services/capabilities-service.js';
 

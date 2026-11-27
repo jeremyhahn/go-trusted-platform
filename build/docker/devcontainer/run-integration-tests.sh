@@ -100,6 +100,19 @@ declare -A TARGET_PACKAGES=(
     [registry]="./test/integration/registry/..."
     [secrets]="./test/integration/secrets/..."
     [vtpm]="./test/integration/vtpm/..."
+    # These two run through their own make targets and are not in ALL_TARGETS.
+    [diskimage-userspace]="./test/integration/diskimage/userspace"
+    [sdn-topology]="./test/integration/sdn/topology"
+)
+
+# Per-target guest suites: packages a target builds into a guest binary and
+# runs inside its VM, not on the host. nat64 boots a VM that runs the sdn
+# package built with the nat64vm tag (Makefile nat64-vm-suite). They stay out
+# of TARGET_PACKAGES, so the host run never runs the whole sdn package;
+# scripts/touched-features.sh reads them so a change there selects the target
+# (#2445).
+declare -A GUEST_PACKAGES=(
+    [nat64]="./test/integration/sdn/"
 )
 
 # Per-target -run filter, for a target that is one test of a larger
