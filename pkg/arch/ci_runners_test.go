@@ -174,14 +174,17 @@ func TestCIRunsHostedFirst(t *testing.T) {
 // GitHub-hosted default or the self-hosted pool, and every job that reads
 // the selection takes that decision. Off github.com each job keeps its label.
 const (
-	selectionStep       = "Balanced runner pool (ruling 1137)"
-	selectionRunner     = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}"
-	selectionDocker     = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}"
-	selectionGate       = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner || '\"ubuntu-latest\"') || 'ubuntu-latest' }}"
-	selectionForkEvents = "case \"$EVENT\" in\n  pull_request|pull_request_target)\n"
-	selectionForkGuard  = `if [ "$HEAD_REPO" != "$REPO" ]; then`
-	selectionEventGuard = "case \"$EVENT:$REF\" in\n  push:refs/heads/main | pull_request:*) ;;\n"
-	selectionTie        = `[ "$SQ" -le "$HQ" ] && pick=self`
+	selectionStep      = "Balanced runner pool (ruling 1137)"
+	selectionRunner    = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}"
+	selectionDocker    = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}"
+	selectionGate      = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner || '\"ubuntu-latest\"') || 'ubuntu-latest' }}"
+	selectionForkGuard = `if [ "$HEAD_REPO" != "$REPO" ]; then`
+	// DS-10475: the event case is an allow-list; a push counts only on
+	// refs/heads/main and every other event takes the hosted default.
+	selectionEventCase   = "case \"$EVENT\" in\n"
+	selectionMainGuard   = `if [ "$REF" != refs/heads/main ]; then`
+	selectionOtherEvents = "  *)\n    hosted_only "
+	selectionTie         = `[ "$SQ" -le "$HQ" ] && pick=self`
 	// selectionPreflight is preflight's runs-on: the bigdisk pool, or
 	// CI_PREFLIGHT_RUNS_ON, on a push to main or a same-repository pull
 	// request, the only events the self-hosted runners accept; hosted on
@@ -333,7 +336,7 @@ func selectionProblems(body []byte) []string {
 	if r := mapValue(first, "run"); r != nil {
 		run = r.Value
 	}
-	for _, want := range []string{selectionForkEvents + "    " + selectionForkGuard, selectionEventGuard, selectionTie, `emit "$(selfhosted bigdisk)" "$(selfhosted bigdisk-docker)"`} {
+	for _, want := range []string{selectionEventCase, selectionMainGuard, selectionForkGuard, selectionOtherEvents, selectionTie, `emit "$(selfhosted bigdisk)" "$(selfhosted bigdisk-docker)"`} {
 		if !strings.Contains(run, want) {
 			problems = append(problems, "the selection step's run lacks "+strconv.Quote(want))
 		}
@@ -436,8 +439,8 @@ func TestSelectionProblems_Mutations(t *testing.T) {
 		{"a v1.48 limit put back", func(b string) string {
 			return strings.Replace(b, "\njobs:\n", "\n  HOSTED_JOBS_PER_REPO: 12\n\njobs:\n", 1)
 		}, "env HOSTED_JOBS_PER_REPO is a v1.48 limit"},
-		{"the event guard dropped", func(b string) string {
-			return strings.Replace(b, "push:refs/heads/main | pull_request:*) ;;", "*) ;;", 1)
+		{"the event case dropped", func(b string) string {
+			return inSelectionStep(t, b, `case "$EVENT" in`, `case "$EVENT:$REF" in`)
 		}, "lacks"},
 		{"a tie back to hosted", func(b string) string { return strings.Replace(b, selectionTie, `[ "$SQ" -lt "$HQ" ] && pick=self`, 1) }, "lacks"},
 		{"the fork guard dropped", func(b string) string { return strings.Replace(b, selectionForkGuard, "if false; then", 1) }, "lacks"},

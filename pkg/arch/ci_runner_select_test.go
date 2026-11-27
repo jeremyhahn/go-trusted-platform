@@ -207,6 +207,9 @@ type selResult struct {
 type selEnv struct {
 	server, event, headRepo, ref string
 	vars                         map[string]string
+	// private: the repository is private (PRIVATE=true); the default is a
+	// public repository, PRIVATE=false (v1.62 overflow applies).
+	private bool
 }
 
 // selMain is the ref of a push to main.
@@ -275,6 +278,8 @@ func runSel(t *testing.T, script string, replies map[string]selReply, e selEnv) 
 		"HEAD_REPO=" + e.headRepo,
 		"EVENT=" + e.event,
 		"REF=" + e.ref,
+		"PRIVATE=" + fmt.Sprint(e.private),
+		"WAIT_LIMIT=600",
 	}
 	for k, v := range map[string]string{"HS": "12", "C1": "4", "C2": "4"} {
 		if o, ok := e.vars[k]; ok {
@@ -319,12 +324,12 @@ func runSel(t *testing.T, script string, replies map[string]selReply, e selEnv) 
 func TestRunnerSelectionStepEnv(t *testing.T) {
 	got := readSelStep(t, readCI(t)).env
 	sort.Strings(got)
-	want := []string{"API", "C1", "C2", "EVENT", "HEAD_REPO", "HS", "JOB_TOKEN", "REF", "REPO", "RUN_ID", "SERVER"}
+	want := []string{"API", "C1", "C2", "EVENT", "HEAD_REPO", "HS", "JOB_TOKEN", "PRIVATE", "REF", "REPO", "RUN_ID", "SERVER", "WAIT_LIMIT"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("the selection step's env keys are %v; this test sets %v", got, want)
 	}
 	body := string(readCI(t))
-	for _, v := range []string{"HS: ${{ vars.CI_HOSTED_SHARE }}", "C1: ${{ vars.CI_SELF_HOSTED_BIGDISK }}", "C2: ${{ vars.CI_SELF_HOSTED_BIGDISK_DOCKER }}"} {
+	for _, v := range []string{"HS: ${{ vars.CI_HOSTED_SHARE }}", "C1: ${{ vars.CI_SELF_HOSTED_BIGDISK }}", "C2: ${{ vars.CI_SELF_HOSTED_BIGDISK_DOCKER }}", "PRIVATE: ${{ github.event.repository.private }}", "WAIT_LIMIT: 600"} {
 		if !strings.Contains(body, v) {
 			t.Errorf("the selection step does not read %q", v)
 		}
@@ -343,12 +348,14 @@ func TestRunnerSelectionScript(t *testing.T) {
 		main     = "refs/heads/main"
 		prRef    = "refs/pull/1/merge"
 		forkNote = "head repository is not this repository (a fork)"
-		refused  = "which the self-hosted runners refuse"
+		refused  = "only a push to refs/heads/main or a pull request from this repository may reach a self-hosted runner"
 	)
 	gh := func(event, ref, headRepo string) selEnv {
 		return selEnv{server: "https://github.com", event: event, ref: ref, headRepo: headRepo}
 	}
 	push := gh("push", main, "")
+	private := push
+	private.private = true
 	vars := func(k, v string) selEnv { e := push; e.vars = map[string]string{k: v}; return e }
 	h := func(n int, st string) []selJob { return selJobs(n, 7, st, selUbuntu, time.Minute) }
 	s1 := func(n int, st string) []selJob { return selJobs(n, 8, st, selSelfHosted, time.Minute) }
@@ -399,13 +406,21 @@ func TestRunnerSelectionScript(t *testing.T) {
 		{name: "a same-repository pull request, hosted full", env: gh("pull_request", prRef, selRepo), jobs: hostedFull, want: selfPool},
 		{name: "a fork pull request, hosted full", env: gh("pull_request", prRef, "someone/repo"), jobs: hostedFull, want: hosted, notice: forkNote, noCalls: true},
 		{name: "a deleted fork's pull request, hosted full", env: gh("pull_request", prRef, ""), jobs: hostedFull, want: hosted, notice: forkNote, noCalls: true},
-		{name: "a fork pull_request_target, hosted full", env: gh("pull_request_target", main, "someone/repo"), jobs: hostedFull, want: hosted, notice: forkNote, noCalls: true},
+		{name: "a fork pull_request_target, hosted full", env: gh("pull_request_target", main, "someone/repo"), jobs: hostedFull, want: hosted, notice: refused, noCalls: true},
 		{name: "a same-repository pull_request_target, hosted full", env: gh("pull_request_target", main, selRepo), jobs: hostedFull, want: hosted, notice: refused, noCalls: true},
 		{name: "a schedule run, hosted full", env: gh("schedule", main, ""), jobs: hostedFull, want: hosted, notice: refused, noCalls: true},
 		{name: "a workflow_dispatch run, hosted full", env: gh("workflow_dispatch", main, ""), jobs: hostedFull, want: hosted, notice: refused, noCalls: true},
 		{name: "a push to another branch, hosted full", env: gh("push", "refs/heads/topic", ""), jobs: hostedFull, want: hosted, notice: refused, noCalls: true},
 		{name: "a push takes no fork check", env: gh("push", main, "someone/repo"), jobs: hostedFull, want: selfPool},
 		{name: "off github.com, hosted full", env: selEnv{server: "https://gitea.example", event: "push", ref: main}, jobs: hostedFull, want: hosted, noCalls: true},
+		// v1.62 overflow: in a public repository a self-hosted job queued past
+		// WAIT_LIMIT (600s) sends the run hosted while hosted has a free slot.
+		// Without the wait each of these picks self-hosted (a use tie).
+		{name: "a bigdisk job queued 700s, hosted free", env: push, jobs: slices.Concat(self, h(3, "in_progress"), selJobs(1, 8, "queued", selSelfHosted, 700*time.Second)), want: hosted, notice: "overflow:"},
+		{name: "a bigdisk-docker job queued 700s, hosted free", env: push, jobs: slices.Concat(self, h(3, "in_progress"), selJobs(1, 8, "queued", selDocker, 700*time.Second)), want: hosted, notice: "overflow:"},
+		{name: "a private repository does not overflow", env: private, jobs: slices.Concat(self, h(3, "in_progress"), selJobs(1, 8, "queued", selSelfHosted, 700*time.Second)), want: selfPool, notice: "use hosted 3/12, bigdisk 1/4"},
+		{name: "a 500s wait does not overflow", env: push, jobs: slices.Concat(self, h(3, "in_progress"), selJobs(1, 8, "queued", selSelfHosted, 500*time.Second)), want: selfPool, notice: "use hosted 3/12, bigdisk 1/4"},
+		{name: "a queued job of this run does not overflow", env: push, jobs: slices.Concat(self, h(1, "in_progress"), selJobs(2, selRunID, "queued", selDocker, time.Hour)), want: selfPool, notice: "use hosted 1/12, bigdisk 0/4, bigdisk-docker 0/4"},
 		// The listing.
 		{name: "a second jobs page read in full", env: push, jobs: paged, want: selfPool, notice: "the hosted pool is full (12 of 12)"},
 		{name: "a failed second jobs page", env: push, jobs: paged,
