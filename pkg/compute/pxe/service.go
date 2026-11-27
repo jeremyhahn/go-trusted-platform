@@ -113,6 +113,49 @@ type service struct {
 	// cannot interleave and leave its port flows and recorded state
 	// disagreeing.
 	devLocks map[string]*deviceLock
+
+	// pendingQuarantine holds the devices whose quarantine flows are
+	// enforced but whose quarantine write has not committed, guarded by
+	// mu and created lazily. Every widening move of such a device is
+	// refused until a quarantined (or failed) state is stored, because
+	// its durable record still names its earlier, wider placement.
+	pendingQuarantine map[string]struct{}
+}
+
+// setPendingQuarantine records (pending true) or clears the enforced but
+// unstored quarantine of deviceID.
+func (s *service) setPendingQuarantine(deviceID string, pending bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !pending {
+		delete(s.pendingQuarantine, deviceID)
+		return
+	}
+	if s.pendingQuarantine == nil {
+		s.pendingQuarantine = make(map[string]struct{})
+	}
+	s.pendingQuarantine[deviceID] = struct{}{}
+}
+
+// refuseIfQuarantinePending returns an ErrInvalidStateTransition when
+// deviceID has enforced quarantine flows that are not yet stored and the
+// move to state would widen its access.
+func (s *service) refuseIfQuarantinePending(deviceID string, from, state ProvisioningState) error {
+	if state == StateQuarantined || state == StateFailed {
+		return nil
+	}
+	s.mu.RLock()
+	_, pending := s.pendingQuarantine[deviceID]
+	s.mu.RUnlock()
+	if !pending {
+		return nil
+	}
+	return ErrInvalidStateTransition{
+		DeviceID:  deviceID,
+		FromState: string(from),
+		ToState:   string(state),
+		Reason:    "quarantine flows are enforced but the quarantine is not stored; quarantine the device again first",
+	}
 }
 
 // deviceLock is a device's lifecycle lock; refs counts the holders and
@@ -607,6 +650,8 @@ func (s *service) RemoveDevice(ctx context.Context, deviceID string) error {
 		}
 	}
 
+	s.setPendingQuarantine(deviceID, false)
+
 	s.logger.Info("Device removed",
 		"device_id", deviceID,
 		"mac_address", device.MACAddress.String(),
@@ -683,6 +728,9 @@ func (s *service) updateDeviceStateLocked(ctx context.Context, deviceID string, 
 			Reason:    "transition not allowed",
 		}
 	}
+	if err := s.refuseIfQuarantinePending(deviceID, device.State, state); err != nil {
+		return err
+	}
 
 	// Fail closed: a device whose VLAN move failed keeps its old state,
 	// so a device sent to failed or quarantined is never reported moved
@@ -721,6 +769,10 @@ func (s *service) updateDeviceStateLocked(ctx context.Context, deviceID string, 
 			Reason:   "failed to transition device state",
 			Cause:    err,
 		}
+	}
+
+	if state == StateQuarantined || state == StateFailed {
+		s.setPendingQuarantine(deviceID, false)
 	}
 
 	s.logger.Info("Device state updated",
@@ -888,6 +940,9 @@ func (s *service) AuthorizeDevice(ctx context.Context, deviceID string, targetVL
 			Reason:    "device must be in authorizing state",
 		}
 	}
+	if err := s.refuseIfQuarantinePending(deviceID, device.State, StateAuthorized); err != nil {
+		return err
+	}
 
 	oldVLAN := device.CurrentVLAN
 
@@ -981,14 +1036,18 @@ func (s *service) QuarantineDevice(ctx context.Context, deviceID string, reason 
 	// State and enforced VLAN in one record write. On failure the
 	// quarantine flows stay in place: a datastore outage must never
 	// restore the device's earlier (possibly production) access. The
-	// stored state is unchanged and the caller retries the quarantine
-	// (#2081 Codex).
+	// stored state is unchanged, so the service remembers the enforced
+	// quarantine until it is stored and refuses every widening move
+	// meanwhile; the caller retries the quarantine (#2081 Codex).
 	err = s.stateManager.TransitionWithUpdate(deviceID, StateQuarantined, reason, func(d *DeviceInfo) {
 		if s.vlanManager != nil {
 			d.CurrentVLAN = s.config.QuarantineVLAN
 		}
 	})
 	if err != nil {
+		if s.vlanManager != nil {
+			s.setPendingQuarantine(deviceID, true)
+		}
 		s.logger.Warn("Quarantine state write failed; quarantine flows kept",
 			"device_id", deviceID,
 			"error", err.Error(),
@@ -999,6 +1058,8 @@ func (s *service) QuarantineDevice(ctx context.Context, deviceID string, reason 
 			Cause:    err,
 		}
 	}
+
+	s.setPendingQuarantine(deviceID, false)
 
 	s.logger.Warn("Device quarantined",
 		"device_id", deviceID,

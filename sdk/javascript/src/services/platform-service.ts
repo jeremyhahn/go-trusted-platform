@@ -54,6 +54,12 @@ import type {
  * }
  * ```
  */
+/**
+ * Service lifecycle actions are never retried: a repeated start, stop or
+ * restart would act on the service again.
+ */
+const NO_RETRY = { retry: { enabled: false } } as const;
+
 export class PlatformService extends BaseService {
   /**
    * Creates a new Platform service instance
@@ -221,7 +227,8 @@ export class PlatformService extends BaseService {
   async startService(name: string): Promise<ApiResponse<PlatformServiceActionResponse>> {
     return this.client.post<PlatformServiceActionResponse>(
       this.buildUrl(`/services/${this.encodePathSegment(name)}/start`),
-      {}
+      {},
+      NO_RETRY
     );
   }
 
@@ -232,7 +239,8 @@ export class PlatformService extends BaseService {
   async stopService(name: string): Promise<ApiResponse<PlatformServiceActionResponse>> {
     return this.client.post<PlatformServiceActionResponse>(
       this.buildUrl(`/services/${this.encodePathSegment(name)}/stop`),
-      {}
+      {},
+      NO_RETRY
     );
   }
 
@@ -243,7 +251,8 @@ export class PlatformService extends BaseService {
   async restartService(name: string): Promise<ApiResponse<PlatformServiceActionResponse>> {
     return this.client.post<PlatformServiceActionResponse>(
       this.buildUrl(`/services/${this.encodePathSegment(name)}/restart`),
-      {}
+      {},
+      NO_RETRY
     );
   }
 }

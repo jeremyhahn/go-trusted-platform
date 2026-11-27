@@ -22,7 +22,7 @@ export interface UseCapabilitiesResult {
   loading: boolean;
   error: unknown;
   capability(op: string): CapabilityAnswer;
-  /** Reads the capabilities again for every hook on this client. */
+  /** Drops the cached answer and reads the capabilities again for every hook on this client. */
   reload(): void;
 }
 
@@ -108,7 +108,11 @@ export function useCapabilities(): UseCapabilitiesResult {
   }, [client, version]);
 
   // Every hook on the client reads again, so Gated controls recover too.
+  // The cached answer is dropped first, so a reload after a successful
+  // read asks the server again.
   const reload = useCallback(() => {
+    cache.delete(client);
+    settled.delete(client);
     subscribers.get(client)?.forEach((bump) => bump());
   }, [client]);
 

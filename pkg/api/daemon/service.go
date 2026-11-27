@@ -1054,7 +1054,10 @@ const entityWalkPageSize = 100
 // returns every record in one response but keeps the first batch's next
 // token. So, as PXEDeviceStore.List does, the walk stops on an empty next
 // token, a page larger than the page size or a next token already sent, and
-// skips an entity ID already seen. It returns the first List or fn error.
+// skips an entity ID already seen. The pinned SDK REST list leaves
+// Entity.ID unset, so ID 0 is not an identity and is never deduplicated;
+// the page-size and repeated-token stops still end an embedded walk. It
+// returns the first List or fn error.
 func walkEntities(ctx context.Context, client quicbaas.ClientInterface, entityType string, fn func(*service.Entity) error) error {
 	seenIDs := make(map[uint64]struct{})
 	sentTokens := make(map[string]struct{})
@@ -1072,10 +1075,12 @@ func walkEntities(ctx context.Context, client quicbaas.ClientInterface, entityTy
 			if entity == nil {
 				continue
 			}
-			if _, dup := seenIDs[entity.ID]; dup {
-				continue
+			if entity.ID != 0 {
+				if _, dup := seenIDs[entity.ID]; dup {
+					continue
+				}
+				seenIDs[entity.ID] = struct{}{}
 			}
-			seenIDs[entity.ID] = struct{}{}
 			if err := fn(entity); err != nil {
 				return err
 			}
