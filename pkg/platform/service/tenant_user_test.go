@@ -1017,8 +1017,8 @@ func TestTenantUserService_RegisterInvitedUser_NoRole(t *testing.T) {
 	mockTenantManager.AssertExpectations(t)
 }
 
-// TestTenantUserService_RegisterInvitedUser_AcceptFails verifies error handling when
-// invitation accept fails (non-critical - user should still be saved)
+// TestTenantUserService_RegisterInvitedUser_AcceptFails verifies that an
+// invitation acceptance failure fails the registration and deletes the saved user
 func TestTenantUserService_RegisterInvitedUser_AcceptFails(t *testing.T) {
 	logger := newTestLogger()
 	mockUserService := new(MockUserServicer)
@@ -1057,18 +1057,18 @@ func TestTenantUserService_RegisterInvitedUser_AcceptFails(t *testing.T) {
 	// User save succeeds
 	mockUserService.On("Save", ctx, mock.AnythingOfType("*entities.User")).Return(nil)
 
-	// Accept invitation fails - but this is non-critical, user registration should succeed
+	// Accept invitation fails: the registration fails and the saved user is deleted
 	acceptErr := errors.New("database error during accept")
 	mockInvitationService.On("Accept", ctx, invitationToken, mock.AnythingOfType("uint64")).Return(acceptErr)
+	mockUserService.On("Delete", ctx, user.ID).Return(nil)
 
 	// Execute
 	result, err := service.RegisterInvitedUser(ctx, user, invitationToken)
 
-	// Verify - registration succeeds even if invitation accept fails
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.NotNil(t, result.User)
-	assert.Equal(t, tenantID, result.User.TenantID)
+	// Verify - an acceptance failure fails the registration and deletes the saved user
+	require.ErrorIs(t, err, acceptErr)
+	assert.Nil(t, result)
+	mockUserService.AssertCalled(t, "Delete", ctx, user.ID)
 
 	mockUserService.AssertExpectations(t)
 	mockInvitationService.AssertExpectations(t)

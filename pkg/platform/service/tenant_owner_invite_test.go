@@ -198,6 +198,49 @@ func TestRegisterInvitedUser_MirrorFailureLeavesInvitationPending(t *testing.T) 
 	invitationService.AssertNotCalled(t, "Accept", mock.Anything, mock.Anything, mock.Anything)
 }
 
+// TestRegisterInvitedUser_AcceptFailureUndoesTheIAMMirror: Accept rechecks
+// the invitation after the IAM write, so an invitation revoked or expired
+// while the user was being mirrored must not leave an IAM user holding the
+// invited roles or a platform user (#2362).
+func TestRegisterInvitedUser_AcceptFailureUndoesTheIAMMirror(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    func(token string) error
+		target func() any
+	}{
+		{
+			name:   "revoked during mirroring",
+			err:    func(token string) error { return ErrInvitationAlreadyRevoked{Token: token} },
+			target: func() any { return new(ErrInvitationAlreadyRevoked) },
+		},
+		{
+			name:   "expired during mirroring",
+			err:    func(token string) error { return ErrInvitationExpired{Token: token} },
+			target: func() any { return new(ErrInvitationExpired) },
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			invitation, err := entities.NewInvitation(
+				"tenant-a", "member@example.test", "viewer", 999, 7*24*time.Hour, time.Now())
+			require.NoError(t, err)
+			mirror := &fakeIAMMirror{}
+			svc, userService, invitationService := newMirroredInvitedRegistration(t, mirror, invitation)
+			invitationService.On("Accept", ctx, invitation.Token, mock.AnythingOfType("uint64")).
+				Return(tc.err(invitation.Token))
+			userService.On("Delete", ctx, mock.AnythingOfType("uint64")).Return(nil)
+
+			result, err := svc.RegisterInvitedUser(ctx, newTestUser(invitation.Email), invitation.Token)
+			assert.Nil(t, result)
+			require.ErrorAs(t, err, tc.target())
+			assert.Len(t, mirror.calls, 1)
+			assert.Equal(t, []string{invitation.Email}, mirror.undone)
+			userService.AssertCalled(t, "Delete", ctx, mock.AnythingOfType("uint64"))
+		})
+	}
+}
+
 // TestRegisterInvitedUser_OrdinaryInvitationsDoNotConferOwnership is the
 // control, and the one that must never regress: the common path stays
 // non-owner. Without it the test above would pass against a change that

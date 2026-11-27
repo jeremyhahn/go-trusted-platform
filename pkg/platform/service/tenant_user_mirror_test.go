@@ -39,6 +39,26 @@ type fakeIAMMirror struct {
 	mu      sync.Mutex
 	calls   []mirroredUser
 	failFor map[string]error
+	undone  []string
+}
+
+// MirrorInvitedUser records the call like MirrorUser and returns an undo
+// that records the email it undid.
+func (f *fakeIAMMirror) MirrorInvitedUser(
+	_ context.Context, tenantID, email, _ string, roles []string,
+) (func(context.Context) error, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, mirroredUser{TenantID: tenantID, Email: email, Roles: roles})
+	if err := f.failFor[email]; err != nil {
+		return nil, err
+	}
+	return func(context.Context) error {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.undone = append(f.undone, email)
+		return nil
+	}, nil
 }
 
 func (f *fakeIAMMirror) MirrorUser(_ context.Context, tenantID, email, _ string, roles []string) error {

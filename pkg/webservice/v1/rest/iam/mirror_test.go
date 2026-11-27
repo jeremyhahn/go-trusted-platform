@@ -49,6 +49,9 @@ func TestMirrorUser_AlreadyExistsIsSuccessOtherErrorsAreNot(t *testing.T) {
 		createUserFn: func(context.Context, string, *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
 			return nil, errors.New("iam.user: already exists")
 		},
+		getByEmailFn: func(context.Context, string, string) (*iamsdk.User, error) {
+			return &iamsdk.User{ID: "u-ann", Email: "ann@example.com"}, nil
+		},
 	})
 	require.NoError(t, exists.MirrorUser(ctx, "t1", "ann@example.com", "Ann", nil))
 
@@ -59,6 +62,67 @@ func TestMirrorUser_AlreadyExistsIsSuccessOtherErrorsAreNot(t *testing.T) {
 		},
 	})
 	assert.ErrorIs(t, missingRole.MirrorUser(ctx, "t1", "ann@example.com", "Ann", []string{"admin"}), roleErr)
+}
+
+// TestMirrorUser_UsernameHeldByAnotherEmailIsAnError: ann@one.example and
+// ann@two.example derive the same username, so the conflict is another
+// user's and must fail before the invitation is consumed.
+func TestMirrorUser_UsernameHeldByAnotherEmailIsAnError(t *testing.T) {
+	t.Parallel()
+	cases := map[string]func(context.Context, string, string) (*iamsdk.User, error){
+		"email has no IAM user": func(context.Context, string, string) (*iamsdk.User, error) {
+			return nil, errors.New("iam.user: not_found")
+		},
+		"username held by another email": func(context.Context, string, string) (*iamsdk.User, error) {
+			return &iamsdk.User{ID: "u-ann", Email: "ann@one.example"}, nil
+		},
+	}
+	for name, getByEmail := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var assigns int
+			m := NewQuicBaaSUserMirror(&mockIAMClient{
+				createUserFn: func(context.Context, string, *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
+					return nil, errors.New("iam.user: already exists")
+				},
+				getByEmailFn: getByEmail,
+				assignRoleFn: func(context.Context, string, string, string) error {
+					assigns++
+					return nil
+				},
+			})
+			err := m.MirrorUser(context.Background(), "t1", "ann@two.example", "", []string{"viewer"})
+			require.Error(t, err)
+			assert.Zero(t, assigns)
+		})
+	}
+}
+
+// TestMirrorUser_ExistingIdentityGetsTheRequestedRoles: a mirror conflict for
+// the same tenant and email assigns the requested roles the user lacks.
+func TestMirrorUser_ExistingIdentityGetsTheRequestedRoles(t *testing.T) {
+	t.Parallel()
+	var assigns [][3]string
+	m := NewQuicBaaSUserMirror(&mockIAMClient{
+		createUserFn: func(context.Context, string, *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
+			return nil, errors.New("iam.user: already exists")
+		},
+		getByEmailFn: func(context.Context, string, string) (*iamsdk.User, error) {
+			return &iamsdk.User{ID: "u-ann", Email: "ann@example.com", Roles: []string{"role-viewer"}}, nil
+		},
+		listRolesFn: func(context.Context, string, *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+			return &iamsdk.ListRolesResponse{Roles: []iamsdk.Role{
+				{ID: "role-viewer", Name: "viewer"},
+				{ID: "role-admin", Name: "admin"},
+			}}, nil
+		},
+		assignRoleFn: func(_ context.Context, tenantID, userID, roleID string) error {
+			assigns = append(assigns, [3]string{tenantID, userID, roleID})
+			return nil
+		},
+	})
+	require.NoError(t, m.MirrorUser(context.Background(), "t1", "ann@example.com", "", []string{"viewer", "admin"}))
+	assert.Equal(t, [][3]string{{"t1", "u-ann", "admin"}}, assigns)
 }
 
 func TestMirroredEmails_ReadsEveryPage(t *testing.T) {
