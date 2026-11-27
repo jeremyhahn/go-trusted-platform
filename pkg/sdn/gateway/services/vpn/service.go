@@ -74,9 +74,16 @@ type Service struct {
 	// reconciliation alone. Guarded by mu.
 	peerRetry map[DataPlaneKind][]*Lease
 	// extendOwed holds the leases whose stored deadline the host has not
-	// confirmed (a failed ExtendPeer): Sweep re-sends it and Renew skips
-	// the renew window for them. Allocated on first use. Guarded by mu.
+	// confirmed (a failed ExtendPeer): Sweep re-sends it until the host
+	// holds it. Allocated on first use. Guarded by mu.
 	extendOwed map[LeaseID]struct{}
+	// renewBypass holds the leases whose client was refused a renewal
+	// after the new deadline was stored (a failed ExtendPeer): the client
+	// still holds its old expiry, so its retry is not held to the window
+	// of the stored one. A Sweep that pays the host extension leaves it;
+	// only a successful Renew or a committed revocation clears it.
+	// Allocated on first use. Guarded by mu.
+	renewBypass map[LeaseID]struct{}
 	// tearingDown counts, per address, the revocations whose teardown has
 	// not settled: the lease may already be deleted while the peer removal
 	// runs and neither releaseAddress nor owePeerRetry has run yet. Orphan
@@ -335,6 +342,10 @@ func (s *Service) oweExtension(id LeaseID) {
 		s.extendOwed = map[LeaseID]struct{}{}
 	}
 	s.extendOwed[id] = struct{}{}
+	if s.renewBypass == nil {
+		s.renewBypass = map[LeaseID]struct{}{}
+	}
+	s.renewBypass[id] = struct{}{}
 }
 
 // extensionOwed reports whether lease id waits on a deadline extension.
@@ -350,6 +361,23 @@ func (s *Service) clearExtension(id LeaseID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.extendOwed, id)
+}
+
+// renewBypassed reports whether the lease's client is owed a renewal
+// outside the renew window (see renewBypass).
+func (s *Service) renewBypassed(id LeaseID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.renewBypass[id]
+	return ok
+}
+
+// clearRenewBypass drops the client's renewal recovery obligation: the
+// client learned its deadline, or the lease is gone.
+func (s *Service) clearRenewBypass(id LeaseID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.renewBypass, id)
 }
 
 // retryOwedExtensions re-sends each owed deadline extension with the stored
@@ -368,6 +396,7 @@ func (s *Service) retryOwedExtensions(ctx context.Context) {
 			var nf *ErrLeaseNotFound
 			if errors.As(err, &nf) {
 				s.clearExtension(id)
+				s.clearRenewBypass(id)
 			}
 			continue
 		}
@@ -389,6 +418,7 @@ func (s *Service) retryOwedExtension(ctx context.Context, probe *Lease) {
 		var nf *ErrLeaseNotFound
 		if errors.As(err, &nf) {
 			s.clearExtension(probe.ID)
+			s.clearRenewBypass(probe.ID)
 		}
 		return
 	}

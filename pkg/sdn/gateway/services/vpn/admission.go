@@ -208,10 +208,11 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 	// that re-attests every minute would otherwise keep a lease alive with
 	// evidence that was never allowed to age, and the window is what the
 	// operator configured (Config.Validate binds it below LeaseTTL). A lease
-	// whose last extension failed is owed: the host may still enforce the
-	// previous deadline, so its retry is not held to the window of the new
-	// stored one.
-	if opensAt := lease.ExpiresAt.Add(-s.cfg.RenewWindow); now.Before(opensAt) && !s.extensionOwed(id) {
+	// whose last renewal stored a deadline the client was refused is owed:
+	// the client still holds the previous expiry (and the host may too), so
+	// its retry is not held to the window of the new stored one, even after
+	// Sweep has paid the host extension.
+	if opensAt := lease.ExpiresAt.Add(-s.cfg.RenewWindow); now.Before(opensAt) && !s.renewBypassed(id) {
 		return nil, s.refuse(ctx, lease.DeviceID, &ErrRenewalNotOpen{LeaseID: id, OpensAt: opensAt})
 	}
 	if err := s.enrolled(lease.TenantID, lease.DeviceID, lease.Zones); err != nil {
@@ -260,6 +261,7 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 		}
 	}
 	s.clearExtension(lease.ID)
+	s.clearRenewBypass(lease.ID)
 	s.logger.Info("vpn.renew", slog.String("lease", string(lease.ID)), slog.Int("renewals", lease.Renewals), slog.Time("expires_at", lease.ExpiresAt))
 	cp := *lease
 	return &cp, nil
@@ -347,7 +349,9 @@ func (s *Service) revoke(ctx context.Context, lease *Lease, reason RevokeReason)
 	// The address stays visible to orphan reclaim from before the lease
 	// deletion until the teardown settles (released, or owed through
 	// peerRetry), on every return path.
-	s.clearExtension(lease.ID)
+	// The owed extension and the client's renewal bypass are cleared only
+	// once the revocation commits: an unrecorded non-expired deletion
+	// leaves the lease served and still owed both.
 	defer s.markTearingDown(lease.Address)()
 	var storeErr error
 	if err := s.deps.Leases.Delete(ctx, lease.ID); err != nil {
@@ -360,6 +364,8 @@ func (s *Service) revoke(ctx context.Context, lease *Lease, reason RevokeReason)
 			// An expired lease is dead whether or not its deletion was
 			// recorded: its peer goes now, and the kept record keeps the
 			// address until a later Sweep records the deletion.
+			s.clearExtension(lease.ID)
+			s.clearRenewBypass(lease.ID)
 			var planeErr error
 			if plane, ok := s.deps.DataPlanes[lease.DataPlane]; ok {
 				if rmErr := plane.RemovePeer(ctx, lease.ID); rmErr != nil {
@@ -376,6 +382,8 @@ func (s *Service) revoke(ctx context.Context, lease *Lease, reason RevokeReason)
 			storeErr = err
 		}
 	}
+	s.clearExtension(lease.ID)
+	s.clearRenewBypass(lease.ID)
 	var planeErr error
 	if plane, ok := s.deps.DataPlanes[lease.DataPlane]; ok {
 		if err := plane.RemovePeer(ctx, lease.ID); err != nil {
