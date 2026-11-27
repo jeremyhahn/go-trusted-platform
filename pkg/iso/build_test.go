@@ -218,8 +218,12 @@ func TestBuildISO_WithSecureBootKeys(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "DB.key"), []byte("key"), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "DB.crt"), []byte("cert"), 0644))
 
+	copiedKeyDir := filepath.Join(isoDir, "keys")
 	mockRunner := &mockXorrisoRunner{
 		runFunc: func(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+			// The keys are on the tree when xorriso packs it.
+			assert.FileExists(t, filepath.Join(copiedKeyDir, "DB.key"))
+			assert.FileExists(t, filepath.Join(copiedKeyDir, "DB.crt"))
 			for i, arg := range args {
 				if arg == "-o" && i+1 < len(args) {
 					return os.WriteFile(args[i+1], []byte("dummy iso content"), 0644)
@@ -243,11 +247,11 @@ func TestBuildISO_WithSecureBootKeys(t *testing.T) {
 
 	assert.NoError(t, err)
 
-	// Verify keys were copied
-	copiedKeyDir := filepath.Join(isoDir, "keys")
+	// The private-key copy does not outlive the build; the "cert" placeholder
+	// is not public enrollment material either, so it is wiped too.
 	assert.DirExists(t, copiedKeyDir)
-	assert.FileExists(t, filepath.Join(copiedKeyDir, "DB.key"))
-	assert.FileExists(t, filepath.Join(copiedKeyDir, "DB.crt"))
+	assert.NoFileExists(t, filepath.Join(copiedKeyDir, "DB.key"))
+	assert.NoFileExists(t, filepath.Join(copiedKeyDir, "DB.crt"))
 }
 
 func TestBuildISO_WithFIPSKernel(t *testing.T) {
@@ -507,4 +511,91 @@ func TestHelperFunctions(t *testing.T) {
 		assert.FileExists(t, filepath.Join(dstDir, "file1.txt"))
 		assert.FileExists(t, filepath.Join(dstDir, "subdir", "file2.txt"))
 	})
+}
+
+// TestBuildISO_HardLinkedStagedKeyKeepsSource covers a pre-staged tree whose
+// private key is a hard link to a signing key outside the ISO tree (as `cp
+// -al` prepares it): the cleanup must detach the tree's link, never zero the
+// shared inode, so the source key keeps its bytes.
+func TestBuildISO_HardLinkedStagedKeyKeepsSource(t *testing.T) {
+	tmpDir := createTestISODirectory(t)
+	isoDir := filepath.Join(tmpDir, "iso")
+	outputISO := filepath.Join(tmpDir, "test.iso")
+
+	srcDir := filepath.Join(tmpDir, "signing")
+	require.NoError(t, os.MkdirAll(srcDir, 0700))
+	srcKey := filepath.Join(srcDir, "DB.key")
+	keyBytes := []byte("test-only source signing key bytes\n")
+	require.NoError(t, os.WriteFile(srcKey, keyBytes, 0600))
+
+	stageDir := filepath.Join(isoDir, SecureBootKeysISODirName)
+	require.NoError(t, os.MkdirAll(stageDir, 0700))
+	stagedKey := filepath.Join(stageDir, "DB.key")
+	require.NoError(t, os.Link(srcKey, stagedKey))
+
+	builder := NewBuilder(nil)
+	builder.runner = &mockXorrisoRunner{
+		runFunc: func(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+			return assert.AnError
+		},
+	}
+
+	err := builder.BuildISO(context.Background(), &ISOConfig{ISODir: isoDir, OutputISO: outputISO})
+	require.Error(t, err)
+
+	got, rerr := os.ReadFile(srcKey)
+	require.NoError(t, rerr)
+	assert.Equal(t, keyBytes, got, "the source key outside the ISO tree must keep its bytes")
+	assert.NoFileExists(t, stagedKey, "the tree's link to the key must still be removed")
+}
+
+// TestBuildISO_RetryAfterFailedPackFailsClosedOnMissingKey covers a failed
+// pack followed by a retry: the first build's cleanup removes the staged
+// DB.key, so the retry, whose baked configuration still references it, must
+// fail with an error naming DB.key instead of packing an ISO without it.
+func TestBuildISO_RetryAfterFailedPackFailsClosedOnMissingKey(t *testing.T) {
+	tmpDir := createTestISODirectory(t)
+	isoDir := filepath.Join(tmpDir, "iso")
+	outputISO := filepath.Join(tmpDir, "test.iso")
+
+	configDir := filepath.Join(isoDir, "configs")
+	require.NoError(t, os.MkdirAll(configDir, 0755))
+	baked := "secure-boot:\n  enabled: true\n  db:\n" +
+		"    key-uri: file://" + SecureBootKeysMediaDir + "/DB.key\n" +
+		"    cert-uri: file://" + SecureBootKeysMediaDir + "/DB.crt\n"
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "installer.yaml"), []byte(baked), 0644))
+
+	stageDir := filepath.Join(isoDir, SecureBootKeysISODirName)
+	require.NoError(t, os.MkdirAll(stageDir, 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(stageDir, "DB.key"), []byte("test-only staged key bytes\n"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(stageDir, "DB.crt"), []byte("test certificate"), 0644))
+
+	fail := true
+	packed := false
+	builder := NewBuilder(nil)
+	builder.runner = &mockXorrisoRunner{
+		runFunc: func(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+			if fail {
+				return assert.AnError
+			}
+			packed = true
+			for i, arg := range args {
+				if arg == "-o" && i+1 < len(args) {
+					return os.WriteFile(args[i+1], []byte("dummy iso content"), 0644)
+				}
+			}
+			return nil
+		},
+	}
+	config := &ISOConfig{ISODir: isoDir, OutputISO: outputISO}
+
+	err := builder.BuildISO(context.Background(), config)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "xorriso failed")
+
+	fail = false
+	err = builder.BuildISO(context.Background(), config)
+	require.Error(t, err, "a retry must not pack an ISO whose baked config references a missing key")
+	assert.Contains(t, err.Error(), "DB.key")
+	assert.False(t, packed, "xorriso must not run when referenced signing material is missing")
 }

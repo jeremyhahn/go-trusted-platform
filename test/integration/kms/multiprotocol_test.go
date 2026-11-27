@@ -1263,6 +1263,10 @@ func testSecretsVersions(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 	_, err := cmd.SecretsStore(testCtx, storeOpts)
 	require.NoError(t, err, "Setup: SecretsStore should succeed")
 
+	// rotated is false when the rotation known gap left only version 1;
+	// version 1 comes from the SecretsStore above, so its read always runs.
+	rotated := true
+
 	// Rotate a few times
 	for i := 2; i <= 3; i++ {
 		rotateOpts := SecretsRotateOptions{
@@ -1274,15 +1278,18 @@ func testSecretsVersions(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 			continue
 		}
 		if cmd.Name() != "CLI" && helpers.KnownGap(t, cmd.Name(), helpers.MethodSecretsRotate, err) {
-			// The version checks below need the rotated versions this
-			// known gap could not create (and the embedded dispatch has no
-			// ListVersions/GetVersion either): stop the scenario here.
-			return
+			// The version list below needs the rotated versions this known
+			// gap could not create: stop rotating and skip that check only.
+			rotated = false
+			break
 		}
 		require.NoError(t, err, "Setup: SecretsRotate should succeed")
 	}
 
 	t.Run("ListSecretVersions", func(t *testing.T) {
+		if !rotated {
+			return
+		}
 		result, err := cmd.SecretsVersions(testCtx, secretName, SecretsVersionsOptions{Limit: 10})
 		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
 			return
