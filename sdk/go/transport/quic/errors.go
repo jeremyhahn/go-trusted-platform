@@ -140,3 +140,17 @@ type ErrDurationClearNotSupported struct {
 func (e ErrDurationClearNotSupported) Error() string {
 	return fmt.Sprintf("QUIC cannot set %s to zero: the QUIC pool update keeps a zero duration (send -1 to keep it)", e.Field)
 }
+
+// ErrTPMSelectorUnsupported is returned when a TPM request names a key
+// selector the QUIC sub-operation cannot honour: GetAK reads the platform AK
+// through GetIAK, which takes no handle or algorithm, so a request that sets
+// either is refused before it is sent.
+type ErrTPMSelectorUnsupported struct {
+	Method string
+	Field  string
+}
+
+// Error implements the error interface.
+func (e ErrTPMSelectorUnsupported) Error() string {
+	return fmt.Sprintf("QUIC %s reads the platform AK only and cannot select a %s", e.Method, e.Field)
+}

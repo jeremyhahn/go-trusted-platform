@@ -50,6 +50,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Gated } from "@/components/features/capabilities/gated";
 import { textToBase64, useApi, useTPM, useTPMOps, useToast } from "@/hooks";
 import type { PCRBank as SDKPCRBank } from "trusted-platform-sdk";
 
@@ -406,14 +407,16 @@ export default function TPMPCRsPage() {
               onChange={(e) => setExtendData(e.target.value)}
             />
           </div>
-          <Button
-            variant="destructive"
-            onClick={() => setExtendConfirmOpen(true)}
-            disabled={!extendData || extendIndex === "" || extendPCR.isLoading}
-          >
-            {extendPCR.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Extend PCR
-          </Button>
+          <Gated op="POST /api/v1/tpm/pcrs/extend">
+            <Button
+              variant="destructive"
+              onClick={() => setExtendConfirmOpen(true)}
+              disabled={!extendData || extendIndex === "" || extendPCR.isLoading}
+            >
+              {extendPCR.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Extend PCR
+            </Button>
+          </Gated>
         </CardContent>
       </Card>
 
