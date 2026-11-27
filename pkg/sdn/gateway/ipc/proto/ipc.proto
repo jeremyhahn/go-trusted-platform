@@ -195,6 +195,10 @@ message RenewVPNPeerRequest {
   bytes public_key = 1;
   // expires_at_unix_nano is the new deadline (Unix nanoseconds).
   int64 expires_at_unix_nano = 2;
+  // data_plane is the plane of the lease being renewed.
+  string data_plane = 3;
+  // lease_id is the lease being renewed: the host extends only the peer it holds for this lease (Codex #2336 round 17).
+  string lease_id = 4;
 }
 
 message RenewVPNPeerResponse {

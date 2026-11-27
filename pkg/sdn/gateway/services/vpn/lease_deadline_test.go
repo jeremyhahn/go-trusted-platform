@@ -255,6 +255,7 @@ func TestLeaseDeadline_RenewalAfterExpiryIsRefusedAndInstallsNothing(t *testing.
 		require.Nil(t, installHosted(t, host, deadlinePeer("l1", t0.Add(time.Hour))))
 
 		resp := host.RenewVPNPeer(ctx, &ipcv1.RenewVPNPeerRequest{
+			DataPlane: string(DataPlaneMASQUE), LeaseId: "l1",
 			PublicKey:         bytesOf(0xab, 32),
 			ExpiresAtUnixNano: t0.Add(2 * time.Hour).UnixNano(),
 		})
@@ -273,6 +274,7 @@ func TestLeaseDeadline_RenewalAfterExpiryIsRefusedAndInstallsNothing(t *testing.
 		managed.installErr = errors.New("renewal reached the plane")
 
 		require.Nil(t, host.RenewVPNPeer(ctx, &ipcv1.RenewVPNPeerRequest{
+			DataPlane: string(DataPlaneMASQUE), LeaseId: "l1",
 			PublicKey:         bytesOf(0xab, 32),
 			ExpiresAtUnixNano: t0.Add(2 * time.Hour).UnixNano(),
 		}).GetRefusal())
@@ -295,10 +297,12 @@ func TestLeaseDeadline_DelayedLowerRenewalCannotRollBackTheHostDeadline(t *testi
 	require.Nil(t, installHosted(t, host, deadlinePeer("l1", t0.Add(time.Hour))))
 
 	require.Nil(t, host.RenewVPNPeer(ctx, &ipcv1.RenewVPNPeerRequest{
+		DataPlane: string(DataPlaneMASQUE), LeaseId: "l1",
 		PublicKey:         bytesOf(0xab, 32),
 		ExpiresAtUnixNano: t0.Add(3 * time.Hour).UnixNano(),
 	}).GetRefusal())
 	require.Nil(t, host.RenewVPNPeer(ctx, &ipcv1.RenewVPNPeerRequest{
+		DataPlane: string(DataPlaneMASQUE), LeaseId: "l1",
 		PublicKey:         bytesOf(0xab, 32),
 		ExpiresAtUnixNano: t0.Add(2 * time.Hour).UnixNano(),
 	}).GetRefusal(), "a lower deadline is accepted as a no-op")
@@ -540,4 +544,53 @@ func TestRenew_AFailedMarkerClearRefusesTheRenewalAndKeepsTheLeaseAcrossARestart
 	assert.Equal(t, 1, managed2.count(), "the replacement host gets the peer replayed")
 	_, err = h.svc.Lease(ctx, lease.ID)
 	require.NoError(t, err)
+}
+
+// TestPlaneHost_ADelayedRenewalOfARemovedLeaseDoesNotExtendItsReplacement:
+// lease A's renewal, delayed past A's removal, must not extend replacement
+// lease B, which reuses A's key; B keeps its own deadline (Codex #2336 round 17).
+func TestPlaneHost_ADelayedRenewalOfARemovedLeaseDoesNotExtendItsReplacement(t *testing.T) {
+	t0 := leaseDeadlineT0
+	ctx := context.Background()
+	managed := newManagedFakePlane(DataPlaneMASQUE, new([]string))
+	host := hostOf(t, managed)
+	host.now = func() time.Time { return t0.Add(30 * time.Minute) }
+	require.Nil(t, installHosted(t, host, deadlinePeer("l1", t0.Add(time.Hour))))
+	require.Nil(t, host.RemoveVPNPeer(ctx, &ipcv1.RemoveVPNPeerRequest{DataPlane: string(DataPlaneMASQUE), LeaseId: "l1"}).GetRefusal())
+	require.Nil(t, installHosted(t, host, deadlinePeer("l2", t0.Add(time.Hour))), "the replacement reuses the key")
+
+	resp := host.RenewVPNPeer(ctx, &ipcv1.RenewVPNPeerRequest{
+		DataPlane: string(DataPlaneMASQUE), LeaseId: "l1",
+		PublicKey:         bytesOf(0xab, 32),
+		ExpiresAtUnixNano: t0.Add(3 * time.Hour).UnixNano(),
+	})
+	require.NotNil(t, resp.GetRefusal(), "the removed lease's renewal is refused")
+	assert.Equal(t, ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_LEASE_NOT_FOUND, resp.GetRefusal().GetClass())
+
+	require.NoError(t, host.ExpirePeers(ctx, t0.Add(time.Hour)))
+	assert.Equal(t, 0, managed.count(), "the replacement keeps its own deadline")
+}
+
+// TestPlaneHost_ACancelledRenewalLeavesTheDeadline: a renewal whose context is
+// cancelled extends nothing (Codex #2336 round 17).
+func TestPlaneHost_ACancelledRenewalLeavesTheDeadline(t *testing.T) {
+	t0 := leaseDeadlineT0
+	ctx := context.Background()
+	managed := newManagedFakePlane(DataPlaneMASQUE, new([]string))
+	host := hostOf(t, managed)
+	host.now = func() time.Time { return t0.Add(30 * time.Minute) }
+	require.Nil(t, installHosted(t, host, deadlinePeer("l1", t0.Add(time.Hour))))
+
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	resp := host.RenewVPNPeer(cctx, &ipcv1.RenewVPNPeerRequest{
+		DataPlane: string(DataPlaneMASQUE), LeaseId: "l1",
+		PublicKey:         bytesOf(0xab, 32),
+		ExpiresAtUnixNano: t0.Add(2 * time.Hour).UnixNano(),
+	})
+	require.NotNil(t, resp.GetRefusal())
+	assert.Equal(t, ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE, resp.GetRefusal().GetClass())
+
+	require.NoError(t, host.ExpirePeers(ctx, t0.Add(time.Hour)))
+	assert.Equal(t, 0, managed.count(), "the old deadline stands")
 }

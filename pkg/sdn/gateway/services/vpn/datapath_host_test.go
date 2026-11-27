@@ -109,6 +109,7 @@ func TestPlaneHost_AnOlderDuplicateInstallKeepsTheRenewedDeadline(t *testing.T) 
 	require.Nil(t, installHosted(t, host, deadlinePeer("l1", t0.Add(time.Hour))))
 
 	require.Nil(t, host.RenewVPNPeer(ctx, &ipcv1.RenewVPNPeerRequest{
+		DataPlane: string(DataPlaneMASQUE), LeaseId: "l1",
 		PublicKey:         bytesOf(0xab, 32),
 		ExpiresAtUnixNano: t0.Add(2 * time.Hour).UnixNano(),
 	}).GetRefusal())
