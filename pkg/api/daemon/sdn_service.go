@@ -1351,7 +1351,7 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		// refuse an entry a flow with another cookie (SDNService.AddFlow,
 		// another owner) holds, before any write, so the policy never
 		// replaces, and its strict deletes never meet, a flow it does not own.
-		adopted, occupied, occupant, err := s.occupiedPolicyFlow(ctx, client, flows)
+		adopted, occupied, occupant, err := s.occupiedPolicyFlow(ctx, client, policyID, flows)
 		if err != nil {
 			return nil, status.Errorf(codes.Unavailable, "%v", err)
 		}
@@ -1701,6 +1701,27 @@ func policyFlowCookie(policyID string, ruleIndex int) uint64 {
 	return policyFlowCookieOwner | (h.Sum64()&(1<<32-1))<<16 | uint64(ruleIndex)&(1<<16-1)
 }
 
+// legacyPolicyFlowCookie is the cookie every flow of a policy carried before
+// per-rule cookies: the owner prefix over the low 48 bits of the FNV-1a hash
+// of the policy ID. ApplyPolicy adopts a flow under the requested policy's
+// legacy cookie as its own, so a reapply over pre-upgrade flows replaces
+// them; another policy's legacy cookie stays a foreign occupant.
+func legacyPolicyFlowCookie(policyID string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(policyID))
+	return policyFlowCookieOwner | h.Sum64()&(1<<48-1)
+}
+
+// parseFlowCookie reads a cookie as the switch or a FlowMod renders it.
+func parseFlowCookie(cookie string) (uint64, bool) {
+	v := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(cookie)), "0x")
+	if v == "" {
+		return 0, true
+	}
+	n, err := strconv.ParseUint(v, 16, 64)
+	return n, err == nil
+}
+
 // maxPolicyRules is how many rules a policy may carry: the rule index
 // takes the low 16 bits of the flow cookie.
 const maxPolicyRules = 1 << 16
@@ -1835,13 +1856,23 @@ func (s *SDNService) recordFlows(p policyResource) []policyFlow {
 }
 
 // mergePolicyFlows concatenates the lists in order, keeping the first flow
-// of each key.
+// of each (key, cookie). One entry can be uncertain under several cookies
+// (a reorder moves a rule to another rule's index, so its cookie), and a
+// strict delete removes only the cookie it names, so every variant is kept
+// for the rollback and for DeletePolicy.
 func mergePolicyFlows(lists ...[]policyFlow) []policyFlow {
-	seen := make(map[policyFlowKey]struct{})
+	type variant struct {
+		key    policyFlowKey
+		cookie string
+	}
+	seen := make(map[variant]struct{})
 	var out []policyFlow
 	for _, list := range lists {
 		for _, flow := range list {
-			key := flowKey(flow)
+			key := variant{key: flowKey(flow), cookie: flow.mod.Cookie}
+			if n, ok := parseFlowCookie(flow.mod.Cookie); ok {
+				key.cookie = strconv.FormatUint(n, 16)
+			}
 			if _, ok := seen[key]; ok {
 				continue
 			}
@@ -1877,9 +1908,11 @@ func (s *SDNService) conflictingPolicyFlow(flows []policyFlow, others []policyRe
 // occupiedPolicyFlow reads the installed flows of each flow's entry and
 // returns the first of flows whose entry (bridge, table, priority,
 // canonical match) a flow with a different cookie holds, with that
-// occupant; nil when none does. The stats filter is not strict, so the
-// flows it returns are keyed here.
-func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientInterface, flows []policyFlow) ([]policyFlow, policyFlow, *ovs.Flow, error) {
+// occupant; nil when none does. Cookie-0 flows with the same actions and
+// flows under policyID's legacy cookie are not occupants: they are
+// returned as adopted, for the rollback to restore. The stats filter is not
+// strict, so the flows it returns are keyed here.
+func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientInterface, policyID string, flows []policyFlow) ([]policyFlow, policyFlow, *ovs.Flow, error) {
 	var adopted []policyFlow
 	for _, flow := range flows {
 		filter := fmt.Sprintf("table=%d", flow.mod.Table)
@@ -1902,10 +1935,17 @@ func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientIn
 				continue
 			}
 			// A cookie-0 flow with the same actions is this flow installed
-			// before policy cookies: adopt it, and keep a copy so a failed
-			// apply can put it back. Actions render "" for any instruction
-			// but APPLY_ACTIONS, so such a flow is never adopted.
-			if zeroFlowCookie(fl.Cookie) && fl.Actions != "" && fl.Actions == flow.mod.Actions {
+			// before policy cookies, and a flow under the policy's legacy
+			// cookie is this policy's flow from before per-rule cookies
+			// (whatever its actions: the cookie names the policy). Adopt
+			// either, and keep a copy so a failed apply can put it back.
+			// Actions render "" for any instruction but APPLY_ACTIONS, so
+			// such a cookie-0 flow is never adopted.
+			legacy := false
+			if n, ok := parseFlowCookie(fl.Cookie); ok && n == legacyPolicyFlowCookie(policyID) {
+				legacy = true
+			}
+			if legacy || zeroFlowCookie(fl.Cookie) && fl.Actions != "" && fl.Actions == flow.mod.Actions {
 				mod := *flow.mod
 				mod.Cookie = fl.Cookie
 				mod.Actions = fl.Actions
