@@ -215,6 +215,10 @@ func (m *ipmiUserManager) ListUsers(_ context.Context) ([]User, error) {
 // user, revokes its channel access and clears the name, and returns the
 // failure joined with any rollback error. The name write is rolled back
 // too, because a BMC may apply it and lose only the response.
+//
+// It first reads the slot's name and refuses a populated slot with
+// ErrSlotOccupied, writing nothing, so a rollback never touches an
+// existing account.
 func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memguard.MemoryEnclave) error {
 	if err := validateSlot(u.Slot); err != nil {
 		return err
@@ -235,6 +239,17 @@ func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memgua
 	// an old or blank one. Refuse before the first write.
 	if u.Enabled && (password == nil || password.Size() == 0) {
 		return ErrInvalidConfig{Field: "password", Reason: "an enabled user needs a password"}
+	}
+	// Probe the slot before the first write: a slot that already holds an
+	// account is refused here, so the rollback below only ever clears a slot
+	// this call found empty. Callers that skip Service.CreateUser (the CLI)
+	// get the same check.
+	name, err := m.getUserName(u.Slot)
+	if err != nil {
+		return err
+	}
+	if name != "" {
+		return ErrSlotOccupied{Slot: u.Slot}
 	}
 	if err := m.setUserName(u.Slot, u.Username); err != nil {
 		// The BMC may have applied the name and lost only the response;

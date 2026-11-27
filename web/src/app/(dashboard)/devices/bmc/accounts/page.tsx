@@ -27,7 +27,7 @@ export default function BMCAccountsPage() {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">BMC certificate and users</h1>
         <p className="text-muted-foreground">
-          Restore the BMC factory certificate, and manage the BMC user accounts of one BMC profile
+          Manage the BMC user accounts of one BMC profile
         </p>
       </div>
 

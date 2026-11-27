@@ -68,7 +68,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `BMCService.GetWebCertificate` | `GET /bmc/{profileID:[0-9]+}/cert` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
 | `BMCService.ReplaceWebCertificate` | `PUT /bmc/{profileID:[0-9]+}/cert` | - | - | - | missing |
 | `BMCService.EnrollBMC` | `POST /bmc/{profileID:[0-9]+}/enroll` | - | - | - | missing |
-| `BMCService.RestoreFactoryCert` | `POST /bmc/{profileID:[0-9]+}/cert/restore` | `(dashboard)/devices/bmc/accounts/page.tsx` | - | `bmc-accounts.spec.ts` | covered |
+| `BMCService.RestoreFactoryCert` | `POST /bmc/{profileID:[0-9]+}/cert/restore` | - | - | - | missing |
 | `BMCService.ListUsers` | `GET /bmc/{profileID:[0-9]+}/users` | `(dashboard)/devices/bmc/accounts/page.tsx` | - | `bmc-accounts.spec.ts` | covered |
 | `BMCService.CreateUser` | `POST /bmc/{profileID:[0-9]+}/users` | `(dashboard)/devices/bmc/accounts/page.tsx` | - | `bmc-accounts.spec.ts` | covered |
 | `BMCService.DeleteUser` | `DELETE /bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}` | `(dashboard)/devices/bmc/accounts/page.tsx` | - | `bmc-accounts.spec.ts` | covered |

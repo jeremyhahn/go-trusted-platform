@@ -134,6 +134,14 @@ export function bmcSlotSegment(slot: number): string {
  */
 const NO_RETRY = { retry: { enabled: false } } as const;
 
+/**
+ * Request options for the factory restore: never retried, and a timeout past
+ * the backend's 5-minute wait for the BMC restart (pkg/bmc/redfish_cert.go
+ * resetMaxWait), so the client does not abort the handler after the
+ * certificate is regenerated but before pin, DNS and device-state cleanup.
+ */
+const RESTORE_OPTIONS = { ...NO_RETRY, timeout: 6 * 60 * 1000 } as const;
+
 export class BMCCertService extends BaseService {
   /**
    * Creates a new BMC certificate service instance
@@ -184,12 +192,18 @@ export class BMCCertService extends BaseService {
    *
    * The handler reads no request body, so none is sent. The server answers
    * 503 when the daemon runs without the restorer and 404 for an unknown
-   * profile; both answers are returned unchanged.
+   * profile; both answers are returned unchanged. The request is never
+   * retried and waits up to 6 minutes, past the backend's 5-minute limit for
+   * the BMC restart, so the client never aborts a restore mid-ceremony.
    *
    * @param profileId - The BMC profile ID
    * @returns The restore result
    */
   async restoreFactoryCert(profileId: string | number): Promise<ApiResponse<BMCRestoreResult>> {
-    return this.client.post<BMCRestoreResult>(this.buildUrl(`/${bmcProfileSegment(profileId)}/cert/restore`), undefined, NO_RETRY);
+    return this.client.post<BMCRestoreResult>(
+      this.buildUrl(`/${bmcProfileSegment(profileId)}/cert/restore`),
+      undefined,
+      RESTORE_OPTIONS
+    );
   }
 }
