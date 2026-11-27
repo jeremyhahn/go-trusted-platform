@@ -25,6 +25,16 @@ export default function MembersPage() {
   const iam = useIAM();
   const { create } = useInvitation();
 
+  // #1992: invitations take one of the tenant's IAM roles.
+  const { data: rolesData } = useApi(
+    () => (tenantId ? iam.listRoles({ tenantId }) : Promise.resolve({ success: true, data: null })),
+    [tenantId],
+  );
+  const roleNames = React.useMemo(
+    () => (rolesData?.roles ?? []).map((r) => r.name).filter((name): name is string => !!name),
+    [rolesData],
+  );
+
   // Fetch members (users) for the current tenant
   const {
     data: usersResponse,
@@ -169,6 +179,7 @@ export default function MembersPage() {
         />
         <InvitationForm
           onSubmit={handleSendInvitation}
+          roles={roleNames}
           trigger={
             <Button>
               <UserPlus className="h-4 w-4 mr-2" />

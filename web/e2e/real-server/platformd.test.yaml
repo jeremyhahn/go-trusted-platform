@@ -525,6 +525,40 @@ proxy:
         mode: public
 
 # =============================================================================
+# SWITCH, the in-memory vendor (no hardware; #2066)
+# =============================================================================
+# The Playwright switch specs drive these ports: they list Eth1/1-5, disable
+# a port and move an access port to another VLAN. The memory vendor seeds
+# every port enabled and link-up and keeps the state in memory only.
+
+switches:
+  - name: harness-1
+    vendor: memory
+    ports:
+      - port: Eth1/1-4
+        mode: access
+        access_vlan: 10
+      - port: Eth1/5
+        mode: trunk
+        vlans: [10, 20]
+        native_vlan: 1
+
+# =============================================================================
+# VTPM (bundles in the run directory)
+# =============================================================================
+# Without this block the service defaults to /var/lib/trusted-platform/vtpm,
+# which the unprivileged harness cannot create, so `platformd serve`
+# (pkg/daemon/commands/serve.go initVTPMServiceOnConfig) leaves the service
+# nil and every /api/v1/vtpm route is dark. Creating, starting, quoting,
+# sealing and the PCR ops also need the swtpm binary on PATH
+# (pkg/swtpm/swtpm.go); a runner without it gets createBundle's refusal.
+
+vtpm:
+  base-dir: trusted-data/vtpm
+  pcr-banks:
+    - sha256
+
+# =============================================================================
 # Default-config sections NOT enabled here (no simulator path)
 # =============================================================================
 # - acme.client: the default daemon enrols its own account against the

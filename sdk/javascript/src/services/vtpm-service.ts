@@ -42,6 +42,7 @@ import type {
   ExtendBundlePCRRequest,
   ExtendBundlePCRResponse,
   ReadBundlePCRResponse,
+  GetBundleStateResponse,
   VTPMRuntimeStatus,
   CreateBundleOptions,
   CreateTemplateOptions,
@@ -309,8 +310,8 @@ export class VTPMService extends BaseService {
   // =========================================================================
   // Bundle Runtime Operations
   //
-  // IsVTPMRunning has no REST route: callers track the running state from
-  // the start and stop results.
+  // IsVTPMRunning is GET /bundles/{id}/state (getBundleState); start and
+  // stop results also carry the running state.
   // =========================================================================
 
   /**
@@ -370,6 +371,30 @@ export class VTPMService extends BaseService {
       return this.withStatus({ ...r, data: { ...data, stopped: data.success === true } as StopBundleResponse });
     }
     return this.withStatus(r);
+  }
+
+  /**
+   * Reads whether a bundle's vTPM is running (IsVTPMRunning), GET
+   * /bundles/{id}/state, which both listeners serve. The webservice answers
+   * StateResponse { bundle_id, running, socket_path }
+   * (pkg/webservice/v1/rest/vtpm/types.go); the daemon REST listener answers
+   * BundleStateResponse { id, running, socket_path, timestamp }
+   * (pkg/api/rest/vtpm_handlers.go), whose id is given here as bundle_id.
+   * A webservice reply and a failed read pass unchanged. A plain read: retry
+   * is allowed.
+   */
+  async getBundleState(id: string): Promise<ApiResponse<GetBundleStateResponse>> {
+    const r = await this.client.get<GetBundleStateResponse>(
+      this.buildUrl(`/bundles/${this.encodePathSegment(id)}/state`)
+    );
+    if (r.success !== true || typeof r.data !== 'object' || r.data === null) {
+      return r;
+    }
+    const data = r.data as unknown as Record<string, unknown>;
+    if (typeof data.bundle_id === 'string' || typeof data.id !== 'string') {
+      return r;
+    }
+    return { ...r, data: { ...data, bundle_id: data.id } as unknown as GetBundleStateResponse };
   }
 
   /** Quote PCRs of a running bundle (POST /bundles/{id}/quote) */

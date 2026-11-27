@@ -44,9 +44,11 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
 	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
+	switchapi "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/switch"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -328,27 +330,9 @@ func (s *RESTServer) SetBMCHandler(handler bmcwebsvc.RestHandler) {
 	}
 	s.bmcHandler = handler
 
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/power", handler.PowerAction).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/power", handler.PowerStatus).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/boot-device", handler.SetBootDevice).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/boot-device", handler.GetBootDevice).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/virtual-media", handler.MountISO).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/virtual-media", handler.UnmountISO).Methods(http.MethodDelete)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/virtual-media", handler.VirtualMediaStatus).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/sensors", handler.GetSensors).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/system-info", handler.GetSystemInfo).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/provision", handler.Provision).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/provision", handler.ProvisionStatus).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/enroll", handler.EnrollBMC).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/cert/restore", handler.RestoreBMC).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/cert", handler.GetWebCertificate).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/cert", handler.ReplaceWebCertificate).Methods(http.MethodPut)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/users", handler.ListUsers).Methods(http.MethodGet)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/users", handler.CreateUser).Methods(http.MethodPost)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}", handler.DeleteUser).Methods(http.MethodDelete)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/password", handler.SetUserPassword).Methods(http.MethodPut)
-	api.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/privilege", handler.SetUserPrivilege).Methods(http.MethodPut)
+	// The same route table the web console mounts; this listener
+	// authenticates by mTLS only, so no scope is checked here.
+	_ = bmcwebsvc.RegisterRoutes(s.router.PathPrefix(restBasePath).Subrouter(), handler, bmcwebsvc.PassThroughGuard{})
 
 	s.logger.Info("BMC management routes registered")
 }
@@ -1319,5 +1303,38 @@ func (s *RESTServer) SetClusterService(svc platformv1.ClusterServiceServer, guar
 		return nil
 	}
 	s.logger.Info("Cluster REST routes registered")
+	return nil
+}
+
+// SetSwitchHandlers mounts the switch port routes (the switchapi router) on
+// the daemon REST listener behind the REST scope guard, each route needing
+// the scope of its SwitchService rpc. A nil guard is refused; a nil service
+// mounts nothing, since the node has no switches block.
+func (s *RESTServer) SetSwitchHandlers(svc device.SwitchServiceProvider, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrSwitchRESTUnavailable{Reason: "no REST scope guard"}
+	}
+	if svc == nil {
+		return nil
+	}
+	log := logging.NewFromSlog(s.logger)
+	// The web listener mounts the switch routes through gated(ROLE_ADMIN),
+	// and docs/switch/api.md requires the admin role on every switch REST
+	// route: the catalog guard checks switch:read/switch:write only, so the
+	// caller it authorized must also carry the admin role. No caller fails
+	// closed.
+	api := s.catalogGuardedAPI(guard)
+	api.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			caller, ok := restCaller(r)
+			if !ok || !slices.Contains(caller.Roles, common.ROLE_ADMIN) {
+				http.Error(w, "the switch routes require the admin role", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+	switchapi.NewSwitchRouter(log, svc, response.NewResponseWriter(log, nil)).RegisterRoutes(api)
+	s.logger.Info("Switch REST routes registered")
 	return nil
 }

@@ -123,6 +123,7 @@ const navigation = [
       { title: "Device Templates", href: "/devices/templates" },
       { title: "vTPM Bundles", href: "/devices/vtpm" },
       { title: "IDevID/IAK", href: "/devices/idevid" },
+      { title: "BMC", href: "/devices/bmc" },
     ],
   },
   {
@@ -160,6 +161,7 @@ const navigation = [
       { title: "Gateway", href: "/networking/gateway" },
       { title: "VPN", href: "/networking/vpn" },
       { title: "PXE Boot", href: "/networking/pxe" },
+      { title: "Switches", href: "/networking/switches" },
     ],
   },
   {

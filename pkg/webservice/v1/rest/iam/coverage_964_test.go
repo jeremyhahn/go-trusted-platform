@@ -365,7 +365,7 @@ type cov964Apps struct {
 }
 
 func (c *cov964Apps) Register(_ context.Context, tenantID string, req *iamsdk.RegisterAppRequest) (*iamsdk.Application, error) {
-	app := &iamsdk.Application{ClientID: "client-new", TenantID: tenantID}
+	app := &iamsdk.Application{ClientID: "client-new", TenantID: tenantID, ClientSecret: "s3cret-new", ResourcePrefix: req.ResourcePrefix}
 	c.apps[app.ClientID] = app
 	return app, nil
 }
@@ -463,6 +463,7 @@ func cov964NewClient() *cov964Client {
 		apps: &cov964Apps{apps: map[string]*iamsdk.Application{
 			"client-1": {
 				ClientID:     "client-1",
+				TenantID:     "tenant-a",
 				Name:         "portal",
 				RedirectURIs: []string{"https://portal.example.com/cb"},
 				GrantTypes:   []iamsdk.GrantType{iamsdk.ParseGrantType("client_credentials")},
@@ -1062,7 +1063,7 @@ func TestCov964Adapter_RotateAppSecret(t *testing.T) {
 
 	resp, err := adapter.RotateAppSecret(ctx, "tenant-a", "client-1")
 	require.NoError(t, err)
-	assert.Equal(t, &RotateSecretResponse{ClientID: "client-1", ClientSecret: "rotated-secret"}, resp)
+	assert.Equal(t, &RotateSecretResponse{ClientID: "client-1", Name: "portal", ClientSecret: "rotated-secret"}, resp)
 
 	_, err = adapter.RotateAppSecret(ctx, "tenant-a", "missing")
 	cov964RequireNotFound(t, err, "app", "missing")

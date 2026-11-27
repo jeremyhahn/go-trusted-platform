@@ -32,42 +32,46 @@ const (
 
 	// VendorNoop represents a no-op configurator for testing.
 	VendorNoop SwitchVendor = "noop"
+
+	// VendorMemory represents a simulated switch that keeps port state in
+	// memory, seeded from the config's ports. It touches no hardware.
+	VendorMemory SwitchVendor = "memory"
 )
 
 // VLANConfig defines a VLAN to be configured on the switch.
 type VLANConfig struct {
-	ID          int    `yaml:"id" json:"id"`
-	Name        string `yaml:"name" json:"name"`
-	Subnet      string `yaml:"subnet" json:"subnet"`
-	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+	ID          int    `yaml:"id" json:"id" mapstructure:"id"`
+	Name        string `yaml:"name" json:"name" mapstructure:"name"`
+	Subnet      string `yaml:"subnet" json:"subnet" mapstructure:"subnet"`
+	Description string `yaml:"description,omitempty" json:"description,omitempty" mapstructure:"description"`
 }
 
 // PortConfig defines a switch port configuration.
 type PortConfig struct {
-	Port        string `yaml:"port" json:"port"`                                   // e.g., "Eth1/1", "Eth1/3-5"
-	Mode        string `yaml:"mode" json:"mode"`                                   // "trunk" | "access"
-	VLANs       []int  `yaml:"vlans,omitempty" json:"vlans,omitempty"`             // For trunk: allowed VLANs
-	AccessVLAN  int    `yaml:"access_vlan,omitempty" json:"access_vlan,omitempty"` // For access: VLAN ID
-	NativeVLAN  int    `yaml:"native_vlan,omitempty" json:"native_vlan,omitempty"` // For trunk: native (untagged) VLAN; 0 = none
-	MTU         int    `yaml:"mtu,omitempty" json:"mtu,omitempty"`                 // 1500-9216; 0 = leave as is
-	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+	Port        string `yaml:"port" json:"port" mapstructure:"port"`                                          // e.g., "Eth1/1", "Eth1/3-5"
+	Mode        string `yaml:"mode" json:"mode" mapstructure:"mode"`                                          // "trunk" | "access"
+	VLANs       []int  `yaml:"vlans,omitempty" json:"vlans,omitempty" mapstructure:"vlans"`                   // For trunk: allowed VLANs
+	AccessVLAN  int    `yaml:"access_vlan,omitempty" json:"access_vlan,omitempty" mapstructure:"access_vlan"` // For access: VLAN ID
+	NativeVLAN  int    `yaml:"native_vlan,omitempty" json:"native_vlan,omitempty" mapstructure:"native_vlan"` // For trunk: native (untagged) VLAN; 0 = none
+	MTU         int    `yaml:"mtu,omitempty" json:"mtu,omitempty" mapstructure:"mtu"`                         // 1500-9216; 0 = leave as is
+	Description string `yaml:"description,omitempty" json:"description,omitempty" mapstructure:"description"`
 }
 
 // Config holds switch connection and configuration details.
 type Config struct {
-	Name     string       `yaml:"name" json:"name"`
-	Vendor   SwitchVendor `yaml:"vendor" json:"vendor"`
-	Host     string       `yaml:"host" json:"host"`
-	Port     int          `yaml:"port" json:"port"`
-	User     string       `yaml:"user" json:"user"`
-	Password string       `yaml:"password,omitempty" json:"password,omitempty" secret:"true"`
-	SSHKey   string       `yaml:"ssh_key,omitempty" json:"ssh_key,omitempty"`
+	Name     string       `yaml:"name" json:"name" mapstructure:"name"`
+	Vendor   SwitchVendor `yaml:"vendor" json:"vendor" mapstructure:"vendor"`
+	Host     string       `yaml:"host" json:"host" mapstructure:"host"`
+	Port     int          `yaml:"port" json:"port" mapstructure:"port"`
+	User     string       `yaml:"user" json:"user" mapstructure:"user"`
+	Password string       `yaml:"password,omitempty" json:"password,omitempty" mapstructure:"password" secret:"true"`
+	SSHKey   string       `yaml:"ssh_key,omitempty" json:"ssh_key,omitempty" mapstructure:"ssh_key"`
 	// KnownHostsPath is the directory of pinned SSH host-key envelopes used
 	// to verify the switch host key during the handshake. Required for any
 	// SSH-backed vendor: switch SSH is fail-closed (no trust-on-first-use).
-	KnownHostsPath string       `yaml:"known_hosts_path,omitempty" json:"known_hosts_path,omitempty"`
-	VLANs          []VLANConfig `yaml:"vlans" json:"vlans"`
-	Ports          []PortConfig `yaml:"ports" json:"ports"`
+	KnownHostsPath string       `yaml:"known_hosts_path,omitempty" json:"known_hosts_path,omitempty" mapstructure:"known_hosts_path"`
+	VLANs          []VLANConfig `yaml:"vlans" json:"vlans" mapstructure:"vlans"`
+	Ports          []PortConfig `yaml:"ports" json:"ports" mapstructure:"ports"`
 }
 
 // Configurator is the interface for switch configuration.
