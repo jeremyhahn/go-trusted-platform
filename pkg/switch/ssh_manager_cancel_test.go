@@ -247,10 +247,10 @@ func TestSSHManager_CloseInterruptsAnExecuteThatNeverReturns(t *testing.T) {
 		t.Errorf("executor closed %d times, want 1", n)
 	}
 
-	if _, err := mgr.GetPortVLAN(context.Background(), "Eth1/3"); err != nil {
-		t.Fatalf("GetPortVLAN after Close: %v", err)
+	if _, err := mgr.GetPortVLAN(context.Background(), "Eth1/3"); !errors.Is(err, errSSHConnectionClosed) {
+		t.Fatalf("GetPortVLAN after Close = %v, want errSSHConnectionClosed", err)
 	}
-	if n := dials.Load(); n != 1 {
-		t.Errorf("dials = %d, want 1 (the call after Close redials)", n)
+	if n := dials.Load(); n != 0 {
+		t.Errorf("dials = %d, want 0 (a closed manager never redials)", n)
 	}
 }

@@ -1541,15 +1541,20 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		}
 	}
 
-	if platformDaemon != nil {
-		if err := platformDaemon.Stop(ctx); err != nil {
-			logger.Warn("Error stopping platform daemon", "error", err)
-		}
-	}
+	var closeSwitches func() error
 	if switchSvc != nil {
-		if err := switchSvc.Close(); err != nil {
-			logger.Warn("Error closing the switch service", "error", err)
-		}
+		closeSwitches = switchSvc.Close
+	}
+	var stopDaemon func(context.Context) error
+	if platformDaemon != nil {
+		stopDaemon = platformDaemon.Stop
+	}
+	closeErr, stopErr := stopWithSwitchesFirst(ctx, closeSwitches, stopDaemon)
+	if closeErr != nil {
+		logger.Warn("Error closing the switch service", "error", closeErr)
+	}
+	if stopErr != nil {
+		logger.Warn("Error stopping platform daemon", "error", stopErr)
 	}
 
 	logger.Info("Graceful shutdown complete")
@@ -1790,13 +1795,16 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	logger.Info("Shutdown signal received")
 	cmd.Println("\nShutting down...")
 
-	if err := d.Stop(ctx); err != nil {
-		logger.Error(err, "Error during shutdown")
-	}
+	var closeSwitches func() error
 	if switchSvc != nil {
-		if err := switchSvc.Close(); err != nil {
-			logger.Warn("Error closing the switch service", "error", err)
-		}
+		closeSwitches = switchSvc.Close
+	}
+	closeErr, stopErr := stopWithSwitchesFirst(ctx, closeSwitches, d.Stop)
+	if closeErr != nil {
+		logger.Warn("Error closing the switch service", "error", closeErr)
+	}
+	if stopErr != nil {
+		logger.Error(stopErr, "Error during shutdown")
 	}
 
 	logger.Info("Platform daemon stopped")
