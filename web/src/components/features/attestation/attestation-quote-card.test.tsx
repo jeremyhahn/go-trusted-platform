@@ -89,7 +89,7 @@ describe('AttestationQuoteCard', () => {
   });
 
   it('verifies a quote against the AK key and nonce', async () => {
-    const sent = stubControlPlane(routes());
+    const sent = stubControlPlane(routes({ [VERIFY_OP]: ok({ status: 'ok', verified: true, message: 'PCR values match the expected policy' }) }));
     render(withControlPlane(<AttestationQuoteCard />));
 
     const button = await ready('Verify quote');
@@ -110,6 +110,9 @@ describe('AttestationQuoteCard', () => {
     expect('channelBinding' in body).toBe(false);
     expect(verdict.textContent).toContain('verified');
     expect(verdict.textContent).not.toContain('not verified');
+    const policy = screen.getByTestId('attestation-quote-pcr-policy');
+    expect(policy.textContent).toContain('PCR policy not checked');
+    expect(verdict.textContent).not.toContain('match the expected policy');
   });
 
   it('shows a failed verification with the server message', async () => {
