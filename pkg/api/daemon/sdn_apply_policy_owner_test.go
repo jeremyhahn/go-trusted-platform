@@ -127,6 +127,69 @@ func TestPolicyFlowCookie_OwnedAndStable(t *testing.T) {
 	assert.True(t, samePolicyCookie(fmt.Sprintf("0x%x", rule0), fmt.Sprintf("0x%x", rule1)))
 }
 
+// Two rules on one entry would install one switch flow (OFPFC_ADD keeps the
+// later) while the record keeps the first rule's cookie, so a strict delete
+// would miss the flow: ApplyPolicy refuses them before any install.
+func TestSDNService_ApplyPolicy_RefusesDuplicateEntryRules(t *testing.T) {
+	svc, fake := newOwnerOVSFixture(t)
+
+	config := &platformv1.PolicyConfig{
+		Name:     "dup",
+		Priority: 100,
+		Enabled:  true,
+		Rules: []*platformv1.PolicyRule{
+			// The /32 and the bare address encode the same entry.
+			{RuleId: "deny-a", Priority: 200, Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY,
+				Match: &platformv1.PolicyRuleMatch{SourceIp: "192.0.2.10"}},
+			{RuleId: "allow-a", Priority: 200, Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_ALLOW,
+				Match: &platformv1.PolicyRuleMatch{SourceIp: "192.0.2.10/32"}},
+		},
+		Targets: []*platformv1.PolicyTarget{bridgeTarget("br0")},
+	}
+	_, err := svc.ApplyPolicy(context.Background(), &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: config})
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	assert.Contains(t, err.Error(), "deny-a")
+	assert.Contains(t, err.Error(), "allow-a")
+
+	flows, err := fake.ListFlows(context.Background(), "br0")
+	require.NoError(t, err)
+	assert.Empty(t, flows, "no flow is installed for a refused policy")
+	assert.Zero(t, fake.calls, "no AddFlow is attempted")
+}
+
+// Policy IDs whose truncated hashes match would share every flow cookie, so
+// ListFlows and GetFlowStats could not tell their flows apart: the second
+// policy is refused before any install.
+func TestSDNService_ApplyPolicy_RefusesCookieHashCollision(t *testing.T) {
+	const first, second = "0518cd1c11c51ee791e80b24", "60a173ed4966add101d89b26"
+	require.Equal(t, policyFlowCookie(first, 0), policyFlowCookie(second, 0), "the two IDs collide")
+
+	svc, fake := newOwnerOVSFixture(t)
+	_, err := svc.ApplyPolicy(context.Background(), &platformv1.ApplyPolicyRequest{PolicyId: first, Config: &platformv1.PolicyConfig{
+		Name: "first", Priority: 100, Enabled: true,
+		Rules: []*platformv1.PolicyRule{{RuleId: "deny-a", Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY,
+			Match: &platformv1.PolicyRuleMatch{SourceIp: "192.0.2.10"}}},
+		Targets: []*platformv1.PolicyTarget{bridgeTarget("br0")},
+	}})
+	require.NoError(t, err)
+
+	_, err = svc.ApplyPolicy(context.Background(), &platformv1.ApplyPolicyRequest{PolicyId: second, Config: &platformv1.PolicyConfig{
+		Name: "second", Priority: 100, Enabled: true,
+		Rules: []*platformv1.PolicyRule{{RuleId: "deny-b", Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY,
+			Match: &platformv1.PolicyRuleMatch{SourceIp: "192.0.2.20"}}},
+		Targets: []*platformv1.PolicyTarget{bridgeTarget("br0")},
+	}})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	assert.Contains(t, err.Error(), first)
+
+	flows, err := fake.ListFlows(context.Background(), "br0")
+	require.NoError(t, err)
+	require.Len(t, flows, 1, "the switch holds only the first policy's flow")
+	assert.Equal(t, fmt.Sprintf("0x%x", policyFlowCookie(first, 0)), flows[0].Cookie)
+}
+
 // twoRuleP1Cookies is the set of flow cookies policy p1 with
 // twoRulePolicyConfig installs: one cookie per rule, as hex strings.
 func twoRuleP1Cookies() map[string]bool {
