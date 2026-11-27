@@ -19,6 +19,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -608,4 +609,98 @@ func (m *nilClientMockFactory) IsStarted() bool {
 
 func (m *nilClientMockFactory) IsClosed() bool {
 	return false
+}
+
+// aggregatingListClient behaves like the pinned go-quicbaas embedded List:
+// it ignores the page token, returns every record in one response and keeps
+// the first batch's next token. From the 5th call it returns an empty token
+// so a walk that trusts the token ends instead of looping forever.
+type aggregatingListClient struct {
+	*quicbaas.MockClient
+	records int
+	calls   int
+}
+
+func (c *aggregatingListClient) List(ctx context.Context, entityType string, pageSize uint64, pageToken string, shardID uint64) ([]*service.Entity, string, error) {
+	c.calls++
+	entities := make([]*service.Entity, 0, c.records)
+	for i := 1; i <= c.records; i++ {
+		entities = append(entities, &service.Entity{ID: uint64(i), Data: []byte(`{}`)})
+	}
+	if c.calls >= 5 {
+		return entities, "", nil
+	}
+	return entities, "batch-1", nil
+}
+
+// aggregatingListFactory hands out an aggregatingListClient.
+type aggregatingListFactory struct {
+	*quicbaas.MockFactory
+	client *aggregatingListClient
+}
+
+func (f *aggregatingListFactory) QuicBaaSClient() quicbaas.ClientInterface {
+	return f.client
+}
+
+func newAggregatingListFactory(t *testing.T, ctx context.Context) *aggregatingListFactory {
+	t.Helper()
+	mockFactory := quicbaas.NewMockFactory()
+	if err := mockFactory.Start(ctx); err != nil {
+		t.Fatalf("failed to start mock factory: %v", err)
+	}
+	t.Cleanup(func() { _ = mockFactory.Stop(ctx) })
+	mockClient := mockFactory.MockClient()
+	mockClient.SetEntityTypes([]string{"users"})
+	return &aggregatingListFactory{
+		MockFactory: mockFactory,
+		client:      &aggregatingListClient{MockClient: mockClient, records: 150},
+	}
+}
+
+func TestListEntityTypes_AggregatedListResponseCountsOnce(t *testing.T) {
+	ctx := context.Background()
+	factory := newAggregatingListFactory(t, ctx)
+	svc, err := NewService(DefaultConfig(), WithQuicBaaSFactory(factory))
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+
+	resp, err := svc.ListEntityTypes(ctx, &platformv1.ListEntityTypesRequest{})
+	if err != nil {
+		t.Fatalf("ListEntityTypes failed: %v", err)
+	}
+	if resp.TotalEntities != 150 {
+		t.Errorf("expected 150 total entities, got %d", resp.TotalEntities)
+	}
+	if len(resp.EntityTypes) != 1 {
+		t.Fatalf("expected 1 entity type, got %d", len(resp.EntityTypes))
+	}
+	if resp.EntityTypes[0].EntityCount != 150 {
+		t.Errorf("expected users count 150, got %d", resp.EntityTypes[0].EntityCount)
+	}
+}
+
+func TestDumpEntityType_AggregatedListResponseSendsOnce(t *testing.T) {
+	ctx := context.Background()
+	factory := newAggregatingListFactory(t, ctx)
+	svc, err := NewService(DefaultConfig(), WithQuicBaaSFactory(factory))
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+
+	stream := &mockDumpStream{ctx: ctx}
+	if err := svc.DumpEntityType(&platformv1.DumpEntityTypeRequest{}, stream); err != nil {
+		t.Fatalf("DumpEntityType failed: %v", err)
+	}
+	if len(stream.responses) != 150 {
+		t.Errorf("expected 150 responses, got %d", len(stream.responses))
+	}
+	seen := make(map[uint64]struct{}, len(stream.responses))
+	for _, resp := range stream.responses {
+		if _, dup := seen[resp.EntityId]; dup {
+			t.Fatalf("entity %d sent twice", resp.EntityId)
+		}
+		seen[resp.EntityId] = struct{}{}
+	}
 }
