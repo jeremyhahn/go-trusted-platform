@@ -82,7 +82,8 @@ func (s *Service) BuildManifest(ctx context.Context, config *manifest.BuilderCon
 // PlatformCACert that's not threaded through this surface yet).
 // It does not check a manifest signature: a supplied publicKey is
 // refused with ErrAttestationManifestSignatureUnchecked rather than
-// reported valid unchecked (#304).
+// reported valid unchecked (#304). A manifest with no timestamp fails
+// closed: its age cannot be established, so it is never reported fresh.
 //
 // Used by /attestation/manifests/verify and by the WebUI's per-row
 // Verify action. Both success and rejection paths emit events for
@@ -139,10 +140,17 @@ func (s *Service) VerifyManifest(
 	}
 	result.HostAttestationValid = hostValid
 	// Freshness: 24h policy matches the existing manifest verifier
-	// default; older manifests are flagged as failed timestamps.
-	result.TimestampValid = m.Timestamp.IsZero() || time.Since(m.Timestamp) <= 24*time.Hour
-	if !result.TimestampValid {
-		result.Errors = append(result.Errors, "manifest is older than 24 hours")
+	// default; older manifests are flagged as failed timestamps. A
+	// manifest with no timestamp has no establishable age, so it fails
+	// closed.
+	if m.Timestamp.IsZero() {
+		result.TimestampValid = false
+		result.Errors = append(result.Errors, "manifest has no timestamp, its age cannot be established")
+	} else {
+		result.TimestampValid = time.Since(m.Timestamp) <= 24*time.Hour
+		if !result.TimestampValid {
+			result.Errors = append(result.Errors, "manifest is older than 24 hours")
+		}
 	}
 	// Signature is not checked at this layer today — the AK signature
 	// over the quote is validated by the enrollment hook at capture
