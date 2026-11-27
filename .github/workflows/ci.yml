@@ -1,4 +1,4 @@
-# ci-template: v1.35.1 + v1.42 hermetic gate + v1.51 reviewed + v1.52 fork check + preflight self-hosted runs-on (#2387) + v1.53 main group, gate and vars mask + v1.53 LAN mask script + v1.60 runner selection + v1.60 runner-selection events + v1.61 main push group per commit (customized)
+# ci-template: v1.62 pool overflow + v1.61 main push group per commit + v1.60 runner selection + v1.35.1 + v1.42 hermetic gate + v1.51 reviewed + v1.52 fork check + preflight self-hosted runs-on (#2387) + v1.53 main group, gate and vars mask + v1.53 LAN mask script + v1.60 runner-selection events (customized)
 #
 # v1.60 runner-selection events: preflight and the runner selection go
 # self-hosted only on a push to refs/heads/main or a pull request from this
@@ -19,6 +19,11 @@
 # v1.38 release label, v1.39/v1.40 scoped deps-check and deps-bump, v1.41
 # PR/main parity and v1.35.2/v1.35.3's signatures.yml move are the full
 # catch-up, still to come. The history below describes the jobs before v1.42.
+#
+# v1.62 (DS-10764, issue #2458): pool overflow. In a public repository, when
+# neither pool is full and the oldest queued bigdisk or bigdisk-docker job
+# has waited past WAIT_LIMIT (600 s), the run takes the free hosted slot
+# instead of queueing behind it. A private repository never overflows.
 #
 # v1.60 runner selection: the preflight step `Balanced runner pool (ruling
 # 1137)` sends each run to the less-used pool; a tie goes self-hosted.
@@ -412,6 +417,8 @@ jobs:
           HS: ${{ vars.CI_HOSTED_SHARE }}
           C1: ${{ vars.CI_SELF_HOSTED_BIGDISK }}
           C2: ${{ vars.CI_SELF_HOSTED_BIGDISK_DOCKER }}
+          PRIVATE: ${{ github.event.repository.private }}
+          WAIT_LIMIT: 600
         run: |
           set -uo pipefail
           HOSTED='"ubuntu-latest"'
@@ -512,11 +519,15 @@ jobs:
           done
           # H, S1, S2: hosted, bigdisk (not bigdisk-docker) and bigdisk-docker
           # jobs in progress plus queued; HQ, SQ: the queued hosted and
-          # self-hosted (both kinds) ones. A job of this run is not counted.
-          read -r H S1 S2 HQ SQ < <(jq -rs --argjson run "$RUN_ID" '
+          # self-hosted (both kinds) ones; W1, W2: the seconds the oldest
+          # queued bigdisk and bigdisk-docker job has waited (0 for none,
+          # v1.62). A job of this run is not counted.
+          read -r H S1 S2 HQ SQ W1 W2 < <(jq -rs --argjson run "$RUN_ID" --argjson now "$(date -u +%s)" '
               [.[] | select(.run_id != $run and (.status == "queued" or .status == "in_progress"))
                    | (.labels // []) as $l
                    | {q: (.status == "queued"),
+                      w: ((try (.created_at | sub("\\.[0-9]+"; "") | fromdateiso8601) catch $now) as $c
+                          | if $now > $c then ($now - $c | floor) else 0 end),
                       p: (if ($l | any(. == "self-hosted")) then
                             (if ($l | any(. == "bigdisk-docker")) then "s2"
                              elif ($l | any(. == "bigdisk")) then "s1" else "x" end)
@@ -524,10 +535,12 @@ jobs:
                           else "x" end)}] as $j
               | def n(f): $j | map(select(f)) | length;
               [n(.p == "h"), n(.p == "s1"), n(.p == "s2"), n(.p == "h" and .q),
-               n((.p == "s1" or .p == "s2") and .q)]
+               n((.p == "s1" or .p == "s2") and .q),
+               ([$j[] | select(.p == "s1" and .q) | .w] | max // 0),
+               ([$j[] | select(.p == "s2" and .q) | .w] | max // 0)]
               | map(tostring) | join(" ")' "$RUNNER_TEMP/sel-jobs.jsonl") || hosted "the job list could not be counted"
-          [ -n "${SQ:-}" ] || hosted "the job list could not be counted"
-          echo "this repository: hosted $H of CI_HOSTED_SHARE=$HS ($HQ queued); bigdisk $S1 of CI_SELF_HOSTED_BIGDISK=$C1, bigdisk-docker $S2 of CI_SELF_HOSTED_BIGDISK_DOCKER=$C2 ($SQ self-hosted queued)"
+          [ -n "${W2:-}" ] || hosted "the job list could not be counted"
+          echo "this repository: hosted $H of CI_HOSTED_SHARE=$HS ($HQ queued); bigdisk $S1 of CI_SELF_HOSTED_BIGDISK=$C1, bigdisk-docker $S2 of CI_SELF_HOSTED_BIGDISK_DOCKER=$C2 ($SQ self-hosted queued); oldest queued bigdisk ${W1}s, bigdisk-docker ${W2}s"
           # v1.59: a short listing is a lower bound; still choose.
           [ -z "$SHORT" ] || echo "::notice::runner selection: the listing returned fewer entries than its total ($SHORT); the counts are a lower bound and the choice below uses them (ci-template v1.59)"
           pick=hosted hfull=0 sfull=0
@@ -540,6 +553,10 @@ jobs:
             pick=self; why="the hosted pool is full ($H of $HS)"
           elif [ "$sfull" = 1 ]; then
             why="the self-hosted pool is full (bigdisk $S1 of $C1, bigdisk-docker $S2 of $C2)"
+          elif [ "${PRIVATE:-}" = false ] && { [ "$W1" -gt "$WAIT_LIMIT" ] || [ "$W2" -gt "$WAIT_LIMIT" ]; }; then
+            # v1.62 overflow: a self-hosted wait past WAIT_LIMIT with a free
+            # hosted slot goes hosted (public repositories, no spend).
+            why="overflow: the oldest queued self-hosted job waited past ${WAIT_LIMIT}s (bigdisk ${W1}s, bigdisk-docker ${W2}s) and hosted has a free slot ($H of $HS) (ci-template v1.62)"
           else
             # self-hosted use, max(S1/C1, S2/C2), at or below hosted use H/HS.
             [ $((S1 * HS)) -le $((H * C1)) ] && [ $((S2 * HS)) -le $((H * C2)) ] && pick=self
