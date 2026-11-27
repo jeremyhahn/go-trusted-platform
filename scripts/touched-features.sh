@@ -160,10 +160,11 @@ while read -r word rest; do
 done <go.mod
 [ -n "$module" ] || all
 tags=$(make -s print-build-tags) || all
-# -e reports a package error in the listing and exits 0; that package's
-# imports are incomplete, so a line marked ! fails closed (#2445).
+# -e reports a package error, a dependency error (DepsErrors, Error unset)
+# or an incomplete package in the listing and exits 0; any of them marks the
+# line !, and a line marked ! fails closed (#2445).
 listing=$(go list -e -tags "integration $tags" \
-	-f '{{if .Error}}!{{end}}{{.Dir}}|{{join .Imports " "}} {{join .TestImports " "}} {{join .XTestImports " "}}' \
+	-f '{{if or .Error .DepsErrors .Incomplete}}!{{end}}{{.Dir}}|{{join .Imports " "}} {{join .TestImports " "}} {{join .XTestImports " "}}' \
 	./test/integration/...) || all
 case $'\n'$listing in *$'\n!'*) all ;; esac
 declare -A importers=()
