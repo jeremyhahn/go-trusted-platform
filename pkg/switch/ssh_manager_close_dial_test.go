@@ -83,3 +83,40 @@ func TestSSHManager_CloseDuringDialClosesLateConnection(t *testing.T) {
 		t.Error("manager still holds a connection after Close returned")
 	}
 }
+
+// TestSSHManager_CloseInterruptsBlockedDial checks that Close does not wait
+// on a dial that never finishes by itself: it cancels the dial's context, and
+// the operation that was dialing returns an error.
+func TestSSHManager_CloseInterruptsBlockedDial(t *testing.T) {
+	entered := make(chan struct{})
+	dial := func(ctx context.Context, _ *Config) (SSHExecutor, error) {
+		close(entered)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	mgr := newSSHManagerWithDialer(testSSHConfig(), testSSHLogger(), dial)
+
+	opErr := make(chan error, 1)
+	go func() {
+		_, err := mgr.GetPortVLAN(context.Background(), "Eth1/3")
+		opErr <- err
+	}()
+	<-entered
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- mgr.Close() }()
+
+	select {
+	case <-closeDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return while the dial was blocked")
+	}
+	select {
+	case err := <-opErr:
+		if err == nil {
+			t.Error("the operation dialing during Close returned no error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the in-flight operation did not return after Close")
+	}
+}

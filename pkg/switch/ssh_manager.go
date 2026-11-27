@@ -46,10 +46,17 @@ type sshManager struct {
 	semOnce sync.Once
 	sem     chan struct{}
 
-	// connMu guards executor so Close can take and close the live
-	// connection while an operation holds sem.
+	// connMu guards executor, closeGen and dialCancel so Close can take and
+	// close the live connection, and stop a dial in flight, while an
+	// operation holds sem.
 	connMu   sync.Mutex
 	executor SSHExecutor
+	// closeGen counts Close calls. A dial publishes its connection only
+	// when closeGen is unchanged since it started; otherwise it closes the
+	// late connection, so Close never returns with a session left open.
+	closeGen uint64
+	// dialCancel cancels the context of the dial in flight, nil when none.
+	dialCancel context.CancelFunc
 }
 
 // slot returns the semaphore, making it on first use.
@@ -327,6 +334,12 @@ func (m *sshManager) runConfig(ctx context.Context, logMsg string, commands []st
 
 func (m *sshManager) Close() error {
 	m.connMu.Lock()
+	// Bumping the generation makes a dial in flight close the connection
+	// it would publish; canceling its context makes a stalled dial return.
+	m.closeGen++
+	if m.dialCancel != nil {
+		m.dialCancel()
+	}
 	executor := m.executor
 	m.executor = nil
 	m.connMu.Unlock()
@@ -382,24 +395,41 @@ func (m *sshManager) execute(ctx context.Context, cmd string) (string, error) {
 // connection whose command failed is dropped (see execute), and the next
 // call dials again; a failed mutation is never replayed.
 func (m *sshManager) ensureConnected(ctx context.Context) error {
+	dialCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	m.connMu.Lock()
-	connected := m.executor != nil
-	m.connMu.Unlock()
-	if connected {
+	if m.executor != nil {
+		m.connMu.Unlock()
 		return nil
 	}
+	gen := m.closeGen
+	m.dialCancel = cancel
+	m.connMu.Unlock()
+
 	dial := m.dial
 	if dial == nil {
 		dial = NewSSHExecutor
 	}
-	executor, err := dial(ctx, m.config)
-	if err != nil {
-		return err
-	}
+	executor, err := dial(dialCtx, m.config)
+
 	m.connMu.Lock()
-	m.executor = executor
+	m.dialCancel = nil
+	closed := m.closeGen != gen
+	if err == nil && !closed {
+		m.executor = executor
+	}
 	m.connMu.Unlock()
-	return nil
+	if closed {
+		// Close ran during the dial: it must not return with this
+		// connection open, so the late connection is closed here.
+		if err == nil && executor != nil {
+			if closeErr := executor.Close(); closeErr != nil {
+				m.logger.Debug("ssh close of connection dialed during Close", "error", closeErr)
+			}
+		}
+		return errSSHConnectionClosed
+	}
+	return err
 }
 
 // buildConfigCommands wraps interface-level commands with configure terminal / end.
