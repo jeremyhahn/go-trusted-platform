@@ -98,12 +98,17 @@ type TokenIssuer interface {
 // membership, and the WebUI's permission gates.
 //
 // Implementations are expected to be idempotent — registering the
-// same email twice should not produce duplicate IAM rows. Failures
-// here are non-fatal for registration: the platform user is already
-// saved, the JWT is already minted; the worst case is that the user
-// must be re-mirrored later by an explicit /iam/users PUT.
+// same email twice should not produce duplicate IAM rows. A mirror
+// failure is fatal to registration and is rolled back: the saved
+// platform user is deleted (and a self-registered tenant removed), so a
+// user the IAM surface cannot see is never registered.
 type IAMUserMirror interface {
 	MirrorUser(ctx context.Context, tenantID, email, displayName string, roles []string) error
+	// MirrorInvitedUser mirrors like MirrorUser and returns an undo that
+	// removes only what this call wrote: the IAM user when this call
+	// created it, otherwise only the roles this call newly assigned. A
+	// pre-existing identity is never deleted.
+	MirrorInvitedUser(ctx context.Context, tenantID, email, displayName string, roles []string) (undo func(context.Context) error, err error)
 }
 
 // TenantUserService implements TenantUserServicer.
@@ -302,7 +307,7 @@ const DefaultTenantOwnerRole = "admin"
 // 5. Set user.IsTenantOwner = false
 // 6. Add role from invitation to user
 // 7. Save the user
-// 8. Accept the invitation
+// 8. Accept the invitation; a refusal undoes the IAM mirror and the save
 // 9. Return the RegisterResult with IsNewTenant = false
 func (s *TenantUserService) RegisterInvitedUser(
 	ctx context.Context,
@@ -413,9 +418,14 @@ func (s *TenantUserService) RegisterInvitedUser(
 	// are the invitation's role, plus the owner role for an owner
 	// invitation, so an ordinary invitee keeps the access it was invited
 	// with. A mirror failure deletes the saved user and leaves the
-	// invitation pending so the link can be redeemed again.
+	// invitation pending so the link can be redeemed again. Accept
+	// rechecks the invitation after the IAM write, so the mirror's undo
+	// is kept: a refusal undoes the IAM write and the saved user.
+	var undo func(context.Context) error
 	if s.iamMirror != nil {
-		if err := s.iamMirror.MirrorUser(ctx, invitation.TenantID, user.Email, user.DisplayName, invitedMirrorRoles(user, invitation.Role)); err != nil {
+		var err error
+		undo, err = s.iamMirror.MirrorInvitedUser(ctx, invitation.TenantID, user.Email, user.DisplayName, invitedMirrorRoles(user, invitation.Role))
+		if err != nil {
 			s.logger.Error(err, "failed to mirror invited user into IAM tenant, rolling back registration",
 				"user_id", user.ID,
 				"email", user.Email,
@@ -436,8 +446,23 @@ func (s *TenantUserService) RegisterInvitedUser(
 			"email", user.Email,
 			"tenant_id", invitation.TenantID,
 		)
-		// User was saved but invitation acceptance failed.
-		// This is a non-critical error - continue with result.
+		// Accept rechecks the invitation after the IAM write: a refusal
+		// (revoked, expired, already accepted, save error) undoes the IAM
+		// write and the saved user, and fails the registration.
+		if undo != nil {
+			if undoErr := undo(ctx); undoErr != nil {
+				s.logger.Error(undoErr, "failed to undo IAM mirror after invitation acceptance failure",
+					"email", user.Email,
+					"tenant_id", invitation.TenantID,
+				)
+			}
+		}
+		if delErr := s.userService.Delete(ctx, user.ID); delErr != nil {
+			s.logger.Error(delErr, "failed to delete invited user after invitation acceptance failure",
+				"user_id", user.ID,
+			)
+		}
+		return nil, err
 	}
 
 	s.logger.Info("invited user registered",

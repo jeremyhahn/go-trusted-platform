@@ -176,6 +176,17 @@ func (e ErrMirrorClientMissing) Error() string {
 	return "rest/iam: user mirror has no IAM client"
 }
 
+// ErrMirrorUsernameTaken is returned when the IAM username a mirror derives
+// already belongs to a user with another email in the tenant.
+type ErrMirrorUsernameTaken struct {
+	TenantID, Username, Email string
+}
+
+func (e ErrMirrorUsernameTaken) Error() string {
+	return fmt.Sprintf("rest/iam: IAM username %q in tenant %s belongs to a user other than %s",
+		e.Username, e.TenantID, e.Email)
+}
+
 // ErrRoleResolverClientMissing is returned when a workspace role resolver is
 // built without an IAM client to read the workspace's users through.
 type ErrRoleResolverClientMissing struct{}

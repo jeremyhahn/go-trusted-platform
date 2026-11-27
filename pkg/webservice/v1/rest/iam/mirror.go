@@ -16,6 +16,7 @@ package iam
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -41,14 +42,26 @@ func NewQuicBaaSUserMirror(client IAMClient) *QuicBaaSUserMirror {
 	return &QuicBaaSUserMirror{client: client}
 }
 
-// MirrorUser creates the user in the QuicBaaS IAM tenant. The
-// operation is idempotent — if the email already exists the IAM
-// client returns AlreadyExists and we treat that as success so a
-// failed first attempt followed by a retry doesn't tombstone the
-// registration flow.
+// MirrorUser creates the user in the QuicBaaS IAM tenant. It delegates
+// to MirrorInvitedUser and drops the undo, so a create conflict gets the
+// same identity and role checks.
 func (m *QuicBaaSUserMirror) MirrorUser(ctx context.Context, tenantID, email, displayName string, roles []string) error {
+	_, err := m.MirrorInvitedUser(ctx, tenantID, email, displayName, roles)
+	return err
+}
+
+// MirrorInvitedUser creates the user in the QuicBaaS IAM tenant and returns
+// an undo that removes only what this call wrote, so a pre-existing identity
+// is never deleted: a created user is deleted, otherwise only the roles this
+// call newly assigned are revoked. A create conflict is resolved by tenant
+// and email: a username held by another email is ErrMirrorUsernameTaken, and
+// the same identity is given the requested roles it does not hold yet.
+func (m *QuicBaaSUserMirror) MirrorInvitedUser(
+	ctx context.Context, tenantID, email, displayName string, roles []string,
+) (func(context.Context) error, error) {
+	noop := func(context.Context) error { return nil }
 	if m == nil || m.client == nil {
-		return nil
+		return noop, nil
 	}
 	username := displayName
 	if username == "" {
@@ -60,18 +73,101 @@ func (m *QuicBaaSUserMirror) MirrorUser(ctx context.Context, tenantID, email, di
 		DisplayName: displayName,
 		Roles:       roles,
 	}
-	_, err := m.client.CreateUser(ctx, tenantID, req)
+	created, err := m.client.CreateUser(ctx, tenantID, req)
 	if err == nil {
-		return nil
+		return func(ctx context.Context) error {
+			id := ""
+			if created != nil {
+				id = created.ID
+			}
+			if id == "" {
+				u, getErr := m.client.GetUserByEmail(ctx, tenantID, email)
+				if getErr != nil {
+					return getErr
+				}
+				if u == nil {
+					return nil
+				}
+				id = u.ID
+			}
+			return m.client.DeleteUser(ctx, tenantID, id)
+		}, nil
 	}
-	// Treat "already exists" as success. The IAM SDK doesn't expose a
-	// typed sentinel today, so we fall back to substring matching on
-	// the error message — the canonical text the QuicBaaS client
-	// returns is "already exists".
-	if isAlreadyExists(err) {
-		return nil
+	if !isAlreadyExists(err) {
+		return nil, err
 	}
-	return err
+	existing, getErr := m.client.GetUserByEmail(ctx, tenantID, email)
+	if getErr != nil {
+		msg := strings.ToLower(getErr.Error())
+		if strings.Contains(msg, "not_found") || strings.Contains(msg, "not found") {
+			return nil, ErrMirrorUsernameTaken{TenantID: tenantID, Username: username, Email: email}
+		}
+		return nil, fmt.Errorf("resolve existing IAM user %s: %w", email, getErr)
+	}
+	if existing == nil || !strings.EqualFold(strings.TrimSpace(existing.Email), strings.TrimSpace(email)) {
+		return nil, ErrMirrorUsernameTaken{TenantID: tenantID, Username: username, Email: email}
+	}
+	if len(roles) == 0 {
+		return noop, nil
+	}
+	held, err := m.heldRoleRefs(ctx, tenantID, existing.Roles)
+	if err != nil {
+		return nil, err
+	}
+	var assigned []string
+	revoke := func(ctx context.Context) error {
+		var errs []error
+		for _, role := range assigned {
+			if rErr := m.client.RevokeRole(ctx, tenantID, existing.ID, role); rErr != nil {
+				errs = append(errs, rErr)
+			}
+		}
+		return errors.Join(errs...)
+	}
+	for _, role := range roles {
+		if _, ok := held[role]; ok {
+			continue
+		}
+		if aErr := m.client.AssignRole(ctx, tenantID, existing.ID, role); aErr != nil {
+			if isAlreadyExists(aErr) {
+				continue
+			}
+			_ = revoke(ctx)
+			return nil, aErr
+		}
+		assigned = append(assigned, role)
+	}
+	return revoke, nil
+}
+
+// heldRoleRefs returns the IDs and names of the roles whose ID is in
+// roleIDs, plus the raw roleIDs entries, paging ListRoles like
+// MirroredEmails pages users.
+func (m *QuicBaaSUserMirror) heldRoleRefs(ctx context.Context, tenantID string, roleIDs []string) (map[string]struct{}, error) {
+	held := make(map[string]struct{}, 2*len(roleIDs))
+	ids := make(map[string]struct{}, len(roleIDs))
+	for _, id := range roleIDs {
+		held[id] = struct{}{}
+		ids[id] = struct{}{}
+	}
+	req := &iamsdk.ListRolesRequest{PageSize: mirroredEmailsPageSize}
+	for {
+		resp, err := m.client.ListRoles(ctx, tenantID, req)
+		if err != nil {
+			return nil, err
+		}
+		for _, role := range resp.Roles {
+			if _, ok := ids[role.ID]; ok {
+				held[role.ID] = struct{}{}
+				held[role.Name] = struct{}{}
+			}
+		}
+		next := resp.Pagination.NextPageToken
+		if !resp.Pagination.HasMore || next == "" || next == req.PageToken {
+			return held, nil
+		}
+		req.PageToken = next
+	}
 }
 
 // mirroredEmailsPageSize is the IAM ListUsers page size MirroredEmails reads
