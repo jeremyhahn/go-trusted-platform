@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ok, refused, stubControlPlane, withControlPlane, type Answer } from '@/test/control-plane-fetch';
@@ -85,6 +85,27 @@ async function toastWith(text: string) {
     expect(found).toBeTruthy();
     return found as HTMLElement;
   });
+}
+
+// holdVerify wraps the stubbed control plane so the verify route answers only
+// once the returned release is called; every other route answers at once.
+function holdVerify(): () => void {
+  const inner = globalThis.fetch;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.pathname === '/api/v1/attestation/manifests/verify') {
+        await gate;
+      }
+      return inner(input, init);
+    }),
+  );
+  return release;
 }
 
 describe('ManifestVerifyButton', () => {
@@ -194,6 +215,8 @@ describe('ManifestVerifyButton', () => {
       render(withControlPlane(<ManifestVerifyButton manifestId="m-1" manifest={MANIFEST} />));
 
       fireEvent.click(await enabledButton());
+      // The nonce row is a real check only when an expected nonce is sent.
+      fireEvent.change(await screen.findByLabelText('Expected nonce'), { target: { value: 'bm9uY2U=' } });
       fireEvent.click(await screen.findByRole('button', { name: 'Verify' }));
       await screen.findByTestId('manifest-verify-result');
       for (const [name, label] of [
@@ -216,6 +239,61 @@ describe('ManifestVerifyButton', () => {
       cleanup();
       vi.unstubAllGlobals();
     }
+  });
+
+  it('shows a blank expected nonce as not checked', async () => {
+    // The server answers nonceValid: true when no expectation is sent
+    // (service.go): the row must not read that as a passed check.
+    const sent = stubControlPlane(routes());
+    render(withControlPlane(<ManifestVerifyButton manifestId="m-1" manifest={MANIFEST} />));
+
+    fireEvent.click(await enabledButton());
+    fireEvent.click(await screen.findByRole('button', { name: 'Verify' }));
+    await screen.findByTestId('manifest-verify-result');
+
+    const body = manifestCalls(sent)[0].body as Record<string, unknown>;
+    expect('expectedNonce' in body).toBe(false);
+    const nonce = screen.getByTestId('manifest-verify-check-nonceValid').textContent ?? '';
+    expect(nonce).toContain('Nonce');
+    expect(nonce).toContain('not checked');
+    expect(nonce).not.toContain('valid');
+  });
+
+  it('clears the result when the expected nonce changes', async () => {
+    stubControlPlane(routes());
+    render(withControlPlane(<ManifestVerifyButton manifestId="m-1" manifest={MANIFEST} />));
+
+    fireEvent.click(await enabledButton());
+    const input = await screen.findByLabelText('Expected nonce');
+    fireEvent.change(input, { target: { value: 'bm9uY2U=' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Verify' }));
+    await screen.findByTestId('manifest-verify-result');
+
+    fireEvent.change(input, { target: { value: 'b3RoZXI=' } });
+    expect(screen.queryByTestId('manifest-verify-result')).toBeNull();
+  });
+
+  it('drops an answer for an older nonce', async () => {
+    const sent = stubControlPlane(routes());
+    const release = holdVerify();
+    render(withControlPlane(<ManifestVerifyButton manifestId="m-1" manifest={MANIFEST} />));
+
+    fireEvent.click(await enabledButton());
+    const input = await screen.findByLabelText('Expected nonce');
+    fireEvent.change(input, { target: { value: 'bm9uY2U=' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Verify' }));
+    await waitFor(() => expect(manifestCalls(sent)).toHaveLength(1));
+
+    fireEvent.change(input, { target: { value: 'b3RoZXI=' } });
+    await act(async () => {
+      release();
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(screen.queryByTestId('manifest-verify-result')).toBeNull();
+    // The dropped answer leaves the dialog ready for the new nonce.
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Verify' }) as HTMLButtonElement).disabled).toBe(false),
+    );
   });
 
   it('styles the wire VERIFIED status as success', async () => {
@@ -274,7 +352,7 @@ describe('ManifestVerifyButton', () => {
 
     fireEvent.click(await enabledButton());
     await screen.findByRole('button', { name: 'Verify' });
-    // service.go dispatches only failures from VerifyManifest: an inspection is not a verdict (#2038).
+    // service.go's VerifyManifest dispatches nothing to the observers: an inspection is not a verdict (#2038).
     expect(screen.getByText(/does not restore a quarantined device/)).toBeTruthy();
   });
 });

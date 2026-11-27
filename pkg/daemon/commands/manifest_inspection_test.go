@@ -17,11 +17,13 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
@@ -80,11 +82,9 @@ func TestWireQuarantineObserver_APassingInspectionLeavesAQuarantinedDeviceQuaran
 	svcs.Service.RegisterObserver(rec)
 
 	ctx := context.Background()
-	failed, err := svcs.Service.VerifyManifest(ctx,
-		&manifest.HostManifest{ID: "m-07", HostID: "node-07", Nonce: []byte("replayed")},
-		nil, []byte("fresh"), nil, nil)
-	require.NoError(t, err)
-	require.Equal(t, manifest.VerificationStatusFailed, failed.Status)
+	require.NoError(t, svcs.Service.RecordDeviceVerdict(ctx, verdict.DeviceVerdict{
+		DeviceID: 7, HostID: "node-07", Passed: false, Cryptographic: true, Reason: "signature invalid",
+	}))
 	state, err := eng.GetPortState("tap07")
 	require.NoError(t, err)
 	require.Equal(t, policy.PortStateQuarantined, state, "precondition: the failed host's port is quarantined")
@@ -103,4 +103,50 @@ func TestWireQuarantineObserver_APassingInspectionLeavesAQuarantinedDeviceQuaran
 	require.NoError(t, err)
 	assert.Equal(t, policy.PortStateQuarantined, state, "a passing inspection must not restore the port")
 	assert.Equal(t, entities.DeviceStateQuarantined, devices.devices[7].State, "a passing inspection must not restore the device")
+}
+
+// Inspecting a healthy host's stored evidence after it ages past the
+// freshness window reports the expiry and changes no network placement:
+// expired evidence never quarantines (#2038).
+func TestWireQuarantineObserver_AStaleInspectionLeavesAnAuthorizedHostAuthorized(t *testing.T) {
+	zones := zone.Defaults()
+	plan, err := netplan.New(netplan.Environment{ID: 4}, zones)
+	require.NoError(t, err)
+	zfm, err := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
+		BridgeName:     "br-fabric",
+		FlowController: nullOVSPort{},
+		PortController: nullOVSPort{},
+		Plan:           plan,
+		Zones:          zones,
+	})
+	require.NoError(t, err)
+	eng, err := policy.NewEngine(policy.Config{
+		BridgeName:     "br-fabric",
+		FlowController: nullOVSPort{},
+		PortController: nullOVSPort{},
+		Zones:          zones,
+		Logger:         quietLogger(),
+	})
+	require.NoError(t, err)
+	for _, step := range []policy.PortState{policy.PortStateProvisioning, policy.PortStateEnrolled, policy.PortStateAuthorized} {
+		require.NoError(t, eng.SetPortState("tap07", step))
+	}
+
+	devices := &hostnameDevices{stubSaveGetSvc: &stubSaveGetSvc{devices: map[uint64]*entities.Device{
+		7: {ID: 7, Hostname: "node-07", State: entities.DeviceStateAttested, NetworkPortID: "tap07"},
+	}}}
+	svcs := &attestationServices{Service: buildRealAttestationService(t)}
+	sdn := &sdnPolicyComponents{Engine: eng, ZoneFlowManager: zfm, ResolvedZones: zones}
+	require.NotNil(t, wireQuarantineObserver(svcs, sdn, devices, newTestLogger()))
+
+	result, err := svcs.Service.VerifyManifest(context.Background(),
+		&manifest.HostManifest{ID: "m-07", HostID: "node-07", Timestamp: time.Now().Add(-25 * time.Hour)},
+		nil, nil, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, manifest.VerificationStatusFailed, result.Status)
+
+	state, err := eng.GetPortState("tap07")
+	require.NoError(t, err)
+	assert.Equal(t, policy.PortStateAuthorized, state, "an expired inspection must not quarantine the port")
+	assert.Equal(t, entities.DeviceStateAttested, devices.devices[7].State, "an expired inspection must not quarantine the device")
 }

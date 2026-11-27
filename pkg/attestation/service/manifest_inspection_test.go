@@ -16,6 +16,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -42,9 +43,10 @@ func TestVerifyManifest_APassingInspectionDispatchesNoRestore(t *testing.T) {
 		"the audit event stays")
 }
 
-// A failed inspection still dispatches the failure: quarantining on a
-// failed check is fail-safe.
-func TestVerifyManifest_AFailedInspectionStillReportsTheFailure(t *testing.T) {
+// A failed inspection is no verdict either: a replayed nonce in stored
+// evidence is reported and audited, but it must not reach the observers,
+// which the quarantine loop would take as a cryptographic failure (#2038).
+func TestVerifyManifest_AFailedInspectionDispatchesNoFailure(t *testing.T) {
 	ctx := context.Background()
 	svc, obs := newVerdictService(t)
 	svc.SetDeviceResolver(&staticResolver{m: map[string]uint64{"host-a": 42}})
@@ -53,6 +55,27 @@ func TestVerifyManifest_AFailedInspectionStillReportsTheFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, manifest.VerificationStatusFailed, result.Status)
 
-	assert.Equal(t, []uint64{42}, obs.failed)
+	assert.Empty(t, obs.failed, "an inspection must not dispatch a failure")
+	assert.Empty(t, obs.passed)
+	assert.Equal(t, []store.EventKind{store.EventKindManifestRejected}, eventKinds(t, svc, "host-a"),
+		"the audit event stays")
+}
+
+// Stored enrollment evidence ages past the freshness window on every healthy
+// host; inspecting it must report the expiry without quarantining the host
+// (docs/attestation/architecture.md: expired evidence never quarantines).
+func TestVerifyManifest_AStaleInspectionDispatchesNoFailure(t *testing.T) {
+	ctx := context.Background()
+	svc, obs := newVerdictService(t)
+	svc.SetDeviceResolver(&staticResolver{m: map[string]uint64{"host-a": 42}})
+
+	stale := storedManifest()
+	stale.Timestamp = time.Now().Add(-25 * time.Hour)
+	result, err := svc.VerifyManifest(ctx, stale, nil, nil, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, manifest.VerificationStatusFailed, result.Status)
+	assert.Contains(t, result.Errors, "manifest is older than 24 hours")
+
+	assert.Empty(t, obs.failed, "an expired inspection must not dispatch a failure")
 	assert.Empty(t, obs.passed)
 }
