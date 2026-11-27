@@ -147,18 +147,25 @@ describe('CeremonyStatusCard', () => {
     render(withControlPlane(<CeremonyPage />));
 
     expect(await screen.findAllByText('Not initialized')).toHaveLength(2);
-    routes[STATUS_PATH] = ok({ ...(inProgress().body as Record<string, unknown>), ceremonyId: 'c-new' });
+    // ok() wraps the payload in the envelope: spread the payload, not the envelope.
+    const inProgressStatus = (inProgress().body as { payload: Record<string, unknown> }).payload;
+    routes[STATUS_PATH] = ok({ ...inProgressStatus, ceremonyId: 'c-new' });
 
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Single admin (no officer shares)' }));
-    fireEvent.change(screen.getByLabelText('SO PIN'), { target: { value: 'so-pin-test' } });
-    const open = screen.getByRole('button', { name: 'Initialize' }) as HTMLButtonElement;
+    // The page has more than one SO PIN field (init and sign-CSR cards):
+    // query inside the Initialize ceremony card (Card > CardHeader > h3).
+    const initCard = screen.getByRole('heading', { name: 'Initialize ceremony' }).parentElement
+      ?.parentElement as HTMLElement;
+    fireEvent.click(within(initCard).getByRole('checkbox', { name: 'Single admin (no officer shares)' }));
+    fireEvent.change(within(initCard).getByLabelText('SO PIN'), { target: { value: 'so-pin-test' } });
+    const open = within(initCard).getByRole('button', { name: 'Initialize' }) as HTMLButtonElement;
     await waitFor(() => expect(open.disabled).toBe(false));
     fireEvent.click(open);
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Initialize' }));
 
     expect(await screen.findByText('c-new')).toBeDefined();
-    expect(screen.getByText('In progress')).toBeDefined();
+    // 'c-new' first shows on the init card; the status fetch lands after it.
+    expect(await screen.findByText('In progress')).toBeDefined();
     expect(screen.queryAllByText('Not initialized')).toHaveLength(0);
     // The init card was not remounted: the one-shot admin key is still shown.
     expect((screen.getByLabelText('Admin private key') as HTMLTextAreaElement).value).toBe('KEY');
