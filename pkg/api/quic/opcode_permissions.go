@@ -842,10 +842,11 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 	// Per-tenant barrier (gRPC TenantService): the tenant scopes the
 	// tenant opcodes carry.
 	quicwire.OpTenantBarrierCategory: {
-		quicwire.TenantBarrierSubInit:   tenantWrite,
-		quicwire.TenantBarrierSubUnseal: tenantWrite,
-		quicwire.TenantBarrierSubSeal:   tenantWrite,
-		quicwire.TenantBarrierSubStatus: tenantRead,
+		quicwire.TenantBarrierSubInit:                   tenantWrite,
+		quicwire.TenantBarrierSubUnseal:                 tenantWrite,
+		quicwire.TenantBarrierSubSeal:                   tenantWrite,
+		quicwire.TenantBarrierSubStatus:                 tenantRead,
+		quicwire.TenantBarrierSubInitialAdminInvitation: tenantWrite,
 	},
 
 	// BMC (gRPC BMCService): each sub-opcode takes its method's scope.

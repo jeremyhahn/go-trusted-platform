@@ -59,6 +59,7 @@
 //
 // Per-Tenant Barrier Operations (sub-opcodes under OpTenantBarrierCategory):
 //   - Init/Unseal/Seal/Status
+//   - InitialAdminInvitation: invite a tenant's first owner (system tenant only)
 
 package daemon
 
@@ -446,6 +447,8 @@ func (h *QUICServiceHandler) handleTenantBarrierCategory(ctx context.Context, re
 		return h.handleTenantBarrierSeal(ctx, subPayload)
 	case quicwire.TenantBarrierSubStatus:
 		return h.handleTenantBarrierStatus(ctx, subPayload)
+	case quicwire.TenantBarrierSubInitialAdminInvitation:
+		return h.handleTenantInitialAdminInvitation(ctx, subPayload)
 	default:
 		return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: subOpcode})
 	}
@@ -503,6 +506,21 @@ func (h *QUICServiceHandler) handleTenantBarrierStatus(ctx context.Context, payl
 	resp, err := h.tenantGRPC.GetTenantBarrierStatus(ctx, &pbReq)
 	if err != nil {
 		return h.grpcDelegateErrorToQUIC("TenantBarrierStatus", err)
+	}
+	return h.encodeGRPCDelegateResponse(resp)
+}
+
+// handleTenantInitialAdminInvitation handles the owner-invitation
+// sub-operation (TenantService.CreateInitialAdminInvitation).
+func (h *QUICServiceHandler) handleTenantInitialAdminInvitation(ctx context.Context, payload []byte) *quicwire.Response {
+	var pbReq platformv1.CreateInitialAdminInvitationRequest
+	if err := quicwire.DecodePayload(payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	resp, err := h.tenantGRPC.CreateInitialAdminInvitation(ctx, &pbReq)
+	if err != nil {
+		return h.grpcDelegateErrorToQUIC("TenantInitialAdminInvitation", err)
 	}
 	return h.encodeGRPCDelegateResponse(resp)
 }
