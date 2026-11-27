@@ -103,19 +103,6 @@ type RevokeResponse struct {
 	Message string `json:"message"`
 }
 
-// ValidRoles contains the set of valid roles that can be assigned via invitation.
-var ValidRoles = map[string]struct{}{
-	"admin":  {},
-	"member": {},
-	"viewer": {},
-}
-
-// IsValidRole checks if the given role is valid.
-func IsValidRole(role string) bool {
-	_, ok := ValidRoles[role]
-	return ok
-}
-
 // ToInvitationResponse converts an Invitation entity to an InvitationResponse.
 //
 // Deprecated: Use ToInvitationResponseWithURL for responses that include the invite URL.

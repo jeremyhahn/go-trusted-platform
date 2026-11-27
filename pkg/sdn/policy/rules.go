@@ -65,8 +65,7 @@ func (g *RuleGenerator) GenerateAuthorizationRules(portID string, policy *PortPo
 
 	// Generate ACL rules
 	for _, acl := range policy.ACLs {
-		aclRule := g.generateACLRule(portID, policy.VLAN, acl)
-		rules = append(rules, aclRule)
+		rules = append(rules, g.generateACLRule(portID, policy.VLAN, acl)...)
 	}
 
 	// If no ACL rules, add default allow rule
@@ -116,7 +115,7 @@ func (g *RuleGenerator) generateVLANRule(portID string, vlan uint16) FlowRule {
 }
 
 // generateACLRule creates an ACL flow rule
-func (g *RuleGenerator) generateACLRule(portID string, vlan uint16, acl ACLRule) FlowRule {
+func (g *RuleGenerator) generateACLRule(portID string, vlan uint16, acl ACLRule) []FlowRule {
 	// Combine port and ACL match criteria
 	match := acl.Match
 	match.InPort = portID
@@ -124,15 +123,34 @@ func (g *RuleGenerator) generateACLRule(portID string, vlan uint16, acl ACLRule)
 		match.VLANVid = vlan
 	}
 
-	matchStr := g.buildMatch(match)
 	actionsStr := g.buildActions(acl.Action)
-
-	return FlowRule{
-		Table:    g.DefaultTable,
-		Priority: g.BasePriority + acl.Priority,
-		Match:    matchStr,
-		Actions:  actionsStr,
+	rule := func(m FlowMatch) FlowRule {
+		return FlowRule{
+			Table:    g.DefaultTable,
+			Priority: g.BasePriority + acl.Priority,
+			Match:    g.buildMatch(m),
+			Actions:  actionsStr,
+		}
 	}
+
+	// An L3/L4 match that names no address family must apply to both:
+	// OpenFlow needs a dl_type for nw_proto and tp_*, and a single IPv4
+	// flow would let the same traffic through over IPv6 (a port DENY
+	// bypass). ICMP (1) is IPv4 only and ICMPv6 (58) is IPv6 only.
+	familyNeutral := match.EthType == 0 &&
+		match.IPv4Src == "" && match.IPv4Dst == "" &&
+		match.IPv6Src == "" && match.IPv6Dst == "" &&
+		match.IPProto != 1 && match.IPProto != 58 &&
+		(match.IPProto > 0 || match.TCPSrc > 0 || match.TCPDst > 0 ||
+			match.UDPSrc > 0 || match.UDPDst > 0)
+	if !familyNeutral {
+		return []FlowRule{rule(match)}
+	}
+
+	v4, v6 := match, match
+	v4.EthType = 0x0800
+	v6.EthType = 0x86dd
+	return []FlowRule{rule(v4), rule(v6)}
 }
 
 // generateDefaultAllowRule creates a default allow rule
@@ -166,16 +184,41 @@ func (g *RuleGenerator) buildMatch(match FlowMatch) string {
 		parts = append(parts, fmt.Sprintf("dl_dst=%s", match.EthDst))
 	}
 
-	if match.EthType > 0 {
-		parts = append(parts, fmt.Sprintf("dl_type=0x%04x", match.EthType))
+	// OpenFlow refuses an L3 or L4 field without its prerequisites
+	// (OFPBMC_BAD_PREREQ): nw_* and ipv6_* need dl_type, tp_* needs nw_proto.
+	ethType := match.EthType
+	if ethType == 0 {
+		switch {
+		case match.IPv6Src != "" || match.IPv6Dst != "":
+			ethType = 0x86dd
+		case match.IPProto == 58 && match.IPv4Src == "" && match.IPv4Dst == "":
+			ethType = 0x86dd // ICMPv6 exists only over IPv6
+		case match.IPProto > 0 || match.IPv4Src != "" || match.IPv4Dst != "" ||
+			match.TCPSrc > 0 || match.TCPDst > 0 || match.UDPSrc > 0 || match.UDPDst > 0:
+			ethType = 0x0800
+		}
+	}
+
+	ipProto := match.IPProto
+	if ipProto == 0 {
+		switch {
+		case match.TCPSrc > 0 || match.TCPDst > 0:
+			ipProto = 6
+		case match.UDPSrc > 0 || match.UDPDst > 0:
+			ipProto = 17
+		}
+	}
+
+	if ethType > 0 {
+		parts = append(parts, fmt.Sprintf("dl_type=0x%04x", ethType))
 	}
 
 	if match.VLANVid > 0 {
 		parts = append(parts, fmt.Sprintf("dl_vlan=%d", match.VLANVid))
 	}
 
-	if match.IPProto > 0 {
-		parts = append(parts, fmt.Sprintf("nw_proto=%d", match.IPProto))
+	if ipProto > 0 {
+		parts = append(parts, fmt.Sprintf("nw_proto=%d", ipProto))
 	}
 
 	if match.IPv4Src != "" {

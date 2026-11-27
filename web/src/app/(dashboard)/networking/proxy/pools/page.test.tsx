@@ -76,7 +76,6 @@ function shared(): Record<string, Answer> {
 async function renderPage() {
   render(withControlPlane(<ProxyPoolsPage />));
   await within(await screen.findByTestId('proxy-pools')).findByText('p1');
-  await waitFor(() => expect(document.querySelector('[title="checking server capabilities"]')).toBeNull());
   // The list can load before the capabilities read: the controls stay
   // disabled until it settles, and a click before then opens nothing.
   await waitFor(() => expect(screen.queryAllByTitle('checking server capabilities')).toHaveLength(0), {

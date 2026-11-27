@@ -60,7 +60,6 @@ async function renderPage() {
 async function renderLoaded() {
   await renderPage();
   await within(await screen.findByTestId('proxy-routes')).findByText('r1');
-  await waitFor(() => expect(document.querySelector('[title="checking server capabilities"]')).toBeNull());
   // The list can load before the capabilities read: the controls stay
   // disabled until it settles, and a click before then opens nothing.
   await waitFor(() => expect(screen.queryAllByTitle('checking server capabilities')).toHaveLength(0), {
