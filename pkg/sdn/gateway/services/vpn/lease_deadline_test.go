@@ -369,3 +369,105 @@ func TestLeaseDeadline_AnUnrecordedRevocationKeepsTheOwedExtension(t *testing.T)
 	h.svc.Sweep(ctx)
 	assert.Equal(t, 2, plane.calls, "Sweep still re-sends the owed extension")
 }
+
+// renewFailingPeers is a datapath whose renewal RPC alone goes unanswered:
+// installs and reconciles still reach the host.
+type renewFailingPeers struct {
+	*hostPeers
+	renewErr error
+}
+
+func (p *renewFailingPeers) RenewVPNPeer(ctx context.Context, req *ipcv1.RenewVPNPeerRequest) (*ipcv1.RenewVPNPeerResponse, error) {
+	if p.renewErr != nil {
+		return nil, p.renewErr
+	}
+	return p.hostPeers.RenewVPNPeer(ctx, req)
+}
+
+// restartableHostedHarness is hostedHarness with the deps a restart reuses
+// and a datapath whose renewal RPC can fail on its own.
+func restartableHostedHarness(t *testing.T) (*harness, Deps, *PlaneHost, *managedFakePlane, *renewFailingPeers) {
+	t.Helper()
+	managed := newManagedFakePlane(DataPlaneMASQUE, new([]string))
+	host := hostOf(t, managed)
+	peers := &renewFailingPeers{hostPeers: &hostPeers{host: host}}
+	dp, err := NewDatapathPlane(DataPlaneMASQUE, peers)
+	require.NoError(t, err)
+	var deps Deps
+	h := newHarnessWith(t, testConfig(), func(d *Deps) {
+		d.DataPlanes[DataPlaneMASQUE] = dp
+		deps = *d
+	})
+	host.now = h.clock.Now
+	return h, deps, host, managed, peers
+}
+
+// A renewal RPC that failed left the host at the client's deadline. After
+// the host expired the peer there, a restart whose renewal check fails again
+// while installs succeed must not recreate the peer with the later stored
+// deadline.
+func TestRestore_AFailedHostCheckNeverReinstallsAPeerTheHostExpired(t *testing.T) {
+	ctx := context.Background()
+	h, deps, host, managed, peers := restartableHostedHarness(t)
+	lease, err := h.svc.Admit(ctx, h.request(t))
+	require.NoError(t, err)
+	h.intoRenewWindow()
+	peers.renewErr = errors.New("datapath unreachable")
+	_, err = h.svc.Renew(ctx, lease.ID, renewalEvidence(t, h))
+	var unavailable *ErrDataPlaneUnavailable
+	require.ErrorAs(t, err, &unavailable)
+	stored, err := h.svc.Lease(ctx, lease.ID)
+	require.NoError(t, err)
+	require.True(t, stored.ExpiresAt.After(lease.ExpiresAt))
+
+	h.clock.Advance(DefaultRenewWindow)
+	require.NoError(t, host.ExpirePeers(ctx, h.clock.Now()))
+	require.Equal(t, 0, managed.count(), "the host expired the peer at the client's deadline")
+
+	require.NoError(t, restartWith(t, h, deps))
+	assert.Equal(t, 0, managed.count(), "an inconclusive host check must not reinstall a peer the host expired")
+
+	peers.renewErr = nil
+	h.svc.Sweep(ctx)
+	assert.Equal(t, 0, managed.count())
+	_, err = h.svc.Lease(ctx, lease.ID)
+	var nf *ErrLeaseNotFound
+	assert.ErrorAs(t, err, &nf, "the Sweep's host check finds the peer expired and revokes the lease")
+}
+
+// A pending renewal's lease survives a restart of both the datapath (an
+// empty replacement host) and the vpn service before the client's deadline:
+// the peer is replayed with the client's deadline, and the client's retry
+// extends it.
+func TestRestore_AReplacementHostGetsAPendingRenewalsPeerReplayed(t *testing.T) {
+	ctx := context.Background()
+	h, deps, _, _, peers := restartableHostedHarness(t)
+	lease, err := h.svc.Admit(ctx, h.request(t))
+	require.NoError(t, err)
+	h.intoRenewWindow()
+	peers.renewErr = errors.New("datapath unreachable")
+	_, err = h.svc.Renew(ctx, lease.ID, renewalEvidence(t, h))
+	var unavailable *ErrDataPlaneUnavailable
+	require.ErrorAs(t, err, &unavailable)
+
+	managed2 := newManagedFakePlane(DataPlaneMASQUE, new([]string))
+	host2 := hostOf(t, managed2)
+	host2.now = h.clock.Now
+	peers.hostPeers.host = host2
+	peers.renewErr = nil
+	require.True(t, h.clock.Now().Before(lease.ExpiresAt))
+
+	require.NoError(t, restartWith(t, h, deps), "a lease before its client's deadline is not dropped")
+	require.Equal(t, 1, managed2.count(), "the replacement host gets the peer replayed")
+	_, err = h.svc.Lease(ctx, lease.ID)
+	require.NoError(t, err)
+	require.NoError(t, host2.ExpirePeers(ctx, lease.ExpiresAt.Add(-time.Second)))
+	require.Equal(t, 1, managed2.count())
+
+	renewed, err := h.svc.Renew(ctx, lease.ID, renewalEvidence(t, h))
+	require.NoError(t, err, "the client's retry keeps the renew bypass")
+	require.NoError(t, host2.ExpirePeers(ctx, lease.ExpiresAt))
+	assert.Equal(t, 1, managed2.count(), "the retry moved the replayed peer's deadline")
+	require.NoError(t, host2.ExpirePeers(ctx, renewed.ExpiresAt))
+	assert.Equal(t, 0, managed2.count())
+}
