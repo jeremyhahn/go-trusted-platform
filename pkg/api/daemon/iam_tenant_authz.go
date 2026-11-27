@@ -8,6 +8,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
+	webiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -51,6 +52,12 @@ func callerUserID(ctx context.Context) (uint64, bool) {
 		subject = authCtx.Subject
 	} else if identity := IdentityFromContext(ctx); identity != nil {
 		subject = identity.UserID
+	} else if authCtx, ok := webiam.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
+		// The webservice REST path stores the verified platform token here.
+		subject = authCtx.Subject
+	} else if session, ok := webiam.GetSessionFromContext(ctx); ok && session != nil {
+		// The webservice REST path stores a verified IAM session here.
+		subject = session.UserID()
 	}
 	id, err := strconv.ParseUint(subject, 10, 64)
 	if err != nil || id == 0 {
