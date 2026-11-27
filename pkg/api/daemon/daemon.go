@@ -412,7 +412,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 		// Configure authentication interceptors. Fails closed (#550): with
 		// SkipIAMValidation off, no authentication backend means no server.
-		authSel, authErr := selectGRPCTCPAuth(config, platformTokenValidatorShared, iamPEP, logger, grpcTCPSkipMethods)
+		var mtlsPrincipal func(ctx context.Context, tenantID, subject string) (string, []string, error)
+		if iamService != nil {
+			mtlsPrincipal = iamUserPrincipal(iamService.Client())
+		}
+		authSel, authErr := selectGRPCTCPAuth(config, platformTokenValidatorShared, iamPEP, mtlsPrincipal, logger, grpcTCPSkipMethods)
 		if authErr != nil {
 			return nil, authErr
 		}
@@ -952,6 +956,17 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		})
 	}
 	eabGRPCService := NewEABGRPCService(logger, eabServicer, eabDeliveryServicer)
+	if iamService != nil {
+		// The IAM PEP decides tenant-scoped EAB operations (docs/SPEC.md line 125).
+		if pep := iamService.PEP(); pep != nil {
+			eabGRPCService.SetPEPClient(pep)
+		}
+		// mTLS callers are resolved to their stored IAM user and roles
+		// before the PEP check.
+		if client := iamService.Client(); client != nil {
+			eabGRPCService.SetUserClient(client.User())
+		}
+	}
 	if grpcServer != nil {
 		platformv1.RegisterEABServiceServer(grpcServer, eabGRPCService)
 	}
@@ -967,6 +982,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// SetService is called the service returns Unimplemented per the
 	// legacy stub.
 	invitationService := NewInvitationGRPCService(logger, nil)
+	invitationService.SetPEP(iamPEP)
 	if grpcServer != nil {
 		platformv1.RegisterInvitationServiceServer(grpcServer, invitationService)
 	}
@@ -1041,6 +1057,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if vpnControlPlane != nil {
 		vpnGRPCService = NewVPNGRPCService(logger, vpnControlPlane)
 	}
+	vpnGRPCService.SetPEP(iamPEP)
 	if grpcServer != nil {
 		platformv1.RegisterVPNServiceServer(grpcServer, vpnGRPCService)
 	}
@@ -1649,6 +1666,10 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if daemon.tenantService != nil && daemon.tenantService.grpcServer != nil {
 			daemon.tenantService.grpcServer.SetManager(config.PlatformTenantManager)
 			daemon.tenantService.grpcServer.SetSystemTenant(config.PlatformTenantID)
+			if iamService != nil {
+				// Unix peers are decided by the IAM PEP (SPEC row 109).
+				daemon.tenantService.grpcServer.SetPEP(iamService.PEP())
+			}
 			logger.Info("Platform tenant manager wired into gRPC TenantService")
 
 			// Share the same *TenantGRPCServer delegate with the QUIC handler so

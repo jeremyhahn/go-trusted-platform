@@ -29,7 +29,11 @@ import (
 
 // wiredIAMGRPCService is the gRPC IAM service on an in-memory IAM client.
 func wiredIAMGRPCService(iam *memIAM) *IAMGRPCService {
-	return NewIAMGRPCService(slog.Default(), iam, iam.PEP())
+	svc := NewIAMGRPCService(slog.Default(), iam, iam.PEP())
+	// CreateTenant and ListTenants are decided in the system tenant and
+	// fail closed with none set (fixtureSystemTenantID).
+	svc.SetSystemTenant(fixtureSystemTenantID)
+	return svc
 }
 
 // memIAMCreated is the creation time of every record memIAM stores, so two
@@ -403,13 +407,21 @@ func (tc memTenants) List(_ context.Context, _ *sdkiam.ListTenantsRequest) (*sdk
 	return &sdkiam.ListTenantsResponse{Tenants: tenants, Pagination: sdkiam.PaginationInfo{TotalCount: len(tenants)}}, nil
 }
 
-// memPEP allows an action when one of the subject's roles grants it, and
-// rejects a resource that is not a type://path URI as invalid input.
+// memPEP admits a Unix peer's uid/gid principal as the fixtures' operator on
+// its bare registered RBAC resource (tenant, iam, ...); for any other subject
+// it rejects a resource that is not a type://path URI as invalid input and
+// allows an action when one of the subject's roles grants it.
 type memPEP struct {
 	m *memIAM
 }
 
 func (p memPEP) Check(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+	// The local operator: a Unix peer's uid/gid principal
+	// (unixPeerPrincipal) is admitted, as the fixtures' operator policy,
+	// on its bare registered RBAC resource name (tenant, iam, ...).
+	if strings.HasPrefix(req.Subject.ID, "unix:uid:") {
+		return &sdkiam.CheckResponse{Allowed: true, MatchedPolicy: "unix-operator", MatchedRule: req.Action}, nil
+	}
 	if !strings.Contains(req.Resource, "://") {
 		return nil, sdkerrors.NewInvalidInput("iam.pep.check", "resource must be a type://path URI")
 	}

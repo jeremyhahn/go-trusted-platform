@@ -14,7 +14,6 @@
 package daemon
 
 import (
-	"context"
 	"testing"
 
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -31,7 +30,7 @@ import (
 // not its name, as go-qrdb stores it.
 func seedAdminRole(t *testing.T, iam *memIAM, tenantID string) {
 	t.Helper()
-	_, err := iam.Role().Create(context.Background(), tenantID, &sdkiam.CreateRoleRequest{ID: "0b5e-admin", Name: "admin"})
+	_, err := iam.Role().Create(unixOperatorContext(), tenantID, &sdkiam.CreateRoleRequest{ID: "0b5e-admin", Name: "admin"})
 	require.NoError(t, err)
 }
 
@@ -39,7 +38,7 @@ func TestIAMGRPCService_CreateUserStoresRoleIDsForRoleNames(t *testing.T) {
 	iam := newMemIAM()
 	seedAdminRole(t, iam, "acme")
 	svc := wiredIAMGRPCService(iam)
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	_, err := svc.CreateUser(ctx, &platformv1.CreateIAMUserRequest{
 		TenantId: "acme", Email: "owner@acme.test", Roles: []string{"admin"},
@@ -55,7 +54,7 @@ func TestIAMGRPCService_CreateUserWithUnknownRoleIsNotFound(t *testing.T) {
 	iam := newMemIAM()
 	seedAdminRole(t, iam, "acme")
 	svc := wiredIAMGRPCService(iam)
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	_, err := svc.CreateUser(ctx, &platformv1.CreateIAMUserRequest{
 		TenantId: "acme", Email: "owner@acme.test", Roles: []string{"owner"},
@@ -91,10 +90,10 @@ func ownerWithRoles(t *testing.T, roles ...string) (*IAMGRPCService, *memIAM) {
 	t.Helper()
 	iam := newMemIAM()
 	seedAdminRole(t, iam, "acme")
-	_, err := iam.Role().Create(context.Background(), "acme", &sdkiam.CreateRoleRequest{ID: "0b5e-operator", Name: "operator"})
+	_, err := iam.Role().Create(unixOperatorContext(), "acme", &sdkiam.CreateRoleRequest{ID: "0b5e-operator", Name: "operator"})
 	require.NoError(t, err)
 	svc := wiredIAMGRPCService(iam)
-	_, err = svc.CreateUser(context.Background(), &platformv1.CreateIAMUserRequest{TenantId: "acme", Email: "owner@acme.test", Roles: roles})
+	_, err = svc.CreateUser(unixOperatorContext(), &platformv1.CreateIAMUserRequest{TenantId: "acme", Email: "owner@acme.test", Roles: roles})
 	require.NoError(t, err)
 	return svc, iam
 }
@@ -102,7 +101,7 @@ func ownerWithRoles(t *testing.T, roles ...string) (*IAMGRPCService, *memIAM) {
 // storedRoles is the role IDs the store holds for owner@acme.test.
 func storedRoles(t *testing.T, iam *memIAM) []string {
 	t.Helper()
-	user, err := iam.User().Get(context.Background(), "acme", "owner@acme.test")
+	user, err := iam.User().Get(unixOperatorContext(), "acme", "owner@acme.test")
 	require.NoError(t, err)
 	return user.Roles
 }
@@ -110,7 +109,7 @@ func storedRoles(t *testing.T, iam *memIAM) []string {
 func TestIAMGRPCService_AssignRoleByName(t *testing.T) {
 	svc, iam := ownerWithRoles(t)
 
-	_, err := svc.AssignRole(context.Background(), &platformv1.AssignIAMRoleRequest{TenantId: "acme", UserId: "owner@acme.test", RoleId: "admin"})
+	_, err := svc.AssignRole(unixOperatorContext(), &platformv1.AssignIAMRoleRequest{TenantId: "acme", UserId: "owner@acme.test", RoleId: "admin"})
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"0b5e-admin"}, storedRoles(t, iam))
@@ -119,7 +118,7 @@ func TestIAMGRPCService_AssignRoleByName(t *testing.T) {
 func TestIAMGRPCService_AssignUnknownRoleIsNotFound(t *testing.T) {
 	svc, iam := ownerWithRoles(t)
 
-	_, err := svc.AssignRole(context.Background(), &platformv1.AssignIAMRoleRequest{TenantId: "acme", UserId: "owner@acme.test", RoleId: "owner"})
+	_, err := svc.AssignRole(unixOperatorContext(), &platformv1.AssignIAMRoleRequest{TenantId: "acme", UserId: "owner@acme.test", RoleId: "owner"})
 
 	assert.Equal(t, codes.NotFound, status.Code(err))
 	assert.Empty(t, storedRoles(t, iam))
@@ -128,7 +127,7 @@ func TestIAMGRPCService_AssignUnknownRoleIsNotFound(t *testing.T) {
 func TestIAMGRPCService_RevokeRoleByName(t *testing.T) {
 	svc, iam := ownerWithRoles(t, "admin", "operator")
 
-	_, err := svc.RevokeRole(context.Background(), &platformv1.RevokeIAMRoleRequest{TenantId: "acme", UserId: "owner@acme.test", RoleId: "admin"})
+	_, err := svc.RevokeRole(unixOperatorContext(), &platformv1.RevokeIAMRoleRequest{TenantId: "acme", UserId: "owner@acme.test", RoleId: "admin"})
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"0b5e-operator"}, storedRoles(t, iam))
@@ -137,7 +136,7 @@ func TestIAMGRPCService_RevokeRoleByName(t *testing.T) {
 func TestIAMGRPCService_RevokeUnknownRoleIsNotFound(t *testing.T) {
 	svc, iam := ownerWithRoles(t, "admin")
 
-	_, err := svc.RevokeRole(context.Background(), &platformv1.RevokeIAMRoleRequest{TenantId: "acme", UserId: "owner@acme.test", RoleId: "owner"})
+	_, err := svc.RevokeRole(unixOperatorContext(), &platformv1.RevokeIAMRoleRequest{TenantId: "acme", UserId: "owner@acme.test", RoleId: "owner"})
 
 	assert.Equal(t, codes.NotFound, status.Code(err))
 	assert.Equal(t, []string{"0b5e-admin"}, storedRoles(t, iam))
@@ -146,7 +145,7 @@ func TestIAMGRPCService_RevokeUnknownRoleIsNotFound(t *testing.T) {
 func TestIAMGRPCService_UpdateUserReplacesRoles(t *testing.T) {
 	svc, iam := ownerWithRoles(t, "admin")
 
-	_, err := svc.UpdateUser(context.Background(), &platformv1.UpdateIAMUserRequest{TenantId: "acme", UserId: "owner@acme.test", Roles: []string{"operator"}})
+	_, err := svc.UpdateUser(unixOperatorContext(), &platformv1.UpdateIAMUserRequest{TenantId: "acme", UserId: "owner@acme.test", Roles: []string{"operator"}})
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"0b5e-operator"}, storedRoles(t, iam))
@@ -155,12 +154,12 @@ func TestIAMGRPCService_UpdateUserReplacesRoles(t *testing.T) {
 func TestIAMGRPCService_UpdateUserWithUnknownRoleChangesNothing(t *testing.T) {
 	svc, iam := ownerWithRoles(t, "admin")
 
-	_, err := svc.UpdateUser(context.Background(), &platformv1.UpdateIAMUserRequest{
+	_, err := svc.UpdateUser(unixOperatorContext(), &platformv1.UpdateIAMUserRequest{
 		TenantId: "acme", UserId: "owner@acme.test", Name: "Renamed", Roles: []string{"owner"},
 	})
 
 	assert.Equal(t, codes.NotFound, status.Code(err))
-	user, getErr := iam.User().Get(context.Background(), "acme", "owner@acme.test")
+	user, getErr := iam.User().Get(unixOperatorContext(), "acme", "owner@acme.test")
 	require.NoError(t, getErr)
 	assert.Equal(t, []string{"0b5e-admin"}, user.Roles)
 	assert.NotEqual(t, "Renamed", user.DisplayName, "an unknown role must refuse the whole update")

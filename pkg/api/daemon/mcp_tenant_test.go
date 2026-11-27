@@ -285,9 +285,14 @@ func newTenantParityHarness(t *testing.T) *tenantParityHarness {
 	h.manager = manager
 
 	h.server = NewTenantGRPCServer(WithTenantLogger(quiet))
+	h.server.SetPEP(allowAllPEP(nil))
 	h.server.SetManager(manager)
+	// The Unix operator's CreateTenant is a cross-tenant call decided in
+	// the system tenant, which fails closed while none is set: bootstrap
+	// with a placeholder, then make the created system tenant the real one.
+	h.server.SetSystemTenant(fixtureSystemTenantID)
 	for label, name := range parityTenantNames {
-		resp, err := h.server.CreateTenant(context.Background(), &platformv1.CreateTenantRequest{Name: name})
+		resp, err := h.server.CreateTenant(unixOperatorContext(), &platformv1.CreateTenantRequest{Name: name})
 		require.NoError(t, err)
 		h.ids[label] = resp.GetTenant().GetId()
 	}
@@ -1006,16 +1011,24 @@ func TestTenantBarrierInitRefusesShamir(t *testing.T) {
 	assert.Equal(t, calls, h.barriers.callsFor(a), "the barrier backend is never called")
 }
 
-// TestTenantServerAdmitsUnboundCaller: a caller with no tenant-bound identity
-// (the Unix-socket operator) reaches any tenant and the cross-tenant methods.
-func TestTenantServerAdmitsUnboundCaller(t *testing.T) {
+// TestTenantServerRefusesUnboundCaller covers SPEC row 109: a caller with no
+// identity at all is refused, fail closed, while the Unix-socket operator
+// (kernel-verified peer credentials) still reaches any tenant and the
+// cross-tenant methods.
+func TestTenantServerRefusesUnboundCaller(t *testing.T) {
 	h := newTenantParityHarness(t)
 	ctx := context.Background()
 
 	_, err := h.server.GetTenant(ctx, &platformv1.GetTenantRequest{TenantId: h.id(parityTenantB)})
-	require.NoError(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err), "a caller with no identity is refused GetTenant")
 	_, err = h.server.ListTenants(ctx, &platformv1.ListTenantsRequest{})
-	require.NoError(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err), "a caller with no identity is refused ListTenants")
+
+	op := unixOperatorContext()
+	_, err = h.server.GetTenant(op, &platformv1.GetTenantRequest{TenantId: h.id(parityTenantB)})
+	require.NoError(t, err, "the Unix operator is still admitted")
+	_, err = h.server.ListTenants(op, &platformv1.ListTenantsRequest{})
+	require.NoError(t, err, "the Unix operator is still admitted")
 }
 
 // TestTenantServerWithoutSystemTenant: with no system tenant configured, no

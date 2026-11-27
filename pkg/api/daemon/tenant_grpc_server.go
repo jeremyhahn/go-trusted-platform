@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -38,6 +39,11 @@ type TenantGRPCServer struct {
 	// systemTenantID is the platform's operating tenant, the one tenant
 	// that may act on every other (tenant_grpc_authz.go).
 	systemTenantID string
+
+	// pep is the IAM decision point a caller with no tenant-bound identity
+	// (a Unix peer) is decided by; nil refuses such callers
+	// (tenant_grpc_authz.go).
+	pep quicbaassdk.IAMPEPClient
 }
 
 // TenantGRPCServerOption is a functional option for configuring TenantGRPCServer.
@@ -83,6 +89,7 @@ func (s *TenantGRPCServer) ListTenants(
 	ctx context.Context,
 	req *platformv1.ListTenantsRequest,
 ) (*platformv1.ListTenantsResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.TenantService/ListTenants")
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
@@ -122,6 +129,7 @@ func (s *TenantGRPCServer) GetTenant(
 	ctx context.Context,
 	req *platformv1.GetTenantRequest,
 ) (*platformv1.GetTenantResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.TenantService/GetTenant")
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
@@ -149,6 +157,7 @@ func (s *TenantGRPCServer) GetTenantByName(
 	ctx context.Context,
 	req *platformv1.GetTenantByNameRequest,
 ) (*platformv1.GetTenantByNameResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.TenantService/GetTenantByName")
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
@@ -185,6 +194,7 @@ func (s *TenantGRPCServer) CreateTenant(
 	ctx context.Context,
 	req *platformv1.CreateTenantRequest,
 ) (*platformv1.CreateTenantResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.TenantService/CreateTenant")
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
@@ -250,6 +260,7 @@ func (s *TenantGRPCServer) UpdateTenant(
 	ctx context.Context,
 	req *platformv1.UpdateTenantRequest,
 ) (*platformv1.UpdateTenantResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.TenantService/UpdateTenant")
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
@@ -293,6 +304,7 @@ func (s *TenantGRPCServer) DeleteTenant(
 	ctx context.Context,
 	req *platformv1.DeleteTenantRequest,
 ) (*platformv1.DeleteTenantResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.TenantService/DeleteTenant")
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
@@ -329,6 +341,7 @@ func (s *TenantGRPCServer) SuspendTenant(
 	ctx context.Context,
 	req *platformv1.SuspendTenantRequest,
 ) (*platformv1.SuspendTenantResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.TenantService/SuspendTenant")
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
@@ -361,6 +374,7 @@ func (s *TenantGRPCServer) ResumeTenant(
 	ctx context.Context,
 	req *platformv1.ResumeTenantRequest,
 ) (*platformv1.ResumeTenantResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.TenantService/ResumeTenant")
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
@@ -397,6 +411,7 @@ func (s *TenantGRPCServer) GetQuotas(
 	ctx context.Context,
 	req *platformv1.GetQuotasRequest,
 ) (*platformv1.GetQuotasResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.TenantService/GetQuotas")
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
@@ -439,6 +454,7 @@ func (s *TenantGRPCServer) UpdateQuotas(
 	ctx context.Context,
 	req *platformv1.UpdateQuotasRequest,
 ) (*platformv1.UpdateQuotasResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.TenantService/UpdateQuotas")
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
@@ -497,6 +513,7 @@ func (s *TenantGRPCServer) GetUsage(
 	ctx context.Context,
 	req *platformv1.GetUsageRequest,
 ) (*platformv1.GetUsageResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.TenantService/GetUsage")
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
@@ -537,6 +554,7 @@ func (s *TenantGRPCServer) CheckQuota(
 	ctx context.Context,
 	req *platformv1.CheckQuotaRequest,
 ) (*platformv1.CheckQuotaResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.TenantService/CheckQuota")
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
@@ -594,6 +612,7 @@ func (s *TenantGRPCServer) Sync(
 	ctx context.Context,
 	req *platformv1.SyncTenantsRequest,
 ) (*platformv1.SyncTenantsResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.TenantService/Sync")
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
@@ -629,6 +648,7 @@ func (s *TenantGRPCServer) RotateTenantDEK(
 	ctx context.Context,
 	req *platformv1.RotateTenantDEKRequest,
 ) (*platformv1.RotateTenantDEKResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.TenantService/RotateTenantDEK")
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
@@ -661,6 +681,7 @@ func (s *TenantGRPCServer) GetTenantDEKStatus(
 	ctx context.Context,
 	req *platformv1.GetTenantDEKStatusRequest,
 ) (*platformv1.GetTenantDEKStatusResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.TenantService/GetTenantDEKStatus")
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
@@ -724,6 +745,7 @@ func (s *TenantGRPCServer) InitTenantBarrier(
 	ctx context.Context,
 	req *platformv1.InitTenantBarrierRequest,
 ) (*platformv1.InitTenantBarrierResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.TenantService/InitTenantBarrier")
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
@@ -756,6 +778,7 @@ func (s *TenantGRPCServer) UnsealTenantBarrier(
 	ctx context.Context,
 	req *platformv1.UnsealTenantBarrierRequest,
 ) (*platformv1.UnsealTenantBarrierResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.TenantService/UnsealTenantBarrier")
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
@@ -784,6 +807,7 @@ func (s *TenantGRPCServer) SealTenantBarrier(
 	ctx context.Context,
 	req *platformv1.SealTenantBarrierRequest,
 ) (*platformv1.SealTenantBarrierResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.TenantService/SealTenantBarrier")
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
@@ -813,6 +837,7 @@ func (s *TenantGRPCServer) GetTenantBarrierStatus(
 	ctx context.Context,
 	req *platformv1.GetTenantBarrierStatusRequest,
 ) (*platformv1.GetTenantBarrierStatusResponse, error) {
+	ctx = withOperationMethod(ctx, "/platform.v1.TenantService/GetTenantBarrierStatus")
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}

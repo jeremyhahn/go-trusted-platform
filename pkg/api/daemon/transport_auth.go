@@ -17,9 +17,12 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"os"
+	"strings"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"google.golang.org/grpc"
 
@@ -100,7 +103,7 @@ var grpcTCPSkipMethods = []string{
 	platformv1.DeviceService_BootDelivery_FullMethodName,
 }
 
-func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicbaassdk.IAMPEPClient, logger *logging.Logger, skipMethods []string) (grpcAuthSelection, error) {
+func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicbaassdk.IAMPEPClient, principal func(ctx context.Context, tenantID, subject string) (string, []string, error), logger *logging.Logger, skipMethods []string) (grpcAuthSelection, error) {
 	if config.EnableMTLS {
 		if config.CAService == nil {
 			return grpcAuthSelection{}, ErrTransportAuthRequired{
@@ -120,6 +123,8 @@ func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicb
 			Authenticator: mtlsAuth,
 			Logger:        logger,
 			SkipMethods:   skipMethods,
+			PEP:           pep,
+			Principal:     principal,
 		}
 		logger.Info("gRPC TCP server: mTLS authentication enabled")
 		return grpcAuthSelection{
@@ -171,6 +176,42 @@ func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicb
 		validator: local,
 		required:  true,
 	}, nil
+}
+
+// iamUserPrincipal returns the mTLS principal resolver backed by the IAM user
+// record: the certificate principal is the stored user ID and the roles IAM
+// holds for that user, so a certificate never carries its own roles and the
+// PEP's user selectors see the stored ID. A record without an ID is refused. A nil client gives a nil resolver,
+// which the mTLS interceptor refuses (fail closed).
+func iamUserPrincipal(client quicbaassdk.IAMClient) func(ctx context.Context, tenantID, subject string) (string, []string, error) {
+	if client == nil {
+		return nil
+	}
+	return func(ctx context.Context, tenantID, subject string) (string, []string, error) {
+		users := client.User()
+		if users == nil {
+			return "", nil, ErrIAMServiceNotAvailable{}
+		}
+		// The subject is the certificate's email SAN, else its CN: neither
+		// is the stored user ID, so look the user up by what the subject
+		// is. No fallback between lookups: a miss is refused (#1989).
+		var user *iam.User
+		var err error
+		if strings.Contains(subject, "@") {
+			user, err = users.GetByEmail(ctx, tenantID, subject)
+		} else {
+			user, err = users.FindByUsername(ctx, tenantID, subject)
+		}
+		if err != nil {
+			return "", nil, err
+		}
+		// The PEP is asked about the stored user ID, so a record without
+		// one fails closed (#1989).
+		if user == nil || user.ID == "" {
+			return "", nil, fmt.Errorf("mtls: IAM holds no user ID for %q in tenant %q", subject, tenantID)
+		}
+		return user.ID, user.Roles, nil
+	}
 }
 
 // selectQUICAuth decides how the QUIC transport authenticates callers. It

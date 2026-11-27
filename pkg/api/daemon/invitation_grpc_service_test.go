@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
@@ -157,7 +158,7 @@ func TestInvitationGRPCService_WithService_Create(t *testing.T) {
 	fake := &fakeInvitationServicer{createResult: inv}
 	svc := NewInvitationGRPCService(logger, fake)
 
-	resp, err := svc.CreateInvitation(context.Background(), &platformv1.CreateInvitationRequest{
+	resp, err := svc.CreateInvitation(context.WithValue(context.Background(), ContextKeyIdentity, &auth.Identity{ID: "op", TenantID: "tenant-1"}), &platformv1.CreateInvitationRequest{
 		TenantId:         "tenant-1",
 		Email:            "alice@example.com",
 		Role:             "member",
@@ -261,7 +262,7 @@ func TestInvitationGRPCService_WithService_List(t *testing.T) {
 	accepted.Status = entities.InvitationStatusAccepted
 	fake := &fakeInvitationServicer{listResult: []*entities.Invitation{pending, accepted}}
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), ContextKeyIdentity, &auth.Identity{ID: "op", TenantID: "tenant-1"})
 
 	// All
 	resp, err := svc.ListInvitations(ctx, &platformv1.ListInvitationsRequest{TenantId: "tenant-1"})
@@ -355,7 +356,7 @@ func TestInvitationGRPCService_WithService_List_Error(t *testing.T) {
 	fake := &fakeInvitationServicer{listErr: sentinel}
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
 
-	_, err := svc.ListInvitations(context.Background(), &platformv1.ListInvitationsRequest{TenantId: "t"})
+	_, err := svc.ListInvitations(context.WithValue(context.Background(), ContextKeyIdentity, &auth.Identity{ID: "op", TenantID: "t"}), &platformv1.ListInvitationsRequest{TenantId: "t"})
 	assertInvitationStatus(t, err, codes.Internal, sentinel.Error())
 }
 

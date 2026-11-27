@@ -41,6 +41,9 @@ type eabParityFixture struct {
 
 func newEABParityFixture() eabParityFixture {
 	grpcService, svc, del := newEABGRPCFixture()
+	// The gRPC tenant-scoped calls need an IAM decision: they run as a
+	// Unix operator the wired PEP allows.
+	grpcService.SetPEPClient(allowAllPEP(nil))
 	return eabParityFixture{grpc: grpcService, mcp: newEABProvider(svc, del), svc: svc}
 }
 
@@ -67,7 +70,7 @@ func TestEABParity_ErrorClass(t *testing.T) {
 		{
 			name: "create negative expiry",
 			grpc: func(f eabParityFixture) error {
-				_, err := f.grpc.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{
+				_, err := f.grpc.CreateCredential(unixOperatorContext(), &platformv1.CreateEABCredentialRequest{
 					ProfileId: 1, TenantId: "t", ExpiresInSeconds: -60,
 				})
 				return err
@@ -82,11 +85,11 @@ func TestEABParity_ErrorClass(t *testing.T) {
 			name:    "create invalid tenant",
 			arrange: func(f eabParityFixture) { f.svc.errGenerate = eab.ErrInvalidTenantID{} },
 			grpc: func(f eabParityFixture) error {
-				_, err := f.grpc.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{ProfileId: 1})
+				_, err := f.grpc.CreateCredential(unixOperatorContext(), &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: "t"})
 				return err
 			},
 			mcp: func(f eabParityFixture) error {
-				_, err := f.mcp.EABCreateCredential(ctx, 1, "", 0, 0)
+				_, err := f.mcp.EABCreateCredential(ctx, 1, "t", 0, 0)
 				return err
 			},
 			want: codes.InvalidArgument,
@@ -119,7 +122,7 @@ func TestEABParity_ErrorClass(t *testing.T) {
 			name:    "list invalid tenant",
 			arrange: func(f eabParityFixture) { f.svc.errListByTenant = eab.ErrInvalidTenantID{TenantID: "t"} },
 			grpc: func(f eabParityFixture) error {
-				_, err := f.grpc.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{TenantId: "t"})
+				_, err := f.grpc.ListCredentials(unixOperatorContext(), &platformv1.ListEABCredentialsRequest{TenantId: "t"})
 				return err
 			},
 			mcp: func(f eabParityFixture) error {
@@ -181,13 +184,13 @@ func TestEABParity_ErrorClass(t *testing.T) {
 		},
 		{
 			name:    "cleanup store failure",
-			arrange: func(f eabParityFixture) { f.svc.errCleanupExpired = errors.New("store down") },
+			arrange: func(f eabParityFixture) { f.svc.errListByTenant = errors.New("store down") },
 			grpc: func(f eabParityFixture) error {
-				_, err := f.grpc.CleanupExpiredCredentials(ctx, &platformv1.CleanupExpiredEABCredentialsRequest{})
+				_, err := f.grpc.CleanupExpiredCredentials(unixOperatorContext(), &platformv1.CleanupExpiredEABCredentialsRequest{TenantId: "t"})
 				return err
 			},
 			mcp: func(f eabParityFixture) error {
-				_, err := f.mcp.EABCleanupExpiredCredentials(ctx, "")
+				_, err := f.mcp.EABCleanupExpiredCredentials(ctx, "t")
 				return err
 			},
 			want: codes.Internal,
@@ -326,22 +329,26 @@ func TestEABParity_ListAnswer(t *testing.T) {
 		grpc *platformv1.ListEABCredentialsRequest
 		mcp  mcp.EABListParams
 	}{
-		{"whole store", &platformv1.ListEABCredentialsRequest{}, mcp.EABListParams{}},
 		{"one tenant", &platformv1.ListEABCredentialsRequest{TenantId: "t"}, mcp.EABListParams{TenantID: "t"}},
 		{
 			"status filter",
-			&platformv1.ListEABCredentialsRequest{StatusFilter: platformv1.EABCredentialStatus_EAB_CREDENTIAL_STATUS_REVOKED},
-			mcp.EABListParams{Status: "revoked"},
+			&platformv1.ListEABCredentialsRequest{TenantId: "t", StatusFilter: platformv1.EABCredentialStatus_EAB_CREDENTIAL_STATUS_REVOKED},
+			mcp.EABListParams{TenantID: "t", Status: "revoked"},
 		},
 		{
 			"second page",
-			&platformv1.ListEABCredentialsRequest{Pagination: &platformv1.PaginationRequest{Page: 2, PageSize: 3}},
-			mcp.EABListParams{Page: 2, PageSize: 3},
+			&platformv1.ListEABCredentialsRequest{TenantId: "t", Pagination: &platformv1.PaginationRequest{Page: 2, PageSize: 3}},
+			mcp.EABListParams{TenantID: "t", Page: 2, PageSize: 3},
 		},
+	}
+	// The whole store spans every tenant: no gRPC caller holds an IAM
+	// decision for the empty tenant, so the gRPC surface refuses it.
+	if _, err := f.grpc.ListCredentials(unixOperatorContext(), &platformv1.ListEABCredentialsRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("gRPC whole store: code = %v, want PermissionDenied", status.Code(err))
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			grpcResp, err := f.grpc.ListCredentials(ctx, tc.grpc)
+			grpcResp, err := f.grpc.ListCredentials(unixOperatorContext(), tc.grpc)
 			if err != nil {
 				t.Fatalf("gRPC: %v", err)
 			}
@@ -432,7 +439,7 @@ func TestEABParity_TenantScopedCleanup(t *testing.T) {
 
 	viaGRPC := newEABParityFixture()
 	otherGRPC := seed(viaGRPC)
-	grpcResp, err := viaGRPC.grpc.CleanupExpiredCredentials(ctx, &platformv1.CleanupExpiredEABCredentialsRequest{TenantId: "a"})
+	grpcResp, err := viaGRPC.grpc.CleanupExpiredCredentials(unixOperatorContext(), &platformv1.CleanupExpiredEABCredentialsRequest{TenantId: "a"})
 	if err != nil {
 		t.Fatalf("gRPC cleanup: %v", err)
 	}

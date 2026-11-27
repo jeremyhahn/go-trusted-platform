@@ -19,8 +19,16 @@ import (
 	"testing"
 	"time"
 
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"google.golang.org/grpc/codes"
@@ -37,6 +45,15 @@ func newEABGRPCFixture() (*EABGRPCService, *fakeEABService, *fakeEABDelivery) {
 		urlWithPath: "https://acme.example/custom?kid=x",
 	}
 	return NewEABGRPCService(logging.DefaultLogger(), svc, del), svc, del
+}
+
+// sameTenantPEP is a decision point that allows a check only when the
+// request tenant is the subject's own tenant, so tests of the caller-tenant
+// rule run with a PEP wired (a nil PEP refuses every tenant-scoped call).
+func sameTenantPEP() *mockSDKPEPClient {
+	return &mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		return &sdkiam.CheckResponse{Allowed: req.TenantID != "" && req.TenantID == req.Subject.TenantID}, nil
+	}}
 }
 
 func TestNewEABGRPCService_NilLoggerDefaults(t *testing.T) {
@@ -145,7 +162,8 @@ func TestEABGRPCService_NilDeliveryReturnsUnavailable(t *testing.T) {
 
 func TestEABGRPCService_CreateCredential(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
+	service.SetPEPClient(allowAllPEP(nil))
 
 	resp, err := service.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{
 		ProfileId:        7,
@@ -183,7 +201,8 @@ func TestEABGRPCService_CreateCredential(t *testing.T) {
 
 func TestEABGRPCService_CreateCredential_Errors(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
+	service.SetPEPClient(allowAllPEP(nil))
 
 	// Negative expiry rejected up front.
 	if _, err := service.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{
@@ -258,22 +277,28 @@ func TestEABGRPCService_GetCredentialByKeyID(t *testing.T) {
 
 func TestEABGRPCService_ListCredentials_FilterCascade(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
+	service.SetPEPClient(allowAllPEP(nil))
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t2"})
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 2, TenantID: "t1"})
 
-	// Unfiltered: full store via Page walk.
-	resp, err := service.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{})
+	// Unfiltered over gRPC spans every tenant: no caller holds an IAM
+	// decision for the empty tenant, so it is refused.
+	if _, err := service.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("unfiltered list: code = %v, want PermissionDenied", status.Code(err))
+	}
+	// The shared cascade still walks the full store for the MCP surface.
+	all, err := collectEABCredentials(ctx, svc, 0, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if resp.GetTotal() != 3 {
-		t.Errorf("unfiltered total = %d, want 3", resp.GetTotal())
+	if len(all) != 3 {
+		t.Errorf("unfiltered total = %d, want 3", len(all))
 	}
 
 	// By tenant.
-	resp, err = service.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{TenantId: "t1"})
+	resp, err := service.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{TenantId: "t1"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -302,7 +327,8 @@ func TestEABGRPCService_ListCredentials_FilterCascade(t *testing.T) {
 
 func TestEABGRPCService_ListCredentials_StatusAndActiveFilters(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
+	service.SetPEPClient(allowAllPEP(nil))
 	c1, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	_ = svc.Revoke(ctx, c1.ID)
@@ -332,7 +358,8 @@ func TestEABGRPCService_ListCredentials_StatusAndActiveFilters(t *testing.T) {
 
 func TestEABGRPCService_ListCredentials_Pagination(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
+	service.SetPEPClient(allowAllPEP(nil))
 	for i := 0; i < 5; i++ {
 		_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	}
@@ -374,7 +401,8 @@ func TestEABGRPCService_ListCredentials_Pagination(t *testing.T) {
 
 func TestEABGRPCService_ListCredentials_SortOptions(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
+	service.SetPEPClient(allowAllPEP(nil))
 	for i := 0; i < 3; i++ {
 		_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	}
@@ -415,7 +443,8 @@ func TestEABGRPCService_ListCredentials_SortOptions(t *testing.T) {
 
 func TestEABGRPCService_ListCredentials_PropagatesErrors(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
+	service.SetPEPClient(allowAllPEP(nil))
 
 	svc.errListByTenant = eab.ErrInvalidTenantID{TenantID: "x"}
 	if _, err := service.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{
@@ -426,8 +455,7 @@ func TestEABGRPCService_ListCredentials_PropagatesErrors(t *testing.T) {
 
 	svc.errListByTenant = nil
 	svc.errPage = context.DeadlineExceeded
-	if _, err := service.ListCredentials(ctx,
-		&platformv1.ListEABCredentialsRequest{}); status.Code(err) != codes.Internal {
+	if _, err := collectEABCredentials(ctx, svc, 0, ""); status.Code(eabErrorToStatus(err)) != codes.Internal {
 		t.Errorf("expected Internal for unknown error, got %v", err)
 	}
 }
@@ -653,16 +681,22 @@ func TestEABGRPCService_MarkCredentialUsed(t *testing.T) {
 
 func TestEABGRPCService_CleanupExpiredCredentials(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
+	service.SetPEPClient(allowAllPEP(nil))
 	svc.cleanupCount = 4
 
-	// Global cleanup delegates to CleanupExpired.
-	resp, err := service.CleanupExpiredCredentials(ctx, &platformv1.CleanupExpiredEABCredentialsRequest{})
+	// Global cleanup over gRPC spans every tenant: no caller holds an IAM
+	// decision for the empty tenant, so it is refused.
+	if _, err := service.CleanupExpiredCredentials(ctx, &platformv1.CleanupExpiredEABCredentialsRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("global cleanup: code = %v, want PermissionDenied", status.Code(err))
+	}
+	// The shared helper still delegates a global cleanup to CleanupExpired.
+	deleted, err := cleanupExpiredEABCredentials(ctx, svc, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if resp.GetDeletedCount() != 4 {
-		t.Errorf("deleted_count = %d, want 4", resp.GetDeletedCount())
+	if deleted != 4 {
+		t.Errorf("deleted = %d, want 4", deleted)
 	}
 
 	// Tenant-scoped cleanup deletes only that tenant's expired creds.
@@ -672,7 +706,7 @@ func TestEABGRPCService_CleanupExpiredCredentials(t *testing.T) {
 	otherTenant, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t2"})
 	otherTenant.ExpiresAt = time.Now().Add(-time.Hour)
 
-	resp, err = service.CleanupExpiredCredentials(ctx, &platformv1.CleanupExpiredEABCredentialsRequest{
+	resp, err := service.CleanupExpiredCredentials(ctx, &platformv1.CleanupExpiredEABCredentialsRequest{
 		TenantId: "t1",
 	})
 	if err != nil {
@@ -686,13 +720,570 @@ func TestEABGRPCService_CleanupExpiredCredentials(t *testing.T) {
 	}
 }
 
+// TestEABGRPCService_CallerTenantBinding is SPEC row 125 (#2008): a
+// tenant-bound caller may create, list and clean up EAB credentials only in
+// its own tenant. Naming another tenant, or no tenant for the all-tenant
+// cleanup, is refused with PermissionDenied before the service is reached.
+func TestEABGRPCService_CallerTenantBinding(t *testing.T) {
+	calls := map[string]func(*EABGRPCService, context.Context, string) error{
+		"CreateCredential": func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+			_, err := s.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: tenantID})
+			return err
+		},
+		"ListCredentials": func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+			_, err := s.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{TenantId: tenantID})
+			return err
+		},
+		"CleanupExpiredCredentials": func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+			_, err := s.CleanupExpiredCredentials(ctx, &platformv1.CleanupExpiredEABCredentialsRequest{TenantId: tenantID})
+			return err
+		},
+	}
+	cases := []struct {
+		name     string
+		ctx      context.Context
+		tenantID string
+		wantCode codes.Code
+	}{
+		{name: "own tenant", ctx: tokenCallerContext("tenant-a"), tenantID: "tenant-a", wantCode: codes.OK},
+		{name: "another tenant", ctx: tokenCallerContext("tenant-a"), tenantID: "tenant-b", wantCode: codes.PermissionDenied},
+		{name: "every tenant", ctx: tokenCallerContext("tenant-a"), tenantID: "", wantCode: codes.PermissionDenied},
+		{name: "unbound local caller", ctx: context.Background(), tenantID: "tenant-b", wantCode: codes.PermissionDenied},
+		{name: "empty-tenant bound caller, every tenant", ctx: tokenCallerContext(""), tenantID: "", wantCode: codes.PermissionDenied},
+		{name: "empty-tenant bound caller, named tenant", ctx: tokenCallerContext(""), tenantID: "tenant-a", wantCode: codes.PermissionDenied},
+	}
+	for method, call := range calls {
+		for _, tc := range cases {
+			t.Run(method+"/"+tc.name, func(t *testing.T) {
+				service, svc, _ := newEABGRPCFixture()
+				service.SetPEPClient(sameTenantPEP())
+				err := call(service, tc.ctx, tc.tenantID)
+				if got := status.Code(err); got != tc.wantCode {
+					t.Fatalf("code = %v, want %v (err %v)", got, tc.wantCode, err)
+				}
+				if tc.wantCode == codes.PermissionDenied && svc.lastGenerate.TenantID != "" {
+					t.Fatalf("refused create reached the service: %+v", svc.lastGenerate)
+				}
+			})
+		}
+	}
+}
+
+// TestEABGRPCService_PEPDecision drives the three tenant-scoped methods with a
+// PEP configured: the PEP decision, not tenant equality, decides (SPEC row
+// 125), so a policy-granted cross-tenant request passes and a denied
+// own-tenant request is refused before the service is reached.
+func TestEABGRPCService_PEPDecision(t *testing.T) {
+	calls := map[string]struct {
+		action string
+		perm   string
+		call   func(*EABGRPCService, context.Context, string) error
+	}{
+		"CreateCredential": {action: "write", perm: "eab:write", call: func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+			_, err := s.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: tenantID})
+			return err
+		}},
+		"ListCredentials": {action: "read", perm: "eab:read", call: func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+			_, err := s.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{TenantId: tenantID})
+			return err
+		}},
+		"CleanupExpiredCredentials": {action: "write", perm: "eab:write", call: func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+			_, err := s.CleanupExpiredCredentials(ctx, &platformv1.CleanupExpiredEABCredentialsRequest{TenantId: tenantID})
+			return err
+		}},
+	}
+	caller := grpcapi.ContextWithAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{
+		Subject:  "user-a",
+		TenantID: "tenant-a",
+		Roles:    []string{"eab-admin"},
+	})
+	cases := []struct {
+		name      string
+		ctx       context.Context
+		tenantID  string
+		allow     bool
+		wantCode  codes.Code
+		wantCheck bool
+	}{
+		{name: "allowed cross tenant", ctx: caller, tenantID: "tenant-b", allow: true, wantCode: codes.OK, wantCheck: true},
+		{name: "denied own tenant", ctx: caller, tenantID: "tenant-a", allow: false, wantCode: codes.PermissionDenied, wantCheck: true},
+		{name: "denied cross tenant", ctx: caller, tenantID: "tenant-b", allow: false, wantCode: codes.PermissionDenied, wantCheck: true},
+		{name: "every tenant refused before the PEP", ctx: caller, tenantID: "", allow: true, wantCode: codes.PermissionDenied},
+		{name: "empty-tenant caller refused before the PEP", ctx: tokenCallerContext(""), tenantID: "tenant-a", allow: true, wantCode: codes.PermissionDenied},
+	}
+	for method, m := range calls {
+		for _, tc := range cases {
+			t.Run(method+"/"+tc.name, func(t *testing.T) {
+				service, svc, _ := newEABGRPCFixture()
+				var got *sdkiam.CheckRequest
+				service.SetPEPClient(&mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+					got = req
+					return &sdkiam.CheckResponse{Allowed: tc.allow}, nil
+				}})
+				err := m.call(service, tc.ctx, tc.tenantID)
+				if code := status.Code(err); code != tc.wantCode {
+					t.Fatalf("code = %v, want %v (err %v)", code, tc.wantCode, err)
+				}
+				if (got != nil) != tc.wantCheck {
+					t.Fatalf("PEP checked = %v, want %v", got != nil, tc.wantCheck)
+				}
+				if got != nil {
+					if got.TenantID != tc.tenantID || got.Subject.TenantID != "tenant-a" || got.Subject.ID != "user-a" || got.Action != m.action {
+						t.Fatalf("check request = %+v", got)
+					}
+					// The RBAC authorizer joins resource and action into the
+					// permission it looks up; it must be the granted one.
+					if got.Resource != "eab" || got.Resource+":"+got.Action != m.perm {
+						t.Fatalf("check permission = %q, want %q", got.Resource+":"+got.Action, m.perm)
+					}
+				}
+				if tc.wantCode == codes.PermissionDenied && svc.lastGenerate.TenantID != "" {
+					t.Fatalf("refused create reached the service: %+v", svc.lastGenerate)
+				}
+			})
+		}
+	}
+}
+
+// TestEABGRPCService_PEPError refuses the request when the PEP cannot decide.
+func TestEABGRPCService_PEPError(t *testing.T) {
+	service, svc, _ := newEABGRPCFixture()
+	service.SetPEPClient(&mockSDKPEPClient{checkFunc: func(context.Context, *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		return nil, context.DeadlineExceeded
+	}})
+	_, err := service.CreateCredential(tokenCallerContext("tenant-a"), &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: "tenant-a"})
+	if status.Code(err) == codes.OK {
+		t.Fatal("create passed with an undecided PEP")
+	}
+	if svc.lastGenerate.TenantID != "" {
+		t.Fatalf("undecided create reached the service: %+v", svc.lastGenerate)
+	}
+}
+
+// eabTenantCalls drives each tenant-scoped EAB method with the given
+// caller and tenant, paired with the action its registered eab permission
+// names (method_permissions.go).
+var eabTenantCalls = []struct {
+	method string
+	action string
+	call   func(*EABGRPCService, context.Context, string) error
+}{
+	{method: "CreateCredential", action: "write", call: func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+		_, err := s.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: tenantID})
+		return err
+	}},
+	{method: "ListCredentials", action: "read", call: func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+		_, err := s.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{TenantId: tenantID})
+		return err
+	}},
+	{method: "CleanupExpiredCredentials", action: "write", call: func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+		_, err := s.CleanupExpiredCredentials(ctx, &platformv1.CleanupExpiredEABCredentialsRequest{TenantId: tenantID})
+		return err
+	}},
+}
+
+// A bound caller on its own tenant is still refused when no decision point
+// is wired: tenant equality alone is not an authorization decision.
+func TestEABGRPCService_NoPEPRefusesBoundCaller(t *testing.T) {
+	for _, tc := range eabTenantCalls {
+		t.Run(tc.method, func(t *testing.T) {
+			service, svc, _ := newEABGRPCFixture()
+			err := tc.call(service, tokenCallerContext("tenant-a"), "tenant-a")
+			if got := status.Code(err); got != codes.PermissionDenied {
+				t.Fatalf("code = %v, want PermissionDenied (err %v)", got, err)
+			}
+			if svc.lastGenerate.TenantID != "" {
+				t.Fatalf("refused call reached the service: %+v", svc.lastGenerate)
+			}
+		})
+	}
+}
+
+// A caller with no tenant binding is admitted only by the IAM decision on
+// its authenticated peer and the method's registered eab permission.
+func TestEABGRPCService_UnboundCallerDecidedByPEP(t *testing.T) {
+	denyAll := func(seen *[]*sdkiam.CheckRequest) *mockSDKPEPClient {
+		return &mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+			*seen = append(*seen, req)
+			return &sdkiam.CheckResponse{Allowed: false}, nil
+		}}
+	}
+	for _, tc := range eabTenantCalls {
+		t.Run(tc.method+"/no peer credentials", func(t *testing.T) {
+			service, svc, _ := newEABGRPCFixture()
+			var seen []*sdkiam.CheckRequest
+			service.SetPEPClient(allowAllPEP(&seen))
+			err := tc.call(service, context.Background(), "tenant-a")
+			if got := status.Code(err); got != codes.PermissionDenied {
+				t.Fatalf("code = %v, want PermissionDenied (err %v)", got, err)
+			}
+			if len(seen) != 0 {
+				t.Fatalf("PEP saw %d checks for a caller with no peer credentials", len(seen))
+			}
+			if svc.lastGenerate.TenantID != "" {
+				t.Fatalf("refused call reached the service: %+v", svc.lastGenerate)
+			}
+		})
+		t.Run(tc.method+"/unix operator allowed", func(t *testing.T) {
+			service, _, _ := newEABGRPCFixture()
+			var seen []*sdkiam.CheckRequest
+			service.SetPEPClient(registeredPairPEP("eab", tc.action, &seen))
+			if err := tc.call(service, unixOperatorContext(), "tenant-a"); err != nil {
+				t.Fatalf("decided unix operator refused: %v", err)
+			}
+			if len(seen) != 1 {
+				t.Fatalf("PEP checks = %d, want 1", len(seen))
+			}
+			if seen[0].Resource != "eab" || seen[0].Action != tc.action {
+				t.Fatalf("check = %s:%s, want eab:%s", seen[0].Resource, seen[0].Action, tc.action)
+			}
+		})
+		t.Run(tc.method+"/unix operator denied", func(t *testing.T) {
+			service, svc, _ := newEABGRPCFixture()
+			var seen []*sdkiam.CheckRequest
+			service.SetPEPClient(denyAll(&seen))
+			err := tc.call(service, unixOperatorContext(), "tenant-a")
+			if got := status.Code(err); got != codes.PermissionDenied {
+				t.Fatalf("code = %v, want PermissionDenied (err %v)", got, err)
+			}
+			if len(seen) != 1 {
+				t.Fatalf("PEP checks = %d, want 1", len(seen))
+			}
+			if svc.lastGenerate.TenantID != "" {
+				t.Fatalf("denied call reached the service: %+v", svc.lastGenerate)
+			}
+		})
+		t.Run(tc.method+"/unix operator no PEP", func(t *testing.T) {
+			service, svc, _ := newEABGRPCFixture()
+			err := tc.call(service, unixOperatorContext(), "tenant-a")
+			if got := status.Code(err); got != codes.PermissionDenied {
+				t.Fatalf("code = %v, want PermissionDenied (err %v)", got, err)
+			}
+			if svc.lastGenerate.TenantID != "" {
+				t.Fatalf("refused call reached the service: %+v", svc.lastGenerate)
+			}
+		})
+	}
+}
+
+// eabUserStub is the IAM user directory the EAB service resolves mTLS
+// callers against. Get answers only canonical numeric IDs, as the qrdb store
+// does; a certificate email or CN must go through GetByEmail or
+// FindByUsername.
+type eabUserStub struct {
+	users []*sdkiam.User
+}
+
+func (s *eabUserStub) Get(_ context.Context, tenantID, userID string) (*sdkiam.User, error) {
+	for _, r := range userID {
+		if r < '0' || r > '9' {
+			return nil, sdkerrors.NewNotFound("get user", "not a canonical user id")
+		}
+	}
+	for _, u := range s.users {
+		if u.ID == userID && u.TenantID == tenantID {
+			return u, nil
+		}
+	}
+	return nil, sdkerrors.NewNotFound("get user", "no such user")
+}
+
+func (s *eabUserStub) GetByEmail(_ context.Context, tenantID, email string) (*sdkiam.User, error) {
+	for _, u := range s.users {
+		if u.Email == email && (u.TenantID == tenantID || tenantID == "") {
+			return u, nil
+		}
+	}
+	return nil, sdkerrors.NewNotFound("get user by email", "no such user")
+}
+
+func (s *eabUserStub) FindByUsername(_ context.Context, tenantID, username string) (*sdkiam.User, error) {
+	for _, u := range s.users {
+		if u.Username == username && (u.TenantID == tenantID || tenantID == "") {
+			return u, nil
+		}
+	}
+	return nil, sdkerrors.NewNotFound("find user", "no such user")
+}
+
+func TestEABGRPCService_MTLSCallerResolvesIAMUser(t *testing.T) {
+	users := &eabUserStub{users: []*sdkiam.User{
+		{ID: "1001", TenantID: "tenant-a", Username: "alice", Email: "alice@example.com", Roles: []string{"eab-admin"}},
+		{ID: "1002", TenantID: "tenant-a", Username: "bob-cn", Email: "bob@example.com", Roles: []string{"eab-operator"}},
+		{ID: "2001", TenantID: "tenant-b", Username: "mallory", Email: "mallory@example.com", Roles: []string{"eab-admin"}},
+	}}
+	mtls := func(id *auth.Identity) context.Context {
+		return context.WithValue(context.Background(), ContextKeyIdentity, id)
+	}
+	cases := []struct {
+		name      string
+		identity  *auth.Identity
+		wantCode  codes.Code
+		wantID    string
+		wantRoles []string
+	}{
+		{
+			name:      "email SAN resolves to the stored admin",
+			identity:  &auth.Identity{ID: "alice@example.com", Email: "alice@example.com", Name: "Alice", TenantID: "tenant-a"},
+			wantCode:  codes.OK,
+			wantID:    "1001",
+			wantRoles: []string{"eab-admin"},
+		},
+		{
+			name:      "CN resolves by username",
+			identity:  &auth.Identity{ID: "bob-cn", Name: "bob-cn", TenantID: "tenant-a"},
+			wantCode:  codes.OK,
+			wantID:    "1002",
+			wantRoles: []string{"eab-operator"},
+		},
+		{
+			name:     "unknown subject denied without a PEP call",
+			identity: &auth.Identity{ID: "nobody@example.com", Email: "nobody@example.com", Name: "nobody", TenantID: "tenant-a"},
+			wantCode: codes.PermissionDenied,
+		},
+		{
+			name:     "user of another tenant denied",
+			identity: &auth.Identity{ID: "mallory@example.com", Email: "mallory@example.com", Name: "mallory", TenantID: "tenant-a"},
+			wantCode: codes.PermissionDenied,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			service, svc, _ := newEABGRPCFixture()
+			service.SetUserClient(users)
+			var got *sdkiam.CheckRequest
+			service.SetPEPClient(&mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+				got = req
+				allowed := req.Subject.ID == "1001" || req.Subject.ID == "1002"
+				return &sdkiam.CheckResponse{Allowed: allowed && len(req.Subject.Roles) > 0}, nil
+			}})
+			_, err := service.CreateCredential(mtls(tc.identity), &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: "tenant-a"})
+			if code := status.Code(err); code != tc.wantCode {
+				t.Fatalf("code = %v, want %v (err %v)", code, tc.wantCode, err)
+			}
+			if tc.wantCode != codes.OK {
+				if got != nil {
+					t.Fatalf("PEP called for a refused caller: %+v", got)
+				}
+				if svc.lastGenerate.TenantID != "" {
+					t.Fatalf("refused create reached the service: %+v", svc.lastGenerate)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("PEP not called")
+			}
+			if got.Subject.ID != tc.wantID || got.Subject.TenantID != "tenant-a" {
+				t.Fatalf("subject = %+v, want ID %q in tenant-a", got.Subject, tc.wantID)
+			}
+			if len(got.Subject.Roles) != len(tc.wantRoles) || got.Subject.Roles[0] != tc.wantRoles[0] {
+				t.Fatalf("subject roles = %v, want %v", got.Subject.Roles, tc.wantRoles)
+			}
+		})
+	}
+}
+
+// TestEABGRPCService_QUICMTLSCallerResolvesIAMUser pins that a certificate
+// caller on QUIC, which mtlsPeerAuthenticator turns into an AuthorizedContext
+// with the operator scope and no roles, reaches the PEP as its stored IAM user
+// and roles, the same as a certificate caller on gRPC. A QUIC bearer-token
+// caller keeps its token subject and roles with no user lookup.
+func TestEABGRPCService_QUICMTLSCallerResolvesIAMUser(t *testing.T) {
+	users := &eabUserStub{users: []*sdkiam.User{
+		{ID: "1001", TenantID: "tenant-a", Username: "alice", Email: "alice@example.com", Roles: []string{"eab-admin"}},
+		{ID: "1002", TenantID: "tenant-a", Username: "bob-cn", Email: "bob@example.com", Roles: []string{"eab-operator"}},
+	}}
+	cases := []struct {
+		name      string
+		authCtx   *platformtoken.AuthorizedContext
+		users     *eabUserStub
+		wantCode  codes.Code
+		wantID    string
+		wantRoles []string
+	}{
+		{
+			name:      "certificate CN resolves to the stored user",
+			authCtx:   &platformtoken.AuthorizedContext{Subject: "bob-cn", Username: "bob-cn", TenantID: "tenant-a", Scopes: []string{mtlsOperatorScope}},
+			users:     users,
+			wantCode:  codes.OK,
+			wantID:    "1002",
+			wantRoles: []string{"eab-operator"},
+		},
+		{
+			name:      "certificate email identity resolves by email when the CN differs",
+			authCtx:   &platformtoken.AuthorizedContext{Subject: "alice@example.com", Username: "alice-cn", TenantID: "tenant-a", Scopes: []string{mtlsOperatorScope}},
+			users:     users,
+			wantCode:  codes.OK,
+			wantID:    "1001",
+			wantRoles: []string{"eab-admin"},
+		},
+		{
+			name:     "unknown certificate CN denied without a PEP call",
+			authCtx:  &platformtoken.AuthorizedContext{Subject: "nobody", Username: "nobody", TenantID: "tenant-a", Scopes: []string{mtlsOperatorScope}},
+			users:    users,
+			wantCode: codes.PermissionDenied,
+		},
+		{
+			// An empty directory denies any lookup, so OK proves none was made.
+			name:      "bearer token keeps its subject and roles",
+			authCtx:   &platformtoken.AuthorizedContext{Subject: "tok-1", TenantID: "tenant-a", Scopes: []string{"eab:write"}, Roles: []string{"eab-admin"}},
+			users:     &eabUserStub{},
+			wantCode:  codes.OK,
+			wantID:    "tok-1",
+			wantRoles: []string{"eab-admin"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			service, svc, _ := newEABGRPCFixture()
+			service.SetUserClient(tc.users)
+			var got *sdkiam.CheckRequest
+			service.SetPEPClient(&mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+				got = req
+				return &sdkiam.CheckResponse{Allowed: len(req.Subject.Roles) > 0}, nil
+			}})
+			ctx := quic.ContextWithAuthorizedContext(context.Background(), tc.authCtx)
+			_, err := service.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: "tenant-a"})
+			if code := status.Code(err); code != tc.wantCode {
+				t.Fatalf("code = %v, want %v (err %v)", code, tc.wantCode, err)
+			}
+			if tc.wantCode != codes.OK {
+				if got != nil {
+					t.Fatalf("PEP called for a refused caller: %+v", got)
+				}
+				if svc.lastGenerate.TenantID != "" {
+					t.Fatalf("refused create reached the service: %+v", svc.lastGenerate)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("PEP not called")
+			}
+			if got.Subject.ID != tc.wantID || got.Subject.TenantID != "tenant-a" {
+				t.Fatalf("subject = %+v, want ID %q in tenant-a", got.Subject, tc.wantID)
+			}
+			if len(got.Subject.Roles) != len(tc.wantRoles) || got.Subject.Roles[0] != tc.wantRoles[0] {
+				t.Fatalf("subject roles = %v, want %v", got.Subject.Roles, tc.wantRoles)
+			}
+		})
+	}
+}
+
+func TestEABGRPCService_MTLSCallerWithoutUserDirectory(t *testing.T) {
+	service, svc, _ := newEABGRPCFixture()
+	called := false
+	service.SetPEPClient(&mockSDKPEPClient{checkFunc: func(context.Context, *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		called = true
+		return &sdkiam.CheckResponse{Allowed: true}, nil
+	}})
+	ctx := context.WithValue(context.Background(), ContextKeyIdentity, &auth.Identity{ID: "alice@example.com", Email: "alice@example.com", TenantID: "tenant-a"})
+	_, err := service.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: "tenant-a"})
+	if code := status.Code(err); code != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable (err %v)", code, err)
+	}
+	if called || svc.lastGenerate.TenantID != "" {
+		t.Fatal("an unresolved mTLS caller reached the PEP or the service")
+	}
+}
+
+// TestEABGRPCService_EveryBoundCallerSourceIsBound pins that every
+// authenticated caller source callerTenant reads binds an EAB call to its
+// tenant, so none of them passes as an unbound local caller.
+func TestEABGRPCService_EveryBoundCallerSourceIsBound(t *testing.T) {
+	calls := map[string]func(*EABGRPCService, context.Context, string) error{
+		"CreateCredential": func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+			_, err := s.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: tenantID})
+			return err
+		},
+		"ListCredentials": func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+			_, err := s.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{TenantId: tenantID})
+			return err
+		},
+		"CleanupExpiredCredentials": func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+			_, err := s.CleanupExpiredCredentials(ctx, &platformv1.CleanupExpiredEABCredentialsRequest{TenantId: tenantID})
+			return err
+		},
+	}
+	sources := map[string]func() context.Context{
+		"QUIC legacy principal": func() context.Context {
+			return quic.ContextWithLegacyPrincipal(context.Background(), &platformtoken.AuthorizedContext{Subject: "legacy-1", TenantID: "tenant-a"})
+		},
+		"REST platform token": func() context.Context {
+			return iammw.SetAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{Subject: "rest-1", TenantID: "tenant-a", Scopes: []string{"eab:write"}})
+		},
+		"REST session": func() context.Context {
+			return iammw.SetSessionInContext(context.Background(), iammw.NewIAMSession(&sdkiam.User{ID: "u1", TenantID: "tenant-a"}))
+		},
+	}
+	cases := []struct {
+		name     string
+		tenantID string
+		wantCode codes.Code
+	}{
+		{name: "own tenant", tenantID: "tenant-a", wantCode: codes.OK},
+		{name: "another tenant", tenantID: "tenant-b", wantCode: codes.PermissionDenied},
+		{name: "every tenant", tenantID: "", wantCode: codes.PermissionDenied},
+	}
+	for method, call := range calls {
+		for source, ctxFor := range sources {
+			for _, tc := range cases {
+				t.Run(method+"/"+source+"/"+tc.name, func(t *testing.T) {
+					service, svc, _ := newEABGRPCFixture()
+					service.SetPEPClient(sameTenantPEP())
+					err := call(service, ctxFor(), tc.tenantID)
+					if got := status.Code(err); got != tc.wantCode {
+						t.Fatalf("code = %v, want %v (err %v)", got, tc.wantCode, err)
+					}
+					if tc.wantCode == codes.PermissionDenied && svc.lastGenerate.TenantID != "" {
+						t.Fatalf("refused create reached the service: %+v", svc.lastGenerate)
+					}
+				})
+			}
+		}
+	}
+}
+
+// TestEABGRPCService_WildcardBearerTokenIsNotACertificate pins that a bearer
+// token carrying only the operator scope and no roles keeps its own subject:
+// only a peer-certificate context, which has no token, is resolved through
+// the IAM user directory.
+func TestEABGRPCService_WildcardBearerTokenIsNotACertificate(t *testing.T) {
+	authCtx := &platformtoken.AuthorizedContext{Subject: "tok-2", TenantID: "tenant-a", Scopes: []string{mtlsOperatorScope}}
+	contexts := map[string]context.Context{
+		"QUIC": quic.ContextWithToken(quic.ContextWithAuthorizedContext(context.Background(), authCtx), "bearer"),
+		"MCP":  mcp.ContextWithToken(mcp.ContextWithAuthorizedContext(context.Background(), authCtx), "bearer"),
+	}
+	for name, ctx := range contexts {
+		t.Run(name, func(t *testing.T) {
+			service, _, _ := newEABGRPCFixture()
+			// An empty directory denies any lookup, so OK proves none was made.
+			service.SetUserClient(&eabUserStub{})
+			var got *sdkiam.CheckRequest
+			service.SetPEPClient(&mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+				got = req
+				return &sdkiam.CheckResponse{Allowed: true}, nil
+			}})
+			_, err := service.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: "tenant-a"})
+			if code := status.Code(err); code != codes.OK {
+				t.Fatalf("code = %v, want OK (err %v)", code, err)
+			}
+			if got == nil {
+				t.Fatal("PEP not called")
+			}
+			if got.Subject.ID != "tok-2" || got.Subject.TenantID != "tenant-a" {
+				t.Fatalf("subject = %+v, want ID tok-2 in tenant-a", got.Subject)
+			}
+		})
+	}
+}
+
 func TestEABGRPCService_CleanupExpiredCredentials_Errors(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
+	service.SetPEPClient(allowAllPEP(nil))
 
 	svc.errCleanupExpired = context.DeadlineExceeded
-	if _, err := service.CleanupExpiredCredentials(ctx,
-		&platformv1.CleanupExpiredEABCredentialsRequest{}); status.Code(err) != codes.Internal {
+	if _, err := cleanupExpiredEABCredentials(ctx, svc, ""); status.Code(eabErrorToStatus(err)) != codes.Internal {
 		t.Errorf("expected Internal, got %v", err)
 	}
 
