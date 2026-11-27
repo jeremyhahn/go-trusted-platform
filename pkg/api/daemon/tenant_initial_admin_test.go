@@ -308,6 +308,37 @@ func TestCreateInitialAdminInvitation_UnknownEmailIsRefused(t *testing.T) {
 	}
 }
 
+// failingInviterResolver answers every lookup with err.
+type failingInviterResolver struct {
+	err   error
+	calls int
+}
+
+func (f *failingInviterResolver) GetByEmail(_ context.Context, _ string) (*entities.User, error) {
+	f.calls++
+	return nil, f.err
+}
+
+// An IAM user whose canonical id is not a positive decimal cannot be
+// recorded as the inviter: the RPC refuses it FailedPrecondition (#2362).
+func TestCreateInitialAdminInvitation_UnusableInviterIDIsFailedPrecondition(t *testing.T) {
+	fake := &fakeInitialAdminInviter{}
+	s := newInitialAdminServer(fake)
+	r := &failingInviterResolver{err: ErrInviterIDNotUsable{ID: "usr-abc"}}
+	s.SetInviterResolver(r)
+	_, err := s.CreateInitialAdminInvitation(systemAdminCallerContext(initialAdminInviterEmail),
+		&platformv1.CreateInitialAdminInvitationRequest{TenantId: initialAdminTenantID(s), Email: "owner@example.com"})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("got %v, want FailedPrecondition", err)
+	}
+	if fake.calls != 0 {
+		t.Fatalf("an unusable inviter id reached the inviter %d times", fake.calls)
+	}
+	if r.calls == 0 {
+		t.Fatalf("the resolver was not consulted")
+	}
+}
+
 // A numeric subject is already the user id and needs no lookup.
 func TestCreateInitialAdminInvitation_NumericSubjectSkipsResolver(t *testing.T) {
 	fake := &fakeInitialAdminInviter{}

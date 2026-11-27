@@ -140,6 +140,44 @@ func TestRegisterInvitedUser_MirrorsInvitedOwnerIntoIAM(t *testing.T) {
 	invitationService.AssertCalled(t, "Accept", context.Background(), invitation.Token, mock.AnythingOfType("uint64"))
 }
 
+// An ordinary invitation carries a listed IAM role that the mirror must
+// keep: a roleless IAM user would consume the invitation without the access
+// it grants (#2362).
+func TestRegisterInvitedUser_MirrorsOrdinaryInviteeWithInvitationRole(t *testing.T) {
+	cases := []struct {
+		name  string
+		role  string
+		roles []string
+	}{
+		{name: "admin", role: "admin", roles: []string{"admin"}},
+		{name: "viewer", role: "viewer", roles: []string{"viewer"}},
+		{name: "no role", role: "", roles: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			invitation, err := entities.NewInvitation(
+				"tenant-a", "member@example.test", tc.role, 999, 7*24*time.Hour, time.Now())
+			require.NoError(t, err)
+			mirror := &fakeIAMMirror{}
+			svc, userService, invitationService := newMirroredInvitedRegistration(t, mirror, invitation)
+			invitationService.On("Accept", context.Background(), invitation.Token, mock.AnythingOfType("uint64")).
+				Return(nil)
+
+			result, err := svc.RegisterInvitedUser(context.Background(), newTestUser(invitation.Email), invitation.Token)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.NotNil(t, result.User)
+			assert.False(t, result.User.IsTenantOwner)
+
+			require.Len(t, mirror.calls, 1)
+			assert.Equal(t, mirroredUser{
+				TenantID: "tenant-a", Email: invitation.Email, Roles: tc.roles,
+			}, mirror.calls[0])
+			userService.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
+		})
+	}
+}
+
 // TestRegisterInvitedUser_MirrorFailureLeavesInvitationPending: when the IAM
 // mirror refuses the invited owner, the saved user is deleted, the
 // invitation is not accepted, and the typed mirror error is returned (#2362).
