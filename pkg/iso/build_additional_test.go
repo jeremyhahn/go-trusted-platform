@@ -820,3 +820,57 @@ func BenchmarkCopyDir(b *testing.B) {
 		copyDir(srcDir, dstDir)
 	}
 }
+
+// TestBuildISO_KeysDirBasenameCollisionKeepsISOFiles covers Codex round 8
+// P1 on #2363 (review debt #2434): a KeysDir whose basename matches an
+// existing ISO directory (here "configs") stages into that directory, and
+// the post-build wipe must zero and remove only the files the copy
+// recorded, leaving every file the build never staged in place after a
+// successful and a failed pack.
+func TestBuildISO_KeysDirBasenameCollisionKeepsISOFiles(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		runErr error
+	}{
+		{name: "pack succeeds"},
+		{name: "pack fails", runErr: errors.New("xorriso failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+			isoDir := filepath.Join(tempDir, "iso")
+			keysDir := filepath.Join(tempDir, "src", "configs")
+			writeTestDBPair(t, keysDir)
+
+			unrelated := map[string][]byte{
+				filepath.Join("configs", "installer.yaml"):        []byte("installer: true\n"),
+				filepath.Join("configs", "network.conf"):          []byte("dhcp=yes\n"),
+				filepath.Join("configs", "profiles", "edge.yaml"): []byte("profile: edge\n"),
+			}
+			for rel, data := range unrelated {
+				p := filepath.Join(isoDir, rel)
+				require.NoError(t, os.MkdirAll(filepath.Dir(p), 0755))
+				require.NoError(t, os.WriteFile(p, data, 0644))
+			}
+
+			output := filepath.Join(tempDir, "out.iso")
+			builder := fakeXorrisoBuilder(output, tc.runErr, nil)
+			err := builder.BuildISO(context.Background(),
+				&ISOConfig{ISODir: isoDir, KeysDir: keysDir, OutputISO: output})
+			if tc.runErr == nil {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+
+			for rel, data := range unrelated {
+				got, err := os.ReadFile(filepath.Join(isoDir, rel))
+				require.NoError(t, err, "ISO file %s the build never staged must survive the wipe", rel)
+				assert.Equal(t, data, got, "ISO file %s the build never staged must keep its bytes", rel)
+			}
+			assert.NoFileExists(t, filepath.Join(isoDir, "configs", "DB.key"),
+				"the staged DB.key copy must be removed")
+			assert.FileExists(t, filepath.Join(isoDir, "configs", "DB.crt"),
+				"the public DB.crt copy stays staged")
+		})
+	}
+}
