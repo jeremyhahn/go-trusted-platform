@@ -195,7 +195,7 @@ export class PlatformClient {
   /** BMC power, boot device, virtual media, provisioning and user accounts */
   public readonly bmc: BMCService;
 
-  /** BMC certificate ceremonies: enroll, restore factory, replace web certificate */
+  /** BMC certificate types; no ceremony is offered until the server re-pins across a certificate change (#2199) */
   public readonly bmcCert: BMCCertService;
 
   /** What the server offers, enabled and dark */

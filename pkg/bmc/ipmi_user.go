@@ -209,7 +209,9 @@ func (m *ipmiUserManager) ListUsers(_ context.Context) ([]User, error) {
 // changes on a slot with no name, so name first is required.
 //
 // An Enabled user needs a password; a name-only entry (nil or empty
-// password) must be created with Enabled false.
+// password) must be created with Enabled false. A disabled user is
+// explicitly disabled, because DeleteUser leaves a slot's global enable
+// flag set.
 //
 // When any write fails, CreateUser rolls the slot back: it disables the
 // user, revokes its channel access and clears the name, and returns the
@@ -268,8 +270,9 @@ func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memgua
 	return nil
 }
 
-// finishCreate sets the password, the channel access and, for an Enabled
-// user, the IPMI enable flag of a slot whose name CreateUser has written.
+// finishCreate sets the password, the channel access and the IPMI enable
+// flag (set for an Enabled user, cleared otherwise) of a slot whose name
+// CreateUser has written.
 func (m *ipmiUserManager) finishCreate(u User, password *memguard.MemoryEnclave) error {
 	if password != nil && password.Size() > 0 {
 		if err := m.setUserPassword(u.Slot, pwdOpSet, password); err != nil {
@@ -283,12 +286,15 @@ func (m *ipmiUserManager) finishCreate(u User, password *memguard.MemoryEnclave)
 	if err := m.setUserAccess(u.Slot, channel, u.Privilege, u.Enabled); err != nil {
 		return err
 	}
-	if !u.Enabled {
-		return nil
+	// Set User Password operation 01b enables the user and 00b disables it;
+	// neither carries password data. The global enable flag survives
+	// DeleteUser, so a disabled create on a reused slot must clear it
+	// explicitly, and an enabled one must set it.
+	op := byte(pwdOpDisable)
+	if u.Enabled {
+		op = pwdOpEnable
 	}
-	// Set User Password operation 01b enables the user; it carries no
-	// password data. A new IPMI account stays disabled for login without it.
-	_, err := m.sender.Send(netFnApp, cmdSetUserPassword, []byte{u.Slot & ipmiMaxUserSlot, pwdOpEnable})
+	_, err := m.sender.Send(netFnApp, cmdSetUserPassword, []byte{u.Slot & ipmiMaxUserSlot, op})
 	return err
 }
 
