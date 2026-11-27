@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -261,6 +262,55 @@ func TestCeremonyRouterRefusesBadBodies(t *testing.T) {
 				t.Fatalf("the service was called with %v", server.last)
 			}
 		})
+	}
+}
+
+// failingBody yields prefix and then fails, the way a request body does
+// when the connection drops part way through it.
+type failingBody struct {
+	prefix []byte
+}
+
+func (b *failingBody) Read(p []byte) (int, error) {
+	if len(b.prefix) > 0 {
+		n := copy(p, b.prefix)
+		b.prefix = b.prefix[n:]
+		return n, nil
+	}
+	return 0, errors.New("connection reset mid-body")
+}
+
+// TestCeremonyRouterRefusesAFailedBodyRead checks that a body whose read
+// fails refuses the request with a 4xx before the service is called, even
+// when the bytes read so far are a complete JSON object or nothing at all,
+// because the rest of the body was lost.
+func TestCeremonyRouterRefusesAFailedBodyRead(t *testing.T) {
+	routes := []struct {
+		name, path, complete string
+	}{
+		{"init", "/api/v1/ceremony/init", `{"soPin":"1234"}`},
+		{"claim cert complete", "/api/v1/ceremony/claim-cert/complete", `{"username":"alice"}`},
+		{"claim share complete", "/api/v1/ceremony/claim-share/complete", `{"username":"alice"}`},
+	}
+	for _, route := range routes {
+		prefixes := []struct{ name, prefix string }{
+			{"complete JSON", route.complete},
+			{"empty", ""},
+		}
+		for _, p := range prefixes {
+			t.Run(route.name+"/"+p.name, func(t *testing.T) {
+				server := &recordingServer{}
+				rec := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodPost, route.path, &failingBody{prefix: []byte(p.prefix)})
+				mountRouter(server).ServeHTTP(rec, req)
+				if rec.Code < 400 || rec.Code >= 500 {
+					t.Fatalf("code = %d, want 4xx, body %s", rec.Code, rec.Body)
+				}
+				if server.last != nil {
+					t.Fatalf("the service was called with %v", server.last)
+				}
+			})
+		}
 	}
 }
 
