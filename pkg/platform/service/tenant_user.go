@@ -17,6 +17,8 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -119,6 +121,10 @@ type TenantUserService struct {
 	tenantManager     TenantManager
 	tokenIssuer       TokenIssuer
 	iamMirror         IAMUserMirror
+
+	// In-flight invitation redemptions by normalized email.
+	redeemMu  sync.Mutex
+	redeeming map[string]struct{}
 }
 
 // TenantUserServiceConfig holds configuration for TenantUserService.
@@ -152,6 +158,30 @@ func NewTenantUserService(config *TenantUserServiceConfig) TenantUserServicer {
 // up after the TenantUserService.
 func (s *TenantUserService) SetIAMMirror(m IAMUserMirror) {
 	s.iamMirror = m
+}
+
+// claimRedemption claims the invitation redemption of email. The user ID
+// derives from the email, so a claim held from the first lookup to the
+// return keeps two redemptions of one email from interleaving saves,
+// mirrors, Accepts and rollbacks; the second is refused, so a rollback can
+// only remove what its own redemption wrote (#2362). The claim is
+// in-process: one TenantUserService serves a platformd.
+func (s *TenantUserService) claimRedemption(email string) (release func(), ok bool) {
+	key := strings.ToLower(strings.TrimSpace(email))
+	s.redeemMu.Lock()
+	defer s.redeemMu.Unlock()
+	if s.redeeming == nil {
+		s.redeeming = make(map[string]struct{})
+	}
+	if _, busy := s.redeeming[key]; busy {
+		return nil, false
+	}
+	s.redeeming[key] = struct{}{}
+	return func() {
+		s.redeemMu.Lock()
+		defer s.redeemMu.Unlock()
+		delete(s.redeeming, key)
+	}, true
 }
 
 // RegisterNewUser creates a new tenant and registers the user as the owner.
@@ -300,6 +330,7 @@ const DefaultTenantOwnerRole = "admin"
 
 // RegisterInvitedUser registers a user from an invitation, joining an existing tenant.
 // Steps:
+// 0. Claim the redemption for the email; a concurrent one is refused
 // 1. Get invitation by token
 // 2. Verify invitation is pending and not expired
 // 3. Get tenant via tenantManager
@@ -321,6 +352,15 @@ func (s *TenantUserService) RegisterInvitedUser(
 	if invitationToken == "" {
 		return nil, ErrInvitationRequired{}
 	}
+
+	// Claim the redemption for the email before the first lookup: a
+	// concurrent redemption of the same email is refused and writes
+	// nothing, so it can never roll back this one's records (#2362).
+	release, ok := s.claimRedemption(user.Email)
+	if !ok {
+		return nil, ErrInvitationRedemptionInProgress{Email: user.Email}
+	}
+	defer release()
 
 	s.logger.Info("registering invited user",
 		"email", user.Email,
@@ -705,6 +745,16 @@ type ErrInvitationRequired struct{}
 
 func (e ErrInvitationRequired) Error() string {
 	return "invitation token is required"
+}
+
+// ErrInvitationRedemptionInProgress is returned when another redemption of
+// the same email is still running; the caller may retry once it finishes.
+type ErrInvitationRedemptionInProgress struct {
+	Email string
+}
+
+func (e ErrInvitationRedemptionInProgress) Error() string {
+	return fmt.Sprintf("an invitation redemption for %s is already in progress; retry", e.Email)
 }
 
 // ErrInvalidUserInput is returned when user input is invalid.
