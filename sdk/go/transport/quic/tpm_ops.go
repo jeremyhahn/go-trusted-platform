@@ -43,6 +43,19 @@ var tpmOpsRequestEncoders = map[string]categoryRequestEncoder{
 				EncryptedSecret: r.GetEncryptedSecret(),
 			}, nil
 		}),
+	// GetAK reads the platform AK through SubOpTPM2GetIAK, which takes no
+	// selector: a handle or an algorithm is refused before any send, as in
+	// the MCP mapping. The untyped nil sends only the sub-opcode byte.
+	platformv1.TPMService_GetAK_FullMethodName: requestEncoder(platformv1.TPMService_GetAK_FullMethodName,
+		func(r *platformv1.GetAKRequest) (interface{}, error) {
+			if r.GetHandle() != 0 {
+				return nil, ErrTPMSelectorUnsupported{Method: platformv1.TPMService_GetAK_FullMethodName, Field: "handle"}
+			}
+			if r.GetAlgorithm() != platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED {
+				return nil, ErrTPMSelectorUnsupported{Method: platformv1.TPMService_GetAK_FullMethodName, Field: "algorithm"}
+			}
+			return nil, nil
+		}),
 }
 
 var tpmOpsResponseDecoders = map[string]categoryResponseDecoder{
@@ -100,7 +113,7 @@ var tpmOpsResponseDecoders = map[string]categoryResponseDecoder{
 
 func init() {
 	categoryEmptyBodyMethods[platformv1.TPMService_GetEventLog_FullMethodName] = struct{}{}
-	// handleGetIAK ignores the payload: GetAK sends an empty body.
-	categoryEmptyBodyMethods[platformv1.TPMService_GetAK_FullMethodName] = struct{}{}
+	// GetAK's empty body comes from its request encoder above, which
+	// first refuses the selectors handleGetIAK cannot honour.
 	registerCategoryCodecs(tpmOpsRequestEncoders, tpmOpsResponseDecoders)
 }
