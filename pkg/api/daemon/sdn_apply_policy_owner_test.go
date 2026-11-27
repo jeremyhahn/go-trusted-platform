@@ -115,11 +115,25 @@ func requireOnlyFlow(t *testing.T, fake *ownerOVS, bridge, cookie, actions strin
 }
 
 func TestPolicyFlowCookie_OwnedAndStable(t *testing.T) {
-	assert.Equal(t, policyFlowCookie("p1"), policyFlowCookie("p1"))
-	assert.NotEqual(t, policyFlowCookie("p1"), policyFlowCookie("p2"))
-	assert.Equal(t, policyFlowCookieOwner, policyFlowCookie("p1")&^(1<<48-1))
+	assert.Equal(t, policyFlowCookie("p1", 0), policyFlowCookie("p1", 0))
+	assert.NotEqual(t, policyFlowCookie("p1", 0), policyFlowCookie("p2", 0))
+	assert.Equal(t, policyFlowCookieOwner, policyFlowCookie("p1", 0)&^(1<<48-1))
 	assert.NotEqual(t, ovs.APIFlowCookieOwner, policyFlowCookieOwner)
 	assert.NotEqual(t, uint64(0xF1BE), policyFlowCookieOwner>>48)
+
+	// Each rule of a policy has its own cookie, and both belong to the policy.
+	rule0, rule1 := policyFlowCookie("p1", 0), policyFlowCookie("p1", 1)
+	assert.NotEqual(t, rule0, rule1)
+	assert.True(t, samePolicyCookie(fmt.Sprintf("0x%x", rule0), fmt.Sprintf("0x%x", rule1)))
+}
+
+// twoRuleP1Cookies is the set of flow cookies policy p1 with
+// twoRulePolicyConfig installs: one cookie per rule, as hex strings.
+func twoRuleP1Cookies() map[string]bool {
+	return map[string]bool{
+		fmt.Sprintf("0x%x", policyFlowCookie("p1", 0)): true,
+		fmt.Sprintf("0x%x", policyFlowCookie("p1", 1)): true,
+	}
 }
 
 func TestSDNService_ApplyPolicy_FlowsCarryThePolicyCookie(t *testing.T) {
@@ -130,10 +144,13 @@ func TestSDNService_ApplyPolicy_FlowsCarryThePolicyCookie(t *testing.T) {
 	flows, err := fake.ListFlows(context.Background(), "br0")
 	require.NoError(t, err)
 	require.Len(t, flows, 2)
-	want := fmt.Sprintf("0x%x", policyFlowCookie("p1"))
+	p1 := fmt.Sprintf("0x%x", policyFlowCookie("p1", 0))
+	cookies := map[string]bool{}
 	for _, fl := range flows {
-		assert.Equal(t, want, fl.Cookie, "flow %q", fl.Match)
+		assert.True(t, samePolicyCookie(p1, fl.Cookie), "flow %q cookie %s is a p1 policy cookie", fl.Match, fl.Cookie)
+		cookies[fl.Cookie] = true
 	}
+	assert.Equal(t, twoRuleP1Cookies(), cookies, "each rule's flow carries its own rule cookie")
 
 	// The policy's own flows are not foreign occupants of their entries.
 	_, err = svc.ApplyPolicy(context.Background(), &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
@@ -258,14 +275,17 @@ func TestSDNService_ApplyPolicy_AdoptsALegacyCookieZeroPolicyFlow(t *testing.T) 
 
 			flows, err := fake.ListFlows(context.Background(), "br0")
 			require.NoError(t, err)
-			want := fmt.Sprintf("0x%x", policyFlowCookie("p1"))
+			p1 := fmt.Sprintf("0x%x", policyFlowCookie("p1", 0))
+			cookies := map[string]bool{}
 			adopted := false
 			for _, fl := range flows {
-				assert.Equal(t, want, fl.Cookie, "flow %s", fl.Match)
+				assert.True(t, samePolicyCookie(p1, fl.Cookie), "flow %s cookie %s is a p1 policy cookie", fl.Match, fl.Cookie)
+				cookies[fl.Cookie] = true
 				if fl.Match == seed.Match && fl.Priority == seed.Priority {
 					adopted = true
 				}
 			}
+			assert.Equal(t, twoRuleP1Cookies(), cookies, "each rule's flow carries its own rule cookie")
 			assert.True(t, adopted, "the legacy flow's entry carries the policy flow")
 
 			_, err = svc.DeletePolicy(context.Background(), &platformv1.DeletePolicyRequest{PolicyId: "p1"})
