@@ -22,9 +22,9 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
 
-// pagedIAMClient serves its tenants by page token the way the IAM backend
-// does: at most 50 per page, a NextPageToken while more remain, and a
-// TotalCount of 0, as the embedded IAM list handler reports.
+// pagedIAMClient stands for a token-paging remote IAM backend: at most 50
+// tenants per page (its default page when PageSize is 0), a NextPageToken
+// while more remain, and a TotalCount of 0.
 type pagedIAMClient struct {
 	*mockIAMClient
 	ordered []iam.Tenant
@@ -32,11 +32,17 @@ type pagedIAMClient struct {
 
 func newPagedIAMClient(n int) *pagedIAMClient {
 	p := &pagedIAMClient{mockIAMClient: newMockIAMClient()}
+	p.ordered = orderedTenants(n)
+	return p
+}
+
+func orderedTenants(n int) []iam.Tenant {
+	out := make([]iam.Tenant, 0, n)
 	for i := 0; i < n; i++ {
 		id := fmt.Sprintf("t-%03d", i)
-		p.ordered = append(p.ordered, iam.Tenant{ID: id, Name: id})
+		out = append(out, iam.Tenant{ID: id, Name: id})
 	}
-	return p
+	return out
 }
 
 func (p *pagedIAMClient) List(_ context.Context, req *iam.ListTenantsRequest) (*iam.ListTenantsResponse, error) {
@@ -48,7 +54,10 @@ func (p *pagedIAMClient) List(_ context.Context, req *iam.ListTenantsRequest) (*
 		}
 		start = n
 	}
-	size := min(req.PageSize, 50)
+	size := req.PageSize
+	if size <= 0 || size > 50 {
+		size = 50
+	}
 	if start > len(p.ordered) {
 		start = len(p.ordered)
 	}
@@ -60,11 +69,29 @@ func (p *pagedIAMClient) List(_ context.Context, req *iam.ListTenantsRequest) (*
 	return resp, nil
 }
 
-func TestListTenants_WalksIAMPageTokens(t *testing.T) {
-	paged := newPagedIAMClient(120)
+// embeddedIAMClient behaves like the pinned SDK's embedded IAM tenant list
+// handler: it ignores PageToken, returns the first PageSize tenants (all of
+// them when PageSize is 0) and never sets Pagination.
+type embeddedIAMClient struct {
+	*mockIAMClient
+	ordered []iam.Tenant
+	lastReq iam.ListTenantsRequest
+}
+
+func (e *embeddedIAMClient) List(_ context.Context, req *iam.ListTenantsRequest) (*iam.ListTenantsResponse, error) {
+	e.lastReq = *req
+	end := len(e.ordered)
+	if req.PageSize > 0 && req.PageSize < end {
+		end = req.PageSize
+	}
+	return &iam.ListTenantsResponse{Tenants: append([]iam.Tenant(nil), e.ordered[:end]...)}, nil
+}
+
+func newListManager(t *testing.T, client iam.TenantClient, roles *mockIAMClient) *Manager {
+	t.Helper()
 	cfg := &ManagerConfig{
-		IAMTenantClient: paged,
-		IAMRoleClient:   paged.mockIAMClient,
+		IAMTenantClient: client,
+		IAMRoleClient:   roles,
 		Config:          DefaultConfig(),
 		Logger:          newTestLogger(),
 	}
@@ -73,25 +100,25 @@ func TestListTenants_WalksIAMPageTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create manager: %v", err)
 	}
+	return manager
+}
 
-	cases := []struct {
-		limit, offset int
-		wantLen       int
-		wantFirst     string
-	}{
-		{50, 0, 50, "t-000"},
-		{50, 50, 50, "t-050"},
-		{50, 100, 20, "t-100"},
-		{50, 150, 0, ""},
-	}
+type listCase struct {
+	limit, offset int
+	wantLen       int
+	wantFirst     string
+}
+
+func checkListCases(t *testing.T, manager *Manager, wantTotal int, cases []listCase) {
+	t.Helper()
 	for _, tc := range cases {
 		t.Run(fmt.Sprintf("limit=%d,offset=%d", tc.limit, tc.offset), func(t *testing.T) {
 			got, total, err := manager.ListTenants(context.Background(), tc.limit, tc.offset)
 			if err != nil {
 				t.Fatalf("ListTenants: %v", err)
 			}
-			if total != 120 {
-				t.Errorf("total = %d, want 120", total)
+			if total != wantTotal {
+				t.Errorf("total = %d, want %d", total, wantTotal)
 			}
 			if len(got) != tc.wantLen {
 				t.Fatalf("len = %d, want %d", len(got), tc.wantLen)
@@ -100,5 +127,28 @@ func TestListTenants_WalksIAMPageTokens(t *testing.T) {
 				t.Errorf("first = %q, want %q", got[0].ID, tc.wantFirst)
 			}
 		})
+	}
+}
+
+func TestListTenants_WalksIAMPageTokens(t *testing.T) {
+	paged := newPagedIAMClient(120)
+	manager := newListManager(t, paged, paged.mockIAMClient)
+	checkListCases(t, manager, 120, []listCase{
+		{50, 0, 50, "t-000"},
+		{50, 50, 50, "t-050"},
+		{50, 100, 20, "t-100"},
+		{50, 150, 0, ""},
+	})
+}
+
+func TestListTenants_ReadsTheWholeEmbeddedList(t *testing.T) {
+	embedded := &embeddedIAMClient{mockIAMClient: newMockIAMClient(), ordered: orderedTenants(51)}
+	manager := newListManager(t, embedded, embedded.mockIAMClient)
+	checkListCases(t, manager, 51, []listCase{
+		{50, 0, 50, "t-000"},
+		{50, 50, 1, "t-050"},
+	})
+	if ps := embedded.lastReq.PageSize; ps != 0 && ps < 51 {
+		t.Errorf("last request PageSize = %d, want 0 or at least 51", ps)
 	}
 }
