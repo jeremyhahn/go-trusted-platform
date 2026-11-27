@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -181,7 +182,60 @@ func TestTouchedFeatures(t *testing.T) {
 		{name: "the runner's freeport command", files: map[string]string{"test/integration/helpers/freeport/main.go": "package main\n\nfunc main() { _ = 1 }\n"}, want: []string{"ALL", "beta"}},
 		{name: "a suite file moved to docs", files: map[string]string{"docs/beta_extra.go": "package beta\n\nfunc C() int { return 1 }\n"}, remove: []string{"test/integration/beta/beta_extra.go"}, want: []string{"beta"}},
 		{name: "a docs change against an unknown base", files: map[string]string{"README.md": "# m3\n"}, base: "no-such-rev", want: []string{"ALL", "beta"}},
+		// #2445: go list -e reports a package error in its output and exits
+		// 0, so the importers it lists are incomplete; that is a failure to
+		// list the packages, which fails closed. Last: the broken file stays.
+		{name: "an integration package go list reports an error for", files: map[string]string{
+			"test/integration/alpha/alpha.go": "package alpha\n\nfunc A( int { return 1 }\n",
+		}, want: []string{"ALL", "beta"}},
 	})
+}
+
+// touchedNAT64Setup turns the base repository into one with the project's
+// real feature table and the two halves of the NAT64 suite (#601): the
+// host harness test/integration/nat64, which boots the VM, and its guest
+// suite, test/integration/sdn built with the nat64vm tag (Makefile
+// nat64-vm-suite, test/integration/nat64/vm_test.go).
+func touchedNAT64Setup(t *testing.T) map[string]string {
+	t.Helper()
+	runner, err := os.ReadFile(filepath.Join(repoRoot(t), filepath.FromSlash(featureTableRunner)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return map[string]string{
+		featureTableRunner:                        string(runner),
+		"test/integration/nat64/vm_test.go":       "//go:build integration\n\npackage nat64\n\nimport \"testing\"\n\nfunc TestNAT64VM(t *testing.T) {}\n",
+		"test/integration/sdn/helpers.go":         "//go:build integration\n\npackage sdn\n\nfunc S() int { return 1 }\n",
+		"test/integration/sdn/nat64_jool_test.go": "//go:build integration && nat64vm\n\npackage sdn\n\nimport \"testing\"\n\nfunc TestJoolDriver(t *testing.T) { _ = S() }\n",
+	}
+}
+
+// TestTouchedFeaturesSelectsNAT64GuestSuite: #2445. Under the project's
+// real feature table, a change to the NAT64 guest suite -- a nat64vm guest
+// test, or a file of the package the guest binary is built from -- selects
+// the nat64 feature, whose make target builds and boots that guest suite.
+// Today the table's nat64 row covers only the host harness, so the script
+// prints lb and sdn and the NAT64 guest tests never run.
+func TestTouchedFeaturesSelectsNAT64GuestSuite(t *testing.T) {
+	dir, commit := touchedRepo(t)
+	commit(touchedNAT64Setup(t), nil)
+	for _, c := range []touchedCase{
+		{name: "a nat64vm guest test", files: map[string]string{
+			"test/integration/sdn/nat64_jool_test.go": "//go:build integration && nat64vm\n\npackage sdn\n\nimport \"testing\"\n\nfunc TestJoolDriver(t *testing.T) { _ = S() + 1 }\n",
+		}},
+		{name: "a new nat64vm guest test file", files: map[string]string{
+			"test/integration/sdn/nat64_datapath_test.go": "//go:build integration && nat64vm\n\npackage sdn\n\nimport \"testing\"\n\nfunc TestNAT64Datapath(t *testing.T) { _ = S() }\n",
+		}},
+		{name: "a file the guest binary compiles", files: map[string]string{
+			"test/integration/sdn/helpers.go": "//go:build integration\n\npackage sdn\n\nfunc S() int { return 2 }\n",
+		}},
+	} {
+		commit(c.files, c.remove)
+		got := runTouched(t, dir, "touched-features.sh", "HEAD^")
+		if !slices.Contains(got, "nat64") || slices.Contains(got, "ALL") {
+			t.Errorf("%s: touched-features.sh printed %q, want the nat64 feature (and no ALL)", c.name, got)
+		}
+	}
 }
 
 // TestTouchedPackages: the script names the changed packages and their
@@ -198,5 +252,10 @@ func TestTouchedPackages(t *testing.T) {
 		{name: "a docs change against an unknown base", files: map[string]string{"README.md": "# m3\n"}, base: "no-such-rev", want: []string{"./..."}},
 		{name: "a go.mod change", files: map[string]string{"go.mod": "module example.com/m\n\ngo 1.21\n\n// changed\n"}, want: []string{"./..."}},
 		{name: "a file moved across packages", files: map[string]string{"pkg/d/extra.go": "package d\n\nfunc X() int { return 1 }\n"}, remove: []string{"pkg/a/extra.go"}, want: []string{"./pkg/a", "./pkg/b", "./pkg/d"}},
+		// #2445: go list -e reports a package error in its output and exits
+		// 0, so the packages and importers it lists are incomplete; that is a
+		// failure to list the packages, which fails closed to ./... .
+		// Last: the broken file stays in the repository.
+		{name: "a package go list reports an error for", files: map[string]string{"pkg/e/e.go": "package e\n\nfunc E( int { return 1 }\n"}, want: []string{"./..."}},
 	})
 }
