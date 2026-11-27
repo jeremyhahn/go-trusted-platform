@@ -5,7 +5,9 @@
  * through the SDK AttestationService (#2038). Each button sits in <Gated>
  * on the server's route, so a node without attestation withholds it.
  * A verify needs the expected nonce, so a replayed quote is never shown as
- * verified.
+ * verified. The card verifies the signature and nonce only: it never
+ * supplies expected PCRs, so a verified verdict says the PCR policy was not
+ * checked instead of showing the server's policy-match message.
  */
 
 import * as React from "react";
@@ -337,7 +339,13 @@ export function AttestationQuoteCard() {
               <span className={verdict.verified ? "font-semibold text-green-600" : "font-semibold text-destructive"}>
                 {verdict.verified ? "verified" : "not verified"}
               </span>
-              {verdict.message && <span className="ml-2 text-muted-foreground">{verdict.message}</span>}
+              {verdict.verified ? (
+                <span className="ml-2 text-muted-foreground" data-testid="attestation-quote-pcr-policy">
+                  Signature and nonce verified; PCR policy not checked (no expected PCR values were supplied).
+                </span>
+              ) : (
+                verdict.message && <span className="ml-2 text-muted-foreground">{verdict.message}</span>
+              )}
             </div>
           )}
         </form>

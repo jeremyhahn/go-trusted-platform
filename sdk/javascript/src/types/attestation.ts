@@ -725,7 +725,7 @@ export const POLL_DEVICE_VERDICTS_MAX_WAIT_MS = 20000;
 
 /** The query of a device verdicts poll. */
 export interface PollDeviceVerdictsRequest {
-  /** Where the poll continues from: the cursor of the previous answer; omit to start at the beginning. */
+  /** Where the poll continues from: the cursor of the previous answer. Omit it to start at the current head: the first poll returns no historical verdicts, only those logged after it; read the device report for the state that already exists. */
   cursor?: string;
   /** How long the server may wait for a new verdict, in milliseconds; clamped to 0..20000. */
   waitMs?: number;
