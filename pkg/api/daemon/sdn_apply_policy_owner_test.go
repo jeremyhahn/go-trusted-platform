@@ -230,6 +230,42 @@ func TestSDNService_ApplyPolicy_RestartKeepsCookieCollisionProtection(t *testing
 	assert.Equal(t, firstActions, flows[0].Actions, "the deny rule is not replaced")
 }
 
+// TestSDNService_ApplyPolicy_RestartRefusesSurvivingSameHashFlowAtAnotherEntry:
+// after a restart the policy map is empty, so a surviving flow under the
+// same truncated hash at another entry must still refuse the colliding
+// policy, or both would share one flow ID and stats.
+func TestSDNService_ApplyPolicy_RestartRefusesSurvivingSameHashFlowAtAnotherEntry(t *testing.T) {
+	const first, second = "0518cd1c11c51ee791e80b24", "60a173ed4966add101d89b26"
+	require.Equal(t, policyFlowCookie(first, 0), policyFlowCookie(second, 0), "the two IDs collide")
+	ctx := context.Background()
+
+	svc, fake := newOwnerOVSFixture(t)
+	_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: first, Config: &platformv1.PolicyConfig{
+		Name: "first", Priority: 100, Enabled: true,
+		Rules: []*platformv1.PolicyRule{{RuleId: "deny-a", Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY,
+			Match: &platformv1.PolicyRuleMatch{SourceIp: "192.0.2.10"}}},
+		Targets: []*platformv1.PolicyTarget{bridgeTarget("br0")},
+	}})
+	require.NoError(t, err)
+
+	// The restarted daemon: same switch, empty policy map.
+	svc2, err := NewSDNService("", WithOVSClient(fake))
+	require.NoError(t, err)
+	_, err = svc2.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: second, Config: &platformv1.PolicyConfig{
+		Name: "second", Priority: 100, Enabled: true,
+		Rules: []*platformv1.PolicyRule{{RuleId: "deny-b", Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY,
+			Match: &platformv1.PolicyRuleMatch{SourceIp: "192.0.2.20"}}},
+		Targets: []*platformv1.PolicyTarget{bridgeTarget("br0")},
+	}})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+
+	flows, err := fake.ListFlows(ctx, "br0")
+	require.NoError(t, err)
+	require.Len(t, flows, 1, "the switch keeps only the first policy's flow")
+	assert.Equal(t, fmt.Sprintf("0x%x", policyFlowCookie(first, 0)), flows[0].Cookie)
+}
+
 // An unchanged reapply after a restart still replaces the policy's own flows.
 func TestSDNService_ApplyPolicy_RestartReapplyOfUnchangedPolicyStillWorks(t *testing.T) {
 	ctx := context.Background()
