@@ -100,15 +100,34 @@ var tpmOpsResponseDecoders = map[string]categoryResponseDecoder{
 			return nil
 		}),
 	// GetAK reads the platform AK (the IAK) through SubOpTPM2GetIAK; the
-	// wire algorithm is a family string, so the reply's KeyAlgorithm
-	// stays unset.
+	// wire algorithm is the x509 family name, mapped to the KeyAlgorithm
+	// the gRPC service reports for the same AK.
 	platformv1.TPMService_GetAK_FullMethodName: responseDecoder(platformv1.TPMService_GetAK_FullMethodName,
 		func(w *quicwire.TPM2KeyResponse, out *platformv1.GetAKResponse) error {
 			out.Handle = w.Handle
 			out.PublicKey = w.PublicKey
+			out.Algorithm = akAlgorithmFromFamily(w.Algorithm)
 			out.Name = w.Name
 			return nil
 		}),
+}
+
+// akAlgorithmFromFamily maps the x509 public key algorithm family the
+// server sends for the AK ("RSA", "ECDSA", "Ed25519") to a KeyAlgorithm.
+// It mirrors keyAlgorithmToProto in pkg/api/daemon/tpm_grpc_service.go,
+// which maps the family only, so every transport reports the same value;
+// any other family is KEY_ALGORITHM_UNSPECIFIED.
+func akAlgorithmFromFamily(family string) platformv1.KeyAlgorithm {
+	switch family {
+	case "RSA":
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048
+	case "ECDSA":
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256
+	case "Ed25519":
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519
+	default:
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED
+	}
 }
 
 func init() {

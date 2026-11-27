@@ -206,12 +206,31 @@ func decodeTPMReadSRKResult(result interface{}, reply interface{}) error {
 }
 
 // tpmReadAKResult is the platform_tpm_iak reply: the key, its handle and
-// its TPM name, base64 in JSON. The algorithm string names the family
-// only, so the reply's KeyAlgorithm stays unset.
+// its TPM name, base64 in JSON. The algorithm string is the x509 family
+// name, mapped by akAlgorithmFromFamily.
 type tpmReadAKResult struct {
 	Handle    uint32 `json:"handle"`
 	PublicKey []byte `json:"public_key"`
+	Algorithm string `json:"algorithm"`
 	Name      []byte `json:"name"`
+}
+
+// akAlgorithmFromFamily maps the x509 public key algorithm family the
+// tool sends for the AK ("RSA", "ECDSA", "Ed25519") to a KeyAlgorithm.
+// It mirrors keyAlgorithmToProto in pkg/api/daemon/tpm_grpc_service.go,
+// which maps the family only, so every transport reports the same value;
+// any other family is KEY_ALGORITHM_UNSPECIFIED.
+func akAlgorithmFromFamily(family string) platformv1.KeyAlgorithm {
+	switch family {
+	case "RSA":
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048
+	case "ECDSA":
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256
+	case "Ed25519":
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519
+	default:
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED
+	}
 }
 
 func decodeTPMReadAKResult(result interface{}, reply interface{}) error {
@@ -225,6 +244,7 @@ func decodeTPMReadAKResult(result interface{}, reply interface{}) error {
 	}
 	out.Handle = key.Handle
 	out.PublicKey = key.PublicKey
+	out.Algorithm = akAlgorithmFromFamily(key.Algorithm)
 	out.Name = key.Name
 	return nil
 }
