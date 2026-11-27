@@ -338,6 +338,7 @@ func desiredLease(lease *vpn.Lease) *gwstate.DesiredVPNLease {
 		ClientCertificateSHA256: slices.Clone(lease.Keys.ClientCertificateSHA256),
 		IssuedAt:                lease.IssuedAt,
 		ExpiresAt:               lease.ExpiresAt,
+		ClientExpiresAt:         lease.ClientExpiresAt,
 		Renewals:                lease.Renewals,
 		Verdict: gwstate.DesiredVPNVerdict{
 			Passed:        lease.Verdict.Passed,
@@ -368,9 +369,10 @@ func projectedLease(i int, l *gwstate.DesiredVPNLease) (*vpn.Lease, error) {
 			WireGuardPublicKey:      slices.Clone(l.WireGuardPublicKey),
 			ClientCertificateSHA256: slices.Clone(l.ClientCertificateSHA256),
 		},
-		IssuedAt:  l.IssuedAt,
-		ExpiresAt: l.ExpiresAt,
-		Renewals:  l.Renewals,
+		IssuedAt:        l.IssuedAt,
+		ExpiresAt:       l.ExpiresAt,
+		ClientExpiresAt: l.ClientExpiresAt,
+		Renewals:        l.Renewals,
 		Verdict: vpn.VerdictSummary{
 			Passed:        l.Verdict.Passed,
 			Cryptographic: l.Verdict.Cryptographic,

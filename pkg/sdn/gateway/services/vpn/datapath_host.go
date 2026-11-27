@@ -302,8 +302,10 @@ func (h *PlaneHost) install(ctx context.Context, peer *ipcv1.VPNPeer) error {
 	defer h.mu.Unlock()
 	if held, ok := h.held[lease.ID]; ok && held.kind == lease.DataPlane && proto.Equal(held.peer, bare) {
 		// The same peer again is a renewal: only its deadline moves, and
-		// the plane is not touched, so a live session is kept.
-		if !lease.ExpiresAt.IsZero() {
+		// the plane is not touched, so a live session is kept. The deadline
+		// only moves forward, as in renew: an older deadline from a
+		// replayed install (Restore) is ignored.
+		if lease.ExpiresAt.After(held.deadline) {
 			held.deadline = lease.ExpiresAt
 			h.held[lease.ID] = held
 		}
