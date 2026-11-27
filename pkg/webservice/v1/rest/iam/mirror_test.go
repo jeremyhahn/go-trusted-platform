@@ -16,6 +16,8 @@ package iam
 import (
 	"context"
 	"errors"
+	"regexp"
+	"strings"
 	"testing"
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -38,7 +40,7 @@ func TestMirrorUser_CreatesUserWithRoles(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "t1", gotTenant)
-	assert.Equal(t, "ann", got.Username, "an empty display name falls back to the email local part")
+	assert.Equal(t, MirrorUsername("ann@example.com"), got.Username, "the IAM username comes from the email, not the display name")
 	assert.Equal(t, []string{"admin"}, got.Roles)
 }
 
@@ -194,5 +196,61 @@ func TestUsernameFromEmail(t *testing.T) {
 		if got := UsernameFromEmail(email); got != want {
 			t.Errorf("UsernameFromEmail(%q) = %q, want %q", email, got, want)
 		}
+	}
+}
+
+// iamUsernameRule is the pinned go-quicbaas pkg/iam username rule that
+// IdentityStore.CreateUser enforces.
+var iamUsernameRule = regexp.MustCompile(`^[a-zA-Z0-9_-]{3,64}$`)
+
+// TestMirrorUsername_MatchesTheIAMUsernameRule: every email form, dotted,
+// plus-tagged, short, quoted, over-long or without an @, maps to a username
+// the IAM store accepts, and two emails with one local part stay apart
+// (#2362).
+func TestMirrorUsername_MatchesTheIAMUsernameRule(t *testing.T) {
+	t.Parallel()
+	emails := []string{
+		"jane.doe@example.com",
+		"jane+tag@example.com",
+		"al@example.com",
+		"a@example.com",
+		"o'brien@example.com",
+		strings.Repeat("x", 70) + "@example.com",
+		"no-at-sign",
+	}
+	for _, email := range emails {
+		got := MirrorUsername(email)
+		assert.True(t, iamUsernameRule.MatchString(got), "MirrorUsername(%q) = %q breaks the IAM username rule", email, got)
+	}
+	assert.NotEqual(t, MirrorUsername("ann@one.example"), MirrorUsername("ann@two.example"))
+	assert.Equal(t, MirrorUsername("ann@example.com"), MirrorUsername(" Ann@Example.com "))
+}
+
+// TestMirrorInvitedUser_UsernameIgnoresTheDisplayName: the mirror sends
+// MirrorUsername(email) as the IAM username whatever the display name, and
+// keeps the display name as DisplayName (#2362).
+func TestMirrorInvitedUser_UsernameIgnoresTheDisplayName(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ email, displayName string }{
+		{"jane.doe@example.com", ""},
+		{"jane+tag@example.com", ""},
+		{"al@example.com", ""},
+		{"jane@example.com", "Jane Doe"},
+	}
+	for _, tc := range cases {
+		var got *iamsdk.CreateUserRequest
+		client := &mockIAMClient{
+			createUserFn: func(_ context.Context, _ string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
+				got = req
+				return &iamsdk.User{}, nil
+			},
+		}
+		_, err := NewQuicBaaSUserMirror(client).MirrorInvitedUser(
+			context.Background(), "t1", tc.email, tc.displayName, []string{"viewer"})
+		require.NoError(t, err, tc.email)
+		require.NotNil(t, got, tc.email)
+		assert.True(t, iamUsernameRule.MatchString(got.Username), "username %q for %q breaks the IAM username rule", got.Username, tc.email)
+		assert.Equal(t, MirrorUsername(tc.email), got.Username, tc.email)
+		assert.Equal(t, tc.displayName, got.DisplayName, tc.email)
 	}
 }

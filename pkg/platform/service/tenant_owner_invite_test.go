@@ -241,6 +241,75 @@ func TestRegisterInvitedUser_AcceptFailureUndoesTheIAMMirror(t *testing.T) {
 	}
 }
 
+// gatedIAMMirror holds its first MirrorInvitedUser call inside the mirror
+// until the test releases it, so a second redemption can be started while
+// the first is mid-mirror.
+type gatedIAMMirror struct {
+	fakeIAMMirror
+	entered chan struct{}
+	release chan struct{}
+	gated   bool
+}
+
+func (g *gatedIAMMirror) MirrorInvitedUser(
+	ctx context.Context, tenantID, email, displayName string, roles []string,
+) (func(context.Context) error, error) {
+	undo, err := g.fakeIAMMirror.MirrorInvitedUser(ctx, tenantID, email, displayName, roles)
+	g.mu.Lock()
+	first := !g.gated
+	g.gated = true
+	g.mu.Unlock()
+	if first {
+		close(g.entered)
+		<-g.release
+	}
+	return undo, err
+}
+
+// TestRegisterInvitedUser_ConcurrentRedemptionNeverDeletesTheWinner: two
+// redemptions of one email derive one user ID. Without a claim the second
+// could save, mirror and accept while the first is mirroring, and the
+// first's AlreadyAccepted rollback would delete the second's committed user
+// and IAM identity. The gate makes the overlap deterministic: B starts only
+// once A is inside the mirror (#2362).
+func TestRegisterInvitedUser_ConcurrentRedemptionNeverDeletesTheWinner(t *testing.T) {
+	ctx := context.Background()
+	invitation, err := entities.NewInvitation(
+		"tenant-a", "member@example.test", "viewer", 999, 7*24*time.Hour, time.Now())
+	require.NoError(t, err)
+	mirror := &gatedIAMMirror{entered: make(chan struct{}), release: make(chan struct{})}
+	svc, userService, invitationService := newMirroredInvitedRegistration(t, mirror, invitation)
+	invitationService.On("Accept", ctx, invitation.Token, mock.AnythingOfType("uint64")).Return(nil).Once()
+	invitationService.On("Accept", ctx, invitation.Token, mock.AnythingOfType("uint64")).
+		Return(ErrInvitationAlreadyAccepted{Token: invitation.Token})
+	userService.On("Delete", ctx, mock.AnythingOfType("uint64")).Return(nil)
+
+	type outcome struct {
+		result *RegisterResult
+		err    error
+	}
+	doneA := make(chan outcome, 1)
+	go func() {
+		result, err := svc.RegisterInvitedUser(ctx, newTestUser(invitation.Email), invitation.Token)
+		doneA <- outcome{result, err}
+	}()
+	<-mirror.entered
+
+	resultB, errB := svc.RegisterInvitedUser(ctx, newTestUser(invitation.Email), invitation.Token)
+	close(mirror.release)
+	a := <-doneA
+
+	require.NoError(t, a.err)
+	assert.NotNil(t, a.result)
+	require.ErrorAs(t, errB, new(ErrInvitationRedemptionInProgress))
+	assert.Nil(t, resultB)
+	userService.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
+	userService.AssertNumberOfCalls(t, "Save", 1)
+	invitationService.AssertNumberOfCalls(t, "Accept", 1)
+	assert.Len(t, mirror.calls, 1)
+	assert.Empty(t, mirror.undone)
+}
+
 // TestRegisterInvitedUser_OrdinaryInvitationsDoNotConferOwnership is the
 // control, and the one that must never regress: the common path stays
 // non-owner. Without it the test above would pass against a change that
