@@ -170,6 +170,38 @@ describe('AttestationQuoteCard', () => {
     expect((verifies[0].body as { channelBinding?: string }).channelBinding).toBe('Y2I=');
   });
 
+  // With a blank expected nonce the server checks only the signature, so a
+  // replayed quote would read as verified: the card must not send it.
+  async function refusesBlankNonce(binding: string) {
+    const sent = stubControlPlane(routes());
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    const button = await ready('Verify quote');
+    await waitFor(() => expect(button.getAttribute('data-capability-enabled')).toBe('true'));
+    fireEvent.change(screen.getByTestId('attestation-verify-quote'), { target: { value: JSON.stringify(QUOTE) } });
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: PEM } });
+    if (binding !== '') {
+      fireEvent.change(screen.getByTestId('attestation-verify-channel-binding'), { target: { value: binding } });
+    }
+    fireEvent.click(button);
+
+    const error = await screen.findByTestId('attestation-verify-error');
+    expect(error.textContent).toContain('expected nonce');
+    await act(async () => {
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+    });
+    expect(posts(sent, '/api/v1/attestation/quote/verify')).toHaveLength(0);
+    expect(screen.queryByTestId('attestation-quote-verdict')).toBeNull();
+  }
+
+  it('refuses to verify an imported quote with no expected nonce', async () => {
+    await refusesBlankNonce('');
+  });
+
+  it('refuses a channel binding with no expected nonce', async () => {
+    await refusesBlankNonce('Y2I=');
+  });
+
   it('keeps a fetched quote binding when the quote JSON is reformatted', async () => {
     const sent = stubControlPlane(routes());
     render(withControlPlane(<AttestationQuoteCard />));
