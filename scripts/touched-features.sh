@@ -64,6 +64,23 @@ while IFS= read -r line; do
 done <<<"$script"
 [ "${#table[@]}" -gt 0 ] || all
 
+# The guest suites: the rows between `declare -A GUEST_PACKAGES=(` and the
+# next `)`, packages a feature runs inside its VM (nat64 runs the sdn
+# package's nat64vm tests). A change there selects that feature too. A row
+# for a key outside the table is ignored; a missing table leaves guest empty.
+declare -A guest=()
+in=0
+while IFS= read -r line; do
+	if [ "$in" = 0 ]; then
+		[ "$line" = 'declare -A GUEST_PACKAGES=(' ] && in=1
+		continue
+	fi
+	[ "$line" = ')' ] && break
+	if [[ $line =~ $row ]] && [ -n "${table[${BASH_REMATCH[1]}]+x}" ]; then
+		guest[${BASH_REMATCH[1]}]=${BASH_REMATCH[2]}
+	fi
+done <<<"$script"
+
 # The suites `all` runs: the words between `ALL_TARGETS=(` and the next `)`,
 # and compute (the runner's `all` adds it). An unreadable list leaves in_all
 # empty, so ALL is followed by every feature (fail closed).
@@ -99,7 +116,7 @@ declare -A touched=()
 mark() {
 	local key p hit=1
 	for key in "${!table[@]}"; do
-		for p in ${table[$key]}; do
+		for p in ${table[$key]} ${guest[$key]:-}; do
 			if covers "$p" "$1"; then
 				touched[$key]=1
 				hit=0
@@ -143,9 +160,13 @@ while read -r word rest; do
 done <go.mod
 [ -n "$module" ] || all
 tags=$(make -s print-build-tags) || all
+# -e reports a package error, a dependency error (DepsErrors, Error unset)
+# or an incomplete package in the listing and exits 0; any of them marks the
+# line !, and a line marked ! fails closed (#2445).
 listing=$(go list -e -tags "integration $tags" \
-	-f '{{.Dir}}|{{join .Imports " "}} {{join .TestImports " "}} {{join .XTestImports " "}}' \
+	-f '{{if or .Error .DepsErrors .Incomplete}}!{{end}}{{.Dir}}|{{join .Imports " "}} {{join .TestImports " "}} {{join .XTestImports " "}}' \
 	./test/integration/...) || all
+case $'\n'$listing in *$'\n!'*) all ;; esac
 declare -A importers=()
 while IFS='|' read -r dir imports; do
 	[ -n "$dir" ] || continue

@@ -162,6 +162,7 @@ const navigation = [
       { title: "Gateway", href: "/networking/gateway" },
       { title: "VPN", href: "/networking/vpn" },
       { title: "PXE Boot", href: "/networking/pxe" },
+      { title: "Switches", href: "/networking/switches" },
     ],
   },
   {
