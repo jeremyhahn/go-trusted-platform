@@ -87,6 +87,58 @@ func TestPhase35_DispatchMapCoverage(t *testing.T) {
 	}
 }
 
+// officersRecordingProvider records the args platform_ceremony_init hands the
+// provider. The embedded ServiceProvider is nil: only the Phase 3.5 methods run.
+type officersRecordingProvider struct {
+	ServiceProvider
+	*phase35StubProvider
+	initArgs map[string]interface{}
+}
+
+func (p *officersRecordingProvider) CeremonyInit(_ context.Context, args map[string]interface{}) (interface{}, error) {
+	p.initArgs = args
+	return map[string]interface{}{}, nil
+}
+
+// TestPhase35_CeremonyInitOfficers checks that platform_ceremony_init
+// advertises an officers array (username, csr_pem) and that the executor
+// hands it to the provider: an M-of-N init needs exactly N officers.
+func TestPhase35_CeremonyInitOfficers(t *testing.T) {
+	r := NewToolRegistry(nil, logging.DefaultLogger())
+	var schema map[string]interface{}
+	for _, tool := range r.ListTools() {
+		if tool.Name == "platform_ceremony_init" {
+			schema = tool.InputSchema
+		}
+	}
+	props, _ := schema["properties"].(map[string]interface{})
+	officers, _ := props["officers"].(map[string]interface{})
+	if officers["type"] != "array" {
+		t.Fatalf("platform_ceremony_init: officers not an array in the schema: %v", props["officers"])
+	}
+	items, _ := officers["items"].(map[string]interface{})
+	itemProps, _ := items["properties"].(map[string]interface{})
+	for _, field := range []string{"username", "csr_pem"} {
+		if _, ok := itemProps[field]; !ok {
+			t.Errorf("platform_ceremony_init: officer item lacks %q: %v", field, items)
+		}
+	}
+
+	rec := &officersRecordingProvider{phase35StubProvider: &phase35StubProvider{}}
+	r.service = rec
+	list := []interface{}{map[string]interface{}{"username": "alice", "csr_pem": "CSR-A"}}
+	if _, handled, err := r.dispatchPhase35Tool(context.Background(), "platform_ceremony_init", map[string]interface{}{
+		"threshold": "1-of-1",
+		"officers":  list,
+	}); !handled || err != nil {
+		t.Fatalf("dispatch: handled=%v err=%v", handled, err)
+	}
+	got, _ := rec.initArgs["officers"].([]interface{})
+	if len(got) != 1 {
+		t.Fatalf("executor did not pass officers: %v", rec.initArgs)
+	}
+}
+
 func TestPhase35_NotConfigured(t *testing.T) {
 	// Registry with a nil service provider — dispatch returns
 	// ErrPhase35NotConfigured for every tool.
