@@ -13,6 +13,9 @@ import {
 } from "@/components/features/platform";
 import { usePlatform, useApi } from "@/hooks";
 import { PlatformVersionCard } from "@/components/features/platform/platform-version-card";
+import { PlatformProbesCard } from "@/components/features/platform/platform-probes-card";
+import { PlatformEntityTypesCard } from "@/components/features/platform/platform-entity-types-card";
+import { PlatformShutdownCard } from "@/components/features/platform/platform-shutdown-card";
 import { useToast } from "@/hooks/use-toast";
 import type { SystemHealth, ServiceHealth } from "@/types/platform";
 
@@ -218,6 +221,12 @@ export default function HealthPage() {
         </div>
       </PageHeader>
       <PlatformVersionCard />
+      <PlatformProbesCard />
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <PlatformEntityTypesCard />
+        <PlatformShutdownCard />
+      </div>
 
       {health && (
         <>

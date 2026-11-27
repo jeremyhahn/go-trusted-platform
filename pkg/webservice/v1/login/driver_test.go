@@ -924,6 +924,38 @@ func TestDriverRefusesAWorkspaceSessionWhoseRolesCannotBeResolved(t *testing.T) 
 	}
 }
 
+// inactiveAccountError is a role resolver failure for an account whose IAM
+// lifecycle refuses it, shaped like the rest/iam error without importing it.
+type inactiveAccountError struct{ lifecycle string }
+
+func (e inactiveAccountError) Error() string {
+	return "the workspace account is " + e.lifecycle
+}
+
+func (e inactiveAccountError) InactiveLifecycle() string { return e.lifecycle }
+
+// A disabled, suspended, locked or deleting workspace account authenticated
+// but must not land: the session is refused with 403 and none is minted.
+func TestDriverRefusesAWorkspaceSessionToAnInactiveAccount(t *testing.T) {
+	issuer := newTestIssuer()
+	roles := &fakeRoles{err: inactiveAccountError{lifecycle: "disabled"}}
+
+	recorder, _ := finishFIDO2WithRoles(t, issuer, newTestWorkspaces(), roles)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for an inactive account, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if issuer.calls != 0 {
+		t.Fatalf("no session may be minted for an inactive account, got %d", issuer.calls)
+	}
+	body := recorder.Body.String()
+	for _, token := range []string{"platform.session.token", "bearer-xyz", "refresh-xyz"} {
+		if strings.Contains(body, token) {
+			t.Fatalf("the refusal carries the token %q: %s", token, body)
+		}
+	}
+}
+
 func TestWorkspaceRolesErrorNamesThePrincipalAndUnwrapsItsCause(t *testing.T) {
 	cause := errors.New("iam unreachable")
 	err := &WorkspaceRolesError{TenantID: "workspace-a", Subject: "operator@platform", Cause: cause}
