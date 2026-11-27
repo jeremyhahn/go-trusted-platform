@@ -4,6 +4,8 @@
  * AttestationQuoteCard: GetAttestationQuote and VerifyAttestationQuote
  * through the SDK AttestationService (#2038). Each button sits in <Gated>
  * on the server's route, so a node without attestation withholds it.
+ * A verify needs the expected nonce, so a replayed quote is never shown as
+ * verified.
  */
 
 import * as React from "react";
@@ -158,6 +160,10 @@ export function AttestationQuoteCard() {
       setVerifyError(`Invalid quote JSON: ${errorText(err)}`);
       return;
     }
+    if (expectedNonce.trim() === "") {
+      setVerifyError("Enter the expected nonce: without it the control plane checks only the quote signature, not its freshness");
+      return;
+    }
     const seq = ++verifySeq.current;
     // An input changed while the verify was in flight: its answer is for other inputs.
     const stale = () => seq !== verifySeq.current;
@@ -288,7 +294,7 @@ export function AttestationQuoteCard() {
             />
           </div>
           <div className="grid gap-1">
-            <Label htmlFor="attestation-verify-nonce">Expected nonce (base64)</Label>
+            <Label htmlFor="attestation-verify-nonce">Expected nonce (base64, required)</Label>
             <Input
               id="attestation-verify-nonce"
               data-testid="attestation-verify-nonce"
