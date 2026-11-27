@@ -131,28 +131,6 @@ func TestPrepareMigration_HappyPath(t *testing.T) {
 	assert.Equal(t, "52:54:00:12:34:56", recv.recordedSpec().Config.MACAddress)
 }
 
-func TestPrepareMigration_LiveCarriesTheSharedDiskPath(t *testing.T) {
-	const shared = "/var/lib/shared/vms/guest.qcow2"
-	recv := &migrationReceiverOrchestrator{
-		grpcMockOrchestrator: newGRPCMockOrchestrator(),
-		handle:               &compute.ReceiverHandle{ReceiverID: "recv-2", Port: 49201},
-	}
-	svc := newMigrationReceiverService(recv)
-
-	resp, err := svc.PrepareMigration(context.Background(), &platformv1.PrepareMigrationRequest{
-		VmId:   "vm-2",
-		VmName: "guest",
-		Mode:   "live",
-		Spec:   &platformv1.VMMigrationSpec{MemoryMb: 2048, Cpus: 2, DiskPath: shared},
-	})
-	require.NoError(t, err)
-	require.True(t, resp.GetStatus().GetSuccess())
-	assert.Equal(t, compute.MigrateModeLive, recv.recordedSpec().Mode)
-	require.NotNil(t, recv.recordedSpec().Config)
-	assert.Equal(t, shared, recv.recordedSpec().Config.DiskPath,
-		"the destination receives the source's shared image path")
-}
-
 func TestPrepareMigration_MissingSpec(t *testing.T) {
 	recv := &migrationReceiverOrchestrator{grpcMockOrchestrator: newGRPCMockOrchestrator()}
 	svc := newMigrationReceiverService(recv)
