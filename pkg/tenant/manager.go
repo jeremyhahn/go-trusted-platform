@@ -1276,18 +1276,20 @@ func (m *Manager) getFromIAMByName(ctx context.Context, name string) (*iam.Tenan
 	return nil, ErrTenantNotFound{Name: name}
 }
 
-// listFromIAM walks every IAM tenant page by NextPageToken and returns the
-// limit/offset window of the full list. The total is the number of tenants
-// collected rather than Pagination.TotalCount, because the embedded IAM list
-// handler reports TotalCount 0; and the offset is applied after the walk,
-// because IAM pages by token, not by offset.
+// listFromIAM reads the whole IAM tenant list and returns its limit/offset
+// window. It asks for page size 0: the embedded IAM list handler ignores page
+// tokens and returns no pagination, but answers page size 0 with every
+// tenant; a token-paging backend answers it with its default page and a
+// NextPageToken, which the walk follows. The total is the number of tenants
+// collected rather than Pagination.TotalCount, which the embedded handler
+// reports as 0, and the limit/offset window is cut after the walk.
 func (m *Manager) listFromIAM(ctx context.Context, limit, offset int) ([]iam.Tenant, int, error) {
 	var all []iam.Tenant
 	seen := make(map[string]struct{})
 	token := ""
 	for {
 		resp, err := m.iamTenantClient.List(ctx, &iam.ListTenantsRequest{
-			PageSize:  limit,
+			PageSize:  0,
 			PageToken: token,
 		})
 		if err != nil {
