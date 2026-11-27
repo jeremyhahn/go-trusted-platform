@@ -139,9 +139,13 @@ func (h *ceremonyQUICHandlers) init(ctx context.Context, payload []byte) *quicwi
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
+	var officers []CeremonyOfficer
+	for _, o := range in.Officers {
+		officers = append(officers, CeremonyOfficer{Username: o.Username, CSRPEM: o.CSRPEM})
+	}
 	out, err := h.service.Init(ctx, &CeremonyInitRequest{
 		SOPIN: in.SOPIN, UserPIN: in.UserPIN, Threshold: in.Threshold, Hostname: in.Hostname,
-		SANs: in.SANs, CredentialSealStrategy: in.CredentialSealStrategy,
+		SANs: in.SANs, CredentialSealStrategy: in.CredentialSealStrategy, Officers: officers,
 	})
 	if err != nil {
 		return errResponseFrom(err)

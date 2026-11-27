@@ -31,6 +31,10 @@ import (
 var ceremonyRequestEncoders = map[string]categoryRequestEncoder{
 	platformv1.CeremonyService_Init_FullMethodName: requestEncoder(platformv1.CeremonyService_Init_FullMethodName,
 		func(r *platformv1.CeremonyInitRequest) (interface{}, error) {
+			var officers []quicwire.CeremonyInitOfficerReq
+			for _, o := range r.GetOfficers() {
+				officers = append(officers, quicwire.CeremonyInitOfficerReq{Username: o.GetUsername(), CSRPEM: o.GetCsrPem()})
+			}
 			return &quicwire.CeremonyInitReq{
 				SOPIN:                  r.GetSoPin(),
 				UserPIN:                r.GetUserPin(),
@@ -38,6 +42,7 @@ var ceremonyRequestEncoders = map[string]categoryRequestEncoder{
 				Hostname:               r.GetHostname(),
 				SANs:                   r.GetSans(),
 				CredentialSealStrategy: r.GetCredentialSealStrategy(),
+				Officers:               officers,
 			}, nil
 		}),
 	platformv1.CeremonyService_ClaimCertBegin_FullMethodName: requestEncoder(platformv1.CeremonyService_ClaimCertBegin_FullMethodName,

@@ -21,6 +21,7 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"github.com/jeremyhahn/go-qrdb/pkg/auth"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -95,11 +96,16 @@ func (r *Router) RegisterRoutes(parent *mux.Router) {
 
 // route sets Cache-Control: no-store before anything answers, the scope
 // check included, then runs handler behind the scope check, which refuses
-// every request when no scope authorizer is set.
+// every request when no scope authorizer is set. It also puts the request's
+// TLS state into the context, where the embedded ceremony service reads the
+// client certificate that authenticates a share claim.
 func (r *Router) route(scope string, handler http.HandlerFunc) http.Handler {
 	scoped := r.requireScope(scope, handler)
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
+		if req.TLS != nil {
+			req = req.WithContext(auth.WithTLSState(req.Context(), req.TLS))
+		}
 		scoped.ServeHTTP(w, req)
 	})
 }

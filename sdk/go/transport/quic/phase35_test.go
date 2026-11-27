@@ -101,27 +101,17 @@ func phase35Cases() []phase35Case {
 	device := quicwire.FIDO2Device{ID: "k1", Path: "/dev/hidraw0", Manufacturer: "Yubico", Product: "Key", ProductID: 1031, VendorID: 4176}
 	return []phase35Case{
 		{
+			method: platformv1.CeremonyService_Init_FullMethodName, opcode: quicwire.OpCeremonyCategory, subOp: quicwire.CeremonySubInit,
 			// M-of-N init: the officers must reach the daemon, or the
 			// backend refuses the request for a wrong officer count.
-			method: platformv1.CeremonyService_Init_FullMethodName, opcode: quicwire.OpCeremonyCategory, subOp: quicwire.CeremonySubInit,
-			request: &platformv1.CeremonyInitRequest{SoPin: "so", Threshold: "2-of-2", Officers: []*platformv1.CeremonyInitOfficer{
-				{Username: "alice", CsrPem: "CSR-A"}, {Username: "bob", CsrPem: "CSR-B"},
-			}},
-			wantWire: &quicwire.CeremonyInitReq{SOPIN: "so", Threshold: "2-of-2", Officers: []quicwire.CeremonyInitOfficerReq{
-				{Username: "alice", CSRPEM: "CSR-A"}, {Username: "bob", CSRPEM: "CSR-B"},
-			}},
-			wireResp: &quicwire.CeremonyInitResp{CeremonyID: "c2", State: "in_progress", InitializedAt: wireTime},
-			reply:    &platformv1.CeremonyInitResponse{},
-			check: func(t *testing.T, r interface{}) {
-				if got := r.(*platformv1.CeremonyInitResponse); got.GetCeremonyId() != "c2" {
-					t.Errorf("reply = %v", got)
-				}
-			},
-		},
-		{
-			method: platformv1.CeremonyService_Init_FullMethodName, opcode: quicwire.OpCeremonyCategory, subOp: quicwire.CeremonySubInit,
-			request:  &platformv1.CeremonyInitRequest{SoPin: "so", UserPin: "u", Threshold: "2-of-3", Hostname: "h", Sans: []string{"a"}, CredentialSealStrategy: "tpm"},
-			wantWire: &quicwire.CeremonyInitReq{SOPIN: "so", UserPIN: "u", Threshold: "2-of-3", Hostname: "h", SANs: []string{"a"}, CredentialSealStrategy: "tpm"},
+			request: &platformv1.CeremonyInitRequest{SoPin: "so", UserPin: "u", Threshold: "2-of-3", Hostname: "h", Sans: []string{"a"}, CredentialSealStrategy: "tpm",
+				Officers: []*platformv1.CeremonyInitOfficer{
+					{Username: "alice", CsrPem: "CSR-A"}, {Username: "bob", CsrPem: "CSR-B"}, {Username: "carol", CsrPem: "CSR-C"},
+				}},
+			wantWire: &quicwire.CeremonyInitReq{SOPIN: "so", UserPIN: "u", Threshold: "2-of-3", Hostname: "h", SANs: []string{"a"}, CredentialSealStrategy: "tpm",
+				Officers: []quicwire.CeremonyInitOfficerReq{
+					{Username: "alice", CSRPEM: "CSR-A"}, {Username: "bob", CSRPEM: "CSR-B"}, {Username: "carol", CSRPEM: "CSR-C"},
+				}},
 			wireResp: &quicwire.CeremonyInitResp{
 				CeremonyID: "c1", State: "in_progress", InitializedAt: wireTime,
 				AdminCertPEM: "ADMIN-CERT", AdminKeyPEM: "ADMIN-KEY", SPKIPin: "PIN",

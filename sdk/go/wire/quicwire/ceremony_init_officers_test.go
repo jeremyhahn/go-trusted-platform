@@ -3,6 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-only
 
+//go:build codec_msgpack
+
 package quicwire
 
 import (

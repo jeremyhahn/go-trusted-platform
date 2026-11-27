@@ -21,12 +21,20 @@ import "time"
 
 // CeremonyInitReq is the QUIC ceremony init request payload.
 type CeremonyInitReq struct {
-	SOPIN                  string   `codec:"so_pin"`
-	UserPIN                string   `codec:"user_pin"`
-	Threshold              string   `codec:"threshold"`
-	Hostname               string   `codec:"hostname"`
-	SANs                   []string `codec:"sans"`
-	CredentialSealStrategy string   `codec:"credential_seal_strategy"`
+	SOPIN                  string                   `codec:"so_pin"`
+	UserPIN                string                   `codec:"user_pin"`
+	Threshold              string                   `codec:"threshold"`
+	Hostname               string                   `codec:"hostname"`
+	SANs                   []string                 `codec:"sans"`
+	CredentialSealStrategy string                   `codec:"credential_seal_strategy"`
+	Officers               []CeremonyInitOfficerReq `codec:"officers"`
+}
+
+// CeremonyInitOfficerReq names one M-of-N officer and the CSR their
+// certificate is issued from.
+type CeremonyInitOfficerReq struct {
+	Username string `codec:"username"`
+	CSRPEM   string `codec:"csr_pem"`
 }
 
 // CeremonyInitResp is the QUIC ceremony init response payload.

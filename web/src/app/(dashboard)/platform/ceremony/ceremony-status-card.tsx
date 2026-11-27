@@ -54,7 +54,9 @@ interface StatusState {
   loading: boolean;
 }
 
-export function CeremonyStatusCard() {
+// refreshKey: a change fetches the status again. The last status stays on
+// screen until the new answer arrives.
+export function CeremonyStatusCard({ refreshKey = 0 }: { refreshKey?: number }) {
   const ceremony = useCeremony();
   const [state, setState] = React.useState<StatusState>({ loading: true });
 
@@ -71,7 +73,7 @@ export function CeremonyStatusCard() {
     return () => {
       cancelled = true;
     };
-  }, [ceremony]);
+  }, [ceremony, refreshKey]);
 
   const { status, error, loading } = state;
 
