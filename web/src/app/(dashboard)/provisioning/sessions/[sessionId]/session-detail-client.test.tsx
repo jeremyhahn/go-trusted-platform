@@ -45,9 +45,21 @@ vi.mock('@/components/ui/select', () => ({
 const SESSION_PATH = 'GET /api/v1/provisioning/sessions/sess-1';
 const PROFILES_PATH = 'POST /api/v1/device/profiles';
 const FULFIL_PATH = 'POST /api/v1/provisioning/sessions/sess-1/fulfill';
+const SUBMIT = 'Create Profile and Provision Device';
 const TEMPLATES_PATH = 'GET /api/v1/device/templates';
 const FROM_TEMPLATE_PATH = 'POST /api/v1/device/templates/7/create-profile';
-const SUBMIT = 'Create Profile and Provision Device';
+const READ_OP = 'GET /api/v1/provisioning/sessions/{sessionID}';
+const FULFIL_OP = 'POST /api/v1/provisioning/sessions/{sessionID}/fulfill';
+const NOT_CONFIGURED = 'not-configured: provisioning';
+
+// The capabilities answer over the two ops this page uses; an op in `off` is
+// offered disabled, with the reason a server gives for an unconfigured service.
+function caps(off: string[] = []): Answer {
+  const capabilities = [READ_OP, FULFIL_OP].map((op) =>
+    off.includes(op) ? { op, kind: 'route', enabled: false, reason: NOT_CONFIGURED } : { op, kind: 'route', enabled: true }
+  );
+  return ok({ capabilities, total: capabilities.length, enabled: capabilities.filter((c) => c.enabled).length });
+}
 
 function storedSession(fulfilled: boolean): Answer {
   return ok({
@@ -64,6 +76,7 @@ function baseRoutes(): Record<string, Answer> {
   return {
     [SESSION_PATH]: storedSession(false),
     [TEMPLATES_PATH]: ok([]),
+    'GET /api/v1/capabilities': caps(),
   };
 }
 
@@ -266,5 +279,39 @@ describe('SessionDetailClient', () => {
     expect(sent.some((r) => r.path.endsWith('/fulfill'))).toBe(false);
     expect(screen.queryByRole('heading', { name: 'Device Provisioned' })).toBeNull();
     expect(provisionedToasts()).toBe(provisionedBefore);
+  });
+
+  it('withholds both provision buttons when the server does not offer the fulfil', async () => {
+    const sent = stubControlPlane({ ...baseRoutes(), 'GET /api/v1/capabilities': caps([FULFIL_OP]) });
+    await renderPage();
+
+    await waitFor(() => {
+      const button = screen.getByRole('button', { name: SUBMIT });
+      expect(button.getAttribute('data-capability-op')).toBe(FULFIL_OP);
+      expect(button.getAttribute('data-capability-enabled')).toBe('false');
+      expect(button.getAttribute('title')).toBe(NOT_CONFIGURED);
+    });
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Custom Profile' }), { button: 0 });
+    fireEvent.change(await screen.findByLabelText('Profile Name'), { target: { value: 'rack-07' } });
+    const custom = screen.getByRole('button', { name: SUBMIT });
+    expect(custom.getAttribute('data-capability-op')).toBe(FULFIL_OP);
+    expect((custom as HTMLButtonElement).disabled).toBe(true);
+    expect(custom.getAttribute('title')).toBe(NOT_CONFIGURED);
+    await act(async () => {
+      fireEvent.click(custom);
+    });
+
+    expect(sent.some((r) => r.path.endsWith('/fulfill'))).toBe(false);
+    expect(sent.some((r) => r.path === '/api/v1/device/profiles')).toBe(false);
+  });
+
+  it('sends no session read and says so when the server does not offer it', async () => {
+    const sent = stubControlPlane({ ...baseRoutes(), 'GET /api/v1/capabilities': caps([READ_OP]) });
+    render(withControlPlane(<SessionDetailClient />));
+
+    const notice = await screen.findByTestId('session-not-enabled');
+    expect(notice.textContent).toContain(NOT_CONFIGURED);
+    expect(sent.some((r) => r.path === '/api/v1/provisioning/sessions/sess-1')).toBe(false);
   });
 });

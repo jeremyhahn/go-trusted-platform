@@ -1309,6 +1309,16 @@ func (e ErrClusterRESTUnavailable) Error() string {
 	return "cluster REST routes unavailable: " + e.Reason
 }
 
+// ErrSwitchRESTUnavailable reports that the switch routes could not be
+// mounted on the daemon REST listener.
+type ErrSwitchRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrSwitchRESTUnavailable) Error() string {
+	return "switch REST routes unavailable: " + e.Reason
+}
+
 // ErrPIVRESTUnavailable reports that the PIV routes could not be mounted on
 // the daemon REST listener.
 type ErrPIVRESTUnavailable struct {

@@ -123,6 +123,79 @@ func TestGenerateModuleSigningKeyRefusesOverwrite(t *testing.T) {
 	}
 }
 
+// TestGenerateModuleSigningKeyForceOverStaleWorldReadableFile pins that a
+// forced generation over an existing world-readable file leaves the bundle
+// owner-only: truncating in place would keep the stale 0644 mode.
+func TestGenerateModuleSigningKeyForceOverStaleWorldReadableFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "module-signing-key.pem")
+	if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+		t.Fatalf("write stale file: %v", err)
+	}
+	// Chmod so the process umask cannot hide the world-readable mode.
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("chmod stale file: %v", err)
+	}
+
+	cfg := &ModuleSigningKeyConfig{Path: path, KeyBits: 2048, Force: true}
+	if _, err := GenerateModuleSigningKey(context.Background(), cfg); err != nil {
+		t.Fatalf("forced generation: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat bundle: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("bundle mode = %#o, want 0600", got)
+	}
+	if _, err := LoadModuleSigningKey(path); err != nil {
+		t.Errorf("LoadModuleSigningKey after forced generation: %v", err)
+	}
+}
+
+// TestGenerateModuleSigningKeyForceDoesNotWriteThroughSymlink pins that a
+// forced generation replaces a symlink at the bundle path with an owner-only
+// regular file and leaves the symlink's target untouched.
+func TestGenerateModuleSigningKeyForceDoesNotWriteThroughSymlink(t *testing.T) {
+	tmp := t.TempDir()
+	outside := filepath.Join(tmp, "outside.pem")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+	dir := filepath.Join(tmp, "keys")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	path := filepath.Join(dir, "module-signing-key.pem")
+	if err := os.Symlink(outside, path); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	cfg := &ModuleSigningKeyConfig{Path: path, KeyBits: 2048, Force: true}
+	if _, err := GenerateModuleSigningKey(context.Background(), cfg); err != nil {
+		t.Fatalf("forced generation: %v", err)
+	}
+
+	got, err := os.ReadFile(outside)
+	if err != nil {
+		t.Fatalf("read outside file: %v", err)
+	}
+	if string(got) != "outside" {
+		t.Errorf("symlink target was written through (%d bytes now, want the 7-byte original)", len(got))
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("lstat bundle: %v", err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Errorf("bundle is %v, want a regular file", info.Mode().Type())
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("bundle mode = %#o, want 0600", perm)
+	}
+}
+
 func TestGenerateModuleSigningKeyInvalidConfig(t *testing.T) {
 	ctx := context.Background()
 
@@ -215,5 +288,50 @@ func TestLoadModuleSigningKeyErrors(t *testing.T) {
 	}
 	if _, err := LoadModuleSigningKey(garbage); !errors.As(err, &malformed) {
 		t.Errorf("garbage error = %v, want ErrModuleKeyMalformed", err)
+	}
+}
+
+// TestParseModuleSigningBundleWipesTheKeyBuffer pins that parsing a bundle
+// zeroes the read buffer it was handed (the file's private key bytes) on
+// success and on error, while the parsed certificate stays intact.
+func TestParseModuleSigningBundleWipesTheKeyBuffer(t *testing.T) {
+	t.Run("valid bundle", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "module-signing-key.pem")
+		cfg := &ModuleSigningKeyConfig{Path: path, KeyBits: 2048}
+		if _, err := GenerateModuleSigningKey(context.Background(), cfg); err != nil {
+			t.Fatalf("generate: %v", err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read bundle: %v", err)
+		}
+
+		msk, err := parseModuleSigningBundle(path, data)
+		if err != nil {
+			t.Fatalf("parseModuleSigningBundle: %v", err)
+		}
+		if _, err := x509.ParseCertificate(msk.Certificate.Raw); err != nil {
+			t.Errorf("certificate Raw no longer parses: %v", err)
+		}
+		assertAllZero(t, data)
+	})
+
+	t.Run("not PEM", func(t *testing.T) {
+		data := []byte("not pem at all")
+		_, err := parseModuleSigningBundle("bundle.pem", data)
+		var malformed ErrModuleKeyMalformed
+		if !errors.As(err, &malformed) {
+			t.Fatalf("err = %v, want ErrModuleKeyMalformed", err)
+		}
+		assertAllZero(t, data)
+	})
+}
+
+func assertAllZero(t *testing.T, data []byte) {
+	t.Helper()
+	for i, b := range data {
+		if b != 0 {
+			t.Fatalf("buffer byte %d = %#x, want the whole %d-byte buffer zeroed", i, b, len(data))
+		}
 	}
 }

@@ -31,6 +31,7 @@ import (
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/registry"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
@@ -326,6 +327,35 @@ func TestPushImage_HeadersBuildMetadata(t *testing.T) {
 	assert.Equal(t, int64(5), out.BytesReceived)
 }
 
+func TestPushImage_SignAndKeyHeadersBuildAnnotations(t *testing.T) {
+	svc := &fakeRegistryService{push: &grpcapi.RegistryPushResponse{BytesReceived: 5}}
+	req := httptest.NewRequest(http.MethodPost, "/compute/images", strings.NewReader("image"))
+	req.Header.Set("X-Trusted-Platform-Repository", "library/alpine")
+	req.Header.Set("X-Trusted-Platform-Encrypt", "true")
+	req.Header.Set("X-Trusted-Platform-Encrypt-Key-ID", "enc-key")
+	req.Header.Set("X-Trusted-Platform-Sign", "true")
+	req.Header.Set("X-Trusted-Platform-Signing-Key-ID", "sign-key")
+	rec := serve(t, newImagesRouter(svc), req)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NotNil(t, svc.pushMeta)
+	assert.Equal(t, map[string]string{
+		registry.PushAnnotationEncrypt:      "true",
+		registry.PushAnnotationKeyID:        "enc-key",
+		registry.PushAnnotationSign:         "true",
+		registry.PushAnnotationSigningKeyID: "sign-key",
+	}, svc.pushMeta.Annotations)
+
+	svc = &fakeRegistryService{push: &grpcapi.RegistryPushResponse{BytesReceived: 5}}
+	req = httptest.NewRequest(http.MethodPost, "/compute/images", strings.NewReader("image"))
+	req.Header.Set("X-Trusted-Platform-Repository", "library/alpine")
+	rec = serve(t, newImagesRouter(svc), req)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NotNil(t, svc.pushMeta)
+	assert.NotContains(t, svc.pushMeta.Annotations, registry.PushAnnotationSign)
+}
+
 func TestPushImage_QueryFallbackDefaultsTagToLatest(t *testing.T) {
 	svc := &fakeRegistryService{push: &grpcapi.RegistryPushResponse{}}
 	req := httptest.NewRequest(http.MethodPost, "/compute/images/?repository=busybox", strings.NewReader("image"))
@@ -339,6 +369,34 @@ func TestPushImage_QueryFallbackDefaultsTagToLatest(t *testing.T) {
 		Tag:         "latest",
 		Annotations: map[string]string{},
 	}, svc.pushMeta)
+}
+
+// A push body past the handler's cap is refused with 413 before the
+// service sees it, so a caller cannot make the handler buffer an
+// unbounded upload (#1690, Codex round 6).
+func TestPushImage_OversizedBodyIs413(t *testing.T) {
+	const limit = 1024
+	svc := &fakeRegistryService{push: &grpcapi.RegistryPushResponse{}}
+	logger := logging.DefaultLogger()
+	h := NewHandlers(logger, svc, response.NewResponseWriter(logger, nil))
+	h.SetMaxPushBytes(limit)
+
+	req := httptest.NewRequest(http.MethodPost, "/compute/images", strings.NewReader(strings.Repeat("x", limit+1)))
+	req.Header.Set("X-Trusted-Platform-Repository", "library/alpine")
+	rec := httptest.NewRecorder()
+	h.PushImage(rec, req)
+
+	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code, rec.Body.String())
+	assert.Contains(t, decodeEnvelope(t, rec).Error, (&ErrUploadTooLarge{Limit: limit}).Error())
+	assert.Nil(t, svc.pushMeta, "the service received an oversized push")
+
+	// A body at the cap still reaches the service.
+	req = httptest.NewRequest(http.MethodPost, "/compute/images", strings.NewReader(strings.Repeat("x", limit)))
+	req.Header.Set("X-Trusted-Platform-Repository", "library/alpine")
+	rec = httptest.NewRecorder()
+	h.PushImage(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Len(t, svc.pushBody, limit)
 }
 
 func TestPushImage_Errors(t *testing.T) {

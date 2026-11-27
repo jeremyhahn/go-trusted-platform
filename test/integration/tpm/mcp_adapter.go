@@ -715,6 +715,13 @@ func (m *MCPAdapter) Seal(ctx context.Context, opts SealOptions) (*SealResult, e
 	args := map[string]interface{}{
 		"data": base64.StdEncoding.EncodeToString(opts.Data),
 	}
+	// Seal under the key name the unseal asks for (#1690).
+	if opts.CN != "" {
+		args["cn"] = opts.CN
+	}
+	if opts.Password != "" {
+		args["password"] = opts.Password
+	}
 
 	result, err := m.callTool(ctx, MCPToolTPMSeal, args)
 	if err != nil {
@@ -744,6 +751,9 @@ func (m *MCPAdapter) Seal(ctx context.Context, opts SealOptions) (*SealResult, e
 func (m *MCPAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealResult, error) {
 	args := map[string]interface{}{
 		"cn": opts.CN,
+	}
+	if opts.Password != "" {
+		args["password"] = opts.Password
 	}
 
 	result, err := m.callTool(ctx, MCPToolTPMUnseal, args)

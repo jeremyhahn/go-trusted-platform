@@ -253,7 +253,7 @@ datastore:
 debug: true
 debug-secrets: true
 domain: dev.example.com
-hostname: omega
+hostname: host-a
 hostmaster: hostmaster@dev.example.com
 log-dir: trusted-data/log
 platform-dir: trusted-data

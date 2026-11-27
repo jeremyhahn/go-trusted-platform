@@ -16,7 +16,6 @@ package registry
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -25,8 +24,10 @@ import (
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/registry"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 // Handlers is the REST surface bound to a RegistryService.
@@ -34,12 +35,22 @@ type Handlers struct {
 	logger     *logging.Logger
 	service    grpcapi.RegistryService
 	respWriter response.HttpWriter
+	// maxPushBytes bounds the PushImage body; past it the push is 413.
+	maxPushBytes int64
 }
 
 // NewHandlers constructs a Handlers value. service may be nil — every
 // handler nil-checks and returns 503 in that case.
 func NewHandlers(logger *logging.Logger, service grpcapi.RegistryService, respWriter response.HttpWriter) *Handlers {
-	return &Handlers{logger: logger, service: service, respWriter: respWriter}
+	return &Handlers{logger: logger, service: service, respWriter: respWriter, maxPushBytes: defaultMaxBlobBytes}
+}
+
+// SetMaxPushBytes sets the largest PushImage body the handler reads;
+// a non-positive n keeps the current cap.
+func (h *Handlers) SetMaxPushBytes(n int64) {
+	if n > 0 {
+		h.maxPushBytes = n
+	}
 }
 
 // ImageSummary is the wire-shape returned by ListImages. It is
@@ -150,6 +161,9 @@ func (h *Handlers) GetImage(w http.ResponseWriter, r *http.Request) {
 //	X-Trusted-Platform-Repository: repo name
 //	X-Trusted-Platform-Tag:        tag (optional; default "latest")
 //	X-Trusted-Platform-Encrypt:    "true" to encrypt-on-push
+//	X-Trusted-Platform-Encrypt-Key-ID: encryption key (optional; default key)
+//	X-Trusted-Platform-Sign:       "true" to sign the manifest
+//	X-Trusted-Platform-Signing-Key-ID: signing key (optional; default key)
 //	X-Trusted-Platform-Overwrite:  "true" to allow overwrite
 //
 // The body is application/x-trusted-platform-image (JSON envelope).
@@ -158,8 +172,21 @@ func (h *Handlers) PushImage(w http.ResponseWriter, r *http.Request) {
 		h.respWriter.Error500(w, r, ErrRegistryNotConfigured{})
 		return
 	}
-	body, err := io.ReadAll(r.Body)
+	limit := h.maxPushBytes
+	if limit <= 0 {
+		limit = defaultMaxBlobBytes
+	}
+	body, err := readBounded(w, r, limit)
 	if err != nil {
+		var tooLarge *ErrUploadTooLarge
+		if errors.As(err, &tooLarge) {
+			h.respWriter.Write(w, r, http.StatusRequestEntityTooLarge, restwire.WebServiceResponse{
+				Code:    http.StatusRequestEntityTooLarge,
+				Error:   err.Error(),
+				Success: false,
+			})
+			return
+		}
 		h.respWriter.Error400(w, r, err)
 		return
 	}
@@ -183,7 +210,16 @@ func (h *Handlers) PushImage(w http.ResponseWriter, r *http.Request) {
 	}
 	annotations := map[string]string{}
 	if r.Header.Get("X-Trusted-Platform-Encrypt") == "true" {
-		annotations["encrypt"] = "true"
+		annotations[registry.PushAnnotationEncrypt] = "true"
+	}
+	if keyID := r.Header.Get("X-Trusted-Platform-Encrypt-Key-ID"); keyID != "" {
+		annotations[registry.PushAnnotationKeyID] = keyID
+	}
+	if r.Header.Get("X-Trusted-Platform-Sign") == "true" {
+		annotations[registry.PushAnnotationSign] = "true"
+	}
+	if signingKeyID := r.Header.Get("X-Trusted-Platform-Signing-Key-ID"); signingKeyID != "" {
+		annotations[registry.PushAnnotationSigningKeyID] = signingKeyID
 	}
 	if r.Header.Get("X-Trusted-Platform-Overwrite") == "true" {
 		annotations[regsvc.AnnotationOverwrite] = "true"

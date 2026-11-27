@@ -166,6 +166,13 @@ var catalogRouteRPCs = map[string]string{
 	"POST /api/v1/cluster/join":      "/platform.v1.ClusterService/Join",
 	"POST /api/v1/cluster/leave":     "/platform.v1.ClusterService/Leave",
 
+	// Switch port operations (the switchapi router on the daemon listener).
+	"GET /api/v1/switches/{switch}/ports":                 "/platform.v1.SwitchService/ListPorts",
+	"GET /api/v1/switches/{switch}/ports/{port}":          "/platform.v1.SwitchService/GetPortStatus",
+	"POST /api/v1/switches/{switch}/ports/{port}/vlan":    "/platform.v1.SwitchService/SetPortVLAN",
+	"POST /api/v1/switches/{switch}/ports/{port}/enable":  "/platform.v1.SwitchService/EnablePort",
+	"POST /api/v1/switches/{switch}/ports/{port}/disable": "/platform.v1.SwitchService/DisablePort",
+
 	"GET /api/v1/sdn/overlay/status":          "/platform.v1.OverlayService/GetOverlayStatus",
 	"GET /api/v1/sdn/overlay/vteps":           "/platform.v1.OverlayService/ListVTEPs",
 	"GET /api/v1/sdn/overlay/vteps/{node_id}": "/platform.v1.OverlayService/GetVTEP",

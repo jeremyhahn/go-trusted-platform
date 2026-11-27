@@ -6,9 +6,10 @@ import type { ReactNode } from "react";
 // (network boundary, mocked here), formats match/actions/bytes/duration in
 // the table cells and adds or deletes flows.
 
-const { sdn, toast } = vi.hoisted(() => ({
+const { sdn, toast, capability } = vi.hoisted(() => ({
   sdn: { listBridges: vi.fn(), listFlows: vi.fn(), addFlow: vi.fn(), deleteFlow: vi.fn() },
   toast: vi.fn(),
+  capability: vi.fn(),
 }));
 
 vi.mock("@/hooks", async (importOriginal) => ({
@@ -18,11 +19,8 @@ vi.mock("@/hooks", async (importOriginal) => ({
 
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast }) }));
 
-// The header's Flush flows control is capability-gated (#2064); every op is
-// offered here.
-vi.mock("@/hooks/use-capabilities", () => ({
-  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
-}));
+// #2033 item 5: Gated reads the server's capabilities through this hook.
+vi.mock("@/hooks/use-capabilities", () => ({ useCapabilities: () => ({ loading: false, error: undefined, capability }) }));
 
 type Row = Record<string, unknown> & { id: string };
 type Column = { id?: string; accessorKey?: string; cell?: (ctx: { row: { getValue: (k: string) => unknown; original: Row } }) => ReactNode };
@@ -106,6 +104,8 @@ function withFlows(flows: unknown[]) {
 beforeEach(() => {
   for (const fn of Object.values(sdn)) fn.mockReset();
   toast.mockReset();
+  capability.mockReset();
+  capability.mockImplementation(() => ({ enabled: true }));
 });
 
 afterEach(() => {
@@ -324,5 +324,41 @@ describe("OpenFlowsPage", () => {
       expect(toast).toHaveBeenCalledWith({ title: "Failed to add flow", description: "table full", variant: "destructive" }),
     );
     expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+  });
+
+  it("withholds Add Flow Rule with the server's reason when POST /api/v1/sdn/bridges/{name}/flows is not offered", async () => {
+    capability.mockImplementation((op: string) =>
+      op === "POST /api/v1/sdn/bridges/{name}/flows" ? { enabled: false, reason: "not-configured: sdn" } : { enabled: true },
+    );
+    withFlows([]);
+    render(<OpenFlowsPage />);
+    await waitFor(() => expect(sdn.listFlows).toHaveBeenCalledTimes(1));
+
+    const add = screen.getByText("Add Flow Rule").closest("button") as HTMLButtonElement;
+    expect(add.disabled).toBe(true);
+    expect(add.getAttribute("title")).toBe("not-configured: sdn");
+    expect(add.getAttribute("data-capability-op")).toBe("POST /api/v1/sdn/bridges/{name}/flows");
+    expect(add.getAttribute("data-capability-enabled")).toBe("false");
+
+    fireEvent.click(add);
+    expect(screen.queryByText(/forwards traffic on bridge/)).toBeNull();
+    expect(sdn.addFlow).not.toHaveBeenCalled();
+  });
+
+  it("asks the gate for POST /api/v1/sdn/bridges/{name}/flows and leaves Add Flow Rule enabled when the server offers it", async () => {
+    withFlows([]);
+    render(<OpenFlowsPage />);
+    await waitFor(() => expect(sdn.listFlows).toHaveBeenCalledTimes(1));
+
+    expect(capability).toHaveBeenCalledWith("POST /api/v1/sdn/bridges/{name}/flows");
+    const add = screen.getByText("Add Flow Rule").closest("button") as HTMLButtonElement;
+    expect(add.getAttribute("data-capability-enabled")).toBe("true");
+    expect(add.disabled).toBe(false);
+
+    fireEvent.click(add);
+    await screen.findByText(/forwards traffic on bridge br-int/);
+    expect(screen.getByRole("button", { name: "Add" }).getAttribute("data-capability-op")).toBe(
+      "POST /api/v1/sdn/bridges/{name}/flows",
+    );
   });
 });

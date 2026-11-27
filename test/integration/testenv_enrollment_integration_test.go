@@ -100,6 +100,19 @@ func (e ErrMissingPrerequisite) Unwrap() error {
 	return e.Err
 }
 
+// iptablesFilterUsable reports whether the iptables binary chosen by pkg/testenv can list the filter table.
+func iptablesFilterUsable() error {
+	iptablesCmd := "iptables-legacy"
+	if _, err := exec.LookPath(iptablesCmd); err != nil {
+		iptablesCmd = "iptables"
+	}
+	out, err := exec.Command(iptablesCmd, "-t", "filter", "-L", "FORWARD", "-n").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s -t filter -L FORWARD -n: %w: %s", iptablesCmd, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // checkEnrollmentPrerequisites returns ErrMissingPrerequisite for the first
 // prerequisite the environment lacks: root for the isolated bridge and TAP
 // network, and QEMU for the server and client VMs.
@@ -144,6 +157,12 @@ func TestEnrollmentIntegration(t *testing.T) {
 		logger.Info("Running in full integration mode",
 			"server_iso", serverISO,
 			"client_iso", clientISO)
+	}
+
+	if !fullIntegrationMode {
+		if err := iptablesFilterUsable(); err != nil {
+			t.Skipf("iptables filter table unavailable on this host: %v", err)
+		}
 	}
 
 	// Create test work directory

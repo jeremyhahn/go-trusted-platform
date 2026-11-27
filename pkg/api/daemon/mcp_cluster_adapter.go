@@ -31,10 +31,10 @@ import (
 // transport calls, so all of them delegate to the same coordinator.
 //
 // The adapter is only compiled when the daemon is built with
-// `-tags cluster` — but nothing calls NewClusterServiceAdapter in any
-// build, so no ClusterServicer is set and every cluster transport answers
-// Unavailable with the tag as well as without it. This bridge is written
-// and unused. See #334; wiring is #336.
+// `-tags cluster`, and it is not what serve wires: serve and every embedded
+// host set the ClusterServicer from pkg/app/backends/cluster.go (over the
+// embedded go-quicbaas SDK) through appbackends.WireSDKBackends. Nothing
+// calls NewClusterServiceAdapter in any build. See #334.
 
 // clusterCore is the minimal subset of *ClusterService the adapter
 // depends on. Defining it as an interface (rather than wrapping the
@@ -60,7 +60,7 @@ type clusterServiceAdapter struct {
 // NewClusterServiceAdapter wraps a *ClusterService so it can be passed
 // to Daemon.SetClusterService. Returns nil if svc is nil so callers can
 // pass through optional services without checks.
-// Kept with no caller: the cluster registration lane hands the real ClusterService to the daemon through it.
+// It has no caller: serve sets its servicer from pkg/app/backends/cluster.go through appbackends.WireSDKBackends instead.
 func NewClusterServiceAdapter(svc *ClusterService) ClusterServicer {
 	if svc == nil {
 		return nil

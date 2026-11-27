@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -707,6 +708,54 @@ func TestMountISO(t *testing.T) {
 
 		if rw.lastStatus != http.StatusBadRequest {
 			t.Errorf("expected status 400, got %d", rw.lastStatus)
+		}
+	})
+
+	t.Run("invalid_iso_url", func(t *testing.T) {
+		cases := []struct {
+			name   string
+			isoURL string
+		}{
+			{name: "no_scheme", isoURL: "os.iso"},
+			{name: "unsupported_scheme", isoURL: "ftp://images.example.com/os.iso"},
+			{name: "blank", isoURL: "   "},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				called := false
+				rw := &mockResponseWriter{}
+				h, err := NewHandler(HandlerParams{
+					Logger: newTestLogger(),
+					BMCService: &mockBMCService{
+						mountISOFn: func(context.Context, uint64, string) error {
+							called = true
+							return nil
+						},
+					},
+					ResponseWriter: rw,
+				})
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+
+				body, _ := json.Marshal(MountISORequest{ISOURL: tc.isoURL})
+				req := httptest.NewRequest("POST", "/bmc/42/virtual-media", bytes.NewReader(body))
+				rec := httptest.NewRecorder()
+
+				router := newTestRouter("POST", "/bmc/{profileID}/virtual-media", h.MountISO)
+				router.ServeHTTP(rec, req)
+
+				if rw.lastStatus != http.StatusBadRequest {
+					t.Errorf("expected status 400, got %d", rw.lastStatus)
+				}
+				var invalid ErrInvalidISOURL
+				if !errors.As(rw.lastErr, &invalid) {
+					t.Errorf("expected ErrInvalidISOURL, got %T: %v", rw.lastErr, rw.lastErr)
+				}
+				if called {
+					t.Errorf("BMC MountISO was called for iso_url %q", tc.isoURL)
+				}
+			})
 		}
 	})
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -225,6 +226,7 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.overlayRoutes()
 	v1Router.ntpRoutes()
 	v1Router.vpnRoutes()
+	v1Router.bmcRoutes()
 	v1Router.proxyRoutes()
 	v1Router.appServiceRoutes()
 	v1Router.clusterRoutes()
@@ -861,19 +863,30 @@ func (v1Router *Router) overlayRoutes() {
 
 func (v1Router *Router) ntpRoutes() {
 	server := v1Router.restHandlerRegistry.NTPServiceServer()
+	// The daemon always builds the NTP service; without an `ntp:` section it
+	// has no backend and answers every RPC with Unavailable. Its routes go
+	// dark (503, not-configured) so the capabilities listing does not offer
+	// ops the node cannot serve.
+	var svc any = server
 	if server == nil {
-		v1Router.logger.Debug("NTP service server is nil - NTP routes not registered")
-		return
+		svc = nil
+	} else if c, ok := server.(interface{ Configured() bool }); ok && !c.Configured() {
+		svc = nil
 	}
-	r := restntp.NewNTPRouter(
-		v1Router.logger,
-		server,
-		v1Router.responseWriter)
-	// POST /ntp/step forces a clock correction. A node whose clock is
-	// wrong fails attestation, ACME issuance and token validation without
-	// any of those failures naming the clock (docs/ntp/user.md), which
-	// makes an anonymous stepper a denial-of-service primitive.
-	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+	v1Router.serviceRegistry.requireService(
+		v1Router.router, "ntp", "/ntp", svc,
+		func() {
+			r := restntp.NewNTPRouter(
+				v1Router.logger,
+				server,
+				v1Router.responseWriter)
+			// POST /ntp/step forces a clock correction. A node whose clock is
+			// wrong fails attestation, ACME issuance and token validation without
+			// any of those failures naming the clock (docs/ntp/user.md), which
+			// makes an anonymous stepper a denial-of-service primitive.
+			r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+		},
+	)
 }
 
 func (v1Router *Router) vpnRoutes() {
@@ -894,6 +907,41 @@ func (v1Router *Router) vpnRoutes() {
 	// there: operator work behind the admin gate, then vpn:read, vpn:write
 	// or vpn:admin per route, as on gRPC, QUIC and MCP.
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+}
+
+// bmcRoutes mounts /api/v1/bmc over the daemon's BMC REST handler (#2039),
+// with the route table the daemon REST listener serves. Power, boot, media,
+// provisioning, certificate and user control of bare metal is operator work
+// behind the admin gate, then each route's bmc: scope, as on gRPC, QUIC and
+// MCP; without a scope authorizer every route answers 403.
+func (v1Router *Router) bmcRoutes() {
+	handler := v1Router.restHandlerRegistry.BMCRestHandler()
+	if handler == nil {
+		v1Router.logger.Debug("BMC REST handler is nil - BMC routes not registered")
+		return
+	}
+	_, sessions, err := v1Router.authorization()
+	if err != nil {
+		v1Router.logger.Error(err,
+			"BMC routes not registered: the RBAC guard could not be built")
+		return
+	}
+	scopes := scopeRouteGuard{}
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		scopes.authorizer = scoped
+	}
+	// BMC profiles carry no tenant: they are system resources, so only
+	// sessions of the system tenant reach them.
+	guard := systemTenantScopeGuard{
+		scopes:       scopes,
+		systemTenant: sessions.RequireTenant(v1Router.restHandlerRegistry.TenantID()),
+	}
+	provisionRoutes := bmcwebsvc.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN), handler, guard)
+	// The provision handlers answer 503 until a bare metal backend is
+	// wired, so capabilities must not list those routes as enabled.
+	if !handler.ProvisioningConfigured() && v1Router.serviceRegistry != nil {
+		v1Router.serviceRegistry.recordUnavailable("baremetal", provisionRoutes...)
+	}
 }
 
 // proxyRoutes mounts the ProxyService routes on /api/v1/proxy (#2061), the
@@ -979,6 +1027,22 @@ func (g scopeRouteGuard) Require(scope string, next http.HandlerFunc) http.Handl
 		}
 	}
 	return g.authorizer.RequireScope(scope)(next).ServeHTTP
+}
+
+// systemTenantScopeGuard checks the system tenant, then the route's scope.
+// Without a tenant check it fails closed: every guarded route answers 403.
+type systemTenantScopeGuard struct {
+	scopes       scopeRouteGuard
+	systemTenant func(http.Handler) http.Handler
+}
+
+func (g systemTenantScopeGuard) Require(scope string, next http.HandlerFunc) http.HandlerFunc {
+	if g.systemTenant == nil {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		}
+	}
+	return g.systemTenant(g.scopes.Require(scope, next)).ServeHTTP
 }
 
 func (v1Router *Router) pxeRoutes() {
@@ -1230,5 +1294,10 @@ func (v1Router *Router) platformRoutes() {
 	platformRouter.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 	if v1Router.serviceRegistry != nil {
 		v1Router.serviceRegistry.markConfigured("platform", "/platform")
+		// The writes that answer 503 without a backend are listed
+		// not-configured, so the console does not offer them.
+		for route, name := range platformRouter.UnavailableRoutes() {
+			v1Router.serviceRegistry.recordUnavailable(name, route)
+		}
 	}
 }

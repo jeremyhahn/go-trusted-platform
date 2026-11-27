@@ -274,12 +274,34 @@ func (c *Client) FindConfigForDevice(ctx context.Context, ekSerial, macAddress s
 
 // AttestDevice verifies attestation evidence for a registered device.
 func (c *Client) AttestDevice(ctx context.Context, id uint64, evidence []byte) (*platformv1.AttestDeviceResponse, error) {
+	return c.AttestDeviceWithChallenge(ctx, id, "", evidence)
+}
+
+// AttestDeviceWithChallenge verifies the device's attestation evidence against
+// a server-issued challenge. challengeID is the challenge_id returned by
+// IssueAttestationChallenge, and the evidence's qualifying data must be that
+// challenge's nonce. An empty challengeID sends no challenge.
+func (c *Client) AttestDeviceWithChallenge(ctx context.Context, id uint64, challengeID string, evidence []byte) (*platformv1.AttestDeviceResponse, error) {
 	resp, err := c.grpc.AttestDevice(ctx, &platformv1.AttestDeviceRequest{
-		DeviceId: strconv.FormatUint(id, 10),
-		Evidence: evidence,
+		DeviceId:    strconv.FormatUint(id, 10),
+		Evidence:    evidence,
+		ChallengeId: challengeID,
 	})
 	if err != nil {
 		return nil, &ErrAttestDeviceFailed{ID: id, Cause: err}
+	}
+	return resp, nil
+}
+
+// IssueAttestationChallenge asks the server for a single-use attestation
+// challenge for the device: a challenge ID, the nonce the evidence must
+// quote, and the time the challenge expires.
+func (c *Client) IssueAttestationChallenge(ctx context.Context, id uint64) (*platformv1.IssueAttestationChallengeResponse, error) {
+	resp, err := c.grpc.IssueAttestationChallenge(ctx, &platformv1.IssueAttestationChallengeRequest{
+		DeviceId: strconv.FormatUint(id, 10),
+	})
+	if err != nil {
+		return nil, &ErrIssueAttestationChallengeFailed{ID: id, Cause: err}
 	}
 	return resp, nil
 }

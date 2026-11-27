@@ -16,9 +16,13 @@ package iam
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/transport/embedded"
 	"gopkg.in/yaml.v3"
 )
 
@@ -132,9 +136,70 @@ func (a *QuicBaaSIAMAdapter) GetUser(ctx context.Context, tenantID, userID strin
 	return a.client.User().Get(ctx, tenantID, userID)
 }
 
-// GetUserByEmail delegates to iamsdk.UserClient.GetByEmail.
+// emailLookupPageSize is the page size GetUserByEmail lists users with when
+// it falls back to reading the tenant's users.
+const emailLookupPageSize = 100
+
+// GetUserByEmail delegates to iamsdk.UserClient.GetByEmail. The embedded
+// transport of go-quicbaas v0.12.0-alpha routes no IAM.User/GetByEmail, so
+// login's workspace-role lookup (WorkspaceRoleResolver) would fail there;
+// only on that unknown-method error does GetUserByEmail read the tenant's
+// users instead, page by page, and return the first user whose canonical email
+// (canonicalEmail: trimmed and lower-cased) equals the canonical form of email,
+// as the upstream lookup matches. It answers an SDK not-found error only when the listing is
+// provably complete: the last page holds fewer than emailLookupPageSize users.
+// A full page with no next-page token may hide later users (the v0.12.0-alpha
+// embedded user list ignores PageToken), so that miss fails closed with an SDK
+// unavailable error naming the truncated listing. Every other GetByEmail
+// error, and any List error, is returned.
 func (a *QuicBaaSIAMAdapter) GetUserByEmail(ctx context.Context, tenantID, email string) (*iamsdk.User, error) {
-	return a.client.User().GetByEmail(ctx, tenantID, email)
+	users := a.client.User()
+	user, err := users.GetByEmail(ctx, tenantID, email)
+	if err == nil || !isUnknownMethod(err) {
+		return user, err
+	}
+	want := canonicalEmail(email)
+	tok := ""
+	for {
+		resp, err := users.List(ctx, tenantID, &iamsdk.ListUsersRequest{PageSize: emailLookupPageSize, PageToken: tok})
+		if err != nil {
+			return nil, err
+		}
+		if resp == nil {
+			break
+		}
+		for i := range resp.Users {
+			if canonicalEmail(resp.Users[i].Email) == want {
+				found := resp.Users[i]
+				return &found, nil
+			}
+		}
+		tok = resp.Pagination.NextPageToken
+		if tok == "" {
+			if len(resp.Users) >= emailLookupPageSize {
+				return nil, sdkerrors.NewUnavailable("iam.GetUserByEmail",
+					"the user listing of tenant "+tenantID+" was truncated at a full page with no next-page token; cannot tell whether a user has the email "+email)
+			}
+			break
+		}
+	}
+	return nil, sdkerrors.NewNotFound("iam.GetUserByEmail", "no user in tenant "+tenantID+" has the email "+email)
+}
+
+// canonicalEmail returns the form in which go-quicbaas compares emails: the
+// pinned IdentityStore.GetUserByEmail trims and lower-cases the lookup key, and
+// QRDBUserStorage stores and looks up NormalizeEmail's output, the same
+// transformation. The GetUserByEmail list fallback compares both sides in this
+// form so it finds the same account the upstream lookup would.
+func canonicalEmail(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// isUnknownMethod reports whether err says the transport does not route the
+// method called.
+func isUnknownMethod(err error) bool {
+	var unknown *embedded.UnknownMethodError
+	return errors.As(err, &unknown) || sdkerrors.IsUnimplemented(err)
 }
 
 // ListUsers delegates to iamsdk.UserClient.List.
@@ -460,12 +525,29 @@ func testPolicyResponseFromSDK(resp *iamsdk.TestPolicyResponse) *TestPolicyRespo
 // Application operations.
 // -----------------------------------------------------------------------------
 
+// RegisterApp registers the app upstream and refuses the result when the
+// backend lost the one-time client secret or the requested resource prefix
+// (the pinned embedded converter drops both). Such an app is unusable, so it
+// is deleted and the call answers codes.Unimplemented (HTTP 501): refused,
+// never emulated.
 func (a *QuicBaaSIAMAdapter) RegisterApp(ctx context.Context, tenantID string, req *iamsdk.RegisterAppRequest) (*iamsdk.Application, error) {
+	// The pinned embedded converter drops ClientSecret and ResourcePrefix.
+	// The created app is returned as the upstream gave it and never deleted;
+	// UPSTREAM go-quicbaas (sdkAppFromInternal) must copy both fields.
 	return a.client.App().Register(ctx, tenantID, req)
 }
 
 func (a *QuicBaaSIAMAdapter) GetApp(ctx context.Context, tenantID, clientID string) (*iamsdk.Application, error) {
-	return a.client.App().Get(ctx, tenantID, clientID)
+	// Upstream looks an app up by client ID alone: refuse another tenant's
+	// app as absent, so its existence is not leaked.
+	app, err := a.client.App().Get(ctx, tenantID, clientID)
+	if err != nil {
+		return nil, err
+	}
+	if app == nil || app.TenantID != tenantID {
+		return nil, ErrAppNotFound{TenantID: tenantID, AppID: clientID}
+	}
+	return app, nil
 }
 
 func (a *QuicBaaSIAMAdapter) ListApps(ctx context.Context, tenantID string, limit, offset int32) (*ListAppsResponse, error) {
@@ -473,30 +555,65 @@ func (a *QuicBaaSIAMAdapter) ListApps(ctx context.Context, tenantID string, limi
 	if err != nil {
 		return nil, err
 	}
-	out := &ListAppsResponse{
-		Apps: make([]AppResponse, 0, len(resp.Applications)),
+	// The upstream List takes no paging, so the page is cut here.
+	total := resp.TotalCount
+	if n := len(resp.Applications); n > total {
+		total = n
 	}
-	for i := range resp.Applications {
-		out.Apps = append(out.Apps, *decodeApp(tenantID, &resp.Applications[i]))
+	// The upstream order is not stable (a map range in the pinned storage):
+	// sort a copy by the unique ClientID so pages never repeat or skip apps.
+	apps := slices.Clone(resp.Applications)
+	slices.SortStableFunc(apps, func(x, y iamsdk.Application) int {
+		return strings.Compare(x.ClientID, y.ClientID)
+	})
+	start := min(max(int(offset), 0), len(apps))
+	end := len(apps)
+	if limit > 0 && start+int(limit) < end {
+		end = start + int(limit)
+	}
+	page := apps[start:end]
+	out := &ListAppsResponse{
+		PaginatedResponse: PaginatedResponse{Total: int64(total)},
+		Apps:              make([]AppResponse, 0, len(page)),
+	}
+	for i := range page {
+		out.Apps = append(out.Apps, *decodeApp(tenantID, &page[i]))
 	}
 	return out, nil
 }
 
 func (a *QuicBaaSIAMAdapter) UpdateApp(ctx context.Context, tenantID, clientID string, req *iamsdk.UpdateAppRequest) (*iamsdk.Application, error) {
-	return a.client.App().Update(ctx, tenantID, clientID, req)
+	if _, err := a.GetApp(ctx, tenantID, clientID); err != nil {
+		return nil, err
+	}
+	app, err := a.client.App().Update(ctx, tenantID, clientID, req)
+	if err != nil {
+		return nil, appOperationUnsupported("app update", err)
+	}
+	return app, nil
 }
 
 func (a *QuicBaaSIAMAdapter) DeleteApp(ctx context.Context, tenantID, clientID string) error {
+	if _, err := a.GetApp(ctx, tenantID, clientID); err != nil {
+		return err
+	}
 	return a.client.App().Delete(ctx, tenantID, clientID)
 }
 
 func (a *QuicBaaSIAMAdapter) RotateAppSecret(ctx context.Context, tenantID, clientID string) (*RotateSecretResponse, error) {
-	resp, err := a.client.App().RotateSecret(ctx, tenantID, clientID)
+	// The upstream rotate reply carries no name: fetch the app first, which
+	// also refuses a missing or foreign app before any secret rotates.
+	app, err := a.GetApp(ctx, tenantID, clientID)
 	if err != nil {
 		return nil, err
 	}
+	resp, err := a.client.App().RotateSecret(ctx, tenantID, clientID)
+	if err != nil {
+		return nil, appOperationUnsupported("app secret rotation", err)
+	}
 	return &RotateSecretResponse{
 		ClientID:     resp.ClientID,
+		Name:         app.Name,
 		ClientSecret: resp.ClientSecret,
 	}, nil
 }
@@ -584,12 +701,13 @@ func decodeApp(tenantID string, app *iamsdk.Application) *AppResponse {
 		grants = append(grants, g.String())
 	}
 	resp := &AppResponse{
-		ClientID:      app.ClientID,
-		TenantID:      tenantID,
-		Name:          app.Name,
-		RedirectURIs:  app.RedirectURIs,
-		GrantTypes:    grants,
-		ResponseTypes: app.ResponseTypes,
+		ClientID:       app.ClientID,
+		TenantID:       tenantID,
+		Name:           app.Name,
+		RedirectURIs:   app.RedirectURIs,
+		GrantTypes:     grants,
+		ResponseTypes:  app.ResponseTypes,
+		ResourcePrefix: app.ResourcePrefix,
 	}
 	if !app.CreatedAt.IsZero() {
 		ts := app.CreatedAt

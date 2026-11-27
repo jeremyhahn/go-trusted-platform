@@ -33,9 +33,10 @@ import {
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Separator } from '@/components/ui/separator';
 import { useToast, useApi, useDevice, useMutation } from '@/hooks';
+import { useCapabilities } from '@/hooks/use-capabilities';
+import { Gated } from '@/components/features/capabilities/gated';
 import type { DeviceRole } from 'trusted-platform-sdk';
 import { deviceRoleLabel } from '@/lib/device-role';
-import { Gated } from '@/components/features/capabilities/gated';
 import { TemplateEditDialog } from '@/components/features/devices/template-edit-dialog';
 
 const UPDATE_TEMPLATE_OP = 'PUT /api/v1/device/templates/{id:[0-9]+}';
@@ -77,6 +78,8 @@ export default function TemplateDetailClient() {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
   const deviceService = useDevice();
+  const { loading: capsLoading, capability } = useCapabilities();
+  const getCap = capability('GET /api/v1/device/templates/{id:[0-9]+}');
 
   const {
     data: template,
@@ -87,6 +90,7 @@ export default function TemplateDetailClient() {
     () => deviceService.getTemplate(templateId),
     [templateId],
     {
+      enabled: !capsLoading && getCap.enabled,
       onError: (err) => {
         toast({
           title: 'Error loading template',
@@ -121,7 +125,26 @@ export default function TemplateDetailClient() {
     }
   );
 
-  if (isLoading) {
+  if (!capsLoading && !getCap.enabled) {
+    return (
+      <div className="flex flex-col gap-6">
+        <Button variant="ghost" className="w-fit" onClick={() => router.push('/devices/templates')}>
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          Back to Templates
+        </Button>
+        <Card data-testid="template-not-enabled">
+          <CardHeader>
+            <CardTitle>Device templates are not enabled on this server</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">{getCap.reason}</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (capsLoading || isLoading) {
     return (
       <div className="flex items-center justify-center py-24">
         <div className="text-center">
@@ -354,11 +377,11 @@ export default function TemplateDetailClient() {
               <Button
                 variant="destructive"
                 onClick={() => deleteTemplateMutation.mutate(undefined)}
-              disabled={deleteTemplateMutation.isLoading}
-            >
-              {deleteTemplateMutation.isLoading && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
+                disabled={deleteTemplateMutation.isLoading}
+              >
+                {deleteTemplateMutation.isLoading && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
                 Delete Template
               </Button>
             </Gated>

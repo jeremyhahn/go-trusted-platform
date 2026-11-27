@@ -22,6 +22,10 @@ interface DataTableRowActionsProps<TData> {
     separator?: boolean
     /** Route the action calls, e.g. "DELETE /api/v1/x/{id}"; gates the item when set. */
     op?: string
+    /** Disables the item, e.g. when the server does not offer its op. */
+    disabled?: boolean
+    /** The item's tooltip, e.g. the reason it is disabled. */
+    title?: string
   }[]
 }
 
@@ -81,6 +85,8 @@ export function DataTableRowActions<TData>({
             const item = (
               <DropdownMenuItem
                 onClick={() => action.onClick(row)}
+                disabled={action.disabled}
+                title={action.title}
                 className={
                   action.variant === "destructive"
                     ? "text-destructive focus:text-destructive"

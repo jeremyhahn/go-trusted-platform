@@ -603,6 +603,12 @@ func (h *VTPMHandlers) handleGetBundleState(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	if _, err := h.service.GetBundle(r.Context(), bundleID); err != nil {
+		h.logger.Error("Failed to get vTPM bundle", "error", err, "id", bundleID)
+		h.writeVTPMError(w, "get", err)
+		return
+	}
+
 	running := h.service.IsRunning(bundleID)
 	socketPath := ""
 	if running {

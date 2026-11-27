@@ -2,7 +2,7 @@ ARG BASE_IMAGE="golang:1.27.4-bookworm"
 
 FROM $BASE_IMAGE
 
-LABEL maintainer="Jeremy Hahn <mail@jeremyhahn.com>"
+LABEL maintainer="Jeremy Hahn <maintainer@example.com>"
 
 ARG SRC_DIR=.
 ARG BUILD_DIR=/builder

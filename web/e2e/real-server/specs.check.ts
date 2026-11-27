@@ -20,6 +20,14 @@ const sa: typeof import('./fixtures/soft-authenticator') = await import(modPath)
 const config = fs.readFileSync(path.join(import.meta.dirname, 'platformd.test.yaml'), 'utf8');
 const want = `  webauthn-aaguid-allowlist-file: webauthn-attestation/${sa.ATTESTATION_FILES.aaguidAllowlist}`;
 assert.ok(config.split('\n').includes(want), `platformd.test.yaml carries "${want}"`);
+assert.ok(config.split('\n').includes('vtpm:'), 'platformd.test.yaml has a vtpm block');
+assert.ok(config.split('\n').includes('  base-dir: trusted-data/vtpm'), 'the vtpm base-dir sits in the run directory');
+
+const vtpmSpec = fs.readFileSync(path.join(import.meta.dirname, 'vtpm-runtime.spec.ts'), 'utf8');
+assert.ok(
+  vtpmSpec.includes("test('drives a running bundle through every runtime control'"),
+  'vtpm-runtime.spec.ts has the runtime flow test',
+);
 
 const spec = fs.readFileSync(path.join(import.meta.dirname, 'auth.spec.ts'), 'utf8');
 const calls = [...spec.matchAll(/browser\.newContext\(([^)]*)\)/g)];

@@ -11,6 +11,9 @@ export { useSessionToken, useHydrated, notifySessionChanged } from "./use-sessio
 // NTP status, sources and clock step (#1682)
 export { useNTP } from "./use-ntp";
 export type { NTPStatus, NTPSource, NTPStatusResponse, NTPSourcesResponse } from "./use-ntp";
+// Capability gate: what the server offers (#2033 item 4, #2058)
+export { useCapabilities } from "./use-capabilities";
+export type { CapabilityAnswer, UseCapabilitiesResult } from "./use-capabilities";
 
 // DNSSEC status and zone signing (#2060)
 export { useDNSSEC } from "./use-dnssec";
@@ -98,6 +101,7 @@ export { useReportedGateways } from './use-reported-gateways';
 export { usePXEDeviceActions } from './use-pxe-device-actions';
 export type { UsePXEDeviceActionsResult } from './use-pxe-device-actions';
 export { useOverlayVteps } from './use-overlay-vteps';
+export { useSwitches } from './use-switches';
 export { useProfileAssignment } from './use-profile-assignment';
 export type { ProfileAssignmentInput, UseProfileAssignmentResult } from './use-profile-assignment';
 export { useRegistry, encodeRepository } from './use-registry';

@@ -29,6 +29,23 @@ export type {
   ListNTPSourcesResponse,
   StepNTPClockResponse,
 } from './ntp-service.js';
+export { BMCService } from './bmc-service.js';
+export type {
+  BMCPowerAction,
+  BMCPowerActionResponse,
+  BMCPowerStatusResponse,
+  BMCSetBootDeviceRequest,
+  BMCSetBootDeviceResponse,
+  BMCBootDeviceResponse,
+  BMCVirtualMediaStatus,
+  BMCMountISOResponse,
+  BMCStatusResponse,
+  BMCSensorReading,
+  BMCSystemInfo,
+  BMCWebCertificate,
+  BMCProvisionRequest,
+  BMCProvisionResult,
+} from './bmc-service.js';
 export { GatewayService } from './gateway-service.js';
 export { IAMService } from './iam-service.js';
 export { IDevIDService } from './idevid-service.js';
@@ -74,6 +91,13 @@ export type {
   DeleteProxyPoolResponse,
   ReloadProxyConfigResponse,
 } from './proxy-service.js';
+export { SwitchService } from './switch-service.js';
+export type {
+  SwitchPortMode,
+  SwitchPortStatus,
+  SwitchPortActionResponse,
+  SetSwitchPortVLANResponse,
+} from './switch-service.js';
 export { InvitationService } from './invitation-service.js';
 export { EABService } from './eab-service.js';
 

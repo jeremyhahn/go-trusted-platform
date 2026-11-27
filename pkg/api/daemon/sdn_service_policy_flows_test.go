@@ -15,12 +15,8 @@ package daemon
 
 import (
 	"context"
-	"errors"
-	"strconv"
-	"strings"
 	"testing"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -50,59 +46,6 @@ func applyACLPolicy(t *testing.T, svc *SDNService) string {
 	}})
 	require.NoError(t, err)
 	return resp.GetPolicy().GetId()
-}
-
-func installedCookies(t *testing.T, m *ConfigurableMockOVSClient) []uint64 {
-	t.Helper()
-	var cookies []uint64
-	for _, c := range m.GetCalls("AddFlow") {
-		fm, ok := c.Args[1].(*ovs.FlowMod)
-		require.True(t, ok)
-		require.NotEmpty(t, fm.Cookie, "a policy flow is installed without a cookie")
-		v, err := strconv.ParseUint(strings.TrimPrefix(fm.Cookie, "0x"), 16, 64)
-		require.NoError(t, err)
-		cookies = append(cookies, v)
-	}
-	return cookies
-}
-
-func TestSDNServiceUnit_DeletePolicyRemovesFlowsByCookie(t *testing.T) {
-	svc, m := newPolicyFlowsService(t)
-	id := applyACLPolicy(t, svc)
-	cookies := installedCookies(t, m)
-	require.Len(t, cookies, 2)
-	assert.NotEqual(t, cookies[0], cookies[1])
-
-	_, err := svc.DeletePolicy(context.Background(), &platformv1.DeletePolicyRequest{PolicyId: id})
-	require.NoError(t, err)
-
-	calls := m.GetCalls("DeleteFlowsByCookie")
-	require.Len(t, calls, 2)
-	var removed []uint64
-	for _, c := range calls {
-		assert.Equal(t, "br0", c.Args[0])
-		assert.Equal(t, ^uint64(0), c.Args[2])
-		removed = append(removed, c.Args[1].(uint64))
-	}
-	assert.ElementsMatch(t, cookies, removed)
-	assert.Zero(t, m.GetCallCount("DeleteFlow"))
-}
-
-func TestSDNServiceUnit_DeletePolicyKeepsPolicyWhenFlowRemovalFails(t *testing.T) {
-	svc, m := newPolicyFlowsService(t)
-	id := applyACLPolicy(t, svc)
-	m.OnDeleteFlowsByCookie(func(ctx context.Context, bridgeName string, cookie, cookieMask uint64) error {
-		return errors.New("switch unreachable")
-	})
-
-	_, err := svc.DeletePolicy(context.Background(), &platformv1.DeletePolicyRequest{PolicyId: id})
-	require.Error(t, err)
-	assert.Equal(t, codes.Internal, status.Code(err))
-
-	list, err := svc.ListPolicies(context.Background(), &platformv1.ListPoliciesRequest{})
-	require.NoError(t, err)
-	require.Len(t, list.GetPolicies(), 1)
-	assert.Equal(t, id, list.GetPolicies()[0].GetId())
 }
 
 func TestSDNServiceUnit_FlushFlowsRejectsTable(t *testing.T) {

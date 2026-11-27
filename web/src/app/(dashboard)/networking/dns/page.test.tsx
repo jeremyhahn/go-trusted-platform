@@ -4,10 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // #1844: the page lists zones through useDNS (network boundary, mocked here),
 // maps each protojson Zone with readZone and creates zones from a dialog.
 
-const { dns, toast, off } = vi.hoisted(() => ({
+const { dns, toast, capability } = vi.hoisted(() => ({
   dns: { listZones: vi.fn(), createZone: vi.fn() },
   toast: vi.fn(),
-  off: new Set<string>(),
+  capability: vi.fn(),
 }));
 
 vi.mock("@/hooks", async (importOriginal) => ({
@@ -16,17 +16,12 @@ vi.mock("@/hooks", async (importOriginal) => ({
   useToast: () => ({ toast }),
 }));
 
-// The table is its own component; the page only hands it the mapped zones.
-// The page mounts the DNS lookup card, whose Resolve and Register are gated
-// on the server's capabilities (#2060); every op not in `off` is offered here.
+// #2033 item 5: Gated reads the server's capabilities through this hook.
 vi.mock("@/hooks/use-capabilities", () => ({
-  useCapabilities: () => ({
-    loading: false,
-    error: undefined,
-    capability: (op: string) =>
-      off.has(op) ? { enabled: false, reason: "not-configured: dns" } : { enabled: true },
-  }),
+  useCapabilities: () => ({ loading: false, error: undefined, capability }),
 }));
+
+// The table is its own component; the page only hands it the mapped zones.
 
 vi.mock("@/components/features/networking/dns-zone-table", () => ({
   DNSZoneTable: ({ zones, onRefresh }: { zones: { id: string; name: string; type: string; recordCount: number }[]; onRefresh: () => void }) => (
@@ -58,26 +53,15 @@ beforeEach(() => {
   dns.listZones.mockReset();
   dns.createZone.mockReset();
   toast.mockReset();
+  capability.mockReset();
+  capability.mockImplementation(() => ({ enabled: true }));
 });
 
 afterEach(() => {
   cleanup();
-  off.clear();
 });
 
 describe("DNSZonesPage", () => {
-  it("withholds Add Zone when POST /api/v1/dns/zones is not offered", async () => {
-    off.add("POST /api/v1/dns/zones");
-    dns.listZones.mockResolvedValue({ data: { zones: [] } });
-    render(<DNSZonesPage />);
-    await waitFor(() => expect(dns.listZones).toHaveBeenCalledTimes(1));
-
-    const add = screen.getByRole("button", { name: "Add Zone" }) as HTMLButtonElement;
-    expect(add.getAttribute("data-capability-op")).toBe("POST /api/v1/dns/zones");
-    expect(add.getAttribute("data-capability-enabled")).toBe("false");
-    expect(add.disabled).toBe(true);
-    expect(add.getAttribute("title")).toBe("not-configured: dns");
-  });
 
   it("lists the zones and computes the stat cards", async () => {
     dns.listZones.mockResolvedValue({ data: { zones } });
@@ -230,5 +214,65 @@ describe("DNSZonesPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByText("Add DNS Zone")).toBeNull());
     expect(dns.createZone).not.toHaveBeenCalled();
+  });
+
+  it("withholds Add Zone and Create with the server's reason when POST /api/v1/dns/zones is not offered", async () => {
+    capability.mockImplementation((op: string) =>
+      op === "POST /api/v1/dns/zones" ? { enabled: false, reason: "not-configured: dns" } : { enabled: true },
+    );
+    dns.listZones.mockResolvedValue({ data: { zones: [] } });
+    render(<DNSZonesPage />);
+
+    const add = screen.getByRole("button", { name: "Add Zone" }) as HTMLButtonElement;
+    expect(add.disabled).toBe(true);
+    expect(add.title).toBe("not-configured: dns");
+    expect(add.getAttribute("data-capability-op")).toBe("POST /api/v1/dns/zones");
+    expect(add.getAttribute("data-capability-enabled")).toBe("false");
+
+    fireEvent.click(add);
+    expect(screen.queryByText("Add DNS Zone")).toBeNull();
+    expect(dns.createZone).not.toHaveBeenCalled();
+  });
+
+  it("asks the gate for POST /api/v1/dns/zones and leaves Add Zone enabled when the server offers it", async () => {
+    dns.listZones.mockResolvedValue({ data: { zones: [] } });
+    render(<DNSZonesPage />);
+
+    expect(capability).toHaveBeenCalledWith("POST /api/v1/dns/zones");
+    const add = screen.getByRole("button", { name: "Add Zone" }) as HTMLButtonElement;
+    expect(add.getAttribute("data-capability-enabled")).toBe("true");
+    expect(add.disabled).toBe(false);
+  });
+
+  it("does not list zones and says DNS is not enabled when the server does not offer GET /api/v1/dns/zones", async () => {
+    capability.mockImplementation((op: string) =>
+      op === "GET /api/v1/dns/zones" ? { enabled: false, reason: "not-configured: dns" } : { enabled: true },
+    );
+    dns.listZones.mockResolvedValue({ data: { zones } });
+    const { container } = render(<DNSZonesPage />);
+
+    const notEnabled = await screen.findByTestId("dns-not-enabled");
+    expect(notEnabled.textContent).toContain("DNS is not enabled on this server");
+    expect(notEnabled.textContent).toContain("not-configured: dns");
+    expect(dns.listZones).not.toHaveBeenCalled();
+
+    const refresh = container.querySelector('[data-capability-op="GET /api/v1/dns/zones"]') as HTMLButtonElement;
+    expect(refresh).not.toBeNull();
+    expect(refresh.disabled).toBe(true);
+    expect(refresh.title).toBe("not-configured: dns");
+    expect(refresh.getAttribute("data-capability-enabled")).toBe("false");
+  });
+
+  it("asks the gate for GET /api/v1/dns/zones and lists the zones when the server offers it", async () => {
+    dns.listZones.mockResolvedValue({ data: { zones } });
+    const { container } = render(<DNSZonesPage />);
+
+    expect(capability).toHaveBeenCalledWith("GET /api/v1/dns/zones");
+    await waitFor(() => expect(dns.listZones).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId("dns-not-enabled")).toBeNull();
+
+    const refresh = container.querySelector('[data-capability-op="GET /api/v1/dns/zones"]') as HTMLButtonElement;
+    expect(refresh).not.toBeNull();
+    expect(refresh.getAttribute("data-capability-enabled")).toBe("true");
   });
 });

@@ -73,6 +73,8 @@ func envOr(key, fallback string) string {
 // diagnosis to a config that has one.
 var notConfiguredMarkers = []string{
 	"ntp service is not configured",
+	// REST: the router takes /ntp dark through the service registry.
+	"ntp service not configured by daemon",
 	"time synchronization is not enabled",
 	"service not available: ntp",
 	"quic service unavailable: ntp",

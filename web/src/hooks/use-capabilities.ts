@@ -10,7 +10,7 @@
  * list, the op is disabled with a reason (#2033 item 4, #2058).
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePlatformClient, type Capability, type PlatformClient } from "trusted-platform-sdk";
 
 export interface CapabilityAnswer {
@@ -22,6 +22,8 @@ export interface UseCapabilitiesResult {
   loading: boolean;
   error: unknown;
   capability(op: string): CapabilityAnswer;
+  /** Reads the capabilities again for every hook on this client. */
+  reload(): void;
 }
 
 export const CAPABILITIES_LOADING_REASON = "checking server capabilities";
@@ -31,6 +33,10 @@ export const CAPABILITY_NOT_OFFERED_REASON = "not offered by this server";
 type CapabilityMap = Map<string, Capability>;
 
 const cache = new WeakMap<PlatformClient, Promise<CapabilityMap>>();
+// The answers already read, so a control that mounts after the read settled
+// (a table row's Gated button) starts enabled instead of passing through
+// "checking server capabilities" for a tick.
+const settled = new WeakMap<PlatformClient, CapabilityMap>();
 
 function loadCapabilities(client: PlatformClient): Promise<CapabilityMap> {
   let pending = cache.get(client);
@@ -39,7 +45,9 @@ function loadCapabilities(client: PlatformClient): Promise<CapabilityMap> {
       if (!res.success || !res.data) {
         throw new Error(res.error?.message ?? CAPABILITIES_UNAVAILABLE_REASON);
       }
-      return new Map((res.data.capabilities ?? []).map((c) => [c.op, c]));
+      const caps: CapabilityMap = new Map((res.data.capabilities ?? []).map((c) => [c.op, c]));
+      settled.set(client, caps);
+      return caps;
     });
     // A failed read is not cached, so a later mount asks again.
     pending.catch(() => {
@@ -59,12 +67,31 @@ interface Loaded {
   caps: CapabilityMap | undefined;
 }
 
+/** The version-bump callbacks of every mounted hook, per client, for reload(). */
+const subscribers = new WeakMap<PlatformClient, Set<() => void>>();
+
 export function useCapabilities(): UseCapabilitiesResult {
   const client = usePlatformClient();
   const [loaded, setLoaded] = useState<Loaded | undefined>(undefined);
+  // Bumped by reload() to read the capabilities again.
+  const [version, setVersion] = useState(0);
+
+  useEffect(() => {
+    const bump = () => setVersion((v) => v + 1);
+    let set = subscribers.get(client);
+    if (!set) {
+      set = new Set();
+      subscribers.set(client, set);
+    }
+    set.add(bump);
+    return () => {
+      set.delete(bump);
+    };
+  }, [client]);
 
   useEffect(() => {
     let live = true;
+    // A failed read is not cached, so this asks the server again after one.
     loadCapabilities(client).then(
       (caps) => {
         if (live) setLoaded({ client, error: undefined, caps });
@@ -78,9 +105,18 @@ export function useCapabilities(): UseCapabilitiesResult {
     return () => {
       live = false;
     };
+  }, [client, version]);
+
+  // Every hook on the client reads again, so Gated controls recover too.
+  const reload = useCallback(() => {
+    subscribers.get(client)?.forEach((bump) => bump());
   }, [client]);
 
-  const current = loaded?.client === client ? loaded : undefined;
+  const known = settled.get(client);
+  const current = useMemo<Loaded | undefined>(() => {
+    if (loaded?.client === client) return loaded;
+    return known ? { client, error: undefined, caps: known } : undefined;
+  }, [loaded, client, known]);
 
   const capability = useCallback(
     (op: string): CapabilityAnswer => {
@@ -99,5 +135,5 @@ export function useCapabilities(): UseCapabilitiesResult {
     [current]
   );
 
-  return { loading: !current, error: current?.error, capability };
+  return { loading: !current, error: current?.error, capability, reload };
 }
