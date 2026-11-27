@@ -19,6 +19,7 @@ import { ComputeService } from '../services/compute-service.js';
 import { DeviceService } from '../services/device-service.js';
 import { DNSService } from '../services/dns-service.js';
 import { NTPService } from '../services/ntp-service.js';
+import { BMCService } from '../services/bmc-service.js';
 import { CapabilitiesService } from '../services/capabilities-service.js';
 import { GatewayService } from '../services/gateway-service.js';
 import { IAMService } from '../services/iam-service.js';
@@ -28,6 +29,7 @@ import { OverlayService } from '../services/overlay-service.js';
 import { PlatformService } from '../services/platform-service.js';
 import { PXEService } from '../services/pxe-service.js';
 import { SDNService } from '../services/sdn-service.js';
+import { SwitchService } from '../services/switch-service.js';
 import { TenantService } from '../services/tenant-service.js';
 import { TPMService } from '../services/tpm-service.js';
 import { VTPMService } from '../services/vtpm-service.js';
@@ -189,6 +191,9 @@ export class PlatformClient {
   /** NTP status, sources and clock step */
   public readonly ntp: NTPService;
 
+  /** BMC power and boot-device service */
+  public readonly bmc: BMCService;
+
   /** What the server offers, enabled and dark */
   public readonly capabilities: CapabilitiesService;
 
@@ -215,6 +220,9 @@ export class PlatformClient {
 
   /** SDN service for bridges, ports, and flows */
   public readonly sdn: SDNService;
+
+  /** Switch service for physical switch ports (list, status, VLAN, enable, disable) */
+  public readonly switches: SwitchService;
 
   /** Tenant service for multi-tenant management */
   public readonly tenant: TenantService;
@@ -361,6 +369,7 @@ export class PlatformClient {
     this.device = new DeviceService(t);
     this.dns = new DNSService(t);
     this.ntp = new NTPService(t);
+    this.bmc = new BMCService(t);
     this.capabilities = new CapabilitiesService(t);
     this.gateway = new GatewayService(t);
     this.iam = new IAMService(t);
@@ -370,6 +379,7 @@ export class PlatformClient {
     this.platform = new PlatformService(t);
     this.pxe = new PXEService(t);
     this.sdn = new SDNService(t);
+    this.switches = new SwitchService(t);
     this.tenant = new TenantService(t);
     this.tpm = new TPMService(t);
     this.vtpm = new VTPMService(t);

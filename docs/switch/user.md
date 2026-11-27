@@ -8,12 +8,13 @@
 
 ## Read this first
 
-**Runtime switch management is not wired into the daemon today.** The
-configuration block is parsed, the routes exist on every transport, and nothing
-constructs the service behind them. Every call returns "service unavailable"
-until that changes ([architecture.md](architecture.md) §8).
+**Runtime switch management is wired only on a node whose config has a
+`switches:` block.** Such a node builds the switch service at start-up and
+serves it on gRPC, QUIC, MCP and REST. A node with no `switches:` block stays
+dark: every call returns "service unavailable" (503 on REST, `Unavailable` on
+gRPC and QUIC) ([architecture.md](architecture.md) §8).
 
-What **does** work today is the bootstrap path: the orchestrator can create
+The bootstrap path works either way: the orchestrator can create
 VLANs and set port modes on a switch as phase 1 of a platform bootstrap.
 
 Check which situation you are in before anything else:
@@ -219,10 +220,10 @@ provisioning VLAN and verifies it by read-back
 
 **Everything returns 503 / "service unavailable" / "switch service not
 configured".**
-The daemon has no switch service wired. This is the default today. Confirm with
-`GET /api/v1/platform/service-registry` and read
-[architecture.md](architecture.md) §8. This is not a configuration mistake on
-your side.
+The daemon has no switch service wired: its config has no `switches:` block, so
+it built none. Confirm with `GET /api/v1/platform/service-registry`, add the
+`switches:` block to that node's config and restart the daemon. See
+[architecture.md](architecture.md) §8.
 
 **"ssh connection failed … field ssh_key: must be set".**
 You configured `password` instead of `ssh_key`. Password authentication is not
@@ -254,11 +255,17 @@ word "error" will trip it. Over-eager on purpose — a false failure beats a
 silent misconfiguration.
 
 **The port did not actually change.**
-Check you are looking at the right switch: two entries with the same `name`
-silently collapse into one. Then check `list-ports` rather than `port-status`.
+Check you are looking at the right switch (`--switch` matches `name`, or `host`
+when `name` is empty; two entries with the same identity stop the daemon at
+start-up, so each name is unique). Then check `list-ports` rather than
+`port-status`.
 
-**Two operations at once behaved strangely.**
-The SSH manager is not concurrency-safe. Serialise operations per switch.
+**An operation waited, then failed.**
+Operations on one switch run one at a time over its single SSH connection; a
+second call queues until the first finishes or its own deadline ends, and a
+call whose deadline ended before its turn sends nothing. A switch that stops
+answering holds the queue until the daemon closes the connection at shutdown,
+which makes the stalled call return an error.
 
 ---
 

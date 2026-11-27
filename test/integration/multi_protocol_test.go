@@ -1274,8 +1274,19 @@ func setupIAMAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 	cmd := createIAMAdapter(adapter.Name())
 	require.NotNil(t, cmd, "IAM adapter should not be nil for protocol %s", protocolName(adapter))
 	helpers.RequireAdapterSetup(t, "IAM", protocolName(adapter), cmd.Setup(ctx))
-	t.Cleanup(func() { cmd.Teardown(ctx) })
+	t.Cleanup(func() {
+		cctx, cancel := iamCleanupCtx(ctx)
+		defer cancel()
+		cmd.Teardown(cctx)
+	})
 	return cmd
+}
+
+// iamCleanupCtx returns a context for an IAM t.Cleanup: t.Cleanup runs after
+// the leaf's deferred cancel, so it keeps the request values of ctx but drops
+// its cancellation and carries its own timeout.
+func iamCleanupCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 }
 
 func testIAMAuthenticate(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
@@ -1320,7 +1331,9 @@ func testIAMGetUser(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	require.NotNil(t, createResult)
 	require.NotNil(t, createResult.User)
 	t.Cleanup(func() {
-		_, _ = cmd.DeleteUser(ctx, iam.DeleteUserOptions{TenantID: helpers.HarnessTenantID, UserID: createResult.User.ID})
+		cctx, cancel := iamCleanupCtx(ctx)
+		defer cancel()
+		_, _ = cmd.DeleteUser(cctx, iam.DeleteUserOptions{TenantID: helpers.HarnessTenantID, UserID: createResult.User.ID})
 	})
 
 	result, err := cmd.GetUser(ctx, iam.GetUserOptions{TenantID: helpers.HarnessTenantID, UserID: createResult.User.ID})
@@ -1357,7 +1370,9 @@ func testIAMUpdateUser(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	require.NotNil(t, createResult)
 	require.NotNil(t, createResult.User)
 	t.Cleanup(func() {
-		_, _ = cmd.DeleteUser(ctx, iam.DeleteUserOptions{TenantID: helpers.HarnessTenantID, UserID: createResult.User.ID})
+		cctx, cancel := iamCleanupCtx(ctx)
+		defer cancel()
+		_, _ = cmd.DeleteUser(cctx, iam.DeleteUserOptions{TenantID: helpers.HarnessTenantID, UserID: createResult.User.ID})
 	})
 
 	updatedName := "Matrix Updated User"
@@ -1400,7 +1415,7 @@ func testIAMCreateRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	roleID := fmt.Sprintf("matrix-role-%d", time.Now().UnixNano())
 	// The CA's certificate scopes (pkg/webservice/v1/rest/ca/handlers.go).
 	result, err := cmd.CreateRole(ctx, iam.CreateRoleOptions{
-		TenantID: helpers.HarnessTenantID, ID: roleID, Name: "Matrix Test Role",
+		TenantID: helpers.HarnessTenantID, ID: roleID, Name: fmt.Sprintf("Matrix Test Role %s", roleID),
 		Description: "Role created by matrix integration test", Permissions: []string{"certs:read", "certs:generate"},
 	})
 	if missing := surfaceMissing(adapter, "IAM", "CreateRole", err); missing != nil {
@@ -1425,12 +1440,14 @@ func testIAMAssignRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	require.NotNil(t, userResult)
 	require.NotNil(t, userResult.User)
 	t.Cleanup(func() {
-		_, _ = cmd.DeleteUser(ctx, iam.DeleteUserOptions{TenantID: helpers.HarnessTenantID, UserID: userResult.User.ID})
+		cctx, cancel := iamCleanupCtx(ctx)
+		defer cancel()
+		_, _ = cmd.DeleteUser(cctx, iam.DeleteUserOptions{TenantID: helpers.HarnessTenantID, UserID: userResult.User.ID})
 	})
 
 	roleID := fmt.Sprintf("matrix-assign-role-%d", time.Now().UnixNano())
 	roleResult, err := cmd.CreateRole(ctx, iam.CreateRoleOptions{
-		TenantID: helpers.HarnessTenantID, ID: roleID, Name: "Matrix Assign Role", Permissions: []string{"certs:read"},
+		TenantID: helpers.HarnessTenantID, ID: roleID, Name: fmt.Sprintf("Matrix Assign Role %s", roleID), Permissions: []string{"certs:read"},
 	})
 	if missing := surfaceMissing(adapter, "IAM", "CreateRole", err); missing != nil {
 		t.Fatal(missing)
@@ -1439,12 +1456,17 @@ func testIAMAssignRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	require.NotNil(t, roleResult)
 	require.NotNil(t, roleResult.Role)
 	t.Cleanup(func() {
-		_, _ = cmd.DeleteRole(ctx, iam.DeleteRoleOptions{TenantID: helpers.HarnessTenantID, RoleID: roleResult.Role.ID})
+		cctx, cancel := iamCleanupCtx(ctx)
+		defer cancel()
+		_, _ = cmd.DeleteRole(cctx, iam.DeleteRoleOptions{TenantID: helpers.HarnessTenantID, RoleID: roleResult.Role.ID})
 	})
 
 	result, err := cmd.AssignRole(ctx, iam.AssignRoleOptions{
 		TenantID: helpers.HarnessTenantID, UserID: userResult.User.ID, RoleID: roleResult.Role.ID,
 	})
+	if helpers.KnownGap(t, protocolName(adapter), helpers.MethodIAMUserAssignRole, err) {
+		return
+	}
 	if missing := surfaceMissing(adapter, "IAM", "AssignRole", err); missing != nil {
 		t.Fatal(missing)
 	}

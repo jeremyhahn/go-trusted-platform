@@ -1,6 +1,6 @@
 # Cluster — API
 
-> **Status: NORMATIVE** · Scope: cluster capabilities on every transport · Last verified: 2026-10-15
+> **Status: NORMATIVE** · Scope: cluster capabilities on every transport · Last verified: 2026-11-23
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
@@ -11,16 +11,21 @@
 
 ## 1. Read this before the tables
 
-**The five operations are implemented, but nothing in production feeds them a
-cluster yet.** The gRPC service the daemon registers is
+**The five operations are implemented; since #2140 serve and every embedded
+host feed them the Raft cluster the embedded go-quicbaas service runs.** The gRPC service the daemon registers is
 `pkg/api/grpc.ClusterGRPCService`, backed by the daemon adapter
 `clusterGRPCBackend` (`pkg/api/daemon/cluster_grpc_backend.go`) over the
 daemon's `ClusterServicer`. REST, the QUIC category opcode and the MCP tools
 all call that registered service, so every transport runs the gRPC code path.
-They answer from whatever servicer `Daemon.SetClusterService` sets — and
-nothing calls it in production (#334), so today gRPC, Unix, QUIC and MCP return
-`Unavailable` and REST returns 503. The embedded registry's `Cluster` field is
-never populated.
+They answer from the servicer `Daemon.SetClusterService` sets. Serve and every
+embedded host set it through `appbackends.WireSDKBackends`
+(`pkg/app/backends/cluster.go`), over the embedded go-quicbaas service, and the
+embedded host sets `registry.Cluster` to the daemon's cluster gRPC service. So
+`GetStatus` and `ListNodes` answer on every transport, `Bootstrap` answers
+already initialized or not initialized, and `Join` and `Leave` both answer
+`Unavailable` (REST 503) because the pinned go-quicbaas has no join seam and no
+leader-routed removal (upstream gaps). A daemon built without an embedded QuicBaaS service
+sets no servicer and still answers `Unavailable` (REST 503) on every call.
 
 The tables below therefore document **two different things**, kept separate on
 purpose:
@@ -63,11 +68,12 @@ For cluster:
   range; token issuance ships as `OpIAMTokenCreate` (`0xF9`).
 - **MCP**: five `platform_cluster_*` tools (`pkg/api/mcp/cluster_tools.go`),
   each calling the registered gRPC service (`daemon.go:2066`).
-- **Embedded**: `ServiceRegistry.Cluster` exists as a field
-  (`sdk/go/transport/embedded/adapter.go`) but the only place a registry is
+- **Embedded**: `ServiceRegistry.Cluster`
+  (`sdk/go/transport/embedded/adapter.go`). The only place a registry is
   constructed — `pkg/api/daemon/embedded_host.go`, shared by the GUI and the
-  CLI — sets `Daemon`, `CallerContext` and 21 service fields, and **not**
-  `Cluster`.
+  CLI — sets `Daemon`, `CallerContext`, 21 service fields and
+  `registry.Cluster`, the daemon's cluster gRPC service, so embedded callers
+  run the same code path as gRPC.
 
 ## 3. Capabilities
 
@@ -75,20 +81,31 @@ For cluster:
 
 | Capability | Embedded (Go) | Unix | REST | gRPC | QUIC | MCP |
 |---|---|---|---|---|---|---|
-| **Bootstrap a cluster** | field exists, never populated — `MISSING — docs/13 G7` in practice | `platform.v1.ClusterService/Bootstrap` | `POST /api/v1/cluster/bootstrap` | `platform.v1.ClusterService/Bootstrap` | `0x90` / `ClusterSubBootstrap` `0x01` | `platform_cluster_bootstrap` |
-| **Join a cluster** | ditto | `ClusterService/Join` | `POST /api/v1/cluster/join` | `ClusterService/Join` | `0x90` / `ClusterSubJoin` `0x02` | `platform_cluster_join` |
-| **Leave a cluster** | ditto | `ClusterService/Leave` | `POST /api/v1/cluster/leave` | `ClusterService/Leave` | `0x90` / `ClusterSubLeave` `0x03` | `platform_cluster_leave` |
-| **Cluster status** | ditto | `ClusterService/GetStatus` | `GET /api/v1/cluster/status` | `ClusterService/GetStatus` | `0x90` / `ClusterSubGetStatus` `0x04` | `platform_cluster_status` |
-| **List nodes** | ditto | `ClusterService/ListNodes` | `GET /api/v1/cluster/nodes` | `ClusterService/ListNodes` | `0x90` / `ClusterSubListNodes` `0x05` | `platform_cluster_list_nodes` |
+| **Bootstrap a cluster** | `ClusterService/Bootstrap` through `ServiceRegistry.Cluster` | `platform.v1.ClusterService/Bootstrap` | `POST /api/v1/cluster/bootstrap` | `platform.v1.ClusterService/Bootstrap` | `0x90` / `ClusterSubBootstrap` `0x01` | `platform_cluster_bootstrap` |
+| **Join a cluster** | `ClusterService/Join` through `ServiceRegistry.Cluster` | `ClusterService/Join` | `POST /api/v1/cluster/join` | `ClusterService/Join` | `0x90` / `ClusterSubJoin` `0x02` | `platform_cluster_join` |
+| **Leave a cluster** | `ClusterService/Leave` through `ServiceRegistry.Cluster` | `ClusterService/Leave` | `POST /api/v1/cluster/leave` | `ClusterService/Leave` | `0x90` / `ClusterSubLeave` `0x03` | `platform_cluster_leave` |
+| **Cluster status** | `ClusterService/GetStatus` through `ServiceRegistry.Cluster` | `ClusterService/GetStatus` | `GET /api/v1/cluster/status` | `ClusterService/GetStatus` | `0x90` / `ClusterSubGetStatus` `0x04` | `platform_cluster_status` |
+| **List nodes** | `ClusterService/ListNodes` through `ServiceRegistry.Cluster` | `ClusterService/ListNodes` | `GET /api/v1/cluster/nodes` | `ClusterService/ListNodes` | `0x90` / `ClusterSubListNodes` `0x05` | `platform_cluster_list_nodes` |
 
 **Behaviour, for every row above:**
 
-- **No servicer set (production today):** gRPC, Unix and MCP return
-  `codes.Unavailable` with `"cluster service not configured"`
-  (`ErrClusterServiceUnavailable`); QUIC returns `StatusUnavailable`; REST
-  maps it to **503** (`clusterErrorToHTTP`).
+- **No servicer set (a daemon built without an embedded QuicBaaS service):**
+  gRPC, Unix, Embedded and MCP return `codes.Unavailable` with
+  `"cluster service not configured"` (`ErrClusterServiceUnavailable`); QUIC
+  returns `StatusUnavailable`; REST maps it to **503** (`clusterErrorToHTTP`).
 - **Servicer set:** every transport returns the gRPC response, projected as in
   §5, or the gRPC refusal in its own status form (§6).
+- **Serve and embedded hosts (since #2140):** the servicer is the one
+  `appbackends.WireSDKBackends` sets over the embedded go-quicbaas service.
+  `GetStatus` and `ListNodes` answer with Raft membership and the leader; node
+  health is not known, so every node State is "unknown" and the healthy count
+  is 0 until the SDK exposes liveness, and the cluster State is "unknown" with
+  a leader, "degraded" without one and "uninitialized" with no members.
+  `Bootstrap` answers `AlreadyExists` (REST 409) when a leader is known and
+  `FailedPrecondition` (REST 409) otherwise. Leave answers `Unavailable`
+  (REST 503): a follower cannot remove itself through the local replica, and
+  no leader-routed removal exists. `Join` answers `Unavailable` (REST 503): the
+  pinned go-quicbaas has no join seam, an upstream gap.
 
 What each RPC does with the servicer:
 
@@ -97,7 +114,7 @@ What each RPC does with the servicer:
 | `Bootstrap` | `Bootstrap`, then `Status` | `cluster.name` echoes `cluster_name`; `node` is the serving node. Bind/advertise addresses, labels and metadata are not applied — the node's own configuration decides them |
 | `Join` | `Join(seed_addresses)`, then `Status` | `node` is the serving node; the same request fields are not applied |
 | `Leave` | `Leave` | Removes the **serving** node. A non-empty `node_id` naming another node is refused (`ErrLeaveNodeNotLocal`, `InvalidArgument`). `timeout_seconds > 0` bounds the call; running out is `ErrLeaveTimeout`. `force` is not applied |
-| `GetStatus` | `Status`, plus `Nodes` when `include_nodes` | `local_node` is the serving node — its full record when nodes are included; `leader_address` is filled only then |
+| `GetStatus` | `Status` and `Nodes`, for both request forms | `local_node` is the serving node's member record from `Nodes` in both forms, its state as membership reports it; an unknown state, or a node absent from membership, reads unspecified (never a fixed ACTIVE). `nodes` and `leader_address` are filled only when `include_nodes` |
 | `ListNodes` | `Nodes` | Filters by `roles`, `states` and `selector.match_labels` (matched against node metadata), sorts by `id` or `address`, then pages (§5) |
 
 ### Everything else is a Go call with no wire form
@@ -278,8 +295,10 @@ validates (§6).
 | `FailedPrecondition` (`ErrClusterNotInitialized`, `ErrCannotLeaveAsLeader`) | 409 (#665) |
 | anything else | 500 |
 
-**Today every cluster REST call returns 503**, because no servicer is set and
-the registered service returns `Unavailable`. With a servicer set, REST returns
+On serve and embedded hosts (since #2140) status and nodes return 200,
+`Bootstrap` returns 409, and `Leave` returns 503 as `Join` does (§3). With no
+servicer set every cluster REST call returns 503, because the registered
+service returns `Unavailable`. With a servicer set, REST returns
 200 with the gRPC response as JSON, or the status above for its error. The
 handlers also return **400** for a request body that will not decode.
 
@@ -367,7 +386,7 @@ transport adapter maps all five onto its own wire:
 | REST | `sdk/go/transport/rest/adapter.go`: method → `/api/v1/cluster/*` route |
 | QUIC | `sdk/go/transport/quic/aab_cluster.go` (`clusterSubOpcodes`): method → `0x90` sub-opcode |
 | MCP | `sdk/go/transport/mcp/cluster.go` (`clusterToolMap`): method → `platform_cluster_*` tool |
-| Embedded | `sdk/go/transport/embedded/dispatch.go`: method → `ServiceRegistry.Cluster` — which the daemon never populates (§2) |
+| Embedded | `sdk/go/transport/embedded/dispatch.go`: method → `ServiceRegistry.Cluster` — which the embedded host sets to the daemon's cluster gRPC service (§2) |
 
 A client on QUIC or MCP gets the reply its gRPC call gives, and the refusal
 code — except `FailedPrecondition` on QUIC (§6).

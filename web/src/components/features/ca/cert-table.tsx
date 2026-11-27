@@ -16,7 +16,16 @@ interface CertTableProps {
   onDownload?: (cert: Certificate) => void;
   onRevoke?: (cert: Certificate) => void;
   onRenew?: (cert: Certificate) => void;
+  /** #2033 item 5: the server's capability for renew; disables the row item when off. */
+  renewGate?: CapabilityGate;
+  /** #2033 item 5: the server's capability for revoke; disables the row item when off. */
+  revokeGate?: CapabilityGate;
   loading?: boolean;
+}
+
+interface CapabilityGate {
+  enabled: boolean;
+  reason?: string;
 }
 
 /**
@@ -34,6 +43,8 @@ export function CertTable({
   onDownload,
   onRevoke,
   onRenew,
+  renewGate,
+  revokeGate,
   loading = false,
 }: CertTableProps) {
   const columns: ColumnDef<Certificate>[] = React.useMemo(
@@ -157,6 +168,7 @@ export function CertTable({
               onClick: onRenew,
               icon: RefreshCw,
               separator: actions.length > 0,
+              ...(renewGate ? { disabled: !renewGate.enabled, title: renewGate.enabled ? undefined : renewGate.reason } : {}),
             });
           }
 
@@ -167,6 +179,7 @@ export function CertTable({
               variant: "destructive",
               icon: XCircle,
               separator: true,
+              ...(revokeGate ? { disabled: !revokeGate.enabled, title: revokeGate.enabled ? undefined : revokeGate.reason } : {}),
             });
           }
 
@@ -174,7 +187,7 @@ export function CertTable({
         },
       },
     ],
-    [onView, onDownload, onRevoke, onRenew]
+    [onView, onDownload, onRevoke, onRenew, renewGate, revokeGate]
   );
 
   const filterableColumns: TypedFilterColumn<Certificate>[] = [

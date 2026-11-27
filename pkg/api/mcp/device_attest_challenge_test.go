@@ -15,6 +15,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"testing"
 
@@ -113,4 +114,87 @@ func TestDeviceAttestChallengeTool_IsRegisteredAsAWrite(t *testing.T) {
 	if perm := authz.toolPermissions["device_attest_challenge"]; perm != "device:write" {
 		t.Fatalf("permission = %q, want device:write: issuing a challenge stores server state for the device", perm)
 	}
+}
+
+func TestExecuteDeviceAttest_PassesTheChallengeID(t *testing.T) {
+	ctx := context.Background()
+	log := logging.DefaultLogger()
+	evidence := []byte(`{"quote":"x"}`)
+
+	run := func(t *testing.T, args map[string]interface{}) (string, []byte, string) {
+		t.Helper()
+		svc := newMockServiceProvider()
+		var gotID, gotChallenge string
+		var gotEvidence []byte
+		svc.deviceAttestFunc = func(_ context.Context, deviceID string, ev []byte, challengeID string) (interface{}, error) {
+			gotID, gotEvidence, gotChallenge = deviceID, ev, challengeID
+			return map[string]interface{}{"verified": true}, nil
+		}
+		registry := NewToolRegistry(svc, log)
+		if _, err := registry.ExecuteTool(ctx, "device_attest", args); err != nil {
+			t.Fatalf("ExecuteTool: %v", err)
+		}
+		return gotID, gotEvidence, gotChallenge
+	}
+
+	t.Run("challenge_id reaches the provider with the device id and the decoded evidence", func(t *testing.T) {
+		id, ev, challenge := run(t, map[string]interface{}{
+			"device_id":    "42",
+			"evidence":     base64.StdEncoding.EncodeToString(evidence),
+			"challenge_id": "c-1",
+		})
+		if id != "42" || string(ev) != string(evidence) || challenge != "c-1" {
+			t.Fatalf("provider got (%q, %q, %q), want (\"42\", %q, \"c-1\")", id, ev, challenge, evidence)
+		}
+	})
+
+	t.Run("without challenge_id the provider receives an empty challenge id", func(t *testing.T) {
+		_, _, challenge := run(t, map[string]interface{}{
+			"device_id": "42",
+			"evidence":  base64.StdEncoding.EncodeToString(evidence),
+		})
+		if challenge != "" {
+			t.Fatalf("challenge id = %q, want empty", challenge)
+		}
+	})
+}
+
+func TestDeviceAttestTool_TakesAnOptionalChallengeID(t *testing.T) {
+	registry := NewToolRegistry(newMockServiceProvider(), logging.DefaultLogger())
+	var def *mcpwire.ToolDefinition
+	for _, tool := range registry.ListTools() {
+		if tool.Name == "device_attest" {
+			d := tool
+			def = &d
+		}
+	}
+	if def == nil {
+		t.Fatal("device_attest is not registered")
+	}
+	props, _ := def.InputSchema["properties"].(map[string]interface{})
+	if _, ok := props["challenge_id"]; !ok {
+		t.Fatal("challenge_id is missing from the device_attest schema")
+	}
+	var required []string
+	switch req := def.InputSchema["required"].(type) {
+	case []string:
+		required = req
+	case []interface{}:
+		for _, name := range req {
+			s, _ := name.(string)
+			required = append(required, s)
+		}
+	}
+	if len(required) != 2 || !attestRequiredHas(required, "device_id") || !attestRequiredHas(required, "evidence") {
+		t.Fatalf("required = %#v, want only device_id and evidence: challenge_id stays optional", required)
+	}
+}
+
+func attestRequiredHas(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }

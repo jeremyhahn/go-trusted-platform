@@ -68,21 +68,35 @@ var errNoPEMBlock = &MessageError{Msg: "no PEM block"}
 var errNotASigner = &MessageError{Msg: "private key does not implement crypto.Signer"}
 
 // LoadPrivateKeyPEM reads a PKCS#1 or PKCS#8 private key from a PEM file.
+// The file buffer and the decoded key DER are wiped after parsing. The
+// parsed key itself cannot be scrubbed (crypto/rsa and crypto/ecdsa expose
+// no zeroization); see docs/security/protected-memory.md.
 func LoadPrivateKeyPEM(path string) (crypto.PrivateKey, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, &KeyFileError{Path: path, Stage: KeyFileRead, Err: err}
 	}
+	return parsePrivateKeyPEM(path, data)
+}
+
+// parsePrivateKeyPEM parses the first PEM block of data, read from path, as a
+// PKCS#1 or PKCS#8 private key. It owns data and zeroes it on return, and
+// zeroes the decoded key DER once it is parsed, on success or error.
+func parsePrivateKeyPEM(path string, data []byte) (crypto.PrivateKey, error) {
+	defer clear(data)
+
 	block, _ := pem.Decode(data)
 	if block == nil {
 		return nil, &KeyFileError{Path: path, Stage: KeyFileDecode, Err: errNoPEMBlock}
 	}
 	var key crypto.PrivateKey
+	var err error
 	if block.Type == "RSA PRIVATE KEY" {
 		key, err = x509.ParsePKCS1PrivateKey(block.Bytes)
 	} else {
 		key, err = x509.ParsePKCS8PrivateKey(block.Bytes)
 	}
+	clear(block.Bytes)
 	if err != nil {
 		return nil, &KeyFileError{Path: path, Stage: KeyFileParse, Err: err}
 	}
