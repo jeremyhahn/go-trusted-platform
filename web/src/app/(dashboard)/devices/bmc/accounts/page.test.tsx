@@ -38,4 +38,22 @@ describe('BMCAccountsPage', () => {
     expect(screen.getByTestId('bmc-cert-card').textContent).toBe('2');
     expect(screen.getByTestId('bmc-accounts-card').textContent).toBe('2');
   });
+
+  it.each(['abc', '01', '-1', '1.5', '18446744073709551616'])(
+    'shows a validation error and mounts no card for the invalid profile ID %s',
+    (value) => {
+      render(<BMCAccountsPage />);
+      fireEvent.change(screen.getByLabelText('BMC profile ID'), { target: { value } });
+      expect(screen.getByRole('alert').textContent).toContain('decimal');
+      expect(screen.queryByTestId('bmc-cert-card')).toBeNull();
+      expect(screen.queryByTestId('bmc-accounts-card')).toBeNull();
+    }
+  );
+
+  it('accepts the largest uint64 profile ID', () => {
+    render(<BMCAccountsPage />);
+    fireEvent.change(screen.getByLabelText('BMC profile ID'), { target: { value: '18446744073709551615' } });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByTestId('bmc-accounts-card').textContent).toBe('18446744073709551615');
+  });
 });

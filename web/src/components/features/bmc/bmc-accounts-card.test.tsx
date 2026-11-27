@@ -231,6 +231,16 @@ describe('BMCAccountsCard', () => {
     expect(screen.getByText('No BMC users')).toBeDefined();
   });
 
+  it('shows a rejected list read as the card error, with no unhandled rejection', async () => {
+    const sent = stub(baseRoutes());
+    render(withControlPlane(<BMCAccountsCard profileID="abc" />));
+
+    const error = await screen.findByTestId('bmc-accounts-error');
+    expect(error.textContent).toContain('invalid BMC profile ID');
+    expect(screen.getByText('No BMC users')).toBeDefined();
+    expect(bmc(sent)).toHaveLength(0);
+  });
+
   it('gates every account control on its users route', async () => {
     stub(baseRoutes());
     await renderCard();
