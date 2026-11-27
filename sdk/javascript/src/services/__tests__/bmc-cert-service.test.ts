@@ -9,6 +9,9 @@ import { BMCCertService } from '../bmc-cert-service.js';
 import type { BMCEnrollResult, BMCRestoreResult } from '../bmc-cert-service.js';
 import type { ApiClient } from '../../client/api-client.js';
 
+/** The request options every BMC certificate write must carry: no retry. */
+const NO_RETRY = { retry: { enabled: false } };
+
 function createMockApiClient(): ApiClient {
   return {
     get: vi.fn(),
@@ -48,13 +51,33 @@ describe('BMCCertService', () => {
     expect(mod.BMCCertService).toBe(BMCCertService);
   });
 
+  describe('retries', () => {
+    it('sends enrollBMC with retries off', async () => {
+      vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: {} });
+      await service.enrollBMC(7);
+      expect(vi.mocked(mockClient.post).mock.calls[0]?.at(-1)).toEqual({ retry: { enabled: false } });
+    });
+
+    it('sends restoreFactoryCert with retries off', async () => {
+      vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: {} });
+      await service.restoreFactoryCert(7);
+      expect(vi.mocked(mockClient.post).mock.calls[0]?.at(-1)).toEqual({ retry: { enabled: false } });
+    });
+
+    it('sends replaceWebCertificate with retries off', async () => {
+      vi.mocked(mockClient.put).mockResolvedValue({ success: true, data: { status: 'ok' } });
+      await service.replaceWebCertificate(7, { certPem: 'C', keyPem: 'K' });
+      expect(vi.mocked(mockClient.put).mock.calls[0]?.at(-1)).toEqual({ retry: { enabled: false } });
+    });
+  });
+
   describe('enrollBMC', () => {
     it('posts an empty JSON object to the enroll route when no option is given', async () => {
       vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: {} });
 
       await service.enrollBMC(7);
 
-      expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/7/enroll', {});
+      expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/7/enroll', {}, NO_RETRY);
     });
 
     it('maps every given option to its snake_case key', async () => {
@@ -72,7 +95,7 @@ describe('BMCCertService', () => {
         rotate_password: false,
         dns_register: true,
         dane_publish: false,
-      });
+      }, NO_RETRY);
     });
 
     it('leaves out the options not given so the profile defaults hold', async () => {
@@ -80,7 +103,7 @@ describe('BMCCertService', () => {
 
       await service.enrollBMC(7, { danePublish: true });
 
-      expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/7/enroll', { dane_publish: true });
+      expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/7/enroll', { dane_publish: true }, NO_RETRY);
     });
 
     it('returns the enroll answer unchanged', async () => {
@@ -130,7 +153,7 @@ describe('BMCCertService', () => {
       const result = await service.restoreFactoryCert(7);
 
       expect(mockClient.post).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(mockClient.post).mock.calls[0]).toEqual(['/v1/bmc/7/cert/restore']);
+      expect(vi.mocked(mockClient.post).mock.calls[0]).toEqual(['/v1/bmc/7/cert/restore', undefined, NO_RETRY]);
       expect(result).toEqual(answer);
     });
 
@@ -154,7 +177,7 @@ describe('BMCCertService', () => {
 
       const result = await service.replaceWebCertificate(7, { certPem: 'C', keyPem: 'K' });
 
-      expect(mockClient.put).toHaveBeenCalledWith('/v1/bmc/7/cert', { cert_pem: 'C', key_pem: 'K' });
+      expect(mockClient.put).toHaveBeenCalledWith('/v1/bmc/7/cert', { cert_pem: 'C', key_pem: 'K' }, NO_RETRY);
       expect(result).toEqual(answer);
     });
 

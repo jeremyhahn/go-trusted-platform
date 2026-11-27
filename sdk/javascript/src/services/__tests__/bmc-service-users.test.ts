@@ -122,6 +122,24 @@ describe('BMCService users', () => {
     });
   });
 
+  it('sends every account write with retries off', async () => {
+    const ok = { success: true, data: { status: 'ok' } };
+    vi.mocked(mockClient.post).mockResolvedValue(ok);
+    vi.mocked(mockClient.put).mockResolvedValue(ok);
+    vi.mocked(mockClient.delete).mockResolvedValue(ok);
+    const noRetry = { retry: { enabled: false } };
+
+    await service.createUser(5, { slot: 3, username: 'ops', password: 'pw', privilege: 'operator' });
+    await service.deleteUser(5, 3);
+    await service.setUserPassword(5, 3, 'new');
+    await service.setUserPrivilege(5, 3, 'user');
+
+    expect(vi.mocked(mockClient.post).mock.calls[0]?.at(-1)).toEqual(noRetry);
+    expect(vi.mocked(mockClient.delete).mock.calls[0]?.at(-1)).toEqual(noRetry);
+    expect(vi.mocked(mockClient.put).mock.calls[0]?.at(-1)).toEqual(noRetry);
+    expect(vi.mocked(mockClient.put).mock.calls[1]?.at(-1)).toEqual(noRetry);
+  });
+
   it('passes an error answer through unchanged', async () => {
     const failure = {
       success: false,
