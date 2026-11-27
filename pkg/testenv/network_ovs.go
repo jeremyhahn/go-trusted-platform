@@ -51,6 +51,19 @@ type OVSIsolatedNetwork struct {
 
 	// Network options
 	opts *OVSNetworkOptions
+
+	// iptablesCmd is the iptables front end setupNAT installed its rules
+	// with; Cleanup removes them with the same one.
+	iptablesCmd string
+}
+
+// cleanupIptablesCmd returns the backend setupNAT installed its rules with,
+// probing only when setup never recorded one.
+func (n *OVSIsolatedNetwork) cleanupIptablesCmd() string {
+	if n.iptablesCmd != "" {
+		return n.iptablesCmd
+	}
+	return iptablesProbe()
 }
 
 // OVSNetworkOptions holds options for OVS network creation
@@ -346,11 +359,10 @@ func (n *OVSIsolatedNetwork) setupNAT() error {
 	subnet := n.config.Subnet.String()
 	bridge := n.config.BridgeName
 
-	// Detect which iptables to use - prefer legacy if available since Docker uses it
-	iptablesCmd := "iptables-legacy"
-	if _, err := exec.LookPath("iptables-legacy"); err != nil {
-		iptablesCmd = "iptables"
-	}
+	// Detect which iptables to use - prefer legacy if available since Docker
+	// uses it; Cleanup reuses the recorded choice instead of probing again.
+	iptablesCmd := iptablesProbe()
+	n.iptablesCmd = iptablesCmd
 
 	fmt.Printf("[OVS] Setting up NAT rules for subnet %s, bridge %s (using %s)\n", subnet, bridge, iptablesCmd)
 
@@ -503,11 +515,8 @@ func (n *OVSIsolatedNetwork) Cleanup() error {
 
 	var lastErr error
 
-	// Detect which iptables to use - must match setupNAT
-	iptablesCmd := "iptables-legacy"
-	if _, err := exec.LookPath("iptables-legacy"); err != nil {
-		iptablesCmd = "iptables"
-	}
+	// Use the iptables backend setupNAT installed the rules with
+	iptablesCmd := n.cleanupIptablesCmd()
 
 	// Remove NAT rules using exec.Command for consistency with setupNAT
 	subnet := n.config.Subnet.String()

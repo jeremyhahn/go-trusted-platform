@@ -187,7 +187,10 @@ tracked here as
   exposes no zeroization API. Wiping `D` would clear one copy, leave the
   cached one, and read as a stronger guarantee than it is — so the code
   deliberately does not do it. This is the single strongest argument for
-  moving generation behind the upstream handle.
+  moving generation behind the upstream handle. The Secure Boot
+  provisioner (`enclaveSecureBootKey`) takes the same custody of each
+  generated PK/KEK/DB key, with the same generation limit for its RSA and
+  ECDSA keys.
 - **Resolution.** `ProcessSecrets` substitutes `kms://` references into
   the configuration as plain Go strings before the NTP service starts, so
   the startup material reaches `writeConfiguredNTSMaterial` as a string
@@ -195,6 +198,29 @@ tracked here as
   which narrows the window; closing it needs handle-preserving resolution
   below Layer 5. The same pipeline feeds the secure-boot provisioner, so
   this is a platform-wide gap, not an NTS one.
+- **Staging.** Install-media staging (`stageSecureBootFile` in
+  `pkg/iso`) writes any file not positively identified as a public
+  enrollment artifact owner-only (0600) and wipes its read buffer after
+  the write, as `writeConfiguredNTSMaterial` does. An existing destination
+  file or symlink is removed and the file re-created with the staging
+  mode, so a stale world-readable copy is never written through. Once
+  xorriso has run, successfully or not, `Builder.BuildISO` zeroes, syncs
+  and removes every staged non-public file under the ISO tree's
+  `secure-boot-keys/` and KeysDir copies, so the private key does not
+  outlive the build on the work tree; a KeysDir that is itself that tree
+  directory is the key source and is left alone. The key file inside the
+  ISO image is still plaintext, because sbsign and the installer need a key
+  file; only a KMS handle (go-quicbaas#136) removes it.
+- **Loading.** The Secure Boot DB-key loader (`authenticode.LoadPrivateKeyPEM`,
+  used by the installer, UKI rebuild and ISO build) and the module-signing
+  bundle (`secureboot.LoadModuleSigningKey` / `writeModuleSigningBundle`)
+  wipe the file buffer and the private-key DER they own; certificate bytes
+  are kept, because the parsed certificate's `Raw` aliases them. A forced
+  bundle write removes any existing file or symlink and re-creates the
+  bundle owner-only (0600, exclusive create) instead of truncating through
+  it. The parsed key object stays unscrubbable for the same reason as
+  generation (crypto/rsa and crypto/ecdsa expose no zeroization), and only
+  a KMS handle (go-quicbaas#136) removes the key file.
 
 The store write in between is bounded rather than protected: the SDK
 request field is a plain `[]byte` whose retention the platform cannot

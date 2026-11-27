@@ -110,6 +110,14 @@ func (s *MediaSpec) Validate() error {
 	if scheme == "" {
 		return ErrVirtualMediaInvalidSpec{Field: "URL", Reason: "missing scheme"}
 	}
+	// Every supported scheme names a server the BMC fetches from.
+	if parsed.Opaque != "" {
+		return ErrVirtualMediaInvalidSpec{Field: "URL", Reason: "must be hierarchical (scheme://host/path)"}
+	}
+	// Hostname, not Host: "https://:443/x.iso" has Host ":443" and no server.
+	if parsed.Hostname() == "" {
+		return ErrVirtualMediaInvalidSpec{Field: "URL", Reason: "missing host"}
+	}
 	inferred, ok := schemeToProtocol[scheme]
 	if !ok {
 		return ErrVirtualMediaInvalidSpec{Field: "URL", Reason: "unrecognized scheme: " + scheme}

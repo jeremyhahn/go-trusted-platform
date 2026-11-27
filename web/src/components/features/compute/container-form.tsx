@@ -32,6 +32,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useCompute, useMutation, useToast, MutationError } from '@/hooks';
+import { Gated } from '@/components/features/capabilities/gated';
 
 const portSchema = z.object({
   container: z.number().min(1).max(65535),
@@ -291,9 +292,11 @@ export function ContainerForm({ open, onOpenChange, onSuccess }: ContainerFormPr
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={createContainerMutation.isLoading}>
-                {createContainerMutation.isLoading ? 'Creating...' : 'Create Container'}
-              </Button>
+              <Gated op="POST /api/v1/compute/containers">
+                <Button type="submit" disabled={createContainerMutation.isLoading}>
+                  {createContainerMutation.isLoading ? 'Creating...' : 'Create Container'}
+                </Button>
+              </Gated>
             </DialogFooter>
           </form>
         </Form>

@@ -684,8 +684,8 @@ when a suite runs outside the runner.
 | `PLATFORM_MCP_ENDPOINT` | `https://localhost:9445` | MCP protocol endpoint (TLS 1.3 only, #844) |
 | `PLATFORM_SOCKET_PATH` | `/run/platformd.sock` | Unix socket path for local IPC |
 | `PLATFORMCTL_PATH` | `platformctl` (on `PATH`) | CLI binary path |
-| `PLATFORM_CLIENT_CERT`, `PLATFORM_CLIENT_KEY` | `client-bundle.pem` | Harness admin credential, subject `O=system` (`helpers.HarnessTenantID`) |
-| `PLATFORM_TENANT_CLIENT_CERT`, `PLATFORM_TENANT_CLIENT_KEY` | `tenant-client-bundle.pem` | Harness credential bound to the non-system tenant `harness-tenant` (`helpers.ForeignTenantID`) |
+| `PLATFORM_CLIENT_CERT`, `PLATFORM_CLIENT_KEY` | `client-bundle.pem` | Harness admin credential, subject `O=system, OU=system` (`helpers.HarnessTenantID`) |
+| `PLATFORM_TENANT_CLIENT_CERT`, `PLATFORM_TENANT_CLIENT_KEY` | `tenant-client-bundle.pem` | Harness credential bound to the non-system tenant `harness-tenant`, subject `O=harness-tenant, OU=harness-tenant` (`helpers.ForeignTenantID`) |
 | `PLATFORM_CA_CERT` | `ca-bundle.crt` | CA both client credentials chain to |
 
 The two client bundles live in `/tmp/platformd-integration/tls/`. platformd

@@ -302,6 +302,12 @@ func (h *IAMHandlers) consistentTenant(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (h *IAMHandlers) handleError(w http.ResponseWriter, r *http.Request, err error) {
+	if st, ok := status.FromError(err); ok && st.Code() == codes.Unimplemented {
+		// An operation the IAM service does not implement (e.g. policy
+		// simulation over the embedded transport) is 501, never 500.
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
 	errStr := err.Error()
 	switch {
 	case strings.Contains(errStr, "not found"):
@@ -424,7 +430,13 @@ func (h *IAMHandlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 		users = append(users, UserToProto(&resp.Users[i]))
 	}
 
+	// The total is the count IAM reports; IAM is not sent the offset, so the
+	// offset never enters it. Only an IAM that sends no count (the embedded
+	// one) is answered with the users this page carries.
 	total := int64(resp.Pagination.TotalCount)
+	if total == 0 {
+		total = int64(len(resp.Users))
+	}
 	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.ListIAMUsersResponse{
 		Users:      users,
 		Pagination: ListPagination(limit, offset, total),
@@ -1521,9 +1533,11 @@ func (h *IAMHandlers) RegisterApp(w http.ResponseWriter, r *http.Request) {
 
 	req.Resolve()
 	sdkReq := &iamsdk.RegisterAppRequest{
-		Name:         req.Name,
-		RedirectURIs: req.RedirectURIs,
-		GrantTypes:   parseGrantTypes(req.GrantTypes),
+		Name:           req.Name,
+		RedirectURIs:   req.RedirectURIs,
+		GrantTypes:     parseGrantTypes(req.GrantTypes),
+		ResponseTypes:  req.ResponseTypes,
+		ResourcePrefix: req.ResourcePrefix,
 	}
 
 	app, err := h.iamClient.RegisterApp(ctx, tenantID, sdkReq)
@@ -1619,9 +1633,11 @@ func (h *IAMHandlers) UpdateApp(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	sdkReq := &iamsdk.UpdateAppRequest{
-		Name:         req.Name,
-		RedirectURIs: req.RedirectURIs,
-		GrantTypes:   parseGrantTypes(req.GrantTypes),
+		Name:           req.Name,
+		RedirectURIs:   req.RedirectURIs,
+		GrantTypes:     parseGrantTypes(req.GrantTypes),
+		ResponseTypes:  req.ResponseTypes,
+		ResourcePrefix: req.ResourcePrefix,
 	}
 
 	app, err := h.iamClient.UpdateApp(ctx, tenantID, appID, sdkReq)
@@ -1696,6 +1712,9 @@ func appToResponse(a *iamsdk.Application) AppResponse {
 		Name:         a.Name,
 		RedirectURIs: a.RedirectURIs,
 		GrantTypes:   grantTypesToStrings(a.GrantTypes),
+
+		ResponseTypes:  a.ResponseTypes,
+		ResourcePrefix: a.ResourcePrefix,
 	}
 	if !a.CreatedAt.IsZero() {
 		t := a.CreatedAt

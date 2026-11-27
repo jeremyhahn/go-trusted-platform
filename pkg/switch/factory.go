@@ -22,6 +22,7 @@ type ConfiguratorFactory func(config *Config, logger *slog.Logger) (Configurator
 var configuratorRegistry = map[SwitchVendor]ConfiguratorFactory{
 	VendorCiscoNexus: newCiscoNexusConfigurator,
 	VendorNoop:       newNoopConfiguratorFactory,
+	VendorMemory:     newNoopConfiguratorFactory,
 }
 
 // NewConfigurator creates a switch configurator for the given vendor.
