@@ -52,7 +52,7 @@ test.describe('Bootstrap ceremony against the real platformd', () => {
     // The Platform group starts collapsed off its own pages; open it first.
     await adminPage.getByRole('button', { name: 'Platform', exact: true }).click();
     await adminPage.getByRole('link', { name: 'Bootstrap Ceremony' }).click();
-    await expect(adminPage).toHaveURL(/\/platform\/ceremony$/);
+    await expect(adminPage).toHaveURL(/\/platform\/ceremony\/?$/);
     await expect(adminPage.getByRole('heading', { name: 'Bootstrap ceremony' })).toBeVisible();
   });
 
