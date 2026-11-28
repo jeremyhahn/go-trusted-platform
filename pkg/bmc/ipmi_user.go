@@ -14,6 +14,7 @@
 package bmc
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -258,6 +259,20 @@ func (m *ipmiUserManager) CreateUser(ctx context.Context, u User, password *memg
 	// an old or blank one. Refuse before the first write.
 	if u.Enabled && (password == nil || password.Size() == 0) {
 		return ErrInvalidConfig{Field: "password", Reason: "an enabled user needs a password"}
+	}
+	// IPMI zero-pads the password field, so a NUL byte would store a
+	// truncated secret, and an all-NUL one a blank secret on an enabled user.
+	if password != nil {
+		hasNUL := false
+		if err := password.Open(func(pw []byte) error {
+			hasNUL = bytes.IndexByte(pw, 0) >= 0
+			return nil
+		}); err != nil {
+			return err
+		}
+		if hasNUL {
+			return ErrInvalidConfig{Field: "password", Reason: "a password may not contain a NUL byte"}
+		}
 	}
 	// Probe the slot before the first write: a slot that already holds an
 	// account is refused here, so a create only ever writes a slot it found
