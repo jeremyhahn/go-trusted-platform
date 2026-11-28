@@ -861,6 +861,33 @@ func TestCreateUser_OccupiedSlotSurvivesRejectedName(t *testing.T) {
 	}
 }
 
+// TestCreateUser_RefusesTheAnonymousSlot: slot 1 is the built-in anonymous
+// user, which Get User Name reports as empty. A create aimed at it is refused
+// before any command, so a rejected fixed-name write can never roll the
+// anonymous user back (Codex #2199 round 15).
+func TestCreateUser_RefusesTheAnonymousSlot(t *testing.T) {
+	m := newMock() // Get User Name answers an empty name, as the anonymous slot does
+	m.cmdErr = map[byte]error{cmdSetUserName: errors.New("fixed name")}
+	pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
+	defer pwd.Destroy()
+	err := newUM(m).CreateUser(context.Background(), User{
+		Slot: 1, Username: "alice", Privilege: PrivilegeAdministrator, Enabled: true,
+	}, pwd)
+	var cfgErr ErrInvalidConfig
+	if !errors.As(err, &cfgErr) || cfgErr.Field != "slot" {
+		t.Fatalf("CreateUser into slot 1 = %v, want ErrInvalidConfig on slot", err)
+	}
+	for i, c := range m.calls {
+		switch c.cmd {
+		case cmdSetUserName, cmdSetUserAccess, cmdSetUserPassword:
+			t.Errorf("call[%d] = 0x%02x: the anonymous user was written", i, c.cmd)
+		}
+	}
+	if len(m.calls) != 0 {
+		t.Errorf("want no IPMI command, got %d", len(m.calls))
+	}
+}
+
 // A failed probe returns its error and writes nothing.
 func TestCreateUser_NameProbeErrorWritesNothing(t *testing.T) {
 	m := newMock()
