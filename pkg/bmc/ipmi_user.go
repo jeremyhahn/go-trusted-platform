@@ -220,7 +220,10 @@ func (m *ipmiUserManager) ListUsers(_ context.Context) ([]User, error) {
 // When any write fails, CreateUser rolls the slot back: it disables the
 // user, revokes its channel access and clears the name, and returns the
 // failure joined with any rollback error. The name write is rolled back
-// too, because a BMC may apply it and lose only the response.
+// too, because a BMC may apply it and lose only the response. The rollback
+// first re-reads the slot name and runs only when the slot is empty or still
+// holds u.Username; a slot another caller filled meanwhile is left untouched
+// and ErrSlotOccupied is joined to the failure.
 //
 // It first reads the slot's name and refuses a populated slot with
 // ErrSlotOccupied, writing nothing, so a rollback never touches an
@@ -268,7 +271,7 @@ func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memgua
 	if err := m.setUserName(u.Slot, u.Username); err != nil {
 		// The BMC may have applied the name and lost only the response;
 		// a populated slot would refuse every retry as occupied.
-		return errors.Join(err, m.rollbackCreate(u))
+		return errors.Join(err, m.rollbackOwnCreate(u))
 	}
 	if err := m.finishCreate(u, password); err != nil {
 		// Roll the slot back. A failed step may still have been applied on
@@ -277,7 +280,9 @@ func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memgua
 		// access too, then clear the name so a retry is not refused as
 		// occupied. Every step runs, and every cleanup error is returned
 		// joined to the first, so a caller sees a rollback that failed.
-		return errors.Join(err, m.rollbackCreate(u))
+		// The rollback runs only while the slot still shows this caller's
+		// name (rollbackOwnCreate).
+		return errors.Join(err, m.rollbackOwnCreate(u))
 	}
 	return nil
 }
@@ -323,6 +328,24 @@ func (m *ipmiUserManager) rollbackCreate(u User) error {
 	accessErr := m.setUserAccess(u.Slot, channel, PrivilegeNoAccess, false)
 	nameErr := m.setUserName(u.Slot, "")
 	return errors.Join(disableErr, accessErr, nameErr)
+}
+
+// rollbackOwnCreate rolls back only a slot this call may own. IPMI has no
+// compare-and-set on a user slot, so another manager (another profile,
+// daemon or CLI) can fill a slot both probed empty. It re-reads the name and
+// calls rollbackCreate only when the slot is empty or still shows
+// u.Username; any other name means the slot is not ours, so it returns
+// ErrSlotOccupied and writes nothing. A failed re-read is returned and
+// nothing is rolled back.
+func (m *ipmiUserManager) rollbackOwnCreate(u User) error {
+	name, err := m.getUserName(u.Slot)
+	if err != nil {
+		return err
+	}
+	if name != "" && name != u.Username {
+		return ErrSlotOccupied{Slot: u.Slot}
+	}
+	return m.rollbackCreate(u)
 }
 
 // SetUserPassword changes the password of an existing slot.
