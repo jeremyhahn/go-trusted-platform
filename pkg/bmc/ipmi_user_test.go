@@ -576,6 +576,8 @@ func TestCreateUser_EnabledWithoutPasswordWritesNothing(t *testing.T) {
 	}{
 		{name: "nil", pwd: nil},
 		{name: "empty", pwd: memguard.NewMemoryEnclave([]byte{})},
+		{name: "all_nul", pwd: memguard.NewMemoryEnclave([]byte{0})},
+		{name: "embedded_nul", pwd: memguard.NewMemoryEnclave([]byte("ab\x00cd"))},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
