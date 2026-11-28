@@ -33,38 +33,27 @@ describe('useKmsDigest', () => {
     expect(res?.data?.digest).toBe('ZGlnZXN0');
   });
 
-  it('computes an HMAC under the escaped key name', async () => {
+  it('withholds HMAC and Verify HMAC without a request', async () => {
+    // #2180 round 9: the backend makes a fresh MAC key per call, so a verify
+    // never matches. The hook refuses both until the key is stable.
     const sent = stubControlPlane({
-      'POST /api/v1/kms/hmac/team%2Fk%201': ok({ key_id: 'team/k 1', hmac: 'dGFn' }),
-    });
-    const { result } = renderHook(() => useKmsDigest(), { wrapper });
-
-    let res: Awaited<ReturnType<typeof result.current.hmac>> | undefined;
-    await act(async () => {
-      res = await result.current.hmac('team/k 1', 'hi', 'SHA-256');
-    });
-
-    expect(sent[0].method).toBe('POST');
-    expect(sent[0].path).toBe('/api/v1/kms/hmac/team%2Fk%201');
-    expect(sent[0].body).toMatchObject({ data: btoa('hi'), hash: 'SHA-256' });
-    expect(res?.data?.hmac).toBe('dGFn');
-  });
-
-  it('verifies a trimmed tag', async () => {
-    const sent = stubControlPlane({
+      'POST /api/v1/kms/hmac/k1': ok({ key_id: 'k1', hmac: 'dGFn' }),
       'POST /api/v1/kms/hmac/k1/verify': ok({ valid: true }),
     });
     const { result } = renderHook(() => useKmsDigest(), { wrapper });
 
-    let res: Awaited<ReturnType<typeof result.current.verifyHmac>> | undefined;
+    let mac: Awaited<ReturnType<typeof result.current.hmac>> | undefined;
+    let verdict: Awaited<ReturnType<typeof result.current.verifyHmac>> | undefined;
     await act(async () => {
-      res = await result.current.verifyHmac('k1', 'hi', ' dGFn ', 'SHA-256');
+      mac = await result.current.hmac('k1', 'hi', 'SHA-256');
+      verdict = await result.current.verifyHmac('k1', 'hi', 'dGFn', 'SHA-256');
     });
 
-    expect(sent[0].method).toBe('POST');
-    expect(sent[0].path).toBe('/api/v1/kms/hmac/k1/verify');
-    expect(sent[0].body).toEqual({ data: btoa('hi'), hmac: 'dGFn', hash: 'SHA-256' });
-    expect(res?.data?.valid).toBe(true);
+    expect(sent).toHaveLength(0);
+    expect(mac?.success).toBe(false);
+    expect(mac?.error?.message).toContain('stable MAC key');
+    expect(verdict?.success).toBe(false);
+    expect(verdict?.error?.message).toContain('stable MAC key');
   });
 
   it('surfaces a refused hash', async () => {

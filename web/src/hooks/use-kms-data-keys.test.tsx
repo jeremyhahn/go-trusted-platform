@@ -46,21 +46,27 @@ describe('useKMSDataKeys', () => {
     expect(res?.data?.encrypted_key).toBe('ZW5j');
   });
 
-  it('sends the encryption context as base64', async () => {
+  it('refuses a nonempty encryption context without a request', async () => {
+    // #2180 round 9: the pinned backend ignores the context, so a key wrapped
+    // "under" one would unwrap without it. Refuse it rather than send it.
     const sent = stubControlPlane({
-      'POST /api/v1/kms/data-keys': ok({
-        key_id: 'kek-1',
-        plaintext_key: btoa('k'.repeat(32)),
-        encrypted_key: 'ZW5j',
-      }),
+      'POST /api/v1/kms/data-keys': ok({ key_id: 'kek-1', plaintext_key: btoa('k'.repeat(32)), encrypted_key: 'ZW5j' }),
+      'POST /api/v1/kms/data-keys/wrapped': ok({ wrapping_key_id: 'kek-2', wrapped_key: 'd3JhcA==' }),
     });
     const { result } = renderHook(() => useKMSDataKeys(), { wrapper });
 
+    let res: DataKeyResult | undefined;
+    let wrapped: WrappedResult | undefined;
     await act(async () => {
-      await result.current.generateDataKey('kek-1', 'tenant=a');
+      res = await result.current.generateDataKey('kek-1', 'tenant=a');
+      wrapped = await result.current.generateWrappedDataKey('kek-2', 'tenant=a');
     });
 
-    expect(sent[0].body).toEqual({ key_id: 'kek-1', context: btoa('tenant=a') });
+    expect(sent).toHaveLength(0);
+    expect(res?.success).toBe(false);
+    expect(res?.error?.message).toContain('context');
+    expect(wrapped?.success).toBe(false);
+    expect(wrapped?.error?.message).toContain('context');
   });
 
   it('surfaces a missing key id', async () => {

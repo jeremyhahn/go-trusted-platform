@@ -75,16 +75,12 @@ describe('DataKeysPage GenerateDataKey', () => {
     }
   });
 
-  it('sends the encryption context as base64', async () => {
-    const sent = stubControlPlane({ [ROUTE]: minted });
+  it('offers no encryption context input', () => {
+    // #2180 round 9: the pinned backend ignores the context, so it is not offered.
+    stubControlPlane({ [ROUTE]: minted });
     renderPage();
 
-    type('Key ID', 'kek-1');
-    type('Encryption context', ' tenant=a ');
-    await click('Generate data key');
-
-    await screen.findByTestId('data-key-plaintext');
-    expect(sent[0].body).toEqual({ key_id: 'kek-1', context: btoa('tenant=a') });
+    expect(screen.queryByLabelText('Encryption context')).toBeNull();
   });
 
   it('hides the plaintext and stores nothing', async () => {

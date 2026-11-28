@@ -67,6 +67,26 @@ describe('SDNService policies', () => {
     expect(result.data?.policy?.id).toBe('p1');
   });
 
+  it('forwards enabled: false to withdraw an installed policy (Q8 (a))', async () => {
+    // The backend removes the policy's flows and marks it inactive when an
+    // installed policy is applied again with enabled false.
+    vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: { policy: { id: 'p1' } } });
+    const request: ApplyPolicyRequest = {
+      policyId: 'p1',
+      config: { name: 'deny-ssh', priority: 10, enabled: false, rules: [] },
+    };
+
+    await service.applyPolicy(request);
+
+    expect(mockClient.post).toHaveBeenCalledTimes(1);
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/sdn/policies', {
+      policyId: 'p1',
+      config: { name: 'deny-ssh', priority: 10, enabled: false, rules: [] },
+    });
+    const body = vi.mocked(mockClient.post).mock.calls[0]?.[1] as ApplyPolicyRequest;
+    expect(body.config?.enabled).toBe(false);
+  });
+
   it('lists policies on GET /v1/sdn/policies', async () => {
     const data: ListPoliciesResponse = { policies: [{ id: 'p1' }] };
     vi.mocked(mockClient.get).mockResolvedValue({ success: true, data });

@@ -68,16 +68,12 @@ describe('DataKeysPage GenerateWrappedDataKey', () => {
     expect(screen.queryByTestId('data-key-plaintext')).toBeNull();
   });
 
-  it('sends the wrapping context as base64', async () => {
-    const sent = stubControlPlane({ [ROUTE]: wrapped });
+  it('offers no wrapping context input', () => {
+    // #2180 round 9: the pinned backend ignores the context, so it is not offered.
+    stubControlPlane({ [ROUTE]: wrapped });
     renderPage();
 
-    type('Wrapping key ID', 'kek-2');
-    type('Wrapping context', 'tenant=a');
-    await click('Generate wrapped data key');
-
-    await screen.findByTestId('wrapped-key');
-    expect(sent[0].body).toEqual({ wrapping_key_id: 'kek-2', context: btoa('tenant=a') });
+    expect(screen.queryByLabelText('Wrapping context')).toBeNull();
   });
 
   it('shows the unknown wrapping key refusal', async () => {

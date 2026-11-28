@@ -77,16 +77,12 @@ function clickAll(controls: Array<[string, string]>) {
 }
 
 describe('KMS cards capability gate (#2057)', () => {
-  it('KmsDigestCard withholds Hash, Compute HMAC and Verify HMAC the server does not offer', async () => {
-    const controls: Array<[string, string]> = [
-      ['Hash', HASH],
-      ['Compute HMAC', HMAC],
-      ['Verify HMAC', VERIFY],
-    ];
+  it('KmsDigestCard withholds Hash the server does not offer', async () => {
+    // Compute HMAC and Verify HMAC are withheld outright until the backend
+    // uses a stable MAC key (#2180 round 9); kms-digest-card.hmac.test.tsx.
+    const controls: Array<[string, string]> = [['Hash', HASH]];
     const fillDigest = () => {
       fill('Text to hash', 'hi');
-      fill('Key name', 'k1');
-      fill('Tag (base64)', 'dGFn');
     };
 
     const sent = renderCard(<KmsDigestCard />, [HASH, HMAC, VERIFY]) as Sent;
