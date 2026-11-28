@@ -16,6 +16,8 @@ package app
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
@@ -358,6 +360,88 @@ func TestProvisionSecureBootKeys_ECDSA(t *testing.T) {
 	require.True(t, ok, "expected ECDSA key, got %T", key)
 	assert.Equal(t, "P-384", ecKey.Curve.Params().Name)
 	assert.Equal(t, "ECDSA-P384", store.meta["platform/secureboot/db"]["algorithm"])
+}
+
+// TestEnclaveSecureBootKey pins the custody step Secure Boot provisioning
+// shares with NTS: the generated key is marshalled straight into a memguard
+// enclave, and the enclave holds exactly that key.
+func TestEnclaveSecureBootKey(t *testing.T) {
+	openPKCS8 := func(t *testing.T, enclave interface {
+		Open(func([]byte) error) error
+	}) any {
+		t.Helper()
+		var parsed any
+		require.NoError(t, enclave.Open(func(keyPEM []byte) error {
+			block, _ := pem.Decode(keyPEM)
+			require.NotNil(t, block)
+			assert.Equal(t, "PRIVATE KEY", block.Type)
+			var parseErr error
+			parsed, parseErr = x509.ParsePKCS8PrivateKey(block.Bytes)
+			require.NoError(t, parseErr)
+			return nil
+		}))
+		return parsed
+	}
+
+	t.Run("captures an RSA key intact", func(t *testing.T) {
+		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		require.NoError(t, err)
+
+		enclave, err := enclaveSecureBootKey(key)
+		require.NoError(t, err)
+		defer enclave.Destroy()
+		require.True(t, enclave.IsAlive())
+
+		parsed, ok := openPKCS8(t, enclave).(*rsa.PrivateKey)
+		require.True(t, ok)
+		assert.True(t, key.Equal(parsed))
+	})
+
+	t.Run("captures an ECDSA key intact", func(t *testing.T) {
+		key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+		require.NoError(t, err)
+
+		enclave, err := enclaveSecureBootKey(key)
+		require.NoError(t, err)
+		defer enclave.Destroy()
+		require.True(t, enclave.IsAlive())
+
+		parsed, ok := openPKCS8(t, enclave).(*ecdsa.PrivateKey)
+		require.True(t, ok)
+		assert.True(t, key.Equal(parsed))
+	})
+
+	t.Run("a value that is not a key is an error, not a dead enclave", func(t *testing.T) {
+		enclave, err := enclaveSecureBootKey("not a key")
+		require.Error(t, err)
+		assert.Nil(t, enclave)
+	})
+}
+
+// TestProvisionSecureBootKeys_StoredKeyIsACopyOfTheEnclave proves the store
+// is handed a copy of the enclave's contents: every slot's enclave is
+// destroyed by the time provisioning returns, so a borrow of the freed
+// locked region would fault or read garbage here.
+func TestProvisionSecureBootKeys_StoredKeyIsACopyOfTheEnclave(t *testing.T) {
+	ctx := context.Background()
+	app := secureBootTestApp()
+	store := newFakeSecretStore()
+
+	require.NoError(t, app.provisionSecureBootKeys(ctx, store))
+
+	for _, path := range []string{
+		"platform/secureboot/pk",
+		"platform/secureboot/kek",
+		"platform/secureboot/db",
+	} {
+		data, ok := store.get(path)
+		require.True(t, ok, "missing secret at %s", path)
+		block, _ := pem.Decode(data)
+		require.NotNil(t, block, "private key at %s is not PEM", path)
+		assert.Equal(t, "PRIVATE KEY", block.Type)
+		_, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		require.NoError(t, err, "private key at %s does not parse", path)
+	}
 }
 
 // TestProvisionSecureBootKeys_DefaultCN verifies a config that omits cn still

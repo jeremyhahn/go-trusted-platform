@@ -1,7 +1,7 @@
 package arch
 
-// Behavioural tests of ci.yml's runner selection (ci-template v1.48, Tenant
-// Agent rulings 1024 and 1031, #2128; Codex P1 on #2129). The run: script of
+// Behavioural tests of ci.yml's runner selection (ci-template v1.60, the
+// step `Balanced runner pool (ruling 1137)`). The run: script of
 // the preflight step `id: runner` is taken from ci.yml as is and run with
 // bash against fixture Actions API replies. A stub curl first on PATH serves
 // the replies from files and logs every URL it is asked for, so the test
@@ -79,6 +79,7 @@ type selReply struct {
 var (
 	selUbuntu     = []string{"ubuntu-latest"}
 	selSelfHosted = []string{"self-hosted", "linux", "x64", "bigdisk"}
+	selDocker     = []string{"self-hosted", "linux", "x64", "bigdisk-docker"}
 )
 
 // selJobs returns n jobs of run with the given status and labels, created
@@ -202,18 +203,13 @@ type selResult struct {
 }
 
 // selEnv is the step env of a case; the keys match the step's env: block.
+// vars overrides the repository variables HS, C1 and C2 (12, 4 and 4).
 type selEnv struct {
 	server, event, headRepo, ref string
-}
-
-// selMain is the ref of a push to main.
-const selMain = "refs/heads/main"
-
-// selMayOverflow reports whether e is an event the step lets reach the API
-// count (DS-10475): a push to main, or a pull request (the fork check then
-// decides).
-func selMayOverflow(e selEnv) bool {
-	return (e.event == "push" && e.ref == selMain) || e.event == "pull_request"
+	vars                         map[string]string
+	// private: the repository is private (PRIVATE=true); the default is a
+	// public repository, PRIVATE=false (v1.62 overflow applies).
+	private bool
 }
 
 // runSel runs script with the fixture replies and env and returns its result.
@@ -268,12 +264,18 @@ func runSel(t *testing.T, script string, replies map[string]selReply, e selEnv) 
 		"API=" + selAPI,
 		"RUN_ID=" + fmt.Sprint(selRunID),
 		"JOB_TOKEN=fixture-token",
-		"LIMIT=" + selEnvValue(t, "HOSTED_JOBS_PER_REPO"),
-		"GRACE=" + selEnvValue(t, "HOSTED_QUEUE_GRACE_SECONDS"),
 		"REPO=" + selRepo,
 		"HEAD_REPO=" + e.headRepo,
 		"EVENT=" + e.event,
 		"REF=" + e.ref,
+		"PRIVATE=" + fmt.Sprint(e.private),
+		"WAIT_LIMIT=600",
+	}
+	for k, v := range map[string]string{"HS": "12", "C1": "4", "C2": "4"} {
+		if o, ok := e.vars[k]; ok {
+			v = o
+		}
+		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 	out, err := cmd.CombinedOutput()
 	res := selResult{stdout: string(out)}
@@ -306,65 +308,53 @@ func runSel(t *testing.T, script string, replies map[string]selReply, e selEnv) 
 	return res
 }
 
-// selEnvValue is the workflow-level env value of key in ci.yml.
-func selEnvValue(t *testing.T, key string) string {
-	t.Helper()
-	var doc yaml.Node
-	if err := yaml.Unmarshal(readCI(t), &doc); err != nil || len(doc.Content) == 0 {
-		t.Fatalf("ci.yml does not parse: %s", errString(err))
-	}
-	v := mapValue(mapValue(doc.Content[0], "env"), key)
-	if v == nil {
-		t.Fatalf("ci.yml has no env %s", key)
-	}
-	return v.Value
-}
-
 // TestRunnerSelectionStepEnv pins the env the step reads to the env this
-// test sets, so a new input of the script is not left at its zero value.
+// test sets, so a new input of the script is not left at its zero value, and
+// the limits to the repository variables the Infra Department sets.
 func TestRunnerSelectionStepEnv(t *testing.T) {
 	got := readSelStep(t, readCI(t)).env
 	sort.Strings(got)
-	want := []string{"API", "EVENT", "GRACE", "HEAD_REPO", "JOB_TOKEN", "LIMIT", "REF", "REPO", "RUN_ID", "SERVER"}
+	want := []string{"API", "C1", "C2", "EVENT", "HEAD_REPO", "HS", "JOB_TOKEN", "PRIVATE", "REF", "REPO", "RUN_ID", "SERVER", "WAIT_LIMIT"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("the selection step's env keys are %v; this test sets %v", got, want)
 	}
-	if l, g := selEnvValue(t, "HOSTED_JOBS_PER_REPO"), selEnvValue(t, "HOSTED_QUEUE_GRACE_SECONDS"); l != "12" || g != "60" {
-		t.Fatalf("HOSTED_JOBS_PER_REPO=%s HOSTED_QUEUE_GRACE_SECONDS=%s; the cases below assume 12 and 60", l, g)
+	body := string(readCI(t))
+	for _, v := range []string{"HS: ${{ vars.CI_HOSTED_SHARE }}", "C1: ${{ vars.CI_SELF_HOSTED_BIGDISK }}", "C2: ${{ vars.CI_SELF_HOSTED_BIGDISK_DOCKER }}", "PRIVATE: ${{ github.event.repository.private }}", "WAIT_LIMIT: 600"} {
+		if !strings.Contains(body, v) {
+			t.Errorf("the selection step does not read %q", v)
+		}
 	}
 }
 
 // TestRunnerSelectionScript runs the real selection script against each
-// fixture and checks the runner it picks.
+// fixture and checks the pool it picks: with HS=12 and C1=C2=4, the less-used
+// pool, a tie to the self-hosted pool; one pool full, the other; both full,
+// fewer queued, a tie to the self-hosted pool.
 func TestRunnerSelectionScript(t *testing.T) {
 	script := readSelStep(t, readCI(t)).run
 	const (
 		hosted   = "hosted"
-		overflow = "overflow"
+		selfPool = "self-hosted"
+		main     = "refs/heads/main"
+		prRef    = "refs/pull/1/merge"
+		forkNote = "head repository is not this repository (a fork)"
+		refused  = "only a push to refs/heads/main or a pull request from this repository may reach a self-hosted runner"
 	)
-	self := selJobs(1, selRunID, "in_progress", selUbuntu, 5*time.Second) // this preflight job
-	gh := selEnv{server: "https://github.com", event: "push", ref: selMain}
-	sameRepoPR := selEnv{server: "https://github.com", event: "pull_request", ref: "refs/pull/7/merge", headRepo: selRepo}
-	forkPR := selEnv{server: "https://github.com", event: "pull_request", ref: "refs/pull/7/merge", headRepo: "someone/repo"}
-	// v1.52: a deleted fork leaves the head repository empty; it is still
-	// not this repository.
-	deletedForkPR := selEnv{server: "https://github.com", event: "pull_request", ref: "refs/pull/7/merge"}
-	// DS-10475: pull_request_target is hosted from any head repository.
-	forkPRT := selEnv{server: "https://github.com", event: "pull_request_target", ref: selMain, headRepo: "someone/repo"}
-	sameRepoPRT := selEnv{server: "https://github.com", event: "pull_request_target", ref: selMain, headRepo: selRepo}
-	// A push has no pull request head: the fork check does not apply.
-	pushForeignHead := selEnv{server: "https://github.com", event: "push", ref: selMain, headRepo: "someone/repo"}
-	// DS-10475: only a push to main may overflow; the self-hosted image
-	// hook refuses schedule and workflow_dispatch runs.
-	pushOtherBranch := selEnv{server: "https://github.com", event: "push", ref: "refs/heads/feature"}
-	pushTag := selEnv{server: "https://github.com", event: "push", ref: "refs/tags/v1.0.0"}
-	schedule := selEnv{server: "https://github.com", event: "schedule", ref: selMain}
-	dispatch := selEnv{server: "https://github.com", event: "workflow_dispatch", ref: selMain}
-	otherEvent := selEnv{server: "https://github.com", event: "merge_group", ref: "refs/heads/gh-readonly-queue/main/pr-7", headRepo: selRepo}
-	saturated := slices.Concat(self, selJobs(30, 7, "in_progress", selUbuntu, time.Minute), selJobs(5, 8, "queued", selUbuntu, 10*time.Minute))
-	// 150 jobs of one run: the first page all done, the 12 in progress on
-	// the second page, so only a complete read overflows.
-	paged := slices.Concat(selJobs(100, 9, "completed", selUbuntu, time.Hour), selJobs(38, 9, "completed", selUbuntu, time.Hour), selJobs(12, 9, "in_progress", selUbuntu, time.Minute))
+	gh := func(event, ref, headRepo string) selEnv {
+		return selEnv{server: "https://github.com", event: event, ref: ref, headRepo: headRepo}
+	}
+	push := gh("push", main, "")
+	private := push
+	private.private = true
+	vars := func(k, v string) selEnv { e := push; e.vars = map[string]string{k: v}; return e }
+	h := func(n int, st string) []selJob { return selJobs(n, 7, st, selUbuntu, time.Minute) }
+	s1 := func(n int, st string) []selJob { return selJobs(n, 8, st, selSelfHosted, time.Minute) }
+	s2 := func(n int, st string) []selJob { return selJobs(n, 8, st, selDocker, time.Minute) }
+	self := selJobs(1, selRunID, "in_progress", selSelfHosted, 5*time.Second) // this preflight job
+	hostedFull := slices.Concat(self, h(12, "in_progress"))
+	// 150 jobs of one run: the 12 in progress on the second page, so only a
+	// complete read sees the hosted pool full.
+	paged := slices.Concat(self, s1(1, "in_progress"), selJobs(138, 9, "completed", selUbuntu, time.Hour), selJobs(12, 9, "in_progress", selUbuntu, time.Minute))
 	jobsURL := func(run, page int) string {
 		return selPage(fmt.Sprintf("%s/runs/%d/jobs?filter=latest", selAPI, run), page)
 	}
@@ -376,84 +366,75 @@ func TestRunnerSelectionScript(t *testing.T) {
 		jobs    []selJob
 		break_  func(map[string]selReply)
 		want    string
-		warning bool // a ::warning names why there is no count
-		noCalls bool // the step must not call the API
+		warning bool   // a ::warning names why there is no count
+		notice  string // a ::notice line contains it
+		noCalls bool   // the step must not call the API
+		notCall string // no called URL contains it
 	}{
-		{name: "no other jobs", env: gh, jobs: self, want: hosted},
-		{name: "11 hosted jobs in progress, under the limit", env: gh,
-			jobs: slices.Concat(self, selJobs(10, 7, "in_progress", selUbuntu, time.Minute)), want: hosted},
-		{name: "12 hosted jobs in progress, at the limit", env: gh,
-			jobs: slices.Concat(self, selJobs(11, 7, "in_progress", selUbuntu, time.Minute)), want: overflow},
-		{name: "12 hosted jobs in progress across runs", env: gh,
-			jobs: slices.Concat(self, selJobs(4, 7, "in_progress", selUbuntu, time.Minute), selJobs(7, 8, "in_progress", selUbuntu, time.Minute)), want: overflow},
-		{name: "self-hosted jobs in progress do not count", env: gh,
-			jobs: slices.Concat(self, selJobs(10, 7, "in_progress", selUbuntu, time.Minute), selJobs(20, 7, "in_progress", selSelfHosted, time.Minute)), want: hosted},
-		{name: "completed jobs do not count", env: gh,
-			jobs: slices.Concat(self, selJobs(10, 7, "in_progress", selUbuntu, time.Minute), selJobs(20, 7, "completed", selUbuntu, time.Minute)), want: hosted},
-		{name: "12 hosted jobs of another run queued under 60s", env: gh,
-			jobs: slices.Concat(self, selJobs(12, 7, "queued", selUbuntu, 45*time.Second)), want: hosted},
-		{name: "12 hosted jobs of another run queued 60s", env: gh,
-			jobs: slices.Concat(self, selJobs(12, 7, "queued", selUbuntu, 60*time.Second)), want: overflow},
-		{name: "one hosted job of another run queued 90s", env: gh,
-			jobs: slices.Concat(self, selJobs(1, 7, "queued", selUbuntu, 90*time.Second)), want: overflow},
-		{name: "this run's own jobs queued 90s do not count", env: gh,
-			jobs: slices.Concat(self, selJobs(12, selRunID, "queued", selUbuntu, 90*time.Second)), want: hosted},
-		{name: "a self-hosted job queued 90s does not count", env: gh,
-			jobs: slices.Concat(self, selJobs(3, 7, "queued", selSelfHosted, 90*time.Second)), want: hosted},
-		{name: "a same-repository pull request at saturation", env: sameRepoPR, jobs: saturated, want: overflow},
-		{name: "a fork pull request at saturation", env: forkPR, jobs: saturated, want: hosted, noCalls: true},
-		{name: "a deleted-fork pull request at saturation", env: deletedForkPR, jobs: saturated, want: hosted, noCalls: true},
-		{name: "a fork pull_request_target at saturation", env: forkPRT, jobs: saturated, want: hosted, noCalls: true},
-		{name: "a same-repository pull_request_target at saturation", env: sameRepoPRT, jobs: saturated, want: hosted, noCalls: true},
-		{name: "a push at saturation takes no fork check", env: pushForeignHead, jobs: saturated, want: overflow},
-		{name: "a push to another branch at saturation", env: pushOtherBranch, jobs: saturated, want: hosted, noCalls: true},
-		{name: "a tag push at saturation", env: pushTag, jobs: saturated, want: hosted, noCalls: true},
-		{name: "a schedule run at saturation", env: schedule, jobs: saturated, want: hosted, noCalls: true},
-		{name: "a workflow_dispatch run at saturation", env: dispatch, jobs: saturated, want: hosted, noCalls: true},
-		{name: "any other event at saturation", env: otherEvent, jobs: saturated, want: hosted, noCalls: true},
-		{name: "off github.com at saturation", env: selEnv{server: "https://gitea.example", event: "push", ref: selMain}, jobs: saturated, want: hosted, noCalls: true},
-		{name: "a schedule run off github.com", env: selEnv{server: "https://gitea.example", event: "schedule", ref: selMain}, jobs: saturated, want: hosted, noCalls: true},
-		{name: "a second jobs page read in full", env: gh, jobs: slices.Concat(self, paged), want: overflow},
-		{name: "a failed second jobs page at saturation", env: gh, jobs: slices.Concat(saturated, paged),
+		// Both pools below their limit: the lower use wins, a tie self-hosted.
+		{name: "an idle repository: a tie", env: push, jobs: self, want: selfPool, notice: "use hosted 0/12, bigdisk 0/4, bigdisk-docker 0/4"},
+		{name: "hosted busier", env: push, jobs: slices.Concat(self, h(3, "in_progress")), want: selfPool},
+		{name: "equal use: a tie", env: push, jobs: slices.Concat(self, h(3, "in_progress"), s1(1, "in_progress")), want: selfPool, notice: "use hosted 3/12, bigdisk 1/4"},
+		{name: "the self-hosted pool busier", env: push, jobs: slices.Concat(self, h(1, "in_progress"), s1(1, "in_progress")), want: hosted},
+		{name: "bigdisk-docker above hosted use", env: push, jobs: slices.Concat(self, h(6, "in_progress"), s2(3, "in_progress")), want: hosted},
+		{name: "queued jobs count as use", env: push, jobs: slices.Concat(self, h(1, "in_progress"), s1(1, "queued")), want: hosted},
+		{name: "completed jobs are not counted", env: push, jobs: slices.Concat(self, h(1, "in_progress"), s1(4, "completed")), want: selfPool},
+		{name: "this run's own jobs are not counted", env: push, jobs: slices.Concat(self, selJobs(4, selRunID, "queued", selSelfHosted, time.Hour), h(1, "in_progress")), want: selfPool, notCall: fmt.Sprintf("/runs/%d/jobs", selRunID)},
+		// One pool full: the other.
+		{name: "the hosted pool full", env: push, jobs: hostedFull, want: selfPool, notice: "the hosted pool is full (12 of 12)"},
+		{name: "bigdisk full", env: push, jobs: slices.Concat(self, h(11, "in_progress"), s1(4, "in_progress")), want: hosted, notice: "the self-hosted pool is full"},
+		// Both full: fewer queued wins, a tie self-hosted.
+		{name: "both full, hosted more queued", env: push, jobs: slices.Concat(hostedFull, h(2, "queued"), s1(4, "in_progress"), s2(1, "queued")), want: selfPool},
+		{name: "both full, self-hosted more queued", env: push, jobs: slices.Concat(hostedFull, h(1, "queued"), s1(5, "queued"), s2(2, "queued")), want: hosted},
+		{name: "both full, a tie", env: push, jobs: slices.Concat(hostedFull, s1(4, "in_progress")), want: selfPool, notice: "both pools full: hosted 0 queued, self-hosted 0 queued"},
+		// The limits.
+		{name: "CI_HOSTED_SHARE unset is 12", env: vars("HS", ""), jobs: hostedFull, want: selfPool, warning: true, notice: "the hosted pool is full (12 of 12)"},
+		{name: "CI_HOSTED_SHARE 3", env: vars("HS", "3"), jobs: slices.Concat(self, h(3, "in_progress")), want: selfPool, notice: "the hosted pool is full (3 of 3)"},
+		{name: "CI_SELF_HOSTED_BIGDISK unset", env: vars("C1", ""), jobs: hostedFull, want: hosted, warning: true, noCalls: true},
+		{name: "CI_SELF_HOSTED_BIGDISK_DOCKER 0", env: vars("C2", "0"), jobs: hostedFull, want: hosted, warning: true, noCalls: true},
+		// Forks, other events and other forges: hosted with no call.
+		{name: "a same-repository pull request, hosted full", env: gh("pull_request", prRef, selRepo), jobs: hostedFull, want: selfPool},
+		{name: "a fork pull request, hosted full", env: gh("pull_request", prRef, "someone/repo"), jobs: hostedFull, want: hosted, notice: forkNote, noCalls: true},
+		{name: "a deleted fork's pull request, hosted full", env: gh("pull_request", prRef, ""), jobs: hostedFull, want: hosted, notice: forkNote, noCalls: true},
+		{name: "a fork pull_request_target, hosted full", env: gh("pull_request_target", main, "someone/repo"), jobs: hostedFull, want: hosted, notice: refused, noCalls: true},
+		{name: "a same-repository pull_request_target, hosted full", env: gh("pull_request_target", main, selRepo), jobs: hostedFull, want: hosted, notice: refused, noCalls: true},
+		{name: "a schedule run, hosted full", env: gh("schedule", main, ""), jobs: hostedFull, want: hosted, notice: refused, noCalls: true},
+		{name: "a workflow_dispatch run, hosted full", env: gh("workflow_dispatch", main, ""), jobs: hostedFull, want: hosted, notice: refused, noCalls: true},
+		{name: "a push to another branch, hosted full", env: gh("push", "refs/heads/topic", ""), jobs: hostedFull, want: hosted, notice: refused, noCalls: true},
+		{name: "a push takes no fork check", env: gh("push", main, "someone/repo"), jobs: hostedFull, want: selfPool},
+		{name: "off github.com, hosted full", env: selEnv{server: "https://gitea.example", event: "push", ref: main}, jobs: hostedFull, want: hosted, noCalls: true},
+		// v1.62 overflow: in a public repository a self-hosted job queued past
+		// WAIT_LIMIT (600s) sends the run hosted while hosted has a free slot.
+		// Without the wait each of these picks self-hosted (a use tie).
+		{name: "a bigdisk job queued 700s, hosted free", env: push, jobs: slices.Concat(self, h(3, "in_progress"), selJobs(1, 8, "queued", selSelfHosted, 700*time.Second)), want: hosted, notice: "overflow:"},
+		{name: "a bigdisk-docker job queued 700s, hosted free", env: push, jobs: slices.Concat(self, h(3, "in_progress"), selJobs(1, 8, "queued", selDocker, 700*time.Second)), want: hosted, notice: "overflow:"},
+		{name: "a private repository does not overflow", env: private, jobs: slices.Concat(self, h(3, "in_progress"), selJobs(1, 8, "queued", selSelfHosted, 700*time.Second)), want: selfPool, notice: "use hosted 3/12, bigdisk 1/4"},
+		{name: "a 500s wait does not overflow", env: push, jobs: slices.Concat(self, h(3, "in_progress"), selJobs(1, 8, "queued", selSelfHosted, 500*time.Second)), want: selfPool, notice: "use hosted 3/12, bigdisk 1/4"},
+		{name: "a queued job of this run does not overflow", env: push, jobs: slices.Concat(self, h(1, "in_progress"), selJobs(2, selRunID, "queued", selDocker, time.Hour)), want: selfPool, notice: "use hosted 1/12, bigdisk 0/4, bigdisk-docker 0/4"},
+		// The listing.
+		{name: "a second jobs page read in full", env: push, jobs: paged, want: selfPool, notice: "the hosted pool is full (12 of 12)"},
+		{name: "a failed second jobs page", env: push, jobs: paged,
 			break_: func(r map[string]selReply) { r[jobsURL(9, 2)] = selReply{code: 502, body: `{"message":"Bad Gateway"}`} },
 			want:   hosted, warning: true},
-		// v1.50: a list short of its total_count is a lower bound, so it
-		// still overflows at saturation.
-		{name: "a jobs list short of its total_count at saturation", env: gh, jobs: saturated,
+		// v1.59: a list short of its total_count is a lower bound, named in a
+		// ::notice, and the choice still uses it.
+		{name: "a jobs list short of its total_count, hosted full", env: push, jobs: hostedFull,
 			break_: func(r map[string]selReply) {
-				r[jobsURL(7, 1)] = selReply{code: 200, body: strings.Replace(r[jobsURL(7, 1)].body, `"total_count":30`, `"total_count":31`, 1)}
-				r[jobsURL(7, 2)] = selReply{code: 200, body: `{"total_count":31,"jobs":[]}`}
+				r[jobsURL(7, 1)] = selReply{code: 200, body: strings.Replace(r[jobsURL(7, 1)].body, `"total_count":12`, `"total_count":13`, 1)}
+				r[jobsURL(7, 2)] = selReply{code: 200, body: `{"total_count":13,"jobs":[]}`}
 			},
-			want: overflow},
-		// v1.50: a short list that reaches no trigger stays hosted with a
-		// ::warning naming the shortfall.
-		{name: "a jobs list short of its total_count under the limit", env: gh,
-			jobs: slices.Concat(self, selJobs(10, 7, "in_progress", selUbuntu, time.Minute)),
-			break_: func(r map[string]selReply) {
-				r[jobsURL(7, 1)] = selReply{code: 200, body: strings.Replace(r[jobsURL(7, 1)].body, `"total_count":10`, `"total_count":11`, 1)}
-				r[jobsURL(7, 2)] = selReply{code: 200, body: `{"total_count":11,"jobs":[]}`}
-			},
-			want: hosted, warning: true},
-		// v1.50: the Actions API lists at most 1000 entries, so a total_count
-		// over 1000 is no lower bound the short-list path may trust: it keeps
-		// the hosted default, as before v1.50, even with an early empty page.
-		{name: "a jobs list with a total_count over 1000 and an early empty page at saturation", env: gh, jobs: saturated,
-			break_: func(r map[string]selReply) {
-				r[jobsURL(7, 1)] = selReply{code: 200, body: strings.Replace(r[jobsURL(7, 1)].body, `"total_count":30`, `"total_count":1001`, 1)}
-				r[jobsURL(7, 2)] = selReply{code: 200, body: `{"total_count":1001,"jobs":[]}`}
-			},
-			want: hosted, warning: true},
-		{name: "a run list reply that is not 200 at saturation", env: gh, jobs: saturated,
+			want: selfPool, notice: "12 of 13 entries"},
+		{name: "a run list reply that is not 200", env: push, jobs: hostedFull,
 			break_: func(r map[string]selReply) {
 				r[runsURL("in_progress", 1)] = selReply{code: 403, body: `{"message":"Forbidden"}`}
 			},
 			want: hosted, warning: true},
-		{name: "a run list with no total_count at saturation", env: gh, jobs: saturated,
+		{name: "a run list with no total_count", env: push, jobs: hostedFull,
 			break_: func(r map[string]selReply) {
 				r[runsURL("queued", 1)] = selReply{code: 200, body: `{"workflow_runs":[]}`}
 			},
 			want: hosted, warning: true},
-		{name: "curl fails at saturation", env: gh, jobs: saturated,
+		{name: "curl fails", env: push, jobs: hostedFull,
 			break_: func(r map[string]selReply) { r[jobsURL(7, 1)] = selReply{exit: 28} },
 			want:   hosted, warning: true},
 	} {
@@ -467,7 +448,7 @@ func TestRunnerSelectionScript(t *testing.T) {
 				t.Fatalf("the step exited %d:\n%s", res.rc, res.stdout)
 			}
 			wantRunner, wantDocker := selHosted, selHosted
-			if c.want == overflow {
+			if c.want == selfPool {
 				wantRunner, wantDocker = selOverflow, selOverDock
 			}
 			if res.runner != wantRunner || res.runnerDocker != wantDocker || res.outputEntries != 2 {
@@ -477,36 +458,10 @@ func TestRunnerSelectionScript(t *testing.T) {
 			if has := strings.Contains(res.stdout, "::warning::"); has != c.warning {
 				t.Errorf("a ::warning printed: %v, want %v\n%s", has, c.warning, res.stdout)
 			}
-			// v1.52 prints a ::notice for a fork pull request (an empty head
-			// repository is one too); DS-10475 one for an event that may not
-			// overflow; any other ::notice is the overflow's.
-			const (
-				forkNotice  = "::notice::runner selection: this pull request's head repository is not this repository (a fork)"
-				eventNotice = "only a push to refs/heads/main or a pull request from this repository may reach a self-hosted runner"
-			)
-			onGitHub := c.env.server == "https://github.com"
-			wantFork := onGitHub && c.env.event == "pull_request" && c.env.headRepo != selRepo
-			wantEvent := onGitHub && !selMayOverflow(c.env)
-			var hasFork, hasEvent, hasOther bool
-			for _, l := range strings.Split(res.stdout, "\n") {
-				switch {
-				case !strings.Contains(l, "::notice::"):
-				case strings.Contains(l, forkNotice):
-					hasFork = true
-				case strings.Contains(l, eventNotice):
-					hasEvent = true
-				default:
-					hasOther = true
-				}
-			}
-			if hasFork != wantFork {
-				t.Errorf("the fork ::notice printed: %v, want %v\n%s", hasFork, wantFork, res.stdout)
-			}
-			if hasEvent != wantEvent {
-				t.Errorf("the event ::notice printed: %v, want %v\n%s", hasEvent, wantEvent, res.stdout)
-			}
-			if hasOther != (c.want == overflow) {
-				t.Errorf("the overflow ::notice printed: %v, want %v\n%s", hasOther, c.want == overflow, res.stdout)
+			if c.notice != "" && !slices.ContainsFunc(strings.Split(res.stdout, "\n"), func(l string) bool {
+				return strings.HasPrefix(l, "::notice::") && strings.Contains(l, c.notice)
+			}) {
+				t.Errorf("want a ::notice containing %q\n%s", c.notice, res.stdout)
 			}
 			if c.noCalls && len(res.calls) != 0 {
 				t.Errorf("the step called the API: %v", res.calls)
@@ -517,6 +472,9 @@ func TestRunnerSelectionScript(t *testing.T) {
 			for _, u := range res.calls {
 				if !strings.HasPrefix(u, selAPI+"/") {
 					t.Errorf("the step called %q, outside %s", u, selAPI)
+				}
+				if c.notCall != "" && strings.Contains(u, c.notCall) {
+					t.Errorf("the step called %q", u)
 				}
 			}
 		})
