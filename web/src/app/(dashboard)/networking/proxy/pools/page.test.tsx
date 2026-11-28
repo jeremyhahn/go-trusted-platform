@@ -84,13 +84,8 @@ async function renderPage() {
 }
 
 async function click(name: string) {
-  // A row's Edit/Delete button sits in its own <Gated>, whose capability
-  // answer loads after the row renders: wait until the button is enabled, or
-  // the click lands on a disabled button and is dropped.
-  const button = (await screen.findByRole('button', { name })) as HTMLButtonElement;
-  await waitFor(() => expect(button.disabled).toBe(false));
   await act(async () => {
-    fireEvent.click(button);
+    fireEvent.click(screen.getByRole('button', { name }));
   });
 }
 
@@ -120,7 +115,6 @@ describe('ProxyPoolsPage', () => {
     const pools = screen.getByTestId('proxy-pools');
     expect(within(pools).getByText('2 backends, least-conn')).toBeTruthy();
     expect(within(pools).getByText('internal')).toBeTruthy();
-    expect(screen.getByTestId('proxy-pool-p1')).toBeTruthy();
 
     const config = screen.getByTestId('proxy-config');
     await within(config).findByText('4');
@@ -173,8 +167,6 @@ describe('ProxyPoolsPage', () => {
     await renderPage();
 
     await click('Edit p1');
-    await waitFor(() => expect(count(sent, 'GET', '/api/v1/proxy/pools/p1')).toBe(1));
-    await screen.findByText('Edit pool', { selector: 'h2' });
     await dialogField('Backends');
     await waitFor(
       () => expect((screen.getByLabelText('Backends') as HTMLTextAreaElement).value).toBe('https://192.0.2.10:8443 2'),

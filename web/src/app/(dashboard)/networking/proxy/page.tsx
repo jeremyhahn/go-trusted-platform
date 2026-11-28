@@ -216,7 +216,7 @@ export default function ProxyRoutesPage() {
                 {list.map((r) => {
                   const id = r.id ?? "";
                   return (
-                    <TableRow key={id} data-testid={'proxy-route-' + id}>
+                    <TableRow key={id}>
                       <TableCell className="font-mono">{id}</TableCell>
                       <TableCell>{proxyRouteMatch(r)}</TableCell>
                       <TableCell className="font-mono">{r.poolId}</TableCell>

@@ -1,9 +1,7 @@
 import { test as base, expect, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test';
 import { PlatformClient } from 'trusted-platform-sdk';
-import { readFileSync } from 'node:fs';
-import { e2ePort, runAttestation, stateFile, type ServerState } from '../global-setup';
+import { runAttestation } from '../global-setup';
 import { SoftAuthenticator } from './soft-authenticator';
-import { claimSystemAdmin } from './system-admin';
 
 /**
  * Real-server fixtures (#2034, epic #1665).
@@ -16,14 +14,6 @@ import { claimSystemAdmin } from './system-admin';
  *  - sdk: the SDK PlatformClient on adminPage's session (the context's
  *    cookie jar, so the jwt cookie the server set).
  *  - tenant: the tenant the admin's session belongs to (its jwt tenant_id).
- *  - systemAdminPage: a page signed in as the system-tenant admin, for APIs
- *    only the system tenant may call (the proxy API). The node's admin is
- *    claimed through the admin claim ceremony (system-admin.ts) once per
- *    run; the bearer is persisted in the run directory and set as the jwt
- *    cookie of each test's context.
- *  - systemSdk: the SDK PlatformClient on systemAdminPage's session.
- *  - proxyAuthorized: whether systemAdminPage's session is scope-authorized
- *    for the proxy API (GET /api/v1/proxy/status answers other than 403).
  *
  * The config seeds no tenant (platformd.test.yaml): the admin and its tenant
  * are created over the API here.
@@ -42,21 +32,12 @@ export interface AdminAccount {
 
 interface WorkerFixtures {
   adminAccount: AdminAccount;
-  systemAuthenticator: SoftAuthenticator;
 }
 
 interface TestFixtures {
   adminPage: Page;
   sdk: PlatformClient;
   tenant: Tenant;
-  systemAdminPage: Page;
-  systemSdk: PlatformClient;
-  proxyAuthorized: boolean;
-}
-
-/** The directory of the daemon global-setup started (its cwd). */
-function runDir(): string {
-  return (JSON.parse(readFileSync(stateFile(e2ePort()), 'utf8')) as ServerState).dir;
 }
 
 /** A context with the software authenticator answering every page of it. */
@@ -124,13 +105,6 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
     { scope: 'worker' },
   ],
 
-  systemAuthenticator: [
-    async ({}, use) => {
-      await use(new SoftAuthenticator(runAttestation()));
-    },
-    { scope: 'worker' },
-  ],
-
   adminPage: async ({ browser, adminAccount, baseURL }, use) => {
     const context = await authenticatedContext(
       await browser.newContext({ baseURL, ignoreHTTPSErrors: true }),
@@ -159,46 +133,6 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
     );
   },
 
-  systemAdminPage: async ({ browser, systemAuthenticator, baseURL }, use) => {
-    if (!baseURL) throw new Error('[real-server] no baseURL');
-    const context = await browser.newContext({ baseURL, ignoreHTTPSErrors: true });
-    try {
-      const token = await claimSystemAdmin(context.request, runDir(), systemAuthenticator, new URL(baseURL).origin);
-      // The cookie the server reads the session from (pkg/webservice/v1/jwt).
-      await context.addCookies([{ name: 'jwt', value: token, url: baseURL }]);
-      const page = await context.newPage();
-      await page.goto('/dashboard');
-      await use(page);
-    } finally {
-      await context.close();
-    }
-  },
-
-  systemSdk: async ({ systemAdminPage, baseURL }, use) => {
-    await use(
-      new PlatformClient({
-        baseUrl: new URL('/api', baseURL).href,
-        fetch: requestFetch(systemAdminPage.context().request),
-        retry: { maxRetries: 0 },
-      }),
-    );
-  },
-
-  /**
-   * Whether the system-admin session is scope-authorized for the proxy API.
-   * pkg/webservice/v1/router.go:370-375 (authMiddleware) serves the legacy JWT
-   * handler unless broker platform tokens are configured, and
-   * rest/proxy/router.go:108-117 (requireScope) then refuses every proxy op
-   * with 403, because that handler is no ScopeAuthorizer. The real-server
-   * harness has no scope-authorized session yet (#2369 Codex round 2,
-   * escalated), so the system-admin specs assert that fail-closed guard
-   * instead of a success path when this is false.
-   */
-  proxyAuthorized: async ({ systemAdminPage }, use) => {
-    const res = await systemAdminPage.context().request.get('/api/v1/proxy/status', { failOnStatusCode: false });
-    await use(res.status() !== 403);
-  },
-
   tenant: async ({ adminPage, sdk }, use) => {
     const id = (await sessionClaims(adminPage.context())).tenant_id;
     if (typeof id !== 'string' || !id) throw new Error('[real-server] the admin session carries no tenant_id');
@@ -207,29 +141,5 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
     await use({ id, name: res.data.tenant.name });
   },
 });
-
-/**
- * Asserts the proxy's fail-closed guard: each op ('METHOD /path', each {id}
- * path parameter filled with a throwaway id) answers 403 on request's session.
- * pkg/webservice/v1/router.go:370-375 (authMiddleware) serves the legacy JWT
- * handler unless broker platform tokens are configured, and
- * rest/proxy/router.go:108-117 (requireScope) then refuses every proxy op
- * with 403, because that handler is no ScopeAuthorizer. The real-server
- * harness has no scope-authorized session yet (#2369 Codex round 2,
- * escalated), so the system-admin specs assert this guard instead of a
- * success path.
- */
-export async function expectProxyFailsClosed(request: APIRequestContext, ops: readonly string[]): Promise<void> {
-  for (const op of ops) {
-    const [method, rawPath] = op.split(' ', 2);
-    const path = rawPath.replace(/\{[^}]+\}/g, `e2e-refused-${Date.now()}`);
-    const res = await request.fetch(path, {
-      method,
-      failOnStatusCode: false,
-      data: method === 'POST' || method === 'PUT' ? {} : undefined,
-    });
-    expect(res.status(), op).toBe(403);
-  }
-}
 
 export { expect };

@@ -184,7 +184,7 @@ export default function ProxyPoolsPage() {
               </TableHeader>
               <TableBody>
                 {poolList.map((p) => (
-                  <TableRow key={p.id} data-testid={"proxy-pool-" + p.id}>
+                  <TableRow key={p.id}>
                     <TableCell className="font-mono">{p.id}</TableCell>
                     <TableCell>{proxyPoolSummary(p)}</TableCell>
                     <TableCell>{p.tls?.trustClass || "-"}</TableCell>
