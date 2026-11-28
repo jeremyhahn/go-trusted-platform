@@ -888,6 +888,97 @@ func TestCreateUser_RefusesTheAnonymousSlot(t *testing.T) {
 	}
 }
 
+// interleavedNameSender is a second manager's view of the shared simulated
+// BMC bmc. On its first non-empty Set User Name it runs before (the other
+// manager's whole create), then fails that write with nameErr without
+// applying it, as a BMC whose reply is lost after a racing create does.
+type interleavedNameSender struct {
+	bmc     *statefulUserSender
+	before  func()
+	nameErr error
+	calls   []mockCall
+}
+
+func (s *interleavedNameSender) Send(netFn, cmd byte, data []byte) ([]byte, error) {
+	cp := append([]byte(nil), data...)
+	s.calls = append(s.calls, mockCall{netFn: netFn, cmd: cmd, data: cp})
+	if cmd == cmdSetUserName && len(data) >= 2 && s.before != nil {
+		named := false
+		for _, b := range data[1:] {
+			if b != 0 {
+				named = true
+				break
+			}
+		}
+		if named {
+			f := s.before
+			s.before = nil
+			f()
+			return nil, s.nameErr
+		}
+	}
+	return s.bmc.Send(netFn, cmd, data)
+}
+
+// TestCreateUser_RollbackSparesAnotherManagersAccount: two managers share
+// one simulated BMC; both probe slot 3 empty, the first completes its
+// create, the second's name write then fails. Its rollback must not
+// disable, revoke or clear the first manager's account (Codex #2199 round
+// 16).
+func TestCreateUser_RollbackSparesAnotherManagersAccount(t *testing.T) {
+	shared := newStatefulUserSender()
+	first := newUM(shared)
+	pwdA := memguard.NewMemoryEnclave([]byte("alice-pw"))
+	defer pwdA.Destroy()
+	pwdB := memguard.NewMemoryEnclave([]byte("bob-pw"))
+	defer pwdB.Destroy()
+	var firstErr error
+	second := &interleavedNameSender{
+		bmc:     shared,
+		nameErr: errors.New("name response lost"),
+		before: func() {
+			firstErr = first.CreateUser(context.Background(), User{
+				Slot: 3, Username: "alice", Privilege: PrivilegeAdministrator, Enabled: true,
+			}, pwdA)
+		},
+	}
+	err := newUM(second).CreateUser(context.Background(), User{
+		Slot: 3, Username: "bob", Privilege: PrivilegeOperator, Enabled: true,
+	}, pwdB)
+	if firstErr != nil {
+		t.Fatalf("first CreateUser: %v", firstErr)
+	}
+	if !errors.Is(err, second.nameErr) {
+		t.Fatalf("err = %v, want the name error", err)
+	}
+	var occ ErrSlotOccupied
+	if !errors.As(err, &occ) || occ.Slot != 3 {
+		t.Errorf("err = %v, want ErrSlotOccupied{Slot: 3} joined", err)
+	}
+	if shared.names[3] != "alice" {
+		t.Errorf("slot 3 name = %q, want alice", shared.names[3])
+	}
+	if !shared.enabled[3] {
+		t.Error("the first manager's account was disabled")
+	}
+	idx := -1
+	for i, c := range second.calls {
+		if c.cmd == cmdSetUserName {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatal("the second manager sent no Set User Name")
+	}
+	for i, c := range second.calls[idx+1:] {
+		switch c.cmd {
+		case cmdSetUserName, cmdSetUserAccess, cmdSetUserPassword:
+			t.Errorf("call[%d] = 0x%02x: the second manager wrote the first manager's slot", idx+1+i, c.cmd)
+		}
+	}
+}
+
 // A failed probe returns its error and writes nothing.
 func TestCreateUser_NameProbeErrorWritesNothing(t *testing.T) {
 	m := newMock()
