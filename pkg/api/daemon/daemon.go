@@ -2071,16 +2071,24 @@ func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *ap
 	if section == nil || !section.Enabled {
 		return svc, nil
 	}
+	// SDNConfig.Zones holds the raw operator overrides; the plan is built
+	// from the resolved zones (the overrides merged onto the built-ins), as
+	// sdn.Config.Validate builds it, so a config that tunes one zone still
+	// carries quarantine and provisioning at their built-in offsets.
 	var plan *netplan.Plan
-	if zones, env := zoneServiceSeed(a); env != nil {
-		if len(zones) == 0 {
-			zones = zone.Defaults()
+	if a != nil && a.SDNConfig != nil && a.SDNConfig.Enabled && a.SDNConfig.Environment != nil {
+		plan = a.SDNConfig.Plan()
+		if plan == nil {
+			resolved, err := zone.Resolve(a.SDNConfig.Zones)
+			if err != nil {
+				return nil, err
+			}
+			p, err := netplan.New(*a.SDNConfig.Environment, resolved)
+			if err != nil {
+				return nil, err
+			}
+			plan = p
 		}
-		p, err := netplan.New(*env, zones)
-		if err != nil {
-			return nil, err
-		}
-		plan = p
 	}
 	// http-port+1 is the device-script port, so 65535 cannot carry both;
 	// refused here as well as by the config (a second line).
