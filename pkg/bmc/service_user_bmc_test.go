@@ -323,3 +323,66 @@ func TestService_CreateUserCancelledWhileWaitingWritesNothing(t *testing.T) {
 		})
 	}
 }
+
+// TestService_CreateUserLockTableStaysBounded checks that the per-profile
+// user lock table drops an entry once no holder or waiter remains, so
+// caller-supplied profile IDs cannot grow it without bound.
+func TestService_CreateUserLockTableStaysBounded(t *testing.T) {
+	user := bmc.User{Slot: 7, Username: "ghost", Enabled: true, Privilege: bmc.PrivilegeOperator}
+	t.Run("unknown_profiles", func(t *testing.T) {
+		t.Parallel()
+		svc := newSimUserService(t)
+		for id := uint64(100); id < 164; id++ {
+			err := svc.CreateUser(context.Background(), id, user, "s3cret-pass")
+			var nf bmc.ErrProfileNotFound
+			if !errors.As(err, &nf) {
+				t.Fatalf("CreateUser(profile %d) err = %v, want ErrProfileNotFound", id, err)
+			}
+		}
+		if got := bmc.UserLockCount(svc); got != 0 {
+			t.Errorf("UserLockCount = %d after creates on unknown profiles, want 0", got)
+		}
+	})
+	t.Run("cancelled_context", func(t *testing.T) {
+		t.Parallel()
+		svc := newSimUserService(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := svc.CreateUser(ctx, 200, user, "s3cret-pass"); !errors.Is(err, context.Canceled) {
+			t.Fatalf("CreateUser err = %v, want %v", err, context.Canceled)
+		}
+		if got := bmc.UserLockCount(svc); got != 0 {
+			t.Errorf("UserLockCount = %d after a cancelled create, want 0", got)
+		}
+	})
+	t.Run("waiter_gives_up_then_release", func(t *testing.T) {
+		t.Parallel()
+		svc := newSimUserService(t)
+		release := bmc.HoldUserLock(svc, 1)
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		done := make(chan error, 1)
+		go func() {
+			done <- svc.CreateUser(ctx, 1, user, "s3cret-pass")
+		}()
+		var err error
+		select {
+		case err = <-done:
+		case <-time.After(15 * time.Second):
+			release()
+			err = <-done
+			t.Fatalf("CreateUser waited on the held user lock after its context ended, then returned %v", err)
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			release()
+			t.Fatalf("CreateUser err = %v, want %v", err, context.DeadlineExceeded)
+		}
+		if got := bmc.UserLockCount(svc); got != 1 {
+			t.Errorf("UserLockCount = %d while the lock is held, want 1", got)
+		}
+		release()
+		if got := bmc.UserLockCount(svc); got != 0 {
+			t.Errorf("UserLockCount = %d after release, want 0", got)
+		}
+	})
+}

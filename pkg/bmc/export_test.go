@@ -62,3 +62,13 @@ func HoldUserLock(s *Service, profileID uint64) (release func()) {
 	release, _ = s.lockUsers(context.Background(), profileID)
 	return release
 }
+
+// UserLockCount returns the number of profile entries in the user lock table.
+func UserLockCount(s *Service) int {
+	n := 0
+	s.userLocks.Range(func(_, _ any) bool {
+		n++
+		return true
+	})
+	return n
+}
