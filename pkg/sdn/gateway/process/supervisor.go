@@ -101,7 +101,12 @@ type Config struct {
 	// and before its restart backoff. An error is logged at Error, recorded
 	// in the process's health, and the hook is called again on each
 	// backoff tick until it succeeds or a relaunched child is up. It is
-	// not called on an operator stop.
+	// also called once after an operator stop has reaped the child,
+	// gracefully or by SIGKILL, and a failure is returned by StopService;
+	// a failure stays owed: it is retried in the background on the restart
+	// backoff while the process stays stopped, and a later stop runs it
+	// again and returns its outcome, until it succeeds or a launch takes the
+	// process over.
 	OnChildExit func(ctx context.Context, def Definition) error
 	// Clock is the time source; nil means the system clock.
 	Clock Clock
@@ -273,6 +278,10 @@ type supervised struct {
 	// cleanDone is closed when the exit-hook call that set cleaning
 	// returns.
 	cleanDone chan struct{}
+	// stopCleanupCancel cancels the background retry of an exit hook that
+	// failed after an operator stop (retryStoppedExitHook); nil when none
+	// runs. A later stop or a launch claim cancels it.
+	stopCleanupCancel context.CancelFunc
 }
 
 // withdrawal is a given-up follower's in-flight peer withdrawal: ctx is
@@ -378,6 +387,13 @@ func (s *Supervisor) StartService(ctx context.Context, service string) error {
 		// backing off, still has its predecessor's desired document; the
 		// parent's version check will not send it again (#557).
 		proc.restoring = proc.desired != nil
+		// The launch takes the process over: a stopped generation's owed
+		// cleanup retry ends now (the generation fence already keeps it off
+		// the replacement).
+		if proc.stopCleanupCancel != nil {
+			proc.stopCleanupCancel()
+			proc.stopCleanupCancel = nil
+		}
 	}
 	s.mu.Unlock()
 
@@ -1246,6 +1262,54 @@ func (s *Supervisor) retryExitHookPastBudget(ctx context.Context, proc *supervis
 	}
 }
 
+// retryStoppedExitHook retries an exit hook that failed after an operator
+// stop, fenced to the stopped generation gen, until it succeeds, ctx is
+// cancelled, the supervisor stops, or a launch takes the process over. It
+// never touches proc.failure, so a later StartService is not a replacing
+// claim.
+func (s *Supervisor) retryStoppedExitHook(ctx context.Context, proc *supervised, gen uint64) {
+	backoff := s.cfg.RestartBackoff
+	for {
+		s.mu.Lock()
+		pending := proc.exitHookErr != nil && !s.stopped && proc.child == nil && !proc.launching && proc.launchGen == gen
+		s.mu.Unlock()
+		if !pending {
+			return
+		}
+		s.cfg.Logger.Warn("gatewayd supervisor: retrying child exit hook after an operator stop",
+			slog.String("process", proc.def.Name), slog.Duration("backoff", backoff))
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.cfg.Clock.After(backoff):
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		s.runExitHook(ctx, proc, gen)
+		if backoff < s.cfg.RestartBackoffMax {
+			backoff = min(backoff*2, s.cfg.RestartBackoffMax)
+		}
+	}
+}
+
+// startStoppedCleanupRetry starts retryStoppedExitHook for gen on a context of
+// its own, cancelled by a later stop or a launch claim.
+func (s *Supervisor) startStoppedCleanupRetry(ctx context.Context, proc *supervised, gen uint64) {
+	s.mu.Lock()
+	if s.stopped || proc.launching {
+		s.mu.Unlock()
+		return
+	}
+	if proc.stopCleanupCancel != nil {
+		proc.stopCleanupCancel()
+	}
+	rctx, rcancel := context.WithCancel(context.WithoutCancel(ctx))
+	proc.stopCleanupCancel = rcancel
+	s.mu.Unlock()
+	go s.retryStoppedExitHook(rctx, proc, gen)
+}
+
 // followerVPNPlanes names the VPN planes a datapath child may host for a
 // follower (vpn.DataPlaneWireGuard and vpn.DataPlaneMASQUE; the vpn package
 // is not imported here, so the names are repeated).
@@ -1909,13 +1973,24 @@ func (s *Supervisor) StopService(ctx context.Context, service string) error {
 }
 
 // stopProcess signals the child, waits for its watch goroutine, and kills it
-// if the graceful stop does not land inside StopTimeout.
+// if the graceful stop does not land inside StopTimeout. A failed exit hook
+// is returned and stays owed: it is retried in the background
+// (retryStoppedExitHook), and a later stop that finds no child runs it
+// again and returns its outcome.
 func (s *Supervisor) stopProcess(ctx context.Context, proc *supervised) error {
 	s.mu.Lock()
 	proc.stopping = true
 	child, cancel, done := proc.child, proc.cancel, proc.done
+	gen := proc.launchGen
 	proc.cancel = nil
+	retryCancel := proc.stopCleanupCancel
+	proc.stopCleanupCancel = nil
 	s.mu.Unlock()
+	// This stop settles any owed cleanup itself; the background retry of
+	// an earlier stop ends here.
+	if retryCancel != nil {
+		retryCancel()
+	}
 
 	// The cancel is deliberately NOT called here. The launch context is the
 	// one exec.CommandContext watches, and cancelling it asks the child to
@@ -1934,8 +2009,12 @@ func (s *Supervisor) stopProcess(ctx context.Context, proc *supervised) error {
 		// and a failure left over from the crash would otherwise be
 		// reported for a process nobody is running any more.
 		s.clearProcessState(proc)
+		hookErr := s.settleOwedExitHook(ctx, proc, gen)
 		s.removeCgroup(ctx, proc)
-		return nil
+		if hookErr != nil {
+			s.startStoppedCleanupRetry(ctx, proc, gen)
+		}
+		return hookErr
 	}
 	if err := s.terminate(ctx, proc.def.Name, child, done); err != nil {
 		return err
@@ -1945,8 +2024,47 @@ func (s *Supervisor) stopProcess(ctx context.Context, proc *supervised) error {
 	}
 
 	s.clearProcessState(proc)
+	// The child is reaped, gracefully or by SIGKILL: run the exit hook once,
+	// fenced to the stopped generation, so a hub the child left behind (a
+	// kill, a failed plane stop) never outlives it (Codex #2336 round 17).
+	s.runExitHook(context.WithoutCancel(ctx), proc, gen)
+	var hookErr error
+	s.mu.Lock()
+	if proc.launchGen == gen {
+		hookErr = proc.exitHookErr
+	}
+	s.mu.Unlock()
 	s.removeCgroup(ctx, proc)
 	s.cfg.Logger.Info("gatewayd supervisor: process stopped", slog.String("process", proc.def.Name))
+	if hookErr != nil {
+		s.startStoppedCleanupRetry(ctx, proc, gen)
+	}
+	return hookErr
+}
+
+// settleOwedExitHook is a stop that finds no child: it still owes a failed
+// cleanup of the stopped generation gen, so it runs the fenced hook again and
+// returns its outcome, and a stop never reports success over an owed hub
+// cleanup (Codex #2336 round 18).
+func (s *Supervisor) settleOwedExitHook(ctx context.Context, proc *supervised, gen uint64) error {
+	s.mu.Lock()
+	if err := s.awaitCleaningLocked(ctx, proc); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	owed := proc.exitHookErr != nil && !proc.launching && proc.launchGen == gen
+	s.mu.Unlock()
+	if owed {
+		s.runExitHook(context.WithoutCancel(ctx), proc, gen)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.awaitCleaningLocked(ctx, proc); err != nil {
+		return err
+	}
+	if proc.launchGen == gen {
+		return proc.exitHookErr
+	}
 	return nil
 }
 

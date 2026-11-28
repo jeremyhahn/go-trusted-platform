@@ -659,8 +659,10 @@ type VPNPeer struct {
 	// expires_at_unix_nano is the lease's deadline (Unix nanoseconds): the
 	// plane removes the peer once it passes. 0 means no deadline was sent.
 	ExpiresAtUnixNano int64 `protobuf:"varint,6,opt,name=expires_at_unix_nano,json=expiresAtUnixNano,proto3" json:"expires_at_unix_nano,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// zones are the lease's destination zones (vpn.Lease.Zones): the hub's forward filter opens only these.
+	Zones         []string `protobuf:"bytes,7,rep,name=zones,proto3" json:"zones,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *VPNPeer) Reset() {
@@ -733,6 +735,13 @@ func (x *VPNPeer) GetExpiresAtUnixNano() int64 {
 		return x.ExpiresAtUnixNano
 	}
 	return 0
+}
+
+func (x *VPNPeer) GetZones() []string {
+	if x != nil {
+		return x.Zones
+	}
+	return nil
 }
 
 type InstallVPNPeerRequest struct {
@@ -1025,8 +1034,12 @@ type RenewVPNPeerRequest struct {
 	PublicKey []byte `protobuf:"bytes,1,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
 	// expires_at_unix_nano is the new deadline (Unix nanoseconds).
 	ExpiresAtUnixNano int64 `protobuf:"varint,2,opt,name=expires_at_unix_nano,json=expiresAtUnixNano,proto3" json:"expires_at_unix_nano,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// data_plane is the plane of the lease being renewed.
+	DataPlane string `protobuf:"bytes,3,opt,name=data_plane,json=dataPlane,proto3" json:"data_plane,omitempty"`
+	// lease_id is the lease being renewed: the host extends only the peer it holds for this lease (Codex #2336 round 17).
+	LeaseId       string `protobuf:"bytes,4,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RenewVPNPeerRequest) Reset() {
@@ -1071,6 +1084,20 @@ func (x *RenewVPNPeerRequest) GetExpiresAtUnixNano() int64 {
 		return x.ExpiresAtUnixNano
 	}
 	return 0
+}
+
+func (x *RenewVPNPeerRequest) GetDataPlane() string {
+	if x != nil {
+		return x.DataPlane
+	}
+	return ""
+}
+
+func (x *RenewVPNPeerRequest) GetLeaseId() string {
+	if x != nil {
+		return x.LeaseId
+	}
+	return ""
 }
 
 type RenewVPNPeerResponse struct {
@@ -2318,7 +2345,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"state_json\x18\x01 \x01(\fR\tstateJson\x12\x1f\n" +
 	"\vapply_error\x18\x02 \x01(\tR\n" +
-	"applyError\"\xfc\x01\n" +
+	"applyError\"\x92\x02\n" +
 	"\aVPNPeer\x12\x19\n" +
 	"\blease_id\x18\x01 \x01(\tR\aleaseId\x12\x1d\n" +
 	"\n" +
@@ -2326,7 +2353,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\aaddress\x18\x03 \x01(\tR\aaddress\x120\n" +
 	"\x14wireguard_public_key\x18\x04 \x01(\fR\x12wireguardPublicKey\x12:\n" +
 	"\x19client_certificate_sha256\x18\x05 \x01(\fR\x17clientCertificateSha256\x12/\n" +
-	"\x14expires_at_unix_nano\x18\x06 \x01(\x03R\x11expiresAtUnixNano\"E\n" +
+	"\x14expires_at_unix_nano\x18\x06 \x01(\x03R\x11expiresAtUnixNano\x12\x14\n" +
+	"\x05zones\x18\a \x03(\tR\x05zones\"E\n" +
 	"\x15InstallVPNPeerRequest\x12,\n" +
 	"\x04peer\x18\x01 \x01(\v2\x18.gatewayd.ipc.v1.VPNPeerR\x04peer\"S\n" +
 	"\x16InstallVPNPeerResponse\x129\n" +
@@ -2342,11 +2370,14 @@ const file_ipc_proto_rawDesc = "" +
 	"data_plane\x18\x01 \x01(\tR\tdataPlane\x12\x1b\n" +
 	"\tlease_ids\x18\x02 \x03(\tR\bleaseIds\"V\n" +
 	"\x19ReconcileVPNPeersResponse\x129\n" +
-	"\arefusal\x18\x01 \x01(\v2\x1f.gatewayd.ipc.v1.VPNPeerRefusalR\arefusal\"e\n" +
+	"\arefusal\x18\x01 \x01(\v2\x1f.gatewayd.ipc.v1.VPNPeerRefusalR\arefusal\"\x9f\x01\n" +
 	"\x13RenewVPNPeerRequest\x12\x1d\n" +
 	"\n" +
 	"public_key\x18\x01 \x01(\fR\tpublicKey\x12/\n" +
-	"\x14expires_at_unix_nano\x18\x02 \x01(\x03R\x11expiresAtUnixNano\"Q\n" +
+	"\x14expires_at_unix_nano\x18\x02 \x01(\x03R\x11expiresAtUnixNano\x12\x1d\n" +
+	"\n" +
+	"data_plane\x18\x03 \x01(\tR\tdataPlane\x12\x19\n" +
+	"\blease_id\x18\x04 \x01(\tR\aleaseId\"Q\n" +
 	"\x14RenewVPNPeerResponse\x129\n" +
 	"\arefusal\x18\x01 \x01(\v2\x1f.gatewayd.ipc.v1.VPNPeerRefusalR\arefusal\"\xa6\x01\n" +
 	"\x0eVPNPeerRefusal\x12:\n" +
