@@ -323,6 +323,67 @@ func TestRegisterInvitedUser_ConcurrentRedemptionNeverDeletesTheWinner(t *testin
 	assert.Empty(t, mirror.undone)
 }
 
+// TestRegisterInvitedUser_AcrossServicesAnAcceptLoserKeepsTheWinner:
+// claimRedemption is in-process, so two platformd instances sharing the
+// stores can both save the email-derived user ID. When B accepts while A is
+// mirroring, A's Accept answers AlreadyAccepted and A must not delete B's
+// committed user or undo the IAM identity B's registration uses (Codex
+// #2362).
+func TestRegisterInvitedUser_AcrossServicesAnAcceptLoserKeepsTheWinner(t *testing.T) {
+	ctx := context.Background()
+	invitation, err := entities.NewInvitation(
+		"tenant-a", "member@example.test", "viewer", 999, 7*24*time.Hour, time.Now())
+	require.NoError(t, err)
+	mirror := &gatedIAMMirror{entered: make(chan struct{}), release: make(chan struct{})}
+	svcA, userService, invitationService := newMirroredInvitedRegistration(t, mirror, invitation)
+
+	// A second platformd over the same user store, invitation store and IAM.
+	tenantManagerB := new(MockTenantManager)
+	tenantManagerB.On("GetTenant", ctx, invitation.TenantID).Return(&tenant.TenantEntity{
+		ID:   invitation.TenantID,
+		Name: invitation.TenantID,
+	}, nil)
+	svcB := NewTenantUserService(&TenantUserServiceConfig{
+		Logger:            logging.DefaultLogger(),
+		UserService:       userService,
+		InvitationService: invitationService,
+		TenantManager:     tenantManagerB,
+		TokenIssuer:       new(MockTokenIssuer),
+		IAMMirror:         mirror,
+	})
+
+	invitationService.On("Accept", ctx, invitation.Token, mock.AnythingOfType("uint64")).Return(nil).Once()
+	invitationService.On("Accept", ctx, invitation.Token, mock.AnythingOfType("uint64")).
+		Return(ErrInvitationAlreadyAccepted{Token: invitation.Token})
+	userService.On("Delete", mock.Anything, mock.AnythingOfType("uint64")).Return(nil)
+
+	type outcome struct {
+		result *RegisterResult
+		err    error
+	}
+	doneA := make(chan outcome, 1)
+	go func() {
+		result, err := svcA.RegisterInvitedUser(ctx, newTestUser(invitation.Email), invitation.Token)
+		doneA <- outcome{result, err}
+	}()
+	<-mirror.entered
+
+	resultB, errB := svcB.RegisterInvitedUser(ctx, newTestUser(invitation.Email), invitation.Token)
+	close(mirror.release)
+	a := <-doneA
+
+	require.NoError(t, errB, "B wins the invitation")
+	assert.NotNil(t, resultB)
+	require.ErrorAs(t, a.err, new(ErrInvitationAlreadyAccepted))
+	assert.Nil(t, a.result)
+	// A Delete here is the Accept loser deleting the winner's user.
+	userService.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
+	assert.Empty(t, mirror.undone, "the Accept loser undid the IAM identity the winner uses")
+	userService.AssertNumberOfCalls(t, "Save", 2)
+	invitationService.AssertNumberOfCalls(t, "Accept", 2)
+	assert.Len(t, mirror.calls, 2)
+}
+
 // cancelingIAMMirror cancels the request right after its IAM write, and
 // records the context the returned undo runs on: whether it was already
 // canceled and whether it carries a deadline.
