@@ -274,15 +274,8 @@ func (m *ipmiUserManager) CreateUser(ctx context.Context, u User, password *memg
 	// IPMI zero-pads the password field, so a NUL byte would store a
 	// truncated secret, and an all-NUL one a blank secret on an enabled user.
 	if password != nil {
-		hasNUL := false
-		if err := password.Open(func(pw []byte) error {
-			hasNUL = bytes.IndexByte(pw, 0) >= 0
-			return nil
-		}); err != nil {
+		if err := refuseNULPassword(password); err != nil {
 			return err
-		}
-		if hasNUL {
-			return ErrInvalidConfig{Field: "password", Reason: "a password may not contain a NUL byte"}
 		}
 	}
 	// Probe the slot before the first write: a slot that already holds an
@@ -370,18 +363,16 @@ func (m *ipmiUserManager) leaveFailedCreate(u User) error {
 	return nil
 }
 
-// SetUserPassword changes the password of an existing slot and then sets
-// the slot's IPMI user enable flag (Set User Password, enable user).
+// SetUserPassword writes the password of an existing slot only (Set User
+// Password, set password). It leaves the slot's IPMI global enable flag and
+// its channel access as they are, so a disabled account stays disabled.
 //
-// The enable is the activation path for a slot CreateUser made disabled: it
-// is sent only after the password write succeeded, so it never activates a
-// stale or blank password. A failed password write sends no enable; a failed
-// enable returns its error. Login still needs channel access, which
-// SetUserPrivilege grants, so a NoAccess account stays unable to log in.
+// It refuses a nil, empty, oversized or NUL-containing password with
+// ErrInvalidConfig before any write: IPMI zero-pads the password field, so a
+// NUL byte would store a truncated secret, and an all-NUL one a blank secret.
 //
-// password must be non-nil and contain at least one byte. Empty passwords
-// are rejected since they are interpreted as "disable" by some BMCs and
-// "no change" by others; callers wanting to disable should call
+// Empty passwords are rejected since they are interpreted as "disable" by
+// some BMCs and "no change" by others; callers wanting to disable should call
 // SetUserPrivilege with PrivilegeNoAccess.
 func (m *ipmiUserManager) SetUserPassword(_ context.Context, slot uint8, password *memguard.MemoryEnclave) error {
 	if err := validateSlot(slot); err != nil {
@@ -390,11 +381,26 @@ func (m *ipmiUserManager) SetUserPassword(_ context.Context, slot uint8, passwor
 	if password == nil || password.Size() == 0 {
 		return ErrInvalidConfig{Field: "password", Reason: "password is required"}
 	}
-	if err := m.setUserPassword(slot, pwdOpSet, password); err != nil {
+	if err := refuseNULPassword(password); err != nil {
 		return err
 	}
-	_, err := m.sender.Send(netFnApp, cmdSetUserPassword, []byte{slot & ipmiMaxUserSlot, pwdOpEnable})
-	return err
+	return m.setUserPassword(slot, pwdOpSet, password)
+}
+
+// refuseNULPassword returns ErrInvalidConfig when password contains a NUL
+// byte, which IPMI's zero-padded password field cannot carry.
+func refuseNULPassword(password *memguard.MemoryEnclave) error {
+	hasNUL := false
+	if err := password.Open(func(pw []byte) error {
+		hasNUL = bytes.IndexByte(pw, 0) >= 0
+		return nil
+	}); err != nil {
+		return err
+	}
+	if hasNUL {
+		return ErrInvalidConfig{Field: "password", Reason: "a password may not contain a NUL byte"}
+	}
+	return nil
 }
 
 // SetUserPrivilege updates the channel privilege of an existing slot and
