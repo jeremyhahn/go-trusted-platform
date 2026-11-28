@@ -54,13 +54,10 @@ var DaemonOnlyPrefixes = map[string]string{
 	"sdn/gateway/overlay": "RESTServer.SetGatewayIPAMService (pkg/api/daemon/rest_sdn.go)",
 	"sdn/gateway/perf":    "RESTServer.SetGatewayIPAMService (pkg/api/daemon/rest_sdn.go)",
 
-	// The webservice router serves the rest of /kms by key name in the path;
-	// export, the batch operations and rewrap are the daemon's alone. A
+	// The webservice router serves the rest of /kms, batch-encrypt,
+	// batch-decrypt and rewrap included; export alone is the daemon's. A
 	// placeholder segment matches any one segment, whatever its name.
-	"kms/batch-decrypt":    "RESTServer.SetKMSHandlers (pkg/api/rest/kms_handlers.go)",
-	"kms/batch-encrypt":    "RESTServer.SetKMSHandlers (pkg/api/rest/kms_handlers.go)",
 	"kms/keys/{id}/export": "RESTServer.SetKMSHandlers (pkg/api/rest/kms_handlers.go)",
-	"kms/rewrap":           "RESTServer.SetKMSHandlers (pkg/api/rest/kms_handlers.go)",
 }
 
 // DaemonOnlyPrefixOf returns the DaemonOnlyPrefixes entry path falls under.

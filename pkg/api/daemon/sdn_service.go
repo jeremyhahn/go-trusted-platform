@@ -700,6 +700,12 @@ func (s *SDNService) FlushFlows(ctx context.Context, req *platformv1.FlushFlowsR
 		return nil, status.Error(codes.NotFound, "bridge not found")
 	}
 
+	// The OVS client has no table-scoped delete: refuse rather than flush
+	// every table when the caller asked for one.
+	if req.GetTable() != platformv1.FlowTable_FLOW_TABLE_UNSPECIFIED {
+		return nil, status.Error(codes.InvalidArgument, "flushing one table is not supported; omit table to flush every flow of the bridge")
+	}
+
 	client := s.getOVSClient()
 
 	// Get current flow count before deletion (without holding the lock)
@@ -975,7 +981,7 @@ func (s *SDNService) GetPortStats(ctx context.Context, req *platformv1.GetPortSt
 		return nil, status.Error(codes.InvalidArgument, "port_id is required")
 	}
 
-	portName, _, found := s.findPortName(req.GetPortId())
+	portName, found := s.resolvePortName(ctx, req.GetBridgeId(), req.GetPortId())
 	if !found {
 		return nil, status.Error(codes.NotFound, "port not found")
 	}
@@ -1124,7 +1130,7 @@ func (s *SDNService) SetPortState(ctx context.Context, req *platformv1.SetPortSt
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	portName, _, found := s.findPortName(req.GetPortId())
+	portName, found := s.resolvePortName(ctx, req.GetBridgeId(), req.GetPortId())
 	if !found {
 		return nil, status.Error(codes.NotFound, "port not found")
 	}
@@ -1509,9 +1515,11 @@ func (s *SDNService) ListPolicies(ctx context.Context, req *platformv1.ListPolic
 	defer s.mu.RUnlock()
 
 	policies := make([]*platformv1.Policy, 0, len(s.policies))
+	// Accept the enum name ("POLICY_TYPE_ACL") as well as the short name ("acl").
+	want := strings.ToLower(strings.TrimPrefix(strings.ToUpper(req.GetType()), "POLICY_TYPE_"))
 	for id, p := range s.policies {
 		// Filter by type if specified
-		if req.GetType() != "" && p.policyType != strings.ToLower(req.GetType()) {
+		if req.GetType() != "" && p.policyType != want {
 			continue
 		}
 
@@ -2340,6 +2348,34 @@ func (s *SDNService) findPortName(id string) (string, platformv1.PortType, bool)
 		}
 	}
 	return "", platformv1.PortType_PORT_TYPE_UNSPECIFIED, false
+}
+
+// resolvePortName finds a port on the given bridge by UUID or name. Ports
+// this process added are found in memory; ports created before this process
+// started, or outside it, are known only to OVS, so on a miss the bridge's
+// ports are listed from OVS.
+func (s *SDNService) resolvePortName(ctx context.Context, bridgeID, portID string) (string, bool) {
+	if name, _, found := s.findPortName(portID); found {
+		return name, true
+	}
+	bridgeName, found := s.findBridgeName(bridgeID)
+	if !found {
+		return "", false
+	}
+	client := s.getOVSClient()
+	if client == nil {
+		return "", false
+	}
+	ovsPorts, err := client.ListPorts(ctx, bridgeName)
+	if err != nil {
+		return "", false
+	}
+	for _, p := range ovsPorts {
+		if p.UUID == portID || p.Name == portID {
+			return p.Name, true
+		}
+	}
+	return "", false
 }
 
 // FindPortBridge looks up the bridge ID associated with a port by port ID or name.

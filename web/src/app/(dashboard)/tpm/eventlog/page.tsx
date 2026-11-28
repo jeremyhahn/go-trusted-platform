@@ -14,6 +14,8 @@
  * Modeled after the xkey TPM Svelte view's "Measurements"
  * (Event Log Viewer + replay) tab; see memory
  * `reference_xkey_tpm_gui.md`.
+ *
+ * The read and Refresh are gated on the server's capabilities (#2069).
  */
 
 import * as React from "react";
@@ -26,6 +28,8 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Table,
   TableBody,
@@ -41,6 +45,8 @@ import {
   Hash,
 } from "lucide-react";
 import { useApi, useTPM, useToast } from "@/hooks";
+import { Gated } from "@/components/features/capabilities/gated";
+import { useCapabilities, CAPABILITIES_LOADING_REASON } from "@/hooks/use-capabilities";
 import type { EventLogEntry } from "trusted-platform-sdk";
 
 
@@ -67,6 +73,7 @@ const PCR_LABELS: Record<number, string> = {
 export default function TPMEventLogPage() {
   const { toast } = useToast();
   const tpm = useTPM();
+  const readCap = useCapabilities().capability("GET /api/v1/tpm/eventlog");
 
   const {
     data: logData,
@@ -75,8 +82,9 @@ export default function TPMEventLogPage() {
     refetch,
   } = useApi(
     () => tpm.getEventLog(),
-    [],
+    [readCap.enabled],
     {
+      enabled: readCap.enabled,
       onError: (err) => {
         toast({
           title: "Error loading event log",
@@ -97,6 +105,17 @@ export default function TPMEventLogPage() {
   // the empty-state copy explains the situation; we don't
   // synthesize fake parsed rows.
   const entries: EventLogEntry[] = React.useMemo(() => logData?.entries ?? [], [logData]);
+
+  // PCR filter: an empty field keeps every entry; a whole number keeps
+  // only the entries extended into that PCR.
+  const [pcrFilter, setPcrFilter] = React.useState("");
+  const filtered: EventLogEntry[] = React.useMemo(() => {
+    const wanted = pcrFilter.trim();
+    if (wanted === "") return entries;
+    if (!/^\d+$/.test(wanted)) return entries;
+    const pcr = Number(wanted);
+    return entries.filter((e) => e.pcrIndex === pcr);
+  }, [entries, pcrFilter]);
 
   const rawEventLog: string | null = logData?.eventLog ?? null;
   const eventCount: number = logData?.eventCount ?? entries.length;
@@ -150,12 +169,20 @@ export default function TPMEventLogPage() {
               Download .bin
             </Button>
           )}
-          <Button variant="outline" onClick={() => refetch()} disabled={loading}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
+          <Gated op="GET /api/v1/tpm/eventlog">
+            <Button variant="outline" onClick={() => refetch()} disabled={loading}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          </Gated>
         </div>
       </div>
+
+      {!readCap.enabled && readCap.reason && readCap.reason !== CAPABILITIES_LOADING_REASON && (
+        <p data-testid="eventlog-withheld" className="text-sm text-muted-foreground">
+          The event log is not available on this server: <span>{readCap.reason}</span>
+        </p>
+      )}
 
       {error && (
         <div className="flex items-center gap-2 p-4 bg-destructive/10 border border-destructive rounded-lg">
@@ -244,6 +271,19 @@ export default function TPMEventLogPage() {
               )}
             </div>
           ) : (
+            <>
+            <div className="mb-4 flex items-center gap-2">
+              <Label htmlFor="eventlog-pcr-filter">Filter by PCR</Label>
+              <Input
+                id="eventlog-pcr-filter"
+                type="number"
+                min={0}
+                max={23}
+                className="w-24"
+                value={pcrFilter}
+                onChange={(e) => setPcrFilter(e.target.value)}
+              />
+            </div>
             <Table>
               <TableHeader>
                 <TableRow>
@@ -254,7 +294,7 @@ export default function TPMEventLogPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {entries.slice(0, 200).map((e, i) => {
+                {filtered.slice(0, 200).map((e, i) => {
                   const display = e.eventString;
                   const label = PCR_LABELS[e.pcrIndex];
                   return (
@@ -274,10 +314,11 @@ export default function TPMEventLogPage() {
                 })}
               </TableBody>
             </Table>
+            </>
           )}
-          {entries.length > 200 && (
+          {filtered.length > 200 && (
             <p className="text-xs text-muted-foreground mt-2">
-              Showing first 200 of {entries.length} events. Filter by PCR to see more.
+              Showing first 200 of {filtered.length} events. Filter by PCR to see more.
             </p>
           )}
         </CardContent>

@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import type { GatewaySnapshot } from 'trusted-platform-sdk';
+import { GatewayAdmittedVTEPs } from './gateway-admitted-vteps';
 
 /**
  * Renders one gateway's datapath: what its services actually programmed,
@@ -58,6 +59,7 @@ export function GatewaySnapshotDetail({ snapshot }: GatewaySnapshotDetailProps) 
   const peers = snapshot.bgp?.peers ?? [];
   const tunnels = snapshot.tunnels ?? [];
   const uplinks = snapshot.uplinks ?? [];
+  const overlay = snapshot.overlay;
 
   return (
     <div className="space-y-6" data-testid="gateway-snapshot-detail">
@@ -326,6 +328,7 @@ export function GatewaySnapshotDetail({ snapshot }: GatewaySnapshotDetailProps) 
                 </dl>
               </div>
             )}
+            {overlay && <GatewayAdmittedVTEPs key={snapshot.gateway_id} gatewayId={snapshot.gateway_id} overlay={overlay} />}
           </section>
         </CardContent>
       </Card>

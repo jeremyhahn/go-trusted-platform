@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { MoreHorizontal, Edit, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -19,15 +20,26 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { useDNS, useMutation, useToast } from '@/hooks';
 import { toRecordType } from "@/utils/dns-record-type";
 import type { DNSRecord } from '@/types/infrastructure';
+import { Gated } from '@/components/features/capabilities/gated';
 
 interface DNSRecordTableProps {
   zoneName: string;
   records: DNSRecord[];
   onRefresh: () => void;
   onEdit?: (record: DNSRecord) => void;
+  /** When set, Delete asks first; off by default. */
+  confirmDelete?: boolean;
 }
 
 const recordTypeColors: Record<DNSRecord['type'], string> = {
@@ -47,8 +59,10 @@ export function DNSRecordTable({
   records,
   onRefresh,
   onEdit,
+  confirmDelete = false,
 }: DNSRecordTableProps) {
   const { toast } = useToast();
+  const [pendingDelete, setPendingDelete] = useState<DNSRecord | null>(null);
   const dns = useDNS();
 
   const deleteMutation = useMutation(
@@ -77,8 +91,32 @@ export function DNSRecordTable({
     }
   );
 
+  // Delete and update identify an SRV record by type and name only, so the
+  // server would remove the first SRV record with that owner name.
+  const sharedSrvOwners = new Set<string>();
+  const seenSrvOwners = new Set<string>();
+  for (const r of records) {
+    if (r.type !== 'SRV') continue;
+    if (seenSrvOwners.has(r.name)) sharedSrvOwners.add(r.name);
+    seenSrvOwners.add(r.name);
+  }
+  const isAmbiguous = (record: DNSRecord) =>
+    record.type === 'SRV' && sharedSrvOwners.has(record.name);
+
   const handleDelete = (record: DNSRecord) => {
+    if (isAmbiguous(record)) return;
+    if (confirmDelete) {
+      setPendingDelete(record);
+      return;
+    }
     deleteMutation.mutate({ type: record.type, name: record.name });
+  };
+
+  const confirmPendingDelete = () => {
+    if (pendingDelete) {
+      deleteMutation.mutate({ type: pendingDelete.type, name: pendingDelete.name });
+    }
+    setPendingDelete(null);
   };
 
   return (
@@ -102,7 +140,9 @@ export function DNSRecordTable({
               </TableCell>
             </TableRow>
           ) : (
-            records.map((record) => (
+            records.map((record) => {
+              const ambiguous = isAmbiguous(record);
+              return (
               <TableRow key={record.id}>
                 <TableCell className="font-medium font-mono">{record.name}</TableCell>
                 <TableCell>
@@ -121,35 +161,76 @@ export function DNSRecordTable({
                       <Button
                         variant="ghost"
                         size="icon"
-                        disabled={deleteMutation.isLoading}
+                        disabled={deleteMutation.isLoading || ambiguous}
+                        title={
+                          ambiguous
+                            ? 'These SRV records share an owner name; edit or delete them from the CLI until the API can tell them apart'
+                            : undefined
+                        }
+                        aria-label={
+                          ambiguous
+                            ? `No actions for SRV record ${record.name} ${record.value}`
+                            : undefined
+                        }
                       >
                         <MoreHorizontal className="h-4 w-4" />
                       </Button>
                     </DropdownMenuTrigger>
+                    {/* Edit and Delete are gated on the server's PUT and DELETE record capabilities (#2060). */}
                     <DropdownMenuContent align="end">
                       <DropdownMenuLabel>Actions</DropdownMenuLabel>
                       <DropdownMenuSeparator />
                       {onEdit && (
-                        <DropdownMenuItem onClick={() => onEdit(record)}>
-                          <Edit className="mr-2 h-4 w-4" />
-                          Edit
-                        </DropdownMenuItem>
+                        <Gated op="PUT /api/v1/dns/zones/{zone}/records">
+                          <DropdownMenuItem onClick={() => onEdit(record)}>
+                            <Edit className="mr-2 h-4 w-4" />
+                            Edit
+                          </DropdownMenuItem>
+                        </Gated>
                       )}
-                      <DropdownMenuItem
-                        onClick={() => handleDelete(record)}
-                        className="text-destructive"
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Delete
-                      </DropdownMenuItem>
+                      <Gated op="DELETE /api/v1/dns/zones/{zone}/records/{type}/{name}">
+                        <DropdownMenuItem
+                          onClick={() => handleDelete(record)}
+                          className="text-destructive"
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          Delete
+                        </DropdownMenuItem>
+                      </Gated>
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </TableCell>
               </TableRow>
-            ))
+              );
+            })
           )}
         </TableBody>
       </Table>
+      <Dialog
+        open={pendingDelete !== null}
+        onOpenChange={(o) => {
+          if (!o) setPendingDelete(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete this record?</DialogTitle>
+            <DialogDescription>
+              {pendingDelete
+                ? `${pendingDelete.type} ${pendingDelete.name} is removed from ${zoneName}.`
+                : ''}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingDelete(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmPendingDelete}>
+              Delete record
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

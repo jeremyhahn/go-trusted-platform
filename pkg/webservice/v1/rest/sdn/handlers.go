@@ -294,12 +294,20 @@ func (h *SDNHandlers) ApplyPolicy(w http.ResponseWriter, r *http.Request) {
 	protorest.WriteSuccessStatus(w, r, h.respWriter, http.StatusCreated, resp)
 }
 
-// ListPolicies handles GET /api/v1/sdn/policies; an optional body carries the
-// ListPoliciesRequest filters.
+// ListPolicies handles GET /api/v1/sdn/policies?type=&target_id=. The type
+// and target_id query filters (the SDK's wire form) win over the
+// ListPoliciesRequest filters an optional body carries.
 func (h *SDNHandlers) ListPolicies(w http.ResponseWriter, r *http.Request) {
 	req := &platformv1.ListPoliciesRequest{}
 	if !h.decode(w, r, req) {
 		return
+	}
+	q := r.URL.Query()
+	if v := q.Get("type"); v != "" {
+		req.Type = v
+	}
+	if v := q.Get("target_id"); v != "" {
+		req.TargetId = v
 	}
 	resp, err := h.sdnService.ListPolicies(r.Context(), req)
 	h.reply(w, r, resp, err)

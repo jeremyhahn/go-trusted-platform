@@ -37,39 +37,18 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
+import { useSDNIPAMPools, type SDNIPAMAllocation, type SDNIPAMPool } from '@/hooks/use-sdn-ipam-pools';
+import { Gated } from '@/components/features/capabilities/gated';
 
-// uint64 arrives as JSON string — render as-is, never parseInt
-type Uint64String = string;
+// The pool as SDNService answers it (pkg/webservice/v1/rest/gateway/ipam.go).
+type IPAMPoolResponse = SDNIPAMPool;
 
-interface IPAMPoolResponse {
-  id: string;
-  name: string;
-  cidr: string;
-  gateway: string;
-  zone: string;
-  description: string;
-  total: Uint64String;
-  allocated: Uint64String;
-  available: Uint64String;
-  default_lease_duration_nanos: number;
-  inactivity_timeout_nanos: number;
-  /** Prefixes (CIDR) that are never allocatable; the gateway is always reserved. */
-  reserved?: string[];
-  /** Dynamic allocation window; both empty means the whole CIDR. */
-  range_start?: string;
-  range_end?: string;
-  created_at: string;
-  updated_at: string;
-}
-
-interface IPAllocationResponse {
-  ip: string;
-  pool_id: string;
-  device_id: string;
-  hostname: string;
-  allocated_at: string;
-  expires_at: string;
-}
+const LIST_POOLS = 'GET /api/v1/sdn/gateway/ipam/pools';
+const CREATE_POOL = 'POST /api/v1/sdn/gateway/ipam/pools';
+const UPDATE_POOL = 'PUT /api/v1/sdn/gateway/ipam/pools/{id}';
+const DELETE_POOL = 'DELETE /api/v1/sdn/gateway/ipam/pools/{id}';
+const GET_POOL = 'GET /api/v1/sdn/gateway/ipam/pools/{id}';
+const LIST_ALLOCATIONS = 'GET /api/v1/sdn/gateway/ipam/allocations';
 
 interface PoolFormState {
   id: string;
@@ -124,11 +103,23 @@ function utilization(pool: IPAMPoolResponse): number {
 export default function IPAMPage() {
   const { toast } = useToast();
 
-  const [pools, setPools] = React.useState<IPAMPoolResponse[]>([]);
-  const [loading, setLoading] = React.useState(true);
-  const [loadError, setLoadError] = React.useState<string | null>(null);
   const [zoneFilter, setZoneFilter] = React.useState('');
-  const [zoneOptions, setZoneOptions] = React.useState<string[]>([]);
+  const {
+    pools,
+    isLoading: loading,
+    error: loadError,
+    refetch,
+    create: createPool,
+    update: updatePool,
+    remove: removePool,
+    get: getPool,
+    listAllocations,
+  } = useSDNIPAMPools(zoneFilter || undefined);
+  // Unique zone values of the last listing feed the filter dropdown.
+  const zoneOptions = React.useMemo(
+    () => Array.from(new Set(pools.map((p) => p.zone).filter((z): z is string => Boolean(z)))),
+    [pools]
+  );
 
   const [formOpen, setFormOpen] = React.useState(false);
   const [editTarget, setEditTarget] = React.useState<IPAMPoolResponse | null>(null);
@@ -142,67 +133,58 @@ export default function IPAMPage() {
 
   // Allocations panel for selected pool
   const [allocationsPool, setAllocationsPool] = React.useState<IPAMPoolResponse | null>(null);
-  const [allocations, setAllocations] = React.useState<IPAllocationResponse[]>([]);
+  const [allocations, setAllocations] = React.useState<SDNIPAMAllocation[]>([]);
   const [allocationsLoading, setAllocationsLoading] = React.useState(false);
   const [allocationsOpen, setAllocationsOpen] = React.useState(false);
-
-  const fetchPools = React.useCallback(async (zone?: string) => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const params = zone ? `?zone=${encodeURIComponent(zone)}` : '';
-      const res = await fetch(`/api/v1/sdn/gateway/ipam/pools${params}`, {
-        credentials: 'include',
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `HTTP ${res.status}`);
-      }
-      const body = await res.json();
-      // The webservice wraps payloads in {payload}; the daemon REST
-      // stack returns the body bare — accept both.
-      const list: IPAMPoolResponse[] = body.payload?.pools ?? body.pools ?? [];
-      setPools(list);
-      // Collect unique zone values for the filter dropdown
-      const seenZones = Array.from(new Set(list.map((p) => p.zone).filter(Boolean)));
-      setZoneOptions(seenZones);
-    } catch (err) {
-      setLoadError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  React.useEffect(() => {
-    void fetchPools(zoneFilter || undefined);
-  }, [fetchPools, zoneFilter]);
+  const [allocationsError, setAllocationsError] = React.useState<string | null>(null);
 
   const fetchAllocations = React.useCallback(async (pool: IPAMPoolResponse) => {
     setAllocationsPool(pool);
+    setAllocations([]);
+    setAllocationsError(null);
     setAllocationsLoading(true);
     setAllocationsOpen(true);
     try {
-      const res = await fetch(
-        `/api/v1/sdn/gateway/ipam/allocations?pool_id=${encodeURIComponent(pool.id)}`,
-        { credentials: 'include' }
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `HTTP ${res.status}`);
-      }
-      const body = await res.json();
-      setAllocations(body.payload?.allocations ?? body.allocations ?? []);
+      setAllocations(await listAllocations(pool.id));
     } catch (err) {
-      toast({
-        title: 'Failed to load allocations',
-        description: err instanceof Error ? err.message : 'Unknown error',
-        variant: 'destructive',
-      });
-      setAllocations([]);
+      setAllocationsError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setAllocationsLoading(false);
     }
-  }, [toast]);
+  }, [listAllocations]);
+
+  const closeAllocations = React.useCallback(() => {
+    setAllocationsOpen(false);
+    setAllocationsPool(null);
+    setAllocations([]);
+    setAllocationsError(null);
+  }, []);
+
+  // Details dialog: one pool read again through GET /pools/{id}.
+  const [detailPool, setDetailPool] = React.useState<IPAMPoolResponse | null>(null);
+  const [detail, setDetail] = React.useState<IPAMPoolResponse | null>(null);
+  const [detailError, setDetailError] = React.useState<string | null>(null);
+  const [detailLoading, setDetailLoading] = React.useState(false);
+
+  const openDetails = React.useCallback(async (pool: IPAMPoolResponse) => {
+    setDetailPool(pool);
+    setDetail(null);
+    setDetailError(null);
+    setDetailLoading(true);
+    try {
+      setDetail(await getPool(pool.id));
+    } catch (err) {
+      setDetailError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setDetailLoading(false);
+    }
+  }, [getPool]);
+
+  const closeDetails = React.useCallback(() => {
+    setDetailPool(null);
+    setDetail(null);
+    setDetailError(null);
+  }, []);
 
   const openCreate = React.useCallback(() => {
     setEditTarget(null);
@@ -243,19 +225,7 @@ export default function IPAMPage() {
           range_start: form.rangeStart.trim(),
           range_end: form.rangeEnd.trim(),
         };
-        const res = await fetch(
-          `/api/v1/sdn/gateway/ipam/pools/${encodeURIComponent(editTarget.id)}`,
-          {
-            method: 'PUT',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-          }
-        );
-        if (!res.ok) {
-          const b = await res.json().catch(() => ({}));
-          throw new Error(b.error || `HTTP ${res.status}`);
-        }
+        await updatePool(editTarget.id, body);
         toast({ title: 'Pool updated', variant: 'success' });
       } else {
         const body = {
@@ -269,20 +239,10 @@ export default function IPAMPage() {
           range_start: form.rangeStart.trim() || undefined,
           range_end: form.rangeEnd.trim() || undefined,
         };
-        const res = await fetch('/api/v1/sdn/gateway/ipam/pools', {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        if (!res.ok) {
-          const b = await res.json().catch(() => ({}));
-          throw new Error(b.error || `HTTP ${res.status}`);
-        }
+        await createPool(body);
         toast({ title: 'Pool created', variant: 'success' });
       }
       setFormOpen(false);
-      void fetchPools(zoneFilter || undefined);
     } catch (err) {
       toast({
         title: editTarget ? 'Failed to update pool' : 'Failed to create pool',
@@ -292,7 +252,7 @@ export default function IPAMPage() {
     } finally {
       setSubmitting(false);
     }
-  }, [form, editTarget, fetchPools, zoneFilter, toast]);
+  }, [form, editTarget, createPool, updatePool, toast]);
 
   const openDeleteConfirm = React.useCallback((pool: IPAMPoolResponse) => {
     setDeleteTarget(pool);
@@ -305,24 +265,16 @@ export default function IPAMPage() {
     setDeleting(true);
     setDeleteError(null);
     try {
-      const res = await fetch(
-        `/api/v1/sdn/gateway/ipam/pools/${encodeURIComponent(deleteTarget.id)}`,
-        { method: 'DELETE', credentials: 'include' }
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `HTTP ${res.status}`);
-      }
+      await removePool(deleteTarget.id);
       toast({ title: 'Pool deleted', variant: 'success' });
       setDeleteConfirmOpen(false);
       setDeleteTarget(null);
-      void fetchPools(zoneFilter || undefined);
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setDeleting(false);
     }
-  }, [deleteTarget, fetchPools, zoneFilter, toast]);
+  }, [deleteTarget, removePool, toast]);
 
   const columns: ColumnDef<IPAMPoolResponse>[] = React.useMemo(
     () => [
@@ -430,23 +382,26 @@ export default function IPAMPage() {
           <DataTableRowActions
             row={row.original}
             actions={[
-              { label: 'Edit', onClick: openEdit },
+              { label: 'Edit', onClick: openEdit, op: UPDATE_POOL },
+              { label: 'Details', onClick: openDetails, op: GET_POOL },
               {
                 label: 'View Allocations',
                 onClick: fetchAllocations,
+                op: LIST_ALLOCATIONS,
               },
               {
                 label: 'Delete',
                 onClick: openDeleteConfirm,
                 variant: 'destructive',
                 separator: true,
+                op: DELETE_POOL,
               },
             ]}
           />
         ),
       },
     ],
-    [openEdit, openDeleteConfirm, fetchAllocations]
+    [openEdit, openDeleteConfirm, fetchAllocations, openDetails]
   );
 
   const stats = React.useMemo(() => ({
@@ -469,7 +424,7 @@ export default function IPAMPage() {
               variant="outline"
               size="sm"
               className="ml-4"
-              onClick={() => void fetchPools(zoneFilter || undefined)}
+              onClick={() => void refetch()}
             >
               Retry
             </Button>
@@ -502,19 +457,24 @@ export default function IPAMPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            onClick={() => void fetchPools(zoneFilter || undefined)}
-            disabled={loading}
-          >
-            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          </Button>
-          <Button type="button" onClick={openCreate}>
-            <Plus className="mr-2 h-4 w-4" />
-            Create Pool
-          </Button>
+          <Gated op={LIST_POOLS}>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label="Refresh pools"
+              onClick={() => void refetch()}
+              disabled={loading}
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            </Button>
+          </Gated>
+          <Gated op={CREATE_POOL}>
+            <Button type="button" onClick={openCreate}>
+              <Plus className="mr-2 h-4 w-4" />
+              Create Pool
+            </Button>
+          </Gated>
         </div>
       </div>
 
@@ -686,6 +646,7 @@ export default function IPAMPage() {
             <Button type="button" variant="outline" onClick={() => setFormOpen(false)}>
               Cancel
             </Button>
+            <Gated op={editTarget ? UPDATE_POOL : CREATE_POOL}>
             <Button
               type="button"
               disabled={
@@ -696,6 +657,7 @@ export default function IPAMPage() {
               {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {editTarget ? 'Save Changes' : 'Create Pool'}
             </Button>
+            </Gated>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -738,6 +700,7 @@ export default function IPAMPage() {
             >
               Cancel
             </Button>
+            <Gated op={DELETE_POOL}>
             <Button
               type="button"
               variant="destructive"
@@ -747,6 +710,58 @@ export default function IPAMPage() {
               {deleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Delete
             </Button>
+            </Gated>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Pool details */}
+      <Dialog
+        open={detailPool !== null}
+        onOpenChange={(open) => {
+          if (!open) closeDetails();
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Pool {detailPool?.name}</DialogTitle>
+            <DialogDescription>The pool as the server answers it now.</DialogDescription>
+          </DialogHeader>
+          {detailLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin mr-2" />
+              <span>Loading pool...</span>
+            </div>
+          ) : detailError ? (
+            <Alert variant="destructive" data-testid="ipam-pool-detail-error">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Failed to load pool</AlertTitle>
+              <AlertDescription>{detailError}</AlertDescription>
+            </Alert>
+          ) : detail ? (
+            <dl data-testid="ipam-pool-detail" className="grid grid-cols-2 gap-2 text-sm">
+              <dt className="text-muted-foreground">Name</dt>
+              <dd>{detail.name}</dd>
+              <dt className="text-muted-foreground">CIDR</dt>
+              <dd className="font-mono">{detail.cidr}</dd>
+              <dt className="text-muted-foreground">Zone</dt>
+              <dd>{detail.zone || '—'}</dd>
+              <dt className="text-muted-foreground">Gateway</dt>
+              <dd className="font-mono">{detail.gateway || '—'}</dd>
+              <dt className="text-muted-foreground">Dynamic window</dt>
+              <dd className="font-mono">{windowLabel(detail)}</dd>
+              <dt className="text-muted-foreground">Total</dt>
+              <dd className="font-mono">{detail.total}</dd>
+              <dt className="text-muted-foreground">Used</dt>
+              <dd className="font-mono">{detail.allocated}</dd>
+              <dt className="text-muted-foreground">Available</dt>
+              <dd className="font-mono">{detail.available}</dd>
+            </dl>
+          ) : null}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={closeDetails}>
+              Close
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -755,11 +770,7 @@ export default function IPAMPage() {
       <Dialog
         open={allocationsOpen}
         onOpenChange={(open) => {
-          if (!open) {
-            setAllocationsOpen(false);
-            setAllocationsPool(null);
-            setAllocations([]);
-          }
+          if (!open) closeAllocations();
         }}
       >
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
@@ -776,6 +787,12 @@ export default function IPAMPage() {
               <Loader2 className="h-6 w-6 animate-spin mr-2" />
               <span>Loading allocations...</span>
             </div>
+          ) : allocationsError ? (
+            <Alert variant="destructive" data-testid="ipam-allocations-error">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Failed to load allocations</AlertTitle>
+              <AlertDescription>{allocationsError}</AlertDescription>
+            </Alert>
           ) : allocations.length === 0 ? (
             <p className="text-center text-muted-foreground py-8">No active allocations.</p>
           ) : (
@@ -793,7 +810,7 @@ export default function IPAMPage() {
                 {allocations.map((a) => (
                   <TableRow key={a.ip}>
                     <TableCell className="font-mono text-sm">{a.ip}</TableCell>
-                    <TableCell className="font-mono text-xs">{a.device_id}</TableCell>
+                    <TableCell className="font-mono text-xs">{a.device_id || '—'}</TableCell>
                     <TableCell>{a.hostname || '—'}</TableCell>
                     <TableCell className="text-xs">
                       {a.allocated_at ? new Date(a.allocated_at).toLocaleString() : '—'}
@@ -810,11 +827,7 @@ export default function IPAMPage() {
             <Button
               type="button"
               variant="outline"
-              onClick={() => {
-                setAllocationsOpen(false);
-                setAllocationsPool(null);
-                setAllocations([]);
-              }}
+              onClick={closeAllocations}
             >
               Close
             </Button>

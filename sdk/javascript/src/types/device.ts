@@ -946,6 +946,10 @@ export interface AssignProfileToDeviceRequest {
   ekSerial?: string;
   /** MAC address */
   macAddress?: string;
+  /** PEM-encoded TPM Endorsement Key certificate to prestage */
+  ekCert?: string;
+  /** An already registered device to bind to */
+  deviceId?: string;
 }
 
 // =============================================================================

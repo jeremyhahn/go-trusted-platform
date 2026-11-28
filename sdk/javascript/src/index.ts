@@ -101,6 +101,9 @@ export {
   type RegistryStatus,
   type RegistryTagList,
   type RegistryComponentHealth,
+  type RegistryImageSummary,
+  type RegistryImageList,
+  type ListImagesRequest,
   SDNService,
   SwitchService,
   TenantService,
@@ -294,6 +297,7 @@ export type {
   AttestationQuoteConfig,
   AttestationPCRValue,
   AttestationPCRValueWire,
+  VMAttestationWire,
   HostAttestation,
   VMAttestation,
   ContainerAttestation,
@@ -460,6 +464,9 @@ export type {
   GetRandomRequest,
   TPMStatus,
   TPMInfoResponse,
+  TPMCapabilitiesResponse,
+  TPMPlatformAttributesResponse,
+  TPMKeyRef,
   TPMProvisionResponse,
   TPMClearResponse,
   CreateEKResponse,
@@ -490,6 +497,8 @@ export type {
   TPMMakeCredentialResponse,
   TPMActivateCredentialRequest,
   TPMActivateCredentialResponse,
+  TPMCertifyRequest,
+  TPMCertifyResponse,
 } from './types/tpm.js';
 
 // Device values: the server's network phase selector defaults and their resolver
@@ -629,6 +638,15 @@ export type {
   GenerateDataKeyResponse,
   GenerateWrappedDataKeyResponse,
   BackendStatusResponse,
+  RewrapRequest,
+  RewrapResponse,
+  BatchEncryptItem,
+  BatchEncryptRequest,
+  BatchDecryptItem,
+  BatchDecryptRequest,
+  BatchItemResult,
+  BatchResponse,
+  GetKeyMetadataResponse,
 } from './types/kms.js';
 
 // Compute types
@@ -854,6 +872,9 @@ export type {
   GatewaySnapshotNATUplink,
   GatewaySnapshotPipeline,
   ListGatewayStateResponse,
+  GatewayAdmittedVTEP,
+  GatewayOverlay,
+  ListGatewayAdmittedVTEPsResponse,
 } from './types/gateway.js';
 
 // SDN types
@@ -924,6 +945,16 @@ export type {
   GetPortStatsResponse,
   GetFlowStatsResponse,
 } from './types/sdn.js';
+export type {
+  SDNIPAMPool,
+  SDNIPAMPoolRequest,
+  ListSDNIPAMPoolsRequest,
+  ListSDNIPAMPoolsResponse,
+  SDNIPAMActionResponse,
+  SDNIPAMAllocation,
+  ListSDNIPAMAllocationsRequest,
+  ListSDNIPAMAllocationsResponse,
+} from './types/sdn-ipam.js';
 
 // PXE types
 export type {

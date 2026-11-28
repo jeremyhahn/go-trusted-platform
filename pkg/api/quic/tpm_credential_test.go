@@ -159,6 +159,55 @@ func TestTPM2Handler_MakeCredential_ExternalEK(t *testing.T) {
 	}
 }
 
+// TestTPM2Handler_MakeCredential_RefusesUnservableRequest checks that an
+// ek_cert without iak_pub (or the reverse), and a local-EK request with no
+// ak_name, are refused with StatusInvalidArgument before the TPM is called.
+func TestTPM2Handler_MakeCredential_RefusesUnservableRequest(t *testing.T) {
+	der := selfSignedDER(t)
+	cases := []struct {
+		name string
+		req  *TPM2MakeCredentialRequest
+	}{
+		{
+			name: "ek_cert without iak_pub",
+			req: &TPM2MakeCredentialRequest{
+				AKName: []byte("ak-name"),
+				Secret: []byte("seed"),
+				EKCert: der,
+			},
+		},
+		{
+			name: "iak_pub without ek_cert",
+			req: &TPM2MakeCredentialRequest{
+				AKName: []byte("ak-name"),
+				Secret: []byte("seed"),
+				IAKPub: []byte("iak-pub"),
+			},
+		},
+		{
+			name: "no ak_name on the local-EK path",
+			req: &TPM2MakeCredentialRequest{
+				Secret: []byte("seed"),
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := &credMockTPM{makeBlob: []byte("blob")}
+			h := newCredHandler(mock)
+
+			payload := append([]byte{quicwire.SubOpTPM2MakeCred}, mustEncode(t, tc.req)...)
+			resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: payload})
+			if resp.Status != quicwire.StatusInvalidArgument {
+				t.Fatalf("status = %d, want %d (body=%s)", resp.Status, quicwire.StatusInvalidArgument, resp.Payload)
+			}
+			if mock.usedExtEK || mock.gotSecret != nil || mock.gotAKName != nil {
+				t.Fatal("TPM was called for an unservable request")
+			}
+		})
+	}
+}
+
 func TestTPM2Handler_MakeCredential_Error(t *testing.T) {
 	mock := &credMockTPM{makeErr: errors.New("tpm failure")}
 	h := newCredHandler(mock)

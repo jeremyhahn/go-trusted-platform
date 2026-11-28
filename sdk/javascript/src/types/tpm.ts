@@ -484,7 +484,7 @@ export interface UndefineNVRAMRequest {
  * Get random request
  */
 export interface GetRandomRequest {
-  /** Number of bytes */
+  /** Number of bytes, an integer from 1 to 1024 */
   numBytes: number;
 }
 
@@ -534,6 +534,53 @@ export interface TPMInfoResponse {
   properties: Record<string, string>;
   /** Defined NV indexes */
   nvIndexes: NVIndex[];
+}
+
+/**
+ * A TPM key reference (TPMKeyRef): its persistent handle and key algorithm.
+ * protojson omits empty fields, so both are optional.
+ */
+export interface TPMKeyRef {
+  /** Persistent handle */
+  handle?: number;
+  /** Key algorithm */
+  algorithm?: string;
+}
+
+/**
+ * TPM capabilities response (GET /v1/tpm/capabilities)
+ */
+export interface TPMCapabilitiesResponse {
+  /** Supported algorithms */
+  algorithms?: string[];
+  /** Supported commands */
+  commands?: string[];
+  /** Supported ECC curves */
+  eccCurves?: string[];
+}
+
+/**
+ * TPM platform attributes response (GET /v1/tpm/platform)
+ */
+export interface TPMPlatformAttributesResponse {
+  /** TPM device path */
+  device?: string;
+  /** FIPS mode enabled */
+  isFips?: boolean;
+  /** PCRs have been extended */
+  pcrExtended?: boolean;
+  /** TPM can seal data */
+  canSeal?: boolean;
+  /** Is simulator */
+  isSimulator?: boolean;
+  /** Manufacturer */
+  manufacturer?: string;
+  /** Endorsement key */
+  ek?: TPMKeyRef;
+  /** Storage root key */
+  srk?: TPMKeyRef;
+  /** Initial attestation key */
+  iak?: TPMKeyRef;
 }
 
 /**
@@ -751,7 +798,7 @@ export interface GetEventLogResponse {
   eventLog: string;
   /** Format */
   format: string;
-  /** Event count */
+  /** Event count; a number after the SDK decodes the server's decimal string (protojson uint64) */
   eventCount: number;
   /** Parsed entries (proto entries; absent until server-side parsing ships) */
   entries?: EventLogEntry[];
@@ -867,4 +914,40 @@ export interface TPMActivateCredentialRequest {
 export interface TPMActivateCredentialResponse {
   /** The recovered secret (base64) */
   secret: string;
+}
+
+/**
+ * Certify request (tpm.proto CertifyRequest)
+ */
+export interface TPMCertifyRequest {
+  /** The persistent handle of the key to certify */
+  keyHandle: number;
+  /** The key's authorization value, if it has one */
+  keyPassword?: string;
+  /** Caller nonce, the qualifying data (base64) */
+  nonce?: string;
+}
+
+/**
+ * Certify response (tpm.proto CertifyResponse in protojson; bytes as base64)
+ */
+export interface TPMCertifyResponse {
+  /** The TPMS_ATTEST structure the IAK signed (base64) */
+  certifyInfo?: string;
+  /** Signature over certifyInfo (base64) */
+  signature?: string;
+  /** Signature scheme, such as SHA256-RSASSA */
+  signatureAlgorithm?: string;
+  /** Marshalled TPMT_SIGNATURE over certifyInfo (base64) */
+  certifyInfoSignature?: string;
+  /** The attesting key's public key (base64) */
+  attestingKeyPublic?: string;
+  /** The certified key's public key (base64) */
+  attestedKeyPublic?: string;
+  /** The attesting key's TPMT_PUBLIC area (base64) */
+  attestingKeyPublicArea?: string;
+  /** The certified key's TPMT_PUBLIC area (base64) */
+  attestedKeyPublicArea?: string;
+  /** The nonce the TPM signed over (base64) */
+  nonce?: string;
 }

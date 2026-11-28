@@ -10,6 +10,7 @@
  *
  * #2069: a refusal shows the server's message, and MakeCredential shows the
  * wrapped secret, so an operator can compare it with the recovered one.
+ * The AK name can be read from GetAK through the SDK (#2069).
  */
 import * as React from "react";
 import {
@@ -20,6 +21,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Gated } from "@/components/features/capabilities/gated";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -31,7 +33,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
-import { Gated } from "@/components/features/capabilities/gated";
 import { base64ToHex, textToBase64, useTPMOps, useToast } from "@/hooks";
 
 /**
@@ -57,6 +58,7 @@ export default function TPMCredentialPage() {
   const [wrappedSecret, setWrappedSecret] = React.useState("");
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [numBytes, setNumBytes] = React.useState("32");
+  const numBytesValid = /^\d+$/.test(numBytes) && Number(numBytes) >= 1 && Number(numBytes) <= 1024;
 
   const fail = (title: string) => (err: unknown) => {
     toast({
@@ -106,8 +108,9 @@ export default function TPMCredentialPage() {
   };
 
   const onRandom = async () => {
+    if (!numBytesValid) return;
     try {
-      await getRandom.mutateAsync({ numBytes: Number(numBytes) || 0 });
+      await getRandom.mutateAsync({ numBytes: Number(numBytes) });
     } catch (err) {
       fail("GetRandom failed")(err);
     }
@@ -230,9 +233,12 @@ export default function TPMCredentialPage() {
               value={numBytes}
               onChange={(e) => setNumBytes(e.target.value)}
             />
+            {numBytes !== "" && !numBytesValid && (
+              <p className="text-xs text-destructive">Number of bytes is a whole number from 1 to 1024</p>
+            )}
           </div>
           <Gated op="POST /api/v1/tpm/random">
-            <Button onClick={onRandom} disabled={getRandom.isLoading}>
+            <Button onClick={onRandom} disabled={!numBytesValid || getRandom.isLoading}>
               {getRandom.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Get Random
             </Button>

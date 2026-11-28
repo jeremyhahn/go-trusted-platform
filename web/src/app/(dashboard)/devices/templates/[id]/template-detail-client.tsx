@@ -37,6 +37,11 @@ import { useCapabilities } from '@/hooks/use-capabilities';
 import { Gated } from '@/components/features/capabilities/gated';
 import type { DeviceRole } from 'trusted-platform-sdk';
 import { deviceRoleLabel } from '@/lib/device-role';
+import { TemplateEditDialog } from '@/components/features/devices/template-edit-dialog';
+
+const UPDATE_TEMPLATE_OP = 'PUT /api/v1/device/templates/{id:[0-9]+}';
+const DELETE_TEMPLATE_OP = 'DELETE /api/v1/device/templates/{id:[0-9]+}';
+const CREATE_PROFILE_OP = 'POST /api/v1/device/templates/{id:[0-9]+}/create-profile';
 
 // ============================================================================
 // Helper Functions
@@ -71,6 +76,7 @@ export default function TemplateDetailClient() {
   const router = useRouter();
   const { toast } = useToast();
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [isEditOpen, setIsEditOpen] = useState(false);
   const deviceService = useDevice();
   const { loading: capsLoading, capability } = useCapabilities();
   const getCap = capability('GET /api/v1/device/templates/{id:[0-9]+}');
@@ -208,16 +214,13 @@ export default function TemplateDetailClient() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Gated op="PUT /api/v1/device/templates/{id:[0-9]+}">
-            <Button
-              variant="outline"
-              onClick={() => router.push(`/devices/templates/${templateId}/edit`)}
-            >
+          <Gated op={UPDATE_TEMPLATE_OP}>
+            <Button variant="outline" onClick={() => setIsEditOpen(true)}>
               <Pencil className="mr-2 h-4 w-4" />
               Edit Template
             </Button>
           </Gated>
-          <Gated op="POST /api/v1/device/templates/{id:[0-9]+}/create-profile">
+          <Gated op={CREATE_PROFILE_OP}>
             <Button
               onClick={() => router.push(`/devices/templates/${templateId}/create-profile`)}
             >
@@ -225,7 +228,7 @@ export default function TemplateDetailClient() {
               Create Profile from Template
             </Button>
           </Gated>
-          <Gated op="DELETE /api/v1/device/templates/{id:[0-9]+}">
+          <Gated op={DELETE_TEMPLATE_OP}>
             <Button
               variant="destructive"
               size="icon"
@@ -370,7 +373,7 @@ export default function TemplateDetailClient() {
             >
               Cancel
             </Button>
-            <Gated op="DELETE /api/v1/device/templates/{id:[0-9]+}">
+            <Gated op={DELETE_TEMPLATE_OP}>
               <Button
                 variant="destructive"
                 onClick={() => deleteTemplateMutation.mutate(undefined)}
@@ -385,6 +388,16 @@ export default function TemplateDetailClient() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <TemplateEditDialog
+        template={template}
+        open={isEditOpen}
+        onOpenChange={setIsEditOpen}
+        onSaved={() => {
+          setIsEditOpen(false);
+          refetch();
+        }}
+      />
     </div>
   );
 }

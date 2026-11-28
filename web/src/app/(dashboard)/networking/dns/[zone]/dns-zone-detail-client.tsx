@@ -9,7 +9,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { DNSRecordTable } from '@/components/features/networking/dns-record-table';
 import { DNSRecordForm } from '@/components/features/networking/dns-record-form';
+import { DNSSECStatusCard } from '@/components/features/networking/dnssec-status-card';
+import { DNSRecordsCard } from '@/components/features/networking/dns-records-card';
 import { useDNS, useApi, useToast } from '@/hooks';
+import { Gated } from '@/components/features/capabilities/gated';
+import { DNSZoneEditDialog } from '@/components/features/networking/dns-zone-edit-dialog';
 import type { DNSZoneDetail, DNSRecord } from '@/types/infrastructure';
 import type { GetZoneResponse } from 'trusted-platform-sdk';
 import { readZoneDetail } from '@/lib/dns-wire';
@@ -89,10 +93,13 @@ export default function DNSZoneDetailPage() {
             <Upload className="mr-2 h-4 w-4" />
             Import
           </Button>
-          <Button onClick={() => setFormOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            Add Record
-          </Button>
+          <DNSZoneEditDialog zoneName={zoneName} ttl={zone.ttl} onSaved={() => void fetchZone()} />
+          <Gated op="POST /api/v1/dns/zones/{zone}/records">
+            <Button onClick={() => setFormOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Add Record
+            </Button>
+          </Gated>
         </div>
       </div>
 
@@ -173,6 +180,10 @@ export default function DNSZoneDetailPage() {
         </Card>
       </div>
 
+      <DNSSECStatusCard zoneName={zoneName} onSigned={fetchZone} />
+
+      <DNSRecordsCard zoneName={zoneName} />
+
       <Card>
         <CardHeader>
           <CardTitle>DNS Records</CardTitle>
@@ -183,6 +194,7 @@ export default function DNSZoneDetailPage() {
             records={zone.records}
             onRefresh={fetchZone}
             onEdit={handleEdit}
+            confirmDelete
           />
         </CardContent>
       </Card>

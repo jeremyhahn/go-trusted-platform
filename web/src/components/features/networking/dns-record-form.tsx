@@ -32,6 +32,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useDNS, useMutation, useToast } from '@/hooks';
+import { Gated } from '@/components/features/capabilities/gated';
+import { useCapabilities } from '@/hooks/use-capabilities';
 import { toRecordType } from "@/utils/dns-record-type";
 import type { DNSRecord } from '@/types/infrastructure';
 import type { DNSRecord as SDKDNSRecord } from 'trusted-platform-sdk';
@@ -56,6 +58,16 @@ interface DNSRecordFormProps {
   record?: DNSRecord;
 }
 
+const EMPTY_VALUES: FormValues = {
+  name: '',
+  type: 'A',
+  value: '',
+  ttl: 3600,
+  priority: undefined,
+  weight: undefined,
+  port: undefined,
+};
+
 export function DNSRecordForm({
   zoneName,
   open,
@@ -66,18 +78,16 @@ export function DNSRecordForm({
   const { toast } = useToast();
   const dns = useDNS();
   const isEdit = !!record;
+  // Create is gated on POST and Update on PUT /api/v1/dns/zones/{zone}/records,
+  // the server's capabilities (#2060).
+  const submitOp = isEdit
+    ? 'PUT /api/v1/dns/zones/{zone}/records'
+    : 'POST /api/v1/dns/zones/{zone}/records';
+  const { capability } = useCapabilities();
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: {
-      name: '',
-      type: 'A',
-      value: '',
-      ttl: 3600,
-      priority: undefined,
-      weight: undefined,
-      port: undefined,
-    },
+    defaultValues: EMPTY_VALUES,
   });
 
   const createMutation = useMutation(
@@ -197,10 +207,17 @@ export function DNSRecordForm({
         weight: record.weight,
         port: record.port,
       });
+    } else if (open && !record) {
+      // The dialog stays mounted: an Add opened after a closed edit must not carry that record's fields.
+      form.reset(EMPTY_VALUES);
     }
-  }, [record, form]);
+  }, [record, open, form]);
 
   const onSubmit = (values: FormValues) => {
+    // A form submitted by Enter must not bypass the gate.
+    if (!capability(submitOp).enabled) {
+      return;
+    }
     if (isEdit && record) {
       updateMutation.mutate(values);
     } else {
@@ -371,9 +388,11 @@ export function DNSRecordForm({
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={isLoading}>
-                {isLoading ? 'Saving...' : isEdit ? 'Update' : 'Create'}
-              </Button>
+              <Gated op={submitOp}>
+                <Button type="submit" disabled={isLoading}>
+                  {isLoading ? 'Saving...' : isEdit ? 'Update' : 'Create'}
+                </Button>
+              </Gated>
             </DialogFooter>
           </form>
         </Form>

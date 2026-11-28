@@ -5,7 +5,7 @@
  * Display and manage device profiles with network phase configurations
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -217,10 +217,73 @@ export default function DeviceProfilesPage() {
     }
   );
 
+  // The registered total, from GET /device/profiles/count (#2048). The list
+  // above loads one server page; the count tells the operator when it is cut
+  // off. A refused count hides the line; the list still renders. useApi keeps
+  // the last data on error, so a failed refresh must hide it too (#2185 Codex).
+  const { data: countResponse, error: countError, refetch: refetchCount } = useApi(
+    () => deviceService.countProfiles(),
+    []
+  );
+  const registeredTotal = countError ? undefined : countResponse?.count;
+
+  // Find one profile by serial or MAC address (FindProfileBySerial and
+  // FindProfileByMACAddress, #2048). A 404 means no profile matches; any
+  // other refusal shows the server's message. Editing the query clears the
+  // old answer and drops a pending one: each lookup takes a generation, and
+  // an answer for an earlier generation is never shown.
+  const [lookupQuery, setLookupQuery] = useState('');
+  const lookupGen = useRef(0);
+  const [lookupBusy, setLookupBusy] = useState(false);
+  const [lookup, setLookup] = useState<
+    | { kind: 'found'; profile: DeviceProfile }
+    | { kind: 'none'; query: string }
+    | { kind: 'error'; message: string }
+    | null
+  >(null);
+  const lookupDisabled = lookupBusy || lookupQuery.trim() === '';
+
+  const findProfile = async (by: 'serial' | 'mac') => {
+    const q = lookupQuery.trim();
+    if (q === '') return;
+    const gen = ++lookupGen.current;
+    setLookupBusy(true);
+    try {
+      const res =
+        by === 'serial'
+          ? await deviceService.findProfileBySerial(q)
+          : await deviceService.findProfileByMACAddress(q);
+      if (gen !== lookupGen.current) return;
+      if (res.error?.status === 404) {
+        setLookup({ kind: 'none', query: q });
+      } else if (res.error) {
+        setLookup({ kind: 'error', message: res.error.message });
+      } else {
+        // The server's FindProfileBySerial and FindProfileByMAC handlers
+        // answer the profile itself, while the SDK types the response as
+        // { profile?: DeviceProfile }; accept both shapes.
+        const payload = res.data as unknown as
+          | { profile?: DeviceProfile }
+          | (DeviceProfile & { profile?: undefined })
+          | undefined;
+        let profile: DeviceProfile | undefined;
+        if (payload && 'profile' in payload && payload.profile) {
+          profile = payload.profile;
+        } else if (payload && 'id' in payload && payload.id) {
+          profile = payload as DeviceProfile;
+        }
+        setLookup(profile ? { kind: 'found', profile } : { kind: 'none', query: q });
+      }
+    } finally {
+      if (gen === lookupGen.current) setLookupBusy(false);
+    }
+  };
+
   const profiles: DeviceProfile[] = useMemo(() => {
     if (!profilesData?.profiles) return [];
     return profilesData.profiles;
   }, [profilesData]);
+  const loadedCount = profiles.length;
 
   // Filtered profiles
   const filteredProfiles = useMemo(() => {
@@ -262,6 +325,7 @@ export default function DeviceProfilesPage() {
           variant: 'success',
         });
         refetchProfiles();
+        refetchCount();
       },
       onError: (error) => {
         toast({
@@ -292,6 +356,7 @@ export default function DeviceProfilesPage() {
           variant: 'success',
         });
         refetchProfiles();
+        refetchCount();
         setIsCreateDialogOpen(false);
       },
       onError: (error) => {
@@ -393,7 +458,7 @@ export default function DeviceProfilesPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => refetchProfiles()} disabled={isLoading}>
+          <Button variant="outline" onClick={() => { refetchProfiles(); refetchCount(); }} disabled={isLoading}>
             <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
@@ -467,6 +532,60 @@ export default function DeviceProfilesPage() {
         </div>
       </div>
 
+      {registeredTotal !== undefined && (
+        <p data-testid="profile-count" className="text-sm text-muted-foreground">
+          Showing {filteredProfiles.length} of {registeredTotal} registered profiles
+          {registeredTotal > loadedCount && (
+            <> (only the first {loadedCount} are loaded)</>
+          )}
+        </p>
+      )}
+
+      <Card data-testid="profile-lookup">
+        <CardHeader>
+          <CardTitle>Find a profile</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="space-y-2">
+            <Label htmlFor="profile-lookup-query">Serial or MAC address</Label>
+            <Input
+              id="profile-lookup-query"
+              value={lookupQuery}
+              onChange={(e) => {
+                setLookupQuery(e.target.value);
+                lookupGen.current++;
+                setLookup(null);
+                setLookupBusy(false);
+              }}
+            />
+          </div>
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" disabled={lookupDisabled} onClick={() => findProfile('serial')}>
+              Find by serial
+            </Button>
+            <Button type="button" variant="outline" disabled={lookupDisabled} onClick={() => findProfile('mac')}>
+              Find by MAC
+            </Button>
+          </div>
+          {lookup?.kind === 'found' && (
+            <p data-testid="profile-lookup-result" className="text-sm">
+              <span>{lookup.profile.name}</span>{' '}
+              ({deviceRoleLabel(lookup.profile.role)})
+            </p>
+          )}
+          {lookup?.kind === 'none' && (
+            <p data-testid="profile-lookup-result" className="text-sm text-muted-foreground">
+              {`No profile matches ${lookup.query}`}
+            </p>
+          )}
+          {lookup?.kind === 'error' && (
+            <p data-testid="profile-lookup-error" className="text-sm text-destructive">
+              Lookup refused: {lookup.message}
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Statistics Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card>
@@ -475,7 +594,7 @@ export default function DeviceProfilesPage() {
             <Layers className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{stats.total}</div>
+            <div className="text-2xl font-bold">{registeredTotal ?? stats.total}</div>
             <p className="text-xs text-muted-foreground">All device profiles</p>
           </CardContent>
         </Card>

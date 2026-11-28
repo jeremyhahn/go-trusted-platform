@@ -32,8 +32,16 @@ function caps(off: string[] = []): Answer {
 
 const made = ok({ credentialBlob: 'Y2I=', encryptedSecret: 'ZXM=', secret: 'czNjcmV0' });
 
-function renderPage() {
+/**
+ * Renders the page and, unless gated is false, waits for the capability gate
+ * to read the server's capabilities.
+ */
+async function renderPage(gated = true) {
   render(withControlPlane(<TPMCredentialPage />));
+  if (!gated) return;
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Get Random' }).getAttribute('data-capability-enabled')).toBe('true')
+  );
 }
 
 function inputOf(label: string): HTMLInputElement {
@@ -70,7 +78,7 @@ describe('TPMCredentialPage', () => {
 
   it('makes a credential through POST /tpm/make-credential and shows the wrapped secret', async () => {
     const sent = stubControlPlane({ [CAPS_PATH]: caps(), [MAKE_PATH]: made });
-    renderPage();
+    await renderPage();
 
     await makeCredential('s3cret');
 
@@ -91,7 +99,7 @@ describe('TPMCredentialPage', () => {
       [ACTIVATE_PATH]: ok({ secret: 'czNjcmV0' }),
     };
     const sent = stubControlPlane(routes);
-    renderPage();
+    await renderPage();
 
     await makeCredential('s3cret');
     await waitFor(() => expect(inputOf('Credential blob (base64)').value).toBe('Y2I='));
@@ -116,7 +124,7 @@ describe('TPMCredentialPage', () => {
       [MAKE_PATH]: made,
       [ACTIVATE_PATH]: ok({ secret: 'czNjcmV0' }),
     });
-    renderPage();
+    await renderPage();
 
     await makeCredential('s3cret');
     await waitFor(() => expect(inputOf('Credential blob (base64)').value).toBe('Y2I='));
@@ -132,7 +140,7 @@ describe('TPMCredentialPage', () => {
 
   it('draws random bytes through POST /tpm/random', async () => {
     const sent = stubControlPlane({ [CAPS_PATH]: caps(), [RANDOM_PATH]: ok({ randomBytes: 'AAEC' }) });
-    renderPage();
+    await renderPage();
 
     fireEvent.change(inputOf('Number of bytes'), { target: { value: '16' } });
     await waitEnabled('Get Random');
@@ -147,7 +155,7 @@ describe('TPMCredentialPage', () => {
       [CAPS_PATH]: caps(),
       [AK_PATH]: ok({ publicKey: 'cHVi', handle: 2164326402, algorithm: 'KEY_ALGORITHM_ECDSA_P256', name: 'YWtu' }),
     });
-    renderPage();
+    await renderPage();
 
     await waitEnabled('Use platform AK');
     await click('Use platform AK');
@@ -158,7 +166,7 @@ describe('TPMCredentialPage', () => {
 
   it("shows the server's reason when the platform AK read is refused", async () => {
     stubControlPlane({ [CAPS_PATH]: caps(), [AK_PATH]: refused(403, 'forbidden') });
-    renderPage();
+    await renderPage();
 
     await waitEnabled('Use platform AK');
     await click('Use platform AK');
@@ -176,7 +184,7 @@ describe('TPMCredentialPage', () => {
       [RANDOM_PATH]: ok({ randomBytes: 'AAEC' }),
       [AK_PATH]: ok({ name: 'YWtu' }),
     });
-    renderPage();
+    await renderPage(false);
 
     fireEvent.change(inputOf('AK name (base64)'), { target: { value: 'YWs=' } });
     fireEvent.change(inputOf('Credential blob (base64)'), { target: { value: 'Y2I=' } });
@@ -198,7 +206,7 @@ describe('TPMCredentialPage', () => {
 
   it("shows the server's reason when MakeCredential is refused", async () => {
     stubControlPlane({ [CAPS_PATH]: caps(), [MAKE_PATH]: refused(403, 'forbidden') });
-    renderPage();
+    await renderPage();
 
     await makeCredential();
 

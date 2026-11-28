@@ -174,6 +174,8 @@ GET /api/v1/gateway/ipam/allocations
 GET /api/v1/gateway/ipam/pools
 GET /api/v1/gateway/state
 GET /api/v1/gateway/state/{id}
+GET /api/v1/gateway/state/{id}/admitted-vteps
+GET /api/v1/gateway/state/{id}/admitted-vteps/{vtep}
 GET /api/v1/gateway/status
 GET /api/v1/iam
 GET /api/v1/iam/apps
@@ -305,6 +307,7 @@ GET /api/v1/sdn/bridges
 GET /api/v1/sdn/bridges/{bridge_id}/vlans
 GET /api/v1/sdn/bridges/{name}
 GET /api/v1/sdn/bridges/{name}/flows
+GET /api/v1/sdn/bridges/{name}/flows/{flow}/stats
 GET /api/v1/sdn/bridges/{name}/ports
 GET /api/v1/sdn/bridges/{name}/ports/{port}/state
 GET /api/v1/sdn/bridges/{name}/ports/{port}/stats
@@ -492,6 +495,8 @@ POST /api/v1/idevid/ldevid
 POST /api/v1/invitations
 POST /api/v1/invitations/accept
 POST /api/v1/invitations/{id:[0-9]+}/revoke
+POST /api/v1/kms/batch-decrypt
+POST /api/v1/kms/batch-encrypt
 POST /api/v1/kms/data-keys
 POST /api/v1/kms/data-keys/wrapped
 POST /api/v1/kms/decrypt/{name}
@@ -506,6 +511,7 @@ POST /api/v1/kms/keys/import
 POST /api/v1/kms/keys/{name}/revoke
 POST /api/v1/kms/keys/{name}/rotate
 POST /api/v1/kms/random
+POST /api/v1/kms/rewrap
 POST /api/v1/kms/secrets
 POST /api/v1/kms/secrets/{name}/rollback
 POST /api/v1/kms/secrets/{name}/rotate
@@ -557,6 +563,7 @@ POST /api/v1/scheduler/jobs/{job_id}/trigger
 POST /api/v1/sdn/bridges
 POST /api/v1/sdn/bridges/{bridge_id}/vlans
 POST /api/v1/sdn/bridges/{name}/flows
+POST /api/v1/sdn/bridges/{name}/flows/flush
 POST /api/v1/sdn/bridges/{name}/ports
 POST /api/v1/sdn/bridges/{name}/ports/{port}/auth
 POST /api/v1/sdn/flows

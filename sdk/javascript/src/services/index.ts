@@ -59,6 +59,9 @@ export {
   type RegistryStatus,
   type RegistryTagList,
   type RegistryComponentHealth,
+  type RegistryImageSummary,
+  type RegistryImageList,
+  type ListImagesRequest,
 } from './registry-service.js';
 export { SDNService } from './sdn-service.js';
 export { TenantService } from './tenant-service.js';

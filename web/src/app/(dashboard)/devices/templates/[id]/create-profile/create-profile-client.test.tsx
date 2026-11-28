@@ -15,6 +15,15 @@ import CreateProfileClient from './create-profile-client';
 
 const { query, push } = vi.hoisted(() => ({ query: { value: '' }, push: vi.fn() }));
 
+// The submit is gated on the create-profile route; the server offers it here.
+vi.mock('@/hooks/use-capabilities', () => ({
+  useCapabilities: () => ({
+    loading: false,
+    error: undefined,
+    capability: () => ({ enabled: true }),
+  }),
+}));
+
 vi.mock('next/navigation', () => ({
   useParams: () => ({ id: '42' }),
   usePathname: () => '/devices/templates/42/create-profile',

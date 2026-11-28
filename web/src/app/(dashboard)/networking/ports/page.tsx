@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import { Plus, RefreshCw, Cable, Wifi, WifiOff, AlertCircle, Loader2 } from 'lucide-react';
 import { ColumnDef } from '@tanstack/react-table';
 import { Button } from '@/components/ui/button';
@@ -29,8 +29,11 @@ import {
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { useSDN, useApi } from '@/hooks';
-import type { Port, PortType } from 'trusted-platform-sdk';
+import type { Port, PortStats, PortType } from 'trusted-platform-sdk';
 import { portState, readUint64, type SDNPortState } from '@/lib/sdn-wire';
+import { useSDNPortState } from '@/hooks/use-sdn-port-state';
+import { SDNPortAuthCard } from '@/components/features/networking/sdn-port-auth-card';
+import { SDNPortStateCard } from '@/components/features/networking/sdn-port-state-card';
 
 // Types for SDN Port management
 interface SDNPort {
@@ -68,6 +71,17 @@ export default function SDNPortsPage() {
   const [createName, setCreateName] = useState('');
   const [createType, setCreateType] = useState<PortType>('PORT_TYPE_INTERNAL');
   const [createSubmitting, setCreateSubmitting] = useState(false);
+  const [statsPort, setStatsPort] = useState<SDNPort | null>(null);
+  // authPort is the port whose authentication dialog is open.
+  const [authPort, setAuthPort] = useState<SDNPort | null>(null);
+  const [statePort, setStatePort] = useState<SDNPort | null>(null);
+  const [portStats, setPortStats] = useState<PortStats | null>(null);
+  const [statsError, setStatsError] = useState<string | null>(null);
+  // statsRequest is the generation of the current stats read.
+  const statsRequest = useRef(0);
+  const [togglePort, setTogglePort] = useState<SDNPort | null>(null);
+  const [toggleBusy, setToggleBusy] = useState(false);
+  const portStateApi = useSDNPortState(selectedBridgeId, togglePort?.id ?? '');
 
   // Fetch bridges to get the first bridge ID
   const {
@@ -139,6 +153,9 @@ export default function SDNPortsPage() {
 
   const isLoading = bridgesLoading || portsLoading;
   const error = bridgesError || portsError;
+  // platformd answers 503 when it runs without an SDN service (the cluster
+  // page's rule): that is a state of the server, not an error.
+  const notConfigured = bridgesError?.status === 503;
 
   const fetchPorts = useCallback(() => {
     refetchBridges();
@@ -154,6 +171,32 @@ export default function SDNPortsPage() {
     });
   };
 
+  /**
+   * handlePortStats reads the port's counters from the switch through
+   * GET /sdn/bridges/{name}/ports/{port}/stats. The SDK reports a refusal in
+   * the response, not by throwing, so the error is read from it and shown in
+   * the dialog instead of a row of zeros. An answer for a read the operator
+   * closed or replaced is dropped.
+   */
+  const handlePortStats = async (port: SDNPort) => {
+    const generation = ++statsRequest.current;
+    setStatsPort(port);
+    setPortStats(null);
+    setStatsError(null);
+    try {
+      const response = await sdn.getPortStats(selectedBridgeId, port.id);
+      if (generation !== statsRequest.current) return;
+      if (response.error !== undefined) {
+        setStatsError(response.error.message);
+        return;
+      }
+      setPortStats(response.data?.stats ?? null);
+    } catch (err) {
+      if (generation !== statsRequest.current) return;
+      setStatsError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const handleEditPort = (port: SDNPort) => {
     toast({
       title: 'Edit Port',
@@ -161,11 +204,45 @@ export default function SDNPortsPage() {
     });
   };
 
+  /** handleTogglePort asks the operator to confirm before the port's admin state changes. */
   const handleTogglePort = (port: SDNPort) => {
-    toast({
-      title: 'Toggle Port',
-      description: `Toggling port ${port.name} is not yet implemented`,
-    });
+    setTogglePort(port);
+  };
+
+  /**
+   * confirmToggle sets the confirmed port's admin state through SetPortState
+   * (PUT /sdn/bridges/{name}/ports/{port}/state): an up port goes down, any
+   * other goes up. The server's message is shown on success or refusal.
+   */
+  const confirmToggle = async () => {
+    if (!togglePort) return;
+    const disabling = togglePort.status === 'up';
+    setToggleBusy(true);
+    try {
+      const res = await portStateApi.setPortState({ adminState: disabling ? 'down' : 'up' });
+      if (res.error) {
+        toast({
+          title: 'Port state change refused',
+          description: res.error.message,
+          variant: 'destructive',
+        });
+        return;
+      }
+      toast({
+        title: disabling ? 'Port disabled' : 'Port enabled',
+        description: res.data?.status?.message,
+      });
+      setTogglePort(null);
+      refetchPorts();
+    } catch (err) {
+      toast({
+        title: 'Port state change refused',
+        description: err instanceof Error ? err.message : String(err),
+        variant: 'destructive',
+      });
+    } finally {
+      setToggleBusy(false);
+    }
   };
 
   const handleDeletePort = async (port: SDNPort) => {
@@ -300,6 +377,13 @@ export default function SDNPortsPage() {
           row={row.original}
           actions={[
             { label: 'View Details', onClick: handleViewPort },
+            {
+              label: 'Port Statistics',
+              op: 'GET /api/v1/sdn/bridges/{name}/ports/{port}/stats',
+              onClick: handlePortStats,
+            },
+            { label: 'Port Authentication', onClick: (port: SDNPort) => setAuthPort(port) },
+            { label: 'Port State', onClick: (port: SDNPort) => setStatePort(port) },
             { label: 'Edit', onClick: handleEditPort },
             {
               label: row.original.status === 'up' ? 'Disable' : 'Enable',
@@ -343,6 +427,21 @@ export default function SDNPortsPage() {
       });
     }
   };
+
+  if (notConfigured) {
+    return (
+      <div className="container mx-auto py-6">
+        <Card data-testid="sdn-not-configured">
+          <CardHeader>
+            <CardTitle>SDN not configured</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">{bridgesError?.message}</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   // Show error state
   if (error) {
@@ -464,6 +563,124 @@ export default function SDNPortsPage() {
               Add
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={statsPort !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            statsRequest.current += 1;
+            setStatsPort(null);
+            setPortStats(null);
+            setStatsError(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Port statistics: {statsPort?.name}</DialogTitle>
+            <DialogDescription>
+              Counters the switch reports for this port on bridge {selectedBridgeId || 'unknown'}.
+            </DialogDescription>
+          </DialogHeader>
+          {statsError !== null ? (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                The switch returned no statistics for {statsPort?.name}: {statsError}
+              </AlertDescription>
+            </Alert>
+          ) : portStats !== null ? (
+            <dl className="grid grid-cols-2 gap-2 text-sm">
+              {[
+                ['Packets received', readUint64(portStats.packetsReceived).toLocaleString('en-US')],
+                ['Packets sent', readUint64(portStats.packetsSent).toLocaleString('en-US')],
+                ['Bytes received', formatBytes(readUint64(portStats.bytesReceived))],
+                ['Bytes sent', formatBytes(readUint64(portStats.bytesSent))],
+                ['Errors', readUint64(portStats.errors).toLocaleString('en-US')],
+                ['Dropped', readUint64(portStats.dropped).toLocaleString('en-US')],
+              ].map(([label, value]) => (
+                <div key={label} className="contents">
+                  <dt className="text-muted-foreground">{label}</dt>
+                  <dd className="font-mono text-right">{value}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading statistics...
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={togglePort !== null}
+        onOpenChange={(open) => {
+          if (!open) setTogglePort(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {togglePort?.status === 'up' ? 'Disable' : 'Enable'} port {togglePort?.name}?
+            </DialogTitle>
+            <DialogDescription>
+              {togglePort?.status === 'up'
+                ? `Disabling cuts the port's traffic on bridge ${selectedBridgeId || 'unknown'}.`
+                : `Enabling lets the port's traffic pass on bridge ${selectedBridgeId || 'unknown'} again.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTogglePort(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant={togglePort?.status === 'up' ? 'destructive' : 'default'}
+              disabled={toggleBusy}
+              onClick={confirmToggle}
+            >
+              {toggleBusy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {togglePort?.status === 'up' ? 'Disable port' : 'Enable port'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={authPort !== null}
+        onOpenChange={(open) => {
+          if (!open) setAuthPort(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Port authentication: {authPort?.name}</DialogTitle>
+            <DialogDescription>
+              Authenticate this port with a certificate, or revoke its authentication, on bridge{' '}
+              {selectedBridgeId || 'unknown'}.
+            </DialogDescription>
+          </DialogHeader>
+          {authPort && <SDNPortAuthCard bridgeId={selectedBridgeId} portId={authPort.id} />}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={statePort !== null}
+        onOpenChange={(open) => {
+          if (!open) setStatePort(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Port state: {statePort?.name}</DialogTitle>
+            <DialogDescription>
+              Read the port and set its admin state and rate limits on bridge {selectedBridgeId || 'unknown'}.
+            </DialogDescription>
+          </DialogHeader>
+          {statePort && <SDNPortStateCard bridgeId={selectedBridgeId} portId={statePort.id} />}
         </DialogContent>
       </Dialog>
 

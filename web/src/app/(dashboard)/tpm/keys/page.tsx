@@ -46,6 +46,8 @@ import {
 import { useApi, useIDevID, useTPM, useToast } from "@/hooks";
 import type { KeyAlgorithm } from "trusted-platform-sdk";
 import { errorMessage } from "@/utils/errors";
+import { TPMKeyLifecycleCard } from "@/components/features/tpm/tpm-key-lifecycle-card";
+import { TPMCertifyCard } from "@/components/features/tpm/tpm-certify-card";
 
 /**
  * TPM Key types — covers the full TCG-prescribed key inventory of a
@@ -125,7 +127,9 @@ export default function TPMKeysPage() {
   // and IDevID pull from /idevid/iak/certificate and
   // /idevid/certificate respectively. SRK/PSRK do not carry x509
   // certificates by design (they're storage hierarchy primaries),
-  // so we render their public key only.
+  // so we render their public key only. A refused certificate fetch
+  // (resp.error) shows the server's reason as the error, not as "no
+  // certificate".
   const openDetail = React.useCallback(
     async (key: TPMKey) => {
       setDetail({ key, certificatePem: null, certificateLoading: true, certificateError: null });
@@ -133,12 +137,15 @@ export default function TPMKeysPage() {
         let pem: string | null = null;
         if (key.type === "EK") {
           const resp = await tpm.getEKCertificate();
+          if (resp.error) throw new Error(resp.error.message || "Failed to load certificate");
           pem = resp.data?.certificate ?? null;
         } else if (key.type === "IAK") {
           const resp = await idevid.getIAKCertificate();
+          if (resp.error) throw new Error(resp.error.message || "Failed to load certificate");
           pem = resp.data?.certificate?.pem ?? null;
         } else if (key.type === "IDevID") {
           const resp = await idevid.getIDevIDCertificate();
+          if (resp.error) throw new Error(resp.error.message || "Failed to load certificate");
           pem = resp.data?.certificate?.pem ?? null;
         }
         setDetail({ key, certificatePem: pem, certificateLoading: false, certificateError: null });
@@ -595,6 +602,11 @@ export default function TPMKeysPage() {
           </div>
         </CardContent>
       </Card>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <TPMKeyLifecycleCard />
+        <TPMCertifyCard />
+      </div>
 
       <Dialog open={detail !== null} onOpenChange={(o) => { if (!o) setDetail(null); }}>
         <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">

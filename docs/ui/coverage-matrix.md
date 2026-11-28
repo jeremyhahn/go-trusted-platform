@@ -271,24 +271,24 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
 | `GatewayService.GetGatewayStatus` | - | `(dashboard)/networking/gateway/page.tsx` | - | `networking.spec.ts` | covered |
-| `GatewayService.SetGatewayMode` | - | - | - | - | missing |
-| `GatewayService.GetGatewaySnapshot` | - | - | - | - | missing |
-| `GatewayService.ListGatewaySnapshots` | - | - | - | - | missing |
-| `GatewayService.GetGatewayAdmittedVTEP` | - | - | - | - | missing |
-| `GatewayService.ListGatewayAdmittedVTEPs` | - | - | - | - | missing |
+| `GatewayService.SetGatewayMode` | `POST /mode` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-snapshots.spec.ts` | covered |
+| `GatewayService.GetGatewaySnapshot` | `GET /state/{id}` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-snapshots.spec.ts` | covered |
+| `GatewayService.ListGatewaySnapshots` | `GET /state` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-snapshots.spec.ts` | covered |
+| `GatewayService.GetGatewayAdmittedVTEP` | `GET /state/{id}/admitted-vteps/{vtep}` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-admitted-vteps.spec.ts` | covered |
+| `GatewayService.ListGatewayAdmittedVTEPs` | `GET /state/{id}/admitted-vteps` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-admitted-vteps.spec.ts` | covered |
 | `GatewayService.GetBGPStatus` | `GET /bgp/status` | `(dashboard)/networking/gateway/page.tsx` | - | `networking.spec.ts` | covered |
-| `GatewayService.ListBGPPeers` | `GET /bgp/peers` | - | - | - | missing |
-| `GatewayService.AnnouncePrefix` | `POST /bgp/prefixes` | - | - | - | missing |
-| `GatewayService.WithdrawPrefix` | `DELETE /bgp/prefixes` | - | - | - | missing |
+| `GatewayService.ListBGPPeers` | `GET /bgp/peers` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-snapshots.spec.ts` | covered |
+| `GatewayService.AnnouncePrefix` | `POST /bgp/prefixes` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-snapshots.spec.ts` | covered |
+| `GatewayService.WithdrawPrefix` | `DELETE /bgp/prefixes` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-snapshots.spec.ts` | covered |
 | `GatewayService.ListAnnouncedPrefixes` | `GET /bgp/prefixes` | `(dashboard)/networking/gateway/page.tsx` | - | `networking.spec.ts` | covered |
-| `GatewayService.CreateIPAMPool` | - | `(dashboard)/networking/gateway/page.tsx` (read-only) | - | - | partial |
-| `GatewayService.GetIPAMPool` | - | - | - | - | missing |
-| `GatewayService.UpdateIPAMPool` | - | `(dashboard)/networking/gateway/page.tsx` (read-only) | - | - | partial |
-| `GatewayService.DeleteIPAMPool` | - | `(dashboard)/networking/gateway/page.tsx` (read-only) | - | - | partial |
+| `GatewayService.CreateIPAMPool` | `POST /sdn/gateway/ipam/pools` | `(dashboard)/networking/ipam/page.tsx` | - | `real-server/ipam-pools.spec.ts` | covered |
+| `GatewayService.GetIPAMPool` | `GET /sdn/gateway/ipam/pools/{id}` | `(dashboard)/networking/ipam/page.tsx` | - | `real-server/ipam-pools.spec.ts` | covered |
+| `GatewayService.UpdateIPAMPool` | `PUT /sdn/gateway/ipam/pools/{id}` | `(dashboard)/networking/ipam/page.tsx` | - | `real-server/ipam-pools.spec.ts` | covered |
+| `GatewayService.DeleteIPAMPool` | `DELETE /sdn/gateway/ipam/pools/{id}` | `(dashboard)/networking/ipam/page.tsx` | - | `real-server/ipam-pools.spec.ts` | covered |
 | `GatewayService.ListIPAMPools` | `GET /ipam/pools` | `(dashboard)/networking/gateway/page.tsx` | - | `networking.spec.ts` | covered |
-| `GatewayService.AllocateIP` | `POST /ipam/allocations` | - | - | - | missing |
-| `GatewayService.ReleaseIP` | `DELETE /ipam/allocations` | - | - | - | missing |
-| `GatewayService.ListAllocations` | `GET /allocations` | - | - | - | missing |
+| `GatewayService.AllocateIP` | `POST /ipam/allocations` | `(dashboard)/networking/gateway/ipam/page.tsx` | - | `real-server/gateway.spec.ts` | covered |
+| `GatewayService.ReleaseIP` | `DELETE /ipam/allocations` | `(dashboard)/networking/gateway/ipam/page.tsx` | - | `real-server/gateway.spec.ts` | covered |
+| `GatewayService.ListAllocations` | `GET /ipam/allocations` | `(dashboard)/networking/gateway/ipam/page.tsx` | - | `real-server/gateway.spec.ts` | covered |
 | `GatewayService.AddVIP` | - | - | - | - | missing |
 | `GatewayService.RemoveVIP` | - | - | - | - | missing |
 | `GatewayService.GetVIP` | - | - | - | - | missing |
@@ -352,24 +352,24 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 |---|---|---|---|---|---|
 | `IDevIDService.GenerateIDevID` | `POST /generate` | `(dashboard)/devices/idevid/[id]/page.tsx`<br>`(dashboard)/devices/idevid/page.tsx` | - | `devices.spec.ts` | covered |
 | `IDevIDService.GetIDevIDInfo` | `GET /info` | `(dashboard)/devices/idevid/[id]/page.tsx`<br>`(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `IDevIDService.HasIDevID` | `GET /exists` | - | - | - | missing |
+| `IDevIDService.HasIDevID` | `GET /exists` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
 | `IDevIDService.DeleteIDevID` | `DELETE /tpm/idevid` | `(dashboard)/devices/idevid/[id]/page.tsx`<br>`(dashboard)/devices/idevid/page.tsx` | - | `devices.spec.ts` | covered |
-| `IDevIDService.GenerateIAK` | `POST /iak/generate` | - | - | - | missing |
+| `IDevIDService.GenerateIAK` | `POST /iak/generate` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
 | `IDevIDService.GetIAKInfo` | `GET /iak` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `IDevIDService.HasIAK` | `GET /iak/exists` | - | - | - | missing |
-| `IDevIDService.DeleteIAK` | `DELETE /iak` | - | - | - | missing |
+| `IDevIDService.HasIAK` | `GET /iak/exists` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
+| `IDevIDService.DeleteIAK` | `DELETE /iak` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
 | `IDevIDService.CreateIDevIDCSR` | `POST /csr` | `(dashboard)/devices/idevid/page.tsx` | - | `devices.spec.ts` | covered |
 | `IDevIDService.CreateIAKCSR` | `POST /iak/csr` | - | - | - | missing |
-| `IDevIDService.CreateLDevID` | `POST /ldevid` | - | - | - | missing |
-| `IDevIDService.InstallIDevIDCertificate` | `POST /certificate` | - | - | - | missing |
-| `IDevIDService.InstallIAKCertificate` | `POST /iak/certificate` | - | - | - | missing |
+| `IDevIDService.CreateLDevID` | `POST /ldevid` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
+| `IDevIDService.InstallIDevIDCertificate` | `POST /certificate` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
+| `IDevIDService.InstallIAKCertificate` | `POST /iak/certificate` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
 | `IDevIDService.GetIDevIDCertificate` | `GET /certificate` | `(dashboard)/devices/idevid/[id]/page.tsx`<br>`(dashboard)/devices/idevid/page.tsx`<br>`(dashboard)/tpm/keys/page.tsx` | - | `devices.spec.ts`<br>`tpm-attestation.spec.ts` | covered |
 | `IDevIDService.GetIAKCertificate` | `GET /iak/certificate` | `(dashboard)/tpm/keys/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `IDevIDService.DeleteIDevIDCertificate` | `DELETE /certificate` | `(dashboard)/devices/idevid/[id]/page.tsx`<br>`(dashboard)/devices/idevid/page.tsx` | - | `devices.spec.ts` | covered |
-| `IDevIDService.DeleteIAKCertificate` | `DELETE /iak/certificate` | `(dashboard)/tpm/keys/page.tsx` (read-only) | - | - | partial |
-| `IDevIDService.GetDeviceAttributes` | `GET /attributes` | - | - | - | missing |
-| `IDevIDService.FlushTransientContexts` | `POST /flush` | - | - | - | missing |
-| `IDevIDService.ActivateCredential` | `POST /activate-credential` | - | - | - | missing |
+| `IDevIDService.DeleteIAKCertificate` | `DELETE /iak/certificate` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
+| `IDevIDService.GetDeviceAttributes` | `GET /attributes` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
+| `IDevIDService.FlushTransientContexts` | `POST /flush` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
+| `IDevIDService.ActivateCredential` | `POST /activate-credential` | `(dashboard)/tpm/status/page.tsx` | - | `real-server/tpm-idevid.spec.ts` | covered |
 
 ## InvitationService (`invitation.proto`)
 
@@ -388,28 +388,28 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
 | `KeyManagementService.GenerateKey` | `POST /keys` | `(dashboard)/kms/page.tsx` | - | `kms.spec.ts` | covered |
-| `KeyManagementService.ImportKey` | `POST /keys/import` | `(dashboard)/kms/[id]/page.tsx`<br>`(dashboard)/kms/page.tsx` (read-only) | - | - | partial |
+| `KeyManagementService.ImportKey` | `POST /keys/import` | `(dashboard)/kms/page.tsx` | - | `real-server/kms.spec.ts` | covered |
 | `KeyManagementService.GetKey` | `GET /keys/{name}` | `(dashboard)/kms/[id]/page.tsx` | - | `kms.spec.ts` | covered |
 | `KeyManagementService.ListKeys` | `GET /keys` | `(dashboard)/kms/page.tsx` | - | `kms.spec.ts` | covered |
 | `KeyManagementService.DeleteKey` | `DELETE /keys/{name}` | `(dashboard)/kms/[id]/page.tsx`<br>`(dashboard)/kms/page.tsx` | - | `kms.spec.ts` | covered |
 | `KeyManagementService.RotateKey` | `POST /keys/{name}/rotate` | `(dashboard)/kms/page.tsx` | - | `kms.spec.ts` | covered |
-| `KeyManagementService.UpdateKeyStatus` | `PUT /keys/{name}/status` | - | - | - | missing |
+| `KeyManagementService.UpdateKeyStatus` | `PUT /keys/{name}/status` | `(dashboard)/kms/page.tsx`<br>`(dashboard)/kms/[id]/page.tsx` | - | `real-server/kms.spec.ts`<br>`real-server/kms-key-detail.spec.ts` | covered |
 | `KeyManagementService.ExportKey` | - | `(dashboard)/kms/page.tsx` | - | `kms.spec.ts` | covered |
-| `KeyManagementService.GetKeyVersions` | `GET /keys/{name}` | - | - | - | missing |
+| `KeyManagementService.GetKeyVersions` | `GET /keys/{name}/versions` | `(dashboard)/kms/[id]/page.tsx` | - | `real-server/kms-key-detail.spec.ts` | covered |
 | `KeyManagementService.Encrypt` | `POST /encrypt/{name}` | `(dashboard)/kms/[id]/page.tsx` | - | `kms.spec.ts` | covered |
 | `KeyManagementService.Decrypt` | `POST /decrypt/{name}` | `(dashboard)/kms/[id]/page.tsx` | - | `kms.spec.ts` | covered |
-| `KeyManagementService.BatchEncrypt` | `POST /encrypt/{name}` | - | - | - | missing |
-| `KeyManagementService.BatchDecrypt` | `POST /decrypt/{name}` | - | - | - | missing |
-| `KeyManagementService.Rewrap` | - | - | - | - | missing |
+| `KeyManagementService.BatchEncrypt` | `POST /batch-encrypt` | `(dashboard)/kms/page.tsx` | - | `real-server/kms.spec.ts` | covered |
+| `KeyManagementService.BatchDecrypt` | `POST /batch-decrypt` | `(dashboard)/kms/page.tsx` | - | `real-server/kms.spec.ts` | covered |
+| `KeyManagementService.Rewrap` | `POST /rewrap` | `(dashboard)/kms/page.tsx` | - | `real-server/kms.spec.ts` | covered |
 | `KeyManagementService.Sign` | `POST /sign/{name}` | `(dashboard)/kms/[id]/page.tsx` | - | `kms.spec.ts` | covered |
 | `KeyManagementService.Verify` | `POST /verify/{name}` | `(dashboard)/kms/[id]/page.tsx` | - | `kms.spec.ts` | covered |
-| `KeyManagementService.Hash` | `POST /hash` | - | - | - | missing |
-| `KeyManagementService.HMAC` | `POST /hmac/{name}` | - | - | - | missing |
-| `KeyManagementService.VerifyHMAC` | `POST /hmac/{name}/verify` | - | - | - | missing |
-| `KeyManagementService.GenerateRandom` | `POST /random` | - | - | - | missing |
-| `KeyManagementService.GenerateDataKey` | `POST /data-keys` | - | - | - | missing |
-| `KeyManagementService.GenerateWrappedDataKey` | `POST /data-keys/wrapped` | - | - | - | missing |
-| `KeyManagementService.BackendStatus` | `GET /backend/status` | - | - | - | missing |
+| `KeyManagementService.Hash` | `POST /hash` | `(dashboard)/kms/page.tsx` | - | `real-server/kms.spec.ts` | covered |
+| `KeyManagementService.HMAC` | `POST /hmac/{name}` | `(dashboard)/kms/page.tsx` | - | `real-server/kms.spec.ts` | covered |
+| `KeyManagementService.VerifyHMAC` | `POST /hmac/{name}/verify` | `(dashboard)/kms/page.tsx` | - | `real-server/kms.spec.ts` | covered |
+| `KeyManagementService.GenerateRandom` | `POST /random` | `(dashboard)/kms/page.tsx` | - | `real-server/kms.spec.ts` | covered |
+| `KeyManagementService.GenerateDataKey` | `POST /data-keys` | `(dashboard)/kms/data-keys/page.tsx` | - | `real-server/kms.spec.ts` | covered |
+| `KeyManagementService.GenerateWrappedDataKey` | `POST /data-keys/wrapped` | `(dashboard)/kms/data-keys/page.tsx` | - | `real-server/kms.spec.ts` | covered |
+| `KeyManagementService.BackendStatus` | `GET /backend/status` | `(dashboard)/kms/page.tsx` | - | `real-server/kms.spec.ts` | covered |
 
 ## LUKSService (`luks.proto`)
 
@@ -492,19 +492,19 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `DNSService.CreateZone` | `POST /zones` | `(dashboard)/networking/dns/page.tsx` | - | `networking.spec.ts` | covered |
-| `DNSService.GetZone` | `GET /zones/{zone}` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | - | partial |
-| `DNSService.UpdateZone` | `PUT /zones/{zone}` | `(dashboard)/networking/dns/[zone]/page.tsx`<br>`(dashboard)/networking/dns/page.tsx` (read-only) | - | - | partial |
-| `DNSService.DeleteZone` | `DELETE /zones/{zone}` | `(dashboard)/networking/dns/page.tsx` | - | `networking.spec.ts` | covered |
-| `DNSService.ListZones` | `GET /zones` | `(dashboard)/networking/dns/page.tsx` | - | `networking.spec.ts` | covered |
-| `DNSService.AddRecord` | `POST /zones/{zone}/records` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | - | partial |
-| `DNSService.DeleteRecord` | `DELETE /zones/{zone}/records/{type}/{name}` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | - | partial |
-| `DNSService.UpdateRecord` | `PUT /zones/{zone}/records` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | - | partial |
-| `DNSService.ListRecords` | `GET /zones/{zone}/records` | - | - | - | missing |
-| `DNSService.SignZone` | `POST /zones/{zone}/sign` | - | - | - | missing |
-| `DNSService.GetDNSSECStatus` | `GET /zones/{zone}/dnssec` | - | - | - | missing |
-| `DNSService.Resolve` | `GET /resolve` | - | - | - | missing |
-| `DNSService.Register` | `POST /register` | - | - | - | missing |
+| `DNSService.CreateZone` | `POST /zones` | `(dashboard)/networking/dns/page.tsx` | - | `networking.spec.ts`<br>`real-server/dns.spec.ts` | covered |
+| `DNSService.GetZone` | `GET /zones/{zone}` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.UpdateZone` | `PUT /zones/{zone}` | `(dashboard)/networking/dns/[zone]/page.tsx`<br>`(dashboard)/networking/dns/page.tsx` (read-only) | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.DeleteZone` | `DELETE /zones/{zone}` | `(dashboard)/networking/dns/page.tsx` | - | `networking.spec.ts`<br>`real-server/dns.spec.ts` | covered |
+| `DNSService.ListZones` | `GET /zones` | `(dashboard)/networking/dns/page.tsx` | - | `networking.spec.ts`<br>`real-server/dns.spec.ts` | covered |
+| `DNSService.AddRecord` | `POST /zones/{zone}/records` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.DeleteRecord` | `DELETE /zones/{zone}/records/{type}/{name}` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.UpdateRecord` | `PUT /zones/{zone}/records` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.ListRecords` | `GET /zones/{zone}/records` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.SignZone` | `POST /zones/{zone}/sign` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.GetDNSSECStatus` | `GET /zones/{zone}/dnssec` | `(dashboard)/networking/dns/[zone]/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.Resolve` | `GET /resolve` | `(dashboard)/networking/dns/page.tsx` | - | `real-server/dns.spec.ts` | covered |
+| `DNSService.Register` | `POST /register` | `(dashboard)/networking/dns/page.tsx` | - | `real-server/dns.spec.ts` | covered |
 
 ## ProvisioningGateway (`provisioning.proto`)
 
@@ -539,20 +539,20 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
 | `PXEService.RegisterDevice` | - | `(dashboard)/networking/pxe/page.tsx` | - | `networking.spec.ts` | covered |
-| `PXEService.GetDevice` | - | - | - | - | missing |
-| `PXEService.GetDeviceByMAC` | - | - | - | - | missing |
+| `PXEService.GetDevice` | `GET /devices/{id}` | `(dashboard)/networking/pxe/devices/[mac]/page.tsx` | - | `pxe.spec.ts` | covered |
+| `PXEService.GetDeviceByMAC` | `GET /devices/mac/{mac}` | `(dashboard)/networking/pxe/devices/[mac]/page.tsx` | - | `pxe.spec.ts` | covered |
 | `PXEService.ListDevices` | - | `(dashboard)/networking/pxe/page.tsx` | - | `networking.spec.ts` | covered |
-| `PXEService.RemoveDevice` | - | `(dashboard)/networking/pxe/page.tsx` (read-only) | - | - | partial |
-| `PXEService.UpdateState` | - | - | - | - | missing |
-| `PXEService.SetDeviceEnrolled` | - | - | - | - | missing |
-| `PXEService.Authorize` | - | - | - | - | missing |
-| `PXEService.Quarantine` | - | - | - | - | missing |
-| `PXEService.Retry` | - | - | - | - | missing |
-| `PXEService.GetEvents` | - | - | - | - | missing |
+| `PXEService.RemoveDevice` | `DELETE /devices/{id}` | `(dashboard)/networking/pxe/page.tsx` | - | `pxe.spec.ts` | covered |
+| `PXEService.UpdateState` | `PUT /devices/{id}/state` | `(dashboard)/networking/pxe/devices/[mac]/page.tsx` | - | `pxe.spec.ts` | covered |
+| `PXEService.SetDeviceEnrolled` | `POST /devices/{id}/enrolled` | `(dashboard)/networking/pxe/devices/[mac]/page.tsx` | - | `pxe.spec.ts` | covered |
+| `PXEService.Authorize` | `POST /devices/{id}/authorize` | `(dashboard)/networking/pxe/page.tsx` | - | `pxe.spec.ts` | covered |
+| `PXEService.Quarantine` | `POST /devices/{id}/quarantine` | `(dashboard)/networking/pxe/page.tsx` | - | `pxe.spec.ts` | covered |
+| `PXEService.Retry` | `POST /devices/{id}/retry` | `(dashboard)/networking/pxe/page.tsx` | - | `pxe.spec.ts` | covered |
+| `PXEService.GetEvents` | `GET /devices/{id}/events` | `(dashboard)/networking/pxe/devices/[mac]/page.tsx` | - | `pxe.spec.ts` | covered |
 | `PXEService.GetStatus` | - | `(dashboard)/networking/pxe/page.tsx` | - | `networking.spec.ts` | covered |
-| `PXEService.StartService` | - | - | - | - | missing |
-| `PXEService.StopService` | - | - | - | - | missing |
-| `PXEService.WebhookComplete` | `POST /webhook/complete` | - | - | - | missing |
+| `PXEService.StartService` | `POST /start` | `(dashboard)/networking/pxe/devices/[mac]/page.tsx` | - | `pxe.spec.ts` | covered |
+| `PXEService.StopService` | `POST /stop` | `(dashboard)/networking/pxe/devices/[mac]/page.tsx` | - | `pxe.spec.ts` | covered |
+| `PXEService.WebhookComplete` | `POST /webhook/complete` | - | - | - | not-UI: installer callback, no operator session |
 
 ## RegistryService (`registry.proto`)
 
@@ -560,10 +560,10 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 |---|---|---|---|---|---|
 | `RegistryService.Push` | `POST /` | - | - | - | not-UI: streaming plumbing |
 | `RegistryService.Pull` | - | - | - | - | not-UI: streaming plumbing |
-| `RegistryService.List` | `GET /{name:.+}/tags/list` | - | - | - | missing |
-| `RegistryService.Inspect` | - | - | - | - | missing |
-| `RegistryService.Delete` | `DELETE /{name:.+}/manifests/{reference}` | - | - | - | missing |
-| `RegistryService.Status` | `GET /status` | - | - | - | missing |
+| `RegistryService.List` | `GET /{name:.+}/tags/list` | `(dashboard)/compute/registry/page.tsx` | - | `registry.spec.ts` | covered |
+| `RegistryService.Inspect` | `GET /compute/images/{repository:.+}` | `(dashboard)/compute/registry/page.tsx` | - | `registry-seeded.spec.ts` | covered |
+| `RegistryService.Delete` | `DELETE /{name:.+}/manifests/{reference}` | `(dashboard)/compute/registry/page.tsx` | - | `registry-seeded.spec.ts` | covered |
+| `RegistryService.Status` | `GET /status` | `(dashboard)/compute/registry/page.tsx` | - | `registry.spec.ts` | covered |
 
 ## SchedulerService (`scheduler.proto`)
 
@@ -586,33 +586,33 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
 | `SDNService.CreateBridge` | `POST /bridges` | `(dashboard)/networking/sdn/page.tsx` | - | `networking.spec.ts` | covered |
-| `SDNService.DeleteBridge` | `DELETE /bridges/{name}` | `(dashboard)/networking/flows/page.tsx`<br>`(dashboard)/networking/ports/page.tsx`<br>`(dashboard)/networking/sdn/page.tsx` (+1) (read-only) | - | - | partial |
-| `SDNService.GetBridge` | `GET /bridges/{name}` | - | - | - | missing |
+| `SDNService.DeleteBridge` | `DELETE /bridges/{name}` | `(dashboard)/networking/sdn/page.tsx` | - | `real-server/sdn-bridges.spec.ts` | covered |
+| `SDNService.GetBridge` | `GET /bridges/{name}` | `(dashboard)/networking/sdn/page.tsx` | - | `real-server/sdn-bridges.spec.ts` | covered |
 | `SDNService.ListBridges` | `GET /bridges` | `(dashboard)/networking/flows/page.tsx`<br>`(dashboard)/networking/ports/page.tsx`<br>`(dashboard)/networking/sdn/page.tsx` (+1) | - | `networking.spec.ts` | covered |
 | `SDNService.AddPort` | `POST /bridges/{name}/ports` | `(dashboard)/networking/ports/page.tsx` | - | `networking.spec.ts` | covered |
 | `SDNService.DeletePort` | `DELETE /bridges/{name}/ports/{port}` | `(dashboard)/networking/ports/page.tsx` | - | `networking.spec.ts` | covered |
-| `SDNService.GetPort` | `GET /bridges/{name}/ports/{port}/state` | - | - | - | missing |
+| `SDNService.GetPort` | `GET /bridges/{name}/ports/{port}/state` | `(dashboard)/networking/ports/page.tsx` | - | `real-server/sdn-port-actions.spec.ts` | covered |
 | `SDNService.ListPorts` | `GET /bridges/{name}/ports` | `(dashboard)/networking/ports/page.tsx` | - | `networking.spec.ts` | covered |
-| `SDNService.SetPortState` | `PUT /bridges/{name}/ports/{port}/state` | - | - | - | missing |
+| `SDNService.SetPortState` | `PUT /bridges/{name}/ports/{port}/state` | `(dashboard)/networking/ports/page.tsx` | - | `real-server/sdn-port-actions.spec.ts` | covered |
 | `SDNService.AddFlow` | `POST /flows` | `(dashboard)/networking/flows/page.tsx` | - | `networking.spec.ts` | covered |
 | `SDNService.DeleteFlow` | `DELETE /flows` | `(dashboard)/networking/flows/page.tsx` | - | `networking.spec.ts` | covered |
 | `SDNService.ListFlows` | `GET /flows` | `(dashboard)/networking/flows/page.tsx`<br>`(dashboard)/networking/sdn/page.tsx` | - | `networking.spec.ts` | covered |
-| `SDNService.FlushFlows` | - | - | - | - | missing |
+| `SDNService.FlushFlows` | `POST /bridges/{name}/flows/flush` | `(dashboard)/networking/flows/page.tsx` | - | `real-server/sdn-flows.spec.ts` | covered |
 | `SDNService.CreateVLAN` | `POST /vlans` | `(dashboard)/networking/vlans/page.tsx` | - | `networking.spec.ts` | covered |
 | `SDNService.DeleteVLAN` | - | `(dashboard)/networking/vlans/page.tsx` | - | `networking.spec.ts` | covered |
 | `SDNService.ListVLANs` | `GET /vlans` | `(dashboard)/networking/vlans/page.tsx` | - | `networking.spec.ts` | covered |
-| `SDNService.AuthenticatePort` | `POST /bridges/{name}/ports/{port}/auth` | - | - | - | missing |
-| `SDNService.RevokePortAuth` | `DELETE /bridges/{name}/ports/{port}/auth` | - | - | - | missing |
-| `SDNService.GetPortStats` | `GET /bridges/{name}/ports/{port}/stats` | - | - | - | missing |
-| `SDNService.GetFlowStats` | - | - | - | - | missing |
-| `SDNService.ApplyPolicy` | `POST /policies` | - | - | - | missing |
-| `SDNService.GetPolicy` | `GET /policies/{id}` | - | - | - | missing |
-| `SDNService.ListPolicies` | `GET /policies` | - | - | - | missing |
-| `SDNService.DeletePolicy` | - | - | - | - | missing |
-| `SDNService.CreateNetworkZone` | - | - | - | - | missing |
-| `SDNService.UpdateNetworkZone` | - | - | - | - | missing |
-| `SDNService.DeleteNetworkZone` | - | - | - | - | missing |
-| `SDNService.ListNetworkZones` | - | - | - | - | missing |
+| `SDNService.AuthenticatePort` | `POST /bridges/{name}/ports/{port}/auth` | `(dashboard)/networking/ports/page.tsx` | - | `real-server/sdn-port-actions.spec.ts` | covered |
+| `SDNService.RevokePortAuth` | `DELETE /bridges/{name}/ports/{port}/auth` | `(dashboard)/networking/ports/page.tsx` | - | `real-server/sdn-port-actions.spec.ts` | covered |
+| `SDNService.GetPortStats` | `GET /bridges/{name}/ports/{port}/stats` | `(dashboard)/networking/ports/page.tsx` | - | `real-server/sdn-bridges.spec.ts` | covered |
+| `SDNService.GetFlowStats` | `GET /bridges/{name}/flows/{flow}/stats` | `(dashboard)/networking/flows/page.tsx` | - | `real-server/sdn-flows.spec.ts` | covered |
+| `SDNService.ApplyPolicy` | `POST /policies` | `(dashboard)/networking/policies/page.tsx` | - | `real-server/sdn-policies.spec.ts` | covered |
+| `SDNService.GetPolicy` | `GET /policies/{id}` | `(dashboard)/networking/policies/page.tsx` | - | `real-server/sdn-policies.spec.ts` | covered |
+| `SDNService.ListPolicies` | `GET /policies` | `(dashboard)/networking/policies/page.tsx` | - | `real-server/sdn-policies.spec.ts` | covered |
+| `SDNService.DeletePolicy` | `DELETE /policies/{id}` | `(dashboard)/networking/policies/page.tsx` | - | `real-server/sdn-policies.spec.ts` | covered |
+| `SDNService.CreateNetworkZone` | `POST /sdn/zones` | - | - | - | missing |
+| `SDNService.UpdateNetworkZone` | `PUT /sdn/zones/{name}` | - | - | - | missing |
+| `SDNService.DeleteNetworkZone` | `DELETE /sdn/zones/{name}` | - | - | - | missing |
+| `SDNService.ListNetworkZones` | `GET /sdn/zones` | - | - | - | missing |
 | `SDNService.StreamFlowLogs` | - | - | - | - | not-UI: streaming plumbing |
 
 ## SwitchService (`switch.proto`)
@@ -654,26 +654,26 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
 | `TPMService.Info` | `GET /info` | `(dashboard)/tpm/lockout/page.tsx`<br>`(dashboard)/tpm/nvram/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `TPMService.Provision` | `POST /provision` | - | - | - | missing |
-| `TPMService.Clear` | `POST /clear` | - | - | - | missing |
-| `TPMService.GetCapabilities` | `GET /capabilities` | - | - | - | missing |
-| `TPMService.GetPlatformAttributes` | `GET /platform` | - | - | - | missing |
-| `TPMService.CreateEK` | `POST /ek` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | - | partial |
+| `TPMService.Provision` | `POST /provision` | `(dashboard)/tpm/provision/page.tsx` | - | `real-server/tpm-provision-quote.spec.ts` | covered |
+| `TPMService.Clear` | `POST /clear` | `(dashboard)/tpm/provision/page.tsx` | - | `real-server/tpm-provision-quote.spec.ts` | covered |
+| `TPMService.GetCapabilities` | `GET /capabilities` | `(dashboard)/tpm/provision/page.tsx` | - | `real-server/tpm-provision-quote.spec.ts` | covered |
+| `TPMService.GetPlatformAttributes` | `GET /platform` | `(dashboard)/tpm/provision/page.tsx` | - | `real-server/tpm-provision-quote.spec.ts` | covered |
+| `TPMService.CreateEK` | `POST /ek` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | `real-server/tpm-keys.spec.ts` | covered |
 | `TPMService.GetEK` | `GET /ek` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.GetEKCertificate` | `GET /ek/certificate` | `(dashboard)/tpm/keys/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `TPMService.ImportEKCertificate` | `POST /ek/certificate` | `(dashboard)/tpm/keys/page.tsx` (read-only) | - | - | partial |
-| `TPMService.DeleteEK` | `DELETE /ek` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | - | partial |
-| `TPMService.CreateSRK` | `POST /srk` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | - | partial |
+| `TPMService.ImportEKCertificate` | `POST /ek/certificate` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-keys.spec.ts` | covered |
+| `TPMService.DeleteEK` | `DELETE /ek` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | `real-server/tpm-keys.spec.ts` | covered |
+| `TPMService.CreateSRK` | `POST /srk` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | `real-server/tpm-keys.spec.ts` | covered |
 | `TPMService.GetSRK` | `GET /srk` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `TPMService.DeleteSRK` | `DELETE /srk` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | - | partial |
-| `TPMService.CreateAK` | `POST /ak` | - | - | - | missing |
-| `TPMService.GetAK` | `GET /ak` | `(dashboard)/tpm/credential/page.tsx` | - | `real-server/tpm-ops.spec.ts` | covered |
-| `TPMService.DeleteAK` | `DELETE /ak` | - | - | - | missing |
+| `TPMService.DeleteSRK` | `DELETE /srk` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | `real-server/tpm-keys.spec.ts` | covered |
+| `TPMService.CreateAK` | `POST /ak` | `(dashboard)/tpm/quote/page.tsx` | - | `real-server/tpm-provision-quote.spec.ts` | covered |
+| `TPMService.GetAK` | `GET /ak` | `(dashboard)/tpm/credential/page.tsx`<br>`(dashboard)/tpm/quote/page.tsx` | - | `real-server/tpm-ops.spec.ts`<br>`real-server/tpm-provision-quote.spec.ts` | covered |
+| `TPMService.DeleteAK` | `DELETE /ak` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-keys.spec.ts` | covered |
 | `TPMService.Seal` | `POST /seal` | `(dashboard)/tpm/seal/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.Unseal` | `POST /unseal` | `(dashboard)/tpm/seal/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `TPMService.Quote` | `POST /quote` | `(dashboard)/tpm/quote/page.tsx` | - | - | partial |
-| `TPMService.VerifyQuote` | `POST /quote/verify` | `(dashboard)/tpm/quote/page.tsx` | - | - | partial |
-| `TPMService.Certify` | `POST /certify` | - | - | - | missing |
+| `TPMService.Quote` | `POST /quote` | `(dashboard)/tpm/quote/page.tsx` | - | `real-server/tpm-provision-quote.spec.ts` | covered |
+| `TPMService.VerifyQuote` | `POST /quote/verify` | `(dashboard)/tpm/quote/page.tsx` | - | `real-server/tpm-provision-quote.spec.ts` | covered |
+| `TPMService.Certify` | `POST /certify` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-keys.spec.ts` | covered |
 | `TPMService.GetEventLog` | `GET /eventlog` | `(dashboard)/tpm/eventlog/page.tsx` | - | `real-server/tpm-ops.spec.ts` | covered |
 | `TPMService.GetPCRs` | `GET /pcrs` | `(dashboard)/tpm/pcrs/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.ExtendPCR` | `POST /pcrs/extend` | `(dashboard)/tpm/pcrs/page.tsx` | - | `real-server/tpm-ops.spec.ts` | covered |
@@ -732,7 +732,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 |---|---|---|---|---|---|---|
 | AttestationService | 16 | 15 | 0 | 0 | 1 | 0 |
 | BarrierService | 5 | 0 | 0 | 0 | 5 | 0 |
-| BMCService | 23 | 0 | 0 | 23 | 0 | 0 |
+| BMCService | 23 | 15 | 0 | 8 | 0 | 0 |
 | CAService | 13 | 7 | 0 | 6 | 0 | 0 |
 | CacheService | 4 | 0 | 0 | 0 | 0 | 4 |
 | CeremonyService | 7 | 0 | 0 | 7 | 0 | 0 |
@@ -743,30 +743,30 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | DeviceService | 32 | 10 | 7 | 15 | 0 | 0 |
 | EABService | 11 | 0 | 0 | 11 | 0 | 0 |
 | FIDO2Service | 5 | 0 | 0 | 0 | 5 | 0 |
-| GatewayService | 29 | 4 | 3 | 22 | 0 | 0 |
+| GatewayService | 29 | 19 | 0 | 10 | 0 | 0 |
 | PlatformIAMService | 41 | 20 | 8 | 13 | 0 | 0 |
-| IDevIDService | 20 | 8 | 1 | 11 | 0 | 0 |
+| IDevIDService | 20 | 19 | 0 | 1 | 0 | 0 |
 | InvitationService | 7 | 4 | 0 | 3 | 0 | 0 |
-| KeyManagementService | 23 | 10 | 1 | 12 | 0 | 0 |
+| KeyManagementService | 23 | 23 | 0 | 0 | 0 | 0 |
 | LUKSService | 10 | 0 | 0 | 0 | 10 | 0 |
 | MessagingService | 8 | 0 | 0 | 0 | 0 | 8 |
 | NTPService | 3 | 3 | 0 | 0 | 0 | 0 |
 | ObjectStorageService | 8 | 0 | 0 | 0 | 0 | 8 |
 | OverlayService | 10 | 10 | 0 | 0 | 0 | 0 |
 | PIVService | 8 | 0 | 0 | 0 | 8 | 0 |
-| DNSService | 13 | 3 | 5 | 5 | 0 | 0 |
+| DNSService | 13 | 13 | 0 | 0 | 0 | 0 |
 | ProvisioningGateway | 4 | 0 | 0 | 0 | 4 | 0 |
 | ProxyService | 14 | 14 | 0 | 0 | 0 | 0 |
-| PXEService | 15 | 3 | 1 | 11 | 0 | 0 |
-| RegistryService | 6 | 0 | 0 | 4 | 2 | 0 |
+| PXEService | 15 | 14 | 0 | 0 | 1 | 0 |
+| RegistryService | 6 | 4 | 0 | 0 | 2 | 0 |
 | SchedulerService | 11 | 0 | 0 | 0 | 0 | 11 |
-| SDNService | 29 | 11 | 1 | 16 | 1 | 0 |
+| SDNService | 29 | 24 | 0 | 4 | 1 | 0 |
 | SwitchService | 5 | 5 | 0 | 0 | 0 | 0 |
 | TenantService | 19 | 4 | 4 | 11 | 0 | 0 |
-| TPMService | 31 | 17 | 7 | 7 | 0 | 0 |
+| TPMService | 31 | 31 | 0 | 0 | 0 | 0 |
 | VPNService | 8 | 8 | 0 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 10 | 9 | 1 | 0 |
-| **Total** | **529** | **191** | **50** | **207** | **50** | **31** |
+| **Total** | **529** | **297** | **31** | **119** | **51** | **31** |
 
 ## Proposed slices
 
@@ -785,24 +785,24 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 11. **DeviceService (1/2): Device, DeviceBySerial, Profile, ProfileByMACAddress, ProfileBySerial, MatchingProfile…**: 14 operations (12 missing, 2 partial): UpdateDevice, CountDevices, ActivateDevice, AttestDevice, FindDeviceBySerial, GetProfile, UpdateProfile, CountProfiles, FindProfileByMACAddress, FindProfileBySerial, FindMatchingProfile, RecordAttestationCertificate, BootCertificate, BootDelivery.
 12. **DeviceService (2/2): Template, ProfileFromTemplate, ConfigForDevice, ProfileToDevice, ProfileFromDevice**: 8 operations (3 missing, 5 partial): CreateTemplate, GetTemplate, UpdateTemplate, DeleteTemplate, CreateProfileFromTemplate, FindConfigForDevice, AssignProfileToDevice, UnassignProfileFromDevice.
 13. **EABService: Credential, CredentialByKeyID, CredentialQRCode, EnrollmentURL, CredentialUsed, ExpiredCredential**: 11 operations (11 missing, 0 partial): CreateCredential, GetCredential, ListCredentials, RevokeCredential, ValidateCredential, DeleteCredential, GetCredentialByKeyID, GetCredentialQRCode, GetEnrollmentURL, MarkCredentialUsed, CleanupExpiredCredentials.
-14. **GatewayService (1/2): GatewayMode, GatewaySnapshot, GatewayAdmittedVTEP, BGPPeer, Prefix, IPAMPool…**: 15 operations (12 missing, 3 partial): SetGatewayMode, GetGatewaySnapshot, ListGatewaySnapshots, GetGatewayAdmittedVTEP, ListGatewayAdmittedVTEPs, ListBGPPeers, AnnouncePrefix, WithdrawPrefix, CreateIPAMPool, GetIPAMPool, UpdateIPAMPool, DeleteIPAMPool, AllocateIP, ReleaseIP, ListAllocations.
+14. **GatewayService (1/2): GatewayMode, GatewaySnapshot, GatewayAdmittedVTEP, BGPPeer, Prefix, IPAMPool…**: 15 operations (12 missing, 3 partial): SetGatewayMode, GetGatewaySnapshot, ListGatewaySnapshots, GetGatewayAdmittedVTEP, ListGatewayAdmittedVTEPs, ListBGPPeers, AnnouncePrefix, WithdrawPrefix, CreateIPAMPool, GetIPAMPool, UpdateIPAMPool, DeleteIPAMPool, AllocateIP, ReleaseIP, ListAllocations. (done)
 15. **GatewayService (2/2): VIP, VIPBackend, LBStatus, NAT64Status, PerfFlow, PerfDatapath…**: 10 operations (10 missing, 0 partial): AddVIP, RemoveVIP, GetVIP, ListVIPs, SetVIPBackends, GetLBStatus, GetNAT64Status, GetPerfFlows, GetPerfDatapath, GetPerfConntrack.
 16. **PlatformIAMService (1/2): Group, GroupMember, Permission, Token, Tenant**: 14 operations (11 missing, 3 partial): CreateGroup, GetGroup, UpdateGroup, AddGroupMember, RemoveGroupMember, CheckPermission, CreateToken, RevokeToken, VerifyToken, CreateTenant, GetTenant, ListTenants, UpdateTenant, DeleteTenant.
 17. **PlatformIAMService (2/2): Policy, App**: 7 operations (2 missing, 5 partial): CreatePolicy, GetPolicy, UpdatePolicy, ValidatePolicy, TestPolicy, GetApp, UpdateApp.
-18. **IDevIDService: IDevID, IAK, IAKCSR, LDevID, IDevIDCertificate, IAKCertificate…**: 12 operations (11 missing, 1 partial): HasIDevID, GenerateIAK, HasIAK, DeleteIAK, CreateIAKCSR, CreateLDevID, InstallIDevIDCertificate, InstallIAKCertificate, DeleteIAKCertificate, GetDeviceAttributes, FlushTransientContexts, ActivateCredential.
+18. **IDevIDService: IDevID, IAK, IAKCSR, LDevID, IDevIDCertificate, IAKCertificate…**: 12 operations (11 missing, 1 partial): HasIDevID, GenerateIAK, HasIAK, DeleteIAK, CreateIAKCSR, CreateLDevID, InstallIDevIDCertificate, InstallIAKCertificate, DeleteIAKCertificate, GetDeviceAttributes, FlushTransientContexts, ActivateCredential. (done except CreateIAKCSR, deferred: the daemon cannot yet return a PEM CSR)
 19. **InvitationService: Invitation, InvitationByToken, AcceptInvitation**: 3 operations (3 missing, 0 partial): GetInvitation, GetInvitationByToken, AcceptInvitation.
-20. **KeyManagementService: Key, KeyStatus, KeyVersion, Encrypt, Decrypt, Rewrap…**: 13 operations (12 missing, 1 partial): ImportKey, UpdateKeyStatus, GetKeyVersions, BatchEncrypt, BatchDecrypt, Rewrap, Hash, HMAC, VerifyHMAC, GenerateRandom, GenerateDataKey, GenerateWrappedDataKey, BackendStatus.
+20. **KeyManagementService: Key, KeyStatus, KeyVersion, Encrypt, Decrypt, Rewrap…**: 13 operations (12 missing, 1 partial): ImportKey, UpdateKeyStatus, GetKeyVersions, BatchEncrypt, BatchDecrypt, Rewrap, Hash, HMAC, VerifyHMAC, GenerateRandom, GenerateDataKey, GenerateWrappedDataKey, BackendStatus. (done)
 21. **NTPService: Status, Source, Step**: 3 operations (3 missing, 0 partial): GetStatus, ListSources, Step.
 22. **OverlayService: VTEP, VNI, Tunnel, TunnelStat, RemoteMAC, MAC…**: 8 operations (7 missing, 1 partial): ListVTEPs, GetVTEP, DeleteVNI, ListTunnels, GetTunnelStats, ListRemoteMACs, ForgetMAC, GetOverlayStatus.
-23. **DNSService: Zone, Record, DNSSECStatus, Resolve, Register**: 10 operations (5 missing, 5 partial): GetZone, UpdateZone, SignZone, AddRecord, DeleteRecord, UpdateRecord, ListRecords, GetDNSSECStatus, Resolve, Register.
+23. **DNSService: Zone, Record, DNSSECStatus, Resolve, Register**: 10 operations (5 missing, 5 partial): GetZone, UpdateZone, SignZone, AddRecord, DeleteRecord, UpdateRecord, ListRecords, GetDNSSECStatus, Resolve, Register. (done: real-server/dns.spec.ts)
 24. **ProxyService: Route, Pool, ProxyConfig, ProxyStatus, ZoneMatrix**: 14 operations (14 missing, 0 partial): CreateRoute, GetRoute, UpdateRoute, DeleteRoute, ListRoutes, CreatePool, GetPool, UpdatePool, DeletePool, ListPools, GetProxyConfig, ReloadProxyConfig, GetProxyStatus, GetZoneMatrix.
 25. **PXEService: Device, DeviceByMAC, State, DeviceEnrolled, Authorize, Quarantine…**: 12 operations (11 missing, 1 partial): GetDevice, RemoveDevice, GetDeviceByMAC, UpdateState, SetDeviceEnrolled, Authorize, Quarantine, Retry, GetEvents, StartService, StopService, WebhookComplete.
-26. **RegistryService: List, Inspect, Delete, Status**: 4 operations (4 missing, 0 partial): List, Inspect, Delete, Status.
-27. **SDNService (1/2): Bridge, Port, PortState, Flow, PortAuth, PortStat…**: 13 operations (12 missing, 1 partial): DeleteBridge, GetBridge, GetPort, AuthenticatePort, SetPortState, FlushFlows, RevokePortAuth, GetPortStats, GetFlowStats, ApplyPolicy, GetPolicy, ListPolicies, DeletePolicy.
+26. **RegistryService: List, Inspect, Delete, Status**: 4 operations (4 missing, 0 partial): List, Inspect, Delete, Status. (done: real-server/registry.spec.ts, real-server/registry-seeded.spec.ts)
+27. **SDNService (1/2): Bridge, Port, PortState, Flow, PortAuth, PortStat…**: 13 operations (12 missing, 1 partial): DeleteBridge, GetBridge, GetPort, AuthenticatePort, SetPortState, FlushFlows, RevokePortAuth, GetPortStats, GetFlowStats, ApplyPolicy, GetPolicy, ListPolicies, DeletePolicy. (done)
 28. **SDNService (2/2): NetworkZone**: 4 operations (4 missing, 0 partial): CreateNetworkZone, UpdateNetworkZone, DeleteNetworkZone, ListNetworkZones.
 29. **SwitchService: Port, PortStatus, PortVLAN**: 5 operations (5 missing, 0 partial): ListPorts, EnablePort, DisablePort, GetPortStatus, SetPortVLAN.
 30. **TenantService: Tenant, TenantByName, Quota, Sync, TenantDEK, TenantDEKStatus…**: 15 operations (11 missing, 4 partial): ListTenants, CreateTenant, UpdateTenant, DeleteTenant, SuspendTenant, ResumeTenant, GetTenantByName, UpdateQuotas, CheckQuota, Sync, RotateTenantDEK, GetTenantDEKStatus, InitTenantBarrier, UnsealTenantBarrier, SealTenantBarrier.
-31. **TPMService (1/2): Provision, Clear, Capability, PlatformAttribute, EK, EKCertificate…**: 15 operations (8 missing, 7 partial): Provision, Clear, GetCapabilities, GetPlatformAttributes, CreateEK, DeleteEK, ImportEKCertificate, CreateSRK, DeleteSRK, CreateAK, GetAK, DeleteAK, Quote, VerifyQuote, Certify.
+31. **TPMService (1/2): Provision, Clear, Capability, PlatformAttribute, EK, EKCertificate…**: 15 operations (8 missing, 7 partial): Provision, Clear, GetCapabilities, GetPlatformAttributes, CreateEK, DeleteEK, ImportEKCertificate, CreateSRK, DeleteSRK, CreateAK, GetAK, DeleteAK, Quote, VerifyQuote, Certify. (done)
 32. **TPMService (2/2): EventLog, PCR, Credential, Random**: covered (#2069): the 5 operations GetEventLog, ExtendPCR, MakeCredential, ActivateCredential and GetRandom, plus GetAK (its AK name fills the credential page), each through the SDK with a capability-gated control and `real-server/tpm-ops.spec.ts`.
 33. **VPNService: Peer, Status, PosturePolicy**: 8 operations (0 missing, 8 partial): EnrolPeer, ListPeers, RevokePeer, GetStatus, GetPosturePolicy, SetPosturePolicy, DeletePosturePolicy, ListPosturePolicies.
 34. **VTPMService (1/2): Bundle, Template, BundlePath, TPMSocketPath, NVRAMPath**: 11 operations (9 missing, 2 partial): GetBundle, ImportBundle, ValidateBundle, CreateTemplate, GetTemplate, DeleteTemplate, ListTemplates, CloneTemplate, GetBundlePath, GetTPMSocketPath, GetNVRAMPath.

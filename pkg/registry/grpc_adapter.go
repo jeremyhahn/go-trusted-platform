@@ -229,13 +229,16 @@ func (a *GRPCAdapter) PullStream(ctx context.Context, req *grpcapi.RegistryPullR
 }
 
 // List delegates to Registry.List, then projects the manifests into
-// the RegistryArtifact shape consumed by the gRPC service.
+// the RegistryArtifact shape consumed by the gRPC service. Offset and
+// Limit apply to the visible images, after the digest-keyed copies are
+// dropped, so a page never counts an entry it does not answer.
 func (a *GRPCAdapter) List(ctx context.Context, req *grpcapi.RegistryListRequest) (*grpcapi.RegistryListResponse, error) {
 	opts := RegistryListOptions{}
+	offset, limit := 0, 0
 	if req != nil {
 		opts.Repository = req.Repository
-		opts.Limit = int(req.Limit)
-		opts.Offset = int(req.Offset)
+		offset = int(req.Offset)
+		limit = int(req.Limit)
 	}
 	manifests, err := a.registry.List(ctx, opts)
 	if err != nil {
@@ -243,21 +246,32 @@ func (a *GRPCAdapter) List(ctx context.Context, req *grpcapi.RegistryListRequest
 	}
 	artifacts := make([]*grpcapi.RegistryArtifact, 0, len(manifests))
 	for _, m := range manifests {
-		repo, tag := splitRef(m.Reference)
 		// Skip the digest-keyed copies the OCI /v2/ PutManifest path
 		// stores alongside each tag. They have the form
 		// "<name>:sha256:<64-hex>" — splitRef returns
 		// (name:sha256, <hex>) for those. Without this filter the
 		// WebUI shows two rows per pushed image.
-		if endsWithSha256Sentinel(repo) && isHex64(tag) {
+		if isDigestKeyedCopy(m.Reference) {
 			continue
 		}
+		repo, tag := splitRef(m.Reference)
 		artifact, err := a.manifestToArtifact(repo, tag, m)
 		if err != nil {
 			return nil, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(artifacts) {
+		offset = len(artifacts)
+	}
+	end := len(artifacts)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	artifacts = artifacts[offset:end]
 	return &grpcapi.RegistryListResponse{
 		Artifacts: artifacts,
 		Total:     int32(len(artifacts)),
@@ -338,7 +352,15 @@ func (a *GRPCAdapter) Status(ctx context.Context) (*grpcapi.RegistryStatusRespon
 		storage.Message = err.Error()
 		return resp, nil
 	}
-	resp.Storage = &grpcapi.RegistryStorageStats{ArtifactCount: int64(len(manifests))}
+	// Count each image once, as List shows it: skip the digest-keyed
+	// copies the OCI PutManifest path stores beside each tag.
+	var count int64
+	for _, m := range manifests {
+		if !isDigestKeyedCopy(m.Reference) {
+			count++
+		}
+	}
+	resp.Storage = &grpcapi.RegistryStorageStats{ArtifactCount: count}
 	return resp, nil
 }
 
@@ -455,4 +477,13 @@ func endsWithSha256Sentinel(ref string) bool {
 		return false
 	}
 	return ref[len(ref)-len(sentinel):] == sentinel
+}
+
+// isDigestKeyedCopy reports whether ref is one of the
+// "<name>:sha256:<64-hex>" copies the OCI dist PutManifest path stores
+// alongside each tag. List and Status skip them so each pushed image
+// counts once.
+func isDigestKeyedCopy(ref string) bool {
+	repo, tag := splitRef(ref)
+	return endsWithSha256Sentinel(repo) && isHex64(tag)
 }

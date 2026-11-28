@@ -463,6 +463,26 @@ func TestDeleteImage_Errors(t *testing.T) {
 	}
 }
 
+// TestDeleteImage_TaglessReferenceIsRefused pins that DELETE refuses a
+// reference without a tag instead of deleting the bare repository
+// reference (#2063), matching the Go SDK's own refusal before the wire.
+func TestDeleteImage_TaglessReferenceIsRefused(t *testing.T) {
+	paths := []string{
+		"/compute/images/library/alpine",
+		"/compute/images/library/alpine:",
+		"/compute/images/registry.example:5000/library/alpine",
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			svc := &fakeRegistryService{}
+			rec := serve(t, newImagesRouter(svc), httptest.NewRequest(http.MethodDelete, path, nil))
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+			assert.Equal(t, ErrMissingImageTag{}.Error(), decodeEnvelope(t, rec).Error)
+			assert.Nil(t, svc.deleteReq)
+		})
+	}
+}
+
 func TestParseRef(t *testing.T) {
 	cases := []struct {
 		in       string

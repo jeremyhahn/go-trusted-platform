@@ -15,6 +15,9 @@ export type { NTPStatus, NTPSource, NTPStatusResponse, NTPSourcesResponse } from
 export { useCapabilities } from "./use-capabilities";
 export type { CapabilityAnswer, UseCapabilitiesResult } from "./use-capabilities";
 
+// DNSSEC status and zone signing (#2060)
+export { useDNSSEC } from "./use-dnssec";
+
 // SDK hooks (exported from main entry point for bundler compatibility)
 export {
   // Generic hooks
@@ -95,8 +98,12 @@ export { useVTPMRuntime, base64ToText, hexToBase64 } from './use-vtpm-runtime';
 export type { VTPMRunState } from './use-vtpm-runtime';
 
 export { useReportedGateways } from './use-reported-gateways';
+export { usePXEDeviceActions } from './use-pxe-device-actions';
+export type { UsePXEDeviceActionsResult } from './use-pxe-device-actions';
 export { useOverlayVteps } from './use-overlay-vteps';
 export { useSwitches } from './use-switches';
+export { useProfileAssignment } from './use-profile-assignment';
+export type { ProfileAssignmentInput, UseProfileAssignmentResult } from './use-profile-assignment';
 export { useRegistry, encodeRepository } from './use-registry';
 export type {
   RegistryHealthCode,

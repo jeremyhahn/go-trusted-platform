@@ -11,6 +11,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Gated } from "@/components/features/capabilities/gated"
 
 interface DataTableRowActionsProps<TData> {
   row: TData
@@ -19,6 +20,8 @@ interface DataTableRowActionsProps<TData> {
     onClick: (row: TData) => void
     variant?: "default" | "destructive"
     separator?: boolean
+    /** Route the action calls, e.g. "DELETE /api/v1/x/{id}"; gates the item when set. */
+    op?: string
     /** Disables the item, e.g. when the server does not offer its op. */
     disabled?: boolean
     /** The item's tooltip, e.g. the reason it is disabled. */
@@ -78,9 +81,8 @@ export function DataTableRowActions<TData>({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-[160px]">
-          {actions.map((action, index) => (
-            <React.Fragment key={index}>
-              {action.separator && <DropdownMenuSeparator />}
+          {actions.map((action, index) => {
+            const item = (
               <DropdownMenuItem
                 onClick={() => action.onClick(row)}
                 disabled={action.disabled}
@@ -93,8 +95,14 @@ export function DataTableRowActions<TData>({
               >
                 {action.label}
               </DropdownMenuItem>
-            </React.Fragment>
-          ))}
+            )
+            return (
+              <React.Fragment key={index}>
+                {action.separator && <DropdownMenuSeparator />}
+                {action.op ? <Gated op={action.op}>{item}</Gated> : item}
+              </React.Fragment>
+            )
+          })}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

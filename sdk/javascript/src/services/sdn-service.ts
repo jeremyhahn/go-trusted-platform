@@ -40,6 +40,31 @@ import type {
   GetFlowStatsResponse,
   SDNLabelSelector,
 } from '../types/sdn.js';
+import type {
+  CreateNetworkZoneRequest,
+  ListNetworkZonesRequest,
+  ListNetworkZonesResponse,
+  NetworkZone,
+  NetworkZoneDeleteResponse,
+  UpdateNetworkZoneRequest,
+} from '../types/sdn-zones.js';
+import type {
+  ApplyPolicyRequest,
+  ApplyPolicyResponse,
+  GetPolicyResponse,
+  ListPoliciesRequest,
+  ListPoliciesResponse,
+  DeletePolicyResponse,
+} from '../types/sdn-policies.js';
+import type {
+  ListSDNIPAMAllocationsRequest,
+  ListSDNIPAMAllocationsResponse,
+  ListSDNIPAMPoolsRequest,
+  ListSDNIPAMPoolsResponse,
+  SDNIPAMActionResponse,
+  SDNIPAMPool,
+  SDNIPAMPoolRequest,
+} from '../types/sdn-ipam.js';
 
 /**
  * Builds the query parameters of an SDN list request under the proto field
@@ -367,6 +392,145 @@ export class SDNService extends BaseService {
   async deleteVLAN(bridgeId: string, vlanId: number): Promise<ApiResponse<DeleteVLANResponse>> {
     return this.client.delete<DeleteVLANResponse>(
       this.buildUrl(`/bridges/${this.encodePathSegment(bridgeId)}/vlans/${vlanId}`)
+    );
+  }
+
+  // =========================================================================
+  // Network Zone Operations
+  // =========================================================================
+
+  /**
+   * List network zones: GET /api/v1/sdn/zones, optionally narrowed by
+   * the `lifecycle_role` query parameter.
+   */
+  async listNetworkZones(
+    request: ListNetworkZonesRequest = {}
+  ): Promise<ApiResponse<ListNetworkZonesResponse>> {
+    return this.client.get<ListNetworkZonesResponse>(
+      this.buildUrl('/zones', { filters: { lifecycle_role: request.lifecycleRole } })
+    );
+  }
+
+  /**
+   * Create a network zone: POST /api/v1/sdn/zones.
+   */
+  async createNetworkZone(zone: CreateNetworkZoneRequest): Promise<ApiResponse<NetworkZone>> {
+    return this.client.post<NetworkZone>(this.buildUrl('/zones'), zone);
+  }
+
+  /**
+   * Update a network zone: PUT /api/v1/sdn/zones/{name}.
+   */
+  async updateNetworkZone(
+    name: string,
+    zone: UpdateNetworkZoneRequest
+  ): Promise<ApiResponse<NetworkZone>> {
+    return this.client.put<NetworkZone>(
+      this.buildUrl(`/zones/${this.encodePathSegment(name)}`),
+      zone
+    );
+  }
+
+  /**
+   * Delete a network zone: DELETE /api/v1/sdn/zones/{name}.
+   */
+  async deleteNetworkZone(name: string): Promise<ApiResponse<NetworkZoneDeleteResponse>> {
+    return this.client.delete<NetworkZoneDeleteResponse>(
+      this.buildUrl(`/zones/${this.encodePathSegment(name)}`)
+    );
+  }
+
+  // =========================================================================
+  // Policy Operations
+  // =========================================================================
+
+  /**
+   * Apply a policy: POST /api/v1/sdn/policies.
+   */
+  async applyPolicy(request: ApplyPolicyRequest): Promise<ApiResponse<ApplyPolicyResponse>> {
+    return this.client.post<ApplyPolicyResponse>(this.buildUrl('/policies'), request);
+  }
+
+  /**
+   * List policies: GET /api/v1/sdn/policies, optionally narrowed by `type` and `target_id`.
+   */
+  async listPolicies(
+    request: ListPoliciesRequest = {}
+  ): Promise<ApiResponse<ListPoliciesResponse>> {
+    return this.client.get<ListPoliciesResponse>(
+      this.buildUrl('/policies', {
+        filters: { type: request.type, target_id: request.targetId },
+      })
+    );
+  }
+
+  /**
+   * Get one policy: GET /api/v1/sdn/policies/{id}.
+   */
+  async getPolicy(id: string): Promise<ApiResponse<GetPolicyResponse>> {
+    return this.client.get<GetPolicyResponse>(
+      this.buildUrl(`/policies/${this.encodePathSegment(id)}`)
+    );
+  }
+
+  /**
+   * Delete a policy: DELETE /api/v1/sdn/policies/{id}.
+   */
+  async deletePolicy(id: string): Promise<ApiResponse<DeletePolicyResponse>> {
+    return this.client.delete<DeletePolicyResponse>(
+      this.buildUrl(`/policies/${this.encodePathSegment(id)}`)
+    );
+  }
+
+  // ========================================================================
+  // Gateway IPAM pools (/sdn/gateway/ipam/pools)
+  // ========================================================================
+
+  /** Create a gateway IPAM pool. */
+  async createIPAMPool(request: SDNIPAMPoolRequest): Promise<ApiResponse<SDNIPAMPool>> {
+    return this.client.post<SDNIPAMPool>(this.buildUrl('/gateway/ipam/pools'), request);
+  }
+
+  /** List the gateway IPAM pools, optionally of one zone. */
+  async listIPAMPools(
+    request: ListSDNIPAMPoolsRequest = {}
+  ): Promise<ApiResponse<ListSDNIPAMPoolsResponse>> {
+    return this.client.get<ListSDNIPAMPoolsResponse>(
+      this.buildUrl('/gateway/ipam/pools', { filters: { zone: request.zone } })
+    );
+  }
+
+  /** Get one gateway IPAM pool. */
+  async getIPAMPool(id: string): Promise<ApiResponse<SDNIPAMPool>> {
+    return this.client.get<SDNIPAMPool>(
+      this.buildUrl(`/gateway/ipam/pools/${this.encodePathSegment(id)}`)
+    );
+  }
+
+  /** Update a gateway IPAM pool. */
+  async updateIPAMPool(
+    id: string,
+    request: SDNIPAMPoolRequest
+  ): Promise<ApiResponse<SDNIPAMPool>> {
+    return this.client.put<SDNIPAMPool>(
+      this.buildUrl(`/gateway/ipam/pools/${this.encodePathSegment(id)}`),
+      request
+    );
+  }
+
+  /** Delete a gateway IPAM pool. */
+  async deleteIPAMPool(id: string): Promise<ApiResponse<SDNIPAMActionResponse>> {
+    return this.client.delete<SDNIPAMActionResponse>(
+      this.buildUrl(`/gateway/ipam/pools/${this.encodePathSegment(id)}`)
+    );
+  }
+
+  /** List the gateway IPAM allocations, optionally of one pool. */
+  async listIPAMAllocations(
+    request: ListSDNIPAMAllocationsRequest = {}
+  ): Promise<ApiResponse<ListSDNIPAMAllocationsResponse>> {
+    return this.client.get<ListSDNIPAMAllocationsResponse>(
+      this.buildUrl('/gateway/ipam/allocations', { filters: { pool_id: request.poolId } })
     );
   }
 }

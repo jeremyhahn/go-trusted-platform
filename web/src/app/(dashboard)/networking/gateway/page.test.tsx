@@ -36,6 +36,17 @@ vi.mock("@/components/features/networking/gateway-snapshot-detail", () => ({
     <div data-testid="snapshot-detail">{snapshot.gateway_id}</div>
   ),
 }));
+vi.mock("@/components/features/networking/gateway-mode-card", () => ({
+  GatewayModeCard: ({ initialModes = [] }: { initialModes?: string[] }) => (
+    <div data-testid="gateway-mode-card">{initialModes.join(",")}</div>
+  ),
+}));
+// The BGP cards read through the SDK client; page.bgp-cards.test.tsx covers their mount.
+vi.mock("@/components/features/networking/bgp-peers-card", () => ({ BGPPeersCard: () => null }));
+vi.mock("@/components/features/networking/bgp-prefixes-card", () => ({ BGPPrefixesCard: () => null }));
+vi.mock("@/components/features/networking/gateway-snapshots-card", () => ({
+  GatewaySnapshotsCard: () => <div data-testid="gateway-snapshots-card-stub" />,
+}));
 
 import APIGatewayPage from "./page";
 
@@ -237,5 +248,47 @@ describe("APIGatewayPage", () => {
       expect(gateway.listAnnouncedPrefixes).toHaveBeenCalledTimes(2);
       expect(gateway.listIPAMPools).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it("mounts the gateway modes card seeded with the modes the local gateway runs", async () => {
+    allOk();
+    gateway.getStatus.mockResolvedValue({ data: { status: { healthy: true, uptimeSeconds: 7300, modes: 5 } } });
+    render(<APIGatewayPage />);
+
+    expect((await screen.findByTestId("gateway-mode-card")).textContent).toBe("OVERLAY,TRANSIT");
+  });
+
+  it("shows no modes card until the local gateway reports its modes", async () => {
+    allOk();
+    render(<APIGatewayPage />);
+
+    expect(await screen.findByText("198.51.100.0/24")).toBeTruthy();
+    expect(screen.queryByTestId("gateway-mode-card")).toBeNull();
+  });
+
+  it("shows no modes card when the local gateway is not configured", async () => {
+    gateway.getStatus.mockResolvedValue(notConfigured);
+    gateway.getBGPStatus.mockResolvedValue(notConfigured);
+    gateway.listAnnouncedPrefixes.mockResolvedValue(notConfigured);
+    gateway.listIPAMPools.mockResolvedValue(notConfigured);
+    render(<APIGatewayPage />);
+
+    expect(await screen.findByText(/This node does not run gatewayd/)).toBeTruthy();
+    expect(screen.queryByTestId("gateway-mode-card")).toBeNull();
+  });
+
+  it("mounts the gateway snapshots card", async () => {
+    allOk();
+    render(<APIGatewayPage />);
+    expect(await screen.findByTestId("gateway-snapshots-card-stub")).toBeTruthy();
+
+    cleanup();
+    gateway.getStatus.mockResolvedValue(notConfigured);
+    gateway.getBGPStatus.mockResolvedValue(notConfigured);
+    gateway.listAnnouncedPrefixes.mockResolvedValue(notConfigured);
+    gateway.listIPAMPools.mockResolvedValue(notConfigured);
+    render(<APIGatewayPage />);
+    expect(await screen.findByText(/This node does not run gatewayd/)).toBeTruthy();
+    expect(screen.getByTestId("gateway-snapshots-card-stub")).toBeTruthy();
   });
 });

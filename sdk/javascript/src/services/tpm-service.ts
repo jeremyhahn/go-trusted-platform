@@ -34,6 +34,8 @@ import type {
   UndefineNVRAMRequest,
   GetRandomRequest,
   TPMInfoResponse,
+  TPMCapabilitiesResponse,
+  TPMPlatformAttributesResponse,
   TPMProvisionResponse,
   TPMClearResponse,
   CreateEKResponse,
@@ -64,6 +66,8 @@ import type {
   TPMMakeCredentialResponse,
   TPMActivateCredentialRequest,
   TPMActivateCredentialResponse,
+  TPMCertifyRequest,
+  TPMCertifyResponse,
   KeyAttributes,
   PCRBank,
   PCRBankName,
@@ -160,6 +164,22 @@ export class TPMService extends BaseService {
    */
   async getInfo(): Promise<ApiResponse<TPMInfoResponse>> {
     return this.client.get<TPMInfoResponse>(this.buildUrl('/info'));
+  }
+
+  /**
+   * Get the TPM capabilities (GET /v1/tpm/capabilities)
+   * @returns Supported algorithms, commands and ECC curves
+   */
+  async getCapabilities(): Promise<ApiResponse<TPMCapabilitiesResponse>> {
+    return this.client.get<TPMCapabilitiesResponse>(this.buildUrl('/capabilities'));
+  }
+
+  /**
+   * Get the TPM platform attributes (GET /v1/tpm/platform)
+   * @returns Device, FIPS and seal state and the EK, SRK and IAK references
+   */
+  async getPlatformAttributes(): Promise<ApiResponse<TPMPlatformAttributesResponse>> {
+    return this.client.get<TPMPlatformAttributesResponse>(this.buildUrl('/platform'));
   }
 
   /**
@@ -373,13 +393,24 @@ export class TPMService extends BaseService {
   /**
    * Get TPM event log
    *
+   * The server's uint64 event_count arrives as a protojson decimal string
+   * and is returned as a number.
+   *
    * @param request - Optional format specification
    * @returns Event log
    */
   async getEventLog(request?: GetEventLogRequest): Promise<ApiResponse<GetEventLogResponse>> {
-    return this.client.get<GetEventLogResponse>(this.buildUrl('/eventlog', {
+    const res = await this.client.get<GetEventLogResponse>(this.buildUrl('/eventlog', {
       filters: { format: request?.format },
     }));
+    const raw: unknown = res.success ? res.data?.eventCount : undefined;
+    if (res.success && res.data && typeof raw === 'string' && /^\d+$/.test(raw)) {
+      const eventCount = Number(raw);
+      if (Number.isSafeInteger(eventCount)) {
+        return { ...res, data: { ...res.data, eventCount } };
+      }
+    }
+    return res;
   }
 
   /**
@@ -471,10 +502,17 @@ export class TPMService extends BaseService {
   /**
    * Get random bytes from TPM
    *
-   * @param request - Number of bytes
+   * The server caps a draw at 1024 bytes and reads 0 as 32, so the SDK
+   * refuses a count outside 1-1024 and sends nothing.
+   *
+   * @param request - Number of bytes, an integer from 1 to 1024
    * @returns Random bytes
+   * @throws RangeError when numBytes is not an integer from 1 to 1024
    */
   async getRandom(request: GetRandomRequest): Promise<ApiResponse<GetRandomResponse>> {
+    if (!Number.isInteger(request.numBytes) || request.numBytes < 1 || request.numBytes > 1024) {
+      throw new RangeError(`numBytes must be an integer from 1 to 1024, got ${request.numBytes}`);
+    }
     return this.client.post<GetRandomResponse>(this.buildUrl('/random'), request);
   }
 
@@ -518,5 +556,20 @@ export class TPMService extends BaseService {
    */
   async activateCredential(request: TPMActivateCredentialRequest): Promise<ApiResponse<TPMActivateCredentialResponse>> {
     return this.client.post<TPMActivateCredentialResponse>(this.buildUrl('/activate-credential'), request);
+  }
+
+  // ===========================================================================
+  // Certify
+  // ===========================================================================
+
+  /**
+   * Certify a key (TPM2_Certify): the IAK signs that the key at keyHandle is
+   * loaded in this TPM. A refusal comes back as the error response.
+   *
+   * @param request - Persistent handle of the key, its password and a nonce
+   * @returns The signed attestation and both keys' public areas
+   */
+  async certify(request: TPMCertifyRequest): Promise<ApiResponse<TPMCertifyResponse>> {
+    return this.client.post<TPMCertifyResponse>(this.buildUrl('/certify'), request);
   }
 }

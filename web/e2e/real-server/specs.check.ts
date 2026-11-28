@@ -61,4 +61,24 @@ for (const call of registry.matchAll(/browser\.newContext\(([^)]*)\)/g)) {
   assert.match(call[1], /\bbaseURL\b/, `registry-seeded.spec.ts newContext call names baseURL: ${call[0]}`);
 }
 
+// The seeded spec inspects a real pushed tag through the page's own
+// GET /api/v1/compute/images/... and asserts the OCI capability gates.
+assert.match(registry, /registry-inspect-panel/, 'registry-seeded.spec.ts asserts the registry-inspect-panel');
+assert.match(
+  registry,
+  /startsWith\('\/api\/v1\/compute\/images\/'\)/,
+  'registry-seeded.spec.ts waits for the page\'s own /api/v1/compute/images/ response',
+);
+assert.match(registry, /data-capability-op/, 'registry-seeded.spec.ts asserts data-capability-op');
+assert.match(
+  registry,
+  /DELETE \/v2\/\{name:\.\+\}\/manifests\/\{reference\}/,
+  'registry-seeded.spec.ts asserts the DELETE /v2/{name:.+}/manifests/{reference} gate',
+);
+assert.match(
+  registry,
+  /GET \/v2\/\{name:\.\+\}\/tags\/list/,
+  'registry-seeded.spec.ts asserts the GET /v2/{name:.+}/tags/list gate',
+);
+
 console.log('specs.check: ok');

@@ -23,7 +23,7 @@ import type {
   CollectContainerAttestationResponse,
 } from '../attestation.js';
 
-/** Captured body of POST /api/v1/attestation/vm/{id}. */
+/** Body of POST /api/v1/attestation/vm/{id}, as protojson writes it. */
 const vmBody = {
   status: { success: true, message: 'ok' },
   attestation: {
@@ -41,7 +41,7 @@ const vmBody = {
   },
 } satisfies CollectVMAttestationResponse;
 
-/** Captured body of POST /api/v1/attestation/container/{id}. */
+/** Body of POST /api/v1/attestation/container/{id}, as protojson writes it. */
 const containerBody = {
   status: { success: true, message: 'ok' },
   attestation: {

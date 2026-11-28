@@ -82,3 +82,46 @@ describe('AttestationService REST contract', () => {
     expect(verifyUrl).toBe('/v1/attestation/manifests/verify');
   });
 });
+
+/**
+ * The REST handler reads `limit`, `offset`, `host_id`, `start_time` and
+ * `end_time` only (pkg/webservice/v1/rest/attestation/server_router.go), so
+ * the client must send exactly those names; camelCase or `page` is ignored.
+ */
+describe('AttestationService listManifests query', () => {
+  let client: ApiClient;
+  let service: AttestationService;
+
+  beforeEach(() => {
+    client = createMockApiClient();
+    service = new AttestationService(client);
+  });
+
+  it('sends host_id, start_time, end_time, limit and offset as the server reads them', async () => {
+    await service.listManifests({
+      hostId: 'node-a',
+      startTime: '2026-08-31T00:00:00Z',
+      endTime: '2026-09-01T00:00:00Z',
+      limit: 5,
+      offset: 10,
+    });
+    const url: unknown = vi.mocked(client.get).mock.calls[0]?.[0];
+    const parsed = new URL(url as string, 'https://x');
+    expect(parsed.pathname).toBe('/v1/attestation/manifests');
+    expect(parsed.searchParams.get('host_id')).toBe('node-a');
+    expect(parsed.searchParams.get('start_time')).toBe('2026-08-31T00:00:00Z');
+    expect(parsed.searchParams.get('end_time')).toBe('2026-09-01T00:00:00Z');
+    expect(parsed.searchParams.get('limit')).toBe('5');
+    expect(parsed.searchParams.get('offset')).toBe('10');
+    expect(parsed.searchParams.has('page')).toBe(false);
+    expect(parsed.searchParams.has('hostId')).toBe(false);
+    expect(parsed.searchParams.has('startTime')).toBe(false);
+    expect(parsed.searchParams.has('endTime')).toBe(false);
+  });
+
+  it('lists the bare route with no query string when no request is given', async () => {
+    await service.listManifests();
+    const url: unknown = vi.mocked(client.get).mock.calls[0]?.[0];
+    expect(url).toBe('/v1/attestation/manifests');
+  });
+});

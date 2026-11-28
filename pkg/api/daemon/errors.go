@@ -1801,6 +1801,26 @@ func (e ErrActivateCredentialFieldRequired) GRPCStatus() *status.Status {
 	return status.New(codes.InvalidArgument, e.Error())
 }
 
+// ErrMakeCredentialInvalid is returned when a MakeCredential request
+// cannot be served as asked: ek_cert arrives without iak_pub (or the
+// reverse), ak_name is empty on the local-EK path, or ek_cert is not a
+// DER certificate. The request is refused before the TPM is touched, so
+// a lopsided request never wraps the challenge to the local EK.
+type ErrMakeCredentialInvalid struct {
+	// Reason says what is wrong with the request.
+	Reason string
+}
+
+// Error implements the error interface.
+func (e ErrMakeCredentialInvalid) Error() string {
+	return e.Reason
+}
+
+// GRPCStatus classifies the refusal as InvalidArgument.
+func (e ErrMakeCredentialInvalid) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // =============================================================================
 // Container Service Errors
 // =============================================================================

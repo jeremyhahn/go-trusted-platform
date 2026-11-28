@@ -131,6 +131,10 @@ func (s *scriptedSDNServer) GetPolicy(_ context.Context, req *platformv1.GetPoli
 	return answer[*platformv1.GetPolicyResponse](s, req)
 }
 
+func (s *scriptedSDNServer) DeletePolicy(_ context.Context, req *platformv1.DeletePolicyRequest) (*platformv1.DeletePolicyResponse, error) {
+	return answer[*platformv1.DeletePolicyResponse](s, req)
+}
+
 func (s *scriptedSDNServer) CreateVLAN(_ context.Context, req *platformv1.CreateVLANRequest) (*platformv1.CreateVLANResponse, error) {
 	return answer[*platformv1.CreateVLANResponse](s, req)
 }
@@ -141,10 +145,6 @@ func (s *scriptedSDNServer) ListVLANs(_ context.Context, req *platformv1.ListVLA
 
 func (s *scriptedSDNServer) DeleteVLAN(_ context.Context, req *platformv1.DeleteVLANRequest) (*platformv1.DeleteVLANResponse, error) {
 	return answer[*platformv1.DeleteVLANResponse](s, req)
-}
-
-func (s *scriptedSDNServer) DeletePolicy(_ context.Context, req *platformv1.DeletePolicyRequest) (*platformv1.DeletePolicyResponse, error) {
-	return answer[*platformv1.DeletePolicyResponse](s, req)
 }
 
 func newTestLogger() *logging.Logger {
@@ -370,6 +370,11 @@ func TestRoutesDecodeTheProtoRequest(t *testing.T) {
 			resp: &platformv1.GetPolicyResponse{Policy: testPolicy()}, reply: &platformv1.GetPolicyResponse{},
 		},
 		{
+			name: "DeletePolicy", method: http.MethodDelete, target: "/api/v1/sdn/policies/p1",
+			want: &platformv1.DeletePolicyRequest{PolicyId: "p1"},
+			resp: &platformv1.DeletePolicyResponse{}, reply: &platformv1.DeletePolicyResponse{},
+		},
+		{
 			name: "CreateVLAN", method: http.MethodPost, target: "/api/v1/sdn/vlans",
 			body: `{"config":{"vlanId":20,"name":"lab","bridgeId":"br0"}}`,
 			want: &platformv1.CreateVLANRequest{Config: &platformv1.VLANConfig{VlanId: 20, Name: "lab", BridgeId: "br0"}},
@@ -501,6 +506,7 @@ var everyRoute = []struct{ method, target string }{
 	{http.MethodPost, "/api/v1/sdn/policies"},
 	{http.MethodGet, "/api/v1/sdn/policies"},
 	{http.MethodGet, "/api/v1/sdn/policies/p1"},
+	{http.MethodDelete, "/api/v1/sdn/policies/p1"},
 	{http.MethodPost, "/api/v1/sdn/vlans"},
 	{http.MethodGet, "/api/v1/sdn/vlans"},
 	{http.MethodPost, "/api/v1/sdn/bridges/br0/vlans"},

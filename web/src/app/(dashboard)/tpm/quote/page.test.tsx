@@ -20,6 +20,12 @@ vi.mock("@/hooks", async (importOriginal) => ({
   useToast: () => ({ toast: vi.fn() }),
 }));
 
+// The page's controls are gated on the server's capabilities (#2068); this
+// test renders without a control plane, so the gate answers every op enabled.
+vi.mock("@/hooks/use-capabilities", () => ({
+  useCapabilities: () => ({ loading: false, error: undefined, capability: () => ({ enabled: true }) }),
+}));
+
 const callerBinding = new Uint8Array(32).fill(0xa1);
 const relayBinding = new Uint8Array(32).fill(0xb2);
 

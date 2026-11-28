@@ -146,7 +146,7 @@ func TestDaemonREST_RegistryWritesNeedAdmin(t *testing.T) {
 			pushRec := httptest.NewRecorder()
 			s.Router().ServeHTTP(pushRec, push)
 
-			del := httptest.NewRequest(http.MethodDelete, "/api/v1/compute/images/x", nil)
+			del := httptest.NewRequest(http.MethodDelete, "/api/v1/compute/images/x:latest", nil)
 			del.Header.Set("Authorization", "Bearer caller")
 			delRec := httptest.NewRecorder()
 			s.Router().ServeHTTP(delRec, del)
@@ -208,7 +208,7 @@ func TestDaemonREST_RegistryAdmitsTheMTLSOperator(t *testing.T) {
 		assert.Equal(t, http.StatusOK, status.Code, status.Body.String())
 		push := serve(s, http.MethodPost, "/api/v1/compute/images", "", strings.NewReader("layer"))
 		assert.True(t, reg.pushed, "the operator certificate's push did not reach the registry: %d %s", push.Code, push.Body.String())
-		del := serve(s, http.MethodDelete, "/api/v1/compute/images/x", "", nil)
+		del := serve(s, http.MethodDelete, "/api/v1/compute/images/x:latest", "", nil)
 		assert.True(t, reg.deleted, "the operator certificate's delete did not reach the registry: %d %s", del.Code, del.Body.String())
 	})
 

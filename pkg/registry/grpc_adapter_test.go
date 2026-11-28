@@ -561,3 +561,94 @@ func TestGRPCAdapter_StatusReportsUnconfiguredStorageAsUnhealthy(t *testing.T) {
 		t.Fatalf("Version %q / StartedAt %v must be set on the unhealthy path too", resp.Version, resp.StartedAt)
 	}
 }
+
+// TestGRPCAdapter_StatusCountsEachImageOnce pins that the Status
+// artifact count matches the List rows: the digest-keyed copies the
+// OCI PutManifest path stores beside each tag are not counted (#2063).
+func TestGRPCAdapter_StatusCountsEachImageOnce(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	a := NewGRPCAdapter(reg)
+
+	if _, err := a.PushStream(ctx, &grpcapi.RegistryPushMetadata{Repository: "apps/web", Tag: "v1"},
+		bytes.NewReader(pushEnvelope(t, []byte("layer")))); err != nil {
+		t.Fatalf("PushStream: %v", err)
+	}
+	for _, tag := range []string{"3.20", "3.21"} {
+		if _, err := reg.PutManifest(ctx, "alpine", tag, "application/vnd.oci.image.manifest.v1+json", ociTestManifest()); err != nil {
+			t.Fatalf("PutManifest %s: %v", tag, err)
+		}
+	}
+
+	list, err := a.List(ctx, &grpcapi.RegistryListRequest{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	resp, err := a.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if resp.Storage == nil {
+		t.Fatalf("Storage = nil, want artifact stats")
+	}
+	if resp.Storage.ArtifactCount != 3 {
+		t.Fatalf("ArtifactCount %d, want 3", resp.Storage.ArtifactCount)
+	}
+	if got := int64(len(list.Artifacts)); resp.Storage.ArtifactCount != got {
+		t.Fatalf("ArtifactCount %d, List shows %d artifacts", resp.Storage.ArtifactCount, got)
+	}
+}
+
+// TestGRPCAdapter_ListPagesCountOnlyVisibleImages pins that List applies
+// Offset and Limit to the visible images, after the digest-keyed copies
+// PutManifest stores alongside each tag are dropped. The copies sort
+// before the tags ("alpine:sha256:..." < "alpine:v1"), so paging the raw
+// entries would answer an empty first page.
+func TestGRPCAdapter_ListPagesCountOnlyVisibleImages(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	a := NewGRPCAdapter(reg)
+
+	for _, tag := range []string{"v1", "v2", "v3"} {
+		if _, err := reg.PutManifest(ctx, "alpine", tag, "application/vnd.oci.image.manifest.v1+json", ociTestManifest()); err != nil {
+			t.Fatalf("PutManifest %s: %v", tag, err)
+		}
+	}
+
+	seen := map[string]bool{}
+	for off := 0; off < 3; off++ {
+		resp, err := a.List(ctx, &grpcapi.RegistryListRequest{Limit: 1, Offset: int32(off)})
+		if err != nil {
+			t.Fatalf("List offset %d: %v", off, err)
+		}
+		if len(resp.Artifacts) != 1 {
+			t.Fatalf("List offset %d limit 1: %d artifacts, want 1", off, len(resp.Artifacts))
+		}
+		tag := resp.Artifacts[0].Tag
+		if seen[tag] {
+			t.Fatalf("List offset %d answered tag %q again", off, tag)
+		}
+		seen[tag] = true
+	}
+	for _, want := range []string{"v1", "v2", "v3"} {
+		if !seen[want] {
+			t.Fatalf("pages missed tag %q (saw %v)", want, seen)
+		}
+	}
+
+	past, err := a.List(ctx, &grpcapi.RegistryListRequest{Limit: 1, Offset: 3})
+	if err != nil {
+		t.Fatalf("List offset 3: %v", err)
+	}
+	if len(past.Artifacts) != 0 {
+		t.Fatalf("List offset 3: %d artifacts, want 0", len(past.Artifacts))
+	}
+
+	all, err := a.List(ctx, &grpcapi.RegistryListRequest{})
+	if err != nil {
+		t.Fatalf("List all: %v", err)
+	}
+	if len(all.Artifacts) != 3 {
+		t.Fatalf("List all: %d artifacts, want 3", len(all.Artifacts))
+	}
+}

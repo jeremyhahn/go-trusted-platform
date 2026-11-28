@@ -28,6 +28,7 @@ import {
 import { useApi, useAttestation, useToast } from "@/hooks";
 import { AttestationQuoteCard } from "@/components/features/attestation/attestation-quote-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { QuoteVerifyCard } from "./quote-verify-card";
 
 /**
  * TPM Quote represents a cryptographically signed attestation quote
@@ -314,6 +315,8 @@ export default function QuotesPage() {
       </div>
 
       <AttestationQuoteCard />
+
+      <QuoteVerifyCard />
 
       {/* Statistics Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

@@ -22,6 +22,7 @@ vi.mock("@/hooks/use-capabilities", () => ({
 }));
 
 // The table is its own component; the page only hands it the mapped zones.
+
 vi.mock("@/components/features/networking/dns-zone-table", () => ({
   DNSZoneTable: ({ zones, onRefresh }: { zones: { id: string; name: string; type: string; recordCount: number }[]; onRefresh: () => void }) => (
     <div data-testid="zone-table">
@@ -61,6 +62,7 @@ afterEach(() => {
 });
 
 describe("DNSZonesPage", () => {
+
   it("lists the zones and computes the stat cards", async () => {
     dns.listZones.mockResolvedValue({ data: { zones } });
     render(<DNSZonesPage />);

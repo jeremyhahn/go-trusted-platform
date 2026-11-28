@@ -32,6 +32,11 @@ type mockStorageClient struct {
 	getErr  error
 	delErr  error
 	listErr error
+	// maxPage caps the entries one List call returns (0: no cap), so a
+	// test can make the caller walk several storage pages.
+	maxPage int
+	// listCalls counts List calls.
+	listCalls int
 }
 
 func newMockStorageClient() *mockStorageClient {
@@ -74,8 +79,9 @@ func (m *mockStorageClient) List(ctx context.Context, entityType, prefix string,
 	if m.listErr != nil {
 		return nil, "", false, m.listErr
 	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.listCalls++
 
 	var keys []string
 	fullPrefix := entityType + ":"
@@ -95,6 +101,10 @@ func (m *mockStorageClient) List(ctx context.Context, entityType, prefix string,
 	// next page.
 	if cursor != "" {
 		keys = keys[sort.SearchStrings(keys, cursor):]
+	}
+
+	if m.maxPage > 0 && (limit <= 0 || limit > m.maxPage) {
+		limit = m.maxPage
 	}
 
 	// Apply limit

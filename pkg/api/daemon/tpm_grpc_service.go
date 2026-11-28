@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -591,7 +592,8 @@ func (s *TPMGRPCService) CreateAK(
 			Success: true,
 			Message: "AK created successfully",
 		},
-		Handle: uint32(iakAttrs.TPMAttributes.Handle),
+		Handle:    uint32(iakAttrs.TPMAttributes.Handle),
+		PublicKey: iakAttrs.TPMAttributes.PublicKeyBytes,
 	}, nil
 }
 
@@ -628,13 +630,23 @@ func (s *TPMGRPCService) GetAK(
 
 // tpmIAKAttributes returns the IAK's attributes only when the IAK exists:
 // attributes alone describe where an IAK would live, so a TPM without one
-// answers NotFound on every transport.
+// answers NotFound on every transport. A missing persistent handle (the
+// ReadPublic TPM_RC_HANDLE error IAKAttributes and IAK return on a TPM with
+// no IAK) is NotFound, not mapTPMError's FailedPrecondition, so REST answers
+// 404 and the quote page offers Create AK; other TPM errors keep their class
+// (#2188 Codex).
 func tpmIAKAttributes(tpm quicbaassdk.TrustedPlatformModule) (*quicbaassdk.KeyAttributes, error) {
 	iakAttrs, err := tpm.IAKAttributes()
+	if errors.Is(err, tpmgo.TPMRCHandle) {
+		return nil, status.Error(codes.NotFound, "IAK not found")
+	}
 	if err != nil {
 		return nil, mapTPMError(err)
 	}
 	pubKey, err := tpm.IAK()
+	if errors.Is(err, tpmgo.TPMRCHandle) {
+		return nil, status.Error(codes.NotFound, "IAK not found")
+	}
 	if err != nil {
 		return nil, mapTPMError(err)
 	}
@@ -1709,16 +1721,26 @@ func (s *TPMGRPCService) ActivateCredential(
 // makeCredential is the single TPM2_MakeCredential delegation point shared
 // by every transport in the daemon package. When ekCertDER and iakPub are
 // both present the verifier path (no local EK) is used; otherwise the call
-// uses the local TPM EK with akName.
+// uses the local TPM EK with akName. A request carrying only one of
+// ekCertDER and iakPub, an empty akName on the local path, or an
+// unparsable ekCertDER is refused with ErrMakeCredentialInvalid before
+// the TPM is touched.
 func makeCredential(
 	tpm quicbaassdk.TrustedPlatformModule,
 	akName, secret, ekCertDER, iakPub []byte,
 ) (credentialBlob, encryptedSecret, plaintextSecret []byte, err error) {
 
-	if len(ekCertDER) > 0 && len(iakPub) > 0 {
+	hasEKCert, hasIAKPub := len(ekCertDER) > 0, len(iakPub) > 0
+	if hasEKCert != hasIAKPub {
+		return nil, nil, nil, ErrMakeCredentialInvalid{Reason: "ek_cert and iak_pub must be sent together"}
+	}
+	if !hasEKCert && len(akName) == 0 {
+		return nil, nil, nil, ErrMakeCredentialInvalid{Reason: "ak_name is required"}
+	}
+	if hasEKCert {
 		ekCert, parseErr := x509.ParseCertificate(ekCertDER)
 		if parseErr != nil {
-			return nil, nil, nil, parseErr
+			return nil, nil, nil, ErrMakeCredentialInvalid{Reason: "ek_cert is not a DER certificate: " + parseErr.Error()}
 		}
 		return tpm.MakeCredentialWithExternalEK(ekCert, iakPub, secret)
 	}

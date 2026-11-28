@@ -143,11 +143,13 @@ export class AttestationService extends BaseService {
   async listManifests(request?: ListManifestsRequest): Promise<ApiResponse<ListManifestsResponse>> {
     return this.client.get<ListManifestsResponse>(this.buildUrl('/manifests', {
       limit: request?.limit,
-      page: request?.offset !== undefined ? Math.floor(request.offset / (request.limit ?? 10)) + 1 : undefined,
+      // The REST handler reads offset, host_id, start_time and end_time
+      // (snake_case) and has no page parameter.
       filters: {
-        hostId: request?.hostId,
-        startTime: request?.startTime,
-        endTime: request?.endTime,
+        offset: request?.offset,
+        host_id: request?.hostId,
+        start_time: request?.startTime,
+        end_time: request?.endTime,
       },
     }));
   }
@@ -268,7 +270,7 @@ export class AttestationService extends BaseService {
     if (request.cursor) {
       params.set('cursor', request.cursor);
     }
-    if (request.waitMs !== undefined) {
+    if (typeof request.waitMs === 'number' && Number.isFinite(request.waitMs) && request.waitMs >= 0) {
       params.set(
         'wait_ms',
         String(Math.min(Math.max(0, Math.floor(request.waitMs)), POLL_DEVICE_VERDICTS_MAX_WAIT_MS)),

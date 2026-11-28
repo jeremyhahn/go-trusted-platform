@@ -28,6 +28,8 @@ import { deviceRoleLabel } from '@/lib/device-role';
 import { profileOverrides } from '@/lib/device-profile-networks';
 import { assignedSessionId } from '@/lib/provisioning-assign';
 
+const CREATE_PROFILE_OP = 'POST /api/v1/device/templates/{id:[0-9]+}/create-profile';
+
 // ============================================================================
 // Helper Functions
 // ============================================================================
@@ -361,12 +363,14 @@ export default function CreateProfileClient() {
               </Button>
             </Gated>
           ) : (
+          <Gated op={CREATE_PROFILE_OP}>
             <Button type="submit" disabled={createProfileMutation.isLoading}>
               {createProfileMutation.isLoading && (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               )}
               Create Profile
             </Button>
+          </Gated>
           )}
         </div>
       </form>

@@ -48,6 +48,12 @@ import type {
   GenerateDataKeyResponse,
   GenerateWrappedDataKeyResponse,
   BackendStatusResponse,
+  RewrapRequest,
+  RewrapResponse,
+  BatchEncryptRequest,
+  BatchDecryptRequest,
+  BatchResponse,
+  GetKeyMetadataResponse,
 } from '../types/kms.js';
 
 /**
@@ -125,6 +131,16 @@ export class KMSService extends BaseService {
   }
 
   /**
+   * Get a key's metadata, including its whole-key status
+   * (GET /api/v1/kms/keys/{name}/metadata). GetKey carries no status.
+   */
+  async getKeyMetadata(keyId: string): Promise<ApiResponse<GetKeyMetadataResponse>> {
+    return this.client.get<GetKeyMetadataResponse>(
+      this.buildUrl(`/keys/${this.encodePathSegment(keyId)}/metadata`)
+    );
+  }
+
+  /**
    * List all keys
    *
    * @param options - List options with filtering
@@ -167,15 +183,22 @@ export class KMSService extends BaseService {
   }
 
   /**
-   * Update key status (enable/disable)
+   * Update key status through the served route PUT /v1/kms/keys/{name}/status.
+   *
+   * The body carries `status` and, only when the caller sets one, `version`;
+   * without a version the server changes the current one.
    *
    * @param request - Status update request
    * @returns Updated key status
    */
   async updateKeyStatus(request: UpdateKeyStatusRequest): Promise<ApiResponse<UpdateKeyStatusResponse>> {
-    return this.client.patch<UpdateKeyStatusResponse>(
+    const body: { status: UpdateKeyStatusRequest['status']; version?: number } = { status: request.status };
+    if (request.version !== undefined) {
+      body.version = request.version;
+    }
+    return this.client.put<UpdateKeyStatusResponse>(
       this.buildUrl(`/keys/${this.encodePathSegment(request.keyId)}/status`),
-      { version: request.version, status: request.status }
+      body
     );
   }
 
@@ -218,21 +241,33 @@ export class KMSService extends BaseService {
   /**
    * Encrypt plaintext
    *
+   * Calls the served route POST /v1/kms/encrypt/{name}; the key name is the
+   * path segment and the request body is sent unchanged.
+   *
    * @param request - Encryption request
    * @returns Ciphertext
    */
   async encrypt(request: EncryptRequest): Promise<ApiResponse<EncryptResponse>> {
-    return this.client.post<EncryptResponse>(this.buildUrl('/encrypt'), request);
+    return this.client.post<EncryptResponse>(
+      this.buildUrl(`/encrypt/${this.encodePathSegment(request.keyId)}`),
+      request
+    );
   }
 
   /**
    * Decrypt ciphertext
    *
+   * Calls the served route POST /v1/kms/decrypt/{name}; the key name is the
+   * path segment and the request body is sent unchanged.
+   *
    * @param request - Decryption request
    * @returns Plaintext
    */
   async decrypt(request: DecryptRequest): Promise<ApiResponse<DecryptResponse>> {
-    return this.client.post<DecryptResponse>(this.buildUrl('/decrypt'), request);
+    return this.client.post<DecryptResponse>(
+      this.buildUrl(`/decrypt/${this.encodePathSegment(request.keyId)}`),
+      request
+    );
   }
 
   /**
@@ -268,21 +303,113 @@ export class KMSService extends BaseService {
   /**
    * Compute HMAC
    *
+   * Reaches the served route POST /api/v1/kms/hmac/{name}: the key name is
+   * the path segment, and the REST body is `{ data, hash }` (data is the
+   * base64 message; hash is sent only when hashAlgorithm is given).
+   *
    * @param request - HMAC request
    * @returns HMAC value
    */
   async hmac(request: HMACRequest): Promise<ApiResponse<HMACResponse>> {
-    return this.client.post<HMACResponse>(this.buildUrl('/hmac'), request);
+    const body: { data: string; hash?: string } = { data: request.message };
+    if (request.hashAlgorithm !== undefined) {
+      body.hash = request.hashAlgorithm;
+    }
+    return this.client.post<HMACResponse>(
+      this.buildUrl(`/hmac/${this.encodePathSegment(request.keyId)}`),
+      body
+    );
   }
 
   /**
    * Verify HMAC
    *
+   * Reaches the served route POST /api/v1/kms/hmac/{name}/verify: the key
+   * name is the path segment, and the REST body is `{ data, hmac, hash }`
+   * (data and hmac base64; hash only when hashAlgorithm is given).
+   * keyVersion is not sent: the served request has no version field.
+   *
    * @param request - HMAC verification request
    * @returns Verification result
    */
   async verifyHMAC(request: VerifyHMACRequest): Promise<ApiResponse<VerifyHMACResponse>> {
-    return this.client.post<VerifyHMACResponse>(this.buildUrl('/hmac/verify'), request);
+    const body: { data: string; hmac: string; hash?: string } = {
+      data: request.message,
+      hmac: request.hmac,
+    };
+    if (request.hashAlgorithm !== undefined) {
+      body.hash = request.hashAlgorithm;
+    }
+    return this.client.post<VerifyHMACResponse>(
+      this.buildUrl(`/hmac/${this.encodePathSegment(request.keyId)}/verify`),
+      body
+    );
+  }
+
+  /**
+   * Rewrap a ciphertext under the key's current version
+   *
+   * Reaches the served route POST /api/v1/kms/rewrap: the REST body is
+   * `{ source_key_id, ciphertext, source_context?, source_nonce? }` (base64
+   * strings; the key id goes in the body, not the path). The server
+   * re-encrypts under the key's current version and refuses a destination
+   * key other than the source, a dest_context and a pinned
+   * source_key_version, so the SDK does not send them.
+   *
+   * @param request - Rewrap request
+   * @returns The new key version, ciphertext and nonce
+   */
+  async rewrap(request: RewrapRequest): Promise<ApiResponse<RewrapResponse>> {
+    const body: {
+      source_key_id: string;
+      ciphertext: string;
+      source_context?: string;
+      source_nonce?: string;
+    } = {
+      source_key_id: request.sourceKeyId,
+      ciphertext: request.ciphertext,
+    };
+    if (request.sourceContext !== undefined) {
+      body.source_context = request.sourceContext;
+    }
+    if (request.sourceNonce !== undefined) {
+      body.source_nonce = request.sourceNonce;
+    }
+    return this.client.post<RewrapResponse>(this.buildUrl('/rewrap'), body);
+  }
+
+  /**
+   * Encrypt several plaintexts under one key
+   * (POST /api/v1/kms/batch-encrypt). Items carry no context: the server
+   * refuses one, because the crypto service does not bind a batch context.
+   */
+  async batchEncrypt(request: BatchEncryptRequest): Promise<ApiResponse<BatchResponse>> {
+    const body = {
+      key_id: request.keyId,
+      items: request.items.map((item) => ({ item_id: item.itemId, plaintext: item.plaintext })),
+    };
+    return this.client.post<BatchResponse>(this.buildUrl('/batch-encrypt'), body);
+  }
+
+  /**
+   * Decrypt several ciphertexts of one key
+   * (POST /api/v1/kms/batch-decrypt). The nonce is sent only when given.
+   */
+  async batchDecrypt(request: BatchDecryptRequest): Promise<ApiResponse<BatchResponse>> {
+    const body = {
+      key_id: request.keyId,
+      items: request.items.map((item) => {
+        const out: { item_id: string; ciphertext: string; nonce?: string } = {
+          item_id: item.itemId,
+          ciphertext: item.ciphertext,
+        };
+        if (item.nonce !== undefined) {
+          out.nonce = item.nonce;
+        }
+        return out;
+      }),
+    };
+    return this.client.post<BatchResponse>(this.buildUrl('/batch-decrypt'), body);
   }
 
   // =========================================================================
@@ -302,21 +429,78 @@ export class KMSService extends BaseService {
   /**
    * Generate a data key (plaintext + encrypted)
    *
+   * Calls the served route POST /v1/kms/data-keys.
+   *
    * @param request - Data key generation request
    * @returns Plaintext and encrypted data key
    */
   async generateDataKey(request: GenerateDataKeyRequest): Promise<ApiResponse<GenerateDataKeyResponse>> {
-    return this.client.post<GenerateDataKeyResponse>(this.buildUrl('/datakey'), request);
+    const body: { key_id: string; algorithm?: string; key_size?: number; context?: string } = {
+      key_id: request.keyId,
+    };
+    if (request.algorithm !== undefined) {
+      body.algorithm = request.algorithm;
+    }
+    if (request.keySize !== undefined) {
+      body.key_size = request.keySize;
+    }
+    if (request.context !== undefined) {
+      body.context = request.context;
+    }
+    const res = await this.client.post<{ key_id?: string; plaintext_key?: string; encrypted_key?: string }>(
+      this.buildUrl('/data-keys'),
+      body
+    );
+    if (!res.success || !res.data) {
+      return res as unknown as ApiResponse<GenerateDataKeyResponse>;
+    }
+    return {
+      ...res,
+      data: {
+        keyId: res.data.key_id,
+        plaintextKey: res.data.plaintext_key,
+        encryptedKey: res.data.encrypted_key,
+      },
+    } as unknown as ApiResponse<GenerateDataKeyResponse>;
   }
 
   /**
    * Generate a wrapped data key (encrypted only)
    *
+   * Calls the served route POST /v1/kms/data-keys/wrapped.
+   *
    * @param request - Wrapped data key generation request
    * @returns Wrapped data key
    */
   async generateWrappedDataKey(request: GenerateWrappedDataKeyRequest): Promise<ApiResponse<GenerateWrappedDataKeyResponse>> {
-    return this.client.post<GenerateWrappedDataKeyResponse>(this.buildUrl('/datakey/wrapped'), request);
+    // The server's request has no wrapping algorithm, so wrappingAlgorithm is
+    // not sent.
+    const body: { wrapping_key_id: string; key_algorithm?: string; key_size?: number; context?: string } = {
+      wrapping_key_id: request.wrappingKeyId,
+    };
+    if (request.keyAlgorithm !== undefined) {
+      body.key_algorithm = request.keyAlgorithm;
+    }
+    if (request.keySize !== undefined) {
+      body.key_size = request.keySize;
+    }
+    if (request.context !== undefined) {
+      body.context = request.context;
+    }
+    const res = await this.client.post<{ wrapping_key_id?: string; wrapped_key?: string }>(
+      this.buildUrl('/data-keys/wrapped'),
+      body
+    );
+    if (!res.success || !res.data) {
+      return res as unknown as ApiResponse<GenerateWrappedDataKeyResponse>;
+    }
+    return {
+      ...res,
+      data: {
+        wrappingKeyId: res.data.wrapping_key_id,
+        wrappedKey: res.data.wrapped_key,
+      },
+    } as unknown as ApiResponse<GenerateWrappedDataKeyResponse>;
   }
 
   // =========================================================================

@@ -14,6 +14,7 @@
 import { useMemo, useState } from 'react';
 import { Loader2, Plus, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Gated } from '@/components/features/capabilities/gated';
 import {
   Dialog,
   DialogContent,
@@ -26,9 +27,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { DNSZoneTable } from '@/components/features/networking/dns-zone-table';
 import { useDNS, useApi, useToast } from '@/hooks';
+import { DNSLookupCard } from '@/components/features/networking/dns-lookup-card';
 import type { DNSZone } from '@/types/infrastructure';
 import { readZone } from '@/lib/dns-wire';
-import { Gated } from '@/components/features/capabilities/gated';
 import { useCapabilities } from '@/hooks/use-capabilities';
 
 export default function DNSZonesPage() {
@@ -207,6 +208,7 @@ export default function DNSZonesPage() {
       ) : (
         <DNSZoneTable zones={zones} onRefresh={() => fetchZones()} />
       )}
+      <DNSLookupCard onRegistered={() => fetchZones()} />
     </div>
   );
 }

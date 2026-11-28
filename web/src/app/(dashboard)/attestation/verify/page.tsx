@@ -9,6 +9,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Gated } from "@/components/features/capabilities/gated";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
@@ -21,12 +22,14 @@ import {
   XCircle,
   Clock,
   Cpu,
+  Play,
   AlertTriangle,
   Loader2,
 } from "lucide-react";
 import { useApi, useAttestation, useToast } from "@/hooks";
 import { ManifestVerifyButton } from "@/components/features/attestation/manifest-verify-button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import type { VerifyManifestResponse } from "trusted-platform-sdk";
 
 /**
  * Verification represents an attestation verification operation
@@ -39,7 +42,7 @@ interface Verification {
   quoteId: string;
   manifestId: string;
   manifestName: string;
-  status: "passed" | "failed" | "warning" | "in_progress";
+  status: "passed" | "failed" | "warning" | "in_progress" | "unverified";
   verifiedAt: string;
   pcrMismatches: number;
   errors: string[];
@@ -57,6 +60,7 @@ const statusConfig: Record<
   failed: { label: "Failed", variant: "destructive", icon: XCircle },
   warning: { label: "Warning", variant: "secondary", icon: AlertTriangle },
   in_progress: { label: "In Progress", variant: "outline", icon: Clock },
+  unverified: { label: "Not verified", variant: "outline", icon: AlertTriangle },
 };
 
 const columns: ColumnDef<Verification>[] = [
@@ -177,21 +181,67 @@ export default function VerifyPage() {
     }
   );
 
-  // Transform manifests into verification records
-  // In a real system, there would be a separate verification history endpoint
+  // Verifier verdicts from AttestationService.VerifyManifest, by manifest id.
+  const [results, setResults] = React.useState<
+    Record<string, VerifyManifestResponse>
+  >({});
+  const [running, setRunning] = React.useState(false);
+
+  const runVerification = React.useCallback(async () => {
+    const manifests = manifestsData?.manifests ?? [];
+    setRunning(true);
+    try {
+      const responses = await Promise.all(
+        manifests.map((manifest) => attestation.verifyManifest({ manifest }))
+      );
+      const next: Record<string, VerifyManifestResponse> = {};
+      responses.forEach((res, i) => {
+        if (res.success && res.data) {
+          next[manifests[i].id] = res.data;
+        } else {
+          toast({
+            title: "Verification failed",
+            description: res.error?.message,
+            variant: "destructive",
+          });
+        }
+      });
+      setResults((prev) => ({ ...prev, ...next }));
+    } finally {
+      setRunning(false);
+    }
+  }, [attestation, manifestsData, toast]);
+
+  // Transform manifests into verification records. A manifest's signature
+  // and merkle root are evidence, not a verdict: the status comes only from
+  // the verifier's result, and a manifest with none is "unverified".
   const verifications = React.useMemo<Verification[]>(() => {
     if (!manifestsData?.manifests) return [];
 
     return manifestsData.manifests.map((manifest) => {
-      // Determine verification status based on signature validity
-      let status: "passed" | "failed" | "warning" | "in_progress" = "passed";
+      let status: Verification["status"];
       const pcrMismatches = 0;
       const errors: string[] = [];
 
-      if (!manifest.signature) {
-        status = "in_progress";
-      } else if (manifest.signature && manifest.merkleRoot) {
-        status = "passed";
+      // The server emits the proto enum names (MANIFEST_VERIFICATION_STATUS_*);
+      // map those and the short names alike.
+      switch (
+        String(results[manifest.id]?.result?.status ?? "").replace(
+          /^MANIFEST_VERIFICATION_STATUS_/,
+          "",
+        )
+      ) {
+        case "VERIFIED":
+          status = "passed";
+          break;
+        case "FAILED":
+          status = "failed";
+          break;
+        case "PENDING":
+          status = "in_progress";
+          break;
+        default:
+          status = "unverified";
       }
 
       return {
@@ -207,7 +257,7 @@ export default function VerifyPage() {
         errors,
       };
     });
-  }, [manifestsData]);
+  }, [manifestsData, results]);
 
   const stats = React.useMemo(() => {
     return {
@@ -278,6 +328,15 @@ export default function VerifyPage() {
             />
             Refresh
           </Button>
+          <Gated op="POST /api/v1/attestation/manifests/verify">
+            <Button
+              onClick={runVerification}
+              disabled={running || !manifestsData?.manifests?.length}
+            >
+              <Play className="mr-2 h-4 w-4" />
+              Run Verification
+            </Button>
+          </Gated>
         </div>
       </div>
 
@@ -384,6 +443,7 @@ export default function VerifyPage() {
                   { label: "Failed", value: "failed" },
                   { label: "Warning", value: "warning" },
                   { label: "In Progress", value: "in_progress" },
+                  { label: "Not verified", value: "unverified" },
                 ],
               },
             ]}

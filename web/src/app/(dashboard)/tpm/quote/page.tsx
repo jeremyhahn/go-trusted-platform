@@ -51,10 +51,12 @@ import {
   AlertCircle,
   Copy,
   ShieldCheck,
+  KeyRound,
 } from "lucide-react";
 import { useTPM, useToast } from "@/hooks";
+import { Gated } from "@/components/features/capabilities/gated";
 import { checkQuoteBinding } from "trusted-platform-sdk";
-import type { QuoteResponse, VerifyQuoteResponse } from "trusted-platform-sdk";
+import type { GetAKResponse, QuoteResponse, VerifyQuoteResponse } from "trusted-platform-sdk";
 import { errorMessage } from "@/utils/errors";
 
 // Attestation key handle the quote and verify flows use (TCG persistent range).
@@ -134,6 +136,61 @@ export default function TPMQuotePage() {
   const [verifying, setVerifying] = React.useState(false);
   const [verifyResult, setVerifyResult] = React.useState<VerifyQuoteResponse | null>(null);
   const [verifyError, setVerifyError] = React.useState<string | null>(null);
+
+  // Attestation key card state
+  const [ak, setAK] = React.useState<GetAKResponse | null>(null);
+  const [akMissing, setAKMissing] = React.useState(false);
+  const [akError, setAKError] = React.useState<string | null>(null);
+  const [akLoading, setAKLoading] = React.useState(true);
+  const [creatingAK, setCreatingAK] = React.useState(false);
+
+  // GetAK answers 404 when the TPM has no AK; that is the "create one" state,
+  // not an error. Any other refusal is shown with the server's message.
+  const readAK = React.useCallback(async () => {
+    setAKLoading(true);
+    setAKError(null);
+    try {
+      const resp = await tpm.getAK();
+      if (resp.error !== undefined) {
+        setAK(null);
+        setAKMissing(resp.error.status === 404);
+        if (resp.error.status !== 404) throw new Error(resp.error.message);
+        return;
+      }
+      setAKMissing(false);
+      setAK(resp.data ?? null);
+    } catch (e) {
+      setAKError(errorMessage(e, "Reading the attestation key failed"));
+    } finally {
+      setAKLoading(false);
+    }
+  }, [tpm]);
+
+  React.useEffect(() => {
+    void readAK();
+  }, [readAK]);
+
+  const handleCreateAK = async () => {
+    setCreatingAK(true);
+    try {
+      const resp = await tpm.createAK();
+      if (resp.error !== undefined) throw new Error(resp.error.message);
+      toast({
+        title: "AK created",
+        description: resp.data?.status?.message ?? "",
+        variant: "success",
+      });
+      await readAK();
+    } catch (e) {
+      toast({
+        title: "Create AK failed",
+        description: errorMessage(e, "Unknown error"),
+        variant: "destructive",
+      });
+    } finally {
+      setCreatingAK(false);
+    }
+  };
 
   const togglePCR = (pcr: number) => {
     setSelectedPCRs((prev) =>
@@ -251,6 +308,61 @@ export default function TPMQuotePage() {
         </p>
       </div>
 
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <KeyRound className="h-5 w-5" />
+            Attestation Key
+          </CardTitle>
+          <CardDescription>The key quotes are signed with</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {akLoading && !ak && !akMissing && !akError && (
+            <p className="text-sm text-muted-foreground">Reading the attestation key…</p>
+          )}
+
+          {ak && (
+            <div className="space-y-2">
+              <div className="text-sm">
+                <span className="text-muted-foreground">Handle </span>
+                <code data-testid="ak-handle">{`0x${ak.handle.toString(16).padStart(8, "0")}`}</code>
+              </div>
+              <div className="text-sm">
+                <span className="text-muted-foreground">Algorithm </span>
+                <code data-testid="ak-algorithm">{String(ak.algorithm)}</code>
+              </div>
+              <div className="text-sm">
+                <span className="text-muted-foreground">Public key </span>
+                <code data-testid="ak-public-key" className="font-mono text-xs break-all">
+                  {ak.publicKey}
+                </code>
+              </div>
+            </div>
+          )}
+
+          {akMissing && (
+            <>
+              <p className="text-sm text-muted-foreground">No attestation key on this TPM</p>
+              <Gated op="POST /api/v1/tpm/ak">
+                <Button onClick={handleCreateAK} disabled={creatingAK}>
+                  <KeyRound className="mr-2 h-4 w-4" />
+                  {creatingAK ? "Creating AK…" : "Create AK"}
+                </Button>
+              </Gated>
+            </>
+          )}
+
+          {akError && (
+            <div className="flex items-center gap-2 p-3 bg-destructive/10 border border-destructive rounded">
+              <AlertCircle className="h-4 w-4 text-destructive" />
+              <p className="text-sm text-destructive" data-testid="ak-error">
+                {akError}
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
@@ -313,18 +425,20 @@ export default function TPMQuotePage() {
               </div>
             </div>
 
-            <Button
-              onClick={handleQuote}
-              disabled={quoting || selectedPCRs.length === 0}
-              className="w-full"
-            >
-              {quoting ? (
-                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Shield className="mr-2 h-4 w-4" />
-              )}
-              {quoting ? "Generating quote…" : "Generate Quote"}
-            </Button>
+            <Gated op="POST /api/v1/tpm/quote">
+              <Button
+                onClick={handleQuote}
+                disabled={quoting || selectedPCRs.length === 0}
+                className="w-full"
+              >
+                {quoting ? (
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Shield className="mr-2 h-4 w-4" />
+                )}
+                {quoting ? "Generating quote…" : "Generate Quote"}
+              </Button>
+            </Gated>
 
             {quoteError && (
               <div className="flex items-center gap-2 p-3 bg-destructive/10 border border-destructive rounded">
@@ -446,19 +560,21 @@ export default function TPMQuotePage() {
               />
             </div>
 
-            <Button
-              onClick={handleVerify}
-              disabled={verifying || !verifyQuote || !verifySignature}
-              className="w-full"
-              variant="outline"
-            >
-              {verifying ? (
-                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <ShieldCheck className="mr-2 h-4 w-4" />
-              )}
-              {verifying ? "Verifying…" : "Verify Quote"}
-            </Button>
+            <Gated op="POST /api/v1/tpm/quote/verify">
+              <Button
+                onClick={handleVerify}
+                disabled={verifying || !verifyQuote || !verifySignature}
+                className="w-full"
+                variant="outline"
+              >
+                {verifying ? (
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <ShieldCheck className="mr-2 h-4 w-4" />
+                )}
+                {verifying ? "Verifying…" : "Verify Quote"}
+              </Button>
+            </Gated>
 
             {verifyError && (
               <div className="flex items-center gap-2 p-3 bg-destructive/10 border border-destructive rounded">

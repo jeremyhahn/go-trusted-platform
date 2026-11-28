@@ -40,10 +40,10 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { SDNTopology } from '@/components/features/networking/sdn-topology';
+import { Gated } from '@/components/features/capabilities/gated';
 import { useSDN, useApi, useToast } from '@/hooks';
 import type { FlowRule } from '@/types/infrastructure';
 import type { BridgeType } from 'trusted-platform-sdk';
-import { Gated } from '@/components/features/capabilities/gated';
 import {
   bridgeKindLabels,
   flowActionKind,
@@ -53,6 +53,10 @@ import {
   type SDNBridgeRow,
 } from '@/lib/sdn-wire';
 
+// The routes the bridge actions call (routes.golden), each a capability gate.
+const GET_BRIDGE = 'GET /api/v1/sdn/bridges/{name}';
+const DELETE_BRIDGE = 'DELETE /api/v1/sdn/bridges/{name}';
+
 export default function SDNPage() {
   const { toast } = useToast();
   const sdn = useSDN();
@@ -60,6 +64,14 @@ export default function SDNPage() {
   const [createName, setCreateName] = useState('');
   const [createType, setCreateType] = useState<BridgeType>('BRIDGE_TYPE_OVS');
   const [createSubmitting, setCreateSubmitting] = useState(false);
+  // Details reads one bridge (GetBridge); the dialog shows it or the refusal.
+  const [detailName, setDetailName] = useState<string | null>(null);
+  const [detail, setDetail] = useState<SDNBridgeRow | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  // Delete asks first, then calls DeleteBridge and lists again.
+  const [deleteName, setDeleteName] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   // Fetch bridges using SDK
   const {
@@ -101,6 +113,52 @@ export default function SDNPage() {
 
   const fetchData = () => {
     refetchBridges();
+  };
+
+  const openDetails = async (name: string) => {
+    setDetailName(name);
+    setDetail(null);
+    setDetailError(null);
+    try {
+      const res = await sdn.getBridge(name);
+      if (res?.error) {
+        setDetailError(res.error.message);
+        return;
+      }
+      const bridge = res?.data?.bridge;
+      if (!bridge) {
+        setDetailError(`bridge ${name} not returned`);
+        return;
+      }
+      setDetail(readBridge(bridge));
+    } catch (err) {
+      setDetailError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const openDelete = (name: string) => {
+    setDeleteName(name);
+    setDeleteError(null);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteName) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await sdn.deleteBridge(deleteName);
+      if (res?.error) {
+        setDeleteError(res.error.message);
+        return;
+      }
+      toast({ title: `Bridge ${deleteName} deleted`, variant: 'success' });
+      setDeleteName(null);
+      refetchBridges();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeleting(false);
+    }
   };
 
   // One row per bridge of the ListBridgesResponse (protojson, #445).
@@ -251,6 +309,65 @@ export default function SDNPage() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={detailName !== null} onOpenChange={(open) => !open && setDetailName(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Bridge {detailName}</DialogTitle>
+            <DialogDescription>The bridge as the SDN service reports it.</DialogDescription>
+          </DialogHeader>
+          {detailError ? (
+            <p data-testid="sdn-bridge-detail-error" className="text-sm text-destructive">
+              {detailError}
+            </p>
+          ) : detail ? (
+            <dl data-testid="sdn-bridge-detail" className="grid grid-cols-2 gap-2 text-sm">
+              <dt className="text-muted-foreground">Name</dt>
+              <dd className="font-medium">{detail.name}</dd>
+              <dt className="text-muted-foreground">ID</dt>
+              <dd className="font-mono">{detail.id}</dd>
+              <dt className="text-muted-foreground">Type</dt>
+              <dd>{bridgeKindLabels[detail.kind]}</dd>
+              <dt className="text-muted-foreground">Status</dt>
+              <dd>{detail.status}</dd>
+              <dt className="text-muted-foreground">Created</dt>
+              <dd>{detail.createdAt || '-'}</dd>
+            </dl>
+          ) : (
+            <div className="flex justify-center py-4">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDetailName(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteName !== null} onOpenChange={(open) => !open && setDeleteName(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete bridge {deleteName}?</DialogTitle>
+            <DialogDescription>
+              The bridge and its configuration are removed from the SDN service.
+            </DialogDescription>
+          </DialogHeader>
+          {deleteError && (
+            <p data-testid="sdn-bridge-delete-error" className="text-sm text-destructive">
+              {deleteError}
+            </p>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteName(null)}>Cancel</Button>
+            <Gated op={DELETE_BRIDGE}>
+              <Button variant="destructive" disabled={deleting} onClick={confirmDelete}>
+                {deleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Delete
+              </Button>
+            </Gated>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <div className="grid gap-4 md:grid-cols-4">
         <div className="rounded-lg border border-border bg-card p-6">
           <div className="text-sm font-medium text-muted-foreground">Networks</div>
@@ -291,13 +408,14 @@ export default function SDNPage() {
                   <TableHead>Name</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {networks.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={3}
+                      colSpan={4}
                       className="text-center text-muted-foreground"
                     >
                       No networks found
@@ -323,6 +441,32 @@ export default function SDNPage() {
                         >
                           {network.status}
                         </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          <Gated op={GET_BRIDGE}>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              aria-label={`Details ${network.name}`}
+                              onClick={() => openDetails(network.name)}
+                            >
+                              Details
+                            </Button>
+                          </Gated>
+                          <Gated op={DELETE_BRIDGE}>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              aria-label={`Delete ${network.name}`}
+                              onClick={() => openDelete(network.name)}
+                            >
+                              Delete
+                            </Button>
+                          </Gated>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))
