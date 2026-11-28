@@ -1189,6 +1189,11 @@ func (v1Router *Router) iamRoutes() {
 		v1Router.logger.Error(err, "IAM routes not registered")
 		return
 	}
+	// The console builds its own IAM router, so it needs the daemon's
+	// token verifier too; without one the verify route answers 503.
+	if v := v1Router.restHandlerRegistry.IAMTokenVerifier(); v != nil {
+		iamRouter.SetTokenVerifier(v)
+	}
 	iamRouter.RegisterRoutes(v1Router.router)
 }
 

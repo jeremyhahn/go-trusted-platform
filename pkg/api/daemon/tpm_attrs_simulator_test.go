@@ -33,6 +33,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -366,4 +367,22 @@ func TestTPMSimulator_ActivateCredentialZeroKeySessionPanicsUnderFIPSOnly(t *tes
 	}
 	assert.Contains(t, fmt.Sprint(recovered), "shorter than 112 bits",
 		"the panic is crypto/hmac refusing the zero-length session key")
+}
+
+// TestTPMSimulator_IAKCSRRefusesMissingIDevIDConfig pins the daemon-side
+// guard: with no IDevID configuration the TPM library's TCG CSR builder
+// dereferences it, so CreateIAKCSR must refuse before calling the library.
+func TestTPMSimulator_IAKCSRRefusesMissingIDevIDConfig(t *testing.T) {
+	tpm := newSimulatedTPM(t)
+	svc := NewIDevIDGRPCService(logging.DefaultLogger())
+	svc.SetTPM2Service(tpm)
+
+	var err error
+	require.NotPanics(t, func() {
+		_, err = svc.CreateIAKCSR(context.Background(), &platformv1.CreateIAKCSRRequest{})
+	})
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.FailedPrecondition, st.Code())
 }

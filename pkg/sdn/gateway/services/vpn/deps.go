@@ -79,6 +79,15 @@ type PeerReconciler interface {
 	ReconcilePeers(ctx context.Context, keep []LeaseID) error
 }
 
+// PeerDeadlineExtender is a data plane whose host enforces lease deadlines
+// itself: it removes a peer once its lease's ExpiresAt passes, without the
+// admission service. Renew moves the deadline through it, without
+// reinstalling the peer. The host's deadline never moves backward, and a
+// failed extension is owed to Sweep (and to the client's next renewal).
+type PeerDeadlineExtender interface {
+	ExtendPeer(ctx context.Context, lease *Lease) error
+}
+
 // LeaseStore persists leases. The in-memory store is the gateway's
 // projection; the daemon may back it with the control plane.
 type LeaseStore interface {
@@ -102,6 +111,17 @@ type LeaseStore interface {
 type PendingDeleteStore interface {
 	LeaseStore
 	RetryPendingDeletes(ctx context.Context) error
+}
+
+// RecordedLeaseStore is a LeaseStore whose reads are served from a projection
+// of an authoritative record (the control plane). GetRecorded reads the lease
+// from the record itself and brings the projection in line with it. It
+// returns ErrLeaseNotFound when the record does not hold the lease and
+// ErrLeaseStoreUnavailable when the record cannot be read. The service uses
+// it where the projection may lag a write whose answer was lost.
+type RecordedLeaseStore interface {
+	LeaseStore
+	GetRecorded(ctx context.Context, id LeaseID) (*Lease, error)
 }
 
 // Clock is the time source; tests inject one.

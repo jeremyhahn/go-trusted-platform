@@ -60,18 +60,22 @@ type DesiredVPN struct {
 // it. It holds no secret: the WireGuard public key and the SHA-256
 // fingerprint of the admitting client certificate are public material.
 type DesiredVPNLease struct {
-	ID                      string            `json:"id" yaml:"id" mapstructure:"id"`
-	TenantID                string            `json:"tenant_id" yaml:"tenant-id" mapstructure:"tenant-id"`
-	DeviceID                string            `json:"device_id" yaml:"device-id" mapstructure:"device-id"`
-	Address                 string            `json:"address" yaml:"address" mapstructure:"address"`
-	Zones                   []string          `json:"zones,omitempty" yaml:"zones,omitempty" mapstructure:"zones"`
-	DataPlane               string            `json:"data_plane" yaml:"data-plane" mapstructure:"data-plane"`
-	WireGuardPublicKey      []byte            `json:"wireguard_public_key,omitempty" yaml:"wireguard-public-key,omitempty" mapstructure:"wireguard-public-key"`
-	ClientCertificateSHA256 []byte            `json:"client_certificate_sha256,omitempty" yaml:"client-certificate-sha256,omitempty" mapstructure:"client-certificate-sha256"`
-	IssuedAt                time.Time         `json:"issued_at" yaml:"issued-at" mapstructure:"issued-at"`
-	ExpiresAt               time.Time         `json:"expires_at" yaml:"expires-at" mapstructure:"expires-at"`
-	Renewals                int               `json:"renewals,omitempty" yaml:"renewals,omitempty" mapstructure:"renewals"`
-	Verdict                 DesiredVPNVerdict `json:"verdict" yaml:"verdict" mapstructure:"verdict"`
+	ID                      string    `json:"id" yaml:"id" mapstructure:"id"`
+	TenantID                string    `json:"tenant_id" yaml:"tenant-id" mapstructure:"tenant-id"`
+	DeviceID                string    `json:"device_id" yaml:"device-id" mapstructure:"device-id"`
+	Address                 string    `json:"address" yaml:"address" mapstructure:"address"`
+	Zones                   []string  `json:"zones,omitempty" yaml:"zones,omitempty" mapstructure:"zones"`
+	DataPlane               string    `json:"data_plane" yaml:"data-plane" mapstructure:"data-plane"`
+	WireGuardPublicKey      []byte    `json:"wireguard_public_key,omitempty" yaml:"wireguard-public-key,omitempty" mapstructure:"wireguard-public-key"`
+	ClientCertificateSHA256 []byte    `json:"client_certificate_sha256,omitempty" yaml:"client-certificate-sha256,omitempty" mapstructure:"client-certificate-sha256"`
+	IssuedAt                time.Time `json:"issued_at" yaml:"issued-at" mapstructure:"issued-at"`
+	ExpiresAt               time.Time `json:"expires_at" yaml:"expires-at" mapstructure:"expires-at"`
+	// ClientExpiresAt is the deadline the client last received while the
+	// host still owes an extension to ExpiresAt; Restore rebuilds the renew
+	// bypass from it. Zero when nothing is owed.
+	ClientExpiresAt time.Time         `json:"client_expires_at,omitzero" yaml:"client-expires-at,omitempty" mapstructure:"client-expires-at"`
+	Renewals        int               `json:"renewals,omitempty" yaml:"renewals,omitempty" mapstructure:"renewals"`
+	Verdict         DesiredVPNVerdict `json:"verdict" yaml:"verdict" mapstructure:"verdict"`
 }
 
 // DesiredVPNVerdict is the outcome of the attestation a lease was admitted or

@@ -143,6 +143,10 @@ func (s *scriptedSDNServer) ListVLANs(_ context.Context, req *platformv1.ListVLA
 	return answer[*platformv1.ListVLANsResponse](s, req)
 }
 
+func (s *scriptedSDNServer) DeleteVLAN(_ context.Context, req *platformv1.DeleteVLANRequest) (*platformv1.DeleteVLANResponse, error) {
+	return answer[*platformv1.DeleteVLANResponse](s, req)
+}
+
 func newTestLogger() *logging.Logger {
 	return logging.NewLogger(slog.LevelError, io.Discard)
 }
@@ -507,6 +511,35 @@ var everyRoute = []struct{ method, target string }{
 	{http.MethodGet, "/api/v1/sdn/vlans"},
 	{http.MethodPost, "/api/v1/sdn/bridges/br0/vlans"},
 	{http.MethodGet, "/api/v1/sdn/bridges/br0/vlans"},
+	{http.MethodDelete, "/api/v1/sdn/vlans/20?bridge_id=br0"},
+	{http.MethodDelete, "/api/v1/sdn/policies/p1"},
+}
+
+// TestDeleteVLAN_BadVLANIDIsBadRequest: a vlan_id that is not a number in
+// 1-4095 is a 400 and never reaches the service.
+func TestDeleteVLAN_BadVLANIDIsBadRequest(t *testing.T) {
+	for _, id := range []string{"0", "4096", "twenty", "-1", "4294967296"} {
+		t.Run(id, func(t *testing.T) {
+			server := &scriptedSDNServer{}
+			rec := serve(server, http.MethodDelete, "/api/v1/sdn/vlans/"+id+"?bridge_id=br0", "")
+			assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+			assert.Nil(t, server.got, "a bad vlan_id reached the service")
+		})
+	}
+}
+
+// TestDeleteRoutes_DecodeThePathAndQuery: the VLAN delete takes its bridge
+// from the query and its VLAN from the path; the policy delete takes its id
+// from the path.
+func TestDeleteRoutes_DecodeThePathAndQuery(t *testing.T) {
+	server := &scriptedSDNServer{}
+	rec := serve(server, http.MethodDelete, "/api/v1/sdn/vlans/4095?bridge_id=br0", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.True(t, proto.Equal(&platformv1.DeleteVLANRequest{BridgeId: "br0", VlanId: 4095}, server.got), "got %v", server.got)
+
+	rec = serve(server, http.MethodDelete, "/api/v1/sdn/policies/p1", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.True(t, proto.Equal(&platformv1.DeletePolicyRequest{PolicyId: "p1"}, server.got), "got %v", server.got)
 }
 
 // TestNoServerIsServiceUnavailable: every route answers 503 when the SDN

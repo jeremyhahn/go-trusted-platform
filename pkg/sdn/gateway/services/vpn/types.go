@@ -167,6 +167,11 @@ type Lease struct {
 	ExpiresAt time.Time      `json:"expires_at"`
 	Renewals  int            `json:"renewals"`
 	Verdict   VerdictSummary `json:"verdict"`
+	// ClientExpiresAt is the deadline the client last received, kept only
+	// while a later stored deadline was refused to it (a failed
+	// ExtendPeer); zero otherwise. Restore rebuilds the client's renew
+	// bypass from it (see Service.renewBypass).
+	ClientExpiresAt time.Time `json:"client_expires_at,omitzero"`
 }
 
 // Expired reports whether the lease is past its expiry at now.

@@ -211,6 +211,22 @@ func TestEABGRPCService_CreateCredential_Errors(t *testing.T) {
 	}
 }
 
+// TestEABGRPCService_CreateCredential_NoExpiry pins the documented contract
+// (docs/eab/api.md §3): a request with only profile_id and tenant_id issues
+// a non-expiring credential.
+func TestEABGRPCService_CreateCredential_NoExpiry(t *testing.T) {
+	service, svc, _ := newEABGRPCFixture()
+	if _, err := service.CreateCredential(context.Background(), &platformv1.CreateEABCredentialRequest{
+		ProfileId: 1,
+		TenantId:  "t",
+	}); err != nil {
+		t.Fatalf("omitted expiry: unexpected error %v", err)
+	}
+	if svc.lastGenerate.ProfileID != 1 || svc.lastGenerate.ExpiresIn != 0 {
+		t.Errorf("omitted expiry: expected Generate with ProfileID=1 ExpiresIn=0, got %+v", svc.lastGenerate)
+	}
+}
+
 func TestEABGRPCService_GetCredential(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
 	ctx := context.Background()

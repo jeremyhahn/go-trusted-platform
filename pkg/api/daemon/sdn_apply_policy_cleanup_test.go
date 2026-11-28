@@ -20,6 +20,7 @@ package daemon
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
@@ -219,4 +220,78 @@ func TestSDNService_ApplyPolicy_UnparseableMatchIsInvalidArgument(t *testing.T) 
 	assert.Equal(t, 0, fake.addCalls)
 	assert.Empty(t, fake.matches(t, "br0"))
 	assert.Empty(t, svc.policies)
+}
+
+// cookieStrictOVS is a switch whose strict delete removes a flow only under
+// the cookie it names, as the OVS client's DeleteFlowStrict does; adds from
+// failFrom on fail and every delete fails while failDelete is set.
+type cookieStrictOVS struct {
+	*replacingOVS
+
+	adds       int
+	failFrom   int
+	failDelete bool
+	deletes    []string
+}
+
+func (f *cookieStrictOVS) AddFlow(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error {
+	f.adds++
+	if f.failFrom > 0 && f.adds >= f.failFrom {
+		return errInjectedOVS
+	}
+	return f.replacingOVS.AddFlow(ctx, bridgeName, flow)
+}
+
+func (f *cookieStrictOVS) DeleteFlowStrict(_ context.Context, bridgeName string, flow *ovs.FlowMod) error {
+	f.deletes = append(f.deletes, flow.Match+"|"+flow.Cookie)
+	if f.failDelete {
+		return errInjectedOVS
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.flows[bridgeName] = f.removeLocked(bridgeName, func(fl *ovs.Flow) bool {
+		return fl.Table == flow.Table && fl.Priority == flow.Priority && fl.Match == flow.Match && fl.Cookie == flow.Cookie
+	})
+	return nil
+}
+
+// Reordering [A,B] to [B,A] puts each rule's entry under the other rule's
+// cookie. When the install, its rollback and the restore all fail, either
+// cookie may hold either entry, so DeletePolicy must delete every pair.
+func TestDeletePolicy_RemovesEveryUncertainCookieVariantAfterAFailedReorder(t *testing.T) {
+	fake := &cookieStrictOVS{replacingOVS: &replacingOVS{MockOVSClientInterface: NewMockOVSClientInterface()}}
+	fake.AddBridgeToMock("br0", &ovs.Bridge{UUID: "uuid-br0", Name: "br0"})
+	svc, err := NewSDNService("", WithOVSClient(fake))
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	_, err = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
+	require.NoError(t, err)
+	matches := fake.matches(t, "br0")
+	require.Len(t, matches, 2)
+
+	// B's flow lands under rule 0's cookie, A's add fails, and neither
+	// the removal nor the restore of the prior rules reaches the switch.
+	cfg := twoRulePolicyConfig()
+	cfg.Rules = []*platformv1.PolicyRule{cfg.Rules[1], cfg.Rules[0]}
+	fake.failFrom = fake.adds + 2
+	fake.failDelete = true
+	_, err = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: cfg})
+	require.Equal(t, codes.Internal, status.Code(err), "err = %v", err)
+
+	fake.failFrom = 0
+	fake.failDelete = false
+	fake.deletes = nil
+	_, err = svc.DeletePolicy(ctx, &platformv1.DeletePolicyRequest{PolicyId: "p1"})
+	require.NoError(t, err)
+	for _, match := range matches {
+		for i := 0; i < 2; i++ {
+			assert.Contains(t, fake.deletes, match+"|"+cookieHex(policyFlowCookie("p1", i)))
+		}
+	}
+	assert.Empty(t, fake.matches(t, "br0"))
+}
+
+func cookieHex(c uint64) string {
+	return "0x" + strconv.FormatUint(c, 16)
 }

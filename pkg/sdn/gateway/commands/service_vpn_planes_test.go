@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,12 +45,12 @@ func wireGuardPlaneRun(t *testing.T, offered []vpn.DataPlaneKind, keyRef string,
 
 var hubAddress = netip.MustParsePrefix("100.64.0.1/24")
 
-// withHubZoneEnforced builds the hub for the test, as the later
-// destination-zone row will: until then vpnDataPlanes fails closed.
+// withHubZoneEnforced installs a destination-zone enforcement for the test
+// (#2093), so vpnDataPlanes builds the hub; the production install needs the
+// management-VPN zone in the SDN zones.
 func withHubZoneEnforced(t *testing.T) {
 	t.Helper()
-	vpnHubZoneEnforced = true
-	t.Cleanup(func() { vpnHubZoneEnforced = false })
+	withHubZoneInstall(t, installedHubZones(newVPNHubZoneEnforcement(hubZoneMatrix())))
 }
 
 // assertErased checks every byte of held is zero.
@@ -166,7 +167,7 @@ func TestHubNetworkPlane_RefusesAPeerOutsideTheHubNetwork(t *testing.T) {
 	_, _, installed := inner.state()
 	assert.Empty(t, installed, "a refused address reaches no peer")
 
-	require.NoError(t, plane.InstallPeer(ctx, &vpn.Lease{ID: "in-pool", Address: netip.PrefixFrom(hubAddress.Addr().Next(), 32)}))
+	require.NoError(t, plane.InstallPeer(ctx, &vpn.Lease{ID: "in-pool", Address: netip.PrefixFrom(hubAddress.Addr().Next(), 32), ExpiresAt: time.Now().Add(time.Hour)}))
 	_, _, installed = inner.state()
 	assert.Equal(t, []vpn.LeaseID{"in-pool"}, installed, "an in-pool address is installed")
 }
@@ -298,7 +299,6 @@ func TestBuildHostRuntime_OperatorDeclaredHubPortKept(t *testing.T) {
 // configured WireGuard hub refuses to start with ErrVPNHubZoneUnenforced and
 // builds no plane until destination-zone enforcement (#2093) lands.
 func TestVPNDataPlanes_ProductionDefaultRefusesTheHubUntilZoneEnforcement(t *testing.T) {
-	require.False(t, vpnHubZoneEnforced, "the production default must keep the hub refused until #2093")
 	cfg, hubKey := wireGuardPlaneRun(t, []vpn.DataPlaneKind{vpn.DataPlaneWireGuard}, "kms://vpn/hub0", hubAddress, &stubSecrets{})
 	require.NotNil(t, hubKey, "a valid key-ref and a secret resolver resolve a hub key")
 

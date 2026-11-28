@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -1243,44 +1244,68 @@ func (m *Manager) getFromIAM(ctx context.Context, id string) (*iam.Tenant, error
 }
 
 func (m *Manager) getFromIAMByName(ctx context.Context, name string) (*iam.Tenant, error) {
-	// Use List with a large page size to find by name
-	req := &iam.ListTenantsRequest{
-		PageSize: 100,
-	}
-
-	resp, err := m.iamTenantClient.List(ctx, req)
+	var found *iam.Tenant
+	err := m.walkIAMTenants(ctx, func(t *iam.Tenant, _ int) bool {
+		if t.Name == name {
+			found = t
+			return false
+		}
+		return true
+	})
 	if err != nil {
 		return nil, err
 	}
+	if found == nil {
+		return nil, ErrTenantNotFound{Name: name}
+	}
+	return found, nil
+}
 
-	for i := range resp.Tenants {
-		if resp.Tenants[i].Name == name {
-			return &resp.Tenants[i], nil
+// walkIAMTenants reads every IAM tenant once, sorts them by ID and calls
+// visit with each tenant and the number of tenants read. The walk stops
+// when visit returns false.
+func (m *Manager) walkIAMTenants(ctx context.Context, visit func(t *iam.Tenant, total int) bool) error {
+	// The pinned embedded SDK ignores PageToken and returns no Pagination,
+	// so the walk reads the whole list once (PageSize 0) and the total is
+	// its length, as QuicBaaSIAMAdapter.ListTenants does.
+	resp, err := m.iamTenantClient.List(ctx, &iam.ListTenantsRequest{})
+	if err != nil {
+		return err
+	}
+	all := resp.Tenants
+	sort.SliceStable(all, func(i, j int) bool { return all[i].ID < all[j].ID })
+	for i := range all {
+		if !visit(&all[i], len(all)) {
+			return nil
 		}
 	}
-
-	return nil, ErrTenantNotFound{Name: name}
+	return nil
 }
 
 func (m *Manager) listFromIAM(ctx context.Context, limit, offset int) ([]iam.Tenant, int, error) {
-	req := &iam.ListTenantsRequest{
-		PageSize: limit,
-	}
-
-	resp, err := m.iamTenantClient.List(ctx, req)
+	// IAM pages by token, so skip the first offset tenants across pages
+	// and collect up to limit.
+	var (
+		tenants []iam.Tenant
+		total   int
+		skipped int
+	)
+	err := m.walkIAMTenants(ctx, func(t *iam.Tenant, pageTotal int) bool {
+		total = pageTotal
+		if limit <= 0 {
+			return false
+		}
+		if skipped < offset {
+			skipped++
+			return true
+		}
+		tenants = append(tenants, *t)
+		return len(tenants) < limit
+	})
 	if err != nil {
 		return nil, 0, err
 	}
-
-	// Apply offset client-side since SDK uses token-based pagination
-	tenants := resp.Tenants
-	if offset > 0 && offset < len(tenants) {
-		tenants = tenants[offset:]
-	} else if offset >= len(tenants) {
-		tenants = nil
-	}
-
-	return tenants, resp.Pagination.TotalCount, nil
+	return tenants, total, nil
 }
 
 func (m *Manager) updateInIAM(ctx context.Context, entity *TenantEntity) error {
