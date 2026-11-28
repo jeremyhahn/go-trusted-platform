@@ -188,8 +188,10 @@ const (
 	// selectionPreflight is preflight's runs-on: the bigdisk pool, or
 	// CI_PREFLIGHT_RUNS_ON, on a push to main or a same-repository pull
 	// request, the only events the self-hosted runners accept; hosted on
-	// every other event and off github.com.
-	selectionPreflight = `${{ github.server_url == 'https://github.com' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON(vars.CI_PREFLIGHT_RUNS_ON || '["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}`
+	// every other event and off github.com. Since v1.63 a push to main
+	// takes the CI_MAIN_RUNNER_LABEL runner first when both main labels are
+	// set.
+	selectionPreflight = `${{ github.server_url == 'https://github.com' && github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.CI_MAIN_RUNNER_LABEL && vars.CI_MAIN_RUNNER_LABEL_DOCKER && fromJSON(format('["self-hosted","linux","x64","{0}"]', vars.CI_MAIN_RUNNER_LABEL)) || github.server_url == 'https://github.com' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON(vars.CI_PREFLIGHT_RUNS_ON || '["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}`
 )
 
 // selectionEventArms are the arms of the selection step's event case, in
