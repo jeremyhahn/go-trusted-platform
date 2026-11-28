@@ -50,6 +50,10 @@ export function TenantBarrierCard({ tenantId }: { tenantId: string }) {
     void load();
   }, [load]);
 
+  // A tenant whose isolation type has no per-tenant barrier (prefix) has
+  // nothing to show or act on; an absent isolation keeps today's card.
+  const noBarrier = !!status?.isolation && !['barrier', 'volume', 'raft'].includes(status.isolation);
+
   const run = async (action: () => Promise<ActionResult>, onSuccess?: () => void) => {
     setBusy(true);
     setError(null);
@@ -79,7 +83,10 @@ export function TenantBarrierCard({ tenantId }: { tenantId: string }) {
           <p className="text-sm text-muted-foreground">{statusCap.reason}</p>
         ) : (
           <div data-testid="tenant-barrier-status" className="flex flex-wrap gap-4 text-sm">
-            {status && (
+            {status && noBarrier && (
+              <span data-testid="tenant-barrier-not-applicable">Not applicable: {status.isolation} isolation</span>
+            )}
+            {status && !noBarrier && (
               <>
                 <span>{status.sealed ? 'Sealed' : 'Unsealed'}</span>
                 <span>{status.initialized ? 'Initialized' : 'Not initialized'}</span>
@@ -98,6 +105,7 @@ export function TenantBarrierCard({ tenantId }: { tenantId: string }) {
               data-testid="tenant-barrier-init-passphrase"
               type="password"
               autoComplete="off"
+              disabled={noBarrier}
               value={initPassphrase}
               onChange={(e) => setInitPassphrase(e.target.value)}
             />
@@ -105,7 +113,7 @@ export function TenantBarrierCard({ tenantId }: { tenantId: string }) {
           </div>
           <Gated op="POST /api/v1/tenants/{id}/barrier/init">
             <Button
-              disabled={busy || initPassphrase === ''}
+              disabled={noBarrier || busy || initPassphrase === ''}
               onClick={() => run(() => barrier.init(tenantId, initPassphrase), () => setInitPassphrase(''))}
             >
               Initialize
@@ -120,18 +128,19 @@ export function TenantBarrierCard({ tenantId }: { tenantId: string }) {
               id="tenant-barrier-unseal-key"
               type="password"
               autoComplete="off"
+              disabled={noBarrier}
               value={unsealKey}
               onChange={(e) => setUnsealKey(e.target.value)}
             />
             <p className="text-xs text-muted-foreground">The tenant barrier key, base64-encoded. The server refuses an empty key.</p>
           </div>
           <Gated op="POST /api/v1/tenants/{id}/barrier/unseal">
-            <Button disabled={busy || unsealKey.trim() === ''} onClick={() => run(() => barrier.unseal(tenantId, unsealKey), () => setUnsealKey(''))}>
+            <Button disabled={noBarrier || busy || unsealKey.trim() === ''} onClick={() => run(() => barrier.unseal(tenantId, unsealKey), () => setUnsealKey(''))}>
               Unseal
             </Button>
           </Gated>
           <Gated op="POST /api/v1/tenants/{id}/barrier/seal">
-            <Button variant="outline" disabled={busy} onClick={() => run(() => barrier.seal(tenantId))}>
+            <Button variant="outline" disabled={noBarrier || busy} onClick={() => run(() => barrier.seal(tenantId))}>
               Seal
             </Button>
           </Gated>

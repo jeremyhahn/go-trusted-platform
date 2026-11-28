@@ -20,6 +20,8 @@ export interface TenantBarrierStatus {
   initialized?: boolean;
   strategy?: string;
   hardwareBacked?: boolean;
+  /** The tenant's isolation type; only barrier, volume and raft tenants have a barrier. */
+  isolation?: string;
 }
 
 export function useTenantBarrier() {
