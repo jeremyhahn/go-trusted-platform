@@ -98,11 +98,30 @@ export class InvitationService extends BaseService {
   /**
    * Create an invitation
    *
+   * The request's expiresIn is in hours; it is sent as expiresInSeconds
+   * (hours * 3600), the field the server's CreateInvitationRequest reads.
+   * expiresIn itself is never sent. When expiresIn is omitted no expiry
+   * field is sent and the server applies its default. An expiresIn that is
+   * not a finite number > 0, or rounds to 0 seconds, throws before posting:
+   * the server would silently replace it with its default.
+   *
    * @param request - Invitation creation request
    * @returns Created invitation with token and invite URL
    */
   async create(request: CreateInvitationRequest): Promise<ApiResponse<CreateInvitationResponse>> {
-    return this.client.post<CreateInvitationResponse>(this.buildUrl(''), request);
+    const body: { email: string; role: CreateInvitationRequest['role']; expiresInSeconds?: number } = {
+      email: request.email,
+      role: request.role,
+    };
+    if (request.expiresIn !== undefined) {
+      const hours = request.expiresIn;
+      const seconds = Number.isFinite(hours) && hours > 0 ? Math.round(hours * 3600) : 0;
+      if (seconds <= 0) {
+        throw new Error(`invitation expiresIn must be a positive number of hours, got ${String(hours)}`);
+      }
+      body.expiresInSeconds = seconds;
+    }
+    return this.client.post<CreateInvitationResponse>(this.buildUrl(''), body);
   }
 
   /**
