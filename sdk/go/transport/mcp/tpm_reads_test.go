@@ -37,6 +37,7 @@ func TestTPMReadMethodsAreRouted(t *testing.T) {
 		platformv1.TPMService_GetPCRs_FullMethodName:          "platform_tpm_pcrs",
 		platformv1.TPMService_GetEventLog_FullMethodName:      "platform_tpm_eventlog",
 		platformv1.TPMService_GetRandom_FullMethodName:        "platform_tpm_random",
+		platformv1.TPMService_GetAK_FullMethodName:            "platform_tpm_iak",
 	}
 	for method, tool := range want {
 		if got := grpcMethodToMCPToolMap[method]; got != tool {
@@ -71,6 +72,94 @@ func TestInvoke_TPMGetEK_DecodesTheKey(t *testing.T) {
 	}
 	if reply.GetAlgorithm() != platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED {
 		t.Errorf("algorithm = %v, want unset (the tool reports the family only)", reply.GetAlgorithm())
+	}
+}
+
+// TestInvoke_TPMGetAK_DecodesTheKeyAndName reads the platform AK (the
+// IAK) through platform_tpm_iak and carries its TPM name, which the
+// credential flow needs.
+func TestInvoke_TPMGetAK_DecodesTheKeyAndName(t *testing.T) {
+	var calls []toolCall
+	adapter := provisioningTestServer(t, map[string]interface{}{
+		"platform_tpm_iak": map[string]interface{}{
+			"handle":     0x81010002,
+			"public_key": tpmReadB64("ak-pub"),
+			"algorithm":  "ECDSA",
+			"name":       tpmReadB64("ak-name"),
+		},
+	}, &calls)
+
+	reply := &platformv1.GetAKResponse{}
+	if err := adapter.Connection().Invoke(context.Background(), platformv1.TPMService_GetAK_FullMethodName,
+		&platformv1.GetAKRequest{}, reply); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if len(calls) != 1 || calls[0].Name != "platform_tpm_iak" {
+		t.Fatalf("calls = %v, want one platform_tpm_iak call", calls)
+	}
+	if len(calls[0].Arguments) != 0 {
+		t.Errorf("arguments = %v, want none", calls[0].Arguments)
+	}
+	if reply.GetHandle() != 0x81010002 || string(reply.GetPublicKey()) != "ak-pub" {
+		t.Errorf("reply = %v, want handle 0x81010002 and the public key", reply)
+	}
+	if string(reply.GetName()) != "ak-name" {
+		t.Errorf("name = %q, want the AK name", reply.GetName())
+	}
+	if reply.GetAlgorithm() != platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256 {
+		t.Errorf("algorithm = %v, want KEY_ALGORITHM_ECDSA_P256 for the ECDSA family", reply.GetAlgorithm())
+	}
+}
+
+// TestInvoke_TPMGetAK_MapsTheAlgorithmFamilyLikeGRPC pins the family to
+// KeyAlgorithm mapping the gRPC service applies to the same AK.
+func TestInvoke_TPMGetAK_MapsTheAlgorithmFamilyLikeGRPC(t *testing.T) {
+	cases := []struct {
+		wire string
+		want platformv1.KeyAlgorithm
+	}{
+		{"RSA", platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048},
+		{"ECDSA", platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256},
+		{"Ed25519", platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519},
+		{"", platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED},
+		{"DSA", platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED},
+	}
+	for _, tc := range cases {
+		t.Run("family="+tc.wire, func(t *testing.T) {
+			var calls []toolCall
+			adapter := provisioningTestServer(t, map[string]interface{}{
+				"platform_tpm_iak": map[string]interface{}{
+					"handle":     0x81010002,
+					"public_key": tpmReadB64("ak-pub"),
+					"algorithm":  tc.wire,
+					"name":       tpmReadB64("ak-name"),
+				},
+			}, &calls)
+
+			reply := &platformv1.GetAKResponse{}
+			if err := adapter.Connection().Invoke(context.Background(), platformv1.TPMService_GetAK_FullMethodName,
+				&platformv1.GetAKRequest{}, reply); err != nil {
+				t.Fatalf("Invoke: %v", err)
+			}
+			if reply.GetAlgorithm() != tc.want {
+				t.Errorf("algorithm = %v, want %v", reply.GetAlgorithm(), tc.want)
+			}
+		})
+	}
+}
+
+// TestInvoke_TPMGetAK_RefusesAHandle refuses an AK handle the tool cannot
+// select, before any call is sent.
+func TestInvoke_TPMGetAK_RefusesAHandle(t *testing.T) {
+	var calls []toolCall
+	adapter := provisioningTestServer(t, map[string]interface{}{}, &calls)
+	err := adapter.Connection().Invoke(context.Background(), platformv1.TPMService_GetAK_FullMethodName,
+		&platformv1.GetAKRequest{Handle: 5}, &platformv1.GetAKResponse{})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("err = %v, want InvalidArgument (ErrTPMReadFieldUnsupported)", err)
+	}
+	if len(calls) != 0 {
+		t.Errorf("calls = %v, want none", calls)
 	}
 }
 
@@ -246,7 +335,19 @@ func TestInvoke_TPMGetEventLog_CarriesTheLog(t *testing.T) {
 		"platform_tpm_eventlog": map[string]interface{}{
 			"event_log":   tpmReadB64("log"),
 			"format":      "tcg2",
-			"event_count": 3,
+			"event_count": 2,
+			"entries": []map[string]interface{}{
+				{
+					"event_num": 0, "pcr_index": 0, "event_type": "EV_S_CRTM_VERSION", "digest_count": 1,
+					"digests":    []map[string]interface{}{{"algorithm_id": "sha256", "digest": "ab01"}},
+					"event_size": 16, "event_string": "crtm",
+				},
+				{
+					"event_num": 1, "pcr_index": 7, "event_type": "EV_EFI_VARIABLE_DRIVER_CONFIG", "digest_count": 1,
+					"digests":    []map[string]interface{}{{"algorithm_id": "sha256", "digest": "cd02"}},
+					"event_size": 32, "event_string": "SecureBoot",
+				},
+			},
 		},
 	}, &calls)
 
@@ -258,11 +359,30 @@ func TestInvoke_TPMGetEventLog_CarriesTheLog(t *testing.T) {
 	if len(calls) != 1 || calls[0].Name != "platform_tpm_eventlog" || len(calls[0].Arguments) != 0 {
 		t.Fatalf("calls = %v, want one platform_tpm_eventlog call with no arguments", calls)
 	}
-	if string(reply.GetEventLog()) != "log" || reply.GetFormat() != "tcg2" || reply.GetEventCount() != 3 {
-		t.Errorf("reply = %v, want the log, format tcg2 and 3 events", reply)
+	if string(reply.GetEventLog()) != "log" || reply.GetFormat() != "tcg2" || reply.GetEventCount() != 2 {
+		t.Errorf("reply = %v, want the log, format tcg2 and 2 events", reply)
 	}
-	if len(reply.GetEntries()) != 0 {
-		t.Errorf("entries = %v, want none (the tool does not send them)", reply.GetEntries())
+	want := []*platformv1.EventLogEntry{
+		{EventNum: 0, PcrIndex: 0, EventType: "EV_S_CRTM_VERSION", DigestCount: 1,
+			Digests: []*platformv1.EventDigest{{AlgorithmId: "sha256", Digest: "ab01"}}, EventSize: 16, EventString: "crtm"},
+		{EventNum: 1, PcrIndex: 7, EventType: "EV_EFI_VARIABLE_DRIVER_CONFIG", DigestCount: 1,
+			Digests: []*platformv1.EventDigest{{AlgorithmId: "sha256", Digest: "cd02"}}, EventSize: 32, EventString: "SecureBoot"},
+	}
+	got := reply.GetEntries()
+	if len(got) != len(want) {
+		t.Fatalf("entries = %v, want %d entries (#2069)", got, len(want))
+	}
+	for i, w := range want {
+		g := got[i]
+		if g.GetEventNum() != w.GetEventNum() || g.GetPcrIndex() != w.GetPcrIndex() ||
+			g.GetEventType() != w.GetEventType() || g.GetDigestCount() != w.GetDigestCount() ||
+			g.GetEventSize() != w.GetEventSize() || g.GetEventString() != w.GetEventString() {
+			t.Errorf("entry %d = %v, want %v", i, g, w)
+		}
+		if len(g.GetDigests()) != 1 || g.GetDigests()[0].GetAlgorithmId() != w.GetDigests()[0].GetAlgorithmId() ||
+			g.GetDigests()[0].GetDigest() != w.GetDigests()[0].GetDigest() {
+			t.Errorf("entry %d digests = %v, want %v", i, g.GetDigests(), w.GetDigests())
+		}
 	}
 }
 

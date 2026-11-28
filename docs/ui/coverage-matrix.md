@@ -666,23 +666,23 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `TPMService.GetSRK` | `GET /srk` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.DeleteSRK` | `DELETE /srk` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | `real-server/tpm-keys.spec.ts` | covered |
 | `TPMService.CreateAK` | `POST /ak` | `(dashboard)/tpm/quote/page.tsx` | - | `real-server/tpm-provision-quote.spec.ts` | covered |
-| `TPMService.GetAK` | `GET /ak` | `(dashboard)/tpm/quote/page.tsx` | - | `real-server/tpm-provision-quote.spec.ts` | covered |
+| `TPMService.GetAK` | `GET /ak` | `(dashboard)/tpm/credential/page.tsx`<br>`(dashboard)/tpm/quote/page.tsx` | - | `real-server/tpm-ops.spec.ts`<br>`real-server/tpm-provision-quote.spec.ts` | covered |
 | `TPMService.DeleteAK` | `DELETE /ak` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-keys.spec.ts` | covered |
 | `TPMService.Seal` | `POST /seal` | `(dashboard)/tpm/seal/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.Unseal` | `POST /unseal` | `(dashboard)/tpm/seal/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.Quote` | `POST /quote` | `(dashboard)/tpm/quote/page.tsx` | - | `real-server/tpm-provision-quote.spec.ts` | covered |
 | `TPMService.VerifyQuote` | `POST /quote/verify` | `(dashboard)/tpm/quote/page.tsx` | - | `real-server/tpm-provision-quote.spec.ts` | covered |
 | `TPMService.Certify` | `POST /certify` | `(dashboard)/tpm/keys/page.tsx` | - | `real-server/tpm-keys.spec.ts` | covered |
-| `TPMService.GetEventLog` | `GET /eventlog` | `(dashboard)/tpm/eventlog/page.tsx` | - | `tpm.spec.ts` | covered |
+| `TPMService.GetEventLog` | `GET /eventlog` | `(dashboard)/tpm/eventlog/page.tsx` | - | `real-server/tpm-ops.spec.ts` | covered |
 | `TPMService.GetPCRs` | `GET /pcrs` | `(dashboard)/tpm/pcrs/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `TPMService.ExtendPCR` | `POST /pcrs/extend` | `(dashboard)/tpm/pcrs/page.tsx` | - | `tpm.spec.ts` | covered |
-| `TPMService.MakeCredential` | `POST /make-credential` | `(dashboard)/tpm/credential/page.tsx` | - | `tpm.spec.ts` | covered |
-| `TPMService.ActivateCredential` | `POST /activate-credential` | `(dashboard)/tpm/credential/page.tsx` | - | `tpm.spec.ts` | covered |
+| `TPMService.ExtendPCR` | `POST /pcrs/extend` | `(dashboard)/tpm/pcrs/page.tsx` | - | `real-server/tpm-ops.spec.ts` | covered |
+| `TPMService.MakeCredential` | `POST /make-credential` | `(dashboard)/tpm/credential/page.tsx` | - | `real-server/tpm-ops.spec.ts` | covered |
+| `TPMService.ActivateCredential` | `POST /activate-credential` | `(dashboard)/tpm/credential/page.tsx` | - | `real-server/tpm-ops.spec.ts` | covered |
 | `TPMService.DefineNVRAM` | `POST /nvram` | `(dashboard)/tpm/nvram/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.WriteNVRAM` | `PUT /nvram/{index}` | `(dashboard)/tpm/nvram/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.ReadNVRAM` | `GET /nvram/{index}` | `(dashboard)/tpm/nvram/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.UndefineNVRAM` | `DELETE /nvram/{index}` | `(dashboard)/tpm/nvram/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `TPMService.GetRandom` | `POST /random` | `(dashboard)/tpm/credential/page.tsx` | - | `tpm.spec.ts` | covered |
+| `TPMService.GetRandom` | `POST /random` | `(dashboard)/tpm/credential/page.tsx` | - | `real-server/tpm-ops.spec.ts` | covered |
 
 ## VPNService (`vpn.proto`)
 
@@ -802,7 +802,7 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 29. **SwitchService: Port, PortStatus, PortVLAN**: 5 operations (5 missing, 0 partial): ListPorts, EnablePort, DisablePort, GetPortStatus, SetPortVLAN.
 30. **TenantService: Tenant, TenantByName, Quota, Sync, TenantDEK, TenantDEKStatus…**: 15 operations (11 missing, 4 partial): ListTenants, CreateTenant, UpdateTenant, DeleteTenant, SuspendTenant, ResumeTenant, GetTenantByName, UpdateQuotas, CheckQuota, Sync, RotateTenantDEK, GetTenantDEKStatus, InitTenantBarrier, UnsealTenantBarrier, SealTenantBarrier.
 31. **TPMService (1/2): Provision, Clear, Capability, PlatformAttribute, EK, EKCertificate…**: 15 operations (8 missing, 7 partial): Provision, Clear, GetCapabilities, GetPlatformAttributes, CreateEK, DeleteEK, ImportEKCertificate, CreateSRK, DeleteSRK, CreateAK, GetAK, DeleteAK, Quote, VerifyQuote, Certify. (done)
-32. **TPMService (2/2): EventLog, PCR, Credential, Random**: 5 operations (4 missing, 1 partial): GetEventLog, ExtendPCR, MakeCredential, ActivateCredential, GetRandom. (done)
+32. **TPMService (2/2): EventLog, PCR, Credential, Random**: covered (#2069): the 5 operations GetEventLog, ExtendPCR, MakeCredential, ActivateCredential and GetRandom, plus GetAK (its AK name fills the credential page), each through the SDK with a capability-gated control and `real-server/tpm-ops.spec.ts`.
 33. **VPNService: Peer, Status, PosturePolicy**: 8 operations (0 missing, 8 partial): EnrolPeer, ListPeers, RevokePeer, GetStatus, GetPosturePolicy, SetPosturePolicy, DeletePosturePolicy, ListPosturePolicies.
 34. **VTPMService (1/2): Bundle, Template, BundlePath, TPMSocketPath, NVRAMPath**: 11 operations (9 missing, 2 partial): GetBundle, ImportBundle, ValidateBundle, CreateTemplate, GetTemplate, DeleteTemplate, ListTemplates, CloneTemplate, GetBundlePath, GetTPMSocketPath, GetNVRAMPath.
 35. **VTPMService (2/2): VTPM, VTPMRunning, VTPMPCR**: 8 operations (8 missing, 0 partial): StartVTPM, StopVTPM, QuoteVTPM, SealVTPM, UnsealVTPM, IsVTPMRunning, ExtendVTPMPCR, ReadVTPMPCR.

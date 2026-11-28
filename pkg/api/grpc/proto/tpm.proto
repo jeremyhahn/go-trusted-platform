@@ -312,6 +312,8 @@ message GetAKResponse {
   bytes public_key = 1;
   uint32 handle = 2;
   KeyAlgorithm algorithm = 3;
+  // The AK's TPM name (nameAlg digest of its public area), as TPM2B_NAME bytes (#2069).
+  bytes name = 4;
 }
 
 message DeleteAKRequest {

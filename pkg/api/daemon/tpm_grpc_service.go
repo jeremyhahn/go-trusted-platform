@@ -624,6 +624,7 @@ func (s *TPMGRPCService) GetAK(
 		Handle:    uint32(iakAttrs.TPMAttributes.Handle),
 		PublicKey: iakAttrs.TPMAttributes.PublicKeyBytes,
 		Algorithm: keyAlgorithmToProto(iakAttrs.KeyAlgorithm),
+		Name:      iakAttrs.TPMAttributes.Name.Buffer,
 	}, nil
 }
 
@@ -1169,25 +1170,7 @@ func (s *TPMGRPCService) GetEventLog(
 	)
 	if err == nil {
 		eventCount = uint64(len(events))
-		entries = make([]*platformv1.EventLogEntry, 0, len(events))
-		for _, ev := range events {
-			digests := make([]*platformv1.EventDigest, 0, len(ev.Digests))
-			for _, d := range ev.Digests {
-				digests = append(digests, &platformv1.EventDigest{
-					AlgorithmId: d.AlgorithmId,
-					Digest:      d.Digest,
-				})
-			}
-			entries = append(entries, &platformv1.EventLogEntry{
-				EventNum:    uint32(ev.EventNum),
-				PcrIndex:    uint32(ev.PCRIndex),
-				EventType:   ev.EventType,
-				DigestCount: uint32(ev.DigestCount),
-				Digests:     digests,
-				EventSize:   uint32(ev.EventSize),
-				EventString: ev.EventString,
-			})
-		}
+		entries = eventLogEntries(events)
 	} else {
 		s.logger.Slog().Warn("Failed to parse event log, returning raw blob only", slog.String("error", err.Error()))
 	}
