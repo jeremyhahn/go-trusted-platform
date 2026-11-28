@@ -118,7 +118,9 @@ type service struct {
 	// enforced but whose quarantine write has not committed, guarded by
 	// mu and created lazily. Every widening move of such a device is
 	// refused until a quarantined (or failed) state is stored, because
-	// its durable record still names its earlier, wider placement.
+	// its durable record still names its earlier, wider placement. The map
+	// does not survive a service recreation: a reloaded service rebuilds an
+	// entry from the port's enforced placement (enforcedQuarantineUnstored).
 	pendingQuarantine map[string]struct{}
 }
 
@@ -138,24 +140,47 @@ func (s *service) setPendingQuarantine(deviceID string, pending bool) {
 }
 
 // refuseIfQuarantinePending returns an ErrInvalidStateTransition when
-// deviceID has enforced quarantine flows that are not yet stored and the
-// move to state would widen its access.
-func (s *service) refuseIfQuarantinePending(deviceID string, from, state ProvisioningState) error {
+// device has enforced quarantine flows that are not yet stored and the move
+// to state would widen its access. The pending entry comes from this
+// service's own failed quarantine write, or, after a reload, from the port's
+// enforced placement (enforcedQuarantineUnstored), in which case the entry
+// is recorded so the quarantine retry clears it.
+func (s *service) refuseIfQuarantinePending(ctx context.Context, device *DeviceInfo, state ProvisioningState) error {
 	if state == StateQuarantined || state == StateFailed {
 		return nil
 	}
 	s.mu.RLock()
-	_, pending := s.pendingQuarantine[deviceID]
+	_, pending := s.pendingQuarantine[device.ID]
 	s.mu.RUnlock()
 	if !pending {
-		return nil
+		if !s.enforcedQuarantineUnstored(ctx, device) {
+			return nil
+		}
+		s.setPendingQuarantine(device.ID, true)
 	}
 	return ErrInvalidStateTransition{
-		DeviceID:  deviceID,
-		FromState: string(from),
+		DeviceID:  device.ID,
+		FromState: string(device.State),
 		ToState:   string(state),
 		Reason:    "quarantine flows are enforced but the quarantine is not stored; quarantine the device again first",
 	}
+}
+
+// enforcedQuarantineUnstored reports whether device's port is on the
+// quarantine VLAN while its stored record is neither quarantined, failed nor
+// on that VLAN: a quarantine whose state write failed before this service
+// was created. This is the reconciliation after a reload (#2081 Codex round
+// 6). A GetCurrentVLAN error means no placement is known (a fresh flow
+// manager has no port map), and the move is not refused for it.
+func (s *service) enforcedQuarantineUnstored(ctx context.Context, device *DeviceInfo) bool {
+	if s.vlanManager == nil || s.config == nil {
+		return false
+	}
+	if device.State == StateQuarantined || device.State == StateFailed || device.CurrentVLAN == s.config.QuarantineVLAN {
+		return false
+	}
+	vlan, err := s.vlanManager.GetCurrentVLAN(ctx, device.PortID)
+	return err == nil && vlan == s.config.QuarantineVLAN
 }
 
 // deviceLock is a device's lifecycle lock; refs counts the holders and
@@ -728,7 +753,7 @@ func (s *service) updateDeviceStateLocked(ctx context.Context, deviceID string, 
 			Reason:    "transition not allowed",
 		}
 	}
-	if err := s.refuseIfQuarantinePending(deviceID, device.State, state); err != nil {
+	if err := s.refuseIfQuarantinePending(ctx, device, state); err != nil {
 		return err
 	}
 
@@ -955,7 +980,7 @@ func (s *service) AuthorizeDevice(ctx context.Context, deviceID string, targetVL
 			Reason:    "device must be in authorizing state",
 		}
 	}
-	if err := s.refuseIfQuarantinePending(deviceID, device.State, StateAuthorized); err != nil {
+	if err := s.refuseIfQuarantinePending(ctx, device, StateAuthorized); err != nil {
 		return err
 	}
 
