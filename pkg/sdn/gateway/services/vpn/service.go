@@ -363,11 +363,13 @@ func (s *Service) bypassRenewal(id LeaseID) {
 }
 
 // confirmClientDeadline drops the stored refused-renewal mark once the
-// client holds the lease's stored deadline. A failed write is returned,
-// keeps the mark and grants the renew bypass, so the client's retry is not
-// held to the window of the newer stored deadline: Restore reads a stored mark as an
-// unresolved renewal and may drop the lease after the client's older
-// deadline, so the renewal must not be reported as done.
+// client holds the lease's stored deadline. A failed clearing write may have
+// committed (a lost response), so the mark is stored again before the failure
+// is returned, and the renew bypass is granted: the refusal is then durable
+// and Restore rebuilds the bypass from the stored mark. When that write fails
+// too, the store is read back: a record without the mark means the clear is
+// stored and the renewal is done; otherwise the failure is returned with the
+// bypass kept in memory.
 func (s *Service) confirmClientDeadline(ctx context.Context, lease *Lease) error {
 	if lease.ClientExpiresAt.IsZero() {
 		s.clearRenewBypass(lease.ID)
@@ -375,13 +377,27 @@ func (s *Service) confirmClientDeadline(ctx context.Context, lease *Lease) error
 	}
 	held := lease.ClientExpiresAt
 	lease.ClientExpiresAt = time.Time{}
-	if err := s.deps.Leases.Put(ctx, lease); err != nil {
-		lease.ClientExpiresAt = held
-		s.bypassRenewal(lease.ID)
+	// A failed Put may have committed before its response was lost.
+	err := s.deps.Leases.Put(ctx, lease)
+	if err == nil {
+		s.clearRenewBypass(lease.ID)
+		return nil
+	}
+	lease.ClientExpiresAt = held
+	s.bypassRenewal(lease.ID)
+	// Store the mark again so the refusal is durable whatever the clear did.
+	if rErr := s.deps.Leases.Put(ctx, lease); rErr == nil {
 		return err
 	}
-	s.clearRenewBypass(lease.ID)
-	return nil
+	// Both outcomes are unknown: the record decides. No other writer moves
+	// it, as Renew holds the device lock.
+	if stored, gErr := s.deps.Leases.Get(ctx, lease.ID); gErr == nil &&
+		stored.ClientExpiresAt.IsZero() && stored.ExpiresAt.Equal(lease.ExpiresAt) {
+		lease.ClientExpiresAt = time.Time{}
+		s.clearRenewBypass(lease.ID)
+		return nil
+	}
+	return err
 }
 
 // extensionOwed reports whether lease id waits on a deadline extension.

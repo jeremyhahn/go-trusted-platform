@@ -259,8 +259,9 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 	// before the next write, still leaves Restore its recovery marker. An
 	// earlier refusal's marker stays: it is the older deadline the client
 	// holds. confirmClientDeadline clears it once the host is extended, and
-	// a renewal whose clear cannot be stored is refused, so the client keeps
-	// the deadline the marker names.
+	// a renewal whose clear cannot be confirmed stores the marker again and
+	// is refused, so the client keeps the deadline the stored marker names (a
+	// read-back that finds the clear stored reports the renewal done).
 	if lease.ClientExpiresAt.IsZero() {
 		lease.ClientExpiresAt = held
 	}
